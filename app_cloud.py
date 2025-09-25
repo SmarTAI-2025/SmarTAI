@@ -13,7 +13,7 @@ def get_random_port():
 def start_backend(backend_port):
     """后端用子进程启动，避免信号冲突"""
     cmd = [sys.executable, "-m", "uvicorn", "backend.main:app",
-           "--host", "127.0.0.1", "--port", str(backend_port),
+           "--host", "localhost", "--port", str(backend_port),  # Changed from 127.0.0.1 to localhost
            "--no-access-log"]
     
     # Set backend port as environment variable

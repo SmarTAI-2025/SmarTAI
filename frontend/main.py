@@ -8,6 +8,7 @@ import streamlit as st
 import sys
 import os
 import json
+import requests
 from datetime import datetime
 from typing import Dict, Any
 
@@ -30,6 +31,14 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="collapsed"
 )
+
+# Quick validation to check if backend is accessible
+try:
+    response = requests.get(f"{BACKEND_URL}/docs", timeout=5)
+    st.session_state.backend_status = "connected"
+except:
+    st.session_state.backend_status = "disconnected"
+    st.warning(f"无法连接到后端服务 ({BACKEND_URL})，部分功能可能无法正常工作。")
 
 def load_mock_data():
     """Load mock data for testing when real data is not available"""

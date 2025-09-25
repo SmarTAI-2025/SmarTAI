@@ -81,5 +81,5 @@ if __name__ == "__main__":
     # Get port from environment variable or use random port
     port = int(os.environ.get("BACKEND_PORT", random.randint(8000, 9000)))
     
-    logger.info(f"启动FastAPI后端服务，监听 http://127.0.0.1:{port}")
-    uvicorn.run(app, host="127.0.0.1", port=port)
+    logger.info(f"启动FastAPI后端服务，监听 http://localhost:{port}")
+    uvicorn.run(app, host="localhost", port=port)  # Changed from 127.0.0.1 to localhost

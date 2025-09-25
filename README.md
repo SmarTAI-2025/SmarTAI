@@ -25,7 +25,7 @@ pip install -r requirements.txt
 再在新终端中运行前端代码：`streamlit run frontend/main.py --client.showSidebarNavigation=False`
 
 > - --client.showSidebarNavigation=False 隐藏 streamlit 默认文件目录导航侧边栏
-> - --server.port 8501：指定端口（默认 8501）。
+> - 端口将随机分配，启动后会在控制台显示访问地址
 > - --server.headless true：在无头环境（容器、远程服务器）下不自动尝试打开浏览器。开发时本地也可以省略该参数以自动打开浏览器。
 
 ## AI自动批改功能
@@ -46,10 +46,3 @@ pip install -r requirements.txt
 
 - `POST /ai_grading_new/grade_student/` - 启动学生作业批改任务
 - `GET /ai_grading_new/grade_result/{job_id}` - 获取批改结果
-
-### 测试
-
-可以运行测试脚本验证批改功能：
-```
-python test_grading.py
-```
