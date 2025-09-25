@@ -46,7 +46,8 @@ def cleanup_backend(backend_proc):
     except Exception as e:
         print(f"Error during cleanup: {e}")
 
-if __name__ == "__main__":
+# This is the main function that will be called by Streamlit
+def main():
     # 1. 拉起后端
     backend_port = get_random_port()
     backend_proc = start_backend(backend_port)
@@ -56,9 +57,16 @@ if __name__ == "__main__":
         print("Backend health-check failed")
         sys.exit(1)
 
-    # 2. 启动前端应用
+    # 2. 启动前端应用 - 优先使用 8501 端口，如果被占用则使用随机端口
     frontend_path = os.path.join(os.path.dirname(__file__), "frontend", "main.py")
-    frontend_port = get_random_port()
+    
+    # 首先尝试 8501 端口
+    frontend_port = 8501
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        if s.connect_ex(('localhost', frontend_port)) == 0:  # Port is in use
+            # 如果 8501 被占用，使用随机端口
+            frontend_port = get_random_port()
+    
     cmd = [sys.executable, "-m", "streamlit", "run", frontend_path, 
            "--server.port", str(frontend_port), "--client.showSidebarNavigation=False"]
     
@@ -70,7 +78,10 @@ if __name__ == "__main__":
     
     print(f"Backend started on port {backend_port}")
     print(f"Frontend started on port {frontend_port}")
-    print(f"Access the application at: http://localhost:{frontend_port}")
+    if frontend_port == 8501:
+        print(f"Access the application at: http://localhost:{frontend_port}")
+    else:
+        print(f"Access the application at: http://localhost:{frontend_port} (Note: For Streamlit Cloud, only port 8501 is publicly accessible)")
     
     try:
         frontend_proc.wait()
@@ -85,3 +96,6 @@ if __name__ == "__main__":
             frontend_proc.kill()
         
         cleanup_backend(backend_proc)
+
+if __name__ == "__main__":
+    main()

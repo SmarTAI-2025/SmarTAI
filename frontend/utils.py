@@ -176,7 +176,8 @@ def inject_pollers_for_active_jobs():
     if "jobs" not in st.session_state:
         st.session_state.jobs = {}
     if "backend" not in st.session_state:
-        st.session_state.backend = "http://localhost:8000"
+        # 修改默认值，使用环境变量而不是固定的8000端口
+        st.session_state.backend = os.environ.get("BACKEND_URL", "http://localhost:8000")
 
     # Filter out mock jobs - only poll for real jobs
     real_jobs = {}

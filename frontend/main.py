@@ -33,12 +33,8 @@ st.set_page_config(
 )
 
 # Quick validation to check if backend is accessible
-try:
-    response = requests.get(f"{BACKEND_URL}/docs", timeout=5)
-    st.session_state.backend_status = "connected"
-except:
-    st.session_state.backend_status = "disconnected"
-    st.warning(f"无法连接到后端服务 ({BACKEND_URL})，部分功能可能无法正常工作。")
+# This validation will be done later in the init_session_state function
+# to ensure the BACKEND_URL is properly set
 
 def load_mock_data():
     """Load mock data for testing when real data is not available"""
@@ -87,6 +83,14 @@ def init_session_state():
     
     # Set logged in state
     st.session_state.logged_in = True
+    
+    # Check backend connectivity - 使用 session_state 中的 backend URL
+    try:
+        response = requests.get(f"{st.session_state.backend}/docs", timeout=5)
+        st.session_state.backend_status = "connected"
+    except:
+        st.session_state.backend_status = "disconnected"
+        st.warning(f"无法连接到后端服务 ({st.session_state.backend})，部分功能可能无法正常工作。")
     
     # Initialize sample data or AI grading data
     if 'sample_data' not in st.session_state:
@@ -536,5 +540,19 @@ def main():
         # 如果已登录，显示主界面内容
         render_dashboard()
 
-if __name__ == "__main__":
+def render_st(backend_url):
+    """Render the Streamlit app with the given backend URL"""
+    # Set the backend URL in environment variable
+    os.environ["BACKEND_URL"] = backend_url
+    
+    # Also update the global BACKEND_URL variable
+    global BACKEND_URL
+    BACKEND_URL = backend_url
+    
+    # Run the main application
     main()
+
+# This is the entry point for Streamlit Cloud
+if __name__ == "__main__":
+    # When run directly by Streamlit, use the default backend URL
+    render_st(BACKEND_URL)
