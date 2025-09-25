@@ -20,6 +20,9 @@ from utils import *
 from frontend_utils.data_loader import load_ai_grading_data, StudentScore, QuestionAnalysis, AssignmentStats
 from frontend_utils.chart_components import create_score_distribution_chart, create_grade_pie_chart
 
+# Get backend URL from environment variable or use default
+BACKEND_URL = os.environ.get("BACKEND_URL", "http://localhost:8000")
+
 # 页面配置
 st.set_page_config(
     page_title="SmarTAI - 智能评估平台",
