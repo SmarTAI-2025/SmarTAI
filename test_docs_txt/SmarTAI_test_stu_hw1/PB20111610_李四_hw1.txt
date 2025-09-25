@@ -1,0 +1,50 @@
+# PB20111610 李四 第一次作业
+
+## 1.
+
+选择 C
+
+## 2.
+
+$$
+\int_0^1\ x\ \arctan{x}\ \mathrm{d}x\\
+=\left.\arctan{x}\frac{1}{2} x^2 \right|_{x=0}^{x=1}-\frac{1}{2}\int_0^1\ x^2 \mathrm{d}(\arctan{x})\\
+=\frac{\pi}{8}-\frac{1}{2}\int_0^1\ \frac{x^2}{1+x^2} \mathrm{d}x\\
+=\frac{\pi}{8}-\frac{1}{2} +\frac{1}{2}\int_0^1\ \frac{1}{1+x^2} \mathrm{d}x\\
+=\frac{\pi}{8}-\frac{1}{2}+\left. \frac{1}{2}\arctan{x}\right|_{x=0}^{x=1}\\
+=\frac{\pi}{4}-\frac{1}{2}
+$$
+
+## 3.
+
+Let $G$ be a solvable group and $1=G_0 \unlhd G_1 \unlhd G_2 \cdots \unlhd G_s=G$ is a chain of subgroups s.t. $G_{i+1} / G_i$ is abelian for $i=0,1, \cdots, s-1$.
+
+(1) Consider $H \leq G$. Let $H_i=G_i \cap H$. For any $g \in H_{i+1}$ and $h \in H_i, g h g^{-1} \in H$ due to $g, h \in H$, and $g h g^{-1} \in G_i$ due to $g \in G_{i+1}, h \in G_i$. Thus $H_i \unlhd H_{i+1}$.
+
+For any $x, y \in H_{i+1}$, since $G_{i+1} / G_i$ is abelian, $x y G_i=y x G_i$, i.e., $x y=y x g$, where $g \in G_i$. We notice that $g=x y x^{-1} y^{-1} \in H$, so $g \in G_i \cap H=H_i$. Hence, $x y H_i=y x H_i$, indicating $H_{i+1} / H_i$ is abelian.
+
+(2) Consider $\bar{G}=G / N$. From (1) we know that $N$ is solvable. Since Jordan-Holder theorem, we can assume that $\exists 0 \leq r \leq s$ s.t. $G_r \cong N$. Now let $\bar{G}_i=G_{r+i} / N$, then $\bar{G}_i \unlhd \bar{G}_{i+1}$ and $\bar{G}_{i+1} / \bar{G}_i= \left(G_{r+i+1} / N\right) /\left(G_{r+i} / N\right) \cong G_{r+i+1} / G_{r+i}$, which is abelian.
+
+## 4.
+
+以轴线为轴、 $r$ 为半径，在硫酸铜溶液中取一个厚为 $\mathrm{d}r$，长为 $l$ 的圆筒，这圆筒的电阻为
+$$
+\mathrm{d}R=\rho\ \frac{\mathrm{d}r}{2\pi r l}=\frac{\rho}{2\pi l} \frac{\mathrm{d}r}{r}
+$$
+积分便得
+$$
+R=\frac{\rho}{2\pi l} \int_a^b \frac{\mathrm{d}r}{r}=\frac{\rho}{2\pi l} \ln{\frac{b}{a}}
+$$
+电容 $C=$
+
+## 5.
+
+人工智能就是让机器像人一样思考和行动的技术。
+
+## 6.
+
+解方程 $x^2 - 5x + 6 = 0$，得到 $x = 2$ 或 $x = 3$。
+
+## 7.
+
+当$n$为奇数时，$n+1$为偶数，所以$n(n+1)$为偶数。当$n$为偶数时，$n$本身为偶数，所以$n(n+1)$为偶数。综上，$n^2+n$总是偶数。

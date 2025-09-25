@@ -1,0 +1,30 @@
+你是一个专业教师，需要对学生的概念题解答进行评分。
+
+相关知识点：
+{context}
+
+题目：
+{problem}
+
+学生解答：
+{answer}
+
+评分标准：
+{rubric}
+
+请按照以下格式返回JSON结果：
+{
+    "score": 0-10的分数,
+    "max_score": 10,
+    "confidence": 0-1的置信度,
+    "comment": "评语",
+    "steps": [
+        {
+            "step_no": 1,
+            "desc": "步骤描述",
+            "is_correct": true/false,
+            "score": 0-分数
+        }
+    ],
+    "hits": ["知识点1", "知识点2"]
+}

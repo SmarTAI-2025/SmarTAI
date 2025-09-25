@@ -1,0 +1,81 @@
+# PB20111611 王五 第一次作业
+
+## 1.
+
+C
+
+## 2.
+
+## 3.
+
+Let $G$ be a soluble group with a chain of subgroups:
+
+$$
+1=G_0 \unlhd G_1 \unlhd G_2 \unlhd \cdots \unlhd G_s=G .
+$$
+
+Let $H \leq G$ and $H_i=H \cap G_i$. Clearly, $H_i$ is a group.
+
+$\forall x \in H_{i+1}$, then $x H_i x^{-1}=H_i \Longrightarrow H_i \unlhd H_{i+1}$.
+In addition, $\forall \bar{a}, \bar{b} \in H_{i+1} / H_i$,
+$$
+\begin{gathered}
+\bar{a} \bar{b}=\left(a H_i\right)\left(b H_i\right)=(a b) H_i=a b\left(H \cap G_i\right)=((a b) H) \cap\left(a b \cdot G_i\right)=H \cap\left(b a G_i\right) \\
+=b a H_i=\bar{b} \bar{a},
+\end{gathered}
+$$
+
+where $a b G_i=b a G_i$ (since $G_{i+1} / G_i$ is Abelian) is used.
+Thus, $H_{i+1} / H_i$ is Abelian, and $H$ is soluble with a chain of normal subgroups:
+
+$$
+1=H_0 \unlhd H_1 \unlhd H_2 \cdots \unlhd H_s=H .
+$$
+
+**Quotient case:**
+Let $N$ be any normal subgroup of $G$. Consider the quotient group $G / N$ and the quotient groups $G_i N / N$. We show that the chain
+$$
+1=N=G_0 N / N \unlhd G_1 N / N \unlhd \cdots \unlhd G_s N / N=G / N
+$$
+
+satisfies $G_i N / N \unlhd G_{i+1} N / N$ and $\left(G_{i+1} N / N\right) /\left(G_i N / N\right)$ is Abelian for $\forall i$.
+1. $G_i N / N \unlhd G_{i+1} N / N$ is clear since $G_i \unlhd G_{i+1}$.
+2. By the Third Iso. Thm.,
+
+$$
+\left(G_{i+1} N / N\right) /\left(G_i N / N\right) \cong\left(G_{i+1} N\right) /\left(G_i N\right),
+$$
+
+which is a subgroup of $G_{i+1} / G_i$, and therefore Abelian.
+
+## 4.
+
+以轴线为轴、 $r$ 为半径，在硫酸铜溶液中取一个厚为 $\mathrm{d}r$，长为 $l$ 的圆筒，这圆筒的电阻为
+$$
+\mathrm{d}R=\rho\ \frac{\mathrm{d}r}{2\pi r l}=\frac{\rho}{2\pi l} \frac{\mathrm{d}r}{r}
+$$
+积分便得
+$$
+R=\frac{\rho}{2\pi l} \int_a^b \frac{\mathrm{d}r}{r}=
+$$
+设两筒的电势差为U，内筒上的电荷量为Q，则由对称性和高斯定理得硫酸铜溶液中的电场强度为
+$$
+E=\frac{\lambda}{2\pi\varepsilon}\frac{\textbf{r}}{r^2}=\frac{Q}{2\pi\varepsilon l}\frac{\textbf{r}}{r^2}
+$$
+式中$\lambda$ 是内筒单位长度的电荷量， $\textbf{r}$ 是从轴线到场点的位矢，于是得
+$$
+U=\int_a^b \textbf{E} \cdot \mathrm{d}\textbf{r}=\frac{Q}{2\pi\varepsilon l}\int_a^b\frac{\textbf{r}\cdot \mathrm{d}\textbf{r}}{r^2}
+$$
+所以电容 $C=\frac{Q}{U}=\frac{2\pi \varepsilon l}{\int_a^b\frac{\textbf{r}\cdot \mathrm{d}\textbf{r}}{r^2}}$
+
+## 5.
+
+人工智能是研究、开发用于模拟、延伸和扩展人的智能的理论、方法、技术及应用系统的一门新的技术科学。
+
+## 6.
+
+使用因式分解法：$x^2 - 5x + 6 = (x-2)(x-3) = 0$，所以 $x = 2$ 或 $x = 3$。
+
+## 7.
+
+通过数学归纳法证明：当 $n=1$ 时，$1^2+1=2$ 为偶数。假设当 $n=k$ 时成立，即 $k^2+k$ 为偶数。则当 $n=k+1$ 时，$(k+1)^2+(k+1) = k^2+2k+1+k+1 = (k^2+k)+2(k+1)$。由归纳假设$k^2+k$ 为偶数，$2(k+1)$ 也为偶数，所以和为偶数。证毕。

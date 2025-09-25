@@ -1,0 +1,160 @@
+/* styles/main.css */
+
+/* --- 全局与主区域样式 --- */
+.stApp {
+    background-color: #F8FAFC; /* 统一浅灰色背景，与登录页面一致 */
+}
+
+/* --- 侧边栏整体背景 --- */
+[data-testid="stSidebar"] {
+    background-color: #F0F7FF; /* 侧边栏淡蓝色背景 */
+}
+
+/* 标题使用深蓝色，专业稳重 */
+h1 {
+    color: #005A9C;
+    font-weight: bold;
+}
+
+/* 二级、三级标题使用主色调蓝色 */
+h2, h3 {
+    color: #0077B6;
+}
+
+/* 内容块使用柔和的阴影和浅边框 */
+[data-testid="stVerticalBlockBorderWrapper"] {
+    background-color: white;
+    border: 1px solid #EAEAEA;
+    border-radius: 12px;
+    padding: 1.5rem;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.05);
+}
+
+/* --- 主导航侧边栏样式 --- */
+[data-testid="stSidebarNav"] a {
+    border-radius: 8px;
+    margin: 0.2rem 0.5rem;
+    padding-left: 10px !important;
+    transition: background-color 0.3s ease, color 0.3s ease;
+    border-left: 4px solid transparent;
+    color: #31333F;
+}
+
+/* 悬停时背景变为更浅的蓝色 */
+[data-testid="stSidebarNav"] a:hover {
+    background-color: #E6F2FF;
+    color: #005A9C;
+}
+
+/* 选中页面: 显示左侧彩条、字体加粗、颜色加深 */
+[data-testid="stSidebarNav"] a[aria-current="page"] {
+    background-color: #E6F2FF;
+    border-left: 4px solid #0077B6 !important; /* 确保彩条显示 */
+    color: #005A9C !important;
+    font-weight: 700 !important; /* 确保字体加粗 */
+    outline: none !important;
+}
+
+/* --- 侧边栏 Expander 样式 --- */
+[data-testid="stExpander"] summary {
+    font-size: 1.05rem;
+    font-weight: 600;
+    color: #0077B6;
+}
+
+[data-testid="stExpanderDetails"] > div {
+    padding-top: 0 !important;
+}
+
+/* --- 学生列表按钮样式 (关键修正区域) --- */
+/* 基础样式: 左对齐, 透明背景 */
+[data-testid="stSidebar"] .stButton>button {
+    text-align: left !important;
+    border-radius: 3px !important;
+    border: none !important;
+    background-color: transparent !important;
+    color: #31333F;
+    width: 100%;
+    margin: 3px 0 !important;
+    border-left: 5px solid transparent !important;
+    padding: 8px 0 8px 15px !important;
+    transition: background-color 0.3s ease, color 0.3s ease;
+}
+
+/* 悬停样式 */
+[data-testid="stSidebar"] .stButton>button:hover {
+    background-color: #E6F2FF !important;
+    color: #005A9C !important;
+}
+
+/* "选中" 样式 (kind="primary"): 修复字体和彩条问题 */
+/* [data-testid="stSidebar"] .stButton>button[kind="primary"] {
+    background-color: #E6F2FF !important;
+    color: #005A9C !important;
+    font-weight: bold !important;
+    border-left: 5px solid #0077B6 !important;
+} */
+
+/* --- 通用组件样式 --- */
+/* 禁用按钮 */
+/* .stButton>button:disabled {
+    background-color: #F0F0F0 !important;
+    color: #A0A0A0 !important;
+    border: 1px solid #D0D0D0 !important;
+} */
+.stButton>button:disabled {
+    background-color: #E6F2FF !important;
+    color: #000000 !important;
+    font-weight: bold !important; /* 强制字体加粗 */
+    border-left: 8px solid #0077B6 !important; /* 强制显示左侧蓝色条 */
+}
+
+/* --- 功能卡片样式 --- */
+.feature-card {
+    background: white;
+    border-radius: 15px;
+    box-shadow: 0 8px 25px rgba(0,0,0,0.1);
+    text-align: center;
+    transition: all 0.3s ease;
+    border-top: 4px solid #1E3A8A;
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+}
+
+.feature-card:hover {
+    transform: translateY(-5px);
+    box-shadow: 0 15px 35px rgba(0,0,0,0.15);
+}
+
+.feature-icon {
+    font-size: 3rem;
+    margin: 1rem 0;
+}
+
+.feature-title {
+    font-size: 1.5rem;
+    font-weight: 700;
+    color: #1E3A8A;
+    margin-bottom: 1rem;
+}
+
+.feature-description {
+    color: #64748B;
+    line-height: 1.6;
+    margin-bottom: 1.5rem;
+    flex-grow: 1;
+}
+
+.feature-card-buttons {
+    margin-top: auto;
+    padding: 0 1rem 1rem 1rem;
+}
+
+/* 文件上传区域 */
+[data-testid="stFileUploader"] {
+    border: 2px dashed #B0C4DE; /* 淡蓝色虚线 */
+    background-color: #F8FBFF;
+    border-radius: 12px;
+    padding: 25px;
+}

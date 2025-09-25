@@ -1,0 +1,23 @@
+# SmarTAI 第一次测试作业
+
+## 1. IPV4首部中标识字段的作用是？
+
+A. 序列号
+
+B. 区分服务
+
+C. 分片
+
+D. 网络标识
+
+## 2. $\int_0^1\ x\ \arctan{x}\ \mathrm{d}x$.
+
+## 3. Prove that subgroups and quotient groups of a solvable group are solvable.
+
+## 4. 丹聂耳电池由两个同轴圆通构成，长为 $l$，外筒是内半径为 $b$ 的同，内筒是外半径为 $a$ 的锌，两筒间是电容率为 $\varepsilon$、电阻率为 $\rho$ 的硫酸铜溶液。略去边缘效应，试求这电池的内阻 $R$ 和两筒之间的电容 $C$。
+
+## 5. 什么是人工智能？
+
+## 6. 求解二次方程 $x^2 - 5x + 6 = 0$
+
+## 7. 证明：对于任意正整数 $n$，$n^2+n$ 是偶数。

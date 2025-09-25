@@ -1,0 +1,93 @@
+# PB20111600 张三 第一次作业
+
+## 1.
+
+A
+
+## 2.
+
+$$
+\int_0^1\ x\ \arctan{x}\ \mathrm{d}x\\
+=\left.\arctan{x}\frac{1}{2} x^2 \right|_{x=0}^{x=1}-\frac{1}{2}\int_0^1\ x^2 \mathrm{d}(\arctan{x})\\
+=\frac{\pi}{8}-0-\frac{1}{2}\int_0^1\ \frac{x^2}{1+x^2} \mathrm{d}x\\
+=\frac{\pi}{8}-\frac{1}{2}\int_0^1\ \mathrm{d}x +\frac{1}{2}\int_0^1\ \frac{1}{1+x^2} \mathrm{d}x\\
+=\frac{\pi}{8}-\frac{1}{2}+\left. \frac{1}{2}\arctan{x}\right|_{x=0}^{x=1}\\
+=\frac{\pi}{4}-\frac{1}{2}
+$$
+
+## 3.
+
+**Proof:**
+$G$ is solvable, suppose $H \leqslant G$, $N \unlhd G$
+$$
+1=G_0 \unlhd G_1 \unlhd \ldots \unlhd G_s=G
+$$
+
+Consider $H_i=G_i \cap H \quad i=0,1 \ldots, s$
+obviously $H_i \leqslant H_{i+1} \quad i=0,1 \ldots, s-1$
+$\forall g \in H_{i+1}, \forall x \in H_i$
+$g x g^{-1} \in H$ because $g, x \in H$
+$g x g^{-1} \in G_i$ because $G_i \unlhd G_{i+1}$
+So $H_i \unlhd H_{i+1} \quad i=0,1, \cdots ,s-1$
+$$
+\begin{aligned}
+H_{i+1} / H_i & =\left(G_{i+1} \cap H\right) /\left(G_i \cap H\right) \\
+& =\left(G_{i+1} \cap H\right) G_i / G_i \\
+& \leq G_{i+1} / G_i
+\end{aligned}
+$$
+
+$\Rightarrow H_{i+1} / H_i$ is abelian
+
+$$
+1=H_0 \unlhd H_1 \unlhd \cdots \unlhd H_s=G \cap H=H
+$$
+
+so $H$ is solvable.
+
+Consider $\quad \bar{G}_i=G_i N / N \quad i=0,1 \cdots s$ 
+
+obviously $\quad \overline{G_i} \leqslant \overline{G_{i+1}}$
+$$
+\overline{G_{i+1}} / \overline{G_i} \cong G_{i+1} N / G_i N
+$$
+
+$G_{i+1} / G_i$ is abelian $\Rightarrow \overline{G_{i+1}} / \overline{G_i}$ is abelian
+
+$$
+1=\bar{G}_0 \unlhd \bar{G}_1 \unlhd \cdots \unlhd \bar{G}_s=G N / N=G / N
+$$
+
+so $G / N$ is solvable.
+
+## 4.
+
+以轴线为轴、 $r$ 为半径，在硫酸铜溶液中取一个厚为 $\mathrm{d}r$，长为 $l$ 的圆筒，这圆筒的电阻为
+$$
+\mathrm{d}R=\rho\ \frac{\mathrm{d}r}{2\pi r l}=\frac{\rho}{2\pi l} \frac{\mathrm{d}r}{r}
+$$
+积分便得
+$$
+R=\frac{\rho}{2\pi l} \int_a^b \frac{\mathrm{d}r}{r}=\frac{\rho}{2\pi l} \ln{\frac{b}{a}}
+$$
+设两筒的电势差为U，内筒上的电荷量为Q，则由对称性和高斯定理得硫酸铜溶液中的电场强度为
+$$
+E=\frac{\lambda}{2\pi\varepsilon}\frac{\textbf{r}}{r^2}=\frac{Q}{2\pi\varepsilon l}\frac{\textbf{r}}{r^2}
+$$
+式中$\lambda$ 是内筒单位长度的电荷量， $\textbf{r}$ 是从轴线到场点的位矢，于是得
+$$
+U=\int_a^b \textbf{E} \cdot \mathrm{d}\textbf{r}=\frac{Q}{2\pi\varepsilon l}\int_a^b\frac{\textbf{r}\cdot \mathrm{d}\textbf{r}}{r^2}=\frac{Q}{2\pi\varepsilon l}\ln{\frac{b}{a}}
+$$
+所以电容 $C=\frac{Q}{U}=\frac{2\pi \varepsilon l}{\ln(b/a)}$
+
+## 5. 
+
+人工智能是计算机科学的一个分支，它企图了解智能的实质，并生产出一种新的能以人类智能相似的方式做出反应的智能机器。
+
+## 6.
+
+首先识别方程系数 $a=1, b=-5, c=6$。然后应用求根公式 $x = (-b \pm \sqrt{(b²-4ac)}) / (2a)$。计算判别式 $\Delta = b^2-4ac = 25-24 = 1$。最后计算根 $x_1 = (5+1)/2 = 3, x_2 = (5-1)/2 = 2$。
+
+## 7.
+
+对于任意正整数 $n$，$n^2+n = n(n+1)$。因为 $n$ 和 $n+1$ 是连续的两个整数，所以其中必有一个是偶数。因此$n(n+1)$必然是偶数。

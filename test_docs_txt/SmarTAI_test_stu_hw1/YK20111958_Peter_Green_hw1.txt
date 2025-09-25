@@ -1,0 +1,18 @@
+# YK20111958 Peter Green hw1
+
+## 1.
+
+C
+
+
+## 5. 
+
+Artificial intelligence (AI) is the capability of computational systems to perform tasks typically associated with human intelligence, such as learning, reasoning, problem-solving, perception, and decision-making. It is a field of research in computer science that develops and studies methods and software that enable machines to perceive their environment and use learning and intelligence to take actions that maximize their chances of achieving defined goals.
+
+## 6.
+
+$x^2-5x+6=(x-2)(x-3)=0$, so the roots are 2 and 3.
+
+## 7.
+
+We can factor the expression: $n^2 + n = n(n+1)$. This represents the product of two consecutive integers. By the properties of consecutive integers, one of these factors must be even, meaning the product is divisible by 2.

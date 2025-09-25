@@ -1,0 +1,86 @@
+# SmarTAI 第一次测试作业标答
+
+## 1. 
+
+C
+
+## 2.
+
+$\frac{\pi}{4}-\frac12$
+
+## 3.
+
+Suppose a group $G$ was solvable. This means that there is a sequence of groups $G_i$ such that
+
+$$
+1=G_0 \unlhd G_1 \unlhd \ldots \unlhd G_n=G
+$$
+
+and that the quotients $G_{i+1} / G_i$ are all abelian.
+Suppose $H$ was a subgroup of $G$. To establish a chain as above, we would like to find a **correspondence** between the subgroups above and the subgroups of $H$. In fact, this can be done by intersecting them all with $H$. Recall that the intersection of two subgroups is again a subgroup, so we get the sequence:
+$$
+1=G_0 \cap H \leq G_1 \cap H \leq \ldots \leq G_n \cap H=H
+$$
+
+We have to prove that each subgroup is normal in the next one and that the quotient is abelian. They are normal, because if $x \in G_i \cap H$ and $y \in G_{i+1} \cap H$, then: 
+$y x y^{-1} \in G_i \quad$ because $G_i$ is normal in $G_{i+1}$,
+$y x y^{-1} \in H \quad$ because $H$ is a subgroup.
+thus $y x y^{-1} \in G_i \cap H$ showing that the subgroups are normal in each other.
+
+Now let us show that the quotients are abelian. The quotient is of the form
+$$
+\frac{G_{i+1} \cap H}{G_i \cap H}
+$$
+
+
+The only theorem with an intersection we had up to now is the **second isomorphism theorem** which states that $\frac{K}{N \cap K} \cong \frac{N K}{N}$ for a normal subgroup $N$ and any subgroup $K$. The idea is to take
+
+$$
+\begin{aligned}
+& K=G_{i+1} \cap H \\
+& N=G_i
+\end{aligned}
+$$
+
+
+Then the above quotient becomes
+
+$$
+\frac{G_{i+1} \cap H}{G_i \cap H}=\frac{K}{N \cap K} \cong \frac{N K}{K}=\frac{\left(G_{i+1} \cap H\right) G_i}{G_i}
+$$
+
+
+Since the "numerator" is a subgroup of $G_{i+1}$, we find that the quotient is a subgroup:
+
+$$
+\frac{\left(G_{i+1} \cap H\right) G_i}{G_i} \leq \frac{G_{i+1}}{G_i}
+$$
+Finally, since $G$ is solvable, the quotient on the right is abelian, and we conclude that $\frac{G_{i+1} \cap H}{G_i \cap H}$ is a subgroup of an abelian group, thus making it abelian itself.
+This proves that a subgroup of a solvable group is solvable.
+
+Now consider $\overline{G}=G / N$, a quotient group of $G$. But this time the correspondence theorem (i.e. lattice isomorphism therorem) comes in, giving us
+$$
+\overline{1}=\overline{G_0} \unlhd \overline{G_1} \unlhd \ldots \unlhd \overline{G_n}=\overline{G}
+$$
+
+
+Let us shows that subgroups are **normal** in one another. Let $\overline{x} \in \overline{G_i}$ and $\overline{y} \in \overline{G_{i+1}}$. Then $\bar{y} \bar{x} \bar{y}^{-1}=\overline{y x y^{-1}}$
+
+But $y x y^{-1} \in G_i$ and therefore $\bar{y} \bar{x} \bar{y}^{-1} \in \overline{G_i}$.
+Now let us show that quotients are abelian. Here it is immediate by the **third isomorphism theorem**:
+$$
+\frac{\overline{G_{i+1}}}{\overline{G_i}}=\frac{\frac{G_{i+1}}{N}}{\frac{G_i}{N}} \cong \frac{G_{i+1}}{G_i}
+$$
+
+
+This shows that the quotients of the $\overline{G_i}$ are abelian, and therefore, a quotient of a solvable group is solvable.
+
+## 4.
+
+$R=\frac{\rho}{2\pi l} \ln{\frac{b}{a}}$
+
+$C=\frac{2\pi \varepsilon l}{\ln(b/a)}$
+
+## 6. 
+
+$x=2$ 和 $x=3$

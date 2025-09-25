@@ -1,0 +1,57 @@
+{
+  "kb_cs_algorithms": {
+    "id": "kb_cs_algorithms",
+    "name": "算法与数据结构高级教程",
+    "description": "涵盖高级算法设计、复杂度分析、动态规划、图算法等核心内容",
+    "category": "计算机科学",
+    "created_at": "2025-09-24T21:19:23.814576",
+    "updated_at": "2025-09-24T21:19:23.814576",
+    "file_count": 25,
+    "total_size": 15728640,
+    "files": {}
+  },
+  "kb_cs_systems": {
+    "id": "kb_cs_systems",
+    "name": "计算机系统原理与架构",
+    "description": "计算机组成原理、操作系统内核、分布式系统设计等系统级知识",
+    "category": "计算机科学",
+    "created_at": "2025-09-24T21:19:23.814576",
+    "updated_at": "2025-09-24T21:19:23.814576",
+    "file_count": 32,
+    "total_size": 22020096,
+    "files": {}
+  },
+  "kb_cs_ai": {
+    "id": "kb_cs_ai",
+    "name": "人工智能前沿技术",
+    "description": "机器学习、深度学习、自然语言处理、计算机视觉等AI核心技术",
+    "category": "计算机科学",
+    "created_at": "2025-09-24T21:19:23.814576",
+    "updated_at": "2025-09-24T21:19:23.814576",
+    "file_count": 41,
+    "total_size": 31457280,
+    "files": {}
+  },
+  "kb_cs_security": {
+    "id": "kb_cs_security",
+    "name": "网络安全与密码学",
+    "description": "信息安全理论、密码学算法、网络攻防、区块链技术等安全相关内容",
+    "category": "计算机科学",
+    "created_at": "2025-09-24T21:19:23.814576",
+    "updated_at": "2025-09-24T21:19:23.814576",
+    "file_count": 28,
+    "total_size": 18874368,
+    "files": {}
+  },
+  "kb_cs_database": {
+    "id": "kb_cs_database",
+    "name": "高级数据库系统",
+    "description": "数据库内核原理、分布式数据库、NoSQL",
+    "category": "计算机科学",
+    "created_at": "2025-09-24T21:19:23.814576",
+    "updated_at": "2025-09-24T21:19:57.212878",
+    "file_count": 19,
+    "total_size": 12582912,
+    "files": {}
+  }
+}
