@@ -69,8 +69,11 @@ SmarTAI/
    - **Region**: 选择一个离您用户近的区域
    - **Build Command**: `pip install -r requirements.txt`
    - **Start Command**: `python start.py`
-5. 点击 "Create Web Service"
-6. 部署成功后，您会得到一个公开的 URL，例如：`https://smartai-backend.onrender.com`
+5. 添加环境变量（在 Dashboard 的 "Environment" 部分）：
+   - **Key**: `FRONTEND_URLS`
+   - **Value**: `https://smartai-2025-smartai-frontendapp-iie6tb.streamlit.app,http://localhost:8501`
+6. 点击 "Create Web Service"
+7. 部署成功后，您会得到一个公开的 URL，例如：`https://smartai-backend.onrender.com`
 
 ### 步骤 3: 部署前端到 Streamlit Community Cloud
 
@@ -83,7 +86,7 @@ SmarTAI/
 4. 点击 "Advanced settings..."
 5. 在 "Secrets" 部分，添加后端 URL：
    - **Secret name**: BACKEND_URL
-   - **Secret value**: `https://smartai-backend.onrender.com` (您在步骤2中获得的URL)
+   - **Secret value**: `https://smartai-backend-zefh.onrender.com` (使用您在步骤2中获得的URL)
 6. 点击 "Deploy!"
 
 ## 方案二：容器化部署
@@ -143,6 +146,7 @@ services:
       - "8000:8000"
     environment:
       - BACKEND_PORT=8000
+      - FRONTEND_URLS=https://smartai-2025-smartai-frontendapp-iie6tb.streamlit.app,http://localhost:8501
 
   frontend:
     build:
@@ -229,3 +233,7 @@ python app_cloud.py
 1. 在 [backend/main.py](file:///d%3A/work/SmarTAI/backend/main.py) 中添加了项目根目录到 Python 路径
 2. 创建了 [backend/start.py](file:///d%3A/work/SmarTAI/backend/start.py) 启动脚本，确保正确的路径设置
 3. 在 [backend/render.yaml](file:///d%3A/work/SmarTAI/backend/render.yaml) 中使用启动脚本而不是直接调用 uvicorn
+
+### 后端根路径返回 {"detail":"Not Found"}
+
+这是正常的，因为我们没有为根路径 [/](file://d:\work\SmarTAI\app_cloud.py) 定义处理函数。现在我们已经添加了一个根路径处理函数，它会返回一个友好的消息，表明后端正在运行。

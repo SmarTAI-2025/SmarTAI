@@ -40,6 +40,10 @@ def create_app() -> FastAPI:
         allow_headers=["*"],
     )
 
+    @app.get("/")
+    def read_root():
+        return {"message": "SmarTAI Backend is running", "status": "success"}
+
     @app.get("/health")
     def health_check():
         return {"status": "healthy", "message": "SmarTAI backend is running"}

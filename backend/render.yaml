@@ -7,3 +7,5 @@ services:
     envVars:
       - key: PYTHON_VERSION
         value: 3.9.15
+      - key: FRONTEND_URLS
+        value: https://smartai-2025-smartai-frontendapp-iie6tb.streamlit.app,http://localhost:8501

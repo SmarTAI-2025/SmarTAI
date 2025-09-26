@@ -321,8 +321,31 @@ def render_feature_cards():
             <div class="feature-card-buttons">
         """, unsafe_allow_html=True)
         
-        if st.button("📚 查看历史记录", use_container_width=True, type="primary", key="history_button_4"):
+        if st.button("📚 知识库管理", use_container_width=True, type="primary", key="kb_button_4"):
             st.switch_page("pages/knowledge_base.py")
+
+        st.markdown("""
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
+    
+    # Add a new row for the backend status feature
+    col5, _ = st.columns(2)
+    
+    with col5:
+        st.markdown("""
+        <div class="feature-card">
+            <div class="feature-icon">🔍</div>
+            <div class="feature-title">后端状态检查</div>
+            <div class="feature-description">
+                检查前端与后端的连接状态，诊断部署配置问题。
+                查看详细的连接信息和错误日志。
+            </div>
+            <div class="feature-card-buttons">
+        """, unsafe_allow_html=True)
+        
+        if st.button("🔍 检查后端状态", use_container_width=True, type="primary", key="status_button_5"):
+            st.switch_page("pages/backend_status.py")
 
         st.markdown("""
             </div>
