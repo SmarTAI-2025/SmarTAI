@@ -4,6 +4,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from backend.routers import prob_preview, hw_preview, ai_grading, human_edit
 # from app.db import init_db
 import logging
+import random
+import os
 
 # --- 日志和应用基础设置 ---
 logging.basicConfig(level=logging.INFO)
@@ -51,9 +53,7 @@ app = create_app()
 #             # Convert to the expected format
 #             problems = data.get('students', [])
 #             for problem in problems:
-#                 q_id = problem.get('id')
-#                 if q_id:
-#                     # Store the problem data with q_id as the key
+#             # Store the problem data with q_id as the key
 #                     problem_data[q_id] = {
 #                         'q_id': q_id,
 #                         'number': problem.get('number', ''),
@@ -77,5 +77,9 @@ app = create_app()
 # --- 本地启动服务器 ---
 if __name__ == "__main__":
     import uvicorn
-    logger.info("启动FastAPI后端服务，监听 http://127.0.0.1:8000")
-    uvicorn.run(app, host="127.0.0.1", port=8000)
+    
+    # Get port from environment variable or use random port
+    port = int(os.environ.get("BACKEND_PORT", random.randint(8000, 9000)))
+    
+    logger.info(f"启动FastAPI后端服务，监听 http://localhost:{port}")
+    uvicorn.run(app, host="localhost", port=port)  # Changed from 127.0.0.1 to localhost

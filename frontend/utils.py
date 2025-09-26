@@ -46,8 +46,8 @@ def initialize_session_state():
     # --- 关键改动在这里 ---
     # 如果 'backend' 这个键不存在于 session_state 中，就设置它的初始/固定值
     if "backend" not in st.session_state:
-        # 在这里硬编码你的后端地址
-        st.session_state.backend = "http://localhost:8000" 
+        # Get backend URL from environment variable or use default
+        st.session_state.backend = os.environ.get("BACKEND_URL", "http://localhost:8000")
         
     if 'prob_changed' not in st.session_state:
         st.session_state.prob_changed = False
@@ -176,7 +176,8 @@ def inject_pollers_for_active_jobs():
     if "jobs" not in st.session_state:
         st.session_state.jobs = {}
     if "backend" not in st.session_state:
-        st.session_state.backend = "http://localhost:8000"
+        # 修改默认值，使用环境变量而不是固定的8000端口
+        st.session_state.backend = os.environ.get("BACKEND_URL", "http://localhost:8000")
 
     # Filter out mock jobs - only poll for real jobs
     real_jobs = {}
