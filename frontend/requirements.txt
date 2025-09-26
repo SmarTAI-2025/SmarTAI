@@ -1,7 +1,7 @@
-streamlit==1.38.0
-streamlit-scroll-to-top==0.0.1
-requests==2.32.3
-numpy==1.24.3
-pandas==2.0.3
-reportlab==4.2.2
-plotly==5.22.0
+streamlit
+streamlit_scroll_to_top
+requests
+numpy
+pandas
+reportlab
+plotly
