@@ -381,7 +381,7 @@ def render_upload_section():
     st.markdown("## 📤 作业上传")
     
     st.markdown("""
-    <div style="background: white; padding: 2rem; border-radius: 15px; box-shadow: 0 8px 25px rgba(0,0,0,0.1); border-top: 4px solid #1E3A8A;">
+    <div style="background: white; padding: 2rem; border-radius: 15px; box-shadow: 0 8px 25px rgba(0,0,0,0.1); border-top: 8px solid #adc3ff;">
         <h3 style="color: #1E3A8A; margin-top: 0;">开始新的作业批改流程</h3>
         <p>上传题目和学生作业文件，启动AI智能批改流程。</p>
     </div>
