@@ -321,7 +321,7 @@ def render_feature_cards():
             <div class="feature-card-buttons">
         """, unsafe_allow_html=True)
         
-        if st.button("📚 查看历史记录", use_container_width=True, type="primary", key="history_button_4"):
+        if st.button("📚 查看知识数据库", use_container_width=True, type="primary", key="history_button_4"):
             st.switch_page("pages/knowledge_base.py")
 
         st.markdown("""
