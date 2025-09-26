@@ -21,14 +21,23 @@ def create_app() -> FastAPI:
     app.include_router(ai_grading.router)   # 挂载到 /ai_grading
     app.include_router(human_edit.router)
 
-    # 允许所有来源的跨域请求，便于本地开发
+    # Configure CORS for deployment
+    # For local development, allow all origins
+    # For production, you should specify the exact origins
+    frontend_origins = os.environ.get("FRONTEND_URLS", "http://localhost:8501,http://localhost:8501")
+    origins = frontend_origins.split(",")
+    
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=["*"],
+        allow_origins=origins,
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
     )
+
+    @app.get("/health")
+    def health_check():
+        return {"status": "healthy", "message": "SmarTAI backend is running"}
 
     return app
 
