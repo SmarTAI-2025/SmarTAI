@@ -46,12 +46,8 @@ def initialize_session_state():
     # --- 关键改动在这里 ---
     # 如果 'backend' 这个键不存在于 session_state 中，就设置它的初始/固定值
     if "backend" not in st.session_state:
-        # Get backend URL from Streamlit secrets first, then environment variable, then default
-        try:
-            backend_url = st.secrets.get("BACKEND_URL", os.environ.get("BACKEND_URL", "http://localhost:8000"))
-        except:
-            backend_url = os.environ.get("BACKEND_URL", "http://localhost:8000")
-        st.session_state.backend = backend_url
+        # Hardcode the backend URL for deployment
+        st.session_state.backend = "https://smartai-backend-zefh.onrender.com"
         
     if 'prob_changed' not in st.session_state:
         st.session_state.prob_changed = False
@@ -180,12 +176,8 @@ def inject_pollers_for_active_jobs():
     if "jobs" not in st.session_state:
         st.session_state.jobs = {}
     if "backend" not in st.session_state:
-        # Get backend URL from Streamlit secrets first, then environment variable, then default
-        try:
-            backend_url = st.secrets.get("BACKEND_URL", os.environ.get("BACKEND_URL", "http://localhost:8000"))
-        except:
-            backend_url = os.environ.get("BACKEND_URL", "http://localhost:8000")
-        st.session_state.backend = backend_url
+        # Hardcode the backend URL for deployment
+        st.session_state.backend = "https://smartai-backend-zefh.onrender.com"
 
     # Filter out mock jobs - only poll for real jobs
     real_jobs = {}

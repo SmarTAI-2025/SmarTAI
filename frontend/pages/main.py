@@ -20,12 +20,8 @@ from utils import *
 from frontend_utils.data_loader import load_ai_grading_data, StudentScore, QuestionAnalysis, AssignmentStats
 from frontend_utils.chart_components import create_score_distribution_chart, create_grade_pie_chart
 
-# Get backend URL from environment variable or use default
-# First try to get from Streamlit secrets, then from environment variable, then default
-try:
-    BACKEND_URL = st.secrets.get("BACKEND_URL", os.environ.get("BACKEND_URL", "http://localhost:8000"))
-except:
-    BACKEND_URL = os.environ.get("BACKEND_URL", "http://localhost:8000")
+# Get backend URL - hardcoded for deployment
+BACKEND_URL = "https://smartai-backend-zefh.onrender.com"
 
 # 页面配置
 st.set_page_config(
