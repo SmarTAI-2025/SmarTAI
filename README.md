@@ -30,7 +30,7 @@ pip install -r requirements.txt
 
 ## 一体化启动（推荐开发使用）
 
-`python app_cloud.py`
+`streamlit run app.py`
 
 这个脚本会自动启动后端和前端服务，并处理端口分配和环境变量设置。
 
