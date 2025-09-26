@@ -47,6 +47,7 @@ SmarTAI/
 │   ├── dependencies.py
 │   ├── requirements.txt
 │   ├── render.yaml
+│   ├── start.py
 │   └── ...
 ├── frontend/
 │   ├── main.py
@@ -67,7 +68,7 @@ SmarTAI/
    - **Environment**: Python 3
    - **Region**: 选择一个离您用户近的区域
    - **Build Command**: `pip install -r requirements.txt`
-   - **Start Command**: `uvicorn main:app --host 0.0.0.0 --port $PORT`
+   - **Start Command**: `python start.py`
 5. 点击 "Create Web Service"
 6. 部署成功后，您会得到一个公开的 URL，例如：`https://smartai-backend.onrender.com`
 
@@ -106,7 +107,7 @@ COPY *.json ./  # Copy config files
 
 EXPOSE 8000
 
-CMD ["uvicorn", "backend.main:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["python", "backend/start.py"]
 ```
 
 创建 `frontend/Dockerfile`:
@@ -182,6 +183,13 @@ docker-compose up --build
 
 ```bash
 cd backend
+python start.py
+```
+
+或者使用 uvicorn directly:
+
+```bash
+cd backend
 uvicorn main:app --reload --host localhost --port 8000
 ```
 
@@ -214,3 +222,10 @@ python app_cloud.py
 ### 依赖安装问题
 
 如果在 Render 上部署时遇到依赖安装问题，可能是因为依赖冲突。我们已经将依赖声明简化为最小化版本，只保留必要的包名而没有版本约束，以允许 pip 自动解决依赖关系。
+
+### 模块导入问题
+
+如果遇到 `ModuleNotFoundError` 错误，这是因为 Python 路径没有正确设置。我们通过以下方式解决：
+1. 在 [backend/main.py](file:///d%3A/work/SmarTAI/backend/main.py) 中添加了项目根目录到 Python 路径
+2. 创建了 [backend/start.py](file:///d%3A/work/SmarTAI/backend/start.py) 启动脚本，确保正确的路径设置
+3. 在 [backend/render.yaml](file:///d%3A/work/SmarTAI/backend/render.yaml) 中使用启动脚本而不是直接调用 uvicorn

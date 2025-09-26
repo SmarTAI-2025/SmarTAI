@@ -1,11 +1,16 @@
 # app/main.py
+import sys
+import os
+
+# Add the project root to the Python path
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from backend.routers import prob_preview, hw_preview, ai_grading, human_edit
 # from app.db import init_db
 import logging
 import random
-import os
 
 # --- 日志和应用基础设置 ---
 logging.basicConfig(level=logging.INFO)
