@@ -571,7 +571,12 @@ def render_dashboard():
     
     render_footer()
 
-    inject_pollers_for_active_jobs()
+    # Only inject pollers if there are jobs to poll
+    try:
+        inject_pollers_for_active_jobs()
+    except Exception as e:
+        # Silently handle any errors in polling
+        pass
 
 def main():
     """主函数 - 应用入口点"""

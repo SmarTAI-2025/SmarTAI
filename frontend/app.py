@@ -8,7 +8,8 @@ import sys
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 # Import and run the main application
-from frontend.pages.main import main
+# Fix the import path - it should be relative to the package structure
+from pages.main import main
 
 if __name__ == "__main__":
     main()
