@@ -22,8 +22,8 @@ class ChartComponents:
         """初始化图表配置"""
         # 配色方案
         self.colors = {
-            'primary': '#1E3A8A',      # 深蓝色
-            'secondary': '#F59E0B',    # 橙色
+            'primary': '#4363cdff',      # 深蓝色
+            'secondary': "#964BC4",    # 紫色
             'success': '#10B981',      # 绿色
             'warning': '#F59E0B',      # 橙色
             'danger': '#EF4444',       # 红色
@@ -93,11 +93,11 @@ class ChartComponents:
         
         # Define colors for each grade level
         grade_colors = {
-            '优秀': self.colors['success'],    # Green for excellent
-            '良好': self.colors['info'],       # Blue for good
-            '中等': self.colors['teal'],       # Teal for average
-            '及格': self.colors['secondary'],  # Orange for passing
-            '不及格': self.colors['danger']    # Red for failing
+            '优秀': "#C774F8",    # Green for excellent
+            '良好': "#6F99F4",       # Blue for good
+            '中等': "#55DC77",       # Teal for average
+            '及格': "#E3CC56",  # Orange for passing
+            '不及格': "#DA5050"    # Red for failing
         }
         
         # Map colors to labels in the same order

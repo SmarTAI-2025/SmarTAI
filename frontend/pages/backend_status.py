@@ -98,18 +98,18 @@ def main():
     initialize_session_state()
     
     # Add return to home button
-    col1, col2 = st.columns([8, 1])
+    col1, col2 = st.columns([12, 56])
+
     with col1:
+        st.page_link("pages/main.py", label="返回首页", icon="🏠")
+
+    with col2:
         st.markdown("""
         <div style="text-align: center; margin-bottom: 2rem;">
             <h1>🔍 Backend Connection Status</h1>
             <p>Check the connection status between the frontend and backend services</p>
         </div>
         """, unsafe_allow_html=True)
-    
-    with col2:
-        if st.button("🏠 Home", key="home_button"):
-            st.switch_page("pages/main.py")
     
     # Get backend URL from session state
     backend_url = st.session_state.get("backend", "http://localhost:8000")
