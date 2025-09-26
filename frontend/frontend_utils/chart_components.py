@@ -22,7 +22,7 @@ class ChartComponents:
         """初始化图表配置"""
         # 配色方案
         self.colors = {
-            'primary': '#4363cdff',      # 深蓝色
+            'primary': '#3B82F6',      # 深蓝色
             'secondary': "#964BC4",    # 紫色
             'success': '#10B981',      # 绿色
             'warning': '#F59E0B',      # 橙色
