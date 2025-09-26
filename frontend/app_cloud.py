@@ -4,12 +4,13 @@ This script is specifically designed for cloud deployments like Streamlit Commun
 """
 import os
 import sys
+from utils import UTILS_BACKEND_URL
 
 # Add the project root to the Python path
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 # Set the backend URL from environment variables or use default
-backend_url = os.environ.get("BACKEND_URL", "https://smartai-backend-zefh.onrender.com")
+backend_url = os.environ.get("BACKEND_URL", UTILS_BACKEND_URL)
 
 def main():
     # Import and run the main application

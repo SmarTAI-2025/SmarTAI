@@ -6,6 +6,8 @@ import requests
 import os
 KNOWLEDGE_BASE_DIR = "knowledge_bases"
 KNOWLEDGE_BASE_CONFIG = "knowledge_base_config.json"
+UTILS_BACKEND_URL = "https://smartai-backend-zefh.onrender.com" # render部署
+# UTILS_BACKEND_URL = "http://localhost:8000" # 本地测试
 
 def load_knowledge_base_config():
     """从 JSON 文件加载知识库配置到 session_state"""
@@ -47,7 +49,7 @@ def initialize_session_state():
     # 如果 'backend' 这个键不存在于 session_state 中，就设置它的初始/固定值
     if "backend" not in st.session_state:
         # Hardcode the backend URL for deployment
-        st.session_state.backend = "https://smartai-backend-zefh.onrender.com"
+        st.session_state.backend = UTILS_BACKEND_URL
         
     if 'prob_changed' not in st.session_state:
         st.session_state.prob_changed = False
@@ -177,7 +179,7 @@ def inject_pollers_for_active_jobs():
         st.session_state.jobs = {}
     if "backend" not in st.session_state:
         # Hardcode the backend URL for deployment
-        st.session_state.backend = "https://smartai-backend-zefh.onrender.com"
+        st.session_state.backend = UTILS_BACKEND_URL
 
     # Filter out mock jobs - only poll for real jobs
     real_jobs = {}

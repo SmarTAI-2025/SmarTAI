@@ -21,7 +21,7 @@ from frontend_utils.data_loader import load_ai_grading_data, StudentScore, Quest
 from frontend_utils.chart_components import create_score_distribution_chart, create_grade_pie_chart
 
 # Get backend URL - from environment variable or hardcoded default
-BACKEND_URL = os.environ.get("BACKEND_URL", "https://smartai-backend-zefh.onrender.com")
+BACKEND_URL = os.environ.get("BACKEND_URL", UTILS_BACKEND_URL)
 
 # 页面配置
 st.set_page_config(
@@ -171,7 +171,7 @@ def render_user_welcome():
             st.session_state.logged_in = False
             st.session_state.username = ""
             st.success("已退出登录")
-            st.switch_page("frontend/pages/login.py")
+            st.switch_page("pages/login.py")
 
 def render_statistics_overview():
     """渲染统计概览"""

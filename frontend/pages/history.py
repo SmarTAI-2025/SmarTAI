@@ -50,7 +50,7 @@ def render_header():
 
     with col1:
         if st.button("🏠 返回首页", type="secondary"):
-            st.switch_page("frontend/pages/main.py")
+            st.switch_page("pages/main.py")
     
     with col2:
         if st.button("🔄 刷新界面", type="secondary"):
