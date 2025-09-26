@@ -1,98 +1,231 @@
-# Streamlit Cloud Deployment Guide
+# SmarTAI 部署指南
 
-## Overview
+本指南将帮助您将 SmarTAI 应用的前端 (Streamlit) 和后端 (FastAPI) 分别部署到不同的托管平台。
 
-This document explains how to deploy the SmarTAI application to Streamlit Cloud using the single-file "glue" mode approach.
+## 部署架构概述
 
-## Implementation Details
+SmarTAI 应用采用前后端分离架构：
 
-We've created a combined application file `app_cloud.py` that integrates both the FastAPI backend and Streamlit frontend into a single process. This approach is necessary because Streamlit Cloud only supports a single entry point.
+- **前端**: Streamlit 应用，提供用户界面
+- **后端**: FastAPI 应用，提供 API 服务
 
-### Key Features of the Combined App
+## 部署方案
 
-1. **Single Process Architecture**: Both frontend and backend run in the same Python process
-2. **Threaded Backend**: The FastAPI backend runs in a separate thread to avoid blocking the Streamlit frontend
-3. **Shared Dependencies**: All required libraries are declared in `requirements.txt`
-4. **Path Management**: Proper Python path configuration to import modules from subdirectories
+### 方案一：托管平台部署（推荐）
 
-### How It Works
+这是最简单的部署方式，适合快速原型验证和个人项目：
 
-1. When `app_cloud.py` is executed:
-   - The FastAPI backend starts in a background thread on port 8000
-   - The Streamlit frontend starts on the main thread (port assigned by Streamlit Cloud)
-   - Both components can communicate as needed
+| 组件 | 推荐平台 | 说明 |
+|------|----------|------|
+| 前端 | [Streamlit Community Cloud](https://share.streamlit.io/) | 官方提供，免费，完美集成 |
+| 后端 | [Render](https://render.com/) | 有免费套餐，对Python Web服务支持友好 |
 
-2. The application structure:
-   - Backend routers are imported and mounted on the FastAPI app
-   - Frontend pages are served through Streamlit
-   - Shared utilities and models are accessible to both components
+### 方案二：容器化部署
 
-## Deployment Instructions
+适合需要更多控制和定制的项目：
 
-### For Streamlit Cloud
+- 使用 Docker 容器化应用
+- 部署到云服务器（如 AWS, Google Cloud, Azure）
 
-1. Push your code to a GitHub repository
-2. In Streamlit Cloud:
-   - Set the "App URL" to point to your repository
-   - Set the "Main file" to `app_cloud.py`
-   - Click "Deploy!"
+## 方案一：托管平台部署步骤
 
-### For Local Testing
+### 步骤 1: 准备代码库
 
-To test the cloud deployment mode locally:
+确保您的项目已经使用 Git 管理，并上传到了 GitHub。
 
-```bash
-streamlit run app_cloud.py --client.showSidebarNavigation=False
+项目结构应该如下：
+
+```
+SmarTAI/
+├── .gitignore
+├── README.md
+├── requirements.txt
+├── DEPLOYMENT.md
+├── backend/
+│   ├── main.py
+│   ├── routers/
+│   ├── dependencies.py
+│   ├── requirements.txt
+│   ├── render.yaml
+│   ├── start.py
+│   └── ...
+├── frontend/
+│   ├── main.py
+│   ├── pages/
+│   ├── utils.py
+│   └── ...
+└── ...
 ```
 
-This will start both the backend (on port 8000) and frontend (on a Streamlit-assigned port) in a single process.
+### 步骤 2: 部署后端到 Render
 
-## Technical Considerations
+1. 访问 [render.com](https://render.com) 并注册/登录
+2. 点击 "New +" -> "Web Service"
+3. 连接您的 GitHub 仓库
+4. 配置部署设置：
+   - **Name**: smartai-backend (或其他您喜欢的名字)
+   - **Root Directory**: backend
+   - **Environment**: Python 3
+   - **Region**: 选择一个离您用户近的区域
+   - **Build Command**: `pip install -r requirements.txt`
+   - **Start Command**: `python start.py`
+5. 点击 "Create Web Service"
+6. 部署成功后，您会得到一个公开的 URL，例如：`https://smartai-backend.onrender.com`
 
-### Port Configuration
+### 步骤 3: 部署前端到 Streamlit Community Cloud
 
-- Backend runs on port 8000 to avoid conflicts with Streamlit's port
-- In a production environment, you may need to adjust firewall settings if external access is required
+1. 访问 [share.streamlit.io](https://share.streamlit.io) 并授权您的 GitHub 账号
+2. 点击 "New app"，选择您的 GitHub 仓库
+3. 配置部署设置：
+   - **Repository**: 选择您的项目仓库
+   - **Branch**: main
+   - **Main file path**: frontend/app.py
+4. 点击 "Advanced settings..."
+5. 在 "Secrets" 部分，添加后端 URL：
+   - **Secret name**: BACKEND_URL
+   - **Secret value**: `https://smartai-backend.onrender.com` (您在步骤2中获得的URL)
+6. 点击 "Deploy!"
 
-### Threading Model
+## 方案二：容器化部署
 
-- The backend runs in a separate thread to prevent blocking the Streamlit event loop
-- Care has been taken to ensure thread-safe operations where needed
+如果您需要更多控制，可以使用 Docker 容器化应用。
 
-### Dependencies
+### Docker 配置
 
-All required dependencies are listed in `requirements.txt`. The combined app requires:
+创建 `backend/Dockerfile`:
 
-- FastAPI and Uvicorn for the backend
-- Streamlit for the frontend
-- Langchain and related AI libraries for processing
-- Archive processing libraries (rarfile, py7zr) for file handling
-- Data visualization libraries (plotly)
+```dockerfile
+FROM python:3.9-slim
 
-## Limitations
+WORKDIR /app
 
-1. **Resource Usage**: Running both frontend and backend in the same process uses more memory
-2. **Error Isolation**: Errors in one component may affect the other
-3. **Scaling**: This approach is suitable for small to medium deployments but may not scale to very high traffic
+COPY requirements.txt .
+RUN pip install -r requirements.txt
 
-## Troubleshooting
+COPY backend/ ./backend
+COPY *.json ./  # Copy config files
 
-### Common Issues
+EXPOSE 8000
 
-1. **Import Errors**: Ensure all dependencies are listed in `requirements.txt`
-2. **Port Conflicts**: If port 8001 is in use, modify the port in `app_cloud.py`
-3. **Path Issues**: Make sure the project root is in the Python path
-
-### Testing Imports
-
-You can verify that all components import correctly by running:
-
-```bash
-python -c "from app_cloud import *; print('All imports successful')"
+CMD ["python", "backend/start.py"]
 ```
 
-## Future Improvements
+创建 `frontend/Dockerfile`:
 
-1. **Health Checks**: Add endpoints to monitor the health of both frontend and backend
-2. **Graceful Shutdown**: Implement proper shutdown procedures for the backend thread
-3. **Configuration**: Add environment variables for port configuration and other settings
+```dockerfile
+FROM python:3.9-slim
+
+WORKDIR /app
+
+COPY requirements.txt .
+RUN pip install -r requirements.txt
+
+COPY . .
+
+EXPOSE 8501
+
+CMD ["streamlit", "run", "frontend/main.py", "--server.port=8501", "--server.address=0.0.0.0"]
+```
+
+### 使用 Docker Compose
+
+创建 `docker-compose.yml`:
+
+```yaml
+version: '3.8'
+
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    ports:
+      - "8000:8000"
+    environment:
+      - BACKEND_PORT=8000
+
+  frontend:
+    build:
+      context: .
+      dockerfile: frontend/Dockerfile
+    ports:
+      - "8501:8501"
+    environment:
+      - BACKEND_URL=http://backend:8000
+    depends_on:
+      - backend
+```
+
+运行应用：
+
+```bash
+docker-compose up --build
+```
+
+## 环境变量配置
+
+应用使用以下环境变量：
+
+### 后端 (FastAPI)
+
+- `FRONTEND_URLS`: 允许访问后端的前端URL列表，用逗号分隔（默认："http://localhost:8501"）
+- `BACKEND_PORT`: 后端服务端口（本地开发时使用）
+
+### 前端 (Streamlit)
+
+- `BACKEND_URL`: 后端服务的URL（默认："http://localhost:8000"）
+
+## 本地开发
+
+在本地运行应用：
+
+### 运行后端
+
+```bash
+cd backend
+python start.py
+```
+
+或者使用 uvicorn directly:
+
+```bash
+cd backend
+uvicorn main:app --reload --host localhost --port 8000
+```
+
+### 运行前端
+
+```bash
+streamlit run frontend/main.py
+```
+
+或者使用一体化启动脚本：
+
+```bash
+python app_cloud.py
+```
+
+## 故障排除
+
+### CORS 错误
+
+如果遇到跨域问题，请检查后端的 `FRONTEND_URLS` 环境变量是否包含了前端的URL。
+
+### 连接问题
+
+确保前端能够访问后端URL。在部署环境中，使用实际的域名而不是 localhost。
+
+### 环境变量未生效
+
+在 Streamlit Community Cloud 中，确保在 "Advanced settings" 的 "Secrets" 部分正确设置了环境变量。
+
+### 依赖安装问题
+
+如果在 Render 上部署时遇到依赖安装问题，可能是因为依赖冲突。我们已经将依赖声明简化为最小化版本，只保留必要的包名而没有版本约束，以允许 pip 自动解决依赖关系。
+
+### 模块导入问题
+
+如果遇到 `ModuleNotFoundError` 错误，这是因为 Python 路径没有正确设置。我们通过以下方式解决：
+1. 在 [backend/main.py](file:///d%3A/work/SmarTAI/backend/main.py) 中添加了项目根目录到 Python 路径
+2. 创建了 [backend/start.py](file:///d%3A/work/SmarTAI/backend/start.py) 启动脚本，确保正确的路径设置
+3. 在 [backend/render.yaml](file:///d%3A/work/SmarTAI/backend/render.yaml) 中使用启动脚本而不是直接调用 uvicorn

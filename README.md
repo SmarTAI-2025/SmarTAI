@@ -28,6 +28,12 @@ pip install -r requirements.txt
 > - 端口将随机分配，启动后会在控制台显示访问地址
 > - --server.headless true：在无头环境（容器、远程服务器）下不自动尝试打开浏览器。开发时本地也可以省略该参数以自动打开浏览器。
 
+## 一体化启动（推荐开发使用）
+
+`python app_cloud.py`
+
+这个脚本会自动启动后端和前端服务，并处理端口分配和环境变量设置。
+
 ## AI自动批改功能
 
 本项目新增了AI自动批改功能，支持以下题型：
@@ -46,3 +52,19 @@ pip install -r requirements.txt
 
 - `POST /ai_grading_new/grade_student/` - 启动学生作业批改任务
 - `GET /ai_grading_new/grade_result/{job_id}` - 获取批改结果
+
+## 部署指南
+
+详细部署说明请参考 [DEPLOYMENT.md](DEPLOYMENT.md) 文件，其中包含：
+
+1. **托管平台部署**（推荐）：
+   - 前端部署到 Streamlit Community Cloud
+   - 后端部署到 Render (配置文件位于 [backend/render.yaml](file:///d%3A/work/SmarTAI/backend/render.yaml))
+
+2. **容器化部署**：
+   - 使用 Docker 和 Docker Compose
+   - 适合需要更多控制的生产环境
+
+3. **环境变量配置**：
+   - BACKEND_URL：前端连接后端的URL
+   - FRONTEND_URLS：后端允许的前端来源（CORS配置）

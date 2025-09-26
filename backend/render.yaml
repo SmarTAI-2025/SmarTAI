@@ -1,0 +1,9 @@
+services:
+  - type: web
+    name: smartai-backend
+    env: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: python backend/start.py
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.9.15
