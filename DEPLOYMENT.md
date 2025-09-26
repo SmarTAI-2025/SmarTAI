@@ -213,4 +213,4 @@ python app_cloud.py
 
 ### 依赖安装问题
 
-如果在 Render 上部署时遇到依赖安装问题，请检查 [backend/requirements.txt](file:///d%3A/work/SmarTAI/backend/requirements.txt) 文件中的包版本是否与 Render 环境兼容。我们已经为 Render 环境优化了依赖版本，使用版本范围而不是固定版本，以确保兼容性。
+如果在 Render 上部署时遇到依赖安装问题，可能是因为依赖冲突。我们已经将依赖声明简化为最小化版本，只保留必要的包名而没有版本约束，以允许 pip 自动解决依赖关系。
