@@ -4,16 +4,16 @@
 包含各种可视化图表的生成函数，支持Plotly和Altair图表
 """
 
-import plotly.express as px
+# import plotly.express as px
 import plotly.graph_objects as go
-from plotly.subplots import make_subplots
+# from plotly.subplots import make_subplots
 import pandas as pd
 import numpy as np
-import streamlit as st
-from typing import List, Dict, Any, Optional
-import altair as alt
+# import streamlit as st
+from typing import List
+# import altair as alt
 
-from .data_loader import StudentScore, QuestionAnalysis, AssignmentStats
+from .data_loader import StudentScore, QuestionAnalysis
 
 class ChartComponents:
     """图表组件类"""

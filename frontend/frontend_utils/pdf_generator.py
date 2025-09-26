@@ -4,10 +4,10 @@ PDF Report Generator for SmarTAI
 This module provides functionality to generate PDF reports from grading data.
 """
 
-import streamlit as st
+# import streamlit as st
 from reportlab.pdfgen import canvas
 from reportlab.lib.pagesizes import A4
-from reportlab.lib.units import mm
+# from reportlab.lib.units import mm
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
 from reportlab.platypus import Table, TableStyle

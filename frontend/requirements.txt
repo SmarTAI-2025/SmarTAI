@@ -1,0 +1,7 @@
+streamlit
+streamlit_scroll_to_top
+requests
+numpy
+pandas
+reportlab
+plotly

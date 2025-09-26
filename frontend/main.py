@@ -10,7 +10,6 @@ import os
 import json
 import requests
 from datetime import datetime
-from typing import Dict, Any
 
 # 添加项目路径
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
