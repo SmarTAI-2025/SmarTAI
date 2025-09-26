@@ -7,7 +7,7 @@ headless = true
 showSidebarNavigation = false
 
 [theme]
-primaryColor = "#1E3A8A"
+primaryColor = "#4363cdff"
 backgroundColor = "#F8FAFC"
 secondaryBackgroundColor = "#F1F5F9"
 textColor = "#0F172A"
