@@ -1,5 +1,5 @@
 from pydantic import BaseModel
-from typing import List, Optional, Any, Dict
+from typing import List, Optional
 
 
 class StepScore(BaseModel):

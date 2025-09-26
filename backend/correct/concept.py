@@ -6,7 +6,7 @@ import re  # Using standard re instead of regex_module
 import os
 import json
 import argparse
-from typing import Dict, Any, List
+from typing import Dict, Any
 
 from backend.models import Correction, StepScore
 from backend.correct.prompt_utils import prepare_concept_prompt

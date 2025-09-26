@@ -1,7 +1,7 @@
 """
 Utility functions for preparing prompts for AI grading.
 """
-import os
+# import os
 import structlog
 from typing import List, Dict, Any
 
