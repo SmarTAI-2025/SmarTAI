@@ -20,8 +20,8 @@ from utils import *
 from frontend_utils.data_loader import load_ai_grading_data, StudentScore, QuestionAnalysis, AssignmentStats
 from frontend_utils.chart_components import create_score_distribution_chart, create_grade_pie_chart
 
-# Get backend URL - hardcoded for deployment
-BACKEND_URL = "https://smartai-backend-zefh.onrender.com"
+# Get backend URL - from environment variable or hardcoded default
+BACKEND_URL = os.environ.get("BACKEND_URL", "https://smartai-backend-zefh.onrender.com")
 
 # 页面配置
 st.set_page_config(
@@ -571,12 +571,7 @@ def render_dashboard():
     
     render_footer()
 
-    # Only inject pollers if there are jobs to poll
-    try:
-        inject_pollers_for_active_jobs()
-    except Exception as e:
-        # Silently handle any errors in polling
-        pass
+    inject_pollers_for_active_jobs()
 
 def main():
     """主函数 - 应用入口点"""

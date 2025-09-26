@@ -1,7 +1,7 @@
 [server]
 port = 8501
-address = "localhost"
-headless = false
+address = "0.0.0.0"
+headless = true
 
 [client]
 showSidebarNavigation = false
@@ -12,3 +12,6 @@ backgroundColor = "#F8FAFC"
 secondaryBackgroundColor = "#F1F5F9"
 textColor = "#0F172A"
 font = "sans serif"
+
+[browser]
+serverAddress = "0.0.0.0"

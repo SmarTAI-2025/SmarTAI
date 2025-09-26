@@ -73,7 +73,7 @@ SmarTAI/
    - **Key**: `FRONTEND_URLS`
    - **Value**: `https://smartai-2025-smartai-frontendapp-iie6tb.streamlit.app,http://localhost:8501`
 6. 点击 "Create Web Service"
-7. 部署成功后，您会得到一个公开的 URL，例如：`https://smartai-backend.onrender.com`
+7. 部署成功后，您会得到一个公开的 URL，例如：`https://smartai-backend-zefh.onrender.com`
 
 ### 步骤 3: 部署前端到 Streamlit Community Cloud
 
@@ -120,14 +120,14 @@ FROM python:3.9-slim
 
 WORKDIR /app
 
-COPY requirements.txt .
-RUN pip install -r requirements.txt
+COPY frontend/requirements.txt .
+RUN pip install -r frontend/requirements.txt
 
 COPY . .
 
 EXPOSE 8501
 
-CMD ["streamlit", "run", "frontend/main.py", "--server.port=8501", "--server.address=0.0.0.0"]
+CMD ["streamlit", "run", "frontend/app.py", "--server.port=8501", "--server.address=0.0.0.0"]
 ```
 
 ### 使用 Docker Compose
@@ -200,13 +200,13 @@ uvicorn main:app --reload --host localhost --port 8000
 ### 运行前端
 
 ```bash
-streamlit run frontend/main.py
+streamlit run frontend/app.py
 ```
 
 或者使用一体化启动脚本：
 
 ```bash
-python app_cloud.py
+python frontend/app_cloud.py
 ```
 
 ## 故障排除
@@ -237,3 +237,19 @@ python app_cloud.py
 ### 后端根路径返回 {"detail":"Not Found"}
 
 这是正常的，因为我们没有为根路径 [/](file://d:\work\SmarTAI\app_cloud.py) 定义处理函数。现在我们已经添加了一个根路径处理函数，它会返回一个友好的消息，表明后端正在运行。
+
+### Streamlit Health Check 失败
+
+如果遇到 "connection refused" 错误，请检查以下几点：
+
+1. 确保 [frontend/.streamlit/config.toml](file:///d%3A/work/SmarTAI/frontend/.streamlit/config.toml) 文件中的配置正确：
+   ```toml
+   [server]
+   port = 8501
+   address = "0.0.0.0"
+   headless = true
+   ```
+
+2. 确保 Streamlit 应用能够正确启动，检查 [frontend/app.py](file:///d%3A/work/SmarTAI/frontend/app.py) 或 [frontend/app_cloud.py](file:///d%3A/work/SmarTAI/frontend/app_cloud.py) 文件
+
+3. 在 Streamlit Community Cloud 中，确保 Main file path 设置为 `frontend/app.py`
