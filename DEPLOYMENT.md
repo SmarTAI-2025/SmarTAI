@@ -45,6 +45,8 @@ SmarTAI/
 │   ├── main.py
 │   ├── routers/
 │   ├── dependencies.py
+│   ├── requirements.txt
+│   ├── render.yaml
 │   └── ...
 ├── frontend/
 │   ├── main.py
@@ -64,7 +66,7 @@ SmarTAI/
    - **Root Directory**: backend
    - **Environment**: Python 3
    - **Region**: 选择一个离您用户近的区域
-   - **Build Command**: `pip install -r ../requirements.txt`
+   - **Build Command**: `pip install -r requirements.txt`
    - **Start Command**: `uvicorn main:app --host 0.0.0.0 --port $PORT`
 5. 点击 "Create Web Service"
 6. 部署成功后，您会得到一个公开的 URL，例如：`https://smartai-backend.onrender.com`
@@ -208,3 +210,7 @@ python app_cloud.py
 ### 环境变量未生效
 
 在 Streamlit Community Cloud 中，确保在 "Advanced settings" 的 "Secrets" 部分正确设置了环境变量。
+
+### 依赖安装问题
+
+如果在 Render 上部署时遇到依赖安装问题，请检查 [backend/requirements.txt](file:///d%3A/work/SmarTAI/backend/requirements.txt) 文件中的包版本是否与 Render 环境兼容。我们已经为 Render 环境优化了依赖版本。

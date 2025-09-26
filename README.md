@@ -59,7 +59,7 @@ pip install -r requirements.txt
 
 1. **托管平台部署**（推荐）：
    - 前端部署到 Streamlit Community Cloud
-   - 后端部署到 Render
+   - 后端部署到 Render (配置文件位于 [backend/render.yaml](file:///d%3A/work/SmarTAI/backend/render.yaml))
 
 2. **容器化部署**：
    - 使用 Docker 和 Docker Compose
