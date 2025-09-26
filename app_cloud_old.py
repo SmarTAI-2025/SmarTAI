@@ -57,7 +57,7 @@ if __name__ == "__main__":
         sys.exit(1)
 
     # 2. 启动前端应用
-    frontend_path = os.path.join(os.path.dirname(__file__), "frontend", "main.py")
+    frontend_path = os.path.join(os.path.dirname(__file__), "frontend/pages", "main.py")
     frontend_port = get_random_port()
     cmd = [sys.executable, "-m", "streamlit", "run", frontend_path, 
            "--server.port", str(frontend_port), "--client.showSidebarNavigation=False"]

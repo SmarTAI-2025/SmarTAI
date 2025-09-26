@@ -50,7 +50,7 @@ def render_header():
 
     with col1:
         if st.button("🏠 返回首页", type="secondary"):
-            st.switch_page("main.py")
+            st.switch_page("frontend/pages/main.py")
     
     with col2:
         if st.button("🔄 刷新界面", type="secondary"):
@@ -292,46 +292,6 @@ def render_completed_records():
             with col3:
                 if st.button("📄 导出PDF报告", key=f"report_{job_id}", use_container_width=True):
                     try:
-                        # Import PDF generator
-                        from frontend_utils.pdf_generator import generate_assignment_report
-                        
-                        # Get data for the report
-                        if job_id.startswith("MOCK_JOB"):
-                            # Use mock data
-                            data = st.session_state.sample_data
-                        else:
-                            # Fetch data from backend
-                            with st.spinner("正在获取数据..."):
-                                ai_data = load_ai_grading_data(job_id)
-                                if "error" not in ai_data:
-                                    data = ai_data
-                                else:
-                                    st.error(f"获取数据失败: {ai_data['error']}")
-                                    st.stop()
-                        
-                        students = data.get('student_scores', [])
-                        assignment_stats = data.get('assignment_stats', None)
-                        question_analysis = data.get('question_analysis', [])
-                        
-                        if assignment_stats and students:
-                            with st.spinner("正在生成报告..."):
-                                # Generate PDF report
-                                pdf_path = generate_assignment_report(assignment_stats, students, question_analysis)
-                                
-                                # Provide download link
-                                with open(pdf_path, "rb") as file:
-                                    st.download_button(
-                                        label="📥 下载PDF报告",
-                                        data=file,
-                                        file_name=f"{assignment_stats.assignment_name}_报告.pdf",
-                                        mime="application/pdf",
-                                        key=f"download_{job_id}"
-                                    )
-                                st.success("报告已生成！点击上方按钮下载。")
-                        else:
-                            st.warning("无法生成报告：缺少必要的数据。")
-                    except Exception as e:
-                        st.error(f"生成报告时出错: {str(e)}")
                         # Import PDF generator
                         from frontend_utils.pdf_generator import generate_assignment_report
                         

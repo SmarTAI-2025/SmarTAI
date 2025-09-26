@@ -249,7 +249,7 @@ def render_header():
     
     with col1:
         if st.button("🏠 返回首页", type="secondary"):
-            st.switch_page("main.py")
+            st.switch_page("pages/main.py")
     
     with col2:
         st.markdown("<h1 style='text-align: center; color: #1E3A8A;'>📚 知识库管理</h1>", 

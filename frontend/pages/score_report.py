@@ -46,13 +46,14 @@ def init_session_state():
         # Load mock data if no job is selected
         if 'sample_data' not in st.session_state:
             st.session_state.sample_data = load_mock_data()
+
 def render_header():
     """渲染页面头部"""
     col1, col2, col3, col4, col5, col6, col7 = st.columns(7)
     col = st.columns(1)[0]
 
     with col1:
-        st.page_link("main.py", label="返回首页", icon="🏠")
+        st.page_link("pages/main.py", label="返回首页", icon="🏠")
     
     with col2:
         st.page_link("pages/history.py", label="历史记录", icon="🕒")
@@ -75,11 +76,6 @@ def render_header():
     with col:
         st.markdown("<h1 style='text-align: center; color: #000000;'>💯 学生作业评分报告</h1>", 
                    unsafe_allow_html=True)
-
-    # with col8:
-    #     # Export button
-    #     if st.button("📤 导出数据", type="secondary"):
-    #         st.info("导出功能将在后续版本中实现")
 
 def render_student_selection(students: List[StudentScore]):
     """渲染学生选择界面"""

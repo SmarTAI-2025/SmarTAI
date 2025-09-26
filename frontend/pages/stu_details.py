@@ -23,7 +23,7 @@ def render_header():
     col = st.columns(1)[0]
 
     with col1:
-        st.page_link("main.py", label="返回首页", icon="🏠")
+        st.page_link("pages/main.py", label="返回首页", icon="🏠")
 
     with col2:
         st.page_link("pages/prob_upload.py", label="重新上传作业题目", icon="📤")

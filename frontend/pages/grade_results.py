@@ -26,7 +26,7 @@ def render_header():
     col = st.columns(1)[0]
 
     with col1:
-        st.page_link("main.py", label="返回首页", icon="🏠")
+        st.page_link("pages/main.py", label="返回首页", icon="🏠")
     
     with col2:
         st.page_link("pages/history.py", label="历史记录", icon="🕒")
@@ -82,8 +82,6 @@ if not st.session_state.jobs:
 
 # 4. 获取当前应该选择的任务ID
 selected_job_id = st.session_state.get("selected_job_id")
-
-# ... 后续代码不变 ...
 
 # # Filter out mock jobs
 # filtered_jobs = {}

@@ -58,7 +58,7 @@ def main():
         sys.exit(1)
 
     # 2. 启动前端应用 - 优先使用 8501 端口，如果被占用则使用随机端口
-    frontend_path = os.path.join(os.path.dirname(__file__), "frontend", "main.py")
+    frontend_path = os.path.join(os.path.dirname(__file__), "frontend/pages", "main.py")
     
     # 首先尝试 8501 端口
     frontend_port = 8501

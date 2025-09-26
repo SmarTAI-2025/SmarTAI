@@ -171,7 +171,7 @@ def render_user_welcome():
             st.session_state.logged_in = False
             st.session_state.username = ""
             st.success("已退出登录")
-            st.switch_page("pages/login.py")
+            st.switch_page("frontend/pages/login.py")
 
 def render_statistics_overview():
     """渲染统计概览"""
@@ -180,7 +180,11 @@ def render_statistics_overview():
     # 获取统计数据
     data = st.session_state.sample_data
     
-    # Check if data contains required keys
+    # Check if data is None or missing required keys
+    if data is None:
+        st.error("数据加载失败：无法获取统计数据")
+        return
+        
     if 'student_scores' not in data:
         st.error("数据加载失败：缺少学生分数信息")
         return
@@ -330,7 +334,7 @@ def render_feature_cards():
         """, unsafe_allow_html=True)
     
     # Add a new row for the backend status feature
-    col5, _ = st.columns(2)
+    col5, col6 = st.columns(2)
     
     with col5:
         st.markdown("""
@@ -338,7 +342,7 @@ def render_feature_cards():
             <div class="feature-icon">🔍</div>
             <div class="feature-title">后端状态检查</div>
             <div class="feature-description">
-                检查前端与后端的连接状态，诊断部署配置问题。
+                检查前端与后端的连接状态，
                 查看详细的连接信息和错误日志。
             </div>
             <div class="feature-card-buttons">
@@ -351,24 +355,21 @@ def render_feature_cards():
             </div>
         </div>
         """, unsafe_allow_html=True)
-    
-    # Add a new row for the backend status feature
-    col5, _ = st.columns(2)
-    
-    with col5:
+
+    with col6:
         st.markdown("""
         <div class="feature-card">
-            <div class="feature-icon">🔍</div>
-            <div class="feature-title">后端状态检查</div>
+            <div class="feature-icon">⚙️</div>
+            <div class="feature-title">系统设置</div>
             <div class="feature-description">
-                检查前端与后端的连接状态，诊断部署配置问题。
-                查看详细的连接信息和错误日志。
+                配置系统参数，管理用户设置。
+                调整应用行为和偏好设置。
             </div>
             <div class="feature-card-buttons">
         """, unsafe_allow_html=True)
         
-        if st.button("🔍 检查后端状态", use_container_width=True, type="primary", key="status_button_5"):
-            st.switch_page("pages/backend_status.py")
+        if st.button("⚙️ 系统设置", use_container_width=True, type="primary", key="settings_button_6"):
+            st.info("系统设置功能将在后续版本中实现")
 
         st.markdown("""
             </div>
@@ -392,13 +393,13 @@ def render_upload_section():
         st.markdown("### 📝 第一步：上传题目文件")
         st.markdown("上传包含题目的PDF或Word文档")
         if st.button("📁 上传题目文件", use_container_width=True, type="primary"):
-            st.switch_page("pages/prob_upload.py")
+                st.switch_page("pages/prob_upload.py")
 
     with col2:
         st.markdown("### 📄 第二步：上传学生作业")
         st.markdown("上传学生提交的作业文件")
         if st.button("📁 上传学生作业", use_container_width=True, type="primary"):
-            st.switch_page("pages/hw_upload.py")
+                st.switch_page("pages/hw_upload.py")
 
 def render_quick_preview():
     """渲染快速预览"""

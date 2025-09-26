@@ -353,7 +353,7 @@ def login(username, password):
 def main():
     # 如果已登录，直接跳转到主界面
     if st.session_state.logged_in:
-        st.switch_page("../main.py")
+        st.switch_page("pages/main.py")
         return
     
     # 如果要显示登录表单
@@ -486,10 +486,10 @@ def render_login_page():
                     st.success("✅ 登录成功！正在进入系统...")
                     time.sleep(1)
                     # 跳转到主界面
-                    st.switch_page("../main.py")
+                    st.switch_page("pages/main.py")
                 else:
                     st.error("❌ 用户名或密码错误，请检查后重试")
-            
+
             if cancel_btn:
                 st.session_state.show_login_modal = False
                 st.rerun()
