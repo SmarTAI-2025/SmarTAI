@@ -1,0 +1,20 @@
+# Web Framework
+fastapi
+uvicorn
+pydantic
+python-multipart
+
+# LangChain Ecosystem
+langchain
+langgraph
+langchain-core
+langchain-openai
+langchain-google-genai
+
+# File Processing
+PyPDF2
+rarfile
+py7zr
+
+# Utilities
+structlog

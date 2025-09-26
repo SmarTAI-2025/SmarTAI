@@ -176,7 +176,7 @@ def load_ai_grading_data(job_id: str) -> Dict[str, Any]:
             # Also check if the result contains data even if status is not explicitly "completed"
             if "results" not in result and "corrections" not in result:
                 # If we can't get real data, return mock data
-                st.info("这里显示的是【示例模拟任务】！")
+                # st.info("这里显示的是【示例模拟任务】！")
                 return load_mock_data()
         
         # 映射题目类型：从内部类型到中文显示名称
@@ -428,7 +428,7 @@ def load_ai_grading_data(job_id: str) -> Dict[str, Any]:
             }
         
         # If we can't get real data, return mock data
-        st.info("这里显示的是【示例模拟任务】！")
+        # st.info("这里显示的是【示例模拟任务】！")
         return load_mock_data()
         
     except Exception as e:

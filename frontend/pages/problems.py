@@ -153,14 +153,14 @@ def start_ai_grading_and_navigate():
 st.divider()
 
 # 使用列布局将按钮推到右侧 (这部分和你的代码一样)
-col_spacer, col_button = st.columns([60, 8])
+col_spacer, col_button = st.columns([60, 6])
 
 with col_button:
     # 2. 创建一个按钮，并告诉它在被点击时调用上面的函数
     if st.button(
         "✅ 确认题目", 
         on_click=start_ai_grading_and_navigate, 
-        use_container_width=False # 让按钮填满列宽，视觉效果更好
+        use_container_width=True # 让按钮填满列宽，视觉效果更好
     ):
         update_prob()
         update_ans()

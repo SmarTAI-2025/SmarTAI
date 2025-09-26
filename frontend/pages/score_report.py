@@ -158,15 +158,15 @@ def render_student_report(student: StudentScore):
     with col3:
         # Use consistent color coding for grade levels
         if student.grade_level == "优秀":
-            grade_color = "#10B981"  # green
+            grade_color = "#9659FF"  # green
         elif student.grade_level == "良好":
-            grade_color = "#3B82F6"  # blue
+            grade_color = "#5ABAFF"  # blue
         elif student.grade_level == "中等":
-            grade_color = "#2E8B57"  # teal
+            grade_color = "#6BFF79"  # teal
         elif student.grade_level == "及格":
-            grade_color = "#F59E0B"  # orange
+            grade_color = "#FFB73B"  # orange
         else:  # 不及格
-            grade_color = "#EF4444"  # red
+            grade_color = "#FF6060"  # red
             
         st.markdown(f"""
         <div style="text-align: center; padding: 1.5rem; background: white; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1);">
