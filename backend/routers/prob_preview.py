@@ -70,7 +70,7 @@ SYSTEM_PROMPT = """
 **[务必注意]:在生成JSON时，请确保字符串值中的所有反斜杠 \"\\" 都被正确转义为 \"\\\"。这对于包含LaTeX公式的字段尤其重要。***
 """
 
-def process_and_store_problems(
+async def process_and_store_problems(
     text: str,
     llm: Any, # 接收LLM客户端实例
     problem_store: Dict[str, Any] # 接收题目存储字典的引用
@@ -89,12 +89,19 @@ def process_and_store_problems(
             HumanMessage(content=text)
         ]
         
-        print("正在调用AI分析题目...")
-        # response_obj: ProblemSet = await structured_llm.ainvoke(messages)
+        logger.info("准备异步调用AI分析题目...")
+        
+        # 使用异步调用 await llm.ainvoke()
+        # 注意：这里假设你的llm对象是异步兼容的，对于langchain_openai的ChatOpenAI通常是这样
+        response = await llm.ainvoke(messages)
+        raw_llm_output = response.content
 
-        raw_llm_output = llm.invoke(messages).content
+        # raw_llm_output = llm.invoke(messages).content
+
         json_output = parse_llm_json_output(raw_llm_output, ProblemSet)
-        print("AI分析完成。")
+        
+        # 增加日志，确认AI调用已返回
+        logger.info("AI分析异步调用完成。")
         
         if not (json_output and json_output.problems):
             raise HTTPException(status_code=500, detail="AI未能从文本中提取出任何有效的题目。")
@@ -110,9 +117,14 @@ def process_and_store_problems(
         
         # 返回处理后的结果，以便API端点可以将其作为响应返回
         return prob_dict
-
+    
+    except asyncio.TimeoutError:
+        # 如果LLM客户端支持并配置了超时，可以捕获这个异常
+        logger.error("调用AI超时！")
+        raise HTTPException(status_code=504, detail="请求AI服务超时，请稍后重试。")
+    
     except Exception as e:
-        # 将底层错误包装成HTTPException
+        logger.exception(f"AI处理过程中发生异步错误: {e}") # 使用 logger.exception 可以打印堆栈信息
         raise HTTPException(status_code=500, detail=f"AI处理过程中发生错误: {e}")
 
 @router.post("/")
@@ -135,18 +147,18 @@ async def handle_homework_upload(
         
         # 2. 调用核心服务函数处理业务逻辑
         # 将解码后的文本和注入的依赖传递给服务函数
-        # recognized_hw = await process_and_store_problems(
-        #     text=text,
-        #     llm=llm,
-        #     problem_store=problem_store
-        # )
-        
-        recognized_hw = await asyncio.to_thread(
-            process_and_store_problems,
+        recognized_hw = await process_and_store_problems(
             text=text,
             llm=llm,
             problem_store=problem_store
         )
+        
+        # recognized_hw = await asyncio.to_thread(
+        #     process_and_store_problems,
+        #     text=text,
+        #     llm=llm,
+        #     problem_store=problem_store
+        # )
         logger.info(f"识别并存储了 {len(recognized_hw)} 个题目。")
         logger.info(f"识别题目内容: {recognized_hw}")
         

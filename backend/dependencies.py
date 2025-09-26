@@ -109,7 +109,7 @@ def get_student_store() -> Dict[str,Dict[str, Any]]:
     return student_data
 
 
-GEMINI_API_KEY = "AIzaSyCTHCicOOCvfqirIVg1xcGvUYl5h58l7U0"
+GEMINI_API_KEY = os.getenv("OPENAI_API_KEY","AIzaSyCTHCicOOCvfqirIVg1xcGvUYl5h58l7U0")
 
 # 您需要使用支持视觉（多模态）的模型，例如 "gpt-4o"
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "ce84d4642c3f4cabbcee430cc0bf674c.tcRryYKVL4tL2TpG")
@@ -126,21 +126,18 @@ def get_llm(model="zhipu") -> ChatOpenAI:
             logger.error("环境变量 OPENAI_API_KEY 未设置，后端调用将失败！")
 
         try:
-            client = ChatOpenAI(
-                api_key=OPENAI_API_KEY,
-                base_url=OPENAI_API_BASE,
-            )
-        except Exception as e:
-            logger.error(f"初始化OpenAI客户端失败: {e}")
-            client = None
-
-        # NOTE:zhipu ai直接复制这部分代码
-        zhipu_ai = ChatOpenAI(
+            zhipu_ai = ChatOpenAI(
                     model=OPENAI_MODEL,
                     temperature=0.0,
+                    max_tokens=None,
+                    timeout=600,
+                    max_retries=2,
                     api_key=OPENAI_API_KEY,
                     base_url=OPENAI_API_BASE,
                 )
+        except Exception as e:
+            logger.error(f"初始化 Zhipu AI客户端失败: {e}")
+            zhipu_ai = None
 
         return zhipu_ai
 
