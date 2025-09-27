@@ -31,6 +31,10 @@ st.set_page_config(
 
 def init_session_state():
     """初始化会话状态"""
+    # Set default job to MOCK_JOB_001 if not already set
+    if 'selected_job_id' not in st.session_state:
+        st.session_state.selected_job_id = "MOCK_JOB_001"
+    
     # Check if we have a selected job for AI grading data
     if 'selected_job_id' in st.session_state and st.session_state.selected_job_id:
         # Load AI grading data
@@ -222,6 +226,32 @@ def render_student_report(student: StudentScore):
             {f'<div style="margin-top: 1rem; padding: 0.5rem; background: #F8FAFC; border-radius: 4px;"><strong>反馈:</strong> {question["feedback"]}</div>' if question.get('feedback') else ''}
         </div>
         """, unsafe_allow_html=True)
+
+def reset_grading_state_on_navigation():
+    """Reset grading state when navigating away from grading pages"""
+    try:
+        # Reset backend grading state (preserves history)
+        response = requests.delete(
+            f"{st.session_state.backend}/ai_grading/reset_all_grading",
+            timeout=5
+        )
+        if response.status_code == 200:
+            print("Backend grading state reset successfully on navigation")
+        else:
+            print(f"Failed to reset backend grading state on navigation: {response.status_code}")
+    except Exception as e:
+        print(f"Error resetting backend grading state on navigation: {e}")
+    
+    # Clear frontend grading-related session state (preserve history and job selection)
+    keys_to_clear = [
+        'ai_grading_data',
+        'sample_data',
+        'report_job_selector'
+    ]
+    
+    for key in keys_to_clear:
+        if key in st.session_state:
+            del st.session_state[key]
 
 def main():
     """主函数"""

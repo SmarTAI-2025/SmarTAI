@@ -74,20 +74,16 @@ def sync_completed_records():
                 
             task_info = st.session_state.jobs[job_id]
             
-            # Skip mock jobs entirely to prevent continuous polling
+            # Handle mock jobs - don't remove them, but don't poll them either
             if job_id.startswith("MOCK_JOB_"):
-                # Remove mock jobs from session state to prevent continuous polling
-                if job_id in st.session_state.jobs:
-                    del st.session_state.jobs[job_id]
+                # Keep mock jobs in session state but don't poll them
                 continue
                 
             # Check if this is a mock job
             is_mock = task_info.get("is_mock", False)
             
             if is_mock:
-                # Remove mock jobs from session state to prevent continuous polling
-                if job_id in st.session_state.jobs:
-                    del st.session_state.jobs[job_id]
+                # Keep mock jobs in session state but don't poll them
                 continue
 
 
@@ -150,7 +146,7 @@ def render_mock_data_preview():
     
     import pandas as pd
     df = pd.DataFrame(data)
-    st.dataframe(df, use_container_width=True)
+    st.dataframe(df, width='stretch')
     
     st.markdown("---")
     
@@ -169,7 +165,7 @@ def render_mock_data_preview():
             })
         
         df_questions = pd.DataFrame(question_data)
-        st.dataframe(df_questions, use_container_width=True)
+        st.dataframe(df_questions, width='stretch')
 
 
 
@@ -271,12 +267,12 @@ def render_completed_records():
             col0, col1, col2, col3, col4 = st.columns(5)
 
             with col0:
-                if st.button("📊 批改结果", key=f"result_{job_id}", use_container_width=True, type="secondary"):
+                if st.button("📊 批改结果", key=f"result_{job_id}", width='stretch', type="secondary"):
                     st.session_state.selected_job_from_history = job_id
                     st.switch_page("pages/grade_results.py")
 
             with col1:
-                if st.button("💯 评分报告", key=f"view_{job_id}", use_container_width=True, type="secondary"):
+                if st.button("💯 评分报告", key=f"view_{job_id}", width='stretch', type="secondary"):
                     # --- 改动 5: 使用专用的临时变量传递选择 ---
                     # 这可以明确地告诉目标页面，用户是从历史记录页点击了特定任务。
                     # 避免了与全局 selected_job_id 冲突。
@@ -284,13 +280,13 @@ def render_completed_records():
                     st.switch_page("pages/score_report.py")
 
             with col2:
-                if st.button("📈 成绩分析", key=f"viz_{job_id}", use_container_width=True):
+                if st.button("📈 成绩分析", key=f"viz_{job_id}", width='stretch'):
                     # 同样使用临时变量
                     st.session_state.selected_job_from_history = job_id
                     st.switch_page("pages/visualization.py")
 
             with col3:
-                if st.button("📄 导出PDF报告", key=f"report_{job_id}", use_container_width=True):
+                if st.button("📄 导出PDF报告", key=f"report_{job_id}", width='stretch'):
                     try:
                         # Import PDF generator
                         from frontend_utils.pdf_generator import generate_assignment_report
@@ -336,13 +332,13 @@ def render_completed_records():
             with col4:
                 # --- 改动 6: 修正删除逻辑 ---
                 # 确保删除按钮只对真实任务有效，并且只从 st.session_state.jobs 中删除。
-                if not job_id.startswith("MOCK_JOB") and st.button("🗑️ 删除记录", key=f"remove_{job_id}", use_container_width=True, type="secondary"):
+                if not job_id.startswith("MOCK_JOB") and st.button("🗑️ 删除记录", key=f"remove_{job_id}", width='stretch', type="secondary"):
                     if job_id in st.session_state.jobs:
                         del st.session_state.jobs[job_id]
                         st.success("记录已移除！")
                         st.rerun()
                 elif job_id.startswith("MOCK_JOB"):
-                     st.button("【示例模拟任务】", disabled=True, key=f"remove_{job_id}", use_container_width=True)
+                     st.button("【示例模拟任务】", disabled=True, key=f"remove_{job_id}", width='stretch')
 
 
 def render_statistics_overview():

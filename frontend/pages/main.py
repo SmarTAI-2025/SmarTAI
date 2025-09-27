@@ -94,6 +94,9 @@ def init_session_state():
     # Initialize sample data or AI grading data
     if 'sample_data' not in st.session_state:
         with st.spinner("初始化系统数据..."):
+            # Set default job to MOCK_JOB_001
+            st.session_state.selected_job_id = "MOCK_JOB_001"
+            
             # Try to load AI grading data if a job is selected
             if 'selected_job_id' in st.session_state:
                 ai_data = load_ai_grading_data(st.session_state.selected_job_id)
@@ -153,8 +156,8 @@ def render_user_welcome():
         """, unsafe_allow_html=True)
     
     with col3:
-        if st.button("🔄 刷新数据", use_container_width=False):
-            # Refresh data based on selected job or default data
+        if st.button("🔄 刷新数据", width='content'):
+            # Refresh data based on selected job or default data without resetting grading state
             if 'selected_job_id' in st.session_state:
                 ai_data = load_ai_grading_data(st.session_state.selected_job_id)
                 if "error" not in ai_data:
@@ -167,11 +170,10 @@ def render_user_welcome():
             st.rerun()
         
         if st.button("🚪 退出登录", use_container_width=False, type="secondary"):
-            # 清除登录状态
-            st.session_state.logged_in = False
-            st.session_state.username = ""
+            # Clear all session state except history records
+            clear_session_state_except_history()
             st.success("已退出登录")
-            st.switch_page("pages/login.py")
+            st.switch_page("frontend/pages/login.py")
 
 def render_statistics_overview():
     """渲染统计概览"""
@@ -597,6 +599,56 @@ def render_st(backend_url):
     
     # Run the main application
     main()
+
+def clear_session_state_except_history():
+    """Clear session state except for history records"""
+    # Store history-related data temporarily
+    history_data = {}
+    if 'jobs' in st.session_state:
+        history_data['jobs'] = st.session_state.jobs
+    if 'selected_job_id' in st.session_state:
+        history_data['selected_job_id'] = st.session_state.selected_job_id
+    if 'selected_job_from_history' in st.session_state:
+        history_data['selected_job_from_history'] = st.session_state.selected_job_from_history
+    
+    # Clear all session state
+    for key in list(st.session_state.keys()):
+        del st.session_state[key]
+    
+    # Restore history-related data
+    for key, value in history_data.items():
+        st.session_state[key] = value
+    
+    # Reinitialize essential session state
+    initialize_session_state()
+
+def reset_grading_state():
+    """Reset grading state to allow fresh grading"""
+    try:
+        # Reset backend grading state
+        response = requests.delete(
+            f"{st.session_state.backend}/ai_grading/reset_all_grading",
+            timeout=5
+        )
+        if response.status_code == 200:
+            print("Backend grading state reset successfully")
+        else:
+            print(f"Failed to reset backend grading state: {response.status_code}")
+    except Exception as e:
+        print(f"Error resetting backend grading state: {e}")
+    
+    # Clear frontend grading-related session state
+    keys_to_clear = [
+        'ai_grading_data',
+        'sample_data',
+        'selected_job_id',
+        'report_job_selector',
+        'selected_job_from_history'
+    ]
+    
+    for key in keys_to_clear:
+        if key in st.session_state:
+            del st.session_state[key]
 
 # This is the entry point for Streamlit Cloud
 if __name__ == "__main__":

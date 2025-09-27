@@ -3,23 +3,19 @@ Calculation question correction node implementation.
 """
 import structlog
 import re
-import os
 import json
 import argparse
 from typing import Dict, Any, List
 from pydantic import BaseModel
 
-from models import Correction, StepScore
-from correct.prompt_utils import prepare_calc_prompt
-from dependencies import get_llm
+from backend.models import Correction, StepScore
+from backend.correct.prompt_utils import prepare_calc_prompt
+from backend.dependencies import get_llm
 
 # Setup logger
 logger = structlog.get_logger()
 
-# Zhipu AI configuration
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "8dcdf3e9238f48f4ae329f638e66dfe2.HHIbfrj5M4GcjM8f")
-OPENAI_API_BASE = os.getenv("OPENAI_API_BASE", "https://open.bigmodel.cn/api/paas/v4")
-OPENAI_MODEL = os.getenv("OPENAI_MODEL", "glm-4")
+# Zhipu AI configuration is now imported from dependencies.py
 
 # Global LLM client for connection pooling
 LLM_CLIENT = None
@@ -137,7 +133,7 @@ def parse_llm_json_response(response_text: str) -> Dict[str, Any]:
                 response_keys=list(llm_response.keys()) if isinstance(llm_response, dict) else "Not a dict")
     return llm_response
 
-def calc_node(answer_unit: Dict[str, Any], rubric: str, max_score: float = 10.0, llm=None) -> Correction:
+async def calc_node(answer_unit: Dict[str, Any], rubric: str, max_score: float = 10.0, llm=None) -> Correction:
     """
     Calculation question correction node.
     
@@ -194,8 +190,8 @@ def calc_node(answer_unit: Dict[str, Any], rubric: str, max_score: float = 10.0,
             retry_count = 0
             while retry_count < max_retries:
                 try:
-                    # Use invoke method instead of direct call to avoid deprecation warning
-                    response = llm.invoke([HumanMessage(content=prompt)])
+                    # Use ainvoke method for async calls
+                    response = await llm.ainvoke([HumanMessage(content=prompt)])
                     
                     # Log the raw response for debugging
                     logger.info("llm_raw_response", content=response.content[:500] + "..." if len(response.content) > 500 else response.content)
@@ -330,7 +326,7 @@ def calc_node(answer_unit: Dict[str, Any], rubric: str, max_score: float = 10.0,
             retry_count = 0
             while retry_count < max_retries:
                 try:
-                    response = llm.invoke([HumanMessage(content=default_prompt)])
+                    response = await llm.ainvoke([HumanMessage(content=default_prompt)])
                     llm_response = parse_llm_json_response(response.content)
                     break  # Success, exit retry loop
                 except Exception as e:

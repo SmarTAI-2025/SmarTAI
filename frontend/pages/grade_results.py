@@ -51,7 +51,7 @@ def render_header():
             st.rerun()
     
     with col:
-        st.markdown("<h1 style='text-align: center; color: #000000;'>📊 AI批改结果总览</h1>", 
+        st.markdown("<h1 style='text-align: center; color: #000000;'>📊 AI自动批改结果总览</h1>", 
                    unsafe_allow_html=True)
  
 render_header()
@@ -212,7 +212,7 @@ else:
                             total_score += question["score"]
                             total_max_score += question["max_score"]
                         df = pd.DataFrame(data)
-                        st.dataframe(df, use_container_width=True, hide_index=True)
+                        st.dataframe(df, width='stretch', hide_index=True)
                         st.write(f"**总分: {total_score:.1f}/{total_max_score:.1f}**")
                         st.divider()
             except Exception as e:
@@ -247,9 +247,10 @@ else:
                         all_results.sort(key=lambda s: s['student_id'])
                         for student_result in all_results:
                             student_id = student_result["student_id"]
+                            student_name = student_result["student_name"]
                             corrections = student_result["corrections"]
                             corrections.sort(key=lambda c: natural_sort_key(c['q_id']))
-                            st.markdown(f"### 学生: {student_id}")
+                            st.markdown(f"### 学生: {student_name} ({student_id})")
                             data = []
                             total_score = 0
                             total_max_score = 0
@@ -272,7 +273,7 @@ else:
                                 total_score += correction["score"]
                                 total_max_score += correction["max_score"]
                             df = pd.DataFrame(data)
-                            st.dataframe(df, use_container_width=True, hide_index=True)
+                            st.dataframe(df, width='stretch', hide_index=True)
                             st.write(f"**总分: {total_score:.1f}/{total_max_score:.1f}**")
                             st.divider()
                     elif "corrections" in result:  # Single student grading results
@@ -313,7 +314,7 @@ else:
                                     total_score += question["score"]
                                     total_max_score += question["max_score"]
                                 df = pd.DataFrame(data)
-                                st.dataframe(df, use_container_width=True, hide_index=True)
+                                st.dataframe(df, width='stretch', hide_index=True)
                                 st.write(f"**总分: {total_score:.1f}/{total_max_score:.1f}**")
                                 st.divider()
                     except Exception as e:
@@ -350,7 +351,7 @@ else:
                                 total_score += question["score"]
                                 total_max_score += question["max_score"]
                             df = pd.DataFrame(data)
-                            st.dataframe(df, use_container_width=True, hide_index=True)
+                            st.dataframe(df, width='stretch', hide_index=True)
                             st.write(f"**总分: {total_score:.1f}/{total_max_score:.1f}**")
                             st.divider()
                 except Exception as e:
@@ -384,7 +385,7 @@ else:
                                 total_score += question["score"]
                                 total_max_score += question["max_score"]
                             df = pd.DataFrame(data)
-                            st.dataframe(df, use_container_width=True, hide_index=True)
+                            st.dataframe(df, width='stretch', hide_index=True)
                             st.write(f"**总分: {total_score:.1f}/{total_max_score:.1f}**")
                             st.divider()
                 except Exception as e:
@@ -404,9 +405,35 @@ with col1:
     st.button(
         "返回顶部", 
         on_click=return_top,
-        use_container_width=False
+        width='content'
     )
 
 with col2:
     # 2. 创建一个按钮，并告诉它在被点击时调用上面的函数
     st.page_link("pages/history.py", label="返回历史批改记录", icon="➡️")
+
+def reset_grading_state_on_navigation():
+    """Reset grading state when navigating away from grading pages"""
+    try:
+        # Reset backend grading state (preserves history)
+        response = requests.delete(
+            f"{st.session_state.backend}/ai_grading/reset_all_grading",
+            timeout=5
+        )
+        if response.status_code == 200:
+            print("Backend grading state reset successfully on navigation")
+        else:
+            print(f"Failed to reset backend grading state on navigation: {response.status_code}")
+    except Exception as e:
+        print(f"Error resetting backend grading state on navigation: {e}")
+    
+    # Clear frontend grading-related session state (preserve history and job selection)
+    keys_to_clear = [
+        'ai_grading_data',
+        'sample_data',
+        'report_job_selector'
+    ]
+    
+    for key in keys_to_clear:
+        if key in st.session_state:
+            del st.session_state[key]

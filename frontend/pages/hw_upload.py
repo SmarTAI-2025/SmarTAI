@@ -1,7 +1,5 @@
 import streamlit as st
 import requests
-# import os
-# from PIL import Image
 import time
 from utils import *
 
@@ -13,10 +11,18 @@ st.set_page_config(
     page_icon="📂"
 )
 
-initialize_session_state()
-
-# 在每个页面的顶部调用这个函数
-load_custom_css()
+def main():
+    """主函数"""
+    # 初始化
+    initialize_session_state()
+    load_custom_css()
+    
+    # Reset grading state when starting a new homework upload
+    reset_grading_state()
+    
+    # 渲染页面
+    render_header()
+    render_upload_section()
 
 def render_header():
     """渲染页面头部"""
@@ -44,81 +50,112 @@ def render_header():
     """, unsafe_allow_html=True)
         st.markdown("---")
         
-render_header()
+def render_upload_section():
+    """渲染作业上传核心功能区"""
+    if 'prob_data' not in st.session_state or not st.session_state.get('prob_data'):
+        st.warning("请先在“作业题目上传”页面上传并作业题目文件。")
+        st.stop()
 
-if 'prob_data' not in st.session_state or not st.session_state.get('prob_data'):
-    st.warning("请先在“作业题目上传”页面上传并作业题目文件。")
-    st.stop()
+    # --- 后端服务地址 ---
+    # BACKEND_URL = os.getenv("BACKEND_URL", "http://127.0.0.1:8000/hw_upload")
 
-# --- 后端服务地址 ---
-# BACKEND_URL = os.getenv("BACKEND_URL", "http://127.0.0.1:8000/hw_upload")
+    # --- 初始化会话状态 ---
+    # if 'processed_data' not in st.session_state:
+    #     st.session_state.processed_data = None
+    st.session_state.processed_data = None
 
-# --- 初始化会话状态 ---
-# if 'processed_data' not in st.session_state:
-#     st.session_state.processed_data = None
-st.session_state.processed_data = None
+    # 如果数据已处理，直接跳转，避免重复上传
+    # if st.session_state.processed_data:
+    #     st.switch_page("pages/problems.py")
 
-# 如果数据已处理，直接跳转，避免重复上传
-# if st.session_state.processed_data:
-#     st.switch_page("pages/problems.py")
-
-# # --- 页面标题和简介 ---
-# st.title("🚀 智能作业核查系统")
-# st.markdown("高效、智能、全面——您的自动化教学助理。")
-# st.markdown("---")
+    # # --- 页面标题和简介 ---
+    # st.title("🚀 智能作业核查系统")
+    # st.markdown("高效、智能、全面——您的自动化教学助理。")
+    # st.markdown("---")
 
 
-# --- 1. 作业上传核心功能区 ---
-st.markdown('<div class="card">', unsafe_allow_html=True)
-st.header("📂 上传学生作业")
-st.caption("请将所有学生的作业文件（如 PDF、Word、代码文件、图片等）打包成一个压缩文件后上传。")
+    # --- 1. 作业上传核心功能区 ---
+    st.markdown('<div class="card">', unsafe_allow_html=True)
+    st.header("📂 上传学生作业")
+    st.caption("请将所有学生的作业文件（如 PDF、Word、代码文件、图片等）打包成一个压缩文件后上传。")
 
-uploaded_hw_file = st.file_uploader(
-    "拖拽或点击选择作业压缩包",
-    type=['zip', 'rar', '7z', 'tar', 'gz', 'bz2'],
-    help="支持 .zip, .rar, .7z, .tar.gz 等常见压缩格式。"
-)
-if uploaded_hw_file is not None:
-    st.success(f"文件 '{uploaded_hw_file.name}' 已选择。")
-st.markdown('</div>', unsafe_allow_html=True)
+    uploaded_hw_file = st.file_uploader(
+        "拖拽或点击选择作业压缩包",
+        type=['zip', 'rar', '7z', 'tar', 'gz', 'bz2'],
+        help="支持 .zip, .rar, .7z, .tar.gz 等常见压缩格式。"
+    )
+    if uploaded_hw_file is not None:
+        st.success(f"文件 '{uploaded_hw_file.name}' 已选择。")
+    st.markdown('</div>', unsafe_allow_html=True)
 
-# --- 3. 确认与提交区 ---
-st.markdown("---")
-st.header("✅ 确认并开始核查")
-st.info("请检查以上信息。点击下方按钮后，系统将开始处理您的文件。")
+    # --- 3. 确认与提交区 ---
+    st.markdown("---")
+    st.header("✅ 确认并开始核查")
+    st.info("请检查以上信息。点击下方按钮后，系统将开始处理您的文件。")
 
-# 当用户上传了作业文件后，才激活确认按钮
-if uploaded_hw_file is not None:
-    if st.button("确认信息，开始智能核查", type="primary", use_container_width=True):
-        with st.spinner("正在上传并请求AI分析，请耐心几分钟..."):
-            # 准备要发送的文件
-            files_to_send = {
-                "file": (uploaded_hw_file.name, uploaded_hw_file.getvalue(), uploaded_hw_file.type)
-            }
-            # (这里可以添加逻辑来处理其他上传的文件，例如答案、测试用例等)
-            # st.session_state.task_name=uploaded_hw_file.name
-            try:
-                # 实际使用时，你需要根据后端API来组织和发送所有数据
-                response = requests.post(f"{st.session_state.backend}/hw_preview/", files=files_to_send, timeout=600)
-                response.raise_for_status()
+    # 当用户上传了作业文件后，才激活确认按钮
+    if uploaded_hw_file is not None:
+        if st.button("确认信息，开始智能核查", type="primary", width='stretch'):
+            with st.spinner("正在上传并请求AI分析，请耐心几分钟..."):
+                # 准备要发送的文件
+                files_to_send = {
+                    "file": (uploaded_hw_file.name, uploaded_hw_file.getvalue(), uploaded_hw_file.type)
+                }
+                # (这里可以添加逻辑来处理其他上传的文件，例如答案、测试用例等)
+                # st.session_state.task_name=uploaded_hw_file.name
+                try:
+                    # 实际使用时，你需要根据后端API来组织和发送所有数据
+                    response = requests.post(f"{st.session_state.backend}/hw_preview/", files=files_to_send, timeout=600)
+                    response.raise_for_status()
 
-                # st.session_state.processed_data = response.json()      
-                students = response.json()                            
-                st.session_state.processed_data = students   #以stu_id为key索引
+                    # st.session_state.processed_data = response.json()      
+                    students = response.json()                            
+                    st.session_state.processed_data = students   #以stu_id为key索引
 
-                # print(st.session_state.processed_data)
+                    # print(st.session_state.processed_data)
           
-                st.success("✅ 文件上传成功，后端开始处理！即将跳转至结果预览页面...")
-                time.sleep(1) # 短暂显示成功信息
-                st.switch_page("pages/stu_preview.py")
+                    st.success("✅ 文件上传成功，后端开始处理！即将跳转至结果预览页面...")
+                    time.sleep(1) # 短暂显示成功信息
+                    st.switch_page("pages/stu_preview.py")
 
-            except requests.exceptions.RequestException as e:
-                st.error(f"网络或服务器错误: {e}")
-            except Exception as e:
-                st.error(f"发生未知错误: {e}")
-else:
-    # 如果用户还未上传文件，则按钮禁用
-    st.button("确认信息，开始智能核查", type="primary", use_container_width=True, disabled=True)
-    st.warning("请先在上方上传学生作业压缩包。")
+                except requests.exceptions.RequestException as e:
+                    st.error(f"网络或服务器错误: {e}")
+                except Exception as e:
+                    st.error(f"发生未知错误: {e}")
+    else:
+        # 如果用户还未上传文件，则按钮禁用
+        st.button("确认信息，开始智能核查", type="primary", width='stretch', disabled=True)
+        st.warning("请先在上方上传学生作业压缩包。")
+
+def reset_grading_state():
+    """Reset grading state to allow fresh grading"""
+    try:
+        # Reset backend grading state
+        response = requests.delete(
+            f"{st.session_state.backend}/ai_grading/reset_all_grading",
+            timeout=5
+        )
+        if response.status_code == 200:
+            print("Backend grading state reset successfully")
+        else:
+            print(f"Failed to reset backend grading state: {response.status_code}")
+    except Exception as e:
+        print(f"Error resetting backend grading state: {e}")
+    
+    # Clear frontend grading-related session state
+    keys_to_clear = [
+        'ai_grading_data',
+        'sample_data',
+        'selected_job_id',
+        'report_job_selector',
+        'selected_job_from_history'
+    ]
+    
+    for key in keys_to_clear:
+        if key in st.session_state:
+            del st.session_state[key]
 
 inject_pollers_for_active_jobs()
+
+if __name__ == "__main__":
+    main()

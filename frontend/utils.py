@@ -6,7 +6,7 @@ import requests
 import os
 KNOWLEDGE_BASE_DIR = "knowledge_bases"
 KNOWLEDGE_BASE_CONFIG = "knowledge_base_config.json"
-UTILS_BACKEND_URL = "https://smartai-backend-zefh.onrender.com" # render部署
+# UTILS_BACKEND_URL = "https://smartai-backend-zefh.onrender.com" # render部署
 UTILS_BACKEND_URL = "https://smartai-production.up.railway.app/" # railway部署
 # UTILS_BACKEND_URL = "http://localhost:8000" # 本地测试
 
@@ -60,7 +60,90 @@ def initialize_session_state():
 
     if 'knowledge_bases' not in st.session_state:
         st.session_state.knowledge_bases = load_knowledge_base_config()
-        
+
+def reset_grading_state():
+    """Reset grading state in both frontend and backend (preserves history)"""
+    try:
+        # Reset backend grading state (preserves history)
+        response = requests.delete(
+            f"{st.session_state.backend}/ai_grading/reset_all_grading",
+            timeout=5
+        )
+        if response.status_code == 200:
+            print("Backend grading state reset successfully")
+        else:
+            print(f"Failed to reset backend grading state: {response.status_code}")
+    except Exception as e:
+        print(f"Error resetting backend grading state: {e}")
+    
+    # Clear frontend grading-related session state (preserve history and job selection)
+    keys_to_clear = [
+        'ai_grading_data',
+        'sample_data',
+        'report_job_selector',
+        'selected_job_from_history'
+    ]
+    
+    # Only clear sample_data if it's not MOCK_JOB_001
+    if 'selected_job_id' in st.session_state and st.session_state.selected_job_id != "MOCK_JOB_001":
+        if 'sample_data' in keys_to_clear:
+            keys_to_clear.remove('sample_data')
+    
+    for key in keys_to_clear:
+        if key in st.session_state:
+            del st.session_state[key]
+
+def clear_session_state_except_history():
+    """Clear session state except for history records"""
+    # Store history-related data temporarily
+    history_data = {}
+    if 'jobs' in st.session_state:
+        history_data['jobs'] = st.session_state.jobs
+    if 'selected_job_id' in st.session_state:
+        # Always preserve MOCK_JOB_001 selection
+        if st.session_state.selected_job_id == "MOCK_JOB_001":
+            history_data['selected_job_id'] = st.session_state.selected_job_id
+    if 'selected_job_from_history' in st.session_state:
+        history_data['selected_job_from_history'] = st.session_state.selected_job_from_history
+    
+    # Clear all session state
+    for key in list(st.session_state.keys()):
+        del st.session_state[key]
+    
+    # Restore history-related data
+    for key, value in history_data.items():
+        st.session_state[key] = value
+    
+    # Reinitialize essential session state
+    initialize_session_state()
+
+def abandon_grading_task(job_id: str):
+    """Abandon a grading task and clean up its state"""
+    try:
+        # Tell backend to discard this specific job
+        response = requests.delete(
+            f"{st.session_state.backend}/ai_grading/discard_job/{job_id}",
+            timeout=5
+        )
+        if response.status_code == 200:
+            print(f"Job {job_id} abandoned successfully")
+        else:
+            print(f"Failed to abandon job {job_id}: {response.status_code}")
+    except Exception as e:
+        print(f"Error abandoning job {job_id}: {e}")
+    
+    # Remove job from session state
+    if "jobs" in st.session_state and job_id in st.session_state.jobs:
+        del st.session_state.jobs[job_id]
+    
+    # Clear any checking state for this job
+    if "checking_job_id" in st.session_state and st.session_state.checking_job_id == job_id:
+        del st.session_state.checking_job_id
+    
+    # Clear any selection state for this job
+    if "selected_job_id" in st.session_state and st.session_state.selected_job_id == job_id:
+        del st.session_state.selected_job_id
+
 def update_prob():
     if st.session_state.get('prob_changed', False):
         st.info("检测到题目数据已修改，正在更新存储到后端...") # 友好提示
@@ -152,7 +235,7 @@ def get_master_poller_html(jobs_json: str, backend_url: str) -> str:
                             // 标记为完成，防止重复弹窗
                             sessionStorage.setItem(completedKey, 'true');
                             // --- 新增功能：刷新当前页面 ---
-                            //window.parent.location.reload();
+                            window.parent.location.href = '/pages/grade_results.py';
                             // -----------------------------
                         }}
                     }}
@@ -270,9 +353,12 @@ def get_all_jobs_for_selection():
     # 1. Add the mock task first as a baseline option
     if 'sample_data' in st.session_state and st.session_state.sample_data:
         assignment_stats = st.session_state.sample_data.get('assignment_stats')
+        mock_job_id = "MOCK_JOB_001"
         if assignment_stats:
-            mock_job_id = "MOCK_JOB_001"
             all_jobs_for_selection[mock_job_id] = f"【模拟数据】{assignment_stats.assignment_name}"
+        else:
+            # Fallback name if assignment_stats is None
+            all_jobs_for_selection[mock_job_id] = "【模拟数据】示例作业"
 
     # 2. Add all real jobs from the session state
     if "jobs" in st.session_state and st.session_state.jobs:

@@ -1,4 +1,3 @@
-# dependencies.py
 import os
 import logging
 from typing import Dict, List, Any, Type
@@ -6,21 +5,11 @@ from pydantic import BaseModel, Field, ValidationError
 from langchain_openai import ChatOpenAI
 from langchain_google_genai import ChatGoogleGenerativeAI # <-- 换成这行
 
-# # 这是一个我们希望在不同路由间共享的 Python 变量
-# # 它可以是任何东西：一个数据库连接池、一个配置对象、一个AI模型实例等
-# fake_db: Dict[str, Any] = {"items": {}, "users": {}}
-
-# # 这是“依赖函数”（或称为 "dependency"）
-# # FastAPI 会在处理请求时调用这个函数，并将其返回值注入到需要它的地方
-# def get_db() -> Dict[str, Any]:
-#     """返回共享的数据库实例"""
-#     return fake_db
-
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 
-# ... (ProblemInfo 和 ProblemSet 的定义保持不变) ...
+# 单个题目的结构
 class ProblemInfo(BaseModel):
     q_id: str = Field(description="题目唯一标识，\"q1\" 开始依次递增为 \"q2\"、\"q3\"...")
     number: str = Field(description="题目包含的题号，如\"1\"、\"2.3\"、\"第二题\", \"III.\" 等，若不存在，则取题目\"q_id\"的阿拉伯数字作为题号\"number\"")
@@ -116,7 +105,7 @@ OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "ce84d4642c3f4cabbcee430cc0bf674c.t
 OPENAI_API_BASE = os.getenv("OPENAI_API_BASE", "https://open.bigmodel.cn/api/paas/v4")
 OPENAI_MODEL = os.getenv("OPENAI_MODEL", "glm-4.5-air")
 
-CONTEXT_WINDOW_THRESHOLD_CHARS = 200000 
+CONTEXT_WINDOW_THRESHOLD_CHARS = 200000
 
 def get_llm(model="zhipu") -> ChatOpenAI:
     """返回共享的LLM客户端实例。"""
@@ -130,7 +119,7 @@ def get_llm(model="zhipu") -> ChatOpenAI:
                     model=OPENAI_MODEL,
                     temperature=0.0,
                     max_tokens=None,
-                    timeout=600,
+                    timeout=400,
                     max_retries=2,
                     api_key=OPENAI_API_KEY,
                     base_url=OPENAI_API_BASE,
@@ -168,6 +157,54 @@ def get_llm(model="zhipu") -> ChatOpenAI:
 import re
 import json
 
+def fix_incomplete_json(json_str: str) -> str:
+    """
+    尝试修复不完整的JSON字符串
+    """
+    # 检查并修复缺失的闭合符号
+    open_braces = json_str.count('{')
+    close_braces = json_str.count('}')
+    open_brackets = json_str.count('[')
+    close_brackets = json_str.count(']')
+    
+    # 尝试添加缺失的闭合符号
+    json_str_fixed = json_str
+    while close_braces < open_braces:
+        json_str_fixed += '}'
+        close_braces += 1
+    while close_brackets < open_brackets:
+        json_str_fixed += ']'
+        close_brackets += 1
+        
+    # 检查引号是否匹配
+    quote_count = json_str_fixed.count('"')
+    if quote_count % 2 != 0:
+        # 如果引号数量是奇数，尝试添加一个引号
+        json_str_fixed += '"'
+        
+    # 特殊处理：检查是否在某个字符串值中间截断
+    # 查找最后一个未闭合的字符串
+    last_quote_pos = json_str_fixed.rfind('"')
+    if last_quote_pos != -1:
+        # 检查在这个引号之后是否有未闭合的结构
+        text_after_last_quote = json_str_fixed[last_quote_pos+1:]
+        if text_after_last_quote.count('{') > text_after_last_quote.count('}'):
+            # 如果有未闭合的大括号，添加闭合符号
+            json_str_fixed += '}'
+        elif text_after_last_quote.count('[') > text_after_last_quote.count(']'):
+            # 如果有未闭合的方括号，添加闭合符号
+            json_str_fixed += ']'
+            
+    # 确保JSON结构完整
+    # 检查是否以 { 开始并以 } 结束
+    json_str_fixed = json_str_fixed.strip()
+    if json_str_fixed.startswith('{') and not json_str_fixed.endswith('}'):
+        json_str_fixed += '}'
+    elif json_str_fixed.startswith('[') and not json_str_fixed.endswith(']'):
+        json_str_fixed += ']'
+        
+    return json_str_fixed
+
 def parse_llm_json_output(llm_output: str, output_model: Type[BaseModel]) -> BaseModel:
     """
     一个通用的、健壮的函数，用于从LLM的原始文本输出中提取JSON并使用Pydantic模型进行解析。
@@ -184,19 +221,11 @@ def parse_llm_json_output(llm_output: str, output_model: Type[BaseModel]) -> Bas
         raise ValueError(f"在LLM输出中未找到有效的JSON结构。原始输出: '{llm_output[:200]}...'")
 
     json_str = match.group(0)
+    logger.info(f"提取的JSON字符串: {json_str}")
 
     try:
         # 第一次尝试直接解析
         return output_model.model_validate_json(json_str)
-    # except ValidationError as e:
-    #     # 检查是否是由于JSON语法无效（特别是转义问题）导致的验证错误
-    #     # e.errors() 返回一个错误字典列表，我们检查第一个错误的类型
-    #     first_error = e.errors()[0] if e.errors() else {}
-    #     error_type = first_error.get('type')
-    #     # 精准定位到由 'invalid escape' 引起的 'json_invalid' 错误
-    #     if error_type == 'json_invalid' and "invalid escape" in str(e):
-    #         print("检测到Pydantic报告了JSON转义错误，尝试智能修复...")
-
     except (ValidationError, json.JSONDecodeError) as e:
         # 检查是否是由于非法转义引起的错误
         # json.JSONDecodeError的错误信息通常包含 "Invalid \escape"
@@ -223,6 +252,29 @@ def parse_llm_json_output(llm_output: str, output_model: Type[BaseModel]) -> Bas
                     file.write(json_str_fixed)
                 raise ValueError(
                     f"自动修复转义字符后解析仍然失败。\n"
+                    f"原始错误: {e}\n"
+                    f"最终错误: {final_e}"
+                )
+        elif "eof while parsing" in str(e).lower() or "unexpected end of input" in str(e).lower():
+            print("检测到JSON不完整错误，尝试修复...")
+            # 尝试修复不完整的JSON
+            json_str_fixed = fix_incomplete_json(json_str)
+                
+            try:
+                # 再次尝试解析修复后的字符串
+                print("修复成功，再次解析...")
+                return output_model.model_validate_json(json_str_fixed)
+            except Exception as final_e:
+                # 如果修复后仍然失败，则抛出信息更全的错误
+                logger.error(f"提取的字符串: {json_str}")
+                logger.error(f"修复后的字符串: {json_str_fixed}")
+                # 写入文件以供调试
+                with open("error_json.txt", "w", encoding="utf-8") as file:
+                    file.write(json_str)
+                with open("error_fixed_json.txt", "w", encoding="utf-8") as file:
+                    file.write(json_str_fixed)
+                raise ValueError(
+                    f"自动修复不完整JSON后解析仍然失败。\n"
                     f"原始错误: {e}\n"
                     f"最终错误: {final_e}"
                 )

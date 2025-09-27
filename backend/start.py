@@ -12,7 +12,7 @@ if project_root not in sys.path:
     sys.path.insert(0, project_root)
 
 # Now import and run the main application
-from main import app
+from backend.main import app
 
 if __name__ == "__main__":
     import uvicorn

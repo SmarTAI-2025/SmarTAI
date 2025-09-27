@@ -30,7 +30,7 @@ def render_header():
         st.page_link("pages/prob_upload.py", label="重新上传作业题目", icon="📤")
 
     with col3:
-        st.page_link("pages/problems.py", label="返回题目识别概览", icon="📖")
+        st.page_link("pages/problems.py", label="返回作业题目识别概览", icon="📖")
 
     with col4:
         st.page_link("pages/hw_upload.py", label="重新上传学生作答", icon="📤")
@@ -208,3 +208,32 @@ with col_button:
         st.switch_page("pages/wait_ai_grade.py")   # 跳转到你的目标页面
 
 inject_pollers_for_active_jobs()
+
+
+def reset_grading_state():
+    """Reset grading state to allow fresh grading"""
+    try:
+        # Reset backend grading state
+        response = requests.delete(
+            f"{st.session_state.backend}/ai_grading/reset_all_grading",
+            timeout=5
+        )
+        if response.status_code == 200:
+            print("Backend grading state reset successfully")
+        else:
+            print(f"Failed to reset backend grading state: {response.status_code}")
+    except Exception as e:
+        print(f"Error resetting backend grading state: {e}")
+    
+    # Clear frontend grading-related session state
+    keys_to_clear = [
+        'ai_grading_data',
+        'sample_data',
+        'selected_job_id',
+        'report_job_selector',
+        'selected_job_from_history'
+    ]
+    
+    for key in keys_to_clear:
+        if key in st.session_state:
+            del st.session_state[key]

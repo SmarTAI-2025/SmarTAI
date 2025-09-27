@@ -158,6 +158,10 @@ def load_ai_grading_data(job_id: str) -> Dict[str, Any]:
         # Debug information
         print(f"Requesting AI grading data for job {job_id}")
         
+        # If it's a mock job, return mock data directly
+        if job_id == "MOCK_JOB_001":
+            return load_mock_data()
+        
         # 获取批改结果
         response = requests.get(
             f"{st.session_state.backend}/ai_grading/grade_result/{job_id}",
