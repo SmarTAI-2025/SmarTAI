@@ -59,7 +59,35 @@ def initialize_session_state():
 
     if 'knowledge_bases' not in st.session_state:
         st.session_state.knowledge_bases = load_knowledge_base_config()
-        
+
+def reset_grading_state():
+    """Reset grading state in both frontend and backend"""
+    try:
+        # Reset backend grading state
+        response = requests.delete(
+            f"{st.session_state.backend}/ai_grading/reset_all_grading",
+            timeout=5
+        )
+        if response.status_code == 200:
+            print("Backend grading state reset successfully")
+        else:
+            print(f"Failed to reset backend grading state: {response.status_code}")
+    except Exception as e:
+        print(f"Error resetting backend grading state: {e}")
+    
+    # Clear frontend grading-related session state
+    keys_to_clear = [
+        'ai_grading_data',
+        'sample_data',
+        'selected_job_id',
+        'report_job_selector',
+        'selected_job_from_history'
+    ]
+    
+    for key in keys_to_clear:
+        if key in st.session_state:
+            del st.session_state[key]
+
 def update_prob():
     if st.session_state.get('prob_changed', False):
         st.info("检测到题目数据已修改，正在更新存储到后端...") # 友好提示

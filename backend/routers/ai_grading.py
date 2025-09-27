@@ -264,8 +264,17 @@ def run_grading_task(job_id: str, student_id: str, problem_store: Dict, student_
             "timestamp": time.time()
         }
         
+        # Update job metadata
+        if job_id in JOB_METADATA:
+            JOB_METADATA[job_id].update({
+                "status": "completed",
+                "completed_at": time.time(),
+                "student_id": student_id
+            })
+        
         # Clean up old results
         cleanup_old_results()
+        cleanup_old_metadata()
         
         logger.info(f"Grading task {job_id} completed for student {student_id}")
         
@@ -279,8 +288,17 @@ def run_grading_task(job_id: str, student_id: str, problem_store: Dict, student_
             "timestamp": time.time()
         }
         
+        # Update job metadata
+        if job_id in JOB_METADATA:
+            JOB_METADATA[job_id].update({
+                "status": "error",
+                "completed_at": time.time(),
+                "error": str(e)
+            })
+        
         # Clean up old results
         cleanup_old_results()
+        cleanup_old_metadata()
     finally:
         # Remove job from active jobs
         ACTIVE_JOBS.discard(job_id)
@@ -341,8 +359,17 @@ def run_batch_grading_task(job_id: str, problem_store: Dict, student_store: Dict
             "timestamp": time.time()
         }
         
+        # Update job metadata
+        if job_id in JOB_METADATA:
+            JOB_METADATA[job_id].update({
+                "status": "completed",
+                "completed_at": time.time(),
+                "student_count": len(all_results)
+            })
+        
         # Clean up old results
         cleanup_old_results()
+        cleanup_old_metadata()
         
         logger.info(f"Batch grading task {job_id} completed for all students. Processed {len(all_results)} students.")
         
@@ -356,8 +383,17 @@ def run_batch_grading_task(job_id: str, problem_store: Dict, student_store: Dict
             "timestamp": time.time()
         }
         
+        # Update job metadata
+        if job_id in JOB_METADATA:
+            JOB_METADATA[job_id].update({
+                "status": "error",
+                "completed_at": time.time(),
+                "error": str(e)
+            })
+        
         # Clean up old results
         cleanup_old_results()
+        cleanup_old_metadata()
     finally:
         # Remove job from active jobs
         ACTIVE_JOBS.discard(job_id)
@@ -365,6 +401,30 @@ def run_batch_grading_task(job_id: str, problem_store: Dict, student_store: Dict
 # Track active grading jobs to prevent overload
 ACTIVE_JOBS = set()
 MAX_CONCURRENT_JOBS = 10
+
+# Store job metadata for history tracking
+JOB_METADATA = OrderedDict()
+MAX_METADATA = 100
+METADATA_TTL = 30 * 24 * 60 * 60  # 30 days
+
+def cleanup_old_metadata():
+    """Remove old job metadata to prevent memory leaks."""
+    current_time = time.time()
+    expired_keys = []
+    
+    # Find expired metadata
+    for job_id, metadata in JOB_METADATA.items():
+        if current_time - metadata.get('timestamp', 0) > METADATA_TTL:
+            expired_keys.append(job_id)
+    
+    # Remove expired metadata
+    for job_id in expired_keys:
+        JOB_METADATA.pop(job_id, None)
+    
+    # Remove excess metadata if we're over the limit
+    while len(JOB_METADATA) > MAX_METADATA:
+        # Remove the oldest metadata (OrderedDict maintains insertion order)
+        JOB_METADATA.popitem(last=False)
 
 @router.post("/grade_student/")
 def start_grading(request: GradingRequest, 
@@ -386,6 +446,19 @@ def start_grading(request: GradingRequest,
         "timestamp": time.time()
     }
     ACTIVE_JOBS.add(job_id)
+    
+    # Store job metadata
+    JOB_METADATA[job_id] = {
+        "job_id": job_id,
+        "type": "student",
+        "student_id": request.student_id,
+        "status": "pending",
+        "created_at": time.time(),
+        "timestamp": time.time()
+    }
+    
+    # Clean up old metadata
+    cleanup_old_metadata()
     
     # Start grading in a background thread
     thread = threading.Thread(
@@ -419,6 +492,18 @@ def start_batch_grading(request: BatchGradingRequest,
     
     logger.info(f"Created new batch grading job: {job_id}")
     
+    # Store job metadata
+    JOB_METADATA[job_id] = {
+        "job_id": job_id,
+        "type": "batch",
+        "status": "pending",
+        "created_at": time.time(),
+        "timestamp": time.time()
+    }
+    
+    # Clean up old metadata
+    cleanup_old_metadata()
+    
     # Start grading in a background thread
     thread = threading.Thread(
         target=run_batch_grading_task, 
@@ -435,6 +520,43 @@ def get_grading_result(job_id: str):
     """
     result = GRADING_RESULTS.get(job_id, {"status": "not_found", "message": "Job ID not found in results."})
     return result
+
+@router.delete("/reset_grading/{job_id}")
+def reset_grading_result(job_id: str):
+    """
+    Reset/clear a specific grading result (except for history records).
+    """
+    if job_id in GRADING_RESULTS:
+        # Only remove from active results, keep in metadata for history
+        del GRADING_RESULTS[job_id]
+        return {"status": "success", "message": f"Grading result for job {job_id} has been reset."}
+    else:
+        return {"status": "not_found", "message": f"Job ID {job_id} not found."}
+
+@router.delete("/reset_all_grading")
+def reset_all_grading_results():
+    """
+    Reset all grading results (except for history records).
+    """
+    global GRADING_RESULTS, ACTIVE_JOBS
+    GRADING_RESULTS = OrderedDict()
+    ACTIVE_JOBS.clear()
+    return {"status": "success", "message": "All grading results have been reset."}
+
+@router.get("/job_metadata/{job_id}")
+def get_job_metadata(job_id: str):
+    """
+    Get metadata for a specific job (for history tracking).
+    """
+    metadata = JOB_METADATA.get(job_id, {"status": "not_found", "message": "Job ID not found in metadata."})
+    return metadata
+
+@router.get("/all_job_metadata")
+def get_all_job_metadata():
+    """
+    Get all job metadata (for history tracking).
+    """
+    return dict(JOB_METADATA)
 
 @router.get("/all_jobs")
 def get_all_jobs():

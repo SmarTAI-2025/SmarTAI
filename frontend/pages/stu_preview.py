@@ -20,33 +20,37 @@ load_custom_css()
 
 def render_header():
     """渲染页面头部"""
-    col1, col2, col3, col4, _, col5 = st.columns([8,13,13,13,15,8])
+    col1, col2, col3, col4, col5, col6, col7 = st.columns(7)
     col = st.columns(1)[0]
 
     with col1:
-        st.page_link("pages/main.py", label="返回首页", icon="🏠")
-
+        if st.button("🏠 返回首页"):
+            # Reset grading state when returning to main page
+            reset_grading_state()
+            st.switch_page("pages/main.py")
+    
     with col2:
-        st.page_link("pages/prob_upload.py", label="重新上传作业题目", icon="📤")
-
-    with col3:
-        st.page_link("pages/problems.py", label="返回题目识别概览", icon="📖")
-
-    with col4:
-        st.page_link("pages/hw_upload.py", label="重新上传学生作答", icon="📤")
-
-    with col5:
         st.page_link("pages/history.py", label="历史记录", icon="🕒")
 
+    with col3:
+        st.page_link("pages/problems.py", label="作业题目", icon="📖")
+
+    with col4:
+        st.page_link("pages/stu_preview.py", label="学生作业", icon="📝")
+    
+    with col5:
+        st.page_link("pages/grade_results.py", label="批改结果", icon="📊")
+
+    with col6:
+        st.page_link("pages/score_report.py", label="评分报告", icon="💯")
+
+    with col7:
+        st.page_link("pages/visualization.py", label="成绩分析", icon="📈")
+    
     with col:
-        st.markdown("""
-    <div class="hero-section">
-        <h1 style="text-align: center; color: #000000; margin-bottom: 1rem; font-weight: 700;">📝 学生作业作答总览</h1>
-        <p style='text-align: center; color: #000000;'>您可以拖拽表格右下角以调整表格大小</p>
-    </div>
-    """, unsafe_allow_html=True)
-        st.markdown("---")
-        
+        st.markdown("<h1 style='text-align: center; color: #000000;'>📝 学生作业预览</h1>", 
+                   unsafe_allow_html=True)
+
 render_header()
 
 # --- 安全检查 ---
@@ -208,3 +212,32 @@ with col_button:
         st.switch_page("pages/wait_ai_grade.py")   # 跳转到你的目标页面
 
 inject_pollers_for_active_jobs()
+
+
+def reset_grading_state():
+    """Reset grading state to allow fresh grading"""
+    try:
+        # Reset backend grading state
+        response = requests.delete(
+            f"{st.session_state.backend}/ai_grading/reset_all_grading",
+            timeout=5
+        )
+        if response.status_code == 200:
+            print("Backend grading state reset successfully")
+        else:
+            print(f"Failed to reset backend grading state: {response.status_code}")
+    except Exception as e:
+        print(f"Error resetting backend grading state: {e}")
+    
+    # Clear frontend grading-related session state
+    keys_to_clear = [
+        'ai_grading_data',
+        'sample_data',
+        'selected_job_id',
+        'report_job_selector',
+        'selected_job_from_history'
+    ]
+    
+    for key in keys_to_clear:
+        if key in st.session_state:
+            del st.session_state[key]

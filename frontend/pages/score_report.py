@@ -53,7 +53,10 @@ def render_header():
     col = st.columns(1)[0]
 
     with col1:
-        st.page_link("pages/main.py", label="返回首页", icon="🏠")
+        if st.button("🏠 返回首页"):
+            # Reset grading state when returning to main page
+            reset_grading_state_on_navigation()
+            st.switch_page("pages/main.py")
     
     with col2:
         st.page_link("pages/history.py", label="历史记录", icon="🕒")
@@ -222,6 +225,33 @@ def render_student_report(student: StudentScore):
             {f'<div style="margin-top: 1rem; padding: 0.5rem; background: #F8FAFC; border-radius: 4px;"><strong>反馈:</strong> {question["feedback"]}</div>' if question.get('feedback') else ''}
         </div>
         """, unsafe_allow_html=True)
+
+def reset_grading_state_on_navigation():
+    """Reset grading state when navigating away from grading pages"""
+    try:
+        # Reset backend grading state
+        response = requests.delete(
+            f"{st.session_state.backend}/ai_grading/reset_all_grading",
+            timeout=5
+        )
+        if response.status_code == 200:
+            print("Backend grading state reset successfully on navigation")
+        else:
+            print(f"Failed to reset backend grading state on navigation: {response.status_code}")
+    except Exception as e:
+        print(f"Error resetting backend grading state on navigation: {e}")
+    
+    # Clear frontend grading-related session state
+    keys_to_clear = [
+        'ai_grading_data',
+        'sample_data',
+        'selected_job_id',
+        'report_job_selector'
+    ]
+    
+    for key in keys_to_clear:
+        if key in st.session_state:
+            del st.session_state[key]
 
 def main():
     """主函数"""

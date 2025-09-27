@@ -22,11 +22,14 @@ load_custom_css()
 
 def render_header():
     """渲染页面头部"""
-    col1, col2, col3, col4, col5, col6, col7, col8 = st.columns(8)
+    col1, col2, col3, col4, col5, col6, col7 = st.columns(7)
     col = st.columns(1)[0]
 
     with col1:
-        st.page_link("pages/main.py", label="返回首页", icon="🏠")
+        if st.button("🏠 返回首页"):
+            # Reset grading state when returning to main page
+            reset_grading_state_on_navigation()
+            st.switch_page("pages/main.py")
     
     with col2:
         st.page_link("pages/history.py", label="历史记录", icon="🕒")
@@ -45,13 +48,9 @@ def render_header():
 
     with col7:
         st.page_link("pages/visualization.py", label="成绩分析", icon="📈")
-
-    with col8:
-        if st.button("🔄 刷新数据", use_container_width=False):
-            st.rerun()
     
     with col:
-        st.markdown("<h1 style='text-align: center; color: #000000;'>📊 AI批改结果总览</h1>", 
+        st.markdown("<h1 style='text-align: center; color: #000000;'>📊 AI自动批改结果总览</h1>", 
                    unsafe_allow_html=True)
  
 render_header()
@@ -410,3 +409,30 @@ with col1:
 with col2:
     # 2. 创建一个按钮，并告诉它在被点击时调用上面的函数
     st.page_link("pages/history.py", label="返回历史批改记录", icon="➡️")
+
+def reset_grading_state_on_navigation():
+    """Reset grading state when navigating away from grading pages"""
+    try:
+        # Reset backend grading state
+        response = requests.delete(
+            f"{st.session_state.backend}/ai_grading/reset_all_grading",
+            timeout=5
+        )
+        if response.status_code == 200:
+            print("Backend grading state reset successfully on navigation")
+        else:
+            print(f"Failed to reset backend grading state on navigation: {response.status_code}")
+    except Exception as e:
+        print(f"Error resetting backend grading state on navigation: {e}")
+    
+    # Clear frontend grading-related session state
+    keys_to_clear = [
+        'ai_grading_data',
+        'sample_data',
+        'selected_job_id',
+        'report_job_selector'
+    ]
+    
+    for key in keys_to_clear:
+        if key in st.session_state:
+            del st.session_state[key]

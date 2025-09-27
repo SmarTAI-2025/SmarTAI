@@ -61,7 +61,10 @@ def render_header():
     col = st.columns(1)[0]
 
     with col1:
-        st.page_link("pages/main.py", label="返回首页", icon="🏠")
+        if st.button("🏠 返回首页"):
+            # Reset grading state when returning to main page
+            reset_grading_state_on_navigation()
+            st.switch_page("pages/main.py")
     
     with col2:
         st.page_link("pages/history.py", label="历史记录", icon="🕒")
@@ -82,13 +85,8 @@ def render_header():
         st.page_link("pages/visualization.py", label="成绩分析", icon="📈")
     
     with col:
-        st.markdown("<h1 style='text-align: center; color: #000000;'>📈 成绩可视化分析</h1>", 
+        st.markdown("<h1 style='text-align: center; color: #000000;'>📈 学生成绩可视化分析</h1>", 
                    unsafe_allow_html=True)
-
-    # with col8:
-    #     # Export button
-    #     if st.button("📤 导出数据", type="secondary"):
-    #         st.info("导出功能将在后续版本中实现")
 
 def render_filters(students: List[StudentScore], question_analysis: List[QuestionAnalysis]):
     """渲染筛选器"""
@@ -411,6 +409,33 @@ def render_export_section():
                     st.warning("无法生成报告：缺少必要的数据。")
             except Exception as e:
                 st.error(f"生成PDF报告时出错: {str(e)}")
+
+def reset_grading_state_on_navigation():
+    """Reset grading state when navigating away from grading pages"""
+    try:
+        # Reset backend grading state
+        response = requests.delete(
+            f"{st.session_state.backend}/ai_grading/reset_all_grading",
+            timeout=5
+        )
+        if response.status_code == 200:
+            print("Backend grading state reset successfully on navigation")
+        else:
+            print(f"Failed to reset backend grading state on navigation: {response.status_code}")
+    except Exception as e:
+        print(f"Error resetting backend grading state on navigation: {e}")
+    
+    # Clear frontend grading-related session state
+    keys_to_clear = [
+        'ai_grading_data',
+        'sample_data',
+        'selected_job_id',
+        'report_job_selector'
+    ]
+    
+    for key in keys_to_clear:
+        if key in st.session_state:
+            del st.session_state[key]
 
 def main():
     """主函数"""
