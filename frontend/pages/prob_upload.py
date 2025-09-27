@@ -359,7 +359,7 @@ if uploaded_prob_file is not None:
             st.session_state.task_name=uploaded_prob_file.name
             try:
                 # TODO: 实际使用时，你需要根据后端API来组织和发送所有数据
-                response = requests.post(f"{st.session_state.backend}/prob_preview", files=files_to_send, timeout=600)
+                response = requests.post(f"{st.session_state.backend}/prob_preview/", files=files_to_send, timeout=600)
                 response.raise_for_status()
                 
                 problems = response.json()                            

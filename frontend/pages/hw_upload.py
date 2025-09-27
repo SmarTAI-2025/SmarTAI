@@ -99,7 +99,7 @@ if uploaded_hw_file is not None:
             # st.session_state.task_name=uploaded_hw_file.name
             try:
                 # 实际使用时，你需要根据后端API来组织和发送所有数据
-                response = requests.post(f"{st.session_state.backend}/hw_preview", files=files_to_send, timeout=600)
+                response = requests.post(f"{st.session_state.backend}/hw_preview/", files=files_to_send, timeout=600)
                 response.raise_for_status()
 
                 # st.session_state.processed_data = response.json()      
