@@ -229,7 +229,7 @@ def render_student_report(student: StudentScore):
 def reset_grading_state_on_navigation():
     """Reset grading state when navigating away from grading pages"""
     try:
-        # Reset backend grading state
+        # Reset backend grading state (preserves history)
         response = requests.delete(
             f"{st.session_state.backend}/ai_grading/reset_all_grading",
             timeout=5
@@ -241,11 +241,10 @@ def reset_grading_state_on_navigation():
     except Exception as e:
         print(f"Error resetting backend grading state on navigation: {e}")
     
-    # Clear frontend grading-related session state
+    # Clear frontend grading-related session state (preserve history and job selection)
     keys_to_clear = [
         'ai_grading_data',
         'sample_data',
-        'selected_job_id',
         'report_job_selector'
     ]
     

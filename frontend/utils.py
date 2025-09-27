@@ -61,9 +61,9 @@ def initialize_session_state():
         st.session_state.knowledge_bases = load_knowledge_base_config()
 
 def reset_grading_state():
-    """Reset grading state in both frontend and backend"""
+    """Reset grading state in both frontend and backend (preserves history)"""
     try:
-        # Reset backend grading state
+        # Reset backend grading state (preserves history)
         response = requests.delete(
             f"{st.session_state.backend}/ai_grading/reset_all_grading",
             timeout=5
@@ -75,11 +75,10 @@ def reset_grading_state():
     except Exception as e:
         print(f"Error resetting backend grading state: {e}")
     
-    # Clear frontend grading-related session state
+    # Clear frontend grading-related session state (preserve history and job selection)
     keys_to_clear = [
         'ai_grading_data',
         'sample_data',
-        'selected_job_id',
         'report_job_selector',
         'selected_job_from_history'
     ]
@@ -87,6 +86,33 @@ def reset_grading_state():
     for key in keys_to_clear:
         if key in st.session_state:
             del st.session_state[key]
+
+def abandon_grading_task(job_id: str):
+    """Abandon a grading task and clean up its state"""
+    try:
+        # Tell backend to discard this specific job
+        response = requests.delete(
+            f"{st.session_state.backend}/ai_grading/discard_job/{job_id}",
+            timeout=5
+        )
+        if response.status_code == 200:
+            print(f"Job {job_id} abandoned successfully")
+        else:
+            print(f"Failed to abandon job {job_id}: {response.status_code}")
+    except Exception as e:
+        print(f"Error abandoning job {job_id}: {e}")
+    
+    # Remove job from session state
+    if "jobs" in st.session_state and job_id in st.session_state.jobs:
+        del st.session_state.jobs[job_id]
+    
+    # Clear any checking state for this job
+    if "checking_job_id" in st.session_state and st.session_state.checking_job_id == job_id:
+        del st.session_state.checking_job_id
+    
+    # Clear any selection state for this job
+    if "selected_job_id" in st.session_state and st.session_state.selected_job_id == job_id:
+        del st.session_state.selected_job_id
 
 def update_prob():
     if st.session_state.get('prob_changed', False):
@@ -175,7 +201,7 @@ def get_master_poller_html(jobs_json: str, backend_url: str) -> str:
                             // --- 核心修改：生成用户友好的弹窗消息 ---
                             const taskName = taskDetails.name || "未命名任务";
                             const submittedAt = taskDetails.submitted_at || "未知时间";
-                            alert(`您于 [${submittedAt}] 提交的任务："${taskName}"已成功完成！页面将自动跳转到批改结果页面。`);
+                            alert("您于 [" + submittedAt + "] 提交的任务：" + taskName + "已成功完成！页面将自动跳转到批改结果页面。");
                             // 标记为完成，防止重复弹窗
                             sessionStorage.setItem(completedKey, 'true');
                             // --- 新增功能：刷新当前页面 ---

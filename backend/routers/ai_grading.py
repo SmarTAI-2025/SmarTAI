@@ -628,6 +628,15 @@ def get_grading_result(job_id: str):
     """
     Get the grading result for a job.
     """
+    # Handle mock jobs specially
+    if job_id.startswith("MOCK_JOB_"):
+        # Return mock data as completed result
+        return {
+            "status": "completed",
+            "message": "Mock job completed successfully",
+            "results": []  # Empty results since mock data is handled in frontend
+        }
+    
     # First check current results
     result = GRADING_RESULTS.get(job_id)
     if result is None:
@@ -650,6 +659,18 @@ def get_job_metadata(job_id: str):
     """
     Get metadata for a specific job (for history tracking).
     """
+    # Handle mock jobs specially
+    if job_id.startswith("MOCK_JOB_"):
+        # Return mock job metadata
+        return {
+            "job_id": job_id,
+            "type": "mock",
+            "status": "completed",
+            "created_at": "2025-01-01T00:00:00",
+            "completed_at": "2025-01-01T00:00:00",
+            "message": "Mock job completed successfully"
+        }
+    
     metadata = JOB_METADATA.get(job_id, {"status": "not_found", "message": "Job ID not found in metadata."})
     return metadata
 
@@ -658,7 +679,14 @@ def get_all_job_metadata():
     """
     Get all job metadata (for history tracking).
     """
-    return dict(JOB_METADATA)
+    # Get all real job metadata
+    all_metadata = dict(JOB_METADATA)
+    
+    # Check if there are any mock jobs in the session (this would need to be passed from frontend)
+    # For now, we'll just return the real metadata
+    # In a real implementation, we might want to check if mock data should be included
+    
+    return all_metadata
 
 @router.get("/all_jobs")
 def get_all_jobs():
@@ -672,6 +700,15 @@ def get_history_result(job_id: str):
     """
     Get a specific history result.
     """
+    # Handle mock jobs specially
+    if job_id.startswith("MOCK_JOB_"):
+        # Return mock data as completed result
+        return {
+            "status": "completed",
+            "message": "Mock job completed successfully",
+            "results": []  # Empty results since mock data is handled in frontend
+        }
+    
     result = HISTORY_RESULTS.get(job_id, {"status": "not_found", "message": "Job ID not found in history."})
     return result
 
@@ -680,4 +717,11 @@ def get_all_history():
     """
     Get all history results.
     """
-    return dict(HISTORY_RESULTS)
+    # Get all real history results
+    all_history = dict(HISTORY_RESULTS)
+    
+    # Check if there are any mock jobs that should be included
+    # For now, we'll just return the real history
+    # In a real implementation, we might want to check if mock data should be included
+    
+    return all_history

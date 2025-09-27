@@ -97,7 +97,7 @@ def render_upload_section():
 
     # 当用户上传了作业文件后，才激活确认按钮
     if uploaded_hw_file is not None:
-        if st.button("确认信息，开始智能核查", type="primary", use_container_width=True):
+        if st.button("确认信息，开始智能核查", type="primary", width='stretch'):
             with st.spinner("正在上传并请求AI分析，请耐心几分钟..."):
                 # 准备要发送的文件
                 files_to_send = {
@@ -126,7 +126,7 @@ def render_upload_section():
                     st.error(f"发生未知错误: {e}")
     else:
         # 如果用户还未上传文件，则按钮禁用
-        st.button("确认信息，开始智能核查", type="primary", use_container_width=True, disabled=True)
+        st.button("确认信息，开始智能核查", type="primary", width='stretch', disabled=True)
         st.warning("请先在上方上传学生作业压缩包。")
 
 def reset_grading_state():

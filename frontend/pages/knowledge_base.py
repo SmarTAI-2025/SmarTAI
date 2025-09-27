@@ -352,7 +352,7 @@ def render_knowledge_base_list():
                 type=['pdf', 'docx', 'txt', 'md']
             )
             
-            submitted = st.form_submit_button("✅ 确认创建知识库", type="primary", use_container_width=True)
+            submitted = st.form_submit_button("✅ 确认创建知识库", type="primary", width='stretch')
 
             if submitted:
                 if not new_kb_name:
@@ -464,19 +464,19 @@ def render_knowledge_base_list():
             col1, col2, col3, col4, col5 = st.columns(5)
             
             with col1:
-                if st.button("📂 管理文件", key=f"manage_{kb_id}", use_container_width=True, type="primary"):
+                if st.button("📂 管理文件", key=f"manage_{kb_id}", width='stretch', type="primary"):
                     st.session_state.selected_kb = kb_id
                     st.session_state.show_file_management = True
                     st.rerun()
             
             with col2:
-                if st.button("✏️ 编辑", key=f"edit_{kb_id}", use_container_width=True):
+                if st.button("✏️ 编辑", key=f"edit_{kb_id}", width='stretch'):
                     st.session_state.edit_kb_id = kb_id
                     st.session_state.show_edit_kb = True
                     st.rerun()
             
             with col3:
-                if st.button("📋 复制", key=f"copy_{kb_id}", use_container_width=True):
+                if st.button("📋 复制", key=f"copy_{kb_id}", width='stretch'):
                     # 复制知识库
                     new_name = f"{kb_info['name']}_副本"
                     new_kb_id = create_knowledge_base(new_name, kb_info.get('description', ''), kb_info.get('category', '通用'))
@@ -484,13 +484,13 @@ def render_knowledge_base_list():
                     st.rerun()
             
             with col4:
-                if st.button("📊 统计", key=f"stats_{kb_id}", use_container_width=True):
+                if st.button("📊 统计", key=f"stats_{kb_id}", width='stretch'):
                     st.session_state.stats_kb_id = kb_id
                     st.session_state.show_kb_stats = True
                     st.rerun()
             
             with col5:
-                if st.button("🗑️ 删除", key=f"delete_{kb_id}", use_container_width=True, type="secondary"):
+                if st.button("🗑️ 删除", key=f"delete_{kb_id}", width='stretch', type="secondary"):
                     st.session_state.delete_kb_id = kb_id
                     st.session_state.show_delete_confirm = True
                     st.rerun()
@@ -718,15 +718,15 @@ def render_file_management_modal():
                     col1, col2, col3 = st.columns([1, 1, 1])
                     
                     with col1:
-                        if st.button("👀 预览", key=f"preview_file_{file_id}", use_container_width=True):
+                        if st.button("👀 预览", key=f"preview_file_{file_id}", width='stretch'):
                             st.info(f"预览文件: {file_info['name']}")
                     
                     with col2:
-                        if st.button("📥 下载", key=f"download_file_{file_id}", use_container_width=True):
+                        if st.button("📥 下载", key=f"download_file_{file_id}", width='stretch'):
                             st.info(f"下载文件: {file_info['name']}")
                     
                     with col3:
-                        if st.button("🗑️ 删除", key=f"delete_file_{file_id}", use_container_width=True, type="secondary"):
+                        if st.button("🗑️ 删除", key=f"delete_file_{file_id}", width='stretch', type="secondary"):
                             if remove_file_from_kb(kb_id, file_id):
                                 st.success(f"文件 '{file_info['name']}' 已删除！")
                                 st.rerun()

@@ -211,7 +211,7 @@ else:
                             total_score += question["score"]
                             total_max_score += question["max_score"]
                         df = pd.DataFrame(data)
-                        st.dataframe(df, use_container_width=True, hide_index=True)
+                        st.dataframe(df, width='stretch', hide_index=True)
                         st.write(f"**总分: {total_score:.1f}/{total_max_score:.1f}**")
                         st.divider()
             except Exception as e:
@@ -271,7 +271,7 @@ else:
                                 total_score += correction["score"]
                                 total_max_score += correction["max_score"]
                             df = pd.DataFrame(data)
-                            st.dataframe(df, use_container_width=True, hide_index=True)
+                            st.dataframe(df, width='stretch', hide_index=True)
                             st.write(f"**总分: {total_score:.1f}/{total_max_score:.1f}**")
                             st.divider()
                     elif "corrections" in result:  # Single student grading results
@@ -312,7 +312,7 @@ else:
                                     total_score += question["score"]
                                     total_max_score += question["max_score"]
                                 df = pd.DataFrame(data)
-                                st.dataframe(df, use_container_width=True, hide_index=True)
+                                st.dataframe(df, width='stretch', hide_index=True)
                                 st.write(f"**总分: {total_score:.1f}/{total_max_score:.1f}**")
                                 st.divider()
                     except Exception as e:
@@ -349,7 +349,7 @@ else:
                                 total_score += question["score"]
                                 total_max_score += question["max_score"]
                             df = pd.DataFrame(data)
-                            st.dataframe(df, use_container_width=True, hide_index=True)
+                            st.dataframe(df, width='stretch', hide_index=True)
                             st.write(f"**总分: {total_score:.1f}/{total_max_score:.1f}**")
                             st.divider()
                 except Exception as e:
@@ -383,7 +383,7 @@ else:
                                 total_score += question["score"]
                                 total_max_score += question["max_score"]
                             df = pd.DataFrame(data)
-                            st.dataframe(df, use_container_width=True, hide_index=True)
+                            st.dataframe(df, width='stretch', hide_index=True)
                             st.write(f"**总分: {total_score:.1f}/{total_max_score:.1f}**")
                             st.divider()
                 except Exception as e:
@@ -403,7 +403,7 @@ with col1:
     st.button(
         "返回顶部", 
         on_click=return_top,
-        use_container_width=False
+        width='content'
     )
 
 with col2:
@@ -413,7 +413,7 @@ with col2:
 def reset_grading_state_on_navigation():
     """Reset grading state when navigating away from grading pages"""
     try:
-        # Reset backend grading state
+        # Reset backend grading state (preserves history)
         response = requests.delete(
             f"{st.session_state.backend}/ai_grading/reset_all_grading",
             timeout=5
@@ -425,11 +425,10 @@ def reset_grading_state_on_navigation():
     except Exception as e:
         print(f"Error resetting backend grading state on navigation: {e}")
     
-    # Clear frontend grading-related session state
+    # Clear frontend grading-related session state (preserve history and job selection)
     keys_to_clear = [
         'ai_grading_data',
         'sample_data',
-        'selected_job_id',
         'report_job_selector'
     ]
     

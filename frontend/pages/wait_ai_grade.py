@@ -64,6 +64,9 @@ def render_header():
 
 render_header()
 
+# Check for abandoned tasks
+check_for_abandoned_tasks()
+
 # --- 模拟后端提交和页面跳转 ---
 
 st.title("⚙️ 正在提交作业...")
@@ -227,10 +230,22 @@ if 'checking_job_id' in st.session_state:
 
 inject_pollers_for_active_jobs()
 
+def check_for_abandoned_tasks():
+    """Check for and abandon tasks that were started but not completed"""
+    # Check if there are any pending jobs that should be abandoned
+    if 'checking_job_id' in st.session_state:
+        job_id = st.session_state.checking_job_id
+        # If user has navigated away from the waiting page, abandon the task
+        # This is a simple check - in a real implementation you might want more sophisticated logic
+        print(f"Potential abandoned task detected: {job_id}")
+        # For now, we'll just clear the checking state without abandoning the backend task
+        # since the backend task might still be processing
+        del st.session_state.checking_job_id
+
 def reset_grading_state_on_navigation():
     """Reset grading state when navigating away from grading pages"""
     try:
-        # Reset backend grading state
+        # Reset backend grading state (preserves history)
         response = requests.delete(
             f"{st.session_state.backend}/ai_grading/reset_all_grading",
             timeout=5
@@ -242,11 +257,10 @@ def reset_grading_state_on_navigation():
     except Exception as e:
         print(f"Error resetting backend grading state on navigation: {e}")
     
-    # Clear frontend grading-related session state
+    # Clear frontend grading-related session state (preserve history and job selection)
     keys_to_clear = [
         'ai_grading_data',
         'sample_data',
-        'selected_job_id',
         'report_job_selector',
         'checking_job_id',
         'job_status'

@@ -153,11 +153,8 @@ def render_user_welcome():
         """, unsafe_allow_html=True)
     
     with col3:
-        if st.button("🔄 刷新数据", use_container_width=False):
-            # Reset grading state to allow fresh grading
-            reset_grading_state()
-            
-            # Refresh data based on selected job or default data
+        if st.button("🔄 刷新数据", width='content'):
+            # Refresh data based on selected job or default data without resetting grading state
             if 'selected_job_id' in st.session_state:
                 ai_data = load_ai_grading_data(st.session_state.selected_job_id)
                 if "error" not in ai_data:
