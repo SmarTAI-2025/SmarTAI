@@ -8,9 +8,9 @@ import argparse
 from typing import Dict, Any, List
 from pydantic import BaseModel
 
-from backend.models import Correction, StepScore
-from backend.correct.prompt_utils import prepare_calc_prompt
-from backend.dependencies import get_llm
+from models import Correction, StepScore
+from correct.prompt_utils import prepare_calc_prompt
+from dependencies import get_llm
 
 # Setup logger
 logger = structlog.get_logger()
