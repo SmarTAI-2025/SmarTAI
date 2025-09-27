@@ -9,12 +9,12 @@ from pydantic import BaseModel
 from functools import lru_cache
 from collections import OrderedDict
 
-from backend.dependencies import get_problem_store, get_student_store
-from backend.models import Correction
-from backend.correct.calc import calc_node
-from backend.correct.concept import concept_node
-from backend.correct.proof import proof_node
-from backend.correct.programming import programming_node
+from dependencies import get_problem_store, get_student_store
+from models import Correction
+from correct.calc import calc_node
+from correct.concept import concept_node
+from correct.proof import proof_node
+from correct.programming import programming_node
 
 # Setup logger
 logger = logging.getLogger(__name__)

@@ -7,7 +7,7 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from backend.routers import prob_preview, hw_preview, ai_grading, human_edit
+from routers import prob_preview, hw_preview, ai_grading, human_edit
 # from app.db import init_db
 import logging
 import random
