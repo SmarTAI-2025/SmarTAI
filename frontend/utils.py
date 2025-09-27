@@ -7,6 +7,7 @@ import os
 KNOWLEDGE_BASE_DIR = "knowledge_bases"
 KNOWLEDGE_BASE_CONFIG = "knowledge_base_config.json"
 UTILS_BACKEND_URL = "https://smartai-backend-zefh.onrender.com" # render部署
+UTILS_BACKEND_URL = "https://smartai-production.up.railway.app/" # railway部署
 # UTILS_BACKEND_URL = "http://localhost:8000" # 本地测试
 
 def load_knowledge_base_config():
