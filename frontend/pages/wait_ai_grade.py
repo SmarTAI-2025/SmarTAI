@@ -124,7 +124,7 @@ if st.session_state.get('trigger_ai_grading'):
             _, img_col, _ = st.columns([1, 1, 1])
             with img_col:
                 st.image(
-                    "static/checkmark.svg",
+                    "frontend/static/checkmark.svg",
                     caption=f"批改任务：{task_name}已成功提交至AI后台处理！",
                     width=200
                 )
