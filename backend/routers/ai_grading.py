@@ -26,14 +26,52 @@ router = APIRouter(
 
 # Store for grading results with timestamp for cleanup
 GRADING_RESULTS: Dict[str, Dict[str, Any]] = OrderedDict()
+# Store for completed grading results (history)
+HISTORY_RESULTS: Dict[str, Dict[str, Any]] = OrderedDict()
 # Maximum number of results to keep
-MAX_RESULTS = 100
+MAX_RESULTS = 1000
 # Time to keep results in seconds (24 hours)
 RESULT_TTL = 24 * 60 * 60
 
 # Add a function to get all job IDs for debugging
 def get_all_job_ids():
     return list(GRADING_RESULTS.keys())
+
+@router.delete("/discard_job/{job_id}")
+def discard_job(job_id: str):
+    """
+    Immediately discard a job (e.g., when user navigates away before completion).
+    """
+    # Remove from active jobs
+    ACTIVE_JOBS.discard(job_id)
+    
+    # Remove from grading results
+    if job_id in GRADING_RESULTS:
+        GRADING_RESULTS.pop(job_id, None)
+    
+    # Remove from job metadata
+    if job_id in JOB_METADATA:
+        JOB_METADATA.pop(job_id, None)
+    
+    return {"status": "success", "message": f"Job {job_id} has been discarded."}
+
+@router.delete("/discard_job/{job_id}")
+def discard_job(job_id: str):
+    """
+    Immediately discard a job (e.g., when user navigates away before completion).
+    """
+    # Remove from active jobs
+    ACTIVE_JOBS.discard(job_id)
+    
+    # Remove from grading results
+    if job_id in GRADING_RESULTS:
+        GRADING_RESULTS.pop(job_id, None)
+    
+    # Remove from job metadata
+    if job_id in JOB_METADATA:
+        JOB_METADATA.pop(job_id, None)
+    
+    return {"status": "success", "message": f"Job {job_id} has been discarded."}
 
 # Cache for LLM clients to avoid repeated initialization
 LLM_CLIENT_CACHE: Dict[int, Any] = {}
@@ -48,27 +86,32 @@ MAX_CONCURRENT_JOBS = 10
 
 # Store job metadata for history tracking
 JOB_METADATA = OrderedDict()
-MAX_METADATA = 100
+MAX_METADATA = 1000
 METADATA_TTL = 30 * 24 * 60 * 60  # 30 days
 
-def cleanup_old_metadata():
+async def cleanup_old_metadata():
     """Remove old job metadata to prevent memory leaks."""
     current_time = time.time()
     expired_keys = []
     
     # Find expired metadata
     for job_id, metadata in JOB_METADATA.items():
-        if current_time - metadata.get('timestamp', 0) > METADATA_TTL:
+        timestamp = metadata.get('timestamp', 0)
+        time_diff = current_time - timestamp
+        logger.info(f"Checking metadata {job_id}: current_time={current_time}, timestamp={timestamp}, time_diff={time_diff}, METADATA_TTL={METADATA_TTL}")
+        if time_diff > METADATA_TTL:
             expired_keys.append(job_id)
     
     # Remove expired metadata
     for job_id in expired_keys:
+        logger.info(f"Removing expired metadata {job_id}")
         JOB_METADATA.pop(job_id, None)
     
     # Remove excess metadata if we're over the limit
     while len(JOB_METADATA) > MAX_METADATA:
         # Remove the oldest metadata (OrderedDict maintains insertion order)
-        JOB_METADATA.popitem(last=False)
+        removed_item = JOB_METADATA.popitem(last=False)
+        logger.info(f"Removed excess metadata {removed_item[0]}")
 
 # Cache for processed rubrics to avoid redundant processing
 @lru_cache(maxsize=128)
@@ -314,9 +357,13 @@ async def run_grading_task(job_id: str, student_id: str, problem_store: Dict, st
                 "student_id": student_id
             })
         
-        # Clean up old results
-        cleanup_old_results()
-        cleanup_old_metadata()
+        # Move completed results to history storage
+        if job_id in GRADING_RESULTS:
+            HISTORY_RESULTS[job_id] = GRADING_RESULTS[job_id].copy()
+        
+        # Only clean up old results after a delay to ensure pending jobs are not removed
+        # Clean up will happen in a separate task to avoid blocking the current task
+        asyncio.create_task(cleanup_after_delay())
         
         logger.info(f"Grading task {job_id} completed for student {student_id}")
         
@@ -338,31 +385,83 @@ async def run_grading_task(job_id: str, student_id: str, problem_store: Dict, st
                 "error": str(e)
             })
         
-        # Clean up old results
-        cleanup_old_results()
-        cleanup_old_metadata()
+        # Only clean up old results after a delay to ensure pending jobs are not removed
+        # Clean up will happen in a separate task to avoid blocking the current task
+        asyncio.create_task(cleanup_after_delay())
     finally:
         # Remove job from active jobs
         ACTIVE_JOBS.discard(job_id)
 
-def cleanup_old_results():
+async def cleanup_old_results():
     """Remove old grading results to prevent memory leaks."""
     current_time = time.time()
     expired_keys = []
     
     # Find expired results
     for job_id, result in GRADING_RESULTS.items():
-        if current_time - result.get('timestamp', 0) > RESULT_TTL:
+        # Don't clean up pending jobs
+        if result.get('status') == 'pending':
+            continue
+            
+        timestamp = result.get('timestamp', 0)
+        time_diff = current_time - timestamp
+        logger.info(f"Checking job {job_id}: current_time={current_time}, timestamp={timestamp}, time_diff={time_diff}, RESULT_TTL={RESULT_TTL}")
+        if time_diff > RESULT_TTL:
             expired_keys.append(job_id)
     
     # Remove expired results
     for job_id in expired_keys:
+        logger.info(f"Removing expired job {job_id}")
         GRADING_RESULTS.pop(job_id, None)
     
     # Remove excess results if we're over the limit
     while len(GRADING_RESULTS) > MAX_RESULTS:
         # Remove the oldest result (OrderedDict maintains insertion order)
-        GRADING_RESULTS.popitem(last=False)
+        # But don't remove pending jobs
+        oldest_key = None
+        for key in list(GRADING_RESULTS.keys()):
+            if GRADING_RESULTS[key].get('status') != 'pending':
+                oldest_key = key
+                break
+        
+        if oldest_key is None:
+            # All jobs are pending, don't remove any
+            break
+            
+        removed_item = GRADING_RESULTS.popitem(last=False)
+        logger.info(f"Removed excess job {removed_item[0]}")
+
+async def cleanup_after_delay():
+    """Clean up old results after a delay to ensure pending jobs are not removed immediately."""
+    # Wait for 10 seconds before cleaning up to ensure pending jobs are not removed
+    await asyncio.sleep(10)
+    await cleanup_old_results()
+    await cleanup_old_metadata()
+    await cleanup_old_history()
+
+async def cleanup_old_history():
+    """Remove old history results to prevent memory leaks."""
+    current_time = time.time()
+    expired_keys = []
+    
+    # Find expired history results
+    for job_id, result in HISTORY_RESULTS.items():
+        timestamp = result.get('timestamp', 0)
+        time_diff = current_time - timestamp
+        logger.info(f"Checking history {job_id}: current_time={current_time}, timestamp={timestamp}, time_diff={time_diff}, RESULT_TTL={RESULT_TTL}")
+        if time_diff > RESULT_TTL:
+            expired_keys.append(job_id)
+    
+    # Remove expired history results
+    for job_id in expired_keys:
+        logger.info(f"Removing expired history {job_id}")
+        HISTORY_RESULTS.pop(job_id, None)
+    
+    # Remove excess history results if we're over the limit
+    while len(HISTORY_RESULTS) > MAX_RESULTS:
+        # Remove the oldest history result (OrderedDict maintains insertion order)
+        removed_item = HISTORY_RESULTS.popitem(last=False)
+        logger.info(f"Removed excess history {removed_item[0]}")
 
 async def run_batch_grading_task(job_id: str, problem_store: Dict, student_store: Dict[str, Any]):
     """Run the grading task for all students using parallel processing."""
@@ -410,9 +509,13 @@ async def run_batch_grading_task(job_id: str, problem_store: Dict, student_store
                 "student_count": len(all_results)
             })
         
-        # Clean up old results
-        cleanup_old_results()
-        cleanup_old_metadata()
+        # Move completed results to history storage
+        if job_id in GRADING_RESULTS:
+            HISTORY_RESULTS[job_id] = GRADING_RESULTS[job_id].copy()
+        
+        # Only clean up old results after a delay to ensure pending jobs are not removed
+        # Clean up will happen in a separate task to avoid blocking the current task
+        asyncio.create_task(cleanup_after_delay())
         
         logger.info(f"Batch grading task {job_id} completed for all students. Processed {len(all_results)} students.")
         
@@ -434,9 +537,9 @@ async def run_batch_grading_task(job_id: str, problem_store: Dict, student_store
                 "error": str(e)
             })
         
-        # Clean up old results
-        cleanup_old_results()
-        cleanup_old_metadata()
+        # Only clean up old results after a delay to ensure pending jobs are not removed
+        # Clean up will happen in a separate task to avoid blocking the current task
+        asyncio.create_task(cleanup_after_delay())
     finally:
         # Remove job from active jobs
         ACTIVE_JOBS.discard(job_id)
@@ -525,7 +628,11 @@ def get_grading_result(job_id: str):
     """
     Get the grading result for a job.
     """
-    result = GRADING_RESULTS.get(job_id, {"status": "not_found", "message": "Job ID not found in results."})
+    # First check current results
+    result = GRADING_RESULTS.get(job_id)
+    if result is None:
+        # If not found in current results, check history
+        result = HISTORY_RESULTS.get(job_id, {"status": "not_found", "message": "Job ID not found in results or history."})
     return result
 
 @router.delete("/reset_all_grading")
@@ -536,7 +643,7 @@ def reset_all_grading_results():
     global GRADING_RESULTS, ACTIVE_JOBS
     GRADING_RESULTS = OrderedDict()
     ACTIVE_JOBS.clear()
-    return {"status": "success", "message": "All grading results have been reset."}
+    return {"status": "success", "message": "All grading results have been reset (history preserved)."}
 
 @router.get("/job_metadata/{job_id}")
 def get_job_metadata(job_id: str):
@@ -559,3 +666,18 @@ def get_all_jobs():
     Get all job IDs and their statuses for debugging.
     """
     return {job_id: result.get("status", "unknown") for job_id, result in GRADING_RESULTS.items()}
+
+@router.get("/history/{job_id}")
+def get_history_result(job_id: str):
+    """
+    Get a specific history result.
+    """
+    result = HISTORY_RESULTS.get(job_id, {"status": "not_found", "message": "Job ID not found in history."})
+    return result
+
+@router.get("/all_history")
+def get_all_history():
+    """
+    Get all history results.
+    """
+    return dict(HISTORY_RESULTS)

@@ -175,11 +175,11 @@ def get_master_poller_html(jobs_json: str, backend_url: str) -> str:
                             // --- 核心修改：生成用户友好的弹窗消息 ---
                             const taskName = taskDetails.name || "未命名任务";
                             const submittedAt = taskDetails.submitted_at || "未知时间";
-                            alert(`您于 [${{submittedAt}}] 提交的任务："${{taskName}}"已成功完成！\\n请前往“历史批改记录”-“批改结果”查看，或直接查看[报告]和[分析]。\\n如果您当前正在AI批改结果总览窗口，请手动点击右上角“刷新数据”按钮以查看最新批改数据！`);
+                            alert(`您于 [${submittedAt}] 提交的任务："${taskName}"已成功完成！页面将自动跳转到批改结果页面。`);
                             // 标记为完成，防止重复弹窗
                             sessionStorage.setItem(completedKey, 'true');
                             // --- 新增功能：刷新当前页面 ---
-                            //window.parent.location.reload();
+                            window.parent.location.href = '/pages/grade_results.py';
                             // -----------------------------
                         }}
                     }}

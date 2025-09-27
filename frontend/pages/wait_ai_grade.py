@@ -69,6 +69,10 @@ render_header()
 st.title("⚙️ 正在提交作业...")
 # st.info("请稍候，AI后台正在进行批改分析...")
 
+# Initialize job status in session state
+if 'job_status' not in st.session_state:
+    st.session_state.job_status = "pending"
+
 # 2. 【核心逻辑】检查是否存在从其他页面传来的“触发标志”
 if st.session_state.get('trigger_ai_grading'):
     
@@ -116,6 +120,8 @@ if st.session_state.get('trigger_ai_grading'):
             st.session_state.jobs[job_id] = task_details
             # Also store the job_id for immediate access
             st.session_state.current_job_id = job_id
+            # Store job_id for status checking
+            st.session_state.checking_job_id = job_id
             
             # Debug information
             st.write(f"Stored job ID: {job_id}")
@@ -125,7 +131,7 @@ if st.session_state.get('trigger_ai_grading'):
             _, img_col, _ = st.columns([1, 1, 1])
             with img_col:
                 st.image(
-                    "frontend/static/checkmark.svg",
+                    "static/checkmark.svg",
                     caption=f"批改任务：{task_name}已成功提交至AI后台处理！",
                     width=200
                 )
@@ -138,44 +144,86 @@ if st.session_state.get('trigger_ai_grading'):
     except Exception as e:
         st.error(f"提交失败：{e}")
 
+# If we have a job to check status for
+if 'checking_job_id' in st.session_state:
+    job_id = st.session_state.checking_job_id
+    
+    # Display current status
+    st.subheader("任务状态")
+    status_container = st.empty()
+    
+    # Add refresh button
+    if st.button("🔄 刷新状态"):
+        try:
+            response = requests.get(
+                f"{st.session_state.backend}/ai_grading/grade_result/{job_id}",
+                timeout=10
+            )
+            if response.status_code == 200:
+                result = response.json()
+                st.session_state.job_status = result.get("status", "unknown")
+            else:
+                st.error(f"获取状态失败: {response.status_code}")
+        except Exception as e:
+            st.error(f"获取状态时出错: {e}")
+    
+    # Auto-check status
+    try:
+        response = requests.get(
+            f"{st.session_state.backend}/ai_grading/grade_result/{job_id}",
+            timeout=10
+        )
+        if response.status_code == 200:
+            result = response.json()
+            status = result.get("status", "unknown")
+            st.session_state.job_status = status
+            
+            # Update display based on status
+            if status == "pending":
+                status_container.info("🕒 任务正在处理中，请稍候...")
+            elif status == "completed":
+                status_container.success("✅ 任务已完成！正在跳转到批改结果页面...")
+                # Remove the job from checking
+                if 'checking_job_id' in st.session_state:
+                    del st.session_state.checking_job_id
+                # Set the current job as selected
+                st.session_state.selected_job_id = job_id
+                # Set newly submitted job ID
+                st.session_state.newly_submitted_job_id = job_id
+                # Wait a moment and then redirect
+                time.sleep(2)
+                st.switch_page("pages/grade_results.py")
+            elif status == "error":
+                status_container.error(f"❌ 任务处理出错: {result.get('message', '未知错误')}")
+                # Remove the job from checking
+                if 'checking_job_id' in st.session_state:
+                    del st.session_state.checking_job_id
+            else:
+                status_container.warning(f"⚠️ 当前状态: {status}")
+        else:
+            status_container.error(f"获取状态失败: {response.status_code}")
+    except Exception as e:
+        status_container.error(f"获取状态时出错: {e}")
 
-# # 5. 页面的其余部分，比如显示标题和当前任务列表
-# st.title("任务执行与轮询")
-# st.write("这里会显示所有正在进行的任务。当任务完成时，你会收到弹窗提醒。")
+    # Show job details
+    if job_id in st.session_state.jobs:
+        task_details = st.session_state.jobs[job_id]
+        st.write(f"任务名称: {task_details.get('name', '未命名任务')}")
+        st.write(f"提交时间: {task_details.get('submitted_at', '未知时间')}")
 
-# if st.session_state.jobs:
-#     st.write("当前会话中的活动任务：")
-#     for j in st.session_state.jobs:
-#         st.info(f"- {j}")
-# else:
-#     st.write("当前没有正在执行的任务。")
-
-
-# # 6. 在脚本末尾注入轮询器（和之前一样）
-# pollers_html = get_global_pollers_html()
-# if pollers_html:
-#     with st.sidebar:
-#         components.html(pollers_html, height=0)
-
-
-
-
-
-
-# # 模拟：我们在 session_state 中记录一个任务的开始时间，代表任务已启动
-# st.session_state['active_job_start_time'] = time.time()
-# # 清理旧的完成状态，以防万一
-# if 'job_completed' in st.session_state:
-#     del st.session_state['job_completed']
-
-
-# 使用 st.spinner 来提供视觉反馈
-# with st.spinner('任务已提交至后台，本页面稍后将自动跳转到历史批改记录。\n 当任务完成时，你会收到弹窗提醒。'):
-st.success('任务已提交至后台，本页面将于5秒后将自动跳转到历史批改记录。\n 当任务完成时，你会收到弹窗提醒。')
-time.sleep(3) # 后续对接后端
-
-# 4. 跳转回历史批改记录界面
-st.switch_page("pages/grade_results.py")
+# Auto-refresh every 5 seconds if we're still checking
+if 'checking_job_id' in st.session_state:
+    st.markdown(
+        """
+        <script>
+        setTimeout(function(){
+            window.parent.location.reload();
+        }, 5000);
+        </script>
+        """,
+        unsafe_allow_html=True
+    )
+    st.info("页面将在5秒后自动刷新以检查任务状态...")
 
 inject_pollers_for_active_jobs()
 
@@ -199,7 +247,9 @@ def reset_grading_state_on_navigation():
         'ai_grading_data',
         'sample_data',
         'selected_job_id',
-        'report_job_selector'
+        'report_job_selector',
+        'checking_job_id',
+        'job_status'
     ]
     
     for key in keys_to_clear:
