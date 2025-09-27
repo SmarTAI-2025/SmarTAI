@@ -173,7 +173,7 @@ def render_user_welcome():
             # Clear all session state except history records
             clear_session_state_except_history()
             st.success("已退出登录")
-            st.switch_page("frontend/pages/login.py")
+            st.switch_page("pages/login.py")
 
 def render_statistics_overview():
     """渲染统计概览"""
