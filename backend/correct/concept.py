@@ -171,7 +171,7 @@ def concept_node(answer_unit: Dict[str, Any], rubric: str, max_score: float = 10
     
     # Step 2: Prepare prompt using the new prompt_utils module
     try:
-        template_path = "backend/prompts/concept.txt"
+        template_path = "prompts/concept.txt"
         context = keywords
         problem = "概念题"  # Mock problem statement
         answer = answer_unit.get("text", "")
@@ -287,7 +287,7 @@ def concept_node(answer_unit: Dict[str, Any], rubric: str, max_score: float = 10
             )
             return correction
     except FileNotFoundError:
-        logger.warning("concept_prompt_template_not_found", template_path="backend/prompts/concept.txt")
+        logger.warning("concept_prompt_template_not_found", template_path=template_path)
         # Create a simple rule-based correction as fallback with a default prompt
         context_str = "\n".join(keywords)
         default_prompt = f"""

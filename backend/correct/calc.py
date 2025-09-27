@@ -170,7 +170,7 @@ def calc_node(answer_unit: Dict[str, Any], rubric: str, max_score: float = 10.0,
     
     # Step 2: Prepare prompt using the new prompt_utils module
     try:
-        template_path = "backend/prompts/calc.txt"
+        template_path = "prompts/calc.txt"
         student_answer = answer_unit_model.text
         # For now, we use the student answer as both problem and correct_answer since we don't have the correct answer
         # In a real implementation, you would get the correct answer from the problem store
@@ -284,7 +284,7 @@ def calc_node(answer_unit: Dict[str, Any], rubric: str, max_score: float = 10.0,
             )
             return correction
     except FileNotFoundError:
-        logger.warning("calc_prompt_template_not_found", template_path="backend/prompts/calc.txt")
+        logger.warning("calc_prompt_template_not_found", template_path=template_path)
         # Create a simple rule-based correction as fallback with a default prompt
         default_prompt = f"""
         你是一个数学老师，需要对学生的计算题解答进行评分。

@@ -207,7 +207,7 @@ def proof_node(answer_unit: Dict[str, Any], rubric: str, max_score: float = 10.0
     
     # Step 4: Prepare prompt using the new prompt_utils module
     try:
-        template_path = "backend/prompts/proof.txt"
+        template_path = "prompts/proof.txt"
         prompt = prepare_proof_prompt(template_path, [step.model_dump() for step in steps], rubric)
         
         # In a real implementation, you would call an LLM with this prompt
@@ -316,7 +316,7 @@ def proof_node(answer_unit: Dict[str, Any], rubric: str, max_score: float = 10.0
             )
             return correction
     except FileNotFoundError:
-        logger.warning("proof_prompt_template_not_found", template_path="backend/prompts/proof.txt")
+        logger.warning("proof_prompt_template_not_found", template_path=template_path)
         # Create a simple rule-based correction as fallback with a default prompt
         steps_str = "\n".join([f"{step.step_no}. {step.content}" for step in steps])
         default_prompt = f"""

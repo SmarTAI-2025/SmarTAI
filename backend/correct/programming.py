@@ -254,7 +254,7 @@ def programming_node(answer_unit: Dict[str, Any], rubric: str, max_score: float 
     
     # Step 6: Prepare prompt using the new prompt_utils module
     try:
-        template_path = "backend/prompts/programming.txt"
+        template_path = "prompts/programming.txt"
         # For now, we use a placeholder problem statement since we don't have the actual problem
         # In a real implementation, you would get the problem from the problem store
         problem = "编程题"
@@ -347,7 +347,7 @@ def programming_node(answer_unit: Dict[str, Any], rubric: str, max_score: float 
             )
             return correction
     except FileNotFoundError:
-        logger.warning("programming_prompt_template_not_found", template_path="backend/prompts/programming.txt")
+        logger.warning("programming_prompt_template_not_found", template_path=template_path)
         # Create a simple rule-based correction as fallback with a default prompt
         default_prompt = f"""
         你是一个编程老师，需要对学生的编程题解答进行评分。
