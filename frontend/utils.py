@@ -83,9 +83,38 @@ def reset_grading_state():
         'selected_job_from_history'
     ]
     
+    # Only clear sample_data if it's not MOCK_JOB_001
+    if 'selected_job_id' in st.session_state and st.session_state.selected_job_id != "MOCK_JOB_001":
+        if 'sample_data' in keys_to_clear:
+            keys_to_clear.remove('sample_data')
+    
     for key in keys_to_clear:
         if key in st.session_state:
             del st.session_state[key]
+
+def clear_session_state_except_history():
+    """Clear session state except for history records"""
+    # Store history-related data temporarily
+    history_data = {}
+    if 'jobs' in st.session_state:
+        history_data['jobs'] = st.session_state.jobs
+    if 'selected_job_id' in st.session_state:
+        # Always preserve MOCK_JOB_001 selection
+        if st.session_state.selected_job_id == "MOCK_JOB_001":
+            history_data['selected_job_id'] = st.session_state.selected_job_id
+    if 'selected_job_from_history' in st.session_state:
+        history_data['selected_job_from_history'] = st.session_state.selected_job_from_history
+    
+    # Clear all session state
+    for key in list(st.session_state.keys()):
+        del st.session_state[key]
+    
+    # Restore history-related data
+    for key, value in history_data.items():
+        st.session_state[key] = value
+    
+    # Reinitialize essential session state
+    initialize_session_state()
 
 def abandon_grading_task(job_id: str):
     """Abandon a grading task and clean up its state"""
@@ -323,9 +352,12 @@ def get_all_jobs_for_selection():
     # 1. Add the mock task first as a baseline option
     if 'sample_data' in st.session_state and st.session_state.sample_data:
         assignment_stats = st.session_state.sample_data.get('assignment_stats')
+        mock_job_id = "MOCK_JOB_001"
         if assignment_stats:
-            mock_job_id = "MOCK_JOB_001"
             all_jobs_for_selection[mock_job_id] = f"【模拟数据】{assignment_stats.assignment_name}"
+        else:
+            # Fallback name if assignment_stats is None
+            all_jobs_for_selection[mock_job_id] = "【模拟数据】示例作业"
 
     # 2. Add all real jobs from the session state
     if "jobs" in st.session_state and st.session_state.jobs:

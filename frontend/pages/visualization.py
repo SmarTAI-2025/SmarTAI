@@ -38,6 +38,18 @@ st.set_page_config(
 
 def init_session_state():
     """初始化会话状态"""
+    # Initialize basic session state
+    initialize_session_state()
+    
+    # Set default job to MOCK_JOB_001 if not already set
+    if 'selected_job_id' not in st.session_state:
+        st.session_state.selected_job_id = "MOCK_JOB_001"
+    
+    # Always ensure mock data is available
+    if 'sample_data' not in st.session_state or not st.session_state.sample_data:
+        with st.spinner("加载数据中..."):
+            st.session_state.sample_data = load_mock_data()
+    
     # Check if we have a selected job for AI grading data
     if 'selected_job_id' in st.session_state and st.session_state.selected_job_id:
         # Load AI grading data
@@ -49,11 +61,10 @@ def init_session_state():
                 st.error(f"加载AI批改数据失败: {ai_data['error']}")
                 # Fallback to mock data
                 st.session_state.sample_data = load_mock_data()
-    else:
-        # Load mock data if no job is selected
-        if 'sample_data' not in st.session_state:
-            with st.spinner("加载数据中..."):
-                st.session_state.sample_data = load_mock_data()
+    
+    # Ensure we always have valid sample data
+    if 'sample_data' not in st.session_state or not st.session_state.sample_data:
+        st.session_state.sample_data = load_mock_data()
 
 def render_header():
     """渲染页面头部"""
@@ -144,11 +155,11 @@ def render_statistics_overview(students: List[StudentScore], assignment_stats: A
         return
     
     scores = [s.percentage for s in students]
-    avg_score = np.mean(scores)
+    avg_score = np.mean(scores) if scores else 0
     median_score = calculate_median_score(students)
-    max_score = np.max(scores)
-    min_score = np.min(scores)
-    std_score = np.std(scores)
+    max_score = np.max(scores) if scores else 0
+    min_score = np.min(scores) if scores else 0
+    std_score = np.std(scores) if scores else 0
     pass_rate = len([s for s in scores if s >= 60]) / len(scores) * 100 if scores else 0
     excellence_rate = len([s for s in scores if s >= 85]) / len(scores) * 100 if scores else 0
     
@@ -449,8 +460,9 @@ def main():
     selectable_jobs = get_all_jobs_for_selection()
 
     if not selectable_jobs:
-        st.warning("当前没有批改任务记录可供分析。")
-        st.stop()
+        # Even if there are no real jobs, we should still show mock data
+        st.info("当前没有批改任务记录，将显示模拟数据。")
+        selectable_jobs = {"MOCK_JOB_001": "【模拟数据】示例作业"}
 
     job_ids = list(selectable_jobs.keys())
     default_index = 0
@@ -466,6 +478,10 @@ def main():
     # 优先级 2: 使用在其他页面已选中的全局任务ID
     elif "selected_job_id" in st.session_state and st.session_state.selected_job_id in job_ids:
         default_index = job_ids.index(st.session_state.selected_job_id)
+    
+    # 优先级 3: 如果没有选中的任务，但有mock数据，选择mock任务作为默认
+    elif "MOCK_JOB_001" in job_ids:
+        default_index = job_ids.index("MOCK_JOB_001")
 
     # --- 改动 3: 创建下拉选择框 ---
     def on_selection_change():
@@ -520,11 +536,11 @@ def main():
             assignment_name="示例作业",
             total_students=len(students),
             submitted_count=len(students),
-            avg_score=np.mean([s.percentage for s in students]) if students else 0,
-            max_score=max([s.percentage for s in students]) if students else 0,
-            min_score=min([s.percentage for s in students]) if students else 0,
-            std_score=np.std([s.percentage for s in students]) if students else 0,
-            pass_rate=(len([s for s in students if s.percentage >= 60]) / len(students) * 100) if students else 0,
+            avg_score=np.mean([s.percentage for s in students]) if students and len(students) > 0 else 0,
+            max_score=max([s.percentage for s in students]) if students and len(students) > 0 else 0,
+            min_score=min([s.percentage for s in students]) if students and len(students) > 0 else 0,
+            std_score=np.std([s.percentage for s in students]) if students and len(students) > 0 else 0,
+            pass_rate=(len([s for s in students if s.percentage >= 60]) / len(students) * 100) if students and len(students) > 0 else 0,
             question_count=len(question_analysis),
             create_time=datetime.now()
         )

@@ -31,6 +31,10 @@ st.set_page_config(
 
 def init_session_state():
     """初始化会话状态"""
+    # Set default job to MOCK_JOB_001 if not already set
+    if 'selected_job_id' not in st.session_state:
+        st.session_state.selected_job_id = "MOCK_JOB_001"
+    
     # Check if we have a selected job for AI grading data
     if 'selected_job_id' in st.session_state and st.session_state.selected_job_id:
         # Load AI grading data

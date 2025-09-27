@@ -94,6 +94,9 @@ def init_session_state():
     # Initialize sample data or AI grading data
     if 'sample_data' not in st.session_state:
         with st.spinner("初始化系统数据..."):
+            # Set default job to MOCK_JOB_001
+            st.session_state.selected_job_id = "MOCK_JOB_001"
+            
             # Try to load AI grading data if a job is selected
             if 'selected_job_id' in st.session_state:
                 ai_data = load_ai_grading_data(st.session_state.selected_job_id)

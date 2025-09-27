@@ -55,7 +55,7 @@ class ChartComponents:
         ))
         
         # 添加平均分线
-        avg_score = np.mean(scores)
+        avg_score = np.mean(scores) if scores else 0
         fig.add_vline(
             x=avg_score,
             line_dash="dash",
@@ -172,7 +172,7 @@ class ChartComponents:
                 knowledge_stats[kp].append(qa.correct_rate)
         
         # 计算平均掌握度
-        knowledge_mastery = {kp: np.mean(rates) for kp, rates in knowledge_stats.items()}
+        knowledge_mastery = {kp: np.mean(rates) if rates else 0 for kp, rates in knowledge_stats.items()}
         
         # 创建矩阵数据 (为了热力图效果，创建一个网格)
         knowledge_points = list(knowledge_mastery.keys())

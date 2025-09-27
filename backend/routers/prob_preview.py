@@ -68,6 +68,8 @@ SYSTEM_PROMPT = """
 }
 **[重要指令]:你的回答输出必须严格按照上述格式，必须直接以 `{` 字符开始，并以 `}` 字符结束。禁止在JSON对象前后添加任何前沿、导语、解释、注释、代码或任何非JSON内容，也不要包含换行符、tab符等。**
 **[务必注意]:在生成JSON时，请确保字符串值中的所有反斜杠 \"\\" 都被正确转义为 \"\\\"。这对于包含LaTeX公式的字段尤其重要。***
+
+**[强制要求]:请确保返回的JSON格式完全正确，包含正确的开闭括号，并且所有字符串都正确转义。**
 """
 
 async def process_and_store_problems(
@@ -97,6 +99,7 @@ async def process_and_store_problems(
         raw_llm_output = response.content
 
         # raw_llm_output = llm.invoke(messages).content
+        logger.info(f"AI返回的原始输出: {raw_llm_output}")
 
         json_output = parse_llm_json_output(raw_llm_output, ProblemSet)
         

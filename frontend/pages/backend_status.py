@@ -151,7 +151,7 @@ def main():
     
     with col2:
         st.markdown("#### ⚙️ Configuration Check")
-        if "smartai-backend" in backend_url.lower():
+        if "smartai" in backend_url.lower():
             st.success("✅ Backend URL appears to be correctly configured for Render deployment")
         elif "localhost" in backend_url:
             st.info("ℹ️ Backend is configured for local development")
