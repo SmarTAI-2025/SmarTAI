@@ -137,7 +137,7 @@ def parse_llm_json_response(response_text: str) -> Dict[str, Any]:
                 response_keys=list(llm_response.keys()) if isinstance(llm_response, dict) else "Not a dict")
     return llm_response
 
-def calc_node(answer_unit: Dict[str, Any], rubric: str, max_score: float = 10.0, llm=None) -> Correction:
+async def calc_node(answer_unit: Dict[str, Any], rubric: str, max_score: float = 10.0, llm=None) -> Correction:
     """
     Calculation question correction node.
     
@@ -194,8 +194,8 @@ def calc_node(answer_unit: Dict[str, Any], rubric: str, max_score: float = 10.0,
             retry_count = 0
             while retry_count < max_retries:
                 try:
-                    # Use invoke method instead of direct call to avoid deprecation warning
-                    response = llm.invoke([HumanMessage(content=prompt)])
+                    # Use ainvoke method for async calls
+                    response = await llm.ainvoke([HumanMessage(content=prompt)])
                     
                     # Log the raw response for debugging
                     logger.info("llm_raw_response", content=response.content[:500] + "..." if len(response.content) > 500 else response.content)
@@ -330,7 +330,7 @@ def calc_node(answer_unit: Dict[str, Any], rubric: str, max_score: float = 10.0,
             retry_count = 0
             while retry_count < max_retries:
                 try:
-                    response = llm.invoke([HumanMessage(content=default_prompt)])
+                    response = await llm.ainvoke([HumanMessage(content=default_prompt)])
                     llm_response = parse_llm_json_response(response.content)
                     break  # Success, exit retry loop
                 except Exception as e:

@@ -1,7 +1,6 @@
 import uuid
-import threading
+import asyncio
 import logging
-import concurrent.futures
 import time
 from typing import Dict, Any
 from fastapi import APIRouter, Depends
@@ -42,6 +41,34 @@ LLM_CACHE_TIMESTAMPS: Dict[int, float] = {}
 # Time to keep LLM clients in cache (1 hour)
 LLM_CACHE_TTL = 60 * 60
 
+# Track active grading jobs to prevent overload
+ACTIVE_JOBS = set()
+MAX_CONCURRENT_JOBS = 10
+
+# Store job metadata for history tracking
+JOB_METADATA = OrderedDict()
+MAX_METADATA = 100
+METADATA_TTL = 30 * 24 * 60 * 60  # 30 days
+
+def cleanup_old_metadata():
+    """Remove old job metadata to prevent memory leaks."""
+    current_time = time.time()
+    expired_keys = []
+    
+    # Find expired metadata
+    for job_id, metadata in JOB_METADATA.items():
+        if current_time - metadata.get('timestamp', 0) > METADATA_TTL:
+            expired_keys.append(job_id)
+    
+    # Remove expired metadata
+    for job_id in expired_keys:
+        JOB_METADATA.pop(job_id, None)
+    
+    # Remove excess metadata if we're over the limit
+    while len(JOB_METADATA) > MAX_METADATA:
+        # Remove the oldest metadata (OrderedDict maintains insertion order)
+        JOB_METADATA.popitem(last=False)
+
 # Cache for processed rubrics to avoid redundant processing
 @lru_cache(maxsize=128)
 def get_processed_rubric(q_id: str, rubric_text: str) -> str:
@@ -59,7 +86,7 @@ class BatchGradingRequest(BaseModel):
 
 def get_cached_llm():
     """Get a cached LLM client instance to avoid repeated initialization."""
-    thread_id = threading.get_ident()
+    task_id = id(asyncio.current_task())
     current_time = time.time()
     
     # Clean up expired cache entries
@@ -72,7 +99,7 @@ def get_cached_llm():
         LLM_CLIENT_CACHE.pop(tid, None)
         LLM_CACHE_TIMESTAMPS.pop(tid, None)
     
-    if thread_id not in LLM_CLIENT_CACHE:
+    if task_id not in LLM_CLIENT_CACHE:
         # Import here to avoid circular imports
         from langchain_openai import ChatOpenAI
         import os
@@ -80,7 +107,7 @@ def get_cached_llm():
         OPENAI_API_BASE = os.getenv("OPENAI_API_BASE", "https://open.bigmodel.cn/api/paas/v4")
         OPENAI_MODEL = os.getenv("OPENAI_MODEL", "glm-4-plus")
         
-        LLM_CLIENT_CACHE[thread_id] = ChatOpenAI(
+        LLM_CLIENT_CACHE[task_id] = ChatOpenAI(
             model=OPENAI_MODEL,
             temperature=0.0,
             api_key=OPENAI_API_KEY,
@@ -88,10 +115,10 @@ def get_cached_llm():
         )
     
     # Update timestamp for this entry
-    LLM_CACHE_TIMESTAMPS[thread_id] = current_time
-    return LLM_CLIENT_CACHE[thread_id]
+    LLM_CACHE_TIMESTAMPS[task_id] = current_time
+    return LLM_CLIENT_CACHE[task_id]
 
-def process_student_answer(answer: Dict[str, Any], problem_store: Dict[str, Any]) -> Correction:
+async def process_student_answer(answer: Dict[str, Any], problem_store: Dict[str, Any]) -> Correction:
     """Process a single student answer and return the correction result."""
     q_id = answer.get("q_id")
     answer_type = answer.get("type")
@@ -146,21 +173,21 @@ def process_student_answer(answer: Dict[str, Any], problem_store: Dict[str, Any]
         if internal_type == "calculation":
             # For calculation questions, we need to parse steps
             answer_unit["steps"] = [{"step_no": 1, "content": content, "formula": ""}]
-            correction = calc_node(answer_unit, rubric, max_score, llm)
+            correction = await calc_node(answer_unit, rubric, max_score, llm)
         
         elif internal_type == "concept":
-            correction = concept_node(answer_unit, rubric, max_score, llm)
+            correction = await concept_node(answer_unit, rubric, max_score, llm)
 
         elif internal_type == "proof":
             # For proof/reasoning questions, parse steps from content
             answer_unit["steps"] = [{"step_no": 1, "content": content}]
-            correction = proof_node(answer_unit, rubric, max_score, llm)
+            correction = await proof_node(answer_unit, rubric, max_score, llm)
 
         elif internal_type == "programming":
             answer_unit["code"] = content
             answer_unit["language"] = "python"  # Default language
             answer_unit["test_cases"] = []  # Empty test cases for now
-            correction = programming_node(answer_unit, rubric, max_score, llm)
+            correction = await programming_node(answer_unit, rubric, max_score, llm)
         
         else:
             # For other types, create a default correction
@@ -192,7 +219,7 @@ def process_student_answer(answer: Dict[str, Any], problem_store: Dict[str, Any]
             steps=[]
         )
 
-def process_student_submission(student: Dict[str, Any], problem_store: Dict[str, Any]) -> Dict[str, Any]:
+async def process_student_submission(student: Dict[str, Any], problem_store: Dict[str, Any]) -> Dict[str, Any]:
     """Process all answers for a single student and return the results."""
     student_id = student.get("stu_id")
     if not student_id:
@@ -203,22 +230,22 @@ def process_student_submission(student: Dict[str, Any], problem_store: Dict[str,
     corrections = []
     student_answers = student.get("stu_ans", [])
     
-    # Use ThreadPoolExecutor to process answers in parallel for each student
-    with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor: # Increased workers slightly
-        future_to_answer = {
-            executor.submit(process_student_answer, answer, problem_store): answer 
-            for answer in student_answers
-        }
-        
-        for future in concurrent.futures.as_completed(future_to_answer):
-            try:
-                correction = future.result()
-                if correction:
-                    corrections.append(correction)
-            except Exception as e:
-                answer = future_to_answer[future]
+    # Process answers concurrently for each student
+    tasks = [
+        process_student_answer(answer, problem_store) 
+        for answer in student_answers
+    ]
+    
+    # Gather all results
+    results = await asyncio.gather(*tasks, return_exceptions=True)
+    
+    # Handle results and exceptions
+    for i, result in enumerate(results):
+        try:
+            if isinstance(result, Exception):
+                answer = student_answers[i]
                 q_id = answer.get('q_id', 'unknown')
-                logger.error(f"Error processing answer {q_id} for student {student_id}: {e}")
+                logger.error(f"Error processing answer {q_id} for student {student_id}: {result}")
                 # Add a default correction for failed answers
                 corrections.append(Correction(
                     q_id=q_id,
@@ -226,9 +253,25 @@ def process_student_submission(student: Dict[str, Any], problem_store: Dict[str,
                     score=0.0,
                     max_score=10.0,
                     confidence=0.0,
-                    comment=f"Processing error: {str(e)}",
+                    comment=f"Processing error: {str(result)}",
                     steps=[]
                 ))
+            elif result:
+                corrections.append(result)
+        except Exception as e:
+            answer = student_answers[i]
+            q_id = answer.get('q_id', 'unknown')
+            logger.error(f"Error handling result for answer {q_id} for student {student_id}: {e}")
+            # Add a default correction for failed answers
+            corrections.append(Correction(
+                q_id=q_id,
+                type=answer.get("type", "概念题"),
+                score=0.0,
+                max_score=10.0,
+                confidence=0.0,
+                comment=f"Result handling error: {str(e)}",
+                steps=[]
+            ))
     
     logger.info(f"Completed processing for student {student_id}")
     return {
@@ -236,8 +279,7 @@ def process_student_submission(student: Dict[str, Any], problem_store: Dict[str,
         "corrections": corrections
     }
 
-# MODIFICATION: Changed student_store type from List to Dict
-def run_grading_task(job_id: str, student_id: str, problem_store: Dict, student_store: Dict[str, Any]):
+async def run_grading_task(job_id: str, student_id: str, problem_store: Dict, student_store: Dict[str, Any]):
     """Run the grading task for a specific student."""
     logger.info(f"Grading task {job_id} started for student {student_id}")
     
@@ -254,7 +296,7 @@ def run_grading_task(job_id: str, student_id: str, problem_store: Dict, student_
             return
             
         # Process the student's submission using the existing parallel function
-        result = process_student_submission(student_data, problem_store)
+        result = await process_student_submission(student_data, problem_store)
 
         # Store the results with timestamp
         GRADING_RESULTS[job_id] = {
@@ -322,8 +364,7 @@ def cleanup_old_results():
         # Remove the oldest result (OrderedDict maintains insertion order)
         GRADING_RESULTS.popitem(last=False)
 
-# MODIFICATION: Changed student_store type from List to Dict
-def run_batch_grading_task(job_id: str, problem_store: Dict, student_store: Dict[str, Any]):
+async def run_batch_grading_task(job_id: str, problem_store: Dict, student_store: Dict[str, Any]):
     """Run the grading task for all students using parallel processing."""
     logger.info(f"Batch grading task {job_id} started for all students")
     
@@ -333,24 +374,26 @@ def run_batch_grading_task(job_id: str, problem_store: Dict, student_store: Dict
         
         all_results = []
         
-        # Increased max_workers for better parallelization across students
-        with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
-            # MODIFICATION: Iterate over dictionary values() instead of the list itself.
-            future_to_student = {
-                executor.submit(process_student_submission, student, problem_store): student 
-                for student in student_store.values() if student.get("stu_id")
-            }
-            
-            for future in concurrent.futures.as_completed(future_to_student):
-                try:
-                    result = future.result()
-                    if result:
-                        all_results.append(result)
-                        logger.info(f"Processed student result: {result.get('student_id', 'unknown')}")
-                except Exception as e:
-                    student = future_to_student[future]
-                    student_id = student.get("stu_id", "unknown")
-                    logger.error(f"Error processing student {student_id}: {e}")
+        # Create tasks for all students
+        tasks = [
+            process_student_submission(student, problem_store)
+            for student in student_store.values() 
+            if student.get("stu_id")
+        ]
+        
+        # Gather all results
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+        
+        # Handle results and exceptions
+        for result in results:
+            try:
+                if isinstance(result, Exception):
+                    logger.error(f"Error processing student: {result}")
+                elif result:
+                    all_results.append(result)
+                    logger.info(f"Processed student result: {result.get('student_id', 'unknown')}")
+            except Exception as e:
+                logger.error(f"Error handling student result: {e}")
     
         # Store the results with timestamp
         GRADING_RESULTS[job_id] = {
@@ -398,36 +441,8 @@ def run_batch_grading_task(job_id: str, problem_store: Dict, student_store: Dict
         # Remove job from active jobs
         ACTIVE_JOBS.discard(job_id)
 
-# Track active grading jobs to prevent overload
-ACTIVE_JOBS = set()
-MAX_CONCURRENT_JOBS = 10
-
-# Store job metadata for history tracking
-JOB_METADATA = OrderedDict()
-MAX_METADATA = 100
-METADATA_TTL = 30 * 24 * 60 * 60  # 30 days
-
-def cleanup_old_metadata():
-    """Remove old job metadata to prevent memory leaks."""
-    current_time = time.time()
-    expired_keys = []
-    
-    # Find expired metadata
-    for job_id, metadata in JOB_METADATA.items():
-        if current_time - metadata.get('timestamp', 0) > METADATA_TTL:
-            expired_keys.append(job_id)
-    
-    # Remove expired metadata
-    for job_id in expired_keys:
-        JOB_METADATA.pop(job_id, None)
-    
-    # Remove excess metadata if we're over the limit
-    while len(JOB_METADATA) > MAX_METADATA:
-        # Remove the oldest metadata (OrderedDict maintains insertion order)
-        JOB_METADATA.popitem(last=False)
-
 @router.post("/grade_student/")
-def start_grading(request: GradingRequest, 
+async def start_grading(request: GradingRequest, 
                   problem_store: Dict[str, Any] = Depends(get_problem_store),
                   student_store: Dict[str, Any] = Depends(get_student_store)):
     """
@@ -460,17 +475,13 @@ def start_grading(request: GradingRequest,
     # Clean up old metadata
     cleanup_old_metadata()
     
-    # Start grading in a background thread
-    thread = threading.Thread(
-        target=run_grading_task, 
-        args=(job_id, request.student_id, problem_store, student_store)
-    )
-    thread.start()
+    # Start grading in a background task
+    asyncio.create_task(run_grading_task(job_id, request.student_id, problem_store, student_store))
     
     return {"job_id": job_id}
 
 @router.post("/grade_all/")
-def start_batch_grading(request: BatchGradingRequest,
+async def start_batch_grading(request: BatchGradingRequest,
                         problem_store: Dict[str, Any] = Depends(get_problem_store),
                         student_store: Dict[str, Any] = Depends(get_student_store)):
     """
@@ -504,12 +515,8 @@ def start_batch_grading(request: BatchGradingRequest,
     # Clean up old metadata
     cleanup_old_metadata()
     
-    # Start grading in a background thread
-    thread = threading.Thread(
-        target=run_batch_grading_task, 
-        args=(job_id, problem_store, student_store)
-    )
-    thread.start()
+    # Start grading in a background task
+    asyncio.create_task(run_batch_grading_task(job_id, problem_store, student_store))
     
     return {"job_id": job_id}
 
@@ -520,18 +527,6 @@ def get_grading_result(job_id: str):
     """
     result = GRADING_RESULTS.get(job_id, {"status": "not_found", "message": "Job ID not found in results."})
     return result
-
-@router.delete("/reset_grading/{job_id}")
-def reset_grading_result(job_id: str):
-    """
-    Reset/clear a specific grading result (except for history records).
-    """
-    if job_id in GRADING_RESULTS:
-        # Only remove from active results, keep in metadata for history
-        del GRADING_RESULTS[job_id]
-        return {"status": "success", "message": f"Grading result for job {job_id} has been reset."}
-    else:
-        return {"status": "not_found", "message": f"Job ID {job_id} not found."}
 
 @router.delete("/reset_all_grading")
 def reset_all_grading_results():

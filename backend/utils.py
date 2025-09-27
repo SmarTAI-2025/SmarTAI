@@ -1,3 +1,5 @@
+import asyncio
+import concurrent.futures
 from fastapi import HTTPException
 from typing import List, Dict
 import io
@@ -5,12 +7,11 @@ import zipfile
 import rarfile
 import py7zr
 import tarfile
-import concurrent.futures
 
-def hw_file2text(file): #TODO: file to text with OCR, or process with AI directly
+async def hw_file2text(file): #TODO: file to text with OCR, or process with AI directly
     pass #这个感觉需要lang graph就是需要一个ai对直接读取+OCR和AI直接识别的综合
 
-def decode_text_bytes(text_bytes: bytes) -> str:
+async def decode_text_bytes(text_bytes: bytes) -> str:
     """尝试以多种编码解码字节，失败则抛出HTTPException。"""
     try:
         return text_bytes.decode('utf-8')
@@ -21,7 +22,7 @@ def decode_text_bytes(text_bytes: bytes) -> str:
             raise HTTPException(status_code=400, detail="无法解码文件，请确保文件是 UTF-8 或 GBK 编码。")
 
 # --- 主函数：处理上传的文件 ---
-def extract_files_from_archive(file_bytes: bytes, filename: str) -> List[Dict[str, str]]:
+async def extract_files_from_archive(file_bytes: bytes, filename: str) -> List[Dict[str, str]]:
     """
     处理一个以字节形式存在的上传文件（可能是压缩包或单个文本文件），
     提取其中所有文本文件的文件名和内容。
@@ -61,16 +62,15 @@ def extract_files_from_archive(file_bytes: bytes, filename: str) -> List[Dict[st
                     "content": decode_text_bytes(content_bytes)
                 }
             
-            # Process files in parallel
+            # Process files in parallel using asyncio
+            loop = asyncio.get_event_loop()
             with concurrent.futures.ThreadPoolExecutor(max_workers=min(len(valid_files), 8)) as executor:
-                future_to_file = {executor.submit(process_zip_file, info): info for info in valid_files}
-                for future in concurrent.futures.as_completed(future_to_file):
-                    try:
-                        result = future.result()
-                        files_data.append(result)
-                    except Exception as e:
-                        info = future_to_file[future]
-                        print(f"Error processing file {info.filename}: {e}")
+                tasks = [
+                    loop.run_in_executor(executor, process_zip_file, info)
+                    for info in valid_files
+                ]
+                results = await asyncio.gather(*tasks)
+                files_data.extend(results)
 
     # 2. 处理 .rar 文件
     elif filename.lower().endswith('.rar'):
@@ -92,16 +92,15 @@ def extract_files_from_archive(file_bytes: bytes, filename: str) -> List[Dict[st
                         "content": decode_text_bytes(content_bytes)
                     }
                 
-                # Process files in parallel
+                # Process files in parallel using asyncio
+                loop = asyncio.get_event_loop()
                 with concurrent.futures.ThreadPoolExecutor(max_workers=min(len(valid_files), 8)) as executor:
-                    future_to_file = {executor.submit(process_rar_file, info): info for info in valid_files}
-                    for future in concurrent.futures.as_completed(future_to_file):
-                        try:
-                            result = future.result()
-                            files_data.append(result)
-                        except Exception as e:
-                            info = future_to_file[future]
-                            print(f"Error processing file {info.filename}: {e}")
+                    tasks = [
+                        loop.run_in_executor(executor, process_rar_file, info)
+                        for info in valid_files
+                    ]
+                    results = await asyncio.gather(*tasks)
+                    files_data.extend(results)
         except rarfile.UNRARError as e:
             # 这是一个常见的服务器配置问题，提供明确的错误信息
             raise RuntimeError(f"处理RAR文件失败: {e}. 请确保服务器上已安装 'unrar' 命令行工具。")
@@ -125,16 +124,15 @@ def extract_files_from_archive(file_bytes: bytes, filename: str) -> List[Dict[st
                     "content": decode_text_bytes(content_bytes)
                 }
             
-            # Process files in parallel
+            # Process files in parallel using asyncio
+            loop = asyncio.get_event_loop()
             with concurrent.futures.ThreadPoolExecutor(max_workers=min(len(valid_files), 8)) as executor:
-                future_to_file = {executor.submit(process_7z_file, item): item for item in valid_files.items()}
-                for future in concurrent.futures.as_completed(future_to_file):
-                    try:
-                        result = future.result()
-                        files_data.append(result)
-                    except Exception as e:
-                        item = future_to_file[future]
-                        print(f"Error processing file {item[0]}: {e}")
+                tasks = [
+                    loop.run_in_executor(executor, process_7z_file, item)
+                    for item in valid_files.items()
+                ]
+                results = await asyncio.gather(*tasks)
+                files_data.extend(results)
 
     # 4. 处理 .tar.* 系列文件
     elif filename.lower().endswith(('.tar', '.tar.gz', '.tgz', '.tar.bz2', '.tbz2')):
@@ -157,17 +155,15 @@ def extract_files_from_archive(file_bytes: bytes, filename: str) -> List[Dict[st
                     }
                 return None
             
-            # Process files in parallel
+            # Process files in parallel using asyncio
+            loop = asyncio.get_event_loop()
             with concurrent.futures.ThreadPoolExecutor(max_workers=min(len(valid_members), 8)) as executor:
-                future_to_file = {executor.submit(process_tar_file, member): member for member in valid_members}
-                for future in concurrent.futures.as_completed(future_to_file):
-                    try:
-                        result = future.result()
-                        if result:
-                            files_data.append(result)
-                    except Exception as e:
-                        member = future_to_file[future]
-                        print(f"Error processing file {member.name}: {e}")
+                tasks = [
+                    loop.run_in_executor(executor, process_tar_file, member)
+                    for member in valid_members
+                ]
+                results = await asyncio.gather(*tasks)
+                files_data.extend([result for result in results if result is not None])
 
     # 5. 如果不是已知的压缩包，则作为单个文件处理
     else:
@@ -175,7 +171,7 @@ def extract_files_from_archive(file_bytes: bytes, filename: str) -> List[Dict[st
         if filename.lower().endswith('.txt'): # TODO: 很重要的代码类文件，.doc, .docx, .pdf, .md
              files_data.append({
                 "filename": filename,
-                "content": decode_text_bytes(file_bytes)
+                "content": await decode_text_bytes(file_bytes)
             })
         else:
             # 对于非txt的单个文件，可以返回空或抛出异常，这里选择忽略

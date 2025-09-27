@@ -1,24 +1,3 @@
-# import os
-# import io
-# import logging
-# import json
-# import asyncio
-# import concurrent.futures
-# from typing import List, Dict, Any
-# from fastapi import APIRouter, Depends, UploadFile, File, HTTPException
-# from fastapi.middleware.cors import CORSMiddleware
-# from fastapi.responses import JSONResponse
-
-# from langchain_openai import ChatOpenAI
-# # from langchain_core.pydantic_v1 import BaseModel, Field
-
-# from pydantic import BaseModel, Field
-# from langchain_core.messages import SystemMessage, HumanMessage
-# from langchain.schema.document import Document
-# from langchain.text_splitter import RecursiveCharacterTextSplitter
-# from langchain.chains.summarize import load_summarize_chain
-
-
 import logging
 import json
 import asyncio
@@ -27,7 +6,6 @@ from fastapi import APIRouter, Depends, UploadFile, File, HTTPException
 from langchain_core.messages import SystemMessage, HumanMessage
 from ..dependencies import *
 from ..utils import *
-
 
 # --- 日志和应用基础设置 ---
 logging.basicConfig(level=logging.INFO)
@@ -116,7 +94,7 @@ example = '''
 }
 '''
 
-def analyze_submissions(
+async def analyze_submissions(
     files_data: List[Dict[str, str]],
     problems_data: Dict[str, Dict[str,str]],
     student_store: List[Dict[str, Any]], # 接收学生存储字典的引用
@@ -159,7 +137,7 @@ def analyze_submissions(
     print(f"开始处理 {len(files_data)}份学生提交...")
     
     # Define a helper function for processing a single file
-    def process_single_file(file_info):
+    async def process_single_file(file_info):
         filename = file_info.get("filename", "")
         content = file_info.get("content", "")
 
@@ -187,32 +165,26 @@ def analyze_submissions(
             HumanMessage(content=human_message_content)
         ]
 
-        # response_obj = structured_llm.invoke(messages)
-        raw_llm_output = llm.invoke(messages).content
-        json_output = parse_llm_json_output(raw_llm_output, StudentSubmission)
+        raw_llm_output = await llm.ainvoke(messages)
+        json_output = parse_llm_json_output(raw_llm_output.content, StudentSubmission)
         logger.info(f"提取到学生解答:{json_output.model_dump()}")
         return json_output.model_dump()
 
-    # Use ThreadPoolExecutor to process files in parallel
-    # Limit the number of workers to avoid overwhelming the system
-    max_workers = min(len(files_data), 16)  # Process up to 16 files in parallel
-    with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
-        # Submit all file processing tasks
-        future_to_file = {
-            executor.submit(process_single_file, file_info): file_info 
-            for file_info in files_data
-        }
-        
-        # Collect results as they complete
-        for future in concurrent.futures.as_completed(future_to_file):
-            try:
-                result = future.result()
+    # Create tasks for all files
+    tasks = [process_single_file(file_info) for file_info in files_data]
+    
+    # Gather all results
+    results = await asyncio.gather(*tasks, return_exceptions=True)
+    
+    # Handle results and exceptions
+    for result in results:
+        try:
+            if isinstance(result, Exception):
+                logger.error(f"Error processing file: {result}")
+            else:
                 all_students_results.append(result)
-            except Exception as e:
-                file_info = future_to_file[future]
-                filename = file_info.get("filename", "Unknown")
-                logger.error(f"Error processing file {filename}: {e}")
-                # Continue processing other files even if one fails
+        except Exception as e:
+            logger.error(f"Error handling file result: {e}")
 
     stu_dict = {stu['stu_id']: stu for stu in all_students_results}
     student_store.clear()
@@ -250,15 +222,7 @@ async def handle_answer_upload(
         # mock_problems = ...
         # analysis_result = analyze_submissions(files_data, mock_problems, mock_llm)
         
-        # recognized_ans = analyze_submissions(
-        #     files_data=files_data,
-        #     problems_data=problem_store,
-        #     student_store=student_store,
-        #     llm=llm,
-        # )
-        
-        recognized_ans = await asyncio.to_thread(
-            analyze_submissions,
+        recognized_ans = await analyze_submissions(
             files_data=files_data,
             problems_data=problem_store,
             student_store=student_store,

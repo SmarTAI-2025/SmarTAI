@@ -118,7 +118,7 @@ OPENAI_MODEL = os.getenv("OPENAI_MODEL", "glm-4.5-air")
 
 CONTEXT_WINDOW_THRESHOLD_CHARS = 200000 
 
-def get_llm(model="zhipu") -> ChatOpenAI:
+async def get_llm(model="zhipu") -> ChatOpenAI:
     """返回共享的LLM客户端实例。"""
 
     if model == "zhipu":

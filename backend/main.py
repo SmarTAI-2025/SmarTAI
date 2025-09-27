@@ -45,7 +45,7 @@ def create_app() -> FastAPI:
         return {"message": "SmarTAI Backend is running", "status": "success"}
 
     @app.get("/health")
-    def health_check():
+    async def health_check():
         import psutil
         import os
         
