@@ -1,12 +1,13 @@
-# import time
 import uuid
 import threading
 import logging
 import concurrent.futures
+import time
 from typing import Dict, Any
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 from functools import lru_cache
+from collections import OrderedDict
 
 from backend.dependencies import get_problem_store, get_student_store
 from backend.models import Correction
@@ -23,8 +24,12 @@ router = APIRouter(
     tags=["ai_grading"]
 )
 
-# Store for grading results
-GRADING_RESULTS: Dict[str, Any] = {}
+# Store for grading results with timestamp for cleanup
+GRADING_RESULTS: Dict[str, Dict[str, Any]] = OrderedDict()
+# Maximum number of results to keep
+MAX_RESULTS = 100
+# Time to keep results in seconds (24 hours)
+RESULT_TTL = 24 * 60 * 60
 
 # Add a function to get all job IDs for debugging
 def get_all_job_ids():
@@ -32,6 +37,10 @@ def get_all_job_ids():
 
 # Cache for LLM clients to avoid repeated initialization
 LLM_CLIENT_CACHE: Dict[int, Any] = {}
+# Timestamps for LLM client cache entries
+LLM_CACHE_TIMESTAMPS: Dict[int, float] = {}
+# Time to keep LLM clients in cache (1 hour)
+LLM_CACHE_TTL = 60 * 60
 
 # Cache for processed rubrics to avoid redundant processing
 @lru_cache(maxsize=128)
@@ -51,6 +60,18 @@ class BatchGradingRequest(BaseModel):
 def get_cached_llm():
     """Get a cached LLM client instance to avoid repeated initialization."""
     thread_id = threading.get_ident()
+    current_time = time.time()
+    
+    # Clean up expired cache entries
+    expired_keys = []
+    for tid, timestamp in LLM_CACHE_TIMESTAMPS.items():
+        if current_time - timestamp > LLM_CACHE_TTL:
+            expired_keys.append(tid)
+    
+    for tid in expired_keys:
+        LLM_CLIENT_CACHE.pop(tid, None)
+        LLM_CACHE_TIMESTAMPS.pop(tid, None)
+    
     if thread_id not in LLM_CLIENT_CACHE:
         # Import here to avoid circular imports
         from langchain_openai import ChatOpenAI
@@ -65,6 +86,9 @@ def get_cached_llm():
             api_key=OPENAI_API_KEY,
             base_url=OPENAI_API_BASE,
         )
+    
+    # Update timestamp for this entry
+    LLM_CACHE_TIMESTAMPS[thread_id] = current_time
     return LLM_CLIENT_CACHE[thread_id]
 
 def process_student_answer(answer: Dict[str, Any], problem_store: Dict[str, Any]) -> Correction:
@@ -232,21 +256,53 @@ def run_grading_task(job_id: str, student_id: str, problem_store: Dict, student_
         # Process the student's submission using the existing parallel function
         result = process_student_submission(student_data, problem_store)
 
-        # Store the results
+        # Store the results with timestamp
         GRADING_RESULTS[job_id] = {
             "status": "completed",
             "student_id": student_id,
-            "corrections": result.get("corrections", [])
+            "corrections": result.get("corrections", []),
+            "timestamp": time.time()
         }
+        
+        # Clean up old results
+        cleanup_old_results()
         
         logger.info(f"Grading task {job_id} completed for student {student_id}")
         
     except Exception as e:
         logger.error(f"Error in grading task {job_id}: {e}")
+        
+        # Store error results with timestamp
         GRADING_RESULTS[job_id] = {
             "status": "error",
-            "message": str(e)
+            "message": str(e),
+            "timestamp": time.time()
         }
+        
+        # Clean up old results
+        cleanup_old_results()
+    finally:
+        # Remove job from active jobs
+        ACTIVE_JOBS.discard(job_id)
+
+def cleanup_old_results():
+    """Remove old grading results to prevent memory leaks."""
+    current_time = time.time()
+    expired_keys = []
+    
+    # Find expired results
+    for job_id, result in GRADING_RESULTS.items():
+        if current_time - result.get('timestamp', 0) > RESULT_TTL:
+            expired_keys.append(job_id)
+    
+    # Remove expired results
+    for job_id in expired_keys:
+        GRADING_RESULTS.pop(job_id, None)
+    
+    # Remove excess results if we're over the limit
+    while len(GRADING_RESULTS) > MAX_RESULTS:
+        # Remove the oldest result (OrderedDict maintains insertion order)
+        GRADING_RESULTS.popitem(last=False)
 
 # MODIFICATION: Changed student_store type from List to Dict
 def run_batch_grading_task(job_id: str, problem_store: Dict, student_store: Dict[str, Any]):
@@ -278,31 +334,58 @@ def run_batch_grading_task(job_id: str, problem_store: Dict, student_store: Dict
                     student_id = student.get("stu_id", "unknown")
                     logger.error(f"Error processing student {student_id}: {e}")
     
-        # Store the results
+        # Store the results with timestamp
         GRADING_RESULTS[job_id] = {
             "status": "completed",
-            "results": all_results
+            "results": all_results,
+            "timestamp": time.time()
         }
+        
+        # Clean up old results
+        cleanup_old_results()
         
         logger.info(f"Batch grading task {job_id} completed for all students. Processed {len(all_results)} students.")
         
     except Exception as e:
         logger.error(f"Error in batch grading task {job_id}: {e}")
+        
+        # Store error results with timestamp
         GRADING_RESULTS[job_id] = {
             "status": "error",
-            "message": str(e)
+            "message": str(e),
+            "timestamp": time.time()
         }
+        
+        # Clean up old results
+        cleanup_old_results()
+    finally:
+        # Remove job from active jobs
+        ACTIVE_JOBS.discard(job_id)
+
+# Track active grading jobs to prevent overload
+ACTIVE_JOBS = set()
+MAX_CONCURRENT_JOBS = 10
 
 @router.post("/grade_student/")
-# MODIFICATION: Changed student_store type hint from List to Dict
 def start_grading(request: GradingRequest, 
                   problem_store: Dict[str, Any] = Depends(get_problem_store),
                   student_store: Dict[str, Any] = Depends(get_student_store)):
     """
     Start grading for a specific student.
     """
+    # Check if we're at the job limit
+    if len(ACTIVE_JOBS) >= MAX_CONCURRENT_JOBS:
+        return {
+            "status": "error",
+            "message": "Too many concurrent grading jobs. Please try again later."
+        }
+    
     job_id = str(uuid.uuid4())
-    GRADING_RESULTS[job_id] = {"status": "pending"}
+    GRADING_RESULTS[job_id] = {
+        "status": "pending",
+        "timestamp": time.time()
+    }
+    ACTIVE_JOBS.add(job_id)
     
     # Start grading in a background thread
     thread = threading.Thread(
@@ -314,15 +397,25 @@ def start_grading(request: GradingRequest,
     return {"job_id": job_id}
 
 @router.post("/grade_all/")
-# MODIFICATION: Changed student_store type hint from List to Dict
 def start_batch_grading(request: BatchGradingRequest,
                         problem_store: Dict[str, Any] = Depends(get_problem_store),
                         student_store: Dict[str, Any] = Depends(get_student_store)):
     """
     Start grading for all students.
     """
+    # Check if we're at the job limit
+    if len(ACTIVE_JOBS) >= MAX_CONCURRENT_JOBS:
+        return {
+            "status": "error",
+            "message": "Too many concurrent grading jobs. Please try again later."
+        }
+    
     job_id = str(uuid.uuid4())
-    GRADING_RESULTS[job_id] = {"status": "pending"}
+    GRADING_RESULTS[job_id] = {
+        "status": "pending",
+        "timestamp": time.time()
+    }
+    ACTIVE_JOBS.add(job_id)
     
     logger.info(f"Created new batch grading job: {job_id}")
     

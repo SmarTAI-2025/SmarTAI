@@ -46,7 +46,23 @@ def create_app() -> FastAPI:
 
     @app.get("/health")
     def health_check():
-        return {"status": "healthy", "message": "SmarTAI backend is running"}
+        import psutil
+        import os
+        
+        # Get memory usage
+        process = psutil.Process(os.getpid())
+        memory_info = process.memory_info()
+        memory_mb = memory_info.rss / 1024 / 1024
+        
+        # Get CPU usage
+        cpu_percent = process.cpu_percent()
+        
+        return {
+            "status": "healthy", 
+            "message": "SmarTAI backend is running",
+            "memory_usage_mb": round(memory_mb, 2),
+            "cpu_percent": cpu_percent
+        }
 
     return app
 
