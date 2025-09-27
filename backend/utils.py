@@ -54,23 +54,19 @@ async def extract_files_from_archive(file_bytes: bytes, filename: str) -> List[D
                           if not info.is_dir() and is_valid_file(info.filename)]
             
             # Function to process a single file
-            def process_zip_file(info):
+            async def process_zip_file(info):
                 clean_filename = info.filename.split('/')[-1]
                 content_bytes = zf.read(info.filename)
+                content = await decode_text_bytes(content_bytes)
                 return {
                     "filename": clean_filename,
-                    "content": decode_text_bytes(content_bytes)
+                    "content": content
                 }
             
             # Process files in parallel using asyncio
-            loop = asyncio.get_event_loop()
-            with concurrent.futures.ThreadPoolExecutor(max_workers=min(len(valid_files), 8)) as executor:
-                tasks = [
-                    loop.run_in_executor(executor, process_zip_file, info)
-                    for info in valid_files
-                ]
-                results = await asyncio.gather(*tasks)
-                files_data.extend(results)
+            tasks = [process_zip_file(info) for info in valid_files]
+            results = await asyncio.gather(*tasks)
+            files_data.extend(results)
 
     # 2. 处理 .rar 文件
     elif filename.lower().endswith('.rar'):
@@ -84,23 +80,19 @@ async def extract_files_from_archive(file_bytes: bytes, filename: str) -> List[D
                               if not info.is_dir() and is_valid_file(info.filename)]
                 
                 # Function to process a single file
-                def process_rar_file(info):
+                async def process_rar_file(info):
                     clean_filename = info.filename.split('/')[-1]
                     content_bytes = rf.read(info.filename)
+                    content = await decode_text_bytes(content_bytes)
                     return {
                         "filename": clean_filename,
-                        "content": decode_text_bytes(content_bytes)
+                        "content": content
                     }
                 
                 # Process files in parallel using asyncio
-                loop = asyncio.get_event_loop()
-                with concurrent.futures.ThreadPoolExecutor(max_workers=min(len(valid_files), 8)) as executor:
-                    tasks = [
-                        loop.run_in_executor(executor, process_rar_file, info)
-                        for info in valid_files
-                    ]
-                    results = await asyncio.gather(*tasks)
-                    files_data.extend(results)
+                tasks = [process_rar_file(info) for info in valid_files]
+                results = await asyncio.gather(*tasks)
+                files_data.extend(results)
         except rarfile.UNRARError as e:
             # 这是一个常见的服务器配置问题，提供明确的错误信息
             raise RuntimeError(f"处理RAR文件失败: {e}. 请确保服务器上已安装 'unrar' 命令行工具。")
@@ -115,24 +107,20 @@ async def extract_files_from_archive(file_bytes: bytes, filename: str) -> List[D
             valid_files = {name: bio for name, bio in all_files.items() if is_valid_file(name)}
             
             # Function to process a single file
-            def process_7z_file(name_and_bio):
+            async def process_7z_file(name_and_bio):
                 name, bio = name_and_bio
                 clean_filename = name.split('/')[-1]
                 content_bytes = bio.read()
+                content = await decode_text_bytes(content_bytes)
                 return {
                     "filename": clean_filename,
-                    "content": decode_text_bytes(content_bytes)
+                    "content": content
                 }
             
             # Process files in parallel using asyncio
-            loop = asyncio.get_event_loop()
-            with concurrent.futures.ThreadPoolExecutor(max_workers=min(len(valid_files), 8)) as executor:
-                tasks = [
-                    loop.run_in_executor(executor, process_7z_file, item)
-                    for item in valid_files.items()
-                ]
-                results = await asyncio.gather(*tasks)
-                files_data.extend(results)
+            tasks = [process_7z_file(item) for item in valid_files.items()]
+            results = await asyncio.gather(*tasks)
+            files_data.extend(results)
 
     # 4. 处理 .tar.* 系列文件
     elif filename.lower().endswith(('.tar', '.tar.gz', '.tgz', '.tar.bz2', '.tbz2')):
@@ -143,27 +131,23 @@ async def extract_files_from_archive(file_bytes: bytes, filename: str) -> List[D
                            if member.isfile() and is_valid_file(member.name)]
             
             # Function to process a single file
-            def process_tar_file(member):
+            async def process_tar_file(member):
                 clean_filename = member.name.split('/')[-1]
                 # 提取文件对象并读取内容
                 file_obj = tf.extractfile(member)
                 if file_obj:
                     content_bytes = file_obj.read()
+                    content = await decode_text_bytes(content_bytes)
                     return {
                         "filename": clean_filename,
-                        "content": decode_text_bytes(content_bytes)
+                        "content": content
                     }
                 return None
             
             # Process files in parallel using asyncio
-            loop = asyncio.get_event_loop()
-            with concurrent.futures.ThreadPoolExecutor(max_workers=min(len(valid_members), 8)) as executor:
-                tasks = [
-                    loop.run_in_executor(executor, process_tar_file, member)
-                    for member in valid_members
-                ]
-                results = await asyncio.gather(*tasks)
-                files_data.extend([result for result in results if result is not None])
+            tasks = [process_tar_file(member) for member in valid_members]
+            results = await asyncio.gather(*tasks)
+            files_data.extend([result for result in results if result is not None])
 
     # 5. 如果不是已知的压缩包，则作为单个文件处理
     else:

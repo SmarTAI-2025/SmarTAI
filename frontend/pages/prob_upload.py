@@ -369,8 +369,9 @@ def render_upload_section():
                     response = requests.post(f"{st.session_state.backend}/prob_preview", files=files_to_send, timeout=600)
                     response.raise_for_status()
                     
-                    problems = response.json()                            
-                    # st.session_state.prob_data = {q['q_id']: q for q in problems.get('problems', [])}   #以q_id为key索引
+                    problems = response.json()
+                    # Store the data in the correct format for problems.py
+                    # The backend returns a dictionary with q_id as keys, which is what we need
                     st.session_state.prob_data = problems
                            
                     st.success("✅ 文件上传成功，后端开始处理！即将跳转至结果预览页面...")
@@ -415,3 +416,6 @@ def reset_grading_state():
             del st.session_state[key]
 
 inject_pollers_for_active_jobs()
+
+if __name__ == "__main__":
+    main()

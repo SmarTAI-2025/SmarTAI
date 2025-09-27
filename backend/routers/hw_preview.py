@@ -97,7 +97,7 @@ example = '''
 async def analyze_submissions(
     files_data: List[Dict[str, str]],
     problems_data: Dict[str, Dict[str,str]],
-    student_store: List[Dict[str, Any]], # 接收学生存储字典的引用
+    student_store: Dict[str, Dict[str, Any]], # 接收学生存储字典的引用
     llm: Any, # 传入一个LangChain LLM实例
 ) -> List[Dict[str, Any]]:
     """
@@ -197,7 +197,7 @@ async def handle_answer_upload(
     file: UploadFile = File(...),
     # 像其他端点一样，注入所需要的依赖
     problem_store: Dict = Depends(get_problem_store),
-    student_store: List = Depends(get_student_store),
+    student_store: Dict = Depends(get_student_store),
     llm: Any = Depends(get_llm)
     ):
     """
@@ -210,7 +210,7 @@ async def handle_answer_upload(
         
         # 1. 使用新函数提取所有文件的内容
         # 这个函数会处理压缩包和单个文件
-        files_data = await asyncio.to_thread(extract_files_from_archive, file_bytes, file.filename)
+        files_data = await extract_files_from_archive(file_bytes, file.filename)
         
         if not files_data:
             raise HTTPException(status_code=400, detail="未在上传文件中找到有效的文本文件。")

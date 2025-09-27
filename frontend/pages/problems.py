@@ -88,16 +88,42 @@ if 'prob_data' not in st.session_state or not st.session_state.get('prob_data'):
 def render_question_overview():
     # st.header("📝 题目识别概览")
     st.caption("您可以直接在左侧下拉框中修改题目类型，或点击编辑按钮修改题干与评分标准。")
-    # problems = st.session_state.prob_data.get('problems', [])
+    
+    # Handle the data format returned by the backend
+    # The backend returns a dictionary with q_id as keys
     problems = st.session_state.prob_data
 
     if not problems:
         st.info("数据中没有识别到题目信息。")
         return
 
-    # for i, q in enumerate(problems):
-    #     # 使用唯一且稳定的ID作为key的基础
-    #     q_id = q.get('q_id', f"question_{i}")
+    # Ensure problems is a dictionary with q_id as keys
+    # Handle different possible data formats
+    if isinstance(problems, dict):
+        # Check if it's the format with 'problems' key
+        if 'problems' in problems:
+            # This is the old format, need to convert
+            problems_data = problems['problems']
+            if isinstance(problems_data, list):
+                # Convert list to dictionary with q_id as keys
+                problems = {q['q_id']: q for q in problems_data}
+            else:
+                # Already in correct format
+                problems = problems_data
+        # If no 'problems' key, assume it's already in the correct format (dict with q_id as keys)
+    elif isinstance(problems, list):
+        # Convert list to dictionary with q_id as keys
+        problems = {q['q_id']: q for q in problems}
+    
+    # Now we should have a dictionary with q_id as keys
+    # Make sure st.session_state.prob_data is also in the correct format for editing
+    if isinstance(st.session_state.prob_data, dict) and 'problems' in st.session_state.prob_data:
+        # Convert to the correct format for editing
+        problems_data = st.session_state.prob_data['problems']
+        if isinstance(problems_data, list):
+            st.session_state.prob_data = {q['q_id']: q for q in problems_data}
+        else:
+            st.session_state.prob_data = problems_data
     
     for q_id, q in problems.items():
         with st.container(border=True):
@@ -117,7 +143,14 @@ def render_question_overview():
                 col1, col2 = st.columns(2)
                 with col1:
                     if st.button("✅ 保存题干", key=f"save_stem_btn_{q_id}", type="primary", use_container_width=True):
-                        st.session_state.prob_data[q_id]['stem'] = new_stem
+                        # Ensure st.session_state.prob_data is in the correct format for editing
+                        if isinstance(st.session_state.prob_data, dict):
+                            if q_id in st.session_state.prob_data:
+                                st.session_state.prob_data[q_id]['stem'] = new_stem
+                            elif 'problems' in st.session_state.prob_data:
+                                # Handle old format
+                                if isinstance(st.session_state.prob_data['problems'], dict) and q_id in st.session_state.prob_data['problems']:
+                                    st.session_state.prob_data['problems'][q_id]['stem'] = new_stem
                         st.session_state.prob_changed = True
                         st.session_state[edit_stem_key] = False
                         st.rerun()
@@ -134,7 +167,14 @@ def render_question_overview():
                 col1, col2 = st.columns(2)
                 with col1:
                     if st.button("✅ 保存标准", key=f"save_criterion_btn_{q_id}", type="primary", use_container_width=True):
-                        st.session_state.prob_data[q_id]['criterion'] = new_criterion
+                        # Ensure st.session_state.prob_data is in the correct format for editing
+                        if isinstance(st.session_state.prob_data, dict):
+                            if q_id in st.session_state.prob_data:
+                                st.session_state.prob_data[q_id]['criterion'] = new_criterion
+                            elif 'problems' in st.session_state.prob_data:
+                                # Handle old format
+                                if isinstance(st.session_state.prob_data['problems'], dict) and q_id in st.session_state.prob_data['problems']:
+                                    st.session_state.prob_data['problems'][q_id]['criterion'] = new_criterion
                         st.session_state.prob_changed = True
                         st.session_state[edit_criterion_key] = False
                         st.rerun()
@@ -156,8 +196,15 @@ def render_question_overview():
 
                     new_type = st.selectbox("题目类型", options=q_types, index=current_type_index, key=f"q_type_{q_id}", label_visibility="collapsed")
                     # 如果类型发生变化，直接更新
-                    if new_type != st.session_state.prob_data[q_id]['type']:
-                        st.session_state.prob_data[q_id]['type'] = new_type
+                    if new_type != q.get('type'):
+                        # Update the session state with the new type
+                        if isinstance(st.session_state.prob_data, dict):
+                            if q_id in st.session_state.prob_data:
+                                st.session_state.prob_data[q_id]['type'] = new_type
+                            elif 'problems' in st.session_state.prob_data:
+                                # Handle old format
+                                if isinstance(st.session_state.prob_data['problems'], dict) and q_id in st.session_state.prob_data['problems']:
+                                    st.session_state.prob_data['problems'][q_id]['type'] = new_type
                         st.session_state.prob_changed = True
                         st.rerun()
 

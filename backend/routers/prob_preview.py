@@ -142,7 +142,7 @@ async def handle_homework_upload(
     try:
         # 1. 处理文件 I/O 和解码
         text_bytes = await file.read()
-        text = decode_text_bytes(text_bytes)
+        text = await decode_text_bytes(text_bytes)
         logger.info(f"文件内容: {text}")
         
         # 2. 调用核心服务函数处理业务逻辑

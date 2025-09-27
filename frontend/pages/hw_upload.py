@@ -158,3 +158,6 @@ def reset_grading_state():
             del st.session_state[key]
 
 inject_pollers_for_active_jobs()
+
+if __name__ == "__main__":
+    main()
