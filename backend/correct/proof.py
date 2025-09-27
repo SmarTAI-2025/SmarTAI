@@ -11,15 +11,12 @@ from pydantic import BaseModel
 
 from backend.models import Correction, StepScore
 from backend.correct.prompt_utils import prepare_proof_prompt
-from backend.dependencies import get_llm
+from backend.dependencies import get_llm, OPENAI_API_KEY, OPENAI_API_BASE, OPENAI_MODEL
 
 # Setup logger
 logger = structlog.get_logger()
 
-# Zhipu AI configuration
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "8dcdf3e9238f48f4ae329f638e66dfe2.HHIbfrj5M4GcjM8f")
-OPENAI_API_BASE = os.getenv("OPENAI_API_BASE", "https://open.bigmodel.cn/api/paas/v4")
-OPENAI_MODEL = os.getenv("OPENAI_MODEL", "glm-4")
+# Zhipu AI configuration is now imported from dependencies.py
 
 # Global LLM client for connection pooling
 LLM_CLIENT = None

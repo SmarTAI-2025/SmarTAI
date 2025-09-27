@@ -14,6 +14,7 @@ from backend.correct.calc import calc_node
 from backend.correct.concept import concept_node
 from backend.correct.proof import proof_node
 from backend.correct.programming import programming_node
+from backend.dependencies import OPENAI_API_KEY, OPENAI_API_BASE, OPENAI_MODEL
 
 # Setup logger
 logger = logging.getLogger(__name__)
@@ -102,13 +103,12 @@ def get_cached_llm():
     if task_id not in LLM_CLIENT_CACHE:
         # Import here to avoid circular imports
         from langchain_openai import ChatOpenAI
-        import os
-        OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "66ea05a8d4484dbd98063dbde387149d.pCG80vNPAyKrdmBq")
-        OPENAI_API_BASE = os.getenv("OPENAI_API_BASE", "https://open.bigmodel.cn/api/paas/v4")
-        OPENAI_MODEL = os.getenv("OPENAI_MODEL", "glm-4-plus")
+        # API keys are now imported from dependencies.py
+        # Use the model from dependencies
+        model_name = OPENAI_MODEL if OPENAI_MODEL else "glm-4-plus"
         
         LLM_CLIENT_CACHE[task_id] = ChatOpenAI(
-            model=OPENAI_MODEL,
+            model=model_name,
             temperature=0.0,
             api_key=OPENAI_API_KEY,
             base_url=OPENAI_API_BASE,
