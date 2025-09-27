@@ -27,8 +27,8 @@ from typing import Dict, Any
 from fastapi import APIRouter, Depends, UploadFile, File, HTTPException
 from fastapi.responses import JSONResponse
 from langchain_core.messages import SystemMessage, HumanMessage
-from ..dependencies import *
-from ..utils import *
+from dependencies import *
+from utils import *
 
 # --- 日志和应用基础设置 ---
 logging.basicConfig(level=logging.INFO)

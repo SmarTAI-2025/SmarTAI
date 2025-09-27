@@ -25,8 +25,8 @@ import asyncio
 from typing import List, Dict, Any
 from fastapi import APIRouter, Depends, UploadFile, File, HTTPException
 from langchain_core.messages import SystemMessage, HumanMessage
-from ..dependencies import *
-from ..utils import *
+from dependencies import *
+from utils import *
 
 
 # --- 日志和应用基础设置 ---

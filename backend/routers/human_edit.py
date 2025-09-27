@@ -21,8 +21,8 @@
 import logging
 from typing import Dict
 from fastapi import APIRouter, Depends
-from ..dependencies import *
-from ..utils import *
+from dependencies import *
+from utils import *
 
 
 # --- 日志和应用基础设置 ---
