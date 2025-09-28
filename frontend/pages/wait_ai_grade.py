@@ -3,6 +3,18 @@ import time
 import requests
 from utils import *
 from datetime import datetime
+import pandas as pd
+import re
+
+# Add natural_sort_key function for mock data display
+def natural_sort_key(s):
+    """
+    实现自然排序的辅助函数。
+    例如: "q2" 会排在 "q10" 之前。
+    """
+    # 确保输入是字符串
+    s = str(s)
+    return [int(text) if text.isdigit() else text.lower() for text in re.split('([0-9]+)', s)]
 
 st.set_page_config(
     page_title="正在处理 - 智能作业核查系统",
@@ -29,16 +41,25 @@ st.markdown("""
     </style>
     """, unsafe_allow_html=True)
 
+def check_for_abandoned_tasks():
+    """Check for and abandon tasks that were started but not completed"""
+    # Check if there are any pending jobs that should be abandoned
+    if 'checking_job_id' in st.session_state:
+        job_id = st.session_state.checking_job_id
+        # If user has navigated away from the waiting page, abandon the task
+        # This is a simple check - in a real implementation you might want more sophisticated logic
+        print(f"Potential abandoned task detected: {job_id}")
+        # For now, we'll just clear the checking state without abandoning the backend task
+        # since the backend task might still be processing
+        del st.session_state.checking_job_id
+
 def render_header():
     """渲染页面头部"""
     col1, col2, col3, col4, col5, col6, col7 = st.columns(7)
     col = st.columns(1)[0]
 
     with col1:
-        if st.button("🏠 返回首页"):
-            # Reset grading state when returning to main page
-            reset_grading_state_on_navigation()
-            st.switch_page("pages/main.py")
+        st.page_link("pages/main.py", label="返回首页", icon="🏠")
     
     with col2:
         st.page_link("pages/history.py", label="历史记录", icon="🕒")
@@ -75,6 +96,41 @@ st.title("⚙️ 正在提交作业...")
 # Initialize job status in session state
 if 'job_status' not in st.session_state:
     st.session_state.job_status = "pending"
+
+# Display mock data while waiting for real results
+st.info("批改任务正在进行中...下方为模拟数据预览，若想查看任务完成情况请点击批改结果刷新页面。")
+try:
+    from frontend_utils.data_loader import load_mock_data
+    mock_data = load_mock_data()
+    
+    if "student_scores" in mock_data:
+        all_mock_students = mock_data["student_scores"]
+        all_mock_students.sort(key=lambda s: s.student_id)
+        
+        st.subheader("模拟学生批改结果预览")
+        for student in all_mock_students[:5]:  # Show first 5 students as preview (matching grade_results.py)
+            st.markdown(f"### 学生: {student.student_name} ({student.student_id})")
+            student.questions.sort(key=lambda q: natural_sort_key(q['question_id']))
+            data = []
+            total_score = 0
+            total_max_score = 0
+            for question in student.questions:
+                data.append({
+                    "题号": question["question_id"][1:],
+                    "题目类型": question["question_type"],
+                    "得分": f"{question['score']:.1f}",
+                    "满分": f"{question['max_score']:.1f}",
+                    "置信度": f"{question['confidence']:.2f}",
+                    "评语": question["feedback"]
+                })
+                total_score += question["score"]
+                total_max_score += question["max_score"]
+            df = pd.DataFrame(data)
+            st.dataframe(df, width='stretch', hide_index=True)
+            st.write(f"**总分: {total_score:.1f}/{total_max_score:.1f}**")
+            st.divider()
+except Exception as e:
+    st.warning(f"无法加载模拟数据: {e}")
 
 # 2. 【核心逻辑】检查是否存在从其他页面传来的“触发标志”
 if st.session_state.get('trigger_ai_grading'):
@@ -185,13 +241,15 @@ if 'checking_job_id' in st.session_state:
             if status == "pending":
                 status_container.info("🕒 任务正在处理中，请稍候...")
             elif status == "completed":
-                status_container.success("✅ 任务已完成！正在跳转到批改结果页面...")
+                success_message = "✅ 任务已完成！请跳转批改结果页面查看"
+                status_container.success(success_message)
+                st.info(success_message)  # Display the message on the web page as well
                 # Remove the job from checking
                 if 'checking_job_id' in st.session_state:
                     del st.session_state.checking_job_id
                 # Set the current job as selected
                 st.session_state.selected_job_id = job_id
-                # Set newly submitted job ID
+                # Set newly submitted job ID for grade_results.py to auto-select this job
                 st.session_state.newly_submitted_job_id = job_id
                 # Wait a moment and then redirect
                 time.sleep(2)
@@ -230,18 +288,6 @@ if 'checking_job_id' in st.session_state:
 
 inject_pollers_for_active_jobs()
 
-def check_for_abandoned_tasks():
-    """Check for and abandon tasks that were started but not completed"""
-    # Check if there are any pending jobs that should be abandoned
-    if 'checking_job_id' in st.session_state:
-        job_id = st.session_state.checking_job_id
-        # If user has navigated away from the waiting page, abandon the task
-        # This is a simple check - in a real implementation you might want more sophisticated logic
-        print(f"Potential abandoned task detected: {job_id}")
-        # For now, we'll just clear the checking state without abandoning the backend task
-        # since the backend task might still be processing
-        del st.session_state.checking_job_id
-
 def reset_grading_state_on_navigation():
     """Reset grading state when navigating away from grading pages"""
     try:
@@ -258,9 +304,9 @@ def reset_grading_state_on_navigation():
         print(f"Error resetting backend grading state on navigation: {e}")
     
     # Clear frontend grading-related session state (preserve history and job selection)
+    # Only clear intermediate grading variables, preserve completed results
     keys_to_clear = [
         'ai_grading_data',
-        'sample_data',
         'report_job_selector',
         'checking_job_id',
         'job_status'
@@ -268,8 +314,7 @@ def reset_grading_state_on_navigation():
     
     # Only clear sample_data if it's not MOCK_JOB_001
     if 'selected_job_id' in st.session_state and st.session_state.selected_job_id != "MOCK_JOB_001":
-        if 'sample_data' in keys_to_clear:
-            keys_to_clear.remove('sample_data')
+        keys_to_clear.append('sample_data')
     
     for key in keys_to_clear:
         if key in st.session_state:

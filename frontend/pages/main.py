@@ -156,24 +156,9 @@ def render_user_welcome():
         """, unsafe_allow_html=True)
     
     with col3:
-        if st.button("🔄 刷新数据", width='content'):
-            # Refresh data based on selected job or default data without resetting grading state
-            if 'selected_job_id' in st.session_state:
-                ai_data = load_ai_grading_data(st.session_state.selected_job_id)
-                if "error" not in ai_data:
-                    st.session_state.sample_data = ai_data
-                else:
-                    st.session_state.sample_data = load_mock_data()
-            else:
-                st.session_state.sample_data = load_mock_data()
-            st.success("数据已刷新！")
-            st.rerun()
+        st.page_link("pages/main.py", label="🔄 刷新数据", icon="🔄")
         
-        if st.button("🚪 退出登录", use_container_width=False, type="secondary"):
-            # Clear all session state except history records
-            clear_session_state_except_history()
-            st.success("已退出登录")
-            st.switch_page("frontend/pages/login.py")
+        st.page_link("pages/login.py", label="🚪 退出登录", icon="🚪")
 
 def render_statistics_overview():
     """渲染统计概览"""
@@ -638,13 +623,16 @@ def reset_grading_state():
         print(f"Error resetting backend grading state: {e}")
     
     # Clear frontend grading-related session state
+    # Preserve completed results and analysis data
     keys_to_clear = [
         'ai_grading_data',
-        'sample_data',
-        'selected_job_id',
         'report_job_selector',
         'selected_job_from_history'
     ]
+    
+    # Only clear sample_data if it's not MOCK_JOB_001
+    if 'selected_job_id' in st.session_state and st.session_state.selected_job_id != "MOCK_JOB_001":
+        keys_to_clear.append('sample_data')
     
     for key in keys_to_clear:
         if key in st.session_state:

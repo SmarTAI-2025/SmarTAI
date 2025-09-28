@@ -78,15 +78,13 @@ def reset_grading_state():
     # Clear frontend grading-related session state (preserve history and job selection)
     keys_to_clear = [
         'ai_grading_data',
-        'sample_data',
         'report_job_selector',
         'selected_job_from_history'
     ]
     
     # Only clear sample_data if it's not MOCK_JOB_001
     if 'selected_job_id' in st.session_state and st.session_state.selected_job_id != "MOCK_JOB_001":
-        if 'sample_data' in keys_to_clear:
-            keys_to_clear.remove('sample_data')
+        keys_to_clear.append('sample_data')
     
     for key in keys_to_clear:
         if key in st.session_state:
@@ -230,7 +228,7 @@ def get_master_poller_html(jobs_json: str, backend_url: str) -> str:
                             // --- 核心修改：生成用户友好的弹窗消息 ---
                             const taskName = taskDetails.name || "未命名任务";
                             const submittedAt = taskDetails.submitted_at || "未知时间";
-                            alert("您于 [" + submittedAt + "] 提交的任务：" + taskName + "已成功完成！页面将自动跳转到批改结果页面。");
+                            alert("您于 [" + submittedAt + "] 提交的任务：" + taskName + "已成功完成！请跳转批改结果页面查看");
                             // 标记为完成，防止重复弹窗
                             sessionStorage.setItem(completedKey, 'true');
                             // --- 新增功能：刷新当前页面 ---

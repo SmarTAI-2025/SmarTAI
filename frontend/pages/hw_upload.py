@@ -19,8 +19,10 @@ def main():
     initialize_session_state()
     load_custom_css()
     
-    # Reset grading state when starting a new homework upload
-    reset_grading_state()
+    # Only reset grading state if we're starting a completely new grading process
+    # Check if we have existing grading data that should be preserved
+    if 'processed_data' not in st.session_state or not st.session_state.get('processed_data'):
+        reset_grading_state()
     
     # 渲染页面
     render_header()
@@ -98,6 +100,11 @@ def render_upload_section():
     # 当用户上传了作业文件后，才激活确认按钮
     if uploaded_hw_file is not None:
         if st.button("确认信息，开始智能核查", type="primary", width='stretch'):
+            # Check if there's already an active grading task
+            if is_grading_in_progress():
+                st.error("当前有正在批改的任务，不允许提交新的任务，请稍候。")
+                return
+                
             with st.spinner("正在上传并请求AI分析，请耐心几分钟..."):
                 # 准备要发送的文件
                 files_to_send = {
@@ -128,6 +135,11 @@ def render_upload_section():
         # 如果用户还未上传文件，则按钮禁用
         st.button("确认信息，开始智能核查", type="primary", width='stretch', disabled=True)
         st.warning("请先在上方上传学生作业压缩包。")
+
+def is_grading_in_progress():
+    """Check if there's an active grading task in progress"""
+    # Check if there's a checking_job_id in session state
+    return 'checking_job_id' in st.session_state
 
 def reset_grading_state():
     """Reset grading state to allow fresh grading"""

@@ -92,8 +92,10 @@ def main():
     initialize_session_state()
     load_custom_css()
     
-    # Reset grading state when starting a new problem upload
-    reset_grading_state()
+    # Only reset grading state if we're starting a completely new grading process
+    # Check if we have existing problem data that should be preserved
+    if 'prob_data' not in st.session_state or not st.session_state.get('prob_data'):
+        reset_grading_state()
     
     # 渲染页面
     render_header()
@@ -357,6 +359,11 @@ def render_upload_section():
     # 当用户上传了作业文件后，才激活确认按钮
     if uploaded_prob_file is not None:
         if st.button("确认信息，开始智能识别题目", type="primary", use_container_width=True):
+            # Check if there's already an active grading task
+            if is_grading_in_progress():
+                st.error("当前有正在批改的任务，不允许提交新的任务，请稍候。")
+                return
+                
             with st.spinner("正在上传并请求AI分析，请耐心等待几分钟..."):
                 # 准备要发送的文件
                 files_to_send = {
@@ -387,6 +394,11 @@ def render_upload_section():
         st.button("确认信息，开始智能核查", type="primary", use_container_width=True, disabled=True)
         st.warning("请先在上方上传本次作业题目。")
 
+def is_grading_in_progress():
+    """Check if there's an active grading task in progress"""
+    # Check if there's a checking_job_id in session state
+    return 'checking_job_id' in st.session_state
+
 def reset_grading_state():
     """Reset grading state to allow fresh grading"""
     try:
@@ -403,13 +415,16 @@ def reset_grading_state():
         print(f"Error resetting backend grading state: {e}")
     
     # Clear frontend grading-related session state
+    # Preserve completed results and analysis data
     keys_to_clear = [
         'ai_grading_data',
-        'sample_data',
-        'selected_job_id',
         'report_job_selector',
         'selected_job_from_history'
     ]
+    
+    # Only clear sample_data if it's not MOCK_JOB_001
+    if 'selected_job_id' in st.session_state and st.session_state.selected_job_id != "MOCK_JOB_001":
+        keys_to_clear.append('sample_data')
     
     for key in keys_to_clear:
         if key in st.session_state:

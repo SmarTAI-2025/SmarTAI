@@ -20,10 +20,7 @@ def render_header():
     col = st.columns(1)[0]
 
     with col1:
-        if st.button("🏠 返回首页"):
-            # Reset grading state when returning to main page
-            reset_grading_state()
-            st.switch_page("pages/main.py")
+        st.page_link("pages/main.py", label="返回首页", icon="🏠")
     
     with col2:
         st.page_link("pages/history.py", label="历史记录", icon="🕒")
@@ -63,13 +60,16 @@ def reset_grading_state():
         print(f"Error resetting backend grading state: {e}")
     
     # Clear frontend grading-related session state
+    # Preserve completed results and analysis data
     keys_to_clear = [
         'ai_grading_data',
-        'sample_data',
-        'selected_job_id',
         'report_job_selector',
         'selected_job_from_history'
     ]
+    
+    # Only clear sample_data if it's not MOCK_JOB_001
+    if 'selected_job_id' in st.session_state and st.session_state.selected_job_id != "MOCK_JOB_001":
+        keys_to_clear.append('sample_data')
     
     for key in keys_to_clear:
         if key in st.session_state:
