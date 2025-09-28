@@ -55,24 +55,6 @@ def discard_job(job_id: str):
     
     return {"status": "success", "message": f"Job {job_id} has been discarded."}
 
-@router.delete("/discard_job/{job_id}")
-def discard_job(job_id: str):
-    """
-    Immediately discard a job (e.g., when user navigates away before completion).
-    """
-    # Remove from active jobs
-    ACTIVE_JOBS.discard(job_id)
-    
-    # Remove from grading results
-    if job_id in GRADING_RESULTS:
-        GRADING_RESULTS.pop(job_id, None)
-    
-    # Remove from job metadata
-    if job_id in JOB_METADATA:
-        JOB_METADATA.pop(job_id, None)
-    
-    return {"status": "success", "message": f"Job {job_id} has been discarded."}
-
 # Cache for LLM clients to avoid repeated initialization
 LLM_CLIENT_CACHE: Dict[int, Any] = {}
 # Timestamps for LLM client cache entries
@@ -190,7 +172,9 @@ async def process_student_answer(answer: Dict[str, Any], problem_store: Dict[str
     # Prepare answer unit based on type
     answer_unit = {
         "q_id": q_id,
-        "text": content
+        "stem" :problem.get("stem", ""),
+        "text": content,
+        "correct_ans": "未提供，请你自行分析题目给出标答！"
     }
     
     # Map Chinese question types to internal English types for processing

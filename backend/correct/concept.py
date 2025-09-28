@@ -169,8 +169,9 @@ async def concept_node(answer_unit: Dict[str, Any], rubric: str, max_score: floa
     # Step 2: Prepare prompt using the new prompt_utils module
     try:
         template_path = "prompts/concept.txt"
-        context = keywords
-        problem = "概念题"  # Mock problem statement
+        # context = keywords
+        context = "暂无标准知识点，请你根据题目自行提取知识点！"
+        problem = answer_unit.get("stem", "概念题")  # Mock problem statement
         answer = answer_unit.get("text", "")
         
         prompt = prepare_concept_prompt(template_path, context, problem, answer, rubric)

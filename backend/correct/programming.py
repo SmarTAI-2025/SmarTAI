@@ -80,6 +80,7 @@ class CodeExecutor:
 class AnswerUnit(BaseModel):
     """Model for programming answer unit."""
     q_id: str
+    stem: str
     code: str
     language: str
     test_cases: List[TestCase]
@@ -252,11 +253,10 @@ async def programming_node(answer_unit: Dict[str, Any], rubric: str, max_score: 
     # Step 6: Prepare prompt using the new prompt_utils module
     try:
         template_path = "prompts/programming.txt"
-        # For now, we use a placeholder problem statement since we don't have the actual problem
-        # In a real implementation, you would get the problem from the problem store
-        problem = "编程题"
-        test_cases = [{"input": "", "output": ""}]
-        prompt = prepare_programming_prompt(template_path, problem, answer_unit_model.code, test_cases, rubric)
+        problem = answer_unit.get("stem", "编程题")
+        code = answer_unit.get("code", "")
+        execution_result = result.model_dump()
+        prompt = prepare_programming_prompt(template_path, problem, code, execution_result, rubric)
         
         # In a real implementation, you would call an LLM with this prompt
         # For now, we'll just log that we would use it

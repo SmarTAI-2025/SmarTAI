@@ -36,6 +36,7 @@ class ProofStep(BaseModel):
 class AnswerUnit(BaseModel):
     """Model for proof answer unit."""
     q_id: str
+    stem: str
     text: str
     steps: List[ProofStep]
 
@@ -205,7 +206,8 @@ async def proof_node(answer_unit: Dict[str, Any], rubric: str, max_score: float 
     # Step 4: Prepare prompt using the new prompt_utils module
     try:
         template_path = "prompts/proof.txt"
-        prompt = prepare_proof_prompt(template_path, [step.model_dump() for step in steps], rubric)
+        problem = answer_unit.get("stem", "证明题")
+        prompt = prepare_proof_prompt(template_path, problem, [step.model_dump() for step in steps], rubric)
         
         # In a real implementation, you would call an LLM with this prompt
         # For now, we'll just log that we would use it

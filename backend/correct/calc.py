@@ -31,7 +31,9 @@ def get_llm_client():
 class AnswerUnit(BaseModel):
     """Model for calculation answer unit."""
     q_id: str
+    stem: str
     text: str
+    correct_ans: str
     steps: List[Dict[str, Any]]
 
 def parse_llm_json_response(response_text: str) -> Dict[str, Any]:
@@ -171,8 +173,8 @@ async def calc_node(answer_unit: Dict[str, Any], rubric: str, max_score: float =
         student_answer = answer_unit_model.text
         # For now, we use the student answer as both problem and correct_answer since we don't have the correct answer
         # In a real implementation, you would get the correct answer from the problem store
-        problem = answer_unit_model.text
-        correct_answer = answer_unit_model.text
+        problem = answer_unit_model.stem
+        correct_answer = answer_unit_model.correct_ans
         prompt = prepare_calc_prompt(template_path, problem, student_answer, correct_answer, rubric)
         
         # In a real implementation, you would call an LLM with this prompt
