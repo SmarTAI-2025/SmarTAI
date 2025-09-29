@@ -89,7 +89,7 @@ def init_session_state():
         st.session_state.backend_status = "connected"
     except:
         st.session_state.backend_status = "disconnected"
-        st.warning(f"无法连接到后端服务 ({st.session_state.backend})，部分功能可能无法正常工作。")
+        st.warning(f"正在连接后端，请稍后30s左右点击下方刷新数据按钮即可连接后端")
     
     # Initialize sample data or AI grading data
     if 'sample_data' not in st.session_state:
@@ -156,9 +156,24 @@ def render_user_welcome():
         """, unsafe_allow_html=True)
     
     with col3:
-        st.page_link("pages/main.py", label="🔄 刷新数据", icon="🔄")
+        if st.button("🔄 刷新数据", width='content'):
+            # Refresh data based on selected job or default data without resetting grading state
+            if 'selected_job_id' in st.session_state:
+                ai_data = load_ai_grading_data(st.session_state.selected_job_id)
+                if "error" not in ai_data:
+                    st.session_state.sample_data = ai_data
+                else:
+                    st.session_state.sample_data = load_mock_data()
+            else:
+                st.session_state.sample_data = load_mock_data()
+            st.success("数据已刷新！")
+            st.rerun()
         
-        st.page_link("pages/login.py", label="🚪 退出登录", icon="🚪")
+        if st.button("🚪 退出登录", use_container_width=False, type="secondary"):
+            # Clear all session state except history records
+            clear_session_state_except_history()
+            st.success("已退出登录")
+            st.switch_page("frontend/pages/login.py")
 
 def render_statistics_overview():
     """渲染统计概览"""

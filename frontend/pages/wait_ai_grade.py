@@ -211,7 +211,7 @@ if 'checking_job_id' in st.session_state:
     st.subheader("任务状态")
     status_container = st.empty()
     
-    # Add refresh button
+    # Add refresh button with backend reconnection capability
     if st.button("🔄 刷新状态"):
         try:
             response = requests.get(
@@ -223,10 +223,30 @@ if 'checking_job_id' in st.session_state:
                 st.session_state.job_status = result.get("status", "unknown")
             else:
                 st.error(f"获取状态失败: {response.status_code}")
+                # Try to reconnect to backend
+                st.warning("正在尝试重新连接后端...")
+                try:
+                    test_response = requests.get(f"{st.session_state.backend}/ai_grading/all_jobs", timeout=5)
+                    if test_response.status_code == 200:
+                        st.success("后端连接已恢复！")
+                    else:
+                        st.error(f"后端连接失败 (状态码: {test_response.status_code})")
+                except Exception as reconnect_error:
+                    st.error(f"后端连接失败: {str(reconnect_error)}")
         except Exception as e:
             st.error(f"获取状态时出错: {e}")
+            # Try to reconnect to backend
+            st.warning("正在尝试重新连接后端...")
+            try:
+                test_response = requests.get(f"{st.session_state.backend}/ai_grading/all_jobs", timeout=5)
+                if test_response.status_code == 200:
+                    st.success("后端连接已恢复！")
+                else:
+                    st.error(f"后端连接失败 (状态码: {test_response.status_code})")
+            except Exception as reconnect_error:
+                st.error(f"后端连接失败: {str(reconnect_error)}")
     
-    # Auto-check status
+    # Auto-check status with backend reconnection capability
     try:
         response = requests.get(
             f"{st.session_state.backend}/ai_grading/grade_result/{job_id}",
@@ -263,8 +283,22 @@ if 'checking_job_id' in st.session_state:
                 status_container.warning(f"⚠️ 当前状态: {status}")
         else:
             status_container.error(f"获取状态失败: {response.status_code}")
+            # Try to reconnect to backend
+            try:
+                test_response = requests.get(f"{st.session_state.backend}/ai_grading/all_jobs", timeout=5)
+                if test_response.status_code != 200:
+                    st.warning("后端连接可能已断开，请点击刷新状态按钮尝试重新连接")
+            except Exception:
+                st.warning("后端连接可能已断开，请点击刷新状态按钮尝试重新连接")
     except Exception as e:
         status_container.error(f"获取状态时出错: {e}")
+        # Try to reconnect to backend
+        try:
+            test_response = requests.get(f"{st.session_state.backend}/ai_grading/all_jobs", timeout=5)
+            if test_response.status_code != 200:
+                st.warning("后端连接可能已断开，请点击刷新状态按钮尝试重新连接")
+        except Exception:
+            st.warning("后端连接可能已断开，请点击刷新状态按钮尝试重新连接")
 
     # Show job details
     if job_id in st.session_state.jobs:

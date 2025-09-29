@@ -44,7 +44,7 @@ def init_storage_state():
 
 def render_header():
     """渲染页面头部"""
-    col1, col3, col2 = st.columns([2, 16, 2])
+    col1, col3, col2 = st.columns([4, 16, 4])
 
     # col3 = st.columns(1)[0]
 
@@ -54,8 +54,20 @@ def render_header():
     
     with col2:
         if st.button("🔄 刷新界面", type="secondary"):
-            sync_completed_records()
-            st.success("记录已刷新！")
+            try:
+                # Try to reconnect to backend first
+                test_response = requests.get(f"{st.session_state.backend}/ai_grading/all_jobs", timeout=5)
+                if test_response.status_code == 200:
+                    sync_completed_records()
+                    st.success("记录已刷新！")
+                else:
+                    st.warning(f"后端连接异常 (状态码: {test_response.status_code})，记录可能未完全刷新。")
+                    sync_completed_records()
+                    st.success("记录已刷新！")
+            except Exception as e:
+                st.warning(f"无法连接到后端: {str(e)}，将使用缓存数据刷新界面。")
+                sync_completed_records()
+                st.success("记录已刷新！")
             st.rerun()
 
     with col3:
