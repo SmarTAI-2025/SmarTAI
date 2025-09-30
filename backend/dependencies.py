@@ -112,7 +112,7 @@ def get_student_store() -> Dict[str,Dict[str, Any]]:
 GEMINI_API_KEY = os.getenv("OPENAI_API_KEY","AIzaSyCTHCicOOCvfqirIVg1xcGvUYl5h58l7U0")
 
 # 您需要使用支持视觉（多模态）的模型，例如 "gpt-4o"
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "ce84d4642c3f4cabbcee430cc0bf674c.tcRryYKVL4tL2TpG")
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "YOUR_API_KEY_HERE")
 OPENAI_API_BASE = os.getenv("OPENAI_API_BASE", "https://open.bigmodel.cn/api/paas/v4")
 OPENAI_MODEL = os.getenv("OPENAI_MODEL", "glm-4.5-air")
 
