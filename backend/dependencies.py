@@ -121,7 +121,8 @@ OPENAI_MODEL = os.getenv("OPENAI_MODEL", "glm-4.5-air")
 
 CONTEXT_WINDOW_THRESHOLD_CHARS = 200000 
 
-async def get_llm(model="gemini") -> ChatOpenAI:
+# async def get_llm(model="gemini") -> ChatOpenAI:
+def get_llm(model="gemini") -> ChatOpenAI:
     """返回共享的LLM客户端实例。"""
 
     if model == "gemini":
