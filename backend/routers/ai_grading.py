@@ -8,13 +8,13 @@ from pydantic import BaseModel
 from functools import lru_cache
 from collections import OrderedDict
 
-from backend.dependencies import get_problem_store, get_student_store
+from backend.dependencies import get_problem_store, get_student_store, get_llm_client
 from backend.models import Correction
 from backend.correct.calc import calc_node
 from backend.correct.concept import concept_node
 from backend.correct.proof import proof_node
 from backend.correct.programming import programming_node
-from backend.dependencies import OPENAI_API_KEY, OPENAI_API_BASE, OPENAI_MODEL
+# from backend.dependencies import OPENAI_API_KEY, OPENAI_API_BASE, OPENAI_MODEL
 
 # Setup logger
 logger = logging.getLogger(__name__)
@@ -126,18 +126,26 @@ def get_cached_llm():
         LLM_CACHE_TIMESTAMPS.pop(tid, None)
     
     if task_id not in LLM_CLIENT_CACHE:
-        # Import here to avoid circular imports
-        from langchain_openai import ChatOpenAI
-        # API keys are now imported from dependencies.py
-        # Use the model from dependencies
-        model_name = OPENAI_MODEL if OPENAI_MODEL else "glm-4-plus"
+        # # Import here to avoid circular imports
+        # from langchain_openai import ChatOpenAI
+        # # API keys are now imported from dependencies.py
+        # # Use the model from dependencies
+        # model_name = OPENAI_MODEL if OPENAI_MODEL else "glm-4-plus"
         
-        LLM_CLIENT_CACHE[task_id] = ChatOpenAI(
-            model=model_name,
-            temperature=0.0,
-            api_key=OPENAI_API_KEY,
-            base_url=OPENAI_API_BASE,
-        )
+        # LLM_CLIENT_CACHE[task_id] = ChatOpenAI(
+        #     model=model_name,
+        #     temperature=0.0,
+        #     api_key=OPENAI_API_KEY,
+        #     base_url=OPENAI_API_BASE,
+        # )
+        
+        try:
+            # logger.info(f"Initializing cached LLM client for task {task_id}")
+            LLM_CLIENT_CACHE[task_id] = get_llm_client()
+        except Exception as e:
+            logger.error(f"Failed to initialize LLM client: {e}")
+            # 如果初始化失败，这里可能需要抛出异常或者返回 None，视您的错误处理逻辑而定
+            raise e
     
     # Update timestamp for this entry
     LLM_CACHE_TIMESTAMPS[task_id] = current_time
