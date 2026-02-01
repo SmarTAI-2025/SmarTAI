@@ -10,6 +10,7 @@ import argparse
 # import tempfile
 from typing import Dict, Any, List
 from pydantic import BaseModel
+from fastapi.concurrency import run_in_threadpool
 
 from backend.models import Correction, StepScore
 from backend.correct.prompt_utils import prepare_programming_prompt
@@ -270,7 +271,8 @@ async def programming_node(answer_unit: Dict[str, Any], rubric: str, max_score: 
             from langchain.schema import HumanMessage
             
             # Use ainvoke method for async calls
-            response = await llm.ainvoke([HumanMessage(content=prompt)])
+            # response = await llm.ainvoke([HumanMessage(content=prompt)])
+            response = await run_in_threadpool(llm.invoke, [HumanMessage(content=prompt)])
             
             # Log the raw response for debugging
             logger.info("llm_raw_response", content=response.content[:500] + "..." if len(response.content) > 500 else response.content)
@@ -386,7 +388,9 @@ async def programming_node(answer_unit: Dict[str, Any], rubric: str, max_score: 
                 llm = get_llm_client()
             from langchain.schema import HumanMessage
             
-            response = await llm.ainvoke([HumanMessage(content=default_prompt)])
+            # response = await llm.ainvoke([HumanMessage(content=default_prompt)])
+            response = await run_in_threadpool(llm.invoke, [HumanMessage(content=default_prompt)])
+
             llm_response = parse_llm_json_response(response.content)
             
             # Create step scores from LLM response

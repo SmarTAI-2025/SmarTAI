@@ -4,6 +4,7 @@ import asyncio
 from typing import List, Dict, Any
 from fastapi import APIRouter, Depends, UploadFile, File, HTTPException
 from langchain_core.messages import SystemMessage, HumanMessage
+from fastapi.concurrency import run_in_threadpool
 from ..dependencies import *
 from ..utils import *
 
@@ -165,7 +166,8 @@ async def analyze_submissions(
             HumanMessage(content=human_message_content)
         ]
 
-        raw_llm_output = await llm.ainvoke(messages)
+        # raw_llm_output = await llm.ainvoke(messages)
+        raw_llm_output = await run_in_threadpool(llm.invoke, messages)
         json_output = parse_llm_json_output(raw_llm_output.content, StudentSubmission)
         logger.info(f"提取到学生解答:{json_output.model_dump()}")
         return json_output.model_dump()

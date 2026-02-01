@@ -7,6 +7,7 @@ import os
 import json
 import argparse
 from typing import Dict, Any
+from fastapi.concurrency import run_in_threadpool
 
 from backend.models import Correction, StepScore
 from backend.correct.prompt_utils import prepare_concept_prompt
@@ -193,7 +194,8 @@ async def concept_node(answer_unit: Dict[str, Any], rubric: str, max_score: floa
             while retry_count < max_retries:
                 try:
                     # Use ainvoke method for async calls
-                    response = await llm.ainvoke([HumanMessage(content=prompt)])
+                    # response = await llm.ainvoke([HumanMessage(content=prompt)])
+                    response = await run_in_threadpool(llm.invoke, [HumanMessage(content=prompt)])
                     
                     # Log the raw response for debugging
                     logger.info("llm_raw_response", content=response.content[:500] + "..." if len(response.content) > 500 else response.content)
@@ -333,7 +335,9 @@ async def concept_node(answer_unit: Dict[str, Any], rubric: str, max_score: floa
             retry_count = 0
             while retry_count < max_retries:
                 try:
-                    response = await llm.ainvoke([HumanMessage(content=default_prompt)])
+                    # response = await llm.ainvoke([HumanMessage(content=default_prompt)])
+                    response = await run_in_threadpool(llm.invoke, [HumanMessage(content=default_prompt)])
+                    
                     llm_response = parse_llm_json_response(response.content)
                     break  # Success, exit retry loop
                 except Exception as e:
