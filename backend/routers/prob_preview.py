@@ -27,6 +27,7 @@ from typing import Dict, Any
 from fastapi import APIRouter, Depends, UploadFile, File, HTTPException
 from fastapi.responses import JSONResponse
 from langchain_core.messages import SystemMessage, HumanMessage
+from fastapi.concurrency import run_in_threadpool
 from ..dependencies import *
 from ..utils import *
 
@@ -95,7 +96,8 @@ async def process_and_store_problems(
         
         # 使用异步调用 await llm.ainvoke()
         # 注意：这里假设你的llm对象是异步兼容的，对于langchain_openai的ChatOpenAI通常是这样
-        response = await llm.ainvoke(messages)
+        # response = await llm.ainvoke(messages)
+        response = await run_in_threadpool(llm.invoke, messages)
         raw_llm_output = response.content
 
         # raw_llm_output = llm.invoke(messages).content
