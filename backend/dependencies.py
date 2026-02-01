@@ -112,6 +112,7 @@ def get_student_store() -> Dict[str,Dict[str, Any]]:
 # os.environ["HTTP_PROXY"] = "http://127.0.0.1:7897"
 # os.environ["HTTPS_PROXY"] = "http://127.0.0.1:7897"
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "AIzaSyA6BAa8PgdrfgX9WO-zFAOiBG6aWanNmto") #"AIzaSyCTHCicOOCvfqirIVg1xcGvUYl5h58l7U0"
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3-flash-preview")
 
 # 您需要使用支持视觉（多模态）的模型，例如 "gpt-4o"
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "YOUR_API_KEY_HERE")
@@ -132,7 +133,7 @@ async def get_llm(model="gemini") -> ChatOpenAI:
             # 1. 类从 ChatOpenAI 变为 ChatGoogleGenerativeAI
             # 2. 参数从 api_key, base_url 变为 model, google_api_key
             gemini_client = ChatGoogleGenerativeAI(
-                model="gemini-3-flash-preview",  # 或者其他模型名
+                model=GEMINI_MODEL,  # 或者其他模型名
                 temperature=0.0,
                 google_api_key=GEMINI_API_KEY,
             )
