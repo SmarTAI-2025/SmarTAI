@@ -8,7 +8,7 @@ from pydantic import BaseModel
 from functools import lru_cache
 from collections import OrderedDict
 
-from backend.dependencies import get_problem_store, get_student_store, get_llm_client
+from backend.dependencies import get_problem_store, get_student_store, get_llm
 from backend.models import Correction
 from backend.correct.calc import calc_node
 from backend.correct.concept import concept_node
@@ -141,7 +141,7 @@ def get_cached_llm():
         
         try:
             # logger.info(f"Initializing cached LLM client for task {task_id}")
-            LLM_CLIENT_CACHE[task_id] = get_llm_client()
+            LLM_CLIENT_CACHE[task_id] = get_llm()
         except Exception as e:
             logger.error(f"Failed to initialize LLM client: {e}")
             # 如果初始化失败，这里可能需要抛出异常或者返回 None，视您的错误处理逻辑而定
