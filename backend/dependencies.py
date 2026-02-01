@@ -127,6 +127,7 @@ async def get_llm(model="gemini") -> ChatOpenAI:
     if model == "gemini":
         if not GEMINI_API_KEY:
             logger.error("API 密钥未设置，后端调用将失败！")
+            raise ValueError("GEMINI_API_KEY not found")
 
         try:
             # 核心改动在这里：
@@ -154,6 +155,7 @@ async def get_llm(model="gemini") -> ChatOpenAI:
     elif model == "zhipu":
         if not OPENAI_API_KEY:
             logger.error("环境变量 OPENAI_API_KEY 未设置，后端调用将失败！")
+            raise ValueError("OPENAI_API_KEY not found")
 
         try:
             zhipu_ai = ChatOpenAI(
