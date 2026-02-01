@@ -1,0 +1,20 @@
+# PB20111610 Alice HW1
+
+## 1.
+
+$$
+\int_0^1\ x\ \arctan{x}\ \mathrm{d}x\\
+=\left.\arctan{x}\frac{1}{2} x^2 \right|_{x=0}^{x=1}-\frac{1}{2}\int_0^1\ x^2 \mathrm{d}(\arctan{x})\\
+=\frac{\pi}{8}-\frac{1}{2}\int_0^1\ \frac{x^2}{1+x^2} \mathrm{d}x\\
+=\frac{\pi}{8}-\frac{1}{2} +\frac{1}{2}\int_0^1\ \frac{1}{1+x^2} \mathrm{d}x\\
+=\frac{\pi}{8}-\frac{1}{2}+\left. \frac{1}{2}\arctan{x}\right|_{x=0}^{x=1}\\
+=\frac{\pi}{4}-\frac{1}{2}
+$$
+
+## 2.
+
+Artificial Intelligence is a technical that makes machine thinking like human beings.
+
+## 3.
+
+$x = 2$ or $x = 3$。

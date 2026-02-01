@@ -1,0 +1,9 @@
+# PB20111611 Bob HW1
+
+## 2.
+
+Artificial Intelligence is a new technical science that researches and develops theories, methods, technologies, and application systems used for simulating, extending, and expanding human intelligence.
+
+## 3.
+
+Using the factoring method: $x^2 - 5x + 6 = (x-2)(x-3) = 0$, therefore $x = 2$ or $x = 3$.
