@@ -135,6 +135,9 @@ async def get_llm(model="gemini") -> ChatOpenAI:
             gemini_client = ChatGoogleGenerativeAI(
                 model=GEMINI_MODEL,  # 或者其他模型名
                 temperature=0.0,
+                transport="rest",
+                timeout=600,
+                max_retries=2,
                 google_api_key=GEMINI_API_KEY,
             )
             logger.info("LangChain Gemini 客户端初始化成功！")
