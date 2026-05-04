@@ -4,9 +4,92 @@
 
 ## 在线 Demo
 
-🔗 **在线体验**：TODO（部署后填入）
+🔗 **当前主版本在线体验**：TODO（部署后填入）
 
 🔗 **测试账号**：TODO（部署后填入）
+
+🔗 **早期概念验证版本（SmarTAI-Gemini）**：[https://smartai-gemini3.streamlit.app/](https://smartai-gemini3.streamlit.app/)
+
+> 主版本线上部署仍在排期中，目前最便捷的体验方式是按照下文「本地运行（开发与测试）」一节自行启动；早期概念验证版本可作为评审专家了解项目最初形态的便捷入口。
+
+---
+
+## 本地运行（开发与测试）
+
+### 环境准备
+
+推荐使用 Conda 创建并激活专用 Python 环境（项目内统一称为 `smartai`，Python 3.11 推荐）：
+
+```bash
+conda create -n smartai python=3.11
+conda activate smartai
+```
+
+激活后请使用 `python` / `pip`（而不是 `python3` / `pip3`），避免与系统 Python 混淆。
+
+### 安装依赖
+
+依赖分为后端与前端两部分，分别由不同的 `requirements` 文件描述：
+
+- **后端依赖**：在仓库根目录执行下述命令，安装 FastAPI、LangChain 各厂商适配器、SymPy、PyJWT、PyMuPDF、rank-bm25 等核心包（`backend/requirements.txt` 直接复用根目录的 `render-requirements.txt`）：
+
+  ```bash
+  pip install -r render-requirements.txt
+  ```
+
+- **前端依赖**：在 `frontend/` 目录下执行下述命令，安装 Reflex、httpx、plotly、pandas 等：
+
+  ```bash
+  cd frontend
+  pip install -r requirements.txt
+  cd ..
+  ```
+
+### 启动后端
+
+在仓库根目录执行：
+
+```bash
+python -m uvicorn backend.main:app --reload --host 0.0.0.0 --port 8000
+```
+
+后端服务将监听 `8000` 端口，对外暴露 `/tasks/*`、`/analytics/*` 等任务中心化 API，可通过 `http://localhost:8000/health` 验证健康状态。
+
+### 启动前端
+
+在另一终端中执行：
+
+```bash
+cd frontend
+reflex run
+```
+
+Reflex 将自动启动前端开发服务器并连接到本地 `8000` 端口的后端，浏览器访问默认地址（一般为 `http://localhost:3000`）即可进入 SmarTAI 教师工作台。
+
+### 运行测试
+
+后端单元测试（在仓库根目录执行）：
+
+```bash
+pytest backend/tests
+```
+
+---
+
+## 部署到公网（Render 免费档）
+
+仓库已附带 Render 免费档的部署配置，可直接连接 GitHub 仓库一键部署：
+
+- **后端**：`backend/render.yaml`，根目录读取 `render-requirements.txt`
+- **前端**：`frontend/render.yaml`，`rootDir` 设为 `frontend`
+
+部署完成后，需要将下列三个环境变量填为真实的 Render 服务 URL（占位值在 yaml 中用 `TODO` 标记）：
+
+- `SMARTAI_BACKEND_URL`（前端配置）
+- `REFLEX_API_URL`（前端配置）
+- `FRONTEND_URLS`（后端配置，前端域名白名单）
+
+部署成功后，任意教师可通过公网 URL 直接访问完整功能，无需任何本地环境准备；同时建议将公网 URL、演示账号、示例题目压缩包同步填入本 README 顶部「在线 Demo」一节，以便评审专家与试用教师以零工程成本体验完整批改流程。
 
 ---
 
