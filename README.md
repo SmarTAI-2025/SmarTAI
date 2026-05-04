@@ -8,7 +8,7 @@
 
 🔗 **测试账号**：TODO（部署后填入）
 
-🔗 **早期概念验证版本（SmarTAI-Gemini）**：[https://smartai-gemini3.streamlit.app/](https://smartai-gemini3.streamlit.app/)
+🔗 **早期概念验证版本（SmarTAI-Gemini）**：[https://smartai-gemini3.streamlit.app](https://smartai-gemini3.streamlit.app)
 
 > 主版本线上部署仍在排期中，目前最便捷的体验方式是按照下文「本地运行（开发与测试）」一节自行启动；早期概念验证版本可作为评审专家了解项目最初形态的便捷入口。
 
@@ -36,7 +36,6 @@ conda activate smartai
   ```bash
   pip install -r render-requirements.txt
   ```
-
 - **前端依赖**：在 `frontend/` 目录下执行下述命令，安装 Reflex、httpx、plotly、pandas 等：
 
   ```bash
@@ -76,9 +75,9 @@ pytest backend/tests
 
 ---
 
-## 部署到公网（Render 免费档）
+## 部署到公网
 
-仓库已附带 Render 免费档的部署配置，可直接连接 GitHub 仓库一键部署：
+仓库已附带 Render 的部署配置，可直接连接 GitHub 仓库一键部署：
 
 - **后端**：`backend/render.yaml`，根目录读取 `render-requirements.txt`
 - **前端**：`frontend/render.yaml`，`rootDir` 设为 `frontend`
