@@ -1,0 +1,56 @@
+# SmarTAI backend — Render free-tier blueprint
+#
+# Deploy from repo root (Render picks this up via "Blueprint" / Web Service
+# create flow). The Python service runs on Render's free tier (512 MB RAM,
+# spins down after 15 min of inactivity — KB / Task state is lost on sleep).
+#
+# Set ALL provider keys via the Render dashboard's "Environment" tab AT YOUR
+# OWN RISK — the recommended flow is to leave them empty here and have users
+# BYOK on the /experts page so secrets never live in env vars.
+
+services:
+  - type: web
+    name: smartai-backend
+    env: python
+    plan: free
+    rootDir: .
+    buildCommand: pip install -r render-requirements.txt
+    startCommand: uvicorn backend.main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /health
+    envVars:
+      - key: PYTHON_VERSION
+        value: "3.11"   # ✅ Render free 支持，且 reflex/numpy/langchain 都 OK
+      - key: SMARTAI_GRADING_ENGINE
+        value: v2
+      # Empty proxy — needed in cloud so HTTP_PROXY isn't inherited from any
+      # base image. With this empty Gemini uses native ainvoke (faster).
+      - key: SMARTAI_HTTP_PROXY
+        value: ""
+      - key: SMARTAI_HTTPS_PROXY
+        value: ""   # ✅ 云端正确
+      # Auth: Render auto-generates a strong random on first deploy and
+      # keeps it stable across redeploys.
+      - key: JWT_SECRET
+        generateValue: true    # ✅ 自动生成
+      - key: SMARTAI_REQUIRE_AUTH
+        value: "true"
+      - key: SMARTAI_REGISTRATION_CLOSED
+        value: "true"
+      # Frontend URL — fill in after Vercel deploys. Comma-separated list
+      # for CORS. Localhost included so you can do mixed dev (frontend
+      # local, backend deployed) while iterating.
+      - key: FRONTEND_URLS
+        value: "http://localhost:3000,http://localhost:8001"  # TODO: ⚠️ 占位，部署完要改
+      # ──────────────────────────────────────────────────────────────────
+      # LLM keys — DO NOT set these here unless you're the only user. The
+      # /experts BYOK flow is the recommended path. If you do set one,
+      # users will inherit it (and the cost). Listed for documentation only:
+      #
+      # - key: SMARTAI_GEMINI_API_KEY
+      #   value: ""
+      # - key: SMARTAI_OPENAI_API_KEY
+      #   value: ""
+      # - key: SMARTAI_ZHIPU_API_KEY
+      #   value: ""
+      # - key: SMARTAI_ANTHROPIC_API_KEY
+      #   value: ""

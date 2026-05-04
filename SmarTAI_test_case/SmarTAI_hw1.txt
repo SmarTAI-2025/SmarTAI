@@ -1,0 +1,7 @@
+# SmarTAI HW1
+
+## 1. $\int_0^1\ x\ \arctan{x}\ \mathrm{d}x$.
+
+## 2. What is Artificial Intelligence?
+
+## 3. Solve the equation $x^2 - 5x + 6 = 0$.

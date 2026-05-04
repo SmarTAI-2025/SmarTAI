@@ -1,0 +1,38 @@
+# SmarTAI frontend (Reflex) — Render free-tier blueprint
+#
+# IMPORTANT: Reflex apps have a Python State server (websocket-based) that
+# can't be statically deployed to Vercel. Despite our earlier plan to use
+# "Vercel + Render", the practical answer is two Render free Web Services:
+# one for the FastAPI backend, one for this Reflex app. Both stay $0.
+#
+# This blueprint deploys ONLY the Reflex frontend. Pair it with
+# backend/render.yaml for the FastAPI service. The two services talk over
+# HTTP via the SMARTAI_BACKEND_URL env below.
+
+services:
+  - type: web
+    name: smartai-frontend
+    env: python
+    plan: free
+    rootDir: frontend
+    buildCommand: |
+      pip install -r requirements.txt &&
+      reflex init --template=blank --skip-prompts &&
+      reflex export --frontend-only --no-zip
+    startCommand: |
+      reflex run --env prod --backend-port $PORT --frontend-port 3000
+    healthCheckPath: /
+    envVars:
+      - key: PYTHON_VERSION
+        value: "3.11"
+      # URL of the FastAPI backend (deployed via backend/render.yaml).
+      # TODO: 部署完后端拿到真实 URL 后回填这里。默认值假设后端服务名叫
+      # smartai-backend（与 backend/render.yaml `name:` 字段一致）。
+      - key: SMARTAI_BACKEND_URL
+        value: "https://smartai-backend.onrender.com"
+      # The public URL Reflex's compiled JS bundle uses to reach the State
+      # WebSocket server (which is THIS service itself in single-service mode).
+      # TODO: 部署完前端拿到真实 URL 后回填这里。默认值假设前端服务名叫
+      # smartai-frontend（与上面 `name:` 字段一致）。
+      - key: REFLEX_API_URL
+        value: "https://smartai-frontend.onrender.com"

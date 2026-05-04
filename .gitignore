@@ -1,0 +1,58 @@
+# ─── Python ─────────────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+build/
+dist/
+*.egg
+
+# ─── Test / lint caches ─────────────────────────────────────────────────────
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# ─── Reflex (frontend) build artifacts ──────────────────────────────────────
+.web/
+.states/
+frontend/.web/
+frontend/.states/
+frontend/assets/external/
+frontend/uploaded_files/
+
+# ─── Secrets & credentials ──────────────────────────────────────────────────
+.env
+.env.*
+!.env.example
+*.secret
+*.db
+secrets.toml
+
+# Pre-seeded test accounts contain plaintext passwords — keep credentials out
+# of the repo. Generate locally with: python scripts/generate_test_users.py
+data/test_users.json
+data/test_users.*.json
+
+# ─── Editor / IDE / OS ──────────────────────────────────────────────────────
+.vscode/
+.idea/
+*.swp
+.DS_Store
+Thumbs.db
+
+# ─── Claude Code local state ────────────────────────────────────────────────
+# Hooks and settings.json are user-specific (paths, preferences, debug flags)
+# and should not pollute the public repo.
+.claude/
+
+# ─── Logs / temp ────────────────────────────────────────────────────────────
+*.log
+*.tmp
+
+# ─── docs / figs ────────────────────────────────────────────────────────────
+docs/
+frontend/docs/
+figs/
+CLAUDE.md
