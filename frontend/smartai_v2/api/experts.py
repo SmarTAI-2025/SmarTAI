@@ -11,6 +11,7 @@ async def add_key(
     base_url: str | None = None,
     display_name: str | None = None,
     max_concurrent: int = 5,
+    rpm: int = 0,
     token: str | None = None,
 ) -> dict:
     """POST /experts/keys → {status, provider_id}"""
@@ -21,6 +22,7 @@ async def add_key(
         "base_url": base_url,
         "display_name": display_name,
         "max_concurrent": max_concurrent,
+        "rpm": rpm,
     }, token=token)
 
 

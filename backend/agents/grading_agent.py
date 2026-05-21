@@ -162,18 +162,39 @@ async def _grade_single_answer(
         return correction
     except AllExpertsFailed as e:
         # Every expert returned a blank/failed result. Produce a Correction
-        # with synthesis_method='all_failed' so the frontend can render an
-        # explicit error state and the teacher knows to re-run / change
-        # provider rather than seeing a 0-score with cryptic mixed text.
-        logger.error(f"All experts failed for {student_id}/{problem.q_id}: {e}")
-        failure_lines = [
-            f"- {er.provider}: {(er.comment or 'unknown error').strip()[:240]}"
-            for er in e.failures
-        ]
-        comment = (
-            "⚠ 所有 AI 专家批改失败 — 请检查 BYOK 配额或更换专家后重新批改：\n"
-            + "\n".join(failure_lines)
+        # with a friendly Chinese comment + synthesis_method that the frontend
+        # can render distinctly. We deliberately do NOT splice the raw English
+        # error text (e.g. "Quota exceeded for metric: …") into the comment —
+        # teachers should see actionable guidance, not stack traces. The raw
+        # per-expert reasons remain in `expert_results` for ops triage.
+        logger.error(
+            f"All experts failed for {student_id}/{problem.q_id} "
+            f"[dominant={e.dominant_kind}]: {e}"
         )
+        if e.dominant_kind == "quota_exhausted":
+            synthesis_method = "quota_exhausted"
+            comment = (
+                "⏳ 该题暂未批改完成 — 所有 AI 专家都遇到了 API 每分钟调用配额上限。\n"
+                "请稍候片刻后在「批改」页重试，或在 BYOK 设置里把该专家的 "
+                "RPM / max_concurrent 调高（免费档常见为 15 RPM）。"
+            )
+        elif e.dominant_kind == "transient_llm":
+            synthesis_method = "all_failed"
+            comment = (
+                "🌐 该题暂未批改完成 — 所有 AI 专家都出现了网络或超时错误。\n"
+                "请稍后重试；如反复出现，请检查代理 / 网络配置。"
+            )
+        elif e.dominant_kind == "parse_failed":
+            synthesis_method = "all_failed"
+            comment = (
+                "⚠ 该题暂未批改完成 — 所有 AI 专家返回的内容均无法解析。\n"
+                "请稍后重试，或在 BYOK 设置里更换一个更稳定的模型。"
+            )
+        else:
+            synthesis_method = "all_failed"
+            comment = (
+                "⚠ 所有 AI 专家批改失败 — 请检查 BYOK 配置后重新批改。"
+            )
         if reporter:
             await reporter.increment_completed()
         return Correction(
@@ -185,18 +206,19 @@ async def _grade_single_answer(
             comment=comment,
             steps=[],
             expert_results=e.failures,
-            synthesis_method="all_failed",
+            synthesis_method=synthesis_method,
         )
     except Exception as e:
         logger.exception(f"Error grading {student_id}/{problem.q_id}")
-        # Return a zero-score Correction so the batch doesn't silently drop
+        # Return a zero-score Correction so the batch doesn't silently drop.
+        # Keep the comment friendly — raw stack traces don't belong in a batch.
         return Correction(
             q_id=problem.q_id,
             type=problem.type,
             score=0.0,
             max_score=10.0,
             confidence=0.0,
-            comment=f"Grading error: {e}",
+            comment="⚠ 该题批改时发生未知错误，请稍后重试。",
             steps=[],
             synthesis_method="all_failed",
         )

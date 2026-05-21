@@ -6,7 +6,7 @@ from __future__ import annotations
 
 import time
 from typing import List, Optional, Literal, Dict, Any
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 # ─── Grading result models ────────────────────────────────────────────────────
@@ -30,6 +30,12 @@ class ExpertResult(BaseModel):
     logs: Optional[str] = None
     raw_output: Optional[str] = Field(None, description="Raw LLM output for traceability")
     duration_ms: Optional[float] = Field(None, description="Wall-clock time for this expert's grading")
+    error_kind: Optional[str] = Field(
+        None,
+        description="When confidence==0 (skill failed), why: "
+                    "'quota_exhausted' | 'transient_llm' | 'parse_failed' | 'general'. "
+                    "Used by multi_expert/grading_agent to pick a friendly comment.",
+    )
 
 
 class Correction(BaseModel):
@@ -45,7 +51,7 @@ class Correction(BaseModel):
     logs: Optional[str] = None
     # Multi-expert traceability
     expert_results: List[ExpertResult] = Field(default_factory=list, description="Individual expert results (empty for single-expert)")
-    synthesis_method: Optional[str] = Field(None, description="'single' | 'multi_sample' | 'weighted_average' | 'judge_agent' | 'degraded_to_single' | 'all_failed'")
+    synthesis_method: Optional[str] = Field(None, description="'single' | 'multi_sample' | 'weighted_average' | 'judge_agent' | 'degraded_to_single' | 'all_failed' | 'quota_exhausted'")
 
     # ─── P0 fairness signals (Indecisiveness Score + Minority Veto) ───────────
     is_score: Optional[float] = Field(
@@ -127,6 +133,27 @@ class ProblemInfo(BaseModel):
                     "generate up to 8 cases with a sandbox_feasible flag.",
     )
 
+    @field_validator("q_id", mode="before")
+    @classmethod
+    def _coerce_q_id(cls, v):
+        # Some LLMs (notably Gemini Flash variants) emit q_id as a bare JSON
+        # integer (e.g. `"q_id": 1`) despite the prompt asking for "q1".
+        # Normalize so Pydantic doesn't reject an otherwise-correct response.
+        if isinstance(v, bool):
+            return v
+        if isinstance(v, int):
+            return f"q{v}"
+        return v
+
+    @field_validator("number", mode="before")
+    @classmethod
+    def _coerce_number(cls, v):
+        if isinstance(v, bool):
+            return v
+        if isinstance(v, (int, float)):
+            return str(v)
+        return v
+
 
 class ProblemSet(BaseModel):
     problems: List[ProblemInfo] = Field(description="List of parsed problems")
@@ -138,6 +165,24 @@ class StudentAnswerInfo(BaseModel):
     type: str
     content: str = Field(description="Student's answer content; empty string if unanswered")
     flag: List[str] = Field(default_factory=list, description="Recognition issues/flags")
+
+    @field_validator("q_id", mode="before")
+    @classmethod
+    def _coerce_q_id(cls, v):
+        if isinstance(v, bool):
+            return v
+        if isinstance(v, int):
+            return f"q{v}"
+        return v
+
+    @field_validator("number", mode="before")
+    @classmethod
+    def _coerce_number(cls, v):
+        if isinstance(v, bool):
+            return v
+        if isinstance(v, (int, float)):
+            return str(v)
+        return v
 
 
 class StudentSubmission(BaseModel):
@@ -220,6 +265,16 @@ class ProviderConfig(BaseModel):
         default=5,
         ge=1,
         description="Max in-flight LLM calls for this key. GLM Air ≤ 5, OpenAI/Gemini may set 10+.",
+    )
+    rpm: int = Field(
+        default=0,
+        ge=0,
+        description="Requests per minute cap for this key (sliding-window token bucket). "
+                    "0 = no rate gating (only `max_concurrent` applies). Set this to the "
+                    "provider's per-minute quota (e.g. Gemini free-tier flash-lite = 15). "
+                    "When grading would exceed this, calls automatically queue until the "
+                    "rolling 60s window has room — prevents 429 quota errors instead of "
+                    "burning retries on them.",
     )
 
 

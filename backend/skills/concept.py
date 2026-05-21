@@ -197,8 +197,10 @@ class ConceptSkill(GradingSkill):
 
             except Exception as e:
                 logger.error(f"ConceptSkill LLM call failed: {e}")
+                from backend.skills.base import classify_skill_error
+                kind, friendly = classify_skill_error(e)
                 return self._blank_result(
-                    problem.q_id, 10.0, f"LLM grading failed: {e}"
+                    problem.q_id, 10.0, friendly, error_kind=kind,
                 )
 
         finally:

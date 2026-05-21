@@ -29,6 +29,7 @@ class AddKeyRequest(BaseModel):
     base_url: Optional[str] = None
     display_name: Optional[str] = None
     max_concurrent: int = 5
+    rpm: int = 0  # Per-minute request cap; 0 = unlimited (only max_concurrent applies)
 
 
 class SelectRequest(BaseModel):
@@ -49,6 +50,7 @@ def add_key(
         base_url=request.base_url,
         display_name=request.display_name or None,
         max_concurrent=max(1, request.max_concurrent),
+        rpm=max(0, request.rpm),
     )
     provider_id = registry.register(config)
     return {"status": "success", "provider_id": provider_id}

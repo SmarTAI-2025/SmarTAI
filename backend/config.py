@@ -54,6 +54,18 @@ class Settings(BaseSettings):
     max_concurrent_llm_per_provider: int = 5
     llm_timeout: int = 600  # seconds
     llm_max_retries: int = 3
+    # When the LLM returns a 429 / quota exceeded error AND the provider's
+    # response carries a retry-after hint (Gemini's `retryDelay: '23s'` or the
+    # standard `Retry-After` header), we honor the server's wait suggestion and
+    # retry up to this many additional attempts on top of `llm_max_retries`.
+    # Generic transient errors (timeout/5xx) still use exponential backoff with
+    # `llm_max_retries`. Set to 0 to disable the dedicated rate-limit retry
+    # path. Default 6 covers a sustained quota burst over ~2-3 minutes.
+    llm_rate_limit_max_retries: int = 6
+    # Hard cap on a single retry sleep (seconds). Gemini occasionally suggests
+    # 30-40s; OpenAI rarely exceeds 60s. We trust the server hint but never
+    # block longer than this.
+    llm_rate_limit_max_wait: int = 60
     context_window_threshold_chars: int = 200_000
 
     # ─── Human-in-the-loop ─────────────────────────────────────────────────────

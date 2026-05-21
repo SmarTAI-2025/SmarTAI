@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import logging
+import random
 import re
 from typing import Type, TypeVar, Optional, List, Dict, Any
 
@@ -36,22 +37,90 @@ T = TypeVar("T", bound=BaseModel)
 # ─── Exceptions ──────────────────────────────────────────────────────────────
 
 class TransientLLMError(Exception):
-    """Retryable error (rate limit, 5xx, timeout)."""
+    """Retryable error (timeout, 5xx, generic transient)."""
+
+
+class RateLimitError(TransientLLMError):
+    """Retryable rate-limit / quota error.
+
+    Carries the server-suggested wait (`retry_after` seconds) when the provider
+    response includes one (Gemini's `retryDelay: '23s'` field, or the standard
+    `Retry-After` header on OpenAI / Anthropic). The retry decorator honors it
+    instead of guessing with exponential backoff.
+
+    If no hint was returned, `retry_after` stays None and we fall back to a
+    conservative fixed wait (`settings.llm_rate_limit_max_wait // 2`).
+    """
+
+    def __init__(self, message: str, retry_after: Optional[float] = None):
+        super().__init__(message)
+        self.retry_after = retry_after
 
 
 class PermanentLLMError(Exception):
     """Non-retryable error (4xx auth, bad request)."""
 
 
+# Patterns we use to extract the retry-after hint from the raw error message.
+# Gemini surfaces "Please retry in 23.377528861s" AND a structured
+# `retryDelay: '23s'` (Google RetryInfo proto). OpenAI / Anthropic return a
+# `Retry-After: 23` HTTP header that langchain folds into the exception text.
+_RETRY_AFTER_PATTERNS = (
+    re.compile(r"retry\s*[-_]?after['\"]?\s*[:=]\s*['\"]?(\d+(?:\.\d+)?)", re.IGNORECASE),
+    re.compile(r"retrydelay['\"]?\s*[:=]\s*['\"]?(\d+(?:\.\d+)?)\s*s", re.IGNORECASE),
+    re.compile(r"please\s+retry\s+in\s+(\d+(?:\.\d+)?)\s*s", re.IGNORECASE),
+)
+
+
+def _extract_retry_after(msg: str) -> Optional[float]:
+    """Pull a retry-after hint (seconds) out of an LLM error message.
+
+    Returns None when no hint is detected — caller then falls back to a fixed
+    cooldown so the loop still makes progress (we'd rather over-wait than
+    burn through retries while the quota window hasn't reset).
+    """
+    for pat in _RETRY_AFTER_PATTERNS:
+        m = pat.search(msg)
+        if m:
+            try:
+                v = float(m.group(1))
+                if v > 0:
+                    return v
+            except (ValueError, IndexError):
+                continue
+    return None
+
+
 def _classify_exception(e: Exception) -> Exception:
-    """Map provider exceptions to transient/permanent for retry logic."""
-    msg = str(e).lower()
-    if any(k in msg for k in ["rate limit", "429", "timeout", "connection", "5xx", "internal"]):
-        return TransientLLMError(str(e))
-    if any(k in msg for k in ["401", "403", "authentication", "unauthorized", "invalid api key"]):
-        return PermanentLLMError(str(e))
-    # Default: treat as transient (safer for flaky APIs)
-    return TransientLLMError(str(e))
+    """Map provider exceptions to transient/permanent for retry logic.
+
+    Rate-limit / quota errors get a dedicated `RateLimitError` carrying the
+    server-suggested wait so the retry wait function can honor it precisely
+    (Gemini commonly suggests 20-40s, far beyond our exponential cap).
+    """
+    msg = str(e)
+    lower = msg.lower()
+
+    # Auth/permission errors — never retry.
+    if any(k in lower for k in ["401", "403", "authentication", "unauthorized", "invalid api key"]):
+        return PermanentLLMError(msg)
+
+    # Quota / rate limit — retryable but with server-provided wait when available.
+    if (
+        "429" in lower
+        or "rate limit" in lower
+        or "quota" in lower
+        or "resourceexhausted" in lower
+        or "resource_exhausted" in lower
+    ):
+        return RateLimitError(msg, retry_after=_extract_retry_after(msg))
+
+    # Generic transient (timeout / 5xx / connection) — retryable.
+    if any(k in lower for k in ["timeout", "connection", "5xx", "internal", "503", "502", "504"]):
+        return TransientLLMError(msg)
+
+    # Default: treat as transient (safer for flaky APIs).
+    return TransientLLMError(msg)
 
 
 # ─── JSON repair (preserves behavior of backend/dependencies.py) ─────────────
@@ -256,18 +325,74 @@ def extract_and_parse_json(raw: str, model: Type[T]) -> T:
 
 # ─── The unified call ────────────────────────────────────────────────────────
 
+
+def _retry_wait(retry_state) -> float:
+    """tenacity wait callable.
+
+    - On a `RateLimitError` carrying `retry_after`: sleep exactly that long
+      (clamped to `settings.llm_rate_limit_max_wait`), plus 0.5-2s jitter so
+      concurrent waiters don't synchronize.
+    - On a `RateLimitError` *without* a hint: sleep half of the max wait —
+      conservatively waits for the quota window to roll rather than hammering.
+    - On any other transient: exponential backoff (1, 2, 4 … capped at 30s).
+    """
+    max_wait = float(settings.llm_rate_limit_max_wait)
+
+    outcome = retry_state.outcome
+    exc = outcome.exception() if (outcome and outcome.failed) else None
+
+    if isinstance(exc, RateLimitError):
+        if exc.retry_after is not None:
+            base = min(max_wait, float(exc.retry_after))
+        else:
+            base = max_wait / 2.0
+        jitter = random.uniform(0.5, 2.0)
+        wait = min(max_wait, base + jitter)
+        logger.info(
+            f"Rate-limit retry: sleeping {wait:.1f}s "
+            f"(server hint={exc.retry_after}, attempt={retry_state.attempt_number})"
+        )
+        return wait
+
+    # Generic transient: exponential 1, 2, 4, 8, ... cap 30s
+    n = max(1, retry_state.attempt_number)
+    return float(min(30, 2 ** (n - 1)))
+
+
+def _retry_stop(retry_state) -> bool:
+    """Stop condition: rate-limit failures get a separate (larger) budget.
+
+    The two budgets stack so a quota burst that gradually clears doesn't share
+    its retries with unrelated transient flakes. Returns True once the budget
+    for the *current* exception kind is exhausted.
+    """
+    outcome = retry_state.outcome
+    exc = outcome.exception() if (outcome and outcome.failed) else None
+    if isinstance(exc, RateLimitError):
+        limit = settings.llm_max_retries + settings.llm_rate_limit_max_retries
+    else:
+        limit = settings.llm_max_retries
+    return retry_state.attempt_number >= max(1, limit)
+
+
 @retry(
-    stop=stop_after_attempt(settings.llm_max_retries),
-    wait=wait_exponential(multiplier=1, min=1, max=10),
-    retry=retry_if_exception_type(TransientLLMError),
+    stop=_retry_stop,
+    wait=_retry_wait,
+    retry=retry_if_exception_type(TransientLLMError),  # RateLimitError subclasses this
     reraise=True,
 )
 async def _ainvoke_with_retry(provider: BaseProvider, messages: List[BaseMessage]) -> LLMResponse:
-    """Inner retry wrapper — exponential backoff, async-native."""
+    """Inner retry wrapper — honors retry-after hints, async-native."""
     try:
         return await provider.ainvoke(messages)
     except Exception as e:
         raise _classify_exception(e) from e
+
+
+# Public alias for callers outside this module. Ingest agent / future helpers
+# that issue raw provider.ainvoke calls must route through this so they share
+# the same transient/rate-limit retry + classification policy as the skills.
+ainvoke_with_retry = _ainvoke_with_retry
 
 
 async def structured_llm_call(

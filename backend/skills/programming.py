@@ -661,7 +661,9 @@ class ProgrammingSkill(GradingSkill):
 
         except Exception as e:
             logger.error(f"ProgrammingSkill failed: {e}", exc_info=True)
-            return self._blank_result(problem.q_id, 10.0, f"Programming grading failed: {e}")
+            from backend.skills.base import classify_skill_error
+            kind, friendly = classify_skill_error(e)
+            return self._blank_result(problem.q_id, 10.0, friendly, error_kind=kind)
         finally:
             if step_ctx:
                 await step_ctx.__aexit__(None, None, None)

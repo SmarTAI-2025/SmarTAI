@@ -25,7 +25,8 @@ def _provider_card(p: dict) -> rx.Component:
                 rx.heading(p["display_name"].to_string(), size="3"),
                 rx.text(
                     p["provider_id"].to_string()
-                    + " · max_concurrent=" + p["max_concurrent"].to_string(),
+                    + " · max_concurrent=" + p["max_concurrent"].to_string()
+                    + " · rpm=" + p["rpm"].to_string(),
                     size="2",
                     color=COLOR["text_muted"],
                 ),
@@ -71,6 +72,11 @@ def _add_form() -> rx.Component:
             "Max concurrent", ExpertsState.new_max_concurrent,
             ExpertsState.set_new_max_concurrent,
             placeholder="GLM Air: 5  ·  Gemini/OpenAI: 10",
+        ),
+        labeled_input(
+            "Requests per minute (RPM)", ExpertsState.new_rpm,
+            ExpertsState.set_new_rpm,
+            placeholder="0 = 不限速；Gemini Flash 免费档 15；OpenAI 付费 60+",
         ),
         rx.button(
             rx.cond(ExpertsState.loading, rx.spinner(), rx.text("Add provider")),

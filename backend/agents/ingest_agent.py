@@ -26,7 +26,7 @@ from backend.models import (
     TestCase,
 )
 from backend.llm.providers import BaseProvider
-from backend.tools.structured_llm import extract_and_parse_json
+from backend.tools.structured_llm import extract_and_parse_json, ainvoke_with_retry
 from backend.tools.file_processing import extract_files_from_archive, decode_text_bytes
 
 if TYPE_CHECKING:
@@ -41,8 +41,9 @@ PROB_SYSTEM_PROMPT = """You are a professional AI teaching assistant with gradua
 
 1. **Problem Segmentation**: Split the identified content into independent problems based on question numbers (e.g., "1.1", "Question 2", "III.", etc.).
 
-2. **Content Extraction**: Extract three key pieces of information for each problem:
-    - `number`: The question number.
+2. **Content Extraction**: Extract these key pieces of information for each problem:
+    - `q_id`: Unique question identifier as a STRING, starting from "q1" and incrementing as "q2", "q3", etc. **Must be a string with the `q` prefix — not a bare integer.**
+    - `number`: The question number as a STRING (e.g. "1", "2.3", "III.").
     - `stem`: The complete question stem content, including all text, formulas, and code blocks.
 
 3. **Problem Classification**: Determine the most appropriate classification (`type`) for each problem. **Use the specific Chinese terms below for the `type` field**:
@@ -57,7 +58,12 @@ PROB_SYSTEM_PROMPT = """You are a professional AI teaching assistant with gradua
 
 4. **Design Grading Criteria (`criterion`)**: If criteria are provided, retain them. If not, design appropriate criteria based on problem type.
 
-5. **Formatted Output**: Return a JSON object with key "problems" containing an array of objects with fields: "q_id", "number", "type", "stem", "criterion".
+5. **Formatted Output**: Return a JSON object with key "problems" containing an array of objects with fields: "q_id", "number", "type", "stem", "criterion". ALL field values must be strings (quoted). Example shape:
+{"problems": [
+    {"q_id": "q1", "number": "1.1", "type": "概念题", "stem": "Please explain what 'Dependency Injection' is.", "criterion": "Full score 10 points. 0 points for incorrect answers, full points for correct answers."},
+    {"q_id": "q2", "number": "1.2", "type": "计算题", "stem": "Solve the equation $x^2 - 5x + 6 = 0$.", "criterion": "Full score 10 points. 2 points for each of the two results, 6 points for the calculation process."},
+    {"q_id": "q3", "number": "2", "type": "编程题", "stem": "Write a Quick Sort algorithm using Python.", "criterion": "Full score 10 points. 1 point for each of the 6 test cases passed, 4 points for implementing the Quick Sort algorithm correctly."}
+]}
 
 **[Important]: Output must start with `{` and end with `}`. No preamble, no markdown fences.**
 **[Note]: Escape all backslashes in string values as `\\\\`. Critical for LaTeX formulas.**
@@ -109,7 +115,7 @@ async def extract_problems(
     logger.info("extract_problems: calling LLM...")
     if reporter:
         await reporter._emit_message(f"Calling {provider.provider_id}...")
-    response = await provider.ainvoke(messages)
+    response = await ainvoke_with_retry(provider, messages)
     raw_output = response.content
     logger.info(f"extract_problems: LLM returned {len(raw_output)} chars")
 
@@ -172,7 +178,7 @@ async def parse_student_answers(
 
     semaphore = asyncio.Semaphore(20)
 
-    async def process_one(file_info: Dict[str, str]) -> Optional[Dict[str, Any]]:
+    async def process_one(file_info: Dict[str, str]) -> tuple[Optional[Dict[str, Any]], Optional[str]]:
         async with semaphore:
             filename = file_info.get("filename", "")
             content = file_info.get("content", "")
@@ -180,7 +186,7 @@ async def parse_student_answers(
                 logger.warning(f"Skipping empty file: {filename}")
                 if reporter:
                     await reporter.increment_completed()
-                return None
+                return None, None
 
             logger.info(f"parse_student_answers: processing {filename}")
             user_msg = (
@@ -191,26 +197,41 @@ async def parse_student_answers(
             messages = [SystemMessage(content=HW_SYSTEM_PROMPT), HumanMessage(content=user_msg)]
 
             try:
-                response = await provider.ainvoke(messages)
+                response = await ainvoke_with_retry(provider, messages)
                 parsed = extract_and_parse_json(response.content, StudentSubmission)
                 logger.info(f"parse_student_answers: done {filename} -> {parsed.stu_name}")
                 if reporter:
                     await reporter._emit_message(f"Parsed {filename} → {parsed.stu_name}")
                     await reporter.increment_completed()
-                return parsed.model_dump()
+                return parsed.model_dump(), None
             except Exception as e:
                 logger.error(f"Failed to parse {filename}: {e}")
                 if reporter:
                     await reporter._emit_message(f"Failed: {filename} ({e})", level="warn")
                     await reporter.increment_completed()
-                return None
+                return None, str(e)
 
     results = await asyncio.gather(*[process_one(f) for f in files_data])
 
-    stu_dict = {r["stu_id"]: r for r in results if r and r.get("stu_id")}
+    stu_dict = {r["stu_id"]: r for (r, _err) in results if r and r.get("stu_id")}
     student_store.clear()
     student_store.update(stu_dict)
     logger.info(f"parse_student_answers: stored {len(stu_dict)} students")
+
+    # Surface a clear error when every file failed — otherwise the API silently
+    # returns "0 students" and the frontend shows a successful empty result.
+    # The most common cause is an LLM connectivity issue (proxy/network/quota)
+    # that affects every concurrent request identically, so we report the first
+    # error message as representative.
+    if not stu_dict and files_data:
+        first_err = next((err for (_r, err) in results if err), None) or "unknown error"
+        msg = (
+            f"All {len(files_data)} student files failed to parse. "
+            f"First error: {first_err}"
+        )
+        if reporter:
+            await reporter.set_error(msg)
+        raise RuntimeError(msg)
 
     if reporter:
         await reporter.set_phase("done")
@@ -285,7 +306,7 @@ async def parse_reference_to_per_question(
 
     if reporter:
         await reporter._emit_message(f"Calling {provider.provider_id} for reference parsing...")
-    response = await provider.ainvoke(messages)
+    response = await ainvoke_with_retry(provider, messages)
     raw = response.content or ""
     logger.info(f"parse_reference: LLM returned {len(raw)} chars")
 
@@ -384,7 +405,7 @@ async def parse_test_cases_to_per_question(
 
     if reporter:
         await reporter._emit_message(f"Calling {provider.provider_id} for test case parsing...")
-    response = await provider.ainvoke(messages)
+    response = await ainvoke_with_retry(provider, messages)
     raw = response.content or ""
     logger.info(f"parse_test_cases: LLM returned {len(raw)} chars")
 

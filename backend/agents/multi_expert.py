@@ -76,17 +76,43 @@ class AllExpertsFailed(Exception):
     """Raised when every expert returned a blank/failed result.
 
     Caller (grading_agent) catches this and produces a Correction with
-    synthesis_method='all_failed' so the frontend can show a clear error UI
+    synthesis_method='all_failed' (or 'quota_exhausted' when at least one
+    failure was a rate-limit) so the frontend can show a clear error UI
     instead of a 0-score Correction with mixed error text.
+
+    `dominant_kind` is the most "actionable" error kind across the failures —
+    we surface quota_exhausted preferentially because it's the only one the
+    teacher can fix immediately (wait & retry, or raise RPM cap).
     """
+
+    # Priority: quota > transient > parse > general. Higher index = wins.
+    _PRIORITY = ("general", "parse_failed", "transient_llm", "quota_exhausted")
 
     def __init__(self, failures: List[ExpertResult]):
         self.failures = failures
+        self.dominant_kind = self._pick_dominant(failures)
         summary = "; ".join(
             f"{er.provider}: {(er.comment or 'unknown error').strip()[:160]}"
             for er in failures
         )
-        super().__init__(f"All {len(failures)} experts failed. {summary}")
+        super().__init__(
+            f"All {len(failures)} experts failed (dominant_kind={self.dominant_kind}). {summary}"
+        )
+
+    @classmethod
+    def _pick_dominant(cls, failures: List[ExpertResult]) -> str:
+        best_rank = -1
+        best = "general"
+        for er in failures:
+            kind = er.error_kind or "general"
+            try:
+                rank = cls._PRIORITY.index(kind)
+            except ValueError:
+                rank = 0
+            if rank > best_rank:
+                best_rank = rank
+                best = kind
+        return best
 
 
 # ─── Multi-expert fan-out ─────────────────────────────────────────────────────

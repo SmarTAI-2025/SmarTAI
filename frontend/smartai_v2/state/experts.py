@@ -22,6 +22,7 @@ class ExpertsState(rx.State):
     new_base_url: str = ""
     new_display_name: str = ""
     new_max_concurrent: str = "5"
+    new_rpm: str = "0"
 
     @rx.var
     def enabled_providers(self) -> list[dict[str, Any]]:
@@ -57,6 +58,10 @@ class ExpertsState(rx.State):
         self.new_max_concurrent = v
 
     @rx.event
+    def set_new_rpm(self, v: str):
+        self.new_rpm = v
+
+    @rx.event
     async def load(self):
         try:
             auth = await self.get_state(AuthState)
@@ -75,6 +80,12 @@ class ExpertsState(rx.State):
                 mc = 1
         except ValueError:
             return rx.toast.error("Max concurrent must be an integer ≥ 1")
+        try:
+            rpm = int(self.new_rpm or "0")
+            if rpm < 0:
+                rpm = 0
+        except ValueError:
+            return rx.toast.error("RPM must be a non-negative integer (0 = unlimited)")
         self.loading = True
         try:
             auth = await self.get_state(AuthState)
@@ -83,12 +94,14 @@ class ExpertsState(rx.State):
                 self.new_base_url or None,
                 display_name=self.new_display_name.strip() or None,
                 max_concurrent=mc,
+                rpm=rpm,
                 token=auth.token or None,
             )
             self.new_api_key = ""
             self.new_base_url = ""
             self.new_display_name = ""
             self.new_max_concurrent = "5"
+            self.new_rpm = "0"
             await self.load()
             self.loading = False
             return rx.toast.success("Provider added")

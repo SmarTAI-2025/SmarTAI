@@ -113,6 +113,7 @@ class ExpertRegistry:
                     "enabled": c.enabled,
                     "display_name": c.display_name or pid,
                     "max_concurrent": c.max_concurrent,
+                    "rpm": c.rpm,
                     "api_key": "***",
                 })
             return out

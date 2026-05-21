@@ -156,8 +156,19 @@ class GradingSkill(ABC):
         """
         ...
 
-    def _blank_result(self, q_id: str, max_score: float, reason: str) -> ExpertResult:
-        """Helper: construct a default zero-score result for error paths."""
+    def _blank_result(
+        self,
+        q_id: str,
+        max_score: float,
+        reason: str,
+        error_kind: Optional[str] = None,
+    ) -> ExpertResult:
+        """Helper: construct a default zero-score result for error paths.
+
+        `error_kind` (one of 'quota_exhausted' | 'transient_llm' | 'parse_failed'
+        | 'general') lets the caller (multi_expert / grading_agent) pick a
+        friendly final comment without re-parsing the raw exception text.
+        """
         return ExpertResult(
             provider=self.provider.provider_id,
             score=0.0,
@@ -165,4 +176,45 @@ class GradingSkill(ABC):
             confidence=0.0,
             comment=reason,
             steps=[],
+            error_kind=error_kind,
         )
+
+
+def classify_skill_error(e: Exception) -> tuple[str, str]:
+    """Classify a skill-level exception into (error_kind, friendly_zh_comment).
+
+    Used by every skill's catch-all block so the raw English error text
+    (e.g. "Quota exceeded for metric: generativelanguage…") never leaks into
+    the student-facing batch comment. The returned `friendly_zh_comment` is
+    what gets stored in `ExpertResult.comment`; the raw `str(e)` still lives
+    in logs for ops triage.
+
+    Recognition is text-based because by the time we reach the skill's
+    `except`, tenacity has unwrapped the original exception type — we only see
+    the message.
+    """
+    s = str(e).lower()
+    if (
+        "quota" in s
+        or "429" in s
+        or "rate limit" in s
+        or "ratelimit" in s
+        or "resourceexhausted" in s
+        or "resource_exhausted" in s
+    ):
+        return (
+            "quota_exhausted",
+            "⏳ 该题暂未批改完成 — AI 服务的每分钟调用配额已用尽。"
+            "请稍后重试，或在 BYOK 设置里调高该专家的 RPM/并发上限。",
+        )
+    if "timeout" in s or "connection" in s or "503" in s or "502" in s or "504" in s:
+        return (
+            "transient_llm",
+            "🌐 该题暂未批改完成 — AI 服务出现网络/超时错误。请稍后重试。",
+        )
+    if "no json found" in s or "could not parse" in s or "validation" in s:
+        return (
+            "parse_failed",
+            "⚠ 该题暂未批改完成 — AI 返回格式异常无法解析。请稍后重试，或更换专家。",
+        )
+    return ("general", "⚠ 该题暂未批改完成 — AI 批改时出现未知错误，请稍后重试。")
