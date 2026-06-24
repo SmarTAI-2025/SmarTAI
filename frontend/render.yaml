@@ -19,7 +19,7 @@ services:
       pip install -r requirements.txt &&
       reflex export --frontend-only --no-zip
     startCommand: |
-      reflex run --env prod --backend-port $PORT --frontend-port 3000
+      reflex run --env prod --backend-host 0.0.0.0 --frontend-port $PORT --backend-port $PORT
     healthCheckPath: /
     envVars:
       - key: PYTHON_VERSION
