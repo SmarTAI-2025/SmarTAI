@@ -17,7 +17,6 @@ services:
     rootDir: frontend
     buildCommand: |
       pip install -r requirements.txt &&
-      reflex init --template=blank --skip-prompts &&
       reflex export --frontend-only --no-zip
     startCommand: |
       reflex run --env prod --backend-port $PORT --frontend-port 3000
