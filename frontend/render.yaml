@@ -1,26 +1,24 @@
-# SmarTAI frontend (Reflex) — Render free-tier blueprint
+# SmarTAI Reflex state server — Render free-tier blueprint
 #
 # IMPORTANT: Reflex apps have a Python State server (websocket-based) that
-# can't be statically deployed to Vercel. Despite our earlier plan to use
-# "Vercel + Render", the practical answer is two Render free Web Services:
-# one for the FastAPI backend, one for this Reflex app. Both stay $0.
+# can't be replaced by a purely static frontend. On Render Free, running the
+# full Reflex frontend+backend in one Web Service can OOM during startup
+# compilation, so the free deployment should be split:
+#   1. Render Static Site serves the exported frontend HTML/JS.
+#   2. This Web Service runs only the Reflex Python state backend.
+#   3. The separate FastAPI service runs SmarTAI business APIs.
 #
-# This blueprint deploys ONLY the Reflex frontend. Pair it with
-# backend/render.yaml for the FastAPI service. The two services talk over
-# HTTP via the SMARTAI_BACKEND_URL env below.
+# Pair this with frontend/render-static.yaml and backend/render.yaml.
 
 services:
   - type: web
-    name: smartai-frontend
+    name: smartai-reflex-state
     env: python
     plan: free
     rootDir: frontend
-    buildCommand: |
-      pip install -r requirements.txt &&
-      reflex export --frontend-only --no-zip
+    buildCommand: pip install -r requirements.txt
     startCommand: |
-      reflex run --env prod --backend-host 0.0.0.0 --frontend-port $PORT --backend-port $PORT
-    healthCheckPath: /
+      reflex run --env prod --backend-only --backend-host 0.0.0.0 --backend-port $PORT
     envVars:
       - key: PYTHON_VERSION
         value: "3.11"
@@ -29,9 +27,8 @@ services:
       # smartai-backend（与 backend/render.yaml `name:` 字段一致）。
       - key: SMARTAI_BACKEND_URL
         value: "https://smartai-backend.onrender.com"
-      # The public URL Reflex's compiled JS bundle uses to reach the State
-      # WebSocket server (which is THIS service itself in single-service mode).
-      # TODO: 部署完前端拿到真实 URL 后回填这里。默认值假设前端服务名叫
-      # smartai-frontend（与上面 `name:` 字段一致）。
+      # The public URL the exported static frontend uses to reach this Reflex
+      # state server. If Render gives this service a different URL, update both
+      # this value and the Static Site's build-time REFLEX_API_URL.
       - key: REFLEX_API_URL
-        value: "https://smartai-frontend.onrender.com"
+        value: "https://smartai-reflex-state.onrender.com"
