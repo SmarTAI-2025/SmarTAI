@@ -22,6 +22,8 @@ services:
     envVars:
       - key: PYTHON_VERSION
         value: "3.11"
+      - key: SMARTAI_REFLEX_BACKEND_ONLY
+        value: "true"
       # URL of the FastAPI backend (deployed via backend/render.yaml).
       # TODO: 部署完后端拿到真实 URL 后回填这里。默认值假设后端服务名叫
       # smartai-backend（与 backend/render.yaml `name:` 字段一致）。
