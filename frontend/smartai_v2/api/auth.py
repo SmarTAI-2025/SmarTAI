@@ -11,7 +11,11 @@ from .client import post_json, get_json
 
 async def login(username: str, password: str) -> dict:
     """POST /auth/login → {token, user}"""
-    return await post_json("/auth/login", {"username": username, "password": password})
+    return await post_json(
+        "/auth/login",
+        {"username": username, "password": password},
+        retries=3,
+    )
 
 
 async def register(username: str, password: str, email: str, role: str, invite_code: str | None = None) -> dict:
