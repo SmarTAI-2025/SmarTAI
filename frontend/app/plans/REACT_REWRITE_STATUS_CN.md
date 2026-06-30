@@ -59,27 +59,27 @@
 
 | 功能 | 代码状态 | 是否展示 | 是否依赖后端新改动 | 备注 |
 |---|---|---:|---:|---|
-| Vite React App 工程 | 未开始 | 否 | 否 | 目标目录 `frontend/app` |
-| 教师登录 | 未开始 | 是 | 否 | 复用 `/auth/login` |
-| 注册申请页 | 未开始 | 是 | 否 | 保持当前“暂未开放”语义 |
-| 教师 Dashboard | 未开始 | 是 | 否 | 仅展示教师任务 |
-| New Task / History | 未开始 | 是 | 否 | 复用 `/tasks/*` |
-| Setup 批改配置 | 未开始 | 是 | 部分否 | 不展示批改语言选择 |
-| task-scoped KB 上传/删除 | 未开始 | 是 | 否 | 复用 `/tasks/{id}/kb` |
+| Vite React App 工程 | 骨架已完成 | 是 | 否 | `frontend/app` 可 typecheck/build |
+| 教师登录 | 静态骨架 | 是 | 否 | API hooks 已有，页面尚未真实提交登录 |
+| 注册申请页 | 静态骨架 | 是 | 否 | 保持当前“暂未开放”语义 |
+| 教师 Dashboard | 静态骨架 | 是 | 否 | 仅展示教师任务，任务数据待接入 |
+| New Task / History | 静态骨架 | 是 | 否 | API hooks 已有，页面待接入 `/tasks/*` |
+| Setup 批改配置 | 静态骨架 | 是 | 部分否 | 不展示批改语言选择 |
+| task-scoped KB 上传/删除 | API 已封装，UI 骨架 | 是 | 否 | 复用 `/tasks/{id}/kb`，上传交互待接入 |
 | 用户级全局知识库 | 未开始 | 否 | 是 | 后端 TODO |
-| 上传题目与题目编辑 | 未开始 | 是 | 否 | 复用 `/tasks/{id}/extract_problems` 和 problem edit API |
-| 上传作答与作答编辑 | 未开始 | 是 | 否 | 复用 `/tasks/{id}/parse_submissions` 和 answer edit API |
-| 批改启动与进度 | 未开始 | 是 | 否 | 轮询 `/tasks/{id}/state` |
-| 结果总览 | 未开始 | 是 | 否 | 学生筛选、低置信、NL summary/filter |
-| 按题分析 | 未开始 | 是 | 否 | 复用 `/analytics/{id}/per_question/{q_id}` |
-| 结果可视化 | 未开始 | 是 | 否 | Plotly + NL chart |
-| 学生详情 | 未开始 | 是 | 否 | 加持久结果导航 |
-| 题目详情 | 未开始 | 是 | 否 | 加持久结果导航 |
-| BYOK Experts | 未开始 | 是 | 否 | 复用 `/experts/*` |
-| Settings | 未开始 | 是 | 否 | 主题、语言、后端健康检查 |
+| 上传题目与题目编辑 | API 已封装，UI 骨架 | 是 | 否 | 上传/编辑交互待接入 |
+| 上传作答与作答编辑 | API 已封装，UI 骨架 | 是 | 否 | 上传/编辑交互待接入 |
+| 批改启动与进度 | API 已封装，hook 已有 | 是 | 否 | 轮询 `/tasks/{id}/state`，页面待接入 |
+| 结果总览 | 静态骨架 | 是 | 否 | 学生筛选、低置信、NL summary/filter 待接入 |
+| 按题分析 | 静态骨架 | 是 | 否 | 复用 `/analytics/{id}/per_question/{q_id}` 待接入 |
+| 结果可视化 | 静态骨架 | 是 | 否 | Plotly + NL chart 待接入 |
+| 学生详情 | 静态骨架 | 是 | 否 | 已有持久结果导航结构 |
+| 题目详情 | 静态骨架 | 是 | 否 | 已有持久结果导航结构 |
+| BYOK Experts | 静态骨架，API 已封装 | 是 | 否 | 列表/添加/删除交互待接入 |
+| Settings | 基础可用 | 是 | 否 | 主题、语言已可切换；后端健康检查待接入 |
 | 学生端 | 禁止展示 | 否 | 部分是 | 可保留文档，不做入口 |
 | 课程/作业 API client | 可预留 | 否 | 否 | 若写代码，必须隐藏 |
-| LMS/LTI/SSO 类型 | 可预留 | 否 | 是 | 仅文档和类型，不展示 |
+| LMS/LTI/SSO 类型 | 已预留隐藏类型 | 否 | 是 | 仅 `types/lms.ts`，不展示 |
 
 ## 4. 执行清单
 
@@ -88,45 +88,45 @@
 - [x] 创建新分支 `codex/vite-react-frontend`
 - [x] 保存 React 重构范围计划文档
 - [x] 保存工程阶段与 Agent 协作计划文档
-- [ ] 后续每个阶段完成后更新本状态总表
+- [x] 后续每个阶段完成后更新本状态总表
 - [ ] 实现结束前做一次“禁止展示项”审计
 
 ### 工程基础
 
-- [ ] 创建 `frontend/app` Vite React + TypeScript 工程
-- [ ] 配置 Tailwind、Radix primitives、lucide、sonner、Plotly、TanStack Query
-- [ ] 配置 lint、typecheck、build 脚本
-- [ ] 配置 `.env.example` 和 README
+- [x] 创建 `frontend/app` Vite React + TypeScript 工程
+- [x] 配置 Tailwind、Radix primitives、lucide、sonner、Plotly、TanStack Query
+- [x] 配置 typecheck、build 脚本
+- [x] 配置 `.env.example` 和 README
 
 ### API 与状态
 
-- [ ] 实现统一 API client
-- [ ] 实现 auth token 与 user LocalStorage
-- [ ] 实现 task API hooks
-- [ ] 实现上传进度与 task state 轮询
-- [ ] 实现 experts API hooks
-- [ ] 实现 analytics API hooks
-- [ ] 实现 KB API hooks
+- [x] 实现统一 API client
+- [x] 实现 auth token 与 user LocalStorage
+- [x] 实现 task API hooks
+- [x] 实现上传进度与 task state 轮询
+- [x] 实现 experts API hooks
+- [x] 实现 analytics API hooks
+- [x] 实现 KB API hooks
 
 ### 教师端页面
 
-- [ ] 登录/注册
-- [ ] AppShell、教师导航、主题切换、语言切换
-- [ ] Dashboard / History / New Task
-- [ ] Setup
-- [ ] 上传题目 / 题目预览编辑
-- [ ] 上传作答 / 学生作答预览编辑
-- [ ] 批改进度
-- [ ] 结果总览 / 按题分析 / 可视化
-- [ ] 学生详情 / 题目详情
-- [ ] BYOK Experts
-- [ ] Settings
+- [x] 登录/注册静态骨架
+- [x] AppShell、教师导航、主题切换、语言切换
+- [x] Dashboard / History / New Task 静态骨架
+- [x] Setup 静态骨架
+- [x] 上传题目 / 题目预览编辑静态骨架
+- [x] 上传作答 / 学生作答预览编辑静态骨架
+- [x] 批改进度 hook
+- [x] 结果总览 / 按题分析 / 可视化静态骨架
+- [x] 学生详情 / 题目详情静态骨架
+- [x] BYOK Experts 静态骨架
+- [x] Settings 主题与语言基础功能
 
 ### 验收
 
-- [ ] `npm run typecheck`
+- [x] `npm run typecheck`
 - [ ] `npm run lint`
-- [ ] `npm run build`
+- [x] `npm run build`
 - [ ] Playwright 覆盖教师主流程
 - [ ] 截图检查桌面与移动端布局
 - [ ] 文档状态与实际代码一致
@@ -188,4 +188,3 @@
 - 可以预留类型和隐藏 API client。
 - 不注册可访问页面，不进导航。
 - 不在空状态、按钮、提示文案中提 LMS 已可用。
-

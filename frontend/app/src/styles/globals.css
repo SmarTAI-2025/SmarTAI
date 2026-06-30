@@ -1,0 +1,73 @@
+@import "tailwindcss";
+
+:root {
+  color-scheme: light;
+  --background: 248 250 252;
+  --foreground: 15 23 42;
+  --card: 255 255 255;
+  --card-foreground: 15 23 42;
+  --muted: 241 245 249;
+  --muted-foreground: 100 116 139;
+  --border: 203 213 225;
+  --primary: 79 70 229;
+  --primary-foreground: 255 255 255;
+  --accent: 13 148 136;
+  --warning: 217 119 6;
+  --danger: 220 38 38;
+  --ring: 79 70 229;
+}
+
+.dark {
+  color-scheme: dark;
+  --background: 15 23 42;
+  --foreground: 226 232 240;
+  --card: 30 41 59;
+  --card-foreground: 226 232 240;
+  --muted: 51 65 85;
+  --muted-foreground: 148 163 184;
+  --border: 71 85 105;
+  --primary: 129 140 248;
+  --primary-foreground: 15 23 42;
+  --accent: 45 212 191;
+  --warning: 245 158 11;
+  --danger: 248 113 113;
+  --ring: 129 140 248;
+}
+
+@theme inline {
+  --color-background: rgb(var(--background));
+  --color-foreground: rgb(var(--foreground));
+  --color-card: rgb(var(--card));
+  --color-card-foreground: rgb(var(--card-foreground));
+  --color-muted: rgb(var(--muted));
+  --color-muted-foreground: rgb(var(--muted-foreground));
+  --color-border: rgb(var(--border));
+  --color-primary: rgb(var(--primary));
+  --color-primary-foreground: rgb(var(--primary-foreground));
+  --color-accent: rgb(var(--accent));
+  --color-warning: rgb(var(--warning));
+  --color-danger: rgb(var(--danger));
+  --color-ring: rgb(var(--ring));
+  --font-sans: Inter, "Noto Sans SC", ui-sans-serif, system-ui, sans-serif;
+}
+
+* {
+  border-color: rgb(var(--border));
+}
+
+body {
+  margin: 0;
+  min-width: 320px;
+  min-height: 100vh;
+  background: rgb(var(--background));
+  color: rgb(var(--foreground));
+  font-family: var(--font-sans);
+}
+
+button,
+input,
+textarea,
+select {
+  font: inherit;
+}
+
