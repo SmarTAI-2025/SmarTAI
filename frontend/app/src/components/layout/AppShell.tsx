@@ -10,7 +10,8 @@ import {
   X,
 } from "lucide-react";
 import { useState } from "react";
-import { Link, NavLink, Outlet } from "react-router-dom";
+import { Link, NavLink, Outlet, useNavigate } from "react-router-dom";
+import { useLogout } from "@/api/hooks";
 import { Button } from "@/components/ui/Button";
 import { useI18n } from "@/i18n/I18nProvider";
 import { cn } from "@/lib/cn";
@@ -26,6 +27,16 @@ const navItems = [
 export function AppShell() {
   const [mobileOpen, setMobileOpen] = useState(false);
   const { t } = useI18n();
+  const logout = useLogout();
+  const navigate = useNavigate();
+
+  async function handleLogout() {
+    try {
+      await logout.mutateAsync();
+    } finally {
+      navigate("/login", { replace: true });
+    }
+  }
 
   return (
     <div className="min-h-screen bg-background text-foreground">
@@ -46,7 +57,12 @@ export function AppShell() {
           {t("appName")}
         </div>
         <div className="ml-auto">
-          <Button variant="ghost" className="h-8">
+          <Button
+            variant="ghost"
+            className="h-8"
+            onClick={() => void handleLogout()}
+            disabled={logout.isPending}
+          >
             <LogOut className="h-4 w-4" />
             {t("logout")}
           </Button>
@@ -118,4 +134,3 @@ function ShellNav({ onNavigate }: { onNavigate?: () => void }) {
     </div>
   );
 }
-

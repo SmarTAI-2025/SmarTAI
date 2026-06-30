@@ -1,6 +1,7 @@
 import React from "react";
 import ReactDOM from "react-dom/client";
 import { createBrowserRouter, Navigate, RouterProvider } from "react-router-dom";
+import { RequireTeacherSession } from "@/components/auth/RequireTeacherSession";
 import { AppShell } from "@/components/layout/AppShell";
 import { Providers } from "@/providers/Providers";
 import { DashboardPage } from "@/routes/DashboardPage";
@@ -25,7 +26,11 @@ const router = createBrowserRouter([
   { path: "/student", element: <StudentUnavailablePage /> },
   {
     path: "/",
-    element: <AppShell />,
+    element: (
+      <RequireTeacherSession>
+        <AppShell />
+      </RequireTeacherSession>
+    ),
     children: [
       { index: true, element: <DashboardPage /> },
       { path: "history", element: <HistoryPage /> },
@@ -50,4 +55,3 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
     </Providers>
   </React.StrictMode>,
 );
-
