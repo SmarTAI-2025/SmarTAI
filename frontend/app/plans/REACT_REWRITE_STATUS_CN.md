@@ -83,50 +83,52 @@
 
 ## 4. 执行清单
 
+时间为本地时间（Asia/Shanghai），取阶段完成或提交前确认的大致时间；同批完成的细项使用同一时间锚点。
+
 ### 文档与范围
 
-- [x] 创建新分支 `codex/vite-react-frontend`
-- [x] 保存 React 重构范围计划文档
-- [x] 保存工程阶段与 Agent 协作计划文档
-- [x] 后续每个阶段完成后更新本状态总表
+- [x] 创建新分支 `codex/vite-react-frontend`（完成：2026-06-30 约15:40）
+- [x] 保存 React 重构范围计划文档（完成：2026-06-30 约15:40）
+- [x] 保存工程阶段与 Agent 协作计划文档（完成：2026-06-30 约15:40）
+- [x] 后续每个阶段完成后更新本状态总表（完成：2026-06-30 约21:20）
 - [ ] 实现结束前做一次“禁止展示项”审计
 
 ### 工程基础
 
-- [x] 创建 `frontend/app` Vite React + TypeScript 工程
-- [x] 配置 Tailwind、Radix primitives、lucide、sonner、Plotly、TanStack Query
-- [x] 配置 typecheck、build 脚本
-- [x] 配置 `.env.example` 和 README
+- [x] 创建 `frontend/app` Vite React + TypeScript 工程（完成：2026-06-30 约21:20）
+- [x] 配置 Tailwind、Radix primitives、lucide、sonner、Plotly、TanStack Query（完成：2026-06-30 约21:20）
+- [x] 配置 typecheck、build 脚本（完成：2026-06-30 约21:20）
+- [x] 配置 `.env.example` 和 README（完成：2026-06-30 约21:20）
 
 ### API 与状态
 
-- [x] 实现统一 API client
-- [x] 实现 auth token 与 user LocalStorage
-- [x] 实现 task API hooks
-- [x] 实现上传进度与 task state 轮询
-- [x] 实现 experts API hooks
-- [x] 实现 analytics API hooks
-- [x] 实现 KB API hooks
+- [x] 实现统一 API client（完成：2026-06-30 约21:20）
+- [x] 实现 auth token 与 user LocalStorage（完成：2026-06-30 约21:20）
+- [x] 实现 task API hooks（完成：2026-06-30 约21:20）
+- [x] 实现上传进度与 task state 轮询（完成：2026-06-30 约21:20）
+- [x] 实现 experts API hooks（完成：2026-06-30 约21:20）
+- [x] 实现 analytics API hooks（完成：2026-06-30 约21:20）
+- [x] 实现 KB API hooks（完成：2026-06-30 约21:20）
 
 ### 教师端页面
 
-- [x] 登录/注册静态骨架
-- [x] AppShell、教师导航、主题切换、语言切换
-- [x] Dashboard / History / New Task 静态骨架
-- [x] Setup 静态骨架
-- [x] 上传题目 / 题目预览编辑静态骨架
-- [x] 上传作答 / 学生作答预览编辑静态骨架
-- [x] 批改进度 hook
-- [x] 结果总览 / 按题分析 / 可视化静态骨架
-- [x] 学生详情 / 题目详情静态骨架
-- [x] BYOK Experts 静态骨架
-- [x] Settings 主题与语言基础功能
+- [x] 登录/注册静态骨架（完成：2026-06-30 约21:20）
+- [x] AppShell、教师导航、主题切换、语言切换（完成：2026-06-30 约21:20）
+- [x] Dashboard / History / New Task 静态骨架（完成：2026-06-30 约21:20）
+- [x] Setup 静态骨架（完成：2026-06-30 约21:20）
+- [x] 上传题目 / 题目预览编辑静态骨架（完成：2026-06-30 约21:20）
+- [x] 上传作答 / 学生作答预览编辑静态骨架（完成：2026-06-30 约21:20）
+- [x] 批改进度 hook（完成：2026-06-30 约21:20）
+- [x] 结果总览 / 按题分析 / 可视化静态骨架（完成：2026-06-30 约21:20）
+- [x] 学生详情 / 题目详情静态骨架（完成：2026-06-30 约21:20）
+- [x] BYOK Experts 静态骨架（完成：2026-06-30 约21:20）
+- [x] Settings 主题与语言基础功能（完成：2026-06-30 约21:20）
 
 ### 验收
 
-- [x] `npm run typecheck`
+- [x] `npm run typecheck`（完成：2026-06-30 约21:20）
 - [ ] `npm run lint`
-- [x] `npm run build`
+- [x] `npm run build`（完成：2026-06-30 约21:20）
 - [ ] Playwright 覆盖教师主流程
 - [ ] 截图检查桌面与移动端布局
 - [ ] 文档状态与实际代码一致
