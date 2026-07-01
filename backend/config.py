@@ -100,7 +100,11 @@ class Settings(BaseSettings):
     progress_ring_buffer_size: int = 200  # max events kept per job
 
     # ─── Frontend ──────────────────────────────────────────────────────────────
-    frontend_urls: str = os.getenv("FRONTEND_URLS", "http://localhost:8501,http://localhost:3000,http://localhost:8001")
+    frontend_urls: str = os.getenv(
+        "FRONTEND_URLS",
+        "http://localhost:8501,http://localhost:3000,http://localhost:8001,"
+        "http://localhost:5173,http://127.0.0.1:5173",
+    )
     backend_port: int = 8000
 
     # ─── Auth (JWT) ────────────────────────────────────────────────────────────
