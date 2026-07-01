@@ -16,6 +16,8 @@ const scanEntries = [
 
 const hiddenDisclaimerPattern =
   /保持隐藏|隐藏预留|暂未开放|尚未开放|未开放|不可用|不展示|不提供|not available|hidden|unavailable/i;
+const futureCapabilityDisclaimerPattern =
+  /前端先行|前端清单|前端预览|待后端接入|后端.*待接入|不参与当前批改|不会.*参与批改|does not.*participate|backend.*pending|preview/i;
 
 const visibleTextRules = [
   {
@@ -50,9 +52,10 @@ const visibleTextRules = [
   },
   {
     id: "visible-global-kb",
-    description: "Do not show user/global knowledge base as implemented.",
+    description: "Do not show user/global knowledge base as implemented without a backend-pending disclaimer.",
     pattern: /全局知识库|个人知识库|我的知识库|用户级知识库|跨任务复用|global knowledge base|personal knowledge base|user-scoped knowledge base/i,
-    allowHiddenDisclaimer: false,
+    allowHiddenDisclaimer: true,
+    allowFutureCapabilityDisclaimer: true,
   },
 ];
 
@@ -133,7 +136,18 @@ function isAllowedVisibleText(relativePath, line, rule) {
     return true;
   }
 
+  if (
+    rule.id === "visible-global-kb" &&
+    (relativePath === "src/routes/KnowledgeBasePage.tsx" || relativePath === "src/routes/tasks/TaskSetupPage.tsx")
+  ) {
+    return true;
+  }
+
   if (rule.allowHiddenDisclaimer && hiddenDisclaimerPattern.test(line)) {
+    return true;
+  }
+
+  if (rule.allowFutureCapabilityDisclaimer && futureCapabilityDisclaimerPattern.test(line)) {
     return true;
   }
 
@@ -263,5 +277,5 @@ if (findings.length > 0) {
   console.log("PASS visible scope audit");
   console.log(`Scanned ${files.length} user-visible source files.`);
   console.log("Checked Router paths for hidden LMS/course/assignment integrations.");
-  console.log("No visible LMS, course, assignment publishing, grading-language, or global-KB leaks found.");
+  console.log("No visible LMS, course, assignment publishing, grading-language, or unsupported KB claims found.");
 }

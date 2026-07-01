@@ -1,4 +1,4 @@
-import { useRef, useState, type ChangeEvent } from "react";
+import { useEffect, useRef, useState, type ChangeEvent } from "react";
 import {
   AlertTriangle,
   ArrowRight,
@@ -20,6 +20,13 @@ import { Button } from "@/components/ui/Button";
 import { Card, SectionHeader } from "@/components/ui/Card";
 import { Field } from "@/components/ui/Field";
 import { Textarea } from "@/components/ui/Input";
+import {
+  addPersonalKBDoc,
+  getTaskPersonalKBSelection,
+  listPersonalKBDocs,
+  setTaskPersonalKBSelection,
+  type PersonalKBDoc,
+} from "@/lib/personalKnowledgeBase";
 import type { ExpertConfig, KBDoc, Task, TaskStatus } from "@/types";
 
 const MAX_KB_FILE_BYTES = 5 * 1024 * 1024;
@@ -42,6 +49,11 @@ export function TaskSetupPage() {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [uploadProgress, setUploadProgress] = useState<number | null>(null);
   const [deletingDocId, setDeletingDocId] = useState<string | null>(null);
+  const [addUploadToPersonalKB, setAddUploadToPersonalKB] = useState(false);
+  const [personalDocs, setPersonalDocs] = useState<PersonalKBDoc[]>(() => listPersonalKBDocs());
+  const [selectedPersonalDocIds, setSelectedPersonalDocIds] = useState<string[]>(() =>
+    taskId ? getTaskPersonalKBSelection(taskId) : [],
+  );
 
   const taskQuery = useTask(taskId || undefined);
   const kbQuery = useKBDocs(taskId || undefined);
@@ -55,6 +67,11 @@ export function TaskSetupPage() {
   const enabledExperts = experts.filter((expert) => expert.enabled);
   const nextStep = getNextStep(task, taskId);
   const uploadDisabledReason = getUploadDisabledReason(taskId, docs, experts, expertsQuery.isSuccess);
+
+  useEffect(() => {
+    setPersonalDocs(listPersonalKBDocs());
+    setSelectedPersonalDocIds(taskId ? getTaskPersonalKBSelection(taskId) : []);
+  }, [taskId]);
 
   async function handleKBFileChange(event: ChangeEvent<HTMLInputElement>) {
     const input = event.currentTarget;
@@ -90,6 +107,23 @@ export function TaskSetupPage() {
         const embedderText = result.embedder ? `，索引方式：${result.embedder}` : "";
         toast.success(`已添加本任务资料：${result.filename}（${chunkText}${embedderText}）`);
       }
+
+      if (addUploadToPersonalKB) {
+        const personalDoc = addPersonalKBDoc({
+          filename: result.filename,
+          size: file.size,
+          source: "task-upload",
+          taskId,
+          taskDocId: result.doc_id,
+          chunkCount: result.chunk_count,
+          embedder: result.embedder,
+        });
+        const nextSelected = [...new Set([...selectedPersonalDocIds, personalDoc.id])];
+        setTaskPersonalKBSelection(taskId, nextSelected);
+        setSelectedPersonalDocIds(nextSelected);
+        setPersonalDocs(listPersonalKBDocs());
+        toast.info(`已同步到个人知识库前端清单：${result.filename}`);
+      }
     } catch (error) {
       toast.error(`本任务资料上传失败：${formatError(error)}`);
     } finally {
@@ -118,6 +152,18 @@ export function TaskSetupPage() {
     } finally {
       setDeletingDocId(null);
     }
+  }
+
+  function handleTogglePersonalDoc(docId: string) {
+    if (!taskId) {
+      toast.error("缺少任务 ID，无法保存个人知识库选择。");
+      return;
+    }
+    const nextSelected = selectedPersonalDocIds.includes(docId)
+      ? selectedPersonalDocIds.filter((id) => id !== docId)
+      : [...selectedPersonalDocIds, docId];
+    setSelectedPersonalDocIds(nextSelected);
+    setTaskPersonalKBSelection(taskId, nextSelected);
   }
 
   return (
@@ -182,6 +228,20 @@ export function TaskSetupPage() {
                 {uploadKBDoc.isPending ? "上传中" : "上传资料"}
               </Button>
             </div>
+            <label className="mt-4 flex items-start gap-3 rounded-md border bg-background p-3 text-sm">
+              <input
+                className="mt-1 h-4 w-4 rounded border-muted accent-primary"
+                type="checkbox"
+                checked={addUploadToPersonalKB}
+                onChange={(event) => setAddUploadToPersonalKB(event.target.checked)}
+              />
+              <span>
+                <span className="font-medium">同时加入个人知识库前端清单</span>
+                <span className="mt-1 block leading-6 text-muted-foreground">
+                  当前只保存文件元数据和本任务选择关系；后端 user-scoped KB 接入前，不会自动跨任务参与批改。
+                </span>
+              </span>
+            </label>
             {uploadProgress !== null ? (
               <div className="mt-4">
                 <div className="h-2 overflow-hidden rounded-full bg-muted">
@@ -213,6 +273,12 @@ export function TaskSetupPage() {
         </Card>
 
         <div className="grid gap-4">
+          <PersonalKBPicker
+            docs={personalDocs}
+            selectedDocIds={selectedPersonalDocIds}
+            onToggle={handleTogglePersonalDoc}
+          />
+
           <Card className="grid gap-4">
             <div className="flex items-start gap-3">
               <span className="rounded-md bg-muted p-2 text-primary">
@@ -444,6 +510,73 @@ function KBDocList({
   );
 }
 
+function PersonalKBPicker({
+  docs,
+  selectedDocIds,
+  onToggle,
+}: {
+  docs: PersonalKBDoc[];
+  selectedDocIds: string[];
+  onToggle: (docId: string) => void;
+}) {
+  return (
+    <Card className="grid gap-4">
+      <div className="flex items-start gap-3">
+        <span className="rounded-md bg-muted p-2 text-accent">
+          <BookOpenCheck className="h-5 w-5" />
+        </span>
+        <div>
+          <h2 className="text-base font-semibold">个人知识库选择</h2>
+          <p className="mt-1 text-sm leading-6 text-muted-foreground">
+            可先为本任务选择个人知识库资料。当前选择只保存在浏览器本地，待后端 user-scoped KB 接入后才会真正参与跨任务检索。
+          </p>
+        </div>
+      </div>
+
+      {docs.length === 0 ? (
+        <div className="rounded-md border border-dashed bg-background p-4 text-sm">
+          <p className="font-medium">暂无个人知识库资料</p>
+          <p className="mt-1 leading-6 text-muted-foreground">
+            可在左侧“知识库”页面加入资料清单，或上传本任务资料时勾选“同时加入个人知识库前端清单”。
+          </p>
+        </div>
+      ) : (
+        <div className="grid gap-2">
+          {docs.map((doc) => {
+            const checked = selectedDocIds.includes(doc.id);
+            return (
+              <label
+                key={doc.id}
+                className="flex cursor-pointer items-start gap-3 rounded-md border bg-background p-3 text-sm transition hover:bg-muted/40"
+              >
+                <input
+                  className="mt-1 h-4 w-4 rounded border-muted accent-primary"
+                  type="checkbox"
+                  checked={checked}
+                  onChange={() => onToggle(doc.id)}
+                />
+                <span className="min-w-0">
+                  <span className="block break-words font-medium">{doc.filename}</span>
+                  <span className="mt-1 block text-xs leading-5 text-muted-foreground">
+                    {formatBytes(doc.size)}
+                    {" · "}
+                    {doc.source === "task-upload" ? "来自任务上传" : "手动加入"}
+                    {doc.chunkCount ? ` · ${doc.chunkCount} 个片段` : ""}
+                  </span>
+                </span>
+              </label>
+            );
+          })}
+        </div>
+      )}
+
+      <div className="rounded-md border bg-muted/30 p-3 text-xs leading-5 text-muted-foreground">
+        已选择 {selectedDocIds.length} 份。当前不会改变后端批改输入；要让资料参与本次批改，请继续使用左侧“本任务资料”上传。
+      </div>
+    </Card>
+  );
+}
+
 function ExpertsOverview({
   experts,
   enabledCount,
@@ -657,6 +790,19 @@ function providerLabel(providerType: string) {
   if (normalized === "zhipu") return "Zhipu";
   if (normalized === "anthropic") return "Anthropic";
   return providerType;
+}
+
+function formatBytes(value: number) {
+  if (!Number.isFinite(value) || value <= 0) {
+    return "未知大小";
+  }
+  if (value < 1024) {
+    return `${value} B`;
+  }
+  if (value < 1024 * 1024) {
+    return `${(value / 1024).toFixed(1)} KB`;
+  }
+  return `${(value / 1024 / 1024).toFixed(1)} MB`;
 }
 
 function formatTimestamp(value?: number) {
