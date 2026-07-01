@@ -16,6 +16,32 @@
 
 ## 本地运行（开发与测试）
 
+### 先切到 React 新前端分支
+
+React 新前端目前在这个分支：
+
+```bash
+cd /Users/annie/code/SmarTAI
+git status
+git switch codex/vite-react-frontend
+```
+
+如果本地还没有这个分支，用：
+
+```bash
+cd /Users/annie/code/SmarTAI
+git fetch origin
+git switch -c codex/vite-react-frontend --track origin/codex/vite-react-frontend
+```
+
+切换前如果 `git status` 显示有未提交修改，先提交或暂存，避免切分支时把工作区弄乱。
+
+### 环境分工
+
+- **后端需要 `smartai` Conda 环境**：FastAPI、LLM、RAG、SymPy 等 Python 依赖都在这里跑。
+- **React 新前端不需要 `smartai` Conda 环境**：它只需要 Node.js + npm，依赖由 `frontend/app/package-lock.json` 锁定。
+- 可以在激活 `smartai` 的终端里跑前端，但这不是必需条件；前端包不要用 `pip/conda` 装。
+
 ### 环境准备
 
 推荐使用 Conda 创建并激活专用 Python 环境（项目内统一称为 `smartai`，Python 3.11 推荐）：
@@ -27,22 +53,13 @@ conda activate smartai
 
 激活后请使用 `python` / `pip`（而不是 `python3` / `pip3`），避免与系统 Python 混淆。
 
-### 安装依赖
+### 安装后端依赖
 
-依赖分为后端与前端两部分，分别由不同的 `requirements` 文件描述：
+在仓库根目录执行下述命令，安装 FastAPI、LangChain 各厂商适配器、SymPy、PyJWT、PyMuPDF、rank-bm25 等核心包（`backend/requirements.txt` 直接复用根目录的 `render-requirements.txt`）：
 
-- **后端依赖**：在仓库根目录执行下述命令，安装 FastAPI、LangChain 各厂商适配器、SymPy、PyJWT、PyMuPDF、rank-bm25 等核心包（`backend/requirements.txt` 直接复用根目录的 `render-requirements.txt`）：
-
-  ```bash
-  pip install -r render-requirements.txt
-  ```
-- **前端依赖**：在 `frontend/` 目录下执行下述命令，安装 Reflex、httpx、plotly、pandas 等：
-
-  ```bash
-  cd frontend
-  pip install -r requirements.txt
-  cd ..
-  ```
+```bash
+pip install -r render-requirements.txt
+```
 
 ### 启动后端
 
@@ -54,12 +71,52 @@ python -m uvicorn backend.main:app --reload --host 0.0.0.0 --port 8000
 
 后端服务将监听 `8000` 端口，对外暴露 `/tasks/*`、`/analytics/*` 等任务中心化 API，可通过 `http://localhost:8000/health` 验证健康状态。
 
-### 启动前端
+### 启动 React 新前端
 
 在另一终端中执行：
 
 ```bash
+cd /Users/annie/code/SmarTAI/frontend/app
+npm install
+npm run dev
+```
+
+浏览器打开：
+
+```text
+http://localhost:5173/login
+```
+
+如果 `5173` 被占用，Vite 会在终端里打印新的本地地址，按终端显示的地址打开即可。
+
+React 新前端默认连接：
+
+```text
+http://localhost:8000
+```
+
+如需改后端地址，在 `frontend/app/.env` 中设置：
+
+```bash
+VITE_SMARTAI_BACKEND_URL=http://localhost:8000
+```
+
+本地测试账号可生成：
+
+```bash
+cd /Users/annie/code/SmarTAI
+python scripts/generate_test_users.py
+```
+
+生成后查看 `data/test_users.json`，用里面的 `username/password` 登录。生成文件已被 git 忽略，不会提交到仓库。
+
+### 旧 Reflex 前端（当前主版本）
+
+如果要跑旧 Reflex 前端，需要在 `smartai` Conda 环境中安装它自己的 Python 前端依赖：
+
+```bash
 cd frontend
+pip install -r requirements.txt
 reflex run
 ```
 
