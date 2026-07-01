@@ -1,5 +1,6 @@
 import {
   BrainCircuit,
+  BookOpenCheck,
   ClipboardList,
   History,
   LayoutDashboard,
@@ -20,6 +21,7 @@ const navItems = [
   { to: "/", labelKey: "dashboard", icon: LayoutDashboard },
   { to: "/tasks/new", labelKey: "newTask", icon: PlusCircle },
   { to: "/history", labelKey: "history", icon: History },
+  { to: "/knowledge-base", labelKey: "knowledgeBase", icon: BookOpenCheck },
   { to: "/experts", labelKey: "experts", icon: BrainCircuit },
   { to: "/settings", labelKey: "settings", icon: Settings },
 ] as const;

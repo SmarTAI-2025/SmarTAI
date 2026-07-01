@@ -12,6 +12,9 @@ const DashboardPage = React.lazy(() =>
 );
 const ExpertsPage = React.lazy(() => import("@/routes/ExpertsPage").then((module) => ({ default: module.ExpertsPage })));
 const HistoryPage = React.lazy(() => import("@/routes/HistoryPage").then((module) => ({ default: module.HistoryPage })));
+const KnowledgeBasePage = React.lazy(() =>
+  import("@/routes/KnowledgeBasePage").then((module) => ({ default: module.KnowledgeBasePage })),
+);
 const LoginPage = React.lazy(() => import("@/routes/LoginPage").then((module) => ({ default: module.LoginPage })));
 const NewTaskPage = React.lazy(() => import("@/routes/NewTaskPage").then((module) => ({ default: module.NewTaskPage })));
 const NotFoundPage = React.lazy(() =>
@@ -63,6 +66,7 @@ const router = createBrowserRouter([
     children: [
       { index: true, element: routeElement(<DashboardPage />) },
       { path: "history", element: routeElement(<HistoryPage />) },
+      { path: "knowledge-base", element: routeElement(<KnowledgeBasePage />) },
       { path: "tasks/new", element: routeElement(<NewTaskPage />) },
       { path: "tasks/:taskId", element: <Navigate to="setup" replace /> },
       { path: "tasks/:taskId/setup", element: routeElement(<TaskSetupPage />) },
