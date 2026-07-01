@@ -60,7 +60,7 @@
 | 功能 | 代码状态 | 是否展示 | 是否依赖后端新改动 | 备注 |
 |---|---|---:|---:|---|
 | Vite React App 工程 | 骨架已完成 | 是 | 否 | `frontend/app` 可 typecheck/build |
-| 教师登录 | 已接入真实登录 | 是 | 否 | 调 `/auth/login`，保存 token/user，并限制进入教师端工作台 |
+| 教师登录 | 已接入真实登录 | 是 | 否 | 调 `/auth/login`，保存 token/user，并限制进入教师端工作台；本地 React dev CORS 已同步 |
 | 注册申请页 | 静态骨架 | 是 | 否 | 保持当前“暂未开放”语义 |
 | 教师 Dashboard | 静态骨架 | 是 | 否 | 仅展示教师任务，任务数据待接入 |
 | New Task / History | 静态骨架 | 是 | 否 | API hooks 已有，页面待接入 `/tasks/*` |
@@ -99,6 +99,7 @@
 - [x] 配置 Tailwind、Radix primitives、lucide、sonner、Plotly、TanStack Query（完成：2026-06-30 约21:20）
 - [x] 配置 typecheck、build 脚本（完成：2026-06-30 约21:20）
 - [x] 配置 `.env.example` 和 README（完成：2026-06-30 约21:20）
+- [x] 后端本地 CORS 默认白名单加入 React dev 地址 `localhost:5173`（完成：2026-07-01 约14:10）
 
 ### API 与状态
 
@@ -138,6 +139,10 @@
 ## 5. 后端后续 TODO
 
 这些事项不在本次前端迁移中实现，只记录清楚，方便后续拆后端任务。
+
+### 已完成的后端配置同步
+
+- [x] `backend/config.py` 默认 `frontend_urls` 增加 `http://localhost:5173` 与 `http://127.0.0.1:5173`，仅用于 React/Vite 本地开发 CORS；未新增业务 API。（完成：2026-07-01 约14:10）
 
 ### 用户级知识库
 
