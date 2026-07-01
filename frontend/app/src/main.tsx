@@ -4,25 +4,54 @@ import { createBrowserRouter, Navigate, RouterProvider } from "react-router-dom"
 import { RequireTeacherSession } from "@/components/auth/RequireTeacherSession";
 import { AppShell } from "@/components/layout/AppShell";
 import { Providers } from "@/providers/Providers";
-import { DashboardPage } from "@/routes/DashboardPage";
-import { ExpertsPage } from "@/routes/ExpertsPage";
-import { HistoryPage } from "@/routes/HistoryPage";
-import { LoginPage } from "@/routes/LoginPage";
-import { NewTaskPage } from "@/routes/NewTaskPage";
-import { NotFoundPage } from "@/routes/NotFoundPage";
-import { RegisterPage } from "@/routes/RegisterPage";
-import { SettingsPage } from "@/routes/SettingsPage";
 import { StudentUnavailablePage } from "@/routes/StudentUnavailablePage";
-import { TaskQuestionDetailPage } from "@/routes/tasks/TaskQuestionDetailPage";
-import { TaskResultsPage } from "@/routes/tasks/TaskResultsPage";
-import { TaskSetupPage } from "@/routes/tasks/TaskSetupPage";
-import { TaskStudentDetailPage } from "@/routes/tasks/TaskStudentDetailPage";
-import { TaskUploadPage } from "@/routes/tasks/TaskUploadPage";
 import "@/styles/globals.css";
 
+const DashboardPage = React.lazy(() =>
+  import("@/routes/DashboardPage").then((module) => ({ default: module.DashboardPage })),
+);
+const ExpertsPage = React.lazy(() => import("@/routes/ExpertsPage").then((module) => ({ default: module.ExpertsPage })));
+const HistoryPage = React.lazy(() => import("@/routes/HistoryPage").then((module) => ({ default: module.HistoryPage })));
+const LoginPage = React.lazy(() => import("@/routes/LoginPage").then((module) => ({ default: module.LoginPage })));
+const NewTaskPage = React.lazy(() => import("@/routes/NewTaskPage").then((module) => ({ default: module.NewTaskPage })));
+const NotFoundPage = React.lazy(() =>
+  import("@/routes/NotFoundPage").then((module) => ({ default: module.NotFoundPage })),
+);
+const RegisterPage = React.lazy(() => import("@/routes/RegisterPage").then((module) => ({ default: module.RegisterPage })));
+const SettingsPage = React.lazy(() =>
+  import("@/routes/SettingsPage").then((module) => ({ default: module.SettingsPage })),
+);
+const TaskQuestionDetailPage = React.lazy(() =>
+  import("@/routes/tasks/TaskQuestionDetailPage").then((module) => ({ default: module.TaskQuestionDetailPage })),
+);
+const TaskResultsPage = React.lazy(() =>
+  import("@/routes/tasks/TaskResultsPage").then((module) => ({ default: module.TaskResultsPage })),
+);
+const TaskSetupPage = React.lazy(() =>
+  import("@/routes/tasks/TaskSetupPage").then((module) => ({ default: module.TaskSetupPage })),
+);
+const TaskStudentDetailPage = React.lazy(() =>
+  import("@/routes/tasks/TaskStudentDetailPage").then((module) => ({ default: module.TaskStudentDetailPage })),
+);
+const TaskUploadPage = React.lazy(() =>
+  import("@/routes/tasks/TaskUploadPage").then((module) => ({ default: module.TaskUploadPage })),
+);
+
+function RouteFallback() {
+  return (
+    <div className="flex min-h-[50vh] items-center justify-center text-sm font-medium text-slate-500">
+      Loading...
+    </div>
+  );
+}
+
+function routeElement(element: React.ReactNode) {
+  return <React.Suspense fallback={<RouteFallback />}>{element}</React.Suspense>;
+}
+
 const router = createBrowserRouter([
-  { path: "/login", element: <LoginPage /> },
-  { path: "/register", element: <RegisterPage /> },
+  { path: "/login", element: routeElement(<LoginPage />) },
+  { path: "/register", element: routeElement(<RegisterPage />) },
   { path: "/student", element: <StudentUnavailablePage /> },
   {
     path: "/",
@@ -32,18 +61,18 @@ const router = createBrowserRouter([
       </RequireTeacherSession>
     ),
     children: [
-      { index: true, element: <DashboardPage /> },
-      { path: "history", element: <HistoryPage /> },
-      { path: "tasks/new", element: <NewTaskPage /> },
+      { index: true, element: routeElement(<DashboardPage />) },
+      { path: "history", element: routeElement(<HistoryPage />) },
+      { path: "tasks/new", element: routeElement(<NewTaskPage />) },
       { path: "tasks/:taskId", element: <Navigate to="setup" replace /> },
-      { path: "tasks/:taskId/setup", element: <TaskSetupPage /> },
-      { path: "tasks/:taskId/upload/:kind", element: <TaskUploadPage /> },
-      { path: "tasks/:taskId/results", element: <TaskResultsPage /> },
-      { path: "tasks/:taskId/results/:studentId", element: <TaskStudentDetailPage /> },
-      { path: "tasks/:taskId/questions/:questionId", element: <TaskQuestionDetailPage /> },
-      { path: "experts", element: <ExpertsPage /> },
-      { path: "settings", element: <SettingsPage /> },
-      { path: "*", element: <NotFoundPage /> },
+      { path: "tasks/:taskId/setup", element: routeElement(<TaskSetupPage />) },
+      { path: "tasks/:taskId/upload/:kind", element: routeElement(<TaskUploadPage />) },
+      { path: "tasks/:taskId/results", element: routeElement(<TaskResultsPage />) },
+      { path: "tasks/:taskId/results/:studentId", element: routeElement(<TaskStudentDetailPage />) },
+      { path: "tasks/:taskId/questions/:questionId", element: routeElement(<TaskQuestionDetailPage />) },
+      { path: "experts", element: routeElement(<ExpertsPage />) },
+      { path: "settings", element: routeElement(<SettingsPage />) },
+      { path: "*", element: routeElement(<NotFoundPage />) },
     ],
   },
 ]);
