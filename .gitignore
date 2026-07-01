@@ -22,6 +22,12 @@ frontend/.states/
 frontend/assets/external/
 frontend/uploaded_files/
 
+# ─── React / Vite frontend artifacts ────────────────────────────────────────
+frontend/app/node_modules/
+frontend/app/dist/
+frontend/app/.vite/
+frontend/app/*.local
+
 # ─── Secrets & credentials ──────────────────────────────────────────────────
 .env
 .env.*
