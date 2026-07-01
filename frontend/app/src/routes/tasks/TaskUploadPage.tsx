@@ -72,7 +72,7 @@ export function TaskUploadPage() {
   const [selectedStudentId, setSelectedStudentId] = useState<string | null>(null);
   const [editingAnswerKey, setEditingAnswerKey] = useState<string | null>(null);
   const [answerDraft, setAnswerDraft] = useState("");
-  const lastRefetchedStatusRef = useRef<string | null>(null);
+  const lastDetailRefetchKeyRef = useRef<string | null>(null);
 
   const task = taskQuery.data;
   const currentStatus = (progressQuery.data?.status ?? task?.status ?? "draft") as TaskStatus;
@@ -87,6 +87,10 @@ export function TaskUploadPage() {
     () => Object.values(task?.student_data ?? {}).sort(compareStudents),
     [task?.student_data],
   );
+  const stateProblemCount = progressQuery.data?.problem_count ?? 0;
+  const stateStudentCount = progressQuery.data?.student_count ?? 0;
+  const expectedProblemCount = Math.max(problems.length, task?.problem_count ?? 0, stateProblemCount);
+  const expectedStudentCount = Math.max(students.length, task?.student_count ?? 0, stateStudentCount);
 
   const selectedStudent = useMemo(
     () => students.find((student) => student.stu_id === selectedStudentId) ?? students[0] ?? null,
@@ -106,23 +110,36 @@ export function TaskUploadPage() {
 
   useEffect(() => {
     if (ACTIVE_STATUS.has(currentStatus)) {
-      lastRefetchedStatusRef.current = null;
+      lastDetailRefetchKeyRef.current = null;
       return;
     }
 
-    if (
+    const completedStatus =
       currentStatus === "problems_ready" ||
       currentStatus === "submissions_ready" ||
       currentStatus === "graded" ||
-      currentStatus === "error"
-    ) {
-      if (lastRefetchedStatusRef.current === currentStatus) {
-        return;
-      }
-      lastRefetchedStatusRef.current = currentStatus;
-      void taskQuery.refetch();
+      currentStatus === "error";
+    const detailCountMismatch = stateProblemCount > problems.length || stateStudentCount > students.length;
+
+    if (!completedStatus && !detailCountMismatch) {
+      return;
     }
-  }, [currentStatus, taskQuery.refetch]);
+
+    const refetchKey = [
+      currentStatus,
+      stateProblemCount,
+      stateStudentCount,
+      problems.length,
+      students.length,
+    ].join(":");
+
+    if (lastDetailRefetchKeyRef.current === refetchKey) {
+      return;
+    }
+
+    lastDetailRefetchKeyRef.current = refetchKey;
+    void taskQuery.refetch();
+  }, [currentStatus, problems.length, stateProblemCount, stateStudentCount, students.length, taskQuery.refetch]);
 
   const handleUpload = async (file: File) => {
     if (!taskId) {
@@ -292,6 +309,7 @@ export function TaskUploadPage() {
             type="button"
             variant="secondary"
             onClick={() => {
+              lastDetailRefetchKeyRef.current = null;
               void taskQuery.refetch();
               void progressQuery.refetch();
             }}
@@ -324,9 +342,9 @@ export function TaskUploadPage() {
           isProcessing={isProcessing}
           latestMessage={progressQuery.latestMessage?.message ?? null}
           percent={progressQuery.percent}
-          problemCount={problems.length || task?.problem_count || 0}
+          problemCount={expectedProblemCount}
           progressError={progressQuery.progress?.error_detail ?? task?.error ?? null}
-          studentCount={students.length || task?.student_count || 0}
+          studentCount={expectedStudentCount}
         />
       </div>
 
@@ -336,6 +354,7 @@ export function TaskUploadPage() {
           isSaving={updateProblem.isPending}
           problemDraft={problemDraft}
           problems={problems}
+          expectedCount={expectedProblemCount}
           onCancel={() => setEditingProblemId(null)}
           onDraftChange={setProblemDraft}
           onEdit={startProblemEdit}
@@ -349,6 +368,7 @@ export function TaskUploadPage() {
           selectedStudent={selectedStudent}
           selectedStudentId={selectedStudent?.stu_id ?? null}
           students={students}
+          expectedCount={expectedStudentCount}
           onAnswerDraftChange={setAnswerDraft}
           onCancel={() => setEditingAnswerKey(null)}
           onEdit={startAnswerEdit}
@@ -542,6 +562,7 @@ function StatusCard({
 
 function ProblemsReview({
   editingProblemId,
+  expectedCount,
   isSaving,
   problemDraft,
   problems,
@@ -551,6 +572,7 @@ function ProblemsReview({
   onSave,
 }: {
   editingProblemId: string | null;
+  expectedCount: number;
   isSaving: boolean;
   problemDraft: { stem: string; criterion: string };
   problems: ProblemInfo[];
@@ -568,11 +590,18 @@ function ProblemsReview({
             检查识别出的题干和评分标准；保存后后续批改会使用更新后的内容。
           </p>
         </div>
-        <span className="text-sm text-muted-foreground">{problems.length} 道题</span>
+        <span className="text-sm text-muted-foreground">{expectedCount} 道题</span>
       </div>
 
       {problems.length === 0 ? (
-        <EmptyState title="暂无题目预览" description="上传题目文件后，识别结果会显示在这里。" />
+        expectedCount > 0 ? (
+          <DetailSyncState
+            title="正在同步题目详情"
+            description={`已识别 ${expectedCount} 道题，题干与评分标准正在载入。`}
+          />
+        ) : (
+          <EmptyState title="暂无题目预览" description="上传题目文件后，识别结果会显示在这里。" />
+        )
       ) : (
         <div className="grid gap-3">
           {problems.map((problem) => {
@@ -637,6 +666,7 @@ function ProblemsReview({
 function SubmissionsReview({
   answerDraft,
   editingAnswerKey,
+  expectedCount,
   isSaving,
   selectedStudent,
   selectedStudentId,
@@ -649,6 +679,7 @@ function SubmissionsReview({
 }: {
   answerDraft: string;
   editingAnswerKey: string | null;
+  expectedCount: number;
   isSaving: boolean;
   selectedStudent: StudentSubmission | null;
   selectedStudentId: string | null;
@@ -670,11 +701,18 @@ function SubmissionsReview({
             按学生检查识别结果；可以逐题修正作答内容后再启动批改。
           </p>
         </div>
-        <span className="text-sm text-muted-foreground">{students.length} 名学生</span>
+        <span className="text-sm text-muted-foreground">{expectedCount} 名学生</span>
       </div>
 
       {students.length === 0 ? (
-        <EmptyState title="暂无学生作答" description="上传学生作答文件后，学生列表与逐题答案会显示在这里。" />
+        expectedCount > 0 ? (
+          <DetailSyncState
+            title="正在同步作答详情"
+            description={`已解析 ${expectedCount} 名学生，逐题作答正在载入。`}
+          />
+        ) : (
+          <EmptyState title="暂无学生作答" description="上传学生作答文件后，学生列表与逐题答案会显示在这里。" />
+        )
       ) : (
         <div className="grid gap-4 lg:grid-cols-[260px_minmax(0,1fr)]">
           <div className="grid max-h-[520px] content-start gap-2 overflow-y-auto pr-1">
@@ -768,6 +806,18 @@ function SubmissionsReview({
         </div>
       )}
     </Card>
+  );
+}
+
+function DetailSyncState({ title, description }: { title: string; description: string }) {
+  return (
+    <div className="flex items-start gap-3 rounded-lg border bg-muted/30 p-4">
+      <Loader2 className="mt-0.5 h-4 w-4 shrink-0 animate-spin text-primary" />
+      <div>
+        <p className="text-sm font-medium">{title}</p>
+        <p className="mt-1 text-sm leading-6 text-muted-foreground">{description}</p>
+      </div>
+    </div>
   );
 }
 

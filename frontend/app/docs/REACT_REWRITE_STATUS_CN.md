@@ -1,6 +1,6 @@
 # SmarTAI Vite React 前端重构状态总表
 
-更新时间：2026-07-01 约14:30 CST  
+更新时间：2026-07-01 约19:55 CST
 分支：`codex/vite-react-frontend`  
 范围：React/Vite 教师端主流程。旧 Reflex 前端保留为回退路径。
 
@@ -48,6 +48,7 @@
 | History | 已接入 `/tasks/` 列表 | 是 | 否 | 支持刷新、删除、状态跳转 |
 | Setup 批改配置 | 已接入 task、KB、experts | 是 | 否 | 不展示批改语言选择 |
 | task-scoped KB 上传/删除 | 已接入 `/tasks/{id}/kb` | 是 | 否 | 文案限定为本任务资料 |
+| 结果区 KB 状态反馈 | 已接入任务资料状态提示 | 是 | 否 | 显示配置/资料状态，不声称逐题引用命中 |
 | 用户级全局知识库 | 未实现 | 否 | 是 | 见 `BACKEND_TODOS_CN.md` |
 | 上传题目与题目编辑 | 已接入 | 是 | 否 | 支持上传、预览、题干/评分标准编辑 |
 | 上传作答与作答编辑 | 已接入 | 是 | 否 | 支持上传、学生答案预览与编辑 |
@@ -70,7 +71,7 @@
 
 - [x] 创建分支 `codex/vite-react-frontend`（完成：2026-06-30 约15:40）
 - [x] 创建 `frontend/app` Vite React + TypeScript 工程（完成：2026-06-30 约21:20）
-- [x] 配置 Tailwind、Radix primitives、lucide、sonner、Plotly、TanStack Query（完成：2026-06-30 约21:20）
+- [x] 配置 Tailwind、lucide、sonner、TanStack Query（完成：2026-06-30 约21:20；Plotly 依赖已在 2026-07-01 约15:15 移除，改为轻量图表预览）
 - [x] 配置 typecheck/build 脚本（完成：2026-06-30 约21:20）
 - [x] 配置 `.env.example` 和 React README（完成：2026-06-30 约21:20）
 
@@ -110,7 +111,7 @@
 - [x] Setup 中只展示 task-scoped KB（完成：2026-07-01 约14:30，Worker D）
 - [x] 本任务资料上传、列表、删除接入真实 hooks（完成：2026-07-01 约14:30，Worker D）
 - [x] 文案避免“全局知识库/个人知识库已完成”的暗示（阶段检查：2026-07-01 约14:30）
-- [ ] 结果区显示 KB 是否实际参与本次批改的反馈
+- [x] 结果区显示 task-scoped KB 配置/资料状态反馈（完成：2026-07-01 约19:25，Agent UI / Pasteur；说明不声称逐题引用命中）
 
 ### BYOK 与 Settings
 
@@ -126,18 +127,18 @@
 - [x] 阶段性源码审计：Setup 无批改语言选择（完成：2026-07-01 约14:30）
 - [x] 阶段性源码审计：task KB 文案未声称全局复用（完成：2026-07-01 约14:30）
 - [x] 静态范围审计脚本 `npm run audit:scope` 已接入（完成：2026-07-01 约15:10，Worker I）
-- [ ] 最终隐藏项审计：Router、Sidebar、Topbar、空状态、移动端截图
+- [x] 最终隐藏项审计：Router、Sidebar、Topbar、空状态、移动端截图（完成：2026-07-01 约19:45，Agent QA / Linnaeus + 主线程浏览器验收）
 
 ### 测试与构建
 
-- [x] `npm run typecheck`（完成：2026-07-01 约15:15）
-- [x] `npm run audit:scope`（完成：2026-07-01 约15:10）
-- [ ] `npm run lint`（当前 `package.json` 尚无 lint 脚本）
-- [x] `npm run build`（完成：2026-07-01 约15:15；已移除未使用 Plotly 依赖，仍有单包 chunk size warning）
-- [x] Vite dev server HTTP smoke test（完成：2026-07-01 约14:42，`localhost:5173` 返回 200）
-- [ ] Playwright 教师主流程验收
-- [ ] 桌面与移动端截图检查
-- [x] 阶段文档状态与实际代码一致性检查（完成：2026-07-01 约14:45）
+- [x] `npm run typecheck`（完成：2026-07-01 约19:05）
+- [x] `npm run audit:scope`（完成：2026-07-01 约19:50）
+- [x] `npm run lint`（完成：2026-07-01 约19:50；无新增依赖，当前执行 `audit:scope` + `typecheck`）
+- [x] `npm run build`（完成：2026-07-01 约19:50；route-level code splitting 后无单包 chunk size warning）
+- [x] Vite dev server HTTP smoke test（完成：2026-07-01 约19:47，`127.0.0.1:5173` 返回 200）
+- [x] Browser/Playwright API 教师主流程验收（完成：2026-07-01 约19:45；本地未安装 `@playwright/test`，使用 Codex Browser 内置 Playwright API 验证）
+- [x] 桌面与移动端截图检查（完成：2026-07-01 约19:45；截图保存于 `/private/tmp/smartai-react-smoke/`）
+- [x] 阶段文档状态与实际代码一致性检查（完成：2026-07-01 约19:55）
 
 ## 5. 本轮 Agent 分工记录
 
@@ -150,12 +151,15 @@
 | Worker F / Wegener | Results、student detail、question detail | 完成 | 子任务 typecheck 通过 |
 | Worker J / Bacon | NL summary/filter/chart | 完成 | 子任务 typecheck 通过 |
 | Worker I / Ptolemy | 静态范围审计脚本 | 完成 | audit:scope 通过 |
-| 主线程 | 集成验证、隐藏项阶段审计、文档 | 完成 | 总体 typecheck/build 通过；HTTP smoke 通过 |
+| Agent QA / Linnaeus | 最终可见范围审计、结果导航证据、浏览器验收清单 | 完成 | audit:scope 通过；报告 Router/Sidebar/Topbar 无隐藏范围泄漏 |
+| Agent UI / Pasteur | 结果区 task-scoped KB 状态反馈 | 完成 | 子任务 typecheck 通过 |
+| Agent Build / Zeno | route-level code splitting、无依赖 lint 脚本 | 完成 | typecheck/lint/build 通过；无 chunk warning |
+| 主线程 | 集成验证、真实浏览器验收、截图、文档 | 完成 | lint/build 通过；登录、Setup、Results、Settings 浏览器验收通过 |
 
 ## 6. 下一阶段建议
 
-下一阶段优先做浏览器验收与体验收口：
+下一阶段优先做正式 e2e 与后端能力补齐：
 
-- 补 Playwright mock 后端验收与桌面/移动端截图。
-- 根据真实浏览器截图继续压缩页面密度、移动端换行和图表可读性。
-- 评估生产包体积，必要时做按路由 code-splitting。
+- 若需要 CI，可补 `@playwright/test` 与 mock 后端夹具，把本轮浏览器验收固化为自动化测试。
+- 用真实样例文件跑完整上传、解析、批改、结果链路；这一步依赖模型 key 与后端 LLM 调用稳定性。
+- 继续推进 `BACKEND_TODOS_CN.md` 中的用户级 KB、持久化、OCR、LMS/LTI 等后端阶段事项。

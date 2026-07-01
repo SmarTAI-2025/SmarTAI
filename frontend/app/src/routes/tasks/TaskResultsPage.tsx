@@ -21,6 +21,7 @@ import { toast } from "sonner";
 import { normalizeAPIError } from "@/api/client";
 import { useAnalyticsQuery } from "@/api/hooks/analytics";
 import { useTask, useTaskResult } from "@/api/hooks/tasks";
+import { useI18n } from "@/i18n/I18nProvider";
 import {
   buildResultsModel,
   clampPercent,
@@ -139,6 +140,15 @@ function ResultsContent({
   model: ResultsModel;
   status?: TaskStatus | "completed" | "not_found";
 }) {
+  const content =
+    context === "by-question" ? (
+      <ByQuestionView taskId={taskId} model={model} />
+    ) : context === "visualization" ? (
+      <VisualizationView taskId={taskId} model={model} />
+    ) : (
+      <OverviewView taskId={taskId} model={model} />
+    );
+
   if (status !== "completed") {
     return (
       <EmptyState
@@ -171,15 +181,63 @@ function ResultsContent({
     );
   }
 
-  if (context === "by-question") {
-    return <ByQuestionView taskId={taskId} model={model} />;
-  }
+  return (
+    <div className="grid gap-4">
+      <TaskKnowledgeStatus model={model} />
+      {content}
+    </div>
+  );
+}
 
-  if (context === "visualization") {
-    return <VisualizationView taskId={taskId} model={model} />;
-  }
+function TaskKnowledgeStatus({ model }: { model: ResultsModel }) {
+  const { t } = useI18n();
+  const kbDocCount = getTaskKBDocCount(model);
+  const status =
+    kbDocCount == null ? "unknown" : kbDocCount > 0 ? "enabled-with-docs" : "enabled-no-docs";
+  const title =
+    status === "enabled-with-docs"
+      ? t("resultKbEnabledWithDocsTitle")
+      : status === "enabled-no-docs"
+        ? t("resultKbEnabledNoDocsTitle")
+        : t("resultKbUnknownTitle");
+  const description =
+    status === "enabled-with-docs"
+      ? t("resultKbEnabledWithDocsDescription").replace("{count}", String(kbDocCount))
+      : status === "enabled-no-docs"
+        ? t("resultKbEnabledNoDocsDescription")
+        : t("resultKbUnknownDescription");
+  const toneClass =
+    status === "enabled-with-docs"
+      ? "border-accent/40 bg-accent/5 text-accent"
+      : status === "enabled-no-docs"
+        ? "border-warning/40 bg-warning/5 text-warning"
+        : "border-muted bg-muted/30 text-muted-foreground";
 
-  return <OverviewView taskId={taskId} model={model} />;
+  return (
+    <Card className="grid gap-3 sm:grid-cols-[auto_minmax(0,1fr)] sm:items-start">
+      <div className={cn("flex h-10 w-10 items-center justify-center rounded-md border", toneClass)}>
+        <FileText className="h-5 w-5" />
+      </div>
+      <div className="grid gap-1">
+        <p className="text-xs font-medium uppercase text-muted-foreground">{t("resultKbStatusLabel")}</p>
+        <h2 className="text-base font-semibold">{title}</h2>
+        <p className="text-sm leading-6 text-muted-foreground">{description}</p>
+        <p className="text-xs leading-5 text-muted-foreground">{t("resultKbUsageNote")}</p>
+      </div>
+    </Card>
+  );
+}
+
+function getTaskKBDocCount(model: ResultsModel) {
+  const explicitCount = model.task?.kb_doc_count;
+  if (typeof explicitCount === "number" && Number.isFinite(explicitCount)) {
+    return explicitCount;
+  }
+  const docs = model.task?.kb_docs;
+  if (docs && typeof docs === "object") {
+    return Object.keys(docs).length;
+  }
+  return null;
 }
 
 interface ActiveStudentFilter {
