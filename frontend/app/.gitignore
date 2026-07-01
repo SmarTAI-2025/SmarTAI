@@ -3,3 +3,7 @@ dist/
 .vite/
 *.local
 
+# Keep React rewrite project docs versioned even though the repository root
+# ignores generic docs/ directories.
+!docs/
+!docs/*.md
