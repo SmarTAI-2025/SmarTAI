@@ -147,10 +147,10 @@ async def test_grading_agent_handles_all_failed(monkeypatch):
     assert correction.score == 0.0
     assert correction.confidence == 0.0
     assert "AI 专家批改失败" in correction.comment
-    assert "zhipu:glm-4.5-air" in correction.comment
-    assert "gemini:gemini-3-flash-preview" in correction.comment
-    # both failures preserved for frontend accordion
+    # both failures preserved for frontend accordion (provider details in expert_results, not comment)
     assert len(correction.expert_results) == 2
+    assert "zhipu:glm-4.5-air" in correction.expert_results[0].provider
+    assert "gemini:gemini-3-flash-preview" in correction.expert_results[1].provider
 
 
 # ─── 2. Partial failure → degraded_to_single ─────────────────────────────────
