@@ -1,5 +1,5 @@
 import { AlertCircle, CheckCircle2, ChevronRight, RotateCcw, Search } from "lucide-react";
-import { useDeferredValue, useMemo } from "react";
+import { useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 import { Link, Navigate, useParams, useSearchParams } from "react-router-dom";
 import { useTask } from "@/api/hooks/tasks";
 import { NewTaskStepper } from "@/components/new-task/NewTaskStepper";
@@ -47,9 +47,14 @@ interface SubmissionQueueItem {
 export function SubmissionReviewOverviewPage() {
   const { taskId } = useParams();
   const [searchParams, setSearchParams] = useSearchParams();
-  const { t } = useI18n();
+  const { locale, t } = useI18n();
   const taskQuery = useTask(taskId);
   const query = searchParams.get("q") ?? "";
+  const latestSearchParamsRef = useRef(new URLSearchParams(searchParams));
+  const queryComposingRef = useRef(false);
+  const pendingCompositionCommitRef = useRef<number | null>(null);
+  const lastCommittedQueryRef = useRef(query);
+  const [queryDraft, setQueryDraft] = useState(query);
   const deferredQuery = useDeferredValue(query);
   const filter = normalizeFilter(searchParams.get("status"));
   const sort = normalizeSort(searchParams.get("sort"));
@@ -68,6 +73,23 @@ export function SubmissionReviewOverviewPage() {
     [deferredQuery, filter, questions, sort, students],
   );
 
+  useEffect(() => {
+    lastCommittedQueryRef.current = query;
+    if (!queryComposingRef.current && pendingCompositionCommitRef.current === null) {
+      setQueryDraft((current) => current === query ? current : query);
+    }
+  }, [query]);
+
+  useEffect(() => {
+    latestSearchParamsRef.current = new URLSearchParams(searchParams);
+  }, [searchParams]);
+
+  useEffect(() => () => {
+    if (pendingCompositionCommitRef.current !== null) {
+      window.clearTimeout(pendingCompositionCommitRef.current);
+    }
+  }, []);
+
   if (taskQuery.isSuccess && taskId) {
     if (!hasTaskReachedStep(taskQuery.data, 4)) {
       return <Navigate replace to={getTaskDestination(taskQuery.data)} />;
@@ -75,10 +97,28 @@ export function SubmissionReviewOverviewPage() {
   }
 
   function setParam(key: string, value: string, defaultValue: string) {
-    const next = new URLSearchParams(searchParams);
+    const next = new URLSearchParams(latestSearchParamsRef.current);
     if (!value || value === defaultValue) next.delete(key);
     else next.set(key, value);
+    latestSearchParamsRef.current = next;
     setSearchParams(next, { replace: true });
+  }
+
+  function commitQuery(value: string) {
+    if (lastCommittedQueryRef.current === value) return;
+    lastCommittedQueryRef.current = value;
+    setParam("q", value, "");
+  }
+
+  function flushComposition(input: HTMLInputElement) {
+    if (pendingCompositionCommitRef.current !== null) {
+      window.clearTimeout(pendingCompositionCommitRef.current);
+      pendingCompositionCommitRef.current = null;
+    }
+    queryComposingRef.current = false;
+    const finalValue = input.value;
+    setQueryDraft(finalValue);
+    commitQuery(finalValue);
   }
 
   const attentionStudent = selection.students.find((student) => studentNeedsAttention(student, selection.questions));
@@ -116,13 +156,13 @@ export function SubmissionReviewOverviewPage() {
           <ReviewMetric
             label={t("submissionReviewMetricReview")}
             value={String(stats.reviewCells)}
-            detail={t("submissionReviewMetricCells")}
+            detail={locale === "zh-CN" ? t("submissionReviewMetricCells") : stats.reviewCells === 1 ? "response" : "responses"}
             tone={stats.reviewCells > 0 ? "danger" : "accent"}
           />
           <ReviewMetric
             label={t("submissionReviewMetricIdentityIssues")}
             value={String(stats.identityAnomalies)}
-            detail={t("submissionReviewMetricStudents")}
+            detail={locale === "zh-CN" ? t("submissionReviewMetricStudents") : stats.identityAnomalies === 1 ? "student" : "students"}
             tone={stats.identityAnomalies > 0 ? "warning" : "neutral"}
           />
         </dl>
@@ -133,8 +173,38 @@ export function SubmissionReviewOverviewPage() {
             <Search aria-hidden="true" className="pointer-events-none absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
             <input
               type="search"
-              value={query}
-              onChange={(event) => setParam("q", event.target.value, "")}
+              value={queryDraft}
+              onCompositionStart={() => {
+                if (pendingCompositionCommitRef.current !== null) {
+                  window.clearTimeout(pendingCompositionCommitRef.current);
+                  pendingCompositionCommitRef.current = null;
+                }
+                queryComposingRef.current = true;
+              }}
+              onCompositionEnd={(event) => {
+                const input = event.currentTarget;
+                queryComposingRef.current = false;
+                setQueryDraft(input.value);
+                pendingCompositionCommitRef.current = window.setTimeout(() => {
+                  flushComposition(input);
+                }, 0);
+              }}
+              onChange={(event) => {
+                const value = event.currentTarget.value;
+                setQueryDraft(value);
+                if (
+                  !queryComposingRef.current
+                  && pendingCompositionCommitRef.current === null
+                  && !(event.nativeEvent as InputEvent).isComposing
+                ) {
+                  commitQuery(value);
+                }
+              }}
+              onBlur={(event) => {
+                if (queryComposingRef.current || pendingCompositionCommitRef.current !== null) {
+                  flushComposition(event.currentTarget);
+                }
+              }}
               placeholder={t("submissionReviewSearchPlaceholder")}
               className="h-10 w-full rounded-[7px] border-0 bg-slate-50 pl-10 pr-3 text-[13px] text-foreground outline-none placeholder:text-muted-foreground focus:ring-2 focus:ring-primary/20 dark:bg-slate-900/50"
             />
@@ -173,7 +243,17 @@ export function SubmissionReviewOverviewPage() {
           {query || filter !== "all" || sort !== "student_id" ? (
             <button
               type="button"
-              onClick={() => setSearchParams({}, { replace: true })}
+              onClick={() => {
+                if (pendingCompositionCommitRef.current !== null) {
+                  window.clearTimeout(pendingCompositionCommitRef.current);
+                  pendingCompositionCommitRef.current = null;
+                }
+                queryComposingRef.current = false;
+                lastCommittedQueryRef.current = "";
+                latestSearchParamsRef.current = new URLSearchParams();
+                setQueryDraft("");
+                setSearchParams({}, { replace: true });
+              }}
               className="inline-flex shrink-0 items-center gap-1 text-[11px] font-semibold text-primary outline-none hover:underline focus-visible:rounded focus-visible:ring-2 focus-visible:ring-ring"
             >
               <RotateCcw aria-hidden="true" className="h-3 w-3" />
@@ -229,10 +309,14 @@ export function SubmissionReviewOverviewPage() {
 
               <footer className="mt-4 flex min-h-[58px] flex-col gap-2 rounded-[10px] border bg-card px-4 py-2.5 sm:flex-row sm:items-center sm:justify-between xl:px-5">
               <p className="text-xs text-muted-foreground">
-                {t("submissionReviewShowingPrefix")}{selection.students.length}
-                {t("submissionReviewShowingMiddle")}{students.length}
-                {t("submissionReviewShowingStudentsSuffix")} · {selection.questions.length}/{questions.length}
-                {t("submissionReviewShowingQuestionsSuffix")}
+                {locale === "zh-CN"
+                  ? <>
+                    {t("submissionReviewShowingPrefix")}{selection.students.length}
+                    {t("submissionReviewShowingMiddle")}{students.length}
+                    {t("submissionReviewShowingStudentsSuffix")} · {selection.questions.length}/{questions.length}
+                    {t("submissionReviewShowingQuestionsSuffix")}
+                  </>
+                  : <>Showing {selection.students.length} of {students.length} {students.length === 1 ? "student" : "students"} · {selection.questions.length} of {questions.length} {questions.length === 1 ? "question" : "questions"}</>}
               </p>
               <div className="flex w-full flex-col gap-2 sm:w-auto sm:flex-row">
                 {detailStudent && detailQuestion ? (

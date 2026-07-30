@@ -85,7 +85,7 @@ export function LoginPage() {
               {zh ? "教师端" : "Teacher workspace"}
             </p>
             <p className="mt-0.5 text-xs text-muted-foreground">
-              {zh ? "题目 · 作答 · 复核 · 分析" : "Problems · Submissions · Review · Insights"}
+              {zh ? "题目 · 作答 · 复核 · 分析" : "Questions · Submissions · Review · Insights"}
             </p>
           </div>
         </div>

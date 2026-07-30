@@ -140,6 +140,37 @@ export function effectiveCorrectionScore(correction: Correction) {
     : correction.score;
 }
 
+/**
+ * The task facade currently serializes a missing AI score as numeric zero.
+ * Do not present that fallback as a real grade while the item still requires
+ * teacher review. A teacher-entered score remains displayable, including 0.
+ */
+export function displayableCorrectionScore(correction: Correction): number | null {
+  if (typeof correction.teacher_score === "number" && Number.isFinite(correction.teacher_score)) {
+    return correction.teacher_score;
+  }
+  if (correction.requires_human_review && correction.review_status !== "confirmed") {
+    return null;
+  }
+  return typeof correction.score === "number" && Number.isFinite(correction.score)
+    ? correction.score
+    : null;
+}
+
+export function correctionReviewDraftScore(correction: Correction): string {
+  const score = displayableCorrectionScore(correction);
+  return score === null ? "" : String(score);
+}
+
+export function correctionReviewReasonIds(correction: Correction): string[] {
+  return Array.from(new Set(
+    (correction.review_reasons ?? [])
+      .flatMap((reason) => reason.split(","))
+      .map((reason) => reason.trim())
+      .filter(Boolean),
+  ));
+}
+
 export function formatPercent(value: number | null | undefined) {
   if (typeof value !== "number" || !Number.isFinite(value)) {
     return "--";

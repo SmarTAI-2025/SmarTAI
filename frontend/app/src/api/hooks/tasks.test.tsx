@@ -2,12 +2,22 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, renderHook } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { CorrectionReviewResponse, Task, TaskFinalizationResponse } from "@/types";
+import type {
+  CorrectionReviewResponse,
+  Task,
+  TaskFinalizationResponse,
+  TaskStateSnapshot,
+} from "@/types";
 import { taskKeys } from "./keys";
-import { useConfirmTaskFinalization, useUpdateCorrectionReview } from "./tasks";
+import {
+  useConfirmTaskFinalization,
+  useStartGrading,
+  useUpdateCorrectionReview,
+} from "./tasks";
 
 vi.mock("@/api/tasks", () => ({
   confirmTaskFinalization: vi.fn(),
+  startGrading: vi.fn(),
   updateCorrectionReview: vi.fn(),
 }));
 
@@ -102,6 +112,46 @@ describe("task finalization cache", () => {
     expect(client.getQueryData<Task>(taskKeys.detail("task-1"))).toMatchObject({
       status: "graded",
       workflow_revision: 8,
+    });
+  });
+});
+
+describe("grading run cache", () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it("marks a regrade as active before progress routing reads stale completed data", async () => {
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    client.setQueryData<Task>(taskKeys.detail("task-1"), {
+      task_id: "task-1",
+      status: "graded",
+      grading_job_id: "old-run",
+    } as Task);
+    client.setQueryData<TaskStateSnapshot>(taskKeys.state("task-1"), {
+      task_id: "task-1",
+      status: "graded",
+      grading_job_id: "old-run",
+    } as TaskStateSnapshot);
+    vi.mocked(tasksApi.startGrading).mockResolvedValue({
+      status: "started",
+      task_id: "task-1",
+      job_id: "new-run",
+    });
+    const wrapper = ({ children }: { children: ReactNode }) => (
+      <QueryClientProvider client={client}>{children}</QueryClientProvider>
+    );
+    const { result } = renderHook(() => useStartGrading(), { wrapper });
+
+    await act(async () => {
+      await result.current.mutateAsync({ taskId: "task-1" });
+    });
+
+    expect(client.getQueryData<Task>(taskKeys.detail("task-1"))).toMatchObject({
+      status: "grading",
+      grading_job_id: "new-run",
+    });
+    expect(client.getQueryData<TaskStateSnapshot>(taskKeys.state("task-1"))).toMatchObject({
+      status: "grading",
+      grading_job_id: "new-run",
     });
   });
 });

@@ -221,7 +221,19 @@ export function useStartGrading() {
   return useMutation({
     mutationFn: ({ taskId, multiSampleN }: { taskId: string; multiSampleN?: number | null }) =>
       tasksApi.startGrading(taskId, { multiSampleN }),
-    onSuccess: (_data, variables) => {
+    onSuccess: (data, variables) => {
+      if (data.status === "started" || data.status === "already_running") {
+        const activeTaskPatch = {
+          status: "grading" as const,
+          grading_job_id: data.job_id ?? null,
+        };
+        queryClient.setQueryData<Task>(taskKeys.detail(variables.taskId), (current) => (
+          current ? { ...current, ...activeTaskPatch } : current
+        ));
+        queryClient.setQueryData<TaskStateSnapshot>(taskKeys.state(variables.taskId), (current) => (
+          current ? { ...current, ...activeTaskPatch } : current
+        ));
+      }
       invalidateTask(queryClient, variables.taskId);
     },
   });

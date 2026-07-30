@@ -1,10 +1,11 @@
 import { Eye, EyeOff } from "lucide-react";
 import { useState, type ChangeEventHandler, type ReactNode } from "react";
+import { LanguageToggle } from "@/components/layout/LanguageToggle";
 import { Input } from "@/components/ui/Input";
 import { useI18n } from "@/i18n/I18nProvider";
 
 export function AuthFrame({ children }: { children: ReactNode }) {
-  const { locale, setLocale } = useI18n();
+  const { locale } = useI18n();
   const zh = locale === "zh-CN";
   return (
     <main className="relative min-h-screen overflow-hidden bg-[#f7f9fc] text-foreground dark:bg-[#0b1220]">
@@ -17,14 +18,7 @@ export function AuthFrame({ children }: { children: ReactNode }) {
               {zh ? "SmarTAI 智能批改工作台" : "SmarTAI Intelligent Grading Workspace"}
             </span>
           </div>
-          <button
-            type="button"
-            className="inline-flex h-8 min-w-12 items-center justify-center rounded-md border border-slate-200 bg-white/75 px-2.5 text-xs font-semibold text-slate-600 outline-none backdrop-blur-sm hover:border-primary/30 hover:text-primary focus-visible:ring-2 focus-visible:ring-ring dark:border-slate-700 dark:bg-slate-900/70 dark:text-slate-300"
-            onClick={() => setLocale(zh ? "en-US" : "zh-CN")}
-            aria-label={zh ? "Switch to English" : "切换为中文"}
-          >
-            {zh ? "EN" : "中文"}
-          </button>
+          <LanguageToggle className="h-8 rounded-md border-slate-200 bg-white/75 backdrop-blur-sm dark:border-slate-700 dark:bg-slate-900/70" />
         </div>
       </header>
 

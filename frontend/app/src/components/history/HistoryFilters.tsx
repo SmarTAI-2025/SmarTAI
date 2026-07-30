@@ -1,5 +1,6 @@
 import { ChevronDown, Search, Sparkles, X } from "lucide-react";
 import { useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
+import { useImeSafeQuery } from "@/hooks/useImeSafeQuery";
 import { useI18n } from "@/i18n/I18nProvider";
 import type { MessageKey } from "@/i18n/messages";
 import type {
@@ -50,6 +51,7 @@ export function HistoryFilters({
   const { locale, t } = useI18n();
   const [keywordDraft, setKeywordDraft] = useState(query.q ?? "");
   const [smartDraft, setSmartDraft] = useState("");
+  const smartSearch = useImeSafeQuery({ value: smartDraft, onCommit: setSmartDraft });
   const semesterOptions = buildSemesterOptions();
 
   useEffect(() => setKeywordDraft(query.q ?? ""), [query.q]);
@@ -63,7 +65,7 @@ export function HistoryFilters({
   }
 
   function submitSmart() {
-    const value = smartDraft.trim();
+    const value = smartSearch.commitDraft().trim();
     if (value) onInterpret(value);
   }
 
@@ -93,15 +95,18 @@ export function HistoryFilters({
             <span className="sr-only">{t("historySmartLabel")}</span>
             <Sparkles aria-hidden="true" className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
             <input
-              value={smartDraft}
-              onChange={(event) => setSmartDraft(event.target.value)}
+              value={smartSearch.draftValue}
+              onBlur={smartSearch.handleBlur}
+              onChange={smartSearch.handleChange}
+              onCompositionEnd={smartSearch.handleCompositionEnd}
+              onCompositionStart={smartSearch.handleCompositionStart}
               className="h-9 w-full rounded-full border bg-background pl-9 pr-3 text-[13px] text-foreground outline-none placeholder:text-muted-foreground focus:border-primary focus:ring-2 focus:ring-primary/15"
               placeholder={t("historySmartPlaceholder")}
             />
           </label>
           <button
             type="submit"
-            disabled={isInterpreting || !smartDraft.trim()}
+            disabled={isInterpreting || !smartSearch.draftValue.trim()}
             className="inline-flex h-9 shrink-0 items-center justify-center gap-2 rounded-full bg-primary px-5 text-[13px] font-semibold text-primary-foreground outline-none transition-colors hover:bg-primary/90 focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50"
           >
             <Sparkles aria-hidden="true" className="h-4 w-4" />
@@ -221,7 +226,9 @@ export function HistoryFilters({
           </div>
           <p className="mt-2 text-xs leading-5 text-muted-foreground">
             {interpretation.conditions.length
-              ? `${t("historySmartAppliedPrefix")}${interpretation.conditions.length}${t("historySmartAppliedSuffix")}`
+              ? locale === "zh-CN"
+                ? `${t("historySmartAppliedPrefix")}${interpretation.conditions.length}${t("historySmartAppliedSuffix")}`
+                : `Applied ${interpretation.conditions.length} editable ${interpretation.conditions.length === 1 ? "condition" : "conditions"}.`
               : t("historySmartNoCondition")}
           </p>
           {interpretation.ambiguities.length ? (

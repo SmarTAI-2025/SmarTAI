@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ArrowDown,
+  ArrowLeft,
   ArrowUp,
   Check,
   Eye,
@@ -13,12 +14,13 @@ import {
   Trash2,
   X,
 } from "lucide-react";
-import { Navigate, useBeforeUnload, useBlocker, useLocation, useNavigate, useParams, useSearchParams } from "react-router-dom";
+import { Link, Navigate, useBeforeUnload, useBlocker, useLocation, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { toast } from "sonner";
 import { useTask, useUpdateProblem } from "@/api/hooks/tasks";
 import { NewTaskStepper } from "@/components/new-task/NewTaskStepper";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { MarkdownMath } from "@/components/ui/MarkdownMath";
+import { SyntaxHighlightedCode } from "@/components/ui/SyntaxHighlightedCode";
 import { UnsavedChangesDialog } from "@/components/ui/UnsavedChangesDialog";
 import { useI18n } from "@/i18n/I18nProvider";
 import { cn } from "@/lib/cn";
@@ -45,13 +47,20 @@ export function QuestionPreparationDetailPage() {
   const urlQuery = searchParams.get("q") ?? "";
   const [query, setQuery] = useState(urlQuery);
   const composingRef = useRef(false);
+  const pendingCompositionCommitRef = useRef<number | null>(null);
+  const lastCommittedQueryRef = useRef(urlQuery);
   const positionedPathRef = useRef<string | null>(null);
 
   const problems = useMemo(
     () => sortProblems(Object.values(taskQuery.data?.problem_data ?? {}), locale),
     [locale, taskQuery.data?.problem_data],
   );
-  const filtered = useMemo(() => filterProblems(problems, query), [problems, query]);
+  const filtered = useMemo(() => filterProblems(problems, urlQuery), [problems, urlQuery]);
+  const activeQuestionIndex = filtered.findIndex((problem) => problem.q_id === activeQuestionId);
+  const previousQuestion = activeQuestionIndex > 0 ? filtered[activeQuestionIndex - 1] : null;
+  const nextQuestion = activeQuestionIndex >= 0 && activeQuestionIndex < filtered.length - 1
+    ? filtered[activeQuestionIndex + 1]
+    : null;
   const readOnly = Boolean(taskQuery.data && taskQuery.data.status !== "problems_ready");
   const hasDirty = dirtyKeys.size > 0;
   const blocker = useBlocker(({ currentLocation, nextLocation }) => (
@@ -59,8 +68,17 @@ export function QuestionPreparationDetailPage() {
   ));
 
   useEffect(() => {
-    if (!composingRef.current) setQuery(urlQuery);
+    lastCommittedQueryRef.current = urlQuery;
+    if (!composingRef.current && pendingCompositionCommitRef.current === null) {
+      setQuery((current) => current === urlQuery ? current : urlQuery);
+    }
   }, [urlQuery]);
+
+  useEffect(() => () => {
+    if (pendingCompositionCommitRef.current !== null) {
+      window.clearTimeout(pendingCompositionCommitRef.current);
+    }
+  }, []);
 
   useBeforeUnload(useCallback((event) => {
     if (hasDirty) {
@@ -123,6 +141,22 @@ export function QuestionPreparationDetailPage() {
     };
   }, [filtered]);
 
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.defaultPrevented || event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
+      if (isKeyboardNavigationBlocked(event.target)) return;
+      if (event.key === "ArrowUp" && previousQuestion) {
+        event.preventDefault();
+        scrollToQuestion(previousQuestion.q_id);
+      } else if (event.key === "ArrowDown" && nextQuestion) {
+        event.preventDefault();
+        scrollToQuestion(nextQuestion.q_id);
+      }
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [nextQuestion?.q_id, previousQuestion?.q_id]);
+
   if (!taskId) {
     return <EmptyState title={tx(locale, "缺少任务 ID", "Task ID is missing")} description={tx(locale, "请从题目风险总览重新进入。", "Reopen this page from the risk overview.")} />;
   }
@@ -130,10 +164,23 @@ export function QuestionPreparationDetailPage() {
   if (taskQuery.data?.status === "extracting_problems") return <Navigate to={`/tasks/${taskId}/problems/progress`} replace />;
 
   function updateQuery(value: string) {
+    if (lastCommittedQueryRef.current === value) return;
+    lastCommittedQueryRef.current = value;
     const next = new URLSearchParams(searchParams);
     if (value.trim()) next.set("q", value);
     else next.delete("q");
     setSearchParams(next, { replace: true });
+  }
+
+  function flushComposition(input: HTMLInputElement) {
+    if (pendingCompositionCommitRef.current !== null) {
+      window.clearTimeout(pendingCompositionCommitRef.current);
+      pendingCompositionCommitRef.current = null;
+    }
+    composingRef.current = false;
+    const finalValue = input.value;
+    setQuery(finalValue);
+    updateQuery(finalValue);
   }
 
   const setFieldDirty = useCallback((key: string, dirty: boolean) => {
@@ -149,6 +196,8 @@ export function QuestionPreparationDetailPage() {
     setActiveQuestionId(targetId);
     scrollQuestionIntoView(targetId, "smooth");
   }
+
+  const overviewHref = `/tasks/${encodeURIComponent(taskId)}/questions${searchParams.size ? `?${searchParams.toString()}` : ""}`;
 
   async function saveText(problem: ProblemInfo, field: TextFieldKey, value: string) {
     await updateProblem.mutateAsync({ taskId: stableTaskId, qId: problem.q_id, [field]: value });
@@ -193,28 +242,48 @@ export function QuestionPreparationDetailPage() {
       <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
         <div>
           <h1 className="text-[30px] font-bold leading-9 tracking-[-0.02em] text-foreground">{tx(locale, "题目资料审核", "Review Question Materials")}</h1>
-          <p className="mt-1 text-sm leading-6 text-muted-foreground">{tx(locale, "连续浏览每道题的题目、标答和评分标准；只有编程题显示测试样例。", "Review the problem, answer, and rubric together. Test cases appear only for programming problems.")}</p>
+          <p className="mt-1 text-sm leading-6 text-muted-foreground">{tx(locale, "连续浏览每道题的题目、标答和评分标准；只有编程题显示测试样例。", "Review each question, reference answer, and rubric together. Test cases appear only for programming questions.")}</p>
         </div>
         <span className="text-xs text-muted-foreground">{taskQuery.data?.name ?? ""}</span>
       </div>
       <NewTaskStepper currentStep={2} />
 
       <label className="relative mt-6 block">
-        <span className="sr-only">{tx(locale, "SmarTAI 智能筛选题目", "SmarTAI Smart problem filter")}</span>
+        <span className="sr-only">{tx(locale, "SmarTAI 智能筛选题目", "SmarTAI Smart question filter")}</span>
         <Search aria-hidden="true" className="pointer-events-none absolute left-4 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
         <input
           value={query}
           inputMode="search"
-          onCompositionStart={() => { composingRef.current = true; }}
+          onCompositionStart={() => {
+            if (pendingCompositionCommitRef.current !== null) {
+              window.clearTimeout(pendingCompositionCommitRef.current);
+              pendingCompositionCommitRef.current = null;
+            }
+            composingRef.current = true;
+          }}
           onCompositionEnd={(event) => {
+            const input = event.currentTarget;
             composingRef.current = false;
-            const value = event.currentTarget.value;
-            setQuery(value);
-            window.setTimeout(() => updateQuery(value), 0);
+            setQuery(input.value);
+            pendingCompositionCommitRef.current = window.setTimeout(() => {
+              flushComposition(input);
+            }, 0);
           }}
           onChange={(event) => {
-            setQuery(event.target.value);
-            if (!composingRef.current) updateQuery(event.target.value);
+            const value = event.currentTarget.value;
+            setQuery(value);
+            if (
+              !composingRef.current
+              && pendingCompositionCommitRef.current === null
+              && !(event.nativeEvent as InputEvent).isComposing
+            ) {
+              updateQuery(value);
+            }
+          }}
+          onBlur={(event) => {
+            if (composingRef.current || pendingCompositionCommitRef.current !== null) {
+              flushComposition(event.currentTarget);
+            }
           }}
           placeholder={tx(locale, "SmarTAI 智能搜索：题号、题型、题目内容，或“编程题 / 低置信 / 冲突”", "SmarTAI Smart Search: number, type, content, or “programming / low confidence / conflict”")}
           className="h-12 w-full rounded-[10px] border bg-card pl-11 pr-4 text-[13px] outline-none placeholder:text-muted-foreground focus:border-primary focus:ring-2 focus:ring-primary/15"
@@ -274,12 +343,18 @@ export function QuestionPreparationDetailPage() {
               <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
                 <div>
                   <h2 className="text-lg font-bold text-foreground">{tx(locale, "完成全部题目资料审核", "Finish Reviewing All Question Materials")}</h2>
-                  <p className="mt-1 text-sm leading-6 text-muted-foreground">{tx(locale, `共 ${problems.length} 道题；确认后进入学生作答上传。`, `${problems.length} questions; continue to student submissions after confirmation.`)}</p>
+                  <p className="mt-1 text-sm leading-6 text-muted-foreground">{tx(locale, `共 ${problems.length} 道题；确认后进入学生作答上传。`, `${problems.length} ${problems.length === 1 ? "question" : "questions"}; continue to student submissions after confirmation.`)}</p>
                 </div>
-                {!readOnly ? <button type="button" disabled={confirming || hasDirty} onClick={() => void confirmAll()} className="inline-flex h-10 items-center justify-center gap-2 rounded-[8px] bg-primary px-5 text-sm font-semibold text-primary-foreground hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50">
-                  {confirming ? <Loader2 aria-hidden="true" className="h-4 w-4 animate-spin" /> : <Check aria-hidden="true" className="h-4 w-4" />}
-                  {tx(locale, "确认全部题目资料", "Confirm All Materials")}
-                </button> : null}
+                <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+                  <Link to={overviewHref} className="inline-flex h-10 items-center justify-center gap-2 rounded-[8px] border bg-card px-4 text-sm font-semibold text-foreground outline-none hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring">
+                    <ArrowLeft aria-hidden="true" className="h-4 w-4" />
+                    {tx(locale, "返回题目资料总览", "Back to Question Material Overview")}
+                  </Link>
+                  {!readOnly ? <button type="button" disabled={confirming || hasDirty} onClick={() => void confirmAll()} className="inline-flex h-10 items-center justify-center gap-2 rounded-[8px] bg-primary px-5 text-sm font-semibold text-primary-foreground hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50">
+                    {confirming ? <Loader2 aria-hidden="true" className="h-4 w-4 animate-spin" /> : <Check aria-hidden="true" className="h-4 w-4" />}
+                    {tx(locale, "确认全部题目资料", "Confirm All Materials")}
+                  </button> : null}
+                </div>
               </div>
             </section>
           </main>
@@ -323,7 +398,7 @@ function QuestionPackageCard({ problem, index, total, previous, next, readOnly, 
           <div className="flex flex-wrap items-center gap-2">
             <h2 className="text-xl font-bold text-foreground">{tx(locale, `第 ${problem.number || problem.q_id} 题`, `Question ${problem.number || problem.q_id}`)}</h2>
             <span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs text-muted-foreground dark:bg-slate-800">{problem.type || tx(locale, "未分类", "Uncategorized")}</span>
-            {risks.length ? <span className="rounded-full bg-amber-100 px-2.5 py-1 text-xs font-semibold text-amber-700">{tx(locale, `${risks.length} 项需核对`, `${risks.length} risk(s)`)}</span> : null}
+            {risks.length ? <span className="rounded-full bg-amber-100 px-2.5 py-1 text-xs font-semibold text-amber-700">{tx(locale, `${risks.length} 项需核对`, `${risks.length} ${risks.length === 1 ? "risk" : "risks"}`)}</span> : null}
           </div>
           <p className="mt-1 text-xs text-muted-foreground">{tx(locale, `筛选结果中的第 ${index + 1} / ${total} 题`, `${index + 1} of ${total}`)}</p>
         </div>
@@ -337,11 +412,11 @@ function QuestionPackageCard({ problem, index, total, previous, next, readOnly, 
       ) : null}
 
       <div className="space-y-0 divide-y">
-        <EditableTextField fieldKey={`${problem.q_id}:stem`} label={tx(locale, "题目", "Problem")} value={problem.stem} problem={problem} field="stem" readOnly={readOnly} saving={saving} locale={locale} onDirtyChange={onDirtyChange} onSave={onSaveText} />
+        <EditableTextField fieldKey={`${problem.q_id}:stem`} label={tx(locale, "题目", "Question")} value={problem.stem} problem={problem} field="stem" readOnly={readOnly} saving={saving} locale={locale} onDirtyChange={onDirtyChange} onSave={onSaveText} />
 
         <div className="grid divide-y md:grid-cols-2 md:divide-x md:divide-y-0">
-          <EditableTextField fieldKey={`${problem.q_id}:answer`} label={tx(locale, "标答 / 解题步骤", "Answer / Solution Steps")} value={problem.reference_answer ?? ""} problem={problem} field="reference_answer" readOnly={readOnly} saving={saving} locale={locale} onDirtyChange={onDirtyChange} onSave={onSaveText} />
-          <EditableTextField fieldKey={`${problem.q_id}:rubric`} label={tx(locale, "评分标准（与标答步骤对应）", "Rubric (Aligned to Answer Steps)")} value={problem.criterion ?? ""} problem={problem} field="criterion" readOnly={readOnly} saving={saving} locale={locale} onDirtyChange={onDirtyChange} onSave={onSaveText} />
+          <EditableTextField fieldKey={`${problem.q_id}:answer`} label={tx(locale, "标答 / 解题步骤", "Reference Answer / Solution Steps")} value={problem.reference_answer ?? ""} problem={problem} field="reference_answer" readOnly={readOnly} saving={saving} locale={locale} onDirtyChange={onDirtyChange} onSave={onSaveText} />
+          <EditableTextField fieldKey={`${problem.q_id}:rubric`} label={tx(locale, "评分标准（与标答步骤对应）", "Rubric (Aligned with Reference Answer Steps)")} value={problem.criterion ?? ""} problem={problem} field="criterion" readOnly={readOnly} saving={saving} locale={locale} onDirtyChange={onDirtyChange} onSave={onSaveText} />
         </div>
 
         {programming ? (
@@ -357,7 +432,7 @@ function QuestionPackageCard({ problem, index, total, previous, next, readOnly, 
       </div>
 
       <footer className="flex items-center justify-between border-t px-5 py-3 sm:px-6">
-        <span className="text-xs text-muted-foreground">{tx(locale, "浏览态渲染 LaTeX；点击修改后显示原始源码。", "LaTeX is rendered while reading and shown as source while editing.")}</span>
+        <span className="text-xs text-muted-foreground">{tx(locale, "浏览态会渲染 LaTeX 或代码；点击修改可编辑源码。", "LaTeX and code are rendered while browsing; click Edit to edit the source.")}</span>
         <QuestionNavigator previous={previous} next={next} locale={locale} onNavigate={onNavigate} compact />
       </footer>
     </article>
@@ -409,13 +484,19 @@ function EditableTextField({ fieldKey, label, value, problem, field, readOnly, s
         <div className="mt-3">
           <textarea value={draft} onChange={(event) => setDraft(event.target.value)} rows={field === "stem" ? 7 : compact ? 6 : 8} className={cn("w-full resize-y rounded-[8px] border bg-background px-4 py-3 text-sm leading-6 text-foreground outline-none focus:border-primary focus:ring-2 focus:ring-primary/15", field === "solution_code" && "font-mono text-xs")} />
           <div className="mt-3 flex items-center justify-between gap-3">
-            <p className={cn("text-xs", error ? "text-danger" : "text-muted-foreground")}>{error ? tx(locale, "保存失败，请重试。", "Save failed. Try again.") : tx(locale, "编辑态保留原始 Markdown / LaTeX。", "Raw Markdown / LaTeX is preserved while editing.")}</p>
+            <p className={cn("text-xs", error ? "text-danger" : "text-muted-foreground")}>{error
+              ? tx(locale, "保存失败，请重试。", "Save failed. Try again.")
+              : field === "solution_code"
+                ? tx(locale, "可直接编辑源码；保存后恢复语法高亮。", "Edit the source code directly; syntax highlighting returns after saving.")
+                : tx(locale, "编辑态保留原始 Markdown / LaTeX。", "Raw Markdown / LaTeX is preserved while editing.")}</p>
             <button type="button" disabled={saving || !dirty} onClick={() => void save()} className="inline-flex h-9 items-center gap-2 rounded-[7px] bg-primary px-4 text-xs font-semibold text-primary-foreground hover:opacity-90 disabled:opacity-45">{saving ? <Loader2 aria-hidden="true" className="h-3.5 w-3.5 animate-spin" /> : <Save aria-hidden="true" className="h-3.5 w-3.5" />}{tx(locale, "保存", "Save")}</button>
           </div>
         </div>
       ) : (
         <div className={cn("mt-3 min-h-[92px] rounded-[8px] bg-slate-50 px-4 py-3 text-sm leading-6 dark:bg-slate-950/20", compact && "min-h-[72px]")}>
-          {value.trim() ? (field === "solution_code" ? <pre className="overflow-x-auto whitespace-pre-wrap font-mono text-xs leading-6 text-foreground">{value}</pre> : <MarkdownMath>{value}</MarkdownMath>) : <p className="text-sm text-muted-foreground">{tx(locale, "SmarTAI 正在生成或本次处理未成功，请在风险总览查看。", "SmarTAI generation is pending or failed; check the risk overview.")}</p>}
+          {value.trim() ? (field === "solution_code"
+            ? <SyntaxHighlightedCode code={value} languageHint={`${problem.type}\n${problem.stem}`} locale={locale} />
+            : <MarkdownMath>{value}</MarkdownMath>) : <p className="text-sm text-muted-foreground">{tx(locale, "SmarTAI 正在生成或本次处理未成功，请在风险总览查看。", "SmarTAI generation is pending or failed; check the risk overview.")}</p>}
         </div>
       )}
     </section>
@@ -507,7 +588,7 @@ function TestCaseViewer({ testCase, locale }: { testCase: TestCase; locale: stri
     <article className="rounded-[8px] border bg-slate-50 p-4 dark:bg-slate-950/20">
       <div className="flex flex-wrap items-center gap-2 text-xs">
         <span className={cn("rounded-full px-2.5 py-1 font-semibold", (testCase.visibility ?? "example") === "hidden" ? "bg-slate-200 text-slate-700 dark:bg-slate-800 dark:text-slate-200" : "bg-blue-100 text-blue-700")}>{(testCase.visibility ?? "example") === "hidden" ? tx(locale, "隐藏测试", "Hidden") : tx(locale, "公开样例", "Example")}</span>
-        <span className="text-muted-foreground">{functionMode ? tx(locale, "函数调用", "Function") : "stdin / stdout"}</span>
+        <span className="text-muted-foreground">{functionMode ? tx(locale, "函数调用", "Function Call") : "stdin / stdout"}</span>
       </div>
       <div className="mt-4 grid gap-4 md:grid-cols-2">
         <CodeBlock label={tx(locale, "输入", "Input")} value={input} />
@@ -533,6 +614,11 @@ function QuestionNavigator({ previous, next, locale, onNavigate, compact = false
       <button type="button" disabled={!next} onClick={() => next && onNavigate(next.q_id)} className={cn("inline-flex items-center justify-center gap-1.5 rounded-[6px] border text-xs font-semibold hover:bg-muted disabled:opacity-30", compact ? "h-8 w-8 px-0" : "h-9 px-3")} aria-label={tx(locale, "下一题", "Next question")}>{compact ? null : tx(locale, "下一题", "Next")}<ArrowDown aria-hidden="true" className="h-3.5 w-3.5" /></button>
     </div>
   );
+}
+
+function isKeyboardNavigationBlocked(target: EventTarget | null) {
+  if (!(target instanceof HTMLElement)) return false;
+  return Boolean(target.closest("input, textarea, select, [contenteditable='true'], [role='dialog']"));
 }
 
 function updateCase(cases: TestCase[], index: number, patch: Partial<TestCase>) {

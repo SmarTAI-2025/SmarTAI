@@ -383,6 +383,18 @@ function localizeEvent(event: ProgressEvent, t: (key: MessageKey) => string): st
   const message = event.message.toLowerCase();
   if (message === "phase: parsing") return t("submissionProgressEventParsing");
   if (message === "phase: done") return t("submissionProgressEventDone");
+  if (message.startsWith("reading ") && message.endsWith("...")) {
+    return t("submissionProgressEventReadingFile");
+  }
+  if (message.startsWith("detected scanned pdf:") && message.includes("rendering pages for ocr")) {
+    return t("submissionProgressEventScannedPdf");
+  }
+  if (message.startsWith("ocr recognizing ")) {
+    return t("submissionProgressEventOcrRecognizing");
+  }
+  if (message.startsWith("ocr warning for ")) {
+    return t("submissionProgressEventOcrWarning");
+  }
   if (message === "submission files prepared.") return t("submissionProgressEventFilesPrepared");
   if (message === "submission recognition started.") return t("submissionProgressEventStarted");
   if (message === "submission recognized.") return t("submissionProgressEventRecognized");

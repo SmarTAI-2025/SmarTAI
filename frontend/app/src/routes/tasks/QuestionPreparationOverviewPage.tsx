@@ -31,14 +31,25 @@ export function QuestionPreparationOverviewPage() {
   const urlQuery = searchParams.get("q") ?? "";
   const [query, setQuery] = useState(urlQuery);
   const composingRef = useRef(false);
+  const pendingCompositionCommitRef = useRef<number | null>(null);
+  const lastCommittedQueryRef = useRef(urlQuery);
   const [selectedTypes, setSelectedTypes] = useState<Set<string>>(new Set());
   const [sortKey, setSortKey] = useState<MatrixSortKey>("number");
   const [sortDirection, setSortDirection] = useState<MatrixSortDirection>("asc");
-  const deferredQuery = useDeferredValue(query);
+  const deferredQuery = useDeferredValue(urlQuery);
 
   useEffect(() => {
-    if (!composingRef.current) setQuery(urlQuery);
+    lastCommittedQueryRef.current = urlQuery;
+    if (!composingRef.current && pendingCompositionCommitRef.current === null) {
+      setQuery((current) => current === urlQuery ? current : urlQuery);
+    }
   }, [urlQuery]);
+
+  useEffect(() => () => {
+    if (pendingCompositionCommitRef.current !== null) {
+      window.clearTimeout(pendingCompositionCommitRef.current);
+    }
+  }, []);
 
   const problems = useMemo(
     () => sortProblems(Object.values(taskQuery.data?.problem_data ?? {}), locale),
@@ -75,10 +86,23 @@ export function QuestionPreparationOverviewPage() {
   }
 
   function updateQuery(value: string) {
+    if (lastCommittedQueryRef.current === value) return;
+    lastCommittedQueryRef.current = value;
     const next = new URLSearchParams(searchParams);
     if (value.trim()) next.set("q", value);
     else next.delete("q");
     setSearchParams(next, { replace: true });
+  }
+
+  function flushComposition(input: HTMLInputElement) {
+    if (pendingCompositionCommitRef.current !== null) {
+      window.clearTimeout(pendingCompositionCommitRef.current);
+      pendingCompositionCommitRef.current = null;
+    }
+    composingRef.current = false;
+    const finalValue = input.value;
+    setQuery(finalValue);
+    updateQuery(finalValue);
   }
 
   function toggleSort(key: MatrixSortKey) {
@@ -123,16 +147,36 @@ export function QuestionPreparationOverviewPage() {
             type="text"
             inputMode="search"
             value={query}
-            onCompositionStart={() => { composingRef.current = true; }}
+            onCompositionStart={() => {
+              if (pendingCompositionCommitRef.current !== null) {
+                window.clearTimeout(pendingCompositionCommitRef.current);
+                pendingCompositionCommitRef.current = null;
+              }
+              composingRef.current = true;
+            }}
             onCompositionEnd={(event) => {
+              const input = event.currentTarget;
               composingRef.current = false;
-              const value = event.currentTarget.value;
-              setQuery(value);
-              window.setTimeout(() => updateQuery(value), 0);
+              setQuery(input.value);
+              pendingCompositionCommitRef.current = window.setTimeout(() => {
+                flushComposition(input);
+              }, 0);
             }}
             onChange={(event) => {
-              setQuery(event.target.value);
-              if (!composingRef.current) updateQuery(event.target.value);
+              const value = event.currentTarget.value;
+              setQuery(value);
+              if (
+                !composingRef.current
+                && pendingCompositionCommitRef.current === null
+                && !(event.nativeEvent as InputEvent).isComposing
+              ) {
+                updateQuery(value);
+              }
+            }}
+            onBlur={(event) => {
+              if (composingRef.current || pendingCompositionCommitRef.current !== null) {
+                flushComposition(event.currentTarget);
+              }
             }}
             placeholder={tx(locale, "SmarTAI 智能搜索：题号、题型、资料状态或风险原因", "SmarTAI Smart Search: question, type, material status, or risk")}
             className="h-12 w-full rounded-[10px] border bg-card pl-11 pr-4 text-[13px] text-foreground outline-none placeholder:text-muted-foreground focus:border-primary focus:ring-2 focus:ring-primary/15"
@@ -162,7 +206,9 @@ export function QuestionPreparationOverviewPage() {
             />
           ) : <MatrixEmpty filtered={Boolean(query || selectedTypes.size)} locale={locale} />}
           <footer className="flex min-h-[58px] flex-col gap-2 border-t px-4 py-2.5 sm:flex-row sm:items-center sm:justify-between xl:px-5">
-            <p className="text-xs text-muted-foreground">{tx(locale, `显示 ${rows.length} / ${problems.length} 道题 · ${allRisks.length} 个开放风险`, `Showing ${rows.length} / ${problems.length} questions · ${allRisks.length} open risks`)}</p>
+            <p className="text-xs text-muted-foreground">{locale === "zh-CN"
+              ? `显示 ${rows.length} / ${problems.length} 道题 · ${allRisks.length} 个开放风险`
+              : `Showing ${rows.length} of ${problems.length} ${problems.length === 1 ? "question" : "questions"} · ${allRisks.length} open ${allRisks.length === 1 ? "risk" : "risks"}`}</p>
             {taskId && firstQuestionId ? (
               <Link to={`/tasks/${taskId}/questions/${encodeURIComponent(firstQuestionId)}/content`} className="inline-flex h-9 items-center justify-center gap-1.5 rounded-[7px] bg-primary px-4 text-sm font-semibold text-primary-foreground outline-none hover:opacity-90 focus-visible:ring-2 focus-visible:ring-ring">
                 {tx(locale, "进入完整审核", "Open Full Review")}
@@ -209,8 +255,8 @@ function QuestionMatrix({ rows, taskId, locale, sortKey, sortDirection, availabl
                 </details>
               </div>
             </th>
-            <th className="w-[145px] px-3 py-3">{tx(locale, "题目", "Problem")}</th>
-            <th className="w-[145px] px-3 py-3">{tx(locale, "标答", "Answer")}</th>
+            <th className="w-[145px] px-3 py-3">{tx(locale, "题目", "Question")}</th>
+            <th className="w-[145px] px-3 py-3">{tx(locale, "标答", "Reference Answer")}</th>
             <th className="w-[145px] px-3 py-3">{tx(locale, "评分标准", "Rubric")}</th>
             <th className="w-[145px] px-3 py-3">{tx(locale, "测试样例", "Tests")}</th>
             <SortableHeading className="w-[145px] px-3" label={tx(locale, "审核提示", "Attention")} sortKey="attention" activeKey={sortKey} direction={sortDirection} locale={locale} onSort={onSort} />
@@ -316,7 +362,7 @@ function getMaterialStatus(problem: ProblemInfo, field: MaterialField, locale: s
         : Boolean(problem.test_cases?.length);
   if (!valueReady) return { label: tx(locale, "待处理", "Pending"), detail: tx(locale, "本项资料尚未准备完成", "This material is not ready"), tone: "danger" };
 
-  if (field === "stem") return { label: tx(locale, "已识别", "Recognized"), detail: tx(locale, "题目正文已识别", "Problem content recognized"), tone: "success" };
+  if (field === "stem") return { label: tx(locale, "已识别", "Recognized"), detail: tx(locale, "题目正文已识别", "Question text recognized"), tone: "success" };
   const provenanceKey = field === "answer" ? "reference_answer" : field === "rubric" ? "criterion" : "test_cases";
   const material = problem.material_provenance?.[provenanceKey];
   const generated = problem.ai_completion_provenance?.[provenanceKey];
@@ -382,7 +428,7 @@ function issueCodeLabel(code: PreparationIssue["code"], locale: string) {
     unmapped_source_content: ["原文件中有内容尚未匹配", "Some source content is unmatched"],
     parse_anomaly: ["文件解析结果异常", "File parsing anomaly"],
     generation_failed: ["所需内容生成失败", "Required content generation failed"],
-    rubric_step_reference_conflict: ["评分步骤与标答步骤未正确对应", "Rubric steps do not align with answer steps"],
+    rubric_step_reference_conflict: ["评分步骤与标答步骤未正确对应", "Rubric steps do not align with reference-answer steps"],
     invalid_test_case: ["测试样例结构无效", "Invalid test case structure"],
     reference_solution_failed_case: ["参考解未通过测试样例", "Reference solution failed a test"],
   };

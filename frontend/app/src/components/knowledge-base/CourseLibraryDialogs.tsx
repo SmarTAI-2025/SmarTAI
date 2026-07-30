@@ -278,9 +278,10 @@ interface MaterialDialogProps {
   onClose: () => void;
   onSaved: (material: CourseMaterial) => void;
   onDeleted: () => void;
+  initialConfirmDelete?: boolean;
 }
 
-export function MaterialDialog({ material, courses, groups, onClose, onSaved, onDeleted }: MaterialDialogProps) {
+export function MaterialDialog({ material, courses, groups, onClose, onSaved, onDeleted, initialConfirmDelete = false }: MaterialDialogProps) {
   const { locale } = useI18n();
   const update = useUpdateCourseMaterial();
   const remove = useDeleteCourseMaterial();
@@ -289,7 +290,7 @@ export function MaterialDialog({ material, courses, groups, onClose, onSaved, on
   const [groupId, setGroupId] = useState(material.group_id ?? "");
   const [category, setCategory] = useState(material.category);
   const [labels, setLabels] = useState(material.labels.join(", "));
-  const [confirmDelete, setConfirmDelete] = useState(false);
+  const [confirmDelete, setConfirmDelete] = useState(initialConfirmDelete);
   const isPending = update.isPending || remove.isPending;
   const availableGroups = useMemo(
     () => groups.filter((group) => !courseId || !group.course_id || group.course_id === courseId),
@@ -335,14 +336,15 @@ export function MaterialDialog({ material, courses, groups, onClose, onSaved, on
 
   return (
     <LibraryDialog
-      title={tx(locale, "管理资料", "Manage material")}
-      description={tx(locale, "修改名称、课程、分组和标签；已解析正文保持不变。", "Change its name, course, group and labels. Parsed content stays unchanged.")}
+      title={confirmDelete ? tx(locale, "删除资料", "Delete material") : tx(locale, "管理资料", "Manage material")}
+      description={confirmDelete
+        ? tx(locale, "删除后无法恢复，请确认要删除的文件。", "This cannot be undone. Confirm the file you want to delete.")
+        : tx(locale, "修改名称、课程、分组和标签；已解析正文保持不变。", "Change its name, course, group and labels. Parsed content stays unchanged.")}
       closeLabel={tx(locale, "关闭", "Close")}
       onClose={onClose}
       footer={confirmDelete ? (
         <>
-          <span className="mr-auto max-w-[280px] text-sm font-medium text-danger">{material.task_reference_count ? tx(locale, `这份资料被 ${material.task_reference_count} 个任务引用，仍要删除吗？`, `This material is used by ${material.task_reference_count} tasks. Delete it anyway?`) : tx(locale, "确认删除这份资料？", "Delete this material?")}</span>
-          <Button type="button" variant="secondary" onClick={() => setConfirmDelete(false)} disabled={isPending}>{tx(locale, "取消", "Cancel")}</Button>
+          <Button type="button" variant="secondary" onClick={() => { if (initialConfirmDelete) onClose(); else setConfirmDelete(false); }} disabled={isPending}>{tx(locale, "取消", "Cancel")}</Button>
           <Button type="button" variant="danger" onClick={() => void deleteMaterial()} disabled={isPending}>{remove.isPending ? <LoaderCircle className="h-4 w-4 animate-spin" /> : null}{tx(locale, "确认删除", "Delete")}</Button>
         </>
       ) : (
@@ -353,50 +355,68 @@ export function MaterialDialog({ material, courses, groups, onClose, onSaved, on
         </>
       )}
     >
-      <form id="course-material-edit-form" className="grid gap-4" onSubmit={(event) => void save(event)}>
-        <FormField label={tx(locale, "文件名称", "File name")}>
-          <Input className="h-10 w-full" value={filename} maxLength={240} onChange={(event) => setFilename(event.target.value)} />
-        </FormField>
-        <div className="grid gap-4 sm:grid-cols-2">
-          <FormField label={tx(locale, "课程（可选）", "Course (optional)")}>
-            <select className={SELECT_CLASS} value={courseId} onChange={(event) => {
-              const next = event.target.value;
-              setCourseId(next);
-              const selected = groups.find((item) => item.group_id === groupId);
-              if (selected?.course_id && selected.course_id !== next) setGroupId("");
-            }}>
-              <option value="">{tx(locale, "不限定课程", "No course")}</option>
-              {courses.map((course) => <option key={course.id} value={course.id}>{course.name}{course.code ? ` · ${course.code}` : ""}</option>)}
-            </select>
-          </FormField>
-          <FormField label={tx(locale, "分组（可选）", "Group (optional)")}>
-            <select className={SELECT_CLASS} value={groupId} onChange={(event) => {
-              const next = event.target.value;
-              setGroupId(next);
-              const selected = groups.find((item) => item.group_id === next);
-              if (selected?.course_id) setCourseId(selected.course_id);
-            }}>
-              <option value="">{tx(locale, "未分组", "Ungrouped")}</option>
-              {availableGroups.map((group) => <option key={group.group_id} value={group.group_id}>{group.name}</option>)}
-            </select>
-          </FormField>
+      {confirmDelete ? (
+        <div className="rounded-[10px] border border-red-200 bg-red-50/60 p-4 dark:border-red-900 dark:bg-red-950/20">
+          <div className="flex items-start gap-3">
+            <span className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-red-100 text-danger dark:bg-red-950/70">
+              <Trash2 aria-hidden="true" className="h-[18px] w-[18px]" />
+            </span>
+            <div className="min-w-0">
+              <p className="truncate text-sm font-semibold">{material.filename}</p>
+              <p className="mt-1 text-sm leading-5 text-muted-foreground">
+                {material.task_reference_count
+                  ? tx(locale, `这份资料被 ${material.task_reference_count} 个任务引用，删除时也会解除这些引用。`, `This material is used by ${material.task_reference_count} tasks. Deleting it will also detach those references.`)
+                  : tx(locale, "这份资料目前没有被任务引用。", "This material is not currently used by any task.")}
+              </p>
+            </div>
+          </div>
         </div>
-        <div className="grid gap-4 sm:grid-cols-2">
-          <FormField label={tx(locale, "资料类型", "Material type")}>
-            <select className={SELECT_CLASS} value={category} onChange={(event) => setCategory(event.target.value as CourseMaterialCategory)}>
-              {categories.map((item) => <option key={item} value={item}>{categoryLabel(item, locale)}</option>)}
-            </select>
+      ) : (
+        <form id="course-material-edit-form" className="grid gap-4" onSubmit={(event) => void save(event)}>
+          <FormField label={tx(locale, "文件名称", "File name")}>
+            <Input className="h-10 w-full" value={filename} maxLength={240} onChange={(event) => setFilename(event.target.value)} />
           </FormField>
-          <FormField label={tx(locale, "标签（逗号分隔）", "Labels (comma separated)")}>
-            <Input className="h-10 w-full" value={labels} onChange={(event) => setLabels(event.target.value)} />
-          </FormField>
-        </div>
-        <div className="flex flex-wrap gap-x-5 gap-y-1 rounded-[8px] bg-slate-50 px-3 py-2 text-xs text-muted-foreground dark:bg-slate-900/40">
-          <span>{tx(locale, "状态：已解析", "Status: parsed")}</span>
-          <span>{formatBytes(material.size_bytes)}</span>
-          <span>{material.task_reference_count} {tx(locale, "个任务引用", material.task_reference_count === 1 ? "task reference" : "task references")}</span>
-        </div>
-      </form>
+          <div className="grid gap-4 sm:grid-cols-2">
+            <FormField label={tx(locale, "课程（可选）", "Course (optional)")}>
+              <select className={SELECT_CLASS} value={courseId} onChange={(event) => {
+                const next = event.target.value;
+                setCourseId(next);
+                const selected = groups.find((item) => item.group_id === groupId);
+                if (selected?.course_id && selected.course_id !== next) setGroupId("");
+              }}>
+                <option value="">{tx(locale, "不限定课程", "No course")}</option>
+                {courses.map((course) => <option key={course.id} value={course.id}>{course.name}{course.code ? ` · ${course.code}` : ""}</option>)}
+              </select>
+            </FormField>
+            <FormField label={tx(locale, "分组（可选）", "Group (optional)")}>
+              <select className={SELECT_CLASS} value={groupId} onChange={(event) => {
+                const next = event.target.value;
+                setGroupId(next);
+                const selected = groups.find((item) => item.group_id === next);
+                if (selected?.course_id) setCourseId(selected.course_id);
+              }}>
+                <option value="">{tx(locale, "未分组", "Ungrouped")}</option>
+                {availableGroups.map((group) => <option key={group.group_id} value={group.group_id}>{group.name}</option>)}
+              </select>
+            </FormField>
+          </div>
+          <div className="grid gap-4 sm:grid-cols-2">
+            <FormField label={tx(locale, "资料类型", "Material type")}>
+              <select className={SELECT_CLASS} value={category} onChange={(event) => setCategory(event.target.value as CourseMaterialCategory)}>
+                {categories.map((item) => <option key={item} value={item}>{categoryLabel(item, locale)}</option>)}
+              </select>
+            </FormField>
+            <FormField label={tx(locale, "标签（逗号分隔）", "Labels (comma separated)")}>
+              <Input className="h-10 w-full" value={labels} onChange={(event) => setLabels(event.target.value)} />
+            </FormField>
+          </div>
+          <div className="flex flex-wrap gap-x-5 gap-y-1 rounded-[8px] bg-slate-50 px-3 py-2 text-xs text-muted-foreground dark:bg-slate-900/40">
+            <span>{tx(locale, "状态：已解析", "Status: parsed")}</span>
+            <span>{formatBytes(material.size_bytes)}</span>
+            <span>{material.task_reference_count} {tx(locale, "个任务引用", material.task_reference_count === 1 ? "task reference" : "task references")}</span>
+          </div>
+        </form>
+      )}
     </LibraryDialog>
   );
 }

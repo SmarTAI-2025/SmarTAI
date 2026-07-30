@@ -113,8 +113,8 @@ export function QuestionMaterialImportReviewPage() {
       const normalized = normalizeAPIError(error);
       const code = getAPIErrorCode(normalized) ?? "";
       const invalidPlanMessages: Record<string, [string, string]> = {
-        stale_workflow_revision: ["题目资料已发生变化，当前匹配计划不能继续使用。", "Problem materials changed, so this match plan can no longer be applied."],
-        stale_revision: ["题目资料已发生变化，当前匹配计划不能继续使用。", "Problem materials changed, so this match plan can no longer be applied."],
+        stale_workflow_revision: ["题目资料已发生变化，当前匹配计划不能继续使用。", "Question materials changed, so this match plan can no longer be applied."],
+        stale_revision: ["题目资料已发生变化，当前匹配计划不能继续使用。", "Question materials changed, so this match plan can no longer be applied."],
         workflow_busy: ["任务正在执行其他操作，当前匹配计划不能继续使用。", "The task is busy, so this match plan can no longer be applied."],
         plan_superseded: ["当前匹配计划已被新计划替代。", "This match plan was superseded by a newer plan."],
         material_import_plan_expired: ["当前匹配计划已过期，需要重新选择资料并匹配。", "This match plan expired. Choose the material and match it again."],
@@ -185,7 +185,7 @@ export function QuestionMaterialImportReviewPage() {
           </div>
         ) : taskQuery.isError || !taskQuery.isSuccess ? (
           <div className="flex min-h-[320px] flex-col items-center justify-center px-5 text-center">
-            <p className="text-sm font-semibold text-danger">{locale === "zh-CN" ? "无法读取当前题目资料" : "Current problem materials could not be loaded"}</p>
+            <p className="text-sm font-semibold text-danger">{locale === "zh-CN" ? "无法读取当前题目资料" : "Current question materials could not be loaded"}</p>
             <p className="mt-2 text-xs leading-5 text-muted-foreground">{locale === "zh-CN" ? "重新读取后才能安全确认是否覆盖现有内容。" : "Reload the task before deciding whether any existing content may be overwritten."}</p>
             <button type="button" onClick={() => void taskQuery.refetch()} className="mt-4 inline-flex h-9 items-center gap-2 rounded-[7px] border bg-card px-4 text-sm font-semibold hover:bg-muted">
               <RefreshCw className="h-4 w-4" />{materialImportText(locale, "refresh")}
@@ -354,7 +354,7 @@ function existingValue(problem: ProblemInfo | undefined, target: MaterialImportT
   if (target === "reference_answer") return problem.reference_answer?.trim() || (locale === "zh-CN" ? "无" : "None");
   const cases = problem.test_cases ?? [];
   return cases.length
-    ? (locale === "zh-CN" ? `${cases.length} 个测试样例` : `${cases.length} test case(s)`)
+    ? (locale === "zh-CN" ? `${cases.length} 个测试样例` : `${cases.length} test ${cases.length === 1 ? "case" : "cases"}`)
     : (locale === "zh-CN" ? "无" : "None");
 }
 

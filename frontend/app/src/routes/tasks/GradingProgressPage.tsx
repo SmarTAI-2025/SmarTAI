@@ -10,7 +10,12 @@ import type { Locale } from "@/i18n/messages";
 import { cn } from "@/lib/cn";
 import { gradingProgressText as copy } from "@/lib/gradingProgressCopy";
 import { classifyRecoverableError } from "@/lib/taskActionGuards";
-import { getTaskDestination, getTaskGradingSetupHref, hasTaskReachedStep } from "@/lib/taskFlow";
+import {
+  getTaskDestination,
+  getTaskGradingSetupHref,
+  hasTaskCompletedGrading,
+  hasTaskReachedStep,
+} from "@/lib/taskFlow";
 import type { JobProgress, TaskStatus } from "@/types";
 
 /** C03: factual, resumable grading progress without exposing student identifiers. */
@@ -25,7 +30,7 @@ export function GradingProgressPage() {
   const state = progressQuery.data;
   const status = (state?.status ?? task?.status) as TaskStatus | undefined;
   const progress = progressQuery.progress;
-  const completedView = Boolean(status && ["graded", "review_confirmed", "generating_analysis", "finalized"].includes(status));
+  const completedView = hasTaskCompletedGrading(status);
 
   const queue = useMemo(
     () => {
@@ -45,6 +50,9 @@ export function GradingProgressPage() {
 
   if (taskId && status === "submissions_ready") {
     return <Navigate replace to={`/tasks/${taskId}/grading/preflight`} />;
+  }
+  if (taskId && completedView) {
+    return <Navigate replace to={`/tasks/${taskId}/review`} />;
   }
   if (taskId && task && status && !hasTaskReachedStep(task, 5)) {
     return <Navigate replace to={getTaskDestination(task)} />;

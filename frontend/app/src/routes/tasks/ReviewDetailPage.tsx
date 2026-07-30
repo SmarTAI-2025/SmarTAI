@@ -18,7 +18,8 @@ import { useTask, useTaskResult, useUpdateCorrectionReview } from "@/api/hooks/t
 import { NewTaskStepper } from "@/components/new-task/NewTaskStepper";
 import {
   buildResultsModel,
-  effectiveCorrectionScore,
+  correctionReviewDraftScore,
+  displayableCorrectionScore,
   formatConfidence,
   formatScore,
   type QuestionSummary,
@@ -27,14 +28,13 @@ import {
 import { collectResultReviewItems } from "@/components/tasks/resultsReviewModel";
 import { MarkdownMath } from "@/components/ui/MarkdownMath";
 import { UnsavedChangesDialog } from "@/components/ui/UnsavedChangesDialog";
+import { useImeSafeQuery } from "@/hooks/useImeSafeQuery";
 import { useI18n } from "@/i18n/I18nProvider";
 import type { Locale } from "@/i18n/messages";
 import { cn } from "@/lib/cn";
 import {
   matchReviewItems,
   questionSearchItems,
-  studentSearchItems,
-  type ReviewSearchItem,
   type ReviewSearchMatch,
 } from "@/lib/reviewDetail";
 import { reviewCellKey } from "@/lib/reviewOverview";
@@ -50,7 +50,7 @@ type ReviewDraft = {
 /** R02: one student, every question, one continuous and auditable teacher-review workspace. */
 export function ReviewDetailPage() {
   const { taskId, studentId, questionId } = useParams();
-  const { locale } = useI18n();
+  const { locale, t } = useI18n();
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
   const taskQuery = useTask(taskId);
@@ -59,16 +59,11 @@ export function ReviewDetailPage() {
   const model = useMemo(() => buildResultsModel(taskQuery.data, resultQuery.data), [resultQuery.data, taskQuery.data]);
   const student = model.students.find((item) => item.id === studentId) ?? null;
   const requestedQuestionId = questionId === "all" ? "" : questionId ?? "";
-  const studentQuery = searchParams.get("student") ?? "";
   const questionQuery = searchParams.get("question") ?? "";
   const overviewHref = taskId
     ? getSafeTaskReturnTo(taskId, searchParams.get("returnTo")) ?? `/tasks/${encodeURIComponent(taskId)}/review`
     : "/history";
 
-  const studentMatches = useMemo(
-    () => matchReviewItems(studentSearchItems(model.students), studentQuery),
-    [model.students, studentQuery],
-  );
   const questionMatches = useMemo(
     () => matchReviewItems(questionSearchItems(model.questions), questionQuery),
     [model.questions, questionQuery],
@@ -100,17 +95,10 @@ export function ReviewDetailPage() {
     () => new Map(reviewItems.map((item) => [reviewCellKey(item.student.id, item.question.id), item.reasons])),
     [reviewItems],
   );
-  const attentionStudentIds = useMemo(
-    () => new Set(reviewItems
-      .filter((item) => item.correction.review_status !== "confirmed")
-      .map((item) => item.student.id)),
-    [reviewItems],
-  );
-
-  const studentIndex = studentMatches.findIndex((match) => match.item.id === studentId);
-  const previousStudent = studentIndex > 0 ? studentMatches[studentIndex - 1]?.item : null;
-  const nextStudent = studentIndex >= 0 && studentIndex < studentMatches.length - 1
-    ? studentMatches[studentIndex + 1]?.item
+  const studentIndex = model.students.findIndex((item) => item.id === studentId);
+  const previousStudent = studentIndex > 0 ? model.students[studentIndex - 1] : null;
+  const nextStudent = studentIndex >= 0 && studentIndex < model.students.length - 1
+    ? model.students[studentIndex + 1]
     : null;
   const [activeQuestionId, setActiveQuestionId] = useState(requestedQuestionId);
   const activeIndex = Math.max(0, visibleQuestions.findIndex((question) => question.id === activeQuestionId));
@@ -143,7 +131,7 @@ export function ReviewDetailPage() {
     setDrafts(Object.fromEntries(student.corrections.map((correction) => [
       correction.q_id,
       {
-        score: String(effectiveCorrectionScore(correction)),
+        score: correctionReviewDraftScore(correction),
         comment: correction.teacher_comment ?? "",
       },
     ])));
@@ -155,7 +143,7 @@ export function ReviewDetailPage() {
   const dirtyQuestionIds = useMemo(() => new Set(student?.corrections.flatMap((correction) => {
     const draft = drafts[correction.q_id];
     if (!draft) return [];
-    const changed = draft.score !== String(effectiveCorrectionScore(correction))
+    const changed = draft.score !== correctionReviewDraftScore(correction)
       || draft.comment !== (correction.teacher_comment ?? "");
     return changed ? [correction.q_id] : [];
   }) ?? []), [drafts, student]);
@@ -179,6 +167,7 @@ export function ReviewDetailPage() {
 
   const buildHref = useCallback((nextStudentId: string, nextQuestionId: string, preserveFilters = true) => {
     const nextParams = preserveFilters ? new URLSearchParams(searchParams) : new URLSearchParams();
+    nextParams.delete("student");
     if (!preserveFilters) {
       const returnTo = searchParams.get("returnTo");
       if (returnTo) nextParams.set("returnTo", returnTo);
@@ -195,8 +184,9 @@ export function ReviewDetailPage() {
     }, 0);
   }, [navigate]);
 
-  const setFilter = useCallback((key: "student" | "question", value: string) => {
+  const setFilter = useCallback((key: "question", value: string) => {
     const next = new URLSearchParams(searchParamsRef.current);
+    next.delete("student");
     if (value.trim()) next.set(key, value);
     else next.delete(key);
     searchParamsRef.current = next;
@@ -334,10 +324,11 @@ export function ReviewDetailPage() {
       return { ok: false as const, message: tx(locale, "找不到这道题的批改结果。", "This grading result could not be found.") };
     }
     const draft = drafts[question.id] ?? {
-      score: String(effectiveCorrectionScore(correction)),
+      score: correctionReviewDraftScore(correction),
       comment: correction.teacher_comment ?? "",
     };
-    const numericScore = Number(draft.score);
+    const normalizedScore = draft.score.trim();
+    const numericScore = normalizedScore ? Number(normalizedScore) : Number.NaN;
     if (!Number.isFinite(numericScore) || numericScore < 0 || numericScore > correction.max_score) {
       setScoreErrors((current) => ({
         ...current,
@@ -374,7 +365,7 @@ export function ReviewDetailPage() {
       setDrafts((current) => ({
         ...current,
         [question.id]: {
-          score: String(effectiveCorrectionScore(response.correction)),
+          score: correctionReviewDraftScore(response.correction),
           comment: response.correction.teacher_comment ?? "",
         },
       }));
@@ -476,7 +467,7 @@ export function ReviewDetailPage() {
       for (const correction of student.corrections) {
         if (!dirtyQuestionIds.has(correction.q_id)) continue;
         next[correction.q_id] = {
-          score: String(effectiveCorrectionScore(correction)),
+          score: correctionReviewDraftScore(correction),
           comment: correction.teacher_comment ?? "",
         };
       }
@@ -523,12 +514,12 @@ export function ReviewDetailPage() {
     ? tx(
         locale,
         `结果分析尚未解锁：还剩 ${pendingReviewItems.length} 个题次需要确认。点击可前往第一处。`,
-        `Results Analysis is locked: ${pendingReviewItems.length} response${pendingReviewItems.length === 1 ? "" : "s"} still need confirmation. Activate to open the first one.`,
+        `Results & Analysis is locked: ${pendingReviewItems.length} response${pendingReviewItems.length === 1 ? "" : "s"} still need confirmation. Activate to open the first one.`,
       )
     : tx(
         locale,
         "所有题次均已确认；请先在复核总览确认完成，再进入结果分析。",
-        "All responses are confirmed. Confirm review completion in the overview before opening Results Analysis.",
+        "All responses are confirmed. Confirm review completion in the overview before opening Results & Analysis.",
       );
 
   function activateLockedResults() {
@@ -583,13 +574,9 @@ export function ReviewDetailPage() {
           <StudentNavigation
             className="mt-5"
             locale={locale}
-            value={studentQuery}
-            current={{ id: student.id, primary: student.name, secondary: student.id, exactValues: [], searchable: [] }}
-            matches={studentMatches}
+            current={{ id: student.id, primary: student.name, secondary: student.id }}
             previous={previousStudent}
             next={nextStudent}
-            attentionIds={attentionStudentIds}
-            onQuery={(value) => setFilter("student", value)}
             onSelect={goToStudent}
           />
 
@@ -601,11 +588,11 @@ export function ReviewDetailPage() {
             onQuery={(value) => setFilter("question", value)}
             onSelect={requestQuestionNavigation}
           />
-          <div className="mt-1.5 flex flex-col gap-1 px-1 text-[11px] leading-5 text-muted-foreground sm:flex-row sm:items-center sm:justify-between sm:gap-4">
+          <div className="mt-1.5 grid gap-0.5 px-1 text-[11px] leading-5 text-muted-foreground">
             <span>{tx(locale, "搜索只筛选题目，当前学生保持不变；中文输入在选词完成后应用。", "Question search does not change the selected student; IME text is applied after composition.")}</span>
-            <span className="inline-flex shrink-0 items-center gap-1.5 font-medium text-foreground/70">
+            <span className="flex items-center gap-1.5 font-medium text-foreground/70">
               <Keyboard aria-hidden="true" className="h-3.5 w-3.5" />
-              {tx(locale, "退出输入框后：←/→ 切学生，↑/↓ 切题目", "Outside inputs: ←/→ students, ↑/↓ questions")}
+              {t("answerReviewKeyboardHint")}
             </span>
           </div>
 
@@ -625,7 +612,7 @@ export function ReviewDetailPage() {
                 {visibleQuestions.map((question, index) => {
                   const correction = correctionByQuestionId.get(question.id);
                   const draft = drafts[question.id] ?? {
-                    score: correction ? String(effectiveCorrectionScore(correction)) : "",
+                    score: correction ? correctionReviewDraftScore(correction) : "",
                     comment: correction?.teacher_comment ?? "",
                   };
                   const required = requiredReviewKeys.has(reviewCellKey(student.id, question.id));
@@ -688,84 +675,24 @@ export function ReviewDetailPage() {
   );
 }
 
-function StudentNavigation({ className, locale, value, current, matches, previous, next, attentionIds, onQuery, onSelect }: {
+function StudentNavigation({ className, locale, current, previous, next, onSelect }: {
   className?: string;
   locale: Locale;
-  value: string;
-  current: ReviewSearchItem;
-  matches: ReviewSearchMatch[];
-  previous: ReviewSearchItem | null;
-  next: ReviewSearchItem | null;
-  attentionIds: Set<string>;
-  onQuery: (value: string) => void;
+  current: { id: string; primary: string; secondary: string };
+  previous: StudentSummary | null;
+  next: StudentSummary | null;
   onSelect: (id: string) => void;
 }) {
-  const [open, setOpen] = useState(false);
-  const [draftValue, setDraftValue] = useState(value);
-  const composingRef = useRef(false);
-
-  useEffect(() => {
-    if (!composingRef.current) setDraftValue(value);
-  }, [value]);
-
   return (
-    <section className={cn("relative grid min-h-[58px] gap-2 rounded-[10px] border bg-card p-2 sm:grid-cols-2 xl:grid-cols-[135px_260px_minmax(240px,1fr)_135px] xl:items-center", className)} aria-label={tx(locale, "学生导航", "Student navigation")}>
-      <NavButton disabled={!previous} onClick={() => previous && onSelect(previous.id)} icon={ArrowLeft} label={previous?.primary || tx(locale, "上一位学生", "Previous student")} />
-      <div className="flex h-10 min-w-0 items-center rounded-[7px] bg-primary/[0.055] px-3" title={`${current.secondary} · ${current.primary}`}>
-        <p className="truncate text-[15px] font-bold tracking-[-0.01em] text-primary">
-          {current.secondary} <span className="mx-1 text-primary/45">·</span> {current.primary}
+    <section className={cn("relative grid min-h-[72px] grid-cols-2 gap-2 rounded-[10px] border bg-card p-2 xl:grid-cols-[minmax(150px,0.8fr)_minmax(360px,1.8fr)_minmax(150px,0.8fr)] xl:items-center", className)} aria-label={tx(locale, "学生导航", "Student navigation")}>
+      <NavButton className="order-2 xl:order-1" disabled={!previous} onClick={() => previous && onSelect(previous.id)} icon={ArrowLeft} label={previous?.name || tx(locale, "上一位学生", "Previous student")} />
+      <div className="order-1 col-span-2 flex min-h-14 min-w-0 items-center justify-center rounded-[9px] bg-primary/[0.07] px-4 py-2 text-center ring-1 ring-inset ring-primary/10 xl:order-2 xl:col-span-1" title={`${current.secondary} · ${current.primary}`}>
+        <p className="flex min-w-0 flex-wrap items-baseline justify-center gap-x-2 leading-tight text-primary">
+          <span className="max-w-full truncate text-[20px] font-extrabold tracking-[-0.02em]">{current.primary}</span>
+          <span className="max-w-full truncate text-[15px] font-bold text-primary/75">{current.secondary}</span>
         </p>
       </div>
-      <div className="relative col-span-2 min-w-0 sm:col-span-2 xl:col-span-1">
-        <label className="relative block">
-          <span className="sr-only">{tx(locale, "SmarTAI 智能搜索学生", "SmarTAI Smart Search for students")}</span>
-          <Search aria-hidden="true" className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-          <input
-            value={draftValue}
-            inputMode="search"
-            onFocus={() => setOpen(true)}
-            onCompositionStart={() => { composingRef.current = true; }}
-            onCompositionEnd={(event) => {
-              composingRef.current = false;
-              const nextValue = event.currentTarget.value;
-              setDraftValue(nextValue);
-              window.setTimeout(() => onQuery(nextValue), 0);
-            }}
-            onChange={(event) => {
-              const nextValue = event.target.value;
-              setDraftValue(nextValue);
-              if (!composingRef.current) onQuery(nextValue);
-              setOpen(true);
-            }}
-            onBlur={() => window.setTimeout(() => setOpen(false), 120)}
-            placeholder={tx(locale, "SmarTAI 智能搜索：姓名、学号或“待复核”", "SmarTAI Smart Search: name, ID, or pending review")}
-            className="h-10 w-full rounded-[7px] border-0 bg-slate-50 pl-9 pr-9 text-[13px] text-foreground outline-none placeholder:text-muted-foreground focus:ring-2 focus:ring-primary/20 dark:bg-slate-900/50"
-          />
-          {draftValue ? (
-            <button type="button" onMouseDown={(event) => event.preventDefault()} onClick={() => { setDraftValue(""); onQuery(""); }} className="absolute right-2 top-1/2 inline-flex h-7 w-7 -translate-y-1/2 items-center justify-center rounded-full text-muted-foreground hover:bg-muted hover:text-foreground" aria-label={tx(locale, "清空学生筛选", "Clear student filter")}>
-              <X aria-hidden="true" className="h-3.5 w-3.5" />
-            </button>
-          ) : null}
-        </label>
-        {open ? (
-          <div className="absolute left-0 right-0 top-[44px] z-40 max-h-[280px] overflow-auto rounded-[9px] border bg-card p-1.5 shadow-xl">
-            <p className="px-2 py-1 text-[10px] leading-4 text-muted-foreground">{tx(locale, `${matches.length} 个匹配结果；橙色表示仍有待复核题目。`, `${matches.length} matches; amber marks students with pending review.`)}</p>
-            {matches.length ? matches.slice(0, 40).map((match) => {
-              const attention = attentionIds.has(match.item.id);
-              return (
-                <button key={match.item.id} type="button" onMouseDown={(event) => event.preventDefault()} onClick={() => { onSelect(match.item.id); setOpen(false); }} className={cn("flex min-h-[44px] w-full items-center justify-between gap-3 rounded-[7px] px-2.5 py-1.5 text-left hover:bg-muted", attention && "bg-amber-50/80 hover:bg-amber-100/75 dark:bg-amber-950/25")}>
-                  <span className="min-w-0">
-                    <span className="block truncate text-xs font-semibold text-foreground">{match.item.primary}</span>
-                    <span className="block truncate text-[10px] text-muted-foreground">{match.item.secondary}</span>
-                  </span>
-                  {attention ? <span className="shrink-0 rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-semibold text-amber-700 dark:bg-amber-950/70 dark:text-amber-200">{tx(locale, "待复核", "Pending")}</span> : match.kind === "exact" ? <span className="shrink-0 rounded-full bg-teal-100 px-2 py-0.5 text-[10px] font-semibold text-teal-700">{tx(locale, "完全匹配", "Exact")}</span> : null}
-                </button>
-              );
-            }) : <p className="px-3 py-5 text-center text-xs text-muted-foreground">{tx(locale, "没有匹配学生；清空后可恢复全部。", "No students matched; clear the filter to restore all.")}</p>}
-          </div>
-        ) : null}
-      </div>
-      <NavButton disabled={!next} onClick={() => next && onSelect(next.id)} icon={ArrowRight} label={next?.primary || tx(locale, "下一位学生", "Next student")} iconAfter />
+      <NavButton className="order-3 xl:order-3" disabled={!next} onClick={() => next && onSelect(next.id)} icon={ArrowRight} label={next?.name || tx(locale, "下一位学生", "Next student")} iconAfter />
     </section>
   );
 }
@@ -779,12 +706,7 @@ function QuestionSearch({ className, locale, value, matches, onQuery, onSelect }
   onSelect: (id: string) => void;
 }) {
   const [open, setOpen] = useState(false);
-  const [draftValue, setDraftValue] = useState(value);
-  const composingRef = useRef(false);
-
-  useEffect(() => {
-    if (!composingRef.current) setDraftValue(value);
-  }, [value]);
+  const smartSearch = useImeSafeQuery({ value, onCommit: onQuery, onDraftChange: () => setOpen(true) });
 
   return (
     <section className={cn("relative rounded-[10px] border bg-card p-2", className)} aria-label={tx(locale, "题目筛选", "Question filter")}>
@@ -792,29 +714,22 @@ function QuestionSearch({ className, locale, value, matches, onQuery, onSelect }
         <span className="sr-only">{tx(locale, "SmarTAI 智能搜索题目", "SmarTAI Smart Search for questions")}</span>
         <Search aria-hidden="true" className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
         <input
-          value={draftValue}
+          value={smartSearch.draftValue}
           inputMode="search"
           onFocus={() => setOpen(true)}
-          onCompositionStart={() => { composingRef.current = true; }}
-          onCompositionEnd={(event) => {
-            composingRef.current = false;
-            const nextValue = event.currentTarget.value;
-            setDraftValue(nextValue);
-            window.setTimeout(() => onQuery(nextValue), 0);
+          onCompositionStart={smartSearch.handleCompositionStart}
+          onCompositionEnd={smartSearch.handleCompositionEnd}
+          onChange={smartSearch.handleChange}
+          onBlur={(event) => {
+            smartSearch.handleBlur(event);
+            window.setTimeout(() => setOpen(false), 120);
           }}
-          onChange={(event) => {
-            const nextValue = event.target.value;
-            setDraftValue(nextValue);
-            if (!composingRef.current) onQuery(nextValue);
-            setOpen(true);
-          }}
-          onBlur={() => window.setTimeout(() => setOpen(false), 120)}
           placeholder={tx(locale, "SmarTAI 智能搜索：题号、题型、题干或“低置信”", "SmarTAI Smart Search: number, type, stem, or low confidence")}
           className="h-10 w-full rounded-[7px] border-0 bg-slate-50 pl-9 pr-9 text-[13px] text-foreground outline-none placeholder:text-muted-foreground focus:ring-2 focus:ring-primary/20 dark:bg-slate-900/50"
         />
-        {draftValue ? <button type="button" onMouseDown={(event) => event.preventDefault()} onClick={() => { setDraftValue(""); onQuery(""); setOpen(false); }} className="absolute right-2 top-1/2 inline-flex h-7 w-7 -translate-y-1/2 items-center justify-center rounded-full text-muted-foreground hover:bg-muted hover:text-foreground" aria-label={tx(locale, "清空题目筛选", "Clear question filter")}><X aria-hidden="true" className="h-3.5 w-3.5" /></button> : null}
+        {smartSearch.draftValue ? <button type="button" onMouseDown={(event) => event.preventDefault()} onClick={() => { smartSearch.commitValue(""); setOpen(false); }} className="absolute right-2 top-1/2 inline-flex h-7 w-7 -translate-y-1/2 items-center justify-center rounded-full text-muted-foreground hover:bg-muted hover:text-foreground" aria-label={tx(locale, "清空题目筛选", "Clear question filter")}><X aria-hidden="true" className="h-3.5 w-3.5" /></button> : null}
       </label>
-      {open && draftValue.trim() ? (
+      {open && smartSearch.draftValue.trim() && smartSearch.draftValue === value ? (
         <div className="absolute left-2 right-2 top-[52px] z-40 max-h-[280px] overflow-auto rounded-[9px] border bg-card p-1.5 shadow-xl">
           {matches.length ? matches.slice(0, 20).map((match) => (
             <button key={match.item.id} type="button" onMouseDown={(event) => event.preventDefault()} onClick={() => { onSelect(match.item.id); setOpen(false); }} className="flex min-h-[42px] w-full items-center gap-3 rounded-[7px] px-2.5 py-1.5 text-left hover:bg-muted">
@@ -848,6 +763,7 @@ function ReviewQuestionCard({ locale, student, question, correction, draft, requ
   onConfirm: () => void;
   onNavigate: (id: string) => void;
 }) {
+  const displayScore = correction ? displayableCorrectionScore(correction) : null;
   const answer = student.answerByQuestion.get(question.id);
   const alreadyConfirmed = correction?.review_status === "confirmed" && !dirty;
   const actionLabel = alreadyConfirmed
@@ -870,7 +786,7 @@ function ReviewQuestionCard({ locale, student, question, correction, draft, requ
             <span className="rounded-full bg-slate-100 px-2.5 py-1 text-[11px] font-semibold text-muted-foreground dark:bg-slate-800">{question.type || tx(locale, "未分类", "Uncategorized")}</span>
             <ReviewStatus correction={correction} required={required} locale={locale} />
           </div>
-          <p className="mt-1 text-[11px] text-muted-foreground">{tx(locale, "题目、作答、SmarTAI 结果和教师最终结果在同一卡片内连续复核。", "Review the question, answer, SmarTAI result, and teacher result in one card.")}</p>
+          <p className="mt-1 text-[11px] text-muted-foreground">{tx(locale, "题目、作答、SmarTAI 结果和教师最终结果在同一卡片内连续复核。", "Review the question, student response, SmarTAI result, and teacher result in one card.")}</p>
         </div>
         <QuestionButtons locale={locale} previous={previous} next={next} onSelect={onNavigate} />
       </header>
@@ -880,8 +796,8 @@ function ReviewQuestionCard({ locale, student, question, correction, draft, requ
           <ContentBlock title={tx(locale, "题目", "Question")}>
             {question.stem ? <MarkdownMath className="text-[13px] leading-6 text-foreground">{question.stem}</MarkdownMath> : <EmptyText locale={locale} text="未提供题干。" en="No question stem was provided." />}
           </ContentBlock>
-          <ContentBlock title={tx(locale, "学生作答", "Student answer")} meta={`${student.id} · ${question.label}`}>
-            {answer?.content ? <MarkdownMath className="text-[13px] leading-6 text-foreground">{answer.content}</MarkdownMath> : <EmptyText locale={locale} text="未识别到这道题的作答。" en="No answer was recognized for this question." />}
+          <ContentBlock title={tx(locale, "学生作答", "Student Response")} meta={`${student.id} · ${question.label}`}>
+            {answer?.content ? <MarkdownMath className="text-[13px] leading-6 text-foreground">{answer.content}</MarkdownMath> : <EmptyText locale={locale} text="未识别到这道题的作答。" en="No response was recognized for this question." />}
           </ContentBlock>
         </div>
 
@@ -890,7 +806,11 @@ function ReviewQuestionCard({ locale, student, question, correction, draft, requ
             <div className="flex items-center justify-between gap-3">
               <h3 id={`smartai-result-${question.id}`} className="text-[16px] font-bold text-foreground">{tx(locale, "SmarTAI 批改结果", "SmarTAI Grading Result")}</h3>
               <span className="shrink-0 rounded-full bg-blue-50 px-3 py-1 text-xs font-semibold text-primary dark:bg-blue-950/50">
-                {correction ? `${formatScore(correction.score)} / ${formatScore(correction.max_score)}` : "— / —"}
+                {correction
+                  ? displayScore === null
+                    ? tx(locale, "待教师复核", "Teacher review required")
+                    : `${formatScore(displayScore)} / ${formatScore(correction.max_score)}`
+                  : "— / —"}
               </span>
             </div>
             {correction ? (
@@ -913,12 +833,12 @@ function ReviewQuestionCard({ locale, student, question, correction, draft, requ
                 ) : null}
                 <dl className="mt-4 grid grid-cols-2 gap-2 text-xs sm:grid-cols-3">
                   <Signal label={tx(locale, "置信度", "Confidence")} value={formatConfidence(correction.confidence)} />
-                  <Signal label={tx(locale, "专家数", "Experts")} value={String(Math.max(1, correction.expert_results?.length ?? 0))} />
+                  <Signal label={tx(locale, "专家数", "Models")} value={String(Math.max(1, correction.expert_results?.length ?? 0))} />
                   <Signal label={tx(locale, "合成方式", "Synthesis")} value={formatSynthesis(correction.synthesis_method, locale)} />
                 </dl>
                 {correction.expert_results?.length ? (
                   <details className="mt-3 text-xs text-muted-foreground">
-                    <summary className="cursor-pointer font-semibold text-foreground">{tx(locale, "查看各专家原始结果", "View original expert results")}</summary>
+                    <summary className="cursor-pointer font-semibold text-foreground">{tx(locale, "查看各专家原始结果", "View Original Model Results")}</summary>
                     <ul className="mt-2 space-y-2">
                       {correction.expert_results.map((expert, index) => (
                         <li key={`${expert.provider}-${index}`} className="rounded-md bg-muted/60 px-3 py-2">
@@ -1000,9 +920,9 @@ function ContentBlock({ title, meta, children }: { title: string; meta?: string;
   );
 }
 
-function NavButton({ disabled, onClick, icon: Icon, label, iconAfter = false }: { disabled: boolean; onClick: () => void; icon: typeof ArrowLeft; label: string; iconAfter?: boolean }) {
+function NavButton({ className, disabled, onClick, icon: Icon, label, iconAfter = false }: { className?: string; disabled: boolean; onClick: () => void; icon: typeof ArrowLeft; label: string; iconAfter?: boolean }) {
   return (
-    <button type="button" disabled={disabled} onClick={onClick} className="inline-flex h-10 min-w-0 items-center justify-center gap-1.5 rounded-[7px] px-3 text-[12px] font-medium text-muted-foreground hover:bg-muted hover:text-foreground disabled:cursor-not-allowed disabled:opacity-35">
+    <button type="button" disabled={disabled} onClick={onClick} className={cn("inline-flex h-10 min-w-0 items-center justify-center gap-1.5 rounded-[7px] px-3 text-[12px] font-medium text-muted-foreground hover:bg-muted hover:text-foreground disabled:cursor-not-allowed disabled:opacity-35", className)}>
       {!iconAfter ? <Icon aria-hidden="true" className="h-4 w-4 shrink-0" /> : null}
       <span className="truncate">{label}</span>
       {iconAfter ? <Icon aria-hidden="true" className="h-4 w-4 shrink-0" /> : null}

@@ -5,6 +5,9 @@ import {
   useMemo,
   useRef,
   useState,
+  type ChangeEvent,
+  type CompositionEvent,
+  type FocusEvent,
   type KeyboardEvent,
 } from "react";
 import { getAPIErrorDetail, normalizeAPIError } from "@/api/client";
@@ -60,6 +63,10 @@ export function SmartCatalogField<T>({
   const fieldId = useId();
   const listId = `${fieldId}-listbox`;
   const rootRef = useRef<HTMLDivElement>(null);
+  const isComposingRef = useRef(false);
+  const pendingCompositionCommitRef = useRef<number | null>(null);
+  const lastCommittedQueryRef = useRef(query);
+  const [inputValue, setInputValue] = useState(query);
   const [open, setOpen] = useState(false);
   const [activeIndex, setActiveIndex] = useState(0);
   const [createError, setCreateError] = useState<string | null>(null);
@@ -92,6 +99,19 @@ export function SmartCatalogField<T>({
   }, [query, conflictCandidates.length]);
 
   useEffect(() => {
+    lastCommittedQueryRef.current = query;
+    if (!isComposingRef.current && pendingCompositionCommitRef.current === null) {
+      setInputValue((current) => current === query ? current : query);
+    }
+  }, [query]);
+
+  useEffect(() => () => {
+    if (pendingCompositionCommitRef.current !== null) {
+      window.clearTimeout(pendingCompositionCommitRef.current);
+    }
+  }, []);
+
+  useEffect(() => {
     function closeOutside(event: MouseEvent) {
       if (!rootRef.current?.contains(event.target as Node)) setOpen(false);
     }
@@ -101,6 +121,13 @@ export function SmartCatalogField<T>({
 
   function selectItem(item: T, closeAfterSelection = false) {
     onSelect(item);
+    if (pendingCompositionCommitRef.current !== null) {
+      window.clearTimeout(pendingCompositionCommitRef.current);
+      pendingCompositionCommitRef.current = null;
+    }
+    isComposingRef.current = false;
+    lastCommittedQueryRef.current = "";
+    setInputValue("");
     onQueryChange("");
     setCreateError(null);
     setConflictCandidates([]);
@@ -140,7 +167,69 @@ export function SmartCatalogField<T>({
     else selectItem(row.candidate.item);
   }
 
+  function commitQuery(value: string) {
+    if (lastCommittedQueryRef.current === value) return;
+    lastCommittedQueryRef.current = value;
+    onQueryChange(value);
+  }
+
+  function flushComposition(input: HTMLInputElement) {
+    if (pendingCompositionCommitRef.current !== null) {
+      window.clearTimeout(pendingCompositionCommitRef.current);
+      pendingCompositionCommitRef.current = null;
+    }
+    isComposingRef.current = false;
+    const finalValue = input.value;
+    setInputValue(finalValue);
+    commitQuery(finalValue);
+  }
+
+  function handleChange(event: ChangeEvent<HTMLInputElement>) {
+    const value = event.currentTarget.value;
+    setInputValue(value);
+    if (
+      !isComposingRef.current
+      && pendingCompositionCommitRef.current === null
+      && !(event.nativeEvent as InputEvent).isComposing
+    ) {
+      commitQuery(value);
+    }
+    setCreateError(null);
+    setConflictCandidates([]);
+    setOpen(true);
+  }
+
+  function handleCompositionStart() {
+    if (pendingCompositionCommitRef.current !== null) {
+      window.clearTimeout(pendingCompositionCommitRef.current);
+      pendingCompositionCommitRef.current = null;
+    }
+    isComposingRef.current = true;
+  }
+
+  function handleCompositionEnd(event: CompositionEvent<HTMLInputElement>) {
+    const input = event.currentTarget;
+    isComposingRef.current = false;
+    setInputValue(input.value);
+    pendingCompositionCommitRef.current = window.setTimeout(() => {
+      flushComposition(input);
+    }, 0);
+  }
+
+  function handleBlur(event: FocusEvent<HTMLInputElement>) {
+    if (isComposingRef.current || pendingCompositionCommitRef.current !== null) {
+      flushComposition(event.currentTarget);
+    }
+  }
+
   function handleKeyDown(event: KeyboardEvent<HTMLInputElement>) {
+    if (
+      isComposingRef.current
+      || pendingCompositionCommitRef.current !== null
+      || event.nativeEvent.isComposing
+      || event.key === "Process"
+      || event.keyCode === 229
+    ) return;
     if (event.key === "ArrowDown" || event.key === "ArrowUp") {
       event.preventDefault();
       setOpen(true);
@@ -218,11 +307,14 @@ export function SmartCatalogField<T>({
             aria-activedescendant={showMenu && rows[activeIndex] ? `${listId}-${activeIndex}` : undefined}
             autoComplete="off"
             disabled={isCreating}
-            value={query}
+            value={inputValue}
             placeholder={selected.length ? t("newTaskSearchAnother") : placeholder}
-          className="h-7 w-full bg-transparent pl-6 pr-7 text-[14px] text-foreground outline-none placeholder:text-muted-foreground focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-wait disabled:opacity-60"
+            className="h-7 w-full bg-transparent pl-6 pr-7 text-[14px] text-foreground outline-none placeholder:text-muted-foreground focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-wait disabled:opacity-60"
             onFocus={() => setOpen(true)}
-            onChange={(event) => { onQueryChange(event.target.value); setCreateError(null); setConflictCandidates([]); setOpen(true); }}
+            onChange={handleChange}
+            onBlur={handleBlur}
+            onCompositionStart={handleCompositionStart}
+            onCompositionEnd={handleCompositionEnd}
             onKeyDown={handleKeyDown}
           />
           {isSearching ? <LoaderCircle aria-hidden="true" className="absolute right-0 top-1/2 h-4 w-4 -translate-y-1/2 animate-spin text-muted-foreground" /> : <ChevronDown aria-hidden="true" className="absolute right-0 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />}

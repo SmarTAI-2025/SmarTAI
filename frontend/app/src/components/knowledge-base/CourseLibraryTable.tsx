@@ -1,4 +1,4 @@
-import { FileText, Folder, MoreHorizontal } from "lucide-react";
+import { FileText, Folder, MoreHorizontal, Pencil, Trash2 } from "lucide-react";
 import type { ReactNode } from "react";
 import type { Locale } from "@/i18n/messages";
 import type { CourseMaterial, CourseMaterialGroup } from "@/types";
@@ -14,6 +14,7 @@ interface CourseLibraryTableProps {
   onOpenGroup: (group: CourseMaterialGroup) => void;
   onEditGroup: (group: CourseMaterialGroup) => void;
   onEditMaterial: (material: CourseMaterial) => void;
+  onDeleteMaterial: (material: CourseMaterial) => void;
   onRetry: () => void;
 }
 
@@ -30,6 +31,7 @@ export function CourseLibraryTable({
   onOpenGroup,
   onEditGroup,
   onEditMaterial,
+  onDeleteMaterial,
   onRetry,
 }: CourseLibraryTableProps) {
   const rows = materials.length + (showGroups ? groups.length : 0);
@@ -46,7 +48,7 @@ export function CourseLibraryTable({
               <th className="w-[14%] px-3 font-medium">{zh(locale) ? "状态" : "Status"}</th>
               <th className="w-[12%] px-3 font-medium">{zh(locale) ? "最近使用" : "Last used"}</th>
               <th className="w-[12%] px-3 font-medium">{zh(locale) ? "任务引用" : "Task use"}</th>
-              <th className="w-12 px-3" aria-label={zh(locale) ? "操作" : "Actions"} />
+              <th className="w-20 px-2" aria-label={zh(locale) ? "操作" : "Actions"} />
             </tr>
           </thead>
           <tbody>
@@ -111,8 +113,20 @@ export function CourseLibraryTable({
                     <td className="px-3"><span className="inline-flex min-w-[84px] justify-center rounded-full bg-emerald-50 px-3 py-1 text-xs font-semibold text-emerald-700 dark:bg-emerald-950/50 dark:text-emerald-200">{zh(locale) ? "已解析" : "Parsed"}</span></td>
                     <td className="px-3 text-muted-foreground">{relativeTime(material.last_used_at ?? material.updated_at, locale)}</td>
                     <td className="px-3 text-muted-foreground">{material.task_reference_count ? `${material.task_reference_count} ${zh(locale) ? "个任务" : material.task_reference_count === 1 ? "task" : "tasks"}` : (zh(locale) ? "尚未使用" : "Not used")}</td>
-                    <td className="px-3">
-                      <ActionButton label={zh(locale) ? `管理资料 ${material.filename}` : `Manage material ${material.filename}`} onClick={() => onEditMaterial(material)} />
+                    <td className="px-2">
+                      <div className="flex items-center justify-end gap-1">
+                        <IconActionButton
+                          label={zh(locale) ? `编辑资料 ${material.filename}` : `Edit material ${material.filename}`}
+                          onClick={() => onEditMaterial(material)}
+                          icon={<Pencil aria-hidden="true" className="h-4 w-4" />}
+                        />
+                        <IconActionButton
+                          label={zh(locale) ? `删除资料 ${material.filename}` : `Delete material ${material.filename}`}
+                          onClick={() => onDeleteMaterial(material)}
+                          tone="danger"
+                          icon={<Trash2 aria-hidden="true" className="h-4 w-4" />}
+                        />
+                      </div>
                     </td>
                   </tr>
                 ))}
@@ -135,8 +149,36 @@ function MutedPill({ children }: { children: ReactNode }) {
 
 function ActionButton({ label, onClick }: { label: string; onClick: () => void }) {
   return (
-    <button type="button" className="inline-flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground outline-none hover:bg-muted hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring" aria-label={label} onClick={onClick}>
+    <button type="button" className="inline-flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground outline-none hover:bg-muted hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring" aria-label={label} title={label} onClick={onClick}>
       <MoreHorizontal aria-hidden="true" className="h-4 w-4" />
+    </button>
+  );
+}
+
+function IconActionButton({
+  label,
+  onClick,
+  icon,
+  tone = "default",
+}: {
+  label: string;
+  onClick: () => void;
+  icon: ReactNode;
+  tone?: "default" | "danger";
+}) {
+  return (
+    <button
+      type="button"
+      className={`inline-flex h-8 w-8 items-center justify-center rounded-md outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring ${
+        tone === "danger"
+          ? "text-muted-foreground hover:bg-red-50 hover:text-danger dark:hover:bg-red-950/40"
+          : "text-muted-foreground hover:bg-muted hover:text-foreground"
+      }`}
+      aria-label={label}
+      title={label}
+      onClick={onClick}
+    >
+      {icon}
     </button>
   );
 }

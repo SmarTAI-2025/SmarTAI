@@ -1,5 +1,5 @@
 import { ArrowRight, Search, X } from "lucide-react";
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useMemo, type ReactNode } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import {
   effectiveCorrectionScore,
@@ -10,6 +10,7 @@ import {
   type ResultsModel,
   type StudentSummary,
 } from "@/components/tasks/resultsModel";
+import { useImeSafeQuery } from "@/hooks/useImeSafeQuery";
 import type { Locale } from "@/i18n/messages";
 import { cn } from "@/lib/cn";
 import type { Correction } from "@/types";
@@ -52,8 +53,7 @@ const PAGE_SIZE = 5;
 export function StudentAnalysisOverview({ locale, taskId, model }: { locale: Locale; taskId: string; model: ResultsModel }) {
   const [searchParams, setSearchParams] = useSearchParams();
   const query = searchParams.get("q") ?? "";
-  const [draftQuery, setDraftQuery] = useState(query);
-  const composingRef = useRef(false);
+  const smartSearch = useImeSafeQuery({ value: query, onCommit: (value) => updateParam("q", value, "") });
   const scoreFilter = normalizeScoreFilter(searchParams.get("score"));
   const passFilter = normalizePassFilter(searchParams.get("pass"));
   const confidenceFilter = normalizeConfidenceFilter(searchParams.get("confidence"));
@@ -85,17 +85,13 @@ export function StudentAnalysisOverview({ locale, taskId, model }: { locale: Loc
   const lowest = validPercents.length ? Math.min(...validPercents) : null;
   const highest = validPercents.length ? Math.max(...validPercents) : null;
 
-  const updateParam = (key: string, value: string, defaultValue = "all") => {
+  function updateParam(key: string, value: string, defaultValue = "all") {
     const next = new URLSearchParams(searchParams);
     if (!value || value === defaultValue) next.delete(key);
     else next.set(key, value);
     if (key !== "page") next.delete("page");
     setSearchParams(next, { replace: true });
-  };
-
-  useEffect(() => {
-    if (!composingRef.current) setDraftQuery(query);
-  }, [query]);
+  }
 
   const removeSemanticCondition = (condition: SemanticCondition) => {
     const start = query.toLocaleLowerCase().indexOf(condition.source.toLocaleLowerCase());
@@ -107,8 +103,8 @@ export function StudentAnalysisOverview({ locale, taskId, model }: { locale: Loc
   return (
     <section className="rounded-[10px] border bg-card">
       <div className="px-5 pt-5">
-        <h2 className="text-[20px] font-bold tracking-[-0.01em] text-foreground">{tx(locale, "学生分析总览", "Student analysis overview")}</h2>
-        <p className="mt-1 text-[13px] text-muted-foreground">{tx(locale, "查看全班总分、逐题得分与正式复核摘要；完整答案进入学生详情。", "Review class totals, per-question scores, and formal review summaries; full answers stay in student detail.")}</p>
+        <h2 className="text-[20px] font-bold tracking-[-0.01em] text-foreground">{tx(locale, "学生分析总览", "Student Performance Overview")}</h2>
+        <p className="mt-1 text-[13px] text-muted-foreground">{tx(locale, "查看全班总分、逐题得分与正式复核摘要；完整答案进入学生详情。", "Review class totals, per-question scores, and final review summaries. Full responses are available in each student's details.")}</p>
 
         <div className="mt-4 grid grid-cols-2 gap-3 xl:grid-cols-6">
           <SummaryMetric label={tx(locale, "学生数", "Students")} value={String(rows.length)} tone="primary" />
@@ -123,25 +119,17 @@ export function StudentAnalysisOverview({ locale, taskId, model }: { locale: Loc
           <label className="relative block">
             <Search aria-hidden="true" className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
             <input
-              value={draftQuery}
+              value={smartSearch.draftValue}
               inputMode="search"
-              onCompositionStart={() => { composingRef.current = true; }}
-              onCompositionEnd={(event) => {
-                composingRef.current = false;
-                const value = event.currentTarget.value;
-                setDraftQuery(value);
-                window.setTimeout(() => updateParam("q", value, ""), 0);
-              }}
-              onChange={(event) => {
-                const value = event.target.value;
-                setDraftQuery(value);
-                if (!composingRef.current) updateParam("q", value, "");
-              }}
+              onBlur={smartSearch.handleBlur}
+              onCompositionStart={smartSearch.handleCompositionStart}
+              onCompositionEnd={smartSearch.handleCompositionEnd}
+              onChange={smartSearch.handleChange}
               placeholder={tx(locale, "SmarTAI 智能搜索：例如 PB2011 不及格 低置信 待复核 低分优先", "SmarTAI Smart Search: PB2011 failed low confidence pending review low score first")}
               aria-label={tx(locale, "SmarTAI 自然语言筛选学生", "SmarTAI natural-language student filter")}
               className="h-11 w-full rounded-[9px] border bg-background pl-10 pr-10 text-[13px] text-foreground outline-none placeholder:text-muted-foreground focus:border-primary focus:ring-2 focus:ring-primary/15"
             />
-            {draftQuery ? <button type="button" onClick={() => { setDraftQuery(""); updateParam("q", "", ""); }} aria-label={tx(locale, "清除 SmarTAI 自然语言筛选", "Clear SmarTAI natural-language filter")} className="absolute right-2 top-1/2 inline-flex h-7 w-7 -translate-y-1/2 items-center justify-center rounded-full text-muted-foreground hover:bg-muted hover:text-foreground"><X aria-hidden="true" className="h-4 w-4" /></button> : null}
+            {smartSearch.draftValue ? <button type="button" onClick={() => smartSearch.commitValue("")} aria-label={tx(locale, "清除 SmarTAI 自然语言筛选", "Clear SmarTAI natural-language filter")} className="absolute right-2 top-1/2 inline-flex h-7 w-7 -translate-y-1/2 items-center justify-center rounded-full text-muted-foreground hover:bg-muted hover:text-foreground"><X aria-hidden="true" className="h-4 w-4" /></button> : null}
           </label>
           <div className="mt-2 flex min-h-7 flex-wrap items-center gap-2">
             {semanticPlan.conditions.length ? semanticPlan.conditions.map((condition) => (
@@ -153,8 +141,8 @@ export function StudentAnalysisOverview({ locale, taskId, model }: { locale: Loc
         </div>
 
         <div className="mt-3 grid grid-cols-2 gap-2 xl:grid-cols-5">
-          <FilterSelect label={tx(locale, "得分率", "Score rate")} value={scoreFilter} onChange={(value) => updateParam("score", value)}>
-            <option value="all">{tx(locale, "全部得分率", "All score rates")}</option><option value="under60">{tx(locale, "低于 60%", "Below 60%")}</option><option value="60to79">60%–79%</option><option value="atleast80">{tx(locale, "80% 及以上", "80% and above")}</option>
+          <FilterSelect label={tx(locale, "得分率", "Score Percentage")} value={scoreFilter} onChange={(value) => updateParam("score", value)}>
+            <option value="all">{tx(locale, "全部得分率", "All score percentages")}</option><option value="under60">{tx(locale, "低于 60%", "Below 60%")}</option><option value="60to79">60%–79%</option><option value="atleast80">{tx(locale, "80% 及以上", "80% and above")}</option>
           </FilterSelect>
           <FilterSelect label={tx(locale, "及格状态", "Pass status")} value={passFilter} onChange={(value) => updateParam("pass", value)}>
             <option value="all">{tx(locale, "全部状态", "All states")}</option><option value="pass">{tx(locale, "及格", "Passed")}</option><option value="fail">{tx(locale, "未及格", "Failed")}</option><option value="unscored">{tx(locale, "无可比总分", "No comparable total")}</option>

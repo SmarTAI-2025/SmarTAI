@@ -31,7 +31,7 @@ const EMPTY_FACETS: HistoryFacets = {
 };
 
 export function HistoryPage() {
-  const { t } = useI18n();
+  const { locale, t } = useI18n();
   const [searchParams, setSearchParams] = useSearchParams();
   const query = useMemo(() => parseHistorySearchParams(searchParams), [searchParams]);
   const historyQuery = useTaskHistory(query);
@@ -125,7 +125,9 @@ export function HistoryPage() {
 
   const countText = historyQuery.isLoading && !data
     ? t("loading")
-    : `${t("historyFilteredPrefix")}${tasks.length}${t("historyFilteredSeparator")}${total}${t("historyTotalSuffix")}`;
+    : locale === "zh-CN"
+      ? `${t("historyFilteredPrefix")}${tasks.length}${t("historyFilteredSeparator")}${total}${t("historyTotalSuffix")}`
+      : `Showing ${tasks.length} of ${total} ${total === 1 ? "task" : "tasks"}`;
 
   return (
     <div className="w-full max-w-[1290px]">

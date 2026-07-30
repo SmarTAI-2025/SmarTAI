@@ -1,5 +1,5 @@
 import { ArrowDown, ArrowLeft, ArrowRight, ArrowUp, Search, X } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import {
   effectiveCorrectionScore,
@@ -11,13 +11,12 @@ import {
   type StudentSummary,
 } from "@/components/tasks/resultsModel";
 import { MarkdownMath } from "@/components/ui/MarkdownMath";
+import { useImeSafeQuery } from "@/hooks/useImeSafeQuery";
 import type { Locale } from "@/i18n/messages";
 import { cn } from "@/lib/cn";
 import {
   matchReviewItems,
   questionSearchItems,
-  studentSearchItems,
-  type ReviewSearchItem,
   type ReviewSearchMatch,
 } from "@/lib/reviewDetail";
 import { ResultQuestionSidebar, type ResultQuestionState } from "@/routes/tasks/results/ResultQuestionSidebar";
@@ -27,17 +26,15 @@ import type { Correction } from "@/types";
 export function StudentAnalysisDetail({ locale, taskId, studentId, model }: { locale: Locale; taskId: string; studentId: string; model: ResultsModel }) {
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
-  const studentQuery = searchParams.get("student_q") ?? "";
   const questionQuery = searchParams.get("question_q") ?? "";
   const selectedQuestionId = searchParams.get("question") ?? "";
   const returnQuery = searchParams.get("return") ?? "";
   const student = model.students.find((item) => item.id === studentId) ?? null;
-  const studentMatches = useMemo(() => matchReviewItems(studentSearchItems(model.students), studentQuery), [model.students, studentQuery]);
   const questionMatches = useMemo(() => matchReviewItems(questionSearchItems(model.questions), questionQuery), [model.questions, questionQuery]);
   const visibleQuestions = useMemo(() => questionMatches.map((match) => model.questions.find((item) => item.id === match.item.id)).filter((item): item is QuestionSummary => Boolean(item)), [model.questions, questionMatches]);
-  const studentIndex = studentMatches.findIndex((match) => match.item.id === studentId);
-  const previousStudent = studentIndex > 0 ? studentMatches[studentIndex - 1]?.item : null;
-  const nextStudent = studentIndex >= 0 && studentIndex < studentMatches.length - 1 ? studentMatches[studentIndex + 1]?.item : null;
+  const studentIndex = model.students.findIndex((item) => item.id === studentId);
+  const previousStudent = studentIndex > 0 ? model.students[studentIndex - 1] : null;
+  const nextStudent = studentIndex >= 0 && studentIndex < model.students.length - 1 ? model.students[studentIndex + 1] : null;
   const studentsRoot = `/tasks/${encodeURIComponent(taskId)}/results/students`;
   const listHref = returnQuery ? `${studentsRoot}?${returnQuery}` : studentsRoot;
   const [activeQuestionId, setActiveQuestionId] = useState<string | null>(() => (
@@ -51,6 +48,7 @@ export function StudentAnalysisDetail({ locale, taskId, studentId, model }: { lo
 
   const buildHref = useCallback((nextStudentId: string, nextQuestionId: string | null, includeQuestionHash = true) => {
     const next = new URLSearchParams(searchParams);
+    next.delete("student_q");
     if (nextQuestionId) next.set("question", nextQuestionId);
     else next.delete("question");
     const serialized = next.toString();
@@ -58,8 +56,9 @@ export function StudentAnalysisDetail({ locale, taskId, studentId, model }: { lo
     return `${studentsRoot}/${encodeURIComponent(nextStudentId)}${serialized ? `?${serialized}` : ""}${hash}`;
   }, [searchParams, studentsRoot]);
 
-  const setFilter = (key: "student_q" | "question_q", value: string) => {
+  const setFilter = (key: "question_q", value: string) => {
     const next = new URLSearchParams(searchParams);
+    next.delete("student_q");
     if (value.trim()) next.set(key, value);
     else next.delete(key);
     setSearchParams(next, { replace: true });
@@ -130,37 +129,30 @@ export function StudentAnalysisDetail({ locale, taskId, studentId, model }: { lo
   }, [goToStudent, nextQuestion, nextStudent, previousQuestion, previousStudent, scrollToQuestion]);
 
   if (!student) {
-    return <DetailState locale={locale} title={tx(locale, `当前正式结果中没有学生 ${studentId}。`, `Student ${studentId} is not present in this formal result.`)} href={listHref} />;
+    return <DetailState locale={locale} title={tx(locale, `当前正式结果中没有学生 ${studentId}。`, `Student ${studentId} is not included in these final results.`)} href={listHref} />;
   }
   const pendingReviewCount = student.corrections.filter((correction) => correctionNeedsFormalReview(correction) && correction.review_status !== "confirmed").length;
   const validCorrectionCount = student.corrections.filter((correction) => correction.max_score > 0).length;
-  const studentReturn = searchParams.toString();
+  const studentReturnParams = new URLSearchParams(searchParams);
+  studentReturnParams.delete("student_q");
+  const studentReturn = studentReturnParams.toString();
 
   return (
     <section className="rounded-[10px] border bg-card p-5">
       <div className="flex flex-wrap items-start justify-between gap-3">
-        <div>
+        <div className="min-w-0">
           <Link to={listHref} className="inline-flex items-center gap-1.5 text-[11px] font-semibold text-primary hover:underline"><ArrowLeft aria-hidden="true" className="h-3.5 w-3.5" />{tx(locale, "返回学生分析总览", "Back to student overview")}</Link>
-          <h2 className="mt-2 text-[22px] font-bold tracking-[-0.01em] text-foreground">{student.name}</h2>
-          <p className="mt-1 text-[12px] text-muted-foreground">{student.id} · {tx(locale, "连续题目视图", "Continuous question view")}</p>
+          <div className="mt-2 inline-flex max-w-full flex-wrap items-baseline gap-x-3 rounded-[10px] bg-primary/[0.07] px-4 py-2.5 ring-1 ring-inset ring-primary/10">
+            <h2 className="max-w-full truncate text-[28px] font-extrabold tracking-[-0.025em] text-primary">{student.name}</h2>
+            <span className="max-w-full truncate text-[16px] font-bold text-primary/75">{student.id}</span>
+          </div>
+          <p className="mt-1.5 text-[12px] text-muted-foreground">{tx(locale, "当前选中学生 · 连续题目视图", "Selected student · Continuous question view")}</p>
         </div>
         <StudentStepButtons locale={locale} previous={previousStudent} next={nextStudent} onSelect={goToStudent} />
       </div>
 
-      <DimensionBar
-        className="mt-4"
-        locale={locale}
-        dimension="student"
-        value={studentQuery}
-        current={{ id: student.id, primary: student.name, secondary: student.id, exactValues: [student.id, student.name], searchable: [student.id, student.name] }}
-        matches={studentMatches}
-        allItems={studentSearchItems(model.students)}
-        previous={previousStudent}
-        next={nextStudent}
-        onQuery={(value) => setFilter("student_q", value)}
-        onSelect={goToStudent}
-      />
       <QuestionFilterBar
+        className="mt-4"
         locale={locale}
         value={questionQuery}
         matches={questionMatches}
@@ -170,7 +162,7 @@ export function StudentAnalysisDetail({ locale, taskId, studentId, model }: { lo
 
       <div className="mt-4 grid grid-cols-2 gap-3 xl:grid-cols-6">
         <DetailMetric label={tx(locale, "总分", "Total score")} value={`${formatScore(student.totalScore)} / ${formatScore(student.totalMax)}`} tone="primary" />
-        <DetailMetric label={tx(locale, "得分率", "Score rate")} value={formatPercent(student.percent)} tone="accent" />
+        <DetailMetric label={tx(locale, "得分率", "Score Percentage")} value={formatPercent(student.percent)} tone="accent" />
         <DetailMetric label={tx(locale, "平均置信度", "Mean confidence")} value={formatConfidence(student.avgConfidence)} tone="primary" />
         <DetailMetric label={tx(locale, "及格状态", "Pass status")} value={student.percent === null ? "—" : student.percent >= 60 ? tx(locale, "及格", "Passed") : tx(locale, "未及格", "Failed")} tone={student.percent !== null && student.percent < 60 ? "danger" : "accent"} />
         <DetailMetric label={tx(locale, "低置信题次", "Low-confidence items")} value={String(student.lowConfidenceCount)} tone="warning" />
@@ -194,125 +186,45 @@ export function StudentAnalysisDetail({ locale, taskId, studentId, model }: { lo
   );
 }
 
-function QuestionFilterBar({ locale, value, matches, onQuery, onSelect }: {
+function QuestionFilterBar({ className, locale, value, matches, onQuery, onSelect }: {
+  className?: string;
   locale: Locale;
   value: string;
   matches: ReviewSearchMatch[];
   onQuery: (value: string) => void;
   onSelect: (id: string) => void;
 }) {
-  const [draftValue, setDraftValue] = useState(value);
   const [open, setOpen] = useState(false);
-  const composingRef = useRef(false);
-
-  useEffect(() => {
-    if (!composingRef.current) setDraftValue(value);
-  }, [value]);
+  const smartSearch = useImeSafeQuery({ value, onCommit: onQuery, onDraftChange: () => setOpen(true) });
 
   return (
-    <section className="relative mt-2.5 rounded-[9px] border bg-background p-2.5" aria-label={tx(locale, "题目筛选", "Question filter")}>
+    <section className={cn("relative rounded-[9px] border bg-background p-2.5", className)} aria-label={tx(locale, "题目筛选", "Question filter")}>
       <div>
         <label className="relative block min-w-0">
           <span className="sr-only">{tx(locale, "搜索题目", "Search questions")}</span>
           <Search aria-hidden="true" className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
           <input
-            value={draftValue}
+            value={smartSearch.draftValue}
             inputMode="search"
             onFocus={() => setOpen(true)}
-            onCompositionStart={() => { composingRef.current = true; }}
-            onCompositionEnd={(event) => {
-              composingRef.current = false;
-              const nextValue = event.currentTarget.value;
-              setDraftValue(nextValue);
-              window.setTimeout(() => onQuery(nextValue), 0);
+            onCompositionStart={smartSearch.handleCompositionStart}
+            onCompositionEnd={smartSearch.handleCompositionEnd}
+            onChange={smartSearch.handleChange}
+            onBlur={(event) => {
+              smartSearch.handleBlur(event);
+              window.setTimeout(() => setOpen(false), 120);
             }}
-            onChange={(event) => {
-              const nextValue = event.target.value;
-              setDraftValue(nextValue);
-              if (!composingRef.current) onQuery(nextValue);
-              setOpen(true);
-            }}
-            onBlur={() => window.setTimeout(() => setOpen(false), 120)}
             placeholder={tx(locale, "SmarTAI 智能搜索：题号、题型、题干，或“积分题”", "SmarTAI Smart Search: number, type, stem, or “integration”")}
             className="h-10 w-full rounded-[8px] border bg-card pl-10 pr-10 text-xs text-foreground outline-none focus:border-primary focus:ring-2 focus:ring-primary/15"
           />
-          {draftValue ? <button type="button" onMouseDown={(event) => event.preventDefault()} onClick={() => { setDraftValue(""); onQuery(""); setOpen(false); }} aria-label={tx(locale, "清空题目筛选", "Clear question filter")} className="absolute right-2 top-1/2 inline-flex h-7 w-7 -translate-y-1/2 items-center justify-center rounded-full text-muted-foreground hover:bg-muted"><X aria-hidden="true" className="h-3.5 w-3.5" /></button> : null}
-          {open && draftValue.trim() && draftValue === value ? <SearchResults locale={locale} matches={matches} onSelect={(id) => { onSelect(id); setOpen(false); }} /> : null}
+          {smartSearch.draftValue ? <button type="button" onMouseDown={(event) => event.preventDefault()} onClick={() => { smartSearch.commitValue(""); setOpen(false); }} aria-label={tx(locale, "清空题目筛选", "Clear question filter")} className="absolute right-2 top-1/2 inline-flex h-7 w-7 -translate-y-1/2 items-center justify-center rounded-full text-muted-foreground hover:bg-muted"><X aria-hidden="true" className="h-3.5 w-3.5" /></button> : null}
+          {open && smartSearch.draftValue.trim() && smartSearch.draftValue === value ? <SearchResults locale={locale} matches={matches} onSelect={(id) => { onSelect(id); setOpen(false); }} /> : null}
         </label>
       </div>
       <div className="mt-2 grid gap-0.5 px-1 text-[10px] leading-4 text-muted-foreground">
         <p>{tx(locale, "搜索只筛选题目，当前学生保持不变；输入中文时在选词完成后应用。", "Search filters questions only and keeps the current student; IME text is applied after composition.")}</p>
         <p>{tx(locale, "输入框聚焦时方向键只编辑文本；退出输入框后，←/→ 切换学生，↑/↓ 切换题目。", "Arrow keys edit text while an input is focused; after leaving it, ←/→ switch students and ↑/↓ switch questions.")}</p>
       </div>
-    </section>
-  );
-}
-
-function DimensionBar({ className, locale, dimension, value, current, matches, allItems, previous, next, allMode = false, onQuery, onSelect, onAll }: {
-  className?: string;
-  locale: Locale;
-  dimension: "student" | "question";
-  value: string;
-  current: ReviewSearchItem | null;
-  matches: ReviewSearchMatch[];
-  allItems: ReviewSearchItem[];
-  previous: ReviewSearchItem | null;
-  next: ReviewSearchItem | null;
-  allMode?: boolean;
-  onQuery: (value: string) => void;
-  onSelect: (id: string) => void;
-  onAll?: () => void;
-}) {
-  const [open, setOpen] = useState(false);
-  const [draftValue, setDraftValue] = useState(value);
-  const composingRef = useRef(false);
-  const isStudent = dimension === "student";
-
-  useEffect(() => {
-    if (!composingRef.current) setDraftValue(value);
-  }, [value]);
-
-  return (
-    <section className={cn("relative grid gap-2 rounded-[9px] border bg-background px-3 py-2 md:grid-cols-[90px_250px_minmax(180px,1fr)_160px_90px] md:items-center", className)} aria-label={isStudent ? tx(locale, "学生导航", "Student navigation") : tx(locale, "题目导航", "Question navigation")}>
-      <NavButton disabled={!previous || allMode} onClick={() => previous && onSelect(previous.id)} icon={isStudent ? ArrowLeft : ArrowUp} label={isStudent ? tx(locale, "上一位", "Previous") : tx(locale, "上一题", "Previous Q")} shortcut={isStudent ? "←" : "↑"} />
-      <div className="min-w-0 px-2 text-center" title={!allMode && current ? `${current.secondary} · ${current.primary}` : undefined}>
-        {isStudent && !allMode && current ? (
-          <p className="truncate text-[15px] font-bold tracking-[-0.01em] text-primary">{current.secondary} <span className="mx-1 text-primary/45">·</span> {current.primary}</p>
-        ) : (
-          <><p className="truncate text-[12px] font-bold text-foreground">{allMode ? tx(locale, "全部题目", "All questions") : current?.primary ?? "—"}</p><p className="truncate text-[10px] text-muted-foreground">{allMode ? tx(locale, "学生保持不变", "Student stays fixed") : current?.secondary}</p></>
-        )}
-      </div>
-      <div className="relative">
-        <Search aria-hidden="true" className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-        <input
-          value={draftValue}
-          inputMode="search"
-          onFocus={() => setOpen(true)}
-          onCompositionStart={() => { composingRef.current = true; }}
-          onCompositionEnd={(event) => {
-            composingRef.current = false;
-            const nextValue = event.currentTarget.value;
-            setDraftValue(nextValue);
-            window.setTimeout(() => onQuery(nextValue), 0);
-          }}
-          onChange={(event) => {
-            const nextValue = event.target.value;
-            setDraftValue(nextValue);
-            if (!composingRef.current) onQuery(nextValue);
-            setOpen(true);
-          }}
-          onBlur={() => window.setTimeout(() => setOpen(false), 120)}
-          placeholder={isStudent ? tx(locale, "SmarTAI 智能搜索：姓名、学号或“低置信”", "SmarTAI Smart Search: name, ID, or low confidence") : tx(locale, "SmarTAI 智能搜索：题号、题型、题干或“积分题”", "SmarTAI Smart Search: number, type, stem, or integration")}
-          className="h-8 w-full rounded-[7px] border bg-card pl-9 pr-8 text-[11px] text-foreground outline-none focus:border-primary focus:ring-2 focus:ring-primary/15"
-        />
-        {draftValue ? <button type="button" onMouseDown={(event) => event.preventDefault()} onClick={() => { setDraftValue(""); onQuery(""); setOpen(false); }} aria-label={tx(locale, "清空当前维度筛选", "Clear this dimension filter")} className="absolute right-1.5 top-1/2 inline-flex h-6 w-6 -translate-y-1/2 items-center justify-center rounded-full text-muted-foreground hover:bg-muted"><X aria-hidden="true" className="h-3.5 w-3.5" /></button> : null}
-        {open && draftValue.trim() && draftValue === value ? <SearchResults locale={locale} matches={matches} onSelect={(id) => { onSelect(id); setOpen(false); }} /> : null}
-      </div>
-      <select value={allMode ? "all" : current?.id ?? ""} onChange={(event) => event.target.value === "all" ? onAll?.() : onSelect(event.target.value)} aria-label={isStudent ? tx(locale, "直接选择学生", "Select student directly") : tx(locale, "直接选择题目", "Select question directly")} className="h-8 w-full rounded-[7px] border bg-card px-2 text-[11px] font-semibold text-foreground outline-none focus:border-primary focus:ring-2 focus:ring-primary/15">
-        {!isStudent ? <option value="all">{tx(locale, "全部题目长视图", "All-questions view")}</option> : null}
-        {allItems.map((item) => <option key={item.id} value={item.id}>{item.primary} · {item.secondary}</option>)}
-      </select>
-      <NavButton disabled={!next || allMode} onClick={() => next && onSelect(next.id)} icon={isStudent ? ArrowRight : ArrowDown} label={isStudent ? tx(locale, "下一位", "Next") : tx(locale, "下一题", "Next Q")} shortcut={isStudent ? "→" : "↓"} trailing />
     </section>
   );
 }
@@ -324,7 +236,7 @@ function SearchResults({ locale, matches, onSelect }: { locale: Locale; matches:
 function ContinuousQuestionsView({ locale, taskId, student, questions, validCorrectionCount, studentReturn, onSelect }: { locale: Locale; taskId: string; student: StudentSummary; questions: QuestionSummary[]; validCorrectionCount: number; studentReturn: string; onSelect: (id: string) => void }) {
   return (
     <section aria-labelledby="student-all-questions-title">
-      <div className="flex flex-wrap items-end justify-between gap-3"><div><h3 id="student-all-questions-title" className="text-[16px] font-bold text-foreground">{tx(locale, "全部题目", "All questions")}</h3><p className="mt-1 text-[11px] text-muted-foreground">{tx(locale, "连续展示每道题的作答与最终结果；侧栏、按钮和 ↑/↓ 键均定位到对应题目。", "Every answer and final result stays in one continuous view; the sidebar, buttons, and ↑/↓ keys move between questions.")}</p></div><span className="text-[11px] text-muted-foreground">{tx(locale, `${questions.length} 道筛选结果 · ${validCorrectionCount} 道可计算得分率`, `${questions.length} filtered · ${validCorrectionCount} with comparable rates`)}</span></div>
+      <div className="flex flex-wrap items-end justify-between gap-3"><div><h3 id="student-all-questions-title" className="text-[16px] font-bold text-foreground">{tx(locale, "全部题目", "All questions")}</h3><p className="mt-1 text-[11px] text-muted-foreground">{tx(locale, "连续展示每道题的作答与最终结果；侧栏、按钮和 ↑/↓ 键均定位到对应题目。", "Every response and final result stays in one continuous view; the sidebar, buttons, and ↑/↓ keys move between questions.")}</p></div><span className="text-[11px] text-muted-foreground">{tx(locale, `${questions.length} 道筛选结果 · ${validCorrectionCount} 道可计算得分率`, `${questions.length} filtered · ${validCorrectionCount} with comparable score percentages`)}</span></div>
       {questions.length ? <div className="mt-3 grid gap-3">{questions.map((question, index) => <QuestionResultCard key={question.id} locale={locale} taskId={taskId} student={student} question={question} studentReturn={studentReturn} previous={index > 0 ? questions[index - 1] : null} next={index < questions.length - 1 ? questions[index + 1] : null} onSelect={onSelect} />)}</div> : <PanelEmpty locale={locale} text={tx(locale, "当前题目筛选没有结果；清空题目筛选即可恢复。", "No questions match this filter; clear the question filter to restore all.")} />}
     </section>
   );
@@ -339,13 +251,13 @@ function QuestionResultCard({ locale, taskId, student, question, studentReturn, 
   return (
     <article id={`question-${question.id}`} className="scroll-mt-24 rounded-[9px] border px-4 py-4">
       <div className="flex flex-wrap items-start justify-between gap-3">
-        <div><div className="flex flex-wrap items-center gap-2"><h4 className="text-[15px] font-bold text-foreground">{question.label}</h4><span className="rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-semibold text-muted-foreground">{question.type || tx(locale, "未标题型", "Unlabelled type")}</span><ReviewStatus locale={locale} correction={correction} /></div><p className="mt-1 text-[11px] text-muted-foreground">{tx(locale, `最终 ${formatScore(finalScore)} / ${formatScore(correction.max_score)} · ${formatPercent(percent)} · 置信度 ${formatConfidence(correction.confidence)}`, `Final ${formatScore(finalScore)} / ${formatScore(correction.max_score)} · ${formatPercent(percent)} · confidence ${formatConfidence(correction.confidence)}`)}</p></div>
+        <div><div className="flex flex-wrap items-center gap-2"><h4 className="text-[15px] font-bold text-foreground">{question.label}</h4><span className="rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-semibold text-muted-foreground">{question.type || tx(locale, "未标题型", "Unlabeled type")}</span><ReviewStatus locale={locale} correction={correction} /></div><p className="mt-1 text-[11px] text-muted-foreground">{tx(locale, `最终 ${formatScore(finalScore)} / ${formatScore(correction.max_score)} · ${formatPercent(percent)} · 置信度 ${formatConfidence(correction.confidence)}`, `Final ${formatScore(finalScore)} / ${formatScore(correction.max_score)} · ${formatPercent(percent)} · confidence ${formatConfidence(correction.confidence)}`)}</p></div>
         <div className="flex flex-wrap items-center justify-end gap-2"><QuestionStepButtons locale={locale} previous={previous} next={next} onSelect={onSelect} /><Link to={questionDetailHref(taskId, student.id, question.id, studentReturn)} className="inline-flex h-8 items-center gap-1.5 rounded-[7px] border bg-card px-3 text-[11px] font-semibold text-primary hover:bg-muted">{tx(locale, "题目分析", "Question analysis")}<ArrowRight aria-hidden="true" className="h-3.5 w-3.5" /></Link></div>
       </div>
 
       <div className="mt-3 grid gap-3 xl:grid-cols-2">
-        <ContentPanel title={tx(locale, "学生作答", "Student answer")}><MarkdownMath className="text-[13px] leading-6 text-foreground">{answer?.content || tx(locale, "未识别到该题作答。", "No answer was recognized for this question.")}</MarkdownMath></ContentPanel>
-        <ContentPanel title={tx(locale, "SmarTAI 批改结果", "SmarTAI grading result")} meta={`${formatScore(correction.score)} / ${formatScore(correction.max_score)}`}><MarkdownMath className="text-[12px] leading-5 text-muted-foreground">{correction.comment || tx(locale, "SmarTAI 未返回文字依据。", "SmarTAI returned no written rationale.")}</MarkdownMath><div className="mt-3 grid grid-cols-3 gap-2"><SmallSignal label={tx(locale, "置信度", "Confidence")} value={formatConfidence(correction.confidence)} /><SmallSignal label={tx(locale, "专家数", "Experts")} value={String(correction.expert_results?.length ?? 0)} /><SmallSignal label={tx(locale, "合成方式", "Synthesis")} value={formatSynthesis(correction.synthesis_method, locale)} /></div></ContentPanel>
+        <ContentPanel title={tx(locale, "学生作答", "Student Response")}><MarkdownMath className="text-[13px] leading-6 text-foreground">{answer?.content || tx(locale, "未识别到该题作答。", "No response was recognized for this question.")}</MarkdownMath></ContentPanel>
+        <ContentPanel title={tx(locale, "SmarTAI 批改结果", "SmarTAI Grading Result")} meta={`${formatScore(correction.score)} / ${formatScore(correction.max_score)}`}><MarkdownMath className="text-[12px] leading-5 text-muted-foreground">{correction.comment || tx(locale, "SmarTAI 未返回文字依据。", "SmarTAI returned no written rationale.")}</MarkdownMath><div className="mt-3 grid grid-cols-3 gap-2"><SmallSignal label={tx(locale, "置信度", "Confidence")} value={formatConfidence(correction.confidence)} /><SmallSignal label={tx(locale, "专家数", "Models")} value={String(correction.expert_results?.length ?? 0)} /><SmallSignal label={tx(locale, "合成方式", "Synthesis")} value={formatSynthesis(correction.synthesis_method, locale)} /></div></ContentPanel>
         <ContentPanel title={tx(locale, "教师最终结果", "Teacher final result")} meta={`${formatScore(finalScore)} / ${formatScore(correction.max_score)}`}><p className="text-[12px] leading-5 text-foreground">{correction.teacher_comment?.trim() || tx(locale, "教师未另加评语；最终分沿用确认后的结果。", "No separate teacher comment; the confirmed score remains final.")}</p><p className="mt-3 text-[10px] text-muted-foreground">{tx(locale, `状态：${reviewStatusText(locale, correction)}`, `Status: ${reviewStatusText(locale, correction)}`)}</p></ContentPanel>
         <ContentPanel title={tx(locale, "题干与评分标准", "Question & rubric")}><MarkdownMath className="text-[12px] leading-5 text-foreground">{question.stem || tx(locale, "未提供题干。", "No question stem was provided.")}</MarkdownMath><div className="my-3 border-t" /><MarkdownMath className="text-[12px] leading-5 text-muted-foreground">{question.criterion || tx(locale, "未提供评分标准。", "No rubric was provided.")}</MarkdownMath></ContentPanel>
       </div>
@@ -366,16 +278,12 @@ function SmallSignal({ label, value }: { label: string; value: string }) {
   return <div className="min-w-0 rounded-[7px] bg-card px-2 py-2"><span className="block truncate text-[9px] text-muted-foreground">{label}</span><strong className="mt-0.5 block truncate text-[10px] text-foreground" title={value}>{value}</strong></div>;
 }
 
-function StudentStepButtons({ locale, previous, next, onSelect }: { locale: Locale; previous: ReviewSearchItem | null; next: ReviewSearchItem | null; onSelect: (id: string) => void }) {
+function StudentStepButtons({ locale, previous, next, onSelect }: { locale: Locale; previous: StudentSummary | null; next: StudentSummary | null; onSelect: (id: string) => void }) {
   return <div className="flex items-center gap-2"><button type="button" disabled={!previous} onClick={() => previous && onSelect(previous.id)} className="inline-flex h-9 items-center gap-1.5 rounded-[7px] border bg-card px-3 text-[11px] font-semibold text-foreground hover:bg-muted disabled:opacity-35"><ArrowLeft aria-hidden="true" className="h-3.5 w-3.5" />{tx(locale, "上一位", "Previous")}</button><button type="button" disabled={!next} onClick={() => next && onSelect(next.id)} className="inline-flex h-9 items-center gap-1.5 rounded-[7px] border bg-card px-3 text-[11px] font-semibold text-foreground hover:bg-muted disabled:opacity-35">{tx(locale, "下一位", "Next")}<ArrowRight aria-hidden="true" className="h-3.5 w-3.5" /></button></div>;
 }
 
 function QuestionStepButtons({ locale, previous, next, onSelect }: { locale: Locale; previous: QuestionSummary | null; next: QuestionSummary | null; onSelect: (id: string) => void }) {
   return <div className="flex items-center gap-2"><button type="button" disabled={!previous} onClick={() => previous && onSelect(previous.id)} className="inline-flex h-8 items-center gap-1 rounded-[7px] border bg-card px-3 text-[10px] font-semibold text-foreground hover:bg-muted disabled:opacity-35"><ArrowUp aria-hidden="true" className="h-3.5 w-3.5" />{tx(locale, "上一题", "Previous Q")}</button><button type="button" disabled={!next} onClick={() => next && onSelect(next.id)} className="inline-flex h-8 items-center gap-1 rounded-[7px] border bg-card px-3 text-[10px] font-semibold text-foreground hover:bg-muted disabled:opacity-35">{tx(locale, "下一题", "Next Q")}<ArrowDown aria-hidden="true" className="h-3.5 w-3.5" /></button></div>;
-}
-
-function NavButton({ disabled, onClick, icon: Icon, label, shortcut, trailing = false }: { disabled: boolean; onClick: () => void; icon: typeof ArrowLeft; label: string; shortcut: string; trailing?: boolean }) {
-  return <button type="button" disabled={disabled} onClick={onClick} className="inline-flex h-8 items-center justify-center gap-1 whitespace-nowrap rounded-[7px] border bg-card px-2 text-[10px] font-semibold text-foreground hover:bg-muted disabled:cursor-not-allowed disabled:opacity-35">{!trailing ? <Icon aria-hidden="true" className="h-3.5 w-3.5" /> : null}<span>{label}</span><kbd className="rounded bg-muted px-1 py-0.5 font-mono text-[8px] text-muted-foreground">{shortcut}</kbd>{trailing ? <Icon aria-hidden="true" className="h-3.5 w-3.5" /> : null}</button>;
 }
 
 function ReviewStatus({ locale, correction }: { locale: Locale; correction: Correction }) {

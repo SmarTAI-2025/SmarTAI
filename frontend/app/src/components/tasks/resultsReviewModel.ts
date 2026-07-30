@@ -1,5 +1,7 @@
 import type { Correction } from "@/types";
 import {
+  correctionReviewReasonIds,
+  displayableCorrectionScore,
   hasReviewSignal,
   reviewReasonLabel,
   type QuestionSummary,
@@ -44,10 +46,13 @@ function buildReviewItem(
   const question = questions.find((item) => item.id === correction.q_id) ?? fallbackQuestion(correction.q_id);
   const reasons = collectReasonLabels(correction);
   const expertSpread = getExpertScoreSpread(correction);
-  const percent = correction.max_score > 0 ? (correction.score / correction.max_score) * 100 : null;
+  const displayScore = displayableCorrectionScore(correction);
+  const percent = displayScore !== null && correction.max_score > 0
+    ? (displayScore / correction.max_score) * 100
+    : null;
   const lowConfidence = correction.confidence < 0.65;
   const expertDisagreement =
-    correction.review_reasons?.some((reason) => reason === "high_indecisiveness" || reason === "score_spread_high") ||
+    correctionReviewReasonIds(correction).some((reason) => reason === "high_indecisiveness" || reason === "score_spread_high") ||
     expertSpread > Math.max(1, correction.max_score * 0.25);
   const scoreAnomaly = percent !== null && (percent <= 40 || percent >= 95) && hasReviewSignal(correction);
 
@@ -84,7 +89,7 @@ function collectReasonLabels(correction: Correction) {
   if (correction.confidence < 0.65) {
     labels.add("置信度偏低");
   }
-  for (const reason of correction.review_reasons ?? []) {
+  for (const reason of correctionReviewReasonIds(correction)) {
     labels.add(reviewReasonLabel(reason));
   }
   if (getExpertScoreSpread(correction) > Math.max(1, correction.max_score * 0.25)) {

@@ -9,7 +9,7 @@ import type { TagColor, TaskLite, TaskTag } from "@/types";
 import { TAG_COLORS, TAG_COLOR_LABEL_KEYS, TAG_TONE_CLASSES } from "./historyPresentation";
 
 export function HistoryTagPopover({ task, tags }: { task: TaskLite; tags: TaskTag[] }) {
-  const { t } = useI18n();
+  const { locale, t } = useI18n();
   const [open, setOpen] = useState(false);
   const [search, setSearch] = useState("");
   const [newColor, setNewColor] = useState<TagColor>("slate");
@@ -90,9 +90,12 @@ export function HistoryTagPopover({ task, tags }: { task: TaskLite; tags: TaskTa
   }
 
   async function handleDeleteTag(tag: TaskTag) {
+    const usageCount = tag.usage_count ?? 0;
     const confirmed = window.confirm(
       `${t("historyTagDeleteConfirmPrefix")}${tag.name}${t("historyTagDeleteConfirmSuffix")}`
-      + `${t("historyTagDeleteUsagePrefix")}${tag.usage_count ?? 0}${t("historyTagDeleteUsageSuffix")}`,
+      + (locale === "zh-CN"
+        ? `${t("historyTagDeleteUsagePrefix")}${usageCount}${t("historyTagDeleteUsageSuffix")}`
+        : `It will be removed from ${usageCount} related ${usageCount === 1 ? "task" : "tasks"} without deleting ${usageCount === 1 ? "the task" : "them"}.`),
     );
     if (!confirmed) return;
     try {
@@ -148,7 +151,9 @@ export function HistoryTagPopover({ task, tags }: { task: TaskLite; tags: TaskTa
                     </span>
                     <span className={cn("truncate rounded-full border px-2 py-0.5 text-xs", TAG_TONE_CLASSES[tag.color])}>{tag.name}</span>
                     <span className="shrink-0 text-[11px] text-muted-foreground">
-                      {tag.usage_count ?? 0}{t("historyTagUsageSuffix")}
+                      {locale === "zh-CN"
+                        ? `${tag.usage_count ?? 0}${t("historyTagUsageSuffix")}`
+                        : `${tag.usage_count ?? 0} ${(tag.usage_count ?? 0) === 1 ? "task" : "tasks"}`}
                     </span>
                   </button>
                   <button type="button" aria-label={`${t("historyTagRename")} ${tag.name}`} className="rounded p-1.5 text-muted-foreground outline-none hover:bg-muted hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring" onClick={() => beginEdit(tag)}>

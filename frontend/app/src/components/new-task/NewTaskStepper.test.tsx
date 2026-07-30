@@ -9,7 +9,7 @@ vi.mock("@/api/hooks/tasks", () => ({
 }));
 
 vi.mock("@/i18n/I18nProvider", () => ({
-  useI18n: () => ({ t: (key: string) => key }),
+  useI18n: () => ({ locale: "en-US", t: (key: string) => key }),
 }));
 
 const { useTask } = await import("@/api/hooks/tasks");
@@ -51,5 +51,39 @@ describe("NewTaskStepper locked-step guidance", () => {
     await user.click(lockedStep);
 
     expect(onLockedStepActivate).toHaveBeenCalledOnce();
+  });
+
+  it("keeps each connector in normal flow after its step label", () => {
+    renderStepper({ currentStep: 1, reachableStep: 1 });
+
+    const uploadLabel = screen.getByText("newTaskStepUpload");
+    const step = uploadLabel.closest("li");
+    const connector = step?.querySelector<HTMLElement>("[data-step-connector]");
+
+    expect(connector).toBeInTheDocument();
+    expect(connector).not.toHaveClass("absolute");
+    expect(connector).toHaveClass("mx-1.5", "min-w-2", "flex-1");
+    expect(connector?.previousElementSibling).toContainElement(uploadLabel);
+  });
+
+  it("uses concise English labels below the wide-screen breakpoint while preserving full accessible names", () => {
+    renderStepper({ currentStep: 1, reachableStep: 1 });
+
+    expect(screen.getByText("Questions")).toHaveClass("xl:hidden");
+    expect(screen.getByText("newTaskStepUpload")).toHaveClass("hidden", "xl:inline");
+    expect(screen.getByRole("link", { name: "newTaskStepUpload" })).toHaveAttribute(
+      "title",
+      "newTaskStepUpload",
+    );
+    expect(screen.getByText("Analysis")).toHaveClass("xl:hidden");
+  });
+
+  it("returns completed tasks to editable grading setup from the Grading step", () => {
+    renderStepper({ currentStep: 6 });
+
+    expect(screen.getByRole("link", { name: "newTaskStepGrading" })).toHaveAttribute(
+      "href",
+      "/tasks/task-1/grading-setup",
+    );
   });
 });

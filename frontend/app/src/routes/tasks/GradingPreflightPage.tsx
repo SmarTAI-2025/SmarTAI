@@ -8,7 +8,13 @@ import { useI18n } from "@/i18n/I18nProvider";
 import type { Locale } from "@/i18n/messages";
 import { cn } from "@/lib/cn";
 import { gradingPreflightText as copy } from "@/lib/gradingPreflightCopy";
-import { getTaskDestination, getTaskGradingSetupHref, hasTaskReachedStep } from "@/lib/taskFlow";
+import { modelDisplayName } from "@/lib/modelPresentation";
+import {
+  canTaskBeRegraded,
+  getTaskDestination,
+  getTaskGradingSetupHref,
+  hasTaskReachedStep,
+} from "@/lib/taskFlow";
 import type { GradingFeedbackLength, GradingSetup, ProblemInfo, StudentSubmission } from "@/types";
 
 const AUTO_START_SECONDS = 10;
@@ -47,16 +53,20 @@ export function GradingPreflightPage() {
     () => buildRiskItems(summary, setupResponse?.readiness.warnings ?? [], locale),
     [locale, setupResponse?.readiness.warnings, summary],
   );
-  const historyView = Boolean(task && task.status !== "submissions_ready");
+  const isRegrading = canTaskBeRegraded(task?.status);
+  const historyView = Boolean(task && task.status !== "submissions_ready" && !isRegrading);
 
   const blockingIssues = setupResponse?.readiness.blocking_issues ?? [];
+  const effectiveBlockingIssues = blockingIssues.filter(
+    (issue) => !(isRegrading && issue === "invalid_state"),
+  );
   const hasEnabledSelection = selectedExperts.length > 0 && selectedExperts.every((expert) => expert.enabled);
   const canStart = Boolean(
     taskId
-    && task?.status === "submissions_ready"
+    && (task?.status === "submissions_ready" || isRegrading)
     && setupResponse?.configured
     && setup
-    && setupResponse.readiness.ready
+    && effectiveBlockingIssues.length === 0
     && hasEnabledSelection
     && summary.problemCount > 0
     && summary.studentCount > 0,
@@ -106,7 +116,7 @@ export function GradingPreflightPage() {
     locale,
     configured: setupResponse?.configured ?? false,
     canStart,
-    blockingIssues,
+    blockingIssues: effectiveBlockingIssues,
     hasEnabledSelection,
   });
 
@@ -150,10 +160,12 @@ export function GradingPreflightPage() {
                   <div className="min-w-0">
                     <h2 id="grading-countdown-title" className="flex items-center gap-2 text-[18px] font-bold leading-6 text-foreground">
                       <Timer aria-hidden="true" className="h-5 w-5 text-primary" />
-                      {copy(locale, "countdownTitle")}
+                      {copy(locale, isRegrading ? "regradeCountdownTitle" : "countdownTitle")}
                     </h2>
                     <p className="mt-1.5 text-[12px] leading-5 text-muted-foreground">
-                      {countdownActive ? copy(locale, "countdownDescription") : disabledReason ?? copy(locale, "readyMessage")}
+                      {countdownActive
+                        ? copy(locale, isRegrading ? "regradeCountdownDescription" : "countdownDescription")
+                        : disabledReason ?? copy(locale, isRegrading ? "regradeReadyMessage" : "readyMessage")}
                     </p>
                     {countdownActive ? <p className="mt-1 text-[11px] font-semibold text-primary">{countdown} {copy(locale, "countdownUnit")}</p> : null}
                   </div>
@@ -173,7 +185,7 @@ export function GradingPreflightPage() {
                     className="inline-flex h-10 items-center justify-center gap-1.5 rounded-[8px] bg-primary px-5 text-[13px] font-semibold text-primary-foreground outline-none hover:opacity-90 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
                   >
                     {startGrading.isPending ? <LoaderCircle aria-hidden="true" className="h-4 w-4 animate-spin" /> : null}
-                    {copy(locale, startGrading.isPending ? "starting" : "startNow")}
+                    {copy(locale, startGrading.isPending ? "starting" : isRegrading ? "regradeNow" : "startNow")}
                     {!startGrading.isPending ? <ChevronRight aria-hidden="true" className="h-4 w-4" /> : null}
                   </button>
                 </div>
@@ -194,10 +206,10 @@ export function GradingPreflightPage() {
             </h2>
             <div className="mt-5 flex flex-wrap gap-3.5 sm:gap-5">
               <SummaryChip tone="primary" href={`/tasks/${taskId}/questions`}>
-                {summary.problemCount} {copy(locale, "problems")}
+                {summary.problemCount} {locale === "zh-CN" ? copy(locale, "problems") : summary.problemCount === 1 ? "question" : "questions"}
               </SummaryChip>
               <SummaryChip tone="primary" href={`/tasks/${taskId}/submissions`}>
-                {summary.studentCount} {copy(locale, "students")}
+                {summary.studentCount} {locale === "zh-CN" ? copy(locale, "students") : summary.studentCount === 1 ? "student" : "students"}
               </SummaryChip>
               <SummaryChip
                 tone={summary.criteriaComplete === summary.problemCount ? "success" : "warning"}
@@ -207,7 +219,7 @@ export function GradingPreflightPage() {
               </SummaryChip>
               <SummaryChip
                 tone={summary.answersComplete === summary.problemCount ? "success" : "warning"}
-                href={questionOverviewHref(taskId, summary.answersComplete < summary.problemCount ? (locale === "en-US" ? "missing answer" : "缺标答") : "")}
+                href={questionOverviewHref(taskId, summary.answersComplete < summary.problemCount ? (locale === "en-US" ? "missing reference answer" : "缺标答") : "")}
               >
                 {copy(locale, "answers")} {summary.answersComplete}/{summary.problemCount}
               </SummaryChip>
@@ -239,7 +251,7 @@ export function GradingPreflightPage() {
               <div className="flex flex-wrap gap-3.5">
                 {selectedExperts.map((expert) => (
                   <span key={expert.provider_id} className="inline-flex min-h-8 items-center rounded-full bg-blue-100 px-4 text-[13px] font-semibold text-primary dark:bg-blue-950/45">
-                    {expert.display_name?.trim() || expert.model}
+                    {modelDisplayName(expert)}
                   </span>
                 ))}
                 {setup ? (
@@ -297,7 +309,9 @@ export function GradingPreflightPage() {
                 : <CheckCircle2 aria-hidden="true" className="mt-0.5 h-4 w-4 shrink-0 text-teal-600" />}
               <span>
                 <span>{copy(locale, "riskLabel")}：</span>
-                {riskItems.length > 0 ? riskItems.join(locale === "en-US" ? "; " : "；") : copy(locale, "readyMessage")}
+                {riskItems.length > 0
+                  ? riskItems.join(locale === "en-US" ? "; " : "；")
+                  : copy(locale, isRegrading ? "regradeReadyMessage" : "readyMessage")}
               </span>
             </p>
             {riskItems.length > 0 ? (
@@ -372,11 +386,31 @@ function buildRiskItems(summary: TaskSummary, warnings: string[], locale: Locale
   const criteriaMissing = summary.problemCount - summary.criteriaComplete;
   const answersMissing = summary.problemCount - summary.answersComplete;
   const testsMissing = summary.programmingCount - summary.testsComplete;
-  if (criteriaMissing > 0) items.push(`${criteriaMissing} ${copy(locale, "criteriaMissing")}`);
-  if (answersMissing > 0) items.push(`${answersMissing} ${copy(locale, "answersMissing")}`);
-  if (testsMissing > 0) items.push(`${testsMissing} ${copy(locale, "testsMissing")}`);
-  if (summary.flaggedAnswers > 0) items.push(`${summary.flaggedAnswers} ${copy(locale, "answersFlagged")}`);
-  if (summary.flaggedIdentities > 0) items.push(`${summary.flaggedIdentities} ${copy(locale, "identitiesFlagged")}`);
+  if (criteriaMissing > 0) {
+    items.push(locale === "zh-CN"
+      ? `${criteriaMissing}${copy(locale, "criteriaMissing")}`
+      : criteriaMissing === 1 ? "1 question is missing a rubric" : `${criteriaMissing} questions are missing rubrics`);
+  }
+  if (answersMissing > 0) {
+    items.push(locale === "zh-CN"
+      ? `${answersMissing}${copy(locale, "answersMissing")}`
+      : answersMissing === 1 ? "1 question is missing a reference answer" : `${answersMissing} questions are missing reference answers`);
+  }
+  if (testsMissing > 0) {
+    items.push(locale === "zh-CN"
+      ? `${testsMissing}${copy(locale, "testsMissing")}`
+      : testsMissing === 1 ? "1 programming question is missing test cases" : `${testsMissing} programming questions are missing test cases`);
+  }
+  if (summary.flaggedAnswers > 0) {
+    items.push(locale === "zh-CN"
+      ? `${summary.flaggedAnswers}${copy(locale, "answersFlagged")}`
+      : summary.flaggedAnswers === 1 ? "1 response still has a recognition flag" : `${summary.flaggedAnswers} responses still have recognition flags`);
+  }
+  if (summary.flaggedIdentities > 0) {
+    items.push(locale === "zh-CN"
+      ? `${summary.flaggedIdentities}${copy(locale, "identitiesFlagged")}`
+      : summary.flaggedIdentities === 1 ? "1 student identity needs confirmation" : `${summary.flaggedIdentities} student identities need confirmation`);
+  }
   if (warnings.includes("task_knowledge_empty")) items.push(copy(locale, "knowledgeEmpty"));
   return items;
 }
@@ -413,7 +447,7 @@ function questionOverviewHref(taskId: string, query: string): string {
 
 function aggregationLabel(method: GradingSetup["aggregation_method"], locale: Locale): string {
   const labels: Record<GradingSetup["aggregation_method"], [string, string]> = {
-    single: ["单专家", "Single expert"],
+    single: ["单专家", "Single model"],
     weighted_average: ["置信度加权", "Confidence weighted"],
     judge_agent: ["裁决专家", "Judge agent"],
   };

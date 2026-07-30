@@ -9,7 +9,6 @@ import {
   Search,
   Settings,
   Settings2,
-  Sparkles,
   Trash2,
   Upload,
 } from "lucide-react";
@@ -25,13 +24,15 @@ import {
   useUploadKBDoc,
 } from "@/api/hooks";
 import { NewTaskStepper } from "@/components/new-task/NewTaskStepper";
+import { ProviderIcon } from "@/components/models/ProviderIcon";
 import { UnsavedChangesDialog } from "@/components/ui/UnsavedChangesDialog";
 import { useI18n } from "@/i18n/I18nProvider";
 import type { Locale } from "@/i18n/messages";
 import { cn } from "@/lib/cn";
 import { gradingSetupText, type GradingSetupCopyKey } from "@/lib/gradingSetupCopy";
+import { modelDisplayName, modelSecondaryLabel } from "@/lib/modelPresentation";
 import { isWorkflowRevisionConflictCode } from "@/lib/taskActionGuards";
-import { getSafeTaskReturnTo, getTaskGradingSetupHref } from "@/lib/taskFlow";
+import { canTaskBeRegraded, getSafeTaskReturnTo, getTaskGradingSetupHref } from "@/lib/taskFlow";
 import type {
   GradingAggregationMethod,
   GradingFeedbackLanguage,
@@ -65,6 +66,7 @@ export function GradingSetupPage() {
   const [selectionNoticeKey, setSelectionNoticeKey] = useState<GradingSetupCopyKey | null>(null);
 
   const response = setupQuery.data;
+  const isRegrading = canTaskBeRegraded(response?.task_status);
   const returnTo = taskId
     ? getSafeTaskReturnTo(taskId, searchParams.get("returnTo"))
     : null;
@@ -128,7 +130,8 @@ export function GradingSetupPage() {
     ? validateSetup(setup, response.available_experts, response.knowledge.scope_options, locale)
     : gradingSetupText(locale, "invalidForm");
   const blockingIssue = response?.readiness.blocking_issues.find(
-    (issue) => !NON_BLOCKING_SETUP_ISSUES.has(issue),
+    (issue) => !NON_BLOCKING_SETUP_ISSUES.has(issue)
+      && !(isRegrading && issue === "invalid_state"),
   );
   const blockingMessage = blockingIssue
     ? readinessMessage(blockingIssue, locale)
@@ -261,6 +264,11 @@ export function GradingSetupPage() {
                 <h2 className="text-[20px] font-bold leading-7 text-foreground">
                   {locale === "zh-CN" ? "模型与资料" : "Models & materials"}
                 </h2>
+                {isRegrading ? (
+                  <p role="status" className="mt-2 rounded-[7px] bg-blue-50 px-3 py-2 text-[12px] leading-5 text-primary dark:bg-blue-950/25">
+                    {gradingSetupText(locale, "regradeNotice")}
+                  </p>
+                ) : null}
 
                 <div className="mt-3">
                   <ModelSection
@@ -324,11 +332,15 @@ export function GradingSetupPage() {
                 {gradingSetupText(locale, "backToPrevious")}
               </Link>
               <p className="text-center text-[13px] leading-5 text-muted-foreground">
-                {locale === "zh-CN" ? "设置会在进入批改摘要前保存" : "Settings are saved before the grading summary"}
+                {isRegrading
+                  ? gradingSetupText(locale, "regradeFooterHint")
+                  : (locale === "zh-CN" ? "设置会在进入批改摘要前保存" : "Settings are saved before the grading summary")}
               </p>
               <button type="submit" disabled={actionDisabled} className="inline-flex h-11 w-full items-center justify-center gap-1.5 rounded-[8px] bg-primary px-5 text-sm font-semibold text-primary-foreground outline-none hover:opacity-90 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50">
                 {saveSetup.isPending ? <LoaderCircle aria-hidden="true" className="h-4 w-4 animate-spin" /> : null}
-                {saveSetup.isPending ? gradingSetupText(locale, "saving") : gradingSetupText(locale, "saveAndContinue")}
+                {saveSetup.isPending
+                  ? gradingSetupText(locale, "saving")
+                  : gradingSetupText(locale, isRegrading ? "saveRegradeAndContinue" : "saveAndContinue")}
                 {!saveSetup.isPending ? <ChevronRight aria-hidden="true" className="h-4 w-4" /> : null}
               </button>
             </footer>
@@ -381,7 +393,8 @@ function ModelSection({
           {experts.map((expert) => {
             const selected = selectedSet.has(expert.provider_id);
             const disabled = !expert.enabled && !selected;
-            const label = expert.display_name?.trim() || expert.model;
+            const label = modelDisplayName(expert);
+            const secondaryLabel = modelSecondaryLabel(expert);
             return (
               <li key={expert.provider_id} className={cn(
                 "flex min-h-[68px] flex-wrap items-center gap-x-3 gap-y-2 px-4 py-2.5 sm:flex-nowrap",
@@ -395,13 +408,18 @@ function ModelSection({
                   onChange={(event) => onToggleProvider(expert, event.target.checked)}
                   className="h-5 w-5 shrink-0 rounded-[5px] border-border accent-primary disabled:opacity-45"
                 />
-                <Sparkles aria-hidden="true" className={cn("h-6 w-6 shrink-0", selected ? "text-primary" : "text-muted-foreground")} />
+                <ProviderIcon
+                  providerType={expert.provider_type}
+                  className={cn(!selected && "grayscale opacity-65")}
+                />
                 <label htmlFor={`grading-expert-${expert.provider_id}`} className={cn("min-w-0 flex-1 cursor-pointer", disabled && "cursor-not-allowed opacity-55")}>
                   <span className="flex min-w-0 items-center gap-2">
                     <span className="truncate text-[14px] font-semibold leading-5 text-foreground" title={label}>{label}</span>
                     {expert.is_shared ? <span className="shrink-0 rounded-full bg-blue-50 px-2 py-0.5 text-[12px] font-semibold text-primary dark:bg-blue-950/30">{gradingSetupText(locale, "sharedModel")}</span> : null}
                   </span>
-                  <span className="mt-0.5 block truncate text-[13px] leading-5 text-muted-foreground">{expert.provider_type} · {gradingSetupText(locale, expert.enabled ? "enabledConfiguration" : "disabledConfiguration")}</span>
+                  <span className="mt-0.5 block truncate text-[13px] leading-5 text-muted-foreground">
+                    {secondaryLabel} · {gradingSetupText(locale, expert.enabled ? "enabledConfiguration" : "disabledConfiguration")}
+                  </span>
                 </label>
                 {hasMultiple && selected && expert.enabled ? (
                   <label className="flex shrink-0 items-center gap-1.5 text-[13px] font-medium text-muted-foreground">
@@ -431,7 +449,7 @@ function ModelSection({
               />
               <label htmlFor={`missing-grading-expert-${index}`} className="min-w-0 flex-1 cursor-pointer">
                 <span className="block truncate text-[14px] font-semibold text-danger">{gradingSetupText(locale, "invalidModelTitle")}</span>
-                <span className="mt-0.5 block truncate text-[13px] text-muted-foreground" title={providerId}>{gradingSetupText(locale, "invalidModelDescription")} · {providerId}</span>
+                <span className="mt-0.5 block truncate text-[13px] text-muted-foreground">{gradingSetupText(locale, "invalidModelDescription")}</span>
               </label>
             </li>
           ))}
@@ -464,7 +482,7 @@ function ModelSection({
   );
 }
 
-function KnowledgeSection({ locale, taskId, value, onChange }: {
+export function KnowledgeSection({ locale, taskId, value, onChange }: {
   locale: Locale;
   taskId: string;
   value: GradingKnowledgeScope;
@@ -474,9 +492,12 @@ function KnowledgeSection({ locale, taskId, value, onChange }: {
   const uploadDocument = useUploadKBDoc();
   const deleteDocument = useDeleteKBDoc();
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const libraryPickerRef = useRef<HTMLDivElement>(null);
   const [libraryQueryText, setLibraryQueryText] = useState("");
   const [libraryOpen, setLibraryOpen] = useState(false);
   const [saveToLibrary, setSaveToLibrary] = useState(false);
+  const [pendingMaterialId, setPendingMaterialId] = useState<string | null>(null);
+  const [knowledgeNotice, setKnowledgeNotice] = useState<string | null>(null);
   const [knowledgeError, setKnowledgeError] = useState<string | null>(null);
   const libraryQuery = useCourseMaterials({
     q: libraryQueryText,
@@ -496,28 +517,56 @@ function KnowledgeSection({ locale, taskId, value, onChange }: {
   const atLimit = docs.length >= 3;
 
   useEffect(() => {
+    if (!libraryOpen) return;
+
+    function closeOnOutsidePointer(event: PointerEvent) {
+      if (!libraryPickerRef.current?.contains(event.target as Node)) {
+        setLibraryOpen(false);
+      }
+    }
+
+    document.addEventListener("pointerdown", closeOnOutsidePointer);
+    return () => document.removeEventListener("pointerdown", closeOnOutsidePointer);
+  }, [libraryOpen]);
+
+  useEffect(() => {
     if (!docsQuery.isSuccess) return;
     const expectedScope: GradingKnowledgeScope = docs.length > 0 ? "all_task_docs" : "none";
     if (value !== expectedScope) onChange(expectedScope);
   }, [docs.length, docsQuery.isSuccess, value]);
 
-  async function attachLibraryMaterial(materialId: string) {
+  async function attachLibraryMaterial(materialId: string, filename: string) {
     setKnowledgeError(null);
+    setKnowledgeNotice(null);
+    setPendingMaterialId(materialId);
     try {
       await uploadDocument.mutateAsync({ taskId, libraryMaterialId: materialId });
       onChange("all_task_docs");
       setLibraryOpen(false);
       setLibraryQueryText("");
+      setKnowledgeNotice(
+        locale === "zh-CN"
+          ? `已将“${filename}”加入本任务。`
+          : `Added “${filename}” to this task.`,
+      );
     } catch (error) {
       setKnowledgeError(normalizeAPIError(error).message);
+    } finally {
+      setPendingMaterialId(null);
     }
   }
 
   async function uploadLocalMaterial(file: File) {
     setKnowledgeError(null);
+    setKnowledgeNotice(null);
     try {
       await uploadDocument.mutateAsync({ taskId, file, saveToLibrary });
       onChange("all_task_docs");
+      setKnowledgeNotice(
+        locale === "zh-CN"
+          ? `已将“${file.name}”加入本任务。`
+          : `Added “${file.name}” to this task.`,
+      );
     } catch (error) {
       setKnowledgeError(normalizeAPIError(error).message);
     } finally {
@@ -527,6 +576,7 @@ function KnowledgeSection({ locale, taskId, value, onChange }: {
 
   async function removeDocument(docId: string) {
     setKnowledgeError(null);
+    setKnowledgeNotice(null);
     try {
       await deleteDocument.mutateAsync({ taskId, docId });
       if (docs.length <= 1) onChange("none");
@@ -545,7 +595,7 @@ function KnowledgeSection({ locale, taskId, value, onChange }: {
           <p className="mt-0.5 text-[13px] leading-5 text-muted-foreground">
             {locale === "zh-CN"
               ? "可选教材、讲义或背景资料作为批改上下文，不会替代已审核的题目、标答和评分标准。"
-              : "Optionally add textbooks, lecture notes, or context. These do not replace reviewed questions, answers, or rubrics."}
+              : "Optionally add textbooks, lecture notes, or other context. These do not replace reviewed questions, reference answers, or rubrics."}
           </p>
         </div>
         <Link
@@ -557,22 +607,72 @@ function KnowledgeSection({ locale, taskId, value, onChange }: {
         </Link>
       </div>
 
-      <div className="relative mt-3 grid gap-3 sm:grid-cols-[minmax(0,1fr)_auto]">
-        <label className="relative min-w-0">
-          <Search aria-hidden="true" className="pointer-events-none absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-          <input
-            type="search"
-            value={libraryQueryText}
-            onFocus={() => setLibraryOpen(true)}
-            onBlur={() => window.setTimeout(() => setLibraryOpen(false), 150)}
-            onChange={(event) => {
-              setLibraryQueryText(event.target.value);
-              setLibraryOpen(true);
-            }}
-            placeholder={locale === "zh-CN" ? "搜索教材、讲义或背景资料" : "Search textbooks, lecture notes, or context"}
-            className="h-11 w-full rounded-[8px] border bg-background pl-10 pr-3 text-[14px] text-foreground outline-none placeholder:text-muted-foreground focus:border-primary focus:ring-2 focus:ring-primary/15"
-          />
-        </label>
+      <div className="mt-3 grid gap-3 sm:grid-cols-[minmax(0,1fr)_auto]">
+        <div ref={libraryPickerRef} className="relative min-w-0">
+          <label className="relative block min-w-0">
+            <Search aria-hidden="true" className="pointer-events-none absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+            <input
+              type="search"
+              value={libraryQueryText}
+              aria-label={locale === "zh-CN" ? "搜索课程资料库" : "Search course library"}
+              aria-expanded={libraryOpen}
+              onFocus={() => setLibraryOpen(true)}
+              onKeyDown={(event) => {
+                if (event.key === "Escape") setLibraryOpen(false);
+              }}
+              onChange={(event) => {
+                setLibraryQueryText(event.target.value);
+                setLibraryOpen(true);
+              }}
+              placeholder={locale === "zh-CN" ? "搜索教材、讲义或背景资料" : "Search textbooks, lecture notes, or context"}
+              className="h-11 w-full rounded-[8px] border bg-background pl-10 pr-3 text-[14px] text-foreground outline-none placeholder:text-muted-foreground focus:border-primary focus:ring-2 focus:ring-primary/15"
+            />
+          </label>
+
+          {libraryOpen ? (
+            <div className="absolute left-0 right-0 top-12 z-20 max-h-56 overflow-y-auto rounded-[8px] border bg-card p-1.5 shadow-lg">
+              {libraryQuery.isLoading ? (
+                <div className="flex min-h-20 items-center justify-center"><LoaderCircle aria-hidden="true" className="h-5 w-5 animate-spin text-primary" /></div>
+              ) : eligibleMaterials.length > 0 ? (
+                <ul className="divide-y">
+                  {eligibleMaterials.map((material) => {
+                    const attached = attachedMaterialIds.has(material.material_id);
+                    const selecting = pendingMaterialId === material.material_id;
+                    return (
+                      <li key={material.material_id} className="flex min-h-14 items-center gap-3 px-3 py-2">
+                        <BookOpen aria-hidden="true" className="h-4 w-4 shrink-0 text-muted-foreground" />
+                        <span className="min-w-0 flex-1">
+                          <span className="block truncate text-[13px] font-semibold text-foreground">{material.filename}</span>
+                          <span className="mt-0.5 block truncate text-[12px] text-muted-foreground">
+                            {material.course_name || (locale === "zh-CN" ? "未归属课程" : "No course")} · {material.category}
+                          </span>
+                        </span>
+                        <button
+                          type="button"
+                          disabled={attached || atLimit || isBusy}
+                          onClick={() => void attachLibraryMaterial(material.material_id, material.filename)}
+                          className="inline-flex h-9 shrink-0 items-center gap-1.5 rounded-[7px] border bg-card px-3 text-[13px] font-semibold text-primary hover:bg-muted disabled:cursor-not-allowed disabled:text-muted-foreground disabled:opacity-60"
+                        >
+                          {selecting ? <LoaderCircle aria-hidden="true" className="h-3.5 w-3.5 animate-spin" /> : null}
+                          {attached
+                            ? (locale === "zh-CN" ? "已选择" : "Selected")
+                            : selecting
+                              ? (locale === "zh-CN" ? "选择中…" : "Selecting…")
+                              : (locale === "zh-CN" ? "选择" : "Select")}
+                        </button>
+                      </li>
+                    );
+                  })}
+                </ul>
+              ) : (
+                <div className="flex min-h-20 flex-col items-center justify-center px-4 text-center">
+                  <p className="text-[13px] font-semibold text-foreground">{locale === "zh-CN" ? "没有匹配的资料" : "No matching materials"}</p>
+                  <p className="mt-1 text-[12px] text-muted-foreground">{locale === "zh-CN" ? "可换个关键词，或直接上传一份新资料。" : "Try another query or upload a new file."}</p>
+                </div>
+              )}
+            </div>
+          ) : null}
+        </div>
         <button
           type="button"
           disabled={atLimit || isBusy}
@@ -593,44 +693,6 @@ function KnowledgeSection({ locale, taskId, value, onChange }: {
             if (file) void uploadLocalMaterial(file);
           }}
         />
-
-        {libraryOpen ? (
-          <div className="absolute left-0 right-0 top-12 z-20 max-h-56 overflow-y-auto rounded-[8px] border bg-card p-1.5 shadow-lg sm:right-[124px]">
-            {libraryQuery.isLoading ? (
-              <div className="flex min-h-20 items-center justify-center"><LoaderCircle aria-hidden="true" className="h-5 w-5 animate-spin text-primary" /></div>
-            ) : eligibleMaterials.length > 0 ? (
-              <ul className="divide-y">
-                {eligibleMaterials.map((material) => {
-                  const attached = attachedMaterialIds.has(material.material_id);
-                  return (
-                    <li key={material.material_id} className="flex min-h-14 items-center gap-3 px-3 py-2">
-                      <BookOpen aria-hidden="true" className="h-4 w-4 shrink-0 text-muted-foreground" />
-                      <span className="min-w-0 flex-1">
-                        <span className="block truncate text-[13px] font-semibold text-foreground">{material.filename}</span>
-                        <span className="mt-0.5 block truncate text-[12px] text-muted-foreground">
-                          {material.course_name || (locale === "zh-CN" ? "未归属课程" : "No course")} · {material.category}
-                        </span>
-                      </span>
-                      <button
-                        type="button"
-                        disabled={attached || atLimit || isBusy}
-                        onClick={() => void attachLibraryMaterial(material.material_id)}
-                        className="h-9 shrink-0 rounded-[7px] border bg-card px-3 text-[13px] font-semibold text-primary hover:bg-muted disabled:cursor-not-allowed disabled:text-muted-foreground disabled:opacity-60"
-                      >
-                        {attached ? (locale === "zh-CN" ? "已选择" : "Selected") : (locale === "zh-CN" ? "选择" : "Select")}
-                      </button>
-                    </li>
-                  );
-                })}
-              </ul>
-            ) : (
-              <div className="flex min-h-20 flex-col items-center justify-center px-4 text-center">
-                <p className="text-[13px] font-semibold text-foreground">{locale === "zh-CN" ? "没有匹配的资料" : "No matching materials"}</p>
-                <p className="mt-1 text-[12px] text-muted-foreground">{locale === "zh-CN" ? "可换个关键词，或直接上传一份新资料。" : "Try another query or upload a new file."}</p>
-              </div>
-            )}
-          </div>
-        ) : null}
       </div>
 
       <div className="mt-3 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
@@ -681,6 +743,7 @@ function KnowledgeSection({ locale, taskId, value, onChange }: {
           </div>
         )}
       </div>
+      {knowledgeNotice ? <p role="status" className="mt-2 text-[13px] leading-5 text-emerald-700 dark:text-emerald-300">{knowledgeNotice}</p> : null}
       {knowledgeError ? <p role="alert" className="mt-2 text-[13px] leading-5 text-danger">{knowledgeError}</p> : null}
     </section>
   );

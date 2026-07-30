@@ -1,8 +1,10 @@
 import { ChevronDown, KeyRound, Loader2, RefreshCw } from "lucide-react";
 import { Link } from "react-router-dom";
 import { HeaderPopover } from "@/components/layout/HeaderPopover";
+import { ProviderIcon } from "@/components/models/ProviderIcon";
 import { useI18n } from "@/i18n/I18nProvider";
 import { cn } from "@/lib/cn";
+import { modelDisplayName, modelSecondaryLabel } from "@/lib/modelPresentation";
 import type { ExpertConfig } from "@/types";
 
 interface ModelStatusMenuProps {
@@ -44,7 +46,11 @@ export function ModelStatusMenu({
           />
           <span className="sm:hidden">{countLabel}</span>
           <span className="hidden sm:inline">
-            {countLabel} {t("modelsAvailableSuffix")}
+            {locale === "zh-CN"
+              ? `${countLabel} ${t("modelsAvailableSuffix")}`
+              : isLoading || isError
+                ? "Models: —"
+                : `Models: ${countLabel} enabled`}
           </span>
           <ChevronDown
             aria-hidden="true"
@@ -102,19 +108,16 @@ export function ModelStatusMenu({
                     key={expert.provider_id}
                     className="flex items-center gap-3 rounded-lg px-2 py-2"
                   >
-                    <span
-                      aria-hidden="true"
-                      className={cn(
-                        "h-2 w-2 shrink-0 rounded-full bg-slate-300",
-                        expert.enabled && "bg-emerald-500",
-                      )}
+                    <ProviderIcon
+                      providerType={expert.provider_type}
+                      className={cn("h-8 w-8 rounded-lg", !expert.enabled && "grayscale opacity-55")}
                     />
                     <div className="min-w-0 flex-1">
                       <p className="truncate text-xs font-semibold text-foreground">
-                        {expert.display_name || expert.provider_type}
+                        {modelDisplayName(expert)}
                       </p>
                       <p className="mt-0.5 truncate text-xs text-muted-foreground">
-                        {expert.model}
+                        {modelSecondaryLabel(expert)}
                       </p>
                     </div>
                     <span className="shrink-0 text-[11px] font-medium text-muted-foreground">
@@ -125,7 +128,9 @@ export function ModelStatusMenu({
               : null}
             {!isLoading && !isError && experts.length > visibleExperts.length ? (
               <p className="px-2 py-1.5 text-xs text-muted-foreground">
-                +{experts.length - visibleExperts.length} {t("moreModels")}
+                +{experts.length - visibleExperts.length} {locale === "zh-CN"
+                  ? t("moreModels")
+                  : experts.length - visibleExperts.length === 1 ? "more model" : "more models"}
               </p>
             ) : null}
           </div>

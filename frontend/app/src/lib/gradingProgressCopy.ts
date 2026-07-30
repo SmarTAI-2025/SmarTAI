@@ -29,7 +29,7 @@ const copy = {
   queuedState: ["排队", "Queued"],
   none: ["无", "None"],
   draftWritten: ["已写入当前批改结果草稿", "Written to the current grading draft"],
-  expertsWorking: ["当前专家正在处理；数量按学生 × 题目去重", "Experts are working; count is deduplicated by student × problem"],
+  expertsWorking: ["当前专家正在处理；数量按学生 × 题目去重", "Models are working; the count is deduplicated by student × question"],
   taskQueue: ["等待当前并发队列执行", "Waiting for the current concurrent queue"],
   recentErrors: ["最近进度事件中的错误信号", "Error signals in recent progress events"],
   noErrors: ["暂无错误", "No errors recorded"],

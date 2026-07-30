@@ -24,6 +24,7 @@ import {
 } from "@/api/hooks";
 import { NewTaskStepper } from "@/components/new-task/NewTaskStepper";
 import { RecoverableActionState, type RecoveryAction } from "@/components/ui/RecoverableActionState";
+import { useImeSafeQuery } from "@/hooks/useImeSafeQuery";
 import { useI18n } from "@/i18n/I18nProvider";
 import { cn } from "@/lib/cn";
 import { classifyRecoverableError } from "@/lib/taskActionGuards";
@@ -108,11 +109,11 @@ export function AddProblemsPage() {
     : expertsQuery.isError
       ? tx(locale, "模型配置暂时不可用。", "Model configuration is unavailable.")
       : needsByok && needsProblemSource
-        ? tx(locale, "还需要上传题目并启用一个 BYOK 模型。", "Upload questions and enable a BYOK model first.")
+        ? tx(locale, "还需要上传题目并启用一个 BYOK 模型。", "Add questions and enable a BYOK model first.")
         : needsByok
         ? tx(locale, "需要先添加并启用一个 BYOK 模型。", "Add and enable a BYOK model first.")
         : needsProblemSource
-          ? tx(locale, "至少添加一份题目来源。", "Add at least one problem source.")
+          ? tx(locale, "至少添加一份题目来源。", "Add at least one question source.")
           : null;
 
   function updateSource(id: string, patch: Partial<SourceDraft>) {
@@ -227,7 +228,7 @@ export function AddProblemsPage() {
   return (
     <div className="w-full max-w-[1300px]">
       <h1 className="text-[30px] font-bold leading-9 tracking-[-0.02em] text-foreground">
-        {tx(locale, "题目与资料上传", "Upload Questions & Materials")}
+        {tx(locale, "题目与资料上传", "Add Questions & Supporting Materials")}
       </h1>
       <NewTaskStepper currentStep={1} reachableStep={hasRecognizedProblems ? 2 : 1} returnState={routeState} />
 
@@ -307,23 +308,29 @@ export function AddProblemsPage() {
               className="inline-flex h-10 items-center gap-2 rounded-[8px] border bg-card px-4 text-sm font-semibold text-foreground hover:bg-muted disabled:opacity-50"
             >
               <Plus aria-hidden="true" className="h-4 w-4" />
-              {tx(locale, `再添加一份${roleMeta(activeRole, locale).shortTitle}`, `Add another ${roleMeta(activeRole, locale).shortTitle}`)}
+              {roleMeta(activeRole, locale).addLabel}
             </button>
           </div>
         </section>
 
         <section className="mt-4 flex flex-col gap-3 rounded-[10px] border bg-card px-5 py-3 sm:flex-row sm:items-center sm:justify-between sm:px-7">
           <div className="min-w-0">
-            <p className="text-sm font-semibold text-foreground">{tx(locale, "一次识别并准备全部题目资料", "Prepare all question materials in one job")}</p>
+            <p className="text-sm font-semibold text-foreground">{tx(locale, "一次识别并准备全部题目资料", "Prepare all question materials in one step")}</p>
             <p className="mt-1 text-xs leading-5 text-muted-foreground">
               {enabledExperts.length
-                ? tx(locale, `已启用 ${enabledExperts.length} 个模型；未上传的标答和评分标准会由 AI 生成。`, `${enabledExperts.length} model(s) enabled. Missing answers and rubrics will be generated.`)
+                ? tx(
+                  locale,
+                  `已启用 ${enabledExperts.length} 个模型；未上传的标答和评分标准会由 AI 生成。`,
+                  enabledExperts.length === 1
+                    ? "1 model is enabled. Missing reference answers and rubrics will be generated."
+                    : `${enabledExperts.length} models are enabled. Missing reference answers and rubrics will be generated.`,
+                )
                 : tx(locale, "尚未启用模型；点击主按钮可查看原因并前往 BYOK。", "No model is enabled. Use the main button to open BYOK guidance.")}
             </p>
             <p className="mt-1 text-[11px] leading-4 text-muted-foreground">
               {capabilitiesQuery.data?.reader.ocr
                 ? tx(locale, "文件能力由当前识别服务动态提供。", "Available file readers are provided by the active recognition service.")
-                : tx(locale, "当前支持可复制文本的 PDF、TXT 与 Markdown；图片、扫描 PDF、OCR 和 DOCX 尚未接入。", "Currently supports selectable-text PDF, TXT and Markdown. Images, scanned PDFs, OCR and DOCX are not connected yet.")}
+                : tx(locale, "PDF、TXT 与 Markdown 可直接读取；图片和扫描版 PDF 的 OCR 需要已启用的视觉模型，DOCX 暂不支持。", "PDF, TXT, and Markdown are read directly. Image and scanned-PDF OCR requires an enabled vision model; DOCX is not supported yet.")}
             </p>
           </div>
           <button
@@ -338,7 +345,7 @@ export function AddProblemsPage() {
           >
             {isBusy ? <LoaderCircle aria-hidden="true" className="mr-2 h-4 w-4 animate-spin" /> : null}
             {busyLabel ?? (hasExistingProblems
-              ? tx(locale, "重新识别全部资料", "Reprepare All Materials")
+              ? tx(locale, "重新识别全部资料", "Prepare All Materials Again")
               : tx(locale, "识别并准备题目资料", "Prepare Question Materials"))}
           </button>
         </section>
@@ -399,6 +406,10 @@ function SourceEditor({
   onRemove: () => void;
 }) {
   const [dragging, setDragging] = useState(false);
+  const librarySearch = useImeSafeQuery({
+    value: source.librarySearch,
+    onCommit: (value) => onUpdate({ librarySearch: value }),
+  });
   const debouncedLibrarySearch = useDebouncedValue(source.librarySearch, 220);
   const libraryQuery = useProblemSourceLibrary(
     taskId,
@@ -468,14 +479,14 @@ function SourceEditor({
           <label className="mt-3 block rounded-[9px] border bg-slate-50/70 p-3 dark:bg-slate-950/20">
             <span className="text-xs font-semibold text-foreground">{tx(locale, "用自然语言描述评分标准", "Describe the grading rubric")}</span>
             <span className="mt-1 block text-[11px] leading-4 text-muted-foreground">
-              {tx(locale, "SmarTAI 会把描述整理为与标答步骤对应、可审核的评分标准。", "SmarTAI will align your description with answer steps for review.")}
+              {tx(locale, "SmarTAI 会把描述整理为与标答步骤对应、可审核的评分标准。", "SmarTAI will align your description with the reference-answer steps for review.")}
             </span>
             <textarea
               value={source.inlineText ?? ""}
               disabled={disabled}
               maxLength={12000}
               onChange={(event) => onUpdate({ inlineText: event.target.value })}
-              placeholder={tx(locale, "例如：每题满分 10 分，推导过程占 60%，结果占 40%；允许等价表达。也可以按题号分别描述。", "Example: Each problem is worth 10 points; reasoning is 60% and the final result is 40%. Equivalent expressions are accepted.")}
+              placeholder={tx(locale, "例如：每题满分 10 分，推导过程占 60%，结果占 40%；允许等价表达。也可以按题号分别描述。", "Example: Each question is worth 10 points; reasoning is 60% and the final answer is 40%. Equivalent expressions are accepted.")}
               className="mt-2 min-h-[92px] w-full resize-y rounded-[7px] border bg-card px-3 py-2 text-sm font-normal leading-5 text-foreground outline-none focus:border-primary focus:ring-2 focus:ring-primary/15"
             />
           </label>
@@ -488,7 +499,7 @@ function SourceEditor({
               </select>
               <label className="relative">
                 <Search aria-hidden="true" className="pointer-events-none absolute left-3 top-3 h-4 w-4 text-muted-foreground" />
-                <input value={source.librarySearch} disabled={disabled} onChange={(event) => onUpdate({ librarySearch: event.target.value })} placeholder={tx(locale, "搜索资料名称", "Search materials")} className="h-10 w-full rounded-[7px] border bg-card pl-9 pr-3 text-sm outline-none focus:border-primary" />
+                <input value={librarySearch.draftValue} disabled={disabled} onBlur={librarySearch.handleBlur} onChange={librarySearch.handleChange} onCompositionEnd={librarySearch.handleCompositionEnd} onCompositionStart={librarySearch.handleCompositionStart} placeholder={tx(locale, "搜索资料名称", "Search materials")} className="h-10 w-full rounded-[7px] border bg-card pl-9 pr-3 text-sm outline-none focus:border-primary" />
               </label>
             </div>
             {!hasTaskCourse && source.libraryScope === "course" ? <p className="mt-3 text-xs text-warning">{tx(locale, "当前任务未选择课程，请改选全部资料。", "This task has no course; choose all materials.")}</p> : null}
@@ -509,20 +520,20 @@ function SourceEditor({
               {source.sourceMode === "inline_text" ? tx(locale, "描述范围", "Description Scope") : tx(locale, "文件结构", "File Structure")}
             </p>
             <div className="mt-2 grid grid-cols-2 gap-2">
-              <StructureButton active={source.structureMode === "organized"} disabled={disabled} onClick={() => onUpdate({ structureMode: "organized" })}>{source.sourceMode === "inline_text" ? tx(locale, "按题描述", "Per Problem") : tx(locale, "已按题整理", "Organized")}</StructureButton>
+              <StructureButton active={source.structureMode === "organized"} disabled={disabled} onClick={() => onUpdate({ structureMode: "organized" })}>{source.sourceMode === "inline_text" ? tx(locale, "按题描述", "Per Question") : tx(locale, "已按题整理", "Organized")}</StructureButton>
               <StructureButton active={source.structureMode === "extract_from_source"} disabled={disabled} onClick={() => onUpdate({ structureMode: "extract_from_source" })}>{source.sourceMode === "inline_text" ? tx(locale, "整体规则", "Overall Rules") : tx(locale, "从原文提取", "Extract")}</StructureButton>
             </div>
           </div>
           {source.sourceMode === "inline_text" ? (
             <p className="self-end pb-1 text-xs leading-5 text-muted-foreground">
               {source.structureMode === "organized"
-                ? tx(locale, "请在描述中写明题号；系统会分别匹配到对应题目。", "Include problem numbers so each rule can be matched directly.")
-                : tx(locale, "整体规则会由 SmarTAI 结合每道题的标答生成对应评分步骤。", "SmarTAI applies the overall rules to each answer's grading steps.")}
+                ? tx(locale, "请在描述中写明题号；系统会分别匹配到对应题目。", "Include question numbers so each rule can be matched directly.")
+                : tx(locale, "整体规则会由 SmarTAI 结合每道题的标答生成对应评分步骤。", "SmarTAI combines the overall rules with each question's reference answer to generate matching grading steps.")}
             </p>
           ) : source.structureMode === "extract_from_source" ? (
             <label className="grid gap-2 text-xs font-semibold text-muted-foreground">
               {tx(locale, "提取说明", "Extraction Hint")}
-              <textarea value={source.extractionHint} disabled={disabled} maxLength={2000} onChange={(event) => onUpdate({ extractionHint: event.target.value })} placeholder={tx(locale, "例如：第 3 章习题 1–8，只提取正文中的题目与对应答案", "Example: Chapter 3, exercises 1–8")} className="min-h-[74px] resize-y rounded-[7px] border bg-card px-3 py-2 text-sm font-normal leading-5 text-foreground outline-none focus:border-primary focus:ring-2 focus:ring-primary/15" />
+              <textarea value={source.extractionHint} disabled={disabled} maxLength={2000} onChange={(event) => onUpdate({ extractionHint: event.target.value })} placeholder={tx(locale, "例如：第 3 章习题 1–8，只提取正文中的题目与对应答案", "Example: Chapter 3, exercises 1–8; extract only the question text and matching reference answers")} className="min-h-[74px] resize-y rounded-[7px] border bg-card px-3 py-2 text-sm font-normal leading-5 text-foreground outline-none focus:border-primary focus:ring-2 focus:ring-primary/15" />
             </label>
           ) : <p className="self-end pb-1 text-xs leading-5 text-muted-foreground">{tx(locale, "系统按明确题号匹配到同一道题。", "Content is matched by explicit question numbers.")}</p>}
         </div>
@@ -588,8 +599,8 @@ function StartRequirementsDialog({
         <div className="mt-4 space-y-3">
           {needsProblemSource ? (
             <div className="rounded-[8px] border bg-slate-50 px-4 py-3 dark:bg-slate-950/30">
-              <p className="text-sm font-semibold text-foreground">{tx(locale, "上传题目", "Upload Questions")}</p>
-              <p className="mt-1 text-xs leading-5 text-muted-foreground">{tx(locale, "至少选择一份题目文件，或从课程资料库选择题目来源。其他三类资料仍可留空。", "Choose at least one problem file or a problem source from the course library. The other material types may remain empty.")}</p>
+              <p className="text-sm font-semibold text-foreground">{tx(locale, "上传题目", "Add Questions")}</p>
+              <p className="mt-1 text-xs leading-5 text-muted-foreground">{tx(locale, "至少选择一份题目文件，或从课程资料库选择题目来源。其他三类资料仍可留空。", "Choose at least one question file or a question source from the course library. The other material types may remain empty.")}</p>
             </div>
           ) : null}
           {needsByok ? (
@@ -601,7 +612,7 @@ function StartRequirementsDialog({
         </div>
         <div className="mt-6 flex flex-col-reverse gap-2 sm:flex-row sm:flex-wrap sm:justify-end">
           <button type="button" onClick={onClose} className="h-10 rounded-[8px] border px-4 text-sm font-semibold text-foreground hover:bg-muted">{tx(locale, "暂不处理", "Not Now")}</button>
-          {needsProblemSource ? <button ref={problemActionRef} type="button" onClick={onGoToProblems} className="inline-flex h-10 items-center justify-center rounded-[8px] border px-4 text-sm font-semibold text-foreground hover:bg-muted">{tx(locale, "上传题目", "Upload Questions")}</button> : null}
+          {needsProblemSource ? <button ref={problemActionRef} type="button" onClick={onGoToProblems} className="inline-flex h-10 items-center justify-center rounded-[8px] border px-4 text-sm font-semibold text-foreground hover:bg-muted">{tx(locale, "上传题目", "Add Questions")}</button> : null}
           {needsByok ? <Link ref={byokActionRef} to={`/settings/byok?returnTo=${encodeURIComponent(returnTo)}`} state={routeState} className="inline-flex h-10 items-center justify-center rounded-[8px] bg-primary px-4 text-sm font-semibold text-primary-foreground hover:opacity-90">{tx(locale, "前往 BYOK", "Open BYOK")}</Link> : null}
         </div>
       </div>
@@ -640,21 +651,21 @@ function sourceSummary(source: SourceDraft, locale: string) {
   if (source.sourceMode === "upload" && source.file) return source.file.name;
   if (source.sourceMode === "library" && source.libraryMaterial) return source.libraryMaterial.filename;
   if (source.sourceMode === "inline_text" && source.inlineText?.trim()) return tx(locale, "自然语言评分标准", "Natural-language rubric");
-  return tx(locale, `${roleMeta(source.role, locale).shortTitle}来源`, `${roleMeta(source.role, locale).shortTitle} source`);
+  return roleMeta(source.role, locale).sourceLabel;
 }
 
 function roleMeta(role: PreparationSourceRole, locale: string) {
   const zh = {
-    problem: { title: "题目文件（必填）", shortTitle: "题目", description: "上传题目正文，或从课程资料库选择题目来源。" },
-    reference_answer: { title: "标答 / 解答（可选）", shortTitle: "标答", description: "可只提供最终答案；SmarTAI 会补全可审核的解题过程。" },
-    rubric: { title: "评分标准（可选）", shortTitle: "评分标准", description: "可上传文件、从资料库选择或直接描述；评分步骤会与标答对应。" },
-    programming_tests: { title: "编程题测试资料（可选）", shortTitle: "测试样例", description: "仅编程题使用，支持输入、期望输出、解释与隐藏测试。" },
+    problem: { title: "题目文件（必填）", shortTitle: "题目", sourceLabel: "题目来源", addLabel: "再添加一份题目", description: "上传题目正文，或从课程资料库选择题目来源。" },
+    reference_answer: { title: "标答 / 解答（可选）", shortTitle: "标答", sourceLabel: "标答来源", addLabel: "再添加一份标答", description: "可只提供最终答案；SmarTAI 会补全可审核的解题过程。" },
+    rubric: { title: "评分标准（可选）", shortTitle: "评分标准", sourceLabel: "评分标准来源", addLabel: "再添加一份评分标准", description: "可上传文件、从资料库选择或直接描述；评分步骤会与标答对应。" },
+    programming_tests: { title: "编程题测试资料（可选）", shortTitle: "测试样例", sourceLabel: "测试资料来源", addLabel: "再添加一份测试资料", description: "仅编程题使用，支持输入、期望输出、解释与隐藏测试。" },
   } as const;
   const en = {
-    problem: { title: "Problem Files (Required)", shortTitle: "Problems", description: "Upload problem statements or choose them from the course library." },
-    reference_answer: { title: "Answers / Solutions (Optional)", shortTitle: "Answers", description: "A final answer is enough; SmarTAI will expand it into a reviewable solution." },
-    rubric: { title: "Grading Rubrics (Optional)", shortTitle: "Rubrics", description: "Upload, choose from the library, or describe rules that align with answer steps." },
-    programming_tests: { title: "Programming Tests (Optional)", shortTitle: "Test Cases", description: "Programming problems only: inputs, expected outputs, explanations and hidden tests." },
+    problem: { title: "Question Files (Required)", shortTitle: "Questions", sourceLabel: "Question source", addLabel: "Add Another Question Source", description: "Upload question text or choose a source from the course library." },
+    reference_answer: { title: "Reference Answers / Solutions (Optional)", shortTitle: "Reference Answers", sourceLabel: "Reference answer source", addLabel: "Add Another Reference Answer Source", description: "A final answer is enough; SmarTAI will expand it into a reviewable solution." },
+    rubric: { title: "Grading Rubrics (Optional)", shortTitle: "Rubrics", sourceLabel: "Rubric source", addLabel: "Add Another Rubric Source", description: "Upload a file, choose one from the library, or describe rules that align with the reference-answer steps." },
+    programming_tests: { title: "Programming Tests (Optional)", shortTitle: "Test Cases", sourceLabel: "Programming test source", addLabel: "Add Another Programming Test Source", description: "For programming questions only: inputs, expected outputs, explanations, and hidden tests." },
   } as const;
   return locale === "zh-CN" ? zh[role] : en[role];
 }

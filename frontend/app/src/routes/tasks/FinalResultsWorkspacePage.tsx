@@ -101,14 +101,14 @@ export function FinalResultsWorkspacePage() {
       <div className="flex flex-wrap items-end justify-between gap-3">
         <div>
           <h1 className="text-[30px] font-bold leading-9 tracking-[-0.02em] text-foreground">
-            {tx(locale, "学情分析与导出", "Learning analysis & export")}
+            {tx(locale, "学情分析与导出", "Performance Analysis & Exports")}
           </h1>
           <p className="mt-1 text-[13px] text-muted-foreground">
-            {task.name} · {tx(locale, `正式结果 v${finalization.final_result_version}`, `Formal result v${finalization.final_result_version}`)}
+            {task.name} · {tx(locale, `正式结果 v${finalization.final_result_version}`, `Final Results v${finalization.final_result_version}`)}
           </p>
         </div>
         <Link to={`/tasks/${encodeURIComponent(taskId)}/review`} className="text-[13px] font-semibold text-primary hover:underline">
-          {tx(locale, "返回复核记录", "Review record")}
+          {tx(locale, "返回复核记录", "Review History")}
         </Link>
       </div>
 
@@ -186,8 +186,8 @@ function ResultStateBanner({ locale, taskId, finalization }: { locale: Locale; t
       <div className="min-w-0 flex-1">
         <p className="text-[14px] font-bold text-foreground">
           {stale
-            ? tx(locale, "结果已修改，需要重新确认正式版本", "Results changed; reconfirm the formal version")
-            : tx(locale, `正式结果 v${finalization.final_result_version} 已保存`, `Formal result v${finalization.final_result_version} saved`)}
+            ? tx(locale, "结果已修改，需要重新确认正式版本", "Results changed; confirm the final version again")
+            : tx(locale, `正式结果 v${finalization.final_result_version} 已保存`, `Final Results v${finalization.final_result_version} saved`)}
         </p>
         <p className="mt-0.5 text-[12px] text-muted-foreground">
           {tx(locale, "确认时间", "Confirmed")}：{formatTaskTime(finalization.final_result_updated_at ?? undefined, true, locale)} · {analysisStatusLabel(locale, finalization.analysis_status)}
@@ -291,21 +291,21 @@ function ResultsOverview({
         description={tx(
           locale,
           "正式结果的简洁班级摘要；详细信息分别进入独立分析页面。",
-          "A concise class summary of the formal result, with focused pages for details.",
+          "A concise class summary of the final results, with dedicated pages for details.",
         )}
       />
 
       <div className="mt-4 grid grid-cols-2 gap-3 xl:grid-cols-4">
         <Metric value={String(model.students.length)} label={tx(locale, "学生数", "Students")} tone="primary" />
         <Metric value={String(model.questions.length)} label={tx(locale, "题目数", "Questions")} tone="accent" />
-        <Metric value={formatPercent(model.classAveragePercent)} label={tx(locale, "班级平均得分率", "Class mean score")} tone="warning" />
+        <Metric value={formatPercent(model.classAveragePercent)} label={tx(locale, "班级平均得分率", "Class Average")} tone="warning" />
         <Metric value={formatPercent(passRate)} label={tx(locale, "及格率（≥60%）", "Pass rate (≥60%)")} tone="primary" />
       </div>
 
       <div className="mt-4 grid gap-4 xl:grid-cols-2">
         <OverviewPanel
           title={tx(locale, "分数分布", "Score distribution")}
-          subtitle={tx(locale, "按学生总得分率分桶", "Students grouped by total score rate")}
+          subtitle={tx(locale, "按学生总得分率分桶", "Students grouped by overall score percentage")}
           href={`${root}/visualizations`}
           linkLabel={tx(locale, "查看可视化", "View visualizations")}
         >
@@ -328,7 +328,7 @@ function ResultsOverview({
 
         <OverviewPanel
           title={tx(locale, "薄弱题目预览", "Lowest-scoring questions")}
-          subtitle={tx(locale, "按平均得分率从低到高", "Ordered by mean score rate")}
+          subtitle={tx(locale, "按平均得分率从低到高", "Ordered by average score percentage")}
           href={`${root}/questions`}
           linkLabel={tx(locale, "查看题目分析", "View questions")}
         >
@@ -345,7 +345,7 @@ function ResultsOverview({
       <div className="mt-4 grid gap-4 xl:grid-cols-[1.2fr_0.8fr]">
         <OverviewPanel
           title={tx(locale, "学生表现预览", "Student performance preview")}
-          subtitle={tx(locale, "低得分率优先，仅显示 3 位", "Lowest score rates first; 3 students shown")}
+          subtitle={tx(locale, "低得分率优先，仅显示 3 位", "Lowest score percentages first; 3 students shown")}
           href={`${root}/students`}
           linkLabel={tx(locale, "查看学生分析", "View students")}
         >
@@ -357,14 +357,14 @@ function ResultsOverview({
         </OverviewPanel>
 
         <OverviewPanel
-          title={tx(locale, "复核与产物", "Review & artifacts")}
+          title={tx(locale, "复核与产物", "Review & Downloads")}
           subtitle={reviewConclusion}
           href={`${root}/reports`}
           linkLabel={tx(locale, "查看报告状态", "View report status")}
         >
           <div className="mt-3 grid gap-2 text-[12px]">
             <StatusLine
-              label={tx(locale, "正式结果", "Formal result")}
+              label={tx(locale, "正式结果", "Final Results")}
               value={`v${finalization.final_result_version}`}
               tone="primary"
             />
@@ -521,7 +521,7 @@ function WorkspaceState({
   return (
     <div className="flex min-h-[420px] flex-col items-center justify-center rounded-[10px] border bg-card px-6 text-center">
       <LoaderCircle aria-hidden="true" className="h-8 w-8 animate-spin text-primary" />
-      <h1 className="mt-4 text-lg font-bold text-foreground">{loading ? tx(locale, "正在读取正式结果…", "Loading formal results…") : tx(locale, "正式结果暂时无法读取", "Formal results are unavailable")}</h1>
+      <h1 className="mt-4 text-lg font-bold text-foreground">{loading ? tx(locale, "正在读取正式结果…", "Loading final results…") : tx(locale, "正式结果暂时无法读取", "Final results are unavailable")}</h1>
     </div>
   );
 }

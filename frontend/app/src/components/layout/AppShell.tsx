@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from "react";
 import { Link, Outlet, useNavigate } from "react-router-dom";
 import { useCurrentUser, useExperts, useLogout } from "@/api/hooks";
 import { AccountMenu } from "@/components/layout/AccountMenu";
+import { LanguageToggle } from "@/components/layout/LanguageToggle";
 import { ModelStatusMenu } from "@/components/layout/ModelStatusMenu";
 import { PrimaryNavigation } from "@/components/layout/PrimaryNavigation";
 import { useI18n } from "@/i18n/I18nProvider";
@@ -124,6 +125,7 @@ export function AppShell() {
           <PrimaryNavigation className="ml-7 hidden lg:flex" />
 
           <div className="ml-auto flex min-w-0 items-center gap-1 sm:gap-2">
+            <LanguageToggle />
             <ModelStatusMenu
               experts={experts}
               enabledCount={enabledCount}

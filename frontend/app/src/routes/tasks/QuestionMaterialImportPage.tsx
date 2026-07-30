@@ -25,6 +25,7 @@ import {
 import { getAPIErrorCode, normalizeAPIError } from "@/api/client";
 import { NewTaskStepper } from "@/components/new-task/NewTaskStepper";
 import { UnsavedChangesDialog } from "@/components/ui/UnsavedChangesDialog";
+import { useImeSafeQuery } from "@/hooks/useImeSafeQuery";
 import { useI18n } from "@/i18n/I18nProvider";
 import { cn } from "@/lib/cn";
 import { materialImportText } from "@/lib/materialImportCopy";
@@ -430,6 +431,8 @@ function LibrarySourcePicker({
   onScopeChange: (scope: ProblemSourceScope) => void;
   onSelect: (material: ProblemLibraryMaterial) => void;
 }) {
+  const librarySearch = useImeSafeQuery({ value: query, onCommit: onQueryChange });
+
   if (selected && !showPicker) {
     return (
       <div className="mt-5 flex min-h-[78px] items-center justify-between gap-4 rounded-[8px] border bg-slate-50 px-5 dark:bg-slate-900/40">
@@ -453,7 +456,7 @@ function LibrarySourcePicker({
         <label className="relative min-w-0 flex-1">
           <span className="sr-only">{materialImportText(locale, "librarySearch")}</span>
           <Search aria-hidden="true" className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-          <input value={query} onChange={(event) => onQueryChange(event.target.value)} placeholder={materialImportText(locale, "librarySearchPlaceholder")} className="h-8 w-full rounded-[7px] border bg-card pl-9 pr-3 text-[13px] outline-none focus:border-primary focus:ring-2 focus:ring-primary/15" />
+          <input value={librarySearch.draftValue} onBlur={librarySearch.handleBlur} onChange={librarySearch.handleChange} onCompositionEnd={librarySearch.handleCompositionEnd} onCompositionStart={librarySearch.handleCompositionStart} placeholder={materialImportText(locale, "librarySearchPlaceholder")} className="h-8 w-full rounded-[7px] border bg-card pl-9 pr-3 text-[13px] outline-none focus:border-primary focus:ring-2 focus:ring-primary/15" />
         </label>
       </div>
       <div className="max-h-[116px] overflow-y-auto">
@@ -529,7 +532,7 @@ function localizeImportError(error: unknown, locale: "zh-CN" | "en-US") {
   const normalized = normalizeAPIError(error);
   const code = getAPIErrorCode(normalized) ?? "";
   const known: Record<string, [string, string]> = {
-    material_import_requires_problems_ready: ["请先完成题目识别与准备。", "Finish problem recognition and preparation first."],
+    material_import_requires_problems_ready: ["请先完成题目识别与准备。", "Finish question recognition and preparation first."],
     material_import_source_changed: ["课程资料已发生变化，请重新选择。", "The Course Library material changed. Select it again."],
     material_import_source_unavailable: ["资料来源已失效，请重新选择。", "The material source expired. Select it again."],
     task_workflow_changed: ["任务内容已发生变化，请刷新后重新导入。", "The task changed. Refresh and start the import again."],

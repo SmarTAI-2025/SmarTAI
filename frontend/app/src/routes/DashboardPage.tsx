@@ -6,6 +6,7 @@ import { useTaskProgress } from "@/hooks/useTaskProgress";
 import { useI18n } from "@/i18n/I18nProvider";
 import type { Locale, MessageKey } from "@/i18n/messages";
 import { cn } from "@/lib/cn";
+import { modelDisplayName } from "@/lib/modelPresentation";
 import { formatTaskTime, getTaskDestination, isTaskProcessing } from "@/lib/taskFlow";
 import type { ExpertConfig, JobProgress, TaskLite, TaskStatus } from "@/types";
 
@@ -105,12 +106,17 @@ export function DashboardPage() {
     [expertsQuery.data],
   );
   const enabledExperts = experts.filter((expert) => expert.enabled);
+  const hasEnabledByok = enabledExperts.some((expert) => expert.is_shared !== true);
   const hasTaskSnapshot = tasksQuery.data !== undefined;
   const modelValue = expertsQuery.isLoading
-    ? "— / —"
+    ? "—"
     : expertsQuery.isError
       ? "—"
-      : `${enabledExperts.length} / ${experts.length}`;
+      : enabledExperts.length > 0
+        ? hasEnabledByok
+          ? (locale === "zh-CN" ? "已配置" : "Configured")
+          : (locale === "zh-CN" ? "平台可用" : "Platform ready")
+        : (locale === "zh-CN" ? "进入配置" : "Set up");
 
   const metrics: Array<{
     label: MessageKey;
@@ -493,6 +499,7 @@ function DashboardInsight({
 }) {
   const { t } = useI18n();
   const primaryTask = tasks[0];
+  const hasEnabledByok = enabledExperts.some((expert) => expert.is_shared !== true);
 
   return (
     <section className="mt-8 min-h-[170px] rounded-[10px] border bg-card px-5 py-6 sm:px-6 xl:mt-[76px] xl:py-[25px]">
@@ -503,7 +510,12 @@ function DashboardInsight({
         {buildInsightSummary(
           counts,
           { isLoading: tasksLoading, isError: tasksError },
-          { isLoading: modelsLoading, isError: modelsError },
+          {
+            isLoading: modelsLoading,
+            isError: modelsError,
+            hasEnabled: enabledExperts.length > 0,
+            hasByok: hasEnabledByok,
+          },
           locale,
         )}
       </p>
@@ -540,24 +552,25 @@ function DashboardInsight({
             to="/settings/byok"
             className="inline-flex h-7 items-center rounded-full bg-amber-100 px-4 text-[12px] font-semibold text-amber-700 outline-none hover:bg-amber-200 focus-visible:ring-2 focus-visible:ring-ring dark:bg-amber-950 dark:text-amber-200"
           >
-            {modelsError ? t("modelsUnavailable") : t("manageModels")}
+            {modelsError
+              ? (locale === "zh-CN" ? "检查 BYOK 配置" : "Check BYOK setup")
+              : (locale === "zh-CN" ? "进入 BYOK 配置" : "Set up BYOK")}
           </Link>
         ) : null}
 
-        {!modelsLoading
-          ? enabledExperts.slice(0, 2).map((expert) => (
-              <Link
-                key={expert.provider_id}
-                to="/settings/byok"
-                title={`${expert.display_name || expert.provider_type} · ${expert.model}`}
-                className="inline-flex h-7 max-w-[280px] items-center rounded-full bg-teal-100 px-4 text-[12px] font-semibold text-teal-700 outline-none transition-colors hover:bg-teal-200 focus-visible:ring-2 focus-visible:ring-ring dark:bg-teal-950 dark:text-teal-200"
-              >
-                <span className="truncate">
-                  {expert.display_name || expert.provider_type} · {expert.model}
-                </span>
-              </Link>
-            ))
-          : null}
+        {!modelsLoading && !modelsError && enabledExperts.length > 0 ? (
+          <Link
+            to="/settings/byok"
+            title={locale === "zh-CN"
+              ? `已启用 ${enabledExperts.length} 个模型配置，点击进入管理`
+              : `${enabledExperts.length} model ${enabledExperts.length === 1 ? "configuration is" : "configurations are"} enabled. Open settings to manage them.`}
+            className="inline-flex h-7 items-center rounded-full bg-teal-100 px-4 text-[12px] font-semibold text-teal-700 outline-none transition-colors hover:bg-teal-200 focus-visible:ring-2 focus-visible:ring-ring dark:bg-teal-950 dark:text-teal-200"
+          >
+            {hasEnabledByok
+              ? (locale === "zh-CN" ? "BYOK 已配置" : "BYOK configured")
+              : (locale === "zh-CN" ? "平台模型可用" : "Platform model available")}
+          </Link>
+        ) : null}
       </div>
     </section>
   );
@@ -654,8 +667,8 @@ function selectVisibleTasks(tasks: TaskLite[]): TaskLite[] {
 
 function compareExperts(a: ExpertConfig, b: ExpertConfig): number {
   if (a.enabled !== b.enabled) return a.enabled ? -1 : 1;
-  const aName = a.display_name || a.provider_id;
-  const bName = b.display_name || b.provider_id;
+  const aName = modelDisplayName(a);
+  const bName = modelDisplayName(b);
   return aName.localeCompare(bName);
 }
 
@@ -668,7 +681,12 @@ function getProgressValue(task: TaskLite, progress: JobProgress | null, percent:
 function buildInsightSummary(
   counts: DashboardCounts,
   tasksState: { isLoading: boolean; isError: boolean },
-  modelsState: { isLoading: boolean; isError: boolean },
+  modelsState: {
+    isLoading: boolean;
+    isError: boolean;
+    hasEnabled: boolean;
+    hasByok: boolean;
+  },
   locale: Locale,
 ): string {
   if (locale === "en-US") {
@@ -683,7 +701,11 @@ function buildInsightSummary(
       ? " Model configuration is loading."
       : modelsState.isError
         ? " Model status is temporarily unavailable."
-        : " Open a model chip below to review its BYOK configuration.";
+        : modelsState.hasByok
+          ? " BYOK is configured; use the control below to manage it."
+          : modelsState.hasEnabled
+            ? " A platform model is available; use the control below to review model settings."
+          : " BYOK is not configured yet; use the control below to set it up.";
     return taskSummary + modelSummary;
   }
 
@@ -698,7 +720,11 @@ function buildInsightSummary(
     ? " 模型配置正在读取。"
     : modelsState.isError
       ? " 模型状态暂时不可用。"
-      : " 点击下方模型可进入模型与 BYOK 配置。";
+      : modelsState.hasByok
+        ? " BYOK 已配置，可通过下方入口管理。"
+        : modelsState.hasEnabled
+          ? " 平台模型可用，可通过下方入口查看模型设置。"
+        : " 尚未配置 BYOK，可通过下方入口完成配置。";
   return taskSummary + modelSummary;
 }
 

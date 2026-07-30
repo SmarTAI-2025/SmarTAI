@@ -8,7 +8,7 @@ import { materialImportText } from "@/lib/materialImportCopy";
 
 const FACT_STEPS = [
   { key: "source", zh: "准备资料来源", en: "Prepare material source" },
-  { key: "match", zh: "匹配题目与资料", en: "Match problems and materials" },
+  { key: "match", zh: "匹配题目与资料", en: "Match questions and materials" },
   { key: "prepare", zh: "校验待确认候选", en: "Validate review candidates" },
 ] as const;
 

@@ -33,11 +33,12 @@ import {
 import { NewTaskStepper } from "@/components/new-task/NewTaskStepper";
 import { SmartCatalogField } from "@/components/new-task/SmartCatalogField";
 import { useI18n } from "@/i18n/I18nProvider";
+import { modelDisplayName } from "@/lib/modelPresentation";
 import { buildSemesterOptions, formatSemesterLabel, getCurrentSemesterId } from "@/lib/semesters";
 import type { Course, TaskMetadataPatch, TaskTag } from "@/types";
 
 export function NewTaskPage() {
-  const { t } = useI18n();
+  const { locale, t } = useI18n();
   const navigate = useNavigate();
   const location = useLocation();
   const { taskId } = useParams();
@@ -247,7 +248,7 @@ export function NewTaskPage() {
   const modelSummary = expertsQuery.isLoading
     ? t("newTaskModelsLoading")
     : enabledExperts.length
-      ? `${t("newTaskModelsConfiguredPrefix")}${enabledExperts.length}${t("newTaskModelsConfiguredSuffix")}${enabledExperts.slice(0, 2).map((expert) => expert.display_name || expert.model).join("、")}${enabledExperts.length > 2 ? t("newTaskModelsMore") : ""}`
+      ? `${t("newTaskModelsConfiguredPrefix")}${enabledExperts.length}${t("newTaskModelsConfiguredSuffix")}${enabledExperts.slice(0, 2).map(modelDisplayName).join(locale === "zh-CN" ? "、" : ", ")}${enabledExperts.length > 2 ? t("newTaskModelsMore") : ""}`
       : t("newTaskModelsMissing");
 
   if (isEditing && (taskQuery.isError || coursesQuery.isError || tagsQuery.isError)) {
@@ -344,7 +345,11 @@ export function NewTaskPage() {
               multiple
               getId={(item) => item.id}
               getLabel={(item) => item.name}
-              getMeta={(item) => item.usage_count ? `${item.usage_count}${t("newTaskTagUsageSuffix")}` : undefined}
+              getMeta={(item) => item.usage_count
+                ? locale === "zh-CN"
+                  ? `${item.usage_count}${t("newTaskTagUsageSuffix")}`
+                  : `${item.usage_count} ${item.usage_count === 1 ? "task uses" : "tasks use"} this tag`
+                : undefined}
               onSelect={(item) => setTags((current) => current.some((tag) => tag.id === item.id) ? current : [...current, item])}
               onRemove={(item) => setTags((current) => current.filter((tag) => tag.id !== item.id))}
               onCreate={async (value, force) => createTag.mutateAsync({ name: value, color: "slate", force_create: force })}

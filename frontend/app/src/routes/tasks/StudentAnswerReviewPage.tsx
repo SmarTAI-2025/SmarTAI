@@ -21,9 +21,7 @@ import {
   useMemo,
   useRef,
   useState,
-  type CompositionEvent,
   type FocusEvent,
-  type ReactNode,
 } from "react";
 import { Link, Navigate, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { toast } from "sonner";
@@ -32,6 +30,7 @@ import { useTask, useUpdateStudentAnswer, useUpdateStudentIdentity } from "@/api
 import { NewTaskStepper } from "@/components/new-task/NewTaskStepper";
 import { Button } from "@/components/ui/Button";
 import { MarkdownMath } from "@/components/ui/MarkdownMath";
+import { useImeSafeQuery } from "@/hooks/useImeSafeQuery";
 import { useI18n } from "@/i18n/I18nProvider";
 import type { Locale, MessageKey } from "@/i18n/messages";
 import { cn } from "@/lib/cn";
@@ -41,7 +40,6 @@ import {
   answerMap,
   buildSubmissionQuestions,
   getAnswerState,
-  studentNeedsAttention,
   type SubmissionAnswerState,
   type SubmissionQuestion,
 } from "@/lib/submissionReview";
@@ -94,12 +92,7 @@ export function StudentAnswerReviewPage() {
   const [identityId, setIdentityId] = useState("");
   const [identityName, setIdentityName] = useState("");
   const [identityError, setIdentityError] = useState<string | null>(null);
-  const studentFilterParam = searchParams.get("studentFilter") ?? "";
   const questionFilterParam = searchParams.get("questionFilter") ?? "";
-  const [studentFilter, setStudentFilter] = useState(studentFilterParam);
-  const [questionFilter, setQuestionFilter] = useState(questionFilterParam);
-  const studentFilterComposingRef = useRef(false);
-  const questionFilterComposingRef = useRef(false);
   const initializedStudentRef = useRef<string | null>(null);
   const positionedRouteRef = useRef<string | null>(null);
   const selectedQuestionRef = useRef(requestedQuestionId);
@@ -118,42 +111,22 @@ export function StudentAnswerReviewPage() {
     [studentId, students],
   );
   const answers = useMemo(() => student ? answerMap(student) : new Map(), [student]);
-  const studentItems = useMemo(
-    () => students.map((candidate) => studentPickerItem(candidate, questions, t)),
-    [questions, students, t],
-  );
   const questionItems = useMemo(() => questions.map(questionPickerItem), [questions]);
-  const studentMatches = useMemo(
-    () => matchPickerItems(studentItems, studentFilter),
-    [studentFilter, studentItems],
-  );
   const questionMatches = useMemo(
-    () => matchPickerItems(questionItems, questionFilter),
-    [questionFilter, questionItems],
+    () => matchPickerItems(questionItems, questionFilterParam),
+    [questionFilterParam, questionItems],
   );
   const filteredQuestions = useMemo(
-    () => selectMatched(questions, questionMatches, questionFilter, (value) => value.id),
-    [questionFilter, questionMatches, questions],
+    () => selectMatched(questions, questionMatches, questionFilterParam, (value) => value.id),
+    [questionFilterParam, questionMatches, questions],
   );
-  const navigableStudents = useMemo(
-    () => selectMatched(students, studentMatches, studentFilter, (value) => value.stu_id, true),
-    [studentFilter, studentMatches, students],
-  );
-  const studentNeighbors = neighbors(navigableStudents, studentId, (value) => value.stu_id);
+  const studentNeighbors = neighbors(students, studentId, (value) => value.stu_id);
   const activeIndex = Math.max(0, filteredQuestions.findIndex((question) => question.id === activeQuestionId));
   const activeQuestion = filteredQuestions[activeIndex] ?? filteredQuestions[0] ?? null;
   const questionNeighbors = {
     previous: activeIndex > 0 ? filteredQuestions[activeIndex - 1] : null,
     next: activeIndex >= 0 && activeIndex < filteredQuestions.length - 1 ? filteredQuestions[activeIndex + 1] : null,
   };
-
-  useEffect(() => {
-    if (!studentFilterComposingRef.current) setStudentFilter(studentFilterParam);
-  }, [studentFilterParam]);
-
-  useEffect(() => {
-    if (!questionFilterComposingRef.current) setQuestionFilter(questionFilterParam);
-  }, [questionFilterParam]);
 
   useEffect(() => {
     if (requestedQuestionId) selectedQuestionRef.current = requestedQuestionId;
@@ -292,9 +265,10 @@ export function StudentAnswerReviewPage() {
     return <Navigate replace to={getTaskDestination(taskQuery.data)} />;
   }
 
-  function setFilterParam(key: "studentFilter" | "questionFilter", value: string) {
+  function setFilterParam(key: "questionFilter", value: string) {
     setSearchParams((previous) => {
       const next = new URLSearchParams(previous);
+      next.delete("studentFilter");
       if (value.trim()) next.set(key, value);
       else next.delete(key);
       return next;
@@ -312,6 +286,7 @@ export function StudentAnswerReviewPage() {
       : activeQuestion?.id || requestedQuestionId;
     if (!target || !taskId || !anchorQuestionId || !confirmLeave()) return;
     const nextSearch = new URLSearchParams(searchParams);
+    nextSearch.delete("studentFilter");
     nextSearch.set("question", anchorQuestionId);
     nextSearch.delete("from");
     resetScrollForStudentRef.current = target.stu_id;
@@ -481,7 +456,7 @@ export function StudentAnswerReviewPage() {
 
       {readOnly ? (
         <div className="mt-4 rounded-[9px] border bg-card px-4 py-3 text-[12px] leading-5 text-muted-foreground">
-          {tx(locale, "当前为已进入后续阶段的历史回看；学生身份与识别作答保持只读。", "This task has moved to a later stage. Student identity and recognized answers are read-only here.")}
+          {tx(locale, "当前为已进入后续阶段的历史回看；学生身份与识别作答保持只读。", "This task has moved to a later stage. Student identity and recognized responses are read-only here.")}
         </div>
       ) : null}
 
@@ -541,20 +516,7 @@ export function StudentAnswerReviewPage() {
               setIdentityError(null);
             }}
             t={t}
-          >
-            <SmartPicker
-              label={t("answerReviewStudentSearchLabel")}
-              placeholder={t("answerReviewStudentSearchPlaceholder")}
-              query={studentFilter}
-              matches={studentMatches}
-              currentId={student.stu_id}
-              onDraftChange={setStudentFilter}
-              onCommit={(value) => setFilterParam("studentFilter", value)}
-              onCompositionState={(composing) => { studentFilterComposingRef.current = composing; }}
-              onSelect={(id) => goToStudent(students.find((candidate) => candidate.stu_id === id) ?? null)}
-              t={t}
-            />
-          </StudentNavigation>
+          />
           </div>
 
           {identityOpen ? (
@@ -600,12 +562,10 @@ export function StudentAnswerReviewPage() {
               <SmartPicker
                 label={t("answerReviewQuestionSearchLabel")}
                 placeholder={t("answerReviewQuestionSearchPlaceholder")}
-                query={questionFilter}
+                query={questionFilterParam}
                 matches={questionMatches}
                 currentId={activeQuestion?.id ?? ""}
-                onDraftChange={setQuestionFilter}
                 onCommit={(value) => setFilterParam("questionFilter", value)}
-                onCompositionState={(composing) => { questionFilterComposingRef.current = composing; }}
                 onSelect={(id) => scrollToQuestion(id)}
                 t={t}
               />
@@ -688,7 +648,6 @@ export function StudentAnswerReviewPage() {
                 <button
                   type="button"
                   onClick={() => {
-                    setQuestionFilter("");
                     setFilterParam("questionFilter", "");
                   }}
                   className="mt-2 text-sm font-semibold text-primary hover:underline"
@@ -722,7 +681,7 @@ export function StudentAnswerReviewPage() {
   );
 }
 
-function StudentNavigation({ student, previous, next, onPrevious, onNext, identityOpen, readOnly, onToggleIdentity, children, t }: {
+function StudentNavigation({ student, previous, next, onPrevious, onNext, identityOpen, readOnly, onToggleIdentity, t }: {
   student: StudentSubmission;
   previous: StudentSubmission | null;
   next: StudentSubmission | null;
@@ -731,26 +690,25 @@ function StudentNavigation({ student, previous, next, onPrevious, onNext, identi
   identityOpen: boolean;
   readOnly: boolean;
   onToggleIdentity: () => void;
-  children: ReactNode;
   t: (key: MessageKey) => string;
 }) {
   return (
-    <nav aria-label={t("answerReviewStudentNavigation")} className="grid min-h-[58px] gap-2 rounded-[10px] border bg-card p-2 sm:grid-cols-2 xl:grid-cols-[135px_260px_minmax(240px,1fr)_135px_135px] xl:items-center">
-      <Button type="button" variant="ghost" className="h-10 justify-start px-3" disabled={!previous} onClick={onPrevious}>
+    <nav aria-label={t("answerReviewStudentNavigation")} className="grid min-h-[72px] grid-cols-2 gap-2 rounded-[10px] border bg-card p-2 xl:grid-cols-[minmax(140px,0.75fr)_minmax(360px,1.8fr)_minmax(140px,0.75fr)_145px] xl:items-center">
+      <Button type="button" variant="ghost" className="order-2 h-10 justify-start px-3 xl:order-1" disabled={!previous} onClick={onPrevious}>
         <ArrowLeft aria-hidden="true" className="h-4 w-4" />
         <span className="min-w-0 truncate">{previous?.stu_name || t("answerReviewPreviousStudent")}</span>
       </Button>
-      <div className="flex h-10 min-w-0 items-center rounded-[7px] bg-primary/[0.055] px-3" title={`${student.stu_id} · ${student.stu_name || student.stu_id}`}>
-        <p className="truncate text-[15px] font-bold tracking-[-0.01em] text-primary">
-          {student.stu_id} <span className="mx-1 text-primary/45">·</span> {student.stu_name || student.stu_id}
+      <div className="order-1 col-span-2 flex min-h-14 min-w-0 items-center justify-center rounded-[9px] bg-primary/[0.07] px-4 py-2 text-center ring-1 ring-inset ring-primary/10 xl:order-2 xl:col-span-1" title={`${student.stu_id} · ${student.stu_name || student.stu_id}`}>
+        <p className="flex min-w-0 flex-wrap items-baseline justify-center gap-x-2 leading-tight text-primary">
+          <span className="max-w-full truncate text-[20px] font-extrabold tracking-[-0.02em]">{student.stu_name || student.stu_id}</span>
+          <span className="max-w-full truncate text-[15px] font-bold text-primary/75">{student.stu_id}</span>
         </p>
       </div>
-      <div className="relative col-span-2 min-w-0 sm:col-span-2 xl:col-span-1">{children}</div>
-      <Button type="button" variant="ghost" className="h-10 justify-end px-3" disabled={!next} onClick={onNext}>
+      <Button type="button" variant="ghost" className="order-3 h-10 justify-end px-3" disabled={!next} onClick={onNext}>
         <span className="min-w-0 truncate">{next?.stu_name || t("answerReviewNextStudent")}</span>
         <ArrowRight aria-hidden="true" className="h-4 w-4" />
       </Button>
-      <Button type="button" variant="secondary" className="h-10 px-3" disabled={readOnly} onClick={onToggleIdentity}>
+      <Button type="button" variant="secondary" className="order-4 h-10 px-3" disabled={readOnly} onClick={onToggleIdentity}>
         {identityOpen ? <X aria-hidden="true" className="h-4 w-4" /> : <Pencil aria-hidden="true" className="h-4 w-4" />}
         {t(identityOpen ? "studentSubmissionCloseIdentity" : "studentSubmissionEditIdentity")}
       </Button>
@@ -758,31 +716,21 @@ function StudentNavigation({ student, previous, next, onPrevious, onNext, identi
   );
 }
 
-function SmartPicker({ label, placeholder, query, matches, currentId, onDraftChange, onCommit, onCompositionState, onSelect, t }: {
+function SmartPicker({ label, placeholder, query, matches, currentId, onCommit, onSelect, t }: {
   label: string;
   placeholder: string;
   query: string;
   matches: PickerMatch[];
   currentId: string;
-  onDraftChange: (value: string) => void;
   onCommit: (value: string) => void;
-  onCompositionState: (composing: boolean) => void;
   onSelect: (id: string) => void;
   t: (key: MessageKey) => string;
 }) {
   const [open, setOpen] = useState(false);
-  const composingRef = useRef(false);
+  const smartSearch = useImeSafeQuery({ value: query, onCommit, onDraftChange: () => setOpen(true) });
 
   function handleBlur(event: FocusEvent<HTMLDivElement>) {
     if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setOpen(false);
-  }
-
-  function handleCompositionEnd(event: CompositionEvent<HTMLInputElement>) {
-    composingRef.current = false;
-    onCompositionState(false);
-    const value = event.currentTarget.value;
-    onDraftChange(value);
-    window.setTimeout(() => onCommit(value), 0);
   }
 
   return (
@@ -793,27 +741,20 @@ function SmartPicker({ label, placeholder, query, matches, currentId, onDraftCha
         <input
           type="text"
           inputMode="search"
-          value={query}
-          onCompositionStart={() => {
-            composingRef.current = true;
-            onCompositionState(true);
-          }}
-          onCompositionEnd={handleCompositionEnd}
-          onChange={(event) => {
-            const value = event.target.value;
-            onDraftChange(value);
-            if (!composingRef.current) onCommit(value);
-          }}
+          value={smartSearch.draftValue}
+          onBlur={smartSearch.handleBlur}
+          onCompositionStart={smartSearch.handleCompositionStart}
+          onCompositionEnd={smartSearch.handleCompositionEnd}
+          onChange={smartSearch.handleChange}
           placeholder={placeholder}
           className="h-10 w-full rounded-[7px] border-0 bg-slate-50 pl-9 pr-9 text-[13px] text-foreground outline-none placeholder:text-muted-foreground focus:ring-2 focus:ring-primary/20 dark:bg-slate-900/50"
         />
-        {query ? (
+        {smartSearch.draftValue ? (
           <button
             type="button"
             onMouseDown={(event) => event.preventDefault()}
             onClick={() => {
-              onDraftChange("");
-              onCommit("");
+              smartSearch.commitValue("");
             }}
             className="absolute right-2 top-1/2 inline-flex h-7 w-7 -translate-y-1/2 items-center justify-center rounded-full text-muted-foreground outline-none hover:bg-muted hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
             aria-label={t("answerReviewClearSearch")}
@@ -825,7 +766,7 @@ function SmartPicker({ label, placeholder, query, matches, currentId, onDraftCha
       {open ? (
         <div className="absolute left-0 right-0 top-[44px] z-40 max-h-[280px] overflow-auto rounded-[9px] border bg-card p-1.5 shadow-xl">
           <p className="px-2 py-1 text-[10px] leading-4 text-muted-foreground">
-            {query ? `${matches.length} ${t("answerReviewMatches")}` : t("answerReviewLocalMatchHint")}
+            {smartSearch.draftValue ? `${matches.length} ${t("answerReviewMatches")}` : t("answerReviewLocalMatchHint")}
           </p>
           {matches.length ? matches.slice(0, 40).map(({ item, kind }) => (
             <button
@@ -912,7 +853,7 @@ function AnswerReviewCard({ question, answer, draft, sourceFilename, previous, n
               </Button>
             ) : null}
           </div>
-          <p className="mt-1 text-[11px] text-muted-foreground">{tx(locale, "题目与学生作答在同一卡片内连续校对；题目只读。", "Review the read-only question and student answer together in this card.")}</p>
+          <p className="mt-1 text-[11px] text-muted-foreground">{tx(locale, "题目与学生作答在同一卡片内连续校对；题目只读。", "Review the read-only question and student response together in this card.")}</p>
         </div>
         <div className="flex shrink-0 gap-2">
           <Button type="button" variant="secondary" className="h-9 px-3" disabled={!previous} onClick={() => previous && onNavigate(previous.id)}>
@@ -1073,24 +1014,6 @@ function matchPickerItems(items: PickerItem[], query: string): PickerMatch[] {
     })
     .filter((match): match is PickerMatch => match !== null)
     .sort((a, b) => Number(b.kind === "exact") - Number(a.kind === "exact"));
-}
-
-function studentPickerItem(student: StudentSubmission, questions: SubmissionQuestion[], t: (key: MessageKey) => string): PickerItem {
-  const name = student.stu_name || student.stu_id;
-  const answers = answerMap(student);
-  const questionIssues = questions.filter((question) => !["recognized", "reviewed"].includes(getAnswerState(answers.get(question.id)))).length;
-  const issueCount = questionIssues + Number(student.identity_status === "needs_review");
-  const attention = studentNeedsAttention(student, questions);
-  return {
-    id: student.stu_id,
-    primary: `${student.stu_id} · ${name}`,
-    secondary: attention
-      ? `${issueCount}${t("answerReviewPendingCountSuffix")}`
-      : t("studentSubmissionIdentityMatched"),
-    searchable: `${student.stu_id} ${name}`,
-    exactValues: [student.stu_id, name],
-    attention,
-  };
 }
 
 function questionPickerItem(question: SubmissionQuestion): PickerItem {

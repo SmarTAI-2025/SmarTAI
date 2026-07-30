@@ -25,6 +25,7 @@ type DialogState =
   | { kind: "create-group" }
   | { kind: "edit-group"; group: CourseMaterialGroup }
   | { kind: "edit-material"; material: CourseMaterial }
+  | { kind: "delete-material"; material: CourseMaterial }
   | null;
 
 const categoryFilters: CategoryFilter[] = ["all", "textbook", "answer", "lecture", "rubric"];
@@ -150,6 +151,7 @@ export function KnowledgeBasePage() {
           onOpenGroup={(group) => { setGroupId(group.group_id); setCategory("all"); }}
           onEditGroup={(group) => setDialog({ kind: "edit-group", group })}
           onEditMaterial={(material) => setDialog({ kind: "edit-material", material })}
+          onDeleteMaterial={(material) => setDialog({ kind: "delete-material", material })}
           onRetry={retry}
         />
       </div>
@@ -189,6 +191,9 @@ export function KnowledgeBasePage() {
       ) : null}
       {dialog?.kind === "edit-material" ? (
         <MaterialDialog material={dialog.material} courses={coursesQuery.data ?? []} groups={groups} onClose={closeDialog} onSaved={closeDialog} onDeleted={closeDialog} />
+      ) : null}
+      {dialog?.kind === "delete-material" ? (
+        <MaterialDialog material={dialog.material} courses={coursesQuery.data ?? []} groups={groups} onClose={closeDialog} onSaved={closeDialog} onDeleted={closeDialog} initialConfirmDelete />
       ) : null}
     </div>
   );

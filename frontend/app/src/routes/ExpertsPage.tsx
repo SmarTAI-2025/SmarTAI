@@ -25,12 +25,18 @@ import {
   useVerifyExpert,
 } from "@/api/hooks";
 import { LibraryDialog } from "@/components/knowledge-base/LibraryDialog";
+import { ProviderIcon } from "@/components/models/ProviderIcon";
 import { Button } from "@/components/ui/Button";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { Field } from "@/components/ui/Field";
 import { Input } from "@/components/ui/Input";
 import { useI18n } from "@/i18n/I18nProvider";
 import { cn } from "@/lib/cn";
+import {
+  hasFriendlyModelName,
+  modelDisplayName,
+  modelSecondaryLabel,
+} from "@/lib/modelPresentation";
 import type {
   AddExpertKeyRequest,
   ExpertConfig,
@@ -110,9 +116,9 @@ export function ExpertsPage() {
           max_concurrent: value.maxConcurrent,
           rpm: value.rpm,
         };
-        const response = await addExpert.mutateAsync(request);
+        await addExpert.mutateAsync(request);
         toast.success(zh ? "模型配置已添加" : "Model configuration added", {
-          description: response.provider_id,
+          description: value.displayName || value.model,
         });
       } else {
         const request: UpdateExpertRequest = {
@@ -123,12 +129,12 @@ export function ExpertsPage() {
           max_concurrent: value.maxConcurrent,
           rpm: value.rpm,
         };
-        const response = await updateExpert.mutateAsync({
+        await updateExpert.mutateAsync({
           providerId: editor.expert.provider_id,
           request,
         });
         toast.success(zh ? "模型配置已更新" : "Model configuration updated", {
-          description: response.provider_id,
+          description: value.displayName || value.model,
         });
       }
       setEditor(null);
@@ -164,7 +170,7 @@ export function ExpertsPage() {
           : zh
             ? "配置已停用"
             : "Configuration disabled",
-        { description: expert.display_name || expert.model },
+        { description: modelDisplayName(expert) },
       );
     } catch (error) {
       toast.error(zh ? "无法更新启用状态" : "Unable to update status", {
@@ -181,7 +187,7 @@ export function ExpertsPage() {
       try {
         await removeExpert.mutateAsync(target.expert.provider_id);
         toast.success(zh ? "模型配置已删除" : "Model configuration deleted", {
-          description: target.expert.display_name || target.expert.model,
+          description: modelDisplayName(target.expert),
         });
       } catch (error) {
         toast.error(zh ? "删除失败" : "Unable to delete configuration", {
@@ -194,7 +200,7 @@ export function ExpertsPage() {
     try {
       await verifyExpert.mutateAsync(target.expert.provider_id);
       toast.success(zh ? "验证通过" : "Verification passed", {
-        description: target.expert.display_name || target.expert.model,
+        description: modelDisplayName(target.expert),
       });
     } catch (error) {
       toast.error(zh ? "验证未通过" : "Verification did not pass", {
@@ -443,17 +449,22 @@ function ExpertTableRow({
   return (
     <tr className="h-[76px] border-t first:border-t-0">
       <td className="max-w-[330px] px-5 align-middle">
-        <div className="flex items-center gap-2">
-          <span className="font-semibold">{expert.display_name || providerLabel(expert.provider_type)}</span>
-          {expert.is_shared ? (
-            <span className="rounded-full bg-blue-50 px-2 py-0.5 text-[10px] font-semibold text-blue-700 dark:bg-blue-950/50 dark:text-blue-200">
-              {zh ? "平台" : "Platform"}
-            </span>
-          ) : null}
+        <div className="flex min-w-0 items-center gap-3">
+          <ProviderIcon providerType={expert.provider_type} />
+          <div className="min-w-0">
+            <div className="flex items-center gap-2">
+              <span className="truncate font-semibold">{modelDisplayName(expert)}</span>
+              {expert.is_shared ? (
+                <span className="shrink-0 rounded-full bg-blue-50 px-2 py-0.5 text-[10px] font-semibold text-blue-700 dark:bg-blue-950/50 dark:text-blue-200">
+                  {zh ? "平台" : "Platform"}
+                </span>
+              ) : null}
+            </div>
+            <p className="mt-1 truncate text-xs text-muted-foreground" title={modelSecondaryLabel(expert)}>
+              {modelSecondaryLabel(expert)}
+            </p>
+          </div>
         </div>
-        <p className="mt-1 truncate text-xs text-muted-foreground" title={expert.model}>
-          {expert.model}
-        </p>
       </td>
       <td className="px-3 text-center align-middle">
         <EnabledBadge enabled={expert.enabled} locale={locale} />
@@ -498,11 +509,14 @@ function ExpertMobileRow(props: ExpertRowProps) {
   return (
     <article className="grid gap-3 px-4 py-4">
       <div className="flex items-start justify-between gap-3">
-        <div className="min-w-0">
-          <p className="truncate font-semibold">
-            {expert.display_name || providerLabel(expert.provider_type)}
-          </p>
-          <p className="mt-1 truncate text-xs text-muted-foreground">{expert.model}</p>
+        <div className="flex min-w-0 items-center gap-3">
+          <ProviderIcon providerType={expert.provider_type} />
+          <div className="min-w-0">
+            <p className="truncate font-semibold">{modelDisplayName(expert)}</p>
+            <p className="mt-1 truncate text-xs text-muted-foreground">
+              {modelSecondaryLabel(expert)}
+            </p>
+          </div>
         </div>
         <EnabledBadge enabled={expert.enabled} locale={locale} />
       </div>
@@ -743,7 +757,9 @@ function ExpertEditorDialog({
   );
   const [baseUrl, setBaseUrl] = useState(target.mode === "edit" ? target.expert.base_url ?? "" : "");
   const [displayName, setDisplayName] = useState(
-    target.mode === "edit" ? target.expert.display_name ?? "" : "",
+    target.mode === "edit" && hasFriendlyModelName(target.expert)
+      ? target.expert.display_name!.trim()
+      : "",
   );
   const [maxConcurrent, setMaxConcurrent] = useState(
     String(target.mode === "edit" ? target.expert.max_concurrent : 5),
@@ -844,12 +860,15 @@ function ExpertEditorDialog({
               ))}
             </select>
           </Field>
-          <Field label={zh ? "显示名称（可选）" : "Display name (optional)"}>
+          <Field
+            label={zh ? "配置名称（可选）" : "Configuration name (optional)"}
+            hint={zh ? "留空时显示模型名称。" : "The model name is shown when this is left blank."}
+          >
             <Input
               value={displayName}
               disabled={pending}
               maxLength={120}
-              placeholder={providerLabel(provider)}
+              placeholder={zh ? "例如：高数批改" : "Example: Calculus grading"}
               onChange={(event) => setDisplayName(event.target.value)}
             />
           </Field>
@@ -953,7 +972,7 @@ function ConfirmationDialog({
   return (
     <LibraryDialog
       title={verify ? (zh ? "验证模型连通性" : "Verify model connectivity") : zh ? "删除模型配置" : "Delete model configuration"}
-      description={confirmation.expert.display_name || confirmation.expert.model}
+      description={modelDisplayName(confirmation.expert)}
       closeLabel={zh ? "关闭" : "Close"}
       onClose={onClose}
       footer={
@@ -1005,10 +1024,6 @@ function InlineError({ message }: { message: string }) {
       <p className="min-w-0 break-words">{message}</p>
     </div>
   );
-}
-
-function providerLabel(providerType: string) {
-  return providerOptions.find((option) => option.value === providerType)?.label ?? providerType;
 }
 
 function providerDefault(providerType: ProviderType) {

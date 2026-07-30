@@ -1,5 +1,5 @@
 import { ArrowDown, ArrowLeft, ArrowRight, ArrowUp, Search, UserRound, X } from "lucide-react";
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useEffect, useMemo, type ReactNode } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import {
   effectiveCorrectionScore,
@@ -11,6 +11,7 @@ import {
   type ResultsModel,
 } from "@/components/tasks/resultsModel";
 import { MarkdownMath } from "@/components/ui/MarkdownMath";
+import { useImeSafeQuery } from "@/hooks/useImeSafeQuery";
 import type { Locale } from "@/i18n/messages";
 import { cn } from "@/lib/cn";
 import { matchReviewItems, questionSearchItems } from "@/lib/reviewDetail";
@@ -43,8 +44,7 @@ export function QuestionAnalysisDetail({
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
   const query = searchParams.get("question_q") ?? "";
-  const [draftQuery, setDraftQuery] = useState(query);
-  const composingRef = useRef(false);
+  const smartSearch = useImeSafeQuery({ value: query, onCommit: updateQuery });
   const questionIndex = model.questions.findIndex((item) => item.id === questionId);
   const question = questionIndex >= 0 ? model.questions[questionIndex] : null;
   const root = `/tasks/${encodeURIComponent(taskId)}/results/questions`;
@@ -67,16 +67,12 @@ export function QuestionAnalysisDetail({
   const previous = filteredQuestionIndex > 0 ? visibleQuestions[filteredQuestionIndex - 1] : null;
   const next = filteredQuestionIndex >= 0 && filteredQuestionIndex < visibleQuestions.length - 1 ? visibleQuestions[filteredQuestionIndex + 1] : null;
 
-  useEffect(() => {
-    if (!composingRef.current) setDraftQuery(query);
-  }, [query]);
-
-  const updateQuery = (value: string) => {
+  function updateQuery(value: string) {
     const nextParams = new URLSearchParams(searchParams);
     if (value.trim()) nextParams.set("question_q", value);
     else nextParams.delete("question_q");
     setSearchParams(nextParams, { replace: true });
-  };
+  }
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
@@ -97,7 +93,7 @@ export function QuestionAnalysisDetail({
     return (
       <section className="rounded-[10px] border bg-card px-6 py-12 text-center">
         <h2 className="text-[18px] font-bold text-foreground">{tx(locale, "未找到该题", "Question not found")}</h2>
-        <p className="mt-2 text-[13px] text-muted-foreground">{tx(locale, `当前正式结果中没有题目 ${questionId}。`, `Question ${questionId} is not present in this formal result.`)}</p>
+        <p className="mt-2 text-[13px] text-muted-foreground">{tx(locale, `当前正式结果中没有题目 ${questionId}。`, `Question ${questionId} is not included in these final results.`)}</p>
         <Link to={listHref} className="mt-5 inline-flex h-9 items-center gap-2 rounded-[8px] bg-primary px-4 text-[12px] font-semibold text-primary-foreground">
           <ArrowLeft aria-hidden="true" className="h-4 w-4" />{tx(locale, "返回题目总览", "Back to question overview")}
         </Link>
@@ -144,26 +140,18 @@ export function QuestionAnalysisDetail({
       <div className="relative mt-4">
         <Search aria-hidden="true" className="pointer-events-none absolute left-4 top-4 h-4 w-4 text-muted-foreground" />
         <input
-          value={draftQuery}
+          value={smartSearch.draftValue}
           inputMode="search"
-          onCompositionStart={() => { composingRef.current = true; }}
-          onCompositionEnd={(event) => {
-            composingRef.current = false;
-            const value = event.currentTarget.value;
-            setDraftQuery(value);
-            window.setTimeout(() => updateQuery(value), 0);
-          }}
-          onChange={(event) => {
-            const value = event.target.value;
-            setDraftQuery(value);
-            if (!composingRef.current) updateQuery(value);
-          }}
+          onBlur={smartSearch.handleBlur}
+          onCompositionStart={smartSearch.handleCompositionStart}
+          onCompositionEnd={smartSearch.handleCompositionEnd}
+          onChange={smartSearch.handleChange}
           placeholder={tx(locale, "SmarTAI 智能搜索：题号、题干、题型或知识点，例如“积分题”", "SmarTAI Smart Search: number, stem, type, or knowledge point")}
           aria-label={tx(locale, "SmarTAI 智能查找题目", "SmarTAI Smart question finder")}
           className="h-12 w-full rounded-[10px] border bg-background pl-11 pr-11 text-[13px] text-foreground outline-none focus:border-primary focus:ring-2 focus:ring-primary/15"
         />
-        {draftQuery ? <button type="button" onClick={() => { setDraftQuery(""); updateQuery(""); }} aria-label={tx(locale, "清空题目筛选", "Clear question filter")} className="absolute right-2.5 top-2.5 inline-flex h-7 w-7 items-center justify-center rounded-full text-muted-foreground hover:bg-muted hover:text-foreground"><X aria-hidden="true" className="h-4 w-4" /></button> : null}
-        {query && draftQuery === query ? (
+        {smartSearch.draftValue ? <button type="button" onClick={() => smartSearch.commitValue("")} aria-label={tx(locale, "清空题目筛选", "Clear question filter")} className="absolute right-2.5 top-2.5 inline-flex h-7 w-7 items-center justify-center rounded-full text-muted-foreground hover:bg-muted hover:text-foreground"><X aria-hidden="true" className="h-4 w-4" /></button> : null}
+        {query && smartSearch.draftValue === query ? (
           <div className="absolute left-0 right-0 top-[52px] z-30 max-h-64 overflow-y-auto rounded-[8px] border bg-card p-1.5 shadow-lg">
             {matches.length ? matches.slice(0, 10).map((match) => (
               <button key={match.item.id} type="button" onMouseDown={(event) => event.preventDefault()} onClick={() => goToQuestion(match.item.id)} className="flex w-full items-center gap-3 rounded-[6px] px-3 py-2 text-left hover:bg-muted">
@@ -200,7 +188,7 @@ export function QuestionAnalysisDetail({
       </div>
 
       <div className="mt-4 grid gap-4 xl:grid-cols-2">
-        <MaterialPanel title={tx(locale, "题干", "Question stem")} source={fieldSource(question.problem, "stem", locale)}>
+        <MaterialPanel title={tx(locale, "题干", "Question Text")} source={fieldSource(question.problem, "stem", locale)}>
           {question.stem ? <MarkdownMath className="text-[13px] leading-6 text-foreground">{question.stem}</MarkdownMath> : <MissingText locale={locale} />}
         </MaterialPanel>
         <MaterialPanel title={tx(locale, "评分标准", "Rubric")} source={fieldSource(question.problem, "criterion", locale)}>
@@ -217,7 +205,7 @@ export function QuestionAnalysisDetail({
       </div>
 
       <div className="mt-4">
-        <EvidencePanel title={tx(locale, "Rubric 维度表现", "Rubric-dimension performance")} subtitle={tx(locale, "按批改步骤描述聚合", "Aggregated from grading-step descriptions")}>
+        <EvidencePanel title={tx(locale, "Rubric 维度表现", "Performance by Rubric Criterion")} subtitle={tx(locale, "按批改步骤描述聚合", "Aggregated from grading-step descriptions")}>
           {rubricDimensions.length ? <div className="mt-3 grid gap-2 lg:grid-cols-2">{rubricDimensions.map((dimension) => (
             <div key={dimension.label} className="rounded-[7px] bg-muted/60 px-3 py-2">
               <div className="flex items-start justify-between gap-3 text-[11px]"><strong className="min-w-0 break-words leading-4 text-foreground">{dimension.label}</strong><span className="shrink-0 font-semibold text-primary">{formatScore(dimension.averageScore)} {tx(locale, "平均分", "mean")}</span></div>
@@ -239,7 +227,7 @@ export function QuestionAnalysisDetail({
         <div className="flex flex-wrap items-end justify-between gap-3 border-b px-4 py-3">
           <div>
             <h3 className="text-[14px] font-bold text-foreground">{tx(locale, "学生表现摘要", "Student performance preview")}</h3>
-            <p className="mt-0.5 text-[11px] text-muted-foreground">{tx(locale, "得分率从低到高只显示 5 位；完整答案进入学生详情。", "Lowest score rates first; only 5 students shown. Open student detail for full answers.")}</p>
+            <p className="mt-0.5 text-[11px] text-muted-foreground">{tx(locale, "得分率从低到高只显示 5 位；完整答案进入学生详情。", "Lowest score percentages first; only 5 students are shown. Open a student's details to view the full response.")}</p>
           </div>
           <span className="text-[10px] text-muted-foreground">{tx(locale, `共 ${question.entries.length} 位`, `${question.entries.length} students`)}</span>
         </div>
@@ -369,7 +357,7 @@ function isProgrammingProblem(problem?: ProblemInfo): boolean {
 }
 
 function MissingText({ locale }: { locale: Locale }) {
-  return <p className="text-[12px] text-muted-foreground">{tx(locale, "当前正式结果未提供该资料。", "This material is not present in the formal result.")}</p>;
+  return <p className="text-[12px] text-muted-foreground">{tx(locale, "当前正式结果未提供该资料。", "This material is not included in the final results.")}</p>;
 }
 
 function PanelEmpty({ text }: { text: string }) {
@@ -432,7 +420,7 @@ function buildReviewSignals(question: QuestionSummary, locale: Locale): CountedS
     for (const reason of entry.correction.review_reasons ?? []) {
       if (reason !== "high_indecisiveness" && reason !== "score_spread_high") add(reviewReasonLabel(reason, locale));
     }
-    if (correctionHasDisagreement(entry.correction)) add(tx(locale, "专家分歧 / 分差较大", "Expert disagreement / score spread"));
+    if (correctionHasDisagreement(entry.correction)) add(tx(locale, "专家分歧 / 分差较大", "Model disagreement / score spread"));
   }
   return Array.from(counts, ([label, count]) => ({ label, count })).sort((left, right) => right.count - left.count || left.label.localeCompare(right.label));
 }
@@ -456,8 +444,8 @@ function correctionHasDisagreement(correction: Correction): boolean {
 function reviewReasonLabel(reason: string, locale: Locale): string {
   const labels: Record<string, [string, string]> = {
     low_confidence: ["低置信度", "Low confidence"],
-    high_indecisiveness: ["专家意见分歧", "Expert disagreement"],
-    score_spread_high: ["专家分差较大", "Large expert score spread"],
+    high_indecisiveness: ["专家意见分歧", "Model disagreement"],
+    score_spread_high: ["专家分差较大", "Large score spread across models"],
     parse_failed: ["解析失败", "Parsing failed"],
     quota_exhausted: ["模型额度失败", "Model quota failure"],
   };

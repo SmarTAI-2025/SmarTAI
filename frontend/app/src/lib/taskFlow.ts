@@ -1,9 +1,19 @@
 import type { Task, TaskLite } from "@/types";
 
 const PROCESSING_STATUSES = new Set(["extracting_problems", "parsing_submissions", "grading", "generating_analysis"]);
+const COMPLETED_GRADING_STATUSES = new Set(["graded", "review_confirmed", "generating_analysis", "finalized"]);
+const REGRADABLE_STATUSES = new Set(["graded", "review_confirmed", "finalized"]);
 
 export function isTaskProcessing(status?: string | null): boolean {
   return Boolean(status && PROCESSING_STATUSES.has(status));
+}
+
+export function hasTaskCompletedGrading(status?: string | null): boolean {
+  return Boolean(status && COMPLETED_GRADING_STATUSES.has(status));
+}
+
+export function canTaskBeRegraded(status?: string | null): boolean {
+  return Boolean(status && REGRADABLE_STATUSES.has(status));
 }
 
 type TaskDestinationInput = Pick<TaskLite, "task_id" | "status" | "grading_setup_configured"> & Partial<Pick<

@@ -1,5 +1,5 @@
 import { AlertTriangle, ArrowRight, CheckCircle2, ChevronRight, LoaderCircle, Search } from "lucide-react";
-import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
+import { useEffect, useMemo, useRef, type FormEvent } from "react";
 import { Link, Navigate, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { toast } from "sonner";
 import { useConfirmTaskFinalization, useTask, useTaskFinalization, useTaskResult, useTeacherComments } from "@/api/hooks/tasks";
@@ -7,10 +7,11 @@ import { NewTaskStepper } from "@/components/new-task/NewTaskStepper";
 import { MatrixQueueWorkspace } from "@/components/tasks/MatrixQueueWorkspace";
 import { MatrixStatusCell, type MatrixStatusTone } from "@/components/tasks/MatrixStatusCell";
 import { getMatrixIdentityLayout, MATRIX_ACTION_COLUMN_WIDTH, MATRIX_QUESTION_COLUMN_WIDTH } from "@/components/tasks/matrixLayout";
-import { buildResultsModel, effectiveCorrectionScore, formatConfidence, formatPercent, type QuestionSummary, type ResultsModel, type StudentSummary } from "@/components/tasks/resultsModel";
+import { buildResultsModel, displayableCorrectionScore, formatConfidence, formatPercent, type QuestionSummary, type ResultsModel, type StudentSummary } from "@/components/tasks/resultsModel";
 import { collectResultReviewItems, type ReviewItem } from "@/components/tasks/resultsReviewModel";
 import { useI18n } from "@/i18n/I18nProvider";
 import type { Locale } from "@/i18n/messages";
+import { useImeSafeQuery } from "@/hooks/useImeSafeQuery";
 import { cn } from "@/lib/cn";
 import { isExpertDisagreement, reviewCellKey, selectReviewOverview } from "@/lib/reviewOverview";
 import { reviewOverviewText as copy } from "@/lib/reviewOverviewCopy";
@@ -29,10 +30,9 @@ export function ReviewOverviewPage() {
   const finalizationQuery = useTaskFinalization(taskId);
   const confirmFinalization = useConfirmTaskFinalization();
   const urlQuery = searchParams.get("q") ?? "";
-  const [draftQuery, setDraftQuery] = useState(urlQuery);
-  const [query, setQuery] = useState(urlQuery.trim());
-  const composingRef = useRef(false);
+  const query = urlQuery.trim();
   const searchParamsRef = useRef(searchParams);
+  const smartSearch = useImeSafeQuery({ value: urlQuery, onCommit: commitFilter });
   const task = taskQuery.data;
   const model = useMemo(() => buildResultsModel(task, resultQuery.data), [resultQuery.data, task]);
   const reviewItems = useMemo(() => collectResultReviewItems(model, model.students), [model]);
@@ -57,10 +57,7 @@ export function ReviewOverviewPage() {
 
   useEffect(() => {
     searchParamsRef.current = searchParams;
-    if (composingRef.current) return;
-    setDraftQuery(urlQuery);
-    setQuery(urlQuery.trim());
-  }, [searchParams, urlQuery]);
+  }, [searchParams]);
 
   if (taskId && task && !hasTaskReachedStep(task, 6)) {
     if (task.status === "grading") return <Navigate replace to={`/tasks/${taskId}/grading/progress`} />;
@@ -116,12 +113,11 @@ export function ReviewOverviewPage() {
 
   function submitFilter(event: FormEvent) {
     event.preventDefault();
-    commitFilter(draftQuery);
+    smartSearch.commitDraft();
   }
 
   function commitFilter(value: string) {
     const normalized = value.trim();
-    setQuery(normalized);
     const next = new URLSearchParams(searchParamsRef.current);
     if (normalized) next.set("q", normalized);
     else next.delete("q");
@@ -174,27 +170,19 @@ export function ReviewOverviewPage() {
               <span className="sr-only">{copy(locale, "searchLabel")}</span>
               <Search aria-hidden="true" className="pointer-events-none absolute left-5 top-1/2 h-5 w-5 -translate-y-1/2 text-muted-foreground" />
               <input
-                value={draftQuery}
+                value={smartSearch.draftValue}
                 inputMode="search"
-                onCompositionStart={() => { composingRef.current = true; }}
-                onCompositionEnd={(event) => {
-                  composingRef.current = false;
-                  const value = event.currentTarget.value;
-                  setDraftQuery(value);
-                  window.setTimeout(() => commitFilter(value), 0);
-                }}
-                onChange={(event) => {
-                  const value = event.target.value;
-                  setDraftQuery(value);
-                  if (!composingRef.current) commitFilter(value);
-                }}
+                onBlur={smartSearch.handleBlur}
+                onChange={smartSearch.handleChange}
+                onCompositionEnd={smartSearch.handleCompositionEnd}
+                onCompositionStart={smartSearch.handleCompositionStart}
                 placeholder={copy(locale, "searchPlaceholder")}
                 className="h-12 w-full rounded-[10px] border bg-card pl-14 pr-28 text-[14px] text-foreground outline-none transition placeholder:text-muted-foreground focus:border-primary focus:ring-2 focus:ring-primary/15"
               />
               {query ? (
                 <button
                   type="button"
-                  onClick={() => { setDraftQuery(""); commitFilter(""); }}
+                  onClick={() => smartSearch.commitValue("")}
                   className="absolute right-3 top-1/2 -translate-y-1/2 rounded-md px-3 py-1.5 text-xs font-semibold text-primary hover:bg-primary/5"
                 >
                   {copy(locale, "clear")}
@@ -460,7 +448,11 @@ function ReviewHeatmap({
 function ReviewCell({ locale, href, correction, item, annotated, confirmed, question }: { locale: Locale; href: string; correction: Correction; item?: ReviewItem; annotated: boolean; confirmed: boolean; question?: QuestionSummary }) {
   const state = confirmed ? "confirmed" : correction.review_status === "edited" ? "edited" : annotated ? "commented" : item?.category === "low-confidence" ? "low" : item ? "review" : "ok";
   const label = copy(locale, state);
-  const detail = `${question?.label ?? correction.q_id} · ${formatPercent(correction.max_score > 0 ? (effectiveCorrectionScore(correction) / correction.max_score) * 100 : null)} · ${formatConfidence(correction.confidence)}`;
+  const displayScore = displayableCorrectionScore(correction);
+  const scoreDetail = displayScore !== null && correction.max_score > 0
+    ? `${formatPercent((displayScore / correction.max_score) * 100)} · `
+    : "";
+  const detail = `${question?.label ?? correction.q_id} · ${scoreDetail}${formatConfidence(correction.confidence)}`;
   const tone: MatrixStatusTone = state === "confirmed"
     ? "reviewed"
     : state === "edited"

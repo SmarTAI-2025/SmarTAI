@@ -1,5 +1,5 @@
 import { ArrowRight, Search, X } from "lucide-react";
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useMemo, type ReactNode } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import {
   clampPercent,
@@ -10,6 +10,7 @@ import {
   type QuestionSummary,
   type ResultsModel,
 } from "@/components/tasks/resultsModel";
+import { useImeSafeQuery } from "@/hooks/useImeSafeQuery";
 import type { Locale } from "@/i18n/messages";
 import { cn } from "@/lib/cn";
 import type { Correction, ProblemInfo } from "@/types";
@@ -53,8 +54,6 @@ interface SemanticQuestionPlan {
   conditions: SemanticCondition[];
 }
 
-const PAGE_SIZE = 4;
-
 export function QuestionAnalysisOverview({
   locale,
   taskId,
@@ -66,15 +65,15 @@ export function QuestionAnalysisOverview({
 }) {
   const [searchParams, setSearchParams] = useSearchParams();
   const query = searchParams.get("q") ?? "";
-  const [draftQuery, setDraftQuery] = useState(query);
-  const composingRef = useRef(false);
+  const smartSearch = useImeSafeQuery({ value: query, onCommit: (value) => updateParam("q", value, "") });
   const typeFilter = searchParams.get("type") ?? "all";
   const scoreFilter = normalizeScoreFilter(searchParams.get("score"));
   const confidenceFilter = normalizeConfidenceFilter(searchParams.get("confidence"));
   const reviewFilter = normalizeReviewFilter(searchParams.get("review"));
   const sortMode = normalizeSortMode(searchParams.get("sort"));
-  const requestedPage = Math.max(1, Number(searchParams.get("page")) || 1);
-  const returnQuery = searchParams.toString();
+  const returnParams = new URLSearchParams(searchParams);
+  returnParams.delete("page");
+  const returnQuery = returnParams.toString();
 
   const rows = useMemo(() => model.questions.map((question) => buildQuestionRow(question, locale)), [locale, model.questions]);
   const semanticPlan = useMemo(() => parseSemanticQuestionQuery(query, locale), [locale, query]);
@@ -93,24 +92,17 @@ export function QuestionAnalysisOverview({
     return matches.sort((left, right) => compareRows(left, right, sortMode));
   }, [confidenceFilter, reviewFilter, rows, scoreFilter, semanticPlan, sortMode, typeFilter]);
 
-  const pageCount = Math.max(1, Math.ceil(filteredRows.length / PAGE_SIZE));
-  const page = Math.min(requestedPage, pageCount);
-  const visibleRows = filteredRows.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
   const averageQuestionPercent = averageOrNull(rows.map((row) => row.question.avgPercent));
   const weakQuestionCount = rows.filter((row) => (row.question.avgPercent ?? 100) < 60).length;
   const reviewSignalCount = rows.filter((row) => row.requiredReviewCount > 0).length;
 
-  const updateParam = (key: string, value: string, defaultValue = "all") => {
+  function updateParam(key: string, value: string, defaultValue = "all") {
     const next = new URLSearchParams(searchParams);
     if (!value || value === defaultValue) next.delete(key);
     else next.set(key, value);
-    if (key !== "page") next.delete("page");
+    next.delete("page");
     setSearchParams(next, { replace: true });
-  };
-
-  useEffect(() => {
-    if (!composingRef.current) setDraftQuery(query);
-  }, [query]);
+  }
 
   const removeSemanticCondition = (condition: SemanticCondition) => {
     const start = query.toLocaleLowerCase().indexOf(condition.source.toLocaleLowerCase());
@@ -126,7 +118,7 @@ export function QuestionAnalysisOverview({
           {tx(locale, "题目分析总览", "Question analysis overview")}
         </h2>
         <p className="mt-1 text-[13px] text-muted-foreground">
-          {tx(locale, "按题查看正式结果统计；学生完整答案只在学生详情中展开。", "Review formal-result statistics by question; full student answers stay in student detail.")}
+          {tx(locale, "按题查看正式结果统计；学生完整答案只在学生详情中展开。", "Review final-results statistics by question. Full student responses are available in each student's details.")}
         </p>
 
         <div className="mt-4 grid grid-cols-2 gap-3 xl:grid-cols-4">
@@ -140,26 +132,18 @@ export function QuestionAnalysisOverview({
           <label className="relative block">
             <Search aria-hidden="true" className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
             <input
-              value={draftQuery}
+              value={smartSearch.draftValue}
               inputMode="search"
-              onCompositionStart={() => { composingRef.current = true; }}
-              onCompositionEnd={(event) => {
-                composingRef.current = false;
-                const value = event.currentTarget.value;
-                setDraftQuery(value);
-                window.setTimeout(() => updateParam("q", value, ""), 0);
-              }}
-              onChange={(event) => {
-                const value = event.target.value;
-                setDraftQuery(value);
-                if (!composingRef.current) updateParam("q", value, "");
-              }}
+              onBlur={smartSearch.handleBlur}
+              onCompositionStart={smartSearch.handleCompositionStart}
+              onCompositionEnd={smartSearch.handleCompositionEnd}
+              onChange={smartSearch.handleChange}
               placeholder={tx(locale, "SmarTAI 智能搜索：例如 计算题 得分率低于 70% 低置信 已复核 Q3", "SmarTAI Smart Search: calculation below 70% low confidence reviewed Q3")}
               aria-label={tx(locale, "SmarTAI 自然语言筛选题目", "SmarTAI natural-language question filter")}
               className="h-11 w-full rounded-[9px] border bg-background pl-10 pr-10 text-[13px] text-foreground outline-none placeholder:text-muted-foreground focus:border-primary focus:ring-2 focus:ring-primary/15"
             />
-            {draftQuery ? (
-              <button type="button" onClick={() => { setDraftQuery(""); updateParam("q", "", ""); }} aria-label={tx(locale, "清除 SmarTAI 自然语言筛选", "Clear SmarTAI natural-language filter")} className="absolute right-2 top-1/2 inline-flex h-7 w-7 -translate-y-1/2 items-center justify-center rounded-full text-muted-foreground hover:bg-muted hover:text-foreground">
+            {smartSearch.draftValue ? (
+              <button type="button" onClick={() => smartSearch.commitValue("")} aria-label={tx(locale, "清除 SmarTAI 自然语言筛选", "Clear SmarTAI natural-language filter")} className="absolute right-2 top-1/2 inline-flex h-7 w-7 -translate-y-1/2 items-center justify-center rounded-full text-muted-foreground hover:bg-muted hover:text-foreground">
                 <X aria-hidden="true" className="h-4 w-4" />
               </button>
             ) : null}
@@ -190,8 +174,8 @@ export function QuestionAnalysisOverview({
             <option value="all">{tx(locale, "全部题型", "All types")}</option>
             {types.map((type) => <option key={type} value={type}>{type}</option>)}
           </FilterSelect>
-          <FilterSelect value={scoreFilter} onChange={(value) => updateParam("score", value)} label={tx(locale, "得分率", "Score rate")}>
-            <option value="all">{tx(locale, "全部得分率", "All score rates")}</option>
+          <FilterSelect value={scoreFilter} onChange={(value) => updateParam("score", value)} label={tx(locale, "得分率", "Score Percentage")}>
+            <option value="all">{tx(locale, "全部得分率", "All score percentages")}</option>
             <option value="under60">{tx(locale, "低于 60%", "Below 60%")}</option>
             <option value="under70">{tx(locale, "低于 70%", "Below 70%")}</option>
             <option value="atleast80">{tx(locale, "80% 及以上", "80% and above")}</option>
@@ -224,10 +208,10 @@ export function QuestionAnalysisOverview({
         </div>
       </div>
 
-      {visibleRows.length ? (
+      {filteredRows.length ? (
         <>
-          <QuestionDesktopTable locale={locale} taskId={taskId} rows={visibleRows} returnQuery={returnQuery} />
-          <QuestionMobileCards locale={locale} taskId={taskId} rows={visibleRows} returnQuery={returnQuery} />
+          <QuestionDesktopTable locale={locale} taskId={taskId} rows={filteredRows} returnQuery={returnQuery} />
+          <QuestionMobileCards locale={locale} taskId={taskId} rows={filteredRows} returnQuery={returnQuery} />
         </>
       ) : (
         <div className="border-t px-5 py-12 text-center">
@@ -236,19 +220,12 @@ export function QuestionAnalysisOverview({
         </div>
       )}
 
-      <div className="flex min-h-12 flex-wrap items-center justify-between gap-3 border-t px-5 py-2.5 text-[11px] text-muted-foreground">
+      <div className="flex min-h-12 items-center border-t px-5 py-2.5 text-[11px] text-muted-foreground">
         <span>
           {filteredRows.length
-            ? tx(locale, `显示 ${(page - 1) * PAGE_SIZE + 1}–${Math.min(page * PAGE_SIZE, filteredRows.length)} / ${filteredRows.length}`, `Showing ${(page - 1) * PAGE_SIZE + 1}–${Math.min(page * PAGE_SIZE, filteredRows.length)} of ${filteredRows.length}`)
+            ? tx(locale, `显示全部 ${filteredRows.length} 道题`, `Showing all ${filteredRows.length} questions`)
             : tx(locale, "显示 0 道题", "Showing 0 questions")}
         </span>
-        {pageCount > 1 ? (
-          <div className="flex items-center gap-2">
-            <button type="button" disabled={page <= 1} onClick={() => updateParam("page", String(page - 1), "1")} className="h-8 rounded-[7px] border px-3 font-semibold text-foreground disabled:cursor-not-allowed disabled:opacity-40">{tx(locale, "上一页", "Previous")}</button>
-            <span>{page} / {pageCount}</span>
-            <button type="button" disabled={page >= pageCount} onClick={() => updateParam("page", String(page + 1), "1")} className="h-8 rounded-[7px] border px-3 font-semibold text-foreground disabled:cursor-not-allowed disabled:opacity-40">{tx(locale, "下一页", "Next")}</button>
-          </div>
-        ) : null}
       </div>
     </section>
   );
@@ -544,7 +521,7 @@ function parseSemanticQuestionQuery(rawQuery: string, locale: Locale): SemanticQ
   const missingKnowledge = query.match(/知识点未标注|未标注知识点|缺知识点/);
   if (missingKnowledge) {
     plan.missingKnowledge = true;
-    addCondition(tx(locale, "知识点：未标注", "Knowledge point: unlabelled"), missingKnowledge[0]);
+    addCondition(tx(locale, "知识点：未标注", "Knowledge point: unlabeled"), missingKnowledge[0]);
   }
 
   let remaining = query;
@@ -660,7 +637,7 @@ function normalizeText(value: string): string {
 function knowledgeLabel(locale: Locale, points: string[]): string {
   return points.length
     ? tx(locale, `知识点：${points.join("、")}`, `Knowledge: ${points.join(", ")}`)
-    : tx(locale, "知识点未标注", "Knowledge point not labelled");
+    : tx(locale, "知识点未标注", "Knowledge point not labeled");
 }
 
 function tx(locale: Locale, zh: string, en: string): string {
