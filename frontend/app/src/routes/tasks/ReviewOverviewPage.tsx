@@ -1,6 +1,7 @@
 import { AlertTriangle, ArrowRight, CheckCircle2, ChevronRight, LoaderCircle, Search } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { Link, Navigate, useNavigate, useParams, useSearchParams } from "react-router-dom";
+import { toast } from "sonner";
 import { useConfirmTaskFinalization, useTask, useTaskFinalization, useTaskResult, useTeacherComments } from "@/api/hooks/tasks";
 import { NewTaskStepper } from "@/components/new-task/NewTaskStepper";
 import { MatrixQueueWorkspace } from "@/components/tasks/MatrixQueueWorkspace";
@@ -66,8 +67,8 @@ export function ReviewOverviewPage() {
     return <Navigate replace to={getTaskDestination(task)} />;
   }
 
-  const isLoading = taskQuery.isLoading || resultQuery.isLoading;
-  const isError = taskQuery.isError || resultQuery.isError;
+  const isLoading = taskQuery.isLoading || resultQuery.isLoading || finalizationQuery.isLoading;
+  const isError = taskQuery.isError || resultQuery.isError || finalizationQuery.isError;
   const pendingReviewItems = reviewItems.filter((item) => !confirmedKeys.has(reviewCellKey(item.student.id, item.question.id)));
   const historyView = Boolean(task && task.status !== "graded");
   const overviewReturnTo = taskId
@@ -87,6 +88,10 @@ export function ReviewOverviewPage() {
   );
   const remainingReviewCount = finalizationQuery.data?.remaining_review_count ?? pendingReviewItems.length;
   const readyForConfirmation = finalizationQuery.data?.ready_for_confirmation === true;
+  const editedPendingCount = pendingReviewItems.filter((item) => item.correction.review_status === "edited").length;
+  const lockedResultsReason = remainingReviewCount > 0
+    ? copy(locale, "lockedResultsRemaining").replace("{count}", String(remainingReviewCount))
+    : copy(locale, "lockedResultsReady");
 
   function confirmReviewComplete() {
     if (!taskId || !readyForConfirmation || confirmFinalization.isPending) return;
@@ -96,6 +101,17 @@ export function ReviewOverviewPage() {
     }, {
       onSuccess: () => navigate(`/tasks/${taskId}/results`),
     });
+  }
+
+  function activateLockedResults() {
+    toast.info(lockedResultsReason);
+    if (remainingReviewCount > 0 && targetHref) {
+      navigate(targetHref);
+      return;
+    }
+    const confirmButton = document.getElementById("confirm-review-complete");
+    confirmButton?.scrollIntoView({ behavior: "smooth", block: "center" });
+    window.requestAnimationFrame(() => confirmButton?.focus());
   }
 
   function submitFilter(event: FormEvent) {
@@ -118,7 +134,12 @@ export function ReviewOverviewPage() {
       <h1 className="min-h-9 text-[30px] font-bold leading-9 tracking-[-0.02em] text-foreground">
         {copy(locale, "title")}
       </h1>
-      <NewTaskStepper currentStep={6} />
+      <NewTaskStepper
+        currentStep={6}
+        lockedStep={7}
+        lockedStepReason={lockedResultsReason}
+        onLockedStepActivate={activateLockedResults}
+      />
 
       {!taskId ? (
         <PageState title={copy(locale, "missingTask")} href="/history" action={copy(locale, "viewHistory")} />
@@ -129,7 +150,7 @@ export function ReviewOverviewPage() {
           title={copy(locale, "loadError")}
           description={copy(locale, "loadErrorDescription")}
           action={copy(locale, "retry")}
-          onAction={() => { void Promise.all([taskQuery.refetch(), resultQuery.refetch(), commentsQuery.refetch()]); }}
+          onAction={() => { void Promise.all([taskQuery.refetch(), resultQuery.refetch(), commentsQuery.refetch(), finalizationQuery.refetch()]); }}
         />
       ) : !model.students.length || !model.questions.length ? (
         <PageState title={copy(locale, "empty")} href="/history" action={copy(locale, "viewHistory")} />
@@ -224,11 +245,15 @@ export function ReviewOverviewPage() {
               {historyView
                 ? copy(locale, "historyHint")
                 : remainingReviewCount > 0
-                  ? copy(locale, "remainingHint").replace("{count}", String(remainingReviewCount))
+                  ? editedPendingCount > 0
+                    ? copy(locale, "editedRemainingHint")
+                        .replace("{count}", String(remainingReviewCount))
+                        .replace("{edited}", String(editedPendingCount))
+                    : copy(locale, "remainingHint").replace("{count}", String(remainingReviewCount))
                   : copy(locale, "readyHint")}
             </p>
             <div className="flex w-full flex-col gap-2 sm:w-auto sm:flex-row">
-              {targetHref ? (
+              {targetHref && (historyView || readyForConfirmation) ? (
                 <Link
                   to={targetHref}
                   className="inline-flex h-9 w-full items-center justify-center gap-1.5 rounded-[7px] border bg-card px-4 text-sm font-semibold text-foreground outline-none transition hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring sm:w-auto"
@@ -244,8 +269,17 @@ export function ReviewOverviewPage() {
                   {copy(locale, "viewFinalResults")}
                   <ArrowRight aria-hidden="true" className="h-4 w-4" />
                 </Link>
+              ) : remainingReviewCount > 0 && targetHref ? (
+                <Link
+                  to={targetHref}
+                  className="inline-flex h-9 w-full items-center justify-center gap-1.5 rounded-[7px] bg-primary px-4 text-sm font-semibold text-primary-foreground outline-none transition hover:opacity-90 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 sm:w-auto"
+                >
+                  {copy(locale, "continueReview").replace("{count}", String(remainingReviewCount))}
+                  <ArrowRight aria-hidden="true" className="h-4 w-4" />
+                </Link>
               ) : (
                 <button
+                  id="confirm-review-complete"
                   type="button"
                   disabled={!readyForConfirmation || confirmFinalization.isPending}
                   title={!readyForConfirmation ? copy(locale, "confirmDisabled") : undefined}
@@ -424,12 +458,14 @@ function ReviewHeatmap({
 }
 
 function ReviewCell({ locale, href, correction, item, annotated, confirmed, question }: { locale: Locale; href: string; correction: Correction; item?: ReviewItem; annotated: boolean; confirmed: boolean; question?: QuestionSummary }) {
-  const state = confirmed ? "confirmed" : annotated ? "commented" : item?.category === "low-confidence" ? "low" : item ? "review" : "ok";
+  const state = confirmed ? "confirmed" : correction.review_status === "edited" ? "edited" : annotated ? "commented" : item?.category === "low-confidence" ? "low" : item ? "review" : "ok";
   const label = copy(locale, state);
   const detail = `${question?.label ?? correction.q_id} · ${formatPercent(correction.max_score > 0 ? (effectiveCorrectionScore(correction) / correction.max_score) * 100 : null)} · ${formatConfidence(correction.confidence)}`;
   const tone: MatrixStatusTone = state === "confirmed"
     ? "reviewed"
-    : state === "commented"
+    : state === "edited"
+      ? "warning"
+      : state === "commented"
       ? "note"
       : state === "low"
         ? "warning"
@@ -489,6 +525,7 @@ function PageState({ title, description, busy = false, action, href, onAction }:
 }
 
 function queueReason(locale: Locale, item: ReviewItem): string {
+  if (item.correction.review_status === "edited") return copy(locale, "savedPendingReason");
   if (item.category === "low-confidence") return copy(locale, "lowReason");
   if (item.category === "expert-disagreement") return copy(locale, "disagreementReason");
   if (item.category === "score-anomaly") return copy(locale, "anomalyReason");

@@ -7,12 +7,11 @@ import {
   Check,
   Keyboard,
   LoaderCircle,
-  Save,
   Search,
   X,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { Link, Navigate, useBlocker, useNavigate, useParams, useSearchParams } from "react-router-dom";
+import { Link, Navigate, useBlocker, useNavigate, useParams, useSearchParams, type BlockerFunction } from "react-router-dom";
 import { toast } from "sonner";
 import { normalizeAPIError } from "@/api/client";
 import { useTask, useTaskResult, useUpdateCorrectionReview } from "@/api/hooks/tasks";
@@ -27,6 +26,7 @@ import {
 } from "@/components/tasks/resultsModel";
 import { collectResultReviewItems } from "@/components/tasks/resultsReviewModel";
 import { MarkdownMath } from "@/components/ui/MarkdownMath";
+import { UnsavedChangesDialog } from "@/components/ui/UnsavedChangesDialog";
 import { useI18n } from "@/i18n/I18nProvider";
 import type { Locale } from "@/i18n/messages";
 import { cn } from "@/lib/cn";
@@ -88,6 +88,10 @@ export function ReviewDetailPage() {
     [student?.corrections],
   );
   const reviewItems = useMemo(() => collectResultReviewItems(model, model.students), [model]);
+  const pendingReviewItems = useMemo(
+    () => reviewItems.filter((item) => item.correction.review_status !== "confirmed"),
+    [reviewItems],
+  );
   const requiredReviewKeys = useMemo(
     () => new Set(reviewItems.map((item) => reviewCellKey(item.student.id, item.question.id))),
     [reviewItems],
@@ -120,10 +124,14 @@ export function ReviewDetailPage() {
   const [scoreErrors, setScoreErrors] = useState<Record<string, string>>({});
   const [saveErrors, setSaveErrors] = useState<Record<string, string>>({});
   const [savingQuestionId, setSavingQuestionId] = useState<string | null>(null);
+  const [pendingQuestionNavigationId, setPendingQuestionNavigationId] = useState<string | null>(null);
+  const [dialogSaving, setDialogSaving] = useState(false);
+  const [dialogSaveError, setDialogSaveError] = useState<string | undefined>();
   const initializedStudentRef = useRef<string | null>(null);
   const positionedRouteRef = useRef<string | null>(null);
   const resetScrollForStudentRef = useRef<string | null>(null);
   const searchParamsRef = useRef(searchParams);
+  const bypassNavigationRef = useRef(false);
 
   useEffect(() => {
     searchParamsRef.current = searchParams;
@@ -152,27 +160,40 @@ export function ReviewDetailPage() {
     return changed ? [correction.q_id] : [];
   }) ?? []), [drafts, student]);
   const dirty = dirtyQuestionIds.size > 0;
-  const blocker = useBlocker(dirty && !updateReview.isPending);
+  const shouldBlockNavigation = useCallback<BlockerFunction>(({ currentLocation, nextLocation }) => (
+    dirty
+    && !bypassNavigationRef.current
+    && currentLocation.pathname !== nextLocation.pathname
+  ), [dirty]);
+  const blocker = useBlocker(shouldBlockNavigation);
 
   useEffect(() => {
     const beforeUnload = (event: BeforeUnloadEvent) => {
-      if (!dirty) return;
+      if (!dirty && !updateReview.isPending) return;
       event.preventDefault();
+      event.returnValue = "";
     };
     window.addEventListener("beforeunload", beforeUnload);
     return () => window.removeEventListener("beforeunload", beforeUnload);
-  }, [dirty]);
+  }, [dirty, updateReview.isPending]);
 
-  useEffect(() => {
-    if (blocker.state !== "blocked") return;
-    if (window.confirm(tx(locale, "当前仍有未保存的复核修改，确定离开吗？", "Some review changes are unsaved. Leave this page?"))) blocker.proceed();
-    else blocker.reset();
-  }, [blocker, locale]);
-
-  const buildHref = useCallback((nextStudentId: string, nextQuestionId: string) => {
-    const serialized = searchParams.toString();
+  const buildHref = useCallback((nextStudentId: string, nextQuestionId: string, preserveFilters = true) => {
+    const nextParams = preserveFilters ? new URLSearchParams(searchParams) : new URLSearchParams();
+    if (!preserveFilters) {
+      const returnTo = searchParams.get("returnTo");
+      if (returnTo) nextParams.set("returnTo", returnTo);
+    }
+    const serialized = nextParams.toString();
     return `/tasks/${encodeURIComponent(taskId ?? "")}/review/${encodeURIComponent(nextStudentId)}/${encodeURIComponent(nextQuestionId)}${serialized ? `?${serialized}` : ""}`;
   }, [searchParams, taskId]);
+
+  const navigateWithoutBlocking = useCallback((href: string) => {
+    bypassNavigationRef.current = true;
+    navigate(href);
+    window.setTimeout(() => {
+      bypassNavigationRef.current = false;
+    }, 0);
+  }, [navigate]);
 
   const setFilter = useCallback((key: "student" | "question", value: string) => {
     const next = new URLSearchParams(searchParamsRef.current);
@@ -196,6 +217,19 @@ export function ReviewDetailPage() {
     const top = window.scrollY + element.getBoundingClientRect().top - 86;
     window.scrollTo({ top: Math.max(0, top), left: 0, behavior });
   }, []);
+
+  const requestQuestionNavigation = useCallback((targetId: string) => {
+    if (targetId === activeQuestionId) {
+      scrollToQuestion(targetId);
+      return;
+    }
+    if (dirty) {
+      setDialogSaveError(undefined);
+      setPendingQuestionNavigationId(targetId);
+      return;
+    }
+    scrollToQuestion(targetId);
+  }, [activeQuestionId, dirty, scrollToQuestion]);
 
   useEffect(() => {
     if (!visibleQuestions.length || !studentId) return;
@@ -264,15 +298,15 @@ export function ReviewDetailPage() {
         goToStudent(nextStudent.id);
       } else if (event.key === "ArrowUp" && previousQuestion) {
         event.preventDefault();
-        scrollToQuestion(previousQuestion.id);
+        requestQuestionNavigation(previousQuestion.id);
       } else if (event.key === "ArrowDown" && nextQuestion) {
         event.preventDefault();
-        scrollToQuestion(nextQuestion.id);
+        requestQuestionNavigation(nextQuestion.id);
       }
     };
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [goToStudent, nextQuestion, nextStudent, previousQuestion, previousStudent, scrollToQuestion]);
+  }, [goToStudent, nextQuestion, nextStudent, previousQuestion, previousStudent, requestQuestionNavigation]);
 
   if (taskId && taskQuery.data?.status === "grading") return <Navigate replace to={`/tasks/${taskId}/grading/progress`} />;
   if (taskId && taskQuery.data && ![
@@ -291,10 +325,14 @@ export function ReviewDetailPage() {
     setSaveErrors((current) => omitKey(current, qId));
   }
 
-  async function saveReview(question: QuestionSummary, confirm: boolean, moveNext: boolean) {
-    if (!taskId || !student || !taskQuery.data) return;
+  function prepareConfirmedReview(question: QuestionSummary) {
+    if (!taskId || !student) {
+      return { ok: false as const, message: tx(locale, "缺少任务或学生信息。", "Task or student information is missing.") };
+    }
     const correction = correctionByQuestionId.get(question.id);
-    if (!correction) return;
+    if (!correction) {
+      return { ok: false as const, message: tx(locale, "找不到这道题的批改结果。", "This grading result could not be found.") };
+    }
     const draft = drafts[question.id] ?? {
       score: String(effectiveCorrectionScore(correction)),
       comment: correction.teacher_comment ?? "",
@@ -305,35 +343,207 @@ export function ReviewDetailPage() {
         ...current,
         [question.id]: tx(locale, `请输入 0–${formatScore(correction.max_score)} 之间的分数。`, `Enter a score from 0 to ${formatScore(correction.max_score)}.`),
       }));
-      return;
+      return { ok: false as const, message: tx(locale, "请先修正标红的分数。", "Correct the highlighted score first.") };
+    }
+    return {
+      ok: true as const,
+      numericScore,
+      teacherComment: draft.comment,
+    };
+  }
+
+  async function persistConfirmedReview(question: QuestionSummary, expectedWorkflowRevision: number) {
+    const prepared = prepareConfirmedReview(question);
+    if (!prepared.ok) return prepared;
+    if (!taskId || !student) {
+      return { ok: false as const, message: tx(locale, "缺少任务或学生信息。", "Task or student information is missing.") };
     }
     setSavingQuestionId(question.id);
     setScoreErrors((current) => omitKey(current, question.id));
     setSaveErrors((current) => omitKey(current, question.id));
     try {
-      await updateReview.mutateAsync({
+      const response = await updateReview.mutateAsync({
         taskId,
         studentId: student.id,
         qId: question.id,
-        expected_workflow_revision: taskQuery.data.workflow_revision,
-        teacher_score: numericScore,
-        teacher_comment: draft.comment,
-        confirm,
+        expected_workflow_revision: expectedWorkflowRevision,
+        teacher_score: prepared.numericScore,
+        teacher_comment: prepared.teacherComment,
+        confirm: true,
       });
-      toast.success(confirm
-        ? tx(locale, "该题复核结果已确认", "This question review is confirmed")
-        : tx(locale, "该题修改已保存", "Changes to this question are saved"));
-      if (confirm && moveNext) {
-        const index = visibleQuestions.findIndex((item) => item.id === question.id);
-        const next = index >= 0 ? visibleQuestions[index + 1] : null;
-        if (next) window.requestAnimationFrame(() => scrollToQuestion(next.id));
-      }
+      setDrafts((current) => ({
+        ...current,
+        [question.id]: {
+          score: String(effectiveCorrectionScore(response.correction)),
+          comment: response.correction.teacher_comment ?? "",
+        },
+      }));
+      return { ok: true as const, workflowRevision: response.workflow_revision };
     } catch (error) {
       const normalized = normalizeAPIError(error);
       setSaveErrors((current) => ({ ...current, [question.id]: normalized.message }));
       if (normalized.status === 409) void Promise.all([taskQuery.refetch(), resultQuery.refetch()]);
+      return { ok: false as const, message: normalized.message };
     } finally {
       setSavingQuestionId(null);
+    }
+  }
+
+  function continueAfterQuestion(question: QuestionSummary, guardOtherUnsavedChanges: boolean) {
+    const currentKey = student ? reviewCellKey(student.id, question.id) : "";
+    const nextReview = pendingReviewItems.find((item) => reviewCellKey(item.student.id, item.question.id) !== currentKey);
+    if (!nextReview) {
+      if (guardOtherUnsavedChanges) navigate(overviewHref);
+      else navigateWithoutBlocking(overviewHref);
+      return;
+    }
+    if (nextReview.student.id === student?.id && visibleQuestions.some((item) => item.id === nextReview.question.id)) {
+      window.requestAnimationFrame(() => {
+        if (guardOtherUnsavedChanges) requestQuestionNavigation(nextReview.question.id);
+        else scrollToQuestion(nextReview.question.id);
+      });
+      return;
+    }
+    const href = buildHref(nextReview.student.id, nextReview.question.id, false);
+    if (guardOtherUnsavedChanges) navigate(href);
+    else navigateWithoutBlocking(href);
+  }
+
+  async function confirmAndContinue(question: QuestionSummary) {
+    if (!taskQuery.data) return;
+    const correction = correctionByQuestionId.get(question.id);
+    if (correction?.review_status === "confirmed" && !dirtyQuestionIds.has(question.id)) {
+      continueAfterQuestion(question, dirtyQuestionIds.size > 0);
+      return;
+    }
+    const wasDirty = dirtyQuestionIds.has(question.id);
+    const hasOtherDirtyChanges = Array.from(dirtyQuestionIds).some((qId) => qId !== question.id);
+    const outcome = await persistConfirmedReview(question, taskQuery.data.workflow_revision);
+    if (!outcome.ok) return;
+    toast.success(wasDirty
+      ? tx(locale, "修改已保存并确认，正在继续复核", "Changes saved and confirmed. Continuing review.")
+      : tx(locale, "该题复核结果已确认", "This question review is confirmed"));
+    continueAfterQuestion(question, hasOtherDirtyChanges);
+  }
+
+  async function saveAllDirtyReviews() {
+    if (!taskQuery.data) return false;
+    const questionIds = Array.from(dirtyQuestionIds);
+    for (const qId of questionIds) {
+      const question = model.questions.find((item) => item.id === qId);
+      if (!question) {
+        setDialogSaveError(tx(locale, "找不到待保存的题目，请刷新后重试。", "A changed question could not be found. Refresh and try again."));
+        return false;
+      }
+      const prepared = prepareConfirmedReview(question);
+      if (!prepared.ok) {
+        setDialogSaveError(prepared.message);
+        return false;
+      }
+    }
+    let workflowRevision = taskQuery.data.workflow_revision;
+    let confirmedCount = 0;
+    for (const qId of questionIds) {
+      const question = model.questions.find((item) => item.id === qId);
+      if (!question) continue;
+      const outcome = await persistConfirmedReview(question, workflowRevision);
+      if (!outcome.ok) {
+        const remainingCount = questionIds.length - confirmedCount;
+        setDialogSaveError(confirmedCount > 0
+          ? tx(
+              locale,
+              `已有 ${confirmedCount} 处修改保存并确认；其余 ${remainingCount} 处尚未完成。请检查后重试。${outcome.message}`,
+              `${confirmedCount} change${confirmedCount === 1 ? " was" : "s were"} saved and confirmed; ${remainingCount} remain. Check the error and retry. ${outcome.message}`,
+            )
+          : outcome.message);
+        return false;
+      }
+      workflowRevision = outcome.workflowRevision;
+      confirmedCount += 1;
+    }
+    toast.success(tx(
+      locale,
+      `${questionIds.length} 处修改已保存并确认`,
+      `${questionIds.length} change${questionIds.length === 1 ? "" : "s"} saved and confirmed`,
+    ));
+    return true;
+  }
+
+  function restoreDirtyDrafts() {
+    if (!student) return;
+    setDrafts((current) => {
+      const next = { ...current };
+      for (const correction of student.corrections) {
+        if (!dirtyQuestionIds.has(correction.q_id)) continue;
+        next[correction.q_id] = {
+          score: String(effectiveCorrectionScore(correction)),
+          comment: correction.teacher_comment ?? "",
+        };
+      }
+      return next;
+    });
+    setScoreErrors({});
+    setSaveErrors({});
+  }
+
+  function stayOnReview() {
+    setDialogSaveError(undefined);
+    setPendingQuestionNavigationId(null);
+    if (blocker.state === "blocked") blocker.reset();
+  }
+
+  function discardAndContinue() {
+    const targetQuestionId = pendingQuestionNavigationId;
+    restoreDirtyDrafts();
+    setDialogSaveError(undefined);
+    setPendingQuestionNavigationId(null);
+    if (blocker.state === "blocked") {
+      blocker.proceed();
+    } else if (targetQuestionId) {
+      window.requestAnimationFrame(() => scrollToQuestion(targetQuestionId));
+    }
+  }
+
+  async function saveAndContinue() {
+    setDialogSaving(true);
+    setDialogSaveError(undefined);
+    const saved = await saveAllDirtyReviews();
+    setDialogSaving(false);
+    if (!saved) return;
+    const targetQuestionId = pendingQuestionNavigationId;
+    setPendingQuestionNavigationId(null);
+    if (blocker.state === "blocked") {
+      blocker.proceed();
+    } else if (targetQuestionId) {
+      window.requestAnimationFrame(() => scrollToQuestion(targetQuestionId));
+    }
+  }
+
+  const lockedResultsReason = pendingReviewItems.length
+    ? tx(
+        locale,
+        `结果分析尚未解锁：还剩 ${pendingReviewItems.length} 个题次需要确认。点击可前往第一处。`,
+        `Results Analysis is locked: ${pendingReviewItems.length} response${pendingReviewItems.length === 1 ? "" : "s"} still need confirmation. Activate to open the first one.`,
+      )
+    : tx(
+        locale,
+        "所有题次均已确认；请先在复核总览确认完成，再进入结果分析。",
+        "All responses are confirmed. Confirm review completion in the overview before opening Results Analysis.",
+      );
+
+  function activateLockedResults() {
+    toast.info(lockedResultsReason);
+    if (dirty) {
+      navigate(overviewHref);
+      return;
+    }
+    const first = pendingReviewItems[0];
+    if (!first) {
+      navigate(overviewHref);
+    } else if (first.student.id === student?.id && visibleQuestions.some((item) => item.id === first.question.id)) {
+      scrollToQuestion(first.question.id);
+    } else {
+      navigate(buildHref(first.student.id, first.question.id, false));
     }
   }
 
@@ -353,7 +563,12 @@ export function ReviewDetailPage() {
           </Link>
         ) : null}
       </div>
-      <NewTaskStepper currentStep={6} />
+      <NewTaskStepper
+        currentStep={6}
+        lockedStep={7}
+        lockedStepReason={lockedResultsReason}
+        onLockedStepActivate={activateLockedResults}
+      />
 
       {!taskId ? (
         <PageState title={tx(locale, "缺少任务 ID", "Task ID is missing")} />
@@ -362,7 +577,7 @@ export function ReviewDetailPage() {
       ) : failed ? (
         <PageState title={tx(locale, "无法加载复核详情", "Could not load review detail")} action={tx(locale, "重试", "Retry")} onAction={() => void Promise.all([taskQuery.refetch(), resultQuery.refetch()])} />
       ) : !student || !model.questions.length ? (
-        <PageState title={tx(locale, "找不到对应的学生或题目", "Student or questions not found")} href={overviewHref} action={tx(locale, "返回总览", "Back to Overview")} />
+        <PageState title={tx(locale, "找不到对应的学生或题目", "Student or question not found")} href={overviewHref} action={tx(locale, "返回总览", "Back to Overview")} />
       ) : (
         <>
           <StudentNavigation
@@ -384,7 +599,7 @@ export function ReviewDetailPage() {
             value={questionQuery}
             matches={questionMatches}
             onQuery={(value) => setFilter("question", value)}
-            onSelect={scrollToQuestion}
+            onSelect={requestQuestionNavigation}
           />
           <div className="mt-1.5 flex flex-col gap-1 px-1 text-[11px] leading-5 text-muted-foreground sm:flex-row sm:items-center sm:justify-between sm:gap-4">
             <span>{tx(locale, "搜索只筛选题目，当前学生保持不变；中文输入在选词完成后应用。", "Question search does not change the selected student; IME text is applied after composition.")}</span>
@@ -400,7 +615,7 @@ export function ReviewDetailPage() {
                 locale={locale}
                 questions={visibleQuestions}
                 activeId={activeQuestion?.id ?? null}
-                onSelect={scrollToQuestion}
+                onSelect={requestQuestionNavigation}
                 stateForQuestion={(question) => reviewQuestionState(
                   correctionByQuestionId.get(question.id),
                   requiredReviewKeys.has(reviewCellKey(student.id, question.id)),
@@ -431,8 +646,9 @@ export function ReviewDetailPage() {
                       scoreError={scoreErrors[question.id]}
                       saveError={saveErrors[question.id]}
                       onDraftChange={(patch) => updateDraft(question.id, patch)}
-                      onSave={(confirm, moveNext) => void saveReview(question, confirm, moveNext)}
-                      onNavigate={scrollToQuestion}
+                      hasNextReview={pendingReviewItems.some((item) => reviewCellKey(item.student.id, item.question.id) !== reviewCellKey(student.id, question.id))}
+                      onConfirm={() => void confirmAndContinue(question)}
+                      onNavigate={requestQuestionNavigation}
                     />
                   );
                 })}
@@ -449,6 +665,25 @@ export function ReviewDetailPage() {
           </div>
         </>
       )}
+      {blocker.state === "blocked" || pendingQuestionNavigationId ? (
+        <UnsavedChangesDialog
+          title={tx(locale, "有批改修改尚未保存", "Unsaved grading changes")}
+          description={tx(
+            locale,
+            `当前有 ${dirtyQuestionIds.size} 处修改尚未保存。你可以继续编辑、放弃修改，或直接保存并确认后继续原操作。`,
+            `${dirtyQuestionIds.size} change${dirtyQuestionIds.size === 1 ? " is" : "s are"} unsaved. Keep editing, discard them, or save and confirm them before continuing.`,
+          )}
+          stayLabel={tx(locale, "继续编辑", "Keep editing")}
+          leaveLabel={tx(locale, "放弃修改", "Discard changes")}
+          saveLabel={tx(locale, "保存、确认并继续", "Save, confirm & continue")}
+          savingLabel={tx(locale, "正在保存…", "Saving…")}
+          saving={dialogSaving || updateReview.isPending}
+          saveError={dialogSaveError}
+          onStay={stayOnReview}
+          onLeave={discardAndContinue}
+          onSave={() => void saveAndContinue()}
+        />
+      ) : null}
     </div>
   );
 }
@@ -594,7 +829,7 @@ function QuestionSearch({ className, locale, value, matches, onQuery, onSelect }
   );
 }
 
-function ReviewQuestionCard({ locale, student, question, correction, draft, required, reviewReasons, previous, next, dirty, saving, scoreError, saveError, onDraftChange, onSave, onNavigate }: {
+function ReviewQuestionCard({ locale, student, question, correction, draft, required, reviewReasons, previous, next, dirty, saving, scoreError, saveError, hasNextReview, onDraftChange, onConfirm, onNavigate }: {
   locale: Locale;
   student: StudentSummary;
   question: QuestionSummary;
@@ -608,11 +843,24 @@ function ReviewQuestionCard({ locale, student, question, correction, draft, requ
   saving: boolean;
   scoreError?: string;
   saveError?: string;
+  hasNextReview: boolean;
   onDraftChange: (patch: Partial<ReviewDraft>) => void;
-  onSave: (confirm: boolean, moveNext: boolean) => void;
+  onConfirm: () => void;
   onNavigate: (id: string) => void;
 }) {
   const answer = student.answerByQuestion.get(question.id);
+  const alreadyConfirmed = correction?.review_status === "confirmed" && !dirty;
+  const actionLabel = alreadyConfirmed
+    ? hasNextReview
+      ? tx(locale, "继续复核", "Continue review")
+      : tx(locale, "返回复核总览", "Back to review overview")
+    : dirty
+      ? hasNextReview
+        ? tx(locale, "保存、确认并继续", "Save, confirm & continue")
+        : tx(locale, "保存并确认", "Save & confirm")
+      : hasNextReview
+        ? tx(locale, "确认并继续", "Confirm & continue")
+        : tx(locale, "确认复核", "Confirm review");
   return (
     <article id={questionAnchorId(question.id)} data-question-id={question.id} className="scroll-mt-[86px] overflow-hidden rounded-[10px] border bg-card">
       <header className="flex flex-col gap-3 border-b px-5 py-4 sm:flex-row sm:items-center sm:justify-between">
@@ -722,14 +970,10 @@ function ReviewQuestionCard({ locale, student, question, correction, draft, requ
             </label>
             {saveError ? <p className="mt-3 rounded-[8px] border border-red-200 bg-red-50 px-3 py-2 text-xs font-medium text-red-700" role="alert">{saveError}</p> : null}
             <div className="mt-auto flex flex-wrap items-center justify-end gap-2 pt-4">
-              <button type="button" onClick={() => onSave(false, false)} disabled={!correction || saving || !dirty} className="inline-flex h-9 items-center gap-1.5 rounded-[8px] border bg-card px-4 text-xs font-semibold text-foreground hover:bg-muted disabled:cursor-not-allowed disabled:opacity-50">
-                {saving ? <LoaderCircle aria-hidden="true" className="h-3.5 w-3.5 animate-spin" /> : <Save aria-hidden="true" className="h-3.5 w-3.5" />}
-                {tx(locale, "保存修改", "Save Changes")}
-              </button>
-              <button type="button" onClick={() => onSave(true, Boolean(next))} disabled={!correction || saving} className="inline-flex h-9 items-center gap-1.5 rounded-[8px] bg-primary px-4 text-xs font-semibold text-primary-foreground hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50">
+              <button type="button" onClick={onConfirm} disabled={!correction || saving} aria-label={`${question.label}：${actionLabel}`} className="inline-flex h-9 items-center gap-1.5 rounded-[8px] bg-primary px-4 text-xs font-semibold text-primary-foreground hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50">
                 {saving ? <LoaderCircle aria-hidden="true" className="h-3.5 w-3.5 animate-spin" /> : <Check aria-hidden="true" className="h-3.5 w-3.5" />}
-                {next ? tx(locale, "确认并到下一题", "Confirm & Next") : tx(locale, "确认复核", "Confirm Review")}
-                {next ? <ArrowDown aria-hidden="true" className="h-3.5 w-3.5" /> : null}
+                {actionLabel}
+                {hasNextReview ? <ArrowRight aria-hidden="true" className="h-3.5 w-3.5" /> : null}
               </button>
             </div>
           </section>
@@ -798,7 +1042,7 @@ function ReviewStatus({ correction, required, locale }: { correction?: Correctio
         : status === "pending"
           ? tx(locale, "待复核", "Pending review")
           : tx(locale, "批改完成", "Graded");
-  return <span className={cn("rounded-full px-3 py-1 text-[11px] font-semibold", status === "confirmed" && "bg-blue-100 text-primary dark:bg-blue-950/60", status === "edited" && "bg-blue-50 text-primary dark:bg-blue-950/40", status === "pending" && "bg-amber-100 text-amber-700 dark:bg-amber-950/60 dark:text-amber-200", status === "ready" && "bg-emerald-100 text-emerald-700 dark:bg-emerald-950/60 dark:text-emerald-200", status === "missing" && "bg-red-100 text-red-600 dark:bg-red-950/60 dark:text-red-200")}>{label}</span>;
+  return <span className={cn("rounded-full px-3 py-1 text-[11px] font-semibold", status === "confirmed" && "bg-blue-100 text-primary dark:bg-blue-950/60", status === "edited" && "bg-amber-100 text-amber-700 dark:bg-amber-950/60 dark:text-amber-200", status === "pending" && "bg-amber-100 text-amber-700 dark:bg-amber-950/60 dark:text-amber-200", status === "ready" && "bg-emerald-100 text-emerald-700 dark:bg-emerald-950/60 dark:text-emerald-200", status === "missing" && "bg-red-100 text-red-600 dark:bg-red-950/60 dark:text-red-200")}>{label}</span>;
 }
 
 function EmptyText({ locale, text, en }: { locale: Locale; text: string; en: string }) {

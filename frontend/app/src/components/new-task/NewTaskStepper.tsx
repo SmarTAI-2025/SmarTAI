@@ -28,7 +28,23 @@ const STEP_PATHS = [
   "results",
 ] as const;
 
-export function NewTaskStepper({ currentStep = 0, reachableStep = currentStep, returnState }: { currentStep?: number; reachableStep?: number; returnState?: unknown }) {
+interface NewTaskStepperProps {
+  currentStep?: number;
+  reachableStep?: number;
+  returnState?: unknown;
+  lockedStep?: number;
+  lockedStepReason?: string;
+  onLockedStepActivate?: () => void;
+}
+
+export function NewTaskStepper({
+  currentStep = 0,
+  reachableStep = currentStep,
+  returnState,
+  lockedStep,
+  lockedStepReason,
+  onLockedStepActivate,
+}: NewTaskStepperProps) {
   const { t } = useI18n();
   const { taskId } = useParams();
   const taskQuery = useTask(taskId);
@@ -64,6 +80,18 @@ export function NewTaskStepper({ currentStep = 0, reachableStep = currentStep, r
                 <StepMarker index={index} currentStep={currentStep} />
                 <span className={`whitespace-nowrap text-[13px] font-medium transition-colors group-hover:text-primary ${index === currentStep ? "font-semibold text-foreground" : "text-muted-foreground"}`}>{t(key)}</span>
               </Link>
+            ) : index === lockedStep && lockedStepReason && onLockedStepActivate ? (
+              <button
+                type="button"
+                title={lockedStepReason}
+                aria-label={`${t(key)}：${lockedStepReason}`}
+                onClick={onLockedStepActivate}
+                className="group flex shrink-0 items-center gap-2 rounded-md text-left outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+              >
+                <StepMarker index={index} currentStep={currentStep} />
+                <span className="whitespace-nowrap text-[13px] font-medium text-muted-foreground transition-colors group-hover:text-foreground">{t(key)}</span>
+                <span className="sr-only">{lockedStepReason}</span>
+              </button>
             ) : (
               <div className="flex shrink-0 cursor-not-allowed items-center gap-2" aria-disabled="true">
                 <StepMarker index={index} currentStep={currentStep} />

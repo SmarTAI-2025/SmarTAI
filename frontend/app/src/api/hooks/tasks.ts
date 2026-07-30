@@ -4,6 +4,7 @@ import type { UploadOptions } from "@/api/client";
 import type {
   Task,
   TaskHistoryQuery,
+  TaskFinalizationResponse,
   TaskMetadataPatch,
   TaskResultResponse,
   TaskStateSnapshot,
@@ -116,6 +117,11 @@ export function useConfirmTaskFinalization() {
     }) => tasksApi.confirmTaskFinalization(taskId, expectedWorkflowRevision),
     onSuccess: (data, variables) => {
       queryClient.setQueryData(taskKeys.finalization(variables.taskId), data);
+      queryClient.setQueryData<Task>(taskKeys.detail(variables.taskId), (current) => (
+        current
+          ? { ...current, status: data.task_status, workflow_revision: data.workflow_revision }
+          : current
+      ));
       invalidateTask(queryClient, variables.taskId);
     },
   });
@@ -370,7 +376,7 @@ export function useUpdateCorrectionReview() {
     }) => tasksApi.updateCorrectionReview(taskId, studentId, qId, input),
     onSuccess: (data, variables) => {
       queryClient.setQueryData<Task>(taskKeys.detail(variables.taskId), (current) =>
-        current ? { ...current, workflow_revision: data.workflow_revision } : current,
+        current ? { ...current, status: "graded", workflow_revision: data.workflow_revision } : current,
       );
       queryClient.setQueryData<TaskResultResponse>(taskKeys.result(variables.taskId), (current) => {
         if (!current?.results) return current;
@@ -384,10 +390,34 @@ export function useUpdateCorrectionReview() {
             : student),
         };
       });
+      if (data.correction.review_status === "confirmed") {
+        queryClient.setQueryData<TaskFinalizationResponse>(taskKeys.finalization(variables.taskId), (current) => {
+          if (!current) return current;
+          const remainingReviews = current.remaining_reviews.filter((review) => (
+            review.student_id !== variables.studentId || review.q_id !== variables.qId
+          ));
+          const newlyConfirmedCount = current.remaining_reviews.length - remainingReviews.length;
+          return {
+            ...current,
+            task_status: "graded",
+            workflow_revision: data.workflow_revision,
+            ready_for_confirmation: remainingReviews.length === 0,
+            confirmed_required_count: Math.min(
+              current.required_review_count,
+              current.confirmed_required_count + newlyConfirmedCount,
+            ),
+            remaining_review_count: remainingReviews.length,
+            remaining_reviews: remainingReviews,
+            final_result_dirty: current.final_result_version > 0 || current.final_result_dirty,
+            analysis_status: current.analysis_status === "ready" ? "stale" : current.analysis_status,
+          };
+        });
+      }
       queryClient.invalidateQueries({ queryKey: taskKeys.list() });
       queryClient.invalidateQueries({ queryKey: taskKeys.detail(variables.taskId) });
       queryClient.invalidateQueries({ queryKey: taskKeys.state(variables.taskId) });
       queryClient.invalidateQueries({ queryKey: taskKeys.comments(variables.taskId) });
+      queryClient.invalidateQueries({ queryKey: taskKeys.finalization(variables.taskId) });
     },
   });
 }
