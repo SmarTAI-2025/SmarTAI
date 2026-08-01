@@ -72,6 +72,8 @@ def seed_test_users() -> int:
     number of accounts seeded. Idempotent — usernames already in the store
     are skipped so reloads don't duplicate users.
     """
+    if not settings.seed_test_users:
+        return 0
     payload = _load_payload()
     if payload is None:
         return 0

@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import logging
 import os
+from io import BytesIO
 from typing import List
 
 from fastapi import HTTPException
@@ -27,7 +28,7 @@ DEFAULT_CHUNK_WORDS = 500
 DEFAULT_OVERLAP_WORDS = 50
 
 
-SUPPORTED_EXTS = (".pdf", ".md", ".markdown", ".txt", ".rst")
+SUPPORTED_EXTS = (".pdf", ".docx", ".pptx", ".md", ".markdown", ".txt", ".rst")
 
 
 def _guess_kind(filename: str) -> str:
@@ -56,13 +57,38 @@ async def extract_text(filename: str, body: bytes) -> str:
         raise HTTPException(
             status_code=400,
             detail=f"Unsupported KB file type: {os.path.basename(filename)}. "
-                   f"Allowed: PDF, MD, TXT, RST.",
+                   f"Allowed: PDF, DOCX, PPTX, MD, TXT, RST.",
         )
 
-    if kind == ".pdf":
-        text = await extract_text_from_pdf(body)
-    else:
-        text = await decode_text_bytes(body)
+    try:
+        if kind == ".pdf":
+            text = await extract_text_from_pdf(body)
+        elif kind == ".docx":
+            from docx import Document
+
+            document = Document(BytesIO(body))
+            parts = [paragraph.text.strip() for paragraph in document.paragraphs if paragraph.text.strip()]
+            for table in document.tables:
+                for row in table.rows:
+                    cells = [cell.text.strip() for cell in row.cells if cell.text.strip()]
+                    if cells:
+                        parts.append(" | ".join(cells))
+            text = "\n".join(parts)
+        elif kind == ".pptx":
+            from pptx import Presentation
+
+            presentation = Presentation(BytesIO(body))
+            parts = []
+            for slide in presentation.slides:
+                for shape in slide.shapes:
+                    if hasattr(shape, "text") and shape.text.strip():
+                        parts.append(shape.text.strip())
+            text = "\n".join(parts)
+        else:
+            text = await decode_text_bytes(body)
+    except Exception as exc:
+        logger.warning("Knowledge document extraction failed for %s: %s", filename, type(exc).__name__)
+        raise HTTPException(status_code=400, detail="Unable to extract text from this document.") from exc
 
     text = (text or "").strip()
     if not text:

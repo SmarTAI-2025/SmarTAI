@@ -22,7 +22,7 @@ Robustness:
     only on successes:
       * len(successes) == 0 → raise AllExpertsFailed (caller renders error)
       * len(successes) == 1 → degraded_to_single (no judge call, clean comment)
-      * len(successes) >= 2 → judge_agent → weighted_average fallback
+      * len(successes) >= 2 → configured judge/weighted synthesis
   - failures are still preserved in `expert_results` so the frontend can show
     *why* each one failed, but their comment text never bleeds into the main
     synthesized comment.
@@ -50,10 +50,10 @@ from typing import List, Optional, Tuple, TYPE_CHECKING
 from pydantic import BaseModel, Field
 
 from backend.config import settings as _settings
-from backend.models import Correction, ExpertResult, ProblemInfo, StudentAnswerInfo, StepScore
+from backend.models import Correction, ExpertResult, ProblemInfo, StudentAnswerInfo, StepScore, TaskGradingSetup
 from backend.llm.providers import BaseProvider
 from backend.llm.registry import ExpertRegistry
-from backend.skills.base import GradingSkill, get_skill_for_type
+from backend.skills.base import GradingSkill, build_system_prompt, get_skill_for_type
 from backend.tools.structured_llm import structured_llm_call
 
 if TYPE_CHECKING:
@@ -127,6 +127,8 @@ async def run_multi_expert(
     language: str = "en",
     task_id: Optional[str] = None,
     multi_sample_n: Optional[int] = None,
+    aggregation_method: Optional[str] = None,
+    grading_setup: Optional[TaskGradingSetup] = None,
 ) -> Correction:
     """
     Run the grading skill across all available experts in parallel.
@@ -189,7 +191,10 @@ async def run_multi_expert(
     # ── Single-shot fast path (legacy: 1 provider, effective_n == 1) ──────
     if mode == "single":
         provider = providers[0]
-        skill = skill_cls(provider, reporter=reporter, language=language, task_id=task_id)
+        skill = skill_cls(
+            provider, reporter=reporter, language=language, task_id=task_id,
+            grading_setup=grading_setup,
+        )
         expert_result = await skill.grade(problem, answer, student_id=student_id)
         # is_score is None (one sample → no variance signal); review flag stays
         # off here. Confidence-based review (`confidence < settings.confidence_threshold`)
@@ -209,7 +214,10 @@ async def run_multi_expert(
     )
 
     async def _run_one(provider: BaseProvider, sample_idx: int) -> ExpertResult:
-        skill = skill_cls(provider, reporter=reporter, language=language, task_id=task_id)
+        skill = skill_cls(
+            provider, reporter=reporter, language=language, task_id=task_id,
+            grading_setup=grading_setup,
+        )
         result = await skill.grade(problem, answer, student_id=student_id)
         # Tag duplicate provider IDs in multi-sample mode so the UI / logs can
         # tell them apart. We do this AFTER the skill returns so any internal
@@ -257,13 +265,30 @@ async def run_multi_expert(
         # gives the IS signal a clean number to anchor on.
         correction = _weighted_average_fallback(problem, successes)
         correction.synthesis_method = "multi_sample"
+    elif aggregation_method == "weighted_average":
+        correction = _weighted_average_fallback(problem, successes)
     else:
-        correction = await _synthesize(
-            problem=problem,
-            expert_results=successes,
-            synthesis_provider=providers[0],  # first provider drives the judge LLM call
-            language=language,
-        )
+        primary_provider = None
+        pick_default = getattr(registry, "pick_default", None)
+        if callable(pick_default):
+            primary_provider = pick_default()
+        if reporter:
+            await reporter._emit_message(
+                f"{student_id}/{problem.q_id}: synthesize_experts_started"
+            )
+        try:
+            correction = await _synthesize(
+                problem=problem,
+                expert_results=successes,
+                synthesis_provider=primary_provider or providers[0],
+                language=language,
+                grading_setup=grading_setup,
+            )
+        finally:
+            if reporter:
+                await reporter._emit_message(
+                    f"{student_id}/{problem.q_id}: synthesize_experts_finished"
+                )
 
     # Re-attach failures so the frontend can show why they failed.
     if failures:
@@ -350,6 +375,7 @@ async def _synthesize(
     expert_results: List[ExpertResult],
     synthesis_provider: BaseProvider,
     language: str = "en",
+    grading_setup: Optional[TaskGradingSetup] = None,
 ) -> Correction:
     """
     Combine multiple expert results into a final Correction.
@@ -368,13 +394,12 @@ async def _synthesize(
         )
     expert_summary = "\n".join(expert_summary_parts)
 
-    lang_instruction = "English" if language == "en" else "Chinese"
-
-    system_prompt = (
+    system_prompt = build_system_prompt(
         "You are a senior teaching coordinator synthesizing multiple expert opinions "
-        "on a student's answer. You must produce a fair, well-reasoned final grade. "
-        f"IMPORTANT: You MUST write your synthesis comment and steps in {lang_instruction}. "
-        "However, if the student's answer is in a different language, provide bilingual feedback (primary language + student's language)."
+        "on a student's answer. Produce a fair, well-reasoned final grade while "
+        "respecting the supplied rubric.",
+        language,
+        grading_setup,
     )
     user_prompt = (
         f"Problem type: {problem.type}\n"
@@ -418,8 +443,10 @@ async def _synthesize(
 
     except Exception as e:
         logger.warning(
-            f"Synthesis LLM call failed for q_id={problem.q_id}, "
-            f"falling back to weighted_average: {e}"
+            "Synthesis LLM call failed for q_id=%s; exception_type=%s; "
+            "falling back to weighted_average",
+            problem.q_id,
+            type(e).__name__,
         )
         return _weighted_average_fallback(problem, expert_results)
 

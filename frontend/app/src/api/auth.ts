@@ -1,4 +1,4 @@
-import { clearAuthToken, getJSON, postJSON, setAuthToken } from "./client";
+import { clearAuthToken, getAuthToken, getJSON, postJSON, setAuthToken } from "./client";
 import type { AuthResponse, LoginRequest, RefreshResponse, RegisterRequest, StatusResponse, User } from "@/types";
 
 export async function login(request: LoginRequest): Promise<AuthResponse> {
@@ -21,6 +21,16 @@ export async function refreshToken(): Promise<RefreshResponse> {
   const response = await postJSON<RefreshResponse>("/auth/refresh");
   setAuthToken(response.token);
   return response;
+}
+
+export async function restoreSession(): Promise<User> {
+  if (!getAuthToken()) {
+    const response = await refreshToken();
+    if (response.user) {
+      return response.user;
+    }
+  }
+  return getCurrentUser();
 }
 
 export async function logout(): Promise<StatusResponse> {

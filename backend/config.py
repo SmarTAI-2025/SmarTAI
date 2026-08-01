@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import os
 from typing import Optional, Literal
+from pydantic import model_validator
 from pydantic_settings import BaseSettings
 
 
@@ -68,6 +69,22 @@ class Settings(BaseSettings):
     llm_rate_limit_max_wait: int = 60
     context_window_threshold_chars: int = 200_000
 
+    # ─── History natural-language filter shared-pool safety ──────────────
+    # Deterministic parsing is always enabled. Optional LLM enhancement is a
+    # kill-switched shared-pool feature and stays OFF until explicitly enabled.
+    history_query_llm_enabled: bool = False
+    history_query_llm_daily_limit: int = 20
+    history_query_llm_cooldown_seconds: float = 10.0
+
+    # ─── Shared environment model pool safety ───────────────────────
+    # BYOK remains the default.  Environment keys are invisible to ordinary
+    # teachers unless this explicit kill switch is enabled.  When enabled,
+    # every actual provider invocation is charged to an in-process per-owner
+    # daily request + estimated-token budget.
+    shared_pool_enabled: bool = False
+    shared_pool_daily_request_limit: int = 100
+    shared_pool_daily_estimated_token_limit: int = 100_000
+
     # ─── Human-in-the-loop ─────────────────────────────────────────────────────
     confidence_threshold: float = 0.6  # below this, trigger human review
 
@@ -99,6 +116,43 @@ class Settings(BaseSettings):
     # ─── Progress reporting ────────────────────────────────────────────────────
     progress_ring_buffer_size: int = 200  # max events kept per job
 
+    # ─── Job recovery & maintenance (Task 4) ───────────────────────────────────
+    # Hard wall-clock cap on a single grading job. The periodic maintenance loop
+    # marks active jobs older than this (by created_at) as error so a wedged
+    # worker cannot hold a concurrency slot forever.
+    job_timeout_seconds: int = int(os.getenv("SMARTAI_JOB_TIMEOUT_SECONDS", "3600"))
+    # How often the per-worker maintenance loop runs recover_interrupted()/maintain().
+    job_maintenance_interval_seconds: int = int(
+        os.getenv("SMARTAI_JOB_MAINTENANCE_INTERVAL_SECONDS", "300")
+    )
+    # Completed/error jobs older than this (by completed_at) are pruned.
+    job_history_retention_seconds: int = int(
+        os.getenv("SMARTAI_JOB_HISTORY_RETENTION_SECONDS", str(30 * 24 * 3600))
+    )
+
+    # ─── Normalized grading-run worker (Task 7) ─────────────────────────────────
+    # Stable per-process identity used as the lease owner. Multiple processes
+    # each get their own id; the DB lease predicate makes concurrent claims safe.
+    grading_worker_id: str = os.getenv(
+        "SMARTAI_GRADING_WORKER_ID", f"worker-{os.getpid()}"
+    )
+    # How long a claimed run lease stays valid before another worker may reclaim.
+    grading_lease_seconds: int = int(os.getenv("SMARTAI_GRADING_LEASE_SECONDS", "300"))
+    # How often a worker renews its lease while a run is in progress.
+    grading_heartbeat_seconds: int = int(os.getenv("SMARTAI_GRADING_HEARTBEAT_SECONDS", "60"))
+    # How often the poller looks for queued runs to claim.
+    grading_poll_seconds: int = int(os.getenv("SMARTAI_GRADING_POLL_SECONDS", "5"))
+
+    # ─── OCR / vision ingest ───────────────────────────────────────────────────
+    ocr_default_provider: Literal["llm_vision", "mathpix"] = "llm_vision"
+    ocr_max_pdf_pages: int = 30
+    ocr_max_image_bytes: int = 10 * 1024 * 1024
+    ocr_render_dpi_scale: float = 2.0
+    ocr_concurrency: int = 2
+    ocr_text_min_chars: int = 50
+    mathpix_app_id: str = os.getenv("MATHPIX_APP_ID", "")
+    mathpix_app_key: str = os.getenv("MATHPIX_APP_KEY", "")
+
     # ─── Frontend ──────────────────────────────────────────────────────────────
     frontend_urls: str = os.getenv(
         "FRONTEND_URLS",
@@ -107,15 +161,49 @@ class Settings(BaseSettings):
     )
     backend_port: int = 8000
 
+    # Persistent application data. SQLite is convenient for local development;
+    # deployed environments should set this to a PostgreSQL URL.
+    # ON selects the heavier PostgreSQL deployment mode; OFF selects SQLite.
+    database_heavy: bool = os.getenv("SMARTAI_DATABASE_HEAVY", "OFF").strip().upper() == "ON"
+    # SMARTAI_DATABASE_URL remains a legacy single-URL fallback. Prefer the
+    # explicit light/heavy pair so changing only SMARTAI_DATABASE_HEAVY switches
+    # the selected database.
+    database_url: str = os.getenv("SMARTAI_DATABASE_URL", "")
+    database_url_light: str = os.getenv("SMARTAI_DATABASE_URL_LIGHT", "")
+    database_url_heavy: str = os.getenv("SMARTAI_DATABASE_URL_HEAVY", "")
+    database_auto_create: bool = os.getenv("SMARTAI_DATABASE_AUTO_CREATE", "true").lower() == "true"
+    storage_root: str = os.getenv("SMARTAI_STORAGE_ROOT", "data/uploads")
+    storage_backend: Literal["local", "object"] = os.getenv("SMARTAI_STORAGE_BACKEND", "local")  # type: ignore[assignment]
+    storage_s3_endpoint: Optional[str] = os.getenv("SMARTAI_STORAGE_S3_ENDPOINT", "")
+    storage_s3_bucket: Optional[str] = os.getenv("SMARTAI_STORAGE_S3_BUCKET", "")
+    storage_s3_region: str = os.getenv("SMARTAI_STORAGE_S3_REGION", "auto")
+    storage_s3_access_key: Optional[str] = os.getenv("SMARTAI_STORAGE_S3_ACCESS_KEY", "")
+    storage_s3_secret_key: Optional[str] = os.getenv("SMARTAI_STORAGE_S3_SECRET_KEY", "")
+
+    # Stable master key for encrypting user BYOK provider credentials. It must
+    # come from the process environment/secret manager and never from source
+    # control or the database.
+    provider_encryption_key: Optional[str] = os.getenv("SMARTAI_PROVIDER_ENCRYPTION_KEY", "")
+
     # ─── Auth (JWT) ────────────────────────────────────────────────────────────
     jwt_secret: str = os.getenv("JWT_SECRET", "smartai-dev-secret-change-in-prod")
     jwt_algorithm: str = "HS256"
-    jwt_expiry_hours: int = 24
+    jwt_expiry_minutes: int = 30
+    refresh_session_days: int = 30
+    refresh_cookie_name: str = "smartai_refresh"
+    refresh_cookie_secure: bool = os.getenv("SMARTAI_REFRESH_COOKIE_SECURE", "false").lower() == "true"
+    refresh_cookie_samesite: Literal["lax", "strict", "none"] = os.getenv("SMARTAI_REFRESH_COOKIE_SAMESITE", "lax")  # type: ignore[assignment]
 
     # If true, requests without a valid token are rejected by protected
     # endpoints. If false (dev default), missing tokens are silently mapped
     # to an "anonymous" user so the legacy non-auth flow still works.
     require_auth: bool = os.getenv("SMARTAI_REQUIRE_AUTH", "false").lower() == "true"
+
+    # Synthetic demo tokens are forgeable and must only be enabled explicitly
+    # for local/E2E workflows. Real JWT authentication remains the default.
+    allow_demo_tokens: bool = os.getenv("SMARTAI_ALLOW_DEMO_TOKENS", "false").lower() == "true"
+    e2e_fake_provider: bool = os.getenv("SMARTAI_E2E_FAKE_PROVIDER", "false").lower() == "true"
+    e2e_fail_qid: str = os.getenv("SMARTAI_E2E_FAIL_QID", "")
 
     # If true, /auth/register is closed; requests get a 403 with "registration
     # closed" message. Demo accounts are seeded from `test_users_file` instead.
@@ -126,6 +214,25 @@ class Settings(BaseSettings):
     # The file MUST be gitignored — keep credentials out of the repo. Generate
     # via `python scripts/generate_test_users.py` (creates 50 random accounts).
     test_users_file: str = os.getenv("SMARTAI_TEST_USERS_FILE", "data/test_users.json")
+    seed_test_users: bool = os.getenv("SMARTAI_SEED_TEST_USERS", "true").lower() == "true"
+
+    @model_validator(mode="after")
+    def resolve_database_url(self) -> "Settings":
+        process_legacy_url = os.getenv("SMARTAI_DATABASE_URL", "").strip()
+        process_light_url = os.getenv("SMARTAI_DATABASE_URL_LIGHT", "").strip()
+        process_heavy_url = os.getenv("SMARTAI_DATABASE_URL_HEAVY", "").strip()
+        legacy_url = process_legacy_url or self.database_url.strip()
+        light_url = self.database_url_light.strip()
+        heavy_url = self.database_url_heavy.strip()
+        if process_legacy_url and not (process_light_url or process_heavy_url):
+            light_url = process_legacy_url if process_legacy_url.startswith("sqlite") else light_url
+            heavy_url = process_legacy_url if process_legacy_url.startswith(("postgresql://", "postgresql+")) else heavy_url
+        if not light_url:
+            light_url = legacy_url if legacy_url.startswith("sqlite") else "sqlite:///data/smartai.db"
+        if not heavy_url and legacy_url.startswith(("postgresql://", "postgresql+")):
+            heavy_url = legacy_url
+        self.database_url = heavy_url if self.database_heavy else light_url
+        return self
 
     model_config = {"env_prefix": "SMARTAI_", "env_file": ".env", "extra": "ignore"}
 

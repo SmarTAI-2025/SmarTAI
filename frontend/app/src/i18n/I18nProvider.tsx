@@ -1,4 +1,4 @@
-import { createContext, useContext, useMemo, useState, type ReactNode } from "react";
+import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
 import { messages, type Locale, type MessageKey } from "@/i18n/messages";
 
 const LOCALE_KEY = "smartai_locale";
@@ -18,6 +18,10 @@ function getInitialLocale(): Locale {
 
 export function I18nProvider({ children }: { children: ReactNode }) {
   const [locale, setLocaleState] = useState<Locale>(getInitialLocale);
+
+  useEffect(() => {
+    document.documentElement.lang = locale;
+  }, [locale]);
 
   const value = useMemo<I18nContextValue>(() => {
     function setLocale(next: Locale) {
@@ -42,4 +46,3 @@ export function useI18n() {
   }
   return context;
 }
-

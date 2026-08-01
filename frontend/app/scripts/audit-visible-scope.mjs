@@ -14,12 +14,34 @@ const scanEntries = [
   { relativePath: "src/i18n/messages.ts", required: false },
 ];
 
+// These normalized workspaces are intentionally retained as dormant source so
+// they can continue to typecheck while the Figma presentation remains the only
+// production surface. They are audited by the router/import checks below, not
+// as user-visible copy, because the default entry point must never import them.
+const dormantVisibleSourcePrefixes = [
+  "src/routes/admin/",
+  "src/routes/student/",
+  "src/routes/teacher/",
+];
+const dormantVisibleSourceFiles = new Set([
+  "src/components/auth/RequireRoleSession.tsx",
+  "src/components/layout/nav.ts",
+]);
+
 const hiddenDisclaimerPattern =
   /保持隐藏|隐藏预留|暂未开放|尚未开放|未开放|不可用|不展示|不提供|not available|hidden|unavailable/i;
 const futureCapabilityDisclaimerPattern =
   /前端先行|前端清单|前端预览|待后端接入|后端.*待接入|不参与当前批改|不会.*参与批改|does not.*participate|backend.*pending|preview/i;
+const rawChineseJsxTextPattern = />\s*[\u3400-\u9fff][^<{]*</;
+const rawChineseLiteralPropPattern =
+  /\b(?:aria-label|title|description|placeholder|label|hint|message|alt)\s*=\s*(["'`])[^"'`\n]*[\u3400-\u9fff][^"'`\n]*\1/;
 
 const visibleTextRules = [
+  {
+    id: "visible-developer-jargon",
+    description: "Do not expose implementation-pending or in-memory developer language to teachers.",
+    pattern: /待后端|后端.{0,12}待接入|前端先行|前端预览|内存索引|in-memory (?:index|state)|backend.{0,30}pending|server persistence.{0,30}pending/i,
+  },
   {
     id: "visible-lms-integration",
     description: "Do not show LMS/LTI/Canvas/Moodle integration as a visible capability.",
@@ -43,12 +65,6 @@ const visibleTextRules = [
     description: "Do not show a student workspace beyond the unavailable notice.",
     pattern: /学生端工作台|学生端入口|学生端 Dashboard|student (?:dashboard|workspace|portal)/i,
     allowHiddenDisclaimer: true,
-  },
-  {
-    id: "visible-grading-language",
-    description: "Do not show grading-language selection.",
-    pattern: /批改语言|评语语言|学科语言|grading[-\s]?language|feedback[-\s]?language/i,
-    allowHiddenDisclaimer: false,
   },
   {
     id: "visible-global-kb",
@@ -116,7 +132,14 @@ async function collectVisibleFiles() {
       continue;
     }
     for (const filePath of await walkFiles(absolutePath)) {
-      files.add(filePath);
+      const relativePath = toRelative(filePath);
+      const isTestSource = /\.test\.(?:tsx?|jsx?)$/.test(relativePath);
+      const isDormantSource =
+        dormantVisibleSourceFiles.has(relativePath) ||
+        dormantVisibleSourcePrefixes.some((prefix) => relativePath.startsWith(prefix));
+      if (!isTestSource && !isDormantSource) {
+        files.add(filePath);
+      }
     }
   }
 
@@ -137,9 +160,73 @@ function isAllowedVisibleText(relativePath, line, rule) {
   }
 
   if (
-    rule.id === "visible-global-kb" &&
-    (relativePath === "src/routes/KnowledgeBasePage.tsx" || relativePath === "src/routes/tasks/TaskSetupPage.tsx")
+    rule.id === "visible-course-management" &&
+    relativePath === "src/i18n/messages.ts" &&
+    /^\s*(?:(?:knowledgeBase|courseLibrary):\s*"Course Library"|dashboardColumnCourseTags:\s*"Course \/ Tags"|history(?:SearchPlaceholder|Course|AllCourses|CourseUnset):),?/.test(line)
   ) {
+    return true;
+  }
+
+  if (
+    rule.id === "visible-course-management" &&
+    (
+      relativePath === "src/routes/tasks/AddProblemsPage.tsx"
+      || relativePath === "src/routes/tasks/QuestionMaterialImportPage.tsx"
+      || relativePath === "src/routes/tasks/GradingSetupPage.tsx"
+      || relativePath.startsWith("src/api/problemSources")
+      || relativePath.startsWith("src/api/hooks/problemSources")
+      || relativePath === "src/types/problemSources.ts"
+      || (relativePath === "src/i18n/messages.ts" && /^\s*addProblems/.test(line))
+    )
+  ) {
+    // Q-01, Q-08, and grading setup may select real owner-scoped course-library
+    // material for the current task. They do not expose enrollment or publishing.
+    return true;
+  }
+
+  if (
+    rule.id === "visible-course-management" &&
+    (relativePath.startsWith("src/components/history/") || relativePath === "src/routes/HistoryPage.tsx")
+  ) {
+    // History exposes course metadata and filtering backed by the task API. It
+    // does not expose course CRUD, publishing, enrollment, or a course route.
+    return true;
+  }
+
+  if (
+    rule.id === "visible-course-management" &&
+    (
+      relativePath.startsWith("src/components/knowledge-base/")
+      || relativePath === "src/routes/KnowledgeBasePage.tsx"
+      || relativePath.startsWith("src/components/new-task/")
+      || relativePath === "src/routes/NewTaskPage.tsx"
+      || (relativePath === "src/i18n/messages.ts" && /^\s*newTask/.test(line))
+    )
+  ) {
+    // New Task may select/create course metadata, and Course Library may use
+    // that metadata to organize materials. Neither exposes enrollment,
+    // assignment publishing, or a standalone course-management route.
+    return true;
+  }
+
+  if (
+    rule.id === "visible-global-kb" &&
+    (
+      relativePath === "src/routes/KnowledgeBasePage.tsx"
+      || relativePath.startsWith("src/components/knowledge-base/")
+      || relativePath === "src/routes/tasks/TaskSetupPage.tsx"
+    )
+  ) {
+    return true;
+  }
+
+  if (
+    rule.id === "visible-lms-integration" &&
+    relativePath === "src/routes/tasks/results/VisualizationAnalysisPage.tsx" &&
+    /(?:createElement\(["']canvas["']\)|\bcanvas\.(?:width|height|toBlob|getContext))/.test(line)
+  ) {
+    // Browser Canvas is used only to rasterize an already-rendered SVG for
+    // PNG download. It is unrelated to the Canvas LMS product capability.
     return true;
   }
 
@@ -163,6 +250,17 @@ function auditVisibleText(relativePath, content) {
       return;
     }
 
+    if (rawChineseJsxTextPattern.test(line) || rawChineseLiteralPropPattern.test(line)) {
+      findings.push({
+        type: "visible-text",
+        file: relativePath,
+        line: index + 1,
+        rule: "raw-unlocalized-chinese",
+        message: "User-visible Chinese JSX text must select a locale-aware alternative.",
+        excerpt: line.trim().replace(/\s+/g, " "),
+      });
+    }
+
     for (const rule of visibleTextRules) {
       if (rule.pattern.test(line) && !isAllowedVisibleText(relativePath, line, rule)) {
         findings.push({
@@ -176,6 +274,52 @@ function auditVisibleText(relativePath, content) {
       }
     }
   });
+
+  return findings;
+}
+
+function auditInteractionMarkup(relativePath, content) {
+  const findings = [];
+  const nestedInteractivePattern =
+    /<(?:Link|a)\b[^>]*>\s*<(?:Button|button)\b|<(?:Button|button)\b[^>]*>\s*<(?:Link|a)\b/g;
+  const nativeButtonPattern = /<button\b[^>]*>/gs;
+  const interactiveTagPattern = /<(?:button|a|Link|input|select|textarea)\b[^>]*>/gs;
+  let match;
+
+  while ((match = nestedInteractivePattern.exec(content)) !== null) {
+    findings.push({
+      type: "interaction",
+      file: relativePath,
+      line: lineNumberAt(content, match.index),
+      rule: "nested-interactive-control",
+      message: "Links and buttons must not be nested inside one another.",
+      excerpt: match[0].replace(/\s+/g, " "),
+    });
+  }
+
+  while ((match = nativeButtonPattern.exec(content)) !== null) {
+    if (/\btype\s*=/.test(match[0])) continue;
+    findings.push({
+      type: "interaction",
+      file: relativePath,
+      line: lineNumberAt(content, match.index),
+      rule: "native-button-type",
+      message: "Native buttons must declare an explicit type.",
+      excerpt: match[0].replace(/\s+/g, " "),
+    });
+  }
+
+  while ((match = interactiveTagPattern.exec(content)) !== null) {
+    if (!match[0].includes("outline-none") || /\bfocus(?:-visible)?:/.test(match[0])) continue;
+    findings.push({
+      type: "interaction",
+      file: relativePath,
+      line: lineNumberAt(content, match.index),
+      rule: "missing-focus-indicator",
+      message: "Interactive controls that remove the default outline must add an explicit focus indicator.",
+      excerpt: match[0].replace(/\s+/g, " "),
+    });
+  }
 
   return findings;
 }
@@ -220,7 +364,14 @@ function auditRouter(content) {
       const hasAllowedStudentRoute = /\{\s*path\s*:\s*(["'`])\/student\1\s*,\s*element\s*:\s*<StudentUnavailablePage\s*\/>\s*\}/s.test(
         content,
       );
-      if (routePath !== "/student" || !hasAllowedStudentRoute) {
+      // This nested task route is a teacher-only review surface protected by
+      // RequireTeacherSession, not a student portal or student workspace.
+      const isTeacherTaskReviewRoute = [
+        "tasks/:taskId/students/:studentId",
+        "tasks/:taskId/results/students",
+        "tasks/:taskId/results/students/:studentId",
+      ].includes(routePath);
+      if ((routePath !== "/student" || !hasAllowedStudentRoute) && !isTeacherTaskReviewRoute) {
         findings.push({
           type: "route",
           file: "src/main.tsx",
@@ -231,6 +382,38 @@ function auditRouter(content) {
         });
       }
     }
+  }
+
+  return findings;
+}
+
+function auditProductionComposition(mainContent, appShellContent) {
+  const findings = [];
+  const forbiddenMainImportPattern =
+    /(?:from\s+["']@\/routes\/(?:admin|student|teacher)\/|import\(\s*["'][^"']*\/routes\/(?:admin|student|teacher)\/|RequireRoleSession|@\/components\/layout\/nav)/g;
+  let match;
+
+  while ((match = forbiddenMainImportPattern.exec(mainContent)) !== null) {
+    findings.push({
+      type: "composition",
+      file: "src/main.tsx",
+      line: lineNumberAt(mainContent, match.index),
+      rule: "dormant-workspace-imported",
+      message: "The production entry point must not import a dormant normalized workspace.",
+      excerpt: match[0].replace(/\s+/g, " "),
+    });
+  }
+
+  const normalizedNavPattern = /@\/components\/layout\/nav|\.\/nav/g;
+  while ((match = normalizedNavPattern.exec(appShellContent)) !== null) {
+    findings.push({
+      type: "composition",
+      file: "src/components/layout/AppShell.tsx",
+      line: lineNumberAt(appShellContent, match.index),
+      rule: "normalized-nav-in-figma-shell",
+      message: "The Figma AppShell must not import the dormant normalized navigation.",
+      excerpt: match[0],
+    });
   }
 
   return findings;
@@ -261,11 +444,15 @@ for (const filePath of files) {
   const relativePath = toRelative(filePath);
   const content = await readFile(filePath, "utf8");
   findings.push(...auditVisibleText(relativePath, content));
+  findings.push(...auditInteractionMarkup(relativePath, content));
 }
 
 const mainContent = await pathExists(mainFile).then((mainStat) => (mainStat ? readFile(mainFile, "utf8") : null));
 if (mainContent) {
   findings.push(...auditRouter(mainContent));
+  const appShellFile = path.join(srcRoot, "components/layout/AppShell.tsx");
+  const appShellContent = await readFile(appShellFile, "utf8");
+  findings.push(...auditProductionComposition(mainContent, appShellContent));
 }
 
 if (findings.length > 0) {
@@ -277,5 +464,5 @@ if (findings.length > 0) {
   console.log("PASS visible scope audit");
   console.log(`Scanned ${files.length} user-visible source files.`);
   console.log("Checked Router paths for hidden LMS/course/assignment integrations.");
-  console.log("No visible LMS, course, assignment publishing, grading-language, or unsupported KB claims found.");
+  console.log("No visible LMS, unsupported course management, assignment publishing, or unsupported KB claims found.");
 }

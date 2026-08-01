@@ -19,7 +19,7 @@ from pydantic import BaseModel, Field
 from typing import List
 
 from backend.skills.base import GradingSkill, build_system_prompt, register_skill
-from backend.models import ExpertResult, ProblemInfo, StudentAnswerInfo, StepScore
+from backend.models import ExpertResult, ProblemInfo, StudentAnswerInfo, StepScore, TaskGradingSetup
 from backend.llm.providers import BaseProvider
 from backend.tools.structured_llm import structured_llm_call
 from backend.tools import knowledge as kb_tool
@@ -106,8 +106,12 @@ class ConceptSkill(GradingSkill):
         reporter: Optional["ProgressReporter"] = None,
         language: str = "en",
         task_id: Optional[str] = None,
+        grading_setup: Optional[TaskGradingSetup] = None,
     ):
-        super().__init__(provider, reporter=reporter, language=language, task_id=task_id)
+        super().__init__(
+            provider, reporter=reporter, language=language, task_id=task_id,
+            grading_setup=grading_setup,
+        )
         self._template = _load_template()
 
     async def grade(
@@ -158,6 +162,7 @@ class ConceptSkill(GradingSkill):
                 "Walk through the 4-step reasoning workflow specified in the user prompt "
                 "and produce a structured per-dimension score.",
                 self.language,
+                self.grading_setup,
             )
 
             try:
@@ -196,7 +201,10 @@ class ConceptSkill(GradingSkill):
                 )
 
             except Exception as e:
-                logger.error(f"ConceptSkill LLM call failed: {e}")
+                logger.error(
+                    "ConceptSkill LLM call failed; exception_type=%s",
+                    type(e).__name__,
+                )
                 from backend.skills.base import classify_skill_error
                 kind, friendly = classify_skill_error(e)
                 return self._blank_result(

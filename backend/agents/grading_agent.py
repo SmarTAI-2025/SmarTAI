@@ -16,9 +16,10 @@ import logging
 import time
 from typing import Dict, Any, List, Optional, TYPE_CHECKING
 
-from backend.models import Correction, ProblemInfo, StudentAnswerInfo
+from backend.models import Correction, ProblemInfo, StudentAnswerInfo, TaskGradingSetup
 from backend.llm.registry import ExpertRegistry
 from backend.agents.multi_expert import run_multi_expert, AllExpertsFailed
+from backend.skills.base import format_deterministic_feedback
 
 if TYPE_CHECKING:
     from backend.progress.tracker import ProgressReporter
@@ -27,6 +28,91 @@ if TYPE_CHECKING:
 from backend.skills import concept, calculation, proof, programming  # noqa: F401
 
 logger = logging.getLogger(__name__)
+
+
+def _apply_low_confidence_policy(
+    correction: Correction,
+    grading_setup: Optional[TaskGradingSetup],
+) -> Correction:
+    """Apply the teacher's deterministic review threshold after model work."""
+
+    if (
+        grading_setup is not None
+        and correction.confidence < grading_setup.low_confidence_threshold
+    ):
+        correction.requires_human_review = True
+        if "low_confidence" not in correction.review_reasons:
+            correction.review_reasons.append("low_confidence")
+    return correction
+
+
+def _grading_failure_feedback(
+    kind: str,
+    grading_setup: Optional[TaskGradingSetup],
+) -> str:
+    """Return a stable, C-01-aware message for a deterministic failure path."""
+
+    messages = {
+        "quota_exhausted": {
+            "zh_message": "该题因所有 AI 专家达到 API 调用配额而暂未批改。",
+            "en_message": "This item was not graded because all AI experts reached their API quota.",
+            "zh_detail": "当前模型的每分钟调用额度已耗尽。",
+            "en_detail": "The active models exhausted their per-minute request allowance.",
+            "zh_suggestion": "请稍候重试，或在模型设置中检查该专家的 RPM 与并发限制。",
+            "en_suggestion": "Retry later, or check this expert's RPM and concurrency limits in model settings.",
+            "legacy_message": (
+                "⏳ 该题暂未批改完成 — 所有 AI 专家都遇到了 API 每分钟调用配额上限。\n"
+                "请稍候片刻后在「批改」页重试，或在 BYOK 设置里把该专家的 "
+                "RPM / max_concurrent 调高（免费档常见为 15 RPM）。"
+            ),
+        },
+        "transient_llm": {
+            "zh_message": "该题因所有 AI 专家均发生网络或超时错误而暂未批改。",
+            "en_message": "This item was not graded because every AI expert encountered a network or timeout error.",
+            "zh_detail": "本次失败未产生有效评分。",
+            "en_detail": "This attempt did not produce a valid score.",
+            "zh_suggestion": "请稍后重试；如反复出现，请检查代理或网络配置。",
+            "en_suggestion": "Retry later; if the issue persists, check the proxy and network configuration.",
+            "legacy_message": (
+                "🌐 该题暂未批改完成 — 所有 AI 专家都出现了网络或超时错误。\n"
+                "请稍后重试；如反复出现，请检查代理 / 网络配置。"
+            ),
+        },
+        "parse_failed": {
+            "zh_message": "该题因所有 AI 专家的返回内容均无法解析而暂未批改。",
+            "en_message": "This item was not graded because none of the AI expert responses could be parsed.",
+            "zh_detail": "本次失败未产生有效评分。",
+            "en_detail": "This attempt did not produce a valid score.",
+            "zh_suggestion": "请稍后重试，或在模型设置中更换更稳定的模型。",
+            "en_suggestion": "Retry later, or choose a more reliable model in model settings.",
+            "legacy_message": (
+                "⚠ 该题暂未批改完成 — 所有 AI 专家返回的内容均无法解析。\n"
+                "请稍后重试，或在 BYOK 设置里更换一个更稳定的模型。"
+            ),
+        },
+        "general": {
+            "zh_message": "所有 AI 专家均未能完成该题批改。",
+            "en_message": "None of the AI experts could complete grading for this item.",
+            "zh_detail": "本次失败未产生有效评分。",
+            "en_detail": "This attempt did not produce a valid score.",
+            "zh_suggestion": "请检查模型配置后重新批改。",
+            "en_suggestion": "Check the model configuration and grade this item again.",
+            "legacy_message": "⚠ 所有 AI 专家批改失败 — 请检查 BYOK 配置后重新批改。",
+        },
+        "unknown": {
+            "zh_message": "该题批改时发生未知错误。",
+            "en_message": "An unexpected error occurred while grading this item.",
+            "zh_detail": "本次失败未产生有效评分。",
+            "en_detail": "This attempt did not produce a valid score.",
+            "zh_suggestion": "请稍后重试；如反复出现，请检查模型配置。",
+            "en_suggestion": "Retry later; if the issue persists, check the model configuration.",
+            "legacy_message": "⚠ 该题批改时发生未知错误，请稍后重试。",
+        },
+    }
+    return format_deterministic_feedback(
+        grading_setup,
+        **messages.get(kind, messages["unknown"]),
+    )
 
 
 async def grade_student(
@@ -38,6 +124,8 @@ async def grade_student(
     language: str = "en",
     task_id: Optional[str] = None,
     multi_sample_n: Optional[int] = None,
+    aggregation_method: Optional[str] = None,
+    grading_setup: Optional[TaskGradingSetup] = None,
 ) -> Dict[str, Any]:
     """
     Grade all answers from a single student submission.
@@ -77,13 +165,17 @@ async def grade_student(
         q_id = ans_raw.get("q_id")
         problem_raw = problem_store.get(q_id)
         if problem_raw is None:
-            logger.warning(f"Problem {q_id} not in problem_store, skipping")
+            logger.warning("Question missing from grading input; q_id=%s", q_id)
             continue
 
         try:
             problem = ProblemInfo(**problem_raw)
         except Exception as e:
-            logger.error(f"Invalid problem data for {q_id}: {e}")
+            logger.error(
+                "Invalid problem data for q_id=%s; exception_type=%s",
+                q_id,
+                type(e).__name__,
+            )
             continue
 
         try:
@@ -95,7 +187,11 @@ async def grade_student(
                 flag=ans_raw.get("flag", []),
             )
         except Exception as e:
-            logger.error(f"Invalid answer data for {q_id}: {e}")
+            logger.error(
+                "Invalid answer data for q_id=%s; exception_type=%s",
+                q_id,
+                type(e).__name__,
+            )
             continue
 
         tasks.append(_grade_single_answer(
@@ -107,6 +203,8 @@ async def grade_student(
             language=language,
             task_id=task_id,
             multi_sample_n=multi_sample_n,
+            aggregation_method=aggregation_method,
+            grading_setup=grading_setup,
         ))
 
     # Run all questions for this student concurrently
@@ -115,7 +213,10 @@ async def grade_student(
     final_corrections: List[Correction] = []
     for c in corrections:
         if isinstance(c, Exception):
-            logger.error(f"Grading task for {student_id} raised: {c}")
+            logger.error(
+                "Per-question grading task failed; exception_type=%s",
+                type(c).__name__,
+            )
             continue
         final_corrections.append(c)
 
@@ -137,6 +238,8 @@ async def _grade_single_answer(
     language: str = "en",
     task_id: Optional[str] = None,
     multi_sample_n: Optional[int] = None,
+    aggregation_method: Optional[str] = None,
+    grading_setup: Optional[TaskGradingSetup] = None,
 ) -> Correction:
     """Grade a single (problem, answer) pair. Wraps MultiExpertAgent."""
     try:
@@ -150,6 +253,8 @@ async def _grade_single_answer(
             language=language,
             task_id=task_id,
             multi_sample_n=multi_sample_n,
+            aggregation_method=aggregation_method,
+            grading_setup=grading_setup,
         )
         duration = (time.perf_counter() - t0) * 1000
         logger.info(
@@ -159,45 +264,30 @@ async def _grade_single_answer(
         )
         if reporter:
             await reporter.increment_completed()
-        return correction
+        return _apply_low_confidence_policy(correction, grading_setup)
     except AllExpertsFailed as e:
         # Every expert returned a blank/failed result. Produce a Correction
-        # with a friendly Chinese comment + synthesis_method that the frontend
+        # with policy-aware fallback feedback + synthesis_method that the frontend
         # can render distinctly. We deliberately do NOT splice the raw English
         # error text (e.g. "Quota exceeded for metric: …") into the comment —
         # teachers should see actionable guidance, not stack traces. The raw
         # per-expert reasons remain in `expert_results` for ops triage.
         logger.error(
-            f"All experts failed for {student_id}/{problem.q_id} "
-            f"[dominant={e.dominant_kind}]: {e}"
+            "All experts failed for grading item; dominant_kind=%s",
+            e.dominant_kind,
         )
         if e.dominant_kind == "quota_exhausted":
             synthesis_method = "quota_exhausted"
-            comment = (
-                "⏳ 该题暂未批改完成 — 所有 AI 专家都遇到了 API 每分钟调用配额上限。\n"
-                "请稍候片刻后在「批改」页重试，或在 BYOK 设置里把该专家的 "
-                "RPM / max_concurrent 调高（免费档常见为 15 RPM）。"
-            )
         elif e.dominant_kind == "transient_llm":
             synthesis_method = "all_failed"
-            comment = (
-                "🌐 该题暂未批改完成 — 所有 AI 专家都出现了网络或超时错误。\n"
-                "请稍后重试；如反复出现，请检查代理 / 网络配置。"
-            )
         elif e.dominant_kind == "parse_failed":
             synthesis_method = "all_failed"
-            comment = (
-                "⚠ 该题暂未批改完成 — 所有 AI 专家返回的内容均无法解析。\n"
-                "请稍后重试，或在 BYOK 设置里更换一个更稳定的模型。"
-            )
         else:
             synthesis_method = "all_failed"
-            comment = (
-                "⚠ 所有 AI 专家批改失败 — 请检查 BYOK 配置后重新批改。"
-            )
+        comment = _grading_failure_feedback(e.dominant_kind, grading_setup)
         if reporter:
             await reporter.increment_completed()
-        return Correction(
+        return _apply_low_confidence_policy(Correction(
             q_id=problem.q_id,
             type=problem.type,
             score=0.0,
@@ -207,21 +297,24 @@ async def _grade_single_answer(
             steps=[],
             expert_results=e.failures,
             synthesis_method=synthesis_method,
-        )
+        ), grading_setup)
     except Exception as e:
-        logger.exception(f"Error grading {student_id}/{problem.q_id}")
+        logger.error(
+            "Error grading student/q_id; exception_type=%s",
+            type(e).__name__,
+        )
         # Return a zero-score Correction so the batch doesn't silently drop.
         # Keep the comment friendly — raw stack traces don't belong in a batch.
-        return Correction(
+        return _apply_low_confidence_policy(Correction(
             q_id=problem.q_id,
             type=problem.type,
             score=0.0,
             max_score=10.0,
             confidence=0.0,
-            comment="⚠ 该题批改时发生未知错误，请稍后重试。",
+            comment=_grading_failure_feedback("unknown", grading_setup),
             steps=[],
             synthesis_method="all_failed",
-        )
+        ), grading_setup)
 
 
 async def grade_batch(
@@ -233,6 +326,8 @@ async def grade_batch(
     language: str = "en",
     task_id: Optional[str] = None,
     multi_sample_n: Optional[int] = None,
+    aggregation_method: Optional[str] = None,
+    grading_setup: Optional[TaskGradingSetup] = None,
 ) -> List[Dict[str, Any]]:
     """
     Grade all students in student_store concurrently.
@@ -262,6 +357,8 @@ async def grade_batch(
             language=language,
             task_id=task_id,
             multi_sample_n=multi_sample_n,
+            aggregation_method=aggregation_method,
+            grading_setup=grading_setup,
         )
         for sd in student_store.values()
         if sd.get("stu_id")
@@ -271,7 +368,10 @@ async def grade_batch(
     final: List[Dict[str, Any]] = []
     for r in results:
         if isinstance(r, Exception):
-            logger.error(f"grade_batch task failed: {r}")
+            logger.error(
+                "Student grading task failed; exception_type=%s",
+                type(r).__name__,
+            )
             continue
         final.append(r)
 

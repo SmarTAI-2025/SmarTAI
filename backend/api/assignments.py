@@ -1,22 +1,25 @@
-"""Assignments API router — CRUD + publish + submit + my_submission + my_grade."""
+"""Assignments API router — assignment + question resource endpoints.
+
+Authorization and the question/publish state machine live in the service and
+repository; this router maps request shapes to service calls and translates
+DomainError into the stable error envelope. Optimistic-lock version is carried
+in the request body (``expected_version``) and a mismatch surfaces as 409
+``version_conflict``. Student submission endpoints are added in Task 5.
+"""
 from __future__ import annotations
 
-import time
-import uuid
-from typing import Any, Dict, Optional
+from typing import List, Optional
 
-from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
+from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from pydantic import BaseModel
 
-from backend.auth import get_current_user, require_student, require_teacher
-from backend.models import Assignment, Submission, User
-from backend.state import (
-    get_assignment_store,
-    get_course_store,
-    get_submission_by_assignment_student,
-    get_submission_store,
-    index_submission,
-)
+from backend.auth import get_current_user, require_teacher
+from backend.api.errors import domain_error_response
+from backend.domain.errors import DomainError
+from backend.llm.registry import ExpertRegistry, get_scoped_expert_registry
+from backend.models import User
+from backend.services import assignments as assignment_service
+from backend.skills.ocr_ingest import LLMVisionOCRSkill
 
 router = APIRouter(prefix="/assignments", tags=["assignments"])
 
@@ -26,154 +29,158 @@ class CreateAssignmentRequest(BaseModel):
     name: str
     description: str = ""
     due_at: Optional[float] = None
-    problem_data: Dict[str, Dict[str, Any]] = {}
 
 
-@router.post("/")
+class AddQuestionRequest(BaseModel):
+    q_id: str
+    order_index: int = 0
+    number: str = ""
+    type: str
+    stem: str = ""
+    criterion: str = ""
+    max_score: float = 10.0
+    reference_answer: Optional[str] = None
+    test_cases: Optional[List[dict]] = None
+    source: Optional[dict] = None
+
+
+class ReorderRequest(BaseModel):
+    ordered_q_ids: List[str]
+
+
+class PublishRequest(BaseModel):
+    expected_version: int
+
+
+@router.post("")
 def create_assignment(req: CreateAssignmentRequest, current: User = Depends(require_teacher)):
-    course = get_course_store().get(req.course_id)
-    if course is None or (current.role != "admin" and course.teacher_id != current.id):
-        raise HTTPException(status.HTTP_403_FORBIDDEN, detail="Not your course")
-    a = Assignment(
-        id=f"a_{uuid.uuid4().hex[:10]}",
-        course_id=req.course_id,
-        teacher_id=current.id,
-        name=req.name,
-        description=req.description,
-        due_at=req.due_at,
-        problem_data=req.problem_data,
-    )
-    get_assignment_store()[a.id] = a
-    return _serialize(a, current)
+    try:
+        a = assignment_service.create_assignment(
+            teacher_id=current.id, course_id=req.course_id, name=req.name,
+            description=req.description, due_at=req.due_at,
+        )
+    except DomainError as exc:
+        return domain_error_response(exc)
+    return _serialize_assignment(a)
 
 
-@router.get("/")
-def list_assignments(course_id: Optional[str] = None, status_filter: Optional[str] = None,
-                     current: User = Depends(get_current_user)):
-    store = get_assignment_store()
-    items: list[Assignment] = list(store.values())
-    if course_id:
-        items = [a for a in items if a.course_id == course_id]
-    if status_filter:
-        items = [a for a in items if a.status == status_filter]
-    if current.role == "student":
-        # Students only see published assignments in courses they're enrolled in
-        items = [a for a in items if a.status == "published" and a.course_id in current.course_ids]
-    elif current.role == "teacher":
-        items = [a for a in items if a.teacher_id == current.id]
-    return [_serialize(a, current) for a in items]
+@router.get("")
+def list_assignments(course_id: Optional[str] = None, current: User = Depends(get_current_user)):
+    try:
+        items = assignment_service.list_assignments(
+            course_id=course_id, actor_id=current.id, role=current.role
+        )
+    except DomainError as exc:
+        return domain_error_response(exc)
+    return [_serialize_assignment(a) for a in items]
 
 
 @router.get("/{assignment_id}")
 def get_assignment(assignment_id: str, current: User = Depends(get_current_user)):
-    a = _get_or_404(assignment_id)
-    _check_view(a, current)
-    out = _serialize(a, current)
-    out["problem_data"] = a.problem_data
-    return out
+    try:
+        a = assignment_service.get_assignment(
+            assignment_id=assignment_id, actor_id=current.id, role=current.role
+        )
+    except DomainError as exc:
+        return domain_error_response(exc)
+    return _serialize_assignment(a)
+
+
+@router.get("/{assignment_id}/questions")
+def list_questions(assignment_id: str, current: User = Depends(get_current_user)):
+    try:
+        questions = assignment_service.list_questions(
+            assignment_id=assignment_id, actor_id=current.id, role=current.role
+        )
+    except DomainError as exc:
+        return domain_error_response(exc)
+    serializer = (
+        _serialize_student_question if current.role == "student" else _serialize_question
+    )
+    return [serializer(q) for q in questions]
+
+
+@router.post("/{assignment_id}/questions")
+def add_question(assignment_id: str, req: AddQuestionRequest, current: User = Depends(require_teacher)):
+    try:
+        q = assignment_service.add_question(
+            assignment_id=assignment_id, teacher_id=current.id, q_id=req.q_id,
+            order_index=req.order_index, number=req.number, type=req.type, stem=req.stem,
+            criterion=req.criterion, max_score=req.max_score, reference_answer=req.reference_answer,
+            test_cases=req.test_cases, source=req.source,
+        )
+    except DomainError as exc:
+        return domain_error_response(exc)
+    return _serialize_question(q)
+
+
+@router.post("/{assignment_id}/questions/import-file")
+async def import_questions_file(
+    assignment_id: str,
+    file: UploadFile = File(...),
+    current: User = Depends(require_teacher),
+    registry: ExpertRegistry = Depends(get_scoped_expert_registry),
+):
+    provider = registry.pick_default()
+    if provider is None:
+        raise HTTPException(
+            503, detail="No LLM provider configured. Add an API key first."
+        )
+    vision_provider = registry.pick_vision(provider)
+    ocr_skill = (
+        LLMVisionOCRSkill(vision_provider) if vision_provider is not None else None
+    )
+    content = await file.read()
+    try:
+        questions = await assignment_service.import_questions_from_upload(
+            assignment_id=assignment_id,
+            teacher_id=current.id,
+            filename=file.filename or "problems",
+            content=content,
+            content_type=file.content_type,
+            provider=provider,
+            ocr_skill=ocr_skill,
+        )
+    except DomainError as exc:
+        return domain_error_response(exc)
+    return [_serialize_question(question) for question in questions]
+
+
+@router.post("/{assignment_id}/questions/reorder")
+def reorder_questions(assignment_id: str, req: ReorderRequest, current: User = Depends(require_teacher)):
+    try:
+        questions = assignment_service.reorder_questions(
+            assignment_id=assignment_id, teacher_id=current.id, ordered_q_ids=req.ordered_q_ids
+        )
+    except DomainError as exc:
+        return domain_error_response(exc)
+    return [_serialize_question(q) for q in questions]
 
 
 @router.post("/{assignment_id}/publish")
-def publish_assignment(assignment_id: str, current: User = Depends(require_teacher)):
-    a = _get_or_404(assignment_id)
-    if a.teacher_id != current.id and current.role != "admin":
-        raise HTTPException(status.HTTP_403_FORBIDDEN, detail="Not your assignment")
-    a.status = "published"
-    a.published_at = time.time()
-    return {"status": "published", "published_at": a.published_at}
-
-
-@router.delete("/{assignment_id}")
-def delete_assignment(assignment_id: str, current: User = Depends(require_teacher)):
-    a = _get_or_404(assignment_id)
-    if a.teacher_id != current.id and current.role != "admin":
-        raise HTTPException(status.HTTP_403_FORBIDDEN, detail="Not your assignment")
-    get_assignment_store().pop(assignment_id, None)
-    return {"status": "success"}
-
-
-@router.post("/{assignment_id}/submit")
-async def submit_assignment(
-    assignment_id: str,
-    file: UploadFile = File(...),
-    current: User = Depends(require_student),
-):
-    a = _get_or_404(assignment_id)
-    if a.status != "published":
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="Assignment is not published")
-    if a.course_id not in current.course_ids:
-        raise HTTPException(status.HTTP_403_FORBIDDEN, detail="Not enrolled in this course")
-
-    content = await file.read()
-    # Naive: store filename + bytes-as-text (real impl: object storage)
+def publish_assignment(assignment_id: str, req: PublishRequest, current: User = Depends(require_teacher)):
     try:
-        text = content.decode("utf-8", errors="ignore")
-    except Exception:
-        text = ""
-
-    sub = get_submission_by_assignment_student(assignment_id, current.id)
-    if sub is None:
-        sub = Submission(
-            id=f"s_{uuid.uuid4().hex[:10]}",
-            assignment_id=assignment_id,
-            student_id=current.id,
-            file_name=file.filename or "submission.txt",
+        a = assignment_service.publish(
+            assignment_id=assignment_id, teacher_id=current.id, expected_version=req.expected_version
         )
-    else:
-        sub.submitted_at = time.time()
-        sub.file_name = file.filename or sub.file_name
-
-    # Very simple split-by-question heuristic — replace with a backend agent later
-    if a.problem_data and text:
-        sub.answers = _naive_split(text, list(a.problem_data.keys()))
-
-    index_submission(sub)
-    return {"submission_id": sub.id, "status": "submitted", "submitted_at": sub.submitted_at}
+    except DomainError as exc:
+        return domain_error_response(exc)
+    return _serialize_assignment(a)
 
 
-@router.get("/{assignment_id}/my_submission")
-def get_my_submission(assignment_id: str, current: User = Depends(require_student)):
-    sub = get_submission_by_assignment_student(assignment_id, current.id)
-    if sub is None:
-        return {"status": "not_submitted"}
+@router.post("/{assignment_id}/close")
+def close_assignment(assignment_id: str, req: PublishRequest, current: User = Depends(require_teacher)):
+    try:
+        a = assignment_service.close(
+            assignment_id=assignment_id, teacher_id=current.id, expected_version=req.expected_version
+        )
+    except DomainError as exc:
+        return domain_error_response(exc)
+    return _serialize_assignment(a)
+
+
+def _serialize_assignment(a) -> dict:
     return {
-        "submission_id": sub.id,
-        "submitted_at": sub.submitted_at,
-        "file_name": sub.file_name,
-        "answers": sub.answers,
-        "grade": sub.grade,
-    }
-
-
-@router.get("/{assignment_id}/my_grade")
-def get_my_grade(assignment_id: str, current: User = Depends(require_student)):
-    sub = get_submission_by_assignment_student(assignment_id, current.id)
-    if sub is None or sub.grade is None:
-        return {"status": "no_grade"}
-    return {"status": "graded", "grade": sub.grade}
-
-
-# ─── Helpers ─────────────────────────────────────────────────────────────────
-
-def _get_or_404(aid: str) -> Assignment:
-    a = get_assignment_store().get(aid)
-    if a is None:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Assignment not found")
-    return a
-
-
-def _check_view(a: Assignment, user: User) -> None:
-    if user.role == "admin":
-        return
-    if user.role == "teacher" and a.teacher_id == user.id:
-        return
-    if user.role == "student" and a.status == "published" and a.course_id in user.course_ids:
-        return
-    raise HTTPException(status.HTTP_403_FORBIDDEN, detail="No access to this assignment")
-
-
-def _serialize(a: Assignment, viewer: User) -> dict:
-    out = {
         "id": a.id,
         "course_id": a.course_id,
         "teacher_id": a.teacher_id,
@@ -181,21 +188,41 @@ def _serialize(a: Assignment, viewer: User) -> dict:
         "description": a.description,
         "status": a.status,
         "due_at": a.due_at,
+        "version": a.version,
+        "question_count": a.question_count,
         "created_at": a.created_at,
+        "updated_at": a.updated_at,
         "published_at": a.published_at,
-        "problem_count": len(a.problem_data),
     }
-    return out
 
 
-def _naive_split(text: str, q_ids: list[str]) -> dict:
-    """Split a free-form text submission across question IDs.
+def _serialize_question(q) -> dict:
+    return {
+        "id": q.id,
+        "assignment_id": q.assignment_id,
+        "q_id": q.q_id,
+        "order_index": q.order_index,
+        "number": q.number,
+        "type": q.type,
+        "stem": q.stem,
+        "criterion": q.criterion,
+        "max_score": q.max_score,
+        "reference_answer": q.reference_answer,
+        "test_cases": q.test_cases,
+        "source": q.source,
+        "version": q.version,
+    }
 
-    This is a placeholder. Replace with backend.agents.ingest_agent.parse_student_answers
-    once you wire student-uploaded files through the same pipeline.
-    """
-    if not q_ids:
-        return {}
-    chunks = max(1, len(q_ids))
-    n = len(text) // chunks
-    return {q: text[i * n : (i + 1) * n] for i, q in enumerate(q_ids)}
+
+def _serialize_student_question(q) -> dict:
+    return {
+        "id": q.id,
+        "assignment_id": q.assignment_id,
+        "q_id": q.q_id,
+        "order_index": q.order_index,
+        "number": q.number,
+        "type": q.type,
+        "stem": q.stem,
+        "max_score": q.max_score,
+        "version": q.version,
+    }

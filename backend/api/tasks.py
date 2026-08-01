@@ -1,1233 +1,902 @@
-"""
-Tasks API — task-centric workflow router.
+"""Figma task presentation façade backed by normalized repositories.
 
-A `Task` bundles `problem_data + student_data + grading_job` into one user-visible
-unit so a teacher can pause mid-flow, switch between drafts, or resume work later.
-This file replaces the global problem_store/student_store coupling that the
-legacy /prob_preview /hw_preview endpoints rely on.
-
-Endpoints:
-  POST   /tasks/                              create draft task
-  GET    /tasks/                              list current user's tasks (lite)
-  GET    /tasks/{task_id}                     full task (incl. problem & student data)
-  PUT    /tasks/{task_id}                     rename / update metadata
-  DELETE /tasks/{task_id}                     delete task
-  POST   /tasks/{task_id}/extract_problems    upload problem file → start extract job
-  POST   /tasks/{task_id}/parse_submissions   upload submission archive → start parse job
-  POST   /tasks/{task_id}/grade               start batch grading job
-  GET    /tasks/{task_id}/state               current status + active reporter snapshot
-  GET    /tasks/{task_id}/result              graded result
-
-Idempotency:
-  Each upload endpoint computes sha256(file_bytes). If a job for the same hash is
-  already running OR has already completed, the endpoint returns
-  `{"status": "already_running"}` or `{"status": "already_done"}` and skips the
-  LLM call. Choosing a different file invalidates the hash and starts a fresh job.
+The public paths remain ``/tasks/*`` so the shipped UI does not change, while
+``task_id`` maps directly to ``AssignmentRecord.id``.  No legacy TaskStore or
+JobStore is imported here.
 """
 from __future__ import annotations
 
-import asyncio
+import csv
 import hashlib
-import logging
+import io
+import json
 import time
-import uuid
-from typing import Any, Dict, List, Optional
+from typing import Any, Literal
+from urllib.parse import quote
 
-from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
-from pydantic import BaseModel, Field
+from fastapi import (
+    APIRouter,
+    BackgroundTasks,
+    Depends,
+    File,
+    Form,
+    Header,
+    HTTPException,
+    Query,
+    Response,
+    UploadFile,
+    status,
+)
+from pydantic import BaseModel, Field, ValidationError as PydanticValidationError
 
+from backend.api.errors import domain_error_response
 from backend.auth import require_teacher
-from backend.models import (
-    GradingJob, Task, User,
-)
-from backend.state import (
-    JobStore, TaskStore,
-    get_job_store, get_task_store,
-)
-from backend.llm.registry import ExpertRegistry, get_expert_registry
-from backend.agents.ingest_agent import (
-    extract_problems,
-    parse_student_answers,
-    parse_reference_to_per_question,
-    parse_test_cases_to_per_question,
-)
-from backend.agents.grading_agent import grade_batch
-from backend.tools.file_processing import (
-    decode_text_bytes, extract_files_from_archive, extract_text_from_pdf,
-)
-from backend.tools.knowledge import get_retriever
-from backend.rag.chunker import extract_text as kb_extract_text, chunk_text, MAX_FILE_BYTES as KB_MAX_FILE_BYTES
-from backend.rag.embedder import pick_embedder
-from backend.rag.store import InMemoryTaskRetriever
-from backend.progress.tracker import (
-    get_or_create_reporter, get_reporter, remove_reporter,
-)
+from backend.db import assignment_repository, grading_repository, workflow_repository
+from backend.domain.errors import DomainError, InvalidTransition, NotFound, ValidationError
+from backend.knowledge.service import ingest_document
+from backend.llm.registry import ExpertRegistry, get_scoped_expert_registry
+from backend.models import TaskGradingSetup, User
+from backend.services import task_facade
 
-logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/tasks", tags=["tasks"])
 
 
-# ─── Request models ──────────────────────────────────────────────────────────
-
 class CreateTaskRequest(BaseModel):
-    name: str = "Untitled task"
+    name: str = Field(min_length=1, max_length=200)
+    semester_id: str | None = Field(default=None, max_length=64)
+    course_id: str | None = Field(default=None, max_length=64)
+    tag_ids: list[str] = Field(default_factory=list, max_length=30)
 
 
 class UpdateTaskRequest(BaseModel):
-    name: Optional[str] = None
+    name: str | None = Field(default=None, max_length=200)
+    semester_id: str | None = Field(default=None, max_length=64)
+    course_id: str | None = Field(default=None, max_length=64)
+    tag_ids: list[str] | None = Field(default=None, max_length=30)
+
+
+class InterpretTaskQueryRequest(BaseModel):
+    query: str = Field(min_length=1, max_length=500)
 
 
 class GradeRequest(BaseModel):
     language: str = "en"
-    # ─── Per-task overrides for global settings ─────────────────────────────
-    # When None, the corresponding `settings.*` value is used (current behavior).
-    # When set, this value is used for THIS grading run only — does NOT persist
-    # back to settings or TaskStore. The plan (hyssop-paper-jaybird) uses this
-    # to surface a per-task multi-sample slider on the task_setup page so a
-    # teacher can spend extra LLM calls on important tasks without changing
-    # the global default.
-    multi_sample_n: Optional[int] = Field(
-        default=None,
-        ge=1, le=10,
-        description="单专家场景下并行采样次数；None = 用全局默认（settings.multi_sample_n，目前 1）。"
-                    "≥ 2 个启用专家时本字段被忽略（变量来自专家本身）。",
-    )
+    multi_sample_n: int | None = Field(default=None, ge=1, le=10)
+
+
+class UpdateGradingSetupRequest(BaseModel):
+    expected_workflow_revision: int = Field(ge=0)
+    grading_setup: dict[str, Any]
 
 
 class UpdateProblemRequest(BaseModel):
-    """Edit a single problem's stem and/or rubric.
-
-    Only fields you pass are applied; the rest stay as-is. Used by the
-    Problems-page edit-in-place UI.
-    """
-    stem: Optional[str] = None
-    criterion: Optional[str] = None
+    stem: str | None = None
+    criterion: str | None = None
+    reference_answer: str | None = None
+    solution_code: str | None = None
+    test_cases: list[dict] | None = None
+    review_status: Literal["needs_review", "edited", "confirmed"] | None = None
 
 
 class UpdateStudentAnswerRequest(BaseModel):
-    """Edit a single student's parsed answer for a specific question.
+    expected_workflow_revision: int | None = Field(default=None, ge=0)
+    content: str | None = None
+    flag: list[str] | None = None
+    review_status: Literal["pending", "confirmed"] | None = None
 
-    Used by the student-answers preview page when the teacher spots an AI
-    OCR / segmentation error and wants to fix the recognized content (or
-    clear the recognition flag) before grading runs.
-    """
-    content: Optional[str] = None
-    flag: Optional[List[str]] = None      # pass [] to clear flags
+
+class UpdateStudentIdentityRequest(BaseModel):
+    expected_workflow_revision: int = Field(ge=0)
+    student_id: str = Field(min_length=1, max_length=160)
+    student_name: str = Field(min_length=1, max_length=160)
+
+
+class UpdateCorrectionReviewRequest(BaseModel):
+    expected_workflow_revision: int = Field(ge=0)
+    teacher_score: float = Field(ge=0)
+    teacher_comment: str = Field(default="", max_length=4000)
+    confirm: bool = False
 
 
 class UpdateTeacherCommentRequest(BaseModel):
-    """Set or clear a teacher's manual comment on a (student, q_id) pair.
-
-    Stored alongside the AI correction so the teacher's note is preserved
-    when the task is reloaded, without overwriting the AI feedback. An empty
-    string clears the comment.
-    """
     student_id: str
     q_id: str
-    comment: str = ""
+    comment: str = Field(default="", max_length=4000)
 
 
-# ─── Helpers ─────────────────────────────────────────────────────────────────
-
-def _check_owner(task: Task, user: User) -> None:
-    if user.role == "admin":
-        return
-    if task.owner_id != user.id:
-        raise HTTPException(status.HTTP_403_FORBIDDEN, detail="Not your task")
+class ConfirmFinalResultRequest(BaseModel):
+    expected_workflow_revision: int = Field(ge=0)
 
 
-def _get_or_404(task_store: TaskStore, task_id: str) -> Task:
-    t = task_store.get(task_id)
-    if t is None:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Task not found")
-    return t
+class GenerateResultArtifactsRequest(BaseModel):
+    expected_workflow_revision: int = Field(ge=0)
 
 
-# ─── CRUD ────────────────────────────────────────────────────────────────────
+def _domain(call):
+    try:
+        return call()
+    except DomainError as exc:
+        return domain_error_response(exc)
+
 
 @router.post("/")
 def create_task(
-    req: CreateTaskRequest,
+    request: CreateTaskRequest,
     current: User = Depends(require_teacher),
-    task_store: TaskStore = Depends(get_task_store),
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
 ):
-    task = Task(
-        task_id=f"T_{uuid.uuid4().hex[:10]}",
-        name=req.name or "Untitled task",
-        owner_id=current.id,
-        status="draft",
-    )
-    task_store.create(task)
-    logger.info(f"Created task {task.task_id} for {current.id}")
-    return task.lite()
+    key = idempotency_key or f"legacy-{hashlib.sha256(json.dumps(request.model_dump(), sort_keys=True).encode()).hexdigest()}"
+    return _domain(lambda: task_facade.create_task(
+        owner_id=current.id, name=request.name, semester_id=request.semester_id,
+        course_id=request.course_id, tag_ids=request.tag_ids,
+        idempotency_key=key,
+    ))
 
 
 @router.get("/")
 def list_tasks(
+    page: int | None = Query(default=None, ge=1),
+    page_size: int | None = Query(default=None, ge=1, le=100),
+    q: str | None = Query(default=None, max_length=200),
+    semester_id: str | None = Query(default=None, max_length=64),
+    course_id: str | None = Query(default=None, max_length=64),
+    tag_ids: str | None = None,
+    statuses: str | None = None,
+    unfinished: bool | None = None,
+    needs_attention: bool | None = None,
+    sort: str = "updated_desc",
     current: User = Depends(require_teacher),
-    task_store: TaskStore = Depends(get_task_store),
 ):
-    tasks = task_store.list_for_owner(current.id)
-    tasks.sort(key=lambda t: t.updated_at, reverse=True)
-    return {t.task_id: t.lite() for t in tasks}
+    try:
+        task_map = task_facade.list_tasks(owner_id=current.id)
+    except DomainError as exc:
+        return domain_error_response(exc)
+    # The dashboard contract is a mapping. Supplying page/page_size selects the
+    # history contract without changing the path used by the Figma client.
+    if page is None and page_size is None and not any(
+        [q, semester_id, course_id, tag_ids, statuses, unfinished, needs_attention]
+    ):
+        return task_map
+    items = list(task_map.values())
+    selected_tags = {item for item in (tag_ids or "").split(",") if item}
+    selected_statuses = {item for item in (statuses or "").split(",") if item}
+    if q:
+        needle = q.casefold().strip()
+        items = [item for item in items if needle in item["name"].casefold()]
+    if semester_id:
+        items = [item for item in items if item.get("semester_id") == semester_id]
+    if course_id:
+        items = [item for item in items if item.get("course_id") == course_id]
+    if selected_tags:
+        items = [item for item in items if selected_tags.issubset(set(item.get("tag_ids") or []))]
+    if selected_statuses:
+        items = [item for item in items if item.get("status") in selected_statuses]
+    if unfinished:
+        items = [item for item in items if item.get("status") not in {"finalized"}]
+    if needs_attention is not None:
+        items = [item for item in items if bool(item.get("needs_attention")) == needs_attention]
+    items = _sort_tasks(items, sort)
+    current_page = page or 1
+    size = page_size or 25
+    start = (current_page - 1) * size
+    return {
+        "items": items[start:start + size], "total": len(items),
+        "page": current_page, "page_size": size,
+        "available_facets": _history_facets(list(task_map.values()), current.id),
+    }
+
+
+def _sort_tasks(items: list[dict], sort: str) -> list[dict]:
+    reverse = sort in {"updated_desc", "created_desc", "name_desc", "attention_first", "stage_desc"}
+    if sort.startswith("created"):
+        key = lambda item: item.get("created_at") or 0
+    elif sort.startswith("name"):
+        key = lambda item: item.get("name", "").casefold()
+    elif sort == "attention_first":
+        key = lambda item: (bool(item.get("needs_attention")), item.get("updated_at") or 0)
+    elif sort.startswith("stage"):
+        order = {name: index for index, name in enumerate([
+            "draft", "extracting_problems", "problems_ready", "parsing_submissions",
+            "submissions_ready", "grading", "graded", "review_confirmed", "finalized", "error",
+        ])}
+        key = lambda item: order.get(item.get("status"), 99)
+    else:
+        key = lambda item: item.get("updated_at") or 0
+    return sorted(items, key=key, reverse=reverse)
+
+
+def _history_facets(items: list[dict], owner_id: str) -> dict:
+    from backend.services.courses import list_courses_for
+
+    statuses: dict[str, int] = {}
+    for item in items:
+        statuses[item["status"]] = statuses.get(item["status"], 0) + 1
+    courses = [course for course in list_courses_for(owner_id, "teacher") if course.code != task_facade.SYSTEM_COURSE_CODE]
+    try:
+        from backend.db import tag_repository
+        tags = tag_repository.list_tags(owner_id=owner_id)
+        rendered_tags = [tag_repository.serialize_tag(tag, usage_count=tag_repository.usage_count(tag.id)) for tag in tags]
+    except (ImportError, AttributeError):
+        rendered_tags = []
+    return {
+        "semesters": sorted({item["semester_id"] for item in items if item.get("semester_id")}),
+        "courses": [{"id": course.id, "name": course.name, "code": course.code} for course in courses],
+        "tags": rendered_tags, "statuses": statuses,
+    }
+
+
+@router.post("/query/interpret")
+def interpret_task_query(
+    request: InterpretTaskQueryRequest,
+    current: User = Depends(require_teacher),
+):
+    """Safe deterministic fallback for the history natural-language box.
+
+    It recognizes stable status/attention words and leaves the remaining text
+    as a keyword. This avoids an LLM call (and BYOK use) for a filter action.
+    """
+    text = request.query.strip()
+    folded = text.casefold()
+    filters: dict[str, Any] = {}
+    conditions = []
+    status_words = {
+        "draft": ("draft", "草稿"), "grading": ("grading", "批改中"),
+        "graded": ("graded", "已批改"), "finalized": ("finalized", "已完成"),
+        "error": ("error", "失败", "错误"),
+    }
+    matched = []
+    for status_name, words in status_words.items():
+        if any(word in folded for word in words):
+            matched.append(status_name)
+    if matched:
+        filters["statuses"] = matched
+        conditions.append({"field": "statuses", "label": "Status", "value": matched})
+    if any(word in folded for word in ("attention", "待处理", "需关注")):
+        filters["needs_attention"] = True
+        conditions.append({"field": "needs_attention", "label": "Needs attention", "value": True})
+    if not filters:
+        filters["q"] = text
+        conditions.append({"field": "q", "label": "Keyword", "value": text})
+    return {
+        "filters": filters, "sort": "updated_desc",
+        "explanation": "Applied deterministic history filters.",
+        "conditions": conditions, "ambiguities": [], "source": "deterministic",
+        "query_id": f"query_{hashlib.sha256(text.encode()).hexdigest()[:12]}",
+    }
 
 
 @router.get("/{task_id}")
-def get_task(
-    task_id: str,
-    current: User = Depends(require_teacher),
-    task_store: TaskStore = Depends(get_task_store),
-):
-    t = _get_or_404(task_store, task_id)
-    _check_owner(t, current)
-    out = t.lite()
-    out["problem_data"] = t.problem_data
-    out["student_data"] = t.student_data
-    return out
+def get_task(task_id: str, current: User = Depends(require_teacher)):
+    return _domain(lambda: task_facade.get_task(task_id=task_id, owner_id=current.id))
 
 
 @router.put("/{task_id}")
-def update_task(
-    task_id: str,
-    req: UpdateTaskRequest,
-    current: User = Depends(require_teacher),
-    task_store: TaskStore = Depends(get_task_store),
-):
-    t = _get_or_404(task_store, task_id)
-    _check_owner(t, current)
-    fields: Dict[str, Any] = {}
-    if req.name is not None:
-        fields["name"] = req.name
-    if fields:
-        task_store.update(task_id, **fields)
-    return task_store.get(task_id).lite()  # type: ignore
+def update_task(task_id: str, request: UpdateTaskRequest, current: User = Depends(require_teacher)):
+    body = request.model_dump(exclude_unset=True)
+    return _domain(lambda: task_facade.update_task(
+        task_id=task_id, owner_id=current.id,
+        name=body.get("name"),
+        semester_id=body["semester_id"] if "semester_id" in body else ...,
+        course_id=body["course_id"] if "course_id" in body else ...,
+        tag_ids=body.get("tag_ids") if "tag_ids" in body else None,
+    ))
 
 
 @router.delete("/{task_id}")
-def delete_task(
-    task_id: str,
-    current: User = Depends(require_teacher),
-    task_store: TaskStore = Depends(get_task_store),
-    job_store: JobStore = Depends(get_job_store),
-):
-    t = _get_or_404(task_store, task_id)
-    _check_owner(t, current)
-    if t.grading_job_id:
-        job_store.discard(t.grading_job_id)
-    if t.extract_job_id:
-        remove_reporter(t.extract_job_id)
-    if t.parse_job_id:
-        remove_reporter(t.parse_job_id)
-    # Drop any in-memory KB index attached to this task. Safe even if the
-    # active retriever is the NoOp default — remove_task is a no-op there.
-    retriever = get_retriever()
-    if isinstance(retriever, InMemoryTaskRetriever):
-        retriever.remove_task(task_id)
-    task_store.delete(task_id)
+def delete_task(task_id: str, current: User = Depends(require_teacher)):
+    try:
+        task_facade.delete_task(task_id=task_id, owner_id=current.id)
+    except DomainError as exc:
+        return domain_error_response(exc)
     return {"status": "success"}
 
 
-# ─── Extract problems (with idempotency) ─────────────────────────────────────
-
-async def _run_extract(
-    task: Task,
-    text: str,
-    provider,
-    job_id: str,
-    task_store: TaskStore,
-):
-    reporter = get_or_create_reporter(job_id)
-    try:
-        await extract_problems(text, provider, task.problem_data, reporter=reporter)
-        task_store.update(task.task_id, status="problems_ready", error=None)
-        logger.info(f"[task:{task.task_id}] extract done, {len(task.problem_data)} problems")
-    except Exception as e:
-        logger.exception(f"[task:{task.task_id}] extract failed")
-        task_store.update(task.task_id, status="error", error=str(e))
-
-
 @router.post("/{task_id}/extract_problems")
-async def task_extract_problems(
+async def extract_problems_endpoint(
     task_id: str,
-    file: UploadFile = File(...),
+    background_tasks: BackgroundTasks,
+    file: UploadFile | None = File(default=None),
+    source_token: str | None = Form(default=None),
+    confirmed_candidate_ids: str = Form(default="[]"),
+    replace_confirmed: bool = Form(default=False),
     current: User = Depends(require_teacher),
-    task_store: TaskStore = Depends(get_task_store),
-    registry: ExpertRegistry = Depends(get_expert_registry),
+    registry: ExpertRegistry = Depends(get_scoped_expert_registry),
 ):
-    t = _get_or_404(task_store, task_id)
-    _check_owner(t, current)
-
-    provider = registry.pick_default()
-    if provider is None:
-        raise HTTPException(503, detail="No LLM provider configured. Add an API key first.")
-
-    bytes_ = await file.read()
-    new_hash = hashlib.sha256(bytes_).hexdigest()
-
-    # Idempotency: same task is already extracting
-    if t.status == "extracting_problems" and t.extract_job_id:
-        return {
-            "status": "already_running",
-            "job_id": t.extract_job_id,
-            "task_id": t.task_id,
-        }
-
-    # Idempotency: same file already processed
-    if (
-        t.problem_file_hash == new_hash
-        and t.status in ("problems_ready", "parsing_submissions",
-                         "submissions_ready", "grading", "graded")
-    ):
-        return {
-            "status": "already_done",
-            "unchanged": True,
-            "job_id": t.extract_job_id,
-            "task_id": t.task_id,
-            "problem_count": len(t.problem_data),
-        }
-
-    # Decode text content
     try:
-        if file.content_type == "application/pdf" or (file.filename or "").lower().endswith(".pdf"):
-            text = await extract_text_from_pdf(bytes_)
-        else:
-            text = await decode_text_bytes(bytes_)
-    except Exception as e:
-        raise HTTPException(400, detail=f"Could not decode file: {e}")
-
-    # Start fresh job
-    job_id = str(uuid.uuid4())
-    task_store.update(
-        task_id,
-        status="extracting_problems",
-        extract_job_id=job_id,
-        problem_file_hash=new_hash,
-        problem_file_name=file.filename,
-        problem_data={},  # clear old data
-        error=None,
-    )
-    asyncio.create_task(_run_extract(t, text, provider, job_id, task_store))
-    return {
-        "status": "started",
-        "job_id": job_id,
-        "task_id": t.task_id,
-    }
-
-
-# ─── Parse submissions (with idempotency) ────────────────────────────────────
-
-async def _run_parse(
-    task: Task,
-    files_data,
-    provider,
-    job_id: str,
-    task_store: TaskStore,
-):
-    reporter = get_or_create_reporter(job_id, total_students=len(files_data))
-    try:
-        await parse_student_answers(
-            files_data=files_data,
-            problems_data=task.problem_data,
-            student_store=task.student_data,
-            provider=provider,
-            reporter=reporter,
+        selected_candidates = json.loads(confirmed_candidate_ids)
+        if not isinstance(selected_candidates, list) or not all(
+            isinstance(item, str) for item in selected_candidates
+        ):
+            raise ValueError
+    except (json.JSONDecodeError, ValueError):
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={"code": "invalid_confirmed_candidate_ids"},
         )
-        task_store.update(task.task_id, status="submissions_ready", error=None)
-        logger.info(f"[task:{task.task_id}] parse done, {len(task.student_data)} students")
-    except Exception as e:
-        logger.exception(f"[task:{task.task_id}] parse failed")
-        task_store.update(task.task_id, status="error", error=str(e))
+    if source_token and file is None:
+        return await _extract_from_source_token(
+            task_id, source_token, selected_candidates, replace_confirmed,
+            current, registry, background_tasks,
+        )
+    if file is None:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, detail={"code": "source_required"})
+    content = await file.read()
+    try:
+        queued = task_facade.queue_task_problem_extraction(
+            task_id=task_id, owner_id=current.id,
+            filename=file.filename or "problems", content=content,
+            content_type=file.content_type, registry=registry,
+            replace_confirmed=replace_confirmed,
+        )
+        if queued["status"] == "started":
+            job_attempt = queued.pop("_job_attempt")
+            background_tasks.add_task(
+                task_facade.run_task_problem_extraction,
+                task_id=task_id, owner_id=current.id,
+                job_id=queued["job_id"], filename=file.filename or "problems",
+                content=content, registry=registry,
+                job_attempt=job_attempt,
+                claimed_workflow_revision=queued["workflow_revision"],
+                replace_confirmed=replace_confirmed,
+            )
+        return queued
+    except DomainError as exc:
+        return domain_error_response(exc)
 
 
 @router.post("/{task_id}/parse_submissions")
-async def task_parse_submissions(
+async def parse_submissions_endpoint(
     task_id: str,
+    background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
+    identity_mode: str = Form(default="filename"),
+    roster_file: UploadFile | None = File(default=None),
+    recognition_provider_id: str | None = Form(default=None),
+    replace_confirmed: bool = Form(default=False),
     current: User = Depends(require_teacher),
-    task_store: TaskStore = Depends(get_task_store),
-    registry: ExpertRegistry = Depends(get_expert_registry),
+    registry: ExpertRegistry = Depends(get_scoped_expert_registry),
 ):
-    t = _get_or_404(task_store, task_id)
-    _check_owner(t, current)
-
-    if t.status not in ("problems_ready", "submissions_ready", "graded", "error"):
-        if t.status == "draft":
-            raise HTTPException(409, detail="Upload problems first.")
-        if t.status == "extracting_problems":
-            raise HTTPException(409, detail="Wait for problem extraction to finish.")
-        if t.status == "parsing_submissions":
-            return {
-                "status": "already_running",
-                "job_id": t.parse_job_id,
-                "task_id": t.task_id,
-            }
-        if t.status == "grading":
-            raise HTTPException(409, detail="Cannot replace submissions while grading.")
-
-    provider = registry.pick_default()
-    if provider is None:
-        raise HTTPException(503, detail="No LLM provider configured.")
-
-    bytes_ = await file.read()
-    new_hash = hashlib.sha256(bytes_).hexdigest()
-
-    # Idempotency: already running same task (defensive — covered above)
-    if t.status == "parsing_submissions" and t.parse_job_id:
-        return {
-            "status": "already_running",
-            "job_id": t.parse_job_id,
-            "task_id": t.task_id,
-        }
-
-    # Idempotency: same file already parsed
-    if (
-        t.submission_file_hash == new_hash
-        and t.status in ("submissions_ready", "grading", "graded")
-    ):
-        return {
-            "status": "already_done",
-            "unchanged": True,
-            "job_id": t.parse_job_id,
-            "task_id": t.task_id,
-            "student_count": len(t.student_data),
-        }
-
+    body = await file.read()
+    roster_entries: list[dict[str, str]] = []
+    roster_name = None
+    if roster_file is not None:
+        roster_name = roster_file.filename or "roster.csv"
+        roster_entries = _parse_roster(await roster_file.read())
     try:
-        files_data = await extract_files_from_archive(bytes_, file.filename or "submissions")
-    except Exception as e:
-        raise HTTPException(400, detail=f"Could not extract archive: {e}")
-
-    if not files_data:
-        raise HTTPException(400, detail="No valid student files found in archive.")
-
-    job_id = str(uuid.uuid4())
-    task_store.update(
-        task_id,
-        status="parsing_submissions",
-        parse_job_id=job_id,
-        submission_file_hash=new_hash,
-        submission_file_name=file.filename,
-        student_data={},  # clear old data
-        error=None,
-    )
-    asyncio.create_task(_run_parse(t, files_data, provider, job_id, task_store))
-    return {
-        "status": "started",
-        "job_id": job_id,
-        "task_id": t.task_id,
-        "file_count": len(files_data),
-    }
-
-
-# ─── Reference answers (auxiliary upload — calculation-style problems) ──────
-#
-# This is an *auxiliary* upload that does NOT advance task.status. A teacher
-# can upload (or re-upload, with a different file) at any point — draft,
-# problems_ready, submissions_ready, graded — and the parsed answers are
-# merged into problem_data[q_id]["reference_answer"]. CalculationSkill picks
-# them up on the next grade pass; already-graded tasks must be re-graded
-# manually (we do NOT auto-rerun LLM calls when a reference is added).
-
-async def _read_text_for_parse(file: UploadFile, bytes_: bytes) -> str:
-    """Decode a PDF / MD / TXT upload into plain text.
-
-    Shared by reference + test-case parsing. Mirrors the logic in
-    task_extract_problems so behavior stays consistent across upload paths.
-    """
-    if file.content_type == "application/pdf" or (file.filename or "").lower().endswith(".pdf"):
-        return await extract_text_from_pdf(bytes_)
-    return await decode_text_bytes(bytes_)
+        queued = task_facade.queue_task_submission_parsing(
+            task_id=task_id, owner_id=current.id,
+            filename=file.filename or "submissions", content=body,
+            content_type=file.content_type, registry=registry,
+            identity_mode=identity_mode, roster_entries=roster_entries,
+            roster_name=roster_name,
+            recognition_provider_id=recognition_provider_id,
+            replace_confirmed=replace_confirmed,
+        )
+        if queued["status"] == "started":
+            job_attempt = queued.pop("_job_attempt")
+            background_tasks.add_task(
+                task_facade.run_task_submission_parsing,
+                task_id=task_id, owner_id=current.id,
+                job_id=queued["job_id"], filename=file.filename or "submissions",
+                content=body, registry=registry, identity_mode=identity_mode,
+                job_attempt=job_attempt,
+                roster_entries=roster_entries,
+                recognition_provider_id=recognition_provider_id,
+                replace_confirmed=replace_confirmed,
+                claimed_workflow_revision=queued["workflow_revision"],
+            )
+        return queued
+    except DomainError as exc:
+        return domain_error_response(exc)
 
 
-async def _run_parse_reference(
-    task: Task,
-    text: str,
-    provider,
-    job_id: str,
-    task_store: TaskStore,
-):
-    """Background worker for /tasks/{id}/upload_reference.
-
-    Calls the LLM helper, merges results into per-question reference_answer
-    fields, then clears reference_parse_job_id so the frontend knows the
-    auxiliary parse is done.
-    """
-    reporter = get_or_create_reporter(job_id)
+def _parse_roster(body: bytes) -> list[dict[str, str]]:
     try:
-        mapping = await parse_reference_to_per_question(
-            text=text,
-            problems_data=task.problem_data,
-            provider=provider,
-            reporter=reporter,
-        )
-        # Merge into problem_data — preserve existing fields.
-        for q_id, ref_text in mapping.items():
-            if q_id in task.problem_data:
-                task.problem_data[q_id]["reference_answer"] = ref_text
-        task_store.update(task.task_id, reference_parse_job_id=None, error=None)
-        logger.info(
-            f"[task:{task.task_id}] reference parse done, matched "
-            f"{len(mapping)}/{len(task.problem_data)} problems"
-        )
-    except Exception as e:
-        logger.exception(f"[task:{task.task_id}] reference parse failed")
-        task_store.update(
-            task.task_id,
-            reference_parse_job_id=None,
-            error=f"Reference parse failed: {e}",
-        )
-
-
-@router.post("/{task_id}/upload_reference")
-async def task_upload_reference(
-    task_id: str,
-    file: UploadFile = File(...),
-    current: User = Depends(require_teacher),
-    task_store: TaskStore = Depends(get_task_store),
-    registry: ExpertRegistry = Depends(get_expert_registry),
-):
-    """Upload a reference-answer document (PDF / MD / TXT).
-
-    Teachers can either upload a dedicated solution file, OR re-upload the
-    same file as the problems (which triggers the LLM to extract solution
-    text from a doc that contains both questions and answers).
-
-    Idempotency: same sha256 → already_done. Concurrent re-upload while parsing
-    → already_running.
-
-    The endpoint does NOT change ``task.status`` — reference answers are an
-    auxiliary annotation that can be added in any state including ``graded``
-    (re-grading is manual).
-    """
-    t = _get_or_404(task_store, task_id)
-    _check_owner(t, current)
-
-    # Need problems to anchor q_ids — uploading reference for a draft (no
-    # problems yet) doesn't make sense.
-    if t.status == "draft" or not t.problem_data:
-        raise HTTPException(
-            409, detail="Upload problems first — reference answers are matched per problem."
-        )
-
-    bytes_ = await file.read()
-    new_hash = hashlib.sha256(bytes_).hexdigest()
-
-    # Idempotency: parsing in flight
-    if t.reference_parse_job_id:
-        return {
-            "status": "already_running",
-            "job_id": t.reference_parse_job_id,
-            "task_id": t.task_id,
-        }
-
-    # Idempotency: same file already merged
-    if t.reference_file_hash == new_hash:
-        return {
-            "status": "already_done",
-            "unchanged": True,
-            "task_id": t.task_id,
-            "reference_file_name": t.reference_file_name,
-        }
-
-    provider = registry.pick_default()
-    if provider is None:
-        raise HTTPException(503, detail="No LLM provider configured. Add an API key first.")
-
-    try:
-        text = await _read_text_for_parse(file, bytes_)
-    except Exception as e:
-        raise HTTPException(400, detail=f"Could not decode file: {e}")
-
-    job_id = str(uuid.uuid4())
-    task_store.update(
-        task_id,
-        reference_file_hash=new_hash,
-        reference_file_name=file.filename,
-        reference_parse_job_id=job_id,
-        error=None,
-    )
-    asyncio.create_task(_run_parse_reference(t, text, provider, job_id, task_store))
-    return {
-        "status": "started",
-        "job_id": job_id,
-        "task_id": t.task_id,
-    }
-
-
-# ─── Test cases (auxiliary upload — programming problems) ──────────────────
-
-async def _run_parse_test_cases(
-    task: Task,
-    text: str,
-    provider,
-    job_id: str,
-    task_store: TaskStore,
-):
-    """Background worker for /tasks/{id}/upload_test_cases.
-
-    Mirrors _run_parse_reference. Stores TestCase objects as model_dump()ed
-    dicts so JSON round-tripping (via Task.lite() etc.) stays clean.
-    """
-    reporter = get_or_create_reporter(job_id)
-    try:
-        mapping = await parse_test_cases_to_per_question(
-            text=text,
-            problems_data=task.problem_data,
-            provider=provider,
-            reporter=reporter,
-        )
-        for q_id, cases in mapping.items():
-            if q_id in task.problem_data:
-                # Store as list[dict] for JSON serialization compatibility.
-                task.problem_data[q_id]["test_cases"] = [tc.model_dump() for tc in cases]
-        total = sum(len(v) for v in mapping.values())
-        task_store.update(task.task_id, test_cases_parse_job_id=None, error=None)
-        logger.info(
-            f"[task:{task.task_id}] test-case parse done, "
-            f"{len(mapping)} programming problems, {total} cases total"
-        )
-    except Exception as e:
-        logger.exception(f"[task:{task.task_id}] test-case parse failed")
-        task_store.update(
-            task.task_id,
-            test_cases_parse_job_id=None,
-            error=f"Test-case parse failed: {e}",
-        )
-
-
-@router.post("/{task_id}/upload_test_cases")
-async def task_upload_test_cases(
-    task_id: str,
-    file: UploadFile = File(...),
-    current: User = Depends(require_teacher),
-    task_store: TaskStore = Depends(get_task_store),
-    registry: ExpertRegistry = Depends(get_expert_registry),
-):
-    """Upload a test-case document (any format — JSON / Markdown / natural language).
-
-    The LLM normalizes whatever shape into structured stdin/stdout cases keyed
-    by q_id. Only programming problems are populated; non-programming
-    problems are silently skipped.
-
-    Same idempotency contract as upload_reference (sha256 + parse_job_id).
-    Same constraint: does NOT change task.status.
-    """
-    t = _get_or_404(task_store, task_id)
-    _check_owner(t, current)
-
-    if t.status == "draft" or not t.problem_data:
-        raise HTTPException(
-            409, detail="Upload problems first — test cases are matched per problem."
-        )
-
-    bytes_ = await file.read()
-    new_hash = hashlib.sha256(bytes_).hexdigest()
-
-    if t.test_cases_parse_job_id:
-        return {
-            "status": "already_running",
-            "job_id": t.test_cases_parse_job_id,
-            "task_id": t.task_id,
-        }
-
-    if t.test_cases_file_hash == new_hash:
-        return {
-            "status": "already_done",
-            "unchanged": True,
-            "task_id": t.task_id,
-            "test_cases_file_name": t.test_cases_file_name,
-        }
-
-    provider = registry.pick_default()
-    if provider is None:
-        raise HTTPException(503, detail="No LLM provider configured. Add an API key first.")
-
-    try:
-        text = await _read_text_for_parse(file, bytes_)
-    except Exception as e:
-        raise HTTPException(400, detail=f"Could not decode file: {e}")
-
-    job_id = str(uuid.uuid4())
-    task_store.update(
-        task_id,
-        test_cases_file_hash=new_hash,
-        test_cases_file_name=file.filename,
-        test_cases_parse_job_id=job_id,
-        error=None,
-    )
-    asyncio.create_task(_run_parse_test_cases(t, text, provider, job_id, task_store))
-    return {
-        "status": "started",
-        "job_id": job_id,
-        "task_id": t.task_id,
-    }
-
-
-# ─── Grade ───────────────────────────────────────────────────────────────────
-
-async def _run_grade(
-    task: Task,
-    registry: ExpertRegistry,
-    job_id: str,
-    task_store: TaskStore,
-    job_store: JobStore,
-    language: str,
-    multi_sample_n: Optional[int] = None,
-):
-    reporter = get_or_create_reporter(
-        job_id,
-        total_students=len(task.student_data),
-        total_questions=len(task.problem_data),
-    )
-    try:
-        results = await grade_batch(
-            student_store=task.student_data,
-            problem_store=task.problem_data,
-            registry=registry,
-            reporter=reporter,
-            language=language,
-            task_id=task.task_id,
-            multi_sample_n=multi_sample_n,
-        )
-        # Serialize corrections
-        serialized = []
-        for r in results:
-            corrections_ser = []
-            for c in r.get("corrections", []):
-                corrections_ser.append(c.model_dump() if hasattr(c, "model_dump") else c)
-            serialized.append({
-                "student_id": r.get("student_id"),
-                "student_name": r.get("student_name"),
-                "corrections": corrections_ser,
-                "student_answers": r.get("student_answers", []),
-            })
-
-        # Mirror into JobStore for backwards compat with /ai_grading/grade_result/{id}
-        job = GradingJob(
-            job_id=job_id,
-            job_name=task.name,
-            job_type="batch",
-        )
-        job_store.create(job)
-        job_store.complete(job_id, {
-            "results": serialized,
-            "task_id": task.task_id,
-            "problem_data": task.problem_data,
-            "student_data": task.student_data,
-            "timestamp": time.time(),
-        })
-
-        # ── Pre-bake per-question common-mistakes (D1) ─────────────────────
-        # Run sequentially (the user explicitly chose serial over parallel
-        # to avoid LLM rework). The deep-dive page is uncached without this.
-        # Failures per-question are non-fatal; we log + continue so a single
-        # bad LLM call doesn't block the "graded" transition.
-        try:
-            from backend.api.analytics import _cm_cache
-            from backend.agents import analytics_agent
-            provider_for_cm = registry.pick_default()
-            results_payload = {"results": serialized}
-            await reporter._emit_message("正在分析全班易错点…", "info")
-            for q_id in task.problem_data.keys():
-                try:
-                    breakdown = analytics_agent.per_question_breakdown(
-                        q_id, results_payload, task.problem_data,
-                    )
-                    if breakdown.get("rows") and provider_for_cm is not None:
-                        out = await analytics_agent.question_common_mistakes(
-                            q_id=q_id,
-                            breakdown=breakdown,
-                            provider=provider_for_cm,
-                        )
-                        _cm_cache[f"{task.task_id}::{q_id}"] = out.common_mistakes_md
-                        await reporter._emit_message(f"易错点完成：{q_id}", "info")
-                except Exception as cm_err:
-                    logger.warning(
-                        f"[task:{task.task_id}] common_mistakes for {q_id} failed: {cm_err}"
-                    )
-        except Exception as e:
-            logger.warning(f"[task:{task.task_id}] common_mistakes pre-bake failed: {e}")
-
-        # Only NOW mark the task as graded — the user's complaint was that
-        # "graded" fired before the deep-dive analytics were ready.
-        task_store.update(task.task_id, status="graded", error=None)
-        logger.info(f"[task:{task.task_id}] grading done, {len(serialized)} students")
-
-    except Exception as e:
-        logger.exception(f"[task:{task.task_id}] grading failed")
-        task_store.update(task.task_id, status="error", error=str(e))
+        text = body.decode("utf-8-sig")
+    except UnicodeDecodeError:
+        text = body.decode("gbk")
+    reader = csv.DictReader(io.StringIO(text))
+    items = []
+    for row in reader:
+        normalized = {str(key or "").strip().casefold(): str(value or "").strip() for key, value in row.items()}
+        student_id = normalized.get("student_id") or normalized.get("stu_id") or normalized.get("学号") or ""
+        student_name = normalized.get("student_name") or normalized.get("stu_name") or normalized.get("name") or normalized.get("姓名") or ""
+        if student_id:
+            items.append({"stu_id": student_id, "stu_name": student_name})
+    return items
 
 
 @router.post("/{task_id}/grade")
-async def task_grade(
+def start_grading(
     task_id: str,
-    req: GradeRequest = GradeRequest(),
+    request: GradeRequest,
     current: User = Depends(require_teacher),
-    task_store: TaskStore = Depends(get_task_store),
-    job_store: JobStore = Depends(get_job_store),
-    registry: ExpertRegistry = Depends(get_expert_registry),
 ):
-    t = _get_or_404(task_store, task_id)
-    _check_owner(t, current)
+    del request  # immutable setup snapshot controls the real run
+    return _domain(lambda: task_facade.start_task_grading(task_id=task_id, owner_id=current.id))
 
-    # Status gate
-    if t.status == "grading" and t.grading_job_id:
-        return {
-            "status": "already_running",
-            "job_id": t.grading_job_id,
-            "task_id": t.task_id,
-        }
-
-    if t.status == "graded" and t.grading_job_id:
-        return {
-            "status": "already_done",
-            "job_id": t.grading_job_id,
-            "task_id": t.task_id,
-        }
-
-    if t.status not in ("submissions_ready", "graded", "error"):
-        raise HTTPException(409, detail=f"Cannot grade in status '{t.status}'")
-
-    if not t.problem_data:
-        raise HTTPException(409, detail="Task has no problems")
-
-    if not t.student_data:
-        raise HTTPException(409, detail="Task has no student submissions")
-
-    if registry.count() == 0:
-        raise HTTPException(503, detail="No LLM provider configured.")
-
-    if job_store.active_count() >= 10:
-        raise HTTPException(429, detail="Too many concurrent jobs. Try again later.")
-
-    job_id = str(uuid.uuid4())
-    task_store.update(
-        task_id,
-        status="grading",
-        grading_job_id=job_id,
-        error=None,
-    )
-    asyncio.create_task(_run_grade(
-        t, registry, job_id, task_store, job_store, req.language,
-        multi_sample_n=req.multi_sample_n,
-    ))
-
-    return {
-        "status": "started",
-        "job_id": job_id,
-        "task_id": t.task_id,
-    }
-
-
-# ─── State / Result ──────────────────────────────────────────────────────────
 
 @router.get("/{task_id}/state")
-async def task_state(
-    task_id: str,
-    current: User = Depends(require_teacher),
-    task_store: TaskStore = Depends(get_task_store),
-):
-    """
-    Unified snapshot: task metadata + active reporter progress.
-    Frontend polls this single endpoint to drive the entire UI state.
-    """
-    t = _get_or_404(task_store, task_id)
-    _check_owner(t, current)
-
-    out = t.lite()
-
-    # Pick the active job's reporter, if any
-    active_job_id: Optional[str] = None
-    if t.status == "extracting_problems":
-        active_job_id = t.extract_job_id
-    elif t.status == "parsing_submissions":
-        active_job_id = t.parse_job_id
-    elif t.status == "grading":
-        active_job_id = t.grading_job_id
-
-    progress = None
-    if active_job_id:
-        reporter = get_reporter(active_job_id)
-        if reporter is not None:
-            snap = await reporter.snapshot()
-            progress = snap.model_dump()
-
-    out["progress"] = progress
-    out["active_job_id"] = active_job_id
-    return out
+async def task_state(task_id: str, current: User = Depends(require_teacher)):
+    try:
+        return await task_facade.async_task_state(task_id=task_id, owner_id=current.id)
+    except DomainError as exc:
+        return domain_error_response(exc)
 
 
 @router.get("/{task_id}/result")
-def task_result(
-    task_id: str,
-    current: User = Depends(require_teacher),
-    task_store: TaskStore = Depends(get_task_store),
-    job_store: JobStore = Depends(get_job_store),
-):
-    """Return the grading result if available, else status info."""
-    t = _get_or_404(task_store, task_id)
-    _check_owner(t, current)
+def task_result(task_id: str, current: User = Depends(require_teacher)):
+    return _domain(lambda: task_facade.task_results(task_id=task_id, owner_id=current.id))
 
-    if t.status != "graded" or not t.grading_job_id:
-        return {"status": t.status, "task_id": t.task_id, "error": t.error}
-
-    job = job_store.get(t.grading_job_id)
-    if job is None or job.results is None:
-        return {"status": "not_found", "task_id": t.task_id}
-    return {"status": "completed", "task_id": t.task_id, **(job.results or {})}
-
-
-# ─── Edit problem (manual stem / rubric refinement) ──────────────────────────
 
 @router.put("/{task_id}/problems/{q_id}")
-def update_problem(
-    task_id: str,
-    q_id: str,
-    req: UpdateProblemRequest,
-    current: User = Depends(require_teacher),
-    task_store: TaskStore = Depends(get_task_store),
-):
-    """Update a single problem's stem and/or criterion.
-
-    Allowed in any post-extract status (problems_ready through graded). The
-    new text is stored verbatim — math delimiters / markdown are preserved
-    so the teacher can re-read their edits without re-conversion.
-
-    Returns the updated problem dict.
-    """
-    t = _get_or_404(task_store, task_id)
-    _check_owner(t, current)
-
-    if t.status in ("draft", "extracting_problems"):
-        raise HTTPException(409, detail="Problems not extracted yet")
-
-    if q_id not in t.problem_data:
-        raise HTTPException(404, detail=f"Problem {q_id} not found")
-
-    # Patch in-place; updates Task.updated_at via TaskStore
-    new_problem = dict(t.problem_data[q_id])
-    if req.stem is not None:
-        new_problem["stem"] = req.stem
-    if req.criterion is not None:
-        new_problem["criterion"] = req.criterion
-
-    new_problems = dict(t.problem_data)
-    new_problems[q_id] = new_problem
-    task_store.update(task_id, problem_data=new_problems)
-    logger.info(f"[task:{task_id}] problem {q_id} edited by {current.id}")
-
-    return {"status": "ok", "q_id": q_id, "problem": new_problem}
+def update_problem(task_id: str, q_id: str, request: UpdateProblemRequest,
+                   current: User = Depends(require_teacher)):
+    return _domain(lambda: task_facade.update_problem(
+        task_id=task_id, owner_id=current.id, q_id=q_id,
+        patch=request.model_dump(exclude_unset=True),
+    ))
 
 
-# ─── Edit student answer (manual OCR/segmentation correction) ────────────────
-
-@router.put("/{task_id}/students/{stu_id}/answers/{q_id}")
+@router.put("/{task_id}/students/{student_id}/answers/{q_id}")
 def update_student_answer(
-    task_id: str,
-    stu_id: str,
-    q_id: str,
-    req: UpdateStudentAnswerRequest,
+    task_id: str, student_id: str, q_id: str,
+    request: UpdateStudentAnswerRequest,
     current: User = Depends(require_teacher),
-    task_store: TaskStore = Depends(get_task_store),
 ):
-    """Patch a single (student, question) parsed answer.
-
-    Allowed once submissions are parsed (status `submissions_ready` or any
-    later status — it's safe to fix recognition errors even after grading,
-    though the existing grade will not auto-rerun).
-
-    Returns the patched answer dict.
-    """
-    t = _get_or_404(task_store, task_id)
-    _check_owner(t, current)
-
-    if t.status in ("draft", "extracting_problems", "problems_ready", "parsing_submissions"):
-        raise HTTPException(409, detail="Submissions not parsed yet")
-
-    student = t.student_data.get(stu_id)
-    if student is None:
-        raise HTTPException(404, detail=f"Student {stu_id} not found")
-
-    answers = student.get("stu_ans") if isinstance(student, dict) else None
-    if not isinstance(answers, list):
-        raise HTTPException(500, detail="Malformed student data")
-
-    # Locate the matching answer
-    target_idx = None
-    for i, a in enumerate(answers):
-        if isinstance(a, dict) and a.get("q_id") == q_id:
-            target_idx = i
-            break
-    if target_idx is None:
-        raise HTTPException(404, detail=f"No answer for q_id={q_id} on student {stu_id}")
-
-    # Patch — copy-on-write so TaskStore's update detects the change
-    new_answer = dict(answers[target_idx])
-    if req.content is not None:
-        new_answer["content"] = req.content
-    if req.flag is not None:
-        new_answer["flag"] = list(req.flag)
-
-    new_answers = list(answers)
-    new_answers[target_idx] = new_answer
-
-    new_student = dict(student)
-    new_student["stu_ans"] = new_answers
-
-    new_student_data = dict(t.student_data)
-    new_student_data[stu_id] = new_student
-    task_store.update(task_id, student_data=new_student_data)
-    logger.info(f"[task:{task_id}] student {stu_id} answer for {q_id} edited by {current.id}")
-
-    return {"status": "ok", "stu_id": stu_id, "q_id": q_id, "answer": new_answer}
+    return _domain(lambda: task_facade.update_student_answer(
+        task_id=task_id, owner_id=current.id, display_student_id=student_id,
+        q_id=q_id, patch=request.model_dump(exclude_unset=True),
+        expected_revision=request.expected_workflow_revision,
+    ))
 
 
-# ─── Teacher comments (manual annotation on AI corrections) ──────────────────
+@router.put("/{task_id}/students/{student_id}/identity")
+def update_student_identity(
+    task_id: str, student_id: str, request: UpdateStudentIdentityRequest,
+    current: User = Depends(require_teacher),
+):
+    return _domain(lambda: task_facade.update_student_identity(
+        task_id=task_id, owner_id=current.id,
+        current_display_id=student_id, new_display_id=request.student_id,
+        new_display_name=request.student_name,
+        expected_revision=request.expected_workflow_revision,
+    ))
+
+
+@router.put("/{task_id}/reviews/{student_id}/{q_id}")
+def update_correction_review(
+    task_id: str, student_id: str, q_id: str,
+    request: UpdateCorrectionReviewRequest,
+    current: User = Depends(require_teacher),
+):
+    return _domain(lambda: task_facade.update_correction_review(
+        task_id=task_id, owner_id=current.id, display_student_id=student_id,
+        q_id=q_id, teacher_score=request.teacher_score,
+        teacher_comment=request.teacher_comment, confirm=request.confirm,
+        expected_revision=request.expected_workflow_revision,
+    ))
+
 
 @router.post("/{task_id}/teacher_comment")
 def set_teacher_comment(
-    task_id: str,
-    req: UpdateTeacherCommentRequest,
+    task_id: str, request: UpdateTeacherCommentRequest,
     current: User = Depends(require_teacher),
-    task_store: TaskStore = Depends(get_task_store),
-    job_store: JobStore = Depends(get_job_store),
 ):
-    """Set / update / clear a teacher's manual comment on a graded answer.
-
-    The comment is stored on the matching `Correction` entry in the grading
-    job's results dict (mirrored into JobStore on grading completion). It
-    coexists with — never replaces — the AI's `comment` field.
-
-    Empty string clears the comment.
-    """
-    t = _get_or_404(task_store, task_id)
-    _check_owner(t, current)
-
-    if t.status != "graded" or not t.grading_job_id:
-        raise HTTPException(409, detail=f"Task not graded yet (status={t.status})")
-
-    job = job_store.get(t.grading_job_id)
-    if job is None or job.results is None:
-        raise HTTPException(404, detail="Grading result not found")
-
-    results = job.results or {}
-    students = results.get("results", []) or []
-    if not isinstance(students, list):
-        raise HTTPException(500, detail="Malformed results payload")
-
-    target_student = None
-    for s in students:
-        if str(s.get("student_id", "")) == req.student_id:
-            target_student = s
-            break
-    if target_student is None:
-        raise HTTPException(404, detail=f"Student {req.student_id} not found in results")
-
-    target_correction = None
-    for c in target_student.get("corrections", []) or []:
-        if str(c.get("q_id", "")) == req.q_id:
-            target_correction = c
-            break
-    if target_correction is None:
-        raise HTTPException(404, detail=f"No correction for q_id={req.q_id} on student {req.student_id}")
-
-    # Mutate in place — JobStore keeps a reference to the dict, so this persists
-    # for the lifetime of the in-memory job.
-    target_correction["teacher_comment"] = (req.comment or "").strip()
-    logger.info(
-        f"[task:{task_id}] teacher comment {'cleared' if not req.comment else 'set'} "
-        f"on student={req.student_id} q={req.q_id}"
-    )
-    return {
-        "status": "ok",
-        "student_id": req.student_id,
-        "q_id": req.q_id,
-        "teacher_comment": target_correction["teacher_comment"],
-    }
+    try:
+        workflow = workflow_repository.get_workflow(task_id, owner_id=current.id)
+        results = task_facade.task_results(task_id=task_id, owner_id=current.id)
+        student = next((item for item in results.get("results", []) if item["student_id"] == request.student_id), None)
+        correction = next((item for item in (student or {}).get("corrections", []) if item["q_id"] == request.q_id), None)
+        if correction is None:
+            raise NotFound("grade_result")
+        task_facade.update_correction_review(
+            task_id=task_id, owner_id=current.id,
+            display_student_id=request.student_id, q_id=request.q_id,
+            teacher_score=correction.get("teacher_score") if correction.get("teacher_score") is not None else correction["score"],
+            teacher_comment=request.comment, confirm=False,
+            expected_revision=workflow.workflow_revision,
+        )
+        return {"status": "ok", "student_id": request.student_id,
+                "q_id": request.q_id, "teacher_comment": request.comment}
+    except DomainError as exc:
+        return domain_error_response(exc)
 
 
 @router.get("/{task_id}/teacher_comments")
-def list_teacher_comments(
-    task_id: str,
-    current: User = Depends(require_teacher),
-    task_store: TaskStore = Depends(get_task_store),
-    job_store: JobStore = Depends(get_job_store),
-):
-    """Return all teacher comments for a task as a flat dict.
-
-    Keyed by f"{student_id}::{q_id}" — easy for the frontend to merge into
-    its TaskState.teacher_comments dict on task load.
-    """
-    t = _get_or_404(task_store, task_id)
-    _check_owner(t, current)
-
-    if t.status != "graded" or not t.grading_job_id:
-        return {"comments": {}}
-
-    job = job_store.get(t.grading_job_id)
-    if job is None or job.results is None:
-        return {"comments": {}}
-
-    out: Dict[str, str] = {}
-    for s in job.results.get("results", []) or []:
-        sid = str(s.get("student_id", ""))
-        for c in s.get("corrections", []) or []:
-            qid = str(c.get("q_id", ""))
-            tc = c.get("teacher_comment", "")
-            if tc:
-                out[f"{sid}::{qid}"] = tc
-    return {"comments": out}
-
-
-# ─── Task-scoped knowledge base (RAG MVP) ────────────────────────────────────
-#
-# Upload a reference document (PDF / MD / TXT) for the current task. The
-# backend chunks + embeds it and indexes it in
-# `backend.rag.store.InMemoryTaskRetriever` keyed by task_id. Grading skills
-# (concept, proof) retrieve from this scope at LLM-call time.
-#
-# Lifecycle:
-#   - Pure in-memory: lost on Render free-tier sleep / restart. The user has
-#     accepted this trade-off — it matches the "测一两个 task,退出失效" UX.
-#   - Cleaned up on DELETE /tasks/{id} (see delete_task).
-#   - Limits: 5 MB / file, 500 chunks / doc, 3 docs / task. See
-#     backend/rag/chunker.py and backend/rag/store.py.
-#
-# Idempotency: same as extract_problems / parse_submissions — sha256(file)
-# hash is stored on each KBDoc; uploading the same bytes returns the
-# existing doc_id with status "already_done".
-
-
-@router.post("/{task_id}/kb")
-async def task_upload_kb(
-    task_id: str,
-    file: UploadFile = File(...),
-    current: User = Depends(require_teacher),
-    task_store: TaskStore = Depends(get_task_store),
-    registry: ExpertRegistry = Depends(get_expert_registry),
-):
-    """Chunk + embed a reference document and add it to this task's KB index."""
-    t = _get_or_404(task_store, task_id)
-    _check_owner(t, current)
-
-    if registry.count() == 0:
-        raise HTTPException(
-            503,
-            detail="Configure at least one BYOK provider before uploading KB; "
-                   "the embedder needs an API key (Zhipu / OpenAI for dense; "
-                   "any provider for BM25 fallback).",
-        )
-
-    retriever = get_retriever()
-    if not isinstance(retriever, InMemoryTaskRetriever):
-        raise HTTPException(
-            503,
-            detail="Task-scoped KB retriever is not active on this deployment.",
-        )
-
-    body = await file.read()
-    if len(body) > KB_MAX_FILE_BYTES:
-        raise HTTPException(
-            413,
-            detail=f"KB file too large ({len(body)} bytes > {KB_MAX_FILE_BYTES}).",
-        )
-
-    sha256 = hashlib.sha256(body).hexdigest()
-
-    # Idempotency: same file already indexed for this task
-    existing = retriever.find_doc_by_hash(task_id, sha256)
-    if existing is not None:
-        return {
-            "status": "already_done",
-            "task_id": t.task_id,
-            "doc_id": existing.doc_id,
-            "filename": existing.filename,
-            "chunk_count": existing.chunk_count,
-        }
-
-    # Extract → chunk
-    text = await kb_extract_text(file.filename or "kb.txt", body)
-    chunks = chunk_text(text)
-    if not chunks:
-        raise HTTPException(400, detail="Document produced no usable chunks.")
-
-    # Embed + index. pick_embedder picks zhipu > openai > BM25 from BYOK.
-    embedder = pick_embedder(registry)
-    doc_id = f"kb_{uuid.uuid4().hex[:10]}"
+def list_teacher_comments(task_id: str, current: User = Depends(require_teacher)):
     try:
-        entry = await retriever.add_document(
-            task_id=task_id,
-            doc_id=doc_id,
-            filename=file.filename or "kb.txt",
-            sha256=sha256,
-            chunks=chunks,
-            embedder=embedder,
-        )
-    except ValueError as e:
-        # Limit exceeded / dim mismatch / embedder switch — caller-facing 4xx
-        raise HTTPException(409, detail=str(e))
-    except Exception as e:
-        logger.exception(f"[task:{task_id}] KB embed failed")
-        raise HTTPException(502, detail=f"Embedding failed: {e}")
+        results = task_facade.task_results(task_id=task_id, owner_id=current.id)
+    except DomainError as exc:
+        return domain_error_response(exc)
+    comments = {}
+    for student in results.get("results", []):
+        for correction in student.get("corrections", []):
+            if correction.get("teacher_comment"):
+                comments[f"{student['student_id']}::{correction['q_id']}"] = correction["teacher_comment"]
+    return {"comments": comments}
 
-    # Mirror metadata into the Task so frontend can list without hitting the
-    # retriever directly.
-    new_kb_docs = dict(t.kb_docs)
-    new_kb_docs[doc_id] = entry.public()
-    task_store.update(task_id, kb_docs=new_kb_docs)
-    logger.info(
-        f"[task:{task_id}] KB upload doc_id={doc_id} filename={file.filename!r} "
-        f"chunks={len(chunks)} embedder={embedder.name}"
-    )
+
+@router.get("/{task_id}/grading-setup")
+def get_grading_setup(
+    task_id: str,
+    current: User = Depends(require_teacher),
+    registry: ExpertRegistry = Depends(get_scoped_expert_registry),
+):
+    try:
+        return _grading_setup_payload(task_id, current.id, registry)
+    except DomainError as exc:
+        return domain_error_response(exc)
+
+
+@router.put("/{task_id}/grading-setup")
+def save_grading_setup(
+    task_id: str,
+    request: UpdateGradingSetupRequest,
+    current: User = Depends(require_teacher),
+    registry: ExpertRegistry = Depends(get_scoped_expert_registry),
+):
+    try:
+        workflow = workflow_repository.get_workflow(task_id, owner_id=current.id)
+        setup = TaskGradingSetup.model_validate(request.grading_setup)
+        _validate_grading_setup(setup, registry)
+        body = setup.model_dump(mode="json")
+        fingerprint = hashlib.sha256(json.dumps(body, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+        unchanged = workflow.grading_setup_fingerprint == fingerprint
+        if not unchanged:
+            workflow_repository.update_workflow(
+                task_id, owner_id=current.id,
+                expected_revision=request.expected_workflow_revision,
+                grading_setup=body, grading_setup_fingerprint=fingerprint,
+                grading_setup_updated_at=time.time(),
+            )
+        else:
+            workflow_repository.update_workflow(
+                task_id, owner_id=current.id,
+                expected_revision=request.expected_workflow_revision,
+                bump_revision=False,
+            )
+        return {**_grading_setup_payload(task_id, current.id, registry),
+                "status": "unchanged" if unchanged else "saved"}
+    except PydanticValidationError as exc:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY,
+                            detail={"code": "invalid_grading_setup"}) from exc
+    except DomainError as exc:
+        return domain_error_response(exc)
+
+
+def _validate_grading_setup(setup: TaskGradingSetup, registry: ExpertRegistry) -> None:
+    configs = {str(item["provider_id"]): item for item in registry.list_configs()}
+    selected = setup.selected_provider_ids
+    if len(set(selected)) != len(selected):
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, detail={"code": "duplicate_provider_ids"})
+    if setup.primary_provider_id not in selected:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, detail={"code": "primary_provider_not_selected"})
+    if any(provider_id not in configs or not configs[provider_id].get("enabled") for provider_id in selected):
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, detail={"code": "provider_not_enabled"})
+    if setup.aggregation_method == "single" and len(selected) != 1:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, detail={"code": "invalid_provider_count"})
+    if setup.aggregation_method != "single" and len(selected) < 2:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, detail={"code": "invalid_provider_count"})
+    if registry.uses_shared_pool() and (len(selected) != 1 or setup.aggregation_method != "single" or setup.multi_sample_n != 1):
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, detail={"code": "shared_pool_single_expert_required"})
+
+
+def _grading_setup_payload(task_id: str, owner_id: str, registry: ExpertRegistry) -> dict:
+    task = task_facade.get_task(task_id=task_id, owner_id=owner_id, full=False)
+    workflow = workflow_repository.get_workflow(task_id, owner_id=owner_id)
+    configs = []
+    for item in registry.list_configs():
+        configs.append({
+            key: item.get(key) for key in (
+                "provider_id", "provider_type", "model", "display_name", "enabled",
+                "scope", "is_shared", "editable", "max_concurrent", "rpm",
+            )
+        })
+    default_id = registry.pick_default_id()
+    suggested = None
+    if default_id is not None:
+        suggested = TaskGradingSetup(
+            selected_provider_ids=[default_id],
+            primary_provider_id=default_id,
+            knowledge_scope="all_task_docs" if task["kb_doc_count"] else "none",
+        ).model_dump(mode="json")
+    blocking = []
+    if not configs:
+        blocking.append("provider_required")
+    if task["status"] not in {"problems_ready", "submissions_ready", "error"}:
+        blocking.append("invalid_state")
+    if workflow.grading_setup:
+        try:
+            _validate_grading_setup(TaskGradingSetup.model_validate(workflow.grading_setup), registry)
+        except (HTTPException, PydanticValidationError):
+            blocking.append("invalid_grading_setup")
     return {
-        "status": "started",  # synchronous in MVP, kept for symmetry with other endpoints
-        "task_id": t.task_id,
-        "doc_id": doc_id,
-        "filename": entry.filename,
-        "chunk_count": entry.chunk_count,
-        "embedder": embedder.name,
+        "task_id": task_id, "task_status": task["status"],
+        "workflow_revision": workflow.workflow_revision,
+        "configured": workflow.grading_setup is not None,
+        "grading_setup": workflow.grading_setup,
+        "suggested_setup": suggested,
+        "grading_setup_fingerprint": workflow.grading_setup_fingerprint,
+        "grading_setup_updated_at": workflow.grading_setup_updated_at,
+        "available_experts": configs,
+        "knowledge": {
+            "scope_options": ["none", "all_task_docs"],
+            "task_doc_count": task["kb_doc_count"],
+            "task_docs": list(task["kb_docs"].values()),
+        },
+        "readiness": {"ready": not blocking, "blocking_issues": list(dict.fromkeys(blocking)), "warnings": []},
     }
 
 
-@router.get("/{task_id}/kb")
-def task_list_kb(
-    task_id: str,
+@router.get("/{task_id}/finalization")
+def get_finalization(task_id: str, current: User = Depends(require_teacher)):
+    return _domain(lambda: task_facade.finalization(task_id=task_id, owner_id=current.id))
+
+
+@router.post("/{task_id}/finalization/confirm")
+def confirm_finalization(
+    task_id: str, request: ConfirmFinalResultRequest,
     current: User = Depends(require_teacher),
-    task_store: TaskStore = Depends(get_task_store),
 ):
-    """Return the metadata for all KB documents currently indexed under this task."""
-    t = _get_or_404(task_store, task_id)
-    _check_owner(t, current)
-    retriever = get_retriever()
-    # Source of truth = retriever (Task.kb_docs is just a serialization mirror).
-    if isinstance(retriever, InMemoryTaskRetriever):
-        return {"docs": retriever.list_docs(task_id)}
-    return {"docs": list((t.kb_docs or {}).values())}
+    return _domain(lambda: task_facade.confirm_finalization(
+        task_id=task_id, owner_id=current.id,
+        expected_revision=request.expected_workflow_revision,
+    ))
+
+
+@router.get("/{task_id}/artifacts")
+def list_artifacts(task_id: str, current: User = Depends(require_teacher)):
+    return _domain(lambda: task_facade.artifact_index(task_id=task_id, owner_id=current.id))
+
+
+@router.post("/{task_id}/artifacts/generate")
+def generate_artifacts(
+    task_id: str, request: GenerateResultArtifactsRequest,
+    current: User = Depends(require_teacher),
+):
+    return _domain(lambda: task_facade.generate_artifacts(
+        task_id=task_id, owner_id=current.id,
+        expected_revision=request.expected_workflow_revision,
+    ))
+
+
+@router.get("/{task_id}/artifacts/{version_number}/{artifact_id}")
+def download_artifact(
+    task_id: str, version_number: int, artifact_id: str,
+    current: User = Depends(require_teacher),
+):
+    try:
+        content, media_type, filename = task_facade.artifact_bytes(
+            task_id=task_id, owner_id=current.id,
+            version=version_number, artifact_id=artifact_id,
+        )
+    except DomainError as exc:
+        return domain_error_response(exc)
+    return Response(
+        content=content, media_type=media_type,
+        headers={"Content-Disposition": f"attachment; filename*=UTF-8''{quote(filename, safe='')}"},
+    )
+
+
+# ─── Assignment-scoped personal knowledge compatibility ─────────────────────
+
+
+@router.post("/{task_id}/kb")
+async def upload_task_knowledge(
+    task_id: str,
+    file: UploadFile | None = File(default=None),
+    library_material_id: str | None = Form(default=None),
+    save_to_library: bool = Form(default=False),
+    expected_workflow_revision: int | None = Form(default=None),
+    current: User = Depends(require_teacher),
+):
+    try:
+        assignment_repository.get_assignment(task_id, actor_id=current.id)
+        workflow = workflow_repository.get_workflow(task_id, owner_id=current.id)
+        if expected_workflow_revision is not None and workflow.workflow_revision != expected_workflow_revision:
+            from backend.domain.errors import VersionConflict
+            raise VersionConflict("workflow_revision_conflict")
+        if library_material_id:
+            from backend.db import course_library_repository as library_repo
+
+            material = library_repo.get_material(library_material_id, current.id)
+            if material is None:
+                raise NotFound("course_material")
+            document_id = material.document_id
+            document = _knowledge_document(document_id, current.id)
+            created = False
+            source_kind = "library"
+            effective_material_id = material.material_id
+            saved_material_created = False
+        elif file is not None:
+            body = await file.read()
+            document = await ingest_document(
+                owner_id=current.id, original_name=file.filename or "knowledge.txt",
+                content=body, content_type=file.content_type,
+            )
+            document_id = document.id
+            created = True
+            source_kind = "upload"
+            from backend.db import course_library_repository as library_repo
+
+            material = library_repo.get_material_by_document(
+                document_id, current.id
+            )
+            saved_material_created = False
+            if save_to_library and material is None:
+                material, saved_material_created = library_repo.create_material(
+                    owner_id=current.id,
+                    document_id=document_id,
+                    filename=document.original_name,
+                    category="other",
+                    labels=[],
+                    course_id=None,
+                    group_id=None,
+                )
+            effective_material_id = (
+                material.material_id if material is not None else None
+            )
+        else:
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, detail={"code": "knowledge_source_required"})
+        from backend.db.knowledge_repository import (
+            list_selected_documents,
+            set_selected_document_metadata,
+            set_task_documents,
+        )
+        selected = list_selected_documents(task_id, current.id)
+        ids = [item.id for item in selected]
+        if document_id not in ids:
+            ids.append(document_id)
+        set_task_documents(assignment_id=task_id, owner_id=current.id, document_ids=ids)
+        try:
+            set_selected_document_metadata(
+                assignment_id=task_id,
+                owner_id=current.id,
+                document_id=document_id,
+                source_kind=source_kind,
+                library_material_id=effective_material_id,
+            )
+        except ValueError as exc:
+            raise ValidationError(
+                "Knowledge attachment metadata is invalid.",
+                code="knowledge_attachment_invalid",
+            ) from exc
+        revised = workflow_repository.update_workflow(task_id, owner_id=current.id)
+        return {
+            "status": "started" if created else "already_done", "task_id": task_id,
+            "doc_id": document.id, "filename": document.original_name,
+            "chunk_count": document.chunk_count, "workflow_revision": revised.workflow_revision,
+            "source_kind": source_kind,
+            "library_material_id": effective_material_id,
+            "saved_to_library": effective_material_id is not None,
+            "saved_material_id": effective_material_id if save_to_library else None,
+            "saved_material_created": saved_material_created,
+        }
+    except DomainError as exc:
+        return domain_error_response(exc)
+
+
+@router.get("/{task_id}/kb")
+def list_task_knowledge(task_id: str, current: User = Depends(require_teacher)):
+    try:
+        task = task_facade.get_task(task_id=task_id, owner_id=current.id, full=False)
+    except DomainError as exc:
+        return domain_error_response(exc)
+    return {"docs": list(task["kb_docs"].values())}
 
 
 @router.delete("/{task_id}/kb/{doc_id}")
-def task_delete_kb(
-    task_id: str,
-    doc_id: str,
+def delete_task_knowledge(
+    task_id: str, doc_id: str,
+    expected_workflow_revision: int | None = Query(default=None, ge=0),
     current: User = Depends(require_teacher),
-    task_store: TaskStore = Depends(get_task_store),
 ):
-    """Remove a single KB document from this task's index."""
-    t = _get_or_404(task_store, task_id)
-    _check_owner(t, current)
-    retriever = get_retriever()
-    removed = False
-    if isinstance(retriever, InMemoryTaskRetriever):
-        removed = retriever.remove_doc(task_id, doc_id)
+    try:
+        workflow = workflow_repository.get_workflow(task_id, owner_id=current.id)
+        if expected_workflow_revision is not None and workflow.workflow_revision != expected_workflow_revision:
+            from backend.domain.errors import VersionConflict
+            raise VersionConflict("workflow_revision_conflict")
+        from backend.db.knowledge_repository import list_selected_documents, set_task_documents
+        selected = list_selected_documents(task_id, current.id)
+        if doc_id not in {item.id for item in selected}:
+            raise NotFound("knowledge_document")
+        set_task_documents(
+            assignment_id=task_id, owner_id=current.id,
+            document_ids=[item.id for item in selected if item.id != doc_id],
+        )
+        revised = workflow_repository.update_workflow(task_id, owner_id=current.id)
+        return {"status": "success", "doc_id": doc_id, "workflow_revision": revised.workflow_revision}
+    except DomainError as exc:
+        return domain_error_response(exc)
 
-    if doc_id in (t.kb_docs or {}):
-        new_kb_docs = dict(t.kb_docs)
-        new_kb_docs.pop(doc_id, None)
-        task_store.update(task_id, kb_docs=new_kb_docs)
-        removed = True
 
-    if not removed:
-        raise HTTPException(404, detail=f"KB doc {doc_id} not found on task {task_id}")
-    return {"status": "success", "doc_id": doc_id}
+def _material_document_id(material_id: str, owner_id: str) -> str:
+    try:
+        from backend.db import material_repository
+        material = material_repository.get_material(material_id=material_id, owner_id=owner_id)
+        return material.document_id
+    except (ImportError, AttributeError):
+        raise NotFound("course_material")
 
+
+def _knowledge_document(document_id: str, owner_id: str):
+    from backend.db.knowledge_repository import get_document
+    document = get_document(document_id, owner_id)
+    if document is None or document.status != "ready":
+        raise NotFound("knowledge_document")
+    return document
+
+
+# Source-token implementation is added below the router endpoints so the core
+# task contract remains readable.
+async def _extract_from_source_token(
+    task_id: str, source_token: str, confirmed_candidate_ids: list[str],
+    replace_confirmed: bool, current: User, registry: ExpertRegistry,
+    background_tasks: BackgroundTasks,
+):
+    try:
+        operation = workflow_repository.get_operation(source_token, owner_id=current.id)
+        if operation.assignment_id != task_id or operation.operation_type != "problem_source":
+            raise NotFound("problem_source")
+        if operation.expires_at is not None and operation.expires_at <= time.time():
+            raise InvalidTransition("Problem source expired.", code="stale_revision")
+        payload = dict(operation.payload or {})
+        candidates = list(payload.get("candidates") or [])
+        available = {
+            str(candidate.get("candidate_id"))
+            for candidate in candidates
+            if candidate.get("candidate_id")
+        }
+        selected = set(confirmed_candidate_ids)
+        if not selected.issubset(available):
+            raise ValidationError(
+                "One or more selected problem candidates are unknown.",
+                code="stale_revision",
+            )
+        if (
+            payload.get("structure_mode") == "extract_from_source"
+            and candidates
+            and not selected
+        ):
+            raise InvalidTransition(
+                "Problem candidates must be confirmed before extraction.",
+                code="replacement_confirmation_required",
+            )
+        content = str(payload.get("text") or "").encode("utf-8")
+        extraction_options = {
+            "structure_mode": payload.get("structure_mode", "organized"),
+            "extraction_hint": payload.get("extraction_hint", ""),
+            "confirmed_candidates": [
+                candidate for candidate in candidates
+                if not selected or candidate.get("candidate_id") in selected
+            ],
+        }
+        queued = task_facade.queue_task_problem_extraction(
+            task_id=task_id, owner_id=current.id,
+            filename=str(payload.get("filename") or "source.txt"),
+            content=content,
+            content_type=str(payload.get("content_type") or "text/plain"),
+            registry=registry,
+            input_hash=operation.input_hash,
+            expected_workflow_revision=int(payload.get("base_workflow_revision") or 0),
+            replace_confirmed=replace_confirmed,
+            extraction_options=extraction_options,
+        )
+        if queued["status"] == "started":
+            job_attempt = queued.pop("_job_attempt")
+            background_tasks.add_task(
+                task_facade.run_task_problem_extraction,
+                task_id=task_id, owner_id=current.id,
+                job_id=queued["job_id"],
+                filename=str(payload.get("filename") or "source.txt"),
+                content=content, registry=registry,
+                job_attempt=job_attempt,
+                claimed_workflow_revision=queued["workflow_revision"],
+                replace_confirmed=replace_confirmed,
+                extraction_options=extraction_options,
+            )
+        return queued
+    except DomainError as exc:
+        return domain_error_response(exc)

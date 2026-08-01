@@ -6,7 +6,7 @@ from __future__ import annotations
 
 import time
 from typing import List, Optional, Literal, Dict, Any
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 # ─── Grading result models ────────────────────────────────────────────────────
@@ -70,16 +70,40 @@ class Correction(BaseModel):
         description="Why review was flagged: e.g. 'high_indecisiveness', 'minority_veto'. "
                     "Stable string IDs so the frontend can localize without parsing.",
     )
+    # Presentation/audit overlay only. Durable teacher reviews continue to live
+    # in the normalized teacher_review table; these fields let grading DTOs be
+    # rendered by the Figma result model without becoming a persistence source.
+    teacher_score: Optional[float] = Field(None, ge=0)
+    teacher_comment: str = Field("", max_length=4000)
+    review_status: Literal["pending", "edited", "confirmed"] = "pending"
+    reviewed_at: Optional[float] = None
 
 
-# ─── Problem & student answer models ──────────────────────────────────────────
+# ─── Problem & student answer wire models ─────────────────────────────────────
+
+PreparationSourceRole = Literal[
+    "problem", "reference_answer", "rubric", "programming_tests",
+]
+ProblemStructureMode = Literal["organized", "extract_from_source"]
+
+
+def is_programming_question_type(value: Any) -> bool:
+    """Recognize both legacy English and current Chinese programming labels."""
+    normalized = "".join(
+        character for character in str(value or "").strip().casefold()
+        if character not in {" ", "_", "-"}
+    )
+    return normalized in {
+        "编程题", "程序设计题", "programming", "program", "code", "coding",
+        "programmingquestion", "codingquestion",
+    }
 
 class TestCase(BaseModel):
     """A single sandbox test case for programming problems.
 
     Replaces the dataclass previously defined in backend/tools/code_interpreter.py
-    so the same shape is used by api/tasks upload, ingest_agent parsing,
-    ProblemInfo storage, and the sandbox executor.
+    so the same shape is used by normalized assignment questions,
+    ingest_agent parsing, ProblemInfo storage, and the sandbox executor.
     """
     # Tell pytest NOT to try to collect this as a test class — without this,
     # the leading "Test" prefix triggers a PytestCollectionWarning.
@@ -88,6 +112,10 @@ class TestCase(BaseModel):
     input: str = ""
     expected_output: str = ""
     description: str = ""
+    title: str = ""
+    visibility: Literal["example", "hidden"] = "example"
+    purpose: Literal["normal", "boundary", "error", "performance", "other"] = "normal"
+    io_mode: Literal["stdin", "function"] = "stdin"
     source: Literal["teacher", "llm_generated"] = "teacher"
     sandbox_feasible: bool = Field(
         default=True,
@@ -120,12 +148,14 @@ class ProblemInfo(BaseModel):
     type: str = Field(description="Question type: 概念题/计算题/编程题/证明题/推理题/其他")
     stem: str = Field(description="Complete question stem including all text, formulas, and code")
     criterion: str = Field(description="Grading rubric/criteria")
+    review_status: Literal["needs_review", "edited", "confirmed"] = "needs_review"
     reference_answer: Optional[str] = Field(
         default=None,
         description="Teacher-supplied reference answer (calculation-style problems). "
                     "If None, CalculationSkill will ask the LLM to generate sympy code "
                     "and execute it in the sandbox to compute a reference value.",
     )
+    solution_code: Optional[str] = None
     test_cases: Optional[List[TestCase]] = Field(
         default=None,
         description="Teacher-supplied sandbox test cases (programming problems). "
@@ -191,6 +221,31 @@ class StudentSubmission(BaseModel):
     stu_ans: List[StudentAnswerInfo]
 
 
+class ProblemSourceDraft(BaseModel):
+    """Short-lived extraction input DTO; never a durable Task aggregate."""
+
+    source_token: str
+    task_id: str
+    owner_id: str
+    role: PreparationSourceRole = "problem"
+    source_kind: Literal["upload", "library", "inline_text"]
+    structure_mode: ProblemStructureMode
+    extraction_hint: str = ""
+    filename: str
+    content_type: str = "application/octet-stream"
+    size_bytes: int
+    content_sha256: str
+    text: Optional[str] = Field(default=None, repr=False)
+    library_material_id: Optional[str] = None
+    base_workflow_revision: int = 0
+    resident_bytes: int = 0
+    candidates: List[Dict[str, Any]] = Field(default_factory=list)
+    not_found: List[str] = Field(default_factory=list)
+    requires_confirmation: bool = False
+    created_at: float = Field(default_factory=time.time)
+    expires_at: float
+
+
 # ─── Progress tracking models (for frontend feedback) ─────────────────────────
 
 class ActiveUnit(BaseModel):
@@ -212,6 +267,8 @@ class ProgressEvent(BaseModel):
 
 class JobProgress(BaseModel):
     """Fine-grained progress for a grading job, polled by frontend."""
+    contract_version: int = 1
+    job_id: Optional[str] = None
     phase: Literal[
         "pending",
         "ingesting",
@@ -227,25 +284,16 @@ class JobProgress(BaseModel):
     total_students: int = 0
     total_questions: int = 0
     completed_units: int = Field(0, description="Number of (student, question) pairs finished")
+    started_at: Optional[float] = None
+    workflow: Optional[str] = None
+    stage_sequence: List[str] = Field(default_factory=list)
+    current_step: Optional[str] = None
+    total_steps: Optional[int] = None
+    completed_steps: Optional[int] = None
+    stage_metrics: Dict[str, int] = Field(default_factory=dict)
     active: List[ActiveUnit] = Field(default_factory=list, description="Currently running units")
     messages: List[ProgressEvent] = Field(default_factory=list, description="Ring buffer of last N events")
     error_detail: Optional[str] = None
-
-
-# ─── Job lifecycle model ──────────────────────────────────────────────────────
-
-class GradingJob(BaseModel):
-    """Represents a grading job (single student or batch)."""
-    job_id: str
-    job_name: Optional[str] = None
-    job_type: Literal["student", "batch"] = "student"
-    status: Literal["pending", "running", "completed", "error"] = "pending"
-    student_id: Optional[str] = None
-    created_at: float = Field(default_factory=time.time)
-    completed_at: Optional[float] = None
-    progress: JobProgress = Field(default_factory=JobProgress)
-    results: Optional[Dict[str, Any]] = None
-    error: Optional[str] = None
 
 
 # ─── LLM provider config ─────────────────────────────────────────────────────
@@ -278,77 +326,49 @@ class ProviderConfig(BaseModel):
     )
 
 
-# ─── User / Course / Assignment models (P0 — multi-role product) ──────────────
-
-Role = Literal["teacher", "student", "admin"]
-
-
-class User(BaseModel):
-    """A user record (teacher / student / admin)."""
-    id: str
-    username: str
-    email: str = ""
-    role: Role = "teacher"
-    password_hash: str = Field("", description="bcrypt hash; never returned to clients")
-    course_ids: List[str] = Field(default_factory=list, description="Courses this user belongs to (teacher: owns; student: enrolled)")
-    created_at: float = Field(default_factory=time.time)
-
-    def public(self) -> Dict[str, Any]:
-        """Dict safe to return to clients (no password hash)."""
-        return {
-            "id": self.id,
-            "username": self.username,
-            "email": self.email,
-            "role": self.role,
-            "course_ids": self.course_ids,
-            "created_at": self.created_at,
-        }
+# These are request/response configuration DTOs only. A normalized grading run
+# must persist the approved snapshot in its own repository; this class is not a
+# Task record and does not introduce a second source of durable workflow state.
+GradingAggregationMethod = Literal["single", "weighted_average", "judge_agent"]
+GradingKnowledgeScope = Literal["none", "all_task_docs"]
+GradingFeedbackTone = Literal["encouraging", "neutral", "strict"]
+GradingFeedbackLength = Literal["short", "medium", "long"]
+GradingFeedbackLanguage = Literal["zh", "en"]
 
 
-class Course(BaseModel):
-    """A course / class."""
-    id: str
-    name: str
-    code: str = ""
-    description: str = ""
-    teacher_id: str
-    student_ids: List[str] = Field(default_factory=list)
-    created_at: float = Field(default_factory=time.time)
+class TaskGradingSetup(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    schema_version: Literal[1] = 1
+    selected_provider_ids: List[str] = Field(min_length=1, max_length=8)
+    primary_provider_id: str = Field(min_length=1, max_length=240)
+    aggregation_method: GradingAggregationMethod = "single"
+    multi_sample_n: int = Field(default=1, ge=1, le=5)
+    knowledge_scope: GradingKnowledgeScope = "all_task_docs"
+    strictness: int = Field(default=50, ge=0, le=100)
+    allow_partial_credit: bool = True
+    feedback_tone: GradingFeedbackTone = "neutral"
+    feedback_length: GradingFeedbackLength = "medium"
+    feedback_language: GradingFeedbackLanguage = "zh"
+    suggest_corrections: bool = True
+    low_confidence_threshold: float = Field(default=0.60, ge=0.30, le=0.80)
+    teacher_notes: str = Field(default="", max_length=500)
+
+    @field_validator("selected_provider_ids", mode="before")
+    @classmethod
+    def _normalize_provider_ids(cls, value):
+        if not isinstance(value, list):
+            return value
+        return [item.strip() if isinstance(item, str) else item for item in value]
+
+    @field_validator("primary_provider_id", "teacher_notes", mode="before")
+    @classmethod
+    def _strip_text(cls, value):
+        return value.strip() if isinstance(value, str) else value
 
 
-class Assignment(BaseModel):
-    """An assignment within a course.
-
-    Wraps the existing problem_data structure (dict[q_id → ProblemInfo-like]) and
-    adds metadata (course, due date, publish status) so students can see and
-    submit to it.
-    """
-    id: str
-    course_id: str
-    teacher_id: str
-    name: str
-    description: str = ""
-    problem_data: Dict[str, Dict[str, Any]] = Field(default_factory=dict)
-    status: Literal["draft", "published", "closed"] = "draft"
-    due_at: Optional[float] = None
-    created_at: float = Field(default_factory=time.time)
-    published_at: Optional[float] = None
-
-
-class Submission(BaseModel):
-    """A student's submission for an assignment."""
-    id: str
-    assignment_id: str
-    student_id: str
-    answers: Dict[str, str] = Field(default_factory=dict, description="{q_id: answer_text}")
-    file_name: str = ""
-    submitted_at: float = Field(default_factory=time.time)
-    job_id: Optional[str] = Field(None, description="Linked grading job_id")
-    grade: Optional[Dict[str, Any]] = Field(None, description="Final grade dict (corrections + total)")
-
-
-# ─── Task lifecycle (frontend_v2 task-centric workflow) ───────────────────────
-
+# Presentation status vocabulary used by history/progress adapters. It is not
+# persisted as a legacy Task model; normalized assignment/run rows stay true.
 TaskStatus = Literal[
     "draft",
     "extracting_problems",
@@ -357,85 +377,40 @@ TaskStatus = Literal[
     "submissions_ready",
     "grading",
     "graded",
+    "review_confirmed",
+    "generating_analysis",
+    "finalized",
     "error",
 ]
 
 
-class Task(BaseModel):
-    """A grading task — bundles problems + submissions + grading job into one
-    user-visible unit. Replaces the global problem_store/student_store coupling
-    by making each task carry its own data.
+# ─── User / Course / Assignment models (P0 — multi-role product) ──────────────
 
-    Status machine (linear, with `error` as a sink):
-        draft
-          → extracting_problems → problems_ready
-          → parsing_submissions → submissions_ready
-          → grading → graded
-        any phase → error (recoverable by re-uploading)
+Role = Literal["teacher", "student", "admin"]
+
+
+class User(BaseModel):
+    """A user record (teacher / student / admin).
+
+    Membership is read only from ``course_enrollments``; the legacy
+    ``course_ids`` mirror is intentionally absent so there is one source of
+    truth for who belongs to which course.
     """
-    task_id: str
-    name: str = "Untitled task"
-    owner_id: str = "anonymous"
-    status: TaskStatus = "draft"
-
-    problem_data: Dict[str, Dict[str, Any]] = Field(default_factory=dict)
-    student_data: Dict[str, Dict[str, Any]] = Field(default_factory=dict)
-
-    extract_job_id: Optional[str] = None
-    parse_job_id: Optional[str] = None
-    grading_job_id: Optional[str] = None
-
-    problem_file_hash: Optional[str] = None
-    submission_file_hash: Optional[str] = None
-    problem_file_name: Optional[str] = None
-    submission_file_name: Optional[str] = None
-
-    # Reference answers (calculation-style problems) — auxiliary upload, does NOT
-    # change task.status. Stored per-question in problem_data[q_id]["reference_answer"]
-    # after parsing; these top-level fields hold the upload metadata.
-    reference_file_hash: Optional[str] = None
-    reference_file_name: Optional[str] = None
-    reference_parse_job_id: Optional[str] = None
-
-    # Test cases (programming problems) — same model as reference. Stored per-question
-    # in problem_data[q_id]["test_cases"] after parsing.
-    test_cases_file_hash: Optional[str] = None
-    test_cases_file_name: Optional[str] = None
-    test_cases_parse_job_id: Optional[str] = None
-
-    # ─── Task-scoped knowledge base (RAG MVP) ─────────────────────────────
-    # Mirror metadata for documents uploaded via POST /tasks/{id}/kb. The
-    # actual chunks + vectors live in backend.rag.store.InMemoryTaskRetriever
-    # (pure in-memory, evicted with the task). Keys = doc_id (random hex);
-    # values = KBDoc.public() shape. Frontend reads this dict to render the
-    # uploaded-files list on the Setup page.
-    kb_docs: Dict[str, Dict[str, Any]] = Field(default_factory=dict)
-
-    error: Optional[str] = None
+    id: str
+    username: str
+    email: str = ""
+    role: Role = "teacher"
+    password_hash: str = Field("", description="bcrypt hash; never returned to clients")
     created_at: float = Field(default_factory=time.time)
-    updated_at: float = Field(default_factory=time.time)
+    is_active: bool = True
 
-    def lite(self) -> Dict[str, Any]:
-        """Metadata-only representation for list views (no problem/student data)."""
+    def public(self) -> Dict[str, Any]:
+        """Dict safe to return to clients (no password hash, no course_ids)."""
         return {
-            "task_id": self.task_id,
-            "name": self.name,
-            "owner_id": self.owner_id,
-            "status": self.status,
-            "extract_job_id": self.extract_job_id,
-            "parse_job_id": self.parse_job_id,
-            "grading_job_id": self.grading_job_id,
-            "problem_file_name": self.problem_file_name,
-            "submission_file_name": self.submission_file_name,
-            "reference_file_name": self.reference_file_name,
-            "test_cases_file_name": self.test_cases_file_name,
-            "reference_parse_job_id": self.reference_parse_job_id,
-            "test_cases_parse_job_id": self.test_cases_parse_job_id,
-            "problem_count": len(self.problem_data),
-            "student_count": len(self.student_data),
-            "kb_docs": dict(self.kb_docs),
-            "kb_doc_count": len(self.kb_docs),
-            "error": self.error,
+            "id": self.id,
+            "username": self.username,
+            "email": self.email,
+            "role": self.role,
+            "is_active": self.is_active,
             "created_at": self.created_at,
-            "updated_at": self.updated_at,
         }

@@ -1,0 +1,55 @@
+import type { Locale } from "@/i18n/messages";
+
+const copy = {
+  title: ["批改中", "Grading in Progress"],
+  gradingAnswers: ["正在批改学生作答", "Grading student submissions"],
+  finalizing: ["正在完成结果分析", "Finalizing result analysis"],
+  completedPrefix: ["已完成", "Completed"],
+  unitSuffix: ["题次", "responses"],
+  etaPrefix: ["预计剩余", "Estimated remaining"],
+  estimating: ["估算中", "Estimating"],
+  waitingFirst: ["等待首个题次", "Waiting for the first response"],
+  almostDone: ["即将完成", "Almost done"],
+  aboutSeconds: ["约 {value} 秒", "about {value} sec"],
+  aboutMinutes: ["约 {value} 分钟", "about {value} min"],
+  aboutHours: ["约 {value} 小时", "about {value} hr"],
+  syncing: ["同步中", "Syncing"],
+  backgroundChip: ["可离开页面，任务会继续运行", "You can leave; grading will continue"],
+  backWorkspace: ["回到工作台", "Back to Workspace"],
+  queue: ["队列", "Queue"],
+  count: ["数量", "Count"],
+  state: ["状态", "Status"],
+  description: ["说明", "Description"],
+  completed: ["已完成", "Completed"],
+  running: ["运行中", "Running"],
+  queued: ["等待中", "Queued"],
+  errorSignals: ["错误信号", "Error signals"],
+  ok: ["完成", "OK"],
+  grading: ["批改中", "Grading"],
+  queuedState: ["排队", "Queued"],
+  none: ["无", "None"],
+  draftWritten: ["已写入当前批改结果草稿", "Written to the current grading draft"],
+  expertsWorking: ["当前专家正在处理；数量按学生 × 题目去重", "Models are working; the count is deduplicated by student × question"],
+  taskQueue: ["等待当前并发队列执行", "Waiting for the current concurrent queue"],
+  recentErrors: ["最近进度事件中的错误信号", "Error signals in recent progress events"],
+  noErrors: ["暂无错误", "No errors recorded"],
+  recoverableHint: ["如果出现 API 超量或网络超时，这里会显示真实错误、重试和调整批改设置入口。", "If an API quota or network timeout occurs, this area will show the real error, retry, and grading setup actions."],
+  failedTitle: ["本次批改没有完成", "This grading run did not finish"],
+  failedDescription: ["任务数据仍然保留。可以重试同一任务，或先调整任务级批改设置。", "Task data is preserved. Retry this task or adjust its task-level grading setup first."],
+  retry: ["重试批改", "Retry grading"],
+  retrying: ["正在重试…", "Retrying…"],
+  editExperts: ["调整批改设置", "Adjust grading setup"],
+  refresh: ["刷新状态", "Refresh status"],
+  reading: ["正在同步批改进度…", "Syncing grading progress…"],
+  readError: ["暂时无法读取批改进度", "Grading progress could not be loaded"],
+  readErrorDescription: ["任务仍可能在后台运行。请刷新状态，不要重复新建任务。", "The task may still be running in the background. Refresh before creating another task."],
+  missingTask: ["缺少任务信息，请从工作台或历史任务重新进入。", "Task information is missing. Reopen it from the workspace or history."],
+  viewHistory: ["查看历史任务", "View History"],
+  retryError: ["暂时无法重新启动批改，请刷新任务状态后再试。", "Grading could not be restarted. Refresh the task state and try again."],
+} as const;
+
+export type GradingProgressCopyKey = keyof typeof copy;
+
+export function gradingProgressText(locale: Locale, key: GradingProgressCopyKey): string {
+  return copy[key][locale === "en-US" ? 1 : 0];
+}

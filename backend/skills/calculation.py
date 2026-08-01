@@ -34,7 +34,7 @@ from typing import Optional, List, TYPE_CHECKING
 from pydantic import BaseModel, Field
 
 from backend.skills.base import GradingSkill, build_system_prompt, register_skill
-from backend.models import ExpertResult, ProblemInfo, StudentAnswerInfo, StepScore
+from backend.models import ExpertResult, ProblemInfo, StudentAnswerInfo, StepScore, TaskGradingSetup
 from backend.llm.providers import BaseProvider
 from backend.tools.structured_llm import structured_llm_call
 from backend.tools import numerical
@@ -174,7 +174,10 @@ async def _generate_sympy_program(
         )
         return result.code
     except Exception as e:
-        logger.warning(f"_generate_sympy_program failed: {e}")
+        logger.warning(
+            "_generate_sympy_program failed; exception_type=%s",
+            type(e).__name__,
+        )
         return None
 
 
@@ -188,7 +191,10 @@ async def _run_sympy_in_sandbox(code: str, *, timeout: float = 10.0) -> Optional
     try:
         result = await run_python_subprocess(code, "", timeout=timeout)
     except Exception as e:
-        logger.warning(f"_run_sympy_in_sandbox subprocess error: {e}")
+        logger.warning(
+            "_run_sympy_in_sandbox failed; exception_type=%s",
+            type(e).__name__,
+        )
         return None
     if result.passed and result.actual_output:
         return result.actual_output.strip()
@@ -237,8 +243,12 @@ class CalculationSkill(GradingSkill):
         reporter: Optional["ProgressReporter"] = None,
         language: str = "en",
         task_id: Optional[str] = None,
+        grading_setup: Optional[TaskGradingSetup] = None,
     ):
-        super().__init__(provider, reporter=reporter, language=language, task_id=task_id)
+        super().__init__(
+            provider, reporter=reporter, language=language, task_id=task_id,
+            grading_setup=grading_setup,
+        )
         self._template = _load_template()
 
     async def grade(
@@ -350,6 +360,7 @@ class CalculationSkill(GradingSkill):
                 "and produce a structured per-dimension score. Respect the verification branch "
                 "rules in the user prompt.",
                 self.language,
+                self.grading_setup,
             )
 
             result, raw = await structured_llm_call(
@@ -396,7 +407,10 @@ class CalculationSkill(GradingSkill):
             )
 
         except Exception as e:
-            logger.error(f"CalculationSkill failed: {e}", exc_info=True)
+            logger.error(
+                "CalculationSkill failed; exception_type=%s",
+                type(e).__name__,
+            )
             from backend.skills.base import classify_skill_error
             kind, friendly = classify_skill_error(e)
             return self._blank_result(problem.q_id, 10.0, friendly, error_kind=kind)

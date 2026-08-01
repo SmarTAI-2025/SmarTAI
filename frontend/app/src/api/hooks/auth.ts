@@ -1,13 +1,12 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import * as authApi from "@/api/auth";
-import { clearAuthToken, getAuthToken } from "@/api/client";
+import { clearAuthToken } from "@/api/client";
 import { authKeys } from "./keys";
 
 export function useCurrentUser() {
   return useQuery({
     queryKey: authKeys.me,
-    queryFn: authApi.getCurrentUser,
-    enabled: Boolean(getAuthToken()),
+    queryFn: authApi.restoreSession,
     retry: false,
   });
 }
@@ -47,7 +46,7 @@ export function useLogout() {
     mutationFn: authApi.logout,
     onSettled: () => {
       clearAuthToken();
-      queryClient.removeQueries({ queryKey: authKeys.me });
+      queryClient.clear();
     },
   });
 }

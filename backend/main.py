@@ -46,44 +46,61 @@ def create_app() -> FastAPI:
         )
     logger.info(f"Starting SmarTAI with GRADING_ENGINE={engine}")
     if settings.http_proxy:
-        logger.info(f"Proxy enabled: {settings.http_proxy}")
+        # Proxy URLs can contain credentials.  Keep startup diagnostics useful
+        # without copying the configured value into ordinary logs.
+        logger.info("HTTP proxy enabled")
 
     # ── Wire up task-scoped knowledge retriever (RAG MVP) ─────────────
     # Replaces the default NoOpRetriever set in backend/tools/knowledge.py.
     # Pure in-memory; chunks + vectors live keyed by task_id so grading
     # skills can scope retrieval via `scope=self.task_id`. State is lost
     # on process restart — by design (matches "测一两个 task 退出失效").
-    from backend.rag.store import InMemoryTaskRetriever
+    from backend.knowledge.retriever import CombinedKnowledgeRetriever
     from backend.tools.knowledge import set_retriever
-    set_retriever(InMemoryTaskRetriever())
+    set_retriever(CombinedKnowledgeRetriever())
 
     # ── V2: new agents/skills/tools architecture ──────────────────────
-    from backend.api.ingest import prob_router, hw_router
-    from backend.api.grading import router as grading_router
-    from backend.api.experts import router as experts_router
-    from backend.api.human_edit import router as human_edit_router
+    # Resource-oriented normalized routers remain canonical.  The /tasks façade
+    # below is a presentation adapter over those same repositories for the Figma
+    # teacher workflow; it does not restore the removed TaskStore/JobStore.
     from backend.api.auth import router as auth_router
     from backend.api.users import router as users_router
+    from backend.api.admin import router as admin_router
     from backend.api.courses import router as courses_router
     from backend.api.assignments import router as assignments_router
-    from backend.api.students import router as students_router
+    from backend.api.submissions import router as submissions_router
+    from backend.api.knowledge import router as knowledge_router, assignment_router as assignment_knowledge_router
+    from backend.api.grading_runs import router as grading_runs_router
+    from backend.api.results import router as results_router
+    from backend.api.experts import router as experts_router
     from backend.api.tasks import router as tasks_router
+    from backend.api.task_preparation import router as task_preparation_router
+    from backend.api.materials import router as materials_router
+    from backend.api.tags import router as tags_router
     from backend.api.analytics import router as analytics_router
 
-    app.include_router(prob_router)
-    app.include_router(hw_router)
-    app.include_router(grading_router)
-    app.include_router(experts_router)
-    app.include_router(human_edit_router)
     app.include_router(auth_router)
     app.include_router(users_router)
+    app.include_router(admin_router)
     app.include_router(courses_router)
     app.include_router(assignments_router)
-    app.include_router(students_router)
+    app.include_router(submissions_router)
+    app.include_router(knowledge_router)
+    app.include_router(assignment_knowledge_router)
+    app.include_router(grading_runs_router)
+    app.include_router(results_router)
+    app.include_router(experts_router)
     app.include_router(tasks_router)
+    app.include_router(task_preparation_router)
+    app.include_router(materials_router)
+    app.include_router(tags_router)
     app.include_router(analytics_router)
 
-    logger.info("V2 routers loaded: prob_preview, hw_preview, ai_grading, experts, human_edit, auth, users, courses, assignments, students, tasks, analytics")
+    logger.info(
+        "V2 routers loaded: auth, users, admin, courses, assignments, submissions, "
+        "knowledge, grading-runs, results, experts, tasks, task-preparation, "
+        "course-materials, tags, analytics"
+    )
 
     # ─── CORS ─────────────────────────────────────────────────────────────
     origins = settings.frontend_urls.split(",")
@@ -116,6 +133,17 @@ def create_app() -> FastAPI:
             "cpu_percent": process.cpu_percent(),
         }
 
+    @app.get("/ready")
+    async def readiness_check():
+        from fastapi.responses import JSONResponse
+        from backend.db.session import database_ready
+        from backend.storage import get_storage
+        database_ok = database_ready()
+        storage_ok = get_storage().ready()
+        payload = {"status": "ready" if database_ok and storage_ok else "not_ready",
+                   "database": database_ok, "storage": storage_ok}
+        return JSONResponse(payload, status_code=200 if database_ok and storage_ok else 503)
+
     # ─── Sandbox concurrency cap ──────────────────────────────────────────
     # The grading pipeline fans out via nested asyncio.gather (students ×
     # questions × test cases) — without a global semaphore, a single batch can
@@ -129,10 +157,51 @@ def create_app() -> FastAPI:
 
     # ─── Seed pre-baked test accounts (kept out of the repo) ──────────────
     try:
+        if settings.database_auto_create:
+            from backend.db.session import create_schema
+            create_schema()
         from backend.auth.seed import seed_test_users
         seed_test_users()
     except Exception as e:
         logger.warning(f"test users seeding skipped: {e}")
+
+    # ─── Grading worker lifecycle (Task 7) ────────────────────────────────
+    # One poller per process claims queued grading runs through the DB lease
+    # predicate, so multiple processes are safe and shutdown simply stops
+    # claiming new work (no unexpired lease is released). The loop is best-
+    # effort: a crashed process leaves its lease to expire, after which another
+    # worker reclaims the run.
+    _grading_worker: dict[str, object] = {"task": None}
+
+    @app.on_event("startup")
+    async def _start_grading_worker():
+        import asyncio as _asyncio
+        from backend.config import settings as _s
+        from backend.services.grading_runs import worker_loop
+
+        async def _run():
+            try:
+                await worker_loop(worker_id=_s.grading_worker_id)
+            except _asyncio.CancelledError:
+                raise
+            except Exception:
+                logger.exception("grading worker loop exited")
+
+        _grading_worker["task"] = _asyncio.create_task(_run())
+
+    @app.on_event("shutdown")
+    async def _stop_grading_worker():
+        import asyncio as _asyncio
+
+        task = _grading_worker.get("task")
+        if task is not None:
+            task.cancel()
+            try:
+                await task
+            except _asyncio.CancelledError:
+                pass
+            except Exception:
+                pass
 
     return app
 

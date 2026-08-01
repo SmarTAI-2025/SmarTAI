@@ -14,18 +14,13 @@ dist/
 .mypy_cache/
 .ruff_cache/
 
-# ─── Reflex (frontend) build artifacts ──────────────────────────────────────
-.web/
-.states/
-frontend/.web/
-frontend/.states/
-frontend/assets/external/
-frontend/uploaded_files/
-
 # ─── React / Vite frontend artifacts ────────────────────────────────────────
 frontend/app/node_modules/
 frontend/app/dist/
 frontend/app/.vite/
+frontend/app/playwright-report/
+frontend/app/test-results/
+.playwright-cli/
 frontend/app/*.local
 
 # ─── Secrets & credentials ──────────────────────────────────────────────────
@@ -40,6 +35,16 @@ secrets.toml
 # of the repo. Generate locally with: python scripts/generate_test_users.py
 data/test_users.json
 data/test_users.*.json
+data/uploads/
+
+# Local benchmark datasets are large and must not be committed.
+data/benchmarks/OmniDocBench/
+
+# OmniDocBench is research-only; keep local manual-test images out of Git.
+manual_test_samples/omnidocbench/images/
+
+# Generated OCR benchmark manifests, predictions, caches, and reports.
+artifacts/ocr_benchmark/
 
 # ─── Editor / IDE / OS ──────────────────────────────────────────────────────
 .vscode/
@@ -56,6 +61,7 @@ Thumbs.db
 # ─── Logs / temp ────────────────────────────────────────────────────────────
 *.log
 *.tmp
+/output/
 
 # ─── docs / figs ────────────────────────────────────────────────────────────
 docs/
@@ -65,4 +71,5 @@ CLAUDE.md
 
 # codex
 .codex
+.worktrees/
 AGENTS.md

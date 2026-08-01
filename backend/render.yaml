@@ -15,11 +15,11 @@ services:
     plan: free
     rootDir: .
     buildCommand: pip install -r render-requirements.txt
-    startCommand: uvicorn backend.main:app --host 0.0.0.0 --port $PORT
-    healthCheckPath: /health
+    startCommand: alembic upgrade head && uvicorn backend.main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /ready
     envVars:
       - key: PYTHON_VERSION
-        value: "3.11"   # ✅ Render free 支持，且 reflex/numpy/langchain 都 OK
+        value: "3.11"   # Render supports the backend's numpy/langchain stack.
       - key: SMARTAI_GRADING_ENGINE
         value: v2
       # Empty proxy — needed in cloud so HTTP_PROXY isn't inherited from any
@@ -36,6 +36,36 @@ services:
         value: "true"
       - key: SMARTAI_REGISTRATION_CLOSED
         value: "true"
+      - key: SMARTAI_DATABASE_URL
+        sync: false
+      - key: SMARTAI_DATABASE_URL_HEAVY
+        sync: false
+      - key: SMARTAI_DATABASE_HEAVY
+        value: "ON"
+      - key: SMARTAI_DATABASE_AUTO_CREATE
+        value: "false"
+      - key: SMARTAI_STORAGE_ROOT
+        value: "/var/data/uploads"  # local fallback; Render Free uses object storage below
+      - key: SMARTAI_STORAGE_BACKEND
+        value: "object"
+      - key: SMARTAI_PROVIDER_ENCRYPTION_KEY
+        sync: false
+      - key: SMARTAI_STORAGE_S3_ENDPOINT
+        sync: false
+      - key: SMARTAI_STORAGE_S3_BUCKET
+        sync: false
+      - key: SMARTAI_STORAGE_S3_REGION
+        value: "auto"
+      - key: SMARTAI_STORAGE_S3_ACCESS_KEY
+        sync: false
+      - key: SMARTAI_STORAGE_S3_SECRET_KEY
+        sync: false
+      - key: SMARTAI_REFRESH_COOKIE_SECURE
+        value: "true"
+      - key: SMARTAI_REFRESH_COOKIE_SAMESITE
+        value: "none"
+      - key: SMARTAI_SEED_TEST_USERS
+        value: "false"
       # Frontend URL — fill in after Vercel deploys. Comma-separated list
       # for CORS. Localhost included so you can do mixed dev (frontend
       # local, backend deployed) while iterating.

@@ -1,20 +1,20 @@
 """
 Knowledge retrieval tool (RAG over external knowledge base).
 
-Per docs §4.2.2, the original design called for PGVector for storage. The
-current task-scoped MVP uses an in-memory implementation in
-`backend/rag/store.InMemoryTaskRetriever`, registered at app startup
-(`backend/main.py`) — see ARCHITECTURE_AND_DEPLOYMENT.md for the full design.
+The application registers a combined persistent and in-memory retriever at
+startup. Persistent documents are selected per assignment; the in-memory
+retriever remains available to the unchanged grading algorithm.
 
 Skills call `retrieve(query, k=5, scope=task_id)` and get back a list of
-relevant chunks. If no KB has been uploaded for that task (or no retriever
-is configured), returns an empty list gracefully so skills still grade
-using only the LLM's own knowledge.
+relevant chunks. The adapter passes the assignment ID through the algorithm's
+existing `task_id` parameter. If no KB has been selected for that assignment
+(or no retriever is configured), returns an empty list gracefully so skills
+still grade using only the LLM's own knowledge.
 
 Note on the `scope` parameter:
-  - Pre-RAG callers (legacy / tests) can omit it; they get [].
-  - The active grading pipeline always threads `task_id` from the API entry
-    point (`backend/api/tasks.py::_run_grade`) down through
+  - Callers without assignment context can omit it; they get [].
+  - The active grading pipeline threads the assignment ID from the normalized
+    grading adapter down through the existing `task_id` parameter:
     `grade_batch → grade_student → multi_expert → GradingSkill.task_id` and
     skills pass it as `scope=self.task_id` at retrieve time.
 """

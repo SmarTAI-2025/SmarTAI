@@ -1,7 +1,14 @@
 export * as analyticsApi from "./analytics";
+export * as aiCompletionsApi from "./aiCompletions";
 export * as authApi from "./auth";
+export * as coursesApi from "./courses";
+export * as courseMaterialsApi from "./courseMaterials";
 export * from "./client";
 export * as expertsApi from "./experts";
 export * as healthApi from "./health";
+export * as gradingSetupApi from "./gradingSetup";
 export * as kbApi from "./kb";
+export * as materialImportsApi from "./materialImports";
+export * as problemSourcesApi from "./problemSources";
+export * as tagsApi from "./tags";
 export * as tasksApi from "./tasks";

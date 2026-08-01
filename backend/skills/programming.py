@@ -3,8 +3,8 @@ ProgrammingSkill: grades programming questions (编程题).
 
 Strategy (4-tier sandbox-cases ladder):
 
-    1. teacher          → ProblemInfo.test_cases (uploaded via
-                          POST /tasks/{id}/upload_test_cases) is non-empty.
+    1. teacher          → ProblemInfo.test_cases from normalized assignment
+                          questions is non-empty.
                           Run sandbox; pass/fail tally is the score anchor.
     2. llm_generated    → No teacher cases AND no complexity-keyword hits
                           AND student code is Python.
@@ -34,8 +34,13 @@ from typing import Optional, List, Tuple, TYPE_CHECKING
 
 from pydantic import BaseModel, Field
 
-from backend.skills.base import GradingSkill, build_system_prompt, register_skill
-from backend.models import ExpertResult, ProblemInfo, StudentAnswerInfo, StepScore, TestCase
+from backend.skills.base import (
+    GradingSkill,
+    build_system_prompt,
+    format_deterministic_feedback,
+    register_skill,
+)
+from backend.models import ExpertResult, ProblemInfo, StudentAnswerInfo, StepScore, TaskGradingSetup, TestCase
 from backend.llm.providers import BaseProvider
 from backend.tools.structured_llm import structured_llm_call
 from backend.tools.code_interpreter import run_sandbox, ExecutionReport
@@ -265,7 +270,10 @@ async def _generate_test_cases(
             output_model=TestCaseList,
         )
     except Exception as e:
-        logger.warning(f"_generate_test_cases LLM call failed: {e}")
+        logger.warning(
+            "_generate_test_cases LLM call failed; exception_type=%s",
+            type(e).__name__,
+        )
         return [], "llm_failed_transient"
 
     if not result.cases:
@@ -305,7 +313,10 @@ def _coerce_test_cases(raw: object) -> List[TestCase]:
             try:
                 out.append(TestCase(**item))
             except Exception as e:
-                logger.warning(f"Skipping invalid test case dict {item}: {e}")
+                logger.warning(
+                    "Skipping invalid test case; exception_type=%s",
+                    type(e).__name__,
+                )
     return out
 
 
@@ -442,8 +453,12 @@ class ProgrammingSkill(GradingSkill):
         reporter: Optional["ProgressReporter"] = None,
         language: str = "en",
         task_id: Optional[str] = None,
+        grading_setup: Optional[TaskGradingSetup] = None,
     ):
-        super().__init__(provider, reporter=reporter, language=language, task_id=task_id)
+        super().__init__(
+            provider, reporter=reporter, language=language, task_id=task_id,
+            grading_setup=grading_setup,
+        )
         self._template = _load_template()
 
     async def grade(
@@ -476,7 +491,19 @@ class ProgrammingSkill(GradingSkill):
                     score=0.0,
                     max_score=10.0,
                     confidence=1.0,
-                    comment="No code provided by student.\n\n（沙箱测评：✗ 学生未提交代码）",
+                    comment=format_deterministic_feedback(
+                        self.grading_setup,
+                        zh_message="学生未提交代码，本题记 0 分。",
+                        en_message="No student code was provided, so this item receives 0 points.",
+                        zh_detail="未运行沙箱或模型批改。",
+                        en_detail="Neither sandbox execution nor model grading was run.",
+                        zh_suggestion="请补交代码后重新批改。",
+                        en_suggestion="Submit the missing code, then grade this item again.",
+                        legacy_message=(
+                            "No code provided by student.\n\n"
+                            "（沙箱测评：✗ 学生未提交代码）"
+                        ),
+                    ),
                     steps=[],
                     logs="",
                 )
@@ -612,6 +639,7 @@ class ProgrammingSkill(GradingSkill):
                 "Code quality → Efficiency) and produce a structured per-dimension score. "
                 "Respect the sandbox branch rules in the user prompt.",
                 self.language,
+                self.grading_setup,
             )
             result, raw = await structured_llm_call(
                 self.provider,
@@ -660,7 +688,10 @@ class ProgrammingSkill(GradingSkill):
             )
 
         except Exception as e:
-            logger.error(f"ProgrammingSkill failed: {e}", exc_info=True)
+            logger.error(
+                "ProgrammingSkill failed; exception_type=%s",
+                type(e).__name__,
+            )
             from backend.skills.base import classify_skill_error
             kind, friendly = classify_skill_error(e)
             return self._blank_result(problem.q_id, 10.0, friendly, error_kind=kind)

@@ -9,8 +9,8 @@ Two dependencies are exposed:
 
 Demo tokens (prefix "demo-"): the frontend's "Demo login (no backend)" button sets
 a synthetic token like "demo-teacher-alice". This module decodes them into a
-synthetic User without needing a backend record. Disable in production by setting
-SMARTAI_REQUIRE_AUTH=true (real JWT only).
+synthetic User without needing a backend record. They are disabled by default and
+must be explicitly enabled with SMARTAI_ALLOW_DEMO_TOKENS=true.
 """
 from __future__ import annotations
 
@@ -50,8 +50,9 @@ def verify_password(password: str, hashed: str) -> bool:
 
 # ─── JWT encode / decode ──────────────────────────────────────────────────────
 
-def create_token(user_id: str, role: str, expires_in_hours: Optional[int] = None) -> str:
-    exp = int(time.time()) + (expires_in_hours or settings.jwt_expiry_hours) * 3600
+def create_token(user_id: str, role: str, expires_in_hours: Optional[int] = None, expires_in_minutes: Optional[int] = None) -> str:
+    lifetime = expires_in_minutes * 60 if expires_in_minutes is not None else ((expires_in_hours * 3600) if expires_in_hours is not None else settings.jwt_expiry_minutes * 60)
+    exp = int(time.time()) + lifetime
     payload = {"sub": user_id, "role": role, "exp": exp, "iat": int(time.time()), "jti": str(uuid.uuid4())[:12]}
     return jwt.encode(payload, settings.jwt_secret, algorithm=settings.jwt_algorithm)
 
@@ -105,9 +106,25 @@ def get_optional_user(
             raise HTTPException(status.HTTP_401_UNAUTHORIZED, detail="Missing token")
         return None
 
-    # Demo token shortcut
-    demo = _decode_demo_token(token)
+    # Demo token shortcut — persist the synthetic user so FK-backed resources
+    # work. Membership lives in course_enrollments (no course_ids mirror), so a
+    # synthetic demo User carries nothing to clobber; we still merge with any
+    # existing row to keep its persisted password_hash/created_at rather than
+    # overwriting with the empty synthetic values.
+    demo = _decode_demo_token(token) if settings.allow_demo_tokens else None
     if demo is not None:
+        try:
+            existing = user_store.get(demo.id)
+            if existing is None:
+                user_store[demo.id] = demo
+                return demo
+            merged = existing.model_copy(
+                update={"role": demo.role, "is_active": True}
+            )
+            user_store[demo.id] = merged
+            return merged
+        except Exception:
+            pass  # Best-effort: if DB isn't ready, the bare synthetic User still works
         return demo
 
     payload = decode_token(token)
@@ -117,6 +134,8 @@ def get_optional_user(
         return None
     user_id = payload.get("sub")
     user = user_store.get(user_id) if user_id else None
+    if user is not None and not user.is_active:
+        user = None
     if user is None and settings.require_auth:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, detail="User not found")
     return user
@@ -130,7 +149,7 @@ def get_current_user(user: Optional[User] = Depends(get_optional_user)) -> User:
 
 
 def require_teacher(user: User = Depends(get_current_user)) -> User:
-    if user.role not in ("teacher", "admin"):
+    if user.role != "teacher":
         raise HTTPException(status.HTTP_403_FORBIDDEN, detail="Teacher access required")
     return user
 

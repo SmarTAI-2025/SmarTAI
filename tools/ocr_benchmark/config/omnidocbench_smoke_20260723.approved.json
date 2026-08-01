@@ -1,0 +1,149 @@
+{
+  "schema_version": 1,
+  "approval": {
+    "status": "approved",
+    "requested_on": "2026-07-23",
+    "approved_by": "user",
+    "approved_on": "2026-07-24",
+    "confirmation_text": "确认这 12 页"
+  },
+  "dataset": {
+    "name": "opendatalab/OmniDocBench",
+    "revision": "aa1ee96d106dbe53d0ae59474d75c6e6d9b53fec",
+    "annotation_file": "OmniDocBench.json",
+    "annotation_sha256": "a45cd84b04ad8b793e775089640e6b681209abea33ead54c1828ddca35fae496"
+  },
+  "manifest": {
+    "schema_version": 2,
+    "seed": 20260723,
+    "all_path": "artifacts/ocr_benchmark/omnidocbench_manifest/manifest.jsonl",
+    "pilot_path": "artifacts/ocr_benchmark/omnidocbench_manifest/pilot.jsonl"
+  },
+  "constraints": {
+    "sample_count": 12,
+    "sampling_group_quotas": {
+      "exam_paper": 4,
+      "note": 3,
+      "fuzzy_scan": 2,
+      "equation_hard": 1,
+      "table_hard": 1,
+      "layout_hard": 1
+    },
+    "all_samples_in_pilot": true,
+    "all_samples_have_content_annotations": true,
+    "contains_over_product_limit_sample": true
+  },
+  "curation": {
+    "generator_exclusions": [
+      {
+        "sample_id": "notes_f7f010b78016aeebd76e56d9283eb67f_5",
+        "reason": "页面除 NO./Date 页眉外无内容；manifest 保留，但禁止进入 Smoke/Pilot。"
+      }
+    ],
+    "manual_replacements": [
+      {
+        "from_sample_id": "exam_paper_en-file-putnam-archive_2005_Solutions_2005s_page_007",
+        "to_sample_id": "exam_paper_en-file-putnam-archive_2007_Problems_2007_page_001",
+        "reason": "用正式试题页替换解答页，使 problems 用途与页面内容一致；替补页已属于固定 Pilot。"
+      }
+    ]
+  },
+  "samples": [
+    {
+      "order": 1,
+      "sample_id": "exam_paper_2004-2019上海高考英语听力原文和答案_page_050",
+      "image_path": "images/exam_paper_2004-2019上海高考英语听力原文和答案_page_050.png",
+      "image_sha256": "0f69c46def894afc60ba0d36901578d9aa65705ad3a9510274e8915fb710f88e",
+      "sampling_group": "fuzzy_scan",
+      "purpose": "problems"
+    },
+    {
+      "order": 2,
+      "sample_id": "exam_paper_2016年安徽省中考英语试题（解析）_page_012",
+      "image_path": "images/exam_paper_2016年安徽省中考英语试题（解析）_page_012.png",
+      "image_sha256": "d80812021584b35f00d5ec502df476aa7ae8db00e7fa64054a2fb4b1da2d776e",
+      "sampling_group": "exam_paper",
+      "purpose": "problems"
+    },
+    {
+      "order": 3,
+      "sample_id": "exam_paper_2018年广西北海、钦州、南宁、来宾、崇左、防城港、北部湾经济区中考英语试题（空白卷）_page_001",
+      "image_path": "images/exam_paper_2018年广西北海、钦州、南宁、来宾、崇左、防城港、北部湾经济区中考英语试题（空白卷）_page_001.png",
+      "image_sha256": "fd348e3efe10dfe25ccab55bb180051a2e0e925d6c3f841b39a69b53ddf4637b",
+      "sampling_group": "exam_paper",
+      "purpose": "problems"
+    },
+    {
+      "order": 4,
+      "sample_id": "exam_paper_en-file-putnam-archive_2007_Problems_2007_page_001",
+      "image_path": "images/exam_paper_en-file-putnam-archive_2007_Problems_2007_page_001.png",
+      "image_sha256": "a834b2330ae91de4ba0f127fe4c64a1f6eff585243289cd9d500d8035eb23576",
+      "sampling_group": "exam_paper",
+      "purpose": "problems"
+    },
+    {
+      "order": 5,
+      "sample_id": "jiaocaineedrop_jiaocai_needrop_en_2360",
+      "image_path": "images/jiaocaineedrop_jiaocai_needrop_en_2360.jpg",
+      "image_sha256": "872bbb80b4ced94022450dd3154e48dbbb309dbbdfc06395c2773f94c562d9a8",
+      "sampling_group": "fuzzy_scan",
+      "purpose": "problems"
+    },
+    {
+      "order": 6,
+      "sample_id": "jiaocaineedrop_jiaocai_needrop_en_237",
+      "image_path": "images/jiaocaineedrop_jiaocai_needrop_en_237.jpg",
+      "image_sha256": "bd393c95aeccf81186f95d8258e8ef4ae64182a321e2481f6d087f05265fa09c",
+      "sampling_group": "exam_paper",
+      "purpose": "problems"
+    },
+    {
+      "order": 7,
+      "sample_id": "notes_1ba14cb325bc448f7201b20502ecf2b5_10",
+      "image_path": "images/notes_1ba14cb325bc448f7201b20502ecf2b5_10.jpg",
+      "image_sha256": "377125b604f4be962c51142429bb57b8854607cc3dd3b49c0ff48e99acf4eaac",
+      "sampling_group": "note",
+      "purpose": "submissions"
+    },
+    {
+      "order": 8,
+      "sample_id": "notes_f7f010b78016aeebd76e56d9283eb67f_46",
+      "image_path": "images/notes_f7f010b78016aeebd76e56d9283eb67f_46.jpg",
+      "image_sha256": "1e0a21cf761258a6f207ae53e64b06976ef651e04a646db65c35cd18e3764e0d",
+      "sampling_group": "note",
+      "purpose": "submissions"
+    },
+    {
+      "order": 9,
+      "sample_id": "notes_f7f010b78016aeebd76e56d9283eb67f_94",
+      "image_path": "images/notes_f7f010b78016aeebd76e56d9283eb67f_94.jpg",
+      "image_sha256": "4949cdeb8431826a84008dfcf2ceb27c525ea977eefd44be910d65264d29bdb9",
+      "sampling_group": "note",
+      "purpose": "submissions"
+    },
+    {
+      "order": 10,
+      "sample_id": "page-4540d82a-19d8-44ef-8f18-6d42fdb2a2de",
+      "image_path": "images/page-4540d82a-19d8-44ef-8f18-6d42fdb2a2de.png",
+      "image_sha256": "9cc4a4e3b32cea1d88ac698bbf7e6c2a51244f783f34f9b1a1eee4d8ffa46885",
+      "sampling_group": "layout_hard",
+      "purpose": "problems"
+    },
+    {
+      "order": 11,
+      "sample_id": "page-8c21f73a-b849-4f71-9573-57d50fbcc180",
+      "image_path": "images/page-8c21f73a-b849-4f71-9573-57d50fbcc180.png",
+      "image_sha256": "00cf9526db945580dbb77e1cb52ac121af7901bd7f40bbb52ea36bdc6fda5aa1",
+      "sampling_group": "equation_hard",
+      "purpose": "reference"
+    },
+    {
+      "order": 12,
+      "sample_id": "page-b9d507e7-1239-42de-b70a-d7ca65393dc9",
+      "image_path": "images/page-b9d507e7-1239-42de-b70a-d7ca65393dc9.png",
+      "image_sha256": "0e1998a5bb434922c0b143b85bc35b67914bc00092ce8740a480b7a9287cb4ef",
+      "sampling_group": "table_hard",
+      "purpose": "reference"
+    }
+  ]
+}

@@ -13,6 +13,7 @@ IMPORTANT — Gemini proxy issue:
 from __future__ import annotations
 
 import asyncio
+import base64
 import logging
 import random
 import time
@@ -21,7 +22,7 @@ from collections import deque
 from typing import List, Optional, Dict, Any, Deque
 from dataclasses import dataclass
 
-from langchain_core.messages import BaseMessage
+from langchain_core.messages import BaseMessage, HumanMessage
 
 from backend.config import settings
 from backend.models import ProviderConfig
@@ -37,6 +38,28 @@ class LLMResponse:
     duration_ms: float
     input_tokens: Optional[int] = None
     output_tokens: Optional[int] = None
+
+
+@dataclass
+class VisionImage:
+    data: bytes
+    media_type: str
+    filename: Optional[str] = None
+
+
+def _image_data_url(image: VisionImage) -> str:
+    encoded = base64.b64encode(image.data).decode("ascii")
+    return f"data:{image.media_type};base64,{encoded}"
+
+
+def _build_vision_messages(prompt: str, images: List[VisionImage]) -> List[BaseMessage]:
+    content: List[Dict[str, Any]] = [{"type": "text", "text": prompt}]
+    for image in images:
+        content.append({
+            "type": "image_url",
+            "image_url": {"url": _image_data_url(image)},
+        })
+    return [HumanMessage(content=content)]
 
 
 class _RPMLimiter:
@@ -88,6 +111,7 @@ class BaseProvider(ABC):
     """Abstract provider with async ainvoke interface."""
 
     provider_type: str = ""
+    supports_vision: bool = False
 
     def __init__(self, config: ProviderConfig):
         self.config = config
@@ -143,8 +167,21 @@ class BaseProvider(ABC):
                 return LLMResponse(content=content, provider=self.provider_id, model=self.model, duration_ms=duration_ms)
             except Exception as e:
                 duration_ms = (time.perf_counter() - t0) * 1000
-                logger.warning(f"LLM call failed on {self.provider_id} after {duration_ms:.0f}ms: {e}")
+                logger.warning(
+                    "LLM call failed on %s after %.0fms; exception_type=%s",
+                    self.provider_id,
+                    duration_ms,
+                    type(e).__name__,
+                )
                 raise
+
+    async def ainvoke_vision(self, prompt: str, images: List[VisionImage]) -> LLMResponse:
+        """Invoke a vision-capable model with text prompt plus one or more images."""
+        if not self.supports_vision:
+            raise NotImplementedError(f"{self.provider_id} does not support vision input.")
+        if not images:
+            raise ValueError("ainvoke_vision requires at least one image.")
+        return await self.ainvoke(_build_vision_messages(prompt, images))
 
 
 # ─── Gemini ───────────────────────────────────────────────────────────────────
@@ -157,6 +194,7 @@ class GeminiProvider(BaseProvider):
     Auto-detected from settings.http_proxy.
     """
     provider_type = "gemini"
+    supports_vision = True
 
     def _build_client_sync(self) -> Any:
         from langchain_google_genai import ChatGoogleGenerativeAI
@@ -198,7 +236,12 @@ class GeminiProvider(BaseProvider):
                 return LLMResponse(content=content, provider=self.provider_id, model=self.model, duration_ms=duration_ms)
             except Exception as e:
                 duration_ms = (time.perf_counter() - t0) * 1000
-                logger.warning(f"LLM call failed on {self.provider_id} after {duration_ms:.0f}ms: {e}")
+                logger.warning(
+                    "LLM call failed on %s after %.0fms; exception_type=%s",
+                    self.provider_id,
+                    duration_ms,
+                    type(e).__name__,
+                )
                 raise
 
 
@@ -206,6 +249,7 @@ class GeminiProvider(BaseProvider):
 
 class OpenAIProvider(BaseProvider):
     provider_type = "openai"
+    supports_vision = True
 
     def _build_client_sync(self) -> Any:
         from langchain_openai import ChatOpenAI
@@ -236,6 +280,7 @@ class ZhipuProvider(BaseProvider):
 
 class AnthropicProvider(BaseProvider):
     provider_type = "anthropic"
+    supports_vision = True
 
     def _build_client_sync(self) -> Any:
         from langchain_anthropic import ChatAnthropic

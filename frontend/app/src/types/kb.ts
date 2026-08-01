@@ -4,7 +4,10 @@ export interface KBDoc {
   sha256?: string;
   chunk_count: number;
   embedder?: string;
-  created_at?: number;
+  uploaded_at?: number;
+  source_kind?: "upload" | "library";
+  library_material_id?: string | null;
+  saved_to_library?: boolean;
 }
 
 export interface KBListResponse {
@@ -18,9 +21,16 @@ export interface KBUploadResponse {
   filename: string;
   chunk_count: number;
   embedder?: string;
+  workflow_revision: number;
+  source_kind?: "upload" | "library";
+  library_material_id?: string | null;
+  saved_to_library?: boolean;
+  saved_material_id?: string | null;
+  saved_material_created?: boolean;
 }
 
 export interface KBDeleteResponse {
   status: "success";
   doc_id: string;
+  workflow_revision: number;
 }

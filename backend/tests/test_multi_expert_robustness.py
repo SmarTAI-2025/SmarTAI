@@ -129,7 +129,7 @@ async def test_all_experts_failed_raises(monkeypatch):
 @pytest.mark.asyncio
 async def test_grading_agent_handles_all_failed(monkeypatch):
     """grading_agent._grade_single_answer should catch AllExpertsFailed and
-    return a synthesis_method='all_failed' Correction with clean comment."""
+    return a synthesis_method='all_failed' Correction with a safe user comment."""
     p1 = _FakeProvider("zhipu:glm-4.5-air")
     p2 = _FakeProvider("gemini:gemini-3-flash-preview")
     _patch_skill_returning(monkeypatch, {
@@ -147,7 +147,10 @@ async def test_grading_agent_handles_all_failed(monkeypatch):
     assert correction.score == 0.0
     assert correction.confidence == 0.0
     assert "AI 专家批改失败" in correction.comment
-    # both failures preserved for frontend accordion (provider details in expert_results, not comment)
+    assert "请检查 BYOK 配置" in correction.comment
+    assert "zhipu:glm-4.5-air" not in correction.comment
+    assert "gemini:gemini-3-flash-preview" not in correction.comment
+    # both failures preserved for frontend accordion
     assert len(correction.expert_results) == 2
     assert "zhipu:glm-4.5-air" in correction.expert_results[0].provider
     assert "gemini:gemini-3-flash-preview" in correction.expert_results[1].provider
@@ -253,15 +256,21 @@ def test_list_configs_exposes_provider_id_and_display_name():
         display_name="GLM Air",
         max_concurrent=5,
     )
-    pid = reg.register(cfg)
+    pid = reg.register(
+        cfg,
+        verification_status="verified",
+        last_checked_at=1_735_689_600.0,
+    )
     items = reg.list_configs()
     matching = [i for i in items if i["provider_id"] == pid]
     assert len(matching) == 1
     item = matching[0]
     assert item["display_name"] == "GLM Air"
     assert item["max_concurrent"] == 5
-    assert item["api_key"] == "***"
+    assert "api_key" not in item
     assert item["model"] == "glm-4.5-air"
+    assert item["last_checked_at"] == "2025-01-01T00:00:00+00:00"
+    assert item["verified_at"] == "2025-01-01T00:00:00+00:00"
 
 
 # ─── 6. Per-call multi_sample_n override (plan: hyssop-paper-jaybird) ────────

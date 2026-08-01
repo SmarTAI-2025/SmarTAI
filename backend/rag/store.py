@@ -52,6 +52,9 @@ class DocEntry:
     filename: str
     sha256: str
     chunk_count: int
+    source_kind: str = "upload"
+    library_material_id: Optional[str] = None
+    saved_to_library: bool = False
     uploaded_at: float = field(default_factory=time.time)
 
     def public(self) -> Dict[str, Any]:
@@ -60,6 +63,9 @@ class DocEntry:
             "filename": self.filename,
             "sha256": self.sha256,
             "chunk_count": self.chunk_count,
+            "source_kind": self.source_kind,
+            "library_material_id": self.library_material_id,
+            "saved_to_library": self.saved_to_library,
             "uploaded_at": self.uploaded_at,
         }
 
@@ -98,6 +104,9 @@ class InMemoryTaskRetriever(KnowledgeRetriever):
         sha256: str,
         chunks: List[str],
         embedder: Embedder,
+        source_kind: str = "upload",
+        library_material_id: Optional[str] = None,
+        saved_to_library: bool = False,
     ) -> DocEntry:
         """Embed `chunks` and append them to the task's index.
 
@@ -159,6 +168,9 @@ class InMemoryTaskRetriever(KnowledgeRetriever):
                 filename=filename,
                 sha256=sha256,
                 chunk_count=len(chunks),
+                source_kind=source_kind,
+                library_material_id=library_material_id,
+                saved_to_library=saved_to_library,
             )
             kb.docs[doc_id] = entry
             kb.embedder = embedder
@@ -261,7 +273,11 @@ class InMemoryTaskRetriever(KnowledgeRetriever):
                 chunk_texts=[c.content for c in chunks_snap] if not embedder.is_dense else None,
             )
         except Exception as e:
-            logger.warning(f"[KB] retrieve failed for task={scope}: {e}")
+            logger.warning(
+                "[KB] retrieve failed for task=%s; exception_type=%s",
+                scope,
+                type(e).__name__,
+            )
             return []
 
         if scores.shape[0] != len(chunks_snap):

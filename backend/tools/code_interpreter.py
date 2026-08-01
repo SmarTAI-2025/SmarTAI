@@ -99,7 +99,9 @@ async def run_python_subprocess(
     """
     sem = get_sandbox_semaphore()
     async with sem:
-        with tempfile.NamedTemporaryFile(mode="w", suffix=".py", delete=False) as f:
+        with tempfile.NamedTemporaryFile(
+            mode="w", encoding="utf-8", newline="\n", suffix=".py", delete=False
+        ) as f:
             f.write(code)
             code_path = f.name
 

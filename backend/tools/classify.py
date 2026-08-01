@@ -81,11 +81,14 @@ async def classify_problem(
         )
         logger.info(f"Classified problem as {result.type} (confidence={result.confidence:.2f})")
         return result
-    except Exception as e:
-        logger.error(f"Classification failed: {e}")
+    except Exception as exc:
+        logger.error(
+            "Classification failed; exception_type=%s",
+            type(exc).__name__,
+        )
         # Fallback: 其他 with low confidence
         return ClassificationResult(
             type="其他",
             confidence=0.0,
-            rationale=f"Classification error: {e}",
+            rationale="Classification service unavailable.",
         )

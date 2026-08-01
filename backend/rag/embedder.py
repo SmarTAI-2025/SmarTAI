@@ -227,10 +227,9 @@ def pick_embedder(registry: "ExpertRegistry") -> Embedder:
     given task always uses the same embedder across uploads (mixing dense +
     BM25 indexes within one task would silently break retrieval).
     """
-    # Need raw configs (with api_key intact) — registry stores the full
-    # ProviderConfig keyed by provider_id.
-    with registry._lock:  # type: ignore[attr-defined]
-        configs = list(registry._configs.values())  # type: ignore[attr-defined]
+    # This trusted backend-only method preserves owner scoping while keeping
+    # API keys out of public registry responses.
+    configs = registry.list_enabled_configs()
 
     by_type = {}
     for c in configs:
@@ -248,7 +247,7 @@ def pick_embedder(registry: "ExpertRegistry") -> Embedder:
         else:
             base_url = cfg.base_url or settings.openai_api_base
         model = _OPENAI_COMPAT_EMBED_MODELS[ptype]
-        logger.info(f"RAG embedder: OpenAICompatible({ptype}, {model}, base={base_url})")
+        logger.info("RAG embedder: OpenAICompatible(%s, %s)", ptype, model)
         return OpenAICompatibleEmbedder(
             api_key=cfg.api_key,
             base_url=base_url,
