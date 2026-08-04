@@ -159,6 +159,115 @@ def test_source_outcome_migration_has_contract_constraints(tmp_path, monkeypatch
     assert ("assignment_id", "operation_id", "attempt", "order_index") in source_indexes
 
 
+def test_operation_checkpoint_migration_has_contract_columns(tmp_path, monkeypatch):
+    from sqlalchemy import create_engine, inspect
+
+    db_url = f"sqlite:///{(tmp_path / 'checkpoint-contract.db').as_posix()}"
+    cfg = _alembic_config(db_url, monkeypatch)
+    command.upgrade(cfg, "head")
+    inspector = inspect(create_engine(db_url))
+
+    columns = {
+        column["name"]: column
+        for column in inspector.get_columns("workflow_operations")
+    }
+    assert {
+        "checkpoint_revision",
+        "checkpoint_stage",
+        "checkpoint",
+        "artifact_refs",
+        "terminal_summary",
+    } <= columns.keys()
+    assert columns["checkpoint_revision"]["nullable"] is False
+    assert columns["checkpoint"]["nullable"] is False
+    assert columns["artifact_refs"]["nullable"] is False
+
+    checks = {
+        item["name"]: item["sqltext"]
+        for item in inspector.get_check_constraints("workflow_operations")
+    }
+    assert "ck_workflow_operations_checkpoint_revision_nonnegative" in checks
+    assert "checkpoint_revision >= 0" in checks[
+        "ck_workflow_operations_checkpoint_revision_nonnegative"
+    ]
+
+
+def test_operation_checkpoint_migration_preserves_0004_operation(
+    tmp_path, monkeypatch,
+):
+    from sqlalchemy import create_engine, inspect, text
+
+    db_url = f"sqlite:///{(tmp_path / 'checkpoint-preserve.db').as_posix()}"
+    cfg = _alembic_config(db_url, monkeypatch)
+    command.upgrade(cfg, "0004_workflow_source_outcomes")
+    engine = create_engine(db_url)
+    with engine.begin() as connection:
+        connection.execute(text(
+            "INSERT INTO users "
+            "(id, username, role, password_hash, is_active, created_at, updated_at) "
+            "VALUES ('owner', 'owner', 'teacher', 'h', 1, 1, 1)"
+        ))
+        connection.execute(text(
+            "INSERT INTO courses "
+            "(id, name, code, description, teacher_id, created_at, updated_at) "
+            "VALUES ('course', 'Course', '', '', 'owner', 1, 1)"
+        ))
+        connection.execute(text(
+            "INSERT INTO assignments "
+            "(id, course_id, teacher_id, name, description, status, created_at, "
+            "updated_at, version) VALUES "
+            "('assignment', 'course', 'owner', 'Assignment', '', 'draft', 1, 1, 1)"
+        ))
+        connection.execute(text(
+            "INSERT INTO workflow_operations "
+            "(id, assignment_id, owner_id, operation_type, input_hash, attempt, "
+            "status, progress, payload, error_code, created_at, updated_at) VALUES "
+            "('operation', 'assignment', 'owner', 'submission_recognition', "
+            "'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', "
+            "2, 'running', :progress, :payload, NULL, 1, 2)"
+        ), {"progress": '{"done":1}', "payload": '{"source":"file"}'})
+
+    command.upgrade(cfg, "0005_operation_checkpoints")
+    with engine.begin() as connection:
+        assert connection.execute(text(
+            "SELECT checkpoint_revision, checkpoint_stage, checkpoint, "
+            "artifact_refs, terminal_summary FROM workflow_operations "
+            "WHERE id='operation'"
+        )).one() == (0, None, "{}", "[]", None)
+        connection.execute(text(
+            "UPDATE workflow_operations SET checkpoint_revision=1, "
+            "checkpoint_stage='parsed', checkpoint=:checkpoint, "
+            "artifact_refs=:artifact_refs, terminal_summary=:terminal_summary "
+            "WHERE id='operation'"
+        ), {
+            "checkpoint": '{"done":1}',
+            "artifact_refs": '["file"]',
+            "terminal_summary": '{"outcome":"done"}',
+        })
+
+    command.downgrade(cfg, "0004_workflow_source_outcomes")
+    columns = {
+        item["name"]
+        for item in inspect(engine).get_columns("workflow_operations")
+    }
+    assert "checkpoint_revision" not in columns
+    with engine.connect() as connection:
+        assert connection.execute(text(
+            "SELECT id, attempt, status, progress, payload, created_at, updated_at "
+            "FROM workflow_operations WHERE id='operation'"
+        )).one() == (
+            "operation", 2, "running", '{"done":1}', '{"source":"file"}', 1.0, 2.0
+        )
+
+    command.upgrade(cfg, "0005_operation_checkpoints")
+    with engine.connect() as connection:
+        assert connection.execute(text(
+            "SELECT checkpoint_revision, checkpoint_stage, checkpoint, "
+            "artifact_refs, terminal_summary FROM workflow_operations "
+            "WHERE id='operation'"
+        )).one() == (0, None, "{}", "[]", None)
+
+
 def test_source_outcome_migration_preserves_0003_rows(tmp_path, monkeypatch):
     from sqlalchemy import create_engine, inspect, text
 
@@ -485,3 +594,21 @@ def test_postgresql_source_outcome_downgrade_drops_child_first(monkeypatch):
     assert sql.index("DROP TABLE workflow_source_outcomes") < sql.index(
         "DROP TABLE workflow_source_items"
     )
+
+
+def test_postgresql_operation_checkpoint_ddl_is_portable(monkeypatch):
+    from importlib import import_module
+
+    migration = import_module(
+        "backend.db.migrations.versions.0005_workflow_operation_checkpoints"
+    )
+    assert len(migration.revision) <= 32
+    sql = _postgresql_sql(monkeypatch, "0005_operation_checkpoints")
+
+    assert "ADD COLUMN checkpoint_revision INTEGER DEFAULT 0 NOT NULL" in sql
+    assert "ADD COLUMN checkpoint_stage VARCHAR(64)" in sql
+    assert "ADD COLUMN checkpoint JSON DEFAULT '{}' NOT NULL" in sql
+    assert "ADD COLUMN artifact_refs JSON DEFAULT '[]' NOT NULL" in sql
+    assert "ADD COLUMN terminal_summary JSON" in sql
+    assert "ck_workflow_operations_checkpoint_revision_nonnegative" in sql
+    assert "checkpoint_revision >= 0" in sql

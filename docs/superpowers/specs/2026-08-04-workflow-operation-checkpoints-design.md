@@ -18,7 +18,7 @@ The existing unique key `(assignment_id, operation_type, input_hash)` continues 
 
 ## Schema
 
-Migration `0005_workflow_operation_checkpoints` adds these columns to `workflow_operations`:
+Migration `0005_operation_checkpoints` adds these columns to `workflow_operations`:
 
 | Column | Contract |
 |---|---|
