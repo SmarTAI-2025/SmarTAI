@@ -118,6 +118,21 @@ async def test_extract_zip_repairs_gbk_name_decoded_as_cp437():
 
 
 @pytest.mark.asyncio
+async def test_extract_zip_repairs_utf8_name_without_utf8_flag():
+    raw_name = "2025105468_张三_1401.txt".encode("utf-8")
+    archive = _stored_zip(raw_name, "姓名：张三\n答案：A\n".encode("utf-8"))
+
+    files = await extract_files_from_archive(archive, "students.zip")
+
+    assert files == [
+        {
+            "filename": "2025105468_张三_1401.txt",
+            "content": "姓名：张三\n答案：A\n",
+        }
+    ]
+
+
+@pytest.mark.asyncio
 async def test_extract_text_upload_txt_skips_ocr():
     ocr = FakeOCRSkill()
 

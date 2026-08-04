@@ -61,6 +61,20 @@ describe("question source recovery guidance", () => {
     expect(info.actionKind).toBe("reupload");
     expect(info.actionLabel).toBe("重新选择文件");
   });
+
+  it("explains the exact file-size limit instead of reporting a format problem", () => {
+    const info = classifyRecoverableError(
+      new APIError(413, "source_too_large", {
+        detail: { code: "source_too_large", max_bytes: 5 * 1024 * 1024 },
+      }),
+      { locale: "zh-CN" },
+    );
+
+    expect(info.actionKind).toBe("reupload");
+    expect(info.description).toContain("5 MB");
+    expect(info.description).not.toContain("格式");
+    expect(info.technicalDetails).toContainEqual({ label: "文件上限", value: "5 MB" });
+  });
 });
 
 describe("background task failure guidance", () => {

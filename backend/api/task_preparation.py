@@ -430,7 +430,10 @@ async def _read_source(
         if not body:
             raise HTTPException(status.HTTP_400_BAD_REQUEST, detail={"code": "source_empty"})
         if len(body) > MAX_SOURCE_BYTES:
-            raise HTTPException(status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, detail={"code": "source_too_large"})
+            raise HTTPException(
+                status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                detail={"code": "source_too_large", "max_bytes": MAX_SOURCE_BYTES},
+            )
         ocr_skill = LLMVisionOCRSkill(vision) if vision is not None else None
         try:
             text = await extract_text_from_upload(

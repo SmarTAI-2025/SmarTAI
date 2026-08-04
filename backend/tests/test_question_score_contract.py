@@ -10,6 +10,7 @@ from pydantic import ValidationError as PydanticValidationError
 from starlette.datastructures import Headers
 
 from backend.api.task_preparation import (
+    MAX_SOURCE_BYTES,
     StartQuestionPreparationRequest,
     _read_source,
     _source_role_ocr_purpose,
@@ -428,6 +429,34 @@ async def test_vision_off_scanned_pdf_returns_stable_preflight_error():
         "role": "problem",
         "filename": "scanned.pdf",
         "recovery": "configure_vision_provider",
+    }
+
+
+@pytest.mark.asyncio
+async def test_oversized_question_source_reports_the_exact_limit():
+    upload = UploadFile(
+        file=io.BytesIO(b"x" * (MAX_SOURCE_BYTES + 1)),
+        filename="questions.txt",
+        headers=Headers({"content-type": "text/plain"}),
+    )
+    registry = MagicMock()
+    registry.pick_default.return_value = MagicMock()
+    registry.pick_vision.return_value = None
+
+    with pytest.raises(HTTPException) as exc:
+        await _read_source(
+            file=upload,
+            library_material_id=None,
+            inline_text=None,
+            owner_id="size-owner",
+            registry=registry,
+            role="problem",
+        )
+
+    assert exc.value.status_code == 413
+    assert exc.value.detail == {
+        "code": "source_too_large",
+        "max_bytes": MAX_SOURCE_BYTES,
     }
 
 

@@ -356,14 +356,21 @@ def _looks_like_cp437_mojibake(text: str) -> bool:
 
 
 def _repair_zip_member_name(name: str) -> str:
-    """Repair GBK zip member names that Python decoded as CP437 mojibake."""
+    """Repair UTF-8 or GBK zip names that Python decoded as CP437 mojibake."""
     if _has_cjk(name) or not _looks_like_cp437_mojibake(name):
         return name
     try:
-        repaired = name.encode("cp437").decode("gbk")
+        raw_name = name.encode("cp437")
     except UnicodeError:
         return name
-    return repaired if _has_cjk(repaired) else name
+    for encoding in ("utf-8", "gbk"):
+        try:
+            repaired = raw_name.decode(encoding)
+        except UnicodeError:
+            continue
+        if _has_cjk(repaired):
+            return repaired
+    return name
 
 
 def _safe_member_name(name: str) -> str:
