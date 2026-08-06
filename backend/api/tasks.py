@@ -71,6 +71,7 @@ class UpdateGradingSetupRequest(BaseModel):
 
 
 class UpdateProblemRequest(BaseModel):
+    expected_workflow_revision: int | None = Field(default=None, ge=0)
     stem: str | None = None
     criterion: str | None = None
     max_score: float | None = Field(
@@ -441,7 +442,8 @@ def update_problem(task_id: str, q_id: str, request: UpdateProblemRequest,
                    current: User = Depends(require_teacher)):
     return _domain(lambda: task_facade.update_problem(
         task_id=task_id, owner_id=current.id, q_id=q_id,
-        patch=request.model_dump(exclude_unset=True),
+        patch=request.model_dump(exclude_unset=True, exclude={"expected_workflow_revision"}),
+        expected_revision=request.expected_workflow_revision,
     ))
 
 

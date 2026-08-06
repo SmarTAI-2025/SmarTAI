@@ -478,6 +478,39 @@ def _terminal_update(run_id: str, *, worker_id: str, status: str,
             raise LeaseLost("lease_lost")
         record = session.get(GradingRunRecord, run_id)
         assert record is not None
+        # A grading run and the task-facing active marker are one lifecycle.
+        # Keep their terminal transition in this transaction; otherwise a
+        # failed run can leave the task permanently reporting ``workflow_busy``.
+        from backend.db.workflow_repository import AssignmentWorkflowRecord
+
+        workflow_values = {
+            "presentation_status": (
+                "error"
+                if status == education.GradingRunStatus.FAILED.value
+                else "graded"
+            ),
+            "active_operation": None,
+            "active_job_id": None,
+            "error_code": (
+                "grading_failed"
+                if status == education.GradingRunStatus.FAILED.value
+                else None
+            ),
+            "updated_at": now,
+        }
+        if status == education.GradingRunStatus.FAILED.value:
+            workflow_values["last_failed_job_id"] = run_id
+        else:
+            workflow_values["last_failed_job_id"] = None
+        session.execute(
+            update(AssignmentWorkflowRecord)
+            .where(
+                AssignmentWorkflowRecord.assignment_id == record.assignment_id,
+                AssignmentWorkflowRecord.owner_id == record.teacher_id,
+                AssignmentWorkflowRecord.active_job_id == run_id,
+            )
+            .values(**workflow_values)
+        )
         return _run_to_dto(record)
 
 
@@ -526,6 +559,26 @@ def cancel(run_id: str, *, teacher_id: str) -> education.GradingRunDTO:
             raise InvalidTransition("run_not_active")
         record = session.get(GradingRunRecord, run_id)
         assert record is not None
+        # A cancelled run is no longer the current workflow generation.  Keep
+        # this cleanup atomic with cancellation so an upstream replacement can
+        # claim the task immediately and a late grading worker loses its lease.
+        from backend.db.workflow_repository import AssignmentWorkflowRecord
+
+        session.execute(
+            update(AssignmentWorkflowRecord)
+            .where(
+                AssignmentWorkflowRecord.assignment_id == record.assignment_id,
+                AssignmentWorkflowRecord.owner_id == teacher_id,
+                AssignmentWorkflowRecord.active_job_id == run_id,
+            )
+            .values(
+                active_operation=None,
+                active_job_id=None,
+                grading_job_id=None,
+                error_code=None,
+                updated_at=now,
+            )
+        )
         return _run_to_dto(record)
 
 

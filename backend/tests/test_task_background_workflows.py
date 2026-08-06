@@ -11,7 +11,7 @@ from fastapi import UploadFile
 from starlette.datastructures import Headers
 
 from backend.api import task_preparation, tasks
-from backend.db import assignment_repository, workflow_repository
+from backend.db import assignment_repository, grading_repository, workflow_repository
 from backend.db.models import AssignmentRecord, CourseRecord, UserRecord
 from backend.db.session import session_scope
 from backend.domain.errors import InvalidTransition, ValidationError, VersionConflict
@@ -75,6 +75,235 @@ def _problem(stem: str) -> dict[str, dict]:
             "stem": stem, "criterion": "", "max_score": 10,
         }
     }
+
+
+def test_grading_terminal_state_releases_task_workflow_atomically():
+    owner_id, task_id = _seed_task()
+    run = grading_repository.create_run(
+        task_id, teacher_id=owner_id, total_submissions=0
+    )
+    grading_repository.claim_lease(
+        run.id, worker_id="worker", lease_seconds=60
+    )
+    workflow_repository.update_workflow(
+        task_id,
+        owner_id=owner_id,
+        bump_revision=False,
+        presentation_status="grading",
+        grading_job_id=run.id,
+        active_operation="grading",
+        active_job_id=run.id,
+    )
+
+    grading_repository.mark_failed(
+        run.id, worker_id="worker", error_message="provider failed"
+    )
+
+    workflow = workflow_repository.get_workflow(task_id, owner_id=owner_id)
+    assert workflow.presentation_status == "error"
+    assert workflow.active_operation is None
+    assert workflow.active_job_id is None
+    assert workflow.grading_job_id == run.id
+    assert workflow.last_failed_job_id == run.id
+
+
+def test_legacy_failed_grading_marker_is_repaired_on_read():
+    owner_id, task_id = _seed_task()
+    run = grading_repository.create_run(
+        task_id, teacher_id=owner_id, total_submissions=0
+    )
+    grading_repository.claim_lease(
+        run.id, worker_id="worker", lease_seconds=60
+    )
+    grading_repository.mark_failed(
+        run.id, worker_id="worker", error_message="provider failed"
+    )
+    # Simulate the historical dirty row found in the user's local database.
+    workflow_repository.update_workflow(
+        task_id,
+        owner_id=owner_id,
+        bump_revision=False,
+        presentation_status="grading",
+        grading_job_id=run.id,
+        active_operation="grading",
+        active_job_id=run.id,
+        last_failed_job_id=None,
+        error_code=None,
+    )
+
+    task = task_facade.get_task(task_id=task_id, owner_id=owner_id, full=False)
+
+    workflow = workflow_repository.get_workflow(task_id, owner_id=owner_id)
+    assert task["status"] == "error"
+    assert workflow.active_job_id is None
+    assert workflow.last_failed_job_id == run.id
+    assert task_facade._ensure_no_other_active_operation(
+        task_id=task_id,
+        owner_id=owner_id,
+        operation_type="question_preparation",
+        input_hash="new-input",
+    )[1] is None
+
+
+def test_task_rename_does_not_advance_workflow_revision():
+    owner_id, task_id = _seed_task()
+
+    updated = task_facade.update_task(
+        task_id=task_id, owner_id=owner_id, name="Renamed"
+    )
+
+    assert updated["name"] == "Renamed"
+    assert updated["workflow_revision"] == 0
+
+
+def test_confirmed_upstream_restart_can_cancel_active_grading():
+    owner_id, task_id = _seed_task()
+    run = grading_repository.create_run(
+        task_id, teacher_id=owner_id, total_submissions=0
+    )
+    workflow_repository.update_workflow(
+        task_id,
+        owner_id=owner_id,
+        bump_revision=False,
+        presentation_status="grading",
+        grading_job_id=run.id,
+        active_operation="grading",
+        active_job_id=run.id,
+    )
+
+    workflow, active = task_facade._ensure_no_other_active_operation(
+        task_id=task_id,
+        owner_id=owner_id,
+        operation_type="question_preparation",
+        input_hash="replacement",
+        allow_supersede=True,
+    )
+
+    assert active is None
+    assert workflow.active_job_id is None
+    assert workflow.grading_job_id is None
+    assert grading_repository.get_run(run.id, actor_id=owner_id).status == "cancelled"
+
+
+def test_replacing_questions_deactivates_students_and_invalidates_downstream():
+    owner_id, task_id = _seed_task(with_question=True)
+    student_id = f"student_{uuid.uuid4().hex[:10]}"
+    with session_scope() as session:
+        session.add(UserRecord(
+            id=student_id,
+            username=student_id,
+            password_hash="hash",
+            role="student",
+            is_active=True,
+        ))
+    workflow_repository.upsert_student_presentation(
+        assignment_id=task_id,
+        student_id=student_id,
+        display_student_id="S001",
+        display_name="Student",
+    )
+    workflow_repository.update_workflow(
+        task_id,
+        owner_id=owner_id,
+        bump_revision=False,
+        presentation_status="graded",
+        grading_job_id="obsolete-run",
+        submission_file_name="old.zip",
+        analysis_status="ready",
+    )
+
+    task_facade._replace_draft_questions(
+        task_id,
+        owner_id,
+        _problem("Replacement"),
+        "new.pdf",
+        expected_workflow_revision=0,
+        replace_confirmed=True,
+    )
+
+    workflow = workflow_repository.get_workflow(task_id, owner_id=owner_id)
+    presentation = workflow_repository.list_student_presentations(task_id)[student_id]
+    assert workflow.presentation_status == "problems_ready"
+    assert workflow.grading_job_id is None
+    assert workflow.submission_file_name is None
+    assert workflow.analysis_status == "not_generated"
+    assert presentation.is_active is False
+
+
+def test_replacing_submissions_preserves_questions_and_invalidates_grading():
+    owner_id, task_id = _seed_task(with_question=True)
+    workflow_repository.update_workflow(
+        task_id,
+        owner_id=owner_id,
+        bump_revision=False,
+        presentation_status="graded",
+        grading_job_id="obsolete-run",
+        analysis_status="ready",
+    )
+
+    imported = task_facade._commit_imported_submissions(
+        task_id=task_id,
+        owner_id=owner_id,
+        course_id=assignment_repository.get_assignment(
+            task_id, actor_id=owner_id
+        ).course_id,
+        students=[],
+        replace_existing=True,
+        expected_workflow_revision=0,
+        submission_file_name="replacement.zip",
+    )
+
+    workflow = workflow_repository.get_workflow(task_id, owner_id=owner_id)
+    assert imported == 0
+    assert len(assignment_repository.list_questions(
+        task_id, teacher_id=owner_id
+    )) == 1
+    assert workflow.presentation_status == "submissions_ready"
+    assert workflow.submission_file_name == "replacement.zip"
+    assert workflow.grading_job_id is None
+    assert workflow.analysis_status == "not_generated"
+
+
+def test_editing_student_answer_atomically_invalidates_current_grading():
+    owner_id, task_id = _seed_task(with_question=True)
+    assignment = assignment_repository.get_assignment(task_id, actor_id=owner_id)
+    task_facade._commit_imported_submissions(
+        task_id=task_id,
+        owner_id=owner_id,
+        course_id=assignment.course_id,
+        students=[{
+            "stu_id": "S001",
+            "stu_name": "Student",
+            "source_filename": "old.txt",
+            "stu_ans": [{"q_id": "q1", "content": "old answer"}],
+        }],
+        expected_workflow_revision=0,
+        submission_file_name="old.txt",
+    )
+    workflow_repository.update_workflow(
+        task_id,
+        owner_id=owner_id,
+        bump_revision=False,
+        presentation_status="graded",
+        grading_job_id="obsolete-run",
+        analysis_status="ready",
+    )
+
+    response = task_facade.update_student_answer(
+        task_id=task_id,
+        owner_id=owner_id,
+        display_student_id="S001",
+        q_id="q1",
+        patch={"content": "corrected answer", "review_status": "confirmed"},
+        expected_revision=1,
+    )
+
+    workflow = workflow_repository.get_workflow(task_id, owner_id=owner_id)
+    assert response["answer"]["content"] == "corrected answer"
+    assert response["workflow_revision"] == 2
+    assert workflow.presentation_status == "submissions_ready"
+    assert workflow.grading_job_id is None
+    assert workflow.analysis_status == "not_generated"
 
 
 def test_question_replace_requires_confirmation_and_cas_is_atomic():
