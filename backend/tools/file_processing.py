@@ -355,21 +355,45 @@ def _looks_like_cp437_mojibake(text: str) -> bool:
     return any(0x2500 <= ord(ch) <= 0x259F for ch in text)
 
 
-def _repair_zip_member_name(name: str) -> str:
-    """Repair UTF-8 or GBK zip names that Python decoded as CP437 mojibake."""
-    if _has_cjk(name) or not _looks_like_cp437_mojibake(name):
+def _is_plausible_utf8_member_name(text: str) -> bool:
+    """Accept a strict UTF-8 recovery only when it is printable and non-ASCII."""
+    return bool(text) and any(ord(ch) > 127 for ch in text) and text.isprintable()
+
+
+def _repair_zip_member_name(info: zipfile.ZipInfo) -> str:
+    """Repair a ZIP member whose producer omitted its filename encoding flag.
+
+    ZIP's legacy fallback is CP437, so ``zipfile`` has already decoded an
+    unflagged byte name by the time it reaches us. Re-encoding that string is
+    lossless and lets us prefer strict UTF-8 (the common broken-producer case)
+    before applying the narrower legacy-GBK heuristic.
+    """
+    name = info.filename
+    if info.flag_bits & 0x800:
         return name
     try:
         raw_name = name.encode("cp437")
     except UnicodeError:
         return name
-    for encoding in ("utf-8", "gbk"):
-        try:
-            repaired = raw_name.decode(encoding)
-        except UnicodeError:
-            continue
-        if _has_cjk(repaired):
-            return repaired
+
+    if raw_name.isascii():
+        return name
+
+    try:
+        repaired_utf8 = raw_name.decode("utf-8")
+    except UnicodeError:
+        repaired_utf8 = ""
+    if _is_plausible_utf8_member_name(repaired_utf8):
+        return repaired_utf8
+
+    if not _looks_like_cp437_mojibake(name):
+        return name
+    try:
+        repaired_gbk = raw_name.decode("gbk")
+    except UnicodeError:
+        return name
+    if _has_cjk(repaired_gbk) and repaired_gbk.isprintable():
+        return repaired_gbk
     return name
 
 
@@ -420,8 +444,8 @@ async def extract_files_from_archive(
             _validate_archive_members([i.file_size for i in valid])
 
             async def process(info):
-                clean = _safe_member_name(_repair_zip_member_name(info.filename))
-                data = zf.read(info.filename)
+                clean = _safe_member_name(_repair_zip_member_name(info))
+                data = zf.read(info)
                 _validate_extracted_member(data)
                 content = await extract_text_from_upload(
                     data,

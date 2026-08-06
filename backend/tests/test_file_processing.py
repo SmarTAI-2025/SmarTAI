@@ -118,18 +118,49 @@ async def test_extract_zip_repairs_gbk_name_decoded_as_cp437():
 
 
 @pytest.mark.asyncio
-async def test_extract_zip_repairs_utf8_name_without_utf8_flag():
-    raw_name = "2025105468_张三_1401.txt".encode("utf-8")
-    archive = _stored_zip(raw_name, "姓名：张三\n答案：A\n".encode("utf-8"))
+@pytest.mark.parametrize(
+    "member_name",
+    [
+        "2025105468_张三_1401.txt",
+        "2025105468_李四_1401.txt",
+        "课程/日本語_答案.txt",
+        "김민수_답안.txt",
+        "résumé.txt",
+    ],
+)
+async def test_extract_zip_repairs_utf8_name_without_utf8_flag(member_name):
+    archive = _stored_zip(member_name.encode("utf-8"), b"answer: A\n")
 
     files = await extract_files_from_archive(archive, "students.zip")
 
     assert files == [
         {
-            "filename": "2025105468_张三_1401.txt",
-            "content": "姓名：张三\n答案：A\n",
+            "filename": member_name,
+            "content": "answer: A\n",
         }
     ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "member_name",
+    ["answer_1401.txt", "café.txt", "Müller.txt", "éö.txt"],
+)
+async def test_extract_zip_preserves_ascii_and_legacy_cp437_names(member_name):
+    archive = _stored_zip(member_name.encode("cp437"), b"answer: A\n")
+
+    files = await extract_files_from_archive(archive, "students.zip")
+
+    assert files == [{"filename": member_name, "content": "answer: A\n"}]
+
+
+@pytest.mark.asyncio
+async def test_extract_zip_preserves_flagged_utf8_name():
+    archive = _zip_bytes({"班级/李四_答案.txt": b"answer: A\n"})
+
+    files = await extract_files_from_archive(archive, "students.zip")
+
+    assert files == [{"filename": "班级/李四_答案.txt", "content": "answer: A\n"}]
 
 
 @pytest.mark.asyncio
