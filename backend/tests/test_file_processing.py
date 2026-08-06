@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import io
 import struct
+import unicodedata
 import zipfile
 import zlib
 
@@ -139,6 +140,32 @@ async def test_extract_zip_repairs_utf8_name_without_utf8_flag(member_name):
             "content": "answer: A\n",
         }
     ]
+
+
+def test_zip_name_repair_covers_every_assigned_cjk_ideograph():
+    ranges = (
+        (0x3400, 0xFB00),
+        (0x20000, 0x2FA20),
+        (0x30000, 0x323B0),
+    )
+    checked = 0
+
+    for start, end in ranges:
+        for codepoint in range(start, end):
+            character = chr(codepoint)
+            unicode_name = unicodedata.name(character, "")
+            if not unicode_name.startswith(
+                ("CJK UNIFIED IDEOGRAPH-", "CJK COMPATIBILITY IDEOGRAPH-")
+            ):
+                continue
+            member_name = f"学生_{character}.txt"
+            info = zipfile.ZipInfo(member_name.encode("utf-8").decode("cp437"))
+            info.flag_bits = 0
+
+            assert file_processing._repair_zip_member_name(info) == member_name
+            checked += 1
+
+    assert checked > 98_000
 
 
 @pytest.mark.asyncio
