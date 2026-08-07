@@ -76,7 +76,7 @@ Constraints and indexes:
 - Index `(assignment_id, operation_id, attempt, order_index)` for ordered batch reads.
 - Index `owner_id`, `stored_file_id`, and `retry_of_source_id` for isolation and lineage queries.
 
-The repository validates that the referenced assignment, operation, stored file, and optional retry parent all belong to the same owner. The operation must belong to the assignment and its current attempt must equal the requested attempt. A retry parent must belong to the same operation and a lower attempt; it cannot be the source itself.
+The repository validates that the referenced assignment, operation, stored file, and optional retry parent all belong to the same owner. The operation must belong to the assignment and its current attempt must equal the requested attempt. On PostgreSQL, source registration locks that owner- and assignment-scoped operation row with `FOR UPDATE` before validating the attempt, so retry and registration cannot cross the attempt boundary. A retry parent must belong to the same operation and a lower attempt; it cannot be the source itself.
 
 ### `workflow_source_outcomes`
 
@@ -121,6 +121,8 @@ The outcome call verifies the owner-scoped source and optional artifact file, va
 
 - An identical repeated write returns the existing outcome.
 - A different second write raises the existing `VersionConflict`; the repository does not overwrite evidence.
+- Concurrent identical inserts produce one new row: one caller receives `created=True` and the other receives the persisted outcome with `created=False`.
+- Concurrent differing inserts produce one success and one `VersionConflict`. A uniqueness race is recovered through an owner-scoped re-read and never leaks a raw SQLAlchemy `IntegrityError`.
 - Wrong-owner and absent sources are indistinguishable.
 
 ### Read and summarize

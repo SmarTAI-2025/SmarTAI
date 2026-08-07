@@ -41,6 +41,7 @@ No API, Facade, Agent, frontend, main.py, file_repository.py, workflow_repositor
 - [ ] Assert the returned source includes original name, SHA-256, MIME, size, and storage key from stored_files. Assert absent and wrong-owner resources both raise NotFound with the same code.
 - [ ] Run the single test and observe RED because register_source is absent.
 - [ ] Implement an immutable source DTO and one-transaction validation of assignment owner, operation owner/assignment/attempt, stored-file owner/assignment, and optional retry parent.
+- [ ] Add a PostgreSQL SQL-compilation test proving source registration locks an owner- and assignment-scoped operation row with `FOR UPDATE` before attempt validation.
 - [ ] Implement identical replay as created=False. Convert same-position/different-file or lineage collisions to the existing VersionConflict. Use stale_operation_attempt for an owner-scoped operation at another attempt.
 - [ ] Add RED/GREEN tests for identical replay, conflict, negative attempt/order validation, and stale attempt.
 
@@ -53,6 +54,8 @@ No API, Facade, Agent, frontend, main.py, file_repository.py, workflow_repositor
 - [ ] Run the single test and observe RED because record_outcome is absent.
 - [ ] Implement validation: only parsed, parse_failed, identity_conflict, no_matching_answer; non-negative count; at most 100 string question IDs; each at most 64 characters; compact UTF-8 JSON at most 8192 bytes.
 - [ ] Validate the artifact with owner and assignment predicates. Insert one immutable outcome and compare repeat requests field-for-field.
+- [ ] Add real concurrent insert tests: identical writes must return one `created=True` and one `created=False`; differing writes must return one success and one `VersionConflict` without exposing a raw `IntegrityError`.
+- [ ] Recover an outcome uniqueness race by rolling back and performing an owner-scoped re-read, then compare every immutable field to classify idempotent replay versus conflict.
 - [ ] Add parametrized repository validation tests and direct SQLAlchemy IntegrityError tests for invalid status and negative count. Run and make them GREEN.
 
 ### Task 4: Ordered reads, conservation, and lineage

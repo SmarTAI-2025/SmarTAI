@@ -1,9 +1,12 @@
 """Contract tests for durable workflow sources and per-file outcomes."""
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
+from threading import Barrier
 import uuid
 
 import pytest
+from sqlalchemy.dialects import postgresql
 from sqlalchemy.exc import IntegrityError
 
 from backend.db import source_outcome_repository, workflow_repository
@@ -263,6 +266,26 @@ def test_source_registration_rejects_invalid_and_stale_attempts(tmp_path):
     assert stale.value.code == "stale_operation_attempt"
 
 
+def test_register_source_operation_row_lock_is_owner_and_assignment_scoped():
+    statement = source_outcome_repository._owned_operation_for_update_statement(
+        operation_id="op-1",
+        assignment_id="assignment-1",
+        owner_id="owner-1",
+    )
+
+    sql = str(
+        statement.compile(
+            dialect=postgresql.dialect(),
+            compile_kwargs={"literal_binds": True},
+        )
+    )
+
+    assert "workflow_operations.id = 'op-1'" in sql
+    assert "workflow_operations.assignment_id = 'assignment-1'" in sql
+    assert "workflow_operations.owner_id = 'owner-1'" in sql
+    assert sql.rstrip().endswith("FOR UPDATE")
+
+
 def test_outcome_is_immutable_idempotent_and_owner_scoped(tmp_path):
     owner_id, assignment_id, operation, stored = _seed_source_context(tmp_path)
     source, _ = source_outcome_repository.register_source(
@@ -358,6 +381,79 @@ def test_outcome_is_immutable_idempotent_and_owner_scoped(tmp_path):
             retryable=True,
         )
     assert absent.value.code == wrong_owner.value.code == "not_found"
+
+
+def test_concurrent_outcome_identical_replay_is_idempotent(tmp_path):
+    owner_id, assignment_id, operation, stored = _seed_source_context(tmp_path)
+    source, _ = source_outcome_repository.register_source(
+        owner_id=owner_id,
+        assignment_id=assignment_id,
+        operation_id=operation.id,
+        expected_attempt=operation.attempt,
+        order_index=0,
+        stored_file_id=stored.id,
+    )
+    barrier = Barrier(2)
+
+    def write_outcome():
+        barrier.wait()
+        try:
+            _outcome, created = source_outcome_repository.record_outcome(
+                source_id=source.id,
+                owner_id=owner_id,
+                status="parsed",
+                student_candidate=None,
+                matched_answer_count=1,
+                unknown_question_ids=[],
+                stable_error_code=None,
+                retryable=False,
+            )
+            return "saved", created
+        except Exception as exc:  # The assertion reports leaked DB exceptions.
+            return type(exc).__name__, getattr(exc, "code", str(exc))
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        results = list(executor.map(lambda _index: write_outcome(), range(2)))
+
+    assert sorted(results) == [("saved", False), ("saved", True)]
+
+
+def test_concurrent_outcome_different_replay_conflicts(tmp_path):
+    owner_id, assignment_id, operation, stored = _seed_source_context(tmp_path)
+    source, _ = source_outcome_repository.register_source(
+        owner_id=owner_id,
+        assignment_id=assignment_id,
+        operation_id=operation.id,
+        expected_attempt=operation.attempt,
+        order_index=0,
+        stored_file_id=stored.id,
+    )
+    barrier = Barrier(2)
+
+    def write_outcome(stable_error_code: str):
+        barrier.wait()
+        try:
+            _outcome, created = source_outcome_repository.record_outcome(
+                source_id=source.id,
+                owner_id=owner_id,
+                status="parsed",
+                student_candidate=None,
+                matched_answer_count=1,
+                unknown_question_ids=[],
+                stable_error_code=stable_error_code,
+                retryable=False,
+            )
+            return "saved", created
+        except VersionConflict as exc:
+            return "conflict", exc.code
+        except Exception as exc:  # The assertion reports leaked DB exceptions.
+            return type(exc).__name__, getattr(exc, "code", str(exc))
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        results = list(executor.map(write_outcome, ("first", "second")))
+
+    assert sum(result == ("saved", True) for result in results) == 1
+    assert results.count(("conflict", "version_conflict")) == 1
 
 
 @pytest.mark.parametrize(

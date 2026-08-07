@@ -281,6 +281,23 @@ def _validate_outcome_evidence(
         raise ValidationError("Unknown question IDs exceed the storage bound.")
 
 
+def _owned_operation_for_update_statement(
+    *,
+    operation_id: str,
+    assignment_id: str,
+    owner_id: str,
+):
+    return (
+        select(WorkflowOperationRecord)
+        .where(
+            WorkflowOperationRecord.id == operation_id,
+            WorkflowOperationRecord.assignment_id == assignment_id,
+            WorkflowOperationRecord.owner_id == owner_id,
+        )
+        .with_for_update()
+    )
+
+
 def register_source(
     *,
     owner_id: str,
@@ -303,11 +320,13 @@ def register_source(
             if assignment is None:
                 raise NotFound("workflow_source")
 
-            operation = session.scalar(select(WorkflowOperationRecord).where(
-                WorkflowOperationRecord.id == operation_id,
-                WorkflowOperationRecord.assignment_id == assignment_id,
-                WorkflowOperationRecord.owner_id == owner_id,
-            ))
+            operation = session.scalar(
+                _owned_operation_for_update_statement(
+                    operation_id=operation_id,
+                    assignment_id=assignment_id,
+                    owner_id=owner_id,
+                )
+            )
             if operation is None:
                 raise NotFound("workflow_source")
             if operation.attempt != expected_attempt:
@@ -542,5 +561,34 @@ def record_outcome(
             created_at=time.time(),
         )
         session.add(row)
-        session.flush()
+        try:
+            session.flush()
+        except IntegrityError:
+            session.rollback()
+            existing = session.scalar(
+                select(WorkflowSourceOutcomeRecord)
+                .join(
+                    WorkflowSourceItemRecord,
+                    WorkflowSourceItemRecord.id
+                    == WorkflowSourceOutcomeRecord.source_id,
+                )
+                .where(
+                    WorkflowSourceOutcomeRecord.source_id == source_id,
+                    WorkflowSourceItemRecord.owner_id == owner_id,
+                )
+            )
+            if existing is None:
+                raise NotFound("workflow_source")
+            if not _same_outcome(
+                existing,
+                status=status,
+                student_candidate=student_candidate,
+                matched_answer_count=matched_answer_count,
+                unknown_question_ids=unknown_question_ids,
+                stable_error_code=stable_error_code,
+                retryable=retryable,
+                artifact_file_id=artifact_file_id,
+            ):
+                raise VersionConflict("Workflow source outcome already exists.")
+            return _outcome_dto(existing), False
         return _outcome_dto(row), True
