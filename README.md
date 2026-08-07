@@ -66,6 +66,42 @@ Windows PowerShell 使用：
 Copy-Item .env.example .env
 ```
 
+#### 可选：为国外模型配置代理
+
+这里配置的是**运行后端的机器所使用的 HTTP 代理**，不是浏览器代理，
+也不是模型 API Key。只有后端无法直连 Gemini、OpenAI 或 Anthropic 时才需要填写。
+
+**不需要代理时**，推荐在项目根目录的 `.env` 中保留明确的空值：
+
+```dotenv
+SMARTAI_HTTP_PROXY=
+SMARTAI_HTTPS_PROXY=
+```
+
+也可以完全删除这两行，效果相同。但如果 Windows 系统环境、启动脚本或部署平台已经
+设置了同名的 `SMARTAI_HTTP_PROXY` / `SMARTAI_HTTPS_PROXY`，需要同时在那里删除或清空。
+
+**需要代理时**，先在 Clash、v2rayN 等代理软件的设置页查找“HTTP 代理”或
+“支持 HTTP 的混合代理”的实际主机和端口，再按以下模板填写：
+
+```dotenv
+# 这是格式模板；必须将 HOST 和 PORT 替换为代理软件显示的实际值
+SMARTAI_HTTP_PROXY=http://HOST:PORT
+SMARTAI_HTTPS_PROXY=http://HOST:PORT
+```
+
+- Windows 原生运行后端时，`HOST` 通常是 `127.0.0.1`；`PORT` 必须使用代理软件显示的
+  **HTTP 代理端口**，没有固定值。不要填控制面板/API 端口。
+- 两项通常填写同一个 `http://HOST:PORT` 地址。`SMARTAI_HTTPS_PROXY` 的值以
+  `http://` 开头是正常的，表示通过 HTTP CONNECT 代理访问 HTTPS API。
+- 如果后端运行在 Docker、WSL 或另一台主机，`127.0.0.1` 指向的是那个运行环境自身；
+  此时必须填后端实际可访问的代理主机地址。
+- 公网后端需要代理时，在 Render、Railway 等**后端服务**的环境变量中填写；
+  能直连时留空或不配置。不要填到前端 `.env`。
+- 智谱/GLM 无论这两项是否填写，都会直连官方 API。
+- 前端 BYOK 的 Key 仍在“模型与 BYOK”页面填写，并由后端加密保存。
+- 修改代理配置后必须重启后端。
+
 #### 配置本地 BYOK 加密主密钥
 
 `.env.example` 中的 `SMARTAI_PROVIDER_ENCRYPTION_KEY` 和 `SMARTAI_JWT_SECRET`

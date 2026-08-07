@@ -334,7 +334,43 @@ def remove_provider(
 
 
 def _verification_error_code(exc: Exception) -> str:
-    if isinstance(exc, (asyncio.TimeoutError, TimeoutError)):
+    exception_chain: list[BaseException] = []
+    current: BaseException | None = exc
+    seen: set[int] = set()
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        exception_chain.append(current)
+        current = current.__cause__ or current.__context__
+
+    timeout_types: tuple[type[BaseException], ...] = (
+        asyncio.TimeoutError,
+        TimeoutError,
+    )
+    connection_types: tuple[type[BaseException], ...] = (ConnectionError, OSError)
+    try:
+        import httpx
+
+        timeout_types += (httpx.TimeoutException,)
+        connection_types += (httpx.TransportError,)
+    except ImportError:  # pragma: no cover - httpx is a runtime dependency
+        pass
+    try:
+        from openai import APIConnectionError, APITimeoutError
+
+        timeout_types += (APITimeoutError,)
+        connection_types += (APIConnectionError,)
+    except ImportError:  # pragma: no cover - OpenAI adapter is optional
+        pass
+    try:
+        from anthropic import APIConnectionError as AnthropicAPIConnectionError
+        from anthropic import APITimeoutError as AnthropicAPITimeoutError
+
+        timeout_types += (AnthropicAPITimeoutError,)
+        connection_types += (AnthropicAPIConnectionError,)
+    except ImportError:  # pragma: no cover - Anthropic adapter is optional
+        pass
+
+    if any(isinstance(item, timeout_types) for item in exception_chain):
         return "expert_verification_timeout"
     status_code = getattr(exc, "status_code", None)
     response = getattr(exc, "response", None)
@@ -346,7 +382,7 @@ def _verification_error_code(exc: Exception) -> str:
         return "expert_verification_model_not_found"
     if status_code == 429:
         return "expert_verification_rate_limited"
-    if isinstance(exc, (ConnectionError, OSError)):
+    if any(isinstance(item, connection_types) for item in exception_chain):
         return "expert_verification_connection_failed"
     return "expert_verification_provider_error"
 
