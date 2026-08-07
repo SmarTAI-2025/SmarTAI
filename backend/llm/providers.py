@@ -16,6 +16,7 @@ import asyncio
 import base64
 import logging
 import random
+import re
 import time
 from abc import ABC, abstractmethod
 from collections import deque
@@ -28,6 +29,30 @@ from backend.config import settings
 from backend.models import ProviderConfig
 
 logger = logging.getLogger(__name__)
+
+
+_ZHIPU_VISION_MODEL_PATTERN = re.compile(
+    r"^glm-\d+(?:\.\d+)?v(?:-|$)", re.IGNORECASE
+)
+
+
+def _configured_proxy_url() -> Optional[str]:
+    """Return the explicit proxy for HTTPS model APIs, if configured."""
+    return settings.https_proxy.strip() or settings.http_proxy.strip() or None
+
+
+def _build_httpx_clients(proxy_url: Optional[str]) -> tuple[Any, Any]:
+    """Build sync/async clients without inheriting machine proxy variables."""
+    import httpx
+
+    kwargs: Dict[str, Any] = {
+        "follow_redirects": True,
+        "timeout": settings.llm_timeout,
+        "trust_env": False,
+    }
+    if proxy_url:
+        kwargs["proxy"] = proxy_url
+    return httpx.Client(**kwargs), httpx.AsyncClient(**kwargs)
 
 
 @dataclass
@@ -191,7 +216,7 @@ class GeminiProvider(BaseProvider):
     Gemini provider with two modes:
       - Proxy mode (local): run_in_threadpool + per-call fresh client (parallel safe)
       - Direct mode (cloud): native ainvoke with shared client (faster)
-    Auto-detected from settings.http_proxy.
+    Auto-detected from SmarTAI's explicit proxy settings.
     """
     provider_type = "gemini"
     supports_vision = True
@@ -209,7 +234,7 @@ class GeminiProvider(BaseProvider):
 
     @property
     def _needs_proxy_mode(self) -> bool:
-        return bool(settings.http_proxy)
+        return _configured_proxy_url() is not None
 
     async def ainvoke(self, messages: List[BaseMessage]) -> LLMResponse:
         if not self._needs_proxy_mode:
@@ -253,6 +278,10 @@ class OpenAIProvider(BaseProvider):
 
     def _build_client_sync(self) -> Any:
         from langchain_openai import ChatOpenAI
+        http_client, http_async_client = _build_httpx_clients(
+            _configured_proxy_url()
+        )
+
         return ChatOpenAI(
             model=self.model,
             temperature=0.0,
@@ -260,14 +289,26 @@ class OpenAIProvider(BaseProvider):
             max_retries=0,
             api_key=self.config.api_key,
             base_url=self.config.base_url or "https://api.openai.com/v1",
+            http_client=http_client,
+            http_async_client=http_async_client,
         )
 
 
 class ZhipuProvider(BaseProvider):
     provider_type = "zhipu"
 
+    def __init__(self, config: ProviderConfig):
+        super().__init__(config)
+        self.supports_vision = bool(
+            _ZHIPU_VISION_MODEL_PATTERN.match(self.model.strip())
+        )
+
     def _build_client_sync(self) -> Any:
         from langchain_openai import ChatOpenAI
+        # proxy=None is insufficient because httpx would still inherit
+        # HTTP(S)_PROXY. Zhipu must use a dedicated direct client.
+        http_client, http_async_client = _build_httpx_clients(None)
+
         return ChatOpenAI(
             model=self.model,
             temperature=0.0,
@@ -275,6 +316,8 @@ class ZhipuProvider(BaseProvider):
             max_retries=0,
             api_key=self.config.api_key,
             base_url=self.config.base_url or settings.zhipu_api_base,
+            http_client=http_client,
+            http_async_client=http_async_client,
         )
 
 
@@ -290,6 +333,7 @@ class AnthropicProvider(BaseProvider):
             timeout=settings.llm_timeout,
             max_retries=0,
             api_key=self.config.api_key,
+            anthropic_proxy=_configured_proxy_url(),
         )
 
 

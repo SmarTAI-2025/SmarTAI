@@ -199,7 +199,7 @@ def _require_ocr_skill(ocr_skill: OCRIngestSkill | None, filename: str) -> OCRIn
             status_code=503,
             detail=(
                 f"{filename} requires OCR, but no vision-capable provider is configured. "
-                "Add a Gemini/OpenAI/Anthropic key that supports image input."
+                "Add and enable a model that supports image input."
             ),
         )
     return ocr_skill
