@@ -225,8 +225,11 @@ def test_terminal_summary_is_repeatable_and_cannot_be_overwritten():
         stage="completed",
         checkpoint={"processed_sources": 20},
         terminal_summary=terminal,
+        terminal_status="done",
     )
     assert saved.terminal_summary == terminal
+    assert saved.status == "done"
+    assert saved.completed_at is not None
     assert workflow_repository.get_operation(
         operation.id, owner_id=owner_id
     ).terminal_summary == terminal
@@ -240,11 +243,22 @@ def test_terminal_summary_is_repeatable_and_cannot_be_overwritten():
             stage="completed",
             checkpoint={"processed_sources": 20},
             terminal_summary=terminal,
+            terminal_status="done",
         )
     assert replay_error.value.code == "stale_checkpoint_revision"
     assert workflow_repository.get_operation(
         operation.id, owner_id=owner_id
     ).terminal_summary == terminal
+
+    with pytest.raises(InvalidTransition) as legacy_update_error:
+        workflow_repository.update_operation(
+            operation.id,
+            owner_id=owner_id,
+            expected_attempt=operation.attempt,
+            status="running",
+            progress={"processed_sources": 21},
+        )
+    assert legacy_update_error.value.code == "operation_already_terminal"
 
     with pytest.raises(InvalidTransition) as terminal_error:
         workflow_repository.save_operation_checkpoint(
@@ -259,6 +273,43 @@ def test_terminal_summary_is_repeatable_and_cannot_be_overwritten():
     assert workflow_repository.get_operation(
         operation.id, owner_id=owner_id
     ).terminal_summary == terminal
+
+
+@pytest.mark.parametrize(
+    ("terminal_summary", "terminal_status", "expected_code"),
+    [
+        ({"outcome": "done"}, None, "invalid_operation_terminal_state"),
+        (None, "done", "invalid_operation_terminal_state"),
+        ({"outcome": "done"}, "", "invalid_operation_terminal_status"),
+        ({"outcome": "done"}, "pending", "invalid_operation_terminal_status"),
+        ({"outcome": "done"}, "running", "invalid_operation_terminal_status"),
+        ({"outcome": "done"}, "x" * 33, "invalid_operation_terminal_status"),
+    ],
+)
+def test_terminal_checkpoint_requires_a_valid_paired_status(
+    terminal_summary,
+    terminal_status,
+    expected_code,
+):
+    owner_id, _assignment_id, operation = _seed_operation()
+
+    with pytest.raises(ValidationError) as invalid:
+        workflow_repository.save_operation_checkpoint(
+            operation.id,
+            owner_id=owner_id,
+            expected_attempt=operation.attempt,
+            expected_checkpoint_revision=0,
+            stage="completed",
+            checkpoint={"processed_sources": 20},
+            terminal_summary=terminal_summary,
+            terminal_status=terminal_status,
+        )
+
+    assert invalid.value.code == expected_code
+    persisted = workflow_repository.get_operation(operation.id, owner_id=owner_id)
+    assert persisted.status == "pending"
+    assert persisted.checkpoint_revision == 0
+    assert persisted.terminal_summary is None
 
 
 def test_retry_resets_checkpoint_and_fences_the_previous_attempt():

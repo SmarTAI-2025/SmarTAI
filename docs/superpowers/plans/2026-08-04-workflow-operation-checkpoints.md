@@ -33,7 +33,7 @@ No API, Facade, Agent, OCR, frontend, `main.py`, file repository, source outcome
 - [ ] Write failing repository tests that `create_operation()` rejects a payload over 4 MiB and progress over 64 KiB, and that `update_operation()` rejects the same shapes without changing the persisted row.
 - [ ] Run the focused tests and observe RED because the existing repository has no bounds.
 - [ ] Add one compact UTF-8 JSON size validator that requires dict values, rejects non-serializable/non-finite JSON, and raises field-specific `ValidationError` codes.
-- [ ] Apply validation before opening the write transaction in both creation/retry and legacy update paths. Do not change either signature.
+- [ ] Apply validation before opening the write transaction in both creation/retry and legacy update paths. Keep the legacy creation and update signatures unchanged; the additive checkpoint API may gain optional checkpoint-specific arguments.
 - [ ] Re-run the focused tests and existing background workflow tests GREEN.
 
 ### Task 3: Checkpoint CAS and owner isolation
@@ -41,17 +41,17 @@ No API, Facade, Agent, OCR, frontend, `main.py`, file repository, source outcome
 - [ ] Write a failing test for `save_operation_checkpoint()` from revision zero, asserting revision one, stage, checkpoint, ordered de-duplicated artifact references, and fresh-read persistence.
 - [ ] Assert a missing or wrong-owner operation raises the same `NotFound`; assert missing and wrong-owner artifacts also share `NotFound("stored_file")`.
 - [ ] Run the test and observe RED because the function is absent.
-- [ ] Implement stage, checkpoint, artifact list, and terminal summary validation. Validate each stored file with owner and assignment predicates in the checkpoint transaction.
+- [ ] Implement stage, checkpoint, artifact list, terminal summary, and paired terminal status validation. Require summary and status together; status must be non-empty, at most 32 characters, and cannot be `pending` or `running`. Validate each stored file with owner and assignment predicates in the checkpoint transaction.
 - [ ] Implement a single conditional update matching operation ID, owner ID, expected attempt, and expected checkpoint revision, incrementing the revision expression atomically.
 - [ ] Classify a failed update as `NotFound`, `stale_operation_attempt`, or `stale_checkpoint_revision` using an owner-scoped re-read. Run the tests GREEN.
 
 ### Task 4: Concurrent CAS, terminal summary, and retry fencing
 
 - [ ] Write a failing concurrency test where two repository calls use revision zero and assert exactly one success plus one `stale_checkpoint_revision` conflict.
-- [ ] Write a failing terminal test: save a terminal summary, read it repeatedly, then reject another checkpoint with `operation_already_terminal`.
+- [ ] Write failing terminal tests: reject unpaired or invalid terminal status; save summary and status atomically with `completed_at`; read the state repeatedly; then reject another checkpoint and generic `update_operation()` with `operation_already_terminal`.
 - [ ] Write a failing retry test: fail and recreate the same operation, assert attempt increments and all checkpoint fields reset, then assert the old attempt receives `stale_operation_attempt`.
 - [ ] Run each test in RED before filling the missing behavior.
-- [ ] Add the terminal predicate and retry reset to the existing conditional updates, keeping legacy status behavior unchanged.
+- [ ] Add the terminal predicate and retry reset to the existing conditional updates. Make the terminal CAS persist summary, status, and completion timestamp together; fence generic operation mutation after a terminal summary while preserving focused atomic terminal transitions such as `ready -> applied`.
 - [ ] Run all checkpoint and background workflow tests GREEN.
 
 ### Task 5: Migration preservation and PostgreSQL evidence

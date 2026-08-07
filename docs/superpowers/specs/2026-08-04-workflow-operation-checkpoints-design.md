@@ -45,6 +45,7 @@ save_operation_checkpoint(
     checkpoint: dict,
     artifact_refs: list[str] | None = None,
     terminal_summary: dict | None = None,
+    terminal_status: str | None = None,
 ) -> WorkflowOperationRecord
 ```
 
@@ -60,7 +61,9 @@ Artifact references are deduplicated while preserving caller order. Every refere
 
 ## Terminal And Replay Semantics
 
-A non-null `terminal_summary` is immutable for its attempt. Once set, another checkpoint write is rejected with `InvalidTransition(code="operation_already_terminal")`. The persisted operation can be read repeatedly through the unchanged `get_operation()` call; refreshes and new processes see the same terminal summary.
+`terminal_summary` and `terminal_status` must be supplied together. A terminal status is a non-empty string of at most 32 characters and cannot be `pending` or `running`. Supplying only one field raises `invalid_operation_terminal_state`; an invalid status raises `invalid_operation_terminal_status`.
+
+A terminal checkpoint CAS atomically persists the summary, status, completion timestamp, checkpoint fields, and incremented revision. A non-null `terminal_summary` is immutable for its attempt. Once set, another checkpoint write or generic `update_operation()` call is rejected with `InvalidTransition(code="operation_already_terminal")`. A focused repository transition that is explicitly designed for an existing terminal state, such as `ready -> applied`, may retain its own atomic transition contract. The persisted operation can be read repeatedly through the unchanged `get_operation()` call; refreshes and new processes see the same terminal state.
 
 An exact replay using the already-consumed revision is also rejected as stale CAS rather than performing a second write. This makes caller behavior explicit: after a timeout, re-read the operation. If the returned terminal summary matches the caller's intended result, the operation is already complete; otherwise the caller lost the CAS and must not overwrite it.
 
@@ -75,6 +78,7 @@ Bounds are measured using compact UTF-8 JSON (`ensure_ascii=False`) before any d
 - checkpoint object: at most 64 KiB;
 - artifact references: at most 100 IDs, each a non-empty string of at most 64 characters, and at most 8 KiB serialized;
 - terminal summary object: at most 16 KiB;
+- terminal status: non-empty, at most 32 characters, and not `pending` or `running`;
 - checkpoint stage: at most 64 characters.
 
 Oversized or structurally invalid values raise the existing `ValidationError` with stable field-specific codes. Bounds apply on `create_operation()`, `update_operation()`, and `save_operation_checkpoint()` so the repository cannot be bypassed through its legacy mutation entry points. The 4 MiB legacy payload ceiling preserves the existing 400,000-character source contract while creating an explicit finite database limit. JSON values must be serializable and finite; non-finite numbers are rejected.
@@ -87,7 +91,7 @@ Artifact ownership is checked in the same transaction before the CAS update. A c
 
 ## Migration And Compatibility
 
-`0005` depends on `0004_workflow_source_outcomes`. No prior migration is edited. Existing rows read with empty checkpoint state after upgrade. Existing callers continue to receive the same ORM record with additive attributes and use their old method signatures unchanged.
+`0005` depends on `0004_workflow_source_outcomes`. No prior migration is edited. Existing rows read with empty checkpoint state after upgrade. Existing callers continue to receive the same ORM record with additive attributes. Existing nonterminal callers remain compatible: legacy creation/update signatures are unchanged, and the additive checkpoint API gains only the optional `terminal_status` argument.
 
 Migration tests cover `0004 -> 0005 -> 0004 -> 0005`, data preservation, defaults, the revision check, and full `head -> base -> head`. PostgreSQL offline DDL and configured live persistence tests cover portable schema behavior.
 
@@ -99,7 +103,7 @@ Repository tests must demonstrate:
 2. A valid checkpoint increments revision and preserves stage, metadata, ordered artifact IDs, and attempt.
 3. Two writes against one revision produce one success; the loser receives `stale_checkpoint_revision`.
 4. A retried operation resets checkpoint fields and rejects the previous attempt with `stale_operation_attempt`.
-5. Terminal summary is durable, repeat-readable, and cannot be overwritten by a later checkpoint.
+5. Terminal summary and terminal status are paired, atomically persisted with `completed_at`, durable, repeat-readable, and cannot be overwritten by a later checkpoint or generic operation update.
 6. Wrong-owner operation and artifact access is indistinguishable from absence.
 7. Stage, JSON shape, serialized byte limits, artifact count/ID limits, non-finite values, and legacy payload/progress limits are enforced before persistence.
 8. Existing operation and background workflow tests remain green without API or Facade changes.

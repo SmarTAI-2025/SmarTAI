@@ -763,15 +763,21 @@ def update_operation(
                 WorkflowOperationRecord.id == operation_id,
                 WorkflowOperationRecord.owner_id == owner_id,
                 WorkflowOperationRecord.attempt == expected_attempt,
+                WorkflowOperationRecord.terminal_summary.is_(None),
             ).values(**values, updated_at=now)
         )
         if result.rowcount != 1:
-            exists = session.scalar(select(WorkflowOperationRecord.id).where(
+            current = session.scalar(select(WorkflowOperationRecord).where(
                 WorkflowOperationRecord.id == operation_id,
                 WorkflowOperationRecord.owner_id == owner_id,
             ))
-            if exists is None:
+            if current is None:
                 raise NotFound("workflow_operation")
+            if current.attempt == expected_attempt and current.terminal_summary is not None:
+                raise InvalidTransition(
+                    "The workflow operation already has a terminal summary.",
+                    code="operation_already_terminal",
+                )
             raise VersionConflict(
                 "A newer workflow operation attempt is active.",
                 code="stale_operation_attempt",
@@ -795,6 +801,7 @@ def save_operation_checkpoint(
     checkpoint: dict,
     artifact_refs: list[str] | None = None,
     terminal_summary: dict | None = None,
+    terminal_status: str | None = None,
 ) -> WorkflowOperationRecord:
     stage = _validate_checkpoint_stage(stage)
     checkpoint = _validate_json_object(
@@ -807,6 +814,21 @@ def save_operation_checkpoint(
             terminal_summary,
             field="terminal_summary",
             max_bytes=MAX_OPERATION_TERMINAL_SUMMARY_BYTES,
+        )
+    if (terminal_summary is None) != (terminal_status is None):
+        raise ValidationError(
+            "Terminal summary and status must be supplied together.",
+            code="invalid_operation_terminal_state",
+        )
+    if terminal_status is not None and (
+        not isinstance(terminal_status, str)
+        or not terminal_status
+        or len(terminal_status) > 32
+        or terminal_status in {"pending", "running"}
+    ):
+        raise ValidationError(
+            "Invalid terminal operation status.",
+            code="invalid_operation_terminal_status",
         )
     refs = _validate_artifact_refs(
         artifact_refs if artifact_refs is not None else []
@@ -834,6 +856,17 @@ def save_operation_checkpoint(
             if matched_refs != set(refs):
                 raise NotFound("stored_file")
 
+        checkpoint_values = {
+            "checkpoint_revision": WorkflowOperationRecord.checkpoint_revision + 1,
+            "checkpoint_stage": stage,
+            "checkpoint": checkpoint,
+            "artifact_refs": refs,
+            "terminal_summary": terminal_summary,
+            "updated_at": now,
+        }
+        if terminal_status is not None:
+            checkpoint_values.update(status=terminal_status, completed_at=now)
+
         result = session.execute(
             update(WorkflowOperationRecord).where(
                 WorkflowOperationRecord.id == operation_id,
@@ -842,14 +875,7 @@ def save_operation_checkpoint(
                 WorkflowOperationRecord.checkpoint_revision
                 == expected_checkpoint_revision,
                 WorkflowOperationRecord.terminal_summary.is_(None),
-            ).values(
-                checkpoint_revision=WorkflowOperationRecord.checkpoint_revision + 1,
-                checkpoint_stage=stage,
-                checkpoint=checkpoint,
-                artifact_refs=refs,
-                terminal_summary=terminal_summary,
-                updated_at=now,
-            )
+            ).values(**checkpoint_values)
         )
         if result.rowcount != 1:
             session.expire_all()
