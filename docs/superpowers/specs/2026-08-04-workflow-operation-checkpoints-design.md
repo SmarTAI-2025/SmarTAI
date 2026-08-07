@@ -18,7 +18,7 @@ The existing unique key `(assignment_id, operation_type, input_hash)` continues 
 
 ## Schema
 
-Migration `0005_operation_checkpoints` adds these columns to `workflow_operations`:
+Migration `0006_operation_checkpoints` adds these columns to `workflow_operations`:
 
 | Column | Contract |
 |---|---|
@@ -91,7 +91,7 @@ Artifact ownership is checked in the same transaction before the CAS update. A c
 
 ## Migration And Compatibility
 
-`0005` depends on `0004_workflow_source_outcomes`. No prior migration is edited. Existing rows read with empty checkpoint state after upgrade. Existing callers continue to receive the same ORM record with additive attributes. Existing nonterminal callers remain compatible: legacy creation/update signatures are unchanged, and the additive checkpoint API gains only the optional `terminal_status` argument.
+`0006` depends on `0005_workflow_source_outcomes`. No prior migration is edited. Existing rows read with empty checkpoint state after upgrade. Existing callers continue to receive the same ORM record with additive attributes. Existing nonterminal callers remain compatible: legacy creation/update signatures are unchanged, and the additive checkpoint API gains only the optional `terminal_status` argument.
 
 Migration tests cover `0004 -> 0005 -> 0004 -> 0005`, data preservation, defaults, the revision check, and full `head -> base -> head`. PostgreSQL offline DDL and configured live persistence tests cover portable schema behavior.
 

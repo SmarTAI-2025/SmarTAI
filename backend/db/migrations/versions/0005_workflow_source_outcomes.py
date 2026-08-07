@@ -1,14 +1,14 @@
 """durable workflow source items and per-file outcomes
 
-Revision ID: 0004_workflow_source_outcomes
-Revises: 0003_assignment_workflow_facade
+Revision ID: 0005_workflow_source_outcomes
+Revises: 0004_structured_review_reasons
 """
 from alembic import op
 import sqlalchemy as sa
 
 
-revision = "0004_workflow_source_outcomes"
-down_revision = "0003_assignment_workflow_facade"
+revision = "0005_workflow_source_outcomes"
+down_revision = "0004_structured_review_reasons"
 branch_labels = None
 depends_on = None
 

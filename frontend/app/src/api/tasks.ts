@@ -188,7 +188,7 @@ export function getTaskResultArtifactBlob(
 export function updateProblem(
   taskId: string,
   qId: string,
-  patch: Pick<Partial<ProblemInfo>, "stem" | "criterion" | "review_status" | "reference_answer" | "solution_code" | "test_cases">,
+  patch: Pick<Partial<ProblemInfo>, "stem" | "criterion" | "max_score" | "review_status" | "reference_answer" | "solution_code" | "test_cases">,
 ): Promise<{ status: "ok"; q_id: string; problem: ProblemInfo }> {
   return putJSON(`/tasks/${taskId}/problems/${qId}`, patch);
 }

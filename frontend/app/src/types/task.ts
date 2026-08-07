@@ -36,6 +36,9 @@ export interface ProblemInfo {
   type: string;
   stem: string;
   criterion: string;
+  max_score: number;
+  max_score_source?: "default_10" | "uniform" | "per_question_text" | "teacher_edited" | "legacy";
+  max_score_review_status?: "needs_review" | "confirmed";
   review_status?: "needs_review" | "edited" | "confirmed";
   reference_answer?: string | null;
   solution_code?: string | null;
@@ -48,8 +51,8 @@ export interface ProblemInfo {
 export interface PreparationIssue {
   issue_id: string;
   q_id?: string | null;
-  field: "stem" | "answer" | "rubric" | "programming_tests" | "source";
-  code: "low_confidence" | "source_conflict" | "ai_source_conflict" | "ambiguous_question_match" | "unmapped_source_content" | "parse_anomaly" | "generation_failed" | "rubric_step_reference_conflict" | "invalid_test_case" | "reference_solution_failed_case";
+  field: "stem" | "answer" | "rubric" | "programming_tests" | "source" | "max_score";
+  code: "low_confidence" | "source_conflict" | "ai_source_conflict" | "ambiguous_question_match" | "unmapped_source_content" | "parse_anomaly" | "generation_failed" | "rubric_step_reference_conflict" | "invalid_test_case" | "reference_solution_failed_case" | "default_max_score_requires_review" | "max_score_not_found";
   severity: "info" | "warning" | "blocking";
   source_ids?: string[];
   details?: Record<string, unknown>;
@@ -133,7 +136,8 @@ export interface ExpertResult {
 export interface Correction {
   q_id: string;
   type: string;
-  score: number;
+  score: number | null;
+  provisional_score?: number | null;
   max_score: number;
   confidence: number;
   comment: string;
@@ -145,6 +149,7 @@ export interface Correction {
   is_score?: number | null;
   requires_human_review: boolean;
   review_reasons: string[];
+  initial_review_reasons?: string[];
   teacher_score?: number | null;
   teacher_comment?: string;
   review_status?: "pending" | "edited" | "confirmed";

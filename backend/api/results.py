@@ -13,6 +13,7 @@ from fastapi import APIRouter, Depends
 from backend.api.errors import domain_error_response
 from backend.auth import get_current_user, require_teacher
 from backend.db import assignment_repository, grading_repository, submission_repository
+from backend.domain import education
 from backend.domain.errors import DomainError, NotFound
 from backend.models import User
 
@@ -21,7 +22,7 @@ router = APIRouter(prefix="/results", tags=["results"])
 
 def _effective_score(result, review) -> float | None:
     """Display score: the latest teacher review if present, else the AI score.
-    Non-graded results (failed/needs_review) contribute nothing to totals."""
+    Scored soft reviews keep the AI value; hard failures contribute nothing."""
     if review is not None:
         return review.new_score
     return result.ai_score
@@ -48,7 +49,8 @@ def _serialize_result(result, review) -> dict:
         "submission_revision_id": result.submission_revision_id,
         "result_status": result.result_status,
         "requires_review": result.requires_review,
-        "review_reason": result.review_reason,
+        "review_reasons": list(result.review_reasons or []),
+        "initial_review_reasons": list(result.initial_review_reasons or []),
         "effective_score": effective_score,
         "effective_comment": effective_comment,
         "teacher_review": review_payload,
@@ -69,7 +71,7 @@ def _latest_run_for_assignment(assignment_id: str, teacher_id: str):
 @router.get("/assignment/{assignment_id}/summary")
 def teacher_summary(assignment_id: str, current: User = Depends(require_teacher)):
     """Teacher-facing deterministic summary: per-student and per-question
-    aggregates over the latest released run's graded results."""
+    aggregates over the latest released run's scoreable results."""
     try:
         assignment = assignment_repository.get_assignment(
             assignment_id=assignment_id, actor_id=current.id
@@ -99,22 +101,29 @@ def teacher_student_result(assignment_id: str, student_id: str,
 
 @router.get("/assignment/{assignment_id}/questions")
 def per_question_aggregates(assignment_id: str, current: User = Depends(require_teacher)):
-    """Deterministic per-question aggregates (mean, max, count) over graded
-    results of the latest run. Non-graded results are excluded."""
+    """Deterministic per-question aggregates over scoreable latest-run rows.
+
+    Soft-review AI scores are included by default; hard failures are excluded.
+    """
     try:
         assignment_repository.get_assignment(assignment_id=assignment_id, actor_id=current.id)
     except DomainError as exc:
         return domain_error_response(exc)
     results = _all_results_for_assignment(assignment_id, current.id, released_only=True)
-    by_q: dict[str, list] = {}
+    by_q: dict[str, list[tuple[object, float]]] = {}
     for r in results:
-        if r.result_status != "graded":
+        review = grading_repository.latest_teacher_review(grade_result_id=r.id)
+        score = _effective_score(r, review)
+        if (
+            r.result_status in education.NON_SCOREABLE_RESULT_STATUSES
+            or score is None
+        ):
             continue
-        by_q.setdefault(r.q_id, []).append(r)
+        by_q.setdefault(r.q_id, []).append((r, score))
     out = []
-    for q_id, items in by_q.items():
-        scores = [(_effective_score(r, grading_repository.latest_teacher_review(grade_result_id=r.id)) or 0.0) for r in items]
-        max_score = items[0].ai_max_score if items else 10.0
+    for q_id, rows in by_q.items():
+        scores = [score for _result, score in rows]
+        max_score = rows[0][0].ai_max_score if rows else 10.0
         out.append({
             "q_id": q_id,
             "count": len(scores),
@@ -139,8 +148,10 @@ def review_queue(assignment_id: str, current: User = Depends(require_teacher)):
 
 @router.get("/assignment/{assignment_id}/me")
 def student_result(assignment_id: str, current: User = Depends(get_current_user)):
-    """Released results for the current student. Empty until the run is released
-    and only graded results are shown (no provider traces, no draft grades)."""
+    """Released results for the current student. Empty until the run is released.
+
+    Scored soft-review rows use the AI default; hard failures block release.
+    """
     from backend.services import grading_runs
     rows = grading_runs.student_results(student_id=current.id, assignment_id=assignment_id)
     return [
@@ -156,6 +167,8 @@ def student_result(assignment_id: str, current: User = Depends(get_current_user)
             "ai_comment": r.ai_comment,
             "teacher_review": r.teacher_review,
             "result_status": r.result_status,
+            "review_reasons": list(r.review_reasons or []),
+            "initial_review_reasons": list(r.initial_review_reasons or []),
         }
         for r in rows
     ]
@@ -182,17 +195,27 @@ def _all_results_for_assignment(
 
 def _summary(assignment_id: str, teacher_id: str) -> dict:
     results = _all_results_for_assignment(assignment_id, teacher_id, released_only=True)
-    graded = [r for r in results if r.result_status == "graded"]
-    needs_review = [r for r in results if r.result_status != "graded"]
-    # Per-student total (sum of effective scores over graded results).
+    scored: list[tuple[object, float]] = []
+    for result in results:
+        review = grading_repository.latest_teacher_review(grade_result_id=result.id)
+        score = _effective_score(result, review)
+        if (
+            result.result_status not in education.NON_SCOREABLE_RESULT_STATUSES
+            and score is not None
+        ):
+            scored.append((result, score))
+    needs_review = [
+        result
+        for result in results
+        if result.result_status in education.REVIEW_QUEUE_RESULT_STATUSES
+    ]
+    # Per-student total over teacher scores or the valid AI default.
     by_student: dict[str, float] = {}
-    for r in graded:
-        review = grading_repository.latest_teacher_review(grade_result_id=r.id)
-        score = _effective_score(r, review) or 0.0
-        by_student[r.student_id] = by_student.get(r.student_id, 0.0) + score
+    for result, score in scored:
+        by_student[result.student_id] = by_student.get(result.student_id, 0.0) + score
     return {
         "assignment_id": assignment_id,
-        "graded_count": len(graded),
+        "graded_count": len(scored),
         "needs_review_count": len(needs_review),
         "students": [
             {"student_id": sid, "total": total} for sid, total in by_student.items()

@@ -9,7 +9,8 @@ lease. Expired leases can be reclaimed; a late worker whose lease lapsed is
 rejected by predicate.
 
 AI-original result columns are immutable once written; teacher review is a
-separate row. Release is blocked while failed/needs_review results remain.
+separate row. Hard failures block release; scored soft-review rows remain
+publishable while retaining their review signal.
 """
 from __future__ import annotations
 
@@ -214,7 +215,7 @@ async def process_run(*, run_id: str, worker_id: str, registry=None, language: s
     (already taken by another worker, or terminal), this is a no-op.
 
     Raises on a batch-level failure so the caller can mark the run failed; per-
-    question failures land as ``needs_review`` results via the adapter.
+    question failures land as explicit ``failed`` results via the adapter.
     """
     try:
         grading_repository.claim_lease(run_id=run_id, worker_id=worker_id, lease_seconds=settings.grading_lease_seconds)
@@ -324,7 +325,7 @@ async def process_run(*, run_id: str, worker_id: str, registry=None, language: s
         )
         grading_repository.record_event(
             run_id=run_id, level="info", message="run_completed",
-            payload={"completed": completed, "needs_review": failed},
+            payload={"completed": completed, "failed": failed},
         )
     except Exception:
         logger.exception("Grading run %s failed", run_id)
@@ -451,9 +452,9 @@ def student_results(*, student_id: str, assignment_id: str) -> list[education.Gr
     """Released, student-visible results for one (assignment, student).
 
     Only results from a *released* run are returned, so draft grades and
-    provider traces never reach students. Non-graded rows are filtered out by
-    the caller's display layer; this returns the raw graded rows for the
-    student's frozen revision in the latest released run.
+    provider traces never reach students. Scored soft-review rows are visible
+    with their effective AI default; hard failures cannot reach this point
+    because they block release.
 
     A later submission revision must not make an already-published result
     disappear: release freezes the visible result set, while the new revision
@@ -477,9 +478,13 @@ def student_results(*, student_id: str, assignment_id: str) -> list[education.Gr
             return []
         rows = session.scalars(
             _select(GradeResultRecord)
-            .where(GradeResultRecord.student_id == student_id,
-                   GradeResultRecord.grading_run_id == latest_run_id,
-                   GradeResultRecord.result_status == education.GradeResultStatus.GRADED.value)
+            .where(
+                GradeResultRecord.student_id == student_id,
+                GradeResultRecord.grading_run_id == latest_run_id,
+                GradeResultRecord.result_status.not_in(
+                    education.NON_SCOREABLE_RESULT_STATUSES
+                ),
+            )
             .order_by(GradeResultRecord.q_id)
         ).all()
         reviews = grading_repository._latest_reviews_by_result(session, [r.id for r in rows])

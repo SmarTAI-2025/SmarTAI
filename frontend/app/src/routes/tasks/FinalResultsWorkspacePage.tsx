@@ -18,6 +18,7 @@ import {
   buildResultsModel,
   clampPercent,
   formatPercent,
+  summarizeReviewScoreSources,
   type QuestionSummary,
   type ResultsModel,
   type StudentSummary,
@@ -276,13 +277,14 @@ function ResultsOverview({
     .filter((value): value is number => typeof value === "number" && Number.isFinite(value));
   const passCount = validStudentPercents.filter((value) => value >= 60).length;
   const passRate = validStudentPercents.length ? (passCount / validStudentPercents.length) * 100 : null;
-  const reviewConclusion = finalization.required_review_count
+  const reviewSources = summarizeReviewScoreSources(model.students.flatMap((student) => student.corrections));
+  const reviewConclusion = reviewSources.total
     ? tx(
         locale,
-        `${finalization.confirmed_required_count}/${finalization.required_review_count} 项已确认`,
-        `${finalization.confirmed_required_count}/${finalization.required_review_count} confirmed`,
+        `${reviewSources.teacherConfirmedSame + reviewSources.teacherChanged} 项教师已处理 · ${reviewSources.aiUntouched} 项沿用有效 AI 分${reviewSources.hardFailure ? ` · ${reviewSources.hardFailure} 项无有效分数` : ""}`,
+        `${reviewSources.teacherConfirmedSame + reviewSources.teacherChanged} teacher-handled · ${reviewSources.aiUntouched} using valid AI scores${reviewSources.hardFailure ? ` · ${reviewSources.hardFailure} unscored` : ""}`,
       )
-    : tx(locale, "无强制复核项", "No required reviews");
+    : tx(locale, "无复核信号", "No review signals");
 
   return (
     <section className="rounded-[10px] border bg-card p-5">

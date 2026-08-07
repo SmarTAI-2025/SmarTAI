@@ -12,7 +12,7 @@
 
 ## File Structure
 
-- Create `backend/db/migrations/versions/0005_workflow_operation_checkpoints.py` for additive checkpoint columns and reversible SQLite/PostgreSQL migration behavior.
+- Create `backend/db/migrations/versions/0006_workflow_operation_checkpoints.py` for additive checkpoint columns and reversible SQLite/PostgreSQL migration behavior.
 - Create `backend/tests/test_workflow_operation_checkpoints.py` for the focused repository contract.
 - Modify `backend/db/workflow_repository.py` for ORM fields, bounded JSON validation, retry reset, and checkpoint CAS.
 - Modify `backend/tests/test_migration_roundtrip.py` for schema/default/constraint/preservation evidence.
@@ -25,7 +25,7 @@ No API, Facade, Agent, OCR, frontend, `main.py`, file repository, source outcome
 - [ ] Add a failing migration test asserting `workflow_operations` has `checkpoint_revision`, `checkpoint_stage`, `checkpoint`, `artifact_refs`, and `terminal_summary`, plus a named non-negative revision check.
 - [ ] Run `python -m pytest backend/tests/test_migration_roundtrip.py -k operation_checkpoint -q` and observe RED because revision `0005` and the columns do not exist.
 - [ ] Add the five ORM fields with Python defaults matching the schema.
-- [ ] Add migration revision `0005_operation_checkpoints`, using batch alter for SQLite compatibility, server defaults for existing rows, and a downgrade that removes only the new columns.
+- [ ] Add migration revision `0006_operation_checkpoints`, using batch alter for SQLite compatibility, server defaults for existing rows, and a downgrade that removes only the new columns.
 - [ ] Re-run the focused migration test and make it GREEN.
 
 ### Task 2: Bounded creation and legacy updates
@@ -66,6 +66,6 @@ No API, Facade, Agent, OCR, frontend, `main.py`, file repository, source outcome
 - [ ] Re-read the DB-W1-1 and DB-W1-2 acceptance lists and map every item to a test or a stated integration boundary.
 - [ ] Run `python -m pytest backend/tests/test_workflow_operation_checkpoints.py backend/tests/test_workflow_source_outcomes.py backend/tests/test_task_background_workflows.py backend/tests/test_storage_persistence.py backend/tests/test_migration_roundtrip.py -q`.
 - [ ] Run the complete backend suite in stable groups if the repository's known OmniDocBench environment test still contains its hard-coded Linux interpreter; distinguish baseline failure from changes.
-- [ ] Run `python -m alembic heads`, expecting only `0005_operation_checkpoints`.
+- [ ] Run `python -m alembic heads`, expecting only `0006_operation_checkpoints`.
 - [ ] Run `git diff --check` and inspect the diff for forbidden files or changed existing signatures.
 - [ ] Commit the DB-W1-2 implementation separately from DB-W1-1 and stop before Week 2 lease work.

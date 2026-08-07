@@ -18,7 +18,13 @@ from typing import Optional, TYPE_CHECKING
 from pydantic import BaseModel, Field
 from typing import List
 
-from backend.skills.base import GradingSkill, build_system_prompt, register_skill
+from backend.skills.base import (
+    GradingSkill,
+    authoritative_score_instruction,
+    build_system_prompt,
+    normalize_expert_result,
+    register_skill,
+)
 from backend.models import ExpertResult, ProblemInfo, StudentAnswerInfo, StepScore, TaskGradingSetup
 from backend.llm.providers import BaseProvider
 from backend.tools.structured_llm import structured_llm_call
@@ -34,9 +40,9 @@ logger = logging.getLogger(__name__)
 
 class ConceptGradingOutput(BaseModel):
     """Expected JSON output from the LLM when grading a concept question."""
-    score: float = Field(ge=0, description="Score awarded, 0 to max_score")
-    max_score: float = Field(default=10.0, description="Maximum possible score")
-    confidence: float = Field(ge=0, le=1, description="Grading confidence")
+    score: float = Field(ge=0, allow_inf_nan=False, description="Score awarded, 0 to max_score")
+    max_score: float = Field(default=10.0, gt=0, allow_inf_nan=False, description="Maximum possible score")
+    confidence: float = Field(ge=0, le=1, allow_inf_nan=False, description="Grading confidence")
     comment: str = Field(description="Overall feedback to the student")
     steps: List[dict] = Field(default_factory=list, description="Step-by-step scoring breakdown")
     hits: List[str] = Field(default_factory=list, description="Knowledge points matched")
@@ -160,7 +166,8 @@ class ConceptSkill(GradingSkill):
             system_prompt = build_system_prompt(
                 "You are a professional teacher grading a concept question. "
                 "Walk through the 4-step reasoning workflow specified in the user prompt "
-                "and produce a structured per-dimension score.",
+                "and produce a structured per-dimension score."
+                + authoritative_score_instruction(problem.max_score),
                 self.language,
                 self.grading_setup,
             )
@@ -188,7 +195,7 @@ class ConceptSkill(GradingSkill):
                 score = max(0.0, min(result.score, result.max_score))
                 confidence = max(0.0, min(result.confidence, 1.0))
 
-                return ExpertResult(
+                return normalize_expert_result(ExpertResult(
                     provider=self.provider.provider_id,
                     score=score,
                     max_score=result.max_score,
@@ -198,7 +205,7 @@ class ConceptSkill(GradingSkill):
                     hits=result.hits,
                     raw_output=raw_response.content,
                     duration_ms=raw_response.duration_ms,
-                )
+                ), problem.max_score)
 
             except Exception as e:
                 logger.error(
@@ -208,7 +215,7 @@ class ConceptSkill(GradingSkill):
                 from backend.skills.base import classify_skill_error
                 kind, friendly = classify_skill_error(e)
                 return self._blank_result(
-                    problem.q_id, 10.0, friendly, error_kind=kind,
+                    problem.q_id, problem.max_score, friendly, error_kind=kind,
                 )
 
         finally:

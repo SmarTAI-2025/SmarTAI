@@ -34,9 +34,12 @@ import type {
   ProblemSourceMode,
   ProblemSourceScope,
   ProblemStructureMode,
+  QuestionScorePolicyInput,
 } from "@/types";
 
 const SOURCE_ROLES: PreparationSourceRole[] = ["problem", "reference_answer", "rubric", "programming_tests"];
+const DOCUMENT_SOURCE_EXTENSIONS = [".pdf", ".txt", ".md", ".markdown"] as const;
+const IMAGE_SOURCE_EXTENSIONS = new Set([".jpg", ".jpeg", ".png", ".webp"]);
 
 type SourceDraft = {
   id: string;
@@ -52,11 +55,24 @@ type SourceDraft = {
   saveToLibrary: boolean;
 };
 
+type ScorePolicyDraft = {
+  mode: QuestionScorePolicyInput["mode"];
+  uniformMaxScore: string;
+  perQuestionText: string;
+};
+
+const DEFAULT_SCORE_POLICY_DRAFT: ScorePolicyDraft = {
+  mode: "default_10",
+  uniformMaxScore: "10",
+  perQuestionText: "",
+};
+
 type AddProblemsRouteState = {
   questionPreparationDraft?: {
     taskId: string;
     activeRole: PreparationSourceRole;
     sources: SourceDraft[];
+    scorePolicy?: ScorePolicyDraft;
   };
 };
 
@@ -80,6 +96,9 @@ export function AddProblemsPage() {
   const startPreparation = useStartQuestionPreparation();
   const [activeRole, setActiveRole] = useState<PreparationSourceRole>(restored?.activeRole ?? "problem");
   const [sources, setSources] = useState<SourceDraft[]>(restored?.sources ?? [createSourceDraft("problem")]);
+  const [scorePolicy, setScorePolicy] = useState<ScorePolicyDraft>(() => (
+    restored?.scorePolicy ?? DEFAULT_SCORE_POLICY_DRAFT
+  ));
   const [formError, setFormError] = useState<string | null>(null);
   const [preparationFailure, setPreparationFailure] = useState<PreparationFailure | null>(null);
   const [busyLabel, setBusyLabel] = useState<string | null>(null);
@@ -98,6 +117,7 @@ export function AddProblemsPage() {
       taskId: taskId ?? "",
       activeRole,
       sources,
+      scorePolicy,
     },
   };
 
@@ -152,6 +172,16 @@ export function AddProblemsPage() {
       else setFormError(primaryDisabledReason);
       return;
     }
+    const resolvedScorePolicy = validateScorePolicy(
+      scorePolicy,
+      locale,
+      capabilitiesQuery.data?.score_policy?.maximum_max_score ?? 10_000,
+    );
+    if (!resolvedScorePolicy.value) {
+      setActiveRole("rubric");
+      setFormError(resolvedScorePolicy.error);
+      return;
+    }
     let activeSource: SourceDraft | undefined;
     let phase: PreparationFailure["phase"] = "source_preflight";
     try {
@@ -181,6 +211,7 @@ export function AddProblemsPage() {
         sourceTokens: tokens,
         expectedWorkflowRevision: taskQuery.data.workflow_revision,
         replaceConfirmed: hasExistingProblems,
+        scorePolicy: resolvedScorePolicy.value,
       });
       toast.success(
         ["already_running", "already_done"].includes(response.status)
@@ -281,6 +312,20 @@ export function AddProblemsPage() {
           </nav>
 
           <div className="space-y-3 bg-slate-50/60 p-3 dark:bg-slate-950/20 sm:p-4">
+            {activeRole === "rubric" ? (
+              <ScorePolicyEditor
+                value={scorePolicy}
+                disabled={isBusy}
+                maximumMaxScore={capabilitiesQuery.data?.score_policy?.maximum_max_score ?? 10_000}
+                maxTextLength={capabilitiesQuery.data?.score_policy?.per_question_text_max_characters ?? 12_000}
+                locale={locale}
+                onChange={(patch) => {
+                  setScorePolicy((current) => ({ ...current, ...patch }));
+                  setFormError(null);
+                  setPreparationFailure(null);
+                }}
+              />
+            ) : null}
             {activeSources.length ? activeSources.map((source, index) => (
               <SourceEditor
                 key={source.id}
@@ -382,6 +427,92 @@ export function AddProblemsPage() {
   );
 }
 
+function ScorePolicyEditor({ value, disabled, maximumMaxScore, maxTextLength, locale, onChange }: {
+  value: ScorePolicyDraft;
+  disabled: boolean;
+  maximumMaxScore: number;
+  maxTextLength: number;
+  locale: string;
+  onChange: (patch: Partial<ScorePolicyDraft>) => void;
+}) {
+  const differentPerQuestion = value.mode === "per_question";
+  return (
+    <section className="rounded-[10px] border border-blue-200 bg-card p-4 shadow-sm dark:border-blue-900 sm:p-5" aria-labelledby="score-policy-title">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+        <div>
+          <h2 id="score-policy-title" className="text-sm font-bold text-foreground">{tx(locale, "设置题目满分", "Set Question Maximum Scores")}</h2>
+          <p className="mt-1 text-xs leading-5 text-muted-foreground">
+            {tx(locale, "评分步骤统一使用百分比；这里的满分会成为批改时不可被模型覆盖的分值尺度。", "Rubric steps use percentages. These maximum scores become the grading scale the model cannot override.")}
+          </p>
+        </div>
+        <label className="inline-flex shrink-0 cursor-pointer items-center gap-2 text-xs font-semibold text-foreground">
+          <input
+            type="checkbox"
+            checked={differentPerQuestion}
+            disabled={disabled}
+            onChange={(event) => onChange({
+              mode: event.target.checked
+                ? "per_question"
+                : value.uniformMaxScore === "10" ? "default_10" : "uniform",
+            })}
+            className="h-4 w-4 rounded border-border accent-primary"
+          />
+          {tx(locale, "每题满分不同", "Different score per question")}
+        </label>
+      </div>
+
+      {differentPerQuestion ? (
+        <label className="mt-4 block">
+          <span className="text-xs font-semibold text-foreground">{tx(locale, "按题号描述每题满分", "Describe maximum scores by question number")}</span>
+          <textarea
+            aria-label={tx(locale, "每题满分说明", "Per-question maximum score instructions")}
+            value={value.perQuestionText}
+            disabled={disabled}
+            maxLength={maxTextLength}
+            onChange={(event) => onChange({ perQuestionText: event.target.value })}
+            placeholder={tx(locale, "例如：第 1–3 题每题 5 分，第 4 题 15 分，第 5 题 20 分。", "Example: Questions 1–3 are worth 5 points each; Question 4 is worth 15; Question 5 is worth 20.")}
+            className="mt-2 min-h-[88px] w-full resize-y rounded-[7px] border bg-background px-3 py-2 text-sm leading-5 text-foreground outline-none focus:border-primary focus:ring-2 focus:ring-primary/15"
+          />
+          <span className="mt-1.5 block text-[11px] leading-4 text-muted-foreground">{tx(locale, "识别后会逐题显示结果；未匹配到的题目按 10 分并明确提醒复核。", "After recognition, every result is shown. Unmatched questions default to 10 and are explicitly flagged for review.")}</span>
+        </label>
+      ) : (
+        <div className="mt-4 flex flex-col gap-3 sm:flex-row sm:items-end">
+          <label className="block w-full sm:max-w-[220px]">
+            <span className="text-xs font-semibold text-foreground">{tx(locale, "每题满分", "Maximum score per question")}</span>
+            <div className="relative mt-2">
+              <input
+                aria-label={tx(locale, "每题满分", "Maximum score per question")}
+                type="number"
+                inputMode="decimal"
+                min="0.01"
+                max={maximumMaxScore}
+                step="0.5"
+                value={value.uniformMaxScore}
+                disabled={disabled}
+                onChange={(event) => onChange({ mode: "uniform", uniformMaxScore: event.target.value })}
+                className="h-10 w-full rounded-[7px] border bg-background px-3 pr-10 text-sm font-semibold text-foreground outline-none focus:border-primary focus:ring-2 focus:ring-primary/15"
+              />
+              <span className="pointer-events-none absolute right-3 top-2.5 text-xs text-muted-foreground">{tx(locale, "分", "pts")}</span>
+            </div>
+          </label>
+          <div className="flex min-w-0 flex-1 items-center justify-between gap-3 rounded-[7px] bg-slate-50 px-3 py-2 dark:bg-slate-950/20">
+            <p className="text-[11px] leading-4 text-muted-foreground">
+              {value.mode === "default_10"
+                ? tx(locale, "当前未主动设置：系统先按每题 10 分，题目审核时会提醒确认。", "Not explicitly set: questions default to 10 and the review step will ask for confirmation.")
+                : tx(locale, "当前数值会应用到全部识别出的题目。", "This value will be applied to every recognized question.")}
+            </p>
+            {value.mode !== "default_10" ? (
+              <button type="button" disabled={disabled} onClick={() => onChange({ mode: "default_10", uniformMaxScore: "10" })} className="shrink-0 text-[11px] font-semibold text-primary hover:underline">
+                {tx(locale, "恢复默认", "Use default")}
+              </button>
+            ) : null}
+          </div>
+        </div>
+      )}
+    </section>
+  );
+}
+
 function SourceEditor({
   source,
   number,
@@ -406,6 +537,7 @@ function SourceEditor({
   onRemove: () => void;
 }) {
   const [dragging, setDragging] = useState(false);
+  const [fileError, setFileError] = useState<string | null>(null);
   const librarySearch = useImeSafeQuery({
     value: source.librarySearch,
     onCommit: (value) => onUpdate({ librarySearch: value }),
@@ -419,16 +551,26 @@ function SourceEditor({
   );
   const libraryItems: ProblemLibraryMaterial[] = libraryQuery.data?.items ?? [];
   const libraryLoading = libraryQuery.isFetching;
-  const accept = (
-    acceptedExtensions?.length
-      ? acceptedExtensions
-      : source.role === "programming_tests"
-        ? [".pdf", ".txt", ".md", ".json"]
-        : [".pdf", ".txt", ".md"]
-  ).join(",");
+  const accepted = acceptedExtensions?.length
+    ? acceptedExtensions.map((extension) => extension.toLowerCase())
+    : source.role === "programming_tests"
+      ? [...DOCUMENT_SOURCE_EXTENSIONS, ".json"]
+      : [...DOCUMENT_SOURCE_EXTENSIONS];
+  const accept = accepted.join(",");
 
   function selectFile(file?: File) {
     if (!file || disabled) return;
+    const validationError = sourceFileValidationError(
+      file,
+      source.role,
+      accepted,
+      locale,
+    );
+    if (validationError) {
+      setFileError(validationError);
+      return;
+    }
+    setFileError(null);
     onUpdate({ file, sourceMode: "upload", libraryMaterial: null });
   }
 
@@ -461,6 +603,7 @@ function SourceEditor({
 
         {source.sourceMode === "upload" ? (
           <div
+            aria-label={tx(locale, `${roleMeta(source.role, locale).sourceLabel}文件上传`, `${roleMeta(source.role, locale).sourceLabel} file upload`)}
             onDragEnter={(event) => { event.preventDefault(); setDragging(true); }}
             onDragOver={(event) => event.preventDefault()}
             onDragLeave={(event) => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setDragging(false); }}
@@ -474,6 +617,7 @@ function SourceEditor({
               {source.file ? tx(locale, "替换文件", "Replace File") : tx(locale, "选择文件", "Choose File")}
               <input id={`problem-source-file-${source.id}`} type="file" accept={accept} className="sr-only" disabled={disabled} onChange={(event: ChangeEvent<HTMLInputElement>) => { selectFile(event.target.files?.[0]); event.target.value = ""; }} />
             </label>
+            {fileError ? <p role="alert" className="mt-2 text-xs font-medium text-danger">{fileError}</p> : null}
           </div>
         ) : source.sourceMode === "inline_text" ? (
           <label className="mt-3 block rounded-[9px] border bg-slate-50/70 p-3 dark:bg-slate-950/20">
@@ -486,7 +630,7 @@ function SourceEditor({
               disabled={disabled}
               maxLength={12000}
               onChange={(event) => onUpdate({ inlineText: event.target.value })}
-              placeholder={tx(locale, "例如：每题满分 10 分，推导过程占 60%，结果占 40%；允许等价表达。也可以按题号分别描述。", "Example: Each question is worth 10 points; reasoning is 60% and the final answer is 40%. Equivalent expressions are accepted.")}
+              placeholder={tx(locale, "例如：推导过程占 60%，最终结果占 40%；允许等价表达。也可以按题号分别描述。", "Example: Reasoning is 60% and the final answer is 40%. Equivalent expressions are accepted; rules may also be described by question number.")}
               className="mt-2 min-h-[92px] w-full resize-y rounded-[7px] border bg-card px-3 py-2 text-sm font-normal leading-5 text-foreground outline-none focus:border-primary focus:ring-2 focus:ring-primary/15"
             />
           </label>
@@ -654,6 +798,43 @@ function sourceSummary(source: SourceDraft, locale: string) {
   return roleMeta(source.role, locale).sourceLabel;
 }
 
+function sourceFileValidationError(
+  file: File,
+  role: PreparationSourceRole,
+  acceptedExtensions: string[],
+  locale: string,
+) {
+  const normalizedName = file.name.trim().toLowerCase();
+  const extension = normalizedName.includes(".")
+    ? `.${normalizedName.split(".").pop()}`
+    : "";
+  if (extension && acceptedExtensions.includes(extension)) return null;
+
+  if (IMAGE_SOURCE_EXTENSIONS.has(extension)) {
+    if (role === "programming_tests") {
+      return tx(
+        locale,
+        "编程题测试资料不接受图片，请上传 PDF、TXT、Markdown 或 JSON。",
+        "Programming-test materials do not accept images. Upload PDF, TXT, Markdown, or JSON.",
+      );
+    }
+    return tx(
+      locale,
+      "当前模型配置未开放题目图片 OCR。请启用支持视觉识别的模型并刷新，或改用 PDF、TXT、Markdown。",
+      "Question-image OCR is not available with the current model configuration. Enable a vision-capable model and refresh, or use PDF, TXT, or Markdown.",
+    );
+  }
+
+  const formats = acceptedExtensions
+    .map((item) => item.replace(/^\./, "").toUpperCase())
+    .join(" / ");
+  return tx(
+    locale,
+    `不支持 ${extension ? extension.slice(1).toUpperCase() : "无扩展名"} 文件。当前可用格式：${formats}。`,
+    `${extension ? extension.slice(1).toUpperCase() : "Files without an extension are"} not supported. Available formats: ${formats}.`,
+  );
+}
+
 function roleMeta(role: PreparationSourceRole, locale: string) {
   const zh = {
     problem: { title: "题目文件（必填）", shortTitle: "题目", sourceLabel: "题目来源", addLabel: "再添加一份题目", description: "上传题目正文，或从课程资料库选择题目来源。" },
@@ -722,6 +903,40 @@ function getPreparationRecoveryAction({
     return { label: info.actionLabel, onClick: onRefresh };
   }
   return { label: info.actionLabel || tx(locale, "重新尝试", "Try again"), onClick: onRetry };
+}
+
+function validateScorePolicy(
+  draft: ScorePolicyDraft,
+  locale: string,
+  maximumMaxScore: number,
+): { value: QuestionScorePolicyInput; error: null } | { value: null; error: string } {
+  if (draft.mode === "default_10") {
+    return { value: { mode: "default_10" }, error: null };
+  }
+  if (draft.mode === "per_question") {
+    const instruction = draft.perQuestionText.trim();
+    if (!instruction) {
+      return {
+        value: null,
+        error: tx(locale, "已选择“每题满分不同”，请按题号填写每题满分。", "Describe each maximum score by question number, or turn off “Different score per question”."),
+      };
+    }
+    return {
+      value: { mode: "per_question", perQuestionText: instruction },
+      error: null,
+    };
+  }
+  const maxScore = Number(draft.uniformMaxScore);
+  if (!Number.isFinite(maxScore) || maxScore <= 0 || maxScore > maximumMaxScore) {
+    return {
+      value: null,
+      error: tx(locale, `每题满分必须大于 0 且不超过 ${maximumMaxScore}。`, `The maximum score must be greater than 0 and no more than ${maximumMaxScore}.`),
+    };
+  }
+  return {
+    value: { mode: "uniform", uniformMaxScore: maxScore },
+    error: null,
+  };
 }
 
 function tx(locale: string, zh: string, en: string) {

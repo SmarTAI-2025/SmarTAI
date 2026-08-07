@@ -17,6 +17,8 @@ const taskData = vi.hoisted(() => ({
       type: "Proof",
       stem: "Proof question one",
       max_score: 10,
+      max_score_source: "default_10",
+      max_score_review_status: "needs_review",
       criterion: "Rubric one",
       reference_answer: "Answer one",
       preparation_issues: [],
@@ -131,6 +133,51 @@ beforeEach(() => {
 });
 
 describe("QuestionPreparationDetailPage navigation", () => {
+  it("shows and edits the authoritative maximum score", async () => {
+    const user = userEvent.setup();
+    renderPage();
+
+    expect((await screen.findAllByText("本题满分")).length).toBeGreaterThan(0);
+    expect(screen.getByText(/系统暂按默认 10 分/)).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "修改第 1 题满分" }));
+    const input = screen.getByRole("spinbutton", { name: "第 1 题满分" });
+    await user.clear(input);
+    await user.type(input, "5");
+    await user.click(screen.getByRole("button", { name: "保存" }));
+
+    await waitFor(() => expect(mutateAsync).toHaveBeenCalledWith({
+      taskId: "task-1",
+      qId: "Q1",
+      max_score: 5,
+    }));
+  });
+
+  it("does not block navigation only because the default maximum score needs review", async () => {
+    const user = userEvent.setup();
+    const router = renderPage();
+
+    await user.click(await screen.findByRole("link", { name: "返回题目资料总览" }));
+
+    expect(await screen.findByText("Question overview destination")).toBeInTheDocument();
+    expect(router.state.location.pathname).toBe("/tasks/task-1/questions");
+    expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+  });
+
+  it("blocks navigation only after the teacher makes an unsaved maximum-score edit", async () => {
+    const user = userEvent.setup();
+    renderPage();
+
+    await user.click(await screen.findByRole("button", { name: "修改第 1 题满分" }));
+    const input = screen.getByRole("spinbutton", { name: "第 1 题满分" });
+    await user.clear(input);
+    await user.type(input, "8");
+    await user.click(screen.getByRole("link", { name: "返回题目资料总览" }));
+
+    expect(await screen.findByRole("alertdialog", { name: "离开且不保存？" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "继续编辑" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "放弃修改" })).toBeInTheDocument();
+  });
+
   it("uses reviewed English copy and returns to the question material overview", async () => {
     testState.locale = "en-US";
     const user = userEvent.setup();

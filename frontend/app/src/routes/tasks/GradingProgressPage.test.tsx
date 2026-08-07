@@ -88,4 +88,34 @@ describe("GradingProgressPage completion routing", () => {
 
     expect(await screen.findByText("Review overview")).toBeInTheDocument();
   });
+
+  it("shows the persisted grading failure code instead of a stale done state", () => {
+    taskStatus = "error";
+    (useTaskProgress as unknown as ReturnType<typeof vi.fn>).mockReturnValue({
+      data: {
+        task_id: "task-1",
+        status: "error",
+        error: "grading_failed",
+        grading_job_id: "run-1",
+        problem_count: 1,
+        student_count: 1,
+      },
+      progress: {
+        phase: "error",
+        current_step: "grading",
+        error_detail: "grading_failed",
+        messages: [],
+      },
+      percent: 0,
+      isError: false,
+      isFetching: false,
+      refetch: vi.fn(),
+    });
+
+    renderProgress();
+
+    expect(screen.getByRole("alert")).toHaveTextContent("This grading run did not finish");
+    expect(screen.getByRole("alert")).toHaveTextContent("grading_failed");
+    expect(screen.getByRole("alert")).toHaveTextContent("run-1");
+  });
 });

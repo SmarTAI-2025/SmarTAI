@@ -124,6 +124,7 @@ export function QuestionPreparationOverviewPage() {
   }
 
   const firstQuestionId = problems[0]?.q_id;
+  const totalMaxScore = problems.reduce((total, problem) => total + (problem.max_score ?? 10), 0);
   return (
     <div className="w-full max-w-[1300px]">
       <h1 className="text-[30px] font-bold leading-9 tracking-[-0.02em] text-foreground">
@@ -207,8 +208,8 @@ export function QuestionPreparationOverviewPage() {
           ) : <MatrixEmpty filtered={Boolean(query || selectedTypes.size)} locale={locale} />}
           <footer className="flex min-h-[58px] flex-col gap-2 border-t px-4 py-2.5 sm:flex-row sm:items-center sm:justify-between xl:px-5">
             <p className="text-xs text-muted-foreground">{locale === "zh-CN"
-              ? `显示 ${rows.length} / ${problems.length} 道题 · ${allRisks.length} 个开放风险`
-              : `Showing ${rows.length} of ${problems.length} ${problems.length === 1 ? "question" : "questions"} · ${allRisks.length} open ${allRisks.length === 1 ? "risk" : "risks"}`}</p>
+              ? `显示 ${rows.length} / ${problems.length} 道题 · 作业总分 ${formatScore(totalMaxScore)} · ${allRisks.length} 个开放风险`
+              : `Showing ${rows.length} of ${problems.length} ${problems.length === 1 ? "question" : "questions"} · ${formatScore(totalMaxScore)} total points · ${allRisks.length} open ${allRisks.length === 1 ? "risk" : "risks"}`}</p>
             {taskId && firstQuestionId ? (
               <Link to={`/tasks/${taskId}/questions/${encodeURIComponent(firstQuestionId)}/content`} className="inline-flex h-9 items-center justify-center gap-1.5 rounded-[7px] bg-primary px-4 text-sm font-semibold text-primary-foreground outline-none hover:opacity-90 focus-visible:ring-2 focus-visible:ring-ring">
                 {tx(locale, "进入完整审核", "Open Full Review")}
@@ -236,7 +237,7 @@ function QuestionMatrix({ rows, taskId, locale, sortKey, sortDirection, availabl
 }) {
   return (
     <div className="max-h-[calc(100vh-520px)] min-h-[280px] overflow-auto overscroll-contain">
-      <table className="w-full min-w-[1080px] border-collapse text-left text-[13px]">
+      <table className="w-full min-w-[1160px] border-collapse text-left text-[13px]">
         <thead className="sticky top-0 z-10 bg-muted/95 text-[12px] font-semibold text-muted-foreground backdrop-blur-sm">
           <tr className="border-b">
             <SortableHeading className="w-[88px] px-5" label={tx(locale, "题号", "No.")} sortKey="number" activeKey={sortKey} direction={sortDirection} locale={locale} onSort={onSort} />
@@ -255,6 +256,7 @@ function QuestionMatrix({ rows, taskId, locale, sortKey, sortDirection, availabl
                 </details>
               </div>
             </th>
+            <th className="w-[105px] px-3 py-3">{tx(locale, "满分", "Max Score")}</th>
             <th className="w-[145px] px-3 py-3">{tx(locale, "题目", "Question")}</th>
             <th className="w-[145px] px-3 py-3">{tx(locale, "标答", "Reference Answer")}</th>
             <th className="w-[145px] px-3 py-3">{tx(locale, "评分标准", "Rubric")}</th>
@@ -268,6 +270,7 @@ function QuestionMatrix({ rows, taskId, locale, sortKey, sortDirection, availabl
             <tr key={problem.q_id} className="h-[64px] hover:bg-muted/30">
               <td className="px-5 py-3 font-semibold text-foreground">{problem.number || problem.q_id}</td>
               <td className="px-3 py-3 text-muted-foreground">{problem.type || tx(locale, "未分类", "Uncategorized")}</td>
+              <td className="px-3 py-3"><MaxScoreStatus problem={problem} locale={locale} /></td>
               <td className="px-3 py-3"><MaterialStatus problem={problem} field="stem" locale={locale} /></td>
               <td className="px-3 py-3"><MaterialStatus problem={problem} field="answer" locale={locale} /></td>
               <td className="px-3 py-3"><MaterialStatus problem={problem} field="rubric" locale={locale} /></td>
@@ -316,6 +319,31 @@ function MaterialStatus({ problem, field, locale }: { problem: ProblemInfo; fiel
     >
       {status.tone === "success" ? <CheckCircle2 aria-hidden="true" className="h-3.5 w-3.5" /> : null}
       {status.label}
+    </span>
+  );
+}
+
+function MaxScoreStatus({ problem, locale }: { problem: ProblemInfo; locale: string }) {
+  const needsReview = problem.max_score_review_status !== "confirmed";
+  const source = problem.max_score_source ?? "legacy";
+  const sourceLabel = {
+    default_10: tx(locale, "系统默认，需确认", "System default; confirm it"),
+    uniform: tx(locale, "统一设置", "Uniform setting"),
+    per_question_text: tx(locale, "按描述识别，需确认", "Interpreted from your note; confirm it"),
+    teacher_edited: tx(locale, "教师已修改", "Teacher edited"),
+    legacy: tx(locale, "历史数据，需确认", "Legacy data; confirm it"),
+  }[source];
+  return (
+    <span
+      title={sourceLabel}
+      className={cn(
+        "inline-flex min-w-[68px] items-center justify-center rounded-full px-2.5 py-1 text-xs font-semibold",
+        needsReview
+          ? "bg-amber-100 text-amber-700 dark:bg-amber-950/35 dark:text-amber-300"
+          : "bg-blue-50 text-primary dark:bg-blue-950/35",
+      )}
+    >
+      {formatScore(problem.max_score ?? 10)} {tx(locale, "分", "pts")}
     </span>
   );
 }
@@ -388,6 +416,9 @@ function filterMatrixRows(rows: QuestionMatrixRow[], rawQuery: string, locale: s
       problem.number,
       problem.q_id,
       problem.type,
+      problem.max_score,
+      problem.max_score_source,
+      problem.max_score_review_status,
       problem.stem,
       problem.reference_answer,
       problem.criterion,
@@ -431,8 +462,14 @@ function issueCodeLabel(code: PreparationIssue["code"], locale: string) {
     rubric_step_reference_conflict: ["评分步骤与标答步骤未正确对应", "Rubric steps do not align with reference-answer steps"],
     invalid_test_case: ["测试样例结构无效", "Invalid test case structure"],
     reference_solution_failed_case: ["参考解未通过测试样例", "Reference solution failed a test"],
+    default_max_score_requires_review: ["当前使用默认 10 分，请确认题目满分", "Default 10-point maximum; confirm the score"],
+    max_score_not_found: ["未从每题分值说明中匹配到本题，已暂按 10 分", "No score matched this question; temporarily set to 10"],
   };
   return locale === "zh-CN" ? labels[code][0] : labels[code][1];
+}
+
+function formatScore(value: number) {
+  return Number.isInteger(value) ? String(value) : value.toFixed(2).replace(/0+$/, "").replace(/\.$/, "");
 }
 
 function tx(locale: string, zh: string, en: string) {

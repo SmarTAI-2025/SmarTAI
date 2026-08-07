@@ -11,7 +11,7 @@
 ### 首次完整校验
 
 ```bash
-/home/dataset-assist-0/tianshu/conda-envs/smartai/bin/python \
+python \
   tools/ocr_benchmark/prepare_omnidocbench.py \
   --dataset-root data/benchmarks/OmniDocBench \
   --output-dir artifacts/ocr_benchmark/omnidocbench_manifest \
@@ -25,7 +25,7 @@
 已经完成首次解码验收后，可以跳过完整解码；文件头、真实尺寸、标注尺寸、SHA-256 和抽样校验仍会执行：
 
 ```bash
-/home/dataset-assist-0/tianshu/conda-envs/smartai/bin/python \
+python \
   tools/ocr_benchmark/prepare_omnidocbench.py \
   --dataset-root data/benchmarks/OmniDocBench \
   --output-dir artifacts/ocr_benchmark/omnidocbench_manifest \
@@ -70,7 +70,7 @@
 ### 测试
 
 ```bash
-/home/dataset-assist-0/tianshu/conda-envs/smartai/bin/python \
+python \
   -m pytest -q backend/tests/test_prepare_omnidocbench.py
 ```
 
@@ -92,7 +92,7 @@
 执行：
 
 ```bash
-/home/dataset-assist-0/tianshu/conda-envs/smartai/bin/python \
+python \
   tools/ocr_benchmark/run_omnidocbench.py
 ```
 
@@ -113,7 +113,7 @@
 真实模型调用必须显式增加 `--execute`：
 
 ```bash
-/home/dataset-assist-0/tianshu/conda-envs/smartai/bin/python \
+python \
   tools/ocr_benchmark/run_omnidocbench.py \
   --execute
 ```
@@ -130,7 +130,7 @@
 失败样本不会在后续命令中自动重复计费。确认需要重跑失败页时使用：
 
 ```bash
-/home/dataset-assist-0/tianshu/conda-envs/smartai/bin/python \
+python \
   tools/ocr_benchmark/run_omnidocbench.py \
   --execute \
   --retry-failures

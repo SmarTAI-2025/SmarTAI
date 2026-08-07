@@ -73,6 +73,12 @@ class UpdateGradingSetupRequest(BaseModel):
 class UpdateProblemRequest(BaseModel):
     stem: str | None = None
     criterion: str | None = None
+    max_score: float | None = Field(
+        default=None,
+        gt=0,
+        le=10_000,
+        allow_inf_nan=False,
+    )
     reference_answer: str | None = None
     solution_code: str | None = None
     test_cases: list[dict] | None = None

@@ -17,8 +17,14 @@ from backend.agents.ingest_agent import (
     parse_material_import_to_candidates,
 )
 from backend.llm.providers import BaseProvider
-from backend.models import ProblemSourceDraft, TestCase, is_programming_question_type
+from backend.models import (
+    ProblemSourceDraft,
+    QuestionScorePolicy,
+    TestCase,
+    is_programming_question_type,
+)
 from backend.progress.tracker import ProgressReporter
+from backend.skills.question_score import resolve_question_score_policy
 
 
 SourceRow = Tuple[ProblemSourceDraft, str]
@@ -42,6 +48,7 @@ async def prepare_question_packages(
     *,
     provider_id: str,
     reporter: ProgressReporter,
+    score_policy: QuestionScorePolicy,
 ) -> Dict[str, Dict[str, Any]]:
     """Prepare complete per-question packages from all Q01 sources.
 
@@ -102,6 +109,21 @@ async def prepare_question_packages(
     )
 
     issues: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
+    resolved_scores = await resolve_question_score_policy(
+        problem_data,
+        score_policy,
+        provider,
+        reporter=reporter,
+    )
+    for q_id, resolved in resolved_scores.items():
+        problem_data[q_id]["max_score"] = resolved.max_score
+        problem_data[q_id]["max_score_source"] = resolved.source
+        problem_data[q_id]["max_score_review_status"] = resolved.review_status
+        if resolved.issue_code:
+            issues[q_id].append(
+                _issue(q_id, "max_score", resolved.issue_code, "warning", [])
+            )
+
     selected_candidates: Dict[Tuple[str, str], List[Tuple[Any, ProblemSourceDraft]]] = defaultdict(list)
     target_by_role = {
         "reference_answer": "reference_answer",

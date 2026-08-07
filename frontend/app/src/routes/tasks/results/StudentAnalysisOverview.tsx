@@ -2,6 +2,7 @@ import { ArrowRight, Search, X } from "lucide-react";
 import { useMemo, type ReactNode } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import {
+  correctionScoreSource,
   effectiveCorrectionScore,
   formatConfidence,
   formatPercent,
@@ -27,6 +28,7 @@ interface StudentAnalysisRow {
   correctionByQuestion: Map<string, Correction>;
   requiredReviewCount: number;
   confirmedReviewCount: number;
+  hardFailureCount: number;
   disagreementCount: number;
   reviewState: ReviewState;
 }
@@ -112,7 +114,7 @@ export function StudentAnalysisOverview({ locale, taskId, model }: { locale: Loc
           <SummaryMetric label={tx(locale, "中位得分率", "Median score")} value={formatPercent(median)} tone="primary" />
           <SummaryMetric label={tx(locale, "最低 / 最高", "Lowest / highest")} value={`${formatPercent(lowest)} / ${formatPercent(highest)}`} tone="warning" />
           <SummaryMetric label={tx(locale, "及格率（≥60%）", "Pass rate (≥60%)")} value={formatPercent(validPercents.length ? (passCount / validPercents.length) * 100 : null)} tone="accent" />
-          <SummaryMetric label={tx(locale, "含必审信号", "With review signals")} value={String(rows.filter((row) => row.requiredReviewCount > 0).length)} tone="danger" />
+          <SummaryMetric label={tx(locale, "含复核信号", "With review signals")} value={String(rows.filter((row) => row.requiredReviewCount > 0).length)} tone="danger" />
         </div>
 
         <div className="mt-4">
@@ -151,7 +153,7 @@ export function StudentAnalysisOverview({ locale, taskId, model }: { locale: Loc
             <option value="all">{tx(locale, "全部置信度", "All confidence")}</option><option value="low_items">{tx(locale, "含低置信题次", "Has low-confidence items")}</option><option value="avg_low">{tx(locale, "平均低于 65%", "Mean below 65%")}</option>
           </FilterSelect>
           <FilterSelect label={tx(locale, "复核状态", "Review status")} value={reviewFilter} onChange={(value) => updateParam("review", value)}>
-            <option value="all">{tx(locale, "全部复核状态", "All review states")}</option><option value="pending">{tx(locale, "仍需确认", "Pending confirmation")}</option><option value="confirmed">{tx(locale, "必审项已确认", "Required reviews confirmed")}</option><option value="none">{tx(locale, "无必审项", "No required reviews")}</option>
+            <option value="all">{tx(locale, "全部复核状态", "All review states")}</option><option value="pending">{tx(locale, "有未人工处理信号", "Has unreviewed signals")}</option><option value="confirmed">{tx(locale, "信号已由教师处理", "Signals handled by teacher")}</option><option value="none">{tx(locale, "无复核信号", "No review signals")}</option>
           </FilterSelect>
           <FilterSelect label={tx(locale, "排序", "Sort")} value={sortMode} onChange={(value) => updateParam("sort", value, "student")}>
             <option value="student">{tx(locale, "按姓名 / 学号", "Name / ID")}</option><option value="score_asc">{tx(locale, "得分率从低到高", "Score low to high")}</option><option value="score_desc">{tx(locale, "得分率从高到低", "Score high to low")}</option><option value="confidence_asc">{tx(locale, "置信度从低到高", "Confidence low to high")}</option><option value="review_desc">{tx(locale, "复核信号最多优先", "Most review signals first")}</option>
@@ -215,7 +217,9 @@ function StudentMatrixRow({ locale, taskId, questions, row, returnQuery }: { loc
 function QuestionScoreLink({ locale, taskId, studentId, question, correction, returnQuery }: { locale: Locale; taskId: string; studentId: string; question: QuestionSummary; correction?: Correction; returnQuery: string }) {
   if (!correction) return <span className="text-[10px] text-muted-foreground">—</span>;
   const score = effectiveCorrectionScore(correction);
-  const percent = correction.max_score > 0 ? (score / correction.max_score) * 100 : null;
+  const percent = score !== null && correction.max_score > 0
+    ? (score / correction.max_score) * 100
+    : null;
   return <Link to={studentDetailHref(taskId, studentId, question.id, returnQuery)} title={tx(locale, `在学生详情查看 ${question.label}`, `Open ${question.label} in student detail`)} className={cn("inline-flex min-w-[66px] flex-col rounded-[7px] px-2 py-1.5 hover:ring-1 hover:ring-primary/30", percent !== null && percent < 60 ? "bg-rose-50 text-rose-700" : "bg-muted/60 text-foreground")}><strong className="text-[10px]">{formatScore(score)} / {formatScore(correction.max_score)}</strong><span className="mt-0.5 text-[9px] opacity-75">{formatPercent(percent)}</span></Link>;
 }
 
@@ -251,7 +255,14 @@ function PassBadge({ locale, percent }: { locale: Locale; percent: number | null
 }
 
 function ReviewBadge({ locale, row, compact = false }: { locale: Locale; row: StudentAnalysisRow; compact?: boolean }) {
-  const label = row.reviewState === "none" ? tx(locale, "无必审", "No review") : row.reviewState === "confirmed" ? tx(locale, `${row.confirmedReviewCount}/${row.requiredReviewCount} 已确认`, `${row.confirmedReviewCount}/${row.requiredReviewCount} confirmed`) : tx(locale, `${row.requiredReviewCount - row.confirmedReviewCount} 项待确认`, `${row.requiredReviewCount - row.confirmedReviewCount} pending`);
+  const untouchedAiCount = Math.max(0, row.requiredReviewCount - row.confirmedReviewCount - row.hardFailureCount);
+  const label = row.reviewState === "none"
+    ? tx(locale, "无复核信号", "No review signal")
+    : row.hardFailureCount
+      ? tx(locale, `${row.hardFailureCount} 项无有效分数${untouchedAiCount ? ` · ${untouchedAiCount} 项 AI 分未人工处理` : ""}`, `${row.hardFailureCount} unscored${untouchedAiCount ? ` · ${untouchedAiCount} AI scores not reviewed` : ""}`)
+      : row.reviewState === "confirmed"
+        ? tx(locale, `${row.confirmedReviewCount}/${row.requiredReviewCount} 教师已处理`, `${row.confirmedReviewCount}/${row.requiredReviewCount} teacher handled`)
+        : tx(locale, `${untouchedAiCount} 项 AI 分未人工处理`, `${untouchedAiCount} AI scores not reviewed`);
   return <span className={cn("inline-flex rounded-full font-semibold", compact ? "mt-1 px-1.5 py-0.5 text-[8px]" : "px-2 py-1 text-[9px]", row.reviewState === "none" && "bg-slate-100 text-slate-600", row.reviewState === "confirmed" && "bg-emerald-100 text-emerald-700", row.reviewState === "pending" && "bg-rose-100 text-rose-700")}>{label}</span>;
 }
 
@@ -261,12 +272,14 @@ function EmptyResult({ locale }: { locale: Locale }) {
 
 function buildStudentRow(student: StudentSummary): StudentAnalysisRow {
   const required = student.corrections.filter(correctionNeedsFormalReview);
-  const confirmed = required.filter((correction) => correction.review_status === "confirmed").length;
+  const confirmed = required.filter((correction) => correctionScoreSource(correction) !== "ai_untouched" && correctionScoreSource(correction) !== "hard_failure").length;
+  const hardFailureCount = required.filter((correction) => correctionScoreSource(correction) === "hard_failure").length;
   return {
     student,
     correctionByQuestion: new Map(student.corrections.map((correction) => [correction.q_id, correction])),
     requiredReviewCount: required.length,
     confirmedReviewCount: confirmed,
+    hardFailureCount,
     disagreementCount: student.corrections.filter(correctionHasDisagreement).length,
     reviewState: !required.length ? "none" : confirmed === required.length ? "confirmed" : "pending",
   };
@@ -294,9 +307,9 @@ function parseSemanticStudentQuery(raw: string, locale: Locale): SemanticStudent
   consume(/不及格|未及格|fail(?:ed)?/i, "fail", () => tx(locale, "未及格", "Failed"), () => { pass = "fail"; });
   if (!pass) consume(/(?:^|\s)及格(?:\s|$)|pass(?:ed)?/i, "pass", () => tx(locale, "及格", "Passed"), () => { pass = "pass"; });
   consume(/低置信(?:度)?|low[\s-]*confidence/i, "confidence", () => tx(locale, "含低置信题次", "Has low-confidence items"), () => { lowConfidence = true; });
-  consume(/待复核|待确认|未复核|pending[\s-]*review/i, "pending", () => tx(locale, "仍需确认", "Pending confirmation"), () => { reviewState = "pending"; });
-  if (!reviewState) consume(/已复核|已确认|reviewed|confirmed/i, "confirmed", () => tx(locale, "必审项已确认", "Required reviews confirmed"), () => { reviewState = "confirmed"; });
-  if (!reviewState) consume(/无复核|无需复核|no[\s-]*review/i, "none", () => tx(locale, "无必审项", "No required reviews"), () => { reviewState = "none"; });
+  consume(/待复核|待确认|未复核|未人工处理|pending[\s-]*review|not[\s-]*reviewed/i, "pending", () => tx(locale, "有未人工处理信号", "Has unreviewed signals"), () => { reviewState = "pending"; });
+  if (!reviewState) consume(/已复核|已确认|教师已处理|reviewed|confirmed|teacher[\s-]*handled/i, "confirmed", () => tx(locale, "信号已由教师处理", "Signals handled by teacher"), () => { reviewState = "confirmed"; });
+  if (!reviewState) consume(/无复核|无需复核|no[\s-]*review/i, "none", () => tx(locale, "无复核信号", "No review signals"), () => { reviewState = "none"; });
   consume(/低分优先|得分(?:率)?从低到高|score\s*(?:asc|low)/i, "sort-low", () => tx(locale, "低分优先", "Low score first"), () => { sort = "score_asc"; });
   if (!sort) consume(/高分优先|得分(?:率)?从高到低|score\s*(?:desc|high)/i, "sort-high", () => tx(locale, "高分优先", "High score first"), () => { sort = "score_desc"; });
 

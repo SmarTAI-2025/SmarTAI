@@ -32,6 +32,7 @@ from backend.db.models import (
     UserRecord,
 )
 from backend.db.session import session_scope
+from backend.domain import education
 from backend.llm.registry import (
     ExpertRegistry,
     SharedPoolLimitError,
@@ -90,7 +91,7 @@ class _ResultFact:
     comment: str
     confidence: float | None
     requires_review: bool
-    review_reason: str | None
+    review_reasons: tuple[str, ...]
     result_status: str
     updated_at: float
     review_id: str | None
@@ -98,7 +99,10 @@ class _ResultFact:
 
     @property
     def is_scored(self) -> bool:
-        return self.result_status == "graded" and self.score is not None
+        return (
+            self.result_status not in education.NON_SCOREABLE_RESULT_STATUSES
+            and self.score is not None
+        )
 
 
 @dataclass(frozen=True)
@@ -282,7 +286,7 @@ def _load_facts(task_id: str, owner_id: str) -> _AnalyticsFacts:
                     if record.ai_confidence is not None else None
                 ),
                 requires_review=bool(record.requires_review),
-                review_reason=record.review_reason,
+                review_reasons=tuple(record.review_reasons or []),
                 result_status=record.result_status,
                 updated_at=record.updated_at,
                 review_id=review.id if review is not None else None,
@@ -381,9 +385,7 @@ def _presentation_payload(
                 "comment": result.comment,
                 "confidence": result.confidence,
                 "requires_human_review": result.requires_review,
-                "review_reasons": (
-                    [result.review_reason] if result.review_reason else []
-                ),
+                "review_reasons": list(result.review_reasons),
             }
             for result in scored
         ]
@@ -650,7 +652,7 @@ def _question_breakdown(
             "comment": result.comment,
             "confidence": result.confidence,
             "requires_human_review": result.requires_review,
-            "review_reasons": [result.review_reason] if result.review_reason else [],
+            "review_reasons": list(result.review_reasons),
         }
         for result in scored
     ]

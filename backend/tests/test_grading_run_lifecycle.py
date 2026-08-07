@@ -7,8 +7,8 @@ result so the lifecycle is deterministic without an LLM. Covers:
 * frozen submission revisions captured at run creation;
 * atomic lease claim, heartbeat by current owner only, expired-lease reclaim;
 * late worker rejection via the lease-owner terminal-write predicate;
-* result normalization (successful Correction → graded; failure modes →
-  needs_review / failed, never a real zero score);
+* result normalization (successful Correction → graded; soft warnings →
+  scored needs_review; hard failures → failed with no fabricated zero);
 * partial failure; teacher-only review; immutable AI fields;
 * release blocking while failures are unresolved;
 * student visibility only after release.
@@ -158,8 +158,8 @@ def test_adapter_maps_successful_correction_to_graded_result(setup_assignment):
     assert r.requires_review is False
 
 
-def test_adapter_marks_low_confidence_as_needs_review_not_zero(setup_assignment):
-    """confidence == 0 (skill failure) must surface as needs_review, never a real 0."""
+def test_adapter_marks_hard_failure_as_failed_not_zero(setup_assignment):
+    """confidence == 0 (skill failure) is a failed result, never a real 0."""
     from backend.models import Correction
 
     corrections = {
@@ -183,18 +183,19 @@ def test_adapter_marks_low_confidence_as_needs_review_not_zero(setup_assignment)
         },
         corrections=corrections,
     )
-    assert results[0].result_status == education.GradeResultStatus.NEEDS_REVIEW.value
+    assert results[0].result_status == education.GradeResultStatus.FAILED.value
+    assert results[0].ai_score is None
     assert results[0].requires_review is True
-    assert results[0].review_reason is not None
+    assert results[0].review_reasons == ["llm_failed"]
 
 
 def test_adapter_preserves_human_review_signal_and_question_max(setup_assignment):
     from backend.models import Correction
 
     correction = Correction(
-        q_id="q1", type="short", score=8.0, max_score=100.0, confidence=0.9,
+        q_id="q1", type="short", score=8.0, max_score=10.0, confidence=0.9,
         comment="check", steps=[], requires_human_review=True,
-        review_reasons=["high_indecisiveness"],
+        review_reasons=["high_indecisiveness", "minority_veto"],
     )
     result = grading_adapter.correction_to_result(
         run_id="run-x", revision_id="rev-x",
@@ -204,9 +205,168 @@ def test_adapter_preserves_human_review_signal_and_question_max(setup_assignment
         student_id=setup_assignment["student_id"], correction=correction,
     )
     assert result.result_status == education.GradeResultStatus.NEEDS_REVIEW.value
-    assert result.ai_score is None
+    assert result.ai_score == 8.0
     assert result.ai_max_score == 10.0
-    assert result.review_reason == "high_indecisiveness"
+    assert result.review_reasons == ["high_indecisiveness", "minority_veto"]
+    assert result.initial_review_reasons == [
+        "high_indecisiveness",
+        "minority_veto",
+    ]
+
+
+def test_task_facade_keeps_null_distinct_from_real_zero():
+    from backend.services.task_facade import _serialize_correction
+
+    hard_failure = education.GradeResultDTO(
+        id="failed",
+        grading_run_id="run",
+        submission_revision_id="revision",
+        question_id="question",
+        student_id="student",
+        q_id="q1",
+        ai_score=None,
+        ai_max_score=10.0,
+        requires_review=True,
+        review_reasons=["llm_failed", "low_confidence"],
+        result_status=education.GradeResultStatus.FAILED.value,
+        effective_score=None,
+        created_at=0,
+        updated_at=0,
+    )
+    failed_payload = _serialize_correction(hard_failure)
+    assert failed_payload["score"] is None
+    assert failed_payload["provisional_score"] is None
+    assert failed_payload["review_reasons"] == ["llm_failed", "low_confidence"]
+
+    real_zero = hard_failure.model_copy(update={
+        "id": "zero",
+        "ai_score": 0.0,
+        "requires_review": False,
+        "review_reasons": [],
+        "initial_requires_review": False,
+        "initial_review_reasons": [],
+        "result_status": education.GradeResultStatus.GRADED.value,
+        "effective_score": 0.0,
+    })
+    zero_payload = _serialize_correction(real_zero)
+    assert zero_payload["score"] == 0.0
+    assert zero_payload["provisional_score"] == 0.0
+
+
+@pytest.mark.parametrize(
+    ("ai_score", "ai_max_score", "status", "expected_error"),
+    [
+        (11.0, 10.0, education.GradeResultStatus.GRADED.value,
+         "result_score_out_of_range"),
+        (4.0, 5.0, education.GradeResultStatus.GRADED.value,
+         "result_max_score_mismatch"),
+        (0.0, 10.0, education.GradeResultStatus.FAILED.value,
+         "failed_result_must_not_have_score"),
+        (None, 10.0, education.GradeResultStatus.NEEDS_REVIEW.value,
+         "soft_review_result_requires_score"),
+    ],
+)
+def test_repository_rejects_non_authoritative_result_rows(
+    setup_assignment, ai_score, ai_max_score, status, expected_error,
+):
+    run = grading_runs.create_run(
+        teacher_id=setup_assignment["teacher_id"],
+        assignment_id=setup_assignment["assignment_id"],
+    )
+    grading_repository.claim_lease(
+        run_id=run.id,
+        worker_id="score-invariant-worker",
+        lease_seconds=60,
+    )
+    revision_id = grading_repository.list_frozen_submissions(run_id=run.id)[0].id
+    result = education.GradeResultDTO(
+        id="",
+        grading_run_id=run.id,
+        submission_revision_id=revision_id,
+        question_id=setup_assignment["question_id"],
+        student_id=setup_assignment["student_id"],
+        q_id="q1",
+        ai_score=ai_score,
+        ai_max_score=ai_max_score,
+        requires_review=status != education.GradeResultStatus.GRADED.value,
+        review_reasons=(
+            ["llm_failed"]
+            if status == education.GradeResultStatus.FAILED.value
+            else []
+        ),
+        result_status=status,
+        created_at=0,
+        updated_at=0,
+    )
+    with pytest.raises(ValidationError, match=expected_error):
+        grading_repository.upsert_result(
+            run.id,
+            worker_id="score-invariant-worker",
+            grade_result=result,
+        )
+
+
+def test_adapter_normalizes_untrusted_model_scale(setup_assignment):
+    from backend.models import Correction, StepScore
+
+    correction = Correction(
+        q_id="q1", type="short", score=80.0, max_score=100.0, confidence=0.9,
+        comment="scaled", steps=[
+            StepScore(step_no=1, desc="reasoning", is_correct=True, score=60.0),
+            StepScore(step_no=2, desc="answer", is_correct=True, score=20.0),
+        ],
+    )
+    result = grading_adapter.correction_to_result(
+        run_id="run-x", revision_id="rev-x",
+        question=assignment_repository.get_questions_by_assignment(
+            assignment_id=setup_assignment["assignment_id"]
+        )[0],
+        student_id=setup_assignment["student_id"], correction=correction,
+    )
+    assert result.result_status == education.GradeResultStatus.GRADED.value
+    assert result.ai_score == 8.0
+    assert result.ai_max_score == 10.0
+    assert [step["score"] for step in result.ai_steps] == [6.0, 2.0]
+
+
+def test_adapter_treats_degraded_to_single_as_soft_review(setup_assignment):
+    from backend.models import Correction
+
+    correction = Correction(
+        q_id="q1", type="short", score=7.0, max_score=10.0, confidence=0.85,
+        comment="one expert succeeded", steps=[], synthesis_method="degraded_to_single",
+    )
+    result = grading_adapter.correction_to_result(
+        run_id="run-x", revision_id="rev-x",
+        question=assignment_repository.get_questions_by_assignment(
+            assignment_id=setup_assignment["assignment_id"]
+        )[0],
+        student_id=setup_assignment["student_id"], correction=correction,
+    )
+    assert result.result_status == education.GradeResultStatus.NEEDS_REVIEW.value
+    assert result.ai_score == 7.0
+    assert result.requires_review is True
+    assert result.review_reasons == ["degraded_to_single"]
+
+
+def test_adapter_preserves_real_zero_during_soft_review(setup_assignment):
+    from backend.models import Correction
+
+    correction = Correction(
+        q_id="q1", type="short", score=0.0, max_score=10.0, confidence=0.4,
+        comment="review", steps=[], requires_human_review=True,
+        review_reasons=["low_confidence"],
+    )
+    result = grading_adapter.correction_to_result(
+        run_id="run-x", revision_id="rev-x",
+        question=assignment_repository.get_questions_by_assignment(
+            assignment_id=setup_assignment["assignment_id"]
+        )[0],
+        student_id=setup_assignment["student_id"], correction=correction,
+    )
+    assert result.ai_score == 0.0
+    assert result.requires_review is True
+    assert result.review_reasons == ["low_confidence"]
 
 
 def test_persisted_ai_fields_are_immutable_after_review(setup_assignment):
@@ -222,7 +382,8 @@ def test_persisted_ai_fields_are_immutable_after_review(setup_assignment):
                 question_id=setup_assignment["question_id"], student_id=setup_assignment["student_id"],
                 q_id="q1", ai_score=7.0, ai_max_score=10.0, ai_comment="ai",
                 result_status=education.GradeResultStatus.NEEDS_REVIEW.value,
-                requires_review=True, review_reason="low_confidence",
+                requires_review=True,
+                review_reasons=["low_confidence", "minority_veto"],
                 created_at=0, updated_at=0,
             )
         ],
@@ -240,9 +401,9 @@ def test_persisted_ai_fields_are_immutable_after_review(setup_assignment):
     after = grading_repository.list_results_for_run(run_id=run.id)[0]
     assert after.ai_score == 7.0  # immutable AI original
     assert after.initial_requires_review is True
-    assert after.initial_review_reason == "low_confidence"
+    assert after.initial_review_reasons == ["low_confidence", "minority_veto"]
     assert after.requires_review is False
-    assert after.review_reason is None
+    assert after.review_reasons == []
     latest = grading_repository.latest_teacher_review(grade_result_id=rid)
     assert latest is not None and latest.new_score == 9.0
 
@@ -277,10 +438,10 @@ def test_later_serialized_review_wins_when_clock_moves_backward(
                 question_id=setup_assignment["question_id"],
                 student_id=setup_assignment["student_id"],
                 q_id="q1",
-                ai_score=None,
+                ai_score=8.0,
                 ai_max_score=10.0,
                 requires_review=True,
-                review_reason="low_confidence",
+                review_reasons=["low_confidence"],
                 result_status=education.GradeResultStatus.NEEDS_REVIEW.value,
                 created_at=0,
                 updated_at=0,
@@ -321,7 +482,7 @@ def test_later_serialized_review_wins_when_clock_moves_backward(
     effective = grading_repository.list_results_for_run(run_id=run.id)[0]
     assert effective.effective_score == 9.0
     assert effective.initial_requires_review is True
-    assert effective.initial_review_reason == "low_confidence"
+    assert effective.initial_review_reasons == ["low_confidence"]
 
     with session_scope() as session:
         rows = session.scalars(
@@ -336,7 +497,7 @@ def test_later_serialized_review_wins_when_clock_moves_backward(
             (second.id, 2),
         ]
         assert result.initial_requires_review is True
-        assert result.initial_review_reason == "low_confidence"
+        assert result.initial_review_reasons == ["low_confidence"]
 
 
 def test_release_blocked_while_failures_unresolved(setup_assignment):
@@ -350,9 +511,9 @@ def test_release_blocked_while_failures_unresolved(setup_assignment):
                 id="", grading_run_id=run.id,
                 submission_revision_id=grading_repository.list_frozen_submissions(run_id=run.id)[0].id,
                 question_id=setup_assignment["question_id"], student_id=setup_assignment["student_id"],
-                q_id="q1", ai_score=0.0, ai_max_score=10.0,
+                q_id="q1", ai_score=None, ai_max_score=10.0,
                 result_status=education.GradeResultStatus.FAILED.value,
-                requires_review=True, review_reason="exception",
+                requires_review=True, review_reasons=["exception"],
                 created_at=0, updated_at=0,
             )
         ],
@@ -363,7 +524,7 @@ def test_release_blocked_while_failures_unresolved(setup_assignment):
         grading_runs.release(teacher_id=setup_assignment["teacher_id"], run_id=run.id)
 
 
-def test_release_succeeds_after_review_resolves_failure(setup_assignment):
+def test_release_uses_scored_soft_review_without_teacher_action(setup_assignment):
     run = grading_runs.create_run(
         teacher_id=setup_assignment["teacher_id"], assignment_id=setup_assignment["assignment_id"]
     )
@@ -376,25 +537,58 @@ def test_release_succeeds_after_review_resolves_failure(setup_assignment):
                 question_id=setup_assignment["question_id"], student_id=setup_assignment["student_id"],
                 q_id="q1", ai_score=0.0, ai_max_score=10.0,
                 result_status=education.GradeResultStatus.NEEDS_REVIEW.value,
-                requires_review=True, review_reason="low_confidence",
+                requires_review=True, review_reasons=["low_confidence"],
                 created_at=0, updated_at=0,
             )
         ],
     )
     grading_repository.claim_lease(run_id=run.id, worker_id=setup_assignment["teacher_id"], lease_seconds=60)
     grading_repository.mark_completed(run_id=run.id, worker_id=setup_assignment["teacher_id"], completed=1, failed=0)
-    # Still blocked while the needs_review result is unresolved.
-    with pytest.raises(ResultNotReleasable):
-        grading_runs.release(teacher_id=setup_assignment["teacher_id"], run_id=run.id)
-    # Resolve via teacher review (which sets a display score).
-    rid = grading_repository.list_results_for_run(run_id=run.id)[0].id
-    grading_repository.add_teacher_review(
-        grade_result_id=rid, teacher_id=setup_assignment["teacher_id"], new_score=6.0, new_comment="ok"
-    )
-    # Mark the result resolved (graded) so it leaves the review queue.
-    grading_runs.resolve_review(grade_result_id=rid, teacher_id=setup_assignment["teacher_id"])
+    # A valid AI zero is still a real score. The warning stays in the review
+    # queue, but no per-item teacher confirmation is required for release.
     released = grading_runs.release(teacher_id=setup_assignment["teacher_id"], run_id=run.id)
     assert released.released_at is not None
+    seen = grading_runs.student_results(
+        student_id=setup_assignment["student_id"],
+        assignment_id=setup_assignment["assignment_id"],
+    )
+    assert len(seen) == 1
+    assert seen[0].ai_score == 0.0
+    assert seen[0].effective_score == 0.0
+    review_queue = grading_runs.list_review_queue(
+        assignment_id=setup_assignment["assignment_id"],
+        teacher_id=setup_assignment["teacher_id"],
+    )
+    assert [row.id for row in review_queue] == [seen[0].id]
+
+    # The normalized result API must use the same effective-score semantics:
+    # the warning stays countable as review work while the real zero remains a
+    # score in totals instead of being dropped as a falsy value.
+    from types import SimpleNamespace
+
+    from backend.api.results import _summary, per_question_aggregates
+
+    summary = _summary(
+        setup_assignment["assignment_id"],
+        setup_assignment["teacher_id"],
+    )
+    assert summary["graded_count"] == 1
+    assert summary["needs_review_count"] == 1
+    assert summary["students"] == [{
+        "student_id": setup_assignment["student_id"],
+        "total": 0.0,
+    }]
+    assert per_question_aggregates(
+        setup_assignment["assignment_id"],
+        current=SimpleNamespace(id=setup_assignment["teacher_id"]),
+    ) == [{
+        "q_id": "q1",
+        "count": 1,
+        "max_score": 10.0,
+        "mean": 0.0,
+        "min": 0.0,
+        "max": 0.0,
+    }]
 
 
 def test_student_visibility_only_after_release(setup_assignment):
@@ -489,6 +683,12 @@ def test_teacher_review_resolves_failure_and_validates_score(setup_assignment):
     # Review is only allowed on a terminal, unreleased run — close the run first
     # so the review invariant (completed/partial_failed, not released) is met.
     grading_repository.mark_completed(run_id=run.id, worker_id="w1", completed=1, failed=0)
+    with pytest.raises(ValidationError):
+        grading_runs.add_teacher_review(
+            grade_result_id=persisted.id,
+            teacher_id=setup_assignment["teacher_id"],
+            new_score=11,
+        )
     review = grading_runs.add_teacher_review(
         grade_result_id=persisted.id,
         teacher_id=setup_assignment["teacher_id"],
@@ -500,12 +700,17 @@ def test_teacher_review_resolves_failure_and_validates_score(setup_assignment):
     assert resolved.result_status == education.GradeResultStatus.GRADED.value
     assert resolved.requires_review is False
     assert resolved.ai_score is None
-    with pytest.raises(ValidationError):
-        grading_runs.add_teacher_review(
-            grade_result_id=persisted.id,
-            teacher_id=setup_assignment["teacher_id"],
-            new_score=11,
-        )
+    released = grading_runs.release(
+        teacher_id=setup_assignment["teacher_id"],
+        run_id=run.id,
+    )
+    assert released.released_at is not None
+    visible = grading_runs.student_results(
+        student_id=setup_assignment["student_id"],
+        assignment_id=setup_assignment["assignment_id"],
+    )
+    assert len(visible) == 1
+    assert visible[0].effective_score == 7.0
 
 
 def test_teacher_review_rejected_while_run_still_running(setup_assignment):
@@ -685,7 +890,7 @@ def test_explicit_e2e_provider_does_not_require_persisted_provider_config(
     assert completed.failed_submissions == 0
 
 
-def test_adapter_marks_missing_student_batch_output_for_review(setup_assignment, monkeypatch):
+def test_adapter_marks_missing_student_batch_output_as_hard_failure(setup_assignment, monkeypatch):
     async def empty_batch(**_kwargs):
         return []
 
@@ -703,7 +908,10 @@ def test_adapter_marks_missing_student_batch_output_for_review(setup_assignment,
         registry=None,
     ))
     assert len(outcomes) == 1
-    assert outcomes[0].results[0].result_status == education.GradeResultStatus.NEEDS_REVIEW.value
+    result = outcomes[0].results[0]
+    assert result.result_status == education.GradeResultStatus.FAILED.value
+    assert result.ai_score is None
+    assert result.review_reasons == ["missing_student_result"]
 
 
 def test_student_results_use_only_latest_released_run(setup_assignment):

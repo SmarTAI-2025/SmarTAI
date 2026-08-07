@@ -1,7 +1,7 @@
 """Add bounded checkpoint state to workflow operations.
 
-Revision ID: 0005_operation_checkpoints
-Revises: 0004_workflow_source_outcomes
+Revision ID: 0006_operation_checkpoints
+Revises: 0005_workflow_source_outcomes
 """
 from __future__ import annotations
 
@@ -9,8 +9,8 @@ from alembic import op
 import sqlalchemy as sa
 
 
-revision = "0005_operation_checkpoints"
-down_revision = "0004_workflow_source_outcomes"
+revision = "0006_operation_checkpoints"
+down_revision = "0005_workflow_source_outcomes"
 branch_labels = None
 depends_on = None
 
