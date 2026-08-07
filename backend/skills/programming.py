@@ -36,8 +36,10 @@ from pydantic import BaseModel, Field
 
 from backend.skills.base import (
     GradingSkill,
+    authoritative_score_instruction,
     build_system_prompt,
     format_deterministic_feedback,
+    normalize_expert_result,
     register_skill,
 )
 from backend.models import ExpertResult, ProblemInfo, StudentAnswerInfo, StepScore, TaskGradingSetup, TestCase
@@ -54,9 +56,9 @@ logger = logging.getLogger(__name__)
 # ─── LLM output schemas ──────────────────────────────────────────────────────
 
 class ProgrammingGradingOutput(BaseModel):
-    score: float = Field(ge=0)
-    max_score: float = Field(default=10.0)
-    confidence: float = Field(ge=0, le=1)
+    score: float = Field(ge=0, allow_inf_nan=False)
+    max_score: float = Field(default=10.0, gt=0, allow_inf_nan=False)
+    confidence: float = Field(ge=0, le=1, allow_inf_nan=False)
     comment: str
     steps: List[dict] = Field(default_factory=list)
     logs: str = Field(default="")
@@ -489,7 +491,7 @@ class ProgrammingSkill(GradingSkill):
                 return ExpertResult(
                     provider=self.provider.provider_id,
                     score=0.0,
-                    max_score=10.0,
+                    max_score=problem.max_score,
                     confidence=1.0,
                     comment=format_deterministic_feedback(
                         self.grading_setup,
@@ -637,7 +639,8 @@ class ProgrammingSkill(GradingSkill):
                 "You are a programming teacher grading student code. "
                 "Walk through the 4-step reasoning workflow (Functionality → Edge cases → "
                 "Code quality → Efficiency) and produce a structured per-dimension score. "
-                "Respect the sandbox branch rules in the user prompt.",
+                "Respect the sandbox branch rules in the user prompt."
+                + authoritative_score_instruction(problem.max_score),
                 self.language,
                 self.grading_setup,
             )
@@ -675,7 +678,7 @@ class ProgrammingSkill(GradingSkill):
             ):
                 confidence = min(confidence, 0.5)
 
-            return ExpertResult(
+            return normalize_expert_result(ExpertResult(
                 provider=self.provider.provider_id,
                 score=max(0.0, min(result.score, result.max_score)),
                 max_score=result.max_score,
@@ -685,7 +688,7 @@ class ProgrammingSkill(GradingSkill):
                 logs=result.logs,
                 raw_output=raw.content,
                 duration_ms=raw.duration_ms,
-            )
+            ), problem.max_score)
 
         except Exception as e:
             logger.error(
@@ -694,7 +697,7 @@ class ProgrammingSkill(GradingSkill):
             )
             from backend.skills.base import classify_skill_error
             kind, friendly = classify_skill_error(e)
-            return self._blank_result(problem.q_id, 10.0, friendly, error_kind=kind)
+            return self._blank_result(problem.q_id, problem.max_score, friendly, error_kind=kind)
         finally:
             if step_ctx:
                 await step_ctx.__aexit__(None, None, None)

@@ -13,7 +13,7 @@
 ## File Structure
 
 - Create backend/db/source_outcome_repository.py for ORM records, DTOs, validation, owner-scoped commands/queries, lineage, and summaries.
-- Create backend/db/migrations/versions/0004_workflow_source_outcomes.py for the reversible schema.
+- Create backend/db/migrations/versions/0005_workflow_source_outcomes.py for the reversible schema.
 - Create backend/tests/test_workflow_source_outcomes.py for repository contract tests.
 - Modify backend/db/base.py only to register the new ORM metadata.
 - Modify backend/tests/test_migration_roundtrip.py for schema and preservation evidence.
@@ -29,7 +29,7 @@ No API, Facade, Agent, frontend, main.py, file_repository.py, workflow_repositor
 - [ ] Run: python -m pytest backend/tests/test_migration_roundtrip.py -k "normalized_tables or source_outcome_migration" -q
   Expected RED: the two tables do not exist.
 - [ ] Add WorkflowSourceItemRecord and WorkflowSourceOutcomeRecord with named constraints matching the approved design. Import the module from base.py so create_all and Alembic metadata include it.
-- [ ] Add revision 0004_workflow_source_outcomes with down_revision 0003_assignment_workflow_facade. Create source before outcome; downgrade outcome before source. Do no backfill and touch no old table.
+- [ ] Add revision 0005_workflow_source_outcomes with down_revision 0004_structured_review_reasons. Create source before outcome; downgrade outcome before source. Do no backfill and touch no old table.
 - [ ] Re-run the focused migration tests.
   Expected GREEN: both pass.
 
@@ -90,7 +90,7 @@ No API, Facade, Agent, frontend, main.py, file_repository.py, workflow_repositor
 - [ ] Run: python -m pytest backend/tests/test_workflow_source_outcomes.py backend/tests/test_storage_persistence.py backend/tests/test_task_background_workflows.py backend/tests/test_migration_roundtrip.py -q
 - [ ] Run: python -m pytest backend/tests -q
 - [ ] Run: python -m alembic heads
-  Expected: only 0004_workflow_source_outcomes is head.
+  Expected: only 0005_workflow_source_outcomes is head.
 - [ ] Run git diff --check and inspect git status. Preserve unrelated untracked user files.
 - [ ] Stage only the six implementation files listed in this plan and commit as feat: persist workflow source outcomes.
 - [ ] Stop for DB-W1-1 schema/repository Review. Do not begin DB-W1-2.

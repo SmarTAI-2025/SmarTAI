@@ -6,7 +6,7 @@
 
 **Baseline:** `c45146f` (`origin/main` when the work began)
 
-**Migration baseline:** `0003_assignment_workflow_facade`
+**Migration baseline:** `0004_structured_review_reasons`
 
 ## Goal
 
@@ -151,7 +151,7 @@ Deleting an assignment or operation cascades its source and outcome metadata. De
 
 ## Migration
 
-Migration `0004_workflow_source_outcomes.py` creates `workflow_source_items` first and `workflow_source_outcomes` second. It adds no columns to legacy tables and performs no data backfill because existing uploads cannot be assigned truthful per-file outcomes retrospectively.
+Migration `0005_workflow_source_outcomes.py` creates `workflow_source_items` first and `workflow_source_outcomes` second. It adds no columns to legacy tables and performs no data backfill because existing uploads cannot be assigned truthful per-file outcomes retrospectively.
 
 Downgrade drops outcomes before sources. It does not mutate `stored_files`, `workflow_operations`, assignments, revisions, results, or any migration from `0001` through `0003`.
 

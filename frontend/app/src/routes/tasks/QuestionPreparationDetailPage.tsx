@@ -207,6 +207,10 @@ export function QuestionPreparationDetailPage() {
     await updateProblem.mutateAsync({ taskId: stableTaskId, qId: problem.q_id, test_cases: cases });
   }
 
+  async function saveMaxScore(problem: ProblemInfo, maxScore: number) {
+    await updateProblem.mutateAsync({ taskId: stableTaskId, qId: problem.q_id, max_score: maxScore });
+  }
+
   async function confirmAll() {
     if (hasDirty) {
       toast.error(tx(locale, "请先保存或取消正在编辑的内容。", "Save or cancel the active edits first."));
@@ -333,6 +337,7 @@ export function QuestionPreparationDetailPage() {
                 saving={updateProblem.isPending}
                 locale={locale}
                 onDirtyChange={setFieldDirty}
+                onSaveMaxScore={saveMaxScore}
                 onSaveText={saveText}
                 onSaveTests={saveTests}
                 onNavigate={scrollToQuestion}
@@ -375,7 +380,7 @@ export function QuestionPreparationDetailPage() {
   );
 }
 
-function QuestionPackageCard({ problem, index, total, previous, next, readOnly, saving, locale, onDirtyChange, onSaveText, onSaveTests, onNavigate }: {
+function QuestionPackageCard({ problem, index, total, previous, next, readOnly, saving, locale, onDirtyChange, onSaveMaxScore, onSaveText, onSaveTests, onNavigate }: {
   problem: ProblemInfo;
   index: number;
   total: number;
@@ -385,6 +390,7 @@ function QuestionPackageCard({ problem, index, total, previous, next, readOnly, 
   saving: boolean;
   locale: string;
   onDirtyChange: (key: string, dirty: boolean) => void;
+  onSaveMaxScore: (problem: ProblemInfo, maxScore: number) => Promise<void>;
   onSaveText: (problem: ProblemInfo, field: TextFieldKey, value: string) => Promise<void>;
   onSaveTests: (problem: ProblemInfo, cases: TestCase[]) => Promise<void>;
   onNavigate: (qId: string) => void;
@@ -398,6 +404,7 @@ function QuestionPackageCard({ problem, index, total, previous, next, readOnly, 
           <div className="flex flex-wrap items-center gap-2">
             <h2 className="text-xl font-bold text-foreground">{tx(locale, `第 ${problem.number || problem.q_id} 题`, `Question ${problem.number || problem.q_id}`)}</h2>
             <span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs text-muted-foreground dark:bg-slate-800">{problem.type || tx(locale, "未分类", "Uncategorized")}</span>
+            <span className={cn("rounded-full px-2.5 py-1 text-xs font-semibold", problem.max_score_review_status === "confirmed" ? "bg-blue-50 text-primary dark:bg-blue-950/35" : "bg-amber-100 text-amber-700 dark:bg-amber-950/35 dark:text-amber-300")}>{tx(locale, `满分 ${formatScore(problem.max_score ?? 10)} 分`, `${formatScore(problem.max_score ?? 10)} points max`)}</span>
             {risks.length ? <span className="rounded-full bg-amber-100 px-2.5 py-1 text-xs font-semibold text-amber-700">{tx(locale, `${risks.length} 项需核对`, `${risks.length} ${risks.length === 1 ? "risk" : "risks"}`)}</span> : null}
           </div>
           <p className="mt-1 text-xs text-muted-foreground">{tx(locale, `筛选结果中的第 ${index + 1} / ${total} 题`, `${index + 1} of ${total}`)}</p>
@@ -412,6 +419,15 @@ function QuestionPackageCard({ problem, index, total, previous, next, readOnly, 
       ) : null}
 
       <div className="space-y-0 divide-y">
+        <EditableMaxScore
+          fieldKey={`${problem.q_id}:max-score`}
+          problem={problem}
+          readOnly={readOnly}
+          saving={saving}
+          locale={locale}
+          onDirtyChange={onDirtyChange}
+          onSave={onSaveMaxScore}
+        />
         <EditableTextField fieldKey={`${problem.q_id}:stem`} label={tx(locale, "题目", "Question")} value={problem.stem} problem={problem} field="stem" readOnly={readOnly} saving={saving} locale={locale} onDirtyChange={onDirtyChange} onSave={onSaveText} />
 
         <div className="grid divide-y md:grid-cols-2 md:divide-x md:divide-y-0">
@@ -436,6 +452,85 @@ function QuestionPackageCard({ problem, index, total, previous, next, readOnly, 
         <QuestionNavigator previous={previous} next={next} locale={locale} onNavigate={onNavigate} compact />
       </footer>
     </article>
+  );
+}
+
+function EditableMaxScore({ fieldKey, problem, readOnly, saving, locale, onDirtyChange, onSave }: {
+  fieldKey: string;
+  problem: ProblemInfo;
+  readOnly: boolean;
+  saving: boolean;
+  locale: string;
+  onDirtyChange: (key: string, dirty: boolean) => void;
+  onSave: (problem: ProblemInfo, maxScore: number) => Promise<void>;
+}) {
+  const original = String(problem.max_score ?? 10);
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(original);
+  const [error, setError] = useState<string | null>(null);
+  const dirty = editing && draft !== original;
+
+  useEffect(() => { if (!editing) setDraft(original); }, [editing, original]);
+  useEffect(() => { onDirtyChange(fieldKey, dirty); return () => onDirtyChange(fieldKey, false); }, [dirty, fieldKey, onDirtyChange]);
+
+  async function save() {
+    const parsed = Number(draft);
+    if (!Number.isFinite(parsed) || parsed <= 0 || parsed > 10_000) {
+      setError(tx(locale, "满分必须大于 0 且不超过 10000。", "The maximum score must be greater than 0 and no more than 10000."));
+      return;
+    }
+    setError(null);
+    try {
+      await onSave(problem, parsed);
+      onDirtyChange(fieldKey, false);
+      setEditing(false);
+    } catch {
+      setError(tx(locale, "保存失败，请重试。", "Save failed. Try again."));
+    }
+  }
+
+  const sourceLabel = maxScoreSourceLabel(problem.max_score_source, locale);
+  const needsReview = problem.max_score_review_status !== "confirmed";
+  return (
+    <section className="bg-blue-50/35 px-5 py-4 dark:bg-blue-950/10 sm:px-6">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+        <div>
+          <div className="flex flex-wrap items-center gap-2">
+            <h3 className="text-sm font-bold text-foreground">{tx(locale, "本题满分", "Question Maximum Score")}</h3>
+            <span className={cn("rounded-full px-2.5 py-1 text-xs font-semibold", needsReview ? "bg-amber-100 text-amber-700 dark:bg-amber-950/35 dark:text-amber-300" : "bg-emerald-100 text-emerald-700 dark:bg-emerald-950/35 dark:text-emerald-300")}>{needsReview ? tx(locale, "请确认", "Confirm") : tx(locale, "已确认", "Confirmed")}</span>
+          </div>
+          <p className="mt-1 text-xs leading-5 text-muted-foreground">{sourceLabel} · {tx(locale, "评分标准中的步骤按百分比分配到该满分。", "Rubric percentages are applied to this maximum score.")}</p>
+        </div>
+        {editing ? (
+          <div className="flex flex-wrap items-center gap-2">
+            <label className="relative">
+              <span className="sr-only">{tx(locale, `第 ${problem.number || problem.q_id} 题满分`, `Maximum score for question ${problem.number || problem.q_id}`)}</span>
+              <input
+                aria-label={tx(locale, `第 ${problem.number || problem.q_id} 题满分`, `Maximum score for question ${problem.number || problem.q_id}`)}
+                type="number"
+                inputMode="decimal"
+                min="0.01"
+                max="10000"
+                step="0.5"
+                value={draft}
+                onChange={(event) => { setDraft(event.target.value); setError(null); }}
+                className="h-9 w-32 rounded-[7px] border bg-background px-3 pr-9 text-sm font-semibold outline-none focus:border-primary focus:ring-2 focus:ring-primary/15"
+              />
+              <span className="pointer-events-none absolute right-3 top-2.5 text-[11px] text-muted-foreground">{tx(locale, "分", "pts")}</span>
+            </label>
+            <button type="button" disabled={saving || (!dirty && !needsReview)} onClick={() => void save()} className="inline-flex h-9 items-center gap-1.5 rounded-[7px] bg-primary px-3 text-xs font-semibold text-primary-foreground disabled:opacity-45">{saving ? <Loader2 aria-hidden="true" className="h-3.5 w-3.5 animate-spin" /> : <Save aria-hidden="true" className="h-3.5 w-3.5" />}{needsReview && !dirty ? tx(locale, "确认", "Confirm") : tx(locale, "保存", "Save")}</button>
+            <button type="button" onClick={() => { setEditing(false); setDraft(original); setError(null); }} className="inline-flex h-9 items-center gap-1 rounded-[7px] border px-3 text-xs font-semibold hover:bg-muted"><X aria-hidden="true" className="h-3.5 w-3.5" />{tx(locale, "取消", "Cancel")}</button>
+          </div>
+        ) : (
+          <div className="flex items-center gap-2">
+            <strong className="text-lg text-foreground">{formatScore(problem.max_score ?? 10)} {tx(locale, "分", "pts")}</strong>
+            {needsReview && !readOnly ? <button type="button" disabled={saving} onClick={() => void save()} className="inline-flex h-8 items-center gap-1.5 rounded-[6px] bg-primary px-2.5 text-xs font-semibold text-primary-foreground disabled:opacity-45"><Check aria-hidden="true" className="h-3.5 w-3.5" />{tx(locale, "确认此满分", "Confirm score")}</button> : null}
+            {!readOnly ? <button type="button" aria-label={tx(locale, `修改第 ${problem.number || problem.q_id} 题满分`, `Edit maximum score for question ${problem.number || problem.q_id}`)} onClick={() => setEditing(true)} className="inline-flex h-8 items-center gap-1.5 rounded-[6px] border px-2.5 text-xs font-semibold hover:bg-muted"><Pencil aria-hidden="true" className="h-3.5 w-3.5" />{tx(locale, "修改", "Edit")}</button> : null}
+          </div>
+        )}
+      </div>
+      {error ? <p role="alert" className="mt-2 text-xs text-danger">{error}</p> : null}
+    </section>
   );
 }
 
@@ -637,7 +732,7 @@ function filterProblems(problems: ProblemInfo[], rawQuery: string) {
     if (["编程", "编程题", "programming"].includes(token)) return isProgrammingProblem(problem);
     if (["低置信", "low-confidence"].includes(token)) return (problem.preparation_issues ?? []).some((issue) => issue.status === "open" && issue.code === "low_confidence");
     if (["冲突", "conflict"].includes(token)) return (problem.preparation_issues ?? []).some((issue) => issue.status === "open" && issue.code.includes("conflict"));
-    const sourceText = [problem.number, problem.q_id, problem.type, problem.stem, problem.reference_answer, problem.criterion].join(" ");
+    const sourceText = [problem.number, problem.q_id, problem.type, problem.max_score, problem.max_score_source, problem.stem, problem.reference_answer, problem.criterion].join(" ");
     return `${sourceText} ${questionSearchAliases(sourceText)}`.toLocaleLowerCase().includes(token);
   }));
 }
@@ -651,9 +746,25 @@ function openRiskCount(problem: ProblemInfo) {
 }
 
 function riskShortLabel(code: string, locale: string) {
-  const zh: Record<string, string> = { low_confidence: "低置信匹配", source_conflict: "来源冲突", ai_source_conflict: "SmarTAI 与原文件冲突", parse_anomaly: "解析异常", generation_failed: "生成失败", invalid_test_case: "测试样例无效", reference_solution_failed_case: "参考解未通过测试", rubric_step_reference_conflict: "评分步骤未对应" };
-  const en: Record<string, string> = { low_confidence: "Low confidence", source_conflict: "Source conflict", ai_source_conflict: "SmarTAI/source conflict", parse_anomaly: "Parse anomaly", generation_failed: "Generation failed", invalid_test_case: "Invalid test case", reference_solution_failed_case: "Reference solution failed", rubric_step_reference_conflict: "Rubric alignment issue" };
+  const zh: Record<string, string> = { low_confidence: "低置信匹配", source_conflict: "来源冲突", ai_source_conflict: "SmarTAI 与原文件冲突", parse_anomaly: "解析异常", generation_failed: "生成失败", invalid_test_case: "测试样例无效", reference_solution_failed_case: "参考解未通过测试", rubric_step_reference_conflict: "评分步骤未对应", default_max_score_requires_review: "默认 10 分待确认", max_score_not_found: "未匹配到本题满分，暂按 10 分" };
+  const en: Record<string, string> = { low_confidence: "Low confidence", source_conflict: "Source conflict", ai_source_conflict: "SmarTAI/source conflict", parse_anomaly: "Parse anomaly", generation_failed: "Generation failed", invalid_test_case: "Invalid test case", reference_solution_failed_case: "Reference solution failed", rubric_step_reference_conflict: "Rubric alignment issue", default_max_score_requires_review: "Default 10-point score needs confirmation", max_score_not_found: "No matched score; temporarily 10" };
   return locale === "zh-CN" ? zh[code] ?? code : en[code] ?? code;
+}
+
+function maxScoreSourceLabel(source: ProblemInfo["max_score_source"], locale: string) {
+  const labels = {
+    default_10: ["系统暂按默认 10 分", "System default of 10 points"],
+    uniform: ["来自统一满分设置", "From the uniform score setting"],
+    per_question_text: ["来自每题分值说明的识别结果", "Interpreted from the per-question score note"],
+    teacher_edited: ["已由教师手动修改", "Manually edited by the teacher"],
+    legacy: ["来自历史题目数据", "From legacy question data"],
+  } as const;
+  const value = labels[source ?? "legacy"];
+  return locale === "zh-CN" ? value[0] : value[1];
+}
+
+function formatScore(value: number) {
+  return Number.isInteger(value) ? String(value) : value.toFixed(2).replace(/0+$/, "").replace(/\.$/, "");
 }
 
 function questionAnchorId(qId: string) {

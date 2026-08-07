@@ -417,7 +417,7 @@ def confirm_final_result_atomic(
     """
     now = time.time()
     terminal_statuses = {"completed", "partial_failed"}
-    unresolved_statuses = {"failed", "needs_review"}
+    unresolved_statuses = {"failed"}
     with session_scope() as session:
         workflow = session.scalar(
             select(AssignmentWorkflowRecord)

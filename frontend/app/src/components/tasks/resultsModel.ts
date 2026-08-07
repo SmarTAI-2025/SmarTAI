@@ -1,6 +1,22 @@
 import type { Correction, ProblemInfo, StudentAnswerInfo, StudentResult, StudentSubmission, Task, TaskResultResponse } from "@/types";
+import type { Locale } from "@/i18n/messages";
 
 export const LOW_CONFIDENCE_THRESHOLD = 0.65;
+
+export type CorrectionScoreSource =
+  | "ai_untouched"
+  | "teacher_confirmed_same"
+  | "teacher_changed"
+  | "hard_failure";
+
+const HARD_FAILURE_METHODS = new Set(["all_failed", "quota_exhausted"]);
+const HARD_FAILURE_REASONS = new Set([
+  "llm_failed",
+  "quota_exhausted",
+  "invalid_score_scale",
+  "missing_correction",
+  "missing_student_result",
+]);
 
 export interface StudentSummary {
   id: string;
@@ -14,6 +30,14 @@ export interface StudentSummary {
   avgConfidence: number | null;
   lowConfidenceCount: number;
   reviewCount: number;
+}
+
+export interface ReviewScoreSourceSummary {
+  aiUntouched: number;
+  teacherConfirmedSame: number;
+  teacherChanged: number;
+  hardFailure: number;
+  total: number;
 }
 
 export interface QuestionEntry {
@@ -31,7 +55,7 @@ export interface QuestionSummary {
   criterion?: string;
   entries: QuestionEntry[];
   count: number;
-  avgScore: number;
+  avgScore: number | null;
   maxScore: number;
   avgPercent: number | null;
   minScore: number | null;
@@ -46,8 +70,8 @@ export interface ResultsModel {
   problems: ProblemInfo[];
   students: StudentSummary[];
   questions: QuestionSummary[];
-  classAverageScore: number;
-  classAverageMax: number;
+  classAverageScore: number | null;
+  classAverageMax: number | null;
   classAveragePercent: number | null;
   lowConfidenceCount: number;
   reviewCount: number;
@@ -91,8 +115,9 @@ export function buildResultsModel(task?: Task, result?: TaskResultResponse): Res
     .sort((a, b) => compareQuestionIds(a, b, problemOrder))
     .map((qId) => buildQuestionSummary(qId, rawProblems[qId], entriesByQuestion.get(qId) ?? []));
 
-  const classAverageScore = average(students.map((student) => student.totalScore));
-  const classAverageMax = average(students.map((student) => student.totalMax));
+  const studentsWithResolvedScores = students.filter((student) => student.totalMax > 0);
+  const classAverageScore = averageOrNull(studentsWithResolvedScores.map((student) => student.totalScore));
+  const classAverageMax = averageOrNull(studentsWithResolvedScores.map((student) => student.totalMax));
   const classAveragePercent = averageOrNull(students.map((student) => student.percent));
   const lowConfidenceCount = students.reduce((sum, student) => sum + student.lowConfidenceCount, 0);
   const reviewCount = students.reduce((sum, student) => sum + student.reviewCount, 0);
@@ -134,27 +159,73 @@ export function formatScore(value: number | null | undefined) {
   return value.toFixed(1);
 }
 
-export function effectiveCorrectionScore(correction: Correction) {
-  return typeof correction.teacher_score === "number" && Number.isFinite(correction.teacher_score)
-    ? correction.teacher_score
-    : correction.score;
+export function aiCorrectionScore(correction: Correction): number | null {
+  if (hasHardFailureSignal(correction)) return null;
+  if (isFiniteScore(correction.provisional_score)) return correction.provisional_score;
+  if (!isFiniteScore(correction.teacher_score) && isFiniteScore(correction.score)) return correction.score;
+  return null;
 }
 
-/**
- * The task facade currently serializes a missing AI score as numeric zero.
- * Do not present that fallback as a real grade while the item still requires
- * teacher review. A teacher-entered score remains displayable, including 0.
- */
+export function effectiveCorrectionScore(correction: Correction): number | null {
+  if (isFiniteScore(correction.teacher_score)) return correction.teacher_score;
+  if (hasHardFailureSignal(correction)) return null;
+  if (isFiniteScore(correction.score)) return correction.score;
+  return isFiniteScore(correction.provisional_score) ? correction.provisional_score : null;
+}
+
+export function correctionScoreSource(correction: Correction): CorrectionScoreSource {
+  if (isFiniteScore(correction.teacher_score)) {
+    const aiScore = isFiniteScore(correction.provisional_score) ? correction.provisional_score : null;
+    return aiScore !== null && Math.abs(correction.teacher_score - aiScore) < 1e-9
+      ? "teacher_confirmed_same"
+      : "teacher_changed";
+  }
+  return effectiveCorrectionScore(correction) === null ? "hard_failure" : "ai_untouched";
+}
+
+export function formatCorrectionScoreSource(correction: Correction, locale: Locale): string {
+  const labels: Record<CorrectionScoreSource, [string, string]> = {
+    ai_untouched: ["采用 AI 分数 · 教师未操作", "AI score used · no teacher action"],
+    teacher_confirmed_same: ["教师已处理 · 沿用 AI 分数", "Teacher handled · AI score retained"],
+    teacher_changed: ["教师已修改分数", "Teacher changed the score"],
+    hard_failure: ["无法给出分数 · 需要处理", "No valid score · action required"],
+  };
+  return labels[correctionScoreSource(correction)][locale === "en-US" ? 1 : 0];
+}
+
+export function summarizeReviewScoreSources(corrections: Correction[]): ReviewScoreSourceSummary {
+  const summary: ReviewScoreSourceSummary = {
+    aiUntouched: 0,
+    teacherConfirmedSame: 0,
+    teacherChanged: 0,
+    hardFailure: 0,
+    total: 0,
+  };
+  for (const correction of corrections) {
+    if (!hasReviewSignal(correction)) continue;
+    summary.total += 1;
+    const source = correctionScoreSource(correction);
+    if (source === "ai_untouched") summary.aiUntouched += 1;
+    else if (source === "teacher_confirmed_same") summary.teacherConfirmedSame += 1;
+    else if (source === "teacher_changed") summary.teacherChanged += 1;
+    else summary.hardFailure += 1;
+  }
+  return summary;
+}
+
+export function shouldHideAutomatedScores(correction: Correction): boolean {
+  return hasReviewSignal(correction) && correctionScoreSource(correction) === "ai_untouched";
+}
+
+/** Review surfaces hide an untouched AI score while formal result math still uses it. */
 export function displayableCorrectionScore(correction: Correction): number | null {
-  if (typeof correction.teacher_score === "number" && Number.isFinite(correction.teacher_score)) {
+  if (isFiniteScore(correction.teacher_score)) {
     return correction.teacher_score;
   }
-  if (correction.requires_human_review && correction.review_status !== "confirmed") {
+  if (shouldHideAutomatedScores(correction)) {
     return null;
   }
-  return typeof correction.score === "number" && Number.isFinite(correction.score)
-    ? correction.score
-    : null;
+  return effectiveCorrectionScore(correction);
 }
 
 export function correctionReviewDraftScore(correction: Correction): string {
@@ -162,9 +233,18 @@ export function correctionReviewDraftScore(correction: Correction): string {
   return score === null ? "" : String(score);
 }
 
+export function reviewConfirmationScore(correction: Correction, draftScore: string): number | null {
+  const normalized = draftScore.trim();
+  if (normalized) {
+    const score = Number(normalized);
+    return Number.isFinite(score) ? score : null;
+  }
+  return aiCorrectionScore(correction);
+}
+
 export function correctionReviewReasonIds(correction: Correction): string[] {
   return Array.from(new Set(
-    (correction.review_reasons ?? [])
+    [...(correction.review_reasons ?? []), ...(correction.initial_review_reasons ?? [])]
       .flatMap((reason) => reason.split(","))
       .map((reason) => reason.trim())
       .filter(Boolean),
@@ -191,7 +271,10 @@ export function isLowConfidence(correction: Correction) {
 }
 
 export function hasReviewSignal(correction: Correction) {
-  return correction.requires_human_review || isLowConfidence(correction);
+  return correction.requires_human_review
+    || isLowConfidence(correction)
+    || correctionReviewReasonIds(correction).length > 0
+    || HARD_FAILURE_METHODS.has(correction.synthesis_method ?? "");
 }
 
 export function reviewReasonLabel(reason: string) {
@@ -222,8 +305,13 @@ function buildStudentSummary(
   const corrections = [...(result.corrections ?? [])].sort((a, b) => compareQuestionIds(a.q_id, b.q_id, problemOrder));
   const answers = result.student_answers?.length ? result.student_answers : (submission?.stu_ans ?? []);
   const answerByQuestion = new Map(answers.map((answer) => [answer.q_id, answer]));
-  const totalScore = sum(corrections.map((correction) => safeNumber(effectiveCorrectionScore(correction))));
-  const totalMax = sum(corrections.map((correction) => safeNumber(correction.max_score)));
+  const resolvedScores = corrections.flatMap((correction) => {
+    const score = effectiveCorrectionScore(correction);
+    const maxScore = safeNumber(correction.max_score);
+    return score === null || maxScore <= 0 ? [] : [{ score, maxScore }];
+  });
+  const totalScore = sum(resolvedScores.map((item) => item.score));
+  const totalMax = sum(resolvedScores.map((item) => item.maxScore));
   const confidenceValues = corrections.map((correction) => safeNumber(correction.confidence));
   const lowConfidenceCount = corrections.filter(isLowConfidence).length;
   const reviewCount = corrections.filter((correction) => correction.requires_human_review).length;
@@ -244,12 +332,15 @@ function buildStudentSummary(
 }
 
 function buildQuestionSummary(qId: string, problem: ProblemInfo | undefined, entries: QuestionEntry[]): QuestionSummary {
-  const scores = entries.map((entry) => safeNumber(effectiveCorrectionScore(entry.correction)));
+  const scores = entries
+    .map((entry) => effectiveCorrectionScore(entry.correction))
+    .filter((value): value is number => value !== null);
   const maxScores = entries.map((entry) => safeNumber(entry.correction.max_score)).filter((value) => value > 0);
   const percents = entries
     .map((entry) => {
       const maxScore = safeNumber(entry.correction.max_score);
-      return maxScore > 0 ? (safeNumber(effectiveCorrectionScore(entry.correction)) / maxScore) * 100 : null;
+      const score = effectiveCorrectionScore(entry.correction);
+      return score !== null && maxScore > 0 ? (score / maxScore) * 100 : null;
     })
     .filter((value): value is number => value !== null);
 
@@ -262,7 +353,7 @@ function buildQuestionSummary(qId: string, problem: ProblemInfo | undefined, ent
     criterion: problem?.criterion,
     entries,
     count: entries.length,
-    avgScore: average(scores),
+    avgScore: averageOrNull(scores),
     maxScore: maxScores.length ? Math.max(...maxScores) : 0,
     avgPercent: percents.length ? average(percents) : null,
     minScore: scores.length ? Math.min(...scores) : null,
@@ -310,4 +401,14 @@ function averageOrNull(values: Array<number | null>) {
 
 function safeNumber(value: number | null | undefined) {
   return typeof value === "number" && Number.isFinite(value) ? value : 0;
+}
+
+function isFiniteScore(value: number | null | undefined): value is number {
+  return typeof value === "number" && Number.isFinite(value);
+}
+
+function hasHardFailureSignal(correction: Correction): boolean {
+  if (isFiniteScore(correction.teacher_score)) return false;
+  if (HARD_FAILURE_METHODS.has(correction.synthesis_method ?? "")) return true;
+  return correctionReviewReasonIds(correction).some((reason) => HARD_FAILURE_REASONS.has(reason));
 }

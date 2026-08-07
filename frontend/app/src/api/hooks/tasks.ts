@@ -248,6 +248,7 @@ export function useUpdateProblem() {
       qId: string;
       stem?: string;
       criterion?: string;
+      max_score?: number;
       review_status?: "needs_review" | "edited" | "confirmed";
       reference_answer?: string | null;
       solution_code?: string | null;

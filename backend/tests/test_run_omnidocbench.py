@@ -5,6 +5,7 @@ import base64
 import hashlib
 import json
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -254,7 +255,7 @@ def test_runner_cli_can_import_project_packages():
     project_root = Path(__file__).resolve().parents[2]
     result = subprocess.run(
         [
-            "/home/dataset-assist-0/tianshu/conda-envs/smartai/bin/python",
+            sys.executable,
             "tools/ocr_benchmark/run_omnidocbench.py",
             "--help",
         ],

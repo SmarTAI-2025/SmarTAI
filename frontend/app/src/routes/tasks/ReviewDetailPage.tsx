@@ -18,10 +18,14 @@ import { useTask, useTaskResult, useUpdateCorrectionReview } from "@/api/hooks/t
 import { NewTaskStepper } from "@/components/new-task/NewTaskStepper";
 import {
   buildResultsModel,
+  correctionScoreSource,
   correctionReviewDraftScore,
   displayableCorrectionScore,
+  effectiveCorrectionScore,
   formatConfidence,
   formatScore,
+  reviewConfirmationScore,
+  shouldHideAutomatedScores,
   type QuestionSummary,
   type StudentSummary,
 } from "@/components/tasks/resultsModel";
@@ -84,7 +88,14 @@ export function ReviewDetailPage() {
   );
   const reviewItems = useMemo(() => collectResultReviewItems(model, model.students), [model]);
   const pendingReviewItems = useMemo(
-    () => reviewItems.filter((item) => item.correction.review_status !== "confirmed"),
+    () => reviewItems.filter((item) => {
+      const source = correctionScoreSource(item.correction);
+      return source === "ai_untouched" || source === "hard_failure";
+    }),
+    [reviewItems],
+  );
+  const blockingReviewItems = useMemo(
+    () => reviewItems.filter((item) => effectiveCorrectionScore(item.correction) === null),
     [reviewItems],
   );
   const requiredReviewKeys = useMemo(
@@ -157,13 +168,13 @@ export function ReviewDetailPage() {
 
   useEffect(() => {
     const beforeUnload = (event: BeforeUnloadEvent) => {
-      if (!dirty && !updateReview.isPending) return;
+      if (!dirty) return;
       event.preventDefault();
       event.returnValue = "";
     };
     window.addEventListener("beforeunload", beforeUnload);
     return () => window.removeEventListener("beforeunload", beforeUnload);
-  }, [dirty, updateReview.isPending]);
+  }, [dirty]);
 
   const buildHref = useCallback((nextStudentId: string, nextQuestionId: string, preserveFilters = true) => {
     const nextParams = preserveFilters ? new URLSearchParams(searchParams) : new URLSearchParams();
@@ -328,8 +339,15 @@ export function ReviewDetailPage() {
       comment: correction.teacher_comment ?? "",
     };
     const normalizedScore = draft.score.trim();
-    const numericScore = normalizedScore ? Number(normalizedScore) : Number.NaN;
-    if (!Number.isFinite(numericScore) || numericScore < 0 || numericScore > correction.max_score) {
+    const numericScore = reviewConfirmationScore(correction, draft.score);
+    if (!normalizedScore && numericScore === null) {
+      setScoreErrors((current) => ({
+        ...current,
+        [question.id]: tx(locale, "SmarTAI 没有生成有效分数，请先手动输入最终分。", "SmarTAI did not produce a valid score. Enter a final score manually."),
+      }));
+      return { ok: false as const, message: tx(locale, "请先为无分结果填写最终分。", "Enter a final score for the unscored result first.") };
+    }
+    if (numericScore === null || !Number.isFinite(numericScore) || numericScore < 0 || numericScore > correction.max_score) {
       setScoreErrors((current) => ({
         ...current,
         [question.id]: tx(locale, `请输入 0–${formatScore(correction.max_score)} 之间的分数。`, `Enter a score from 0 to ${formatScore(correction.max_score)}.`),
@@ -403,7 +421,8 @@ export function ReviewDetailPage() {
   async function confirmAndContinue(question: QuestionSummary) {
     if (!taskQuery.data) return;
     const correction = correctionByQuestionId.get(question.id);
-    if (correction?.review_status === "confirmed" && !dirtyQuestionIds.has(question.id)) {
+    const source = correction ? correctionScoreSource(correction) : null;
+    if ((source === "teacher_confirmed_same" || source === "teacher_changed") && !dirtyQuestionIds.has(question.id)) {
       continueAfterQuestion(question, dirtyQuestionIds.size > 0);
       return;
     }
@@ -510,16 +529,16 @@ export function ReviewDetailPage() {
     }
   }
 
-  const lockedResultsReason = pendingReviewItems.length
+  const lockedResultsReason = blockingReviewItems.length
     ? tx(
         locale,
-        `结果分析尚未解锁：还剩 ${pendingReviewItems.length} 个题次需要确认。点击可前往第一处。`,
-        `Results & Analysis is locked: ${pendingReviewItems.length} response${pendingReviewItems.length === 1 ? "" : "s"} still need confirmation. Activate to open the first one.`,
+        `结果分析尚未解锁：还有 ${blockingReviewItems.length} 个题次没有有效分数，必须先处理。`,
+        `Results & Analysis is locked: ${blockingReviewItems.length} response${blockingReviewItems.length === 1 ? " has" : "s have"} no valid score and must be resolved.`,
       )
     : tx(
         locale,
-        "所有题次均已确认；请先在复核总览确认完成，再进入结果分析。",
-        "All responses are confirmed. Confirm review completion in the overview before opening Results & Analysis.",
+        "没有阻断项；未人工处理的有效 AI 分会默认沿用。请在复核总览确认正式结果。",
+        "No blocking items remain. Valid untouched AI scores will be used by default; confirm the final result in the review overview.",
       );
 
   function activateLockedResults() {
@@ -528,7 +547,7 @@ export function ReviewDetailPage() {
       navigate(overviewHref);
       return;
     }
-    const first = pendingReviewItems[0];
+    const first = blockingReviewItems[0];
     if (!first) {
       navigate(overviewHref);
     } else if (first.student.id === student?.id && visibleQuestions.some((item) => item.id === first.question.id)) {
@@ -764,8 +783,10 @@ function ReviewQuestionCard({ locale, student, question, correction, draft, requ
   onNavigate: (id: string) => void;
 }) {
   const displayScore = correction ? displayableCorrectionScore(correction) : null;
+  const hideAutomatedScores = correction ? shouldHideAutomatedScores(correction) : false;
+  const scoreSource = correction ? correctionScoreSource(correction) : null;
   const answer = student.answerByQuestion.get(question.id);
-  const alreadyConfirmed = correction?.review_status === "confirmed" && !dirty;
+  const alreadyConfirmed = (scoreSource === "teacher_confirmed_same" || scoreSource === "teacher_changed") && !dirty;
   const actionLabel = alreadyConfirmed
     ? hasNextReview
       ? tx(locale, "继续复核", "Continue review")
@@ -815,9 +836,15 @@ function ReviewQuestionCard({ locale, student, question, correction, draft, requ
             </div>
             {correction ? (
               <>
-                <MarkdownMath className="mt-3 text-[13px] leading-6 text-foreground">{correction.comment || tx(locale, "SmarTAI 未返回文字说明。", "SmarTAI returned no written rationale.")}</MarkdownMath>
+                {hideAutomatedScores ? (
+                  <p className="mt-3 rounded-[8px] bg-amber-50 px-3 py-2.5 text-[12px] leading-5 text-amber-800 dark:bg-amber-950/35 dark:text-amber-100">
+                    {tx(locale, "为避免把低置信或存在分歧的 AI 判断误当成正式分数，AI 暂定分、评语和评分细节已隐藏。请结合题目、作答、评分标准和下方复核原因判断。", "The provisional score, AI rationale, and score details are hidden so a low-confidence or disputed AI judgment is not mistaken for a formal grade. Review the question, response, rubric, and reasons below.")}
+                  </p>
+                ) : (
+                  <MarkdownMath className="mt-3 text-[13px] leading-6 text-foreground">{correction.comment || tx(locale, "SmarTAI 未返回文字说明。", "SmarTAI returned no written rationale.")}</MarkdownMath>
+                )}
                 {reviewReasons.length ? <div className="mt-3 flex flex-wrap gap-1.5">{reviewReasons.map((reason) => <span key={reason} className="rounded-full bg-amber-50 px-2.5 py-1 text-[10px] font-semibold text-amber-700 dark:bg-amber-950/40 dark:text-amber-200">{reason}</span>)}</div> : null}
-                {correction.steps?.length ? (
+                {!hideAutomatedScores && correction.steps?.length ? (
                   <div className="mt-4 border-t pt-3">
                     <p className="text-[11px] font-semibold text-muted-foreground">{tx(locale, "评分步骤", "Scoring steps")}</p>
                     <ol className="mt-2 space-y-2">
@@ -831,12 +858,14 @@ function ReviewQuestionCard({ locale, student, question, correction, draft, requ
                     </ol>
                   </div>
                 ) : null}
-                <dl className="mt-4 grid grid-cols-2 gap-2 text-xs sm:grid-cols-3">
-                  <Signal label={tx(locale, "置信度", "Confidence")} value={formatConfidence(correction.confidence)} />
-                  <Signal label={tx(locale, "专家数", "Models")} value={String(Math.max(1, correction.expert_results?.length ?? 0))} />
-                  <Signal label={tx(locale, "合成方式", "Synthesis")} value={formatSynthesis(correction.synthesis_method, locale)} />
-                </dl>
-                {correction.expert_results?.length ? (
+                {!hideAutomatedScores ? (
+                  <dl className="mt-4 grid grid-cols-2 gap-2 text-xs sm:grid-cols-3">
+                    <Signal label={tx(locale, "置信度", "Confidence")} value={formatConfidence(correction.confidence)} />
+                    <Signal label={tx(locale, "专家数", "Models")} value={String(Math.max(1, correction.expert_results?.length ?? 0))} />
+                    <Signal label={tx(locale, "合成方式", "Synthesis")} value={formatSynthesis(correction.synthesis_method, locale)} />
+                  </dl>
+                ) : null}
+                {!hideAutomatedScores && correction.expert_results?.length ? (
                   <details className="mt-3 text-xs text-muted-foreground">
                     <summary className="cursor-pointer font-semibold text-foreground">{tx(locale, "查看各专家原始结果", "View Original Model Results")}</summary>
                     <ul className="mt-2 space-y-2">
@@ -944,25 +973,30 @@ function Signal({ label, value }: { label: string; value: string }) {
 }
 
 function ReviewStatus({ correction, required, locale }: { correction?: Correction; required: boolean; locale: Locale }) {
+  const source = correction ? correctionScoreSource(correction) : null;
   const status = !correction
     ? "missing"
-    : correction.review_status === "confirmed"
-      ? "confirmed"
-      : correction.review_status === "edited"
-        ? "edited"
+    : source === "hard_failure"
+      ? "hard"
+      : source === "teacher_confirmed_same"
+        ? "confirmed"
+        : source === "teacher_changed"
+          ? "edited"
         : required
           ? "pending"
           : "ready";
   const label = status === "missing"
     ? tx(locale, "无批改结果", "Missing result")
+    : status === "hard"
+      ? tx(locale, "无有效分数 · 必须处理", "No valid score · action required")
     : status === "confirmed"
-      ? tx(locale, "已复核", "Reviewed")
+      ? tx(locale, "教师已处理 · 沿用 AI 分", "Teacher handled · AI score retained")
       : status === "edited"
-        ? tx(locale, "已修改 · 待确认", "Edited · pending")
+        ? tx(locale, "教师已修改", "Teacher changed")
         : status === "pending"
-          ? tx(locale, "待复核", "Pending review")
-          : tx(locale, "批改完成", "Graded");
-  return <span className={cn("rounded-full px-3 py-1 text-[11px] font-semibold", status === "confirmed" && "bg-blue-100 text-primary dark:bg-blue-950/60", status === "edited" && "bg-amber-100 text-amber-700 dark:bg-amber-950/60 dark:text-amber-200", status === "pending" && "bg-amber-100 text-amber-700 dark:bg-amber-950/60 dark:text-amber-200", status === "ready" && "bg-emerald-100 text-emerald-700 dark:bg-emerald-950/60 dark:text-emerald-200", status === "missing" && "bg-red-100 text-red-600 dark:bg-red-950/60 dark:text-red-200")}>{label}</span>;
+          ? tx(locale, "AI 分默认采用 · 教师未操作", "AI score used by default · no teacher action")
+          : tx(locale, "AI 自动评分 · 教师未操作", "AI scored · no teacher action");
+  return <span className={cn("rounded-full px-3 py-1 text-[11px] font-semibold", status === "confirmed" && "bg-blue-100 text-primary dark:bg-blue-950/60", status === "edited" && "bg-amber-100 text-amber-700 dark:bg-amber-950/60 dark:text-amber-200", status === "pending" && "bg-amber-100 text-amber-700 dark:bg-amber-950/60 dark:text-amber-200", status === "ready" && "bg-emerald-100 text-emerald-700 dark:bg-emerald-950/60 dark:text-emerald-200", (status === "missing" || status === "hard") && "bg-red-100 text-red-600 dark:bg-red-950/60 dark:text-red-200")}>{label}</span>;
 }
 
 function EmptyText({ locale, text, en }: { locale: Locale; text: string; en: string }) {
@@ -976,7 +1010,9 @@ function PageState({ title, busy = false, action, href, onAction }: { title: str
 
 function reviewQuestionState(correction: Correction | undefined, required: boolean): ResultQuestionState {
   if (!correction) return "danger";
-  if (correction.review_status === "confirmed") return "confirmed";
+  if (effectiveCorrectionScore(correction) === null) return "danger";
+  const source = correctionScoreSource(correction);
+  if (source === "teacher_confirmed_same" || source === "teacher_changed") return "confirmed";
   if (required) return "warning";
   return "ready";
 }

@@ -45,6 +45,7 @@ function buildReviewItem(
 ): ReviewItem | null {
   const question = questions.find((item) => item.id === correction.q_id) ?? fallbackQuestion(correction.q_id);
   const reasons = collectReasonLabels(correction);
+  const reasonIds = correctionReviewReasonIds(correction);
   const expertSpread = getExpertScoreSpread(correction);
   const displayScore = displayableCorrectionScore(correction);
   const percent = displayScore !== null && correction.max_score > 0
@@ -56,7 +57,7 @@ function buildReviewItem(
     expertSpread > Math.max(1, correction.max_score * 0.25);
   const scoreAnomaly = percent !== null && (percent <= 40 || percent >= 95) && hasReviewSignal(correction);
 
-  if (!lowConfidence && !expertDisagreement && !scoreAnomaly && !correction.requires_human_review) {
+  if (!lowConfidence && !expertDisagreement && !scoreAnomaly && !correction.requires_human_review && !reasonIds.length) {
     return null;
   }
 
@@ -107,7 +108,7 @@ function fallbackQuestion(qId: string): QuestionSummary {
     label: qId,
     entries: [],
     count: 0,
-    avgScore: 0,
+    avgScore: null,
     maxScore: 0,
     avgPercent: null,
     minScore: null,

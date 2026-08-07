@@ -2,6 +2,7 @@ import { Link } from "react-router-dom";
 import { useAssignments, useMyStudentResult } from "@/api/hooks/education";
 import { Card, SectionHeader } from "@/components/ui/Card";
 import { EmptyState } from "@/components/ui/EmptyState";
+import type { GradeResult } from "@/types/education";
 
 /**
  * Student results overview: lists published assignments with a quick score
@@ -34,9 +35,7 @@ export function StudentResultPage() {
 
 function ResultRow({ assignmentId, name }: { assignmentId: string; name: string }) {
   const result = useMyStudentResult(assignmentId);
-  const graded = (result.data ?? []).filter((r) => r.result_status === "graded");
-  const total = graded.reduce((sum, r) => sum + (r.score ?? r.ai_score ?? 0), 0);
-  const max = graded.reduce((sum, r) => sum + (r.ai_max_score ?? 0), 0);
+  const { total, max } = summarizeReleasedResults(result.data ?? []);
   const released = (result.data?.length ?? 0) > 0;
 
   return (
@@ -51,4 +50,17 @@ function ResultRow({ assignmentId, name }: { assignmentId: string; name: string 
       </div>
     </Card>
   );
+}
+
+export function summarizeReleasedResults(results: GradeResult[]) {
+  const scoreable = results.flatMap((result) => {
+    const score = result.effective_score ?? result.score ?? result.ai_score;
+    return result.result_status === "failed" || typeof score !== "number" || !Number.isFinite(score)
+      ? []
+      : [{ score, maxScore: result.ai_max_score }];
+  });
+  return {
+    total: scoreable.reduce((sum, result) => sum + result.score, 0),
+    max: scoreable.reduce((sum, result) => sum + result.maxScore, 0),
+  };
 }

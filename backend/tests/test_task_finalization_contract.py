@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import csv
+from io import StringIO
+
 
 def _prepared_task():
     from backend.db import (
@@ -77,7 +80,7 @@ def _prepared_task():
         ai_score=6,
         ai_max_score=10,
         requires_review=True,
-        review_reason="low_confidence",
+        review_reasons=["low_confidence"],
         result_status=education.GradeResultStatus.NEEDS_REVIEW.value,
         created_at=0,
         updated_at=0,
@@ -103,7 +106,7 @@ def _prepared_task():
         run.id, worker_id="finalization-worker", grade_result=optional,
     )
     grading_repository.mark_completed(
-        run.id, worker_id="finalization-worker", completed=0, failed=1,
+        run.id, worker_id="finalization-worker", completed=1, failed=0,
     )
     return {
         "owner_id": owner_id,
@@ -127,7 +130,7 @@ def test_required_review_audit_counts_only_originally_required_results():
         before["required_review_count"],
         before["confirmed_required_count"],
         before["remaining_review_count"],
-    ) == (1, 0, 1)
+    ) == (1, 0, 0)
 
     grading_repository.add_teacher_review(
         seeded["required_result_id"],
@@ -151,6 +154,51 @@ def test_required_review_audit_counts_only_originally_required_results():
         after["confirmed_required_count"],
         after["remaining_review_count"],
     ) == (1, 1, 0)
+
+
+def test_soft_review_ai_score_is_publishable_and_exported_by_default():
+    from backend.services import task_facade
+
+    seeded = _prepared_task()
+    final = task_facade.confirm_finalization(
+        task_id=seeded["task_id"],
+        owner_id=seeded["owner_id"],
+        expected_revision=0,
+    )
+    assert final["status"] == "ok"
+    assert final["required_review_count"] == 1
+    assert final["confirmed_required_count"] == 0
+    assert final["remaining_review_count"] == 0
+
+    snapshot = task_facade.result_snapshot(
+        task_id=seeded["task_id"],
+        owner_id=seeded["owner_id"],
+        result_version=1,
+    )
+    corrections = snapshot["payload"]["results"][0]["corrections"]
+    by_question = {row["q_id"]: row for row in corrections}
+    assert by_question["q-required"]["score"] == 6
+    assert by_question["q-required"]["teacher_score"] is None
+    assert by_question["q-required"]["review_status"] == "pending"
+
+    generated = task_facade.generate_artifacts(
+        task_id=seeded["task_id"],
+        owner_id=seeded["owner_id"],
+        expected_revision=1,
+    )
+    assert generated["status"] == "ok"
+    body, media_type, _filename = task_facade.artifact_bytes(
+        task_id=seeded["task_id"],
+        owner_id=seeded["owner_id"],
+        version=1,
+        artifact_id="grades_csv",
+    )
+    assert media_type == "text/csv; charset=utf-8"
+    rows = list(csv.DictReader(StringIO(body.decode("utf-8-sig"))))
+    assert len(rows) == 1
+    assert rows[0]["total_score"] == "15"
+    assert rows[0]["q-required_score"] == "6"
+    assert rows[0]["q-optional_score"] == "9"
 
 
 def test_finalization_artifacts_and_dirty_state_are_idempotent():

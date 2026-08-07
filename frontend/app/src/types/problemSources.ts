@@ -83,7 +83,16 @@ export interface StartQuestionPreparationInput {
   sourceTokens: string[];
   expectedWorkflowRevision: number;
   replaceConfirmed?: boolean;
+  scorePolicy: QuestionScorePolicyInput;
 }
+
+export type QuestionScorePolicyMode = "default_10" | "uniform" | "per_question";
+
+export type QuestionScorePolicyInput = {
+  mode: QuestionScorePolicyMode;
+  uniformMaxScore?: number;
+  perQuestionText?: string;
+};
 
 export type StartQuestionPreparationResponse = TaskMutationResponse & {
   source_count?: number;
@@ -117,5 +126,13 @@ export interface QuestionPreparationCapabilities {
     max_file_bytes: number;
     max_text_characters: number;
     max_inline_rubric_characters: number;
+  };
+  score_policy?: {
+    supported_modes: QuestionScorePolicyMode[];
+    default_mode: "default_10";
+    default_max_score: number;
+    maximum_max_score: number;
+    per_question_text_max_characters: number;
+    rubric_weight_format: "percentage";
   };
 }

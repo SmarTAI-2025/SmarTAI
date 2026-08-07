@@ -33,7 +33,13 @@ from typing import Optional, List, TYPE_CHECKING
 
 from pydantic import BaseModel, Field
 
-from backend.skills.base import GradingSkill, build_system_prompt, register_skill
+from backend.skills.base import (
+    GradingSkill,
+    authoritative_score_instruction,
+    build_system_prompt,
+    normalize_expert_result,
+    register_skill,
+)
 from backend.models import ExpertResult, ProblemInfo, StudentAnswerInfo, StepScore, TaskGradingSetup
 from backend.llm.providers import BaseProvider
 from backend.tools.structured_llm import structured_llm_call
@@ -49,9 +55,9 @@ logger = logging.getLogger(__name__)
 # ─── Output schemas ──────────────────────────────────────────────────────────
 
 class CalcGradingOutput(BaseModel):
-    score: float = Field(ge=0)
-    max_score: float = Field(default=10.0)
-    confidence: float = Field(ge=0, le=1)
+    score: float = Field(ge=0, allow_inf_nan=False)
+    max_score: float = Field(default=10.0, gt=0, allow_inf_nan=False)
+    confidence: float = Field(ge=0, le=1, allow_inf_nan=False)
     comment: str
     steps: List[dict] = Field(default_factory=list)
 
@@ -358,7 +364,8 @@ class CalculationSkill(GradingSkill):
                 "You are a mathematics teacher grading a calculation problem. "
                 "Walk through the 4-step reasoning workflow (Setup → Method → Derivation → Result) "
                 "and produce a structured per-dimension score. Respect the verification branch "
-                "rules in the user prompt.",
+                "rules in the user prompt."
+                + authoritative_score_instruction(problem.max_score),
                 self.language,
                 self.grading_setup,
             )
@@ -395,7 +402,7 @@ class CalculationSkill(GradingSkill):
             )
             final_comment = (result.comment or "") + metadata_footer
 
-            return ExpertResult(
+            return normalize_expert_result(ExpertResult(
                 provider=self.provider.provider_id,
                 score=score,
                 max_score=result.max_score,
@@ -404,7 +411,7 @@ class CalculationSkill(GradingSkill):
                 steps=step_scores,
                 raw_output=raw.content,
                 duration_ms=raw.duration_ms,
-            )
+            ), problem.max_score)
 
         except Exception as e:
             logger.error(
@@ -413,7 +420,7 @@ class CalculationSkill(GradingSkill):
             )
             from backend.skills.base import classify_skill_error
             kind, friendly = classify_skill_error(e)
-            return self._blank_result(problem.q_id, 10.0, friendly, error_kind=kind)
+            return self._blank_result(problem.q_id, problem.max_score, friendly, error_kind=kind)
         finally:
             if step_ctx:
                 await step_ctx.__aexit__(None, None, None)

@@ -55,13 +55,13 @@ PROB_SYSTEM_PROMPT = """You are a professional AI teaching assistant with gradua
 
     **[Important]: Preserve the stem information completely. Do not delete or translate content.**
 
-4. **Design Grading Criteria (`criterion`)**: If criteria are provided, retain them. If not, design appropriate criteria based on problem type.
+4. **Design Grading Criteria (`criterion`)**: Express rubric allocations only as percentages whose scoring steps add up to 100%. If source criteria use absolute points, preserve their relative weighting but convert the allocations to percentages. Do not state or infer the question's maximum score; it is configured separately by the authenticated teacher. If no criteria are provided, design an appropriate percentage-based rubric for the problem type.
 
 5. **Formatted Output**: Return a JSON object with key "problems" containing an array of objects with fields: "q_id", "number", "type", "stem", "criterion". ALL field values must be strings (quoted). Example shape:
 {"problems": [
-    {"q_id": "q1", "number": "1.1", "type": "概念题", "stem": "Please explain what 'Dependency Injection' is.", "criterion": "Full score 10 points. 0 points for incorrect answers, full points for correct answers."},
-    {"q_id": "q2", "number": "1.2", "type": "计算题", "stem": "Solve the equation $x^2 - 5x + 6 = 0$.", "criterion": "Full score 10 points. 2 points for each of the two results, 6 points for the calculation process."},
-    {"q_id": "q3", "number": "2", "type": "编程题", "stem": "Write a Quick Sort algorithm using Python.", "criterion": "Full score 10 points. 1 point for each of the 6 test cases passed, 4 points for implementing the Quick Sort algorithm correctly."}
+    {"q_id": "q1", "number": "1.1", "type": "概念题", "stem": "Please explain what 'Dependency Injection' is.", "criterion": "1. Correct definition: 60%. 2. Relevant example: 40%."},
+    {"q_id": "q2", "number": "1.2", "type": "计算题", "stem": "Solve the equation $x^2 - 5x + 6 = 0$.", "criterion": "1. Correct method and calculation: 60%. 2. Both roots: 40%."},
+    {"q_id": "q3", "number": "2", "type": "编程题", "stem": "Write a Quick Sort algorithm using Python.", "criterion": "1. Functional correctness: 60%. 2. Algorithm structure: 30%. 3. Clarity: 10%."}
 ]}
 
 **[Important]: Output must start with `{` and end with `}`. No preamble, no markdown fences.**
@@ -652,6 +652,9 @@ Return one JSON object with this shape:
 Rules:
 - Only emit requested targets and known q_id values.
 - For criterion/reference_answer, use text_value and omit test_cases.
+- For criterion, express scoring allocations only as percentages totaling 100%. If the source
+  uses absolute points, preserve the relative weights but convert them using the known question's
+  max_score. Never copy an absolute point total into text_value.
 - For test_cases, only emit candidates for programming questions and use test_cases.
 - confidence is match confidence, not grading confidence.
 - exact is allowed only when the source has an explicit matching question number or title.
@@ -718,6 +721,7 @@ async def parse_material_import_to_candidates(
             "number": str(problem.get("number") or ""),
             "type": str(problem.get("type") or ""),
             "stem": str(problem.get("stem") or "")[:6000],
+            "max_score": float(problem.get("max_score") or 10),
         }
         for q_id, problem in list(problems_data.items())[:200]
         if isinstance(problem, dict)
@@ -786,7 +790,8 @@ Return exactly one JSON object:
 
 Rules:
 - criterion: a concrete, usable scoring rubric whose numbered scoring steps align with the
-  corresponding numbered reference-answer steps and whose points add up to the full score.
+  corresponding numbered reference-answer steps. Express weights only as percentages adding up
+  to 100%; never use absolute points or restate the question's maximum score.
 - reference_answer: a correct model answer or derivation suitable for teacher review. If an
   existing teacher answer contains only a final answer, preserve that conclusion and expand it
   into explicit, checkable solution steps rather than replacing it with an unrelated approach.
@@ -858,6 +863,7 @@ async def generate_missing_question_materials(
             "number": str(problem.get("number") or "")[:120],
             "type": str(problem.get("type") or "")[:120],
             "stem": str(problem.get("stem") or "")[:stem_budget],
+            "max_score": float(problem.get("max_score") or 10),
             "existing_criterion": str(problem.get("criterion") or "")[:existing_budget],
             "existing_reference_answer": str(
                 problem.get("reference_answer") or ""

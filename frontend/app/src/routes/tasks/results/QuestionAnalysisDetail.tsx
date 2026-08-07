@@ -3,6 +3,7 @@ import { useEffect, useMemo, type ReactNode } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import {
   effectiveCorrectionScore,
+  formatCorrectionScoreSource,
   formatConfidence,
   formatPercent,
   formatScore,
@@ -184,7 +185,7 @@ export function QuestionAnalysisDetail({
         <DetailMetric label={tx(locale, "中位数", "Median")} value={formatScore(metrics.median)} tone="primary" />
         <DetailMetric label={tx(locale, "最低 / 最高", "Min / max")} value={`${formatScore(question.minScore)} / ${formatScore(question.maxObservedScore)}`} tone="warning" />
         <DetailMetric label={tx(locale, "平均置信度", "Mean confidence")} value={formatConfidence(metrics.avgConfidence)} tone="accent" />
-        <DetailMetric label={tx(locale, "必审 / 分歧题次", "Review / disagreement")} value={`${metrics.requiredReviewCount} / ${metrics.disagreementCount}`} tone="danger" />
+        <DetailMetric label={tx(locale, "复核信号 / 分歧题次", "Review signals / disagreement")} value={`${metrics.requiredReviewCount} / ${metrics.disagreementCount}`} tone="danger" />
       </div>
 
       <div className="mt-4 grid gap-4 xl:grid-cols-2">
@@ -313,7 +314,9 @@ function SignalList({ signals, empty }: { locale: Locale; signals: CountedSignal
 
 function StudentPreview({ locale, taskId, question, entry }: { locale: Locale; taskId: string; question: QuestionSummary; entry: QuestionEntry }) {
   const score = effectiveCorrectionScore(entry.correction);
-  const percent = entry.correction.max_score > 0 ? (score / entry.correction.max_score) * 100 : null;
+  const percent = score !== null && entry.correction.max_score > 0
+    ? (score / entry.correction.max_score) * 100
+    : null;
   const href = `/tasks/${encodeURIComponent(taskId)}/results/students/${encodeURIComponent(entry.student.id)}?question=${encodeURIComponent(question.id)}#question-${encodeURIComponent(question.id)}`;
   return (
     <div className="grid gap-2 px-4 py-3 sm:grid-cols-[minmax(0,1.4fr)_100px_100px_120px_auto] sm:items-center">
@@ -323,7 +326,7 @@ function StudentPreview({ locale, taskId, question, entry }: { locale: Locale; t
       </div>
       <span className="text-[11px] font-semibold text-primary">{formatScore(score)} / {formatScore(entry.correction.max_score)} · {formatPercent(percent)}</span>
       <span className="text-[11px] text-muted-foreground">{formatConfidence(entry.correction.confidence)}</span>
-      <span className={cn("w-fit rounded-full px-2.5 py-1 text-[10px] font-semibold", entry.correction.review_status === "confirmed" ? "bg-emerald-100 text-emerald-700" : "bg-slate-100 text-slate-600")}>{entry.correction.review_status === "confirmed" ? tx(locale, "已确认", "Confirmed") : tx(locale, "无必审确认", "No required confirmation")}</span>
+      <span className="w-fit rounded-full bg-slate-100 px-2.5 py-1 text-[10px] font-semibold text-slate-600">{formatCorrectionScoreSource(entry.correction, locale)}</span>
       <Link to={href} className="inline-flex h-8 w-fit items-center gap-1.5 rounded-[7px] border bg-card px-3 text-[10px] font-semibold text-foreground hover:bg-muted">
         <UserRound aria-hidden="true" className="h-3.5 w-3.5" />{tx(locale, "学生详情", "Student detail")}<ArrowRight aria-hidden="true" className="h-3 w-3" />
       </Link>
@@ -365,7 +368,10 @@ function PanelEmpty({ text }: { text: string }) {
 }
 
 function buildQuestionMetrics(question: QuestionSummary) {
-  const scores = question.entries.map((entry) => effectiveCorrectionScore(entry.correction)).filter((value) => Number.isFinite(value)).sort((a, b) => a - b);
+  const scores = question.entries
+    .map((entry) => effectiveCorrectionScore(entry.correction))
+    .filter((value): value is number => value !== null)
+    .sort((a, b) => a - b);
   const confidences = question.entries.map((entry) => normalizeConfidence(entry.correction.confidence)).filter((value): value is number => value !== null);
   const requiredReviewCount = question.entries.filter((entry) => correctionNeedsFormalReview(entry.correction)).length;
   const disagreementCount = question.entries.filter((entry) => correctionHasDisagreement(entry.correction)).length;
@@ -475,7 +481,10 @@ function buildStudentContextHref(taskId: string, studentId: string, questionId: 
 
 function entryPercent(entry: QuestionEntry): number {
   const max = Number(entry.correction.max_score);
-  return max > 0 ? (effectiveCorrectionScore(entry.correction) / max) * 100 : Number.POSITIVE_INFINITY;
+  const score = effectiveCorrectionScore(entry.correction);
+  return score !== null && max > 0
+    ? (score / max) * 100
+    : Number.POSITIVE_INFINITY;
 }
 
 function normalizeConfidence(value: number | null | undefined): number | null {

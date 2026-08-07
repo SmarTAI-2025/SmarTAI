@@ -48,11 +48,16 @@ from backend.domain.errors import (
 )
 from backend.llm.registry import ExpertRegistry, get_scoped_expert_registry
 from backend.knowledge.service import ingest_document
-from backend.models import ProblemSourceDraft, User, is_programming_question_type
+from backend.models import (
+    ProblemSourceDraft,
+    QuestionScorePolicy,
+    User,
+    is_programming_question_type,
+)
 from backend.progress.tracker import get_or_create_reporter, get_reporter, remove_reporter
 from backend.services import task_facade
-from backend.skills.ocr_ingest import LLMVisionOCRSkill
-from backend.tools.file_processing import extract_text_from_upload
+from backend.skills.ocr_ingest import LLMVisionOCRSkill, OCRPurpose
+from backend.tools.file_processing import IMAGE_MEDIA_TYPES, extract_text_from_upload
 
 
 router = APIRouter(prefix="/tasks", tags=["task-preparation"])
@@ -62,12 +67,149 @@ MAX_SOURCE_BYTES = 5 * 1024 * 1024
 MAX_SOURCE_CHARACTERS = 400_000
 SOURCE_TTL_SECONDS = 2 * 60 * 60
 
+_DOCUMENT_SOURCE_EXTENSIONS = (".pdf", ".txt", ".md", ".markdown")
+_IMAGE_SOURCE_EXTENSIONS = tuple(IMAGE_MEDIA_TYPES)
+_VISION_SOURCE_ROLES = frozenset({"problem", "reference_answer", "rubric"})
+_SOURCE_ROLE_EXTENSIONS = {
+    "problem": _DOCUMENT_SOURCE_EXTENSIONS,
+    "reference_answer": _DOCUMENT_SOURCE_EXTENSIONS,
+    "rubric": _DOCUMENT_SOURCE_EXTENSIONS,
+    "programming_tests": (*_DOCUMENT_SOURCE_EXTENSIONS, ".json"),
+}
+_SOURCE_ROLE_OCR_PURPOSE: dict[str, OCRPurpose] = {
+    "problem": "problems",
+    "reference_answer": "reference",
+    "rubric": "problems",
+    "programming_tests": "test_cases",
+}
+_SOURCE_MIME_TYPES = {
+    ".pdf": frozenset({"application/pdf", "application/x-pdf"}),
+    ".txt": frozenset({"text/plain"}),
+    ".md": frozenset({"text/markdown", "text/plain"}),
+    ".markdown": frozenset({"text/markdown", "text/plain"}),
+    ".json": frozenset({"application/json", "text/json", "text/plain"}),
+    ".jpg": frozenset({"image/jpeg"}),
+    ".jpeg": frozenset({"image/jpeg"}),
+    ".png": frozenset({"image/png"}),
+    ".webp": frozenset({"image/webp"}),
+}
+
+
+def _accepted_source_extensions(role: str, *, has_vision: bool) -> list[str]:
+    base = _SOURCE_ROLE_EXTENSIONS.get(role)
+    if base is None:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={"code": "invalid_source_role", "role": role},
+        )
+    accepted = list(base)
+    if has_vision and role in _VISION_SOURCE_ROLES:
+        accepted.extend(_IMAGE_SOURCE_EXTENSIONS)
+    return accepted
+
+
+def _material_import_source_role(targets: list[str]) -> str:
+    """Choose the strictest upload policy for a combined material import."""
+
+    if "test_cases" in targets:
+        return "programming_tests"
+    if targets == ["reference_answer"]:
+        return "reference_answer"
+    if targets == ["criterion"]:
+        return "rubric"
+    return "problem"
+
+
+def _source_role_ocr_purpose(role: str) -> OCRPurpose:
+    """Keep OCR instructions aligned with the uploaded material's role."""
+
+    try:
+        return _SOURCE_ROLE_OCR_PURPOSE[role]
+    except KeyError as exc:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={"code": "invalid_source_role", "role": role},
+        ) from exc
+
+
+def _validate_source_upload(
+    file: UploadFile,
+    *,
+    role: str,
+    has_vision: bool,
+) -> str:
+    """Validate role, extension, and declared MIME before reading upload bytes."""
+
+    filename = Path(file.filename or "source").name
+    extension = Path(filename.lower()).suffix
+    accepted = _accepted_source_extensions(role, has_vision=has_vision)
+    if (
+        extension in _IMAGE_SOURCE_EXTENSIONS
+        and role in _VISION_SOURCE_ROLES
+        and not has_vision
+    ):
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={
+                "code": "vision_provider_required",
+                "role": role,
+                "filename": filename,
+                "recovery": "configure_vision_provider",
+            },
+        )
+    if extension not in accepted:
+        raise HTTPException(
+            status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
+            detail={
+                "code": "source_type_not_allowed",
+                "role": role,
+                "filename": filename,
+                "accepted_extensions": accepted,
+            },
+        )
+
+    declared_mime = (file.content_type or "").split(";", 1)[0].strip().lower()
+    allowed_mimes = _SOURCE_MIME_TYPES[extension]
+    if (
+        declared_mime
+        and declared_mime != "application/octet-stream"
+        and declared_mime not in allowed_mimes
+    ):
+        raise HTTPException(
+            status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
+            detail={
+                "code": "source_mime_type_not_allowed",
+                "role": role,
+                "filename": filename,
+                "content_type": declared_mime,
+            },
+        )
+    return extension
+
+
+def _stable_vision_error(exc: HTTPException, *, role: str, filename: str) -> None:
+    detail = exc.detail
+    if exc.status_code == status.HTTP_503_SERVICE_UNAVAILABLE and (
+        isinstance(detail, str) and "requires OCR" in detail
+    ):
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={
+                "code": "vision_provider_required",
+                "role": role,
+                "filename": filename,
+                "recovery": "configure_vision_provider",
+            },
+        ) from exc
+    raise exc
+
 
 class StartQuestionPreparationRequest(BaseModel):
     source_tokens: list[str] = Field(min_length=1, max_length=20)
     expected_workflow_revision: int = Field(ge=0)
     replace_confirmed: bool = False
     generation_policy: Literal["complete_required_materials"] = "complete_required_materials"
+    score_policy: QuestionScorePolicy = Field(default_factory=QuestionScorePolicy)
 
 
 class StartMaterialImportRequest(BaseModel):
@@ -97,17 +239,38 @@ def question_preparation_capabilities(
     except DomainError as exc:
         return domain_error_response(exc)
     has_vision = registry.pick_vision() is not None
-    common = {"accepted_extensions": [".pdf", ".txt", ".md"], "course_library": True, "inline_text": True}
+    common = {
+        "course_library": True,
+        "inline_text": True,
+    }
     return {
-        "contract_version": 1,
+        "contract_version": 2,
         "operation": "question_preparation",
         "stage_sequence": list(QUESTION_PREPARATION_STAGE_SEQUENCE),
         "source_roles": {
-            "problem": dict(common),
-            "reference_answer": dict(common),
-            "rubric": dict(common),
+            "problem": {
+                **common,
+                "accepted_extensions": _accepted_source_extensions(
+                    "problem", has_vision=has_vision
+                ),
+            },
+            "reference_answer": {
+                **common,
+                "accepted_extensions": _accepted_source_extensions(
+                    "reference_answer", has_vision=has_vision
+                ),
+            },
+            "rubric": {
+                **common,
+                "accepted_extensions": _accepted_source_extensions(
+                    "rubric", has_vision=has_vision
+                ),
+            },
             "programming_tests": {
-                **common, "accepted_extensions": [".pdf", ".txt", ".md", ".json"]
+                **common,
+                "accepted_extensions": _accepted_source_extensions(
+                    "programming_tests", has_vision=has_vision
+                ),
             },
         },
         "reader": {
@@ -125,6 +288,14 @@ def question_preparation_capabilities(
             "max_file_bytes": MAX_SOURCE_BYTES,
             "max_text_characters": MAX_SOURCE_CHARACTERS,
             "max_inline_rubric_characters": 12_000,
+        },
+        "score_policy": {
+            "supported_modes": ["default_10", "uniform", "per_question"],
+            "default_mode": "default_10",
+            "default_max_score": 10,
+            "maximum_max_score": 10_000,
+            "per_question_text_max_characters": 12_000,
+            "rubric_weight_format": "percentage",
         },
     }
 
@@ -182,7 +353,7 @@ async def preflight_problem_source(
         text, descriptor = await _read_source(
             file=file, library_material_id=library_material_id,
             inline_text=inline_text, owner_id=current.id, registry=registry,
-            purpose="problems",
+            role=role,
         )
         saved_material = await _save_source_to_library(
             save=save_to_library,
@@ -243,24 +414,35 @@ async def preflight_problem_source(
 async def _read_source(
     *, file: UploadFile | None, library_material_id: str | None,
     inline_text: str | None, owner_id: str, registry: ExpertRegistry,
-    purpose: str,
+    role: str,
 ) -> tuple[str, dict]:
+    _accepted_source_extensions(
+        role, has_vision=registry.pick_vision() is not None
+    )
     selected = int(file is not None) + int(bool(library_material_id)) + int(bool((inline_text or "").strip()))
     if selected != 1:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, detail={"code": "exactly_one_source_required"})
     if file is not None:
+        provider = registry.pick_default()
+        vision = registry.pick_vision(provider)
+        _validate_source_upload(file, role=role, has_vision=vision is not None)
         body = await file.read(MAX_SOURCE_BYTES + 1)
         if not body:
             raise HTTPException(status.HTTP_400_BAD_REQUEST, detail={"code": "source_empty"})
         if len(body) > MAX_SOURCE_BYTES:
             raise HTTPException(status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, detail={"code": "source_too_large"})
-        provider = registry.pick_default()
-        vision = registry.pick_vision(provider)
         ocr_skill = LLMVisionOCRSkill(vision) if vision is not None else None
-        text = await extract_text_from_upload(
-            body, file.filename or "source", ocr_skill=ocr_skill,
-            purpose=purpose, reporter=None,
-        )
+        try:
+            text = await extract_text_from_upload(
+                body, file.filename or "source", ocr_skill=ocr_skill,
+                purpose=_source_role_ocr_purpose(role), reporter=None,
+            )
+        except HTTPException as exc:
+            _stable_vision_error(
+                exc,
+                role=role,
+                filename=Path(file.filename or "source").name,
+            )
         descriptor = {
             "kind": "upload", "filename": file.filename or "source",
             "size_bytes": len(body), "content_type": file.content_type,
@@ -417,6 +599,7 @@ async def start_question_preparation(
             "base_revision": request.expected_workflow_revision,
             "replace_confirmed": request.replace_confirmed,
             "generation_policy": request.generation_policy,
+            "score_policy": request.score_policy.model_dump(mode="json"),
         }, sort_keys=True).encode()).hexdigest()
         replay = task_facade.find_task_operation(
             task_id=task_id, owner_id=current.id,
@@ -457,6 +640,7 @@ async def start_question_preparation(
                 "source_tokens": request.source_tokens,
                 "base_workflow_revision": claim_base_revision,
                 "replace_confirmed": request.replace_confirmed,
+                "score_policy": request.score_policy.model_dump(mode="json"),
             },
             expires_at=time.time() + SOURCE_TTL_SECONDS,
         )
@@ -492,6 +676,7 @@ async def start_question_preparation(
             provider=provider,
             claimed_workflow_revision=claimed_revision,
             replace_confirmed=request.replace_confirmed,
+            score_policy=request.score_policy,
         )
         return {
             "status": "started", "task_id": task_id, "job_id": job.id,
@@ -507,12 +692,14 @@ async def _run_question_preparation(
     *, task_id: str, owner_id: str, job_id: str, job_attempt: int,
     sources: list[tuple[ProblemSourceDraft, str]],
     provider, claimed_workflow_revision: int, replace_confirmed: bool,
+    score_policy: QuestionScorePolicy,
 ) -> None:
     try:
         reporter = get_or_create_reporter(job_id)
         packages = await prepare_question_packages(
             sources, provider, provider_id=provider.provider_id,
             reporter=reporter,
+            score_policy=score_policy,
         )
         await reporter.set_stage_progress(
             "committing_question_packages", total_steps=8, completed_steps=8,
@@ -567,7 +754,7 @@ async def preflight_material_import(
         text, descriptor = await _read_source(
             file=file, library_material_id=library_material_id,
             inline_text=None, owner_id=current.id, registry=registry,
-            purpose="problems",
+            role=_material_import_source_role(requested_targets),
         )
         target_role = (
             "rubric" if requested_targets == ["criterion"]
@@ -1259,11 +1446,17 @@ async def _apply_auxiliary_upload(
         provider = registry.pick_default()
         if provider is None:
             raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, detail={"code": "provider_required"})
-        body = await file.read()
-        vision = registry.pick_vision(provider)
-        text = await extract_text_from_upload(
-            body, file.filename or "material", ocr_skill=LLMVisionOCRSkill(vision) if vision else None,
-            purpose="problems",
+        text, _ = await _read_source(
+            file=file,
+            library_material_id=None,
+            inline_text=None,
+            owner_id=current.id,
+            registry=registry,
+            role=(
+                "reference_answer"
+                if target == "reference_answer"
+                else "programming_tests"
+            ),
         )
         if target == "reference_answer":
             mapping = await parse_reference_to_per_question(

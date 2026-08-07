@@ -216,12 +216,15 @@ export interface RecoverableErrorContext {
 const BYOK_CODES = new Set([
   "recognition_provider_not_enabled",
   "provider_not_enabled",
+  "vision_provider_required",
   "shared_pool_kb_requires_byok",
   "no_enabled_expert",
   "expert_verification_auth_failed",
 ]);
 
 const FILE_CODES = new Set([
+  "source_type_not_allowed",
+  "source_mime_type_not_allowed",
   "problem_source_unsupported",
   "problem_source_decode_failed",
   "problem_source_character_limit_exceeded",
@@ -253,12 +256,27 @@ export function classifyRecoverableError(
 ): RecoverableErrorInfo {
   const apiError = normalizeAPIError(error);
   const locale = context.locale ?? "zh-CN";
-  const code = getAPIErrorCode(apiError);
+  const code = getAPIErrorCode(apiError) ?? stableBackgroundErrorCode(error);
   const detail = getAPIErrorDetail(apiError);
   const message = apiError.message || "请求失败，请稍后重试。";
   const normalized = `${code ?? ""} ${message}`.toLowerCase();
   const technicalDetails = buildTechnicalDetails(apiError.status, code, detail, context, locale);
   const retryAfterSeconds = apiError.retryAfterSeconds;
+
+  if (code === "grading_failed") {
+    return {
+      title: tx(locale, "本次批改没有完成", "This grading run did not finish"),
+      description: tx(
+        locale,
+        "后端未能完成批改或保存结果。任务资料仍然保留；请记录任务编号，处理后再重试。",
+        "The backend could not complete grading or save its results. Task data is preserved; keep the job ID and retry after the issue is resolved.",
+      ),
+      actionLabel: tx(locale, "重新尝试", "Try again"),
+      actionKind: "retry",
+      tone: "danger",
+      technicalDetails,
+    };
+  }
 
   if (
     (code && BYOK_CODES.has(code))
@@ -418,6 +436,12 @@ function buildTechnicalDetails(
 
 function safeTechnicalValue(value: unknown): string | number | undefined {
   return typeof value === "string" || typeof value === "number" ? value : undefined;
+}
+
+function stableBackgroundErrorCode(error: unknown): string | null {
+  if (typeof error !== "string") return null;
+  const value = error.trim();
+  return /^[a-z][a-z0-9_]{1,127}$/.test(value) ? value : null;
 }
 
 function fileErrorDescription(code: string | null, message: string, locale: Locale): string {

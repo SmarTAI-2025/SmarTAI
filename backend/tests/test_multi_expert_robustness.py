@@ -9,7 +9,7 @@
   max_concurrent in the dict shape the frontend consumes.
 
 Run:
-    /opt/anaconda3/envs/smartai/bin/python -m pytest backend/tests/test_multi_expert_robustness.py -v
+    python -m pytest backend/tests/test_multi_expert_robustness.py -v
 """
 from __future__ import annotations
 
