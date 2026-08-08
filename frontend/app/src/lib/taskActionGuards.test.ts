@@ -61,9 +61,38 @@ describe("question source recovery guidance", () => {
     expect(info.actionKind).toBe("reupload");
     expect(info.actionLabel).toBe("重新选择文件");
   });
+
+  it("explains the exact file-size limit instead of reporting a format problem", () => {
+    const info = classifyRecoverableError(
+      new APIError(413, "source_too_large", {
+        detail: { code: "source_too_large", max_bytes: 5 * 1024 * 1024 },
+      }),
+      { locale: "zh-CN" },
+    );
+
+    expect(info.actionKind).toBe("reupload");
+    expect(info.description).toContain("5 MB");
+    expect(info.description).not.toContain("格式");
+    expect(info.technicalDetails).toContainEqual({ label: "文件上限", value: "5 MB" });
+  });
 });
 
 describe("background task failure guidance", () => {
+  it("explains a provider timeout as a network failure", () => {
+    const info = classifyRecoverableError("provider_timeout", {
+      locale: "zh-CN",
+      phase: "question_preparation",
+      jobId: "op-timeout",
+    });
+
+    expect(info.title).toBe("网络或后端暂时不可用");
+    expect(info.description).toContain("请检查网络后重试");
+    expect(info.actionKind).toBe("retry");
+    expect(info.tone).toBe("warning");
+    expect(info.technicalDetails).toContainEqual({ label: "错误代码", value: "provider_timeout" });
+    expect(info.technicalDetails).toContainEqual({ label: "任务编号", value: "op-timeout" });
+  });
+
   it("keeps a stable grading failure code and job id visible", () => {
     const info = classifyRecoverableError("grading_failed", {
       locale: "zh-CN",

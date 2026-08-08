@@ -31,7 +31,7 @@ describe("model presentation", () => {
   });
 
   it("uses stable provider labels", () => {
-    expect(providerDisplayName("openai")).toBe("OpenAI");
-    expect(providerDisplayName("zhipu")).toBe("Zhipu AI");
+    expect(providerDisplayName("openai")).toBe("GPT (OpenAI)");
+    expect(providerDisplayName("zhipu")).toBe("Zhipu (智谱)");
   });
 });

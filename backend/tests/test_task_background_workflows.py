@@ -16,6 +16,7 @@ from backend.db.models import AssignmentRecord, CourseRecord, UserRecord
 from backend.db.session import session_scope
 from backend.domain.errors import InvalidTransition, ValidationError, VersionConflict
 from backend.services import task_facade
+from backend.tools.structured_llm import TransientLLMError
 
 
 def _seed_task(*, with_question: bool = False) -> tuple[str, str]:
@@ -386,6 +387,61 @@ async def test_extract_endpoint_queues_background_work_and_returns_started():
     workflow = workflow_repository.get_workflow(task_id, owner_id=owner_id)
     assert workflow.active_job_id is None
     assert workflow.error_code == "problem_extraction_failed"
+
+
+@pytest.mark.asyncio
+async def test_question_preparation_timeout_persists_provider_timeout(monkeypatch):
+    owner_id, task_id = _seed_task()
+    job, _ = workflow_repository.create_operation(
+        assignment_id=task_id,
+        owner_id=owner_id,
+        operation_type="question_preparation",
+        input_hash=uuid.uuid4().hex,
+        expires_at=time.time() + 60,
+    )
+    claimed_revision = task_facade.claim_workflow_operation_atomic(
+        task_id=task_id,
+        owner_id=owner_id,
+        operation_id=job.id,
+        expected_operation_attempt=job.attempt,
+        expected_workflow_revision=0,
+        workflow_changes={
+            "presentation_status": "extracting_problems",
+            "active_operation": "question_preparation",
+            "active_job_id": job.id,
+            "extract_job_id": job.id,
+        },
+    )
+
+    async def _timeout(*args, **kwargs):
+        del args, kwargs
+        try:
+            raise TimeoutError("provider request timed out")
+        except TimeoutError as exc:
+            raise TransientLLMError("provider request failed") from exc
+
+    monkeypatch.setattr(task_preparation, "prepare_question_packages", _timeout)
+
+    await task_preparation._run_question_preparation(
+        task_id=task_id,
+        owner_id=owner_id,
+        job_id=job.id,
+        job_attempt=job.attempt,
+        sources=[],
+        provider=SimpleNamespace(provider_id="gemini:test"),
+        claimed_workflow_revision=claimed_revision,
+        replace_confirmed=False,
+        score_policy=SimpleNamespace(),
+    )
+
+    failed = workflow_repository.get_operation(job.id, owner_id=owner_id)
+    workflow = workflow_repository.get_workflow(task_id, owner_id=owner_id)
+    assert failed.status == "error"
+    assert failed.error_code == "provider_timeout"
+    assert workflow.presentation_status == "error"
+    assert workflow.active_job_id is None
+    assert workflow.error_code == "provider_timeout"
+    task_preparation.remove_reporter(job.id)
 
 
 def test_disabled_selected_recognition_provider_has_figma_error_code():
