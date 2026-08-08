@@ -66,6 +66,7 @@ _SAFE_ERROR_CODES = {
     "no_provider_configured",
     "recognition_provider_not_enabled",
     "problem_extraction_failed",
+    "provider_timeout",
     "material_import_failed",
     "ai_completion_failed",
     "replacement_confirmation_required",

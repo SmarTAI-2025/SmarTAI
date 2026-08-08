@@ -78,6 +78,21 @@ describe("question source recovery guidance", () => {
 });
 
 describe("background task failure guidance", () => {
+  it("explains a provider timeout as a network failure", () => {
+    const info = classifyRecoverableError("provider_timeout", {
+      locale: "zh-CN",
+      phase: "question_preparation",
+      jobId: "op-timeout",
+    });
+
+    expect(info.title).toBe("网络或后端暂时不可用");
+    expect(info.description).toContain("请检查网络后重试");
+    expect(info.actionKind).toBe("retry");
+    expect(info.tone).toBe("warning");
+    expect(info.technicalDetails).toContainEqual({ label: "错误代码", value: "provider_timeout" });
+    expect(info.technicalDetails).toContainEqual({ label: "任务编号", value: "op-timeout" });
+  });
+
   it("keeps a stable grading failure code and job id visible", () => {
     const info = classifyRecoverableError("grading_failed", {
       locale: "zh-CN",
