@@ -18,8 +18,16 @@ vi.mock("@/api/hooks/tasks", () => ({
           type: "概念题",
           stem: "三角函数基础",
           max_score: 10,
+          max_score_source: "default_10",
+          max_score_review_status: "needs_review",
           criterion: "说明基本概念",
-          preparation_issues: [],
+          preparation_issues: [{
+            issue_id: "score-risk-1",
+            field: "max_score",
+            code: "default_max_score_requires_review",
+            severity: "warning",
+            status: "open",
+          }],
         },
       },
     },
@@ -59,6 +67,15 @@ function renderPage(initialEntry: string) {
 }
 
 describe("QuestionPreparationOverviewPage smart search", () => {
+  it("shows each maximum score and the total while flagging defaults", () => {
+    renderPage("/tasks/task-1/questions");
+
+    expect(screen.getByRole("columnheader", { name: "满分" })).toBeInTheDocument();
+    expect(screen.getByTitle("系统默认，需确认")).toHaveTextContent("10 分");
+    expect(screen.getByText(/作业总分 10/)).toBeInTheDocument();
+    expect(screen.getByTitle("当前使用默认 10 分，请确认题目满分")).toBeInTheDocument();
+  });
+
   it("does not apply a native composing input event before composition ends", async () => {
     const input = renderPage("/tasks/task-1/questions?status=open");
 

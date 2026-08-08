@@ -9,7 +9,7 @@ Coverage:
   - LLM returns 20 cases             → only 8 actually run
 
 Run with:
-    /opt/anaconda3/envs/smartai/bin/python -m pytest backend/tests/test_programming_skill.py -v
+    python -m pytest backend/tests/test_programming_skill.py -v
 """
 from __future__ import annotations
 
@@ -43,6 +43,7 @@ def _make_problem(
     type_: str = "编程题",
     stem: str = "Read two ints, print their sum.",
     test_cases: list | None = None,
+    max_score: float = 10.0,
 ) -> ProblemInfo:
     return ProblemInfo(
         q_id="q1",
@@ -51,6 +52,7 @@ def _make_problem(
         stem=stem,
         criterion="Correctness; readability.",
         test_cases=test_cases,
+        max_score=max_score,
     )
 
 
@@ -357,10 +359,11 @@ async def test_prog_caps_at_max_llm_generated_cases(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_prog_no_code():
-    problem = _make_problem(test_cases=None)
+    problem = _make_problem(test_cases=None, max_score=5.0)
     answer = _make_answer("")
 
     skill = ProgrammingSkill(provider=_fake_provider())
     result = await skill.grade(problem, answer, student_id="s1")
     assert result.score == 0.0
+    assert result.max_score == 5.0
     assert "未提交" in result.comment or "No code" in result.comment

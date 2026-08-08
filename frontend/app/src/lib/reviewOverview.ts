@@ -1,5 +1,10 @@
 import type { Correction } from "@/types";
-import type { QuestionSummary, ResultsModel, StudentSummary } from "@/components/tasks/resultsModel";
+import {
+  displayableCorrectionScore,
+  type QuestionSummary,
+  type ResultsModel,
+  type StudentSummary,
+} from "@/components/tasks/resultsModel";
 import { getExpertScoreSpread, type ReviewItem } from "@/components/tasks/resultsReviewModel";
 
 export const reviewCellKey = (studentId: string, questionId: string) => `${studentId}::${questionId}`;
@@ -93,7 +98,10 @@ export function selectReviewOverview(
 }
 
 function correctionPercent(correction: Correction): number {
-  return correction.max_score > 0 ? (correction.score / correction.max_score) * 100 : 0;
+  const score = displayableCorrectionScore(correction);
+  return score !== null && correction.max_score > 0
+    ? (score / correction.max_score) * 100
+    : Number.POSITIVE_INFINITY;
 }
 
 function cellDescriptor(student: StudentSummary, question: QuestionSummary | undefined, correction: Correction): string {

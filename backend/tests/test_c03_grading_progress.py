@@ -33,3 +33,37 @@ def test_progress_reporter_counts_completed_units_and_active_work():
     assert len(active.active) == 1
     assert finished.completed_units == 1
     assert finished.active == []
+
+
+def test_failed_grading_state_overrides_stale_done_reporter(monkeypatch):
+    from backend.services import task_facade
+
+    monkeypatch.setattr(
+        task_facade,
+        "task_state",
+        lambda **_kwargs: {
+            "status": "error",
+            "grading_job_id": "run-failed",
+            "active_job_id": "run-failed",
+            "active_operation": "grading",
+            "progress": {"phase": "done", "error_detail": None},
+            "error": None,
+        },
+    )
+    monkeypatch.setattr(task_facade, "get_reporter", lambda _job_id: None)
+    monkeypatch.setattr(
+        task_facade,
+        "_grading_progress",
+        lambda _run_id, _owner_id: {
+            "phase": "error",
+            "error_detail": "grading_failed",
+        },
+    )
+
+    snapshot = asyncio.run(
+        task_facade.async_task_state(task_id="task-1", owner_id="teacher-1")
+    )
+
+    assert snapshot["progress"]["phase"] == "error"
+    assert snapshot["progress"]["error_detail"] == "grading_failed"
+    assert snapshot["error"] == "grading_failed"

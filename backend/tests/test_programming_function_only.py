@@ -11,7 +11,7 @@
   list is empty.
 
 Run:
-    /opt/anaconda3/envs/smartai/bin/python -m pytest backend/tests/test_programming_function_only.py -v
+    python -m pytest backend/tests/test_programming_function_only.py -v
 """
 from __future__ import annotations
 

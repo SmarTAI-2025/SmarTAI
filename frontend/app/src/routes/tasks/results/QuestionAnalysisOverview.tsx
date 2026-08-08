@@ -3,6 +3,7 @@ import { useMemo, type ReactNode } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import {
   clampPercent,
+  correctionScoreSource,
   formatConfidence,
   formatPercent,
   formatScore,
@@ -31,6 +32,7 @@ interface QuestionAnalysisRow {
   lowConfidenceCount: number;
   requiredReviewCount: number;
   confirmedReviewCount: number;
+  hardFailureCount: number;
   reviewState: ReviewState;
   riskSummary: string;
 }
@@ -125,7 +127,7 @@ export function QuestionAnalysisOverview({
           <SummaryMetric label={tx(locale, "题目数", "Questions")} value={String(rows.length)} tone="primary" />
           <SummaryMetric label={tx(locale, "题目平均得分率", "Mean question score")} value={formatPercent(averageQuestionPercent)} tone="accent" />
           <SummaryMetric label={tx(locale, "低于 60%", "Below 60%")} value={String(weakQuestionCount)} tone="warning" />
-          <SummaryMetric label={tx(locale, "含必审信号", "With review signals")} value={String(reviewSignalCount)} tone="danger" />
+          <SummaryMetric label={tx(locale, "含复核信号", "With review signals")} value={String(reviewSignalCount)} tone="danger" />
         </div>
 
         <div className="mt-4">
@@ -187,9 +189,9 @@ export function QuestionAnalysisOverview({
           </FilterSelect>
           <FilterSelect value={reviewFilter} onChange={(value) => updateParam("review", value)} label={tx(locale, "复核状态", "Review status")}>
             <option value="all">{tx(locale, "全部复核状态", "All review states")}</option>
-            <option value="pending">{tx(locale, "仍需确认", "Pending confirmation")}</option>
-            <option value="confirmed">{tx(locale, "必审项已确认", "Required reviews confirmed")}</option>
-            <option value="none">{tx(locale, "无必审项", "No required reviews")}</option>
+            <option value="pending">{tx(locale, "有未人工处理信号", "Has unreviewed signals")}</option>
+            <option value="confirmed">{tx(locale, "信号已由教师处理", "Signals handled by teacher")}</option>
+            <option value="none">{tx(locale, "无复核信号", "No review signals")}</option>
           </FilterSelect>
           <FilterSelect value={sortMode} onChange={(value) => updateParam("sort", value, "question")} label={tx(locale, "排序", "Sort")}>
             <option value="question">{tx(locale, "按题号", "Question order")}</option>
@@ -335,11 +337,14 @@ function FilterSelect({ label, value, onChange, children }: { label: string; val
 }
 
 function ReviewBadge({ locale, row }: { locale: Locale; row: QuestionAnalysisRow }) {
+  const untouchedAiCount = Math.max(0, row.requiredReviewCount - row.confirmedReviewCount - row.hardFailureCount);
   const label = row.reviewState === "none"
-    ? tx(locale, "无必审项", "No required review")
-    : row.reviewState === "confirmed"
-      ? tx(locale, `${row.confirmedReviewCount}/${row.requiredReviewCount} 已确认`, `${row.confirmedReviewCount}/${row.requiredReviewCount} confirmed`)
-      : tx(locale, `${row.requiredReviewCount - row.confirmedReviewCount} 项待确认`, `${row.requiredReviewCount - row.confirmedReviewCount} pending`);
+    ? tx(locale, "无复核信号", "No review signal")
+    : row.hardFailureCount
+      ? tx(locale, `${row.hardFailureCount} 项无有效分数${untouchedAiCount ? ` · ${untouchedAiCount} 项 AI 分未人工处理` : ""}`, `${row.hardFailureCount} unscored${untouchedAiCount ? ` · ${untouchedAiCount} AI scores not reviewed` : ""}`)
+      : row.reviewState === "confirmed"
+        ? tx(locale, `${row.confirmedReviewCount}/${row.requiredReviewCount} 教师已处理`, `${row.confirmedReviewCount}/${row.requiredReviewCount} teacher handled`)
+        : tx(locale, `${untouchedAiCount} 项 AI 分未人工处理`, `${untouchedAiCount} AI scores not reviewed`);
   return (
     <span className={cn(
       "inline-flex rounded-full px-2.5 py-1 text-[10px] font-semibold",
@@ -364,7 +369,11 @@ function buildQuestionRow(question: QuestionSummary, locale: Locale): QuestionAn
     .map((entry) => normalizeConfidence(entry.correction.confidence))
     .filter((value): value is number => value !== null);
   const requiredEntries = question.entries.filter((entry) => correctionNeedsFormalReview(entry.correction));
-  const confirmedReviewCount = requiredEntries.filter((entry) => entry.correction.review_status === "confirmed").length;
+  const confirmedReviewCount = requiredEntries.filter((entry) => {
+    const source = correctionScoreSource(entry.correction);
+    return source === "teacher_confirmed_same" || source === "teacher_changed";
+  }).length;
+  const hardFailureCount = requiredEntries.filter((entry) => correctionScoreSource(entry.correction) === "hard_failure").length;
   const reviewState: ReviewState = !requiredEntries.length
     ? "none"
     : confirmedReviewCount === requiredEntries.length
@@ -385,6 +394,7 @@ function buildQuestionRow(question: QuestionSummary, locale: Locale): QuestionAn
     lowConfidenceCount,
     requiredReviewCount: requiredEntries.length,
     confirmedReviewCount,
+    hardFailureCount,
     reviewState,
     riskSummary: buildRiskSummary(question, lowConfidenceCount, locale),
   };
@@ -504,18 +514,18 @@ function parseSemanticQuestionQuery(rawQuery: string, locale: Locale): SemanticQ
     addCondition(tx(locale, "含低置信题次", "Has low-confidence items"), lowConfidence[0]);
   }
 
-  const reviewMatch = query.match(/(?:仍需|待|需要)复核|待确认/);
-  const confirmedMatch = query.match(/已复核|复核完成|已确认/);
-  const noReviewMatch = query.match(/无必审|无需复核|没有复核项/);
+  const reviewMatch = query.match(/(?:仍需|待|需要)复核|待确认|未人工处理/);
+  const confirmedMatch = query.match(/已复核|复核完成|已确认|教师已处理/);
+  const noReviewMatch = query.match(/无必审|无需复核|没有复核项|无复核信号/);
   if (reviewMatch) {
     plan.reviewState = "pending";
-    addCondition(tx(locale, "复核：仍需确认", "Review: pending"), reviewMatch[0]);
+    addCondition(tx(locale, "复核：有未人工处理信号", "Review: unreviewed signals"), reviewMatch[0]);
   } else if (confirmedMatch) {
     plan.reviewState = "confirmed";
-    addCondition(tx(locale, "复核：必审项已确认", "Review: confirmed"), confirmedMatch[0]);
+    addCondition(tx(locale, "复核：信号已由教师处理", "Review: teacher handled"), confirmedMatch[0]);
   } else if (noReviewMatch) {
     plan.reviewState = "none";
-    addCondition(tx(locale, "复核：无必审项", "Review: none required"), noReviewMatch[0]);
+    addCondition(tx(locale, "复核：无复核信号", "Review: no signal"), noReviewMatch[0]);
   }
 
   const missingKnowledge = query.match(/知识点未标注|未标注知识点|缺知识点/);

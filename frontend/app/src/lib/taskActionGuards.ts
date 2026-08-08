@@ -216,12 +216,16 @@ export interface RecoverableErrorContext {
 const BYOK_CODES = new Set([
   "recognition_provider_not_enabled",
   "provider_not_enabled",
+  "vision_provider_required",
   "shared_pool_kb_requires_byok",
   "no_enabled_expert",
   "expert_verification_auth_failed",
 ]);
 
 const FILE_CODES = new Set([
+  "source_too_large",
+  "source_type_not_allowed",
+  "source_mime_type_not_allowed",
   "problem_source_unsupported",
   "problem_source_decode_failed",
   "problem_source_character_limit_exceeded",
@@ -253,12 +257,27 @@ export function classifyRecoverableError(
 ): RecoverableErrorInfo {
   const apiError = normalizeAPIError(error);
   const locale = context.locale ?? "zh-CN";
-  const code = getAPIErrorCode(apiError);
+  const code = getAPIErrorCode(apiError) ?? stableBackgroundErrorCode(error);
   const detail = getAPIErrorDetail(apiError);
   const message = apiError.message || "请求失败，请稍后重试。";
   const normalized = `${code ?? ""} ${message}`.toLowerCase();
   const technicalDetails = buildTechnicalDetails(apiError.status, code, detail, context, locale);
   const retryAfterSeconds = apiError.retryAfterSeconds;
+
+  if (code === "grading_failed") {
+    return {
+      title: tx(locale, "本次批改没有完成", "This grading run did not finish"),
+      description: tx(
+        locale,
+        "后端未能完成批改或保存结果。任务资料仍然保留；请记录任务编号，处理后再重试。",
+        "The backend could not complete grading or save its results. Task data is preserved; keep the job ID and retry after the issue is resolved.",
+      ),
+      actionLabel: tx(locale, "重新尝试", "Try again"),
+      actionKind: "retry",
+      tone: "danger",
+      technicalDetails,
+    };
+  }
 
   if (
     (code && BYOK_CODES.has(code))
@@ -338,7 +357,7 @@ export function classifyRecoverableError(
   ) {
     return {
       title: tx(locale, "这份文件暂时无法处理", "This file cannot be processed"),
-      description: fileErrorDescription(code, message, locale),
+      description: fileErrorDescription(code, message, detail, locale),
       actionLabel: tx(locale, "重新选择文件", "Choose another file"),
       actionKind: "reupload",
       tone: "danger",
@@ -409,7 +428,7 @@ function buildTechnicalDetails(
     { label: tx(locale, "重试等待", "Retry after"), value: safeTechnicalValue(detail?.retry_after_seconds ?? detail?.retry_after) },
     { label: tx(locale, "页数上限", "Page limit"), value: safeTechnicalValue(detail?.max_pages) },
     { label: tx(locale, "字符上限", "Character limit"), value: safeTechnicalValue(detail?.max_characters) },
-    { label: tx(locale, "文件上限", "File-size limit"), value: safeTechnicalValue(detail?.max_bytes) },
+    { label: tx(locale, "文件上限", "File-size limit"), value: formatByteLimit(detail?.max_bytes) },
   ];
   return rows
     .filter((row) => row.value !== null && row.value !== undefined && row.value !== "")
@@ -420,7 +439,24 @@ function safeTechnicalValue(value: unknown): string | number | undefined {
   return typeof value === "string" || typeof value === "number" ? value : undefined;
 }
 
-function fileErrorDescription(code: string | null, message: string, locale: Locale): string {
+function stableBackgroundErrorCode(error: unknown): string | null {
+  if (typeof error !== "string") return null;
+  const value = error.trim();
+  return /^[a-z][a-z0-9_]{1,127}$/.test(value) ? value : null;
+}
+
+function fileErrorDescription(
+  code: string | null,
+  message: string,
+  detail: Record<string, unknown> | null,
+  locale: Locale,
+): string {
+  if (code === "source_too_large") {
+    const limit = formatByteLimit(detail?.max_bytes);
+    return limit
+      ? tx(locale, `文件超过 ${limit} 的单文件上传上限，请选择更小的文件。`, `The file exceeds the ${limit} per-file upload limit. Choose a smaller file.`)
+      : tx(locale, "文件超过单文件上传上限，请选择更小的文件。", "The file exceeds the per-file upload limit. Choose a smaller file.");
+  }
   if (code === "problem_source_decode_failed") {
     return tx(locale, "没有从文件中读取到可用正文。若是扫描 PDF，请先转换为可复制文字的 PDF、TXT 或 Markdown。", "No usable text could be read. If this is a scanned PDF, convert it to a text-based PDF, TXT, or Markdown file first.");
   }
@@ -434,6 +470,14 @@ function fileErrorDescription(code: string | null, message: string, locale: Loca
     return tx(locale, "名单必须包含可识别的学号和姓名列。请修正表头后重新上传。", "The roster must contain recognizable student-ID and name columns. Fix the headers and upload it again.");
   }
   return friendlyMessage(message, code, tx(locale, "请检查文件格式与内容后重新选择。", "Check the file format and content, then choose it again."));
+}
+
+function formatByteLimit(value: unknown): string | undefined {
+  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) return undefined;
+  if (value < 1024) return `${value} B`;
+  if (value < 1024 * 1024) return `${Math.ceil(value / 1024)} KB`;
+  const megabytes = value / (1024 * 1024);
+  return `${Number.isInteger(megabytes) ? megabytes : megabytes.toFixed(1)} MB`;
 }
 
 function friendlyMessage(message: string, code: string | null, fallback: string): string {

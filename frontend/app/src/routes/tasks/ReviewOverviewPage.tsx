@@ -7,7 +7,7 @@ import { NewTaskStepper } from "@/components/new-task/NewTaskStepper";
 import { MatrixQueueWorkspace } from "@/components/tasks/MatrixQueueWorkspace";
 import { MatrixStatusCell, type MatrixStatusTone } from "@/components/tasks/MatrixStatusCell";
 import { getMatrixIdentityLayout, MATRIX_ACTION_COLUMN_WIDTH, MATRIX_QUESTION_COLUMN_WIDTH } from "@/components/tasks/matrixLayout";
-import { buildResultsModel, displayableCorrectionScore, formatConfidence, formatPercent, type QuestionSummary, type ResultsModel, type StudentSummary } from "@/components/tasks/resultsModel";
+import { buildResultsModel, correctionScoreSource, displayableCorrectionScore, effectiveCorrectionScore, formatConfidence, formatPercent, shouldHideAutomatedScores, type QuestionSummary, type ResultsModel, type StudentSummary } from "@/components/tasks/resultsModel";
 import { collectResultReviewItems, type ReviewItem } from "@/components/tasks/resultsReviewModel";
 import { useI18n } from "@/i18n/I18nProvider";
 import type { Locale } from "@/i18n/messages";
@@ -47,7 +47,7 @@ export function ReviewOverviewPage() {
   }, [commentsQuery.data?.comments, model.students]);
   const confirmedKeys = useMemo(() => new Set(
     model.students.flatMap((student) => student.corrections
-      .filter((correction) => correction.review_status === "confirmed")
+      .filter((correction) => typeof correction.teacher_score === "number" && Number.isFinite(correction.teacher_score))
       .map((correction) => reviewCellKey(student.id, correction.q_id))),
   ), [model.students]);
   const selection = useMemo(
@@ -67,25 +67,24 @@ export function ReviewOverviewPage() {
   const isLoading = taskQuery.isLoading || resultQuery.isLoading || finalizationQuery.isLoading;
   const isError = taskQuery.isError || resultQuery.isError || finalizationQuery.isError;
   const pendingReviewItems = reviewItems.filter((item) => !confirmedKeys.has(reviewCellKey(item.student.id, item.question.id)));
+  const blockingReviewItems = reviewItems.filter((item) => effectiveCorrectionScore(item.correction) === null);
   const historyView = Boolean(task && task.status !== "graded");
   const overviewReturnTo = taskId
     ? `/tasks/${encodeURIComponent(taskId)}/review${searchParams.toString() ? `?${searchParams.toString()}` : ""}`
     : "";
-  const firstTarget = pendingReviewItems[0]
+  const firstTarget = blockingReviewItems[0] ?? pendingReviewItems[0]
     ?? (model.students[0] && model.questions[0]
       ? { student: model.students[0], question: model.questions[0] } as Pick<ReviewItem, "student" | "question">
       : null);
   const targetHref = taskId && firstTarget
     ? reviewDetailHref(taskId, firstTarget.student.id, firstTarget.question.id, overviewReturnTo)
     : null;
-  const correctionCount = model.students.reduce((total, student) => total + student.corrections.length, 0);
   const disagreementCount = model.students.reduce(
     (total, student) => total + student.corrections.filter(isExpertDisagreement).length,
     0,
   );
-  const remainingReviewCount = finalizationQuery.data?.remaining_review_count ?? pendingReviewItems.length;
+  const remainingReviewCount = finalizationQuery.data?.remaining_review_count ?? blockingReviewItems.length;
   const readyForConfirmation = finalizationQuery.data?.ready_for_confirmation === true;
-  const editedPendingCount = pendingReviewItems.filter((item) => item.correction.review_status === "edited").length;
   const lockedResultsReason = remainingReviewCount > 0
     ? copy(locale, "lockedResultsRemaining").replace("{count}", String(remainingReviewCount))
     : copy(locale, "lockedResultsReady");
@@ -156,7 +155,7 @@ export function ReviewOverviewPage() {
             <MetricCard value={formatMetricPercent(model.classAveragePercent)} label={copy(locale, "average")} tone="primary" />
             <MetricCard value={String(model.lowConfidenceCount)} label={copy(locale, "lowConfidence")} tone="warning" />
             <MetricCard value={String(disagreementCount)} label={copy(locale, "disagreement")} tone="primary" />
-            <MetricCard value={`${confirmedKeys.size}/${correctionCount}`} label={copy(locale, "annotated")} tone="accent" />
+            <MetricCard value={`${reviewItems.filter((item) => confirmedKeys.has(reviewCellKey(item.student.id, item.question.id))).length}/${reviewItems.length}`} label={copy(locale, "annotated")} tone="accent" />
           </div>
 
           {!historyView && confirmFinalization.isError ? (
@@ -233,11 +232,7 @@ export function ReviewOverviewPage() {
               {historyView
                 ? copy(locale, "historyHint")
                 : remainingReviewCount > 0
-                  ? editedPendingCount > 0
-                    ? copy(locale, "editedRemainingHint")
-                        .replace("{count}", String(remainingReviewCount))
-                        .replace("{edited}", String(editedPendingCount))
-                    : copy(locale, "remainingHint").replace("{count}", String(remainingReviewCount))
+                  ? copy(locale, "remainingHint").replace("{count}", String(remainingReviewCount))
                   : copy(locale, "readyHint")}
             </p>
             <div className="flex w-full flex-col gap-2 sm:w-auto sm:flex-row">
@@ -446,19 +441,27 @@ function ReviewHeatmap({
 }
 
 function ReviewCell({ locale, href, correction, item, annotated, confirmed, question }: { locale: Locale; href: string; correction: Correction; item?: ReviewItem; annotated: boolean; confirmed: boolean; question?: QuestionSummary }) {
-  const state = confirmed ? "confirmed" : correction.review_status === "edited" ? "edited" : annotated ? "commented" : item?.category === "low-confidence" ? "low" : item ? "review" : "ok";
+  const source = correctionScoreSource(correction);
+  const state = source === "hard_failure" ? "hard" : source === "teacher_changed" ? "edited" : confirmed ? "confirmed" : source === "ai_untouched" && item ? "aiDefault" : annotated ? "commented" : item?.category === "low-confidence" ? "low" : item ? "review" : "ok";
   const label = copy(locale, state);
   const displayScore = displayableCorrectionScore(correction);
+  const masked = shouldHideAutomatedScores(correction);
   const scoreDetail = displayScore !== null && correction.max_score > 0
     ? `${formatPercent((displayScore / correction.max_score) * 100)} · `
     : "";
-  const detail = `${question?.label ?? correction.q_id} · ${scoreDetail}${formatConfidence(correction.confidence)}`;
-  const tone: MatrixStatusTone = state === "confirmed"
+  const detail = masked
+    ? `${question?.label ?? correction.q_id} · ${item ? queueReason(locale, item) : copy(locale, "reviewReason")}`
+    : `${question?.label ?? correction.q_id} · ${scoreDetail}${formatConfidence(correction.confidence)}`;
+  const tone: MatrixStatusTone = state === "hard"
+    ? "error"
+    : state === "confirmed"
     ? "reviewed"
     : state === "edited"
       ? "warning"
       : state === "commented"
       ? "note"
+      : state === "aiDefault"
+        ? "warning"
       : state === "low"
         ? "warning"
         : state === "review"

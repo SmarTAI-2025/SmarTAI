@@ -216,14 +216,28 @@ def _seed_graded_assignment(owner: User, label: str = "owner") -> dict[str, obje
         ))
         session.flush()
         values = [
-            (7.0, "graded", False, None, "AI comment one", 0.8),
-            (4.0, "graded", True, "minority_veto", "AI comment two", 0.7),
-            (None, "needs_review", True, "low_confidence", "Unavailable", 0.2),
+            (7.0, "graded", False, [], "AI comment one", 0.8),
+            (
+                4.0,
+                "needs_review",
+                True,
+                ["minority_veto", "high_indecisiveness"],
+                "AI comment two",
+                0.7,
+            ),
+            (
+                None,
+                "failed",
+                True,
+                ["low_confidence"],
+                "Unavailable",
+                0.2,
+            ),
         ]
         for index, (student, revision_id, value) in enumerate(
             zip(students, revision_ids, values)
         ):
-            score, result_status, requires_review, reason, comment, confidence = value
+            score, result_status, requires_review, reasons, comment, confidence = value
             result_id = _id("result")
             result_ids.append(result_id)
             session.add(GradeResultRecord(
@@ -241,7 +255,9 @@ def _seed_graded_assignment(owner: User, label: str = "owner") -> dict[str, obje
                 ai_expert_results=[],
                 ai_synthesis_method="single",
                 requires_review=requires_review,
-                review_reason=reason,
+                review_reasons=list(reasons),
+                initial_requires_review=requires_review,
+                initial_review_reasons=list(reasons),
                 result_status=result_status,
                 created_at=now + 20 + index,
                 updated_at=now + 20 + index,
@@ -328,7 +344,10 @@ def test_per_question_uses_effective_normalized_results_and_owner_cache():
     assert breakdown["stats"]["unavailable"] == 1
     assert [row["score"] for row in breakdown["rows"]] == [8.5, 4.0]
     assert breakdown["rows"][0]["comment"] == "Reviewed comment"
-    assert breakdown["rows"][1]["review_reasons"] == ["minority_veto"]
+    assert breakdown["rows"][1]["review_reasons"] == [
+        "minority_veto",
+        "high_indecisiveness",
+    ]
     assert breakdown["common_mistakes_md"] == "- Check signs"
     assert [mode for mode, _messages in provider.calls] == ["mistakes"]
 

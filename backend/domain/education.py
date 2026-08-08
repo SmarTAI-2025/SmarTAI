@@ -59,9 +59,14 @@ class GradeResultStatus(str, Enum):
     NEEDS_REVIEW = "needs_review"
 
 
-# Results in these states are excluded from totals and from release; they route
-# to the teacher review queue instead of being shown as a real score.
-NON_GRADED_RESULT_STATUSES = frozenset(
+# Only hard failures lack a usable score and therefore block totals/release.
+# ``needs_review`` is a soft warning state: its validated AI score remains the
+# effective default unless a teacher explicitly confirms or changes it.
+NON_SCOREABLE_RESULT_STATUSES = frozenset({GradeResultStatus.FAILED.value})
+
+# Both hard failures and soft warnings stay discoverable in the teacher review
+# queue even though only the former block publication.
+REVIEW_QUEUE_RESULT_STATUSES = frozenset(
     {GradeResultStatus.FAILED.value, GradeResultStatus.NEEDS_REVIEW.value}
 )
 
@@ -188,9 +193,9 @@ class GradeResultDTO(BaseModel):
     ai_expert_results: list[dict[str, Any]] = Field(default_factory=list)
     ai_synthesis_method: str | None = None
     requires_review: bool = False
-    review_reason: str | None = None
+    review_reasons: list[str] = Field(default_factory=list)
     initial_requires_review: bool = False
-    initial_review_reason: str | None = None
+    initial_review_reasons: list[str] = Field(default_factory=list)
     result_status: str = GradeResultStatus.GRADED.value
     effective_score: float | None = None
     effective_comment: str = ""
@@ -207,9 +212,31 @@ class GradeResultDTO(BaseModel):
         """
         if "initial_requires_review" not in self.model_fields_set:
             self.initial_requires_review = self.requires_review
-        if "initial_review_reason" not in self.model_fields_set:
-            self.initial_review_reason = self.review_reason
+        self.review_reasons = _normalize_review_reasons(self.review_reasons)
+        if "initial_review_reasons" not in self.model_fields_set:
+            self.initial_review_reasons = list(self.review_reasons)
+        else:
+            self.initial_review_reasons = _normalize_review_reasons(
+                self.initial_review_reasons
+            )
         return self
+
+
+def _normalize_review_reasons(values: list[str] | None) -> list[str]:
+    """Return stable, ordered reason IDs without lossy comma-joining.
+
+    A few pre-P0 callers can still supply a comma-joined value inside a list.
+    Split that compatibility shape at the domain boundary, then persist and
+    expose only the canonical list contract.
+    """
+
+    normalized: list[str] = []
+    for raw in values or []:
+        for part in str(raw).split(","):
+            reason = part.strip()
+            if reason and reason not in normalized:
+                normalized.append(reason)
+    return normalized
 
 
 class TeacherReviewDTO(BaseModel):

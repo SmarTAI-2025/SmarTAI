@@ -60,7 +60,7 @@ class DuplicateActiveRun(DomainError):
 
 
 class ResultNotReleasable(DomainError):
-    """A run cannot be released while it has unresolved failed/needs_review results."""
+    """A run cannot be released while it has unresolved hard failures."""
     code = "result_not_releasable"
     status_code = 409
 

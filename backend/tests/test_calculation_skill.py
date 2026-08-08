@@ -8,7 +8,7 @@ Coverage:
   - Unparseable student answer             → sympy_failed footer
 
 Run with:
-    /opt/anaconda3/envs/smartai/bin/python -m pytest backend/tests/test_calculation_skill.py -v
+    python -m pytest backend/tests/test_calculation_skill.py -v
 """
 from __future__ import annotations
 
@@ -54,6 +54,7 @@ def _make_problem(
     stem: str = "Compute 6 * 7.",
     criterion: str = "Final value must be 42.",
     reference_answer: str | None = None,
+    max_score: float = 10.0,
 ) -> ProblemInfo:
     return ProblemInfo(
         q_id=q_id,
@@ -62,6 +63,7 @@ def _make_problem(
         stem=stem,
         criterion=criterion,
         reference_answer=reference_answer,
+        max_score=max_score,
     )
 
 
@@ -119,7 +121,7 @@ def test_metadata_sympy_failed_no_ref():
 
 @pytest.mark.asyncio
 async def test_calc_with_reference_matched(monkeypatch):
-    problem = _make_problem(reference_answer="42")
+    problem = _make_problem(reference_answer="42", max_score=5.0)
     answer = _make_answer("Working: 6 * 7 = 42")
 
     # Mock structured_llm_call → return a 5/10 score with a comment.
@@ -139,7 +141,8 @@ async def test_calc_with_reference_matched(monkeypatch):
     result = await skill.grade(problem, answer, student_id="s1")
 
     assert isinstance(result, ExpertResult)
-    assert result.score == 10.0  # forced to full marks
+    assert result.score == 5.0  # forced to the question's authoritative full marks
+    assert result.max_score == 5.0
     assert "✓" in result.comment
     assert "标答" in result.comment
 

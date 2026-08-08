@@ -53,7 +53,14 @@ from backend.config import settings as _settings
 from backend.models import Correction, ExpertResult, ProblemInfo, StudentAnswerInfo, StepScore, TaskGradingSetup
 from backend.llm.providers import BaseProvider
 from backend.llm.registry import ExpertRegistry
-from backend.skills.base import GradingSkill, build_system_prompt, get_skill_for_type
+from backend.skills.base import (
+    GradingSkill,
+    authoritative_score_instruction,
+    build_system_prompt,
+    get_skill_for_type,
+    normalize_expert_result,
+    normalize_score_scale,
+)
 from backend.tools.structured_llm import structured_llm_call
 
 if TYPE_CHECKING:
@@ -65,9 +72,9 @@ logger = logging.getLogger(__name__)
 # ─── Synthesis output ─────────────────────────────────────────────────────────
 
 class SynthesisOutput(BaseModel):
-    score: float = Field(ge=0)
-    max_score: float = Field(default=10.0)
-    confidence: float = Field(ge=0, le=1)
+    score: float = Field(ge=0, allow_inf_nan=False)
+    max_score: float = Field(default=10.0, gt=0, allow_inf_nan=False)
+    confidence: float = Field(ge=0, le=1, allow_inf_nan=False)
     comment: str = Field(description="Synthesized feedback incorporating all experts")
     steps: List[dict] = Field(default_factory=list)
 
@@ -195,7 +202,10 @@ async def run_multi_expert(
             provider, reporter=reporter, language=language, task_id=task_id,
             grading_setup=grading_setup,
         )
-        expert_result = await skill.grade(problem, answer, student_id=student_id)
+        expert_result = normalize_expert_result(
+            await skill.grade(problem, answer, student_id=student_id),
+            problem.max_score,
+        )
         # is_score is None (one sample → no variance signal); review flag stays
         # off here. Confidence-based review (`confidence < settings.confidence_threshold`)
         # is the caller's job in this branch.
@@ -218,7 +228,10 @@ async def run_multi_expert(
             provider, reporter=reporter, language=language, task_id=task_id,
             grading_setup=grading_setup,
         )
-        result = await skill.grade(problem, answer, student_id=student_id)
+        result = normalize_expert_result(
+            await skill.grade(problem, answer, student_id=student_id),
+            problem.max_score,
+        )
         # Tag duplicate provider IDs in multi-sample mode so the UI / logs can
         # tell them apart. We do this AFTER the skill returns so any internal
         # logging in the skill still reports the real provider_id.
@@ -250,13 +263,16 @@ async def run_multi_expert(
             f"{mode} degraded_to_single for q_id={problem.q_id}: "
             f"{len(failures)} of {len(results)} samples failed"
         )
-        return _expert_to_correction(
+        correction = _expert_to_correction(
             problem.q_id,
             problem.type,
             successes[0],
             synthesis_method="degraded_to_single",
             extra_experts=failures,
         )
+        correction.requires_human_review = True
+        correction.review_reasons = ["degraded_to_single"]
+        return correction
 
     # ── Synthesis (≥ 2 successes) ─────────────────────────────────────────
     if mode == "multi_sample":
@@ -397,7 +413,8 @@ async def _synthesize(
     system_prompt = build_system_prompt(
         "You are a senior teaching coordinator synthesizing multiple expert opinions "
         "on a student's answer. Produce a fair, well-reasoned final grade while "
-        "respecting the supplied rubric.",
+        "respecting the supplied rubric."
+        + authoritative_score_instruction(problem.max_score),
         language,
         grading_setup,
     )
@@ -406,6 +423,7 @@ async def _synthesize(
         f"Problem: {problem.stem}\n\n"
         f"Expert opinions:\n{expert_summary}\n\n"
         f"Rubric: {problem.criterion}\n\n"
+        f"Authoritative maximum score: {problem.max_score:g}\n\n"
         "Synthesize these expert opinions into a single final grade. "
         "Weight higher-confidence experts more. If experts disagree, explain why in the comment. "
         "Return JSON with: score, max_score, confidence, comment, steps."
@@ -429,14 +447,21 @@ async def _synthesize(
                     score=float(s.get("score", 0.0)),
                 ))
 
+        normalized_score, normalized_steps = normalize_score_scale(
+            score=result.score,
+            reported_max_score=result.max_score,
+            authoritative_max_score=problem.max_score,
+            steps=step_scores,
+        )
+
         return Correction(
             q_id=problem.q_id,
             type=problem.type,
-            score=max(0.0, min(result.score, result.max_score)),
-            max_score=result.max_score,
+            score=normalized_score,
+            max_score=problem.max_score,
             confidence=max(0.0, min(result.confidence, 1.0)),
             comment=result.comment,
-            steps=step_scores,
+            steps=normalized_steps,
             expert_results=expert_results,
             synthesis_method="judge_agent",
         )
@@ -468,7 +493,7 @@ def _weighted_average_fallback(
             q_id=problem.q_id,
             type=problem.type,
             score=0.0,
-            max_score=10.0,
+            max_score=problem.max_score,
             confidence=0.0,
             comment="No expert produced a result.",
             steps=[],
@@ -476,7 +501,7 @@ def _weighted_average_fallback(
         )
     total_weight = sum(er.confidence for er in expert_results) or 1.0
     weighted_score = sum(er.score * er.confidence for er in expert_results) / total_weight
-    max_score = max(er.max_score for er in expert_results)
+    max_score = problem.max_score
     avg_confidence = sum(er.confidence for er in expert_results) / len(expert_results)
 
     if len(expert_results) == 1:
@@ -491,7 +516,7 @@ def _weighted_average_fallback(
     return Correction(
         q_id=problem.q_id,
         type=problem.type,
-        score=round(weighted_score, 2),
+        score=min(max(round(weighted_score, 2), 0.0), problem.max_score),
         max_score=max_score,
         confidence=round(avg_confidence, 2),
         comment=comment,

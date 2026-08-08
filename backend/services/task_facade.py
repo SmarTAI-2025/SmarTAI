@@ -10,6 +10,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import math
 import re
 import time
 import uuid
@@ -65,6 +66,7 @@ _SAFE_ERROR_CODES = {
     "no_provider_configured",
     "recognition_provider_not_enabled",
     "problem_extraction_failed",
+    "provider_timeout",
     "material_import_failed",
     "ai_completion_failed",
     "replacement_confirmation_required",
@@ -224,7 +226,7 @@ def get_task(*, task_id: str, owner_id: str, full: bool = True) -> dict:
     attention = bool(
         workflow.error_code
         or (latest_run and latest_run.status in {"failed", "partial_failed"})
-        or (latest_run and grading_repository.has_unresolved_failures(latest_run.id))
+        or (latest_run and grading_repository.has_review_queue_items(latest_run.id))
     )
     final_version = max(
         workflow.final_result_version,
@@ -314,12 +316,20 @@ def _presentation_status(workflow, questions, submissions, latest_run) -> str:
 
 def _serialize_problem(question) -> dict:
     presentation = dict((question.source or {}).get("presentation") or {})
+    max_score = float(question.max_score)
     return {
         "q_id": question.q_id,
         "number": question.number,
         "type": question.type,
         "stem": question.stem,
         "criterion": question.criterion,
+        "max_score": max_score,
+        "max_score_source": presentation.get("max_score_source") or (
+            "default_10" if max_score == 10 else "legacy"
+        ),
+        "max_score_review_status": presentation.get(
+            "max_score_review_status", "needs_review"
+        ),
         "review_status": presentation.get("review_status", "needs_review"),
         "reference_answer": question.reference_answer,
         "solution_code": presentation.get("solution_code"),
@@ -859,6 +869,14 @@ def _replace_draft_questions(
                 "filename": filename,
                 "presentation": {
                     "review_status": raw.get("review_status", "needs_review"),
+                    "max_score_source": raw.get("max_score_source") or (
+                        "default_10"
+                        if float(raw.get("max_score") or 10) == 10
+                        else "legacy"
+                    ),
+                    "max_score_review_status": raw.get(
+                        "max_score_review_status", "needs_review"
+                    ),
                     "solution_code": raw.get("solution_code"),
                     "material_provenance": raw.get("material_provenance", {}),
                     "ai_completion_provenance": raw.get("ai_completion_provenance", {}),
@@ -1064,10 +1082,13 @@ def apply_question_patches_atomic(
     rolls back the workflow claim, question changes, and operation transition.
     """
     now = time.time()
-    allowed_fields = {"stem", "criterion", "reference_answer", "test_cases"}
+    allowed_fields = {
+        "stem", "criterion", "max_score", "reference_answer", "test_cases"
+    }
     allowed_presentation = {
         "review_status", "solution_code", "material_provenance",
         "ai_completion_provenance", "preparation_issues",
+        "max_score_source", "max_score_review_status",
     }
     with session_scope() as session:
         assignment = session.scalar(select(AssignmentRecord).where(
@@ -1107,6 +1128,14 @@ def apply_question_patches_atomic(
                 presentation_updates
             ).issubset(allowed_presentation):
                 raise ValidationError("Unsupported question patch.")
+            if "max_score" in fields:
+                max_score = float(fields["max_score"])
+                if not math.isfinite(max_score) or not 0 < max_score <= 10_000:
+                    raise ValidationError(
+                        "Question maximum score must be between 0 and 10000.",
+                        code="invalid_max_score",
+                    )
+                fields["max_score"] = max_score
             if require_missing:
                 current_presentation = dict(
                     (question.source or {}).get("presentation") or {}
@@ -1585,10 +1614,16 @@ async def async_task_state(*, task_id: str, owner_id: str) -> dict:
     if active_job_id and (reporter := get_reporter(active_job_id)) is not None:
         payload["progress"] = (await reporter.snapshot()).model_dump(mode="json")
     grading_job_id = payload.get("grading_job_id")
-    if payload.get("status") == "grading" and grading_job_id:
-        payload["progress"] = _grading_progress(grading_job_id, owner_id)
-        payload["active_job_id"] = grading_job_id
-        payload["active_operation"] = "grading"
+    if payload.get("status") in {"grading", "error"} and grading_job_id:
+        grading_progress = _grading_progress(grading_job_id, owner_id)
+        # A reporter can reach ``done`` before result persistence finishes.
+        # Prefer the durable failed-run projection so clients never render a
+        # stale success phase after the database marks the run failed.
+        if payload.get("status") == "grading" or grading_progress.get("phase") == "error":
+            payload["progress"] = grading_progress
+            payload["active_job_id"] = grading_job_id
+            payload["active_operation"] = "grading"
+            payload["error"] = payload.get("error") or grading_progress.get("error_detail")
     return payload
 
 
@@ -1771,7 +1806,8 @@ def _serialize_correction(result) -> dict:
         "result_id": result.id,
         "q_id": result.q_id,
         "type": "",
-        "score": score if score is not None else 0,
+        "score": score,
+        "provisional_score": result.ai_score,
         "max_score": result.ai_max_score,
         "confidence": result.ai_confidence or 0,
         "comment": result.ai_comment,
@@ -1781,7 +1817,8 @@ def _serialize_correction(result) -> dict:
         "synthesis_method": result.ai_synthesis_method,
         "is_score": None,
         "requires_human_review": result.requires_review,
-        "review_reasons": [result.review_reason] if result.review_reason else [],
+        "review_reasons": list(result.review_reasons or []),
+        "initial_review_reasons": list(result.initial_review_reasons or []),
         "teacher_score": review.get("new_score") if review else None,
         "teacher_comment": review.get("new_comment", "") if review else "",
         "review_status": review_status,
@@ -1798,13 +1835,39 @@ def update_problem(
         raise NotFound("question")
     source = dict(question.source or {})
     presentation = dict(source.get("presentation") or {})
-    for key in ("review_status", "solution_code", "material_provenance", "ai_completion_provenance", "preparation_issues"):
+    for key in (
+        "review_status", "solution_code", "material_provenance",
+        "ai_completion_provenance", "preparation_issues",
+    ):
         if key in patch:
             presentation[key] = patch[key]
+    if patch.get("review_status") == "confirmed":
+        presentation["max_score_review_status"] = "confirmed"
+        presentation["preparation_issues"] = [
+            issue
+            for issue in presentation.get("preparation_issues", [])
+            if issue.get("field") != "max_score"
+        ]
+    if "max_score" in patch:
+        max_score = float(patch["max_score"])
+        if not math.isfinite(max_score) or not 0 < max_score <= 10_000:
+            raise ValidationError(
+                "Question maximum score must be between 0 and 10000.",
+                code="invalid_max_score",
+            )
+        presentation["max_score_source"] = "teacher_edited"
+        presentation["max_score_review_status"] = "confirmed"
+        presentation["preparation_issues"] = [
+            issue
+            for issue in presentation.get("preparation_issues", [])
+            if issue.get("field") != "max_score"
+        ]
     source["presentation"] = presentation
     fields = {
         key: patch[key]
-        for key in ("stem", "criterion", "reference_answer", "test_cases")
+        for key in (
+            "stem", "criterion", "max_score", "reference_answer", "test_cases"
+        )
         if key in patch
     }
     fields["source"] = source
@@ -1991,16 +2054,16 @@ def finalization(*, task_id: str, owner_id: str) -> dict:
                 review = result.teacher_review or {}
                 if (
                     result.result_status
-                    not in education.NON_GRADED_RESULT_STATUSES
+                    not in education.NON_SCOREABLE_RESULT_STATUSES
                     and review.get("confirmed") is True
                 ):
                     confirmed_required_count += 1
-            if result.result_status in education.NON_GRADED_RESULT_STATUSES:
+            if result.result_status in education.NON_SCOREABLE_RESULT_STATUSES:
                 presentation = workflow_repository.list_student_presentations(task_id).get(result.student_id)
                 remaining.append({
                     "student_id": presentation.display_student_id if presentation else result.student_id,
                     "q_id": result.q_id,
-                    "reasons": [result.review_reason] if result.review_reason else [],
+                    "reasons": list(result.review_reasons or []),
                     "confirmed": False,
                 })
     released = bool(run and run.released_at is not None)

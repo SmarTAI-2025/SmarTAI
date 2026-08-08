@@ -8,6 +8,7 @@ retained + education table from an empty database.
 """
 from __future__ import annotations
 
+import json
 from io import StringIO
 from pathlib import Path
 
@@ -94,6 +95,103 @@ def test_normalized_tables_exist_after_roundtrip(tmp_path, monkeypatch):
     assert not ({"tasks", "grading_jobs", "task_knowledge_documents"} & tables)
 
 
+def test_structured_review_migration_preserves_real_zero_and_blocks_legacy_null(
+    tmp_path, monkeypatch,
+):
+    """0004 must distinguish a real soft-review zero from a missing score."""
+    from sqlalchemy import create_engine, text
+
+    db_url = f"sqlite:///{(tmp_path / 'review-semantics.db').as_posix()}"
+    cfg = _alembic_config(db_url, monkeypatch)
+    command.upgrade(cfg, "0003_assignment_workflow_facade")
+    engine = create_engine(db_url)
+    with engine.begin() as connection:
+        connection.execute(text(
+            "INSERT INTO users "
+            "(id, username, role, password_hash, is_active, created_at, updated_at) "
+            "VALUES ('teacher', 'teacher', 'teacher', 'h', 1, 1, 1), "
+            "('student', 'student', 'student', 'h', 1, 1, 1)"
+        ))
+        connection.execute(text(
+            "INSERT INTO courses "
+            "(id, name, code, description, teacher_id, created_at, updated_at) "
+            "VALUES ('course', 'Course', '', '', 'teacher', 1, 1)"
+        ))
+        connection.execute(text(
+            "INSERT INTO assignments "
+            "(id, course_id, teacher_id, name, description, status, created_at, "
+            "updated_at, version) VALUES "
+            "('assignment', 'course', 'teacher', 'Assignment', '', 'published', 1, 1, 1)"
+        ))
+        connection.execute(text(
+            "INSERT INTO assignment_questions "
+            "(id, assignment_id, q_id, order_index, number, type, stem, criterion, "
+            "max_score, version, created_at, updated_at) VALUES "
+            "('question-null', 'assignment', 'q-null', 0, '1', 'short', '', '', 10, 1, 1, 1), "
+            "('question-zero', 'assignment', 'q-zero', 1, '2', 'short', '', '', 10, 1, 1, 1), "
+            "('question-failed', 'assignment', 'q-failed', 2, '3', 'short', '', '', 10, 1, 1, 1), "
+            "('question-reviewed', 'assignment', 'q-reviewed', 3, '4', 'short', '', '', 10, 1, 1, 1)"
+        ))
+        connection.execute(text(
+            "INSERT INTO submissions "
+            "(id, assignment_id, student_id, current_revision_id, created_at, updated_at) "
+            "VALUES ('submission', 'assignment', 'student', NULL, 1, 1)"
+        ))
+        connection.execute(text(
+            "INSERT INTO submission_revisions "
+            "(id, submission_id, revision_number, source, file_name, created_at) "
+            "VALUES ('revision', 'submission', 1, 'online', '', 1)"
+        ))
+        connection.execute(text(
+            "UPDATE submissions SET current_revision_id='revision' WHERE id='submission'"
+        ))
+        connection.execute(text(
+            "INSERT INTO grading_runs "
+            "(id, assignment_id, teacher_id, status, total_submissions, "
+            "completed_submissions, failed_submissions, created_at, completed_at) "
+            "VALUES ('run', 'assignment', 'teacher', 'completed', 1, 1, 0, 1, 2)"
+        ))
+        connection.execute(text(
+            "INSERT INTO grade_results "
+            "(id, grading_run_id, submission_revision_id, question_id, student_id, "
+            "q_id, ai_score, ai_max_score, ai_comment, ai_steps, ai_expert_results, "
+            "requires_review, review_reason, result_status, created_at, updated_at) VALUES "
+            "('legacy-null', 'run', 'revision', 'question-null', 'student', 'q-null', "
+            "NULL, 10, '', '[]', '[]', 1, 'missing_correction', 'needs_review', 1, 1), "
+            "('real-zero', 'run', 'revision', 'question-zero', 'student', 'q-zero', "
+            "0, 10, '', '[]', '[]', 1, 'low_confidence', 'needs_review', 1, 1), "
+            "('failed-sentinel', 'run', 'revision', 'question-failed', 'student', 'q-failed', "
+            "0, 10, '', '[]', '[]', 1, 'llm_failed', 'failed', 1, 1), "
+            "('reviewed-null', 'run', 'revision', 'question-reviewed', 'student', 'q-reviewed', "
+            "NULL, 10, '', '[]', '[]', 1, 'teacher_edit_pending_confirmation', "
+            "'needs_review', 1, 1)"
+        ))
+        connection.execute(text(
+            "INSERT INTO teacher_reviews "
+            "(id, grade_result_id, teacher_id, previous_score, previous_comment, "
+            "new_score, new_comment, comment, confirmed, review_sequence, created_at) "
+            "VALUES ('saved-review', 'reviewed-null', 'teacher', NULL, '', "
+            "5, 'manual score', 'manual score', 0, 1, 2)"
+        ))
+
+    command.upgrade(cfg, "head")
+    with engine.connect() as connection:
+        rows = connection.execute(text(
+            "SELECT id, result_status, ai_score FROM grade_results ORDER BY id"
+        )).all()
+        saved_review_score = connection.execute(text(
+            "SELECT new_score FROM teacher_reviews "
+            "WHERE grade_result_id = 'reviewed-null'"
+        )).scalar_one()
+    assert rows == [
+        ("failed-sentinel", "failed", None),
+        ("legacy-null", "failed", None),
+        ("real-zero", "needs_review", 0.0),
+        ("reviewed-null", "needs_review", None),
+    ]
+    assert saved_review_score == 5.0
+
+
 def test_workflow_migration_preserves_existing_review_and_kb_link(
     tmp_path, monkeypatch,
 ):
@@ -154,7 +252,8 @@ def test_workflow_migration_preserves_existing_review_and_kb_link(
             "q_id, ai_score, ai_max_score, ai_comment, ai_steps, ai_expert_results, "
             "requires_review, review_reason, result_status, created_at, updated_at) VALUES "
             "('result', 'run', 'revision', 'question', 'student', 'q1', 8, 10, '', "
-            "'[]', '[]', 1, 'legacy_low_confidence', 'needs_review', 1, 1)"
+            "'[]', '[]', 1, 'legacy_low_confidence, minority_veto', "
+            "'needs_review', 1, 1)"
         ))
         connection.execute(text(
             "INSERT INTO teacher_reviews "
@@ -189,7 +288,7 @@ def test_workflow_migration_preserves_existing_review_and_kb_link(
             "WHERE grade_result_id='result' ORDER BY review_sequence"
         )).all()
         result = connection.execute(text(
-            "SELECT initial_requires_review, initial_review_reason "
+            "SELECT initial_requires_review, review_reasons, initial_review_reasons "
             "FROM grade_results WHERE id='result'"
         )).one()
         link = connection.execute(text(
@@ -202,7 +301,14 @@ def test_workflow_migration_preserves_existing_review_and_kb_link(
         ("review-z", True, 2),
     ]
     assert bool(result.initial_requires_review) is True
-    assert result.initial_review_reason == "legacy_low_confidence"
+    assert json.loads(result.review_reasons) == [
+        "legacy_low_confidence",
+        "minority_veto",
+    ]
+    assert json.loads(result.initial_review_reasons) == [
+        "legacy_low_confidence",
+        "minority_veto",
+    ]
     assert link.source_kind == "upload"
     assert link.library_material_id is None
 
@@ -215,6 +321,9 @@ def test_workflow_migration_preserves_existing_review_and_kb_link(
             "SELECT COUNT(*) FROM assignment_knowledge_documents "
             "WHERE assignment_id='assignment' AND document_id='document'"
         )).scalar_one() == 1
+        assert connection.execute(text(
+            "SELECT review_reason FROM grade_results WHERE id='result'"
+        )).scalar_one() == "legacy_low_confidence,minority_veto"
 
 
 def _postgresql_sql(monkeypatch, revision: str) -> str:
