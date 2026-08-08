@@ -7,6 +7,7 @@ recreate the removed TaskStore or JobStore.
 """
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import logging
@@ -17,6 +18,7 @@ import uuid
 from collections import defaultdict
 from typing import Any
 
+from fastapi import HTTPException
 from sqlalchemy import delete, func, select, update
 
 from backend.agents.ingest_agent import extract_problems, parse_student_answers
@@ -65,8 +67,12 @@ SYSTEM_COURSE_NAME = "SmarTAI Workspace"
 _SAFE_ERROR_CODES = {
     "no_provider_configured",
     "recognition_provider_not_enabled",
+    "vision_provider_required",
     "problem_extraction_failed",
     "provider_timeout",
+    "provider_unreachable",
+    "provider_rate_limited",
+    "provider_auth_failed",
     "material_import_failed",
     "ai_completion_failed",
     "replacement_confirmation_required",
@@ -76,6 +82,14 @@ _SAFE_ERROR_CODES = {
     "unknown_ai_completion_target",
     "workflow_busy",
     "workflow_revision_conflict",
+    # File / source limits emitted by tools/file_processing.py; propagated so the
+    # frontend's FILE_CODES branch can render a specific, actionable message.
+    "source_too_large",
+    "problem_source_decode_failed",
+    "pdf_page_limit_exceeded",
+    "pdf_character_limit_exceeded",
+    "submission_source_unsupported",
+    "submission_source_too_large",
 }
 _AUXILIARY_QUESTION_OPERATION_TYPES = {"material_import", "ai_completion"}
 logger = logging.getLogger(__name__)
@@ -602,6 +616,120 @@ def _detail_error(error: DomainError, fallback: str) -> str:
     return error.code if error.code != "domain_error" else fallback
 
 
+def _provider_network_exception_types() -> tuple[
+    tuple[type[BaseException], ...], tuple[type[BaseException], ...]
+]:
+    """Gather provider timeout / connection exception classes across adapters.
+
+    Mirrors ``api/experts._verification_error_code``: optional SDK imports are
+    guarded so a missing adapter never breaks classification.
+    """
+    timeout_types: tuple[type[BaseException], ...] = (asyncio.TimeoutError, TimeoutError)
+    connection_types: tuple[type[BaseException], ...] = (ConnectionError, OSError)
+    try:
+        import httpx
+
+        timeout_types += (httpx.TimeoutException,)
+        connection_types += (httpx.TransportError,)
+    except ImportError:  # pragma: no cover - httpx is a runtime dependency
+        pass
+    try:
+        from openai import APIConnectionError, APITimeoutError
+
+        timeout_types += (APITimeoutError,)
+        connection_types += (APIConnectionError,)
+    except ImportError:  # pragma: no cover - optional adapter
+        pass
+    try:
+        from anthropic import APIConnectionError as AnthropicAPIConnectionError
+        from anthropic import APITimeoutError as AnthropicAPITimeoutError
+
+        timeout_types += (AnthropicAPITimeoutError,)
+        connection_types += (AnthropicAPIConnectionError,)
+    except ImportError:  # pragma: no cover - optional adapter
+        pass
+    return timeout_types, connection_types
+
+
+def _http_status(item: BaseException) -> int | None:
+    status_code = getattr(item, "status_code", None)
+    if status_code is None:
+        response = getattr(item, "response", None)
+        status_code = getattr(response, "status_code", None)
+    return status_code if isinstance(status_code, int) else None
+
+
+def _http_exception_detail(item: HTTPException) -> tuple[str | None, str | None]:
+    """Return (code, free_text) from an HTTPException detail."""
+    detail = item.detail
+    if isinstance(detail, dict):
+        code = detail.get("code")
+        return (str(code) if isinstance(code, str) else None), None
+    if isinstance(detail, str):
+        return None, detail
+    return None, None
+
+
+def _classify_background_error(exc: Exception, fallback: str) -> str:
+    """Map a background-job exception to a stable, user-facing error code.
+
+    Walks the ``__cause__`` / ``__context__`` chain so provider errors re-raised
+    through langchain / tenacity still classify correctly. Mirrors
+    ``api/task_preparation._question_preparation_failure_code`` and
+    ``api/experts._verification_error_code``. Only returns codes that are in
+    ``_SAFE_ERROR_CODES`` (or ``fallback``); anything else would be collapsed to
+    ``workflow_failed`` by ``_fail_operation`` and lose its meaning.
+    """
+    from backend.tools.structured_llm import PermanentLLMError, RateLimitError
+
+    chain: list[BaseException] = []
+    current: BaseException | None = exc
+    seen: set[int] = set()
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        chain.append(current)
+        current = current.__cause__ or current.__context__
+
+    if any(isinstance(item, RateLimitError) for item in chain):
+        return "provider_rate_limited"
+
+    timeout_types, connection_types = _provider_network_exception_types()
+    if any(isinstance(item, timeout_types) for item in chain):
+        return "provider_timeout"
+
+    # Auth / permission before connection: a 401/403 from a reachable host is an
+    # authorization problem, not "unreachable".
+    for item in chain:
+        status_code = _http_status(item)
+        if status_code in {401, 403}:
+            return "provider_auth_failed"
+        if status_code == 429:
+            return "provider_rate_limited"
+        if isinstance(item, PermanentLLMError) and any(
+            marker in f"{item}".lower()
+            for marker in (
+                "401", "403", "auth", "unauthorized", "invalid api key", "permission",
+            )
+        ):
+            return "provider_auth_failed"
+
+    if any(isinstance(item, connection_types) for item in chain):
+        return "provider_unreachable"
+
+    # File/vision HTTPExceptions carry either a safe ``code`` or a free-text
+    # message (e.g. "... requires OCR ..."). Propagate the safe codes; detect the
+    # vision-required text so the frontend can point users to enable a vision model.
+    for item in chain:
+        if isinstance(item, HTTPException):
+            code, text = _http_exception_detail(item)
+            if code in _SAFE_ERROR_CODES:
+                return code
+            if code == "vision_provider_required" or "requires ocr" in (text or "").lower():
+                return "vision_provider_required"
+
+    return fallback
+
+
 def _raise_stale_revision() -> None:
     raise VersionConflict("The task changed while this operation was running.", code="stale_revision")
 
@@ -795,10 +923,11 @@ async def run_task_problem_extraction(
             task_id, owner_id, job_id, job_attempt,
             _detail_error(exc, "problem_extraction_failed"),
         )
-    except Exception:
+    except Exception as exc:
         logger.warning("Background problem extraction failed; job_id=%s", job_id)
         _fail_operation(
-            task_id, owner_id, job_id, job_attempt, "problem_extraction_failed"
+            task_id, owner_id, job_id, job_attempt,
+            _classify_background_error(exc, "problem_extraction_failed"),
         )
 
 
@@ -1060,10 +1189,11 @@ async def run_task_submission_parsing(
             task_id, owner_id, job_id, job_attempt,
             _detail_error(exc, "submission_parse_failed"),
         )
-    except Exception:
+    except Exception as exc:
         logger.warning("Background submission parsing failed; job_id=%s", job_id)
         _fail_operation(
-            task_id, owner_id, job_id, job_attempt, "submission_parse_failed"
+            task_id, owner_id, job_id, job_attempt,
+            _classify_background_error(exc, "submission_parse_failed"),
         )
 
 

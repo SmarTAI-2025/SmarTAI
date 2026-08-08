@@ -216,10 +216,10 @@ export interface RecoverableErrorContext {
 const BYOK_CODES = new Set([
   "recognition_provider_not_enabled",
   "provider_not_enabled",
-  "vision_provider_required",
   "shared_pool_kb_requires_byok",
   "no_enabled_expert",
   "expert_verification_auth_failed",
+  // "vision_provider_required" has its own dedicated branch below (OCR-specific copy).
 ]);
 
 const FILE_CODES = new Set([
@@ -263,18 +263,81 @@ export function classifyRecoverableError(
   const normalized = `${code ?? ""} ${message}`.toLowerCase();
   const technicalDetails = buildTechnicalDetails(apiError.status, code, detail, context, locale);
   const retryAfterSeconds = apiError.retryAfterSeconds;
+  const returnTo = context.returnTo?.trim();
 
   if (code === "grading_failed") {
     return {
       title: tx(locale, "本次批改没有完成", "This grading run did not finish"),
       description: tx(
         locale,
-        "后端未能完成批改或保存结果。任务资料仍然保留；请记录任务编号，处理后再重试。",
-        "The backend could not complete grading or save its results. Task data is preserved; keep the job ID and retry after the issue is resolved.",
+        "批改过程中出现了未预期的错误，任务资料仍然保留。请稍后重试；若多次重试仍失败，请记下下方任务/作业编号并联系管理员。",
+        "An unexpected error occurred during grading. Task data is preserved. Retry shortly; if it keeps failing, note the job ID below and contact your administrator.",
       ),
       actionLabel: tx(locale, "重新尝试", "Try again"),
       actionKind: "retry",
       tone: "danger",
+      technicalDetails,
+    };
+  }
+
+  if (code === "provider_timeout") {
+    return {
+      title: tx(locale, "模型响应超时", "The model took too long to respond"),
+      description: tx(
+        locale,
+        "模型服务未能在限定时间内返回结果，通常因为负载较高或网络较慢。任务资料不会丢失，请稍后重试。",
+        "The model service did not respond in time, usually because it is busy or the connection is slow. Your task data is preserved — retry shortly.",
+      ),
+      actionLabel: tx(locale, "重新尝试", "Try again"),
+      actionKind: "retry",
+      tone: "warning",
+      technicalDetails,
+    };
+  }
+
+  if (code === "provider_unreachable") {
+    return {
+      title: tx(locale, "无法连接模型服务", "Cannot reach the model service"),
+      description: tx(
+        locale,
+        "SmarTAI 连接不到模型服务。请检查网络是否正常、代理或 VPN（科学上网）是否已开启后重试；本地部署请确认后端地址可达。",
+        "SmarTAI could not reach the model service. Check your network and that your proxy or VPN is enabled, then retry. For local setups, confirm the backend address is reachable.",
+      ),
+      actionLabel: tx(locale, "重新尝试", "Try again"),
+      actionKind: "retry",
+      tone: "warning",
+      technicalDetails,
+    };
+  }
+
+  if (code === "provider_auth_failed") {
+    return {
+      title: tx(locale, "模型密钥或授权无效", "Model API key or authorization is invalid"),
+      description: tx(
+        locale,
+        "模型返回了授权错误，可能是密钥无效、额度未开通，或当前账号无权使用该模型（例如所选模型不在套餐内）。请在“模型与 BYOK”更新密钥并确认模型可用后再重试。",
+        "The model returned an authorization error — the key may be invalid, quota not enabled, or your account lacks access to this model (for example, it isn't included in your plan). Update the key in Models & BYOK and confirm access, then retry.",
+      ),
+      actionLabel: tx(locale, "前往 BYOK 配置", "Open BYOK settings"),
+      actionHref: `/settings/byok${returnTo ? `?returnTo=${encodeURIComponent(returnTo)}` : ""}`,
+      actionKind: "byok",
+      tone: "primary",
+      technicalDetails,
+    };
+  }
+
+  if (code === "vision_provider_required") {
+    return {
+      title: tx(locale, "需要支持图像识别的模型", "A vision-capable model is required"),
+      description: tx(
+        locale,
+        "这份文件需要图像识别（OCR），但当前没有启用支持图片输入的视觉模型。请在“模型与 BYOK”启用一个支持图像输入的模型后返回重试。",
+        "This file needs image recognition (OCR), but no vision-capable model is enabled. Enable a model that supports image input in Models & BYOK, then return and retry.",
+      ),
+      actionLabel: tx(locale, "前往 BYOK 配置", "Open BYOK settings"),
+      actionHref: `/settings/byok${returnTo ? `?returnTo=${encodeURIComponent(returnTo)}` : ""}`,
+      actionKind: "byok",
+      tone: "primary",
       technicalDetails,
     };
   }
@@ -287,7 +350,6 @@ export function classifyRecoverableError(
     || normalized.includes("provider not enabled")
     || normalized.includes("no enabled expert")
   ) {
-    const returnTo = context.returnTo?.trim();
     return {
       title: tx(locale, "需要配置可用模型", "A model configuration is required"),
       description: tx(
@@ -304,7 +366,8 @@ export function classifyRecoverableError(
   }
 
   if (
-    apiError.status === 429
+    code === "provider_rate_limited"
+    || apiError.status === 429
     || normalized.includes("rate limit")
     || normalized.includes("quota")
     || normalized.includes("too many requests")
@@ -405,7 +468,15 @@ export function classifyRecoverableError(
     title: apiError.status >= 500
       ? tx(locale, "后端处理未完成", "Backend processing did not complete")
       : tx(locale, "本次操作未完成", "This action did not complete"),
-    description: friendlyMessage(message, code, tx(locale, "可以重试；当前任务内容不会丢失。", "You can retry; the current task content is preserved.")),
+    description: friendlyMessage(
+      message,
+      code,
+      tx(
+        locale,
+        "识别或批改过程中出现了未预期的错误，任务资料仍然保留。请稍后重试；若多次重试仍失败，请记下下方任务/作业编号并联系管理员。",
+        "An unexpected error occurred. Your task data is preserved. Retry shortly; if it keeps failing, note the job ID below and contact your administrator.",
+      ),
+    ),
     actionLabel: tx(locale, "重新尝试", "Try again"),
     actionKind: "retry",
     tone: "danger",
@@ -443,6 +514,24 @@ function stableBackgroundErrorCode(error: unknown): string | null {
   if (typeof error !== "string") return null;
   const value = error.trim();
   return /^[a-z][a-z0-9_]{1,127}$/.test(value) ? value : null;
+}
+
+/**
+ * Short, localized label for a background error code/message — for inline strips
+ * that would otherwise leak a raw code (e.g. "grading_failed") to the user.
+ *
+ * Bare snake_case codes route through classifyRecoverableError's code branches;
+ * genuine event messages (e.g. "OCR returned empty text for x.pdf") are returned
+ * verbatim so they stay readable. `null`/empty yields "".
+ */
+export function backgroundErrorTitle(value: unknown, locale: Locale = "zh-CN"): string {
+  if (value == null) return "";
+  if (typeof value === "string") {
+    const text = value.trim();
+    if (!text) return "";
+    if (!stableBackgroundErrorCode(text)) return text;
+  }
+  return classifyRecoverableError(value, { locale }).title;
 }
 
 function fileErrorDescription(
