@@ -58,6 +58,7 @@ from backend.progress.tracker import get_or_create_reporter, get_reporter, remov
 from backend.services import task_facade
 from backend.skills.ocr_ingest import LLMVisionOCRSkill, OCRPurpose
 from backend.tools.file_processing import IMAGE_MEDIA_TYPES, extract_text_from_upload
+from backend.tools.structured_llm import TransientLLMError
 
 
 router = APIRouter(prefix="/tasks", tags=["task-preparation"])
@@ -82,6 +83,24 @@ _SOURCE_ROLE_OCR_PURPOSE: dict[str, OCRPurpose] = {
     "rubric": "problems",
     "programming_tests": "test_cases",
 }
+
+
+def _question_preparation_failure_code(exc: Exception) -> str:
+    """Return a stable, non-sensitive code for a background preparation failure."""
+    if not isinstance(exc, TransientLLMError):
+        return "problem_extraction_failed"
+
+    current: BaseException | None = exc
+    seen: set[int] = set()
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        fingerprint = f"{type(current).__name__} {current}".lower()
+        if "timeout" in fingerprint or "timed out" in fingerprint:
+            return "provider_timeout"
+        current = current.__cause__ or current.__context__
+    return "problem_extraction_failed"
+
+
 _SOURCE_MIME_TYPES = {
     ".pdf": frozenset({"application/pdf", "application/x-pdf"}),
     ".txt": frozenset({"text/plain"}),
@@ -721,10 +740,16 @@ async def _run_question_preparation(
             task_id, owner_id, job_id, job_attempt,
             task_facade._detail_error(exc, "problem_extraction_failed"),
         )
-    except Exception:
-        logger.warning("Background question preparation failed; job_id=%s", job_id)
+    except Exception as exc:
+        error_code = _question_preparation_failure_code(exc)
+        logger.warning(
+            "Background question preparation failed; job_id=%s error_code=%s exception_type=%s",
+            job_id,
+            error_code,
+            type(exc).__name__,
+        )
         task_facade._fail_operation(
-            task_id, owner_id, job_id, job_attempt, "problem_extraction_failed"
+            task_id, owner_id, job_id, job_attempt, error_code
         )
 
 
