@@ -1,4 +1,11 @@
-export type ProviderType = "openai" | "gemini" | "anthropic" | "zhipu";
+export type ProviderType =
+  | "openai"
+  | "gemini"
+  | "anthropic"
+  | "zhipu"
+  | "deepseek"
+  | "moonshot"
+  | "qwen";
 
 export interface ExpertConfig {
   provider_id: string;

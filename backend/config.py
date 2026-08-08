@@ -18,7 +18,7 @@ class Settings(BaseSettings):
     grading_engine: Literal["v1", "v2"] = "v2"
 
     # ─── Default LLM provider (fallback if no BYOK keys configured) ────────────
-    default_provider: Literal["gemini", "openai", "zhipu", "anthropic"] = "gemini"
+    default_provider: Literal["gemini", "openai", "zhipu", "anthropic", "deepseek", "moonshot", "qwen"] = "deepseek"
 
     # Gemini
     # NEVER hardcode an API key here — keys must come from env vars or BYOK only.
