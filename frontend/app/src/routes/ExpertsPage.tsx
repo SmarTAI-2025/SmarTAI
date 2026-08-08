@@ -47,10 +47,25 @@ import type {
 
 const providerOptions: Array<{ value: ProviderType; label: string; defaultModel: string }> = [
   { value: "gemini", label: "Google Gemini", defaultModel: "gemini-3-flash-preview" },
-  { value: "openai", label: "OpenAI", defaultModel: "gpt-4o" },
-  { value: "zhipu", label: "Zhipu AI", defaultModel: "glm-4.5-air" },
-  { value: "anthropic", label: "Anthropic", defaultModel: "claude-sonnet-4-20250514" },
+  { value: "openai", label: "GPT (OpenAI)", defaultModel: "gpt-4o" },
+  { value: "zhipu", label: "Zhipu (智谱)", defaultModel: "glm-4.5-air" },
+  { value: "anthropic", label: "Claude (Anthropic)", defaultModel: "claude-sonnet-4-20250514" },
+  { value: "deepseek", label: "DeepSeek", defaultModel: "deepseek-v4-flash" },
+  { value: "moonshot", label: "Kimi (Moonshot)", defaultModel: "kimi-k3" },
+  { value: "qwen", label: "Qwen (通义千问)", defaultModel: "qwen-plus" },
 ];
+
+// Official base URL shown as the placeholder for OpenAI-compatible providers
+// whose endpoint a teacher may legitimately override. The backend validator
+// still rejects anything that is not the vendor's official HTTPS host, so this
+// only presets the expected address — it does not widen what is accepted.
+const providerDefaultBaseUrl: Partial<Record<ProviderType, string>> = {
+  openai: "https://api.openai.com/v1",
+  zhipu: "https://open.bigmodel.cn/api/paas/v4",
+  deepseek: "https://api.deepseek.com/v1",
+  moonshot: "https://api.moonshot.cn/v1",
+  qwen: "https://dashscope.aliyuncs.com/compatible-mode/v1",
+};
 
 type EditorTarget =
   | { mode: "add" }
@@ -749,7 +764,7 @@ function ExpertEditorDialog({
   const initialProvider =
     target.mode === "edit" && isProviderType(target.expert.provider_type)
       ? target.expert.provider_type
-      : "gemini";
+      : "deepseek";
   const [provider, setProvider] = useState<ProviderType>(initialProvider);
   const [apiKey, setApiKey] = useState("");
   const [model, setModel] = useState(
@@ -766,7 +781,12 @@ function ExpertEditorDialog({
   );
   const [rpm, setRpm] = useState(String(target.mode === "edit" ? target.expert.rpm : 0));
   const [formError, setFormError] = useState<string | null>(null);
-  const allowsBaseUrl = provider === "openai" || provider === "zhipu";
+  const allowsBaseUrl =
+    provider === "openai" ||
+    provider === "zhipu" ||
+    provider === "deepseek" ||
+    provider === "moonshot" ||
+    provider === "qwen";
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -916,7 +936,7 @@ function ExpertEditorDialog({
               value={baseUrl}
               disabled={pending}
               type="url"
-              placeholder={provider === "openai" ? "https://api.openai.com/v1" : "https://open.bigmodel.cn/api/paas/v4"}
+              placeholder={providerDefaultBaseUrl[provider]}
               onChange={(event) => setBaseUrl(event.target.value)}
             />
           </Field>

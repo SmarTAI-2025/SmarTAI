@@ -11,6 +11,7 @@ from backend.llm.providers import (
     GeminiProvider,
     OpenAIProvider,
     ZhipuProvider,
+    build_provider,
 )
 from backend.models import ProviderConfig
 
@@ -146,6 +147,45 @@ def test_zhipu_always_builds_a_direct_client(monkeypatch):
     assert captured["proxy_url"] is None
     assert captured["kwargs"]["http_client"] == "sync-client"
     assert captured["kwargs"]["http_async_client"] == "async-client"
+
+
+@pytest.mark.parametrize(
+    ("provider_type", "model", "expected_base_url"),
+    [
+        ("deepseek", "deepseek-v4-flash", "https://api.deepseek.com/v1"),
+        ("moonshot", "kimi-k3", "https://api.moonshot.cn/v1"),
+        ("qwen", "qwen-plus", "https://dashscope.aliyuncs.com/compatible-mode/v1"),
+    ],
+)
+def test_domestic_providers_always_build_a_direct_client(
+    monkeypatch, provider_type, model, expected_base_url
+):
+    """DeepSeek/Moonshot/Qwen ignore the foreign-proxy setting and connect
+    directly, exactly like Zhipu — so domestic models keep working at the same
+    time as VPN-routed OpenAI/Gemini/Anthropic. They also default to the
+    vendor's official OpenAI-compatible endpoint when no base_url is supplied."""
+    import langchain_openai
+
+    captured: dict[str, object] = {}
+
+    def fake_clients(proxy_url):
+        captured["proxy_url"] = proxy_url
+        return "sync-client", "async-client"
+
+    def fake_chat_openai(**kwargs):
+        captured["kwargs"] = kwargs
+        return object()
+
+    monkeypatch.setattr(settings, "http_proxy", "http://127.0.0.1:7897")
+    monkeypatch.setattr(settings, "https_proxy", "http://127.0.0.1:7897")
+    monkeypatch.setattr(provider_module, "_build_httpx_clients", fake_clients)
+    monkeypatch.setattr(langchain_openai, "ChatOpenAI", fake_chat_openai)
+
+    provider = build_provider(_provider_config(provider_type, model))
+    provider._build_client_sync()
+
+    assert captured["proxy_url"] is None
+    assert captured["kwargs"]["base_url"] == expected_base_url
 
 
 def test_gemini_and_anthropic_see_explicit_proxy(monkeypatch):
