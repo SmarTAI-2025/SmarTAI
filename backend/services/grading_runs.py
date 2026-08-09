@@ -19,6 +19,7 @@ import logging
 import time
 from typing import Optional
 
+from pydantic import ValidationError as PydanticValidationError
 from sqlalchemy import select
 
 from backend.config import settings
@@ -35,6 +36,7 @@ from backend.llm.registry import _build_scoped_registry
 from backend.models import TaskGradingSetup, User
 from backend.progress.tracker import get_or_create_reporter
 from backend.services import grading_adapter
+from backend.services.background_errors import classify_background_error
 
 logger = logging.getLogger(__name__)
 
@@ -56,7 +58,10 @@ def _questions_for_run(
         return current
     items = list((frozen_setup.input_manifest or {}).get("questions", []))
     if not items:
-        raise ValidationError("grading_question_snapshot_missing")
+        raise ValidationError(
+            "grading_question_snapshot_missing",
+            code="grading_question_snapshot_missing",
+        )
     if all(
         isinstance(item, dict)
         and {
@@ -68,9 +73,15 @@ def _questions_for_run(
         try:
             frozen = [education.QuestionDTO.model_validate(item) for item in items]
         except Exception as exc:
-            raise ValidationError("grading_question_snapshot_invalid") from exc
+            raise ValidationError(
+                "grading_question_snapshot_invalid",
+                code="grading_question_snapshot_invalid",
+            ) from exc
         if any(question.assignment_id != assignment_id for question in frozen):
-            raise ValidationError("grading_question_snapshot_invalid")
+            raise ValidationError(
+                "grading_question_snapshot_invalid",
+                code="grading_question_snapshot_invalid",
+            )
         return frozen
 
     expected = [
@@ -80,7 +91,7 @@ def _questions_for_run(
     ]
     actual = [(question.id, question.version) for question in current]
     if expected != actual:
-        raise VersionConflict("grading_inputs_changed")
+        raise VersionConflict("grading_inputs_changed", code="grading_inputs_changed")
     return current
 
 
@@ -177,16 +188,16 @@ def start_run(
     if input_manifest is not None:
         expected_question_ids = [str(item.get("id")) for item in input_manifest.get("questions", [])]
         if expected_question_ids != [question.id for question in questions]:
-            raise VersionConflict("grading_inputs_changed")
+            raise VersionConflict("grading_inputs_changed", code="grading_inputs_changed")
         expected_question_versions = [
             int(item.get("version", -1))
             for item in input_manifest.get("questions", [])
         ]
         if expected_question_versions != [question.version for question in questions]:
-            raise VersionConflict("grading_inputs_changed")
+            raise VersionConflict("grading_inputs_changed", code="grading_inputs_changed")
         expected_revisions = list(input_manifest.get("submission_revision_ids", []))
         if any(revision_id not in frozen_revision_ids for revision_id in expected_revisions):
-            raise VersionConflict("grading_inputs_changed")
+            raise VersionConflict("grading_inputs_changed", code="grading_inputs_changed")
         frozen_revision_ids = expected_revisions
     run = grading_repository.create_run_bundle(
         assignment_id=assignment_id,
@@ -247,7 +258,12 @@ async def process_run(*, run_id: str, worker_id: str, registry=None, language: s
         # would violate the teacher-approved cost and privacy boundary.
         frozen_setup = get_run_setup(run_id)
         if frozen_setup is not None:
-            grading_setup = TaskGradingSetup.model_validate(frozen_setup.setup)
+            try:
+                grading_setup = TaskGradingSetup.model_validate(frozen_setup.setup)
+            except PydanticValidationError as exc:
+                raise ValidationError(
+                    "grading_setup_invalid", code="grading_setup_invalid"
+                ) from exc
             from backend.services.grading_input_security import (
                 provider_configuration_fingerprint,
             )
@@ -271,12 +287,17 @@ async def process_run(*, run_id: str, worker_id: str, registry=None, language: s
                     primary_provider_id=grading_setup.primary_provider_id,
                 )
             except ValueError as exc:
-                raise ValidationError("grading_provider_selection_invalid") from exc
+                raise ValidationError(
+                    "grading_provider_selection_invalid",
+                    code="grading_provider_selection_invalid",
+                ) from exc
             language = grading_setup.feedback_language
         # The explicitly enabled E2E provider is injected inside the adapter,
         # so it does not appear in a teacher-scoped production registry.
         if run_registry.count() == 0 and not settings.e2e_fake_provider:
-            raise ValidationError("no_provider_configured")
+            raise ValidationError(
+                "no_provider_configured", code="no_provider_configured"
+            )
         questions = _questions_for_run(
             assignment_id=run.assignment_id, frozen_setup=frozen_setup,
         )
@@ -327,17 +348,27 @@ async def process_run(*, run_id: str, worker_id: str, registry=None, language: s
             run_id=run_id, level="info", message="run_completed",
             payload={"completed": completed, "failed": failed},
         )
-    except Exception:
-        logger.exception("Grading run %s failed", run_id)
+    except Exception as exc:
+        error_code = classify_background_error(
+            exc,
+            "grading_failed",
+            persistence_code="grading_persistence_failed",
+        )
+        logger.exception(
+            "Grading run %s failed; error_code=%s exception_type=%s",
+            run_id,
+            error_code,
+            type(exc).__name__,
+        )
         try:
             grading_repository.mark_failed(
                 run_id=run_id,
                 worker_id=worker_id,
-                error_message="grading_failed",
+                error_message=error_code,
             )
             grading_repository.record_event(
                 run_id=run_id, level="error", message="run_failed",
-                payload={"code": "grading_failed"},
+                payload={"code": error_code},
             )
         except DomainError:
             pass  # lease already lost; another worker will reclaim

@@ -214,6 +214,8 @@ export interface RecoverableErrorContext {
 }
 
 const BYOK_CODES = new Set([
+  "no_provider_configured",
+  "provider_credentials_unavailable",
   "recognition_provider_not_enabled",
   "provider_not_enabled",
   "shared_pool_kb_requires_byok",
@@ -223,6 +225,13 @@ const BYOK_CODES = new Set([
 ]);
 
 const FILE_CODES = new Set([
+  "ocr_empty_result",
+  "pdf_extraction_failed",
+  "pdf_ocr_render_failed",
+  "pdf_processing_unavailable",
+  "source_decode_failed",
+  "source_empty",
+  "source_text_too_large",
   "source_too_large",
   "source_type_not_allowed",
   "source_mime_type_not_allowed",
@@ -235,11 +244,25 @@ const FILE_CODES = new Set([
   "submission_source_unsupported",
   "submission_source_empty",
   "submission_source_too_large",
+  "submission_archive_invalid",
+  "submission_archive_limit_exceeded",
   "submission_roster_unsupported",
   "submission_roster_empty",
   "submission_roster_too_large",
   "submission_roster_too_many_rows",
   "submission_roster_headers_invalid",
+]);
+
+const GRADING_CONFIGURATION_CODES = new Set([
+  "grading_provider_configuration_changed",
+  "grading_provider_selection_invalid",
+  "grading_setup_invalid",
+]);
+
+const GRADING_INPUT_CODES = new Set([
+  "grading_inputs_changed",
+  "grading_question_snapshot_invalid",
+  "grading_question_snapshot_missing",
 ]);
 
 const SOURCE_CHANGED_CODES = new Set([
@@ -264,6 +287,51 @@ export function classifyRecoverableError(
   const technicalDetails = buildTechnicalDetails(apiError.status, code, detail, context, locale);
   const retryAfterSeconds = apiError.retryAfterSeconds;
   const returnTo = context.returnTo?.trim();
+
+  if (code && GRADING_CONFIGURATION_CODES.has(code)) {
+    return {
+      title: tx(locale, "批改模型配置已经变化", "The grading model configuration changed"),
+      description: tx(
+        locale,
+        "本次批改使用的模型或批改设置在任务确认后发生了变化。请重新打开批改设置，确认当前可用模型后再启动批改。",
+        "The model or grading setup changed after this run was confirmed. Reopen grading settings, confirm the currently available model, and start grading again.",
+      ),
+      actionLabel: tx(locale, "调整批改设置", "Review grading settings"),
+      actionKind: "adjust_experts",
+      tone: "warning",
+      technicalDetails,
+    };
+  }
+
+  if (code && GRADING_INPUT_CODES.has(code)) {
+    return {
+      title: tx(locale, "批改输入已经变化或不完整", "The grading inputs changed or are incomplete"),
+      description: tx(
+        locale,
+        "题目、作答或本次批改快照已不再匹配。任务原资料仍然保留；请刷新后重新启动批改，以当前内容生成新的批次。",
+        "The questions, submissions, or grading snapshot no longer match. Source data is preserved. Refresh and start a new run from the current content.",
+      ),
+      actionLabel: tx(locale, "刷新任务状态", "Refresh task state"),
+      actionKind: "refresh",
+      tone: "warning",
+      technicalDetails,
+    };
+  }
+
+  if (code === "grading_persistence_failed") {
+    return {
+      title: tx(locale, "批改结果保存失败", "The grading results could not be saved"),
+      description: tx(
+        locale,
+        "批改服务未能把本批结果完整写入数据库，因此没有把不完整结果标为成功。任务原资料仍然保留，请稍后重试；若持续失败，请把任务编号交给管理员检查存储服务。",
+        "The service could not fully save this grading batch, so incomplete results were not marked successful. Source data is preserved. Retry later; if it persists, give the job ID to an administrator to check storage.",
+      ),
+      actionLabel: tx(locale, "重新尝试", "Try again"),
+      actionKind: "retry",
+      tone: "danger",
+      technicalDetails,
+    };
+  }
 
   if (code === "grading_failed") {
     return {
@@ -338,6 +406,21 @@ export function classifyRecoverableError(
       actionHref: `/settings/byok${returnTo ? `?returnTo=${encodeURIComponent(returnTo)}` : ""}`,
       actionKind: "byok",
       tone: "primary",
+      technicalDetails,
+    };
+  }
+
+  if (code === "pdf_extraction_busy" || code === "pdf_extraction_timeout") {
+    return {
+      title: tx(locale, "PDF 读取暂时未完成", "PDF reading did not finish"),
+      description: tx(
+        locale,
+        "PDF 读取任务当前繁忙或超时，原文件仍然保留。请稍后直接重试；不需要重新制作同一份文件。",
+        "PDF processing was busy or timed out. The original file is preserved. Retry shortly; you do not need to recreate the same file.",
+      ),
+      actionLabel: tx(locale, "重新尝试", "Try again"),
+      actionKind: "retry",
+      tone: "warning",
       technicalDetails,
     };
   }
@@ -546,8 +629,17 @@ function fileErrorDescription(
       ? tx(locale, `文件超过 ${limit} 的单文件上传上限，请选择更小的文件。`, `The file exceeds the ${limit} per-file upload limit. Choose a smaller file.`)
       : tx(locale, "文件超过单文件上传上限，请选择更小的文件。", "The file exceeds the per-file upload limit. Choose a smaller file.");
   }
-  if (code === "problem_source_decode_failed") {
+  if (code === "problem_source_decode_failed" || code === "source_decode_failed") {
     return tx(locale, "没有从文件中读取到可用正文。若是扫描 PDF，请先转换为可复制文字的 PDF、TXT 或 Markdown。", "No usable text could be read. If this is a scanned PDF, convert it to a text-based PDF, TXT, or Markdown file first.");
+  }
+  if (code === "ocr_empty_result") {
+    return tx(locale, "视觉模型没有从图片或扫描页中识别出可用文字。请检查图片清晰度、方向和页面内容，或更换视觉模型后重试。", "The vision model found no usable text in the image or scanned page. Check clarity, orientation, and page content, or retry with another vision model.");
+  }
+  if (code === "submission_archive_invalid") {
+    return tx(locale, "压缩包损坏或包含不安全的文件路径。请重新打包为正常 ZIP 后上传。", "The archive is damaged or contains unsafe paths. Create a clean ZIP archive and upload it again.");
+  }
+  if (code === "submission_archive_limit_exceeded") {
+    return tx(locale, "压缩包中的文件数量、单文件大小或解压后总大小超过安全上限。请拆分压缩包后重新上传。", "The archive exceeds the safe file-count, per-file, or expanded-size limit. Split it into smaller archives and upload again.");
   }
   if (code === "pdf_page_limit_exceeded") {
     return tx(locale, "PDF 页数超出本次处理上限。请拆分文件后重新上传。", "The PDF exceeds the page limit. Split it into smaller files and upload again.");

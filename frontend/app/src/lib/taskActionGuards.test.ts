@@ -145,6 +145,41 @@ describe("background task failure guidance", () => {
     expect(info.technicalDetails).toContainEqual({ label: "任务编号", value: "run-1" });
   });
 
+  it("routes changed grading configuration back to grading setup", () => {
+    const info = classifyRecoverableError("grading_provider_configuration_changed", {
+      locale: "zh-CN",
+      phase: "grading",
+      jobId: "run-config",
+    });
+
+    expect(info.title).toContain("模型配置已经变化");
+    expect(info.actionKind).toBe("adjust_experts");
+    expect(info.actionLabel).toBe("调整批改设置");
+    expect(info.technicalDetails).toContainEqual({
+      label: "错误代码",
+      value: "grading_provider_configuration_changed",
+    });
+  });
+
+  it("distinguishes a result persistence failure from model failure", () => {
+    const info = classifyRecoverableError("grading_persistence_failed", {
+      locale: "zh-CN",
+      jobId: "run-db",
+    });
+
+    expect(info.title).toBe("批改结果保存失败");
+    expect(info.description).toContain("数据库");
+    expect(info.actionKind).toBe("retry");
+  });
+
+  it("explains an empty OCR result instead of using submission_parse_failed", () => {
+    const info = classifyRecoverableError("ocr_empty_result", { locale: "zh-CN" });
+
+    expect(info.title).toBe("这份文件暂时无法处理");
+    expect(info.description).toContain("没有从图片或扫描页中识别出可用文字");
+    expect(info.actionKind).toBe("reupload");
+  });
+
   it("translates a bare code via backgroundErrorTitle but keeps real event text", () => {
     expect(backgroundErrorTitle("grading_failed", "zh-CN")).toBe("本次批改没有完成");
     expect(backgroundErrorTitle("provider_timeout", "en-US")).toBe("The model took too long to respond");

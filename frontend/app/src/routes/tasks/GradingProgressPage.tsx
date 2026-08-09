@@ -124,11 +124,20 @@ export function GradingProgressPage() {
               locale={locale}
               className="min-h-[300px]"
               primaryAction={recoveryInfo.actionKind === "byok" ? undefined : {
-                label: recoveryInfo.actionKind === "refresh" ? recoveryInfo.actionLabel : copy(locale, retryGrading.isPending ? "retrying" : "retry"),
-                onClick: recoveryInfo.actionKind === "refresh" ? refresh : () => void handleRetry(),
+                label: recoveryInfo.actionKind === "refresh" || recoveryInfo.actionKind === "adjust_experts"
+                  ? recoveryInfo.actionLabel
+                  : copy(locale, retryGrading.isPending ? "retrying" : "retry"),
+                href: recoveryInfo.actionKind === "adjust_experts"
+                  ? getTaskGradingSetupHref(taskId, `/tasks/${taskId}/grading/progress`)
+                  : undefined,
+                onClick: recoveryInfo.actionKind === "refresh"
+                  ? refresh
+                  : recoveryInfo.actionKind === "adjust_experts"
+                    ? undefined
+                    : () => void handleRetry(),
                 busy: retryGrading.isPending || taskQuery.isFetching || progressQuery.isFetching,
               }}
-              secondaryAction={{
+              secondaryAction={recoveryInfo.actionKind === "adjust_experts" ? undefined : {
                 label: copy(locale, "editExperts"),
                 href: getTaskGradingSetupHref(taskId, `/tasks/${taskId}/grading/progress`),
               }}

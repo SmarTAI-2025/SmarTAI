@@ -7,7 +7,6 @@ recreate the removed TaskStore or JobStore.
 """
 from __future__ import annotations
 
-import asyncio
 import hashlib
 import json
 import logging
@@ -18,7 +17,7 @@ import uuid
 from collections import defaultdict
 from typing import Any
 
-from fastapi import HTTPException
+from pydantic import ValidationError as PydanticValidationError
 from sqlalchemy import delete, func, select, update
 
 from backend.agents.ingest_agent import extract_problems, parse_student_answers
@@ -52,6 +51,11 @@ from backend.domain.errors import (
 from backend.models import TaskGradingSetup
 from backend.progress.tracker import get_or_create_reporter, get_reporter, remove_reporter
 from backend.services import grading_runs
+from backend.services.background_errors import (
+    SAFE_BACKGROUND_ERROR_CODES,
+    classify_background_error,
+    safe_background_error_code,
+)
 from backend.services.result_artifacts import (
     ARTIFACT_SCHEMA_VERSION,
     build_artifact_bundle,
@@ -64,33 +68,7 @@ from backend.tools.file_processing import extract_files_from_archive, extract_te
 
 SYSTEM_COURSE_CODE = "__SMARTAI_UNASSIGNED__"
 SYSTEM_COURSE_NAME = "SmarTAI Workspace"
-_SAFE_ERROR_CODES = {
-    "no_provider_configured",
-    "recognition_provider_not_enabled",
-    "vision_provider_required",
-    "problem_extraction_failed",
-    "provider_timeout",
-    "provider_unreachable",
-    "provider_rate_limited",
-    "provider_auth_failed",
-    "material_import_failed",
-    "ai_completion_failed",
-    "replacement_confirmation_required",
-    "stale_revision",
-    "submission_parse_failed",
-    "grading_failed",
-    "unknown_ai_completion_target",
-    "workflow_busy",
-    "workflow_revision_conflict",
-    # File / source limits emitted by tools/file_processing.py; propagated so the
-    # frontend's FILE_CODES branch can render a specific, actionable message.
-    "source_too_large",
-    "problem_source_decode_failed",
-    "pdf_page_limit_exceeded",
-    "pdf_character_limit_exceeded",
-    "submission_source_unsupported",
-    "submission_source_too_large",
-}
+_SAFE_ERROR_CODES = SAFE_BACKGROUND_ERROR_CODES
 _AUXILIARY_QUESTION_OPERATION_TYPES = {"material_import", "ai_completion"}
 logger = logging.getLogger(__name__)
 
@@ -234,6 +212,7 @@ def get_task(*, task_id: str, owner_id: str, full: bool = True) -> dict:
     submissions = _active_submissions(task_id, owner_id)
     runs = grading_repository.list_runs_for_assignment(task_id, actor_id=owner_id)
     latest_run = runs[-1] if runs else None
+    grading_error_code = _grading_failure_code(latest_run)
     status = _presentation_status(workflow, questions, submissions, latest_run)
     selected_docs = _selected_knowledge(task_id, owner_id)
     tag_ids = _get_task_tags(task_id, owner_id)
@@ -265,7 +244,9 @@ def get_task(*, task_id: str, owner_id: str, full: bool = True) -> dict:
         "extract_job_id": workflow.extract_job_id,
         "parse_job_id": workflow.parse_job_id,
         "grading_job_id": latest_run.id if latest_run else workflow.grading_job_id,
-        "last_failed_job_id": workflow.last_failed_job_id,
+        "last_failed_job_id": (
+            latest_run.id if grading_error_code and latest_run else workflow.last_failed_job_id
+        ),
         "problem_file_name": workflow.problem_file_name,
         "submission_file_name": workflow.submission_file_name,
         "pending_submission_file_name": workflow.pending_submission_file_name,
@@ -293,7 +274,7 @@ def get_task(*, task_id: str, owner_id: str, full: bool = True) -> dict:
         "student_count": len(submissions),
         "kb_docs": selected_docs,
         "kb_doc_count": len(selected_docs),
-        "error": workflow.error_code,
+        "error": grading_error_code or workflow.error_code,
         "created_at": assignment.created_at,
         "updated_at": max(assignment.updated_at, workflow.updated_at),
     }
@@ -326,6 +307,12 @@ def _presentation_status(workflow, questions, submissions, latest_run) -> str:
     if questions:
         return "problems_ready"
     return "draft"
+
+
+def _grading_failure_code(run) -> str | None:
+    if run is None or run.status != education.GradingRunStatus.FAILED.value:
+        return None
+    return safe_background_error_code(run.error_message, "grading_failed")
 
 
 def _serialize_problem(question) -> dict:
@@ -613,120 +600,9 @@ def claim_workflow_operation_atomic(
 
 
 def _detail_error(error: DomainError, fallback: str) -> str:
-    return error.code if error.code != "domain_error" else fallback
-
-
-def _provider_network_exception_types() -> tuple[
-    tuple[type[BaseException], ...], tuple[type[BaseException], ...]
-]:
-    """Gather provider timeout / connection exception classes across adapters.
-
-    Mirrors ``api/experts._verification_error_code``: optional SDK imports are
-    guarded so a missing adapter never breaks classification.
-    """
-    timeout_types: tuple[type[BaseException], ...] = (asyncio.TimeoutError, TimeoutError)
-    connection_types: tuple[type[BaseException], ...] = (ConnectionError, OSError)
-    try:
-        import httpx
-
-        timeout_types += (httpx.TimeoutException,)
-        connection_types += (httpx.TransportError,)
-    except ImportError:  # pragma: no cover - httpx is a runtime dependency
-        pass
-    try:
-        from openai import APIConnectionError, APITimeoutError
-
-        timeout_types += (APITimeoutError,)
-        connection_types += (APIConnectionError,)
-    except ImportError:  # pragma: no cover - optional adapter
-        pass
-    try:
-        from anthropic import APIConnectionError as AnthropicAPIConnectionError
-        from anthropic import APITimeoutError as AnthropicAPITimeoutError
-
-        timeout_types += (AnthropicAPITimeoutError,)
-        connection_types += (AnthropicAPIConnectionError,)
-    except ImportError:  # pragma: no cover - optional adapter
-        pass
-    return timeout_types, connection_types
-
-
-def _http_status(item: BaseException) -> int | None:
-    status_code = getattr(item, "status_code", None)
-    if status_code is None:
-        response = getattr(item, "response", None)
-        status_code = getattr(response, "status_code", None)
-    return status_code if isinstance(status_code, int) else None
-
-
-def _http_exception_detail(item: HTTPException) -> tuple[str | None, str | None]:
-    """Return (code, free_text) from an HTTPException detail."""
-    detail = item.detail
-    if isinstance(detail, dict):
-        code = detail.get("code")
-        return (str(code) if isinstance(code, str) else None), None
-    if isinstance(detail, str):
-        return None, detail
-    return None, None
-
-
-def _classify_background_error(exc: Exception, fallback: str) -> str:
-    """Map a background-job exception to a stable, user-facing error code.
-
-    Walks the ``__cause__`` / ``__context__`` chain so provider errors re-raised
-    through langchain / tenacity still classify correctly. Mirrors
-    ``api/task_preparation._question_preparation_failure_code`` and
-    ``api/experts._verification_error_code``. Only returns codes that are in
-    ``_SAFE_ERROR_CODES`` (or ``fallback``); anything else would be collapsed to
-    ``workflow_failed`` by ``_fail_operation`` and lose its meaning.
-    """
-    from backend.tools.structured_llm import PermanentLLMError, RateLimitError
-
-    chain: list[BaseException] = []
-    current: BaseException | None = exc
-    seen: set[int] = set()
-    while current is not None and id(current) not in seen:
-        seen.add(id(current))
-        chain.append(current)
-        current = current.__cause__ or current.__context__
-
-    if any(isinstance(item, RateLimitError) for item in chain):
-        return "provider_rate_limited"
-
-    timeout_types, connection_types = _provider_network_exception_types()
-    if any(isinstance(item, timeout_types) for item in chain):
-        return "provider_timeout"
-
-    # Auth / permission before connection: a 401/403 from a reachable host is an
-    # authorization problem, not "unreachable".
-    for item in chain:
-        status_code = _http_status(item)
-        if status_code in {401, 403}:
-            return "provider_auth_failed"
-        if status_code == 429:
-            return "provider_rate_limited"
-        if isinstance(item, PermanentLLMError) and any(
-            marker in f"{item}".lower()
-            for marker in (
-                "401", "403", "auth", "unauthorized", "invalid api key", "permission",
-            )
-        ):
-            return "provider_auth_failed"
-
-    if any(isinstance(item, connection_types) for item in chain):
-        return "provider_unreachable"
-
-    # File/vision HTTPExceptions carry either a safe ``code`` or a free-text
-    # message (e.g. "... requires OCR ..."). Propagate the safe codes; detect the
-    # vision-required text so the frontend can point users to enable a vision model.
-    for item in chain:
-        if isinstance(item, HTTPException):
-            code, text = _http_exception_detail(item)
-            if code in _SAFE_ERROR_CODES:
-                return code
-            if code == "vision_provider_required" or "requires ocr" in (text or "").lower():
-                return "vision_provider_required"
-
+    for candidate in (error.code, error.message):
+        if candidate in _SAFE_ERROR_CODES:
+            return candidate
     return fallback
 
 
@@ -927,7 +803,7 @@ async def run_task_problem_extraction(
         logger.warning("Background problem extraction failed; job_id=%s", job_id)
         _fail_operation(
             task_id, owner_id, job_id, job_attempt,
-            _classify_background_error(exc, "problem_extraction_failed"),
+            classify_background_error(exc, "problem_extraction_failed"),
         )
 
 
@@ -1193,7 +1069,7 @@ async def run_task_submission_parsing(
         logger.warning("Background submission parsing failed; job_id=%s", job_id)
         _fail_operation(
             task_id, owner_id, job_id, job_attempt,
-            _classify_background_error(exc, "submission_parse_failed"),
+            classify_background_error(exc, "submission_parse_failed"),
         )
 
 
@@ -1652,7 +1528,7 @@ def _fail_operation(
     task_id: str, owner_id: str, job_id: str, expected_operation_attempt: int,
     error_code: str,
 ) -> bool:
-    safe = error_code if error_code in _SAFE_ERROR_CODES else "workflow_failed"
+    safe = safe_background_error_code(error_code, "workflow_failed")
     now = time.time()
     # Keep the operation transition and workflow cleanup in one transaction.
     # Because retries reuse the operation id, splitting these writes would let
@@ -1783,7 +1659,7 @@ def _grading_progress(run_id: str, owner_id: str) -> dict:
         "total_questions": question_count,
         "completed_units": completed_units,
         "active": [], "messages": messages,
-        "error_detail": "grading_failed" if run.status == "failed" else None,
+        "error_detail": _grading_failure_code(run),
         "started_at": run.started_at or run.created_at,
         "workflow": "grading", "stage_sequence": [],
         "current_step": "completed" if run.status in {"completed", "partial_failed"} else "grading",
@@ -1812,7 +1688,12 @@ def start_task_grading(*, task_id: str, owner_id: str) -> dict:
     answer_statuses = workflow_repository.answer_review_statuses([
         answer.id for revision in revisions for answer in revision.answers
     ])
-    setup = TaskGradingSetup.model_validate(workflow.grading_setup)
+    try:
+        setup = TaskGradingSetup.model_validate(workflow.grading_setup)
+    except PydanticValidationError as exc:
+        raise ValidationError(
+            "grading_setup_invalid", code="grading_setup_invalid"
+        ) from exc
     from backend.services.grading_input_security import (
         provider_configuration_fingerprint,
     )
@@ -1899,7 +1780,7 @@ def task_results(*, task_id: str, owner_id: str) -> dict:
         return {
             "status": "not_found" if run.status == "failed" else task["status"],
             "task_id": task_id,
-            "error": "grading_failed" if run.status == "failed" else None,
+            "error": _grading_failure_code(run),
         }
     results = grading_repository.list_results_for_run(run.id)
     presentations = workflow_repository.list_student_presentations(task_id)
