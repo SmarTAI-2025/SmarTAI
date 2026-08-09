@@ -268,3 +268,44 @@ def test_finalization_artifacts_and_dirty_state_are_idempotent():
         task_id=seeded["task_id"], owner_id=seeded["owner_id"],
     )
     assert stale_index["versions"][0]["status"] == "stale"
+
+
+def test_upstream_answer_edit_marks_detached_formal_result_and_artifacts_stale():
+    from backend.services import task_facade
+
+    seeded = _prepared_task()
+    task_facade.confirm_finalization(
+        task_id=seeded["task_id"],
+        owner_id=seeded["owner_id"],
+        expected_revision=0,
+    )
+    generated = task_facade.generate_artifacts(
+        task_id=seeded["task_id"],
+        owner_id=seeded["owner_id"],
+        expected_revision=1,
+    )
+
+    task_facade.update_student_answer(
+        task_id=seeded["task_id"],
+        owner_id=seeded["owner_id"],
+        display_student_id=seeded["student_id"],
+        q_id="q-required",
+        patch={"content": "corrected after release", "review_status": "confirmed"},
+        expected_revision=generated["workflow_revision"],
+    )
+
+    task = task_facade.get_task(
+        task_id=seeded["task_id"], owner_id=seeded["owner_id"], full=False,
+    )
+    finalization = task_facade.finalization(
+        task_id=seeded["task_id"], owner_id=seeded["owner_id"],
+    )
+    artifacts = task_facade.artifact_index(
+        task_id=seeded["task_id"], owner_id=seeded["owner_id"],
+    )
+
+    assert task["status"] == "submissions_ready"
+    assert task["grading_job_id"] is None
+    assert task["final_result_dirty"] is True
+    assert finalization["final_result_dirty"] is True
+    assert artifacts["versions"][0]["status"] == "stale"

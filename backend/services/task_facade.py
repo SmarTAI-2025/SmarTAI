@@ -238,12 +238,7 @@ def get_task(*, task_id: str, owner_id: str, full: bool = True) -> dict:
         workflow.final_result_version,
         1 if latest_run and latest_run.released_at is not None else 0,
     )
-    has_released_run = any(run.released_at is not None for run in runs)
-    final_result_dirty = bool(
-        has_released_run
-        and latest_run is not None
-        and latest_run.released_at is None
-    )
+    final_result_dirty = _final_result_is_dirty(runs, latest_run)
     payload: dict[str, Any] = {
         "task_id": assignment.id,
         "name": assignment.name,
@@ -335,6 +330,14 @@ def _current_grading_run(workflow, runs):
     }:
         return runs[-1] if runs else None
     return None
+
+
+def _final_result_is_dirty(runs, current_run) -> bool:
+    """Return whether a released result was detached by a newer generation."""
+    return bool(
+        any(run.released_at is not None for run in runs)
+        and (current_run is None or current_run.released_at is None)
+    )
 
 
 def _reconcile_terminal_active_operation(*, task_id: str, owner_id: str, workflow):
@@ -1796,6 +1799,14 @@ def start_task_grading(*, task_id: str, owner_id: str) -> dict:
     )
     if workflow.grading_setup is None:
         raise InvalidTransition("grading_setup_required")
+    if workflow.active_job_id:
+        if workflow.active_operation == "grading":
+            return {
+                "status": "already_running", "task_id": task_id,
+                "job_id": workflow.active_job_id,
+            }
+        raise InvalidTransition("The task is busy.", code="workflow_busy")
+    start_revision = workflow.workflow_revision
     runs = grading_repository.list_runs_for_assignment(task_id, actor_id=owner_id)
     active = next((run for run in reversed(runs) if run.status in {"queued", "running"}), None)
     if active:
@@ -1882,12 +1893,25 @@ def start_task_grading(*, task_id: str, owner_id: str) -> dict:
         setup_fingerprint=run_fingerprint,
         input_manifest=input_manifest,
     )
-    workflow_repository.update_workflow(
-        task_id, owner_id=owner_id, bump_revision=False,
-        presentation_status="grading", grading_job_id=run.id,
-        active_operation="grading", active_job_id=run.id,
-        last_failed_job_id=None, error_code=None,
-    )
+    try:
+        workflow_repository.update_workflow(
+            task_id, owner_id=owner_id, expected_revision=start_revision,
+            bump_revision=False,
+            presentation_status="grading", grading_job_id=run.id,
+            active_operation="grading", active_job_id=run.id,
+            last_failed_job_id=None, error_code=None,
+        )
+    except VersionConflict:
+        # The run bundle commits before the task-facing marker.  If a teacher
+        # edit or another operation wins that window, revoke this old-input run
+        # so it can never become the current grading generation.
+        try:
+            grading_repository.cancel(run.id, teacher_id=owner_id)
+        except InvalidTransition:
+            # A very fast worker may already be terminal.  With no matching
+            # workflow pointer its historical rows remain detached.
+            pass
+        _raise_stale_revision()
     return {"status": "started", "task_id": task_id, "job_id": run.id}
 
 
@@ -1983,6 +2007,8 @@ def update_problem(
         ).with_for_update())
         if workflow_row is None:
             raise NotFound("workflow")
+        if workflow_row.active_job_id:
+            raise InvalidTransition("The task is busy.", code="workflow_busy")
         if (
             expected_revision is not None
             and workflow_row.workflow_revision != expected_revision
@@ -2360,7 +2386,6 @@ def finalization(*, task_id: str, owner_id: str) -> dict:
                     "confirmed": False,
                 })
     released = bool(run and run.released_at is not None)
-    has_released_run = any(item.released_at is not None for item in runs)
     status = "finalized" if released else _presentation_status(
         workflow,
         assignment_repository.get_questions_by_assignment(task_id),
@@ -2376,7 +2401,7 @@ def finalization(*, task_id: str, owner_id: str) -> dict:
         "remaining_review_count": len(remaining), "remaining_reviews": remaining,
         "final_result_version": max(workflow.final_result_version, 1 if released else 0),
         "final_result_updated_at": workflow.final_result_updated_at or (run.released_at if run else None),
-        "final_result_dirty": bool(has_released_run and run and not released),
+        "final_result_dirty": _final_result_is_dirty(runs, run),
         "analysis_status": workflow.analysis_status,
         "analysis_result_version": workflow.analysis_result_version,
         "analysis_generated_at": workflow.analysis_generated_at,
@@ -2609,11 +2634,7 @@ def artifact_index(*, task_id: str, owner_id: str) -> dict:
     records = workflow_repository.list_artifact_manifests(task_id, owner_id=owner_id)
     runs = grading_repository.list_runs_for_assignment(task_id, actor_id=owner_id)
     current_run = _current_grading_run(workflow, runs)
-    final_result_dirty = bool(
-        any(run.released_at is not None for run in runs)
-        and current_run is not None
-        and current_run.released_at is None
-    )
+    final_result_dirty = _final_result_is_dirty(runs, current_run)
     current = max(workflow.final_result_version, 1 if records else 0)
     versions = [
         {

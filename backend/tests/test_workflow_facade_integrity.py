@@ -262,16 +262,14 @@ def test_artifact_manifest_keeps_confirmation_time_and_csv_is_formula_safe():
     )
 
 
-def test_figma_grading_run_freezes_full_questions_and_provider_configuration():
+def _seed_figma_grading_task(owner_id: str):
     from backend.db import assignment_repository, course_repository
     from backend.db.provider_repository import upsert_provider_config
-    from backend.db.workflow_repository import ensure_workflow, get_run_setup, update_workflow
+    from backend.db.workflow_repository import ensure_workflow, update_workflow
     from backend.db.models import UserRecord
     from backend.db.session import session_scope
     from backend.models import ProviderConfig, TaskGradingSetup
-    from backend.services import task_facade
 
-    owner_id = "grading-input-owner"
     with session_scope() as session:
         session.add(UserRecord(
             id=owner_id, username=owner_id, password_hash="hash",
@@ -311,6 +309,15 @@ def test_figma_grading_run_freezes_full_questions_and_provider_configuration():
         grading_setup=setup.model_dump(mode="json"),
         grading_setup_fingerprint="teacher-approved",
     )
+    return assignment, question
+
+
+def test_figma_grading_run_freezes_full_questions_and_provider_configuration():
+    from backend.db.workflow_repository import get_run_setup
+    from backend.services import task_facade
+
+    owner_id = "grading-input-owner"
+    assignment, question = _seed_figma_grading_task(owner_id)
 
     started = task_facade.start_task_grading(
         task_id=assignment.id, owner_id=owner_id
@@ -322,3 +329,70 @@ def test_figma_grading_run_freezes_full_questions_and_provider_configuration():
     assert len(manifest["provider_configuration_fingerprint"]) == 64
     assert "provider-secret" not in str(manifest)
     assert manifest["questions"] == [question.model_dump(mode="json")]
+
+
+def test_grading_start_cancels_old_input_run_when_workflow_revision_races(monkeypatch):
+    from backend.db import grading_repository, workflow_repository
+    from backend.domain.errors import VersionConflict
+    from backend.services import grading_runs, task_facade
+
+    owner_id = "grading-race-owner"
+    assignment, _question = _seed_figma_grading_task(owner_id)
+    original_start_run = grading_runs.start_run
+
+    def start_run_after_concurrent_edit(**kwargs):
+        run = original_start_run(**kwargs)
+        workflow_repository.update_workflow(
+            assignment.id, owner_id=owner_id, semester_id="concurrent-edit"
+        )
+        return run
+
+    monkeypatch.setattr(grading_runs, "start_run", start_run_after_concurrent_edit)
+
+    with pytest.raises(VersionConflict) as stale:
+        task_facade.start_task_grading(
+            task_id=assignment.id, owner_id=owner_id,
+        )
+
+    workflow = workflow_repository.get_workflow(
+        assignment.id, owner_id=owner_id,
+    )
+    runs = grading_repository.list_runs_for_assignment(
+        assignment.id, actor_id=owner_id,
+    )
+    assert stale.value.code == "stale_revision"
+    assert [run.status for run in runs] == ["cancelled"]
+    assert workflow.active_job_id is None
+    assert workflow.grading_job_id is None
+
+
+def test_grading_start_rejects_an_active_non_grading_operation():
+    from backend.db import grading_repository, workflow_repository
+    from backend.domain.errors import InvalidTransition
+    from backend.services import task_facade
+
+    owner_id = "grading-busy-owner"
+    assignment, _question = _seed_figma_grading_task(owner_id)
+    operation, _created = workflow_repository.create_operation(
+        assignment_id=assignment.id,
+        owner_id=owner_id,
+        operation_type="submission_recognition",
+        input_hash="active-recognition",
+    )
+    workflow_repository.update_workflow(
+        assignment.id,
+        owner_id=owner_id,
+        bump_revision=False,
+        active_operation=operation.operation_type,
+        active_job_id=operation.id,
+    )
+
+    with pytest.raises(InvalidTransition) as busy:
+        task_facade.start_task_grading(
+            task_id=assignment.id, owner_id=owner_id,
+        )
+
+    assert busy.value.code == "workflow_busy"
+    assert grading_repository.list_runs_for_assignment(
+        assignment.id, actor_id=owner_id,
+    ) == []
