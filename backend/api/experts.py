@@ -39,7 +39,7 @@ router = APIRouter(prefix="/experts", tags=["experts"])
 
 
 class AddKeyRequest(BaseModel):
-    provider_type: Literal["openai", "gemini", "anthropic", "zhipu"]
+    provider_type: Literal["openai", "gemini", "anthropic", "zhipu", "deepseek", "moonshot", "qwen"]
     api_key: str = Field(min_length=1, max_length=512)
     model: str = Field(min_length=1, max_length=200)
     base_url: Optional[str] = Field(default=None, max_length=512)
@@ -65,6 +65,9 @@ class UpdateKeyRequest(BaseModel):
 _OFFICIAL_PROVIDER_BASE_URLS = {
     "openai": ("api.openai.com", "/v1"),
     "zhipu": ("open.bigmodel.cn", "/api/paas/v4"),
+    "deepseek": ("api.deepseek.com", "/v1"),
+    "moonshot": ("api.moonshot.cn", "/v1"),
+    "qwen": ("dashscope.aliyuncs.com", "/compatible-mode/v1"),
 }
 
 _PROVIDER_CATALOG = (
@@ -88,6 +91,27 @@ _PROVIDER_CATALOG = (
         "docs_url": "https://docs.bigmodel.cn/",
         "console_url": "https://open.bigmodel.cn/usercenter/apikeys",
         "usage_url": "https://open.bigmodel.cn/console/overview",
+    },
+    {
+        "provider_type": "deepseek",
+        "display_name": "DeepSeek",
+        "docs_url": "https://api-docs.deepseek.com/",
+        "console_url": "https://platform.deepseek.com/api_keys",
+        "usage_url": "https://platform.deepseek.com/usage",
+    },
+    {
+        "provider_type": "moonshot",
+        "display_name": "Moonshot (Kimi)",
+        "docs_url": "https://platform.moonshot.cn/docs",
+        "console_url": "https://platform.moonshot.cn/console/api-keys",
+        "usage_url": "https://platform.moonshot.cn/console/account",
+    },
+    {
+        "provider_type": "qwen",
+        "display_name": "Qwen (通义千问)",
+        "docs_url": "https://help.aliyun.com/zh/model-studio/",
+        "console_url": "https://bailian.console.aliyun.com/",
+        "usage_url": "https://bailian.console.aliyun.com/",
     },
     {
         "provider_type": "anthropic",

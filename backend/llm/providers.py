@@ -337,6 +337,51 @@ class AnthropicProvider(BaseProvider):
         )
 
 
+# ─── Domestic OpenAI-compatible providers (direct, no proxy) ─────────────────
+# DeepSeek / Moonshot (Kimi) / Qwen expose OpenAI-compatible endpoints that are
+# reachable from mainland China without a VPN. Like Zhipu, they must ALWAYS
+# build a direct httpx client (proxy=None) so a SMARTAI_HTTPS_PROXY configured
+# for foreign providers (OpenAI/Gemini/Anthropic) is never applied to them.
+# That is what lets domestic and foreign models coexist when a proxy is set.
+# Text models stay supports_vision=False — never advertise a domestic text model
+# as OCR (launch plan 上线前 08); vision GLM is handled by ZhipuProvider above.
+
+
+class _DomesticOpenAICompatibleProvider(BaseProvider):
+    """OpenAI-compatible domestic provider that always connects directly."""
+
+    _default_base_url: str = ""
+
+    def _build_client_sync(self) -> Any:
+        from langchain_openai import ChatOpenAI
+        http_client, http_async_client = _build_httpx_clients(None)
+        return ChatOpenAI(
+            model=self.model,
+            temperature=0.0,
+            timeout=settings.llm_timeout,
+            max_retries=0,
+            api_key=self.config.api_key,
+            base_url=self.config.base_url or self._default_base_url,
+            http_client=http_client,
+            http_async_client=http_async_client,
+        )
+
+
+class DeepSeekProvider(_DomesticOpenAICompatibleProvider):
+    provider_type = "deepseek"
+    _default_base_url = "https://api.deepseek.com/v1"
+
+
+class MoonshotProvider(_DomesticOpenAICompatibleProvider):
+    provider_type = "moonshot"
+    _default_base_url = "https://api.moonshot.cn/v1"
+
+
+class QwenProvider(_DomesticOpenAICompatibleProvider):
+    provider_type = "qwen"
+    _default_base_url = "https://dashscope.aliyuncs.com/compatible-mode/v1"
+
+
 # ─── Factory ─────────────────────────────────────────────────────────────────
 
 PROVIDER_CLASSES: Dict[str, type[BaseProvider]] = {
@@ -344,6 +389,9 @@ PROVIDER_CLASSES: Dict[str, type[BaseProvider]] = {
     "openai": OpenAIProvider,
     "zhipu": ZhipuProvider,
     "anthropic": AnthropicProvider,
+    "deepseek": DeepSeekProvider,
+    "moonshot": MoonshotProvider,
+    "qwen": QwenProvider,
 }
 
 

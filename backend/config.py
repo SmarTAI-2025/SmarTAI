@@ -18,7 +18,7 @@ class Settings(BaseSettings):
     grading_engine: Literal["v1", "v2"] = "v2"
 
     # ─── Default LLM provider (fallback if no BYOK keys configured) ────────────
-    default_provider: Literal["gemini", "openai", "zhipu", "anthropic"] = "gemini"
+    default_provider: Literal["gemini", "openai", "zhipu", "anthropic", "deepseek", "moonshot", "qwen"] = "deepseek"
 
     # Gemini
     # NEVER hardcode an API key here — keys must come from env vars or BYOK only.
@@ -41,6 +41,19 @@ class Settings(BaseSettings):
     # Anthropic
     anthropic_api_key: Optional[str] = os.getenv("ANTHROPIC_API_KEY", "")
     anthropic_model: str = "claude-sonnet-4-20250514"
+
+    # ─── Domestic OpenAI-compatible providers (DeepSeek, Moonshot, Qwen) ─────
+    deepseek_api_key: Optional[str] = os.getenv("DEEPSEEK_API_KEY", "")
+    deepseek_api_base: str = "https://api.deepseek.com/v1"
+    deepseek_model: str = "deepseek-v4-flash"
+
+    moonshot_api_key: Optional[str] = os.getenv("MOONSHOT_API_KEY", "")
+    moonshot_api_base: str = "https://api.moonshot.cn/v1"
+    moonshot_model: str = "kimi-k3"
+
+    qwen_api_key: Optional[str] = os.getenv("QWEN_API_KEY", "")
+    qwen_api_base: str = "https://dashscope.aliyuncs.com/compatible-mode/v1"
+    qwen_model: str = "qwen-plus"
 
     # ─── Optional outbound proxy for overseas model providers ──────────
     # Only SMARTAI_HTTP_PROXY / SMARTAI_HTTPS_PROXY opt in to proxying. Do not
