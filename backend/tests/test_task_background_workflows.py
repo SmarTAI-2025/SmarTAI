@@ -7,7 +7,7 @@ import uuid
 from types import SimpleNamespace
 
 import pytest
-from fastapi import UploadFile
+from fastapi import HTTPException, UploadFile
 from starlette.datastructures import Headers
 
 from backend.api import task_preparation, tasks
@@ -16,7 +16,7 @@ from backend.db.models import AssignmentRecord, CourseRecord, UserRecord
 from backend.db.session import session_scope
 from backend.domain.errors import InvalidTransition, ValidationError, VersionConflict
 from backend.services import task_facade
-from backend.tools.structured_llm import TransientLLMError
+from backend.tools.structured_llm import PermanentLLMError, RateLimitError, TransientLLMError
 
 
 def _seed_task(*, with_question: bool = False) -> tuple[str, str]:
@@ -96,7 +96,7 @@ def test_grading_terminal_state_releases_task_workflow_atomically():
     )
 
     grading_repository.mark_failed(
-        run.id, worker_id="worker", error_message="provider failed"
+        run.id, worker_id="worker", error_message="provider_timeout"
     )
 
     workflow = workflow_repository.get_workflow(task_id, owner_id=owner_id)
@@ -105,6 +105,10 @@ def test_grading_terminal_state_releases_task_workflow_atomically():
     assert workflow.active_job_id is None
     assert workflow.grading_job_id == run.id
     assert workflow.last_failed_job_id == run.id
+    assert workflow.error_code is None
+    assert task_facade.get_task(
+        task_id=task_id, owner_id=owner_id, full=False
+    )["error"] == "provider_timeout"
 
 
 def test_legacy_failed_grading_marker_is_repaired_on_read():
@@ -116,7 +120,7 @@ def test_legacy_failed_grading_marker_is_repaired_on_read():
         run.id, worker_id="worker", lease_seconds=60
     )
     grading_repository.mark_failed(
-        run.id, worker_id="worker", error_message="provider failed"
+        run.id, worker_id="worker", error_message="provider_timeout"
     )
     # Simulate the historical dirty row found in the user's local database.
     workflow_repository.update_workflow(
@@ -135,14 +139,35 @@ def test_legacy_failed_grading_marker_is_repaired_on_read():
 
     workflow = workflow_repository.get_workflow(task_id, owner_id=owner_id)
     assert task["status"] == "error"
+    assert task["error"] == "provider_timeout"
     assert workflow.active_job_id is None
     assert workflow.last_failed_job_id == run.id
+    assert workflow.error_code == "provider_timeout"
     assert task_facade._ensure_no_other_active_operation(
         task_id=task_id,
         owner_id=owner_id,
         operation_type="question_preparation",
         input_hash="new-input",
     )[1] is None
+
+
+def test_missing_active_grading_run_reports_persistence_failure():
+    owner_id, task_id = _seed_task()
+    workflow_repository.update_workflow(
+        task_id,
+        owner_id=owner_id,
+        bump_revision=False,
+        presentation_status="grading",
+        grading_job_id="run-missing",
+        active_operation="grading",
+        active_job_id="run-missing",
+    )
+
+    task = task_facade.get_task(task_id=task_id, owner_id=owner_id, full=False)
+
+    assert task["status"] == "error"
+    assert task["error"] == "grading_persistence_failed"
+    assert task["last_failed_job_id"] == "run-missing"
 
 
 def test_task_rename_does_not_advance_workflow_revision():
@@ -690,6 +715,179 @@ def test_disabled_selected_recognition_provider_has_figma_error_code():
             registry=DisabledRegistry(), recognition_provider_id="disabled",
         )
     assert disabled.value.code == "recognition_provider_not_enabled"
+
+
+@pytest.mark.asyncio
+async def test_submission_ocr_without_vision_provider_has_figma_error_code(monkeypatch):
+    owner_id, task_id = _seed_task(with_question=True)
+
+    class NoVisionRegistry(_Registry):
+        def pick_vision(self, preferred=None):
+            del preferred
+            return None
+
+    async def _requires_vision(*args, **kwargs):
+        del args, kwargs
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "answers.pdf requires OCR, but no vision-capable provider is "
+                "configured. Add and enable a model that supports image input."
+            ),
+        )
+
+    monkeypatch.setattr(task_facade, "extract_files_from_archive", _requires_vision)
+    registry = NoVisionRegistry()
+    queued = task_facade.queue_task_submission_parsing(
+        task_id=task_id, owner_id=owner_id, filename="answers.zip",
+        content=b"archive", content_type="application/zip", registry=registry,
+    )
+
+    await task_facade.run_task_submission_parsing(
+        task_id=task_id,
+        owner_id=owner_id,
+        job_id=queued["job_id"],
+        filename="answers.zip",
+        content=b"archive",
+        registry=registry,
+        job_attempt=queued["_job_attempt"],
+        identity_mode="filename",
+        roster_entries=None,
+        recognition_provider_id=None,
+        replace_confirmed=False,
+        claimed_workflow_revision=queued["workflow_revision"],
+    )
+
+    failed = workflow_repository.get_operation(queued["job_id"], owner_id=owner_id)
+    workflow = workflow_repository.get_workflow(task_id, owner_id=owner_id)
+    assert failed.status == "error"
+    assert failed.error_code == "vision_provider_required"
+    assert workflow.presentation_status == "error"
+    assert workflow.error_code == "vision_provider_required"
+
+
+class _VisionlessRegistry(_Registry):
+    """_Registry plus a no-op ``pick_vision`` so background runners reach their work."""
+
+    def pick_vision(self, preferred=None):
+        del preferred
+        return None
+
+
+@pytest.mark.asyncio
+async def test_problem_extraction_timeout_persists_provider_timeout(monkeypatch):
+    owner_id, task_id = _seed_task()
+    registry = _VisionlessRegistry()
+
+    async def _timeout(*args, **kwargs):
+        del args, kwargs
+        try:
+            raise TimeoutError("provider request timed out")
+        except TimeoutError as exc:
+            raise TransientLLMError("provider request failed") from exc
+
+    monkeypatch.setattr(task_facade, "extract_text_from_upload", _timeout)
+    queued = task_facade.queue_task_problem_extraction(
+        task_id=task_id, owner_id=owner_id, filename="questions.pdf",
+        content=b"source", content_type="application/pdf", registry=registry,
+    )
+    await task_facade.run_task_problem_extraction(
+        task_id=task_id, owner_id=owner_id, job_id=queued["job_id"],
+        filename="questions.pdf", content=b"source", registry=registry,
+        job_attempt=queued["_job_attempt"],
+        claimed_workflow_revision=queued["workflow_revision"],
+        replace_confirmed=False,
+    )
+
+    failed = workflow_repository.get_operation(queued["job_id"], owner_id=owner_id)
+    workflow = workflow_repository.get_workflow(task_id, owner_id=owner_id)
+    assert failed.status == "error"
+    assert failed.error_code == "provider_timeout"
+    assert workflow.presentation_status == "error"
+    assert workflow.error_code == "provider_timeout"
+
+
+@pytest.mark.asyncio
+async def test_submission_rate_limit_persists_provider_rate_limited(monkeypatch):
+    owner_id, task_id = _seed_task(with_question=True)
+
+    async def _rate_limited(*args, **kwargs):
+        del args, kwargs
+        raise RateLimitError("429 Too Many Requests")
+
+    monkeypatch.setattr(task_facade, "extract_files_from_archive", _rate_limited)
+    registry = _VisionlessRegistry()
+    queued = task_facade.queue_task_submission_parsing(
+        task_id=task_id, owner_id=owner_id, filename="answers.zip",
+        content=b"archive", content_type="application/zip", registry=registry,
+    )
+    await task_facade.run_task_submission_parsing(
+        task_id=task_id, owner_id=owner_id, job_id=queued["job_id"],
+        filename="answers.zip", content=b"archive", registry=registry,
+        job_attempt=queued["_job_attempt"], identity_mode="filename",
+        roster_entries=None, recognition_provider_id=None,
+        replace_confirmed=False,
+        claimed_workflow_revision=queued["workflow_revision"],
+    )
+
+    failed = workflow_repository.get_operation(queued["job_id"], owner_id=owner_id)
+    assert failed.status == "error"
+    assert failed.error_code == "provider_rate_limited"
+
+
+@pytest.mark.asyncio
+async def test_submission_connection_error_persists_provider_unreachable(monkeypatch):
+    owner_id, task_id = _seed_task(with_question=True)
+
+    async def _unreachable(*args, **kwargs):
+        del args, kwargs
+        raise ConnectionError("failed to connect to provider")
+
+    monkeypatch.setattr(task_facade, "extract_files_from_archive", _unreachable)
+    registry = _VisionlessRegistry()
+    queued = task_facade.queue_task_submission_parsing(
+        task_id=task_id, owner_id=owner_id, filename="answers.zip",
+        content=b"archive", content_type="application/zip", registry=registry,
+    )
+    await task_facade.run_task_submission_parsing(
+        task_id=task_id, owner_id=owner_id, job_id=queued["job_id"],
+        filename="answers.zip", content=b"archive", registry=registry,
+        job_attempt=queued["_job_attempt"], identity_mode="filename",
+        roster_entries=None, recognition_provider_id=None,
+        replace_confirmed=False,
+        claimed_workflow_revision=queued["workflow_revision"],
+    )
+
+    failed = workflow_repository.get_operation(queued["job_id"], owner_id=owner_id)
+    assert failed.status == "error"
+    assert failed.error_code == "provider_unreachable"
+
+
+@pytest.mark.asyncio
+async def test_problem_extraction_auth_error_persists_provider_auth_failed(monkeypatch):
+    owner_id, task_id = _seed_task()
+    registry = _VisionlessRegistry()
+
+    async def _auth_failed(*args, **kwargs):
+        del args, kwargs
+        raise PermanentLLMError("401 invalid api key")
+
+    monkeypatch.setattr(task_facade, "extract_text_from_upload", _auth_failed)
+    queued = task_facade.queue_task_problem_extraction(
+        task_id=task_id, owner_id=owner_id, filename="questions.pdf",
+        content=b"source", content_type="application/pdf", registry=registry,
+    )
+    await task_facade.run_task_problem_extraction(
+        task_id=task_id, owner_id=owner_id, job_id=queued["job_id"],
+        filename="questions.pdf", content=b"source", registry=registry,
+        job_attempt=queued["_job_attempt"],
+        claimed_workflow_revision=queued["workflow_revision"],
+        replace_confirmed=False,
+    )
+
+    failed = workflow_repository.get_operation(queued["job_id"], owner_id=owner_id)
+    assert failed.status == "error"
+    assert failed.error_code == "provider_auth_failed"
 
 
 @pytest.mark.asyncio

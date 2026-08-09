@@ -491,11 +491,10 @@ def _terminal_update(run_id: str, *, worker_id: str, status: str,
             ),
             "active_operation": None,
             "active_job_id": None,
-            "error_code": (
-                "grading_failed"
-                if status == education.GradingRunStatus.FAILED.value
-                else None
-            ),
+            # The classified failure is persisted on the run itself. Task
+            # projections read and sanitize that value, so this atomic marker
+            # cleanup never duplicates or replaces it with a generic code.
+            "error_code": None,
             "updated_at": now,
         }
         if status == education.GradingRunStatus.FAILED.value:
