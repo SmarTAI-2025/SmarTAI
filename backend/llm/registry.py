@@ -139,6 +139,27 @@ class ExpertRegistry:
                 api_key=settings.anthropic_api_key,
                 model=settings.anthropic_model,
             ))
+        if settings.deepseek_api_key:
+            self.register(ProviderConfig(
+                provider_type="deepseek",
+                api_key=settings.deepseek_api_key,
+                model=settings.deepseek_model,
+                base_url=settings.deepseek_api_base,
+            ))
+        if settings.moonshot_api_key:
+            self.register(ProviderConfig(
+                provider_type="moonshot",
+                api_key=settings.moonshot_api_key,
+                model=settings.moonshot_model,
+                base_url=settings.moonshot_api_base,
+            ))
+        if settings.qwen_api_key:
+            self.register(ProviderConfig(
+                provider_type="qwen",
+                api_key=settings.qwen_api_key,
+                model=settings.qwen_model,
+                base_url=settings.qwen_api_base,
+            ))
 
     def register(
         self,

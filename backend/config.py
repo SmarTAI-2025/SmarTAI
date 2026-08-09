@@ -42,6 +42,19 @@ class Settings(BaseSettings):
     anthropic_api_key: Optional[str] = os.getenv("ANTHROPIC_API_KEY", "")
     anthropic_model: str = "claude-sonnet-4-20250514"
 
+    # ─── Domestic OpenAI-compatible providers (DeepSeek, Moonshot, Qwen) ─────
+    deepseek_api_key: Optional[str] = os.getenv("DEEPSEEK_API_KEY", "")
+    deepseek_api_base: str = "https://api.deepseek.com/v1"
+    deepseek_model: str = "deepseek-v4-flash"
+
+    moonshot_api_key: Optional[str] = os.getenv("MOONSHOT_API_KEY", "")
+    moonshot_api_base: str = "https://api.moonshot.cn/v1"
+    moonshot_model: str = "kimi-k3"
+
+    qwen_api_key: Optional[str] = os.getenv("QWEN_API_KEY", "")
+    qwen_api_base: str = "https://dashscope.aliyuncs.com/compatible-mode/v1"
+    qwen_model: str = "qwen-plus"
+
     # ─── Optional outbound proxy for overseas model providers ──────────
     # Only SMARTAI_HTTP_PROXY / SMARTAI_HTTPS_PROXY opt in to proxying. Do not
     # inherit a machine-wide HTTP_PROXY implicitly: Zhipu must remain direct.
