@@ -263,13 +263,20 @@ def test_artifact_manifest_keeps_confirmation_time_and_csv_is_formula_safe():
 
 
 def test_figma_grading_run_freezes_full_questions_and_provider_configuration():
-    from backend.db import assignment_repository, course_repository
+    from backend.db import (
+        assignment_repository,
+        course_repository,
+        source_outcome_repository,
+        workflow_repository,
+    )
+    from backend.db.file_repository import save_file
     from backend.db.provider_repository import upsert_provider_config
     from backend.db.workflow_repository import ensure_workflow, get_run_setup, update_workflow
     from backend.db.models import UserRecord
     from backend.db.session import session_scope
     from backend.models import ProviderConfig, TaskGradingSetup
     from backend.services import task_facade
+    from backend.storage import get_storage
 
     owner_id = "grading-input-owner"
     with session_scope() as session:
@@ -305,15 +312,88 @@ def test_figma_grading_run_freezes_full_questions_and_provider_configuration():
         primary_provider_id=provider.id,
         knowledge_scope="none",
     )
-    ensure_workflow(assignment_id=assignment.id, owner_id=owner_id)
-    update_workflow(
+    workflow = ensure_workflow(assignment_id=assignment.id, owner_id=owner_id)
+    operation, _ = workflow_repository.create_operation(
+        assignment_id=assignment.id,
+        owner_id=owner_id,
+        operation_type="submission_recognition",
+        input_hash="f" * 64,
+    )
+    workflow_repository.update_operation(
+        operation.id,
+        owner_id=owner_id,
+        expected_attempt=operation.attempt,
+        status="running",
+    )
+    workflow = update_workflow(
+        assignment.id,
+        owner_id=owner_id,
+        parse_job_id=operation.id,
+        active_operation="submission_recognition",
+        active_job_id=operation.id,
+    )
+    stored = save_file(
+        storage=get_storage(),
+        owner_id=owner_id,
+        kind="submission_source",
+        original_name="student.txt",
+        content=b"answer",
+        content_type="text/plain",
+        assignment_id=assignment.id,
+    )
+    source, _ = source_outcome_repository.register_source(
+        owner_id=owner_id,
+        assignment_id=assignment.id,
+        operation_id=operation.id,
+        expected_attempt=operation.attempt,
+        order_index=0,
+        stored_file_id=stored.id,
+    )
+    source_outcome_repository.record_outcome(
+        source_id=source.id,
+        owner_id=owner_id,
+        status="parsed",
+        student_candidate="S001",
+        matched_answer_count=1,
+        unknown_question_ids=[],
+        stable_error_code=None,
+        failure_phase=None,
+        retryable=False,
+    )
+    task_facade._commit_imported_submissions(
+        task_id=assignment.id,
+        owner_id=owner_id,
+        course_id=course.id,
+        students=[{
+            "stu_id": "S001",
+            "stu_name": "Student One",
+            "source_id": source.id,
+            "source_filename": "student.txt",
+            "identity_match_method": "filename",
+            "identity_status": "matched",
+            "stu_ans": [{
+                "q_id": "q1",
+                "number": "1",
+                "type": "short",
+                "content": "answer",
+                "flag": [],
+            }],
+        }],
+        expected_workflow_revision=workflow.workflow_revision,
+        operation_id=operation.id,
+        expected_operation_attempt=operation.attempt,
+        submission_file_name="student.txt",
+    )
+    workflow = update_workflow(
         assignment.id, owner_id=owner_id,
         grading_setup=setup.model_dump(mode="json"),
         grading_setup_fingerprint="teacher-approved",
     )
 
     started = task_facade.start_task_grading(
-        task_id=assignment.id, owner_id=owner_id
+        task_id=assignment.id,
+        owner_id=owner_id,
+        expected_workflow_revision=workflow.workflow_revision,
     )
     frozen = get_run_setup(started["job_id"])
 

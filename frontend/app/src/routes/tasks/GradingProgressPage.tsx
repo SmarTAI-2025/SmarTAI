@@ -66,9 +66,12 @@ export function GradingProgressPage() {
   };
 
   async function handleRetry() {
-    if (!taskId) return;
+    if (!taskId || !task) return;
     try {
-      const response = await retryGrading.mutateAsync({ taskId });
+      const response = await retryGrading.mutateAsync({
+        taskId,
+        expectedWorkflowRevision: task.workflow_revision,
+      });
       if (response.status === "already_done") {
         navigate(`/tasks/${taskId}/review`, { replace: true });
         return;

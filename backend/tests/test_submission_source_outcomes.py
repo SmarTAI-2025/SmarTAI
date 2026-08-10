@@ -257,7 +257,7 @@ async def test_partial_batch_keeps_success_and_exact_per_file_failure(monkeypatc
     assert by_name["bad.txt"]["internal_status"] == "parse_failed"
     assert by_name["bad.txt"]["reason_code"] == "submission_parse_invalid"
     assert by_name["bad.txt"]["failure_phase"] == "structured_parse"
-    assert by_name["bad.txt"]["retryable"] is False
+    assert by_name["bad.txt"]["retryable"] is True
 
 
 @pytest.mark.asyncio
@@ -322,7 +322,7 @@ async def test_teacher_identity_confirmation_resolves_current_attention_without_
 @pytest.mark.asyncio
 async def test_model_without_image_support_reaches_teacher_as_vision_reason(monkeypatch):
     owner_id, task_id = _seed_task()
-    content = b"not-a-real-image-but-ocr-provider-sees-bytes"
+    content = b"\x89PNG\r\n\x1a\nfake-image-payload"
     queued = _queue(owner_id, task_id, content, filename="scan.png")
 
     class UnsupportedVisionSkill:
@@ -368,6 +368,14 @@ async def test_model_without_image_support_reaches_teacher_as_vision_reason(monk
     operation = workflow_repository.get_operation(queued["job_id"], owner_id=owner_id)
     assert operation.error_code == "vision_provider_required"
     assert operation.progress["error_detail"] == "vision_provider_required"
+
+
+def test_provider_failure_during_image_read_is_classified_as_ocr():
+    from backend.services.submission_source_pipeline import _source_read_failure_phase
+
+    assert _source_read_failure_phase("provider_timeout", "image/png") == "ocr"
+    assert _source_read_failure_phase("provider_unreachable", "application/pdf") == "ocr"
+    assert _source_read_failure_phase("provider_timeout", "text/plain") == "recognition"
 
 
 @pytest.mark.asyncio
@@ -465,4 +473,5 @@ async def test_duplicate_student_ids_preserve_both_sources_for_review(monkeypatc
         "duplicate_student_identity", "duplicate_student_identity"
     ]
     ids = [result.student["stu_id"] for result in results if result.student]
-    assert ids == ["S003#duplicate-1", "S003#duplicate-2"]
+    assert len(set(ids)) == 2
+    assert all(value.startswith("duplicate_") and len(value) <= 160 for value in ids)

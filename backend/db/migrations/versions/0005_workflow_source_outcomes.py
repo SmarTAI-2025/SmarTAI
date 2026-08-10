@@ -25,8 +25,13 @@ def upgrade() -> None:
         sa.Column("stored_file_id", sa.String(length=64), nullable=False),
         sa.Column("retry_of_source_id", sa.String(length=64), nullable=True),
         sa.Column("created_at", sa.Float(), nullable=False),
-        sa.CheckConstraint("attempt > 0", name="ck_workflow_source_items_attempt_positive"),
-        sa.CheckConstraint("order_index >= 0", name="ck_workflow_source_items_order_nonnegative"),
+        sa.CheckConstraint(
+            "attempt > 0", name="ck_workflow_source_items_attempt_positive"
+        ),
+        sa.CheckConstraint(
+            "order_index >= 0",
+            name="ck_workflow_source_items_order_nonnegative",
+        ),
         sa.ForeignKeyConstraint(
             ["owner_id"], ["users.id"],
             name="fk_workflow_source_items_owner", ondelete="CASCADE",
@@ -57,9 +62,15 @@ def upgrade() -> None:
             name="uq_workflow_source_items_operation_attempt_file",
         ),
     )
-    op.create_index("ix_workflow_source_items_owner_id", "workflow_source_items", ["owner_id"])
     op.create_index(
-        "ix_workflow_source_items_stored_file_id", "workflow_source_items", ["stored_file_id"]
+        "ix_workflow_source_items_owner_id",
+        "workflow_source_items",
+        ["owner_id"],
+    )
+    op.create_index(
+        "ix_workflow_source_items_stored_file_id",
+        "workflow_source_items",
+        ["stored_file_id"],
     )
     op.create_index(
         "ix_workflow_source_items_retry_of_source_id",
@@ -71,20 +82,6 @@ def upgrade() -> None:
         "workflow_source_items",
         ["assignment_id", "operation_id", "attempt", "order_index"],
     )
-    with op.batch_alter_table("assignment_student_presentations") as batch_op:
-        batch_op.add_column(sa.Column("source_id", sa.String(length=64), nullable=True))
-        batch_op.create_foreign_key(
-            "fk_assignment_student_presentations_source",
-            "workflow_source_items",
-            ["source_id"],
-            ["id"],
-            ondelete="SET NULL",
-        )
-        batch_op.create_index(
-            "ix_assignment_student_presentations_source_id",
-            ["source_id"],
-            unique=True,
-        )
 
     op.create_table(
         "workflow_source_outcomes",
@@ -94,7 +91,6 @@ def upgrade() -> None:
         sa.Column("matched_answer_count", sa.Integer(), nullable=False),
         sa.Column("unknown_question_ids", sa.JSON(), nullable=False),
         sa.Column("stable_error_code", sa.String(length=128), nullable=True),
-        sa.Column("failure_phase", sa.String(length=64), nullable=True),
         sa.Column("retryable", sa.Boolean(), nullable=False),
         sa.Column("artifact_file_id", sa.String(length=64), nullable=True),
         sa.Column("created_at", sa.Float(), nullable=False),
@@ -118,7 +114,9 @@ def upgrade() -> None:
         sa.PrimaryKeyConstraint("source_id"),
     )
     op.create_index(
-        "ix_workflow_source_outcomes_status", "workflow_source_outcomes", ["status"]
+        "ix_workflow_source_outcomes_status",
+        "workflow_source_outcomes",
+        ["status"],
     )
     op.create_index(
         "ix_workflow_source_outcomes_artifact_file_id",
@@ -128,18 +126,16 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    with op.batch_alter_table("assignment_student_presentations") as batch_op:
-        batch_op.drop_index("ix_assignment_student_presentations_source_id")
-        batch_op.drop_constraint(
-            "fk_assignment_student_presentations_source", type_="foreignkey"
-        )
-        batch_op.drop_column("source_id")
     op.drop_index(
         "ix_workflow_source_outcomes_artifact_file_id",
         table_name="workflow_source_outcomes",
     )
-    op.drop_index("ix_workflow_source_outcomes_status", table_name="workflow_source_outcomes")
+    op.drop_index(
+        "ix_workflow_source_outcomes_status",
+        table_name="workflow_source_outcomes",
+    )
     op.drop_table("workflow_source_outcomes")
+
     op.drop_index(
         "ix_workflow_source_items_assignment_operation_attempt_order",
         table_name="workflow_source_items",
@@ -152,5 +148,8 @@ def downgrade() -> None:
         "ix_workflow_source_items_stored_file_id",
         table_name="workflow_source_items",
     )
-    op.drop_index("ix_workflow_source_items_owner_id", table_name="workflow_source_items")
+    op.drop_index(
+        "ix_workflow_source_items_owner_id",
+        table_name="workflow_source_items",
+    )
     op.drop_table("workflow_source_items")

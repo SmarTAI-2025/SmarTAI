@@ -24,6 +24,84 @@ function source(overrides: Partial<SubmissionSourceOutcome>): SubmissionSourceOu
 }
 
 describe("submission source reason copy", () => {
+  it.each([
+    [
+      "submission_model_field_too_long",
+      "structured_parse",
+      "模型返回字段超过安全长度",
+      "The model returned an oversized field",
+    ],
+    [
+      "submission_outcome_persistence_failed",
+      "outcome_persistence",
+      "逐文件识别结果保存未完成",
+      "Per-file outcomes were not fully saved",
+    ],
+    [
+      "student_identity_conflict",
+      "identity",
+      "学生身份发生冲突",
+      "The student identity conflicts",
+    ],
+    [
+      "submission_source_content_type_mismatch",
+      "source_read",
+      "文件内容与扩展名或类型不一致",
+      "The file contents do not match its name or declared type",
+    ],
+    [
+      "pdf_extraction_busy",
+      "source_read",
+      "PDF 读取服务正忙",
+      "PDF extraction is busy",
+    ],
+    [
+      "submission_archive_member_too_large",
+      "archive",
+      "压缩包中的这份文件过大",
+      "This archive member is too large",
+    ],
+    [
+      "submission_archive_member_unreadable",
+      "archive",
+      "压缩包中的这份文件无法读取",
+      "This archive member could not be read",
+    ],
+    [
+      "submission_archive_member_unsafe_path",
+      "archive",
+      "压缩包成员路径不安全",
+      "This archive member has an unsafe path",
+    ],
+  ])("has exact bilingual copy for newly public reason %s", (
+    reasonCode,
+    failurePhase,
+    expectedZhTitle,
+    expectedEnTitle,
+  ) => {
+    const overrides: Partial<SubmissionSourceOutcome> = {
+      reason_code: reasonCode,
+      failure_phase: failurePhase,
+    };
+    if (reasonCode === "student_identity_conflict") {
+      overrides.status = "identity_needs_review";
+      overrides.internal_status = "identity_conflict";
+      overrides.student_candidate = "S008";
+    }
+
+    const zhCopy = getSubmissionSourceReasonCopy(source(overrides), "zh-CN");
+    const enCopy = getSubmissionSourceReasonCopy(source(overrides), "en-US");
+
+    expect(zhCopy.title).toBe(expectedZhTitle);
+    expect(enCopy.title).toBe(expectedEnTitle);
+    expect(zhCopy.title).not.toBe("这份作答未完成识别");
+    expect(enCopy.title).not.toBe("This submission was not recognized");
+    expect(zhCopy.description).not.toBe("");
+    expect(enCopy.description).not.toBe("");
+    expect(zhCopy.nextStep).not.toBe("");
+    expect(enCopy.nextStep).not.toBe("");
+  });
+
   it("states that a vision-provider failure is an OCR capability problem", () => {
     const copy = getSubmissionSourceReasonCopy(source({
       reason_code: "vision_provider_required",
@@ -33,6 +111,21 @@ describe("submission source reason copy", () => {
     expect(copy.title).toContain("模型不支持图片 OCR");
     expect(copy.description).toContain("并不是文件丢失或学生答案有误");
     expect(copy.nextStep).toContain("视觉模型");
+  });
+
+  it("identifies a provider timeout in the OCR phase as an OCR model failure", () => {
+    const zhCopy = getSubmissionSourceReasonCopy(source({
+      reason_code: "provider_timeout",
+      failure_phase: "ocr",
+    }), "zh-CN");
+    const enCopy = getSubmissionSourceReasonCopy(source({
+      reason_code: "provider_timeout",
+      failure_phase: "ocr",
+    }), "en-US");
+
+    expect(zhCopy.title).toBe("OCR：模型响应超时");
+    expect(zhCopy.description).toContain("OCR 模型调用");
+    expect(enCopy.title).toBe("OCR: The model timed out");
   });
 
   it("states that no_matching_answer is not a wrong student answer", () => {

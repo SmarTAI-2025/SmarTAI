@@ -7,7 +7,7 @@ import uuid
 from types import SimpleNamespace
 
 import pytest
-from fastapi import UploadFile
+from fastapi import HTTPException, UploadFile
 from starlette.datastructures import Headers
 
 from backend.api import task_preparation, tasks
@@ -387,6 +387,34 @@ async def test_extract_endpoint_queues_background_work_and_returns_started():
     workflow = workflow_repository.get_workflow(task_id, owner_id=owner_id)
     assert workflow.active_job_id is None
     assert workflow.error_code == "problem_extraction_failed"
+
+
+@pytest.mark.asyncio
+async def test_submission_upload_is_bounded_before_any_operation_is_created(monkeypatch):
+    background = _BackgroundTasks()
+    upload = UploadFile(
+        file=io.BytesIO(b"four"),
+        filename="submissions.zip",
+        headers=Headers({"content-type": "application/zip"}),
+    )
+    monkeypatch.setattr(tasks, "SUBMISSION_UPLOAD_MAX_BYTES", 3)
+
+    with pytest.raises(HTTPException) as exc:
+        await tasks.parse_submissions_endpoint(
+            task_id="never-created",
+            background_tasks=background,
+            file=upload,
+            identity_mode="filename",
+            roster_file=None,
+            recognition_provider_id=None,
+            replace_confirmed=False,
+            current=SimpleNamespace(id="owner"),
+            registry=_Registry(),
+        )
+
+    assert exc.value.status_code == 413
+    assert exc.value.detail == {"code": "submission_source_too_large"}
+    assert background.calls == []
 
 
 @pytest.mark.asyncio

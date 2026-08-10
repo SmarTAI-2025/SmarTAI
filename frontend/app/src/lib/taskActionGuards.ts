@@ -235,11 +235,15 @@ const FILE_CODES = new Set([
   "pdf_page_limit_exceeded",
   "pdf_character_limit_exceeded",
   "submission_source_unsupported",
+  "submission_source_content_type_mismatch",
   "submission_source_empty",
   "submission_source_too_large",
   "submission_archive_empty",
   "submission_archive_invalid",
   "submission_archive_limit_exceeded",
+  "submission_archive_member_too_large",
+  "submission_archive_member_unreadable",
+  "submission_archive_member_unsafe_path",
   "submission_roster_unsupported",
   "submission_roster_empty",
   "submission_roster_too_large",
@@ -376,6 +380,21 @@ export function classifyRecoverableError(
     };
   }
 
+  if (code === "submission_outcome_persistence_failed") {
+    return {
+      title: tx(locale, "逐文件识别结果保存未完成", "Per-file outcomes were not fully saved"),
+      description: tx(
+        locale,
+        "原文件已经保存，但系统无法确认每份来源的终态都已写入数据库。任务已停止，不会把缺失结果静默带入批改。请携带任务编号排查数据库后重试。",
+        "The originals were saved, but the system could not confirm every per-source terminal outcome in the database. The task stopped and will not silently grade missing results. Use the job ID to check the database, then retry.",
+      ),
+      actionLabel: tx(locale, "重新尝试", "Try again"),
+      actionKind: "retry",
+      tone: "danger",
+      technicalDetails,
+    };
+  }
+
   if (code === "submission_parse_invalid") {
     return {
       title: tx(locale, "模型返回格式无法解析", "The model returned an invalid structure"),
@@ -387,6 +406,36 @@ export function classifyRecoverableError(
       actionLabel: tx(locale, "重新尝试", "Try again"),
       actionKind: "retry",
       tone: "danger",
+      technicalDetails,
+    };
+  }
+
+  if (code === "submission_model_field_too_long") {
+    return {
+      title: tx(locale, "模型返回字段超过安全长度", "The model returned an oversized field"),
+      description: tx(
+        locale,
+        "模型返回了过长的身份或题号字段。系统只拒绝这份来源，没有截断后冒充成功，也不会拖垮整批。",
+        "The model returned an overlong identity or question field. Only this source was rejected; no truncated value was accepted and the rest of the batch continued.",
+      ),
+      actionLabel: tx(locale, "重新尝试", "Try again"),
+      actionKind: "retry",
+      tone: "warning",
+      technicalDetails,
+    };
+  }
+
+  if (code === "pdf_extraction_busy" || code === "pdf_extraction_timeout") {
+    return {
+      title: code === "pdf_extraction_busy"
+        ? tx(locale, "PDF 读取服务正忙", "PDF extraction is busy")
+        : tx(locale, "PDF 读取超时", "PDF extraction timed out"),
+      description: code === "pdf_extraction_busy"
+        ? tx(locale, "原文件已保存。稍等片刻后直接重试，不需要重新整理整批文件。", "The original is saved. Wait briefly and retry; the batch does not need to be rebuilt.")
+        : tx(locale, "原文件已保存，但本次 PDF 读取超过时间上限。请拆分或优化 PDF 后重试。", "The original is saved, but PDF extraction exceeded its time limit. Split or optimize the PDF, then retry."),
+      actionLabel: tx(locale, "重新尝试", "Try again"),
+      actionKind: "retry",
+      tone: "warning",
       technicalDetails,
     };
   }

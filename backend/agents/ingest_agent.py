@@ -10,6 +10,7 @@ The API routers in backend/api/ingest.py become thin HTTP wrappers over this.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import logging
 from collections import defaultdict
@@ -32,7 +33,11 @@ from backend.services.background_errors import (
     classify_background_error,
     is_retryable_background_error,
 )
-from backend.tools.structured_llm import extract_and_parse_json, ainvoke_with_retry
+from backend.tools.structured_llm import (
+    StructuredOutputBoundsError,
+    ainvoke_with_retry,
+    extract_and_parse_json,
+)
 
 if TYPE_CHECKING:
     from backend.progress.tracker import ProgressReporter
@@ -313,7 +318,7 @@ async def parse_student_answer_sources(
 
     semaphore = asyncio.Semaphore(20)
 
-    async def process_one(source: Any) -> SubmissionSourceParseResult:
+    async def process_one_unchecked(source: Any) -> SubmissionSourceParseResult:
         async with semaphore:
             if source.pre_error_code:
                 return SubmissionSourceParseResult(
@@ -378,6 +383,24 @@ async def parse_student_answer_sources(
                 )
             try:
                 parsed = extract_and_parse_json(response.content, StudentSubmission)
+            except StructuredOutputBoundsError as exc:
+                logger.warning(
+                    "Submission recognition exceeded safe field bounds; exception_type=%s",
+                    type(exc).__name__,
+                )
+                return SubmissionSourceParseResult(
+                    source_id=source.source_id,
+                    stored_file_id=source.stored_file_id,
+                    filename=source.filename,
+                    status="parse_failed",
+                    student=None,
+                    student_candidate=None,
+                    matched_answer_count=0,
+                    unknown_question_ids=(),
+                    stable_error_code="submission_model_field_too_long",
+                    failure_phase="structured_parse",
+                    retryable=False,
+                )
             except Exception as exc:
                 logger.warning(
                     "Submission recognition returned invalid structured data; exception_type=%s",
@@ -394,7 +417,9 @@ async def parse_student_answer_sources(
                     unknown_question_ids=(),
                     stable_error_code="submission_parse_invalid",
                     failure_phase="structured_parse",
-                    retryable=False,
+                    retryable=is_retryable_background_error(
+                        "submission_parse_invalid"
+                    ),
                 )
 
             payload = parsed.model_dump()
@@ -482,6 +507,30 @@ async def parse_student_answer_sources(
                 retryable=False,
             )
 
+    async def process_one(source: Any) -> SubmissionSourceParseResult:
+        try:
+            return await process_one_unchecked(source)
+        except Exception as exc:
+            logger.warning(
+                "One submission source normalization failed; exception_type=%s",
+                type(exc).__name__,
+            )
+            return SubmissionSourceParseResult(
+                source_id=source.source_id,
+                stored_file_id=source.stored_file_id,
+                filename=source.filename,
+                status="parse_failed",
+                student=None,
+                student_candidate=None,
+                matched_answer_count=0,
+                unknown_question_ids=(),
+                stable_error_code="submission_parse_invalid",
+                failure_phase="structured_parse",
+                retryable=is_retryable_background_error(
+                    "submission_parse_invalid"
+                ),
+            )
+
     results = list(await asyncio.gather(*(process_one(source) for source in sources)))
 
     candidate_groups: dict[str, list[int]] = defaultdict(list)
@@ -507,7 +556,13 @@ async def parse_student_answer_sources(
         student = dict(result.student)
         if index in duplicate_indexes:
             candidate = result.student_candidate or "unresolved"
-            student["stu_id"] = f"{candidate}#duplicate-{duplicate_positions[index]}"
+            duplicate_digest = hashlib.sha256(
+                (
+                    f"{candidate}\0{result.source_id}\0"
+                    f"{duplicate_positions[index]}"
+                ).encode("utf-8")
+            ).hexdigest()[:24]
+            student["stu_id"] = f"duplicate_{duplicate_digest}"
             student["identity_status"] = "needs_review"
             normalized_results.append(replace(
                 result,

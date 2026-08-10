@@ -13,6 +13,7 @@ from fastapi import HTTPException
 from sqlalchemy.exc import SQLAlchemyError
 
 from backend.domain.errors import DomainError
+from backend.domain.source_outcomes import SAFE_SOURCE_REASON_CODES
 from backend.tools.structured_llm import PermanentLLMError, RateLimitError
 
 
@@ -72,7 +73,7 @@ SAFE_BACKGROUND_ERROR_CODES = frozenset({
     "submission_source_empty",
     "submission_source_unsupported",
     "submission_source_too_large",
-})
+}) | SAFE_SOURCE_REASON_CODES
 
 RETRYABLE_BACKGROUND_ERROR_CODES = frozenset({
     "provider_timeout",
@@ -81,7 +82,9 @@ RETRYABLE_BACKGROUND_ERROR_CODES = frozenset({
     "pdf_extraction_busy",
     "pdf_extraction_timeout",
     "submission_parse_failed",
+    "submission_parse_invalid",
     "submission_persistence_failed",
+    "submission_outcome_persistence_failed",
     "submission_source_persistence_failed",
     "workflow_failed",
 })

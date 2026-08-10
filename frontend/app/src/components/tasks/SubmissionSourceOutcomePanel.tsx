@@ -136,6 +136,12 @@ function SourceOutcomeRow({ source, locale }: { source: SubmissionSourceOutcome;
               {tx(locale, "建议：", "Next: ")}{copy.nextStep}
             </p>
           ) : null}
+          {source.unknown_question_ids.length > 0 && source.reason_code !== "no_matching_answer" ? (
+            <p className="mt-1 rounded-md bg-amber-50 px-2 py-1.5 text-[11px] font-medium leading-5 text-amber-800 dark:bg-amber-950/35 dark:text-amber-200">
+              {tx(locale, "同时发现未匹配题号：", "Also found unmatched question IDs: ")}
+              {source.unknown_question_ids.join(locale === "zh-CN" ? "、" : ", ")}
+            </p>
+          ) : null}
           {source.reason_code || source.failure_phase ? (
             <details className="mt-2">
               <summary className="w-fit cursor-pointer text-[10px] font-medium text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring">

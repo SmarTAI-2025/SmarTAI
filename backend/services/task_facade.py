@@ -48,11 +48,13 @@ from backend.domain.errors import (
     ValidationError,
     VersionConflict,
 )
+from backend.domain.source_outcomes import safe_source_diagnostic
 from backend.models import TaskGradingSetup
 from backend.progress.tracker import get_or_create_reporter, get_reporter, remove_reporter
 from backend.services import grading_runs
 from backend.services.background_errors import (
     classify_background_error,
+    is_retryable_background_error,
     safe_background_error_code,
 )
 from backend.services.result_artifacts import (
@@ -61,7 +63,10 @@ from backend.services.result_artifacts import (
     build_artifact_files,
     build_artifact_manifest,
 )
-from backend.services.submission_source_pipeline import prepare_submission_sources
+from backend.services.submission_source_pipeline import (
+    failure_phase_for_code,
+    prepare_submission_sources,
+)
 from backend.skills.ocr_ingest import LLMVisionOCRSkill
 from backend.tools.file_processing import extract_text_from_upload
 
@@ -322,7 +327,31 @@ def _submission_source_projection(workflow, owner_id: str) -> tuple[dict[str, in
     summary = dict(empty)
     for result in results:
         outcome = result.outcome
-        if outcome is None:
+        terminal_without_outcome = (
+            outcome is None and operation.status not in {"pending", "running"}
+        )
+        safe_reason, safe_phase = (
+            safe_source_diagnostic(
+                outcome.status,
+                outcome.stable_error_code,
+                outcome.failure_phase,
+            )
+            if outcome is not None
+            else safe_source_diagnostic(
+                "parse_failed",
+                operation.error_code or "submission_outcome_persistence_failed",
+                failure_phase_for_code(
+                    operation.error_code or "submission_outcome_persistence_failed"
+                ),
+            )
+            if terminal_without_outcome
+            else (None, None)
+        )
+        if terminal_without_outcome:
+            external_status = "failed"
+            internal_status = "parse_failed"
+            summary["failed"] += 1
+        elif outcome is None:
             external_status = "processing"
             internal_status = "pending"
             summary["pending"] += 1
@@ -359,9 +388,9 @@ def _submission_source_projection(workflow, owner_id: str) -> tuple[dict[str, in
                 if outcome
                 and outcome.status == "identity_conflict"
                 and result.source.id in resolved_identity_sources
-                else outcome.stable_error_code if outcome else None
+                else safe_reason
             ),
-            "recognition_reason_code": outcome.stable_error_code if outcome else None,
+            "recognition_reason_code": safe_reason,
             "resolution_status": (
                 "identity_resolved"
                 if outcome
@@ -369,8 +398,12 @@ def _submission_source_projection(workflow, owner_id: str) -> tuple[dict[str, in
                 and result.source.id in resolved_identity_sources
                 else None
             ),
-            "failure_phase": outcome.failure_phase if outcome else None,
-            "retryable": outcome.retryable if outcome else False,
+            "failure_phase": safe_phase,
+            "retryable": (
+                outcome.retryable
+                if outcome
+                else is_retryable_background_error(safe_reason or "")
+            ),
             "student_candidate": outcome.student_candidate if outcome else None,
             "matched_answer_count": outcome.matched_answer_count if outcome else 0,
             "unknown_question_ids": list(outcome.unknown_question_ids) if outcome else [],
@@ -1105,6 +1138,7 @@ async def run_task_submission_parsing(
     replace_confirmed: bool, claimed_workflow_revision: int,
 ) -> None:
     reporter = get_or_create_reporter(job_id)
+    current_failure_phase = "source_persistence"
     try:
         provider = (
             registry.get(recognition_provider_id)
@@ -1133,6 +1167,7 @@ async def run_task_submission_parsing(
             ocr_skill=ocr_skill,
             reporter=reporter,
         )
+        current_failure_phase = "recognition"
         results = await parse_student_answer_sources(
             sources,
             {q.q_id: _serialize_problem(q) for q in questions},
@@ -1142,6 +1177,7 @@ async def run_task_submission_parsing(
             roster_entries=roster_entries,
         )
 
+        current_failure_phase = "outcome_persistence"
         for result in results:
             source_outcome_repository.record_outcome(
                 source_id=result.source_id,
@@ -1155,6 +1191,7 @@ async def run_task_submission_parsing(
                 retryable=result.retryable,
             )
 
+        current_failure_phase = "result_persistence"
         summary = source_outcome_repository.summarize_sources(
             operation_id=job_id,
             owner_id=owner_id,
@@ -1210,10 +1247,16 @@ async def run_task_submission_parsing(
             },
         )
     except Exception as exc:
+        persistence_code = {
+            "source_persistence": "submission_source_persistence_failed",
+            "outcome_persistence": "submission_outcome_persistence_failed",
+            "result_persistence": "submission_persistence_failed",
+        }.get(current_failure_phase)
+        fallback_code = persistence_code or "submission_parse_failed"
         code = classify_background_error(
             exc,
-            "submission_parse_failed",
-            persistence_code="submission_persistence_failed",
+            fallback_code,
+            persistence_code=persistence_code,
         )
         logger.warning(
             "Background submission parsing failed; job_id=%s code=%s exception_type=%s",
@@ -1221,6 +1264,29 @@ async def run_task_submission_parsing(
             code,
             type(exc).__name__,
         )
+        terminal_reason, terminal_phase = safe_source_diagnostic(
+            "parse_failed",
+            code,
+            current_failure_phase,
+        )
+        assert terminal_reason is not None and terminal_phase is not None
+        try:
+            source_outcome_repository.finalize_pending_sources_as_failed(
+                owner_id=owner_id,
+                assignment_id=task_id,
+                operation_id=job_id,
+                expected_attempt=job_attempt,
+                reason_code=terminal_reason,
+                failure_phase=terminal_phase,
+                retryable=is_retryable_background_error(terminal_reason),
+            )
+        except Exception as cleanup_exc:
+            logger.warning(
+                "Pending submission source finalization failed; job_id=%s "
+                "exception_type=%s",
+                job_id,
+                type(cleanup_exc).__name__,
+            )
         await reporter.set_error(code)
         snapshot = (await reporter.snapshot()).model_dump(mode="json")
         _fail_operation(
@@ -1531,6 +1597,32 @@ def _commit_imported_submissions(
             )
 
         for student in students:
+            source_id = str(student.get("source_id") or "").strip() or None
+            if source_id is not None:
+                if operation is None or expected_operation_attempt is None:
+                    raise ValidationError("submission_source_operation_required")
+                linked_outcome_status = session.scalar(
+                    select(source_outcome_repository.WorkflowSourceOutcomeRecord.status)
+                    .join(
+                        source_outcome_repository.WorkflowSourceItemRecord,
+                        source_outcome_repository.WorkflowSourceItemRecord.id
+                        == source_outcome_repository.WorkflowSourceOutcomeRecord.source_id,
+                    )
+                    .where(
+                        source_outcome_repository.WorkflowSourceItemRecord.id == source_id,
+                        source_outcome_repository.WorkflowSourceItemRecord.owner_id == owner_id,
+                        source_outcome_repository.WorkflowSourceItemRecord.assignment_id == task_id,
+                        source_outcome_repository.WorkflowSourceItemRecord.operation_id
+                        == operation.id,
+                        source_outcome_repository.WorkflowSourceItemRecord.attempt
+                        == expected_operation_attempt,
+                        source_outcome_repository.WorkflowSourceOutcomeRecord.status.in_(
+                            ("parsed", "identity_conflict")
+                        ),
+                    )
+                )
+                if linked_outcome_status is None:
+                    raise NotFound("workflow_source")
             display_id = (
                 str(student.get("stu_id") or "").strip()
                 or f"unknown-{uuid.uuid4().hex[:6]}"
@@ -1644,7 +1736,7 @@ def _commit_imported_submissions(
                     id=f"sp_{uuid.uuid4().hex[:12]}",
                     assignment_id=task_id,
                     student_id=student_id,
-                    source_id=str(student.get("source_id") or "") or None,
+                    source_id=source_id,
                     display_student_id=display_id,
                     display_name=display_name,
                     is_active=True,
@@ -1652,7 +1744,7 @@ def _commit_imported_submissions(
                     updated_at=now,
                 )
                 session.add(presentation)
-            presentation.source_id = str(student.get("source_id") or "") or presentation.source_id
+            presentation.source_id = source_id or presentation.source_id
             presentation.display_student_id = display_id
             presentation.display_name = display_name
             presentation.source_filename = str(student.get("source_filename") or "")
@@ -1837,7 +1929,68 @@ def _grading_progress(run_id: str, owner_id: str) -> dict:
     }
 
 
-def start_task_grading(*, task_id: str, owner_id: str) -> dict:
+def grading_readiness(
+    *,
+    task_id: str,
+    owner_id: str,
+) -> dict[str, list[str] | bool]:
+    """Authoritative, fail-closed gate shared by preflight and mutation."""
+    workflow = workflow_repository.get_workflow(task_id, owner_id=owner_id)
+    questions = assignment_repository.get_questions_by_assignment(task_id)
+    submissions = _active_submissions(task_id, owner_id)
+    presentations = workflow_repository.list_student_presentations(task_id)
+    source_summary, source_rows = _submission_source_projection(workflow, owner_id)
+
+    issues: list[str] = []
+    warnings: list[str] = []
+    if not questions:
+        issues.append("questions_required")
+    if not submissions:
+        issues.append("submissions_required")
+    if workflow.active_operation and workflow.active_operation != "grading":
+        issues.append("workflow_busy")
+
+    if submissions:
+        if not workflow.parse_job_id or source_summary["uploaded"] == 0:
+            issues.append("submission_source_evidence_missing")
+        else:
+            if source_summary["pending"]:
+                issues.append("submission_sources_pending")
+            if source_summary["failed"]:
+                issues.append("submission_sources_failed")
+            if source_summary["identity_needs_review"]:
+                issues.append("submission_identities_unresolved")
+            evidenced_submission_count = (
+                source_summary["parsed"]
+                + source_summary["identity_needs_review"]
+            )
+            if evidenced_submission_count != len(submissions):
+                issues.append("submission_source_evidence_missing")
+
+        for submission in submissions:
+            presentation = presentations.get(submission.student_id)
+            if presentation is None or not presentation.source_id:
+                issues.append("submission_source_evidence_missing")
+                continue
+            if presentation.identity_status != "matched":
+                issues.append("submission_identities_unresolved")
+
+    if any(row.get("unknown_question_ids") for row in source_rows):
+        warnings.append("submission_question_ids_unmatched")
+    ordered_issues = list(dict.fromkeys(issues))
+    return {
+        "ready": not ordered_issues,
+        "blocking_issues": ordered_issues,
+        "warnings": list(dict.fromkeys(warnings)),
+    }
+
+
+def start_task_grading(
+    *,
+    task_id: str,
+    owner_id: str,
+    expected_workflow_revision: int,
+) -> dict:
     workflow = workflow_repository.get_workflow(task_id, owner_id=owner_id)
     if workflow.grading_setup is None:
         raise InvalidTransition("grading_setup_required")
@@ -1845,6 +1998,13 @@ def start_task_grading(*, task_id: str, owner_id: str) -> dict:
     active = next((run for run in reversed(runs) if run.status in {"queued", "running"}), None)
     if active:
         return {"status": "already_running", "task_id": task_id, "job_id": active.id}
+    if workflow.workflow_revision != expected_workflow_revision:
+        raise VersionConflict("workflow_revision_conflict")
+    readiness = grading_readiness(task_id=task_id, owner_id=owner_id)
+    blocking_issues = list(readiness["blocking_issues"])
+    if blocking_issues:
+        issue = blocking_issues[0]
+        raise InvalidTransition(issue, code=issue)
     questions = assignment_repository.get_questions_by_assignment(task_id)
     submissions = _active_submissions(task_id, owner_id)
     presentations = workflow_repository.list_student_presentations(task_id)
@@ -1920,18 +2080,47 @@ def start_task_grading(*, task_id: str, owner_id: str) -> dict:
         frozen = workflow_repository.get_run_setup(latest.id)
         if frozen is not None and frozen.fingerprint == run_fingerprint:
             return {"status": "already_done", "task_id": task_id, "job_id": latest.id}
-    run = grading_runs.start_run(
-        assignment_id=task_id,
-        teacher_id=owner_id,
-        grading_setup=dict(workflow.grading_setup),
-        setup_fingerprint=run_fingerprint,
-        input_manifest=input_manifest,
+    claim_id = f"grading_claim_{uuid.uuid4().hex[:16]}"
+    claimed = workflow_repository.update_workflow(
+        task_id,
+        owner_id=owner_id,
+        expected_revision=expected_workflow_revision,
+        active_operation="grading",
+        active_job_id=claim_id,
+        error_code=None,
     )
-    workflow_repository.update_workflow(
-        task_id, owner_id=owner_id, bump_revision=False,
-        presentation_status="grading", grading_job_id=run.id,
-        active_operation="grading", active_job_id=run.id, error_code=None,
-    )
+    try:
+        run = grading_runs.start_run(
+            assignment_id=task_id,
+            teacher_id=owner_id,
+            grading_setup=dict(workflow.grading_setup),
+            setup_fingerprint=run_fingerprint,
+            input_manifest=input_manifest,
+        )
+        workflow_repository.update_workflow(
+            task_id,
+            owner_id=owner_id,
+            expected_revision=claimed.workflow_revision,
+            bump_revision=False,
+            presentation_status="grading",
+            grading_job_id=run.id,
+            active_operation="grading",
+            active_job_id=run.id,
+            error_code=None,
+        )
+    except Exception:
+        try:
+            workflow_repository.update_workflow(
+                task_id,
+                owner_id=owner_id,
+                expected_revision=claimed.workflow_revision,
+                bump_revision=False,
+                active_operation=None,
+                active_job_id=None,
+            )
+        except DomainError:
+            pass
+        raise
     return {"status": "started", "task_id": task_id, "job_id": run.id}
 
 
