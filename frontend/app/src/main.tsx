@@ -17,6 +17,12 @@ const KnowledgeBasePage = React.lazy(() =>
   import("@/routes/KnowledgeBasePage").then((module) => ({ default: module.KnowledgeBasePage })),
 );
 const LoginPage = React.lazy(() => import("@/routes/LoginPage").then((module) => ({ default: module.LoginPage })));
+const FrontierLandingPage = React.lazy(() =>
+  import("@/routes/frontier/FrontierLandingPage").then((module) => ({ default: module.FrontierLandingPage })),
+);
+const FrontierLiveDemoPage = React.lazy(() =>
+  import("@/routes/frontier/FrontierLiveDemoPage").then((module) => ({ default: module.FrontierLiveDemoPage })),
+);
 const NewTaskPage = React.lazy(() => import("@/routes/NewTaskPage").then((module) => ({ default: module.NewTaskPage })));
 const NotFoundPage = React.lazy(() =>
   import("@/routes/NotFoundPage").then((module) => ({ default: module.NotFoundPage })),
@@ -101,6 +107,7 @@ function routeElement(element: React.ReactNode) {
 }
 
 const router = createBrowserRouter([
+  { path: "/frontier", element: routeElement(<FrontierLandingPage />) },
   { path: "/login", element: routeElement(<LoginPage />) },
   { path: "/register", element: routeElement(<RegisterPage />) },
   { path: "/student", element: <StudentUnavailablePage /> },
@@ -116,6 +123,7 @@ const router = createBrowserRouter([
       { path: "dashboard", element: <Navigate to="/" replace /> },
       { path: "history", element: routeElement(<HistoryPage />) },
       { path: "knowledge-base", element: routeElement(<KnowledgeBasePage />) },
+      { path: "frontier/live", element: routeElement(<FrontierLiveDemoPage />) },
       { path: "tasks/new", element: routeElement(<NewTaskPage />) },
       { path: "tasks/:taskId/edit", element: routeElement(<NewTaskPage />) },
       { path: "tasks/:taskId", element: routeElement(<TaskEntryRedirect />) },

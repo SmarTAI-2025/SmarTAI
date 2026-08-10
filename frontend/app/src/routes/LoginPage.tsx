@@ -66,7 +66,7 @@ export function LoginPage() {
       queryClient.removeQueries({
         predicate: (query) => query.queryKey[0] !== authKeys.me[0],
       });
-      navigate(safeReturnPath(location.state), { replace: true });
+      navigate(safeReturnPath(location.state, location.search), { replace: true });
     } catch (error) {
       setPassword("");
       setFormError(localizedAuthError(error, locale, "login"));
@@ -157,9 +157,13 @@ function localizedSessionError(value: string, locale: "zh-CN" | "en-US") {
   return "Sign in again to continue.";
 }
 
-function safeReturnPath(state: unknown): string {
-  if (!state || typeof state !== "object" || !("from" in state)) return "/";
-  const from = String(state.from);
+export function safeReturnPath(state: unknown, search = ""): string {
+  const stateFrom = state && typeof state === "object" && "from" in state
+    ? String(state.from)
+    : null;
+  const queryFrom = new URLSearchParams(search).get("returnTo");
+  const from = stateFrom || queryFrom;
+  if (!from) return "/";
   try {
     const parsed = new URL(from, window.location.origin);
     if (

@@ -1,0 +1,71 @@
+\documentclass[11pt]{article}
+\pdfinfoomitdate=1
+\pdftrailerid{}
+\pdfsuppressptexinfo=15
+\usepackage[a4paper,margin=24mm]{geometry}
+\usepackage{amsmath,amssymb}
+\usepackage[T1]{fontenc}
+\usepackage{xcolor}
+\usepackage{fancyhdr}
+\usepackage{listings}
+\definecolor{cobalt}{HTML}{2457D6}
+\definecolor{graphite}{HTML}{17202A}
+\definecolor{muted}{HTML}{667085}
+\pagestyle{fancy}
+\fancyhf{}
+\lfoot{\scriptsize\color{muted}SYNTHETIC DEMO DOCUMENT --- raw student input}
+\rfoot{\scriptsize\color{muted}Page \thepage\ of 2}
+\renewcommand{\headrulewidth}{0pt}
+\setlength{\parindent}{0pt}
+\setlength{\parskip}{8pt}
+\newcommand{\answer}[1]{\vspace{8pt}{\small\bfseries\color{cobalt}#1}\par\vspace{3pt}\hrule\vspace{10pt}}
+\begin{document}
+{\LARGE\bfseries\color{graphite} DEMO-001 --- Submission}\par
+{\small\color{muted}LaTeX response --- synthetic student}\par
+\vspace{8pt}\hrule\vspace{14pt}
+
+\answer{Q1 --- Calculus}
+Let $u=x^2$, so $\mathrm{d}u=2x\,\mathrm{d}x$. Therefore
+\[
+I=\frac12\int_0^1 e^u\,\mathrm{d}u
+ =\frac12\left[e^u\right]_0^1
+ =\frac{e-1}{2}.
+\]
+
+\answer{Q2 --- Mechanics}
+The normal force is $N=mg\cos 30^\circ$. Along the slope,
+\[
+ma=mg\sin 30^\circ-\mu_kN,
+\qquad
+a=9.81(\sin30^\circ-0.20\cos30^\circ)
+  =3.20\,\mathrm{m\,s^{-2}}.
+\]
+Starting from rest, $v^2=2as$, so
+\[
+v=\sqrt{2(3.20)(3)}=4.38\,\mathrm{m\,s^{-1}}.
+\]
+
+\newpage
+{\LARGE\bfseries\color{graphite} DEMO-001 --- Submission}\par
+{\small\color{muted}LaTeX response --- synthetic student}\par
+\vspace{8pt}\hrule\vspace{14pt}
+
+\answer{Q3 --- Linear algebra}
+If $Ax=0$, then $A^{\mathsf T}Ax=0$. Conversely, if $A^{\mathsf T}Ax=0$, left-multiplying by $x^{\mathsf T}$ gives
+\[
+x^{\mathsf T}A^{\mathsf T}Ax=\lVert Ax\rVert^2=0,
+\]
+hence $Ax=0$. The kernels are equal, so rank--nullity gives equal ranks.
+
+\answer{Q4 --- Programming}
+\begin{lstlisting}[language=Python,basicstyle=\ttfamily\small,frame=single]
+import math
+
+def stable_softmax(xs):
+    if not xs:
+        return []
+    exps = [math.exp(x) for x in xs]
+    total = sum(exps)
+    return [value / total for value in exps]
+\end{lstlisting}
+\end{document}

@@ -1,6 +1,7 @@
 node_modules/
 dist/
 .vite/
+tmp/
 *.local
 
 # Keep React rewrite project docs versioned even though the repository root

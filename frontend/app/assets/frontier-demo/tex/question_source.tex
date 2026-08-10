@@ -1,0 +1,61 @@
+\documentclass[11pt]{article}
+\pdfinfoomitdate=1
+\pdftrailerid{}
+\pdfsuppressptexinfo=15
+\usepackage[a4paper,margin=24mm]{geometry}
+\usepackage{amsmath,amssymb}
+\usepackage[T1]{fontenc}
+\usepackage{xcolor}
+\usepackage{fancyhdr}
+\usepackage{listings}
+\usepackage{enumitem}
+\definecolor{cobalt}{HTML}{2457D6}
+\definecolor{graphite}{HTML}{17202A}
+\definecolor{muted}{HTML}{667085}
+\pagestyle{fancy}
+\fancyhf{}
+\lfoot{\scriptsize\color{muted}SYNTHETIC DEMO DOCUMENT --- no real student data}
+\rfoot{\scriptsize\color{muted}Page \thepage\ of 3}
+\renewcommand{\headrulewidth}{0pt}
+\setlength{\parindent}{0pt}
+\setlength{\parskip}{8pt}
+\newcommand{\question}[3]{%
+  {\small\bfseries\color{cobalt}#1 \hfill #2 points}\par
+  \vspace{4pt}{\large #3}\par\vspace{18pt}}
+\begin{document}
+{\LARGE\bfseries\color{graphite} STEM Reasoning Lab}\par
+{\small\color{muted}Raw synthetic question source --- no answer key}\par
+\vspace{8pt}\hrule\vspace{22pt}
+
+\question{Q1 --- Calculus}{5}{Evaluate
+\[
+  \int_0^1 x e^{x^2}\,\mathrm{d}x.
+\]
+Show the substitution and the transformed bounds.}
+
+\question{Q2 --- Mechanics}{8}{A $2\,\mathrm{kg}$ block slides $3\,\mathrm{m}$ from rest down a $30^\circ$ incline with $\mu_k=0.20$. Find its acceleration and final speed. Use $g=9.81\,\mathrm{m\,s^{-2}}$.}
+
+\newpage
+{\LARGE\bfseries\color{graphite} STEM Reasoning Lab}\par
+{\small\color{muted}Raw synthetic question source --- no answer key}\par
+\vspace{8pt}\hrule\vspace{22pt}
+
+\question{Q3 --- Linear algebra}{7}{For any real $m\times n$ matrix $A$, prove
+\[
+  \ker(A)=\ker(A^{\mathsf T}A),
+\]
+then conclude $\operatorname{rank}(A)=\operatorname{rank}(A^{\mathsf T}A)$. Do not assume that $A$ is square or invertible.}
+
+\newpage
+{\LARGE\bfseries\color{graphite} STEM Reasoning Lab}\par
+{\small\color{muted}Raw synthetic question source --- no answer key}\par
+\vspace{8pt}\hrule\vspace{22pt}
+
+\question{Q4 --- Programming}{10}{Implement \texttt{stable\_softmax(xs)}. Return \texttt{[]} for empty input and avoid overflow for values near $1000$. Do not use NumPy.}
+
+\textbf{Required signature}
+\begin{lstlisting}[basicstyle=\ttfamily\small,frame=single]
+def stable_softmax(xs):
+    ...
+\end{lstlisting}
+\end{document}

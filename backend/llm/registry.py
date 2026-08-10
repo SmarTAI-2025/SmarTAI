@@ -19,7 +19,11 @@ from fastapi import Depends, HTTPException
 
 from backend.config import settings
 from backend.models import ProviderConfig
-from backend.llm.providers import BaseProvider, build_provider
+from backend.llm.providers import (
+    BaseProvider,
+    VisionImage,
+    build_provider,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -42,11 +46,15 @@ class _SharedPoolUsageLimiter:
         self._lock = Lock()
 
     def consume(self, owner_id: str, messages: List[Any]) -> None:
-        day = datetime.now(timezone.utc).date().isoformat()
         estimated_tokens = max(
             1,
             sum(len(str(getattr(message, "content", ""))) for message in messages) // 4,
         )
+        self.consume_estimated(owner_id, estimated_tokens)
+
+    def consume_estimated(self, owner_id: str, estimated_tokens: int) -> None:
+        day = datetime.now(timezone.utc).date().isoformat()
+        estimated_tokens = max(1, int(estimated_tokens))
         request_limit = max(0, int(settings.shared_pool_daily_request_limit))
         token_limit = max(0, int(settings.shared_pool_daily_estimated_token_limit))
         with self._lock:
@@ -84,6 +92,23 @@ class _GuardedSharedProvider:
             raise SharedPoolLimitError("shared_pool_disabled")
         _shared_pool_usage.consume(self._owner_id, messages)
         return await self._provider.ainvoke(messages)
+
+    async def ainvoke_vision(self, prompt: str, images: List[VisionImage]):
+        if not settings.shared_pool_enabled:
+            raise SharedPoolLimitError("shared_pool_disabled")
+        # Do not count the Base64 data URL as text: that can overstate a normal
+        # page image by two orders of magnitude and make every vision call fail.
+        # The byte-based proxy stays deliberately conservative while capping a
+        # single page at 8K estimated input tokens.
+        estimated_tokens = max(1, len(prompt) // 4) + sum(
+            max(1_024, min(8_192, len(image.data) // 128))
+            for image in images
+        )
+        _shared_pool_usage.consume_estimated(
+            self._owner_id,
+            estimated_tokens,
+        )
+        return await self._provider.ainvoke_vision(prompt, images)
 
     def __getattr__(self, name: str):
         return getattr(self._provider, name)
