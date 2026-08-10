@@ -28,9 +28,13 @@ import { toast } from "sonner";
 import { getAPIErrorCode, normalizeAPIError } from "@/api/client";
 import { useTask, useUpdateStudentAnswer, useUpdateStudentIdentity } from "@/api/hooks/tasks";
 import { NewTaskStepper } from "@/components/new-task/NewTaskStepper";
+import { OriginalFilePreviewPanel } from "@/components/tasks/OriginalFilePreviewPanel";
+import { OriginalFilePreviewTrigger } from "@/components/tasks/OriginalFilePreviewTrigger";
+import { SourceComparisonWorkspace } from "@/components/tasks/SourceComparisonWorkspace";
 import { Button } from "@/components/ui/Button";
 import { MarkdownMath } from "@/components/ui/MarkdownMath";
 import { useImeSafeQuery } from "@/hooks/useImeSafeQuery";
+import { isFrontierDemoTask, useFrontierDemoSourcePreview } from "@/hooks/useFrontierDemoSourcePreview";
 import { useI18n } from "@/i18n/I18nProvider";
 import type { Locale, MessageKey } from "@/i18n/messages";
 import { cn } from "@/lib/cn";
@@ -110,6 +114,10 @@ export function StudentAnswerReviewPage() {
     () => students.find((candidate) => candidate.stu_id === studentId),
     [studentId, students],
   );
+  const sourcePreview = useFrontierDemoSourcePreview({
+    enabled: isFrontierDemoTask(taskQuery.data?.name),
+    sourceFilename: student?.source_filename,
+  });
   const answers = useMemo(() => student ? answerMap(student) : new Map(), [student]);
   const questionItems = useMemo(() => questions.map(questionPickerItem), [questions]);
   const questionMatches = useMemo(
@@ -443,14 +451,25 @@ export function StudentAnswerReviewPage() {
         <h1 className="min-w-0 truncate text-[28px] font-bold leading-9 tracking-[-0.02em] text-foreground sm:text-[30px]">
           {t("answerReviewTitle")}
         </h1>
-        <Link
-          to={backHref}
-          onClick={(event) => { if (!confirmLeave()) event.preventDefault(); }}
-          className="inline-flex shrink-0 items-center gap-1.5 text-[13px] font-medium text-muted-foreground outline-none hover:text-foreground focus-visible:rounded focus-visible:ring-2 focus-visible:ring-ring"
-        >
-          <ArrowLeft aria-hidden="true" className="h-4 w-4" />
-          {t("answerReviewBackMatrix")}
-        </Link>
+        <div className="flex shrink-0 flex-wrap items-center justify-end gap-2">
+          {sourcePreview.available ? (
+            <OriginalFilePreviewTrigger
+              descriptor={sourcePreview.descriptor}
+              open={sourcePreview.open}
+              onOpen={sourcePreview.openPreview}
+              onClose={sourcePreview.close}
+              t={t}
+            />
+          ) : null}
+          <Link
+            to={backHref}
+            onClick={(event) => { if (!confirmLeave()) event.preventDefault(); }}
+            className="inline-flex shrink-0 items-center gap-1.5 text-[13px] font-medium text-muted-foreground outline-none hover:text-foreground focus-visible:rounded focus-visible:ring-2 focus-visible:ring-ring"
+          >
+            <ArrowLeft aria-hidden="true" className="h-4 w-4" />
+            {t("answerReviewBackMatrix")}
+          </Link>
+        </div>
       </div>
       <NewTaskStepper currentStep={4} />
 
@@ -474,7 +493,23 @@ export function StudentAnswerReviewPage() {
           action={t("answerReviewBackMatrix")}
         />
       ) : (
-        <section className="mt-[22px] min-w-0" aria-label={`${student.stu_id} · ${t("studentSubmissionAllAnswersTitle")}`}>
+        <SourceComparisonWorkspace
+          open={sourcePreview.open}
+          separatorLabel={tx(locale, "拖动调整原文件与识别内容宽度", "Resize the original file and recognized content")}
+          preview={(
+            <OriginalFilePreviewPanel
+              descriptor={sourcePreview.descriptor}
+              loadState={sourcePreview.loadState}
+              previewUrl={sourcePreview.previewUrl}
+              onClose={sourcePreview.close}
+              onRetry={sourcePreview.retry}
+              provenanceNote={tx(locale, "这是经 SHA-256 校验、并实际发送给 OCR API 的合成作答文件副本；当前后端尚未持久化原始文件字节。", "This SHA-256-verified synthetic submission is the exact browser-side copy sent to the OCR API; the current backend does not persist original bytes.")}
+              t={t}
+            />
+          )}
+          className="mt-[22px]"
+        >
+        <section className="min-w-0" aria-label={`${student.stu_id} · ${t("studentSubmissionAllAnswersTitle")}`}>
           <dl className="grid grid-cols-2 gap-3 lg:grid-cols-4 lg:gap-5">
             <ReviewMetric
               label={t("studentSubmissionMetricIdentity")}
@@ -580,8 +615,8 @@ export function StudentAnswerReviewPage() {
           </div>
 
           {filteredQuestions.length ? (
-            <div className="mt-4 grid items-start gap-4 lg:grid-cols-[clamp(180px,16vw,240px)_minmax(0,1fr)]">
-              <aside className="sticky top-[86px] z-20 hidden max-h-[calc(100vh-102px)] overflow-hidden rounded-[10px] border bg-card lg:flex lg:flex-col" aria-label={tx(locale, "题目导航", "Question navigation")}>
+            <div className={cn("mt-4 grid items-start gap-4 lg:grid-cols-[clamp(180px,16vw,240px)_minmax(0,1fr)]", sourcePreview.open && "lg:grid-cols-1")}>
+              <aside className={cn("sticky top-[86px] z-20 hidden max-h-[calc(100vh-102px)] overflow-hidden rounded-[10px] border bg-card lg:flex lg:flex-col", sourcePreview.open && "lg:hidden")} aria-label={tx(locale, "题目导航", "Question navigation")}>
                 <div className="shrink-0 border-b px-3 py-3">
                   <p className="text-xs font-bold text-foreground">{tx(locale, "题目导航", "Questions")}</p>
                   <p className="mt-1 text-[11px] leading-4 text-muted-foreground">{tx(locale, `共 ${filteredQuestions.length} 题 · 点击定位`, `${filteredQuestions.length} questions · select to locate`)}</p>
@@ -676,6 +711,7 @@ export function StudentAnswerReviewPage() {
             </Link>
           </div>
         </section>
+        </SourceComparisonWorkspace>
       )}
     </div>
   );

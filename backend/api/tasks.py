@@ -30,7 +30,7 @@ from fastapi import (
 from pydantic import BaseModel, Field, ValidationError as PydanticValidationError
 
 from backend.api.errors import domain_error_response
-from backend.auth import require_teacher
+from backend.auth import require_task_teacher as require_teacher
 from backend.db import assignment_repository, grading_repository, workflow_repository
 from backend.domain.errors import DomainError, InvalidTransition, NotFound, ValidationError
 from backend.knowledge.service import ingest_document

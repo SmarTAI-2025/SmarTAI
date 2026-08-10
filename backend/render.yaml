@@ -4,9 +4,9 @@
 # create flow). The Python service runs on Render's free tier (512 MB RAM,
 # spins down after 15 min of inactivity — KB / Task state is lost on sleep).
 #
-# Set ALL provider keys via the Render dashboard's "Environment" tab AT YOUR
-# OWN RISK — the recommended flow is to leave them empty here and have users
-# BYOK on the /experts page so secrets never live in env vars.
+# Provider keys are entered only in Render's secret Environment UI. This
+# isolated Frontier demo branch intentionally uses one server-side Gemini key
+# for synthetic fixtures; the normal product continues to prefer BYOK.
 
 services:
   - type: web
@@ -66,6 +66,26 @@ services:
         value: "none"
       - key: SMARTAI_SEED_TEST_USERS
         value: "false"
+      # AWS Frontier application demo: passwordless short task sessions backed
+      # by one server-side Gemini key. This branch uses synthetic fixtures only.
+      - key: SMARTAI_FRONTIER_DEMO_ENABLED
+        value: "true"
+      - key: SMARTAI_FRONTIER_DEMO_SESSION_MINUTES
+        value: "20"
+      - key: SMARTAI_FRONTIER_DEMO_DAILY_SESSION_LIMIT
+        value: "12"
+      - key: SMARTAI_FRONTIER_DEMO_SESSION_COOLDOWN_SECONDS
+        value: "5"
+      - key: SMARTAI_SHARED_POOL_ENABLED
+        value: "true"
+      - key: SMARTAI_SHARED_POOL_DAILY_REQUEST_LIMIT
+        value: "100"
+      - key: SMARTAI_SHARED_POOL_DAILY_ESTIMATED_TOKEN_LIMIT
+        value: "250000"
+      - key: SMARTAI_GEMINI_MODEL
+        value: "gemini-3.5-flash"
+      - key: SMARTAI_GEMINI_API_KEY
+        sync: false
       # Frontend URL — fill in after Vercel deploys. Comma-separated list
       # for CORS. Localhost included so you can do mixed dev (frontend
       # local, backend deployed) while iterating.
@@ -76,8 +96,6 @@ services:
       # /experts BYOK flow is the recommended path. If you do set one,
       # users will inherit it (and the cost). Listed for documentation only:
       #
-      # - key: SMARTAI_GEMINI_API_KEY
-      #   value: ""
       # - key: SMARTAI_OPENAI_API_KEY
       #   value: ""
       # - key: SMARTAI_ZHIPU_API_KEY

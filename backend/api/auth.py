@@ -1,12 +1,23 @@
 """Configurable registration with short access tokens and rotating sessions."""
 from __future__ import annotations
 
+import time
+import uuid
+from datetime import datetime, timezone
+from threading import Lock
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from pydantic import BaseModel, Field, field_validator
 
-from backend.auth import create_token, get_current_user, hash_password, verify_password
+from backend.auth import (
+    create_frontier_demo_token,
+    create_token,
+    get_current_user,
+    get_task_user,
+    hash_password,
+    verify_password,
+)
 from backend.config import settings
 from backend.db.auth_repository import (
     AuthRepositoryError,
@@ -17,9 +28,47 @@ from backend.db.auth_repository import (
     rotate_refresh_session,
 )
 from backend.models import User
-from backend.state import find_user_by_username
+from backend.state import find_user_by_username, register_user
 
 router = APIRouter(prefix="/auth", tags=["auth"])
+
+
+class _FrontierDemoSessionIssuer:
+    """Bound anonymous session issuance for the single-process demo host."""
+
+    def __init__(self) -> None:
+        self._lock = Lock()
+        self._day = ""
+        self._issued = 0
+        self._last_issued_at = 0.0
+
+    def reserve(self) -> None:
+        now = time.time()
+        day = datetime.now(timezone.utc).date().isoformat()
+        limit = max(0, int(settings.frontier_demo_daily_session_limit))
+        cooldown = max(0.0, float(settings.frontier_demo_session_cooldown_seconds))
+        with self._lock:
+            if day != self._day:
+                self._day = day
+                self._issued = 0
+                self._last_issued_at = 0.0
+            if limit <= 0 or self._issued >= limit:
+                raise HTTPException(
+                    status.HTTP_429_TOO_MANY_REQUESTS,
+                    detail={"code": "frontier_demo_daily_limit_reached"},
+                )
+            if now - self._last_issued_at < cooldown:
+                retry_after = max(1, int(cooldown - (now - self._last_issued_at)) + 1)
+                raise HTTPException(
+                    status.HTTP_429_TOO_MANY_REQUESTS,
+                    detail={"code": "frontier_demo_session_cooldown"},
+                    headers={"Retry-After": str(retry_after)},
+                )
+            self._issued += 1
+            self._last_issued_at = now
+
+
+_frontier_demo_session_issuer = _FrontierDemoSessionIssuer()
 
 
 class LoginRequest(BaseModel):
@@ -105,6 +154,44 @@ def login(req: LoginRequest, response: Response):
     return {"token": create_token(user.id, user.role), "user": user.public()}
 
 
+@router.post("/frontier-demo-session")
+def create_frontier_demo_session(response: Response):
+    """Issue a passwordless short task capability for synthetic demo data."""
+    if not settings.frontier_demo_enabled:
+        raise HTTPException(
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={"code": "frontier_demo_disabled"},
+        )
+    if not settings.shared_pool_enabled or not settings.gemini_api_key:
+        raise HTTPException(
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={"code": "frontier_demo_provider_unavailable"},
+        )
+    _frontier_demo_session_issuer.reserve()
+
+    identity = uuid.uuid4().hex
+    user = User(
+        id=f"frontier_{identity}",
+        username=f"frontier-{identity}",
+        email="",
+        role="teacher",
+        password_hash="",
+    )
+    register_user(user)
+    lifetime_minutes = max(1, min(int(settings.frontier_demo_session_minutes), 60))
+    response.headers["Cache-Control"] = "no-store"
+    return {
+        "token": create_frontier_demo_token(
+            user.id,
+            expires_in_minutes=lifetime_minutes,
+        ),
+        "token_type": "bearer",
+        "expires_in": lifetime_minutes * 60,
+        "user": user.public(),
+        "synthetic_data_only": True,
+    }
+
+
 @router.post("/refresh")
 def refresh(request: Request, response: Response):
     raw = request.cookies.get(settings.refresh_cookie_name)
@@ -127,5 +214,5 @@ def logout(request: Request, response: Response, current: User = Depends(get_cur
 
 
 @router.get("/me")
-def me(current: User = Depends(get_current_user)):
+def me(current: User = Depends(get_task_user)):
     return current.public()

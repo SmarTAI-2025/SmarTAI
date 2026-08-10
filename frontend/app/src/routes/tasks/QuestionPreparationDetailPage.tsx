@@ -18,11 +18,15 @@ import { Link, Navigate, useBeforeUnload, useBlocker, useLocation, useNavigate, 
 import { toast } from "sonner";
 import { useTask, useUpdateProblem } from "@/api/hooks/tasks";
 import { NewTaskStepper } from "@/components/new-task/NewTaskStepper";
+import { OriginalFilePreviewPanel } from "@/components/tasks/OriginalFilePreviewPanel";
+import { OriginalFilePreviewTrigger } from "@/components/tasks/OriginalFilePreviewTrigger";
+import { SourceComparisonWorkspace } from "@/components/tasks/SourceComparisonWorkspace";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { MarkdownMath } from "@/components/ui/MarkdownMath";
 import { SyntaxHighlightedCode } from "@/components/ui/SyntaxHighlightedCode";
 import { UnsavedChangesDialog } from "@/components/ui/UnsavedChangesDialog";
 import { useI18n } from "@/i18n/I18nProvider";
+import { isFrontierDemoTask, useFrontierDemoSourcePreview } from "@/hooks/useFrontierDemoSourcePreview";
 import { cn } from "@/lib/cn";
 import { isProgrammingProblem } from "@/lib/questionPreparation";
 import { questionSearchAliases } from "@/lib/questionSearch";
@@ -38,7 +42,7 @@ export function QuestionPreparationDetailPage() {
   const [searchParams, setSearchParams] = useSearchParams();
   const location = useLocation();
   const navigate = useNavigate();
-  const { locale } = useI18n();
+  const { locale, t } = useI18n();
   const taskQuery = useTask(taskId);
   const updateProblem = useUpdateProblem();
   const [activeQuestionId, setActiveQuestionId] = useState(questionId ?? "");
@@ -50,6 +54,10 @@ export function QuestionPreparationDetailPage() {
   const pendingCompositionCommitRef = useRef<number | null>(null);
   const lastCommittedQueryRef = useRef(urlQuery);
   const positionedPathRef = useRef<string | null>(null);
+  const sourcePreview = useFrontierDemoSourcePreview({
+    enabled: isFrontierDemoTask(taskQuery.data?.name),
+    questionSource: true,
+  });
 
   const problems = useMemo(
     () => sortProblems(Object.values(taskQuery.data?.problem_data ?? {}), locale),
@@ -248,7 +256,19 @@ export function QuestionPreparationDetailPage() {
           <h1 className="text-[30px] font-bold leading-9 tracking-[-0.02em] text-foreground">{tx(locale, "题目资料审核", "Review Question Materials")}</h1>
           <p className="mt-1 text-sm leading-6 text-muted-foreground">{tx(locale, "连续浏览每道题的题目、标答和评分标准；只有编程题显示测试样例。", "Review each question, reference answer, and rubric together. Test cases appear only for programming questions.")}</p>
         </div>
-        <span className="text-xs text-muted-foreground">{taskQuery.data?.name ?? ""}</span>
+        <div className="flex flex-wrap items-center justify-end gap-2">
+          <span className="text-xs text-muted-foreground">{taskQuery.data?.name ?? ""}</span>
+          {sourcePreview.available ? (
+            <OriginalFilePreviewTrigger
+              descriptor={sourcePreview.descriptor}
+              open={sourcePreview.open}
+              onOpen={sourcePreview.openPreview}
+              onClose={sourcePreview.close}
+              openLabel={t("sourcePreviewOpenProblem")}
+              t={t}
+            />
+          ) : null}
+        </div>
       </div>
       <NewTaskStepper currentStep={2} />
 
@@ -303,8 +323,24 @@ export function QuestionPreparationDetailPage() {
       ) : filtered.length === 0 ? (
         <EmptyState title={tx(locale, "没有匹配的题目", "No matching questions")} description={tx(locale, "清空或调整筛选条件。", "Clear or adjust the filter.")} />
       ) : (
-        <div className="mt-5 grid items-start gap-4 lg:grid-cols-[clamp(180px,16vw,240px)_minmax(0,1fr)]">
-          <aside className="sticky top-[86px] z-20 hidden max-h-[calc(100vh-102px)] overflow-hidden rounded-[10px] border bg-card lg:flex lg:flex-col" aria-label={tx(locale, "题目导航", "Question navigation")}>
+        <SourceComparisonWorkspace
+          open={sourcePreview.open}
+          separatorLabel={tx(locale, "拖动调整原文件与识别内容宽度", "Resize the original file and recognized content")}
+          preview={(
+            <OriginalFilePreviewPanel
+              descriptor={sourcePreview.descriptor}
+              loadState={sourcePreview.loadState}
+              previewUrl={sourcePreview.previewUrl}
+              onClose={sourcePreview.close}
+              onRetry={sourcePreview.retry}
+              provenanceNote={tx(locale, "这是经 SHA-256 校验、并实际发送给识别 API 的合成题目文件副本；当前后端尚未持久化原始文件字节。", "This SHA-256-verified synthetic question file is the exact browser-side copy sent to the recognition API; the current backend does not persist original bytes.")}
+              t={t}
+            />
+          )}
+          className="mt-5"
+        >
+        <div className={cn("grid items-start gap-4 lg:grid-cols-[clamp(180px,16vw,240px)_minmax(0,1fr)]", sourcePreview.open && "lg:grid-cols-1")}>
+          <aside className={cn("sticky top-[86px] z-20 hidden max-h-[calc(100vh-102px)] overflow-hidden rounded-[10px] border bg-card lg:flex lg:flex-col", sourcePreview.open && "lg:hidden")} aria-label={tx(locale, "题目导航", "Question navigation")}>
             <div className="shrink-0 border-b px-3 py-3">
               <p className="text-xs font-bold text-foreground">{tx(locale, "题目导航", "Questions")}</p>
               <p className="mt-1 text-[11px] leading-4 text-muted-foreground">{tx(locale, `共 ${filtered.length} 题 · 点击定位`, `${filtered.length} questions · select to locate`)}</p>
@@ -364,6 +400,7 @@ export function QuestionPreparationDetailPage() {
             </section>
           </main>
         </div>
+        </SourceComparisonWorkspace>
       )}
 
       {blocker.state === "blocked" ? (

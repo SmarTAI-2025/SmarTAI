@@ -57,6 +57,20 @@ def create_token(user_id: str, role: str, expires_in_hours: Optional[int] = None
     return jwt.encode(payload, settings.jwt_secret, algorithm=settings.jwt_algorithm)
 
 
+def create_frontier_demo_token(user_id: str, *, expires_in_minutes: int) -> str:
+    """Create a short capability accepted by task routes, not teacher routes."""
+    now = int(time.time())
+    payload = {
+        "sub": user_id,
+        "role": "teacher",
+        "scope": "frontier_demo",
+        "exp": now + expires_in_minutes * 60,
+        "iat": now,
+        "jti": uuid.uuid4().hex,
+    }
+    return jwt.encode(payload, settings.jwt_secret, algorithm=settings.jwt_algorithm)
+
+
 def decode_token(token: str) -> Optional[dict]:
     try:
         return jwt.decode(token, settings.jwt_secret, algorithms=[settings.jwt_algorithm])
@@ -132,12 +146,25 @@ def get_optional_user(
         if settings.require_auth:
             raise HTTPException(status.HTTP_401_UNAUTHORIZED, detail="Invalid or expired token")
         return None
+    auth_scope = payload.get("scope") or "user"
+    if auth_scope not in {"user", "frontier_demo"}:
+        if settings.require_auth:
+            raise HTTPException(status.HTTP_401_UNAUTHORIZED, detail="Invalid token scope")
+        return None
+    if auth_scope == "frontier_demo" and (
+        not settings.frontier_demo_enabled or payload.get("role") != "teacher"
+    ):
+        if settings.require_auth:
+            raise HTTPException(status.HTTP_401_UNAUTHORIZED, detail="Invalid token scope")
+        return None
     user_id = payload.get("sub")
     user = user_store.get(user_id) if user_id else None
     if user is not None and not user.is_active:
         user = None
     if user is None and settings.require_auth:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, detail="User not found")
+    if user is not None:
+        user = user.model_copy(update={"auth_scope": auth_scope})
     return user
 
 
@@ -145,12 +172,28 @@ def get_current_user(user: Optional[User] = Depends(get_optional_user)) -> User:
     """Required-auth dependency. Used by all new (auth/users/courses/assignments) endpoints."""
     if user is None:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, detail="Authentication required")
+    if user.auth_scope != "user":
+        raise HTTPException(status.HTTP_403_FORBIDDEN, detail="User session required")
+    return user
+
+
+def get_task_user(user: Optional[User] = Depends(get_optional_user)) -> User:
+    """Required-auth dependency for task routes, including Frontier demo sessions."""
+    if user is None:
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, detail="Authentication required")
     return user
 
 
 def require_teacher(user: User = Depends(get_current_user)) -> User:
-    if user.role != "teacher":
+    if user.role != "teacher" or user.auth_scope != "user":
         raise HTTPException(status.HTTP_403_FORBIDDEN, detail="Teacher access required")
+    return user
+
+
+def require_task_teacher(user: User = Depends(get_task_user)) -> User:
+    """Allow normal teachers and the narrowly scoped Frontier task capability."""
+    if user.role != "teacher" or user.auth_scope not in {"user", "frontier_demo"}:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, detail="Teacher task access required")
     return user
 
 

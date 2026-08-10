@@ -23,6 +23,9 @@ const FrontierLandingPage = React.lazy(() =>
 const FrontierLiveDemoPage = React.lazy(() =>
   import("@/routes/frontier/FrontierLiveDemoPage").then((module) => ({ default: module.FrontierLiveDemoPage })),
 );
+const FrontierDemoEntryPage = React.lazy(() =>
+  import("@/routes/frontier/FrontierDemoEntryPage").then((module) => ({ default: module.FrontierDemoEntryPage })),
+);
 const NewTaskPage = React.lazy(() => import("@/routes/NewTaskPage").then((module) => ({ default: module.NewTaskPage })));
 const NotFoundPage = React.lazy(() =>
   import("@/routes/NotFoundPage").then((module) => ({ default: module.NotFoundPage })),
@@ -108,6 +111,7 @@ function routeElement(element: React.ReactNode) {
 
 const router = createBrowserRouter([
   { path: "/frontier", element: routeElement(<FrontierLandingPage />) },
+  { path: "/frontier/enter", element: routeElement(<FrontierDemoEntryPage />) },
   { path: "/login", element: routeElement(<LoginPage />) },
   { path: "/register", element: routeElement(<RegisterPage />) },
   { path: "/student", element: <StudentUnavailablePage /> },

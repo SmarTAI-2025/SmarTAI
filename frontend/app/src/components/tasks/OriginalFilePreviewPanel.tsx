@@ -12,6 +12,7 @@ export function OriginalFilePreviewPanel({
   previewUrl,
   onClose,
   onRetry,
+  provenanceNote,
   t,
 }: {
   descriptor: SourceFileDescriptor;
@@ -19,6 +20,7 @@ export function OriginalFilePreviewPanel({
   previewUrl: string | null;
   onClose: () => void;
   onRetry: () => void;
+  provenanceNote?: string;
   t: (key: MessageKey) => string;
 }) {
   const closeButtonRef = useRef<HTMLButtonElement>(null);
@@ -73,6 +75,7 @@ export function OriginalFilePreviewPanel({
       <div className="flex h-[42vh] min-h-[280px] items-center justify-center overflow-hidden bg-muted p-3 md:h-[52vh] md:p-4 lg:h-auto lg:min-h-0 lg:flex-1">
         <PreviewContent descriptor={descriptor} loadState={loadState} previewUrl={previewUrl} onRetry={onRetry} t={t} />
       </div>
+      {provenanceNote ? <p className="border-t bg-card px-4 py-2.5 text-[11px] leading-4 text-muted-foreground">{provenanceNote}</p> : null}
     </section>
   );
 }

@@ -13,6 +13,20 @@ export async function register(request: RegisterRequest): Promise<AuthResponse> 
   return response;
 }
 
+let frontierDemoSessionPromise: Promise<AuthResponse> | null = null;
+
+export function createFrontierDemoSession(): Promise<AuthResponse> {
+  frontierDemoSessionPromise ??= postJSON<AuthResponse>("/auth/frontier-demo-session")
+    .then((response) => {
+      setAuthToken(response.token);
+      return response;
+    })
+    .finally(() => {
+      frontierDemoSessionPromise = null;
+    });
+  return frontierDemoSessionPromise;
+}
+
 export async function getCurrentUser(): Promise<User> {
   return getJSON<User>("/auth/me");
 }

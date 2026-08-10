@@ -427,6 +427,7 @@ TaskStatus = Literal[
 # ─── User / Course / Assignment models (P0 — multi-role product) ──────────────
 
 Role = Literal["teacher", "student", "admin"]
+AuthScope = Literal["user", "frontier_demo"]
 
 
 class User(BaseModel):
@@ -443,6 +444,9 @@ class User(BaseModel):
     password_hash: str = Field("", description="bcrypt hash; never returned to clients")
     created_at: float = Field(default_factory=time.time)
     is_active: bool = True
+    # Request-only authorization provenance. It is never persisted or returned
+    # by ``public``; ordinary database users always load with the default scope.
+    auth_scope: AuthScope = Field(default="user", exclude=True)
 
     def public(self) -> Dict[str, Any]:
         """Dict safe to return to clients (no password hash, no course_ids)."""

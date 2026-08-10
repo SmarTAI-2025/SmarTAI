@@ -5,9 +5,9 @@
 报名入口要让评审在 90 秒内理解 SmarTAI 的价值，也要允许其继续验证真实技术链路。宣传体验和真实运行必须明确分层：
 
 1. `/frontier` 是无需登录的动态宣传页。允许使用明确标注的合成数据、动画和预计算 walkthrough，但视觉、术语和交互必须与真实产品一致。
-2. `/frontier/live` 是登录后的真实运行入口。输入文件为合成材料，但任务创建、题目识别、图片 OCR、学生作答识别和大模型批改全部调用真实 SmarTAI API。
+2. `/frontier/enter` 从后端取得免密码短时 Demo task scope，随后进入 `/frontier/live` 真实运行入口。输入文件为合成材料，但任务创建、题目识别、图片 OCR、学生作答识别和大模型批改全部调用真实 SmarTAI API。
 3. 真实运行失败时显示真实错误码和后端消息，再由用户主动选择 `View precomputed walkthrough`；不得静默降级或把预计算分数冒充为本次运行结果。
-4. 页面、URL、仓库和 fixture 中不得出现账号密码、共享模型 Token 或 API Key。每位评审使用独立、短期的教师账号，凭据只通过私密渠道发送且不得多人复用。
+4. 页面、URL、仓库和 fixture 中不得出现账号密码、共享模型 Token 或 API Key。后端为每次入口签发随机独立、无 refresh cookie 的短时 scope，Gemini Key 只保存在后端。
 5. 当前后端不持久化可下载的原文件字节；Live 页只能如实说明预览的是“本次上传所用的同一浏览器侧合成副本”，不得宣称是服务端保存的原件。
 
 ## 隔离分支与代码纳入
@@ -53,12 +53,14 @@ Live raw 学生文件中不得出现 `REVIEW SIGNAL`、建议分数、OCR 更正
 
 ### 宣传入口 `/frontier`
 
-- 英文默认，以全球市场叙事呈现。
+- 中英文均可切换，以全球市场叙事呈现并遵循用户已保存的界面语言。
 - 主题来自批改现场：纸张、石墨、蓝墨水、批注色，而不是通用 AI 霓虹。
-- Hero 编排动画演示 `Source → Recognize → Grade → Decide`。
-- 主 CTA：`Enter the live demo`，登录后回到 `/frontier/live`。
+- Hero 上半区集中呈现价值主张、真实 Demo CTA 与可信边界；四阶段 walkthrough 独占下一整行，避免把产品演示挤在狭窄右栏。
+- 四阶段演示为 `Source → Recognize → Grade → Analyze`：分别突出混合原件输入、带置信度的 OCR/识别、rubric 与隐藏测试驱动的批改、班级洞察和新图表生成，不能只替换同一张卡片的文案。
+- 主 CTA：`Enter the live demo`，经 `/frontier/enter` 自动签发会话后进入 `/frontier/live`。
 - 页面所有动画结果都标注为 `Product walkthrough` / `Synthetic content`。
 - 关键事实：mixed STEM、traceable evidence、teacher in control。
+- 原文件对照之后设置独立的 `Ask SmarTAI` 双语互动区；可用明确标注的合成 walkthrough 演示自然语言追问、答案依据和与问题对应的新图表，但不得把预计算图表描述成本次 Live 运行结果。
 
 ### 真实入口 `/frontier/live`
 
@@ -68,7 +70,7 @@ Live raw 学生文件中不得出现 `REVIEW SIGNAL`、建议分数、OCR 更正
 2. 上传 raw 题目 PDF 到 `/tasks/{id}/extract_problems`，轮询真实 job/status/progress。
 3. 先以题号和稳定语义锚点逐题校验识别结果；只有四题都唯一匹配时，才写入合成教师 rubric、参考答案、分值和编程测试。数量相同但错序、错拆或题干错配也必须停止。
 4. 上传 raw 学生作业 ZIP 到 `/tasks/{id}/parse_submissions`，真实处理排版 PDF、图片和手写 OCR。
-5. 从当前账号的已启用 provider 中选择一个，强制 single provider / one sample，保存 grading setup。
+5. 从后端共享池的已启用 provider 中选择一个，强制 single provider / one sample，并按当前界面语言写入 `feedback_language` 后保存 grading setup。
 6. 调用 `/tasks/{id}/grade`，轮询到真实 `graded` 状态。
 7. 进入现有 Review/Results 页面，由教师检查来源、调整分数并决定是否发布。
 
@@ -76,12 +78,12 @@ Live 页显示 task ID、job ID、后端 current step、最新 progress event、
 
 ## 安全与成本门
 
-- 不公开或复用共享账号；同一 owner 会看到同一任务空间，并可删除、重跑和消耗模型额度。每位评审单独创建短期账号，演示结束后撤销。
-- 当前没有受限的 `demo role`；评审登录的是普通教师账号。因此独立 Demo 环境只能存放合成数据，关闭公开注册，报名链接直达固定 fixture 流程，不能把它描述为权限沙箱。
-- 截止前采用独立 Demo 环境、合成固定 fixtures、单 provider、单 sample；页面不提供共享 API Key，邀请账号也不预置可见密钥。
+- `/auth/frontier-demo-session` 只在显式启用 Demo、共享池和后端 Gemini Key 时签发随机独立 owner 的短时 `frontier_demo` scope；无密码、无 refresh cookie，且有单进程每日签发上限与冷却。
+- 该 scope 只被 task router 接受，普通 experts/courses/admin 教师面继续拒绝。为节约截止前实现成本，当前未做 fixture 上传白名单或完整 demo role，因此它仍可调用整个 task API；独立 Demo 环境只能存放合成数据，不能描述为完整权限沙箱。
+- 截止前采用独立 Demo 环境、合成固定 fixtures、单 provider、单 sample；页面不提供共享 API Key，模型密钥只配置在后端环境变量。
 - `_GuardedSharedProvider` 必须同时限制文本 `ainvoke` 和视觉 `ainvoke_vision`；共享池关闭时两者都 fail closed。
 - 共享池现有额度仍是单进程内存计数，不具备跨 worker 原子结算与平台总金额熔断，因此不得把当前版本当作无登录公共模型服务。
-- 若未来开放匿名公共 Live Demo，应另建受限 `/demo/session`/`demo/runs`：fixture SHA allowlist、独立 demo 身份、并发 1、持久原子额度、全局预算 kill switch，且禁止访问普通任务和 provider 管理接口。
+- 当前签发计数和共享池额度均是单进程内存态，多 worker/重启不共享。若从报名 Demo 扩大为长期公共服务，应补 fixture SHA allowlist、持久原子额度、全局预算 kill switch 和更窄的 task capability。
 
 ## 视觉系统
 
@@ -103,7 +105,7 @@ Live 页显示 task ID、job ID、后端 current step、最新 progress event、
 
 - 同一 SHA 通过 TypeScript、Vitest、后端聚焦测试、visible-scope audit 和 production build。
 - raw ZIP 可解压，manifest SHA 全部一致，PDF 可逐页渲染，raw 学生材料通过标签泄漏扫描。
-- 无痕浏览器从 `/frontier` → 登录 → `/frontier/live`；登录后 return path 不允许跨域跳转。
+- 无痕浏览器从 `/frontier` → `/frontier/enter` → `/frontier/live`，且浏览器网络与存储中不出现 Gemini API Key 明文。
 - 用真实 Demo provider 至少跑通一次完整 E2E，保存 task/job ID、运行时间和真实结果截图；未跑通前状态只能写 `unverified`。
 - 验证后冻结 commit SHA，并让 Cloudflare 前端与 Demo 后端都固定该 SHA、关闭自动部署。
 - 发布前继续遵守 `docs/active_beta_launch/20260803_leader_replan/PRE_PRODUCTION_SECURITY_RELEASE_GATE_CN.md`；真实学生数据仍为 No-Go。

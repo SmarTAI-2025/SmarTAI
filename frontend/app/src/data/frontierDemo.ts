@@ -9,6 +9,7 @@ export interface DemoQuestion {
   title: string;
   prompt: string;
   reference: string;
+  solutionCode?: string;
   maxScore: number;
   rubric: string[];
 }
@@ -42,8 +43,8 @@ export const demoQuestions: DemoQuestion[] = [
     label: "Q1",
     discipline: "Calculus",
     title: "Substitution with an exponential integral",
-    prompt: "Evaluate ∫₀¹ x e^(x²) dx. Show the substitution and the transformed bounds.",
-    reference: "Let u = x² and du = 2x dx. The integral is ½∫₀¹eᵘdu = (e − 1)/2.",
+    prompt: "Evaluate $\\int_{0}^{1} x e^{x^2}\\,dx$. Show the substitution and the transformed bounds.",
+    reference: "Let $u=x^2$ and $du=2x\\,dx$. Then $\\frac{1}{2}\\int_0^1 e^u\\,du=\\frac{e-1}{2}$.",
     maxScore: 5,
     rubric: ["Chooses u = x²", "Carries the 1/2 factor", "Transforms bounds and evaluates correctly"],
   },
@@ -52,8 +53,8 @@ export const demoQuestions: DemoQuestion[] = [
     label: "Q2",
     discipline: "Mechanics",
     title: "Motion down a rough incline",
-    prompt: "A 2 kg block slides 3 m from rest down a 30° incline with μₖ = 0.20. Find its acceleration and final speed. Use g = 9.81 m/s².",
-    reference: "a = g(sin 30° − μₖ cos 30°) ≈ 3.20 m/s², then v = √(2as) ≈ 4.38 m/s.",
+    prompt: "A $2\\,\\mathrm{kg}$ block slides $3\\,\\mathrm{m}$ from rest down a $30^\\circ$ incline with $\\mu_k=0.20$. Find its acceleration and final speed. Use $g=9.81\\,\\mathrm{m\\,s^{-2}}$.",
+    reference: "$a=g(\\sin 30^\\circ-\\mu_k\\cos 30^\\circ)\\approx3.20\\,\\mathrm{m\\,s^{-2}}$, then $v=\\sqrt{2as}\\approx4.38\\,\\mathrm{m\\,s^{-1}}$.",
     maxScore: 8,
     rubric: ["Resolves gravity and normal force", "Uses friction in the opposing direction", "Finds acceleration", "Finds speed with units"],
   },
@@ -62,8 +63,8 @@ export const demoQuestions: DemoQuestion[] = [
     label: "Q3",
     discipline: "Linear algebra",
     title: "Kernel and rank of AᵀA",
-    prompt: "Prove ker(A) = ker(AᵀA), then conclude rank(A) = rank(AᵀA). Do not assume A is square or invertible.",
-    reference: "Ax = 0 implies AᵀAx = 0. Conversely, AᵀAx = 0 gives xᵀAᵀAx = ‖Ax‖² = 0, hence Ax = 0. Rank-nullity completes the proof.",
+    prompt: "For any real $m\\times n$ matrix $A$, prove $\\ker(A)=\\ker(A^T A)$, then conclude $\\operatorname{rank}(A)=\\operatorname{rank}(A^T A)$. Do not assume $A$ is square or invertible.",
+    reference: "$Ax=0$ implies $A^TAx=0$. Conversely, $A^TAx=0$ gives $x^TA^TAx=\\lVert Ax\\rVert^2=0$, hence $Ax=0$. Rank-nullity completes the proof.",
     maxScore: 7,
     rubric: ["Proves the forward inclusion", "Uses the norm identity for the reverse inclusion", "Applies rank-nullity without assuming A is invertible"],
   },
@@ -74,6 +75,7 @@ export const demoQuestions: DemoQuestion[] = [
     title: "Numerically stable softmax",
     prompt: "Implement stable_softmax(xs). Return [] for empty input and avoid overflow for values near 1000. Do not use NumPy.",
     reference: "Return [] when xs is empty; otherwise subtract max(xs), exponentiate, sum, and normalize.",
+    solutionCode: "import math\n\ndef stable_softmax(xs):\n    if not xs:\n        return []\n    peak = max(xs)\n    exps = [math.exp(value - peak) for value in xs]\n    total = sum(exps)\n    return [value / total for value in exps]",
     maxScore: 10,
     rubric: ["Handles empty input", "Subtracts the maximum", "Normalizes correctly", "Passes extreme-value tests"],
   },

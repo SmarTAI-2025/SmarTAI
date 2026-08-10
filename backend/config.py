@@ -100,6 +100,14 @@ class Settings(BaseSettings):
     shared_pool_daily_request_limit: int = 100
     shared_pool_daily_estimated_token_limit: int = 100_000
 
+    # ─── Passwordless AWS Frontier demo ──────────────────────────────
+    # Disabled by default. When enabled, the backend may issue a short-lived,
+    # random teacher identity so the frontend can reuse the existing task API.
+    frontier_demo_enabled: bool = False
+    frontier_demo_session_minutes: int = 20
+    frontier_demo_daily_session_limit: int = 4
+    frontier_demo_session_cooldown_seconds: float = 5.0
+
     # ─── Human-in-the-loop ─────────────────────────────────────────────────────
     confidence_threshold: float = 0.6  # below this, trigger human review
 

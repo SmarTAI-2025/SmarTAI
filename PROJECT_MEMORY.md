@@ -1,6 +1,6 @@
 # SmarTAI 当前项目记忆与决策
 
-> 最后更新：2026-08-10
+> 最后更新：2026-08-11
 > 用途：跨 Codex 任务保存已经确认的产品、架构、部署和运营决定。这里记录“现在相信什么”，不保存密码、API Key、令牌或其他秘密。
 
 ## 新任务读取规则
@@ -78,11 +78,16 @@
 ### AWS Frontier 报名 Demo 边界
 
 1. **宣传页可以使用合成数据、前端动画和预计算 walkthrough；进入 Live Demo 后，API、OCR 和批改必须真实运行。**
-   - 状态：**已确认；隔离分支实现已完成，真实 provider E2E、部署和运行证据待完成。**
+   - 状态：**已确认；隔离分支候选已实现，真实 provider E2E、部署和运行证据待完成。**
    - 无需登录的 `/frontier` 必须把动画结果标成 product walkthrough / synthetic content，并保持与真实产品一致的视觉和术语。
-   - 登录后的 `/frontier/live` 使用无真实学生信息的合成原始文件，但必须真实创建任务、调用题目识别、视觉 OCR、作答识别和大模型批改；不得把预计算分数注入本次结果。
+   - `/frontier/enter` 从后端取得免密码、无 refresh cookie 的短时随机 Demo 会话，再进入 `/frontier/live`；Live 使用无真实学生信息的合成原始文件，但必须真实创建任务、调用题目识别、视觉 OCR、作答识别和大模型批改，不得把预计算分数注入本次结果。
    - 真实运行失败时先显示安全的真实错误，再由用户主动打开预计算 walkthrough；不得静默降级。
-   - 不在网页、URL、仓库或 fixture 中写入账号密码、共享 Token 或 API Key；每位评审使用独立、短期账号，凭据只能私下发送且不得多人复用。当前普通教师账号不是受限 `demo role`，所以 Demo 环境只允许合成数据。
+   - 不在网页、URL、仓库或 fixture 中写入账号密码、共享 Token 或 API Key；Gemini Key 只保存在后端。2026-08-11 项目负责人为节约截止前实现成本，明确用后端签发的短时 `frontier_demo` task scope 替代“私下发送每位评审账号密码”。该 scope 只进入 task API，普通 experts/courses/admin 教师面继续拒绝；签发有单进程每日上限和冷却。
+   - 这次明确接受的截止前简化边界是：未实现 fixture 上传白名单或完整 demo role，Demo task scope 仍可调用整个 task API；签发计数也不是多 worker 持久额度。部署环境只允许合成数据，这些限制必须作为公开部署风险保留，不得包装成完整生产隔离。
+   - 题目审核与作答校对页复用既有 50/50 原文件 Preview UI；Demo 中显示的是 manifest SHA-256 校验后、与实际上传 API 相同的浏览器端 raw fixture 副本。当前后端未持久化原始文件字节，不得宣称这是服务端原件读取。
+   - `/frontier`、`/frontier/enter` 和 `/frontier/live` 支持中英文切换；Live 批改设置按启动时界面语言写入 `feedback_language`。
+   - `/frontier` 的四阶段宣传 walkthrough 独占整行并固定为 `Source → Recognize → Grade → Analyze`，各阶段分别展示原件输入、OCR 不确定性、rubric/代码测试批改和班级分析；原来的侧栏空间并入价值主张、真实 Demo CTA 与可信边界，不另塞无关功能。
+   - 原文件对照之后可用明确标注的合成 walkthrough 展示 `Ask SmarTAI` 自然语言追问和按问题生成的新图表；它与真实 Live API 入口保持视觉一致，但不得冒充本次 Live 运行结果。
    - Demo 从独立冻结 SHA 部署，不自动吸收 `main` 后续开发改动。
    - 来源：2026-08-10 AWS From Idea to Frontier 报名 Demo 任务中项目负责人明确确认；替代此前“报名 Demo 只做无需登录纯前端 guided demo”的建议。
 
@@ -123,9 +128,12 @@
 - “已经决定完整 App 取代 Web”——尚未拍板；目前是强偏好和技术评估方向。
 - “所有处理都在本地”——只有本地模型或本地批改引擎且不调用外部模型时才成立；BYOK 直接调用模型厂商仍会把相应数据发送给该厂商。
 - “平台共享 Unlimited-OCR 会随受邀测试版上线”——已被 2026-08-10 的范围决定替代；上线前只允许 adapter、用户自有凭据和内部 smoke，平台共享入口排在上线后优先 02。
+- “AWS Frontier Demo 必须私下发送每位评审账号密码”——已被 2026-08-11 的免密码短时 Demo task scope 替代；密钥仍只保存在后端，真实 provider E2E 与部署证据仍待完成。
 
 ## 更新记录
 
+- **2026-08-11**：项目负责人确认 AWS Frontier 宣传页可把 walkthrough 放大为独占整行的 `Source → Recognize → Grade → Analyze` 四阶段演示；原侧栏空间并入上方价值主张、真实 Demo CTA 与可信边界，并增加双语 `Ask SmarTAI` 合成互动来展示自然语言分析和按问题生成图表。Live API/OCR/批改真实运行边界不变。
+- **2026-08-11**：项目负责人确认 AWS Frontier Live Demo 改为点击即取得后端签发的短时免密码 task scope，Gemini Key 只留在后端；为节约截止前实现成本，不做 fixture 白名单或完整 demo role，保留整个 task API 可用、单进程签发计数等已知风险。同期确认复用既有 50/50 Preview UI 显示经 SHA-256 校验的同一浏览器端合成 raw fixture，并为宣传、入口和 Live 页面提供中英文切换；替代此前私下发放每位评审账号密码的运行方案。
 - **2026-08-10**：确认 AWS Frontier 报名宣传页可使用明确标注的合成动画和预计算 walkthrough，但登录后的 Live Demo 必须使用合成原始文件真实调用 API、OCR 和批改；失败不得静默切换静态结果，且不得公开账号密码或模型密钥。落实时每位评审使用独立短期账号，不复用普通教师账号凭据；当前没有受限 demo role，环境内只放合成数据。
 - **2026-08-10**：项目负责人确认批改与作答识别负责人 dsy 的 GitHub 账号为 `desuyagn`；项目台账和 PR 行动清单不再保留 candidate/待确认表述。
 - **2026-08-10**：确认平台共享 Unlimited-OCR token 不进入 2026-08-30 受邀测试版，排为上线后优先 02；上线前仍可准备 adapter、用户自有凭据和内部 smoke，同时保留现有共享模型池全部上线门禁。

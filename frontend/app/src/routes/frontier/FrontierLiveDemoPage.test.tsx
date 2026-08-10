@@ -1,10 +1,11 @@
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { getGradingSetup, saveGradingSetup } from "@/api/gradingSetup";
 import { createTask, extractProblems, getTask, getTaskState, parseSubmissions, startGrading, updateProblem } from "@/api/tasks";
 import { demoQuestions } from "@/data/frontierDemo";
+import { I18nProvider } from "@/i18n/I18nProvider";
 import type { GradingSetupResponse, Task, TaskStateSnapshot } from "@/types";
 import { alignDemoProblems, FrontierLiveDemoPage } from "./FrontierLiveDemoPage";
 
@@ -24,23 +25,25 @@ vi.mock("@/api/gradingSetup", () => ({
 }));
 
 describe("FrontierLiveDemoPage", () => {
+  beforeEach(() => window.localStorage.setItem("smartai_locale", "en-US"));
+
   afterEach(() => {
     vi.clearAllMocks();
     vi.unstubAllGlobals();
   });
 
   it("states the honest boundary between synthetic inputs and live processing", () => {
-    render(<MemoryRouter><FrontierLiveDemoPage /></MemoryRouter>);
+    render(<I18nProvider><MemoryRouter><FrontierLiveDemoPage /></MemoryRouter></I18nProvider>);
     expect(screen.getByText("Synthetic inputs")).toBeInTheDocument();
     expect(screen.getByText("Real API")).toBeInTheDocument();
     expect(screen.getByText("Real OCR")).toBeInTheDocument();
     expect(screen.getByText("Real grading")).toBeInTheDocument();
     expect(screen.getByText(/Nothing on this page injects precomputed scores/i)).toBeInTheDocument();
-    expect(screen.getByText(/no embedded credentials/i)).toBeInTheDocument();
+    expect(screen.getByText(/no exposed model key/i)).toBeInTheDocument();
   });
 
   it("offers an explicit real-run action", () => {
-    render(<MemoryRouter><FrontierLiveDemoPage /></MemoryRouter>);
+    render(<I18nProvider><MemoryRouter><FrontierLiveDemoPage /></MemoryRouter></I18nProvider>);
     expect(screen.getByRole("button", { name: /start real OCR \+ grading/i })).toBeEnabled();
   });
 
@@ -61,9 +64,11 @@ describe("FrontierLiveDemoPage", () => {
     vi.mocked(getTaskState).mockResolvedValue(taskState("problems_ready"));
 
     render(
-      <MemoryRouter initialEntries={["/frontier/live?taskId=asg_demo123"]}>
-        <FrontierLiveDemoPage />
-      </MemoryRouter>,
+      <I18nProvider>
+        <MemoryRouter initialEntries={["/frontier/live?taskId=asg_demo123"]}>
+          <FrontierLiveDemoPage />
+        </MemoryRouter>
+      </I18nProvider>,
     );
 
     expect(await screen.findByText(/rubric confirmation will be verified before continuing/i)).toBeInTheDocument();
@@ -113,7 +118,7 @@ describe("FrontierLiveDemoPage", () => {
       return { ok: true, status: 200, blob: async () => fixture } as Response;
     }));
 
-    render(<MemoryRouter><FrontierLiveDemoPage /></MemoryRouter>);
+    render(<I18nProvider><MemoryRouter><FrontierLiveDemoPage /></MemoryRouter></I18nProvider>);
     await user.click(screen.getByRole("button", { name: /start real OCR \+ grading/i }));
 
     await waitFor(() => expect(extractProblems).toHaveBeenCalledTimes(1));
@@ -128,6 +133,14 @@ describe("FrontierLiveDemoPage", () => {
     expect(parseSubmissions).toHaveBeenCalledTimes(1);
     expect(saveGradingSetup).toHaveBeenCalledTimes(1);
     expect(startGrading).toHaveBeenCalledTimes(1);
+    expect(saveGradingSetup).toHaveBeenCalledWith(expect.objectContaining({
+      gradingSetup: expect.objectContaining({ feedback_language: "en" }),
+    }));
+    expect(updateProblem).toHaveBeenCalledWith(
+      "asg_demo123",
+      "q4",
+      expect.objectContaining({ solution_code: expect.stringContaining("def stable_softmax") }),
+    );
     expect(screen.queryByText(/static score has been substituted/i)).not.toBeInTheDocument();
     await waitFor(() => expect(screen.getByText(/provider Demo Vision/)).toBeInTheDocument());
   });
