@@ -17,6 +17,7 @@ import uuid
 from collections import defaultdict
 from typing import Any
 
+from pydantic import ValidationError as PydanticValidationError
 from sqlalchemy import delete, func, select, update
 
 from backend.agents.ingest_agent import extract_problems, parse_student_answers
@@ -50,6 +51,11 @@ from backend.domain.errors import (
 from backend.models import TaskGradingSetup
 from backend.progress.tracker import get_or_create_reporter, get_reporter, remove_reporter
 from backend.services import grading_runs
+from backend.services.background_errors import (
+    SAFE_BACKGROUND_ERROR_CODES,
+    classify_background_error,
+    safe_background_error_code,
+)
 from backend.services.result_artifacts import (
     ARTIFACT_SCHEMA_VERSION,
     build_artifact_bundle,
@@ -62,21 +68,7 @@ from backend.tools.file_processing import extract_files_from_archive, extract_te
 
 SYSTEM_COURSE_CODE = "__SMARTAI_UNASSIGNED__"
 SYSTEM_COURSE_NAME = "SmarTAI Workspace"
-_SAFE_ERROR_CODES = {
-    "no_provider_configured",
-    "recognition_provider_not_enabled",
-    "problem_extraction_failed",
-    "provider_timeout",
-    "material_import_failed",
-    "ai_completion_failed",
-    "replacement_confirmation_required",
-    "stale_revision",
-    "submission_parse_failed",
-    "grading_failed",
-    "unknown_ai_completion_target",
-    "workflow_busy",
-    "workflow_revision_conflict",
-}
+_SAFE_ERROR_CODES = SAFE_BACKGROUND_ERROR_CODES
 _AUXILIARY_QUESTION_OPERATION_TYPES = {"material_import", "ai_completion"}
 logger = logging.getLogger(__name__)
 
@@ -220,6 +212,7 @@ def get_task(*, task_id: str, owner_id: str, full: bool = True) -> dict:
     submissions = _active_submissions(task_id, owner_id)
     runs = grading_repository.list_runs_for_assignment(task_id, actor_id=owner_id)
     latest_run = runs[-1] if runs else None
+    grading_error_code = _grading_failure_code(latest_run)
     status = _presentation_status(workflow, questions, submissions, latest_run)
     selected_docs = _selected_knowledge(task_id, owner_id)
     tag_ids = _get_task_tags(task_id, owner_id)
@@ -251,7 +244,9 @@ def get_task(*, task_id: str, owner_id: str, full: bool = True) -> dict:
         "extract_job_id": workflow.extract_job_id,
         "parse_job_id": workflow.parse_job_id,
         "grading_job_id": latest_run.id if latest_run else workflow.grading_job_id,
-        "last_failed_job_id": workflow.last_failed_job_id,
+        "last_failed_job_id": (
+            latest_run.id if grading_error_code and latest_run else workflow.last_failed_job_id
+        ),
         "problem_file_name": workflow.problem_file_name,
         "submission_file_name": workflow.submission_file_name,
         "pending_submission_file_name": workflow.pending_submission_file_name,
@@ -279,7 +274,7 @@ def get_task(*, task_id: str, owner_id: str, full: bool = True) -> dict:
         "student_count": len(submissions),
         "kb_docs": selected_docs,
         "kb_doc_count": len(selected_docs),
-        "error": workflow.error_code,
+        "error": grading_error_code or workflow.error_code,
         "created_at": assignment.created_at,
         "updated_at": max(assignment.updated_at, workflow.updated_at),
     }
@@ -312,6 +307,12 @@ def _presentation_status(workflow, questions, submissions, latest_run) -> str:
     if questions:
         return "problems_ready"
     return "draft"
+
+
+def _grading_failure_code(run) -> str | None:
+    if run is None or run.status != education.GradingRunStatus.FAILED.value:
+        return None
+    return safe_background_error_code(run.error_message, "grading_failed")
 
 
 def _serialize_problem(question) -> dict:
@@ -599,7 +600,10 @@ def claim_workflow_operation_atomic(
 
 
 def _detail_error(error: DomainError, fallback: str) -> str:
-    return error.code if error.code != "domain_error" else fallback
+    for candidate in (error.code, error.message):
+        if candidate in _SAFE_ERROR_CODES:
+            return candidate
+    return fallback
 
 
 def _raise_stale_revision() -> None:
@@ -795,10 +799,11 @@ async def run_task_problem_extraction(
             task_id, owner_id, job_id, job_attempt,
             _detail_error(exc, "problem_extraction_failed"),
         )
-    except Exception:
+    except Exception as exc:
         logger.warning("Background problem extraction failed; job_id=%s", job_id)
         _fail_operation(
-            task_id, owner_id, job_id, job_attempt, "problem_extraction_failed"
+            task_id, owner_id, job_id, job_attempt,
+            classify_background_error(exc, "problem_extraction_failed"),
         )
 
 
@@ -1060,10 +1065,11 @@ async def run_task_submission_parsing(
             task_id, owner_id, job_id, job_attempt,
             _detail_error(exc, "submission_parse_failed"),
         )
-    except Exception:
+    except Exception as exc:
         logger.warning("Background submission parsing failed; job_id=%s", job_id)
         _fail_operation(
-            task_id, owner_id, job_id, job_attempt, "submission_parse_failed"
+            task_id, owner_id, job_id, job_attempt,
+            classify_background_error(exc, "submission_parse_failed"),
         )
 
 
@@ -1522,7 +1528,7 @@ def _fail_operation(
     task_id: str, owner_id: str, job_id: str, expected_operation_attempt: int,
     error_code: str,
 ) -> bool:
-    safe = error_code if error_code in _SAFE_ERROR_CODES else "workflow_failed"
+    safe = safe_background_error_code(error_code, "workflow_failed")
     now = time.time()
     # Keep the operation transition and workflow cleanup in one transaction.
     # Because retries reuse the operation id, splitting these writes would let
@@ -1653,7 +1659,7 @@ def _grading_progress(run_id: str, owner_id: str) -> dict:
         "total_questions": question_count,
         "completed_units": completed_units,
         "active": [], "messages": messages,
-        "error_detail": "grading_failed" if run.status == "failed" else None,
+        "error_detail": _grading_failure_code(run),
         "started_at": run.started_at or run.created_at,
         "workflow": "grading", "stage_sequence": [],
         "current_step": "completed" if run.status in {"completed", "partial_failed"} else "grading",
@@ -1682,7 +1688,12 @@ def start_task_grading(*, task_id: str, owner_id: str) -> dict:
     answer_statuses = workflow_repository.answer_review_statuses([
         answer.id for revision in revisions for answer in revision.answers
     ])
-    setup = TaskGradingSetup.model_validate(workflow.grading_setup)
+    try:
+        setup = TaskGradingSetup.model_validate(workflow.grading_setup)
+    except PydanticValidationError as exc:
+        raise ValidationError(
+            "grading_setup_invalid", code="grading_setup_invalid"
+        ) from exc
     from backend.services.grading_input_security import (
         provider_configuration_fingerprint,
     )
@@ -1769,7 +1780,7 @@ def task_results(*, task_id: str, owner_id: str) -> dict:
         return {
             "status": "not_found" if run.status == "failed" else task["status"],
             "task_id": task_id,
-            "error": "grading_failed" if run.status == "failed" else None,
+            "error": _grading_failure_code(run),
         }
     results = grading_repository.list_results_for_run(run.id)
     presentations = workflow_repository.list_student_presentations(task_id)
