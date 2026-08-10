@@ -10,7 +10,7 @@ describe("FrontierLandingPage", () => {
   it("presents an honest walkthrough and routes to the live demo", () => {
     render(<I18nProvider><MemoryRouter><FrontierLandingPage /></MemoryRouter></I18nProvider>);
 
-    expect(screen.getByRole("heading", { name: /auditable first pass/i })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: /faster review.*evidence intact/i })).toBeInTheDocument();
     expect(screen.getAllByText(/synthetic student data/i).length).toBeGreaterThan(0);
     expect(screen.getAllByRole("link", { name: /enter (the )?live demo/i })[0]).toHaveAttribute("href", "/frontier/enter");
   });
@@ -19,19 +19,36 @@ describe("FrontierLandingPage", () => {
     render(<I18nProvider><MemoryRouter><FrontierLandingPage /></MemoryRouter></I18nProvider>);
 
     fireEvent.click(screen.getByRole("tab", { name: /03 grade/i }));
-    expect(screen.getByText("Tie every point to a rubric signal.")).toBeInTheDocument();
+    expect(screen.getByText(/Tie every point/)).toBeInTheDocument();
+    expect(screen.getByText(/to its evidence/)).toBeInTheDocument();
     expect(screen.getByRole("tab", { name: /03 grade/i })).toHaveAttribute("aria-selected", "true");
   });
 
-  it("shows analysis as a distinct stage and answers example questions", () => {
+  it("presents source comparison without claiming unsupported glyph confidence", () => {
+    render(<I18nProvider><MemoryRouter><FrontierLandingPage /></MemoryRouter></I18nProvider>);
+
+    fireEvent.click(screen.getByRole("tab", { name: /02 recognize/i }));
+    expect(screen.getByText("Source comparison open")).toBeInTheDocument();
+    expect(screen.getByText("Complete source")).toBeInTheDocument();
+    expect(screen.getByText("Editable")).toBeInTheDocument();
+    expect(screen.queryByText(/OCR candidate/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/source confidence/i)).not.toBeInTheDocument();
+  });
+
+  it("shows analysis as a distinct stage with varied supported charts", () => {
     render(<I18nProvider><MemoryRouter><FrontierLandingPage /></MemoryRouter></I18nProvider>);
 
     fireEvent.click(screen.getByRole("tab", { name: /04 analyze/i }));
-    expect(screen.getByText("Turn one grading run into class insight.")).toBeInTheDocument();
+    expect(screen.getByText(/Turn grading results/)).toBeInTheDocument();
+    expect(screen.getByRole("img", { name: /Scatter chart: Attainment by question/i })).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole("button", { name: /which hidden code test fails most often/i }));
-    expect(screen.getByText(/empty-input handling is the most common gap/i)).toBeInTheDocument();
-    expect(screen.getByRole("heading", { name: /hidden-test pass rate/i })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: /how spread out are overall scores/i }));
+    expect(screen.getByRole("img", { name: /Box chart: Overall score distribution/i })).toBeInTheDocument();
+    expect(screen.getByText(/77% median/i)).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: /what share of students scored below 70%/i }));
+    expect(screen.getByRole("img", { name: /Pie chart: Score threshold share/i })).toBeInTheDocument();
+    expect(screen.getAllByText("25%").length).toBeGreaterThan(0);
   });
 
   it("switches the full showcase to Chinese", () => {

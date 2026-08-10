@@ -7,6 +7,8 @@ interface PrimaryNavigationProps {
   className?: string;
   mobile?: boolean;
   onNavigate?: () => void;
+  demoLivePath?: string;
+  demoTaskPath?: string;
 }
 
 /** Shared navigation renderer for the desktop header and mobile drawer. */
@@ -14,17 +16,26 @@ export function PrimaryNavigation({
   className,
   mobile = false,
   onNavigate,
+  demoLivePath,
+  demoTaskPath,
 }: PrimaryNavigationProps) {
-  const { t } = useI18n();
+  const { locale, t } = useI18n();
   const location = useLocation();
+  const items = demoLivePath
+    ? [
+        { to: "/frontier", label: locale === "zh-CN" ? "产品介绍" : "Product overview" },
+        { to: demoLivePath, label: "Live Demo" },
+        ...(demoTaskPath ? [{ to: demoTaskPath, label: locale === "zh-CN" ? "当前任务" : "Current task" }] : []),
+      ]
+    : PRIMARY_NAVIGATION.map((item) => ({ to: item.to, label: t(item.labelKey) }));
 
   return (
     <nav aria-label={t("primaryNavigation")} className={className}>
-      {PRIMARY_NAVIGATION.map((item) => (
+      {items.map((item) => (
         <NavLink
           key={item.to}
           to={item.to}
-          end={item.to === "/"}
+          end={item.to === "/" || item.to === "/frontier"}
           onClick={onNavigate}
           aria-current={item.to === "/tasks/new" && location.pathname.startsWith("/tasks/") ? "page" : undefined}
           className={({ isActive }) =>
@@ -36,7 +47,7 @@ export function PrimaryNavigation({
             )
           }
         >
-          {t(item.labelKey)}
+          {item.label}
         </NavLink>
       ))}
     </nav>

@@ -29,11 +29,12 @@ import {
 } from "@/api/tasks";
 import { Button } from "@/components/ui/Button";
 import { InlineNotice } from "@/components/ui/InlineNotice";
-import { demoQuestions, type DemoQuestion, type DemoQuestionId } from "@/data/frontierDemo";
+import { MarkdownMath } from "@/components/ui/MarkdownMath";
+import { demoQuestions, type DemoQuestion } from "@/data/frontierDemo";
 import { useI18n } from "@/i18n/I18nProvider";
 import type { Locale } from "@/i18n/messages";
 import { cn } from "@/lib/cn";
-import type { GradingSetup, ProblemInfo, TaskStateSnapshot, TaskStatus, TestCase } from "@/types";
+import type { GradingSetup, ProblemInfo, Task, TaskStateSnapshot, TaskStatus, TestCase } from "@/types";
 
 const QUESTION_FIXTURE = "/frontier-demo/live/question_source.pdf";
 const SUBMISSION_FIXTURE = "/frontier-demo/live/submissions_raw.zip";
@@ -74,6 +75,7 @@ export function FrontierLiveDemoPage() {
   const [error, setError] = useState<{ message: string; code?: string | null } | null>(null);
   const [startedAt, setStartedAt] = useState<number | null>(null);
   const [providerLabel, setProviderLabel] = useState<string | null>(null);
+  const [teacherReviewTask, setTeacherReviewTask] = useState<Task | null>(null);
   const activeStepRef = useRef<RunStepId | null>(null);
   const runLockRef = useRef(false);
 
@@ -100,7 +102,7 @@ export function FrontierLiveDemoPage() {
 
   const elapsed = startedAt ? Math.max(0, Math.round((Date.now() - startedAt) / 1_000)) : null;
   const finished = snapshot?.status === "graded" || snapshot?.status === "review_confirmed" || snapshot?.status === "finalized";
-  const canResume = Boolean(taskId && snapshot && !finished && snapshot.status !== "error");
+  const canResume = Boolean(taskId && snapshot && !finished && snapshot.status !== "error" && !teacherReviewTask);
 
   async function startFreshRun() {
     if (runLockRef.current) return;
@@ -109,13 +111,14 @@ export function FrontierLiveDemoPage() {
     setError(null);
     setSnapshot(null);
     setProviderLabel(null);
+    setTeacherReviewTask(null);
     setStartedAt(Date.now());
     setSteps(initialSteps(locale));
     activeStepRef.current = null;
     try {
       markStep("task", "active", tx(locale, "正在创建真实教师任务…", "Creating a real teacher-owned task…"));
       const task = await createTask({
-        name: `AWS Frontier Live Demo · ${new Date().toISOString().slice(0, 16).replace("T", " ")} UTC`,
+        name: `SmarTAI Live Demo · ${new Date().toISOString().slice(0, 16).replace("T", " ")} UTC`,
         idempotencyKey: createIdempotencyKey(),
       });
       setTaskId(task.task_id);
@@ -148,7 +151,26 @@ export function FrontierLiveDemoPage() {
     }
   }
 
-  async function continueWorkflow(currentTaskId: string, startingStatus: TaskStatus) {
+  async function confirmTeacherMaterials() {
+    if (!taskId || !teacherReviewTask || runLockRef.current) return;
+    runLockRef.current = true;
+    setBusy(true);
+    setError(null);
+    try {
+      markStep("questions", "active", tx(locale, "正在写入已确认的合成教师资料…", "Applying the confirmed synthetic teacher materials…"));
+      await confirmDemoQuestions(taskId, teacherReviewTask);
+      setTeacherReviewTask(null);
+      await continueWorkflow(taskId, "problems_ready", true);
+    } catch (caught) {
+      failActiveStep();
+      setError(errorMessage(caught));
+    } finally {
+      runLockRef.current = false;
+      setBusy(false);
+    }
+  }
+
+  async function continueWorkflow(currentTaskId: string, startingStatus: TaskStatus, teacherMaterialsConfirmed = false) {
     let status = startingStatus;
 
     if (status === "draft") {
@@ -164,8 +186,15 @@ export function FrontierLiveDemoPage() {
     }
 
     if (status === "problems_ready") {
-      markStep("questions", "active", tx(locale, "正在将合成教师评分标准应用到识别题目…", "Applying the synthetic teacher rubric to recognized questions…"));
-      await confirmDemoQuestions(currentTaskId);
+      const recognizedTask = await getTask(currentTaskId);
+      const aligned = alignDemoProblems(Object.values(recognizedTask.problem_data));
+      if (!teacherMaterialsConfirmed && !demoTeacherMaterialsApplied(aligned)) {
+        setTeacherReviewTask(recognizedTask);
+        const recognizedState = await getTaskState(currentTaskId);
+        setSnapshot(recognizedState);
+        markStep("questions", "active", tx(locale, "真实题目识别已完成；等待确认合成教师资料。", "Live question recognition is complete; waiting for teacher-material confirmation."), recognizedState.extract_job_id);
+        return;
+      }
       const afterQuestions = await getTaskState(currentTaskId);
       setSnapshot(afterQuestions);
       markStep("questions", "complete", tx(locale, `已识别 ${afterQuestions.problem_count} 题并确认教师评分标准`, `${afterQuestions.problem_count} questions recognized and teacher rubric confirmed`), afterQuestions.extract_job_id);
@@ -256,7 +285,7 @@ export function FrontierLiveDemoPage() {
     <div className="mx-auto min-w-0 w-full max-w-[1240px] pb-12">
       <div className="flex flex-col gap-5 border-b pb-7 lg:flex-row lg:items-end lg:justify-between">
         <div className="max-w-3xl">
-          <Link to="/frontier" className="text-xs font-semibold uppercase tracking-[0.16em] text-primary hover:underline">AWS From Idea to Frontier · {tx(locale, "项目展示", "showcase")}</Link>
+          <Link to="/frontier" className="text-xs font-semibold uppercase tracking-[0.16em] text-primary hover:underline">SmarTAI · {tx(locale, "产品介绍", "product overview")}</Link>
           <h1 className="mt-3 text-[34px] font-bold leading-tight tracking-[-0.035em] text-foreground sm:text-[42px]">{tx(locale, "真实批改运行", "Live grading run")}</h1>
           <p className="mt-3 max-w-2xl text-sm leading-6 text-muted-foreground sm:text-base">
             {tx(locale, "合成作业会经过真实的 SmarTAI API、原文识别、OCR 与批改流程。本页不会向真实结果注入任何预计算分数。", "Synthetic coursework goes through the real SmarTAI API, source recognition, OCR, and grading pipeline. Nothing on this page injects precomputed scores into the live result.")}
@@ -314,6 +343,15 @@ export function FrontierLiveDemoPage() {
             </InlineNotice>
           ) : null}
 
+          {teacherReviewTask ? (
+            <TeacherMaterialConfirmation
+              task={teacherReviewTask}
+              locale={locale}
+              busy={busy}
+              onConfirm={() => void confirmTeacherMaterials()}
+            />
+          ) : null}
+
           <div className="mt-6 flex flex-wrap items-center gap-3">
             <Button className="h-11 px-5" onClick={startFreshRun} disabled={busy}>
               {busy ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />}
@@ -360,6 +398,67 @@ export function FrontierLiveDemoPage() {
         </aside>
       </div>
     </div>
+  );
+}
+
+function TeacherMaterialConfirmation({
+  task,
+  locale,
+  busy,
+  onConfirm,
+}: {
+  task: Task;
+  locale: Locale;
+  busy: boolean;
+  onConfirm: () => void;
+}) {
+  const aligned = alignDemoProblems(Object.values(task.problem_data));
+  return (
+    <section className="mt-5 rounded-[10px] border border-primary/25 bg-primary/[0.035] p-4 sm:p-5" aria-labelledby="demo-teacher-material-title">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+        <div>
+          <p className="text-xs font-semibold uppercase tracking-[0.12em] text-primary">{tx(locale, "显式教师输入", "Explicit teacher input")}</p>
+          <h3 id="demo-teacher-material-title" className="mt-1 text-lg font-bold">{tx(locale, "确认评分资料后继续", "Confirm grading materials to continue")}</h3>
+          <p className="mt-1 max-w-2xl text-xs leading-5 text-muted-foreground">
+            {tx(locale, "上方题干来自本次真实识别；下方 rubric、参考解与满分是为合成样例预先准备的教师资料。它们不是学生分数，也不是识别结果。", "The question text comes from this live extraction. The rubric, reference answer, and maximum score below are pre-authored teacher materials for this synthetic sample—not student scores or recognition output.")}
+          </p>
+        </div>
+        <Link className="shrink-0 text-xs font-semibold text-primary hover:underline" to={`/tasks/${task.task_id}/questions`}>
+          {tx(locale, "在题目审核页查看", "Open question review")}
+        </Link>
+      </div>
+
+      <div className="mt-4 grid gap-3">
+        {aligned.map(({ problem, fixture }, index) => (
+          <details key={fixture.id} className="rounded-lg border bg-card px-3 py-2.5" open={index === 0}>
+            <summary className="cursor-pointer text-sm font-semibold">
+              {fixture.label} · {fixture.discipline} · {tx(locale, `${fixture.maxScore} 分`, `${fixture.maxScore} points`)}
+            </summary>
+            <div className="mt-3 grid gap-3 lg:grid-cols-2">
+              <div>
+                <p className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">{tx(locale, "本次真实识别题干", "Live recognized question")}</p>
+                <MarkdownMath className="mt-1 text-xs leading-5 text-foreground">{problem.stem}</MarkdownMath>
+              </div>
+              <div>
+                <p className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">{tx(locale, "合成教师评分资料", "Synthetic teacher materials")}</p>
+                <ol className="mt-1 list-decimal space-y-1 pl-4 text-xs leading-5 text-foreground">
+                  {fixture.rubric.map((item) => <li key={item}>{item}</li>)}
+                </ol>
+                <MarkdownMath className="mt-2 border-t pt-2 text-xs leading-5 text-muted-foreground">{fixture.reference}</MarkdownMath>
+              </div>
+            </div>
+          </details>
+        ))}
+      </div>
+
+      <div className="mt-4 flex flex-wrap items-center gap-3">
+        <Button onClick={onConfirm} disabled={busy} className="h-10 px-4">
+          {busy ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />}
+          {tx(locale, "确认教师资料并继续真实 OCR", "Confirm teacher materials and continue live OCR")}
+        </Button>
+        <span className="text-xs text-muted-foreground">{tx(locale, "确认后仍可在题目审核页修改；最终评分继续由教师复核。", "You can still edit these fields in question review; final scores remain subject to teacher review.")}</span>
+      </div>
+    </section>
   );
 }
 
@@ -424,12 +523,14 @@ function TaskLinks({ taskId, status, locale }: { taskId: string; status?: TaskSt
   );
 }
 
-async function confirmDemoQuestions(taskId: string) {
-  const task = await getTask(taskId);
-  const aligned = alignDemoProblems(Object.values(task.problem_data));
+async function confirmDemoQuestions(taskId: string, task?: Task) {
+  const currentTask = task ?? await getTask(taskId);
+  const aligned = alignDemoProblems(Object.values(currentTask.problem_data));
   for (const { problem, fixture } of aligned) {
     await updateProblem(taskId, problem.q_id, {
-      stem: fixture.prompt,
+      // Keep the real extraction visible; only rubric/reference fields are
+      // supplied as synthetic teacher input for this fixed demo assignment.
+      stem: problem.stem,
       criterion: fixture.rubric.map((item, rubricIndex) => `${rubricIndex + 1}. ${item}`).join("\n"),
       max_score: fixture.maxScore,
       reference_answer: fixture.reference,
@@ -440,44 +541,30 @@ async function confirmDemoQuestions(taskId: string) {
   }
 }
 
-const DEMO_QUESTION_ANCHORS: Record<DemoQuestionId, string[][]> = {
-  q1: [["integral01", "int01", "01xexp", "01xe"], ["exp", "ex2"], ["x2"], ["substitution"]],
-  q2: [["2kg", "2mathrmkg"], ["incline"], ["020", "02"], ["acceleration"], ["speed"]],
-  q3: [["kera", "kernela"], ["ata", "transpose"], ["rank"], ["invertible"]],
-  q4: [["stablesoftmax"], ["emptyinput"], ["1000"], ["numpy"]],
-};
+function demoTeacherMaterialsApplied(aligned: Array<{ problem: ProblemInfo; fixture: DemoQuestion }>) {
+  return aligned.every(({ problem }) => (
+    problem.review_status === "confirmed"
+    && Boolean(problem.criterion?.trim())
+    && Boolean(problem.reference_answer?.trim())
+  ));
+}
 
 export function alignDemoProblems(problems: ProblemInfo[]) {
   if (problems.length !== demoQuestions.length) {
     throw new Error(`Question recognition returned ${problems.length} items; expected ${demoQuestions.length}. Open the task to review the real extraction before continuing.`);
   }
-  const remaining = new Set(problems);
-  return demoQuestions.map((fixture, index) => {
-    const expectedNumber = index + 1;
-    const candidates = [...remaining].filter((problem) => {
-      const recognizedNumber = problemNumber(problem.number);
-      if (recognizedNumber !== null && recognizedNumber !== expectedNumber) return false;
-      const normalized = normalizeQuestionText(problem.stem);
-      return DEMO_QUESTION_ANCHORS[fixture.id].every((alternatives) =>
-        alternatives.some((anchor) => normalized.includes(normalizeQuestionText(anchor))),
-      );
-    });
-    if (candidates.length !== 1) {
-      throw new Error(`Question recognition did not preserve a unique semantic match for ${fixture.label}. Open the task to inspect the real extraction; no rubric or score has been applied.`);
+  const byNumber = new Map<number, ProblemInfo>();
+  for (const problem of problems) {
+    const recognizedNumber = problemNumber(problem.number) ?? problemNumber(problem.q_id);
+    if (recognizedNumber === null || recognizedNumber < 1 || recognizedNumber > demoQuestions.length || byNumber.has(recognizedNumber)) {
+      throw new Error("Question recognition did not preserve unique Q1–Q4 numbering. Open the task to inspect the real extraction; no rubric or score has been applied.");
     }
-    const problem = candidates[0];
-    remaining.delete(problem);
-    return { problem, fixture } satisfies { problem: ProblemInfo; fixture: DemoQuestion };
-  });
-}
-
-function normalizeQuestionText(value: string) {
-  return value
-    .normalize("NFKC")
-    .toLowerCase()
-    .replaceAll("²", "2")
-    .replaceAll("ᵀ", "t")
-    .replace(/[^a-z0-9]+/g, "");
+    byNumber.set(recognizedNumber, problem);
+  }
+  return demoQuestions.map((fixture, index) => ({
+    problem: byNumber.get(index + 1)!,
+    fixture,
+  } satisfies { problem: ProblemInfo; fixture: DemoQuestion }));
 }
 
 function problemNumber(value: string) {

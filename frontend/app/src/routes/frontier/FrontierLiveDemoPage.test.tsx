@@ -47,17 +47,24 @@ describe("FrontierLiveDemoPage", () => {
     expect(screen.getByRole("button", { name: /start real OCR \+ grading/i })).toBeEnabled();
   });
 
-  it("stops before rubric confirmation when four recognized questions are semantically mismatched", () => {
+  it("preserves real recognized content instead of testing it against fixture keywords", () => {
     const problems = Object.values(taskWithQuestions().problem_data);
     problems[1] = { ...problems[1], stem: "Implement stable_softmax for values near 1000." };
 
-    expect(() => alignDemoProblems(problems)).toThrow(/unique semantic match for Q2/i);
+    expect(alignDemoProblems(problems)[1].problem.stem).toBe("Implement stable_softmax for values near 1000.");
   });
 
   it("aligns recognized questions by semantic identity instead of object order", () => {
     const problems = Object.values(taskWithQuestions().problem_data).reverse();
 
     expect(alignDemoProblems(problems).map(({ problem }) => problem.q_id)).toEqual(["q1", "q2", "q3", "q4"]);
+  });
+
+  it("stops before rubric confirmation when recognized question numbers are duplicated", () => {
+    const problems = Object.values(taskWithQuestions().problem_data);
+    problems[1] = { ...problems[1], number: "Q1", q_id: "q1-copy" };
+
+    expect(() => alignDemoProblems(problems)).toThrow(/unique Q1–Q4 numbering/i);
   });
 
   it("does not claim rubric confirmation when a refreshed task is only problems-ready", async () => {
@@ -77,9 +84,11 @@ describe("FrontierLiveDemoPage", () => {
 
   it("runs the real API workflow in order without injecting fallback scores", async () => {
     const user = userEvent.setup();
+    const recognizedTask = taskWithQuestions();
+    recognizedTask.problem_data.q2.stem = "Recognized Q2 wording from the live extraction.";
     vi.mocked(createTask).mockResolvedValue(taskState("draft"));
     vi.mocked(extractProblems).mockResolvedValue({ status: "started", job_id: "job-questions" });
-    vi.mocked(getTask).mockResolvedValue(taskWithQuestions());
+    vi.mocked(getTask).mockResolvedValue(recognizedTask);
     vi.mocked(updateProblem).mockResolvedValue({ status: "ok", q_id: "q", problem: taskWithQuestions().problem_data.q1 });
     vi.mocked(parseSubmissions).mockResolvedValue({ status: "started", job_id: "job-submissions" });
     vi.mocked(getGradingSetup).mockResolvedValue(gradingSetup());
@@ -122,6 +131,10 @@ describe("FrontierLiveDemoPage", () => {
     await user.click(screen.getByRole("button", { name: /start real OCR \+ grading/i }));
 
     await waitFor(() => expect(extractProblems).toHaveBeenCalledTimes(1));
+    const confirmTeacherMaterials = await screen.findByRole("button", { name: /confirm teacher materials and continue live OCR/i });
+    expect(parseSubmissions).not.toHaveBeenCalled();
+    expect(screen.getByText(/pre-authored teacher materials/i)).toBeInTheDocument();
+    await user.click(confirmTeacherMaterials);
     await waitFor(() => expect(updateProblem).toHaveBeenCalledTimes(4));
     await waitFor(() => expect(parseSubmissions).toHaveBeenCalledTimes(1));
     await waitFor(() => expect(saveGradingSetup).toHaveBeenCalledTimes(1));
@@ -138,6 +151,11 @@ describe("FrontierLiveDemoPage", () => {
     }));
     expect(updateProblem).toHaveBeenCalledWith(
       "asg_demo123",
+      "q2",
+      expect.objectContaining({ stem: "Recognized Q2 wording from the live extraction." }),
+    );
+    expect(updateProblem).toHaveBeenCalledWith(
+      "asg_demo123",
       "q4",
       expect.objectContaining({ solution_code: expect.stringContaining("def stable_softmax") }),
     );
@@ -149,7 +167,7 @@ describe("FrontierLiveDemoPage", () => {
 function taskState(status: TaskStateSnapshot["status"]): TaskStateSnapshot {
   return {
     task_id: "asg_demo123",
-    name: "AWS Frontier Live Demo",
+    name: "SmarTAI Live Demo",
     owner_id: "teacher-demo",
     status,
     workflow_revision: 1,

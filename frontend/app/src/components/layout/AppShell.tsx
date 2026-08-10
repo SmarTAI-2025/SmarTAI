@@ -1,6 +1,6 @@
-import { Menu, X } from "lucide-react";
+import { FlaskConical, Menu, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
-import { Link, Outlet, useNavigate } from "react-router-dom";
+import { Link, Outlet, useLocation, useNavigate } from "react-router-dom";
 import { useCurrentUser, useExperts, useLogout } from "@/api/hooks";
 import { AccountMenu } from "@/components/layout/AccountMenu";
 import { LanguageToggle } from "@/components/layout/LanguageToggle";
@@ -13,11 +13,24 @@ export function AppShell() {
   const mobileTriggerRef = useRef<HTMLButtonElement>(null);
   const mobileCloseRef = useRef<HTMLButtonElement>(null);
   const mobilePanelRef = useRef<HTMLElement>(null);
-  const { t } = useI18n();
+  const { locale, t } = useI18n();
   const currentUser = useCurrentUser();
-  const expertsQuery = useExperts();
+  const isFrontierDemo = currentUser.data?.id.startsWith("frontier_") ?? false;
+  const expertsQuery = useExperts({ enabled: currentUser.isSuccess && !isFrontierDemo });
   const logout = useLogout();
+  const location = useLocation();
   const navigate = useNavigate();
+  const taskIdFromLocation = demoTaskIdFromLocation(location.pathname, location.search);
+  const [rememberedDemoTaskId, setRememberedDemoTaskId] = useState<string | null>(() => readRememberedDemoTaskId());
+  const demoTaskId = taskIdFromLocation ?? rememberedDemoTaskId;
+  const demoLivePath = demoTaskId ? `/frontier/live?taskId=${encodeURIComponent(demoTaskId)}` : "/frontier/live";
+  const demoTaskPath = demoTaskId ? `/tasks/${encodeURIComponent(demoTaskId)}` : undefined;
+
+  useEffect(() => {
+    if (!isFrontierDemo || !taskIdFromLocation) return;
+    window.sessionStorage.setItem("smartai_frontier_demo_task_id", taskIdFromLocation);
+    setRememberedDemoTaskId(taskIdFromLocation);
+  }, [isFrontierDemo, taskIdFromLocation]);
 
   useEffect(() => {
     const desktop = window.matchMedia("(min-width: 1024px)");
@@ -116,25 +129,37 @@ export function AppShell() {
           </button>
 
           <Link
-            to="/"
+            to={isFrontierDemo ? demoLivePath : "/"}
             className="shrink-0 text-[22px] font-bold leading-[27px] tracking-[-0.02em] text-primary outline-none focus-visible:rounded focus-visible:ring-2 focus-visible:ring-ring"
           >
             {t("appName")}
           </Link>
 
-          <PrimaryNavigation className="ml-7 hidden lg:flex" />
+          <PrimaryNavigation
+            className="ml-7 hidden lg:flex"
+            demoLivePath={isFrontierDemo ? demoLivePath : undefined}
+            demoTaskPath={isFrontierDemo ? demoTaskPath : undefined}
+          />
 
           <div className="ml-auto flex min-w-0 items-center gap-1 sm:gap-2">
             <LanguageToggle />
-            <ModelStatusMenu
+            {!isFrontierDemo ? <ModelStatusMenu
               experts={experts}
               enabledCount={enabledCount}
               isLoading={expertsQuery.isLoading}
               isError={expertsQuery.isError}
               isFetching={expertsQuery.isFetching}
               onRetry={() => void expertsQuery.refetch()}
-            />
-            {currentUser.data ? (
+            /> : null}
+            {isFrontierDemo ? (
+              <Link
+                to={demoLivePath}
+                className="inline-flex h-9 items-center gap-1.5 rounded-lg bg-primary px-3 text-xs font-semibold text-primary-foreground outline-none transition-colors hover:bg-primary/90 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+              >
+                <FlaskConical aria-hidden="true" size={15} />
+                {locale === "zh-CN" ? "返回 Demo" : "Back to Demo"}
+              </Link>
+            ) : currentUser.data ? (
               <AccountMenu
                 user={currentUser.data}
                 isSigningOut={logout.isPending}
@@ -162,7 +187,7 @@ export function AppShell() {
           >
             <div className="flex h-[70px] items-center justify-between border-b px-5">
               <Link
-                to="/"
+                to={isFrontierDemo ? demoLivePath : "/"}
                 className="text-[22px] font-bold leading-[27px] tracking-[-0.02em] text-primary"
                 onClick={() => setMobileOpen(false)}
               >
@@ -182,6 +207,8 @@ export function AppShell() {
               mobile
               className="grid gap-1 p-3"
               onNavigate={() => setMobileOpen(false)}
+              demoLivePath={isFrontierDemo ? demoLivePath : undefined}
+              demoTaskPath={isFrontierDemo ? demoTaskPath : undefined}
             />
           </aside>
         </div>
@@ -198,4 +225,17 @@ export function AppShell() {
       </main>
     </div>
   );
+}
+
+function demoTaskIdFromLocation(pathname: string, search: string): string | null {
+  const fromTaskPath = pathname.match(/^\/tasks\/([A-Za-z0-9_-]+)/)?.[1];
+  const fromLiveQuery = pathname === "/frontier/live" ? new URLSearchParams(search).get("taskId") : null;
+  const candidate = fromTaskPath ?? fromLiveQuery;
+  return candidate && /^[A-Za-z0-9_-]+$/.test(candidate) ? candidate : null;
+}
+
+function readRememberedDemoTaskId(): string | null {
+  if (typeof window === "undefined") return null;
+  const candidate = window.sessionStorage.getItem("smartai_frontier_demo_task_id");
+  return candidate && /^[A-Za-z0-9_-]+$/.test(candidate) ? candidate : null;
 }

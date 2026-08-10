@@ -6,7 +6,7 @@
 
 1. `/frontier` 是无需登录的动态宣传页。允许使用明确标注的合成数据、动画和预计算 walkthrough，但视觉、术语和交互必须与真实产品一致。
 2. `/frontier/enter` 从后端取得免密码短时 Demo task scope，随后进入 `/frontier/live` 真实运行入口。输入文件为合成材料，但任务创建、题目识别、图片 OCR、学生作答识别和大模型批改全部调用真实 SmarTAI API。
-3. 真实运行失败时显示真实错误码和后端消息，再由用户主动选择 `View precomputed walkthrough`；不得静默降级或把预计算分数冒充为本次运行结果。
+3. 真实运行失败时显示与安全原因码对应的中英文可操作提示；内部错误码不直接暴露给普通访客。用户可主动返回或打开明确标注的预计算 walkthrough；不得静默降级或把预计算分数冒充为本次运行结果。
 4. 页面、URL、仓库和 fixture 中不得出现账号密码、共享模型 Token 或 API Key。后端为每次入口签发随机独立、无 refresh cookie 的短时 scope，Gemini Key 只保存在后端。
 5. 当前后端不持久化可下载的原文件字节；Live 页只能如实说明预览的是“本次上传所用的同一浏览器侧合成副本”，不得宣称是服务端保存的原件。
 
@@ -56,10 +56,14 @@ Live raw 学生文件中不得出现 `REVIEW SIGNAL`、建议分数、OCR 更正
 - 中英文均可切换，以全球市场叙事呈现并遵循用户已保存的界面语言。
 - 主题来自批改现场：纸张、石墨、蓝墨水、批注色，而不是通用 AI 霓虹。
 - Hero 上半区集中呈现价值主张、真实 Demo CTA 与可信边界；四阶段 walkthrough 独占下一整行，避免把产品演示挤在狭窄右栏。
-- 四阶段演示为 `Source → Recognize → Grade → Analyze`：分别突出混合原件输入、带置信度的 OCR/识别、rubric 与隐藏测试驱动的批改、班级洞察和新图表生成，不能只替换同一张卡片的文案。
+- 四阶段演示为 `Source → Recognize → Grade → Analyze`：分别突出完整原件输入、原件与结构化识别结果并排复核、rubric 与代码测试支持的初评、基于当前评分结果的班级洞察和新图表生成，不能只替换同一张卡片的文案。
+- 当前后端不提供逐字符 OCR 候选、逐字符置信度或精确区域坐标，因此宣传页不得展示 `μ/u` 候选选择器、虚构的字符置信度或暗示精确框选映射；只展示真实存在的“完整原件 + 可编辑结构化文本 + 教师确认”闭环。
+- 分析示例只能使用当前 Analytics Agent 实际收到的评分数据，并限定在已支持的 `bar`、`scatter`、`pie`、`histogram`、`box` 图表类型内；没有上下文证据时不得声称分析了隐藏测试、原文件格式或 rubric 来源。
+- 视觉文案遵循动作边界：系统负责“识别、建议、标记”，教师负责“复核、修改、决定”；不得把教师介入描述成系统自动代办。
+- Stage 04 使用明亮、等高的双面板并用散点图、箱线图和饼图体现不同分析问题；中英文大标题采用短语级换行，避免拆开词组或产生孤行。
 - 主 CTA：`Enter the live demo`，经 `/frontier/enter` 自动签发会话后进入 `/frontier/live`。
 - 页面所有动画结果都标注为 `Product walkthrough` / `Synthetic content`。
-- 关键事实：mixed STEM、traceable evidence、teacher in control。
+- 关键事实：复杂计算、推导、证明与编程等广泛理工作答，traceable evidence，teacher in control；“混合题型”只用于展示 fixture 的覆盖面，不作为产品核心定位。
 - 原文件对照之后设置独立的 `Ask SmarTAI` 双语互动区；可用明确标注的合成 walkthrough 演示自然语言追问、答案依据和与问题对应的新图表，但不得把预计算图表描述成本次 Live 运行结果。
 
 ### 真实入口 `/frontier/live`
@@ -68,7 +72,7 @@ Live raw 学生文件中不得出现 `REVIEW SIGNAL`、建议分数、OCR 更正
 
 1. `POST /tasks/` 创建独立教师任务并保存 task ID。
 2. 上传 raw 题目 PDF 到 `/tasks/{id}/extract_problems`，轮询真实 job/status/progress。
-3. 先以题号和稳定语义锚点逐题校验识别结果；只有四题都唯一匹配时，才写入合成教师 rubric、参考答案、分值和编程测试。数量相同但错序、错拆或题干错配也必须停止。
+3. 展示本次真实识别题干与四套合成教师 rubric、参考答案、分值和编程测试，等待评审显式点击确认；确认后只按返回的唯一 Q1–Q4 题号关联。不得再用 fixture 关键词或语义锚点检验模型措辞，也不得用已知 fixture 题干覆盖真实识别文本。若题号缺失或重复，才在写入 rubric 前停止，避免把教师输入套到错误题目。
 4. 上传 raw 学生作业 ZIP 到 `/tasks/{id}/parse_submissions`，真实处理排版 PDF、图片和手写 OCR。
 5. 从后端共享池的已启用 provider 中选择一个，强制 single provider / one sample，并按当前界面语言写入 `feedback_language` 后保存 grading setup。
 6. 调用 `/tasks/{id}/grade`，轮询到真实 `graded` 状态。
@@ -98,7 +102,7 @@ Live 页显示 task ID、job ID、后端 current step、最新 progress event、
 
 - Display：`Iowan Old Style` / `Georgia`，只用于宣传页论文式标题。
 - Body：沿用真实产品字体、布局尺度和组件语言。
-- Utility：`SFMono-Regular` / `IBM Plex Mono`，用于 task/job ID、置信度与测试结果。
+- Utility：`SFMono-Regular` / `IBM Plex Mono`，用于 task/job ID、评分证据与测试结果。
 - 支持键盘焦点、390px 移动端和 `prefers-reduced-motion`。
 
 ## 验收与冻结

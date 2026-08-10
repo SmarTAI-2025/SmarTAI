@@ -1,7 +1,11 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type { SourceFileDescriptor, SourcePreviewLoadState } from "@/types/sourcePreview";
 
-const FRONTIER_TASK_PREFIX = "AWS Frontier Live Demo";
+const FRONTIER_TASK_PREFIXES = [
+  "SmarTAI Live Demo",
+  // Read-only compatibility for tasks created before the public-brand cleanup.
+  "AWS Frontier Live Demo",
+] as const;
 const MANIFEST_URL = "/frontier-demo/manifest.json";
 
 const SUBMISSION_FIXTURES: Record<string, { path: string; kind: "pdf" | "image"; mime: string }> = {
@@ -30,7 +34,7 @@ interface FixtureSource {
 }
 
 export function isFrontierDemoTask(taskName: string | null | undefined) {
-  return Boolean(taskName?.startsWith(FRONTIER_TASK_PREFIX));
+  return Boolean(taskName && FRONTIER_TASK_PREFIXES.some((prefix) => taskName.startsWith(prefix)));
 }
 
 export function useFrontierDemoSourcePreview({

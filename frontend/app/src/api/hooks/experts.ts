@@ -2,10 +2,11 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import * as expertsApi from "@/api/experts";
 import { expertKeys } from "./keys";
 
-export function useExperts() {
+export function useExperts({ enabled = true }: { enabled?: boolean } = {}) {
   return useQuery({
     queryKey: expertKeys.list(),
     queryFn: expertsApi.listExperts,
+    enabled,
   });
 }
 
