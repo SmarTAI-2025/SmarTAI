@@ -78,19 +78,44 @@ describe("question source recovery guidance", () => {
 });
 
 describe("background task failure guidance", () => {
-  it("explains a provider timeout as a network failure", () => {
+  it("explains a provider timeout without collapsing it into a generic failure", () => {
     const info = classifyRecoverableError("provider_timeout", {
       locale: "zh-CN",
       phase: "question_preparation",
       jobId: "op-timeout",
     });
 
-    expect(info.title).toBe("网络或后端暂时不可用");
-    expect(info.description).toContain("请检查网络后重试");
+    expect(info.title).toBe("模型响应超时");
+    expect(info.description).toContain("原文件已经保存");
     expect(info.actionKind).toBe("retry");
     expect(info.tone).toBe("warning");
     expect(info.technicalDetails).toContainEqual({ label: "错误代码", value: "provider_timeout" });
     expect(info.technicalDetails).toContainEqual({ label: "任务编号", value: "op-timeout" });
+  });
+
+  it("distinguishes an empty extracted answer list from mismatched question IDs", () => {
+    const info = classifyRecoverableError("no_answer_content_detected", {
+      locale: "zh-CN",
+      phase: "answer_detection",
+      jobId: "op-empty-answer",
+    });
+
+    expect(info.title).toBe("没有提取到任何作答内容");
+    expect(info.description).toContain("不同于题号不匹配");
+    expect(info.actionKind).toBe("reupload");
+  });
+
+  it("does not claim an original was saved when source persistence failed", () => {
+    const info = classifyRecoverableError("submission_source_persistence_failed", {
+      locale: "zh-CN",
+      phase: "source_persistence",
+      jobId: "op-storage",
+    });
+
+    expect(info.title).toBe("原文件保存未完成");
+    expect(info.description).toContain("无法确认原文件已经安全保存");
+    expect(info.description).not.toContain("原文件已经保存");
+    expect(info.actionKind).toBe("reupload");
   });
 
   it("keeps a stable grading failure code and job id visible", () => {

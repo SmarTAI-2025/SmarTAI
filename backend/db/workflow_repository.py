@@ -173,6 +173,12 @@ class AssignmentStudentPresentationRecord(Base):
     student_id: Mapped[str] = mapped_column(
         ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
     )
+    source_id: Mapped[str | None] = mapped_column(
+        ForeignKey("workflow_source_items.id", ondelete="SET NULL"),
+        nullable=True,
+        unique=True,
+        index=True,
+    )
     display_student_id: Mapped[str] = mapped_column(String(160), nullable=False)
     display_name: Mapped[str] = mapped_column(String(160), nullable=False)
     source_filename: Mapped[str | None] = mapped_column(String(512), nullable=True)

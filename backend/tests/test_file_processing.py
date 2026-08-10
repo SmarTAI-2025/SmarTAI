@@ -285,8 +285,8 @@ async def test_image_without_ocr_skill_returns_clear_error():
     with pytest.raises(HTTPException) as exc:
         await extract_text_from_upload(b"fake image", "student.png")
 
-    assert exc.value.status_code == 503
-    assert "requires OCR" in exc.value.detail
+    assert exc.value.status_code == 422
+    assert exc.value.detail == {"code": "vision_provider_required"}
 
 
 @pytest.mark.asyncio
@@ -295,7 +295,7 @@ async def test_unsupported_single_file_returns_clear_error():
         await extract_files_from_archive(b"binary", "answers.xlsx")
 
     assert exc.value.status_code == 415
-    assert "Unsupported file type" in exc.value.detail
+    assert exc.value.detail == {"code": "submission_source_unsupported"}
 
 
 @pytest.mark.asyncio

@@ -5,6 +5,7 @@ import { useTask } from "@/api/hooks/tasks";
 import { NewTaskStepper } from "@/components/new-task/NewTaskStepper";
 import { MatrixQueueWorkspace } from "@/components/tasks/MatrixQueueWorkspace";
 import { MatrixStatusCell, type MatrixStatusTone } from "@/components/tasks/MatrixStatusCell";
+import { SubmissionSourceOutcomePanel } from "@/components/tasks/SubmissionSourceOutcomePanel";
 import { getMatrixIdentityLayout, MATRIX_ACTION_COLUMN_WIDTH, MATRIX_QUESTION_COLUMN_WIDTH } from "@/components/tasks/matrixLayout";
 import { useI18n } from "@/i18n/I18nProvider";
 import type { MessageKey } from "@/i18n/messages";
@@ -137,6 +138,14 @@ export function SubmissionReviewOverviewPage() {
         {t("submissionReviewTitle")}
       </h1>
       <NewTaskStepper currentStep={4} />
+
+      <SubmissionSourceOutcomePanel
+        summary={taskQuery.data?.submission_source_summary}
+        sources={taskQuery.data?.submission_sources}
+        locale={locale}
+        taskId={taskId}
+        className="mt-[22px]"
+      />
 
       <section className="mt-[22px] min-w-0" aria-labelledby="submission-review-matrix">
         <h2 id="submission-review-matrix" className="sr-only">{t("submissionReviewMatrixLabel")}</h2>

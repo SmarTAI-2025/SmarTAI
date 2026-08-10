@@ -86,6 +86,8 @@ def test_normalized_tables_exist_after_roundtrip(tmp_path, monkeypatch):
         "assignment_workflows",
         "task_create_idempotency",
         "workflow_operations",
+        "workflow_source_items",
+        "workflow_source_outcomes",
         "assignment_student_presentations",
         "submission_answer_presentations",
         "grading_run_setups",

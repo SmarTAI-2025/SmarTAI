@@ -216,6 +216,8 @@ export interface RecoverableErrorContext {
 const BYOK_CODES = new Set([
   "recognition_provider_not_enabled",
   "provider_not_enabled",
+  "provider_auth_failed",
+  "provider_credentials_unavailable",
   "vision_provider_required",
   "shared_pool_kb_requires_byok",
   "no_enabled_expert",
@@ -235,6 +237,9 @@ const FILE_CODES = new Set([
   "submission_source_unsupported",
   "submission_source_empty",
   "submission_source_too_large",
+  "submission_archive_empty",
+  "submission_archive_invalid",
+  "submission_archive_limit_exceeded",
   "submission_roster_unsupported",
   "submission_roster_empty",
   "submission_roster_too_large",
@@ -279,6 +284,130 @@ export function classifyRecoverableError(
     };
   }
 
+  if (code === "vision_provider_required") {
+    const returnTo = context.returnTo?.trim();
+    return {
+      title: tx(locale, "当前模型不支持图片 OCR", "The selected model cannot OCR images"),
+      description: tx(
+        locale,
+        "这份作答包含图片或扫描页，但当前识别模型不支持图片输入。原文件已经保存；请到 BYOK 改用支持视觉输入的模型，或上传可复制文字版文件。",
+        "This submission contains images or scanned pages, but the selected recognition model does not accept image input. The original is saved; choose a vision-capable model in BYOK or upload a text-based file.",
+      ),
+      actionLabel: tx(locale, "选择支持 OCR 的模型", "Choose an OCR-capable model"),
+      actionHref: `/settings/byok${returnTo ? `?returnTo=${encodeURIComponent(returnTo)}` : ""}`,
+      actionKind: "byok",
+      tone: "danger",
+      technicalDetails,
+    };
+  }
+
+  if (code === "ocr_empty_result") {
+    return {
+      title: tx(locale, "OCR 没有读到可用文字", "OCR found no usable text"),
+      description: tx(
+        locale,
+        "模型完成了图片读取，但返回内容为空。请检查照片清晰度、方向、反光和裁切；也可以换一个视觉模型重试。",
+        "The image request completed, but OCR returned no text. Check clarity, orientation, glare, and cropping, or retry with another vision model.",
+      ),
+      actionLabel: tx(locale, "重新选择文件", "Choose the file again"),
+      actionKind: "reupload",
+      tone: "danger",
+      technicalDetails,
+    };
+  }
+
+  if (code === "no_matching_answer") {
+    return {
+      title: tx(locale, "作答与当前任务题目不匹配", "The answers do not match this task"),
+      description: tx(
+        locale,
+        "文件内容已解析，也提取到了作答条目，但没有题号能对应当前任务。这不是“学生答错”，更可能是传错作业、OCR 误读题号，或任务题目后来被替换。",
+        "The file was parsed and answer entries were extracted, but none of their question IDs match this task. This does not mean the student answered incorrectly; the wrong assignment may have been uploaded, OCR may have misread labels, or the task questions may have changed.",
+      ),
+      actionLabel: tx(locale, "核对并重新上传", "Review and upload again"),
+      actionKind: "reupload",
+      tone: "warning",
+      technicalDetails,
+    };
+  }
+
+  if (code === "no_answer_content_detected") {
+    return {
+      title: tx(locale, "没有提取到任何作答内容", "No answer content was detected"),
+      description: tx(
+        locale,
+        "文件文字和模型返回结构都可以读取，但没有提取到学生作答。这不是学生答错，也不同于题号不匹配；请检查是否只上传了封面/空白页、答案区域是否被裁掉，或换一个识别模型重试。",
+        "The file text and model response structure were readable, but no student answers were extracted. This is not a wrong answer and differs from unmatched question IDs. Check for a cover/blank page or cropped answer area, or retry with another model.",
+      ),
+      actionLabel: tx(locale, "核对并重新上传", "Review and upload again"),
+      actionKind: "reupload",
+      tone: "warning",
+      technicalDetails,
+    };
+  }
+
+  if (code === "submission_source_persistence_failed") {
+    return {
+      title: tx(locale, "原文件保存未完成", "The original file was not saved"),
+      description: tx(
+        locale,
+        "系统无法确认原文件已经安全保存，因此没有继续识别。这是文件存储或数据库问题，不是学生答案问题。请重试；若重复出现，请把任务编号交给管理员。",
+        "The system could not confirm that the original was safely stored, so recognition did not continue. This is a file-storage or database issue, not a student-answer issue. Retry; if it repeats, share the job ID with an administrator.",
+      ),
+      actionLabel: tx(locale, "重新上传", "Upload again"),
+      actionKind: "reupload",
+      tone: "danger",
+      technicalDetails,
+    };
+  }
+
+  if (code === "submission_persistence_failed") {
+    return {
+      title: tx(locale, "识别结果写入任务失败", "Recognized results could not be saved to the task"),
+      description: tx(
+        locale,
+        "原文件和逐文件识别结果已经保留，但可用作答没有成功发布到当前任务。这是结果持久化问题，不是 OCR 或学生答案错误；请携带任务编号排查数据库后重试。",
+        "The originals and per-file outcomes were preserved, but usable answers were not published to this task. This is result persistence failure, not an OCR or student-answer error. Use the job ID to check the database, then retry.",
+      ),
+      actionLabel: tx(locale, "重新尝试", "Try again"),
+      actionKind: "retry",
+      tone: "danger",
+      technicalDetails,
+    };
+  }
+
+  if (code === "submission_parse_invalid") {
+    return {
+      title: tx(locale, "模型返回格式无法解析", "The model returned an invalid structure"),
+      description: tx(
+        locale,
+        "模型有返回内容，但没有形成系统需要的学生、题号和作答结构；系统没有把不确定内容当成成功结果。可以重试，或换用结构化输出更稳定的模型。",
+        "The model returned content, but not the required student, question-ID, and answer structure. The system did not accept uncertain output as a success. Retry or choose a model with more reliable structured output.",
+      ),
+      actionLabel: tx(locale, "重新尝试", "Try again"),
+      actionKind: "retry",
+      tone: "danger",
+      technicalDetails,
+    };
+  }
+
+  if (code === "provider_timeout" || code === "provider_unreachable") {
+    return {
+      title: code === "provider_timeout"
+        ? tx(locale, "模型响应超时", "The model timed out")
+        : tx(locale, "暂时无法连接模型服务", "The model service is unreachable"),
+      description: tx(
+        locale,
+        "原文件已经保存，本次模型调用没有得到可用结果。稍后重试即可，不需要重新整理整批文件。",
+        "The original is saved, but this model call produced no usable result. Retry later; the whole batch does not need to be rebuilt.",
+      ),
+      actionLabel: tx(locale, "重新尝试", "Try again"),
+      actionKind: "retry",
+      tone: "warning",
+      technicalDetails,
+    };
+  }
+
   if (
     (code && BYOK_CODES.has(code))
     || normalized.includes("api key")
@@ -305,6 +434,7 @@ export function classifyRecoverableError(
 
   if (
     apiError.status === 429
+    || code === "provider_rate_limited"
     || normalized.includes("rate limit")
     || normalized.includes("quota")
     || normalized.includes("too many requests")
