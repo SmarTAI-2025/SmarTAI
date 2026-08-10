@@ -35,6 +35,7 @@ const sources: SubmissionSourceOutcome[] = [
     unknown_question_ids: [],
     job_id: "job-21",
     attempt: 1,
+    trace_id: "job-21:1:src-ocr",
     created_at: 1,
   },
   {
@@ -79,6 +80,7 @@ describe("SubmissionSourceOutcomePanel", () => {
     expect(screen.getByText(/3 份上传 = 1 份成功 \+ 1 份失败 \+ 1 份身份待确认/)).toBeInTheDocument();
     expect(screen.getByText("student-scan.png")).toBeInTheDocument();
     expect(screen.getByText("当前模型不支持图片 OCR")).toBeInTheDocument();
+    expect(screen.getByText("job-21:1:src-ocr")).toBeInTheDocument();
     expect(screen.getByText("student-unknown.pdf")).toBeInTheDocument();
     expect(screen.getByText("学生身份需要教师确认")).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "重新选择文件" })).toHaveAttribute(

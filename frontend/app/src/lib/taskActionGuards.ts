@@ -214,17 +214,26 @@ export interface RecoverableErrorContext {
 }
 
 const BYOK_CODES = new Set([
+  "no_provider_configured",
+  "provider_credentials_unavailable",
   "recognition_provider_not_enabled",
   "provider_not_enabled",
   "provider_auth_failed",
-  "provider_credentials_unavailable",
   "vision_provider_required",
   "shared_pool_kb_requires_byok",
   "no_enabled_expert",
   "expert_verification_auth_failed",
+  // "vision_provider_required" has its own dedicated branch below (OCR-specific copy).
 ]);
 
 const FILE_CODES = new Set([
+  "ocr_empty_result",
+  "pdf_extraction_failed",
+  "pdf_ocr_render_failed",
+  "pdf_processing_unavailable",
+  "source_decode_failed",
+  "source_empty",
+  "source_text_too_large",
   "source_too_large",
   "source_type_not_allowed",
   "source_mime_type_not_allowed",
@@ -251,6 +260,18 @@ const FILE_CODES = new Set([
   "submission_roster_headers_invalid",
 ]);
 
+const GRADING_CONFIGURATION_CODES = new Set([
+  "grading_provider_configuration_changed",
+  "grading_provider_selection_invalid",
+  "grading_setup_invalid",
+]);
+
+const GRADING_INPUT_CODES = new Set([
+  "grading_inputs_changed",
+  "grading_question_snapshot_invalid",
+  "grading_question_snapshot_missing",
+]);
+
 const SOURCE_CHANGED_CODES = new Set([
   "question_preparation_source_expired",
   "question_preparation_library_source_changed",
@@ -272,14 +293,45 @@ export function classifyRecoverableError(
   const normalized = `${code ?? ""} ${message}`.toLowerCase();
   const technicalDetails = buildTechnicalDetails(apiError.status, code, detail, context, locale);
   const retryAfterSeconds = apiError.retryAfterSeconds;
+  const returnTo = context.returnTo?.trim();
 
-  if (code === "grading_failed") {
+  if (code && GRADING_CONFIGURATION_CODES.has(code)) {
     return {
-      title: tx(locale, "本次批改没有完成", "This grading run did not finish"),
+      title: tx(locale, "批改模型配置已经变化", "The grading model configuration changed"),
       description: tx(
         locale,
-        "后端未能完成批改或保存结果。任务资料仍然保留；请记录任务编号，处理后再重试。",
-        "The backend could not complete grading or save its results. Task data is preserved; keep the job ID and retry after the issue is resolved.",
+        "本次批改使用的模型或批改设置在任务确认后发生了变化。请重新打开批改设置，确认当前可用模型后再启动批改。",
+        "The model or grading setup changed after this run was confirmed. Reopen grading settings, confirm the currently available model, and start grading again.",
+      ),
+      actionLabel: tx(locale, "调整批改设置", "Review grading settings"),
+      actionKind: "adjust_experts",
+      tone: "warning",
+      technicalDetails,
+    };
+  }
+
+  if (code && GRADING_INPUT_CODES.has(code)) {
+    return {
+      title: tx(locale, "批改输入已经变化或不完整", "The grading inputs changed or are incomplete"),
+      description: tx(
+        locale,
+        "题目、作答或本次批改快照已不再匹配。任务原资料仍然保留；请刷新后重新启动批改，以当前内容生成新的批次。",
+        "The questions, submissions, or grading snapshot no longer match. Source data is preserved. Refresh and start a new run from the current content.",
+      ),
+      actionLabel: tx(locale, "刷新任务状态", "Refresh task state"),
+      actionKind: "refresh",
+      tone: "warning",
+      technicalDetails,
+    };
+  }
+
+  if (code === "grading_persistence_failed") {
+    return {
+      title: tx(locale, "批改结果保存失败", "The grading results could not be saved"),
+      description: tx(
+        locale,
+        "批改服务未能把本批结果完整写入数据库，因此没有把不完整结果标为成功。任务原资料仍然保留，请稍后重试；若持续失败，请把任务编号交给管理员检查存储服务。",
+        "The service could not fully save this grading batch, so incomplete results were not marked successful. Source data is preserved. Retry later; if it persists, give the job ID to an administrator to check storage.",
       ),
       actionLabel: tx(locale, "重新尝试", "Try again"),
       actionKind: "retry",
@@ -288,19 +340,80 @@ export function classifyRecoverableError(
     };
   }
 
+  if (code === "grading_failed") {
+    return {
+      title: tx(locale, "本次批改没有完成", "This grading run did not finish"),
+      description: tx(
+        locale,
+        "批改过程中出现了未预期的错误，任务资料仍然保留。请稍后重试；若多次重试仍失败，请记下下方任务/作业编号并联系管理员。",
+        "An unexpected error occurred during grading. Task data is preserved. Retry shortly; if it keeps failing, note the job ID below and contact your administrator.",
+      ),
+      actionLabel: tx(locale, "重新尝试", "Try again"),
+      actionKind: "retry",
+      tone: "danger",
+      technicalDetails,
+    };
+  }
+
+  if (code === "provider_timeout") {
+    return {
+      title: tx(locale, "模型响应超时", "The model took too long to respond"),
+      description: tx(
+        locale,
+        "模型服务未能在限定时间内返回结果，通常因为负载较高或网络较慢。任务资料不会丢失，请稍后重试。",
+        "The model service did not respond in time, usually because it is busy or the connection is slow. Your task data is preserved — retry shortly.",
+      ),
+      actionLabel: tx(locale, "重新尝试", "Try again"),
+      actionKind: "retry",
+      tone: "warning",
+      technicalDetails,
+    };
+  }
+
+  if (code === "provider_unreachable") {
+    return {
+      title: tx(locale, "无法连接模型服务", "Cannot reach the model service"),
+      description: tx(
+        locale,
+        "SmarTAI 连接不到模型服务。请检查网络是否正常、代理或 VPN（科学上网）是否已开启后重试；本地部署请确认后端地址可达。",
+        "SmarTAI could not reach the model service. Check your network and that your proxy or VPN is enabled, then retry. For local setups, confirm the backend address is reachable.",
+      ),
+      actionLabel: tx(locale, "重新尝试", "Try again"),
+      actionKind: "retry",
+      tone: "warning",
+      technicalDetails,
+    };
+  }
+
+  if (code === "provider_auth_failed") {
+    return {
+      title: tx(locale, "模型密钥或授权无效", "Model API key or authorization is invalid"),
+      description: tx(
+        locale,
+        "模型返回了授权错误，可能是密钥无效、额度未开通，或当前账号无权使用该模型（例如所选模型不在套餐内）。请在“模型与 BYOK”更新密钥并确认模型可用后再重试。",
+        "The model returned an authorization error — the key may be invalid, quota not enabled, or your account lacks access to this model (for example, it isn't included in your plan). Update the key in Models & BYOK and confirm access, then retry.",
+      ),
+      actionLabel: tx(locale, "前往 BYOK 配置", "Open BYOK settings"),
+      actionHref: `/settings/byok${returnTo ? `?returnTo=${encodeURIComponent(returnTo)}` : ""}`,
+      actionKind: "byok",
+      tone: "primary",
+      technicalDetails,
+    };
+  }
+
   if (code === "vision_provider_required") {
-    const returnTo = context.returnTo?.trim();
+    const byokReturnTo = context.returnTo?.trim();
     return {
       title: tx(locale, "当前模型不支持图片 OCR", "The selected model cannot OCR images"),
       description: tx(
         locale,
-        "这份作答包含图片或扫描页，但当前识别模型不支持图片输入。原文件已经保存；请到 BYOK 改用支持视觉输入的模型，或上传可复制文字版文件。",
-        "This submission contains images or scanned pages, but the selected recognition model does not accept image input. The original is saved; choose a vision-capable model in BYOK or upload a text-based file.",
+        "这份文件需要图像识别（OCR），但当前识别模型不支持图片输入。请在“模型与 BYOK”启用支持视觉输入的模型后重试，或上传可复制文字版文件。",
+        "This file needs image recognition (OCR), but the selected recognition model does not accept image input. Enable a vision-capable model in Models & BYOK and retry, or upload a text-based file.",
       ),
       actionLabel: tx(locale, "选择支持 OCR 的模型", "Choose an OCR-capable model"),
-      actionHref: `/settings/byok${returnTo ? `?returnTo=${encodeURIComponent(returnTo)}` : ""}`,
+      actionHref: `/settings/byok${byokReturnTo ? `?returnTo=${encodeURIComponent(byokReturnTo)}` : ""}`,
       actionKind: "byok",
-      tone: "danger",
+      tone: "primary",
       technicalDetails,
     };
   }
@@ -440,23 +553,6 @@ export function classifyRecoverableError(
     };
   }
 
-  if (code === "provider_timeout" || code === "provider_unreachable") {
-    return {
-      title: code === "provider_timeout"
-        ? tx(locale, "模型响应超时", "The model timed out")
-        : tx(locale, "暂时无法连接模型服务", "The model service is unreachable"),
-      description: tx(
-        locale,
-        "原文件已经保存，本次模型调用没有得到可用结果。稍后重试即可，不需要重新整理整批文件。",
-        "The original is saved, but this model call produced no usable result. Retry later; the whole batch does not need to be rebuilt.",
-      ),
-      actionLabel: tx(locale, "重新尝试", "Try again"),
-      actionKind: "retry",
-      tone: "warning",
-      technicalDetails,
-    };
-  }
-
   if (
     (code && BYOK_CODES.has(code))
     || normalized.includes("api key")
@@ -465,7 +561,6 @@ export function classifyRecoverableError(
     || normalized.includes("provider not enabled")
     || normalized.includes("no enabled expert")
   ) {
-    const returnTo = context.returnTo?.trim();
     return {
       title: tx(locale, "需要配置可用模型", "A model configuration is required"),
       description: tx(
@@ -584,7 +679,15 @@ export function classifyRecoverableError(
     title: apiError.status >= 500
       ? tx(locale, "后端处理未完成", "Backend processing did not complete")
       : tx(locale, "本次操作未完成", "This action did not complete"),
-    description: friendlyMessage(message, code, tx(locale, "可以重试；当前任务内容不会丢失。", "You can retry; the current task content is preserved.")),
+    description: friendlyMessage(
+      message,
+      code,
+      tx(
+        locale,
+        "识别或批改过程中出现了未预期的错误，任务资料仍然保留。请稍后重试；若多次重试仍失败，请记下下方任务/作业编号并联系管理员。",
+        "An unexpected error occurred. Your task data is preserved. Retry shortly; if it keeps failing, note the job ID below and contact your administrator.",
+      ),
+    ),
     actionLabel: tx(locale, "重新尝试", "Try again"),
     actionKind: "retry",
     tone: "danger",
@@ -624,6 +727,24 @@ function stableBackgroundErrorCode(error: unknown): string | null {
   return /^[a-z][a-z0-9_]{1,127}$/.test(value) ? value : null;
 }
 
+/**
+ * Short, localized label for a background error code/message — for inline strips
+ * that would otherwise leak a raw code (e.g. "grading_failed") to the user.
+ *
+ * Bare snake_case codes route through classifyRecoverableError's code branches;
+ * genuine event messages (e.g. "OCR returned empty text for x.pdf") are returned
+ * verbatim so they stay readable. `null`/empty yields "".
+ */
+export function backgroundErrorTitle(value: unknown, locale: Locale = "zh-CN"): string {
+  if (value == null) return "";
+  if (typeof value === "string") {
+    const text = value.trim();
+    if (!text) return "";
+    if (!stableBackgroundErrorCode(text)) return text;
+  }
+  return classifyRecoverableError(value, { locale }).title;
+}
+
 function fileErrorDescription(
   code: string | null,
   message: string,
@@ -636,8 +757,17 @@ function fileErrorDescription(
       ? tx(locale, `文件超过 ${limit} 的单文件上传上限，请选择更小的文件。`, `The file exceeds the ${limit} per-file upload limit. Choose a smaller file.`)
       : tx(locale, "文件超过单文件上传上限，请选择更小的文件。", "The file exceeds the per-file upload limit. Choose a smaller file.");
   }
-  if (code === "problem_source_decode_failed") {
+  if (code === "problem_source_decode_failed" || code === "source_decode_failed") {
     return tx(locale, "没有从文件中读取到可用正文。若是扫描 PDF，请先转换为可复制文字的 PDF、TXT 或 Markdown。", "No usable text could be read. If this is a scanned PDF, convert it to a text-based PDF, TXT, or Markdown file first.");
+  }
+  if (code === "ocr_empty_result") {
+    return tx(locale, "视觉模型没有从图片或扫描页中识别出可用文字。请检查图片清晰度、方向和页面内容，或更换视觉模型后重试。", "The vision model found no usable text in the image or scanned page. Check clarity, orientation, and page content, or retry with another vision model.");
+  }
+  if (code === "submission_archive_invalid") {
+    return tx(locale, "压缩包损坏或包含不安全的文件路径。请重新打包为正常 ZIP 后上传。", "The archive is damaged or contains unsafe paths. Create a clean ZIP archive and upload it again.");
+  }
+  if (code === "submission_archive_limit_exceeded") {
+    return tx(locale, "压缩包中的文件数量、单文件大小或解压后总大小超过安全上限。请拆分压缩包后重新上传。", "The archive exceeds the safe file-count, per-file, or expanded-size limit. Split it into smaller archives and upload again.");
   }
   if (code === "pdf_page_limit_exceeded") {
     return tx(locale, "PDF 页数超出本次处理上限。请拆分文件后重新上传。", "The PDF exceeds the page limit. Split it into smaller files and upload again.");

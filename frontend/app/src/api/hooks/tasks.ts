@@ -246,7 +246,7 @@ export function useUpdateProblem() {
   const queryClient = useQueryClient();
 
   return useMutation({
-    mutationFn: ({ taskId, qId, ...patch }: {
+    mutationFn: ({ taskId, qId, expectedWorkflowRevision, ...patch }: {
       taskId: string;
       qId: string;
       stem?: string;
@@ -256,7 +256,11 @@ export function useUpdateProblem() {
       reference_answer?: string | null;
       solution_code?: string | null;
       test_cases?: import("@/types").TestCase[] | null;
-    }) => tasksApi.updateProblem(taskId, qId, patch),
+      expectedWorkflowRevision?: number;
+    }) => tasksApi.updateProblem(taskId, qId, {
+      ...patch,
+      expected_workflow_revision: expectedWorkflowRevision,
+    }),
     onSuccess: (_data, variables) => {
       invalidateTask(queryClient, variables.taskId);
     },

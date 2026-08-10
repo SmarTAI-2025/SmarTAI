@@ -152,6 +152,7 @@ export interface SubmissionSourceOutcome {
   unknown_question_ids: string[];
   job_id: string;
   attempt: number;
+  trace_id?: string;
   created_at: number;
 }
 

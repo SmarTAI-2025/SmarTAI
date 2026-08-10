@@ -56,9 +56,9 @@ from backend.models import (
 )
 from backend.progress.tracker import get_or_create_reporter, get_reporter, remove_reporter
 from backend.services import task_facade
+from backend.services.background_errors import classify_background_error
 from backend.skills.ocr_ingest import LLMVisionOCRSkill, OCRPurpose
 from backend.tools.file_processing import IMAGE_MEDIA_TYPES, extract_text_from_upload
-from backend.tools.structured_llm import TransientLLMError
 
 
 router = APIRouter(prefix="/tasks", tags=["task-preparation"])
@@ -87,18 +87,7 @@ _SOURCE_ROLE_OCR_PURPOSE: dict[str, OCRPurpose] = {
 
 def _question_preparation_failure_code(exc: Exception) -> str:
     """Return a stable, non-sensitive code for a background preparation failure."""
-    if not isinstance(exc, TransientLLMError):
-        return "problem_extraction_failed"
-
-    current: BaseException | None = exc
-    seen: set[int] = set()
-    while current is not None and id(current) not in seen:
-        seen.add(id(current))
-        fingerprint = f"{type(current).__name__} {current}".lower()
-        if "timeout" in fingerprint or "timed out" in fingerprint:
-            return "provider_timeout"
-        current = current.__cause__ or current.__context__
-    return "problem_extraction_failed"
+    return classify_background_error(exc, "problem_extraction_failed")
 
 
 _SOURCE_MIME_TYPES = {
@@ -651,6 +640,7 @@ async def start_question_preparation(
         workflow, active = task_facade._ensure_no_other_active_operation(
             task_id=task_id, owner_id=current.id,
             operation_type="question_preparation", input_hash=operation_hash,
+            allow_supersede=request.replace_confirmed,
         )
         if active is not None:
             return {
@@ -1004,10 +994,11 @@ async def _run_material_import(
             task_id, owner_id, job_id, job_attempt,
             task_facade._detail_error(exc, "material_import_failed"),
         )
-    except Exception:
+    except Exception as exc:
         logger.warning("Background material import failed; job_id=%s", job_id)
         task_facade._fail_operation(
-            task_id, owner_id, job_id, job_attempt, "material_import_failed"
+            task_id, owner_id, job_id, job_attempt,
+            classify_background_error(exc, "material_import_failed"),
         )
 
 
@@ -1397,10 +1388,11 @@ async def _run_ai_completion(
             task_id, owner_id, job_id, job_attempt,
             task_facade._detail_error(exc, "ai_completion_failed"),
         )
-    except Exception:
+    except Exception as exc:
         logger.warning("Background AI completion failed; job_id=%s", job_id)
         task_facade._fail_operation(
-            task_id, owner_id, job_id, job_attempt, "ai_completion_failed"
+            task_id, owner_id, job_id, job_attempt,
+            classify_background_error(exc, "ai_completion_failed"),
         )
 
 

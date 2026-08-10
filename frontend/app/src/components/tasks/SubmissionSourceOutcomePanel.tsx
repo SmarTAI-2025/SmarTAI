@@ -154,6 +154,7 @@ function SourceOutcomeRow({ source, locale }: { source: SubmissionSourceOutcome;
                 <TechnicalRow label={tx(locale, "失败阶段", "Failure phase")} value={source.failure_phase} />
                 <TechnicalRow label={tx(locale, "任务编号", "Job ID")} value={source.job_id} />
                 <TechnicalRow label={tx(locale, "来源编号", "Source ID")} value={source.source_id} />
+                <TechnicalRow label={tx(locale, "追踪编号", "Trace ID")} value={source.trace_id} />
                 <TechnicalRow label={tx(locale, "可直接重试", "Retryable")} value={source.retryable ? tx(locale, "是", "Yes") : tx(locale, "否", "No")} />
               </dl>
             </details>

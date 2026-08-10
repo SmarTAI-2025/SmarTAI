@@ -7,16 +7,26 @@ import zipfile
 from types import SimpleNamespace
 
 import pytest
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
 
 from backend.agents.ingest_agent import (
     SubmissionSourceInput,
     parse_student_answer_sources,
 )
-from backend.db import assignment_repository, source_outcome_repository, workflow_repository
+from backend.api import tasks as tasks_api
+from backend.auth import require_teacher
+from backend.db import (
+    assignment_repository,
+    grading_repository,
+    source_outcome_repository,
+    workflow_repository,
+)
 from backend.db.file_repository import save_file
 from backend.db.models import AssignmentRecord, CourseRecord, UserRecord
 from backend.db.session import session_scope
 from backend.domain.errors import NotFound
+from backend.models import User
 from backend.services import task_facade
 from backend.services.background_errors import classify_background_error
 from backend.storage import get_storage
@@ -96,7 +106,14 @@ def _zip_bytes(files: dict[str, bytes]) -> bytes:
     return output.getvalue()
 
 
-def _queue(owner_id: str, task_id: str, content: bytes, filename: str = "answers.zip"):
+def _queue(
+    owner_id: str,
+    task_id: str,
+    content: bytes,
+    filename: str = "answers.zip",
+    *,
+    replace_confirmed: bool = False,
+):
     return task_facade.queue_task_submission_parsing(
         task_id=task_id,
         owner_id=owner_id,
@@ -105,6 +122,7 @@ def _queue(owner_id: str, task_id: str, content: bytes, filename: str = "answers
         content_type="application/zip" if filename.endswith(".zip") else "image/png",
         registry=_Registry(),
         recognition_provider_id="test-provider",
+        replace_confirmed=replace_confirmed,
     )
 
 
@@ -203,6 +221,111 @@ def test_source_persistence_failure_survives_safe_error_projection():
     )
 
 
+def test_retry_projection_hides_old_attempt_even_when_old_worker_finishes_late():
+    owner_id, task_id = _seed_task()
+    input_hash = uuid.uuid4().hex
+    first, _created = workflow_repository.create_operation(
+        assignment_id=task_id,
+        owner_id=owner_id,
+        operation_type="submission_recognition",
+        input_hash=input_hash,
+    )
+    workflow_repository.update_workflow(
+        task_id,
+        owner_id=owner_id,
+        bump_revision=False,
+        parse_job_id=first.id,
+    )
+    first_file = save_file(
+        storage=get_storage(),
+        owner_id=owner_id,
+        kind="submission_source",
+        original_name="old-attempt.txt",
+        content=b"old",
+        content_type="text/plain",
+        assignment_id=task_id,
+    )
+    old_source, _ = source_outcome_repository.register_source(
+        owner_id=owner_id,
+        assignment_id=task_id,
+        operation_id=first.id,
+        expected_attempt=first.attempt,
+        order_index=0,
+        stored_file_id=first_file.id,
+    )
+    workflow_repository.update_operation(
+        first.id,
+        owner_id=owner_id,
+        expected_attempt=first.attempt,
+        status="error",
+        error_code="provider_timeout",
+    )
+    retry, created = workflow_repository.create_operation(
+        assignment_id=task_id,
+        owner_id=owner_id,
+        operation_type="submission_recognition",
+        input_hash=input_hash,
+    )
+    assert created is True
+    assert retry.attempt == first.attempt + 1
+    retry_file = save_file(
+        storage=get_storage(),
+        owner_id=owner_id,
+        kind="submission_source",
+        original_name="current-attempt.txt",
+        content=b"current",
+        content_type="text/plain",
+        assignment_id=task_id,
+    )
+    current_source, _ = source_outcome_repository.register_source(
+        owner_id=owner_id,
+        assignment_id=task_id,
+        operation_id=retry.id,
+        expected_attempt=retry.attempt,
+        order_index=0,
+        stored_file_id=retry_file.id,
+        retry_of_source_id=old_source.id,
+    )
+    source_outcome_repository.record_outcome(
+        source_id=current_source.id,
+        owner_id=owner_id,
+        status="parsed",
+        student_candidate="S001",
+        matched_answer_count=1,
+        unknown_question_ids=[],
+        stable_error_code=None,
+        failure_phase=None,
+        retryable=False,
+    )
+
+    # The superseded worker returns after attempt 2 is already authoritative.
+    source_outcome_repository.record_outcome(
+        source_id=old_source.id,
+        owner_id=owner_id,
+        status="parse_failed",
+        student_candidate=None,
+        matched_answer_count=0,
+        unknown_question_ids=[],
+        stable_error_code="provider_timeout",
+        failure_phase="recognition",
+        retryable=True,
+    )
+
+    task = task_facade.get_task(task_id=task_id, owner_id=owner_id)
+    assert task["submission_source_summary"] == {
+        "uploaded": 1,
+        "parsed": 1,
+        "failed": 0,
+        "identity_needs_review": 0,
+        "pending": 0,
+    }
+    assert [item["source_id"] for item in task["submission_sources"]] == [
+        current_source.id
+    ]
+    assert task["submission_sources"][0]["attempt"] == retry.attempt
+    assert task["submission_sources"][0]["reason_code"] is None
+
+
 @pytest.mark.asyncio
 async def test_partial_batch_keeps_success_and_exact_per_file_failure(monkeypatch):
     owner_id, task_id = _seed_task()
@@ -258,6 +381,40 @@ async def test_partial_batch_keeps_success_and_exact_per_file_failure(monkeypatc
     assert by_name["bad.txt"]["reason_code"] == "submission_parse_invalid"
     assert by_name["bad.txt"]["failure_phase"] == "structured_parse"
     assert by_name["bad.txt"]["retryable"] is True
+    assert by_name["bad.txt"]["trace_id"] == (
+        f"{queued['job_id']}:{queued['_job_attempt']}:"
+        f"{by_name['bad.txt']['source_id']}"
+    )
+
+    api = FastAPI()
+    api.include_router(tasks_api.router)
+    api.dependency_overrides[require_teacher] = lambda: User(
+        id=owner_id,
+        username=owner_id,
+        role="teacher",
+    )
+    response = TestClient(api).get(f"/tasks/{task_id}")
+    assert response.status_code == 200
+    api_failure = next(
+        item
+        for item in response.json()["submission_sources"]
+        if item["file_name"] == "bad.txt"
+    )
+    assert {
+        "source_id": api_failure["source_id"],
+        "job_id": api_failure["job_id"],
+        "trace_id": api_failure["trace_id"],
+        "reason_code": api_failure["reason_code"],
+        "failure_phase": api_failure["failure_phase"],
+        "retryable": api_failure["retryable"],
+    } == {
+        "source_id": by_name["bad.txt"]["source_id"],
+        "job_id": queued["job_id"],
+        "trace_id": by_name["bad.txt"]["trace_id"],
+        "reason_code": "submission_parse_invalid",
+        "failure_phase": "structured_parse",
+        "retryable": True,
+    }
 
 
 @pytest.mark.asyncio
@@ -322,8 +479,38 @@ async def test_teacher_identity_confirmation_resolves_current_attention_without_
 @pytest.mark.asyncio
 async def test_model_without_image_support_reaches_teacher_as_vision_reason(monkeypatch):
     owner_id, task_id = _seed_task()
+    old_run = grading_repository.create_run(
+        task_id,
+        teacher_id=owner_id,
+        total_submissions=0,
+    )
+    assert grading_repository.claim_lease(
+        old_run.id,
+        worker_id="old-worker",
+        lease_seconds=60,
+    )
+    grading_repository.mark_failed(
+        old_run.id,
+        worker_id="old-worker",
+        error_message="grading_failed",
+    )
+    workflow_repository.update_workflow(
+        task_id,
+        owner_id=owner_id,
+        bump_revision=False,
+        presentation_status="error",
+        grading_job_id=old_run.id,
+        last_failed_job_id=old_run.id,
+        error_code="grading_failed",
+    )
     content = b"\x89PNG\r\n\x1a\nfake-image-payload"
-    queued = _queue(owner_id, task_id, content, filename="scan.png")
+    queued = _queue(
+        owner_id,
+        task_id,
+        content,
+        filename="scan.png",
+        replace_confirmed=True,
+    )
 
     class UnsupportedVisionSkill:
         async def recognize_images(self, _images, _purpose):
@@ -353,6 +540,8 @@ async def test_model_without_image_support_reaches_teacher_as_vision_reason(monk
     task = task_facade.get_task(task_id=task_id, owner_id=owner_id)
     assert task["status"] == "error"
     assert task["error"] == "vision_provider_required"
+    assert task["last_failed_job_id"] == queued["job_id"]
+    assert task["grading_job_id"] is None
     assert task["submission_source_summary"] == {
         "uploaded": 1,
         "parsed": 0,
@@ -368,6 +557,23 @@ async def test_model_without_image_support_reaches_teacher_as_vision_reason(monk
     operation = workflow_repository.get_operation(queued["job_id"], owner_id=owner_id)
     assert operation.error_code == "vision_provider_required"
     assert operation.progress["error_detail"] == "vision_provider_required"
+
+    # Databases used with the pre-fix PR branch can retain an obsolete grading
+    # pointer. The current source failure and its operation progress must still
+    # win on the polling API consumed by the teacher progress page.
+    workflow_repository.update_workflow(
+        task_id,
+        owner_id=owner_id,
+        bump_revision=False,
+        grading_job_id=old_run.id,
+    )
+    state = await task_facade.async_task_state(
+        task_id=task_id,
+        owner_id=owner_id,
+    )
+    assert state["error"] == "vision_provider_required"
+    assert state["last_failed_job_id"] == queued["job_id"]
+    assert state["progress"]["error_detail"] == "vision_provider_required"
 
 
 def test_provider_failure_during_image_read_is_classified_as_ocr():
