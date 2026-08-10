@@ -82,6 +82,20 @@ def test_frontier_demo_session_reuses_tasks_but_not_other_teacher_surfaces(
     assert task.status_code == 200, task.text
     assert task.json()["owner_id"] == body["user"]["id"]
 
+    preflight = client.post(
+        f"/tasks/{task.json()['task_id']}/question-preparation/sources/preflight",
+        headers=headers,
+        data={
+            "inline_text": "Q1. Synthetic calculus question",
+            "structure_mode": "organized",
+            "role": "problem",
+            "save_to_library": "false",
+        },
+    )
+    assert preflight.status_code == 200, preflight.text
+    assert preflight.json()["status"] == "ready"
+    assert preflight.json()["source_token"]
+
     experts = client.get("/experts/available", headers=headers)
     courses = client.get("/courses", headers=headers)
     assert experts.status_code == 403
@@ -132,3 +146,13 @@ def test_frontier_demo_session_issuance_has_daily_limit(monkeypatch):
 
     assert limited.status_code == 429
     assert limited.json()["detail"]["code"] == "frontier_demo_daily_limit_reached"
+
+
+def test_frontier_demo_non_positive_daily_limit_is_unlimited(monkeypatch):
+    _enable_frontier_demo(monkeypatch)
+    monkeypatch.setattr(settings, "frontier_demo_daily_session_limit", 0)
+    client = TestClient(app)
+
+    responses = [client.post("/auth/frontier-demo-session") for _ in range(6)]
+
+    assert {response.status_code for response in responses} == {200}

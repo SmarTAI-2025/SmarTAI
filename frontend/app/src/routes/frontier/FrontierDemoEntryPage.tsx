@@ -88,8 +88,8 @@ function entryErrorMessage(error: { code: string | null; status: number }, zh: b
   }
   if (error.code === "frontier_demo_daily_limit_reached") {
     return zh
-      ? "今日 Demo 会话已达到上限。请联系演示维护者安排访问。"
-      : "The Demo has reached its session limit for today. Contact the demo maintainer to arrange access.";
+      ? "当前公网 Demo 后端今天已达到全局会话保护上限；这不是你的个人或 IP 限额。请联系演示维护者安排访问。"
+      : "The public Demo backend has reached its global session safeguard for today. This is not a personal or per-IP limit; contact the demo maintainer to arrange access.";
   }
   if (error.status === 0) {
     return zh

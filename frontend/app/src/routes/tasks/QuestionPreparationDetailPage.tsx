@@ -561,7 +561,7 @@ function EditableMaxScore({ fieldKey, problem, readOnly, saving, locale, onDirty
         ) : (
           <div className="flex items-center gap-2">
             <strong className="text-lg text-foreground">{formatScore(problem.max_score ?? 10)} {tx(locale, "分", "pts")}</strong>
-            {needsReview && !readOnly ? <button type="button" disabled={saving} onClick={() => void save()} className="inline-flex h-8 items-center gap-1.5 rounded-[6px] bg-primary px-2.5 text-xs font-semibold text-primary-foreground disabled:opacity-45"><Check aria-hidden="true" className="h-3.5 w-3.5" />{tx(locale, "确认此满分", "Confirm score")}</button> : null}
+            {needsReview && !readOnly ? <button type="button" disabled={saving} onClick={() => void save()} className="inline-flex h-8 items-center gap-1.5 rounded-[6px] bg-primary px-2.5 text-xs font-semibold text-primary-foreground disabled:opacity-45"><Check aria-hidden="true" className="h-3.5 w-3.5" />{tx(locale, "确认总分", "Confirm total score")}</button> : null}
             {!readOnly ? <button type="button" aria-label={tx(locale, `修改第 ${problem.number || problem.q_id} 题满分`, `Edit maximum score for question ${problem.number || problem.q_id}`)} onClick={() => setEditing(true)} className="inline-flex h-8 items-center gap-1.5 rounded-[6px] border px-2.5 text-xs font-semibold hover:bg-muted"><Pencil aria-hidden="true" className="h-3.5 w-3.5" />{tx(locale, "修改", "Edit")}</button> : null}
           </div>
         )}

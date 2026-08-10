@@ -517,8 +517,8 @@
   border: 1px solid rgb(23 32 42 / 0.14);
   border-radius: 1rem;
   background:
-    radial-gradient(circle at 100% 0, rgb(108 139 105 / 0.14), transparent 15rem),
-    linear-gradient(145deg, #fbfcf7, #eef2e8);
+    radial-gradient(circle at 100% 0, rgb(36 87 214 / 0.16), transparent 15rem),
+    linear-gradient(145deg, #f8faff, #edf3fc);
   padding: 1.25rem;
   color: var(--frontier-graphite);
   opacity: 0;
@@ -788,7 +788,7 @@
 }
 
 .frontier-hero-visual[data-stage="analyze"] .frontier-review-card {
-  border-color: rgb(91 123 88 / 0.3);
+  border-color: rgb(36 87 214 / 0.3);
   transform: none;
 }
 
@@ -1103,8 +1103,8 @@
   display: flex;
   flex: 1;
   flex-direction: column;
-  border-color: #dce3d5;
-  background: #f4f7ee;
+  border-color: var(--frontier-rule);
+  background: #fbfcfa;
 }
 
 .frontier-analysis-query {
@@ -1147,7 +1147,7 @@
 .frontier-analysis-metrics span {
   display: grid;
   gap: 0.15rem;
-  border: 1px solid #dce3d5;
+  border: 1px solid var(--frontier-rule);
   border-radius: 0.55rem;
   background: white;
   padding: 0.7rem;
@@ -1169,7 +1169,7 @@
   align-items: center;
   gap: 0.4rem;
   margin-top: auto;
-  border-top: 1px solid #dce3d5;
+  border-top: 1px solid var(--frontier-rule);
   padding-top: 0.65rem;
   color: #667485;
   font-size: 0.52rem;

@@ -9,7 +9,6 @@ import {
   FlaskConical,
   LoaderCircle,
   Play,
-  RotateCcw,
   ScanText,
   Sparkles,
   TriangleAlert,
@@ -18,9 +17,9 @@ import { useEffect, useRef, useState } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { getAPIErrorCode, normalizeAPIError } from "@/api/client";
 import { getGradingSetup, saveGradingSetup } from "@/api/gradingSetup";
+import { preflightProblemSource, startQuestionPreparation } from "@/api/problemSources";
 import {
   createTask,
-  extractProblems,
   getTask,
   getTaskState,
   parseSubmissions,
@@ -30,11 +29,10 @@ import {
 import { Button } from "@/components/ui/Button";
 import { InlineNotice } from "@/components/ui/InlineNotice";
 import { MarkdownMath } from "@/components/ui/MarkdownMath";
-import { demoQuestions, type DemoQuestion } from "@/data/frontierDemo";
 import { useI18n } from "@/i18n/I18nProvider";
 import type { Locale } from "@/i18n/messages";
 import { cn } from "@/lib/cn";
-import type { GradingSetup, ProblemInfo, Task, TaskStateSnapshot, TaskStatus, TestCase } from "@/types";
+import type { GradingSetup, ProblemInfo, Task, TaskStateSnapshot, TaskStatus } from "@/types";
 
 const QUESTION_FIXTURE = "/frontier-demo/live/question_source.pdf";
 const SUBMISSION_FIXTURE = "/frontier-demo/live/submissions_raw.zip";
@@ -42,6 +40,8 @@ const HANDWRITTEN_FIXTURE = "/frontier-demo/live/DEMO-002_handwritten_raw.png";
 const FIXTURE_MANIFEST = "/frontier-demo/manifest.json";
 const POLL_INTERVAL_MS = 1_500;
 const WORKFLOW_TIMEOUT_MS = 8 * 60 * 1_000;
+const EXPECTED_DEMO_QUESTION_COUNT = 4;
+const DEMO_SCORE_POLICY = "Q1: 5 points; Q2: 8 points; Q3: 7 points; Q4: 10 points.";
 
 type RunStepId = "task" | "questions" | "submissions" | "grading";
 type RunStepState = "waiting" | "active" | "complete" | "error";
@@ -57,7 +57,7 @@ interface RunStep {
 function initialSteps(locale: Locale): RunStep[] {
   return [
     { id: "task", label: tx(locale, "创建专属 Demo 任务", "Create a dedicated demo task"), detail: tx(locale, "真实 POST /tasks 请求", "Real POST /tasks request"), state: "waiting" },
-    { id: "questions", label: tx(locale, "识别并确认题目", "Recognize and confirm questions"), detail: tx(locale, "真实原文识别 + 教师评分标准", "Real source extraction + teacher rubric"), state: "waiting" },
+    { id: "questions", label: tx(locale, "准备并确认题目", "Prepare and confirm questions"), detail: tx(locale, "真实识别 + 标答与评分资料生成", "Real extraction + answer and rubric generation"), state: "waiting" },
     { id: "submissions", label: tx(locale, "识别混合作答", "Recognize mixed submissions"), detail: tx(locale, "真实 PDF / 图片 OCR 流程", "Real PDF/image OCR pipeline"), state: "waiting" },
     { id: "grading", label: tx(locale, "运行 AI 批改", "Run AI grading"), detail: tx(locale, "真实单模型批改任务", "Real single-provider grading run"), state: "waiting" },
   ];
@@ -76,24 +76,59 @@ export function FrontierLiveDemoPage() {
   const [startedAt, setStartedAt] = useState<number | null>(null);
   const [providerLabel, setProviderLabel] = useState<string | null>(null);
   const [teacherReviewTask, setTeacherReviewTask] = useState<Task | null>(null);
+  const [materialsConfirmed, setMaterialsConfirmed] = useState(false);
   const activeStepRef = useRef<RunStepId | null>(null);
   const runLockRef = useRef(false);
+  const restoredTaskIdRef = useRef<string | null>(null);
 
   useEffect(() => {
-    if (!taskIdFromUrl || busy) return;
+    if (!taskIdFromUrl || busy || runLockRef.current || restoredTaskIdRef.current === taskIdFromUrl) return;
+    restoredTaskIdRef.current = taskIdFromUrl;
+    const restoredTaskId = taskIdFromUrl;
     let cancelled = false;
-    getTaskState(taskIdFromUrl)
-      .then((state) => {
+    async function restoreCurrentTask() {
+      try {
+        const state = await getTaskState(restoredTaskId);
         if (cancelled) return;
-        setTaskId(taskIdFromUrl);
+        setTaskId(restoredTaskId);
         setSnapshot(state);
         setSteps((current) => current.some((step) => step.state === "error") ? current : stepsFromSnapshot(state, locale));
-      })
-      .catch((caught) => {
-        if (!cancelled) setError(errorMessage(caught));
-      });
+        if (state.problem_count > 0) {
+          const task = await getTask(restoredTaskId);
+          if (cancelled) return;
+          const prepared = alignDemoProblems(Object.values(task.problem_data));
+          if (!preparedMaterialsComplete(prepared)) {
+            throw new Error(tx(locale, "此任务的题目准备资料不完整；请打开任务检查真实结果。", "This task's prepared question materials are incomplete. Open the task to inspect the real result."));
+          }
+          const confirmed = generatedMaterialsConfirmed(prepared);
+          setTeacherReviewTask(task);
+          setMaterialsConfirmed(confirmed);
+          if (state.status === "problems_ready" && !confirmed) {
+            return;
+          }
+        }
+        if (["draft", "extracting_problems", "problems_ready", "parsing_submissions", "submissions_ready", "grading"].includes(state.status)) {
+          runLockRef.current = true;
+          setBusy(true);
+          setError(null);
+          setStartedAt(Date.now());
+          await continueWorkflow(restoredTaskId, state.status);
+        }
+      } catch (caught) {
+        if (!cancelled) {
+          failActiveStep();
+          setError(errorMessage(caught));
+        }
+      } finally {
+        if (!cancelled) {
+          runLockRef.current = false;
+          setBusy(false);
+        }
+      }
+    }
+    void restoreCurrentTask();
     return () => { cancelled = true; };
-  }, [busy, locale, taskIdFromUrl]);
+  }, [locale, taskIdFromUrl]);
 
   useEffect(() => {
     if (busy) return;
@@ -101,9 +136,6 @@ export function FrontierLiveDemoPage() {
   }, [busy, locale, snapshot]);
 
   const elapsed = startedAt ? Math.max(0, Math.round((Date.now() - startedAt) / 1_000)) : null;
-  const finished = snapshot?.status === "graded" || snapshot?.status === "review_confirmed" || snapshot?.status === "finalized";
-  const canResume = Boolean(taskId && snapshot && !finished && snapshot.status !== "error" && !teacherReviewTask);
-
   async function startFreshRun() {
     if (runLockRef.current) return;
     runLockRef.current = true;
@@ -112,6 +144,7 @@ export function FrontierLiveDemoPage() {
     setSnapshot(null);
     setProviderLabel(null);
     setTeacherReviewTask(null);
+    setMaterialsConfirmed(false);
     setStartedAt(Date.now());
     setSteps(initialSteps(locale));
     activeStepRef.current = null;
@@ -122,26 +155,10 @@ export function FrontierLiveDemoPage() {
         idempotencyKey: createIdempotencyKey(),
       });
       setTaskId(task.task_id);
+      restoredTaskIdRef.current = task.task_id;
       markStep("task", "complete", tx(locale, `任务 ${shortId(task.task_id)} 已创建`, `Task ${shortId(task.task_id)} created`));
       navigate(`/frontier/live?taskId=${encodeURIComponent(task.task_id)}`, { replace: true });
       await continueWorkflow(task.task_id, task.status);
-    } catch (caught) {
-      failActiveStep();
-      setError(errorMessage(caught));
-    } finally {
-      runLockRef.current = false;
-      setBusy(false);
-    }
-  }
-
-  async function resumeRun() {
-    if (!taskId || !snapshot || runLockRef.current) return;
-    runLockRef.current = true;
-    setBusy(true);
-    setError(null);
-    setStartedAt((value) => value ?? Date.now());
-    try {
-      await continueWorkflow(taskId, snapshot.status);
     } catch (caught) {
       failActiveStep();
       setError(errorMessage(caught));
@@ -157,9 +174,9 @@ export function FrontierLiveDemoPage() {
     setBusy(true);
     setError(null);
     try {
-      markStep("questions", "active", tx(locale, "正在写入已确认的合成教师资料…", "Applying the confirmed synthetic teacher materials…"));
-      await confirmDemoQuestions(taskId, teacherReviewTask);
-      setTeacherReviewTask(null);
+      markStep("questions", "active", tx(locale, "正在确认本次真实生成的题目资料…", "Confirming the materials generated in this live run…"));
+      await confirmPreparedQuestions(taskId, teacherReviewTask);
+      setMaterialsConfirmed(true);
       await continueWorkflow(taskId, "problems_ready", true);
     } catch (caught) {
       failActiveStep();
@@ -174,10 +191,28 @@ export function FrontierLiveDemoPage() {
     let status = startingStatus;
 
     if (status === "draft") {
-      markStep("questions", "active", tx(locale, "正在将原始题目文件发送给识别 API…", "Uploading the raw question source to the recognition API…"));
+      markStep("questions", "active", tx(locale, "正在上传原始题目并运行完整题目准备…", "Uploading the raw source and running full question preparation…"));
       const questionSource = await fixtureFile(QUESTION_FIXTURE, "question_source.pdf", "application/pdf");
-      const response = await extractProblems(currentTaskId, questionSource);
-      markStep("questions", "active", tx(locale, "题目识别正在运行…", "Question recognition is running…"), response.job_id);
+      const preflight = await preflightProblemSource({
+        taskId: currentTaskId,
+        mode: "upload",
+        role: "problem",
+        file: questionSource,
+        structureMode: "organized",
+        extractionHint: tx(locale, "按 Q1–Q4 保留题号与数学符号。", "Preserve the Q1–Q4 numbering and mathematical notation."),
+        saveToLibrary: false,
+      });
+      const expectedWorkflowRevision = preflight.workflow_revision ?? preflight.base_workflow_revision;
+      if (expectedWorkflowRevision === undefined) {
+        throw new Error(tx(locale, "题目准备预检未返回工作流版本。", "Question-preparation preflight did not return a workflow revision."));
+      }
+      const response = await startQuestionPreparation({
+        taskId: currentTaskId,
+        sourceTokens: [preflight.source_token],
+        expectedWorkflowRevision,
+        scorePolicy: { mode: "per_question", perQuestionText: DEMO_SCORE_POLICY },
+      });
+      markStep("questions", "active", tx(locale, "正在识别题目并生成标答、评分依据与代码题材料…", "Recognizing questions and generating answers, rubrics, and programming materials…"), response.job_id);
       const state = await waitForStatus(currentTaskId, ["problems_ready"]);
       status = state.status;
     } else if (status === "extracting_problems") {
@@ -188,11 +223,16 @@ export function FrontierLiveDemoPage() {
     if (status === "problems_ready") {
       const recognizedTask = await getTask(currentTaskId);
       const aligned = alignDemoProblems(Object.values(recognizedTask.problem_data));
-      if (!teacherMaterialsConfirmed && !demoTeacherMaterialsApplied(aligned)) {
-        setTeacherReviewTask(recognizedTask);
+      if (!preparedMaterialsComplete(aligned)) {
+        throw new Error(tx(locale, "本次题目准备未生成完整的标答、评分依据或代码题材料；请打开任务检查真实结果。", "This preparation run did not generate a complete answer, rubric, or programming package. Open the task to inspect the real result."));
+      }
+      setTeacherReviewTask(recognizedTask);
+      const alreadyConfirmed = generatedMaterialsConfirmed(aligned);
+      setMaterialsConfirmed(teacherMaterialsConfirmed || alreadyConfirmed);
+      if (!teacherMaterialsConfirmed && !alreadyConfirmed) {
         const recognizedState = await getTaskState(currentTaskId);
         setSnapshot(recognizedState);
-        markStep("questions", "active", tx(locale, "真实题目识别已完成；等待确认合成教师资料。", "Live question recognition is complete; waiting for teacher-material confirmation."), recognizedState.extract_job_id);
+        markStep("questions", "active", tx(locale, "题目、标答与评分资料已真实生成；等待教师确认。", "Questions, answers, and rubrics were generated live and await teacher confirmation."), recognizedState.extract_job_id);
         return;
       }
       const afterQuestions = await getTaskState(currentTaskId);
@@ -304,7 +344,7 @@ export function FrontierLiveDemoPage() {
       </InlineNotice>
 
       <div className="mt-6 grid gap-6 xl:grid-cols-[minmax(0,1.1fr)_minmax(330px,0.9fr)]">
-        <section className="rounded-[12px] border bg-card p-5 shadow-sm sm:p-7">
+        <section className="flex h-full flex-col rounded-[12px] border bg-card p-5 shadow-sm sm:p-7">
           <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
             <div>
               <p className="text-xs font-semibold uppercase tracking-[0.12em] text-primary">{tx(locale, "可观察的真实流程", "Observable live workflow")}</p>
@@ -314,22 +354,9 @@ export function FrontierLiveDemoPage() {
             {snapshot ? <StatusPill status={snapshot.status} locale={locale} /> : null}
           </div>
 
-          <ol className="mt-7 grid gap-3">
+          <ol className="mt-7 grid flex-1 grid-rows-4 gap-3">
             {steps.map((step, index) => <WorkflowStep key={step.id} step={step} index={index} locale={locale} />)}
           </ol>
-
-          {snapshot?.progress ? (
-            <div className="mt-5 rounded-[9px] border bg-muted/30 p-4">
-              <div className="flex flex-wrap items-center justify-between gap-2 text-xs font-semibold">
-                <span className="inline-flex items-center gap-2 text-foreground"><Activity className="h-4 w-4 text-primary" />{tx(locale, "后端进度", "Backend progress")}</span>
-                <span className="font-mono text-muted-foreground">{snapshot.progress.current_step || snapshot.progress.phase}</span>
-              </div>
-              <div className="mt-3 h-2 overflow-hidden rounded-full bg-muted">
-                <span className="block h-full rounded-full bg-primary transition-[width] duration-500" style={{ width: `${progressPercent(snapshot)}%` }} />
-              </div>
-              <p className="mt-2 text-xs leading-5 text-muted-foreground">{latestProgressMessage(snapshot) || tx(locale, "正在等待下一个后端事件…", "Waiting for the next backend event…")}</p>
-            </div>
-          ) : null}
 
           {error ? (
             <InlineNotice
@@ -343,25 +370,11 @@ export function FrontierLiveDemoPage() {
             </InlineNotice>
           ) : null}
 
-          {teacherReviewTask ? (
-            <TeacherMaterialConfirmation
-              task={teacherReviewTask}
-              locale={locale}
-              busy={busy}
-              onConfirm={() => void confirmTeacherMaterials()}
-            />
-          ) : null}
-
           <div className="mt-6 flex flex-wrap items-center gap-3">
             <Button className="h-11 px-5" onClick={startFreshRun} disabled={busy}>
               {busy ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />}
               {busy ? tx(locale, "正在运行真实流程…", "Running real workflow…") : taskId ? tx(locale, "开始新的真实运行", "Start a fresh live run") : tx(locale, "开始真实 OCR + 批改", "Start real OCR + grading")}
             </Button>
-            {canResume ? (
-              <Button variant="secondary" className="h-11 px-5" onClick={resumeRun} disabled={busy}>
-                <RotateCcw className="h-4 w-4" />{tx(locale, "恢复此任务", "Resume this task")}
-              </Button>
-            ) : null}
             {taskId ? <TaskLinks taskId={taskId} status={snapshot?.status} locale={locale} /> : null}
           </div>
 
@@ -370,6 +383,19 @@ export function FrontierLiveDemoPage() {
             {providerLabel ? <span>{tx(locale, "模型", "provider")} {providerLabel}</span> : null}
             {elapsed !== null ? <span className="inline-flex items-center gap-1"><Clock3 className="h-3.5 w-3.5" />{tx(locale, `已观察 ${elapsed} 秒`, `${elapsed}s observed`)}</span> : null}
           </div>
+
+          {snapshot?.progress ? (
+            <div className="mt-5 rounded-[9px] border bg-muted/30 p-4">
+              <div className="flex flex-wrap items-center justify-between gap-2 text-xs font-semibold">
+                <span className="inline-flex items-center gap-2 text-foreground"><Activity className="h-4 w-4 text-primary" />{tx(locale, "后端进度", "Backend progress")}</span>
+                <span className="font-mono text-muted-foreground">{snapshot.progress.current_step || snapshot.progress.phase}</span>
+              </div>
+              <div className="mt-3 h-2 overflow-hidden rounded-full bg-muted">
+                <span className="block h-full rounded-full bg-primary transition-[width] duration-500" style={{ width: `${progressPercent(snapshot)}%` }} />
+              </div>
+              <p className="mt-2 text-xs leading-5 text-muted-foreground">{latestProgressMessage(snapshot) || tx(locale, "正在等待下一个后端事件…", "Waiting for the next backend event…")}</p>
+            </div>
+          ) : null}
         </section>
 
         <aside className="grid content-start gap-4">
@@ -393,10 +419,20 @@ export function FrontierLiveDemoPage() {
             <p className="border-t px-4 py-3 text-xs leading-5 text-muted-foreground">{tx(locale, "这就是实际上传至 API 的浏览器端合成样例副本；它不代表当前后端已持久化原始文件字节。", "This is the same browser-side synthetic fixture uploaded to the API. It is not a claim that the current backend persists original bytes.")}</p>
           </section>
           <InlineNotice tone="warning" title={tx(locale, "仍由教师控制的部分", "What remains human-controlled")}>
-            {tx(locale, "样例评分标准作为合成教师输入提供。批改完成后，教师仍需在现有复核工作台检查证据并作出最终发布决定。", "The sample rubric is supplied as synthetic teacher input. After grading, the existing review workspace still requires the educator to inspect evidence and make the final release decision.")}
+            {tx(locale, "题目准备流程真实生成标答与评分依据，教师确认后才进入批改。批改完成后，教师仍需在复核工作台检查证据并作出最终发布决定。", "The live preparation flow generates the reference answers and rubrics, and grading starts only after teacher confirmation. The educator still reviews evidence and makes the final release decision.")}
           </InlineNotice>
         </aside>
       </div>
+
+      {teacherReviewTask ? (
+        <TeacherMaterialConfirmation
+          task={teacherReviewTask}
+          locale={locale}
+          busy={busy}
+          confirmed={materialsConfirmed}
+          onConfirm={() => void confirmTeacherMaterials()}
+        />
+      ) : null}
     </div>
   );
 }
@@ -405,11 +441,13 @@ function TeacherMaterialConfirmation({
   task,
   locale,
   busy,
+  confirmed,
   onConfirm,
 }: {
   task: Task;
   locale: Locale;
   busy: boolean;
+  confirmed: boolean;
   onConfirm: () => void;
 }) {
   const aligned = alignDemoProblems(Object.values(task.problem_data));
@@ -417,10 +455,10 @@ function TeacherMaterialConfirmation({
     <section className="mt-5 rounded-[10px] border border-primary/25 bg-primary/[0.035] p-4 sm:p-5" aria-labelledby="demo-teacher-material-title">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
         <div>
-          <p className="text-xs font-semibold uppercase tracking-[0.12em] text-primary">{tx(locale, "显式教师输入", "Explicit teacher input")}</p>
-          <h3 id="demo-teacher-material-title" className="mt-1 text-lg font-bold">{tx(locale, "确认评分资料后继续", "Confirm grading materials to continue")}</h3>
+          <p className="text-xs font-semibold uppercase tracking-[0.12em] text-primary">{confirmed ? tx(locale, "真实生成 · 已确认", "Live generation · confirmed") : tx(locale, "真实生成 · 教师确认", "Live generation · teacher confirmation")}</p>
+          <h3 id="demo-teacher-material-title" className="mt-1 text-lg font-bold">{tx(locale, "复核本次生成的题目资料", "Review this run's generated materials")}</h3>
           <p className="mt-1 max-w-2xl text-xs leading-5 text-muted-foreground">
-            {tx(locale, "上方题干来自本次真实识别；下方 rubric、参考解与满分是为合成样例预先准备的教师资料。它们不是学生分数，也不是识别结果。", "The question text comes from this live extraction. The rubric, reference answer, and maximum score below are pre-authored teacher materials for this synthetic sample—not student scores or recognition output.")}
+            {tx(locale, "题干、标答、评分依据与代码题材料均来自本次真实题目准备流程；这里只做教师确认，不注入预置答案或评分标准。各题总分来自合成 Demo 中明确的教师设置。", "The stems, reference answers, rubrics, and programming materials all come from this live preparation run. This step only records teacher confirmation; it injects no pre-authored answers or rubrics. Question totals come from the synthetic Demo's explicit teacher score settings.")}
           </p>
         </div>
         <Link className="shrink-0 text-xs font-semibold text-primary hover:underline" to={`/tasks/${task.task_id}/questions`}>
@@ -429,10 +467,10 @@ function TeacherMaterialConfirmation({
       </div>
 
       <div className="mt-4 grid gap-3">
-        {aligned.map(({ problem, fixture }, index) => (
-          <details key={fixture.id} className="rounded-lg border bg-card px-3 py-2.5" open={index === 0}>
+        {aligned.map((problem, index) => (
+          <details key={problem.q_id} className="rounded-lg border bg-card px-3 py-2.5" open={index === 0}>
             <summary className="cursor-pointer text-sm font-semibold">
-              {fixture.label} · {fixture.discipline} · {tx(locale, `${fixture.maxScore} 分`, `${fixture.maxScore} points`)}
+              Q{problem.number} · {problem.type} · {tx(locale, `${problem.max_score} 分`, `${problem.max_score} points`)}
             </summary>
             <div className="mt-3 grid gap-3 lg:grid-cols-2">
               <div>
@@ -440,11 +478,11 @@ function TeacherMaterialConfirmation({
                 <MarkdownMath className="mt-1 text-xs leading-5 text-foreground">{problem.stem}</MarkdownMath>
               </div>
               <div>
-                <p className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">{tx(locale, "合成教师评分资料", "Synthetic teacher materials")}</p>
-                <ol className="mt-1 list-decimal space-y-1 pl-4 text-xs leading-5 text-foreground">
-                  {fixture.rubric.map((item) => <li key={item}>{item}</li>)}
-                </ol>
-                <MarkdownMath className="mt-2 border-t pt-2 text-xs leading-5 text-muted-foreground">{fixture.reference}</MarkdownMath>
+                <p className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">{tx(locale, "本次生成的评分依据与标答", "Rubric and answer generated in this run")}</p>
+                <MarkdownMath className="mt-1 text-xs leading-5 text-foreground">{problem.criterion}</MarkdownMath>
+                <MarkdownMath className="mt-2 border-t pt-2 text-xs leading-5 text-muted-foreground">{problem.reference_answer ?? ""}</MarkdownMath>
+                {problem.solution_code ? <pre className="mt-2 overflow-auto rounded-md bg-slate-950 p-2 text-[11px] text-slate-100"><code>{problem.solution_code}</code></pre> : null}
+                {problem.test_cases?.length ? <p className="mt-2 text-[11px] font-semibold text-accent">{tx(locale, `${problem.test_cases.length} 个代码测试样例已生成`, `${problem.test_cases.length} programming tests generated`)}</p> : null}
               </div>
             </div>
           </details>
@@ -452,11 +490,18 @@ function TeacherMaterialConfirmation({
       </div>
 
       <div className="mt-4 flex flex-wrap items-center gap-3">
-        <Button onClick={onConfirm} disabled={busy} className="h-10 px-4">
-          {busy ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />}
-          {tx(locale, "确认教师资料并继续真实 OCR", "Confirm teacher materials and continue live OCR")}
-        </Button>
-        <span className="text-xs text-muted-foreground">{tx(locale, "确认后仍可在题目审核页修改；最终评分继续由教师复核。", "You can still edit these fields in question review; final scores remain subject to teacher review.")}</span>
+        {confirmed ? (
+          <span className="inline-flex h-10 items-center gap-2 rounded-md border border-accent/25 bg-accent/5 px-4 text-xs font-semibold text-accent">
+            <Check className="h-4 w-4" />
+            {tx(locale, "本次生成资料已由教师确认", "This run's generated materials were teacher-confirmed")}
+          </span>
+        ) : (
+          <Button onClick={onConfirm} disabled={busy} className="h-10 px-4">
+            {busy ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />}
+            {tx(locale, "确认生成资料并继续真实 OCR", "Confirm generated materials and continue live OCR")}
+          </Button>
+        )}
+        <span className="text-xs text-muted-foreground">{tx(locale, "资料会随当前任务持续保留；仍可在题目审核页查看，最终评分继续由教师复核。", "These materials remain attached to the current task and stay available in question review; final scores remain subject to teacher review.")}</span>
       </div>
     </section>
   );
@@ -466,7 +511,7 @@ function WorkflowStep({ step, index, locale }: { step: RunStep; index: number; l
   const Icon = step.state === "complete" ? Check : step.state === "error" ? TriangleAlert : step.state === "active" ? LoaderCircle : CircleDot;
   return (
     <li className={cn(
-      "grid grid-cols-[38px_minmax(0,1fr)] gap-3 rounded-[9px] border px-3 py-3.5 transition",
+      "grid h-full grid-cols-[38px_minmax(0,1fr)] items-center gap-3 rounded-[9px] border px-3 py-3.5 transition",
       step.state === "active" && "border-primary/35 bg-primary/5",
       step.state === "complete" && "border-accent/25 bg-accent/5",
       step.state === "error" && "border-danger/30 bg-danger/5",
@@ -510,7 +555,7 @@ function StatusPill({ status, locale }: { status: TaskStatus; locale: Locale }) 
     error: "错误",
   };
   const label = locale === "zh-CN" ? zhStatus[status] ?? status : status.replaceAll("_", " ");
-  return <span className={cn("inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-xs font-bold", done ? "bg-accent/10 text-accent" : status === "error" ? "bg-danger/10 text-danger" : "bg-primary/10 text-primary")}><span className="h-1.5 w-1.5 rounded-full bg-current" />{label}</span>;
+  return <span className={cn("inline-flex min-w-max shrink-0 items-center gap-1.5 whitespace-nowrap rounded-full px-4 py-1.5 text-xs font-bold", done ? "bg-accent/10 text-accent" : status === "error" ? "bg-danger/10 text-danger" : "bg-primary/10 text-primary")}><span className="h-1.5 w-1.5 shrink-0 rounded-full bg-current" />{label}</span>;
 }
 
 function TaskLinks({ taskId, status, locale }: { taskId: string; status?: TaskStatus; locale: Locale }) {
@@ -523,78 +568,63 @@ function TaskLinks({ taskId, status, locale }: { taskId: string; status?: TaskSt
   );
 }
 
-async function confirmDemoQuestions(taskId: string, task?: Task) {
+async function confirmPreparedQuestions(taskId: string, task?: Task) {
   const currentTask = task ?? await getTask(taskId);
   const aligned = alignDemoProblems(Object.values(currentTask.problem_data));
-  for (const { problem, fixture } of aligned) {
+  if (!preparedMaterialsComplete(aligned)) {
+    throw new Error("The live question-preparation result is incomplete; no generated material was replaced with a fixture fallback.");
+  }
+  for (const problem of aligned) {
     await updateProblem(taskId, problem.q_id, {
-      // Keep the real extraction visible; only rubric/reference fields are
-      // supplied as synthetic teacher input for this fixed demo assignment.
+      // Persist only the materials returned by the real preparation run. The
+      // Demo never substitutes fixture answers, rubrics, code, or tests.
       stem: problem.stem,
-      criterion: fixture.rubric.map((item, rubricIndex) => `${rubricIndex + 1}. ${item}`).join("\n"),
-      max_score: fixture.maxScore,
-      reference_answer: fixture.reference,
-      solution_code: fixture.solutionCode ?? null,
+      criterion: problem.criterion,
+      max_score: problem.max_score,
+      reference_answer: problem.reference_answer ?? null,
+      solution_code: problem.solution_code ?? null,
       review_status: "confirmed",
-      test_cases: fixture.id === "q4" ? stableSoftmaxTests() : null,
+      test_cases: problem.test_cases ?? null,
     });
   }
 }
 
-function demoTeacherMaterialsApplied(aligned: Array<{ problem: ProblemInfo; fixture: DemoQuestion }>) {
-  return aligned.every(({ problem }) => (
+function generatedMaterialsConfirmed(problems: ProblemInfo[]) {
+  return problems.every((problem) => (
     problem.review_status === "confirmed"
-    && Boolean(problem.criterion?.trim())
+  ));
+}
+
+function preparedMaterialsComplete(problems: ProblemInfo[]) {
+  return problems.every((problem) => (
+    Boolean(problem.stem.trim())
+    && Boolean(problem.criterion.trim())
     && Boolean(problem.reference_answer?.trim())
+    && (problemNumber(problem.number) !== 4 || (
+      Boolean(problem.solution_code?.trim())
+      && Boolean(problem.test_cases?.length)
+    ))
   ));
 }
 
 export function alignDemoProblems(problems: ProblemInfo[]) {
-  if (problems.length !== demoQuestions.length) {
-    throw new Error(`Question recognition returned ${problems.length} items; expected ${demoQuestions.length}. Open the task to review the real extraction before continuing.`);
+  if (problems.length !== EXPECTED_DEMO_QUESTION_COUNT) {
+    throw new Error(`Question preparation returned ${problems.length} items; expected ${EXPECTED_DEMO_QUESTION_COUNT}. Open the task to review the real result before continuing.`);
   }
   const byNumber = new Map<number, ProblemInfo>();
   for (const problem of problems) {
     const recognizedNumber = problemNumber(problem.number) ?? problemNumber(problem.q_id);
-    if (recognizedNumber === null || recognizedNumber < 1 || recognizedNumber > demoQuestions.length || byNumber.has(recognizedNumber)) {
-      throw new Error("Question recognition did not preserve unique Q1–Q4 numbering. Open the task to inspect the real extraction; no rubric or score has been applied.");
+    if (recognizedNumber === null || recognizedNumber < 1 || recognizedNumber > EXPECTED_DEMO_QUESTION_COUNT || byNumber.has(recognizedNumber)) {
+      throw new Error("Question preparation did not preserve unique Q1–Q4 numbering. Open the task to inspect the real result; no generated material has been replaced.");
     }
     byNumber.set(recognizedNumber, problem);
   }
-  return demoQuestions.map((fixture, index) => ({
-    problem: byNumber.get(index + 1)!,
-    fixture,
-  } satisfies { problem: ProblemInfo; fixture: DemoQuestion }));
+  return Array.from({ length: EXPECTED_DEMO_QUESTION_COUNT }, (_, index) => byNumber.get(index + 1)!);
 }
 
 function problemNumber(value: string) {
   const match = value.match(/\d+/);
   return match ? Number.parseInt(match[0], 10) : null;
-}
-
-function stableSoftmaxTests(): TestCase[] {
-  return [
-    testCase("Empty input", [[]], "[]", "Return an empty list for empty input."),
-    testCase("Balanced pair", [[0, 0]], "[0.5, 0.5]", "Normalize equal logits."),
-    testCase("Large values", [[1000, 1000]], "[0.5, 0.5]", "Avoid exponential overflow."),
-  ];
-}
-
-function testCase(title: string, args: unknown[], expected: string, description: string): TestCase {
-  return {
-    title,
-    description,
-    input: JSON.stringify(args),
-    expected_output: expected,
-    source: "teacher",
-    sandbox_feasible: true,
-    visibility: "hidden",
-    purpose: "boundary",
-    io_mode: "function",
-    function_name: "stable_softmax",
-    function_args: args,
-    expected_return: expected,
-  };
 }
 
 async function fixtureFile(url: string, filename: string, type: string) {

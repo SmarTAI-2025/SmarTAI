@@ -82,13 +82,16 @@
    - 无需登录的 `/frontier` 必须把动画结果标成 product walkthrough / synthetic content，并保持与真实产品一致的视觉和术语。
    - `/frontier/enter` 从后端取得免密码、无 refresh cookie 的短时随机 Demo 会话，再进入 `/frontier/live`；Live 使用无真实学生信息的合成原始文件，但必须真实创建任务、调用题目识别、视觉 OCR、作答识别和大模型批改，不得把预计算分数注入本次结果。
    - 真实运行失败时先显示安全的真实错误，再由用户主动打开预计算 walkthrough；不得静默降级。
-   - 不在网页、URL、仓库或 fixture 中写入账号密码、共享 Token 或 API Key；Gemini Key 只保存在后端。2026-08-11 项目负责人为节约截止前实现成本，明确用后端签发的短时 `frontier_demo` task scope 替代“私下发送每位评审账号密码”。该 scope 只进入 task API，普通 experts/courses/admin 教师面继续拒绝；签发有单进程每日上限和冷却。
+   - 不在网页、URL、仓库或 fixture 中写入账号密码、共享 Token 或 API Key；Gemini Key 只保存在后端。2026-08-11 项目负责人为节约截止前实现成本，明确用后端签发的短时 `frontier_demo` task scope 替代“私下发送每位评审账号密码”。该 scope 只进入 task API，普通 experts/courses/admin 教师面继续拒绝。本地默认不限签发次数；公网 Demo 单实例使用全局 100 次/UTC 日和 1 秒冷却，不按 IP 或个人分别计数。签发计数仍是单进程内存态，重启清零且多 worker 不共享。
    - 这次明确接受的截止前简化边界是：未实现 fixture 上传白名单或完整 demo role，Demo task scope 仍可调用整个 task API；签发计数也不是多 worker 持久额度。部署环境只允许合成数据，这些限制必须作为公开部署风险保留，不得包装成完整生产隔离。
    - 题目审核与作答校对页复用既有 50/50 原文件 Preview UI；Demo 中显示的是 manifest SHA-256 校验后、与实际上传 API 相同的浏览器端 raw fixture 副本。当前后端未持久化原始文件字节，不得宣称这是服务端原件读取。
+   - Demo 的合成原文件可作为 Cloudflare Pages 不可变静态资产公开保存；真实用户原文件不得依赖 Render Free 易失磁盘。正式开放真实文件前必须使用私有 S3-compatible object storage 持久化文件字节，在数据库记录 owner/task/source/object key/SHA-256/MIME/大小/生命周期，并以 owner-scoped 读取或短时签名 URL 提供预览。
    - `/frontier`、`/frontier/enter` 和 `/frontier/live` 支持中英文切换；Live 批改设置按启动时界面语言写入 `feedback_language`。
    - `/frontier` 的四阶段宣传 walkthrough 独占整行并固定为 `Source → Recognize → Grade → Analyze`，各阶段分别展示原件输入、原件与结构化识别结果并排复核、rubric/代码测试支持的初评和班级分析；原来的侧栏空间并入价值主张、真实 Demo CTA 与可信边界，不另塞无关功能。
    - 当前后端不提供逐字符 OCR 候选、逐字符置信度或精确区域坐标；宣传页不得展示 `μ/u` 候选选择器、虚构的字符置信度或精确框选映射，只能如实展示“完整原件 + 可编辑结构化文本 + 教师确认”。分析示例只使用当前 Analytics Agent 实际收到的评分数据及其已支持的图表类型，不得在无上下文证据时宣称分析了隐藏测试、原文件格式或 rubric 来源。
-   - Live Demo 不得用 fixture 关键词或语义锚点检验真实题目识别结果，也不得用已知 fixture 题干覆盖真实识别文本。页面必须并排展示真实识别题干与预设合成教师 rubric/reference，等待评审显式确认后，才按返回的唯一 Q1–Q4 题号关联；题号缺失或重复时才在写入前停止。这是 Demo 编排边界，不是主体识别算法。
+   - Live Demo 不得用 fixture 关键词或语义锚点检验真实题目识别结果，也不得用已知 fixture 题干覆盖真实识别文本。正式前端和 Live Demo 必须统一走完整的 `POST /tasks/{task_id}/question-preparation/jobs` 题目准备流水线，由模型真实生成缺失标答、评分标准、编程参考代码与测试资料，再等待教师显式确认；不得再绕过完整流程后注入预设 rubric/reference。唯一 Q1–Q4 题号检查只用于该固定合成任务的展示顺序，不得冒充主体识别算法。
+   - `POST /tasks/{task_id}/extract_problems` 的直接文件上传分支只视为窄兼容入口。未经正式消费者、恢复路径和路由合同审计，不得用于新的产品流程或 Demo；是否删除必须先证明不会误删仍在使用的 source-token/candidate 确认能力。
+   - Live 运行页把 1–4 阶段、操作区和后端进度作为同一完整流程卡展示；进入题目审核或其他任务详情后，返回带同一 `taskId` 的 Live 路由必须自动恢复当前任务与生成资料视图，不再要求点击“恢复任务”。只有用户明确点击“开始新的真实运行”才替换该任务。
    - 宣传文案动作边界固定为：系统“识别、建议、标记”，教师“复核、修改、决定”。产品定位覆盖复杂计算、推导、证明与编程等广泛理工作答；混合题型只是 Demo fixture 的覆盖设计，不是产品核心定位。
    - 原文件对照之后可用明确标注的合成 walkthrough 展示 `Ask SmarTAI` 自然语言追问和按问题生成的新图表；它与真实 Live API 入口保持视觉一致，但不得冒充本次 Live 运行结果。分析舞台采用明亮、等高的双面板，并以散点图、箱线图和饼图展示不同问题；中英文大标题采用短语级换行，避免拆开词组或产生孤行。
    - Demo 从独立冻结 SHA 部署，不自动吸收 `main` 后续开发改动。
@@ -135,7 +138,9 @@
 
 ## 更新记录
 
-- **2026-08-11**：项目负责人撤销此前 Demo 编排中的逐题语义锚点护栏，明确该约束既不能提升识别，也不属于主体识别流程；Live Demo 必须保留真实识别题干，先向评审完整展示预设合成教师 rubric/reference 并等待显式确认，再按唯一 Q1–Q4 题号关联，题号缺失或重复时才停止。替代设计文档中“题号和稳定语义锚点都必须匹配”的旧方案。
+- **2026-08-11**：项目负责人确认本地 Frontier Demo 会话不限签发次数，公网单实例使用全局 100 次/UTC 日和 1 秒冷却，不按 IP/个人分别计数；同时确认 Live 页面从任务详情返回时自动保持同一 `taskId`，只有显式开始新运行才替换。合成 Demo 原文件可静态公开，真实用户原文件上线前必须落私有 S3-compatible object storage 并使用 owner-scoped 读取或短时签名 URL，不能依赖 Render Free 易失盘。
+- **2026-08-11**：项目负责人确认正式前端与 Live Demo 统一使用 `/question-preparation/jobs` 完整题目准备流水线；`/extract_problems` 直接文件上传分支降为未经消费者审计不得复用的窄兼容入口。禁止再用固定标答、评分标准或静态结果补齐并冒充完整真实准备流程；本决定替代此前 Demo 显式注入预设合成 rubric/reference 的方案。
+- **2026-08-11（已被同日完整流程决定部分替代）**：项目负责人撤销此前 Demo 编排中的逐题语义锚点护栏，明确该约束既不能提升识别，也不属于主体识别流程；其中“保留真实识别题干”和“不得使用语义锚点”继续有效，原先注入预设合成 rubric/reference 的做法已被 `/question-preparation/jobs` 真实生成与教师确认方案替代。
 - **2026-08-11**：项目负责人确认 AWS Frontier 宣传页不得超出当前产品能力：删除逐字符 OCR 候选、字符置信度与精确区域映射暗示；系统文案只使用“识别、建议、标记”，最终由教师复核、修改和决定。分析示例只基于 Analytics Agent 当前可用的评分数据与已支持图表；宣传定位覆盖复杂计算、推导、证明和编程等广泛理工作答，混合题型仅用于 Demo 覆盖。同期确认 Stage 04 改为明亮等高双面板、散点/箱线/饼图，并对中英文大标题做短语级换行。
 - **2026-08-11**：项目负责人确认所有公开宣传、Demo 入口、Live Demo 任务名和页面返回链接均使用通用的 SmarTAI 产品品牌，不再显示 AWS、Amazon、亚马逊云科技、From Idea to Frontier 或“报名展示”等活动字样，以便同一页面长期作为通用产品展示。为避免临近截止增加部署风险，内部 `/frontier` 路由、分支、PR 与设计文档文件名暂不重命名；本决定仅替代此前公开页面的活动专属品牌文案，不改变 AWS 申请或部署评估决定。
 - **2026-08-11**：项目负责人确认 AWS Frontier 宣传页可把 walkthrough 放大为独占整行的 `Source → Recognize → Grade → Analyze` 四阶段演示；原侧栏空间并入上方价值主张、真实 Demo CTA 与可信边界，并增加双语 `Ask SmarTAI` 合成互动来展示自然语言分析和按问题生成图表。Live API/OCR/批改真实运行边界不变。

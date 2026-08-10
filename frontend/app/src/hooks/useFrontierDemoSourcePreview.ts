@@ -6,7 +6,6 @@ const FRONTIER_TASK_PREFIXES = [
   // Read-only compatibility for tasks created before the public-brand cleanup.
   "AWS Frontier Live Demo",
 ] as const;
-const MANIFEST_URL = "/frontier-demo/manifest.json";
 
 const SUBMISSION_FIXTURES: Record<string, { path: string; kind: "pdf" | "image"; mime: string }> = {
   "DEMO-001_typeset.pdf": { path: "live/DEMO-001_typeset_raw.pdf", kind: "pdf", mime: "application/pdf" },
@@ -21,10 +20,6 @@ const QUESTION_FIXTURE = {
   kind: "pdf" as const,
   mime: "application/pdf",
 };
-
-interface Manifest {
-  assets: Array<{ path: string; sha256: string }>;
-}
 
 interface FixtureSource {
   displayName: string;
@@ -55,57 +50,12 @@ export function useFrontierDemoSourcePreview({
   }, [enabled, questionSource, sourceFilename]);
   const [open, setOpen] = useState(false);
   const [loadState, setLoadState] = useState<SourcePreviewLoadState>("idle");
-  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
-  const [attempt, setAttempt] = useState(0);
+  const previewUrl = source ? `/frontier-demo/${source.path}` : null;
 
   useEffect(() => {
     setOpen(false);
     setLoadState("idle");
-    setPreviewUrl((current) => {
-      if (current) URL.revokeObjectURL(current);
-      return null;
-    });
   }, [source?.path]);
-
-  useEffect(() => {
-    if (!open || !source) return;
-    let cancelled = false;
-    let objectUrl: string | null = null;
-    setLoadState("loading");
-    Promise.all([
-      fetch(`/frontier-demo/${source.path}`, { cache: "no-store" }),
-      fetch(MANIFEST_URL, { cache: "no-store" }),
-    ])
-      .then(async ([fileResponse, manifestResponse]) => {
-        if (!fileResponse.ok) throw new Error(`Fixture request failed (${fileResponse.status})`);
-        if (!manifestResponse.ok) throw new Error(`Manifest request failed (${manifestResponse.status})`);
-        const [blob, manifest] = await Promise.all([
-          fileResponse.blob(),
-          manifestResponse.json() as Promise<Manifest>,
-        ]);
-        const expected = manifest.assets.find((asset) => asset.path === source.path)?.sha256;
-        if (!expected) throw new Error("Fixture is missing from the manifest");
-        const actual = await sha256Hex(await blob.arrayBuffer());
-        if (actual !== expected) throw new Error("Fixture integrity check failed");
-        objectUrl = URL.createObjectURL(blob);
-        if (cancelled) {
-          URL.revokeObjectURL(objectUrl);
-          return;
-        }
-        setPreviewUrl((current) => {
-          if (current) URL.revokeObjectURL(current);
-          return objectUrl;
-        });
-        setLoadState("ready");
-      })
-      .catch(() => {
-        if (!cancelled) setLoadState("error");
-      });
-    return () => {
-      cancelled = true;
-      if (objectUrl) URL.revokeObjectURL(objectUrl);
-    };
-  }, [attempt, open, source]);
 
   const descriptor = useMemo<SourceFileDescriptor>(() => source ? {
     file_id: `frontier:${source.path}`,
@@ -123,12 +73,14 @@ export function useFrontierDemoSourcePreview({
   }, [source, sourceFilename]);
 
   const retry = useCallback(() => {
-    setPreviewUrl((current) => {
-      if (current) URL.revokeObjectURL(current);
-      return null;
-    });
-    setAttempt((current) => current + 1);
-  }, []);
+    setLoadState(source ? "ready" : "error");
+    setOpen(Boolean(source));
+  }, [source]);
+
+  const openPreview = useCallback(() => {
+    setOpen(Boolean(source));
+    setLoadState(source ? "ready" : "error");
+  }, [source]);
 
   return {
     available: Boolean(source),
@@ -137,12 +89,7 @@ export function useFrontierDemoSourcePreview({
     open,
     previewUrl,
     close: () => setOpen(false),
-    openPreview: () => setOpen(true),
+    openPreview,
     retry,
   };
-}
-
-async function sha256Hex(value: ArrayBuffer) {
-  const digest = await crypto.subtle.digest("SHA-256", value);
-  return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
 }

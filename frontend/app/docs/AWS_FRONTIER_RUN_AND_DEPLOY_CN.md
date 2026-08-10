@@ -114,8 +114,8 @@ mkdir -p /private/tmp/smartai-frontier-local/uploads
 
 export SMARTAI_FRONTIER_DEMO_ENABLED='true'
 export SMARTAI_FRONTIER_DEMO_SESSION_MINUTES='20'
-export SMARTAI_FRONTIER_DEMO_DAILY_SESSION_LIMIT='12'
-export SMARTAI_FRONTIER_DEMO_SESSION_COOLDOWN_SECONDS='5'
+export SMARTAI_FRONTIER_DEMO_DAILY_SESSION_LIMIT='0'
+export SMARTAI_FRONTIER_DEMO_SESSION_COOLDOWN_SECONDS='0'
 export SMARTAI_SHARED_POOL_ENABLED='true'
 export SMARTAI_SHARED_POOL_DAILY_REQUEST_LIMIT='100'
 export SMARTAI_SHARED_POOL_DAILY_ESTIMATED_TOKEN_LIMIT='250000'
@@ -137,6 +137,8 @@ export FRONTEND_URLS='http://127.0.0.1:5173,http://localhost:5173'
 export SMARTAI_HTTP_PROXY=''
 export SMARTAI_HTTPS_PROXY=''
 ```
+
+`SMARTAI_FRONTIER_DEMO_DAILY_SESSION_LIMIT=0` 表示本地签发不限次数，方便反复测试；它不是按 IP 计数。公网 Render 配置使用单进程全局 `100` 次/UTC 日和 `1` 秒冷却。当前计数存在单进程内存中，重启会清零，多 worker 也不会共享，因此它只是截止期 Demo 的轻量门禁。
 
 如果本机访问 Gemini 必须经过代理，只在当前 shell 或私有 env 文件中填写真实代理 URL，再启动后端；不要沿用一个猜测端口：
 
@@ -233,11 +235,13 @@ open http://127.0.0.1:5173/frontier
 
 1. `/frontier` 的 CTA 进入 `/frontier/enter`。
 2. 入口页从后端取得短时会话，再进入 `/frontier/live`。
-3. 点击开始真实运行；页面应显示真实 task ID 和各阶段 job ID。
-4. 状态依次经过题目识别、作答识别/OCR、批改，最终为 `graded`、`review_confirmed` 或 `finalized`。
-5. 手写 fixture 必须实际经过 vision OCR；不得把 walkthrough 的预计算分数当成本次结果。
-6. 若真实流程失败，页面先显示安全真实错误；静态 walkthrough 只能由用户主动打开。
-7. 记录最终 SHA、task ID、job IDs、模型名、开始/结束时间、总耗时和模型控制台用量。
+3. 点击开始真实运行；页面应显示真实 task ID，并先调用完整的 `/tasks/{task_id}/question-preparation/jobs` 题目准备流程。
+4. 检查本次真实生成的题干、标答、评分依据、编程参考代码与测试资料；教师确认后才继续。不得改用窄兼容 `/extract_problems` 文件入口，也不得注入 fixture 自带的固定标答或 rubric。
+5. 状态再依次经过作答识别/vision OCR、批改，最终为 `graded`、`review_confirmed` 或 `finalized`；页面保留真实 job ID。
+6. 手写 fixture 必须实际经过 vision OCR；不得把 walkthrough 的预计算分数当成本次结果。
+7. 从题目审核或其他任务详情返回 `/frontier/live?taskId=...` 时，应自动恢复同一任务的当前视图；只有点击“开始新的真实运行”才替换当前任务。
+8. 若真实流程失败，页面先显示安全真实错误；静态 walkthrough 只能由用户主动打开。
+9. 记录最终 SHA、task ID、job IDs、模型名、开始/结束时间、总耗时和模型控制台用量。
 
 ### 5.9 停止与重启
 
@@ -328,6 +332,8 @@ SMARTAI_STORAGE_ROOT=/tmp/smartai-frontier-uploads
 ```
 
 其余 auth、Demo、shared-pool、Gemini model、并发和 CORS 变量沿用第 5 节；Gemini Key 与 JWT secret 只在 Dashboard secret 中填写。
+
+公网环境把 `SMARTAI_FRONTIER_DEMO_DAILY_SESSION_LIMIT` 显式设为 `100`、`SMARTAI_FRONTIER_DEMO_SESSION_COOLDOWN_SECONDS` 设为 `1`；这是该 Render 进程的全局签发次数，不是每 IP 或每人 100 次。
 
 这条路的事实边界：Render Free 每次休眠、重启或重新部署都会丢失 SQLite、随机 Demo owner 和任务。评审需要从 `/frontier/enter` 开始新会话，旧 `?taskId=` 不可恢复。它只因“全是合成数据、每次从头演示”而暂时可接受，不是持久部署。
 
@@ -651,6 +657,7 @@ rg -n 'SMARTAI_GEMINI_API_KEY|GEMINI_API_KEY|JWT_SECRET|AIza' dist
 10. 自定义域名所有权、DNS、TLS、CAA 和迁移 TTL 尚未验证。
 11. Demo session 与 shared-pool 额度是当前简化门禁，不是多进程持久平台总预算；审核期成本上限需要人工监控和随时可用的 kill switch。
 12. Lightsail 的 systemd/Nginx 路径是本文给出的备选实施步骤，尚未在目标实例运行；不要在未完成 E2E 时切换 API DNS。
+13. 当前 Demo 的合成原文件可由 Cloudflare Pages 作为不可变静态资产长期提供；真实用户原文件的公网持久化仍未实现。正式开放真实上传前，必须使用私有 S3-compatible object storage 保存文件字节，在数据库记录 owner/task/source/object key/SHA-256/MIME/大小/生命周期，并通过 owner-scoped 读取或短时签名 URL 展示；不得依赖 Render Free 易失磁盘。
 
 ## 13. 官方来源索引
 

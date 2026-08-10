@@ -73,9 +73,9 @@ async def test_text_only_provider_rejects_vision():
 
 
 def test_registry_pick_vision_prefers_preferred_when_supported():
-    registry = ExpertRegistry()
-    registry._providers.clear()
-    registry._configs.clear()
+    # This unit test supplies its own providers and must not inherit a shared
+    # pool configured in the developer or CI environment.
+    registry = ExpertRegistry(seed_from_settings=False)
 
     vision = MagicMock()
     vision.provider_id = "openai:gpt-4o"

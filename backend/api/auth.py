@@ -52,7 +52,7 @@ class _FrontierDemoSessionIssuer:
                 self._day = day
                 self._issued = 0
                 self._last_issued_at = 0.0
-            if limit <= 0 or self._issued >= limit:
+            if limit > 0 and self._issued >= limit:
                 raise HTTPException(
                     status.HTTP_429_TOO_MANY_REQUESTS,
                     detail={"code": "frontier_demo_daily_limit_reached"},
@@ -64,7 +64,8 @@ class _FrontierDemoSessionIssuer:
                     detail={"code": "frontier_demo_session_cooldown"},
                     headers={"Retry-After": str(retry_after)},
                 )
-            self._issued += 1
+            if limit > 0:
+                self._issued += 1
             self._last_issued_at = now
 
 

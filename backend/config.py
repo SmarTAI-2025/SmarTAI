@@ -105,8 +105,11 @@ class Settings(BaseSettings):
     # random teacher identity so the frontend can reuse the existing task API.
     frontier_demo_enabled: bool = False
     frontier_demo_session_minutes: int = 20
-    frontier_demo_daily_session_limit: int = 4
-    frontier_demo_session_cooldown_seconds: float = 5.0
+    # A non-positive value disables the anonymous-session issuance cap. Local
+    # development is unlimited; public hosts opt into their own guard through
+    # SMARTAI_FRONTIER_DEMO_DAILY_SESSION_LIMIT.
+    frontier_demo_daily_session_limit: int = 0
+    frontier_demo_session_cooldown_seconds: float = 0.0
 
     # ─── Human-in-the-loop ─────────────────────────────────────────────────────
     confidence_threshold: float = 0.6  # below this, trigger human review

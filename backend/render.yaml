@@ -73,9 +73,10 @@ services:
       - key: SMARTAI_FRONTIER_DEMO_SESSION_MINUTES
         value: "20"
       - key: SMARTAI_FRONTIER_DEMO_DAILY_SESSION_LIMIT
-        value: "12"
+        # Public-host guard only. Local development defaults to unlimited (0).
+        value: "100"
       - key: SMARTAI_FRONTIER_DEMO_SESSION_COOLDOWN_SECONDS
-        value: "5"
+        value: "1"
       - key: SMARTAI_SHARED_POOL_ENABLED
         value: "true"
       - key: SMARTAI_SHARED_POOL_DAILY_REQUEST_LIMIT

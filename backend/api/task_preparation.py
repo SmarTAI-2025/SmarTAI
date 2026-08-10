@@ -37,7 +37,7 @@ from backend.agents.question_preparation_agent import (
     prepare_question_packages,
 )
 from backend.api.errors import domain_error_response
-from backend.auth import require_teacher
+from backend.auth import require_task_teacher, require_teacher
 from backend.db import assignment_repository, workflow_repository
 from backend.domain.errors import (
     DomainError,
@@ -364,7 +364,7 @@ async def preflight_problem_source(
     role: str = Form(default="problem"),
     extraction_hint: str = Form(default=""),
     save_to_library: bool = Form(default=False),
-    current: User = Depends(require_teacher),
+    current: User = Depends(require_task_teacher),
     registry: ExpertRegistry = Depends(get_scoped_expert_registry),
 ):
     try:
@@ -579,7 +579,7 @@ async def start_question_preparation(
     task_id: str,
     request: StartQuestionPreparationRequest,
     background_tasks: BackgroundTasks,
-    current: User = Depends(require_teacher),
+    current: User = Depends(require_task_teacher),
     registry: ExpertRegistry = Depends(get_scoped_expert_registry),
 ):
     try:

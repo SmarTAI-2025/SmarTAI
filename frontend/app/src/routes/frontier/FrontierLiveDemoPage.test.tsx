@@ -3,7 +3,8 @@ import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { getGradingSetup, saveGradingSetup } from "@/api/gradingSetup";
-import { createTask, extractProblems, getTask, getTaskState, parseSubmissions, startGrading, updateProblem } from "@/api/tasks";
+import { preflightProblemSource, startQuestionPreparation } from "@/api/problemSources";
+import { createTask, getTask, getTaskState, parseSubmissions, startGrading, updateProblem } from "@/api/tasks";
 import { demoQuestions } from "@/data/frontierDemo";
 import { I18nProvider } from "@/i18n/I18nProvider";
 import type { GradingSetupResponse, Task, TaskStateSnapshot } from "@/types";
@@ -11,12 +12,16 @@ import { alignDemoProblems, FrontierLiveDemoPage } from "./FrontierLiveDemoPage"
 
 vi.mock("@/api/tasks", () => ({
   createTask: vi.fn(),
-  extractProblems: vi.fn(),
   getTask: vi.fn(),
   getTaskState: vi.fn(),
   parseSubmissions: vi.fn(),
   startGrading: vi.fn(),
   updateProblem: vi.fn(),
+}));
+
+vi.mock("@/api/problemSources", () => ({
+  preflightProblemSource: vi.fn(),
+  startQuestionPreparation: vi.fn(),
 }));
 
 vi.mock("@/api/gradingSetup", () => ({
@@ -51,13 +56,13 @@ describe("FrontierLiveDemoPage", () => {
     const problems = Object.values(taskWithQuestions().problem_data);
     problems[1] = { ...problems[1], stem: "Implement stable_softmax for values near 1000." };
 
-    expect(alignDemoProblems(problems)[1].problem.stem).toBe("Implement stable_softmax for values near 1000.");
+    expect(alignDemoProblems(problems)[1].stem).toBe("Implement stable_softmax for values near 1000.");
   });
 
   it("aligns recognized questions by semantic identity instead of object order", () => {
     const problems = Object.values(taskWithQuestions().problem_data).reverse();
 
-    expect(alignDemoProblems(problems).map(({ problem }) => problem.q_id)).toEqual(["q1", "q2", "q3", "q4"]);
+    expect(alignDemoProblems(problems).map((problem) => problem.q_id)).toEqual(["q1", "q2", "q3", "q4"]);
   });
 
   it("stops before rubric confirmation when recognized question numbers are duplicated", () => {
@@ -67,8 +72,9 @@ describe("FrontierLiveDemoPage", () => {
     expect(() => alignDemoProblems(problems)).toThrow(/unique Q1–Q4 numbering/i);
   });
 
-  it("does not claim rubric confirmation when a refreshed task is only problems-ready", async () => {
+  it("restores the same teacher-confirmation view without a resume button", async () => {
     vi.mocked(getTaskState).mockResolvedValue(taskState("problems_ready"));
+    vi.mocked(getTask).mockResolvedValue(taskWithQuestions());
 
     render(
       <I18nProvider>
@@ -78,8 +84,31 @@ describe("FrontierLiveDemoPage", () => {
       </I18nProvider>,
     );
 
-    expect(await screen.findByText(/rubric confirmation will be verified before continuing/i)).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: /review this run's generated materials/i })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /resume this task/i })).not.toBeInTheDocument();
     expect(screen.queryByText(/teacher rubric confirmed/i)).not.toBeInTheDocument();
+  });
+
+  it("keeps generated materials visible after the task advances", async () => {
+    const completedTask = taskWithQuestions();
+    Object.values(completedTask.problem_data).forEach((problem) => {
+      problem.review_status = "confirmed";
+    });
+    vi.mocked(getTaskState).mockResolvedValue(taskState("graded"));
+    vi.mocked(getTask).mockResolvedValue(completedTask);
+
+    render(
+      <I18nProvider>
+        <MemoryRouter initialEntries={["/frontier/live?taskId=asg_demo123"]}>
+          <FrontierLiveDemoPage />
+        </MemoryRouter>
+      </I18nProvider>,
+    );
+
+    expect(await screen.findByRole("heading", { name: /review this run's generated materials/i })).toBeInTheDocument();
+    expect(screen.getByText(/generated materials were teacher-confirmed/i)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /confirm generated materials/i })).not.toBeInTheDocument();
+    expect(getTask).toHaveBeenCalledWith("asg_demo123");
   });
 
   it("runs the real API workflow in order without injecting fallback scores", async () => {
@@ -87,21 +116,27 @@ describe("FrontierLiveDemoPage", () => {
     const recognizedTask = taskWithQuestions();
     recognizedTask.problem_data.q2.stem = "Recognized Q2 wording from the live extraction.";
     vi.mocked(createTask).mockResolvedValue(taskState("draft"));
-    vi.mocked(extractProblems).mockResolvedValue({ status: "started", job_id: "job-questions" });
+    vi.mocked(preflightProblemSource).mockResolvedValue({
+      status: "ready",
+      source_token: "source-questions",
+      source: { kind: "upload", filename: "question_source.pdf", size_bytes: 7, sha256: "0".repeat(64) },
+      structure_mode: "organized",
+      requires_confirmation: false,
+      candidate_summary: { matched: [], possible_matches: [], not_found: [], semantic_match_performed: false },
+      workflow_revision: 0,
+    });
+    vi.mocked(startQuestionPreparation).mockResolvedValue({ status: "started", job_id: "job-questions" });
     vi.mocked(getTask).mockResolvedValue(recognizedTask);
     vi.mocked(updateProblem).mockResolvedValue({ status: "ok", q_id: "q", problem: taskWithQuestions().problem_data.q1 });
     vi.mocked(parseSubmissions).mockResolvedValue({ status: "started", job_id: "job-submissions" });
     vi.mocked(getGradingSetup).mockResolvedValue(gradingSetup());
     vi.mocked(saveGradingSetup).mockResolvedValue({ ...gradingSetup(), configured: true, status: "saved" });
     vi.mocked(startGrading).mockResolvedValue({ status: "started", job_id: "job-grading" });
-    vi.mocked(getTaskState)
-      .mockResolvedValueOnce(taskState("problems_ready"))
-      .mockResolvedValueOnce(taskState("problems_ready"))
-      .mockResolvedValueOnce(taskState("submissions_ready"))
-      .mockResolvedValueOnce(taskState("submissions_ready"))
-      .mockResolvedValueOnce(taskState("graded"))
-      .mockResolvedValueOnce(taskState("graded"))
-      .mockResolvedValue(taskState("graded"));
+    vi.mocked(getTaskState).mockImplementation(async () => {
+      if (vi.mocked(startGrading).mock.calls.length) return taskState("graded");
+      if (vi.mocked(parseSubmissions).mock.calls.length) return taskState("submissions_ready");
+      return taskState("problems_ready");
+    });
 
     vi.stubGlobal("crypto", {
       randomUUID: () => "demo-run-id",
@@ -130,10 +165,10 @@ describe("FrontierLiveDemoPage", () => {
     render(<I18nProvider><MemoryRouter><FrontierLiveDemoPage /></MemoryRouter></I18nProvider>);
     await user.click(screen.getByRole("button", { name: /start real OCR \+ grading/i }));
 
-    await waitFor(() => expect(extractProblems).toHaveBeenCalledTimes(1));
-    const confirmTeacherMaterials = await screen.findByRole("button", { name: /confirm teacher materials and continue live OCR/i });
+    await waitFor(() => expect(startQuestionPreparation).toHaveBeenCalledTimes(1));
+    const confirmTeacherMaterials = await screen.findByRole("button", { name: /confirm generated materials and continue live OCR/i });
     expect(parseSubmissions).not.toHaveBeenCalled();
-    expect(screen.getByText(/pre-authored teacher materials/i)).toBeInTheDocument();
+    expect(screen.getByText(/come from this live preparation run/i)).toBeInTheDocument();
     await user.click(confirmTeacherMaterials);
     await waitFor(() => expect(updateProblem).toHaveBeenCalledTimes(4));
     await waitFor(() => expect(parseSubmissions).toHaveBeenCalledTimes(1));
@@ -141,7 +176,8 @@ describe("FrontierLiveDemoPage", () => {
     await waitFor(() => expect(startGrading).toHaveBeenCalledTimes(1));
     await screen.findByText("16 answer units processed");
     expect(createTask).toHaveBeenCalledTimes(1);
-    expect(extractProblems).toHaveBeenCalledTimes(1);
+    expect(preflightProblemSource).toHaveBeenCalledTimes(1);
+    expect(startQuestionPreparation).toHaveBeenCalledTimes(1);
     expect(updateProblem).toHaveBeenCalledTimes(4);
     expect(parseSubmissions).toHaveBeenCalledTimes(1);
     expect(saveGradingSetup).toHaveBeenCalledTimes(1);
@@ -157,8 +193,15 @@ describe("FrontierLiveDemoPage", () => {
     expect(updateProblem).toHaveBeenCalledWith(
       "asg_demo123",
       "q4",
-      expect.objectContaining({ solution_code: expect.stringContaining("def stable_softmax") }),
+      expect.objectContaining({
+        solution_code: expect.stringContaining("def stable_softmax"),
+        criterion: "Generated rubric for q4",
+        reference_answer: "Generated answer for q4",
+      }),
     );
+    expect(startQuestionPreparation).toHaveBeenCalledWith(expect.objectContaining({
+      scorePolicy: expect.objectContaining({ mode: "per_question" }),
+    }));
     expect(screen.queryByText(/static score has been substituted/i)).not.toBeInTheDocument();
     await waitFor(() => expect(screen.getByText(/provider Demo Vision/)).toBeInTheDocument());
   });
@@ -185,10 +228,20 @@ function taskWithQuestions(): Task {
   const problem = (qId: string, number: string, stem: string) => ({
     q_id: qId,
     number,
-    type: "calculation",
+    type: qId === "q4" ? "programming" : "calculation",
     stem,
-    criterion: "",
-    max_score: 10,
+    criterion: `Generated rubric for ${qId}`,
+    max_score: qId === "q1" ? 5 : qId === "q2" ? 8 : qId === "q3" ? 7 : 10,
+    reference_answer: `Generated answer for ${qId}`,
+    solution_code: qId === "q4" ? "def stable_softmax(xs):\n    return []" : null,
+    test_cases: qId === "q4" ? [{
+      input: "[[]]",
+      expected_output: "[]",
+      description: "Generated empty-input test",
+      source: "llm_generated" as const,
+      sandbox_feasible: true,
+    }] : null,
+    review_status: "needs_review" as const,
   });
   return {
     ...base,
