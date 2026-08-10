@@ -4,8 +4,10 @@ CalculationSkill: grades calculation-type questions (计算题).
 Strategy (4-tier fallback ladder):
 
     1. Reference present  → use teacher's reference_answer directly.
-    2. Reference absent   → ask LLM to generate a sympy program, run it in the
-                            sandbox, use stdout as the reference value.
+    2. Reference absent   → ask LLM to generate a SymPy program, statically
+                            check it, run it through the versioned runner, and
+                            repair the tool script at most once when the script
+                            itself is invalid. Use stdout as the reference.
     3. Reference resolved → SymPy.verify_equivalent / verify_value compares
                             student's final expression against the reference.
                               matched     → award full marks (LLM only writes a
@@ -26,12 +28,15 @@ It NEVER does the arithmetic itself when sympy can do it.
 """
 from __future__ import annotations
 
+import hashlib
+import json
 import logging
 import os
 import re
-from typing import Optional, List, TYPE_CHECKING
+import uuid
+from typing import Awaitable, Callable, Literal, Optional, List, TYPE_CHECKING
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationError
 
 from backend.skills.base import (
     GradingSkill,
@@ -44,7 +49,14 @@ from backend.models import ExpertResult, ProblemInfo, StudentAnswerInfo, StepSco
 from backend.llm.providers import BaseProvider
 from backend.tools.structured_llm import structured_llm_call
 from backend.tools import numerical
-from backend.tools.code_interpreter import run_python_subprocess
+from backend.tools.grading_runner import (
+    RunnerExitReason,
+    RunnerLimits,
+    RunnerRequest,
+    RunnerResourceStatus,
+    RunnerResult,
+    run_grading_request,
+)
 
 if TYPE_CHECKING:
     from backend.progress.tracker import ProgressReporter
@@ -71,6 +83,34 @@ class SympyProgramOutput(BaseModel):
                     "stdout. No file I/O, no network, no input(). At most a "
                     "few seconds of computation."
     )
+
+
+MAX_SYMPY_REPAIRS = 1
+SYMPY_RUN_TIMEOUT_SECONDS = 10.0
+
+
+class SympyAttemptTrace(BaseModel):
+    attempt_number: int = Field(ge=1)
+    phase: Literal["generated", "repaired"]
+    code_sha256: str
+    runner_result: RunnerResult
+
+
+class SympyLoopResult(BaseModel):
+    execution_id: str
+    status: Literal[
+        "succeeded",
+        "generation_failed",
+        "repair_generation_failed",
+        "repair_exhausted",
+        "timeout",
+        "output_limit",
+        "execution_failed",
+    ]
+    stop_reason: str
+    reference_value: Optional[str] = None
+    repair_count: int = Field(default=0, ge=0)
+    attempts: List[SympyAttemptTrace] = Field(default_factory=list)
 
 
 # ─── Prompt template loading ─────────────────────────────────────────────────
@@ -154,8 +194,8 @@ async def _generate_sympy_program(
 ) -> Optional[str]:
     """Ask the LLM to write a sympy program that prints the reference value.
 
-    Returns None on parse failure; caller marks sympy_status="sympy_failed"
-    and falls back to LLM_ONLY scoring.
+    Returns None on parse failure; the loop records ``generation_failed`` and
+    falls back to LLM_ONLY scoring.
     """
     system_prompt = (
         "You are an expert at translating mathematics problems into sympy code. "
@@ -187,30 +227,256 @@ async def _generate_sympy_program(
         return None
 
 
-async def _run_sympy_in_sandbox(code: str, *, timeout: float = 10.0) -> Optional[str]:
-    """Execute the LLM-generated sympy program; return stdout on success.
+async def _repair_sympy_program(
+    provider: BaseProvider,
+    problem: ProblemInfo,
+    *,
+    previous_code: str,
+    safe_error: str,
+    repair_number: int,
+) -> Optional[str]:
+    """Repair generated tool code without seeing or changing student content."""
 
-    Uses backend.tools.code_interpreter.run_python_subprocess, which is gated
-    by the global sandbox semaphore (limit=8) so this never fork-bombs even
-    when many students are graded concurrently.
-    """
+    system_prompt = (
+        "You repair a short SymPy reference-calculation program. Fix only the "
+        "tool script. Never change the mathematics problem, rubric, expected "
+        "answer, or any student content. Only `import sympy` and "
+        "`from sympy import ...` are allowed. The corrected program must print "
+        "exactly one final answer and must not use input, files, network, "
+        "processes, dynamic execution, or reflection. Return JSON "
+        "{\"code\": \"<corrected program>\"}."
+    )
+    user_prompt = (
+        f"Problem (type={problem.type}):\n{problem.stem}\n\n"
+        f"Rubric (immutable):\n{problem.criterion}\n\n"
+        f"Repair number: {repair_number}\n"
+        f"Sanitized runner feedback:\n{safe_error[:1000]}\n\n"
+        f"Previous generated script:\n{previous_code}\n\n"
+        "Return the corrected SymPy program."
+    )
     try:
-        result = await run_python_subprocess(code, "", timeout=timeout)
-    except Exception as e:
+        result, _raw = await structured_llm_call(
+            provider,
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
+            output_model=SympyProgramOutput,
+        )
+        return result.code
+    except Exception as exc:
         logger.warning(
-            "_run_sympy_in_sandbox failed; exception_type=%s",
-            type(e).__name__,
+            "_repair_sympy_program failed; exception_type=%s",
+            type(exc).__name__,
         )
         return None
-    if result.passed and result.actual_output:
-        return result.actual_output.strip()
-    if result.error:
-        logger.info(f"sympy program failed: {result.error[:200]}")
+
+
+def _code_sha256(code: str) -> str:
+    return hashlib.sha256(code.encode("utf-8")).hexdigest()
+
+
+def _invalid_request_result(execution_id: str) -> RunnerResult:
+    return RunnerResult(
+        execution_id=execution_id,
+        executed=False,
+        exit_reason=RunnerExitReason.STATIC_REJECTED,
+        stderr="runner request validation failed",
+        resource_status=RunnerResourceStatus.NOT_EXECUTED,
+    )
+
+
+async def _run_sympy_loop(
+    provider: BaseProvider,
+    problem: ProblemInfo,
+    *,
+    max_repairs: int = MAX_SYMPY_REPAIRS,
+    timeout: float = SYMPY_RUN_TIMEOUT_SECONDS,
+    execution_id: Optional[str] = None,
+    runner: Optional[Callable[[RunnerRequest], Awaitable[RunnerResult]]] = None,
+    phase_callback: Optional[Callable[[str], Awaitable[None]]] = None,
+) -> SympyLoopResult:
+    """Generate, check and execute SymPy code with a finite repair budget."""
+
+    root_execution_id = execution_id or f"sympy-{uuid.uuid4().hex}"
+    max_repairs = max(0, min(int(max_repairs), MAX_SYMPY_REPAIRS))
+    execute = runner or run_grading_request
+
+    async def emit(phase: str) -> None:
+        if phase_callback is not None:
+            await phase_callback(phase)
+
+    await emit("generate_sympy")
+    code = await _generate_sympy_program(provider, problem)
+    if not code or not code.strip():
+        return SympyLoopResult(
+            execution_id=root_execution_id,
+            status="generation_failed",
+            stop_reason="generation_failed",
+        )
+
+    attempts: List[SympyAttemptTrace] = []
+    repair_count = 0
+    phase: Literal["generated", "repaired"] = "generated"
+    repairable_reasons = {
+        RunnerExitReason.STATIC_REJECTED,
+        RunnerExitReason.SYNTAX_ERROR,
+        RunnerExitReason.RUNTIME_ERROR,
+    }
+
+    while True:
+        attempt_number = len(attempts) + 1
+        attempt_execution_id = f"{root_execution_id}:a{attempt_number}"
+        await emit("check_sympy" if attempt_number == 1 else "check_repaired_sympy")
+        try:
+            request = RunnerRequest(
+                execution_id=attempt_execution_id,
+                task_type="sympy",
+                language="python",
+                code=code,
+                limits=RunnerLimits(timeout_seconds=timeout),
+            )
+        except ValidationError:
+            runner_result = _invalid_request_result(attempt_execution_id)
+        else:
+            await emit("run_sympy")
+            runner_result = await execute(request)
+
+        attempts.append(SympyAttemptTrace(
+            attempt_number=attempt_number,
+            phase=phase,
+            code_sha256=_code_sha256(code),
+            runner_result=runner_result,
+        ))
+
+        output = runner_result.stdout.strip()
+        invalid_output = (
+            runner_result.exit_reason == RunnerExitReason.SUCCESS and not output
+        )
+        if runner_result.exit_reason == RunnerExitReason.SUCCESS and output:
+            return SympyLoopResult(
+                execution_id=root_execution_id,
+                status="succeeded",
+                stop_reason="completed",
+                reference_value=output,
+                repair_count=repair_count,
+                attempts=attempts,
+            )
+
+        can_repair = (
+            invalid_output or runner_result.exit_reason in repairable_reasons
+        )
+        if can_repair and repair_count < max_repairs:
+            repair_count += 1
+            await emit("repair_sympy")
+            feedback = (
+                "program completed without printing a non-empty final answer"
+                if invalid_output
+                else runner_result.stderr or runner_result.exit_reason.value
+            )
+            repaired = await _repair_sympy_program(
+                provider,
+                problem,
+                previous_code=code,
+                safe_error=feedback,
+                repair_number=repair_count,
+            )
+            if not repaired or not repaired.strip():
+                return SympyLoopResult(
+                    execution_id=root_execution_id,
+                    status="repair_generation_failed",
+                    stop_reason="repair_generation_failed",
+                    repair_count=repair_count,
+                    attempts=attempts,
+                )
+            code = repaired
+            phase = "repaired"
+            continue
+
+        if can_repair:
+            status = "repair_exhausted"
+            stop_reason = "repair_exhausted"
+        elif runner_result.exit_reason == RunnerExitReason.TIMEOUT:
+            status = "timeout"
+            stop_reason = "timeout"
+        elif runner_result.exit_reason == RunnerExitReason.OUTPUT_LIMIT:
+            status = "output_limit"
+            stop_reason = "output_limit"
+        else:
+            status = "execution_failed"
+            stop_reason = runner_result.exit_reason.value
+        return SympyLoopResult(
+            execution_id=root_execution_id,
+            status=status,
+            stop_reason=stop_reason,
+            repair_count=repair_count,
+            attempts=attempts,
+        )
+
+
+async def _run_sympy_in_sandbox(code: str, *, timeout: float = 10.0) -> Optional[str]:
+    """Compatibility helper for callers that only need a reference value."""
+
+    request = RunnerRequest(
+        execution_id=f"sympy-compat-{uuid.uuid4().hex}",
+        task_type="sympy",
+        code=code,
+        limits=RunnerLimits(timeout_seconds=timeout),
+    )
+    result = await run_grading_request(request)
+    if result.exit_reason == RunnerExitReason.SUCCESS and result.stdout.strip():
+        return result.stdout.strip()
     return None
 
 
+def _build_sympy_audit_log(
+    loop_result: Optional[SympyLoopResult],
+    *,
+    verification_status: str,
+    ref_origin: str,
+) -> str:
+    payload: dict = {
+        "schema_version": 1,
+        "tool": "sympy",
+        "reference_origin": ref_origin,
+        "verification_status": verification_status,
+        "max_repairs": MAX_SYMPY_REPAIRS,
+    }
+    if loop_result is not None:
+        payload.update({
+            "execution_id": loop_result.execution_id,
+            "loop_status": loop_result.status,
+            "stop_reason": loop_result.stop_reason,
+            "repair_count": loop_result.repair_count,
+            "attempts": [
+                {
+                    "attempt_number": attempt.attempt_number,
+                    "phase": attempt.phase,
+                    "code_sha256": attempt.code_sha256,
+                    "executed": attempt.runner_result.executed,
+                    "exit_reason": attempt.runner_result.exit_reason.value,
+                    "duration_ms": round(attempt.runner_result.duration_ms, 3),
+                    "resource_status": attempt.runner_result.resource_status.value,
+                    "stdout_truncated": attempt.runner_result.stdout_truncated,
+                    "stderr_truncated": attempt.runner_result.stderr_truncated,
+                    "isolation_mode": attempt.runner_result.isolation_mode,
+                }
+                for attempt in loop_result.attempts
+            ],
+        })
+    return json.dumps(
+        payload,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+
+
 def _format_metadata_zh(
-    sympy_status: str, has_reference: bool, ref_origin: str
+    sympy_status: str,
+    has_reference: bool,
+    ref_origin: str,
+    *,
+    loop_stop_reason: Optional[str] = None,
+    repair_count: int = 0,
 ) -> str:
     """Build the metadata footer appended to the LLM comment.
 
@@ -220,13 +486,23 @@ def _format_metadata_zh(
     """
     if sympy_status == "matched":
         origin_zh = "标答" if ref_origin == "teacher" else "AI 计算结果"
-        return f"\n\n（SymPy 验证：✓ 与{origin_zh}一致）"
+        repair_note = f"；计算脚本自动修正 {repair_count} 次" if repair_count else ""
+        return f"\n\n（SymPy 验证：✓ 与{origin_zh}一致{repair_note}）"
     if sympy_status == "mismatched":
         origin_zh = "标答" if ref_origin == "teacher" else "AI 计算结果"
-        return f"\n\n（SymPy 验证：✗ 答案与{origin_zh}不一致；本评分基于过程分判断）"
+        return (
+            f"\n\n（SymPy 验证：✗ 答案与{origin_zh}不一致；"
+            "系统未修改学生答案，本评分基于过程分判断）"
+        )
     if sympy_status == "sympy_failed":
         if has_reference:
             return "\n\n（SymPy 验证：未启用 — 学生答案表达式无法解析；本评分基于 AI 推理）"
+        if loop_stop_reason == "timeout":
+            return "\n\n（SymPy 验证：未完成 — 计算脚本执行超时；结果未经验证，需人工复核）"
+        if loop_stop_reason == "output_limit":
+            return "\n\n（SymPy 验证：未完成 — 计算脚本输出超限；结果未经验证，需人工复核）"
+        if loop_stop_reason in {"repair_exhausted", "repair_generation_failed"}:
+            return "\n\n（SymPy 验证：未完成 — 计算脚本修正后仍失败；结果未经验证，需人工复核）"
         return "\n\n（SymPy 验证：未启用 — sympy 程序执行失败；本评分基于 AI 推理）"
     if sympy_status == "no_reference":
         return "\n\n（SymPy 验证：未启用 — 标答缺失且 AI 未能生成 sympy 程序；本评分基于 AI 推理）"
@@ -284,6 +560,7 @@ class CalculationSkill(GradingSkill):
             ref_value: Optional[str] = None
             ref_origin: str = "n/a"  # "teacher" | "ai_computed" | "n/a"
             sympy_status: str = "unsuitable"
+            sympy_loop: Optional[SympyLoopResult] = None
             #  ↑ legal values:
             #    matched | mismatched | sympy_failed | no_reference | unsuitable
 
@@ -291,21 +568,22 @@ class CalculationSkill(GradingSkill):
                 ref_value = reference.strip()
                 ref_origin = "teacher"
             else:
-                # No teacher-supplied reference → LLM writes a sympy program
-                if self.reporter and active_unit:
-                    await self.reporter.substep(active_unit, "generate_sympy")
-                sympy_code = await _generate_sympy_program(self.provider, problem)
-                if sympy_code:
+                async def report_sympy_phase(phase: str) -> None:
                     if self.reporter and active_unit:
-                        await self.reporter.substep(active_unit, "run_sympy")
-                    stdout = await _run_sympy_in_sandbox(sympy_code, timeout=10.0)
-                    if stdout:
-                        ref_value = stdout
-                        ref_origin = "ai_computed"
-                    else:
-                        sympy_status = "sympy_failed"
-                else:
+                        await self.reporter.substep(active_unit, phase)
+
+                sympy_loop = await _run_sympy_loop(
+                    self.provider,
+                    problem,
+                    phase_callback=report_sympy_phase,
+                )
+                if sympy_loop.status == "succeeded":
+                    ref_value = sympy_loop.reference_value
+                    ref_origin = "ai_computed"
+                elif sympy_loop.status == "generation_failed":
                     sympy_status = "no_reference"
+                else:
+                    sympy_status = "sympy_failed"
 
             # ─── Step 2: Verify against reference (if we have one) ──────────
             if ref_value is not None:
@@ -342,7 +620,28 @@ class CalculationSkill(GradingSkill):
             else:  # sympy_failed | no_reference | unsuitable
                 branch = "LLM_ONLY"
                 if sympy_status == "sympy_failed":
-                    verification_status = "sympy could not verify (program/expression parse failure)."
+                    if sympy_loop and sympy_loop.stop_reason == "timeout":
+                        verification_status = (
+                            "The SymPy tool script timed out. No computed result was "
+                            "verified; grade conservatively and request human review."
+                        )
+                    elif sympy_loop and sympy_loop.stop_reason == "output_limit":
+                        verification_status = (
+                            "The SymPy tool script exceeded its output limit. No "
+                            "computed result was verified; request human review."
+                        )
+                    elif sympy_loop and sympy_loop.stop_reason in {
+                        "repair_exhausted",
+                        "repair_generation_failed",
+                    }:
+                        verification_status = (
+                            "The SymPy tool script still failed after its single allowed "
+                            "repair. No computed result was verified."
+                        )
+                    else:
+                        verification_status = (
+                            "sympy could not verify (program/expression parse failure)."
+                        )
                 elif sympy_status == "no_reference":
                     verification_status = "No reference value available."
                 else:
@@ -398,9 +697,18 @@ class CalculationSkill(GradingSkill):
                     ))
 
             metadata_footer = _format_metadata_zh(
-                sympy_status, has_reference=(ref_value is not None), ref_origin=ref_origin
+                sympy_status,
+                has_reference=(ref_value is not None),
+                ref_origin=ref_origin,
+                loop_stop_reason=(sympy_loop.stop_reason if sympy_loop else None),
+                repair_count=(sympy_loop.repair_count if sympy_loop else 0),
             )
             final_comment = (result.comment or "") + metadata_footer
+            audit_log = _build_sympy_audit_log(
+                sympy_loop,
+                verification_status=sympy_status,
+                ref_origin=ref_origin,
+            )
 
             return normalize_expert_result(ExpertResult(
                 provider=self.provider.provider_id,
@@ -409,6 +717,7 @@ class CalculationSkill(GradingSkill):
                 confidence=max(0.0, min(result.confidence, 1.0)),
                 comment=final_comment,
                 steps=step_scores,
+                logs=audit_log,
                 raw_output=raw.content,
                 duration_ms=raw.duration_ms,
             ), problem.max_score)

@@ -34,6 +34,7 @@ import os
 import subprocess
 import sys
 import tempfile
+import time
 
 # `resource` is Unix-only; on Windows the rlimit-based sandbox is skipped
 # (see preexec_fn guard in run_python_subprocess).
@@ -59,6 +60,9 @@ class TestResult:
     actual_output: str
     error: str
     duration_ms: float
+    exit_reason: str = ""
+    stdout_truncated: bool = False
+    stderr_truncated: bool = False
 
 
 @dataclass
@@ -89,6 +93,7 @@ async def run_python_subprocess(
     *,
     timeout: float = 10.0,
     memory_mb: int = 256,
+    max_output_chars: Optional[int] = None,
 ) -> TestResult:
     """Run a single test case in a subprocess.
 
@@ -99,6 +104,7 @@ async def run_python_subprocess(
     """
     sem = get_sandbox_semaphore()
     async with sem:
+        started_at = time.perf_counter()
         with tempfile.NamedTemporaryFile(
             mode="w", encoding="utf-8", newline="\n", suffix=".py", delete=False
         ) as f:
@@ -132,24 +138,61 @@ async def run_python_subprocess(
                     passed=False,
                     actual_output="",
                     error=f"Timeout after {timeout}s",
-                    duration_ms=timeout * 1000,
+                    duration_ms=(time.perf_counter() - started_at) * 1000,
+                    exit_reason="timeout",
                 )
 
             stdout = stdout_b.decode(errors="replace")
-            stderr = stderr_b.decode(errors="replace")
+            stderr = stderr_b.decode(errors="replace").replace(
+                code_path,
+                "<runner>/main.py",
+            )
+            stdout_truncated = False
+            stderr_truncated = False
+            if max_output_chars is not None:
+                stdout, stdout_truncated = _truncate_output(
+                    stdout,
+                    max_output_chars,
+                )
+                stderr, stderr_truncated = _truncate_output(
+                    stderr,
+                    max_output_chars,
+                )
+            output_limited = stdout_truncated or stderr_truncated
+            if output_limited:
+                limit_error = f"Output limit exceeded ({max_output_chars} chars)"
+                stderr = f"{stderr.rstrip()}\n{limit_error}".lstrip()
 
             return TestResult(
                 test=TestCase(input=test_input),
-                passed=(proc.returncode == 0),
+                passed=(proc.returncode == 0 and not output_limited),
                 actual_output=stdout,
-                error=stderr if proc.returncode != 0 else "",
-                duration_ms=0.0,  # TODO: measure
+                error=stderr if proc.returncode != 0 or output_limited else "",
+                duration_ms=(time.perf_counter() - started_at) * 1000,
+                exit_reason=(
+                    "output_limit"
+                    if output_limited
+                    else ("success" if proc.returncode == 0 else "runtime_error")
+                ),
+                stdout_truncated=stdout_truncated,
+                stderr_truncated=stderr_truncated,
             )
         finally:
             try:
                 os.unlink(code_path)
             except OSError:
                 pass
+
+
+def _truncate_output(value: str, limit: int) -> tuple[str, bool]:
+    """Bound one captured subprocess stream while preserving a clear marker."""
+
+    if limit < 1 or len(value) <= limit:
+        return value, False
+    marker = "\n...[truncated]"
+    if limit <= len(marker):
+        return value[:limit], True
+    return value[: limit - len(marker)] + marker, True
 
 
 async def run_sandbox(
