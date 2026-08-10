@@ -79,11 +79,9 @@ export function FrontierLiveDemoPage() {
   const [materialsConfirmed, setMaterialsConfirmed] = useState(false);
   const activeStepRef = useRef<RunStepId | null>(null);
   const runLockRef = useRef(false);
-  const restoredTaskIdRef = useRef<string | null>(null);
 
   useEffect(() => {
-    if (!taskIdFromUrl || busy || runLockRef.current || restoredTaskIdRef.current === taskIdFromUrl) return;
-    restoredTaskIdRef.current = taskIdFromUrl;
+    if (!taskIdFromUrl || busy || runLockRef.current) return;
     const restoredTaskId = taskIdFromUrl;
     let cancelled = false;
     async function restoreCurrentTask() {
@@ -155,7 +153,6 @@ export function FrontierLiveDemoPage() {
         idempotencyKey: createIdempotencyKey(),
       });
       setTaskId(task.task_id);
-      restoredTaskIdRef.current = task.task_id;
       markStep("task", "complete", tx(locale, `任务 ${shortId(task.task_id)} 已创建`, `Task ${shortId(task.task_id)} created`));
       navigate(`/frontier/live?taskId=${encodeURIComponent(task.task_id)}`, { replace: true });
       await continueWorkflow(task.task_id, task.status);

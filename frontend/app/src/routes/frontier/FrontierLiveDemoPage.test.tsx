@@ -1,6 +1,7 @@
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { MemoryRouter } from "react-router-dom";
+import { StrictMode } from "react";
+import { Link, MemoryRouter, Route, Routes } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { getGradingSetup, saveGradingSetup } from "@/api/gradingSetup";
 import { preflightProblemSource, startQuestionPreparation } from "@/api/problemSources";
@@ -89,26 +90,37 @@ describe("FrontierLiveDemoPage", () => {
     expect(screen.queryByText(/teacher rubric confirmed/i)).not.toBeInTheDocument();
   });
 
-  it("keeps generated materials visible after the task advances", async () => {
+  it("keeps generated materials visible after returning under React StrictMode", async () => {
+    const user = userEvent.setup();
     const completedTask = taskWithQuestions();
     Object.values(completedTask.problem_data).forEach((problem) => {
       problem.review_status = "confirmed";
     });
     vi.mocked(getTaskState).mockResolvedValue(taskState("graded"));
     vi.mocked(getTask).mockResolvedValue(completedTask);
+    vi.mocked(createTask).mockImplementation(() => new Promise(() => {}));
 
     render(
-      <I18nProvider>
-        <MemoryRouter initialEntries={["/frontier/live?taskId=asg_demo123"]}>
-          <FrontierLiveDemoPage />
-        </MemoryRouter>
-      </I18nProvider>,
+      <StrictMode>
+        <I18nProvider>
+          <MemoryRouter initialEntries={["/tasks/asg_demo123"]}>
+            <Routes>
+              <Route path="/tasks/:taskId" element={<Link to="/frontier/live?taskId=asg_demo123">Live Demo</Link>} />
+              <Route path="/frontier/live" element={<FrontierLiveDemoPage />} />
+            </Routes>
+          </MemoryRouter>
+        </I18nProvider>
+      </StrictMode>,
     );
 
+    await user.click(screen.getByRole("link", { name: "Live Demo" }));
     expect(await screen.findByRole("heading", { name: /review this run's generated materials/i })).toBeInTheDocument();
     expect(screen.getByText(/generated materials were teacher-confirmed/i)).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /confirm generated materials/i })).not.toBeInTheDocument();
     expect(getTask).toHaveBeenCalledWith("asg_demo123");
+
+    await user.click(screen.getByRole("button", { name: /start a fresh live run/i }));
+    expect(screen.queryByRole("heading", { name: /review this run's generated materials/i })).not.toBeInTheDocument();
   });
 
   it("runs the real API workflow in order without injecting fallback scores", async () => {
