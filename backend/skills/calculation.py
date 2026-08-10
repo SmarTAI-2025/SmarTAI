@@ -287,6 +287,7 @@ class CalculationSkill(GradingSkill):
             #  ↑ legal values:
             #    matched | mismatched | sympy_failed | no_reference | unsuitable
 
+            is_integral = False  # set True when ref comes from an LLM-generated integrate() call
             if reference and reference.strip():
                 ref_value = reference.strip()
                 ref_origin = "teacher"
@@ -296,6 +297,12 @@ class CalculationSkill(GradingSkill):
                     await self.reporter.substep(active_unit, "generate_sympy")
                 sympy_code = await _generate_sympy_program(self.provider, problem)
                 if sympy_code:
+                    # Indefinite-integral detection: SymPy's integrate() omits +C,
+                    # so a correct student answer that includes +C would be marked
+                    # mismatched by strict symbolic comparison.  When the LLM
+                    # generated an integrate() call, we verify via derivatives
+                    # instead (see Step 2).
+                    is_integral = "integrate(" in sympy_code
                     if self.reporter and active_unit:
                         await self.reporter.substep(active_unit, "run_sympy")
                     stdout = await _run_sympy_in_sandbox(sympy_code, timeout=10.0)
@@ -313,10 +320,17 @@ class CalculationSkill(GradingSkill):
                     await self.reporter.substep(active_unit, "sympy_verify")
                 student_expr = _extract_final_expression(student_text)
                 if student_expr:
-                    ok: Optional[bool] = await numerical.verify_equivalent(student_expr, ref_value)
-                    if ok is None:
-                        # symbolic compare failed → try numeric closeness
-                        ok = await numerical.verify_value(student_expr, ref_value, rel_tol=1e-6)
+                    if is_integral:
+                        # Indefinite-integral answer (no teacher reference):
+                        # compare derivatives so the +C constant vanishes.
+                        ok: Optional[bool] = await numerical.verify_derivative_equivalent(
+                            student_expr, ref_value
+                        )
+                    else:
+                        ok = await numerical.verify_equivalent(student_expr, ref_value)
+                        if ok is None:
+                            # symbolic compare failed → try numeric closeness
+                            ok = await numerical.verify_value(student_expr, ref_value, rel_tol=1e-6)
                     if ok is True:
                         sympy_status = "matched"
                     elif ok is False:

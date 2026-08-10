@@ -84,3 +84,39 @@ async def simplify_expression(expr: str) -> Optional[str]:
         return str(sympy.simplify(sympy.sympify(expr, convert_xor=True)))
     except Exception:
         return None
+
+
+async def verify_derivative_equivalent(
+    student_expr: str, target_expr: str
+) -> Optional[bool]:
+    """For indefinite-integral answers, compare derivatives instead of raw
+    expressions.
+
+    SymPy's ``integrate`` returns an antiderivative *without* the +C constant.
+    A student who correctly writes ``+C`` would therefore be marked mismatched
+    by :func:`verify_equivalent` (``simplify(s - t) == C != 0``).  Comparing
+    derivatives instead makes the constant vanish, so both ``x**2 + 3*x`` and
+    ``x**2 + 3*x + C`` verify against the AI-computed reference.
+
+    Only used for the *no-reference* branch (LLM-generated SymPy), where the
+    reference itself lacks +C.  When the teacher supplies a reference that
+    includes +C, the strict :func:`verify_equivalent` is used so that a student
+    who omits C is correctly marked wrong.
+
+    Returns:
+        True  if the derivatives w.r.t. ``x`` are equivalent
+        False if they differ
+        None  if verification cannot be performed
+    """
+    sympy = _try_import_sympy()
+    if sympy is None:
+        return None
+    try:
+        s = sympy.sympify(student_expr, convert_xor=True)
+        t = sympy.sympify(target_expr, convert_xor=True)
+        x = sympy.Symbol("x")
+        diff = sympy.simplify(sympy.diff(s, x) - sympy.diff(t, x))
+        return diff == 0
+    except Exception as e:
+        logger.debug(f"verify_derivative_equivalent failed: {e}")
+        return None
