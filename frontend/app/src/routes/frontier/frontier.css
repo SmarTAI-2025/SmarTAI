@@ -1,5 +1,5 @@
 .frontier-site {
-  --frontier-paper: #f7f8f4;
+  --frontier-paper: #fcfcfb;
   --frontier-graphite: #17202a;
   --frontier-cobalt: #2457d6;
   --frontier-cobalt-dark: #173d9c;
@@ -10,7 +10,7 @@
   min-height: 100vh;
   overflow: hidden;
   background:
-    radial-gradient(circle at 12% 0%, rgb(36 87 214 / 0.08), transparent 28rem),
+    radial-gradient(circle at 12% 0%, rgb(36 87 214 / 0.045), transparent 30rem),
     var(--frontier-paper);
   color: var(--frontier-graphite);
 }
