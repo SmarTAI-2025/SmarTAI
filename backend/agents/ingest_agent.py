@@ -54,6 +54,7 @@ PROB_SYSTEM_PROMPT = """You are a professional AI teaching assistant with gradua
     - **其他**: Does not fit into the above 5 categories.
 
     **[Important]: Preserve the stem information completely. Do not delete or translate content.**
+    For Markdown rendering, enclose every inline LaTeX expression in `$...$` and every display expression in `$$...$$`; never leave commands such as `\\int`, `\\mu`, or `\\times` bare in prose. Do not add math delimiters inside code blocks.
 
 4. **Design Grading Criteria (`criterion`)**: Express rubric allocations only as percentages whose scoring steps add up to 100%. If source criteria use absolute points, preserve their relative weighting but convert the allocations to percentages. Do not state or infer the question's maximum score; it is configured separately by the authenticated teacher. If no criteria are provided, design an appropriate percentage-based rubric for the problem type.
 
@@ -75,7 +76,7 @@ HW_SYSTEM_PROMPT = """You are a professional AI teaching assistant. Analyze a si
 
 1. **Identity Recognition**: Look for `stu_id` (student ID) and `stu_name` (name) in the **[Student Submission Content]** first. If not found in the content, try to extract them from the **[Filename]**. If you cannot find them in either place, set `stu_name` to "[Unknown Student]" and `stu_id` to the filename.
 
-2. **Answer Segmentation**: Based on the provided [Question Data], extract each student answer. If a student skipped a question, set "content" to empty string. Preserve content completely — do not delete or translate.
+2. **Answer Segmentation**: Based on the provided [Question Data], extract each student answer. If a student skipped a question, set "content" to empty string. Preserve content completely — do not delete or translate. Enclose inline LaTeX in `$...$` and display LaTeX in `$$...$$`; do not leave bare LaTeX commands in prose or add math delimiters inside code blocks.
 
 3. **Identify Reliability**: For each question, list any recognition issues in `flag` (empty list if none).
 
@@ -434,6 +435,7 @@ Your task:
 3. If a problem has no matching answer, omit that q_id from the mapping.
 
 **[Critical]: Do NOT reproduce the question stem in the answer text. Output ONLY the answer / solution portion (final result + key derivation steps if present). The same document may also contain the questions — strip them.**
+In prose fields, wrap inline LaTeX in `$...$` and display LaTeX in `$$...$$`; never leave LaTeX commands bare or add math delimiters inside code.
 
 **[Critical]: Output must be a single JSON object starting with `{` and ending with `}`. No preamble, no markdown fences.**
 **[Note]: Escape backslashes as `\\\\` in string values for LaTeX safety.**
@@ -662,6 +664,7 @@ Rules:
 - In organized mode, prefer explicit matching question numbers/headings.
 - In extract_from_source mode, use the extraction hint to locate the relevant source passage.
 - Empty or unsupported matches must be omitted, not guessed.
+- In prose fields, wrap inline LaTeX in `$...$` and display LaTeX in `$$...$$`; never add math delimiters inside code or test data.
 - Output JSON only, without markdown fences or commentary.
 """
 
@@ -798,6 +801,7 @@ Rules:
 - solution_code: only for programming questions; return reference implementation text, never run it.
 - test_cases: only for programming questions; return structured cases, at most the requested count.
 - For tests requiring GUI, network, files, special packages, or large resources, set sandbox_feasible=false.
+- In criterion and reference_answer prose, wrap inline LaTeX in `$...$` and display LaTeX in `$$...$$`; never add math delimiters inside solution_code or test data.
 - Omit a candidate rather than guess when the stem is insufficient.
 - Output JSON only, without markdown fences or commentary.
 """
