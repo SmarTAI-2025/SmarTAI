@@ -17,6 +17,7 @@ class CapturingVisionProvider(BaseProvider):
     def __init__(self):
         super().__init__(ProviderConfig(provider_type="openai", api_key="test", model="gpt-4o"))
         self.messages = None
+        self.response_content = "ok"
 
     def _build_client_sync(self):
         raise AssertionError("ainvoke_vision test should not build a real client")
@@ -24,7 +25,7 @@ class CapturingVisionProvider(BaseProvider):
     async def ainvoke(self, messages):
         self.messages = messages
         return LLMResponse(
-            content="ok",
+            content=self.response_content,
             provider=self.provider_id,
             model=self.model,
             duration_ms=1.0,
@@ -107,3 +108,18 @@ async def test_ocr_skill_preserves_provider_response_metadata():
     assert result.duration_ms == 1.0
     assert result.input_tokens == 12
     assert result.output_tokens == 3
+
+
+@pytest.mark.asyncio
+async def test_ocr_skill_requests_and_normalizes_markdown_math():
+    provider = CapturingVisionProvider()
+    provider.response_content = "Evaluate\n\\int_{0}^{1} x e^{x^2} dx."
+    skill = LLMVisionOCRSkill(provider)
+
+    result = await skill.recognize_images(
+        [OCRImage(data=b"abc", media_type="image/png", label="page.png")],
+        "problems",
+    )
+
+    assert "$...$" in provider.messages[0].content[0]["text"]
+    assert result.text == "Evaluate\n$\\int_{0}^{1} x e^{x^2} dx$."

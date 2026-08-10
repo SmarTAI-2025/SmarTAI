@@ -33,6 +33,13 @@ logger = logging.getLogger(__name__)
 
 T = TypeVar("T", bound=BaseModel)
 
+MATH_MARKDOWN_SYSTEM_INSTRUCTION = (
+    "\n\nMARKDOWN MATH CONTRACT: In every prose field, wrap inline mathematics in "
+    "`$...$` and display mathematics in `$$...$$`. Never leave LaTeX commands "
+    "such as `\\int`, `\\mu`, or `\\times` bare. Do not add math delimiters "
+    "inside source code, code blocks, test input, or expected output."
+)
+
 
 # ─── Exceptions ──────────────────────────────────────────────────────────────
 
@@ -155,23 +162,125 @@ def _fix_incomplete_json(json_str: str) -> str:
     return fixed
 
 
+_PROTECTED_MARKDOWN_RE = re.compile(
+    r"(```[\s\S]*?```|`[^`\n]*`|\$\$[\s\S]*?\$\$|(?<!\\)\$(?:\\.|[^$\n])+\$)"
+)
+_LEADING_MATH_RE = re.compile(
+    r"^\\(?:int|sum|prod|lim|frac|dfrac|tfrac|sqrt|ker|operatorname|lVert|Vert|begin)(?![A-Za-z])"
+)
+_SOURCE_CODE_START_RE = re.compile(
+    r"^\s*(?:def|class|async\s+def|import|from\s+\S+\s+import|function|const|let|var|"
+    r"public|private|protected|#include)\b",
+    re.MULTILINE,
+)
+_PROSE_WORD_RE = re.compile(
+    r"\b(?:show|find|prove|where|when|then|and|or|with|for|use|return|assume|explain)\b",
+    re.IGNORECASE,
+)
+_DEGREE_EXPRESSION_RE = re.compile(
+    r"(?<![\w$])(?P<base>[+-]?(?:\d+(?:\.\d+)?|[A-Za-z]))\s*\^\s*(?P<command>\\(?:circ|degree))\b"
+)
+_LATEX_ATOM_RE = re.compile(
+    r"(?:"
+    r"\\(?:d?frac|tfrac)\s*\{[^{}\n]*\}\s*\{[^{}\n]*\}"
+    r"|\\sqrt(?:\s*\[[^\]\n]*\])?\s*\{[^{}\n]*\}"
+    r"|\\(?:text|mathrm|mathbf|mathit|operatorname)\s*\{[^{}\n]*\}(?:\s*[_^](?:\{[^{}\n]*\}|[A-Za-z0-9]))*"
+    r"|\\(?:int|sum|prod|lim|ker|rank|sin|cos|tan|log|ln|exp|det|max|min|"
+    r"alpha|beta|gamma|delta|epsilon|theta|lambda|mu|nu|pi|rho|sigma|tau|phi|psi|omega|"
+    r"infty|partial|nabla|ell|lVert|rVert|Vert)"
+    r"(?:\s*[_^](?:\{[^{}\n]*\}|[A-Za-z0-9]))*(?:\s*\([^()\n]*\))?"
+    r"|\\(?:times|cdot|div|pm|mp|leq?|geq?|neq|approx|equiv|in|notin|subseteq|supseteq|to|mapsto)"
+    r")"
+)
+
+
 def format_math_and_quotes(text: str) -> str:
     if not isinstance(text, str):
+        return text
+    # Structured output occasionally contains an unfenced implementation in a
+    # generic text field. Never reinterpret source-code escape sequences as
+    # mathematics; code-specific fields are also excluded in `_clean_strings`.
+    if _SOURCE_CODE_START_RE.match(text):
         return text
     # Normalize standard LaTeX delimiters for the Markdown math renderer.
     text = re.sub(r'\\\[(.*?)\\\]', r'$$\1$$', text, flags=re.DOTALL)
     text = re.sub(r'\\\((.*?)\\\)', r'$\1$', text, flags=re.DOTALL)
     # Strip literal quotes hallucinated by LLM
     text = text.strip('"').strip("'")
-    return text
+    return _wrap_bare_latex(text)
 
-def _clean_strings(data: Any) -> Any:
+
+def _wrap_bare_latex(text: str) -> str:
+    """Add Markdown math delimiters around common bare LaTeX conservatively.
+
+    Prompting remains the first line of defence. This deterministic pass keeps
+    an occasional non-compliant model response renderable without touching
+    fenced/inline code or expressions that already carry math delimiters.
+    """
+    parts = _PROTECTED_MARKDOWN_RE.split(text)
+    return "".join(
+        part if not part or part.startswith(("$", "`")) else _wrap_bare_latex_segment(part)
+        for part in parts
+    )
+
+
+def _wrap_bare_latex_segment(segment: str) -> str:
+    lines = segment.splitlines(keepends=True)
+    return "".join(_wrap_bare_latex_line(line) for line in lines)
+
+
+def _wrap_bare_latex_line(line: str) -> str:
+    newline = "\n" if line.endswith("\n") else ""
+    body = line[:-1] if newline else line
+    leading = body[: len(body) - len(body.lstrip())]
+    trailing = body[len(body.rstrip()):]
+    core = body.strip()
+    if not core or "\\" not in core:
+        return line
+
+    # Formula-only lines from PDF extraction are common. Wrap the complete
+    # expression so integral bounds, operands, and equality chains stay intact.
+    if _LEADING_MATH_RE.match(core) and not _PROSE_WORD_RE.search(core):
+        punctuation = core[-1] if core[-1:] in {".", ",", ";", ":"} else ""
+        expression = core[:-1] if punctuation else core
+        return f"{leading}${expression}${punctuation}{trailing}{newline}"
+
+    # Inline degree notation needs its numeric/symbolic base inside the same
+    # math span; other known commands can safely render as individual atoms.
+    core = _DEGREE_EXPRESSION_RE.sub(
+        lambda match: f"${match.group('base')}^{match.group('command')}$",
+        core,
+    )
+    inline_parts = _PROTECTED_MARKDOWN_RE.split(core)
+    normalized = "".join(
+        part if not part or part.startswith(("$", "`")) else _LATEX_ATOM_RE.sub(lambda match: f"${match.group(0)}$", part)
+        for part in inline_parts
+    )
+    return f"{leading}{normalized}{trailing}{newline}"
+
+
+_CODE_FIELD_NAMES = frozenset(
+    {
+        "code",
+        "solution_code",
+        "reference_code",
+        "student_code",
+        "input",
+        "expected_output",
+        "expected_return",
+    }
+)
+
+
+def _clean_strings(data: Any, field_name: Optional[str] = None) -> Any:
     """Recursively clean strings in dicts/lists: strip literal quotes, format math."""
     if isinstance(data, dict):
-        return {k: _clean_strings(v) for k, v in data.items()}
+        return {k: _clean_strings(v, field_name=k) for k, v in data.items()}
     elif isinstance(data, list):
-        return [_clean_strings(v) for v in data]
+        return [_clean_strings(v, field_name=field_name) for v in data]
     elif isinstance(data, str):
+        if field_name in _CODE_FIELD_NAMES:
+            return data
         return format_math_and_quotes(data)
     return data
 
@@ -421,7 +530,10 @@ async def structured_llm_call(
         (parsed_model, raw_llm_response). The raw response is preserved for
         ExpertResult.raw_output traceability.
     """
-    messages = [SystemMessage(content=system_prompt), HumanMessage(content=user_prompt)]
+    messages = [
+        SystemMessage(content=system_prompt + MATH_MARKDOWN_SYSTEM_INSTRUCTION),
+        HumanMessage(content=user_prompt),
+    ]
 
     # Always use text generation + JSON extraction.
     # Native structured output (.with_structured_output) is skipped because:
