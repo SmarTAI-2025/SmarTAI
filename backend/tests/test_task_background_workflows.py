@@ -7,7 +7,7 @@ import uuid
 from types import SimpleNamespace
 
 import pytest
-from fastapi import UploadFile
+from fastapi import HTTPException, UploadFile
 from starlette.datastructures import Headers
 
 from backend.api import task_preparation, tasks
@@ -16,7 +16,7 @@ from backend.db.models import AssignmentRecord, CourseRecord, UserRecord
 from backend.db.session import session_scope
 from backend.domain.errors import InvalidTransition, ValidationError, VersionConflict
 from backend.services import task_facade
-from backend.tools.structured_llm import TransientLLMError
+from backend.tools.structured_llm import PermanentLLMError, RateLimitError, TransientLLMError
 
 
 def _seed_task(*, with_question: bool = False) -> tuple[str, str]:
@@ -461,6 +461,179 @@ def test_disabled_selected_recognition_provider_has_figma_error_code():
             registry=DisabledRegistry(), recognition_provider_id="disabled",
         )
     assert disabled.value.code == "recognition_provider_not_enabled"
+
+
+@pytest.mark.asyncio
+async def test_submission_ocr_without_vision_provider_has_figma_error_code(monkeypatch):
+    owner_id, task_id = _seed_task(with_question=True)
+
+    class NoVisionRegistry(_Registry):
+        def pick_vision(self, preferred=None):
+            del preferred
+            return None
+
+    async def _requires_vision(*args, **kwargs):
+        del args, kwargs
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "answers.pdf requires OCR, but no vision-capable provider is "
+                "configured. Add and enable a model that supports image input."
+            ),
+        )
+
+    monkeypatch.setattr(task_facade, "extract_files_from_archive", _requires_vision)
+    registry = NoVisionRegistry()
+    queued = task_facade.queue_task_submission_parsing(
+        task_id=task_id, owner_id=owner_id, filename="answers.zip",
+        content=b"archive", content_type="application/zip", registry=registry,
+    )
+
+    await task_facade.run_task_submission_parsing(
+        task_id=task_id,
+        owner_id=owner_id,
+        job_id=queued["job_id"],
+        filename="answers.zip",
+        content=b"archive",
+        registry=registry,
+        job_attempt=queued["_job_attempt"],
+        identity_mode="filename",
+        roster_entries=None,
+        recognition_provider_id=None,
+        replace_confirmed=False,
+        claimed_workflow_revision=queued["workflow_revision"],
+    )
+
+    failed = workflow_repository.get_operation(queued["job_id"], owner_id=owner_id)
+    workflow = workflow_repository.get_workflow(task_id, owner_id=owner_id)
+    assert failed.status == "error"
+    assert failed.error_code == "vision_provider_required"
+    assert workflow.presentation_status == "error"
+    assert workflow.error_code == "vision_provider_required"
+
+
+class _VisionlessRegistry(_Registry):
+    """_Registry plus a no-op ``pick_vision`` so background runners reach their work."""
+
+    def pick_vision(self, preferred=None):
+        del preferred
+        return None
+
+
+@pytest.mark.asyncio
+async def test_problem_extraction_timeout_persists_provider_timeout(monkeypatch):
+    owner_id, task_id = _seed_task()
+    registry = _VisionlessRegistry()
+
+    async def _timeout(*args, **kwargs):
+        del args, kwargs
+        try:
+            raise TimeoutError("provider request timed out")
+        except TimeoutError as exc:
+            raise TransientLLMError("provider request failed") from exc
+
+    monkeypatch.setattr(task_facade, "extract_text_from_upload", _timeout)
+    queued = task_facade.queue_task_problem_extraction(
+        task_id=task_id, owner_id=owner_id, filename="questions.pdf",
+        content=b"source", content_type="application/pdf", registry=registry,
+    )
+    await task_facade.run_task_problem_extraction(
+        task_id=task_id, owner_id=owner_id, job_id=queued["job_id"],
+        filename="questions.pdf", content=b"source", registry=registry,
+        job_attempt=queued["_job_attempt"],
+        claimed_workflow_revision=queued["workflow_revision"],
+        replace_confirmed=False,
+    )
+
+    failed = workflow_repository.get_operation(queued["job_id"], owner_id=owner_id)
+    workflow = workflow_repository.get_workflow(task_id, owner_id=owner_id)
+    assert failed.status == "error"
+    assert failed.error_code == "provider_timeout"
+    assert workflow.presentation_status == "error"
+    assert workflow.error_code == "provider_timeout"
+
+
+@pytest.mark.asyncio
+async def test_submission_rate_limit_persists_provider_rate_limited(monkeypatch):
+    owner_id, task_id = _seed_task(with_question=True)
+
+    async def _rate_limited(*args, **kwargs):
+        del args, kwargs
+        raise RateLimitError("429 Too Many Requests")
+
+    monkeypatch.setattr(task_facade, "extract_files_from_archive", _rate_limited)
+    registry = _VisionlessRegistry()
+    queued = task_facade.queue_task_submission_parsing(
+        task_id=task_id, owner_id=owner_id, filename="answers.zip",
+        content=b"archive", content_type="application/zip", registry=registry,
+    )
+    await task_facade.run_task_submission_parsing(
+        task_id=task_id, owner_id=owner_id, job_id=queued["job_id"],
+        filename="answers.zip", content=b"archive", registry=registry,
+        job_attempt=queued["_job_attempt"], identity_mode="filename",
+        roster_entries=None, recognition_provider_id=None,
+        replace_confirmed=False,
+        claimed_workflow_revision=queued["workflow_revision"],
+    )
+
+    failed = workflow_repository.get_operation(queued["job_id"], owner_id=owner_id)
+    assert failed.status == "error"
+    assert failed.error_code == "provider_rate_limited"
+
+
+@pytest.mark.asyncio
+async def test_submission_connection_error_persists_provider_unreachable(monkeypatch):
+    owner_id, task_id = _seed_task(with_question=True)
+
+    async def _unreachable(*args, **kwargs):
+        del args, kwargs
+        raise ConnectionError("failed to connect to provider")
+
+    monkeypatch.setattr(task_facade, "extract_files_from_archive", _unreachable)
+    registry = _VisionlessRegistry()
+    queued = task_facade.queue_task_submission_parsing(
+        task_id=task_id, owner_id=owner_id, filename="answers.zip",
+        content=b"archive", content_type="application/zip", registry=registry,
+    )
+    await task_facade.run_task_submission_parsing(
+        task_id=task_id, owner_id=owner_id, job_id=queued["job_id"],
+        filename="answers.zip", content=b"archive", registry=registry,
+        job_attempt=queued["_job_attempt"], identity_mode="filename",
+        roster_entries=None, recognition_provider_id=None,
+        replace_confirmed=False,
+        claimed_workflow_revision=queued["workflow_revision"],
+    )
+
+    failed = workflow_repository.get_operation(queued["job_id"], owner_id=owner_id)
+    assert failed.status == "error"
+    assert failed.error_code == "provider_unreachable"
+
+
+@pytest.mark.asyncio
+async def test_problem_extraction_auth_error_persists_provider_auth_failed(monkeypatch):
+    owner_id, task_id = _seed_task()
+    registry = _VisionlessRegistry()
+
+    async def _auth_failed(*args, **kwargs):
+        del args, kwargs
+        raise PermanentLLMError("401 invalid api key")
+
+    monkeypatch.setattr(task_facade, "extract_text_from_upload", _auth_failed)
+    queued = task_facade.queue_task_problem_extraction(
+        task_id=task_id, owner_id=owner_id, filename="questions.pdf",
+        content=b"source", content_type="application/pdf", registry=registry,
+    )
+    await task_facade.run_task_problem_extraction(
+        task_id=task_id, owner_id=owner_id, job_id=queued["job_id"],
+        filename="questions.pdf", content=b"source", registry=registry,
+        job_attempt=queued["_job_attempt"],
+        claimed_workflow_revision=queued["workflow_revision"],
+        replace_confirmed=False,
+    )
+
+    failed = workflow_repository.get_operation(queued["job_id"], owner_id=owner_id)
+    assert failed.status == "error"
+    assert failed.error_code == "provider_auth_failed"
 
 
 @pytest.mark.asyncio

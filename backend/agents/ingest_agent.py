@@ -288,7 +288,9 @@ async def parse_student_answers(
 
     semaphore = asyncio.Semaphore(20)
 
-    async def process_one(file_info: Dict[str, str]) -> tuple[Optional[Dict[str, Any]], Optional[str]]:
+    async def process_one(
+        file_info: Dict[str, str],
+    ) -> tuple[Optional[Dict[str, Any]], Optional[BaseException]]:
         async with semaphore:
             filename = file_info.get("filename", "")
             content = file_info.get("content", "")
@@ -362,7 +364,11 @@ async def parse_student_answers(
                         parse_failures=1,
                     )
                     await reporter.increment_completed()
-                return None, "submission_parse_failed"
+                # Preserve the exception object for the batch-level caller. If
+                # every file fails, its typed/cause chain is what lets the
+                # durable worker distinguish timeout, quota, auth, and network
+                # failures instead of collapsing them to submission_parse_failed.
+                return None, exc
 
     results = await asyncio.gather(*[process_one(f) for f in files_data])
 
@@ -383,10 +389,12 @@ async def parse_student_answers(
     # that affects every concurrent request identically, so we report the first
     # stable error code as representative.
     if not stu_dict and files_data:
-        first_err = next((err for (_r, err) in results if err), None) or "unknown error"
-        msg = f"All {len(files_data)} student files failed to parse ({first_err})."
+        first_err = next((err for (_r, err) in results if err), None)
+        msg = f"All {len(files_data)} student files failed to parse."
         if reporter:
             await reporter.set_error(msg)
+        if isinstance(first_err, BaseException):
+            raise RuntimeError(msg) from first_err
         raise RuntimeError(msg)
 
     return stu_dict
