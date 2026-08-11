@@ -41,6 +41,7 @@ def test_oci_command_contains_every_week_one_isolation_control(tmp_path: Path):
 
     assert "--network=none" in command
     assert "--read-only" in command
+    assert "--ipc=none" in command
     assert "--cap-drop=ALL" in command
     assert "--security-opt=no-new-privileges=true" in command
     assert f"--pids-limit={DEFAULT_PIDS_LIMIT}" in command
@@ -55,6 +56,27 @@ def test_oci_command_contains_every_week_one_isolation_control(tmp_path: Path):
     assert mount.endswith(",readonly")
     assert not any(item.startswith("--env-file") for item in command)
     assert not any("SMARTAI_" in item or "DATABASE_URL" in item for item in command)
+
+
+def test_podman_command_disables_implicit_writable_tmpfs_and_proxy_env(
+    tmp_path: Path,
+):
+    request_file = tmp_path / "request.json"
+    request_file.write_text("{}", encoding="utf-8")
+
+    command = build_container_command(
+        runtime="/usr/bin/podman",
+        image="runner:test",
+        request_file=request_file,
+        container_name="runner-spike-test",
+        memory_mb=256,
+    )
+
+    assert "--read-only-tmpfs=false" in command
+    assert "--http-proxy=false" in command
+    assert "--security-opt=no-new-privileges" in command
+    mount = next(item for item in command if item.startswith("--mount="))
+    assert mount.endswith(",readonly,relabel=private")
 
 
 def test_worker_clears_launcher_environment_and_matches_runner_contract(

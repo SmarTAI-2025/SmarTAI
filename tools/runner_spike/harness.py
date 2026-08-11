@@ -77,6 +77,30 @@ def build_container_command(
 ) -> list[str]:
     """Build the auditable OCI invocation used by every spike request."""
 
+    runtime_name = Path(runtime).name
+    security_option = (
+        "--security-opt=no-new-privileges"
+        if runtime_name == "podman"
+        else "--security-opt=no-new-privileges=true"
+    )
+    mount_option = (
+        "--mount=type=bind,"
+        f"source={request_file.resolve()},"
+        "target=/input/request.json,readonly"
+    )
+    runtime_specific: list[str] = []
+    if runtime_name == "podman":
+        # Podman otherwise creates writable /tmp, /var/tmp and /run mounts for
+        # a read-only container and may copy proxy variables from the host.
+        runtime_specific.extend(
+            [
+                "--read-only-tmpfs=false",
+                "--http-proxy=false",
+            ]
+        )
+        # Required on enforcing SELinux Oracle hosts for the ephemeral bind.
+        mount_option += ",relabel=private"
+
     return [
         runtime,
         "run",
@@ -84,8 +108,10 @@ def build_container_command(
         f"--name={container_name}",
         "--network=none",
         "--read-only",
+        "--ipc=none",
         "--cap-drop=ALL",
-        "--security-opt=no-new-privileges=true",
+        security_option,
+        *runtime_specific,
         f"--pids-limit={DEFAULT_PIDS_LIMIT}",
         f"--memory={memory_mb}m",
         f"--cpus={DEFAULT_CPU_LIMIT}",
@@ -98,11 +124,7 @@ def build_container_command(
             "--tmpfs=/work:rw,nosuid,nodev,noexec,"
             f"size={DEFAULT_TMPFS_MB}m,mode=0700,uid=65534,gid=65534"
         ),
-        (
-            "--mount=type=bind,"
-            f"source={request_file.resolve()},"
-            "target=/input/request.json,readonly"
-        ),
+        mount_option,
         "--env=HOME=/work",
         "--env=LANG=C.UTF-8",
         "--env=LC_ALL=C.UTF-8",
@@ -260,12 +282,28 @@ def run_probe(*, runtime: str, image: str = DEFAULT_IMAGE) -> dict[str, Any]:
     launcher_env[_SECRET_ENV_NAME] = "must-not-cross-container-boundary"
 
     env_code = f"""import json, os
+from pathlib import Path
 prefixes = ("SMARTAI_", "OPENAI_", "ANTHROPIC_", "GEMINI_", "GOOGLE_",
             "ZHIPU_", "DATABASE_", "AWS_", "S3_")
-forbidden = sorted(name for name in os.environ
-                   if name.startswith(prefixes) or name == "JWT_SECRET")
+
+def forbidden_keys(names):
+    return sorted(name for name in names
+                  if name.startswith(prefixes) or name == "JWT_SECRET")
+
+child_forbidden = forbidden_keys(os.environ)
+try:
+    parent_entries = Path("/proc/1/environ").read_bytes().split(b"\\0")
+    parent_names = [entry.split(b"=", 1)[0].decode(errors="replace")
+                    for entry in parent_entries if b"=" in entry]
+    parent_forbidden = forbidden_keys(parent_names)
+    parent_readable = True
+except OSError:
+    parent_forbidden = []
+    parent_readable = False
 print(json.dumps({{"sentinel_present": {_SECRET_ENV_NAME!r} in os.environ,
-                  "forbidden_keys": forbidden}}, sort_keys=True))
+                  "child_forbidden_keys": child_forbidden,
+                  "parent_forbidden_keys": parent_forbidden,
+                  "parent_readable": parent_readable}}, sort_keys=True))
 """
     network_code = """import json, socket
 tcp_blocked = False
@@ -304,11 +342,16 @@ host_visible = Path({str(sentinel)!r}).exists()
 root_write = write_allowed("/escape.txt")
 input_write = write_allowed("/input/escape.txt")
 work_write = write_allowed("/work/probe.txt")
+unexpected_writable = [path for path in ("/tmp/spike.txt",
+                                         "/var/tmp/spike.txt",
+                                         "/run/spike.txt")
+                       if write_allowed(path)]
 input_entries = sorted(item.name for item in Path("/input").iterdir())
 print(json.dumps({{"host_visible": host_visible,
                   "root_write": root_write,
                   "input_write": input_write,
                   "work_write": work_write,
+                  "unexpected_writable": unexpected_writable,
                   "input_entries": input_entries}}, sort_keys=True))
 """
 
@@ -317,7 +360,9 @@ print(json.dumps({{"host_visible": host_visible,
                 "production_env_cleared",
                 env_code,
                 lambda detail: detail.get("sentinel_present") is False
-                and detail.get("forbidden_keys") == [],
+                and detail.get("child_forbidden_keys") == []
+                and detail.get("parent_forbidden_keys") == []
+                and detail.get("parent_readable") is True,
                 5.0,
             ),
             (
@@ -334,6 +379,7 @@ print(json.dumps({{"host_visible": host_visible,
                 and detail.get("root_write") is False
                 and detail.get("input_write") is False
                 and detail.get("work_write") is True
+                and detail.get("unexpected_writable") == []
                 and detail.get("input_entries") == ["request.json"],
                 5.0,
             ),
