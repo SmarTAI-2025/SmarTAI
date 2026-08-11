@@ -569,13 +569,13 @@ function DemoResultInsights({ result, taskId, locale }: { result: TaskResultResp
   const passCount = validPercents.filter((value) => value >= 60).length;
   const passRate = validPercents.length ? Math.round((passCount / validPercents.length) * 100) : 0;
   const metricCards = [
-    { value: String(model.students.length), label: tx(locale, "学生", "Students"), className: "border-[#cbd8ff] bg-[#f1f4ff]", color: "#4f6ee8" },
-    { value: formatPercent(model.classAveragePercent), label: tx(locale, "班级平均得分率", "Class average"), className: "border-[#bfe8e4] bg-[#effaf8]", color: "#238f88" },
-    { value: String(model.reviewCount), label: tx(locale, "需教师关注题次", "Review signals"), className: "border-[#ffd4c6] bg-[#fff3ee]", color: "#dc6f54" },
-    { value: `${passRate}%`, label: tx(locale, "及格率", "Pass rate"), className: "border-[#dfd1ff] bg-[#f7f2ff]", color: "#7659ca" },
+    { value: String(model.students.length), label: tx(locale, "学生", "Students") },
+    { value: formatPercent(model.classAveragePercent), label: tx(locale, "班级平均得分率", "Class average") },
+    { value: String(model.reviewCount), label: tx(locale, "需教师关注题次", "Review signals") },
+    { value: `${passRate}%`, label: tx(locale, "及格率", "Pass rate") },
   ];
   return (
-    <section className="frontier-live-results mt-5 overflow-hidden rounded-[12px] border border-primary/20 bg-gradient-to-br from-[#fbfcff] via-card to-[#f8fcf9] p-4 sm:p-6" aria-labelledby="demo-result-insights-title">
+    <section className="frontier-live-results mt-5 overflow-hidden rounded-[12px] border border-primary/20 bg-card p-4 sm:p-6" aria-labelledby="demo-result-insights-title">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
         <div>
           <p className="text-xs font-semibold uppercase tracking-[0.12em] text-primary">{tx(locale, "真实批改 · 即时分析", "Live grading · instant analysis")}</p>
@@ -592,8 +592,8 @@ function DemoResultInsights({ result, taskId, locale }: { result: TaskResultResp
 
       <div className="mt-5 grid grid-cols-2 gap-3 lg:grid-cols-4">
         {metricCards.map((card, index) => (
-          <div key={card.label} className={cn("frontier-live-reveal rounded-[10px] border px-4 py-4 shadow-sm", card.className)} style={{ animationDelay: `${index * 80}ms` }}>
-            <strong className="text-2xl" style={{ color: card.color }}>{card.value}</strong>
+          <div key={card.label} className="frontier-live-reveal rounded-[10px] border bg-card px-4 py-4 shadow-sm" style={{ animationDelay: `${index * 80}ms` }}>
+            <strong className="text-2xl text-primary">{card.value}</strong>
             <span className="mt-1 block text-[11px] font-medium text-muted-foreground">{card.label}</span>
           </div>
         ))}
@@ -601,9 +601,9 @@ function DemoResultInsights({ result, taskId, locale }: { result: TaskResultResp
 
       <LiveResultCarousel model={model} locale={locale} />
 
-      <div className="mt-4 flex flex-wrap items-center justify-between gap-3 rounded-[10px] border border-amber-200 bg-amber-50/90 px-4 py-3 text-xs text-amber-900">
+      <div className="mt-4 flex flex-wrap items-center justify-between gap-3 rounded-[10px] bg-muted/60 px-4 py-3 text-xs text-foreground">
         <span>{tx(locale, `当前总分为 AI 初评；${model.reviewCount} 个题次仍需教师按证据复核。`, `These totals are AI provisional scores; ${model.reviewCount} responses still require evidence-based teacher review.`)}</span>
-        <span className="font-semibold">{tx(locale, `班级平均 ${formatScore(model.classAverageScore)} 分`, `Class mean ${formatScore(model.classAverageScore)} points`)}</span>
+        <span className="font-semibold text-primary">{tx(locale, `班级平均 ${formatScore(model.classAverageScore)} 分`, `Class mean ${formatScore(model.classAverageScore)} points`)}</span>
       </div>
     </section>
   );
@@ -648,7 +648,7 @@ function LiveResultCarousel({ model, locale }: { model: ReturnType<typeof buildR
         if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setPointerPaused(false);
       }}
     >
-      <div className="flex flex-col gap-3 border-b border-[#e2e7f2] bg-gradient-to-r from-[#f5f7ff] via-[#fff9f4] to-[#f3fbf7] px-4 py-4 sm:flex-row sm:items-center sm:justify-between sm:px-5">
+      <div className="flex flex-col gap-3 border-b bg-muted/35 px-4 py-4 sm:flex-row sm:items-center sm:justify-between sm:px-5">
         <div>
           <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-primary">{tx(locale, "真实数据 · 动态图集", "Live data · rotating gallery")}</p>
           <h4 className="mt-1 inline-flex items-center gap-2 text-sm font-bold"><BarChart3 className="h-4 w-4 text-primary" />{slideLabels[activeSlide]}</h4>
@@ -703,7 +703,7 @@ function StudentPathChart({ model, locale }: { model: ReturnType<typeof buildRes
   }));
   return (
     <div className="grid gap-5 lg:grid-cols-[minmax(0,1.4fr)_minmax(210px,0.6fr)] lg:items-center">
-      <div className="rounded-[10px] border border-[#d4def8] bg-[#f5f7ff] p-3">
+      <div className="rounded-[10px] border bg-card p-3">
         <svg viewBox="0 0 720 270" className="h-[240px] w-full" role="img" aria-label={tx(locale, "学生总分率折线图", "Student total score line chart")}>
           <defs><linearGradient id="frontier-score-line" x1="0" x2="1"><stop stopColor="#5B7CFA" /><stop offset="0.5" stopColor="#B8A5FF" /><stop offset="1" stopColor="#5FD6D1" /></linearGradient></defs>
           {[25, 50, 75, 100].map((tick) => <g key={tick}><line x1="58" x2="672" y1={226 - tick * 1.75} y2={226 - tick * 1.75} stroke="#dce3f3" strokeDasharray="4 7" /><text x="12" y={230 - tick * 1.75} fill="#7d879b" fontSize="11">{tick}%</text></g>)}
@@ -712,11 +712,11 @@ function StudentPathChart({ model, locale }: { model: ReturnType<typeof buildRes
         </svg>
       </div>
       <div>
-        <p className="text-xs font-semibold uppercase tracking-[0.12em] text-[#4f6ee8]">{tx(locale, "逐位学生", "Student by student")}</p>
+        <p className="text-xs font-semibold uppercase tracking-[0.12em] text-primary">{tx(locale, "逐位学生", "Student by student")}</p>
         <h5 className="mt-2 text-xl font-bold">{tx(locale, "总分率一眼可比", "Compare total score rates")}</h5>
         <p className="mt-2 text-xs leading-5 text-muted-foreground">{tx(locale, "每个点均来自本次真实批改总分；连接线只帮助阅读，不代表时间趋势。", "Every point comes from this live grading total. The connecting line aids comparison and is not a time trend.")}</p>
         <div className="mt-4 grid grid-cols-2 gap-2">
-          {model.students.map((student, index) => <div key={student.id} className="rounded-lg border bg-card px-3 py-2"><span className="block truncate text-[10px] text-muted-foreground">{student.name}</span><strong style={{ color: ["#4f6ee8", "#238f88", "#dc6f54", "#7659ca"][index % 4] }}>{formatPercent(student.percent)}</strong></div>)}
+          {model.students.map((student) => <div key={student.id} className="rounded-lg border bg-card px-3 py-2"><span className="block truncate text-[10px] text-muted-foreground">{student.name}</span><strong className="text-primary">{formatPercent(student.percent)}</strong></div>)}
         </div>
       </div>
     </div>
@@ -734,11 +734,11 @@ function ScoreDistributionChart({ model, locale }: { model: ReturnType<typeof bu
   const maxCount = Math.max(1, ...buckets.map((bucket) => bucket.count));
   return (
     <div className="grid gap-5 lg:grid-cols-[minmax(0,1.4fr)_minmax(210px,0.6fr)] lg:items-center">
-      <div className="flex h-[270px] items-end justify-around gap-3 rounded-[10px] border border-[#ffe0c9] bg-[#fff8f2] px-5 pb-5 pt-8">
+      <div className="flex h-[270px] items-end justify-around gap-3 rounded-[10px] border bg-card px-5 pb-5 pt-8">
         {buckets.map((bucket) => <div key={bucket.label} className="flex h-full min-w-0 flex-1 flex-col items-center justify-end"><span className="mb-2 text-sm font-bold" style={{ color: bucket.color }}>{bucket.count}</span><span className="frontier-live-column w-full max-w-20 rounded-t-[14px]" style={{ height: `${Math.max(8, (bucket.count / maxCount) * 165)}px`, background: `linear-gradient(180deg, ${bucket.color}, ${bucket.color}aa)` }} /><span className="mt-3 text-[10px] font-semibold text-muted-foreground">{bucket.label}%</span></div>)}
       </div>
       <div>
-        <p className="text-xs font-semibold uppercase tracking-[0.12em] text-[#dc7a48]">{tx(locale, "分布直方图", "Score histogram")}</p>
+        <p className="text-xs font-semibold uppercase tracking-[0.12em] text-primary">{tx(locale, "分布直方图", "Score histogram")}</p>
         <h5 className="mt-2 text-xl font-bold">{tx(locale, "班级成绩落在哪些区间", "Where the class scores fall")}</h5>
         <p className="mt-2 text-xs leading-5 text-muted-foreground">{tx(locale, "柱高由本次真实学生总分率分箱计算，不使用宣传页预置数据。", "Column heights are bucketed from this run's student totals, never from showcase fixture data.")}</p>
       </div>
@@ -750,7 +750,7 @@ function QuestionScatterChart({ model, locale }: { model: ReturnType<typeof buil
   const points = model.questions.map((question, index) => ({ question, x: 92 + index * (model.questions.length <= 1 ? 0 : 520 / (model.questions.length - 1)), y: 226 - ((question.avgPercent ?? 0) * 1.75) }));
   return (
     <div className="grid gap-5 lg:grid-cols-[minmax(0,1.4fr)_minmax(210px,0.6fr)] lg:items-center">
-      <div className="rounded-[10px] border border-[#d9cff8] bg-[#f8f4ff] p-3">
+      <div className="rounded-[10px] border bg-card p-3">
         <svg viewBox="0 0 720 270" className="h-[240px] w-full" role="img" aria-label={tx(locale, "逐题平均得分率散点图", "Question average scatter plot")}>
           {[25, 50, 75, 100].map((tick) => <g key={tick}><line x1="58" x2="672" y1={226 - tick * 1.75} y2={226 - tick * 1.75} stroke="#e4ddf4" /><text x="12" y={230 - tick * 1.75} fill="#827894" fontSize="11">{tick}%</text></g>)}
           <line x1="58" x2="672" y1={121} y2={121} stroke="#FF9F8D" strokeDasharray="8 7" strokeWidth="2" />
@@ -758,7 +758,7 @@ function QuestionScatterChart({ model, locale }: { model: ReturnType<typeof buil
         </svg>
       </div>
       <div>
-        <p className="text-xs font-semibold uppercase tracking-[0.12em] text-[#7659ca]">{tx(locale, "逐题散点", "Question scatter")}</p>
+        <p className="text-xs font-semibold uppercase tracking-[0.12em] text-primary">{tx(locale, "逐题散点", "Question scatter")}</p>
         <h5 className="mt-2 text-xl font-bold">{tx(locale, "定位难题与复核密度", "Locate hard questions and review density")}</h5>
         <p className="mt-2 text-xs leading-5 text-muted-foreground">{tx(locale, "纵轴是本次逐题平均得分率；点越大，需复核的作答越多。", "The vertical position is this run's question average; larger dots indicate more responses needing review.")}</p>
       </div>
@@ -772,17 +772,17 @@ function ReviewSignalChart({ model, locale }: { model: ReturnType<typeof buildRe
   const reviewPercent = totalUnits ? Math.round((model.reviewCount / totalUnits) * 100) : 0;
   return (
     <div className="grid gap-6 lg:grid-cols-[minmax(260px,0.8fr)_minmax(0,1.2fr)] lg:items-center">
-      <div className="flex min-h-[270px] items-center justify-center rounded-[10px] border border-[#c9e8da] bg-[#f2fbf7] p-5">
+      <div className="flex min-h-[270px] items-center justify-center rounded-[10px] border bg-card p-5">
         <div className="relative h-48 w-48 rounded-full shadow-inner" style={{ background: `conic-gradient(#FFB69E 0 ${reviewPercent}%, #A7E3C1 ${reviewPercent}% 100%)` }}>
-          <div className="absolute inset-8 flex flex-col items-center justify-center rounded-full bg-card shadow-sm"><strong className="text-3xl text-[#3b8f74]">{reviewPercent}%</strong><span className="mt-1 text-[10px] font-semibold text-muted-foreground">{tx(locale, "需复核", "review")}</span></div>
+          <div className="absolute inset-8 flex flex-col items-center justify-center rounded-full bg-card shadow-sm"><strong className="text-3xl text-primary">{reviewPercent}%</strong><span className="mt-1 text-[10px] font-semibold text-muted-foreground">{tx(locale, "需复核", "review")}</span></div>
         </div>
       </div>
       <div>
-        <p className="text-xs font-semibold uppercase tracking-[0.12em] text-[#3b8f74]">{tx(locale, "教师复核信号", "Teacher review signals")}</p>
+        <p className="text-xs font-semibold uppercase tracking-[0.12em] text-primary">{tx(locale, "教师复核信号", "Teacher review signals")}</p>
         <h5 className="mt-2 text-xl font-bold">{tx(locale, "把注意力放在需要判断的地方", "Focus attention where judgment is needed")}</h5>
         <p className="mt-2 max-w-lg text-xs leading-5 text-muted-foreground">{tx(locale, "环图按本次真实批改的复核标记计算；它不替教师作决定。", "The ring is computed from this run's actual review flags; it never makes the teacher's decision.")}</p>
         <div className="mt-5 grid grid-cols-3 gap-2">
-          {[{ value: totalUnits, label: tx(locale, "作答单元", "Answer units"), color: "#5B7CFA" }, { value: model.reviewCount, label: tx(locale, "需复核", "Review"), color: "#dc6f54" }, { value: clearUnits, label: tx(locale, "无复核标记", "No flag"), color: "#3b8f74" }].map((item) => <div key={item.label} className="rounded-lg border bg-card px-3 py-3"><strong className="text-xl" style={{ color: item.color }}>{item.value}</strong><span className="mt-1 block text-[10px] text-muted-foreground">{item.label}</span></div>)}
+          {[{ value: totalUnits, label: tx(locale, "作答单元", "Answer units") }, { value: model.reviewCount, label: tx(locale, "需复核", "Review") }, { value: clearUnits, label: tx(locale, "无复核标记", "No flag") }].map((item) => <div key={item.label} className="rounded-lg border bg-card px-3 py-3"><strong className="text-xl text-primary">{item.value}</strong><span className="mt-1 block text-[10px] text-muted-foreground">{item.label}</span></div>)}
         </div>
       </div>
     </div>
