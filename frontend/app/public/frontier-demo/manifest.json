@@ -19,13 +19,13 @@
     },
     {
       "path": "DEMO-002_handwritten.pdf",
-      "bytes": 450186,
-      "sha256": "6256141acbac69fd7b3430ee41c8a9c2c96edb7e9f240543ca608746cdacfcf3"
+      "bytes": 450158,
+      "sha256": "e30ec297a2c78aaa6359c756061c3396f85d91e4749c67ff34a071cdbba526a9"
     },
     {
       "path": "DEMO-002_handwritten.png",
-      "bytes": 482945,
-      "sha256": "0b0fff439209d78f219b84503ca3703eedc44be7631a514d003c479cf78da254"
+      "bytes": 480283,
+      "sha256": "951e021503b5b88fbfb4f0f7fd008eb60ab943f00d2a4d2360d23e703cbf4d7e"
     },
     {
       "path": "DEMO-003_mixed.pdf",
@@ -35,7 +35,7 @@
     {
       "path": "SHA256SUMS",
       "bytes": 1452,
-      "sha256": "a17a7ac5f7a4277e456e4dce25da0a9cf45ed41bacefaeaab92252b3ce79fae3"
+      "sha256": "1817f262e8b2d2b2e9eedd2c39986a0a5372a1c0b08f6322db2230058202b55c"
     },
     {
       "path": "assignment_mixed_stem.pdf",
@@ -49,13 +49,13 @@
     },
     {
       "path": "live/DEMO-002_handwritten_raw.pdf",
-      "bytes": 416896,
-      "sha256": "1738ffb15533e1e707acdf0946f2b0a714e4a68bbc837cb34fe9e6c275366a9b"
+      "bytes": 416670,
+      "sha256": "28b90146d57b8bb6386cf17ea1276d9f9a29446e7a6d1d5955dd211d9d7f1018"
     },
     {
       "path": "live/DEMO-002_handwritten_raw.png",
-      "bytes": 453207,
-      "sha256": "b269c15f86335d45390632cd979e72f4ea3591eab6abdf033cc9f467d5573474"
+      "bytes": 450760,
+      "sha256": "ed5e1f52adff2ba16b45168f17d265e622f37f3ad0e7dad45013a83a3a55d87c"
     },
     {
       "path": "live/DEMO-003_mixed_raw.pdf",
@@ -69,18 +69,18 @@
     },
     {
       "path": "live/scan_004_raw.pdf",
-      "bytes": 317691,
-      "sha256": "91f903974844eefaa95d9fcccdebd94996aec25c87675f1666290fa2fab1582d"
+      "bytes": 311026,
+      "sha256": "84489e304220f1aa263a1ce49704883ae0b9b5bb7123b993dea98967fba13905"
     },
     {
       "path": "live/scan_004_raw.png",
-      "bytes": 360099,
-      "sha256": "241587ea6a98a11988f44e3e954a6b5b2bf597cccad44a37618df6f5e7e3190b"
+      "bytes": 359751,
+      "sha256": "b632c97d7408ecad241fc57b1e17f39368f67488cd26fda410bd30182d7c1e0e"
     },
     {
       "path": "live/submissions_raw.zip",
-      "bytes": 1055298,
-      "sha256": "cd5f6d26d11417db48c9bdce07d5dafbe1eb517449e4691c4b5245ee959a8fd7"
+      "bytes": 1052248,
+      "sha256": "69dae88d58d4c33fd6b565508295320d9ea7d785945a7ee40393ea84e9a34e54"
     },
     {
       "path": "live/teacher_rubric_reference.pdf",
@@ -89,13 +89,13 @@
     },
     {
       "path": "scan_004.pdf",
-      "bytes": 317691,
-      "sha256": "91f903974844eefaa95d9fcccdebd94996aec25c87675f1666290fa2fab1582d"
+      "bytes": 311026,
+      "sha256": "84489e304220f1aa263a1ce49704883ae0b9b5bb7123b993dea98967fba13905"
     },
     {
       "path": "scan_004.png",
-      "bytes": 360099,
-      "sha256": "241587ea6a98a11988f44e3e954a6b5b2bf597cccad44a37618df6f5e7e3190b"
+      "bytes": 359751,
+      "sha256": "b632c97d7408ecad241fc57b1e17f39368f67488cd26fda410bd30182d7c1e0e"
     }
   ]
 }

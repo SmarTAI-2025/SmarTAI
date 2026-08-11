@@ -32,6 +32,8 @@ import {
 import { Button } from "@/components/ui/Button";
 import { InlineNotice } from "@/components/ui/InlineNotice";
 import { MarkdownMath } from "@/components/ui/MarkdownMath";
+import { SyntaxHighlightedCode } from "@/components/ui/SyntaxHighlightedCode";
+import { PdfDocumentPreview } from "@/components/tasks/PdfDocumentPreview";
 import { buildResultsModel, formatPercent, formatScore } from "@/components/tasks/resultsModel";
 import { useI18n } from "@/i18n/I18nProvider";
 import type { Locale } from "@/i18n/messages";
@@ -409,6 +411,17 @@ export function FrontierLiveDemoPage() {
               {busy ? tx(locale, "正在运行真实流程…", "Running real workflow…") : taskId ? tx(locale, "开始新的真实运行", "Start a fresh live run") : tx(locale, "开始真实 OCR + 批改", "Start real OCR + grading")}
             </Button>
             {taskId ? <TaskLinks taskId={taskId} status={snapshot?.status} locale={locale} /> : null}
+            {teacherReviewTask && !materialsConfirmed ? (
+              <Button variant="secondary" className="h-11 px-5" onClick={() => void confirmTeacherMaterials()} disabled={busy}>
+                {busy ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />}
+                {tx(locale, "确认题目资料并继续", "Confirm question materials and continue")}
+              </Button>
+            ) : submissionReviewTask ? (
+              <Button variant="secondary" className="h-11 px-5" onClick={() => void confirmSubmissionReview()} disabled={busy}>
+                {busy ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
+                {tx(locale, "确认作答并继续批改", "Confirm submissions and continue grading")}
+              </Button>
+            ) : null}
           </div>
 
           <div className="mt-5 flex flex-wrap gap-x-5 gap-y-2 text-xs text-muted-foreground">
@@ -437,9 +450,17 @@ export function FrontierLiveDemoPage() {
               <div className="flex items-center gap-2 text-sm font-bold"><FileText className="h-4 w-4 text-primary" />{tx(locale, "原始题目样例", "Raw question fixture")}</div>
               <a href={QUESTION_FIXTURE} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-xs font-semibold text-primary hover:underline">{tx(locale, "打开", "Open")} <ExternalLink className="h-3.5 w-3.5" /></a>
             </div>
-            <object data={QUESTION_FIXTURE} type="application/pdf" title="Synthetic raw question source" className="h-[310px] w-full bg-white">
-              <a href={QUESTION_FIXTURE}>{tx(locale, "打开题目 PDF", "Open the question PDF")}</a>
-            </object>
+            <div className="flex h-[310px] items-center justify-center overflow-hidden bg-slate-200">
+              <PdfDocumentPreview
+                url={QUESTION_FIXTURE}
+                title="Synthetic raw question source"
+                loadingLabel={tx(locale, "正在载入原始题目…", "Loading raw questions…")}
+                errorTitle={tx(locale, "暂时无法显示题目 PDF", "The question PDF could not be displayed")}
+                errorDescription={tx(locale, "可重试渲染，或在新窗口打开原文件。", "Retry the preview or open the original in a new window.")}
+                retryLabel={tx(locale, "重新载入", "Retry")}
+                openLabel={tx(locale, "打开原文件", "Open original")}
+              />
+            </div>
           </section>
           <section className="overflow-hidden rounded-[12px] border bg-card shadow-sm">
             <div className="flex items-center justify-between border-b px-4 py-3">
@@ -603,7 +624,7 @@ function LiveResultCarousel({ model, locale }: { model: ReturnType<typeof buildR
 
   useEffect(() => {
     if (manuallyPaused || pointerPaused || reducedMotion) return;
-    const timer = window.setInterval(() => setActiveSlide((current) => (current + 1) % slideLabels.length), 4_500);
+    const timer = window.setInterval(() => setActiveSlide((current) => (current + 1) % slideLabels.length), 3_000);
     return () => window.clearInterval(timer);
   }, [manuallyPaused, pointerPaused, reducedMotion, slideLabels.length]);
 
@@ -810,7 +831,7 @@ function TeacherMaterialConfirmation({
                 <p className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">{tx(locale, "本次生成的评分依据与标答", "Rubric and answer generated in this run")}</p>
                 <MarkdownMath className="mt-1 text-xs leading-5 text-foreground">{problem.criterion}</MarkdownMath>
                 <MarkdownMath className="mt-2 border-t pt-2 text-xs leading-5 text-muted-foreground">{problem.reference_answer ?? ""}</MarkdownMath>
-                {problem.solution_code ? <pre className="mt-2 overflow-auto rounded-md bg-slate-950 p-2 text-[11px] text-slate-100"><code>{problem.solution_code}</code></pre> : null}
+                {problem.solution_code ? <div className="mt-2 overflow-auto rounded-md bg-slate-950 p-2 text-[11px] text-slate-100"><SyntaxHighlightedCode code={problem.solution_code} languageHint={`${problem.type}\n${problem.stem}`} locale={locale} /></div> : null}
                 {problem.test_cases?.length ? <p className="mt-2 text-[11px] font-semibold text-accent">{tx(locale, `${problem.test_cases.length} 个代码测试样例已生成`, `${problem.test_cases.length} programming tests generated`)}</p> : null}
               </div>
             </div>

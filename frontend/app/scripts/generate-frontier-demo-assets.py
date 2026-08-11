@@ -32,7 +32,7 @@ STIX_BOLD = Path("/System/Library/Fonts/Supplemental/Times New Roman Bold.ttf")
 STIX_ITALIC = Path("/System/Library/Fonts/Supplemental/STIXTwoText-Italic.ttf")
 HAND = Path("/System/Library/Fonts/Noteworthy.ttc")
 HAND_FALLBACK = Path("/System/Library/Fonts/Supplemental/Bradley Hand Bold.ttf")
-MATH = Path("/System/Library/Fonts/Supplemental/STIXGeneralItalic.otf")
+HAND_SECONDARY = Path("/System/Library/Fonts/Supplemental/Bradley Hand Bold.ttf")
 
 INK = HexColor("#17202A")
 BLUE = HexColor("#2457D6")
@@ -491,6 +491,36 @@ def rotated_text(image: Image.Image, xy: tuple[int, int], text: str, font: Image
     image.paste(layer, xy, layer)
 
 
+def rotated_segments(
+    image: Image.Image,
+    xy: tuple[int, int],
+    segments: list[tuple[str, ImageFont.FreeTypeFont, int]],
+    fill: tuple[int, int, int],
+    angle: float,
+) -> None:
+    """Draw one handwritten line with real, raised superscript glyphs."""
+    layer = Image.new("RGBA", (1220, 130), (255, 255, 255, 0))
+    layer_draw = ImageDraw.Draw(layer)
+    cursor = 18.0
+    baseline_top = 42
+    for text, font, vertical_offset in segments:
+        box = font.getbbox(text)
+        layer_draw.text(
+            (cursor, baseline_top + vertical_offset - box[1]),
+            text,
+            font=font,
+            fill=(*fill, 255),
+        )
+        cursor += layer_draw.textlength(text, font=font)
+    occupied = layer.getbbox()
+    if occupied is None:
+        return
+    left, top, right, bottom = occupied
+    layer = layer.crop((max(0, left - 10), max(0, top - 10), min(layer.width, right + 10), min(layer.height, bottom + 10)))
+    layer = layer.rotate(angle, resample=Image.Resampling.BICUBIC, expand=True)
+    image.paste(layer, xy, layer)
+
+
 def generate_handwritten_submission() -> tuple[Path, Path, Path, Path]:
     rng = random.Random(20260812)
     image = paper(20260812)
@@ -498,7 +528,11 @@ def generate_handwritten_submission() -> tuple[Path, Path, Path, Path]:
     hand_path = HAND if HAND.exists() else HAND_FALLBACK
     hand = load_font(hand_path, 48)
     hand_small = load_font(hand_path, 40)
-    math_font = load_font(MATH, 43)
+    hand_super = load_font(hand_path, 29)
+    # Keep mathematical symbols in the same handwritten face as the rest of
+    # Maya's response.  STIXGeneralItalic lacks glyphs such as integral signs,
+    # radicals, subscripts and transpose marks and silently renders blanks.
+    math_font = load_font(hand_path, 40)
     utility = load_font(STIX, 25)
     utility_bold = load_font(STIX_BOLD, 31)
     blue = (27, 67, 143)
@@ -508,13 +542,10 @@ def generate_handwritten_submission() -> tuple[Path, Path, Path, Path]:
     draw.text((235, 108), "mixed STEM responses", font=hand, fill=blue)
     draw.text((1090, 120), "synthetic", font=utility, fill=(100, 108, 113))
     entries = [
-        (220, "Q1   u = x^2,  du = 2x dx", hand_small),
-        (300, "I = [exp(u)]_0^1 = e - 1", math_font),
-        (465, "Q2   μ = 0.20    N = mg cos 30 deg", hand_small),
-        (545, "a = g(sin 30 deg - μ cos 30 deg) = 3.20", math_font),
-        (625, "v = sqrt(2as) = 4.38 m/s", math_font),
-        (800, "Q3   If A^T A x = 0, then Ax = 0", hand_small),
-        (880, "because A^T cancels A.", hand_small),
+        (220, "Q1   u = x²,  du = 2x dx", hand_small),
+        (465, "Q2   μ = 0.20    N = mg cos 30°", hand_small),
+        (545, "a = g(sin 30° − μ cos 30°) = 3.20", math_font),
+        (625, "v = √(2as) = 4.38 m/s", math_font),
         (1050, "Q4", hand_small),
         (1130, "m = max(xs)", hand_small),
         (1210, "z = [exp(x-m) for x in xs]", hand_small),
@@ -522,6 +553,27 @@ def generate_handwritten_submission() -> tuple[Path, Path, Path, Path]:
     ]
     for y, text, font in entries:
         rotated_text(image, (235 + rng.randint(-8, 8), y), text, font, blue, rng.uniform(-1.1, 1.1))
+    rotated_segments(
+        image,
+        (235 + rng.randint(-8, 8), 300),
+        [("I = ½∫₀¹ e", math_font, 0), ("u", hand_super, -18), (" du = ½(e − 1)", math_font, 0)],
+        blue,
+        rng.uniform(-1.1, 1.1),
+    )
+    rotated_segments(
+        image,
+        (235 + rng.randint(-8, 8), 800),
+        [("Q3   If A", hand_small, 0), ("T", hand_super, -18), ("Ax = 0, then Ax = 0", hand_small, 0)],
+        blue,
+        rng.uniform(-1.1, 1.1),
+    )
+    rotated_segments(
+        image,
+        (235 + rng.randint(-8, 8), 880),
+        [("because A", hand_small, 0), ("T", hand_super, -18), (" cancels A.", hand_small, 0)],
+        blue,
+        rng.uniform(-1.1, 1.1),
+    )
     raw_image = image.copy()
     raw_draw = ImageDraw.Draw(raw_image)
     raw_draw.text((235, 1935), "SYNTHETIC DEMO DOCUMENT - raw student input", font=utility, fill=(98, 106, 112))
@@ -550,7 +602,7 @@ def generate_handwritten_submission() -> tuple[Path, Path, Path, Path]:
 def generate_scanned_submission() -> tuple[Path, Path, Path, Path]:
     image = paper(20260813)
     draw = ImageDraw.Draw(image)
-    hand_path = HAND if HAND.exists() else HAND_FALLBACK
+    hand_path = HAND_SECONDARY if HAND_SECONDARY.exists() else HAND_FALLBACK
     hand = load_font(hand_path, 43)
     hand_small = load_font(hand_path, 37)
     utility = load_font(STIX, 25)
@@ -558,8 +610,8 @@ def generate_scanned_submission() -> tuple[Path, Path, Path, Path]:
     graphite = (44, 48, 54)
     draw.text((230, 55), "Student: Taylor Singh", font=utility_bold, fill=graphite)
     draw.text((1030, 58), "ID: DEMO-004", font=utility, fill=graphite)
-    rotated_text(image, (230, 235), "Q1  I = (e - 1) / 2", hand, graphite, -0.8)
-    rotated_text(image, (230, 470), "Q2  a ~ 3.2    v ~ 4.4", hand, graphite, 0.7)
+    rotated_text(image, (230, 235), "Q1  I = ½(e − 1)", hand, graphite, -0.8)
+    rotated_text(image, (230, 470), "Q2  a ≈ 3.2    v ≈ 4.4", hand, graphite, 0.7)
     draw.rectangle((215, 690, 1340, 980), outline=(176, 178, 176), width=3)
     draw.text((245, 720), "Q3", font=hand, fill=graphite)
     rotated_text(image, (230, 1080), "Q4", hand, graphite, -0.5)

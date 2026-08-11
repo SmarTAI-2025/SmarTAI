@@ -31,6 +31,10 @@ vi.mock("@/api/gradingSetup", () => ({
   saveGradingSetup: vi.fn(),
 }));
 
+vi.mock("@/components/tasks/PdfDocumentPreview", () => ({
+  PdfDocumentPreview: ({ title }: { title: string }) => <div role="document" aria-label={title} />,
+}));
+
 describe("FrontierLiveDemoPage", () => {
   beforeEach(() => window.localStorage.setItem("smartai_locale", "en-US"));
 
