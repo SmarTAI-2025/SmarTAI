@@ -1,6 +1,7 @@
 import { ArrowRight, Search, X } from "lucide-react";
 import { useMemo, type ReactNode } from "react";
 import { Link, useSearchParams } from "react-router-dom";
+import { SmarTAIMascot } from "@/components/brand/SmarTAIMascot";
 import {
   correctionScoreSource,
   effectiveCorrectionScore,
@@ -119,7 +120,8 @@ export function StudentAnalysisOverview({ locale, taskId, model }: { locale: Loc
         </div>
 
         <div className="mt-4">
-          <label className="relative block">
+          <div className="flex items-center gap-3">
+          <label className="relative block min-w-0 flex-1">
             <Search aria-hidden="true" className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
             <input
               value={smartSearch.draftValue}
@@ -134,6 +136,8 @@ export function StudentAnalysisOverview({ locale, taskId, model }: { locale: Loc
             />
             {smartSearch.draftValue ? <button type="button" onClick={() => smartSearch.commitValue("")} aria-label={tx(locale, "清除 SmarTAI 自然语言筛选", "Clear SmarTAI natural-language filter")} className="absolute right-2 top-1/2 inline-flex h-7 w-7 -translate-y-1/2 items-center justify-center rounded-full text-muted-foreground hover:bg-muted hover:text-foreground"><X aria-hidden="true" className="h-4 w-4" /></button> : null}
           </label>
+          <SmarTAIMascot variant="thinking" size="sm" className="hidden sm:inline-flex" />
+          </div>
           <div className="mt-2 flex min-h-7 flex-wrap items-center gap-2">
             {semanticPlan.conditions.length ? semanticPlan.conditions.map((condition) => (
               <button key={condition.id} type="button" onClick={() => removeSemanticCondition(condition)} title={tx(locale, "点击移除此条件", "Click to remove this condition")} className="inline-flex h-7 items-center gap-1 rounded-full bg-blue-50 px-2.5 text-[11px] font-semibold text-primary hover:bg-blue-100">
