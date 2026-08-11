@@ -13,7 +13,6 @@ import {
   Pencil,
   RotateCcw,
   Save,
-  Search,
   X,
 } from "lucide-react";
 import {
@@ -27,6 +26,7 @@ import { Link, Navigate, useNavigate, useParams, useSearchParams } from "react-r
 import { toast } from "sonner";
 import { getAPIErrorCode, normalizeAPIError } from "@/api/client";
 import { useTask, useUpdateStudentAnswer, useUpdateStudentIdentity } from "@/api/hooks/tasks";
+import { SmarTAIMascot } from "@/components/brand/SmarTAIMascot";
 import { NewTaskStepper } from "@/components/new-task/NewTaskStepper";
 import { Button } from "@/components/ui/Button";
 import { MarkdownMath } from "@/components/ui/MarkdownMath";
@@ -735,10 +735,11 @@ function SmartPicker({ label, placeholder, query, matches, currentId, onCommit, 
 
   return (
     <div className="relative" onFocusCapture={() => setOpen(true)} onBlurCapture={handleBlur}>
-      <label className="relative block">
-        <span className="sr-only">{label}</span>
-        <Search aria-hidden="true" className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-        <input
+      <div className="flex items-center gap-2">
+        <SmarTAIMascot variant="thinking" size="xs" />
+        <label className="relative min-w-0 flex-1">
+          <span className="sr-only">{label}</span>
+          <input
           type="text"
           inputMode="search"
           value={smartSearch.draftValue}
@@ -747,22 +748,23 @@ function SmartPicker({ label, placeholder, query, matches, currentId, onCommit, 
           onCompositionEnd={smartSearch.handleCompositionEnd}
           onChange={smartSearch.handleChange}
           placeholder={placeholder}
-          className="h-10 w-full rounded-[7px] border-0 bg-slate-50 pl-9 pr-9 text-[13px] text-foreground outline-none placeholder:text-muted-foreground focus:ring-2 focus:ring-primary/20 dark:bg-slate-900/50"
-        />
-        {smartSearch.draftValue ? (
-          <button
-            type="button"
-            onMouseDown={(event) => event.preventDefault()}
-            onClick={() => {
-              smartSearch.commitValue("");
-            }}
-            className="absolute right-2 top-1/2 inline-flex h-7 w-7 -translate-y-1/2 items-center justify-center rounded-full text-muted-foreground outline-none hover:bg-muted hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
-            aria-label={t("answerReviewClearSearch")}
-          >
-            <RotateCcw aria-hidden="true" className="h-3.5 w-3.5" />
-          </button>
-        ) : null}
-      </label>
+            className="h-10 w-full rounded-[7px] border-0 bg-slate-50 pl-3 pr-9 text-[13px] text-foreground outline-none placeholder:text-muted-foreground focus:ring-2 focus:ring-primary/20 dark:bg-slate-900/50"
+          />
+          {smartSearch.draftValue ? (
+            <button
+              type="button"
+              onMouseDown={(event) => event.preventDefault()}
+              onClick={() => {
+                smartSearch.commitValue("");
+              }}
+              className="absolute right-2 top-1/2 inline-flex h-7 w-7 -translate-y-1/2 items-center justify-center rounded-full text-muted-foreground outline-none hover:bg-muted hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
+              aria-label={t("answerReviewClearSearch")}
+            >
+              <RotateCcw aria-hidden="true" className="h-3.5 w-3.5" />
+            </button>
+          ) : null}
+        </label>
+      </div>
       {open ? (
         <div className="absolute left-0 right-0 top-[44px] z-40 max-h-[280px] overflow-auto rounded-[9px] border bg-card p-1.5 shadow-xl">
           <p className="px-2 py-1 text-[10px] leading-4 text-muted-foreground">
