@@ -61,10 +61,17 @@ const OVERVIEW_CHART_PALETTE = ["#f08f9b", "#f3b780", "#5ec7ae", "#7c8cf8", "#a9
 type OverviewPanelTone = "primary" | "accent" | "secondary" | "warning";
 
 const OVERVIEW_PANEL_STYLES: Record<OverviewPanelTone, string> = {
-  primary: "border-[#dbe0ff] bg-[#fbfbff]",
-  accent: "border-[#cfece4] bg-[#fbfefd]",
-  secondary: "border-[#e2daf9] bg-[#fdfcff]",
-  warning: "border-[#f3dfbf] bg-[#fffdf9]",
+  primary: "border-border/75 bg-white",
+  accent: "border-border/75 bg-white",
+  secondary: "border-border/75 bg-white",
+  warning: "border-border/75 bg-white",
+};
+
+const OVERVIEW_PANEL_TITLE_STYLES: Record<OverviewPanelTone, string> = {
+  primary: "text-[#4f61c9]",
+  accent: "text-[#247d69]",
+  secondary: "text-[#7058b2]",
+  warning: "text-[#a56524]",
 };
 
 /** A-00: Figma-16 visual language, expanded into the confirmed five-route workspace. */
@@ -342,8 +349,7 @@ function ResultsOverview({
     : tx(locale, "无复核信号", "No review signals");
 
   return (
-    <section className="relative overflow-hidden rounded-[10px] border bg-card p-5">
-      <span aria-hidden="true" className="absolute inset-x-0 top-0 h-1 bg-[linear-gradient(90deg,#7c8cf8_0%,#5ec7ae_28%,#f3b780_54%,#f08f9b_76%,#a995e8_100%)]" />
+    <section className="relative overflow-hidden rounded-[10px] border border-t-2 border-t-primary/65 bg-card p-5">
       <div className="relative">
         <SectionHeading
           title={tx(locale, "结果总览", "Results overview")}
@@ -471,7 +477,7 @@ function OverviewPanel({
     <section className={cn("min-w-0 rounded-[9px] border px-4 py-3.5 shadow-[0_12px_30px_-28px_rgba(40,56,99,0.65)]", OVERVIEW_PANEL_STYLES[tone])}>
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
-          <h3 className="text-[14px] font-bold text-foreground">{title}</h3>
+          <h3 className={cn("text-[14px] font-bold", OVERVIEW_PANEL_TITLE_STYLES[tone])}>{title}</h3>
           <p className="mt-0.5 truncate text-[11px] text-muted-foreground">{subtitle}</p>
         </div>
         <Link to={href} className="inline-flex shrink-0 items-center gap-1 text-[11px] font-semibold text-primary hover:underline">
@@ -515,7 +521,7 @@ function StudentPreviewRow({ locale, student }: { locale: Locale; student: Stude
 
 function StatusLine({ label, value, tone }: { label: string; value: string; tone: "primary" | "warning" | "neutral" }) {
   return (
-    <div className={cn("flex items-center justify-between gap-4 rounded-[7px] border px-3 py-2", tone === "primary" && "border-[#dbe0ff] bg-[#f4f5ff]", tone === "warning" && "border-[#f3dfbf] bg-[#fff8ee]", tone === "neutral" && "border-border/70 bg-card/80")}>
+    <div className="flex items-center justify-between gap-4 rounded-[7px] border border-border/70 bg-white px-3 py-2">
       <span className="font-medium text-muted-foreground">{label}</span>
       <span className={cn("text-right font-semibold", tone === "primary" && "text-primary", tone === "warning" && "text-amber-600", tone === "neutral" && "text-foreground")}>{value}</span>
     </div>
