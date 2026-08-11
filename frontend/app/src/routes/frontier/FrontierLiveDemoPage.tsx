@@ -496,20 +496,18 @@ function SubmissionRecognitionReview({ task, locale, busy, onContinue }: { task:
         </Link>
       </div>
 
-      <div className="mt-4 grid gap-3 md:grid-cols-2">
-        {students.map((student, index) => (
-          <details key={student.stu_id} open={index === 0} className="rounded-lg border bg-card px-3 py-3">
-            <summary className="cursor-pointer list-none">
-              <div className="flex items-center justify-between gap-3">
-                <div className="min-w-0">
-                  <p className="truncate text-sm font-bold">{student.stu_name || student.stu_id}</p>
-                  <p className="mt-0.5 truncate text-[11px] text-muted-foreground">{student.stu_id} · {student.source_filename || tx(locale, "合成作答文件", "synthetic submission")}</p>
-                </div>
-                <span className={cn("shrink-0 rounded-full px-2 py-1 text-[10px] font-semibold", student.identity_status === "needs_review" ? "bg-warning/10 text-warning" : "bg-accent/10 text-accent")}>
-                  {student.identity_status === "needs_review" ? tx(locale, "身份待核对", "Identity check") : tx(locale, `${student.stu_ans.length} 题已识别`, `${student.stu_ans.length} answers`)}
-                </span>
+      <div className="mt-4 grid items-start gap-3 md:grid-cols-2">
+        {students.map((student) => (
+          <article key={student.stu_id} className="rounded-lg border bg-card px-3 py-3">
+            <div className="flex items-center justify-between gap-3">
+              <div className="min-w-0">
+                <p className="truncate text-sm font-bold">{student.stu_name || student.stu_id}</p>
+                <p className="mt-0.5 truncate text-[11px] text-muted-foreground">{student.stu_id} · {student.source_filename || tx(locale, "合成作答文件", "synthetic submission")}</p>
               </div>
-            </summary>
+              <span className={cn("shrink-0 rounded-full px-2 py-1 text-[10px] font-semibold", student.identity_status === "needs_review" ? "bg-warning/10 text-warning" : "bg-accent/10 text-accent")}>
+                {student.identity_status === "needs_review" ? tx(locale, "身份待核对", "Identity check") : tx(locale, `${student.stu_ans.length} 题已识别`, `${student.stu_ans.length} answers`)}
+              </span>
+            </div>
             <div className="mt-3 grid gap-2 border-t pt-3">
               {student.stu_ans.map((answer) => (
                 <div key={answer.q_id} className="rounded-md bg-muted/45 px-3 py-2">
@@ -521,7 +519,7 @@ function SubmissionRecognitionReview({ task, locale, busy, onContinue }: { task:
                 </div>
               ))}
             </div>
-          </details>
+          </article>
         ))}
       </div>
 

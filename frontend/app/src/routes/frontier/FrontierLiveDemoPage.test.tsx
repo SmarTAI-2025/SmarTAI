@@ -189,7 +189,14 @@ describe("FrontierLiveDemoPage", () => {
     await waitFor(() => expect(parseSubmissions).toHaveBeenCalledTimes(1));
     expect(saveGradingSetup).not.toHaveBeenCalled();
     expect(await screen.findByRole("heading", { name: /inspect this run's recognized submissions/i })).toBeInTheDocument();
-    expect(screen.getByText("Alex Chen")).toBeInTheDocument();
+    expect(screen.getByText("Alex Chen")).toBeVisible();
+    expect(screen.getByText("Maya Lin")).toBeVisible();
+    expect(screen.getByText("Jordan Rivera")).toBeVisible();
+    expect(screen.getByText("Taylor Singh")).toBeVisible();
+    expect(screen.getByText("Recognized answer for q1 by demo-1")).toBeVisible();
+    expect(screen.getByText("Recognized answer for q1 by demo-2")).toBeVisible();
+    expect(screen.getByText("Recognized answer for q1 by demo-3")).toBeVisible();
+    expect(screen.getByText("Recognized answer for q1 by demo-4")).toBeVisible();
     await user.click(screen.getByRole("button", { name: /continue to live grading/i }));
     await waitFor(() => expect(saveGradingSetup).toHaveBeenCalledTimes(1));
     await waitFor(() => expect(startGrading).toHaveBeenCalledTimes(1));
