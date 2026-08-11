@@ -80,7 +80,7 @@ class RunnerResult(BaseModel):
     stderr_truncated: bool = False
     duration_ms: float = Field(default=0.0, ge=0)
     resource_status: RunnerResourceStatus = RunnerResourceStatus.UNKNOWN
-    isolation_mode: Literal["host_subprocess"] = "host_subprocess"
+    isolation_mode: Literal["host_subprocess", "oci_container"] = "host_subprocess"
 
 
 class SympyStaticCheck(BaseModel):
