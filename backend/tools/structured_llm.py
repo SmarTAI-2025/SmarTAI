@@ -289,17 +289,99 @@ def _wrap_bare_latex_line(line: str) -> str:
     return f"{leading}{normalized}{trailing}{newline}"
 
 
-_CODE_FIELD_NAMES = frozenset(
+_SOURCE_CODE_FIELD_NAMES = frozenset(
     {
         "code",
         "solution_code",
         "reference_code",
         "student_code",
+    }
+)
+_CODE_FIELD_NAMES = frozenset(
+    {
+        *_SOURCE_CODE_FIELD_NAMES,
         "input",
         "expected_output",
         "expected_return",
     }
 )
+
+
+def normalize_code_line_breaks(text: str) -> str:
+    """Decode model-escaped code line separators outside string literals.
+
+    Structured providers normally turn JSON ``\\n`` escapes into real newlines.
+    Some models escape the code contents a second time, leaving visible ``\\n``
+    text after JSON decoding.  A global replacement would corrupt legitimate
+    string/regex literals such as ``print("\\\\n")``.  This small scanner only
+    decodes one- or two-backslash CR/LF separators while outside quoted source
+    strings, preserving every character inside single, double, triple, and
+    backtick-delimited strings.
+    """
+    if "\\n" not in text and "\\r" not in text:
+        return text
+
+    output: list[str] = []
+    index = 0
+    delimiter = ""
+    while index < len(text):
+        if delimiter:
+            if text.startswith(delimiter, index):
+                output.append(delimiter)
+                index += len(delimiter)
+                delimiter = ""
+                continue
+            if text[index] == "\\" and index + 1 < len(text):
+                output.append(text[index:index + 2])
+                index += 2
+                continue
+            output.append(text[index])
+            index += 1
+            continue
+
+        character = text[index]
+        if character in {"'", '"', "`"}:
+            delimiter = (
+                character * 3
+                if character != "`" and text.startswith(character * 3, index)
+                else character
+            )
+            output.append(delimiter)
+            index += len(delimiter)
+            continue
+
+        escaped_line_break_end = _escaped_code_line_break_end(text, index)
+        if escaped_line_break_end is not None:
+            output.append("\n")
+            index = escaped_line_break_end
+            continue
+
+        output.append(character)
+        index += 1
+
+    return "".join(output)
+
+
+def _escaped_code_line_break_end(text: str, index: int) -> Optional[int]:
+    if text[index] != "\\":
+        return None
+    cursor = index
+    while cursor < len(text) and text[cursor] == "\\":
+        cursor += 1
+    if cursor - index not in {1, 2} or cursor >= len(text):
+        return None
+    if text[cursor] == "n":
+        return cursor + 1
+    if text[cursor] != "r":
+        return None
+
+    newline_slashes = cursor + 1
+    newline_marker = newline_slashes
+    while newline_marker < len(text) and text[newline_marker] == "\\":
+        newline_marker += 1
+    if newline_marker - newline_slashes not in {1, 2}:
+        return None
+    return newline_marker + 1 if newline_marker < len(text) and text[newline_marker] == "n" else None
 
 
 def _clean_strings(data: Any, field_name: Optional[str] = None) -> Any:
@@ -309,6 +391,8 @@ def _clean_strings(data: Any, field_name: Optional[str] = None) -> Any:
     elif isinstance(data, list):
         return [_clean_strings(v, field_name=field_name) for v in data]
     elif isinstance(data, str):
+        if field_name in _SOURCE_CODE_FIELD_NAMES:
+            return normalize_code_line_breaks(data)
         if field_name in _CODE_FIELD_NAMES:
             return data
         return format_math_and_quotes(data)

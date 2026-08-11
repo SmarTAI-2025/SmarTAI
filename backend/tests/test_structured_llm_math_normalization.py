@@ -6,6 +6,7 @@ from backend.tools.structured_llm import (
     _clean_strings,
     extract_and_parse_json,
     format_math_and_quotes,
+    normalize_code_line_breaks,
 )
 
 
@@ -62,6 +63,31 @@ def test_json_output_normalizes_prose_but_preserves_solution_code():
 
     assert parsed.prose == "Use $\\mu_k$ on a $30^\\circ$ incline."
     assert parsed.solution_code == "pattern = r'\\mu'"
+
+
+def test_decodes_model_escaped_code_line_breaks_after_json_parsing():
+    escaped = r"import math\n\ndef stable_softmax(xs):\n    return []"
+
+    assert normalize_code_line_breaks(escaped) == (
+        "import math\n\ndef stable_softmax(xs):\n    return []"
+    )
+    assert _clean_strings({"solution_code": escaped}) == {
+        "solution_code": "import math\n\ndef stable_softmax(xs):\n    return []"
+    }
+
+
+def test_code_line_break_repair_preserves_escapes_inside_source_strings():
+    escaped = 'print("\\\\n")\\npattern = r"\\n"\\nreturn pattern'
+
+    assert normalize_code_line_breaks(escaped) == (
+        'print("\\\\n")\npattern = r"\\n"\nreturn pattern'
+    )
+
+
+def test_does_not_reinterpret_test_input_or_output_fields_as_source_code():
+    payload = {"input": r"first\nsecond", "expected_output": r"line\n"}
+
+    assert _clean_strings(payload) == payload
 
 
 def test_repairs_double_escaped_generated_markdown_without_touching_math_meaning():
