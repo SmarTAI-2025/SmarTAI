@@ -1,4 +1,4 @@
-import { ArrowRight, LoaderCircle, Save } from "lucide-react";
+import { ArrowRight, FileCheck2, LoaderCircle, LockKeyhole, Save } from "lucide-react";
 import {
   useCallback,
   useEffect,
@@ -24,6 +24,7 @@ import {
   useCreateCourse,
   useCreateTag,
   useCreateTask,
+  useCurrentUser,
   useExperts,
   useTask,
   useTags,
@@ -33,6 +34,7 @@ import {
 import { NewTaskStepper } from "@/components/new-task/NewTaskStepper";
 import { SmartCatalogField } from "@/components/new-task/SmartCatalogField";
 import { useI18n } from "@/i18n/I18nProvider";
+import { isFrontierDemoUserId } from "@/hooks/useFrontierDemoSourcePreview";
 import { modelDisplayName } from "@/lib/modelPresentation";
 import { buildSemesterOptions, formatSemesterLabel, getCurrentSemesterId } from "@/lib/semesters";
 import type { Course, TaskMetadataPatch, TaskTag } from "@/types";
@@ -45,6 +47,9 @@ export function NewTaskPage() {
   const [searchParams] = useSearchParams();
   const isEditing = Boolean(taskId);
   const returnTo = safeTaskReturnPath(searchParams.get("returnTo"), taskId);
+  const currentUser = useCurrentUser();
+  const isDemoSession = isFrontierDemoUserId(currentUser.data?.id);
+  const loadEditableCatalog = currentUser.isSuccess && !isDemoSession;
   const returnReachableStep = isEditing ? taskStepFromPath(returnTo) : 0;
   const semesterOptions = useMemo(() => buildSemesterOptions(), []);
   const initialSemester = useMemo(() => {
@@ -69,16 +74,16 @@ export function NewTaskPage() {
 
   const debouncedCourseDraft = useDebouncedValue(courseDraft, 180);
   const debouncedTagDraft = useDebouncedValue(tagDraft, 180);
-  const coursesQuery = useCourses();
+  const coursesQuery = useCourses({ enabled: loadEditableCatalog });
   const courseSearch = useCourseSearch(debouncedCourseDraft);
-  const tagsQuery = useTags();
+  const tagsQuery = useTags({ enabled: loadEditableCatalog });
   const tagSearch = useTagSearch(debouncedTagDraft);
   const createCourse = useCreateCourse();
   const createTag = useCreateTag();
   const createTask = useCreateTask();
   const updateTask = useUpdateTask();
   const taskQuery = useTask(taskId);
-  const expertsQuery = useExperts();
+  const expertsQuery = useExperts({ enabled: loadEditableCatalog });
   const reachableStep = isEditing
     ? Math.max(returnReachableStep, (taskQuery.data?.problem_count ?? 0) > 0 ? 2 : 0)
     : 0;
@@ -251,6 +256,20 @@ export function NewTaskPage() {
       ? `${t("newTaskModelsConfiguredPrefix")}${enabledExperts.length}${t("newTaskModelsConfiguredSuffix")}${enabledExperts.slice(0, 2).map(modelDisplayName).join(locale === "zh-CN" ? "、" : ", ")}${enabledExperts.length > 2 ? t("newTaskModelsMore") : ""}`
       : t("newTaskModelsMissing");
 
+  if (currentUser.isSuccess && isDemoSession) {
+    const rememberedTaskId = taskId ?? readRememberedFrontierDemoTaskId();
+    return (
+      <FrontierDemoTaskMetadataLock
+        locale={locale}
+        taskName={taskQuery.data?.name}
+        taskLoading={Boolean(taskId && taskQuery.isLoading)}
+        livePath={rememberedTaskId
+          ? `/frontier/live?taskId=${encodeURIComponent(rememberedTaskId)}`
+          : "/frontier/live"}
+      />
+    );
+  }
+
   if (isEditing && (taskQuery.isError || coursesQuery.isError || tagsQuery.isError)) {
     return (
       <div className="w-full max-w-[1300px]">
@@ -396,6 +415,104 @@ export function NewTaskPage() {
   );
 }
 
+function FrontierDemoTaskMetadataLock({
+  locale,
+  taskName,
+  taskLoading,
+  livePath,
+}: {
+  locale: string;
+  taskName?: string | null;
+  taskLoading: boolean;
+  livePath: string;
+}) {
+  const fields = [
+    {
+      label: tx(locale, "任务名称", "Task name"),
+      value: taskName || "SmarTAI Live Demo · Synthetic STEM sample",
+    },
+    {
+      label: tx(locale, "课程", "Course"),
+      value: "STEM Reasoning Lab",
+    },
+    {
+      label: tx(locale, "任务类型", "Task type"),
+      value: tx(locale, "合成示例 · 复杂计算、证明与编程", "Synthetic example · calculation, proof, and programming"),
+    },
+    {
+      label: tx(locale, "数据范围", "Data scope"),
+      value: tx(locale, "1 份题目文件 · 4 份具名合成作答", "1 question file · 4 named synthetic submissions"),
+    },
+  ];
+
+  return (
+    <div className="w-full max-w-[1300px]">
+      <h1 className="text-[30px] font-bold leading-9 tracking-[-0.02em] text-foreground">
+        {tx(locale, "示例任务信息", "Sample task details")}
+      </h1>
+      <NewTaskStepper currentStep={0} reachableStep={0} />
+
+      <section className="mx-auto mt-[35px] max-w-[900px] rounded-[12px] border border-primary/25 bg-gradient-to-br from-[#f4f7ff] via-card to-[#f1fbf7] p-6 shadow-sm sm:p-8">
+        <div className="flex items-start gap-4">
+          <span className="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-primary/12 text-primary">
+            <LockKeyhole aria-hidden="true" className="h-5 w-5" />
+          </span>
+          <div>
+            <p className="text-xs font-semibold uppercase tracking-[0.12em] text-primary">
+              {tx(locale, "Demo 固定配置", "Locked Demo setup")}
+            </p>
+            <h2 className="mt-1 text-xl font-bold text-foreground">
+              {tx(locale, "示例任务已预先配置", "This sample task is preconfigured")}
+            </h2>
+            <p className="mt-2 text-sm leading-6 text-muted-foreground">
+              {tx(
+                locale,
+                "为保证每位体验者看到同一条可复核流程，Demo 中不能修改任务信息或换成自己的文件。",
+                "To keep the walkthrough consistent and reviewable, task details and source files cannot be changed in Demo mode.",
+              )}
+            </p>
+          </div>
+        </div>
+
+        {taskLoading ? (
+          <div className="mt-7 flex min-h-36 items-center justify-center rounded-[10px] border bg-card/90 text-sm text-muted-foreground">
+            <LoaderCircle aria-hidden="true" className="mr-2 h-4 w-4 animate-spin" />
+            {tx(locale, "正在读取示例任务…", "Loading the sample task…")}
+          </div>
+        ) : (
+          <div className="mt-7 grid gap-4 sm:grid-cols-2">
+            {fields.map((field) => (
+              <label key={field.label} className="block">
+                <span className="text-xs font-semibold text-foreground">{field.label}</span>
+                <input
+                  disabled
+                  readOnly
+                  value={field.value}
+                  className="mt-1 h-11 w-full cursor-not-allowed rounded-[8px] border bg-card/80 px-3 text-sm text-foreground opacity-100"
+                />
+              </label>
+            ))}
+          </div>
+        )}
+
+        <div className="mt-7 flex flex-col gap-3 border-t pt-5 sm:flex-row sm:items-center sm:justify-between">
+          <p className="inline-flex items-center gap-2 text-xs leading-5 text-muted-foreground">
+            <FileCheck2 aria-hidden="true" className="h-4 w-4 shrink-0 text-primary" />
+            {tx(locale, "真实 API 仍会处理预置题目与作答。", "The real API still processes the preset questions and submissions.")}
+          </p>
+          <Link
+            to={livePath}
+            className="inline-flex h-11 shrink-0 items-center justify-center gap-2 rounded-[8px] bg-primary px-5 text-sm font-semibold text-primary-foreground shadow-sm transition hover:opacity-90"
+          >
+            {tx(locale, "返回 Demo 继续", "Return to Demo")}
+            <ArrowRight aria-hidden="true" className="h-4 w-4" />
+          </Link>
+        </div>
+      </section>
+    </div>
+  );
+}
+
 function TaskMetadataHeading({
   editing,
 }: {
@@ -447,6 +564,12 @@ function safeTaskReturnPath(raw: string | null, taskId?: string): string {
   }
 }
 
+function readRememberedFrontierDemoTaskId(): string | null {
+  if (typeof window === "undefined") return null;
+  const candidate = window.sessionStorage.getItem("smartai_frontier_demo_task_id");
+  return candidate && /^[A-Za-z0-9_-]+$/.test(candidate) ? candidate : null;
+}
+
 function useDebouncedValue(value: string, delay: number): string {
   const [debounced, setDebounced] = useState(value);
   useEffect(() => {
@@ -458,4 +581,8 @@ function useDebouncedValue(value: string, delay: number): string {
 
 function createIdempotencyKey(): string {
   return globalThis.crypto?.randomUUID?.() ?? `task-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+}
+
+function tx(locale: string, zh: string, en: string): string {
+  return locale === "zh-CN" ? zh : en;
 }

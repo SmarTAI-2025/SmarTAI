@@ -2,10 +2,11 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import * as coursesApi from "@/api/courses";
 import { courseKeys, taskKeys } from "./keys";
 
-export function useCourses() {
+export function useCourses({ enabled = true }: { enabled?: boolean } = {}) {
   return useQuery({
     queryKey: courseKeys.list(),
     queryFn: coursesApi.listCourses,
+    enabled,
   });
 }
 

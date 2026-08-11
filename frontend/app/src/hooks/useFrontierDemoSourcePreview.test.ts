@@ -27,4 +27,16 @@ describe("useFrontierDemoSourcePreview", () => {
     act(() => result.current.openPreview());
     expect(result.current.loadState).toBe("error");
   });
+
+  it("maps a named handwritten fixture to the exact PNG uploaded for OCR", () => {
+    const { result } = renderHook(() => useFrontierDemoSourcePreview({
+      enabled: true,
+      sourceFilename: "DEMO-002_Maya-Lin_handwritten.png",
+    }));
+
+    expect(result.current.available).toBe(true);
+    expect(result.current.previewUrl).toBe("/frontier-demo/live/DEMO-002_handwritten_raw.png");
+    expect(result.current.descriptor.preview_kind).toBe("image");
+    expect(result.current.descriptor.mime_type).toBe("image/png");
+  });
 });

@@ -16,6 +16,7 @@ import { Link, useLocation, useNavigate, useParams } from "react-router-dom";
 import { toast } from "sonner";
 import {
   useExperts,
+  useCurrentUser,
   useProblemSourceLibrary,
   useProblemSourcePreflight,
   useQuestionPreparationCapabilities,
@@ -24,6 +25,7 @@ import {
 } from "@/api/hooks";
 import { NewTaskStepper } from "@/components/new-task/NewTaskStepper";
 import { RecoverableActionState, type RecoveryAction } from "@/components/ui/RecoverableActionState";
+import { isFrontierDemoTask, isFrontierDemoUserId } from "@/hooks/useFrontierDemoSourcePreview";
 import { useImeSafeQuery } from "@/hooks/useImeSafeQuery";
 import { useI18n } from "@/i18n/I18nProvider";
 import { cn } from "@/lib/cn";
@@ -89,9 +91,11 @@ export function AddProblemsPage() {
   const navigate = useNavigate();
   const { locale } = useI18n();
   const restored = getRestoredDraft(location.state, taskId);
+  const currentUser = useCurrentUser();
   const taskQuery = useTask(taskId);
+  const isDemoTask = isFrontierDemoUserId(currentUser.data?.id) || isFrontierDemoTask(taskQuery.data?.name);
   const capabilitiesQuery = useQuestionPreparationCapabilities(taskId);
-  const expertsQuery = useExperts();
+  const expertsQuery = useExperts({ enabled: taskQuery.isSuccess && !isDemoTask });
   const preflight = useProblemSourcePreflight();
   const startPreparation = useStartQuestionPreparation();
   const [activeRole, setActiveRole] = useState<PreparationSourceRole>(restored?.activeRole ?? "problem");
@@ -256,6 +260,11 @@ export function AddProblemsPage() {
       },
     })
     : undefined;
+
+  if (isDemoTask && taskId) {
+    return <FrontierDemoProblemPreset locale={locale} taskId={taskId} />;
+  }
+
   return (
     <div className="w-full max-w-[1300px]">
       <h1 className="text-[30px] font-bold leading-9 tracking-[-0.02em] text-foreground">
@@ -424,6 +433,86 @@ export function AddProblemsPage() {
           setShowStartRequirements(false);
         }}
       />
+    </div>
+  );
+}
+
+function FrontierDemoProblemPreset({ locale, taskId }: { locale: string; taskId: string }) {
+  const questions = [
+    tx(locale, "Q1 · 微积分计算 · 5 分", "Q1 · Calculus · 5 points"),
+    tx(locale, "Q2 · 力学计算 · 8 分", "Q2 · Mechanics · 8 points"),
+    tx(locale, "Q3 · 线性代数证明 · 7 分", "Q3 · Linear algebra proof · 7 points"),
+    tx(locale, "Q4 · Python 编程 · 10 分", "Q4 · Python programming · 10 points"),
+  ];
+
+  return (
+    <div className="w-full max-w-[1300px]">
+      <h1 className="text-[30px] font-bold leading-9 tracking-[-0.02em] text-foreground">
+        {tx(locale, "上传题目", "Upload questions")}
+      </h1>
+      <NewTaskStepper currentStep={1} reachableStep={1} />
+
+      <section className="mx-auto mt-[45px] w-full max-w-[900px] rounded-[12px] border border-primary/25 bg-gradient-to-br from-[#f4f7ff] via-card to-[#f1fbf7] p-5 shadow-sm sm:p-7" aria-labelledby="frontier-demo-question-title">
+        <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+          <div>
+            <p className="text-xs font-semibold uppercase tracking-[0.12em] text-primary">
+              {tx(locale, "Demo 预置题目", "Demo preset questions")}
+            </p>
+            <h2 id="frontier-demo-question-title" className="mt-1 text-xl font-bold text-foreground">
+              {tx(locale, "题目文件已为当前任务准备好", "The question file is ready for this task")}
+            </h2>
+            <p className="mt-2 max-w-2xl text-sm leading-6 text-muted-foreground">
+              {tx(
+                locale,
+                "Demo 固定使用这份合成题目文件。返回 Live Demo 后，它会通过真实 API 进入统一题目准备流程，生成待教师确认的标答与评分依据。",
+                "Demo mode uses this fixed synthetic question file. Return to Live Demo to send it through the real preparation API and generate teacher-reviewable answers and rubrics.",
+              )}
+            </p>
+          </div>
+          <Link
+            to={`/frontier/live?taskId=${encodeURIComponent(taskId)}`}
+            className="inline-flex h-11 shrink-0 items-center justify-center gap-2 rounded-[8px] bg-primary px-4 text-sm font-semibold text-primary-foreground shadow-sm transition hover:opacity-90"
+          >
+            {tx(locale, "使用预置题目继续", "Continue with preset questions")}
+            <ArrowRight aria-hidden="true" className="h-4 w-4" />
+          </Link>
+        </div>
+
+        <div className="mt-6 overflow-hidden rounded-[10px] border bg-card/90">
+          <div className="flex flex-col gap-3 border-b px-4 py-4 sm:flex-row sm:items-center sm:justify-between">
+            <div className="flex min-w-0 items-center gap-3">
+              <span className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-primary/10 text-primary">
+                <FileText aria-hidden="true" className="h-5 w-5" />
+              </span>
+              <span className="min-w-0">
+                <strong className="block truncate text-sm text-foreground">question_source.pdf</strong>
+                <span className="block text-xs text-muted-foreground">
+                  {tx(locale, "合成题目 · 4 题 · 30 分", "Synthetic questions · 4 questions · 30 points")}
+                </span>
+              </span>
+            </div>
+            <a
+              href="/frontier-demo/live/question_source.pdf"
+              target="_blank"
+              rel="noreferrer"
+              className="inline-flex h-9 items-center justify-center rounded-[7px] border px-4 text-xs font-semibold text-primary transition hover:bg-primary/5"
+            >
+              {tx(locale, "查看原文件", "View source file")}
+            </a>
+          </div>
+          <div className="grid gap-2 p-4 sm:grid-cols-2">
+            {questions.map((question) => (
+              <div key={question} className="rounded-[8px] bg-muted/55 px-3 py-2.5 text-xs font-semibold text-foreground">
+                {question}
+              </div>
+            ))}
+          </div>
+        </div>
+
+        <p className="mt-4 text-xs leading-5 text-muted-foreground">
+          {tx(locale, "Demo 模式不接受自定义题目文件；普通教师任务仍保留完整上传能力。", "Custom question files are disabled in Demo mode; regular teacher tasks keep the full upload workflow.")}
+        </p>
+      </section>
     </div>
   );
 }

@@ -39,15 +39,15 @@
 - 原始题目 PDF；
 - 教师 rubric/reference PDF；
 - 无评分、无红色批注、无 OCR 提示的排版作答 PDF；
-- 无评分、无红色批注的合成手写 PNG/PDF；
+- 无评分、无红色批注的合成手写 PNG（PDF 副本只用于展示）；
 - 混合排版/代码作答 PDF；
-- 匿名扫描件；
+- 具名合成扫描 PNG（PDF 副本只用于展示）；
 - 只包含上述 raw 学生文件的确定性 ZIP；
 - 根目录中的文件 SHA-256 manifest 与 `SHA256SUMS`（覆盖 live 子目录）。
 
 `question_source.pdf`、`DEMO-001_typeset.pdf` 与 `DEMO-001_typeset_raw.pdf` 必须由仓库中的真实 LaTeX 源文件编译生成；生成脚本以 `SOURCE_DATE_EPOCH` 固定元数据。其他扫描/批注资产由确定性 ReportLab/Pillow 生成。
 
-Live raw 学生文件中不得出现 `REVIEW SIGNAL`、建议分数、OCR 更正提示、红色教师批注或答案标签泄漏。所有身份使用 `DEMO-001` 等虚构编号。
+Live raw 学生文件中不得出现 `REVIEW SIGNAL`、建议分数、OCR 更正提示、红色教师批注或答案标签泄漏。四份材料均使用固定的虚构姓名与 `DEMO-001` 至 `DEMO-004` 编号，并同时写在文件名和原件页眉中，避免身份识别失败。排版与混排材料以 PDF 上传；手写与扫描材料以原始 PNG 上传并直接走视觉 OCR，PDF 副本仅保留作展示资产。
 
 ## 页面与交互
 
@@ -71,14 +71,16 @@ Live raw 学生文件中不得出现 `REVIEW SIGNAL`、建议分数、OCR 更正
 一次完整运行：
 
 1. `POST /tasks/` 创建独立教师任务并保存 task ID。
-2. 上传 raw 题目 PDF 到 `/tasks/{id}/extract_problems`，轮询真实 job/status/progress。
-3. 展示本次真实识别题干与四套合成教师 rubric、参考答案、分值和编程测试，等待评审显式点击确认；确认后只按返回的唯一 Q1–Q4 题号关联。不得再用 fixture 关键词或语义锚点检验模型措辞，也不得用已知 fixture 题干覆盖真实识别文本。若题号缺失或重复，才在写入 rubric 前停止，避免把教师输入套到错误题目。
+2. 对 raw 题目 PDF 执行 source preflight，再调用 `/tasks/{id}/question-preparation/jobs` 完整题目准备入口，轮询真实 job/status/progress。
+3. 展示本次真实生成的题干、标答、评分依据与编程题材料，等待评审显式点击确认；不得注入预设 rubric/reference，不得用 fixture 关键词或语义锚点检验模型措辞，也不得用已知 fixture 题干覆盖真实识别文本。固定 Demo 只按唯一 Q1–Q4 题号排序；题号缺失或重复时停止并要求人工检查。
 4. 上传 raw 学生作业 ZIP 到 `/tasks/{id}/parse_submissions`，真实处理排版 PDF、图片和手写 OCR。
 5. 从后端共享池的已启用 provider 中选择一个，强制 single provider / one sample，并按当前界面语言写入 `feedback_language` 后保存 grading setup。
 6. 调用 `/tasks/{id}/grade`，轮询到真实 `graded` 状态。
 7. 进入现有 Review/Results 页面，由教师检查来源、调整分数并决定是否发布。
 
 Live 页显示 task ID、job ID、后端 current step、最新 progress event、provider 名称、耗时和真实错误。刷新后可通过 `taskId` 查询参数恢复后端状态；重复运行会显式创建新任务。
+
+Demo 会话进入正式产品工作流后采用固定、可检查的样例桥接：新建/编辑任务页只读显示示例名称、课程、题型与数据范围；“上传题目”页只显示 `question_source.pdf`、四题摘要、原文件入口和返回同一 `taskId` 的 Live CTA；“上传学生作答”页只显示四份具名预置样本、原件入口和同一 Live CTA。Demo 页面不显示自定义文件选择器或元数据编辑控件；普通教师任务保留完整编辑、上传和身份匹配能力。两个 CTA 都由 Live 编排器真实上传文件并继续统一题目准备或 OCR，不用脚本伪造浏览器文件选择。这里的 UI 锁定不是后端 fixture 白名单，当前 scope 风险仍以安全边界章节为准。批改完成后的即时分析只使用本次 `getTaskResult` 数据，并以可暂停、可手动切换、尊重 reduced-motion 的图表轮播展示学生折线、成绩直方图、逐题散点和复核信号环图。
 
 ## 安全与成本门
 

@@ -179,6 +179,16 @@ select {
   to { transform: scaleX(1); }
 }
 
+@keyframes frontier-live-column {
+  from { opacity: 0.25; transform: scaleY(0.08); }
+  to { opacity: 1; transform: scaleY(1); }
+}
+
+@keyframes frontier-live-carousel-panel {
+  from { opacity: 0; transform: translateX(18px); }
+  to { opacity: 1; transform: translateX(0); }
+}
+
 .frontier-live-reveal {
   animation: frontier-live-reveal 560ms cubic-bezier(0.22, 1, 0.36, 1) both;
 }
@@ -187,9 +197,20 @@ select {
   animation: frontier-live-bar 720ms cubic-bezier(0.22, 1, 0.36, 1) both;
 }
 
+.frontier-live-column {
+  transform-origin: bottom;
+  animation: frontier-live-column 720ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+.frontier-live-carousel-panel {
+  animation: frontier-live-carousel-panel 420ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
 @media (prefers-reduced-motion: reduce) {
   .frontier-live-reveal,
-  .frontier-live-bar {
+  .frontier-live-bar,
+  .frontier-live-column,
+  .frontier-live-carousel-panel {
     animation: none;
   }
 }

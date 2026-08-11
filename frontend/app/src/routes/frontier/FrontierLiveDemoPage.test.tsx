@@ -189,12 +189,17 @@ describe("FrontierLiveDemoPage", () => {
     await waitFor(() => expect(parseSubmissions).toHaveBeenCalledTimes(1));
     expect(saveGradingSetup).not.toHaveBeenCalled();
     expect(await screen.findByRole("heading", { name: /inspect this run's recognized submissions/i })).toBeInTheDocument();
-    expect(screen.getByText("Demo Student 1")).toBeInTheDocument();
+    expect(screen.getByText("Alex Chen")).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: /continue to live grading/i }));
     await waitFor(() => expect(saveGradingSetup).toHaveBeenCalledTimes(1));
     await waitFor(() => expect(startGrading).toHaveBeenCalledTimes(1));
     await screen.findByText("16 answer units processed");
     expect(await screen.findByRole("heading", { name: /see class performance from live scores/i })).toBeInTheDocument();
+    expect(screen.getByLabelText(/live result chart carousel/i)).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: /compare total score rates/i })).toBeInTheDocument();
+    await user.click(screen.getByRole("tab", { name: "02" }));
+    expect(screen.getByRole("heading", { name: /where the class scores fall/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /pause autoplay/i })).toBeInTheDocument();
     expect(createTask).toHaveBeenCalledTimes(1);
     expect(preflightProblemSource).toHaveBeenCalledTimes(1);
     expect(startQuestionPreparation).toHaveBeenCalledTimes(1);
@@ -244,12 +249,19 @@ function taskState(status: TaskStateSnapshot["status"]): TaskStateSnapshot {
 }
 
 function recognizedStudents(): Task["student_data"] {
+  const names = ["Alex Chen", "Maya Lin", "Jordan Rivera", "Taylor Singh"];
+  const filenames = [
+    "DEMO-001_Alex-Chen_typeset.pdf",
+    "DEMO-002_Maya-Lin_handwritten.png",
+    "DEMO-003_Jordan-Rivera_mixed.pdf",
+    "DEMO-004_Taylor-Singh_scan.png",
+  ];
   return Object.fromEntries(Array.from({ length: 4 }, (_, index) => {
     const id = `demo-${index + 1}`;
     return [id, {
       stu_id: id,
-      stu_name: `Demo Student ${index + 1}`,
-      source_filename: `DEMO-00${index + 1}.pdf`,
+      stu_name: names[index],
+      source_filename: filenames[index],
       identity_status: "matched" as const,
       identity_match_method: "filename" as const,
       stu_ans: Object.values(taskWithQuestions().problem_data).map((problem) => ({

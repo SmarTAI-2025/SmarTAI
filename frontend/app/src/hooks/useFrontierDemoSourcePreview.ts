@@ -8,6 +8,11 @@ const FRONTIER_TASK_PREFIXES = [
 ] as const;
 
 const SUBMISSION_FIXTURES: Record<string, { path: string; kind: "pdf" | "image"; mime: string }> = {
+  "DEMO-001_Alex-Chen_typeset.pdf": { path: "live/DEMO-001_typeset_raw.pdf", kind: "pdf", mime: "application/pdf" },
+  "DEMO-002_Maya-Lin_handwritten.png": { path: "live/DEMO-002_handwritten_raw.png", kind: "image", mime: "image/png" },
+  "DEMO-003_Jordan-Rivera_mixed.pdf": { path: "live/DEMO-003_mixed_raw.pdf", kind: "pdf", mime: "application/pdf" },
+  "DEMO-004_Taylor-Singh_scan.png": { path: "live/scan_004_raw.png", kind: "image", mime: "image/png" },
+  // Keep already-created local Demo tasks inspectable after the named-fixture upgrade.
   "DEMO-001_typeset.pdf": { path: "live/DEMO-001_typeset_raw.pdf", kind: "pdf", mime: "application/pdf" },
   "DEMO-002_handwritten.pdf": { path: "live/DEMO-002_handwritten_raw.pdf", kind: "pdf", mime: "application/pdf" },
   "DEMO-003_mixed.pdf": { path: "live/DEMO-003_mixed_raw.pdf", kind: "pdf", mime: "application/pdf" },
@@ -30,6 +35,10 @@ interface FixtureSource {
 
 export function isFrontierDemoTask(taskName: string | null | undefined) {
   return Boolean(taskName && FRONTIER_TASK_PREFIXES.some((prefix) => taskName.startsWith(prefix)));
+}
+
+export function isFrontierDemoUserId(userId: string | null | undefined) {
+  return Boolean(userId?.startsWith("frontier_"));
 }
 
 export function useFrontierDemoSourcePreview({

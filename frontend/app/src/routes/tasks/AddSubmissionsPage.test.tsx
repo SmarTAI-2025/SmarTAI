@@ -4,11 +4,14 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { AddSubmissionsPage } from "./AddSubmissionsPage";
 
 const mutateAsync = vi.fn();
+let taskName = "Ordinary assignment";
 
 vi.mock("@/api/hooks", () => ({
+  useCurrentUser: () => ({ data: { id: "teacher-1" } }),
   useTask: () => ({
     data: {
       task_id: "task-1",
+      name: taskName,
       status: "problems_ready",
       student_count: 0,
       submission_file_name: null,
@@ -27,7 +30,7 @@ vi.mock("@/components/new-task/NewTaskStepper", () => ({
 }));
 
 vi.mock("@/i18n/I18nProvider", () => ({
-  useI18n: () => ({ t: (key: string) => key }),
+  useI18n: () => ({ t: (key: string) => key, locale: "en-US" }),
 }));
 
 function renderPage() {
@@ -43,6 +46,7 @@ function renderPage() {
 
 describe("AddSubmissionsPage OCR uploads", () => {
   beforeEach(() => {
+    taskName = "Ordinary assignment";
     mutateAsync.mockReset();
     mutateAsync.mockResolvedValue({ status: "started", task_id: "task-1" });
   });
@@ -70,5 +74,23 @@ describe("AddSubmissionsPage OCR uploads", () => {
       }));
     });
     expect(await screen.findByText("progress page")).toBeInTheDocument();
+  });
+
+  it("offers only the four named preset fixtures and a direct route back to the same Live Demo task", () => {
+    taskName = "SmarTAI Live Demo · 2026-08-11";
+
+    const { container } = renderPage();
+
+    expect(screen.getByRole("heading", { name: "Four samples are ready for this task" })).toBeInTheDocument();
+    expect(screen.getByText("Alex Chen")).toBeInTheDocument();
+    expect(screen.getByText("Maya Lin")).toBeInTheDocument();
+    expect(screen.getByText("Jordan Rivera")).toBeInTheDocument();
+    expect(screen.getByText("Taylor Singh")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /Continue with Demo samples/i })).toHaveAttribute(
+      "href",
+      "/frontier/live?taskId=task-1",
+    );
+    expect(container.querySelector('input[type="file"]')).not.toBeInTheDocument();
+    expect(screen.queryByText("submissionUploadIdentityTitle")).not.toBeInTheDocument();
   });
 });

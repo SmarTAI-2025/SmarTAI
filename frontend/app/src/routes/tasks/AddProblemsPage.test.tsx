@@ -6,6 +6,7 @@ import { AddProblemsPage } from "./AddProblemsPage";
 
 const preflightMutateAsync = vi.hoisted(() => vi.fn());
 const startMutateAsync = vi.hoisted(() => vi.fn());
+let taskName = "Assignment";
 const capabilityState = vi.hoisted(() => ({
   available: true,
   data: {
@@ -25,6 +26,7 @@ const capabilityState = vi.hoisted(() => ({
 }));
 
 vi.mock("@/api/hooks", () => ({
+  useCurrentUser: () => ({ data: { id: "teacher-1" } }),
   useExperts: () => ({
     data: [{ provider_id: "mock:test", enabled: true }],
     isLoading: false,
@@ -50,7 +52,7 @@ vi.mock("@/api/hooks", () => ({
     isSuccess: true,
     data: {
       task_id: "task-1",
-      name: "Assignment",
+      name: taskName,
       status: "draft",
       workflow_revision: 0,
       problem_count: 0,
@@ -90,6 +92,7 @@ async function uploadProblemFile(user: ReturnType<typeof userEvent.setup>) {
 }
 
 beforeEach(() => {
+  taskName = "Assignment";
   capabilityState.available = true;
   capabilityState.data.source_roles.problem.accepted_extensions = [".pdf", ".txt", ".md", ".markdown", ".jpg", ".jpeg", ".png", ".webp"];
   capabilityState.data.source_roles.reference_answer.accepted_extensions = [".pdf", ".txt", ".md", ".markdown", ".jpg", ".jpeg", ".png", ".webp"];
@@ -101,6 +104,25 @@ beforeEach(() => {
   startMutateAsync.mockReset();
   preflightMutateAsync.mockResolvedValue({ source_token: "source-1" });
   startMutateAsync.mockResolvedValue({ status: "started", job_id: "job-1" });
+});
+
+describe("AddProblemsPage Frontier Demo preset", () => {
+  it("shows the fixed synthetic question source and removes custom upload controls", () => {
+    taskName = "SmarTAI Live Demo · 2026-08-11";
+    renderPage();
+
+    expect(screen.getByRole("heading", { name: "题目文件已为当前任务准备好" })).toBeInTheDocument();
+    expect(screen.getByText("question_source.pdf")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "查看原文件" })).toHaveAttribute(
+      "href",
+      "/frontier-demo/live/question_source.pdf",
+    );
+    expect(screen.getByRole("link", { name: /使用预置题目继续/ })).toHaveAttribute(
+      "href",
+      "/frontier/live?taskId=task-1",
+    );
+    expect(screen.queryByLabelText("选择文件")).not.toBeInTheDocument();
+  });
 });
 
 describe("AddProblemsPage score configuration", () => {

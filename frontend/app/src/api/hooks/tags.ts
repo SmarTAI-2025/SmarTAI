@@ -3,10 +3,11 @@ import * as tagsApi from "@/api/tags";
 import type { TagColor } from "@/types";
 import { tagKeys, taskKeys } from "./keys";
 
-export function useTags() {
+export function useTags({ enabled = true }: { enabled?: boolean } = {}) {
   return useQuery({
     queryKey: tagKeys.list(),
     queryFn: tagsApi.listTags,
+    enabled,
   });
 }
 

@@ -1,4 +1,4 @@
-import { FileUp, LoaderCircle } from "lucide-react";
+import { ArrowRight, FileImage, FileText, FileUp, LoaderCircle } from "lucide-react";
 import {
   useEffect,
   useRef,
@@ -9,10 +9,11 @@ import {
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { toast } from "sonner";
 import { getAPIErrorCode, normalizeAPIError } from "@/api/client";
-import { useParseSubmissions, useTask } from "@/api/hooks";
+import { useCurrentUser, useParseSubmissions, useTask } from "@/api/hooks";
 import { NewTaskStepper } from "@/components/new-task/NewTaskStepper";
 import { useI18n } from "@/i18n/I18nProvider";
 import type { MessageKey } from "@/i18n/messages";
+import { isFrontierDemoTask, isFrontierDemoUserId } from "@/hooks/useFrontierDemoSourcePreview";
 import { cn } from "@/lib/cn";
 import type { SubmissionIdentityMode } from "@/types";
 
@@ -36,10 +37,18 @@ type SubmissionDraft = {
 
 const submissionDrafts = new Map<string, SubmissionDraft>();
 
+const FRONTIER_DEMO_SUBMISSIONS = [
+  { name: "Alex Chen", id: "DEMO-001", format: "PDF", href: "/frontier-demo/live/DEMO-001_typeset_raw.pdf", kind: "document" },
+  { name: "Maya Lin", id: "DEMO-002", format: "PNG · OCR", href: "/frontier-demo/live/DEMO-002_handwritten_raw.png", kind: "image" },
+  { name: "Jordan Rivera", id: "DEMO-003", format: "PDF", href: "/frontier-demo/live/DEMO-003_mixed_raw.pdf", kind: "document" },
+  { name: "Taylor Singh", id: "DEMO-004", format: "PNG · OCR", href: "/frontier-demo/live/scan_004_raw.png", kind: "image" },
+] as const;
+
 export function AddSubmissionsPage() {
   const { taskId } = useParams();
   const navigate = useNavigate();
-  const { t } = useI18n();
+  const { t, locale } = useI18n();
+  const currentUser = useCurrentUser();
   const taskQuery = useTask(taskId);
   const parseSubmissions = useParseSubmissions();
   const submissionInputRef = useRef<HTMLInputElement>(null);
@@ -55,6 +64,7 @@ export function AddSubmissionsPage() {
   const [needsModel, setNeedsModel] = useState(false);
 
   const task = taskQuery.data;
+  const isDemoTask = isFrontierDemoUserId(currentUser.data?.id) || isFrontierDemoTask(task?.name);
   const hasExistingSubmissions = Boolean(task?.submission_file_name || task?.student_count);
   const isRecognitionRunning = task?.status === "parsing_submissions";
   const isWorkflowBusy = task?.status === "extracting_problems" || task?.status === "grading";
@@ -168,6 +178,10 @@ export function AddSubmissionsPage() {
     : identityMode === "manual_review"
       ? t("submissionUploadManualHelp")
       : t("submissionUploadFilenameHelp");
+
+  if (isDemoTask && taskId) {
+    return <FrontierDemoSubmissionPreset locale={locale} taskId={taskId} />;
+  }
 
   return (
     <div className="w-full max-w-[1300px]">
@@ -336,6 +350,72 @@ export function AddSubmissionsPage() {
           </button>
         </div>
       </div>
+    </div>
+  );
+}
+
+function FrontierDemoSubmissionPreset({ locale, taskId }: { locale: string; taskId: string }) {
+  return (
+    <div className="w-full max-w-[1300px]">
+      <h1 className="text-[30px] font-bold leading-9 tracking-[-0.02em] text-foreground">
+        {locale === "zh-CN" ? "上传学生作答" : "Upload student submissions"}
+      </h1>
+      <NewTaskStepper currentStep={3} />
+
+      <section className="mx-auto mt-[45px] w-full max-w-[900px] rounded-[12px] border border-primary/25 bg-gradient-to-br from-[#f4f7ff] via-card to-[#f1fbf7] p-5 shadow-sm sm:p-7" aria-labelledby="frontier-demo-preset-title">
+        <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+          <div>
+            <p className="text-xs font-semibold uppercase tracking-[0.12em] text-primary">
+              {locale === "zh-CN" ? "Demo 预置作答" : "Demo preset submissions"}
+            </p>
+            <h2 id="frontier-demo-preset-title" className="mt-1 text-xl font-bold text-foreground">
+              {locale === "zh-CN" ? "4 份样本已为当前任务准备好" : "Four samples are ready for this task"}
+            </h2>
+            <p className="mt-2 max-w-2xl text-sm leading-6 text-muted-foreground">
+              {locale === "zh-CN"
+                ? "无需再次选择文件。返回 Live Demo 后，这组样本会通过真实 API 上传，并继续真实 PDF / 图片 OCR。"
+                : "No file selection is needed. Return to Live Demo to upload this set through the real API and continue real PDF/image OCR."}
+            </p>
+          </div>
+          <Link
+            to={`/frontier/live?taskId=${encodeURIComponent(taskId)}`}
+            className="inline-flex h-11 shrink-0 items-center justify-center gap-2 rounded-[8px] bg-primary px-4 text-sm font-semibold text-primary-foreground shadow-sm transition hover:opacity-90"
+          >
+            {locale === "zh-CN" ? "使用 Demo 样本继续" : "Continue with Demo samples"}
+            <ArrowRight className="h-4 w-4" aria-hidden="true" />
+          </Link>
+        </div>
+
+        <div className="mt-5 grid gap-2 sm:grid-cols-2">
+          {FRONTIER_DEMO_SUBMISSIONS.map((submission) => {
+            const Icon = submission.kind === "image" ? FileImage : FileText;
+            return (
+              <a
+                key={submission.id}
+                href={submission.href}
+                target="_blank"
+                rel="noreferrer"
+                className="group flex items-center gap-3 rounded-[9px] border bg-card/90 px-3 py-3 transition hover:border-primary/35 hover:shadow-sm"
+              >
+                <span className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-primary/10 text-primary">
+                  <Icon className="h-4 w-4" aria-hidden="true" />
+                </span>
+                <span className="min-w-0">
+                  <strong className="block truncate text-sm text-foreground">{submission.name}</strong>
+                  <span className="block text-[11px] text-muted-foreground">{submission.id} · {submission.format}</span>
+                </span>
+                <ArrowRight className="ml-auto h-4 w-4 shrink-0 text-muted-foreground transition group-hover:translate-x-0.5 group-hover:text-primary" aria-hidden="true" />
+              </a>
+            );
+          })}
+        </div>
+
+        <p className="mt-4 text-xs leading-5 text-muted-foreground">
+          {locale === "zh-CN"
+            ? "Demo 模式不接受自定义学生文件；普通教师任务仍保留完整上传与身份匹配能力。"
+            : "Custom student files are disabled in Demo mode; regular teacher tasks keep full upload and identity-matching controls."}
+        </p>
+      </section>
     </div>
   );
 }

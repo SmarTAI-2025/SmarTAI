@@ -344,7 +344,7 @@ def code_block(pdf: canvas.Canvas, lines: list[str], x: float, y: float, width: 
 def generate_typeset_submission() -> Path:
     path = OUTPUT / "DEMO-001_typeset.pdf"
     pdf = pdf_canvas(path)
-    y = page_frame(pdf, "DEMO-001 - Submission", "Typeset response - synthetic student", 1, 2)
+    y = page_frame(pdf, "Alex Chen - Submission", "Student ID: DEMO-001 | Typeset response - synthetic student", 1, 2)
     y = answer_heading(pdf, y, "Q1 - Calculus", "5 / 5")
     y = paragraph(pdf, "Let u = x^2, so du = 2x dx. Therefore I = (1/2) integral_0^1 exp(u) du = (e - 1)/2.", 60, y, A4[0] - 120, size=12, leading=18)
     y -= 35
@@ -353,7 +353,7 @@ def generate_typeset_submission() -> Path:
     y -= 12
     paragraph(pdf, "Starting from rest, v^2 = 2as gives v = sqrt(2 x 3.20 x 3) = 4.38 m/s.", 60, y, A4[0] - 120, size=11, leading=17)
     pdf.showPage()
-    y = page_frame(pdf, "DEMO-001 - Submission", "Typeset response - synthetic student", 2, 2)
+    y = page_frame(pdf, "Alex Chen - Submission", "Student ID: DEMO-001 | Typeset response - synthetic student", 2, 2)
     y = answer_heading(pdf, y, "Q3 - Linear algebra", "7 / 7")
     y = paragraph(pdf, "If Ax=0, then A^T A x=0. Conversely, if A^T A x=0, left-multiplying by x^T gives ||Ax||^2=0, hence Ax=0. The kernels are equal, so rank-nullity gives equal ranks.", 60, y, A4[0] - 120, size=11, leading=17)
     y -= 30
@@ -376,7 +376,7 @@ def generate_typeset_submission() -> Path:
 def generate_live_typeset_submission() -> Path:
     path = LIVE_OUTPUT / "DEMO-001_typeset_raw.pdf"
     pdf = pdf_canvas(path)
-    y = page_frame(pdf, "DEMO-001 - Submission", "Raw typeset response - synthetic student", 1, 2)
+    y = page_frame(pdf, "Alex Chen - Submission", "Student ID: DEMO-001 | Raw typeset response - synthetic student", 1, 2)
     y = answer_heading(pdf, y, "Q1 - Calculus", "")
     y = paragraph(pdf, "Let u = x^2, so du = 2x dx. Therefore I = (1/2) integral_0^1 exp(u) du = (e - 1)/2.", 60, y, A4[0] - 120, size=12, leading=18)
     y -= 35
@@ -385,7 +385,7 @@ def generate_live_typeset_submission() -> Path:
     y -= 12
     paragraph(pdf, "Starting from rest, v^2 = 2as gives v = sqrt(2 x 3.20 x 3) = 4.38 m/s.", 60, y, A4[0] - 120, size=11, leading=17)
     pdf.showPage()
-    y = page_frame(pdf, "DEMO-001 - Submission", "Raw typeset response - synthetic student", 2, 2)
+    y = page_frame(pdf, "Alex Chen - Submission", "Student ID: DEMO-001 | Raw typeset response - synthetic student", 2, 2)
     y = answer_heading(pdf, y, "Q3 - Linear algebra", "")
     y = paragraph(pdf, "If Ax=0, then A^T A x=0. Conversely, if A^T A x=0, left-multiplying by x^T gives ||Ax||^2=0, hence Ax=0. The kernels are equal, so rank-nullity gives equal ranks.", 60, y, A4[0] - 120, size=11, leading=17)
     y -= 30
@@ -405,7 +405,7 @@ def generate_live_typeset_submission() -> Path:
 def generate_mixed_submission() -> Path:
     path = OUTPUT / "DEMO-003_mixed.pdf"
     pdf = pdf_canvas(path)
-    y = page_frame(pdf, "DEMO-003 - Submission", "Mixed typeset response and annotations - synthetic student", 1, 2)
+    y = page_frame(pdf, "Jordan Rivera - Submission", "Student ID: DEMO-003 | Mixed response - synthetic student", 1, 2)
     y = answer_heading(pdf, y, "Q1 - Calculus", "5 / 5")
     y = paragraph(pdf, "With u=x^2, I=(e-1)/2.", 60, y, A4[0] - 120, size=12, leading=18)
     y -= 42
@@ -416,7 +416,7 @@ def generate_mixed_submission() -> Path:
     pdf.drawString(92, y - 28, "unit missing here")
     pdf.line(185, y - 24, 260, y - 7)
     pdf.showPage()
-    y = page_frame(pdf, "DEMO-003 - Submission", "Mixed typeset response and annotations - synthetic student", 2, 2)
+    y = page_frame(pdf, "Jordan Rivera - Submission", "Student ID: DEMO-003 | Mixed response - synthetic student", 2, 2)
     y = answer_heading(pdf, y, "Q3 - Linear algebra", "3 / 7")
     y = paragraph(pdf, "A is invertible, so multiplying by A^T cannot change the kernel. Therefore A and A^T A have equal rank.", 60, y, A4[0] - 120, size=11.5, leading=18)
     pdf.setFillColor(RED)
@@ -437,14 +437,14 @@ def generate_mixed_submission() -> Path:
 def generate_live_mixed_submission() -> Path:
     path = LIVE_OUTPUT / "DEMO-003_mixed_raw.pdf"
     pdf = pdf_canvas(path)
-    y = page_frame(pdf, "DEMO-003 - Submission", "Raw mixed response - synthetic student", 1, 2)
+    y = page_frame(pdf, "Jordan Rivera - Submission", "Student ID: DEMO-003 | Raw mixed response - synthetic student", 1, 2)
     y = answer_heading(pdf, y, "Q1 - Calculus", "")
     y = paragraph(pdf, "With u=x^2, I=(e-1)/2.", 60, y, A4[0] - 120, size=12, leading=18)
     y -= 42
     y = answer_heading(pdf, y, "Q2 - Mechanics", "")
     paragraph(pdf, "a = 9.81(sin 30 deg - 0.2 cos 30 deg) = 3.20; therefore v is approximately 4.4.", 60, y, A4[0] - 120, size=12, leading=18)
     pdf.showPage()
-    y = page_frame(pdf, "DEMO-003 - Submission", "Raw mixed response - synthetic student", 2, 2)
+    y = page_frame(pdf, "Jordan Rivera - Submission", "Student ID: DEMO-003 | Raw mixed response - synthetic student", 2, 2)
     y = answer_heading(pdf, y, "Q3 - Linear algebra", "")
     y = paragraph(pdf, "A is invertible, so multiplying by A^T cannot change the kernel. Therefore A and A^T A have equal rank.", 60, y, A4[0] - 120, size=11.5, leading=18)
     y -= 60
@@ -500,10 +500,13 @@ def generate_handwritten_submission() -> tuple[Path, Path, Path, Path]:
     hand_small = load_font(hand_path, 40)
     math_font = load_font(MATH, 43)
     utility = load_font(STIX, 25)
+    utility_bold = load_font(STIX_BOLD, 31)
     blue = (27, 67, 143)
     red = (177, 53, 42)
-    draw.text((235, 72), "DEMO-002  -  mixed STEM", font=hand, fill=blue)
-    draw.text((1090, 90), "synthetic", font=utility, fill=(100, 108, 113))
+    draw.text((235, 48), "Student: Maya Lin", font=utility_bold, fill=(32, 39, 48))
+    draw.text((1025, 52), "ID: DEMO-002", font=utility, fill=(32, 39, 48))
+    draw.text((235, 108), "mixed STEM responses", font=hand, fill=blue)
+    draw.text((1090, 120), "synthetic", font=utility, fill=(100, 108, 113))
     entries = [
         (220, "Q1   u = x^2,  du = 2x dx", hand_small),
         (300, "I = [exp(u)]_0^1 = e - 1", math_font),
@@ -544,15 +547,17 @@ def generate_handwritten_submission() -> tuple[Path, Path, Path, Path]:
     return png_path, pdf_path, raw_png_path, raw_pdf_path
 
 
-def generate_anonymous_scan() -> tuple[Path, Path, Path, Path]:
+def generate_scanned_submission() -> tuple[Path, Path, Path, Path]:
     image = paper(20260813)
     draw = ImageDraw.Draw(image)
     hand_path = HAND if HAND.exists() else HAND_FALLBACK
     hand = load_font(hand_path, 43)
     hand_small = load_font(hand_path, 37)
     utility = load_font(STIX, 25)
+    utility_bold = load_font(STIX_BOLD, 31)
     graphite = (44, 48, 54)
-    draw.text((230, 75), "name: __________________", font=hand, fill=graphite)
+    draw.text((230, 55), "Student: Taylor Singh", font=utility_bold, fill=graphite)
+    draw.text((1030, 58), "ID: DEMO-004", font=utility, fill=graphite)
     rotated_text(image, (230, 235), "Q1  I = (e - 1) / 2", hand, graphite, -0.8)
     rotated_text(image, (230, 470), "Q2  a ~ 3.2    v ~ 4.4", hand, graphite, 0.7)
     draw.rectangle((215, 690, 1340, 980), outline=(176, 178, 176), width=3)
@@ -567,7 +572,7 @@ def generate_anonymous_scan() -> tuple[Path, Path, Path, Path]:
     ]
     for index, line in enumerate(code):
         rotated_text(image, (250, 1160 + index * 83), line, hand_small, graphite, (index - 2) * 0.15)
-    draw.text((230, 1935), "SYNTHETIC DEMO DOCUMENT - identity intentionally absent", font=utility, fill=(98, 106, 112))
+    draw.text((230, 1935), "SYNTHETIC DEMO DOCUMENT - raw student input", font=utility, fill=(98, 106, 112))
     png_path = OUTPUT / "scan_004.png"
     image.save(png_path, optimize=True)
     pdf_path = OUTPUT / "scan_004.pdf"
@@ -658,22 +663,22 @@ def main() -> None:
         mixed_raw,
     ]
     handwritten_png, handwritten_pdf, handwritten_raw_png, handwritten_raw_pdf = generate_handwritten_submission()
-    anonymous_png, anonymous_pdf, anonymous_raw_png, anonymous_raw_pdf = generate_anonymous_scan()
+    scan_png, scan_pdf, scan_raw_png, scan_raw_pdf = generate_scanned_submission()
     paths.extend([
         handwritten_png,
         handwritten_pdf,
         handwritten_raw_png,
         handwritten_raw_pdf,
-        anonymous_png,
-        anonymous_pdf,
-        anonymous_raw_png,
-        anonymous_raw_pdf,
+        scan_png,
+        scan_pdf,
+        scan_raw_png,
+        scan_raw_pdf,
     ])
     submissions_zip = write_submissions_zip([
-        (typeset_raw, "DEMO-001_typeset.pdf"),
-        (handwritten_raw_pdf, "DEMO-002_handwritten.pdf"),
-        (mixed_raw, "DEMO-003_mixed.pdf"),
-        (anonymous_raw_pdf, "scan_004.pdf"),
+        (typeset_raw, "DEMO-001_Alex-Chen_typeset.pdf"),
+        (handwritten_raw_png, "DEMO-002_Maya-Lin_handwritten.png"),
+        (mixed_raw, "DEMO-003_Jordan-Rivera_mixed.pdf"),
+        (scan_raw_png, "DEMO-004_Taylor-Singh_scan.png"),
     ])
     paths.append(submissions_zip)
     sha256sums = write_sha256sums(paths)
