@@ -16,6 +16,7 @@ describe("SyntaxHighlightedCode", () => {
     const { container } = render(<SyntaxHighlightedCode code={code} locale="en-US" />);
 
     expect(container.querySelector("[data-code-language='python']")).toBeInTheDocument();
+    expect(container.querySelector("[data-code-theme='github-light']")).toHaveClass("bg-[#f6f8fa]");
     expect(screen.getByLabelText("Code language: Python")).toHaveTextContent("Python");
     expect(container.querySelector("pre")).toHaveTextContent("def fibonacci(n):");
     expect(Array.from(container.querySelectorAll("[data-code-token='keyword']")).map((node) => node.textContent))
