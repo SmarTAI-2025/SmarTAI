@@ -1,7 +1,6 @@
 import {
   ArrowRight,
   BarChart3,
-  Bot,
   Braces,
   Check,
   ChevronRight,
@@ -13,7 +12,6 @@ import {
   MessageCircle,
   ScanText,
   ShieldCheck,
-  Sparkles,
 } from "lucide-react";
 import { useEffect, useState, type CSSProperties, type ReactNode } from "react";
 import { Link } from "react-router-dom";
@@ -245,7 +243,7 @@ export function FrontierLandingPage() {
                 </div>
               </div>
               <div className="frontier-analysis-callout">
-                <Sparkles />
+                <Eye aria-hidden="true" />
                 <span>{tx(locale, "Q3 · 平均得分率最低，建议教师查看作答", "Q3 · lowest average attainment; review submissions")}</span>
               </div>
             </div>
@@ -306,7 +304,7 @@ export function FrontierLandingPage() {
             </p>
             <ul>
               <li><ShieldCheck aria-hidden="true" /> {tx(locale, "原文优先的可追溯性", "Source-first traceability")}</li>
-              <li><Sparkles aria-hidden="true" /> {tx(locale, "需要关注的项目保留在教师复核流程中", "Items that need attention remain visible for teacher review")}</li>
+              <li><Eye aria-hidden="true" /> {tx(locale, "需要关注的项目保留在教师复核流程中", "Items that need attention remain visible for teacher review")}</li>
               <li><BarChart3 aria-hidden="true" /> {tx(locale, "分析说明所依据的评分数据与版本", "Analysis states which grading data and version it uses")}</li>
             </ul>
             <Link className="frontier-inline-link" to={liveDemoEntryHref}>
@@ -359,14 +357,11 @@ export function FrontierLandingPage() {
           <div className="frontier-ask-workbench">
             <div className="frontier-ask-console">
               <div className="frontier-ask-console-title">
-                <span>
-                  <Bot aria-hidden="true" />
-                  Ask SmarTAI
-                  <SmarTAIMascot variant="thinking" size="sm" className="-my-3 ml-1" />
-                </span>
+                <span>Ask SmarTAI</span>
                 <small>{tx(locale, "产品导览 · 合成数据", "Product walkthrough · synthetic data")}</small>
               </div>
               <div className="frontier-ask-prompts" aria-label={tx(locale, "分析问题示例", "Example analysis questions")}>
+                <SmarTAIMascot variant="thinking" size="sm" className="frontier-ask-mascot" />
                 {insights.map((item, index) => (
                   <button
                     key={item.id}
@@ -384,7 +379,7 @@ export function FrontierLandingPage() {
                   <p>{insight.query}</p>
                 </div>
                 <div className="frontier-smartai-answer" key={insight.id}>
-                  <span><Sparkles aria-hidden="true" /> SmarTAI</span>
+                  <span>SmarTAI</span>
                   <p>{insight.answer}</p>
                   <small>{tx(locale, "依据：4 道题 · 4 份合成作答 · 当前评分版本", "Based on 4 questions · 4 synthetic submissions · current grading version")}</small>
                 </div>
@@ -393,7 +388,7 @@ export function FrontierLandingPage() {
                   <p>{insight.followUpQuery}</p>
                 </div>
                 <div className="frontier-smartai-answer frontier-followup-answer" key={`${insight.id}-follow-up`}>
-                  <span><Sparkles aria-hidden="true" /> SmarTAI</span>
+                  <span>SmarTAI</span>
                   <p>{insight.followUpAnswer}</p>
                 </div>
               </div>
@@ -412,7 +407,6 @@ export function FrontierLandingPage() {
                 <p>{insight.chartRequest}</p>
               </div>
               <div className="frontier-chart-generated-label">
-                <Sparkles aria-hidden="true" />
                 <span>{tx(locale, "SmarTAI 已根据当前评分结果生成下图", "Ask SmarTAI generated the chart below from the current grading results")}</span>
               </div>
               <InsightChart insight={insight} locale={locale} />
@@ -577,7 +571,6 @@ function WalkthroughStageDetail({ id, locale, metric }: { id: WalkthroughStageId
       </div>
       <div className="frontier-analysis-query"><MessageCircle aria-hidden="true" /> {tx(locale, "哪道题最需要重新讲解？", "Which question needs reteaching?")}</div>
       <div className="frontier-analysis-answer">
-        <Sparkles aria-hidden="true" />
         <span>{tx(locale, "Q3 的平均得分率最低。建议教师先查看该题作答，再决定是否重新讲解。", "Q3 has the lowest average attainment. Review those submissions before deciding whether to reteach it.")}</span>
       </div>
       <div className="frontier-analysis-metrics">

@@ -1656,9 +1656,15 @@
 
 .frontier-ask-prompts {
   display: flex;
+  align-items: center;
   flex-wrap: wrap;
   gap: 0.45rem;
   margin-top: 1.6rem;
+}
+
+.frontier-ask-mascot {
+  flex: 0 0 auto;
+  margin: -0.6rem 0.1rem -0.6rem 0;
 }
 
 .frontier-ask-prompts button {
