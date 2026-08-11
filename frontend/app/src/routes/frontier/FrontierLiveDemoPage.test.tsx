@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { StrictMode } from "react";
 import { Link, MemoryRouter, Route, Routes } from "react-router-dom";
@@ -201,6 +201,10 @@ describe("FrontierLiveDemoPage", () => {
     expect(screen.getByText("Recognized answer for q1 by demo-2")).toBeVisible();
     expect(screen.getByText("Recognized answer for q1 by demo-3")).toBeVisible();
     expect(screen.getByText("Recognized answer for q1 by demo-4")).toBeVisible();
+    const alexCard = screen.getByText("Alex Chen").closest("article");
+    expect(alexCard).not.toBeNull();
+    expect(within(alexCard!).getAllByText(/^Q[1-4]$/u).map((label) => label.textContent))
+      .toEqual(["Q1", "Q2", "Q3", "Q4"]);
     await user.click(screen.getByRole("button", { name: /continue to live grading/i }));
     await waitFor(() => expect(saveGradingSetup).toHaveBeenCalledTimes(1));
     await waitFor(() => expect(startGrading).toHaveBeenCalledTimes(1));
@@ -275,7 +279,7 @@ function recognizedStudents(): Task["student_data"] {
       source_filename: filenames[index],
       identity_status: "matched" as const,
       identity_match_method: "filename" as const,
-      stu_ans: Object.values(taskWithQuestions().problem_data).map((problem) => ({
+      stu_ans: Object.values(taskWithQuestions().problem_data).reverse().map((problem) => ({
         q_id: problem.q_id,
         number: problem.number,
         type: problem.type,

@@ -530,10 +530,10 @@ function SubmissionRecognitionReview({ task, locale, busy, onContinue }: { task:
               </span>
             </div>
             <div className="mt-3 grid gap-2 border-t pt-3">
-              {student.stu_ans.map((answer) => (
+              {[...student.stu_ans].sort(compareStudentAnswers).map((answer) => (
                 <div key={answer.q_id} className="rounded-md bg-muted/45 px-3 py-2">
                   <div className="flex items-center justify-between gap-2">
-                    <span className="text-[11px] font-bold text-primary">Q{answer.number || answer.q_id}</span>
+                    <span className="text-[11px] font-bold text-primary">{studentAnswerLabel(answer)}</span>
                     {answer.flag?.length ? <span className="text-[10px] font-medium text-warning">{answer.flag.join(" · ")}</span> : null}
                   </div>
                   <MarkdownMath className="mt-1 max-h-28 overflow-auto text-[11px] leading-5 text-foreground">{answer.content}</MarkdownMath>
@@ -831,7 +831,7 @@ function TeacherMaterialConfirmation({
                 <p className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">{tx(locale, "本次生成的评分依据与标答", "Rubric and answer generated in this run")}</p>
                 <MarkdownMath className="mt-1 text-xs leading-5 text-foreground">{problem.criterion}</MarkdownMath>
                 <MarkdownMath className="mt-2 border-t pt-2 text-xs leading-5 text-muted-foreground">{problem.reference_answer ?? ""}</MarkdownMath>
-                {problem.solution_code ? <div className="mt-2 overflow-auto rounded-md bg-slate-950 p-2 text-[11px] text-slate-100"><SyntaxHighlightedCode code={problem.solution_code} languageHint={`${problem.type}\n${problem.stem}`} locale={locale} /></div> : null}
+                {problem.solution_code ? <div className="mt-2 overflow-auto"><SyntaxHighlightedCode code={problem.solution_code} languageHint={`${problem.type}\n${problem.stem}`} locale={locale} /></div> : null}
                 {problem.test_cases?.length ? <p className="mt-2 text-[11px] font-semibold text-accent">{tx(locale, `${problem.test_cases.length} 个代码测试样例已生成`, `${problem.test_cases.length} programming tests generated`)}</p> : null}
               </div>
             </div>
@@ -976,6 +976,20 @@ export function alignDemoProblems(problems: ProblemInfo[]) {
 function problemNumber(value: string) {
   const match = value.match(/\d+/);
   return match ? Number.parseInt(match[0], 10) : null;
+}
+
+function studentAnswerLabel(answer: Task["student_data"][string]["stu_ans"][number]) {
+  const number = problemNumber(answer.number) ?? problemNumber(answer.q_id);
+  return number === null ? answer.number || answer.q_id : `Q${number}`;
+}
+
+function compareStudentAnswers(
+  left: Task["student_data"][string]["stu_ans"][number],
+  right: Task["student_data"][string]["stu_ans"][number],
+) {
+  const leftNumber = problemNumber(left.number) ?? problemNumber(left.q_id) ?? Number.MAX_SAFE_INTEGER;
+  const rightNumber = problemNumber(right.number) ?? problemNumber(right.q_id) ?? Number.MAX_SAFE_INTEGER;
+  return leftNumber - rightNumber || left.q_id.localeCompare(right.q_id);
 }
 
 async function fixtureFile(url: string, filename: string, type: string) {
