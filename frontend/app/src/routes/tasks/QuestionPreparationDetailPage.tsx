@@ -10,13 +10,13 @@ import {
   Pencil,
   Plus,
   Save,
-  Search,
   Trash2,
   X,
 } from "lucide-react";
 import { Link, Navigate, useBeforeUnload, useBlocker, useLocation, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { toast } from "sonner";
 import { useTask, useUpdateProblem } from "@/api/hooks/tasks";
+import { SmarTAIMascot } from "@/components/brand/SmarTAIMascot";
 import { NewTaskStepper } from "@/components/new-task/NewTaskStepper";
 import { OriginalFilePreviewPanel } from "@/components/tasks/OriginalFilePreviewPanel";
 import { OriginalFilePreviewTrigger } from "@/components/tasks/OriginalFilePreviewTrigger";
@@ -272,10 +272,11 @@ export function QuestionPreparationDetailPage() {
       </div>
       <NewTaskStepper currentStep={2} />
 
-      <label className="relative mt-6 block">
-        <span className="sr-only">{tx(locale, "SmarTAI 智能筛选题目", "SmarTAI Smart question filter")}</span>
-        <Search aria-hidden="true" className="pointer-events-none absolute left-4 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-        <input
+      <div className="mt-6 flex items-center gap-2">
+        <SmarTAIMascot variant="thinking" size="xs" />
+        <label className="relative min-w-0 flex-1">
+          <span className="sr-only">{tx(locale, "SmarTAI 智能筛选题目", "SmarTAI Smart question filter")}</span>
+          <input
           value={query}
           inputMode="search"
           onCompositionStart={() => {
@@ -310,9 +311,10 @@ export function QuestionPreparationDetailPage() {
             }
           }}
           placeholder={tx(locale, "SmarTAI 智能搜索：题号、题型、题目内容，或“编程题 / 低置信 / 冲突”", "SmarTAI Smart Search: number, type, content, or “programming / low confidence / conflict”")}
-          className="h-12 w-full rounded-[10px] border bg-card pl-11 pr-4 text-[13px] outline-none placeholder:text-muted-foreground focus:border-primary focus:ring-2 focus:ring-primary/15"
-        />
-      </label>
+          className="h-12 w-full rounded-[10px] border bg-card pl-4 pr-4 text-[13px] outline-none placeholder:text-muted-foreground focus:border-primary focus:ring-2 focus:ring-primary/15"
+          />
+        </label>
+      </div>
 
       {readOnly ? <p className="mt-4 rounded-[8px] border border-amber-200 bg-amber-50 px-4 py-3 text-xs leading-5 text-amber-800 dark:border-amber-900 dark:bg-amber-950/20 dark:text-amber-200">{tx(locale, "当前任务已进入后续阶段，本页可浏览但不能修改。", "This task has moved to a later stage. The page is read-only.")}</p> : null}
 

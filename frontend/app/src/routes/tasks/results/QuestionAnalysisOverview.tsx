@@ -1,4 +1,4 @@
-import { ArrowRight, Search, X } from "lucide-react";
+import { ArrowRight, X } from "lucide-react";
 import { useMemo, type ReactNode } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { SmarTAIMascot } from "@/components/brand/SmarTAIMascot";
@@ -134,26 +134,25 @@ export function QuestionAnalysisOverview({
 
         <div className="mt-4">
           <div className="flex items-center gap-3">
-          <label className="relative block min-w-0 flex-1">
-            <Search aria-hidden="true" className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-            <input
-              value={smartSearch.draftValue}
-              inputMode="search"
-              onBlur={smartSearch.handleBlur}
-              onCompositionStart={smartSearch.handleCompositionStart}
-              onCompositionEnd={smartSearch.handleCompositionEnd}
-              onChange={smartSearch.handleChange}
-              placeholder={tx(locale, "SmarTAI 智能搜索：例如 计算题 得分率低于 70% 低置信 已复核 Q3", "SmarTAI Smart Search: calculation below 70% low confidence reviewed Q3")}
-              aria-label={tx(locale, "SmarTAI 自然语言筛选题目", "SmarTAI natural-language question filter")}
-              className="h-11 w-full rounded-[9px] border bg-background pl-10 pr-10 text-[13px] text-foreground outline-none placeholder:text-muted-foreground focus:border-primary focus:ring-2 focus:ring-primary/15"
-            />
-            {smartSearch.draftValue ? (
-              <button type="button" onClick={() => smartSearch.commitValue("")} aria-label={tx(locale, "清除 SmarTAI 自然语言筛选", "Clear SmarTAI natural-language filter")} className="absolute right-2 top-1/2 inline-flex h-7 w-7 -translate-y-1/2 items-center justify-center rounded-full text-muted-foreground hover:bg-muted hover:text-foreground">
-                <X aria-hidden="true" className="h-4 w-4" />
-              </button>
-            ) : null}
-          </label>
-          <SmarTAIMascot variant="thinking" size="sm" className="hidden sm:inline-flex" />
+            <SmarTAIMascot variant="thinking" size="xs" />
+            <label className="relative block min-w-0 flex-1">
+              <input
+                value={smartSearch.draftValue}
+                inputMode="search"
+                onBlur={smartSearch.handleBlur}
+                onCompositionStart={smartSearch.handleCompositionStart}
+                onCompositionEnd={smartSearch.handleCompositionEnd}
+                onChange={smartSearch.handleChange}
+                placeholder={tx(locale, "SmarTAI 智能搜索：例如 计算题 得分率低于 70% 低置信 已复核 Q3", "SmarTAI Smart Search: calculation below 70% low confidence reviewed Q3")}
+                aria-label={tx(locale, "SmarTAI 自然语言筛选题目", "SmarTAI natural-language question filter")}
+                className="h-11 w-full rounded-[9px] border bg-background pl-3 pr-10 text-[13px] text-foreground outline-none placeholder:text-muted-foreground focus:border-primary focus:ring-2 focus:ring-primary/15"
+              />
+              {smartSearch.draftValue ? (
+                <button type="button" onClick={() => smartSearch.commitValue("")} aria-label={tx(locale, "清除 SmarTAI 自然语言筛选", "Clear SmarTAI natural-language filter")} className="absolute right-2 top-1/2 inline-flex h-7 w-7 -translate-y-1/2 items-center justify-center rounded-full text-muted-foreground hover:bg-muted hover:text-foreground">
+                  <X aria-hidden="true" className="h-4 w-4" />
+                </button>
+              ) : null}
+            </label>
           </div>
 
           <div className="mt-2 flex min-h-7 flex-wrap items-center gap-2">

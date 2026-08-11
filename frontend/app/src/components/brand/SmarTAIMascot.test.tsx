@@ -16,11 +16,12 @@ describe("SmarTAIMascot", () => {
     expect(images?.[1]).toHaveClass("motion-reduce:block");
   });
 
-  it("uses only the static companion for the idle variant", () => {
-    const { container } = render(<SmarTAIMascot variant="idle" />);
+  it("uses only the static companion for the compact idle variant", () => {
+    const { container } = render(<SmarTAIMascot variant="idle" size="xs" />);
     const images = container.querySelectorAll('[data-smartai-mascot="idle"] img');
 
     expect(images).toHaveLength(1);
     expect(images[0]).toHaveAttribute("src", "/brand/smartai-mascot.svg");
+    expect(container.firstChild).toHaveClass("h-9", "w-11");
   });
 });

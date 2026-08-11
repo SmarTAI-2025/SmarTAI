@@ -1,7 +1,7 @@
 import { cn } from "@/lib/cn";
 
 export type SmarTAIMascotVariant = "idle" | "thinking" | "grading";
-export type SmarTAIMascotSize = "sm" | "md" | "lg";
+export type SmarTAIMascotSize = "xs" | "sm" | "md" | "lg";
 
 const STATIC_SRC = "/brand/smartai-mascot.svg";
 
@@ -11,6 +11,7 @@ const ANIMATED_SRC: Record<Exclude<SmarTAIMascotVariant, "idle">, string> = {
 };
 
 const SIZE_CLASS: Record<SmarTAIMascotSize, string> = {
+  xs: "h-9 w-11",
   sm: "h-12 w-16",
   md: "h-20 w-28",
   lg: "h-24 w-36",

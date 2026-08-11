@@ -1,7 +1,8 @@
-import { AlertCircle, CheckCircle2, ChevronRight, RotateCcw, Search } from "lucide-react";
+import { AlertCircle, CheckCircle2, ChevronRight, RotateCcw } from "lucide-react";
 import { useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 import { Link, Navigate, useParams, useSearchParams } from "react-router-dom";
 import { useTask } from "@/api/hooks/tasks";
+import { SmarTAIMascot } from "@/components/brand/SmarTAIMascot";
 import { NewTaskStepper } from "@/components/new-task/NewTaskStepper";
 import { MatrixQueueWorkspace } from "@/components/tasks/MatrixQueueWorkspace";
 import { MatrixStatusCell, type MatrixStatusTone } from "@/components/tasks/MatrixStatusCell";
@@ -168,10 +169,11 @@ export function SubmissionReviewOverviewPage() {
         </dl>
 
         <div className="mt-6 min-w-0 rounded-[10px] border bg-card p-2.5 sm:flex sm:min-h-[52px] sm:items-center sm:gap-2.5 sm:p-1.5">
-          <label className="relative block min-w-0 flex-1">
-            <span className="sr-only">{t("submissionReviewSearchLabel")}</span>
-            <Search aria-hidden="true" className="pointer-events-none absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-            <input
+          <div className="flex min-w-0 flex-1 items-center gap-2">
+            <SmarTAIMascot variant="thinking" size="xs" />
+            <label className="relative block min-w-0 flex-1">
+              <span className="sr-only">{t("submissionReviewSearchLabel")}</span>
+              <input
               type="search"
               value={queryDraft}
               onCompositionStart={() => {
@@ -206,9 +208,10 @@ export function SubmissionReviewOverviewPage() {
                 }
               }}
               placeholder={t("submissionReviewSearchPlaceholder")}
-              className="h-10 w-full rounded-[7px] border-0 bg-slate-50 pl-10 pr-3 text-[13px] text-foreground outline-none placeholder:text-muted-foreground focus:ring-2 focus:ring-primary/20 dark:bg-slate-900/50"
-            />
-          </label>
+                className="h-10 w-full rounded-[7px] border-0 bg-slate-50 pl-3 pr-3 text-[13px] text-foreground outline-none placeholder:text-muted-foreground focus:ring-2 focus:ring-primary/20 dark:bg-slate-900/50"
+              />
+            </label>
+          </div>
           <label className="mt-2 block shrink-0 sm:mt-0 sm:w-[170px]">
             <span className="sr-only">{t("submissionReviewStatusLabel")}</span>
             <select

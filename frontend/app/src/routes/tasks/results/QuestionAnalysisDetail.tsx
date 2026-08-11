@@ -1,6 +1,7 @@
-import { ArrowDown, ArrowLeft, ArrowRight, ArrowUp, Search, UserRound, X } from "lucide-react";
+import { ArrowDown, ArrowLeft, ArrowRight, ArrowUp, UserRound, X } from "lucide-react";
 import { useEffect, useMemo, type ReactNode } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
+import { SmarTAIMascot } from "@/components/brand/SmarTAIMascot";
 import {
   effectiveCorrectionScore,
   formatCorrectionScoreSource,
@@ -140,19 +141,23 @@ export function QuestionAnalysisDetail({
       </div>
 
       <div className="relative mt-4">
-        <Search aria-hidden="true" className="pointer-events-none absolute left-4 top-4 h-4 w-4 text-muted-foreground" />
-        <input
-          value={smartSearch.draftValue}
-          inputMode="search"
-          onBlur={smartSearch.handleBlur}
-          onCompositionStart={smartSearch.handleCompositionStart}
-          onCompositionEnd={smartSearch.handleCompositionEnd}
-          onChange={smartSearch.handleChange}
-          placeholder={tx(locale, "SmarTAI 智能搜索：题号、题干、题型或知识点，例如“积分题”", "SmarTAI Smart Search: number, stem, type, or knowledge point")}
-          aria-label={tx(locale, "SmarTAI 智能查找题目", "SmarTAI Smart question finder")}
-          className="h-12 w-full rounded-[10px] border bg-background pl-11 pr-11 text-[13px] text-foreground outline-none focus:border-primary focus:ring-2 focus:ring-primary/15"
-        />
-        {smartSearch.draftValue ? <button type="button" onClick={() => smartSearch.commitValue("")} aria-label={tx(locale, "清空题目筛选", "Clear question filter")} className="absolute right-2.5 top-2.5 inline-flex h-7 w-7 items-center justify-center rounded-full text-muted-foreground hover:bg-muted hover:text-foreground"><X aria-hidden="true" className="h-4 w-4" /></button> : null}
+        <div className="flex items-center gap-2">
+          <SmarTAIMascot variant="thinking" size="xs" />
+          <label className="relative min-w-0 flex-1">
+            <input
+              value={smartSearch.draftValue}
+              inputMode="search"
+              onBlur={smartSearch.handleBlur}
+              onCompositionStart={smartSearch.handleCompositionStart}
+              onCompositionEnd={smartSearch.handleCompositionEnd}
+              onChange={smartSearch.handleChange}
+              placeholder={tx(locale, "SmarTAI 智能搜索：题号、题干、题型或知识点，例如“积分题”", "SmarTAI Smart Search: number, stem, type, or knowledge point")}
+              aria-label={tx(locale, "SmarTAI 智能查找题目", "SmarTAI Smart question finder")}
+              className="h-12 w-full rounded-[10px] border bg-background pl-3 pr-11 text-[13px] text-foreground outline-none focus:border-primary focus:ring-2 focus:ring-primary/15"
+            />
+            {smartSearch.draftValue ? <button type="button" onClick={() => smartSearch.commitValue("")} aria-label={tx(locale, "清空题目筛选", "Clear question filter")} className="absolute right-2.5 top-2.5 inline-flex h-7 w-7 items-center justify-center rounded-full text-muted-foreground hover:bg-muted hover:text-foreground"><X aria-hidden="true" className="h-4 w-4" /></button> : null}
+          </label>
+        </div>
         {query && smartSearch.draftValue === query ? (
           <div className="absolute left-0 right-0 top-[52px] z-30 max-h-64 overflow-y-auto rounded-[8px] border bg-card p-1.5 shadow-lg">
             {matches.length ? matches.slice(0, 10).map((match) => (
