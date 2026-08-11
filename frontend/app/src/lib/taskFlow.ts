@@ -49,7 +49,10 @@ export function getTaskReachableStep(task?: TaskReachabilityInput | null): numbe
     case "grading":
       return 5;
     case "graded":
-      return 6;
+      // Grading results are already persisted and safe to analyse before the
+      // teacher confirms the release. Publication and artifact generation
+      // remain gated by finalization; only the read-only analysis step opens.
+      return 7;
     case "review_confirmed":
     case "generating_analysis":
     case "finalized":

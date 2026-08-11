@@ -14,7 +14,7 @@ const markdownMathComponents: Components = {
 };
 
 export function MarkdownMath({ children, className }: { children?: string | null; className?: string }) {
-  const content = children?.trim();
+  const content = normalizeMarkdownMathInput(children ?? "").trim();
   if (!content) {
     return null;
   }
@@ -35,4 +35,18 @@ export function MarkdownMath({ children, className }: { children?: string | null
       </ReactMarkdown>
     </div>
   );
+}
+
+const DOUBLE_ESCAPED_LATEX = /\\\\(?=(?:int|sum|prod|lim|frac|dfrac|tfrac|sqrt|ker|rank|sin|cos|tan|log|ln|exp|det|max|min|alpha|beta|gamma|delta|epsilon|theta|lambda|mu|nu|pi|rho|sigma|tau|phi|psi|omega|infty|partial|nabla|ell|lVert|rVert|Vert|text|mathrm|mathbf|mathit|operatorname|left|right|begin|end|times|cdot|div|pm|mp|leq?|geq?|neq|approx|equiv|in|notin|subseteq|supseteq|to|mapsto|circ)(?![A-Za-z]))/g;
+const OVERESCAPED_NEWLINE = /\\{1,2}n(?=(?:\\{1,2}n|[\s\-*#>0-9(A-Z]|[\u3400-\u9fff]|$))/g;
+
+/** Presentation fallback for already-persisted over-escaped model prose. */
+export function normalizeMarkdownMathInput(value: string): string {
+  return value
+    .replace(/\\{1,2}r\\{1,2}n/g, "\n")
+    .replace(OVERESCAPED_NEWLINE, "\n")
+    .replace(DOUBLE_ESCAPED_LATEX, "\\")
+    .replace(/\\\\(?=[\[\]()])/g, "\\")
+    .replace(/(?<!\$)\${3,}(?!\$)/g, () => "$$")
+    .replace(/\n{3,}/g, "\n\n");
 }
