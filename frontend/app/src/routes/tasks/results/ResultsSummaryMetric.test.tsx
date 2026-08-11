@@ -13,6 +13,7 @@ describe("ResultsSummaryMetric", () => {
     render(<ResultsSummaryMetric label={label} value="72%" tone={tone} />);
 
     expect(screen.getByText(label).parentElement).toHaveAttribute("data-result-tone", tone);
+    expect(screen.getByText(label).parentElement).toHaveClass("bg-white");
     expect(screen.getByText("72%")).toBeVisible();
   });
 });

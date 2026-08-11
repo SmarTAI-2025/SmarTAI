@@ -4,27 +4,27 @@ export type ResultMetricTone = "primary" | "accent" | "secondary" | "warning" | 
 
 const TONE_STYLES: Record<ResultMetricTone, { card: string; value: string; accent: string }> = {
   primary: {
-    card: "border-[#dbe0ff] bg-[#f4f5ff]",
+    card: "border-border/75 bg-white",
     value: "text-[#4f61c9]",
     accent: "bg-[#7c8cf8]",
   },
   accent: {
-    card: "border-[#cfece4] bg-[#effaf7]",
+    card: "border-border/75 bg-white",
     value: "text-[#247d69]",
     accent: "bg-[#5ec7ae]",
   },
   secondary: {
-    card: "border-[#e2daf9] bg-[#f7f3ff]",
+    card: "border-border/75 bg-white",
     value: "text-[#7058b2]",
     accent: "bg-[#a995e8]",
   },
   warning: {
-    card: "border-[#f3dfbf] bg-[#fff8ee]",
+    card: "border-border/75 bg-white",
     value: "text-[#a56524]",
     accent: "bg-[#f3b780]",
   },
   danger: {
-    card: "border-[#f2d5da] bg-[#fff3f5]",
+    card: "border-border/75 bg-white",
     value: "text-[#b64f60]",
     accent: "bg-[#f08f9b]",
   },
@@ -46,7 +46,7 @@ export function ResultsSummaryMetric({
   return (
     <div
       className={cn(
-        "relative overflow-hidden rounded-[9px] border shadow-[0_8px_22px_-20px_rgba(40,56,99,0.55)]",
+        "relative overflow-hidden rounded-[9px] border shadow-[0_8px_22px_-22px_rgba(40,56,99,0.45)]",
         styles.card,
         size === "large" ? "px-4 py-4" : "px-3 py-3",
       )}
