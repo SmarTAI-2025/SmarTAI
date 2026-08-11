@@ -54,6 +54,7 @@ PROB_SYSTEM_PROMPT = """You are a professional AI teaching assistant with gradua
     - **其他**: Does not fit into the above 5 categories.
 
     **[Important]: Preserve the stem information completely. Do not delete or translate content.**
+    For Markdown rendering, enclose every inline LaTeX expression in `$...$` and every display expression in `$$...$$`; never leave commands such as `\\int`, `\\mu`, or `\\times` bare in prose. Do not add math delimiters inside code blocks.
 
 4. **Design Grading Criteria (`criterion`)**: Express rubric allocations only as percentages whose scoring steps add up to 100%. If source criteria use absolute points, preserve their relative weighting but convert the allocations to percentages. Do not state or infer the question's maximum score; it is configured separately by the authenticated teacher. If no criteria are provided, design an appropriate percentage-based rubric for the problem type.
 
@@ -442,6 +443,7 @@ Your task:
 3. If a problem has no matching answer, omit that q_id from the mapping.
 
 **[Critical]: Do NOT reproduce the question stem in the answer text. Output ONLY the answer / solution portion (final result + key derivation steps if present). The same document may also contain the questions — strip them.**
+In prose fields, wrap inline LaTeX in `$...$` and display LaTeX in `$$...$$`; never leave LaTeX commands bare or add math delimiters inside code.
 
 **[Critical]: Output must be a single JSON object starting with `{` and ending with `}`. No preamble, no markdown fences.**
 **[Note]: Escape backslashes as `\\\\` in string values for LaTeX safety.**
@@ -670,6 +672,7 @@ Rules:
 - In organized mode, prefer explicit matching question numbers/headings.
 - In extract_from_source mode, use the extraction hint to locate the relevant source passage.
 - Empty or unsupported matches must be omitted, not guessed.
+- In prose fields, wrap inline LaTeX in `$...$` and display LaTeX in `$$...$$`; never add math delimiters inside code or test data.
 - Output JSON only, without markdown fences or commentary.
 """
 
