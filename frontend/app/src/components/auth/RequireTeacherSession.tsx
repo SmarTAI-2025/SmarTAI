@@ -14,6 +14,7 @@ export function RequireTeacherSession({ children }: { children: ReactNode }) {
   const { locale } = useI18n();
   const zh = locale === "zh-CN";
   const returnTo = `${location.pathname}${location.search}${location.hash}`;
+  const redirectTo = sessionRedirectFor(location.pathname);
 
   if (currentUser.isLoading) {
     return (
@@ -36,6 +37,7 @@ export function RequireTeacherSession({ children }: { children: ReactNode }) {
       <ResetSessionAndRedirect
         message={zh ? "登录状态已过期，请重新登录。" : "Your session expired. Sign in again."}
         returnTo={returnTo}
+        redirectTo={redirectTo}
       />
     );
   }
@@ -49,6 +51,7 @@ export function RequireTeacherSession({ children }: { children: ReactNode }) {
             : "This workspace is currently available to teachers only. Sign in with a teacher account."
         }
         returnTo={returnTo}
+        redirectTo={redirectTo}
       />
     );
   }
@@ -56,13 +59,36 @@ export function RequireTeacherSession({ children }: { children: ReactNode }) {
   return children;
 }
 
-function ResetSessionAndRedirect({ message, returnTo }: { message: string; returnTo: string }) {
+function ResetSessionAndRedirect({
+  message,
+  returnTo,
+  redirectTo,
+}: {
+  message: string;
+  returnTo: string;
+  redirectTo: "/frontier" | "/login";
+}) {
   const queryClient = useQueryClient();
 
   useEffect(() => {
     clearAuthToken();
     queryClient.clear();
-  }, [queryClient]);
+    if (redirectTo === "/frontier") {
+      window.sessionStorage.removeItem("smartai_frontier_demo_task_id");
+    }
+  }, [queryClient, redirectTo]);
 
-  return <Navigate to="/login" replace state={{ authError: message, from: returnTo }} />;
+  return redirectTo === "/frontier"
+    ? <Navigate to="/frontier" replace />
+    : <Navigate to="/login" replace state={{ authError: message, from: returnTo }} />;
+}
+
+function sessionRedirectFor(pathname: string): "/frontier" | "/login" {
+  if (pathname === "/frontier/live" || pathname.startsWith("/frontier/live/")) {
+    return "/frontier";
+  }
+
+  const rememberedTaskId = window.sessionStorage.getItem("smartai_frontier_demo_task_id");
+  const taskId = pathname.match(/^\/tasks\/([^/]+)/)?.[1] ?? null;
+  return rememberedTaskId && taskId === rememberedTaskId ? "/frontier" : "/login";
 }

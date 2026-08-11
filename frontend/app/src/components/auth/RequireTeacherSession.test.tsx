@@ -33,10 +33,10 @@ const teacher: User = {
   created_at: 1,
 };
 
-function TestApp({ client }: { client: QueryClient }) {
+function TestApp({ client, initialEntry }: { client: QueryClient; initialEntry: string }) {
   return (
     <QueryClientProvider client={client}>
-      <MemoryRouter initialEntries={["/tasks/task-1/results"]}>
+      <MemoryRouter initialEntries={[initialEntry]}>
         <Routes>
           <Route
             path="/tasks/:taskId/results"
@@ -46,6 +46,15 @@ function TestApp({ client }: { client: QueryClient }) {
               </RequireTeacherSession>
             }
           />
+          <Route
+            path="/frontier/live"
+            element={
+              <RequireTeacherSession>
+                <div>Frontier live workspace</div>
+              </RequireTeacherSession>
+            }
+          />
+          <Route path="/frontier" element={<div>Frontier product introduction</div>} />
           <Route path="/login" element={<div>Login page</div>} />
         </Routes>
       </MemoryRouter>
@@ -53,11 +62,11 @@ function TestApp({ client }: { client: QueryClient }) {
   );
 }
 
-function renderGuard() {
+function renderGuard(initialEntry = "/tasks/task-1/results") {
   const client = new QueryClient({
     defaultOptions: { queries: { retry: false } },
   });
-  const view = render(<TestApp client={client} />);
+  const view = render(<TestApp client={client} initialEntry={initialEntry} />);
   return { ...view, client };
 }
 
@@ -65,6 +74,7 @@ describe("RequireTeacherSession cookie restore", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     window.localStorage.removeItem("smartai_token");
+    window.sessionStorage.removeItem("smartai_frontier_demo_task_id");
   });
 
   it("waits for refresh-cookie recovery when no local access token exists", () => {
@@ -93,5 +103,44 @@ describe("RequireTeacherSession cookie restore", () => {
     expect(screen.getByText("Teacher workspace")).toBeInTheDocument();
     expect(screen.queryByText("Login page")).not.toBeInTheDocument();
     expect(clearAuthToken).not.toHaveBeenCalled();
+  });
+
+  it("returns an expired Frontier live session to the product introduction", () => {
+    (useCurrentUser as unknown as ReturnType<typeof vi.fn>).mockReturnValue({
+      data: undefined,
+      isLoading: false,
+      isError: true,
+    });
+
+    renderGuard("/frontier/live");
+
+    expect(screen.getByText("Frontier product introduction")).toBeInTheDocument();
+    expect(screen.queryByText("Login page")).not.toBeInTheDocument();
+  });
+
+  it("returns an expired remembered Demo task to the product introduction", () => {
+    window.sessionStorage.setItem("smartai_frontier_demo_task_id", "task-1");
+    (useCurrentUser as unknown as ReturnType<typeof vi.fn>).mockReturnValue({
+      data: undefined,
+      isLoading: false,
+      isError: true,
+    });
+
+    renderGuard();
+
+    expect(screen.getByText("Frontier product introduction")).toBeInTheDocument();
+    expect(screen.queryByText("Login page")).not.toBeInTheDocument();
+  });
+
+  it("keeps ordinary protected routes on the normal sign-in flow", () => {
+    (useCurrentUser as unknown as ReturnType<typeof vi.fn>).mockReturnValue({
+      data: undefined,
+      isLoading: false,
+      isError: true,
+    });
+
+    renderGuard();
+
+    expect(screen.getByText("Login page")).toBeInTheDocument();
   });
 });

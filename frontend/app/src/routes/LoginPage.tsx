@@ -139,6 +139,13 @@ export function LoginPage() {
             {zh ? "使用邀请码注册" : "Create invited account"}
           </Link>
         </div>
+
+        <Link
+          className="mt-3 inline-flex h-10 w-full items-center justify-center rounded-md border bg-card px-3 text-sm font-semibold text-primary outline-none transition hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring"
+          to="/frontier"
+        >
+          {zh ? "查看产品介绍并进入 Live Demo" : "Explore the product and Live Demo"}
+        </Link>
       </AuthCard>
     </AuthFrame>
   );

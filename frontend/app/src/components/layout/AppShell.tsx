@@ -91,7 +91,10 @@ export function AppShell() {
     try {
       await logout.mutateAsync();
     } finally {
-      navigate("/login", { replace: true });
+      if (isFrontierDemo) {
+        window.sessionStorage.removeItem("smartai_frontier_demo_task_id");
+      }
+      navigate(isFrontierDemo ? "/frontier" : "/login", { replace: true });
     }
   }
 
