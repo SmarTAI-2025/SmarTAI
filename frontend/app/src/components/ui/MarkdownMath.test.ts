@@ -11,4 +11,10 @@ describe("normalizeMarkdownMathInput", () => {
   it("preserves legitimate nu and nabla commands", () => {
     expect(normalizeMarkdownMathInput(String.raw`$\nu$ and $\nabla f$`)).toBe(String.raw`$\nu$ and $\nabla f$`);
   });
+
+  it("turns escaped separators before lowercase code into real line breaks", () => {
+    expect(normalizeMarkdownMathInput(
+      String.raw`Required signature:\ndef stable_softmax(xs):\n    return []`,
+    )).toBe("Required signature:\ndef stable_softmax(xs):\n    return []");
+  });
 });

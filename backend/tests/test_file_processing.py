@@ -223,6 +223,61 @@ async def test_extract_text_upload_native_pdf_skips_ocr():
 
 @pytest.mark.asyncio
 @pytest.mark.skipif(fitz is None, reason="PyMuPDF is not installed")
+async def test_extract_text_upload_fragmented_math_pdf_uses_vision_ocr(monkeypatch):
+    ocr = FakeOCRSkill("$v = \\sqrt{2as}$")
+    fragmented = """Q1 — Calculus
+I = 1
+2
+Z 1
+0
+e^u du = 1
+2
+Q2 — Mechanics
+v =
+p
+2as
+sin 30 = 0.5
+"""
+
+    async def fake_payload(*_args, **_kwargs):
+        return fragmented, 1
+
+    monkeypatch.setattr(file_processing, "_extract_pdf_payload", fake_payload)
+    text = await extract_text_from_upload(
+        _blank_pdf(),
+        "math-layout.pdf",
+        ocr_skill=ocr,
+        purpose="submissions",
+    )
+
+    assert text == "$v = \\sqrt{2as}$"
+    assert len(ocr.calls) == 1
+    assert ocr.calls[0]["purpose"] == "submissions"
+
+
+@pytest.mark.asyncio
+@pytest.mark.skipif(fitz is None, reason="PyMuPDF is not installed")
+async def test_fragmented_native_pdf_without_vision_keeps_selectable_text(monkeypatch):
+    fragmented = (
+        "Q1\nI = 1\n2\nZ 1\n0\nQ2\nv =\np\n2as\nsin 30 = 0.5\n"
+        + "Selectable explanatory prose remains available. " * 5
+    )
+
+    async def fake_payload(*_args, **_kwargs):
+        return fragmented, 1
+
+    monkeypatch.setattr(file_processing, "_extract_pdf_payload", fake_payload)
+    text = await extract_text_from_upload(
+        _blank_pdf(),
+        "math-layout.pdf",
+        purpose="submissions",
+    )
+
+    assert text == fragmented
+
+
+@pytest.mark.asyncio
+@pytest.mark.skipif(fitz is None, reason="PyMuPDF is not installed")
 async def test_extract_text_upload_scanned_pdf_uses_ocr():
     ocr = FakeOCRSkill("OCR from scanned PDF")
 
