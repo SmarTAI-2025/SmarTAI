@@ -69,13 +69,16 @@ export function FinalResultsWorkspacePage() {
   const finalizationQuery = useTaskFinalization(taskId, { enabled: resultWorkspaceReady });
   const section = sectionFromPath(location.pathname);
   const provisional = task?.status === "graded";
+  const waitingForFreshTaskStatus = Boolean(
+    task && taskQuery.isFetching && !RESULT_WORKSPACE_STATUSES.has(task.status),
+  );
 
   useEffect(() => {
     window.scrollTo({ top: 0, behavior: "auto" });
   }, [questionId, section, studentId]);
 
   if (!taskId) return <Navigate replace to="/history" />;
-  if (taskQuery.isLoading || (task?.status === "grading" && taskQuery.isFetching)) {
+  if (taskQuery.isLoading || waitingForFreshTaskStatus) {
     return <WorkspaceState locale={locale} loading />;
   }
   if (task?.status === "grading") return <Navigate replace to={`/tasks/${taskId}/grading/progress`} />;
