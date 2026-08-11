@@ -26,6 +26,8 @@ import {
 import { useI18n } from "@/i18n/I18nProvider";
 import type { Locale } from "@/i18n/messages";
 import { cn } from "@/lib/cn";
+import { sanitizeFrontierDemoTaskResult } from "@/lib/frontierDemoFeedback";
+import { isFrontierDemoTask } from "@/hooks/useFrontierDemoSourcePreview";
 import { formatTaskTime, getTaskDestination } from "@/lib/taskFlow";
 import { classifyRecoverableError } from "@/lib/taskActionGuards";
 import { QuestionAnalysisDetail } from "@/routes/tasks/results/QuestionAnalysisDetail";
@@ -122,7 +124,7 @@ export function FinalResultsWorkspacePage() {
 
   const root = `/tasks/${encodeURIComponent(taskId)}/results`;
   const finalization = finalizationQuery.data;
-  const result = resultQuery.data;
+  const result = sanitizeFrontierDemoTaskResult(resultQuery.data, isFrontierDemoTask(task.name));
 
   return (
     <div className="w-full max-w-[1300px]">

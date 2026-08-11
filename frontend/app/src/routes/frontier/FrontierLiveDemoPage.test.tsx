@@ -93,6 +93,8 @@ describe("FrontierLiveDemoPage", () => {
     expect(await screen.findByRole("heading", { name: /review this run's generated materials/i })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /resume this task/i })).not.toBeInTheDocument();
     expect(screen.queryByText(/teacher rubric confirmed/i)).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /confirm question materials and continue/i })).toHaveClass("h-12", "bg-primary");
+    expect(screen.getByRole("button", { name: /start over/i })).toHaveClass("h-9", "bg-card");
   });
 
   it("keeps generated materials visible after returning under React StrictMode", async () => {
@@ -124,7 +126,7 @@ describe("FrontierLiveDemoPage", () => {
     expect(screen.queryByRole("button", { name: /confirm generated materials/i })).not.toBeInTheDocument();
     expect(getTask).toHaveBeenCalledWith("asg_demo123");
 
-    await user.click(screen.getByRole("button", { name: /start a fresh live run/i }));
+    await user.click(screen.getByRole("button", { name: /start over/i }));
     expect(screen.queryByRole("heading", { name: /review this run's generated materials/i })).not.toBeInTheDocument();
   });
 

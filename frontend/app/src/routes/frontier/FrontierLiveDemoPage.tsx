@@ -11,6 +11,7 @@ import {
   LoaderCircle,
   Pause,
   Play,
+  RotateCcw,
   ScanText,
   Sparkles,
   TriangleAlert,
@@ -406,20 +407,27 @@ export function FrontierLiveDemoPage() {
           ) : null}
 
           <div className="mt-6 flex flex-wrap items-center gap-3">
-            <Button className="h-11 px-5" onClick={startFreshRun} disabled={busy}>
-              {busy ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />}
-              {busy ? tx(locale, "正在运行真实流程…", "Running real workflow…") : taskId ? tx(locale, "开始新的真实运行", "Start a fresh live run") : tx(locale, "开始真实 OCR + 批改", "Start real OCR + grading")}
-            </Button>
-            {taskId ? <TaskLinks taskId={taskId} status={snapshot?.status} locale={locale} /> : null}
             {teacherReviewTask && !materialsConfirmed ? (
-              <Button variant="secondary" className="h-11 px-5" onClick={() => void confirmTeacherMaterials()} disabled={busy}>
+              <Button className="h-12 px-6 text-sm shadow-sm" onClick={() => void confirmTeacherMaterials()} disabled={busy}>
                 {busy ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />}
                 {tx(locale, "确认题目资料并继续", "Confirm question materials and continue")}
               </Button>
             ) : submissionReviewTask ? (
-              <Button variant="secondary" className="h-11 px-5" onClick={() => void confirmSubmissionReview()} disabled={busy}>
+              <Button className="h-12 px-6 text-sm shadow-sm" onClick={() => void confirmSubmissionReview()} disabled={busy}>
                 {busy ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
                 {tx(locale, "确认作答并继续批改", "Confirm submissions and continue grading")}
+              </Button>
+            ) : !taskId ? (
+              <Button className="h-12 px-6 text-sm shadow-sm" onClick={startFreshRun} disabled={busy}>
+                {busy ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />}
+                {busy ? tx(locale, "正在运行真实流程…", "Running real workflow…") : tx(locale, "开始真实 OCR + 批改", "Start real OCR + grading")}
+              </Button>
+            ) : null}
+            {taskId ? <TaskLinks taskId={taskId} status={snapshot?.status} locale={locale} /> : null}
+            {taskId ? (
+              <Button variant="secondary" className="h-9 px-3 text-xs" onClick={startFreshRun} disabled={busy}>
+                {busy ? <LoaderCircle className="h-3.5 w-3.5 animate-spin" /> : <RotateCcw className="h-3.5 w-3.5" />}
+                {busy ? tx(locale, "正在运行…", "Running…") : tx(locale, "重新开始", "Start over")}
               </Button>
             ) : null}
           </div>

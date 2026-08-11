@@ -33,9 +33,11 @@ import { collectResultReviewItems } from "@/components/tasks/resultsReviewModel"
 import { MarkdownMath } from "@/components/ui/MarkdownMath";
 import { UnsavedChangesDialog } from "@/components/ui/UnsavedChangesDialog";
 import { useImeSafeQuery } from "@/hooks/useImeSafeQuery";
+import { isFrontierDemoTask } from "@/hooks/useFrontierDemoSourcePreview";
 import { useI18n } from "@/i18n/I18nProvider";
 import type { Locale } from "@/i18n/messages";
 import { cn } from "@/lib/cn";
+import { sanitizeFrontierDemoTaskResult } from "@/lib/frontierDemoFeedback";
 import {
   matchReviewItems,
   questionSearchItems,
@@ -60,7 +62,11 @@ export function ReviewDetailPage() {
   const taskQuery = useTask(taskId);
   const resultQuery = useTaskResult(taskId);
   const updateReview = useUpdateCorrectionReview();
-  const model = useMemo(() => buildResultsModel(taskQuery.data, resultQuery.data), [resultQuery.data, taskQuery.data]);
+  const displayResult = useMemo(
+    () => sanitizeFrontierDemoTaskResult(resultQuery.data, isFrontierDemoTask(taskQuery.data?.name)),
+    [resultQuery.data, taskQuery.data?.name],
+  );
+  const model = useMemo(() => buildResultsModel(taskQuery.data, displayResult), [displayResult, taskQuery.data]);
   const student = model.students.find((item) => item.id === studentId) ?? null;
   const requestedQuestionId = questionId === "all" ? "" : questionId ?? "";
   const questionQuery = searchParams.get("question") ?? "";
