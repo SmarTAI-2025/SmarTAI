@@ -16,7 +16,7 @@ export function ResultsSummaryMetric({
   return (
     <div
       className={cn(
-        "rounded-[9px] border border-border/75 bg-white shadow-[0_8px_22px_-22px_rgba(40,56,99,0.45)]",
+        "rounded-[9px] border",
         size === "large" ? "px-4 py-4" : "px-3 py-3",
       )}
       data-result-tone={tone}

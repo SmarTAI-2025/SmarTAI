@@ -453,7 +453,7 @@ function OverviewPanel({
   children: ReactNode;
 }) {
   return (
-    <section className="min-w-0 rounded-[9px] border border-border/75 bg-white px-4 py-3.5 shadow-[0_12px_30px_-28px_rgba(40,56,99,0.65)]">
+    <section className="min-w-0 rounded-[9px] border px-4 py-3.5">
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
           <h3 className="text-[14px] font-bold text-foreground">{title}</h3>
@@ -500,7 +500,7 @@ function StudentPreviewRow({ locale, student }: { locale: Locale; student: Stude
 
 function StatusLine({ label, value, tone }: { label: string; value: string; tone: "primary" | "warning" | "neutral" }) {
   return (
-    <div className="flex items-center justify-between gap-4 rounded-[7px] border border-border/70 bg-white px-3 py-2">
+    <div className="flex items-center justify-between gap-4 rounded-[7px] bg-muted/60 px-3 py-2">
       <span className="font-medium text-muted-foreground">{label}</span>
       <span className={cn("text-right font-semibold", tone === "primary" && "text-primary", tone === "warning" && "text-amber-600", tone === "neutral" && "text-foreground")}>{value}</span>
     </div>
