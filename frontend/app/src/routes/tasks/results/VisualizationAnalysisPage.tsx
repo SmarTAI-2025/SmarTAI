@@ -32,6 +32,7 @@ import {
 import type { Locale } from "@/i18n/messages";
 import { cn } from "@/lib/cn";
 import { classifyRecoverableError } from "@/lib/taskActionGuards";
+import { ResultsSummaryMetric as SummaryMetric } from "@/routes/tasks/results/ResultsSummaryMetric";
 import type { ChartAnalyticsResult, ChartTrace, Correction } from "@/types";
 
 type ScopeFilter = "all" | "pass" | "fail" | "review";
@@ -43,13 +44,13 @@ interface SavedChart {
 }
 
 const COLORS = {
-  primary: "#7897F6",
-  teal: "#76D4C5",
-  amber: "#F6CF77",
-  rose: "#FF9C91",
-  violet: "#B7A0F5",
-  slate: "#A9B7CA",
-  grid: "#E9EDF4",
+  primary: "#7C8CF8",
+  teal: "#5EC7AE",
+  amber: "#F3B780",
+  rose: "#F08F9B",
+  violet: "#A995E8",
+  slate: "#A8B3C7",
+  grid: "#E9ECF4",
 };
 const CHART_PALETTE = [COLORS.rose, COLORS.amber, COLORS.teal, COLORS.primary, COLORS.violet];
 const PIE_COLORS = [COLORS.teal, COLORS.rose, COLORS.violet];
@@ -131,7 +132,7 @@ export function VisualizationAnalysisPage({ locale, taskId, version, model, prov
         <div className="mt-4 grid grid-cols-2 gap-3 xl:grid-cols-6">
           <SummaryMetric label={tx(locale, "当前样本", "Current sample")} value={String(students.length)} tone="primary" />
           <SummaryMetric label={tx(locale, "平均得分率", "Mean score")} value={formatPercent(mean)} tone="accent" />
-          <SummaryMetric label={tx(locale, "中位得分率", "Median score")} value={formatPercent(median)} tone="primary" />
+          <SummaryMetric label={tx(locale, "中位得分率", "Median score")} value={formatPercent(median)} tone="secondary" />
           <SummaryMetric label={tx(locale, "最低 / 最高", "Lowest / highest")} value={`${formatPercent(lowest)} / ${formatPercent(highest)}`} tone="warning" />
           <SummaryMetric label={tx(locale, "及格率（≥60%）", "Pass rate (≥60%)")} value={formatPercent(validPercents.length ? (passCount / validPercents.length) * 100 : null)} tone="accent" />
           <SummaryMetric label={tx(locale, "含复核信号", "With review signals")} value={String(students.filter(studentNeedsReview).length)} tone="danger" />
@@ -249,8 +250,6 @@ function BoxPlotSvg({ values, label }: { values: number[]; label: string }) {
   const min = sorted[0]; const max = sorted[sorted.length - 1]; const q1 = quantile(sorted, 0.25); const median = quantile(sorted, 0.5); const q3 = quantile(sorted, 0.75); const span = max - min || 1; const scale = (value: number) => 40 + ((value - min) / span) * 300;
   return <svg role="img" aria-label={`Box plot ${label}`} viewBox="0 0 380 210" width="100%" height="210" xmlns="http://www.w3.org/2000/svg"><rect width="380" height="210" fill="#ffffff" /><line x1={scale(min)} x2={scale(max)} y1="100" y2="100" stroke={COLORS.slate} strokeWidth="2" /><line x1={scale(min)} x2={scale(min)} y1="82" y2="118" stroke={COLORS.slate} strokeWidth="2" /><line x1={scale(max)} x2={scale(max)} y1="82" y2="118" stroke={COLORS.slate} strokeWidth="2" /><rect x={scale(q1)} y="65" width={Math.max(2, scale(q3) - scale(q1))} height="70" rx="5" fill="#E7E0FF" stroke={COLORS.violet} strokeWidth="2" /><line x1={scale(median)} x2={scale(median)} y1="65" y2="135" stroke={COLORS.rose} strokeWidth="3" />{[min, q1, median, q3, max].map((value, index) => <text key={`${value}-${index}`} x={scale(value)} y={index % 2 ? 158 : 178} textAnchor="middle" fontSize="9" fill="#64748b">{formatScore(value)}</text>)}</svg>;
 }
-
-function SummaryMetric({ label, value, tone }: { label: string; value: string; tone: "primary" | "accent" | "warning" | "danger" }) { return <div className="rounded-[9px] border px-3 py-3"><strong className={cn("text-[18px] leading-6", tone === "primary" && "text-primary", tone === "accent" && "text-teal-500", tone === "warning" && "text-amber-500", tone === "danger" && "text-rose-500")}>{value}</strong><span className="mt-1 block text-[10px] font-medium text-muted-foreground">{label}</span></div>; }
 
 function buildScoreDistribution(students: StudentSummary[]) { const buckets = [{ label: "<60", min: -Infinity, max: 60 }, { label: "60–69", min: 60, max: 70 }, { label: "70–79", min: 70, max: 80 }, { label: "80–89", min: 80, max: 90 }, { label: "90–100", min: 90, max: Infinity }]; return buckets.map((bucket) => ({ ...bucket, count: students.filter((student) => student.percent !== null && student.percent >= bucket.min && student.percent < bucket.max).length })); }
 function buildPassComposition(students: StudentSummary[]) { return [{ name: "≥60%", value: students.filter((student) => student.percent !== null && student.percent >= 60).length }, { name: "<60%", value: students.filter((student) => student.percent !== null && student.percent < 60).length }, { name: "—", value: students.filter((student) => student.percent === null).length }]; }

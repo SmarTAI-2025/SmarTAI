@@ -30,6 +30,7 @@ import { formatTaskTime, getTaskDestination } from "@/lib/taskFlow";
 import { classifyRecoverableError } from "@/lib/taskActionGuards";
 import { QuestionAnalysisDetail } from "@/routes/tasks/results/QuestionAnalysisDetail";
 import { QuestionAnalysisOverview } from "@/routes/tasks/results/QuestionAnalysisOverview";
+import { ResultsSummaryMetric } from "@/routes/tasks/results/ResultsSummaryMetric";
 import { StudentAnalysisDetail } from "@/routes/tasks/results/StudentAnalysisDetail";
 import { StudentAnalysisOverview } from "@/routes/tasks/results/StudentAnalysisOverview";
 import type { TaskFinalizationResponse, TaskResultResponse } from "@/types";
@@ -56,6 +57,15 @@ const WORKSPACE_NAV: WorkspaceNavItem[] = [
 ];
 
 const RESULT_WORKSPACE_STATUSES = new Set(["graded", "review_confirmed", "generating_analysis", "finalized"]);
+const OVERVIEW_CHART_PALETTE = ["#f08f9b", "#f3b780", "#5ec7ae", "#7c8cf8", "#a995e8"];
+type OverviewPanelTone = "primary" | "accent" | "secondary" | "warning";
+
+const OVERVIEW_PANEL_STYLES: Record<OverviewPanelTone, string> = {
+  primary: "border-[#dbe0ff] bg-[#fbfbff]",
+  accent: "border-[#cfece4] bg-[#fbfefd]",
+  secondary: "border-[#e2daf9] bg-[#fdfcff]",
+  warning: "border-[#f3dfbf] bg-[#fffdf9]",
+};
 
 /** A-00: Figma-16 visual language, expanded into the confirmed five-route workspace. */
 export function FinalResultsWorkspacePage() {
@@ -332,21 +342,23 @@ function ResultsOverview({
     : tx(locale, "无复核信号", "No review signals");
 
   return (
-    <section className="rounded-[10px] border bg-card p-5">
-      <SectionHeading
-        title={tx(locale, "结果总览", "Results overview")}
-        description={tx(
-          locale,
-          provisional ? "当前批改结果的班级摘要；教师确认前仅供分析与复核。" : "正式结果的简洁班级摘要；详细信息分别进入独立分析页面。",
-          provisional ? "A class summary of the current grading results, for analysis and review before teacher confirmation." : "A concise class summary of the final results, with dedicated pages for details.",
-        )}
-      />
+    <section className="relative overflow-hidden rounded-[10px] border bg-card p-5">
+      <span aria-hidden="true" className="absolute inset-x-0 top-0 h-1 bg-[linear-gradient(90deg,#7c8cf8_0%,#5ec7ae_28%,#f3b780_54%,#f08f9b_76%,#a995e8_100%)]" />
+      <div className="relative">
+        <SectionHeading
+          title={tx(locale, "结果总览", "Results overview")}
+          description={tx(
+            locale,
+            provisional ? "当前批改结果的班级摘要；教师确认前仅供分析与复核。" : "正式结果的简洁班级摘要；详细信息分别进入独立分析页面。",
+            provisional ? "A class summary of the current grading results, for analysis and review before teacher confirmation." : "A concise class summary of the final results, with dedicated pages for details.",
+          )}
+        />
 
       <div className="mt-4 grid grid-cols-2 gap-3 xl:grid-cols-4">
-        <Metric value={String(model.students.length)} label={tx(locale, "学生数", "Students")} tone="primary" />
-        <Metric value={String(model.questions.length)} label={tx(locale, "题目数", "Questions")} tone="accent" />
-        <Metric value={formatPercent(model.classAveragePercent)} label={tx(locale, "班级平均得分率", "Class Average")} tone="warning" />
-        <Metric value={formatPercent(passRate)} label={tx(locale, "及格率（≥60%）", "Pass rate (≥60%)")} tone="primary" />
+        <ResultsSummaryMetric value={String(model.students.length)} label={tx(locale, "学生数", "Students")} tone="primary" size="large" />
+        <ResultsSummaryMetric value={String(model.questions.length)} label={tx(locale, "题目数", "Questions")} tone="accent" size="large" />
+        <ResultsSummaryMetric value={formatPercent(model.classAveragePercent)} label={tx(locale, "班级平均得分率", "Class Average")} tone="warning" size="large" />
+        <ResultsSummaryMetric value={formatPercent(passRate)} label={tx(locale, "及格率（≥60%）", "Pass rate (≥60%)")} tone="secondary" size="large" />
       </div>
 
       <div className="mt-4 grid gap-4 xl:grid-cols-2">
@@ -355,15 +367,19 @@ function ResultsOverview({
           subtitle={tx(locale, "按学生总得分率分桶", "Students grouped by overall score percentage")}
           href={`${root}/visualizations`}
           linkLabel={tx(locale, "查看可视化", "View visualizations")}
+          tone="primary"
         >
           {validStudentPercents.length ? (
             <div className="flex h-[118px] items-end justify-between gap-3 pt-3" aria-label={tx(locale, "学生分数分布", "Student score distribution")}>
-              {scoreDistribution.map((bucket) => (
+              {scoreDistribution.map((bucket, index) => (
                 <div key={bucket.label} className="flex min-w-0 flex-1 flex-col items-center justify-end gap-1.5">
                   <span className="text-[11px] font-semibold text-muted-foreground">{bucket.count}</span>
                   <span
-                    className="w-full max-w-10 rounded-t-[6px] bg-primary"
-                    style={{ height: `${Math.max(5, (bucket.count / strongestBucket) * 76)}px` }}
+                    className="w-full max-w-10 rounded-t-[6px]"
+                    style={{
+                      backgroundColor: OVERVIEW_CHART_PALETTE[index % OVERVIEW_CHART_PALETTE.length],
+                      height: `${Math.max(5, (bucket.count / strongestBucket) * 76)}px`,
+                    }}
                     title={`${bucket.label}: ${bucket.count}`}
                   />
                   <span className="whitespace-nowrap text-[10px] text-muted-foreground">{bucket.label}</span>
@@ -378,6 +394,7 @@ function ResultsOverview({
           subtitle={tx(locale, "按平均得分率从低到高", "Ordered by average score percentage")}
           href={`${root}/questions`}
           linkLabel={tx(locale, "查看题目分析", "View questions")}
+          tone="warning"
         >
           {weakQuestions.length ? (
             <div className="mt-3 grid gap-3">
@@ -395,6 +412,7 @@ function ResultsOverview({
           subtitle={tx(locale, "低得分率优先，仅显示 3 位", "Lowest score percentages first; 3 students shown")}
           href={`${root}/students`}
           linkLabel={tx(locale, "查看学生分析", "View students")}
+          tone="accent"
         >
           {studentPreview.length ? (
             <div className="mt-2 divide-y">
@@ -408,6 +426,7 @@ function ResultsOverview({
           subtitle={reviewConclusion}
           href={provisional ? `/tasks/${encodeURIComponent(taskId)}/review` : `${root}/reports`}
           linkLabel={provisional ? tx(locale, "完成教师复核", "Complete teacher review") : tx(locale, "查看报告状态", "View report status")}
+          tone="secondary"
         >
           <div className="mt-3 grid gap-2 text-[12px]">
             <StatusLine
@@ -428,6 +447,7 @@ function ResultsOverview({
           </div>
         </OverviewPanel>
       </div>
+        </div>
     </section>
   );
 }
@@ -437,16 +457,18 @@ function OverviewPanel({
   subtitle,
   href,
   linkLabel,
+  tone,
   children,
 }: {
   title: string;
   subtitle: string;
   href: string;
   linkLabel: string;
+  tone: OverviewPanelTone;
   children: ReactNode;
 }) {
   return (
-    <section className="min-w-0 rounded-[9px] border px-4 py-3.5">
+    <section className={cn("min-w-0 rounded-[9px] border px-4 py-3.5 shadow-[0_12px_30px_-28px_rgba(40,56,99,0.65)]", OVERVIEW_PANEL_STYLES[tone])}>
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
           <h3 className="text-[14px] font-bold text-foreground">{title}</h3>
@@ -464,11 +486,12 @@ function OverviewPanel({
 
 function QuestionPreviewRow({ locale, question }: { locale: Locale; question: QuestionSummary }) {
   const percent = clampPercent(question.avgPercent);
+  const barColor = percent < 60 ? "#f08f9b" : percent < 75 ? "#f3b780" : "#5ec7ae";
   return (
     <div className="grid grid-cols-[minmax(72px,0.8fr)_minmax(120px,1.4fr)_38px] items-center gap-3">
       <span className="truncate text-[12px] font-semibold text-foreground">{question.label}</span>
       <span className="h-2 overflow-hidden rounded-full bg-muted">
-        <span className="block h-full rounded-full bg-amber-400" style={{ width: `${percent}%` }} />
+        <span className="block h-full rounded-full" style={{ backgroundColor: barColor, width: `${percent}%` }} />
       </span>
       <span className="text-right text-[11px] font-semibold text-muted-foreground">{formatPercent(question.avgPercent)}</span>
       <span className="col-span-3 -mt-2 truncate text-[10px] text-muted-foreground">
@@ -485,14 +508,14 @@ function StudentPreviewRow({ locale, student }: { locale: Locale; student: Stude
       <span className="text-[11px] text-muted-foreground">
         {student.lowConfidenceCount ? tx(locale, `${student.lowConfidenceCount} 个低置信题次`, `${student.lowConfidenceCount} low-confidence`) : tx(locale, "无低置信题次", "No low-confidence items")}
       </span>
-      <span className="min-w-10 text-right text-[12px] font-bold text-primary">{formatPercent(student.percent)}</span>
+      <span className="min-w-10 text-right text-[12px] font-bold text-[#4f61c9]">{formatPercent(student.percent)}</span>
     </div>
   );
 }
 
 function StatusLine({ label, value, tone }: { label: string; value: string; tone: "primary" | "warning" | "neutral" }) {
   return (
-    <div className="flex items-center justify-between gap-4 rounded-[7px] bg-muted/60 px-3 py-2">
+    <div className={cn("flex items-center justify-between gap-4 rounded-[7px] border px-3 py-2", tone === "primary" && "border-[#dbe0ff] bg-[#f4f5ff]", tone === "warning" && "border-[#f3dfbf] bg-[#fff8ee]", tone === "neutral" && "border-border/70 bg-card/80")}>
       <span className="font-medium text-muted-foreground">{label}</span>
       <span className={cn("text-right font-semibold", tone === "primary" && "text-primary", tone === "warning" && "text-amber-600", tone === "neutral" && "text-foreground")}>{value}</span>
     </div>
@@ -524,15 +547,6 @@ function SectionHeading({ title, description }: { title: string; description: st
     <div>
       <h2 className="text-[20px] font-bold tracking-[-0.01em] text-foreground">{title}</h2>
       <p className="mt-1 text-[13px] text-muted-foreground">{description}</p>
-    </div>
-  );
-}
-
-function Metric({ value, label, tone }: { value: string; label: string; tone: "primary" | "accent" | "warning" }) {
-  return (
-    <div className="rounded-[9px] border px-4 py-4">
-      <strong className={cn("text-[26px] leading-8", tone === "primary" && "text-primary", tone === "accent" && "text-teal-500", tone === "warning" && "text-amber-500")}>{value}</strong>
-      <span className="mt-1 block text-[12px] font-medium text-muted-foreground">{label}</span>
     </div>
   );
 }

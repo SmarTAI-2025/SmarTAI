@@ -14,6 +14,7 @@ import {
 import { useImeSafeQuery } from "@/hooks/useImeSafeQuery";
 import type { Locale } from "@/i18n/messages";
 import { cn } from "@/lib/cn";
+import { ResultsSummaryMetric as SummaryMetric } from "@/routes/tasks/results/ResultsSummaryMetric";
 import type { Correction } from "@/types";
 
 type ScoreFilter = "all" | "under60" | "60to79" | "atleast80";
@@ -111,7 +112,7 @@ export function StudentAnalysisOverview({ locale, taskId, model }: { locale: Loc
         <div className="mt-4 grid grid-cols-2 gap-3 xl:grid-cols-6">
           <SummaryMetric label={tx(locale, "学生数", "Students")} value={String(rows.length)} tone="primary" />
           <SummaryMetric label={tx(locale, "平均得分率", "Mean score")} value={formatPercent(mean)} tone="accent" />
-          <SummaryMetric label={tx(locale, "中位得分率", "Median score")} value={formatPercent(median)} tone="primary" />
+          <SummaryMetric label={tx(locale, "中位得分率", "Median score")} value={formatPercent(median)} tone="secondary" />
           <SummaryMetric label={tx(locale, "最低 / 最高", "Lowest / highest")} value={`${formatPercent(lowest)} / ${formatPercent(highest)}`} tone="warning" />
           <SummaryMetric label={tx(locale, "及格率（≥60%）", "Pass rate (≥60%)")} value={formatPercent(validPercents.length ? (passCount / validPercents.length) * 100 : null)} tone="accent" />
           <SummaryMetric label={tx(locale, "含复核信号", "With review signals")} value={String(rows.filter((row) => row.requiredReviewCount > 0).length)} tone="danger" />
@@ -234,10 +235,6 @@ function StudentMobileCards({ locale, taskId, questions, rows, returnQuery }: { 
       </div>
     </article>
   ))}</div>;
-}
-
-function SummaryMetric({ label, value, tone }: { label: string; value: string; tone: "primary" | "accent" | "warning" | "danger" }) {
-  return <div className="rounded-[9px] border px-3 py-3"><strong className={cn("text-[18px] leading-6", tone === "primary" && "text-primary", tone === "accent" && "text-teal-500", tone === "warning" && "text-amber-500", tone === "danger" && "text-rose-500")}>{value}</strong><span className="mt-1 block text-[10px] font-medium text-muted-foreground">{label}</span></div>;
 }
 
 function FilterSelect({ label, value, onChange, children }: { label: string; value: string; onChange: (value: string) => void; children: ReactNode }) {

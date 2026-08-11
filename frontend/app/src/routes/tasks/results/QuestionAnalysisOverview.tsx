@@ -14,6 +14,7 @@ import {
 import { useImeSafeQuery } from "@/hooks/useImeSafeQuery";
 import type { Locale } from "@/i18n/messages";
 import { cn } from "@/lib/cn";
+import { ResultsSummaryMetric as SummaryMetric } from "@/routes/tasks/results/ResultsSummaryMetric";
 import type { Correction, ProblemInfo } from "@/types";
 
 type ReviewFilter = "all" | "pending" | "confirmed" | "none";
@@ -312,15 +313,6 @@ function QuestionMobileCards({ locale, taskId, rows, returnQuery }: { locale: Lo
           <p className="mt-2 rounded-[7px] bg-muted/60 px-2.5 py-2 text-[11px] leading-4 text-muted-foreground">{row.riskSummary}</p>
         </article>
       ))}
-    </div>
-  );
-}
-
-function SummaryMetric({ label, value, tone }: { label: string; value: string; tone: "primary" | "accent" | "warning" | "danger" }) {
-  return (
-    <div className="rounded-[9px] border px-4 py-3.5">
-      <strong className={cn("text-[25px] leading-8", tone === "primary" && "text-primary", tone === "accent" && "text-teal-500", tone === "warning" && "text-amber-500", tone === "danger" && "text-rose-500")}>{value}</strong>
-      <span className="mt-0.5 block text-[11px] font-medium text-muted-foreground">{label}</span>
     </div>
   );
 }
