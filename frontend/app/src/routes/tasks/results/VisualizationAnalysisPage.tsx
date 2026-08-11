@@ -20,6 +20,7 @@ import {
 } from "recharts";
 import { toast } from "sonner";
 import { useAnalyticsQuery } from "@/api/hooks/analytics";
+import { SmarTAIMascot } from "@/components/brand/SmarTAIMascot";
 import { RecoverableActionState } from "@/components/ui/RecoverableActionState";
 import {
   effectiveCorrectionScore,
@@ -151,7 +152,10 @@ export function VisualizationAnalysisPage({ locale, taskId, version, model, prov
                 <p className="mt-1 max-w-4xl text-[11px] leading-5 text-muted-foreground">{tx(locale, "直接描述希望比较的对象、指标和图表形式。每次提交只调用当前模型一次；支持柱状图、散点图、饼图、直方图或箱线图，单次最多 4 组、每组 50 个点。", "Describe what to compare, which metrics matter, and the chart form. Each submission calls the current model once and supports bar, scatter, pie, histogram, or box charts, with up to 4 series and 50 points per series.")}</p>
               </div>
             </div>
-            <span className="rounded-full border bg-card px-2.5 py-1 text-[10px] font-semibold text-primary">{tx(locale, "按需调用模型", "Uses a model on demand")}</span>
+            <div className="flex items-center gap-2">
+              <SmarTAIMascot variant={chartQuery.isPending ? "grading" : "thinking"} size="sm" className="hidden sm:inline-flex" />
+              <span className="rounded-full border bg-card px-2.5 py-1 text-[10px] font-semibold text-primary">{tx(locale, "按需调用模型", "Uses a model on demand")}</span>
+            </div>
           </div>
           <div className="relative mt-3 flex flex-wrap gap-2">{[tx(locale, "比较各题得分率与低置信题次", "Compare question score percentages and low-confidence counts"), tx(locale, "画出总分率与平均置信度散点图", "Plot overall score percentage against average confidence"), tx(locale, "显示及格与未及格人数", "Show pass and fail counts")].map((suggestion) => <button key={suggestion} type="button" onClick={() => updatePrompt(suggestion)} className="rounded-full border bg-card px-2.5 py-1 text-[10px] font-medium text-muted-foreground shadow-sm hover:border-primary/20 hover:text-primary">{suggestion}</button>)}</div>
           <form onSubmit={submitChart} className="relative mt-3 grid gap-2 lg:grid-cols-[minmax(0,1fr)_auto]">

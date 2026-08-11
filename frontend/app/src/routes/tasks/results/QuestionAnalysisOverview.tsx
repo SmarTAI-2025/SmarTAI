@@ -1,6 +1,7 @@
 import { ArrowRight, Search, X } from "lucide-react";
 import { useMemo, type ReactNode } from "react";
 import { Link, useSearchParams } from "react-router-dom";
+import { SmarTAIMascot } from "@/components/brand/SmarTAIMascot";
 import {
   clampPercent,
   correctionScoreSource,
@@ -132,7 +133,8 @@ export function QuestionAnalysisOverview({
         </div>
 
         <div className="mt-4">
-          <label className="relative block">
+          <div className="flex items-center gap-3">
+          <label className="relative block min-w-0 flex-1">
             <Search aria-hidden="true" className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
             <input
               value={smartSearch.draftValue}
@@ -151,6 +153,8 @@ export function QuestionAnalysisOverview({
               </button>
             ) : null}
           </label>
+          <SmarTAIMascot variant="thinking" size="sm" className="hidden sm:inline-flex" />
+          </div>
 
           <div className="mt-2 flex min-h-7 flex-wrap items-center gap-2">
             {semanticPlan.conditions.length ? semanticPlan.conditions.map((condition) => (
