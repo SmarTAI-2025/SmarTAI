@@ -4,6 +4,7 @@ from fastapi import HTTPException
 from sqlalchemy.exc import SQLAlchemyError
 
 from backend.domain.errors import ValidationError
+from backend.llm.registry import SharedPoolLimitError
 from backend.services.background_errors import classify_background_error
 from backend.tools.structured_llm import RateLimitError, TransientLLMError
 
@@ -36,6 +37,15 @@ def test_provider_rejection_of_image_input_reports_missing_vision_capability():
     assert (
         classify_background_error(error, "submission_parse_failed")
         == "vision_provider_required"
+    )
+
+
+def test_shared_pool_daily_limit_keeps_its_actionable_safe_code():
+    error = SharedPoolLimitError("shared_pool_daily_limit_reached")
+
+    assert (
+        classify_background_error(error, "submission_parse_failed")
+        == "shared_pool_daily_limit_reached"
     )
 
 

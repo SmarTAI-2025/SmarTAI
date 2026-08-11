@@ -338,7 +338,7 @@ export function FrontierLiveDemoPage() {
       if (targets.includes(state.status)) return state;
       if (state.status === "error") {
         const detail = state.progress?.error_detail || state.error || "workflow_error";
-        throw new Error(tx(locale, `后端已停止本次运行：${detail}`, `The backend stopped this run: ${detail}`));
+        throw new Error(liveDemoWorkflowFailureMessage(locale, detail));
       }
       await delay(POLL_INTERVAL_MS);
     }
@@ -1099,6 +1099,17 @@ function stepsFromSnapshot(snapshot: TaskStateSnapshot, locale: Locale): RunStep
 
 function tx(locale: Locale, zh: string, en: string) {
   return locale === "zh-CN" ? zh : en;
+}
+
+function liveDemoWorkflowFailureMessage(locale: Locale, detail: string) {
+  if (detail === "shared_pool_daily_limit_reached") {
+    return tx(
+      locale,
+      "已超出每日体验限额，请在额度重置后再试。",
+      "The daily demo limit has been reached. Please try again after the allowance resets.",
+    );
+  }
+  return tx(locale, `后端已停止本次运行：${detail}`, `The backend stopped this run: ${detail}`);
 }
 
 function errorMessage(error: unknown) {

@@ -58,6 +58,28 @@ describe("FrontierLiveDemoPage", () => {
     expect(screen.getByRole("button", { name: /start real OCR \+ grading/i })).toBeEnabled();
   });
 
+  it("explains when the daily demo allowance is exhausted", async () => {
+    window.localStorage.setItem("smartai_locale", "zh-CN");
+    vi.mocked(getTaskState)
+      .mockResolvedValueOnce(taskState("parsing_submissions"))
+      .mockResolvedValueOnce({
+        ...taskState("error"),
+        error: "shared_pool_daily_limit_reached",
+      });
+    vi.mocked(getTask).mockResolvedValue(taskWithQuestions());
+
+    render(
+      <I18nProvider>
+        <MemoryRouter initialEntries={["/frontier/live?taskId=asg_demo123"]}>
+          <FrontierLiveDemoPage />
+        </MemoryRouter>
+      </I18nProvider>,
+    );
+
+    expect(await screen.findByText(/已超出每日体验限额/)).toBeInTheDocument();
+    expect(screen.queryByText(/submission_parse_failed/i)).not.toBeInTheDocument();
+  });
+
   it("preserves real recognized content instead of testing it against fixture keywords", () => {
     const problems = Object.values(taskWithQuestions().problem_data);
     problems[1] = { ...problems[1], stem: "Implement stable_softmax for values near 1000." };

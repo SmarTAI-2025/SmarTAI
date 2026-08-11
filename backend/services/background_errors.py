@@ -27,6 +27,7 @@ SAFE_BACKGROUND_ERROR_CODES = frozenset({
     "provider_unreachable",
     "provider_rate_limited",
     "provider_auth_failed",
+    "shared_pool_daily_limit_reached",
     "material_import_failed",
     "ai_completion_failed",
     "replacement_confirmation_required",
@@ -176,7 +177,9 @@ def classify_background_error(
                 return "submission_source_unsupported"
             if "too large for ocr" in normalized:
                 return "submission_source_too_large"
-        normalized = f"{item}".lower()
+        normalized = f"{item}".strip().lower()
+        if normalized in SAFE_BACKGROUND_ERROR_CODES:
+            return normalized
         if any(marker in normalized for marker in (
             "does not support vision",
             "does not support image input",
