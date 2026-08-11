@@ -62,10 +62,11 @@ export function FinalResultsWorkspacePage() {
   const { taskId, questionId, studentId } = useParams();
   const { locale } = useI18n();
   const location = useLocation();
-  const taskQuery = useTask(taskId);
-  const resultQuery = useTaskResult(taskId);
-  const finalizationQuery = useTaskFinalization(taskId);
+  const taskQuery = useTask(taskId, { refetchOnMount: "always" });
   const task = taskQuery.data;
+  const resultWorkspaceReady = Boolean(task && RESULT_WORKSPACE_STATUSES.has(task.status));
+  const resultQuery = useTaskResult(taskId, { enabled: resultWorkspaceReady });
+  const finalizationQuery = useTaskFinalization(taskId, { enabled: resultWorkspaceReady });
   const section = sectionFromPath(location.pathname);
   const provisional = task?.status === "graded";
 
@@ -73,7 +74,11 @@ export function FinalResultsWorkspacePage() {
     window.scrollTo({ top: 0, behavior: "auto" });
   }, [questionId, section, studentId]);
 
-  if (taskId && task?.status === "grading") return <Navigate replace to={`/tasks/${taskId}/grading/progress`} />;
+  if (!taskId) return <Navigate replace to="/history" />;
+  if (taskQuery.isLoading || (task?.status === "grading" && taskQuery.isFetching)) {
+    return <WorkspaceState locale={locale} loading />;
+  }
+  if (task?.status === "grading") return <Navigate replace to={`/tasks/${taskId}/grading/progress`} />;
   if (taskId && task && !RESULT_WORKSPACE_STATUSES.has(task.status)) {
     return <Navigate replace to={getTaskDestination(task)} />;
   }
@@ -81,7 +86,6 @@ export function FinalResultsWorkspacePage() {
     return <Navigate replace to={`/tasks/${taskId}/results`} />;
   }
 
-  if (!taskId) return <Navigate replace to="/history" />;
   if (taskQuery.isLoading || resultQuery.isLoading || finalizationQuery.isLoading) {
     return <WorkspaceState locale={locale} loading />;
   }

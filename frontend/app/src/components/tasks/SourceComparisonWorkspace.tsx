@@ -115,7 +115,7 @@ export function SourceComparisonWorkspace({
       style={splitStyle}
       data-preview-open={open ? "true" : "false"}
     >
-      <div id={previewId} className={cn("min-w-0", open ? "block" : "hidden")}>
+      <div id={previewId} className={cn("min-w-0", open ? "block lg:sticky lg:top-[86px] lg:self-start" : "hidden")}>
         {open ? preview : null}
       </div>
       <div

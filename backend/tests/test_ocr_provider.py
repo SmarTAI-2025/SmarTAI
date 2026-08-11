@@ -123,3 +123,20 @@ async def test_ocr_skill_requests_and_normalizes_markdown_math():
 
     assert "$...$" in provider.messages[0].content[0]["text"]
     assert result.text == "Evaluate\n$\\int_{0}^{1} x e^{x^2} dx$."
+
+
+@pytest.mark.asyncio
+async def test_submission_ocr_prompt_preserves_math_layout_and_code_lines():
+    provider = CapturingVisionProvider()
+    skill = LLMVisionOCRSkill(provider)
+
+    await skill.recognize_images(
+        [OCRImage(data=b"abc", media_type="image/png", label="submission.png")],
+        "submissions",
+    )
+
+    prompt = provider.messages[0].content[0]["text"]
+    assert "上标、下标、分数、根号、积分号" in prompt
+    assert "不要把 `x²` 转成 `x2`" in prompt
+    assert "代码块" in prompt
+    assert "可见的 `\\n`" in prompt

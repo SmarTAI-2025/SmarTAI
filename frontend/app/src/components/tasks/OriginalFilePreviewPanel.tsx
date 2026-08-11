@@ -5,6 +5,7 @@ import { InlineNotice } from "@/components/ui/InlineNotice";
 import type { MessageKey } from "@/i18n/messages";
 import { cn } from "@/lib/cn";
 import type { SourceFileDescriptor, SourcePreviewLoadState, SourceUnavailableReason } from "@/types/sourcePreview";
+import { PdfDocumentPreview } from "./PdfDocumentPreview";
 
 export function OriginalFilePreviewPanel({
   descriptor,
@@ -40,7 +41,7 @@ export function OriginalFilePreviewPanel({
     <section
       aria-labelledby="source-preview-title"
       onKeyDown={handleKeyDown}
-      className="flex flex-col overflow-hidden rounded-[10px] border bg-card lg:sticky lg:top-[86px] lg:h-[calc(100vh-102px)]"
+      className="flex flex-col overflow-hidden rounded-[10px] border bg-card lg:h-[calc(100vh-102px)]"
       data-testid="source-preview-panel"
       data-source-preview-panel="true"
     >
@@ -125,11 +126,15 @@ function PreviewContent({ descriptor, loadState, previewUrl, onRetry, t }: {
       </div>
     );
   }
-  return (
-    <object data={previewUrl} type="application/pdf" title={`${t("sourcePreviewTitle")} · ${descriptor.display_name}`} className="h-full w-full rounded-[5px] bg-white shadow-[0_8px_28px_rgb(15_23_42_/_0.12)]">
-      <p className="p-4 text-sm text-muted-foreground">{t("sourcePreviewPdfFallback")}</p>
-    </object>
-  );
+  return <PdfDocumentPreview
+    url={previewUrl}
+    title={`${t("sourcePreviewTitle")} · ${descriptor.display_name}`}
+    loadingLabel={t("sourcePreviewLoading")}
+    errorTitle={t("sourcePreviewErrorTitle")}
+    errorDescription={t("sourcePreviewErrorDescription")}
+    retryLabel={t("sourcePreviewRetry")}
+    openLabel={t("sourcePreviewPdfFallback")}
+  />;
 }
 
 function StatusBadge({ descriptor, t }: { descriptor: SourceFileDescriptor; t: (key: MessageKey) => string }) {

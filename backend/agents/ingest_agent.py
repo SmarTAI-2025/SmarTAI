@@ -76,7 +76,7 @@ HW_SYSTEM_PROMPT = """You are a professional AI teaching assistant. Analyze a si
 
 1. **Identity Recognition**: Look for `stu_id` (student ID) and `stu_name` (name) in the **[Student Submission Content]** first. If not found in the content, try to extract them from the **[Filename]**. If you cannot find them in either place, set `stu_name` to "[Unknown Student]" and `stu_id` to the filename.
 
-2. **Answer Segmentation**: Based on the provided [Question Data], extract each student answer. If a student skipped a question, set "content" to empty string. Preserve content completely — do not delete or translate. Enclose inline LaTeX in `$...$` and display LaTeX in `$$...$$`; do not leave bare LaTeX commands in prose or add math delimiters inside code blocks.
+2. **Answer Segmentation**: Based on the provided [Question Data], extract each student answer. If a student skipped a question, set "content" to empty string. Preserve content completely — do not delete or translate. Preserve the OCR Markdown structure instead of flattening it: keep superscripts, subscripts, fractions, radicals, integral bounds, transposes, and norms as valid LaTeX. Enclose inline LaTeX in `$...$` and display LaTeX in `$$...$$`; do not leave bare LaTeX commands in prose or add math delimiters inside code blocks. Do not introduce hard line breaks inside one equation or sentence. Preserve fenced code and its indentation, using real decoded newlines rather than visible `\\n` text.
 
 3. **Identify Reliability**: For each question, list any recognition issues in `flag` (empty list if none).
 
@@ -802,6 +802,7 @@ Rules:
 - test_cases: only for programming questions; return structured cases, at most the requested count.
 - For tests requiring GUI, network, files, special packages, or large resources, set sandbox_feasible=false.
 - In criterion and reference_answer prose, wrap inline LaTeX in `$...$` and display LaTeX in `$$...$$`; never add math delimiters inside solution_code or test data.
+- Keep each mathematical expression intact on one logical Markdown line. Never split a fraction, radical, exponent, integral, bound, or equality chain across lines.
 - Keep reference answers concise: use 3-6 checkable numbered steps, at most one blank line between blocks, and no decorative repetition.
 - In the JSON source, encode line breaks once as `\n`, never double-escape them as `\\n`. Escape each TeX backslash exactly once for JSON so the decoded text contains one backslash per command. Never use `$$$` delimiters.
 - Omit a candidate rather than guess when the stem is insufficient.

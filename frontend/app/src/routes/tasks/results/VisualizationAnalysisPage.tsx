@@ -43,14 +43,16 @@ interface SavedChart {
 }
 
 const COLORS = {
-  primary: "#2563eb",
-  teal: "#14b8a6",
-  amber: "#f59e0b",
-  rose: "#f43f5e",
-  slate: "#94a3b8",
-  grid: "#e2e8f0",
+  primary: "#7897F6",
+  teal: "#76D4C5",
+  amber: "#F6CF77",
+  rose: "#FF9C91",
+  violet: "#B7A0F5",
+  slate: "#A9B7CA",
+  grid: "#E9EDF4",
 };
-const PIE_COLORS = [COLORS.teal, COLORS.rose, COLORS.slate];
+const CHART_PALETTE = [COLORS.rose, COLORS.amber, COLORS.teal, COLORS.primary, COLORS.violet];
+const PIE_COLORS = [COLORS.teal, COLORS.rose, COLORS.violet];
 
 export function VisualizationAnalysisPage({ locale, taskId, version, model, provisional = false }: { locale: Locale; taskId: string; version: number; model: ResultsModel; provisional?: boolean }) {
   const [searchParams, setSearchParams] = useSearchParams();
@@ -137,8 +139,7 @@ export function VisualizationAnalysisPage({ locale, taskId, version, model, prov
       </div>
 
       <div className="mt-4 border-t p-5">
-        <section className="relative overflow-hidden rounded-[10px] border border-primary/25 bg-gradient-to-br from-blue-50/90 via-card to-card px-4 py-4 dark:from-blue-950/25">
-          <div aria-hidden="true" className="pointer-events-none absolute -right-12 -top-16 h-40 w-40 rounded-full bg-primary/5 blur-2xl" />
+        <section className="relative overflow-hidden rounded-[10px] border bg-card px-4 py-4">
           <div className="relative flex flex-wrap items-start justify-between gap-3">
             <div className="flex min-w-0 items-start gap-3">
               <span className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-[9px] bg-primary text-primary-foreground shadow-sm">
@@ -149,9 +150,9 @@ export function VisualizationAnalysisPage({ locale, taskId, version, model, prov
                 <p className="mt-1 max-w-4xl text-[11px] leading-5 text-muted-foreground">{tx(locale, "直接描述希望比较的对象、指标和图表形式。每次提交只调用当前模型一次；支持柱状图、散点图、饼图、直方图或箱线图，单次最多 4 组、每组 50 个点。", "Describe what to compare, which metrics matter, and the chart form. Each submission calls the current model once and supports bar, scatter, pie, histogram, or box charts, with up to 4 series and 50 points per series.")}</p>
               </div>
             </div>
-            <span className="rounded-full border border-blue-200 bg-white/80 px-2.5 py-1 text-[10px] font-semibold text-primary dark:border-blue-900 dark:bg-blue-950/40">{tx(locale, "按需调用模型", "Uses a model on demand")}</span>
+            <span className="rounded-full border bg-card px-2.5 py-1 text-[10px] font-semibold text-primary">{tx(locale, "按需调用模型", "Uses a model on demand")}</span>
           </div>
-          <div className="relative mt-3 flex flex-wrap gap-2">{[tx(locale, "比较各题得分率与低置信题次", "Compare question score percentages and low-confidence counts"), tx(locale, "画出总分率与平均置信度散点图", "Plot overall score percentage against average confidence"), tx(locale, "显示及格与未及格人数", "Show pass and fail counts")].map((suggestion) => <button key={suggestion} type="button" onClick={() => updatePrompt(suggestion)} className="rounded-full border border-transparent bg-white/80 px-2.5 py-1 text-[10px] font-medium text-muted-foreground shadow-sm hover:border-primary/20 hover:text-primary dark:bg-slate-900/60">{suggestion}</button>)}</div>
+          <div className="relative mt-3 flex flex-wrap gap-2">{[tx(locale, "比较各题得分率与低置信题次", "Compare question score percentages and low-confidence counts"), tx(locale, "画出总分率与平均置信度散点图", "Plot overall score percentage against average confidence"), tx(locale, "显示及格与未及格人数", "Show pass and fail counts")].map((suggestion) => <button key={suggestion} type="button" onClick={() => updatePrompt(suggestion)} className="rounded-full border bg-card px-2.5 py-1 text-[10px] font-medium text-muted-foreground shadow-sm hover:border-primary/20 hover:text-primary">{suggestion}</button>)}</div>
           <form onSubmit={submitChart} className="relative mt-3 grid gap-2 lg:grid-cols-[minmax(0,1fr)_auto]">
             <textarea value={prompt} onChange={(event) => updatePrompt(event.target.value)} rows={2} maxLength={500} disabled={chartQuery.isPending} aria-label={tx(locale, "SmarTAI 自然语言图表请求", "SmarTAI natural-language chart request")} className="min-h-20 resize-y rounded-[8px] border bg-background px-3 py-2 text-[12px] leading-5 text-foreground outline-none focus:border-primary focus:ring-2 focus:ring-primary/15" />
             <button type="submit" disabled={chartQuery.isPending || !prompt.trim()} className="inline-flex h-10 items-center justify-center gap-1.5 rounded-[8px] bg-primary px-4 text-[11px] font-semibold text-primary-foreground disabled:opacity-50 lg:self-end">{chartQuery.isPending ? <LoaderCircle aria-hidden="true" className="h-4 w-4 animate-spin" /> : <BarChart3 aria-hidden="true" className="h-4 w-4" />}{chartQuery.isPending ? tx(locale, "SmarTAI 生成中…", "SmarTAI is generating…") : tx(locale, "让 SmarTAI 生成", "Generate with SmarTAI")}</button>
@@ -172,7 +173,7 @@ export function VisualizationAnalysisPage({ locale, taskId, version, model, prov
                 : { label: tx(locale, "查看模型配置", "View model settings"), href: `/settings/byok?returnTo=${encodeURIComponent(`${root}/visualizations`)}` }}
             />
           ) : null}
-          {preview ? <GeneratedResult locale={locale} id="generated-preview" result={preview} version={version} provisional={provisional} onSave={savePreview} /> : <div className="relative mt-3 rounded-[8px] border border-dashed border-primary/20 bg-white/50 px-4 py-5 text-center text-[11px] text-muted-foreground dark:bg-slate-950/15">{tx(locale, "尚未生成自定义图表；下方五张默认图表始终可用且不消耗模型额度。", "No custom chart has been generated; the five default charts below remain available without model usage.")}</div>}
+          {preview ? <GeneratedResult locale={locale} id="generated-preview" result={preview} version={version} provisional={provisional} onSave={savePreview} /> : <div className="relative mt-3 rounded-[8px] border border-dashed border-primary/20 bg-card px-4 py-5 text-center text-[11px] text-muted-foreground">{tx(locale, "尚未生成自定义图表；下方五张默认图表始终可用且不消耗模型额度。", "No custom chart has been generated; the five default charts below remain available without model usage.")}</div>}
         </section>
 
         {savedCharts.length ? <section className="mt-4"><div className="flex items-end justify-between gap-3"><div><h3 className="text-[15px] font-bold text-foreground">{tx(locale, "本次浏览已保存", "Saved for this visit")}</h3><p className="mt-1 text-[10px] text-muted-foreground">{tx(locale, "这些图表只保留到刷新或离开本页；需要长期保存时请下载 PNG 或报告。", "These charts last until you refresh or leave this page. Download a PNG or report to keep them.")}</p></div><span className="text-[10px] text-muted-foreground">{savedCharts.length}</span></div><div className="mt-3 grid gap-4 xl:grid-cols-2">{savedCharts.map((item) => <GeneratedResult key={item.id} locale={locale} id={item.id} result={item.result} version={version} provisional={provisional} prompt={item.prompt} onDelete={() => setSavedCharts((items) => items.filter((candidate) => candidate.id !== item.id))} />)}</div></section> : null}
@@ -180,7 +181,7 @@ export function VisualizationAnalysisPage({ locale, taskId, version, model, prov
 
       <div className="mt-4 grid gap-4 border-t p-5 xl:grid-cols-2">
         <ChartCard locale={locale} id="score-distribution" title={tx(locale, "得分率分布", "Score-rate distribution")} description={tx(locale, "查看成绩集中区间与尾部学生，不把人数少的区间夸大。", "Locate score clusters and tails without exaggerating sparse buckets.")} metadata={chartMetadata(locale, students.length, version, scope, "", provisional)} detailHref={`${root}/students`}>
-          <ResponsiveContainer width="100%" height={250}><BarChart data={distributionData} margin={{ top: 12, right: 12, left: -20, bottom: 4 }}><CartesianGrid stroke={COLORS.grid} strokeDasharray="3 3" vertical={false} /><XAxis dataKey="label" tick={{ fontSize: 10 }} /><YAxis allowDecimals={false} tick={{ fontSize: 10 }} /><Tooltip contentStyle={tooltipStyle} /><Bar dataKey="count" name={tx(locale, "学生数", "Students")} fill={COLORS.primary} radius={[6, 6, 0, 0]} /></BarChart></ResponsiveContainer>
+          <ResponsiveContainer width="100%" height={250}><BarChart data={distributionData} margin={{ top: 12, right: 12, left: -20, bottom: 4 }}><CartesianGrid stroke={COLORS.grid} strokeDasharray="3 3" vertical={false} /><XAxis dataKey="label" tick={{ fontSize: 10 }} /><YAxis allowDecimals={false} tick={{ fontSize: 10 }} /><Tooltip contentStyle={tooltipStyle} /><Bar dataKey="count" name={tx(locale, "学生数", "Students")} radius={[6, 6, 0, 0]}>{distributionData.map((bucket, index) => <Cell key={bucket.label} fill={CHART_PALETTE[index % CHART_PALETTE.length]} />)}</Bar></BarChart></ResponsiveContainer>
         </ChartCard>
 
         <ChartCard locale={locale} id="pass-composition" title={tx(locale, "及格构成", "Pass/Fail Breakdown")} description={tx(locale, "只比较互斥的及格、未及格与无可比总分，不把复核状态混入同一饼图。", "Compares mutually exclusive passed, failed, and unscored groups; review status is shown separately.")} metadata={chartMetadata(locale, students.length, version, scope, "", provisional)} detailHref={`${root}/students`}>
@@ -188,7 +189,7 @@ export function VisualizationAnalysisPage({ locale, taskId, version, model, prov
         </ChartCard>
 
         <ChartCard locale={locale} id="question-performance" title={tx(locale, "逐题得分率与复核量", "Question Score Percentage & Review Volume")} description={tx(locale, "柱表示平均得分率，折线表示复核信号题次数，用于同时发现薄弱题与证据风险。", "Bars show the average score percentage; the line shows review-signal volume, highlighting both difficult questions and evidence risks.")} metadata={chartMetadata(locale, students.length, version, scope, "", provisional)} detailHref={`${root}/questions`} wide>
-          <div style={{ width: `${Math.max(620, questionData.length * 72)}px`, height: 280 }}><ResponsiveContainer width="100%" height="100%"><ComposedChart data={questionData} margin={{ top: 14, right: 18, left: -10, bottom: 4 }}><CartesianGrid stroke={COLORS.grid} strokeDasharray="3 3" vertical={false} /><XAxis dataKey="label" tick={{ fontSize: 10 }} /><YAxis yAxisId="score" domain={[0, 100]} tick={{ fontSize: 10 }} unit="%" /><YAxis yAxisId="review" orientation="right" allowDecimals={false} tick={{ fontSize: 10 }} /><Tooltip contentStyle={tooltipStyle} /><Legend wrapperStyle={{ fontSize: 11 }} /><Bar yAxisId="score" dataKey="scoreRate" name={tx(locale, "平均得分率", "Average Score Percentage")} fill={COLORS.teal} radius={[5, 5, 0, 0]} /><Line yAxisId="review" type="monotone" dataKey="reviewCount" name={tx(locale, "复核信号题次", "Review-signal responses")} stroke={COLORS.rose} strokeWidth={2} dot={{ r: 3 }} /></ComposedChart></ResponsiveContainer></div>
+          <div style={{ width: `${Math.max(620, questionData.length * 72)}px`, height: 280 }}><ResponsiveContainer width="100%" height="100%"><ComposedChart data={questionData} margin={{ top: 14, right: 18, left: -10, bottom: 4 }}><CartesianGrid stroke={COLORS.grid} strokeDasharray="3 3" vertical={false} /><XAxis dataKey="label" tick={{ fontSize: 10 }} /><YAxis yAxisId="score" domain={[0, 100]} tick={{ fontSize: 10 }} unit="%" /><YAxis yAxisId="review" orientation="right" allowDecimals={false} tick={{ fontSize: 10 }} /><Tooltip contentStyle={tooltipStyle} /><Legend wrapperStyle={{ fontSize: 11 }} /><Bar yAxisId="score" dataKey="scoreRate" name={tx(locale, "平均得分率", "Average Score Percentage")} radius={[5, 5, 0, 0]}>{questionData.map((item, index) => <Cell key={item.label} fill={CHART_PALETTE[index % CHART_PALETTE.length]} />)}</Bar><Line yAxisId="review" type="monotone" dataKey="reviewCount" name={tx(locale, "复核信号题次", "Review-signal responses")} stroke={COLORS.violet} strokeWidth={2.5} dot={{ r: 3, fill: COLORS.violet }} /></ComposedChart></ResponsiveContainer></div>
         </ChartCard>
 
         <ChartCard locale={locale} id="confidence-scatter" title={tx(locale, "得分率 × 平均置信度", "Score Percentage × Average Confidence")} description={tx(locale, "每个点是一位学生；红色表示含复核信号，便于识别高分低置信等异常组合。", "Each point represents a student. Red indicates a review signal, helping identify patterns such as a high score with low confidence.")} metadata={chartMetadata(locale, students.length, version, scope, "", provisional)} detailHref={`${root}/students`} wide>
@@ -217,7 +218,7 @@ function GeneratedTrace({ locale, trace, index }: { locale: Locale; trace: Chart
   const name = trace.name || `${trace.type} ${index + 1}`;
   if (trace.type === "pie") {
     const data = (trace.labels ?? []).slice(0, 50).map((label, itemIndex) => ({ name: label, value: numeric(trace.values?.[itemIndex]) ?? 0 }));
-    return <TraceFrame title={name}><ResponsiveContainer width="100%" height={230}><PieChart><Pie data={data} dataKey="value" nameKey="name" innerRadius={38} outerRadius={72}>{data.map((item, itemIndex) => <Cell key={`${item.name}-${itemIndex}`} fill={[COLORS.primary, COLORS.teal, COLORS.amber, COLORS.rose, COLORS.slate][itemIndex % 5]} />)}</Pie><Tooltip contentStyle={tooltipStyle} /><Legend wrapperStyle={{ fontSize: 10 }} /></PieChart></ResponsiveContainer></TraceFrame>;
+    return <TraceFrame title={name}><ResponsiveContainer width="100%" height={230}><PieChart><Pie data={data} dataKey="value" nameKey="name" innerRadius={38} outerRadius={72}>{data.map((item, itemIndex) => <Cell key={`${item.name}-${itemIndex}`} fill={CHART_PALETTE[itemIndex % CHART_PALETTE.length]} />)}</Pie><Tooltip contentStyle={tooltipStyle} /><Legend wrapperStyle={{ fontSize: 10 }} /></PieChart></ResponsiveContainer></TraceFrame>;
   }
   if (trace.type === "scatter") {
     const points = tracePoints(trace);
@@ -230,7 +231,7 @@ function GeneratedTrace({ locale, trace, index }: { locale: Locale; trace: Chart
   return <TraceFrame title={name}><ResponsiveContainer width="100%" height={230}><BarChart data={data} margin={{ top: 12, right: 10, left: -16, bottom: 2 }}><CartesianGrid stroke={COLORS.grid} strokeDasharray="3 3" vertical={false} /><XAxis dataKey="label" tick={{ fontSize: 8 }} interval="preserveStartEnd" /><YAxis tick={{ fontSize: 9 }} /><Tooltip contentStyle={tooltipStyle} /><Bar dataKey="value" name={name} fill={trace.type === "histogram" ? COLORS.amber : COLORS.teal} radius={[4, 4, 0, 0]} /></BarChart></ResponsiveContainer></TraceFrame>;
 }
 
-function TraceFrame({ title, children }: { title: string; children: ReactNode }) { return <section className="min-w-0 rounded-[8px] bg-muted/35 px-3 py-3"><h5 className="truncate text-[10px] font-semibold text-foreground">{title}</h5><div className="mt-2">{children}</div></section>; }
+function TraceFrame({ title, children }: { title: string; children: ReactNode }) { return <section className="min-w-0 rounded-[8px] border bg-card px-3 py-3"><h5 className="truncate text-[10px] font-semibold text-foreground">{title}</h5><div className="mt-2">{children}</div></section>; }
 
 function ScoreHeatmap({ locale, students, questions }: { locale: Locale; students: StudentSummary[]; questions: QuestionSummary[] }) {
   const cellWidth = 58;
@@ -246,7 +247,7 @@ function BoxPlotSvg({ values, label }: { values: number[]; label: string }) {
   if (!values.length) return <p className="flex h-[210px] items-center justify-center text-[11px] text-muted-foreground">No numeric values</p>;
   const sorted = [...values].sort((a, b) => a - b);
   const min = sorted[0]; const max = sorted[sorted.length - 1]; const q1 = quantile(sorted, 0.25); const median = quantile(sorted, 0.5); const q3 = quantile(sorted, 0.75); const span = max - min || 1; const scale = (value: number) => 40 + ((value - min) / span) * 300;
-  return <svg role="img" aria-label={`Box plot ${label}`} viewBox="0 0 380 210" width="100%" height="210" xmlns="http://www.w3.org/2000/svg"><rect width="380" height="210" fill="#ffffff" /><line x1={scale(min)} x2={scale(max)} y1="100" y2="100" stroke={COLORS.slate} strokeWidth="2" /><line x1={scale(min)} x2={scale(min)} y1="82" y2="118" stroke={COLORS.slate} strokeWidth="2" /><line x1={scale(max)} x2={scale(max)} y1="82" y2="118" stroke={COLORS.slate} strokeWidth="2" /><rect x={scale(q1)} y="65" width={Math.max(2, scale(q3) - scale(q1))} height="70" rx="5" fill="#dbeafe" stroke={COLORS.primary} strokeWidth="2" /><line x1={scale(median)} x2={scale(median)} y1="65" y2="135" stroke={COLORS.rose} strokeWidth="3" />{[min, q1, median, q3, max].map((value, index) => <text key={`${value}-${index}`} x={scale(value)} y={index % 2 ? 158 : 178} textAnchor="middle" fontSize="9" fill="#64748b">{formatScore(value)}</text>)}</svg>;
+  return <svg role="img" aria-label={`Box plot ${label}`} viewBox="0 0 380 210" width="100%" height="210" xmlns="http://www.w3.org/2000/svg"><rect width="380" height="210" fill="#ffffff" /><line x1={scale(min)} x2={scale(max)} y1="100" y2="100" stroke={COLORS.slate} strokeWidth="2" /><line x1={scale(min)} x2={scale(min)} y1="82" y2="118" stroke={COLORS.slate} strokeWidth="2" /><line x1={scale(max)} x2={scale(max)} y1="82" y2="118" stroke={COLORS.slate} strokeWidth="2" /><rect x={scale(q1)} y="65" width={Math.max(2, scale(q3) - scale(q1))} height="70" rx="5" fill="#E7E0FF" stroke={COLORS.violet} strokeWidth="2" /><line x1={scale(median)} x2={scale(median)} y1="65" y2="135" stroke={COLORS.rose} strokeWidth="3" />{[min, q1, median, q3, max].map((value, index) => <text key={`${value}-${index}`} x={scale(value)} y={index % 2 ? 158 : 178} textAnchor="middle" fontSize="9" fill="#64748b">{formatScore(value)}</text>)}</svg>;
 }
 
 function SummaryMetric({ label, value, tone }: { label: string; value: string; tone: "primary" | "accent" | "warning" | "danger" }) { return <div className="rounded-[9px] border px-3 py-3"><strong className={cn("text-[18px] leading-6", tone === "primary" && "text-primary", tone === "accent" && "text-teal-500", tone === "warning" && "text-amber-500", tone === "danger" && "text-rose-500")}>{value}</strong><span className="mt-1 block text-[10px] font-medium text-muted-foreground">{label}</span></div>; }
