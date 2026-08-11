@@ -329,10 +329,72 @@ function prepareCode(code: string, languageHint: string) {
 }
 
 function unwrapCodeFence(value: string): { code: string; language: string } {
-  const normalized = value.replace(/\r\n?/gu, "\n").trimEnd();
+  const normalized = normalizeCodeLineBreaks(value).replace(/\r\n?/gu, "\n").trimEnd();
   const match = normalized.match(/^\s*(```|~~~)\s*([^\n`]*)\n([\s\S]*?)\n\1\s*$/u);
   if (!match) return { code: normalized, language: "" };
   return { code: match[3], language: match[2].trim().split(/\s+/u)[0] ?? "" };
+}
+
+export function normalizeCodeLineBreaks(value: string): string {
+  if (!value.includes("\\n") && !value.includes("\\r")) return value;
+
+  const output: string[] = [];
+  let index = 0;
+  let delimiter = "";
+  while (index < value.length) {
+    if (delimiter) {
+      if (value.startsWith(delimiter, index)) {
+        output.push(delimiter);
+        index += delimiter.length;
+        delimiter = "";
+        continue;
+      }
+      if (value[index] === "\\" && index + 1 < value.length) {
+        output.push(value.slice(index, index + 2));
+        index += 2;
+        continue;
+      }
+      output.push(value[index] ?? "");
+      index += 1;
+      continue;
+    }
+
+    const character = value[index] ?? "";
+    if (character === "'" || character === '"' || character === "`") {
+      delimiter = character !== "`" && value.startsWith(character.repeat(3), index)
+        ? character.repeat(3)
+        : character;
+      output.push(delimiter);
+      index += delimiter.length;
+      continue;
+    }
+
+    const escapedLineBreakEnd = escapedCodeLineBreakEnd(value, index);
+    if (escapedLineBreakEnd !== null) {
+      output.push("\n");
+      index = escapedLineBreakEnd;
+      continue;
+    }
+
+    output.push(character);
+    index += 1;
+  }
+  return output.join("");
+}
+
+function escapedCodeLineBreakEnd(value: string, index: number): number | null {
+  if (value[index] !== "\\") return null;
+  let cursor = index;
+  while (value[cursor] === "\\") cursor += 1;
+  if (![1, 2].includes(cursor - index) || cursor >= value.length) return null;
+  if (value[cursor] === "n") return cursor + 1;
+  if (value[cursor] !== "r") return null;
+
+  const newlineSlashes = cursor + 1;
+  let newlineMarker = newlineSlashes;
+  while (value[newlineMarker] === "\\") newlineMarker += 1;
+  if (![1, 2].includes(newlineMarker - newlineSlashes)) return null;
+  return value[newlineMarker] === "n" ? newlineMarker + 1 : null;
 }
 
 function normalizeLanguage(value: string): CodeLanguage | null {

@@ -12,6 +12,7 @@ import {
   type ResultsModel,
 } from "@/components/tasks/resultsModel";
 import { MarkdownMath } from "@/components/ui/MarkdownMath";
+import { normalizeCodeLineBreaks } from "@/components/ui/SyntaxHighlightedCode";
 import { useImeSafeQuery } from "@/hooks/useImeSafeQuery";
 import type { Locale } from "@/i18n/messages";
 import { cn } from "@/lib/cn";
@@ -345,7 +346,7 @@ function TestMaterialSummary({ locale, problem }: { locale: Locale; problem?: Pr
           <span className="font-semibold text-foreground">#{index + 1}</span> · {tx(locale, "输入", "Input")} {testCase.input || "—"} · {tx(locale, "期望", "Expected")} {testCase.expected_output || "—"}
         </div>
       ))}
-      {problem?.solution_code ? <pre className="max-h-20 overflow-auto rounded-[6px] bg-slate-950 p-2 text-[10px] text-slate-100">{problem.solution_code}</pre> : null}
+      {problem?.solution_code ? <pre className="max-h-20 overflow-auto whitespace-pre rounded-[6px] bg-slate-950 p-2 text-[10px] text-slate-100">{normalizeCodeLineBreaks(problem.solution_code)}</pre> : null}
     </div>
   );
 }
