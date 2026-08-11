@@ -45,6 +45,8 @@ describe("FrontierLiveDemoPage", () => {
 
   it("states the honest boundary between synthetic inputs and live processing", () => {
     render(<I18nProvider><MemoryRouter><FrontierLiveDemoPage /></MemoryRouter></I18nProvider>);
+    expect(document.querySelector('[data-smartai-app-mark="silver"]')).toBeInTheDocument();
+    expect(document.querySelector('[data-smartai-wordmark="white"]')).toBeInTheDocument();
     expect(screen.getByText("Synthetic inputs")).toBeInTheDocument();
     expect(screen.getByText("Real API")).toBeInTheDocument();
     expect(screen.getByText("Real OCR")).toBeInTheDocument();

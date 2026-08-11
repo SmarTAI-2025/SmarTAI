@@ -15,6 +15,7 @@ import {
 } from "lucide-react";
 import { useEffect, useState, type CSSProperties, type ReactNode } from "react";
 import { Link } from "react-router-dom";
+import { SmarTAIAppMark, SmarTAIWordmark } from "@/components/brand/SmarTAIBrand";
 import { SmarTAIMascot } from "@/components/brand/SmarTAIMascot";
 import { LanguageToggle } from "@/components/layout/LanguageToggle";
 import { useI18n } from "@/i18n/I18nProvider";
@@ -147,8 +148,7 @@ export function FrontierLandingPage() {
       <a className="frontier-skip" href="#frontier-main">{tx(locale, "跳到主要内容", "Skip to content")}</a>
       <header className="frontier-nav">
         <Link className="frontier-wordmark" to="/frontier" aria-label="SmarTAI Frontier home">
-          <span className="frontier-wordmark-mark" aria-hidden="true">S</span>
-          <span>SmarTAI</span>
+          <SmarTAIWordmark alt="" className="frontier-wordmark-image" />
         </Link>
         <nav aria-label={tx(locale, "展示页导航", "Showcase navigation")}>
           <a href="#how-it-works">{tx(locale, "工作方式", "How it works")}</a>
@@ -166,6 +166,16 @@ export function FrontierLandingPage() {
 
       <main id="frontier-main">
         <section className="frontier-hero">
+          <div className="frontier-hero-brand" aria-label="SmarTAI — Smart AI Teaching Assistant" role="img">
+            <span className="frontier-hero-app-mark" aria-hidden="true">
+              <SmarTAIAppMark finish="crystal-blue" />
+            </span>
+            <span className="frontier-hero-brand-copy">
+              <SmarTAIWordmark alt="" className="frontier-hero-wordmark" />
+              <span className="frontier-brand-expansion">Smart AI Teaching Assistant</span>
+              <span className="frontier-hero-descriptor">{tx(locale, "面向高校理工科的 AI 智能批改与教学分析平台", "Trustworthy AI-assisted grading and learning analytics for STEM education")}</span>
+            </span>
+          </div>
           <div className="frontier-hero-copy">
             <div className="frontier-kicker">
               <span className="frontier-kicker-dot" aria-hidden="true" />
@@ -314,7 +324,7 @@ export function FrontierLandingPage() {
           </div>
           <div className="frontier-workspace-window" aria-label={tx(locale, "SmarTAI 原文对照预览", "SmarTAI source comparison preview")}>
             <div className="frontier-window-bar">
-              <span className="frontier-window-brand">SmarTAI</span>
+              <span className="frontier-window-brand"><SmarTAIWordmark alt="" /></span>
               <span>{tx(locale, "校对学生作答", "Review Student Answers")}</span>
               <span className="frontier-demo-badge">{tx(locale, "产品导览", "Product walkthrough")}</span>
             </div>
@@ -434,9 +444,13 @@ export function FrontierLandingPage() {
 
         <section className="frontier-final-cta">
           <div>
+            <div className="frontier-final-brand" aria-label="SmarTAI" role="img">
+              <span className="frontier-final-app-mark" aria-hidden="true"><SmarTAIAppMark finish="silver" /></span>
+              <SmarTAIWordmark tone="white" alt="" className="frontier-final-wordmark" />
+            </div>
             <p className="frontier-eyebrow">{tx(locale, "准备查看真实工作流？", "Ready to inspect the real workflow?")}</p>
             <h2 className="frontier-title-fragments">
-              {titleFragments(locale, ["打开 SmarTAI", "真实 Demo。"], ["Open the live", "SmarTAI demo."])}
+              {titleFragments(locale, ["打开真实 Demo。"], ["Open the live demo."])}
             </h2>
             <p>{tx(locale, "真实工作台使用合成文件，并运行真实 API 与批改流程。", "The live workspace uses synthetic files with the real API and grading pipeline.")}</p>
           </div>
@@ -448,7 +462,7 @@ export function FrontierLandingPage() {
       </main>
 
       <footer className="frontier-footer">
-        <Link className="frontier-wordmark" to="/frontier"><span className="frontier-wordmark-mark" aria-hidden="true">S</span><span>SmarTAI</span></Link>
+        <Link className="frontier-wordmark" to="/frontier" aria-label="SmarTAI Frontier home"><SmarTAIWordmark alt="" className="frontier-wordmark-image" /></Link>
         <p>{tx(locale, "互动展示 · 合成学生数据 · 点击即可进入真实产品", "Interactive showcase · synthetic student data · live product available after entry")}</p>
       </footer>
     </div>

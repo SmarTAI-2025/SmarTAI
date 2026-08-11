@@ -3,6 +3,8 @@
   --frontier-graphite: #17202a;
   --frontier-cobalt: #2457d6;
   --frontier-cobalt-dark: #173d9c;
+  --frontier-brand-blue: #489fec;
+  --frontier-night: #071426;
   --frontier-vermilion: #d94a3a;
   --frontier-sage: #dce9de;
   --frontier-rule: #d7d9d2;
@@ -46,6 +48,44 @@
   box-shadow: 0 30px 80px rgb(36 87 214 / 0.12);
 }
 
+.frontier-entry-card-branded {
+  border-color: rgb(255 255 255 / 0.1);
+  background:
+    radial-gradient(circle at 18% 15%, rgb(72 159 236 / 0.2), transparent 22rem),
+    linear-gradient(145deg, #071426, #10243a 68%, #17202a);
+  color: white;
+  box-shadow: 0 34px 90px rgb(7 20 38 / 0.24);
+}
+
+.frontier-entry-brand {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  margin-bottom: 2rem;
+}
+
+.frontier-entry-brand-app {
+  display: block;
+  overflow: hidden;
+  width: 4.4rem;
+  aspect-ratio: 1;
+  flex: 0 0 auto;
+  border: 1px solid rgb(255 255 255 / 0.16);
+  border-radius: 23%;
+  background: #061225;
+  box-shadow: 0 15px 32px rgb(0 0 0 / 0.3);
+}
+
+.frontier-entry-brand-app img {
+  width: 100%;
+  height: 100%;
+  transform: scale(1.012);
+}
+
+.frontier-entry-brand-wordmark {
+  width: min(14.5rem, 48vw);
+}
+
 .frontier-entry-card h1 {
   margin-top: 0.75rem;
   font-family: "Iowan Old Style", "Times New Roman", serif;
@@ -62,6 +102,14 @@
   line-height: 1.7;
 }
 
+.frontier-entry-card-branded > p:not(.frontier-eyebrow) {
+  color: #c5d1df;
+}
+
+.frontier-entry-card-branded .frontier-eyebrow {
+  color: #9fc5ff;
+}
+
 .frontier-entry-icon {
   display: inline-flex;
   width: 3rem;
@@ -73,6 +121,16 @@
   background: #2457d6;
   color: white;
   box-shadow: 0 12px 30px rgb(36 87 214 / 0.2);
+}
+
+.frontier-entry-card-branded .frontier-entry-icon {
+  border: 1px solid rgb(255 255 255 / 0.12);
+  background: rgb(255 255 255 / 0.08);
+  box-shadow: none;
+}
+
+.frontier-entry-status {
+  color: #b9d8ff;
 }
 
 .frontier-entry-icon svg {
@@ -131,26 +189,10 @@
   display: inline-flex;
   align-items: center;
   width: max-content;
-  gap: 0.65rem;
-  font-size: 1.05rem;
-  font-weight: 800;
-  letter-spacing: -0.02em;
 }
 
-.frontier-wordmark-mark {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 2rem;
-  height: 2rem;
-  border: 1px solid rgb(36 87 214 / 0.34);
-  border-radius: 0.55rem;
-  background: var(--frontier-cobalt);
-  color: white;
-  font-family: "Iowan Old Style", "Times New Roman", serif;
-  font-size: 1.15rem;
-  font-weight: 700;
-  box-shadow: 0 8px 24px rgb(36 87 214 / 0.16);
+.frontier-wordmark-image {
+  width: 11rem;
 }
 
 .frontier-nav nav {
@@ -214,8 +256,86 @@
   grid-template-columns: 1fr;
   width: min(100% - 3rem, 1260px);
   margin: 0 auto;
-  padding: 5.3rem 0 7rem;
-  gap: 4.5rem;
+  padding: 3.4rem 0 7rem;
+  gap: 3.8rem;
+}
+
+.frontier-hero-brand {
+  position: relative;
+  display: grid;
+  grid-template-columns:
+    clamp(8.5rem, 10vw, 10.5rem)
+    minmax(0, 31rem)
+    clamp(8.5rem, 10vw, 10.5rem);
+  align-items: center;
+  justify-content: center;
+  gap: clamp(1.75rem, 3vw, 2.75rem);
+  width: min(100%, 64rem);
+  margin: 0 auto 0.5rem;
+  padding: 1.25rem clamp(0rem, 3vw, 2rem) 1.8rem;
+}
+
+.frontier-hero-brand::after {
+  position: absolute;
+  right: 11%;
+  bottom: 0;
+  left: 11%;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, rgb(72 159 236 / 0.42), transparent);
+  content: "";
+}
+
+.frontier-hero-app-mark {
+  display: block;
+  overflow: hidden;
+  width: 100%;
+  aspect-ratio: 1;
+  border: 1px solid rgb(120 187 246 / 0.28);
+  border-radius: 23%;
+  background: #071426;
+  box-shadow:
+    0 26px 56px rgb(7 20 38 / 0.22),
+    0 0 0 7px rgb(72 159 236 / 0.055);
+}
+
+.frontier-hero-app-mark img {
+  width: 100%;
+  height: 100%;
+  transform: scale(1.012);
+}
+
+.frontier-hero-brand-copy {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  align-items: center;
+  gap: 1rem;
+  text-align: center;
+}
+
+.frontier-hero-wordmark {
+  width: min(100%, 30rem);
+}
+
+.frontier-brand-expansion {
+  color: #397cc1;
+  font-family: "SFMono-Regular", "IBM Plex Mono", ui-monospace, monospace;
+  font-size: 0.62rem;
+  font-weight: 760;
+  letter-spacing: 0.16em;
+  line-height: 1.2;
+  text-transform: uppercase;
+}
+
+.frontier-hero-descriptor {
+  max-width: 31rem;
+  color: #5f6e7d;
+  font-family: "SFMono-Regular", "IBM Plex Mono", ui-monospace, monospace;
+  font-size: 0.78rem;
+  font-weight: 680;
+  letter-spacing: 0.06em;
+  line-height: 1.6;
+  text-transform: uppercase;
 }
 
 .frontier-hero-copy {
@@ -1427,9 +1547,12 @@
 }
 
 .frontier-window-brand {
-  color: var(--frontier-cobalt);
-  font-size: 0.88rem;
-  font-weight: 800;
+  display: inline-flex;
+  align-items: center;
+}
+
+.frontier-window-brand img {
+  width: 5.5rem;
 }
 
 .frontier-demo-badge {
@@ -2177,16 +2300,49 @@
 }
 
 .frontier-final-cta {
+  position: relative;
   display: flex;
+  overflow: hidden;
   align-items: center;
   justify-content: space-between;
   gap: 3rem;
   margin-top: 1rem;
   border-radius: 1.3rem;
-  background: var(--frontier-graphite);
+  background:
+    radial-gradient(circle at 12% 35%, rgb(72 159 236 / 0.16), transparent 24rem),
+    linear-gradient(125deg, var(--frontier-night), #10243a 64%, #17202a);
   padding: clamp(2rem, 5vw, 4rem);
   color: white;
-  box-shadow: 0 30px 65px rgb(23 32 42 / 0.2);
+  box-shadow: 0 30px 65px rgb(7 20 38 / 0.25);
+}
+
+.frontier-final-brand {
+  display: flex;
+  align-items: center;
+  gap: 1.15rem;
+  margin-bottom: 2rem;
+}
+
+.frontier-final-app-mark {
+  display: block;
+  overflow: hidden;
+  width: clamp(4.25rem, 6vw, 5.35rem);
+  aspect-ratio: 1;
+  flex: 0 0 auto;
+  border: 1px solid rgb(255 255 255 / 0.16);
+  border-radius: 23%;
+  background: #061225;
+  box-shadow: 0 15px 32px rgb(0 0 0 / 0.28);
+}
+
+.frontier-final-app-mark img {
+  width: 100%;
+  height: 100%;
+  transform: scale(1.012);
+}
+
+.frontier-final-wordmark {
+  width: clamp(11rem, 18vw, 15rem);
 }
 
 .frontier-final-cta .frontier-eyebrow {
@@ -2222,6 +2378,10 @@
 
 .frontier-footer .frontier-wordmark {
   color: var(--frontier-graphite);
+}
+
+.frontier-footer .frontier-wordmark-image {
+  width: 8.2rem;
 }
 
 @keyframes frontier-rail {
@@ -2314,7 +2474,16 @@
   .frontier-hero {
     min-height: auto;
     gap: 3rem;
-    padding: 3.5rem 0 5rem;
+    padding: 2.75rem 0 5rem;
+  }
+
+  .frontier-hero-brand {
+    grid-template-columns: 7rem minmax(0, 22rem);
+    gap: 1.6rem;
+    justify-content: start;
+    width: 100%;
+    margin-bottom: 0;
+    padding-inline: 0;
   }
 
   .frontier-hero-copy {
@@ -2398,12 +2567,19 @@
   }
 
   .frontier-wordmark {
-    font-size: 0.94rem;
+    max-width: 7.5rem;
   }
 
-  .frontier-wordmark-mark {
-    width: 1.8rem;
-    height: 1.8rem;
+  .frontier-wordmark-image {
+    width: 8.25rem;
+  }
+
+  .frontier-entry-brand {
+    gap: 0.75rem;
+  }
+
+  .frontier-entry-brand-app {
+    width: 3.6rem;
   }
 
   .frontier-nav-cta {
@@ -2421,6 +2597,39 @@
 
   .frontier-hero h1 {
     font-size: clamp(2.8rem, 14vw, 4rem);
+  }
+
+  .frontier-hero-brand {
+    grid-template-columns: 4.8rem minmax(0, 1fr);
+    gap: 1rem;
+    padding: 0.25rem 0 1.4rem;
+  }
+
+  .frontier-hero-app-mark {
+    box-shadow:
+      0 18px 36px rgb(7 20 38 / 0.2),
+      0 0 0 5px rgb(72 159 236 / 0.05);
+  }
+
+  .frontier-hero-brand-copy {
+    align-items: flex-start;
+    gap: 0.5rem;
+    text-align: left;
+  }
+
+  .frontier-hero-wordmark {
+    width: min(100%, 13rem);
+  }
+
+  .frontier-brand-expansion {
+    font-size: 0.43rem;
+    letter-spacing: 0.09em;
+  }
+
+  .frontier-hero-descriptor {
+    font-size: 0.49rem;
+    letter-spacing: 0.045em;
+    line-height: 1.45;
   }
 
   .frontier-site[data-locale="en-US"] .frontier-hero h1 {
@@ -2668,6 +2877,19 @@
     flex-direction: column;
     justify-content: center;
     gap: 1rem;
+  }
+
+  .frontier-final-brand {
+    gap: 0.85rem;
+    margin-bottom: 1.5rem;
+  }
+
+  .frontier-final-app-mark {
+    width: 3.9rem;
+  }
+
+  .frontier-final-wordmark {
+    width: min(10.5rem, 55vw);
   }
 }
 

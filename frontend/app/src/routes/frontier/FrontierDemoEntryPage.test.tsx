@@ -45,7 +45,9 @@ describe("FrontierDemoEntryPage", () => {
     render(<I18nProvider><RouterProvider router={router} /></I18nProvider>);
 
     expect(await screen.findByText(/此环境尚未启用 Demo 服务/)).toBeInTheDocument();
-    expect(screen.getByText(/SmarTAI · 真实产品 Demo/)).toBeInTheDocument();
+    expect(screen.getByText("真实产品 Demo")).toBeInTheDocument();
+    expect(document.querySelector('[data-smartai-app-mark="silver"]')).toBeInTheDocument();
+    expect(document.querySelector('[data-smartai-wordmark="white"]')).toBeInTheDocument();
     expect(screen.queryByText("frontier_demo_disabled")).not.toBeInTheDocument();
   });
 });

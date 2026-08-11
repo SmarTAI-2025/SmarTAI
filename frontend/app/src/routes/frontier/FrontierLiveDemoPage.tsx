@@ -30,6 +30,7 @@ import {
   startGrading,
   updateProblem,
 } from "@/api/tasks";
+import { SmarTAIAppMark, SmarTAIWordmark } from "@/components/brand/SmarTAIBrand";
 import { Button } from "@/components/ui/Button";
 import { InlineNotice } from "@/components/ui/InlineNotice";
 import { MarkdownMath } from "@/components/ui/MarkdownMath";
@@ -359,19 +360,23 @@ export function FrontierLiveDemoPage() {
 
   return (
     <div className="mx-auto min-w-0 w-full max-w-[1240px] pb-12">
-      <div className="flex flex-col gap-5 border-b pb-7 lg:flex-row lg:items-end lg:justify-between">
+      <div className="flex flex-col gap-6 overflow-hidden rounded-[18px] border border-white/10 bg-[radial-gradient(circle_at_12%_20%,rgba(72,159,236,0.2),transparent_22rem),linear-gradient(125deg,#071426,#10243a_66%,#17202a)] p-6 text-white shadow-[0_24px_55px_rgba(7,20,38,0.2)] sm:p-8 lg:flex-row lg:items-end lg:justify-between">
         <div className="max-w-3xl">
-          <Link to="/frontier" className="text-xs font-semibold uppercase tracking-[0.16em] text-primary hover:underline">SmarTAI · {tx(locale, "产品介绍", "product overview")}</Link>
-          <h1 className="mt-3 text-[34px] font-bold leading-tight tracking-[-0.035em] text-foreground sm:text-[42px]">{tx(locale, "真实批改运行", "Live grading run")}</h1>
-          <p className="mt-3 max-w-2xl text-sm leading-6 text-muted-foreground sm:text-base">
+          <Link to="/frontier" aria-label={tx(locale, "返回 SmarTAI 产品介绍", "Back to SmarTAI product overview")} className="inline-flex items-center gap-3 rounded-lg outline-none focus-visible:ring-2 focus-visible:ring-white/60">
+            <span className="inline-flex h-12 w-12 shrink-0 overflow-hidden rounded-[13px] border border-white/15 bg-[#061225] shadow-lg" aria-hidden="true"><SmarTAIAppMark finish="silver" className="h-full w-full" /></span>
+            <SmarTAIWordmark tone="white" alt="" className="w-[156px] sm:w-[178px]" />
+            <span className="hidden border-l border-white/20 pl-3 text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-300 sm:inline">{tx(locale, "产品介绍", "Product overview")}</span>
+          </Link>
+          <h1 className="mt-5 text-[34px] font-bold leading-tight tracking-[-0.035em] text-white sm:text-[42px]">{tx(locale, "真实批改运行", "Live grading run")}</h1>
+          <p className="mt-3 max-w-2xl text-sm leading-6 text-slate-300 sm:text-base">
             {tx(locale, "合成作业会经过真实的 SmarTAI API、原文识别、OCR 与批改流程。本页不会向真实结果注入任何预计算分数。", "Synthetic coursework goes through the real SmarTAI API, source recognition, OCR, and grading pipeline. Nothing on this page injects precomputed scores into the live result.")}
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
-          <BoundaryBadge icon={<FlaskConical />} label={tx(locale, "合成输入", "Synthetic inputs")} />
-          <BoundaryBadge icon={<Activity />} label={tx(locale, "真实 API", "Real API")} tone="blue" />
-          <BoundaryBadge icon={<ScanText />} label={tx(locale, "真实 OCR", "Real OCR")} tone="blue" />
-          <BoundaryBadge icon={<Sparkles />} label={tx(locale, "真实批改", "Real grading")} tone="blue" />
+          <BoundaryBadge icon={<FlaskConical />} label={tx(locale, "合成输入", "Synthetic inputs")} inverse />
+          <BoundaryBadge icon={<Activity />} label={tx(locale, "真实 API", "Real API")} tone="blue" inverse />
+          <BoundaryBadge icon={<ScanText />} label={tx(locale, "真实 OCR", "Real OCR")} tone="blue" inverse />
+          <BoundaryBadge icon={<Sparkles />} label={tx(locale, "真实批改", "Real grading")} tone="blue" inverse />
         </div>
       </div>
 
@@ -893,8 +898,13 @@ function WorkflowStep({ step, index, locale }: { step: RunStep; index: number; l
   );
 }
 
-function BoundaryBadge({ icon, label, tone = "neutral" }: { icon: React.ReactNode; label: string; tone?: "neutral" | "blue" }) {
-  return <span className={cn("inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1.5 text-xs font-semibold", tone === "blue" ? "border-primary/25 bg-primary/5 text-primary" : "bg-card text-muted-foreground")}>{icon}{label}</span>;
+function BoundaryBadge({ icon, label, tone = "neutral", inverse = false }: { icon: React.ReactNode; label: string; tone?: "neutral" | "blue"; inverse?: boolean }) {
+  return <span className={cn(
+    "inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1.5 text-xs font-semibold",
+    inverse
+      ? tone === "blue" ? "border-sky-300/25 bg-sky-300/10 text-sky-100" : "border-white/15 bg-white/[0.06] text-slate-200"
+      : tone === "blue" ? "border-primary/25 bg-primary/5 text-primary" : "bg-card text-muted-foreground",
+  )}>{icon}{label}</span>;
 }
 
 function StatusPill({ status, locale }: { status: TaskStatus; locale: Locale }) {

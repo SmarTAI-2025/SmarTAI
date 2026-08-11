@@ -8,11 +8,17 @@ describe("FrontierLandingPage", () => {
   beforeEach(() => window.localStorage.setItem("smartai_locale", "en-US"));
 
   it("presents an honest walkthrough and routes to the live demo", () => {
-    render(<I18nProvider><MemoryRouter><FrontierLandingPage /></MemoryRouter></I18nProvider>);
+    const { container } = render(<I18nProvider><MemoryRouter><FrontierLandingPage /></MemoryRouter></I18nProvider>);
 
     expect(screen.getByRole("heading", { name: /faster review.*evidence intact/i })).toBeInTheDocument();
     expect(screen.getAllByText(/synthetic student data/i).length).toBeGreaterThan(0);
     expect(screen.getAllByRole("link", { name: /enter (the )?live demo/i })[0]).toHaveAttribute("href", "/frontier/enter");
+    expect(container.querySelectorAll('[data-smartai-wordmark="blue"]')).toHaveLength(4);
+    expect(container.querySelector('[data-smartai-app-mark="crystal-blue"]')).toBeInTheDocument();
+    expect(screen.getByText("Smart AI Teaching Assistant")).toBeInTheDocument();
+    expect(container.querySelector('[data-smartai-app-mark="silver"]')).toBeInTheDocument();
+    expect(container.querySelector('[data-smartai-wordmark="white"]')).toBeInTheDocument();
+    expect(container.querySelector(".frontier-wordmark-mark")).not.toBeInTheDocument();
   });
 
   it("lets the reviewer step through the product walkthrough", () => {

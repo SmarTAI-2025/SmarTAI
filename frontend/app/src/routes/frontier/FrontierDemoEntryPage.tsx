@@ -3,6 +3,7 @@ import { useEffect, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { createFrontierDemoSession } from "@/api/auth";
 import { getAPIErrorCode, normalizeAPIError } from "@/api/client";
+import { SmarTAIAppMark, SmarTAIWordmark } from "@/components/brand/SmarTAIBrand";
 import { LanguageToggle } from "@/components/layout/LanguageToggle";
 import { Button } from "@/components/ui/Button";
 import { useI18n } from "@/i18n/I18nProvider";
@@ -41,11 +42,15 @@ export function FrontierDemoEntryPage() {
         </Link>
         <LanguageToggle className="border-slate-300 bg-white/85" />
       </div>
-      <section className="frontier-entry-card" aria-live="polite">
+      <section className="frontier-entry-card frontier-entry-card-branded" aria-live="polite">
+        <div className="frontier-entry-brand" aria-label="SmarTAI" role="img">
+          <span className="frontier-entry-brand-app" aria-hidden="true"><SmarTAIAppMark finish="silver" /></span>
+          <SmarTAIWordmark tone="white" alt="" className="frontier-entry-brand-wordmark" />
+        </div>
         <span className="frontier-entry-icon">
           {error ? <RotateCcw aria-hidden="true" /> : <LoaderCircle aria-hidden="true" className="animate-spin" />}
         </span>
-        <p className="frontier-eyebrow">{zh ? "SmarTAI · 真实产品 Demo" : "SmarTAI · Live product demo"}</p>
+        <p className="frontier-eyebrow">{zh ? "真实产品 Demo" : "Live product demo"}</p>
         <h1>{error ? (zh ? "暂时无法进入 Demo" : "The demo could not start") : (zh ? "正在进入真实 Demo" : "Entering the live demo")}</h1>
         <p>
           {error
@@ -60,7 +65,7 @@ export function FrontierDemoEntryPage() {
             {zh ? "重试" : "Try again"}
           </Button>
         ) : (
-          <span className="mt-5 inline-flex items-center gap-2 text-xs font-semibold text-blue-700">
+          <span className="frontier-entry-status mt-5 inline-flex items-center gap-2 text-xs font-semibold">
             <ShieldCheck aria-hidden="true" className="h-4 w-4" />
             {zh ? "合成数据 · 真实 API / OCR / 批改" : "Synthetic data · real API / OCR / grading"}
           </span>
