@@ -60,21 +60,6 @@ const WORKSPACE_NAV: WorkspaceNavItem[] = [
 
 const RESULT_WORKSPACE_STATUSES = new Set(["graded", "review_confirmed", "generating_analysis", "finalized"]);
 const OVERVIEW_CHART_PALETTE = ["#f08f9b", "#f3b780", "#5ec7ae", "#7c8cf8", "#a995e8"];
-type OverviewPanelTone = "primary" | "accent" | "secondary" | "warning";
-
-const OVERVIEW_PANEL_STYLES: Record<OverviewPanelTone, string> = {
-  primary: "border-border/75 bg-white",
-  accent: "border-border/75 bg-white",
-  secondary: "border-border/75 bg-white",
-  warning: "border-border/75 bg-white",
-};
-
-const OVERVIEW_PANEL_TITLE_STYLES: Record<OverviewPanelTone, string> = {
-  primary: "text-[#4f61c9]",
-  accent: "text-[#247d69]",
-  secondary: "text-[#7058b2]",
-  warning: "text-[#a56524]",
-};
 
 /** A-00: Figma-16 visual language, expanded into the confirmed five-route workspace. */
 export function FinalResultsWorkspacePage() {
@@ -375,7 +360,6 @@ function ResultsOverview({
           subtitle={tx(locale, "按学生总得分率分桶", "Students grouped by overall score percentage")}
           href={`${root}/visualizations`}
           linkLabel={tx(locale, "查看可视化", "View visualizations")}
-          tone="primary"
         >
           {validStudentPercents.length ? (
             <div className="flex h-[118px] items-end justify-between gap-3 pt-3" aria-label={tx(locale, "学生分数分布", "Student score distribution")}>
@@ -402,7 +386,6 @@ function ResultsOverview({
           subtitle={tx(locale, "按平均得分率从低到高", "Ordered by average score percentage")}
           href={`${root}/questions`}
           linkLabel={tx(locale, "查看题目分析", "View questions")}
-          tone="warning"
         >
           {weakQuestions.length ? (
             <div className="mt-3 grid gap-3">
@@ -420,7 +403,6 @@ function ResultsOverview({
           subtitle={tx(locale, "低得分率优先，仅显示 3 位", "Lowest score percentages first; 3 students shown")}
           href={`${root}/students`}
           linkLabel={tx(locale, "查看学生分析", "View students")}
-          tone="accent"
         >
           {studentPreview.length ? (
             <div className="mt-2 divide-y">
@@ -434,7 +416,6 @@ function ResultsOverview({
           subtitle={reviewConclusion}
           href={provisional ? `/tasks/${encodeURIComponent(taskId)}/review` : `${root}/reports`}
           linkLabel={provisional ? tx(locale, "完成教师复核", "Complete teacher review") : tx(locale, "查看报告状态", "View report status")}
-          tone="secondary"
         >
           <div className="mt-3 grid gap-2 text-[12px]">
             <StatusLine
@@ -465,21 +446,19 @@ function OverviewPanel({
   subtitle,
   href,
   linkLabel,
-  tone,
   children,
 }: {
   title: string;
   subtitle: string;
   href: string;
   linkLabel: string;
-  tone: OverviewPanelTone;
   children: ReactNode;
 }) {
   return (
-    <section className={cn("min-w-0 rounded-[9px] border px-4 py-3.5 shadow-[0_12px_30px_-28px_rgba(40,56,99,0.65)]", OVERVIEW_PANEL_STYLES[tone])}>
+    <section className="min-w-0 rounded-[9px] border border-border/75 bg-white px-4 py-3.5 shadow-[0_12px_30px_-28px_rgba(40,56,99,0.65)]">
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
-          <h3 className={cn("text-[14px] font-bold", OVERVIEW_PANEL_TITLE_STYLES[tone])}>{title}</h3>
+          <h3 className="text-[14px] font-bold text-foreground">{title}</h3>
           <p className="mt-0.5 truncate text-[11px] text-muted-foreground">{subtitle}</p>
         </div>
         <Link to={href} className="inline-flex shrink-0 items-center gap-1 text-[11px] font-semibold text-primary hover:underline">
@@ -516,7 +495,7 @@ function StudentPreviewRow({ locale, student }: { locale: Locale; student: Stude
       <span className="text-[11px] text-muted-foreground">
         {student.lowConfidenceCount ? tx(locale, `${student.lowConfidenceCount} 个低置信题次`, `${student.lowConfidenceCount} low-confidence`) : tx(locale, "无低置信题次", "No low-confidence items")}
       </span>
-      <span className="min-w-10 text-right text-[12px] font-bold text-[#4f61c9]">{formatPercent(student.percent)}</span>
+      <span className="min-w-10 text-right text-[12px] font-bold text-primary">{formatPercent(student.percent)}</span>
     </div>
   );
 }
