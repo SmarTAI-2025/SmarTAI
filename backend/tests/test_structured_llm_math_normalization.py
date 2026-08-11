@@ -62,3 +62,21 @@ def test_json_output_normalizes_prose_but_preserves_solution_code():
 
     assert parsed.prose == "Use $\\mu_k$ on a $30^\\circ$ incline."
     assert parsed.solution_code == "pattern = r'\\mu'"
+
+
+def test_repairs_double_escaped_generated_markdown_without_touching_math_meaning():
+    value = (
+        r"1. **Substitution:** Let $u=x^2$.\\n\\n"
+        r"2. Evaluate $$$\\frac{1}{2}\\left(e-1\\right)$$$."
+    )
+
+    assert format_math_and_quotes(value) == (
+        "1. **Substitution:** Let $u=x^2$.\n\n"
+        r"2. Evaluate $$\frac{1}{2}\left(e-1\right)$$."
+    )
+
+
+def test_does_not_decode_real_latex_nu_or_nabla_as_newlines():
+    value = r"Use \nu and \nabla f in the proof."
+
+    assert format_math_and_quotes(value) == r"Use $\nu$ and $\nabla$ f in the proof."

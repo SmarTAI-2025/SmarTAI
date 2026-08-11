@@ -37,7 +37,10 @@ MATH_MARKDOWN_SYSTEM_INSTRUCTION = (
     "\n\nMARKDOWN MATH CONTRACT: In every prose field, wrap inline mathematics in "
     "`$...$` and display mathematics in `$$...$$`. Never leave LaTeX commands "
     "such as `\\int`, `\\mu`, or `\\times` bare. Do not add math delimiters "
-    "inside source code, code blocks, test input, or expected output."
+    "inside source code, code blocks, test input, or expected output. Inside JSON, "
+    "escape a TeX backslash exactly once and encode each line break exactly once; "
+    "the decoded field must contain one backslash per TeX command and real newlines, "
+    "not the visible characters `\\n`. Never use triple-dollar delimiters."
 )
 
 
@@ -192,6 +195,16 @@ _LATEX_ATOM_RE = re.compile(
     r"|\\(?:times|cdot|div|pm|mp|leq?|geq?|neq|approx|equiv|in|notin|subseteq|supseteq|to|mapsto)"
     r")"
 )
+_DOUBLE_ESCAPED_LATEX_RE = re.compile(
+    r"\\\\(?=(?:int|sum|prod|lim|frac|dfrac|tfrac|sqrt|ker|rank|sin|cos|tan|log|ln|exp|det|max|min|"
+    r"alpha|beta|gamma|delta|epsilon|theta|lambda|mu|nu|pi|rho|sigma|tau|phi|psi|omega|"
+    r"infty|partial|nabla|ell|lVert|rVert|Vert|text|mathrm|mathbf|mathit|operatorname|"
+    r"left|right|begin|end|times|cdot|div|pm|mp|leq?|geq?|neq|approx|equiv|in|notin|"
+    r"subseteq|supseteq|to|mapsto|circ)(?![A-Za-z]))"
+)
+_OVERESCAPED_NEWLINE_RE = re.compile(
+    r"\\{1,2}n(?=(?:\\{1,2}n|[\s\-\*#>0-9(A-Z]|[\u3400-\u9fff]|$))"
+)
 
 
 def format_math_and_quotes(text: str) -> str:
@@ -202,12 +215,30 @@ def format_math_and_quotes(text: str) -> str:
     # mathematics; code-specific fields are also excluded in `_clean_strings`.
     if _SOURCE_CODE_START_RE.match(text):
         return text
+    text = _normalize_overescaped_markdown(text)
     # Normalize standard LaTeX delimiters for the Markdown math renderer.
     text = re.sub(r'\\\[(.*?)\\\]', r'$$\1$$', text, flags=re.DOTALL)
     text = re.sub(r'\\\((.*?)\\\)', r'$\1$', text, flags=re.DOTALL)
     # Strip literal quotes hallucinated by LLM
     text = text.strip('"').strip("'")
     return _wrap_bare_latex(text)
+
+
+def _normalize_overescaped_markdown(text: str) -> str:
+    """Repair presentation-only double escaping without changing semantics.
+
+    Some models correctly return JSON but double-escape the *contents* of a
+    prose field. After JSON decoding that leaves visible ``\\n`` separators and
+    two backslashes before TeX commands, which Markdown/KaTeX cannot interpret.
+    This pass is deliberately narrow: it only decodes separator-shaped newlines
+    and a fixed allowlist of TeX commands. Code/test fields never call it.
+    """
+    text = re.sub(r"\\{1,2}r\\{1,2}n", "\n", text)
+    text = _OVERESCAPED_NEWLINE_RE.sub("\n", text)
+    text = _DOUBLE_ESCAPED_LATEX_RE.sub(lambda _match: "\\", text)
+    text = re.sub(r"\\\\(?=[\[\]()])", lambda _match: "\\", text)
+    text = re.sub(r"(?<!\$)\${3,}(?!\$)", "$$", text)
+    return re.sub(r"\n{3,}", "\n\n", text)
 
 
 def _wrap_bare_latex(text: str) -> str:
