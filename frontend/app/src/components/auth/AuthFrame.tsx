@@ -1,5 +1,6 @@
 import { Eye, EyeOff } from "lucide-react";
 import { useState, type ChangeEventHandler, type ReactNode } from "react";
+import { SmarTAIAppMark, SmarTAIWordmark } from "@/components/brand/SmarTAIBrand";
 import { LanguageToggle } from "@/components/layout/LanguageToggle";
 import { Input } from "@/components/ui/Input";
 import { useI18n } from "@/i18n/I18nProvider";
@@ -12,9 +13,12 @@ export function AuthFrame({ children }: { children: ReactNode }) {
       <AuthBackdrop />
       <header className="absolute inset-x-0 top-0 z-20">
         <div className="mx-auto flex h-[70px] w-full max-w-[1440px] items-center justify-between px-5 sm:px-10">
-          <div className="flex items-baseline gap-3">
-            <span className="text-[22px] font-bold tracking-[-0.03em] text-primary">SmarTAI</span>
-            <span className="hidden text-xs font-medium text-muted-foreground sm:inline">
+          <div className="flex items-center gap-2.5">
+            <span className="inline-flex h-9 w-6 shrink-0 items-center justify-center" aria-hidden="true">
+              <SmarTAIAppMark className="h-full w-full" />
+            </span>
+            <SmarTAIWordmark alt="SmarTAI" className="w-[128px] sm:w-[142px]" />
+            <span className="hidden border-l pl-3 text-xs font-medium text-muted-foreground md:inline">
               {zh ? "SmarTAI 智能批改工作台" : "SmarTAI Intelligent Grading Workspace"}
             </span>
           </div>
