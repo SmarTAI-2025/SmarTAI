@@ -806,6 +806,9 @@ Rules:
 - solution_code: only for programming questions; return reference implementation text, never run it.
 - test_cases: only for programming questions; return structured cases, at most the requested count.
 - For tests requiring GUI, network, files, special packages, or large resources, set sandbox_feasible=false.
+- In criterion and reference_answer prose, wrap inline LaTeX in `$...$` and display LaTeX in `$$...$$`; never add math delimiters inside solution_code or test data.
+- Keep reference answers concise: use 3-6 checkable numbered steps, at most one blank line between blocks, and no decorative repetition.
+- In the JSON source, encode line breaks once as `\n`, never double-escape them as `\\n`. Escape each TeX backslash exactly once for JSON so the decoded text contains one backslash per command. Never use `$$$` delimiters.
 - Omit a candidate rather than guess when the stem is insufficient.
 - Output JSON only, without markdown fences or commentary.
 """
