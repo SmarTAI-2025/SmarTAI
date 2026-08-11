@@ -5,15 +5,16 @@ import { Link, MemoryRouter, Route, Routes } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { getGradingSetup, saveGradingSetup } from "@/api/gradingSetup";
 import { preflightProblemSource, startQuestionPreparation } from "@/api/problemSources";
-import { createTask, getTask, getTaskState, parseSubmissions, startGrading, updateProblem } from "@/api/tasks";
+import { createTask, getTask, getTaskResult, getTaskState, parseSubmissions, startGrading, updateProblem } from "@/api/tasks";
 import { demoQuestions } from "@/data/frontierDemo";
 import { I18nProvider } from "@/i18n/I18nProvider";
-import type { GradingSetupResponse, Task, TaskStateSnapshot } from "@/types";
+import type { Correction, GradingSetupResponse, Task, TaskResultResponse, TaskStateSnapshot } from "@/types";
 import { alignDemoProblems, FrontierLiveDemoPage } from "./FrontierLiveDemoPage";
 
 vi.mock("@/api/tasks", () => ({
   createTask: vi.fn(),
   getTask: vi.fn(),
+  getTaskResult: vi.fn(),
   getTaskState: vi.fn(),
   parseSubmissions: vi.fn(),
   startGrading: vi.fn(),
@@ -126,6 +127,7 @@ describe("FrontierLiveDemoPage", () => {
   it("runs the real API workflow in order without injecting fallback scores", async () => {
     const user = userEvent.setup();
     const recognizedTask = taskWithQuestions();
+    recognizedTask.student_data = recognizedStudents();
     recognizedTask.problem_data.q2.stem = "Recognized Q2 wording from the live extraction.";
     vi.mocked(createTask).mockResolvedValue(taskState("draft"));
     vi.mocked(preflightProblemSource).mockResolvedValue({
@@ -144,6 +146,7 @@ describe("FrontierLiveDemoPage", () => {
     vi.mocked(getGradingSetup).mockResolvedValue(gradingSetup());
     vi.mocked(saveGradingSetup).mockResolvedValue({ ...gradingSetup(), configured: true, status: "saved" });
     vi.mocked(startGrading).mockResolvedValue({ status: "started", job_id: "job-grading" });
+    vi.mocked(getTaskResult).mockResolvedValue(gradedResult(recognizedTask));
     vi.mocked(getTaskState).mockImplementation(async () => {
       if (vi.mocked(startGrading).mock.calls.length) return taskState("graded");
       if (vi.mocked(parseSubmissions).mock.calls.length) return taskState("submissions_ready");
@@ -184,9 +187,14 @@ describe("FrontierLiveDemoPage", () => {
     await user.click(confirmTeacherMaterials);
     await waitFor(() => expect(updateProblem).toHaveBeenCalledTimes(4));
     await waitFor(() => expect(parseSubmissions).toHaveBeenCalledTimes(1));
+    expect(saveGradingSetup).not.toHaveBeenCalled();
+    expect(await screen.findByRole("heading", { name: /inspect this run's recognized submissions/i })).toBeInTheDocument();
+    expect(screen.getByText("Demo Student 1")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: /continue to live grading/i }));
     await waitFor(() => expect(saveGradingSetup).toHaveBeenCalledTimes(1));
     await waitFor(() => expect(startGrading).toHaveBeenCalledTimes(1));
     await screen.findByText("16 answer units processed");
+    expect(await screen.findByRole("heading", { name: /see class performance from live scores/i })).toBeInTheDocument();
     expect(createTask).toHaveBeenCalledTimes(1);
     expect(preflightProblemSource).toHaveBeenCalledTimes(1);
     expect(startQuestionPreparation).toHaveBeenCalledTimes(1);
@@ -232,6 +240,55 @@ function taskState(status: TaskStateSnapshot["status"]): TaskStateSnapshot {
     kb_doc_count: 0,
     created_at: 1,
     updated_at: 1,
+  };
+}
+
+function recognizedStudents(): Task["student_data"] {
+  return Object.fromEntries(Array.from({ length: 4 }, (_, index) => {
+    const id = `demo-${index + 1}`;
+    return [id, {
+      stu_id: id,
+      stu_name: `Demo Student ${index + 1}`,
+      source_filename: `DEMO-00${index + 1}.pdf`,
+      identity_status: "matched" as const,
+      identity_match_method: "filename" as const,
+      stu_ans: Object.values(taskWithQuestions().problem_data).map((problem) => ({
+        q_id: problem.q_id,
+        number: problem.number,
+        type: problem.type,
+        content: `Recognized answer for ${problem.q_id} by ${id}`,
+        flag: [],
+        review_status: "pending" as const,
+      })),
+    }];
+  }));
+}
+
+function gradedResult(task: Task): TaskResultResponse {
+  const correction = (qId: string, maxScore: number, index: number): Correction => ({
+    q_id: qId,
+    type: qId === "q4" ? "programming" : "calculation",
+    score: Math.max(0, maxScore - index),
+    provisional_score: Math.max(0, maxScore - index),
+    max_score: maxScore,
+    confidence: 0.82,
+    comment: "Live model feedback",
+    steps: [],
+    expert_results: [],
+    requires_human_review: index === 2,
+    review_reasons: index === 2 ? ["low_confidence"] : [],
+  });
+  return {
+    status: "completed",
+    task_id: task.task_id,
+    problem_data: task.problem_data,
+    student_data: task.student_data,
+    results: Object.values(task.student_data).map((student, studentIndex) => ({
+      student_id: student.stu_id,
+      student_name: student.stu_name,
+      student_answers: student.stu_ans,
+      corrections: Object.values(task.problem_data).map((problem, qIndex) => correction(problem.q_id, problem.max_score, (studentIndex + qIndex) % 3)),
+    })),
   };
 }
 

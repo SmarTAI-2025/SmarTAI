@@ -1,6 +1,7 @@
 import {
   Activity,
   ArrowRight,
+  BarChart3,
   Check,
   CircleDot,
   Clock3,
@@ -12,6 +13,7 @@ import {
   ScanText,
   Sparkles,
   TriangleAlert,
+  Users,
 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
@@ -21,6 +23,7 @@ import { preflightProblemSource, startQuestionPreparation } from "@/api/problemS
 import {
   createTask,
   getTask,
+  getTaskResult,
   getTaskState,
   parseSubmissions,
   startGrading,
@@ -29,10 +32,11 @@ import {
 import { Button } from "@/components/ui/Button";
 import { InlineNotice } from "@/components/ui/InlineNotice";
 import { MarkdownMath } from "@/components/ui/MarkdownMath";
+import { buildResultsModel, formatPercent, formatScore } from "@/components/tasks/resultsModel";
 import { useI18n } from "@/i18n/I18nProvider";
 import type { Locale } from "@/i18n/messages";
 import { cn } from "@/lib/cn";
-import type { GradingSetup, ProblemInfo, Task, TaskStateSnapshot, TaskStatus } from "@/types";
+import type { GradingSetup, ProblemInfo, Task, TaskResultResponse, TaskStateSnapshot, TaskStatus } from "@/types";
 
 const QUESTION_FIXTURE = "/frontier-demo/live/question_source.pdf";
 const SUBMISSION_FIXTURE = "/frontier-demo/live/submissions_raw.zip";
@@ -76,6 +80,8 @@ export function FrontierLiveDemoPage() {
   const [startedAt, setStartedAt] = useState<number | null>(null);
   const [providerLabel, setProviderLabel] = useState<string | null>(null);
   const [teacherReviewTask, setTeacherReviewTask] = useState<Task | null>(null);
+  const [submissionReviewTask, setSubmissionReviewTask] = useState<Task | null>(null);
+  const [demoResult, setDemoResult] = useState<TaskResultResponse | null>(null);
   const [materialsConfirmed, setMaterialsConfirmed] = useState(false);
   const activeStepRef = useRef<RunStepId | null>(null);
   const runLockRef = useRef(false);
@@ -104,6 +110,14 @@ export function FrontierLiveDemoPage() {
           if (state.status === "problems_ready" && !confirmed) {
             return;
           }
+          if (state.status === "submissions_ready") {
+            setSubmissionReviewTask(task);
+            return;
+          }
+        }
+        if (["graded", "review_confirmed", "finalized"].includes(state.status)) {
+          setDemoResult(await getTaskResult(restoredTaskId));
+          return;
         }
         if (["draft", "extracting_problems", "problems_ready", "parsing_submissions", "submissions_ready", "grading"].includes(state.status)) {
           runLockRef.current = true;
@@ -142,6 +156,8 @@ export function FrontierLiveDemoPage() {
     setSnapshot(null);
     setProviderLabel(null);
     setTeacherReviewTask(null);
+    setSubmissionReviewTask(null);
+    setDemoResult(null);
     setMaterialsConfirmed(false);
     setStartedAt(Date.now());
     setSteps(initialSteps(locale));
@@ -184,7 +200,23 @@ export function FrontierLiveDemoPage() {
     }
   }
 
-  async function continueWorkflow(currentTaskId: string, startingStatus: TaskStatus, teacherMaterialsConfirmed = false) {
+  async function confirmSubmissionReview() {
+    if (!taskId || !submissionReviewTask || runLockRef.current) return;
+    runLockRef.current = true;
+    setBusy(true);
+    setError(null);
+    try {
+      await continueWorkflow(taskId, "submissions_ready", true, true);
+    } catch (caught) {
+      failActiveStep();
+      setError(errorMessage(caught));
+    } finally {
+      runLockRef.current = false;
+      setBusy(false);
+    }
+  }
+
+  async function continueWorkflow(currentTaskId: string, startingStatus: TaskStatus, teacherMaterialsConfirmed = false, teacherSubmissionsReviewed = false) {
     let status = startingStatus;
 
     if (status === "draft") {
@@ -249,8 +281,11 @@ export function FrontierLiveDemoPage() {
 
     if (status === "submissions_ready") {
       const recognized = await getTaskState(currentTaskId);
+      const recognizedTask = await getTask(currentTaskId);
       setSnapshot(recognized);
+      setSubmissionReviewTask(recognizedTask);
       markStep("submissions", "complete", tx(locale, `已识别 ${recognized.student_count} 份合成作答`, `${recognized.student_count} synthetic submissions recognized`), recognized.parse_job_id);
+      if (!teacherSubmissionsReviewed) return;
       markStep("grading", "active", tx(locale, "正在选择一个已启用模型并保存批改设置…", "Selecting one enabled provider and saving the grading setup…"));
       const setupResponse = await getGradingSetup(currentTaskId);
       const enabled = setupResponse.available_experts.filter((item) => item.enabled);
@@ -287,6 +322,7 @@ export function FrontierLiveDemoPage() {
     if (["graded", "review_confirmed", "finalized"].includes(status)) {
       const completed = await getTaskState(currentTaskId);
       setSnapshot(completed);
+      setDemoResult(await getTaskResult(currentTaskId));
       markStep("grading", "complete", tx(locale, `已处理 ${completed.student_count * completed.problem_count} 个作答单元`, `${completed.student_count * completed.problem_count} answer units processed`), completed.grading_job_id);
     }
   }
@@ -421,7 +457,16 @@ export function FrontierLiveDemoPage() {
         </aside>
       </div>
 
-      {teacherReviewTask ? (
+      {demoResult ? (
+        <DemoResultInsights result={demoResult} taskId={taskId ?? demoResult.task_id} locale={locale} />
+      ) : submissionReviewTask ? (
+        <SubmissionRecognitionReview
+          task={submissionReviewTask}
+          locale={locale}
+          busy={busy}
+          onContinue={() => void confirmSubmissionReview()}
+        />
+      ) : teacherReviewTask ? (
         <TeacherMaterialConfirmation
           task={teacherReviewTask}
           locale={locale}
@@ -431,6 +476,147 @@ export function FrontierLiveDemoPage() {
         />
       ) : null}
     </div>
+  );
+}
+
+function SubmissionRecognitionReview({ task, locale, busy, onContinue }: { task: Task; locale: Locale; busy: boolean; onContinue: () => void }) {
+  const students = Object.values(task.student_data);
+  return (
+    <section className="mt-5 rounded-[10px] border border-primary/25 bg-primary/[0.035] p-4 sm:p-5" aria-labelledby="demo-submission-review-title">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+        <div>
+          <p className="text-xs font-semibold uppercase tracking-[0.12em] text-primary">{tx(locale, "真实 OCR · 教师检查", "Live OCR · teacher check")}</p>
+          <h3 id="demo-submission-review-title" className="mt-1 text-lg font-bold">{tx(locale, "检查本次识别的学生作答", "Inspect this run's recognized submissions")}</h3>
+          <p className="mt-1 max-w-3xl text-xs leading-5 text-muted-foreground">
+            {tx(locale, "以下学生、文件名和逐题作答均来自本次真实作答识别流程；继续后才会启动模型批改。", "The students, filenames, and per-question answers below come from this live recognition run. Model grading starts only after you continue.")}
+          </p>
+        </div>
+        <Link className="shrink-0 text-xs font-semibold text-primary hover:underline" to={`/tasks/${task.task_id}/submissions`}>
+          {tx(locale, "在作答校对页查看", "Open submission review")}
+        </Link>
+      </div>
+
+      <div className="mt-4 grid gap-3 md:grid-cols-2">
+        {students.map((student, index) => (
+          <details key={student.stu_id} open={index === 0} className="rounded-lg border bg-card px-3 py-3">
+            <summary className="cursor-pointer list-none">
+              <div className="flex items-center justify-between gap-3">
+                <div className="min-w-0">
+                  <p className="truncate text-sm font-bold">{student.stu_name || student.stu_id}</p>
+                  <p className="mt-0.5 truncate text-[11px] text-muted-foreground">{student.stu_id} · {student.source_filename || tx(locale, "合成作答文件", "synthetic submission")}</p>
+                </div>
+                <span className={cn("shrink-0 rounded-full px-2 py-1 text-[10px] font-semibold", student.identity_status === "needs_review" ? "bg-warning/10 text-warning" : "bg-accent/10 text-accent")}>
+                  {student.identity_status === "needs_review" ? tx(locale, "身份待核对", "Identity check") : tx(locale, `${student.stu_ans.length} 题已识别`, `${student.stu_ans.length} answers`)}
+                </span>
+              </div>
+            </summary>
+            <div className="mt-3 grid gap-2 border-t pt-3">
+              {student.stu_ans.map((answer) => (
+                <div key={answer.q_id} className="rounded-md bg-muted/45 px-3 py-2">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-[11px] font-bold text-primary">Q{answer.number || answer.q_id}</span>
+                    {answer.flag?.length ? <span className="text-[10px] font-medium text-warning">{answer.flag.join(" · ")}</span> : null}
+                  </div>
+                  <MarkdownMath className="mt-1 max-h-28 overflow-auto text-[11px] leading-5 text-foreground">{answer.content}</MarkdownMath>
+                </div>
+              ))}
+            </div>
+          </details>
+        ))}
+      </div>
+
+      <div className="mt-4 flex flex-wrap items-center gap-3">
+        <Button onClick={onContinue} disabled={busy} className="h-10 px-4">
+          {busy ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
+          {tx(locale, "继续运行真实批改", "Continue to live grading")}
+        </Button>
+        <span className="text-xs text-muted-foreground">{tx(locale, "Demo 不会修改识别文本；如有问题可先进入作答校对页。", "The Demo does not rewrite recognized text. Open submission review first if anything needs checking.")}</span>
+      </div>
+    </section>
+  );
+}
+
+function DemoResultInsights({ result, taskId, locale }: { result: TaskResultResponse; taskId: string; locale: Locale }) {
+  const model = buildResultsModel(undefined, result);
+  const validPercents = model.students.map((student) => student.percent).filter((value): value is number => value !== null && Number.isFinite(value));
+  const passCount = validPercents.filter((value) => value >= 60).length;
+  const passRate = validPercents.length ? Math.round((passCount / validPercents.length) * 100) : 0;
+  const sortedQuestions = [...model.questions].sort((left, right) => (left.avgPercent ?? 101) - (right.avgPercent ?? 101));
+  return (
+    <section className="frontier-live-results mt-5 overflow-hidden rounded-[12px] border border-primary/25 bg-gradient-to-br from-blue-50/70 via-card to-emerald-50/50 p-4 sm:p-6" aria-labelledby="demo-result-insights-title">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+        <div>
+          <p className="text-xs font-semibold uppercase tracking-[0.12em] text-primary">{tx(locale, "真实批改 · 即时分析", "Live grading · instant analysis")}</p>
+          <h3 id="demo-result-insights-title" className="mt-1 text-xl font-bold">{tx(locale, "从真实分数看到班级表现", "See class performance from live scores")}</h3>
+          <p className="mt-1 max-w-3xl text-xs leading-5 text-muted-foreground">
+            {tx(locale, "所有指标均由本次 API 返回的逐题批改结果实时计算；教师确认前属于未确认结果。", "Every metric is computed from the per-question grading results returned by this live API run. Results remain unconfirmed until teacher review.")}
+          </p>
+        </div>
+        <div className="flex flex-wrap gap-3 text-xs font-semibold text-primary">
+          <Link className="hover:underline" to={`/tasks/${taskId}/results/visualizations`}>{tx(locale, "打开完整可视化", "Open full visual analysis")}</Link>
+          <Link className="hover:underline" to={`/tasks/${taskId}/review`}>{tx(locale, "复核真实结果", "Review live results")}</Link>
+        </div>
+      </div>
+
+      <div className="mt-5 grid grid-cols-2 gap-3 lg:grid-cols-4">
+        {[
+          [String(model.students.length), tx(locale, "学生", "Students")],
+          [formatPercent(model.classAveragePercent), tx(locale, "班级平均得分率", "Class average")],
+          [String(model.reviewCount), tx(locale, "需教师关注题次", "Review signals")],
+          [`${passRate}%`, tx(locale, "及格率", "Pass rate")],
+        ].map(([value, label], index) => (
+          <div key={label} className="frontier-live-reveal rounded-[10px] border bg-card/90 px-4 py-4 shadow-sm" style={{ animationDelay: `${index * 80}ms` }}>
+            <strong className="text-2xl text-primary">{value}</strong>
+            <span className="mt-1 block text-[11px] font-medium text-muted-foreground">{label}</span>
+          </div>
+        ))}
+      </div>
+
+      <div className="mt-4 grid gap-4 lg:grid-cols-[1.05fr_0.95fr]">
+        <article className="frontier-live-reveal rounded-[10px] border bg-card/90 p-4 shadow-sm" style={{ animationDelay: "320ms" }}>
+          <div className="flex items-center justify-between gap-3">
+            <h4 className="inline-flex items-center gap-2 text-sm font-bold"><Users className="h-4 w-4 text-primary" />{tx(locale, "学生总分率", "Student score rates")}</h4>
+            <span className="text-[10px] text-muted-foreground">{tx(locale, "本次真实运行", "This live run")}</span>
+          </div>
+          <div className="mt-4 grid gap-3">
+            {model.students.map((student, index) => (
+              <div key={student.id} className="grid grid-cols-[minmax(92px,0.8fr)_minmax(120px,1.5fr)_44px] items-center gap-3">
+                <span className="truncate text-[11px] font-semibold">{student.name}</span>
+                <span className="h-2 overflow-hidden rounded-full bg-muted">
+                  <span className="frontier-live-bar block h-full origin-left rounded-full bg-gradient-to-r from-primary to-cyan-400" style={{ width: `${Math.max(2, student.percent ?? 0)}%`, animationDelay: `${380 + index * 90}ms` }} />
+                </span>
+                <span className="text-right text-[11px] font-bold text-primary">{formatPercent(student.percent)}</span>
+              </div>
+            ))}
+          </div>
+        </article>
+
+        <article className="frontier-live-reveal rounded-[10px] border bg-card/90 p-4 shadow-sm" style={{ animationDelay: "400ms" }}>
+          <div className="flex items-center justify-between gap-3">
+            <h4 className="inline-flex items-center gap-2 text-sm font-bold"><BarChart3 className="h-4 w-4 text-primary" />{tx(locale, "逐题表现", "Question performance")}</h4>
+            <span className="text-[10px] text-muted-foreground">{tx(locale, "低得分率优先", "Lowest first")}</span>
+          </div>
+          <div className="mt-4 grid gap-2.5">
+            {sortedQuestions.map((question, index) => (
+              <div key={question.id} className="rounded-[8px] bg-muted/45 px-3 py-2.5">
+                <div className="flex items-center justify-between gap-3">
+                  <span className="text-[11px] font-semibold">{question.label} · {question.type || tx(locale, "题目", "Question")}</span>
+                  <span className={cn("text-[11px] font-bold", (question.avgPercent ?? 0) < 60 ? "text-danger" : "text-accent")}>{formatPercent(question.avgPercent)}</span>
+                </div>
+                <span className="mt-2 block h-1.5 overflow-hidden rounded-full bg-card">
+                  <span className={cn("frontier-live-bar block h-full origin-left rounded-full", (question.avgPercent ?? 0) < 60 ? "bg-danger" : "bg-accent")} style={{ width: `${Math.max(2, question.avgPercent ?? 0)}%`, animationDelay: `${460 + index * 90}ms` }} />
+                </span>
+              </div>
+            ))}
+          </div>
+        </article>
+      </div>
+
+      <div className="mt-4 flex flex-wrap items-center justify-between gap-3 rounded-[10px] border border-amber-200 bg-amber-50/90 px-4 py-3 text-xs text-amber-900">
+        <span>{tx(locale, `当前总分为 AI 初评；${model.reviewCount} 个题次仍需教师按证据复核。`, `These totals are AI provisional scores; ${model.reviewCount} responses still require evidence-based teacher review.`)}</span>
+        <span className="font-semibold">{tx(locale, `班级平均 ${formatScore(model.classAverageScore)} 分`, `Class mean ${formatScore(model.classAverageScore)} points`)}</span>
+      </div>
+    </section>
   );
 }
 
@@ -561,6 +747,7 @@ function TaskLinks({ taskId, status, locale }: { taskId: string; status?: TaskSt
     <div className="flex flex-wrap items-center gap-3 text-xs font-semibold text-primary">
       <Link className="inline-flex items-center gap-1 hover:underline" to={`/tasks/${taskId}`}>{tx(locale, "打开任务", "Open task")} <ArrowRight className="h-3.5 w-3.5" /></Link>
       {finished ? <Link className="inline-flex items-center gap-1 hover:underline" to={`/tasks/${taskId}/review`}>{tx(locale, "复核真实结果", "Review real results")} <ArrowRight className="h-3.5 w-3.5" /></Link> : null}
+      {finished ? <Link className="inline-flex items-center gap-1 hover:underline" to={`/tasks/${taskId}/results/visualizations`}>{tx(locale, "查看可视化", "View visual analysis")} <ArrowRight className="h-3.5 w-3.5" /></Link> : null}
     </div>
   );
 }

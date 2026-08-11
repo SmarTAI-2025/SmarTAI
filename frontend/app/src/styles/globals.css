@@ -168,3 +168,28 @@ select {
     transition-duration: 0.01ms !important;
   }
 }
+
+@keyframes frontier-live-reveal {
+  from { opacity: 0; transform: translateY(12px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes frontier-live-bar {
+  from { transform: scaleX(0); }
+  to { transform: scaleX(1); }
+}
+
+.frontier-live-reveal {
+  animation: frontier-live-reveal 560ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+.frontier-live-bar {
+  animation: frontier-live-bar 720ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .frontier-live-reveal,
+  .frontier-live-bar {
+    animation: none;
+  }
+}
