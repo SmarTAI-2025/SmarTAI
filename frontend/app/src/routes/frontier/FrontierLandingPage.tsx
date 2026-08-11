@@ -17,6 +17,7 @@ import {
 } from "lucide-react";
 import { useEffect, useState, type CSSProperties, type ReactNode } from "react";
 import { Link } from "react-router-dom";
+import { SmarTAIMascot } from "@/components/brand/SmarTAIMascot";
 import { LanguageToggle } from "@/components/layout/LanguageToggle";
 import { useI18n } from "@/i18n/I18nProvider";
 import type { Locale } from "@/i18n/messages";
@@ -358,7 +359,11 @@ export function FrontierLandingPage() {
           <div className="frontier-ask-workbench">
             <div className="frontier-ask-console">
               <div className="frontier-ask-console-title">
-                <span><Bot aria-hidden="true" /> Ask SmarTAI</span>
+                <span>
+                  <Bot aria-hidden="true" />
+                  Ask SmarTAI
+                  <SmarTAIMascot variant="thinking" size="sm" className="-my-3 ml-1" />
+                </span>
                 <small>{tx(locale, "产品导览 · 合成数据", "Product walkthrough · synthetic data")}</small>
               </div>
               <div className="frontier-ask-prompts" aria-label={tx(locale, "分析问题示例", "Example analysis questions")}>
