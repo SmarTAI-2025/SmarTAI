@@ -1518,7 +1518,7 @@
 .frontier-film-footer {
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  justify-content: flex-end;
   gap: 1rem;
   padding-top: 1rem;
   color: #9fb0c4;

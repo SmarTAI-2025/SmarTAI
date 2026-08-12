@@ -96,15 +96,14 @@ export function FrontierPromoVideo({ locale, youtubeUrls }: FrontierPromoVideoPr
           <span className="frontier-film-muted-note"><VolumeX aria-hidden="true" /> {zh ? "默认静音" : "Muted by default"}</span>
         </div>
 
-        <div className="frontier-film-footer">
-          <span>{zh ? "本站视频优先 · 中英双语字幕 · 1920 × 1080" : "Local playback first · bilingual captions · 1920 × 1080"}</span>
-          {youtubeUrl ? (
+        {youtubeUrl ? (
+          <div className="frontier-film-footer">
             <a href={youtubeUrl} target="_blank" rel="noreferrer">
               {zh ? "在 YouTube 网页观看" : "Watch on YouTube"}
               <ExternalLink aria-hidden="true" />
             </a>
-          ) : null}
-        </div>
+          </div>
+        ) : null}
       </div>
     </section>
   );
