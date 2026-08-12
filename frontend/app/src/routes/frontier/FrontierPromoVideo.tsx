@@ -54,7 +54,7 @@ export function FrontierPromoVideo({ locale, youtubeUrls }: FrontierPromoVideoPr
         <div className="frontier-film-heading">
           <div>
             <p className="frontier-eyebrow">{zh ? "SmarTAI 宣传片" : "SmarTAI film"}</p>
-            <h2 id="frontier-film-title">{zh ? "66 秒，看见从作答到洞察。" : "From student work to insight in 66 seconds."}</h2>
+            <h2 id="frontier-film-title">{zh ? "一分钟，看见从作答到洞察。" : "From student work to insight in one minute."}</h2>
             <p>
               {zh
                 ? "视频由本站直接播放，默认静音并自动循环；需要声音时，可使用播放器控件开启。"

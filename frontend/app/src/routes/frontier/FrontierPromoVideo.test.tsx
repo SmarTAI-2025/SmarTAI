@@ -12,11 +12,19 @@ describe("FrontierPromoVideo", () => {
     expect(video.loop).toBe(true);
     expect(video.muted).toBe(true);
     expect(video.playsInline).toBe(true);
+    expect(screen.getByRole("heading", { name: "From student work to insight in one minute." })).toBeInTheDocument();
     expect(container.querySelectorAll("video source")).toHaveLength(1);
     expect(container.querySelector("video source")).toHaveAttribute(
       "src",
       "/frontier-media/SmarTAI-Promo-Final-EN-v4-1.mp4",
     );
+  });
+
+  it("uses the one-minute Chinese headline", () => {
+    render(<FrontierPromoVideo locale="zh-CN" />);
+
+    expect(screen.getByRole("heading", { name: "一分钟，看见从作答到洞察。" })).toBeInTheDocument();
+    expect(screen.queryByText(/66 秒/)).not.toBeInTheDocument();
   });
 
   it("switches editions without loading both videos and exposes a configured YouTube link", () => {

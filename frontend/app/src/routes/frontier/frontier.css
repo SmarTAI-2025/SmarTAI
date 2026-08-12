@@ -265,7 +265,7 @@
   display: grid;
   grid-template-columns:
     clamp(8.5rem, 10vw, 10.5rem)
-    minmax(0, 31rem)
+    minmax(0, 34.1rem)
     clamp(8.5rem, 10vw, 10.5rem);
   align-items: center;
   justify-content: center;
@@ -314,7 +314,7 @@
 }
 
 .frontier-hero-wordmark {
-  width: min(100%, 30rem);
+  width: min(100%, 33rem);
 }
 
 .frontier-brand-expansion {
@@ -1408,6 +1408,12 @@
   line-height: 0.98;
   letter-spacing: -0.04em;
   text-wrap: balance;
+}
+
+.frontier-site[data-locale="zh-CN"] .frontier-film-heading h2 {
+  max-width: none;
+  font-size: clamp(2.35rem, 3.65vw, 4rem);
+  white-space: nowrap;
 }
 
 .frontier-film-heading > div:first-child > p:last-child {
@@ -2665,7 +2671,7 @@
   }
 
   .frontier-hero-brand {
-    grid-template-columns: 7rem minmax(0, 22rem);
+    grid-template-columns: 7rem minmax(0, 24.2rem);
     gap: 1.6rem;
     justify-content: start;
     width: 100%;
@@ -2818,7 +2824,7 @@
   }
 
   .frontier-hero-wordmark {
-    width: min(100%, 13rem);
+    width: min(100%, 14.3rem);
   }
 
   .frontier-brand-expansion {
@@ -2863,6 +2869,11 @@
 
   .frontier-film-heading h2 {
     font-size: clamp(2.25rem, 11vw, 3.3rem);
+  }
+
+  .frontier-site[data-locale="zh-CN"] .frontier-film-heading h2 {
+    font-size: clamp(1.05rem, 5.35vw, 1.8rem);
+    letter-spacing: -0.055em;
   }
 
   .frontier-film-language {
