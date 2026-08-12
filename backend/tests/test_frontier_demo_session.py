@@ -96,6 +96,16 @@ def test_frontier_demo_session_reuses_tasks_but_not_other_teacher_surfaces(
     assert preflight.json()["status"] == "ready"
     assert preflight.json()["source_token"]
 
+    # Task-scoped analytics accepts the Frontier capability. A missing task is
+    # intentionally hidden as 404; it must not fail earlier as a user-session 403.
+    analytics = client.post(
+        "/analytics/missing-synthetic-task/query",
+        headers=headers,
+        json={"question": "从高到低", "mode": "filter"},
+    )
+    assert analytics.status_code == 404
+    assert analytics.json()["detail"] == {"code": "analytics_task_not_found"}
+
     experts = client.get("/experts/available", headers=headers)
     courses = client.get("/courses", headers=headers)
     assert experts.status_code == 403

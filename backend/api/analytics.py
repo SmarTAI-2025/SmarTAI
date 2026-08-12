@@ -22,7 +22,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import and_, select
 
 from backend.agents import analytics_agent
-from backend.auth import require_teacher
+from backend.auth import require_task_teacher
 from backend.db.models import (
     AssignmentQuestionRecord,
     AssignmentRecord,
@@ -568,7 +568,7 @@ def _redact_filter_question(question: str, facts: _AnalyticsFacts) -> str:
 async def interpret_filter_intent(
     task_id: str,
     req: FilterIntentRequest,
-    current: User = Depends(require_teacher),
+    current: User = Depends(require_task_teacher),
     registry: ExpertRegistry = Depends(get_scoped_expert_registry),
 ):
     facts = _load_facts(task_id, current.id)
@@ -614,7 +614,7 @@ async def interpret_filter_intent(
 async def nl_query(
     task_id: str,
     req: QueryRequest,
-    current: User = Depends(require_teacher),
+    current: User = Depends(require_task_teacher),
     registry: ExpertRegistry = Depends(get_scoped_expert_registry),
 ):
     facts = _load_facts(task_id, current.id)
@@ -797,7 +797,7 @@ def _clear_cache(owner_id: str, task_id: str, question_id: str | None = None) ->
 async def per_question(
     task_id: str,
     question_id: str,
-    current: User = Depends(require_teacher),
+    current: User = Depends(require_task_teacher),
     registry: ExpertRegistry = Depends(get_scoped_expert_registry),
 ):
     facts = _load_facts(task_id, current.id)
@@ -845,7 +845,7 @@ def _authorize_cache_clear(task_id: str, owner_id: str) -> None:
 @router.delete("/{task_id}/cache")
 def reset_task_cache(
     task_id: str,
-    current: User = Depends(require_teacher),
+    current: User = Depends(require_task_teacher),
 ):
     _authorize_cache_clear(task_id, current.id)
     _clear_cache(current.id, task_id)
@@ -858,7 +858,7 @@ def reset_task_cache(
 def reset_per_question_cache(
     task_id: str,
     question_id: str,
-    current: User = Depends(require_teacher),
+    current: User = Depends(require_task_teacher),
 ):
     _authorize_cache_clear(task_id, current.id)
     _clear_cache(current.id, task_id, question_id)

@@ -10,7 +10,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from backend.api import analytics
-from backend.auth import require_teacher
+from backend.auth import require_task_teacher
 from backend.db.models import (
     AssignmentQuestionRecord,
     AssignmentRecord,
@@ -126,7 +126,7 @@ class _Registry:
 def _client(owner: User, registry: _Registry) -> TestClient:
     app = FastAPI()
     app.include_router(analytics.router)
-    app.dependency_overrides[require_teacher] = lambda: owner
+    app.dependency_overrides[require_task_teacher] = lambda: owner
     app.dependency_overrides[get_scoped_expert_registry] = lambda: registry
     return TestClient(app)
 
