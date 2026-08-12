@@ -264,10 +264,10 @@
   position: relative;
   display: grid;
   grid-template-columns:
-    clamp(8.5rem, 10vw, 10.5rem)
+    clamp(9.35rem, 11vw, 11.55rem)
     minmax(0, 34.1rem)
-    clamp(8.5rem, 10vw, 10.5rem);
-  align-items: center;
+    clamp(9.35rem, 11vw, 11.55rem);
+  align-items: end;
   justify-content: center;
   gap: clamp(1.75rem, 3vw, 2.75rem);
   width: min(100%, 64rem);
@@ -2671,7 +2671,7 @@
   }
 
   .frontier-hero-brand {
-    grid-template-columns: 7rem minmax(0, 24.2rem);
+    grid-template-columns: 7.7rem minmax(0, 24.2rem);
     gap: 1.6rem;
     justify-content: start;
     width: 100%;
@@ -2806,7 +2806,7 @@
   }
 
   .frontier-hero-brand {
-    grid-template-columns: 4.8rem minmax(0, 1fr);
+    grid-template-columns: 5.28rem minmax(0, 1fr);
     gap: 1rem;
     padding: 0.25rem 0 1.4rem;
   }
