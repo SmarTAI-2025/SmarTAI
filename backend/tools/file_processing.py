@@ -85,71 +85,71 @@ async def _extract_pdf_payload(
     max_characters: int = PDF_MAX_CHARACTERS,
     timeout_seconds: float = PDF_EXTRACTION_TIMEOUT_SECONDS,
 ) -> tuple[str, int]:
-    """Extract PDF text in a killable subprocess with hard ceilings."""
+    """Extract PDF text in-process with a timeout guard."""
     if fitz is None:
         raise HTTPException(
             status_code=501,
             detail="PDF processing requires 'PyMuPDF'; pip install PyMuPDF"
         )
+
     if not _PDF_EXTRACTION_SLOTS.acquire(blocking=False):
         raise HTTPException(status_code=429, detail={"code": "pdf_extraction_busy"})
-    process = None
+
     try:
-        process = await asyncio.create_subprocess_exec(
-            sys.executable,
-            str(_PDF_WORKER_PATH),
-            str(max_pages),
-            str(max_characters),
-            stdin=asyncio.subprocess.PIPE,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.DEVNULL,
-        )
         try:
-            stdout, _ = await asyncio.wait_for(
-                process.communicate(pdf_bytes),
+            doc = await asyncio.wait_for(
+                asyncio.to_thread(fitz.open, stream=pdf_bytes, filetype="pdf"),
                 timeout=timeout_seconds,
             )
-        except asyncio.TimeoutError as exc:
-            process.kill()
-            await process.wait()
-            logger.warning("PDF extraction timed out")
+        except asyncio.TimeoutError:
+            logger.warning("PDF extraction timed out during open")
             raise HTTPException(
                 status_code=408,
-                detail={
-                    "code": "pdf_extraction_timeout",
-                    "timeout_seconds": timeout_seconds,
-                },
-            ) from exc
+                detail={"code": "pdf_extraction_timeout", "timeout_seconds": timeout_seconds},
+            )
+
         try:
-            payload = json.loads(stdout.decode("utf-8"))
-        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-            raise HTTPException(
-                status_code=400,
-                detail={"code": "pdf_extraction_failed"},
-            ) from exc
-        worker_status = payload.get("status")
-        if worker_status == "ok":
-            return str(payload.get("text", "")), int(payload.get("page_count", 0))
-        if worker_status == "page_limit":
-            raise HTTPException(
-                status_code=413,
-                detail={"code": "pdf_page_limit_exceeded", "max_pages": max_pages},
-            )
-        if worker_status == "character_limit":
-            raise HTTPException(
-                status_code=413,
-                detail={
-                    "code": "pdf_character_limit_exceeded",
-                    "max_characters": max_characters,
-                },
-            )
-        raise HTTPException(status_code=400, detail={"code": "pdf_extraction_failed"})
+            if doc.page_count > max_pages:
+                raise HTTPException(
+                    status_code=413,
+                    detail={"code": "pdf_page_limit_exceeded", "max_pages": max_pages},
+                )
+
+            parts: list[str] = []
+            character_count = 0
+            try:
+                for page in doc:
+                    text = await asyncio.wait_for(
+                        asyncio.to_thread(page.get_text),
+                        timeout=timeout_seconds,
+                    )
+                    character_count += len(text)
+                    if character_count > max_characters:
+                        raise HTTPException(
+                            status_code=413,
+                            detail={
+                                "code": "pdf_character_limit_exceeded",
+                                "max_characters": max_characters,
+                            },
+                        )
+                    parts.append(text)
+            except asyncio.TimeoutError:
+                logger.warning("PDF extraction timed out during page read")
+                raise HTTPException(
+                    status_code=408,
+                    detail={"code": "pdf_extraction_timeout", "timeout_seconds": timeout_seconds},
+                )
+
+            text = "".join(parts)
+            return str(text), int(doc.page_count)
+        finally:
+            try:
+                doc.close()
+            except Exception:
+                pass
     except HTTPException:
         raise
     except Exception as exc:
-        if process is not None and process.returncode is None:
-            process.kill()
-            await process.wait()
         logger.warning(
             "PDF extraction failed; exception_type=%s",
             type(exc).__name__,

@@ -6,10 +6,17 @@ returns raw parser exceptions.
 """
 from __future__ import annotations
 
+import io
 import json
 import sys
 
 import pymupdf as fitz
+
+# On Windows the default console encoding (e.g. GBK) can't encode characters
+# found in math / CJK PDFs, causing UnicodeEncodeError during stdout.write.
+# Rewrap stdout and stderr with UTF-8 so all JSON output stays intact.
+sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8")
+sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8")
 
 
 def _write(payload: dict) -> None:
@@ -44,6 +51,8 @@ def main() -> int:
         finally:
             doc.close()
     except Exception:
+        import traceback
+        traceback.print_exc(file=sys.stderr)
         _write({"status": "invalid"})
         return 0
 
