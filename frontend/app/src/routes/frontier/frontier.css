@@ -296,6 +296,7 @@
   box-shadow:
     0 26px 56px rgb(7 20 38 / 0.22),
     0 0 0 7px rgb(72 159 236 / 0.055);
+  transform: translateY(-0.25rem);
 }
 
 .frontier-hero-app-mark img {
@@ -2815,6 +2816,7 @@
     box-shadow:
       0 18px 36px rgb(7 20 38 / 0.2),
       0 0 0 5px rgb(72 159 236 / 0.05);
+    transform: translateY(-0.1875rem);
   }
 
   .frontier-hero-brand-copy {
