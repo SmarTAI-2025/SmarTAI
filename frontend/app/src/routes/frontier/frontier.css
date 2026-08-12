@@ -296,7 +296,7 @@
   box-shadow:
     0 26px 56px rgb(7 20 38 / 0.22),
     0 0 0 7px rgb(72 159 236 / 0.055);
-  transform: translateY(-0.3125rem);
+  transform: translateY(-0.375rem);
 }
 
 .frontier-hero-app-mark img {
@@ -2803,7 +2803,15 @@
   }
 
   .frontier-hero h1 {
-    font-size: clamp(2.8rem, 14vw, 4rem);
+    font-size: clamp(2.45rem, 12.4vw, 3.6rem);
+  }
+
+  .frontier-site[data-locale="zh-CN"] .frontier-title-fragments > span {
+    white-space: nowrap;
+  }
+
+  .frontier-workspace-copy h2 {
+    font-size: clamp(2.3rem, 10vw, 2.7rem);
   }
 
   .frontier-hero-brand {
@@ -2876,6 +2884,11 @@
   .frontier-site[data-locale="zh-CN"] .frontier-film-heading h2 {
     font-size: clamp(1.05rem, 5.35vw, 1.8rem);
     letter-spacing: -0.055em;
+  }
+
+  .frontier-film-heading > div:first-child > p:last-child {
+    font-size: 0.78rem;
+    line-height: 1.6;
   }
 
   .frontier-film-language {
