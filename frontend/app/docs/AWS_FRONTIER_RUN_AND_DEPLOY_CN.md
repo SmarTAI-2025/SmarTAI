@@ -57,6 +57,7 @@ flowchart LR
 | Blueprint CORS | 当前仍是 `http://localhost:3000,http://localhost:8001` 占位 | 公网部署前必须在 Dashboard 改掉 |
 | Blueprint Demo | 当前显式启用 Demo、shared pool、12 次/日签发、5 秒冷却、100 请求/owner/日、估算 250000 tokens/owner/日 | 是报名演示配置；不是持久平台总预算 |
 | Fixture | `frontend/app/public/frontier-demo/SHA256SUMS` 当前校验通过；最大单文件小于 1 MiB | 远低于 Pages 25 MiB 单文件上限；最终提交仍要重跑校验 |
+| 宣传片 | `frontend/app/public/frontier-media/` 含中英文 v4.1 正式成片，各约 6.2 MiB、66 秒、H.264/AAC，并有独立 `SHA256SUMS` | 按当前页面选择只加载一支；两支均低于 Pages 25 MiB 单文件上限，不经过 Render |
 | Docker | 当前仓库没有 Demo Dockerfile/Compose | 截止前不要临时改成容器化新架构；Lightsail B 路径先用 venv + systemd |
 
 ## 4. 准备清单
@@ -70,6 +71,7 @@ flowchart LR
 - [ ] `SMARTAI_REQUIRE_AUTH=true`、`SMARTAI_ALLOW_DEMO_TOKENS=false`、`SMARTAI_REGISTRATION_CLOSED=true`。
 - [ ] `SMARTAI_FRONTIER_DEMO_ENABLED=true`、`SMARTAI_SHARED_POOL_ENABLED=true`，并设置保守并发、请求与 token 上限。
 - [ ] 数据环境只含合成 fixture；禁止真实学生、教师或学校数据。
+- [ ] 在 `frontend/app/public/frontier-media/` 运行 `shasum -a 256 -c SHA256SUMS`，两支宣传片均为 `OK`。
 - [ ] `/health` 返回 200；`/ready` 返回 200 且 `database=true, storage=true`。
 - [ ] 冷启动后完整跑通一次 `/frontier/enter → /frontier/live → graded`，记录 task ID、job ID、用时和模型调用量。
 - [ ] 从无缓存浏览器重新打开 `/frontier`、`/frontier/enter`、`/frontier/live` 深链接。
@@ -372,6 +374,8 @@ VITE_SMARTAI_BACKEND_URL: https://api-demo.example.com
 
 若暂时没有 API 自定义域名，把最后一行改成 Render 固定 `<service>.onrender.com` URL；不要加尾斜杠。
 
+如果两支成片已经分别上传到 YouTube，可选填 `VITE_SMARTAI_PROMO_YOUTUBE_ZH_URL` 与 `VITE_SMARTAI_PROMO_YOUTUBE_EN_URL`。未填写时页面只显示本站播放，不渲染外链；填写后当前旁白版本旁显示“在 YouTube 网页观看”，但视频源仍优先使用 Cloudflare Pages 本地资产。
+
 Cloudflare 官方给 React/Vite 的 build/output 正是 `npm run build` / `dist`，并允许用 `NODE_VERSION` 固定 Node 版本：[Build configuration](https://developers.cloudflare.com/pages/configuration/build-configuration/)、[Build image](https://developers.cloudflare.com/pages/configuration/build-image/)。当前代码没有顶层 `404.html`，Pages 会自动按 SPA 把未知路径交给根 `index.html`，因此 `/frontier/live` 等深链接应工作；仍必须部署后实测。[Serving Pages](https://developers.cloudflare.com/pages/configuration/serving-pages/)
 
 只创建这一个 Pages 项目。同一构建已经包含：
@@ -379,6 +383,7 @@ Cloudflare 官方给 React/Vite 的 build/output 正是 `npm run build` / `dist`
 - `/frontier`：宣传和合成 walkthrough；
 - `/frontier/enter`：免密码短时会话入口；
 - `/frontier/live`：真实 API/OCR/批改；
+- `/frontier-media/*`：中英文宣传片静态资产；
 - `/`、`/tasks/*`、`/settings/*` 等真实 App 路由。
 
 ### 6.5 回填后端 CORS
@@ -556,7 +561,7 @@ API URL:  https://api-demo.example.com
 | Render 750 小时 | 同一 workspace 的 Free web services 每月共享 750 instance hours；运行时消耗，休眠不消耗；用尽后全部 Free web services 暂停到下月。[Free docs](https://render.com/docs/free) | 一个后端即使整月运行约 744 小时；两个都连续运行会以约 48 小时/天消耗，约 15.6 天用尽。不要再开第二个 Free web runtime 做前端 |
 | Render local disk | 休眠、重启、部署都会丢本地 SQLite 和上传文件；Free 不能挂 persistent disk。Free Postgres 只有一个、1 GB、30 天到期且无备份。[Free docs](https://render.com/docs/free) | 报名可接受每次从新 synthetic task 开始；审核期持久性不能靠 Free SQLite/Free Postgres 保证 |
 | Render Blueprint | `plan: free` 可用于 web service；默认 Blueprint 是根 `render.yaml`，可以自定义路径；互联网服务有 `onrender.com` 子域名。[Blueprint spec](https://render.com/docs/blueprint-spec) | 当前必须显式选 `backend/render.yaml`，并填完 DB/storage/CORS secrets 才能让 `/ready` 成功 |
-| Cloudflare Pages Free | 1 个并发 build、500 builds/月、单次 20 分钟；20,000 files/site；单文件 25 MiB；100 custom domains/project。[Pages limits](https://developers.cloudflare.com/pages/platform/limits/) | 当前 Demo 静态资源远低于单文件上限；仍在最终 build 后检查文件数和最大文件，不拆第二项目 |
+| Cloudflare Pages Free | 1 个并发 build、500 builds/月、单次 20 分钟；20,000 files/site；单文件 25 MiB；100 custom domains/project；不触发 Functions 的静态资产请求免费且不限量。[Pages limits](https://developers.cloudflare.com/pages/platform/limits/)、[Pages pricing](https://developers.cloudflare.com/pages/functions/pricing/) | 当前最大宣传片约 6.24 MiB；页面一次只请求当前旁白版本，并对版本化文件使用长期缓存，不拆第二项目，也不让视频经过 Render |
 | Cloudflare SPA | 没有顶层 `404.html` 时默认把未知路径交给 SPA 根页面。[Serving Pages](https://developers.cloudflare.com/pages/configuration/serving-pages/) | 一个构建即可支持所有 Frontier 与真实 App 深链接；部署后逐个 curl/浏览器验证 |
 | AWS Lightsail | 带 IPv4 Linux 的 $5/$7/$12 bundle 当前列入三个月试用，每账户一个 bundle、每月前 750 小时；之后标准收费。[Lightsail pricing](https://aws.amazon.com/lightsail/pricing/) | 作为稳定备选；建议从 $12/2 GB 做 E2E，再按内存实测升配 |
 | Lightsail URL/IP | 默认 public IP 在 stop/start 后变化；附加 static IPv4 后保持不变，并可重绑新实例。[Static IP guide](https://docs.aws.amazon.com/lightsail/latest/userguide/lightsail-create-static-ip.html) | `api-demo` 指向 static IP；后续迁移不改前端报名 URL |

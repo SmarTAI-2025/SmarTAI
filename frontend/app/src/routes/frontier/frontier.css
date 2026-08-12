@@ -1344,6 +1344,7 @@
   box-shadow: 0 6px 16px rgb(23 32 42 / 0.16);
 }
 
+.frontier-film-section,
 .frontier-process-section,
 .frontier-workspace-section,
 .frontier-ask-section,
@@ -1352,6 +1353,191 @@
 .frontier-footer {
   width: min(100% - 3rem, 1260px);
   margin: 0 auto;
+}
+
+.frontier-film-section {
+  padding: 0 0 8rem;
+}
+
+.frontier-film-shell {
+  position: relative;
+  overflow: hidden;
+  border: 1px solid rgb(255 255 255 / 0.1);
+  border-radius: 1.5rem;
+  background:
+    radial-gradient(circle at 12% 0%, rgb(72 159 236 / 0.26), transparent 32rem),
+    linear-gradient(145deg, #061225, #0b1c32 58%, #102843);
+  padding: clamp(1.25rem, 3vw, 2.5rem);
+  color: white;
+  box-shadow: 0 34px 90px rgb(7 20 38 / 0.2);
+}
+
+.frontier-film-shell::after {
+  position: absolute;
+  inset: 0;
+  background-image: linear-gradient(rgb(255 255 255 / 0.025) 1px, transparent 1px), linear-gradient(90deg, rgb(255 255 255 / 0.025) 1px, transparent 1px);
+  background-size: 42px 42px;
+  content: "";
+  mask-image: linear-gradient(to bottom, rgb(0 0 0 / 0.7), transparent 62%);
+  pointer-events: none;
+}
+
+.frontier-film-heading,
+.frontier-film-player,
+.frontier-film-footer {
+  position: relative;
+  z-index: 1;
+}
+
+.frontier-film-heading {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: end;
+  gap: 2rem;
+}
+
+.frontier-film-heading .frontier-eyebrow {
+  color: #9fc5ff;
+}
+
+.frontier-film-heading h2 {
+  max-width: 760px;
+  margin-top: 0.9rem;
+  font-family: "Iowan Old Style", "Times New Roman", Georgia, serif;
+  font-size: clamp(2.35rem, 4.1vw, 4.35rem);
+  line-height: 0.98;
+  letter-spacing: -0.04em;
+  text-wrap: balance;
+}
+
+.frontier-film-heading > div:first-child > p:last-child {
+  max-width: 660px;
+  margin-top: 1.25rem;
+  color: #c5d1df;
+  font-size: 0.9rem;
+  line-height: 1.7;
+}
+
+.frontier-film-language {
+  display: grid;
+  grid-template-columns: auto auto;
+  gap: 0.35rem;
+  border: 1px solid rgb(255 255 255 / 0.12);
+  border-radius: 0.8rem;
+  background: rgb(255 255 255 / 0.055);
+  padding: 0.35rem;
+  backdrop-filter: blur(16px);
+}
+
+.frontier-film-language > span {
+  display: flex;
+  grid-column: 1 / -1;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.25rem 0.45rem 0.15rem;
+  color: #9fb0c4;
+  font-size: 0.63rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.frontier-film-language > span svg {
+  width: 0.85rem;
+}
+
+.frontier-film-language button {
+  min-height: 38px;
+  border: 0;
+  border-radius: 0.55rem;
+  background: transparent;
+  color: #c8d4e1;
+  padding: 0.55rem 0.75rem;
+  font-size: 0.72rem;
+  font-weight: 720;
+  cursor: pointer;
+  transition: background 180ms ease, color 180ms ease, transform 180ms ease;
+}
+
+.frontier-film-language button:hover {
+  color: white;
+}
+
+.frontier-film-language button[aria-pressed="true"] {
+  background: white;
+  color: #10243a;
+  box-shadow: 0 8px 22px rgb(0 0 0 / 0.2);
+}
+
+.frontier-film-player {
+  overflow: hidden;
+  aspect-ratio: 16 / 9;
+  margin-top: clamp(1.75rem, 3vw, 2.75rem);
+  border: 1px solid rgb(255 255 255 / 0.12);
+  border-radius: 1rem;
+  background: #020711;
+  box-shadow: 0 24px 60px rgb(0 0 0 / 0.32);
+}
+
+.frontier-film-player video {
+  display: block;
+  width: 100%;
+  height: 100%;
+  background: #020711;
+  object-fit: contain;
+}
+
+.frontier-film-muted-note {
+  position: absolute;
+  top: 0.8rem;
+  left: 0.8rem;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  border: 1px solid rgb(255 255 255 / 0.12);
+  border-radius: 999px;
+  background: rgb(2 7 17 / 0.72);
+  padding: 0.42rem 0.65rem;
+  color: #d7e0eb;
+  font-size: 0.68rem;
+  font-weight: 700;
+  backdrop-filter: blur(10px);
+  pointer-events: none;
+}
+
+.frontier-film-muted-note svg {
+  width: 0.9rem;
+}
+
+.frontier-film-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding-top: 1rem;
+  color: #9fb0c4;
+  font-size: 0.7rem;
+}
+
+.frontier-film-footer a {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  color: white;
+  font-weight: 720;
+}
+
+.frontier-film-footer a:hover {
+  color: #b9d8ff;
+}
+
+.frontier-film-footer a:focus-visible {
+  outline: 3px solid rgb(159 197 255 / 0.35);
+  outline-offset: 4px;
+}
+
+.frontier-film-footer a svg {
+  width: 0.9rem;
 }
 
 .frontier-process-section {
@@ -2462,6 +2648,7 @@
   }
 
   .frontier-hero,
+  .frontier-film-section,
   .frontier-process-section,
   .frontier-workspace-section,
   .frontier-ask-section,
@@ -2517,6 +2704,19 @@
 
   .frontier-process-grid {
     grid-template-columns: repeat(2, 1fr);
+  }
+
+  .frontier-film-section {
+    padding-bottom: 6rem;
+  }
+
+  .frontier-film-heading {
+    grid-template-columns: 1fr;
+    align-items: start;
+  }
+
+  .frontier-film-language {
+    justify-self: start;
   }
 
   .frontier-process-card:nth-child(2) {
@@ -2649,6 +2849,44 @@
   .frontier-proof-strip {
     align-items: flex-start;
     flex-direction: column;
+  }
+
+  .frontier-film-shell {
+    border-radius: 1rem;
+    padding: 1rem;
+  }
+
+  .frontier-film-heading {
+    gap: 1.4rem;
+    padding: 0.35rem 0.35rem 0;
+  }
+
+  .frontier-film-heading h2 {
+    font-size: clamp(2.25rem, 11vw, 3.3rem);
+  }
+
+  .frontier-film-language {
+    width: 100%;
+  }
+
+  .frontier-film-language button {
+    min-width: 0;
+  }
+
+  .frontier-film-player {
+    margin-top: 1.5rem;
+    border-radius: 0.72rem;
+  }
+
+  .frontier-film-muted-note {
+    top: 0.55rem;
+    left: 0.55rem;
+  }
+
+  .frontier-film-footer {
+    align-items: flex-start;
+    flex-direction: column;
+    padding: 0.9rem 0.35rem 0.2rem;
   }
 
   .frontier-hero-visual {

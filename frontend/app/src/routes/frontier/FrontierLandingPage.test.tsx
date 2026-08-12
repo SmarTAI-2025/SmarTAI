@@ -19,6 +19,8 @@ describe("FrontierLandingPage", () => {
     expect(container.querySelector('[data-smartai-app-mark="silver"]')).toBeInTheDocument();
     expect(container.querySelector('[data-smartai-wordmark="white"]')).toBeInTheDocument();
     expect(container.querySelector(".frontier-wordmark-mark")).not.toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Film" })).toHaveAttribute("href", "#film");
+    expect(screen.getByLabelText("SmarTAI promotional film with English narration")).toBeInTheDocument();
   });
 
   it("lets the reviewer step through the product walkthrough", () => {

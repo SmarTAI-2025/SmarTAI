@@ -1,5 +1,7 @@
 interface ImportMetaEnv {
   readonly VITE_SMARTAI_BACKEND_URL?: string;
+  readonly VITE_SMARTAI_PROMO_YOUTUBE_ZH_URL?: string;
+  readonly VITE_SMARTAI_PROMO_YOUTUBE_EN_URL?: string;
 }
 
 interface ImportMeta {

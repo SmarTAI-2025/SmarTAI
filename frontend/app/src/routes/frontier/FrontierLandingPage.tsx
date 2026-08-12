@@ -20,6 +20,7 @@ import { SmarTAIMascot } from "@/components/brand/SmarTAIMascot";
 import { LanguageToggle } from "@/components/layout/LanguageToggle";
 import { useI18n } from "@/i18n/I18nProvider";
 import type { Locale } from "@/i18n/messages";
+import { FrontierPromoVideo } from "./FrontierPromoVideo";
 import "./frontier.css";
 
 function walkthroughStages(locale: Locale) {
@@ -120,6 +121,10 @@ function insightStories(locale: Locale): InsightStory[] {
 type WalkthroughStageId = ReturnType<typeof walkthroughStages>[number]["id"];
 
 const liveDemoEntryHref = "/frontier/enter";
+const promoYouTubeUrls = {
+  "zh-CN": import.meta.env.VITE_SMARTAI_PROMO_YOUTUBE_ZH_URL,
+  "en-US": import.meta.env.VITE_SMARTAI_PROMO_YOUTUBE_EN_URL,
+} as const;
 
 export function FrontierLandingPage() {
   const { locale } = useI18n();
@@ -151,6 +156,7 @@ export function FrontierLandingPage() {
           <SmarTAIWordmark alt="" className="frontier-wordmark-image" />
         </Link>
         <nav aria-label={tx(locale, "展示页导航", "Showcase navigation")}>
+          <a href="#film">{tx(locale, "宣传片", "Film")}</a>
           <a href="#how-it-works">{tx(locale, "工作方式", "How it works")}</a>
           <a href="#ask-smartai">Ask SmarTAI</a>
           <a href="#trust">{tx(locale, "可信设计", "Trust by design")}</a>
@@ -286,6 +292,8 @@ export function FrontierLandingPage() {
             </div>
           </div>
         </section>
+
+        <FrontierPromoVideo locale={locale} youtubeUrls={promoYouTubeUrls} />
 
         <section id="how-it-works" className="frontier-process-section">
           <div className="frontier-section-intro">
