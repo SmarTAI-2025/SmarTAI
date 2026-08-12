@@ -145,7 +145,7 @@ export function QuestionPreparationOverviewPage() {
         <div className="mt-4 flex items-center gap-2">
           <SmarTAIMascot variant="thinking" size="xs" />
           <label className="relative min-w-0 flex-1">
-            <span className="sr-only">{tx(locale, "SmarTAI 智能筛选题目资料", "SmarTAI Smart filter for question materials")}</span>
+            <span className="sr-only">{tx(locale, "本地快速筛选题目资料，不调用模型", "Local quick filter for question materials, no model call")}</span>
             <input
             type="text"
             inputMode="search"
@@ -181,7 +181,7 @@ export function QuestionPreparationOverviewPage() {
                 flushComposition(event.currentTarget);
               }
             }}
-            placeholder={tx(locale, "SmarTAI 智能搜索：题号、题型、资料状态或风险原因", "SmarTAI Smart Search: question, type, material status, or risk")}
+            placeholder={tx(locale, "本地快速筛选：题号、题型、资料状态或风险原因", "Local quick filter: question, type, material status, or risk")}
             className="h-12 w-full rounded-[10px] border bg-card pl-4 pr-4 text-[13px] text-foreground outline-none placeholder:text-muted-foreground focus:border-primary focus:ring-2 focus:ring-primary/15"
             />
           </label>

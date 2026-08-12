@@ -64,6 +64,20 @@ class _Provider:
     def __init__(self) -> None:
         self.outputs: dict[str, object] = {
             "filter": {"student_ids": [], "explanation": "matched"},
+            "intent": {
+                "recognized": True,
+                "min_score_percent": None,
+                "max_score_percent": None,
+                "pass_status": None,
+                "low_confidence": False,
+                "review_status": None,
+                "disagreement": False,
+                "annotated": False,
+                "sort": "score_desc",
+                "question_tokens": [],
+                "text_terms": [],
+                "explanation": "Sort scores from high to low",
+            },
             "summary": {"markdown": "summary"},
             "chart": {
                 "title": "Scores",
@@ -84,7 +98,9 @@ class _Provider:
 
     async def ainvoke(self, messages):
         system = str(messages[0].content)
-        if "subset of students" in system:
+        if "translate a teacher" in system:
+            mode = "intent"
+        elif "subset of students" in system:
             mode = "filter"
         elif "asks for a chart" in system:
             mode = "chart"
@@ -434,6 +450,32 @@ def test_nl_query_filters_hallucinated_ids_and_emits_only_safe_chart_fields():
     }
     assert "marker" not in body["traces"][0]
     assert "mode" not in body["traces"][0]
+
+
+def test_filter_intent_sends_only_redacted_query_and_returns_fixed_controls():
+    owner = _user("teacher", "intent-owner")
+    seeded = _seed_graded_assignment(owner)
+    provider = _Provider()
+    client = _client(owner, _Registry(provider))
+    student = seeded["students"][0]
+
+    response = client.post(
+        f"/analytics/{seeded['task_id']}/filter-intent",
+        json={
+            "question": f"{student.username} 的成绩排个名，从高到低",
+            "surface": "student_analysis",
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    assert response.json()["sort"] == "score_desc"
+    assert response.json()["recognized"] is True
+    assert [mode for mode, _messages in provider.calls] == ["intent"]
+    provider_prompt = str(provider.calls[0][1][-1].content)
+    assert student.username not in provider_prompt
+    assert student.id not in provider_prompt
+    assert "<student>" in provider_prompt
+    assert '"students"' not in provider_prompt
 
 
 def test_analytics_readiness_and_generation_errors_are_stable_and_redacted():
