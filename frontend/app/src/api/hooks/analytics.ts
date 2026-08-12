@@ -10,6 +10,13 @@ export function useAnalyticsQuery() {
   });
 }
 
+export function useAnalyticsFilterIntent() {
+  return useMutation({
+    mutationFn: ({ taskId, question, surface }: { taskId: string; question: string; surface: import("@/types").FilterIntentSurface }) =>
+      analyticsApi.interpretFilterIntent(taskId, question, surface),
+  });
+}
+
 export function usePerQuestionBreakdown(taskId?: string, qId?: string) {
   return useQuery({
     queryKey: analyticsKeys.perQuestion(taskId ?? "", qId ?? ""),

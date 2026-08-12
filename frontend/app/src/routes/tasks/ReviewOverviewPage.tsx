@@ -1,8 +1,10 @@
 import { AlertTriangle, ArrowRight, CheckCircle2, ChevronRight, LoaderCircle, Search } from "lucide-react";
-import { useEffect, useMemo, useRef, type FormEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { Link, Navigate, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { toast } from "sonner";
+import { useAnalyticsFilterIntent } from "@/api/hooks/analytics";
 import { useConfirmTaskFinalization, useTask, useTaskFinalization, useTaskResult, useTeacherComments } from "@/api/hooks/tasks";
+import { RecoverableActionState } from "@/components/ui/RecoverableActionState";
 import { NewTaskStepper } from "@/components/new-task/NewTaskStepper";
 import { MatrixQueueWorkspace } from "@/components/tasks/MatrixQueueWorkspace";
 import { MatrixStatusCell, type MatrixStatusTone } from "@/components/tasks/MatrixStatusCell";
@@ -13,10 +15,11 @@ import { useI18n } from "@/i18n/I18nProvider";
 import type { Locale } from "@/i18n/messages";
 import { useImeSafeQuery } from "@/hooks/useImeSafeQuery";
 import { cn } from "@/lib/cn";
-import { isExpertDisagreement, reviewCellKey, selectReviewOverview } from "@/lib/reviewOverview";
+import { isExpertDisagreement, reviewCellKey, reviewQueryNeedsIntentFallback, selectReviewOverview, selectReviewOverviewFromIntent } from "@/lib/reviewOverview";
 import { reviewOverviewText as copy } from "@/lib/reviewOverviewCopy";
+import { classifyRecoverableError } from "@/lib/taskActionGuards";
 import { getTaskDestination, hasTaskReachedStep } from "@/lib/taskFlow";
-import type { Correction } from "@/types";
+import type { Correction, FilterIntentResult } from "@/types";
 
 /** R01: compact Figma-14 review overview backed only by persisted grading results. */
 export function ReviewOverviewPage() {
@@ -33,6 +36,9 @@ export function ReviewOverviewPage() {
   const query = urlQuery.trim();
   const searchParamsRef = useRef(searchParams);
   const smartSearch = useImeSafeQuery({ value: urlQuery, onCommit: commitFilter });
+  const intentQuery = useAnalyticsFilterIntent();
+  const [intentState, setIntentState] = useState<{ question: string; result: FilterIntentResult } | null>(null);
+  const [resolution, setResolution] = useState<"idle" | "local" | "llm">("idle");
   const task = taskQuery.data;
   const model = useMemo(() => buildResultsModel(task, resultQuery.data), [resultQuery.data, task]);
   const reviewItems = useMemo(() => collectResultReviewItems(model, model.students), [model]);
@@ -50,9 +56,16 @@ export function ReviewOverviewPage() {
       .filter((correction) => typeof correction.teacher_score === "number" && Number.isFinite(correction.teacher_score))
       .map((correction) => reviewCellKey(student.id, correction.q_id))),
   ), [model.students]);
-  const selection = useMemo(
+  const localSelection = useMemo(
     () => selectReviewOverview(model, reviewItems, annotatedKeys, query),
     [annotatedKeys, model, query, reviewItems],
+  );
+  const activeIntent = intentState?.question === query && intentState.result.recognized ? intentState.result : null;
+  const selection = useMemo(
+    () => activeIntent
+      ? selectReviewOverviewFromIntent(model, reviewItems, annotatedKeys, activeIntent)
+      : localSelection,
+    [activeIntent, annotatedKeys, localSelection, model, reviewItems],
   );
 
   useEffect(() => {
@@ -88,6 +101,13 @@ export function ReviewOverviewPage() {
   const lockedResultsReason = remainingReviewCount > 0
     ? copy(locale, "lockedResultsRemaining").replace("{count}", String(remainingReviewCount))
     : copy(locale, "lockedResultsReady");
+  const recoveryInfo = intentQuery.isError
+    ? classifyRecoverableError(intentQuery.error, {
+      locale,
+      phase: "analytics_filter_intent",
+      returnTo: taskId ? `/tasks/${encodeURIComponent(taskId)}/review` : "/history",
+    })
+    : null;
 
   function confirmReviewComplete() {
     if (!taskId || !readyForConfirmation || confirmFinalization.isPending) return;
@@ -112,7 +132,37 @@ export function ReviewOverviewPage() {
 
   function submitFilter(event: FormEvent) {
     event.preventDefault();
-    smartSearch.commitDraft();
+    applySmartFilter(smartSearch.draftValue);
+  }
+
+  function applySmartFilter(value: string) {
+    const normalized = value.trim();
+    smartSearch.commitValue(normalized);
+    setIntentState(null);
+    intentQuery.reset();
+    if (!normalized) {
+      setResolution("idle");
+      return;
+    }
+    const parsed = selectReviewOverview(model, reviewItems, annotatedKeys, normalized);
+    if (!reviewQueryNeedsIntentFallback(parsed)) {
+      setResolution("local");
+      return;
+    }
+    if (!taskId) return;
+    intentQuery.mutate({ taskId, question: normalized, surface: "review_overview" }, {
+      onSuccess: (result) => {
+        setIntentState({ question: normalized, result });
+        setResolution("llm");
+      },
+    });
+  }
+
+  function clearSmartFilter() {
+    setIntentState(null);
+    setResolution("idle");
+    intentQuery.reset();
+    smartSearch.commitValue("");
   }
 
   function commitFilter(value: string) {
@@ -172,22 +222,30 @@ export function ReviewOverviewPage() {
                 value={smartSearch.draftValue}
                 inputMode="search"
                 onBlur={smartSearch.handleBlur}
-                onChange={smartSearch.handleChange}
+                onChange={(event) => { setIntentState(null); setResolution("idle"); intentQuery.reset(); smartSearch.handleChange(event); }}
                 onCompositionEnd={smartSearch.handleCompositionEnd}
                 onCompositionStart={smartSearch.handleCompositionStart}
+                disabled={intentQuery.isPending}
                 placeholder={copy(locale, "searchPlaceholder")}
-                className="h-12 w-full rounded-[10px] border bg-card pl-14 pr-28 text-[14px] text-foreground outline-none transition placeholder:text-muted-foreground focus:border-primary focus:ring-2 focus:ring-primary/15"
+                className="h-12 w-full rounded-[10px] border bg-card pl-14 pr-44 text-[14px] text-foreground outline-none transition placeholder:text-muted-foreground focus:border-primary focus:ring-2 focus:ring-primary/15"
               />
-              {query ? (
+              {smartSearch.draftValue ? (
                 <button
                   type="button"
-                  onClick={() => smartSearch.commitValue("")}
-                  className="absolute right-3 top-1/2 -translate-y-1/2 rounded-md px-3 py-1.5 text-xs font-semibold text-primary hover:bg-primary/5"
+                  onClick={clearSmartFilter}
+                  className="absolute right-[8.6rem] top-1/2 -translate-y-1/2 rounded-md px-2 py-1.5 text-xs font-semibold text-primary hover:bg-primary/5"
                 >
                   {copy(locale, "clear")}
                 </button>
               ) : null}
+              <button type="submit" disabled={intentQuery.isPending || !smartSearch.draftValue.trim()} className="absolute right-1.5 top-1/2 inline-flex h-9 -translate-y-1/2 items-center justify-center gap-1.5 rounded-[8px] bg-primary px-3 text-[11px] font-semibold text-primary-foreground disabled:opacity-50">{intentQuery.isPending ? <LoaderCircle aria-hidden="true" className="h-3.5 w-3.5 animate-spin" /> : null}{intentQuery.isPending ? copy(locale, "interpreting") : copy(locale, "applyFilter")}</button>
             </label>
+            <div className="mt-2 flex min-h-6 flex-wrap items-center gap-2 text-[11px] text-muted-foreground">
+              <span>{copy(locale, "filterPrivacyHint")}</span>
+              {resolution === "local" ? <span className="rounded-full bg-slate-100 px-2.5 py-1 text-[10px] font-semibold text-slate-600">{copy(locale, "localRecognized")}</span> : null}
+              {resolution === "llm" && intentState ? <><span className="rounded-full bg-emerald-100 px-2.5 py-1 text-[10px] font-semibold text-emerald-700">{copy(locale, "modelInterpreted")}</span><span>{intentState.result.explanation}</span></> : null}
+            </div>
+            {recoveryInfo ? <RecoverableActionState info={recoveryInfo} locale={locale} compact className="mt-2" primaryAction={recoveryInfo.actionKind === "byok" ? undefined : { label: recoveryInfo.actionLabel, onClick: () => applySmartFilter(smartSearch.draftValue), busy: intentQuery.isPending }} secondaryAction={recoveryInfo.actionKind === "byok" ? { label: copy(locale, "dismiss"), onClick: () => intentQuery.reset() } : { label: copy(locale, "modelSettings"), href: `/settings/byok?returnTo=${encodeURIComponent(taskId ? `/tasks/${taskId}/review` : "/history")}` }} /> : null}
           </form>
 
           {query ? (

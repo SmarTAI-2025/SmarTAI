@@ -253,7 +253,7 @@ export function QuestionPreparationDetailPage() {
       <NewTaskStepper currentStep={2} />
 
       <label className="relative mt-6 block">
-        <span className="sr-only">{tx(locale, "SmarTAI 智能筛选题目", "SmarTAI Smart question filter")}</span>
+        <span className="sr-only">{tx(locale, "本地快速筛选题目，不调用模型", "Local quick question filter, no model call")}</span>
         <Search aria-hidden="true" className="pointer-events-none absolute left-4 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
         <input
           value={query}
@@ -289,7 +289,7 @@ export function QuestionPreparationDetailPage() {
               flushComposition(event.currentTarget);
             }
           }}
-          placeholder={tx(locale, "SmarTAI 智能搜索：题号、题型、题目内容，或“编程题 / 低置信 / 冲突”", "SmarTAI Smart Search: number, type, content, or “programming / low confidence / conflict”")}
+          placeholder={tx(locale, "本地快速筛选：题号、题型、题目内容，或“编程题 / 低置信 / 冲突”", "Local quick filter: number, type, content, or “programming / low confidence / conflict”")}
           className="h-12 w-full rounded-[10px] border bg-card pl-11 pr-4 text-[13px] outline-none placeholder:text-muted-foreground focus:border-primary focus:ring-2 focus:ring-primary/15"
         />
       </label>

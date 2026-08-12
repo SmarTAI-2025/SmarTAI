@@ -6,6 +6,23 @@ export interface FilterAnalyticsResult {
   explanation: string;
 }
 
+export type FilterIntentSurface = "student_analysis" | "review_overview";
+
+export interface FilterIntentResult {
+  recognized: boolean;
+  min_score_percent: number | null;
+  max_score_percent: number | null;
+  pass_status: "pass" | "fail" | "unscored" | null;
+  low_confidence: boolean;
+  review_status: "pending" | "confirmed" | "none" | null;
+  disagreement: boolean;
+  annotated: boolean;
+  sort: "score_asc" | "score_desc" | "confidence_asc" | "review_desc" | null;
+  question_tokens: string[];
+  text_terms: string[];
+  explanation: string;
+}
+
 export interface SummaryAnalyticsResult {
   mode: "summary";
   markdown: string;
