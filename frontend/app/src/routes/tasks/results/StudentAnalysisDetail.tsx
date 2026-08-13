@@ -1,6 +1,7 @@
-import { ArrowDown, ArrowLeft, ArrowRight, ArrowUp, Search, X } from "lucide-react";
+import { ArrowDown, ArrowLeft, ArrowRight, ArrowUp, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
+import { SmarTAIMascot } from "@/components/brand/SmarTAIMascot";
 import {
   aiCorrectionScore,
   correctionScoreSource,
@@ -208,10 +209,10 @@ function QuestionFilterBar({ className, locale, value, matches, onQuery, onSelec
 
   return (
     <section className={cn("relative rounded-[9px] border bg-background p-2.5", className)} aria-label={tx(locale, "题目筛选", "Question filter")}>
-      <div>
-        <label className="relative block min-w-0">
+      <div className="flex items-start gap-2">
+        <SmarTAIMascot variant="thinking" size="xs" />
+        <label className="relative block min-w-0 flex-1">
           <span className="sr-only">{tx(locale, "搜索题目", "Search questions")}</span>
-          <Search aria-hidden="true" className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
           <input
             value={smartSearch.draftValue}
             inputMode="search"
@@ -224,7 +225,7 @@ function QuestionFilterBar({ className, locale, value, matches, onQuery, onSelec
               window.setTimeout(() => setOpen(false), 120);
             }}
             placeholder={tx(locale, "本地快速筛选：题号、题型、题干，或“积分题”", "Local quick filter: number, type, stem, or “integration”")}
-            className="h-10 w-full rounded-[8px] border bg-card pl-10 pr-10 text-xs text-foreground outline-none focus:border-primary focus:ring-2 focus:ring-primary/15"
+            className="h-10 w-full rounded-[8px] border bg-card pl-3 pr-10 text-xs text-foreground outline-none focus:border-primary focus:ring-2 focus:ring-primary/15"
           />
           {smartSearch.draftValue ? <button type="button" onMouseDown={(event) => event.preventDefault()} onClick={() => { smartSearch.commitValue(""); setOpen(false); }} aria-label={tx(locale, "清空题目筛选", "Clear question filter")} className="absolute right-2 top-1/2 inline-flex h-7 w-7 -translate-y-1/2 items-center justify-center rounded-full text-muted-foreground hover:bg-muted"><X aria-hidden="true" className="h-3.5 w-3.5" /></button> : null}
           {open && smartSearch.draftValue.trim() && smartSearch.draftValue === value ? <SearchResults locale={locale} matches={matches} onSelect={(id) => { onSelect(id); setOpen(false); }} /> : null}

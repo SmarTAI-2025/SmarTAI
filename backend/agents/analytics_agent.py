@@ -23,7 +23,7 @@ import logging
 from typing import Any, Dict, List, Literal, Optional
 
 from langchain_core.messages import SystemMessage, HumanMessage
-from pydantic import BaseModel, Field, ValidationError
+from pydantic import BaseModel, Field, ValidationError, model_validator
 
 from backend.llm.providers import BaseProvider
 from backend.tools.structured_llm import extract_and_parse_json
@@ -53,6 +53,37 @@ class FilterIntentOutput(BaseModel):
     question_tokens: List[str] = Field(default_factory=list, max_length=4)
     text_terms: List[str] = Field(default_factory=list, max_length=4)
     explanation: str = Field("", max_length=500)
+
+    @model_validator(mode="after")
+    def fail_closed_when_unrecognized_or_empty(self) -> "FilterIntentOutput":
+        """Never let an unknown request smuggle in controls or match everything."""
+        actionable = any((
+            self.min_score_percent is not None,
+            self.max_score_percent is not None,
+            self.pass_status is not None,
+            self.low_confidence,
+            self.review_status is not None,
+            self.disagreement,
+            self.annotated,
+            self.sort is not None,
+            bool(self.question_tokens),
+            bool(self.text_terms),
+        ))
+        if self.recognized and actionable:
+            return self
+
+        self.recognized = False
+        self.min_score_percent = None
+        self.max_score_percent = None
+        self.pass_status = None
+        self.low_confidence = False
+        self.review_status = None
+        self.disagreement = False
+        self.annotated = False
+        self.sort = None
+        self.question_tokens = []
+        self.text_terms = []
+        return self
 
 
 class SummaryOutput(BaseModel):
@@ -141,6 +172,8 @@ Allowed values:
   max_score_percent=90. Bare "从高到低" means sort="score_desc".
 - Use question_tokens only for explicit question references such as Q2 or 第3题.
 - Use text_terms only for literal words that should still be matched locally.
+- On student_analysis, annotated must be false and question_tokens must be empty;
+  those controls exist only on review_overview.
 - If the request cannot map to these controls, set recognized=false and explain why.
 - Do not invent names, IDs, score thresholds, or question numbers.
 - Output must start with { and end with }.
@@ -275,7 +308,17 @@ async def interpret_filter_intent(
         SystemMessage(content=FILTER_INTENT_SYS),
         HumanMessage(content=user_msg),
     ])
-    return extract_and_parse_json(response.content, FilterIntentOutput)
+    output = extract_and_parse_json(response.content, FilterIntentOutput)
+    if surface == "student_analysis":
+        # These controls are implemented only by the review matrix. Revalidate
+        # after removing them so a response containing only unsupported fields
+        # becomes recognized=false instead of silently matching every student.
+        output = FilterIntentOutput.model_validate({
+            **output.model_dump(),
+            "annotated": False,
+            "question_tokens": [],
+        })
+    return output
 
 
 async def summarize(

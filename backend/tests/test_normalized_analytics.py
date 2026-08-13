@@ -26,6 +26,7 @@ from backend.db.models import (
 from backend.db.session import session_scope
 from backend.llm.registry import get_scoped_expert_registry
 from backend.models import User
+from backend.state import get_user_store
 
 
 def _id(prefix: str) -> str:
@@ -128,6 +129,14 @@ def _client(owner: User, registry: _Registry) -> TestClient:
     app.include_router(analytics.router)
     app.dependency_overrides[require_teacher] = lambda: owner
     app.dependency_overrides[get_scoped_expert_registry] = lambda: registry
+    return TestClient(app)
+
+
+def _unauthenticated_client(registry: _Registry) -> TestClient:
+    app = FastAPI()
+    app.include_router(analytics.router)
+    app.dependency_overrides[get_scoped_expert_registry] = lambda: registry
+    app.dependency_overrides[get_user_store] = lambda: {}
     return TestClient(app)
 
 
@@ -454,15 +463,19 @@ def test_nl_query_filters_hallucinated_ids_and_emits_only_safe_chart_fields():
 
 def test_filter_intent_sends_only_redacted_query_and_returns_fixed_controls():
     owner = _user("teacher", "intent-owner")
+    other = _user("teacher", "intent-other")
     seeded = _seed_graded_assignment(owner)
     provider = _Provider()
     client = _client(owner, _Registry(provider))
     student = seeded["students"][0]
+    teacher_query = (
+        f"{student.username}（学号 {student.id}）的成绩排个名，从高到低"
+    )
 
     response = client.post(
         f"/analytics/{seeded['task_id']}/filter-intent",
         json={
-            "question": f"{student.username} 的成绩排个名，从高到低",
+            "question": teacher_query,
             "surface": "student_analysis",
         },
     )
@@ -472,10 +485,106 @@ def test_filter_intent_sends_only_redacted_query_and_returns_fixed_controls():
     assert response.json()["recognized"] is True
     assert [mode for mode, _messages in provider.calls] == ["intent"]
     provider_prompt = str(provider.calls[0][1][-1].content)
+    provider_payload = json.loads(provider_prompt)
+    assert provider_payload == {
+        "surface": "student_analysis",
+        "teacher_query": "<student>（学号 <student>）的成绩排个名，从高到低",
+    }
     assert student.username not in provider_prompt
     assert student.id not in provider_prompt
     assert "<student>" in provider_prompt
-    assert '"students"' not in provider_prompt
+    for sensitive_value in (
+        "2x",
+        "AI comment one",
+        "minority_veto",
+        "8.5",
+        "0.8",
+    ):
+        assert sensitive_value not in provider_prompt
+    for forbidden_field in (
+        "students",
+        "results",
+        "answers",
+        "scores",
+        "confidence",
+        "review_signals",
+        "statistics",
+        "per_student_stats",
+    ):
+        assert forbidden_field not in provider_payload
+
+    other_provider = _Provider()
+    hidden = _client(other, _Registry(other_provider)).post(
+        f"/analytics/{seeded['task_id']}/filter-intent",
+        json={"question": "从高到低", "surface": "student_analysis"},
+    )
+    assert hidden.status_code == 404
+    assert hidden.json()["detail"] == {"code": "analytics_task_not_found"}
+    assert other_provider.calls == []
+
+    unauthenticated_provider = _Provider()
+    unauthenticated = _unauthenticated_client(
+        _Registry(unauthenticated_provider)
+    ).post(
+        f"/analytics/{seeded['task_id']}/filter-intent",
+        json={"question": "从高到低", "surface": "student_analysis"},
+    )
+    assert unauthenticated.status_code == 401
+    assert unauthenticated_provider.calls == []
+
+
+def test_filter_intent_unknown_requests_fail_closed():
+    owner = _user("teacher", "intent-unknown")
+    seeded = _seed_graded_assignment(owner)
+    provider = _Provider()
+    provider.outputs["intent"] = {
+        "recognized": True,
+        "min_score_percent": None,
+        "max_score_percent": None,
+        "pass_status": None,
+        "low_confidence": False,
+        "review_status": None,
+        "disagreement": False,
+        "annotated": True,
+        "sort": None,
+        "question_tokens": ["Q1"],
+        "text_terms": [],
+        "explanation": "Cannot map this request to a fixed control",
+    }
+
+    response = _client(owner, _Registry(provider)).post(
+        f"/analytics/{seeded['task_id']}/filter-intent",
+        json={
+            "question": "Do something mysterious",
+            "surface": "student_analysis",
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["recognized"] is False
+    assert body["min_score_percent"] is None
+    assert body["max_score_percent"] is None
+    assert body["pass_status"] is None
+    assert body["low_confidence"] is False
+    assert body["review_status"] is None
+    assert body["disagreement"] is False
+    assert body["annotated"] is False
+    assert body["sort"] is None
+    assert body["question_tokens"] == []
+    assert body["text_terms"] == []
+
+    empty = analytics.analytics_agent.FilterIntentOutput(recognized=True)
+    assert empty.recognized is False
+
+    tainted = analytics.analytics_agent.FilterIntentOutput(
+        recognized=False,
+        sort="score_desc",
+        text_terms=["must-not-survive"],
+    )
+    assert tainted.recognized is False
+    assert tainted.sort is None
+    assert tainted.text_terms == []
 
 
 def test_analytics_readiness_and_generation_errors_are_stable_and_redacted():

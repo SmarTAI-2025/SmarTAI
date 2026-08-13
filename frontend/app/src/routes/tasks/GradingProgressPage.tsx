@@ -2,6 +2,7 @@ import { AlertTriangle, CheckCircle2, LoaderCircle } from "lucide-react";
 import { useMemo, type ReactNode } from "react";
 import { Link, Navigate, useNavigate, useParams } from "react-router-dom";
 import { useStartGrading, useTask } from "@/api/hooks/tasks";
+import { SmarTAIMascot } from "@/components/brand/SmarTAIMascot";
 import { NewTaskStepper } from "@/components/new-task/NewTaskStepper";
 import { RecoverableActionState } from "@/components/ui/RecoverableActionState";
 import { useTaskProgress } from "@/hooks/useTaskProgress";
@@ -144,13 +145,14 @@ export function GradingProgressPage() {
             />
           ) : (
             <>
-              <section className="flex min-h-[220px] flex-col rounded-[10px] border bg-card px-5 pb-5 pt-7 sm:h-[220px] sm:px-10 sm:pb-5 sm:pt-8" aria-live="polite" aria-busy={completedView ? undefined : true}>
-                <h2 className="text-[22px] font-bold leading-8 tracking-[-0.01em] text-foreground sm:text-[24px]">
+              <section className="relative flex min-h-[220px] flex-col overflow-hidden rounded-[10px] border bg-card px-5 pb-5 pt-7 sm:h-[220px] sm:px-10 sm:pb-5 sm:pt-8" aria-live="polite" aria-busy={completedView ? undefined : true}>
+                <SmarTAIMascot variant="grading" size="md" className="absolute right-7 top-4 hidden sm:inline-flex" />
+                <h2 className="text-[22px] font-bold leading-8 tracking-[-0.01em] text-foreground sm:pr-32 sm:text-[24px]">
                   {completedView
                     ? (locale === "en-US" ? "Grading Completed" : "批改已完成")
                     : copy(locale, isFinalizing ? "finalizing" : "gradingAnswers")}
                 </h2>
-                <p className="mt-1 text-[13px] leading-5 text-muted-foreground sm:text-[14px]">
+                <p className="mt-1 text-[13px] leading-5 text-muted-foreground sm:pr-32 sm:text-[14px]">
                   {copy(locale, "completedPrefix")} {queue.completed} / {queue.total} {copy(locale, "unitSuffix")}
                   <span aria-hidden="true"> · </span>
                   {completedView
@@ -312,7 +314,7 @@ function PageState({
 }) {
   return (
     <section className="mx-auto mt-[25px] flex min-h-[360px] w-full max-w-[940px] flex-col items-center justify-center rounded-[10px] border bg-card px-6 text-center" aria-busy={busy || undefined}>
-      {busy ? <LoaderCircle aria-hidden="true" className="mb-4 h-7 w-7 animate-spin text-primary" /> : <CheckCircle2 aria-hidden="true" className="mb-4 h-7 w-7 text-muted-foreground" />}
+      {busy ? <><SmarTAIMascot variant="grading" size="lg" /><LoaderCircle aria-hidden="true" className="mb-4 h-7 w-7 animate-spin text-primary" /></> : <CheckCircle2 aria-hidden="true" className="mb-4 h-7 w-7 text-muted-foreground" />}
       <h2 className="text-base font-semibold text-foreground">{title}</h2>
       {description ? <p className="mt-2 max-w-xl text-sm leading-6 text-muted-foreground">{description}</p> : null}
       <div className="mt-5 flex flex-col gap-2 sm:flex-row">

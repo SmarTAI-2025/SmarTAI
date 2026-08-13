@@ -1,5 +1,6 @@
 import { ChevronDown, Search, Sparkles, X } from "lucide-react";
 import { useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
+import { SmarTAIMascot } from "@/components/brand/SmarTAIMascot";
 import { useImeSafeQuery } from "@/hooks/useImeSafeQuery";
 import { useI18n } from "@/i18n/I18nProvider";
 import type { MessageKey } from "@/i18n/messages";
@@ -91,16 +92,16 @@ export function HistoryFilters({
           </button>
         </form>
         <form className="flex min-w-0 gap-2" onSubmit={(event) => { event.preventDefault(); submitSmart(); }}>
+          <SmarTAIMascot variant={isInterpreting ? "grading" : "thinking"} size="xs" />
           <label className="relative min-w-0 flex-1">
             <span className="sr-only">{t("historySmartLabel")}</span>
-            <Sparkles aria-hidden="true" className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
             <input
               value={smartSearch.draftValue}
               onBlur={smartSearch.handleBlur}
               onChange={smartSearch.handleChange}
               onCompositionEnd={smartSearch.handleCompositionEnd}
               onCompositionStart={smartSearch.handleCompositionStart}
-              className="h-9 w-full rounded-full border bg-background pl-9 pr-3 text-[13px] text-foreground outline-none placeholder:text-muted-foreground focus:border-primary focus:ring-2 focus:ring-primary/15"
+              className="h-9 w-full rounded-full border bg-background pl-3 pr-3 text-[13px] text-foreground outline-none placeholder:text-muted-foreground focus:border-primary focus:ring-2 focus:ring-primary/15"
               placeholder={t("historySmartPlaceholder")}
             />
           </label>

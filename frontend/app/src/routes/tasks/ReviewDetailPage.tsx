@@ -7,7 +7,6 @@ import {
   Check,
   Keyboard,
   LoaderCircle,
-  Search,
   X,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
@@ -15,6 +14,7 @@ import { Link, Navigate, useBlocker, useNavigate, useParams, useSearchParams, ty
 import { toast } from "sonner";
 import { normalizeAPIError } from "@/api/client";
 import { useTask, useTaskResult, useUpdateCorrectionReview } from "@/api/hooks/tasks";
+import { SmarTAIMascot } from "@/components/brand/SmarTAIMascot";
 import { NewTaskStepper } from "@/components/new-task/NewTaskStepper";
 import {
   buildResultsModel,
@@ -729,25 +729,27 @@ function QuestionSearch({ className, locale, value, matches, onQuery, onSelect }
 
   return (
     <section className={cn("relative rounded-[10px] border bg-card p-2", className)} aria-label={tx(locale, "题目筛选", "Question filter")}>
-      <label className="relative block">
-        <span className="sr-only">{tx(locale, "本地快速筛选题目，不调用模型", "Local quick filter for questions, no model call")}</span>
-        <Search aria-hidden="true" className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-        <input
-          value={smartSearch.draftValue}
-          inputMode="search"
-          onFocus={() => setOpen(true)}
-          onCompositionStart={smartSearch.handleCompositionStart}
-          onCompositionEnd={smartSearch.handleCompositionEnd}
-          onChange={smartSearch.handleChange}
-          onBlur={(event) => {
-            smartSearch.handleBlur(event);
-            window.setTimeout(() => setOpen(false), 120);
-          }}
-          placeholder={tx(locale, "本地快速筛选：题号、题型、题干或“低置信”", "Local quick filter: number, type, stem, or low confidence")}
-          className="h-10 w-full rounded-[7px] border-0 bg-slate-50 pl-9 pr-9 text-[13px] text-foreground outline-none placeholder:text-muted-foreground focus:ring-2 focus:ring-primary/20 dark:bg-slate-900/50"
-        />
-        {smartSearch.draftValue ? <button type="button" onMouseDown={(event) => event.preventDefault()} onClick={() => { smartSearch.commitValue(""); setOpen(false); }} className="absolute right-2 top-1/2 inline-flex h-7 w-7 -translate-y-1/2 items-center justify-center rounded-full text-muted-foreground hover:bg-muted hover:text-foreground" aria-label={tx(locale, "清空题目筛选", "Clear question filter")}><X aria-hidden="true" className="h-3.5 w-3.5" /></button> : null}
-      </label>
+      <div className="flex items-center gap-2">
+        <SmarTAIMascot variant="thinking" size="xs" />
+        <label className="relative min-w-0 flex-1">
+          <span className="sr-only">{tx(locale, "本地快速筛选题目，不调用模型", "Local quick filter for questions, no model call")}</span>
+          <input
+            value={smartSearch.draftValue}
+            inputMode="search"
+            onFocus={() => setOpen(true)}
+            onCompositionStart={smartSearch.handleCompositionStart}
+            onCompositionEnd={smartSearch.handleCompositionEnd}
+            onChange={smartSearch.handleChange}
+            onBlur={(event) => {
+              smartSearch.handleBlur(event);
+              window.setTimeout(() => setOpen(false), 120);
+            }}
+            placeholder={tx(locale, "本地快速筛选：题号、题型、题干或“低置信”", "Local quick filter: number, type, stem, or low confidence")}
+            className="h-10 w-full rounded-[7px] border-0 bg-slate-50 pl-3 pr-9 text-[13px] text-foreground outline-none placeholder:text-muted-foreground focus:ring-2 focus:ring-primary/20 dark:bg-slate-900/50"
+          />
+          {smartSearch.draftValue ? <button type="button" onMouseDown={(event) => event.preventDefault()} onClick={() => { smartSearch.commitValue(""); setOpen(false); }} className="absolute right-2 top-1/2 inline-flex h-7 w-7 -translate-y-1/2 items-center justify-center rounded-full text-muted-foreground hover:bg-muted hover:text-foreground" aria-label={tx(locale, "清空题目筛选", "Clear question filter")}><X aria-hidden="true" className="h-3.5 w-3.5" /></button> : null}
+        </label>
+      </div>
       {open && smartSearch.draftValue.trim() && smartSearch.draftValue === value ? (
         <div className="absolute left-2 right-2 top-[52px] z-40 max-h-[280px] overflow-auto rounded-[9px] border bg-card p-1.5 shadow-xl">
           {matches.length ? matches.slice(0, 20).map((match) => (

@@ -4,8 +4,9 @@ import { Link, Navigate, useNavigate, useParams, useSearchParams } from "react-r
 import { toast } from "sonner";
 import { useAnalyticsFilterIntent } from "@/api/hooks/analytics";
 import { useConfirmTaskFinalization, useTask, useTaskFinalization, useTaskResult, useTeacherComments } from "@/api/hooks/tasks";
-import { RecoverableActionState } from "@/components/ui/RecoverableActionState";
+import { SmarTAIMascot } from "@/components/brand/SmarTAIMascot";
 import { NewTaskStepper } from "@/components/new-task/NewTaskStepper";
+import { RecoverableActionState } from "@/components/ui/RecoverableActionState";
 import { MatrixQueueWorkspace } from "@/components/tasks/MatrixQueueWorkspace";
 import { MatrixStatusCell, type MatrixStatusTone } from "@/components/tasks/MatrixStatusCell";
 import { getMatrixIdentityLayout, MATRIX_ACTION_COLUMN_WIDTH, MATRIX_QUESTION_COLUMN_WIDTH } from "@/components/tasks/matrixLayout";
@@ -215,31 +216,33 @@ export function ReviewOverviewPage() {
           ) : null}
 
           <form onSubmit={submitFilter} role="search" className="mt-6">
-            <label className="relative block">
-              <span className="sr-only">{copy(locale, "searchLabel")}</span>
-              <Search aria-hidden="true" className="pointer-events-none absolute left-5 top-1/2 h-5 w-5 -translate-y-1/2 text-muted-foreground" />
-              <input
-                value={smartSearch.draftValue}
-                inputMode="search"
-                onBlur={smartSearch.handleBlur}
-                onChange={(event) => { setIntentState(null); setResolution("idle"); intentQuery.reset(); smartSearch.handleChange(event); }}
-                onCompositionEnd={smartSearch.handleCompositionEnd}
-                onCompositionStart={smartSearch.handleCompositionStart}
-                disabled={intentQuery.isPending}
-                placeholder={copy(locale, "searchPlaceholder")}
-                className="h-12 w-full rounded-[10px] border bg-card pl-14 pr-44 text-[14px] text-foreground outline-none transition placeholder:text-muted-foreground focus:border-primary focus:ring-2 focus:ring-primary/15"
-              />
-              {smartSearch.draftValue ? (
-                <button
-                  type="button"
-                  onClick={clearSmartFilter}
-                  className="absolute right-[8.6rem] top-1/2 -translate-y-1/2 rounded-md px-2 py-1.5 text-xs font-semibold text-primary hover:bg-primary/5"
-                >
-                  {copy(locale, "clear")}
-                </button>
-              ) : null}
-              <button type="submit" disabled={intentQuery.isPending || !smartSearch.draftValue.trim()} className="absolute right-1.5 top-1/2 inline-flex h-9 -translate-y-1/2 items-center justify-center gap-1.5 rounded-[8px] bg-primary px-3 text-[11px] font-semibold text-primary-foreground disabled:opacity-50">{intentQuery.isPending ? <LoaderCircle aria-hidden="true" className="h-3.5 w-3.5 animate-spin" /> : null}{intentQuery.isPending ? copy(locale, "interpreting") : copy(locale, "applyFilter")}</button>
-            </label>
+            <div className="flex items-center gap-2">
+              <SmarTAIMascot variant="thinking" size="xs" />
+              <label className="relative min-w-0 flex-1">
+                <span className="sr-only">{copy(locale, "searchLabel")}</span>
+                <input
+                  value={smartSearch.draftValue}
+                  inputMode="search"
+                  onBlur={smartSearch.handleBlur}
+                  onChange={(event) => { setIntentState(null); setResolution("idle"); intentQuery.reset(); smartSearch.handleChange(event); }}
+                  onCompositionEnd={smartSearch.handleCompositionEnd}
+                  onCompositionStart={smartSearch.handleCompositionStart}
+                  disabled={intentQuery.isPending}
+                  placeholder={copy(locale, "searchPlaceholder")}
+                  className="h-12 w-full rounded-[10px] border bg-card pl-4 pr-44 text-[14px] text-foreground outline-none transition placeholder:text-muted-foreground focus:border-primary focus:ring-2 focus:ring-primary/15"
+                />
+                {smartSearch.draftValue ? (
+                  <button
+                    type="button"
+                    onClick={clearSmartFilter}
+                    className="absolute right-[8.6rem] top-1/2 -translate-y-1/2 rounded-md px-2 py-1.5 text-xs font-semibold text-primary hover:bg-primary/5"
+                  >
+                    {copy(locale, "clear")}
+                  </button>
+                ) : null}
+                <button type="submit" disabled={intentQuery.isPending || !smartSearch.draftValue.trim()} className="absolute right-1.5 top-1/2 inline-flex h-9 -translate-y-1/2 items-center justify-center gap-1.5 rounded-[8px] bg-primary px-3 text-[11px] font-semibold text-primary-foreground disabled:opacity-50">{intentQuery.isPending ? <LoaderCircle aria-hidden="true" className="h-3.5 w-3.5 animate-spin" /> : null}{intentQuery.isPending ? copy(locale, "interpreting") : copy(locale, "applyFilter")}</button>
+              </label>
+            </div>
             <div className="mt-2 flex min-h-6 flex-wrap items-center gap-2 text-[11px] text-muted-foreground">
               <span>{copy(locale, "filterPrivacyHint")}</span>
               {resolution === "local" ? <span className="rounded-full bg-slate-100 px-2.5 py-1 text-[10px] font-semibold text-slate-600">{copy(locale, "localRecognized")}</span> : null}
