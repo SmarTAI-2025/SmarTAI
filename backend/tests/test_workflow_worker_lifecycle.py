@@ -35,7 +35,23 @@ def test_app_starts_and_stops_empty_workflow_worker(monkeypatch):
     app = create_app()
     with TestClient(app) as client:
         assert client.get("/").status_code == 200
-        assert ("constructed", {}) in events
+        from backend.services.task_facade import (
+            run_durable_problem_extraction,
+            run_durable_submission_recognition,
+        )
+        from backend.api.task_preparation import (
+            run_durable_ai_completion, run_durable_material_import,
+        )
+
+        assert (
+            "constructed",
+            {
+                "problem_extraction": run_durable_problem_extraction,
+                "submission_recognition": run_durable_submission_recognition,
+                "material_import": run_durable_material_import,
+                "ai_completion": run_durable_ai_completion,
+            },
+        ) in events
         assert "run_started" in events
 
     assert events.index("stop") < events.index("run_cancelled")
@@ -55,7 +71,20 @@ def test_workflow_worker_lifecycle_never_bulk_releases_leases(monkeypatch):
 
     class FakeWorker:
         def __init__(self, *, handlers):
-            assert dict(handlers) == {}
+            from backend.services.task_facade import (
+                run_durable_problem_extraction,
+                run_durable_submission_recognition,
+            )
+            from backend.api.task_preparation import (
+                run_durable_ai_completion, run_durable_material_import,
+            )
+
+            assert dict(handlers) == {
+                "problem_extraction": run_durable_problem_extraction,
+                "submission_recognition": run_durable_submission_recognition,
+                "material_import": run_durable_material_import,
+                "ai_completion": run_durable_ai_completion,
+            }
 
         async def run_forever(self):
             await asyncio.Event().wait()

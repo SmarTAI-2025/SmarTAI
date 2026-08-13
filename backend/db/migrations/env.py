@@ -8,7 +8,7 @@ from backend.db.session import prepare_sqlite_parent, validate_database_mode
 
 config = context.config
 if config.config_file_name is not None:
-    fileConfig(config.config_file_name)
+    fileConfig(config.config_file_name, disable_existing_loggers=False)
 database_url = os.getenv("SMARTAI_DATABASE_URL", settings.database_url)
 validate_database_mode(database_url)
 config.set_main_option("sqlalchemy.url", database_url.replace("%", "%%"))

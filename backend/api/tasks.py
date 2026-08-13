@@ -335,17 +335,6 @@ async def extract_problems_endpoint(
             content_type=file.content_type, registry=registry,
             replace_confirmed=replace_confirmed,
         )
-        if queued["status"] == "started":
-            job_attempt = queued.pop("_job_attempt")
-            background_tasks.add_task(
-                task_facade.run_task_problem_extraction,
-                task_id=task_id, owner_id=current.id,
-                job_id=queued["job_id"], filename=file.filename or "problems",
-                content=content, registry=registry,
-                job_attempt=job_attempt,
-                claimed_workflow_revision=queued["workflow_revision"],
-                replace_confirmed=replace_confirmed,
-            )
         return queued
     except DomainError as exc:
         return domain_error_response(exc)
@@ -379,19 +368,6 @@ async def parse_submissions_endpoint(
             recognition_provider_id=recognition_provider_id,
             replace_confirmed=replace_confirmed,
         )
-        if queued["status"] == "started":
-            job_attempt = queued.pop("_job_attempt")
-            background_tasks.add_task(
-                task_facade.run_task_submission_parsing,
-                task_id=task_id, owner_id=current.id,
-                job_id=queued["job_id"], filename=file.filename or "submissions",
-                content=body, registry=registry, identity_mode=identity_mode,
-                job_attempt=job_attempt,
-                roster_entries=roster_entries,
-                recognition_provider_id=recognition_provider_id,
-                replace_confirmed=replace_confirmed,
-                claimed_workflow_revision=queued["workflow_revision"],
-            )
         return queued
     except DomainError as exc:
         return domain_error_response(exc)
@@ -890,19 +866,6 @@ async def _extract_from_source_token(
             replace_confirmed=replace_confirmed,
             extraction_options=extraction_options,
         )
-        if queued["status"] == "started":
-            job_attempt = queued.pop("_job_attempt")
-            background_tasks.add_task(
-                task_facade.run_task_problem_extraction,
-                task_id=task_id, owner_id=current.id,
-                job_id=queued["job_id"],
-                filename=str(payload.get("filename") or "source.txt"),
-                content=content, registry=registry,
-                job_attempt=job_attempt,
-                claimed_workflow_revision=queued["workflow_revision"],
-                replace_confirmed=replace_confirmed,
-                extraction_options=extraction_options,
-            )
         return queued
     except DomainError as exc:
         return domain_error_response(exc)

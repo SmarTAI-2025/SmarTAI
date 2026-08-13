@@ -164,6 +164,40 @@ def test_atomic_question_batch_rolls_back_before_any_partial_write():
     assert applied.payload["applied_candidate_ids"] == ["candidate-1"]
 
 
+def test_atomic_question_batch_rejects_non_finite_operation_payload():
+    owner_id, task_id = _seed_task(with_question=True)
+    job, _ = workflow_repository.create_operation(
+        assignment_id=task_id, owner_id=owner_id,
+        operation_type="material_import", input_hash=uuid.uuid4().hex,
+        expires_at=time.time() + 60,
+    )
+    workflow_repository.update_operation(
+        job.id, owner_id=owner_id, expected_attempt=job.attempt, status="ready"
+    )
+
+    with pytest.raises(ValidationError) as invalid:
+        task_facade.apply_question_patches_atomic(
+            task_id=task_id, owner_id=owner_id,
+            expected_workflow_revision=0,
+            patches=[{"q_id": "q1", "fields": {"criterion": "new"}}],
+            operation_id=job.id, expected_operation_attempt=job.attempt,
+            required_operation_status="ready",
+            final_operation_status="applied",
+            operation_payload={"confidence": float("nan")},
+        )
+
+    assert invalid.value.code == "invalid_operation_payload"
+    assert assignment_repository.list_questions(
+        task_id, teacher_id=owner_id
+    )[0].criterion == ""
+    assert workflow_repository.get_workflow(
+        task_id, owner_id=owner_id
+    ).workflow_revision == 0
+    assert workflow_repository.get_operation(
+        job.id, owner_id=owner_id
+    ).status == "ready"
+
+
 def test_retry_attempt_rejects_every_stale_operation_update():
     owner_id, task_id = _seed_task()
     input_hash = uuid.uuid4().hex
@@ -352,7 +386,7 @@ def test_student_identity_conflict_does_not_consume_workflow_revision():
 
 
 @pytest.mark.asyncio
-async def test_extract_endpoint_queues_background_work_and_returns_started():
+async def test_extract_endpoint_queues_durable_work_and_returns_started():
     owner_id, task_id = _seed_task()
     background = _BackgroundTasks()
     upload = UploadFile(
@@ -368,24 +402,13 @@ async def test_extract_endpoint_queues_background_work_and_returns_started():
     )
 
     assert response["status"] == "started"
-    assert len(background.calls) == 1
-    assert background.calls[0][0] is task_facade.run_task_problem_extraction
+    assert background.calls == []
     operation = workflow_repository.get_operation(
         response["job_id"], owner_id=owner_id
     )
-    assert operation.status == "running"
+    assert operation.status == "pending"
+    assert isinstance(operation.payload.get("source_id"), str)
     assert assignment_repository.list_questions(task_id, teacher_id=owner_id) == []
-
-    worker, args, kwargs = background.calls[0]
-    await worker(*args, **kwargs)
-    failed = workflow_repository.get_operation(
-        response["job_id"], owner_id=owner_id
-    )
-    assert failed.status == "error"
-    assert failed.error_code == "problem_extraction_failed"
-    workflow = workflow_repository.get_workflow(task_id, owner_id=owner_id)
-    assert workflow.active_job_id is None
-    assert workflow.error_code == "problem_extraction_failed"
 
 
 def test_disabled_selected_recognition_provider_has_figma_error_code():
@@ -446,7 +469,7 @@ async def test_ai_completion_retry_replays_running_job_after_revision_claim():
     assert first["status"] == "started"
     assert retry["status"] == "already_running"
     assert retry["job_id"] == first["job_id"]
-    assert len(first_background.calls) == 1
+    assert first_background.calls == []
     assert retry_background.calls == []
 
 
@@ -485,7 +508,7 @@ async def test_ai_completion_error_retry_reclaims_with_current_internal_revision
     assert retried["workflow_revision"] == 2
     assert retry_operation.attempt == first_operation.attempt + 1
     assert retry_operation.payload["base_workflow_revision"] == 1
-    assert len(retry_background.calls) == 1
+    assert retry_background.calls == []
 
 
 @pytest.mark.parametrize(

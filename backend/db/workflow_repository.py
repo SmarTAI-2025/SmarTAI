@@ -718,7 +718,13 @@ def create_operation(
     payload: dict | None = None,
     progress: dict | None = None,
     expires_at: float | None = None,
+    initial_status: str = "pending",
 ) -> tuple[WorkflowOperationRecord, bool]:
+    if initial_status not in {"pending", "preparing"}:
+        raise ValidationError(
+            "Invalid initial workflow operation status.",
+            code="invalid_operation_status",
+        )
     payload = _validate_json_object(
         payload if payload is not None else {},
         field="payload",
@@ -741,7 +747,7 @@ def create_operation(
         retryable = or_(
             WorkflowOperationRecord.status == "error",
             and_(
-                WorkflowOperationRecord.status.in_(("pending", "running")),
+                WorkflowOperationRecord.status.in_(("preparing", "pending", "running")),
                 WorkflowOperationRecord.expires_at.is_not(None),
                 WorkflowOperationRecord.expires_at <= now,
             ),
@@ -756,7 +762,7 @@ def create_operation(
             )
             .values(
                 attempt=WorkflowOperationRecord.attempt + 1,
-                status="pending", progress=progress, payload=payload,
+                status=initial_status, progress=progress, payload=payload,
                 checkpoint_revision=0, checkpoint_stage=None, checkpoint={},
                 artifact_refs=[], terminal_summary=None,
                 error_code=None, updated_at=now, completed_at=None,
@@ -790,7 +796,7 @@ def create_operation(
             row = WorkflowOperationRecord(
                 id=_new_id("op"), assignment_id=assignment_id,
                 owner_id=owner_id, operation_type=operation_type,
-                input_hash=input_hash, attempt=1, status="pending",
+                input_hash=input_hash, attempt=1, status=initial_status,
                 payload=payload, progress=progress,
                 created_at=now, updated_at=now, expires_at=expires_at,
             )
