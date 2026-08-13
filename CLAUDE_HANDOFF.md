@@ -92,6 +92,26 @@ summary. Codex stopped the orphaned process and reviewed the implementation.
 W2-2B FastAPI lifespan wiring is intentionally not included in this core
 commit. No production operation handler is registered yet.
 
+## Codex verification (DB-W2-2B application lifecycle)
+
+The application now starts one empty-handler `WorkflowWorker` loop per process
+and stops it before bounded worker shutdown. Because the handler mapping is
+empty, this commit cannot claim any production operation. Shutdown never calls
+`release_operation`; active leases are left to expire.
+
+- Lifecycle RED: `test_app_starts_and_stops_empty_workflow_worker` failed
+  because no worker was constructed.
+- Lifecycle GREEN: `python -m pytest backend/tests/test_workflow_worker_lifecycle.py -q`
+  -> `2 passed`.
+- Combined worker/app/grading regression:
+  `python -m pytest backend/tests/test_workflow_worker.py backend/tests/test_workflow_worker_lifecycle.py backend/tests/test_auth_persistence.py backend/tests/test_grading_run_lifecycle.py -q`
+  -> `69 passed, 30 warnings in 91.33s`.
+
+The warnings are FastAPI's `on_event` deprecation notices. The repository
+already uses `on_event` for sandbox and grading worker lifecycle; converting
+all lifecycle hooks to a lifespan context is deferred to a focused integration
+cleanup rather than mixed into DB-W2-2.
+
 ### Codex review fixes required after timed-out first pass
 
 The first Claude invocation timed out while tests were still running and did
