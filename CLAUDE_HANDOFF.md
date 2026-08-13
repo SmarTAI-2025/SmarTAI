@@ -1,5 +1,51 @@
 # Claude Collaboration Handoff
 
+## Current Task (2026-08-13): Database Week 2 recovery
+
+Complete DB-W2-1 through DB-W2-4 from
+`active_beta_launch/active_beta_launch/数据库持久化与任务恢复工作安排.md`.
+The detailed implementation plan is
+`docs/superpowers/plans/2026-08-13-database-week2-recovery.md`.
+
+### Baseline and delivery
+
+- Worktree: `D:\project-of-python\Teacher\SmarTAI\.worktrees\db-operation-leases`
+- Current branch: `codex/db-operation-leases`
+- Baseline: `6a0f76b`, the head of open stacked PR #18.
+- PR #18 depends on PR #17; do not rebase this work directly onto `main` until
+  those dependencies merge.
+- Deliver Week 2 as sequential commits/stacked branches. Do not commit or push;
+  Codex will review, verify, commit, push, and create PRs.
+- Preserve unrelated work and do not modify root `render-requirements.txt` or
+  untracked `active_beta_launch/` content.
+
+### Mandatory scope and process
+
+- Execute only the plan's current task when Codex names one.
+- Use TDD: add the focused test, run it and record the intended RED, then make
+  the smallest implementation and record GREEN.
+- Reuse `workflow_operations`, normalized repositories, stored-file metadata,
+  and object storage. Never create another JobStore/TaskStore or put original
+  bytes, full OCR text, raw model responses, or provider keys in operation JSON.
+- Keep owner predicates, attempt fencing, lease-token fencing, bounded JSON,
+  idempotent commits, and stable error codes explicit.
+- Do not change OCR output semantics, student identity/matching rules, grading
+  semantics, frontend behavior, quota policy, or public API meaning.
+- PR #23 and PR #26 overlap `task_facade.py` and tests. Do not copy their
+  unmerged business behavior into this branch; report the exact conflict/rebase
+  points instead.
+
+### First implementation assignment: DB-W2-1
+
+Implement Task 1 from the Week 2 plan: operation lease schema and repository
+contract only. Allowed production files are the next Alembic migration and
+`backend/db/workflow_repository.py`; allowed tests are focused lease,
+checkpoint, migration, and PostgreSQL integration tests. Do not add the worker,
+modify `task_facade.py`, or modify `main.py` in this assignment.
+
+Record modified files, RED/GREEN commands and results, design concerns, and
+remaining verification gaps in a new `Claude -> Codex (DB-W2-1)` section.
+
 ## Current Task
 
 Fix the three failed GitHub Actions jobs for commit
