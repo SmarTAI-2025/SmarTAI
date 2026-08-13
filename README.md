@@ -102,16 +102,17 @@ SMARTAI_HTTPS_PROXY=http://HOST:PORT
 - 前端 BYOK 的 Key 仍在“模型与 BYOK”页面填写，并由后端加密保存。
 - 修改代理配置后必须重启后端。
 
-#### 配置本地 BYOK 加密主密钥（可选）
+#### 配置本地 BYOK 加密主密钥（使用 BYOK 时必需）
 
-`SMARTAI_PROVIDER_ENCRYPTION_KEY` 和 `SMARTAI_JWT_SECRET` 在本地开发时都有内置
-默认值，不创建 `.env` 文件也能直接启动。
+后端未配置 `SMARTAI_PROVIDER_ENCRYPTION_KEY` 时仍可启动，但不能保存持久化 BYOK
+凭据。需要测试 BYOK 时，在本地 `.env` 中为它设置至少 32 字节的随机值。若本地也
+覆盖 `SMARTAI_JWT_SECRET`，两项必须使用不同值。开发或测试环境中的缺失、过短、
+公开占位值或与 JWT 相同的主密钥都会被视为“未配置”：其他功能仍可启动，保存或
+读取持久化 BYOK 时会返回明确错误，不会使用不安全密钥，也不会改走共享模型。
+生成方法：
 
-**开发环境开箱即用**：跳过本节直接进入「首次运行前」即可。如果你已经运行过
-`cp .env.example .env`，请确保 `.env` 中这两项为空或是安全的自定义值。
-
-> ⚠️ **生产环境**：必须在平台的 Secret Manager 中为这两项分别设置至少 32 字节的
-> 随机值，生成方法：
+> ⚠️ **生产环境**：还必须设置 `SMARTAI_RUNTIME_ENVIRONMENT=production`，并在平台
+> Secret Manager 中配置上述两个随机值；配置缺失、不安全或相同时后端拒绝启动。
 >
 > ```bash
 > python -c "import secrets; print(secrets.token_hex(32))"
@@ -122,6 +123,11 @@ SMARTAI_HTTPS_PROXY=http://HOST:PORT
 > - 一旦保存过 BYOK，就必须在后续重启中继续使用同一个值；丢失或更换它会使已有密文
 >   无法解密。连接同一个共享数据库的后端实例必须从安全的 Secret Manager 读取同一主密钥。
 > - 新建且互不共享的本地数据库可以各自生成独立主密钥。
+
+从只配置旧变量 `JWT_SECRET` 的已有部署迁移时，先新增并确认
+`SMARTAI_JWT_SECRET`，完成一次部署后再删除旧变量。代码只读取统一后的
+`SMARTAI_JWT_SECRET`；不要同时借迁移机会更换 BYOK 加密主密钥，否则已有 BYOK
+密文将无法读取。
 
 首次运行前，在**仓库根目录**（该目录应能看到 `alembic.ini`、`backend/` 和
 `frontend/`）应用数据库迁移。请先激活上文创建并已安装后端依赖的 Python 环境，
@@ -246,9 +252,10 @@ VITE_SMARTAI_BACKEND_URL=https://your-backend.example.com
 
 后端生产环境至少需要配置以下项目：
 
+- `SMARTAI_RUNTIME_ENVIRONMENT=production`
 - `SMARTAI_DATABASE_HEAVY=ON` 与 `SMARTAI_DATABASE_URL_HEAVY`
 - `SMARTAI_STORAGE_BACKEND=object` 与 `SMARTAI_STORAGE_S3_*`
-- `SMARTAI_PROVIDER_ENCRYPTION_KEY` 与 JWT 签名密钥
+- `SMARTAI_PROVIDER_ENCRYPTION_KEY` 与 `SMARTAI_JWT_SECRET`（互不相同）
 - `SMARTAI_REFRESH_COOKIE_SECURE=true`
 - `SMARTAI_REFRESH_COOKIE_SAMESITE=none`
 - `FRONTEND_URLS`（填写真实前端域名，不带结尾 `/`）

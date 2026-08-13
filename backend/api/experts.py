@@ -31,7 +31,11 @@ from backend.db.provider_repository import (
     upsert_provider_config,
 )
 from backend.models import ProviderConfig, User
-from backend.llm.registry import get_scoped_expert_registry, ExpertRegistry
+from backend.llm.registry import (
+    ExpertRegistry,
+    get_scoped_expert_registry,
+    provider_encryption_not_configured_error,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -209,7 +213,7 @@ def add_key(
         rpm=request.rpm,
     )
     if not settings.provider_encryption_key:
-        raise HTTPException(503, detail="Provider credential encryption is not configured.")
+        raise provider_encryption_not_configured_error(api_key_was_submitted=True)
     record = upsert_provider_config(current.id, config, master_key=settings.provider_encryption_key)
     provider_id = registry.register(config, provider_id=record.id)
     return {"status": "success", "provider_id": provider_id}
@@ -256,7 +260,9 @@ def update_provider(
 ):
     """Update one persisted BYOK entry without requiring the key again."""
     if not settings.provider_encryption_key:
-        raise HTTPException(503, detail="Provider credential encryption is not configured.")
+        raise provider_encryption_not_configured_error(
+            api_key_was_submitted=request.api_key is not None,
+        )
     existing = get_provider_config(
         current.id,
         provider_id,
