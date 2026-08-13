@@ -5,7 +5,14 @@ export type ProviderType =
   | "zhipu"
   | "deepseek"
   | "moonshot"
-  | "qwen";
+  | "qwen"
+  | "openai_compatible";
+
+export type VerificationStatus =
+  | "unverified"
+  | "verified"
+  | "failed"
+  | "platform_managed";
 
 export interface ExpertConfig {
   provider_id: string;
@@ -19,10 +26,15 @@ export interface ExpertConfig {
   scope?: "shared" | "owner";
   is_shared?: boolean;
   editable?: boolean;
-  verification_status?: "unverified" | "verified" | "failed" | "platform_managed";
+  verification_status?: VerificationStatus;
   last_checked_at?: string | null;
   verified_at?: string | null;
   verification_error_code?: string | null;
+  vision_verification_status?: VerificationStatus;
+  vision_last_checked_at?: string | null;
+  vision_verification_error_code?: string | null;
+  risk_ack_version?: string | null;
+  risk_ack_at?: string | null;
 }
 
 export interface AddExpertKeyRequest {
@@ -33,6 +45,7 @@ export interface AddExpertKeyRequest {
   display_name?: string | null;
   max_concurrent?: number;
   rpm?: number;
+  risk_ack_version?: string | null;
 }
 
 export interface ExpertMutationResponse {
@@ -40,6 +53,8 @@ export interface ExpertMutationResponse {
   provider_id?: string;
   enabled?: boolean;
   verification_status?: ExpertConfig["verification_status"];
+  vision_verification_status?: ExpertConfig["vision_verification_status"];
+  base_url?: string | null;
   message?: string;
 }
 
@@ -50,6 +65,7 @@ export interface UpdateExpertRequest {
   display_name?: string | null;
   max_concurrent?: number;
   rpm?: number;
+  risk_ack_version?: string | null;
 }
 
 export interface ExpertVerificationResponse {
@@ -60,10 +76,19 @@ export interface ExpertVerificationResponse {
   verified_at: string;
 }
 
+export interface ExpertVisionVerificationResponse {
+  status: "success";
+  provider_id: string;
+  vision_verification_status: "verified";
+  vision_last_checked_at: string;
+}
+
 export interface ProviderCatalogItem {
   provider_type: ProviderType;
   display_name: string;
-  docs_url: string;
-  console_url: string;
-  usage_url: string;
+  docs_url?: string;
+  console_url?: string;
+  usage_url?: string;
+  custom?: boolean;
+  risk_ack_version?: string;
 }

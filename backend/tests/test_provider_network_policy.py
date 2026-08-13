@@ -10,6 +10,7 @@ from backend.llm.providers import (
     AnthropicProvider,
     GeminiProvider,
     OpenAIProvider,
+    OpenAICompatibleProvider,
     ZhipuProvider,
     build_provider,
 )
@@ -122,6 +123,46 @@ def test_openai_uses_explicit_smartai_proxy(monkeypatch):
     assert captured["proxy_url"] == "http://127.0.0.1:7897"
     assert captured["kwargs"]["http_client"] == "sync-client"
     assert captured["kwargs"]["http_async_client"] == "async-client"
+
+
+def test_custom_provider_uses_only_the_pinned_safe_clients(monkeypatch):
+    import langchain_openai
+
+    captured: dict[str, object] = {}
+
+    def fake_safe_clients(base_url, **kwargs):
+        captured["base_url"] = base_url
+        captured["client_kwargs"] = kwargs
+        return "safe-sync", "safe-async"
+
+    def fake_chat_openai(**kwargs):
+        captured["chat_kwargs"] = kwargs
+        return object()
+
+    monkeypatch.setattr(settings, "custom_provider_endpoints_enabled", True)
+    monkeypatch.setattr(provider_module, "build_safe_provider_clients", fake_safe_clients)
+    monkeypatch.setattr(
+        provider_module,
+        "_build_httpx_clients",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("custom providers must not use the ordinary client")
+        ),
+    )
+    monkeypatch.setattr(langchain_openai, "ChatOpenAI", fake_chat_openai)
+    provider = OpenAICompatibleProvider(ProviderConfig(
+        provider_type="openai_compatible",
+        api_key="test-key",
+        model="relay-model",
+        base_url="https://relay.example.com/v1",
+        endpoint_identity="https://relay.example.com/v1",
+    ))
+
+    provider._build_client_sync()
+
+    assert captured["base_url"] == "https://relay.example.com/v1"
+    assert captured["chat_kwargs"]["http_client"] == "safe-sync"
+    assert captured["chat_kwargs"]["http_async_client"] == "safe-async"
+    assert captured["chat_kwargs"]["max_retries"] == 0
 
 
 def test_zhipu_always_builds_a_direct_client(monkeypatch):

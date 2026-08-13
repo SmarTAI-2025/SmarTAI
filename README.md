@@ -129,6 +129,21 @@ SMARTAI_HTTPS_PROXY=http://HOST:PORT
 `SMARTAI_JWT_SECRET`；不要同时借迁移机会更换 BYOK 加密主密钥，否则已有 BYOK
 密文将无法读取。
 
+#### 自定义 OpenAI-compatible 中转站（默认关闭）
+
+后端支持将任意通过安全检查的公网 HTTPS OpenAI Chat Completions-compatible
+Base URL 保存为 `openai_compatible` BYOK 配置，包括 USTC 等学校或第三方中转站；
+它们不会伪装成 DeepSeek 等官方服务商，也没有任何域名特批。只接受域名、HTTPS 443、
+系统可信证书且无 query/fragment 的 Base URL，拒绝 IP literal、localhost、内网、云元数据、
+特殊地址和重定向。DNS 会在保存和每次连接前重新检查，socket 仅连接本次批准的公网 IP，
+TLS 与 HTTP Host 仍使用原域名。
+
+该功能由 `SMARTAI_CUSTOM_PROVIDER_ENDPOINTS_ENABLED` 控制，仓库和 Render 默认均为
+`false`。开启后，教师仍需确认第三方数据风险，先通过合成文本验证才可启用；视觉/OCR
+能力必须再用仓库内合成图片单独验证。自定义配置仅属于当前教师的加密 BYOK，不进入共享
+模型池或 RAG embedding。公网 production 在应用安全测试、网络层 egress 防护和发布门禁
+没有同一 release SHA 的证据前，不应把此开关改为 `true`。
+
 首次运行前，在**仓库根目录**（该目录应能看到 `alembic.ini`、`backend/` 和
 `frontend/`）应用数据库迁移。请先激活上文创建并已安装后端依赖的 Python 环境，
 例如 Conda `smartai` 或项目 `.venv`；不要在 `frontend/app/` 或未安装依赖的系统

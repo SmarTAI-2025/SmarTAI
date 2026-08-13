@@ -15,6 +15,7 @@ const PROVIDER_NAMES: Record<string, string> = {
   deepseek: "DeepSeek",
   moonshot: "Kimi (Moonshot)",
   qwen: "Qwen (通义千问)",
+  openai_compatible: "Custom OpenAI-compatible",
 };
 
 export function providerDisplayName(providerType: string): string {

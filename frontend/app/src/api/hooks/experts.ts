@@ -68,6 +68,14 @@ export function useVerifyExpert() {
   });
 }
 
+export function useVerifyExpertVision() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: expertsApi.verifyExpertVision,
+    onSettled: () => queryClient.invalidateQueries({ queryKey: expertKeys.all }),
+  });
+}
+
 export function useRemoveExpert() {
   const queryClient = useQueryClient();
 

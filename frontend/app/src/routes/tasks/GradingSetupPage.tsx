@@ -416,9 +416,17 @@ function ModelSection({
                   <span className="flex min-w-0 items-center gap-2">
                     <span className="truncate text-[14px] font-semibold leading-5 text-foreground" title={label}>{label}</span>
                     {expert.is_shared ? <span className="shrink-0 rounded-full bg-blue-50 px-2 py-0.5 text-[12px] font-semibold text-primary dark:bg-blue-950/30">{gradingSetupText(locale, "sharedModel")}</span> : null}
+                    {expert.provider_type === "openai_compatible" ? (
+                      <span className="shrink-0 rounded-full bg-amber-50 px-2 py-0.5 text-[11px] font-semibold text-amber-800 dark:bg-amber-950/30 dark:text-amber-200">
+                        {locale === "zh-CN" ? "用户自定义 · 未经审核" : "Custom · Unreviewed"}
+                      </span>
+                    ) : null}
                   </span>
                   <span className="mt-0.5 block truncate text-[13px] leading-5 text-muted-foreground">
                     {secondaryLabel} · {gradingSetupText(locale, expert.enabled ? "enabledConfiguration" : "disabledConfiguration")}
+                    {expert.provider_type === "openai_compatible" && expert.base_url
+                      ? ` · ${safeEndpointHostname(expert.base_url)}`
+                      : ""}
                   </span>
                 </label>
                 {hasMultiple && selected && expert.enabled ? (
@@ -480,6 +488,14 @@ function ModelSection({
       ) : null}
     </fieldset>
   );
+}
+
+function safeEndpointHostname(value: string): string {
+  try {
+    return new URL(value).hostname;
+  } catch {
+    return "custom endpoint";
+  }
 }
 
 export function KnowledgeSection({ locale, taskId, value, onChange }: {

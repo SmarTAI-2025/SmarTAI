@@ -26,6 +26,9 @@ from dataclasses import dataclass
 from langchain_core.messages import BaseMessage, HumanMessage
 
 from backend.config import settings
+from backend.llm.endpoint_policy import (
+    build_safe_provider_clients,
+)
 from backend.models import ProviderConfig
 
 logger = logging.getLogger(__name__)
@@ -382,6 +385,44 @@ class QwenProvider(_DomesticOpenAICompatibleProvider):
     _default_base_url = "https://dashscope.aliyuncs.com/compatible-mode/v1"
 
 
+class OpenAICompatibleProvider(BaseProvider):
+    """User-defined OpenAI Chat Completions service with pinned networking."""
+
+    provider_type = "openai_compatible"
+
+    async def _get_client(self) -> Any:
+        """Resolve and construct custom transports without blocking the event loop."""
+        self._ensure_async_primitives()
+        if self._client is None:
+            async with self._client_lock:
+                if self._client is None:
+                    self._client = await asyncio.to_thread(self._build_client_sync)
+        return self._client
+
+    def _build_client_sync(self) -> Any:
+        from langchain_openai import ChatOpenAI
+
+        if not settings.custom_provider_endpoints_enabled or not self.config.base_url:
+            raise ValueError("custom_provider_endpoints_disabled")
+        # The dedicated transport re-resolves before every new connection and
+        # binds sockets to the approved set while retaining hostname TLS.
+        http_client, http_async_client = build_safe_provider_clients(
+            self.config.base_url,
+            timeout_seconds=float(settings.llm_timeout),
+            max_response_bytes=settings.custom_provider_max_response_bytes,
+        )
+        return ChatOpenAI(
+            model=self.model,
+            temperature=0.0,
+            timeout=settings.llm_timeout,
+            max_retries=0,
+            api_key=self.config.api_key,
+            base_url=self.config.base_url,
+            http_client=http_client,
+            http_async_client=http_async_client,
+        )
+
+
 # ─── Factory ─────────────────────────────────────────────────────────────────
 
 PROVIDER_CLASSES: Dict[str, type[BaseProvider]] = {
@@ -392,6 +433,7 @@ PROVIDER_CLASSES: Dict[str, type[BaseProvider]] = {
     "deepseek": DeepSeekProvider,
     "moonshot": MoonshotProvider,
     "qwen": QwenProvider,
+    "openai_compatible": OpenAICompatibleProvider,
 }
 
 

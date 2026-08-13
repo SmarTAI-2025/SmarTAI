@@ -23,6 +23,7 @@ import {
   useSelectExpert,
   useUpdateExpert,
   useVerifyExpert,
+  useVerifyExpertVision,
 } from "@/api/hooks";
 import { LibraryDialog } from "@/components/knowledge-base/LibraryDialog";
 import { ProviderIcon } from "@/components/models/ProviderIcon";
@@ -53,19 +54,12 @@ const providerOptions: Array<{ value: ProviderType; label: string; defaultModel:
   { value: "deepseek", label: "DeepSeek", defaultModel: "deepseek-v4-flash" },
   { value: "moonshot", label: "Kimi (Moonshot)", defaultModel: "kimi-k3" },
   { value: "qwen", label: "Qwen (通义千问)", defaultModel: "qwen-plus" },
+  {
+    value: "openai_compatible",
+    label: "自定义 OpenAI-compatible",
+    defaultModel: "",
+  },
 ];
-
-// Official base URL shown as the placeholder for OpenAI-compatible providers
-// whose endpoint a teacher may legitimately override. The backend validator
-// still rejects anything that is not the vendor's official HTTPS host, so this
-// only presets the expected address — it does not widen what is accepted.
-const providerDefaultBaseUrl: Partial<Record<ProviderType, string>> = {
-  openai: "https://api.openai.com/v1",
-  zhipu: "https://open.bigmodel.cn/api/paas/v4",
-  deepseek: "https://api.deepseek.com/v1",
-  moonshot: "https://api.moonshot.cn/v1",
-  qwen: "https://dashscope.aliyuncs.com/compatible-mode/v1",
-};
 
 type EditorTarget =
   | { mode: "add" }
@@ -73,6 +67,7 @@ type EditorTarget =
 
 type Confirmation =
   | { kind: "verify"; expert: ExpertConfig }
+  | { kind: "verify-vision"; expert: ExpertConfig }
   | { kind: "delete"; expert: ExpertConfig };
 
 interface ExpertFormValue {
@@ -83,6 +78,7 @@ interface ExpertFormValue {
   displayName: string;
   maxConcurrent: number;
   rpm: number;
+  riskAckVersion: string | null;
 }
 
 export function ExpertsPage() {
@@ -96,11 +92,14 @@ export function ExpertsPage() {
   const updateExpert = useUpdateExpert();
   const selectExpert = useSelectExpert();
   const verifyExpert = useVerifyExpert();
+  const verifyExpertVision = useVerifyExpertVision();
   const removeExpert = useRemoveExpert();
   const [editor, setEditor] = useState<EditorTarget | null>(null);
   const [confirmation, setConfirmation] = useState<Confirmation | null>(null);
 
   const experts = expertsQuery.data ?? [];
+  const customCatalog =
+    (catalogQuery.data ?? []).find((item) => item.custom === true) ?? null;
   const enabledCount = experts.filter((expert) => expert.enabled).length;
   const verifiedCount = experts.filter(
     (expert) => expert.verification_status === "verified",
@@ -116,6 +115,7 @@ export function ExpertsPage() {
     updateExpert.isPending ||
     selectExpert.isPending ||
     verifyExpert.isPending ||
+    verifyExpertVision.isPending ||
     removeExpert.isPending;
 
   async function handleSave(value: ExpertFormValue) {
@@ -130,6 +130,7 @@ export function ExpertsPage() {
           display_name: value.displayName || null,
           max_concurrent: value.maxConcurrent,
           rpm: value.rpm,
+          risk_ack_version: value.riskAckVersion,
         };
         await addExpert.mutateAsync(request);
         toast.success(zh ? "模型配置已添加" : "Model configuration added", {
@@ -143,6 +144,7 @@ export function ExpertsPage() {
           display_name: value.displayName || null,
           max_concurrent: value.maxConcurrent,
           rpm: value.rpm,
+          risk_ack_version: value.riskAckVersion,
         };
         await updateExpert.mutateAsync({
           providerId: editor.expert.provider_id,
@@ -213,10 +215,19 @@ export function ExpertsPage() {
     }
 
     try {
-      await verifyExpert.mutateAsync(target.expert.provider_id);
-      toast.success(zh ? "验证通过" : "Verification passed", {
+      if (target.kind === "verify-vision") {
+        await verifyExpertVision.mutateAsync(target.expert.provider_id);
+      } else {
+        await verifyExpert.mutateAsync(target.expert.provider_id);
+      }
+      toast.success(
+        target.kind === "verify-vision"
+          ? zh ? "视觉验证通过" : "Vision verification passed"
+          : zh ? "文本验证通过" : "Text verification passed",
+        {
         description: modelDisplayName(target.expert),
-      });
+        },
+      );
     } catch (error) {
       toast.error(zh ? "验证未通过" : "Verification did not pass", {
         description: safeExpertError(error, locale),
@@ -371,6 +382,7 @@ export function ExpertsPage() {
                       onEdit={() => setEditor({ mode: "edit", expert })}
                       onToggle={() => void handleToggle(expert)}
                       onVerify={() => setConfirmation({ kind: "verify", expert })}
+                      onVerifyVision={() => setConfirmation({ kind: "verify-vision", expert })}
                       onDelete={() => setConfirmation({ kind: "delete", expert })}
                     />
                   ))}
@@ -387,6 +399,7 @@ export function ExpertsPage() {
                   onEdit={() => setEditor({ mode: "edit", expert })}
                   onToggle={() => void handleToggle(expert)}
                   onVerify={() => setConfirmation({ kind: "verify", expert })}
+                  onVerifyVision={() => setConfirmation({ kind: "verify-vision", expert })}
                   onDelete={() => setConfirmation({ kind: "delete", expert })}
                 />
               ))}
@@ -409,6 +422,7 @@ export function ExpertsPage() {
           target={editor}
           locale={locale}
           pending={addExpert.isPending || updateExpert.isPending}
+          customCatalog={customCatalog}
           onClose={() => setEditor(null)}
           onSave={handleSave}
         />
@@ -418,7 +432,7 @@ export function ExpertsPage() {
         <ConfirmationDialog
           confirmation={confirmation}
           locale={locale}
-          pending={verifyExpert.isPending || removeExpert.isPending}
+          pending={verifyExpert.isPending || verifyExpertVision.isPending || removeExpert.isPending}
           onClose={() => setConfirmation(null)}
           onConfirm={() => void handleConfirm()}
         />
@@ -458,6 +472,7 @@ function ExpertTableRow({
   onEdit,
   onToggle,
   onVerify,
+  onVerifyVision,
   onDelete,
 }: ExpertRowProps) {
   const zh = locale === "zh-CN";
@@ -472,6 +487,10 @@ function ExpertTableRow({
               {expert.is_shared ? (
                 <span className="shrink-0 rounded-full bg-blue-50 px-2 py-0.5 text-[10px] font-semibold text-blue-700 dark:bg-blue-950/50 dark:text-blue-200">
                   {zh ? "平台" : "Platform"}
+                </span>
+              ) : expert.provider_type === "openai_compatible" ? (
+                <span className="shrink-0 rounded-full bg-amber-50 px-2 py-0.5 text-[10px] font-semibold text-amber-800 dark:bg-amber-950/40 dark:text-amber-200">
+                  {zh ? "用户自定义 · 未经审核" : "Custom · Unreviewed"}
                 </span>
               ) : null}
             </div>
@@ -501,6 +520,7 @@ function ExpertTableRow({
           onEdit={onEdit}
           onToggle={onToggle}
           onVerify={onVerify}
+          onVerifyVision={onVerifyVision}
           onDelete={onDelete}
         />
       </td>
@@ -515,6 +535,7 @@ interface ExpertRowProps {
   onEdit: () => void;
   onToggle: () => void;
   onVerify: () => void;
+  onVerifyVision: () => void;
   onDelete: () => void;
 }
 
@@ -527,7 +548,14 @@ function ExpertMobileRow(props: ExpertRowProps) {
         <div className="flex min-w-0 items-center gap-3">
           <ProviderIcon providerType={expert.provider_type} />
           <div className="min-w-0">
-            <p className="truncate font-semibold">{modelDisplayName(expert)}</p>
+            <div className="flex min-w-0 items-center gap-2">
+              <p className="truncate font-semibold">{modelDisplayName(expert)}</p>
+              {expert.provider_type === "openai_compatible" ? (
+                <span className="shrink-0 rounded-full bg-amber-50 px-2 py-0.5 text-[10px] font-semibold text-amber-800 dark:bg-amber-950/40 dark:text-amber-200">
+                  {zh ? "用户自定义 · 未经审核" : "Custom · Unreviewed"}
+                </span>
+              ) : null}
+            </div>
             <p className="mt-1 truncate text-xs text-muted-foreground">
               {modelSecondaryLabel(expert)}
             </p>
@@ -554,6 +582,7 @@ function ExpertActions({
   onEdit,
   onToggle,
   onVerify,
+  onVerifyVision,
   onDelete,
 }: ExpertRowProps) {
   const zh = locale === "zh-CN";
@@ -572,6 +601,19 @@ function ExpertActions({
       <RowAction label={zh ? "验证" : "Verify"} onClick={onVerify} disabled={disabled}>
         <ShieldCheck aria-hidden="true" size={14} />
       </RowAction>
+      {expert.provider_type === "openai_compatible" ? (
+        <RowAction
+          label={zh ? "验证视觉" : "Verify vision"}
+          onClick={onVerifyVision}
+          disabled={
+            disabled ||
+            expert.verification_status !== "verified" ||
+            !expert.enabled
+          }
+        >
+          <ShieldCheck aria-hidden="true" size={14} />
+        </RowAction>
+      ) : null}
       <RowAction
         label={expert.enabled ? (zh ? "停用" : "Disable") : zh ? "启用" : "Enable"}
         onClick={onToggle}
@@ -674,6 +716,13 @@ function VerificationBadge({
           {formatCheckedAt(expert.last_checked_at, locale)}
         </p>
       ) : null}
+      {expert.provider_type === "openai_compatible" ? (
+        <p className="mt-1 text-[10px] text-muted-foreground">
+          {zh
+            ? `视觉：${expert.vision_verification_status === "verified" ? "已验证" : "未验证"}`
+            : `Vision: ${expert.vision_verification_status === "verified" ? "verified" : "not verified"}`}
+        </p>
+      ) : null}
     </div>
   );
 }
@@ -712,18 +761,18 @@ function OfficialProviderLinks({
           </button>
         ) : null}
       </div>
-      {catalog.length > 0 ? (
+      {catalog.some((provider) => !provider.custom) ? (
         <div className="mt-3 grid gap-2 md:grid-cols-2 xl:grid-cols-4">
-          {catalog.map((provider) => (
+          {catalog.filter((provider) => !provider.custom).map((provider) => (
             <div
               key={provider.provider_type}
               className="flex min-w-0 items-center justify-between gap-3 rounded-lg bg-slate-50 px-3 py-2.5 dark:bg-slate-900/45"
             >
               <span className="truncate text-xs font-semibold">{provider.display_name}</span>
               <div className="flex shrink-0 items-center gap-2 text-[11px] font-semibold text-primary">
-                <OfficialLink href={provider.console_url} label={zh ? "密钥" : "Keys"} />
-                <OfficialLink href={provider.usage_url} label={zh ? "用量" : "Usage"} />
-                <OfficialLink href={provider.docs_url} label={zh ? "文档" : "Docs"} />
+                <OfficialLink href={provider.console_url!} label={zh ? "密钥" : "Keys"} />
+                <OfficialLink href={provider.usage_url!} label={zh ? "用量" : "Usage"} />
+                <OfficialLink href={provider.docs_url!} label={zh ? "文档" : "Docs"} />
               </div>
             </div>
           ))}
@@ -751,12 +800,14 @@ function ExpertEditorDialog({
   target,
   locale,
   pending,
+  customCatalog,
   onClose,
   onSave,
 }: {
   target: EditorTarget;
   locale: "zh-CN" | "en-US";
   pending: boolean;
+  customCatalog: ProviderCatalogItem | null;
   onClose: () => void;
   onSave: (value: ExpertFormValue) => Promise<void>;
 }) {
@@ -781,12 +832,14 @@ function ExpertEditorDialog({
   );
   const [rpm, setRpm] = useState(String(target.mode === "edit" ? target.expert.rpm : 0));
   const [formError, setFormError] = useState<string | null>(null);
-  const allowsBaseUrl =
-    provider === "openai" ||
-    provider === "zhipu" ||
-    provider === "deepseek" ||
-    provider === "moonshot" ||
-    provider === "qwen";
+  const [riskAccepted, setRiskAccepted] = useState(false);
+  const isCustom = provider === "openai_compatible";
+  const visibleProviderOptions = providerOptions.filter(
+    (option) =>
+      option.value !== "openai_compatible" ||
+      customCatalog !== null ||
+      (target.mode === "edit" && target.expert.provider_type === "openai_compatible"),
+  );
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -798,6 +851,18 @@ function ExpertEditorDialog({
     if (!nextModel || (target.mode === "add" && !nextKey)) {
       setFormError(
         zh ? "请填写模型名称和 API key。" : "Enter a model name and API key.",
+      );
+      return;
+    }
+    if (isCustom && !baseUrl.trim()) {
+      setFormError(zh ? "请填写自定义服务的 Base URL。" : "Enter the custom service base URL.");
+      return;
+    }
+    if (isCustom && (!riskAccepted || !customCatalog?.risk_ack_version)) {
+      setFormError(
+        zh
+          ? "请阅读并确认自定义服务的数据与隐私风险。"
+          : "Read and acknowledge the custom service data and privacy risk.",
       );
       return;
     }
@@ -814,10 +879,11 @@ function ExpertEditorDialog({
         provider,
         apiKey: nextKey,
         model: nextModel,
-        baseUrl: allowsBaseUrl ? baseUrl.trim() : "",
+        baseUrl: isCustom ? baseUrl.trim() : "",
         displayName: displayName.trim(),
         maxConcurrent: nextConcurrency,
         rpm: nextRpm,
+        riskAckVersion: isCustom ? customCatalog?.risk_ack_version ?? null : null,
       });
     } catch (error) {
       setApiKey("");
@@ -873,7 +939,7 @@ function ExpertEditorDialog({
                 setBaseUrl("");
               }}
             >
-              {providerOptions.map((option) => (
+              {visibleProviderOptions.map((option) => (
                 <option key={option.value} value={option.value}>
                   {option.label}
                 </option>
@@ -923,23 +989,39 @@ function ExpertEditorDialog({
             onChange={(event) => setApiKey(event.target.value)}
           />
         </Field>
-        {allowsBaseUrl ? (
+        {isCustom ? (
           <Field
-            label={zh ? "官方 API Base URL（可选）" : "Official API base URL (optional)"}
+            label="API Base URL"
             hint={
               zh
-                ? "仅接受该服务商的官方 HTTPS 地址；通常留空即可。"
-                : "Only the provider's official HTTPS URL is accepted; usually leave this blank."
+                ? "仅接受公网域名的 HTTPS 443 地址；不要填写 /chat/completions。"
+                : "Public-domain HTTPS on port 443 only; omit /chat/completions."
             }
           >
             <Input
               value={baseUrl}
               disabled={pending}
               type="url"
-              placeholder={providerDefaultBaseUrl[provider]}
+              placeholder="https://relay.example.com/v1"
               onChange={(event) => setBaseUrl(event.target.value)}
             />
           </Field>
+        ) : null}
+        {isCustom ? (
+          <label className="flex items-start gap-3 rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 text-sm leading-6 text-amber-950 dark:border-amber-900 dark:bg-amber-950/30 dark:text-amber-100">
+            <input
+              type="checkbox"
+              checked={riskAccepted}
+              disabled={pending}
+              className="mt-1 h-4 w-4 shrink-0 accent-primary"
+              onChange={(event) => setRiskAccepted(event.target.checked)}
+            />
+            <span>
+              {zh
+                ? "此服务由你自行配置，SmarTAI 未审核其隐私、日志或数据保留政策。API Key 以及你选择发送的题目、作答或资料内容会提供给该服务。"
+                : "You configure this service yourself. SmarTAI has not reviewed its privacy, logging, or retention policy. Your API key and any selected questions, submissions, or materials will be sent to it."}
+            </span>
+          </label>
         ) : null}
         <div className="grid gap-4 sm:grid-cols-2">
           <Field label={zh ? "并发上限" : "Max concurrency"} hint="1–10">
@@ -988,10 +1070,17 @@ function ConfirmationDialog({
   onConfirm: () => void;
 }) {
   const zh = locale === "zh-CN";
-  const verify = confirmation.kind === "verify";
+  const verify = confirmation.kind !== "delete";
+  const verifyVision = confirmation.kind === "verify-vision";
   return (
     <LibraryDialog
-      title={verify ? (zh ? "验证模型连通性" : "Verify model connectivity") : zh ? "删除模型配置" : "Delete model configuration"}
+      title={
+        verifyVision
+          ? zh ? "验证模型视觉能力" : "Verify model vision capability"
+          : verify
+            ? zh ? "验证模型文本连通性" : "Verify model text connectivity"
+            : zh ? "删除模型配置" : "Delete model configuration"
+      }
       description={modelDisplayName(confirmation.expert)}
       closeLabel={zh ? "关闭" : "Close"}
       onClose={onClose}
@@ -1007,9 +1096,9 @@ function ConfirmationDialog({
                 ? "处理中…"
                 : "Working…"
               : verify
-                ? zh
-                  ? "发起一次验证"
-                  : "Run one verification"
+                ? verifyVision
+                  ? zh ? "发起视觉验证" : "Run vision verification"
+                  : zh ? "发起文本验证" : "Run text verification"
                 : zh
                   ? "确认删除"
                   : "Delete"}
@@ -1020,8 +1109,12 @@ function ConfirmationDialog({
       {verify ? (
         <div className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm leading-6 text-amber-900 dark:border-amber-900 dark:bg-amber-950/35 dark:text-amber-100">
           {zh
-            ? "系统将向该服务商发送一次最小文本请求。这可能消耗极少量额度；不会自动重试，也不会读取账户余额或用量。"
-            : "SmarTAI will send one minimal text request. It may consume a tiny amount of quota, will not retry automatically, and will not read account balance or usage."}
+            ? verifyVision
+              ? "系统将向该服务发送一张仓库内的合成测试图片。验证通过后，该配置才可用于需要视觉能力的流程。"
+              : "系统将向该服务商发送一次最小合成文本请求。这可能消耗极少量额度；不会自动重试，也不会读取账户余额或用量。"
+            : verifyVision
+              ? "SmarTAI will send one synthetic repository test image. Only a passing result enables this configuration for vision workflows."
+              : "SmarTAI will send one minimal synthetic text request. It may consume a tiny amount of quota, will not retry automatically, and will not read account balance or usage."}
         </div>
       ) : (
         <div className="flex items-start gap-3 rounded-lg border border-rose-200 bg-rose-50 px-4 py-3 text-sm leading-6 text-rose-900 dark:border-rose-900 dark:bg-rose-950/35 dark:text-rose-100">
@@ -1039,7 +1132,7 @@ function ConfirmationDialog({
 
 function InlineError({ message }: { message: string }) {
   return (
-    <div className="flex items-start gap-2 rounded-md border border-danger/40 bg-danger/10 p-3 text-sm text-danger">
+    <div role="alert" className="flex items-start gap-2 rounded-md border border-danger/40 bg-danger/10 p-3 text-sm text-danger">
       <AlertTriangle aria-hidden="true" className="mt-0.5 shrink-0" size={16} />
       <p className="min-w-0 break-words">{message}</p>
     </div>
@@ -1092,6 +1185,21 @@ function safeExpertError(error: unknown, locale: "zh-CN" | "en-US") {
     expert_verification_stale: ["配置已在验证期间改变，请重新验证。", "The configuration changed during verification. Verify again."],
     provider_base_url_not_allowed: ["仅允许该服务商的官方 HTTPS API 地址。", "Only the provider's official HTTPS API URL is allowed."],
     expert_provider_conflict: ["相同服务商与模型的配置已经存在。", "A configuration for this provider and model already exists."],
+    custom_provider_endpoints_disabled: ["自定义中转站功能目前未开放。", "Custom relay endpoints are currently disabled."],
+    custom_provider_limit_reached: ["自定义服务配置已达到数量上限。", "The custom service configuration limit has been reached."],
+    provider_endpoint_invalid: ["Base URL 格式无效，请填写服务根路径且不要包含查询参数。", "The base URL is invalid. Use a service root path without query parameters."],
+    provider_endpoint_https_required: ["自定义服务必须使用 HTTPS。", "Custom services must use HTTPS."],
+    provider_endpoint_host_not_allowed: ["该域名不允许作为公网模型服务地址。", "This hostname is not allowed as a public model endpoint."],
+    provider_endpoint_port_not_allowed: ["自定义服务只允许 HTTPS 443 端口。", "Custom services may use HTTPS port 443 only."],
+    provider_endpoint_dns_failed: ["无法解析该服务域名，请稍后重试。", "The service hostname could not be resolved. Try again later."],
+    provider_endpoint_non_public_address: ["该域名解析到内网或特殊地址，已拒绝连接。", "The hostname resolves to a private or special address and was blocked."],
+    provider_endpoint_redirect_blocked: ["服务返回了重定向；为安全起见未继续请求。", "The service returned a redirect, which was not followed for safety."],
+    provider_endpoint_tls_failed: ["HTTPS 证书校验失败。", "HTTPS certificate validation failed."],
+    provider_endpoint_not_verified: ["请先完成文本验证再启用该配置。", "Complete text verification before enabling this configuration."],
+    provider_endpoint_protocol_mismatch: ["服务响应不符合 OpenAI Chat Completions 合同。", "The response does not match the OpenAI Chat Completions contract."],
+    provider_endpoint_response_too_large: ["服务响应超过安全大小限制。", "The service response exceeded the safe size limit."],
+    provider_endpoint_risk_ack_required: ["请先确认自定义服务的数据与隐私风险。", "Acknowledge the custom service data and privacy risk first."],
+    provider_endpoint_probe_rate_limited: ["操作过于频繁，请稍后重试。", "Too many endpoint checks. Try again shortly."],
   };
   if (code && messages[code]) return zh ? messages[code][0] : messages[code][1];
   return normalized.message || (zh ? "请求失败，请稍后重试。" : "Request failed. Try again later.");

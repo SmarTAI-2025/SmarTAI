@@ -102,6 +102,14 @@ class Settings(BaseSettings):
     shared_pool_daily_request_limit: int = 100
     shared_pool_daily_estimated_token_limit: int = 100_000
 
+    # User-defined public HTTPS OpenAI-compatible endpoints. This stays off in
+    # production until the release gate has matching app + egress evidence.
+    custom_provider_endpoints_enabled: bool = False
+    custom_provider_max_per_owner: int = 10
+    custom_provider_verification_timeout_seconds: int = 30
+    custom_provider_verification_cooldown_seconds: int = 5
+    custom_provider_max_response_bytes: int = 4 * 1024 * 1024
+
     # ─── Human-in-the-loop ─────────────────────────────────────────────────────
     confidence_threshold: float = 0.6  # below this, trigger human review
 

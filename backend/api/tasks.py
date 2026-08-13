@@ -34,6 +34,7 @@ from backend.auth import require_teacher
 from backend.db import assignment_repository, grading_repository, workflow_repository
 from backend.domain.errors import DomainError, InvalidTransition, NotFound, ValidationError
 from backend.knowledge.service import ingest_document
+from backend.llm.endpoint_policy import CUSTOM_PROVIDER_RISK_ACK_VERSION
 from backend.llm.registry import ExpertRegistry, get_scoped_expert_registry
 from backend.models import TaskGradingSetup, User
 from backend.services import task_facade
@@ -569,6 +570,19 @@ def _validate_grading_setup(setup: TaskGradingSetup, registry: ExpertRegistry) -
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, detail={"code": "primary_provider_not_selected"})
     if any(provider_id not in configs or not configs[provider_id].get("enabled") for provider_id in selected):
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, detail={"code": "provider_not_enabled"})
+    if any(
+        configs[provider_id].get("provider_type") == "openai_compatible"
+        and (
+            configs[provider_id].get("verification_status") != "verified"
+            or configs[provider_id].get("risk_ack_version")
+            != CUSTOM_PROVIDER_RISK_ACK_VERSION
+        )
+        for provider_id in selected
+    ):
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={"code": "provider_endpoint_not_verified"},
+        )
     if setup.aggregation_method == "single" and len(selected) != 1:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, detail={"code": "invalid_provider_count"})
     if setup.aggregation_method != "single" and len(selected) < 2:
@@ -586,6 +600,7 @@ def _grading_setup_payload(task_id: str, owner_id: str, registry: ExpertRegistry
             key: item.get(key) for key in (
                 "provider_id", "provider_type", "model", "display_name", "enabled",
                 "scope", "is_shared", "editable", "max_concurrent", "rpm",
+                "verification_status", "vision_verification_status", "base_url",
             )
         })
     default_id = registry.pick_default_id()

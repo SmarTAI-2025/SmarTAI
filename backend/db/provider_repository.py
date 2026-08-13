@@ -8,6 +8,11 @@ from sqlalchemy import select
 
 from backend.db.models import ProviderConfigRecord
 from backend.db.session import session_scope
+from backend.llm.endpoint_policy import (
+    CUSTOM_PROVIDER_TYPE,
+    OFFICIAL_PROVIDER_ENDPOINT_IDENTITIES,
+    normalize_provider_endpoint,
+)
 from backend.models import ProviderConfig
 from backend.security.secrets import EncryptedSecret, decrypt_secret, encrypt_secret
 
@@ -19,10 +24,33 @@ class StoredProviderConfig:
     verification_status: str = "unverified"
     last_checked_at: float | None = None
     verification_error_code: str | None = None
+    vision_verification_status: str = "unverified"
+    vision_last_checked_at: float | None = None
+    vision_verification_error_code: str | None = None
+    risk_ack_version: str | None = None
+    risk_ack_at: float | None = None
+    updated_at: float | None = None
 
 
 def _associated_data(owner_id: str, record_id: str) -> str:
     return f"provider-config:{owner_id}:{record_id}"
+
+
+def _endpoint_identity(config: ProviderConfig) -> str:
+    if config.provider_type == CUSTOM_PROVIDER_TYPE:
+        _, canonical = normalize_provider_endpoint(
+            config.provider_type,
+            config.base_url,
+        )
+        if config.endpoint_identity not in {None, canonical}:
+            raise ValueError("custom_provider_endpoint_identity_mismatch")
+        return canonical
+    return (
+        config.endpoint_identity
+        or OFFICIAL_PROVIDER_ENDPOINT_IDENTITIES.get(config.provider_type)
+        or config.base_url
+        or ""
+    )
 
 
 def _to_config(record: ProviderConfigRecord, master_key: str) -> ProviderConfig:
@@ -36,6 +64,7 @@ def _to_config(record: ProviderConfigRecord, master_key: str) -> ProviderConfig:
         api_key=api_key,
         model=record.model,
         base_url=record.base_url,
+        endpoint_identity=record.endpoint_identity,
         enabled=record.enabled,
         display_name=record.display_name,
         max_concurrent=max(1, record.max_concurrent),
@@ -43,12 +72,20 @@ def _to_config(record: ProviderConfigRecord, master_key: str) -> ProviderConfig:
     )
 
 
-def upsert_provider_config(owner_id: str, config: ProviderConfig, *, master_key: str) -> ProviderConfigRecord:
+def upsert_provider_config(
+    owner_id: str,
+    config: ProviderConfig,
+    *,
+    master_key: str,
+    risk_ack_version: str | None = None,
+) -> ProviderConfigRecord:
     now = time.time()
+    endpoint_identity = _endpoint_identity(config)
     with session_scope() as session:
         record = session.scalar(select(ProviderConfigRecord).where(
             ProviderConfigRecord.owner_id == owner_id,
             ProviderConfigRecord.provider_type == config.provider_type,
+            ProviderConfigRecord.endpoint_identity == endpoint_identity,
             ProviderConfigRecord.model == config.model,
         ))
         if record is None:
@@ -56,6 +93,7 @@ def upsert_provider_config(owner_id: str, config: ProviderConfig, *, master_key:
                 id=uuid.uuid4().hex,
                 owner_id=owner_id,
                 provider_type=config.provider_type,
+                endpoint_identity=endpoint_identity,
                 model=config.model,
                 created_at=now,
             )
@@ -66,6 +104,7 @@ def upsert_provider_config(owner_id: str, config: ProviderConfig, *, master_key:
             associated_data=_associated_data(owner_id, record.id),
         )
         record.base_url = config.base_url
+        record.endpoint_identity = endpoint_identity
         record.display_name = config.display_name
         record.encrypted_api_key = encrypted.ciphertext
         record.nonce = encrypted.nonce
@@ -76,6 +115,11 @@ def upsert_provider_config(owner_id: str, config: ProviderConfig, *, master_key:
         record.verification_status = "unverified"
         record.last_checked_at = None
         record.verification_error_code = None
+        record.vision_verification_status = "unverified"
+        record.vision_last_checked_at = None
+        record.vision_verification_error_code = None
+        record.risk_ack_version = risk_ack_version
+        record.risk_ack_at = now if risk_ack_version else None
         record.updated_at = now
         return record
 
@@ -91,6 +135,12 @@ def list_provider_configs(owner_id: str, *, master_key: str) -> list[StoredProvi
             verification_status=record.verification_status,
             last_checked_at=record.last_checked_at,
             verification_error_code=record.verification_error_code,
+            vision_verification_status=record.vision_verification_status,
+            vision_last_checked_at=record.vision_last_checked_at,
+            vision_verification_error_code=record.vision_verification_error_code,
+            risk_ack_version=record.risk_ack_version,
+            risk_ack_at=record.risk_ack_at,
+            updated_at=record.updated_at,
         )
         for record in records
     ]
@@ -121,6 +171,12 @@ def get_provider_config(owner_id: str, provider_id: str, *, master_key: str) -> 
         verification_status=record.verification_status,
         last_checked_at=record.last_checked_at,
         verification_error_code=record.verification_error_code,
+        vision_verification_status=record.vision_verification_status,
+        vision_last_checked_at=record.vision_last_checked_at,
+        vision_verification_error_code=record.vision_verification_error_code,
+        risk_ack_version=record.risk_ack_version,
+        risk_ack_at=record.risk_ack_at,
+        updated_at=record.updated_at,
     )
 
 
@@ -130,6 +186,7 @@ def update_provider_config(
     config: ProviderConfig,
     *,
     master_key: str,
+    risk_ack_version: str | None = None,
 ) -> StoredProviderConfig | None:
     """Replace one owner-scoped record while preserving its stable id.
 
@@ -138,6 +195,7 @@ def update_provider_config(
     never written to logs or returned by public API serializers.
     """
     now = time.time()
+    endpoint_identity = _endpoint_identity(config)
     with session_scope() as session:
         record = session.scalar(select(ProviderConfigRecord).where(
             ProviderConfigRecord.id == provider_id,
@@ -153,6 +211,7 @@ def update_provider_config(
         record.provider_type = config.provider_type
         record.model = config.model
         record.base_url = config.base_url
+        record.endpoint_identity = endpoint_identity
         record.display_name = config.display_name
         record.encrypted_api_key = encrypted.ciphertext
         record.nonce = encrypted.nonce
@@ -163,6 +222,11 @@ def update_provider_config(
         record.verification_status = "unverified"
         record.last_checked_at = None
         record.verification_error_code = None
+        record.vision_verification_status = "unverified"
+        record.vision_last_checked_at = None
+        record.vision_verification_error_code = None
+        record.risk_ack_version = risk_ack_version
+        record.risk_ack_at = now if risk_ack_version else None
         record.updated_at = now
         session.flush()
         return StoredProviderConfig(
@@ -171,6 +235,12 @@ def update_provider_config(
             verification_status=record.verification_status,
             last_checked_at=record.last_checked_at,
             verification_error_code=record.verification_error_code,
+            vision_verification_status=record.vision_verification_status,
+            vision_last_checked_at=record.vision_last_checked_at,
+            vision_verification_error_code=record.vision_verification_error_code,
+            risk_ack_version=record.risk_ack_version,
+            risk_ack_at=record.risk_ack_at,
+            updated_at=record.updated_at,
         )
 
 
@@ -181,6 +251,7 @@ def set_provider_verification(
     verification_status: str,
     checked_at: float,
     error_code: str | None = None,
+    expected_updated_at: float | None = None,
 ) -> bool:
     with session_scope() as session:
         record = session.scalar(
@@ -191,9 +262,36 @@ def set_provider_verification(
         )
         if record is None:
             return False
+        if expected_updated_at is not None and record.updated_at != expected_updated_at:
+            return False
         record.verification_status = verification_status
         record.last_checked_at = checked_at
         record.verification_error_code = error_code
+        record.updated_at = checked_at
+        return True
+
+
+def set_provider_vision_verification(
+    owner_id: str,
+    provider_id: str,
+    *,
+    verification_status: str,
+    checked_at: float,
+    error_code: str | None = None,
+    expected_updated_at: float | None = None,
+) -> bool:
+    with session_scope() as session:
+        record = session.scalar(select(ProviderConfigRecord).where(
+            ProviderConfigRecord.id == provider_id,
+            ProviderConfigRecord.owner_id == owner_id,
+        ))
+        if record is None:
+            return False
+        if expected_updated_at is not None and record.updated_at != expected_updated_at:
+            return False
+        record.vision_verification_status = verification_status
+        record.vision_last_checked_at = checked_at
+        record.vision_verification_error_code = error_code
         record.updated_at = checked_at
         return True
 

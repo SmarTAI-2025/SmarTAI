@@ -18,6 +18,7 @@ from threading import Lock
 from fastapi import Depends, HTTPException, status
 
 from backend.config import settings
+from backend.llm.endpoint_policy import CUSTOM_PROVIDER_RISK_ACK_VERSION
 from backend.models import ProviderConfig
 from backend.llm.providers import BaseProvider, build_provider
 
@@ -196,9 +197,21 @@ class ExpertRegistry:
         verification_status: str = "unverified",
         last_checked_at: float | None = None,
         verification_error_code: str | None = None,
+        vision_verification_status: str = "unverified",
+        vision_last_checked_at: float | None = None,
+        vision_verification_error_code: str | None = None,
+        risk_ack_version: str | None = None,
+        risk_ack_at: float | None = None,
     ) -> str:
         """Register or update a provider. Returns its provider_id."""
+        if self._uses_shared_pool and config.provider_type == "openai_compatible":
+            raise ValueError("custom_provider_shared_pool_not_allowed")
         provider = build_provider(config)
+        if (
+            config.provider_type == "openai_compatible"
+            and vision_verification_status == "verified"
+        ):
+            provider.supports_vision = True
         registry_id = provider_id or provider.provider_id
         with self._lock:
             self._providers[registry_id] = provider
@@ -210,6 +223,11 @@ class ExpertRegistry:
                     last_checked_at if verification_status == "verified" else None
                 ),
                 "verification_error_code": verification_error_code,
+                "vision_verification_status": vision_verification_status,
+                "vision_last_checked_at": vision_last_checked_at,
+                "vision_verification_error_code": vision_verification_error_code,
+                "risk_ack_version": risk_ack_version,
+                "risk_ack_at": risk_ack_at,
             }
         logger.info("Registered expert configuration; provider_type=%s", config.provider_type)
         return registry_id
@@ -225,33 +243,87 @@ class ExpertRegistry:
             logger.info(f"Unregistered expert: {provider_id}")
         return existed
 
-    def get(self, provider_id: str) -> Optional[BaseProvider]:
-        """Look up a provider by its provider_id."""
+    def get(
+        self,
+        provider_id: str,
+        *,
+        include_unverified: bool = False,
+    ) -> Optional[BaseProvider]:
+        """Look up one provider, hiding unusable custom endpoints by default.
+
+        Existing official-provider callers historically receive disabled
+        providers from ``get`` and separately gate them via ``list_configs``.
+        Preserve that contract while custom endpoints fail closed here.
+        """
         with self._lock:
             provider = self._providers.get(provider_id)
+            if (
+                provider is not None
+                and not include_unverified
+                and self._configs[provider_id].provider_type == "openai_compatible"
+                and not self._is_text_available_unlocked(provider_id)
+            ):
+                provider = None
         return self._guard_shared(provider)
 
     def list_available(self) -> List[BaseProvider]:
         """Return all enabled providers. Order is deterministic (sorted by provider_id)."""
         with self._lock:
             available = sorted(
-                [p for pid, p in self._providers.items() if self._configs[pid].enabled],
+                [
+                    provider
+                    for provider_id, provider in self._providers.items()
+                    if self._is_text_available_unlocked(provider_id)
+                ],
                 key=lambda p: p.provider_id,
             )
         return [self._guard_shared(provider) for provider in available]
+
+    def _is_text_available_unlocked(self, provider_id: str) -> bool:
+        config = self._configs[provider_id]
+        verification = self._verification.get(provider_id, {})
+        return bool(
+            config.enabled
+            and (
+                config.provider_type != "openai_compatible"
+                or (
+                    settings.custom_provider_endpoints_enabled
+                    and verification.get("verification_status") == "verified"
+                    and verification.get("risk_ack_version")
+                    == CUSTOM_PROVIDER_RISK_ACK_VERSION
+                )
+            )
+        )
 
     def _guard_shared(self, provider: Optional[BaseProvider]):
         if provider is None or not self._uses_shared_pool:
             return provider
         return _GuardedSharedProvider(provider, self._shared_owner_id or "anonymous")
 
+    def _registry_id_for_provider(self, provider: BaseProvider) -> str | None:
+        target = (
+            provider._provider
+            if isinstance(provider, _GuardedSharedProvider)
+            else provider
+        )
+        with self._lock:
+            return next(
+                (
+                    provider_id
+                    for provider_id, registered in self._providers.items()
+                    if registered is target
+                ),
+                None,
+            )
+
     def list_enabled_configs(self) -> List[ProviderConfig]:
         """Trusted backend-only view used by the owner-scoped RAG embedder."""
         with self._lock:
             return [
                 config.model_copy(deep=True)
-                for config in self._configs.values()
+                for provider_id, config in self._configs.items()
                 if config.enabled
+                and config.provider_type != "openai_compatible"
             ]
 
     def uses_shared_pool(self) -> bool:
@@ -273,7 +345,19 @@ class ExpertRegistry:
                     "provider_type": c.provider_type,
                     "model": c.model,
                     "base_url": c.base_url,
-                    "enabled": c.enabled,
+                    "enabled": bool(
+                        c.enabled
+                        and (
+                            c.provider_type != "openai_compatible"
+                            or (
+                                settings.custom_provider_endpoints_enabled
+                                and verification.get("verification_status")
+                                == "verified"
+                                and verification.get("risk_ack_version")
+                                == CUSTOM_PROVIDER_RISK_ACK_VERSION
+                            )
+                        )
+                    ),
                     "display_name": c.display_name or pid,
                     "max_concurrent": c.max_concurrent,
                     "rpm": c.rpm,
@@ -292,6 +376,19 @@ class ExpertRegistry:
                     ),
                     "verification_error_code": verification.get(
                         "verification_error_code"
+                    ),
+                    "vision_verification_status": verification.get(
+                        "vision_verification_status", "unverified"
+                    ),
+                    "vision_last_checked_at": _iso_utc_timestamp(
+                        verification.get("vision_last_checked_at")
+                    ),
+                    "vision_verification_error_code": verification.get(
+                        "vision_verification_error_code"
+                    ),
+                    "risk_ack_version": verification.get("risk_ack_version"),
+                    "risk_ack_at": _iso_utc_timestamp(
+                        verification.get("risk_ack_at")
                     ),
                 })
             return out
@@ -316,6 +413,16 @@ class ExpertRegistry:
             for provider_id in unique_ids
         ):
             raise ValueError("provider_not_enabled")
+        if any(
+            configs[provider_id].get("provider_type") == "openai_compatible"
+            and (
+                configs[provider_id].get("verification_status") != "verified"
+                or configs[provider_id].get("risk_ack_version")
+                != CUSTOM_PROVIDER_RISK_ACK_VERSION
+            )
+            for provider_id in unique_ids
+        ):
+            raise ValueError("provider_endpoint_not_verified")
         return ExpertRegistryView(
             self,
             unique_ids,
@@ -349,7 +456,7 @@ class ExpertRegistry:
                 (
                     (provider_id, config)
                     for provider_id, config in self._configs.items()
-                    if config.enabled
+                    if self._is_text_available_unlocked(provider_id)
                 ),
                 key=lambda item: item[0],
             )
@@ -371,14 +478,30 @@ class ExpertRegistry:
         If the caller already picked a default provider and it supports vision,
         keep using it. Otherwise fall back to the first enabled vision provider.
         """
-        available = self.list_available()
+        available = [
+            provider
+            for provider in self.list_available()
+            if self._vision_verified(provider)
+        ]
         if preferred is not None and getattr(preferred, "supports_vision", False):
-            if any(p.provider_id == preferred.provider_id for p in available):
+            preferred_id = self._registry_id_for_provider(preferred)
+            if preferred_id is not None and any(
+                self._registry_id_for_provider(provider) == preferred_id
+                for provider in available
+            ):
                 return preferred
         for p in available:
             if getattr(p, "supports_vision", False):
                 return p
         return None
+
+    def _vision_verified(self, provider: BaseProvider) -> bool:
+        if provider.provider_type != "openai_compatible":
+            return True
+        registry_id = self._registry_id_for_provider(provider)
+        with self._lock:
+            verification = self._verification.get(registry_id or "", {})
+        return verification.get("vision_verification_status") == "verified"
 
 
 class ExpertRegistryView:
@@ -446,12 +569,31 @@ class ExpertRegistryView:
         return self._primary_provider_id if self.get(self._primary_provider_id) else None
 
     def pick_vision(self, preferred: Optional[BaseProvider] = None) -> Optional[BaseProvider]:
-        available = self.list_available()
+        configs = {
+            str(item.get("provider_id")): item for item in self.list_configs()
+        }
+        available: List[tuple[str, BaseProvider]] = []
+        for provider_id in self._provider_ids:
+            provider = self._registry.get(provider_id)
+            metadata = configs.get(provider_id, {})
+            if provider is None:
+                continue
+            if (
+                metadata.get("provider_type") == "openai_compatible"
+                and metadata.get("vision_verification_status") != "verified"
+            ):
+                continue
+            available.append((provider_id, provider))
         if preferred is not None and getattr(preferred, "supports_vision", False):
-            if any(item.provider_id == preferred.provider_id for item in available):
+            preferred_id = self._registry._registry_id_for_provider(preferred)
+            if any(provider_id == preferred_id for provider_id, _ in available):
                 return preferred
         return next(
-            (item for item in available if getattr(item, "supports_vision", False)),
+            (
+                item
+                for _, item in available
+                if getattr(item, "supports_vision", False)
+            ),
             None,
         )
 
@@ -506,6 +648,11 @@ def _build_scoped_registry(current) -> ExpertRegistry:
                 verification_status=stored.verification_status,
                 last_checked_at=stored.last_checked_at,
                 verification_error_code=stored.verification_error_code,
+                vision_verification_status=stored.vision_verification_status,
+                vision_last_checked_at=stored.vision_last_checked_at,
+                vision_verification_error_code=stored.vision_verification_error_code,
+                risk_ack_version=stored.risk_ack_version,
+                risk_ack_at=stored.risk_ack_at,
             )
     except ValueError as exc:
         logger.error("Unable to load encrypted provider configurations for user %s", current.id)
