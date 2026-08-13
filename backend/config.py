@@ -143,6 +143,31 @@ class Settings(BaseSettings):
     # How often the poller looks for queued runs to claim.
     grading_poll_seconds: int = int(os.getenv("SMARTAI_GRADING_POLL_SECONDS", "5"))
 
+    # ─── Workflow operation worker (DB-W2-2) ────────────────────────────────
+    # Stable per-process identity used as the operation lease owner. Multiple
+    # processes each get their own id; the DB lease predicate makes concurrent
+    # claims safe. A claimed operation lease is only held by this id.
+    workflow_worker_id: str = os.getenv(
+        "SMARTAI_WORKFLOW_WORKER_ID", f"workflow-{os.getpid()}"
+    )
+    # How long a claimed workflow operation lease stays valid before another
+    # worker may reclaim it.
+    workflow_lease_seconds: int = int(os.getenv("SMARTAI_WORKFLOW_LEASE_SECONDS", "300"))
+    # How often a worker renews a claim's lease while its handler runs.
+    workflow_heartbeat_seconds: int = int(os.getenv("SMARTAI_WORKFLOW_HEARTBEAT_SECONDS", "60"))
+    # How often the poller looks for claimable workflow operations.
+    workflow_poll_seconds: int = int(os.getenv("SMARTAI_WORKFLOW_POLL_SECONDS", "5"))
+    # Maximum rows the poller claims in one tick.
+    workflow_claim_batch_size: int = int(os.getenv("SMARTAI_WORKFLOW_CLAIM_BATCH_SIZE", "10"))
+    # Maximum handlers running concurrently across the whole worker. Polling
+    # stops claiming new rows once this many dispatches are in flight.
+    workflow_max_in_flight: int = int(os.getenv("SMARTAI_WORKFLOW_MAX_IN_FLIGHT", "4"))
+    # Maximum time application shutdown waits for worker-owned tasks after
+    # cancellation. Leases are left to expire when a handler ignores cancel.
+    workflow_shutdown_seconds: float = float(
+        os.getenv("SMARTAI_WORKFLOW_SHUTDOWN_SECONDS", "10")
+    )
+
     # ─── OCR / vision ingest ───────────────────────────────────────────────────
     ocr_default_provider: Literal["llm_vision", "mathpix"] = "llm_vision"
     ocr_max_pdf_pages: int = 30
