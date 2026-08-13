@@ -278,3 +278,105 @@ def test_postgres_operation_checkpoint_cas_and_owner_isolation(pg_database):
             stage="hidden",
             checkpoint={},
         )
+
+
+def test_postgres_operation_lease_one_winner_claim(pg_database):
+    from backend.db import (
+        assignment_repository,
+        course_repository,
+        workflow_repository,
+    )
+    from backend.domain.errors import LeaseLost
+
+    teacher = _seed_user("teacher")
+    course = course_repository.create_course(teacher_id=teacher, name="C")
+    assignment = assignment_repository.create_assignment(
+        teacher_id=teacher,
+        course_id=course.id,
+        name="A",
+    )
+    workflow_repository.ensure_workflow(
+        assignment_id=assignment.id,
+        owner_id=teacher,
+    )
+    operation, _ = workflow_repository.create_operation(
+        assignment_id=assignment.id,
+        owner_id=teacher,
+        operation_type="submission_recognition",
+        input_hash=uuid.uuid4().hex,
+    )
+
+    def claim(worker: str):
+        try:
+            workflow_repository.claim_operation(
+                operation.id,
+                owner_id=teacher,
+                worker_id=worker,
+                lease_seconds=60,
+            )
+            return "claimed"
+        except LeaseLost:
+            return "lost"
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        results = list(executor.map(claim, ("worker-a", "worker-b")))
+
+    assert results.count("claimed") == 1
+    assert results.count("lost") == 1
+    persisted = workflow_repository.get_operation(operation.id, owner_id=teacher)
+    assert persisted.status == "running"
+    assert persisted.lease_owner in {"worker-a", "worker-b"}
+    assert persisted.lease_token is not None
+    assert persisted.lease_expires_at is not None
+
+
+def test_postgres_live_lease_rejects_same_worker_claim(pg_database):
+    """A live lease fences a second claim even from the same worker_id.
+
+    Two concurrent coroutines in one process share a worker_id; the claim
+    predicate must not treat ``lease_owner == worker_id`` as claimable, or both
+    could win and rotate the token independently.
+    """
+    from backend.db import (
+        assignment_repository,
+        course_repository,
+        workflow_repository,
+    )
+    from backend.domain.errors import LeaseLost
+
+    teacher = _seed_user("teacher")
+    course = course_repository.create_course(teacher_id=teacher, name="A")
+    assignment = assignment_repository.create_assignment(
+        teacher_id=teacher,
+        course_id=course.id,
+        name="A",
+    )
+    workflow_repository.ensure_workflow(
+        assignment_id=assignment.id,
+        owner_id=teacher,
+    )
+    operation, _ = workflow_repository.create_operation(
+        assignment_id=assignment.id,
+        owner_id=teacher,
+        operation_type="submission_recognition",
+        input_hash=uuid.uuid4().hex,
+    )
+
+    first = workflow_repository.claim_operation(
+        operation.id,
+        owner_id=teacher,
+        worker_id="worker-a",
+        lease_seconds=60,
+    )
+    with pytest.raises(LeaseLost) as second_claim:
+        workflow_repository.claim_operation(
+            operation.id,
+            owner_id=teacher,
+            worker_id="worker-a",
+            lease_seconds=60,
+        )
+    assert second_claim.value.code == "operation_not_claimable"
+
+    persisted = workflow_repository.get_operation(operation.id, owner_id=teacher)
+    assert persisted.lease_owner == "worker-a"
+    assert persisted.lease_token == first.lease_token

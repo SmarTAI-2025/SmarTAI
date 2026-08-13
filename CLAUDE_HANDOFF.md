@@ -46,6 +46,79 @@ modify `task_facade.py`, or modify `main.py` in this assignment.
 Record modified files, RED/GREEN commands and results, design concerns, and
 remaining verification gaps in a new `Claude -> Codex (DB-W2-1)` section.
 
+### Codex review fixes required after timed-out first pass
+
+The first Claude invocation timed out while tests were still running and did
+not write its required summary. Preserve the useful implementation, but fix
+these issues with focused RED tests before declaring DB-W2-1 complete:
+
+1. `claim_operation` currently treats a live lease held by the same
+   `worker_id` as claimable and rotates its token. Two concurrent coroutines in
+   one process can therefore both receive a successful claim. Any live lease,
+   including one with the same worker ID, must reject a second claim; only an
+   unleased or expired row may be claimed/reclaimed.
+2. The lease consistency check allows null owner/token with non-null expiry or
+   heartbeat. Tighten it so an inactive lease has all four lease fields null,
+   while an active lease has owner, token, expiry, and heartbeat non-null.
+3. Validate non-empty bounded `worker_id` and `lease_token` inputs before SQL,
+   using stable validation codes rather than leaking database/string-length
+   failures. Add boundary tests.
+4. Run the focused tests in a command that terminates; diagnose the previous
+   hang if it repeats. Record exact RED and GREEN outputs plus all modified
+   files and the live-PostgreSQL skip/result in `Claude -> Codex (DB-W2-1)`.
+
+Do not start DB-W2-2, commit, or push.
+
+## Claude -> Codex (DB-W2-1)
+
+Both non-interactive Claude Code invocations wrote their changes to disk but
+hit the outer 15-minute and 10-minute command timeouts before returning a
+final response. Codex stopped the orphaned task processes, reviewed the diff,
+and performed independent verification. The missing Claude final response is
+a process gap; no implementation result is inferred from it.
+
+### Implemented files
+
+- `backend/db/migrations/versions/0007_operation_leases.py`
+- `backend/db/workflow_repository.py`
+- `backend/tests/test_workflow_operation_leases.py`
+- `backend/tests/test_migration_roundtrip.py`
+- `backend/tests/test_postgres_integration.py`
+
+The change adds a four-field operation lease with a consistency constraint,
+claim index, random token rotation on reclaim, atomic claim/heartbeat/release,
+bounded claim polling, and attempt-plus-token fencing for checkpoint and
+terminal writes. New attempts clear all lease state.
+
+### Codex review correction
+
+The first pass allowed a live lease to be claimed again by the same
+`worker_id`. Codex rejected that behavior because two coroutines in one process
+share a worker ID and could both receive success. The corrected predicate
+allows only unleased or expired rows; focused tests cover sequential and
+concurrent same-worker claims. The lease check was also tightened so all four
+lease fields are either null or non-null, and worker/token inputs now use
+stable validation errors.
+
+### Independent verification
+
+- `python -m pytest backend/tests/test_workflow_operation_leases.py -q`:
+  `25 passed in 21.60s`.
+- `python -m pytest backend/tests/test_workflow_operation_checkpoints.py backend/tests/test_workflow_source_outcomes.py backend/tests/test_task_background_workflows.py backend/tests/test_migration_roundtrip.py -q`:
+  `79 passed, 34 warnings in 120.70s`; warnings are the existing Alembic
+  `path_separator` deprecation warning.
+- `python -m pytest backend/tests/test_postgres_integration.py -q -rs`:
+  `8 skipped`; `SMARTAI_TEST_POSTGRES_URL` is not configured locally.
+- `python -m alembic heads`: `0007_operation_leases (head)`.
+- `git diff --check`: passed; only CRLF conversion notices for this handoff
+  file were emitted by subsequent diff commands.
+
+### Remaining gap
+
+The live PostgreSQL one-winner and same-worker fencing tests were added but
+could not run locally. GitHub Actions or a configured PostgreSQL test service
+must execute them before merge. W2-2 is not included in this change.
+
 ## Current Task
 
 Fix the three failed GitHub Actions jobs for commit

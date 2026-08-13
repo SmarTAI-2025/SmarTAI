@@ -49,6 +49,7 @@ from backend.db.models import (  # noqa: F401
 from backend.db.session import session_scope
 from backend.domain.errors import (
     InvalidTransition,
+    LeaseLost,
     NotFound,
     ResultNotReleasable,
     ValidationError,
@@ -63,6 +64,9 @@ MAX_OPERATION_TERMINAL_SUMMARY_BYTES = 16 * 1024
 MAX_OPERATION_ARTIFACT_REFS = 100
 MAX_OPERATION_ARTIFACT_REF_LENGTH = 64
 MAX_OPERATION_ARTIFACT_REFS_BYTES = 8 * 1024
+MAX_OPERATION_CLAIM_BATCH = 100
+MAX_LEASE_OWNER_LENGTH = 128
+MAX_LEASE_TOKEN_LENGTH = 64
 
 
 def _validate_json_object(
@@ -221,9 +225,17 @@ class WorkflowOperationRecord(Base):
             name="uq_workflow_operations_assignment_type_hash",
         ),
         Index("ix_workflow_operations_assignment_status", "assignment_id", "status"),
+        Index("ix_workflow_operations_claimable", "status", "lease_expires_at"),
         CheckConstraint(
             "checkpoint_revision >= 0",
             name="ck_workflow_operations_checkpoint_revision_nonnegative",
+        ),
+        CheckConstraint(
+            "(lease_owner IS NULL AND lease_token IS NULL"
+            " AND lease_expires_at IS NULL AND lease_heartbeat_at IS NULL)"
+            " OR (lease_owner IS NOT NULL AND lease_token IS NOT NULL"
+            " AND lease_expires_at IS NOT NULL AND lease_heartbeat_at IS NOT NULL)",
+            name="ck_workflow_operations_lease_consistency",
         ),
     )
 
@@ -260,6 +272,16 @@ class WorkflowOperationRecord(Base):
     updated_at: Mapped[float] = mapped_column(Float, nullable=False, default=time.time)
     completed_at: Mapped[float | None] = mapped_column(Float, nullable=True)
     expires_at: Mapped[float | None] = mapped_column(Float, nullable=True, index=True)
+    # Operation lease fencing. Only the worker holding the current
+    # (lease_owner, lease_token) with a live lease_expires_at may heartbeat,
+    # checkpoint, write terminal state, or release. lease_token is random and
+    # rotates on every claim/reclaim, so a fenced worker's old token is
+    # rejected by predicate. owner/token are null together; an active lease
+    # always has an expiry.
+    lease_owner: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    lease_token: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    lease_expires_at: Mapped[float | None] = mapped_column(Float, nullable=True)
+    lease_heartbeat_at: Mapped[float | None] = mapped_column(Float, nullable=True)
 
 
 class AssignmentStudentPresentationRecord(Base):
@@ -353,6 +375,65 @@ class ResultArtifactManifestRecord(Base):
 
 def _new_id(prefix: str) -> str:
     return f"{prefix}_{uuid.uuid4().hex[:12]}"
+
+
+def _new_lease_token() -> str:
+    return uuid.uuid4().hex
+
+
+def _validate_worker_id(worker_id: str) -> str:
+    if (
+        not isinstance(worker_id, str)
+        or not worker_id
+        or len(worker_id) > MAX_LEASE_OWNER_LENGTH
+    ):
+        raise ValidationError(
+            "Worker ID must be a non-empty string of at most "
+            f"{MAX_LEASE_OWNER_LENGTH} characters.",
+            code="invalid_worker_id",
+        )
+    return worker_id
+
+
+def _validate_lease_token(lease_token: str | None) -> str | None:
+    if lease_token is None:
+        return None
+    if (
+        not isinstance(lease_token, str)
+        or not lease_token
+        or len(lease_token) > MAX_LEASE_TOKEN_LENGTH
+    ):
+        raise ValidationError(
+            "Lease token must be a non-empty string of at most "
+            f"{MAX_LEASE_TOKEN_LENGTH} characters.",
+            code="invalid_lease_token",
+        )
+    return lease_token
+
+
+def _lease_write_predicate(expected_lease_token: str | None, now: float):
+    if expected_lease_token is None:
+        # Legacy non-worker writes are allowed only on rows with no active
+        # lease; a live lease fences any writer that cannot present its token.
+        return WorkflowOperationRecord.lease_owner.is_(None)
+    return and_(
+        WorkflowOperationRecord.lease_token == expected_lease_token,
+        WorkflowOperationRecord.lease_expires_at >= now,
+    )
+
+
+def _lease_allows_write(
+    record: WorkflowOperationRecord,
+    expected_lease_token: str | None,
+    now: float,
+) -> bool:
+    if expected_lease_token is None:
+        return record.lease_owner is None
+    return (
+        record.lease_token == expected_lease_token
+        and record.lease_expires_at is not None
+        and record.lease_expires_at >= now
+    )
 
 
 def get_create_idempotency(
@@ -680,6 +761,10 @@ def create_operation(
                 artifact_refs=[], terminal_summary=None,
                 error_code=None, updated_at=now, completed_at=None,
                 expires_at=expires_at,
+                # A new retry generation is unleased; the worker that claims
+                # it receives a fresh token.
+                lease_owner=None, lease_token=None,
+                lease_expires_at=None, lease_heartbeat_at=None,
             )
         )
         if claimed.rowcount == 1:
@@ -740,6 +825,7 @@ def get_operation(operation_id: str, *, owner_id: str) -> WorkflowOperationRecor
 
 def update_operation(
     operation_id: str, *, owner_id: str, expected_attempt: int,
+    expected_lease_token: str | None = None,
     **changes: Any,
 ) -> WorkflowOperationRecord:
     allowed = {"status", "progress", "payload", "error_code", "completed_at", "expires_at"}
@@ -756,6 +842,7 @@ def update_operation(
             field="progress",
             max_bytes=MAX_OPERATION_PROGRESS_BYTES,
         )
+    _validate_lease_token(expected_lease_token)
     now = time.time()
     with session_scope() as session:
         result = session.execute(
@@ -764,6 +851,7 @@ def update_operation(
                 WorkflowOperationRecord.owner_id == owner_id,
                 WorkflowOperationRecord.attempt == expected_attempt,
                 WorkflowOperationRecord.terminal_summary.is_(None),
+                _lease_write_predicate(expected_lease_token, now),
             ).values(**values, updated_at=now)
         )
         if result.rowcount != 1:
@@ -777,6 +865,11 @@ def update_operation(
                 raise InvalidTransition(
                     "The workflow operation already has a terminal summary.",
                     code="operation_already_terminal",
+                )
+            if not _lease_allows_write(current, expected_lease_token, now):
+                raise LeaseLost(
+                    "The operation lease is held by another worker or expired.",
+                    code="lease_lost",
                 )
             raise VersionConflict(
                 "A newer workflow operation attempt is active.",
@@ -802,6 +895,7 @@ def save_operation_checkpoint(
     artifact_refs: list[str] | None = None,
     terminal_summary: dict | None = None,
     terminal_status: str | None = None,
+    expected_lease_token: str | None = None,
 ) -> WorkflowOperationRecord:
     stage = _validate_checkpoint_stage(stage)
     checkpoint = _validate_json_object(
@@ -833,6 +927,7 @@ def save_operation_checkpoint(
     refs = _validate_artifact_refs(
         artifact_refs if artifact_refs is not None else []
     )
+    _validate_lease_token(expected_lease_token)
     now = time.time()
 
     with session_scope() as session:
@@ -865,7 +960,16 @@ def save_operation_checkpoint(
             "updated_at": now,
         }
         if terminal_status is not None:
-            checkpoint_values.update(status=terminal_status, completed_at=now)
+            checkpoint_values.update(
+                status=terminal_status,
+                completed_at=now,
+                # A terminal transition releases only its own matching lease;
+                # a fenced or stale worker never reaches this branch.
+                lease_owner=None,
+                lease_token=None,
+                lease_expires_at=None,
+                lease_heartbeat_at=None,
+            )
 
         result = session.execute(
             update(WorkflowOperationRecord).where(
@@ -875,6 +979,7 @@ def save_operation_checkpoint(
                 WorkflowOperationRecord.checkpoint_revision
                 == expected_checkpoint_revision,
                 WorkflowOperationRecord.terminal_summary.is_(None),
+                _lease_write_predicate(expected_lease_token, now),
             ).values(**checkpoint_values)
         )
         if result.rowcount != 1:
@@ -900,6 +1005,11 @@ def save_operation_checkpoint(
                     "The workflow operation already has a terminal summary.",
                     code="operation_already_terminal",
                 )
+            if not _lease_allows_write(latest, expected_lease_token, now):
+                raise LeaseLost(
+                    "The operation lease is held by another worker or expired.",
+                    code="lease_lost",
+                )
             raise VersionConflict(
                 "The workflow operation checkpoint changed.",
                 code="stale_checkpoint_revision",
@@ -911,6 +1021,218 @@ def save_operation_checkpoint(
         ))
         assert row is not None
         return _detach_operation(row)
+
+
+def claim_operation(
+    operation_id: str,
+    *,
+    owner_id: str,
+    worker_id: str,
+    lease_seconds: int,
+) -> WorkflowOperationRecord:
+    """Atomically claim or reclaim an operation's lease with a fresh token.
+
+    The conditional UPDATE matches a row that is pending or running and is
+    either never leased or whose lease has expired. Any live lease — including
+    one held by this same ``worker_id`` — rejects a second claim, so two
+    concurrent coroutines in one process cannot both win. rowcount 0 means a
+    live worker holds the lease → ``LeaseLost``. The token rotates on every
+    claim, so a worker that lost the race can no longer write with its old
+    token.
+    """
+    _validate_worker_id(worker_id)
+    if lease_seconds <= 0:
+        raise ValidationError(
+            "Lease duration must be positive.",
+            code="invalid_lease_duration",
+        )
+    now = time.time()
+    with session_scope() as session:
+        result = session.execute(
+            update(WorkflowOperationRecord)
+            .where(
+                WorkflowOperationRecord.id == operation_id,
+                WorkflowOperationRecord.owner_id == owner_id,
+                WorkflowOperationRecord.status.in_(("pending", "running")),
+                or_(
+                    WorkflowOperationRecord.lease_owner.is_(None),
+                    WorkflowOperationRecord.lease_expires_at < now,
+                ),
+            )
+            .values(
+                status="running",
+                lease_owner=worker_id,
+                lease_token=_new_lease_token(),
+                lease_expires_at=now + lease_seconds,
+                lease_heartbeat_at=now,
+                updated_at=now,
+            )
+        )
+        if result.rowcount != 1:
+            session.expire_all()
+            current = session.scalar(
+                select(WorkflowOperationRecord).where(
+                    WorkflowOperationRecord.id == operation_id,
+                    WorkflowOperationRecord.owner_id == owner_id,
+                )
+            )
+            if current is None:
+                raise NotFound("workflow_operation")
+            raise LeaseLost(
+                "The workflow operation is not claimable.",
+                code="operation_not_claimable",
+            )
+        row = session.scalar(
+            select(WorkflowOperationRecord).where(
+                WorkflowOperationRecord.id == operation_id,
+                WorkflowOperationRecord.owner_id == owner_id,
+            )
+        )
+        assert row is not None
+        return _detach_operation(row)
+
+
+def heartbeat_operation(
+    operation_id: str,
+    *,
+    owner_id: str,
+    worker_id: str,
+    lease_token: str,
+    lease_seconds: int,
+) -> bool:
+    """Extend the lease. Only the current owner with the live matching token
+    may heartbeat; a fenced or expired lease raises ``LeaseLost`` so the worker
+    loop stops rather than silently extending a lease it no longer holds."""
+    _validate_worker_id(worker_id)
+    _validate_lease_token(lease_token)
+    if lease_seconds <= 0:
+        raise ValidationError(
+            "Lease duration must be positive.",
+            code="invalid_lease_duration",
+        )
+    now = time.time()
+    with session_scope() as session:
+        result = session.execute(
+            update(WorkflowOperationRecord)
+            .where(
+                WorkflowOperationRecord.id == operation_id,
+                WorkflowOperationRecord.owner_id == owner_id,
+                WorkflowOperationRecord.lease_owner == worker_id,
+                WorkflowOperationRecord.lease_token == lease_token,
+                WorkflowOperationRecord.lease_expires_at >= now,
+                WorkflowOperationRecord.status == "running",
+            )
+            .values(
+                lease_expires_at=now + lease_seconds,
+                lease_heartbeat_at=now,
+                updated_at=now,
+            )
+        )
+        if result.rowcount != 1:
+            session.expire_all()
+            current = session.scalar(
+                select(WorkflowOperationRecord).where(
+                    WorkflowOperationRecord.id == operation_id,
+                    WorkflowOperationRecord.owner_id == owner_id,
+                )
+            )
+            if current is None:
+                raise NotFound("workflow_operation")
+            raise LeaseLost("lease_lost", code="lease_lost")
+        return True
+
+
+def release_operation(
+    operation_id: str,
+    *,
+    owner_id: str,
+    worker_id: str,
+    lease_token: str,
+) -> WorkflowOperationRecord:
+    """Clear the lease only when this worker's live token still matches.
+
+    A fenced or expired worker cannot release (and thereby hand the row back)
+    after its token was rotated or its lease lapsed.
+    """
+    _validate_worker_id(worker_id)
+    _validate_lease_token(lease_token)
+    now = time.time()
+    with session_scope() as session:
+        result = session.execute(
+            update(WorkflowOperationRecord)
+            .where(
+                WorkflowOperationRecord.id == operation_id,
+                WorkflowOperationRecord.owner_id == owner_id,
+                WorkflowOperationRecord.lease_owner == worker_id,
+                WorkflowOperationRecord.lease_token == lease_token,
+                WorkflowOperationRecord.lease_expires_at >= now,
+            )
+            .values(
+                lease_owner=None,
+                lease_token=None,
+                lease_expires_at=None,
+                lease_heartbeat_at=None,
+                updated_at=now,
+            )
+        )
+        if result.rowcount != 1:
+            session.expire_all()
+            current = session.scalar(
+                select(WorkflowOperationRecord).where(
+                    WorkflowOperationRecord.id == operation_id,
+                    WorkflowOperationRecord.owner_id == owner_id,
+                )
+            )
+            if current is None:
+                raise NotFound("workflow_operation")
+            raise LeaseLost("lease_lost", code="lease_lost")
+        row = session.scalar(
+            select(WorkflowOperationRecord).where(
+                WorkflowOperationRecord.id == operation_id,
+                WorkflowOperationRecord.owner_id == owner_id,
+            )
+        )
+        assert row is not None
+        return _detach_operation(row)
+
+
+def list_claimable_operations(
+    operation_types: Iterable[str],
+    *,
+    limit: int = 10,
+) -> list[WorkflowOperationRecord]:
+    """Return a bounded set of rows a worker may claim.
+
+    Only rows for the supported operation types that are pending, or running
+    with no live lease (never leased or expired), are returned. Rows already
+    held by a live worker are excluded; each returned row is then claimed with
+    the polling worker's identity, so the conditional claim does the real
+    fencing and owner predicates are preserved.
+    """
+    types = list(operation_types)
+    if not types or limit <= 0:
+        return []
+    if limit > MAX_OPERATION_CLAIM_BATCH:
+        raise ValidationError(
+            "Claim batch exceeds its storage limit.",
+            code="operation_claim_batch_too_large",
+        )
+    now = time.time()
+    with session_scope() as session:
+        rows = session.scalars(
+            select(WorkflowOperationRecord)
+            .where(
+                WorkflowOperationRecord.operation_type.in_(types),
+                WorkflowOperationRecord.status.in_(("pending", "running")),
+                or_(
+                    WorkflowOperationRecord.lease_owner.is_(None),
+                    WorkflowOperationRecord.lease_expires_at < now,
+                ),
+            )
+            .order_by(WorkflowOperationRecord.updated_at.asc())
+            .limit(limit)
+        ).all()
+        return [_detach_operation(row) for row in rows]
 
 
 def upsert_student_presentation(

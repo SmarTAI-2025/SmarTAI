@@ -721,3 +721,129 @@ def test_postgresql_operation_checkpoint_ddl_is_portable(monkeypatch):
     assert "ADD COLUMN terminal_summary JSON" in sql
     assert "ck_workflow_operations_checkpoint_revision_nonnegative" in sql
     assert "checkpoint_revision >= 0" in sql
+
+
+def test_operation_lease_migration_has_contract_columns(tmp_path, monkeypatch):
+    from sqlalchemy import create_engine, inspect
+
+    db_url = f"sqlite:///{(tmp_path / 'lease-contract.db').as_posix()}"
+    cfg = _alembic_config(db_url, monkeypatch)
+    command.upgrade(cfg, "head")
+    inspector = inspect(create_engine(db_url))
+
+    columns = {
+        column["name"]: column
+        for column in inspector.get_columns("workflow_operations")
+    }
+    assert {
+        "lease_owner",
+        "lease_token",
+        "lease_expires_at",
+        "lease_heartbeat_at",
+    } <= columns.keys()
+    assert columns["lease_owner"]["nullable"] is True
+    assert columns["lease_token"]["nullable"] is True
+    assert columns["lease_expires_at"]["nullable"] is True
+    assert columns["lease_heartbeat_at"]["nullable"] is True
+
+    checks = {
+        item["name"]: item["sqltext"]
+        for item in inspector.get_check_constraints("workflow_operations")
+    }
+    assert "ck_workflow_operations_lease_consistency" in checks
+    lease_check = checks["ck_workflow_operations_lease_consistency"]
+    # An inactive lease has all four lease fields null; an active lease has
+    # owner, token, expiry, and heartbeat all non-null.
+    for column in ("lease_owner", "lease_token", "lease_expires_at", "lease_heartbeat_at"):
+        assert f"{column} IS NULL" in lease_check
+        assert f"{column} IS NOT NULL" in lease_check
+    index_columns = {
+        tuple(item["column_names"])
+        for item in inspector.get_indexes("workflow_operations")
+    }
+    assert ("status", "lease_expires_at") in index_columns
+
+
+def test_operation_lease_migration_preserves_0006_operation(tmp_path, monkeypatch):
+    from sqlalchemy import create_engine, inspect, text
+
+    db_url = f"sqlite:///{(tmp_path / 'lease-preserve.db').as_posix()}"
+    cfg = _alembic_config(db_url, monkeypatch)
+    command.upgrade(cfg, "0006_operation_checkpoints")
+    engine = create_engine(db_url)
+    with engine.begin() as connection:
+        connection.execute(text(
+            "INSERT INTO users "
+            "(id, username, role, password_hash, is_active, created_at, updated_at) "
+            "VALUES ('owner', 'owner', 'teacher', 'h', 1, 1, 1)"
+        ))
+        connection.execute(text(
+            "INSERT INTO courses "
+            "(id, name, code, description, teacher_id, created_at, updated_at) "
+            "VALUES ('course', 'Course', '', '', 'owner', 1, 1)"
+        ))
+        connection.execute(text(
+            "INSERT INTO assignments "
+            "(id, course_id, teacher_id, name, description, status, created_at, "
+            "updated_at, version) VALUES "
+            "('assignment', 'course', 'owner', 'Assignment', '', 'draft', 1, 1, 1)"
+        ))
+        connection.execute(text(
+            "INSERT INTO workflow_operations "
+            "(id, assignment_id, owner_id, operation_type, input_hash, attempt, "
+            "status, progress, payload, created_at, updated_at) VALUES "
+            "('operation', 'assignment', 'owner', 'submission_recognition', "
+            "'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', "
+            "1, 'running', '{}', '{}', 1, 1)"
+        ))
+
+    command.upgrade(cfg, "head")
+    with engine.begin() as connection:
+        assert connection.execute(text(
+            "SELECT lease_owner, lease_token, lease_expires_at, lease_heartbeat_at "
+            "FROM workflow_operations WHERE id='operation'"
+        )).one() == (None, None, None, None)
+        connection.execute(text(
+            "UPDATE workflow_operations SET lease_owner='worker', "
+            "lease_token='token', lease_expires_at=100, lease_heartbeat_at=99 "
+            "WHERE id='operation'"
+        ))
+
+    command.downgrade(cfg, "0006_operation_checkpoints")
+    columns = {
+        item["name"]
+        for item in inspect(engine).get_columns("workflow_operations")
+    }
+    assert "lease_owner" not in columns
+    with engine.connect() as connection:
+        assert connection.execute(text(
+            "SELECT id, attempt, status FROM workflow_operations WHERE id='operation'"
+        )).one() == ("operation", 1, "running")
+
+    command.upgrade(cfg, "head")
+    with engine.connect() as connection:
+        assert connection.execute(text(
+            "SELECT lease_owner, lease_token, lease_expires_at, lease_heartbeat_at "
+            "FROM workflow_operations WHERE id='operation'"
+        )).one() == (None, None, None, None)
+
+
+def test_postgresql_operation_lease_ddl_is_portable(monkeypatch):
+    from importlib import import_module
+
+    migration = import_module(
+        "backend.db.migrations.versions.0007_operation_leases"
+    )
+    assert len(migration.revision) <= 32
+    sql = _postgresql_sql(monkeypatch, "0007_operation_leases")
+
+    assert "ADD COLUMN lease_owner VARCHAR(128)" in sql
+    assert "ADD COLUMN lease_token VARCHAR(64)" in sql
+    assert "ADD COLUMN lease_expires_at FLOAT" in sql
+    assert "ADD COLUMN lease_heartbeat_at FLOAT" in sql
+    assert "ck_workflow_operations_lease_consistency" in sql
+    lease_check_sql = sql[sql.index("ck_workflow_operations_lease_consistency"):]
+    for column in ("lease_owner", "lease_token", "lease_expires_at", "lease_heartbeat_at"):
+        assert f"{column} IS NULL" in lease_check_sql
+        assert f"{column} IS NOT NULL" in lease_check_sql
+    assert "CREATE INDEX ix_workflow_operations_claimable" in sql
