@@ -133,6 +133,14 @@ beforeEach(() => {
 });
 
 describe("QuestionPreparationDetailPage navigation", () => {
+  it("uses a bounded responsive question rail and preserves the full label on hover", async () => {
+    renderPage();
+
+    const navigation = await screen.findByRole("complementary", { name: "题目导航" });
+    expect(navigation.parentElement).toHaveClass("lg:grid-cols-[clamp(180px,16vw,240px)_minmax(0,1fr)]");
+    expect(screen.getByRole("button", { name: "第 1 题" }).querySelector(".truncate")).toHaveAttribute("title", "第 1 题");
+  });
+
   it("shows and edits the authoritative maximum score", async () => {
     const user = userEvent.setup();
     renderPage();

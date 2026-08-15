@@ -616,7 +616,7 @@ export function ReviewDetailPage() {
           </div>
 
           {visibleQuestions.length ? (
-            <div className="mt-4 grid items-start gap-4 lg:grid-cols-[132px_minmax(0,1fr)]">
+            <div className="mt-4 grid items-start gap-4 lg:grid-cols-[clamp(180px,16vw,240px)_minmax(0,1fr)]">
               <ResultQuestionSidebar
                 locale={locale}
                 questions={visibleQuestions}
