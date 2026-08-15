@@ -847,3 +847,14 @@ def test_postgresql_operation_lease_ddl_is_portable(monkeypatch):
         assert f"{column} IS NULL" in lease_check_sql
         assert f"{column} IS NOT NULL" in lease_check_sql
     assert "CREATE INDEX ix_workflow_operations_claimable" in sql
+
+
+def test_alembic_migration_keeps_application_loggers_enabled(tmp_path, monkeypatch):
+    """Running Alembic must not disable workflow worker security logging."""
+    db_url = f"sqlite:///{(tmp_path / 'logger.db').as_posix()}"
+    cfg = _alembic_config(db_url, monkeypatch)
+    from backend.services import workflow_worker
+
+    command.upgrade(cfg, "head")
+
+    assert workflow_worker.logger.disabled is False
