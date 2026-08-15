@@ -70,6 +70,13 @@ _OFFICIAL_PROVIDER_BASE_URLS = {
     "qwen": ("dashscope.aliyuncs.com", "/compatible-mode/v1"),
 }
 
+# Community / university proxy endpoints that are treated as valid alternatives
+# for the corresponding provider_type.  Kept separate from _OFFICIAL_PROVIDER_BASE_URLS
+# so the official host is still the one returned by _validated_provider_base_url.
+_APPROVED_PROXY_HOSTS: dict[str, set[str]] = {
+    "deepseek": {"api.llm.ustc.edu.cn"},
+}
+
 _PROVIDER_CATALOG = (
     {
         "provider_type": "gemini",
@@ -138,23 +145,44 @@ def _validated_provider_base_url(
             detail={"code": "provider_base_url_not_allowed"},
         ) from exc
     official = _OFFICIAL_PROVIDER_BASE_URLS.get(provider_type)
+    approved_hosts = _APPROVED_PROXY_HOSTS.get(provider_type, set())
     normalized_path = parsed.path.rstrip("/")
+
+    if official is None:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={"code": "provider_base_url_not_allowed"},
+        )
+
+    # Allow either the official host or an approved proxy host
+    is_official_host = (parsed.hostname == official[0])
+    is_approved_proxy = (parsed.hostname in approved_hosts)
+
+    if not (is_official_host or is_approved_proxy):
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={"code": "provider_base_url_not_allowed"},
+        )
+
+    # For approved proxy hosts, accept any path (they may follow their own convention).
+    # For the official host, the path must match the official path.
+    host_path = official[1] if is_official_host else normalized_path or ""
+    host = parsed.hostname
+
     if (
-        official is None
-        or parsed.scheme != "https"
+        parsed.scheme != "https"
         or parsed.username is not None
         or parsed.password is not None
         or parsed.query
         or parsed.fragment
-        or parsed.hostname != official[0]
         or parsed_port not in {None, 443}
-        or normalized_path not in {"", official[1]}
+        or (is_official_host and normalized_path not in {"", official[1]})
     ):
         raise HTTPException(
             status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail={"code": "provider_base_url_not_allowed"},
         )
-    return urlunsplit(("https", official[0], official[1], "", ""))
+    return urlunsplit(("https", host, host_path, "", ""))
 
 
 @router.post("/keys")
