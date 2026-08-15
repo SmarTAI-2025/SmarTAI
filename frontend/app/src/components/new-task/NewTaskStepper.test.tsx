@@ -86,4 +86,23 @@ describe("NewTaskStepper locked-step guidance", () => {
       "/tasks/task-1/grading-setup",
     );
   });
+
+  it("greys stale later steps after the server rewinds to question review", () => {
+    (useTask as unknown as ReturnType<typeof vi.fn>).mockReturnValue({
+      data: {
+        task_id: "task-1",
+        status: "problems_ready",
+        grading_setup_configured: false,
+        problem_data: {
+          q1: { q_id: "q1", review_status: "needs_review" },
+        },
+      },
+    });
+
+    renderStepper({ currentStep: 6 });
+
+    expect(screen.queryByRole("link", { name: "newTaskStepSubmissions" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "newTaskStepGrading" })).not.toBeInTheDocument();
+    expect(screen.getByText("newTaskStepGrading").closest("div")).toHaveAttribute("aria-disabled", "true");
+  });
 });

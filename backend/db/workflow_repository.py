@@ -401,6 +401,99 @@ def update_workflow(
         return _detach_workflow(row)
 
 
+def update_workflow_if_active_job(
+    assignment_id: str,
+    *,
+    owner_id: str,
+    active_job_id: str,
+    **changes: Any,
+) -> AssignmentWorkflowRecord | None:
+    """Update a workflow only while it still points at ``active_job_id``.
+
+    Recovery paths use this compare-and-set helper so a late terminal worker
+    can never clear a newer operation that was claimed for the same task.
+    Recovery metadata does not change the teacher-authored workflow revision.
+    """
+    allowed = {
+        column.name
+        for column in AssignmentWorkflowRecord.__table__.columns
+        if column.name not in {
+            "assignment_id", "owner_id", "created_at", "workflow_revision",
+            "active_job_id",
+        }
+    }
+    values = {key: value for key, value in changes.items() if key in allowed}
+    now = time.time()
+    with session_scope() as session:
+        result = session.execute(
+            update(AssignmentWorkflowRecord)
+            .where(
+                AssignmentWorkflowRecord.assignment_id == assignment_id,
+                AssignmentWorkflowRecord.owner_id == owner_id,
+                AssignmentWorkflowRecord.active_job_id == active_job_id,
+            )
+            .values(**values, active_job_id=None, updated_at=now)
+        )
+        if result.rowcount != 1:
+            return None
+        row = session.get(AssignmentWorkflowRecord, assignment_id)
+        assert row is not None
+        return _detach_workflow(row)
+
+
+def supersede_workflow_operation(
+    assignment_id: str,
+    *,
+    owner_id: str,
+    operation_id: str,
+    expected_attempt: int,
+) -> AssignmentWorkflowRecord | None:
+    """Stop one active OCR/import operation and release its workflow claim.
+
+    The operation transition and marker cleanup share a transaction.  A late
+    worker still holding the old attempt can no longer commit its staged data.
+    """
+    now = time.time()
+    with session_scope() as session:
+        stopped = session.execute(
+            update(WorkflowOperationRecord)
+            .where(
+                WorkflowOperationRecord.id == operation_id,
+                WorkflowOperationRecord.assignment_id == assignment_id,
+                WorkflowOperationRecord.owner_id == owner_id,
+                WorkflowOperationRecord.attempt == expected_attempt,
+                WorkflowOperationRecord.status.in_(("pending", "running")),
+            )
+            .values(
+                status="error",
+                error_code="superseded",
+                completed_at=now,
+                updated_at=now,
+            )
+        )
+        if stopped.rowcount != 1:
+            return None
+        released = session.execute(
+            update(AssignmentWorkflowRecord)
+            .where(
+                AssignmentWorkflowRecord.assignment_id == assignment_id,
+                AssignmentWorkflowRecord.owner_id == owner_id,
+                AssignmentWorkflowRecord.active_job_id == operation_id,
+            )
+            .values(
+                active_operation=None,
+                active_job_id=None,
+                error_code=None,
+                updated_at=now,
+            )
+        )
+        if released.rowcount != 1:
+            return None
+        row = session.get(AssignmentWorkflowRecord, assignment_id)
+        assert row is not None
+        return _detach_workflow(row)
+
+
 def confirm_final_result_atomic(
     *,
     assignment_id: str,

@@ -637,6 +637,7 @@ async def start_question_preparation(
         workflow, active = task_facade._ensure_no_other_active_operation(
             task_id=task_id, owner_id=current.id,
             operation_type="question_preparation", input_hash=operation_hash,
+            allow_supersede=request.replace_confirmed,
         )
         if active is not None:
             return {
