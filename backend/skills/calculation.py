@@ -29,6 +29,7 @@ from __future__ import annotations
 import ast
 import logging
 import os
+import ast
 import re
 from typing import Optional, List, Tuple, TYPE_CHECKING
 
@@ -218,6 +219,14 @@ async def _generate_sympy_program(
         "for symbolic work; you may import only `sympy` and `from sympy import ...`. "
         "Do NOT use input(), file I/O, or network. Keep the program short — it "
         "must finish in under 10 seconds.\n\n"
+        "OUTPUT RULES (critical):\n"
+        "  - Use plain `print(expr)` to output the answer — a single-line repr.\n"
+        "  - Do NOT use `pretty`, `pprint`, `srepr`, `latex`, or `sympy.printing` — "
+        "    they produce multi-line / non-sympifiable output that breaks grading.\n"
+        "  - Output the RAW result of `integrate(...)` / `solve(...)` / etc.\n"
+        "  - Do NOT manually add a constant of integration (+ C) — `integrate` "
+        "    already omits it by design; the verifier handles +C.\n"
+        "  - Do NOT simplify, expand, or rewrite the result.\n\n"
         "Return JSON {\"code\": \"<the program>\"}."
     )
     user_prompt = (
@@ -261,6 +270,93 @@ async def _run_sympy_in_sandbox(code: str, *, timeout: float = 10.0) -> Optional
     if result.error:
         logger.info(f"sympy program failed: {result.error[:200]}")
     return None
+
+
+# ─── Sanitiser: rewrite pretty()/pprint()/srepr()/latex() into print(str(...)) ─
+
+#: Function names that produce multi-line / non-sympifiable stdout and must be
+#: rewritten before the program is sent to the sandbox.
+_FORMAT_FUNCS = {"pretty", "pprint", "srepr", "latex", "pretty_print"}
+
+
+def _sanitize_sympy_output_code(code: str) -> str:
+    """Rewrite LLM-generated sympy code so stdout stays single-line & sympifiable.
+
+    If the LLM ignored the prompt and used `pretty(expr)`, `pprint(expr)`,
+    `srepr(expr)`, or `latex(expr)` to print the answer, the sandbox stdout
+    would be multi-line ASCII art (or LaTeX) that `sympy.sympify` cannot parse
+    → SymPy verification silently fails and grading degrades to LLM_ONLY.
+
+    This function parses the code with `ast`, finds any call whose function
+    name is in `_FORMAT_FUNCS`, and rewrites it to `print(str(<arg>))`.  If the
+    pretty/pprint/srepr call is already wrapped in `print(...)` it is still
+    rewritten.  Unparseable code is returned unchanged (the sandbox will report
+    the error as before).
+
+    Returns the (possibly rewritten) code string.
+    """
+    try:
+        tree = ast.parse(code)
+    except SyntaxError:
+        return code
+
+    rewrites: list[Tuple[ast.Call, str]] = []  # (node, replacement)
+
+    class _Visitor(ast.NodeVisitor):
+        def visit_Call(self, node: ast.Call) -> None:  # noqa: N802
+            # Identify the function name, handling attribute calls like
+            # ``sp.pretty(...)`` / ``sympy.pprint(...)``.
+            fname: Optional[str] = None
+            if isinstance(node.func, ast.Name):
+                fname = node.func.id
+            elif isinstance(node.func, ast.Attribute):
+                fname = node.func.attr
+            if fname in _FORMAT_FUNCS and node.args:
+                # Only rewrite when there is a single positional argument —
+                # `pretty(expr, use_unicode=False)` has 2 args; we still rewrite
+                # it using the first arg and drop the keyword flags.
+                rewrites.append((node, _expr_to_source(node.args[0])))
+            self.generic_visit(node)
+
+    _Visitor().visit(tree)
+
+    if not rewrites:
+        return code  # nothing to fix
+
+    # Apply rewrites via line-based replacement.  Each call's source span is
+    # replaced with `print(str(<arg>))`.  We work from the bottom up so earlier
+    # line numbers stay valid.
+    lines = code.splitlines(keepends=True)
+    # Build (start_line, end_line, new_text) per rewrite, sorting descending.
+    spans: list[Tuple[int, int, str]] = []
+    for node, arg_src in rewrites:
+        start = node.lineno - 1  # 0-indexed
+        end = node.end_lineno - 1
+        indent = _leading_indent(lines[start])
+        spans.append((start, end, f"{indent}print(str({arg_src}))"))
+    spans.sort(key=lambda s: s[0], reverse=True)
+
+    for start, end, new_text in spans:
+        lines[start:end + 1] = [new_text + "\n"]
+
+    rewritten = "".join(lines)
+    if rewritten != code:
+        logger.info("_sanitize_sympy_output_code rewrote %d format call(s)", len(rewrites))
+    return rewritten
+
+
+def _expr_to_source(node: ast.AST) -> str:
+    """Best-effort source reconstruction for an ast node."""
+    try:
+        return ast.unparse(node)
+    except Exception:
+        # Fallback for very old Python without ast.unparse — unlikely on 3.9+.
+        return "..."  # type: ignore[unreachable]
+
+
+def _leading_indent(line: str) -> str:
+    """Return the leading whitespace of a line."""
+    return line[: len(line) - len(line.lstrip())]
 
 
 def _format_metadata_zh(
@@ -365,6 +461,10 @@ class CalculationSkill(GradingSkill):
                         is_integral, integral_var = parsed
                     if self.reporter and active_unit:
                         await self.reporter.substep(active_unit, "run_sympy")
+                    # Defensively rewrite pretty()/pprint()/srepr()/latex() calls
+                    # into print(str(...)) so stdout stays single-line and
+                    # sympifiable — even if the LLM ignored the prompt rules.
+                    sympy_code = _sanitize_sympy_output_code(sympy_code)
                     stdout = await _run_sympy_in_sandbox(sympy_code, timeout=10.0)
                     if stdout:
                         ref_value = stdout
