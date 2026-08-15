@@ -25,12 +25,11 @@ import { EmptyState } from "@/components/ui/EmptyState";
 import { MarkdownMath } from "@/components/ui/MarkdownMath";
 import { SyntaxHighlightedCode } from "@/components/ui/SyntaxHighlightedCode";
 import { UnsavedChangesDialog } from "@/components/ui/UnsavedChangesDialog";
-import { useMockSourcePreview } from "@/hooks/useMockSourcePreview";
+import { useSourcePreview } from "@/hooks/useSourcePreview";
 import { useI18n } from "@/i18n/I18nProvider";
 import { cn } from "@/lib/cn";
 import { isProgrammingProblem } from "@/lib/questionPreparation";
 import { questionSearchAliases } from "@/lib/questionSearch";
-import { getSourcePreviewMockVariant } from "@/lib/sourcePreview";
 import type { ProblemInfo, TestCase } from "@/types";
 
 type TextFieldKey = "stem" | "reference_answer" | "criterion" | "solution_code";
@@ -46,12 +45,8 @@ export function QuestionPreparationDetailPage() {
   const { locale, t } = useI18n();
   const taskQuery = useTask(taskId);
   const updateProblem = useUpdateProblem();
-  const sourcePreview = useMockSourcePreview({
-    scope: "problem",
-    sourceId: stableTaskId || "unknown",
+  const sourcePreview = useSourcePreview({
     displayName: taskQuery.data?.problem_file_name,
-    taskFinalized: taskQuery.data?.status === "finalized",
-    variant: getSourcePreviewMockVariant(searchParams.get("sourcePreview")),
   });
   const [activeQuestionId, setActiveQuestionId] = useState(questionId ?? "");
   const [dirtyKeys, setDirtyKeys] = useState<Set<string>>(new Set());
@@ -263,7 +258,8 @@ export function QuestionPreparationDetailPage() {
         <div className="flex flex-wrap items-center justify-end gap-2">
           <span className="text-xs text-muted-foreground">{taskQuery.data?.name ?? ""}</span>
           <OriginalFilePreviewTrigger
-            descriptor={sourcePreview.descriptor}
+            state={sourcePreview.triggerState}
+            unavailableReason={sourcePreview.unavailableReason}
             open={sourcePreview.isOpen}
             onOpen={sourcePreview.openPreview}
             onClose={sourcePreview.closePreview}
@@ -279,7 +275,10 @@ export function QuestionPreparationDetailPage() {
         preview={(
           <OriginalFilePreviewPanel
             descriptor={sourcePreview.descriptor}
+            displayName={sourcePreview.displayName}
+            previewKind={sourcePreview.previewKind}
             loadState={sourcePreview.loadState}
+            errorCode={sourcePreview.errorCode}
             previewUrl={sourcePreview.previewUrl}
             onClose={sourcePreview.closePreview}
             onRetry={sourcePreview.retryPreview}

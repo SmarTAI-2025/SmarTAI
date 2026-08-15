@@ -18,3 +18,9 @@ export interface SourceFileDescriptor {
 }
 
 export type SourcePreviewLoadState = "idle" | "loading" | "ready" | "error";
+
+export type SourcePreviewErrorCode =
+  | "source_preview_not_connected"
+  | "source_preview_load_failed";
+
+export type SourcePreviewTriggerState = "ready" | "processing" | "unavailable";

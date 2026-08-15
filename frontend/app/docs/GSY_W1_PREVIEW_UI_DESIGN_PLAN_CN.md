@@ -1,8 +1,9 @@
 # 原文件左右对照 UI 设计与实施计划（GSY-W1-PREVIEW-UI）
 
 > 周期：Week 1（2026-08-03～08-09）；Week 1 只表示任务排期，不构成运行环境开关。
-> 主责：gsy；本文件的完成范围只包含 Week 1 mock UI，lyj 只确认文件状态合同。
-> 后续：真实鉴权读取属于独立的 Week 2 `GSY-W2-PREVIEW-AND-REGISTRATION`，不计入本任务完成定义。
+> 主责：gsy；本文件的完成范围是 Preview UI 与前端 adapter 边界。
+> 接口依赖：`LYJ-W1-ORIGINAL-FILES` / `LYJ-W2-RECOVERY-LIBRARY` 完成持久化、owner-scoped descriptor 与每次重新鉴权的二进制读取后，再接通真实文件。
+> 当前结论：UI complete; backend integration pending under LYJ-W1-ORIGINAL-FILES / LYJ-W2-RECOVERY-LIBRARY; no fabricated source content.
 > 单一目标：教师不离开当前复核页，就能把整份 PDF/图片原稿与可编辑识别内容放在一起核对。
 
 ## 1. 范围
@@ -13,7 +14,7 @@
 - 题目资料审核页：打开/关闭整份题目原文件。
 - PDF、图片、加载、读取失败、处理中、不可用、任务完成后已清理七类状态。
 - 桌面默认原稿与识别内容各占 50%，教师可拖动中间分隔条调整比例。
-- 使用显式本地 mock 演示，不等待 lyj 的数据库和文件接口。
+- 正式页面保留入口；接口未接通时显示真实读取失败，不生成或展示假原文件。
 - 保持当前搜索、题目导航、编辑、保存、未保存拦截和键盘导航行为。
 
 ### 不做
@@ -107,7 +108,7 @@
 
 ## 7. 状态合同
 
-Week 1 放在独立 `sourcePreview.ts`，不扩大共享 `Task` DTO；本任务只冻结可供 lyj 确认的 mock 字段。
+前端在独立 `sourcePreview.ts` 中使用规范化 UI 模型，不扩大共享 `Task` DTO。下列字段是组件输入模型，不宣称为尚未冻结的后端 wire contract：
 
 ```ts
 type SourceFileStatus = "available" | "processing" | "unavailable";
@@ -128,7 +129,7 @@ interface SourceFileDescriptor {
 }
 ```
 
-约束：DTO 只有 `file_id`，绝不包含服务器路径、storage key 或永久公开 URL。真实鉴权 blob 读取由后续 Week 2 任务实现。
+约束：UI 模型只识别不透明 `file_id`，绝不接收服务器路径、storage key 或永久公开 URL。lyj 冻结真实 descriptor/download route 后，由 adapter 映射实际字段；字节端点必须每次重新鉴权。
 
 ## 8. 七类可见状态
 
@@ -162,16 +163,17 @@ interface SourceFileDescriptor {
 - `components/tasks/OriginalFilePreviewTrigger.tsx`：短按钮和禁用 tooltip。
 - `components/tasks/SourceComparisonWorkspace.tsx`：50/50 布局、比例状态、分隔条和响应式降级。
 - `types/sourcePreview.ts`：独立合同。
-- `lib/sourcePreview.ts`：MIME→kind、reason→文案映射、object URL 清理 helper。
-- `mocks/sourcePreview.ts`：当前未上线开发/预发布阶段使用的 PDF/图片/状态 fixture。
+- `lib/sourcePreview.ts`：安全显示名/MIME 到预览类型的纯映射。
+- `api/sourcePreview.ts`：真实文件 adapter 边界；当前不猜测后端 URL，稳定拒绝 `source_preview_not_connected`。
+- `hooks/useSourcePreview.ts`：面板生命周期、错误态、焦点返回与未来真实 object URL 清理。
 
-## 10. Mock 策略
+## 10. 正式数据接线边界
 
-- 项目尚未公开上线，所有开发与预发布构建（包括 `npm run build`）默认启用，不要求额外 VITE flag。
-- 可用查询参数切状态：`sourcePreview=pdf|image|processing|unavailable|error`；构建模式不改变这套联调行为。
-- 不使用“接口 404 自动伪装成功”；真实环境缺接口时必须显示不可用。
-- Mock 不设置 auth、不写 Task 数据、不模拟 owner 授权。
-- 真实 owner-scoped 文件接口完成后只替换数据 adapter，不改变已确认 UI；只有临近实际公开上线而真实接口仍未完成时，才由发布门禁隐藏入口。
+- 正式产品不生成或加载 fake PDF/image blob，不提供 query 参数切换状态，也不按 build mode 改变入口。
+- 当前 `loadSourcePreviewFile` 不发网络请求、不猜测 URL，点击入口后进入确定性的“接口尚未接通”错误态；该状态不显示无效的“重新读取”，右侧识别内容仍可查看、编辑，草稿不丢失。未来真实 `source_preview_load_failed` 等瞬时错误才提供重试。
+- 学生作答原件与题目原件都要等待 lyj 提供正式持久化与 owner-scoped descriptor/download contract；前端不实现 owner 判断。
+- 后端合同冻结后只替换 `api/sourcePreview.ts` adapter 与 descriptor 映射，不改变已经确认的布局和交互。
+- PDF、图片、processing、unavailable 等状态用组件级测试覆盖；它们不是正式页面中的伪造业务数据。
 
 ## 11. 交互与可访问性
 
@@ -186,7 +188,7 @@ interface SourceFileDescriptor {
 - 切题时题目原文件不变；不重复请求。
 - 遵守 `prefers-reduced-motion`；只用现有短 transition，不做滑入动画。
 - PDF Canvas 使用 `role=document` 与逐页可读标签；浏览器 object 兜底必须有明确 `title`；图片 `alt` 使用安全显示名。
-- `OriginalFilePreviewPanel` 可接收可选 provenance note，但正式 Week 1 mock 不伪造来源证明；后续只有真实合同提供证据时才展示。
+- `OriginalFilePreviewPanel` 可接收可选 provenance note；正式 UI 不伪造来源证明，只有真实合同提供证据时才展示。
 
 ## 12. 文件改动边界
 
@@ -195,32 +197,32 @@ interface SourceFileDescriptor {
 - 改 `routes/tasks/StudentAnswerReviewPage.tsx`：入口、对照布局、保持编辑状态。
 - 改 `routes/tasks/QuestionPreparationDetailPage.tsx`：题目入口和复用布局。
 - 改 `i18n/messages.ts`：中英双语状态与按钮文案。
-- 新增第 9 节组件/types/lib/mock/tests。
+- 新增第 9 节组件、types、adapter、hook 与 tests。
 - 不改 `api/tasks.ts`、`api/hooks/tasks.ts`、`types/task.ts`，减少与并行 PR 的共享文件冲突。
 
-### 后续 GSY-W2-PREVIEW-AND-REGISTRATION（不属于本任务）
+### 后端依赖完成后的接线（不属于本任务）
 
-- 新增 `api/sourceFiles.ts` 与 `api/hooks/sourceFiles.ts`。
-- 将 mock descriptor 映射替换为 lyj 的真实 status + 鉴权 blob。
+- 以 lyj 最终冻结的路由和字段为准完善 `api/sourcePreview.ts`；不得预先发明 endpoint。
+- 映射真实 status，并从每次重新鉴权的 binary endpoint 取得 Blob。
 - 保留组件 public props，不改视觉层。
 
 ## 13. 实施顺序
 
-1. 冻结第 7 节合同及中英文文案，lyj 只确认字段含义。
+1. 冻结第 7 节 UI 模型及中英文文案；后端 wire contract 由 lyj 另行冻结。
 2. 实现 `SourceComparisonWorkspace`：默认 50/50、拖动/键盘调节、边界和移动端降级。
 3. 实现纯展示 `OriginalFilePreviewPanel` 和七类组件测试。
-4. 接学生作答页，验证草稿、切学生、关闭后滚动位置及比例保留。
+4. 接学生作答页，验证未接通错误、草稿、关闭后焦点及比例保留。
 5. 接题目资料页，共用组件，不复制状态逻辑。
 6. 做 `1440×900`、`1280×720`、`768×1024`、`390×844` 亮/暗色检查。
-7. 运行定向测试、全量前端测试、scope audit、typecheck、production build。
+7. 运行定向测试、全量前端测试、scope audit、typecheck、build。
 
 ## 14. 测试与验收
 
-- PDF、图片、processing、unavailable、finalized、error/retry 七种状态逐项测试。
+- PDF、图片、processing、unavailable、error/retry 等纯 UI 状态逐项测试；正式页面不注入假 descriptor 或文件内容。
 - 打开/关闭不清除作答草稿；未保存离开拦截仍生效。
 - 桌面首次打开为 50/50；鼠标拖动、键盘调节、35%～65%/最小宽度约束和双击复位均有测试。
 - `< lg` 不出现分隔条或横向拖动手势，页面自然上下堆叠。
-- 切学生时 source descriptor 更新且旧 object URL 被 revoke。
+- adapter 接入后，切学生时 source descriptor 更新且旧 object URL 被 revoke。
 - 不支持文件无法加载 active content，禁用原因键盘可读。
 - 手机无横向页面溢出；PDF/图片不越出面板。
 - 深色模式、中文、英文、200% zoom、键盘 focus 均可用。
@@ -229,9 +231,10 @@ interface SourceFileDescriptor {
 
 ## 15. 完成定义
 
-- 教师在正式复核页内打开/关闭整份 PDF 或图片，并继续编辑右侧文字。
+- 已完成正式复核页入口、50/50 工作区、分隔条、PDF/图片渲染组件及关闭/重试交互；真实原文件读取仍依赖 lyj 后端合同。
+- 当前点击入口显示“原文件读取接口尚未接通”，不生成、加载或展示假原文件；右侧内容和未保存草稿继续保留。
 - 所有不可用状态都有明确原因和下一步，不出现空白/死按钮。
 - 无服务器路径、永久 URL、主动内容渲染或前端 owner 判断。
 - 默认关闭时现有页面像素与交互不变；打开时才进入对照布局。
-- Week 1 有 50/50 可拖动 mock 的截图/录屏、测试结果和 gsy 自测记录；lyj 只需给状态合同确认。
-- 不以 lyj 的真实文件接口或 gxr 的真实接口验收作为 `GSY-W1-PREVIEW-UI` 完成前置；两者属于后续 Week 2 任务。
+- Week 1 有已确认 Demo 同款 50/50/拖动 UI、正式页面错误态、测试结果和 gsy 自测记录。
+- `GSY-W1-PREVIEW-UI` 可按 UI complete 评审；上传→持久化→鉴权读取→Preview 的集成完成要等待 `LYJ-W1-ORIGINAL-FILES` / `LYJ-W2-RECOVERY-LIBRARY`，随后由 gxr 做退出/重登、后端重启和两教师隔离验收。

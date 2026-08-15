@@ -34,13 +34,12 @@ import { OriginalFilePreviewTrigger } from "@/components/tasks/OriginalFilePrevi
 import { SourceComparisonWorkspace } from "@/components/tasks/SourceComparisonWorkspace";
 import { Button } from "@/components/ui/Button";
 import { MarkdownMath } from "@/components/ui/MarkdownMath";
-import { useMockSourcePreview } from "@/hooks/useMockSourcePreview";
+import { useSourcePreview } from "@/hooks/useSourcePreview";
 import { useImeSafeQuery } from "@/hooks/useImeSafeQuery";
 import { useI18n } from "@/i18n/I18nProvider";
 import type { Locale, MessageKey } from "@/i18n/messages";
 import { cn } from "@/lib/cn";
 import { questionSearchAliases } from "@/lib/questionSearch";
-import { getSourcePreviewMockVariant } from "@/lib/sourcePreview";
 import { isWorkflowRevisionConflictCode } from "@/lib/taskActionGuards";
 import {
   answerMap,
@@ -133,12 +132,8 @@ export function StudentAnswerReviewPage() {
     previous: activeIndex > 0 ? filteredQuestions[activeIndex - 1] : null,
     next: activeIndex >= 0 && activeIndex < filteredQuestions.length - 1 ? filteredQuestions[activeIndex + 1] : null,
   };
-  const sourcePreview = useMockSourcePreview({
-    scope: "submission",
-    sourceId: student?.stu_id ?? studentId ?? "unknown",
+  const sourcePreview = useSourcePreview({
     displayName: student?.source_filename,
-    taskFinalized: taskQuery.data?.status === "finalized",
-    variant: getSourcePreviewMockVariant(searchParams.get("sourcePreview")),
   });
 
   useEffect(() => {
@@ -530,7 +525,8 @@ export function StudentAnswerReviewPage() {
             }}
             previewAction={(
               <OriginalFilePreviewTrigger
-                descriptor={sourcePreview.descriptor}
+                state={sourcePreview.triggerState}
+                unavailableReason={sourcePreview.unavailableReason}
                 open={sourcePreview.isOpen}
                 onOpen={sourcePreview.openPreview}
                 onClose={sourcePreview.closePreview}
@@ -546,7 +542,10 @@ export function StudentAnswerReviewPage() {
             preview={(
               <OriginalFilePreviewPanel
                 descriptor={sourcePreview.descriptor}
+                displayName={sourcePreview.displayName}
+                previewKind={sourcePreview.previewKind}
                 loadState={sourcePreview.loadState}
+                errorCode={sourcePreview.errorCode}
                 previewUrl={sourcePreview.previewUrl}
                 onClose={sourcePreview.closePreview}
                 onRetry={sourcePreview.retryPreview}

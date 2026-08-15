@@ -53,9 +53,6 @@ vi.mock("@/api/hooks/tasks", () => ({
 }));
 
 vi.mock("@/components/new-task/NewTaskStepper", () => ({ NewTaskStepper: () => null }));
-vi.mock("@/components/tasks/PdfDocumentPreview", () => ({
-  PdfDocumentPreview: ({ url, title }: { url: string; title: string }) => <object data={url} title={title} />,
-}));
 
 vi.mock("@/i18n/I18nProvider", async () => {
   const { messages } = await vi.importActual<typeof import("@/i18n/messages")>("@/i18n/messages");
@@ -83,8 +80,6 @@ beforeEach(() => {
     return 1;
   });
   vi.spyOn(window, "cancelAnimationFrame").mockImplementation(() => undefined);
-  Object.defineProperty(URL, "createObjectURL", { configurable: true, value: vi.fn(() => "blob:student-source") });
-  Object.defineProperty(URL, "revokeObjectURL", { configurable: true, value: vi.fn() });
   vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockReturnValue({
     x: 0,
     y: 0,
@@ -99,19 +94,30 @@ beforeEach(() => {
 });
 
 describe("StudentAnswerReviewPage source preview", () => {
-  it("opens the whole file beside editable recognized content and closes without losing it", async () => {
+  it("keeps an unsaved answer draft while the pending backend integration reports a truthful error", async () => {
     const user = userEvent.setup();
     renderPage();
 
     expect(await screen.findByText("Student answer one")).toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: "查看原文件" }));
+    await user.click(screen.getByRole("button", { name: "修改" }));
+    const draft = document.querySelector("textarea");
+    expect(draft).not.toBeNull();
+    await user.clear(draft!);
+    await user.type(draft!, "Unsaved corrected answer");
+
+    const openButton = screen.getByRole("button", { name: "查看原文件" });
+    await user.click(openButton);
 
     const panel = await screen.findByTestId("source-preview-panel");
     expect(screen.getByRole("separator", { name: "拖动调整原文件与识别内容宽度" })).toHaveAttribute("aria-valuenow", "50");
-    await waitFor(() => expect(document.querySelector("object")).toHaveAttribute("data", "blob:student-source"));
+    expect(await screen.findByText("原文件读取接口尚未接通；识别内容仍可继续查看和编辑。")).toBeInTheDocument();
+    expect(within(panel).queryByRole("button", { name: "重新读取" })).not.toBeInTheDocument();
+    expect(document.querySelector("object")).not.toBeInTheDocument();
+    expect(draft).toHaveValue("Unsaved corrected answer");
 
     await user.click(within(panel).getByRole("button", { name: "关闭对照" }));
     expect(screen.queryByTestId("source-preview-panel")).not.toBeInTheDocument();
-    expect(screen.getByText("Student answer one")).toBeInTheDocument();
+    expect(draft).toHaveValue("Unsaved corrected answer");
+    expect(openButton).toHaveFocus();
   });
 });

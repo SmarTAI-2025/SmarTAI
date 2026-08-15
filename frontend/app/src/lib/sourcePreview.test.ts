@@ -1,27 +1,19 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
-import { buildSourcePreviewMockScenario } from "@/lib/sourcePreview";
+import { describe, expect, it } from "vitest";
+import { inferSourcePreviewKind } from "./sourcePreview";
 
-describe("source preview prelaunch mock contract", () => {
-  afterEach(() => {
-    vi.unstubAllEnvs();
+describe("source preview type inference", () => {
+  it("recognizes supported file names without loading file content", () => {
+    expect(inferSourcePreviewKind("question-set.pdf")).toBe("pdf");
+    expect(inferSourcePreviewKind("student-answer.PNG")).toBe("image");
   });
 
-  it("stays available in a production-mode prelaunch build without a feature flag", () => {
-    vi.stubEnv("DEV", false);
-    vi.stubEnv("MODE", "production");
+  it("prefers an explicit supported MIME type", () => {
+    expect(inferSourcePreviewKind("download", "image/webp")).toBe("image");
+    expect(inferSourcePreviewKind("download", "application/pdf")).toBe("pdf");
+  });
 
-    const scenario = buildSourcePreviewMockScenario({
-      scope: "problem",
-      sourceId: "preview-build-contract",
-      displayName: "question-source.pdf",
-      taskFinalized: false,
-      variant: "pdf",
-    });
-
-    expect(scenario.descriptor).toMatchObject({
-      status: "available",
-      preview_kind: "pdf",
-      unavailable_reason: null,
-    });
+  it("rejects unsupported active-content formats", () => {
+    expect(inferSourcePreviewKind("answer.svg", "image/svg+xml")).toBe("unsupported");
+    expect(inferSourcePreviewKind("answer.html", "text/html")).toBe("unsupported");
   });
 });

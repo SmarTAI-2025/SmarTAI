@@ -4,7 +4,13 @@ import { Button } from "@/components/ui/Button";
 import { InlineNotice } from "@/components/ui/InlineNotice";
 import type { MessageKey } from "@/i18n/messages";
 import { cn } from "@/lib/cn";
-import type { SourceFileDescriptor, SourcePreviewLoadState, SourceUnavailableReason } from "@/types/sourcePreview";
+import type {
+  SourceFileDescriptor,
+  SourcePreviewErrorCode,
+  SourcePreviewKind,
+  SourcePreviewLoadState,
+  SourceUnavailableReason,
+} from "@/types/sourcePreview";
 
 const PdfDocumentPreview = lazy(async () => {
   const module = await import("./PdfDocumentPreview");
@@ -13,15 +19,21 @@ const PdfDocumentPreview = lazy(async () => {
 
 export function OriginalFilePreviewPanel({
   descriptor,
+  displayName,
+  previewKind,
   loadState,
+  errorCode,
   previewUrl,
   onClose,
   onRetry,
   provenanceNote,
   t,
 }: {
-  descriptor: SourceFileDescriptor;
+  descriptor: SourceFileDescriptor | null;
+  displayName: string;
+  previewKind: SourcePreviewKind;
   loadState: SourcePreviewLoadState;
+  errorCode: SourcePreviewErrorCode | null;
   previewUrl: string | null;
   onClose: () => void;
   onRetry: () => void;
@@ -52,14 +64,14 @@ export function OriginalFilePreviewPanel({
       <header className="flex min-h-14 items-center justify-between gap-3 border-b bg-card px-3 py-2.5 sm:px-4">
         <div className="flex min-w-0 items-center gap-2.5">
           <span className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-[7px] bg-primary/10 text-primary">
-            {descriptor.preview_kind === "image"
+            {previewKind === "image"
               ? <Image aria-hidden="true" className="h-4 w-4" />
               : <FileText aria-hidden="true" className="h-4 w-4" />}
           </span>
           <div className="min-w-0">
             <h2 id="source-preview-title" className="text-sm font-bold text-foreground">{t("sourcePreviewTitle")}</h2>
-            <p className="truncate text-[11px] leading-4 text-muted-foreground" title={descriptor.display_name || undefined}>
-              {descriptor.display_name || t("sourcePreviewUnknownFile")}
+            <p className="truncate text-[11px] leading-4 text-muted-foreground" title={displayName || undefined}>
+              {displayName || t("sourcePreviewUnknownFile")}
             </p>
           </div>
         </div>
@@ -80,7 +92,10 @@ export function OriginalFilePreviewPanel({
       <div className="flex h-[42vh] min-h-[280px] items-center justify-center overflow-hidden bg-muted p-3 md:h-[52vh] md:p-4 lg:h-auto lg:min-h-0 lg:flex-1">
         <PreviewContent
           descriptor={descriptor}
+          displayName={displayName}
+          previewKind={previewKind}
           loadState={loadState}
+          errorCode={errorCode}
           previewUrl={previewUrl}
           onRetry={onRetry}
           t={t}
@@ -91,21 +106,24 @@ export function OriginalFilePreviewPanel({
   );
 }
 
-function PreviewContent({ descriptor, loadState, previewUrl, onRetry, t }: {
-  descriptor: SourceFileDescriptor;
+function PreviewContent({ descriptor, displayName, previewKind, loadState, errorCode, previewUrl, onRetry, t }: {
+  descriptor: SourceFileDescriptor | null;
+  displayName: string;
+  previewKind: SourcePreviewKind;
   loadState: SourcePreviewLoadState;
+  errorCode: SourcePreviewErrorCode | null;
   previewUrl: string | null;
   onRetry: () => void;
   t: (key: MessageKey) => string;
 }) {
-  if (descriptor.status === "processing") {
+  if (descriptor?.status === "processing") {
     return (
       <InlineNotice tone="warning" title={t("sourcePreviewProcessingTitle")} className="max-w-md bg-card">
         {t("sourcePreviewProcessingDescription")}
       </InlineNotice>
     );
   }
-  if (descriptor.status === "unavailable") {
+  if (descriptor?.status === "unavailable") {
     return (
       <InlineNotice
         tone={descriptor.unavailable_reason === "task_finalized" ? "warning" : "neutral"}
@@ -122,14 +140,16 @@ function PreviewContent({ descriptor, loadState, previewUrl, onRetry, t }: {
         tone="danger"
         title={t("sourcePreviewErrorTitle")}
         className="max-w-md bg-card"
-        action={(
+        action={errorCode === "source_preview_not_connected" ? undefined : (
           <Button type="button" variant="secondary" className="h-8 px-3" onClick={onRetry}>
             <RefreshCw aria-hidden="true" className="h-3.5 w-3.5" />
             {t("sourcePreviewRetry")}
           </Button>
         )}
       >
-        {t("sourcePreviewErrorDescription")}
+        {t(errorCode === "source_preview_not_connected"
+          ? "sourcePreviewNotConnectedDescription"
+          : "sourcePreviewErrorDescription")}
       </InlineNotice>
     );
   }
@@ -142,12 +162,12 @@ function PreviewContent({ descriptor, loadState, previewUrl, onRetry, t }: {
       </div>
     );
   }
-  if (descriptor.preview_kind === "image") {
+  if (previewKind === "image") {
     return (
       <div className="flex h-full w-full items-center justify-center overflow-auto rounded-[8px] bg-slate-200/70 p-3 dark:bg-slate-950/35">
         <img
           src={previewUrl}
-          alt={descriptor.display_name}
+          alt={displayName}
           className="max-h-full max-w-full rounded-[3px] bg-white object-contain shadow-[0_8px_28px_rgb(15_23_42_/_0.12)]"
         />
       </div>
@@ -157,7 +177,7 @@ function PreviewContent({ descriptor, loadState, previewUrl, onRetry, t }: {
     <Suspense fallback={<PreviewLoading t={t} />}>
       <PdfDocumentPreview
         url={previewUrl}
-        title={`${t("sourcePreviewTitle")} · ${descriptor.display_name}`}
+        title={`${t("sourcePreviewTitle")} · ${displayName}`}
         loadingLabel={t("sourcePreviewLoading")}
         errorTitle={t("sourcePreviewErrorTitle")}
         errorDescription={t("sourcePreviewErrorDescription")}
@@ -178,9 +198,10 @@ function PreviewLoading({ t }: { t: (key: MessageKey) => string }) {
 }
 
 function StatusBadge({ descriptor, t }: {
-  descriptor: SourceFileDescriptor;
+  descriptor: SourceFileDescriptor | null;
   t: (key: MessageKey) => string;
 }) {
+  if (!descriptor) return null;
   const processing = descriptor.status === "processing";
   const unavailable = descriptor.status === "unavailable";
   return (

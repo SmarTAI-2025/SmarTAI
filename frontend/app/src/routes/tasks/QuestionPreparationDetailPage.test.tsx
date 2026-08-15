@@ -87,9 +87,6 @@ vi.mock("@/api/hooks/tasks", () => ({
 vi.mock("@/components/new-task/NewTaskStepper", () => ({
   NewTaskStepper: () => null,
 }));
-vi.mock("@/components/tasks/PdfDocumentPreview", () => ({
-  PdfDocumentPreview: ({ url, title }: { url: string; title: string }) => <object data={url} title={title} />,
-}));
 
 vi.mock("@/i18n/I18nProvider", async () => {
   const { messages } = await vi.importActual<typeof import("@/i18n/messages")>("@/i18n/messages");
@@ -126,8 +123,6 @@ beforeEach(() => {
     return 1;
   });
   vi.spyOn(window, "cancelAnimationFrame").mockImplementation(() => undefined);
-  Object.defineProperty(URL, "createObjectURL", { configurable: true, value: vi.fn(() => "blob:problem-source") });
-  Object.defineProperty(URL, "revokeObjectURL", { configurable: true, value: vi.fn() });
   vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function getRect(this: HTMLElement) {
     const top = this.id === "question-Q2" ? 600 : 0;
     return {
@@ -145,14 +140,15 @@ beforeEach(() => {
 });
 
 describe("QuestionPreparationDetailPage navigation", () => {
-  it("opens the whole question file in a default 50/50 comparison", async () => {
+  it("opens the 50/50 workspace and truthfully reports the pending backend integration", async () => {
     const user = userEvent.setup();
     renderPage();
 
     await user.click(await screen.findByRole("button", { name: "查看题目原文件" }));
     expect(await screen.findByTestId("source-preview-panel")).toBeInTheDocument();
     expect(screen.getByRole("separator", { name: "拖动调整原文件与识别内容宽度" })).toHaveAttribute("aria-valuenow", "50");
-    await waitFor(() => expect(document.querySelector("object")).toHaveAttribute("data", "blob:problem-source"));
+    expect(await screen.findByText("原文件读取接口尚未接通；识别内容仍可继续查看和编辑。")).toBeInTheDocument();
+    expect(document.querySelector("object")).not.toBeInTheDocument();
   });
 
   it("uses a bounded responsive question rail and preserves the full label on hover", async () => {

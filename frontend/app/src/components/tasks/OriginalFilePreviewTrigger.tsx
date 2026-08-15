@@ -3,10 +3,11 @@ import { Button } from "@/components/ui/Button";
 import { HelpTooltip } from "@/components/ui/HelpTooltip";
 import type { MessageKey } from "@/i18n/messages";
 import { cn } from "@/lib/cn";
-import type { SourceFileDescriptor, SourceUnavailableReason } from "@/types/sourcePreview";
+import type { SourcePreviewTriggerState, SourceUnavailableReason } from "@/types/sourcePreview";
 
 export function OriginalFilePreviewTrigger({
-  descriptor,
+  state,
+  unavailableReason: unavailableReasonCode,
   open,
   onOpen,
   onClose,
@@ -14,7 +15,8 @@ export function OriginalFilePreviewTrigger({
   openLabel,
   className,
 }: {
-  descriptor: SourceFileDescriptor;
+  state: SourcePreviewTriggerState;
+  unavailableReason?: SourceUnavailableReason | null;
   open: boolean;
   onOpen: () => void;
   onClose: () => void;
@@ -22,17 +24,17 @@ export function OriginalFilePreviewTrigger({
   openLabel?: string;
   className?: string;
 }) {
-  const unavailable = descriptor.status === "unavailable";
+  const unavailable = state === "unavailable";
   const resolvedOpenLabel = openLabel ?? t("sourcePreviewOpen");
   const label = open ? t("sourcePreviewClose") : resolvedOpenLabel;
   const icon = open
     ? <X aria-hidden="true" className="h-4 w-4" />
-    : descriptor.status === "processing"
+    : state === "processing"
       ? <LoaderCircle aria-hidden="true" className="h-4 w-4 animate-spin" />
       : <Eye aria-hidden="true" className="h-4 w-4" />;
 
   if (unavailable) {
-    const reason = unavailableReason(descriptor.unavailable_reason, t);
+    const reason = unavailableReason(unavailableReasonCode, t);
     return (
       <span className={cn("inline-flex min-w-0 items-center gap-1", className)}>
         <Button type="button" variant="secondary" className="h-10 px-3" disabled>
