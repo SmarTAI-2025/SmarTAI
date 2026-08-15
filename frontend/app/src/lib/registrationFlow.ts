@@ -92,7 +92,7 @@ function parsePendingRegistrationFlow(value: unknown): PendingRegistrationFlow |
     || flow.requestId.length > 512
     || flow.username.length > 64
     || flow.email.length > 254
-    || (flow.transport !== "api" && flow.transport !== "development_mock")
+    || (flow.transport !== "api" && flow.transport !== "temporary_adapter")
   ) {
     return null;
   }

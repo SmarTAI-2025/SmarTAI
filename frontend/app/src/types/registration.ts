@@ -1,4 +1,4 @@
-export type RegistrationTransport = "api" | "development_mock";
+export type RegistrationTransport = "api" | "temporary_adapter";
 
 export interface RegistrationRequest {
   username: string;

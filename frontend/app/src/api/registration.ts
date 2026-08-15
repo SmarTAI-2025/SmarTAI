@@ -10,12 +10,8 @@ import type {
 } from "@/types/registration";
 import type { Locale } from "@/i18n/messages";
 
-const IS_DEVELOPMENT = (import.meta.env as ImportMetaEnv & { readonly DEV?: boolean }).DEV === true;
-
-export interface DevelopmentRegistrationPreview {
+export interface TemporaryRegistrationPreview {
   path: string;
-  title: string;
-  description: string;
   actionLabel: string;
 }
 
@@ -24,10 +20,10 @@ export async function requestRegistration(request: RegistrationRequest): Promise
     const response = await postJSON<RegistrationRequestResponse, RegistrationRequest>("/auth/register/request", request);
     return { ...response, transport: "api" };
   } catch (error) {
-    if (IS_DEVELOPMENT && shouldUseDevelopmentRegistrationMock(error, true)) {
-      const mock = await import("./registration.mock");
-      const response = await mock.requestRegistrationMock(request);
-      return { ...response, transport: "development_mock" };
+    if (shouldUseTemporaryRegistrationAdapter(error)) {
+      const adapter = await import("./registration.adapter");
+      const response = await adapter.requestRegistrationAdapter(request);
+      return { ...response, transport: "temporary_adapter" };
     }
     throw error;
   }
@@ -37,9 +33,9 @@ export async function resendRegistration(request: RegistrationResendRequest): Pr
   try {
     return await postJSON<RegistrationResendResponse, RegistrationResendRequest>("/auth/register/resend", request);
   } catch (error) {
-    if (IS_DEVELOPMENT && shouldUseDevelopmentRegistrationMock(error, true)) {
-      const mock = await import("./registration.mock");
-      return mock.resendRegistrationMock();
+    if (shouldUseTemporaryRegistrationAdapter(error)) {
+      const adapter = await import("./registration.adapter");
+      return adapter.resendRegistrationAdapter();
     }
     throw error;
   }
@@ -54,27 +50,23 @@ export async function verifyRegistration(
       request,
     );
   } catch (error) {
-    if (IS_DEVELOPMENT && shouldUseDevelopmentRegistrationMock(error, true)) {
-      const mock = await import("./registration.mock");
-      return mock.verifyRegistrationMock(request.token);
+    if (shouldUseTemporaryRegistrationAdapter(error)) {
+      const adapter = await import("./registration.adapter");
+      return adapter.verifyRegistrationAdapter(request.token);
     }
     throw error;
   }
 }
 
-export async function getDevelopmentVerificationPreview(
+export async function getTemporaryVerificationPreview(
   requestId: string,
   locale: Locale,
-): Promise<DevelopmentRegistrationPreview | null> {
-  if (IS_DEVELOPMENT) {
-    const mock = await import("./registration.mock");
-    return mock.developmentVerificationPreview(requestId, locale);
-  }
-  return null;
+): Promise<TemporaryRegistrationPreview> {
+  const adapter = await import("./registration.adapter");
+  return adapter.temporaryVerificationPreview(requestId, locale);
 }
 
-export function shouldUseDevelopmentRegistrationMock(error: unknown, isDevelopment: boolean): boolean {
-  if (!isDevelopment) return false;
+export function shouldUseTemporaryRegistrationAdapter(error: unknown): boolean {
   const status = normalizeAPIError(error).status;
   return status === 0 || status === 404;
 }

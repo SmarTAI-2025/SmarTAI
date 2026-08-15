@@ -25,7 +25,7 @@ describe("RegisterPage", () => {
       request_id: "request-1",
       expires_in_seconds: 1800,
       resend_after_seconds: 60,
-      transport: "development_mock",
+      transport: "temporary_adapter",
     });
   });
 

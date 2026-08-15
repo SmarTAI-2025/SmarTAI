@@ -3,6 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { savePendingRegistrationFlow } from "@/lib/registrationFlow";
+import type { RegistrationTransport } from "@/types/registration";
 import { RegisterCheckEmailPage } from "./RegisterCheckEmailPage";
 
 const mutateAsync = vi.fn();
@@ -19,17 +20,7 @@ describe("RegisterCheckEmailPage", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     window.sessionStorage.clear();
-    const now = Date.now();
-    savePendingRegistrationFlow({
-      version: 1,
-      requestId: "request-1",
-      username: "teacher",
-      email: "teacher@example.edu",
-      createdAt: now,
-      expiresAt: now + 1_800_000,
-      resendAvailableAt: now - 1,
-      transport: "api",
-    });
+    saveFlow("api");
     mutateAsync.mockResolvedValue({
       status: "verification_required",
       request_id: "request-2",
@@ -50,4 +41,27 @@ describe("RegisterCheckEmailPage", () => {
     expect(mutateAsync).toHaveBeenCalledWith({ request_id: "request-1" });
     expect(screen.getByRole("button", { name: /Resend available in/ })).toBeDisabled();
   });
+
+  it("shows one direct verification-link action for the temporary adapter", async () => {
+    saveFlow("temporary_adapter");
+    render(<MemoryRouter><RegisterCheckEmailPage /></MemoryRouter>);
+
+    const link = await screen.findByRole("link", { name: "Open verification link" });
+    expect(link.getAttribute("href")).toMatch(/^\/register\/verify#token=/);
+    expect(screen.queryByText(/local demonstration|simulated|real account/i)).not.toBeInTheDocument();
+  });
 });
+
+function saveFlow(transport: RegistrationTransport) {
+  const now = Date.now();
+  savePendingRegistrationFlow({
+    version: 1,
+    requestId: "request-1",
+    username: "teacher",
+    email: "teacher@example.edu",
+    createdAt: now,
+    expiresAt: now + 1_800_000,
+    resendAvailableAt: now - 1,
+    transport,
+  });
+}

@@ -3,8 +3,8 @@ import { useEffect, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { normalizeAPIError } from "@/api/client";
 import {
-  getDevelopmentVerificationPreview,
-  type DevelopmentRegistrationPreview,
+  getTemporaryVerificationPreview,
+  type TemporaryRegistrationPreview,
 } from "@/api/registration";
 import { useResendRegistration } from "@/api/hooks/registration";
 import { AuthFlowHeader } from "@/components/auth/AuthFlowHeader";
@@ -33,7 +33,7 @@ export function RegisterCheckEmailPage() {
   const [now, setNow] = useState(Date.now());
   const [error, setError] = useState<string | null>(null);
   const [resent, setResent] = useState(false);
-  const [developmentPreview, setDevelopmentPreview] = useState<DevelopmentRegistrationPreview | null>(null);
+  const [verificationPreview, setVerificationPreview] = useState<TemporaryRegistrationPreview | null>(null);
   const steps = [text("stepDetails"), text("stepEmail"), text("stepLogin")];
 
   useEffect(() => {
@@ -44,12 +44,12 @@ export function RegisterCheckEmailPage() {
 
   useEffect(() => {
     let active = true;
-    if (!flow || flow.transport !== "development_mock") {
-      setDevelopmentPreview(null);
+    if (!flow || flow.transport !== "temporary_adapter") {
+      setVerificationPreview(null);
       return () => { active = false; };
     }
-    void getDevelopmentVerificationPreview(flow.requestId, locale).then((preview) => {
-      if (active) setDevelopmentPreview(preview);
+    void getTemporaryVerificationPreview(flow.requestId, locale).then((preview) => {
+      if (active) setVerificationPreview(preview);
     });
     return () => { active = false; };
   }, [flow, locale]);
@@ -154,23 +154,14 @@ export function RegisterCheckEmailPage() {
         ) : null}
         {error ? <div className="mt-4"><AuthError message={error} /></div> : null}
 
-        {developmentPreview ? (
-          <InlineNotice
-            tone="info"
-            title={developmentPreview.title}
-            className="mt-4"
-            action={(
-              <Link
-                to={developmentPreview.path}
-                className="inline-flex h-8 items-center gap-1.5 rounded-md border border-primary/30 bg-card px-2.5 text-xs font-semibold text-primary outline-none hover:bg-primary/5 focus-visible:ring-2 focus-visible:ring-ring"
-              >
-                {developmentPreview.actionLabel}
-                <ArrowRight aria-hidden="true" size={13} />
-              </Link>
-            )}
+        {verificationPreview ? (
+          <Link
+            to={verificationPreview.path}
+            className="mt-4 inline-flex h-11 w-full items-center justify-center gap-2 rounded-md bg-primary px-4 text-sm font-semibold text-primary-foreground outline-none hover:bg-primary/90 focus-visible:ring-2 focus-visible:ring-ring"
           >
-            {developmentPreview.description}
-          </InlineNotice>
+            {verificationPreview.actionLabel}
+            <ArrowRight aria-hidden="true" size={15} />
+          </Link>
         ) : null}
 
         <div className="mt-5 grid gap-3">
