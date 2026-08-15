@@ -9,7 +9,7 @@ import { useI18n } from "@/i18n/I18nProvider";
 import type { Locale } from "@/i18n/messages";
 import { cn } from "@/lib/cn";
 import { gradingProgressText as copy } from "@/lib/gradingProgressCopy";
-import { classifyRecoverableError } from "@/lib/taskActionGuards";
+import { backgroundErrorTitle, classifyRecoverableError } from "@/lib/taskActionGuards";
 import {
   getTaskDestination,
   getTaskGradingSetupHref,
@@ -124,11 +124,20 @@ export function GradingProgressPage() {
               locale={locale}
               className="min-h-[300px]"
               primaryAction={recoveryInfo.actionKind === "byok" ? undefined : {
-                label: recoveryInfo.actionKind === "refresh" ? recoveryInfo.actionLabel : copy(locale, retryGrading.isPending ? "retrying" : "retry"),
-                onClick: recoveryInfo.actionKind === "refresh" ? refresh : () => void handleRetry(),
+                label: recoveryInfo.actionKind === "refresh" || recoveryInfo.actionKind === "adjust_experts"
+                  ? recoveryInfo.actionLabel
+                  : copy(locale, retryGrading.isPending ? "retrying" : "retry"),
+                href: recoveryInfo.actionKind === "adjust_experts"
+                  ? getTaskGradingSetupHref(taskId, `/tasks/${taskId}/grading/progress`)
+                  : undefined,
+                onClick: recoveryInfo.actionKind === "refresh"
+                  ? refresh
+                  : recoveryInfo.actionKind === "adjust_experts"
+                    ? undefined
+                    : () => void handleRetry(),
                 busy: retryGrading.isPending || taskQuery.isFetching || progressQuery.isFetching,
               }}
-              secondaryAction={{
+              secondaryAction={recoveryInfo.actionKind === "adjust_experts" ? undefined : {
                 label: copy(locale, "editExperts"),
                 href: getTaskGradingSetupHref(taskId, `/tasks/${taskId}/grading/progress`),
               }}
@@ -186,7 +195,7 @@ export function GradingProgressPage() {
                 {latestError ? (
                   <span className="flex items-start gap-2 text-danger">
                     <AlertTriangle aria-hidden="true" className="mt-0.5 h-4 w-4 shrink-0" />
-                    {latestError}
+                    {backgroundErrorTitle(latestError, locale)}
                   </span>
                 ) : completedView
                   ? (locale === "en-US" ? "This page preserves the completed grading queue for later review." : "这里保留已完成批改的队列快照，便于之后回看。")

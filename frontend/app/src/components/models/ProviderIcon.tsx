@@ -2,7 +2,10 @@ import {
   Atom,
   Bot,
   BrainCircuit,
+  Cpu,
   Feather,
+  Moon,
+  Orbit,
   Sparkles,
   type LucideIcon,
 } from "lucide-react";
@@ -25,6 +28,18 @@ const PROVIDER_ICONS: Record<string, { icon: LucideIcon; className: string }> = 
   zhipu: {
     icon: BrainCircuit,
     className: "bg-indigo-50 text-indigo-600 dark:bg-indigo-950/35 dark:text-indigo-300",
+  },
+  deepseek: {
+    icon: Cpu,
+    className: "bg-violet-50 text-violet-700 dark:bg-violet-950/35 dark:text-violet-300",
+  },
+  moonshot: {
+    icon: Moon,
+    className: "bg-cyan-50 text-cyan-700 dark:bg-cyan-950/35 dark:text-cyan-300",
+  },
+  qwen: {
+    icon: Orbit,
+    className: "bg-rose-50 text-rose-700 dark:bg-rose-950/35 dark:text-rose-300",
   },
 };
 
