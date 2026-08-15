@@ -14,24 +14,30 @@ from urllib.parse import quote, unquote, urlsplit, urlunsplit
 import httpcore
 import httpx
 
+from backend.llm.provider_catalog import (
+    PROVIDER_CATALOG_BY_TYPE,
+    WIRE_PROTOCOLS,
+    effective_wire_protocol,
+)
+
 
 Resolver = Callable[[str, int], Iterable[str]]
 
-CUSTOM_PROVIDER_TYPE = "openai_compatible"
-CUSTOM_PROVIDER_RISK_ACK_VERSION = "2026-08-12.v1"
-
 OFFICIAL_PROVIDER_BASE_URLS = {
-    "openai": "https://api.openai.com/v1",
-    "zhipu": "https://open.bigmodel.cn/api/paas/v4",
-    "deepseek": "https://api.deepseek.com/v1",
-    "moonshot": "https://api.moonshot.cn/v1",
-    "qwen": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+    provider_type: entry.default_base_url
+    for provider_type, entry in PROVIDER_CATALOG_BY_TYPE.items()
 }
-OFFICIAL_PROVIDER_ENDPOINT_IDENTITIES = {
-    **OFFICIAL_PROVIDER_BASE_URLS,
-    "gemini": "https://generativelanguage.googleapis.com",
-    "anthropic": "https://api.anthropic.com",
-}
+EDITABLE_OPENAI_COMPATIBLE_PROVIDER_TYPES = frozenset(
+    provider_type
+    for provider_type, entry in PROVIDER_CATALOG_BY_TYPE.items()
+    if entry.wire_protocol == "openai_chat_completions"
+)
+CUSTOM_BASE_URL_PROVIDER_TYPES = frozenset(
+    provider_type
+    for provider_type, entry in PROVIDER_CATALOG_BY_TYPE.items()
+    if entry.custom_base_url_supported
+)
+OFFICIAL_PROVIDER_ENDPOINT_IDENTITIES = dict(OFFICIAL_PROVIDER_BASE_URLS)
 
 _DOMAIN_LABEL = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$")
 DEFAULT_MAX_RESPONSE_BYTES = 4 * 1024 * 1024
@@ -113,6 +119,7 @@ def canonicalize_provider_base_url(value: str) -> str:
             segment in {".", ".."}
             or "/" in segment
             or "\\" in segment
+            or "%" in segment
             or any(ord(character) < 32 for character in segment)
         ):
             raise ProviderEndpointError("provider_endpoint_invalid")
@@ -122,7 +129,12 @@ def canonicalize_provider_base_url(value: str) -> str:
     path = "/".join(normalized_segments).rstrip("/")
     if path and not path.startswith("/"):
         path = "/" + path
-    if path.lower().endswith("/chat/completions"):
+    lowered_path = unquote(path).lower()
+    if (
+        lowered_path.endswith("/chat/completions")
+        or lowered_path.endswith("/messages")
+        or lowered_path.endswith(":generatecontent")
+    ):
         raise ProviderEndpointError("provider_endpoint_invalid")
     return urlunsplit(("https", hostname, path, "", ""))
 
@@ -130,25 +142,26 @@ def canonicalize_provider_base_url(value: str) -> str:
 def normalize_provider_endpoint(
     provider_type: str,
     base_url: str | None,
+    wire_protocol: str | None = None,
 ) -> tuple[str | None, str]:
-    """Validate official endpoints and return (stored URL, endpoint identity)."""
+    """Normalize a provider URL and return (stored URL, endpoint identity).
+
+    Every implemented provider may use its official default or a policy-safe
+    public HTTPS relay. Protocol selection is independent from the model brand,
+    but a cross-protocol override is only allowed with a custom endpoint.
+    """
     value = base_url.strip() if base_url else ""
-    if provider_type == CUSTOM_PROVIDER_TYPE:
-        if not value:
-            raise ProviderEndpointError("provider_endpoint_invalid")
-        canonical = canonicalize_provider_base_url(value)
-        return canonical, canonical
-    identity = OFFICIAL_PROVIDER_ENDPOINT_IDENTITIES.get(provider_type)
-    if identity is None:
+    entry = PROVIDER_CATALOG_BY_TYPE.get(provider_type)
+    if entry is None:
         raise ProviderEndpointError("provider_base_url_not_allowed")
+    try:
+        protocol = effective_wire_protocol(provider_type, wire_protocol)
+    except ValueError as exc:
+        raise ProviderEndpointError("provider_wire_protocol_not_supported") from exc
+    identity = entry.default_base_url
     if value:
-        expected = OFFICIAL_PROVIDER_BASE_URLS.get(provider_type)
-        try:
-            canonical = canonicalize_provider_base_url(value)
-        except ProviderEndpointError as exc:
-            raise ProviderEndpointError("provider_base_url_not_allowed") from exc
-        if expected is None:
-            raise ProviderEndpointError("provider_base_url_not_allowed")
+        canonical = canonicalize_provider_base_url(value)
+        expected = entry.default_base_url
         expected_parts = urlsplit(expected)
         expected_origin = urlunsplit((
             expected_parts.scheme,
@@ -157,10 +170,73 @@ def normalize_provider_endpoint(
             "",
             "",
         ))
-        if canonical not in {expected_origin, expected}:
-            raise ProviderEndpointError("provider_base_url_not_allowed")
-        return expected, identity
+        is_official = canonical in {expected_origin, expected}
+        if is_official:
+            if protocol != entry.wire_protocol:
+                raise ProviderEndpointError(
+                    "provider_wire_protocol_requires_custom_endpoint"
+                )
+            return expected, identity
+        return canonical, canonical
+    if protocol != entry.wire_protocol:
+        raise ProviderEndpointError("provider_wire_protocol_requires_custom_endpoint")
     return None, identity
+
+
+def is_user_defined_provider_endpoint(
+    provider_type: str,
+    base_url: str | None,
+    wire_protocol: str | None = None,
+) -> bool:
+    """Return whether a saved provider URL differs from its official default."""
+    entry = PROVIDER_CATALOG_BY_TYPE.get(provider_type)
+    if entry is None:
+        return False
+    try:
+        protocol = effective_wire_protocol(provider_type, wire_protocol)
+        normalized, identity = normalize_provider_endpoint(
+            provider_type,
+            base_url,
+            protocol,
+        )
+    except ProviderEndpointError:
+        return False
+    return protocol != entry.wire_protocol or identity != entry.default_base_url
+
+
+def provider_operation_url(
+    base_url: str,
+    wire_protocol: str,
+    *,
+    model: str,
+) -> str:
+    """Join one reviewed Base URL to the only operation allowed per protocol."""
+    if wire_protocol not in WIRE_PROTOCOLS:
+        raise ProviderEndpointError("provider_wire_protocol_not_supported")
+    canonical = canonicalize_provider_base_url(base_url)
+    path = urlsplit(canonical).path.rstrip("/")
+    if wire_protocol == "openai_chat_completions":
+        suffix = "/chat/completions"
+    elif wire_protocol == "anthropic_messages":
+        suffix = "/messages" if path.lower().endswith("/v1") else "/v1/messages"
+    else:
+        clean_model = model.strip()
+        if not clean_model or any(ord(ch) < 32 for ch in clean_model):
+            raise ProviderEndpointError("provider_model_invalid")
+        encoded_model = quote(clean_model, safe="-._~")
+        suffix = (
+            f"/models/{encoded_model}:generateContent"
+            if path.lower().endswith("/v1beta")
+            else f"/v1beta/models/{encoded_model}:generateContent"
+        )
+    return f"{canonical}{suffix}"
+
+
+def effective_provider_base_url(provider_type: str, base_url: str | None) -> str:
+    entry = PROVIDER_CATALOG_BY_TYPE.get(provider_type)
+    if entry is None:
+        raise ProviderEndpointError("provider_base_url_not_allowed")
+    return base_url or entry.default_base_url
 
 
 def resolve_public_endpoint(
@@ -349,6 +425,7 @@ class _PinnedHTTPTransport(httpx.HTTPTransport):
         resolver: Resolver | None = None,
         revalidate: bool = False,
         max_response_bytes: int = DEFAULT_MAX_RESPONSE_BYTES,
+        allowed_target_url: str | None = None,
     ) -> None:
         super().__init__(verify=True, trust_env=False, retries=0)
         self._pool = httpcore.ConnectionPool(
@@ -363,10 +440,13 @@ class _PinnedHTTPTransport(httpx.HTTPTransport):
             ),
         )
         self._max_response_bytes = max(1024, int(max_response_bytes))
+        self._allowed_target_url = _validated_allowed_target(
+            endpoint,
+            allowed_target_url,
+        )
 
     def handle_request(self, request: httpx.Request) -> httpx.Response:
-        if request.method != "POST":
-            raise ProviderEndpointError("provider_endpoint_protocol_mismatch")
+        _validate_outbound_request(request, self._allowed_target_url)
         request.headers["accept-encoding"] = "identity"
         response = super().handle_request(request)
         if 300 <= response.status_code < 400:
@@ -396,6 +476,7 @@ class _PinnedAsyncHTTPTransport(httpx.AsyncHTTPTransport):
         resolver: Resolver | None = None,
         revalidate: bool = False,
         max_response_bytes: int = DEFAULT_MAX_RESPONSE_BYTES,
+        allowed_target_url: str | None = None,
     ) -> None:
         super().__init__(verify=True, trust_env=False, retries=0)
         self._pool = httpcore.AsyncConnectionPool(
@@ -410,10 +491,13 @@ class _PinnedAsyncHTTPTransport(httpx.AsyncHTTPTransport):
             ),
         )
         self._max_response_bytes = max(1024, int(max_response_bytes))
+        self._allowed_target_url = _validated_allowed_target(
+            endpoint,
+            allowed_target_url,
+        )
 
     async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
-        if request.method != "POST":
-            raise ProviderEndpointError("provider_endpoint_protocol_mismatch")
+        _validate_outbound_request(request, self._allowed_target_url)
         request.headers["accept-encoding"] = "identity"
         response = await super().handle_async_request(request)
         if 300 <= response.status_code < 400:
@@ -443,6 +527,41 @@ def _declared_response_too_large(headers: httpx.Headers, max_bytes: int) -> bool
         return int(value) > max_bytes
     except ValueError:
         return False
+
+
+def _validated_allowed_target(
+    endpoint: ResolvedEndpoint,
+    allowed_target_url: str | None,
+) -> httpx.URL | None:
+    if allowed_target_url is None:
+        return None
+    try:
+        target = httpx.URL(allowed_target_url)
+    except (TypeError, ValueError) as exc:
+        raise ProviderEndpointError("provider_endpoint_protocol_mismatch") from exc
+    if (
+        target.scheme != "https"
+        or target.host != endpoint.hostname
+        or target.port not in {None, 443}
+        or bool(target.username)
+        or bool(target.password)
+        or target.query
+        or target.fragment
+    ):
+        raise ProviderEndpointError("provider_endpoint_protocol_mismatch")
+    return target
+
+
+def _validate_outbound_request(
+    request: httpx.Request,
+    allowed_target_url: httpx.URL | None,
+) -> None:
+    if request.method != "POST":
+        raise ProviderEndpointError("provider_endpoint_protocol_mismatch")
+    if request.url.query or request.url.fragment:
+        raise ProviderEndpointError("provider_endpoint_protocol_mismatch")
+    if allowed_target_url is not None and request.url != allowed_target_url:
+        raise ProviderEndpointError("provider_endpoint_protocol_mismatch")
 
 
 class _LimitedSyncStream(httpx.SyncByteStream):
@@ -487,6 +606,7 @@ def build_safe_provider_clients(
     timeout_seconds: float,
     resolver: Resolver | None = None,
     max_response_bytes: int = DEFAULT_MAX_RESPONSE_BYTES,
+    allowed_target_url: str | None = None,
 ) -> tuple[httpx.Client, httpx.AsyncClient]:
     """Build redirect-free clients whose sockets only use reviewed addresses."""
     endpoint = resolve_public_endpoint(base_url, resolver=resolver)
@@ -496,6 +616,7 @@ def build_safe_provider_clients(
         resolver=resolver,
         revalidate=True,
         max_response_bytes=max_response_bytes,
+        allowed_target_url=allowed_target_url,
     )
 
 
@@ -506,6 +627,7 @@ def build_safe_provider_clients_for_endpoint(
     resolver: Resolver | None = None,
     revalidate: bool = False,
     max_response_bytes: int = DEFAULT_MAX_RESPONSE_BYTES,
+    allowed_target_url: str | None = None,
 ) -> tuple[httpx.Client, httpx.AsyncClient]:
     """Build clients for one just-resolved and approved endpoint."""
     timeout = httpx.Timeout(timeout_seconds, connect=min(timeout_seconds, 15.0))
@@ -516,6 +638,7 @@ def build_safe_provider_clients_for_endpoint(
                 resolver=resolver,
                 revalidate=revalidate,
                 max_response_bytes=max_response_bytes,
+                allowed_target_url=allowed_target_url,
             ),
             follow_redirects=False,
             timeout=timeout,
@@ -527,6 +650,7 @@ def build_safe_provider_clients_for_endpoint(
                 resolver=resolver,
                 revalidate=revalidate,
                 max_response_bytes=max_response_bytes,
+                allowed_target_url=allowed_target_url,
             ),
             follow_redirects=False,
             timeout=timeout,

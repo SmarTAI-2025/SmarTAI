@@ -4,7 +4,6 @@ import type {
   ExpertConfig,
   ExpertMutationResponse,
   ExpertVerificationResponse,
-  ExpertVisionVerificationResponse,
   ProviderCatalogItem,
   UpdateExpertRequest,
 } from "@/types";
@@ -49,15 +48,6 @@ export function updateExpert(
 export function verifyExpert(providerId: string): Promise<ExpertVerificationResponse> {
   return postJSON<ExpertVerificationResponse>(
     `/experts/${encodeURIComponent(providerId)}/verify`,
-  );
-}
-
-export function verifyExpertVision(
-  providerId: string,
-): Promise<ExpertVisionVerificationResponse> {
-  return postJSON<ExpertVisionVerificationResponse>(
-    `/experts/${encodeURIComponent(providerId)}/verify-vision`,
-    {},
   );
 }
 

@@ -368,7 +368,11 @@ ProviderType = Literal[
     "deepseek",
     "moonshot",
     "qwen",
-    "openai_compatible",
+]
+WireProtocol = Literal[
+    "openai_chat_completions",
+    "anthropic_messages",
+    "gemini_generate_content",
 ]
 
 
@@ -379,6 +383,10 @@ class ProviderConfig(BaseModel):
     model: str = Field(description="Model name, e.g. 'gpt-4o', 'gemini-2.5-pro'")
     base_url: Optional[str] = None
     endpoint_identity: Optional[str] = None
+    wire_protocol: Optional[WireProtocol] = Field(
+        default=None,
+        description="Effective API protocol; omitted means the provider default.",
+    )
     enabled: bool = True
     display_name: Optional[str] = Field(
         default=None,

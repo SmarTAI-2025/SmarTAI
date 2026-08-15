@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import ssl
+
 import httpx
 import pytest
+from langchain_core.messages import HumanMessage, SystemMessage
 
 from backend.api.experts import _verification_error_code
 from backend.config import Settings, configure_provider_proxy_environment, settings
@@ -10,7 +13,9 @@ from backend.llm.providers import (
     AnthropicProvider,
     GeminiProvider,
     OpenAIProvider,
-    OpenAICompatibleProvider,
+    ProviderRequestError,
+    SafeRelayProvider,
+    VisionImage,
     ZhipuProvider,
     build_provider,
 )
@@ -125,9 +130,7 @@ def test_openai_uses_explicit_smartai_proxy(monkeypatch):
     assert captured["kwargs"]["http_async_client"] == "async-client"
 
 
-def test_custom_provider_uses_only_the_pinned_safe_clients(monkeypatch):
-    import langchain_openai
-
+def test_deepseek_relay_uses_only_the_pinned_safe_clients(monkeypatch):
     captured: dict[str, object] = {}
 
     def fake_safe_clients(base_url, **kwargs):
@@ -135,11 +138,7 @@ def test_custom_provider_uses_only_the_pinned_safe_clients(monkeypatch):
         captured["client_kwargs"] = kwargs
         return "safe-sync", "safe-async"
 
-    def fake_chat_openai(**kwargs):
-        captured["chat_kwargs"] = kwargs
-        return object()
-
-    monkeypatch.setattr(settings, "custom_provider_endpoints_enabled", True)
+    monkeypatch.setattr(settings, "runtime_environment", "development")
     monkeypatch.setattr(provider_module, "build_safe_provider_clients", fake_safe_clients)
     monkeypatch.setattr(
         provider_module,
@@ -148,9 +147,8 @@ def test_custom_provider_uses_only_the_pinned_safe_clients(monkeypatch):
             AssertionError("custom providers must not use the ordinary client")
         ),
     )
-    monkeypatch.setattr(langchain_openai, "ChatOpenAI", fake_chat_openai)
-    provider = OpenAICompatibleProvider(ProviderConfig(
-        provider_type="openai_compatible",
+    provider = build_provider(ProviderConfig(
+        provider_type="deepseek",
         api_key="test-key",
         model="relay-model",
         base_url="https://relay.example.com/v1",
@@ -160,9 +158,211 @@ def test_custom_provider_uses_only_the_pinned_safe_clients(monkeypatch):
     provider._build_client_sync()
 
     assert captured["base_url"] == "https://relay.example.com/v1"
-    assert captured["chat_kwargs"]["http_client"] == "safe-sync"
-    assert captured["chat_kwargs"]["http_async_client"] == "safe-async"
-    assert captured["chat_kwargs"]["max_retries"] == 0
+    assert captured["client_kwargs"]["allowed_target_url"] == (
+        "https://relay.example.com/v1/chat/completions"
+    )
+    assert provider._safe_sync_client == "safe-sync"
+    assert provider._safe_async_client == "safe-async"
+    assert provider.supports_vision is False
+    assert provider.can_encode_vision is True
+
+
+class _FakeRelayClient:
+    def __init__(self, response_payload, status_code=200):
+        self.response_payload = response_payload
+        self.status_code = status_code
+        self.calls = []
+
+    async def post(self, url, *, headers, json):
+        self.calls.append({"url": url, "headers": headers, "json": json})
+        return httpx.Response(
+            self.status_code,
+            json=self.response_payload,
+            request=httpx.Request("POST", url),
+        )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("provider_type", "wire_protocol", "expected_path", "response_payload"),
+    [
+        (
+            "deepseek",
+            "openai_chat_completions",
+            "/v1/chat/completions",
+            {
+                "choices": [{"message": {"content": "openai ok"}}],
+                "usage": {"prompt_tokens": 3, "completion_tokens": 2},
+            },
+        ),
+        (
+            "anthropic",
+            "anthropic_messages",
+            "/v1/messages",
+            {
+                "content": [{"type": "text", "text": "anthropic ok"}],
+                "usage": {"input_tokens": 3, "output_tokens": 2},
+            },
+        ),
+        (
+            "gemini",
+            "gemini_generate_content",
+            "/v1beta/models/test-model:generateContent",
+            {
+                "candidates": [{"content": {"parts": [{"text": "gemini ok"}]}}],
+                "usageMetadata": {
+                    "promptTokenCount": 3,
+                    "candidatesTokenCount": 2,
+                },
+            },
+        ),
+    ],
+)
+async def test_each_relay_protocol_sends_text_and_image_once_without_key_in_url_or_body(
+    monkeypatch,
+    provider_type,
+    wire_protocol,
+    expected_path,
+    response_payload,
+):
+    monkeypatch.setattr(settings, "runtime_environment", "development")
+    provider = build_provider(ProviderConfig(
+        provider_type=provider_type,
+        api_key="test-key",
+        model="test-model",
+        base_url="https://relay.example.com/v1" if wire_protocol != "gemini_generate_content" else "https://relay.example.com",
+        endpoint_identity="https://relay.example.com/v1" if wire_protocol != "gemini_generate_content" else "https://relay.example.com",
+        wire_protocol=wire_protocol,
+    ))
+    assert isinstance(provider, SafeRelayProvider)
+    fake = _FakeRelayClient(response_payload)
+    provider._safe_async_client = fake
+
+    text_response = await provider.ainvoke([HumanMessage(content="hello")])
+    response = await provider.ainvoke_vision(
+        "Read this image",
+        [VisionImage(data=b"image-bytes", media_type="image/png")],
+    )
+
+    assert text_response.content.endswith("ok")
+    assert response.content.endswith("ok")
+    assert len(fake.calls) == 2
+    text_call, call = fake.calls
+    assert text_call["url"] == call["url"]
+    assert call["url"].endswith(expected_path)
+    assert "?" not in call["url"]
+    assert "test-key" not in str(call["json"])
+    if wire_protocol == "openai_chat_completions":
+        assert call["headers"]["authorization"] == "Bearer test-key"
+        assert text_call["json"]["messages"][0]["content"] == "hello"
+        image = call["json"]["messages"][0]["content"][1]
+        assert image["type"] == "image_url"
+    elif wire_protocol == "anthropic_messages":
+        assert call["headers"]["x-api-key"] == "test-key"
+        assert text_call["json"]["messages"][0]["content"][0]["text"] == "hello"
+        image = call["json"]["messages"][0]["content"][1]
+        assert image["source"]["type"] == "base64"
+    else:
+        assert call["headers"]["x-goog-api-key"] == "test-key"
+        assert text_call["json"]["contents"][0]["parts"][0]["text"] == "hello"
+        image = call["json"]["contents"][0]["parts"][1]
+        assert image["inlineData"]["mimeType"] == "image/png"
+
+
+@pytest.mark.asyncio
+async def test_cross_protocol_override_uses_only_the_selected_wire_protocol(monkeypatch):
+    monkeypatch.setattr(settings, "runtime_environment", "development")
+    provider = build_provider(ProviderConfig(
+        provider_type="gemini",
+        api_key="test-key",
+        model="relay-model",
+        base_url="https://relay.example.com/v1",
+        endpoint_identity="https://relay.example.com/v1",
+        wire_protocol="openai_chat_completions",
+    ))
+    fake = _FakeRelayClient({
+        "choices": [{"message": {"content": "ok"}}],
+        "usage": {},
+    })
+    provider._safe_async_client = fake
+
+    await provider.ainvoke([
+        SystemMessage(content="system"),
+        HumanMessage(content="hello"),
+    ])
+
+    assert len(fake.calls) == 1
+    assert fake.calls[0]["url"] == "https://relay.example.com/v1/chat/completions"
+    assert fake.calls[0]["json"]["messages"][0]["role"] == "system"
+    assert "x-goog-api-key" not in fake.calls[0]["headers"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("status_code", "expected_code"),
+    [
+        (401, "provider_auth_failed"),
+        (404, "provider_model_or_endpoint_not_found"),
+        (429, "provider_rate_limited"),
+        (500, "provider_upstream_unavailable"),
+        (400, "provider_request_rejected"),
+    ],
+)
+async def test_relay_http_failures_expose_only_stable_codes(
+    monkeypatch,
+    status_code,
+    expected_code,
+):
+    monkeypatch.setattr(settings, "runtime_environment", "development")
+    provider = build_provider(ProviderConfig(
+        provider_type="deepseek",
+        api_key="secret-must-not-leak",
+        model="relay-model",
+        base_url="https://relay.example.com/v1",
+        wire_protocol="openai_chat_completions",
+    ))
+    provider._safe_async_client = _FakeRelayClient(
+        {"raw": "secret-must-not-leak"},
+        status_code=status_code,
+    )
+
+    with pytest.raises(ProviderRequestError) as exc_info:
+        await provider.ainvoke([HumanMessage(content="hello")])
+
+    assert exc_info.value.code == expected_code
+    assert str(exc_info.value) == expected_code
+    assert "secret-must-not-leak" not in str(exc_info.value)
+
+
+@pytest.mark.asyncio
+async def test_relay_tls_failure_preserves_a_specific_safe_error_code(monkeypatch):
+    monkeypatch.setattr(settings, "runtime_environment", "development")
+    provider = build_provider(ProviderConfig(
+        provider_type="deepseek",
+        api_key="secret-must-not-leak",
+        model="relay-model",
+        base_url="https://relay.example.com/v1",
+        wire_protocol="openai_chat_completions",
+    ))
+
+    class TLSFailureClient:
+        async def post(self, url, *, headers, json):
+            try:
+                raise ssl.SSLCertVerificationError("certificate verify failed")
+            except ssl.SSLError as cause:
+                raise httpx.ConnectError(
+                    "TLS connection failed",
+                    request=httpx.Request("POST", url),
+                ) from cause
+
+    provider._safe_async_client = TLSFailureClient()
+
+    with pytest.raises(ProviderRequestError) as exc_info:
+        await provider.ainvoke([HumanMessage(content="hello")])
+
+    assert exc_info.value.code == "provider_endpoint_tls_failed"
+    assert "relay.example.com" not in str(exc_info.value)
+    assert "secret-must-not-leak" not in str(exc_info.value)
 
 
 def test_zhipu_always_builds_a_direct_client(monkeypatch):

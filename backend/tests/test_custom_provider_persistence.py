@@ -3,26 +3,22 @@ from __future__ import annotations
 import pytest
 from sqlalchemy import select
 
+from backend.config import settings
 from backend.db.models import ProviderConfigRecord, UserRecord
 from backend.db.provider_repository import (
     list_provider_configs,
     set_provider_verification,
-    set_provider_vision_verification,
     update_provider_config,
     upsert_provider_config,
 )
 from backend.db.session import session_scope
-from backend.services.grading_input_security import provider_configuration_fingerprint
-from backend.config import settings
-from backend.llm.endpoint_policy import (
-    CUSTOM_PROVIDER_RISK_ACK_VERSION,
-    normalize_provider_endpoint,
-)
-from backend.models import ProviderConfig
+from backend.llm.endpoint_policy import normalize_provider_endpoint
 from backend.llm.registry import ExpertRegistry
+from backend.models import ProviderConfig
+from backend.services.grading_input_security import provider_configuration_fingerprint
 
 
-MASTER_KEY = "custom-provider-test-master-key-0123456789"
+MASTER_KEY = "relay-provider-test-master-key-0123456789"
 
 
 def _owner(owner_id: str) -> None:
@@ -39,247 +35,299 @@ def _owner(owner_id: str) -> None:
         ))
 
 
-def _custom_config(base_url: str, *, model: str = "relay-model") -> ProviderConfig:
-    canonical, identity = normalize_provider_endpoint("openai_compatible", base_url)
+def _deepseek_config(
+    base_url: str,
+    *,
+    model: str = "relay-model",
+    enabled: bool = True,
+    wire_protocol: str | None = None,
+) -> ProviderConfig:
+    canonical, identity = normalize_provider_endpoint(
+        "deepseek",
+        base_url,
+        wire_protocol,
+    )
     return ProviderConfig(
-        provider_type="openai_compatible",
+        provider_type="deepseek",
         api_key="sk-private-owner-key",
         model=model,
         base_url=canonical,
         endpoint_identity=identity,
-        display_name="Private relay",
-        enabled=False,
+        wire_protocol=wire_protocol,
+        display_name="DeepSeek model",
+        enabled=enabled,
     )
 
 
-def test_same_owner_can_store_same_model_at_two_endpoints():
-    _owner("custom-owner-a")
+def test_same_owner_can_store_same_vendor_model_at_two_endpoints():
+    _owner("relay-owner-a")
     first = upsert_provider_config(
-        "custom-owner-a",
-        _custom_config("https://relay-a.example.com/v1"),
+        "relay-owner-a",
+        _deepseek_config("https://relay-a.example.com/v1"),
         master_key=MASTER_KEY,
-        risk_ack_version=CUSTOM_PROVIDER_RISK_ACK_VERSION,
     )
     second = upsert_provider_config(
-        "custom-owner-a",
-        _custom_config("https://relay-b.example.com/v1"),
+        "relay-owner-a",
+        _deepseek_config("https://relay-b.example.com/v1"),
         master_key=MASTER_KEY,
-        risk_ack_version=CUSTOM_PROVIDER_RISK_ACK_VERSION,
     )
 
     assert first.id != second.id
-    loaded = list_provider_configs("custom-owner-a", master_key=MASTER_KEY)
+    loaded = list_provider_configs("relay-owner-a", master_key=MASTER_KEY)
     assert {item.config.endpoint_identity for item in loaded} == {
         "https://relay-a.example.com/v1",
         "https://relay-b.example.com/v1",
     }
 
 
-def test_custom_provider_stays_owner_scoped_encrypted_and_acknowledged():
-    _owner("custom-owner-b")
+def test_ustc_deepseek_stays_owner_scoped_and_encrypted():
+    _owner("relay-owner-b")
     record = upsert_provider_config(
-        "custom-owner-b",
-        _custom_config("https://api.llm.ustc.edu.cn/v1"),
+        "relay-owner-b",
+        _deepseek_config("https://api.llm.ustc.edu.cn/v1"),
         master_key=MASTER_KEY,
-        risk_ack_version=CUSTOM_PROVIDER_RISK_ACK_VERSION,
     )
 
     with session_scope() as session:
         row = session.get(ProviderConfigRecord, record.id)
         assert row is not None
         assert "sk-private-owner-key" not in row.encrypted_api_key
-        assert row.provider_type == "openai_compatible"
+        assert row.provider_type == "deepseek"
         assert row.endpoint_identity == "https://api.llm.ustc.edu.cn/v1"
-        assert row.risk_ack_version == CUSTOM_PROVIDER_RISK_ACK_VERSION
-        assert row.risk_ack_at is not None
-        assert row.enabled is False
+        assert row.enabled is True
 
     assert list_provider_configs("other-owner", master_key=MASTER_KEY) == []
 
 
-def test_update_invalidates_text_and_vision_verification():
-    _owner("custom-owner-c")
+def test_update_keeps_relay_enabled_and_resets_optional_connectivity_status():
+    _owner("relay-owner-c")
     record = upsert_provider_config(
-        "custom-owner-c",
-        _custom_config("https://relay.example.com/v1"),
+        "relay-owner-c",
+        _deepseek_config("https://relay.example.com/v1"),
         master_key=MASTER_KEY,
-        risk_ack_version=CUSTOM_PROVIDER_RISK_ACK_VERSION,
     )
     set_provider_verification(
-        "custom-owner-c", record.id,
-        verification_status="verified", checked_at=2,
-    )
-    set_provider_vision_verification(
-        "custom-owner-c", record.id,
-        verification_status="verified", checked_at=3,
+        "relay-owner-c",
+        record.id,
+        verification_status="verified",
+        checked_at=2,
     )
 
     updated = update_provider_config(
-        "custom-owner-c",
+        "relay-owner-c",
         record.id,
-        _custom_config("https://relay.example.com/v2"),
+        _deepseek_config("https://relay.example.com/v2"),
         master_key=MASTER_KEY,
-        risk_ack_version=CUSTOM_PROVIDER_RISK_ACK_VERSION,
     )
 
     assert updated is not None
     assert updated.verification_status == "unverified"
-    assert updated.vision_verification_status == "unverified"
-    assert updated.config.enabled is False
+    assert updated.config.enabled is True
 
 
-def test_official_deepseek_and_custom_ustc_are_distinct_records():
-    _owner("custom-owner-d")
-    official_url, official_identity = normalize_provider_endpoint(
-        "deepseek", "https://api.deepseek.com/v1"
-    )
+def test_official_and_relay_deepseek_are_distinct_records():
+    _owner("relay-owner-d")
     official = upsert_provider_config(
-        "custom-owner-d",
-        ProviderConfig(
-            provider_type="deepseek",
-            api_key="sk-deepseek",
-            model="deepseek-chat",
-            base_url=official_url,
-            endpoint_identity=official_identity,
-        ),
+        "relay-owner-d",
+        _deepseek_config("https://api.deepseek.com/v1", model="deepseek-chat"),
         master_key=MASTER_KEY,
     )
-    custom = upsert_provider_config(
-        "custom-owner-d",
-        _custom_config(
-            "https://api.llm.ustc.edu.cn/v1", model="deepseek-chat"
+    relay = upsert_provider_config(
+        "relay-owner-d",
+        _deepseek_config(
+            "https://api.llm.ustc.edu.cn/v1",
+            model="deepseek-chat",
         ),
         master_key=MASTER_KEY,
-        risk_ack_version=CUSTOM_PROVIDER_RISK_ACK_VERSION,
     )
 
-    assert official.id != custom.id
+    assert official.id != relay.id
     with session_scope() as session:
         rows = list(session.scalars(select(ProviderConfigRecord)))
-    assert {row.provider_type for row in rows} == {"deepseek", "openai_compatible"}
+    assert {row.provider_type for row in rows} == {"deepseek"}
+    assert {row.endpoint_identity for row in rows} == {
+        "https://api.deepseek.com/v1",
+        "https://api.llm.ustc.edu.cn/v1",
+    }
+
+
+def test_same_vendor_model_and_endpoint_can_store_distinct_wire_protocols():
+    _owner("relay-owner-protocol")
+    endpoint = "https://relay.example.com/v1"
+    openai_wire = upsert_provider_config(
+        "relay-owner-protocol",
+        _deepseek_config(
+            endpoint,
+            model="same-model",
+            wire_protocol="openai_chat_completions",
+        ),
+        master_key=MASTER_KEY,
+    )
+    anthropic_wire = upsert_provider_config(
+        "relay-owner-protocol",
+        _deepseek_config(
+            endpoint,
+            model="same-model",
+            wire_protocol="anthropic_messages",
+        ),
+        master_key=MASTER_KEY,
+    )
+
+    assert openai_wire.id != anthropic_wire.id
+    loaded = list_provider_configs("relay-owner-protocol", master_key=MASTER_KEY)
+    assert {item.config.wire_protocol for item in loaded} == {
+        "openai_chat_completions",
+        "anthropic_messages",
+    }
 
 
 def test_official_repository_derives_stable_identity_for_legacy_callers():
-    _owner("custom-owner-e")
+    _owner("relay-owner-e")
     first = upsert_provider_config(
-        "custom-owner-e",
-        ProviderConfig(
-            provider_type="openai", api_key="first", model="gpt-test"
-        ),
+        "relay-owner-e",
+        ProviderConfig(provider_type="openai", api_key="first", model="gpt-test"),
         master_key=MASTER_KEY,
     )
     second = upsert_provider_config(
-        "custom-owner-e",
-        ProviderConfig(
-            provider_type="openai", api_key="second", model="gpt-test"
-        ),
+        "relay-owner-e",
+        ProviderConfig(provider_type="openai", api_key="second", model="gpt-test"),
         master_key=MASTER_KEY,
     )
 
     assert first.id == second.id
-    loaded = list_provider_configs("custom-owner-e", master_key=MASTER_KEY)
+    loaded = list_provider_configs("relay-owner-e", master_key=MASTER_KEY)
     assert loaded[0].config.endpoint_identity == "https://api.openai.com/v1"
 
 
-def test_registry_gates_custom_text_vision_and_rag_without_model_id_collision(
+def test_registry_uses_unverified_relay_without_changing_vision_routing(
     monkeypatch,
 ):
-    monkeypatch.setattr(settings, "custom_provider_endpoints_enabled", True)
+    monkeypatch.setattr(settings, "runtime_environment", "development")
     registry = ExpertRegistry(seed_from_settings=False)
-    registry.register(
-        _custom_config("https://relay-a.example.com/v1").model_copy(
-            update={"enabled": True}
-        ),
-        provider_id="custom-a",
-        verification_status="verified",
-        vision_verification_status="unverified",
-        risk_ack_version=CUSTOM_PROVIDER_RISK_ACK_VERSION,
+    official = _deepseek_config(
+        "https://api.deepseek.com/v1",
+        model="same-model",
     )
-    registry.register(
-        _custom_config("https://relay-b.example.com/v1").model_copy(
-            update={"enabled": True}
-        ),
-        provider_id="custom-b",
-        verification_status="verified",
-        vision_verification_status="verified",
-        risk_ack_version=CUSTOM_PROVIDER_RISK_ACK_VERSION,
+    relay = _deepseek_config(
+        "https://relay.example.com/v1",
+        model="same-model",
     )
+    registry.register(official, provider_id="official")
+    registry.register(relay, provider_id="relay")
 
-    provider_a = registry.get("custom-a")
-    provider_b = registry.get("custom-b")
-    assert provider_a is not None and provider_b is not None
-    assert provider_a.provider_id == provider_b.provider_id
-    assert registry.pick_vision(provider_a) is provider_b
-    assert registry.pick_vision(provider_b) is provider_b
-    assert registry.list_enabled_configs() == []
+    official_provider = registry.get("official")
+    relay_provider = registry.get("relay")
+    assert official_provider is not None and relay_provider is not None
+    assert official_provider.provider_id == relay_provider.provider_id
+    assert official_provider.supports_vision is False
+    assert relay_provider.supports_vision is False
+    assert relay_provider.can_encode_vision is True
+    assert registry.pick_vision(official_provider) is None
     assert registry.select(
-        ["custom-a", "custom-b"], primary_provider_id="custom-a"
-    ).pick_vision(provider_a) is provider_b
+        ["official", "relay"], primary_provider_id="official"
+    ).pick_vision(official_provider) is None
+    # Unreviewed relays are not silently reused for course-material embeddings.
+    assert registry.list_enabled_configs() == [official]
 
 
-def test_custom_provider_cannot_be_added_to_a_shared_pool_registry(monkeypatch):
-    monkeypatch.setattr(settings, "custom_provider_endpoints_enabled", True)
+def test_registry_resolves_duplicate_user_labels_with_a_stable_id_suffix(
+    monkeypatch,
+):
+    monkeypatch.setattr(settings, "runtime_environment", "development")
+    registry = ExpertRegistry(seed_from_settings=False)
+    for provider_type, provider_id in (
+        ("openai", "provider-record-aaaa1111"),
+        ("deepseek", "provider-record-bbbb2222"),
+    ):
+        registry.register(
+            ProviderConfig(
+                provider_type=provider_type,
+                api_key="private-key",
+                model="shared-model-name",
+                base_url="https://relay.example.com/v1",
+                endpoint_identity="https://relay.example.com/v1",
+                wire_protocol="openai_chat_completions",
+                display_name="Campus relay",
+            ),
+            provider_id=provider_id,
+        )
+
+    names = [item["resolved_display_name"] for item in registry.list_configs()]
+    assert len(names) == len(set(names)) == 2
+    assert any(str(name).endswith("aaaa1111") for name in names)
+    assert any(str(name).endswith("bbbb2222") for name in names)
+
+
+def test_relay_cannot_be_added_to_an_active_shared_pool_registry(monkeypatch):
+    monkeypatch.setattr(settings, "runtime_environment", "development")
     registry = ExpertRegistry(seed_from_settings=False)
     registry._uses_shared_pool = True
 
     with pytest.raises(ValueError, match="custom_provider_shared_pool_not_allowed"):
-        registry.register(_custom_config("https://relay.example.com/v1"))
+        registry.register(_deepseek_config("https://relay.example.com/v1"))
 
 
-def test_changed_risk_version_hides_previously_verified_custom_provider(monkeypatch):
-    monkeypatch.setattr(settings, "custom_provider_endpoints_enabled", True)
+def test_shared_pool_seed_skips_custom_environment_route(monkeypatch):
+    monkeypatch.setattr(settings, "runtime_environment", "development")
+    monkeypatch.setattr(settings, "shared_pool_enabled", True)
+    monkeypatch.setattr(settings, "openai_api_key", "shared-key")
+    monkeypatch.setattr(settings, "openai_api_base", "https://relay.example.com/v1")
+    for field in (
+        "gemini_api_key",
+        "zhipu_api_key",
+        "anthropic_api_key",
+        "deepseek_api_key",
+        "moonshot_api_key",
+        "qwen_api_key",
+    ):
+        monkeypatch.setattr(settings, field, "")
+
+    registry = ExpertRegistry(shared_owner_id="owner")
+
+    assert registry.list_configs() == []
+    assert registry.uses_shared_pool() is False
+
+
+def test_production_kill_switch_hides_relay_but_not_official(monkeypatch):
+    monkeypatch.setattr(settings, "runtime_environment", "production")
+    monkeypatch.setattr(settings, "custom_provider_endpoints_enabled", False)
     registry = ExpertRegistry(seed_from_settings=False)
     registry.register(
-        _custom_config("https://relay.example.com/v1").model_copy(
-            update={"enabled": True}
-        ),
-        provider_id="custom-old-ack",
-        verification_status="verified",
-        risk_ack_version="2026-01-01.old",
+        _deepseek_config("https://api.deepseek.com/v1"),
+        provider_id="official",
     )
-
-    assert registry.get("custom-old-ack") is None
-    assert registry.list_available() == []
-    assert registry.list_configs()[0]["enabled"] is False
-
-
-def test_unverified_custom_provider_is_projected_as_disabled(monkeypatch):
-    monkeypatch.setattr(settings, "custom_provider_endpoints_enabled", True)
-    registry = ExpertRegistry(seed_from_settings=False)
     registry.register(
-        _custom_config("https://relay.example.com/v1").model_copy(
-            update={"enabled": True}
-        ),
-        provider_id="custom-unverified",
-        verification_status="unverified",
-        risk_ack_version=CUSTOM_PROVIDER_RISK_ACK_VERSION,
+        _deepseek_config("https://relay.example.com/v1"),
+        provider_id="relay",
     )
 
-    assert registry.get("custom-unverified") is None
-    assert registry.list_configs()[0]["enabled"] is False
+    assert registry.get("official") is not None
+    assert registry.get("relay") is None
+    assert [item["provider_id"] for item in registry.list_configs() if item["enabled"]] == [
+        "official"
+    ]
 
 
-def test_custom_verification_state_is_frozen_into_grading_fingerprint():
-    _owner("custom-owner-fingerprint")
+def test_optional_verification_does_not_change_frozen_provider_fingerprint():
+    _owner("relay-owner-fingerprint")
     record = upsert_provider_config(
-        "custom-owner-fingerprint",
-        _custom_config("https://relay.example.com/v1"),
+        "relay-owner-fingerprint",
+        _deepseek_config("https://relay.example.com/v1"),
         master_key=MASTER_KEY,
-        risk_ack_version=CUSTOM_PROVIDER_RISK_ACK_VERSION,
     )
     before = provider_configuration_fingerprint(
-        owner_id="custom-owner-fingerprint",
+        owner_id="relay-owner-fingerprint",
         selected_provider_ids=[record.id],
     )
     assert set_provider_verification(
-        "custom-owner-fingerprint",
+        "relay-owner-fingerprint",
         record.id,
         verification_status="verified",
         checked_at=2,
     )
     after = provider_configuration_fingerprint(
-        owner_id="custom-owner-fingerprint",
+        owner_id="relay-owner-fingerprint",
         selected_provider_ids=[record.id],
     )
 
-    assert before != after
+    assert before == after

@@ -23,10 +23,10 @@ def _alembic_config(db_url: str, monkeypatch) -> Config:
     return cfg
 
 
-def test_migration_converts_only_ustc_and_preserves_official(tmp_path, monkeypatch):
+def test_migration_preserves_ustc_as_enabled_deepseek(tmp_path, monkeypatch):
     from sqlalchemy import create_engine, text
 
-    db_url = f"sqlite:///{(tmp_path / 'custom-provider-migration.db').as_posix()}"
+    db_url = f"sqlite:///{(tmp_path / 'relay-migration.db').as_posix()}"
     cfg = _alembic_config(db_url, monkeypatch)
     command.upgrade(cfg, "0007_source_outcome_diagnostics")
     engine = create_engine(db_url)
@@ -42,12 +42,21 @@ def test_migration_converts_only_ustc_and_preserves_official(tmp_path, monkeypat
             "encrypted_api_key, nonce, key_version, enabled, max_concurrent, rpm, "
             "created_at, updated_at, verification_status, last_checked_at) VALUES "
             "('official', 'owner', 'deepseek', 'deepseek-chat', "
-            "'https://api.deepseek.com/v1', NULL, 'cipher', 'nonce', 1, 1, 5, 0, "
+            "'https://api.deepseek.com', NULL, 'cipher', 'nonce', 1, 1, 5, 0, "
             "1, 1, 'verified', 1), "
             "('ustc', 'owner', 'deepseek', 'school-model', "
             "'https://api.llm.ustc.edu.cn/v1/', NULL, 'cipher', 'nonce', 1, 1, 5, 0, "
             "1, 1, 'verified', 1)"
         ))
+
+    # Simulate a collaborator who already ran the earlier Draft #36 migration.
+    command.upgrade(cfg, "0008_custom_provider_endpoints")
+    with engine.connect() as connection:
+        legacy_ustc = connection.execute(text(
+            "SELECT provider_type, enabled FROM provider_configs WHERE id = 'ustc'"
+        )).mappings().one()
+    assert legacy_ustc["provider_type"] == "openai_compatible"
+    assert legacy_ustc["enabled"] == 0
 
     command.upgrade(cfg, "head")
     with engine.connect() as connection:
@@ -55,8 +64,7 @@ def test_migration_converts_only_ustc_and_preserves_official(tmp_path, monkeypat
             row.id: row
             for row in connection.execute(text(
                 "SELECT id, provider_type, base_url, endpoint_identity, enabled, "
-                "verification_status, vision_verification_status "
-                "FROM provider_configs"
+                "wire_protocol, verification_status FROM provider_configs"
             )).mappings()
         }
 
@@ -64,18 +72,21 @@ def test_migration_converts_only_ustc_and_preserves_official(tmp_path, monkeypat
     assert rows["official"]["endpoint_identity"] == "https://api.deepseek.com/v1"
     assert rows["official"]["enabled"] == 1
     assert rows["official"]["verification_status"] == "verified"
-    assert rows["ustc"]["provider_type"] == "openai_compatible"
+    assert rows["official"]["wire_protocol"] == "openai_chat_completions"
+    assert rows["ustc"]["provider_type"] == "deepseek"
     assert rows["ustc"]["base_url"] == "https://api.llm.ustc.edu.cn/v1"
     assert rows["ustc"]["endpoint_identity"] == "https://api.llm.ustc.edu.cn/v1"
-    assert rows["ustc"]["enabled"] == 0
+    assert rows["ustc"]["enabled"] == 1
+    # The earlier draft intentionally erased this status. The compatibility
+    # migration cannot reconstruct it, but unverified no longer blocks use.
     assert rows["ustc"]["verification_status"] == "unverified"
-    assert rows["ustc"]["vision_verification_status"] == "unverified"
+    assert rows["ustc"]["wire_protocol"] == "openai_chat_completions"
 
 
-def test_migration_allows_same_model_at_distinct_endpoints(tmp_path, monkeypatch):
+def test_migration_allows_same_vendor_model_at_distinct_endpoints(tmp_path, monkeypatch):
     from sqlalchemy import create_engine, text
 
-    db_url = f"sqlite:///{(tmp_path / 'custom-provider-identity.db').as_posix()}"
+    db_url = f"sqlite:///{(tmp_path / 'relay-identity.db').as_posix()}"
     cfg = _alembic_config(db_url, monkeypatch)
     command.upgrade(cfg, "head")
     engine = create_engine(db_url)
@@ -91,13 +102,12 @@ def test_migration_allows_same_model_at_distinct_endpoints(tmp_path, monkeypatch
         ):
             connection.execute(text(
                 "INSERT INTO provider_configs "
-                "(id, owner_id, provider_type, model, base_url, endpoint_identity, "
+                "(id, owner_id, provider_type, model, base_url, endpoint_identity, wire_protocol, "
                 "encrypted_api_key, nonce, key_version, enabled, max_concurrent, rpm, "
-                "created_at, updated_at, verification_status, "
-                "vision_verification_status) VALUES "
-                "(:id, 'owner', 'openai_compatible', 'same-model', :endpoint, "
-                ":endpoint, 'cipher', 'nonce', 1, 0, 5, 0, 1, 1, 'unverified', "
-                "'unverified')"
+                "created_at, updated_at, verification_status) VALUES "
+                "(:id, 'owner', 'deepseek', 'same-model', :endpoint, :endpoint, "
+                "'openai_chat_completions', "
+                "'cipher', 'nonce', 1, 1, 5, 0, 1, 1, 'unverified')"
             ), {"id": record_id, "endpoint": endpoint})
 
     with engine.connect() as connection:
@@ -106,7 +116,7 @@ def test_migration_allows_same_model_at_distinct_endpoints(tmp_path, monkeypatch
         )).scalar_one() == 2
 
 
-def test_postgresql_custom_provider_ddl_is_portable(monkeypatch):
+def test_postgresql_relay_endpoint_ddl_is_portable(monkeypatch):
     from backend.config import settings
 
     database_url = "postgresql+psycopg://smartai:smartai@localhost/smartai_test"
@@ -120,17 +130,19 @@ def test_postgresql_custom_provider_ddl_is_portable(monkeypatch):
     sql = output.getvalue()
 
     assert "ADD COLUMN endpoint_identity VARCHAR(1024)" in sql
-    assert "ADD COLUMN vision_verification_status VARCHAR(32)" in sql
-    assert "ADD COLUMN risk_ack_version VARCHAR(64)" in sql
-    assert "uq_provider_configs_owner_provider_endpoint_model" in sql
-    assert "provider_type = 'openai_compatible'" in sql
+    assert "uq_provider_configs_owner_provider_protocol_endpoint_model" in sql
+    assert "ADD COLUMN wire_protocol VARCHAR(64)" in sql
+    assert (
+        "SET provider_type = 'deepseek', enabled = true WHERE provider_type = "
+        "'openai_compatible'"
+    ) in sql
 
 
 PG_URL = os.environ.get("SMARTAI_TEST_POSTGRES_URL")
 
 
 @pytest.fixture
-def custom_provider_pg_database():
+def relay_provider_pg_database():
     if not PG_URL:
         pytest.skip(
             "Set SMARTAI_TEST_POSTGRES_URL to run PostgreSQL integration (GitHub Actions)."
@@ -172,11 +184,10 @@ def custom_provider_pg_database():
             os.environ["SMARTAI_DATABASE_HEAVY"] = old_heavy_env
 
 
-def test_postgres_endpoint_identity_and_owner_isolation(custom_provider_pg_database):
+def test_postgres_endpoint_identity_and_owner_isolation(relay_provider_pg_database):
     from backend.db.models import UserRecord
     from backend.db.provider_repository import list_provider_configs, upsert_provider_config
     from backend.db.session import session_scope
-    from backend.llm.endpoint_policy import CUSTOM_PROVIDER_RISK_ACK_VERSION
     from backend.models import ProviderConfig
 
     owner_ids = [f"pg_teacher_{uuid.uuid4().hex[:8]}" for _ in range(2)]
@@ -194,15 +205,14 @@ def test_postgres_endpoint_identity_and_owner_isolation(custom_provider_pg_datab
         upsert_provider_config(
             teacher,
             ProviderConfig(
-                provider_type="openai_compatible",
+                provider_type="deepseek",
                 api_key=f"owner-secret-{suffix}",
                 model="shared-model-name",
                 base_url=endpoint,
                 endpoint_identity=endpoint,
-                enabled=False,
+                enabled=True,
             ),
             master_key="postgres-provider-master-key",
-            risk_ack_version=CUSTOM_PROVIDER_RISK_ACK_VERSION,
         )
         for suffix, endpoint in (
             ("a", "https://relay-a.example.com/v1"),

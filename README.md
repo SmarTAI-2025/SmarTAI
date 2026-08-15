@@ -129,20 +129,38 @@ SMARTAI_HTTPS_PROXY=http://HOST:PORT
 `SMARTAI_JWT_SECRET`；不要同时借迁移机会更换 BYOK 加密主密钥，否则已有 BYOK
 密文将无法读取。
 
-#### 自定义 OpenAI-compatible 中转站（默认关闭）
+#### 所有已支持厂商都可无感替换 Base URL
 
-后端支持将任意通过安全检查的公网 HTTPS OpenAI Chat Completions-compatible
-Base URL 保存为 `openai_compatible` BYOK 配置，包括 USTC 等学校或第三方中转站；
-它们不会伪装成 DeepSeek 等官方服务商，也没有任何域名特批。只接受域名、HTTPS 443、
-系统可信证书且无 query/fragment 的 Base URL，拒绝 IP literal、localhost、内网、云元数据、
-特殊地址和重定向。DNS 会在保存和每次连接前重新检查，socket 仅连接本次批准的公网 IP，
-TLS 与 HTTP Host 仍使用原域名。
+“模型与 BYOK”页面支持项目现有的七类厂商：OpenAI、DeepSeek、智谱、Kimi/Moonshot、
+通义千问、Anthropic/Claude 和 Gemini。选择厂商后，Base URL 默认显示该厂商官网地址；
+用户也可以直接改成任意通过下述安全检查的公网中转地址。官网与中转站使用同一套保存、
+启用和任务调用流程，不需要额外选择“中转站类型”、勾选风险声明或先完成验证。页面上的
+连通性检查只是可选排错工具，不是启用门槛。
 
-该功能由 `SMARTAI_CUSTOM_PROVIDER_ENDPOINTS_ENABLED` 控制，仓库和 Render 默认均为
-`false`。开启后，教师仍需确认第三方数据风险，先通过合成文本验证才可启用；视觉/OCR
-能力必须再用仓库内合成图片单独验证。自定义配置仅属于当前教师的加密 BYOK，不进入共享
-模型池或 RAG embedding。公网 production 在应用安全测试、网络层 egress 防护和发布门禁
-没有同一 release SHA 的证据前，不应把此开关改为 `true`。
+例如，选择 DeepSeek 后可以把 `https://api.deepseek.com/v1` 直接改成 USTC 的
+`https://api.llm.ustc.edu.cn/v1`。USTC 只是普通自定义 URL，没有特殊域名白名单；保存后
+仍是 DeepSeek 配置并立即可用于任务。同一用户可以保存“同厂商 + 同模型 + 不同 URL”或
+“同端点 + 不同协议”的多个配置；配置名称留空时，系统会用厂商、模型、端点和协议自动
+生成不重复的显示名称。
+
+协议默认跟随所选厂商，无需用户操作：OpenAI、DeepSeek、智谱、Kimi 和通义千问使用
+OpenAI Chat Completions；Claude 使用 Anthropic Messages；Gemini 使用
+Gemini `generateContent`。只有当中转站文档明确说明“模型品牌与接口协议不同”时，才在
+折叠的“高级设置”中覆盖 API 协议。后端只发送所选协议的一次请求，不会静默改用第二种
+协议或重复产生计费。
+
+非官网 URL 没有域名特批。后端统一只接受域名形式、HTTPS 443、系统可信证书且不含
+userinfo、query 或 fragment 的服务 Base URL；拒绝 IP literal、localhost、内网、云元
+数据、特殊地址、完整 `/chat/completions`、`/messages` 或 `:generateContent` 操作终点
+以及所有重定向。DNS 在保存和每次新建连接前重新检查；任一解析结果不是公网地址即拒绝，
+socket 只连接本次批准的公网 IP，TLS/SNI 和 HTTP Host 仍使用原域名。客户端不继承系统
+代理、不自动重试，并限制响应大小。
+
+开发和测试环境默认开放编辑，方便同学直接用真实机构 API；production 仍由默认关闭的
+`SMARTAI_CUSTOM_PROVIDER_ENDPOINTS_ENABLED` 控制。自定义端点只使用当前教师加密保存的
+BYOK，绝不进入平台共享模型池。任务知识库继续使用本地 BM25；自定义端点不会收到隐式
+`/embeddings` 请求或课程资料。公网 production 在应用安全测试、网络出口防护和发布门禁
+没有同一 release SHA 的证据前，不应把该开关改为 `true`。
 
 首次运行前，在**仓库根目录**（该目录应能看到 `alembic.ini`、`backend/` 和
 `frontend/`）应用数据库迁移。请先激活上文创建并已安装后端依赖的 Python 环境，

@@ -102,13 +102,22 @@ class Settings(BaseSettings):
     shared_pool_daily_request_limit: int = 100
     shared_pool_daily_estimated_token_limit: int = 100_000
 
-    # User-defined public HTTPS OpenAI-compatible endpoints. This stays off in
-    # production until the release gate has matching app + egress evidence.
+    # User-defined public HTTPS provider endpoints are available in
+    # development/test for every implemented wire protocol so collaborators
+    # can exercise real relay services. In production the explicit kill switch
+    # defaults to OFF until release gates have matching app + egress evidence.
     custom_provider_endpoints_enabled: bool = False
     custom_provider_max_per_owner: int = 10
     custom_provider_verification_timeout_seconds: int = 30
     custom_provider_verification_cooldown_seconds: int = 5
     custom_provider_max_response_bytes: int = 4 * 1024 * 1024
+
+    @property
+    def custom_provider_endpoints_available(self) -> bool:
+        return (
+            self.runtime_environment != "production"
+            or self.custom_provider_endpoints_enabled
+        )
 
     # ─── Human-in-the-loop ─────────────────────────────────────────────────────
     confidence_threshold: float = 0.6  # below this, trigger human review

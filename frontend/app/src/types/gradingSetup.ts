@@ -36,7 +36,6 @@ export interface GradingSetupExpert {
   rpm: number;
   base_url?: string | null;
   verification_status?: string | null;
-  vision_verification_status?: string | null;
 }
 
 export interface GradingSetupKnowledgeDocument {

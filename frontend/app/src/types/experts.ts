@@ -5,8 +5,12 @@ export type ProviderType =
   | "zhipu"
   | "deepseek"
   | "moonshot"
-  | "qwen"
-  | "openai_compatible";
+  | "qwen";
+
+export type WireProtocol =
+  | "openai_chat_completions"
+  | "anthropic_messages"
+  | "gemini_generate_content";
 
 export type VerificationStatus =
   | "unverified"
@@ -19,8 +23,13 @@ export interface ExpertConfig {
   provider_type: ProviderType | string;
   model: string;
   base_url?: string | null;
+  endpoint_identity?: string | null;
+  endpoint_descriptor?: string | null;
+  wire_protocol?: WireProtocol | null;
   enabled: boolean;
   display_name?: string | null;
+  configured_display_name?: string | null;
+  resolved_display_name?: string | null;
   max_concurrent: number;
   rpm: number;
   scope?: "shared" | "owner";
@@ -30,11 +39,6 @@ export interface ExpertConfig {
   last_checked_at?: string | null;
   verified_at?: string | null;
   verification_error_code?: string | null;
-  vision_verification_status?: VerificationStatus;
-  vision_last_checked_at?: string | null;
-  vision_verification_error_code?: string | null;
-  risk_ack_version?: string | null;
-  risk_ack_at?: string | null;
 }
 
 export interface AddExpertKeyRequest {
@@ -42,10 +46,10 @@ export interface AddExpertKeyRequest {
   api_key: string;
   model: string;
   base_url?: string | null;
+  wire_protocol?: WireProtocol | null;
   display_name?: string | null;
   max_concurrent?: number;
   rpm?: number;
-  risk_ack_version?: string | null;
 }
 
 export interface ExpertMutationResponse {
@@ -53,8 +57,8 @@ export interface ExpertMutationResponse {
   provider_id?: string;
   enabled?: boolean;
   verification_status?: ExpertConfig["verification_status"];
-  vision_verification_status?: ExpertConfig["vision_verification_status"];
   base_url?: string | null;
+  wire_protocol?: WireProtocol | null;
   message?: string;
 }
 
@@ -62,10 +66,10 @@ export interface UpdateExpertRequest {
   api_key?: string | null;
   model: string;
   base_url?: string | null;
+  wire_protocol?: WireProtocol | null;
   display_name?: string | null;
   max_concurrent?: number;
   rpm?: number;
-  risk_ack_version?: string | null;
 }
 
 export interface ExpertVerificationResponse {
@@ -76,19 +80,15 @@ export interface ExpertVerificationResponse {
   verified_at: string;
 }
 
-export interface ExpertVisionVerificationResponse {
-  status: "success";
-  provider_id: string;
-  vision_verification_status: "verified";
-  vision_last_checked_at: string;
-}
-
 export interface ProviderCatalogItem {
   provider_type: ProviderType;
   display_name: string;
   docs_url?: string;
   console_url?: string;
   usage_url?: string;
-  custom?: boolean;
-  risk_ack_version?: string;
+  default_base_url?: string | null;
+  wire_protocol: WireProtocol;
+  custom_base_url_supported: boolean;
+  custom_base_url_enabled: boolean;
+  base_url_editable?: boolean;
 }

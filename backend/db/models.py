@@ -109,8 +109,8 @@ class ProviderConfigRecord(Base):
     __tablename__ = "provider_configs"
     __table_args__ = (
         UniqueConstraint(
-            "owner_id", "provider_type", "endpoint_identity", "model",
-            name="uq_provider_configs_owner_provider_endpoint_model",
+            "owner_id", "provider_type", "wire_protocol", "endpoint_identity", "model",
+            name="uq_provider_configs_owner_provider_protocol_endpoint_model",
         ),
     )
 
@@ -122,6 +122,7 @@ class ProviderConfigRecord(Base):
     model: Mapped[str] = mapped_column(String(255), nullable=False)
     base_url: Mapped[str | None] = mapped_column(String(1024), nullable=True)
     endpoint_identity: Mapped[str] = mapped_column(String(1024), nullable=False)
+    wire_protocol: Mapped[str] = mapped_column(String(64), nullable=False)
     display_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
     encrypted_api_key: Mapped[str] = mapped_column(Text, nullable=False)
     nonce: Mapped[str] = mapped_column(String(128), nullable=False)
@@ -138,15 +139,6 @@ class ProviderConfigRecord(Base):
     verification_error_code: Mapped[str | None] = mapped_column(
         String(128), nullable=True
     )
-    vision_verification_status: Mapped[str] = mapped_column(
-        String(32), nullable=False, default="unverified"
-    )
-    vision_last_checked_at: Mapped[float | None] = mapped_column(Float, nullable=True)
-    vision_verification_error_code: Mapped[str | None] = mapped_column(
-        String(128), nullable=True
-    )
-    risk_ack_version: Mapped[str | None] = mapped_column(String(64), nullable=True)
-    risk_ack_at: Mapped[float | None] = mapped_column(Float, nullable=True)
     created_at: Mapped[float] = mapped_column(Float, nullable=False, default=time.time)
     updated_at: Mapped[float] = mapped_column(
         Float, nullable=False, default=time.time, onupdate=time.time

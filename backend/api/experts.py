@@ -14,7 +14,6 @@ import ssl
 import threading
 import time
 from datetime import datetime, timezone
-from pathlib import Path
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -30,24 +29,26 @@ from backend.db.provider_repository import (
     list_provider_configs,
     set_provider_enabled,
     set_provider_verification,
-    set_provider_vision_verification,
     update_provider_config,
     upsert_provider_config,
 )
 from backend.llm.endpoint_policy import (
-    CUSTOM_PROVIDER_RISK_ACK_VERSION,
-    CUSTOM_PROVIDER_TYPE,
     ProviderEndpointError,
+    is_user_defined_provider_endpoint,
     normalize_provider_endpoint,
     resolve_public_endpoint,
 )
-from backend.llm.providers import VisionImage
+from backend.llm.provider_catalog import (
+    PROVIDER_CATALOG as PROVIDER_CATALOG_ENTRIES,
+    effective_wire_protocol,
+)
 from backend.llm.registry import (
     ExpertRegistry,
     get_scoped_expert_registry,
     provider_encryption_not_configured_error,
 )
-from backend.models import ProviderConfig, ProviderType, User
+from backend.llm.providers import ProviderRequestError
+from backend.models import ProviderConfig, ProviderType, User, WireProtocol
 
 logger = logging.getLogger(__name__)
 
@@ -62,10 +63,10 @@ class AddKeyRequest(BaseModel):
     api_key: str = Field(min_length=1, max_length=512)
     model: str = Field(min_length=1, max_length=200)
     base_url: Optional[str] = Field(default=None, max_length=512)
+    wire_protocol: Optional[WireProtocol] = None
     display_name: Optional[str] = Field(default=None, max_length=120)
     max_concurrent: int = Field(default=5, ge=1, le=10)
     rpm: int = Field(default=0, ge=0, le=10_000)
-    risk_ack_version: Optional[str] = Field(default=None, max_length=64)
 
 
 class SelectRequest(BaseModel):
@@ -77,97 +78,52 @@ class UpdateKeyRequest(BaseModel):
     api_key: Optional[str] = Field(default=None, max_length=512)
     model: str = Field(min_length=1, max_length=200)
     base_url: Optional[str] = Field(default=None, max_length=512)
+    wire_protocol: Optional[WireProtocol] = None
     display_name: Optional[str] = Field(default=None, max_length=120)
     max_concurrent: int = Field(default=5, ge=1, le=10)
     rpm: int = Field(default=0, ge=0, le=10_000)
-    risk_ack_version: Optional[str] = Field(default=None, max_length=64)
-
-
-_PROVIDER_CATALOG = (
-    {
-        "provider_type": "gemini",
-        "display_name": "Google Gemini",
-        "docs_url": "https://ai.google.dev/gemini-api/docs",
-        "console_url": "https://aistudio.google.com/app/apikey",
-        "usage_url": "https://aistudio.google.com/usage",
-    },
-    {
-        "provider_type": "openai",
-        "display_name": "OpenAI",
-        "docs_url": "https://platform.openai.com/docs",
-        "console_url": "https://platform.openai.com/api-keys",
-        "usage_url": "https://platform.openai.com/usage",
-    },
-    {
-        "provider_type": "zhipu",
-        "display_name": "Zhipu AI",
-        "docs_url": "https://docs.bigmodel.cn/",
-        "console_url": "https://open.bigmodel.cn/usercenter/apikeys",
-        "usage_url": "https://open.bigmodel.cn/console/overview",
-    },
-    {
-        "provider_type": "deepseek",
-        "display_name": "DeepSeek",
-        "docs_url": "https://api-docs.deepseek.com/",
-        "console_url": "https://platform.deepseek.com/api_keys",
-        "usage_url": "https://platform.deepseek.com/usage",
-    },
-    {
-        "provider_type": "moonshot",
-        "display_name": "Moonshot (Kimi)",
-        "docs_url": "https://platform.moonshot.cn/docs",
-        "console_url": "https://platform.moonshot.cn/console/api-keys",
-        "usage_url": "https://platform.moonshot.cn/console/account",
-    },
-    {
-        "provider_type": "qwen",
-        "display_name": "Qwen (通义千问)",
-        "docs_url": "https://help.aliyun.com/zh/model-studio/",
-        "console_url": "https://bailian.console.aliyun.com/",
-        "usage_url": "https://bailian.console.aliyun.com/",
-    },
-    {
-        "provider_type": "anthropic",
-        "display_name": "Anthropic",
-        "docs_url": "https://docs.anthropic.com/en/docs",
-        "console_url": "https://platform.claude.com/settings/keys",
-        "usage_url": "https://platform.claude.com/usage",
-    },
-)
 
 
 def _validated_provider_base_url(
     provider_type: str,
     value: Optional[str],
-) -> tuple[Optional[str], str]:
+    wire_protocol: str | None,
+) -> tuple[Optional[str], str, str]:
     try:
-        return normalize_provider_endpoint(provider_type, value)
+        effective_protocol = effective_wire_protocol(provider_type, wire_protocol)
+        normalized, endpoint_identity = normalize_provider_endpoint(
+            provider_type,
+            value,
+            effective_protocol,
+        )
+        return normalized, endpoint_identity, effective_protocol
     except ProviderEndpointError as exc:
         raise HTTPException(
             status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail={"code": exc.code},
         ) from exc
-def _validate_custom_request(
+
+
+def _validate_provider_request(
     provider_type: str,
     base_url: str | None,
-    risk_ack_version: str | None,
-    *,
-    owner_id: str,
-) -> tuple[str | None, str]:
-    if provider_type == CUSTOM_PROVIDER_TYPE:
-        if not settings.custom_provider_endpoints_enabled:
+    wire_protocol: str | None,
+) -> tuple[str | None, str, str]:
+    normalized, endpoint_identity, effective_protocol = _validated_provider_base_url(
+        provider_type,
+        base_url,
+        wire_protocol,
+    )
+    if is_user_defined_provider_endpoint(
+        provider_type,
+        normalized,
+        effective_protocol,
+    ):
+        if not settings.custom_provider_endpoints_available:
             raise HTTPException(
                 status.HTTP_403_FORBIDDEN,
                 detail={"code": "custom_provider_endpoints_disabled"},
             )
-        if risk_ack_version != CUSTOM_PROVIDER_RISK_ACK_VERSION:
-            raise HTTPException(
-                status.HTTP_422_UNPROCESSABLE_ENTITY,
-                detail={"code": "provider_endpoint_risk_ack_required"},
-            )
-        _check_custom_probe_limit(owner_id, "save")
-    normalized, endpoint_identity = _validated_provider_base_url(provider_type, base_url)
-    if provider_type == CUSTOM_PROVIDER_TYPE:
         assert normalized is not None
         try:
             resolve_public_endpoint(normalized)
@@ -176,7 +132,7 @@ def _validate_custom_request(
                 _verification_http_status(exc.code),
                 detail={"code": exc.code},
             ) from exc
-    return normalized, endpoint_identity
+    return normalized, endpoint_identity, effective_protocol
 
 
 def _check_custom_probe_limit(owner_id: str, operation: str) -> None:
@@ -216,11 +172,10 @@ def add_key(
             status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail={"code": "expert_fields_blank"},
         )
-    base_url, endpoint_identity = _validate_custom_request(
+    base_url, endpoint_identity, wire_protocol = _validate_provider_request(
         request.provider_type,
         request.base_url,
-        request.risk_ack_version,
-        owner_id=current.id,
+        request.wire_protocol,
     )
     config = ProviderConfig(
         provider_type=request.provider_type,
@@ -228,14 +183,19 @@ def add_key(
         model=model,
         base_url=base_url,
         endpoint_identity=endpoint_identity,
-        enabled=request.provider_type != CUSTOM_PROVIDER_TYPE,
+        wire_protocol=wire_protocol,
+        enabled=True,
         display_name=(request.display_name.strip() if request.display_name else None),
         max_concurrent=request.max_concurrent,
         rpm=request.rpm,
     )
     if not settings.provider_encryption_key:
         raise provider_encryption_not_configured_error(api_key_was_submitted=True)
-    if request.provider_type == CUSTOM_PROVIDER_TYPE:
+    if is_user_defined_provider_endpoint(
+        request.provider_type,
+        base_url,
+        wire_protocol,
+    ):
         stored_configs = list_provider_configs(
             current.id,
             master_key=settings.provider_encryption_key,
@@ -243,10 +203,16 @@ def add_key(
         custom_configs = [
             stored
             for stored in stored_configs
-            if stored.config.provider_type == CUSTOM_PROVIDER_TYPE
+            if is_user_defined_provider_endpoint(
+                stored.config.provider_type,
+                stored.config.base_url,
+                stored.config.wire_protocol,
+            )
         ]
         already_exists = any(
-            stored.config.endpoint_identity == endpoint_identity
+            stored.config.provider_type == request.provider_type
+            and stored.config.wire_protocol == wire_protocol
+            and stored.config.endpoint_identity == endpoint_identity
             and stored.config.model == model
             for stored in custom_configs
         )
@@ -263,11 +229,6 @@ def add_key(
             current.id,
             config,
             master_key=settings.provider_encryption_key,
-            risk_ack_version=(
-                request.risk_ack_version
-                if request.provider_type == CUSTOM_PROVIDER_TYPE
-                else None
-            ),
         )
     except IntegrityError as exc:
         raise HTTPException(
@@ -283,13 +244,12 @@ def add_key(
         provider_id = registry.register(
             config,
             provider_id=record.id,
-            risk_ack_version=record.risk_ack_version,
-            risk_ack_at=record.risk_ack_at,
         )
     return {
         "status": "success",
         "provider_id": provider_id,
-        "base_url": base_url if request.provider_type == CUSTOM_PROVIDER_TYPE else None,
+        "base_url": base_url,
+        "wire_protocol": wire_protocol,
         "verification_status": "unverified",
     }
 
@@ -311,15 +271,19 @@ def list_available(
 @router.get("/catalog")
 def provider_catalog(current: User = Depends(require_teacher)):
     """Return fixed, non-secret links used by the BYOK settings screen."""
-    catalog = list(_PROVIDER_CATALOG)
-    if settings.custom_provider_endpoints_enabled:
-        catalog.append({
-            "provider_type": CUSTOM_PROVIDER_TYPE,
-            "display_name": "Custom OpenAI-compatible service",
-            "custom": True,
-            "risk_ack_version": CUSTOM_PROVIDER_RISK_ACK_VERSION,
-        })
-    return catalog
+    return [
+        {
+            **entry.public_dict(),
+            "custom_base_url_enabled": settings.custom_provider_endpoints_available,
+            # Backward-compatible UI field; new clients use the two explicit
+            # capability/enabled fields above.
+            "base_url_editable": (
+                entry.custom_base_url_supported
+                and settings.custom_provider_endpoints_available
+            ),
+        }
+        for entry in PROVIDER_CATALOG_ENTRIES
+    ]
 
 
 @router.post("/select")
@@ -339,26 +303,18 @@ def select_provider(
         else None
     )
     if (
-        stored is not None
-        and stored.config.provider_type == CUSTOM_PROVIDER_TYPE
-        and not settings.custom_provider_endpoints_enabled
+        request.enabled
+        and stored is not None
+        and is_user_defined_provider_endpoint(
+            stored.config.provider_type,
+            stored.config.base_url,
+            stored.config.wire_protocol,
+        )
+        and not settings.custom_provider_endpoints_available
     ):
         raise HTTPException(
             status.HTTP_403_FORBIDDEN,
             detail={"code": "custom_provider_endpoints_disabled"},
-        )
-    if (
-        request.enabled
-        and stored is not None
-        and stored.config.provider_type == CUSTOM_PROVIDER_TYPE
-        and (
-            stored.verification_status != "verified"
-            or stored.risk_ack_version != CUSTOM_PROVIDER_RISK_ACK_VERSION
-        )
-    ):
-        raise HTTPException(
-            status.HTTP_409_CONFLICT,
-            detail={"code": "provider_endpoint_not_verified"},
         )
     if set_provider_enabled(current.id, request.provider_id, request.enabled):
         return {"status": "success", "provider_id": request.provider_id, "enabled": request.enabled}
@@ -391,11 +347,15 @@ def update_provider(
             status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail={"code": "expert_fields_blank"},
         )
-    base_url, endpoint_identity = _validate_custom_request(
+    requested_protocol = (
+        request.wire_protocol
+        if "wire_protocol" in request.model_fields_set
+        else existing.config.wire_protocol
+    )
+    base_url, endpoint_identity, wire_protocol = _validate_provider_request(
         existing.config.provider_type,
         request.base_url,
-        request.risk_ack_version,
-        owner_id=current.id,
+        requested_protocol,
     )
     config = ProviderConfig(
         provider_type=existing.config.provider_type,
@@ -403,11 +363,8 @@ def update_provider(
         model=model,
         base_url=base_url,
         endpoint_identity=endpoint_identity,
-        enabled=(
-            False
-            if existing.config.provider_type == CUSTOM_PROVIDER_TYPE
-            else existing.config.enabled
-        ),
+        wire_protocol=wire_protocol,
+        enabled=existing.config.enabled,
         display_name=(
             request.display_name.strip()
             if request.display_name and request.display_name.strip()
@@ -422,11 +379,6 @@ def update_provider(
             provider_id,
             config,
             master_key=settings.provider_encryption_key,
-            risk_ack_version=(
-                request.risk_ack_version
-                if existing.config.provider_type == CUSTOM_PROVIDER_TYPE
-                else None
-            ),
         )
     except IntegrityError as exc:
         # Unique (owner, provider_type, model) conflicts are the only expected
@@ -446,12 +398,11 @@ def update_provider(
         registry.register(
             config,
             provider_id=provider_id,
-            risk_ack_version=updated.risk_ack_version,
-            risk_ack_at=updated.risk_ack_at,
         )
     return {
         "status": "success",
         "provider_id": provider_id,
+        "wire_protocol": wire_protocol,
         "verification_status": "unverified",
     }
 
@@ -472,19 +423,18 @@ async def verify_provider(
         if settings.provider_encryption_key
         else None
     )
-    provider = registry.get(provider_id, include_unverified=True)
+    provider = registry.get(provider_id)
     if stored is None or provider is None or registry.uses_shared_pool():
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Provider not found")
-    if provider.provider_type == CUSTOM_PROVIDER_TYPE:
-        if not settings.custom_provider_endpoints_enabled:
+    if is_user_defined_provider_endpoint(
+        stored.config.provider_type,
+        stored.config.base_url,
+        stored.config.wire_protocol,
+    ):
+        if not settings.custom_provider_endpoints_available:
             raise HTTPException(
                 status.HTTP_403_FORBIDDEN,
                 detail={"code": "custom_provider_endpoints_disabled"},
-            )
-        if stored.risk_ack_version != CUSTOM_PROVIDER_RISK_ACK_VERSION:
-            raise HTTPException(
-                status.HTTP_409_CONFLICT,
-                detail={"code": "provider_endpoint_risk_ack_required"},
             )
         _check_custom_probe_limit(current.id, "verify_text")
     try:
@@ -495,17 +445,10 @@ async def verify_provider(
                 int(settings.custom_provider_verification_timeout_seconds),
             ),
         )
-        response = await asyncio.wait_for(
-            provider.ainvoke([
-                HumanMessage(content="Reply with exactly SMARTAI_TEXT_PROBE_OK.")
-            ]),
+        await asyncio.wait_for(
+            provider.ainvoke([HumanMessage(content="Reply with exactly OK.")]),
             timeout=timeout_seconds,
         )
-        if (
-            provider.provider_type == CUSTOM_PROVIDER_TYPE
-            and str(response.content).strip() != "SMARTAI_TEXT_PROBE_OK"
-        ):
-            raise ProviderEndpointError("provider_endpoint_protocol_mismatch")
     except Exception as exc:
         error_code = _verification_error_code(exc)
         persisted = set_provider_verification(
@@ -557,109 +500,6 @@ async def verify_provider(
     }
 
 
-@router.post("/{provider_id}/verify-vision")
-async def verify_provider_vision(
-    provider_id: str,
-    current: User = Depends(require_teacher),
-    registry: ExpertRegistry = Depends(get_scoped_expert_registry),
-):
-    """Verify custom vision with one repository synthetic image."""
-    stored = (
-        get_provider_config(
-            current.id,
-            provider_id,
-            master_key=settings.provider_encryption_key,
-        )
-        if settings.provider_encryption_key
-        else None
-    )
-    provider = registry.get(provider_id, include_unverified=True)
-    if (
-        stored is None
-        or provider is None
-        or registry.uses_shared_pool()
-        or provider.provider_type != CUSTOM_PROVIDER_TYPE
-    ):
-        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Provider not found")
-    if not settings.custom_provider_endpoints_enabled:
-        raise HTTPException(
-            status.HTTP_403_FORBIDDEN,
-            detail={"code": "custom_provider_endpoints_disabled"},
-        )
-    if stored.verification_status != "verified":
-        raise HTTPException(
-            status.HTTP_409_CONFLICT,
-            detail={"code": "provider_endpoint_not_verified"},
-        )
-    if stored.risk_ack_version != CUSTOM_PROVIDER_RISK_ACK_VERSION:
-        raise HTTPException(
-            status.HTTP_409_CONFLICT,
-            detail={"code": "provider_endpoint_risk_ack_required"},
-        )
-    _check_custom_probe_limit(current.id, "verify_vision")
-    sample = (
-        Path(__file__).resolve().parents[2]
-        / "SmarTAI_test_case"
-        / "ocr_samples"
-        / "S003_synthetic_geography_handwriting.png"
-    )
-    try:
-        provider.supports_vision = True
-        response = await asyncio.wait_for(
-            provider.ainvoke_vision(
-                "Return only the sample identifier written at the top-left of this synthetic image.",
-                [VisionImage(data=sample.read_bytes(), media_type="image/png")],
-            ),
-            timeout=max(
-                5,
-                int(settings.custom_provider_verification_timeout_seconds),
-            ),
-        )
-        if "S003" not in response.content.upper().replace(" ", ""):
-            raise ValueError("vision_probe_mismatch")
-    except Exception as exc:
-        checked_at = time.time()
-        error_code = _verification_error_code(exc)
-        persisted = set_provider_vision_verification(
-            current.id,
-            provider_id,
-            verification_status="failed",
-            checked_at=checked_at,
-            error_code=error_code,
-            expected_updated_at=stored.updated_at,
-        )
-        if not persisted:
-            raise HTTPException(
-                status.HTTP_409_CONFLICT,
-                detail={"code": "expert_verification_stale"},
-            ) from exc
-        raise HTTPException(
-            _verification_http_status(error_code),
-            detail={"code": error_code, "provider_id": provider_id},
-        ) from exc
-    checked_at = time.time()
-    persisted = set_provider_vision_verification(
-        current.id,
-        provider_id,
-        verification_status="verified",
-        checked_at=checked_at,
-        expected_updated_at=stored.updated_at,
-    )
-    if not persisted:
-        raise HTTPException(
-            status.HTTP_409_CONFLICT,
-            detail={"code": "expert_verification_stale"},
-        )
-    return {
-        "status": "success",
-        "provider_id": provider_id,
-        "vision_verification_status": "verified",
-        "vision_last_checked_at": datetime.fromtimestamp(
-            checked_at, tz=timezone.utc
-        ).isoformat(),
-    }
-
-
 @router.delete("/{provider_id}")
 def remove_provider(
     provider_id: str,
@@ -685,10 +525,16 @@ def _verification_error_code(exc: Exception) -> str:
     for item in exception_chain:
         if isinstance(item, ProviderEndpointError):
             return item.code
+        if isinstance(item, ProviderRequestError):
+            return {
+                "provider_auth_failed": "expert_verification_auth_failed",
+                "provider_model_or_endpoint_not_found": "expert_verification_model_not_found",
+                "provider_rate_limited": "expert_verification_rate_limited",
+                "provider_timeout": "expert_verification_timeout",
+                "provider_unreachable": "expert_verification_connection_failed",
+            }.get(item.code, item.code)
         if isinstance(item, ssl.SSLError):
             return "provider_endpoint_tls_failed"
-        if str(item) == "vision_probe_mismatch":
-            return "provider_endpoint_protocol_mismatch"
 
     timeout_types: tuple[type[BaseException], ...] = (
         asyncio.TimeoutError,

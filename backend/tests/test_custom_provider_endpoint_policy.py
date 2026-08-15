@@ -14,6 +14,7 @@ from backend.llm.endpoint_policy import (
     _PinnedSyncBackend,
     canonicalize_provider_base_url,
     normalize_provider_endpoint,
+    provider_operation_url,
     resolve_public_endpoint,
 )
 
@@ -46,6 +47,8 @@ def test_custom_base_url_canonicalization(value, expected):
         ("https://relay.example.com/v1?token=x", "provider_endpoint_invalid"),
         ("https://relay.example.com/v1#x", "provider_endpoint_invalid"),
         ("https://relay.example.com/v1/chat/completions", "provider_endpoint_invalid"),
+        ("https://relay.example.com/v1/messages", "provider_endpoint_invalid"),
+        ("https://relay.example.com/v1beta/models/x:generateContent", "provider_endpoint_invalid"),
         ("https://127.0.0.1/v1", "provider_endpoint_host_not_allowed"),
         ("https://2130706433/v1", "provider_endpoint_host_not_allowed"),
         ("https://127.1/v1", "provider_endpoint_host_not_allowed"),
@@ -53,6 +56,8 @@ def test_custom_base_url_canonicalization(value, expected):
         ("https://service.local/v1", "provider_endpoint_host_not_allowed"),
         ("https://relay.example.com/v1/../admin", "provider_endpoint_invalid"),
         ("https://relay.example.com/v1%2fadmin", "provider_endpoint_invalid"),
+        ("https://relay.example.com/v1%252fadmin", "provider_endpoint_invalid"),
+        ("https://relay.example.com/%252e%252e/admin", "provider_endpoint_invalid"),
         ("https://relay.example.com//v1", "provider_endpoint_invalid"),
     ],
 )
@@ -128,13 +133,9 @@ def test_dns_failure_and_empty_result_fail_closed():
         assert exc_info.value.code == "provider_endpoint_dns_failed"
 
 
-def test_official_types_reject_third_party_and_ustc_is_plain_custom():
-    with pytest.raises(ProviderEndpointError) as exc_info:
-        normalize_provider_endpoint("deepseek", "https://api.llm.ustc.edu.cn/v1")
-    assert exc_info.value.code == "provider_base_url_not_allowed"
-
+def test_deepseek_accepts_ustc_as_a_generic_user_defined_endpoint():
     base_url, identity = normalize_provider_endpoint(
-        "openai_compatible", "https://api.llm.ustc.edu.cn/v1"
+        "deepseek", "https://api.llm.ustc.edu.cn/v1"
     )
     assert base_url == identity == "https://api.llm.ustc.edu.cn/v1"
 
@@ -157,10 +158,75 @@ def test_official_deepseek_accepts_only_its_origin_or_canonical_base(value):
     assert base_url == identity == "https://api.deepseek.com/v1"
 
 
-def test_official_deepseek_rejects_a_same_host_arbitrary_path():
+def test_deepseek_accepts_any_policy_compliant_service_root_path():
+    base_url, identity = normalize_provider_endpoint(
+        "deepseek", "https://api.deepseek.com/proxy/v1"
+    )
+    assert base_url == identity == "https://api.deepseek.com/proxy/v1"
+
+
+@pytest.mark.parametrize(
+    ("provider_type", "protocol"),
+    [
+        ("gemini", "gemini_generate_content"),
+        ("anthropic", "anthropic_messages"),
+        ("gemini", "openai_chat_completions"),
+        ("anthropic", "gemini_generate_content"),
+    ],
+)
+def test_native_and_cross_protocol_relays_use_the_same_generic_url_policy(
+    provider_type,
+    protocol,
+):
+    base_url, identity = normalize_provider_endpoint(
+        provider_type,
+        "https://relay.example.com/v1",
+        protocol,
+    )
+    assert base_url == identity == "https://relay.example.com/v1"
+
+
+def test_cross_protocol_override_requires_a_custom_url():
     with pytest.raises(ProviderEndpointError) as exc_info:
-        normalize_provider_endpoint("deepseek", "https://api.deepseek.com/proxy/v1")
-    assert exc_info.value.code == "provider_base_url_not_allowed"
+        normalize_provider_endpoint(
+            "gemini",
+            None,
+            "openai_chat_completions",
+        )
+    assert exc_info.value.code == "provider_wire_protocol_requires_custom_endpoint"
+
+
+@pytest.mark.parametrize(
+    ("base_url", "protocol", "model", "expected"),
+    [
+        (
+            "https://relay.example.com/v1",
+            "openai_chat_completions",
+            "model",
+            "https://relay.example.com/v1/chat/completions",
+        ),
+        (
+            "https://relay.example.com/v1",
+            "anthropic_messages",
+            "model",
+            "https://relay.example.com/v1/messages",
+        ),
+        (
+            "https://relay.example.com/anthropic",
+            "anthropic_messages",
+            "model",
+            "https://relay.example.com/anthropic/v1/messages",
+        ),
+        (
+            "https://relay.example.com/v1beta",
+            "gemini_generate_content",
+            "model/name",
+            "https://relay.example.com/v1beta/models/model%2Fname:generateContent",
+        ),
+    ],
+)
+def test_protocol_operation_url_is_joined_once(base_url, protocol, model, expected):
+    assert provider_operation_url(base_url, protocol, model=model) == expected
 
 
 class _SyncBackend:
@@ -333,6 +399,63 @@ def test_custom_transport_allows_only_post_and_requests_identity_encoding(monkey
     with pytest.raises(ProviderEndpointError) as exc_info:
         transport.handle_request(httpx.Request("GET", endpoint.canonical_url))
     assert exc_info.value.code == "provider_endpoint_protocol_mismatch"
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "https://relay.example.com/v1",
+        "https://relay.example.com/v1/chat/completions?key=x",
+        "https://other.example.com/v1/chat/completions",
+        "https://relay.example.com/v1/messages",
+    ],
+)
+def test_custom_transport_rejects_every_target_except_the_selected_operation(
+    monkeypatch,
+    url,
+):
+    endpoint = ResolvedEndpoint(
+        "https://relay.example.com/v1",
+        "relay.example.com",
+        ("93.184.216.34",),
+    )
+    allowed = "https://relay.example.com/v1/chat/completions"
+    transport = _PinnedHTTPTransport(endpoint, allowed_target_url=allowed)
+    monkeypatch.setattr(
+        httpx.HTTPTransport,
+        "handle_request",
+        lambda _self, request: httpx.Response(
+            200,
+            stream=_BytesStream([b"{}"]),
+            request=request,
+        ),
+    )
+
+    with pytest.raises(ProviderEndpointError) as exc_info:
+        transport.handle_request(httpx.Request("POST", url))
+    assert exc_info.value.code == "provider_endpoint_protocol_mismatch"
+
+
+def test_custom_transport_allows_exact_selected_operation(monkeypatch):
+    endpoint = ResolvedEndpoint(
+        "https://relay.example.com/v1",
+        "relay.example.com",
+        ("93.184.216.34",),
+    )
+    allowed = "https://relay.example.com/v1/chat/completions"
+    transport = _PinnedHTTPTransport(endpoint, allowed_target_url=allowed)
+    monkeypatch.setattr(
+        httpx.HTTPTransport,
+        "handle_request",
+        lambda _self, request: httpx.Response(
+            200,
+            stream=_BytesStream([b"{}"]),
+            request=request,
+        ),
+    )
+
+    response = transport.handle_request(httpx.Request("POST", allowed))
+    assert b"".join(response.iter_bytes()) == b"{}"
 
 
 def test_custom_transport_rejects_compressed_response(monkeypatch):
