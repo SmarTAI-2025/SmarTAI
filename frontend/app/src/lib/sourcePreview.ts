@@ -15,7 +15,6 @@ export type SourcePreviewMockVariant = "pdf" | "image" | "processing" | "unavail
 export interface SourcePreviewMockScenario {
   descriptor: SourceFileDescriptor;
   variant: SourcePreviewMockVariant;
-  mockEnabled: boolean;
 }
 
 export function getSourcePreviewMockVariant(value: string | null): SourcePreviewMockVariant {
@@ -42,7 +41,6 @@ export function buildSourcePreviewMockScenario({
   variant: SourcePreviewMockVariant;
 }): SourcePreviewMockScenario {
   const normalizedName = displayName?.trim() ?? "";
-  const mockEnabled = import.meta.env.DEV || import.meta.env.MODE === "test";
   const forcedKind = variant === "pdf" ? "pdf" : variant === "image" ? "image" : null;
   const previewKind = forcedKind ?? inferSourcePreviewKind(normalizedName);
   const descriptor = baseDescriptor(scope, sourceId, normalizedName, previewKind);
@@ -51,41 +49,35 @@ export function buildSourcePreviewMockScenario({
     return {
       descriptor: { ...descriptor, status: "unavailable", unavailable_reason: "task_finalized" },
       variant,
-      mockEnabled,
     };
   }
   if (!normalizedName) {
     return {
       descriptor: { ...descriptor, status: "unavailable", unavailable_reason: "missing" },
       variant,
-      mockEnabled,
     };
   }
-  if (!mockEnabled || variant === "unavailable") {
+  if (variant === "unavailable") {
     return {
       descriptor: { ...descriptor, status: "unavailable", unavailable_reason: "not_persisted" },
       variant,
-      mockEnabled,
     };
   }
   if (previewKind === "unsupported") {
     return {
       descriptor: { ...descriptor, status: "unavailable", unavailable_reason: "unsupported_type" },
       variant,
-      mockEnabled,
     };
   }
   if (variant === "processing") {
     return {
       descriptor: { ...descriptor, status: "processing", unavailable_reason: null },
       variant,
-      mockEnabled,
     };
   }
   return {
     descriptor: { ...descriptor, status: "available", unavailable_reason: null },
     variant,
-    mockEnabled,
   };
 }
 

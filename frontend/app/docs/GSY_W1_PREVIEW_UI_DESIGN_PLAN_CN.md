@@ -1,6 +1,6 @@
 # 原文件左右对照 UI 设计与实施计划（GSY-W1-PREVIEW-UI）
 
-> 周期：Week 1（2026-08-03～08-09）
+> 周期：Week 1（2026-08-03～08-09）；Week 1 只表示任务排期，不构成运行环境开关。
 > 主责：gsy；本文件的完成范围只包含 Week 1 mock UI，lyj 只确认文件状态合同。
 > 后续：真实鉴权读取属于独立的 Week 2 `GSY-W2-PREVIEW-AND-REGISTRATION`，不计入本任务完成定义。
 > 单一目标：教师不离开当前复核页，就能把整份 PDF/图片原稿与可编辑识别内容放在一起核对。
@@ -163,14 +163,15 @@ interface SourceFileDescriptor {
 - `components/tasks/SourceComparisonWorkspace.tsx`：50/50 布局、比例状态、分隔条和响应式降级。
 - `types/sourcePreview.ts`：独立合同。
 - `lib/sourcePreview.ts`：MIME→kind、reason→文案映射、object URL 清理 helper。
-- `mocks/sourcePreview.ts`：仅开发/测试环境的 PDF/图片/状态 fixture。
+- `mocks/sourcePreview.ts`：当前未上线开发/预发布阶段使用的 PDF/图片/状态 fixture。
 
 ## 10. Mock 策略
 
-- 只在 `import.meta.env.DEV` 或测试模式启用；生产构建没有打开 mock 的环境变量逃生口。
-- 可用查询参数切状态：`sourcePreview=pdf|image|processing|unavailable|error`，生产构建忽略。
+- 项目尚未公开上线，所有开发与预发布构建（包括 `npm run build`）默认启用，不要求额外 VITE flag。
+- 可用查询参数切状态：`sourcePreview=pdf|image|processing|unavailable|error`；构建模式不改变这套联调行为。
 - 不使用“接口 404 自动伪装成功”；真实环境缺接口时必须显示不可用。
 - Mock 不设置 auth、不写 Task 数据、不模拟 owner 授权。
+- 真实 owner-scoped 文件接口完成后只替换数据 adapter，不改变已确认 UI；只有临近实际公开上线而真实接口仍未完成时，才由发布门禁隐藏入口。
 
 ## 11. 交互与可访问性
 

@@ -51,13 +51,6 @@ export function useMockSourcePreview({
         cancelled = true;
       };
     }
-    if (!import.meta.env.DEV && import.meta.env.MODE !== "test") {
-      setLoadState("idle");
-      return () => {
-        cancelled = true;
-      };
-    }
-
     setLoadState("loading");
     void import("@/mocks/sourcePreview")
       .then(({ loadSourcePreviewMock }) => loadSourcePreviewMock(scenario, attempt))
