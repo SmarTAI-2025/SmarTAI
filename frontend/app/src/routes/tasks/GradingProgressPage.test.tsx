@@ -118,4 +118,34 @@ describe("GradingProgressPage completion routing", () => {
     expect(screen.getByRole("alert")).toHaveTextContent("grading_failed");
     expect(screen.getByRole("alert")).toHaveTextContent("run-1");
   });
+
+  it("renders the classified provider cause from the grading run", () => {
+    taskStatus = "error";
+    (useTaskProgress as unknown as ReturnType<typeof vi.fn>).mockReturnValue({
+      data: {
+        task_id: "task-1",
+        status: "error",
+        error: "provider_timeout",
+        grading_job_id: "run-timeout",
+        problem_count: 1,
+        student_count: 1,
+      },
+      progress: {
+        phase: "error",
+        current_step: "grading",
+        error_detail: "provider_timeout",
+        messages: [],
+      },
+      percent: 0,
+      isError: false,
+      isFetching: false,
+      refetch: vi.fn(),
+    });
+
+    renderProgress();
+
+    expect(screen.getByRole("alert")).toHaveTextContent("The model took too long to respond");
+    expect(screen.getByRole("alert")).toHaveTextContent("provider_timeout");
+    expect(screen.getByRole("alert")).not.toHaveTextContent("grading_failed");
+  });
 });

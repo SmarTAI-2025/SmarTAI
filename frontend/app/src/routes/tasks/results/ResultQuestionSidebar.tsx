@@ -47,7 +47,7 @@ export function ResultQuestionSidebar({
                 active ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted hover:text-foreground",
               )}
             >
-              <span className="truncate">{question.label}</span>
+              <span className="truncate" title={question.label}>{question.label}</span>
               <span
                 aria-hidden="true"
                 className={cn(

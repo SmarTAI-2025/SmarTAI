@@ -170,7 +170,7 @@ export function QuestionAnalysisDetail({
         <p>{tx(locale, "输入框聚焦时方向键只编辑文本；退出输入框后，↑/↓ 切换题目。", "Arrow keys edit text while the input is focused; after leaving it, ↑/↓ switch questions.")}</p>
       </div>
 
-      <div className="mt-4 grid items-start gap-4 lg:grid-cols-[132px_minmax(0,1fr)]">
+      <div className="mt-4 grid items-start gap-4 lg:grid-cols-[clamp(180px,16vw,240px)_minmax(0,1fr)]">
         <ResultQuestionSidebar
           locale={locale}
           questions={visibleQuestions}
