@@ -178,7 +178,7 @@ export function StudentAnalysisDetail({ locale, taskId, studentId, model }: { lo
         <DetailMetric label={tx(locale, "未人工处理提醒", "Unreviewed flags")} value={String(pendingReviewCount)} tone="warning" />
       </div>
 
-      <div className="mt-5 grid items-start gap-4 lg:grid-cols-[132px_minmax(0,1fr)]">
+      <div className="mt-5 grid items-start gap-4 lg:grid-cols-[clamp(180px,16vw,240px)_minmax(0,1fr)]">
         <ResultQuestionSidebar
           locale={locale}
           questions={visibleQuestions}

@@ -39,7 +39,7 @@ router = APIRouter(prefix="/experts", tags=["experts"])
 
 
 class AddKeyRequest(BaseModel):
-    provider_type: Literal["openai", "gemini", "anthropic", "zhipu"]
+    provider_type: Literal["openai", "gemini", "anthropic", "zhipu", "deepseek", "moonshot", "qwen"]
     api_key: str = Field(min_length=1, max_length=512)
     model: str = Field(min_length=1, max_length=200)
     base_url: Optional[str] = Field(default=None, max_length=512)
@@ -65,6 +65,16 @@ class UpdateKeyRequest(BaseModel):
 _OFFICIAL_PROVIDER_BASE_URLS = {
     "openai": ("api.openai.com", "/v1"),
     "zhipu": ("open.bigmodel.cn", "/api/paas/v4"),
+    "deepseek": ("api.deepseek.com", "/v1"),
+    "moonshot": ("api.moonshot.cn", "/v1"),
+    "qwen": ("dashscope.aliyuncs.com", "/compatible-mode/v1"),
+}
+
+# Community / university proxy endpoints that are treated as valid alternatives
+# for the corresponding provider_type.  Kept separate from _OFFICIAL_PROVIDER_BASE_URLS
+# so the official host is still the one returned by _validated_provider_base_url.
+_APPROVED_PROXY_HOSTS: dict[str, set[str]] = {
+    "deepseek": {"api.llm.ustc.edu.cn"},
 }
 
 _PROVIDER_CATALOG = (
@@ -88,6 +98,27 @@ _PROVIDER_CATALOG = (
         "docs_url": "https://docs.bigmodel.cn/",
         "console_url": "https://open.bigmodel.cn/usercenter/apikeys",
         "usage_url": "https://open.bigmodel.cn/console/overview",
+    },
+    {
+        "provider_type": "deepseek",
+        "display_name": "DeepSeek",
+        "docs_url": "https://api-docs.deepseek.com/",
+        "console_url": "https://platform.deepseek.com/api_keys",
+        "usage_url": "https://platform.deepseek.com/usage",
+    },
+    {
+        "provider_type": "moonshot",
+        "display_name": "Moonshot (Kimi)",
+        "docs_url": "https://platform.moonshot.cn/docs",
+        "console_url": "https://platform.moonshot.cn/console/api-keys",
+        "usage_url": "https://platform.moonshot.cn/console/account",
+    },
+    {
+        "provider_type": "qwen",
+        "display_name": "Qwen (通义千问)",
+        "docs_url": "https://help.aliyun.com/zh/model-studio/",
+        "console_url": "https://bailian.console.aliyun.com/",
+        "usage_url": "https://bailian.console.aliyun.com/",
     },
     {
         "provider_type": "anthropic",
@@ -114,23 +145,44 @@ def _validated_provider_base_url(
             detail={"code": "provider_base_url_not_allowed"},
         ) from exc
     official = _OFFICIAL_PROVIDER_BASE_URLS.get(provider_type)
+    approved_hosts = _APPROVED_PROXY_HOSTS.get(provider_type, set())
     normalized_path = parsed.path.rstrip("/")
+
+    if official is None:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={"code": "provider_base_url_not_allowed"},
+        )
+
+    # Allow either the official host or an approved proxy host
+    is_official_host = (parsed.hostname == official[0])
+    is_approved_proxy = (parsed.hostname in approved_hosts)
+
+    if not (is_official_host or is_approved_proxy):
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={"code": "provider_base_url_not_allowed"},
+        )
+
+    # For approved proxy hosts, accept any path (they may follow their own convention).
+    # For the official host, the path must match the official path.
+    host_path = official[1] if is_official_host else normalized_path or ""
+    host = parsed.hostname
+
     if (
-        official is None
-        or parsed.scheme != "https"
+        parsed.scheme != "https"
         or parsed.username is not None
         or parsed.password is not None
         or parsed.query
         or parsed.fragment
-        or parsed.hostname != official[0]
         or parsed_port not in {None, 443}
-        or normalized_path not in {"", official[1]}
+        or (is_official_host and normalized_path not in {"", official[1]})
     ):
         raise HTTPException(
             status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail={"code": "provider_base_url_not_allowed"},
         )
-    return urlunsplit(("https", official[0], official[1], "", ""))
+    return urlunsplit(("https", host, host_path, "", ""))
 
 
 @router.post("/keys")
@@ -334,7 +386,43 @@ def remove_provider(
 
 
 def _verification_error_code(exc: Exception) -> str:
-    if isinstance(exc, (asyncio.TimeoutError, TimeoutError)):
+    exception_chain: list[BaseException] = []
+    current: BaseException | None = exc
+    seen: set[int] = set()
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        exception_chain.append(current)
+        current = current.__cause__ or current.__context__
+
+    timeout_types: tuple[type[BaseException], ...] = (
+        asyncio.TimeoutError,
+        TimeoutError,
+    )
+    connection_types: tuple[type[BaseException], ...] = (ConnectionError, OSError)
+    try:
+        import httpx
+
+        timeout_types += (httpx.TimeoutException,)
+        connection_types += (httpx.TransportError,)
+    except ImportError:  # pragma: no cover - httpx is a runtime dependency
+        pass
+    try:
+        from openai import APIConnectionError, APITimeoutError
+
+        timeout_types += (APITimeoutError,)
+        connection_types += (APIConnectionError,)
+    except ImportError:  # pragma: no cover - OpenAI adapter is optional
+        pass
+    try:
+        from anthropic import APIConnectionError as AnthropicAPIConnectionError
+        from anthropic import APITimeoutError as AnthropicAPITimeoutError
+
+        timeout_types += (AnthropicAPITimeoutError,)
+        connection_types += (AnthropicAPIConnectionError,)
+    except ImportError:  # pragma: no cover - Anthropic adapter is optional
+        pass
+
+    if any(isinstance(item, timeout_types) for item in exception_chain):
         return "expert_verification_timeout"
     status_code = getattr(exc, "status_code", None)
     response = getattr(exc, "response", None)
@@ -346,7 +434,7 @@ def _verification_error_code(exc: Exception) -> str:
         return "expert_verification_model_not_found"
     if status_code == 429:
         return "expert_verification_rate_limited"
-    if isinstance(exc, (ConnectionError, OSError)):
+    if any(isinstance(item, connection_types) for item in exception_chain):
         return "expert_verification_connection_failed"
     return "expert_verification_provider_error"
 
