@@ -1,13 +1,12 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <svg xmlns="http://www.w3.org/2000/svg" width="1200" height="1200"
      viewBox="330 80 680 1120" role="img" aria-labelledby="title desc">
-  <title id="title">SmarTAI integral fountain-pen mark v3</title>
-  <desc id="desc">The approved flat integral-pen silhouette with a seamless curled terminal and the verified symmetric nib aperture.</desc>
+  <title id="title">SmarTAI integral fountain-pen mark v4</title>
+  <desc id="desc">The approved flat integral-pen silhouette with a seamless curled terminal and the refined near-circular nib aperture.</desc>
   <metadata>
-    Round-15 v3 preserves the complete round-14 v2 silhouette and nib geometry.
-    The only addition is a small Bezier bridge within the pointed transparent seam at the curled terminal.
-    The terminal boundary is rewritten as a true continuous union: exact retained curve subsegments
-    are joined by a sub-pixel Bezier bridge, preventing both an outer bulge and raster hairline seams.
+    Round-15 v4 preserves the complete round-15 v3 outer silhouette, seamless curled terminal,
+    centered aperture, symmetric nib slit, and all other geometry. The transparent nib aperture is
+    slightly smaller and subtly elongated along the nib axis; its center remains unchanged.
     Gradient remains #5EB5F1 to #489FEC to #419BE9.
   </metadata>
   <defs>

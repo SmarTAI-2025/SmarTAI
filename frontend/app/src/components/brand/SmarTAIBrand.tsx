@@ -35,3 +35,15 @@ export function SmarTAIAppMark({
     />
   );
 }
+
+export function SmarTAINavigationBrand() {
+  return (
+    <>
+      <SmarTAIAppMark className="h-8 w-5 min-[390px]:hidden" />
+      <SmarTAIWordmark
+        alt=""
+        className="hidden w-[104px] min-[390px]:block min-[420px]:w-[116px] sm:w-[132px] lg:w-[142px]"
+      />
+    </>
+  );
+}

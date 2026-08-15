@@ -22,4 +22,8 @@
 - `/brand/smartai-wordmark-blue.svg`
 - `/favicon.svg`
 
+当前官方蓝色字标的 SHA-256 为
+`ca2a9016fbc5faca79c846695e6922d585b945ad8314cb24c000e0951a8771ab`，与正式宣传成片 v4.1
+保留的 provenance 副本一致；后续视觉候选不得在未确认时覆盖该资产。
+
 组件入口为 `src/components/brand/SmarTAIBrand.tsx`，避免各页面自行拼接尺寸与资源路径。

@@ -2,7 +2,10 @@ import { Menu, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { Link, Outlet, useNavigate } from "react-router-dom";
 import { useCurrentUser, useExperts, useLogout } from "@/api/hooks";
-import { SmarTAIWordmark } from "@/components/brand/SmarTAIBrand";
+import {
+  SmarTAINavigationBrand,
+  SmarTAIWordmark,
+} from "@/components/brand/SmarTAIBrand";
 import { AccountMenu } from "@/components/layout/AccountMenu";
 import { LanguageToggle } from "@/components/layout/LanguageToggle";
 import { ModelStatusMenu } from "@/components/layout/ModelStatusMenu";
@@ -121,7 +124,7 @@ export function AppShell() {
             aria-label={t("appName")}
             className="shrink-0 outline-none focus-visible:rounded focus-visible:ring-2 focus-visible:ring-ring"
           >
-            <SmarTAIWordmark alt="" className="w-[104px] min-[420px]:w-[116px] sm:w-[132px] lg:w-[142px]" />
+            <SmarTAINavigationBrand />
           </Link>
 
           <PrimaryNavigation className="ml-7 hidden lg:flex" />
