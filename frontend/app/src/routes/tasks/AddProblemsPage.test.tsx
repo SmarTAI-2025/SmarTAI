@@ -16,6 +16,7 @@ const capabilityState = vi.hoisted(() => ({
       programming_tests: { accepted_extensions: [".pdf", ".txt", ".md", ".markdown", ".json"] },
     },
     reader: { ocr: true },
+    limits: { max_file_bytes: 5 * 1024 * 1024 },
     score_policy: {
       maximum_max_score: 10_000,
       per_question_text_max_characters: 12_000,
@@ -95,6 +96,7 @@ beforeEach(() => {
   capabilityState.data.source_roles.rubric.accepted_extensions = [".pdf", ".txt", ".md", ".markdown", ".jpg", ".jpeg", ".png", ".webp"];
   capabilityState.data.source_roles.programming_tests.accepted_extensions = [".pdf", ".txt", ".md", ".markdown", ".json"];
   capabilityState.data.reader.ocr = true;
+  capabilityState.data.limits.max_file_bytes = 5 * 1024 * 1024;
   preflightMutateAsync.mockReset();
   startMutateAsync.mockReset();
   preflightMutateAsync.mockResolvedValue({ source_token: "source-1" });
@@ -155,6 +157,20 @@ describe("AddProblemsPage score configuration", () => {
 });
 
 describe("AddProblemsPage upload capability contract", () => {
+  it("shows and enforces the backend file-size limit before preflight", () => {
+    renderPage();
+    expect(screen.getByText(/单个文件最大 5\.0 MB/)).toBeInTheDocument();
+
+    const oversized = new File(["x"], "oversized.pdf", { type: "application/pdf" });
+    Object.defineProperty(oversized, "size", { value: 5 * 1024 * 1024 + 1 });
+    fireEvent.change(screen.getByLabelText("选择文件"), {
+      target: { files: [oversized] },
+    });
+
+    expect(screen.getByRole("alert")).toHaveTextContent("超过单个文件 5.0 MB 的上传上限");
+    expect(preflightMutateAsync).not.toHaveBeenCalled();
+  });
+
   it("accepts a question image from the chooser when vision capability allows it", async () => {
     const user = userEvent.setup();
     renderPage();

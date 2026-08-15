@@ -7,6 +7,7 @@ import pytest
 
 from backend.agents.ingest_agent import parse_student_answers
 from backend.progress.tracker import ProgressReporter
+from backend.tools.structured_llm import RateLimitError
 
 
 @pytest.mark.asyncio
@@ -69,6 +70,29 @@ async def test_submission_parser_reports_factual_stage_metrics_without_pii(monke
     assert "Kate" not in event_text
     assert "PB001" not in event_text
     assert "Submission recognized." in event_text
+
+
+@pytest.mark.asyncio
+async def test_all_submission_failures_preserve_the_typed_provider_cause(monkeypatch):
+    async def rate_limited(_provider, _messages):
+        raise RateLimitError("429 Too Many Requests")
+
+    monkeypatch.setattr("backend.agents.ingest_agent.ainvoke_with_retry", rate_limited)
+
+    with pytest.raises(RuntimeError) as exc_info:
+        await parse_student_answers(
+            files_data=[{"filename": "student.txt", "content": "answer"}],
+            problems_data={
+                "q1": {
+                    "q_id": "q1", "number": "1", "type": "概念题", "stem": "Q1",
+                },
+            },
+            student_store={},
+            provider=SimpleNamespace(provider_id="mock:limited"),
+        )
+
+    assert isinstance(exc_info.value.__cause__, RateLimitError)
+    assert "429" not in str(exc_info.value)
 
 
 @pytest.mark.asyncio
