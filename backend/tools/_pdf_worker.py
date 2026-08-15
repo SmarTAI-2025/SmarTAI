@@ -9,7 +9,7 @@ from __future__ import annotations
 import json
 import sys
 
-import fitz
+import pymupdf as fitz
 
 
 def _write(payload: dict) -> None:

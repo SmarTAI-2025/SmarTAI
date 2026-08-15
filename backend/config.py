@@ -5,6 +5,7 @@ Loaded from environment variables or .env file.
 from __future__ import annotations
 
 import os
+from collections.abc import MutableMapping
 from typing import Optional, Literal
 from pydantic import model_validator
 from pydantic_settings import BaseSettings
@@ -17,7 +18,7 @@ class Settings(BaseSettings):
     grading_engine: Literal["v1", "v2"] = "v2"
 
     # ─── Default LLM provider (fallback if no BYOK keys configured) ────────────
-    default_provider: Literal["gemini", "openai", "zhipu", "anthropic"] = "gemini"
+    default_provider: Literal["gemini", "openai", "zhipu", "anthropic", "deepseek", "moonshot", "qwen"] = "deepseek"
 
     # Gemini
     # NEVER hardcode an API key here — keys must come from env vars or BYOK only.
@@ -41,10 +42,24 @@ class Settings(BaseSettings):
     anthropic_api_key: Optional[str] = os.getenv("ANTHROPIC_API_KEY", "")
     anthropic_model: str = "claude-sonnet-4-20250514"
 
-    # ─── Network proxy (for accessing Google/OpenAI APIs behind GFW) ──────────
-    # Set to "" to disable. Clash Verge default: http://127.0.0.1:7897
-    http_proxy: str = os.getenv("HTTP_PROXY", "http://127.0.0.1:7897")
-    https_proxy: str = os.getenv("HTTPS_PROXY", "http://127.0.0.1:7897")
+    # ─── Domestic OpenAI-compatible providers (DeepSeek, Moonshot, Qwen) ─────
+    deepseek_api_key: Optional[str] = os.getenv("DEEPSEEK_API_KEY", "")
+    deepseek_api_base: str = "https://api.deepseek.com/v1"
+    deepseek_model: str = "deepseek-v4-flash"
+
+    moonshot_api_key: Optional[str] = os.getenv("MOONSHOT_API_KEY", "")
+    moonshot_api_base: str = "https://api.moonshot.cn/v1"
+    moonshot_model: str = "kimi-k3"
+
+    qwen_api_key: Optional[str] = os.getenv("QWEN_API_KEY", "")
+    qwen_api_base: str = "https://dashscope.aliyuncs.com/compatible-mode/v1"
+    qwen_model: str = "qwen-plus"
+
+    # ─── Optional outbound proxy for overseas model providers ──────────
+    # Only SMARTAI_HTTP_PROXY / SMARTAI_HTTPS_PROXY opt in to proxying. Do not
+    # inherit a machine-wide HTTP_PROXY implicitly: Zhipu must remain direct.
+    http_proxy: str = ""
+    https_proxy: str = ""
 
     # ─── Concurrency & performance ─────────────────────────────────────────────
     max_concurrent_jobs: int = 10
@@ -208,10 +223,10 @@ class Settings(BaseSettings):
     # Stable master key for encrypting user BYOK provider credentials. It must
     # come from the process environment/secret manager and never from source
     # control or the database.
-    provider_encryption_key: Optional[str] = os.getenv("SMARTAI_PROVIDER_ENCRYPTION_KEY", "")
+    provider_encryption_key: str = os.getenv("SMARTAI_PROVIDER_ENCRYPTION_KEY", "smartai-dev-provider-key-change-in-prod")
 
     # ─── Auth (JWT) ────────────────────────────────────────────────────────────
-    jwt_secret: str = os.getenv("JWT_SECRET", "smartai-dev-secret-change-in-prod")
+    jwt_secret: str = os.getenv("SMARTAI_JWT_SECRET", "smartai-dev-secret-change-in-prod")
     jwt_algorithm: str = "HS256"
     jwt_expiry_minutes: int = 30
     refresh_session_days: int = 30
@@ -260,6 +275,40 @@ class Settings(BaseSettings):
         return self
 
     model_config = {"env_prefix": "SMARTAI_", "env_file": ".env", "extra": "ignore"}
+
+
+_PROXY_ENV_KEYS = (
+    "HTTP_PROXY",
+    "HTTPS_PROXY",
+    "ALL_PROXY",
+    "http_proxy",
+    "https_proxy",
+    "all_proxy",
+)
+
+
+def configure_provider_proxy_environment(
+    config: Settings,
+    *,
+    environ: MutableMapping[str, str] | None = None,
+) -> None:
+    """Apply only SmarTAI's explicit proxy settings to SDK environment state.
+
+    Google SDK imports inspect standard proxy variables, so this must run
+    before importing Google/LangChain clients. Clearing every common proxy
+    spelling also prevents a machine-wide ``ALL_PROXY`` from changing backend
+    behavior implicitly.
+    """
+    target = os.environ if environ is None else environ
+    for key in _PROXY_ENV_KEYS:
+        target.pop(key, None)
+
+    http_proxy = config.http_proxy.strip()
+    https_proxy = config.https_proxy.strip()
+    if http_proxy or https_proxy:
+        fallback = https_proxy or http_proxy
+        target["HTTP_PROXY"] = http_proxy or fallback
+        target["HTTPS_PROXY"] = https_proxy or fallback
 
 
 # Global singleton

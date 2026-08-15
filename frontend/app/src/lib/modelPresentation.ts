@@ -8,10 +8,13 @@ export interface ModelPresentationSource {
 const OPAQUE_PROVIDER_LABEL = /^(?:[a-f0-9]{24,}|[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}|(?:cfg|config|provider)[_-][a-z0-9_-]{12,})$/i;
 
 const PROVIDER_NAMES: Record<string, string> = {
-  anthropic: "Anthropic",
+  anthropic: "Claude (Anthropic)",
   gemini: "Google Gemini",
-  openai: "OpenAI",
-  zhipu: "Zhipu AI",
+  openai: "GPT (OpenAI)",
+  zhipu: "Zhipu (智谱)",
+  deepseek: "DeepSeek",
+  moonshot: "Kimi (Moonshot)",
+  qwen: "Qwen (通义千问)",
 };
 
 export function providerDisplayName(providerType: string): string {
