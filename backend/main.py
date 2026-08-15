@@ -14,14 +14,13 @@ import random
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 # ─── Proxy MUST be set before ANY Google/LangChain imports ────────────────────
-# Google's HTTP client reads HTTP_PROXY at import time, not at call time.
-from backend.config import settings as _settings
-if _settings.http_proxy:
-    os.environ["HTTP_PROXY"] = _settings.http_proxy
-    os.environ["HTTPS_PROXY"] = _settings.https_proxy
-else:
-    os.environ.pop("HTTP_PROXY", None)
-    os.environ.pop("HTTPS_PROXY", None)
+# Google's HTTP client reads standard proxy variables during initialization.
+from backend.config import (
+    configure_provider_proxy_environment,
+    settings as _settings,
+)
+
+configure_provider_proxy_environment(_settings)
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -45,7 +44,7 @@ def create_app() -> FastAPI:
             f"(V1 routers were removed). Unset the env var or set it to 'v2'."
         )
     logger.info(f"Starting SmarTAI with GRADING_ENGINE={engine}")
-    if settings.http_proxy:
+    if settings.http_proxy or settings.https_proxy:
         # Proxy URLs can contain credentials.  Keep startup diagnostics useful
         # without copying the configured value into ordinary logs.
         logger.info("HTTP proxy enabled")

@@ -580,7 +580,7 @@ export function StudentAnswerReviewPage() {
           </div>
 
           {filteredQuestions.length ? (
-            <div className="mt-4 grid items-start gap-4 lg:grid-cols-[132px_minmax(0,1fr)]">
+            <div className="mt-4 grid items-start gap-4 lg:grid-cols-[clamp(180px,16vw,240px)_minmax(0,1fr)]">
               <aside className="sticky top-[86px] z-20 hidden max-h-[calc(100vh-102px)] overflow-hidden rounded-[10px] border bg-card lg:flex lg:flex-col" aria-label={tx(locale, "题目导航", "Question navigation")}>
                 <div className="shrink-0 border-b px-3 py-3">
                   <p className="text-xs font-bold text-foreground">{tx(locale, "题目导航", "Questions")}</p>
@@ -602,7 +602,7 @@ export function StudentAnswerReviewPage() {
                           active ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted hover:text-foreground",
                         )}
                       >
-                        <span className="truncate">{tx(locale, `第 ${question.label} 题`, `Q${question.label}`)}</span>
+                        <span className="truncate" title={tx(locale, `第 ${question.label} 题`, `Q${question.label}`)}>{tx(locale, `第 ${question.label} 题`, `Q${question.label}`)}</span>
                         <span className={cn(
                           "ml-1 h-2 w-2 shrink-0 rounded-full",
                           active ? "bg-white" : state === "recognized" ? "bg-emerald-500" : state === "reviewed" ? "bg-blue-500" : state === "flagged" ? "bg-amber-500" : "bg-red-500",

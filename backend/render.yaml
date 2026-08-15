@@ -22,8 +22,8 @@ services:
         value: "3.11"   # Render supports the backend's numpy/langchain stack.
       - key: SMARTAI_GRADING_ENGINE
         value: v2
-      # Empty proxy — needed in cloud so HTTP_PROXY isn't inherited from any
-      # base image. With this empty Gemini uses native ainvoke (faster).
+      # Leave empty when this host can reach overseas providers directly; set
+      # only when the deployment needs an outbound proxy. Zhipu always bypasses it.
       - key: SMARTAI_HTTP_PROXY
         value: ""
       - key: SMARTAI_HTTPS_PROXY

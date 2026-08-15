@@ -336,6 +336,7 @@ export function AddProblemsPage() {
                 disabled={isBusy}
                 hasTaskCourse={Boolean(taskQuery.data?.course_id)}
                 acceptedExtensions={capabilitiesQuery.data?.source_roles[source.role]?.accepted_extensions}
+                maxFileBytes={capabilitiesQuery.data?.limits.max_file_bytes}
                 locale={locale}
                 onUpdate={(patch) => updateSource(source.id, patch)}
                 onRemove={() => removeSource(source.id)}
@@ -521,6 +522,7 @@ function SourceEditor({
   disabled,
   hasTaskCourse,
   acceptedExtensions,
+  maxFileBytes,
   locale,
   onUpdate,
   onRemove,
@@ -532,6 +534,7 @@ function SourceEditor({
   disabled: boolean;
   hasTaskCourse: boolean;
   acceptedExtensions?: string[];
+  maxFileBytes?: number;
   locale: string;
   onUpdate: (patch: Partial<SourceDraft>) => void;
   onRemove: () => void;
@@ -564,6 +567,7 @@ function SourceEditor({
       file,
       source.role,
       accepted,
+      maxFileBytes,
       locale,
     );
     if (validationError) {
@@ -612,7 +616,12 @@ function SourceEditor({
           >
             <FileText aria-hidden="true" className="h-6 w-6 text-primary" />
             <p className="mt-1.5 max-w-full truncate text-sm font-semibold text-foreground">{source.file?.name ?? tx(locale, "拖入或选择文件", "Drop or choose a file")}</p>
-            <p className="mt-1 text-xs text-muted-foreground">{accept.replaceAll(".", "").toUpperCase().replaceAll(",", " / ")}</p>
+            <p className="mt-1 text-xs text-muted-foreground">
+              {accept.replaceAll(".", "").toUpperCase().replaceAll(",", " / ")}
+              {maxFileBytes
+                ? tx(locale, ` · 单个文件最大 ${formatFileSize(maxFileBytes)}`, ` · Maximum ${formatFileSize(maxFileBytes)} per file`)
+                : ""}
+            </p>
             <label className="mt-2 inline-flex h-9 cursor-pointer items-center rounded-[7px] border bg-card px-4 text-xs font-semibold text-foreground hover:bg-muted">
               {source.file ? tx(locale, "替换文件", "Replace File") : tx(locale, "选择文件", "Choose File")}
               <input id={`problem-source-file-${source.id}`} type="file" accept={accept} className="sr-only" disabled={disabled} onChange={(event: ChangeEvent<HTMLInputElement>) => { selectFile(event.target.files?.[0]); event.target.value = ""; }} />
@@ -802,8 +811,16 @@ function sourceFileValidationError(
   file: File,
   role: PreparationSourceRole,
   acceptedExtensions: string[],
+  maxFileBytes: number | undefined,
   locale: string,
 ) {
+  if (maxFileBytes && file.size > maxFileBytes) {
+    return tx(
+      locale,
+      `文件超过单个文件 ${formatFileSize(maxFileBytes)} 的上传上限，请选择更小的文件。`,
+      `This file exceeds the ${formatFileSize(maxFileBytes)} per-file upload limit. Choose a smaller file.`,
+    );
+  }
   const normalizedName = file.name.trim().toLowerCase();
   const extension = normalizedName.includes(".")
     ? `.${normalizedName.split(".").pop()}`

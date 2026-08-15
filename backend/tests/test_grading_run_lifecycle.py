@@ -35,6 +35,7 @@ from backend.domain.errors import (
     VersionConflict,
 )
 from backend.services import grading_adapter, grading_runs
+from backend.tools.structured_llm import PermanentLLMError, RateLimitError
 
 
 # ─── fixtures: teacher + course + enrolled student + published assignment ─────
@@ -888,6 +889,69 @@ def test_explicit_e2e_provider_does_not_require_persisted_provider_config(
     assert completed.status == education.GradingRunStatus.COMPLETED.value
     assert completed.completed_submissions == 1
     assert completed.failed_submissions == 0
+
+
+@pytest.mark.parametrize(
+    ("failure", "expected_code"),
+    [
+        (TimeoutError("provider timed out"), "provider_timeout"),
+        (RateLimitError("429 Too Many Requests"), "provider_rate_limited"),
+        (ConnectionError("provider unreachable"), "provider_unreachable"),
+        (PermanentLLMError("401 invalid api key"), "provider_auth_failed"),
+        (
+            ValidationError(
+                "Provider configuration changed.",
+                code="grading_provider_configuration_changed",
+            ),
+            "grading_provider_configuration_changed",
+        ),
+        (RuntimeError("unexpected internal failure"), "grading_failed"),
+    ],
+)
+def test_failed_run_persists_and_projects_the_classified_reason(
+    setup_assignment, monkeypatch, failure, expected_code,
+):
+    from backend.services import task_facade
+
+    run = grading_runs.create_run(
+        teacher_id=setup_assignment["teacher_id"],
+        assignment_id=setup_assignment["assignment_id"],
+    )
+
+    class _Registry:
+        @staticmethod
+        def count():
+            return 1
+
+    async def fail_grading(**_kwargs):
+        raise failure
+
+    monkeypatch.setattr(grading_adapter, "run_grading", fail_grading)
+
+    with pytest.raises(type(failure)):
+        asyncio.run(grading_runs.process_run(
+            run_id=run.id, worker_id="w-classified", registry=_Registry(),
+        ))
+
+    failed = grading_repository.get_run(run.id)
+    assert failed.status == education.GradingRunStatus.FAILED.value
+    assert failed.error_message == expected_code
+    assert grading_repository.list_events(run_id=run.id)[-1]["payload"]["code"] == expected_code
+
+    progress = task_facade._grading_progress(run.id, setup_assignment["teacher_id"])
+    assert progress["error_detail"] == expected_code
+    task = task_facade.get_task(
+        task_id=setup_assignment["assignment_id"],
+        owner_id=setup_assignment["teacher_id"],
+        full=False,
+    )
+    assert task["status"] == "error"
+    assert task["error"] == expected_code
+    assert task["last_failed_job_id"] == run.id
+    assert task_facade.task_results(
+        task_id=setup_assignment["assignment_id"],
+        owner_id=setup_assignment["teacher_id"],
+    )["error"] == expected_code
 
 
 def test_adapter_marks_missing_student_batch_output_as_hard_failure(setup_assignment, monkeypatch):

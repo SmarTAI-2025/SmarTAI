@@ -340,7 +340,7 @@ class JobProgress(BaseModel):
 
 class ProviderConfig(BaseModel):
     """Configuration for a single LLM provider."""
-    provider_type: Literal["openai", "gemini", "anthropic", "zhipu"]
+    provider_type: Literal["openai", "gemini", "anthropic", "zhipu", "deepseek", "moonshot", "qwen"]
     api_key: str
     model: str = Field(description="Model name, e.g. 'gpt-4o', 'gemini-2.5-pro'")
     base_url: Optional[str] = None

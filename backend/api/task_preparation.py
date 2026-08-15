@@ -59,6 +59,7 @@ from backend.models import (
 from backend.progress.tracker import get_or_create_reporter, get_reporter, remove_reporter
 from backend.services import task_facade
 from backend.storage import get_storage
+from backend.services.background_errors import classify_background_error
 from backend.skills.ocr_ingest import LLMVisionOCRSkill, OCRPurpose
 from backend.tools.file_processing import IMAGE_MEDIA_TYPES, extract_text_from_upload
 
@@ -85,6 +86,13 @@ _SOURCE_ROLE_OCR_PURPOSE: dict[str, OCRPurpose] = {
     "rubric": "problems",
     "programming_tests": "test_cases",
 }
+
+
+def _question_preparation_failure_code(exc: Exception) -> str:
+    """Return a stable, non-sensitive code for a background preparation failure."""
+    return classify_background_error(exc, "problem_extraction_failed")
+
+
 _SOURCE_MIME_TYPES = {
     ".pdf": frozenset({"application/pdf", "application/x-pdf"}),
     ".txt": frozenset({"text/plain"}),
@@ -433,7 +441,10 @@ async def _read_source(
         if not body:
             raise HTTPException(status.HTTP_400_BAD_REQUEST, detail={"code": "source_empty"})
         if len(body) > MAX_SOURCE_BYTES:
-            raise HTTPException(status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, detail={"code": "source_too_large"})
+            raise HTTPException(
+                status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                detail={"code": "source_too_large", "max_bytes": MAX_SOURCE_BYTES},
+            )
         ocr_skill = LLMVisionOCRSkill(vision) if vision is not None else None
         try:
             text = await extract_text_from_upload(
@@ -724,10 +735,16 @@ async def _run_question_preparation(
             task_id, owner_id, job_id, job_attempt,
             task_facade._detail_error(exc, "problem_extraction_failed"),
         )
-    except Exception:
-        logger.warning("Background question preparation failed; job_id=%s", job_id)
+    except Exception as exc:
+        error_code = _question_preparation_failure_code(exc)
+        logger.warning(
+            "Background question preparation failed; job_id=%s error_code=%s exception_type=%s",
+            job_id,
+            error_code,
+            type(exc).__name__,
+        )
         task_facade._fail_operation(
-            task_id, owner_id, job_id, job_attempt, "problem_extraction_failed"
+            task_id, owner_id, job_id, job_attempt, error_code
         )
 
 
@@ -1004,10 +1021,11 @@ async def _run_material_import(
             task_facade._detail_error(exc, "material_import_failed"),
             expected_lease_token=expected_lease_token,
         )
-    except Exception:
+    except Exception as exc:
         logger.warning("Background material import failed; job_id=%s", job_id)
         task_facade._fail_operation(
-            task_id, owner_id, job_id, job_attempt, "material_import_failed",
+            task_id, owner_id, job_id, job_attempt,
+            classify_background_error(exc, "material_import_failed"),
             expected_lease_token=expected_lease_token,
         )
 
@@ -1464,10 +1482,11 @@ async def _run_ai_completion(
             task_facade._detail_error(exc, "ai_completion_failed"),
             expected_lease_token=expected_lease_token,
         )
-    except Exception:
+    except Exception as exc:
         logger.warning("Background AI completion failed; job_id=%s", job_id)
         task_facade._fail_operation(
-            task_id, owner_id, job_id, job_attempt, "ai_completion_failed",
+            task_id, owner_id, job_id, job_attempt,
+            classify_background_error(exc, "ai_completion_failed"),
             expected_lease_token=expected_lease_token,
         )
 

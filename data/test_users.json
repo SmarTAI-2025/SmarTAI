@@ -1,0 +1,16 @@
+{
+  "users": [
+    {
+      "username": "gxr_teacher01",
+      "password": "edHlbV0ooqLf",
+      "role": "teacher",
+      "email": "gxr_teacher01@test.local"
+    },
+    {
+      "username": "gxr_teacher02",
+      "password": "zAFoDjABWHps",
+      "role": "teacher",
+      "email": "gxr_teacher02@test.local"
+    }
+  ]
+}

@@ -303,7 +303,7 @@ export function QuestionPreparationDetailPage() {
       ) : filtered.length === 0 ? (
         <EmptyState title={tx(locale, "没有匹配的题目", "No matching questions")} description={tx(locale, "清空或调整筛选条件。", "Clear or adjust the filter.")} />
       ) : (
-        <div className="mt-5 grid items-start gap-4 lg:grid-cols-[132px_minmax(0,1fr)]">
+        <div className="mt-5 grid items-start gap-4 lg:grid-cols-[clamp(180px,16vw,240px)_minmax(0,1fr)]">
           <aside className="sticky top-[86px] z-20 hidden max-h-[calc(100vh-102px)] overflow-hidden rounded-[10px] border bg-card lg:flex lg:flex-col" aria-label={tx(locale, "题目导航", "Question navigation")}>
             <div className="shrink-0 border-b px-3 py-3">
               <p className="text-xs font-bold text-foreground">{tx(locale, "题目导航", "Questions")}</p>
@@ -316,7 +316,7 @@ export function QuestionPreparationDetailPage() {
                 const number = problem.number || problem.q_id;
                 return (
                   <button key={problem.q_id} type="button" aria-current={active ? "true" : undefined} onClick={() => scrollToQuestion(problem.q_id)} className={cn("mb-1 flex min-h-10 w-full items-center justify-between rounded-[7px] px-2.5 text-left text-xs font-semibold transition last:mb-0", active ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted hover:text-foreground")}>
-                    <span className="truncate">{tx(locale, `第 ${number} 题`, `Q${number}`)}</span>
+                    <span className="truncate" title={tx(locale, `第 ${number} 题`, `Q${number}`)}>{tx(locale, `第 ${number} 题`, `Q${number}`)}</span>
                     {riskCount ? <span className={cn("ml-1 inline-flex h-5 min-w-5 items-center justify-center rounded-full px-1 text-[10px]", active ? "bg-white/20 text-white" : "bg-amber-100 text-amber-700")}>{riskCount}</span> : null}
                   </button>
                 );

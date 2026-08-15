@@ -425,8 +425,11 @@ async def test_failure_logging_does_not_expose_payload(caplog):
         assert await worker.poll_once() == 1
         await _drain(worker)
 
+    assert caplog.messages == [
+        f"workflow operation {operation.id} failed (workflow_failed)"
+    ]
     assert secret not in caplog.text
-    assert "workflow_failed" in caplog.text
+    assert "handler crashed" not in caplog.text
     persisted = workflow_repository.get_operation(operation.id, owner_id=owner_id)
     assert persisted.error_code == "workflow_failed"
 
