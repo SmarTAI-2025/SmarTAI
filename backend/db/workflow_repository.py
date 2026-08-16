@@ -13,12 +13,14 @@ TTL; they are not a source of truth for confirmed questions or submissions.
 """
 from __future__ import annotations
 
+import json
 import time
 import uuid
 from typing import Any, Iterable
 
 from sqlalchemy import (
     Boolean,
+    CheckConstraint,
     Float,
     ForeignKey,
     Index,
@@ -42,14 +44,100 @@ from backend.db.models import (  # noqa: F401
     AssignmentRecord,
     GradeResultRecord,
     GradingRunRecord,
+    StoredFileRecord,
 )
 from backend.db.session import session_scope
 from backend.domain.errors import (
     InvalidTransition,
     NotFound,
     ResultNotReleasable,
+    ValidationError,
     VersionConflict,
 )
+
+
+MAX_OPERATION_PAYLOAD_BYTES = 4 * 1024 * 1024
+MAX_OPERATION_PROGRESS_BYTES = 64 * 1024
+MAX_OPERATION_CHECKPOINT_BYTES = 64 * 1024
+MAX_OPERATION_TERMINAL_SUMMARY_BYTES = 16 * 1024
+MAX_OPERATION_ARTIFACT_REFS = 100
+MAX_OPERATION_ARTIFACT_REF_LENGTH = 64
+MAX_OPERATION_ARTIFACT_REFS_BYTES = 8 * 1024
+
+
+def _validate_json_object(
+    value: Any,
+    *,
+    field: str,
+    max_bytes: int,
+) -> dict:
+    if not isinstance(value, dict):
+        raise ValidationError(
+            f"Operation {field} must be a JSON object.",
+            code=f"invalid_operation_{field}",
+        )
+    try:
+        encoded = json.dumps(
+            value,
+            ensure_ascii=False,
+            allow_nan=False,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    except (TypeError, ValueError) as exc:
+        raise ValidationError(
+            f"Operation {field} must contain finite JSON values.",
+            code=f"invalid_operation_{field}",
+        ) from exc
+    if len(encoded) > max_bytes:
+        raise ValidationError(
+            f"Operation {field} exceeds its storage limit.",
+            code=f"operation_{field}_too_large",
+        )
+    return value
+
+
+def _validate_checkpoint_stage(value: Any) -> str | None:
+    if value is not None and (not isinstance(value, str) or len(value) > 64):
+        raise ValidationError(
+            "Checkpoint stage must be null or a string of at most 64 characters.",
+            code="invalid_checkpoint_stage",
+        )
+    return value
+
+
+def _validate_artifact_refs(value: Any) -> list[str]:
+    if not isinstance(value, list):
+        raise ValidationError(
+            "Operation artifact references must be a list.",
+            code="invalid_operation_artifact_refs",
+        )
+    if len(value) > MAX_OPERATION_ARTIFACT_REFS:
+        raise ValidationError(
+            "Operation artifact references exceed their storage limit.",
+            code="operation_artifact_refs_too_large",
+        )
+    refs: list[str] = []
+    seen: set[str] = set()
+    for item in value:
+        if (
+            not isinstance(item, str)
+            or not item
+            or len(item) > MAX_OPERATION_ARTIFACT_REF_LENGTH
+        ):
+            raise ValidationError(
+                "Operation artifact references must contain stable file IDs.",
+                code="invalid_operation_artifact_refs",
+            )
+        if item not in seen:
+            refs.append(item)
+            seen.add(item)
+    encoded = json.dumps(refs, separators=(",", ":")).encode("utf-8")
+    if len(encoded) > MAX_OPERATION_ARTIFACT_REFS_BYTES:
+        raise ValidationError(
+            "Operation artifact references exceed their storage limit.",
+            code="operation_artifact_refs_too_large",
+        )
+    return refs
 
 
 class AssignmentWorkflowRecord(Base):
@@ -133,6 +221,10 @@ class WorkflowOperationRecord(Base):
             name="uq_workflow_operations_assignment_type_hash",
         ),
         Index("ix_workflow_operations_assignment_status", "assignment_id", "status"),
+        CheckConstraint(
+            "checkpoint_revision >= 0",
+            name="ck_workflow_operations_checkpoint_revision_nonnegative",
+        ),
     )
 
     id: Mapped[str] = mapped_column(String(64), primary_key=True)
@@ -150,6 +242,19 @@ class WorkflowOperationRecord(Base):
     # Temporary source descriptors/candidates only. Confirmed data is written
     # to assignment_questions/submission_* and then removed from this payload.
     payload: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    checkpoint_revision: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0
+    )
+    checkpoint_stage: Mapped[str | None] = mapped_column(
+        String(64), nullable=True
+    )
+    checkpoint: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    artifact_refs: Mapped[list[str]] = mapped_column(
+        JSON, nullable=False, default=list
+    )
+    terminal_summary: Mapped[dict | None] = mapped_column(
+        JSON(none_as_null=True), nullable=True
+    )
     error_code: Mapped[str | None] = mapped_column(String(128), nullable=True)
     created_at: Mapped[float] = mapped_column(Float, nullable=False, default=time.time)
     updated_at: Mapped[float] = mapped_column(Float, nullable=False, default=time.time)
@@ -626,6 +731,16 @@ def create_operation(
     progress: dict | None = None,
     expires_at: float | None = None,
 ) -> tuple[WorkflowOperationRecord, bool]:
+    payload = _validate_json_object(
+        payload if payload is not None else {},
+        field="payload",
+        max_bytes=MAX_OPERATION_PAYLOAD_BYTES,
+    )
+    progress = _validate_json_object(
+        progress if progress is not None else {},
+        field="progress",
+        max_bytes=MAX_OPERATION_PROGRESS_BYTES,
+    )
     now = time.time()
     selector = (
         WorkflowOperationRecord.assignment_id == assignment_id,
@@ -653,7 +768,9 @@ def create_operation(
             )
             .values(
                 attempt=WorkflowOperationRecord.attempt + 1,
-                status="pending", progress=progress or {}, payload=payload or {},
+                status="pending", progress=progress, payload=payload,
+                checkpoint_revision=0, checkpoint_stage=None, checkpoint={},
+                artifact_refs=[], terminal_summary=None,
                 error_code=None, updated_at=now, completed_at=None,
                 expires_at=expires_at,
             )
@@ -682,7 +799,7 @@ def create_operation(
                 id=_new_id("op"), assignment_id=assignment_id,
                 owner_id=owner_id, operation_type=operation_type,
                 input_hash=input_hash, attempt=1, status="pending",
-                payload=payload or {}, progress=progress or {},
+                payload=payload, progress=progress,
                 created_at=now, updated_at=now, expires_at=expires_at,
             )
             session.add(row)
@@ -720,6 +837,18 @@ def update_operation(
 ) -> WorkflowOperationRecord:
     allowed = {"status", "progress", "payload", "error_code", "completed_at", "expires_at"}
     values = {key: value for key, value in changes.items() if key in allowed}
+    if "payload" in values:
+        values["payload"] = _validate_json_object(
+            values["payload"],
+            field="payload",
+            max_bytes=MAX_OPERATION_PAYLOAD_BYTES,
+        )
+    if "progress" in values:
+        values["progress"] = _validate_json_object(
+            values["progress"],
+            field="progress",
+            max_bytes=MAX_OPERATION_PROGRESS_BYTES,
+        )
     now = time.time()
     with session_scope() as session:
         result = session.execute(
@@ -727,18 +856,146 @@ def update_operation(
                 WorkflowOperationRecord.id == operation_id,
                 WorkflowOperationRecord.owner_id == owner_id,
                 WorkflowOperationRecord.attempt == expected_attempt,
+                WorkflowOperationRecord.terminal_summary.is_(None),
             ).values(**values, updated_at=now)
         )
         if result.rowcount != 1:
-            exists = session.scalar(select(WorkflowOperationRecord.id).where(
+            current = session.scalar(select(WorkflowOperationRecord).where(
                 WorkflowOperationRecord.id == operation_id,
                 WorkflowOperationRecord.owner_id == owner_id,
             ))
-            if exists is None:
+            if current is None:
                 raise NotFound("workflow_operation")
+            if current.attempt == expected_attempt and current.terminal_summary is not None:
+                raise InvalidTransition(
+                    "The workflow operation already has a terminal summary.",
+                    code="operation_already_terminal",
+                )
             raise VersionConflict(
                 "A newer workflow operation attempt is active.",
                 code="stale_operation_attempt",
+            )
+        row = session.scalar(select(WorkflowOperationRecord).where(
+            WorkflowOperationRecord.id == operation_id,
+            WorkflowOperationRecord.owner_id == owner_id,
+            WorkflowOperationRecord.attempt == expected_attempt,
+        ))
+        assert row is not None
+        return _detach_operation(row)
+
+
+def save_operation_checkpoint(
+    operation_id: str,
+    *,
+    owner_id: str,
+    expected_attempt: int,
+    expected_checkpoint_revision: int,
+    stage: str | None,
+    checkpoint: dict,
+    artifact_refs: list[str] | None = None,
+    terminal_summary: dict | None = None,
+    terminal_status: str | None = None,
+) -> WorkflowOperationRecord:
+    stage = _validate_checkpoint_stage(stage)
+    checkpoint = _validate_json_object(
+        checkpoint,
+        field="checkpoint",
+        max_bytes=MAX_OPERATION_CHECKPOINT_BYTES,
+    )
+    if terminal_summary is not None:
+        terminal_summary = _validate_json_object(
+            terminal_summary,
+            field="terminal_summary",
+            max_bytes=MAX_OPERATION_TERMINAL_SUMMARY_BYTES,
+        )
+    if (terminal_summary is None) != (terminal_status is None):
+        raise ValidationError(
+            "Terminal summary and status must be supplied together.",
+            code="invalid_operation_terminal_state",
+        )
+    if terminal_status is not None and (
+        not isinstance(terminal_status, str)
+        or not terminal_status
+        or len(terminal_status) > 32
+        or terminal_status in {"pending", "running"}
+    ):
+        raise ValidationError(
+            "Invalid terminal operation status.",
+            code="invalid_operation_terminal_status",
+        )
+    refs = _validate_artifact_refs(
+        artifact_refs if artifact_refs is not None else []
+    )
+    now = time.time()
+
+    with session_scope() as session:
+        current = session.scalar(select(WorkflowOperationRecord).where(
+            WorkflowOperationRecord.id == operation_id,
+            WorkflowOperationRecord.owner_id == owner_id,
+        ))
+        if current is None:
+            raise NotFound("workflow_operation")
+        if current.attempt != expected_attempt:
+            raise VersionConflict(
+                "A newer workflow operation attempt is active.",
+                code="stale_operation_attempt",
+            )
+        if refs:
+            matched_refs = set(session.scalars(select(StoredFileRecord.id).where(
+                StoredFileRecord.id.in_(refs),
+                StoredFileRecord.owner_id == owner_id,
+                StoredFileRecord.assignment_id == current.assignment_id,
+            )))
+            if matched_refs != set(refs):
+                raise NotFound("stored_file")
+
+        checkpoint_values = {
+            "checkpoint_revision": WorkflowOperationRecord.checkpoint_revision + 1,
+            "checkpoint_stage": stage,
+            "checkpoint": checkpoint,
+            "artifact_refs": refs,
+            "terminal_summary": terminal_summary,
+            "updated_at": now,
+        }
+        if terminal_status is not None:
+            checkpoint_values.update(status=terminal_status, completed_at=now)
+
+        result = session.execute(
+            update(WorkflowOperationRecord).where(
+                WorkflowOperationRecord.id == operation_id,
+                WorkflowOperationRecord.owner_id == owner_id,
+                WorkflowOperationRecord.attempt == expected_attempt,
+                WorkflowOperationRecord.checkpoint_revision
+                == expected_checkpoint_revision,
+                WorkflowOperationRecord.terminal_summary.is_(None),
+            ).values(**checkpoint_values)
+        )
+        if result.rowcount != 1:
+            session.expire_all()
+            latest = session.scalar(select(WorkflowOperationRecord).where(
+                WorkflowOperationRecord.id == operation_id,
+                WorkflowOperationRecord.owner_id == owner_id,
+            ))
+            if latest is None:
+                raise NotFound("workflow_operation")
+            if latest.attempt != expected_attempt:
+                raise VersionConflict(
+                    "A newer workflow operation attempt is active.",
+                    code="stale_operation_attempt",
+                )
+            if latest.checkpoint_revision != expected_checkpoint_revision:
+                raise VersionConflict(
+                    "The workflow operation checkpoint changed.",
+                    code="stale_checkpoint_revision",
+                )
+            if latest.terminal_summary is not None:
+                raise InvalidTransition(
+                    "The workflow operation already has a terminal summary.",
+                    code="operation_already_terminal",
+                )
+            raise VersionConflict(
+                "The workflow operation checkpoint changed.",
+                code="stale_checkpoint_revision",
             )
         row = session.scalar(select(WorkflowOperationRecord).where(
             WorkflowOperationRecord.id == operation_id,
