@@ -180,6 +180,49 @@ def test_multiple_format_calls_all_rewritten():
     assert "pretty" not in out
 
 
+def test_nested_formatter_preserves_assignment_and_outer_call():
+    """Nested formatter replacement must not delete its assignment target."""
+    code = (
+        "import sympy as sp\n"
+        "x = sp.symbols('x')\n"
+        "r = sp.simplify(sp.pretty(x))\n"
+        "print(r)\n"
+    )
+    out = _sanitize_sympy_output_code(code)
+    assert "r = sp.simplify(str(x))" in out
+    assert "print(r)" in out
+    compile(out, "<sanitized>", "exec")
+
+
+def test_multiline_formatter_inside_print_is_not_double_printed():
+    """A multiline wrapped call becomes one print, not print(print(...))."""
+    code = (
+        "import sympy as sp\n"
+        "x = sp.symbols('x')\n"
+        "print(\n"
+        "    sp.pretty(x, use_unicode=False)\n"
+        ")\n"
+    )
+    out = _sanitize_sympy_output_code(code)
+    assert "print(str(x))" in out
+    assert "print(print" not in out
+    compile(out, "<sanitized>", "exec")
+
+
+def test_multiple_format_calls_on_one_line_preserve_all_arguments():
+    """Span overlap must not drop either formatter call or the outer print."""
+    code = (
+        "import sympy as sp\n"
+        "a, b = sp.symbols('a b')\n"
+        "print(sp.pretty(a), sp.latex(b))\n"
+    )
+    out = _sanitize_sympy_output_code(code)
+    assert "print(str(a), str(b))" in out
+    assert "pretty" not in out
+    assert "latex" not in out
+    compile(out, "<sanitized>", "exec")
+
+
 def test_non_format_function_not_touched():
     """``print(sp.simplify(r))`` is NOT rewritten — simplify is fine."""
     code = (

@@ -29,9 +29,8 @@ from __future__ import annotations
 import ast
 import logging
 import os
-import ast
 import re
-from typing import Optional, List, Tuple, TYPE_CHECKING
+from typing import Optional, List, TYPE_CHECKING
 
 from pydantic import BaseModel, Field
 
@@ -287,11 +286,12 @@ def _sanitize_sympy_output_code(code: str) -> str:
     would be multi-line ASCII art (or LaTeX) that `sympy.sympify` cannot parse
     → SymPy verification silently fails and grading degrades to LLM_ONLY.
 
-    This function parses the code with `ast`, finds any call whose function
-    name is in `_FORMAT_FUNCS`, and rewrites it to `print(str(<arg>))`.  If the
-    pretty/pprint/srepr call is already wrapped in `print(...)` it is still
-    rewritten.  Unparseable code is returned unchanged (the sandbox will report
-    the error as before).
+    This function parses the code with `ast` and structurally replaces any call
+    whose function name is in `_FORMAT_FUNCS` with `str(<arg>)`.  A standalone
+    formatter expression such as `sp.pprint(expr)` is replaced with
+    `print(str(<arg>))`; assignments and outer calls are otherwise preserved.
+    Unparseable code is returned unchanged (the sandbox will report the error
+    as before).
 
     Returns the (possibly rewritten) code string.
     """
@@ -300,63 +300,67 @@ def _sanitize_sympy_output_code(code: str) -> str:
     except SyntaxError:
         return code
 
-    rewrites: list[Tuple[ast.Call, str]] = []  # (node, replacement)
+    def _is_format_call(node: ast.AST) -> bool:
+        if not isinstance(node, ast.Call) or not node.args:
+            return False
+        if isinstance(node.func, ast.Name):
+            return node.func.id in _FORMAT_FUNCS
+        if isinstance(node.func, ast.Attribute):
+            return node.func.attr in _FORMAT_FUNCS
+        return False
 
-    class _Visitor(ast.NodeVisitor):
-        def visit_Call(self, node: ast.Call) -> None:  # noqa: N802
-            # Identify the function name, handling attribute calls like
-            # ``sp.pretty(...)`` / ``sympy.pprint(...)``.
-            fname: Optional[str] = None
-            if isinstance(node.func, ast.Name):
-                fname = node.func.id
-            elif isinstance(node.func, ast.Attribute):
-                fname = node.func.attr
-            if fname in _FORMAT_FUNCS and node.args:
-                # Only rewrite when there is a single positional argument —
-                # `pretty(expr, use_unicode=False)` has 2 args; we still rewrite
-                # it using the first arg and drop the keyword flags.
-                rewrites.append((node, _expr_to_source(node.args[0])))
-            self.generic_visit(node)
+    class _Transformer(ast.NodeTransformer):
+        def __init__(self) -> None:
+            self.rewrite_count = 0
 
-    _Visitor().visit(tree)
+        def visit_Expr(self, node: ast.Expr) -> ast.AST:  # noqa: N802
+            # pprint() writes to stdout itself.  Once replaced with str(), a
+            # standalone expression needs an explicit print() to keep that
+            # externally visible behaviour.
+            if _is_format_call(node.value):
+                formatter = node.value
+                assert isinstance(formatter, ast.Call)
+                arg = self.visit(formatter.args[0])
+                self.rewrite_count += 1
+                replacement = ast.Expr(
+                    value=ast.Call(
+                        func=ast.Name(id="print", ctx=ast.Load()),
+                        args=[
+                            ast.Call(
+                                func=ast.Name(id="str", ctx=ast.Load()),
+                                args=[arg],
+                                keywords=[],
+                            )
+                        ],
+                        keywords=[],
+                    )
+                )
+                return ast.copy_location(replacement, node)
+            return self.generic_visit(node)
 
-    if not rewrites:
+        def visit_Call(self, node: ast.Call) -> ast.AST:  # noqa: N802
+            if _is_format_call(node):
+                arg = self.visit(node.args[0])
+                self.rewrite_count += 1
+                replacement = ast.Call(
+                    func=ast.Name(id="str", ctx=ast.Load()),
+                    args=[arg],
+                    keywords=[],
+                )
+                return ast.copy_location(replacement, node)
+            return self.generic_visit(node)
+
+    transformer = _Transformer()
+    rewritten_tree = transformer.visit(tree)
+    if not transformer.rewrite_count:
         return code  # nothing to fix
-
-    # Apply rewrites via line-based replacement.  Each call's source span is
-    # replaced with `print(str(<arg>))`.  We work from the bottom up so earlier
-    # line numbers stay valid.
-    lines = code.splitlines(keepends=True)
-    # Build (start_line, end_line, new_text) per rewrite, sorting descending.
-    spans: list[Tuple[int, int, str]] = []
-    for node, arg_src in rewrites:
-        start = node.lineno - 1  # 0-indexed
-        end = node.end_lineno - 1
-        indent = _leading_indent(lines[start])
-        spans.append((start, end, f"{indent}print(str({arg_src}))"))
-    spans.sort(key=lambda s: s[0], reverse=True)
-
-    for start, end, new_text in spans:
-        lines[start:end + 1] = [new_text + "\n"]
-
-    rewritten = "".join(lines)
-    if rewritten != code:
-        logger.info("_sanitize_sympy_output_code rewrote %d format call(s)", len(rewrites))
+    ast.fix_missing_locations(rewritten_tree)
+    rewritten = ast.unparse(rewritten_tree) + "\n"
+    logger.info(
+        "_sanitize_sympy_output_code rewrote %d format call(s)",
+        transformer.rewrite_count,
+    )
     return rewritten
-
-
-def _expr_to_source(node: ast.AST) -> str:
-    """Best-effort source reconstruction for an ast node."""
-    try:
-        return ast.unparse(node)
-    except Exception:
-        # Fallback for very old Python without ast.unparse — unlikely on 3.9+.
-        return "..."  # type: ignore[unreachable]
-
-
-def _leading_indent(line: str) -> str:
-    """Return the leading whitespace of a line."""
-    return line[: len(line) - len(line.lstrip())]
 
 
 def _format_metadata_zh(
