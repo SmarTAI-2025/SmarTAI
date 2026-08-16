@@ -87,7 +87,7 @@ export function AddProblemsPage() {
   const { taskId } = useParams();
   const location = useLocation();
   const navigate = useNavigate();
-  const { locale } = useI18n();
+  const { locale, t } = useI18n();
   const restored = getRestoredDraft(location.state, taskId);
   const taskQuery = useTask(taskId);
   const capabilitiesQuery = useQuestionPreparationCapabilities(taskId);
@@ -182,6 +182,10 @@ export function AddProblemsPage() {
       setFormError(resolvedScorePolicy.error);
       return;
     }
+    const replaceConfirmed = hasExistingProblems
+      ? window.confirm(t("addProblemsOverwriteWarning"))
+      : false;
+    if (hasExistingProblems && !replaceConfirmed) return;
     let activeSource: SourceDraft | undefined;
     let phase: PreparationFailure["phase"] = "source_preflight";
     try {
@@ -210,7 +214,7 @@ export function AddProblemsPage() {
         taskId,
         sourceTokens: tokens,
         expectedWorkflowRevision: taskQuery.data.workflow_revision,
-        replaceConfirmed: hasExistingProblems,
+        replaceConfirmed,
         scorePolicy: resolvedScorePolicy.value,
       });
       toast.success(
@@ -231,6 +235,24 @@ export function AddProblemsPage() {
     }
   }
 
+  async function refreshTaskState() {
+    setBusyLabel(tx(locale, "正在刷新任务状态", "Refreshing task status"));
+    try {
+      const [taskResult] = await Promise.all([
+        taskQuery.refetch(),
+        expertsQuery.refetch(),
+      ]);
+      setPreparationFailure(null);
+      if (taskResult.data?.status === "extracting_problems") {
+        navigate(`/tasks/${taskId}/problems/progress`);
+        return;
+      }
+      toast.success(tx(locale, "已刷新为最新任务状态。", "Task status refreshed."));
+    } finally {
+      setBusyLabel(null);
+    }
+  }
+
   const roleIndex = SOURCE_ROLES.indexOf(activeRole);
   const recoveryInfo = preparationFailure
     ? classifyRecoverableError(preparationFailure.error, {
@@ -246,7 +268,7 @@ export function AddProblemsPage() {
       routeState,
       locale,
       onRetry: () => void handleStart(),
-      onRefresh: () => void Promise.all([taskQuery.refetch(), expertsQuery.refetch()]),
+      onRefresh: () => void refreshTaskState(),
       onOpenSource: (role, sourceId, clearLibrary) => {
         setActiveRole(role);
         if (clearLibrary && sourceId) updateSource(sourceId, { libraryMaterial: null });

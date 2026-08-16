@@ -199,6 +199,7 @@ def test_postgres_source_outcome_persistence_and_owner_isolation(
         matched_answer_count=0,
         unknown_question_ids=[],
         stable_error_code="submission_parse_failed",
+        failure_phase="recognition",
         retryable=True,
     )
     summary = source_outcome_repository.summarize_sources(

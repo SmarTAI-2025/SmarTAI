@@ -262,16 +262,22 @@ def test_artifact_manifest_keeps_confirmation_time_and_csv_is_formula_safe():
     )
 
 
-def test_figma_grading_run_freezes_full_questions_and_provider_configuration():
-    from backend.db import assignment_repository, course_repository
+def _seed_figma_grading_task(owner_id: str):
+    from backend.db import (
+        assignment_repository,
+        course_repository,
+        source_outcome_repository,
+        workflow_repository,
+    )
+    from backend.db.file_repository import save_file
     from backend.db.provider_repository import upsert_provider_config
-    from backend.db.workflow_repository import ensure_workflow, get_run_setup, update_workflow
+    from backend.db.workflow_repository import ensure_workflow, update_workflow
     from backend.db.models import UserRecord
     from backend.db.session import session_scope
     from backend.models import ProviderConfig, TaskGradingSetup
     from backend.services import task_facade
+    from backend.storage import get_storage
 
-    owner_id = "grading-input-owner"
     with session_scope() as session:
         session.add(UserRecord(
             id=owner_id, username=owner_id, password_hash="hash",
@@ -305,15 +311,97 @@ def test_figma_grading_run_freezes_full_questions_and_provider_configuration():
         primary_provider_id=provider.id,
         knowledge_scope="none",
     )
-    ensure_workflow(assignment_id=assignment.id, owner_id=owner_id)
-    update_workflow(
+    workflow = ensure_workflow(assignment_id=assignment.id, owner_id=owner_id)
+    operation, _ = workflow_repository.create_operation(
+        assignment_id=assignment.id,
+        owner_id=owner_id,
+        operation_type="submission_recognition",
+        input_hash="f" * 64,
+    )
+    workflow_repository.update_operation(
+        operation.id,
+        owner_id=owner_id,
+        expected_attempt=operation.attempt,
+        status="running",
+    )
+    workflow = update_workflow(
+        assignment.id,
+        owner_id=owner_id,
+        parse_job_id=operation.id,
+        active_operation="submission_recognition",
+        active_job_id=operation.id,
+    )
+    stored = save_file(
+        storage=get_storage(),
+        owner_id=owner_id,
+        kind="submission_source",
+        original_name="student.txt",
+        content=b"answer",
+        content_type="text/plain",
+        assignment_id=assignment.id,
+    )
+    source, _ = source_outcome_repository.register_source(
+        owner_id=owner_id,
+        assignment_id=assignment.id,
+        operation_id=operation.id,
+        expected_attempt=operation.attempt,
+        order_index=0,
+        stored_file_id=stored.id,
+    )
+    source_outcome_repository.record_outcome(
+        source_id=source.id,
+        owner_id=owner_id,
+        status="parsed",
+        student_candidate="S001",
+        matched_answer_count=1,
+        unknown_question_ids=[],
+        stable_error_code=None,
+        failure_phase=None,
+        retryable=False,
+    )
+    task_facade._commit_imported_submissions(
+        task_id=assignment.id,
+        owner_id=owner_id,
+        course_id=course.id,
+        students=[{
+            "stu_id": "S001",
+            "stu_name": "Student One",
+            "source_id": source.id,
+            "source_filename": "student.txt",
+            "identity_match_method": "filename",
+            "identity_status": "matched",
+            "stu_ans": [{
+                "q_id": "q1",
+                "number": "1",
+                "type": "short",
+                "content": "answer",
+                "flag": [],
+            }],
+        }],
+        expected_workflow_revision=workflow.workflow_revision,
+        operation_id=operation.id,
+        expected_operation_attempt=operation.attempt,
+        submission_file_name="student.txt",
+    )
+    workflow = update_workflow(
         assignment.id, owner_id=owner_id,
         grading_setup=setup.model_dump(mode="json"),
         grading_setup_fingerprint="teacher-approved",
     )
+    return assignment, question, workflow
+
+
+def test_figma_grading_run_freezes_full_questions_and_provider_configuration():
+    from backend.db.workflow_repository import get_run_setup
+    from backend.services import task_facade
+
+    owner_id = "grading-input-owner"
+    assignment, question, workflow = _seed_figma_grading_task(owner_id)
 
     started = task_facade.start_task_grading(
-        task_id=assignment.id, owner_id=owner_id
+        task_id=assignment.id,
+        owner_id=owner_id,
+        expected_workflow_revision=workflow.workflow_revision,
     )
     frozen = get_run_setup(started["job_id"])
 
@@ -322,3 +410,116 @@ def test_figma_grading_run_freezes_full_questions_and_provider_configuration():
     assert len(manifest["provider_configuration_fingerprint"]) == 64
     assert "provider-secret" not in str(manifest)
     assert manifest["questions"] == [question.model_dump(mode="json")]
+
+
+def test_atomic_grading_start_rolls_back_run_and_workflow_together(monkeypatch):
+    from backend.db import grading_repository, submission_repository, workflow_repository
+
+    owner_id = "grading-race-owner"
+    assignment, _question, workflow = _seed_figma_grading_task(owner_id)
+    revisions = [
+        item.current_revision_id
+        for item in submission_repository.list_submissions(
+            assignment.id,
+            actor_id=owner_id,
+        )
+        if item.current_revision_id is not None
+    ]
+
+    def fail_before_commit(_record):
+        raise RuntimeError("injected_precommit_failure")
+
+    real_run_to_dto = grading_repository._run_to_dto
+    monkeypatch.setattr(grading_repository, "_run_to_dto", fail_before_commit)
+
+    with pytest.raises(RuntimeError, match="injected_precommit_failure"):
+        grading_repository.create_run_bundle(
+            assignment.id,
+            teacher_id=owner_id,
+            revision_ids=revisions,
+            setup=dict(workflow.grading_setup or {}),
+            setup_fingerprint="atomic-test",
+            input_manifest={},
+            workflow_expected_revision=workflow.workflow_revision,
+        )
+    monkeypatch.setattr(grading_repository, "_run_to_dto", real_run_to_dto)
+
+    persisted_workflow = workflow_repository.get_workflow(
+        assignment.id, owner_id=owner_id,
+    )
+    runs = grading_repository.list_runs_for_assignment(
+        assignment.id, actor_id=owner_id,
+    )
+    assert runs == []
+    assert persisted_workflow.workflow_revision == workflow.workflow_revision
+    assert persisted_workflow.active_job_id is None
+    assert persisted_workflow.grading_job_id is None
+
+
+def test_grading_start_repairs_a_legacy_active_run_without_a_workflow_pointer():
+    from backend.db import workflow_repository
+    from backend.services import grading_runs, task_facade
+
+    owner_id = "grading-repair-owner"
+    assignment, _question, workflow = _seed_figma_grading_task(owner_id)
+    run = grading_runs.start_run(
+        assignment_id=assignment.id,
+        teacher_id=owner_id,
+        grading_setup=dict(workflow.grading_setup or {}),
+        setup_fingerprint="legacy-window",
+        input_manifest=None,
+    )
+
+    started = task_facade.start_task_grading(
+        task_id=assignment.id,
+        owner_id=owner_id,
+        expected_workflow_revision=workflow.workflow_revision,
+    )
+    repaired = workflow_repository.get_workflow(
+        assignment.id,
+        owner_id=owner_id,
+    )
+
+    assert started == {
+        "status": "already_running",
+        "task_id": assignment.id,
+        "job_id": run.id,
+    }
+    assert repaired.grading_job_id == run.id
+    assert repaired.active_operation == "grading"
+    assert repaired.active_job_id == run.id
+    assert repaired.workflow_revision == workflow.workflow_revision
+
+
+def test_grading_start_rejects_an_active_non_grading_operation():
+    from backend.db import grading_repository, workflow_repository
+    from backend.domain.errors import InvalidTransition
+    from backend.services import task_facade
+
+    owner_id = "grading-busy-owner"
+    assignment, _question, workflow = _seed_figma_grading_task(owner_id)
+    operation, _created = workflow_repository.create_operation(
+        assignment_id=assignment.id,
+        owner_id=owner_id,
+        operation_type="submission_recognition",
+        input_hash="active-recognition",
+    )
+    workflow_repository.update_workflow(
+        assignment.id,
+        owner_id=owner_id,
+        bump_revision=False,
+        active_operation=operation.operation_type,
+        active_job_id=operation.id,
+    )
+
+    with pytest.raises(InvalidTransition) as busy:
+        task_facade.start_task_grading(
+            task_id=assignment.id,
+            owner_id=owner_id,
+            expected_workflow_revision=workflow.workflow_revision,
+        )
+
+    assert busy.value.code == "workflow_busy"
+    assert grading_repository.list_runs_for_assignment(
+        assignment.id, actor_id=owner_id,
+    ) == []

@@ -129,6 +129,7 @@ def test_source_outcome_migration_has_contract_constraints(tmp_path, monkeypatch
         "matched_answer_count",
         "unknown_question_ids",
         "stable_error_code",
+        "failure_phase",
         "retryable",
         "artifact_file_id",
         "created_at",
@@ -158,6 +159,31 @@ def test_source_outcome_migration_has_contract_constraints(tmp_path, monkeypatch
         for item in inspector.get_indexes("workflow_source_items")
     }
     assert ("assignment_id", "operation_id", "attempt", "order_index") in source_indexes
+
+    presentation_columns = {
+        column["name"]
+        for column in inspector.get_columns("assignment_student_presentations")
+    }
+    assert "source_id" in presentation_columns
+    presentation_indexes = {
+        (item["name"], tuple(item["column_names"]), item["unique"])
+        for item in inspector.get_indexes("assignment_student_presentations")
+    }
+    assert (
+        "ix_assignment_student_presentations_source_id",
+        ("source_id",),
+        1,
+    ) in presentation_indexes
+    presentation_foreign_keys = {
+        item["name"]: item
+        for item in inspector.get_foreign_keys("assignment_student_presentations")
+    }
+    source_fk = presentation_foreign_keys[
+        "fk_assignment_student_presentations_source"
+    ]
+    assert source_fk["referred_table"] == "workflow_source_items"
+    assert source_fk["referred_columns"] == ["id"]
+    assert source_fk["options"].get("ondelete") == "SET NULL"
 
 
 def test_operation_checkpoint_migration_has_contract_columns(tmp_path, monkeypatch):
@@ -267,6 +293,196 @@ def test_operation_checkpoint_migration_preserves_0005_operation(
             "artifact_refs, terminal_summary FROM workflow_operations "
             "WHERE id='operation'"
         )).one() == (0, None, "{}", "[]", None)
+
+
+def test_source_diagnostic_migration_preserves_0006_rows_across_roundtrip(
+    tmp_path, monkeypatch,
+):
+    from sqlalchemy import create_engine, inspect, text
+
+    db_url = f"sqlite:///{(tmp_path / 'diagnostic-preserve.db').as_posix()}"
+    cfg = _alembic_config(db_url, monkeypatch)
+    command.upgrade(cfg, "0006_operation_checkpoints")
+    engine = create_engine(db_url)
+    with engine.begin() as connection:
+        connection.execute(text(
+            "INSERT INTO users "
+            "(id, username, role, password_hash, is_active, created_at, updated_at) "
+            "VALUES ('owner', 'owner', 'teacher', 'h', 1, 1, 1), "
+            "('student', 'student', 'student', 'h', 1, 1, 1)"
+        ))
+        connection.execute(text(
+            "INSERT INTO courses "
+            "(id, name, code, description, teacher_id, created_at, updated_at) "
+            "VALUES ('course', 'Course', '', '', 'owner', 1, 1)"
+        ))
+        connection.execute(text(
+            "INSERT INTO assignments "
+            "(id, course_id, teacher_id, name, description, status, created_at, "
+            "updated_at, version) VALUES "
+            "('assignment', 'course', 'owner', 'Assignment', '', 'draft', 1, 1, 1)"
+        ))
+        connection.execute(text(
+            "INSERT INTO workflow_operations "
+            "(id, assignment_id, owner_id, operation_type, input_hash, attempt, "
+            "status, progress, payload, error_code, created_at, updated_at) VALUES "
+            "('operation', 'assignment', 'owner', 'submission_recognition', "
+            "'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', "
+            "1, 'running', '{}', '{}', NULL, 1, 1)"
+        ))
+        connection.execute(text(
+            "INSERT INTO stored_files "
+            "(id, owner_id, kind, original_name, storage_backend, storage_key, "
+            "content_type, size_bytes, sha256, assignment_id, created_at) VALUES "
+            "('file', 'owner', 'submission_source', 'answers.pdf', 'local', "
+            "'assignments/assignment/file/answers.pdf', 'application/pdf', 7, "
+            "'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb', "
+            "'assignment', 1)"
+        ))
+        connection.execute(text(
+            "INSERT INTO workflow_source_items "
+            "(id, owner_id, assignment_id, operation_id, attempt, order_index, "
+            "stored_file_id, retry_of_source_id, created_at) VALUES "
+            "('source', 'owner', 'assignment', 'operation', 1, 0, 'file', NULL, 1)"
+        ))
+        connection.execute(text(
+            "INSERT INTO workflow_source_outcomes "
+            "(source_id, status, student_candidate, matched_answer_count, "
+            "unknown_question_ids, stable_error_code, retryable, artifact_file_id, "
+            "created_at) VALUES "
+            "('source', 'parse_failed', NULL, 0, '[]', "
+            "'submission_parse_failed', 1, NULL, 1)"
+        ))
+        connection.execute(text(
+            "INSERT INTO assignment_student_presentations "
+            "(id, assignment_id, student_id, display_student_id, display_name, "
+            "source_filename, identity_match_method, identity_status, is_active, "
+            "created_at, updated_at) VALUES "
+            "('presentation', 'assignment', 'student', 'student', 'Student', "
+            "'answers.pdf', 'exact', 'matched', 1, 1, 1)"
+        ))
+
+    command.upgrade(cfg, "0007_source_outcome_diagnostics")
+    with engine.begin() as connection:
+        assert connection.execute(text(
+            "SELECT status, stable_error_code, failure_phase "
+            "FROM workflow_source_outcomes WHERE source_id='source'"
+        )).one() == (
+            "parse_failed",
+            "submission_parse_failed",
+            None,
+        )
+        assert connection.execute(text(
+            "SELECT student_id, source_filename, source_id "
+            "FROM assignment_student_presentations WHERE id='presentation'"
+        )).one() == ("student", "answers.pdf", None)
+        connection.execute(text(
+            "UPDATE workflow_source_outcomes SET failure_phase='recognition' "
+            "WHERE source_id='source'"
+        ))
+        connection.execute(text(
+            "UPDATE assignment_student_presentations SET source_id='source' "
+            "WHERE id='presentation'"
+        ))
+
+    command.downgrade(cfg, "0006_operation_checkpoints")
+    inspector = inspect(engine)
+    assert "failure_phase" not in {
+        column["name"]
+        for column in inspector.get_columns("workflow_source_outcomes")
+    }
+    assert "source_id" not in {
+        column["name"]
+        for column in inspector.get_columns("assignment_student_presentations")
+    }
+    with engine.connect() as connection:
+        assert connection.execute(text(
+            "SELECT source_id, status, stable_error_code, retryable "
+            "FROM workflow_source_outcomes WHERE source_id='source'"
+        )).one() == (
+            "source",
+            "parse_failed",
+            "submission_parse_failed",
+            1,
+        )
+        assert connection.execute(text(
+            "SELECT id, student_id, source_filename "
+            "FROM assignment_student_presentations WHERE id='presentation'"
+        )).one() == ("presentation", "student", "answers.pdf")
+
+    command.upgrade(cfg, "0007_source_outcome_diagnostics")
+    with engine.connect() as connection:
+        assert connection.execute(text(
+            "SELECT status, stable_error_code, failure_phase "
+            "FROM workflow_source_outcomes WHERE source_id='source'"
+        )).one() == (
+            "parse_failed",
+            "submission_parse_failed",
+            None,
+        )
+        assert connection.execute(text(
+            "SELECT student_id, source_filename, source_id "
+            "FROM assignment_student_presentations WHERE id='presentation'"
+        )).one() == ("student", "answers.pdf", None)
+
+
+def test_source_diagnostic_upgrade_accepts_legacy_pr26_0005_schema(
+    tmp_path,
+    monkeypatch,
+):
+    from alembic.migration import MigrationContext
+    from alembic.operations import Operations
+    from sqlalchemy import Column, String, create_engine, inspect
+
+    db_url = f"sqlite:///{(tmp_path / 'legacy-pr26-0005.db').as_posix()}"
+    cfg = _alembic_config(db_url, monkeypatch)
+    command.upgrade(cfg, "0005_workflow_source_outcomes")
+    engine = create_engine(db_url)
+
+    # PR #26's previously published 0005 put these diagnostics directly in
+    # 0005. Recreate that exact shape while the database remains stamped 0005.
+    with engine.begin() as connection:
+        operations = Operations(MigrationContext.configure(connection))
+        with operations.batch_alter_table("workflow_source_outcomes") as batch_op:
+            batch_op.add_column(Column("failure_phase", String(64), nullable=True))
+        with operations.batch_alter_table(
+            "assignment_student_presentations"
+        ) as batch_op:
+            batch_op.add_column(Column("source_id", String(64), nullable=True))
+            batch_op.create_foreign_key(
+                "fk_assignment_student_presentations_source",
+                "workflow_source_items",
+                ["source_id"],
+                ["id"],
+                ondelete="SET NULL",
+            )
+            batch_op.create_index(
+                "ix_assignment_student_presentations_source_id",
+                ["source_id"],
+                unique=True,
+            )
+
+    command.upgrade(cfg, "head")
+    inspector = inspect(engine)
+    assert [
+        column["name"]
+        for column in inspector.get_columns("workflow_source_outcomes")
+    ].count("failure_phase") == 1
+    assert [
+        column["name"]
+        for column in inspector.get_columns("assignment_student_presentations")
+    ].count("source_id") == 1
+    assert any(
+        foreign_key.get("constrained_columns") == ["source_id"]
+        and foreign_key.get("referred_table") == "workflow_source_items"
+        for foreign_key in inspector.get_foreign_keys(
+            "assignment_student_presentations"
+        )
+    )
+    assert any(
+        index.get("column_names") == ["source_id"] and index.get("unique")
+        for index in inspector.get_indexes("assignment_student_presentations")
+    )
 
 
 def test_source_outcome_migration_preserves_prior_rows(tmp_path, monkeypatch):
@@ -832,10 +1048,10 @@ def test_postgresql_operation_lease_ddl_is_portable(monkeypatch):
     from importlib import import_module
 
     migration = import_module(
-        "backend.db.migrations.versions.0007_operation_leases"
+        "backend.db.migrations.versions.0008_operation_leases"
     )
     assert len(migration.revision) <= 32
-    sql = _postgresql_sql(monkeypatch, "0007_operation_leases")
+    sql = _postgresql_sql(monkeypatch, "0008_operation_leases")
 
     assert "ADD COLUMN lease_owner VARCHAR(128)" in sql
     assert "ADD COLUMN lease_token VARCHAR(64)" in sql
@@ -847,3 +1063,17 @@ def test_postgresql_operation_lease_ddl_is_portable(monkeypatch):
         assert f"{column} IS NULL" in lease_check_sql
         assert f"{column} IS NOT NULL" in lease_check_sql
     assert "CREATE INDEX ix_workflow_operations_claimable" in sql
+def test_postgresql_source_diagnostics_ddl_is_portable(monkeypatch):
+    from importlib import import_module
+
+    migration = import_module(
+        "backend.db.migrations.versions.0007_source_outcome_diagnostics"
+    )
+    assert len(migration.revision) <= 32
+    sql = _postgresql_sql(monkeypatch, "0007_source_outcome_diagnostics")
+
+    assert "ADD COLUMN failure_phase VARCHAR(64)" in sql
+    assert "ADD COLUMN source_id VARCHAR(64)" in sql
+    assert "fk_assignment_student_presentations_source" in sql
+    assert "ON DELETE SET NULL" in sql
+    assert "ix_assignment_student_presentations_source_id" in sql

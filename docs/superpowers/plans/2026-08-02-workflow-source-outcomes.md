@@ -74,8 +74,8 @@ No API, Facade, Agent, frontend, main.py, file_repository.py, workflow_repositor
 
 **Files:** test_migration_roundtrip.py, test_postgres_integration.py.
 
-- [ ] Write a 0003 to 0004 to 0003 to 0004 test. Seed owner/course/assignment/workflow/operation/stored-file at 0003; verify those exact rows survive upgrade and downgrade; verify the recreated new tables are empty and usable.
-- [ ] Run the focused migration test. If it exposes downgrade ordering or constraint defects, correct only migration 0004 and re-run.
+- [ ] Write a 0004 to 0005 to 0004 to 0005 test. Seed owner/course/assignment/workflow/operation/stored-file at 0004; verify those exact rows survive upgrade and downgrade; verify the recreated new tables are empty and usable.
+- [ ] Run the focused migration test. If it exposes downgrade ordering or constraint defects, correct only migration 0005 and re-run.
 - [ ] Add PostgreSQL offline DDL assertions for both tables, portable Boolean DDL, and outcome-before-source downgrade ordering.
 - [ ] Add a pg_database repository test covering register, outcome, summary, and wrong-owner behavior. Preserve the existing explicit skip when SMARTAI_TEST_POSTGRES_URL is absent.
 - [ ] Run: python -m pytest backend/tests/test_migration_roundtrip.py -q

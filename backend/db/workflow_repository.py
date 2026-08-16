@@ -47,6 +47,7 @@ from backend.db.models import (  # noqa: F401
     StoredFileRecord,
 )
 from backend.db.session import session_scope
+from backend.domain import education
 from backend.domain.errors import (
     InvalidTransition,
     LeaseLost,
@@ -299,6 +300,12 @@ class AssignmentStudentPresentationRecord(Base):
     )
     student_id: Mapped[str] = mapped_column(
         ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    source_id: Mapped[str | None] = mapped_column(
+        ForeignKey("workflow_source_items.id", ondelete="SET NULL"),
+        nullable=True,
+        unique=True,
+        index=True,
     )
     display_student_id: Mapped[str] = mapped_column(String(160), nullable=False)
     display_name: Mapped[str] = mapped_column(String(160), nullable=False)
@@ -582,6 +589,165 @@ def update_workflow(
         )
         if result.rowcount != 1:
             raise NotFound("workflow")
+        row = session.get(AssignmentWorkflowRecord, assignment_id)
+        assert row is not None
+        return _detach_workflow(row)
+
+
+def update_workflow_if_active_job(
+    assignment_id: str,
+    *,
+    owner_id: str,
+    active_job_id: str,
+    **changes: Any,
+) -> AssignmentWorkflowRecord | None:
+    """Update a workflow only while it still points at ``active_job_id``.
+
+    Recovery paths use this compare-and-set helper so a late terminal worker
+    can never clear a newer operation that was claimed for the same task.
+    Recovery metadata does not change the teacher-authored workflow revision.
+    """
+    allowed = {
+        column.name
+        for column in AssignmentWorkflowRecord.__table__.columns
+        if column.name not in {
+            "assignment_id", "owner_id", "created_at", "workflow_revision",
+            "active_job_id",
+        }
+    }
+    values = {key: value for key, value in changes.items() if key in allowed}
+    now = time.time()
+    with session_scope() as session:
+        result = session.execute(
+            update(AssignmentWorkflowRecord)
+            .where(
+                AssignmentWorkflowRecord.assignment_id == assignment_id,
+                AssignmentWorkflowRecord.owner_id == owner_id,
+                AssignmentWorkflowRecord.active_job_id == active_job_id,
+            )
+            .values(**values, active_job_id=None, updated_at=now)
+        )
+        if result.rowcount != 1:
+            return None
+        row = session.get(AssignmentWorkflowRecord, assignment_id)
+        assert row is not None
+        return _detach_workflow(row)
+
+
+def bind_existing_active_grading_run(
+    assignment_id: str,
+    *,
+    owner_id: str,
+    run_id: str,
+) -> AssignmentWorkflowRecord:
+    """Repair a legacy active run that committed before its workflow pointer.
+
+    New grading starts bind the run in the creation transaction.  This helper
+    exists for rows produced by older code or a deployment interrupted in the
+    former two-transaction window.  It never overwrites a different operation.
+    """
+    now = time.time()
+    with session_scope() as session:
+        workflow = session.scalar(
+            select(AssignmentWorkflowRecord)
+            .where(
+                AssignmentWorkflowRecord.assignment_id == assignment_id,
+                AssignmentWorkflowRecord.owner_id == owner_id,
+            )
+            .with_for_update()
+        )
+        if workflow is None:
+            raise NotFound("workflow")
+        run = session.scalar(
+            select(GradingRunRecord)
+            .where(
+                GradingRunRecord.id == run_id,
+                GradingRunRecord.assignment_id == assignment_id,
+                GradingRunRecord.teacher_id == owner_id,
+                GradingRunRecord.status.in_(
+                    tuple(education.ACTIVE_GRADING_RUN_STATUSES)
+                ),
+            )
+            .with_for_update()
+        )
+        if run is None:
+            raise NotFound("grading_run")
+        if (
+            workflow.active_operation == "grading"
+            and workflow.active_job_id == run_id
+            and workflow.grading_job_id == run_id
+        ):
+            return _detach_workflow(workflow)
+        claim_id = workflow.active_job_id or ""
+        repairable_claim = claim_id.startswith("grading_claim_")
+        if (
+            workflow.active_operation not in {None, "grading"}
+            or (
+                workflow.active_job_id not in {None, run_id}
+                and not repairable_claim
+            )
+            or workflow.grading_job_id not in {None, run_id}
+        ):
+            raise InvalidTransition("workflow_busy", code="workflow_busy")
+        workflow.presentation_status = "grading"
+        workflow.grading_job_id = run_id
+        workflow.active_operation = "grading"
+        workflow.active_job_id = run_id
+        workflow.last_failed_job_id = None
+        workflow.error_code = None
+        workflow.updated_at = now
+        session.flush()
+        return _detach_workflow(workflow)
+
+
+def supersede_workflow_operation(
+    assignment_id: str,
+    *,
+    owner_id: str,
+    operation_id: str,
+    expected_attempt: int,
+) -> AssignmentWorkflowRecord | None:
+    """Stop one active OCR/import operation and release its workflow claim.
+
+    The operation transition and marker cleanup share a transaction.  A late
+    worker still holding the old attempt can no longer commit its staged data.
+    """
+    now = time.time()
+    with session_scope() as session:
+        stopped = session.execute(
+            update(WorkflowOperationRecord)
+            .where(
+                WorkflowOperationRecord.id == operation_id,
+                WorkflowOperationRecord.assignment_id == assignment_id,
+                WorkflowOperationRecord.owner_id == owner_id,
+                WorkflowOperationRecord.attempt == expected_attempt,
+                WorkflowOperationRecord.status.in_(("pending", "running")),
+            )
+            .values(
+                status="error",
+                error_code="superseded",
+                completed_at=now,
+                updated_at=now,
+            )
+        )
+        if stopped.rowcount != 1:
+            return None
+        released = session.execute(
+            update(AssignmentWorkflowRecord)
+            .where(
+                AssignmentWorkflowRecord.assignment_id == assignment_id,
+                AssignmentWorkflowRecord.owner_id == owner_id,
+                AssignmentWorkflowRecord.active_job_id == operation_id,
+            )
+            .values(
+                active_operation=None,
+                active_job_id=None,
+                error_code=None,
+                updated_at=now,
+            )
+        )
+        if released.rowcount != 1:
+            return None
         row = session.get(AssignmentWorkflowRecord, assignment_id)
         assert row is not None
         return _detach_workflow(row)
@@ -943,11 +1109,13 @@ def save_operation_checkpoint(
                 code="stale_operation_attempt",
             )
         if refs:
-            matched_refs = set(session.scalars(select(StoredFileRecord.id).where(
-                StoredFileRecord.id.in_(refs),
-                StoredFileRecord.owner_id == owner_id,
-                StoredFileRecord.assignment_id == current.assignment_id,
-            )))
+            matched_refs = set(session.scalars(
+                select(StoredFileRecord.id).where(
+                    StoredFileRecord.id.in_(refs),
+                    StoredFileRecord.owner_id == owner_id,
+                    StoredFileRecord.assignment_id == current.assignment_id,
+                ).with_for_update()
+            ))
             if matched_refs != set(refs):
                 raise NotFound("stored_file")
 
