@@ -139,3 +139,82 @@ def test_postgres_role_scoped_reads_hide_other_owner(pg_database):
     asg = assignment_repository.create_assignment(teacher_id=teacher, course_id=course.id, name="Secret")
     with pytest.raises(NotFound):
         assignment_repository.get_assignment(assignment_id=asg.id, actor_id=other)
+
+
+def test_postgres_source_outcome_persistence_and_owner_isolation(
+    pg_database,
+    tmp_path,
+):
+    from backend.db import (
+        assignment_repository,
+        course_repository,
+        source_outcome_repository,
+        workflow_repository,
+    )
+    from backend.db.file_repository import save_file
+    from backend.domain.errors import NotFound
+    from backend.storage.local import LocalStorage
+
+    teacher = _seed_user("teacher")
+    other = _seed_user("teacher")
+    course = course_repository.create_course(teacher_id=teacher, name="C")
+    assignment = assignment_repository.create_assignment(
+        teacher_id=teacher,
+        course_id=course.id,
+        name="A",
+    )
+    workflow_repository.ensure_workflow(
+        assignment_id=assignment.id,
+        owner_id=teacher,
+    )
+    operation, _ = workflow_repository.create_operation(
+        assignment_id=assignment.id,
+        owner_id=teacher,
+        operation_type="submission_recognition",
+        input_hash=uuid.uuid4().hex,
+    )
+    stored = save_file(
+        storage=LocalStorage(tmp_path / "pg-source-files"),
+        owner_id=teacher,
+        kind="submission_source",
+        original_name="answers.pdf",
+        content=b"answers",
+        content_type="application/pdf",
+        assignment_id=assignment.id,
+    )
+    source, created = source_outcome_repository.register_source(
+        owner_id=teacher,
+        assignment_id=assignment.id,
+        operation_id=operation.id,
+        expected_attempt=operation.attempt,
+        order_index=0,
+        stored_file_id=stored.id,
+    )
+    source_outcome_repository.record_outcome(
+        source_id=source.id,
+        owner_id=teacher,
+        status="parse_failed",
+        student_candidate=None,
+        matched_answer_count=0,
+        unknown_question_ids=[],
+        stable_error_code="submission_parse_failed",
+        retryable=True,
+    )
+    summary = source_outcome_repository.summarize_sources(
+        operation_id=operation.id,
+        owner_id=teacher,
+        attempt=operation.attempt,
+    )
+
+    assert created is True
+    assert summary.uploaded_count == 1
+    assert summary.failed_count == 1
+    assert summary.is_complete is True
+    with pytest.raises(NotFound):
+        source_outcome_repository.get_source(source.id, owner_id=other)
+    with pytest.raises(NotFound):
+        source_outcome_repository.summarize_sources(
+            operation_id=operation.id,
+            owner_id=other,
+            attempt=operation.attempt,
+        )

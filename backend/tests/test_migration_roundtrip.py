@@ -86,6 +86,8 @@ def test_normalized_tables_exist_after_roundtrip(tmp_path, monkeypatch):
         "assignment_workflows",
         "task_create_idempotency",
         "workflow_operations",
+        "workflow_source_items",
+        "workflow_source_outcomes",
         "assignment_student_presentations",
         "submission_answer_presentations",
         "grading_run_setups",
@@ -93,6 +95,162 @@ def test_normalized_tables_exist_after_roundtrip(tmp_path, monkeypatch):
     } <= tables
     # Legacy tables must not reappear after the roundtrip.
     assert not ({"tasks", "grading_jobs", "task_knowledge_documents"} & tables)
+
+
+def test_source_outcome_migration_has_contract_constraints(tmp_path, monkeypatch):
+    from sqlalchemy import create_engine, inspect
+
+    db_url = f"sqlite:///{(tmp_path / 'source-contract.db').as_posix()}"
+    cfg = _alembic_config(db_url, monkeypatch)
+    command.upgrade(cfg, "head")
+    inspector = inspect(create_engine(db_url))
+
+    assert {
+        column["name"]
+        for column in inspector.get_columns("workflow_source_items")
+    } == {
+        "id",
+        "owner_id",
+        "assignment_id",
+        "operation_id",
+        "attempt",
+        "order_index",
+        "stored_file_id",
+        "retry_of_source_id",
+        "created_at",
+    }
+    assert {
+        column["name"]
+        for column in inspector.get_columns("workflow_source_outcomes")
+    } == {
+        "source_id",
+        "status",
+        "student_candidate",
+        "matched_answer_count",
+        "unknown_question_ids",
+        "stable_error_code",
+        "retryable",
+        "artifact_file_id",
+        "created_at",
+    }
+    source_uniques = {
+        tuple(item["column_names"])
+        for item in inspector.get_unique_constraints("workflow_source_items")
+    }
+    assert ("operation_id", "attempt", "order_index") in source_uniques
+    assert ("operation_id", "attempt", "stored_file_id") in source_uniques
+
+    source_checks = " ".join(
+        item["sqltext"]
+        for item in inspector.get_check_constraints("workflow_source_items")
+    )
+    outcome_checks = " ".join(
+        item["sqltext"]
+        for item in inspector.get_check_constraints("workflow_source_outcomes")
+    )
+    assert "attempt > 0" in source_checks
+    assert "order_index >= 0" in source_checks
+    assert "matched_answer_count >= 0" in outcome_checks
+    assert "identity_conflict" in outcome_checks
+
+    source_indexes = {
+        tuple(item["column_names"])
+        for item in inspector.get_indexes("workflow_source_items")
+    }
+    assert ("assignment_id", "operation_id", "attempt", "order_index") in source_indexes
+
+
+def test_source_outcome_migration_preserves_prior_rows(tmp_path, monkeypatch):
+    from sqlalchemy import create_engine, inspect, text
+
+    db_url = f"sqlite:///{(tmp_path / 'source-preserve.db').as_posix()}"
+    cfg = _alembic_config(db_url, monkeypatch)
+    command.upgrade(cfg, "0004_structured_review_reasons")
+    engine = create_engine(db_url)
+    with engine.begin() as connection:
+        connection.execute(text(
+            "INSERT INTO users "
+            "(id, username, role, password_hash, is_active, created_at, updated_at) "
+            "VALUES ('owner', 'owner', 'teacher', 'h', 1, 1, 1)"
+        ))
+        connection.execute(text(
+            "INSERT INTO courses "
+            "(id, name, code, description, teacher_id, created_at, updated_at) "
+            "VALUES ('course', 'Course', '', '', 'owner', 1, 1)"
+        ))
+        connection.execute(text(
+            "INSERT INTO assignments "
+            "(id, course_id, teacher_id, name, description, status, created_at, "
+            "updated_at, version) VALUES "
+            "('assignment', 'course', 'owner', 'Assignment', '', 'draft', 1, 1, 1)"
+        ))
+        connection.execute(text(
+            "INSERT INTO assignment_workflows "
+            "(assignment_id, owner_id, presentation_status, workflow_revision, "
+            "submission_identity_mode, final_result_version, analysis_status, "
+            "created_at, updated_at) VALUES "
+            "('assignment', 'owner', 'draft', 0, 'auto', 0, 'idle', 1, 1)"
+        ))
+        connection.execute(text(
+            "INSERT INTO workflow_operations "
+            "(id, assignment_id, owner_id, operation_type, input_hash, attempt, "
+            "status, progress, payload, created_at, updated_at) VALUES "
+            "('operation', 'assignment', 'owner', 'submission_recognition', "
+            "'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', "
+            "1, 'pending', '{}', '{}', 1, 1)"
+        ))
+        connection.execute(text(
+            "INSERT INTO stored_files "
+            "(id, owner_id, kind, original_name, storage_backend, storage_key, "
+            "content_type, size_bytes, sha256, assignment_id, created_at) VALUES "
+            "('file', 'owner', 'submission_source', 'answers.pdf', 'local', "
+            "'assignments/assignment/file/answers.pdf', 'application/pdf', 7, "
+            "'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb', "
+            "'assignment', 1)"
+        ))
+
+    command.upgrade(cfg, "head")
+    with engine.begin() as connection:
+        connection.execute(text(
+            "INSERT INTO workflow_source_items "
+            "(id, owner_id, assignment_id, operation_id, attempt, order_index, "
+            "stored_file_id, created_at) VALUES "
+            "('source', 'owner', 'assignment', 'operation', 1, 0, 'file', 2)"
+        ))
+        connection.execute(text(
+            "INSERT INTO workflow_source_outcomes "
+            "(source_id, status, matched_answer_count, unknown_question_ids, "
+            "retryable, created_at) VALUES "
+            "('source', 'parsed', 1, '[]', 0, 2)"
+        ))
+
+    command.downgrade(cfg, "0004_structured_review_reasons")
+    inspector = inspect(engine)
+    assert "workflow_source_items" not in inspector.get_table_names()
+    assert "workflow_source_outcomes" not in inspector.get_table_names()
+    with engine.connect() as connection:
+        assert connection.execute(text(
+            "SELECT id, teacher_id, name FROM assignments WHERE id='assignment'"
+        )).one() == ("assignment", "owner", "Assignment")
+        assert connection.execute(text(
+            "SELECT id, attempt, status FROM workflow_operations WHERE id='operation'"
+        )).one() == ("operation", 1, "pending")
+        assert connection.execute(text(
+            "SELECT id, original_name, sha256 FROM stored_files WHERE id='file'"
+        )).one() == (
+            "file",
+            "answers.pdf",
+            "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        )
+
+    command.upgrade(cfg, "head")
+    with engine.connect() as connection:
+        assert connection.execute(text(
+            "SELECT COUNT(*) FROM workflow_source_items"
+        )).scalar_one() == 0
+        assert connection.execute(text(
+            "SELECT COUNT(*) FROM workflow_source_outcomes"
+        )).scalar_one() == 0
 
 
 def test_structured_review_migration_preserves_real_zero_and_blocks_legacy_null(
@@ -412,3 +570,27 @@ def test_postgresql_downgrade_drops_deferred_foreign_keys_before_tables(monkeypa
         assert sql.index(f"DROP CONSTRAINT {constraint}") < sql.index(
             f"DROP TABLE {table_name}"
         )
+
+
+def test_postgresql_source_outcome_ddl_is_portable(monkeypatch):
+    sql = _postgresql_sql(monkeypatch, "0005_workflow_source_outcomes")
+
+    assert "CREATE TABLE workflow_source_items" in sql
+    assert "CREATE TABLE workflow_source_outcomes" in sql
+    assert "retryable BOOLEAN NOT NULL" in sql
+    assert "ck_workflow_source_outcomes_status" in sql
+    assert "ck_workflow_source_outcomes_matched_count_nonnegative" in sql
+    assert sql.index("CREATE TABLE workflow_source_items") < sql.index(
+        "CREATE TABLE workflow_source_outcomes"
+    )
+
+
+def test_postgresql_source_outcome_downgrade_drops_child_first(monkeypatch):
+    sql = _postgresql_sql(
+        monkeypatch,
+        "0005_workflow_source_outcomes:0004_structured_review_reasons",
+    )
+
+    assert sql.index("DROP TABLE workflow_source_outcomes") < sql.index(
+        "DROP TABLE workflow_source_items"
+    )
