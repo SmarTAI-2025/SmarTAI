@@ -198,10 +198,10 @@ class Settings(BaseSettings):
     # Stable master key for encrypting user BYOK provider credentials. It must
     # come from the process environment/secret manager and never from source
     # control or the database.
-    provider_encryption_key: Optional[str] = os.getenv("SMARTAI_PROVIDER_ENCRYPTION_KEY", "")
+    provider_encryption_key: str = os.getenv("SMARTAI_PROVIDER_ENCRYPTION_KEY", "smartai-dev-provider-key-change-in-prod")
 
     # ─── Auth (JWT) ────────────────────────────────────────────────────────────
-    jwt_secret: str = os.getenv("JWT_SECRET", "smartai-dev-secret-change-in-prod")
+    jwt_secret: str = os.getenv("SMARTAI_JWT_SECRET", "smartai-dev-secret-change-in-prod")
     jwt_algorithm: str = "HS256"
     jwt_expiry_minutes: int = 30
     refresh_session_days: int = 30
