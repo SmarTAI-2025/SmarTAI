@@ -79,7 +79,7 @@ describe("question source recovery guidance", () => {
 });
 
 describe("background task failure guidance", () => {
-  it("explains a provider timeout as a slow/busy model, not a generic failure", () => {
+  it("explains a provider timeout without collapsing it into a generic failure", () => {
     const info = classifyRecoverableError("provider_timeout", {
       locale: "zh-CN",
       phase: "question_preparation",
@@ -92,6 +92,31 @@ describe("background task failure guidance", () => {
     expect(info.tone).toBe("warning");
     expect(info.technicalDetails).toContainEqual({ label: "错误代码", value: "provider_timeout" });
     expect(info.technicalDetails).toContainEqual({ label: "任务编号", value: "op-timeout" });
+  });
+
+  it("distinguishes an empty extracted answer list from mismatched question IDs", () => {
+    const info = classifyRecoverableError("no_answer_content_detected", {
+      locale: "zh-CN",
+      phase: "answer_detection",
+      jobId: "op-empty-answer",
+    });
+
+    expect(info.title).toBe("没有提取到任何作答内容");
+    expect(info.description).toContain("不同于题号不匹配");
+    expect(info.actionKind).toBe("reupload");
+  });
+
+  it("does not claim an original was saved when source persistence failed", () => {
+    const info = classifyRecoverableError("submission_source_persistence_failed", {
+      locale: "zh-CN",
+      phase: "source_persistence",
+      jobId: "op-storage",
+    });
+
+    expect(info.title).toBe("原文件保存未完成");
+    expect(info.description).toContain("无法确认原文件已经安全保存");
+    expect(info.description).not.toContain("原文件已经保存");
+    expect(info.actionKind).toBe("reupload");
   });
 
   it("explains an unreachable provider as a network/VPN problem", () => {
@@ -119,7 +144,7 @@ describe("background task failure guidance", () => {
   it("routes a vision-required background failure to BYOK with OCR-specific copy", () => {
     const info = classifyRecoverableError("vision_provider_required", { locale: "zh-CN" });
 
-    expect(info.title).toBe("需要支持图像识别的模型");
+    expect(info.title).toBe("当前模型不支持图片 OCR");
     expect(info.description).toContain("OCR");
     expect(info.actionKind).toBe("byok");
   });
@@ -175,8 +200,8 @@ describe("background task failure guidance", () => {
   it("explains an empty OCR result instead of using submission_parse_failed", () => {
     const info = classifyRecoverableError("ocr_empty_result", { locale: "zh-CN" });
 
-    expect(info.title).toBe("这份文件暂时无法处理");
-    expect(info.description).toContain("没有从图片或扫描页中识别出可用文字");
+    expect(info.title).toBe("OCR 没有读到可用文字");
+    expect(info.description).toContain("返回内容为空");
     expect(info.actionKind).toBe("reupload");
   });
 

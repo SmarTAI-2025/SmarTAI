@@ -29,13 +29,16 @@ import type {
 // frontend API compatibility point that should change.
 const BACKEND_COMPAT_GRADING_LANGUAGE = "en";
 
-export function buildGradePayload(options: { multiSampleN?: number | null } = {}) {
-  const payload: { language: string; multi_sample_n?: number } = {
+export function buildGradePayload(options: { multiSampleN?: number | null; expectedWorkflowRevision?: number } = {}) {
+  const payload: { language: string; multi_sample_n?: number; expected_workflow_revision?: number } = {
     language: BACKEND_COMPAT_GRADING_LANGUAGE,
   };
 
   if (typeof options.multiSampleN === "number" && options.multiSampleN > 1) {
     payload.multi_sample_n = Math.floor(options.multiSampleN);
+  }
+  if (typeof options.expectedWorkflowRevision === "number") {
+    payload.expected_workflow_revision = options.expectedWorkflowRevision;
   }
 
   return payload;
@@ -136,7 +139,7 @@ export function uploadTestCases(taskId: string, file: File, options?: UploadOpti
 
 export function startGrading(
   taskId: string,
-  options: { multiSampleN?: number | null } = {},
+  options: { multiSampleN?: number | null; expectedWorkflowRevision: number },
 ): Promise<TaskMutationResponse> {
   return postJSON<TaskMutationResponse>(`/tasks/${taskId}/grade`, buildGradePayload(options));
 }

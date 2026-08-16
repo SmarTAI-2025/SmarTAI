@@ -7,7 +7,7 @@ import uuid
 import pytest
 
 from backend.db import workflow_repository
-from backend.db.file_repository import save_file
+from backend.db.file_repository import delete_unlinked_file, get_file, save_file
 from backend.db.models import AssignmentRecord, CourseRecord, UserRecord
 from backend.db.session import session_scope
 from backend.domain.errors import (
@@ -159,6 +159,40 @@ def test_checkpoint_write_increments_revision_and_persists_artifact_refs(tmp_pat
     assert persisted.checkpoint_stage == "ocr_complete"
     assert persisted.checkpoint == {"completed_sources": 1}
     assert persisted.artifact_refs == [artifact.id]
+
+
+def test_checkpoint_reference_prevents_artifact_cleanup(tmp_path):
+    owner_id, assignment_id, operation = _seed_operation()
+    storage = LocalStorage(tmp_path / "checkpoint-protected")
+    artifact = save_file(
+        storage=storage,
+        owner_id=owner_id,
+        kind="submission_container",
+        original_name="submissions.zip",
+        content=b"archive",
+        content_type="application/zip",
+        assignment_id=assignment_id,
+    )
+    workflow_repository.save_operation_checkpoint(
+        operation.id,
+        owner_id=owner_id,
+        expected_attempt=operation.attempt,
+        expected_checkpoint_revision=0,
+        stage="submission_container_saved",
+        checkpoint={"container_file_id": artifact.id},
+        artifact_refs=[artifact.id],
+    )
+
+    deleted = delete_unlinked_file(
+        storage=storage,
+        file_id=artifact.id,
+        owner_id=owner_id,
+        assignment_id=assignment_id,
+    )
+
+    assert deleted is False
+    assert get_file(file_id=artifact.id, owner_id=owner_id) is not None
+    assert storage.exists(artifact.storage_key)
 
 
 def test_checkpoint_revision_cas_allows_exactly_one_writer():

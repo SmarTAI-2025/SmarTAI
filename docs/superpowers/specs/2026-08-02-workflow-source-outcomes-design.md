@@ -29,7 +29,7 @@ No `pending` outcome is introduced. A persisted source without an outcome row re
 
 ### In scope
 
-- New `0004` Alembic migration.
+- New `0005` Alembic migration.
 - ORM records for workflow sources and source outcomes.
 - A focused source/outcome repository.
 - Owner isolation, idempotency, lineage, aggregation, constraint, migration, SQLite, and PostgreSQL tests.
@@ -155,7 +155,7 @@ Migration `0005_workflow_source_outcomes.py` creates `workflow_source_items` fir
 
 Downgrade drops outcomes before sources. It does not mutate `stored_files`, `workflow_operations`, assignments, revisions, results, or any migration from `0001` through `0003`.
 
-SQLite must pass `0003 -> 0004 -> 0003 -> 0004` and the full `head -> base -> head` round trip. PostgreSQL must produce valid DDL and pass the repository isolation/persistence test when `SMARTAI_TEST_POSTGRES_URL` is configured.
+SQLite must pass `0004 -> 0005 -> 0004 -> 0005` and the full `head -> base -> head` round trip. PostgreSQL must produce valid DDL and pass the repository isolation/persistence test when `SMARTAI_TEST_POSTGRES_URL` is configured.
 
 ## Test Design
 
@@ -174,7 +174,7 @@ Repository tests cover:
 
 Migration tests cover:
 
-1. Both new tables, expected columns, foreign keys, checks, unique constraints, and indexes exist at `0004`.
+1. Both new tables, expected columns, foreign keys, checks, unique constraints, and indexes exist at `0005`.
 2. Rows present at `0003` remain unchanged through upgrade and downgrade.
 3. SQLite upgrade/downgrade/upgrade succeeds.
 4. PostgreSQL offline DDL uses portable boolean/default/check syntax and the configured PostgreSQL integration test exercises actual persistence.

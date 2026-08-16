@@ -47,6 +47,7 @@ from backend.db.models import (  # noqa: F401
     StoredFileRecord,
 )
 from backend.db.session import session_scope
+from backend.domain import education
 from backend.domain.errors import (
     InvalidTransition,
     NotFound,
@@ -277,6 +278,12 @@ class AssignmentStudentPresentationRecord(Base):
     )
     student_id: Mapped[str] = mapped_column(
         ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    source_id: Mapped[str | None] = mapped_column(
+        ForeignKey("workflow_source_items.id", ondelete="SET NULL"),
+        nullable=True,
+        unique=True,
+        index=True,
     )
     display_student_id: Mapped[str] = mapped_column(String(160), nullable=False)
     display_name: Mapped[str] = mapped_column(String(160), nullable=False)
@@ -544,6 +551,72 @@ def update_workflow_if_active_job(
         row = session.get(AssignmentWorkflowRecord, assignment_id)
         assert row is not None
         return _detach_workflow(row)
+
+
+def bind_existing_active_grading_run(
+    assignment_id: str,
+    *,
+    owner_id: str,
+    run_id: str,
+) -> AssignmentWorkflowRecord:
+    """Repair a legacy active run that committed before its workflow pointer.
+
+    New grading starts bind the run in the creation transaction.  This helper
+    exists for rows produced by older code or a deployment interrupted in the
+    former two-transaction window.  It never overwrites a different operation.
+    """
+    now = time.time()
+    with session_scope() as session:
+        workflow = session.scalar(
+            select(AssignmentWorkflowRecord)
+            .where(
+                AssignmentWorkflowRecord.assignment_id == assignment_id,
+                AssignmentWorkflowRecord.owner_id == owner_id,
+            )
+            .with_for_update()
+        )
+        if workflow is None:
+            raise NotFound("workflow")
+        run = session.scalar(
+            select(GradingRunRecord)
+            .where(
+                GradingRunRecord.id == run_id,
+                GradingRunRecord.assignment_id == assignment_id,
+                GradingRunRecord.teacher_id == owner_id,
+                GradingRunRecord.status.in_(
+                    tuple(education.ACTIVE_GRADING_RUN_STATUSES)
+                ),
+            )
+            .with_for_update()
+        )
+        if run is None:
+            raise NotFound("grading_run")
+        if (
+            workflow.active_operation == "grading"
+            and workflow.active_job_id == run_id
+            and workflow.grading_job_id == run_id
+        ):
+            return _detach_workflow(workflow)
+        claim_id = workflow.active_job_id or ""
+        repairable_claim = claim_id.startswith("grading_claim_")
+        if (
+            workflow.active_operation not in {None, "grading"}
+            or (
+                workflow.active_job_id not in {None, run_id}
+                and not repairable_claim
+            )
+            or workflow.grading_job_id not in {None, run_id}
+        ):
+            raise InvalidTransition("workflow_busy", code="workflow_busy")
+        workflow.presentation_status = "grading"
+        workflow.grading_job_id = run_id
+        workflow.active_operation = "grading"
+        workflow.active_job_id = run_id
+        workflow.last_failed_job_id = None
+        workflow.error_code = None
+        workflow.updated_at = now
+        session.flush()
+        return _detach_workflow(workflow)
 
 
 def supersede_workflow_operation(
@@ -941,11 +1014,13 @@ def save_operation_checkpoint(
                 code="stale_operation_attempt",
             )
         if refs:
-            matched_refs = set(session.scalars(select(StoredFileRecord.id).where(
-                StoredFileRecord.id.in_(refs),
-                StoredFileRecord.owner_id == owner_id,
-                StoredFileRecord.assignment_id == current.assignment_id,
-            )))
+            matched_refs = set(session.scalars(
+                select(StoredFileRecord.id).where(
+                    StoredFileRecord.id.in_(refs),
+                    StoredFileRecord.owner_id == owner_id,
+                    StoredFileRecord.assignment_id == current.assignment_id,
+                ).with_for_update()
+            ))
             if matched_refs != set(refs):
                 raise NotFound("stored_file")
 

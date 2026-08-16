@@ -131,19 +131,23 @@ def create_run_bundle(
     setup: dict | None = None,
     setup_fingerprint: str | None = None,
     input_manifest: dict | None = None,
+    workflow_expected_revision: int | None = None,
 ) -> education.GradingRunDTO:
-    """Atomically create a queued run, its frozen revisions, and setup.
+    """Atomically create a run bundle and optionally bind its task workflow.
 
     A worker polls committed queued rows.  Keeping every prerequisite in the
     same transaction prevents it from observing a run before the frozen input
-    set or the teacher-approved provider selection exists.
+    set, teacher-approved provider selection, or task-facing run pointer exists.
     """
     if (setup is None) != (setup_fingerprint is None):
         raise ValidationError("grading_setup_bundle_incomplete")
 
     # Imported lazily to keep the normalized repository usable independently
     # while still sharing this transaction with façade-only presentation data.
-    from backend.db.workflow_repository import GradingRunSetupRecord
+    from backend.db.workflow_repository import (
+        AssignmentWorkflowRecord,
+        GradingRunSetupRecord,
+    )
     from sqlalchemy.exc import IntegrityError
 
     run_id = _new_run_id()
@@ -157,6 +161,26 @@ def create_run_bundle(
         )
         if assignment is None:
             raise NotFound("assignment")
+
+        workflow = None
+        if workflow_expected_revision is not None:
+            workflow = session.scalar(
+                select(AssignmentWorkflowRecord)
+                .where(
+                    AssignmentWorkflowRecord.assignment_id == assignment_id,
+                    AssignmentWorkflowRecord.owner_id == teacher_id,
+                )
+                .with_for_update()
+            )
+            if workflow is None:
+                raise NotFound("workflow")
+            if workflow.workflow_revision != workflow_expected_revision:
+                raise VersionConflict(
+                    "workflow_revision_conflict",
+                    code="workflow_revision_conflict",
+                )
+            if workflow.active_operation is not None or workflow.active_job_id is not None:
+                raise InvalidTransition("workflow_busy", code="workflow_busy")
 
         record = GradingRunRecord(
             id=run_id,
@@ -224,6 +248,15 @@ def create_run_bundle(
                 created_at=now,
             )
         )
+        if workflow is not None:
+            workflow.presentation_status = "grading"
+            workflow.grading_job_id = run_id
+            workflow.active_operation = "grading"
+            workflow.active_job_id = run_id
+            workflow.last_failed_job_id = None
+            workflow.error_code = None
+            workflow.workflow_revision += 1
+            workflow.updated_at = now
         session.flush()
         return _run_to_dto(record)
 

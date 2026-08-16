@@ -644,6 +644,34 @@ async def test_extract_endpoint_queues_background_work_and_returns_started():
 
 
 @pytest.mark.asyncio
+async def test_submission_upload_is_bounded_before_any_operation_is_created(monkeypatch):
+    background = _BackgroundTasks()
+    upload = UploadFile(
+        file=io.BytesIO(b"four"),
+        filename="submissions.zip",
+        headers=Headers({"content-type": "application/zip"}),
+    )
+    monkeypatch.setattr(tasks, "SUBMISSION_UPLOAD_MAX_BYTES", 3)
+
+    with pytest.raises(HTTPException) as exc:
+        await tasks.parse_submissions_endpoint(
+            task_id="never-created",
+            background_tasks=background,
+            file=upload,
+            identity_mode="filename",
+            roster_file=None,
+            recognition_provider_id=None,
+            replace_confirmed=False,
+            current=SimpleNamespace(id="owner"),
+            registry=_Registry(),
+        )
+
+    assert exc.value.status_code == 413
+    assert exc.value.detail == {"code": "submission_source_too_large"}
+    assert background.calls == []
+
+
+@pytest.mark.asyncio
 async def test_question_preparation_timeout_persists_provider_timeout(monkeypatch):
     owner_id, task_id = _seed_task()
     job, _ = workflow_repository.create_operation(
@@ -719,6 +747,9 @@ def test_disabled_selected_recognition_provider_has_figma_error_code():
 
 @pytest.mark.asyncio
 async def test_submission_ocr_without_vision_provider_has_figma_error_code(monkeypatch):
+    from backend.db import source_outcome_repository
+    from backend.services import submission_source_pipeline
+
     owner_id, task_id = _seed_task(with_question=True)
 
     class NoVisionRegistry(_Registry):
@@ -736,19 +767,24 @@ async def test_submission_ocr_without_vision_provider_has_figma_error_code(monke
             ),
         )
 
-    monkeypatch.setattr(task_facade, "extract_files_from_archive", _requires_vision)
+    monkeypatch.setattr(
+        submission_source_pipeline,
+        "extract_text_from_upload",
+        _requires_vision,
+    )
     registry = NoVisionRegistry()
     queued = task_facade.queue_task_submission_parsing(
-        task_id=task_id, owner_id=owner_id, filename="answers.zip",
-        content=b"archive", content_type="application/zip", registry=registry,
+        task_id=task_id, owner_id=owner_id, filename="answers.pdf",
+        content=b"%PDF-1.4\n", content_type="application/pdf", registry=registry,
     )
 
     await task_facade.run_task_submission_parsing(
         task_id=task_id,
         owner_id=owner_id,
         job_id=queued["job_id"],
-        filename="answers.zip",
-        content=b"archive",
+        filename="answers.pdf",
+        content=b"%PDF-1.4\n",
+        content_type="application/pdf",
         registry=registry,
         job_attempt=queued["_job_attempt"],
         identity_mode="filename",
@@ -764,6 +800,14 @@ async def test_submission_ocr_without_vision_provider_has_figma_error_code(monke
     assert failed.error_code == "vision_provider_required"
     assert workflow.presentation_status == "error"
     assert workflow.error_code == "vision_provider_required"
+    result = source_outcome_repository.list_source_results(
+        operation_id=failed.id,
+        owner_id=owner_id,
+        attempt=failed.attempt,
+    )[0]
+    assert result.outcome is not None
+    assert result.outcome.stable_error_code == "vision_provider_required"
+    assert result.outcome.failure_phase == "ocr"
 
 
 class _VisionlessRegistry(_Registry):
@@ -809,21 +853,29 @@ async def test_problem_extraction_timeout_persists_provider_timeout(monkeypatch)
 
 @pytest.mark.asyncio
 async def test_submission_rate_limit_persists_provider_rate_limited(monkeypatch):
+    from backend.db import source_outcome_repository
+    from backend.services import submission_source_pipeline
+
     owner_id, task_id = _seed_task(with_question=True)
 
     async def _rate_limited(*args, **kwargs):
         del args, kwargs
         raise RateLimitError("429 Too Many Requests")
 
-    monkeypatch.setattr(task_facade, "extract_files_from_archive", _rate_limited)
+    monkeypatch.setattr(
+        submission_source_pipeline,
+        "extract_text_from_upload",
+        _rate_limited,
+    )
     registry = _VisionlessRegistry()
     queued = task_facade.queue_task_submission_parsing(
-        task_id=task_id, owner_id=owner_id, filename="answers.zip",
-        content=b"archive", content_type="application/zip", registry=registry,
+        task_id=task_id, owner_id=owner_id, filename="answers.txt",
+        content=b"answer", content_type="text/plain", registry=registry,
     )
     await task_facade.run_task_submission_parsing(
         task_id=task_id, owner_id=owner_id, job_id=queued["job_id"],
-        filename="answers.zip", content=b"archive", registry=registry,
+        filename="answers.txt", content=b"answer", content_type="text/plain",
+        registry=registry,
         job_attempt=queued["_job_attempt"], identity_mode="filename",
         roster_entries=None, recognition_provider_id=None,
         replace_confirmed=False,
@@ -833,25 +885,41 @@ async def test_submission_rate_limit_persists_provider_rate_limited(monkeypatch)
     failed = workflow_repository.get_operation(queued["job_id"], owner_id=owner_id)
     assert failed.status == "error"
     assert failed.error_code == "provider_rate_limited"
+    result = source_outcome_repository.list_source_results(
+        operation_id=failed.id,
+        owner_id=owner_id,
+        attempt=failed.attempt,
+    )[0]
+    assert result.outcome is not None
+    assert result.outcome.stable_error_code == "provider_rate_limited"
+    assert result.outcome.failure_phase == "recognition"
 
 
 @pytest.mark.asyncio
 async def test_submission_connection_error_persists_provider_unreachable(monkeypatch):
+    from backend.db import source_outcome_repository
+    from backend.services import submission_source_pipeline
+
     owner_id, task_id = _seed_task(with_question=True)
 
     async def _unreachable(*args, **kwargs):
         del args, kwargs
         raise ConnectionError("failed to connect to provider")
 
-    monkeypatch.setattr(task_facade, "extract_files_from_archive", _unreachable)
+    monkeypatch.setattr(
+        submission_source_pipeline,
+        "extract_text_from_upload",
+        _unreachable,
+    )
     registry = _VisionlessRegistry()
     queued = task_facade.queue_task_submission_parsing(
-        task_id=task_id, owner_id=owner_id, filename="answers.zip",
-        content=b"archive", content_type="application/zip", registry=registry,
+        task_id=task_id, owner_id=owner_id, filename="answers.txt",
+        content=b"answer", content_type="text/plain", registry=registry,
     )
     await task_facade.run_task_submission_parsing(
         task_id=task_id, owner_id=owner_id, job_id=queued["job_id"],
-        filename="answers.zip", content=b"archive", registry=registry,
+        filename="answers.txt", content=b"answer", content_type="text/plain",
+        registry=registry,
         job_attempt=queued["_job_attempt"], identity_mode="filename",
         roster_entries=None, recognition_provider_id=None,
         replace_confirmed=False,
@@ -861,6 +929,14 @@ async def test_submission_connection_error_persists_provider_unreachable(monkeyp
     failed = workflow_repository.get_operation(queued["job_id"], owner_id=owner_id)
     assert failed.status == "error"
     assert failed.error_code == "provider_unreachable"
+    result = source_outcome_repository.list_source_results(
+        operation_id=failed.id,
+        owner_id=owner_id,
+        attempt=failed.attempt,
+    )[0]
+    assert result.outcome is not None
+    assert result.outcome.stable_error_code == "provider_unreachable"
+    assert result.outcome.failure_phase == "recognition"
 
 
 @pytest.mark.asyncio

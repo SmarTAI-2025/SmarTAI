@@ -1,8 +1,8 @@
-"""Stable, non-sensitive error codes for durable background jobs.
+"""Stable, non-sensitive error classification for background work.
 
-Background workers persist only codes from this module.  Raw provider, file,
-database, and traceback text stays in server-side diagnostics and never becomes
-part of the task-state contract consumed by the frontend.
+Only codes from this module may cross the durable task/API boundary. Provider
+messages and tracebacks remain server-side, while the cause chain is still
+inspected so teachers receive a useful, specific reason.
 """
 from __future__ import annotations
 
@@ -13,10 +13,12 @@ from fastapi import HTTPException
 from sqlalchemy.exc import SQLAlchemyError
 
 from backend.domain.errors import DomainError
+from backend.domain.source_outcomes import SAFE_SOURCE_REASON_CODES
 from backend.tools.structured_llm import PermanentLLMError, RateLimitError
 
 
 SAFE_BACKGROUND_ERROR_CODES = frozenset({
+    "workflow_failed",
     "no_provider_configured",
     "provider_not_enabled",
     "provider_credentials_unavailable",
@@ -32,6 +34,13 @@ SAFE_BACKGROUND_ERROR_CODES = frozenset({
     "replacement_confirmation_required",
     "stale_revision",
     "submission_parse_failed",
+    "submission_parse_invalid",
+    "submission_persistence_failed",
+    "submission_source_persistence_failed",
+    "duplicate_student_identity",
+    "identity_needs_review",
+    "no_answer_content_detected",
+    "no_matching_answer",
     "grading_failed",
     "grading_inputs_changed",
     "grading_persistence_failed",
@@ -43,7 +52,6 @@ SAFE_BACKGROUND_ERROR_CODES = frozenset({
     "unknown_ai_completion_target",
     "workflow_busy",
     "workflow_revision_conflict",
-    # File/source failures that are safe and actionable in a progress page.
     "source_decode_failed",
     "source_empty",
     "source_mime_type_not_allowed",
@@ -59,20 +67,38 @@ SAFE_BACKGROUND_ERROR_CODES = frozenset({
     "pdf_page_limit_exceeded",
     "pdf_processing_unavailable",
     "ocr_empty_result",
+    "submission_archive_empty",
     "submission_archive_invalid",
     "submission_archive_limit_exceeded",
     "submission_source_empty",
     "submission_source_unsupported",
     "submission_source_too_large",
+}) | SAFE_SOURCE_REASON_CODES
+
+RETRYABLE_BACKGROUND_ERROR_CODES = frozenset({
+    "provider_timeout",
+    "provider_unreachable",
+    "provider_rate_limited",
+    "pdf_extraction_busy",
+    "pdf_extraction_timeout",
+    "submission_parse_failed",
+    "submission_parse_invalid",
+    "submission_persistence_failed",
+    "submission_outcome_persistence_failed",
+    "submission_source_persistence_failed",
+    "workflow_failed",
 })
 
 
 def safe_background_error_code(value: Any, fallback: str) -> str:
-    """Return a public stable code, never arbitrary persisted/raw text."""
     candidate = value.strip() if isinstance(value, str) else ""
     if candidate in SAFE_BACKGROUND_ERROR_CODES:
         return candidate
     return fallback if fallback in SAFE_BACKGROUND_ERROR_CODES else "workflow_failed"
+
+
+def is_retryable_background_error(code: str) -> bool:
+    return code in RETRYABLE_BACKGROUND_ERROR_CODES
 
 
 def _exception_chain(exc: BaseException) -> list[BaseException]:
@@ -89,27 +115,21 @@ def _exception_chain(exc: BaseException) -> list[BaseException]:
 def _provider_network_exception_types() -> tuple[
     tuple[type[BaseException], ...], tuple[type[BaseException], ...]
 ]:
-    timeout_types: tuple[type[BaseException], ...] = (
-        asyncio.TimeoutError,
-        TimeoutError,
-    )
-    # Do not classify every OSError as a provider outage: disk/file failures are
-    # local infrastructure problems. ConnectionError plus SDK transport types
-    # covers actual network failures without that false positive.
+    timeout_types: tuple[type[BaseException], ...] = (asyncio.TimeoutError, TimeoutError)
     connection_types: tuple[type[BaseException], ...] = (ConnectionError,)
     try:
         import httpx
 
         timeout_types += (httpx.TimeoutException,)
         connection_types += (httpx.TransportError,)
-    except ImportError:  # pragma: no cover - httpx is a runtime dependency
+    except ImportError:  # pragma: no cover - runtime dependency in production
         pass
     try:
         from openai import APIConnectionError, APITimeoutError
 
         timeout_types += (APITimeoutError,)
         connection_types += (APIConnectionError,)
-    except ImportError:  # pragma: no cover - optional adapter
+    except ImportError:  # pragma: no cover - optional provider adapter
         pass
     try:
         from anthropic import APIConnectionError as AnthropicAPIConnectionError
@@ -117,7 +137,7 @@ def _provider_network_exception_types() -> tuple[
 
         timeout_types += (AnthropicAPITimeoutError,)
         connection_types += (AnthropicAPIConnectionError,)
-    except ImportError:  # pragma: no cover - optional adapter
+    except ImportError:  # pragma: no cover - optional provider adapter
         pass
     return timeout_types, connection_types
 
@@ -143,15 +163,13 @@ def classify_background_error(
     *,
     persistence_code: str | None = None,
 ) -> str:
-    """Classify a worker exception into one stable, public-safe code.
-
-    The full cause/context chain is inspected because retry wrappers commonly
-    replace the outer exception while keeping the provider/network cause.
-    """
+    """Classify an exception and its causes into a stable public code."""
     chain = _exception_chain(exc)
 
-    # Explicit stable codes always win, including a PDF-specific 429/timeout.
     for item in chain:
+        literal_code = f"{item}".strip()
+        if literal_code in SAFE_BACKGROUND_ERROR_CODES:
+            return literal_code
         if isinstance(item, DomainError):
             for candidate in (item.code, item.message):
                 code = candidate.strip() if isinstance(candidate, str) else ""
@@ -176,7 +194,8 @@ def classify_background_error(
                 return "submission_source_unsupported"
             if "too large for ocr" in normalized:
                 return "submission_source_too_large"
-        normalized = f"{item}".lower()
+
+        normalized = literal_code.lower()
         if any(marker in normalized for marker in (
             "does not support vision",
             "does not support image input",
@@ -204,9 +223,7 @@ def classify_background_error(
             return "provider_rate_limited"
         if isinstance(item, PermanentLLMError) and any(
             marker in f"{item}".lower()
-            for marker in (
-                "401", "403", "auth", "unauthorized", "invalid api key", "permission",
-            )
+            for marker in ("401", "403", "auth", "unauthorized", "invalid api key", "permission")
         ):
             return "provider_auth_failed"
 
@@ -221,6 +238,7 @@ def classify_background_error(
             "not a gzip file",
             "not a bzip2 file",
             "could not be opened successfully",
+            "rar extraction failed",
         )):
             return "submission_archive_invalid"
         if any(marker in normalized for marker in (
