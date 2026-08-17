@@ -50,7 +50,7 @@ interface NewTaskStepperProps {
 
 export function NewTaskStepper({
   currentStep = 0,
-  reachableStep = currentStep,
+  reachableStep,
   returnState,
   lockedStep,
   lockedStepReason,
@@ -62,7 +62,12 @@ export function NewTaskStepper({
   const location = useLocation();
   const navRef = useRef<HTMLElement>(null);
   const currentStepRef = useRef<HTMLLIElement>(null);
-  const effectiveReachableStep = Math.max(currentStep, reachableStep, getTaskReachableStep(taskQuery.data));
+  // Once the server task is available it is the authority.  Keeping the URL's
+  // current step reachable made stale deep links look valid after an upstream
+  // replacement had deliberately rewound the workflow.
+  const effectiveReachableStep = taskQuery.data
+    ? getTaskReachableStep(taskQuery.data)
+    : Math.max(currentStep, reachableStep ?? currentStep);
 
   useLayoutEffect(() => {
     const nav = navRef.current;

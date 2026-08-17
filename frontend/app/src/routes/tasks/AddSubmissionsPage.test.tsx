@@ -10,6 +10,7 @@ vi.mock("@/api/hooks", () => ({
     data: {
       task_id: "task-1",
       status: "problems_ready",
+      grading_setup_configured: true,
       student_count: 0,
       submission_file_name: null,
     },

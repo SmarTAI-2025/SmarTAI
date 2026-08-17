@@ -26,10 +26,11 @@ It NEVER does the arithmetic itself when sympy can do it.
 """
 from __future__ import annotations
 
+import ast
 import logging
 import os
 import re
-from typing import Optional, List, TYPE_CHECKING
+from typing import Optional, List, Tuple, TYPE_CHECKING
 
 from pydantic import BaseModel, Field
 
@@ -145,6 +146,59 @@ def _extract_final_expression(text: str) -> Optional[str]:
         if any(c.isdigit() for c in line) or any(op in line for op in "+-*/^√()"):
             return line
         # Pure-word line ("我不会") — give up
+        return None
+    return None
+
+
+def _parse_integrate_call(
+    code: str,
+) -> Optional[Tuple[bool, Optional[str]]]:
+    """Inspect LLM-generated sympy code for an ``integrate(...)`` call.
+
+    Returns ``(is_indefinite, var)`` where:
+      - ``is_indefinite`` is True for a *single-variable* indefinite integral
+        ``integrate(f, x)`` (2nd arg is a bare ``Name``).  ``var`` is that
+        variable's name.
+      - ``is_indefinite`` is False for a *definite* integral
+        ``integrate(f, (x, a, b))`` (2nd arg is a ``Tuple``).  ``var`` is None —
+        definite integrals must use strict comparison, not derivative compare.
+      - Returns ``None`` when no ``integrate(...)`` call is found or the form is
+        ambiguous (e.g. multi-variate ``integrate(f, x, y)``, keyword args,
+        starred args, or unparseable code).
+
+    Only the *first* ``integrate`` call in the program is considered; a
+    well-formed reference program uses integrate once to print the answer.
+    """
+    try:
+        tree = ast.parse(code)
+    except SyntaxError:
+        return None
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        func = node.func
+        if isinstance(func, ast.Attribute):
+            fname = func.attr
+        elif isinstance(func, ast.Name):
+            fname = func.id
+        else:
+            continue
+        if fname != "integrate":
+            continue
+        # Skip calls with keyword args / star args — form is ambiguous.
+        if node.keywords or any(isinstance(a, ast.Starred) for a in node.args):
+            return None
+        args = node.args
+        # integrate(f) or integrate(f, x, y, ...) — not a standard single-var
+        # indefinite/definite form we recognise.
+        if len(args) != 2:
+            return None
+        second = args[1]
+        if isinstance(second, ast.Name):
+            return (True, second.id)            # indefinite: integrate(f, x)
+        if isinstance(second, ast.Tuple):
+            return (False, None)                # definite: integrate(f, (x, a, b))
+        # Any other shape (e.g. integrate(f, x**2)) — ambiguous.
         return None
     return None
 
@@ -287,6 +341,8 @@ class CalculationSkill(GradingSkill):
             #  ↑ legal values:
             #    matched | mismatched | sympy_failed | no_reference | unsuitable
 
+            is_integral = False  # True when ref is an *indefinite* integral from LLM sympy
+            integral_var: Optional[str] = None  # integration variable, if known
             if reference and reference.strip():
                 ref_value = reference.strip()
                 ref_origin = "teacher"
@@ -296,6 +352,17 @@ class CalculationSkill(GradingSkill):
                     await self.reporter.substep(active_unit, "generate_sympy")
                 sympy_code = await _generate_sympy_program(self.provider, problem)
                 if sympy_code:
+                    # Indefinite-integral detection: SymPy's ``integrate(f, x)``
+                    # omits +C, so a correct student answer that includes +C
+                    # would be marked mismatched by strict symbolic comparison.
+                    # Only *indefinite* integrals get derivative-based verify;
+                    # *definite* integrals ``integrate(f, (x, a, b))`` yield a
+                    # scalar (possibly with free params) and must use strict
+                    # comparison.  Parsing the call form (rather than a substring
+                    # match on "integrate(") also distinguishes the two.
+                    parsed = _parse_integrate_call(sympy_code)
+                    if parsed is not None:
+                        is_integral, integral_var = parsed
                     if self.reporter and active_unit:
                         await self.reporter.substep(active_unit, "run_sympy")
                     stdout = await _run_sympy_in_sandbox(sympy_code, timeout=10.0)
@@ -313,10 +380,20 @@ class CalculationSkill(GradingSkill):
                     await self.reporter.substep(active_unit, "sympy_verify")
                 student_expr = _extract_final_expression(student_text)
                 if student_expr:
-                    ok: Optional[bool] = await numerical.verify_equivalent(student_expr, ref_value)
-                    if ok is None:
-                        # symbolic compare failed → try numeric closeness
-                        ok = await numerical.verify_value(student_expr, ref_value, rel_tol=1e-6)
+                    if is_integral:
+                        # Indefinite-integral answer (no teacher reference):
+                        # compare derivatives so the +C constant vanishes.  Pass
+                        # the parsed integration variable; the verifier also has
+                        # a fallback to infer it from the reference's free symbols
+                        # and a safety valve against stale substitution vars.
+                        ok: Optional[bool] = await numerical.verify_derivative_equivalent(
+                            student_expr, ref_value, var=integral_var
+                        )
+                    else:
+                        ok = await numerical.verify_equivalent(student_expr, ref_value)
+                        if ok is None:
+                            # symbolic compare failed → try numeric closeness
+                            ok = await numerical.verify_value(student_expr, ref_value, rel_tol=1e-6)
                     if ok is True:
                         sympy_status = "matched"
                     elif ok is False:

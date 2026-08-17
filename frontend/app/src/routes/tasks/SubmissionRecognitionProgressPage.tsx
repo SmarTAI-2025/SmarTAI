@@ -10,6 +10,7 @@ import { Navigate, useNavigate, useParams } from "react-router-dom";
 import { useTask } from "@/api/hooks/tasks";
 import { SmarTAIMascot } from "@/components/brand/SmarTAIMascot";
 import { NewTaskStepper } from "@/components/new-task/NewTaskStepper";
+import { SubmissionSourceOutcomePanel } from "@/components/tasks/SubmissionSourceOutcomePanel";
 import { Button } from "@/components/ui/Button";
 import { RecoverableActionState } from "@/components/ui/RecoverableActionState";
 import { useTaskProgress } from "@/hooks/useTaskProgress";
@@ -90,22 +91,31 @@ export function SubmissionRecognitionProgressPage() {
       returnTo: `/tasks/${taskId}/submissions/progress`,
     });
     return (
-      <ProgressPageFrame title={t("submissionProgressTitle")}>
-        <RecoverableActionState
-          info={info}
-          locale={locale}
-          className="min-h-[430px]"
-          primaryAction={info.actionKind === "byok" ? undefined : {
-            label: info.actionKind === "refresh" ? info.actionLabel : t("submissionProgressChooseAgain"),
-            onClick: info.actionKind === "refresh" ? refresh : () => navigate(`/tasks/${taskId}/submissions/upload`),
-            busy: taskQuery.isFetching || progressQuery.isFetching,
-          }}
-          secondaryAction={{
-            label: t("submissionProgressRefresh"),
-            onClick: refresh,
-            busy: taskQuery.isFetching || progressQuery.isFetching,
-          }}
-        />
+      <ProgressPageFrame title={locale === "en-US" ? "Submission recognition did not complete" : "作答识别未完成"}>
+        <>
+          <RecoverableActionState
+            info={info}
+            locale={locale}
+            className="min-h-[300px]"
+            primaryAction={info.actionKind === "byok" ? undefined : {
+              label: info.actionKind === "refresh" ? info.actionLabel : t("submissionProgressChooseAgain"),
+              onClick: info.actionKind === "refresh" ? refresh : () => navigate(`/tasks/${taskId}/submissions/upload`),
+              busy: taskQuery.isFetching || progressQuery.isFetching,
+            }}
+            secondaryAction={{
+              label: t("submissionProgressRefresh"),
+              onClick: refresh,
+              busy: taskQuery.isFetching || progressQuery.isFetching,
+            }}
+          />
+          <SubmissionSourceOutcomePanel
+            summary={progressQuery.data?.submission_source_summary ?? taskQuery.data?.submission_source_summary}
+            sources={progressQuery.data?.submission_sources ?? taskQuery.data?.submission_sources}
+            locale={locale}
+            taskId={taskId}
+            className="mt-4"
+          />
+        </>
       </ProgressPageFrame>
     );
   }
@@ -235,6 +245,14 @@ export function SubmissionRecognitionProgressPage() {
           </div>
         </div>
       </section>
+
+      <SubmissionSourceOutcomePanel
+        summary={progressQuery.data?.submission_source_summary ?? taskQuery.data?.submission_source_summary}
+        sources={progressQuery.data?.submission_sources ?? taskQuery.data?.submission_sources}
+        locale={locale}
+        taskId={taskId}
+        className="mt-4"
+      />
 
       <div className="mt-[30px] flex flex-col justify-end gap-3 sm:flex-row">
         <Button

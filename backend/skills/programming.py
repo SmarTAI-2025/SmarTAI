@@ -61,7 +61,11 @@ class ProgrammingGradingOutput(BaseModel):
     confidence: float = Field(ge=0, le=1, allow_inf_nan=False)
     comment: str
     steps: List[dict] = Field(default_factory=list)
-    logs: str = Field(default="")
+    # LLMs commonly emit `"logs": null` (the prompt asks for a `logs` field but
+    # there is often nothing to log). Keep this nullable so a null doesn't
+    # trip Pydantic validation and turn an otherwise-valid grade into a
+    # confidence-0 parse failure. Downstream ExpertResult.logs is Optional too.
+    logs: Optional[str] = Field(default="")
 
 
 class TestCaseList(BaseModel):
