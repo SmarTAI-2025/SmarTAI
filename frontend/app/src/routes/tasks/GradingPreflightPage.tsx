@@ -1,9 +1,10 @@
 import { AlertTriangle, ArrowLeft, CheckCircle2, ChevronRight, LoaderCircle, Timer } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Link, Navigate, useNavigate, useParams } from "react-router-dom";
-import { normalizeAPIError } from "@/api/client";
+import { getAPIErrorCode, normalizeAPIError } from "@/api/client";
 import { useGradingSetup, useStartGrading, useTask } from "@/api/hooks";
 import { NewTaskStepper } from "@/components/new-task/NewTaskStepper";
+import { SubmissionSourceOutcomePanel } from "@/components/tasks/SubmissionSourceOutcomePanel";
 import { useI18n } from "@/i18n/I18nProvider";
 import type { Locale } from "@/i18n/messages";
 import { cn } from "@/lib/cn";
@@ -57,8 +58,9 @@ export function GradingPreflightPage() {
   const historyView = Boolean(task && task.status !== "submissions_ready" && !isRegrading);
 
   const blockingIssues = setupResponse?.readiness.blocking_issues ?? [];
-  const effectiveBlockingIssues = blockingIssues.filter(
-    (issue) => !(isRegrading && issue === "invalid_state"),
+  const effectiveBlockingIssues = blockingIssues;
+  const hasSourceWarnings = (setupResponse?.readiness.warnings ?? []).some(
+    (warning) => warning.startsWith("submission_"),
   );
   const hasEnabledSelection = selectedExperts.length > 0 && selectedExperts.every((expert) => expert.enabled);
   const canStart = Boolean(
@@ -71,21 +73,24 @@ export function GradingPreflightPage() {
     && summary.problemCount > 0
     && summary.studentCount > 0,
   );
-  const countdownActive = canStart && autoStartEnabled && !startGrading.isPending;
+  const countdownActive = canStart && autoStartEnabled && !hasSourceWarnings && !startGrading.isPending;
 
   async function handleStart() {
-    if (!taskId || !canStart || startTriggeredRef.current) return;
+    if (!taskId || !task || !canStart || startTriggeredRef.current) return;
     startTriggeredRef.current = true;
     setAutoStartEnabled(false);
     try {
-      const response = await startGrading.mutateAsync({ taskId });
+      const response = await startGrading.mutateAsync({
+        taskId,
+        expectedWorkflowRevision: task.workflow_revision,
+      });
       if (response.status === "already_done") {
         navigate(`/tasks/${taskId}/review`, { replace: true });
         return;
       }
       navigate(`/tasks/${taskId}/grading/progress`, { replace: true });
     } catch {
-      // The normalized response is rendered below; task data remains intact.
+      await Promise.allSettled([taskQuery.refetch(), setupQuery.refetch()]);
       startTriggeredRef.current = false;
     }
   }
@@ -93,7 +98,7 @@ export function GradingPreflightPage() {
   startHandlerRef.current = () => { void handleStart(); };
 
   useEffect(() => {
-    if (!canStart || historyView || !autoStartEnabled) {
+    if (!canStart || historyView || !autoStartEnabled || hasSourceWarnings) {
       setCountdown(AUTO_START_SECONDS);
       return;
     }
@@ -103,7 +108,7 @@ export function GradingPreflightPage() {
       setCountdown((current) => Math.max(0, current - 1));
     }, 1000);
     return () => window.clearInterval(intervalId);
-  }, [autoStartEnabled, canStart, historyView, taskId]);
+  }, [autoStartEnabled, canStart, hasSourceWarnings, historyView, taskId]);
 
   useEffect(() => {
     if (countdownActive && countdown === 0) startHandlerRef.current();
@@ -111,7 +116,10 @@ export function GradingPreflightPage() {
 
   const isLoading = taskQuery.isLoading || setupQuery.isLoading;
   const isError = taskQuery.isError || setupQuery.isError;
-  const startError = startGrading.error ? normalizeAPIError(startGrading.error).message : null;
+  const startError = startGrading.error
+    ? gradingBlockerMessage(getAPIErrorCode(startGrading.error), locale)
+      ?? normalizeAPIError(startGrading.error).message
+    : null;
   const disabledReason = historyView ? null : getDisabledReason({
     locale,
     configured: setupResponse?.configured ?? false,
@@ -231,6 +239,17 @@ export function GradingPreflightPage() {
               </SummaryChip>
             </div>
           </section>
+
+          {task.submission_sources?.length ? (
+            <div className="mt-[30px]">
+              <SubmissionSourceOutcomePanel
+                summary={task.submission_source_summary}
+                sources={task.submission_sources}
+                locale={locale}
+                taskId={taskId}
+              />
+            </div>
+          ) : null}
 
           <section className="mt-[30px] min-h-[135px] rounded-[10px] border bg-card px-6 py-5 sm:px-8" aria-labelledby="preflight-experts">
             <div className="flex items-start justify-between gap-4">
@@ -433,7 +452,26 @@ function getDisabledReason({
   if (!hasEnabledSelection || blockingIssues.includes("provider_required") || blockingIssues.includes("provider_not_enabled")) {
     return copy(locale, "configureModels");
   }
+  const blocker = blockingIssues
+    .map((issue) => gradingBlockerMessage(issue, locale))
+    .find((message): message is string => Boolean(message));
+  if (blocker) return blocker;
   return copy(locale, "unavailable");
+}
+
+function gradingBlockerMessage(code: string | null, locale: Locale): string | null {
+  const messages: Record<string, [string, string]> = {
+    submission_sources_failed: ["仍有文件识别失败。请在上方查看具体原因并重新处理后再开始批改。", "Some files failed recognition. Review the exact reasons above and resolve them before grading."],
+    submission_identities_unresolved: ["仍有学生身份待确认。请先核对并确认身份，避免把成绩记到错误学生。", "Some student identities are unresolved. Confirm them before grading to avoid assigning results to the wrong student."],
+    submission_sources_pending: ["仍有文件正在处理。全部来源得到终态后才能开始批改。", "Some files are still processing. Grading can start only after every source has a terminal result."],
+    submission_source_evidence_missing: ["作答缺少完整的逐文件来源凭证。系统已停止自动批改，请重新识别这批文件。", "The submissions lack complete per-file source evidence. Automatic grading is blocked; recognize the batch again."],
+    submissions_required: ["当前没有可批改的学生作答。", "There are no student submissions to grade."],
+    questions_required: ["当前任务还没有题目。", "This task has no questions yet."],
+    workflow_busy: ["任务正在执行另一项操作，请等待完成后刷新。", "Another task operation is running. Wait for it to finish, then refresh."],
+    workflow_revision_conflict: ["任务内容已变化。请刷新后按最新内容重新确认。", "The task changed. Refresh and confirm the latest content."],
+  };
+  const message = code ? messages[code] : undefined;
+  return message ? message[locale === "en-US" ? 1 : 0] : null;
 }
 
 function compareProblems(left: ProblemInfo, right: ProblemInfo): number {

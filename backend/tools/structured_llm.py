@@ -34,6 +34,10 @@ logger = logging.getLogger(__name__)
 T = TypeVar("T", bound=BaseModel)
 
 
+class StructuredOutputBoundsError(ValueError):
+    """The provider returned valid JSON whose fields exceed safe bounds."""
+
+
 # ─── Exceptions ──────────────────────────────────────────────────────────────
 
 class TransientLLMError(Exception):
@@ -302,6 +306,7 @@ def extract_and_parse_json(raw: str, model: Type[T]) -> T:
     # composes transforms — `latex+newlines` is the realistic LLM math case
     # (e.g. comment = "F = \overline{C}\n step 2: ..."); previous code only
     # tried double-everything which butchers already-valid escapes.
+    bounds_error: ValidationError | None = None
     for attempt_desc, transform in [
         ("direct", lambda s: s),
         ("latex_backslashes", _escape_latex_backslashes),
@@ -316,11 +321,24 @@ def extract_and_parse_json(raw: str, model: Type[T]) -> T:
             candidate_dict = json.loads(candidate)
             cleaned_dict = _clean_strings(candidate_dict)
             return model.model_validate(cleaned_dict)
-        except (ValidationError, json.JSONDecodeError) as e:
+        except ValidationError as e:
+            if any(
+                error.get("type") in {"string_too_long", "too_long"}
+                or "safe total size" in str(error.get("msg") or "").lower()
+                for error in e.errors()
+            ):
+                bounds_error = e
+            logger.debug(f"JSON parse attempt '{attempt_desc}' failed: {e}")
+            continue
+        except json.JSONDecodeError as e:
             logger.debug(f"JSON parse attempt '{attempt_desc}' failed: {e}")
             continue
 
     # 4. All attempts failed — raise with full context
+    if bounds_error is not None:
+        raise StructuredOutputBoundsError(
+            f"Structured output for {model.__name__} exceeds safe field bounds."
+        ) from bounds_error
     raise ValueError(
         f"Could not parse LLM output as {model.__name__}. Raw output first 500 chars: {raw[:500]}"
     )

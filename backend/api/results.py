@@ -12,7 +12,7 @@ from fastapi import APIRouter, Depends
 
 from backend.api.errors import domain_error_response
 from backend.auth import get_current_user, require_teacher
-from backend.db import assignment_repository, grading_repository, submission_repository
+from backend.db import assignment_repository, grading_repository, workflow_repository
 from backend.domain import education
 from backend.domain.errors import DomainError, NotFound
 from backend.models import User
@@ -57,15 +57,6 @@ def _serialize_result(result, review) -> dict:
         "score": effective_score,
         "teacher_comment": effective_comment,
     }
-
-
-def _latest_run_for_assignment(assignment_id: str, teacher_id: str):
-    """Most recent released run, falling back to the newest owned run."""
-    runs = grading_repository.list_runs_for_assignment(
-        assignment_id=assignment_id, actor_id=teacher_id
-    )
-    released = [run for run in runs if run.released_at is not None]
-    return max(released, key=lambda run: run.released_at or 0) if released else (runs[-1] if runs else None)
 
 
 @router.get("/assignment/{assignment_id}/summary")
@@ -137,12 +128,16 @@ def per_question_aggregates(assignment_id: str, current: User = Depends(require_
 
 @router.get("/assignment/{assignment_id}/review-queue")
 def review_queue(assignment_id: str, current: User = Depends(require_teacher)):
-    """Failed / needs_review results across the assignment's runs."""
+    """Failed / needs_review results from the current workflow generation."""
     try:
         assignment_repository.get_assignment(assignment_id=assignment_id, actor_id=current.id)
     except DomainError as exc:
         return domain_error_response(exc)
-    items = grading_repository.list_results_for_review(assignment_id=assignment_id)
+    items = [
+        result
+        for result in _all_results_for_assignment(assignment_id, current.id)
+        if result.result_status in education.REVIEW_QUEUE_RESULT_STATUSES
+    ]
     return [_serialize_result(r, None) for r in items]
 
 
@@ -152,8 +147,19 @@ def student_result(assignment_id: str, current: User = Depends(get_current_user)
 
     Scored soft-review rows use the AI default; hard failures block release.
     """
-    from backend.services import grading_runs
-    rows = grading_runs.student_results(student_id=current.id, assignment_id=assignment_id)
+    try:
+        assignment = assignment_repository.get_assignment_unscoped(assignment_id)
+        current_results = _all_results_for_assignment(
+            assignment_id, assignment.teacher_id, released_only=True
+        )
+    except DomainError as exc:
+        return domain_error_response(exc)
+    rows = [
+        result
+        for result in current_results
+        if result.student_id == current.id
+        and result.result_status not in education.NON_SCOREABLE_RESULT_STATUSES
+    ]
     return [
         {
             "q_id": r.q_id,
@@ -180,17 +186,55 @@ def student_result(assignment_id: str, current: User = Depends(get_current_user)
 def _all_results_for_assignment(
     assignment_id: str, teacher_id: str, *, released_only: bool = False
 ) -> list:
-    """Results from the newest released run, or newest run while unreleased."""
-    runs = grading_repository.list_runs_for_assignment(
-        assignment_id=assignment_id, actor_id=teacher_id
-    )
-    if not runs:
+    """Results from the run selected by the current workflow generation."""
+    try:
+        workflow = workflow_repository.get_workflow(
+            assignment_id, owner_id=teacher_id
+        )
+    except NotFound:
+        # Normalized lifecycle callers created before the task façade do not
+        # own a presentation workflow row. Preserve that compatibility path;
+        # façade-backed tasks always use the explicit current-run pointer.
+        runs = grading_repository.list_runs_for_assignment(
+            assignment_id=assignment_id, actor_id=teacher_id
+        )
+        if not runs:
+            return []
+        released = [run for run in runs if run.released_at is not None]
+        if released_only and not released:
+            return []
+        run = (
+            max(released, key=lambda item: item.released_at or 0)
+            if released
+            else runs[-1]
+        )
+        return grading_repository.list_results_for_run(run_id=run.id)
+    if workflow.grading_job_id:
+        run = grading_repository.get_run(
+            workflow.grading_job_id, actor_id=teacher_id
+        )
+    elif workflow.presentation_status in {
+        "draft", "grading", "graded", "review_confirmed", "finalized",
+    }:
+        # Compatibility for early façade rows that predate grading_job_id.
+        # Rewound generations use problems_ready/submissions_ready and never
+        # take this fallback, so their historical results stay hidden.
+        runs = grading_repository.list_runs_for_assignment(
+            assignment_id=assignment_id, actor_id=teacher_id
+        )
+        if not runs:
+            return []
+        released = [item for item in runs if item.released_at is not None]
+        run = (
+            max(released, key=lambda item: item.released_at or 0)
+            if released
+            else runs[-1]
+        )
+    else:
         return []
-    released = [run for run in runs if run.released_at is not None]
-    if released_only and not released:
+    if released_only and run.released_at is None:
         return []
-    target = max(released, key=lambda run: run.released_at or 0) if released else runs[-1]
-    return grading_repository.list_results_for_run(run_id=target.id)
+    return grading_repository.list_results_for_run(run_id=run.id)
 
 
 def _summary(assignment_id: str, teacher_id: str) -> dict:

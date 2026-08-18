@@ -55,6 +55,11 @@ export function getTaskReachableStep(task?: TaskReachabilityInput | null): numbe
     case "finalized":
       return 7;
     case "error":
+      // A failed restart stays at the stage that failed even when an older
+      // successful generation is still retained for recovery/audit.
+      if (task.last_failed_job_id && task.last_failed_job_id === task.extract_job_id) return 1;
+      if (task.last_failed_job_id && task.last_failed_job_id === task.parse_job_id) return 3;
+      if (task.last_failed_job_id && task.last_failed_job_id === task.grading_job_id) return 5;
       if (task.grading_job_id) return 5;
       if (task.parse_job_id || task.submission_file_name || (task.student_count ?? 0) > 0) return 4;
       if ((task.problem_count ?? 0) > 0) return allProblemsConfirmed(task.problem_data) ? 3 : 2;
