@@ -50,6 +50,22 @@ describe("FrontierLandingPage", () => {
     }
   });
 
+  it("keeps every insight scene mounted while exposing only the active one", () => {
+    const { container } = render(<I18nProvider><MemoryRouter><FrontierLandingPage /></MemoryRouter></I18nProvider>);
+
+    expect(container.querySelectorAll(".frontier-conversation")).toHaveLength(3);
+    expect(container.querySelectorAll(".frontier-generated-chart")).toHaveLength(3);
+    expect(container.querySelectorAll(".frontier-conversation.is-active")).toHaveLength(1);
+    expect(container.querySelectorAll(".frontier-generated-chart.is-active")).toHaveLength(1);
+
+    fireEvent.click(screen.getByRole("button", { name: /how spread out are overall scores/i }));
+
+    expect(container.querySelector('.frontier-conversation[data-insight="spread"]')).toHaveClass("is-active");
+    expect(container.querySelector('.frontier-generated-chart[data-insight="spread"]')).toHaveClass("is-active");
+    expect(container.querySelectorAll('.frontier-conversation[aria-hidden="true"]')).toHaveLength(2);
+    expect(container.querySelectorAll('.frontier-generated-chart[aria-hidden="true"]')).toHaveLength(2);
+  });
+
   it("presents source comparison without claiming unsupported glyph confidence", () => {
     render(<I18nProvider><MemoryRouter><FrontierLandingPage /></MemoryRouter></I18nProvider>);
 
