@@ -1,6 +1,6 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { I18nProvider } from "@/i18n/I18nProvider";
 import { FrontierLandingPage } from "./FrontierLandingPage";
 
@@ -30,6 +30,24 @@ describe("FrontierLandingPage", () => {
     expect(screen.getByText(/Tie every point/)).toBeInTheDocument();
     expect(screen.getByText(/to its evidence/)).toBeInTheDocument();
     expect(screen.getByRole("tab", { name: /03 grade/i })).toHaveAttribute("aria-selected", "true");
+  });
+
+  it("autoplays the walkthrough and analysis prompts on the same interval", () => {
+    vi.useFakeTimers();
+    const { unmount } = render(<I18nProvider><MemoryRouter><FrontierLandingPage /></MemoryRouter></I18nProvider>);
+
+    try {
+      expect(screen.getByRole("tab", { name: /01 source/i })).toHaveAttribute("aria-selected", "true");
+      expect(screen.getByRole("button", { name: /which question needs reteaching/i })).toHaveAttribute("aria-pressed", "true");
+
+      act(() => vi.advanceTimersByTime(4_200));
+
+      expect(screen.getByRole("tab", { name: /02 recognize/i })).toHaveAttribute("aria-selected", "true");
+      expect(screen.getByRole("button", { name: /how spread out are overall scores/i })).toHaveAttribute("aria-pressed", "true");
+    } finally {
+      unmount();
+      vi.useRealTimers();
+    }
   });
 
   it("presents source comparison without claiming unsupported glyph confidence", () => {

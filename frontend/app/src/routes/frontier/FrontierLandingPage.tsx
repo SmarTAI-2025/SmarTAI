@@ -125,6 +125,7 @@ const promoYouTubeUrls = {
   "zh-CN": import.meta.env.VITE_SMARTAI_PROMO_YOUTUBE_ZH_URL,
   "en-US": import.meta.env.VITE_SMARTAI_PROMO_YOUTUBE_EN_URL,
 } as const;
+const showcaseAutoplayIntervalMs = 4_200;
 
 export function FrontierLandingPage() {
   const { locale } = useI18n();
@@ -134,15 +135,18 @@ export function FrontierLandingPage() {
   const [activeInsight, setActiveInsight] = useState(0);
   const stage = stages[activeStage];
   const insight = insights[activeInsight];
+  const stageCount = stages.length;
+  const insightCount = insights.length;
 
   useEffect(() => {
     const reduceMotion = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
     if (reduceMotion) return;
     const timer = window.setInterval(() => {
-      setActiveStage((current) => (current + 1) % stages.length);
-    }, 4200);
+      setActiveStage((current) => (current + 1) % stageCount);
+      setActiveInsight((current) => (current + 1) % insightCount);
+    }, showcaseAutoplayIntervalMs);
     return () => window.clearInterval(timer);
-  }, []);
+  }, [insightCount, stageCount]);
 
   function chooseStage(index: number) {
     setActiveStage(index);
