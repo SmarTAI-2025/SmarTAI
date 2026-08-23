@@ -1,7 +1,7 @@
 """Normalize editable provider routes and persist their wire protocol.
 
-Revision ID: 0009_provider_wire_protocol
-Revises: 0008_custom_provider_endpoints
+Revision ID: 0010_provider_wire_protocol
+Revises: 0009_merge_provider_heads
 """
 from __future__ import annotations
 
@@ -11,8 +11,8 @@ from alembic import op
 import sqlalchemy as sa
 
 
-revision = "0009_provider_wire_protocol"
-down_revision = "0008_custom_provider_endpoints"
+revision = "0010_provider_wire_protocol"
+down_revision = "0009_merge_provider_heads"
 branch_labels = None
 depends_on = None
 

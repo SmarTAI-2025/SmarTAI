@@ -24,7 +24,7 @@ def _alembic_config(db_url: str, monkeypatch) -> Config:
 
 
 def test_migration_preserves_ustc_as_enabled_deepseek(tmp_path, monkeypatch):
-    from sqlalchemy import create_engine, text
+    from sqlalchemy import create_engine, inspect, text
 
     db_url = f"sqlite:///{(tmp_path / 'relay-migration.db').as_posix()}"
     cfg = _alembic_config(db_url, monkeypatch)
@@ -59,6 +59,9 @@ def test_migration_preserves_ustc_as_enabled_deepseek(tmp_path, monkeypatch):
     assert legacy_ustc["enabled"] == 0
 
     command.upgrade(cfg, "head")
+    assert "lease_token" in {
+        column["name"] for column in inspect(engine).get_columns("workflow_operations")
+    }
     with engine.connect() as connection:
         rows = {
             row.id: row
