@@ -71,7 +71,7 @@ async def test_text_only_provider_rejects_vision():
         )
 
 
-def test_registry_pick_vision_prefers_preferred_when_supported():
+def test_registry_pick_vision_never_replaces_stage_selected_provider():
     registry = ExpertRegistry()
     registry._providers.clear()
     registry._configs.clear()
@@ -89,7 +89,8 @@ def test_registry_pick_vision_prefers_preferred_when_supported():
     registry._configs[text.provider_id] = ProviderConfig(provider_type="zhipu", api_key="k", model="glm-4.5-air")
 
     assert registry.pick_vision(vision) is vision
-    assert registry.pick_vision(text) is vision
+    assert registry.pick_vision(text) is None
+    assert registry.pick_vision() is vision
 
 
 @pytest.mark.asyncio

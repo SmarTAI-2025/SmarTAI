@@ -29,7 +29,13 @@ const capabilityState = vi.hoisted(() => ({
 
 vi.mock("@/api/hooks", () => ({
   useExperts: () => ({
-    data: [{ provider_id: "mock:test", enabled: true }],
+    data: [{
+      provider_id: "mock:test",
+      provider_type: "openai",
+      model: "test-model",
+      enabled: true,
+      is_default: true,
+    }],
     isLoading: false,
     isError: false,
     refetch: expertsRefetch,
@@ -120,7 +126,11 @@ describe("AddProblemsPage score configuration", () => {
 
     await waitFor(() => expect(startMutateAsync).toHaveBeenCalledWith(expect.objectContaining({
       scorePolicy: { mode: "default_10" },
+      recognitionProviderId: "mock:test",
     })));
+    expect(preflightMutateAsync).toHaveBeenCalledWith(expect.objectContaining({
+      recognitionProviderId: "mock:test",
+    }));
   });
 
   it("sends an explicitly edited uniform maximum score", async () => {
@@ -190,37 +200,33 @@ describe("AddProblemsPage upload capability contract", () => {
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
 
-  it("uses the same vision-off rejection for an injected chooser file and drag-drop", () => {
+  it("keeps images selectable and lets the selected provider return the precise capability error", () => {
     capabilityState.data.source_roles.problem.accepted_extensions = [".pdf", ".txt", ".md", ".markdown"];
     capabilityState.data.reader.ocr = false;
     renderPage();
     const image = new File(["image"], "questions.png", { type: "image/png" });
     const input = screen.getByLabelText("选择文件");
-    const dropZone = screen.getByLabelText("题目来源文件上传");
 
-    expect(input).not.toHaveAttribute("accept", expect.stringContaining(".png"));
+    expect(input).toHaveAttribute("accept", expect.stringContaining(".png"));
     fireEvent.change(input, { target: { files: [image] } });
-    const chooserError = screen.getByRole("alert").textContent;
-    expect(chooserError).toContain("未开放题目图片 OCR");
-
-    fireEvent.drop(dropZone, { dataTransfer: { files: [image] } });
-    expect(screen.getByRole("alert")).toHaveTextContent(chooserError ?? "");
-    expect(screen.queryByText("questions.png")).not.toBeInTheDocument();
+    expect(screen.getAllByText("questions.png")).toHaveLength(2);
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
     expect(preflightMutateAsync).not.toHaveBeenCalled();
   });
 
-  it("falls back to document-only formats while capability data is unavailable", () => {
+  it("keeps supported image formats selectable while capability data is loading", () => {
     capabilityState.available = false;
     renderPage();
 
     const input = screen.getByLabelText("选择文件");
-    expect(input).toHaveAttribute("accept", ".pdf,.txt,.md,.markdown");
+    expect(input).toHaveAttribute("accept", expect.stringContaining(".webp"));
     fireEvent.drop(screen.getByLabelText("题目来源文件上传"), {
       dataTransfer: {
         files: [new File(["image"], "questions.webp", { type: "image/webp" })],
       },
     });
-    expect(screen.getByRole("alert")).toHaveTextContent("未开放题目图片 OCR");
+    expect(screen.getAllByText("questions.webp")).toHaveLength(2);
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
 
   it("keeps programming-test images blocked even when question OCR is available", async () => {

@@ -43,6 +43,7 @@ export interface ProblemSourceDescriptor {
   size_bytes: number;
   sha256: string;
   library_material_id?: string | null;
+  stored_file_id?: string | null;
 }
 
 export interface ProblemSourcePreflightResponse {
@@ -55,6 +56,7 @@ export interface ProblemSourcePreflightResponse {
   candidate_summary: ProblemCandidateSummary;
   base_workflow_revision?: number;
   workflow_revision?: number;
+  recognition_provider_id?: string | null;
 }
 
 export interface ProblemSourcePreflightInput {
@@ -62,11 +64,13 @@ export interface ProblemSourcePreflightInput {
   mode: ProblemSourceMode;
   role?: PreparationSourceRole;
   file?: File | null;
+  storedFileId?: string | null;
   libraryMaterialId?: string | null;
   inlineText?: string;
   structureMode: ProblemStructureMode;
   extractionHint?: string;
   saveToLibrary: boolean;
+  recognitionProviderId: string;
 }
 
 export interface StartProblemExtractionInput {
@@ -84,6 +88,7 @@ export interface StartQuestionPreparationInput {
   expectedWorkflowRevision: number;
   replaceConfirmed?: boolean;
   scorePolicy: QuestionScorePolicyInput;
+  recognitionProviderId: string;
 }
 
 export type QuestionScorePolicyMode = "default_10" | "uniform" | "per_question";

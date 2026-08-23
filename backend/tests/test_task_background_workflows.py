@@ -51,10 +51,22 @@ def _seed_task(*, with_question: bool = False) -> tuple[str, str]:
 
 
 class _Registry:
-    provider = SimpleNamespace(provider_id="test-provider")
+    provider = SimpleNamespace(
+        provider_id="test-provider",
+        supports_vision=False,
+    )
 
     def pick_default(self):
         return self.provider
+
+    def pick_default_id(self):
+        return "test-provider"
+
+    def get(self, provider_id):
+        return self.provider if provider_id == "test-provider" else None
+
+    def uses_shared_pool(self):
+        return True
 
     def list_configs(self):
         return [{"provider_id": "test-provider", "enabled": True}]
@@ -711,6 +723,7 @@ async def test_question_preparation_timeout_persists_provider_timeout(monkeypatc
         job_attempt=job.attempt,
         sources=[],
         provider=SimpleNamespace(provider_id="gemini:test"),
+        recognition_provider_id="gemini:test",
         claimed_workflow_revision=claimed_revision,
         replace_confirmed=False,
         score_policy=SimpleNamespace(),
@@ -743,6 +756,46 @@ def test_disabled_selected_recognition_provider_has_figma_error_code():
             registry=DisabledRegistry(), recognition_provider_id="disabled",
         )
     assert disabled.value.code == "recognition_provider_not_enabled"
+
+
+def test_question_and_submission_queues_freeze_resolved_default_provider_id():
+    problem_owner, problem_task = _seed_task()
+    problem_queued = task_facade.queue_task_problem_extraction(
+        task_id=problem_task,
+        owner_id=problem_owner,
+        filename="questions.txt",
+        content=b"Question 1",
+        content_type="text/plain",
+        registry=_Registry(),
+    )
+    problem_operation = workflow_repository.get_operation(
+        problem_queued["job_id"], owner_id=problem_owner,
+    )
+    problem_workflow = workflow_repository.get_workflow(
+        problem_task, owner_id=problem_owner,
+    )
+    assert problem_queued["_recognition_provider_id"] == "test-provider"
+    assert problem_operation.payload["recognition_provider_id"] == "test-provider"
+    assert problem_workflow.question_recognition_provider_id == "test-provider"
+
+    submission_owner, submission_task = _seed_task(with_question=True)
+    submission_queued = task_facade.queue_task_submission_parsing(
+        task_id=submission_task,
+        owner_id=submission_owner,
+        filename="answers.txt",
+        content=b"Answer 1",
+        content_type="text/plain",
+        registry=_Registry(),
+    )
+    submission_operation = workflow_repository.get_operation(
+        submission_queued["job_id"], owner_id=submission_owner,
+    )
+    submission_workflow = workflow_repository.get_workflow(
+        submission_task, owner_id=submission_owner,
+    )
+    assert submission_queued["_recognition_provider_id"] == "test-provider"
+    assert submission_operation.payload["recognition_provider_id"] == "test-provider"
+    assert submission_workflow.submission_recognition_provider_id == "test-provider"
 
 
 @pytest.mark.asyncio
@@ -789,7 +842,7 @@ async def test_submission_ocr_without_vision_provider_has_figma_error_code(monke
         job_attempt=queued["_job_attempt"],
         identity_mode="filename",
         roster_entries=None,
-        recognition_provider_id=None,
+        recognition_provider_id=queued["_recognition_provider_id"],
         replace_confirmed=False,
         claimed_workflow_revision=queued["workflow_revision"],
     )
@@ -797,16 +850,16 @@ async def test_submission_ocr_without_vision_provider_has_figma_error_code(monke
     failed = workflow_repository.get_operation(queued["job_id"], owner_id=owner_id)
     workflow = workflow_repository.get_workflow(task_id, owner_id=owner_id)
     assert failed.status == "error"
-    assert failed.error_code == "vision_provider_required"
+    assert failed.error_code == "provider_vision_not_supported"
     assert workflow.presentation_status == "error"
-    assert workflow.error_code == "vision_provider_required"
+    assert workflow.error_code == "provider_vision_not_supported"
     result = source_outcome_repository.list_source_results(
         operation_id=failed.id,
         owner_id=owner_id,
         attempt=failed.attempt,
     )[0]
     assert result.outcome is not None
-    assert result.outcome.stable_error_code == "vision_provider_required"
+    assert result.outcome.stable_error_code == "provider_vision_not_supported"
     assert result.outcome.failure_phase == "ocr"
 
 
@@ -841,6 +894,7 @@ async def test_problem_extraction_timeout_persists_provider_timeout(monkeypatch)
         job_attempt=queued["_job_attempt"],
         claimed_workflow_revision=queued["workflow_revision"],
         replace_confirmed=False,
+        recognition_provider_id=queued["_recognition_provider_id"],
     )
 
     failed = workflow_repository.get_operation(queued["job_id"], owner_id=owner_id)
@@ -877,7 +931,8 @@ async def test_submission_rate_limit_persists_provider_rate_limited(monkeypatch)
         filename="answers.txt", content=b"answer", content_type="text/plain",
         registry=registry,
         job_attempt=queued["_job_attempt"], identity_mode="filename",
-        roster_entries=None, recognition_provider_id=None,
+        roster_entries=None,
+        recognition_provider_id=queued["_recognition_provider_id"],
         replace_confirmed=False,
         claimed_workflow_revision=queued["workflow_revision"],
     )
@@ -921,7 +976,8 @@ async def test_submission_connection_error_persists_provider_unreachable(monkeyp
         filename="answers.txt", content=b"answer", content_type="text/plain",
         registry=registry,
         job_attempt=queued["_job_attempt"], identity_mode="filename",
-        roster_entries=None, recognition_provider_id=None,
+        roster_entries=None,
+        recognition_provider_id=queued["_recognition_provider_id"],
         replace_confirmed=False,
         claimed_workflow_revision=queued["workflow_revision"],
     )
@@ -959,6 +1015,7 @@ async def test_problem_extraction_auth_error_persists_provider_auth_failed(monke
         job_attempt=queued["_job_attempt"],
         claimed_workflow_revision=queued["workflow_revision"],
         replace_confirmed=False,
+        recognition_provider_id=queued["_recognition_provider_id"],
     )
 
     failed = workflow_repository.get_operation(queued["job_id"], owner_id=owner_id)

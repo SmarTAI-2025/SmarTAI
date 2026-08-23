@@ -5,9 +5,10 @@ import {
   Loader2,
   RefreshCw,
 } from "lucide-react";
-import type { ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { Navigate, useNavigate, useParams } from "react-router-dom";
-import { useTask } from "@/api/hooks/tasks";
+import { useExperts, useRetryQuestionPreparation, useTask } from "@/api/hooks";
+import { StageProviderSelect } from "@/components/models/StageProviderSelect";
 import { NewTaskStepper } from "@/components/new-task/NewTaskStepper";
 import { Button } from "@/components/ui/Button";
 import { RecoverableActionState } from "@/components/ui/RecoverableActionState";
@@ -40,8 +41,32 @@ export function ProblemRecognitionProgressPage() {
   const navigate = useNavigate();
   const { locale, t } = useI18n();
   const taskQuery = useTask(taskId);
+  const expertsQuery = useExperts();
+  const retryPreparation = useRetryQuestionPreparation();
   const progressQuery = useTaskProgress(taskId);
+  const [recognitionProviderId, setRecognitionProviderId] = useState("");
+  const [retryFailure, setRetryFailure] = useState<unknown>(null);
   const status = (progressQuery.data?.status ?? taskQuery.data?.status) as TaskStatus | undefined;
+  const enabledExperts = (expertsQuery.data ?? []).filter((expert) => expert.enabled);
+
+  useEffect(() => {
+    if (expertsQuery.isLoading || expertsQuery.isError) return;
+    setRecognitionProviderId((current) => {
+      if (enabledExperts.some((expert) => expert.provider_id === current)) return current;
+      const frozenProviderId = taskQuery.data?.question_recognition_provider_id;
+      if (
+        frozenProviderId
+        && enabledExperts.some((expert) => expert.provider_id === frozenProviderId)
+      ) {
+        return frozenProviderId;
+      }
+      return (
+        enabledExperts.find((expert) => expert.is_default)?.provider_id
+        ?? enabledExperts[0]?.provider_id
+        ?? ""
+      );
+    });
+  }, [enabledExperts, expertsQuery.isError, expertsQuery.isLoading, taskQuery.data?.question_recognition_provider_id]);
 
   if (taskId && status === "draft" && !taskQuery.isFetching && !progressQuery.isFetching) {
     return <Navigate to={`/tasks/${taskId}/upload/problems`} replace />;
@@ -54,7 +79,8 @@ export function ProblemRecognitionProgressPage() {
   const refresh = () => {
     void Promise.all([taskQuery.refetch(), progressQuery.refetch()]);
   };
-  const progressFailure = progressQuery.progress?.error_detail
+  const progressFailure = retryFailure
+    ?? progressQuery.progress?.error_detail
     ?? [...(progressQuery.progress?.messages ?? [])].reverse().find((event) => event.level === "error")?.message
     ?? taskQuery.data?.error
     ?? progressQuery.error
@@ -80,23 +106,69 @@ export function ProblemRecognitionProgressPage() {
       jobId: taskQuery.data?.last_failed_job_id,
       returnTo: `/tasks/${taskId}/problems/progress`,
     });
+    const failedJobId = taskQuery.data?.last_failed_job_id;
+    const canRetryPreparedSources = Boolean(
+      failedJobId && recognitionProviderId && taskQuery.data,
+    );
+    const retryPreparedSources = async () => {
+      if (!taskId || !failedJobId || !recognitionProviderId || !taskQuery.data) return;
+      setRetryFailure(null);
+      try {
+        await retryPreparation.mutateAsync({
+          taskId,
+          jobId: failedJobId,
+          recognitionProviderId,
+          expectedWorkflowRevision: taskQuery.data.workflow_revision,
+        });
+        refresh();
+      } catch (error) {
+        setRetryFailure(error);
+      }
+    };
     return (
       <ProgressPageFrame title={t("problemProgressTitle")}>
-        <RecoverableActionState
-          info={info}
-          locale={locale}
-          className="min-h-[430px]"
-          primaryAction={info.actionKind === "byok" ? undefined : {
-            label: info.actionKind === "refresh" ? info.actionLabel : t("problemProgressChooseAgain"),
-            onClick: info.actionKind === "refresh" ? refresh : () => navigate(`/tasks/${taskId}/upload/problems`),
-            busy: taskQuery.isFetching || progressQuery.isFetching,
-          }}
-          secondaryAction={{
-            label: t("problemProgressRefresh"),
-            onClick: refresh,
-            busy: taskQuery.isFetching || progressQuery.isFetching,
-          }}
-        />
+        <div className="grid gap-4">
+          {failedJobId ? (
+            <StageProviderSelect
+              id="question-retry-provider"
+              label={locale === "zh-CN" ? "题目识别模型" : "Question recognition model"}
+              hint={locale === "zh-CN"
+                ? "原资料和已完成步骤已保留；可直接改选模型，只重试失败的题目准备阶段。"
+                : "The original materials and completed steps are preserved. Choose a model and retry only the failed preparation stage."}
+              experts={enabledExperts}
+              value={recognitionProviderId}
+              disabled={retryPreparation.isPending || expertsQuery.isLoading}
+              locale={locale}
+              onChange={(providerId) => {
+                setRecognitionProviderId(providerId);
+                setRetryFailure(null);
+              }}
+            />
+          ) : null}
+          <RecoverableActionState
+            info={info}
+            locale={locale}
+            className="min-h-[430px]"
+            primaryAction={info.actionKind === "byok" ? undefined : {
+              label: info.actionKind === "refresh"
+                ? info.actionLabel
+                : canRetryPreparedSources
+                  ? (locale === "zh-CN" ? "用所选模型重试" : "Retry with selected model")
+                  : t("problemProgressChooseAgain"),
+              onClick: info.actionKind === "refresh"
+                ? refresh
+                : canRetryPreparedSources
+                  ? () => void retryPreparedSources()
+                  : () => navigate(`/tasks/${taskId}/upload/problems`),
+              busy: taskQuery.isFetching || progressQuery.isFetching || retryPreparation.isPending,
+            }}
+            secondaryAction={{
+              label: t("problemProgressRefresh"),
+              onClick: refresh,
+              busy: taskQuery.isFetching || progressQuery.isFetching || retryPreparation.isPending,
+            }}
+          />
+        </div>
       </ProgressPageFrame>
     );
   }

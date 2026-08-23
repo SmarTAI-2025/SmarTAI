@@ -79,6 +79,7 @@ def test_normalized_tables_exist_after_roundtrip(tmp_path, monkeypatch):
         "grade_results",
         "teacher_reviews",
         "stored_files",
+        "provider_preferences",
         "course_material_groups",
         "course_materials",
         "tags",
@@ -95,6 +96,43 @@ def test_normalized_tables_exist_after_roundtrip(tmp_path, monkeypatch):
     } <= tables
     # Legacy tables must not reappear after the roundtrip.
     assert not ({"tasks", "grading_jobs", "task_knowledge_documents"} & tables)
+
+
+def test_provider_routing_migration_backfills_default_and_question_column(
+    tmp_path,
+    monkeypatch,
+):
+    from sqlalchemy import create_engine, inspect, text
+
+    db_url = f"sqlite:///{(tmp_path / 'provider-routing.db').as_posix()}"
+    cfg = _alembic_config(db_url, monkeypatch)
+    command.upgrade(cfg, "0008_operation_leases")
+    engine = create_engine(db_url)
+    with engine.begin() as connection:
+        connection.execute(text(
+            "INSERT INTO users "
+            "(id, username, role, password_hash, is_active, created_at, updated_at) "
+            "VALUES ('owner', 'owner', 'teacher', 'hash', true, 1, 1)"
+        ))
+        for provider_id, created_at in (("later", 2), ("first", 1)):
+            connection.execute(text(
+                "INSERT INTO provider_configs "
+                "(id, owner_id, provider_type, model, encrypted_api_key, nonce, "
+                "key_version, enabled, max_concurrent, rpm, created_at, updated_at) "
+                "VALUES (:id, 'owner', 'openai', :model, 'cipher', 'nonce', "
+                "1, true, 5, 0, :created_at, :created_at)"
+            ), {"id": provider_id, "model": provider_id, "created_at": created_at})
+
+    command.upgrade(cfg, "head")
+    inspector = inspect(engine)
+    assert "question_recognition_provider_id" in {
+        column["name"] for column in inspector.get_columns("assignment_workflows")
+    }
+    with engine.connect() as connection:
+        preference = connection.execute(text(
+            "SELECT owner_id, default_provider_id FROM provider_preferences"
+        )).one()
+    assert tuple(preference) == ("owner", "first")
 
 
 def test_source_outcome_migration_has_contract_constraints(tmp_path, monkeypatch):

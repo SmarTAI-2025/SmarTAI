@@ -149,6 +149,7 @@ def failure_phase_for_code(code: str) -> str:
         return "result_persistence"
     if code in {
         "vision_provider_required",
+        "provider_vision_not_supported",
         "ocr_empty_result",
         "pdf_ocr_render_failed",
     }:
@@ -160,6 +161,8 @@ def failure_phase_for_code(code: str) -> str:
         "provider_unreachable",
         "provider_rate_limited",
         "provider_auth_failed",
+        "provider_model_not_found",
+        "provider_request_rejected",
         "provider_credentials_unavailable",
     }:
         return "recognition"
@@ -173,6 +176,8 @@ def _source_read_failure_phase(code: str, content_type: str) -> str:
             "provider_unreachable",
             "provider_rate_limited",
             "provider_auth_failed",
+            "provider_model_not_found",
+            "provider_request_rejected",
             "provider_credentials_unavailable",
         }
         and (content_type.startswith("image/") or content_type == "application/pdf")
@@ -298,6 +303,7 @@ async def prepare_submission_sources(
     job_id: str,
     job_attempt: int,
     ocr_skill,
+    vision_unavailable_code: str | None = None,
     reporter=None,
 ) -> list[PreparedSubmissionSource]:
     """Persist originals, then OCR/read each source without batch-wide collapse."""
@@ -448,6 +454,8 @@ async def prepare_submission_sources(
                 ))
         except Exception as exc:
             code = classify_background_error(exc, "submission_parse_failed")
+            if code == "vision_provider_required" and vision_unavailable_code:
+                code = vision_unavailable_code
             logger.warning(
                 "One submission source could not be read; code=%s exception_type=%s",
                 code,

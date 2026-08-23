@@ -102,15 +102,15 @@ describe("submission source reason copy", () => {
     expect(enCopy.nextStep).not.toBe("");
   });
 
-  it("states that a vision-provider failure is an OCR capability problem", () => {
+  it("distinguishes a selected model's vision rejection from a missing model", () => {
     const copy = getSubmissionSourceReasonCopy(source({
-      reason_code: "vision_provider_required",
+      reason_code: "provider_vision_not_supported",
       failure_phase: "ocr",
     }), "zh-CN");
 
-    expect(copy.title).toContain("模型不支持图片 OCR");
-    expect(copy.description).toContain("并不是文件丢失或学生答案有误");
-    expect(copy.nextStep).toContain("视觉模型");
+    expect(copy.title).toContain("所选模型不支持图片输入");
+    expect(copy.description).toContain("原文件已保存");
+    expect(copy.nextStep).toContain("复用原文件重试");
   });
 
   it("identifies a provider timeout in the OCR phase as an OCR model failure", () => {

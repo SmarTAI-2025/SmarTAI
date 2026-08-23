@@ -34,7 +34,11 @@ from backend.auth import require_teacher
 from backend.db import assignment_repository, grading_repository, workflow_repository
 from backend.domain.errors import DomainError, InvalidTransition, NotFound, ValidationError
 from backend.knowledge.service import ingest_document
-from backend.llm.registry import ExpertRegistry, get_scoped_expert_registry
+from backend.llm.registry import (
+    ExpertRegistry,
+    get_scoped_expert_registry,
+    resolve_owner_default_provider_id,
+)
 from backend.models import TaskGradingSetup, User
 from backend.services import task_facade
 from backend.tools.file_processing import SUBMISSION_UPLOAD_MAX_BYTES
@@ -64,6 +68,11 @@ class InterpretTaskQueryRequest(BaseModel):
 class GradeRequest(BaseModel):
     language: str = "en"
     multi_sample_n: int | None = Field(default=None, ge=1, le=10)
+    expected_workflow_revision: int = Field(ge=0)
+
+
+class RetrySubmissionRecognitionRequest(BaseModel):
+    recognition_provider_id: str | None = Field(default=None, max_length=240)
     expected_workflow_revision: int = Field(ge=0)
 
 
@@ -340,6 +349,7 @@ async def extract_problems_endpoint(
         )
         if queued["status"] == "started":
             job_attempt = queued.pop("_job_attempt")
+            recognition_provider_id = queued.pop("_recognition_provider_id")
             background_tasks.add_task(
                 task_facade.run_task_problem_extraction,
                 task_id=task_id, owner_id=current.id,
@@ -348,6 +358,7 @@ async def extract_problems_endpoint(
                 job_attempt=job_attempt,
                 claimed_workflow_revision=queued["workflow_revision"],
                 replace_confirmed=replace_confirmed,
+                recognition_provider_id=recognition_provider_id,
             )
         return queued
     except DomainError as exc:
@@ -389,6 +400,9 @@ async def parse_submissions_endpoint(
         )
         if queued["status"] == "started":
             job_attempt = queued.pop("_job_attempt")
+            frozen_recognition_provider_id = queued.pop(
+                "_recognition_provider_id"
+            )
             background_tasks.add_task(
                 task_facade.run_task_submission_parsing,
                 task_id=task_id, owner_id=current.id,
@@ -397,11 +411,70 @@ async def parse_submissions_endpoint(
                 registry=registry, identity_mode=identity_mode,
                 job_attempt=job_attempt,
                 roster_entries=roster_entries,
-                recognition_provider_id=recognition_provider_id,
+                recognition_provider_id=frozen_recognition_provider_id,
                 replace_confirmed=replace_confirmed,
                 claimed_workflow_revision=queued["workflow_revision"],
             )
         return queued
+    except DomainError as exc:
+        return domain_error_response(exc)
+
+
+@router.post("/{task_id}/submission-recognition/{job_id}/retry")
+async def retry_submission_recognition_endpoint(
+    task_id: str,
+    job_id: str,
+    request: RetrySubmissionRecognitionRequest,
+    background_tasks: BackgroundTasks,
+    current: User = Depends(require_teacher),
+    registry: ExpertRegistry = Depends(get_scoped_expert_registry),
+):
+    """Retry a failed recognition job from its durable original upload."""
+    try:
+        workflow = workflow_repository.get_workflow(task_id, owner_id=current.id)
+        if workflow.workflow_revision != request.expected_workflow_revision:
+            raise ValidationError(
+                "The task changed before recognition retry.",
+                code="stale_revision",
+            )
+        retry = task_facade.load_submission_retry_upload(
+            task_id=task_id,
+            owner_id=current.id,
+            job_id=job_id,
+        )
+        queued = task_facade.queue_task_submission_parsing(
+            task_id=task_id,
+            owner_id=current.id,
+            filename=retry["filename"],
+            content=retry["content"],
+            content_type=retry["content_type"],
+            registry=registry,
+            identity_mode=retry["identity_mode"],
+            roster_entries=retry["roster_entries"],
+            roster_name=retry["roster_name"],
+            recognition_provider_id=request.recognition_provider_id,
+            replace_confirmed=retry["replace_confirmed"],
+        )
+        if queued["status"] == "started":
+            job_attempt = queued.pop("_job_attempt")
+            frozen_provider_id = queued.pop("_recognition_provider_id")
+            background_tasks.add_task(
+                task_facade.run_task_submission_parsing,
+                task_id=task_id,
+                owner_id=current.id,
+                job_id=queued["job_id"],
+                filename=retry["filename"],
+                content=retry["content"],
+                content_type=retry["content_type"],
+                registry=registry,
+                identity_mode=retry["identity_mode"],
+                job_attempt=job_attempt,
+                roster_entries=retry["roster_entries"],
+                recognition_provider_id=frozen_provider_id,
+                replace_confirmed=retry["replace_confirmed"],
+                claimed_workflow_revision=queued["workflow_revision"],
+            )
+        return {**queued, "reused_original_upload": True}
     except DomainError as exc:
         return domain_error_response(exc)
 
@@ -613,7 +686,7 @@ def _grading_setup_payload(task_id: str, owner_id: str, registry: ExpertRegistry
                 "scope", "is_shared", "editable", "max_concurrent", "rpm",
             )
         })
-    default_id = registry.pick_default_id()
+    default_id = resolve_owner_default_provider_id(owner_id, registry)
     suggested = None
     if default_id is not None:
         suggested = TaskGradingSetup(

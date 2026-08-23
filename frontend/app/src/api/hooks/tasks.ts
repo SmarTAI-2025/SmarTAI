@@ -207,6 +207,53 @@ export function useParseSubmissions() {
   });
 }
 
+export function useRetrySubmissionRecognition() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: tasksApi.retrySubmissionRecognition,
+    onSuccess: (data, variables) => {
+      if (data.status === "started" || data.status === "already_running") {
+        const activeTaskPatch = {
+          status: "parsing_submissions" as const,
+          parse_job_id: data.job_id ?? null,
+        };
+        queryClient.setQueryData<Task>(taskKeys.detail(variables.taskId), (current) => (
+          current ? { ...current, ...activeTaskPatch } : current
+        ));
+        queryClient.setQueryData<TaskStateSnapshot>(taskKeys.state(variables.taskId), (current) => (
+          current ? { ...current, ...activeTaskPatch } : current
+        ));
+      }
+      invalidateTask(queryClient, variables.taskId);
+    },
+  });
+}
+
+export function useRetryQuestionPreparation() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: tasksApi.retryQuestionPreparation,
+    onSuccess: (data, variables) => {
+      if (data.status === "started" || data.status === "already_running") {
+        const activeTaskPatch = {
+          status: "extracting_problems" as const,
+          extract_job_id: data.job_id ?? null,
+          last_failed_job_id: null,
+        };
+        queryClient.setQueryData<Task>(taskKeys.detail(variables.taskId), (current) => (
+          current ? { ...current, ...activeTaskPatch } : current
+        ));
+        queryClient.setQueryData<TaskStateSnapshot>(taskKeys.state(variables.taskId), (current) => (
+          current ? { ...current, ...activeTaskPatch } : current
+        ));
+      }
+      invalidateTask(queryClient, variables.taskId);
+    },
+  });
+}
+
 export function useUploadReference() {
   return useTaskUploadMutation((taskId, file, options) => tasksApi.uploadReference(taskId, file, options));
 }

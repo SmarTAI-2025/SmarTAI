@@ -57,13 +57,18 @@ const REASON_COPY: Record<string, ReasonFactory> = {
     nextStep: tx(locale, "在任务设置中改选已启用且与文件类型匹配的模型后重试。", "Choose an enabled model that supports the file type in task settings, then retry."),
   }),
   vision_provider_required: (locale) => ({
-    title: tx(locale, "当前模型不支持图片 OCR", "The selected model cannot OCR images"),
+    title: tx(locale, "尚未选择可用的视觉模型", "No usable vision model is selected"),
     description: tx(
       locale,
-      "这份文件需要读取图片或扫描页，但当前识别模型不支持图片输入。原文件已保存，并不是文件丢失或学生答案有误。",
-      "This file requires image or scanned-page reading, but the selected recognition model does not accept image input. The original is saved; the file was not lost and the student's answer is not at fault.",
+      "这份文件需要读取图片或扫描页，但当前阶段没有可用的视觉模型。原文件已保存，并不是文件丢失或学生答案有误。",
+      "This file requires image or scanned-page reading, but no usable vision model is selected for this stage. The original is saved; the file was not lost and the student's answer is not at fault.",
     ),
-    nextStep: tx(locale, "改用支持图片输入的视觉模型，或上传可复制文字版 PDF/TXT。", "Choose a vision-capable model, or upload a text-based PDF/TXT file."),
+    nextStep: tx(locale, "添加或启用支持图片输入的视觉模型后重试，或上传可复制文字版 PDF/TXT。", "Add or enable a vision-capable model and retry, or upload a text-based PDF/TXT file."),
+  }),
+  provider_vision_not_supported: (locale) => ({
+    title: tx(locale, "所选模型不支持图片输入", "The selected model does not support image input"),
+    description: tx(locale, "这份文件需要读取图片或扫描页，但本阶段明确选择的模型拒绝了视觉输入。原文件已保存。", "This file requires image or scanned-page reading, but the model explicitly selected for this stage rejected visual input. The original is saved."),
+    nextStep: tx(locale, "在作答上传页改选支持视觉的模型，直接复用原文件重试。", "Choose a vision-capable model on the submission upload page and retry using the preserved original."),
   }),
   ocr_empty_result: (locale) => ({
     title: tx(locale, "OCR 没有读到可用文字", "OCR found no usable text"),
@@ -78,6 +83,8 @@ const REASON_COPY: Record<string, ReasonFactory> = {
   provider_unreachable: (locale, source) => providerCopy(locale, source, "暂时无法连接模型服务", "The model service is unreachable", "检查网络或模型服务状态后重试。", "Check network and provider status, then retry."),
   provider_rate_limited: (locale, source) => providerCopy(locale, source, "模型服务触发限流", "The model service rate-limited the request", "等待限额恢复后重试，或换用另一个已启用模型。", "Wait for the quota window or retry with another enabled model."),
   provider_auth_failed: (locale, source) => providerCopy(locale, source, "模型凭据无效或无权限", "The model credentials were rejected", "到 BYOK 检查 API Key、模型权限和余额后重试。", "Check the API key, model permission, and balance in BYOK, then retry."),
+  provider_model_not_found: (locale, source) => providerCopy(locale, source, "模型名称不存在或无权限", "The model was not found or is unavailable", "核对模型名称，或改选另一个已启用模型后重试。", "Check the model name or retry with another enabled model."),
+  provider_request_rejected: (locale, source) => providerCopy(locale, source, "服务商拒绝了请求", "The provider rejected the request", "检查模型名称和中转地址，或改选其他模型后重试。", "Check the model name and relay URL, or retry with another model."),
   provider_credentials_unavailable: (locale, source) => providerCopy(locale, source, "无法读取已保存的模型凭据", "Saved model credentials could not be loaded", "重新保存 BYOK 凭据后重试。", "Save the BYOK credentials again, then retry."),
   submission_parse_invalid: (locale) => ({
     title: tx(locale, "模型返回格式无法解析", "The model returned an invalid structure"),

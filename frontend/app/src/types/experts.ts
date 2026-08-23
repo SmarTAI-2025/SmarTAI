@@ -19,6 +19,8 @@ export interface ExpertConfig {
   scope?: "shared" | "owner";
   is_shared?: boolean;
   editable?: boolean;
+  is_default?: boolean;
+  supports_vision?: boolean;
   verification_status?: "unverified" | "verified" | "failed" | "platform_managed";
   last_checked_at?: string | null;
   verified_at?: string | null;
@@ -39,6 +41,7 @@ export interface ExpertMutationResponse {
   status: "success" | "not_found" | string;
   provider_id?: string;
   enabled?: boolean;
+  is_default?: boolean;
   verification_status?: ExpertConfig["verification_status"];
   message?: string;
 }
@@ -58,6 +61,12 @@ export interface ExpertVerificationResponse {
   verification_status: "verified";
   last_checked_at: string;
   verified_at: string;
+}
+
+export interface SetDefaultExpertResponse {
+  status: "success";
+  provider_id: string;
+  is_default: true;
 }
 
 export interface ProviderCatalogItem {

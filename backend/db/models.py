@@ -143,6 +143,25 @@ class ProviderConfigRecord(Base):
     )
 
 
+class ProviderPreferenceRecord(Base):
+    """Owner-scoped model preference used by single-model product flows."""
+
+    __tablename__ = "provider_preferences"
+
+    owner_id: Mapped[str] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), primary_key=True
+    )
+    default_provider_id: Mapped[str | None] = mapped_column(
+        ForeignKey("provider_configs.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    created_at: Mapped[float] = mapped_column(Float, nullable=False, default=time.time)
+    updated_at: Mapped[float] = mapped_column(
+        Float, nullable=False, default=time.time, onupdate=time.time
+    )
+
+
 # ─── Course → enrollment ──────────────────────────────────────────────────────
 
 

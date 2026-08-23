@@ -9,6 +9,7 @@ import {
   Power,
   RefreshCw,
   ShieldCheck,
+  Star,
   Trash2,
 } from "lucide-react";
 import { useState, type FormEvent } from "react";
@@ -21,6 +22,7 @@ import {
   useProviderCatalog,
   useRemoveExpert,
   useSelectExpert,
+  useSetDefaultExpert,
   useUpdateExpert,
   useVerifyExpert,
 } from "@/api/hooks";
@@ -95,6 +97,7 @@ export function ExpertsPage() {
   const addExpert = useAddExpertKey();
   const updateExpert = useUpdateExpert();
   const selectExpert = useSelectExpert();
+  const setDefaultExpert = useSetDefaultExpert();
   const verifyExpert = useVerifyExpert();
   const removeExpert = useRemoveExpert();
   const [editor, setEditor] = useState<EditorTarget | null>(null);
@@ -115,6 +118,7 @@ export function ExpertsPage() {
     addExpert.isPending ||
     updateExpert.isPending ||
     selectExpert.isPending ||
+    setDefaultExpert.isPending ||
     verifyExpert.isPending ||
     removeExpert.isPending;
 
@@ -189,6 +193,20 @@ export function ExpertsPage() {
       );
     } catch (error) {
       toast.error(zh ? "无法更新启用状态" : "Unable to update status", {
+        description: safeExpertError(error, locale),
+      });
+    }
+  }
+
+  async function handleSetDefault(expert: ExpertConfig) {
+    if (!expert.enabled || expert.is_default) return;
+    try {
+      await setDefaultExpert.mutateAsync(expert.provider_id);
+      toast.success(zh ? "默认模型已更新" : "Default model updated", {
+        description: modelDisplayName(expert),
+      });
+    } catch (error) {
+      toast.error(zh ? "无法设置默认模型" : "Unable to set default model", {
         description: safeExpertError(error, locale),
       });
     }
@@ -371,6 +389,7 @@ export function ExpertsPage() {
                       onEdit={() => setEditor({ mode: "edit", expert })}
                       onToggle={() => void handleToggle(expert)}
                       onVerify={() => setConfirmation({ kind: "verify", expert })}
+                      onSetDefault={() => void handleSetDefault(expert)}
                       onDelete={() => setConfirmation({ kind: "delete", expert })}
                     />
                   ))}
@@ -387,6 +406,7 @@ export function ExpertsPage() {
                   onEdit={() => setEditor({ mode: "edit", expert })}
                   onToggle={() => void handleToggle(expert)}
                   onVerify={() => setConfirmation({ kind: "verify", expert })}
+                  onSetDefault={() => void handleSetDefault(expert)}
                   onDelete={() => setConfirmation({ kind: "delete", expert })}
                 />
               ))}
@@ -458,6 +478,7 @@ function ExpertTableRow({
   onEdit,
   onToggle,
   onVerify,
+  onSetDefault,
   onDelete,
 }: ExpertRowProps) {
   const zh = locale === "zh-CN";
@@ -474,6 +495,7 @@ function ExpertTableRow({
                   {zh ? "平台" : "Platform"}
                 </span>
               ) : null}
+              {expert.is_default ? <DefaultBadge locale={locale} /> : null}
             </div>
             <p className="mt-1 truncate text-xs text-muted-foreground" title={modelSecondaryLabel(expert)}>
               {modelSecondaryLabel(expert)}
@@ -501,6 +523,7 @@ function ExpertTableRow({
           onEdit={onEdit}
           onToggle={onToggle}
           onVerify={onVerify}
+          onSetDefault={onSetDefault}
           onDelete={onDelete}
         />
       </td>
@@ -515,6 +538,7 @@ interface ExpertRowProps {
   onEdit: () => void;
   onToggle: () => void;
   onVerify: () => void;
+  onSetDefault: () => void;
   onDelete: () => void;
 }
 
@@ -528,6 +552,7 @@ function ExpertMobileRow(props: ExpertRowProps) {
           <ProviderIcon providerType={expert.provider_type} />
           <div className="min-w-0">
             <p className="truncate font-semibold">{modelDisplayName(expert)}</p>
+            {expert.is_default ? <DefaultBadge locale={locale} /> : null}
             <p className="mt-1 truncate text-xs text-muted-foreground">
               {modelSecondaryLabel(expert)}
             </p>
@@ -554,6 +579,7 @@ function ExpertActions({
   onEdit,
   onToggle,
   onVerify,
+  onSetDefault,
   onDelete,
 }: ExpertRowProps) {
   const zh = locale === "zh-CN";
@@ -572,6 +598,11 @@ function ExpertActions({
       <RowAction label={zh ? "验证" : "Verify"} onClick={onVerify} disabled={disabled}>
         <ShieldCheck aria-hidden="true" size={14} />
       </RowAction>
+      {!expert.is_default && expert.enabled ? (
+        <RowAction label={zh ? "设为默认" : "Set default"} onClick={onSetDefault} disabled={disabled}>
+          <Star aria-hidden="true" size={14} />
+        </RowAction>
+      ) : null}
       <RowAction
         label={expert.enabled ? (zh ? "停用" : "Disable") : zh ? "启用" : "Enable"}
         onClick={onToggle}
@@ -588,6 +619,15 @@ function ExpertActions({
         <Trash2 aria-hidden="true" size={14} />
       </RowAction>
     </div>
+  );
+}
+
+function DefaultBadge({ locale }: { locale: "zh-CN" | "en-US" }) {
+  return (
+    <span className="inline-flex shrink-0 items-center gap-1 rounded-full bg-amber-50 px-2 py-0.5 text-[10px] font-semibold text-amber-700 dark:bg-amber-950/40 dark:text-amber-200">
+      <Star aria-hidden="true" className="h-3 w-3 fill-current" />
+      {locale === "zh-CN" ? "默认" : "Default"}
+    </span>
   );
 }
 
@@ -1092,6 +1132,8 @@ function safeExpertError(error: unknown, locale: "zh-CN" | "en-US") {
     expert_verification_stale: ["配置已在验证期间改变，请重新验证。", "The configuration changed during verification. Verify again."],
     provider_base_url_not_allowed: ["仅允许该服务商的官方 HTTPS API 地址。", "Only the provider's official HTTPS API URL is allowed."],
     expert_provider_conflict: ["相同服务商与模型的配置已经存在。", "A configuration for this provider and model already exists."],
+    default_provider_not_enabled: ["只能把已启用的模型设为默认。", "Only an enabled model can be the default."],
+    default_provider_replacement_required: ["请先把另一个已启用模型设为默认，再停用或删除当前默认模型。", "Set another enabled model as default before disabling or deleting the current default."],
   };
   if (code && messages[code]) return zh ? messages[code][0] : messages[code][1];
   return normalized.message || (zh ? "请求失败，请稍后重试。" : "Request failed. Try again later.");

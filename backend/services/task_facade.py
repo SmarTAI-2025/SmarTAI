@@ -40,6 +40,7 @@ from backend.db.models import (
     SubmissionRevisionRecord,
     UserRecord,
 )
+from backend.db.file_repository import get_file
 from backend.db.session import session_scope
 from backend.domain import education
 from backend.domain.errors import (
@@ -52,6 +53,10 @@ from backend.domain.errors import (
 )
 from backend.domain.source_outcomes import safe_source_diagnostic
 from backend.models import TaskGradingSetup
+from backend.llm.registry import (
+    resolve_owner_default_provider,
+    resolve_owner_default_provider_id,
+)
 from backend.progress.tracker import get_or_create_reporter, get_reporter, remove_reporter
 from backend.services import grading_runs
 from backend.services.background_errors import (
@@ -71,7 +76,11 @@ from backend.services.submission_source_pipeline import (
     prepare_submission_sources,
 )
 from backend.skills.ocr_ingest import LLMVisionOCRSkill
-from backend.tools.file_processing import extract_text_from_upload
+from backend.storage import get_storage
+from backend.tools.file_processing import (
+    SUBMISSION_UPLOAD_MAX_BYTES,
+    extract_text_from_upload,
+)
 
 
 SYSTEM_COURSE_CODE = "__SMARTAI_UNASSIGNED__"
@@ -84,6 +93,18 @@ logger = logging.getLogger(__name__)
 def _hash_json(value: Any) -> str:
     body = json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str)
     return hashlib.sha256(body.encode("utf-8")).hexdigest()
+
+
+def _registry_provider(registry, provider_id: str, owner_id: str):
+    getter = getattr(registry, "get", None)
+    if callable(getter):
+        return getter(provider_id)
+    default_id = resolve_owner_default_provider_id(owner_id, registry)
+    return (
+        resolve_owner_default_provider(owner_id, registry)
+        if default_id == provider_id
+        else None
+    )
 
 
 def _ensure_system_course(owner_id: str) -> str:
@@ -265,6 +286,7 @@ def get_task(*, task_id: str, owner_id: str, full: bool = True) -> dict:
         "pending_submission_file_name": workflow.pending_submission_file_name,
         "submission_identity_mode": workflow.submission_identity_mode,
         "submission_roster_name": workflow.submission_roster_name,
+        "question_recognition_provider_id": workflow.question_recognition_provider_id,
         "submission_recognition_provider_id": workflow.submission_recognition_provider_id,
         "reference_file_name": workflow.reference_file_name,
         "test_cases_file_name": workflow.test_cases_file_name,
@@ -912,11 +934,20 @@ def queue_task_problem_extraction(
         if expected_workflow_revision is None
         else expected_workflow_revision
     )
+    recognition_provider_id = resolve_owner_default_provider_id(owner_id, registry)
+    if recognition_provider_id is None or resolve_owner_default_provider(
+        owner_id,
+        registry,
+    ) is None:
+        raise ValidationError(
+            "No enabled provider is available.", code="no_provider_configured"
+        )
     digest = _hash_json({
         "source": input_hash or hashlib.sha256(content).hexdigest(),
         "base_revision": base_revision,
         "replace_confirmed": replace_confirmed,
         "extraction_options": extraction_options or {},
+        "recognition_provider_id": recognition_provider_id,
     })
     replay = find_task_operation(
         task_id=task_id, owner_id=owner_id,
@@ -932,10 +963,6 @@ def queue_task_problem_extraction(
     )
     if _has_draft_questions(task_id) and not replace_confirmed:
         _raise_replacement_confirmation_required()
-    if registry.pick_default() is None:
-        raise ValidationError(
-            "No enabled provider is available.", code="no_provider_configured"
-        )
     workflow, active = _ensure_no_other_active_operation(
         task_id=task_id, owner_id=owner_id,
         operation_type="problem_extraction", input_hash=digest,
@@ -956,6 +983,7 @@ def queue_task_problem_extraction(
             "base_workflow_revision": claim_base_revision,
             "replace_confirmed": replace_confirmed,
             "extraction_options": extraction_options or {},
+            "recognition_provider_id": recognition_provider_id,
         },
         expires_at=time.time() + 2 * 60 * 60,
     )
@@ -975,6 +1003,7 @@ def queue_task_problem_extraction(
                 "active_operation": "problem_extraction",
                 "active_job_id": operation.id, "extract_job_id": operation.id,
                 "problem_file_name": filename, "error_code": None,
+                "question_recognition_provider_id": recognition_provider_id,
             },
         )
     except VersionConflict:
@@ -988,6 +1017,7 @@ def queue_task_problem_extraction(
         "status": "started", "task_id": task_id, "job_id": operation.id,
         "workflow_revision": claimed_revision,
         "_job_attempt": operation.attempt,
+        "_recognition_provider_id": recognition_provider_id,
     }
 
 
@@ -996,15 +1026,20 @@ async def run_task_problem_extraction(
     content: bytes, registry, job_attempt: int,
     claimed_workflow_revision: int,
     replace_confirmed: bool, extraction_options: dict[str, Any] | None = None,
+    recognition_provider_id: str | None = None,
 ) -> None:
     """Run a previously claimed extraction job and durably record its outcome."""
     try:
-        provider = registry.pick_default()
+        provider = (
+            _registry_provider(registry, recognition_provider_id, owner_id)
+            if recognition_provider_id
+            else None
+        )
         if provider is None:
             raise ValidationError(
                 "No enabled provider is available.", code="no_provider_configured"
             )
-        vision = registry.pick_vision(provider)
+        vision = provider if getattr(provider, "supports_vision", False) else None
         ocr_skill = LLMVisionOCRSkill(vision) if vision is not None else None
         reporter = get_or_create_reporter(job_id)
         await reporter.configure_workflow(
@@ -1044,6 +1079,7 @@ async def run_task_problem_extraction(
             operation_id=job_id,
             expected_operation_attempt=job_attempt,
             operation_progress=snapshot,
+            recognition_provider_id=recognition_provider_id,
         )
     except Exception as exc:
         code = classify_background_error(exc, "problem_extraction_failed")
@@ -1064,6 +1100,7 @@ def _replace_draft_questions(
     replace_confirmed: bool = False, operation_id: str | None = None,
     expected_operation_attempt: int | None = None,
     operation_progress: dict | None = None,
+    recognition_provider_id: str | None = None,
 ) -> int:
     """Atomically CAS the workflow and replace the complete draft question set."""
     now = time.time()
@@ -1115,6 +1152,7 @@ def _replace_draft_questions(
                 workflow_revision=workflow_repository.AssignmentWorkflowRecord.workflow_revision + 1,
                 presentation_status="problems_ready", active_operation=None,
                 active_job_id=None, problem_file_name=filename,
+                question_recognition_provider_id=recognition_provider_id,
                 parse_job_id=None, grading_job_id=None,
                 last_failed_job_id=None,
                 submission_file_name=None,
@@ -1207,20 +1245,25 @@ def queue_task_submission_parsing(
         raise InvalidTransition("problems_required")
     if _active_submissions(task_id, owner_id) and not replace_confirmed:
         _raise_replacement_confirmation_required()
-    if recognition_provider_id:
+    resolved_provider_id = recognition_provider_id or resolve_owner_default_provider_id(
+        owner_id,
+        registry,
+    )
+    if resolved_provider_id:
         enabled_ids = {
             str(item.get("provider_id"))
             for item in registry.list_configs()
             if item.get("enabled")
         }
-        if recognition_provider_id not in enabled_ids:
+        if resolved_provider_id not in enabled_ids:
             raise ValidationError(
                 "The selected recognition provider is not enabled.",
                 code="recognition_provider_not_enabled",
             )
     provider = (
-        registry.get(recognition_provider_id)
-        if recognition_provider_id else registry.pick_default()
+        _registry_provider(registry, resolved_provider_id, owner_id)
+        if resolved_provider_id
+        else None
     )
     if provider is None:
         code = (
@@ -1233,7 +1276,7 @@ def queue_task_submission_parsing(
         "sha256": hashlib.sha256(content).hexdigest(),
         "identity_mode": identity_mode,
         "roster": roster_entries or [],
-        "provider": recognition_provider_id,
+        "provider": resolved_provider_id,
         "replace_confirmed": replace_confirmed,
         "base_revision": workflow.workflow_revision,
     })
@@ -1252,8 +1295,13 @@ def queue_task_submission_parsing(
         operation_type="submission_recognition", input_hash=digest,
         payload={
             "filename": filename,
+            "content_type": content_type,
+            "identity_mode": identity_mode,
+            "roster_entries": roster_entries or [],
+            "roster_name": roster_name,
             "base_workflow_revision": workflow.workflow_revision,
             "replace_confirmed": replace_confirmed,
+            "recognition_provider_id": resolved_provider_id,
         }, expires_at=time.time() + 2 * 60 * 60,
     )
     if not created:
@@ -1270,7 +1318,7 @@ def queue_task_submission_parsing(
         "pending_submission_file_name": filename,
         "submission_identity_mode": identity_mode,
         "submission_roster_name": roster_name,
-        "submission_recognition_provider_id": recognition_provider_id,
+        "submission_recognition_provider_id": resolved_provider_id,
         "error_code": None,
     }
     if replace_confirmed:
@@ -1303,6 +1351,77 @@ def queue_task_submission_parsing(
         "status": "started", "task_id": task_id, "job_id": operation.id,
         "workflow_revision": claimed_revision,
         "_job_attempt": operation.attempt,
+        "_recognition_provider_id": resolved_provider_id,
+    }
+
+
+def load_submission_retry_upload(
+    *,
+    task_id: str,
+    owner_id: str,
+    job_id: str,
+) -> dict[str, Any]:
+    """Load a failed submission upload from owner-scoped durable storage."""
+    operation = workflow_repository.get_operation(job_id, owner_id=owner_id)
+    if (
+        operation.assignment_id != task_id
+        or operation.operation_type != "submission_recognition"
+    ):
+        raise NotFound("submission_recognition")
+    if operation.status != "error":
+        raise InvalidTransition(
+            "Only a failed recognition operation can reuse its originals.",
+            code="submission_retry_not_available",
+        )
+    payload = dict(operation.payload or {})
+    stored = None
+    for file_id in operation.artifact_refs:
+        candidate = get_file(file_id=file_id, owner_id=owner_id)
+        if (
+            candidate is not None
+            and candidate.assignment_id == task_id
+            and candidate.kind == "submission_container"
+        ):
+            stored = candidate
+            break
+    if stored is None:
+        sources = source_outcome_repository.list_sources(
+            operation_id=operation.id,
+            owner_id=owner_id,
+            attempt=operation.attempt,
+        )
+        if len(sources) == 1:
+            candidate = get_file(
+                file_id=sources[0].stored_file_id,
+                owner_id=owner_id,
+            )
+            if (
+                candidate is not None
+                and candidate.assignment_id == task_id
+                and candidate.kind == "submission_source"
+            ):
+                stored = candidate
+    if stored is None or stored.size_bytes > SUBMISSION_UPLOAD_MAX_BYTES:
+        raise InvalidTransition(
+            "The original upload is not available for retry.",
+            code="submission_retry_source_unavailable",
+        )
+    storage = get_storage()
+    with storage.open(stored.storage_key) as stream:
+        content = stream.read(SUBMISSION_UPLOAD_MAX_BYTES + 1)
+    if not content or len(content) > SUBMISSION_UPLOAD_MAX_BYTES:
+        raise InvalidTransition(
+            "The original upload is not available for retry.",
+            code="submission_retry_source_unavailable",
+        )
+    return {
+        "filename": str(payload.get("filename") or stored.original_name),
+        "content": content,
+        "content_type": payload.get("content_type") or stored.content_type,
+        "identity_mode": str(payload.get("identity_mode") or "filename"),
+        "roster_entries": list(payload.get("roster_entries") or []),
+        "roster_name": payload.get("roster_name"),
+        "replace_confirmed": bool(payload.get("replace_confirmed")),
     }
 
 
@@ -1310,16 +1429,13 @@ async def run_task_submission_parsing(
     *, task_id: str, owner_id: str, job_id: str, filename: str,
     content: bytes, content_type: str | None, registry, job_attempt: int,
     identity_mode: str,
-    roster_entries: list[dict[str, str]] | None, recognition_provider_id: str | None,
+    roster_entries: list[dict[str, str]] | None, recognition_provider_id: str,
     replace_confirmed: bool, claimed_workflow_revision: int,
 ) -> None:
     reporter = get_or_create_reporter(job_id)
     current_failure_phase = "source_persistence"
     try:
-        provider = (
-            registry.get(recognition_provider_id)
-            if recognition_provider_id else registry.pick_default()
-        )
+        provider = _registry_provider(registry, recognition_provider_id, owner_id)
         if provider is None:
             raise ValidationError(
                 "No enabled recognition provider is available.",
@@ -1328,7 +1444,7 @@ async def run_task_submission_parsing(
                     if recognition_provider_id else "no_provider_configured"
                 ),
             )
-        vision = registry.pick_vision(provider)
+        vision = provider if getattr(provider, "supports_vision", False) else None
         ocr_skill = LLMVisionOCRSkill(vision) if vision is not None else None
         assignment = assignment_repository.get_assignment(task_id, actor_id=owner_id)
         questions = assignment_repository.list_questions(task_id, teacher_id=owner_id)
@@ -1341,6 +1457,9 @@ async def run_task_submission_parsing(
             job_id=job_id,
             job_attempt=job_attempt,
             ocr_skill=ocr_skill,
+            vision_unavailable_code=(
+                None if vision is not None else "provider_vision_not_supported"
+            ),
             reporter=reporter,
         )
         current_failure_phase = "recognition"

@@ -401,14 +401,51 @@ export function classifyRecoverableError(
     };
   }
 
+  if (code === "provider_vision_not_supported") {
+    return {
+      title: tx(locale, "所选模型不支持视觉输入", "The selected model does not support visual input"),
+      description: tx(
+        locale,
+        "这份图片或扫描版 PDF 需要视觉输入，但本阶段明确选择的模型拒绝了图片。原文件和已完成步骤均已保留；请在当前阶段改选支持视觉的模型后重试。",
+        "This image or scanned PDF requires visual input, but the model explicitly selected for this stage rejected images. The original and completed steps are preserved; choose a vision-capable model for this stage and retry.",
+      ),
+      actionLabel: tx(locale, "改选模型后重试", "Switch model and retry"),
+      actionKind: "retry",
+      tone: "warning",
+      technicalDetails,
+    };
+  }
+
+  if (code === "provider_model_not_found") {
+    return {
+      title: tx(locale, "模型名称不可用", "The model name is unavailable"),
+      description: tx(locale, "服务商找不到当前模型，或这个 API Key 无权使用它。请核对模型名称或在当前阶段改选其他模型；原文件已保留。", "The provider could not find this model, or the API key cannot access it. Check the model name or choose another model for this stage; the original is preserved."),
+      actionLabel: tx(locale, "改选模型后重试", "Switch model and retry"),
+      actionKind: "retry",
+      tone: "warning",
+      technicalDetails,
+    };
+  }
+
+  if (code === "provider_request_rejected") {
+    return {
+      title: tx(locale, "服务商拒绝了请求", "The provider rejected the request"),
+      description: tx(locale, "服务商没有接受当前模型或接口参数。请检查模型名称与中转地址，或改选其他模型后重试；原文件已保留。", "The provider did not accept the current model or endpoint parameters. Check the model name and relay URL, or choose another model and retry; the original is preserved."),
+      actionLabel: tx(locale, "检查配置后重试", "Check configuration and retry"),
+      actionKind: "retry",
+      tone: "warning",
+      technicalDetails,
+    };
+  }
+
   if (code === "vision_provider_required") {
     const byokReturnTo = context.returnTo?.trim();
     return {
-      title: tx(locale, "当前模型不支持图片 OCR", "The selected model cannot OCR images"),
+      title: tx(locale, "尚未选择可用的视觉模型", "No usable vision model is selected"),
       description: tx(
         locale,
-        "这份文件需要图像识别（OCR），但当前识别模型不支持图片输入。请在“模型与 BYOK”启用支持视觉输入的模型后重试，或上传可复制文字版文件。",
-        "This file needs image recognition (OCR), but the selected recognition model does not accept image input. Enable a vision-capable model in Models & BYOK and retry, or upload a text-based file.",
+        "这份文件需要图像识别（OCR），但当前阶段没有可用的视觉模型。请添加或启用支持视觉输入的模型后重试，或上传可复制文字版文件。",
+        "This file needs image recognition (OCR), but no usable vision model is available for this stage. Add or enable a vision-capable model and retry, or upload a text-based file.",
       ),
       actionLabel: tx(locale, "选择支持 OCR 的模型", "Choose an OCR-capable model"),
       actionHref: `/settings/byok${byokReturnTo ? `?returnTo=${encodeURIComponent(byokReturnTo)}` : ""}`,

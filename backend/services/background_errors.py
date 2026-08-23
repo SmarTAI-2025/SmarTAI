@@ -24,11 +24,14 @@ SAFE_BACKGROUND_ERROR_CODES = frozenset({
     "provider_credentials_unavailable",
     "recognition_provider_not_enabled",
     "vision_provider_required",
+    "provider_vision_not_supported",
     "problem_extraction_failed",
     "provider_timeout",
     "provider_unreachable",
     "provider_rate_limited",
     "provider_auth_failed",
+    "provider_model_not_found",
+    "provider_request_rejected",
     "material_import_failed",
     "ai_completion_failed",
     "replacement_confirmation_required",
@@ -79,6 +82,7 @@ RETRYABLE_BACKGROUND_ERROR_CODES = frozenset({
     "provider_timeout",
     "provider_unreachable",
     "provider_rate_limited",
+    "provider_vision_not_supported",
     "pdf_extraction_busy",
     "pdf_extraction_timeout",
     "submission_parse_failed",
@@ -203,7 +207,7 @@ def classify_background_error(
             "image input is not supported",
             "vision input is not supported",
         )):
-            return "vision_provider_required"
+            return "provider_vision_not_supported"
 
     if any(isinstance(item, RateLimitError) for item in chain):
         return "provider_rate_limited"
@@ -219,6 +223,10 @@ def classify_background_error(
         status_code = _http_status(item)
         if status_code in {401, 403}:
             return "provider_auth_failed"
+        if status_code == 404:
+            return "provider_model_not_found"
+        if status_code == 400:
+            return "provider_request_rejected"
         if status_code == 429:
             return "provider_rate_limited"
         if isinstance(item, PermanentLLMError) and any(

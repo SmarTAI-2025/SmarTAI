@@ -327,7 +327,8 @@ def test_per_question_uses_effective_normalized_results_and_owner_cache():
     seeded = _seed_graded_assignment(owner)
     other_seeded = _seed_graded_assignment(other, "other")
     provider = _Provider()
-    owner_client = _client(owner, _Registry(provider))
+    owner_registry = _Registry(provider)
+    owner_client = _client(owner, owner_registry)
     other_provider = _Provider()
     other_client = _client(other, _Registry(other_provider))
 
@@ -350,6 +351,17 @@ def test_per_question_uses_effective_normalized_results_and_owner_cache():
     ]
     assert breakdown["common_mistakes_md"] == "- Check signs"
     assert [mode for mode, _messages in provider.calls] == ["mistakes"]
+
+    # Changing the owner's default model must not reuse the previous model's
+    # Ask SmarTAI result.
+    replacement_provider = _Provider()
+    replacement_provider.provider_id = "provider-replacement"
+    owner_registry.provider = replacement_provider
+    assert owner_client.get(
+        f"/analytics/{seeded['task_id']}/per_question/Q1"
+    ).status_code == 200
+    assert [mode for mode, _messages in replacement_provider.calls] == ["mistakes"]
+    owner_registry.provider = provider
 
     # The derived summary is cached by owner/task/question/result fingerprint.
     assert owner_client.get(

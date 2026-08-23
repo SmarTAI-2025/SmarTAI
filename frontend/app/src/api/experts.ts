@@ -5,6 +5,7 @@ import type {
   ExpertMutationResponse,
   ExpertVerificationResponse,
   ProviderCatalogItem,
+  SetDefaultExpertResponse,
   UpdateExpertRequest,
 } from "@/types";
 
@@ -28,6 +29,12 @@ export function selectExpert(providerId: string, enabled: boolean): Promise<Expe
   return postJSON<ExpertMutationResponse>("/experts/select", {
     provider_id: providerId,
     enabled,
+  });
+}
+
+export function setDefaultExpert(providerId: string): Promise<SetDefaultExpertResponse> {
+  return putJSON<SetDefaultExpertResponse, { provider_id: string }>("/experts/default", {
+    provider_id: providerId,
   });
 }
 

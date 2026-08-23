@@ -40,6 +40,17 @@ export function useSelectExpert() {
   });
 }
 
+export function useSetDefaultExpert() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: expertsApi.setDefaultExpert,
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: expertKeys.all });
+    },
+  });
+}
+
 export function useUpdateExpert() {
   const queryClient = useQueryClient();
 

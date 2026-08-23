@@ -6,7 +6,7 @@ from dataclasses import dataclass
 
 from sqlalchemy import select
 
-from backend.db.models import ProviderConfigRecord
+from backend.db.models import ProviderConfigRecord, ProviderPreferenceRecord
 from backend.db.session import session_scope
 from backend.models import ProviderConfig
 from backend.security.secrets import EncryptedSecret, decrypt_secret, encrypt_secret
@@ -21,8 +21,111 @@ class StoredProviderConfig:
     verification_error_code: str | None = None
 
 
+class DefaultProviderReplacementRequired(RuntimeError):
+    """The current default cannot be removed while alternatives remain."""
+
+
+class DefaultProviderNotEnabled(RuntimeError):
+    """The requested default is not an enabled owner-scoped configuration."""
+
+
 def _associated_data(owner_id: str, record_id: str) -> str:
     return f"provider-config:{owner_id}:{record_id}"
+
+
+def _preference(
+    session,
+    owner_id: str,
+    *,
+    create: bool,
+) -> ProviderPreferenceRecord | None:
+    preference = session.get(ProviderPreferenceRecord, owner_id)
+    if preference is None and create:
+        now = time.time()
+        preference = ProviderPreferenceRecord(
+            owner_id=owner_id,
+            default_provider_id=None,
+            created_at=now,
+            updated_at=now,
+        )
+        session.add(preference)
+        session.flush()
+    return preference
+
+
+def _set_first_default_if_missing(session, owner_id: str) -> str | None:
+    preference = _preference(session, owner_id, create=True)
+    assert preference is not None
+    if preference.default_provider_id:
+        return preference.default_provider_id
+    provider_id = session.scalar(
+        select(ProviderConfigRecord.id)
+        .where(
+            ProviderConfigRecord.owner_id == owner_id,
+            ProviderConfigRecord.enabled.is_(True),
+        )
+        .order_by(ProviderConfigRecord.created_at, ProviderConfigRecord.id)
+        .limit(1)
+    )
+    if provider_id:
+        preference.default_provider_id = provider_id
+        preference.updated_at = time.time()
+    return provider_id
+
+
+def get_default_provider_id(owner_id: str) -> str | None:
+    with session_scope() as session:
+        preference = session.get(ProviderPreferenceRecord, owner_id)
+        return preference.default_provider_id if preference is not None else None
+
+
+def ensure_default_provider_id(owner_id: str) -> str | None:
+    """Backfill a missing preference without replacing an existing choice."""
+    with session_scope() as session:
+        return _set_first_default_if_missing(session, owner_id)
+
+
+def set_default_provider_id(owner_id: str, provider_id: str) -> str:
+    now = time.time()
+    with session_scope() as session:
+        provider = session.scalar(
+            select(ProviderConfigRecord).where(
+                ProviderConfigRecord.id == provider_id,
+                ProviderConfigRecord.owner_id == owner_id,
+                ProviderConfigRecord.enabled.is_(True),
+            )
+        )
+        if provider is None:
+            raise DefaultProviderNotEnabled(provider_id)
+        preference = _preference(session, owner_id, create=True)
+        assert preference is not None
+        preference.default_provider_id = provider.id
+        preference.updated_at = now
+        return provider.id
+
+
+def _prepare_default_for_removal(
+    session,
+    *,
+    owner_id: str,
+    provider_id: str,
+) -> None:
+    preference = _preference(session, owner_id, create=False)
+    if preference is None or preference.default_provider_id != provider_id:
+        return
+    alternative = session.scalar(
+        select(ProviderConfigRecord.id)
+        .where(
+            ProviderConfigRecord.owner_id == owner_id,
+            ProviderConfigRecord.id != provider_id,
+            ProviderConfigRecord.enabled.is_(True),
+        )
+        .limit(1)
+    )
+    if alternative is not None:
+        raise DefaultProviderReplacementRequired(provider_id)
+    preference.default_provider_id = None
+    preference.updated_at = time.time()
 
 
 def _to_config(record: ProviderConfigRecord, master_key: str) -> ProviderConfig:
@@ -77,6 +180,9 @@ def upsert_provider_config(owner_id: str, config: ProviderConfig, *, master_key:
         record.last_checked_at = None
         record.verification_error_code = None
         record.updated_at = now
+        session.flush()
+        if record.enabled:
+            _set_first_default_if_missing(session, owner_id)
         return record
 
 
@@ -206,8 +312,17 @@ def set_provider_enabled(owner_id: str, provider_id: str, enabled: bool) -> bool
         ))
         if record is None:
             return False
+        if not enabled:
+            _prepare_default_for_removal(
+                session,
+                owner_id=owner_id,
+                provider_id=provider_id,
+            )
         record.enabled = enabled
         record.updated_at = time.time()
+        session.flush()
+        if enabled:
+            _set_first_default_if_missing(session, owner_id)
         return True
 
 
@@ -219,5 +334,10 @@ def delete_provider_config(owner_id: str, provider_id: str) -> bool:
         ))
         if record is None:
             return False
+        _prepare_default_for_removal(
+            session,
+            owner_id=owner_id,
+            provider_id=provider_id,
+        )
         session.delete(record)
         return True

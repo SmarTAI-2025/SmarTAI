@@ -280,6 +280,9 @@ class ExpertRegistry:
                     "scope": "shared" if self._uses_shared_pool else "owner",
                     "is_shared": self._uses_shared_pool,
                     "editable": not self._uses_shared_pool,
+                    "supports_vision": bool(
+                        getattr(self._providers.get(pid), "supports_vision", False)
+                    ),
                     "verification_status": (
                         "platform_managed" if self._uses_shared_pool
                         else verification.get("verification_status", "unverified")
@@ -368,13 +371,17 @@ class ExpertRegistry:
     def pick_vision(self, preferred: Optional[BaseProvider] = None) -> Optional[BaseProvider]:
         """Return a provider that supports image input.
 
-        If the caller already picked a default provider and it supports vision,
-        keep using it. Otherwise fall back to the first enabled vision provider.
+        When a caller supplies a stage-selected provider, never switch to a
+        different configuration. An omitted preference retains the legacy
+        capability-discovery behavior used by read-only preflight endpoints.
         """
         available = self.list_available()
-        if preferred is not None and getattr(preferred, "supports_vision", False):
-            if any(p.provider_id == preferred.provider_id for p in available):
+        if preferred is not None:
+            if getattr(preferred, "supports_vision", False) and any(
+                p.provider_id == preferred.provider_id for p in available
+            ):
                 return preferred
+            return None
         for p in available:
             if getattr(p, "supports_vision", False):
                 return p
@@ -447,13 +454,74 @@ class ExpertRegistryView:
 
     def pick_vision(self, preferred: Optional[BaseProvider] = None) -> Optional[BaseProvider]:
         available = self.list_available()
-        if preferred is not None and getattr(preferred, "supports_vision", False):
-            if any(item.provider_id == preferred.provider_id for item in available):
+        if preferred is not None:
+            if getattr(preferred, "supports_vision", False) and any(
+                item.provider_id == preferred.provider_id for item in available
+            ):
                 return preferred
+            return None
         return next(
             (item for item in available if getattr(item, "supports_vision", False)),
             None,
         )
+
+
+def resolve_owner_default_provider_id(
+    owner_id: str,
+    registry: ExpertRegistry,
+) -> str | None:
+    """Resolve the owner's persisted default to a stable registry record ID.
+
+    Shared-pool and in-memory test registries retain their deterministic
+    registry default. Owner-scoped BYOK registries must use the persisted
+    preference and never silently switch after a saved choice becomes invalid.
+    """
+    def registry_default_id() -> str | None:
+        picker = getattr(registry, "pick_default_id", None)
+        if callable(picker):
+            return picker()
+        provider = registry.pick_default()
+        return str(provider.provider_id) if provider is not None else None
+
+    uses_shared_pool = getattr(registry, "uses_shared_pool", None)
+    if callable(uses_shared_pool) and uses_shared_pool():
+        return registry_default_id()
+
+    from backend.db.provider_repository import (
+        ensure_default_provider_id,
+        get_default_provider_id,
+        has_provider_configs,
+    )
+
+    if not has_provider_configs(owner_id):
+        return registry_default_id()
+    provider_id = get_default_provider_id(owner_id)
+    if provider_id is None:
+        provider_id = ensure_default_provider_id(owner_id)
+    enabled = {
+        str(item.get("provider_id"))
+        for item in registry.list_configs()
+        if item.get("enabled")
+    }
+    return provider_id if provider_id in enabled else None
+
+
+def resolve_owner_default_provider(
+    owner_id: str,
+    registry: ExpertRegistry,
+) -> BaseProvider | None:
+    provider_id = resolve_owner_default_provider_id(owner_id, registry)
+    if provider_id is None:
+        return None
+    getter = getattr(registry, "get", None)
+    if callable(getter):
+        return getter(provider_id)
+    provider = registry.pick_default()
+    return (
+        provider
+        if provider is not None and str(provider.provider_id) == provider_id
+        else None
+    )
 
 
 # ─── Module-level singleton ──────────────────────────────────────────────────

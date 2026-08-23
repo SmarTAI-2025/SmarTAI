@@ -9,7 +9,8 @@ import {
 import { Link, Navigate, useNavigate, useParams } from "react-router-dom";
 import { toast } from "sonner";
 import { getAPIErrorCode, normalizeAPIError } from "@/api/client";
-import { useParseSubmissions, useTask } from "@/api/hooks";
+import { useExperts, useParseSubmissions, useRetrySubmissionRecognition, useTask } from "@/api/hooks";
+import { StageProviderSelect } from "@/components/models/StageProviderSelect";
 import { NewTaskStepper } from "@/components/new-task/NewTaskStepper";
 import { useI18n } from "@/i18n/I18nProvider";
 import type { MessageKey } from "@/i18n/messages";
@@ -33,6 +34,7 @@ type SubmissionDraft = {
   selectedFile: File | null;
   rosterFile: File | null;
   identityMode: SubmissionIdentityMode;
+  recognitionProviderId: string;
 };
 
 const submissionDrafts = new Map<string, SubmissionDraft>();
@@ -40,9 +42,11 @@ const submissionDrafts = new Map<string, SubmissionDraft>();
 export function AddSubmissionsPage() {
   const { taskId } = useParams();
   const navigate = useNavigate();
-  const { t } = useI18n();
+  const { t, locale } = useI18n();
   const taskQuery = useTask(taskId);
+  const expertsQuery = useExperts();
   const parseSubmissions = useParseSubmissions();
+  const retryRecognition = useRetrySubmissionRecognition();
   const submissionInputRef = useRef<HTMLInputElement>(null);
   const rosterInputRef = useRef<HTMLInputElement>(null);
 
@@ -50,24 +54,66 @@ export function AddSubmissionsPage() {
   const [selectedFile, setSelectedFile] = useState<File | null>(savedDraft?.selectedFile ?? null);
   const [rosterFile, setRosterFile] = useState<File | null>(savedDraft?.rosterFile ?? null);
   const [identityMode, setIdentityMode] = useState<SubmissionIdentityMode>(savedDraft?.identityMode ?? "filename");
+  const [recognitionProviderId, setRecognitionProviderId] = useState(
+    savedDraft?.recognitionProviderId ?? "",
+  );
   const [isDragging, setIsDragging] = useState(false);
   const [uploadPercent, setUploadPercent] = useState(0);
   const [formError, setFormError] = useState<string | null>(null);
   const [needsModel, setNeedsModel] = useState(false);
 
   const task = taskQuery.data;
+  const enabledExperts = (expertsQuery.data ?? []).filter((expert) => expert.enabled);
   const hasExistingSubmissions = Boolean(
     task?.submission_file_name
       || task?.pending_submission_file_name
       || task?.student_count,
   );
+  const needsReplacementConfirmation = Boolean(
+    task?.submission_file_name || task?.student_count,
+  );
   const isRecognitionRunning = task?.status === "parsing_submissions";
   const isWorkflowBusy = task?.status === "extracting_problems";
+  const canRetryOriginal = Boolean(
+    task?.status === "error"
+      && task.last_failed_job_id
+      && task.pending_submission_file_name
+      && !selectedFile,
+  );
+  const isPending = parseSubmissions.isPending || retryRecognition.isPending;
+  const visibleFileName = selectedFile?.name ?? (
+    canRetryOriginal ? task?.pending_submission_file_name ?? null : null
+  );
 
   useEffect(() => {
     if (!taskId) return;
-    submissionDrafts.set(taskId, { selectedFile, rosterFile, identityMode });
-  }, [identityMode, rosterFile, selectedFile, taskId]);
+    submissionDrafts.set(taskId, {
+      selectedFile,
+      rosterFile,
+      identityMode,
+      recognitionProviderId,
+    });
+  }, [identityMode, recognitionProviderId, rosterFile, selectedFile, taskId]);
+
+  useEffect(() => {
+    if (expertsQuery.isLoading || expertsQuery.isError) return;
+    const enabled = (expertsQuery.data ?? []).filter((expert) => expert.enabled);
+    setRecognitionProviderId((current) => {
+      if (enabled.some((expert) => expert.provider_id === current)) return current;
+      const frozenProviderId = task?.submission_recognition_provider_id;
+      if (
+        frozenProviderId
+        && enabled.some((expert) => expert.provider_id === frozenProviderId)
+      ) {
+        return frozenProviderId;
+      }
+      return (
+        enabled.find((expert) => expert.is_default)?.provider_id
+        ?? enabled[0]?.provider_id
+        ?? ""
+      );
+    });
+  }, [expertsQuery.data, expertsQuery.isError, expertsQuery.isLoading, task?.submission_recognition_provider_id]);
 
   const uploadDisabledReason = isRecognitionRunning
     ? null
@@ -79,14 +125,16 @@ export function AddSubmissionsPage() {
           ? task.status === "grading"
             ? t("submissionUploadGradingLocked")
             : t("submissionUploadBusy")
-          : !selectedFile
+          : !recognitionProviderId
+            ? localText(locale, "需要先添加或选择一个已启用模型。", "Add or select an enabled model first.")
+          : !selectedFile && !canRetryOriginal
             ? t("submissionUploadFileRequired")
-            : identityMode === "roster" && !rosterFile
+            : !canRetryOriginal && identityMode === "roster" && !rosterFile
               ? t("submissionUploadRosterRequired")
               : null;
 
   function selectSubmission(file: File | undefined) {
-    if (!file || parseSubmissions.isPending) return;
+    if (!file || isPending) return;
     if (!hasSuffix(file.name, SUBMISSION_SUFFIXES)) {
       setFormError(t("submissionUploadUnsupported"));
       return;
@@ -98,7 +146,7 @@ export function AddSubmissionsPage() {
   }
 
   function selectRoster(file: File | undefined) {
-    if (!file || parseSubmissions.isPending) return;
+    if (!file || isPending) return;
     if (!hasSuffix(file.name, ROSTER_SUFFIXES)) {
       setFormError(t("submissionUploadErrorRoster"));
       return;
@@ -139,32 +187,42 @@ export function AddSubmissionsPage() {
       setFormError(uploadDisabledReason);
       return;
     }
-    const replaceConfirmed = hasExistingSubmissions
+    const replaceConfirmed = needsReplacementConfirmation && !canRetryOriginal
       ? window.confirm(t("submissionUploadReplaceConfirm"))
       : false;
-    if (hasExistingSubmissions && !replaceConfirmed) return;
+    if (needsReplacementConfirmation && !canRetryOriginal && !replaceConfirmed) return;
 
     try {
-      const response = await parseSubmissions.mutateAsync({
-        taskId,
-        file: selectedFile as File,
-        identityMode,
-        rosterFile: identityMode === "roster" ? rosterFile : null,
-        replaceConfirmed,
-        onProgress: setUploadPercent,
-      });
+      const response = canRetryOriginal && task?.last_failed_job_id
+        ? await retryRecognition.mutateAsync({
+            taskId,
+            jobId: task.last_failed_job_id,
+            recognitionProviderId,
+            expectedWorkflowRevision: task.workflow_revision,
+          })
+        : await parseSubmissions.mutateAsync({
+            taskId,
+            file: selectedFile as File,
+            identityMode,
+            rosterFile: identityMode === "roster" ? rosterFile : null,
+            recognitionProviderId,
+            replaceConfirmed,
+            onProgress: setUploadPercent,
+          });
       if (response.status === "already_done") {
         submissionDrafts.delete(taskId);
         toast.info(t("submissionUploadViewProgress"));
         navigate(`/tasks/${taskId}/submissions`);
       } else {
-        submissionDrafts.delete(taskId);
         toast.success(t("submissionUploadStarted"));
         navigate(`/tasks/${taskId}/submissions/progress`);
       }
     } catch (error) {
-      setNeedsModel(submissionErrorCode(error) === "recognition_provider_not_enabled");
-      setFormError(localizeSubmissionError(error, t));
+      setNeedsModel([
+        "no_provider_configured",
+        "recognition_provider_not_enabled",
+      ].includes(submissionErrorCode(error)));
+      setFormError(localizeSubmissionError(error, t, locale));
     }
   }
 
@@ -189,7 +247,7 @@ export function AddSubmissionsPage() {
           className={cn(
             "flex h-[230px] cursor-pointer flex-col items-center justify-center rounded-[12px] border bg-card px-6 text-center outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2",
             isDragging ? "border-primary bg-primary/[0.03]" : "border-primary",
-            parseSubmissions.isPending && "cursor-wait opacity-70",
+            isPending && "cursor-wait opacity-70",
           )}
           role="button"
           tabIndex={0}
@@ -214,24 +272,26 @@ export function AddSubmissionsPage() {
             type="file"
             className="hidden"
             accept={SUBMISSION_SUFFIXES.join(",")}
-            disabled={parseSubmissions.isPending}
+            disabled={isPending}
             onChange={handleSubmissionInput}
           />
           <span className="inline-flex h-14 w-14 items-center justify-center rounded-full bg-primary/[0.14] text-primary">
             <FileUp aria-hidden="true" className="h-6 w-6" />
           </span>
           <p className="mt-[14px] text-[18px] font-semibold leading-[22px] text-foreground">
-            {selectedFile ? selectedFile.name : t("submissionUploadDropTitle")}
+            {visibleFileName ?? t("submissionUploadDropTitle")}
           </p>
           <p className="mt-2 text-[13px] leading-5 text-muted-foreground">
             {selectedFile
               ? `${formatFileSize(selectedFile.size)} · ${t("submissionUploadOcrLimit")}`
+              : canRetryOriginal
+                ? localText(locale, "原文件已安全保留，可直接改选模型后重试。", "The original file is preserved; switch models and retry without uploading again.")
               : t("submissionUploadFormats")}
           </p>
           <span className="mt-[17px] inline-flex h-10 min-w-[130px] items-center justify-center rounded-[8px] border bg-card px-4 text-[14px] font-semibold text-foreground">
-            {selectedFile ? t("submissionUploadReplace") : t("submissionUploadChoose")}
+            {visibleFileName ? t("submissionUploadReplace") : t("submissionUploadChoose")}
           </span>
-          {parseSubmissions.isPending ? (
+          {isPending ? (
             <div className="mt-3 h-1 w-[min(300px,70%)] overflow-hidden rounded-full bg-muted" aria-label={`${uploadPercent}%`}>
               <div className="h-full rounded-full bg-primary transition-[width]" style={{ width: `${uploadPercent}%` }} />
             </div>
@@ -241,6 +301,26 @@ export function AddSubmissionsPage() {
         <p className="mt-3 rounded-[8px] border border-blue-200 bg-blue-50/60 px-4 py-3 text-[12px] leading-5 text-blue-900 dark:border-blue-900 dark:bg-blue-950/20 dark:text-blue-100">
           {t("submissionUploadFileContract")}
         </p>
+
+        <StageProviderSelect
+          id="submission-recognition-provider"
+          label={localText(locale, "作答识别模型", "Submission recognition model")}
+          hint={localText(
+            locale,
+            "已自动选择默认模型；有多个模型时可在这里改选。图片或扫描版 PDF 需要支持图片/视觉输入的模型，若失败会明确显示认证、模型、限流、网络或视觉能力原因。",
+            "Your default model is selected automatically; choose another here when needed. Images and scanned PDFs require visual input support; failures identify authentication, model, rate-limit, network, or vision capability errors.",
+          )}
+          experts={enabledExperts}
+          value={recognitionProviderId}
+          disabled={isPending || expertsQuery.isLoading}
+          locale={locale}
+          onChange={(providerId) => {
+            setRecognitionProviderId(providerId);
+            setFormError(null);
+            setNeedsModel(false);
+          }}
+          className="mt-5"
+        />
 
         <section className="mt-10 flex min-h-[145px] flex-col rounded-[10px] border bg-card px-[29px] pb-5 pt-[27px] sm:h-[145px]">
           <h2 className="text-[18px] font-bold leading-[22px] text-foreground">
@@ -253,7 +333,7 @@ export function AddSubmissionsPage() {
                 type="button"
                 role="radio"
                 aria-checked={identityMode === option.mode}
-                disabled={parseSubmissions.isPending}
+                disabled={isPending}
                 onClick={() => {
                   setIdentityMode(option.mode);
                   setFormError(null);
@@ -289,7 +369,7 @@ export function AddSubmissionsPage() {
                   type="file"
                   className="hidden"
                   accept={ROSTER_SUFFIXES.join(",")}
-                  disabled={parseSubmissions.isPending}
+                  disabled={isPending}
                   onChange={handleRosterInput}
                 />
                 <button
@@ -334,15 +414,17 @@ export function AddSubmissionsPage() {
           <button
             type="button"
             className="inline-flex h-10 w-full shrink-0 items-center justify-center rounded-[8px] bg-primary px-4 text-[14px] font-semibold leading-[18px] text-primary-foreground outline-none transition hover:opacity-90 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50 sm:w-[180px]"
-            disabled={parseSubmissions.isPending || isWorkflowBusy}
+            disabled={isPending || isWorkflowBusy}
             title={uploadDisabledReason ?? undefined}
             aria-describedby={formError || hasExistingSubmissions || uploadDisabledReason ? "submission-upload-action-message" : undefined}
             onClick={() => void handleStart()}
           >
-            {parseSubmissions.isPending ? (
+            {isPending ? (
               <><LoaderCircle aria-hidden="true" className="mr-2 h-4 w-4 animate-spin" />{t("submissionUploadStarting")}</>
             ) : isRecognitionRunning && !selectedFile
               ? t("submissionUploadViewProgress")
+              : canRetryOriginal
+                ? localText(locale, "用所选模型重试", "Retry with selected model")
               : hasExistingSubmissions
                 ? t("submissionUploadOverwriteStart")
                 : t("submissionUploadStart")}
@@ -381,7 +463,11 @@ function formatFileSize(bytes: number) {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MiB`;
 }
 
-function localizeSubmissionError(error: unknown, t: (key: MessageKey) => string) {
+function localizeSubmissionError(
+  error: unknown,
+  t: (key: MessageKey) => string,
+  locale: "zh-CN" | "en-US",
+) {
   const normalized = normalizeAPIError(error);
   const code = submissionErrorCode(error);
   if (["submission_source_unsupported", "submission_source_empty", "submission_archive_empty", "submission_archive_invalid"].includes(code)) {
@@ -391,14 +477,49 @@ function localizeSubmissionError(error: unknown, t: (key: MessageKey) => string)
     return t("submissionUploadErrorTooLarge");
   }
   if (code.startsWith("submission_roster_")) return t("submissionUploadErrorRoster");
-  if (code === "recognition_provider_not_enabled") return t("submissionUploadErrorProvider");
+  if (["no_provider_configured", "recognition_provider_not_enabled"].includes(code)) {
+    return t("submissionUploadErrorProvider");
+  }
+  if (code === "provider_vision_not_supported") {
+    return localText(locale, "所选模型不支持这份图片或扫描版 PDF 的视觉输入。原文件已保留，请改选支持视觉的模型后重试。", "The selected model does not support visual input for this image or scanned PDF. The original file is preserved; choose a vision-capable model and retry.");
+  }
+  if (code === "vision_provider_required") {
+    return localText(locale, "这份文件需要视觉识别，请选择一个支持图片输入的模型。", "This file requires visual recognition. Choose a model that supports image input.");
+  }
+  if (code === "provider_auth_failed") {
+    return localText(locale, "所选模型的 API Key 无效或没有调用权限。请在模型与 BYOK 中修正后重试。", "The selected model's API key is invalid or lacks permission. Fix it in Models & BYOK and retry.");
+  }
+  if (code === "provider_model_not_found") {
+    return localText(locale, "所选模型名称不存在或当前账户无权使用。请检查模型名称或改选其他模型。", "The selected model was not found or is unavailable to this account. Check the model name or choose another model.");
+  }
+  if (code === "provider_rate_limited") {
+    return localText(locale, "服务商限制了本次请求，原文件已保留，请稍后重试。", "The provider rate-limited this request. The original file is preserved; try again later.");
+  }
+  if (code === "provider_timeout") {
+    return localText(locale, "所选模型响应超时，原文件已保留，请重试或改选其他模型。", "The selected model timed out. The original file is preserved; retry or choose another model.");
+  }
+  if (code === "provider_unreachable") {
+    return localText(locale, "暂时无法连接所选模型服务，原文件已保留。请检查网络或中转地址后重试。", "The selected model service is unreachable. The original file is preserved; check the network or relay URL and retry.");
+  }
+  if (code === "provider_request_rejected") {
+    return localText(locale, "所选服务商拒绝了请求。请检查模型与接口配置后重试。", "The selected provider rejected the request. Check the model and endpoint configuration, then retry.");
+  }
+  if (["submission_retry_not_available", "submission_retry_source_unavailable"].includes(code)) {
+    return localText(locale, "原文件已不可用于直接重试，请重新选择文件。", "The original file is no longer available for direct retry. Select the file again.");
+  }
   if (["workflow_busy", "different_submission_running"].includes(code)) return t("submissionUploadBusy");
   if (["invalid_state", "stale_revision", "replacement_confirmation_required"].includes(code)) {
     return t("submissionUploadErrorConflict");
   }
-  return t("submissionUploadErrorGeneric");
+  return normalized.status === 0 && normalized.message
+    ? normalized.message
+    : t("submissionUploadErrorGeneric");
 }
 
 function submissionErrorCode(error: unknown) {
   return getAPIErrorCode(error) ?? "";
+}
+
+function localText(locale: "zh-CN" | "en-US", zh: string, en: string) {
+  return locale === "zh-CN" ? zh : en;
 }
