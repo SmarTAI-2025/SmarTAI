@@ -146,6 +146,57 @@ class ProviderConfigRecord(Base):
 # ─── Course → enrollment ──────────────────────────────────────────────────────
 
 
+# Specialized OCR credentials are deliberately not LLM provider configs.
+class OCRProviderCredentialRecord(Base):
+    """Encrypted credentials for a specialized, owner-only OCR provider.
+
+    This table is intentionally separate from ``provider_configs``: OCR
+    ingestion is not an LLM expert and these records must never enter the
+    shared expert pool or its default selector.
+    """
+
+    __tablename__ = "ocr_provider_credentials"
+    __table_args__ = (
+        UniqueConstraint(
+            "owner_id", "provider_type",
+            name="uq_ocr_provider_credentials_owner_provider",
+        ),
+        CheckConstraint(
+            "provider_type = 'baidu_unlimited_ocr'",
+            name="ck_ocr_provider_credentials_provider_type",
+        ),
+        CheckConstraint(
+            "verification_status IN "
+            "('unverified', 'credentials_verified', 'failed')",
+            name="ck_ocr_provider_credentials_verification_status",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    owner_id: Mapped[str] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    provider_type: Mapped[str] = mapped_column(String(64), nullable=False)
+    encrypted_api_key: Mapped[str] = mapped_column(Text, nullable=False)
+    api_key_nonce: Mapped[str] = mapped_column(String(128), nullable=False)
+    api_key_version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    encrypted_secret_key: Mapped[str] = mapped_column(Text, nullable=False)
+    secret_key_nonce: Mapped[str] = mapped_column(String(128), nullable=False)
+    secret_key_version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    verification_status: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="unverified"
+    )
+    last_checked_at: Mapped[float | None] = mapped_column(Float, nullable=True)
+    verification_error_code: Mapped[str | None] = mapped_column(
+        String(128), nullable=True
+    )
+    created_at: Mapped[float] = mapped_column(Float, nullable=False, default=time.time)
+    updated_at: Mapped[float] = mapped_column(
+        Float, nullable=False, default=time.time, onupdate=time.time
+    )
+
+
+# Course and enrollment records follow the provider-specific credential table.
 class CourseRecord(Base):
     __tablename__ = "courses"
 

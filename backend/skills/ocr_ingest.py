@@ -12,6 +12,11 @@ from typing import Literal, Protocol
 
 from backend.config import settings
 from backend.llm.providers import BaseProvider, VisionImage
+from backend.tools.baidu_unlimited_ocr import (
+    PROVIDER_ID as BAIDU_UNLIMITED_OCR_PROVIDER_ID,
+    BaiduUnlimitedOCRClient,
+    BaiduUnlimitedOCRError,
+)
 from backend.tools.structured_llm import format_math_and_quotes
 
 OCRPurpose = Literal["problems", "submissions", "reference", "test_cases"]
@@ -39,6 +44,18 @@ class OCRIngestSkill(Protocol):
     async def recognize_images(
         self,
         images: list[OCRImage],
+        purpose: OCRPurpose,
+    ) -> OCRResult:
+        ...
+
+
+class DocumentOCRIngestSkill(Protocol):
+    """Whole-document OCR contract for providers that preserve page layout."""
+
+    async def recognize_document(
+        self,
+        file_data: bytes,
+        file_name: str,
         purpose: OCRPurpose,
     ) -> OCRResult:
         ...
@@ -127,6 +144,75 @@ class LLMVisionOCRSkill:
             input_tokens=response.input_tokens,
             output_tokens=response.output_tokens,
             warnings=[],
+        )
+
+
+class BaiduUnlimitedOCRSkill:
+    """OCR skill backed by an explicitly injected owner BYOK client.
+
+    This class is intentionally not registered in ``ExpertRegistry`` and is
+    not a default OCR selector.  A request-scoped factory must first resolve
+    and decrypt the authenticated owner's OCR credentials, then inject the
+    resulting client here.
+    """
+
+    name = "BaiduUnlimitedOCRSkill"
+
+    _IMAGE_SUFFIX_BY_MEDIA_TYPE = {
+        "image/jpeg": ".jpg",
+        "image/png": ".png",
+        "image/bmp": ".bmp",
+        "image/tiff": ".tiff",
+    }
+
+    def __init__(self, client: BaiduUnlimitedOCRClient):
+        self.client = client
+
+    async def recognize_document(
+        self,
+        file_data: bytes,
+        file_name: str,
+        purpose: OCRPurpose = "submissions",
+    ) -> OCRResult:
+        # Baidu's document parser has no prompt field; ``purpose`` remains in
+        # the skill contract so agents can swap OCR implementations without
+        # coupling themselves to provider-specific signatures.
+        del purpose
+        response = await self.client.recognize_document(file_data, file_name)
+        return OCRResult(
+            text=response.markdown.strip(),
+            provider=BAIDU_UNLIMITED_OCR_PROVIDER_ID,
+            # The official contract names a service, not a selectable model
+            # identifier.  Do not manufacture one for product messaging.
+            model=None,
+            duration_ms=response.duration_ms,
+            warnings=[],
+        )
+
+    async def recognize_images(
+        self,
+        images: list[OCRImage],
+        purpose: OCRPurpose,
+    ) -> OCRResult:
+        if not images:
+            return OCRResult(text="", provider=BAIDU_UNLIMITED_OCR_PROVIDER_ID)
+        if len(images) != 1:
+            # Do not silently fan out into multiple asynchronous/billable OCR
+            # tasks.  Callers with a multi-page document should use the whole-
+            # document method with the original bytes.
+            raise BaiduUnlimitedOCRError("ocr_multiple_images_unsupported")
+        image = images[0]
+        media_type = (image.media_type or "").split(";", 1)[0].strip().lower()
+        suffix = self._IMAGE_SUFFIX_BY_MEDIA_TYPE.get(media_type)
+        if suffix is None:
+            raise BaiduUnlimitedOCRError("ocr_unsupported_file")
+        # Never forward ``image.label``: upload labels often contain a student
+        # name or assignment identifier.  The tool also re-sanitizes this name
+        # before it crosses the provider boundary.
+        return await self.recognize_document(
+            image.data,
+            f"image{suffix}",
+            purpose,
         )
 
 
