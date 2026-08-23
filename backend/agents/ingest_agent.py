@@ -10,8 +10,11 @@ The API routers in backend/api/ingest.py become thin HTTP wrappers over this.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import logging
+from collections import defaultdict
+from dataclasses import dataclass, replace
 from typing import Any, Callable, Dict, List, Literal, Optional, TYPE_CHECKING
 
 from langchain_core.messages import SystemMessage, HumanMessage
@@ -26,7 +29,15 @@ from backend.models import (
     TestCase,
 )
 from backend.llm.providers import BaseProvider
-from backend.tools.structured_llm import extract_and_parse_json, ainvoke_with_retry
+from backend.services.background_errors import (
+    classify_background_error,
+    is_retryable_background_error,
+)
+from backend.tools.structured_llm import (
+    StructuredOutputBoundsError,
+    ainvoke_with_retry,
+    extract_and_parse_json,
+)
 
 if TYPE_CHECKING:
     from backend.progress.tracker import ProgressReporter
@@ -209,6 +220,398 @@ async def extract_problems(
 
 # ─── Student answer parsing ──────────────────────────────────────────────────
 
+
+@dataclass(frozen=True)
+class SubmissionSourceInput:
+    source_id: str
+    stored_file_id: str
+    filename: str
+    content_type: str
+    text: str | None
+    pre_error_code: str | None = None
+    failure_phase: str | None = None
+    retryable: bool = False
+
+
+@dataclass(frozen=True)
+class SubmissionSourceParseResult:
+    source_id: str
+    stored_file_id: str
+    filename: str
+    status: Literal[
+        "parsed", "parse_failed", "identity_conflict", "no_matching_answer"
+    ]
+    student: Dict[str, Any] | None
+    student_candidate: str | None
+    matched_answer_count: int
+    unknown_question_ids: tuple[str, ...]
+    stable_error_code: str | None
+    failure_phase: str | None
+    retryable: bool
+
+
+async def parse_student_answer_sources(
+    sources: List[Any],
+    problems_data: Dict[str, Dict[str, Any]],
+    provider: BaseProvider,
+    reporter: Optional["ProgressReporter"] = None,
+    *,
+    identity_mode: Literal["filename", "roster", "manual_review"] = "filename",
+    roster_entries: Optional[List[Dict[str, str]]] = None,
+) -> list[SubmissionSourceParseResult]:
+    """Return exactly one durable-ready result for every original source."""
+    if not sources:
+        raise ValueError("No student files to process.")
+
+    if reporter:
+        await reporter.set_phase("parsing")
+        await reporter.set_totals(students=len(sources), questions=len(problems_data))
+        await reporter.set_stage_metrics(
+            files_total=len(sources),
+            files_processed=0,
+            submissions_recognized=0,
+            identities_matched=0,
+            identities_needing_review=0,
+            answers_split=0,
+            parse_failures=0,
+        )
+        await reporter.set_current_step(
+            "preparing_submission_files", message="Submission files prepared."
+        )
+        await reporter.set_current_step(
+            "recognizing_submissions", message="Submission recognition started."
+        )
+
+    prompt_problems = [
+        {
+            "q_id": problem["q_id"],
+            "number": problem["number"],
+            "type": problem["type"],
+            "stem": problem["stem"],
+        }
+        for problem in problems_data.values()
+    ]
+    problems_json = json.dumps(prompt_problems, ensure_ascii=False, indent=1)
+    known_question_ids = set(problems_data)
+    safe_roster = [
+        {
+            "stu_id": str(entry.get("stu_id") or "").strip(),
+            "stu_name": str(entry.get("stu_name") or "").strip(),
+        }
+        for entry in (roster_entries or [])
+        if str(entry.get("stu_id") or "").strip()
+    ]
+    if identity_mode == "roster":
+        identity_instruction = (
+            "Extract only identity candidates visible in this filename or submission. "
+            "The server matches them against a private roster; do not invent an identity."
+        )
+    elif identity_mode == "manual_review":
+        identity_instruction = (
+            "Extract the most likely identity. The teacher will review it before use."
+        )
+    else:
+        identity_instruction = (
+            "Use the filename as the primary identity source, then the submission content "
+            "only when the filename has no usable student ID or name."
+        )
+
+    semaphore = asyncio.Semaphore(20)
+
+    async def process_one_unchecked(source: Any) -> SubmissionSourceParseResult:
+        async with semaphore:
+            if source.pre_error_code:
+                return SubmissionSourceParseResult(
+                    source_id=source.source_id,
+                    stored_file_id=source.stored_file_id,
+                    filename=source.filename,
+                    status="parse_failed",
+                    student=None,
+                    student_candidate=None,
+                    matched_answer_count=0,
+                    unknown_question_ids=(),
+                    stable_error_code=source.pre_error_code,
+                    failure_phase=source.failure_phase or "source_read",
+                    retryable=bool(source.retryable),
+                )
+            if not source.text or not source.text.strip():
+                return SubmissionSourceParseResult(
+                    source_id=source.source_id,
+                    stored_file_id=source.stored_file_id,
+                    filename=source.filename,
+                    status="parse_failed",
+                    student=None,
+                    student_candidate=None,
+                    matched_answer_count=0,
+                    unknown_question_ids=(),
+                    stable_error_code="submission_source_empty",
+                    failure_phase="source_read",
+                    retryable=False,
+                )
+
+            user_message = (
+                f"**[Filename]**: {source.filename}\n\n"
+                f"**[Identity Matching Rule]**: {identity_instruction}\n\n"
+                f"**[Question Data (JSON)]**:\n{problems_json}\n\n"
+                f"**[Student Submission Content]**:\n---\n{source.text}\n---"
+            )
+            messages = [
+                SystemMessage(content=HW_SYSTEM_PROMPT),
+                HumanMessage(content=user_message),
+            ]
+            try:
+                response = await ainvoke_with_retry(provider, messages)
+            except Exception as exc:
+                code = classify_background_error(exc, "submission_parse_failed")
+                logger.warning(
+                    "Submission recognition provider call failed; code=%s exception_type=%s",
+                    code,
+                    type(exc).__name__,
+                )
+                return SubmissionSourceParseResult(
+                    source_id=source.source_id,
+                    stored_file_id=source.stored_file_id,
+                    filename=source.filename,
+                    status="parse_failed",
+                    student=None,
+                    student_candidate=None,
+                    matched_answer_count=0,
+                    unknown_question_ids=(),
+                    stable_error_code=code,
+                    failure_phase="recognition",
+                    retryable=is_retryable_background_error(code),
+                )
+            try:
+                parsed = extract_and_parse_json(response.content, StudentSubmission)
+            except StructuredOutputBoundsError as exc:
+                logger.warning(
+                    "Submission recognition exceeded safe field bounds; exception_type=%s",
+                    type(exc).__name__,
+                )
+                return SubmissionSourceParseResult(
+                    source_id=source.source_id,
+                    stored_file_id=source.stored_file_id,
+                    filename=source.filename,
+                    status="parse_failed",
+                    student=None,
+                    student_candidate=None,
+                    matched_answer_count=0,
+                    unknown_question_ids=(),
+                    stable_error_code="submission_model_field_too_long",
+                    failure_phase="structured_parse",
+                    retryable=False,
+                )
+            except Exception as exc:
+                logger.warning(
+                    "Submission recognition returned invalid structured data; exception_type=%s",
+                    type(exc).__name__,
+                )
+                return SubmissionSourceParseResult(
+                    source_id=source.source_id,
+                    stored_file_id=source.stored_file_id,
+                    filename=source.filename,
+                    status="parse_failed",
+                    student=None,
+                    student_candidate=None,
+                    matched_answer_count=0,
+                    unknown_question_ids=(),
+                    stable_error_code="submission_parse_invalid",
+                    failure_phase="structured_parse",
+                    retryable=is_retryable_background_error(
+                        "submission_parse_invalid"
+                    ),
+                )
+
+            payload = parsed.model_dump()
+            payload["source_filename"] = source.filename
+            payload["source_id"] = source.source_id
+            payload["stored_file_id"] = source.stored_file_id
+            payload["identity_match_method"] = identity_mode
+            if identity_mode == "roster":
+                match = _match_roster_identity(payload, source.filename, safe_roster)
+                if match is not None:
+                    payload["stu_id"] = match["stu_id"]
+                    payload["stu_name"] = match["stu_name"]
+                    payload["identity_status"] = "matched"
+                else:
+                    payload["identity_status"] = "needs_review"
+            elif identity_mode == "manual_review":
+                payload["identity_status"] = "needs_review"
+            else:
+                unknown_name = str(payload.get("stu_name") or "").strip() in {
+                    "", "[Unknown Student]"
+                }
+                candidate_id = str(payload.get("stu_id") or "").strip()
+                fallback_id = candidate_id in {"", source.filename}
+                payload["identity_status"] = (
+                    "needs_review" if unknown_name or fallback_id else "matched"
+                )
+
+            candidate = str(payload.get("stu_id") or "").strip() or None
+            all_answers = list(payload.get("stu_ans") or [])
+            if not all_answers:
+                return SubmissionSourceParseResult(
+                    source_id=source.source_id,
+                    stored_file_id=source.stored_file_id,
+                    filename=source.filename,
+                    status="no_matching_answer",
+                    student=None,
+                    student_candidate=candidate,
+                    matched_answer_count=0,
+                    unknown_question_ids=(),
+                    stable_error_code="no_answer_content_detected",
+                    failure_phase="answer_detection",
+                    retryable=False,
+                )
+            matched_answers = [
+                answer
+                for answer in all_answers
+                if str(answer.get("q_id") or "") in known_question_ids
+            ]
+            unknown_question_ids = tuple(dict.fromkeys(
+                str(answer.get("q_id") or "")
+                for answer in all_answers
+                if str(answer.get("q_id") or "")
+                and str(answer.get("q_id") or "") not in known_question_ids
+            ))[:100]
+            if not matched_answers:
+                return SubmissionSourceParseResult(
+                    source_id=source.source_id,
+                    stored_file_id=source.stored_file_id,
+                    filename=source.filename,
+                    status="no_matching_answer",
+                    student=None,
+                    student_candidate=candidate,
+                    matched_answer_count=0,
+                    unknown_question_ids=unknown_question_ids,
+                    stable_error_code="no_matching_answer",
+                    failure_phase="question_matching",
+                    retryable=False,
+                )
+
+            payload["stu_ans"] = matched_answers
+            needs_identity_review = payload["identity_status"] != "matched"
+            return SubmissionSourceParseResult(
+                source_id=source.source_id,
+                stored_file_id=source.stored_file_id,
+                filename=source.filename,
+                status="identity_conflict" if needs_identity_review else "parsed",
+                student=payload,
+                student_candidate=candidate,
+                matched_answer_count=len(matched_answers),
+                unknown_question_ids=unknown_question_ids,
+                stable_error_code=(
+                    "identity_needs_review" if needs_identity_review else None
+                ),
+                failure_phase="identity" if needs_identity_review else None,
+                retryable=False,
+            )
+
+    async def process_one(source: Any) -> SubmissionSourceParseResult:
+        try:
+            return await process_one_unchecked(source)
+        except Exception as exc:
+            logger.warning(
+                "One submission source normalization failed; exception_type=%s",
+                type(exc).__name__,
+            )
+            return SubmissionSourceParseResult(
+                source_id=source.source_id,
+                stored_file_id=source.stored_file_id,
+                filename=source.filename,
+                status="parse_failed",
+                student=None,
+                student_candidate=None,
+                matched_answer_count=0,
+                unknown_question_ids=(),
+                stable_error_code="submission_parse_invalid",
+                failure_phase="structured_parse",
+                retryable=is_retryable_background_error(
+                    "submission_parse_invalid"
+                ),
+            )
+
+    results = list(await asyncio.gather(*(process_one(source) for source in sources)))
+
+    candidate_groups: dict[str, list[int]] = defaultdict(list)
+    for index, result in enumerate(results):
+        if result.student is not None and result.student_candidate:
+            candidate_groups[_normalize_identity_value(result.student_candidate)].append(index)
+    duplicate_indexes = {
+        index
+        for indexes in candidate_groups.values()
+        if len(indexes) > 1
+        for index in indexes
+    }
+    duplicate_positions: dict[int, int] = {}
+    for indexes in candidate_groups.values():
+        if len(indexes) > 1:
+            duplicate_positions.update({index: position for position, index in enumerate(indexes, 1)})
+
+    normalized_results: list[SubmissionSourceParseResult] = []
+    for index, result in enumerate(results):
+        if result.student is None:
+            normalized_results.append(result)
+            continue
+        student = dict(result.student)
+        if index in duplicate_indexes:
+            candidate = result.student_candidate or "unresolved"
+            duplicate_digest = hashlib.sha256(
+                (
+                    f"{candidate}\0{result.source_id}\0"
+                    f"{duplicate_positions[index]}"
+                ).encode("utf-8")
+            ).hexdigest()[:24]
+            student["stu_id"] = f"duplicate_{duplicate_digest}"
+            student["identity_status"] = "needs_review"
+            normalized_results.append(replace(
+                result,
+                status="identity_conflict",
+                student=student,
+                stable_error_code="duplicate_student_identity",
+                failure_phase="identity",
+            ))
+            continue
+        if result.status == "identity_conflict" and not result.student_candidate:
+            student["stu_id"] = f"unresolved-{result.source_id[-8:]}"
+            student["identity_status"] = "needs_review"
+            normalized_results.append(replace(result, student=student))
+            continue
+        normalized_results.append(result)
+    results = normalized_results
+
+    if reporter:
+        recognized = [result for result in results if result.student is not None]
+        await reporter.set_stage_metrics(
+            files_total=len(results),
+            files_processed=len(results),
+            submissions_recognized=len(recognized),
+            identities_matched=sum(result.status == "parsed" for result in results),
+            identities_needing_review=sum(
+                result.status == "identity_conflict" for result in results
+            ),
+            answers_split=sum(result.matched_answer_count for result in recognized),
+            parse_failures=sum(
+                result.status in {"parse_failed", "no_matching_answer"}
+                for result in results
+            ),
+        )
+        for result in results:
+            if result.student is not None:
+                await reporter._emit_message("Submission recognized.")
+            else:
+                await reporter._emit_message(
+                    f"Submission source failed: {result.stable_error_code or 'submission_parse_failed'}.",
+                    level="warn",
+                )
+            await reporter.increment_completed()
+        await reporter.set_current_step(
+            "consolidating_submission_results",
+            message="Consolidating recognized submissions.",
+        )
+    return results
+
+
 async def parse_student_answers(
     files_data: List[Dict[str, str]],
     problems_data: Dict[str, Dict[str, str]],
@@ -287,7 +690,9 @@ async def parse_student_answers(
 
     semaphore = asyncio.Semaphore(20)
 
-    async def process_one(file_info: Dict[str, str]) -> tuple[Optional[Dict[str, Any]], Optional[str]]:
+    async def process_one(
+        file_info: Dict[str, str],
+    ) -> tuple[Optional[Dict[str, Any]], Optional[BaseException]]:
         async with semaphore:
             filename = file_info.get("filename", "")
             content = file_info.get("content", "")
@@ -361,7 +766,11 @@ async def parse_student_answers(
                         parse_failures=1,
                     )
                     await reporter.increment_completed()
-                return None, "submission_parse_failed"
+                # Preserve the exception object for the batch-level caller. If
+                # every file fails, its typed/cause chain is what lets the
+                # durable worker distinguish timeout, quota, auth, and network
+                # failures instead of collapsing them to submission_parse_failed.
+                return None, exc
 
     results = await asyncio.gather(*[process_one(f) for f in files_data])
 
@@ -382,10 +791,12 @@ async def parse_student_answers(
     # that affects every concurrent request identically, so we report the first
     # stable error code as representative.
     if not stu_dict and files_data:
-        first_err = next((err for (_r, err) in results if err), None) or "unknown error"
-        msg = f"All {len(files_data)} student files failed to parse ({first_err})."
+        first_err = next((err for (_r, err) in results if err), None)
+        msg = f"All {len(files_data)} student files failed to parse."
         if reporter:
             await reporter.set_error(msg)
+        if isinstance(first_err, BaseException):
+            raise RuntimeError(msg) from first_err
         raise RuntimeError(msg)
 
     return stu_dict

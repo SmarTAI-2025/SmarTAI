@@ -6,7 +6,7 @@ import {
   type ChangeEvent,
   type DragEvent,
 } from "react";
-import { Link, useNavigate, useParams } from "react-router-dom";
+import { Link, Navigate, useNavigate, useParams } from "react-router-dom";
 import { toast } from "sonner";
 import { getAPIErrorCode, normalizeAPIError } from "@/api/client";
 import { useParseSubmissions, useTask } from "@/api/hooks";
@@ -14,6 +14,7 @@ import { NewTaskStepper } from "@/components/new-task/NewTaskStepper";
 import { useI18n } from "@/i18n/I18nProvider";
 import type { MessageKey } from "@/i18n/messages";
 import { cn } from "@/lib/cn";
+import { getTaskDestination, hasTaskReachedStep } from "@/lib/taskFlow";
 import type { SubmissionIdentityMode } from "@/types";
 
 const SUBMISSION_SUFFIXES = [
@@ -55,9 +56,13 @@ export function AddSubmissionsPage() {
   const [needsModel, setNeedsModel] = useState(false);
 
   const task = taskQuery.data;
-  const hasExistingSubmissions = Boolean(task?.submission_file_name || task?.student_count);
+  const hasExistingSubmissions = Boolean(
+    task?.submission_file_name
+      || task?.pending_submission_file_name
+      || task?.student_count,
+  );
   const isRecognitionRunning = task?.status === "parsing_submissions";
-  const isWorkflowBusy = task?.status === "extracting_problems" || task?.status === "grading";
+  const isWorkflowBusy = task?.status === "extracting_problems";
 
   useEffect(() => {
     if (!taskId) return;
@@ -126,7 +131,7 @@ export function AddSubmissionsPage() {
       setFormError(t("submissionUploadTaskUnavailable"));
       return;
     }
-    if (isRecognitionRunning) {
+    if (isRecognitionRunning && !selectedFile) {
       navigate(`/tasks/${taskId}/submissions/progress`);
       return;
     }
@@ -168,6 +173,10 @@ export function AddSubmissionsPage() {
     : identityMode === "manual_review"
       ? t("submissionUploadManualHelp")
       : t("submissionUploadFilenameHelp");
+
+  if (taskQuery.isSuccess && taskId && task && !hasTaskReachedStep(task, 3)) {
+    return <Navigate replace to={getTaskDestination(task)} />;
+  }
 
   return (
     <div className="w-full max-w-[1300px]">
@@ -328,7 +337,7 @@ export function AddSubmissionsPage() {
           >
             {parseSubmissions.isPending ? (
               <><LoaderCircle aria-hidden="true" className="mr-2 h-4 w-4 animate-spin" />{t("submissionUploadStarting")}</>
-            ) : isRecognitionRunning
+            ) : isRecognitionRunning && !selectedFile
               ? t("submissionUploadViewProgress")
               : hasExistingSubmissions
                 ? t("submissionUploadOverwriteStart")

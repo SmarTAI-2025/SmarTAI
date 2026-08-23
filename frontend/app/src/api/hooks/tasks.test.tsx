@@ -142,7 +142,10 @@ describe("grading run cache", () => {
     const { result } = renderHook(() => useStartGrading(), { wrapper });
 
     await act(async () => {
-      await result.current.mutateAsync({ taskId: "task-1" });
+      await result.current.mutateAsync({
+        taskId: "task-1",
+        expectedWorkflowRevision: 1,
+      });
     });
 
     expect(client.getQueryData<Task>(taskKeys.detail("task-1"))).toMatchObject({

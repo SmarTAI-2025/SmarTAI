@@ -30,6 +30,7 @@ from backend.skills.calculation import (
     _format_metadata_zh,
     _run_sympy_loop,
 )
+from backend.tools.grading_runner import RunnerResult
 
 
 # ─── Helper: build a fake provider that returns a canned LLM response ────────
@@ -369,6 +370,46 @@ async def test_sympy_loop_never_exceeds_one_repair(monkeypatch):
     assert loop.repair_count == 1
     assert repair_calls == 1
     assert len(loop.attempts) == 2
+
+
+@pytest.mark.asyncio
+async def test_sympy_loop_preserves_pretty_sanitizer_and_integral_metadata(monkeypatch):
+    problem = _make_problem(reference_answer=None)
+    executed_code = ""
+
+    async def fake_gen(provider, problem):
+        return (
+            "import sympy as sp\n"
+            "x = sp.symbols('x')\n"
+            "result = sp.integrate(x**2, x)\n"
+            "print(sp.pretty(result))\n"
+        )
+
+    async def fake_runner(request):
+        nonlocal executed_code
+        executed_code = request.code
+        return RunnerResult(
+            execution_id=request.execution_id,
+            executed=True,
+            exit_reason="success",
+            stdout="x**3/3",
+        )
+
+    monkeypatch.setattr("backend.skills.calculation._generate_sympy_program", fake_gen)
+
+    loop = await _run_sympy_loop(
+        _fake_provider_returning(None),
+        problem,
+        execution_id="pretty-integral-loop",
+        runner=fake_runner,
+    )
+
+    assert "pretty" not in executed_code
+    assert "print(str(result))" in executed_code
+    assert loop.status == "succeeded"
+    assert loop.reference_value == "x**3/3"
+    assert loop.is_indefinite_integral is True
+    assert loop.integral_variable == "x"
 
 
 # ─── End-to-end grade() — sympy code execution fails ────────────────────────

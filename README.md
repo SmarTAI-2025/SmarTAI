@@ -102,29 +102,26 @@ SMARTAI_HTTPS_PROXY=http://HOST:PORT
 - 前端 BYOK 的 Key 仍在“模型与 BYOK”页面填写，并由后端加密保存。
 - 修改代理配置后必须重启后端。
 
-#### 配置本地 BYOK 加密主密钥
+#### 配置本地 BYOK 加密主密钥（可选）
 
-`.env.example` 中的 `SMARTAI_PROVIDER_ENCRYPTION_KEY` 和 `SMARTAI_JWT_SECRET`
-只是公开占位值，不能直接使用。先运行下面的命令**两次**，分别生成两个至少 32 字节、
-互不相同的随机值：
+`SMARTAI_PROVIDER_ENCRYPTION_KEY` 和 `SMARTAI_JWT_SECRET` 在本地开发时都有内置
+默认值，不创建 `.env` 文件也能直接启动。
 
-```bash
-python -c "import secrets; print(secrets.token_hex(32))"
-```
+**开发环境开箱即用**：跳过本节直接进入「首次运行前」即可。如果你已经运行过
+`cp .env.example .env`，请确保 `.env` 中这两项为空或是安全的自定义值。
 
-把两次输出分别填入本地 `.env`：
-
-```dotenv
-SMARTAI_PROVIDER_ENCRYPTION_KEY=在这里粘贴第一个随机值
-SMARTAI_JWT_SECRET=在这里粘贴第二个随机值
-```
-
-- `.env` 已被 Git 忽略，不要提交、上传或通过普通聊天发送其中的值。
-- `SMARTAI_PROVIDER_ENCRYPTION_KEY` 是服务器用于加密用户 BYOK 的主密钥，不是
-  Gemini、OpenAI 等服务商的 API key，也不要与 JWT 签名密钥共用。
-- 一旦保存过 BYOK，就必须在后续重启中继续使用同一个值；丢失或更换它会使已有密文
-  无法解密。连接同一个共享数据库的后端实例必须从安全的 Secret Manager 读取同一主密钥。
-- 新建且互不共享的本地数据库可以各自生成独立主密钥。
+> ⚠️ **生产环境**：必须在平台的 Secret Manager 中为这两项分别设置至少 32 字节的
+> 随机值，生成方法：
+>
+> ```bash
+> python -c "import secrets; print(secrets.token_hex(32))"
+> ```
+>
+> - `SMARTAI_PROVIDER_ENCRYPTION_KEY` 是服务器用于加密用户 BYOK 的主密钥，不是
+>   Gemini、OpenAI 等服务商的 API key，也不要与 JWT 签名密钥共用。
+> - 一旦保存过 BYOK，就必须在后续重启中继续使用同一个值；丢失或更换它会使已有密文
+>   无法解密。连接同一个共享数据库的后端实例必须从安全的 Secret Manager 读取同一主密钥。
+> - 新建且互不共享的本地数据库可以各自生成独立主密钥。
 
 首次运行前，在**仓库根目录**（该目录应能看到 `alembic.ini`、`backend/` 和
 `frontend/`）应用数据库迁移。请先激活上文创建并已安装后端依赖的 Python 环境，
