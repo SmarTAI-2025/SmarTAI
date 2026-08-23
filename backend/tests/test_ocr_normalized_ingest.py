@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 from unittest.mock import MagicMock
 
 import pytest
@@ -11,6 +12,12 @@ from backend.db.session import session_scope
 from backend.services import assignments as assignment_service
 from backend.services import submissions as submission_service
 from backend.skills.ocr_ingest import OCRResult
+
+
+PNG_1X1 = base64.b64decode(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk"
+    "AAMAASsJTYQAAAAASUVORK5CYII="
+)
 
 
 class FakeOCRSkill:
@@ -110,7 +117,7 @@ async def test_problem_upload_ocr_persists_normalized_questions(monkeypatch):
         assignment_id=assignment.id,
         teacher_id=teacher_id,
         filename="problems.png",
-        content=b"fake image bytes",
+        content=PNG_1X1,
         content_type="image/png",
         provider=_provider(),
         ocr_skill=ocr,
@@ -166,7 +173,7 @@ async def test_student_upload_ocr_creates_answer_revision(monkeypatch):
         student_id=student_id,
         assignment_id=assignment_id,
         filename="answer.png",
-        content=b"fake image bytes",
+        content=PNG_1X1,
         content_type="image/png",
         provider=_provider(),
         ocr_skill=ocr,

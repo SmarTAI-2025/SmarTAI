@@ -10,6 +10,7 @@ const taskData = vi.hoisted(() => ({
   task_id: "task-1",
   name: "Geometry",
   status: "problems_ready",
+  workflow_revision: 7,
   problem_data: {
     Q1: {
       q_id: "Q1",
@@ -156,6 +157,7 @@ describe("QuestionPreparationDetailPage navigation", () => {
     await waitFor(() => expect(mutateAsync).toHaveBeenCalledWith({
       taskId: "task-1",
       qId: "Q1",
+      expectedWorkflowRevision: 7,
       max_score: 5,
     }));
   });

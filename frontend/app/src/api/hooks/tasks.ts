@@ -220,8 +220,11 @@ export function useStartGrading() {
   const queryClient = useQueryClient();
 
   return useMutation({
-    mutationFn: ({ taskId, multiSampleN }: { taskId: string; multiSampleN?: number | null }) =>
-      tasksApi.startGrading(taskId, { multiSampleN }),
+    mutationFn: ({ taskId, multiSampleN, expectedWorkflowRevision }: {
+      taskId: string;
+      multiSampleN?: number | null;
+      expectedWorkflowRevision: number;
+    }) => tasksApi.startGrading(taskId, { multiSampleN, expectedWorkflowRevision }),
     onSuccess: (data, variables) => {
       if (data.status === "started" || data.status === "already_running") {
         const activeTaskPatch = {
@@ -244,7 +247,7 @@ export function useUpdateProblem() {
   const queryClient = useQueryClient();
 
   return useMutation({
-    mutationFn: ({ taskId, qId, ...patch }: {
+    mutationFn: ({ taskId, qId, expectedWorkflowRevision, ...patch }: {
       taskId: string;
       qId: string;
       stem?: string;
@@ -254,7 +257,11 @@ export function useUpdateProblem() {
       reference_answer?: string | null;
       solution_code?: string | null;
       test_cases?: import("@/types").TestCase[] | null;
-    }) => tasksApi.updateProblem(taskId, qId, patch),
+      expectedWorkflowRevision?: number;
+    }) => tasksApi.updateProblem(taskId, qId, {
+      ...patch,
+      expected_workflow_revision: expectedWorkflowRevision,
+    }),
     onSuccess: (_data, variables) => {
       invalidateTask(queryClient, variables.taskId);
     },

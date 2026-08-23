@@ -1,6 +1,6 @@
-import { render, screen } from "@testing-library/react";
+import { act, render, screen } from "@testing-library/react";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { GradingPreflightPage } from "./GradingPreflightPage";
 
 vi.mock("@/api/hooks", () => ({
@@ -22,6 +22,8 @@ vi.mock("@/i18n/I18nProvider", () => ({
 
 const { useGradingSetup, useStartGrading, useTask } = await import("@/api/hooks");
 
+const mutateAsync = vi.fn();
+
 describe("GradingPreflightPage regrade mode", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -29,6 +31,7 @@ describe("GradingPreflightPage regrade mode", () => {
       data: {
         task_id: "task-1",
         status: "graded",
+        workflow_revision: 8,
         grading_setup_configured: true,
         problem_data: {
           q1: {
@@ -100,8 +103,8 @@ describe("GradingPreflightPage regrade mode", () => {
           task_docs: [],
         },
         readiness: {
-          ready: false,
-          blocking_issues: ["invalid_state"],
+          ready: true,
+          blocking_issues: [],
           warnings: [],
         },
       },
@@ -112,8 +115,12 @@ describe("GradingPreflightPage regrade mode", () => {
     (useStartGrading as unknown as ReturnType<typeof vi.fn>).mockReturnValue({
       error: null,
       isPending: false,
-      mutateAsync: vi.fn(),
+      mutateAsync,
     });
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
   });
 
   it("treats a completed task as a startable regrade after setup is saved", () => {
@@ -128,5 +135,78 @@ describe("GradingPreflightPage regrade mode", () => {
     expect(screen.getByText("Regrading is about to start")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Start Regrading Now" })).toBeEnabled();
     expect(screen.queryByText("Historical configuration")).not.toBeInTheDocument();
+  });
+
+  it("disables grading and never starts the countdown when a source blocker exists", () => {
+    vi.useFakeTimers();
+    (useGradingSetup as unknown as ReturnType<typeof vi.fn>).mockReturnValue({
+      data: {
+        task_id: "task-1",
+        task_status: "graded",
+        workflow_revision: 8,
+        configured: true,
+        grading_setup: {
+          schema_version: 1,
+          selected_provider_ids: ["provider-1"],
+          primary_provider_id: "provider-1",
+          aggregation_method: "single",
+          multi_sample_n: 1,
+          knowledge_scope: "none",
+          strictness: 50,
+          allow_partial_credit: true,
+          feedback_tone: "neutral",
+          feedback_length: "medium",
+          feedback_language: "en",
+          suggest_corrections: true,
+          low_confidence_threshold: 0.6,
+          teacher_notes: "",
+        },
+        suggested_setup: null,
+        grading_setup_fingerprint: "setup-2",
+        grading_setup_updated_at: 2,
+        available_experts: [{
+          provider_id: "provider-1",
+          provider_type: "gemini",
+          model: "gemini-3.1-flash-lite-preview",
+          display_name: "Calculus grader",
+          enabled: true,
+          scope: "owner",
+          is_shared: false,
+          editable: true,
+          max_concurrent: 1,
+          rpm: 10,
+        }],
+        knowledge: {
+          scope_options: ["none", "all_task_docs"],
+          task_doc_count: 0,
+          task_docs: [],
+        },
+        readiness: {
+          ready: false,
+          blocking_issues: ["submission_sources_failed"],
+          warnings: [],
+        },
+      },
+      isLoading: false,
+      isError: false,
+      refetch: vi.fn(),
+    });
+
+    render(
+      <MemoryRouter initialEntries={["/tasks/task-1/grading/preflight"]}>
+        <Routes>
+          <Route path="/tasks/:taskId/grading/preflight" element={<GradingPreflightPage />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    expect(screen.getByRole("button", { name: "Start Regrading Now" })).toBeDisabled();
+    expect(screen.getByText("Some files failed recognition. Review the exact reasons above and resolve them before grading.")).toBeInTheDocument();
+    expect(screen.queryByText(/seconds until automatic start/)).not.toBeInTheDocument();
+
+    act(() => {
+      vi.advanceTimersByTime(12_000);
+    });
+    expect(mutateAsync).not.toHaveBeenCalled();
   });
 });

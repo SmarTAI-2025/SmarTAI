@@ -200,15 +200,30 @@ export function QuestionPreparationDetailPage() {
   const overviewHref = `/tasks/${encodeURIComponent(taskId)}/questions${searchParams.size ? `?${searchParams.toString()}` : ""}`;
 
   async function saveText(problem: ProblemInfo, field: TextFieldKey, value: string) {
-    await updateProblem.mutateAsync({ taskId: stableTaskId, qId: problem.q_id, [field]: value });
+    await updateProblem.mutateAsync({
+      taskId: stableTaskId,
+      qId: problem.q_id,
+      expectedWorkflowRevision: taskQuery.data?.workflow_revision,
+      [field]: value,
+    });
   }
 
   async function saveTests(problem: ProblemInfo, cases: TestCase[]) {
-    await updateProblem.mutateAsync({ taskId: stableTaskId, qId: problem.q_id, test_cases: cases });
+    await updateProblem.mutateAsync({
+      taskId: stableTaskId,
+      qId: problem.q_id,
+      expectedWorkflowRevision: taskQuery.data?.workflow_revision,
+      test_cases: cases,
+    });
   }
 
   async function saveMaxScore(problem: ProblemInfo, maxScore: number) {
-    await updateProblem.mutateAsync({ taskId: stableTaskId, qId: problem.q_id, max_score: maxScore });
+    await updateProblem.mutateAsync({
+      taskId: stableTaskId,
+      qId: problem.q_id,
+      expectedWorkflowRevision: taskQuery.data?.workflow_revision,
+      max_score: maxScore,
+    });
   }
 
   async function confirmAll() {
@@ -218,10 +233,12 @@ export function QuestionPreparationDetailPage() {
     }
     setConfirming(true);
     try {
+      let expectedWorkflowRevision = taskQuery.data?.workflow_revision;
       for (const problem of problems) {
-        await updateProblem.mutateAsync({
+        const response = await updateProblem.mutateAsync({
           taskId: stableTaskId,
           qId: problem.q_id,
+          expectedWorkflowRevision,
           stem: problem.stem,
           criterion: problem.criterion,
           reference_answer: problem.reference_answer ?? "",
@@ -231,6 +248,7 @@ export function QuestionPreparationDetailPage() {
           } : {}),
           review_status: "confirmed",
         });
+        expectedWorkflowRevision = response.workflow_revision;
       }
       toast.success(tx(locale, "全部题目资料已确认。", "All question materials are confirmed."));
       navigate(`/tasks/${taskId}/submissions/upload`);

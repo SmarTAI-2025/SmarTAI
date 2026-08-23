@@ -8,9 +8,11 @@ the tools/ namespace so it's discoverable as a "predefined tool" per docs §4.2.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import io
 import json
 import logging
+import mimetypes
 import posixpath
 import re
 import sys
@@ -18,6 +20,7 @@ import tarfile
 import tempfile
 import threading
 import zipfile
+from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import List, Dict
 
@@ -52,6 +55,8 @@ _PDF_WORKER_PATH = Path(__file__).with_name("_pdf_worker.py")
 SUBMISSION_ARCHIVE_MAX_FILES = 500
 SUBMISSION_ARCHIVE_MAX_EXPANDED_BYTES = 100 * 1024 * 1024
 SUBMISSION_ARCHIVE_MAX_MEMBER_BYTES = 5 * 1024 * 1024
+SUBMISSION_UPLOAD_MAX_BYTES = 100 * 1024 * 1024
+MAX_SOURCE_FILENAME_CHARACTERS = 512
 
 TEXT_EXTENSIONS = {".txt", ".md", ".markdown", ".csv", ".rst"}
 IMAGE_MEDIA_TYPES = {
@@ -65,6 +70,151 @@ ARCHIVE_EXTENSIONS = (
 )
 
 
+class _ArchiveLimitExceeded(RuntimeError):
+    pass
+
+
+def _bounded_source_name(value: str) -> str:
+    name = str(value or "upload.bin")
+    if len(name) <= MAX_SOURCE_FILENAME_CHARACTERS:
+        return name
+    digest = hashlib.sha256(name.encode("utf-8", errors="replace")).hexdigest()[:16]
+    suffix = PurePosixPath(name.replace("\\", "/")).suffix[:20]
+    prefix_length = MAX_SOURCE_FILENAME_CHARACTERS - len(suffix) - len(digest) - 1
+    return f"{name[:prefix_length]}~{digest}{suffix}"
+
+
+@dataclass(frozen=True)
+class RawUploadSource:
+    """One original upload/member before text extraction or OCR."""
+
+    filename: str
+    content: bytes | None
+    content_type: str
+    pre_error_code: str | None = None
+    failure_phase: str | None = None
+    retryable: bool = False
+
+
+@dataclass(frozen=True)
+class ContentInspection:
+    """Content-derived media type plus any declared-type conflict."""
+
+    content_type: str
+    declared_content_type: str
+    mismatch: bool
+
+
+_MIME_ALIASES = {
+    "application/x-zip-compressed": "application/zip",
+    "application/x-rar-compressed": "application/vnd.rar",
+    "application/x-7z-compressed": "application/x-7z-compressed",
+    "application/x-gzip": "application/gzip",
+    "image/jpg": "image/jpeg",
+    "text/x-markdown": "text/markdown",
+}
+
+
+def _normalized_content_type(value: str | None) -> str:
+    normalized = (value or "").split(";", 1)[0].strip().lower()
+    if not normalized:
+        return "application/octet-stream"
+    return _MIME_ALIASES.get(normalized, normalized)
+
+
+def _looks_like_text(data: bytes) -> bool:
+    if b"\x00" in data:
+        return False
+    try:
+        text = data.decode("utf-8")
+    except UnicodeDecodeError:
+        try:
+            text = data.decode("gbk")
+        except UnicodeDecodeError:
+            return False
+    return all(character in "\t\n\r" or ord(character) >= 32 for character in text)
+
+
+def _content_signature_type(data: bytes, filename: str) -> str:
+    if not data:
+        return "application/octet-stream"
+    if b"%PDF-" in data[:1024]:
+        return "application/pdf"
+    if data.startswith(b"\x89PNG\r\n\x1a\n"):
+        return "image/png"
+    if data.startswith(b"\xff\xd8\xff"):
+        return "image/jpeg"
+    if len(data) >= 12 and data[:4] == b"RIFF" and data[8:12] == b"WEBP":
+        return "image/webp"
+    if data.startswith((b"PK\x03\x04", b"PK\x05\x06", b"PK\x07\x08")):
+        return "application/zip"
+    if data.startswith((b"Rar!\x1a\x07\x00", b"Rar!\x1a\x07\x01\x00")):
+        return "application/vnd.rar"
+    if data.startswith(b"7z\xbc\xaf\x27\x1c"):
+        return "application/x-7z-compressed"
+    if data.startswith(b"\x1f\x8b"):
+        return "application/gzip"
+    if data.startswith(b"BZh"):
+        return "application/x-bzip2"
+    if len(data) > 262 and data[257:262] == b"ustar":
+        return "application/x-tar"
+    if _looks_like_text(data):
+        guessed, _encoding = mimetypes.guess_type(filename)
+        guessed_type = _normalized_content_type(guessed)
+        return guessed_type if guessed_type.startswith("text/") else "text/plain"
+    return "application/octet-stream"
+
+
+def inspect_upload_content(
+    content: bytes,
+    filename: str,
+    supplied: str | None = None,
+) -> ContentInspection:
+    """Inspect bytes; supplied MIME and filename are hints, never authority."""
+    detected = _content_signature_type(content, filename)
+    supplied_type = _normalized_content_type(supplied)
+    guessed, _encoding = mimetypes.guess_type(filename)
+    filename_type = _normalized_content_type(guessed)
+    extension = _ext(filename)
+    if extension in {".tar.gz", ".tgz"}:
+        filename_type = "application/gzip"
+    elif extension in {".tar.bz2", ".tbz2"}:
+        filename_type = "application/x-bzip2"
+    elif detected == "application/zip" and extension in {".docx", ".xlsx", ".pptx"}:
+        # These formats are ZIP containers, but they are not submission
+        # archives and remain unsupported until a dedicated parser exists.
+        detected = filename_type
+    declared = (
+        supplied_type
+        if supplied_type != "application/octet-stream"
+        else filename_type
+    )
+    declared_hints = {
+        value
+        for value in (supplied_type, filename_type)
+        if value != "application/octet-stream"
+    }
+    mismatch = any(value != detected for value in declared_hints)
+    return ContentInspection(
+        content_type=detected,
+        declared_content_type=declared,
+        mismatch=mismatch,
+    )
+
+
+def infer_upload_content_type(
+    filename: str,
+    supplied: str | None = None,
+    content: bytes | None = None,
+) -> str:
+    if content is not None:
+        return inspect_upload_content(content, filename, supplied).content_type
+    if supplied and supplied.strip() and supplied != "application/octet-stream":
+        return _normalized_content_type(supplied)
+    guessed, _encoding = mimetypes.guess_type(filename)
+    return _normalized_content_type(guessed)
+
+
 async def decode_text_bytes(text_bytes: bytes) -> str:
     """Try UTF-8 then GBK; raise 400 if both fail."""
     try:
@@ -75,7 +225,7 @@ async def decode_text_bytes(text_bytes: bytes) -> str:
         except UnicodeDecodeError:
             raise HTTPException(
                 status_code=400,
-                detail="Unable to decode file; please ensure UTF-8 or GBK encoding.",
+                detail={"code": "source_decode_failed"},
             )
 
 
@@ -90,7 +240,7 @@ async def _extract_pdf_payload(
     if fitz is None:
         raise HTTPException(
             status_code=501,
-            detail="PDF processing requires 'PyMuPDF'; pip install PyMuPDF"
+            detail={"code": "pdf_processing_unavailable"},
         )
     if not _PDF_EXTRACTION_SLOTS.acquire(blocking=False):
         raise HTTPException(status_code=429, detail={"code": "pdf_extraction_busy"})
@@ -227,11 +377,8 @@ def _is_likely_fragmented_math_pdf(text: str, purpose: OCRPurpose) -> bool:
 def _require_ocr_skill(ocr_skill: OCRIngestSkill | None, filename: str) -> OCRIngestSkill:
     if ocr_skill is None:
         raise HTTPException(
-            status_code=503,
-            detail=(
-                f"{filename} requires OCR, but no vision-capable provider is configured. "
-                "Add and enable a model that supports image input."
-            ),
+            status_code=422,
+            detail={"code": "vision_provider_required"},
         )
     return ocr_skill
 
@@ -240,10 +387,10 @@ def _check_image_size(data: bytes, filename: str) -> None:
     if len(data) > settings.ocr_max_image_bytes:
         raise HTTPException(
             status_code=413,
-            detail=(
-                f"{filename} is too large for OCR "
-                f"({len(data)} bytes > {settings.ocr_max_image_bytes} bytes)."
-            ),
+            detail={
+                "code": "submission_source_too_large",
+                "max_bytes": settings.ocr_max_image_bytes,
+            },
         )
 
 
@@ -263,7 +410,7 @@ async def _ocr_images(
         for warning in result.warnings:
             await reporter._emit_message(f"OCR warning for {filename}: {warning}", level="warn")
     if not result.text.strip():
-        raise HTTPException(status_code=422, detail=f"OCR returned empty text for {filename}.")
+        raise HTTPException(status_code=422, detail={"code": "ocr_empty_result"})
     return result.text
 
 
@@ -271,7 +418,7 @@ def _render_pdf_pages_for_ocr(pdf_bytes: bytes, filename: str) -> list[OCRImage]
     if fitz is None:
         raise HTTPException(
             status_code=501,
-            detail="PDF processing requires 'PyMuPDF'; pip install PyMuPDF"
+            detail={"code": "pdf_processing_unavailable"},
         )
     try:
         with fitz.open(stream=pdf_bytes, filetype="pdf") as doc:
@@ -279,10 +426,10 @@ def _render_pdf_pages_for_ocr(pdf_bytes: bytes, filename: str) -> list[OCRImage]
             if page_count > settings.ocr_max_pdf_pages:
                 raise HTTPException(
                     status_code=413,
-                    detail=(
-                        f"{filename} has {page_count} pages; OCR limit is "
-                        f"{settings.ocr_max_pdf_pages} pages."
-                    ),
+                    detail={
+                        "code": "pdf_page_limit_exceeded",
+                        "max_pages": settings.ocr_max_pdf_pages,
+                    },
                 )
             scale = settings.ocr_render_dpi_scale
             matrix = fitz.Matrix(scale, scale)
@@ -316,6 +463,7 @@ async def extract_text_from_upload(
     ocr_skill: OCRIngestSkill | None = None,
     purpose: OCRPurpose = "submissions",
     reporter=None,
+    content_type: str | None = None,
 ) -> str:
     """Convert a supported upload into text.
 
@@ -324,18 +472,24 @@ async def extract_text_from_upload(
     ingest skill when one is available.
     """
     safe_name = filename or "upload"
-    extension = _ext(safe_name)
+    inspection = inspect_upload_content(file_bytes, safe_name, content_type)
+    if inspection.mismatch:
+        raise HTTPException(
+            status_code=415,
+            detail={"code": "submission_source_content_type_mismatch"},
+        )
+    media_type = inspection.content_type
     if reporter:
         await reporter._emit_message(f"Reading {safe_name}...")
 
-    if extension in TEXT_EXTENSIONS:
+    if media_type.startswith("text/"):
         return await decode_text_bytes(file_bytes)
 
-    if extension == ".pdf":
+    if media_type == "application/pdf":
         if fitz is None:
             raise HTTPException(
                 status_code=501,
-                detail="PDF processing requires 'PyMuPDF'; pip install PyMuPDF"
+                detail={"code": "pdf_processing_unavailable"},
             )
         text, page_count = await _extract_pdf_payload(file_bytes)
 
@@ -359,9 +513,9 @@ async def extract_text_from_upload(
         )
         return text
 
-    if extension in IMAGE_MEDIA_TYPES:
+    if media_type in set(IMAGE_MEDIA_TYPES.values()):
         _check_image_size(file_bytes, safe_name)
-        image = OCRImage(data=file_bytes, media_type=IMAGE_MEDIA_TYPES[extension], label=safe_name)
+        image = OCRImage(data=file_bytes, media_type=media_type, label=safe_name)
         return await _ocr_images(
             [image],
             filename=safe_name,
@@ -372,10 +526,7 @@ async def extract_text_from_upload(
 
     raise HTTPException(
         status_code=415,
-        detail=(
-            f"Unsupported file type for {safe_name}. Supported: "
-            ".txt, .md, .csv, .pdf, .jpg, .jpeg, .png, .webp, and archives."
-        ),
+        detail={"code": "submission_source_unsupported"},
     )
 
 
@@ -443,21 +594,227 @@ def _safe_member_name(name: str) -> str:
     normalized = posixpath.normpath(normalized)
     if normalized in {"", "."} or normalized.startswith("../"):
         raise ValueError("Unsafe path in submission archive")
-    return normalized
+    return _bounded_source_name(normalized)
 
 
 def _validate_archive_members(sizes: List[int]) -> None:
     if len(sizes) > SUBMISSION_ARCHIVE_MAX_FILES:
-        raise ValueError("Submission archive contains too many files")
-    if any(size < 0 or size > SUBMISSION_ARCHIVE_MAX_MEMBER_BYTES for size in sizes):
-        raise ValueError("Submission archive contains an oversized file")
-    if sum(sizes) > SUBMISSION_ARCHIVE_MAX_EXPANDED_BYTES:
-        raise ValueError("Submission archive expands beyond the safe limit")
+        raise _ArchiveLimitExceeded("submission_archive_limit_exceeded")
+    if any(size < 0 for size in sizes) or sum(sizes) > SUBMISSION_ARCHIVE_MAX_EXPANDED_BYTES:
+        raise _ArchiveLimitExceeded("submission_archive_limit_exceeded")
 
 
 def _validate_extracted_member(data: bytes) -> None:
     if len(data) > SUBMISSION_ARCHIVE_MAX_MEMBER_BYTES:
         raise ValueError("Submission archive contains an oversized file")
+
+
+def _read_archive_member(stream) -> bytes:
+    data = stream.read(SUBMISSION_ARCHIVE_MAX_MEMBER_BYTES + 1)
+    _validate_extracted_member(data)
+    return data
+
+
+def extract_raw_files_from_archive(
+    file_bytes: bytes,
+    filename: str,
+    *,
+    content_type: str | None = None,
+) -> list[RawUploadSource]:
+    """Unpack original bytes without performing OCR or text parsing.
+
+    Keeping this boundary separate lets callers persist and account for every
+    source before one file's OCR/provider failure can abort the rest of a batch.
+    """
+    sources: list[RawUploadSource] = []
+    file_in_memory = io.BytesIO(file_bytes)
+    lower = filename.lower()
+    if not file_bytes:
+        if lower.endswith(ARCHIVE_EXTENSIONS):
+            raise RuntimeError("submission_source_empty")
+        return [RawUploadSource(
+            filename=_bounded_source_name(filename),
+            content=file_bytes,
+            content_type="application/octet-stream",
+            pre_error_code="submission_source_empty",
+            failure_phase="source_read",
+            retryable=False,
+        )]
+    container_inspection = inspect_upload_content(file_bytes, filename, content_type)
+    expanded_bytes = 0
+
+    def member_label(raw_name: str, index: int) -> str:
+        leaf = PurePosixPath(raw_name.replace("\\", "/")).name
+        return _bounded_source_name(leaf or f"archive-member-{index + 1}")
+
+    def add(clean: str, data: bytes) -> None:
+        nonlocal expanded_bytes
+        _validate_extracted_member(data)
+        expanded_bytes += len(data)
+        if expanded_bytes > SUBMISSION_ARCHIVE_MAX_EXPANDED_BYTES:
+            raise _ArchiveLimitExceeded("submission_archive_limit_exceeded")
+        inspection = inspect_upload_content(data, clean)
+        sources.append(RawUploadSource(
+            filename=clean,
+            content=data,
+            content_type=inspection.content_type,
+            pre_error_code=(
+                "submission_source_content_type_mismatch"
+                if inspection.mismatch else None
+            ),
+            failure_phase="source_read" if inspection.mismatch else None,
+        ))
+
+    def add_failure(raw_name: str, index: int, code: str) -> None:
+        sources.append(RawUploadSource(
+            filename=member_label(raw_name, index),
+            content=None,
+            content_type=container_inspection.content_type,
+            pre_error_code=code,
+            failure_phase="archive",
+            retryable=False,
+        ))
+
+    archive_suffix = lower.endswith(ARCHIVE_EXTENSIONS)
+    if archive_suffix and container_inspection.mismatch:
+        return [RawUploadSource(
+            filename=_bounded_source_name(filename),
+            content=file_bytes,
+            content_type=container_inspection.content_type,
+            pre_error_code="submission_source_content_type_mismatch",
+            failure_phase="source_read",
+        )]
+
+    if lower.endswith(".zip"):
+        with zipfile.ZipFile(file_in_memory, "r") as archive:
+            members = [
+                item for item in archive.infolist()
+                if not item.is_dir() and _is_valid_file(item.filename)
+            ]
+            _validate_archive_members([item.file_size for item in members])
+            for index, item in enumerate(members):
+                repaired_name = _repair_zip_member_name(item)
+                try:
+                    clean = _safe_member_name(repaired_name)
+                except (TypeError, ValueError):
+                    add_failure(repaired_name, index, "submission_archive_member_unsafe_path")
+                    continue
+                if item.file_size > SUBMISSION_ARCHIVE_MAX_MEMBER_BYTES:
+                    add_failure(clean, index, "submission_archive_member_too_large")
+                    continue
+                try:
+                    with archive.open(item, "r") as extracted:
+                        add(clean, _read_archive_member(extracted))
+                except _ArchiveLimitExceeded:
+                    raise
+                except Exception:
+                    add_failure(clean, index, "submission_archive_member_unreadable")
+        return sources
+
+    if lower.endswith(".rar"):
+        if rarfile is None:
+            raise ValueError("Processing .rar files requires rarfile")
+        try:
+            with rarfile.RarFile(file_in_memory, "r") as archive:
+                members = [
+                    item for item in archive.infolist()
+                    if not item.is_dir() and _is_valid_file(item.filename)
+                ]
+                _validate_archive_members([item.file_size for item in members])
+                for index, item in enumerate(members):
+                    try:
+                        clean = _safe_member_name(item.filename)
+                    except (TypeError, ValueError):
+                        add_failure(item.filename, index, "submission_archive_member_unsafe_path")
+                        continue
+                    if item.file_size > SUBMISSION_ARCHIVE_MAX_MEMBER_BYTES:
+                        add_failure(clean, index, "submission_archive_member_too_large")
+                        continue
+                    try:
+                        with archive.open(item) as extracted:
+                            add(clean, _read_archive_member(extracted))
+                    except _ArchiveLimitExceeded:
+                        raise
+                    except Exception:
+                        add_failure(clean, index, "submission_archive_member_unreadable")
+        except rarfile.UNRARError as exc:
+            raise RuntimeError("submission_archive_invalid") from exc
+        return sources
+
+    if lower.endswith(".7z"):
+        if py7zr is None:
+            raise ValueError("Processing .7z files requires py7zr")
+        with py7zr.SevenZipFile(file_in_memory, "r") as archive:
+            members = [
+                item for item in archive.list()
+                if item.is_file and not item.is_symlink and _is_valid_file(item.filename)
+            ]
+        _validate_archive_members([int(item.uncompressed) for item in members])
+        with tempfile.TemporaryDirectory(prefix="smartai-submissions-") as temp_dir:
+            root = Path(temp_dir).resolve()
+            for index, item in enumerate(members):
+                try:
+                    clean = _safe_member_name(item.filename)
+                except (TypeError, ValueError):
+                    add_failure(item.filename, index, "submission_archive_member_unsafe_path")
+                    continue
+                if int(item.uncompressed) > SUBMISSION_ARCHIVE_MAX_MEMBER_BYTES:
+                    add_failure(clean, index, "submission_archive_member_too_large")
+                    continue
+                try:
+                    with py7zr.SevenZipFile(io.BytesIO(file_bytes), "r") as member_archive:
+                        member_archive.extract(path=root, targets=[item.filename])
+                    extracted = (root / clean).resolve()
+                    extracted.relative_to(root)
+                    if not extracted.is_file() or extracted.is_symlink():
+                        raise ValueError("unsafe extracted member")
+                    extracted.chmod(0o600)
+                    with extracted.open("rb") as handle:
+                        add(clean, _read_archive_member(handle))
+                except _ArchiveLimitExceeded:
+                    raise
+                except Exception:
+                    add_failure(clean, index, "submission_archive_member_unreadable")
+        return sources
+
+    if lower.endswith((".tar", ".tar.gz", ".tgz", ".tar.bz2", ".tbz2")):
+        with tarfile.open(fileobj=file_in_memory, mode="r:*") as archive:
+            members = [
+                item for item in archive.getmembers()
+                if item.isfile() and _is_valid_file(item.name)
+            ]
+            _validate_archive_members([item.size for item in members])
+            for index, item in enumerate(members):
+                try:
+                    clean = _safe_member_name(item.name)
+                except (TypeError, ValueError):
+                    add_failure(item.name, index, "submission_archive_member_unsafe_path")
+                    continue
+                if item.size > SUBMISSION_ARCHIVE_MAX_MEMBER_BYTES:
+                    add_failure(clean, index, "submission_archive_member_too_large")
+                    continue
+                try:
+                    extracted = archive.extractfile(item)
+                    if extracted is None:
+                        raise ValueError("archive member is unreadable")
+                    with extracted:
+                        add(clean, _read_archive_member(extracted))
+                except _ArchiveLimitExceeded:
+                    raise
+                except Exception:
+                    add_failure(clean, index, "submission_archive_member_unreadable")
+        return sources
+
+    return [RawUploadSource(
+        filename=_bounded_source_name(filename),
+        content=file_bytes,
+        content_type=container_inspection.content_type,
+        pre_error_code=(
+            "submission_source_content_type_mismatch"
+            if container_inspection.mismatch else None
+        ),
+        failure_phase="source_read" if container_inspection.mismatch else None,
+    )]
 
 
 async def extract_files_from_archive(
