@@ -313,7 +313,7 @@ class _SymPySymbolTable:
 
     def __init__(self) -> None:
         self.sympy_modules: set[str] = set()
-        self.sympy_names: set[str] = set()
+        self.sympy_names: dict[str, str] = {}
         self.star_import: bool = False
         self.aliases: dict[str, str] = {}
         self.shadowed: set[str] = set()
@@ -322,8 +322,9 @@ class _SymPySymbolTable:
         """Record ``import sympy`` / ``import sympy as sp`` / ``from sympy import ...``."""
         if isinstance(node, ast.Import):
             for alias in node.names:
+                bound = alias.asname or alias.name.split(".")[0]
+                self.sympy_modules.discard(bound)
                 if alias.name == "sympy":
-                    bound = alias.asname or "sympy"
                     self.sympy_modules.add(bound)
                     # a bare ``import sympy`` does NOT create ``pretty`` —
                     # only ``sympy.pretty`` is available, handled via Attribute.
@@ -339,7 +340,9 @@ class _SymPySymbolTable:
                     continue
                 if alias.name in _FORMAT_FUNCS:
                     bound = alias.asname or alias.name
-                    self.sympy_names.add(bound)
+                    self.aliases.pop(bound, None)
+                    self.shadowed.discard(bound)
+                    self.sympy_names[bound] = alias.name
             return
 
     def process_assign(self, node: ast.Assign) -> None:
@@ -371,20 +374,24 @@ class _SymPySymbolTable:
             if resolved is not None:
                 new_alias = resolved
 
+        self.sympy_modules.discard(target_name)
+        self.sympy_names.pop(target_name, None)
         if new_alias is not None:
             self.aliases[target_name] = new_alias
+            self.shadowed.discard(target_name)
         else:
             # Assignment does not create an alias — clear any previous one.
             self.aliases.pop(target_name, None)
             # If the target name is itself a format-func name, it is now
             # shadowed (``latex = 5`` makes the SymPy ``latex`` unreachable).
-            if target_name in _FORMAT_FUNCS:
-                self.shadowed.add(target_name)
+            self.shadowed.add(target_name)
 
     def process_func_def(self, node: ast.FunctionDef) -> None:
         """``def latex(...):`` shadows the SymPy function."""
-        if node.name in _FORMAT_FUNCS:
-            self.shadowed.add(node.name)
+        self.sympy_modules.discard(node.name)
+        self.sympy_names.pop(node.name, None)
+        self.aliases.pop(node.name, None)
+        self.shadowed.add(node.name)
 
     def process_args(self, args: ast.arguments) -> None:
         """Function parameters named like a format func shadow it inside the body."""
@@ -410,7 +417,7 @@ class _SymPySymbolTable:
         if name in self.aliases:
             return self.aliases[name]
         if name in self.sympy_names:
-            return name
+            return self.sympy_names[name]
         # D-1b: ``from sympy import *`` heuristic — SymPy exports these names,
         # and the name is not locally shadowed, so assume it comes from SymPy.
         if self.star_import and name in _FORMAT_FUNCS:
@@ -441,13 +448,9 @@ class _SymPySymbolTable:
             # even if it was previously aliased.
             if name in self.shadowed:
                 return None
-            # Alias (``fmt = sp.pretty``) — takes priority over a direct name
-            # so that ``pretty = sp.pprint`` uses pprint's category.
-            if name in self.aliases:
-                return self._category(self.aliases[name])
-            # Direct confirmed name (explicit import or unshadowed star).
-            if name in _FORMAT_FUNCS and self._is_confirmed_name(name):
-                return self._category(name)
+            resolved = self._resolve_name(name)
+            if resolved is not None:
+                return self._category(resolved)
             return None
         return None
 
@@ -514,17 +517,7 @@ def _sanitize_sympy_output_code(code: str) -> str:
     except SyntaxError:
         return code
 
-    # ── Pass 1: build the symbol table ──────────────────────────────────
     table = _SymPySymbolTable()
-    for stmt in tree.body:
-        if isinstance(stmt, (ast.Import, ast.ImportFrom)):
-            table.process_import(stmt)
-        elif isinstance(stmt, ast.FunctionDef):
-            table.process_func_def(stmt)
-            table.process_args(stmt.args)
-        elif isinstance(stmt, ast.Assign):
-            table.process_assign(stmt)
-    # ── Pass 2: rewrite confirmed SymPy format calls ────────────────────
 
     class _Transformer(ast.NodeTransformer):
         def __init__(self) -> None:
@@ -537,7 +530,18 @@ def _sanitize_sympy_output_code(code: str) -> str:
             self._scope_shadows: list[set[str]] = []
 
         def _current_shadows(self) -> set[str]:
-            return self._scope_shadows[-1] if self._scope_shadows else set()
+            return set().union(*self._scope_shadows) if self._scope_shadows else set()
+
+        def visit_Module(self, node: ast.Module) -> ast.AST:  # noqa: N802
+            for index, stmt in enumerate(node.body):
+                if isinstance(stmt, (ast.Import, ast.ImportFrom)):
+                    table.process_import(stmt)
+                node.body[index] = self.visit(stmt)
+                if isinstance(stmt, ast.FunctionDef):
+                    table.process_func_def(stmt)
+                elif isinstance(stmt, ast.Assign):
+                    table.process_assign(stmt)
+            return node
 
         def _classify(self, node: ast.Call) -> str | None:
             cat = table.classify_call(node)
@@ -550,18 +554,29 @@ def _sanitize_sympy_output_code(code: str) -> str:
             return cat
 
         def visit_FunctionDef(self, node: ast.FunctionDef) -> ast.AST:  # noqa: N802
-            local: set[str] = set()
-            if node.name in _FORMAT_FUNCS:
-                local.add(node.name)
+            local: set[str] = {node.name}
             for arg in node.args.args + node.args.posonlyargs + node.args.kwonlyargs:
-                if arg.arg in _FORMAT_FUNCS:
-                    local.add(arg.arg)
+                local.add(arg.arg)
+            if node.args.vararg:
+                local.add(node.args.vararg.arg)
+            if node.args.kwarg:
+                local.add(node.args.kwarg.arg)
             # detect ``latex = ...`` assignments inside the body
             for child in ast.walk(node):
                 if isinstance(child, ast.Assign):
                     for tgt in child.targets:
-                        if isinstance(tgt, ast.Name) and tgt.id in _FORMAT_FUNCS:
+                        if isinstance(tgt, ast.Name):
                             local.add(tgt.id)
+            self._scope_shadows.append(local)
+            result = self.generic_visit(node)
+            self._scope_shadows.pop()
+            return result
+
+        def visit_Lambda(self, node: ast.Lambda) -> ast.AST:  # noqa: N802
+            local = {
+                arg.arg
+                for arg in node.args.args + node.args.posonlyargs + node.args.kwonlyargs
+            }
             self._scope_shadows.append(local)
             result = self.generic_visit(node)
             self._scope_shadows.pop()

@@ -224,6 +224,55 @@ def test_runtime_alias_reassigned_away_not_rewritten():
     assert sanitized == code, "reassigned alias must not be rewritten"
 
 
+def test_runtime_later_alias_does_not_rewrite_earlier_call():
+    code = textwrap.dedent("""\
+        import sympy as sp
+        fmt = lambda x: x + 1
+        print(fmt(2))
+        fmt = sp.pretty
+    """)
+    sanitized, stdout = _run_sanitized(code)
+    assert sanitized == code
+    assert stdout.strip() == "3"
+
+
+def test_runtime_local_alias_shadow_not_rewritten():
+    code = textwrap.dedent("""\
+        import sympy as sp
+        fmt = sp.pretty
+        def f():
+            fmt = lambda x: x + 1
+            print(fmt(2))
+        f()
+    """)
+    sanitized, stdout = _run_sanitized(code)
+    assert sanitized == code
+    assert stdout.strip() == "3"
+
+
+def test_runtime_alias_parameter_shadow_not_rewritten():
+    code = textwrap.dedent("""\
+        import sympy as sp
+        fmt = sp.pretty
+        def f(fmt):
+            print(fmt(2))
+        f(lambda x: x + 1)
+    """)
+    sanitized, stdout = _run_sanitized(code)
+    assert sanitized == code
+    assert stdout.strip() == "3"
+
+
+def test_runtime_explicit_import_alias_rewritten():
+    code = textwrap.dedent("""\
+        from sympy import Symbol, pretty as fmt
+        x = Symbol("x")
+        print(fmt(x**2))
+    """)
+    _, stdout = _run_sanitized(code)
+    assert stdout.strip() == "x**2"
+
+
 # ─── v_s6 regression: the original failure case ─────────────────────────────
 
 
