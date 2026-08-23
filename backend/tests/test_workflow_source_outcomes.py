@@ -312,6 +312,7 @@ def test_outcome_is_immutable_idempotent_and_owner_scoped(tmp_path):
         matched_answer_count=0,
         unknown_question_ids=["q404"],
         stable_error_code="no_matching_answer",
+        failure_phase="question_matching",
         retryable=True,
         artifact_file_id=artifact.id,
     )
@@ -328,6 +329,7 @@ def test_outcome_is_immutable_idempotent_and_owner_scoped(tmp_path):
     assert restored.matched_answer_count == 0
     assert restored.unknown_question_ids == ("q404",)
     assert restored.stable_error_code == "no_matching_answer"
+    assert restored.failure_phase == "question_matching"
     assert restored.retryable is True
     assert restored.artifact_file_id == artifact.id
 
@@ -339,6 +341,7 @@ def test_outcome_is_immutable_idempotent_and_owner_scoped(tmp_path):
         matched_answer_count=0,
         unknown_question_ids=["q404"],
         stable_error_code="no_matching_answer",
+        failure_phase="question_matching",
         retryable=True,
         artifact_file_id=artifact.id,
     )
@@ -354,6 +357,7 @@ def test_outcome_is_immutable_idempotent_and_owner_scoped(tmp_path):
             matched_answer_count=1,
             unknown_question_ids=[],
             stable_error_code=None,
+            failure_phase=None,
             retryable=False,
             artifact_file_id=artifact.id,
         )
@@ -367,6 +371,7 @@ def test_outcome_is_immutable_idempotent_and_owner_scoped(tmp_path):
             matched_answer_count=0,
             unknown_question_ids=[],
             stable_error_code="submission_parse_failed",
+            failure_phase="recognition",
             retryable=True,
         )
     with pytest.raises(NotFound) as wrong_owner:
@@ -378,9 +383,46 @@ def test_outcome_is_immutable_idempotent_and_owner_scoped(tmp_path):
             matched_answer_count=0,
             unknown_question_ids=[],
             stable_error_code="submission_parse_failed",
+            failure_phase="recognition",
             retryable=True,
         )
     assert absent.value.code == wrong_owner.value.code == "not_found"
+
+
+def test_outcome_replay_identity_includes_failure_phase(tmp_path):
+    owner_id, assignment_id, operation, stored = _seed_source_context(tmp_path)
+    source, _ = source_outcome_repository.register_source(
+        owner_id=owner_id,
+        assignment_id=assignment_id,
+        operation_id=operation.id,
+        expected_attempt=operation.attempt,
+        order_index=0,
+        stored_file_id=stored.id,
+    )
+    source_outcome_repository.record_outcome(
+        source_id=source.id,
+        owner_id=owner_id,
+        status="parse_failed",
+        student_candidate=None,
+        matched_answer_count=0,
+        unknown_question_ids=[],
+        stable_error_code="submission_parse_failed",
+        failure_phase="recognition",
+        retryable=True,
+    )
+
+    with pytest.raises(VersionConflict):
+        source_outcome_repository.record_outcome(
+            source_id=source.id,
+            owner_id=owner_id,
+            status="parse_failed",
+            student_candidate=None,
+            matched_answer_count=0,
+            unknown_question_ids=[],
+            stable_error_code="submission_parse_failed",
+            failure_phase="structured_parse",
+            retryable=True,
+        )
 
 
 def test_concurrent_outcome_identical_replay_is_idempotent(tmp_path):
@@ -406,6 +448,7 @@ def test_concurrent_outcome_identical_replay_is_idempotent(tmp_path):
                 matched_answer_count=1,
                 unknown_question_ids=[],
                 stable_error_code=None,
+                failure_phase=None,
                 retryable=False,
             )
             return "saved", created
@@ -430,17 +473,18 @@ def test_concurrent_outcome_different_replay_conflicts(tmp_path):
     )
     barrier = Barrier(2)
 
-    def write_outcome(stable_error_code: str):
+    def write_outcome(student_candidate: str):
         barrier.wait()
         try:
             _outcome, created = source_outcome_repository.record_outcome(
                 source_id=source.id,
                 owner_id=owner_id,
                 status="parsed",
-                student_candidate=None,
+                student_candidate=student_candidate,
                 matched_answer_count=1,
                 unknown_question_ids=[],
-                stable_error_code=stable_error_code,
+                stable_error_code=None,
+                failure_phase=None,
                 retryable=False,
             )
             return "saved", created
@@ -486,6 +530,7 @@ def test_outcome_rejects_unbounded_or_invalid_evidence(tmp_path, changes):
         "matched_answer_count": 1,
         "unknown_question_ids": [],
         "stable_error_code": None,
+        "failure_phase": None,
         "retryable": False,
     }
     values.update(changes)
@@ -493,6 +538,135 @@ def test_outcome_rejects_unbounded_or_invalid_evidence(tmp_path, changes):
     with pytest.raises(ValidationError) as invalid:
         source_outcome_repository.record_outcome(**values)
     assert invalid.value.code == "validation_error"
+
+
+@pytest.mark.parametrize(
+    "stable_error_code, failure_phase",
+    [
+        ("raw_sdk_exception", "recognition"),
+        ("submission_parse_failed", "raw_internal_phase"),
+        (None, "recognition"),
+        ("submission_parse_failed", None),
+    ],
+)
+def test_repository_rejects_unknown_or_incomplete_source_diagnostic(
+    tmp_path,
+    stable_error_code,
+    failure_phase,
+):
+    owner_id, assignment_id, operation, stored = _seed_source_context(tmp_path)
+    source, _ = source_outcome_repository.register_source(
+        owner_id=owner_id,
+        assignment_id=assignment_id,
+        operation_id=operation.id,
+        expected_attempt=operation.attempt,
+        order_index=0,
+        stored_file_id=stored.id,
+    )
+
+    with pytest.raises(ValidationError) as invalid:
+        source_outcome_repository.record_outcome(
+            source_id=source.id,
+            owner_id=owner_id,
+            status="parse_failed",
+            student_candidate=None,
+            matched_answer_count=0,
+            unknown_question_ids=[],
+            stable_error_code=stable_error_code,
+            failure_phase=failure_phase,
+            retryable=True,
+        )
+    assert invalid.value.code == "validation_error"
+
+
+def test_finalize_pending_sources_preserves_terminal_results_and_is_idempotent(
+    tmp_path,
+):
+    owner_id, assignment_id, operation, first_file = _seed_source_context(tmp_path)
+    stored_files = [
+        first_file,
+        _save_assignment_file(
+            tmp_path,
+            owner_id=owner_id,
+            assignment_id=assignment_id,
+            index=1,
+        ),
+        _save_assignment_file(
+            tmp_path,
+            owner_id=owner_id,
+            assignment_id=assignment_id,
+            index=2,
+        ),
+    ]
+    sources = []
+    for index, stored in enumerate(stored_files):
+        source, _ = source_outcome_repository.register_source(
+            owner_id=owner_id,
+            assignment_id=assignment_id,
+            operation_id=operation.id,
+            expected_attempt=operation.attempt,
+            order_index=index,
+            stored_file_id=stored.id,
+        )
+        sources.append(source)
+
+    source_outcome_repository.record_outcome(
+        source_id=sources[0].id,
+        owner_id=owner_id,
+        status="parsed",
+        student_candidate="student-1",
+        matched_answer_count=1,
+        unknown_question_ids=[],
+        stable_error_code=None,
+        failure_phase=None,
+        retryable=False,
+    )
+
+    created = source_outcome_repository.finalize_pending_sources_as_failed(
+        owner_id=owner_id,
+        assignment_id=assignment_id,
+        operation_id=operation.id,
+        expected_attempt=operation.attempt,
+        reason_code="submission_persistence_failed",
+        failure_phase="result_persistence",
+        retryable=True,
+    )
+    replay_created = source_outcome_repository.finalize_pending_sources_as_failed(
+        owner_id=owner_id,
+        assignment_id=assignment_id,
+        operation_id=operation.id,
+        expected_attempt=operation.attempt,
+        reason_code="submission_persistence_failed",
+        failure_phase="result_persistence",
+        retryable=True,
+    )
+
+    assert created == 2
+    assert replay_created == 0
+    results = source_outcome_repository.list_source_results(
+        operation_id=operation.id,
+        owner_id=owner_id,
+        attempt=operation.attempt,
+    )
+    assert [result.source.order_index for result in results] == [0, 1, 2]
+    assert results[0].outcome is not None
+    assert results[0].outcome.status == "parsed"
+    for result in results[1:]:
+        assert result.outcome is not None
+        assert result.outcome.status == "parse_failed"
+        assert result.outcome.stable_error_code == "submission_persistence_failed"
+        assert result.outcome.failure_phase == "result_persistence"
+
+    with pytest.raises(NotFound):
+        source_outcome_repository.finalize_pending_sources_as_failed(
+            owner_id="another-owner",
+            assignment_id=assignment_id,
+            operation_id=operation.id,
+            expected_attempt=operation.attempt,
+            reason_code="submission_persistence_failed",
+            failure_phase="result_persistence",
+            retryable=True,
+        )
 
 
 @pytest.mark.parametrize(
@@ -563,6 +737,7 @@ def test_twenty_sources_preserve_failed_and_conflicting_results(tmp_path):
             matched_answer_count=1 if status == "parsed" else 0,
             unknown_question_ids=[],
             stable_error_code=None if status == "parsed" else "submission_parse_failed",
+            failure_phase=None if status == "parsed" else "recognition",
             retryable=status != "parsed",
         )
 
@@ -586,6 +761,7 @@ def test_twenty_sources_preserve_failed_and_conflicting_results(tmp_path):
         matched_answer_count=1,
         unknown_question_ids=[],
         stable_error_code="student_identity_conflict",
+        failure_phase="identity",
         retryable=False,
     )
     listed = source_outcome_repository.list_sources(
@@ -632,6 +808,7 @@ def test_no_matching_counts_as_failed_and_owner_scoped_reads_hide_batch(tmp_path
         matched_answer_count=0,
         unknown_question_ids=["q404"],
         stable_error_code="no_matching_answer",
+        failure_phase="question_matching",
         retryable=True,
     )
 
@@ -695,6 +872,7 @@ def test_retry_source_preserves_lineage_and_artifact_reference(tmp_path):
         matched_answer_count=0,
         unknown_question_ids=[],
         stable_error_code="submission_parse_failed",
+        failure_phase="recognition",
         retryable=True,
         artifact_file_id=artifact.id,
     )

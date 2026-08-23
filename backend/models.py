@@ -5,7 +5,7 @@ Extends the original Correction/StepScore with multi-expert support and progress
 from __future__ import annotations
 
 import time
-from typing import List, Optional, Literal, Dict, Any
+from typing import Annotated, List, Optional, Literal, Dict, Any
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
@@ -230,11 +230,18 @@ class QuestionScorePolicy(BaseModel):
 
 
 class StudentAnswerInfo(BaseModel):
-    q_id: str
-    number: str
-    type: str
-    content: str = Field(description="Student's answer content; empty string if unanswered")
-    flag: List[str] = Field(default_factory=list, description="Recognition issues/flags")
+    q_id: str = Field(max_length=64)
+    number: str = Field(max_length=64)
+    type: str = Field(max_length=64)
+    content: str = Field(
+        max_length=500_000,
+        description="Student's answer content; empty string if unanswered",
+    )
+    flag: List[Annotated[str, Field(max_length=256)]] = Field(
+        default_factory=list,
+        max_length=100,
+        description="Recognition issues/flags",
+    )
 
     @field_validator("q_id", mode="before")
     @classmethod
@@ -256,9 +263,24 @@ class StudentAnswerInfo(BaseModel):
 
 
 class StudentSubmission(BaseModel):
-    stu_id: str = Field(description="Student ID extracted from filename")
-    stu_name: str = Field(description="Student name extracted from filename")
-    stu_ans: List[StudentAnswerInfo]
+    stu_id: str = Field(max_length=160, description="Student ID extracted from filename")
+    stu_name: str = Field(max_length=160, description="Student name extracted from filename")
+    stu_ans: List[StudentAnswerInfo] = Field(max_length=1000)
+
+    @model_validator(mode="after")
+    def bound_total_structured_output(self) -> "StudentSubmission":
+        total_characters = len(self.stu_id) + len(self.stu_name)
+        total_characters += sum(
+            len(answer.q_id)
+            + len(answer.number)
+            + len(answer.type)
+            + len(answer.content)
+            + sum(len(flag) for flag in answer.flag)
+            for answer in self.stu_ans
+        )
+        if total_characters > 1_000_000:
+            raise ValueError("structured output exceeds the safe total size")
+        return self
 
 
 class ProblemSourceDraft(BaseModel):

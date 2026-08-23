@@ -101,6 +101,7 @@ export interface StudentSubmission {
   source_filename?: string | null;
   identity_match_method?: SubmissionIdentityMode | null;
   identity_status?: "matched" | "needs_review";
+  source_id?: string | null;
 }
 
 export interface StudentIdentityUpdateResponse {
@@ -111,6 +112,49 @@ export interface StudentIdentityUpdateResponse {
 }
 
 export type SubmissionIdentityMode = "filename" | "roster" | "manual_review";
+
+export type SubmissionSourceStatus =
+  | "processing"
+  | "parsed"
+  | "failed"
+  | "identity_needs_review";
+
+export type SubmissionSourceInternalStatus =
+  | "pending"
+  | "parsed"
+  | "parse_failed"
+  | "identity_conflict"
+  | "no_matching_answer";
+
+export interface SubmissionSourceSummary {
+  uploaded: number;
+  parsed: number;
+  failed: number;
+  identity_needs_review: number;
+  pending: number;
+}
+
+export interface SubmissionSourceOutcome {
+  source_id: string;
+  file_id: string;
+  file_name: string;
+  content_type: string;
+  size_bytes: number;
+  status: SubmissionSourceStatus;
+  internal_status: SubmissionSourceInternalStatus;
+  reason_code?: string | null;
+  recognition_reason_code?: string | null;
+  resolution_status?: "identity_resolved" | null;
+  failure_phase?: string | null;
+  retryable: boolean;
+  student_candidate?: string | null;
+  matched_answer_count: number;
+  unknown_question_ids: string[];
+  job_id: string;
+  attempt: number;
+  trace_id?: string;
+  created_at: number;
+}
 
 export interface StepScore {
   step_no: number;
@@ -200,6 +244,7 @@ export interface TaskLite {
   grading_setup_configured?: boolean;
   problem_count: number;
   student_count: number;
+  submission_source_summary?: SubmissionSourceSummary;
   kb_docs: Record<string, KBDoc>;
   kb_doc_count: number;
   error?: string | null;
@@ -210,9 +255,11 @@ export interface TaskLite {
 export interface Task extends TaskLite {
   problem_data: Record<string, ProblemInfo>;
   student_data: Record<string, StudentSubmission>;
+  submission_sources?: SubmissionSourceOutcome[];
 }
 
 export interface TaskStateSnapshot extends TaskLite {
+  submission_sources?: SubmissionSourceOutcome[];
   progress?: JobProgress | null;
   active_job_id?: string | null;
   active_operation?:

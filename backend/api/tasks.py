@@ -37,6 +37,7 @@ from backend.knowledge.service import ingest_document
 from backend.llm.registry import ExpertRegistry, get_scoped_expert_registry
 from backend.models import TaskGradingSetup, User
 from backend.services import task_facade
+from backend.tools.file_processing import SUBMISSION_UPLOAD_MAX_BYTES
 
 
 router = APIRouter(prefix="/tasks", tags=["tasks"])
@@ -63,6 +64,7 @@ class InterpretTaskQueryRequest(BaseModel):
 class GradeRequest(BaseModel):
     language: str = "en"
     multi_sample_n: int | None = Field(default=None, ge=1, le=10)
+    expected_workflow_revision: int = Field(ge=0)
 
 
 class UpdateGradingSetupRequest(BaseModel):
@@ -71,6 +73,7 @@ class UpdateGradingSetupRequest(BaseModel):
 
 
 class UpdateProblemRequest(BaseModel):
+    expected_workflow_revision: int | None = Field(default=None, ge=0)
     stem: str | None = None
     criterion: str | None = None
     max_score: float | None = Field(
@@ -352,7 +355,12 @@ async def parse_submissions_endpoint(
     current: User = Depends(require_teacher),
     registry: ExpertRegistry = Depends(get_scoped_expert_registry),
 ):
-    body = await file.read()
+    body = await file.read(SUBMISSION_UPLOAD_MAX_BYTES + 1)
+    if len(body) > SUBMISSION_UPLOAD_MAX_BYTES:
+        raise HTTPException(
+            status.HTTP_413_CONTENT_TOO_LARGE,
+            detail={"code": "submission_source_too_large"},
+        )
     roster_entries: list[dict[str, str]] = []
     roster_name = None
     if roster_file is not None:
@@ -395,8 +403,11 @@ def start_grading(
     request: GradeRequest,
     current: User = Depends(require_teacher),
 ):
-    del request  # immutable setup snapshot controls the real run
-    return _domain(lambda: task_facade.start_task_grading(task_id=task_id, owner_id=current.id))
+    return _domain(lambda: task_facade.start_task_grading(
+        task_id=task_id,
+        owner_id=current.id,
+        expected_workflow_revision=request.expected_workflow_revision,
+    ))
 
 
 @router.get("/{task_id}/state")
@@ -417,7 +428,8 @@ def update_problem(task_id: str, q_id: str, request: UpdateProblemRequest,
                    current: User = Depends(require_teacher)):
     return _domain(lambda: task_facade.update_problem(
         task_id=task_id, owner_id=current.id, q_id=q_id,
-        patch=request.model_dump(exclude_unset=True),
+        patch=request.model_dump(exclude_unset=True, exclude={"expected_workflow_revision"}),
+        expected_revision=request.expected_workflow_revision,
     ))
 
 
@@ -585,10 +597,19 @@ def _grading_setup_payload(task_id: str, owner_id: str, registry: ExpertRegistry
             knowledge_scope="all_task_docs" if task["kb_doc_count"] else "none",
         ).model_dump(mode="json")
     blocking = []
+    warnings = []
     if not configs:
         blocking.append("provider_required")
-    if task["status"] not in {"problems_ready", "submissions_ready", "error"}:
+    if task["status"] not in {
+        "submissions_ready", "graded", "review_confirmed", "finalized", "error",
+    }:
         blocking.append("invalid_state")
+    source_readiness = task_facade.grading_readiness(
+        task_id=task_id,
+        owner_id=owner_id,
+    )
+    blocking.extend(source_readiness["blocking_issues"])
+    warnings.extend(source_readiness["warnings"])
     if workflow.grading_setup:
         try:
             _validate_grading_setup(TaskGradingSetup.model_validate(workflow.grading_setup), registry)
@@ -608,7 +629,11 @@ def _grading_setup_payload(task_id: str, owner_id: str, registry: ExpertRegistry
             "task_doc_count": task["kb_doc_count"],
             "task_docs": list(task["kb_docs"].values()),
         },
-        "readiness": {"ready": not blocking, "blocking_issues": list(dict.fromkeys(blocking)), "warnings": []},
+        "readiness": {
+            "ready": not blocking,
+            "blocking_issues": list(dict.fromkeys(blocking)),
+            "warnings": list(dict.fromkeys(warnings)),
+        },
     }
 
 

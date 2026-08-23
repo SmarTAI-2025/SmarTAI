@@ -26,17 +26,17 @@ from backend.db.models import AssignmentRecord, StoredFileRecord
 from backend.db.session import session_scope
 from backend.db.workflow_repository import WorkflowOperationRecord
 from backend.domain.errors import NotFound, ValidationError, VersionConflict
+from backend.domain.source_outcomes import (
+    SOURCE_OUTCOME_STATUSES,
+    source_diagnostic_is_valid,
+)
 
 
-OUTCOME_STATUSES = frozenset({
-    "parsed",
-    "parse_failed",
-    "identity_conflict",
-    "no_matching_answer",
-})
+OUTCOME_STATUSES = SOURCE_OUTCOME_STATUSES
 MAX_UNKNOWN_QUESTION_IDS = 100
 MAX_QUESTION_ID_LENGTH = 64
 MAX_UNKNOWN_QUESTION_IDS_JSON_BYTES = 8192
+MAX_STUDENT_CANDIDATE_LENGTH = 255
 
 
 class WorkflowSourceItemRecord(Base):
@@ -113,6 +113,7 @@ class WorkflowSourceOutcomeRecord(Base):
     matched_answer_count: Mapped[int] = mapped_column(Integer, nullable=False)
     unknown_question_ids: Mapped[list] = mapped_column(JSON, nullable=False)
     stable_error_code: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    failure_phase: Mapped[str | None] = mapped_column(String(64), nullable=True)
     retryable: Mapped[bool] = mapped_column(Boolean, nullable=False)
     artifact_file_id: Mapped[str | None] = mapped_column(
         ForeignKey("stored_files.id", ondelete="RESTRICT"), nullable=True, index=True
@@ -147,6 +148,7 @@ class WorkflowSourceOutcome:
     matched_answer_count: int
     unknown_question_ids: tuple[str, ...]
     stable_error_code: str | None
+    failure_phase: str | None
     retryable: bool
     artifact_file_id: str | None
     created_at: float
@@ -163,6 +165,12 @@ class WorkflowSourceSummary:
     @property
     def is_complete(self) -> bool:
         return self.pending_count == 0
+
+
+@dataclass(frozen=True)
+class WorkflowSourceResult:
+    source: WorkflowSourceItem
+    outcome: WorkflowSourceOutcome | None
 
 
 def _source_dto(
@@ -226,6 +234,7 @@ def _outcome_dto(row: WorkflowSourceOutcomeRecord) -> WorkflowSourceOutcome:
         matched_answer_count=row.matched_answer_count,
         unknown_question_ids=tuple(row.unknown_question_ids),
         stable_error_code=row.stable_error_code,
+        failure_phase=row.failure_phase,
         retryable=row.retryable,
         artifact_file_id=row.artifact_file_id,
         created_at=row.created_at,
@@ -240,6 +249,7 @@ def _same_outcome(
     matched_answer_count: int,
     unknown_question_ids: list[str],
     stable_error_code: str | None,
+    failure_phase: str | None,
     retryable: bool,
     artifact_file_id: str | None,
 ) -> bool:
@@ -249,6 +259,7 @@ def _same_outcome(
         and row.matched_answer_count == matched_answer_count
         and row.unknown_question_ids == unknown_question_ids
         and row.stable_error_code == stable_error_code
+        and row.failure_phase == failure_phase
         and row.retryable is retryable
         and row.artifact_file_id == artifact_file_id
     )
@@ -257,13 +268,21 @@ def _same_outcome(
 def _validate_outcome_evidence(
     *,
     status: str,
+    student_candidate: str | None,
     matched_answer_count: int,
     unknown_question_ids: list[str],
+    stable_error_code: str | None,
+    failure_phase: str | None,
 ) -> None:
     if status not in OUTCOME_STATUSES:
         raise ValidationError("Invalid workflow source outcome status.")
     if matched_answer_count < 0:
         raise ValidationError("Matched answer count must be non-negative.")
+    if student_candidate is not None and (
+        not isinstance(student_candidate, str)
+        or len(student_candidate) > MAX_STUDENT_CANDIDATE_LENGTH
+    ):
+        raise ValidationError("Student candidate exceeds the storage bound.")
     if not isinstance(unknown_question_ids, list):
         raise ValidationError("Unknown question IDs must be a list.")
     if len(unknown_question_ids) > MAX_UNKNOWN_QUESTION_IDS:
@@ -279,6 +298,8 @@ def _validate_outcome_evidence(
     ).encode("utf-8")
     if len(encoded) > MAX_UNKNOWN_QUESTION_IDS_JSON_BYTES:
         raise ValidationError("Unknown question IDs exceed the storage bound.")
+    if not source_diagnostic_is_valid(status, stable_error_code, failure_phase):
+        raise ValidationError("Invalid workflow source diagnostic.")
 
 
 def _owned_operation_for_update_statement(
@@ -411,6 +432,32 @@ def get_source(source_id: str, *, owner_id: str) -> WorkflowSourceItem:
         return _load_source_dto(session, source_id, owner_id)
 
 
+def get_source_at_position(
+    *,
+    operation_id: str,
+    owner_id: str,
+    attempt: int,
+    order_index: int,
+) -> WorkflowSourceItem | None:
+    with session_scope() as session:
+        _require_owned_operation(session, operation_id, owner_id)
+        row = session.execute(
+            select(WorkflowSourceItemRecord, StoredFileRecord)
+            .join(
+                StoredFileRecord,
+                StoredFileRecord.id == WorkflowSourceItemRecord.stored_file_id,
+            )
+            .where(
+                WorkflowSourceItemRecord.operation_id == operation_id,
+                WorkflowSourceItemRecord.owner_id == owner_id,
+                WorkflowSourceItemRecord.attempt == attempt,
+                WorkflowSourceItemRecord.order_index == order_index,
+                StoredFileRecord.owner_id == owner_id,
+            )
+        ).one_or_none()
+        return _source_dto(row[0], row[1]) if row is not None else None
+
+
 def _require_owned_operation(session, operation_id: str, owner_id: str) -> None:
     operation = session.scalar(select(WorkflowOperationRecord.id).where(
         WorkflowOperationRecord.id == operation_id,
@@ -443,6 +490,45 @@ def list_sources(
             .order_by(WorkflowSourceItemRecord.order_index)
         ).all()
         return [_source_dto(source, stored_file) for source, stored_file in rows]
+
+
+def list_source_results(
+    *,
+    operation_id: str,
+    owner_id: str,
+    attempt: int,
+) -> list[WorkflowSourceResult]:
+    with session_scope() as session:
+        _require_owned_operation(session, operation_id, owner_id)
+        rows = session.execute(
+            select(
+                WorkflowSourceItemRecord,
+                StoredFileRecord,
+                WorkflowSourceOutcomeRecord,
+            )
+            .join(
+                StoredFileRecord,
+                StoredFileRecord.id == WorkflowSourceItemRecord.stored_file_id,
+            )
+            .outerjoin(
+                WorkflowSourceOutcomeRecord,
+                WorkflowSourceOutcomeRecord.source_id == WorkflowSourceItemRecord.id,
+            )
+            .where(
+                WorkflowSourceItemRecord.operation_id == operation_id,
+                WorkflowSourceItemRecord.owner_id == owner_id,
+                WorkflowSourceItemRecord.attempt == attempt,
+                StoredFileRecord.owner_id == owner_id,
+            )
+            .order_by(WorkflowSourceItemRecord.order_index)
+        ).all()
+        return [
+            WorkflowSourceResult(
+                source=_source_dto(source, stored_file),
+                outcome=_outcome_dto(outcome) if outcome is not None else None,
+            )
+            for source, stored_file, outcome in rows
+        ]
 
 
 def summarize_sources(
@@ -479,6 +565,115 @@ def summarize_sources(
     )
 
 
+def find_retry_source_id(
+    *,
+    operation_id: str,
+    owner_id: str,
+    expected_attempt: int,
+    order_index: int,
+    sha256: str,
+) -> str | None:
+    """Find the newest matching prior-attempt source for retry lineage."""
+    if expected_attempt <= 1:
+        return None
+    with session_scope() as session:
+        _require_owned_operation(session, operation_id, owner_id)
+        return session.scalar(
+            select(WorkflowSourceItemRecord.id)
+            .join(
+                StoredFileRecord,
+                StoredFileRecord.id == WorkflowSourceItemRecord.stored_file_id,
+            )
+            .where(
+                WorkflowSourceItemRecord.operation_id == operation_id,
+                WorkflowSourceItemRecord.owner_id == owner_id,
+                WorkflowSourceItemRecord.attempt < expected_attempt,
+                WorkflowSourceItemRecord.order_index == order_index,
+                StoredFileRecord.owner_id == owner_id,
+                StoredFileRecord.sha256 == sha256,
+            )
+            .order_by(WorkflowSourceItemRecord.attempt.desc())
+            .limit(1)
+        )
+
+
+def finalize_pending_sources_as_failed(
+    *,
+    owner_id: str,
+    assignment_id: str,
+    operation_id: str,
+    expected_attempt: int,
+    reason_code: str,
+    failure_phase: str,
+    retryable: bool,
+) -> int:
+    """Give every registered source a terminal result without overwriting winners.
+
+    Each immutable insert uses its own transaction. A concurrent normal writer
+    may win for one source without rolling back finalization of the others.
+    """
+    _validate_outcome_evidence(
+        status="parse_failed",
+        student_candidate=None,
+        matched_answer_count=0,
+        unknown_question_ids=[],
+        stable_error_code=reason_code,
+        failure_phase=failure_phase,
+    )
+    with session_scope() as session:
+        operation = session.scalar(
+            _owned_operation_for_update_statement(
+                operation_id=operation_id,
+                assignment_id=assignment_id,
+                owner_id=owner_id,
+            )
+        )
+        if operation is None:
+            raise NotFound("workflow_source")
+        if operation.attempt != expected_attempt:
+            raise VersionConflict(
+                "A newer workflow operation attempt is active.",
+                code="stale_operation_attempt",
+            )
+        pending_source_ids = list(session.scalars(
+            select(WorkflowSourceItemRecord.id)
+            .outerjoin(
+                WorkflowSourceOutcomeRecord,
+                WorkflowSourceOutcomeRecord.source_id == WorkflowSourceItemRecord.id,
+            )
+            .where(
+                WorkflowSourceItemRecord.operation_id == operation_id,
+                WorkflowSourceItemRecord.owner_id == owner_id,
+                WorkflowSourceItemRecord.assignment_id == assignment_id,
+                WorkflowSourceItemRecord.attempt == expected_attempt,
+                WorkflowSourceOutcomeRecord.source_id.is_(None),
+            )
+            .order_by(WorkflowSourceItemRecord.order_index)
+        ))
+
+    created_count = 0
+    for source_id in pending_source_ids:
+        try:
+            _outcome, created = record_outcome(
+                source_id=source_id,
+                owner_id=owner_id,
+                status="parse_failed",
+                student_candidate=None,
+                matched_answer_count=0,
+                unknown_question_ids=[],
+                stable_error_code=reason_code,
+                failure_phase=failure_phase,
+                retryable=retryable,
+            )
+            created_count += int(created)
+        except VersionConflict:
+            # A normal worker won the immutable terminal write. Any terminal
+            # result is authoritative and must never be replaced by cleanup.
+            if get_outcome(source_id, owner_id=owner_id) is None:
+                raise
+    return created_count
+
+
 def get_outcome(
     source_id: str,
     *,
@@ -508,6 +703,7 @@ def record_outcome(
     matched_answer_count: int,
     unknown_question_ids: list[str],
     stable_error_code: str | None,
+    failure_phase: str | None,
     retryable: bool,
     artifact_file_id: str | None = None,
 ) -> tuple[WorkflowSourceOutcome, bool]:
@@ -521,8 +717,11 @@ def record_outcome(
 
         _validate_outcome_evidence(
             status=status,
+            student_candidate=student_candidate,
             matched_answer_count=matched_answer_count,
             unknown_question_ids=unknown_question_ids,
+            stable_error_code=stable_error_code,
+            failure_phase=failure_phase,
         )
 
         if artifact_file_id is not None:
@@ -543,6 +742,7 @@ def record_outcome(
                 matched_answer_count=matched_answer_count,
                 unknown_question_ids=unknown_question_ids,
                 stable_error_code=stable_error_code,
+                failure_phase=failure_phase,
                 retryable=retryable,
                 artifact_file_id=artifact_file_id,
             ):
@@ -556,6 +756,7 @@ def record_outcome(
             matched_answer_count=matched_answer_count,
             unknown_question_ids=list(unknown_question_ids),
             stable_error_code=stable_error_code,
+            failure_phase=failure_phase,
             retryable=retryable,
             artifact_file_id=artifact_file_id,
             created_at=time.time(),
@@ -586,6 +787,7 @@ def record_outcome(
                 matched_answer_count=matched_answer_count,
                 unknown_question_ids=unknown_question_ids,
                 stable_error_code=stable_error_code,
+                failure_phase=failure_phase,
                 retryable=retryable,
                 artifact_file_id=artifact_file_id,
             ):

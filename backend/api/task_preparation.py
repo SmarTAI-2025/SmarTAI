@@ -200,8 +200,11 @@ def _validate_source_upload(
 
 def _stable_vision_error(exc: HTTPException, *, role: str, filename: str) -> None:
     detail = exc.detail
-    if exc.status_code == status.HTTP_503_SERVICE_UNAVAILABLE and (
-        isinstance(detail, str) and "requires OCR" in detail
+    structured_code = detail.get("code") if isinstance(detail, dict) else None
+    if structured_code == "vision_provider_required" or (
+        exc.status_code == status.HTTP_503_SERVICE_UNAVAILABLE
+        and isinstance(detail, str)
+        and "requires OCR" in detail
     ):
         raise HTTPException(
             status.HTTP_422_UNPROCESSABLE_ENTITY,
@@ -640,6 +643,7 @@ async def start_question_preparation(
         workflow, active = task_facade._ensure_no_other_active_operation(
             task_id=task_id, owner_id=current.id,
             operation_type="question_preparation", input_hash=operation_hash,
+            allow_supersede=request.replace_confirmed,
         )
         if active is not None:
             return {

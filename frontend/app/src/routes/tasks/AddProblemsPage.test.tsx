@@ -2,10 +2,13 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { createMemoryRouter, RouterProvider } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { APIError } from "@/api/client";
 import { AddProblemsPage } from "./AddProblemsPage";
 
 const preflightMutateAsync = vi.hoisted(() => vi.fn());
 const startMutateAsync = vi.hoisted(() => vi.fn());
+const taskRefetch = vi.hoisted(() => vi.fn());
+const expertsRefetch = vi.hoisted(() => vi.fn());
 const capabilityState = vi.hoisted(() => ({
   available: true,
   data: {
@@ -29,7 +32,7 @@ vi.mock("@/api/hooks", () => ({
     data: [{ provider_id: "mock:test", enabled: true }],
     isLoading: false,
     isError: false,
-    refetch: vi.fn(),
+    refetch: expertsRefetch,
   }),
   useProblemSourceLibrary: () => ({
     data: { items: [] },
@@ -57,7 +60,7 @@ vi.mock("@/api/hooks", () => ({
       problem_file_name: null,
       course_id: "course-1",
     },
-    refetch: vi.fn(),
+    refetch: taskRefetch,
   }),
 }));
 
@@ -66,7 +69,7 @@ vi.mock("@/components/new-task/NewTaskStepper", () => ({
 }));
 
 vi.mock("@/i18n/I18nProvider", () => ({
-  useI18n: () => ({ locale: "zh-CN" }),
+  useI18n: () => ({ locale: "zh-CN", t: (key: string) => key }),
 }));
 
 vi.mock("sonner", () => ({
@@ -99,8 +102,12 @@ beforeEach(() => {
   capabilityState.data.limits.max_file_bytes = 5 * 1024 * 1024;
   preflightMutateAsync.mockReset();
   startMutateAsync.mockReset();
+  taskRefetch.mockReset();
+  expertsRefetch.mockReset();
   preflightMutateAsync.mockResolvedValue({ source_token: "source-1" });
   startMutateAsync.mockResolvedValue({ status: "started", job_id: "job-1" });
+  taskRefetch.mockResolvedValue({ data: { status: "error" } });
+  expertsRefetch.mockResolvedValue({ data: [] });
 });
 
 describe("AddProblemsPage score configuration", () => {
@@ -229,5 +236,24 @@ describe("AddProblemsPage upload capability contract", () => {
     });
 
     expect(screen.getByRole("alert")).toHaveTextContent("编程题测试资料不接受图片");
+  });
+});
+
+describe("AddProblemsPage workflow recovery", () => {
+  it("refreshes the server snapshot and dismisses a stale workflow-busy warning", async () => {
+    const user = userEvent.setup();
+    startMutateAsync.mockRejectedValueOnce(new APIError(
+      409,
+      "The task is busy.",
+      { detail: { code: "workflow_busy", stage: "question_preparation" } },
+    ));
+    renderPage();
+    await uploadProblemFile(user);
+
+    await user.click(screen.getByRole("button", { name: "识别并准备题目资料" }));
+    await user.click(await screen.findByRole("button", { name: "刷新任务状态" }));
+
+    await waitFor(() => expect(taskRefetch).toHaveBeenCalledOnce());
+    expect(screen.queryByRole("button", { name: "刷新任务状态" })).not.toBeInTheDocument();
   });
 });

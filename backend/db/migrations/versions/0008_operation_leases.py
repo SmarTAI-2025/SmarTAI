@@ -1,7 +1,7 @@
 """Add operation lease fencing columns.
 
-Revision ID: 0007_operation_leases
-Revises: 0006_operation_checkpoints
+Revision ID: 0008_operation_leases
+Revises: 0007_source_outcome_diagnostics
 """
 from __future__ import annotations
 
@@ -9,8 +9,8 @@ from alembic import op
 import sqlalchemy as sa
 
 
-revision = "0007_operation_leases"
-down_revision = "0006_operation_checkpoints"
+revision = "0008_operation_leases"
+down_revision = "0007_source_outcome_diagnostics"
 branch_labels = None
 depends_on = None
 

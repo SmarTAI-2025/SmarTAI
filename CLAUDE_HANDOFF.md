@@ -222,7 +222,7 @@ a process gap; no implementation result is inferred from it.
 
 ### Implemented files
 
-- `backend/db/migrations/versions/0007_operation_leases.py`
+- `backend/db/migrations/versions/0008_operation_leases.py`
 - `backend/db/workflow_repository.py`
 - `backend/tests/test_workflow_operation_leases.py`
 - `backend/tests/test_migration_roundtrip.py`
@@ -252,7 +252,8 @@ stable validation errors.
   `path_separator` deprecation warning.
 - `python -m pytest backend/tests/test_postgres_integration.py -q -rs`:
   `8 skipped`; `SMARTAI_TEST_POSTGRES_URL` is not configured locally.
-- `python -m alembic heads`: `0007_operation_leases (head)`.
+- `python -m alembic heads`: `0008_operation_leases (head)` after integration
+  with the source-outcome diagnostics migration already on `main`.
 - `git diff --check`: passed; only CRLF conversion notices for this handoff
   file were emitted by subsequent diff commands.
 
@@ -460,4 +461,3 @@ were changed. A live PostgreSQL service and Playwright browser run were not
 available locally (Docker is unavailable); the PostgreSQL DDL is covered by
 the dialect-rendered regression test and the E2E readiness command is covered
 by the workflow regression test.
-
