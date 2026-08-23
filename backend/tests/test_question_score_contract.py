@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import io
 from types import SimpleNamespace
 from unittest.mock import MagicMock
@@ -23,6 +24,12 @@ from backend.skills.question_score import (
     InterpretedQuestionScore,
     InterpretedQuestionScorePlan,
     resolve_question_score_policy,
+)
+
+
+PNG_1X1 = base64.b64decode(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk"
+    "AAMAASsJTYQAAAAASUVORK5CYII="
 )
 
 
@@ -333,7 +340,7 @@ async def test_source_image_uses_role_specific_normalized_vision_ocr_path(
 ):
     registry = _VisionRegistry()
     upload = UploadFile(
-        file=io.BytesIO(b"fake image bytes"),
+        file=io.BytesIO(PNG_1X1),
         filename=filename,
         headers=Headers({"content-type": "image/png"}),
     )

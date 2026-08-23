@@ -7,6 +7,8 @@ bytes are in the storage backend.
 """
 from __future__ import annotations
 
+from contextlib import contextmanager
+
 import pytest
 
 from backend.db.base import Base
@@ -117,6 +119,91 @@ def test_file_linked_to_assignment_lists_and_deletes(tmp_path):
     n = delete_files_for_assignment(storage=storage, assignment_id="asg-2", owner_id="owner-1")
     assert n == 1
     assert storage.exists(saved.storage_key) is False
+
+
+def test_save_file_recovers_when_commit_succeeds_but_acknowledgement_is_lost(
+    tmp_path,
+    monkeypatch,
+):
+    """An ambiguous commit must never delete the object behind a committed row."""
+    import backend.db.file_repository as file_repository
+
+    configure_database(f"sqlite:///{(tmp_path / 'ambiguous.db').as_posix()}")
+    Base.metadata.create_all(get_engine())
+    _seed_owner()
+    _seed_assignment()
+    storage = LocalStorage(tmp_path / "ambiguous-uploads")
+    real_session_scope = file_repository.session_scope
+    calls = 0
+
+    @contextmanager
+    def commit_then_lose_ack():
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            with real_session_scope() as session:
+                yield session
+            raise RuntimeError("injected_commit_ack_loss")
+        with real_session_scope() as session:
+            yield session
+
+    monkeypatch.setattr(file_repository, "session_scope", commit_then_lose_ack)
+
+    saved = file_repository.save_file(
+        storage=storage,
+        owner_id="owner-1",
+        kind="submission_source",
+        original_name="answer.txt",
+        content=b"durable",
+        content_type="text/plain",
+        assignment_id="asg-1",
+    )
+
+    assert calls == 2
+    assert storage.exists(saved.storage_key)
+    assert get_file(file_id=saved.id, owner_id="owner-1") == saved
+
+
+def test_save_file_preserves_object_when_commit_state_cannot_be_verified(
+    tmp_path,
+    monkeypatch,
+):
+    """Unknown database state favors recoverable cleanup over object loss."""
+    import backend.db.file_repository as file_repository
+
+    configure_database(f"sqlite:///{(tmp_path / 'unverified.db').as_posix()}")
+    Base.metadata.create_all(get_engine())
+    _seed_owner()
+    _seed_assignment()
+    storage = LocalStorage(tmp_path / "unverified-uploads")
+    saved_keys: list[str] = []
+    real_save = storage.save
+
+    def capture_save(key: str, content: bytes) -> None:
+        saved_keys.append(key)
+        real_save(key, content)
+
+    @contextmanager
+    def unavailable_database():
+        raise RuntimeError("injected_database_unavailable")
+        yield  # pragma: no cover
+
+    monkeypatch.setattr(storage, "save", capture_save)
+    monkeypatch.setattr(file_repository, "session_scope", unavailable_database)
+
+    with pytest.raises(RuntimeError, match="injected_database_unavailable"):
+        file_repository.save_file(
+            storage=storage,
+            owner_id="owner-1",
+            kind="submission_source",
+            original_name="answer.txt",
+            content=b"recoverable",
+            content_type="text/plain",
+            assignment_id="asg-1",
+        )
+
+    assert len(saved_keys) == 1
+    assert storage.exists(saved_keys[0])
 
 
 def test_storage_factory_selects_object_backend_from_settings(monkeypatch):

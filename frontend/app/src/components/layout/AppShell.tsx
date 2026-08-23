@@ -2,6 +2,10 @@ import { Menu, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { Link, Outlet, useNavigate } from "react-router-dom";
 import { useCurrentUser, useExperts, useLogout } from "@/api/hooks";
+import {
+  SmarTAINavigationBrand,
+  SmarTAIWordmark,
+} from "@/components/brand/SmarTAIBrand";
 import { AccountMenu } from "@/components/layout/AccountMenu";
 import { LanguageToggle } from "@/components/layout/LanguageToggle";
 import { ModelStatusMenu } from "@/components/layout/ModelStatusMenu";
@@ -117,9 +121,10 @@ export function AppShell() {
 
           <Link
             to="/"
-            className="shrink-0 text-[22px] font-bold leading-[27px] tracking-[-0.02em] text-primary outline-none focus-visible:rounded focus-visible:ring-2 focus-visible:ring-ring"
+            aria-label={t("appName")}
+            className="shrink-0 outline-none focus-visible:rounded focus-visible:ring-2 focus-visible:ring-ring"
           >
-            {t("appName")}
+            <SmarTAINavigationBrand />
           </Link>
 
           <PrimaryNavigation className="ml-7 hidden lg:flex" />
@@ -163,10 +168,11 @@ export function AppShell() {
             <div className="flex h-[70px] items-center justify-between border-b px-5">
               <Link
                 to="/"
-                className="text-[22px] font-bold leading-[27px] tracking-[-0.02em] text-primary"
+                aria-label={t("appName")}
+                className="outline-none focus-visible:rounded focus-visible:ring-2 focus-visible:ring-ring"
                 onClick={() => setMobileOpen(false)}
               >
-                {t("appName")}
+                <SmarTAIWordmark alt="" className="w-[138px]" />
               </Link>
               <button
                 ref={mobileCloseRef}

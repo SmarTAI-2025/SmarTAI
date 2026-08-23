@@ -11,7 +11,7 @@ from fastapi import HTTPException, UploadFile
 from starlette.datastructures import Headers
 
 from backend.api import task_preparation, tasks
-from backend.db import assignment_repository, workflow_repository
+from backend.db import assignment_repository, grading_repository, workflow_repository
 from backend.db.models import AssignmentRecord, CourseRecord, UserRecord
 from backend.db.session import session_scope
 from backend.domain.errors import InvalidTransition, ValidationError, VersionConflict
@@ -75,6 +75,260 @@ def _problem(stem: str) -> dict[str, dict]:
             "stem": stem, "criterion": "", "max_score": 10,
         }
     }
+
+
+def test_grading_terminal_state_releases_task_workflow_atomically():
+    owner_id, task_id = _seed_task()
+    run = grading_repository.create_run(
+        task_id, teacher_id=owner_id, total_submissions=0
+    )
+    grading_repository.claim_lease(
+        run.id, worker_id="worker", lease_seconds=60
+    )
+    workflow_repository.update_workflow(
+        task_id,
+        owner_id=owner_id,
+        bump_revision=False,
+        presentation_status="grading",
+        grading_job_id=run.id,
+        active_operation="grading",
+        active_job_id=run.id,
+    )
+
+    grading_repository.mark_failed(
+        run.id, worker_id="worker", error_message="provider_timeout"
+    )
+
+    workflow = workflow_repository.get_workflow(task_id, owner_id=owner_id)
+    assert workflow.presentation_status == "error"
+    assert workflow.active_operation is None
+    assert workflow.active_job_id is None
+    assert workflow.grading_job_id == run.id
+    assert workflow.last_failed_job_id == run.id
+    assert workflow.error_code is None
+    assert task_facade.get_task(
+        task_id=task_id, owner_id=owner_id, full=False
+    )["error"] == "provider_timeout"
+
+
+def test_legacy_failed_grading_marker_is_repaired_on_read():
+    owner_id, task_id = _seed_task()
+    run = grading_repository.create_run(
+        task_id, teacher_id=owner_id, total_submissions=0
+    )
+    grading_repository.claim_lease(
+        run.id, worker_id="worker", lease_seconds=60
+    )
+    grading_repository.mark_failed(
+        run.id, worker_id="worker", error_message="provider_timeout"
+    )
+    # Simulate the historical dirty row found in the user's local database.
+    workflow_repository.update_workflow(
+        task_id,
+        owner_id=owner_id,
+        bump_revision=False,
+        presentation_status="grading",
+        grading_job_id=run.id,
+        active_operation="grading",
+        active_job_id=run.id,
+        last_failed_job_id=None,
+        error_code=None,
+    )
+
+    task = task_facade.get_task(task_id=task_id, owner_id=owner_id, full=False)
+
+    workflow = workflow_repository.get_workflow(task_id, owner_id=owner_id)
+    assert task["status"] == "error"
+    assert task["error"] == "provider_timeout"
+    assert workflow.active_job_id is None
+    assert workflow.last_failed_job_id == run.id
+    assert workflow.error_code == "provider_timeout"
+    assert task_facade._ensure_no_other_active_operation(
+        task_id=task_id,
+        owner_id=owner_id,
+        operation_type="question_preparation",
+        input_hash="new-input",
+    )[1] is None
+
+
+def test_missing_active_grading_run_reports_persistence_failure():
+    owner_id, task_id = _seed_task()
+    workflow_repository.update_workflow(
+        task_id,
+        owner_id=owner_id,
+        bump_revision=False,
+        presentation_status="grading",
+        grading_job_id="run-missing",
+        active_operation="grading",
+        active_job_id="run-missing",
+    )
+
+    task = task_facade.get_task(task_id=task_id, owner_id=owner_id, full=False)
+
+    assert task["status"] == "error"
+    assert task["error"] == "grading_persistence_failed"
+    assert task["last_failed_job_id"] == "run-missing"
+
+
+def test_task_rename_does_not_advance_workflow_revision():
+    owner_id, task_id = _seed_task()
+
+    updated = task_facade.update_task(
+        task_id=task_id, owner_id=owner_id, name="Renamed"
+    )
+
+    assert updated["name"] == "Renamed"
+    assert updated["workflow_revision"] == 0
+
+
+def test_confirmed_upstream_restart_can_cancel_active_grading():
+    owner_id, task_id = _seed_task()
+    run = grading_repository.create_run(
+        task_id, teacher_id=owner_id, total_submissions=0
+    )
+    workflow_repository.update_workflow(
+        task_id,
+        owner_id=owner_id,
+        bump_revision=False,
+        presentation_status="grading",
+        grading_job_id=run.id,
+        active_operation="grading",
+        active_job_id=run.id,
+    )
+
+    workflow, active = task_facade._ensure_no_other_active_operation(
+        task_id=task_id,
+        owner_id=owner_id,
+        operation_type="question_preparation",
+        input_hash="replacement",
+        allow_supersede=True,
+    )
+
+    assert active is None
+    assert workflow.active_job_id is None
+    assert workflow.grading_job_id is None
+    assert grading_repository.get_run(run.id, actor_id=owner_id).status == "cancelled"
+
+
+def test_replacing_questions_deactivates_students_and_invalidates_downstream():
+    owner_id, task_id = _seed_task(with_question=True)
+    student_id = f"student_{uuid.uuid4().hex[:10]}"
+    with session_scope() as session:
+        session.add(UserRecord(
+            id=student_id,
+            username=student_id,
+            password_hash="hash",
+            role="student",
+            is_active=True,
+        ))
+    workflow_repository.upsert_student_presentation(
+        assignment_id=task_id,
+        student_id=student_id,
+        display_student_id="S001",
+        display_name="Student",
+    )
+    workflow_repository.update_workflow(
+        task_id,
+        owner_id=owner_id,
+        bump_revision=False,
+        presentation_status="graded",
+        grading_job_id="obsolete-run",
+        submission_file_name="old.zip",
+        analysis_status="ready",
+    )
+
+    task_facade._replace_draft_questions(
+        task_id,
+        owner_id,
+        _problem("Replacement"),
+        "new.pdf",
+        expected_workflow_revision=0,
+        replace_confirmed=True,
+    )
+
+    workflow = workflow_repository.get_workflow(task_id, owner_id=owner_id)
+    presentation = workflow_repository.list_student_presentations(task_id)[student_id]
+    assert workflow.presentation_status == "problems_ready"
+    assert workflow.grading_job_id is None
+    assert workflow.submission_file_name is None
+    assert workflow.analysis_status == "not_generated"
+    assert presentation.is_active is False
+
+
+def test_replacing_submissions_preserves_questions_and_invalidates_grading():
+    owner_id, task_id = _seed_task(with_question=True)
+    workflow_repository.update_workflow(
+        task_id,
+        owner_id=owner_id,
+        bump_revision=False,
+        presentation_status="graded",
+        grading_job_id="obsolete-run",
+        analysis_status="ready",
+    )
+
+    imported = task_facade._commit_imported_submissions(
+        task_id=task_id,
+        owner_id=owner_id,
+        course_id=assignment_repository.get_assignment(
+            task_id, actor_id=owner_id
+        ).course_id,
+        students=[],
+        replace_existing=True,
+        expected_workflow_revision=0,
+        submission_file_name="replacement.zip",
+    )
+
+    workflow = workflow_repository.get_workflow(task_id, owner_id=owner_id)
+    assert imported == 0
+    assert len(assignment_repository.list_questions(
+        task_id, teacher_id=owner_id
+    )) == 1
+    assert workflow.presentation_status == "submissions_ready"
+    assert workflow.submission_file_name == "replacement.zip"
+    assert workflow.grading_job_id is None
+    assert workflow.analysis_status == "not_generated"
+
+
+def test_editing_student_answer_atomically_invalidates_current_grading():
+    owner_id, task_id = _seed_task(with_question=True)
+    assignment = assignment_repository.get_assignment(task_id, actor_id=owner_id)
+    task_facade._commit_imported_submissions(
+        task_id=task_id,
+        owner_id=owner_id,
+        course_id=assignment.course_id,
+        students=[{
+            "stu_id": "S001",
+            "stu_name": "Student",
+            "source_filename": "old.txt",
+            "stu_ans": [{"q_id": "q1", "content": "old answer"}],
+        }],
+        expected_workflow_revision=0,
+        submission_file_name="old.txt",
+    )
+    workflow_repository.update_workflow(
+        task_id,
+        owner_id=owner_id,
+        bump_revision=False,
+        presentation_status="graded",
+        grading_job_id="obsolete-run",
+        analysis_status="ready",
+    )
+
+    response = task_facade.update_student_answer(
+        task_id=task_id,
+        owner_id=owner_id,
+        display_student_id="S001",
+        q_id="q1",
+        patch={"content": "corrected answer", "review_status": "confirmed"},
+        expected_revision=1,
+    )
+
+    workflow = workflow_repository.get_workflow(task_id, owner_id=owner_id)
+    assert response["answer"]["content"] == "corrected answer"
+    assert response["workflow_revision"] == 2
+    assert workflow.presentation_status == "submissions_ready"
+    assert workflow.grading_job_id is None
+    assert workflow.analysis_status == "not_generated"
 
 
 def test_question_replace_requires_confirmation_and_cas_is_atomic():
@@ -390,6 +644,34 @@ async def test_extract_endpoint_queues_background_work_and_returns_started():
 
 
 @pytest.mark.asyncio
+async def test_submission_upload_is_bounded_before_any_operation_is_created(monkeypatch):
+    background = _BackgroundTasks()
+    upload = UploadFile(
+        file=io.BytesIO(b"four"),
+        filename="submissions.zip",
+        headers=Headers({"content-type": "application/zip"}),
+    )
+    monkeypatch.setattr(tasks, "SUBMISSION_UPLOAD_MAX_BYTES", 3)
+
+    with pytest.raises(HTTPException) as exc:
+        await tasks.parse_submissions_endpoint(
+            task_id="never-created",
+            background_tasks=background,
+            file=upload,
+            identity_mode="filename",
+            roster_file=None,
+            recognition_provider_id=None,
+            replace_confirmed=False,
+            current=SimpleNamespace(id="owner"),
+            registry=_Registry(),
+        )
+
+    assert exc.value.status_code == 413
+    assert exc.value.detail == {"code": "submission_source_too_large"}
+    assert background.calls == []
+
+
+@pytest.mark.asyncio
 async def test_question_preparation_timeout_persists_provider_timeout(monkeypatch):
     owner_id, task_id = _seed_task()
     job, _ = workflow_repository.create_operation(
@@ -465,6 +747,9 @@ def test_disabled_selected_recognition_provider_has_figma_error_code():
 
 @pytest.mark.asyncio
 async def test_submission_ocr_without_vision_provider_has_figma_error_code(monkeypatch):
+    from backend.db import source_outcome_repository
+    from backend.services import submission_source_pipeline
+
     owner_id, task_id = _seed_task(with_question=True)
 
     class NoVisionRegistry(_Registry):
@@ -482,19 +767,24 @@ async def test_submission_ocr_without_vision_provider_has_figma_error_code(monke
             ),
         )
 
-    monkeypatch.setattr(task_facade, "extract_files_from_archive", _requires_vision)
+    monkeypatch.setattr(
+        submission_source_pipeline,
+        "extract_text_from_upload",
+        _requires_vision,
+    )
     registry = NoVisionRegistry()
     queued = task_facade.queue_task_submission_parsing(
-        task_id=task_id, owner_id=owner_id, filename="answers.zip",
-        content=b"archive", content_type="application/zip", registry=registry,
+        task_id=task_id, owner_id=owner_id, filename="answers.pdf",
+        content=b"%PDF-1.4\n", content_type="application/pdf", registry=registry,
     )
 
     await task_facade.run_task_submission_parsing(
         task_id=task_id,
         owner_id=owner_id,
         job_id=queued["job_id"],
-        filename="answers.zip",
-        content=b"archive",
+        filename="answers.pdf",
+        content=b"%PDF-1.4\n",
+        content_type="application/pdf",
         registry=registry,
         job_attempt=queued["_job_attempt"],
         identity_mode="filename",
@@ -510,6 +800,14 @@ async def test_submission_ocr_without_vision_provider_has_figma_error_code(monke
     assert failed.error_code == "vision_provider_required"
     assert workflow.presentation_status == "error"
     assert workflow.error_code == "vision_provider_required"
+    result = source_outcome_repository.list_source_results(
+        operation_id=failed.id,
+        owner_id=owner_id,
+        attempt=failed.attempt,
+    )[0]
+    assert result.outcome is not None
+    assert result.outcome.stable_error_code == "vision_provider_required"
+    assert result.outcome.failure_phase == "ocr"
 
 
 class _VisionlessRegistry(_Registry):
@@ -555,21 +853,29 @@ async def test_problem_extraction_timeout_persists_provider_timeout(monkeypatch)
 
 @pytest.mark.asyncio
 async def test_submission_rate_limit_persists_provider_rate_limited(monkeypatch):
+    from backend.db import source_outcome_repository
+    from backend.services import submission_source_pipeline
+
     owner_id, task_id = _seed_task(with_question=True)
 
     async def _rate_limited(*args, **kwargs):
         del args, kwargs
         raise RateLimitError("429 Too Many Requests")
 
-    monkeypatch.setattr(task_facade, "extract_files_from_archive", _rate_limited)
+    monkeypatch.setattr(
+        submission_source_pipeline,
+        "extract_text_from_upload",
+        _rate_limited,
+    )
     registry = _VisionlessRegistry()
     queued = task_facade.queue_task_submission_parsing(
-        task_id=task_id, owner_id=owner_id, filename="answers.zip",
-        content=b"archive", content_type="application/zip", registry=registry,
+        task_id=task_id, owner_id=owner_id, filename="answers.txt",
+        content=b"answer", content_type="text/plain", registry=registry,
     )
     await task_facade.run_task_submission_parsing(
         task_id=task_id, owner_id=owner_id, job_id=queued["job_id"],
-        filename="answers.zip", content=b"archive", registry=registry,
+        filename="answers.txt", content=b"answer", content_type="text/plain",
+        registry=registry,
         job_attempt=queued["_job_attempt"], identity_mode="filename",
         roster_entries=None, recognition_provider_id=None,
         replace_confirmed=False,
@@ -579,25 +885,41 @@ async def test_submission_rate_limit_persists_provider_rate_limited(monkeypatch)
     failed = workflow_repository.get_operation(queued["job_id"], owner_id=owner_id)
     assert failed.status == "error"
     assert failed.error_code == "provider_rate_limited"
+    result = source_outcome_repository.list_source_results(
+        operation_id=failed.id,
+        owner_id=owner_id,
+        attempt=failed.attempt,
+    )[0]
+    assert result.outcome is not None
+    assert result.outcome.stable_error_code == "provider_rate_limited"
+    assert result.outcome.failure_phase == "recognition"
 
 
 @pytest.mark.asyncio
 async def test_submission_connection_error_persists_provider_unreachable(monkeypatch):
+    from backend.db import source_outcome_repository
+    from backend.services import submission_source_pipeline
+
     owner_id, task_id = _seed_task(with_question=True)
 
     async def _unreachable(*args, **kwargs):
         del args, kwargs
         raise ConnectionError("failed to connect to provider")
 
-    monkeypatch.setattr(task_facade, "extract_files_from_archive", _unreachable)
+    monkeypatch.setattr(
+        submission_source_pipeline,
+        "extract_text_from_upload",
+        _unreachable,
+    )
     registry = _VisionlessRegistry()
     queued = task_facade.queue_task_submission_parsing(
-        task_id=task_id, owner_id=owner_id, filename="answers.zip",
-        content=b"archive", content_type="application/zip", registry=registry,
+        task_id=task_id, owner_id=owner_id, filename="answers.txt",
+        content=b"answer", content_type="text/plain", registry=registry,
     )
     await task_facade.run_task_submission_parsing(
         task_id=task_id, owner_id=owner_id, job_id=queued["job_id"],
-        filename="answers.zip", content=b"archive", registry=registry,
+        filename="answers.txt", content=b"answer", content_type="text/plain",
+        registry=registry,
         job_attempt=queued["_job_attempt"], identity_mode="filename",
         roster_entries=None, recognition_provider_id=None,
         replace_confirmed=False,
@@ -607,6 +929,14 @@ async def test_submission_connection_error_persists_provider_unreachable(monkeyp
     failed = workflow_repository.get_operation(queued["job_id"], owner_id=owner_id)
     assert failed.status == "error"
     assert failed.error_code == "provider_unreachable"
+    result = source_outcome_repository.list_source_results(
+        operation_id=failed.id,
+        owner_id=owner_id,
+        attempt=failed.attempt,
+    )[0]
+    assert result.outcome is not None
+    assert result.outcome.stable_error_code == "provider_unreachable"
+    assert result.outcome.failure_phase == "recognition"
 
 
 @pytest.mark.asyncio

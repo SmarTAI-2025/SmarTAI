@@ -158,6 +158,7 @@ def start_run(
     grading_setup: dict | None = None,
     setup_fingerprint: str | None = None,
     input_manifest: dict | None = None,
+    workflow_expected_revision: int | None = None,
 ) -> education.GradingRunDTO:
     """Create a run and freeze the current revisions to grade.
 
@@ -206,6 +207,7 @@ def start_run(
         setup=grading_setup,
         setup_fingerprint=setup_fingerprint,
         input_manifest=input_manifest,
+        workflow_expected_revision=workflow_expected_revision,
     )
     return run
 

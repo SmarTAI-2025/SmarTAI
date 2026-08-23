@@ -35,7 +35,7 @@
 
 - [ ] Write failing tests in `backend/tests/test_workflow_operation_leases.py` for one-winner concurrent claim, claimable pending/unleased running rows, expired reclaim with token rotation, heartbeat extension, owner isolation, release, cancellation, and stale/expired token fencing.
 - [ ] Run the focused tests and record RED because lease fields and APIs are absent.
-- [ ] Add `lease_owner`, `lease_token`, `lease_expires_at`, and `lease_heartbeat_at` plus claim indexes in the ORM and a reversible `0007` migration. Lease owner/token are nullable together; expiry is required for an active lease.
+- [ ] Add `lease_owner`, `lease_token`, `lease_expires_at`, and `lease_heartbeat_at` plus claim indexes in the ORM and a reversible `0008` migration after `0007_source_outcome_diagnostics`. Lease owner/token are nullable together; expiry is required for an active lease.
 - [ ] Implement `claim_operation`, `heartbeat_operation`, and `release_operation` as conditional updates. Add a bounded `list_claimable_operations` query for supported operation types.
 - [ ] Require `expected_lease_token` for checkpoint and terminal writes used by workers. Preserve legacy call compatibility only for non-worker code until its W2 handler is migrated; do not allow an unleased writer when an active lease exists.
 - [ ] Reset lease fields on a new attempt. Make terminal transitions clear only their own matching lease.
@@ -88,5 +88,5 @@
 - [ ] Run the complete backend suite. Run PostgreSQL integration when `SMARTAI_TEST_POSTGRES_URL` is configured; otherwise report the skip and retain dialect/concurrency SQL evidence.
 - [ ] Run migration upgrade/downgrade/upgrade checks, `python -m alembic heads`, `git diff --check`, and inspect every diff for owner predicates, payload bounds, secrets, and forbidden business changes.
 - [ ] Update `CLAUDE_HANDOFF.md` with red/green commands, modified files, review fixes, residual risks, and exact PR dependencies.
-- [ ] Push each branch and create stacked PRs in this order: W2-1 based on PR #18; W2-2 based on W2-1; problem extraction based on W2-2; submission parsing based on problem extraction; W2-4 operation PRs based on the preceding approved recovery pattern.
+- [ ] Push each branch and create stacked PRs in this order: W2-1 based on current `main` (which already contains the source-outcome/checkpoint foundation); W2-2 based on W2-1; problem extraction based on W2-2; submission parsing based on problem extraction; W2-4 operation PRs based on the preceding approved recovery pattern.
 - [ ] Every PR body must state baseline SHA, single problem, before/after contract, migration/rollback behavior, tests, dependencies, conflicts with PR #23/#26, and unimplemented follow-ups.
