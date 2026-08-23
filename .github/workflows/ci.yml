@@ -10,6 +10,10 @@ jobs:
   backend-sqlite:
     name: Backend (SQLite)
     runs-on: ubuntu-latest
+    env:
+      SMARTAI_RUNTIME_ENVIRONMENT: "test"
+      SMARTAI_PROVIDER_ENCRYPTION_KEY: "ci-provider-master-key-0123456789abcdef"
+      SMARTAI_JWT_SECRET: "ci-jwt-signing-secret-0123456789abcdef"
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -35,13 +39,16 @@ jobs:
           SMARTAI_DATABASE_URL_LIGHT: "sqlite:////tmp/smartai-ci.db"
           SMARTAI_DATABASE_AUTO_CREATE: "true"
           SMARTAI_SEED_TEST_USERS: "false"
-          SMARTAI_PROVIDER_ENCRYPTION_KEY: ci-provider-master-key
           SMARTAI_GRADING_ENGINE: v2
         run: python -m pytest backend/tests -q
 
   backend-postgres:
     name: Backend (PostgreSQL)
     runs-on: ubuntu-latest
+    env:
+      SMARTAI_RUNTIME_ENVIRONMENT: "test"
+      SMARTAI_PROVIDER_ENCRYPTION_KEY: "ci-postgres-provider-key-0123456789abcdef"
+      SMARTAI_JWT_SECRET: "ci-postgres-jwt-secret-0123456789abcdef"
     services:
       postgres:
         image: postgres:16
@@ -83,7 +90,6 @@ jobs:
           SMARTAI_DATABASE_URL: "postgresql+psycopg://smartai:smartai@localhost:5432/smartai_test"
           SMARTAI_DATABASE_URL_HEAVY: "postgresql+psycopg://smartai:smartai@localhost:5432/smartai_test"
           SMARTAI_SEED_TEST_USERS: "false"
-          SMARTAI_PROVIDER_ENCRYPTION_KEY: ci-provider-master-key
           SMARTAI_GRADING_ENGINE: v2
           SMARTAI_TEST_POSTGRES_URL: "postgresql+psycopg://smartai:smartai@localhost:5432/smartai_test"
         run: python -m pytest backend/tests/test_postgres_integration.py -q
@@ -126,6 +132,10 @@ jobs:
   e2e:
     name: E2E (Playwright)
     runs-on: ubuntu-latest
+    env:
+      SMARTAI_RUNTIME_ENVIRONMENT: "test"
+      SMARTAI_PROVIDER_ENCRYPTION_KEY: "e2e-provider-master-key-0123456789abcdef"
+      SMARTAI_JWT_SECRET: "e2e-jwt-signing-secret-0123456789abcdef"
     defaults:
       run:
         working-directory: frontend/app
@@ -153,7 +163,7 @@ jobs:
           # Start the backend on a fixed port with a throwaway SQLite DB, then
           # run the Playwright suite against it. The workflow stops the server
           # afterwards regardless of test outcome.
-          (cd ../.. && SMARTAI_DATABASE_HEAVY=OFF SMARTAI_DATABASE_URL=sqlite:////tmp/smartai-e2e.db SMARTAI_DATABASE_URL_LIGHT=sqlite:////tmp/smartai-e2e.db SMARTAI_STORAGE_ROOT=/tmp/smartai-e2e-uploads SMARTAI_DATABASE_AUTO_CREATE=true SMARTAI_SEED_TEST_USERS=false SMARTAI_ALLOW_DEMO_TOKENS=true SMARTAI_E2E_FAKE_PROVIDER=true SMARTAI_E2E_FAIL_QID=q1 SMARTAI_PROVIDER_ENCRYPTION_KEY=e2e-master-key SMARTAI_GRADING_ENGINE=v2 python -m uvicorn backend.main:app --host 127.0.0.1 --port 8000 > /tmp/backend.log 2>&1 &)
+          (cd ../.. && SMARTAI_DATABASE_HEAVY=OFF SMARTAI_DATABASE_URL=sqlite:////tmp/smartai-e2e.db SMARTAI_DATABASE_URL_LIGHT=sqlite:////tmp/smartai-e2e.db SMARTAI_STORAGE_ROOT=/tmp/smartai-e2e-uploads SMARTAI_DATABASE_AUTO_CREATE=true SMARTAI_SEED_TEST_USERS=false SMARTAI_ALLOW_DEMO_TOKENS=true SMARTAI_E2E_FAKE_PROVIDER=true SMARTAI_E2E_FAIL_QID=q1 SMARTAI_GRADING_ENGINE=v2 python -m uvicorn backend.main:app --host 127.0.0.1 --port 8000 > /tmp/backend.log 2>&1 &)
           # wait-on issues HEAD for HTTP URL resources, but the /ready route is
           # GET-only and returns 405 for HEAD — that caused the readiness wait
           # to time out. Poll /ready with an explicit GET instead.

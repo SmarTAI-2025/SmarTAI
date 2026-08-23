@@ -96,6 +96,17 @@ def list_provider_configs(owner_id: str, *, master_key: str) -> list[StoredProvi
     ]
 
 
+def has_provider_configs(owner_id: str) -> bool:
+    """Check owner-scoped record existence without decrypting credentials."""
+    with session_scope() as session:
+        record_id = session.scalar(
+            select(ProviderConfigRecord.id)
+            .where(ProviderConfigRecord.owner_id == owner_id)
+            .limit(1)
+        )
+    return record_id is not None
+
+
 def get_provider_config(owner_id: str, provider_id: str, *, master_key: str) -> StoredProviderConfig | None:
     with session_scope() as session:
         record = session.scalar(select(ProviderConfigRecord).where(
