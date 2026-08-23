@@ -1,6 +1,10 @@
 import { render, screen } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
-import { detectCodeLanguage, SyntaxHighlightedCode } from "./SyntaxHighlightedCode";
+import {
+  detectCodeLanguage,
+  normalizeCodeLineBreaks,
+  SyntaxHighlightedCode,
+} from "./SyntaxHighlightedCode";
 
 describe("SyntaxHighlightedCode", () => {
   it("infers Python, renders highlighted tokens, and exposes reviewed English language copy", () => {
@@ -12,6 +16,7 @@ describe("SyntaxHighlightedCode", () => {
     const { container } = render(<SyntaxHighlightedCode code={code} locale="en-US" />);
 
     expect(container.querySelector("[data-code-language='python']")).toBeInTheDocument();
+    expect(container.querySelector("[data-code-theme='github-light']")).toHaveClass("bg-[#f6f8fa]");
     expect(screen.getByLabelText("Code language: Python")).toHaveTextContent("Python");
     expect(container.querySelector("pre")).toHaveTextContent("def fibonacci(n):");
     expect(Array.from(container.querySelectorAll("[data-code-token='keyword']")).map((node) => node.textContent))
@@ -26,5 +31,22 @@ describe("SyntaxHighlightedCode", () => {
       .toBe("typescript");
     expect(detectCodeLanguage("public static void main(String[] args) {}"))
       .toBe("java");
+  });
+
+  it("renders model-escaped code line separators as real lines", () => {
+    const code = String.raw`import math\n\ndef stable_softmax(xs):\n    return []`;
+    const { container } = render(<SyntaxHighlightedCode code={code} locale="zh-CN" />);
+
+    expect(container.querySelector("pre")?.textContent).toBe(
+      "import math\n\ndef stable_softmax(xs):\n    return []",
+    );
+  });
+
+  it("preserves escaped newline literals inside source strings", () => {
+    const code = String.raw`print("\\n")\npattern = r"\n"\nreturn pattern`;
+
+    expect(normalizeCodeLineBreaks(code)).toBe(
+      'print("\\\\n")\npattern = r"\\n"\nreturn pattern',
+    );
   });
 });

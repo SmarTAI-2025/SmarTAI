@@ -1,5 +1,4 @@
 import { render, screen } from "@testing-library/react";
-import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { NewTaskStepper } from "./NewTaskStepper";
@@ -24,7 +23,7 @@ function renderStepper(props: React.ComponentProps<typeof NewTaskStepper>) {
   );
 }
 
-describe("NewTaskStepper locked-step guidance", () => {
+describe("NewTaskStepper workflow guidance", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     (useTask as unknown as ReturnType<typeof vi.fn>).mockReturnValue({
@@ -32,8 +31,7 @@ describe("NewTaskStepper locked-step guidance", () => {
     });
   });
 
-  it("explains a locked Results Analysis step and activates its recovery action", async () => {
-    const user = userEvent.setup();
+  it("opens read-only Results Analysis after grading even before teacher confirmation", () => {
     const onLockedStepActivate = vi.fn();
 
     renderStepper({
@@ -43,14 +41,11 @@ describe("NewTaskStepper locked-step guidance", () => {
       onLockedStepActivate,
     });
 
-    const lockedStep = screen.getByRole("button", {
-      name: /newTaskStepComplete.*One response still needs confirmation/,
-    });
-    expect(lockedStep).toHaveAttribute("title", "One response still needs confirmation.");
-
-    await user.click(lockedStep);
-
-    expect(onLockedStepActivate).toHaveBeenCalledOnce();
+    expect(screen.getByRole("link", { name: "newTaskStepComplete" })).toHaveAttribute(
+      "href",
+      "/tasks/task-1/results",
+    );
+    expect(onLockedStepActivate).not.toHaveBeenCalled();
   });
 
   it("keeps each connector in normal flow after its step label", () => {
