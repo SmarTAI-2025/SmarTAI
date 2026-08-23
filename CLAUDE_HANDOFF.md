@@ -1,5 +1,125 @@
 # Claude Collaboration Handoff
 
+## Current Task (2026-08-13): Database Week 2 recovery
+
+Complete DB-W2-1 through DB-W2-4 from
+`active_beta_launch/active_beta_launch/数据库持久化与任务恢复工作安排.md`.
+The detailed implementation plan is
+`docs/superpowers/plans/2026-08-13-database-week2-recovery.md`.
+
+### Baseline and delivery
+
+- Worktree: `D:\project-of-python\Teacher\SmarTAI\.worktrees\db-operation-leases`
+- Current branch: `codex/db-operation-leases`
+- Baseline: `6a0f76b`, the head of open stacked PR #18.
+- PR #18 depends on PR #17; do not rebase this work directly onto `main` until
+  those dependencies merge.
+- Deliver Week 2 as sequential commits/stacked branches. Do not commit or push;
+  Codex will review, verify, commit, push, and create PRs.
+- Preserve unrelated work and do not modify root `render-requirements.txt` or
+  untracked `active_beta_launch/` content.
+
+### Mandatory scope and process
+
+- Execute only the plan's current task when Codex names one.
+- Use TDD: add the focused test, run it and record the intended RED, then make
+  the smallest implementation and record GREEN.
+- Reuse `workflow_operations`, normalized repositories, stored-file metadata,
+  and object storage. Never create another JobStore/TaskStore or put original
+  bytes, full OCR text, raw model responses, or provider keys in operation JSON.
+- Keep owner predicates, attempt fencing, lease-token fencing, bounded JSON,
+  idempotent commits, and stable error codes explicit.
+- Do not change OCR output semantics, student identity/matching rules, grading
+  semantics, frontend behavior, quota policy, or public API meaning.
+- PR #23 and PR #26 overlap `task_facade.py` and tests. Do not copy their
+  unmerged business behavior into this branch; report the exact conflict/rebase
+  points instead.
+
+### First implementation assignment: DB-W2-1
+
+Implement Task 1 from the Week 2 plan: operation lease schema and repository
+contract only. Allowed production files are the next Alembic migration and
+`backend/db/workflow_repository.py`; allowed tests are focused lease,
+checkpoint, migration, and PostgreSQL integration tests. Do not add the worker,
+modify `task_facade.py`, or modify `main.py` in this assignment.
+
+Record modified files, RED/GREEN commands and results, design concerns, and
+remaining verification gaps in a new `Claude -> Codex (DB-W2-1)` section.
+
+### Codex review fixes required after timed-out first pass
+
+The first Claude invocation timed out while tests were still running and did
+not write its required summary. Preserve the useful implementation, but fix
+these issues with focused RED tests before declaring DB-W2-1 complete:
+
+1. `claim_operation` currently treats a live lease held by the same
+   `worker_id` as claimable and rotates its token. Two concurrent coroutines in
+   one process can therefore both receive a successful claim. Any live lease,
+   including one with the same worker ID, must reject a second claim; only an
+   unleased or expired row may be claimed/reclaimed.
+2. The lease consistency check allows null owner/token with non-null expiry or
+   heartbeat. Tighten it so an inactive lease has all four lease fields null,
+   while an active lease has owner, token, expiry, and heartbeat non-null.
+3. Validate non-empty bounded `worker_id` and `lease_token` inputs before SQL,
+   using stable validation codes rather than leaking database/string-length
+   failures. Add boundary tests.
+4. Run the focused tests in a command that terminates; diagnose the previous
+   hang if it repeats. Record exact RED and GREEN outputs plus all modified
+   files and the live-PostgreSQL skip/result in `Claude -> Codex (DB-W2-1)`.
+
+Do not start DB-W2-2, commit, or push.
+
+## Claude -> Codex (DB-W2-1)
+
+Both non-interactive Claude Code invocations wrote their changes to disk but
+hit the outer 15-minute and 10-minute command timeouts before returning a
+final response. Codex stopped the orphaned task processes, reviewed the diff,
+and performed independent verification. The missing Claude final response is
+a process gap; no implementation result is inferred from it.
+
+### Implemented files
+
+- `backend/db/migrations/versions/0008_operation_leases.py`
+- `backend/db/workflow_repository.py`
+- `backend/tests/test_workflow_operation_leases.py`
+- `backend/tests/test_migration_roundtrip.py`
+- `backend/tests/test_postgres_integration.py`
+
+The change adds a four-field operation lease with a consistency constraint,
+claim index, random token rotation on reclaim, atomic claim/heartbeat/release,
+bounded claim polling, and attempt-plus-token fencing for checkpoint and
+terminal writes. New attempts clear all lease state.
+
+### Codex review correction
+
+The first pass allowed a live lease to be claimed again by the same
+`worker_id`. Codex rejected that behavior because two coroutines in one process
+share a worker ID and could both receive success. The corrected predicate
+allows only unleased or expired rows; focused tests cover sequential and
+concurrent same-worker claims. The lease check was also tightened so all four
+lease fields are either null or non-null, and worker/token inputs now use
+stable validation errors.
+
+### Independent verification
+
+- `python -m pytest backend/tests/test_workflow_operation_leases.py -q`:
+  `25 passed in 21.60s`.
+- `python -m pytest backend/tests/test_workflow_operation_checkpoints.py backend/tests/test_workflow_source_outcomes.py backend/tests/test_task_background_workflows.py backend/tests/test_migration_roundtrip.py -q`:
+  `79 passed, 34 warnings in 120.70s`; warnings are the existing Alembic
+  `path_separator` deprecation warning.
+- `python -m pytest backend/tests/test_postgres_integration.py -q -rs`:
+  `8 skipped`; `SMARTAI_TEST_POSTGRES_URL` is not configured locally.
+- `python -m alembic heads`: `0008_operation_leases (head)` after integration
+  with the source-outcome diagnostics migration already on `main`.
+- `git diff --check`: passed; only CRLF conversion notices for this handoff
+  file were emitted by subsequent diff commands.
+
+### Remaining gap
+
+The live PostgreSQL one-winner and same-worker fencing tests were added but
+could not run locally. GitHub Actions or a configured PostgreSQL test service
+must execute them before merge. W2-2 is not included in this change.
+
 ## Current Task
 
 Fix the three failed GitHub Actions jobs for commit
@@ -198,4 +318,3 @@ were changed. A live PostgreSQL service and Playwright browser run were not
 available locally (Docker is unavailable); the PostgreSQL DDL is covered by
 the dialect-rendered regression test and the E2E readiness command is covered
 by the workflow regression test.
-
