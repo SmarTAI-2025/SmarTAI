@@ -41,4 +41,13 @@ describe("interface translations", () => {
     ]);
     expect(Object.values(english).join("\n")).not.toMatch(/\b(?:model|item|case|task|problem|answer)\(s\)/i);
   });
+
+  it("states the one-file-per-student boundary in both upload languages", () => {
+    expect(messages["zh-CN"].submissionUploadFileContract).toContain("一位学生一个文件");
+    expect(messages["zh-CN"].submissionUploadFileContract).toContain("同一 ZIP");
+    expect(messages["zh-CN"].submissionUploadFileContract).toContain("不支持从一个合并 PDF 自动拆分");
+    expect(messages["en-US"].submissionUploadFileContract).toContain("one file per student");
+    expect(messages["en-US"].submissionUploadFileContract).toContain("one ZIP");
+    expect(messages["en-US"].submissionUploadFileContract).toContain("does not split a combined multi-student PDF automatically");
+  });
 });
