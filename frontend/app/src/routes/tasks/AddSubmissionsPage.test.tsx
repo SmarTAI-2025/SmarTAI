@@ -72,4 +72,17 @@ describe("AddSubmissionsPage OCR uploads", () => {
     });
     expect(await screen.findByText("progress page")).toBeInTheDocument();
   });
+
+  it("keeps the one-file-per-student upload contract visible after file selection", () => {
+    const { container } = renderPage();
+    const input = container.querySelector('input[type="file"]') as HTMLInputElement;
+    const submission = new File(["student answer"], "S003_Li.txt", {
+      type: "text/plain",
+    });
+
+    fireEvent.change(input, { target: { files: [submission] } });
+
+    expect(screen.getByText("submissionUploadFileContract")).toBeInTheDocument();
+    expect(screen.getByText("S003_Li.txt")).toBeInTheDocument();
+  });
 });

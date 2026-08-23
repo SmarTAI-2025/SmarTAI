@@ -238,6 +238,10 @@ export function AddSubmissionsPage() {
           ) : null}
         </div>
 
+        <p className="mt-3 rounded-[8px] border border-blue-200 bg-blue-50/60 px-4 py-3 text-[12px] leading-5 text-blue-900 dark:border-blue-900 dark:bg-blue-950/20 dark:text-blue-100">
+          {t("submissionUploadFileContract")}
+        </p>
+
         <section className="mt-10 flex min-h-[145px] flex-col rounded-[10px] border bg-card px-[29px] pb-5 pt-[27px] sm:h-[145px]">
           <h2 className="text-[18px] font-bold leading-[22px] text-foreground">
             {t("submissionUploadIdentityTitle")}
