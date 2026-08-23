@@ -14,6 +14,7 @@ from pathlib import Path
 
 from alembic import command
 from alembic.config import Config
+from alembic.script import ScriptDirectory
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -30,6 +31,13 @@ def _alembic_config(db_url: str, monkeypatch) -> Config:
     monkeypatch.setenv("SMARTAI_DATABASE_URL", db_url)
     monkeypatch.setenv("SMARTAI_DATABASE_HEAVY", "OFF")
     return cfg
+
+
+def test_revision_identifiers_fit_postgresql_version_column(monkeypatch):
+    cfg = _alembic_config("sqlite://", monkeypatch)
+    revisions = ScriptDirectory.from_config(cfg).walk_revisions()
+
+    assert all(len(revision.revision) <= 32 for revision in revisions)
 
 
 def test_upgrade_creates_missing_sqlite_parent(tmp_path, monkeypatch):

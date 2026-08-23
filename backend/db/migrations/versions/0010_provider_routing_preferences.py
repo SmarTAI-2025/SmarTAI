@@ -1,6 +1,6 @@
 """Add owner default-provider preference and freeze question recognition.
 
-Revision ID: 0010_provider_routing_preferences
+Revision ID: 0010_provider_routing_pref
 Revises: 0008_operation_leases
 """
 from __future__ import annotations
@@ -9,7 +9,7 @@ from alembic import op
 import sqlalchemy as sa
 
 
-revision = "0010_provider_routing_preferences"
+revision = "0010_provider_routing_pref"
 down_revision = "0008_operation_leases"
 branch_labels = None
 depends_on = None
