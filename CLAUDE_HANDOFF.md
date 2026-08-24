@@ -1,6 +1,83 @@
 # Claude Collaboration Handoff
 
-## Current Task (2026-08-13): Database Week 2 recovery
+## Week 2 final delivery (2026-08-13)
+
+The database Week 2 scope is implemented on
+`codex/db-problem-extraction-recovery`, based on `b8f619a` / stacked PR #35.
+This branch completes the concrete recovery cutover for problem extraction,
+submission recognition, material import, and AI completion on top of the W2-1
+operation leases and W2-2 worker lifecycle.
+
+### Final contract
+
+- Upload bytes and large intermediate text/results live in owner- and
+  assignment-scoped stored files; operation JSON contains bounded metadata and
+  artifact IDs only.
+- All four operation types publish through `preparing -> pending`, so workers
+  cannot claim before source persistence and workflow activation are complete.
+  Abandoned publication attempts become retryable after a short TTL.
+- Durable handlers reconstruct owner-scoped provider registries, discover
+  deterministic artifacts saved before checkpoints, and avoid repeating
+  completed provider stages after process death.
+- Checkpoints, progress, success, failure, source outcomes, normalized question
+  or submission revisions, and workflow terminal transitions are guarded by
+  operation attempt plus live lease token. Submission source outcomes commit in
+  the same transaction as normalized submission revisions.
+- Request-memory `BackgroundTasks` dispatch is removed for the four migrated
+  operation types; one shared `WorkflowWorker` handler map performs dispatch.
+
+### Review fixes
+
+- Added short-lived `preparing` publication leases and atomic publication for
+  material/AI jobs, closing the worker-before-activation race.
+- Moved successful and failed submission outcomes into lease-fenced operation
+  transactions so stale workers cannot publish per-source state.
+- Added deterministic result artifacts for submission, material import, and AI
+  completion, plus owner/assignment validation and bounded JSON validation on
+  direct atomic write paths.
+- Prevented Alembic test configuration from disabling already-imported loggers
+  with `disable_existing_loggers=False`.
+
+### Final verification
+
+- `python -m pytest backend/tests -q`:
+  `467 passed, 8 skipped, 69 warnings in 589.57s`.
+- Targeted worker/recovery/lease/checkpoint/source/storage/migration suite:
+  `166 passed, 64 warnings in 224.83s`.
+- SQLite migration round trip on an isolated temporary database:
+  `upgrade head -> downgrade 0006_operation_checkpoints -> upgrade head` passed;
+  final revision `0007_operation_leases (head)`.
+- `python -m alembic heads`: `0007_operation_leases (head)`.
+- `git diff --check`: passed; Git emitted only CRLF conversion notices.
+- `SMARTAI_TEST_POSTGRES_URL` is not configured locally. The 8 live PostgreSQL
+  tests were skipped; dialect-rendered PostgreSQL DDL and migration tests ran in
+  the full suite. CI must run the live PostgreSQL service tests before merge.
+
+### Delivery dependencies
+
+- Stack: PR #17 -> PR #18 -> PR #34 -> PR #35 -> this Week 2 recovery PR.
+- This branch adds no migration beyond `0007`; rollback behavior is inherited
+  from PR #34 and was exercised in the migration round trip.
+- PR #23 and PR #26 may conflict in `backend/services/task_facade.py`, API
+  background-dispatch removal, and related workflow tests. Rebase by preserving
+  this branch's owner predicates, lease fencing, artifact boundaries, and atomic
+  terminal commits while resolving their product/UI semantics separately.
+
+## Current Task (2026-08-13): DB-W2-3 problem extraction recovery
+
+Implement the first concrete durable workflow handler on top of PR #35. Queueing
+must persist the owner-scoped source object before dispatch; a fresh worker must
+recover from database and object storage without request-memory bytes; safe paid
+stages must reuse durable artifacts; all checkpoint, success, and failure writes
+must be fenced by attempt plus lease token. Remove request `BackgroundTasks`
+dispatch only after restart, owner-isolation, stale-lease, and replay tests pass.
+
+The next stacked branch will handle submission parsing, followed by the two
+DB-W2-4 auxiliary operations. Codex is implementing directly because repeated
+local Claude Code attempts recorded below timed out without a usable handoff;
+retrying that same blocked route would prevent completion.
+
+## Week 2 umbrella task
 
 Complete DB-W2-1 through DB-W2-4 from
 `active_beta_launch/active_beta_launch/数据库持久化与任务恢复工作安排.md`.
@@ -35,16 +112,82 @@ The detailed implementation plan is
   unmerged business behavior into this branch; report the exact conflict/rebase
   points instead.
 
-### First implementation assignment: DB-W2-1
+### Current implementation assignment: DB-W2-2A worker core only
 
-Implement Task 1 from the Week 2 plan: operation lease schema and repository
-contract only. Allowed production files are the next Alembic migration and
-`backend/db/workflow_repository.py`; allowed tests are focused lease,
-checkpoint, migration, and PostgreSQL integration tests. Do not add the worker,
-modify `task_facade.py`, or modify `main.py` in this assignment.
+Implement only the worker-core half of Task 2 from the Week 2 plan.
+The current branch is `codex/db-workflow-worker`, based on W2-1 commit
+`740bf02` / PR #34. Allowed production changes are focused settings in
+`backend/config.py` and a single-purpose `backend/services/workflow_worker.py`;
+allowed tests are `backend/tests/test_workflow_worker.py`. Do not modify
+`backend/main.py` in this assignment. Do not register any of the four
+production operation types yet:
+their handlers do not become durable until W2-3/W2-4. Tests may use synthetic
+handler names. Do not modify `task_facade.py`, OCR/Agent code, or public APIs.
+
+Implement a small `WorkflowWorker` with an explicit immutable handler mapping,
+one poll/tick API, a continuous run API, per-claim heartbeat lifecycle, bounded
+in-flight task tracking, and stop/shutdown APIs. It must poll only registered
+types, tolerate another worker winning a listed row, stop handler mutation on
+`LeaseLost`, map handler failures without exposing payloads, cancel/await its
+own tasks on shutdown, and never bulk-clear database leases. Keep the API easy
+for a later FastAPI lifespan wrapper. Do not implement that wrapper now.
 
 Record modified files, RED/GREEN commands and results, design concerns, and
-remaining verification gaps in a new `Claude -> Codex (DB-W2-1)` section.
+remaining verification gaps in a new `Claude -> Codex (DB-W2-2)` section.
+
+## Claude -> Codex (DB-W2-2A worker core)
+
+Claude Code produced the settings, worker core, and focused tests, but its
+non-interactive command again reached the outer timeout before returning a
+summary. Codex stopped the orphaned process and reviewed the implementation.
+
+### Codex review corrections
+
+- Corrected the checkpoint test: terminal completion is itself checkpoint
+  revision 3, not revision 2.
+- Made shutdown bounded with `workflow_shutdown_seconds`; handlers that swallow
+  cancellation leave their database lease to expire instead of blocking app
+  shutdown indefinitely.
+- A heartbeat infrastructure error now fences/cancels the handler once the
+  locally confirmed lease deadline passes. The worker no longer continues paid
+  work indefinitely when it cannot prove lease ownership.
+- Removed the worker's reverse import of private `task_facade._SAFE_ERROR_CODES`.
+  Typed `DomainError` codes remain stable; unexpected exceptions use
+  `workflow_failed` without importing the facade or logging exception payloads.
+
+### Verification
+
+- Review RED command for bounded shutdown, uncertain heartbeat expiry, and
+  facade independence: `3 failed` for the intended missing behaviors.
+- Same focused command after fixes: `3 passed in 3.10s`.
+- `python -m pytest backend/tests/test_workflow_worker.py -q`:
+  `26 passed in 28.94s`.
+- `python -m pytest backend/tests/test_workflow_operation_leases.py backend/tests/test_workflow_operation_checkpoints.py backend/tests/test_task_background_workflows.py -q`:
+  `65 passed in 86.18s`.
+- `git diff --check`: passed; only CRLF conversion notices were emitted.
+
+W2-2B FastAPI lifespan wiring is intentionally not included in this core
+commit. No production operation handler is registered yet.
+
+## Codex verification (DB-W2-2B application lifecycle)
+
+The application now starts one empty-handler `WorkflowWorker` loop per process
+and stops it before bounded worker shutdown. Because the handler mapping is
+empty, this commit cannot claim any production operation. Shutdown never calls
+`release_operation`; active leases are left to expire.
+
+- Lifecycle RED: `test_app_starts_and_stops_empty_workflow_worker` failed
+  because no worker was constructed.
+- Lifecycle GREEN: `python -m pytest backend/tests/test_workflow_worker_lifecycle.py -q`
+  -> `2 passed`.
+- Combined worker/app/grading regression:
+  `python -m pytest backend/tests/test_workflow_worker.py backend/tests/test_workflow_worker_lifecycle.py backend/tests/test_auth_persistence.py backend/tests/test_grading_run_lifecycle.py -q`
+  -> `69 passed, 30 warnings in 91.33s`.
+
+The warnings are FastAPI's `on_event` deprecation notices. The repository
+already uses `on_event` for sandbox and grading worker lifecycle; converting
+all lifecycle hooks to a lifespan context is deferred to a focused integration
+cleanup rather than mixed into DB-W2-2.
 
 ### Codex review fixes required after timed-out first pass
 

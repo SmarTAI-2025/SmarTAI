@@ -10,6 +10,7 @@ from __future__ import annotations
 import hashlib
 import logging
 import math
+import re
 import time
 from collections import OrderedDict, defaultdict
 from dataclasses import dataclass
@@ -53,6 +54,11 @@ _CACHE_MAX_ENTRIES = 1000
 class QueryRequest(BaseModel):
     question: str = Field(min_length=1, max_length=500)
     mode: Literal["filter", "summary", "chart"] = "filter"
+
+
+class FilterIntentRequest(BaseModel):
+    question: str = Field(min_length=1, max_length=500)
+    surface: Literal["student_analysis", "review_overview"]
 
 
 @dataclass(frozen=True)
@@ -542,6 +548,66 @@ def _provider_error(exc: SharedPoolLimitError) -> HTTPException:
             )
         },
     )
+
+
+def _redact_filter_question(question: str, facts: _AnalyticsFacts) -> str:
+    """Remove known student identifiers before sending query text to a provider."""
+    redacted = question
+    identifiers = {
+        identifier.strip()
+        for row in facts.per_student_stats
+        for identifier in (str(row.get("id", "")), str(row.get("name", "")))
+        if identifier and identifier.strip()
+    }
+    for identifier in sorted(identifiers, key=len, reverse=True):
+        redacted = re.sub(re.escape(identifier), "<student>", redacted, flags=re.IGNORECASE)
+    return redacted
+
+
+@router.post("/{task_id}/filter-intent")
+async def interpret_filter_intent(
+    task_id: str,
+    req: FilterIntentRequest,
+    current: User = Depends(require_teacher),
+    registry: ExpertRegistry = Depends(get_scoped_expert_registry),
+):
+    facts = _load_facts(task_id, current.id)
+    provider = registry.pick_default()
+    if provider is None:
+        raise HTTPException(
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={"code": "analytics_provider_unavailable"},
+        )
+    _check_rate_limit(f"{current.id}:filter-intent")
+    provider_question = _redact_filter_question(req.question, facts)
+
+    try:
+        output = await analytics_agent.interpret_filter_intent(
+            question=provider_question,
+            surface=req.surface,
+            provider=provider,
+        )
+        return {
+            **output.model_dump(),
+            "question_tokens": [
+                _safe_text(value, 40) for value in output.question_tokens
+            ],
+            "text_terms": [_safe_text(value, 80) for value in output.text_terms],
+            "explanation": _safe_text(output.explanation, 500),
+        }
+    except SharedPoolLimitError as exc:
+        raise _provider_error(exc) from exc
+    except Exception as exc:
+        logger.warning(
+            "Analytics intent interpretation failed; task_id=%s surface=%s exception_type=%s",
+            task_id,
+            req.surface,
+            type(exc).__name__,
+        )
+        raise HTTPException(
+            status.HTTP_502_BAD_GATEWAY,
+            detail={"code": "analytics_intent_failed"},
+        ) from exc
 
 
 @router.post("/{task_id}/query")

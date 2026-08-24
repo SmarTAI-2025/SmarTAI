@@ -581,6 +581,9 @@ def test_provider_failure_during_image_read_is_classified_as_ocr():
 
     assert _source_read_failure_phase("provider_timeout", "image/png") == "ocr"
     assert _source_read_failure_phase("provider_unreachable", "application/pdf") == "ocr"
+    assert _source_read_failure_phase(
+        "provider_endpoint_non_public_address", "image/png"
+    ) == "ocr"
     assert _source_read_failure_phase("provider_timeout", "text/plain") == "recognition"
 
 

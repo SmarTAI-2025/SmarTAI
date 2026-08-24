@@ -10,6 +10,7 @@ from backend.config import settings
 from backend.db.models import ProviderConfigRecord
 from backend.db.session import session_scope
 from backend.domain.errors import ValidationError
+from backend.llm.provider_catalog import catalog_entry
 
 
 def provider_configuration_fingerprint(
@@ -43,6 +44,8 @@ def provider_configuration_fingerprint(
                 "provider_type": record.provider_type,
                 "model": record.model,
                 "base_url": record.base_url,
+                "endpoint_identity": record.endpoint_identity,
+                "wire_protocol": record.wire_protocol,
                 "enabled": record.enabled,
                 "max_concurrent": record.max_concurrent,
                 "rpm": record.rpm,
@@ -86,6 +89,8 @@ def _shared_provider_row(provider_id: str) -> dict | None:
             "provider_type": provider_type,
             "model": model,
             "base_url": base_url,
+            "endpoint_identity": catalog_entry(provider_type).default_base_url,
+            "wire_protocol": catalog_entry(provider_type).wire_protocol,
             "secret_digest": hashlib.sha256(api_key.encode("utf-8")).hexdigest(),
             "scope": "shared",
         }

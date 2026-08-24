@@ -1,18 +1,15 @@
 """
 Embedder abstractions for task-scoped RAG.
 
-Strategy (matches the user's "BYOK 加什么用什么" preference):
+Strategy:
 
-  1. Look at the live ExpertRegistry. If any provider is OpenAI-compatible
-     (zhipu / openai), use its API key + base_url to embed via
-     `langchain_openai.OpenAIEmbeddings`. Both Zhipu (`embedding-3`,
-     2048-dim) and OpenAI (`text-embedding-3-small`, 1536-dim) speak the same
-     wire format so we get one code path.
+  1. Only an exact official OpenAI or Zhipu route may use dense embeddings.
+     The base URL comes from the reviewed provider catalog, never from a user
+     supplied relay record.
 
-  2. Otherwise — user only configured Anthropic / Gemini, neither of which
-     expose a 1st-class embedding endpoint we can hit through the same SDK
-     — fall back to BM25 keyword retrieval (`rank_bm25`). Worse semantics,
-     but RAG still works without any extra LLM calls.
+  2. Every custom URL or protocol override falls back to local BM25 keyword
+     retrieval (`rank_bm25`). This prevents an implicit `/embeddings` request
+     from sending course material to a relay selected only for model calls.
 
 The ABC is `Embedder` with two methods: `embed(texts) -> np.ndarray` for
 indexing and `score(query, vectors)` for retrieval. BM25 fakes a vector
@@ -26,6 +23,11 @@ from abc import ABC, abstractmethod
 from typing import List, Optional, TYPE_CHECKING
 
 import numpy as np
+
+from backend.llm.endpoint_policy import (
+    is_user_defined_provider_endpoint,
+)
+from backend.llm.provider_catalog import catalog_entry, effective_wire_protocol
 
 if TYPE_CHECKING:
     from backend.llm.registry import ExpertRegistry
@@ -83,18 +85,23 @@ class Embedder(ABC):
 
 
 class OpenAICompatibleEmbedder(Embedder):
-    """Wraps langchain_openai.OpenAIEmbeddings with a custom base_url.
+    """Wrap OpenAIEmbeddings for two exact official endpoints only.
 
     Works identically against:
       - api.openai.com (`text-embedding-3-small`)
       - open.bigmodel.cn/api/paas/v4 (Zhipu `embedding-3`)
-    so a single class covers both. The parent ExpertRegistry already enforces
-    api_key validity at registration time, so we don't re-validate.
+    so a single class covers both. A second constructor-level check rejects
+    every user-defined endpoint even if a caller bypasses the registry picker.
     """
 
     def __init__(self, *, api_key: str, base_url: str, model: str, provider_type: str):
+        if provider_type not in _OPENAI_COMPAT_EMBED_MODELS:
+            raise ValueError("embedding_provider_not_supported")
+        entry = catalog_entry(provider_type)
+        if base_url.rstrip("/").casefold() != entry.default_base_url.casefold():
+            raise ValueError("embedding_endpoint_not_official")
         self.api_key = api_key
-        self.base_url = base_url
+        self.base_url = entry.default_base_url
         self.model = model
         self.provider_type = provider_type
         self.name = f"{provider_type}:{model}"
@@ -233,19 +240,30 @@ def pick_embedder(registry: "ExpertRegistry") -> Embedder:
 
     by_type = {}
     for c in configs:
-        if c.enabled and c.provider_type not in by_type:
-            by_type[c.provider_type] = c
+        if not c.enabled or c.provider_type in by_type:
+            continue
+        try:
+            entry = catalog_entry(c.provider_type)
+            protocol = effective_wire_protocol(c.provider_type, c.wire_protocol)
+        except ValueError:
+            continue
+        if (
+            c.provider_type not in _OPENAI_COMPAT_EMBED_MODELS
+            or protocol != entry.wire_protocol
+            or is_user_defined_provider_endpoint(
+                c.provider_type,
+                c.base_url,
+                protocol,
+            )
+        ):
+            continue
+        by_type[c.provider_type] = c
 
     for ptype in ("zhipu", "openai"):
         cfg = by_type.get(ptype)
         if cfg is None:
             continue
-        from backend.config import settings
-        # Choose base_url: explicit > settings default > openai default
-        if ptype == "zhipu":
-            base_url = cfg.base_url or settings.zhipu_api_base
-        else:
-            base_url = cfg.base_url or settings.openai_api_base
+        base_url = catalog_entry(ptype).default_base_url
         model = _OPENAI_COMPAT_EMBED_MODELS[ptype]
         logger.info("RAG embedder: OpenAICompatible(%s, %s)", ptype, model)
         return OpenAICompatibleEmbedder(

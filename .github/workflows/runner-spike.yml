@@ -1,0 +1,35 @@
+name: Runner isolation spike
+
+on:
+  push:
+    paths:
+      - "tools/runner_spike/**"
+      - "backend/tools/grading_runner.py"
+      - "backend/tests/test_runner_spike.py"
+      - ".github/workflows/runner-spike.yml"
+  pull_request:
+    branches: [main]
+    paths:
+      - "tools/runner_spike/**"
+      - "backend/tools/grading_runner.py"
+      - "backend/tests/test_runner_spike.py"
+      - ".github/workflows/runner-spike.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  oci-isolation-probe:
+    name: OCI isolation acceptance
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Build candidate image
+        run: python tools/runner_spike/harness.py build --runtime docker
+      - name: Probe env, network, directory and process isolation
+        run: python tools/runner_spike/harness.py probe --runtime docker --json

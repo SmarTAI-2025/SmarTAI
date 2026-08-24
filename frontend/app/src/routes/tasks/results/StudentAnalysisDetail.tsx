@@ -224,7 +224,7 @@ function QuestionFilterBar({ className, locale, value, matches, onQuery, onSelec
               smartSearch.handleBlur(event);
               window.setTimeout(() => setOpen(false), 120);
             }}
-            placeholder={tx(locale, "SmarTAI 智能搜索：题号、题型、题干，或“积分题”", "SmarTAI Smart Search: number, type, stem, or “integration”")}
+            placeholder={tx(locale, "本地快速筛选：题号、题型、题干，或“积分题”", "Local quick filter: number, type, stem, or “integration”")}
             className="h-10 w-full rounded-[8px] border bg-card pl-3 pr-10 text-xs text-foreground outline-none focus:border-primary focus:ring-2 focus:ring-primary/15"
           />
           {smartSearch.draftValue ? <button type="button" onMouseDown={(event) => event.preventDefault()} onClick={() => { smartSearch.commitValue(""); setOpen(false); }} aria-label={tx(locale, "清空题目筛选", "Clear question filter")} className="absolute right-2 top-1/2 inline-flex h-7 w-7 -translate-y-1/2 items-center justify-center rounded-full text-muted-foreground hover:bg-muted"><X aria-hidden="true" className="h-3.5 w-3.5" /></button> : null}

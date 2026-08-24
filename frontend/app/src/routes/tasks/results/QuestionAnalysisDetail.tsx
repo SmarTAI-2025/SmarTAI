@@ -151,8 +151,8 @@ export function QuestionAnalysisDetail({
               onCompositionStart={smartSearch.handleCompositionStart}
               onCompositionEnd={smartSearch.handleCompositionEnd}
               onChange={smartSearch.handleChange}
-              placeholder={tx(locale, "SmarTAI 智能搜索：题号、题干、题型或知识点，例如“积分题”", "SmarTAI Smart Search: number, stem, type, or knowledge point")}
-              aria-label={tx(locale, "SmarTAI 智能查找题目", "SmarTAI Smart question finder")}
+              placeholder={tx(locale, "本地快速筛选：题号、题干、题型或知识点，例如“积分题”", "Local quick filter: number, stem, type, or knowledge point")}
+              aria-label={tx(locale, "本地快速查找题目，不调用模型", "Find questions locally without a model call")}
               className="h-12 w-full rounded-[10px] border bg-background pl-3 pr-11 text-[13px] text-foreground outline-none focus:border-primary focus:ring-2 focus:ring-primary/15"
             />
             {smartSearch.draftValue ? <button type="button" onClick={() => smartSearch.commitValue("")} aria-label={tx(locale, "清空题目筛选", "Clear question filter")} className="absolute right-2.5 top-2.5 inline-flex h-7 w-7 items-center justify-center rounded-full text-muted-foreground hover:bg-muted hover:text-foreground"><X aria-hidden="true" className="h-4 w-4" /></button> : null}

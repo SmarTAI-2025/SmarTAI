@@ -52,6 +52,8 @@ services:
         value: "object"
       - key: SMARTAI_PROVIDER_ENCRYPTION_KEY
         sync: false
+      - key: SMARTAI_CUSTOM_PROVIDER_ENDPOINTS_ENABLED
+        value: "false"
       - key: SMARTAI_STORAGE_S3_ENDPOINT
         sync: false
       - key: SMARTAI_STORAGE_S3_BUCKET
