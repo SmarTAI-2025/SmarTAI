@@ -1,6 +1,7 @@
-import { ArrowRight, Search, X } from "lucide-react";
+import { ArrowRight, X } from "lucide-react";
 import { useMemo, type ReactNode } from "react";
 import { Link, useSearchParams } from "react-router-dom";
+import { SmarTAIMascot } from "@/components/brand/SmarTAIMascot";
 import {
   correctionScoreSource,
   effectiveCorrectionScore,
@@ -14,6 +15,7 @@ import {
 import { useImeSafeQuery } from "@/hooks/useImeSafeQuery";
 import type { Locale } from "@/i18n/messages";
 import { cn } from "@/lib/cn";
+import { ResultsSummaryMetric as SummaryMetric } from "@/routes/tasks/results/ResultsSummaryMetric";
 import type { Correction } from "@/types";
 
 type ScoreFilter = "all" | "under60" | "60to79" | "atleast80";
@@ -111,28 +113,30 @@ export function StudentAnalysisOverview({ locale, taskId, model }: { locale: Loc
         <div className="mt-4 grid grid-cols-2 gap-3 xl:grid-cols-6">
           <SummaryMetric label={tx(locale, "学生数", "Students")} value={String(rows.length)} tone="primary" />
           <SummaryMetric label={tx(locale, "平均得分率", "Mean score")} value={formatPercent(mean)} tone="accent" />
-          <SummaryMetric label={tx(locale, "中位得分率", "Median score")} value={formatPercent(median)} tone="primary" />
+          <SummaryMetric label={tx(locale, "中位得分率", "Median score")} value={formatPercent(median)} tone="secondary" />
           <SummaryMetric label={tx(locale, "最低 / 最高", "Lowest / highest")} value={`${formatPercent(lowest)} / ${formatPercent(highest)}`} tone="warning" />
           <SummaryMetric label={tx(locale, "及格率（≥60%）", "Pass rate (≥60%)")} value={formatPercent(validPercents.length ? (passCount / validPercents.length) * 100 : null)} tone="accent" />
           <SummaryMetric label={tx(locale, "含复核信号", "With review signals")} value={String(rows.filter((row) => row.requiredReviewCount > 0).length)} tone="danger" />
         </div>
 
         <div className="mt-4">
-          <label className="relative block">
-            <Search aria-hidden="true" className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-            <input
-              value={smartSearch.draftValue}
-              inputMode="search"
-              onBlur={smartSearch.handleBlur}
-              onCompositionStart={smartSearch.handleCompositionStart}
-              onCompositionEnd={smartSearch.handleCompositionEnd}
-              onChange={smartSearch.handleChange}
-              placeholder={tx(locale, "SmarTAI 智能搜索：例如 PB2011 不及格 低置信 待复核 低分优先", "SmarTAI Smart Search: PB2011 failed low confidence pending review low score first")}
-              aria-label={tx(locale, "SmarTAI 自然语言筛选学生", "SmarTAI natural-language student filter")}
-              className="h-11 w-full rounded-[9px] border bg-background pl-10 pr-10 text-[13px] text-foreground outline-none placeholder:text-muted-foreground focus:border-primary focus:ring-2 focus:ring-primary/15"
-            />
-            {smartSearch.draftValue ? <button type="button" onClick={() => smartSearch.commitValue("")} aria-label={tx(locale, "清除 SmarTAI 自然语言筛选", "Clear SmarTAI natural-language filter")} className="absolute right-2 top-1/2 inline-flex h-7 w-7 -translate-y-1/2 items-center justify-center rounded-full text-muted-foreground hover:bg-muted hover:text-foreground"><X aria-hidden="true" className="h-4 w-4" /></button> : null}
-          </label>
+          <div className="flex items-center gap-3">
+            <SmarTAIMascot variant="thinking" size="xs" />
+            <label className="relative block min-w-0 flex-1">
+              <input
+                value={smartSearch.draftValue}
+                inputMode="search"
+                onBlur={smartSearch.handleBlur}
+                onCompositionStart={smartSearch.handleCompositionStart}
+                onCompositionEnd={smartSearch.handleCompositionEnd}
+                onChange={smartSearch.handleChange}
+                placeholder={tx(locale, "SmarTAI 智能搜索：例如 PB2011 不及格 低置信 待复核 低分优先", "SmarTAI Smart Search: PB2011 failed low confidence pending review low score first")}
+                aria-label={tx(locale, "SmarTAI 自然语言筛选学生", "SmarTAI natural-language student filter")}
+                className="h-11 w-full rounded-[9px] border bg-background pl-3 pr-10 text-[13px] text-foreground outline-none placeholder:text-muted-foreground focus:border-primary focus:ring-2 focus:ring-primary/15"
+              />
+              {smartSearch.draftValue ? <button type="button" onClick={() => smartSearch.commitValue("")} aria-label={tx(locale, "清除 SmarTAI 自然语言筛选", "Clear SmarTAI natural-language filter")} className="absolute right-2 top-1/2 inline-flex h-7 w-7 -translate-y-1/2 items-center justify-center rounded-full text-muted-foreground hover:bg-muted hover:text-foreground"><X aria-hidden="true" className="h-4 w-4" /></button> : null}
+            </label>
+          </div>
           <div className="mt-2 flex min-h-7 flex-wrap items-center gap-2">
             {semanticPlan.conditions.length ? semanticPlan.conditions.map((condition) => (
               <button key={condition.id} type="button" onClick={() => removeSemanticCondition(condition)} title={tx(locale, "点击移除此条件", "Click to remove this condition")} className="inline-flex h-7 items-center gap-1 rounded-full bg-blue-50 px-2.5 text-[11px] font-semibold text-primary hover:bg-blue-100">
@@ -234,10 +238,6 @@ function StudentMobileCards({ locale, taskId, questions, rows, returnQuery }: { 
       </div>
     </article>
   ))}</div>;
-}
-
-function SummaryMetric({ label, value, tone }: { label: string; value: string; tone: "primary" | "accent" | "warning" | "danger" }) {
-  return <div className="rounded-[9px] border px-3 py-3"><strong className={cn("text-[18px] leading-6", tone === "primary" && "text-primary", tone === "accent" && "text-teal-500", tone === "warning" && "text-amber-500", tone === "danger" && "text-rose-500")}>{value}</strong><span className="mt-1 block text-[10px] font-medium text-muted-foreground">{label}</span></div>;
 }
 
 function FilterSelect({ label, value, onChange, children }: { label: string; value: string; onChange: (value: string) => void; children: ReactNode }) {
