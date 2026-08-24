@@ -181,7 +181,7 @@ def test_multiple_format_calls_all_rewritten():
 
 
 def test_nested_formatter_preserves_assignment_and_outer_call():
-    """Nested formatter replacement must not delete its assignment target."""
+    """Nested formatter values must remain unchanged for later computation."""
     code = (
         "import sympy as sp\n"
         "x = sp.symbols('x')\n"
@@ -189,9 +189,7 @@ def test_nested_formatter_preserves_assignment_and_outer_call():
         "print(r)\n"
     )
     out = _sanitize_sympy_output_code(code)
-    assert "r = sp.simplify(str(x))" in out
-    assert "print(r)" in out
-    compile(out, "<sanitized>", "exec")
+    assert out == code
 
 
 def test_multiline_formatter_inside_print_is_not_double_printed():
@@ -210,17 +208,14 @@ def test_multiline_formatter_inside_print_is_not_double_printed():
 
 
 def test_multiple_format_calls_on_one_line_preserve_all_arguments():
-    """Span overlap must not drop either formatter call or the outer print."""
+    """A multi-value print is not a provable single final-answer output."""
     code = (
         "import sympy as sp\n"
         "a, b = sp.symbols('a b')\n"
         "print(sp.pretty(a), sp.latex(b))\n"
     )
     out = _sanitize_sympy_output_code(code)
-    assert "print(str(a), str(b))" in out
-    assert "pretty" not in out
-    assert "latex" not in out
-    compile(out, "<sanitized>", "exec")
+    assert out == code
 
 
 def test_non_format_function_not_touched():
@@ -323,8 +318,8 @@ def test_nested_pprint_in_assignment_not_rewritten():
     assert out == code
 
 
-def test_nested_pprint_inside_print_not_rewritten():
-    """``print(sp.pprint(r))`` — nested pprint, leave untouched (D-2b)."""
+def test_pprint_as_only_print_value_rewritten():
+    """``print(sp.pprint(r))`` is a direct terminal output."""
     code = (
         "import sympy as sp\n"
         "x = sp.symbols('x')\n"
@@ -332,12 +327,12 @@ def test_nested_pprint_inside_print_not_rewritten():
         "print(sp.pprint(r))\n"
     )
     out = _sanitize_sympy_output_code(code)
-    assert "pprint" in out
-    assert out == code
+    assert "print(str(r))" in out
+    assert "pprint" not in out
 
 
-def test_nested_pretty_in_assignment_still_rewritten():
-    """``saved = sp.pretty(r)`` — pretty returns a string, safe to rewrite."""
+def test_nested_pretty_in_assignment_not_rewritten():
+    """``saved = sp.pretty(r)`` may be used later and stays unchanged."""
     code = (
         "import sympy as sp\n"
         "x = sp.symbols('x')\n"
@@ -346,9 +341,7 @@ def test_nested_pretty_in_assignment_still_rewritten():
         "print(saved)\n"
     )
     out = _sanitize_sympy_output_code(code)
-    assert "saved = str(r)" in out
-    assert "pretty" not in out
-    compile(out, "<sanitized>", "exec")
+    assert out == code
 
 
 def test_standalone_pprint_still_rewritten():

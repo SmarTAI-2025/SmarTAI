@@ -542,8 +542,8 @@ def _build_sympy_audit_log(
 # ─── Sanitiser: rewrite pretty()/pprint()/srepr()/latex() into print(str(...)) ─
 
 #: Formatters that *return* a multi-line / non-sympifiable string.
-#: Safe to replace with ``str(<arg>)`` in any position (the return value is
-#: preserved, only the representation changes to single-line ``str()``).
+#: They are rewritten only when their value is the program's direct output;
+#: changing the returned representation elsewhere can change program meaning.
 _RETURN_FUNCS = {"pretty", "srepr", "latex"}
 
 #: Formatters that *print to stdout themselves* and return ``None``.
@@ -733,17 +733,20 @@ def _format_call_argument(node: ast.Call) -> ast.expr | None:
     """Extract the *expression* argument from a format call.
 
     Handles positional (``pretty(expr)``), keyword-only (``pretty(expr=r)``),
-    and ``pretty(r, use_unicode=False)``).  Returns ``None`` if no usable
-    argument is found (the caller will treat this as a non-match).
+    and ``pretty(r, use_unicode=False)``).  Invalid/ambiguous calls and
+    settings with executable expressions are left unchanged so sanitization
+    cannot turn a failing program into a successful but incorrect reference.
     """
+    expr_keywords = [kw for kw in node.keywords if kw.arg == "expr"]
+    settings = [kw for kw in node.keywords if kw.arg != "expr"]
+    if any(kw.arg is None or not isinstance(kw.value, ast.Constant) for kw in settings):
+        return None
     if node.args:
+        if len(node.args) != 1 or expr_keywords:
+            return None
         return node.args[0]
-    # keyword-only call: ``sp.pretty(expr=value, use_unicode=False)``
-    for kw in node.keywords:
-        if kw.arg == "expr":
-            return kw.value
-    if node.keywords:
-        return node.keywords[0].value
+    if len(expr_keywords) == 1:
+        return expr_keywords[0].value
     return None
 
 
@@ -759,8 +762,8 @@ def _sanitize_sympy_output_code(code: str) -> str:
     **confirmed SymPy** format calls so stdout stays single-line:
 
     - ``_RETURN_FUNCS`` (``pretty`` / ``srepr`` / ``latex``) — return a string,
-      so they are replaced by ``str(<arg>)`` in **any** position (the return
-      value is preserved, only the representation changes).
+      so they are replaced only as a standalone output or the sole direct
+      argument of ``print``.  Assignments and later computations are untouched.
     - ``_SELF_PRINT_FUNCS`` (``pprint`` / ``pretty_print``) — print to stdout
       themselves and return ``None``.  A **standalone** expression
       ``sp.pprint(expr)`` is replaced with ``print(str(<arg>))``.  In a
@@ -784,6 +787,31 @@ def _sanitize_sympy_output_code(code: str) -> str:
         tree = ast.parse(code)
     except SyntaxError:
         return code
+
+    binding_counts: dict[str, int] = {}
+
+    def record_binding(name: str) -> None:
+        binding_counts[name] = binding_counts.get(name, 0) + 1
+
+    for item in ast.walk(tree):
+        if isinstance(item, ast.Name) and isinstance(item.ctx, (ast.Store, ast.Del)):
+            record_binding(item.id)
+        elif isinstance(item, ast.arg):
+            record_binding(item.arg)
+        elif isinstance(item, ast.alias) and item.name != "*":
+            record_binding(item.asname or item.name.split(".")[0])
+        elif isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            record_binding(item.name)
+        elif isinstance(item, ast.ExceptHandler) and item.name:
+            record_binding(item.name)
+
+    # Rewriting injects calls to these builtins.  If either name is rebound
+    # anywhere, leave the program unchanged rather than invoke user code.
+    if binding_counts.get("print") or binding_counts.get("str"):
+        return code
+    ambiguous_bindings = {
+        name for name, count in binding_counts.items() if count > 1
+    }
 
     table = _SymPySymbolTable()
 
@@ -812,14 +840,22 @@ def _sanitize_sympy_output_code(code: str) -> str:
             return node
 
         def _classify(self, node: ast.Call) -> str | None:
-            cat = table.classify_call(node)
-            if cat is None:
-                return None
-            # honour in-scope shadowing from nested function bodies
             func = node.func
-            if isinstance(func, ast.Name) and func.id in self._current_shadows():
+            shadows = self._current_shadows()
+            if isinstance(func, ast.Name) and (
+                func.id in shadows or func.id in ambiguous_bindings
+            ):
                 return None
-            return cat
+            if (
+                isinstance(func, ast.Attribute)
+                and isinstance(func.value, ast.Name)
+                and (
+                    func.value.id in shadows
+                    or func.value.id in ambiguous_bindings
+                )
+            ):
+                return None
+            return table.classify_call(node)
 
         def visit_FunctionDef(self, node: ast.FunctionDef) -> ast.AST:  # noqa: N802
             local: set[str] = {node.name}
@@ -879,26 +915,34 @@ def _sanitize_sympy_output_code(code: str) -> str:
             return self.generic_visit(node)
 
         def visit_Call(self, node: ast.Call) -> ast.AST:  # noqa: N802
-            cat = self._classify(node)
-            if cat is None:
-                return self.generic_visit(node)
-            arg = _format_call_argument(node)
-            if arg is None:
-                return self.generic_visit(node)
-            if cat == "self_print":
-                # D-2b: pprint/pretty_print in a nested position would lose
-                # stdout or change the return value if rewritten.  Leave it
-                # untouched so the sandbox fails safely → LLM_ONLY.
-                return self.generic_visit(node)
-            # cat == "return": pretty/srepr/latex return a string → str(arg)
-            arg = self.visit(arg)
-            self.rewrite_count += 1
-            replacement = ast.Call(
-                func=ast.Name(id="str", ctx=ast.Load()),
-                args=[arg],
-                keywords=[],
-            )
-            return ast.copy_location(replacement, node)
+            # Only rewrite a formatter when it is the sole direct value sent
+            # to builtin print.  Arbitrary nested positions can use the
+            # formatter string later and therefore must preserve semantics.
+            if (
+                isinstance(node.func, ast.Name)
+                and node.func.id == "print"
+                and len(node.args) == 1
+                and not node.keywords
+                and isinstance(node.args[0], ast.Call)
+                and self._classify(node.args[0]) is not None
+            ):
+                arg = _format_call_argument(node.args[0])
+                if arg is not None:
+                    arg = self.visit(arg)
+                    self.rewrite_count += 1
+                    replacement = ast.Call(
+                        func=ast.Name(id="print", ctx=ast.Load()),
+                        args=[
+                            ast.Call(
+                                func=ast.Name(id="str", ctx=ast.Load()),
+                                args=[arg],
+                                keywords=[],
+                            )
+                        ],
+                        keywords=[],
+                    )
+                    return ast.copy_location(replacement, node)
+            return self.generic_visit(node)
 
     transformer = _Transformer()
     rewritten_tree = transformer.visit(tree)
