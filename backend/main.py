@@ -202,6 +202,52 @@ def create_app() -> FastAPI:
             except Exception:
                 pass
 
+    # ─── Durable workflow-operation worker (DB-W2-2) ──────────────────
+    # Only operation types with restart-safe handlers are registered. Adding a
+    # mapping is the cutover from request-memory dispatch to durable polling.
+    _workflow_worker: dict[str, object] = {"worker": None, "task": None}
+
+    @app.on_event("startup")
+    async def _start_workflow_worker():
+        import asyncio as _asyncio
+        from backend.services.workflow_worker import WorkflowWorker
+        from backend.services.task_facade import (
+            run_durable_problem_extraction,
+            run_durable_submission_recognition,
+        )
+        from backend.api.task_preparation import (
+            run_durable_ai_completion,
+            run_durable_material_import,
+        )
+
+        worker = WorkflowWorker(handlers={
+            "problem_extraction": run_durable_problem_extraction,
+            "submission_recognition": run_durable_submission_recognition,
+            "material_import": run_durable_material_import,
+            "ai_completion": run_durable_ai_completion,
+        })
+        _workflow_worker["worker"] = worker
+        _workflow_worker["task"] = _asyncio.create_task(worker.run_forever())
+
+    @app.on_event("shutdown")
+    async def _stop_workflow_worker():
+        import asyncio as _asyncio
+
+        worker = _workflow_worker.get("worker")
+        task = _workflow_worker.get("task")
+        if worker is not None:
+            worker.stop()
+        if task is not None:
+            task.cancel()
+            try:
+                await task
+            except _asyncio.CancelledError:
+                pass
+            except Exception:
+                logger.exception("workflow worker loop exited during shutdown")
+        if worker is not None:
+            await worker.shutdown()
+
     return app
 
 

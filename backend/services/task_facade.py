@@ -20,10 +20,15 @@ from typing import Any
 from pydantic import ValidationError as PydanticValidationError
 from sqlalchemy import delete, func, select, update
 
-from backend.agents.ingest_agent import extract_problems, parse_student_answer_sources
+from backend.agents.ingest_agent import (
+    SubmissionSourceParseResult,
+    extract_problems,
+    parse_student_answer_sources,
+)
 from backend.db import (
     assignment_repository,
     course_repository,
+    file_repository,
     grading_repository,
     source_outcome_repository,
     submission_repository,
@@ -46,12 +51,14 @@ from backend.domain.errors import (
     DomainError,
     DuplicateActiveRun,
     InvalidTransition,
+    LeaseLost,
     NotFound,
     ValidationError,
     VersionConflict,
 )
 from backend.domain.source_outcomes import safe_source_diagnostic
 from backend.models import TaskGradingSetup
+from backend.models import User
 from backend.progress.tracker import get_or_create_reporter, get_reporter, remove_reporter
 from backend.services import grading_runs
 from backend.services.background_errors import (
@@ -71,13 +78,20 @@ from backend.services.submission_source_pipeline import (
     prepare_submission_sources,
 )
 from backend.skills.ocr_ingest import LLMVisionOCRSkill
-from backend.tools.file_processing import extract_text_from_upload
+from backend.storage import get_storage
+from backend.tools.file_processing import (
+    ARCHIVE_EXTENSIONS,
+    extract_text_from_upload,
+    infer_upload_content_type,
+)
 
 
 SYSTEM_COURSE_CODE = "__SMARTAI_UNASSIGNED__"
 SYSTEM_COURSE_NAME = "SmarTAI Workspace"
 _SAFE_ERROR_CODES = SAFE_BACKGROUND_ERROR_CODES
 _AUXILIARY_QUESTION_OPERATION_TYPES = {"material_import", "ai_completion"}
+_OPERATION_PUBLICATION_TTL_SECONDS = 60
+_OPERATION_RUNTIME_TTL_SECONDS = 2 * 60 * 60
 logger = logging.getLogger(__name__)
 
 
@@ -657,7 +671,7 @@ def _is_system_course(course_id: str) -> bool:
 def _operation_state(operation) -> str:
     return (
         "already_running"
-        if operation.status in {"pending", "running"}
+        if operation.status in {"preparing", "pending", "running"}
         else "already_done"
     )
 
@@ -667,7 +681,7 @@ def _operation_is_retryable(operation, *, now: float | None = None) -> bool:
         return True
     current_time = time.time() if now is None else now
     return bool(
-        operation.status in {"pending", "running"}
+        operation.status in {"preparing", "pending", "running"}
         and operation.expires_at is not None
         and operation.expires_at <= current_time
     )
@@ -723,6 +737,7 @@ def find_task_operation(
 def _cas_operation_attempt_for_write(
     session, *, task_id: str, owner_id: str, operation_id: str,
     expected_operation_attempt: int, expected_statuses: tuple[str, ...],
+    expected_lease_token: str | None = None,
     changes: dict[str, Any] | None = None,
 ):
     """Lock one operation generation through an attempt-and-status CAS.
@@ -741,6 +756,7 @@ def _cas_operation_attempt_for_write(
             workflow_repository.WorkflowOperationRecord.attempt
             == expected_operation_attempt,
             workflow_repository.WorkflowOperationRecord.status.in_(expected_statuses),
+            workflow_repository._lease_write_predicate(expected_lease_token, now),
         )
         .values(**(changes or {}), updated_at=now)
     )
@@ -757,6 +773,15 @@ def _cas_operation_attempt_for_write(
             raise VersionConflict(
                 "A newer workflow operation attempt is active.",
                 code="stale_operation_attempt",
+            )
+        if not workflow_repository._lease_allows_write(
+            current, expected_lease_token, now
+        ):
+            from backend.domain.errors import LeaseLost
+
+            raise LeaseLost(
+                "The operation lease is held by another worker or expired.",
+                code="lease_lost",
             )
         raise InvalidTransition(
             "The workflow job is not in the expected state.", code="workflow_busy"
@@ -821,6 +846,62 @@ def claim_workflow_operation_atomic(
         if claimed.rowcount != 1:
             _raise_stale_revision()
         session.flush()
+        return expected_workflow_revision + 1
+
+
+def activate_workflow_operation_atomic(
+    *, task_id: str, owner_id: str, operation_id: str,
+    expected_operation_attempt: int, expected_workflow_revision: int,
+    operation_payload: dict[str, Any], workflow_changes: dict[str, Any],
+) -> int:
+    """Publish a fully persisted operation to the durable worker queue."""
+    validated_payload = workflow_repository._validate_json_object(
+        operation_payload,
+        field="payload",
+        max_bytes=workflow_repository.MAX_OPERATION_PAYLOAD_BYTES,
+    )
+    now = time.time()
+    allowed = {
+        column.name
+        for column in workflow_repository.AssignmentWorkflowRecord.__table__.columns
+        if column.name not in {
+            "assignment_id", "owner_id", "created_at", "updated_at",
+            "workflow_revision",
+        }
+    }
+    values = {
+        key: value for key, value in workflow_changes.items() if key in allowed
+    }
+    with session_scope() as session:
+        _cas_operation_attempt_for_write(
+            session, task_id=task_id, owner_id=owner_id,
+            operation_id=operation_id,
+            expected_operation_attempt=expected_operation_attempt,
+            expected_statuses=("preparing",),
+            changes={
+                "status": "pending", "payload": validated_payload,
+                "error_code": None,
+                "expires_at": now + _OPERATION_RUNTIME_TTL_SECONDS,
+            },
+        )
+        claimed = session.execute(
+            update(workflow_repository.AssignmentWorkflowRecord)
+            .where(
+                workflow_repository.AssignmentWorkflowRecord.assignment_id == task_id,
+                workflow_repository.AssignmentWorkflowRecord.owner_id == owner_id,
+                workflow_repository.AssignmentWorkflowRecord.workflow_revision
+                == expected_workflow_revision,
+            )
+            .values(
+                **values,
+                workflow_revision=(
+                    workflow_repository.AssignmentWorkflowRecord.workflow_revision + 1
+                ),
+                updated_at=now,
+            )
+        )
+        if claimed.rowcount != 1:
+            _raise_stale_revision()
         return expected_workflow_revision + 1
 
 
@@ -914,7 +995,6 @@ def queue_task_problem_extraction(
     )
     digest = _hash_json({
         "source": input_hash or hashlib.sha256(content).hexdigest(),
-        "base_revision": base_revision,
         "replace_confirmed": replace_confirmed,
         "extraction_options": extraction_options or {},
     })
@@ -951,13 +1031,9 @@ def queue_task_problem_extraction(
         owner_id=owner_id,
         operation_type="problem_extraction",
         input_hash=digest,
-        payload={
-            "filename": filename, "content_type": content_type,
-            "base_workflow_revision": claim_base_revision,
-            "replace_confirmed": replace_confirmed,
-            "extraction_options": extraction_options or {},
-        },
-        expires_at=time.time() + 2 * 60 * 60,
+        payload={},
+        expires_at=time.time() + _OPERATION_PUBLICATION_TTL_SECONDS,
+        initial_status="preparing",
     )
     if not created:
         return {
@@ -966,10 +1042,35 @@ def queue_task_problem_extraction(
         }
     remove_reporter(operation.id)
     try:
-        claimed_revision = claim_workflow_operation_atomic(
+        source_sha256 = hashlib.sha256(content).hexdigest()
+        stored = next((
+            item for item in file_repository.list_files(
+                owner_id=owner_id, assignment_id=task_id
+            )
+            if item.kind == "problem_source" and item.sha256 == source_sha256
+        ), None)
+        if stored is None:
+            stored = file_repository.save_file(
+                storage=get_storage(), owner_id=owner_id,
+                kind="problem_source", original_name=filename, content=content,
+                content_type=content_type or "application/octet-stream",
+                assignment_id=task_id,
+            )
+        source, _ = source_outcome_repository.register_source(
+            owner_id=owner_id, assignment_id=task_id,
+            operation_id=operation.id, expected_attempt=operation.attempt,
+            order_index=0, stored_file_id=stored.id,
+        )
+        claimed_revision = activate_workflow_operation_atomic(
             task_id=task_id, owner_id=owner_id, operation_id=operation.id,
             expected_operation_attempt=operation.attempt,
             expected_workflow_revision=claim_base_revision,
+            operation_payload={
+                "source_id": source.id,
+                "base_workflow_revision": claim_base_revision,
+                "replace_confirmed": replace_confirmed,
+                "extraction_options": extraction_options or {},
+            },
             workflow_changes={
                 "presentation_status": "extracting_problems",
                 "active_operation": "problem_extraction",
@@ -984,6 +1085,13 @@ def queue_task_problem_extraction(
             error_code="stale_revision", completed_at=time.time(),
         )
         _raise_stale_revision()
+    except Exception:
+        workflow_repository.update_operation(
+            operation.id, owner_id=owner_id,
+            expected_attempt=operation.attempt, status="error",
+            error_code="problem_extraction_failed", completed_at=time.time(),
+        )
+        raise
     return {
         "status": "started", "task_id": task_id, "job_id": operation.id,
         "workflow_revision": claimed_revision,
@@ -1058,15 +1166,86 @@ async def run_task_problem_extraction(
         )
 
 
+def _registry_for_owner(owner_id: str):
+    from backend.llm.registry import _build_scoped_registry
+
+    with session_scope() as session:
+        record = session.get(UserRecord, owner_id)
+        if record is None:
+            raise NotFound("workflow_operation_owner")
+        user = User(
+            id=record.id,
+            username=record.username,
+            email=record.email or "",
+            role=record.role,
+            password_hash=record.password_hash,
+            created_at=record.created_at,
+            is_active=record.is_active,
+        )
+    return _build_scoped_registry(user)
+
+
+async def run_durable_problem_extraction(operation) -> None:
+    from backend.services.problem_extraction import run_problem_extraction
+
+    try:
+        await run_problem_extraction(
+            operation,
+            registry_factory=_registry_for_owner,
+            extract_text=extract_text_from_upload,
+            extract_questions=extract_problems,
+            commit=_replace_draft_questions,
+        )
+    except Exception as exc:
+        from backend.domain.errors import LeaseLost
+
+        if isinstance(exc, LeaseLost):
+            raise
+        code = (
+            _detail_error(exc, "problem_extraction_failed")
+            if isinstance(exc, DomainError)
+            else "problem_extraction_failed"
+        )
+        _fail_operation(
+            operation.assignment_id,
+            operation.owner_id,
+            operation.operation_id,
+            operation.attempt,
+            code,
+            expected_lease_token=operation.lease_token,
+        )
+
+
 def _replace_draft_questions(
     task_id: str, owner_id: str, problem_data: dict[str, dict], filename: str,
     *, expected_workflow_revision: int | None = None,
     replace_confirmed: bool = False, operation_id: str | None = None,
     expected_operation_attempt: int | None = None,
+    expected_lease_token: str | None = None,
     operation_progress: dict | None = None,
+    operation_checkpoint: dict | None = None,
+    operation_artifact_refs: list[str] | None = None,
 ) -> int:
     """Atomically CAS the workflow and replace the complete draft question set."""
     now = time.time()
+    validated_progress = workflow_repository._validate_json_object(
+        operation_progress or {},
+        field="progress",
+        max_bytes=workflow_repository.MAX_OPERATION_PROGRESS_BYTES,
+    )
+    validated_checkpoint = workflow_repository._validate_json_object(
+        operation_checkpoint or {},
+        field="checkpoint",
+        max_bytes=workflow_repository.MAX_OPERATION_CHECKPOINT_BYTES,
+    )
+    validated_refs = workflow_repository._validate_artifact_refs(
+        operation_artifact_refs or []
+    )
+    terminal_summary = workflow_repository._validate_json_object(
+        {"problem_count": len(problem_data)},
+        field="terminal_summary",
+        max_bytes=workflow_repository.MAX_OPERATION_TERMINAL_SUMMARY_BYTES,
+    )
     with session_scope() as session:
         operation = None
         if operation_id is not None:
@@ -1077,7 +1256,18 @@ def _replace_draft_questions(
                 operation_id=operation_id,
                 expected_operation_attempt=expected_operation_attempt,
                 expected_statuses=("running",),
+                expected_lease_token=expected_lease_token,
             )
+            if validated_refs:
+                matched_refs = set(session.scalars(select(
+                    file_repository.StoredFileRecord.id
+                ).where(
+                    file_repository.StoredFileRecord.id.in_(validated_refs),
+                    file_repository.StoredFileRecord.owner_id == owner_id,
+                    file_repository.StoredFileRecord.assignment_id == task_id,
+                )))
+                if matched_refs != set(validated_refs):
+                    raise NotFound("stored_file")
         allowed_statuses = list(education.EDITABLE_ASSIGNMENT_STATUSES)
         if replace_confirmed:
             allowed_statuses.append(education.AssignmentStatus.PUBLISHED.value)
@@ -1186,11 +1376,20 @@ def _replace_draft_questions(
             payload = dict(operation.payload or {})
             payload.update({"filename": filename, "problem_count": len(problem_data)})
             operation.status = "done"
-            operation.progress = operation_progress or {}
+            operation.progress = validated_progress
             operation.payload = payload
             operation.error_code = None
             operation.completed_at = now
             operation.updated_at = now
+            operation.checkpoint_revision += 1
+            operation.checkpoint_stage = "completed"
+            operation.checkpoint = validated_checkpoint
+            operation.artifact_refs = validated_refs
+            operation.terminal_summary = terminal_summary
+            operation.lease_owner = None
+            operation.lease_token = None
+            operation.lease_expires_at = None
+            operation.lease_heartbeat_at = None
         return expected + 1
 
 
@@ -1235,7 +1434,6 @@ def queue_task_submission_parsing(
         "roster": roster_entries or [],
         "provider": recognition_provider_id,
         "replace_confirmed": replace_confirmed,
-        "base_revision": workflow.workflow_revision,
     })
     workflow, active = _ensure_no_other_active_operation(
         task_id=task_id, owner_id=owner_id,
@@ -1250,11 +1448,8 @@ def queue_task_submission_parsing(
     operation, created = workflow_repository.create_operation(
         assignment_id=task_id, owner_id=owner_id,
         operation_type="submission_recognition", input_hash=digest,
-        payload={
-            "filename": filename,
-            "base_workflow_revision": workflow.workflow_revision,
-            "replace_confirmed": replace_confirmed,
-        }, expires_at=time.time() + 2 * 60 * 60,
+        payload={}, expires_at=time.time() + _OPERATION_PUBLICATION_TTL_SECONDS,
+        initial_status="preparing",
     )
     if not created:
         return {
@@ -1286,10 +1481,56 @@ def queue_task_submission_parsing(
             "analysis_error_code": None,
         })
     try:
-        claimed_revision = claim_workflow_operation_atomic(
+        is_archive = (filename or "").lower().endswith(ARCHIVE_EXTENSIONS)
+        source_kind = "submission_container" if is_archive else "submission_source"
+        stored = next((
+            item for item in file_repository.list_files(
+                owner_id=owner_id, assignment_id=task_id
+            )
+            if item.kind == source_kind
+            and item.sha256 == hashlib.sha256(content).hexdigest()
+        ), None)
+        if stored is None:
+            stored = file_repository.save_file(
+                storage=get_storage(), owner_id=owner_id,
+                kind=source_kind, original_name=filename,
+                content=content,
+                content_type=infer_upload_content_type(
+                    filename, content_type, content
+                ),
+                assignment_id=task_id,
+            )
+        source_ids: list[str] = []
+        if not is_archive:
+            source, _ = source_outcome_repository.register_source(
+                owner_id=owner_id, assignment_id=task_id,
+                operation_id=operation.id, expected_attempt=operation.attempt,
+                order_index=0, stored_file_id=stored.id,
+            )
+            source_ids.append(source.id)
+        workflow_repository.save_operation_checkpoint(
+            operation.id,
+            owner_id=owner_id,
+            expected_attempt=operation.attempt,
+            expected_checkpoint_revision=operation.checkpoint_revision,
+            stage="submission_source_saved",
+            checkpoint={"input_file_id": stored.id},
+            artifact_refs=[stored.id],
+        )
+        claimed_revision = activate_workflow_operation_atomic(
             task_id=task_id, owner_id=owner_id, operation_id=operation.id,
             expected_operation_attempt=operation.attempt,
             expected_workflow_revision=workflow.workflow_revision,
+            operation_payload={
+                "input_file_id": stored.id,
+                "source_ids": source_ids,
+                "base_workflow_revision": workflow.workflow_revision,
+                "identity_mode": identity_mode,
+                "roster_entries": roster_entries or [],
+                "roster_name": roster_name,
+                "recognition_provider_id": recognition_provider_id,
+                "replace_confirmed": replace_confirmed,
+            },
             workflow_changes=workflow_changes,
         )
     except VersionConflict:
@@ -1299,11 +1540,72 @@ def queue_task_submission_parsing(
             error_code="stale_revision", completed_at=time.time(),
         )
         _raise_stale_revision()
+    except Exception:
+        workflow_repository.update_operation(
+            operation.id, owner_id=owner_id,
+            expected_attempt=operation.attempt, status="error",
+            error_code="submission_parse_failed", completed_at=time.time(),
+        )
+        raise
     return {
         "status": "started", "task_id": task_id, "job_id": operation.id,
         "workflow_revision": claimed_revision,
         "_job_attempt": operation.attempt,
     }
+
+
+def _submission_result_artifact(
+    *, owner_id: str, task_id: str, job_id: str, job_attempt: int,
+):
+    expected_name = f"{job_id}-attempt-{job_attempt}-parsed.json"
+    return next((
+        item for item in file_repository.list_files(
+            owner_id=owner_id, assignment_id=task_id
+        )
+        if item.kind == "submission_recognition_result"
+        and item.original_name == expected_name
+    ), None)
+
+
+def _serialize_submission_results(
+    results: list[SubmissionSourceParseResult],
+) -> bytes:
+    return json.dumps([
+        {
+            "source_id": result.source_id,
+            "stored_file_id": result.stored_file_id,
+            "filename": result.filename,
+            "status": result.status,
+            "student": result.student,
+            "student_candidate": result.student_candidate,
+            "matched_answer_count": result.matched_answer_count,
+            "unknown_question_ids": list(result.unknown_question_ids),
+            "stable_error_code": result.stable_error_code,
+            "failure_phase": result.failure_phase,
+            "retryable": result.retryable,
+        }
+        for result in results
+    ], ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+
+
+def _load_submission_results(artifact) -> list[SubmissionSourceParseResult]:
+    with get_storage().open(artifact.storage_key) as stream:
+        payload = json.loads(stream.read().decode("utf-8"))
+    if not isinstance(payload, list) or not payload:
+        raise RuntimeError("submission_parse_invalid")
+    return [SubmissionSourceParseResult(
+        source_id=str(item["source_id"]),
+        stored_file_id=str(item["stored_file_id"]),
+        filename=str(item["filename"]),
+        status=item["status"],
+        student=item.get("student"),
+        student_candidate=item.get("student_candidate"),
+        matched_answer_count=int(item.get("matched_answer_count") or 0),
+        unknown_question_ids=tuple(item.get("unknown_question_ids") or []),
+        stable_error_code=item.get("stable_error_code"),
+        failure_phase=item.get("failure_phase"),
+        retryable=bool(item.get("retryable")),
+    ) for item in payload if isinstance(item, dict)]
 
 
 async def run_task_submission_parsing(
@@ -1312,46 +1614,93 @@ async def run_task_submission_parsing(
     identity_mode: str,
     roster_entries: list[dict[str, str]] | None, recognition_provider_id: str | None,
     replace_confirmed: bool, claimed_workflow_revision: int,
+    leased_operation=None,
 ) -> None:
     reporter = get_or_create_reporter(job_id)
     current_failure_phase = "source_persistence"
+    parsed_artifact = None
     try:
-        provider = (
-            registry.get(recognition_provider_id)
-            if recognition_provider_id else registry.pick_default()
-        )
-        if provider is None:
-            raise ValidationError(
-                "No enabled recognition provider is available.",
-                code=(
-                    "recognition_provider_not_enabled"
-                    if recognition_provider_id else "no_provider_configured"
-                ),
+        if leased_operation is None:
+            current_operation = workflow_repository.get_operation(
+                job_id, owner_id=owner_id
             )
-        vision = registry.pick_vision(provider)
-        ocr_skill = LLMVisionOCRSkill(vision) if vision is not None else None
+            if current_operation.status == "pending":
+                workflow_repository.update_operation(
+                    job_id,
+                    owner_id=owner_id,
+                    expected_attempt=job_attempt,
+                    status="running",
+                    started_at=time.time(),
+                )
         assignment = assignment_repository.get_assignment(task_id, actor_id=owner_id)
         questions = assignment_repository.list_questions(task_id, teacher_id=owner_id)
-        sources = await prepare_submission_sources(
-            content=content,
-            filename=filename,
-            content_type=content_type,
-            owner_id=owner_id,
-            task_id=task_id,
-            job_id=job_id,
-            job_attempt=job_attempt,
-            ocr_skill=ocr_skill,
-            reporter=reporter,
-        )
-        current_failure_phase = "recognition"
-        results = await parse_student_answer_sources(
-            sources,
-            {q.q_id: _serialize_problem(q) for q in questions},
-            provider,
-            reporter=reporter,
-            identity_mode=identity_mode,
-            roster_entries=roster_entries,
-        )
+        results = None
+        if leased_operation is not None:
+            parsed_artifact = _submission_result_artifact(
+                owner_id=owner_id,
+                task_id=task_id,
+                job_id=job_id,
+                job_attempt=job_attempt,
+            )
+            if parsed_artifact is not None:
+                results = _load_submission_results(parsed_artifact)
+        if results is None:
+            provider = (
+                registry.get(recognition_provider_id)
+                if recognition_provider_id else registry.pick_default()
+            )
+            if provider is None:
+                raise ValidationError(
+                    "No enabled recognition provider is available.",
+                    code=(
+                        "recognition_provider_not_enabled"
+                        if recognition_provider_id else "no_provider_configured"
+                    ),
+                )
+            pick_vision = getattr(registry, "pick_vision", None)
+            vision = pick_vision(provider) if pick_vision is not None else None
+            ocr_skill = LLMVisionOCRSkill(vision) if vision is not None else None
+            sources = await prepare_submission_sources(
+                content=content,
+                filename=filename,
+                content_type=content_type,
+                owner_id=owner_id,
+                task_id=task_id,
+                job_id=job_id,
+                job_attempt=job_attempt,
+                ocr_skill=ocr_skill,
+                reporter=reporter,
+            )
+            current_failure_phase = "recognition"
+            results = await parse_student_answer_sources(
+                sources,
+                {q.q_id: _serialize_problem(q) for q in questions},
+                provider,
+                reporter=reporter,
+                identity_mode=identity_mode,
+                roster_entries=roster_entries,
+            )
+            if leased_operation is not None:
+                current_failure_phase = "outcome_persistence"
+                parsed_artifact = file_repository.save_file(
+                    storage=get_storage(),
+                    owner_id=owner_id,
+                    kind="submission_recognition_result",
+                    original_name=(
+                        f"{job_id}-attempt-{job_attempt}-parsed.json"
+                    ),
+                    content=_serialize_submission_results(results),
+                    content_type="application/json",
+                    assignment_id=task_id,
+                )
+                await leased_operation.checkpoint(
+                    stage="submissions_parsed",
+                    checkpoint={"parsed_artifact_id": parsed_artifact.id},
+                    artifact_refs=list(dict.fromkeys([
+                        *leased_operation.artifact_refs,
+                        parsed_artifact.id,
+                    ])),
+                )
 
         current_failure_phase = "outcome_persistence"
         for result in results:
@@ -1365,6 +1714,9 @@ async def run_task_submission_parsing(
                 stable_error_code=result.stable_error_code,
                 failure_phase=result.failure_phase,
                 retryable=result.retryable,
+                artifact_file_id=(
+                    parsed_artifact.id if parsed_artifact is not None else None
+                ),
             )
 
         current_failure_phase = "result_persistence"
@@ -1397,6 +1749,10 @@ async def run_task_submission_parsing(
                 job_id,
                 job_attempt,
                 safe_code,
+                expected_lease_token=(
+                    leased_operation.lease_token
+                    if leased_operation is not None else None
+                ),
                 operation_progress=snapshot,
             )
             return
@@ -1412,6 +1768,10 @@ async def run_task_submission_parsing(
             expected_workflow_revision=claimed_workflow_revision,
             operation_id=job_id,
             expected_operation_attempt=job_attempt,
+            expected_lease_token=(
+                leased_operation.lease_token
+                if leased_operation is not None else None
+            ),
             operation_progress=snapshot,
             submission_file_name=filename,
             source_summary={
@@ -1423,6 +1783,8 @@ async def run_task_submission_parsing(
             },
         )
     except Exception as exc:
+        if isinstance(exc, LeaseLost):
+            raise
         persistence_code = {
             "source_persistence": "submission_source_persistence_failed",
             "outcome_persistence": "submission_outcome_persistence_failed",
@@ -1471,7 +1833,65 @@ async def run_task_submission_parsing(
             job_id,
             job_attempt,
             code,
+            expected_lease_token=(
+                leased_operation.lease_token
+                if leased_operation is not None else None
+            ),
             operation_progress=snapshot,
+        )
+
+
+async def run_durable_submission_recognition(operation) -> None:
+    """Recover one persisted submission archive and commit it under its lease."""
+    try:
+        input_file_id = str(
+            (operation.payload or {}).get("input_file_id") or ""
+        )
+        input_file = file_repository.get_file(
+            file_id=input_file_id, owner_id=operation.owner_id
+        )
+        if input_file is None or input_file.assignment_id != operation.assignment_id:
+            raise NotFound("stored_file")
+        with get_storage().open(input_file.storage_key) as stream:
+            content = stream.read()
+        await run_task_submission_parsing(
+            task_id=operation.assignment_id,
+            owner_id=operation.owner_id,
+            job_id=operation.operation_id,
+            filename=input_file.original_name,
+            content=content,
+            content_type=input_file.content_type,
+            registry=_registry_for_owner(operation.owner_id),
+            job_attempt=operation.attempt,
+            identity_mode=str(
+                (operation.payload or {}).get("identity_mode") or "filename"
+            ),
+            roster_entries=list(
+                (operation.payload or {}).get("roster_entries") or []
+            ),
+            recognition_provider_id=(
+                operation.payload or {}
+            ).get("recognition_provider_id"),
+            replace_confirmed=bool(
+                (operation.payload or {}).get("replace_confirmed")
+            ),
+            claimed_workflow_revision=(
+                int((operation.payload or {}).get("base_workflow_revision") or 0)
+                + 1
+            ),
+            leased_operation=operation,
+        )
+    except Exception as exc:
+        if isinstance(exc, LeaseLost):
+            raise
+        code = (
+            _detail_error(exc, "submission_parse_failed")
+            if isinstance(exc, DomainError)
+            else "submission_parse_failed"
+        )
+        _fail_operation(
+            operation.assignment_id, operation.owner_id, operation.operation_id,
+            operation.attempt, code, expected_lease_token=operation.lease_token,
         )
 
 
@@ -1479,6 +1899,7 @@ def apply_question_patches_atomic(
     *, task_id: str, owner_id: str, expected_workflow_revision: int,
     patches: list[dict[str, Any]], operation_id: str,
     expected_operation_attempt: int,
+    expected_lease_token: str | None = None,
     required_operation_status: str, final_operation_status: str,
     operation_payload: dict[str, Any], operation_progress: dict | None = None,
     require_missing: bool = False,
@@ -1489,6 +1910,19 @@ def apply_question_patches_atomic(
     changed.  Any invalid target, stale revision, expired job, or database error
     rolls back the workflow claim, question changes, and operation transition.
     """
+    validated_payload = workflow_repository._validate_json_object(
+        operation_payload,
+        field="payload",
+        max_bytes=workflow_repository.MAX_OPERATION_PAYLOAD_BYTES,
+    )
+    validated_progress = (
+        workflow_repository._validate_json_object(
+            operation_progress,
+            field="progress",
+            max_bytes=workflow_repository.MAX_OPERATION_PROGRESS_BYTES,
+        )
+        if operation_progress is not None else None
+    )
     now = time.time()
     allowed_fields = {
         "stem", "criterion", "max_score", "reference_answer", "test_cases"
@@ -1513,6 +1947,7 @@ def apply_question_patches_atomic(
             operation_id=operation_id,
             expected_operation_attempt=expected_operation_attempt,
             expected_statuses=(required_operation_status,),
+            expected_lease_token=expected_lease_token,
         )
         if operation.expires_at is not None and operation.expires_at <= now:
             raise InvalidTransition("The workflow job expired.", code="stale_revision")
@@ -1612,11 +2047,23 @@ def apply_question_patches_atomic(
             question.updated_at = now
 
         operation.status = final_operation_status
-        operation.payload = operation_payload
-        operation.progress = operation_progress or dict(operation.progress or {})
+        operation.payload = validated_payload
+        operation.progress = (
+            validated_progress
+            if validated_progress is not None
+            else workflow_repository._validate_json_object(
+                dict(operation.progress or {}),
+                field="progress",
+                max_bytes=workflow_repository.MAX_OPERATION_PROGRESS_BYTES,
+            )
+        )
         operation.error_code = None
         operation.completed_at = now
         operation.updated_at = now
+        operation.lease_owner = None
+        operation.lease_token = None
+        operation.lease_expires_at = None
+        operation.lease_heartbeat_at = None
         session.flush()
         return expected_workflow_revision + 1
 
@@ -1624,10 +2071,21 @@ def apply_question_patches_atomic(
 def complete_planning_operation_atomic(
     *, task_id: str, owner_id: str, expected_workflow_revision: int,
     operation_id: str, expected_operation_attempt: int,
+    expected_lease_token: str | None = None,
     payload: dict[str, Any], progress: dict | None,
     final_status: str = "ready",
 ) -> int:
     """Publish a background-generated plan only if its task snapshot is current."""
+    validated_payload = workflow_repository._validate_json_object(
+        payload,
+        field="payload",
+        max_bytes=workflow_repository.MAX_OPERATION_PAYLOAD_BYTES,
+    )
+    validated_progress = workflow_repository._validate_json_object(
+        progress or {},
+        field="progress",
+        max_bytes=workflow_repository.MAX_OPERATION_PROGRESS_BYTES,
+    )
     now = time.time()
     with session_scope() as session:
         operation = _cas_operation_attempt_for_write(
@@ -1635,6 +2093,7 @@ def complete_planning_operation_atomic(
             operation_id=operation_id,
             expected_operation_attempt=expected_operation_attempt,
             expected_statuses=("running",),
+            expected_lease_token=expected_lease_token,
         )
         if operation.expires_at is not None and operation.expires_at <= now:
             _raise_stale_revision()
@@ -1660,11 +2119,15 @@ def complete_planning_operation_atomic(
         if claimed.rowcount != 1:
             _raise_stale_revision()
         operation.status = final_status
-        operation.payload = payload
-        operation.progress = progress or {}
+        operation.payload = validated_payload
+        operation.progress = validated_progress
         operation.error_code = None
         operation.completed_at = now
         operation.updated_at = now
+        operation.lease_owner = None
+        operation.lease_token = None
+        operation.lease_expires_at = None
+        operation.lease_heartbeat_at = None
         session.flush()
         return expected_workflow_revision
 
@@ -1680,8 +2143,11 @@ def _commit_imported_submissions(
     expected_workflow_revision: int | None = None,
     operation_id: str | None = None,
     expected_operation_attempt: int | None = None,
+    expected_lease_token: str | None = None,
     operation_progress: dict | None = None,
     submission_file_name: str | None = None,
+    source_id: str | None = None,
+    source_artifact_file_id: str | None = None,
     source_summary: dict[str, int] | None = None,
 ) -> int:
     """Publish and persist a parsed teacher batch in one transaction.
@@ -1701,7 +2167,35 @@ def _commit_imported_submissions(
                 operation_id=operation_id,
                 expected_operation_attempt=expected_operation_attempt,
                 expected_statuses=("running",),
+                expected_lease_token=expected_lease_token,
             )
+        source = None
+        if source_id is not None:
+            if operation is None or source_artifact_file_id is None:
+                raise ValidationError("operation_source_outcome_required")
+            source = session.scalar(select(
+                source_outcome_repository.WorkflowSourceItemRecord
+            ).where(
+                source_outcome_repository.WorkflowSourceItemRecord.id == source_id,
+                source_outcome_repository.WorkflowSourceItemRecord.owner_id == owner_id,
+                source_outcome_repository.WorkflowSourceItemRecord.assignment_id == task_id,
+                source_outcome_repository.WorkflowSourceItemRecord.operation_id == operation_id,
+                source_outcome_repository.WorkflowSourceItemRecord.attempt
+                == expected_operation_attempt,
+            ))
+            if source is None:
+                raise NotFound("workflow_source")
+            artifact = session.scalar(select(file_repository.StoredFileRecord.id).where(
+                file_repository.StoredFileRecord.id == source_artifact_file_id,
+                file_repository.StoredFileRecord.owner_id == owner_id,
+                file_repository.StoredFileRecord.assignment_id == task_id,
+            ))
+            if artifact is None:
+                raise NotFound("workflow_source")
+            if session.get(
+                source_outcome_repository.WorkflowSourceOutcomeRecord, source_id
+            ) is not None:
+                raise VersionConflict("Workflow source outcome already exists.")
         assignment = session.scalar(
             select(AssignmentRecord).where(
                 AssignmentRecord.id == task_id,
@@ -1958,13 +2452,30 @@ def _commit_imported_submissions(
             operation.error_code = None
             operation.completed_at = now
             operation.updated_at = now
+            operation.lease_owner = None
+            operation.lease_token = None
+            operation.lease_expires_at = None
+            operation.lease_heartbeat_at = None
+        if source is not None:
+            session.add(source_outcome_repository.WorkflowSourceOutcomeRecord(
+                source_id=source.id,
+                status="parsed",
+                student_candidate=None,
+                matched_answer_count=len(students),
+                unknown_question_ids=[],
+                stable_error_code=None,
+                retryable=False,
+                artifact_file_id=source_artifact_file_id,
+                created_at=now,
+            ))
         session.flush()
         return len(students)
 
 
 def _fail_operation(
     task_id: str, owner_id: str, job_id: str, expected_operation_attempt: int,
-    error_code: str,
+    error_code: str, *, expected_lease_token: str | None = None,
+    failed_source_id: str | None = None,
     operation_progress: dict | None = None,
 ) -> bool:
     safe = safe_background_error_code(error_code, "workflow_failed")
@@ -1986,6 +2497,7 @@ def _fail_operation(
                 operation_id=job_id,
                 expected_operation_attempt=expected_operation_attempt,
                 expected_statuses=("pending", "running", "ready"),
+                expected_lease_token=expected_lease_token,
                 changes=changes,
             )
         except (VersionConflict, InvalidTransition) as exc:
@@ -2000,6 +2512,39 @@ def _fail_operation(
         ))
         if workflow is None:
             raise NotFound("workflow")
+        if expected_lease_token is not None:
+            operation.lease_owner = None
+            operation.lease_token = None
+            operation.lease_expires_at = None
+            operation.lease_heartbeat_at = None
+        if failed_source_id is not None:
+            source = session.scalar(select(
+                source_outcome_repository.WorkflowSourceItemRecord
+            ).where(
+                source_outcome_repository.WorkflowSourceItemRecord.id == failed_source_id,
+                source_outcome_repository.WorkflowSourceItemRecord.owner_id == owner_id,
+                source_outcome_repository.WorkflowSourceItemRecord.assignment_id == task_id,
+                source_outcome_repository.WorkflowSourceItemRecord.operation_id == job_id,
+                source_outcome_repository.WorkflowSourceItemRecord.attempt
+                == expected_operation_attempt,
+            ))
+            if source is None:
+                raise NotFound("workflow_source")
+            if session.get(
+                source_outcome_repository.WorkflowSourceOutcomeRecord,
+                failed_source_id,
+            ) is None:
+                session.add(source_outcome_repository.WorkflowSourceOutcomeRecord(
+                    source_id=failed_source_id,
+                    status="parse_failed",
+                    student_candidate=None,
+                    matched_answer_count=0,
+                    unknown_question_ids=[],
+                    stable_error_code=safe,
+                    retryable=True,
+                    artifact_file_id=None,
+                    created_at=now,
+                ))
         if operation.operation_type in _AUXILIARY_QUESTION_OPERATION_TYPES:
             workflow.last_failed_job_id = job_id
             workflow.error_code = safe

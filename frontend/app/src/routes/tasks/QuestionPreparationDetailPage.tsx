@@ -50,6 +50,8 @@ export function QuestionPreparationDetailPage() {
   const pendingCompositionCommitRef = useRef<number | null>(null);
   const lastCommittedQueryRef = useRef(urlQuery);
   const positionedPathRef = useRef<string | null>(null);
+  const workflowRevisionTaskRef = useRef(stableTaskId);
+  const latestWorkflowRevisionRef = useRef<number | undefined>(taskQuery.data?.workflow_revision);
 
   const problems = useMemo(
     () => sortProblems(Object.values(taskQuery.data?.problem_data ?? {}), locale),
@@ -66,6 +68,21 @@ export function QuestionPreparationDetailPage() {
   const blocker = useBlocker(({ currentLocation, nextLocation }) => (
     hasDirty && currentLocation.pathname !== nextLocation.pathname
   ));
+
+  useEffect(() => {
+    const serverRevision = taskQuery.data?.workflow_revision;
+    if (workflowRevisionTaskRef.current !== stableTaskId) {
+      workflowRevisionTaskRef.current = stableTaskId;
+      latestWorkflowRevisionRef.current = serverRevision;
+      return;
+    }
+    if (
+      serverRevision !== undefined
+      && (latestWorkflowRevisionRef.current === undefined || serverRevision > latestWorkflowRevisionRef.current)
+    ) {
+      latestWorkflowRevisionRef.current = serverRevision;
+    }
+  }, [stableTaskId, taskQuery.data?.workflow_revision]);
 
   useEffect(() => {
     lastCommittedQueryRef.current = urlQuery;
@@ -200,30 +217,33 @@ export function QuestionPreparationDetailPage() {
   const overviewHref = `/tasks/${encodeURIComponent(taskId)}/questions${searchParams.size ? `?${searchParams.toString()}` : ""}`;
 
   async function saveText(problem: ProblemInfo, field: TextFieldKey, value: string) {
-    await updateProblem.mutateAsync({
+    const response = await updateProblem.mutateAsync({
       taskId: stableTaskId,
       qId: problem.q_id,
-      expectedWorkflowRevision: taskQuery.data?.workflow_revision,
+      expectedWorkflowRevision: latestWorkflowRevisionRef.current,
       [field]: value,
     });
+    latestWorkflowRevisionRef.current = response.workflow_revision;
   }
 
   async function saveTests(problem: ProblemInfo, cases: TestCase[]) {
-    await updateProblem.mutateAsync({
+    const response = await updateProblem.mutateAsync({
       taskId: stableTaskId,
       qId: problem.q_id,
-      expectedWorkflowRevision: taskQuery.data?.workflow_revision,
+      expectedWorkflowRevision: latestWorkflowRevisionRef.current,
       test_cases: cases,
     });
+    latestWorkflowRevisionRef.current = response.workflow_revision;
   }
 
   async function saveMaxScore(problem: ProblemInfo, maxScore: number) {
-    await updateProblem.mutateAsync({
+    const response = await updateProblem.mutateAsync({
       taskId: stableTaskId,
       qId: problem.q_id,
-      expectedWorkflowRevision: taskQuery.data?.workflow_revision,
+      expectedWorkflowRevision: latestWorkflowRevisionRef.current,
       max_score: maxScore,
     });
+    latestWorkflowRevisionRef.current = response.workflow_revision;
   }
 
   async function confirmAll() {
@@ -233,7 +253,7 @@ export function QuestionPreparationDetailPage() {
     }
     setConfirming(true);
     try {
-      let expectedWorkflowRevision = taskQuery.data?.workflow_revision;
+      let expectedWorkflowRevision = latestWorkflowRevisionRef.current;
       for (const problem of problems) {
         const response = await updateProblem.mutateAsync({
           taskId: stableTaskId,
@@ -249,6 +269,7 @@ export function QuestionPreparationDetailPage() {
           review_status: "confirmed",
         });
         expectedWorkflowRevision = response.workflow_revision;
+        latestWorkflowRevisionRef.current = response.workflow_revision;
       }
       toast.success(tx(locale, "全部题目资料已确认。", "All question materials are confirmed."));
       navigate(`/tasks/${taskId}/submissions/upload`);
