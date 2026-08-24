@@ -35,16 +35,82 @@ The detailed implementation plan is
   unmerged business behavior into this branch; report the exact conflict/rebase
   points instead.
 
-### First implementation assignment: DB-W2-1
+### Current implementation assignment: DB-W2-2A worker core only
 
-Implement Task 1 from the Week 2 plan: operation lease schema and repository
-contract only. Allowed production files are the next Alembic migration and
-`backend/db/workflow_repository.py`; allowed tests are focused lease,
-checkpoint, migration, and PostgreSQL integration tests. Do not add the worker,
-modify `task_facade.py`, or modify `main.py` in this assignment.
+Implement only the worker-core half of Task 2 from the Week 2 plan.
+The current branch is `codex/db-workflow-worker`, based on W2-1 commit
+`740bf02` / PR #34. Allowed production changes are focused settings in
+`backend/config.py` and a single-purpose `backend/services/workflow_worker.py`;
+allowed tests are `backend/tests/test_workflow_worker.py`. Do not modify
+`backend/main.py` in this assignment. Do not register any of the four
+production operation types yet:
+their handlers do not become durable until W2-3/W2-4. Tests may use synthetic
+handler names. Do not modify `task_facade.py`, OCR/Agent code, or public APIs.
+
+Implement a small `WorkflowWorker` with an explicit immutable handler mapping,
+one poll/tick API, a continuous run API, per-claim heartbeat lifecycle, bounded
+in-flight task tracking, and stop/shutdown APIs. It must poll only registered
+types, tolerate another worker winning a listed row, stop handler mutation on
+`LeaseLost`, map handler failures without exposing payloads, cancel/await its
+own tasks on shutdown, and never bulk-clear database leases. Keep the API easy
+for a later FastAPI lifespan wrapper. Do not implement that wrapper now.
 
 Record modified files, RED/GREEN commands and results, design concerns, and
-remaining verification gaps in a new `Claude -> Codex (DB-W2-1)` section.
+remaining verification gaps in a new `Claude -> Codex (DB-W2-2)` section.
+
+## Claude -> Codex (DB-W2-2A worker core)
+
+Claude Code produced the settings, worker core, and focused tests, but its
+non-interactive command again reached the outer timeout before returning a
+summary. Codex stopped the orphaned process and reviewed the implementation.
+
+### Codex review corrections
+
+- Corrected the checkpoint test: terminal completion is itself checkpoint
+  revision 3, not revision 2.
+- Made shutdown bounded with `workflow_shutdown_seconds`; handlers that swallow
+  cancellation leave their database lease to expire instead of blocking app
+  shutdown indefinitely.
+- A heartbeat infrastructure error now fences/cancels the handler once the
+  locally confirmed lease deadline passes. The worker no longer continues paid
+  work indefinitely when it cannot prove lease ownership.
+- Removed the worker's reverse import of private `task_facade._SAFE_ERROR_CODES`.
+  Typed `DomainError` codes remain stable; unexpected exceptions use
+  `workflow_failed` without importing the facade or logging exception payloads.
+
+### Verification
+
+- Review RED command for bounded shutdown, uncertain heartbeat expiry, and
+  facade independence: `3 failed` for the intended missing behaviors.
+- Same focused command after fixes: `3 passed in 3.10s`.
+- `python -m pytest backend/tests/test_workflow_worker.py -q`:
+  `26 passed in 28.94s`.
+- `python -m pytest backend/tests/test_workflow_operation_leases.py backend/tests/test_workflow_operation_checkpoints.py backend/tests/test_task_background_workflows.py -q`:
+  `65 passed in 86.18s`.
+- `git diff --check`: passed; only CRLF conversion notices were emitted.
+
+W2-2B FastAPI lifespan wiring is intentionally not included in this core
+commit. No production operation handler is registered yet.
+
+## Codex verification (DB-W2-2B application lifecycle)
+
+The application now starts one empty-handler `WorkflowWorker` loop per process
+and stops it before bounded worker shutdown. Because the handler mapping is
+empty, this commit cannot claim any production operation. Shutdown never calls
+`release_operation`; active leases are left to expire.
+
+- Lifecycle RED: `test_app_starts_and_stops_empty_workflow_worker` failed
+  because no worker was constructed.
+- Lifecycle GREEN: `python -m pytest backend/tests/test_workflow_worker_lifecycle.py -q`
+  -> `2 passed`.
+- Combined worker/app/grading regression:
+  `python -m pytest backend/tests/test_workflow_worker.py backend/tests/test_workflow_worker_lifecycle.py backend/tests/test_auth_persistence.py backend/tests/test_grading_run_lifecycle.py -q`
+  -> `69 passed, 30 warnings in 91.33s`.
+
+The warnings are FastAPI's `on_event` deprecation notices. The repository
+already uses `on_event` for sandbox and grading worker lifecycle; converting
+all lifecycle hooks to a lifespan context is deferred to a focused integration
+cleanup rather than mixed into DB-W2-2.
 
 ### Codex review fixes required after timed-out first pass
 

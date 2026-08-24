@@ -202,6 +202,40 @@ def create_app() -> FastAPI:
             except Exception:
                 pass
 
+    # ─── Durable workflow-operation worker (DB-W2-2) ──────────────────
+    # The mapping stays empty until each operation gains a restart-safe
+    # handler in W2-3/W2-4. An empty mapping polls no rows, so merely enabling
+    # the lifecycle cannot steal request-memory background jobs.
+    _workflow_worker: dict[str, object] = {"worker": None, "task": None}
+
+    @app.on_event("startup")
+    async def _start_workflow_worker():
+        import asyncio as _asyncio
+        from backend.services.workflow_worker import WorkflowWorker
+
+        worker = WorkflowWorker(handlers={})
+        _workflow_worker["worker"] = worker
+        _workflow_worker["task"] = _asyncio.create_task(worker.run_forever())
+
+    @app.on_event("shutdown")
+    async def _stop_workflow_worker():
+        import asyncio as _asyncio
+
+        worker = _workflow_worker.get("worker")
+        task = _workflow_worker.get("task")
+        if worker is not None:
+            worker.stop()
+        if task is not None:
+            task.cancel()
+            try:
+                await task
+            except _asyncio.CancelledError:
+                pass
+            except Exception:
+                logger.exception("workflow worker loop exited during shutdown")
+        if worker is not None:
+            await worker.shutdown()
+
     return app
 
 
