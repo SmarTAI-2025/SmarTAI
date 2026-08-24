@@ -36,7 +36,9 @@ from backend.domain.errors import DomainError, InvalidTransition, NotFound, Vali
 from backend.knowledge.service import ingest_document
 from backend.llm.registry import ExpertRegistry, get_scoped_expert_registry
 from backend.models import TaskGradingSetup, User
+from backend.services import source_files as source_file_service
 from backend.services import task_facade
+from backend.storage import get_storage
 from backend.tools.file_processing import SUBMISSION_UPLOAD_MAX_BYTES
 
 
@@ -278,6 +280,51 @@ def interpret_task_query(
 @router.get("/{task_id}")
 def get_task(task_id: str, current: User = Depends(require_teacher)):
     return _domain(lambda: task_facade.get_task(task_id=task_id, owner_id=current.id))
+
+
+@router.get("/{task_id}/source-files")
+def get_source_files(
+    task_id: str,
+    current: User = Depends(require_teacher),
+):
+    try:
+        return source_file_service.describe_source_files(
+            task_id=task_id,
+            owner_id=current.id,
+            storage=get_storage(),
+        )
+    except DomainError as exc:
+        return domain_error_response(exc)
+
+
+@router.get("/{task_id}/source-files/{file_id}/content")
+def get_source_file_content(
+    task_id: str,
+    file_id: str,
+    current: User = Depends(require_teacher),
+):
+    try:
+        source = source_file_service.read_source_file_content(
+            task_id=task_id,
+            file_id=file_id,
+            owner_id=current.id,
+            storage=get_storage(),
+        )
+    except DomainError as exc:
+        return domain_error_response(exc)
+    return Response(
+        content=source.content,
+        media_type=source.mime_type,
+        headers={
+            "Content-Disposition": (
+                "inline; filename*=UTF-8''"
+                f"{quote(source.display_name, safe='')}"
+            ),
+            "X-Content-Type-Options": "nosniff",
+            "Cache-Control": "private, no-store",
+            "Content-Length": str(len(source.content)),
+        },
+    )
 
 
 @router.put("/{task_id}")

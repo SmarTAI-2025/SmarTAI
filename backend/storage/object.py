@@ -7,7 +7,11 @@ import boto3
 from botocore.exceptions import BotoCoreError, ClientError
 
 from backend.config import settings
-from backend.storage.base import StorageBackend
+from backend.storage.base import (
+    StorageBackend,
+    StorageObjectNotFound,
+    StorageUnavailable,
+)
 
 
 class S3Storage(StorageBackend):
@@ -33,8 +37,16 @@ class S3Storage(StorageBackend):
         self.client.put_object(Bucket=self.bucket, Key=key, Body=content)
 
     def open(self, key: str) -> BinaryIO:
-        response = self.client.get_object(Bucket=self.bucket, Key=key)
-        return BytesIO(response["Body"].read())
+        try:
+            response = self.client.get_object(Bucket=self.bucket, Key=key)
+            return BytesIO(response["Body"].read())
+        except ClientError as exc:
+            code = str(exc.response.get("Error", {}).get("Code", ""))
+            if code in {"404", "NoSuchKey", "NotFound"}:
+                raise StorageObjectNotFound("storage_object_not_found") from None
+            raise StorageUnavailable("storage_unavailable") from None
+        except BotoCoreError:
+            raise StorageUnavailable("storage_unavailable") from None
 
     def delete(self, key: str) -> None:
         self.client.delete_object(Bucket=self.bucket, Key=key)
