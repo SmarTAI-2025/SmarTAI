@@ -72,6 +72,7 @@ def create_app() -> FastAPI:
     from backend.api.grading_runs import router as grading_runs_router
     from backend.api.results import router as results_router
     from backend.api.experts import router as experts_router
+    from backend.api.ocr_providers import router as ocr_providers_router
     from backend.api.tasks import router as tasks_router
     from backend.api.task_preparation import router as task_preparation_router
     from backend.api.materials import router as materials_router
@@ -89,6 +90,7 @@ def create_app() -> FastAPI:
     app.include_router(grading_runs_router)
     app.include_router(results_router)
     app.include_router(experts_router)
+    app.include_router(ocr_providers_router)
     app.include_router(tasks_router)
     app.include_router(task_preparation_router)
     app.include_router(materials_router)
@@ -97,7 +99,7 @@ def create_app() -> FastAPI:
 
     logger.info(
         "V2 routers loaded: auth, users, admin, courses, assignments, submissions, "
-        "knowledge, grading-runs, results, experts, tasks, task-preparation, "
+        "knowledge, grading-runs, results, experts, ocr-providers, tasks, task-preparation, "
         "course-materials, tags, analytics"
     )
 

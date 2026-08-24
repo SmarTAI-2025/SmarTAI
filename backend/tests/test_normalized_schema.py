@@ -38,6 +38,7 @@ RETAINED_TABLES = {
     "invite_codes",
     "refresh_sessions",
     "provider_configs",
+    "ocr_provider_credentials",
     "knowledge_documents",
     "knowledge_chunks",
 }
