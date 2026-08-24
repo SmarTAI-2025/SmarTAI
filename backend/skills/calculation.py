@@ -30,7 +30,7 @@ import ast
 import logging
 import os
 import re
-from typing import Optional, List, Tuple, TYPE_CHECKING
+from typing import Optional, List, TYPE_CHECKING
 
 from pydantic import BaseModel, Field
 
@@ -218,6 +218,14 @@ async def _generate_sympy_program(
         "for symbolic work; you may import only `sympy` and `from sympy import ...`. "
         "Do NOT use input(), file I/O, or network. Keep the program short — it "
         "must finish in under 10 seconds.\n\n"
+        "OUTPUT RULES (critical):\n"
+        "  - Use plain `print(expr)` to output the answer — a single-line repr.\n"
+        "  - Do NOT use `pretty`, `pprint`, `srepr`, `latex`, or `sympy.printing` — "
+        "    they produce multi-line / non-sympifiable output that breaks grading.\n"
+        "  - Output the RAW result of `integrate(...)` / `solve(...)` / etc.\n"
+        "  - Do NOT manually add a constant of integration (+ C) — `integrate` "
+        "    already omits it by design; the verifier handles +C.\n"
+        "  - Do NOT simplify, expand, or rewrite the result.\n\n"
         "Return JSON {\"code\": \"<the program>\"}."
     )
     user_prompt = (
@@ -261,6 +269,424 @@ async def _run_sympy_in_sandbox(code: str, *, timeout: float = 10.0) -> Optional
     if result.error:
         logger.info(f"sympy program failed: {result.error[:200]}")
     return None
+
+
+# ─── Sanitiser: rewrite pretty()/pprint()/srepr()/latex() into print(str(...)) ─
+
+#: Formatters that *return* a multi-line / non-sympifiable string.
+#: They are rewritten only when their value is the program's direct output;
+#: changing the returned representation elsewhere can change program meaning.
+_RETURN_FUNCS = {"pretty", "srepr", "latex"}
+
+#: Formatters that *print to stdout themselves* and return ``None``.
+#: Only safe to rewrite when they appear as a standalone expression — in a
+#: nested position (assignment RHS, outer-call argument, return value) the
+#: rewrite would either lose stdout or silently change the return value, so we
+#: leave them untouched and let the sandbox fail safely (→ LLM_ONLY).
+_SELF_PRINT_FUNCS = {"pprint", "pretty_print"}
+
+#: All formatter names we know about (union of the two sets above).
+_FORMAT_FUNCS = _RETURN_FUNCS | _SELF_PRINT_FUNCS
+
+
+class _SymPySymbolTable:
+    """Track which names/aliases refer to SymPy, so we only rewrite SymPy calls.
+
+    Built from a single AST pass over the module body.  It records:
+
+    - ``sympy_modules``: names bound to the ``sympy`` module via
+      ``import sympy as <alias>`` or ``import sympy``.
+    - ``sympy_names``: names bound to specific SymPy functions via
+      ``from sympy import <name>`` (only when <name> ∈ _FORMAT_FUNCS).
+    - ``star_import``: whether ``from sympy import *`` was seen.
+    - ``aliases``: ``<alias> -> <format_func_name>`` for assignments like
+      ``fmt = sp.pretty`` or ``fmt = pretty``.
+    - ``shadowed``: names locally redefined (``def latex`` / ``latex = ...``
+      / function parameters) that must NOT be treated as SymPy.
+
+    A bare-name call ``pretty(r)`` is confirmed SymPy only when ``pretty`` ∈
+    ``sympy_names`` *or* (``star_import`` is True and ``pretty`` is not
+    ``shadowed``).  This is the D-1b heuristic: ``from sympy import *`` is a
+    common LLM pattern, and SymPy does export these names, so an unshadowed
+    bare call is assumed to come from SymPy.
+    """
+
+    def __init__(self) -> None:
+        self.sympy_modules: set[str] = set()
+        self.sympy_names: dict[str, str] = {}
+        self.star_import: bool = False
+        self.aliases: dict[str, str] = {}
+        self.shadowed: set[str] = set()
+
+    def process_import(self, node: ast.stmt) -> None:
+        """Record ``import sympy`` / ``import sympy as sp`` / ``from sympy import ...``."""
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                bound = alias.asname or alias.name.split(".")[0]
+                self.sympy_modules.discard(bound)
+                if alias.name == "sympy":
+                    self.sympy_modules.add(bound)
+                    # a bare ``import sympy`` does NOT create ``pretty`` —
+                    # only ``sympy.pretty`` is available, handled via Attribute.
+                    if alias.asname:
+                        self.sympy_modules.add(alias.asname)
+            return
+        if isinstance(node, ast.ImportFrom):
+            if node.module != "sympy":
+                return
+            for alias in node.names:
+                if alias.name == "*":
+                    self.star_import = True
+                    continue
+                if alias.name in _FORMAT_FUNCS:
+                    bound = alias.asname or alias.name
+                    self.aliases.pop(bound, None)
+                    self.shadowed.discard(bound)
+                    self.sympy_names[bound] = alias.name
+            return
+
+    def process_assign(self, node: ast.Assign) -> None:
+        """Track ``fmt = sp.pretty`` / ``fmt = pretty`` (alias) and ``latex = 1`` (shadow).
+
+        Returns early once the assignment is classified.  Three cases:
+
+        1. ``fmt = sp.pretty`` — value is a confirmed SymPy attribute that IS a
+           format func → record the alias.
+        2. ``fmt = pretty`` — value is a bare name that resolves (directly or
+           transitively via an existing alias) to a format func → record the
+           alias (resolved to the ultimate format-func name).
+        3. Anything else — the target no longer refers to a format func.  Any
+           previous alias for the target is cleared, and if the target name is
+           itself a format-func name it is marked as shadowed.
+        """
+        if len(node.targets) != 1 or not isinstance(node.targets[0], ast.Name):
+            return
+        target_name = node.targets[0].id
+        value = node.value
+
+        # Determine whether this assignment creates / updates an alias.
+        new_alias: str | None = None
+        if isinstance(value, ast.Attribute) and value.attr in _FORMAT_FUNCS:
+            if self._is_sympy_attr(value):
+                new_alias = value.attr
+        elif isinstance(value, ast.Name):
+            resolved = self._resolve_name(value.id)
+            if resolved is not None:
+                new_alias = resolved
+
+        self.sympy_modules.discard(target_name)
+        self.sympy_names.pop(target_name, None)
+        if new_alias is not None:
+            self.aliases[target_name] = new_alias
+            self.shadowed.discard(target_name)
+        else:
+            # Assignment does not create an alias — clear any previous one.
+            self.aliases.pop(target_name, None)
+            # If the target name is itself a format-func name, it is now
+            # shadowed (``latex = 5`` makes the SymPy ``latex`` unreachable).
+            self.shadowed.add(target_name)
+
+    def process_func_def(self, node: ast.FunctionDef) -> None:
+        """``def latex(...):`` shadows the SymPy function."""
+        self.sympy_modules.discard(node.name)
+        self.sympy_names.pop(node.name, None)
+        self.aliases.pop(node.name, None)
+        self.shadowed.add(node.name)
+
+    def process_args(self, args: ast.arguments) -> None:
+        """Function parameters named like a format func shadow it inside the body."""
+        for arg in args.args + args.posonlyargs + args.kwonlyargs:
+            if arg.arg in _FORMAT_FUNCS:
+                self.shadowed.add(arg.arg)
+
+    def _is_sympy_attr(self, attr: ast.Attribute) -> bool:
+        """``sp.pretty`` where ``sp`` is a confirmed SymPy module."""
+        if not isinstance(attr.value, ast.Name):
+            return False
+        return attr.value.id in self.sympy_modules
+
+    def _resolve_name(self, name: str) -> str | None:
+        """Resolve a bare name to a format-func name, or ``None`` if not SymPy.
+
+        Handles direct imports (``from sympy import latex``), aliases
+        (``fmt = sp.pretty`` → resolves transitively), and the D-1b star-import
+        heuristic.  Returns ``None`` if the name is shadowed or not confirmed.
+        """
+        if name in self.shadowed:
+            return None
+        if name in self.aliases:
+            return self.aliases[name]
+        if name in self.sympy_names:
+            return self.sympy_names[name]
+        # D-1b: ``from sympy import *`` heuristic — SymPy exports these names,
+        # and the name is not locally shadowed, so assume it comes from SymPy.
+        if self.star_import and name in _FORMAT_FUNCS:
+            return name
+        return None
+
+    def _is_confirmed_name(self, name: str) -> bool:
+        """Bare name known to be a SymPy format func (for alias source checks)."""
+        return self._resolve_name(name) is not None
+
+    def classify_call(self, node: ast.Call) -> str | None:
+        """Return ``"return"`` / ``"self_print"`` / ``None`` for a confirmed call.
+
+        ``"return"``  — ``_RETURN_FUNCS`` member (pretty/srepr/latex), returns a string.
+        ``"self_print"`` — ``_SELF_PRINT_FUNCS`` member (pprint/pretty_print), prints itself.
+        ``None`` — not a confirmed SymPy format call (leave untouched).
+        """
+        func = node.func
+        if isinstance(func, ast.Attribute):
+            if func.attr not in _FORMAT_FUNCS:
+                return None
+            if not self._is_sympy_attr(func):
+                return None
+            return self._category(func.attr)
+        if isinstance(func, ast.Name):
+            name = func.id
+            # Shadow check first — a shadowed name is never a format call,
+            # even if it was previously aliased.
+            if name in self.shadowed:
+                return None
+            resolved = self._resolve_name(name)
+            if resolved is not None:
+                return self._category(resolved)
+            return None
+        return None
+
+    @staticmethod
+    def _category(func_name: str) -> str:
+        if func_name in _RETURN_FUNCS:
+            return "return"
+        return "self_print"
+
+
+def _format_call_argument(node: ast.Call) -> ast.expr | None:
+    """Extract the *expression* argument from a format call.
+
+    Handles positional (``pretty(expr)``), keyword-only (``pretty(expr=r)``),
+    and ``pretty(r, use_unicode=False)``).  Invalid/ambiguous calls and
+    settings with executable expressions are left unchanged so sanitization
+    cannot turn a failing program into a successful but incorrect reference.
+    """
+    expr_keywords = [kw for kw in node.keywords if kw.arg == "expr"]
+    settings = [kw for kw in node.keywords if kw.arg != "expr"]
+    if any(kw.arg is None or not isinstance(kw.value, ast.Constant) for kw in settings):
+        return None
+    if node.args:
+        if len(node.args) != 1 or expr_keywords:
+            return None
+        return node.args[0]
+    if len(expr_keywords) == 1:
+        return expr_keywords[0].value
+    return None
+
+
+def _sanitize_sympy_output_code(code: str) -> str:
+    """Rewrite LLM-generated sympy code so stdout stays single-line & sympifiable.
+
+    If the LLM ignored the prompt and used ``pretty(expr)``, ``pprint(expr)``,
+    ``srepr(expr)``, or ``latex(expr)`` to print the answer, the sandbox stdout
+    would be multi-line ASCII art (or LaTeX) that ``sympy.sympify`` cannot parse
+    → SymPy verification silently fails and grading degrades to LLM_ONLY.
+
+    This function parses the code with ``ast`` and structurally replaces
+    **confirmed SymPy** format calls so stdout stays single-line:
+
+    - ``_RETURN_FUNCS`` (``pretty`` / ``srepr`` / ``latex``) — return a string,
+      so they are replaced only as a standalone output or the sole direct
+      argument of ``print``.  Assignments and later computations are untouched.
+    - ``_SELF_PRINT_FUNCS`` (``pprint`` / ``pretty_print``) — print to stdout
+      themselves and return ``None``.  A **standalone** expression
+      ``sp.pprint(expr)`` is replaced with ``print(str(<arg>))``.  In a
+      **nested** position (assignment RHS, outer-call argument, return value)
+      the call is left **untouched** — rewriting would either lose stdout or
+      silently change the return value, so the sandbox fails safely (→
+      LLM_ONLY) rather than risk corrupting the mathematical reference.
+
+    Only calls whose source is confirmed to be SymPy (via ``import sympy`` /
+    ``from sympy import …`` / ``from sympy import *`` heuristics / tracked
+    aliases) are rewritten.  A locally-defined ``def latex(x): …`` or a
+    shadowing assignment ``latex = …`` is detected and **never** touched, so
+    non-SymPy code with the same function name is safe.
+
+    Unparseable code is returned unchanged (the sandbox will report the error
+    as before).
+
+    Returns the (possibly rewritten) code string.
+    """
+    try:
+        tree = ast.parse(code)
+    except SyntaxError:
+        return code
+
+    binding_counts: dict[str, int] = {}
+
+    def record_binding(name: str) -> None:
+        binding_counts[name] = binding_counts.get(name, 0) + 1
+
+    for item in ast.walk(tree):
+        if isinstance(item, ast.Name) and isinstance(item.ctx, (ast.Store, ast.Del)):
+            record_binding(item.id)
+        elif isinstance(item, ast.arg):
+            record_binding(item.arg)
+        elif isinstance(item, ast.alias) and item.name != "*":
+            record_binding(item.asname or item.name.split(".")[0])
+        elif isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            record_binding(item.name)
+        elif isinstance(item, ast.ExceptHandler) and item.name:
+            record_binding(item.name)
+
+    # Rewriting injects calls to these builtins.  If either name is rebound
+    # anywhere, leave the program unchanged rather than invoke user code.
+    if binding_counts.get("print") or binding_counts.get("str"):
+        return code
+    ambiguous_bindings = {
+        name for name, count in binding_counts.items() if count > 1
+    }
+
+    table = _SymPySymbolTable()
+
+    class _Transformer(ast.NodeTransformer):
+        def __init__(self) -> None:
+            self.rewrite_count = 0
+            # Track shadowing introduced *inside* nested scopes (function
+            # bodies) that the top-level pass 1 might have missed.  We keep a
+            # simple scope stack; Python scoping means a local ``def latex``
+            # or ``latex = ...`` inside a function shadows the global for that
+            # body only.
+            self._scope_shadows: list[set[str]] = []
+
+        def _current_shadows(self) -> set[str]:
+            return set().union(*self._scope_shadows) if self._scope_shadows else set()
+
+        def visit_Module(self, node: ast.Module) -> ast.AST:  # noqa: N802
+            for index, stmt in enumerate(node.body):
+                if isinstance(stmt, (ast.Import, ast.ImportFrom)):
+                    table.process_import(stmt)
+                node.body[index] = self.visit(stmt)
+                if isinstance(stmt, ast.FunctionDef):
+                    table.process_func_def(stmt)
+                elif isinstance(stmt, ast.Assign):
+                    table.process_assign(stmt)
+            return node
+
+        def _classify(self, node: ast.Call) -> str | None:
+            func = node.func
+            shadows = self._current_shadows()
+            if isinstance(func, ast.Name) and (
+                func.id in shadows or func.id in ambiguous_bindings
+            ):
+                return None
+            if (
+                isinstance(func, ast.Attribute)
+                and isinstance(func.value, ast.Name)
+                and (
+                    func.value.id in shadows
+                    or func.value.id in ambiguous_bindings
+                )
+            ):
+                return None
+            return table.classify_call(node)
+
+        def visit_FunctionDef(self, node: ast.FunctionDef) -> ast.AST:  # noqa: N802
+            local: set[str] = {node.name}
+            for arg in node.args.args + node.args.posonlyargs + node.args.kwonlyargs:
+                local.add(arg.arg)
+            if node.args.vararg:
+                local.add(node.args.vararg.arg)
+            if node.args.kwarg:
+                local.add(node.args.kwarg.arg)
+            # detect ``latex = ...`` assignments inside the body
+            for child in ast.walk(node):
+                if isinstance(child, ast.Assign):
+                    for tgt in child.targets:
+                        if isinstance(tgt, ast.Name):
+                            local.add(tgt.id)
+            self._scope_shadows.append(local)
+            result = self.generic_visit(node)
+            self._scope_shadows.pop()
+            return result
+
+        def visit_Lambda(self, node: ast.Lambda) -> ast.AST:  # noqa: N802
+            local = {
+                arg.arg
+                for arg in node.args.args + node.args.posonlyargs + node.args.kwonlyargs
+            }
+            self._scope_shadows.append(local)
+            result = self.generic_visit(node)
+            self._scope_shadows.pop()
+            return result
+
+        def visit_Expr(self, node: ast.Expr) -> ast.AST:  # noqa: N802
+            # Standalone expression: ``sp.pprint(expr)`` or ``pretty(expr)``.
+            # Both categories are safe here — we wrap in ``print(str(...))``
+            # so stdout stays single-line and sympifiable.
+            if isinstance(node.value, ast.Call):
+                cat = self._classify(node.value)
+                if cat is not None:
+                    arg = _format_call_argument(node.value)
+                    if arg is None:
+                        return self.generic_visit(node)
+                    arg = self.visit(arg)
+                    self.rewrite_count += 1
+                    replacement = ast.Expr(
+                        value=ast.Call(
+                            func=ast.Name(id="print", ctx=ast.Load()),
+                            args=[
+                                ast.Call(
+                                    func=ast.Name(id="str", ctx=ast.Load()),
+                                    args=[arg],
+                                    keywords=[],
+                                )
+                            ],
+                            keywords=[],
+                        )
+                    )
+                    return ast.copy_location(replacement, node)
+            return self.generic_visit(node)
+
+        def visit_Call(self, node: ast.Call) -> ast.AST:  # noqa: N802
+            # Only rewrite a formatter when it is the sole direct value sent
+            # to builtin print.  Arbitrary nested positions can use the
+            # formatter string later and therefore must preserve semantics.
+            if (
+                isinstance(node.func, ast.Name)
+                and node.func.id == "print"
+                and len(node.args) == 1
+                and not node.keywords
+                and isinstance(node.args[0], ast.Call)
+                and self._classify(node.args[0]) is not None
+            ):
+                arg = _format_call_argument(node.args[0])
+                if arg is not None:
+                    arg = self.visit(arg)
+                    self.rewrite_count += 1
+                    replacement = ast.Call(
+                        func=ast.Name(id="print", ctx=ast.Load()),
+                        args=[
+                            ast.Call(
+                                func=ast.Name(id="str", ctx=ast.Load()),
+                                args=[arg],
+                                keywords=[],
+                            )
+                        ],
+                        keywords=[],
+                    )
+                    return ast.copy_location(replacement, node)
+            return self.generic_visit(node)
+
+    transformer = _Transformer()
+    rewritten_tree = transformer.visit(tree)
+    if not transformer.rewrite_count:
+        return code  # nothing to fix
+    ast.fix_missing_locations(rewritten_tree)
+    rewritten = ast.unparse(rewritten_tree) + "\n"
+    logger.info(
+        "_sanitize_sympy_output_code rewrote %d format call(s)",
+        transformer.rewrite_count,
+    )
+    return rewritten
 
 
 def _format_metadata_zh(
@@ -365,6 +791,10 @@ class CalculationSkill(GradingSkill):
                         is_integral, integral_var = parsed
                     if self.reporter and active_unit:
                         await self.reporter.substep(active_unit, "run_sympy")
+                    # Defensively rewrite pretty()/pprint()/srepr()/latex() calls
+                    # into print(str(...)) so stdout stays single-line and
+                    # sympifiable — even if the LLM ignored the prompt rules.
+                    sympy_code = _sanitize_sympy_output_code(sympy_code)
                     stdout = await _run_sympy_in_sandbox(sympy_code, timeout=10.0)
                     if stdout:
                         ref_value = stdout
