@@ -22,6 +22,7 @@ import contextlib
 import io
 import textwrap
 
+import pytest
 import sympy
 from backend.skills.calculation import _sanitize_sympy_output_code
 
@@ -134,13 +135,8 @@ def test_runtime_standalone_pprint_single_line():
     assert "x**3/3" in stdout or "x^3/3" in stdout, f"got {stdout!r}"
 
 
-def test_runtime_nested_pretty_returns_string():
-    """``saved = sp.pretty(r)`` → ``saved = str(r)`` — return type preserved.
-
-    ``pretty`` returns a string, so it's safe to rewrite in any position.
-    The value of ``saved`` should be the ``str()`` representation, and printing
-    it should give a single line.
-    """
+def test_runtime_nested_pretty_preserves_formatter_value():
+    """A formatter string used through an assignment remains unchanged."""
     code = textwrap.dedent("""\
         import sympy as sp
         x = sp.symbols('x')
@@ -149,9 +145,8 @@ def test_runtime_nested_pretty_returns_string():
         print(saved)
     """)
     sanitized, stdout = _run_sanitized(code)
-    lines = [l for l in stdout.splitlines() if l.strip()]
-    assert len(lines) == 1, f"expected 1 line, got {len(lines)}: {lines}"
-    assert "x**3/3" in stdout or "x^3/3" in stdout, f"got {stdout!r}"
+    assert sanitized == code
+    assert stdout == _run_raw(code)
 
 
 # ─── Problem 3: keyword-only & alias — real execution ────────────────────────
@@ -271,6 +266,72 @@ def test_runtime_explicit_import_alias_rewritten():
     """)
     _, stdout = _run_sanitized(code)
     assert stdout.strip() == "x**2"
+
+
+# ─── Conservative semantic-safety regressions ───────────────────────────────
+
+
+def test_runtime_missing_expr_remains_a_failure():
+    code = textwrap.dedent("""\
+        import sympy as sp
+        print(sp.pretty(use_unicode=False))
+    """)
+    assert _sanitize_sympy_output_code(code) == code
+    with pytest.raises(TypeError):
+        _run_sanitized(code)
+
+
+def test_runtime_local_module_shadow_not_rewritten():
+    code = textwrap.dedent("""\
+        import sympy as sp
+        class Dummy:
+            def pretty(self, value):
+                return value + 1
+        def f():
+            sp = Dummy()
+            print(sp.pretty(2))
+        f()
+    """)
+    sanitized, stdout = _run_sanitized(code)
+    assert sanitized == code
+    assert stdout.strip() == "3"
+
+
+def test_runtime_conditional_alias_rebind_not_rewritten():
+    code = textwrap.dedent("""\
+        import sympy as sp
+        fmt = sp.pretty
+        if True:
+            fmt = lambda value: value + 1
+        print(fmt(2))
+    """)
+    sanitized, stdout = _run_sanitized(code)
+    assert sanitized == code
+    assert stdout.strip() == "3"
+
+
+def test_runtime_formatter_value_used_later_not_rewritten():
+    code = textwrap.dedent("""\
+        import sympy as sp
+        x = sp.Symbol("x")
+        rendered = sp.srepr(x)
+        print(len(rendered))
+    """)
+    sanitized, stdout = _run_sanitized(code)
+    assert sanitized == code
+    assert stdout.strip() == "11"
+
+
+def test_runtime_shadowed_str_keeps_original_program():
+    code = textwrap.dedent("""\
+        import sympy as sp
+        str = lambda value: "WRONG"
+        x = sp.Symbol("x")
+        print(sp.pretty(x))
+    """)
+    sanitized, stdout = _run_sanitized(code)
+    assert sanitized == code
+    assert stdout.strip() == "x"
 
 
 # ─── v_s6 regression: the original failure case ─────────────────────────────
