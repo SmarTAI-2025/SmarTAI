@@ -3,6 +3,7 @@ import { useEffect, useMemo, useRef, type FormEvent } from "react";
 import { Link, Navigate, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { toast } from "sonner";
 import { useConfirmTaskFinalization, useTask, useTaskFinalization, useTaskResult, useTeacherComments } from "@/api/hooks/tasks";
+import { SmarTAIMascot } from "@/components/brand/SmarTAIMascot";
 import { NewTaskStepper } from "@/components/new-task/NewTaskStepper";
 import { MatrixQueueWorkspace } from "@/components/tasks/MatrixQueueWorkspace";
 import { MatrixStatusCell, type MatrixStatusTone } from "@/components/tasks/MatrixStatusCell";
@@ -165,29 +166,31 @@ export function ReviewOverviewPage() {
           ) : null}
 
           <form onSubmit={submitFilter} role="search" className="mt-6">
-            <label className="relative block">
-              <span className="sr-only">{copy(locale, "searchLabel")}</span>
-              <Search aria-hidden="true" className="pointer-events-none absolute left-5 top-1/2 h-5 w-5 -translate-y-1/2 text-muted-foreground" />
-              <input
-                value={smartSearch.draftValue}
-                inputMode="search"
-                onBlur={smartSearch.handleBlur}
-                onChange={smartSearch.handleChange}
-                onCompositionEnd={smartSearch.handleCompositionEnd}
-                onCompositionStart={smartSearch.handleCompositionStart}
-                placeholder={copy(locale, "searchPlaceholder")}
-                className="h-12 w-full rounded-[10px] border bg-card pl-14 pr-28 text-[14px] text-foreground outline-none transition placeholder:text-muted-foreground focus:border-primary focus:ring-2 focus:ring-primary/15"
-              />
-              {query ? (
-                <button
-                  type="button"
-                  onClick={() => smartSearch.commitValue("")}
-                  className="absolute right-3 top-1/2 -translate-y-1/2 rounded-md px-3 py-1.5 text-xs font-semibold text-primary hover:bg-primary/5"
-                >
-                  {copy(locale, "clear")}
-                </button>
-              ) : null}
-            </label>
+            <div className="flex items-center gap-2">
+              <SmarTAIMascot variant="thinking" size="xs" />
+              <label className="relative min-w-0 flex-1">
+                <span className="sr-only">{copy(locale, "searchLabel")}</span>
+                <input
+                  value={smartSearch.draftValue}
+                  inputMode="search"
+                  onBlur={smartSearch.handleBlur}
+                  onChange={smartSearch.handleChange}
+                  onCompositionEnd={smartSearch.handleCompositionEnd}
+                  onCompositionStart={smartSearch.handleCompositionStart}
+                  placeholder={copy(locale, "searchPlaceholder")}
+                  className="h-12 w-full rounded-[10px] border bg-card pl-4 pr-28 text-[14px] text-foreground outline-none transition placeholder:text-muted-foreground focus:border-primary focus:ring-2 focus:ring-primary/15"
+                />
+                {query ? (
+                  <button
+                    type="button"
+                    onClick={() => smartSearch.commitValue("")}
+                    className="absolute right-3 top-1/2 -translate-y-1/2 rounded-md px-3 py-1.5 text-xs font-semibold text-primary hover:bg-primary/5"
+                  >
+                    {copy(locale, "clear")}
+                  </button>
+                ) : null}
+              </label>
+            </div>
           </form>
 
           {query ? (

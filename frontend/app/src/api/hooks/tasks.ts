@@ -48,11 +48,12 @@ export function useTaskHistory(query: TaskHistoryQuery) {
   });
 }
 
-export function useTask(taskId?: string, options: { pollAICompletion?: boolean } = {}) {
+export function useTask(taskId?: string, options: { pollAICompletion?: boolean; refetchOnMount?: boolean | "always" } = {}) {
   return useQuery({
     queryKey: taskKeys.detail(taskId ?? ""),
     queryFn: () => tasksApi.getTask(taskId as string),
     enabled: Boolean(taskId),
+    refetchOnMount: options.refetchOnMount,
     refetchInterval: options.pollAICompletion
       ? (query) => query.state.data?.ai_completion_job_id ? 1_500 : false
       : false,
@@ -68,19 +69,19 @@ export function useTaskState(taskId?: string, options: { refetchInterval?: numbe
   });
 }
 
-export function useTaskResult(taskId?: string) {
+export function useTaskResult(taskId?: string, options: { enabled?: boolean } = {}) {
   return useQuery({
     queryKey: taskKeys.result(taskId ?? ""),
     queryFn: () => tasksApi.getTaskResult(taskId as string),
-    enabled: Boolean(taskId),
+    enabled: Boolean(taskId) && (options.enabled ?? true),
   });
 }
 
-export function useTaskFinalization(taskId?: string) {
+export function useTaskFinalization(taskId?: string, options: { enabled?: boolean } = {}) {
   return useQuery({
     queryKey: taskKeys.finalization(taskId ?? ""),
     queryFn: () => tasksApi.getTaskFinalization(taskId as string),
-    enabled: Boolean(taskId),
+    enabled: Boolean(taskId) && (options.enabled ?? true),
   });
 }
 

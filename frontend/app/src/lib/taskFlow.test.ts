@@ -1,6 +1,12 @@
 import { describe, expect, it } from "vitest";
 import { getTaskReachableStep, hasTaskReachedStep } from "./taskFlow";
 
+describe("getTaskReachableStep", () => {
+  it("opens read-only analysis as soon as grading has completed", () => {
+    expect(getTaskReachableStep({ status: "graded" })).toBe(7);
+  });
+});
+
 describe("task workflow rewinds", () => {
   it("keeps a failed question restart at the question upload stage even with old downstream ids", () => {
     const task = {
