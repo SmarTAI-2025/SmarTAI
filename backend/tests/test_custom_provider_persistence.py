@@ -288,6 +288,26 @@ def test_shared_pool_seed_skips_custom_environment_route(monkeypatch):
     assert registry.uses_shared_pool() is False
 
 
+def test_shared_pool_seed_skips_invalid_environment_route(monkeypatch):
+    monkeypatch.setattr(settings, "shared_pool_enabled", True)
+    monkeypatch.setattr(settings, "openai_api_key", "shared-key")
+    monkeypatch.setattr(settings, "openai_api_base", "http://127.0.0.1/v1")
+    for field in (
+        "gemini_api_key",
+        "zhipu_api_key",
+        "anthropic_api_key",
+        "deepseek_api_key",
+        "moonshot_api_key",
+        "qwen_api_key",
+    ):
+        monkeypatch.setattr(settings, field, "")
+
+    registry = ExpertRegistry(shared_owner_id="owner")
+
+    assert registry.list_configs() == []
+    assert registry.uses_shared_pool() is False
+
+
 def test_production_kill_switch_hides_relay_but_not_official(monkeypatch):
     monkeypatch.setattr(settings, "runtime_environment", "production")
     monkeypatch.setattr(settings, "custom_provider_endpoints_enabled", False)

@@ -19,7 +19,10 @@ from urllib.parse import urlsplit
 from fastapi import Depends, HTTPException, status
 
 from backend.config import settings
-from backend.llm.endpoint_policy import is_user_defined_provider_endpoint
+from backend.llm.endpoint_policy import (
+    ProviderEndpointError,
+    is_user_defined_provider_endpoint,
+)
 from backend.models import ProviderConfig
 from backend.llm.providers import BaseProvider, build_provider
 from backend.llm.provider_catalog import (
@@ -197,11 +200,21 @@ class ExpertRegistry:
             ))
 
     def _register_shared_setting(self, config: ProviderConfig) -> None:
-        if is_user_defined_provider_endpoint(
-            config.provider_type,
-            config.base_url,
-            config.wire_protocol,
-        ):
+        try:
+            custom_route = is_user_defined_provider_endpoint(
+                config.provider_type,
+                config.base_url,
+                config.wire_protocol,
+            )
+        except ProviderEndpointError as exc:
+            logger.error(
+                "Skipped shared provider with an invalid endpoint; "
+                "provider_type=%s code=%s",
+                config.provider_type,
+                exc.code,
+            )
+            return
+        if custom_route:
             logger.error(
                 "Skipped shared provider with a user-defined route; provider_type=%s",
                 config.provider_type,

@@ -4,6 +4,7 @@ from fastapi import HTTPException
 from sqlalchemy.exc import SQLAlchemyError
 
 from backend.domain.errors import ValidationError
+from backend.llm.endpoint_policy import ProviderEndpointError
 from backend.services.background_errors import classify_background_error
 from backend.tools.structured_llm import RateLimitError, TransientLLMError
 
@@ -55,3 +56,11 @@ def test_unknown_exception_uses_safe_fallback_without_exposing_message():
     error = RuntimeError("secret provider response")
 
     assert classify_background_error(error, "grading_failed") == "grading_failed"
+
+
+def test_dns_rebinding_block_keeps_its_safe_specific_code():
+    error = ProviderEndpointError("provider_endpoint_non_public_address")
+
+    assert classify_background_error(error, "grading_failed") == (
+        "provider_endpoint_non_public_address"
+    )

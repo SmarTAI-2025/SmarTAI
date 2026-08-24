@@ -45,6 +45,7 @@ SAFE_SOURCE_REASON_CODES = frozenset({
     "provider_image_payload_invalid",
     "provider_message_payload_not_supported",
     "provider_endpoint_dns_failed",
+    "provider_endpoint_non_public_address",
     "provider_endpoint_tls_failed",
     "provider_endpoint_redirect_blocked",
     "provider_endpoint_protocol_mismatch",

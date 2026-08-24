@@ -800,6 +800,12 @@ function providerConfigurationErrorCopy(
       "请检查 Base URL 拼写与中转站服务状态；系统没有尝试访问其他地址。",
       "Check the base URL spelling and relay status. No alternate address was contacted.",
     ],
+    provider_endpoint_non_public_address: [
+      "中转站域名解析到非公网地址",
+      "The relay hostname resolved to a non-public address",
+      "请检查中转站 DNS 配置；系统已阻止访问内网或特殊地址。",
+      "Check the relay DNS configuration. Access to private or special addresses was blocked.",
+    ],
     provider_endpoint_tls_failed: [
       "中转站 HTTPS 证书校验失败",
       "The relay HTTPS certificate could not be verified",

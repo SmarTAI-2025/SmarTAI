@@ -13,6 +13,7 @@ from backend.llm.endpoint_policy import (
     _PinnedHTTPTransport,
     _PinnedSyncBackend,
     canonicalize_provider_base_url,
+    is_user_defined_provider_endpoint,
     normalize_provider_endpoint,
     provider_operation_url,
     resolve_public_endpoint,
@@ -78,6 +79,23 @@ def test_query_and_fragment_are_rejected_even_when_empty_or_malformed(value):
     with pytest.raises(ProviderEndpointError) as exc_info:
         canonicalize_provider_base_url(value)
     assert exc_info.value.code == "provider_endpoint_invalid"
+
+
+def test_route_classification_keeps_valid_relays_and_rejects_invalid_routes():
+    assert not is_user_defined_provider_endpoint(
+        "deepseek",
+        "https://api.deepseek.com/v1",
+    )
+    assert is_user_defined_provider_endpoint(
+        "deepseek",
+        "https://relay.example.com/tenant/course/v1",
+    )
+    with pytest.raises(ProviderEndpointError) as exc_info:
+        is_user_defined_provider_endpoint(
+            "openai",
+            "http://127.0.0.1/v1",
+        )
+    assert exc_info.value.code == "provider_endpoint_https_required"
 
 
 @pytest.mark.parametrize(

@@ -158,6 +158,23 @@ describe("background task failure guidance", () => {
     expect(info.description).not.toContain("relay.example.edu");
   });
 
+  it("explains a blocked non-public relay address without exposing the endpoint", () => {
+    const info = classifyRecoverableError(
+      new APIError(502, "blocked https://relay.example.edu/v1", {
+        detail: {
+          code: "provider_endpoint_non_public_address",
+          message: "blocked https://relay.example.edu/v1",
+        },
+      }),
+      { locale: "zh-CN", returnTo: "/tasks/t1/problems/progress" },
+    );
+
+    expect(info.title).toBe("中转站域名解析到非公网地址");
+    expect(info.actionKind).toBe("byok");
+    expect(info.description).toContain("已阻止");
+    expect(info.description).not.toContain("relay.example.edu");
+  });
+
   it("treats a temporary relay failure as retryable", () => {
     const info = classifyRecoverableError("provider_upstream_unavailable", { locale: "zh-CN" });
 

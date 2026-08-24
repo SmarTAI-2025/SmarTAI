@@ -188,19 +188,20 @@ def is_user_defined_provider_endpoint(
     base_url: str | None,
     wire_protocol: str | None = None,
 ) -> bool:
-    """Return whether a saved provider URL differs from its official default."""
+    """Return whether a valid provider route differs from its official default.
+
+    Invalid routes must propagate their safe policy error instead of being
+    mistaken for an official endpoint by callers that choose the transport.
+    """
     entry = PROVIDER_CATALOG_BY_TYPE.get(provider_type)
     if entry is None:
         return False
-    try:
-        protocol = effective_wire_protocol(provider_type, wire_protocol)
-        normalized, identity = normalize_provider_endpoint(
-            provider_type,
-            base_url,
-            protocol,
-        )
-    except ProviderEndpointError:
-        return False
+    _, identity = normalize_provider_endpoint(
+        provider_type,
+        base_url,
+        wire_protocol,
+    )
+    protocol = effective_wire_protocol(provider_type, wire_protocol)
     return protocol != entry.wire_protocol or identity != entry.default_base_url
 
 
