@@ -1,5 +1,6 @@
 import type { Correction, FilterIntentResult } from "@/types";
 import {
+  correctionScoreSource,
   type QuestionSummary,
   type ResultsModel,
   type StudentSummary,
@@ -19,6 +20,7 @@ export interface ReviewOverviewSelection {
 const LOW_CONFIDENCE_TOKENS = ["低置信", "置信度低", "low confidence"];
 const DISAGREEMENT_TOKENS = ["专家分歧", "分歧大", "评分差异", "disagreement", "score spread"];
 const REVIEW_TOKENS = ["待复核", "需复核", "复核项", "review", "flagged"];
+const CONFIRMED_REVIEW_TOKENS = ["已复核", "复核完成", "已确认", "教师已处理", "reviewed", "confirmed", "teacher handled"];
 const ANNOTATED_TOKENS = ["已批注", "教师批注", "有批注", "annotated", "commented"];
 const NO_REVIEW_TOKENS = ["无复核信号", "无需复核", "no review"];
 const UNSCORED_TOKENS = ["无可比总分", "无分", "unscored"];
@@ -53,7 +55,8 @@ export function selectReviewOverview(
   const wantsLowConfidence = includesAny(normalized, LOW_CONFIDENCE_TOKENS);
   const wantsDisagreement = includesAny(normalized, DISAGREEMENT_TOKENS);
   const wantsNoReview = includesAny(normalized, NO_REVIEW_TOKENS);
-  const wantsReview = !wantsNoReview && includesAny(normalized, REVIEW_TOKENS);
+  const wantsConfirmedReview = includesAny(normalized, CONFIRMED_REVIEW_TOKENS);
+  const wantsReview = !wantsNoReview && !wantsConfirmedReview && includesAny(normalized, REVIEW_TOKENS);
   const wantsAnnotated = includesAny(normalized, ANNOTATED_TOKENS);
   const wantsUnscored = includesAny(normalized, UNSCORED_TOKENS);
   const scoreLimit = parseScoreLimit(normalized);
@@ -65,6 +68,7 @@ export function selectReviewOverview(
     ...LOW_CONFIDENCE_TOKENS,
     ...DISAGREEMENT_TOKENS,
     ...REVIEW_TOKENS,
+    ...CONFIRMED_REVIEW_TOKENS,
     ...ANNOTATED_TOKENS,
     ...NO_REVIEW_TOKENS,
     ...UNSCORED_TOKENS,
@@ -81,7 +85,9 @@ export function selectReviewOverview(
       const key = reviewCellKey(student.id, correction.q_id);
       if (wantsLowConfidence && correction.confidence >= 0.65) continue;
       if (wantsDisagreement && !isExpertDisagreement(correction)) continue;
-      if (wantsReview && !reviewKeys.has(key)) continue;
+      const confirmedReview = isConfirmedReview(correction);
+      if (wantsReview && (!reviewKeys.has(key) || confirmedReview)) continue;
+      if (wantsConfirmedReview && (!reviewKeys.has(key) || !confirmedReview)) continue;
       if (wantsNoReview && reviewKeys.has(key)) continue;
       if (wantsAnnotated && !annotatedKeys.has(key)) continue;
       if (wantsUnscored && student.percent !== null) continue;
@@ -96,7 +102,7 @@ export function selectReviewOverview(
   const students = model.students.filter((student) =>
     student.corrections.some((correction) => matchedCellKeys.has(reviewCellKey(student.id, correction.q_id))),
   );
-  if (requestedSort) students.sort((left, right) => compareReviewStudents(left, right, requestedSort.sort));
+  if (requestedSort) students.sort((left, right) => compareReviewStudents(left, right, requestedSort.sort, reviewKeys));
   const questions = model.questions.filter((question) =>
     students.some((student) => matchedCellKeys.has(reviewCellKey(student.id, question.id))),
   );
@@ -105,7 +111,7 @@ export function selectReviewOverview(
   if (!matchedCellKeys.size) explanation = "no-match";
   else if (wantsLowConfidence) explanation = "low-confidence";
   else if (wantsDisagreement) explanation = "disagreement";
-  else if (wantsReview) explanation = "review";
+  else if (wantsReview || wantsConfirmedReview) explanation = "review";
   else if (wantsAnnotated) explanation = "annotated";
   else if (scoreLimit || scoreFloor || wantsUnscored) explanation = "score";
 
@@ -155,8 +161,21 @@ function getQuestionTokens(query: string): { raw: string[]; values: string[] } {
 function matchesQuestion(question: QuestionSummary | undefined, fallbackId: string, token: string): boolean {
   return [question?.label, question?.id, fallbackId]
     .filter((value): value is string => Boolean(value))
-    .map((value) => normalize(value).replace(/^q/i, ""))
-    .some((value) => value === token || value.endsWith(token));
+    .some((value) => explicitQuestionTokens(value).includes(token));
+}
+
+function explicitQuestionTokens(value: string): string[] {
+  const normalized = normalize(value);
+  const tokens = new Set<string>();
+  const direct = normalized.match(/^q?\s*(\d+(?:[.-]\d+)?)$/i);
+  if (direct) tokens.add(direct[1]);
+  for (const match of normalized.matchAll(/(?:^|[^a-z0-9])(?:q|question|problem)\s*[-_:.]?\s*(\d+(?:[.-]\d+)?)(?=$|[^0-9.])/gi)) {
+    tokens.add(match[1]);
+  }
+  for (const match of normalized.matchAll(/(?:第\s*)?(\d+(?:[.-]\d+)?)\s*题/g)) {
+    tokens.add(match[1]);
+  }
+  return Array.from(tokens);
 }
 
 function parseScoreLimit(query: string): { raw: string; value: number } | null {
@@ -187,11 +206,17 @@ function parseReviewSort(query: string): { raw: string; sort: NonNullable<Filter
   return null;
 }
 
-function compareReviewStudents(left: StudentSummary, right: StudentSummary, sort: NonNullable<FilterIntentResult["sort"]>): number {
+function compareReviewStudents(
+  left: StudentSummary,
+  right: StudentSummary,
+  sort: NonNullable<FilterIntentResult["sort"]>,
+  reviewKeys: Set<string>,
+): number {
   if (sort === "score_asc") return nullable(left.percent, Number.POSITIVE_INFINITY) - nullable(right.percent, Number.POSITIVE_INFINITY) || compareNames(left, right);
   if (sort === "score_desc") return nullable(right.percent, Number.NEGATIVE_INFINITY) - nullable(left.percent, Number.NEGATIVE_INFINITY) || compareNames(left, right);
   if (sort === "confidence_asc") return nullable(left.avgConfidence, Number.POSITIVE_INFINITY) - nullable(right.avgConfidence, Number.POSITIVE_INFINITY) || compareNames(left, right);
-  const reviewCount = (student: StudentSummary) => student.corrections.filter((correction) => correction.requires_human_review).length;
+  const reviewCount = (student: StudentSummary) => student.corrections
+    .filter((correction) => reviewKeys.has(reviewCellKey(student.id, correction.q_id))).length;
   return reviewCount(right) - reviewCount(left) || compareNames(left, right);
 }
 
@@ -204,7 +229,8 @@ function reviewIntentCanonicalQuery(intent: FilterIntentResult): string {
   if (intent.low_confidence) parts.push("低置信");
   if (intent.disagreement) parts.push("专家分歧");
   if (intent.review_status === "pending") parts.push("待复核");
-  if (intent.review_status === "confirmed" || intent.annotated) parts.push("已批注");
+  if (intent.review_status === "confirmed") parts.push("教师已处理");
+  if (intent.annotated) parts.push("已批注");
   if (intent.review_status === "none") parts.push("无复核信号");
   if (intent.pass_status === "unscored") parts.push("无可比总分");
   if (intent.sort === "score_asc") parts.push("得分率从低到高");
@@ -213,6 +239,11 @@ function reviewIntentCanonicalQuery(intent: FilterIntentResult): string {
   if (intent.sort === "review_desc") parts.push("复核信号最多优先");
   parts.push(...intent.question_tokens, ...intent.text_terms);
   return parts.join(" ");
+}
+
+function isConfirmedReview(correction: Correction): boolean {
+  const source = correctionScoreSource(correction);
+  return source === "teacher_confirmed_same" || source === "teacher_changed";
 }
 
 function nullable(value: number | null | undefined, fallback: number): number {

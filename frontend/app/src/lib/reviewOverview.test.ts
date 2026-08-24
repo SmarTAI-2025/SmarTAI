@@ -1,13 +1,15 @@
 import { describe, expect, it } from "vitest";
 import type { Correction, FilterIntentResult } from "@/types";
 import type { ResultsModel, StudentSummary } from "@/components/tasks/resultsModel";
+import { collectResultReviewItems } from "@/components/tasks/resultsReviewModel";
 import {
+  reviewCellKey,
   reviewQueryNeedsIntentFallback,
   selectReviewOverview,
   selectReviewOverviewFromIntent,
 } from "./reviewOverview";
 
-function correction(qId: string): Correction {
+function correction(qId: string, overrides: Partial<Correction> = {}): Correction {
   return {
     q_id: qId,
     type: "calculation",
@@ -19,15 +21,15 @@ function correction(qId: string): Correction {
     expert_results: [],
     requires_human_review: false,
     review_reasons: [],
+    ...overrides,
   };
 }
 
-function student(id: string, name: string, percent: number): StudentSummary {
-  const item = correction("Q1");
+function student(id: string, name: string, percent: number, corrections = [correction("Q1")]): StudentSummary {
   return {
     id,
     name,
-    corrections: [item],
+    corrections,
     answers: [],
     answerByQuestion: new Map(),
     totalScore: percent / 10,
@@ -36,6 +38,32 @@ function student(id: string, name: string, percent: number): StudentSummary {
     avgConfidence: 0.9,
     lowConfidenceCount: 0,
     reviewCount: 0,
+  };
+}
+
+function questionSummary(id: string) {
+  return {
+    ...question,
+    id,
+    label: id,
+  };
+}
+
+function intent(overrides: Partial<FilterIntentResult> = {}): FilterIntentResult {
+  return {
+    recognized: true,
+    min_score_percent: null,
+    max_score_percent: null,
+    pass_status: null,
+    low_confidence: false,
+    review_status: null,
+    disagreement: false,
+    annotated: false,
+    sort: null,
+    question_tokens: [],
+    text_terms: [],
+    explanation: "",
+    ...overrides,
   };
 }
 
@@ -84,22 +112,67 @@ describe("review overview smart filter", () => {
     const local = selectReviewOverview(model, [], new Set(), "成绩排个名");
     expect(reviewQueryNeedsIntentFallback(local)).toBe(true);
 
-    const intent: FilterIntentResult = {
-      recognized: true,
-      min_score_percent: null,
-      max_score_percent: null,
-      pass_status: null,
-      low_confidence: false,
-      review_status: null,
-      disagreement: false,
-      annotated: false,
+    const structuredIntent = intent({
       sort: "score_desc",
-      question_tokens: [],
-      text_terms: [],
       explanation: "按得分率从高到低排序",
-    };
-    const selection = selectReviewOverviewFromIntent(model, [], new Set(), intent);
+    });
+    const selection = selectReviewOverviewFromIntent(model, [], new Set(), structuredIntent);
 
     expect(selection.students.map((item) => item.id)).toEqual(["student-high", "student-low"]);
+  });
+
+  it("matches Q1 without also matching Q11 or Q1.1", () => {
+    const mixedStudent = student("student-mixed", "Mixed", 80, [correction("Q1"), correction("Q11"), correction("Q1.1")]);
+    const mixedModel = {
+      ...model,
+      students: [mixedStudent],
+      questions: [questionSummary("Q1"), questionSummary("Q11"), questionSummary("Q1.1")],
+    } as ResultsModel;
+
+    const selection = selectReviewOverview(mixedModel, [], new Set(), "Q1");
+    const nestedSelection = selectReviewOverview(mixedModel, [], new Set(), "Q1.1");
+    const chineseSelection = selectReviewOverview(mixedModel, [], new Set(), "第1题");
+
+    expect(Array.from(selection.matchedCellKeys)).toEqual([reviewCellKey("student-mixed", "Q1")]);
+    expect(selection.questions.map((item) => item.id)).toEqual(["Q1"]);
+    expect(Array.from(nestedSelection.matchedCellKeys)).toEqual([reviewCellKey("student-mixed", "Q1.1")]);
+    expect(Array.from(chineseSelection.matchedCellKeys)).toEqual([reviewCellKey("student-mixed", "Q1")]);
+  });
+
+  it("keeps confirmed reviews, pending reviews, and annotations distinct", () => {
+    const statusStudent = student("student-status", "Status", 80, [
+      correction("Q1", { requires_human_review: true, provisional_score: 8, teacher_score: 8 }),
+      correction("Q2", { requires_human_review: true }),
+    ]);
+    const statusModel = {
+      ...model,
+      students: [statusStudent],
+      questions: [questionSummary("Q1"), questionSummary("Q2")],
+    } as ResultsModel;
+    const reviewItems = collectResultReviewItems(statusModel, statusModel.students);
+    const annotations = new Set([reviewCellKey("student-status", "Q2")]);
+
+    expect(selectReviewOverviewFromIntent(statusModel, reviewItems, annotations, intent({ review_status: "confirmed" })).questions.map((item) => item.id)).toEqual(["Q1"]);
+    expect(selectReviewOverviewFromIntent(statusModel, reviewItems, annotations, intent({ review_status: "pending" })).questions.map((item) => item.id)).toEqual(["Q2"]);
+    expect(selectReviewOverviewFromIntent(statusModel, reviewItems, annotations, intent({ annotated: true })).questions.map((item) => item.id)).toEqual(["Q2"]);
+  });
+
+  it("sorts by every review signal shown in the queue", () => {
+    const twoLowConfidence = student("student-two", "Two", 80, [
+      correction("Q1", { confidence: 0.4 }),
+      correction("Q2", { confidence: 0.4 }),
+    ]);
+    const oneBackendFlag = student("student-one", "One", 80, [correction("Q1", { requires_human_review: true })]);
+    const noSignals = student("student-none", "None", 80);
+    const sortModel = {
+      ...model,
+      students: [oneBackendFlag, noSignals, twoLowConfidence],
+      questions: [questionSummary("Q1"), questionSummary("Q2")],
+    } as ResultsModel;
+    const reviewItems = collectResultReviewItems(sortModel, sortModel.students);
+
+    const selection = selectReviewOverview(sortModel, reviewItems, new Set(), "复核信号最多优先");
+
+    expect(selection.students.map((item) => item.id)).toEqual(["student-two", "student-one", "student-none"]);
   });
 });
