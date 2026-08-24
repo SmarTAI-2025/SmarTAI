@@ -203,17 +203,29 @@ def create_app() -> FastAPI:
                 pass
 
     # ─── Durable workflow-operation worker (DB-W2-2) ──────────────────
-    # The mapping stays empty until each operation gains a restart-safe
-    # handler in W2-3/W2-4. An empty mapping polls no rows, so merely enabling
-    # the lifecycle cannot steal request-memory background jobs.
+    # Only operation types with restart-safe handlers are registered. Adding a
+    # mapping is the cutover from request-memory dispatch to durable polling.
     _workflow_worker: dict[str, object] = {"worker": None, "task": None}
 
     @app.on_event("startup")
     async def _start_workflow_worker():
         import asyncio as _asyncio
         from backend.services.workflow_worker import WorkflowWorker
+        from backend.services.task_facade import (
+            run_durable_problem_extraction,
+            run_durable_submission_recognition,
+        )
+        from backend.api.task_preparation import (
+            run_durable_ai_completion,
+            run_durable_material_import,
+        )
 
-        worker = WorkflowWorker(handlers={})
+        worker = WorkflowWorker(handlers={
+            "problem_extraction": run_durable_problem_extraction,
+            "submission_recognition": run_durable_submission_recognition,
+            "material_import": run_durable_material_import,
+            "ai_completion": run_durable_ai_completion,
+        })
         _workflow_worker["worker"] = worker
         _workflow_worker["task"] = _asyncio.create_task(worker.run_forever())
 

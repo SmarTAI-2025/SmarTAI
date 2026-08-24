@@ -1,6 +1,83 @@
 # Claude Collaboration Handoff
 
-## Current Task (2026-08-13): Database Week 2 recovery
+## Week 2 final delivery (2026-08-13)
+
+The database Week 2 scope is implemented on
+`codex/db-problem-extraction-recovery`, based on `b8f619a` / stacked PR #35.
+This branch completes the concrete recovery cutover for problem extraction,
+submission recognition, material import, and AI completion on top of the W2-1
+operation leases and W2-2 worker lifecycle.
+
+### Final contract
+
+- Upload bytes and large intermediate text/results live in owner- and
+  assignment-scoped stored files; operation JSON contains bounded metadata and
+  artifact IDs only.
+- All four operation types publish through `preparing -> pending`, so workers
+  cannot claim before source persistence and workflow activation are complete.
+  Abandoned publication attempts become retryable after a short TTL.
+- Durable handlers reconstruct owner-scoped provider registries, discover
+  deterministic artifacts saved before checkpoints, and avoid repeating
+  completed provider stages after process death.
+- Checkpoints, progress, success, failure, source outcomes, normalized question
+  or submission revisions, and workflow terminal transitions are guarded by
+  operation attempt plus live lease token. Submission source outcomes commit in
+  the same transaction as normalized submission revisions.
+- Request-memory `BackgroundTasks` dispatch is removed for the four migrated
+  operation types; one shared `WorkflowWorker` handler map performs dispatch.
+
+### Review fixes
+
+- Added short-lived `preparing` publication leases and atomic publication for
+  material/AI jobs, closing the worker-before-activation race.
+- Moved successful and failed submission outcomes into lease-fenced operation
+  transactions so stale workers cannot publish per-source state.
+- Added deterministic result artifacts for submission, material import, and AI
+  completion, plus owner/assignment validation and bounded JSON validation on
+  direct atomic write paths.
+- Prevented Alembic test configuration from disabling already-imported loggers
+  with `disable_existing_loggers=False`.
+
+### Final verification
+
+- `python -m pytest backend/tests -q`:
+  `467 passed, 8 skipped, 69 warnings in 589.57s`.
+- Targeted worker/recovery/lease/checkpoint/source/storage/migration suite:
+  `166 passed, 64 warnings in 224.83s`.
+- SQLite migration round trip on an isolated temporary database:
+  `upgrade head -> downgrade 0006_operation_checkpoints -> upgrade head` passed;
+  final revision `0007_operation_leases (head)`.
+- `python -m alembic heads`: `0007_operation_leases (head)`.
+- `git diff --check`: passed; Git emitted only CRLF conversion notices.
+- `SMARTAI_TEST_POSTGRES_URL` is not configured locally. The 8 live PostgreSQL
+  tests were skipped; dialect-rendered PostgreSQL DDL and migration tests ran in
+  the full suite. CI must run the live PostgreSQL service tests before merge.
+
+### Delivery dependencies
+
+- Stack: PR #17 -> PR #18 -> PR #34 -> PR #35 -> this Week 2 recovery PR.
+- This branch adds no migration beyond `0007`; rollback behavior is inherited
+  from PR #34 and was exercised in the migration round trip.
+- PR #23 and PR #26 may conflict in `backend/services/task_facade.py`, API
+  background-dispatch removal, and related workflow tests. Rebase by preserving
+  this branch's owner predicates, lease fencing, artifact boundaries, and atomic
+  terminal commits while resolving their product/UI semantics separately.
+
+## Current Task (2026-08-13): DB-W2-3 problem extraction recovery
+
+Implement the first concrete durable workflow handler on top of PR #35. Queueing
+must persist the owner-scoped source object before dispatch; a fresh worker must
+recover from database and object storage without request-memory bytes; safe paid
+stages must reuse durable artifacts; all checkpoint, success, and failure writes
+must be fenced by attempt plus lease token. Remove request `BackgroundTasks`
+dispatch only after restart, owner-isolation, stale-lease, and replay tests pass.
+
+The next stacked branch will handle submission parsing, followed by the two
+DB-W2-4 auxiliary operations. Codex is implementing directly because repeated
+local Claude Code attempts recorded below timed out without a usable handoff;
+retrying that same blocked route would prevent completion.
+
+## Week 2 umbrella task
 
 Complete DB-W2-1 through DB-W2-4 from
 `active_beta_launch/active_beta_launch/数据库持久化与任务恢复工作安排.md`.

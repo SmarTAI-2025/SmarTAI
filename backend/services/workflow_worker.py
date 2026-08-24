@@ -115,7 +115,7 @@ class LeasedOperation:
         return self._operation.progress
 
     @property
-    def checkpoint(self) -> dict:
+    def checkpoint_data(self) -> dict:
         return self._operation.checkpoint
 
     @property
