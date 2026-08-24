@@ -1,7 +1,7 @@
 """Add owner-scoped specialized OCR BYOK credentials.
 
-Revision ID: 0009_ocr_provider_credentials
-Revises: 0008_operation_leases
+Revision ID: 0011_ocr_provider_credentials
+Revises: 0010_provider_wire_protocol
 """
 from __future__ import annotations
 
@@ -9,8 +9,8 @@ from alembic import op
 import sqlalchemy as sa
 
 
-revision = "0009_ocr_provider_credentials"
-down_revision = "0008_operation_leases"
+revision = "0011_ocr_provider_credentials"
+down_revision = "0010_provider_wire_protocol"
 branch_labels = None
 depends_on = None
 

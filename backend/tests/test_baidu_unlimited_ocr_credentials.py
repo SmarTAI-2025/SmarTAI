@@ -526,7 +526,7 @@ def test_ocr_credential_migration_contract(tmp_path, monkeypatch):
     }
     assert ("owner_id", "provider_type") in uniques
 
-    command.downgrade(config, "0008_operation_leases")
+    command.downgrade(config, "0010_provider_wire_protocol")
     assert "ocr_provider_credentials" not in set(
         inspect(create_engine(db_url)).get_table_names()
     )
