@@ -1,5 +1,5 @@
 import { deleteJSON, getJSON, postJSON } from "./client";
-import type { AnalyticsMode, AnalyticsResult, PerQuestionBreakdown } from "@/types";
+import type { AnalyticsMode, AnalyticsResult, FilterIntentResult, FilterIntentSurface, PerQuestionBreakdown } from "@/types";
 
 export function runAnalyticsQuery(
   taskId: string,
@@ -7,6 +7,14 @@ export function runAnalyticsQuery(
   mode: AnalyticsMode,
 ): Promise<AnalyticsResult> {
   return postJSON<AnalyticsResult>(`/analytics/${taskId}/query`, { question, mode });
+}
+
+export function interpretFilterIntent(
+  taskId: string,
+  question: string,
+  surface: FilterIntentSurface,
+): Promise<FilterIntentResult> {
+  return postJSON<FilterIntentResult>(`/analytics/${taskId}/filter-intent`, { question, surface });
 }
 
 export function getPerQuestionBreakdown(taskId: string, qId: string): Promise<PerQuestionBreakdown> {

@@ -732,7 +732,7 @@ function QuestionSearch({ className, locale, value, matches, onQuery, onSelect }
       <div className="flex items-center gap-2">
         <SmarTAIMascot variant="thinking" size="xs" />
         <label className="relative min-w-0 flex-1">
-          <span className="sr-only">{tx(locale, "SmarTAI 智能搜索题目", "SmarTAI Smart Search for questions")}</span>
+          <span className="sr-only">{tx(locale, "本地快速筛选题目，不调用模型", "Local quick filter for questions, no model call")}</span>
           <input
             value={smartSearch.draftValue}
             inputMode="search"
@@ -744,7 +744,7 @@ function QuestionSearch({ className, locale, value, matches, onQuery, onSelect }
               smartSearch.handleBlur(event);
               window.setTimeout(() => setOpen(false), 120);
             }}
-            placeholder={tx(locale, "SmarTAI 智能搜索：题号、题型、题干或“低置信”", "SmarTAI Smart Search: number, type, stem, or low confidence")}
+            placeholder={tx(locale, "本地快速筛选：题号、题型、题干或“低置信”", "Local quick filter: number, type, stem, or low confidence")}
             className="h-10 w-full rounded-[7px] border-0 bg-slate-50 pl-3 pr-9 text-[13px] text-foreground outline-none placeholder:text-muted-foreground focus:ring-2 focus:ring-primary/20 dark:bg-slate-900/50"
           />
           {smartSearch.draftValue ? <button type="button" onMouseDown={(event) => event.preventDefault()} onClick={() => { smartSearch.commitValue(""); setOpen(false); }} className="absolute right-2 top-1/2 inline-flex h-7 w-7 -translate-y-1/2 items-center justify-center rounded-full text-muted-foreground hover:bg-muted hover:text-foreground" aria-label={tx(locale, "清空题目筛选", "Clear question filter")}><X aria-hidden="true" className="h-3.5 w-3.5" /></button> : null}

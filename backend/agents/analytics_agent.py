@@ -23,7 +23,7 @@ import logging
 from typing import Any, Dict, List, Literal, Optional
 
 from langchain_core.messages import SystemMessage, HumanMessage
-from pydantic import BaseModel, Field, ValidationError
+from pydantic import BaseModel, Field, ValidationError, model_validator
 
 from backend.llm.providers import BaseProvider
 from backend.tools.structured_llm import extract_and_parse_json
@@ -36,6 +36,54 @@ logger = logging.getLogger(__name__)
 class FilterOutput(BaseModel):
     student_ids: List[str] = Field(description="Subset of student IDs matching the teacher's ask")
     explanation: str = Field("", description="One-sentence rationale for the filter")
+
+
+class FilterIntentOutput(BaseModel):
+    """A data-free translation from natural language to local filter controls."""
+
+    recognized: bool = True
+    min_score_percent: Optional[float] = Field(None, ge=0, le=100)
+    max_score_percent: Optional[float] = Field(None, ge=0, le=100)
+    pass_status: Optional[Literal["pass", "fail", "unscored"]] = None
+    low_confidence: bool = False
+    review_status: Optional[Literal["pending", "confirmed", "none"]] = None
+    disagreement: bool = False
+    annotated: bool = False
+    sort: Optional[Literal["score_asc", "score_desc", "confidence_asc", "review_desc"]] = None
+    question_tokens: List[str] = Field(default_factory=list, max_length=4)
+    text_terms: List[str] = Field(default_factory=list, max_length=4)
+    explanation: str = Field("", max_length=500)
+
+    @model_validator(mode="after")
+    def fail_closed_when_unrecognized_or_empty(self) -> "FilterIntentOutput":
+        """Never let an unknown request smuggle in controls or match everything."""
+        actionable = any((
+            self.min_score_percent is not None,
+            self.max_score_percent is not None,
+            self.pass_status is not None,
+            self.low_confidence,
+            self.review_status is not None,
+            self.disagreement,
+            self.annotated,
+            self.sort is not None,
+            bool(self.question_tokens),
+            bool(self.text_terms),
+        ))
+        if self.recognized and actionable:
+            return self
+
+        self.recognized = False
+        self.min_score_percent = None
+        self.max_score_percent = None
+        self.pass_status = None
+        self.low_confidence = False
+        self.review_status = None
+        self.disagreement = False
+        self.annotated = False
+        self.sort = None
+        self.question_tokens = []
+        self.text_terms = []
+        return self
 
 
 class SummaryOutput(BaseModel):
@@ -93,6 +141,41 @@ Inputs you receive:
 Return JSON: {"student_ids": [...], "explanation": "one sentence rationale"}.
 - Only return student IDs that exist in the input.
 - If the question is ambiguous, pick the most reasonable interpretation.
+- Output must start with { and end with }.
+"""
+
+FILTER_INTENT_SYS = """You translate a teacher's natural-language filter or sort request
+into a fixed set of local UI controls. You receive ONLY the teacher's query and the UI
+surface name. You never receive student records, scores, answers, or class analytics.
+
+Return JSON with exactly these fields:
+{
+  "recognized": true,
+  "min_score_percent": null,
+  "max_score_percent": null,
+  "pass_status": null,
+  "low_confidence": false,
+  "review_status": null,
+  "disagreement": false,
+  "annotated": false,
+  "sort": null,
+  "question_tokens": [],
+  "text_terms": [],
+  "explanation": "short explanation in the query language"
+}
+
+Allowed values:
+- pass_status: "pass", "fail", "unscored", or null.
+- review_status: "pending", "confirmed", "none", or null.
+- sort: "score_asc", "score_desc", "confidence_asc", "review_desc", or null.
+- Score limits are percentages from 0 to 100. Phrases such as "90分以下" mean
+  max_score_percent=90. Bare "从高到低" means sort="score_desc".
+- Use question_tokens only for explicit question references such as Q2 or 第3题.
+- Use text_terms only for literal words that should still be matched locally.
+- On student_analysis, annotated must be false and question_tokens must be empty;
+  those controls exist only on review_overview.
+- If the request cannot map to these controls, set recognized=false and explain why.
+- Do not invent names, IDs, score thresholds, or question numbers.
 - Output must start with { and end with }.
 """
 
@@ -208,6 +291,34 @@ async def filter_students(
         HumanMessage(content=user_msg),
     ])
     return extract_and_parse_json(response.content, FilterOutput)
+
+
+async def interpret_filter_intent(
+    *,
+    question: str,
+    surface: Literal["student_analysis", "review_overview"],
+    provider: BaseProvider,
+) -> FilterIntentOutput:
+    """Interpret only the query text; no grading or student payload is accepted."""
+    user_msg = json.dumps(
+        {"surface": surface, "teacher_query": question},
+        ensure_ascii=False,
+    )
+    response = await provider.ainvoke([
+        SystemMessage(content=FILTER_INTENT_SYS),
+        HumanMessage(content=user_msg),
+    ])
+    output = extract_and_parse_json(response.content, FilterIntentOutput)
+    if surface == "student_analysis":
+        # These controls are implemented only by the review matrix. Revalidate
+        # after removing them so a response containing only unsupported fields
+        # becomes recognized=false instead of silently matching every student.
+        output = FilterIntentOutput.model_validate({
+            **output.model_dump(),
+            "annotated": False,
+            "question_tokens": [],
+        })
+    return output
 
 
 async def summarize(
