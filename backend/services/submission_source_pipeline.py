@@ -161,6 +161,18 @@ def failure_phase_for_code(code: str) -> str:
         "provider_rate_limited",
         "provider_auth_failed",
         "provider_credentials_unavailable",
+        "provider_model_or_endpoint_not_found",
+        "provider_request_rejected",
+        "provider_upstream_unavailable",
+        "provider_response_invalid",
+        "provider_image_payload_invalid",
+        "provider_message_payload_not_supported",
+        "provider_endpoint_dns_failed",
+        "provider_endpoint_non_public_address",
+        "provider_endpoint_tls_failed",
+        "provider_endpoint_redirect_blocked",
+        "provider_endpoint_protocol_mismatch",
+        "provider_endpoint_response_too_large",
     }:
         return "recognition"
     return "recognition"
@@ -174,6 +186,18 @@ def _source_read_failure_phase(code: str, content_type: str) -> str:
             "provider_rate_limited",
             "provider_auth_failed",
             "provider_credentials_unavailable",
+            "provider_model_or_endpoint_not_found",
+            "provider_request_rejected",
+            "provider_upstream_unavailable",
+            "provider_response_invalid",
+            "provider_image_payload_invalid",
+            "provider_message_payload_not_supported",
+            "provider_endpoint_dns_failed",
+            "provider_endpoint_non_public_address",
+            "provider_endpoint_tls_failed",
+            "provider_endpoint_redirect_blocked",
+            "provider_endpoint_protocol_mismatch",
+            "provider_endpoint_response_too_large",
         }
         and (content_type.startswith("image/") or content_type == "application/pdf")
     ):

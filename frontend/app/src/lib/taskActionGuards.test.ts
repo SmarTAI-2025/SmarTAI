@@ -141,6 +141,57 @@ describe("background task failure guidance", () => {
     expect(info.actionHref).toContain("returnTo=");
   });
 
+  it("routes a relay protocol mismatch to BYOK without exposing the raw endpoint", () => {
+    const info = classifyRecoverableError(
+      new APIError(502, "upstream rejected https://relay.example.edu/v1/messages", {
+        detail: {
+          code: "provider_endpoint_protocol_mismatch",
+          message: "upstream rejected https://relay.example.edu/v1/messages",
+        },
+      }),
+      { locale: "zh-CN", returnTo: "/tasks/t1/problems/progress" },
+    );
+
+    expect(info.title).toBe("中转站响应与所选 API 协议不一致");
+    expect(info.actionKind).toBe("byok");
+    expect(info.actionHref).toContain("/settings/byok");
+    expect(info.description).not.toContain("relay.example.edu");
+  });
+
+  it("explains a blocked non-public relay address without exposing the endpoint", () => {
+    const info = classifyRecoverableError(
+      new APIError(502, "blocked https://relay.example.edu/v1", {
+        detail: {
+          code: "provider_endpoint_non_public_address",
+          message: "blocked https://relay.example.edu/v1",
+        },
+      }),
+      { locale: "zh-CN", returnTo: "/tasks/t1/problems/progress" },
+    );
+
+    expect(info.title).toBe("中转站域名解析到非公网地址");
+    expect(info.actionKind).toBe("byok");
+    expect(info.description).toContain("已阻止");
+    expect(info.description).not.toContain("relay.example.edu");
+  });
+
+  it("treats a temporary relay failure as retryable", () => {
+    const info = classifyRecoverableError("provider_upstream_unavailable", { locale: "zh-CN" });
+
+    expect(info.title).toBe("模型服务暂时不可用");
+    expect(info.actionKind).toBe("retry");
+    expect(info.tone).toBe("warning");
+    expect(info.description).toContain("任务资料已保留");
+  });
+
+  it("routes an unsafe image payload back to file selection", () => {
+    const info = classifyRecoverableError("provider_image_payload_invalid", { locale: "zh-CN" });
+
+    expect(info.title).toBe("图片无法组成安全模型请求");
+    expect(info.actionKind).toBe("reupload");
+    expect(info.description).toContain("没有把无法验证的图片负载发送给模型");
+  });
+
   it("routes a vision-required background failure to BYOK with OCR-specific copy", () => {
     const info = classifyRecoverableError("vision_provider_required", { locale: "zh-CN" });
 

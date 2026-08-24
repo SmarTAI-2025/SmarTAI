@@ -401,6 +401,44 @@ export function classifyRecoverableError(
     };
   }
 
+  const providerConfigurationCopy = providerConfigurationErrorCopy(code, locale);
+  if (providerConfigurationCopy) {
+    return {
+      ...providerConfigurationCopy,
+      actionLabel: tx(locale, "检查 BYOK 配置", "Check BYOK settings"),
+      actionHref: `/settings/byok${returnTo ? `?returnTo=${encodeURIComponent(returnTo)}` : ""}`,
+      actionKind: "byok",
+      tone: "primary",
+      technicalDetails,
+    };
+  }
+
+  const providerTransientCopy = providerTransientErrorCopy(code, locale);
+  if (providerTransientCopy) {
+    return {
+      ...providerTransientCopy,
+      actionLabel: tx(locale, "重新尝试", "Try again"),
+      actionKind: "retry",
+      tone: "warning",
+      technicalDetails,
+    };
+  }
+
+  if (code === "provider_image_payload_invalid") {
+    return {
+      title: tx(locale, "图片无法组成安全模型请求", "The image could not be encoded safely"),
+      description: tx(
+        locale,
+        "系统没有把无法验证的图片负载发送给模型。请重新上传清晰的 JPG、PNG 或 WebP；原任务资料仍然保留。",
+        "The invalid image payload was not sent to the model. Upload a clear JPG, PNG, or WebP again; task data is preserved.",
+      ),
+      actionLabel: tx(locale, "重新选择文件", "Choose the file again"),
+      actionKind: "reupload",
+      tone: "danger",
+      technicalDetails,
+    };
+  }
+
   if (code === "vision_provider_required") {
     const byokReturnTo = context.returnTo?.trim();
     return {
@@ -725,6 +763,91 @@ function stableBackgroundErrorCode(error: unknown): string | null {
   if (typeof error !== "string") return null;
   const value = error.trim();
   return /^[a-z][a-z0-9_]{1,127}$/.test(value) ? value : null;
+}
+
+function providerConfigurationErrorCopy(
+  code: string | null,
+  locale: Locale,
+): Pick<RecoverableErrorInfo, "title" | "description"> | null {
+  const copies: Record<string, [string, string, string, string]> = {
+    provider_model_or_endpoint_not_found: [
+      "模型名称或接口路径不存在",
+      "The model or endpoint was not found",
+      "请核对模型名称和 Base URL。中转站应填写服务根路径，不要填写完整操作终点。",
+      "Check the model name and base URL. Enter the relay service root, not a full operation endpoint.",
+    ],
+    provider_request_rejected: [
+      "模型服务拒绝了请求",
+      "The model service rejected the request",
+      "请核对模型能力与高级 API 协议；若当前步骤需要 OCR，请确认所选模型支持图片输入。",
+      "Check model capabilities and the Advanced API protocol. For OCR, confirm that the selected model accepts images.",
+    ],
+    provider_response_invalid: [
+      "模型服务返回了无法识别的响应",
+      "The model service returned an invalid response",
+      "请核对中转站文档与高级 API 协议；系统没有把异常响应当作任务结果。",
+      "Check the relay documentation and Advanced API protocol. The invalid response was not accepted as a task result.",
+    ],
+    provider_message_payload_not_supported: [
+      "当前协议无法发送这类输入",
+      "The selected protocol cannot encode this input",
+      "请核对高级 API 协议，或改用支持当前文件类型的模型。",
+      "Check the Advanced API protocol or choose a model that supports this file type.",
+    ],
+    provider_endpoint_dns_failed: [
+      "中转站域名无法解析",
+      "The relay hostname could not be resolved",
+      "请检查 Base URL 拼写与中转站服务状态；系统没有尝试访问其他地址。",
+      "Check the base URL spelling and relay status. No alternate address was contacted.",
+    ],
+    provider_endpoint_non_public_address: [
+      "中转站域名解析到非公网地址",
+      "The relay hostname resolved to a non-public address",
+      "请检查中转站 DNS 配置；系统已阻止访问内网或特殊地址。",
+      "Check the relay DNS configuration. Access to private or special addresses was blocked.",
+    ],
+    provider_endpoint_tls_failed: [
+      "中转站 HTTPS 证书校验失败",
+      "The relay HTTPS certificate could not be verified",
+      "请让中转站维护方修复可信证书；系统不会绕过证书校验。",
+      "Ask the relay operator to fix its trusted certificate. Certificate checks are not bypassed.",
+    ],
+    provider_endpoint_redirect_blocked: [
+      "中转站返回了重定向",
+      "The relay returned a redirect",
+      "请把 Base URL 改为重定向后的实际 HTTPS 服务根路径；系统不会自动跟随重定向。",
+      "Set the base URL to the final HTTPS service root. Redirects are not followed automatically.",
+    ],
+    provider_endpoint_protocol_mismatch: [
+      "中转站响应与所选 API 协议不一致",
+      "The relay response does not match the selected API protocol",
+      "请在 BYOK 高级设置中核对 OpenAI、Anthropic 或 Gemini 协议。",
+      "Check the OpenAI, Anthropic, or Gemini protocol in BYOK Advanced settings.",
+    ],
+  };
+  const copy = code ? copies[code] : undefined;
+  return copy
+    ? { title: tx(locale, copy[0], copy[1]), description: tx(locale, copy[2], copy[3]) }
+    : null;
+}
+
+function providerTransientErrorCopy(
+  code: string | null,
+  locale: Locale,
+): Pick<RecoverableErrorInfo, "title" | "description"> | null {
+  if (code === "provider_upstream_unavailable") {
+    return {
+      title: tx(locale, "模型服务暂时不可用", "The model service is temporarily unavailable"),
+      description: tx(locale, "模型服务返回了临时故障。任务资料已保留，请稍后重试或换用另一个已启用模型。", "The model service reported a temporary failure. Task data is preserved; retry later or use another enabled model."),
+    };
+  }
+  if (code === "provider_endpoint_response_too_large") {
+    return {
+      title: tx(locale, "中转站响应超过安全大小上限", "The relay response exceeded the safety limit"),
+      description: tx(locale, "系统停止读取过大的响应且没有把它当作成功结果。请缩小输入或输出范围后重试。", "The oversized response was stopped and was not accepted as a result. Reduce the input or requested output, then retry."),
+    };
+  }
+  return null;
 }
 
 /**

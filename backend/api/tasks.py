@@ -586,6 +586,7 @@ def _grading_setup_payload(task_id: str, owner_id: str, registry: ExpertRegistry
             key: item.get(key) for key in (
                 "provider_id", "provider_type", "model", "display_name", "enabled",
                 "scope", "is_shared", "editable", "max_concurrent", "rpm",
+                "verification_status", "base_url",
             )
         })
     default_id = registry.pick_default_id()

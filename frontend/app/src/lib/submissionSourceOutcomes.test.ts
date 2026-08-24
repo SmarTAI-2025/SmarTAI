@@ -73,6 +73,12 @@ describe("submission source reason copy", () => {
       "压缩包成员路径不安全",
       "This archive member has an unsafe path",
     ],
+    [
+      "provider_endpoint_non_public_address",
+      "ocr",
+      "OCR：中转站域名解析到非公网地址",
+      "OCR: The relay hostname resolved to a non-public address",
+    ],
   ])("has exact bilingual copy for newly public reason %s", (
     reasonCode,
     failurePhase,
