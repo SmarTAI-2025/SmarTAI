@@ -209,4 +209,33 @@ describe("GradingPreflightPage regrade mode", () => {
     });
     expect(mutateAsync).not.toHaveBeenCalled();
   });
+
+  it("blocks Baidu OCR grading with an explicit choose-model message", () => {
+    const current = (useGradingSetup as unknown as () => any)();
+    (useGradingSetup as unknown as ReturnType<typeof vi.fn>).mockReturnValue({
+      ...current,
+      data: {
+        ...current.data,
+        readiness: {
+          ready: false,
+          blocking_issues: ["ocr_provider_grading_not_supported"],
+          warnings: [],
+        },
+      },
+    });
+
+    render(
+      <MemoryRouter initialEntries={["/tasks/task-1/grading/preflight"]}>
+        <Routes>
+          <Route path="/tasks/:taskId/grading/preflight" element={<GradingPreflightPage />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    expect(screen.getByRole("button", { name: "Start Regrading Now" })).toBeDisabled();
+    expect(screen.getByText(
+      "This OCR service does not support grading. Choose a grading model.",
+    )).toBeInTheDocument();
+    expect(mutateAsync).not.toHaveBeenCalled();
+  });
 });

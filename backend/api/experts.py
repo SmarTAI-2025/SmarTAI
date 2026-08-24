@@ -24,9 +24,13 @@ from sqlalchemy.exc import IntegrityError
 from backend.auth import require_teacher
 from backend.config import settings
 from backend.db.provider_repository import (
+    DefaultProviderNotEnabled,
+    DefaultProviderReplacementRequired,
     delete_provider_config,
+    get_default_provider_id,
     get_provider_config,
     list_provider_configs,
+    set_default_provider_id,
     set_provider_enabled,
     set_provider_verification,
     update_provider_config,
@@ -46,9 +50,11 @@ from backend.llm.registry import (
     ExpertRegistry,
     get_scoped_expert_registry,
     provider_encryption_not_configured_error,
+    resolve_owner_default_provider_id,
 )
 from backend.llm.providers import ProviderRequestError
 from backend.models import ProviderConfig, ProviderType, User, WireProtocol
+from backend.services.stage_provider_routing import list_stage_provider_options
 
 logger = logging.getLogger(__name__)
 
@@ -72,6 +78,10 @@ class AddKeyRequest(BaseModel):
 class SelectRequest(BaseModel):
     provider_id: str
     enabled: bool
+
+
+class DefaultProviderRequest(BaseModel):
+    provider_id: str = Field(min_length=1, max_length=240)
 
 
 class UpdateKeyRequest(BaseModel):
@@ -251,6 +261,7 @@ def add_key(
         "base_url": base_url,
         "wire_protocol": wire_protocol,
         "verification_status": "unverified",
+        "is_default": get_default_provider_id(current.id) == provider_id,
     }
 
 
@@ -265,7 +276,14 @@ def list_available(
     display_name, max_concurrent. The frontend dropdown uses provider_id as
     value and display_name as label.
     """
-    return registry.list_configs()
+    default_provider_id = resolve_owner_default_provider_id(current.id, registry)
+    return [
+        {
+            **item,
+            "is_default": item.get("provider_id") == default_provider_id,
+        }
+        for item in registry.list_configs()
+    ]
 
 
 @router.get("/catalog")
@@ -284,6 +302,15 @@ def provider_catalog(current: User = Depends(require_teacher)):
         }
         for entry in PROVIDER_CATALOG_ENTRIES
     ]
+
+
+@router.get("/stage-options")
+def stage_provider_options(
+    current: User = Depends(require_teacher),
+    registry: ExpertRegistry = Depends(get_scoped_expert_registry),
+):
+    """List owner-visible task-stage routes without combining credentials."""
+    return list_stage_provider_options(current.id, registry)
 
 
 @router.post("/select")
@@ -316,9 +343,53 @@ def select_provider(
             status.HTTP_403_FORBIDDEN,
             detail={"code": "custom_provider_endpoints_disabled"},
         )
-    if set_provider_enabled(current.id, request.provider_id, request.enabled):
-        return {"status": "success", "provider_id": request.provider_id, "enabled": request.enabled}
+    try:
+        changed = set_provider_enabled(
+            current.id,
+            request.provider_id,
+            request.enabled,
+        )
+    except DefaultProviderReplacementRequired as exc:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            detail={
+                "code": "default_provider_replacement_required",
+                "provider_id": request.provider_id,
+            },
+        ) from exc
+    if changed:
+        return {
+            "status": "success",
+            "provider_id": request.provider_id,
+            "enabled": request.enabled,
+            "is_default": get_default_provider_id(current.id) == request.provider_id,
+        }
     return {"status": "not_found", "message": f"Provider {request.provider_id} not found."}
+
+
+@router.put("/default")
+def set_default_provider(
+    request: DefaultProviderRequest,
+    current: User = Depends(require_teacher),
+    registry: ExpertRegistry = Depends(get_scoped_expert_registry),
+):
+    """Set the single owner default used to prefill task stages and Ask."""
+    if registry.uses_shared_pool():
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            detail={"code": "default_provider_platform_managed"},
+        )
+    try:
+        provider_id = set_default_provider_id(current.id, request.provider_id)
+    except DefaultProviderNotEnabled as exc:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={
+                "code": "default_provider_not_enabled",
+                "provider_id": request.provider_id,
+            },
+        ) from exc
+    return {"status": "success", "provider_id": provider_id, "is_default": True}
 
 
 @router.put("/{provider_id}")
@@ -507,7 +578,16 @@ def remove_provider(
     registry: ExpertRegistry = Depends(get_scoped_expert_registry),
 ):
     """Remove a provider entirely."""
-    existed = delete_provider_config(current.id, provider_id)
+    try:
+        existed = delete_provider_config(current.id, provider_id)
+    except DefaultProviderReplacementRequired as exc:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            detail={
+                "code": "default_provider_replacement_required",
+                "provider_id": provider_id,
+            },
+        ) from exc
     if existed:
         return {"status": "success", "message": f"Provider {provider_id} removed."}
     return {"status": "not_found", "message": f"Provider {provider_id} not found."}

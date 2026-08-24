@@ -2,22 +2,25 @@ from __future__ import annotations
 
 import base64
 import io
+import json
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
-from fastapi import HTTPException, UploadFile
+from fastapi import BackgroundTasks, HTTPException, UploadFile
 from pydantic import ValidationError as PydanticValidationError
 from starlette.datastructures import Headers
 
 from backend.api.task_preparation import (
     MAX_SOURCE_BYTES,
+    RetryQuestionPreparationRequest,
     StartQuestionPreparationRequest,
     _read_source,
     _source_role_ocr_purpose,
     _validate_source_upload,
     preflight_problem_source,
     question_preparation_capabilities,
+    retry_question_preparation,
 )
 from backend.models import QuestionScorePolicy
 from backend.skills.question_score import (
@@ -48,6 +51,68 @@ def test_question_preparation_request_defaults_to_reviewable_ten_points():
 
     assert request.score_policy == QuestionScorePolicy()
     assert request.score_policy.mode == "default_10"
+
+
+@pytest.mark.asyncio
+async def test_failed_question_preparation_reuses_sources_with_selected_model(
+    monkeypatch,
+):
+    workflow = SimpleNamespace(
+        workflow_revision=8,
+        last_failed_job_id="failed-question-job",
+    )
+    failed = SimpleNamespace(
+        id="failed-question-job",
+        assignment_id="question-task",
+        operation_type="question_preparation",
+        status="error",
+        payload={
+            "source_tokens": ["prepared-source-1"],
+            "base_workflow_revision": 7,
+            "replace_confirmed": False,
+            "score_policy": {"mode": "default_10"},
+        },
+    )
+    monkeypatch.setattr(
+        "backend.api.task_preparation.workflow_repository.get_workflow",
+        lambda *_args, **_kwargs: workflow,
+    )
+    monkeypatch.setattr(
+        "backend.api.task_preparation.workflow_repository.get_operation",
+        lambda *_args, **_kwargs: failed,
+    )
+    captured = {}
+
+    async def fake_start(**kwargs):
+        captured.update(kwargs)
+        return {"status": "started", "job_id": "retry-job"}
+
+    monkeypatch.setattr(
+        "backend.api.task_preparation._start_question_preparation",
+        fake_start,
+    )
+
+    response = await retry_question_preparation(
+        task_id="question-task",
+        job_id="failed-question-job",
+        request=RetryQuestionPreparationRequest(
+            recognition_provider_id="provider-new",
+            expected_workflow_revision=8,
+        ),
+        background_tasks=BackgroundTasks(),
+        current=SimpleNamespace(id="question-owner"),
+        registry=MagicMock(),
+    )
+
+    assert response == {
+        "status": "started",
+        "job_id": "retry-job",
+        "reused_prepared_sources": True,
+    }
+    assert captured["allow_prepared_source_reuse"] is True
+    assert captured["request"].source_tokens == ["prepared-source-1"]
+    assert captured["request"].recognition_provider_id == "provider-new"
+    assert captured["request"].expected_workflow_revision == 8
 
 
 @pytest.mark.parametrize(
@@ -226,7 +291,7 @@ def test_question_preparation_capabilities_expose_ocr_images_but_not_test_images
     assert capabilities["reader"]["images"] is True
 
 
-def test_question_preparation_capabilities_hide_images_without_vision():
+def test_question_preparation_capabilities_keep_images_selectable_without_vision():
     owner_id = "score-no-vision-owner"
     task_id = "score-no-vision-task"
     _seed_question_task(owner_id, task_id)
@@ -240,7 +305,7 @@ def test_question_preparation_capabilities_hide_images_without_vision():
     )
 
     for role in ("problem", "reference_answer", "rubric"):
-        assert ".png" not in capabilities["source_roles"][role]["accepted_extensions"]
+        assert ".png" in capabilities["source_roles"][role]["accepted_extensions"]
     assert capabilities["source_roles"]["programming_tests"]["accepted_extensions"] == [
         ".pdf", ".txt", ".md", ".markdown", ".json"
     ]
@@ -348,6 +413,7 @@ async def test_source_image_uses_role_specific_normalized_vision_ocr_path(
     text, descriptor = await _read_source(
         file=upload,
         library_material_id=None,
+        stored_file_id=None,
         inline_text=None,
         owner_id="ocr-owner",
         registry=registry,
@@ -366,7 +432,7 @@ def test_scanned_programming_test_document_uses_test_case_ocr_prompt():
 
 
 @pytest.mark.asyncio
-async def test_vision_off_image_fails_before_reading_or_creating_operation(monkeypatch):
+async def test_missing_provider_stops_preflight_before_reading_or_creating_operation(monkeypatch):
     owner_id = "preflight-no-vision-owner"
     task_id = "preflight-no-vision-task"
     _seed_question_task(owner_id, task_id)
@@ -377,6 +443,8 @@ async def test_vision_off_image_fails_before_reading_or_creating_operation(monke
         headers=Headers({"content-type": "image/png"}),
     )
     registry = MagicMock()
+    registry.uses_shared_pool.return_value = True
+    registry.pick_default_id.return_value = None
     registry.pick_default.return_value = None
     registry.pick_vision.return_value = None
     create_operation = MagicMock(side_effect=AssertionError("must not enqueue"))
@@ -385,22 +453,22 @@ async def test_vision_off_image_fails_before_reading_or_creating_operation(monke
         create_operation,
     )
 
-    with pytest.raises(HTTPException) as exc:
-        await preflight_problem_source(
-            task_id=task_id,
-            file=upload,
-            library_material_id=None,
-            inline_text=None,
-            structure_mode="organized",
-            role="problem",
-            extraction_hint="",
-            save_to_library=False,
-            current=SimpleNamespace(id=owner_id),
-            registry=registry,
-        )
+    response = await preflight_problem_source(
+        task_id=task_id,
+        file=upload,
+        library_material_id=None,
+        inline_text=None,
+        structure_mode="organized",
+        role="problem",
+        extraction_hint="",
+        save_to_library=False,
+        recognition_provider_id=None,
+        current=SimpleNamespace(id=owner_id),
+        registry=registry,
+    )
 
-    assert exc.value.status_code == 422
-    assert exc.value.detail["code"] == "vision_provider_required"
+    assert response.status_code == 422
+    assert json.loads(response.body)["error"]["code"] == "no_provider_configured"
     assert stream.tell() == 0
     create_operation.assert_not_called()
 
@@ -436,6 +504,49 @@ async def test_vision_off_scanned_pdf_returns_stable_preflight_error():
         "role": "problem",
         "filename": "scanned.pdf",
         "recovery": "configure_vision_provider",
+    }
+
+
+@pytest.mark.asyncio
+async def test_selected_text_model_preserves_question_image_for_model_switch(
+    monkeypatch,
+):
+    upload = UploadFile(
+        file=io.BytesIO(PNG_1X1),
+        filename="questions.png",
+        headers=Headers({"content-type": "image/png"}),
+    )
+    provider = SimpleNamespace(
+        provider_id="text-provider",
+        supports_vision=False,
+    )
+    registry = MagicMock()
+    registry.pick_vision.return_value = None
+    saved = SimpleNamespace(id="stored-question-source")
+    monkeypatch.setattr(
+        "backend.api.task_preparation.save_file",
+        lambda **_kwargs: saved,
+    )
+
+    with pytest.raises(HTTPException) as exc:
+        await _read_source(
+            file=upload,
+            library_material_id=None,
+            inline_text=None,
+            owner_id="question-owner",
+            registry=registry,
+            role="problem",
+            provider=provider,
+            task_id="question-task",
+        )
+
+    assert exc.value.status_code == 422
+    assert exc.value.detail == {
+        "code": "provider_vision_not_supported",
+        "role": "problem",
+        "filename": "questions.png",
+        "recovery": "choose_another_provider",
+        "stored_file_id": "stored-question-source",
     }
 
 

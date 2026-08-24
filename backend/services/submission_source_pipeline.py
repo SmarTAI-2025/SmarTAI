@@ -4,6 +4,7 @@ from __future__ import annotations
 import hashlib
 import logging
 from dataclasses import dataclass
+from typing import Awaitable, Callable
 
 from fastapi.concurrency import run_in_threadpool
 
@@ -27,6 +28,7 @@ from backend.tools.file_processing import (
     extract_raw_files_from_archive,
     extract_text_from_upload,
     infer_upload_content_type,
+    inspect_baidu_ocr_upload,
 )
 
 
@@ -149,7 +151,27 @@ def failure_phase_for_code(code: str) -> str:
         return "result_persistence"
     if code in {
         "vision_provider_required",
+        "provider_vision_not_supported",
         "ocr_empty_result",
+        "ocr_credential_not_found",
+        "provider_permission_denied",
+        "provider_quota_exceeded",
+        "provider_unavailable",
+        "provider_submit_uncertain",
+        "provider_task_failed",
+        "provider_request_failed",
+        "provider_download_url_rejected",
+        "provider_result_unavailable",
+        "provider_result_too_large",
+        "ocr_input_invalid",
+        "ocr_unsupported_file",
+        "ocr_file_too_large",
+        "ocr_image_dimension_limit_exceeded",
+        "media_inspection_unavailable",
+        "media_inspection_busy",
+        "media_inspection_timeout",
+        "media_inspection_failed",
+        "pdf_page_limit_exceeded",
         "pdf_ocr_render_failed",
     }:
         return "ocr"
@@ -160,9 +182,10 @@ def failure_phase_for_code(code: str) -> str:
         "provider_unreachable",
         "provider_rate_limited",
         "provider_auth_failed",
+        "provider_model_not_found",
+        "provider_request_rejected",
         "provider_credentials_unavailable",
         "provider_model_or_endpoint_not_found",
-        "provider_request_rejected",
         "provider_upstream_unavailable",
         "provider_response_invalid",
         "provider_image_payload_invalid",
@@ -185,9 +208,10 @@ def _source_read_failure_phase(code: str, content_type: str) -> str:
             "provider_unreachable",
             "provider_rate_limited",
             "provider_auth_failed",
+            "provider_model_not_found",
+            "provider_request_rejected",
             "provider_credentials_unavailable",
             "provider_model_or_endpoint_not_found",
-            "provider_request_rejected",
             "provider_upstream_unavailable",
             "provider_response_invalid",
             "provider_image_payload_invalid",
@@ -198,6 +222,25 @@ def _source_read_failure_phase(code: str, content_type: str) -> str:
             "provider_endpoint_redirect_blocked",
             "provider_endpoint_protocol_mismatch",
             "provider_endpoint_response_too_large",
+            "ocr_credential_not_found",
+            "provider_permission_denied",
+            "provider_quota_exceeded",
+            "provider_unavailable",
+            "provider_submit_uncertain",
+            "provider_task_failed",
+            "provider_request_failed",
+            "provider_download_url_rejected",
+            "provider_result_unavailable",
+            "provider_result_too_large",
+            "ocr_input_invalid",
+            "ocr_unsupported_file",
+            "ocr_file_too_large",
+            "ocr_image_dimension_limit_exceeded",
+            "media_inspection_unavailable",
+            "media_inspection_busy",
+            "media_inspection_timeout",
+            "media_inspection_failed",
+            "pdf_page_limit_exceeded",
         }
         and (content_type.startswith("image/") or content_type == "application/pdf")
     ):
@@ -322,6 +365,13 @@ async def prepare_submission_sources(
     job_id: str,
     job_attempt: int,
     ocr_skill,
+    document_ocr_skill=None,
+    recovered_ocr_text_by_source: dict[str, str] | None = None,
+    blocked_ocr_source_ids: set[str] | None = None,
+    before_document_ocr: Callable[[str], Awaitable[None]] | None = None,
+    save_document_ocr: Callable[[str, str], Awaitable[None]] | None = None,
+    document_ocr_failed: Callable[[str, Exception], Awaitable[None]] | None = None,
+    vision_unavailable_code: str | None = None,
     reporter=None,
 ) -> list[PreparedSubmissionSource]:
     """Persist originals, then OCR/read each source without batch-wide collapse."""
@@ -442,15 +492,42 @@ async def prepare_submission_sources(
             continue
         if raw.content is None:
             raise RuntimeError("submission_source_persistence_failed")
+        document_ocr_checkpointed = False
         try:
-            text = await extract_text_from_upload(
-                raw.content,
-                raw.filename,
-                ocr_skill=ocr_skill,
-                purpose="submissions",
-                reporter=reporter,
-                content_type=raw.content_type,
-            )
+            if document_ocr_skill is not None:
+                recovered = (recovered_ocr_text_by_source or {}).get(source_id)
+                if recovered is not None:
+                    text = recovered
+                elif source_id in (blocked_ocr_source_ids or set()):
+                    raise RuntimeError("provider_submit_uncertain")
+                else:
+                    await inspect_baidu_ocr_upload(
+                        raw.content,
+                        raw.filename,
+                        content_type=raw.content_type,
+                    )
+                    if before_document_ocr is not None:
+                        await before_document_ocr(source_id)
+                        document_ocr_checkpointed = True
+                    result = await document_ocr_skill.recognize_document(
+                        raw.content,
+                        raw.filename,
+                        "submissions",
+                    )
+                    text = result.text
+                    if not text.strip():
+                        raise RuntimeError("ocr_empty_result")
+                    if save_document_ocr is not None:
+                        await save_document_ocr(source_id, text)
+            else:
+                text = await extract_text_from_upload(
+                    raw.content,
+                    raw.filename,
+                    ocr_skill=ocr_skill,
+                    purpose="submissions",
+                    reporter=reporter,
+                    content_type=raw.content_type,
+                )
             if not text.strip():
                 prepared.append(PreparedSubmissionSource(
                     source_id=source_id,
@@ -471,7 +548,25 @@ async def prepare_submission_sources(
                     text=text,
                 ))
         except Exception as exc:
+            if document_ocr_checkpointed and document_ocr_failed is not None:
+                try:
+                    await document_ocr_failed(source_id, exc)
+                except Exception as checkpoint_exc:
+                    logger.warning(
+                        "Submission OCR checkpoint cleanup failed; exception_type=%s",
+                        type(checkpoint_exc).__name__,
+                    )
             code = classify_background_error(exc, "submission_parse_failed")
+            if code == "vision_provider_required" and vision_unavailable_code:
+                code = vision_unavailable_code
+            retryable = is_retryable_background_error(code)
+            if (
+                document_ocr_checkpointed
+                and bool(getattr(exc, "submission_may_exist", True))
+            ):
+                if retryable:
+                    code = "provider_submit_uncertain"
+                retryable = False
             logger.warning(
                 "One submission source could not be read; code=%s exception_type=%s",
                 code,
@@ -485,6 +580,6 @@ async def prepare_submission_sources(
                 text=None,
                 pre_error_code=code,
                 failure_phase=_source_read_failure_phase(code, raw.content_type),
-                retryable=is_retryable_background_error(code),
+                retryable=retryable,
             ))
     return prepared

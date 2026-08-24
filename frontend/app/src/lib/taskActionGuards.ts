@@ -219,6 +219,8 @@ const BYOK_CODES = new Set([
   "recognition_provider_not_enabled",
   "provider_not_enabled",
   "provider_auth_failed",
+  "ocr_credential_not_found",
+  "provider_permission_denied",
   "vision_provider_required",
   "shared_pool_kb_requires_byok",
   "no_enabled_expert",
@@ -243,6 +245,14 @@ const FILE_CODES = new Set([
   "problem_source_token_limit_exceeded",
   "pdf_page_limit_exceeded",
   "pdf_character_limit_exceeded",
+  "ocr_input_invalid",
+  "ocr_unsupported_file",
+  "ocr_file_too_large",
+  "ocr_image_dimension_limit_exceeded",
+  "media_inspection_unavailable",
+  "media_inspection_busy",
+  "media_inspection_timeout",
+  "media_inspection_failed",
   "submission_source_unsupported",
   "submission_source_content_type_mismatch",
   "submission_source_empty",
@@ -294,6 +304,36 @@ export function classifyRecoverableError(
   const technicalDetails = buildTechnicalDetails(apiError.status, code, detail, context, locale);
   const retryAfterSeconds = apiError.retryAfterSeconds;
   const returnTo = context.returnTo?.trim();
+
+  if (code === "ocr_provider_grading_not_supported") {
+    return {
+      title: tx(locale, "该 OCR 服务不支持批改", "This OCR service does not support grading"),
+      description: tx(
+        locale,
+        "百度 Unlimited-OCR 只负责题目和作答转写，不会调用或伪装成批改模型。请返回批改设置并更换批改模型。",
+        "Baidu Unlimited-OCR only transcribes questions and submissions; it will not call or impersonate a grading model. Return to Grading Setup and choose a grading model.",
+      ),
+      actionLabel: tx(locale, "更换批改模型", "Choose another grading model"),
+      actionKind: "adjust_experts",
+      tone: "warning",
+      technicalDetails,
+    };
+  }
+
+  if (code === "provider_submit_uncertain") {
+    return {
+      title: tx(locale, "OCR 提交状态无法确认", "The OCR submission state is uncertain"),
+      description: tx(
+        locale,
+        "请求可能已经到达百度。为避免重复提交或重复计费，系统不会自动重试这份文件；请保留任务编号并让管理员先核对服务商状态。",
+        "The request may have reached Baidu. To avoid duplicate submission or billing, SmarTAI will not retry this file automatically. Keep the job ID and ask an administrator to verify the provider state first.",
+      ),
+      actionLabel: tx(locale, "刷新任务状态", "Refresh task state"),
+      actionKind: "refresh",
+      tone: "danger",
+      technicalDetails,
+    };
+  }
 
   if (code && GRADING_CONFIGURATION_CODES.has(code)) {
     return {
@@ -401,6 +441,21 @@ export function classifyRecoverableError(
     };
   }
 
+  if (code === "provider_vision_not_supported") {
+    return {
+      title: tx(locale, "当前识别模型不能读取图片/扫描件", "The current recognition model cannot read images or scans"),
+      description: tx(
+        locale,
+        "当前阶段选择的模型拒绝了图片输入。原文件和已完成步骤均已保留；请改选识别模型后重试。",
+        "The model selected for this stage rejected image input. The original file and completed steps are preserved; switch the recognition model and retry.",
+      ),
+      actionLabel: tx(locale, "更换识别模型后重试", "Switch recognition model and retry"),
+      actionKind: "retry",
+      tone: "warning",
+      technicalDetails,
+    };
+  }
+
   const providerConfigurationCopy = providerConfigurationErrorCopy(code, locale);
   if (providerConfigurationCopy) {
     return {
@@ -442,11 +497,11 @@ export function classifyRecoverableError(
   if (code === "vision_provider_required") {
     const byokReturnTo = context.returnTo?.trim();
     return {
-      title: tx(locale, "当前模型不支持图片 OCR", "The selected model cannot OCR images"),
+      title: tx(locale, "尚未选择可用的视觉模型", "No usable vision model is selected"),
       description: tx(
         locale,
-        "这份文件需要图像识别（OCR），但当前识别模型不支持图片输入。请在“模型与 BYOK”启用支持视觉输入的模型后重试，或上传可复制文字版文件。",
-        "This file needs image recognition (OCR), but the selected recognition model does not accept image input. Enable a vision-capable model in Models & BYOK and retry, or upload a text-based file.",
+        "这份文件需要图像识别（OCR），但当前阶段没有可用的视觉模型。请添加或启用支持视觉输入的模型后重试，或上传可复制文字版文件。",
+        "This file needs image recognition (OCR), but no usable vision model is available for this stage. Add or enable a vision-capable model and retry, or upload a text-based file.",
       ),
       actionLabel: tx(locale, "选择支持 OCR 的模型", "Choose an OCR-capable model"),
       actionHref: `/settings/byok${byokReturnTo ? `?returnTo=${encodeURIComponent(byokReturnTo)}` : ""}`,
@@ -770,6 +825,12 @@ function providerConfigurationErrorCopy(
   locale: Locale,
 ): Pick<RecoverableErrorInfo, "title" | "description"> | null {
   const copies: Record<string, [string, string, string, string]> = {
+    provider_model_not_found: [
+      "模型名称不可用",
+      "The model name is unavailable",
+      "服务商找不到当前模型，或当前 API Key 无权使用它。请核对模型名称或改选当前阶段的模型。",
+      "The provider could not find this model, or the current API key cannot access it. Check the model name or switch the model for this stage.",
+    ],
     provider_model_or_endpoint_not_found: [
       "模型名称或接口路径不存在",
       "The model or endpoint was not found",
@@ -787,6 +848,24 @@ function providerConfigurationErrorCopy(
       "The model service returned an invalid response",
       "请核对中转站文档与高级 API 协议；系统没有把异常响应当作任务结果。",
       "Check the relay documentation and Advanced API protocol. The invalid response was not accepted as a task result.",
+    ],
+    ocr_credential_not_found: [
+      "所选 OCR 凭据已不存在",
+      "The selected OCR credential no longer exists",
+      "返回模型与 BYOK 页面重新保存百度 OCR 的 AK/SK，然后重新选择识别服务。",
+      "Return to Models & BYOK, save the Baidu OCR AK/SK again, then reselect the recognition service.",
+    ],
+    provider_permission_denied: [
+      "OCR 账号没有服务权限",
+      "The OCR account lacks service permission",
+      "请在百度控制台确认已开通文档解析权限，或替换为有权限的 AK/SK。",
+      "Confirm Document Parsing access in the Baidu console or replace the AK/SK with an authorized pair.",
+    ],
+    provider_quota_exceeded: [
+      "OCR 额度已用完",
+      "The OCR quota is exhausted",
+      "请在百度控制台检查当前活动额度与用量，额度恢复后再重试。",
+      "Check the current campaign quota and usage in the Baidu console, then retry after quota is available.",
     ],
     provider_message_payload_not_supported: [
       "当前协议无法发送这类输入",
@@ -839,6 +918,12 @@ function providerTransientErrorCopy(
     return {
       title: tx(locale, "模型服务暂时不可用", "The model service is temporarily unavailable"),
       description: tx(locale, "模型服务返回了临时故障。任务资料已保留，请稍后重试或换用另一个已启用模型。", "The model service reported a temporary failure. Task data is preserved; retry later or use another enabled model."),
+    };
+  }
+  if (code === "provider_unavailable" || code === "provider_task_failed") {
+    return {
+      title: tx(locale, "OCR 服务暂时不可用", "The OCR service is temporarily unavailable"),
+      description: tx(locale, "原文件已保留，系统没有静默切换到其他服务。请稍后明确重试。", "The original is preserved and no alternate service was selected silently. Retry explicitly later."),
     };
   }
   if (code === "provider_endpoint_response_too_large") {

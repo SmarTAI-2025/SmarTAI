@@ -5,6 +5,7 @@ import type {
   ExpertMutationResponse,
   ExpertVerificationResponse,
   ProviderCatalogItem,
+  SetDefaultExpertResponse,
   UpdateExpertRequest,
 } from "@/types";
 
@@ -20,6 +21,10 @@ export function listExperts(): Promise<ExpertConfig[]> {
   return getJSON<ExpertConfig[]>("/experts/available");
 }
 
+export function listStageProviders(): Promise<ExpertConfig[]> {
+  return getJSON<ExpertConfig[]>("/experts/stage-options");
+}
+
 export function listProviderCatalog(): Promise<ProviderCatalogItem[]> {
   return getJSON<ProviderCatalogItem[]>("/experts/catalog");
 }
@@ -28,6 +33,12 @@ export function selectExpert(providerId: string, enabled: boolean): Promise<Expe
   return postJSON<ExpertMutationResponse>("/experts/select", {
     provider_id: providerId,
     enabled,
+  });
+}
+
+export function setDefaultExpert(providerId: string): Promise<SetDefaultExpertResponse> {
+  return putJSON<SetDefaultExpertResponse, { provider_id: string }>("/experts/default", {
+    provider_id: providerId,
   });
 }
 

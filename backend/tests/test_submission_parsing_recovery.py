@@ -62,6 +62,53 @@ async def test_submission_queue_persists_archive_and_has_no_request_task():
 
 
 @pytest.mark.asyncio
+async def test_submission_retry_republishes_only_for_durable_worker():
+    owner_id, task_id = _seed_task(with_question=True)
+    queued = task_facade.queue_task_submission_parsing(
+        task_id=task_id,
+        owner_id=owner_id,
+        filename="student.txt",
+        content=b"answer",
+        content_type="text/plain",
+        registry=_Registry(),
+    )
+    operation = workflow_repository.get_operation(
+        queued["job_id"], owner_id=owner_id
+    )
+    assert task_facade._fail_operation(
+        task_id,
+        owner_id,
+        operation.id,
+        operation.attempt,
+        "provider_timeout",
+    ) is True
+    workflow = workflow_repository.get_workflow(task_id, owner_id=owner_id)
+    background = _BackgroundTasks()
+
+    retried = await tasks.retry_submission_recognition_endpoint(
+        task_id=task_id,
+        job_id=operation.id,
+        request=tasks.RetrySubmissionRecognitionRequest(
+            recognition_provider_id=None,
+            expected_workflow_revision=workflow.workflow_revision,
+        ),
+        background_tasks=background,
+        current=type("User", (), {"id": owner_id})(),
+        registry=_Registry(),
+    )
+
+    assert retried["status"] == "started"
+    assert retried["reused_original_upload"] is True
+    assert background.calls == []
+    retry_operation = workflow_repository.get_operation(
+        operation.id, owner_id=owner_id
+    )
+    assert retry_operation.status == "pending"
+    assert retry_operation.attempt == operation.attempt + 1
+    assert retry_operation.payload["recognition_provider_id"] == "test-provider"
+
+
+@pytest.mark.asyncio
 async def test_fresh_submission_worker_recovers_archive_and_commits_once(monkeypatch):
     owner_id, task_id = _seed_task(with_question=True)
     content = _archive_bytes()

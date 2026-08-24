@@ -6,10 +6,21 @@ import { I18nProvider } from "@/i18n/I18nProvider";
 import { ExpertsPage } from "./ExpertsPage";
 
 const addExpert = vi.fn();
+const saveBaiduOCRCredentials = vi.fn();
+const verifyBaiduOCRCredentials = vi.fn();
+const deleteBaiduOCRCredentials = vi.fn();
 
 const hookState = vi.hoisted(() => ({
   catalog: [] as Array<Record<string, unknown>>,
   experts: [] as Array<Record<string, unknown>>,
+  baiduOCR: {
+    credential_id: null as string | null,
+    provider_type: "baidu_unlimited_ocr" as const,
+    credentials_configured: false,
+    verification_status: "not_configured",
+    last_checked_at: null as string | null,
+    verification_error_code: null as string | null,
+  },
 }));
 
 vi.mock("@/api/hooks", () => ({
@@ -18,8 +29,27 @@ vi.mock("@/api/hooks", () => ({
   useAddExpertKey: () => ({ isPending: false, mutateAsync: addExpert }),
   useUpdateExpert: () => ({ isPending: false, mutateAsync: vi.fn() }),
   useSelectExpert: () => ({ isPending: false, mutateAsync: vi.fn() }),
+  useSetDefaultExpert: () => ({ isPending: false, mutateAsync: vi.fn() }),
   useVerifyExpert: () => ({ isPending: false, mutateAsync: vi.fn() }),
   useRemoveExpert: () => ({ isPending: false, mutateAsync: vi.fn() }),
+  useBaiduOCRConfiguration: () => ({
+    data: hookState.baiduOCR,
+    error: null,
+    isLoading: false,
+    isError: false,
+  }),
+  useSaveBaiduOCRCredentials: () => ({
+    isPending: false,
+    mutateAsync: saveBaiduOCRCredentials,
+  }),
+  useVerifyBaiduOCRCredentials: () => ({
+    isPending: false,
+    mutateAsync: verifyBaiduOCRCredentials,
+  }),
+  useDeleteBaiduOCRCredentials: () => ({
+    isPending: false,
+    mutateAsync: deleteBaiduOCRCredentials,
+  }),
 }));
 
 function renderPage() {
@@ -71,7 +101,18 @@ describe("ExpertsPage editable vendor Base URL", () => {
     window.localStorage.clear();
     hookState.catalog = providerCatalog(true);
     hookState.experts = [];
+    hookState.baiduOCR = {
+      credential_id: null,
+      provider_type: "baidu_unlimited_ocr",
+      credentials_configured: false,
+      verification_status: "not_configured",
+      last_checked_at: null,
+      verification_error_code: null,
+    };
     addExpert.mockResolvedValue({ status: "success", provider_id: "pc-test" });
+    saveBaiduOCRCredentials.mockResolvedValue({ status: "success" });
+    verifyBaiduOCRCredentials.mockResolvedValue({ status: "credentials_verified" });
+    deleteBaiduOCRCredentials.mockResolvedValue({ status: "success" });
   });
 
   it("uses the official DeepSeek URL by default and saves USTC without extra gates", async () => {
@@ -184,5 +225,50 @@ describe("ExpertsPage editable vendor Base URL", () => {
 
     expect(screen.getByLabelText(/API Base URL/)).toBeDisabled();
     expect(screen.getByLabelText(/API Base URL/)).toHaveValue("https://api.deepseek.com/v1");
+  });
+
+  it("saves Baidu OCR AK/SK without echoing or persisting either secret", async () => {
+    const user = userEvent.setup();
+    renderPage();
+
+    await user.type(screen.getByLabelText("AK"), "fake-baidu-ak");
+    await user.type(screen.getByLabelText("SK"), "fake-baidu-sk");
+    await user.click(screen.getByRole("button", { name: "保存凭据" }));
+
+    await waitFor(() => expect(saveBaiduOCRCredentials).toHaveBeenCalledWith({
+      api_key: "fake-baidu-ak",
+      secret_key: "fake-baidu-sk",
+    }));
+    expect(screen.getByLabelText("AK")).toHaveValue("");
+    expect(screen.getByLabelText("SK")).toHaveValue("");
+    expect(screen.queryByDisplayValue("fake-baidu-ak")).not.toBeInTheDocument();
+    expect(screen.queryByDisplayValue("fake-baidu-sk")).not.toBeInTheDocument();
+    expect(window.localStorage.getItem("fake-baidu-ak")).toBeNull();
+    expect(window.localStorage.getItem("fake-baidu-sk")).toBeNull();
+  });
+
+  it("shows only Baidu OCR metadata and supports verify and confirmed delete", async () => {
+    hookState.baiduOCR = {
+      credential_id: "ocr-record-1",
+      provider_type: "baidu_unlimited_ocr",
+      credentials_configured: true,
+      verification_status: "credentials_verified",
+      last_checked_at: "2026-08-24T12:00:00Z",
+      verification_error_code: null,
+    };
+    const user = userEvent.setup();
+    renderPage();
+
+    expect(screen.getByText("ocr-record-1")).toBeInTheDocument();
+    expect(screen.getByText("AK/SK 已验证")).toBeInTheDocument();
+    expect(screen.getByLabelText("替换 AK")).toHaveValue("");
+    expect(screen.getByLabelText("替换 SK")).toHaveValue("");
+
+    await user.click(screen.getByRole("button", { name: "验证 AK/SK" }));
+    await waitFor(() => expect(verifyBaiduOCRCredentials).toHaveBeenCalledWith("ocr-record-1"));
+
+    await user.click(screen.getByRole("button", { name: "删除凭据" }));
+    await user.click(screen.getByRole("button", { name: "再次点击确认删除" }));
+    await waitFor(() => expect(deleteBaiduOCRCredentials).toHaveBeenCalledWith("ocr-record-1"));
   });
 });

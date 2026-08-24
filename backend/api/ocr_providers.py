@@ -184,6 +184,24 @@ def get_current_baidu_unlimited_ocr_credential(
     return _metadata_response(metadata)
 
 
+@router.get("/configuration")
+def get_baidu_unlimited_ocr_configuration(
+    current: User = Depends(require_teacher),
+):
+    """Return a stable empty-or-configured view for the BYOK settings page."""
+    metadata = get_current_baidu_unlimited_ocr_credential_metadata(current.id)
+    if metadata is None:
+        return {
+            "provider_type": BAIDU_UNLIMITED_OCR_PROVIDER_TYPE,
+            "credentials_configured": False,
+            "credential_id": None,
+            "verification_status": "not_configured",
+            "last_checked_at": None,
+            "verification_error_code": None,
+        }
+    return _metadata_response(metadata)
+
+
 @router.get("/{credential_id}")
 def get_baidu_unlimited_ocr_credential(
     credential_id: str,
