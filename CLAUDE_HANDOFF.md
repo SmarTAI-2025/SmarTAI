@@ -1,5 +1,268 @@
 # Claude Collaboration Handoff
 
+## Week 2 final delivery (2026-08-13)
+
+The database Week 2 scope is implemented on
+`codex/db-problem-extraction-recovery`, based on `b8f619a` / stacked PR #35.
+This branch completes the concrete recovery cutover for problem extraction,
+submission recognition, material import, and AI completion on top of the W2-1
+operation leases and W2-2 worker lifecycle.
+
+### Final contract
+
+- Upload bytes and large intermediate text/results live in owner- and
+  assignment-scoped stored files; operation JSON contains bounded metadata and
+  artifact IDs only.
+- All four operation types publish through `preparing -> pending`, so workers
+  cannot claim before source persistence and workflow activation are complete.
+  Abandoned publication attempts become retryable after a short TTL.
+- Durable handlers reconstruct owner-scoped provider registries, discover
+  deterministic artifacts saved before checkpoints, and avoid repeating
+  completed provider stages after process death.
+- Checkpoints, progress, success, failure, source outcomes, normalized question
+  or submission revisions, and workflow terminal transitions are guarded by
+  operation attempt plus live lease token. Submission source outcomes commit in
+  the same transaction as normalized submission revisions.
+- Request-memory `BackgroundTasks` dispatch is removed for the four migrated
+  operation types; one shared `WorkflowWorker` handler map performs dispatch.
+
+### Review fixes
+
+- Added short-lived `preparing` publication leases and atomic publication for
+  material/AI jobs, closing the worker-before-activation race.
+- Moved successful and failed submission outcomes into lease-fenced operation
+  transactions so stale workers cannot publish per-source state.
+- Added deterministic result artifacts for submission, material import, and AI
+  completion, plus owner/assignment validation and bounded JSON validation on
+  direct atomic write paths.
+- Prevented Alembic test configuration from disabling already-imported loggers
+  with `disable_existing_loggers=False`.
+
+### Final verification
+
+- `python -m pytest backend/tests -q`:
+  `467 passed, 8 skipped, 69 warnings in 589.57s`.
+- Targeted worker/recovery/lease/checkpoint/source/storage/migration suite:
+  `166 passed, 64 warnings in 224.83s`.
+- SQLite migration round trip on an isolated temporary database:
+  `upgrade head -> downgrade 0006_operation_checkpoints -> upgrade head` passed;
+  final revision `0007_operation_leases (head)`.
+- `python -m alembic heads`: `0007_operation_leases (head)`.
+- `git diff --check`: passed; Git emitted only CRLF conversion notices.
+- `SMARTAI_TEST_POSTGRES_URL` is not configured locally. The 8 live PostgreSQL
+  tests were skipped; dialect-rendered PostgreSQL DDL and migration tests ran in
+  the full suite. CI must run the live PostgreSQL service tests before merge.
+
+### Delivery dependencies
+
+- Stack: PR #17 -> PR #18 -> PR #34 -> PR #35 -> this Week 2 recovery PR.
+- This branch adds no migration beyond `0007`; rollback behavior is inherited
+  from PR #34 and was exercised in the migration round trip.
+- PR #23 and PR #26 may conflict in `backend/services/task_facade.py`, API
+  background-dispatch removal, and related workflow tests. Rebase by preserving
+  this branch's owner predicates, lease fencing, artifact boundaries, and atomic
+  terminal commits while resolving their product/UI semantics separately.
+
+## Current Task (2026-08-13): DB-W2-3 problem extraction recovery
+
+Implement the first concrete durable workflow handler on top of PR #35. Queueing
+must persist the owner-scoped source object before dispatch; a fresh worker must
+recover from database and object storage without request-memory bytes; safe paid
+stages must reuse durable artifacts; all checkpoint, success, and failure writes
+must be fenced by attempt plus lease token. Remove request `BackgroundTasks`
+dispatch only after restart, owner-isolation, stale-lease, and replay tests pass.
+
+The next stacked branch will handle submission parsing, followed by the two
+DB-W2-4 auxiliary operations. Codex is implementing directly because repeated
+local Claude Code attempts recorded below timed out without a usable handoff;
+retrying that same blocked route would prevent completion.
+
+## Week 2 umbrella task
+
+Complete DB-W2-1 through DB-W2-4 from
+`active_beta_launch/active_beta_launch/数据库持久化与任务恢复工作安排.md`.
+The detailed implementation plan is
+`docs/superpowers/plans/2026-08-13-database-week2-recovery.md`.
+
+### Baseline and delivery
+
+- Worktree: `D:\project-of-python\Teacher\SmarTAI\.worktrees\db-operation-leases`
+- Current branch: `codex/db-operation-leases`
+- Baseline: `6a0f76b`, the head of open stacked PR #18.
+- PR #18 depends on PR #17; do not rebase this work directly onto `main` until
+  those dependencies merge.
+- Deliver Week 2 as sequential commits/stacked branches. Do not commit or push;
+  Codex will review, verify, commit, push, and create PRs.
+- Preserve unrelated work and do not modify root `render-requirements.txt` or
+  untracked `active_beta_launch/` content.
+
+### Mandatory scope and process
+
+- Execute only the plan's current task when Codex names one.
+- Use TDD: add the focused test, run it and record the intended RED, then make
+  the smallest implementation and record GREEN.
+- Reuse `workflow_operations`, normalized repositories, stored-file metadata,
+  and object storage. Never create another JobStore/TaskStore or put original
+  bytes, full OCR text, raw model responses, or provider keys in operation JSON.
+- Keep owner predicates, attempt fencing, lease-token fencing, bounded JSON,
+  idempotent commits, and stable error codes explicit.
+- Do not change OCR output semantics, student identity/matching rules, grading
+  semantics, frontend behavior, quota policy, or public API meaning.
+- PR #23 and PR #26 overlap `task_facade.py` and tests. Do not copy their
+  unmerged business behavior into this branch; report the exact conflict/rebase
+  points instead.
+
+### Current implementation assignment: DB-W2-2A worker core only
+
+Implement only the worker-core half of Task 2 from the Week 2 plan.
+The current branch is `codex/db-workflow-worker`, based on W2-1 commit
+`740bf02` / PR #34. Allowed production changes are focused settings in
+`backend/config.py` and a single-purpose `backend/services/workflow_worker.py`;
+allowed tests are `backend/tests/test_workflow_worker.py`. Do not modify
+`backend/main.py` in this assignment. Do not register any of the four
+production operation types yet:
+their handlers do not become durable until W2-3/W2-4. Tests may use synthetic
+handler names. Do not modify `task_facade.py`, OCR/Agent code, or public APIs.
+
+Implement a small `WorkflowWorker` with an explicit immutable handler mapping,
+one poll/tick API, a continuous run API, per-claim heartbeat lifecycle, bounded
+in-flight task tracking, and stop/shutdown APIs. It must poll only registered
+types, tolerate another worker winning a listed row, stop handler mutation on
+`LeaseLost`, map handler failures without exposing payloads, cancel/await its
+own tasks on shutdown, and never bulk-clear database leases. Keep the API easy
+for a later FastAPI lifespan wrapper. Do not implement that wrapper now.
+
+Record modified files, RED/GREEN commands and results, design concerns, and
+remaining verification gaps in a new `Claude -> Codex (DB-W2-2)` section.
+
+## Claude -> Codex (DB-W2-2A worker core)
+
+Claude Code produced the settings, worker core, and focused tests, but its
+non-interactive command again reached the outer timeout before returning a
+summary. Codex stopped the orphaned process and reviewed the implementation.
+
+### Codex review corrections
+
+- Corrected the checkpoint test: terminal completion is itself checkpoint
+  revision 3, not revision 2.
+- Made shutdown bounded with `workflow_shutdown_seconds`; handlers that swallow
+  cancellation leave their database lease to expire instead of blocking app
+  shutdown indefinitely.
+- A heartbeat infrastructure error now fences/cancels the handler once the
+  locally confirmed lease deadline passes. The worker no longer continues paid
+  work indefinitely when it cannot prove lease ownership.
+- Removed the worker's reverse import of private `task_facade._SAFE_ERROR_CODES`.
+  Typed `DomainError` codes remain stable; unexpected exceptions use
+  `workflow_failed` without importing the facade or logging exception payloads.
+
+### Verification
+
+- Review RED command for bounded shutdown, uncertain heartbeat expiry, and
+  facade independence: `3 failed` for the intended missing behaviors.
+- Same focused command after fixes: `3 passed in 3.10s`.
+- `python -m pytest backend/tests/test_workflow_worker.py -q`:
+  `26 passed in 28.94s`.
+- `python -m pytest backend/tests/test_workflow_operation_leases.py backend/tests/test_workflow_operation_checkpoints.py backend/tests/test_task_background_workflows.py -q`:
+  `65 passed in 86.18s`.
+- `git diff --check`: passed; only CRLF conversion notices were emitted.
+
+W2-2B FastAPI lifespan wiring is intentionally not included in this core
+commit. No production operation handler is registered yet.
+
+## Codex verification (DB-W2-2B application lifecycle)
+
+The application now starts one empty-handler `WorkflowWorker` loop per process
+and stops it before bounded worker shutdown. Because the handler mapping is
+empty, this commit cannot claim any production operation. Shutdown never calls
+`release_operation`; active leases are left to expire.
+
+- Lifecycle RED: `test_app_starts_and_stops_empty_workflow_worker` failed
+  because no worker was constructed.
+- Lifecycle GREEN: `python -m pytest backend/tests/test_workflow_worker_lifecycle.py -q`
+  -> `2 passed`.
+- Combined worker/app/grading regression:
+  `python -m pytest backend/tests/test_workflow_worker.py backend/tests/test_workflow_worker_lifecycle.py backend/tests/test_auth_persistence.py backend/tests/test_grading_run_lifecycle.py -q`
+  -> `69 passed, 30 warnings in 91.33s`.
+
+The warnings are FastAPI's `on_event` deprecation notices. The repository
+already uses `on_event` for sandbox and grading worker lifecycle; converting
+all lifecycle hooks to a lifespan context is deferred to a focused integration
+cleanup rather than mixed into DB-W2-2.
+
+### Codex review fixes required after timed-out first pass
+
+The first Claude invocation timed out while tests were still running and did
+not write its required summary. Preserve the useful implementation, but fix
+these issues with focused RED tests before declaring DB-W2-1 complete:
+
+1. `claim_operation` currently treats a live lease held by the same
+   `worker_id` as claimable and rotates its token. Two concurrent coroutines in
+   one process can therefore both receive a successful claim. Any live lease,
+   including one with the same worker ID, must reject a second claim; only an
+   unleased or expired row may be claimed/reclaimed.
+2. The lease consistency check allows null owner/token with non-null expiry or
+   heartbeat. Tighten it so an inactive lease has all four lease fields null,
+   while an active lease has owner, token, expiry, and heartbeat non-null.
+3. Validate non-empty bounded `worker_id` and `lease_token` inputs before SQL,
+   using stable validation codes rather than leaking database/string-length
+   failures. Add boundary tests.
+4. Run the focused tests in a command that terminates; diagnose the previous
+   hang if it repeats. Record exact RED and GREEN outputs plus all modified
+   files and the live-PostgreSQL skip/result in `Claude -> Codex (DB-W2-1)`.
+
+Do not start DB-W2-2, commit, or push.
+
+## Claude -> Codex (DB-W2-1)
+
+Both non-interactive Claude Code invocations wrote their changes to disk but
+hit the outer 15-minute and 10-minute command timeouts before returning a
+final response. Codex stopped the orphaned task processes, reviewed the diff,
+and performed independent verification. The missing Claude final response is
+a process gap; no implementation result is inferred from it.
+
+### Implemented files
+
+- `backend/db/migrations/versions/0008_operation_leases.py`
+- `backend/db/workflow_repository.py`
+- `backend/tests/test_workflow_operation_leases.py`
+- `backend/tests/test_migration_roundtrip.py`
+- `backend/tests/test_postgres_integration.py`
+
+The change adds a four-field operation lease with a consistency constraint,
+claim index, random token rotation on reclaim, atomic claim/heartbeat/release,
+bounded claim polling, and attempt-plus-token fencing for checkpoint and
+terminal writes. New attempts clear all lease state.
+
+### Codex review correction
+
+The first pass allowed a live lease to be claimed again by the same
+`worker_id`. Codex rejected that behavior because two coroutines in one process
+share a worker ID and could both receive success. The corrected predicate
+allows only unleased or expired rows; focused tests cover sequential and
+concurrent same-worker claims. The lease check was also tightened so all four
+lease fields are either null or non-null, and worker/token inputs now use
+stable validation errors.
+
+### Independent verification
+
+- `python -m pytest backend/tests/test_workflow_operation_leases.py -q`:
+  `25 passed in 21.60s`.
+- `python -m pytest backend/tests/test_workflow_operation_checkpoints.py backend/tests/test_workflow_source_outcomes.py backend/tests/test_task_background_workflows.py backend/tests/test_migration_roundtrip.py -q`:
+  `79 passed, 34 warnings in 120.70s`; warnings are the existing Alembic
+  `path_separator` deprecation warning.
+- `python -m pytest backend/tests/test_postgres_integration.py -q -rs`:
+  `8 skipped`; `SMARTAI_TEST_POSTGRES_URL` is not configured locally.
+- `python -m alembic heads`: `0008_operation_leases (head)` after integration
+  with the source-outcome diagnostics migration already on `main`.
+- `git diff --check`: passed; only CRLF conversion notices for this handoff
+  file were emitted by subsequent diff commands.
+
+### Remaining gap
+
+The live PostgreSQL one-winner and same-worker fencing tests were added but
+could not run locally. GitHub Actions or a configured PostgreSQL test service
+must execute them before merge. W2-2 is not included in this change.
+
 ## Current Task
 
 Fix the three failed GitHub Actions jobs for commit
@@ -198,4 +461,3 @@ were changed. A live PostgreSQL service and Playwright browser run were not
 available locally (Docker is unavailable); the PostgreSQL DDL is covered by
 the dialect-rendered regression test and the E2E readiness command is covered
 by the workflow regression test.
-

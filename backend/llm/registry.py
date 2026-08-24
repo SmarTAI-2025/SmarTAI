@@ -15,13 +15,40 @@ from datetime import datetime, timezone
 from typing import Dict, List, Optional, Any
 from threading import Lock
 
-from fastapi import Depends, HTTPException
+from fastapi import Depends, HTTPException, status
 
 from backend.config import settings
 from backend.models import ProviderConfig
 from backend.llm.providers import BaseProvider, build_provider
 
 logger = logging.getLogger(__name__)
+
+
+def provider_encryption_not_configured_error(
+    *,
+    api_key_was_submitted: bool = False,
+) -> HTTPException:
+    """Return the stable, environment-safe BYOK master-key error."""
+    if settings.runtime_environment == "production":
+        message = (
+            "Service configuration is temporarily unavailable. Contact an "
+            "administrator."
+        )
+    else:
+        message = (
+            "Server BYOK encryption is not configured. Set "
+            "SMARTAI_PROVIDER_ENCRYPTION_KEY to a private random value and "
+            "restart the backend."
+        )
+    if api_key_was_submitted:
+        message = f"{message} This API key was not saved."
+    return HTTPException(
+        status.HTTP_503_SERVICE_UNAVAILABLE,
+        detail={
+            "code": "provider_encryption_not_configured",
+            "message": message,
+        },
+    )
 
 
 def _iso_utc_timestamp(value: object) -> str | None:
@@ -448,7 +475,16 @@ def get_expert_registry() -> ExpertRegistry:
 
 def _build_scoped_registry(current) -> ExpertRegistry:
     owner_id = getattr(current, "id", None) or "anonymous"
-    if current is None or not settings.provider_encryption_key:
+    if current is None:
+        return ExpertRegistry(shared_owner_id=owner_id)
+    if not settings.provider_encryption_key:
+        from backend.db.provider_repository import has_provider_configs
+
+        # Do not make existing BYOK records disappear and then silently route
+        # the same user's request through the shared provider pool. Checking
+        # record existence does not require decrypting or exposing a secret.
+        if has_provider_configs(current.id):
+            raise provider_encryption_not_configured_error()
         return ExpertRegistry(shared_owner_id=owner_id)
     try:
         from backend.db.provider_repository import list_provider_configs

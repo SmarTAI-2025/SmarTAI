@@ -251,13 +251,13 @@ const CODE_SCORE_RULES: readonly [CodeLanguage, RegExp, number][] = [
 ];
 
 const TOKEN_CLASSES: Record<Exclude<TokenKind, "plain">, string> = {
-  keyword: "font-semibold text-violet-700 dark:text-violet-300",
-  type: "text-sky-700 dark:text-sky-300",
-  string: "text-emerald-700 dark:text-emerald-300",
-  comment: "italic text-slate-500 dark:text-slate-400",
-  number: "text-amber-700 dark:text-amber-300",
-  function: "text-blue-700 dark:text-blue-300",
-  operator: "text-rose-600 dark:text-rose-300",
+  keyword: "font-semibold text-[#cf222e]",
+  type: "text-[#8250df]",
+  string: "text-[#0a3069]",
+  comment: "italic text-[#57606a]",
+  number: "text-[#0550ae]",
+  function: "text-[#6639ba]",
+  operator: "text-[#cf222e]",
 };
 
 export const SyntaxHighlightedCode = memo(function SyntaxHighlightedCode({
@@ -279,16 +279,20 @@ export const SyntaxHighlightedCode = memo(function SyntaxHighlightedCode({
     : LANGUAGE_LABELS[presentation.language];
 
   return (
-    <div data-code-language={presentation.language}>
+    <div
+      data-code-language={presentation.language}
+      data-code-theme="github-light"
+      className="rounded-[8px] border border-[#d0d7de] bg-[#f6f8fa] p-3 text-[#24292f] shadow-sm"
+    >
       <div className="mb-2 flex justify-end">
         <span
           aria-label={tx(locale, `代码语言：${languageLabel}`, `Code language: ${languageLabel}`)}
-          className="rounded-full border bg-background px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground"
+          className="rounded-full border border-[#d0d7de] bg-white px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-[#57606a]"
         >
           {languageLabel}
         </span>
       </div>
-      <pre className="overflow-x-auto whitespace-pre font-mono text-xs leading-6 text-foreground">
+      <pre className="overflow-x-auto whitespace-pre font-mono text-xs leading-6 text-[#24292f]">
         <code>{renderTokens(tokens)}</code>
       </pre>
     </div>
@@ -329,10 +333,72 @@ function prepareCode(code: string, languageHint: string) {
 }
 
 function unwrapCodeFence(value: string): { code: string; language: string } {
-  const normalized = value.replace(/\r\n?/gu, "\n").trimEnd();
+  const normalized = normalizeCodeLineBreaks(value).replace(/\r\n?/gu, "\n").trimEnd();
   const match = normalized.match(/^\s*(```|~~~)\s*([^\n`]*)\n([\s\S]*?)\n\1\s*$/u);
   if (!match) return { code: normalized, language: "" };
   return { code: match[3], language: match[2].trim().split(/\s+/u)[0] ?? "" };
+}
+
+export function normalizeCodeLineBreaks(value: string): string {
+  if (!value.includes("\\n") && !value.includes("\\r")) return value;
+
+  const output: string[] = [];
+  let index = 0;
+  let delimiter = "";
+  while (index < value.length) {
+    if (delimiter) {
+      if (value.startsWith(delimiter, index)) {
+        output.push(delimiter);
+        index += delimiter.length;
+        delimiter = "";
+        continue;
+      }
+      if (value[index] === "\\" && index + 1 < value.length) {
+        output.push(value.slice(index, index + 2));
+        index += 2;
+        continue;
+      }
+      output.push(value[index] ?? "");
+      index += 1;
+      continue;
+    }
+
+    const character = value[index] ?? "";
+    if (character === "'" || character === '"' || character === "`") {
+      delimiter = character !== "`" && value.startsWith(character.repeat(3), index)
+        ? character.repeat(3)
+        : character;
+      output.push(delimiter);
+      index += delimiter.length;
+      continue;
+    }
+
+    const escapedLineBreakEnd = escapedCodeLineBreakEnd(value, index);
+    if (escapedLineBreakEnd !== null) {
+      output.push("\n");
+      index = escapedLineBreakEnd;
+      continue;
+    }
+
+    output.push(character);
+    index += 1;
+  }
+  return output.join("");
+}
+
+function escapedCodeLineBreakEnd(value: string, index: number): number | null {
+  if (value[index] !== "\\") return null;
+  let cursor = index;
+  while (value[cursor] === "\\") cursor += 1;
+  if (![1, 2].includes(cursor - index) || cursor >= value.length) return null;
+  if (value[cursor] === "n") return cursor + 1;
+  if (value[cursor] !== "r") return null;
+
+  const newlineSlashes = cursor + 1;
+  let newlineMarker = newlineSlashes;
+  while (value[newlineMarker] === "\\") newlineMarker += 1;
+  if (![1, 2].includes(newlineMarker - newlineSlashes)) return null;
+  return value[newlineMarker] === "n" ? newlineMarker + 1 : null;
 }
 
 function normalizeLanguage(value: string): CodeLanguage | null {

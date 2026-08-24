@@ -1,7 +1,8 @@
-import { ArrowDown, ArrowUp, ArrowUpDown, CheckCircle2, ChevronRight, Filter, Search, X } from "lucide-react";
+import { ArrowDown, ArrowUp, ArrowUpDown, CheckCircle2, ChevronRight, Filter, X } from "lucide-react";
 import { useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 import { Link, Navigate, useParams, useSearchParams } from "react-router-dom";
 import { useTask } from "@/api/hooks/tasks";
+import { SmarTAIMascot } from "@/components/brand/SmarTAIMascot";
 import { NewTaskStepper } from "@/components/new-task/NewTaskStepper";
 import { useI18n } from "@/i18n/I18nProvider";
 import { cn } from "@/lib/cn";
@@ -141,10 +142,11 @@ export function QuestionPreparationOverviewPage() {
           <RiskMetric label={tx(locale, "解析异常", "Parse Anomalies")} value={metrics.anomalies} tone="accent" />
         </dl>
 
-        <label className="relative mt-4 block">
-          <span className="sr-only">{tx(locale, "SmarTAI 智能筛选题目资料", "SmarTAI Smart filter for question materials")}</span>
-          <Search aria-hidden="true" className="pointer-events-none absolute left-4 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-          <input
+        <div className="mt-4 flex items-center gap-2">
+          <SmarTAIMascot variant="thinking" size="xs" />
+          <label className="relative min-w-0 flex-1">
+            <span className="sr-only">{tx(locale, "SmarTAI 智能筛选题目资料", "SmarTAI Smart filter for question materials")}</span>
+            <input
             type="text"
             inputMode="search"
             value={query}
@@ -180,9 +182,10 @@ export function QuestionPreparationOverviewPage() {
               }
             }}
             placeholder={tx(locale, "SmarTAI 智能搜索：题号、题型、资料状态或风险原因", "SmarTAI Smart Search: question, type, material status, or risk")}
-            className="h-12 w-full rounded-[10px] border bg-card pl-11 pr-4 text-[13px] text-foreground outline-none placeholder:text-muted-foreground focus:border-primary focus:ring-2 focus:ring-primary/15"
-          />
-        </label>
+            className="h-12 w-full rounded-[10px] border bg-card pl-4 pr-4 text-[13px] text-foreground outline-none placeholder:text-muted-foreground focus:border-primary focus:ring-2 focus:ring-primary/15"
+            />
+          </label>
+        </div>
 
         <div className="mt-4 overflow-hidden rounded-[10px] border bg-card">
           {taskQuery.isLoading ? (

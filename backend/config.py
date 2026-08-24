@@ -14,6 +14,8 @@ from pydantic_settings import BaseSettings
 class Settings(BaseSettings):
     """Application settings, loaded from env vars."""
 
+    runtime_environment: Literal["development", "test", "production"] = "development"
+
     # ─── Engine toggle (v1 = old routers, v2 = new agents/skills/tools) ────────
     grading_engine: Literal["v1", "v2"] = "v2"
 
@@ -158,6 +160,31 @@ class Settings(BaseSettings):
     # How often the poller looks for queued runs to claim.
     grading_poll_seconds: int = int(os.getenv("SMARTAI_GRADING_POLL_SECONDS", "5"))
 
+    # ─── Workflow operation worker (DB-W2-2) ────────────────────────────────
+    # Stable per-process identity used as the operation lease owner. Multiple
+    # processes each get their own id; the DB lease predicate makes concurrent
+    # claims safe. A claimed operation lease is only held by this id.
+    workflow_worker_id: str = os.getenv(
+        "SMARTAI_WORKFLOW_WORKER_ID", f"workflow-{os.getpid()}"
+    )
+    # How long a claimed workflow operation lease stays valid before another
+    # worker may reclaim it.
+    workflow_lease_seconds: int = int(os.getenv("SMARTAI_WORKFLOW_LEASE_SECONDS", "300"))
+    # How often a worker renews a claim's lease while its handler runs.
+    workflow_heartbeat_seconds: int = int(os.getenv("SMARTAI_WORKFLOW_HEARTBEAT_SECONDS", "60"))
+    # How often the poller looks for claimable workflow operations.
+    workflow_poll_seconds: int = int(os.getenv("SMARTAI_WORKFLOW_POLL_SECONDS", "5"))
+    # Maximum rows the poller claims in one tick.
+    workflow_claim_batch_size: int = int(os.getenv("SMARTAI_WORKFLOW_CLAIM_BATCH_SIZE", "10"))
+    # Maximum handlers running concurrently across the whole worker. Polling
+    # stops claiming new rows once this many dispatches are in flight.
+    workflow_max_in_flight: int = int(os.getenv("SMARTAI_WORKFLOW_MAX_IN_FLIGHT", "4"))
+    # Maximum time application shutdown waits for worker-owned tasks after
+    # cancellation. Leases are left to expire when a handler ignores cancel.
+    workflow_shutdown_seconds: float = float(
+        os.getenv("SMARTAI_WORKFLOW_SHUTDOWN_SECONDS", "10")
+    )
+
     # ─── OCR / vision ingest ───────────────────────────────────────────────────
     ocr_default_provider: Literal["llm_vision", "mathpix"] = "llm_vision"
     ocr_max_pdf_pages: int = 30
@@ -198,10 +225,10 @@ class Settings(BaseSettings):
     # Stable master key for encrypting user BYOK provider credentials. It must
     # come from the process environment/secret manager and never from source
     # control or the database.
-    provider_encryption_key: str = os.getenv("SMARTAI_PROVIDER_ENCRYPTION_KEY", "smartai-dev-provider-key-change-in-prod")
+    provider_encryption_key: str = ""
 
     # ─── Auth (JWT) ────────────────────────────────────────────────────────────
-    jwt_secret: str = os.getenv("SMARTAI_JWT_SECRET", "smartai-dev-secret-change-in-prod")
+    jwt_secret: str = "smartai-dev-secret-change-in-prod"
     jwt_algorithm: str = "HS256"
     jwt_expiry_minutes: int = 30
     refresh_session_days: int = 30
@@ -286,5 +313,66 @@ def configure_provider_proxy_environment(
         target["HTTPS_PROXY"] = https_proxy or fallback
 
 
+_INSECURE_SECRET_VALUES = {
+    "smartai-dev-provider-key-change-in-prod",
+    "smartai-dev-secret-change-in-prod",
+    "replace-with-a-long-random-secret",
+}
+
+
+def _has_minimum_secret_length(value: str) -> bool:
+    return len(value.encode("utf-8")) >= 32
+
+
+def _provider_encryption_key_is_usable(provider_key: str, jwt_secret: str) -> bool:
+    return bool(
+        provider_key
+        and _has_minimum_secret_length(provider_key)
+        and provider_key not in _INSECURE_SECRET_VALUES
+        and provider_key != jwt_secret
+    )
+
+
+def validate_runtime_secret_policy(config: Settings) -> None:
+    """Apply the runtime secret contract without echoing secret values.
+
+    Development and test must stay usable for work that does not persist BYOK
+    credentials.  An unsafe BYOK master key is therefore normalized to the
+    existing "not configured" state in those environments.  Production fails
+    closed before the API process starts.
+    """
+    provider_key = config.provider_encryption_key.strip()
+    jwt_secret = config.jwt_secret.strip()
+    provider_key_usable = _provider_encryption_key_is_usable(
+        provider_key,
+        jwt_secret,
+    )
+
+    if config.runtime_environment != "production":
+        if not provider_key_usable:
+            # Business code already treats an empty value as "BYOK persistence
+            # unavailable".  Never leave a short/public/reused value available
+            # for AES-GCM key derivation merely to keep development convenient.
+            config.provider_encryption_key = ""
+        return
+
+    invalid: list[str] = []
+    if not provider_key_usable:
+        invalid.append(
+            "SMARTAI_PROVIDER_ENCRYPTION_KEY must contain at least 32 private "
+            "bytes, must not use a public placeholder, and must differ from "
+            "SMARTAI_JWT_SECRET"
+        )
+    if (
+        not jwt_secret
+        or not _has_minimum_secret_length(jwt_secret)
+        or jwt_secret in _INSECURE_SECRET_VALUES
+    ):
+        invalid.append("SMARTAI_JWT_SECRET must contain at least 32 private random bytes")
+    if invalid:
+        raise RuntimeError("Invalid production secret configuration: " + "; ".join(invalid))
+
+
 # Global singleton
 settings = Settings()
+validate_runtime_secret_policy(settings)
