@@ -43,7 +43,9 @@ def test_problem_queue_persists_owner_scoped_source_before_dispatch():
         "base_workflow_revision",
         "replace_confirmed",
         "extraction_options",
+        "recognition_provider_id",
     }
+    assert operation.payload["recognition_provider_id"] == "test-provider"
     sources = source_outcome_repository.list_sources(
         operation_id=operation.id,
         owner_id=owner_id,
@@ -86,6 +88,7 @@ def test_problem_queue_storage_failure_leaves_retryable_operation(monkeypatch):
             "source": task_facade.hashlib.sha256(b"source").hexdigest(),
             "replace_confirmed": False,
             "extraction_options": {},
+            "recognition_provider_id": "test-provider",
         }),
     )
     assert operation is not None
@@ -99,6 +102,7 @@ def test_expired_preparing_problem_operation_is_reclaimed():
         "source": task_facade.hashlib.sha256(b"source").hexdigest(),
         "replace_confirmed": False,
         "extraction_options": {},
+        "recognition_provider_id": "test-provider",
     })
     abandoned, created = workflow_repository.create_operation(
         assignment_id=task_id, owner_id=owner_id,
@@ -129,6 +133,7 @@ def test_expired_preparing_retry_reuses_already_saved_source_object():
         "source": task_facade.hashlib.sha256(content).hexdigest(),
         "replace_confirmed": False,
         "extraction_options": {},
+        "recognition_provider_id": "test-provider",
     })
     abandoned, _ = workflow_repository.create_operation(
         assignment_id=task_id, owner_id=owner_id,

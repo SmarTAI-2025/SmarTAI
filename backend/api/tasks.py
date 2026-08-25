@@ -34,9 +34,19 @@ from backend.auth import require_teacher
 from backend.db import assignment_repository, grading_repository, workflow_repository
 from backend.domain.errors import DomainError, InvalidTransition, NotFound, ValidationError
 from backend.knowledge.service import ingest_document
-from backend.llm.registry import ExpertRegistry, get_scoped_expert_registry
+from backend.llm.registry import (
+    ExpertRegistry,
+    get_scoped_expert_registry,
+    resolve_owner_default_provider_id,
+)
 from backend.models import TaskGradingSetup, User
+from backend.services import source_files as source_file_service
 from backend.services import task_facade
+from backend.services.stage_provider_routing import (
+    baidu_ocr_credential_id,
+    list_stage_provider_options,
+)
+from backend.storage import get_storage
 from backend.tools.file_processing import SUBMISSION_UPLOAD_MAX_BYTES
 
 
@@ -64,6 +74,11 @@ class InterpretTaskQueryRequest(BaseModel):
 class GradeRequest(BaseModel):
     language: str = "en"
     multi_sample_n: int | None = Field(default=None, ge=1, le=10)
+    expected_workflow_revision: int = Field(ge=0)
+
+
+class RetrySubmissionRecognitionRequest(BaseModel):
+    recognition_provider_id: str | None = Field(default=None, max_length=240)
     expected_workflow_revision: int = Field(ge=0)
 
 
@@ -280,6 +295,51 @@ def get_task(task_id: str, current: User = Depends(require_teacher)):
     return _domain(lambda: task_facade.get_task(task_id=task_id, owner_id=current.id))
 
 
+@router.get("/{task_id}/source-files")
+def get_source_files(
+    task_id: str,
+    current: User = Depends(require_teacher),
+):
+    try:
+        return source_file_service.describe_source_files(
+            task_id=task_id,
+            owner_id=current.id,
+            storage=get_storage(),
+        )
+    except DomainError as exc:
+        return domain_error_response(exc)
+
+
+@router.get("/{task_id}/source-files/{file_id}/content")
+def get_source_file_content(
+    task_id: str,
+    file_id: str,
+    current: User = Depends(require_teacher),
+):
+    try:
+        source = source_file_service.read_source_file_content(
+            task_id=task_id,
+            file_id=file_id,
+            owner_id=current.id,
+            storage=get_storage(),
+        )
+    except DomainError as exc:
+        return domain_error_response(exc)
+    return Response(
+        content=source.content,
+        media_type=source.mime_type,
+        headers={
+            "Content-Disposition": (
+                "inline; filename*=UTF-8''"
+                f"{quote(source.display_name, safe='')}"
+            ),
+            "X-Content-Type-Options": "nosniff",
+            "Cache-Control": "private, no-store",
+            "Content-Length": str(len(source.content)),
+        },
+    )
+
+
 @router.put("/{task_id}")
 def update_task(task_id: str, request: UpdateTaskRequest, current: User = Depends(require_teacher)):
     body = request.model_dump(exclude_unset=True)
@@ -377,6 +437,52 @@ async def parse_submissions_endpoint(
             replace_confirmed=replace_confirmed,
         )
         return queued
+    except DomainError as exc:
+        return domain_error_response(exc)
+
+
+@router.post("/{task_id}/submission-recognition/{job_id}/retry")
+async def retry_submission_recognition_endpoint(
+    task_id: str,
+    job_id: str,
+    request: RetrySubmissionRecognitionRequest,
+    background_tasks: BackgroundTasks,
+    current: User = Depends(require_teacher),
+    registry: ExpertRegistry = Depends(get_scoped_expert_registry),
+):
+    """Retry a failed recognition job from its durable original upload."""
+    try:
+        workflow = workflow_repository.get_workflow(task_id, owner_id=current.id)
+        if workflow.workflow_revision != request.expected_workflow_revision:
+            raise ValidationError(
+                "The task changed before recognition retry.",
+                code="stale_revision",
+            )
+        retry = task_facade.load_submission_retry_upload(
+            task_id=task_id,
+            owner_id=current.id,
+            job_id=job_id,
+        )
+        queued = task_facade.queue_task_submission_parsing(
+            task_id=task_id,
+            owner_id=current.id,
+            filename=retry["filename"],
+            content=retry["content"],
+            content_type=retry["content_type"],
+            registry=registry,
+            identity_mode=retry["identity_mode"],
+            roster_entries=retry["roster_entries"],
+            roster_name=retry["roster_name"],
+            recognition_provider_id=request.recognition_provider_id,
+            replace_confirmed=retry["replace_confirmed"],
+        )
+        # Submission recognition is owned exclusively by the durable workflow
+        # worker.  A retry only republishes the persisted operation; running it
+        # in request memory as well would bypass the lease fence and could race
+        # a fresh worker with a stale provider selection.
+        queued.pop("_job_attempt", None)
+        queued.pop("_recognition_provider_id", None)
+        return {**queued, "reused_original_upload": True}
     except DomainError as exc:
         return domain_error_response(exc)
 
@@ -534,7 +640,7 @@ def save_grading_setup(
     try:
         workflow = workflow_repository.get_workflow(task_id, owner_id=current.id)
         setup = TaskGradingSetup.model_validate(request.grading_setup)
-        _validate_grading_setup(setup, registry)
+        _validate_grading_setup(setup, registry, current.id)
         body = setup.model_dump(mode="json")
         fingerprint = hashlib.sha256(json.dumps(body, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
         unchanged = workflow.grading_setup_fingerprint == fingerprint
@@ -560,8 +666,15 @@ def save_grading_setup(
         return domain_error_response(exc)
 
 
-def _validate_grading_setup(setup: TaskGradingSetup, registry: ExpertRegistry) -> None:
-    configs = {str(item["provider_id"]): item for item in registry.list_configs()}
+def _validate_grading_setup(
+    setup: TaskGradingSetup,
+    registry: ExpertRegistry,
+    owner_id: str,
+) -> None:
+    configs = {
+        str(item["provider_id"]): item
+        for item in list_stage_provider_options(owner_id, registry)
+    }
     selected = setup.selected_provider_ids
     if len(set(selected)) != len(selected):
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, detail={"code": "duplicate_provider_ids"})
@@ -573,7 +686,10 @@ def _validate_grading_setup(setup: TaskGradingSetup, registry: ExpertRegistry) -
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, detail={"code": "invalid_provider_count"})
     if setup.aggregation_method != "single" and len(selected) < 2:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, detail={"code": "invalid_provider_count"})
-    if registry.uses_shared_pool() and (len(selected) != 1 or setup.aggregation_method != "single" or setup.multi_sample_n != 1):
+    selected_uses_shared_pool = any(
+        configs[provider_id].get("is_shared") for provider_id in selected
+    )
+    if selected_uses_shared_pool and (len(selected) != 1 or setup.aggregation_method != "single" or setup.multi_sample_n != 1):
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, detail={"code": "shared_pool_single_expert_required"})
 
 
@@ -581,15 +697,16 @@ def _grading_setup_payload(task_id: str, owner_id: str, registry: ExpertRegistry
     task = task_facade.get_task(task_id=task_id, owner_id=owner_id, full=False)
     workflow = workflow_repository.get_workflow(task_id, owner_id=owner_id)
     configs = []
-    for item in registry.list_configs():
+    for item in list_stage_provider_options(owner_id, registry):
         configs.append({
             key: item.get(key) for key in (
                 "provider_id", "provider_type", "model", "display_name", "enabled",
                 "scope", "is_shared", "editable", "max_concurrent", "rpm",
-                "verification_status", "base_url",
+                "verification_status", "base_url", "provider_kind",
+                "credential_id", "supports_vision",
             )
         })
-    default_id = registry.pick_default_id()
+    default_id = resolve_owner_default_provider_id(owner_id, registry)
     suggested = None
     if default_id is not None:
         suggested = TaskGradingSetup(
@@ -613,7 +730,13 @@ def _grading_setup_payload(task_id: str, owner_id: str, registry: ExpertRegistry
     warnings.extend(source_readiness["warnings"])
     if workflow.grading_setup:
         try:
-            _validate_grading_setup(TaskGradingSetup.model_validate(workflow.grading_setup), registry)
+            saved_setup = TaskGradingSetup.model_validate(workflow.grading_setup)
+            _validate_grading_setup(saved_setup, registry, owner_id)
+            if any(
+                baidu_ocr_credential_id(provider_id) is not None
+                for provider_id in saved_setup.selected_provider_ids
+            ):
+                blocking.append("ocr_provider_grading_not_supported")
         except (HTTPException, PydanticValidationError):
             blocking.append("invalid_grading_setup")
     return {

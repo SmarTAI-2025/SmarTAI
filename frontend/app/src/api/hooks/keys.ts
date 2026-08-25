@@ -64,6 +64,12 @@ export const expertKeys = {
   all: ["experts"] as const,
   list: () => ["experts", "list"] as const,
   catalog: () => ["experts", "catalog"] as const,
+  stage: () => ["experts", "stage-options"] as const,
+};
+
+export const ocrProviderKeys = {
+  all: ["ocr-providers"] as const,
+  baiduConfiguration: () => ["ocr-providers", "baidu-unlimited-ocr"] as const,
 };
 
 export const analyticsKeys = {

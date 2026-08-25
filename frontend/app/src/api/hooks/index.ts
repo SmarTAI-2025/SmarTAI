@@ -4,6 +4,7 @@ export * from "./auth";
 export * from "./courses";
 export * from "./courseMaterials";
 export * from "./experts";
+export * from "./ocrProviders";
 export * from "./health";
 export * from "./gradingSetup";
 export * from "./kb";

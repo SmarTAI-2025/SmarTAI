@@ -89,6 +89,7 @@ const COPY = {
   staleReloaded: ["任务内容已变化。当前编辑已保留并使用最新版本，请核对后重新保存。", "The task changed. Your edits were kept against the latest version; review them before saving again."],
   providerChanged: ["模型配置已变化，请重新选择模型。", "Model configuration changed. Select the models again."],
   sharedPoolRestriction: ["平台共享模型只能单独使用并固定单次采样。", "A shared-pool model must be used alone with one sample."],
+  ocrGradingUnsupported: ["该 OCR 服务不支持批改，请更换批改模型。", "This OCR service does not support grading. Choose a grading model."],
   saveErrorGeneric: ["暂时无法保存批改设置，请稍后重试。", "Grading setup could not be saved. Try again shortly."],
   leaveTitle: ["离开批改设置？", "Leave Grading Setup?"],
   leaveDescription: ["当前修改尚未保存，离开后会丢失。", "Your changes have not been saved and will be lost."],

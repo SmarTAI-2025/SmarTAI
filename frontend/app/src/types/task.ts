@@ -234,6 +234,7 @@ export interface TaskLite {
   submission_identity_mode?: SubmissionIdentityMode;
   submission_roster_name?: string | null;
   submission_recognition_provider_id?: string | null;
+  question_recognition_provider_id?: string | null;
   reference_file_name?: string | null;
   test_cases_file_name?: string | null;
   reference_parse_job_id?: string | null;

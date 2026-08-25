@@ -5,6 +5,7 @@ export * as coursesApi from "./courses";
 export * as courseMaterialsApi from "./courseMaterials";
 export * from "./client";
 export * as expertsApi from "./experts";
+export * as ocrProvidersApi from "./ocrProviders";
 export * as healthApi from "./health";
 export * as gradingSetupApi from "./gradingSetup";
 export * as kbApi from "./kb";

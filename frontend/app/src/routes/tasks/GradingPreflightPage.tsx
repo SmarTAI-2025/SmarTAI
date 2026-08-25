@@ -469,6 +469,7 @@ function gradingBlockerMessage(code: string | null, locale: Locale): string | nu
     questions_required: ["当前任务还没有题目。", "This task has no questions yet."],
     workflow_busy: ["任务正在执行另一项操作，请等待完成后刷新。", "Another task operation is running. Wait for it to finish, then refresh."],
     workflow_revision_conflict: ["任务内容已变化。请刷新后按最新内容重新确认。", "The task changed. Refresh and confirm the latest content."],
+    ocr_provider_grading_not_supported: ["该 OCR 服务不支持批改，请更换批改模型。", "This OCR service does not support grading. Choose a grading model."],
   };
   const message = code ? messages[code] : undefined;
   return message ? message[locale === "en-US" ? 1 : 0] : null;

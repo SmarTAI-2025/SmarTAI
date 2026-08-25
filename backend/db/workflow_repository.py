@@ -172,6 +172,9 @@ class AssignmentWorkflowRecord(Base):
         String(32), nullable=False, default="filename"
     )
     submission_roster_name: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    question_recognition_provider_id: Mapped[str | None] = mapped_column(
+        String(240), nullable=True
+    )
     submission_recognition_provider_id: Mapped[str | None] = mapped_column(
         String(240), nullable=True
     )

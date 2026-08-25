@@ -5,7 +5,13 @@ from sqlalchemy import select
 from backend.db.models import ProviderConfigRecord, UserRecord
 from backend.auth import create_token
 from backend.db.provider_repository import (
+    DefaultProviderNotEnabled,
+    DefaultProviderReplacementRequired,
+    delete_provider_config,
+    get_default_provider_id,
     list_provider_configs,
+    set_default_provider_id,
+    set_provider_enabled,
     update_provider_config,
     upsert_provider_config,
 )
@@ -77,6 +83,95 @@ def test_expert_endpoints_require_identity_and_only_list_current_users_keys():
     assert "sk-api-only" not in listed.text
 
     assert client.get("/experts/available").status_code == 401
+
+
+def test_owner_default_provider_is_stable_explicit_and_owner_scoped():
+    owner = "provider-default-owner"
+    other_owner = "provider-default-other"
+    master_key = "provider-default-master-key-0123456789abcdef"
+    with session_scope() as session:
+        for owner_id in (owner, other_owner):
+            session.add(UserRecord(
+                id=owner_id,
+                username=owner_id,
+                email=f"{owner_id}@test.local",
+                role="teacher",
+                password_hash="hash",
+                is_active=True,
+                created_at=1,
+                updated_at=1,
+            ))
+    first = upsert_provider_config(
+        owner,
+        ProviderConfig(provider_type="openai", api_key="sk-first", model="first"),
+        master_key=master_key,
+    )
+    second = upsert_provider_config(
+        owner,
+        ProviderConfig(provider_type="gemini", api_key="sk-second", model="second"),
+        master_key=master_key,
+    )
+
+    assert get_default_provider_id(owner) == first.id
+    assert set_default_provider_id(owner, second.id) == second.id
+    assert get_default_provider_id(owner) == second.id
+    with pytest.raises(DefaultProviderNotEnabled):
+        set_default_provider_id(other_owner, second.id)
+    with pytest.raises(DefaultProviderReplacementRequired):
+        set_provider_enabled(owner, second.id, False)
+    with pytest.raises(DefaultProviderReplacementRequired):
+        delete_provider_config(owner, second.id)
+
+    assert set_default_provider_id(owner, first.id) == first.id
+    assert delete_provider_config(owner, second.id) is True
+    assert get_default_provider_id(owner) == first.id
+    assert set_provider_enabled(owner, first.id, False) is True
+    assert get_default_provider_id(owner) is None
+
+
+def test_expert_api_marks_and_changes_owner_default(monkeypatch):
+    owner = "provider-default-api-owner"
+    master_key = "provider-default-api-key-0123456789abcdef"
+    with session_scope() as session:
+        session.add(UserRecord(
+            id=owner,
+            username=owner,
+            email=f"{owner}@test.local",
+            role="teacher",
+            password_hash="hash",
+            is_active=True,
+            created_at=1,
+            updated_at=1,
+        ))
+    monkeypatch.setattr(settings, "provider_encryption_key", master_key)
+    headers = {"Authorization": f"Bearer {create_token(owner, 'teacher')}"}
+    client = TestClient(app)
+    first = client.post("/experts/keys", headers=headers, json={
+        "provider_type": "openai", "api_key": "sk-first", "model": "first",
+    }).json()["provider_id"]
+    second = client.post("/experts/keys", headers=headers, json={
+        "provider_type": "gemini", "api_key": "sk-second", "model": "second",
+    }).json()["provider_id"]
+
+    listed = client.get("/experts/available", headers=headers).json()
+    assert {item["provider_id"]: item["is_default"] for item in listed} == {
+        first: True,
+        second: False,
+    }
+    changed = client.put(
+        "/experts/default", headers=headers, json={"provider_id": second},
+    )
+    assert changed.status_code == 200
+    assert changed.json() == {
+        "status": "success", "provider_id": second, "is_default": True,
+    }
+    blocked = client.post(
+        "/experts/select",
+        headers=headers,
+        json={"provider_id": second, "enabled": False},
+    )
+    assert blocked.status_code == 409
+    assert blocked.json()["detail"]["code"] == "default_provider_replacement_required"
 
 
 @pytest.mark.parametrize(

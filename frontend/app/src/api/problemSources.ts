@@ -38,6 +38,9 @@ export async function preflightProblemSource(
   if (input.mode === "upload" && input.file) {
     formData.append("file", input.file);
   }
+  if (input.mode === "upload" && !input.file && input.storedFileId) {
+    formData.append("stored_file_id", input.storedFileId);
+  }
   if (input.mode === "library" && input.libraryMaterialId) {
     formData.append("library_material_id", input.libraryMaterialId);
   }
@@ -48,6 +51,7 @@ export async function preflightProblemSource(
   formData.append("role", input.role ?? "problem");
   formData.append("extraction_hint", input.extractionHint?.trim() ?? "");
   formData.append("save_to_library", String(input.saveToLibrary));
+  formData.append("recognition_provider_id", input.recognitionProviderId);
 
   try {
     const response = await apiClient.post<ProblemSourcePreflightResponse>(
@@ -81,6 +85,7 @@ export async function startQuestionPreparation(
             ? { per_question_text: input.scorePolicy.perQuestionText }
             : {}),
         },
+        recognition_provider_id: input.recognitionProviderId,
       },
       { timeout: 180_000 },
     );

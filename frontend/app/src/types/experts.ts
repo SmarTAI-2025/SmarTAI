@@ -35,6 +35,10 @@ export interface ExpertConfig {
   scope?: "shared" | "owner";
   is_shared?: boolean;
   editable?: boolean;
+  is_default?: boolean;
+  supports_vision?: boolean;
+  provider_kind?: "llm" | "ocr";
+  credential_id?: string | null;
   verification_status?: VerificationStatus;
   last_checked_at?: string | null;
   verified_at?: string | null;
@@ -56,6 +60,7 @@ export interface ExpertMutationResponse {
   status: "success" | "not_found" | string;
   provider_id?: string;
   enabled?: boolean;
+  is_default?: boolean;
   verification_status?: ExpertConfig["verification_status"];
   base_url?: string | null;
   wire_protocol?: WireProtocol | null;
@@ -78,6 +83,12 @@ export interface ExpertVerificationResponse {
   verification_status: "verified";
   last_checked_at: string;
   verified_at: string;
+}
+
+export interface SetDefaultExpertResponse {
+  status: "success";
+  provider_id: string;
+  is_default: true;
 }
 
 export interface ProviderCatalogItem {

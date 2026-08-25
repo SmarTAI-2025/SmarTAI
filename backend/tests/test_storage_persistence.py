@@ -216,3 +216,44 @@ def test_storage_factory_selects_object_backend_from_settings(monkeypatch):
     storage = build_storage()
     assert isinstance(storage, S3Storage)
     assert storage.bucket == "test-bucket"
+
+
+@pytest.mark.parametrize(
+    ("error_code", "http_status", "expected_exception"),
+    [
+        ("NoSuchKey", 404, "StorageObjectNotFound"),
+        ("NoSuchBucket", 404, "StorageUnavailable"),
+        ("AccessDenied", 403, "StorageUnavailable"),
+    ],
+)
+def test_object_storage_open_distinguishes_missing_from_unavailable(
+    error_code, http_status, expected_exception
+):
+    from botocore.exceptions import ClientError
+
+    from backend.storage import S3Storage
+    from backend.storage.base import StorageObjectNotFound, StorageUnavailable
+
+    class FailingClient:
+        def get_object(self, **_kwargs):
+            raise ClientError(
+                {
+                    "Error": {"Code": error_code, "Message": "internal detail"},
+                    "ResponseMetadata": {"HTTPStatusCode": http_status},
+                },
+                "GetObject",
+            )
+
+    storage = S3Storage.__new__(S3Storage)
+    storage.bucket = "private-bucket"
+    storage.client = FailingClient()
+    expected = {
+        "StorageObjectNotFound": StorageObjectNotFound,
+        "StorageUnavailable": StorageUnavailable,
+    }[expected_exception]
+
+    with pytest.raises(expected) as failure:
+        storage.open("private/key")
+
+    assert "private-bucket" not in str(failure.value)
+    assert "private/key" not in str(failure.value)

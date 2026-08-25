@@ -31,12 +31,12 @@ def test_explicit_pdf_429_code_is_not_misreported_as_provider_rate_limit():
     assert classify_background_error(error, "problem_extraction_failed") == "pdf_extraction_busy"
 
 
-def test_provider_rejection_of_image_input_reports_missing_vision_capability():
+def test_provider_rejection_of_image_input_reports_selected_model_capability():
     error = RuntimeError("This model does not support image input")
 
     assert (
         classify_background_error(error, "submission_parse_failed")
-        == "vision_provider_required"
+        == "provider_vision_not_supported"
     )
 
 

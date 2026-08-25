@@ -14,14 +14,16 @@ import {
 import { useEffect, useRef, useState, type ChangeEvent, type DragEvent, type ReactNode } from "react";
 import { Link, useLocation, useNavigate, useParams } from "react-router-dom";
 import { toast } from "sonner";
+import { getAPIErrorCode, getAPIErrorDetail } from "@/api/client";
 import {
-  useExperts,
+  useStageProviders,
   useProblemSourceLibrary,
   useProblemSourcePreflight,
   useQuestionPreparationCapabilities,
   useStartQuestionPreparation,
   useTask,
 } from "@/api/hooks";
+import { StageProviderSelect } from "@/components/models/StageProviderSelect";
 import { NewTaskStepper } from "@/components/new-task/NewTaskStepper";
 import { RecoverableActionState, type RecoveryAction } from "@/components/ui/RecoverableActionState";
 import { useImeSafeQuery } from "@/hooks/useImeSafeQuery";
@@ -39,7 +41,9 @@ import type {
 
 const SOURCE_ROLES: PreparationSourceRole[] = ["problem", "reference_answer", "rubric", "programming_tests"];
 const DOCUMENT_SOURCE_EXTENSIONS = [".pdf", ".txt", ".md", ".markdown"] as const;
-const IMAGE_SOURCE_EXTENSIONS = new Set([".jpg", ".jpeg", ".png", ".webp"]);
+const IMAGE_SOURCE_EXTENSIONS = new Set([
+  ".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff", ".webp",
+]);
 
 type SourceDraft = {
   id: string;
@@ -53,6 +57,7 @@ type SourceDraft = {
   structureMode: ProblemStructureMode;
   extractionHint: string;
   saveToLibrary: boolean;
+  storedFileId: string | null;
 };
 
 type ScorePolicyDraft = {
@@ -73,6 +78,7 @@ type AddProblemsRouteState = {
     activeRole: PreparationSourceRole;
     sources: SourceDraft[];
     scorePolicy?: ScorePolicyDraft;
+    recognitionProviderId?: string;
   };
 };
 
@@ -91,7 +97,7 @@ export function AddProblemsPage() {
   const restored = getRestoredDraft(location.state, taskId);
   const taskQuery = useTask(taskId);
   const capabilitiesQuery = useQuestionPreparationCapabilities(taskId);
-  const expertsQuery = useExperts();
+  const expertsQuery = useStageProviders();
   const preflight = useProblemSourcePreflight();
   const startPreparation = useStartQuestionPreparation();
   const [activeRole, setActiveRole] = useState<PreparationSourceRole>(restored?.activeRole ?? "problem");
@@ -99,6 +105,9 @@ export function AddProblemsPage() {
   const [scorePolicy, setScorePolicy] = useState<ScorePolicyDraft>(() => (
     restored?.scorePolicy ?? DEFAULT_SCORE_POLICY_DRAFT
   ));
+  const [recognitionProviderId, setRecognitionProviderId] = useState(
+    restored?.recognitionProviderId ?? "",
+  );
   const [formError, setFormError] = useState<string | null>(null);
   const [preparationFailure, setPreparationFailure] = useState<PreparationFailure | null>(null);
   const [busyLabel, setBusyLabel] = useState<string | null>(null);
@@ -118,10 +127,31 @@ export function AddProblemsPage() {
       activeRole,
       sources,
       scorePolicy,
+      recognitionProviderId,
     },
   };
 
-  const needsByok = enabledExperts.length === 0 && !expertsQuery.isLoading && !expertsQuery.isError;
+  useEffect(() => {
+    if (expertsQuery.isLoading || expertsQuery.isError) return;
+    const enabled = (expertsQuery.data ?? []).filter((expert) => expert.enabled);
+    setRecognitionProviderId((current) => {
+      if (enabled.some((expert) => expert.provider_id === current)) return current;
+      const frozenProviderId = taskQuery.data?.question_recognition_provider_id;
+      if (
+        frozenProviderId
+        && enabled.some((expert) => expert.provider_id === frozenProviderId)
+      ) {
+        return frozenProviderId;
+      }
+      return (
+        enabled.find((expert) => expert.is_default)?.provider_id
+        ?? enabled[0]?.provider_id
+        ?? ""
+      );
+    });
+  }, [expertsQuery.data, expertsQuery.isError, expertsQuery.isLoading, taskQuery.data?.question_recognition_provider_id]);
+
+  const needsByok = (!enabledExperts.length || !recognitionProviderId) && !expertsQuery.isLoading && !expertsQuery.isError;
   const needsProblemSource = !hasProblemSource;
   const startBlocked = needsByok || needsProblemSource;
   const primaryDisabledReason = expertsQuery.isLoading
@@ -198,13 +228,18 @@ export function AddProblemsPage() {
           taskId,
           role: source.role,
           mode: source.sourceMode,
-          file: source.file,
+          file: source.storedFileId ? null : source.file,
+          storedFileId: source.storedFileId,
           libraryMaterialId: source.libraryMaterial?.material_id,
           inlineText: source.inlineText,
           structureMode: source.structureMode,
           extractionHint: source.extractionHint,
           saveToLibrary: source.sourceMode === "upload" && source.saveToLibrary,
+          recognitionProviderId,
         });
+        if (typeof result.source === "object" && result.source?.stored_file_id) {
+          updateSource(source.id, { storedFileId: result.source.stored_file_id });
+        }
         tokens.push(result.source_token);
       }
       phase = "question_preparation";
@@ -216,6 +251,7 @@ export function AddProblemsPage() {
         expectedWorkflowRevision: taskQuery.data.workflow_revision,
         replaceConfirmed,
         scorePolicy: resolvedScorePolicy.value,
+        recognitionProviderId,
       });
       toast.success(
         ["already_running", "already_done"].includes(response.status)
@@ -224,6 +260,10 @@ export function AddProblemsPage() {
       );
       navigate(`/tasks/${taskId}/problems/progress`);
     } catch (error) {
+      const storedFileId = getAPIErrorDetail(error)?.stored_file_id;
+      if (activeSource && typeof storedFileId === "string" && storedFileId) {
+        updateSource(activeSource.id, { storedFileId });
+      }
       setPreparationFailure({
         error,
         phase,
@@ -381,6 +421,26 @@ export function AddProblemsPage() {
           </div>
         </section>
 
+        <StageProviderSelect
+          id="question-recognition-provider"
+          label={tx(locale, "题目识别模型", "Question recognition model")}
+          hint={tx(
+            locale,
+            "已自动选择默认模型；有多个模型时可在这里改选。图片或扫描版 PDF 需要支持图片/视觉输入的模型，具体能力以服务商说明为准。",
+            "Your default model is selected automatically; choose another here when needed. Images and scanned PDFs require a model that supports image input; check the provider's current documentation.",
+          )}
+          experts={enabledExperts}
+          value={recognitionProviderId}
+          disabled={isBusy || expertsQuery.isLoading}
+          locale={locale}
+          onChange={(providerId) => {
+            setRecognitionProviderId(providerId);
+            setFormError(null);
+            setPreparationFailure(null);
+          }}
+          className="mt-4"
+        />
+
         <section className="mt-4 flex flex-col gap-3 rounded-[10px] border bg-card px-5 py-3 sm:flex-row sm:items-center sm:justify-between sm:px-7">
           <div className="min-w-0">
             <p className="text-sm font-semibold text-foreground">{tx(locale, "一次识别并准备全部题目资料", "Prepare all question materials in one step")}</p>
@@ -396,9 +456,7 @@ export function AddProblemsPage() {
                 : tx(locale, "尚未启用模型；点击主按钮可查看原因并前往 BYOK。", "No model is enabled. Use the main button to open BYOK guidance.")}
             </p>
             <p className="mt-1 text-[11px] leading-4 text-muted-foreground">
-              {capabilitiesQuery.data?.reader.ocr
-                ? tx(locale, "文件能力由当前识别服务动态提供。", "Available file readers are provided by the active recognition service.")
-                : tx(locale, "PDF、TXT 与 Markdown 可直接读取；图片和扫描版 PDF 的 OCR 需要已启用的视觉模型，DOCX 暂不支持。", "PDF, TXT, and Markdown are read directly. Image and scanned-PDF OCR requires an enabled vision model; DOCX is not supported yet.")}
+              {tx(locale, "PDF、TXT 与 Markdown 可直接读取；图片和扫描版 PDF 需要所选模型支持视觉输入，若不支持会明确提示并保留原文件供改选后重试。", "PDF, TXT, and Markdown are read directly. Images and scanned PDFs require visual input support; if the selected model rejects them, the original file is kept so you can switch models and retry.")}
             </p>
           </div>
           <button
@@ -576,11 +634,14 @@ function SourceEditor({
   );
   const libraryItems: ProblemLibraryMaterial[] = libraryQuery.data?.items ?? [];
   const libraryLoading = libraryQuery.isFetching;
-  const accepted = acceptedExtensions?.length
+  const advertised = acceptedExtensions?.length
     ? acceptedExtensions.map((extension) => extension.toLowerCase())
     : source.role === "programming_tests"
       ? [...DOCUMENT_SOURCE_EXTENSIONS, ".json"]
       : [...DOCUMENT_SOURCE_EXTENSIONS];
+  const accepted = source.role === "programming_tests"
+    ? advertised
+    : [...new Set([...advertised, ...IMAGE_SOURCE_EXTENSIONS])];
   const accept = accepted.join(",");
 
   function selectFile(file?: File) {
@@ -597,7 +658,7 @@ function SourceEditor({
       return;
     }
     setFileError(null);
-    onUpdate({ file, sourceMode: "upload", libraryMaterial: null });
+    onUpdate({ file, storedFileId: null, sourceMode: "upload", libraryMaterial: null });
   }
 
   function handleDrop(event: DragEvent<HTMLDivElement>) {
@@ -808,6 +869,7 @@ function createSourceDraft(role: PreparationSourceRole): SourceDraft {
     structureMode: "organized",
     extractionHint: "",
     saveToLibrary: false,
+    storedFileId: null,
   };
 }
 
@@ -817,7 +879,7 @@ function getRestoredDraft(state: unknown, taskId?: string) {
 }
 
 function sourceHasValue(source: SourceDraft) {
-  if (source.sourceMode === "upload") return Boolean(source.file);
+  if (source.sourceMode === "upload") return Boolean(source.file || source.storedFileId);
   if (source.sourceMode === "inline_text") return Boolean(source.inlineText?.trim());
   return Boolean(source.libraryMaterial);
 }
@@ -923,6 +985,16 @@ function getPreparationRecoveryAction({
   onRefresh: () => void;
   onOpenSource: (role: PreparationSourceRole, sourceId?: string, clearLibrary?: boolean) => void;
 }): RecoveryAction {
+  if ([
+    "provider_vision_not_supported",
+    "provider_model_not_found",
+    "provider_request_rejected",
+  ].includes(getAPIErrorCode(failure.error) ?? "")) {
+    return {
+      label: info.actionLabel,
+      onClick: () => document.getElementById("question-recognition-provider")?.focus(),
+    };
+  }
   if (info.actionKind === "byok" && info.actionHref) {
     return { label: info.actionLabel, href: info.actionHref, state: routeState };
   }

@@ -37,6 +37,7 @@ from backend.models import TaskGradingSetup, User
 from backend.progress.tracker import get_or_create_reporter
 from backend.services import grading_adapter
 from backend.services.background_errors import classify_background_error
+from backend.services.stage_provider_routing import assert_grading_routes_supported
 
 logger = logging.getLogger(__name__)
 
@@ -266,6 +267,7 @@ async def process_run(*, run_id: str, worker_id: str, registry=None, language: s
                 raise ValidationError(
                     "grading_setup_invalid", code="grading_setup_invalid"
                 ) from exc
+            assert_grading_routes_supported(grading_setup)
             from backend.services.grading_input_security import (
                 provider_configuration_fingerprint,
             )

@@ -295,6 +295,7 @@ async def test_submit_rate_limit_is_not_retryable_or_replayed():
 
     assert raised.value.code == "provider_rate_limited"
     assert raised.value.retryable is False
+    assert raised.value.submission_may_exist is False
     assert submit_calls == 1
 
 

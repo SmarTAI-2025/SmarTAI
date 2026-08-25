@@ -127,4 +127,49 @@ describe("GradingSetupPage regrade mode", () => {
     expect(screen.getByRole("button", { name: "Save & Review Regrade" })).toBeEnabled();
     expect(screen.queryByText(/not ready for grading setup/i)).not.toBeInTheDocument();
   });
+
+  it("keeps a selected OCR record visible while warning the teacher to change it", async () => {
+    const current = (useGradingSetup as unknown as () => any)();
+    (useGradingSetup as unknown as ReturnType<typeof vi.fn>).mockReturnValue({
+      ...current,
+      data: {
+        ...current.data,
+        grading_setup: {
+          ...current.data.grading_setup,
+          selected_provider_ids: ["ocr:baidu_unlimited_ocr:record-1"],
+          primary_provider_id: "ocr:baidu_unlimited_ocr:record-1",
+        },
+        available_experts: [{
+          provider_id: "ocr:baidu_unlimited_ocr:record-1",
+          provider_type: "baidu_unlimited_ocr",
+          provider_kind: "ocr",
+          credential_id: "record-1",
+          model: "unlimited-ocr-parser",
+          display_name: "Baidu Document Parsing (Unlimited-OCR)",
+          enabled: true,
+          scope: "owner",
+          is_shared: false,
+          editable: false,
+          max_concurrent: 1,
+          rpm: 0,
+        }],
+      },
+    });
+    const router = createMemoryRouter([
+      {
+        path: "/tasks/:taskId/grading-setup",
+        element: <GradingSetupPage />,
+      },
+    ], {
+      initialEntries: ["/tasks/task-1/grading-setup"],
+    });
+
+    render(<RouterProvider router={router} />);
+
+    expect(await screen.findByText(
+      "This OCR service does not support grading. Choose a grading model.",
+    )).toBeInTheDocument();
+    expect(screen.getByText("Baidu Document Parsing (Unlimited-OCR)")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Save & Review Regrade" })).toBeEnabled();
+  });
 });

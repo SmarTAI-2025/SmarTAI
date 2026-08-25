@@ -9,6 +9,7 @@ import {
   Power,
   RefreshCw,
   ShieldCheck,
+  Star,
   Trash2,
 } from "lucide-react";
 import { useState, type FormEvent } from "react";
@@ -17,11 +18,16 @@ import { toast } from "sonner";
 import { getAPIErrorCode, normalizeAPIError } from "@/api/client";
 import {
   useAddExpertKey,
+  useBaiduOCRConfiguration,
+  useDeleteBaiduOCRCredentials,
   useExperts,
   useProviderCatalog,
   useRemoveExpert,
   useSelectExpert,
+  useSetDefaultExpert,
   useUpdateExpert,
+  useSaveBaiduOCRCredentials,
+  useVerifyBaiduOCRCredentials,
   useVerifyExpert,
 } from "@/api/hooks";
 import { LibraryDialog } from "@/components/knowledge-base/LibraryDialog";
@@ -84,6 +90,7 @@ export function ExpertsPage() {
   const addExpert = useAddExpertKey();
   const updateExpert = useUpdateExpert();
   const selectExpert = useSelectExpert();
+  const setDefaultExpert = useSetDefaultExpert();
   const verifyExpert = useVerifyExpert();
   const removeExpert = useRemoveExpert();
   const [editor, setEditor] = useState<EditorTarget | null>(null);
@@ -102,6 +109,7 @@ export function ExpertsPage() {
     addExpert.isPending ||
     updateExpert.isPending ||
     selectExpert.isPending ||
+    setDefaultExpert.isPending ||
     verifyExpert.isPending ||
     removeExpert.isPending;
 
@@ -178,6 +186,20 @@ export function ExpertsPage() {
       );
     } catch (error) {
       toast.error(zh ? "无法更新启用状态" : "Unable to update status", {
+        description: safeExpertError(error, locale),
+      });
+    }
+  }
+
+  async function handleSetDefault(expert: ExpertConfig) {
+    if (!expert.enabled || expert.is_default) return;
+    try {
+      await setDefaultExpert.mutateAsync(expert.provider_id);
+      toast.success(zh ? "默认模型已更新" : "Default model updated", {
+        description: modelDisplayName(expert),
+      });
+    } catch (error) {
+      toast.error(zh ? "无法设置默认模型" : "Unable to set default model", {
         description: safeExpertError(error, locale),
       });
     }
@@ -274,6 +296,8 @@ export function ExpertsPage() {
         />
       </section>
 
+      <BaiduOCRSettings locale={locale} />
+
       <section className="overflow-hidden rounded-[10px] border bg-card">
         <div className="flex items-center justify-between gap-3 border-b px-4 py-3.5 sm:px-5">
           <div>
@@ -364,6 +388,7 @@ export function ExpertsPage() {
                       onEdit={() => setEditor({ mode: "edit", expert })}
                       onToggle={() => void handleToggle(expert)}
                       onVerify={() => setConfirmation({ kind: "verify", expert })}
+                      onSetDefault={() => void handleSetDefault(expert)}
                       onDelete={() => setConfirmation({ kind: "delete", expert })}
                     />
                   ))}
@@ -380,6 +405,7 @@ export function ExpertsPage() {
                   onEdit={() => setEditor({ mode: "edit", expert })}
                   onToggle={() => void handleToggle(expert)}
                   onVerify={() => setConfirmation({ kind: "verify", expert })}
+                  onSetDefault={() => void handleSetDefault(expert)}
                   onDelete={() => setConfirmation({ kind: "delete", expert })}
                 />
               ))}
@@ -421,6 +447,190 @@ export function ExpertsPage() {
   );
 }
 
+function BaiduOCRSettings({ locale }: { locale: "zh-CN" | "en-US" }) {
+  const zh = locale === "zh-CN";
+  const configuration = useBaiduOCRConfiguration();
+  const saveCredentials = useSaveBaiduOCRCredentials();
+  const verifyCredentials = useVerifyBaiduOCRCredentials();
+  const deleteCredentials = useDeleteBaiduOCRCredentials();
+  const [apiKey, setApiKey] = useState("");
+  const [secretKey, setSecretKey] = useState("");
+  const [formError, setFormError] = useState<string | null>(null);
+  const [deleteArmed, setDeleteArmed] = useState(false);
+  const metadata = configuration.data;
+  const configured = Boolean(metadata?.credentials_configured && metadata.credential_id);
+  const pending = saveCredentials.isPending
+    || verifyCredentials.isPending
+    || deleteCredentials.isPending;
+
+  async function handleSave(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const request = {
+      api_key: apiKey.trim(),
+      secret_key: secretKey.trim(),
+    };
+    setApiKey("");
+    setSecretKey("");
+    setFormError(null);
+    if (!request.api_key || !request.secret_key) {
+      setFormError(zh ? "请同时填写 AK 和 SK。" : "Enter both AK and SK.");
+      return;
+    }
+    try {
+      await saveCredentials.mutateAsync(request);
+      toast.success(
+        configured
+          ? zh ? "百度 OCR 凭据已替换" : "Baidu OCR credentials replaced"
+          : zh ? "百度 OCR 凭据已保存" : "Baidu OCR credentials saved",
+      );
+    } catch (error) {
+      setFormError(safeExpertError(error, locale));
+    }
+  }
+
+  async function handleVerify() {
+    if (!metadata?.credential_id) return;
+    setFormError(null);
+    try {
+      await verifyCredentials.mutateAsync(metadata.credential_id);
+      toast.success(
+        zh ? "AK/SK 验证通过" : "AK/SK verification passed",
+        {
+          description: zh
+            ? "仅验证了凭据；OCR 服务权限与额度将在真实任务中检查。"
+            : "Credentials only were verified. OCR access and quota are checked by a real task.",
+        },
+      );
+    } catch (error) {
+      setFormError(safeExpertError(error, locale));
+    }
+  }
+
+  async function handleDelete() {
+    if (!metadata?.credential_id) return;
+    if (!deleteArmed) {
+      setDeleteArmed(true);
+      return;
+    }
+    const credentialId = metadata.credential_id;
+    setDeleteArmed(false);
+    setFormError(null);
+    try {
+      await deleteCredentials.mutateAsync(credentialId);
+      toast.success(zh ? "百度 OCR 凭据已删除" : "Baidu OCR credentials deleted");
+    } catch (error) {
+      setFormError(safeExpertError(error, locale));
+    }
+  }
+
+  const verificationLabel = metadata?.verification_status === "credentials_verified"
+    ? zh ? "AK/SK 已验证" : "AK/SK verified"
+    : metadata?.verification_status === "failed"
+      ? zh ? "最近验证失败" : "Last verification failed"
+      : configured
+        ? zh ? "尚未验证" : "Not verified"
+        : zh ? "尚未配置" : "Not configured";
+
+  return (
+    <section className="rounded-[10px] border bg-card px-4 py-4 sm:px-5" aria-labelledby="baidu-ocr-settings-title">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+        <div>
+          <h2 id="baidu-ocr-settings-title" className="text-[15px] font-semibold">
+            {zh ? "百度文档解析（Unlimited-OCR）" : "Baidu Document Parsing (Unlimited-OCR)"}
+          </h2>
+          <p className="mt-1 max-w-3xl text-xs leading-5 text-muted-foreground">
+            {zh
+              ? "独立的 OCR BYOK，仅用于题目与作答转写。AK/SK 保存后不会回显，也不会进入平台共享模型池。"
+              : "Independent OCR BYOK for question and submission transcription only. AK/SK values are never displayed after saving and never enter the shared model pool."}
+          </p>
+        </div>
+        <span className={cn(
+          "inline-flex w-fit rounded-full px-3 py-1 text-xs font-semibold",
+          metadata?.verification_status === "credentials_verified"
+            ? "bg-emerald-50 text-emerald-700 dark:bg-emerald-950/50 dark:text-emerald-200"
+            : metadata?.verification_status === "failed"
+              ? "bg-rose-50 text-rose-700 dark:bg-rose-950/50 dark:text-rose-200"
+              : "bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-200",
+        )}>
+          {configuration.isLoading ? (zh ? "读取中…" : "Loading…") : verificationLabel}
+        </span>
+      </div>
+
+      {configuration.isError ? (
+        <div className="mt-3"><InlineError message={safeExpertError(configuration.error, locale)} /></div>
+      ) : null}
+
+      {configured ? (
+        <dl className="mt-3 grid gap-2 rounded-lg bg-slate-50 px-3 py-3 text-xs dark:bg-slate-900/40 sm:grid-cols-3">
+          <div>
+            <dt className="text-muted-foreground">{zh ? "凭据记录" : "Credential record"}</dt>
+            <dd className="mt-1 break-all font-mono text-[11px]">{metadata?.credential_id}</dd>
+          </div>
+          <div>
+            <dt className="text-muted-foreground">{zh ? "最近检查" : "Last checked"}</dt>
+            <dd className="mt-1 font-medium">{metadata?.last_checked_at ? formatCheckedAt(metadata.last_checked_at, locale) : "—"}</dd>
+          </div>
+          <div>
+            <dt className="text-muted-foreground">{zh ? "最近错误" : "Last error"}</dt>
+            <dd className="mt-1 break-all font-medium">{metadata?.verification_error_code ?? "—"}</dd>
+          </div>
+        </dl>
+      ) : null}
+
+      <form className="mt-4 grid gap-3" onSubmit={handleSave}>
+        <div className="grid gap-3 sm:grid-cols-2">
+          <Field label={configured ? (zh ? "替换 AK" : "Replace AK") : "AK"}>
+            <Input
+              type="password"
+              autoComplete="new-password"
+              value={apiKey}
+              maxLength={512}
+              disabled={pending}
+              placeholder="••••••••"
+              onChange={(event) => setApiKey(event.target.value)}
+            />
+          </Field>
+          <Field label={configured ? (zh ? "替换 SK" : "Replace SK") : "SK"}>
+            <Input
+              type="password"
+              autoComplete="new-password"
+              value={secretKey}
+              maxLength={512}
+              disabled={pending}
+              placeholder="••••••••"
+              onChange={(event) => setSecretKey(event.target.value)}
+            />
+          </Field>
+        </div>
+        <div className="flex flex-wrap gap-2">
+          <Button type="submit" disabled={pending || configuration.isLoading}>
+            {saveCredentials.isPending ? <Loader2 aria-hidden="true" className="animate-spin" size={16} /> : <ShieldCheck aria-hidden="true" size={16} />}
+            {configured ? (zh ? "替换凭据" : "Replace credentials") : zh ? "保存凭据" : "Save credentials"}
+          </Button>
+          {configured ? (
+            <>
+              <Button type="button" variant="secondary" disabled={pending} onClick={() => void handleVerify()}>
+                {verifyCredentials.isPending ? <Loader2 aria-hidden="true" className="animate-spin" size={16} /> : <CheckCircle2 aria-hidden="true" size={16} />}
+                {zh ? "验证 AK/SK" : "Verify AK/SK"}
+              </Button>
+              <Button type="button" variant="danger" disabled={pending} onClick={() => void handleDelete()}>
+                <Trash2 aria-hidden="true" size={16} />
+                {deleteArmed ? (zh ? "再次点击确认删除" : "Click again to delete") : zh ? "删除凭据" : "Delete credentials"}
+              </Button>
+            </>
+          ) : null}
+        </div>
+        <p className="text-[11px] leading-4 text-muted-foreground">
+          {zh
+            ? "验证只做一次 AK/SK token 交换，不提交 OCR 文件；真实 OCR 服务权限与活动额度仍需任务调用验证。"
+            : "Verification performs only an AK/SK token exchange and submits no OCR file. A real task is still required to verify OCR access and campaign quota."}
+        </p>
+        {formError ? <InlineError message={formError} /> : null}
+      </form>
+    </section>
+  );
+}
+
 function SummaryMetric({
   label,
   value,
@@ -452,6 +662,7 @@ function ExpertTableRow({
   onEdit,
   onToggle,
   onVerify,
+  onSetDefault,
   onDelete,
 }: ExpertRowProps) {
   const zh = locale === "zh-CN";
@@ -468,6 +679,7 @@ function ExpertTableRow({
                   {zh ? "平台" : "Platform"}
                 </span>
               ) : null}
+              {expert.is_default ? <DefaultBadge locale={locale} /> : null}
             </div>
             <p className="mt-1 truncate text-xs text-muted-foreground" title={modelSecondaryLabel(expert)}>
               {modelSecondaryLabel(expert)}
@@ -495,6 +707,7 @@ function ExpertTableRow({
           onEdit={onEdit}
           onToggle={onToggle}
           onVerify={onVerify}
+          onSetDefault={onSetDefault}
           onDelete={onDelete}
         />
       </td>
@@ -509,6 +722,7 @@ interface ExpertRowProps {
   onEdit: () => void;
   onToggle: () => void;
   onVerify: () => void;
+  onSetDefault: () => void;
   onDelete: () => void;
 }
 
@@ -523,6 +737,7 @@ function ExpertMobileRow(props: ExpertRowProps) {
           <div className="min-w-0">
             <div className="flex min-w-0 items-center gap-2">
               <p className="truncate font-semibold">{modelDisplayName(expert)}</p>
+              {expert.is_default ? <DefaultBadge locale={locale} /> : null}
             </div>
             <p className="mt-1 truncate text-xs text-muted-foreground">
               {modelSecondaryLabel(expert)}
@@ -550,6 +765,7 @@ function ExpertActions({
   onEdit,
   onToggle,
   onVerify,
+  onSetDefault,
   onDelete,
 }: ExpertRowProps) {
   const zh = locale === "zh-CN";
@@ -568,6 +784,11 @@ function ExpertActions({
       <RowAction label={zh ? "验证（可选）" : "Verify (optional)"} onClick={onVerify} disabled={disabled}>
         <ShieldCheck aria-hidden="true" size={14} />
       </RowAction>
+      {!expert.is_default && expert.enabled ? (
+        <RowAction label={zh ? "设为默认" : "Set default"} onClick={onSetDefault} disabled={disabled}>
+          <Star aria-hidden="true" size={14} />
+        </RowAction>
+      ) : null}
       <RowAction
         label={expert.enabled ? (zh ? "停用" : "Disable") : zh ? "启用" : "Enable"}
         onClick={onToggle}
@@ -584,6 +805,15 @@ function ExpertActions({
         <Trash2 aria-hidden="true" size={14} />
       </RowAction>
     </div>
+  );
+}
+
+function DefaultBadge({ locale }: { locale: "zh-CN" | "en-US" }) {
+  return (
+    <span className="inline-flex shrink-0 items-center gap-1 rounded-full bg-amber-50 px-2 py-0.5 text-[10px] font-semibold text-amber-700 dark:bg-amber-950/40 dark:text-amber-200">
+      <Star aria-hidden="true" className="h-3 w-3 fill-current" />
+      {locale === "zh-CN" ? "默认" : "Default"}
+    </span>
   );
 }
 
@@ -1230,6 +1460,8 @@ function safeExpertError(error: unknown, locale: "zh-CN" | "en-US") {
     provider_request_rejected: ["模型服务拒绝了请求，请检查模型名称和接口协议。", "The model service rejected the request. Check the model name and API protocol."],
     provider_upstream_unavailable: ["模型服务当前不可用，请稍后重试。", "The model service is unavailable. Try again later."],
     provider_response_invalid: ["模型服务返回了无法识别的响应。", "The model service returned an invalid response."],
+    default_provider_not_enabled: ["只能把已启用的模型设为默认。", "Only an enabled model can be the default."],
+    default_provider_replacement_required: ["请先把另一个已启用模型设为默认，再停用或删除当前默认模型。", "Set another enabled model as default before disabling or deleting the current default."],
   };
   if (code && messages[code]) return zh ? messages[code][0] : messages[code][1];
   return normalized.message || (zh ? "请求失败，请稍后重试。" : "Request failed. Try again later.");

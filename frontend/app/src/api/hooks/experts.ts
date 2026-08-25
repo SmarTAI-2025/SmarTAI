@@ -9,6 +9,13 @@ export function useExperts() {
   });
 }
 
+export function useStageProviders() {
+  return useQuery({
+    queryKey: expertKeys.stage(),
+    queryFn: expertsApi.listStageProviders,
+  });
+}
+
 export function useProviderCatalog() {
   return useQuery({
     queryKey: expertKeys.catalog(),
@@ -34,6 +41,17 @@ export function useSelectExpert() {
   return useMutation({
     mutationFn: ({ providerId, enabled }: { providerId: string; enabled: boolean }) =>
       expertsApi.selectExpert(providerId, enabled),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: expertKeys.all });
+    },
+  });
+}
+
+export function useSetDefaultExpert() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: expertsApi.setDefaultExpert,
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: expertKeys.all });
     },
