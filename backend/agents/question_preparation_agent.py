@@ -13,8 +13,10 @@ from typing import Any, Dict, Iterable, List, Tuple
 
 from backend.agents.ingest_agent import (
     extract_problems,
+    extract_problems_from_ocr_markdown,
     generate_missing_question_materials,
     parse_material_import_to_candidates,
+    split_ocr_markdown_sections,
 )
 from backend.llm.providers import BaseProvider
 from backend.models import (
@@ -318,6 +320,128 @@ async def prepare_question_packages(
         total_steps=8,
         completed_steps=7,
         message="Question packages ready for transactional commit",
+    )
+    return problem_data
+
+
+async def prepare_ocr_question_packages(
+    sources: Iterable[SourceRow],
+    *,
+    provider_id: str,
+    reporter: ProgressReporter,
+    score_policy: QuestionScorePolicy,
+) -> Dict[str, Dict[str, Any]]:
+    """Continue Baidu OCR Markdown through the existing question workflow.
+
+    Unlimited-OCR is not an LLM. This path therefore performs only exact,
+    deterministic structure matching and leaves generated answers, rubrics,
+    and ambiguous score mappings for teacher review.
+    """
+    del provider_id
+    source_rows = list(sources)
+    problem_sources = [row for row in source_rows if row[0].role == "problem"]
+    if not problem_sources:
+        raise ValueError("At least one problem source is required.")
+
+    await reporter.configure_workflow(
+        QUESTION_PREPARATION_WORKFLOW,
+        QUESTION_PREPARATION_STAGE_SEQUENCE,
+    )
+    await reporter.set_phase("parsing")
+    await reporter.set_stage_progress(
+        "validating_sources", total_steps=8, completed_steps=1,
+        message="Validated OCR question and material sources",
+    )
+    problem_data: Dict[str, Dict[str, Any]] = {}
+    await reporter.set_stage_progress(
+        "extracting_questions", total_steps=8, completed_steps=1,
+        message="Mapping OCR Markdown question sections",
+    )
+    await extract_problems_from_ocr_markdown(
+        _join_sources(problem_sources),
+        problem_data,
+        reporter=reporter,
+    )
+
+    for q_id, problem in problem_data.items():
+        issues = list(problem.get("preparation_issues") or [])
+        if score_policy.mode == "uniform":
+            assert score_policy.uniform_max_score is not None
+            problem["max_score"] = float(score_policy.uniform_max_score)
+            problem["max_score_source"] = "uniform"
+            problem["max_score_review_status"] = "confirmed"
+        else:
+            problem["max_score"] = 10.0
+            problem["max_score_source"] = "default_10"
+            problem["max_score_review_status"] = "needs_review"
+            issues.append(_issue(
+                q_id,
+                "max_score",
+                (
+                    "max_score_not_found"
+                    if score_policy.mode == "per_question"
+                    else "default_max_score_requires_review"
+                ),
+                "warning",
+                [],
+            ))
+        problem["preparation_issues"] = issues
+
+    by_number = {
+        str(problem.get("number") or "").strip(): q_id
+        for q_id, problem in problem_data.items()
+    }
+    await reporter.set_stage_progress(
+        "aligning_uploaded_materials", total_steps=8, completed_steps=2,
+        message="Matching exact OCR material headings",
+    )
+    for draft, text in source_rows:
+        target = {
+            "reference_answer": "reference_answer",
+        }.get(draft.role)
+        if target is None:
+            continue
+        for number, value in split_ocr_markdown_sections(text):
+            q_id = by_number.get(number.strip())
+            if q_id is None or not value.strip():
+                continue
+            problem_data[q_id][target] = value.strip()
+            provenance = dict(problem_data[q_id].get("material_provenance") or {})
+            provenance[target] = {
+                "import_job_id": reporter.job_id,
+                "source_kind": draft.source_kind,
+                "source_filename": draft.filename,
+                "library_material_id": draft.library_material_id,
+                "confidence": 1.0,
+                "match_status": "exact",
+                "source_excerpt": value.strip()[:600],
+                "source_location": f"question {number}",
+                "reason": "Exact OCR question-number heading",
+                "review_status": "pending",
+                "imported_at": time.time(),
+                "updated_at": time.time(),
+            }
+            problem_data[q_id]["material_provenance"] = provenance
+
+    await reporter.set_stage_progress(
+        "generating_solutions", total_steps=8, completed_steps=3,
+        message="OCR-only route does not generate missing solutions",
+    )
+    await reporter.set_stage_progress(
+        "aligning_rubrics", total_steps=8, completed_steps=4,
+        message="Rubrics remain for teacher review",
+    )
+    await reporter.set_stage_progress(
+        "preparing_programming_tests", total_steps=8, completed_steps=5,
+        message="Programming tests remain for teacher review",
+    )
+    await reporter.set_stage_progress(
+        "detecting_conflicts", total_steps=8, completed_steps=6,
+        message="Recorded OCR-only review requirements",
+    )
+    await reporter.set_stage_progress(
+        "committing_question_packages", total_steps=8, completed_steps=7,
+        message="OCR question packages ready for transactional commit",
     )
     return problem_data
 

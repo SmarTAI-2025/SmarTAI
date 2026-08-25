@@ -38,6 +38,8 @@ from backend.llm.registry import (
     ExpertRegistry,
     SharedPoolLimitError,
     get_scoped_expert_registry,
+    resolve_owner_default_provider,
+    resolve_owner_default_provider_id,
 )
 from backend.models import User
 
@@ -142,7 +144,7 @@ class _CacheEntry:
     created_at: float
 
 
-_cache: "OrderedDict[tuple[str, str, str, str], _CacheEntry]" = OrderedDict()
+_cache: "OrderedDict[tuple[str, str, str, str, str], _CacheEntry]" = OrderedDict()
 _cache_lock = RLock()
 _query_last_at: dict[str, float] = {}
 _query_rate_lock = RLock()
@@ -623,7 +625,7 @@ async def nl_query(
             status.HTTP_409_CONFLICT,
             detail={"code": "analytics_no_results"},
         )
-    provider = registry.pick_default()
+    provider = resolve_owner_default_provider(current.id, registry)
     if provider is None:
         raise HTTPException(
             status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -754,7 +756,7 @@ def _question_breakdown(
     }
 
 
-def _cache_get(key: tuple[str, str, str, str]) -> str | None:
+def _cache_get(key: tuple[str, str, str, str, str]) -> str | None:
     now = time.monotonic()
     with _cache_lock:
         _prune_cache(now)
@@ -765,7 +767,7 @@ def _cache_get(key: tuple[str, str, str, str]) -> str | None:
         return entry.markdown
 
 
-def _cache_put(key: tuple[str, str, str, str], markdown: str) -> None:
+def _cache_put(key: tuple[str, str, str, str, str], markdown: str) -> None:
     with _cache_lock:
         _cache[key] = _CacheEntry(markdown=markdown, created_at=time.monotonic())
         _cache.move_to_end(key)
@@ -784,7 +786,7 @@ def _prune_cache(now: float | None = None) -> None:
 def _clear_cache(owner_id: str, task_id: str, question_id: str | None = None) -> None:
     with _cache_lock:
         for key in list(_cache):
-            key_owner, key_task, key_question, _version = key
+            key_owner, key_task, key_question, _version, _provider_id = key
             if (
                 key_owner == owner_id
                 and key_task == task_id
@@ -803,10 +805,17 @@ async def per_question(
     facts = _load_facts(task_id, current.id)
     question = _resolve_question(facts, question_id)
     breakdown = _question_breakdown(facts, question)
-    cache_key = (current.id, task_id, question.q_id, facts.cache_version)
+    provider_id = resolve_owner_default_provider_id(current.id, registry)
+    cache_key = (
+        current.id,
+        task_id,
+        question.q_id,
+        facts.cache_version,
+        provider_id or "none",
+    )
     common_mistakes_md = _cache_get(cache_key)
     if common_mistakes_md is None and breakdown["rows"]:
-        provider = registry.pick_default()
+        provider = resolve_owner_default_provider(current.id, registry)
         if provider is not None:
             try:
                 output = await analytics_agent.question_common_mistakes(

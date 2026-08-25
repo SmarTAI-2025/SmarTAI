@@ -129,6 +129,36 @@ export function parseSubmissions({
   });
 }
 
+export function retrySubmissionRecognition(input: {
+  taskId: string;
+  jobId: string;
+  recognitionProviderId: string;
+  expectedWorkflowRevision: number;
+}): Promise<TaskMutationResponse & { reused_original_upload?: boolean }> {
+  return postJSON(
+    `/tasks/${encodeURIComponent(input.taskId)}/submission-recognition/${encodeURIComponent(input.jobId)}/retry`,
+    {
+      recognition_provider_id: input.recognitionProviderId,
+      expected_workflow_revision: input.expectedWorkflowRevision,
+    },
+  );
+}
+
+export function retryQuestionPreparation(input: {
+  taskId: string;
+  jobId: string;
+  recognitionProviderId: string;
+  expectedWorkflowRevision: number;
+}): Promise<TaskMutationResponse & { reused_prepared_sources?: boolean }> {
+  return postJSON(
+    `/tasks/${encodeURIComponent(input.taskId)}/question-preparation/${encodeURIComponent(input.jobId)}/retry`,
+    {
+      recognition_provider_id: input.recognitionProviderId,
+      expected_workflow_revision: input.expectedWorkflowRevision,
+    },
+  );
+}
+
 export function uploadReference(taskId: string, file: File, options?: UploadOptions): Promise<TaskMutationResponse> {
   return postMultipart<TaskMutationResponse>(`/tasks/${taskId}/upload_reference`, file, options);
 }
