@@ -22,6 +22,7 @@
     "clsx": "^2.1.1",
     "katex": "^0.16.47",
     "lucide-react": "^0.577.0",
+    "pdfjs-dist": "6.2.108",
     "react": "^19.2.5",
     "react-dom": "^19.2.5",
     "react-markdown": "^10.1.0",
