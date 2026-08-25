@@ -9,7 +9,7 @@ from sqlalchemy import func, select
 
 from backend.auth import hash_password
 from backend.config import settings
-from backend.db.auth_repository import _ensure_unique_identity, _persist_user
+from backend.db.auth_repository import AuthRepositoryError, _ensure_unique_identity, _persist_user
 from backend.db.models import EmailVerificationRequestRecord, UserRecord
 from backend.db.session import session_scope
 from backend.services.email_sender import EmailDeliveryError, EmailSender, get_email_sender, verification_message
@@ -205,11 +205,14 @@ def verify_registration(token: str) -> dict[str, str]:
             raise RegistrationError("verification_link_expired")
         if not email_domain_allowed(row.normalized_email, settings.allowed_email_domains):
             raise RegistrationError("registration_email_domain_not_allowed")
-        _ensure_unique_identity(
-            session,
-            username=row.normalized_username,
-            email=row.normalized_email,
-        )
+        try:
+            _ensure_unique_identity(
+                session,
+                username=row.normalized_username,
+                email=row.normalized_email,
+            )
+        except AuthRepositoryError as exc:
+            raise RegistrationError("registration_unavailable", status_code=409) from exc
         _persist_user(
             session=session,
             username=row.normalized_username,
