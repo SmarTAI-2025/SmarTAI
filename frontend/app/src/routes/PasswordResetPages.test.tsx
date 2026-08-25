@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
@@ -15,6 +15,15 @@ vi.mock("@/api/hooks", () => ({
 }));
 
 const { useLogin, useRequestPasswordReset, useConfirmPasswordReset } = await import("@/api/hooks");
+const originalLocalStorage = Object.getOwnPropertyDescriptor(window, "localStorage");
+
+afterEach(() => {
+  if (originalLocalStorage) {
+    Object.defineProperty(window, "localStorage", originalLocalStorage);
+  } else {
+    delete (window as Window & { localStorage?: Storage }).localStorage;
+  }
+});
 
 function renderPage(element: React.ReactNode, initialEntries = ["/"]) {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
