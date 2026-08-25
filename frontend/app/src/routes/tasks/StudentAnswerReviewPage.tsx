@@ -21,6 +21,7 @@ import {
   useRef,
   useState,
   type FocusEvent,
+  type ReactNode,
 } from "react";
 import { Link, Navigate, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { toast } from "sonner";
@@ -28,8 +29,12 @@ import { getAPIErrorCode, normalizeAPIError } from "@/api/client";
 import { useTask, useUpdateStudentAnswer, useUpdateStudentIdentity } from "@/api/hooks/tasks";
 import { SmarTAIMascot } from "@/components/brand/SmarTAIMascot";
 import { NewTaskStepper } from "@/components/new-task/NewTaskStepper";
+import { OriginalFilePreviewPanel } from "@/components/tasks/OriginalFilePreviewPanel";
+import { OriginalFilePreviewTrigger } from "@/components/tasks/OriginalFilePreviewTrigger";
+import { SourceComparisonWorkspace } from "@/components/tasks/SourceComparisonWorkspace";
 import { Button } from "@/components/ui/Button";
 import { MarkdownMath } from "@/components/ui/MarkdownMath";
+import { useSourcePreview } from "@/hooks/useSourcePreview";
 import { useImeSafeQuery } from "@/hooks/useImeSafeQuery";
 import { useI18n } from "@/i18n/I18nProvider";
 import type { Locale, MessageKey } from "@/i18n/messages";
@@ -127,6 +132,9 @@ export function StudentAnswerReviewPage() {
     previous: activeIndex > 0 ? filteredQuestions[activeIndex - 1] : null,
     next: activeIndex >= 0 && activeIndex < filteredQuestions.length - 1 ? filteredQuestions[activeIndex + 1] : null,
   };
+  const sourcePreview = useSourcePreview({
+    displayName: student?.source_filename,
+  });
 
   useEffect(() => {
     if (requestedQuestionId) selectedQuestionRef.current = requestedQuestionId;
@@ -515,13 +523,42 @@ export function StudentAnswerReviewPage() {
               setIdentityOpen((open) => !open);
               setIdentityError(null);
             }}
+            previewAction={(
+              <OriginalFilePreviewTrigger
+                state={sourcePreview.triggerState}
+                unavailableReason={sourcePreview.unavailableReason}
+                open={sourcePreview.isOpen}
+                onOpen={sourcePreview.openPreview}
+                onClose={sourcePreview.closePreview}
+                t={t}
+              />
+            )}
             t={t}
           />
           </div>
 
+          <SourceComparisonWorkspace
+            open={sourcePreview.isOpen}
+            preview={(
+              <OriginalFilePreviewPanel
+                descriptor={sourcePreview.descriptor}
+                displayName={sourcePreview.displayName}
+                previewKind={sourcePreview.previewKind}
+                loadState={sourcePreview.loadState}
+                errorCode={sourcePreview.errorCode}
+                previewUrl={sourcePreview.previewUrl}
+                onClose={sourcePreview.closePreview}
+                onRetry={sourcePreview.retryPreview}
+                t={t}
+              />
+            )}
+            separatorLabel={t("sourcePreviewSplitLabel")}
+            className="mt-3"
+          >
+          <div className="min-w-0">
           {identityOpen ? (
             <form
-              className="mt-3 rounded-[10px] border bg-card p-4"
+              className="rounded-[10px] border bg-card p-4"
               onSubmit={(event) => {
                 event.preventDefault();
                 void saveIdentity();
@@ -557,7 +594,7 @@ export function StudentAnswerReviewPage() {
             </form>
           ) : null}
 
-          <div className="mt-3">
+          <div className={identityOpen ? "mt-3" : undefined}>
             <div className="rounded-[10px] border bg-card p-2">
               <SmartPicker
                 label={t("answerReviewQuestionSearchLabel")}
@@ -580,8 +617,8 @@ export function StudentAnswerReviewPage() {
           </div>
 
           {filteredQuestions.length ? (
-            <div className="mt-4 grid items-start gap-4 lg:grid-cols-[clamp(180px,16vw,240px)_minmax(0,1fr)]">
-              <aside className="sticky top-[86px] z-20 hidden max-h-[calc(100vh-102px)] overflow-hidden rounded-[10px] border bg-card lg:flex lg:flex-col" aria-label={tx(locale, "题目导航", "Question navigation")}>
+            <div className={cn("mt-4 items-start", sourcePreview.isOpen ? "block" : "grid gap-4 lg:grid-cols-[clamp(180px,16vw,240px)_minmax(0,1fr)]")}>
+              <aside className={sourcePreview.isOpen ? "hidden" : "sticky top-[86px] z-20 hidden max-h-[calc(100vh-102px)] overflow-hidden rounded-[10px] border bg-card lg:flex lg:flex-col"} aria-label={tx(locale, "题目导航", "Question navigation")}>
                 <div className="shrink-0 border-b px-3 py-3">
                   <p className="text-xs font-bold text-foreground">{tx(locale, "题目导航", "Questions")}</p>
                   <p className="mt-1 text-[11px] leading-4 text-muted-foreground">{tx(locale, `共 ${filteredQuestions.length} 题 · 点击定位`, `${filteredQuestions.length} questions · select to locate`)}</p>
@@ -675,13 +712,15 @@ export function StudentAnswerReviewPage() {
               <ChevronRight aria-hidden="true" className="h-4 w-4" />
             </Link>
           </div>
+          </div>
+          </SourceComparisonWorkspace>
         </section>
       )}
     </div>
   );
 }
 
-function StudentNavigation({ student, previous, next, onPrevious, onNext, identityOpen, readOnly, onToggleIdentity, t }: {
+function StudentNavigation({ student, previous, next, onPrevious, onNext, identityOpen, readOnly, onToggleIdentity, previewAction, t }: {
   student: StudentSubmission;
   previous: StudentSubmission | null;
   next: StudentSubmission | null;
@@ -690,10 +729,11 @@ function StudentNavigation({ student, previous, next, onPrevious, onNext, identi
   identityOpen: boolean;
   readOnly: boolean;
   onToggleIdentity: () => void;
+  previewAction: ReactNode;
   t: (key: MessageKey) => string;
 }) {
   return (
-    <nav aria-label={t("answerReviewStudentNavigation")} className="grid min-h-[72px] grid-cols-2 gap-2 rounded-[10px] border bg-card p-2 xl:grid-cols-[minmax(140px,0.75fr)_minmax(360px,1.8fr)_minmax(140px,0.75fr)_145px] xl:items-center">
+    <nav aria-label={t("answerReviewStudentNavigation")} className="grid min-h-[72px] grid-cols-2 gap-2 rounded-[10px] border bg-card p-2 xl:grid-cols-[minmax(140px,0.7fr)_minmax(300px,1.5fr)_minmax(140px,0.7fr)_minmax(280px,auto)] xl:items-center">
       <Button type="button" variant="ghost" className="order-2 h-10 justify-start px-3 xl:order-1" disabled={!previous} onClick={onPrevious}>
         <ArrowLeft aria-hidden="true" className="h-4 w-4" />
         <span className="min-w-0 truncate">{previous?.stu_name || t("answerReviewPreviousStudent")}</span>
@@ -708,10 +748,13 @@ function StudentNavigation({ student, previous, next, onPrevious, onNext, identi
         <span className="min-w-0 truncate">{next?.stu_name || t("answerReviewNextStudent")}</span>
         <ArrowRight aria-hidden="true" className="h-4 w-4" />
       </Button>
-      <Button type="button" variant="secondary" className="order-4 h-10 px-3" disabled={readOnly} onClick={onToggleIdentity}>
-        {identityOpen ? <X aria-hidden="true" className="h-4 w-4" /> : <Pencil aria-hidden="true" className="h-4 w-4" />}
-        {t(identityOpen ? "studentSubmissionCloseIdentity" : "studentSubmissionEditIdentity")}
-      </Button>
+      <div className="order-4 col-span-2 flex min-w-0 flex-wrap items-center justify-end gap-2 xl:col-span-1 xl:flex-nowrap">
+        <Button type="button" variant="secondary" className="h-10 px-3" disabled={readOnly} onClick={onToggleIdentity}>
+          {identityOpen ? <X aria-hidden="true" className="h-4 w-4" /> : <Pencil aria-hidden="true" className="h-4 w-4" />}
+          {t(identityOpen ? "studentSubmissionCloseIdentity" : "studentSubmissionEditIdentity")}
+        </Button>
+        {previewAction}
+      </div>
     </nav>
   );
 }
@@ -1060,7 +1103,7 @@ function answerErrorMessage(error: unknown, t: (key: MessageKey) => string) {
 
 function isKeyboardNavigationBlocked(target: EventTarget | null) {
   if (!(target instanceof HTMLElement)) return false;
-  return Boolean(target.closest("input, textarea, select, [contenteditable='true'], [role='dialog']"));
+  return Boolean(target.closest("input, textarea, select, [contenteditable='true'], [role='dialog'], [role='separator'], [data-source-preview-panel]"));
 }
 
 function scrollQuestionIntoView(questionId: string, behavior: ScrollBehavior) {

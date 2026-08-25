@@ -11,6 +11,7 @@ const taskData = vi.hoisted(() => ({
   name: "Geometry",
   status: "problems_ready",
   workflow_revision: 7,
+  problem_file_name: "geometry-problems.pdf",
   problem_data: {
     Q1: {
       q_id: "Q1",
@@ -88,9 +89,15 @@ vi.mock("@/components/new-task/NewTaskStepper", () => ({
   NewTaskStepper: () => null,
 }));
 
-vi.mock("@/i18n/I18nProvider", () => ({
-  useI18n: () => ({ locale: testState.locale }),
-}));
+vi.mock("@/i18n/I18nProvider", async () => {
+  const { messages } = await vi.importActual<typeof import("@/i18n/messages")>("@/i18n/messages");
+  return {
+    useI18n: () => ({
+      locale: testState.locale,
+      t: (key: keyof typeof messages["zh-CN"]) => messages[testState.locale as "zh-CN" | "en-US"][key],
+    }),
+  };
+});
 
 function renderPage(initialEntry = "/tasks/task-1/questions/Q1/content") {
   const router = createMemoryRouter([
@@ -138,6 +145,17 @@ beforeEach(() => {
 });
 
 describe("QuestionPreparationDetailPage navigation", () => {
+  it("opens the 50/50 workspace and truthfully reports the pending backend integration", async () => {
+    const user = userEvent.setup();
+    renderPage();
+
+    await user.click(await screen.findByRole("button", { name: "查看题目原文件" }));
+    expect(await screen.findByTestId("source-preview-panel")).toBeInTheDocument();
+    expect(screen.getByRole("separator", { name: "拖动调整原文件与识别内容宽度" })).toHaveAttribute("aria-valuenow", "50");
+    expect(await screen.findByText("原文件读取接口尚未接通；识别内容仍可继续查看和编辑。")).toBeInTheDocument();
+    expect(document.querySelector("object")).not.toBeInTheDocument();
+  });
+
   it("uses a bounded responsive question rail and preserves the full label on hover", async () => {
     renderPage();
 

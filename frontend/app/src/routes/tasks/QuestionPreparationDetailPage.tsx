@@ -18,10 +18,14 @@ import { toast } from "sonner";
 import { useTask, useUpdateProblem } from "@/api/hooks/tasks";
 import { SmarTAIMascot } from "@/components/brand/SmarTAIMascot";
 import { NewTaskStepper } from "@/components/new-task/NewTaskStepper";
+import { OriginalFilePreviewPanel } from "@/components/tasks/OriginalFilePreviewPanel";
+import { OriginalFilePreviewTrigger } from "@/components/tasks/OriginalFilePreviewTrigger";
+import { SourceComparisonWorkspace } from "@/components/tasks/SourceComparisonWorkspace";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { MarkdownMath } from "@/components/ui/MarkdownMath";
 import { SyntaxHighlightedCode } from "@/components/ui/SyntaxHighlightedCode";
 import { UnsavedChangesDialog } from "@/components/ui/UnsavedChangesDialog";
+import { useSourcePreview } from "@/hooks/useSourcePreview";
 import { useI18n } from "@/i18n/I18nProvider";
 import { cn } from "@/lib/cn";
 import { isProgrammingProblem } from "@/lib/questionPreparation";
@@ -38,9 +42,12 @@ export function QuestionPreparationDetailPage() {
   const [searchParams, setSearchParams] = useSearchParams();
   const location = useLocation();
   const navigate = useNavigate();
-  const { locale } = useI18n();
+  const { locale, t } = useI18n();
   const taskQuery = useTask(taskId);
   const updateProblem = useUpdateProblem();
+  const sourcePreview = useSourcePreview({
+    displayName: taskQuery.data?.problem_file_name,
+  });
   const [activeQuestionId, setActiveQuestionId] = useState(questionId ?? "");
   const [dirtyKeys, setDirtyKeys] = useState<Set<string>>(new Set());
   const [confirming, setConfirming] = useState(false);
@@ -287,11 +294,41 @@ export function QuestionPreparationDetailPage() {
           <h1 className="text-[30px] font-bold leading-9 tracking-[-0.02em] text-foreground">{tx(locale, "题目资料审核", "Review Question Materials")}</h1>
           <p className="mt-1 text-sm leading-6 text-muted-foreground">{tx(locale, "连续浏览每道题的题目、标答和评分标准；只有编程题显示测试样例。", "Review each question, reference answer, and rubric together. Test cases appear only for programming questions.")}</p>
         </div>
-        <span className="text-xs text-muted-foreground">{taskQuery.data?.name ?? ""}</span>
+        <div className="flex flex-wrap items-center justify-end gap-2">
+          <span className="text-xs text-muted-foreground">{taskQuery.data?.name ?? ""}</span>
+          <OriginalFilePreviewTrigger
+            state={sourcePreview.triggerState}
+            unavailableReason={sourcePreview.unavailableReason}
+            open={sourcePreview.isOpen}
+            onOpen={sourcePreview.openPreview}
+            onClose={sourcePreview.closePreview}
+            openLabel={t("sourcePreviewOpenProblem")}
+            t={t}
+          />
+        </div>
       </div>
       <NewTaskStepper currentStep={2} />
 
-      <div className="mt-6 flex items-center gap-2">
+      <SourceComparisonWorkspace
+        open={sourcePreview.isOpen}
+        preview={(
+          <OriginalFilePreviewPanel
+            descriptor={sourcePreview.descriptor}
+            displayName={sourcePreview.displayName}
+            previewKind={sourcePreview.previewKind}
+            loadState={sourcePreview.loadState}
+            errorCode={sourcePreview.errorCode}
+            previewUrl={sourcePreview.previewUrl}
+            onClose={sourcePreview.closePreview}
+            onRetry={sourcePreview.retryPreview}
+            t={t}
+          />
+        )}
+        separatorLabel={t("sourcePreviewSplitLabel")}
+        className="mt-6"
+      >
+      <div className="min-w-0">
+      <div className="flex items-center gap-2">
         <SmarTAIMascot variant="thinking" size="xs" />
         <label className="relative min-w-0 flex-1">
           <span className="sr-only">{tx(locale, "本地快速筛选题目，不调用模型", "Local quick question filter, no model call")}</span>
@@ -344,8 +381,8 @@ export function QuestionPreparationDetailPage() {
       ) : filtered.length === 0 ? (
         <EmptyState title={tx(locale, "没有匹配的题目", "No matching questions")} description={tx(locale, "清空或调整筛选条件。", "Clear or adjust the filter.")} />
       ) : (
-        <div className="mt-5 grid items-start gap-4 lg:grid-cols-[clamp(180px,16vw,240px)_minmax(0,1fr)]">
-          <aside className="sticky top-[86px] z-20 hidden max-h-[calc(100vh-102px)] overflow-hidden rounded-[10px] border bg-card lg:flex lg:flex-col" aria-label={tx(locale, "题目导航", "Question navigation")}>
+        <div className={cn("mt-5 items-start", sourcePreview.isOpen ? "block" : "grid gap-4 lg:grid-cols-[clamp(180px,16vw,240px)_minmax(0,1fr)]")}>
+          <aside className={sourcePreview.isOpen ? "hidden" : "sticky top-[86px] z-20 hidden max-h-[calc(100vh-102px)] overflow-hidden rounded-[10px] border bg-card lg:flex lg:flex-col"} aria-label={tx(locale, "题目导航", "Question navigation")}>
             <div className="shrink-0 border-b px-3 py-3">
               <p className="text-xs font-bold text-foreground">{tx(locale, "题目导航", "Questions")}</p>
               <p className="mt-1 text-[11px] leading-4 text-muted-foreground">{tx(locale, `共 ${filtered.length} 题 · 点击定位`, `${filtered.length} questions · select to locate`)}</p>
@@ -406,6 +443,8 @@ export function QuestionPreparationDetailPage() {
           </main>
         </div>
       )}
+      </div>
+      </SourceComparisonWorkspace>
 
       {blocker.state === "blocked" ? (
         <UnsavedChangesDialog
@@ -754,7 +793,7 @@ function QuestionNavigator({ previous, next, locale, onNavigate, compact = false
 
 function isKeyboardNavigationBlocked(target: EventTarget | null) {
   if (!(target instanceof HTMLElement)) return false;
-  return Boolean(target.closest("input, textarea, select, [contenteditable='true'], [role='dialog']"));
+  return Boolean(target.closest("input, textarea, select, [contenteditable='true'], [role='dialog'], [role='separator'], [data-source-preview-panel]"));
 }
 
 function updateCase(cases: TestCase[], index: number, patch: Partial<TestCase>) {

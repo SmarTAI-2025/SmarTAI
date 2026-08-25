@@ -222,11 +222,16 @@ function isAllowedVisibleText(relativePath, line, rule) {
 
   if (
     rule.id === "visible-lms-integration" &&
-    relativePath === "src/routes/tasks/results/VisualizationAnalysisPage.tsx" &&
-    /(?:createElement\(["']canvas["']\)|\bcanvas\.(?:width|height|toBlob|getContext))/.test(line)
+    (
+      (
+        relativePath === "src/routes/tasks/results/VisualizationAnalysisPage.tsx"
+        && /(?:createElement\(["']canvas["']\)|\bcanvas\.(?:width|height|toBlob|getContext))/.test(line)
+      )
+      || relativePath === "src/components/tasks/PdfDocumentPreview.tsx"
+    )
   ) {
-    // Browser Canvas is used only to rasterize an already-rendered SVG for
-    // PNG download. It is unrelated to the Canvas LMS product capability.
+    // Browser Canvas is used for local rendering and image export only. It is
+    // unrelated to the Canvas LMS product capability.
     return true;
   }
 
