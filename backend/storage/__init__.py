@@ -1,4 +1,8 @@
-from backend.storage.base import StorageBackend
+from backend.storage.base import (
+    StorageBackend,
+    StorageObjectNotFound,
+    StorageUnavailable,
+)
 from backend.storage.local import LocalStorage
 from backend.config import settings
 from functools import lru_cache
@@ -31,5 +35,6 @@ def __getattr__(name: str):
 
 
 __all__ = [
-    "StorageBackend", "LocalStorage", "S3Storage", "build_storage", "get_storage",
+    "StorageBackend", "StorageObjectNotFound", "StorageUnavailable",
+    "LocalStorage", "S3Storage", "build_storage", "get_storage",
 ]

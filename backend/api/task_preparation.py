@@ -40,7 +40,12 @@ from backend.agents.question_preparation_agent import (
 )
 from backend.api.errors import domain_error_response
 from backend.auth import require_teacher
-from backend.db import assignment_repository, file_repository, workflow_repository
+from backend.db import (
+    assignment_repository,
+    file_repository,
+    source_outcome_repository,
+    workflow_repository,
+)
 from backend.domain.errors import (
     DomainError,
     InvalidTransition,
@@ -57,11 +62,16 @@ from backend.models import (
     is_programming_question_type,
 )
 from backend.progress.tracker import get_or_create_reporter, get_reporter, remove_reporter
+from backend.services import source_files as source_file_service
 from backend.services import task_facade
 from backend.storage import get_storage
 from backend.services.background_errors import classify_background_error
 from backend.skills.ocr_ingest import LLMVisionOCRSkill, OCRPurpose
-from backend.tools.file_processing import IMAGE_MEDIA_TYPES, extract_text_from_upload
+from backend.tools.file_processing import (
+    IMAGE_MEDIA_TYPES,
+    extract_text_from_upload,
+    inspect_upload_content,
+)
 
 
 router = APIRouter(prefix="/tasks", tags=["task-preparation"])
@@ -364,72 +374,264 @@ async def preflight_problem_source(
 ):
     try:
         workflow = workflow_repository.get_workflow(task_id, owner_id=current.id)
-        text, descriptor = await _read_source(
+        descriptor = await _select_source(
             file=file, library_material_id=library_material_id,
             inline_text=inline_text, owner_id=current.id, registry=registry,
             role=role,
         )
-        saved_material = await _save_source_to_library(
-            save=save_to_library,
-            descriptor=descriptor,
+        provisional_payload = {
+            "filename": descriptor["filename"],
+            "content_type": descriptor.get("content_type"),
+            "size_bytes": descriptor["size_bytes"],
+            "sha256": descriptor["sha256"],
+            "source_kind": descriptor["kind"],
+            "library_material_id": descriptor.get("library_material_id"),
+            "structure_mode": structure_mode,
+            "role": role,
+            "extraction_hint": extraction_hint,
+            "save_to_library": save_to_library,
+            "base_workflow_revision": workflow.workflow_revision,
+        }
+        operation, created = workflow_repository.create_operation(
+            assignment_id=task_id,
             owner_id=current.id,
-            task_id=task_id,
-            role=role,
-            existing_material_id=library_material_id,
+            operation_type="problem_source",
+            input_hash=_source_fingerprint(provisional_payload),
+            payload=provisional_payload,
+            expires_at=time.time() + SOURCE_TTL_SECONDS,
+            initial_status="preparing",
         )
+        if not created:
+            if operation.status == "ready" and operation.payload.get("text"):
+                return _problem_source_preflight_response(
+                    operation=operation,
+                    workflow_revision=workflow.workflow_revision,
+                )
+            raise HTTPException(
+                status.HTTP_409_CONFLICT,
+                detail={"code": "problem_source_preflight_processing"},
+            )
+
+        source_ref = {
+            "role": role,
+            "source_kind": descriptor["kind"],
+            "display_name": descriptor["filename"],
+            "source_id": None,
+            "stored_file_id": descriptor.get("stored_file_id"),
+            "source_operation_id": operation.id,
+            "source_attempt": operation.attempt,
+            "library_material_id": descriptor.get("library_material_id"),
+            "knowledge_document_id": descriptor.get("knowledge_document_id"),
+        }
+        artifact_refs: list[str] = []
+        stored_created = False
+        stored = None
+        if descriptor["kind"] == "upload":
+            try:
+                stored, stored_created = source_file_service.persist_problem_source(
+                    storage=get_storage(),
+                    owner_id=current.id,
+                    task_id=task_id,
+                    original_name=descriptor["filename"],
+                    content=descriptor["_body"],
+                    content_type=descriptor["content_type"],
+                )
+                source, _ = source_outcome_repository.register_source(
+                    owner_id=current.id,
+                    assignment_id=task_id,
+                    operation_id=operation.id,
+                    expected_attempt=operation.attempt,
+                    order_index=0,
+                    stored_file_id=stored.id,
+                )
+                source_ref.update(
+                    source_id=source.id,
+                    stored_file_id=stored.id,
+                )
+                artifact_refs.append(stored.id)
+            except Exception as exc:
+                if stored_created and stored is not None:
+                    file_repository.delete_unlinked_file(
+                        storage=get_storage(),
+                        file_id=stored.id,
+                        owner_id=current.id,
+                        assignment_id=task_id,
+                    )
+                _mark_problem_source_failed(
+                    operation=operation,
+                    owner_id=current.id,
+                    error_code="source_persistence_failed",
+                )
+                logger.warning(
+                    "Problem source persistence failed; operation_id=%s exception_type=%s",
+                    operation.id,
+                    type(exc).__name__,
+                )
+                raise HTTPException(
+                    status.HTTP_503_SERVICE_UNAVAILABLE,
+                    detail={"code": "source_persistence_failed"},
+                ) from None
+
+        try:
+            operation = workflow_repository.save_operation_checkpoint(
+                operation.id,
+                owner_id=current.id,
+                expected_attempt=operation.attempt,
+                expected_checkpoint_revision=operation.checkpoint_revision,
+                stage="problem_source_saved",
+                checkpoint={"source_refs": [source_ref]},
+                artifact_refs=artifact_refs,
+            )
+            text = await _extract_selected_source(
+                descriptor=descriptor, registry=registry, role=role
+            )
+        except HTTPException as exc:
+            detail = exc.detail if isinstance(exc.detail, dict) else {}
+            _mark_problem_source_failed(
+                operation=operation,
+                owner_id=current.id,
+                error_code=str(detail.get("code") or "problem_source_parse_failed"),
+            )
+            raise
+        except DomainError as exc:
+            _mark_problem_source_failed(
+                operation=operation,
+                owner_id=current.id,
+                error_code=task_facade._detail_error(
+                    exc, "problem_source_parse_failed"
+                ),
+            )
+            raise
+        except Exception as exc:
+            error_code = _question_preparation_failure_code(exc)
+            _mark_problem_source_failed(
+                operation=operation,
+                owner_id=current.id,
+                error_code=error_code,
+            )
+            logger.warning(
+                "Problem source extraction failed; operation_id=%s error_code=%s exception_type=%s",
+                operation.id,
+                error_code,
+                type(exc).__name__,
+            )
+            raise HTTPException(
+                status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail={"code": error_code},
+            ) from None
+
+        try:
+            saved_material = await _save_source_to_library(
+                save=save_to_library,
+                descriptor=descriptor,
+                owner_id=current.id,
+                task_id=task_id,
+                role=role,
+                existing_material_id=library_material_id,
+            )
+        except DomainError as exc:
+            _mark_problem_source_failed(
+                operation=operation,
+                owner_id=current.id,
+                error_code=task_facade._detail_error(
+                    exc, "problem_source_library_save_failed"
+                ),
+            )
+            raise
+        except Exception as exc:
+            _mark_problem_source_failed(
+                operation=operation,
+                owner_id=current.id,
+                error_code="problem_source_library_save_failed",
+            )
+            logger.warning(
+                "Problem source library save failed; operation_id=%s exception_type=%s",
+                operation.id,
+                type(exc).__name__,
+            )
+            raise HTTPException(
+                status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail={"code": "problem_source_library_save_failed"},
+            ) from None
         effective_material_id = (
             library_material_id
             or (saved_material or {}).get("material_id")
         )
         candidates = _detect_candidates(text)
-        digest = hashlib.sha256(text.encode("utf-8")).hexdigest()
         payload = {
+            **provisional_payload,
             "text": text,
-            "filename": descriptor["filename"],
-            "content_type": descriptor.get("content_type"),
-            "size_bytes": descriptor["size_bytes"],
-            "sha256": digest,
-            "source_kind": descriptor["kind"],
             "library_material_id": effective_material_id,
-            "structure_mode": structure_mode,
-            "role": role,
-            "extraction_hint": extraction_hint,
             "candidates": candidates,
-            "base_workflow_revision": workflow.workflow_revision,
-        }
-        operation, _ = workflow_repository.create_operation(
-            assignment_id=task_id, owner_id=current.id,
-            operation_type="problem_source", input_hash=_source_fingerprint(payload),
-            payload=payload, expires_at=time.time() + SOURCE_TTL_SECONDS,
-        )
-        return {
-            "status": "ready", "source_token": operation.id,
-            "source": {
-                "kind": descriptor["kind"], "filename": descriptor["filename"],
-                "size_bytes": descriptor["size_bytes"], "sha256": digest,
-                "library_material_id": effective_material_id,
-            },
-            "role": role, "structure_mode": structure_mode,
-            "requires_confirmation": structure_mode == "extract_from_source" and bool(candidates),
-            "candidate_summary": {
-                "matched": candidates if structure_mode == "organized" else [],
-                "possible_matches": candidates if structure_mode != "organized" else [],
-                "not_found": [], "semantic_match_performed": False,
-                "notice": None,
-            },
-            "base_workflow_revision": workflow.workflow_revision,
-            "workflow_revision": workflow.workflow_revision,
+            "source_ref": source_ref,
             "saved_material": saved_material,
         }
+        operation = workflow_repository.update_operation(
+            operation.id,
+            owner_id=current.id,
+            expected_attempt=operation.attempt,
+            status="ready",
+            payload=payload,
+        )
+        return _problem_source_preflight_response(
+            operation=operation,
+            workflow_revision=workflow.workflow_revision,
+        )
     except DomainError as exc:
         return domain_error_response(exc)
 
 
-async def _read_source(
+def _mark_problem_source_failed(*, operation, owner_id: str, error_code: str) -> None:
+    try:
+        workflow_repository.update_operation(
+            operation.id,
+            owner_id=owner_id,
+            expected_attempt=operation.attempt,
+            status="error",
+            error_code=error_code[:128],
+            completed_at=time.time(),
+        )
+    except Exception:
+        return
+
+
+def _problem_source_preflight_response(*, operation, workflow_revision: int) -> dict:
+    payload = dict(operation.payload or {})
+    candidates = list(payload.get("candidates") or [])
+    structure_mode = str(payload.get("structure_mode") or "organized")
+    return {
+        "status": "ready",
+        "source_token": operation.id,
+        "source": {
+            "kind": payload.get("source_kind"),
+            "filename": payload.get("filename"),
+            "size_bytes": payload.get("size_bytes"),
+            "sha256": payload.get("sha256"),
+            "library_material_id": payload.get("library_material_id"),
+        },
+        "role": payload.get("role", "problem"),
+        "structure_mode": structure_mode,
+        "requires_confirmation": (
+            structure_mode == "extract_from_source" and bool(candidates)
+        ),
+        "candidate_summary": {
+            "matched": candidates if structure_mode == "organized" else [],
+            "possible_matches": candidates if structure_mode != "organized" else [],
+            "not_found": [],
+            "semantic_match_performed": False,
+            "notice": None,
+        },
+        "base_workflow_revision": payload.get("base_workflow_revision", 0),
+        "workflow_revision": workflow_revision,
+        "saved_material": payload.get("saved_material"),
+    }
+
+
+async def _select_source(
     *, file: UploadFile | None, library_material_id: str | None,
     inline_text: str | None, owner_id: str, registry: ExpertRegistry,
     role: str,
-) -> tuple[str, dict]:
+) -> dict:
     _accepted_source_extensions(
         role, has_vision=registry.pick_vision() is not None
     )
@@ -439,7 +641,9 @@ async def _read_source(
     if file is not None:
         provider = registry.pick_default()
         vision = registry.pick_vision(provider)
-        _validate_source_upload(file, role=role, has_vision=vision is not None)
+        extension = _validate_source_upload(
+            file, role=role, has_vision=vision is not None
+        )
         body = await file.read(MAX_SOURCE_BYTES + 1)
         if not body:
             raise HTTPException(status.HTTP_400_BAD_REQUEST, detail={"code": "source_empty"})
@@ -448,51 +652,114 @@ async def _read_source(
                 status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
                 detail={"code": "source_too_large", "max_bytes": MAX_SOURCE_BYTES},
             )
-        ocr_skill = LLMVisionOCRSkill(vision) if vision is not None else None
-        try:
-            text = await extract_text_from_upload(
-                body, file.filename or "source", ocr_skill=ocr_skill,
-                purpose=_source_role_ocr_purpose(role), reporter=None,
-            )
-        except HTTPException as exc:
-            _stable_vision_error(
-                exc,
-                role=role,
-                filename=Path(file.filename or "source").name,
+        filename = source_file_service.safe_display_name(
+            file.filename or "source"
+        )
+        detected = (
+            source_file_service.detected_preview_mime(body[:4096], filename)
+            if extension in {".pdf", *_IMAGE_SOURCE_EXTENSIONS}
+            else inspect_upload_content(body, filename, file.content_type).content_type
+        )
+        if detected not in _SOURCE_MIME_TYPES[extension]:
+            raise HTTPException(
+                status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
+                detail={
+                    "code": "source_content_type_not_allowed",
+                    "role": role,
+                    "filename": filename,
+                },
             )
         descriptor = {
-            "kind": "upload", "filename": file.filename or "source",
-            "size_bytes": len(body), "content_type": file.content_type,
+            "kind": "upload", "filename": filename,
+            "size_bytes": len(body), "content_type": detected,
+            "sha256": hashlib.sha256(body).hexdigest(),
             "_body": body,
+            "_vision": vision,
         }
     elif library_material_id:
         from backend.db import course_library_repository
-        from backend.db.knowledge_repository import list_chunks
 
         material = course_library_repository.get_material(
             material_id=library_material_id, owner_id=owner_id
         )
         if material is None:
             raise NotFound("course_material")
-        chunks = list_chunks([material.document_id])
-        text = "\n\n".join(chunk.content for chunk in chunks)
         descriptor = {
             "kind": "library", "filename": material.filename,
-            "size_bytes": material.size_bytes or len(text.encode("utf-8")),
+            "size_bytes": material.size_bytes,
             "content_type": material.content_type,
+            "sha256": material.sha256,
+            "library_material_id": material.material_id,
+            "knowledge_document_id": material.document_id,
+            "stored_file_id": material.stored_file_id,
         }
     else:
         text = (inline_text or "").strip()
         descriptor = {
             "kind": "inline_text", "filename": "inline-text.txt",
             "size_bytes": len(text.encode("utf-8")), "content_type": "text/plain",
+            "sha256": hashlib.sha256(text.encode("utf-8")).hexdigest(),
             "_body": text.encode("utf-8"),
+            "_text": text,
         }
+    return descriptor
+
+
+async def _extract_selected_source(
+    *, descriptor: dict, registry: ExpertRegistry, role: str
+) -> str:
+    if descriptor["kind"] == "upload":
+        vision = descriptor.get("_vision")
+        ocr_skill = LLMVisionOCRSkill(vision) if vision is not None else None
+        try:
+            text = await extract_text_from_upload(
+                descriptor["_body"],
+                descriptor["filename"],
+                ocr_skill=ocr_skill,
+                purpose=_source_role_ocr_purpose(role),
+                reporter=None,
+            )
+        except HTTPException as exc:
+            _stable_vision_error(
+                exc, role=role, filename=descriptor["filename"]
+            )
+    elif descriptor["kind"] == "library":
+        from backend.db.knowledge_repository import list_chunks
+
+        chunks = list_chunks([descriptor["knowledge_document_id"]])
+        text = "\n\n".join(chunk.content for chunk in chunks)
+    else:
+        text = str(descriptor.get("_text") or "")
     text = text.strip()
     if not text:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, detail={"code": "source_empty"})
     if len(text) > MAX_SOURCE_CHARACTERS:
         raise HTTPException(status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, detail={"code": "source_text_too_large"})
+    return text
+
+
+async def _read_source(
+    *, file: UploadFile | None, library_material_id: str | None,
+    inline_text: str | None, owner_id: str, registry: ExpertRegistry,
+    role: str,
+) -> tuple[str, dict]:
+    """Compatibility reader for auxiliary material paths.
+
+    The formal problem-source preflight uses ``_select_source`` directly so it
+    can persist upload bytes and their source relation before this extraction.
+    """
+
+    descriptor = await _select_source(
+        file=file,
+        library_material_id=library_material_id,
+        inline_text=inline_text,
+        owner_id=owner_id,
+        registry=registry,
+        role=role,
+    )
+    text = await _extract_selected_source(
+        descriptor=descriptor, registry=registry, role=role
+    )
     return text, descriptor
 
 
@@ -562,11 +829,92 @@ def _source_fingerprint(payload: dict) -> str:
     selected = {
         key: payload.get(key)
         for key in (
-            "sha256", "source_kind", "library_material_id", "structure_mode",
-            "role", "extraction_hint", "targets", "base_workflow_revision",
+            "sha256", "filename", "content_type", "source_kind",
+            "library_material_id", "structure_mode", "role",
+            "extraction_hint", "save_to_library", "targets",
+            "base_workflow_revision",
         )
     }
     return hashlib.sha256(json.dumps(selected, sort_keys=True).encode()).hexdigest()
+
+
+def _validated_question_source_ref(
+    *, operation, payload: dict, task_id: str, owner_id: str
+) -> dict:
+    if operation.status != "ready":
+        raise InvalidTransition(
+            "Problem source is not ready.", code="problem_source_not_ready"
+        )
+    source_kind = str(payload.get("source_kind") or "upload")
+    raw_ref = payload.get("source_ref")
+    if not isinstance(raw_ref, dict):
+        if source_kind == "upload":
+            raise InvalidTransition(
+                "Problem source bytes were not persisted.",
+                code="problem_source_not_persisted",
+            )
+        raw_ref = {}
+    ref = {
+        "role": str(payload.get("role") or "problem"),
+        "source_kind": source_kind,
+        "display_name": source_file_service.safe_display_name(
+            payload.get("filename") or "source"
+        ),
+        "source_id": raw_ref.get("source_id"),
+        "stored_file_id": raw_ref.get("stored_file_id"),
+        "source_operation_id": operation.id,
+        "source_attempt": operation.attempt,
+        "library_material_id": payload.get("library_material_id"),
+        "knowledge_document_id": raw_ref.get("knowledge_document_id"),
+    }
+    if source_kind == "upload":
+        source_id = ref["source_id"]
+        file_id = ref["stored_file_id"]
+        if not isinstance(source_id, str) or not isinstance(file_id, str):
+            raise InvalidTransition(
+                "Problem source bytes were not persisted.",
+                code="problem_source_not_persisted",
+            )
+        source = source_outcome_repository.get_source(
+            source_id, owner_id=owner_id
+        )
+        stored = file_repository.get_file(file_id=file_id, owner_id=owner_id)
+        if (
+            source.assignment_id != task_id
+            or source.operation_id != operation.id
+            or source.attempt != operation.attempt
+            or source.stored_file_id != file_id
+            or stored is None
+            or stored.assignment_id != task_id
+            or stored.kind != "problem_source"
+        ):
+            raise NotFound("problem_source")
+    elif source_kind == "library":
+        from backend.db import course_library_repository
+
+        material_id = ref["library_material_id"]
+        if not isinstance(material_id, str):
+            raise NotFound("problem_source")
+        material = course_library_repository.get_material(material_id, owner_id)
+        if material is None:
+            raise NotFound("problem_source")
+        ref.update(
+            stored_file_id=material.stored_file_id,
+            knowledge_document_id=material.document_id,
+        )
+        if material.stored_file_id is not None:
+            stored = file_repository.get_file(
+                file_id=material.stored_file_id, owner_id=owner_id
+            )
+            if (
+                stored is None
+                or stored.knowledge_document_id != material.document_id
+                or stored.assignment_id is not None
+            ):
+                raise NotFound("problem_source")
+    else:
+        ref.update(source_id=None, stored_file_id=None)
+    return ref
 
 
 @router.post("/{task_id}/question-preparation/jobs")
@@ -581,6 +929,8 @@ async def start_question_preparation(
         workflow = workflow_repository.get_workflow(task_id, owner_id=current.id)
         sources = []
         source_fingerprints = []
+        job_source_refs: list[dict] = []
+        job_artifact_refs: list[str] = []
         for token in request.source_tokens:
             operation = workflow_repository.get_operation(token, owner_id=current.id)
             if operation.assignment_id != task_id or operation.operation_type != "problem_source":
@@ -588,6 +938,12 @@ async def start_question_preparation(
             payload = dict(operation.payload or {})
             if operation.expires_at and operation.expires_at < time.time():
                 raise InvalidTransition("Problem source expired.", code="stale_revision")
+            source_ref = _validated_question_source_ref(
+                operation=operation,
+                payload=payload,
+                task_id=task_id,
+                owner_id=current.id,
+            )
             draft = ProblemSourceDraft(
                 source_token=operation.id, task_id=task_id, owner_id=current.id,
                 role=payload.get("role", "problem"),
@@ -611,6 +967,12 @@ async def start_question_preparation(
                 )
             sources.append((draft, str(payload.get("text") or "")))
             source_fingerprints.append(operation.input_hash)
+            job_source_refs.append(source_ref)
+            if (
+                source_ref["source_kind"] == "upload"
+                and isinstance(source_ref.get("stored_file_id"), str)
+            ):
+                job_artifact_refs.append(source_ref["stored_file_id"])
         operation_hash = hashlib.sha256(json.dumps({
             "sources": sorted(source_fingerprints),
             "base_revision": request.expected_workflow_revision,
@@ -656,6 +1018,7 @@ async def start_question_preparation(
             operation_type="question_preparation", input_hash=operation_hash,
             payload={
                 "source_tokens": request.source_tokens,
+                "source_refs": job_source_refs,
                 "base_workflow_revision": claim_base_revision,
                 "replace_confirmed": request.replace_confirmed,
                 "score_policy": request.score_policy.model_dump(mode="json"),
@@ -668,6 +1031,27 @@ async def start_question_preparation(
                     "workflow_revision": workflow.workflow_revision}
         remove_reporter(job.id)
         try:
+            job = workflow_repository.save_operation_checkpoint(
+                job.id,
+                owner_id=current.id,
+                expected_attempt=job.attempt,
+                expected_checkpoint_revision=job.checkpoint_revision,
+                stage="problem_sources_selected",
+                checkpoint={
+                    "source_refs": job_source_refs,
+                    "source_ids": [
+                        ref["source_id"]
+                        for ref in job_source_refs
+                        if isinstance(ref.get("source_id"), str)
+                    ],
+                    "stored_file_ids": [
+                        ref["stored_file_id"]
+                        for ref in job_source_refs
+                        if isinstance(ref.get("stored_file_id"), str)
+                    ],
+                },
+                artifact_refs=list(dict.fromkeys(job_artifact_refs)),
+            )
             claimed_revision = task_facade.claim_workflow_operation_atomic(
                 task_id=task_id, owner_id=current.id, operation_id=job.id,
                 expected_operation_attempt=job.attempt,
@@ -686,6 +1070,28 @@ async def start_question_preparation(
                 error_code="stale_revision", completed_at=time.time(),
             )
             task_facade._raise_stale_revision()
+        except DomainError:
+            _mark_problem_source_failed(
+                operation=job,
+                owner_id=current.id,
+                error_code="problem_source_persistence_failed",
+            )
+            raise
+        except Exception as exc:
+            _mark_problem_source_failed(
+                operation=job,
+                owner_id=current.id,
+                error_code="problem_source_persistence_failed",
+            )
+            logger.warning(
+                "Question source checkpoint failed; job_id=%s exception_type=%s",
+                job.id,
+                type(exc).__name__,
+            )
+            raise HTTPException(
+                status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail={"code": "problem_source_persistence_failed"},
+            ) from None
         background_tasks.add_task(
             _run_question_preparation,
             task_id=task_id, owner_id=current.id, job_id=job.id,
@@ -695,6 +1101,20 @@ async def start_question_preparation(
             claimed_workflow_revision=claimed_revision,
             replace_confirmed=request.replace_confirmed,
             score_policy=request.score_policy,
+            source_checkpoint={
+                "source_refs": job_source_refs,
+                "source_ids": [
+                    ref["source_id"]
+                    for ref in job_source_refs
+                    if isinstance(ref.get("source_id"), str)
+                ],
+                "stored_file_ids": [
+                    ref["stored_file_id"]
+                    for ref in job_source_refs
+                    if isinstance(ref.get("stored_file_id"), str)
+                ],
+            },
+            source_artifact_refs=list(dict.fromkeys(job_artifact_refs)),
         )
         return {
             "status": "started", "task_id": task_id, "job_id": job.id,
@@ -711,6 +1131,8 @@ async def _run_question_preparation(
     sources: list[tuple[ProblemSourceDraft, str]],
     provider, claimed_workflow_revision: int, replace_confirmed: bool,
     score_policy: QuestionScorePolicy,
+    source_checkpoint: dict | None = None,
+    source_artifact_refs: list[str] | None = None,
 ) -> None:
     try:
         reporter = get_or_create_reporter(job_id)
@@ -733,6 +1155,8 @@ async def _run_question_preparation(
             operation_id=job_id,
             expected_operation_attempt=job_attempt,
             operation_progress=snapshot,
+            operation_checkpoint=source_checkpoint or {},
+            operation_artifact_refs=source_artifact_refs or [],
         )
     except DomainError as exc:
         task_facade._fail_operation(
