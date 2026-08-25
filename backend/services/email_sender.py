@@ -44,6 +44,23 @@ def verification_message(token: str) -> tuple[str, str, str]:
     return subject, text, html
 
 
+def password_reset_message(token: str) -> tuple[str, str, str]:
+    link = f"{_frontend_origin()}/reset-password#token={token}"
+    subject = "SmarTAI 密码重置"
+    text = (
+        "你好，\n\n你请求了 SmarTAI 密码重置。链接 30 分钟内有效，请打开后设置新密码：\n"
+        f"{link}\n\n如果不是你本人操作，可以忽略此邮件，原密码不会改变。"
+    )
+    html = (
+        "<p>你好，</p><p>你请求了 SmarTAI 密码重置。链接 30 分钟内有效，"
+        "请点击下面的按钮设置新密码。</p>"
+        f'<p><a href="{escape(link, quote=True)}">重置密码</a></p>'
+        f"<p>纯文本链接：{escape(link)}</p>"
+        "<p>如果不是你本人操作，可以忽略此邮件，原密码不会改变。</p>"
+    )
+    return subject, text, html
+
+
 class SMTPEmailSender:
     def send(self, to_email: str, subject: str, text_body: str, html_body: str) -> None:
         if not settings.smtp_host or not settings.smtp_username or not settings.smtp_password:

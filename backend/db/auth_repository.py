@@ -30,6 +30,7 @@ def _user_from_record(record: UserRecord) -> User:
         password_hash=record.password_hash,
         created_at=record.created_at,
         is_active=record.is_active,
+        auth_invalid_before=record.auth_invalid_before,
     )
 
 
@@ -147,3 +148,12 @@ def revoke_refresh_session(raw: str | None) -> None:
         record = session.scalar(select(RefreshSessionRecord).where(RefreshSessionRecord.token_hash == _hash_token(raw)))
         if record and record.revoked_at is None:
             record.revoked_at = time.time()
+
+
+def revoke_all_refresh_sessions(session, user_id: str, *, now: float | None = None) -> None:
+    """Revoke every active refresh session in the caller's transaction."""
+    revoked_at = now if now is not None else time.time()
+    session.query(RefreshSessionRecord).filter(
+        RefreshSessionRecord.user_id == user_id,
+        RefreshSessionRecord.revoked_at.is_(None),
+    ).update({RefreshSessionRecord.revoked_at: revoked_at}, synchronize_session=False)

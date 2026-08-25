@@ -25,6 +25,11 @@ from backend.services.email_registration import (
     verify_registration,
 )
 from backend.services.email_sender import get_email_sender
+from backend.services.password_reset import (
+    PasswordResetError,
+    confirm_password_reset,
+    request_password_reset,
+)
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -83,6 +88,17 @@ class EmailRegistrationResendRequest(BaseModel):
 class EmailRegistrationVerifyRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     token: str = Field(min_length=1, max_length=512)
+
+
+class PasswordResetRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    email: str = Field(min_length=3, max_length=320)
+
+
+class PasswordResetConfirmRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    token: str = Field(min_length=1, max_length=512)
+    new_password: str = Field(min_length=8, max_length=128)
 
 
 def _set_refresh_cookie(response: Response, raw: str) -> None:
@@ -160,6 +176,31 @@ def verify_email_registration(req: EmailRegistrationVerifyRequest):
         return verify_registration(req.token)
     except RegistrationError as exc:
         raise _registration_error(exc) from exc
+
+
+def _password_reset_error(exc: PasswordResetError) -> HTTPException:
+    headers = {"Retry-After": str(exc.retry_after)} if exc.retry_after else None
+    return HTTPException(exc.status_code, detail={"code": exc.code}, headers=headers)
+
+
+@router.post("/password-reset/request", status_code=status.HTTP_202_ACCEPTED)
+def request_password_reset_email(req: PasswordResetRequest, request: Request):
+    try:
+        return request_password_reset(
+            email=req.email,
+            source_ip=request.client.host if request.client else None,
+            sender=get_email_sender(),
+        )
+    except PasswordResetError as exc:
+        raise _password_reset_error(exc) from exc
+
+
+@router.post("/password-reset/confirm")
+def confirm_password_reset_email(req: PasswordResetConfirmRequest):
+    try:
+        return confirm_password_reset(req.token, req.new_password)
+    except PasswordResetError as exc:
+        raise _password_reset_error(exc) from exc
 
 
 @router.post("/login")

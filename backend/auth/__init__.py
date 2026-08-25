@@ -52,8 +52,9 @@ def verify_password(password: str, hashed: str) -> bool:
 
 def create_token(user_id: str, role: str, expires_in_hours: Optional[int] = None, expires_in_minutes: Optional[int] = None) -> str:
     lifetime = expires_in_minutes * 60 if expires_in_minutes is not None else ((expires_in_hours * 3600) if expires_in_hours is not None else settings.jwt_expiry_minutes * 60)
-    exp = int(time.time()) + lifetime
-    payload = {"sub": user_id, "role": role, "exp": exp, "iat": int(time.time()), "jti": str(uuid.uuid4())[:12]}
+    issued_at = time.time()
+    exp = int(issued_at) + lifetime
+    payload = {"sub": user_id, "role": role, "exp": exp, "iat": issued_at, "jti": str(uuid.uuid4())[:12]}
     return jwt.encode(payload, settings.jwt_secret, algorithm=settings.jwt_algorithm)
 
 
@@ -136,6 +137,13 @@ def get_optional_user(
     user = user_store.get(user_id) if user_id else None
     if user is not None and not user.is_active:
         user = None
+    issued_at = payload.get("iat")
+    if user is not None and user.auth_invalid_before is not None:
+        try:
+            if issued_at is None or float(issued_at) <= user.auth_invalid_before:
+                user = None
+        except (TypeError, ValueError):
+            user = None
     if user is None and settings.require_auth:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, detail="User not found")
     return user
