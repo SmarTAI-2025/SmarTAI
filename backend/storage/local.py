@@ -4,7 +4,11 @@ from io import BufferedReader
 from pathlib import Path
 
 from backend.config import settings
-from backend.storage.base import StorageBackend
+from backend.storage.base import (
+    StorageBackend,
+    StorageObjectNotFound,
+    StorageUnavailable,
+)
 
 
 class LocalStorage(StorageBackend):
@@ -28,7 +32,12 @@ class LocalStorage(StorageBackend):
         path.write_bytes(content)
 
     def open(self, key: str) -> BufferedReader:
-        return self._path(key).open("rb")
+        try:
+            return self._path(key).open("rb")
+        except FileNotFoundError:
+            raise StorageObjectNotFound("storage_object_not_found") from None
+        except OSError:
+            raise StorageUnavailable("storage_unavailable") from None
 
     def delete(self, key: str) -> None:
         path = self._path(key)
