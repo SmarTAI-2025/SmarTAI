@@ -70,7 +70,6 @@ SAFE_SOURCE_REASON_CODES = frozenset({
     "media_inspection_busy",
     "media_inspection_timeout",
     "media_inspection_failed",
-    "ocr_provider_grading_not_supported",
     "source_decode_failed",
     "pdf_character_limit_exceeded",
     "pdf_extraction_busy",
