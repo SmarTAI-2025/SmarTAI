@@ -61,7 +61,7 @@ def test_expired_refresh_session_is_rejected():
     assert client.post("/auth/refresh").status_code == 401
 
 
-def test_open_registration_without_invite_creates_teacher(monkeypatch):
+def test_public_registration_without_invite_requires_email_verification(monkeypatch):
     monkeypatch.setattr(settings, "registration_closed", False)
     client = TestClient(app)
 
@@ -71,12 +71,12 @@ def test_open_registration_without_invite_creates_teacher(monkeypatch):
         "role": "teacher",
     })
 
-    assert response.status_code == 200, response.text
-    assert response.json()["user"]["role"] == "teacher"
-    assert client.cookies.get("smartai_refresh")
+    assert response.status_code == 410, response.text
+    assert response.json()["detail"]["code"] == "registration_verification_required"
+    assert client.cookies.get("smartai_refresh") is None
 
 
-def test_open_registration_allows_student_role(monkeypatch):
+def test_public_registration_cannot_select_student_role(monkeypatch):
     monkeypatch.setattr(settings, "registration_closed", False)
     client = TestClient(app)
 
@@ -86,11 +86,10 @@ def test_open_registration_allows_student_role(monkeypatch):
         "role": "student",
     })
 
-    assert response.status_code == 200, response.text
-    assert response.json()["user"]["role"] == "student"
+    assert response.status_code == 410, response.text
 
 
-def test_open_registration_rejects_admin_role(monkeypatch):
+def test_public_registration_cannot_select_admin_role(monkeypatch):
     monkeypatch.setattr(settings, "registration_closed", False)
     client = TestClient(app)
 
@@ -100,8 +99,7 @@ def test_open_registration_rejects_admin_role(monkeypatch):
         "role": "admin",
     })
 
-    assert response.status_code == 400
-    assert response.json()["detail"] == "Invalid registration role"
+    assert response.status_code == 410
 
 
 def test_closed_registration_without_invite_is_rejected(monkeypatch):
@@ -113,8 +111,8 @@ def test_closed_registration_without_invite_is_rejected(monkeypatch):
         "password": "secret-pass",
     })
 
-    assert response.status_code == 403
-    assert response.json()["detail"] == "Invitation code required"
+    assert response.status_code == 410
+    assert response.json()["detail"]["code"] == "registration_verification_required"
 
 
 def test_demo_admin_token_is_rejected_and_not_persisted_by_default(monkeypatch):

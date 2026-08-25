@@ -4,7 +4,7 @@ from __future__ import annotations
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from backend.auth import create_token, get_current_user, hash_password, verify_password
 from backend.config import settings
@@ -18,6 +18,13 @@ from backend.db.auth_repository import (
 )
 from backend.models import User
 from backend.state import find_user_by_username
+from backend.services.email_registration import (
+    RegistrationError,
+    request_registration,
+    resend_registration,
+    verify_registration,
+)
+from backend.services.email_sender import get_email_sender
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -55,6 +62,29 @@ class RegisterRequest(BaseModel):
         return stripped or None
 
 
+class EmailRegistrationRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    username: str = Field(min_length=3, max_length=64)
+    email: str = Field(min_length=3, max_length=320)
+    password: str = Field(min_length=8, max_length=128)
+
+    @field_validator("username", "email", mode="before")
+    @classmethod
+    def _strip_fields(cls, value):
+        return value.strip() if isinstance(value, str) else value
+
+
+class EmailRegistrationResendRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    request_id: str = Field(min_length=1, max_length=64)
+
+
+class EmailRegistrationVerifyRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    token: str = Field(min_length=1, max_length=512)
+
+
 def _set_refresh_cookie(response: Response, raw: str) -> None:
     response.set_cookie(
         settings.refresh_cookie_name,
@@ -69,10 +99,11 @@ def _set_refresh_cookie(response: Response, raw: str) -> None:
 
 @router.post("/register")
 def register(req: RegisterRequest, response: Response):
-    if settings.registration_closed and not req.invite_code:
-        raise HTTPException(status.HTTP_403_FORBIDDEN, detail="Invitation code required")
-    try:
-        if req.invite_code:
+    # Existing administrator-issued invites remain a controlled path. Anonymous
+    # public registration without an invite is permanently replaced by email
+    # verification below.
+    if req.invite_code:
+        try:
             user = register_with_invite(
                 username=req.username,
                 email=req.email,
@@ -80,19 +111,55 @@ def register(req: RegisterRequest, response: Response):
                 password_hash=hash_password(req.password),
                 invite_code=req.invite_code,
             )
-        else:
-            user = register_without_invite(
-                username=req.username,
-                email=req.email,
-                password_hash=hash_password(req.password),
-                role=req.role,
-            )
-    except AuthRepositoryError as exc:
-        code = status.HTTP_409_CONFLICT if str(exc) in {"Username already exists", "Email already exists"} else status.HTTP_400_BAD_REQUEST
-        raise HTTPException(code, detail=str(exc)) from exc
-    refresh = create_refresh_session(user.id, settings.refresh_session_days)
-    _set_refresh_cookie(response, refresh)
-    return {"user_id": user.id, "token": create_token(user.id, user.role), "user": user.public()}
+        except AuthRepositoryError as exc:
+            code = status.HTTP_409_CONFLICT if str(exc) in {"Username already exists", "Email already exists"} else status.HTTP_400_BAD_REQUEST
+            raise HTTPException(code, detail=str(exc)) from exc
+        refresh = create_refresh_session(user.id, settings.refresh_session_days)
+        _set_refresh_cookie(response, refresh)
+        return {"user_id": user.id, "token": create_token(user.id, user.role), "user": user.public()}
+    raise HTTPException(
+        status.HTTP_410_GONE,
+        detail={"code": "registration_verification_required"},
+    )
+
+
+def _registration_error(exc: RegistrationError) -> HTTPException:
+    headers = {"Retry-After": str(exc.retry_after)} if exc.retry_after else None
+    return HTTPException(exc.status_code, detail={"code": exc.code}, headers=headers)
+
+
+@router.post("/register/request", status_code=status.HTTP_202_ACCEPTED)
+def request_email_registration(req: EmailRegistrationRequest, request: Request):
+    try:
+        return request_registration(
+            username=req.username,
+            email=req.email,
+            password=req.password,
+            source_ip=request.client.host if request.client else None,
+            sender=get_email_sender(),
+        )
+    except RegistrationError as exc:
+        raise _registration_error(exc) from exc
+
+
+@router.post("/register/resend", status_code=status.HTTP_202_ACCEPTED)
+def resend_email_registration(req: EmailRegistrationResendRequest, request: Request):
+    try:
+        return resend_registration(
+            request_id=req.request_id,
+            source_ip=request.client.host if request.client else None,
+            sender=get_email_sender(),
+        )
+    except RegistrationError as exc:
+        raise _registration_error(exc) from exc
+
+
+@router.post("/register/verify")
+def verify_email_registration(req: EmailRegistrationVerifyRequest):
+    try:
+        return verify_registration(req.token)
+    except RegistrationError as exc:
+        raise _registration_error(exc) from exc
 
 
 @router.post("/login")

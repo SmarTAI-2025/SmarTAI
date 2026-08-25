@@ -33,6 +33,14 @@ export function useRegister() {
   });
 }
 
+export function useRequestRegistration() {
+  return useMutation({ mutationFn: authApi.requestRegistration });
+}
+
+export function useVerifyRegistration() {
+  return useMutation({ mutationFn: authApi.verifyRegistration });
+}
+
 export function useRefreshToken() {
   return useMutation({
     mutationFn: authApi.refreshToken,

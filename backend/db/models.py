@@ -102,6 +102,36 @@ class RefreshSessionRecord(Base):
     revoked_at: Mapped[float | None] = mapped_column(Float, nullable=True)
 
 
+class EmailVerificationRequestRecord(Base):
+    """One-time email verification state for public teacher registration."""
+
+    __tablename__ = "email_verification_requests"
+    __table_args__ = (
+        Index("ix_email_verification_requests_email", "normalized_email"),
+        Index("ix_email_verification_requests_created_at", "created_at"),
+        CheckConstraint(
+            "delivery_status IN ('pending', 'sent', 'failed')",
+            name="ck_email_verification_delivery_status",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    normalized_username: Mapped[str] = mapped_column(String(128), nullable=False)
+    normalized_email: Mapped[str] = mapped_column(String(320), nullable=False)
+    password_hash: Mapped[str] = mapped_column(String(255), nullable=False)
+    token_digest: Mapped[str] = mapped_column(String(64), nullable=False, unique=True, index=True)
+    created_at: Mapped[float] = mapped_column(Float, nullable=False, default=time.time)
+    expires_at: Mapped[float] = mapped_column(Float, nullable=False, index=True)
+    resend_available_at: Mapped[float] = mapped_column(Float, nullable=False)
+    superseded_at: Mapped[float | None] = mapped_column(Float, nullable=True)
+    verified_at: Mapped[float | None] = mapped_column(Float, nullable=True)
+    delivery_status: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="pending", server_default="pending"
+    )
+    last_delivery_error_code: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    source_ip: Mapped[str | None] = mapped_column(String(64), nullable=True)
+
+
 # ─── LLM provider config (retained) ───────────────────────────────────────────
 
 

@@ -1,5 +1,5 @@
 import { clearAuthToken, getAuthToken, getJSON, postJSON, setAuthToken } from "./client";
-import type { AuthResponse, LoginRequest, RefreshResponse, RegisterRequest, StatusResponse, User } from "@/types";
+import type { AuthResponse, EmailRegistrationRequest, EmailRegistrationResponse, EmailRegistrationVerifyResponse, LoginRequest, RefreshResponse, RegisterRequest, StatusResponse, User } from "@/types";
 
 export async function login(request: LoginRequest): Promise<AuthResponse> {
   const response = await postJSON<AuthResponse, LoginRequest>("/auth/login", request);
@@ -11,6 +11,18 @@ export async function register(request: RegisterRequest): Promise<AuthResponse> 
   const response = await postJSON<AuthResponse, RegisterRequest>("/auth/register", request);
   setAuthToken(response.token);
   return response;
+}
+
+export async function requestRegistration(request: EmailRegistrationRequest): Promise<EmailRegistrationResponse> {
+  return postJSON<EmailRegistrationResponse, EmailRegistrationRequest>("/auth/register/request", request);
+}
+
+export async function resendRegistration(requestId: string): Promise<EmailRegistrationResponse> {
+  return postJSON<EmailRegistrationResponse, { request_id: string }>("/auth/register/resend", { request_id: requestId });
+}
+
+export async function verifyRegistration(token: string): Promise<EmailRegistrationVerifyResponse> {
+  return postJSON<EmailRegistrationVerifyResponse, { token: string }>("/auth/register/verify", { token });
 }
 
 export async function getCurrentUser(): Promise<User> {

@@ -253,6 +253,22 @@ class Settings(BaseSettings):
     refresh_cookie_secure: bool = os.getenv("SMARTAI_REFRESH_COOKIE_SECURE", "false").lower() == "true"
     refresh_cookie_samesite: Literal["lax", "strict", "none"] = os.getenv("SMARTAI_REFRESH_COOKIE_SAMESITE", "lax")  # type: ignore[assignment]
 
+    # ─── Email verification registration ─────────────────────────────────────
+    smtp_host: str = ""
+    smtp_port: int = 587
+    smtp_security: Literal["starttls", "ssl"] = "starttls"
+    smtp_username: str = ""
+    smtp_password: str = ""
+    mail_from_address: str = ""
+    mail_from_name: str = "SmarTAI"
+    public_frontend_url: str = "http://localhost:5173"
+    allowed_email_domains: str = ""
+    smtp_timeout_seconds: float = 20.0
+    email_verification_expiry_seconds: int = 1800
+    email_verification_resend_seconds: int = 60
+    email_verification_hourly_email_limit: int = 5
+    email_verification_hourly_ip_limit: int = 20
+
     # If true, requests without a valid token are rejected by protected
     # endpoints. If false (dev default), missing tokens are silently mapped
     # to an "anonymous" user so the legacy non-auth flow still works.

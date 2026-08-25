@@ -20,6 +20,23 @@ export interface RegisterRequest extends LoginRequest {
   invite_code?: string | null;
 }
 
+export interface EmailRegistrationRequest {
+  username: string;
+  email: string;
+  password: string;
+}
+
+export interface EmailRegistrationResponse {
+  status: "verification_required";
+  request_id: string;
+  expires_in_seconds: number;
+  resend_after_seconds: number;
+}
+
+export interface EmailRegistrationVerifyResponse {
+  status: "registered" | "already_verified";
+}
+
 export interface AuthResponse {
   token: string;
   user: User;
