@@ -27,6 +27,8 @@ from fastapi import (
 from pydantic import BaseModel, Field
 
 from backend.agents.ingest_agent import (
+    AICompletionCandidateOutput,
+    MaterialImportCandidateOutput,
     generate_missing_question_materials,
     parse_material_import_to_candidates,
     parse_reference_to_per_question,
@@ -38,7 +40,7 @@ from backend.agents.question_preparation_agent import (
 )
 from backend.api.errors import domain_error_response
 from backend.auth import require_teacher
-from backend.db import assignment_repository, workflow_repository
+from backend.db import assignment_repository, file_repository, workflow_repository
 from backend.domain.errors import (
     DomainError,
     InvalidTransition,
@@ -56,6 +58,7 @@ from backend.models import (
 )
 from backend.progress.tracker import get_or_create_reporter, get_reporter, remove_reporter
 from backend.services import task_facade
+from backend.storage import get_storage
 from backend.services.background_errors import classify_background_error
 from backend.skills.ocr_ingest import LLMVisionOCRSkill, OCRPurpose
 from backend.tools.file_processing import IMAGE_MEDIA_TYPES, extract_text_from_upload
@@ -794,8 +797,14 @@ async def preflight_material_import(
             library_material_id
             or (saved_material or {}).get("material_id")
         )
+        text_artifact = file_repository.save_file(
+            storage=get_storage(), owner_id=current.id,
+            kind="material_import_text", original_name="material-source.txt",
+            content=text.encode("utf-8"), content_type="text/plain",
+            assignment_id=task_id,
+        )
         payload = {
-            "text": text, "filename": descriptor["filename"],
+            "text_artifact_id": text_artifact.id, "filename": descriptor["filename"],
             "source_kind": descriptor["kind"], "size_bytes": descriptor["size_bytes"],
             "sha256": hashlib.sha256(text.encode()).hexdigest(),
             "library_material_id": effective_material_id,
@@ -894,7 +903,8 @@ async def start_material_import(
             payload={
                 "source_token": source.id,
                 "base_workflow_revision": claim_base_revision,
-            }, expires_at=time.time() + SOURCE_TTL_SECONDS,
+            }, expires_at=time.time() + task_facade._OPERATION_PUBLICATION_TTL_SECONDS,
+            initial_status="preparing",
         )
         if not created:
             state = (
@@ -907,10 +917,11 @@ async def start_material_import(
                     "workflow_revision": workflow.workflow_revision}
         remove_reporter(job.id)
         try:
-            claimed_revision = task_facade.claim_workflow_operation_atomic(
+            claimed_revision = task_facade.activate_workflow_operation_atomic(
                 task_id=task_id, owner_id=current.id, operation_id=job.id,
                 expected_operation_attempt=job.attempt,
                 expected_workflow_revision=claim_base_revision,
+                operation_payload=dict(job.payload or {}),
                 workflow_changes={
                     "active_operation": "material_import",
                     "active_job_id": job.id, "error_code": None,
@@ -923,14 +934,6 @@ async def start_material_import(
                 error_code="stale_revision", completed_at=time.time(),
             )
             task_facade._raise_stale_revision()
-        background_tasks.add_task(
-            _run_material_import,
-            task_id=task_id, owner_id=current.id, job_id=job.id,
-            job_attempt=job.attempt,
-            source_id=source.id, source_payload=payload,
-            problems_data=task["problem_data"], provider=provider,
-            claimed_workflow_revision=claimed_revision,
-        )
         return {
             "status": "started", "job_id": job.id, "task_id": task_id,
             "request_fingerprint": operation_hash,
@@ -945,20 +948,42 @@ async def _run_material_import(
     source_id: str,
     source_payload: dict[str, Any], problems_data: dict[str, dict], provider,
     claimed_workflow_revision: int,
+    expected_lease_token: str | None = None,
+    durable_operation=None,
+    recovered_candidates: list[MaterialImportCandidateOutput] | None = None,
+    result_artifact=None,
 ) -> None:
     try:
         reporter = get_or_create_reporter(job_id)
         await reporter.configure_workflow(
             "material_import", ("matching_questions", "validating_matches", "plan_ready")
         )
-        candidates = await parse_material_import_to_candidates(
-            text=str(source_payload.get("text") or ""),
-            problems_data=problems_data,
-            targets=list(source_payload.get("targets") or []),
-            structure_mode=str(source_payload.get("structure_mode") or "organized"),
-            extraction_hint=str(source_payload.get("extraction_hint") or ""),
-            provider=provider, reporter=reporter,
-        )
+        candidates = recovered_candidates
+        if candidates is None:
+            candidates = await parse_material_import_to_candidates(
+                text=str(source_payload.get("text") or ""),
+                problems_data=problems_data,
+                targets=list(source_payload.get("targets") or []),
+                structure_mode=str(source_payload.get("structure_mode") or "organized"),
+                extraction_hint=str(source_payload.get("extraction_hint") or ""),
+                provider=provider, reporter=reporter,
+            )
+            if durable_operation is not None:
+                result_artifact = _save_auxiliary_result_artifact(
+                    operation=durable_operation,
+                    kind="material_import_result",
+                    stage="material-candidates",
+                    payload=[item.model_dump(mode="json") for item in candidates],
+                )
+        if durable_operation is not None and result_artifact is not None and (
+            durable_operation.checkpoint_data.get("result_artifact_id")
+            != result_artifact.id
+        ):
+            await durable_operation.checkpoint(
+                stage="material_candidates_generated",
+                checkpoint={"result_artifact_id": result_artifact.id},
+                artifact_refs=[result_artifact.id],
+            )
         serialized = []
         for index, candidate in enumerate(candidates, start=1):
             problem = problems_data.get(candidate.q_id, {})
@@ -977,14 +1002,19 @@ async def _run_material_import(
             })
         snapshot = (await reporter.snapshot()).model_dump(mode="json")
         completed_at = time.time()
+        persisted_source_payload = {
+            key: value for key, value in source_payload.items() if key != "text"
+        }
         task_facade.complete_planning_operation_atomic(
             task_id=task_id, owner_id=owner_id,
             expected_workflow_revision=claimed_workflow_revision,
             operation_id=job_id,
             expected_operation_attempt=job_attempt,
+            expected_lease_token=expected_lease_token,
             progress=snapshot,
             payload={
-                **source_payload, "source_token": source_id, "candidates": serialized,
+                **persisted_source_payload,
+                "source_token": source_id, "candidates": serialized,
                 "applied_candidate_ids": [], "completed_at": completed_at,
                 "base_workflow_revision": claimed_workflow_revision,
             },
@@ -993,13 +1023,55 @@ async def _run_material_import(
         task_facade._fail_operation(
             task_id, owner_id, job_id, job_attempt,
             task_facade._detail_error(exc, "material_import_failed"),
+            expected_lease_token=expected_lease_token,
         )
     except Exception as exc:
         logger.warning("Background material import failed; job_id=%s", job_id)
         task_facade._fail_operation(
             task_id, owner_id, job_id, job_attempt,
             classify_background_error(exc, "material_import_failed"),
+            expected_lease_token=expected_lease_token,
         )
+
+
+async def run_durable_material_import(operation) -> None:
+    source_id = str((operation.payload or {}).get("source_token") or "")
+    source = workflow_repository.get_operation(source_id, owner_id=operation.owner_id)
+    if source.assignment_id != operation.assignment_id or source.operation_type != "material_source":
+        raise NotFound("material_source")
+    source_payload = dict(source.payload or {})
+    artifact = file_repository.get_file(
+        file_id=str(source_payload.get("text_artifact_id") or ""),
+        owner_id=operation.owner_id,
+    )
+    if artifact is None or artifact.assignment_id != operation.assignment_id:
+        raise NotFound("stored_file")
+    with get_storage().open(artifact.storage_key) as stream:
+        source_payload["text"] = stream.read().decode("utf-8")
+    result_artifact = _find_auxiliary_result_artifact(
+        operation=operation, kind="material_import_result",
+        stage="material-candidates",
+    )
+    recovered_candidates = (
+        _read_auxiliary_candidates(result_artifact, MaterialImportCandidateOutput)
+        if result_artifact is not None else None
+    )
+    registry = task_facade._registry_for_owner(operation.owner_id)
+    provider = registry.pick_default()
+    if provider is None and recovered_candidates is None:
+        raise ValidationError("No enabled provider is available.", code="no_provider_configured")
+    task = task_facade.get_task(task_id=operation.assignment_id, owner_id=operation.owner_id, full=True)
+    await _run_material_import(
+        task_id=operation.assignment_id, owner_id=operation.owner_id,
+        job_id=operation.operation_id, job_attempt=operation.attempt,
+        source_id=source.id, source_payload=source_payload,
+        problems_data=task["problem_data"], provider=provider,
+        claimed_workflow_revision=int((operation.payload or {}).get("base_workflow_revision") or 0) + 1,
+        expected_lease_token=operation.lease_token,
+        durable_operation=operation,
+        recovered_candidates=recovered_candidates,
+        result_artifact=result_artifact,
+    )
 
 
 @router.get("/{task_id}/material-imports/{job_id}")
@@ -1261,7 +1333,8 @@ async def confirm_ai_completion(
                 "target_ids": requested_ids,
                 "test_case_count": request.test_case_count,
                 "base_workflow_revision": claim_base_revision,
-            }, expires_at=time.time() + SOURCE_TTL_SECONDS,
+            }, expires_at=time.time() + task_facade._OPERATION_PUBLICATION_TTL_SECONDS,
+            initial_status="preparing",
         )
         if not created:
             state = "already_running" if job.status in {"pending", "running"} else "already_done"
@@ -1269,10 +1342,11 @@ async def confirm_ai_completion(
                     "request_fingerprint": input_hash, "workflow_revision": task["workflow_revision"]}
         remove_reporter(job.id)
         try:
-            claimed_revision = task_facade.claim_workflow_operation_atomic(
+            claimed_revision = task_facade.activate_workflow_operation_atomic(
                 task_id=task_id, owner_id=current.id, operation_id=job.id,
                 expected_operation_attempt=job.attempt,
                 expected_workflow_revision=claim_base_revision,
+                operation_payload=dict(job.payload or {}),
                 workflow_changes={
                     "active_operation": "ai_completion",
                     "active_job_id": job.id, "error_code": None,
@@ -1285,14 +1359,6 @@ async def confirm_ai_completion(
                 error_code="stale_revision", completed_at=time.time(),
             )
             task_facade._raise_stale_revision()
-        background_tasks.add_task(
-            _run_ai_completion,
-            task_id=task_id, owner_id=current.id, job_id=job.id,
-            job_attempt=job.attempt,
-            problems_data=task["problem_data"], selected=selected,
-            requested_ids=requested_ids, test_case_count=request.test_case_count,
-            provider=provider, claimed_workflow_revision=claimed_revision,
-        )
         return {
             "status": "started", "job_id": job.id, "task_id": task_id,
             "request_fingerprint": input_hash,
@@ -1307,6 +1373,11 @@ async def _run_ai_completion(
     problems_data: dict[str, dict], selected: list[dict],
     requested_ids: list[str], test_case_count: int, provider,
     claimed_workflow_revision: int,
+    expected_lease_token: str | None = None,
+    durable_operation=None,
+    recovered_candidates: list[AICompletionCandidateOutput] | None = None,
+    result_artifact=None,
+    result_provider_id: str | None = None,
 ) -> None:
     try:
         reporter = get_or_create_reporter(job_id)
@@ -1314,11 +1385,36 @@ async def _run_ai_completion(
             "ai_completion",
             ("generating_missing_materials", "validating_generated_materials", "applying_generated_materials"),
         )
-        candidates = await generate_missing_question_materials(
-            problems_data=problems_data, requested_targets=selected,
-            test_case_count=test_case_count, provider=provider,
-            reporter=reporter,
-        )
+        candidates = recovered_candidates
+        if candidates is None:
+            candidates = await generate_missing_question_materials(
+                problems_data=problems_data, requested_targets=selected,
+                test_case_count=test_case_count, provider=provider,
+                reporter=reporter,
+            )
+            result_provider_id = provider.provider_id
+            if durable_operation is not None:
+                result_artifact = _save_auxiliary_result_artifact(
+                    operation=durable_operation,
+                    kind="ai_completion_result",
+                    stage="ai-candidates",
+                    payload={
+                        "provider_id": result_provider_id,
+                        "candidates": [
+                            item.model_dump(mode="json") for item in candidates
+                        ],
+                    },
+                )
+        if durable_operation is not None and result_artifact is not None and (
+            durable_operation.checkpoint_data.get("result_artifact_id")
+            != result_artifact.id
+        ):
+            await durable_operation.checkpoint(
+                stage="ai_candidates_generated",
+                checkpoint={"result_artifact_id": result_artifact.id},
+                artifact_refs=[result_artifact.id],
+            )
+        effective_provider_id = result_provider_id or provider.provider_id
         applied = []
         serialized = []
         generated_at = time.time()
@@ -1344,7 +1440,7 @@ async def _run_ai_completion(
             candidate_id = f"ai_{job_id}_{index}"
             provenance = {
                 "job_id": job_id, "candidate_id": candidate_id,
-                "source_kind": "ai_generated", "provider_id": provider.provider_id,
+                "source_kind": "ai_generated", "provider_id": effective_provider_id,
                 "review_status": "pending", "generated_at": generated_at,
                 "updated_at": generated_at,
             }
@@ -1373,6 +1469,7 @@ async def _run_ai_completion(
             expected_workflow_revision=claimed_workflow_revision,
             patches=list(patch_map.values()), operation_id=job_id,
             expected_operation_attempt=job_attempt,
+            expected_lease_token=expected_lease_token,
             required_operation_status="running", final_operation_status="done",
             operation_progress=snapshot, require_missing=True,
             operation_payload={
@@ -1387,13 +1484,101 @@ async def _run_ai_completion(
         task_facade._fail_operation(
             task_id, owner_id, job_id, job_attempt,
             task_facade._detail_error(exc, "ai_completion_failed"),
+            expected_lease_token=expected_lease_token,
         )
     except Exception as exc:
         logger.warning("Background AI completion failed; job_id=%s", job_id)
         task_facade._fail_operation(
             task_id, owner_id, job_id, job_attempt,
             classify_background_error(exc, "ai_completion_failed"),
+            expected_lease_token=expected_lease_token,
         )
+
+
+async def run_durable_ai_completion(operation) -> None:
+    task = task_facade.get_task(task_id=operation.assignment_id, owner_id=operation.owner_id, full=True)
+    requested_ids = list((operation.payload or {}).get("target_ids") or [])
+    allowed = {item["target_id"]: item for item in _missing_targets(task)}
+    selected = [allowed[item] for item in requested_ids if item in allowed]
+    if len(selected) != len(requested_ids):
+        raise ValidationError(
+            "A requested AI completion target is unknown or no longer missing.",
+            code="unknown_ai_completion_target",
+        )
+    result_artifact = _find_auxiliary_result_artifact(
+        operation=operation, kind="ai_completion_result", stage="ai-candidates",
+    )
+    recovered_candidates = None
+    result_provider_id = None
+    if result_artifact is not None:
+        raw_result = _read_auxiliary_result(result_artifact)
+        if isinstance(raw_result, dict):
+            result_provider_id = str(raw_result.get("provider_id") or "") or None
+            raw_candidates = raw_result.get("candidates")
+        else:
+            raw_candidates = raw_result
+        recovered_candidates = [
+            AICompletionCandidateOutput.model_validate(item)
+            for item in raw_candidates
+        ]
+    registry = task_facade._registry_for_owner(operation.owner_id)
+    provider = registry.pick_default()
+    if provider is None and recovered_candidates is None:
+        raise ValidationError("No enabled provider is available.", code="no_provider_configured")
+    if provider is None and result_provider_id is None:
+        raise ValidationError("The durable AI result has no provider identity.", code="no_provider_configured")
+    await _run_ai_completion(
+        task_id=operation.assignment_id, owner_id=operation.owner_id,
+        job_id=operation.operation_id, job_attempt=operation.attempt,
+        problems_data=task["problem_data"], selected=selected,
+        requested_ids=requested_ids,
+        test_case_count=int((operation.payload or {}).get("test_case_count") or 5),
+        provider=provider,
+        claimed_workflow_revision=int((operation.payload or {}).get("base_workflow_revision") or 0) + 1,
+        expected_lease_token=operation.lease_token,
+        durable_operation=operation,
+        recovered_candidates=recovered_candidates,
+        result_artifact=result_artifact,
+        result_provider_id=result_provider_id,
+    )
+
+
+def _auxiliary_result_name(operation, stage: str) -> str:
+    return f"{operation.operation_id}-attempt-{operation.attempt}-{stage}.json"
+
+
+def _find_auxiliary_result_artifact(*, operation, kind: str, stage: str):
+    expected_name = _auxiliary_result_name(operation, stage)
+    matches = [
+        item for item in file_repository.list_files(
+            owner_id=operation.owner_id, assignment_id=operation.assignment_id
+        )
+        if item.kind == kind and item.original_name == expected_name
+    ]
+    return max(matches, key=lambda item: item.created_at) if matches else None
+
+
+def _save_auxiliary_result_artifact(*, operation, kind: str, stage: str, payload):
+    return file_repository.save_file(
+        storage=get_storage(), owner_id=operation.owner_id, kind=kind,
+        original_name=_auxiliary_result_name(operation, stage),
+        content=json.dumps(
+            payload, ensure_ascii=False, allow_nan=False, separators=(",", ":")
+        ).encode("utf-8"),
+        content_type="application/json", assignment_id=operation.assignment_id,
+    )
+
+
+def _read_auxiliary_result(artifact):
+    with get_storage().open(artifact.storage_key) as stream:
+        return json.loads(stream.read().decode("utf-8"))
+
+
+def _read_auxiliary_candidates(artifact, model_type):
+    raw = _read_auxiliary_result(artifact)
+    if not isinstance(raw, list):
+        raise ValueError("Durable auxiliary result must be a list.")
+    return [model_type.model_validate(item) for item in raw]
 
 
 @router.get("/{task_id}/ai-completions/{job_id}")

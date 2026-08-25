@@ -9,7 +9,13 @@ os.environ.setdefault("SMARTAI_DATABASE_URL", f"sqlite:///{(_TEST_ROOT / 'test.d
 os.environ.setdefault("SMARTAI_DATABASE_AUTO_CREATE", "true")
 os.environ.setdefault("SMARTAI_SEED_TEST_USERS", "false")
 os.environ.setdefault("SMARTAI_STORAGE_ROOT", str(_TEST_ROOT / "uploads"))
-os.environ.setdefault("SMARTAI_PROVIDER_ENCRYPTION_KEY", "test-suite-provider-master-key")
+# Tests must never inherit developer or deployment secrets.  Use explicit,
+# independent fake values that satisfy the runtime contract.
+os.environ["SMARTAI_RUNTIME_ENVIRONMENT"] = "test"
+os.environ["SMARTAI_PROVIDER_ENCRYPTION_KEY"] = (
+    "test-suite-provider-master-key-0123456789abcdef"
+)
+os.environ["SMARTAI_JWT_SECRET"] = "test-suite-jwt-secret-0123456789abcdef"
 
 import pytest  # noqa: E402
 

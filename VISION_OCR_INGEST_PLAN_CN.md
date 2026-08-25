@@ -642,3 +642,16 @@ SMARTAI_MATHPIX_APP_KEY=
 6.1(A) 最稳妥的落地方式是“文件转文本层扩展 + provider 多模态能力 + 前端放开上传类型”。不要把 OCR 逻辑深入到题目抽取、答案解析或评分 agent 里。这样既能快速支持图片和扫描 PDF，又能最大限度复用现有人工订正和评分流程。
 
 第一阶段建议默认走 LLM vision，Mathpix 只留接口。等图片/扫描 PDF 的端到端流程稳定后，再根据识别准确率和成本决定是否接入 Mathpix 作为高精度 OCR provider。
+
+## 13. 2026-08-23：百度文档解析（Unlimited-OCR）BYOK 切片状态
+
+本节是对既有 OCR abstraction 的增量状态记录，不改变上文 LLM vision 路线，也不把 OCR-only 服务并入通用评分 provider。
+
+- 已核实正式托管能力名为“文档解析（Unlimited-OCR）”，它是异步 OCR/文档解析 API，不是通用 LLM `model`。
+- 本切片实现独立 Tool → OCR Skill adapter，以及 owner-scoped 的 API Key + Secret Key 加密存储、显式 factory 和安全管理 API。
+- 百度凭据不进入 `ProviderConfig` / `ExpertRegistry`，不参与 `pick_default()`、`pick_vision()`、共享模型池或任何默认 selector。
+- 只支持用户本地文件字节的 `file_data` 路径；`file_url`、JSON 结果、共享 token、自动任务路由和公网页面宣传保持关闭。
+- 自动测试使用 fake HTTP transport，不消耗百度免费页数；live smoke 尚未通过，仍需 Annie 经安全 BYOK 入口提供已开通该权限的自有凭据与一份合成/去标识样本。
+- 官方计费与契约证据、未定义项和上线停止线见 `BAIDU_UNLIMITED_OCR_BYOK_CONTRACT_CN.md`。
+
+因此项目状态应保持为“adapter/凭据骨架的聚焦自动测试已通过；真实账号 live integration 未验证”。在真实凭据 smoke、账号资源状态、结果下载域名和必要的数据处理地区得到确认前，不得标记为可公开默认使用或生产就绪。

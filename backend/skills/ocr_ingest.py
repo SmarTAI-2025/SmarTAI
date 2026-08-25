@@ -12,6 +12,12 @@ from typing import Literal, Protocol
 
 from backend.config import settings
 from backend.llm.providers import BaseProvider, VisionImage
+from backend.tools.baidu_unlimited_ocr import (
+    PROVIDER_ID as BAIDU_UNLIMITED_OCR_PROVIDER_ID,
+    BaiduUnlimitedOCRClient,
+    BaiduUnlimitedOCRError,
+)
+from backend.tools.structured_llm import format_math_and_quotes
 
 OCRPurpose = Literal["problems", "submissions", "reference", "test_cases"]
 
@@ -43,12 +49,24 @@ class OCRIngestSkill(Protocol):
         ...
 
 
+class DocumentOCRIngestSkill(Protocol):
+    """Whole-document OCR contract for providers that preserve page layout."""
+
+    async def recognize_document(
+        self,
+        file_data: bytes,
+        file_name: str,
+        purpose: OCRPurpose,
+    ) -> OCRResult:
+        ...
+
+
 _PROMPTS: dict[OCRPurpose, str] = {
     "problems": """你是一个数理题目 OCR 转写器。请把图片中的题目内容转写为纯文本 Markdown。
 
 要求：
 1. 保留题号、题干、选项、已给条件、评分标准、附图说明。
-2. 数学公式使用 LaTeX。
+2. 数学公式使用 LaTeX，并用 Markdown 数学定界符包裹：行内公式使用 `$...$`，独立公式使用 `$$...$$`；不要输出裸露的 `\\int`、`\\mu`、`\\times` 等命令。
 3. 不要解题，不要补充图片中没有的信息。
 4. 无法辨认的内容标记为 [unclear]。
 5. 如果有多页，按页面顺序输出。""",
@@ -57,15 +75,18 @@ _PROMPTS: dict[OCRPurpose, str] = {
 要求：
 1. 保留学生姓名、学号、班级等身份信息。
 2. 保留题号和每道题的作答步骤。
-3. 数学公式使用 LaTeX。
+3. 数学公式使用 LaTeX，并用 Markdown 数学定界符包裹：行内公式使用 `$...$`，独立公式使用 `$$...$$`；不要输出裸露的 `\\int`、`\\mu`、`\\times` 等命令。
 4. 不要批改，不要推断学生未写出的步骤。
 5. 看不清的字、公式或数字标记为 [unclear]。
-6. 尽量保留划改、箭头、补充说明等作答痕迹。""",
+6. 尽量保留划改、箭头、补充说明等作答痕迹。
+7. 根据视觉布局还原完整数学结构：必须区分上标、下标、分数、根号、积分号及其上下限、矩阵转置和范数；例如不要把 `x²` 转成 `x2`，不要把 `√(2as)` 拆成多行。
+8. 视觉换行不等于语义换行。同一公式或同一句话请合并为一个连续 Markdown 段落；只有真正的步骤、段落或代码行才换行。
+9. 编程作答使用带语言标识的 Markdown 代码块，恢复源码缩进与真实换行；不要输出可见的 `\\n` 字符。""",
     "reference": """你是一个数理参考答案 OCR 转写器。请把图片中的参考答案或解题过程转写为纯文本 Markdown。
 
 要求：
 1. 只转写图片中真实存在的参考答案、公式、推导和说明。
-2. 数学公式使用 LaTeX。
+2. 数学公式使用 LaTeX，并用 Markdown 数学定界符包裹：行内公式使用 `$...$`，独立公式使用 `$$...$$`；不要输出裸露的 `\\int`、`\\mu`、`\\times` 等命令。
 3. 不要生成新答案，不要补充图片中没有的信息。
 4. 无法辨认的内容标记为 [unclear]。
 5. 如果有多页，按页面顺序输出。""",
@@ -116,13 +137,82 @@ class LLMVisionOCRSkill:
         ]
         response = await self.provider.ainvoke_vision(prompt, vision_images)
         return OCRResult(
-            text=(response.content or "").strip(),
+            text=format_math_and_quotes((response.content or "").strip()),
             provider=response.provider,
             model=response.model,
             duration_ms=response.duration_ms,
             input_tokens=response.input_tokens,
             output_tokens=response.output_tokens,
             warnings=[],
+        )
+
+
+class BaiduUnlimitedOCRSkill:
+    """OCR skill backed by an explicitly injected owner BYOK client.
+
+    This class is intentionally not registered in ``ExpertRegistry`` and is
+    not a default OCR selector.  A request-scoped factory must first resolve
+    and decrypt the authenticated owner's OCR credentials, then inject the
+    resulting client here.
+    """
+
+    name = "BaiduUnlimitedOCRSkill"
+
+    _IMAGE_SUFFIX_BY_MEDIA_TYPE = {
+        "image/jpeg": ".jpg",
+        "image/png": ".png",
+        "image/bmp": ".bmp",
+        "image/tiff": ".tiff",
+    }
+
+    def __init__(self, client: BaiduUnlimitedOCRClient):
+        self.client = client
+
+    async def recognize_document(
+        self,
+        file_data: bytes,
+        file_name: str,
+        purpose: OCRPurpose = "submissions",
+    ) -> OCRResult:
+        # Baidu's document parser has no prompt field; ``purpose`` remains in
+        # the skill contract so agents can swap OCR implementations without
+        # coupling themselves to provider-specific signatures.
+        del purpose
+        response = await self.client.recognize_document(file_data, file_name)
+        return OCRResult(
+            text=response.markdown.strip(),
+            provider=BAIDU_UNLIMITED_OCR_PROVIDER_ID,
+            # The official contract names a service, not a selectable model
+            # identifier.  Do not manufacture one for product messaging.
+            model=None,
+            duration_ms=response.duration_ms,
+            warnings=[],
+        )
+
+    async def recognize_images(
+        self,
+        images: list[OCRImage],
+        purpose: OCRPurpose,
+    ) -> OCRResult:
+        if not images:
+            return OCRResult(text="", provider=BAIDU_UNLIMITED_OCR_PROVIDER_ID)
+        if len(images) != 1:
+            # Do not silently fan out into multiple asynchronous/billable OCR
+            # tasks.  Callers with a multi-page document should use the whole-
+            # document method with the original bytes.
+            raise BaiduUnlimitedOCRError("ocr_multiple_images_unsupported")
+        image = images[0]
+        media_type = (image.media_type or "").split(";", 1)[0].strip().lower()
+        suffix = self._IMAGE_SUFFIX_BY_MEDIA_TYPE.get(media_type)
+        if suffix is None:
+            raise BaiduUnlimitedOCRError("ocr_unsupported_file")
+        # Never forward ``image.label``: upload labels often contain a student
+        # name or assignment identifier.  The tool also re-sanitizes this name
+        # before it crosses the provider boundary.
+        return await self.recognize_document(
+            image.data,
+            f"image{suffix}",
+            purpose,
         )
 
 

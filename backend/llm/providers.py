@@ -17,15 +17,24 @@ import base64
 import logging
 import random
 import re
+import ssl
 import time
 from abc import ABC, abstractmethod
 from collections import deque
 from typing import List, Optional, Dict, Any, Deque
 from dataclasses import dataclass
 
-from langchain_core.messages import BaseMessage, HumanMessage
+import httpx
+from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
 
 from backend.config import settings
+from backend.llm.endpoint_policy import (
+    build_safe_provider_clients,
+    effective_provider_base_url,
+    is_user_defined_provider_endpoint,
+    provider_operation_url,
+)
+from backend.llm.provider_catalog import effective_wire_protocol
 from backend.models import ProviderConfig
 
 logger = logging.getLogger(__name__)
@@ -55,6 +64,32 @@ def _build_httpx_clients(proxy_url: Optional[str]) -> tuple[Any, Any]:
     return httpx.Client(**kwargs), httpx.AsyncClient(**kwargs)
 
 
+def _build_provider_httpx_clients(
+    config: ProviderConfig,
+    *,
+    provider_type: str,
+    official_proxy_url: Optional[str],
+) -> tuple[Any, Any]:
+    if not is_user_defined_provider_endpoint(
+        provider_type,
+        config.base_url,
+        config.wire_protocol,
+    ):
+        return _build_httpx_clients(official_proxy_url)
+    if not settings.custom_provider_endpoints_available or not config.base_url:
+        raise ValueError("custom_provider_endpoints_disabled")
+    return build_safe_provider_clients(
+        config.base_url,
+        timeout_seconds=float(settings.llm_timeout),
+        max_response_bytes=settings.custom_provider_max_response_bytes,
+        allowed_target_url=provider_operation_url(
+            config.base_url,
+            effective_wire_protocol(config.provider_type, config.wire_protocol),
+            model=config.model,
+        ),
+    )
+
+
 @dataclass
 class LLMResponse:
     content: str
@@ -70,6 +105,15 @@ class VisionImage:
     data: bytes
     media_type: str
     filename: Optional[str] = None
+
+
+class ProviderRequestError(RuntimeError):
+    """Stable provider failure that never includes response bodies or secrets."""
+
+    def __init__(self, code: str, *, status_code: int | None = None):
+        super().__init__(code)
+        self.code = code
+        self.status_code = status_code
 
 
 def _image_data_url(image: VisionImage) -> str:
@@ -174,7 +218,16 @@ class BaseProvider(ABC):
         if self._client is None:
             async with self._client_lock:
                 if self._client is None:
-                    self._client = self._build_client_sync()
+                    if is_user_defined_provider_endpoint(
+                        self.config.provider_type,
+                        self.config.base_url,
+                        self.config.wire_protocol,
+                    ):
+                        self._client = await asyncio.to_thread(
+                            self._build_client_sync
+                        )
+                    else:
+                        self._client = self._build_client_sync()
         return self._client
 
     async def ainvoke(self, messages: List[BaseMessage]) -> LLMResponse:
@@ -278,8 +331,10 @@ class OpenAIProvider(BaseProvider):
 
     def _build_client_sync(self) -> Any:
         from langchain_openai import ChatOpenAI
-        http_client, http_async_client = _build_httpx_clients(
-            _configured_proxy_url()
+        http_client, http_async_client = _build_provider_httpx_clients(
+            self.config,
+            provider_type=self.provider_type,
+            official_proxy_url=_configured_proxy_url(),
         )
 
         return ChatOpenAI(
@@ -307,7 +362,11 @@ class ZhipuProvider(BaseProvider):
         from langchain_openai import ChatOpenAI
         # proxy=None is insufficient because httpx would still inherit
         # HTTP(S)_PROXY. Zhipu must use a dedicated direct client.
-        http_client, http_async_client = _build_httpx_clients(None)
+        http_client, http_async_client = _build_provider_httpx_clients(
+            self.config,
+            provider_type=self.provider_type,
+            official_proxy_url=None,
+        )
 
         return ChatOpenAI(
             model=self.model,
@@ -352,9 +411,17 @@ class _DomesticOpenAICompatibleProvider(BaseProvider):
 
     _default_base_url: str = ""
 
+    def __init__(self, config: ProviderConfig):
+        super().__init__(config)
+        self.supports_vision = False
+
     def _build_client_sync(self) -> Any:
         from langchain_openai import ChatOpenAI
-        http_client, http_async_client = _build_httpx_clients(None)
+        http_client, http_async_client = _build_provider_httpx_clients(
+            self.config,
+            provider_type=self.provider_type,
+            official_proxy_url=None,
+        )
         return ChatOpenAI(
             model=self.model,
             temperature=0.0,
@@ -382,6 +449,324 @@ class QwenProvider(_DomesticOpenAICompatibleProvider):
     _default_base_url = "https://dashscope.aliyuncs.com/compatible-mode/v1"
 
 
+# ─── User-defined endpoint protocols ────────────────────────────────────────
+
+def _message_role(message: BaseMessage) -> str:
+    if isinstance(message, SystemMessage):
+        return "system"
+    role = getattr(message, "type", "human")
+    if role in {"ai", "assistant"}:
+        return "assistant"
+    return "user"
+
+
+def _data_url_parts(value: str) -> tuple[str, str]:
+    match = re.fullmatch(r"data:([^;,]+);base64,([A-Za-z0-9+/=]+)", value)
+    if match is None:
+        raise ProviderRequestError("provider_image_payload_invalid")
+    return match.group(1), match.group(2)
+
+
+def _content_blocks(content: Any) -> list[dict[str, Any]]:
+    if isinstance(content, str):
+        return [{"type": "text", "text": content}]
+    if not isinstance(content, list):
+        return [{"type": "text", "text": str(content)}]
+    blocks: list[dict[str, Any]] = []
+    for item in content:
+        if isinstance(item, str):
+            blocks.append({"type": "text", "text": item})
+            continue
+        if not isinstance(item, dict):
+            blocks.append({"type": "text", "text": str(item)})
+            continue
+        if item.get("type") == "text":
+            blocks.append({"type": "text", "text": str(item.get("text", ""))})
+            continue
+        if item.get("type") == "image_url":
+            image_url = item.get("image_url")
+            value = image_url.get("url") if isinstance(image_url, dict) else image_url
+            if not isinstance(value, str):
+                raise ProviderRequestError("provider_image_payload_invalid")
+            media_type, data = _data_url_parts(value)
+            blocks.append({
+                "type": "image",
+                "media_type": media_type,
+                "data": data,
+                "data_url": value,
+            })
+            continue
+        raise ProviderRequestError("provider_message_payload_not_supported")
+    return blocks
+
+
+def _openai_payload(messages: List[BaseMessage], model: str) -> dict[str, Any]:
+    output: list[dict[str, Any]] = []
+    for message in messages:
+        content: str | list[dict[str, Any]]
+        blocks = _content_blocks(message.content)
+        if len(blocks) == 1 and blocks[0]["type"] == "text":
+            content = blocks[0]["text"]
+        else:
+            content = []
+            for block in blocks:
+                if block["type"] == "text":
+                    content.append({"type": "text", "text": block["text"]})
+                else:
+                    content.append({
+                        "type": "image_url",
+                        "image_url": {"url": block["data_url"]},
+                    })
+        output.append({"role": _message_role(message), "content": content})
+    return {"model": model, "messages": output, "temperature": 0}
+
+
+def _anthropic_payload(messages: List[BaseMessage], model: str) -> dict[str, Any]:
+    system_parts: list[str] = []
+    output: list[dict[str, Any]] = []
+    for message in messages:
+        blocks = _content_blocks(message.content)
+        if isinstance(message, SystemMessage):
+            system_parts.extend(
+                block["text"] for block in blocks if block["type"] == "text"
+            )
+            continue
+        content: list[dict[str, Any]] = []
+        for block in blocks:
+            if block["type"] == "text":
+                content.append({"type": "text", "text": block["text"]})
+            else:
+                content.append({
+                    "type": "image",
+                    "source": {
+                        "type": "base64",
+                        "media_type": block["media_type"],
+                        "data": block["data"],
+                    },
+                })
+        output.append({"role": _message_role(message), "content": content})
+    payload: dict[str, Any] = {
+        "model": model,
+        "messages": output,
+        "max_tokens": 4096,
+        "temperature": 0,
+    }
+    if system_parts:
+        payload["system"] = "\n\n".join(system_parts)
+    return payload
+
+
+def _gemini_payload(messages: List[BaseMessage], model: str) -> dict[str, Any]:
+    system_parts: list[dict[str, str]] = []
+    contents: list[dict[str, Any]] = []
+    for message in messages:
+        blocks = _content_blocks(message.content)
+        parts: list[dict[str, Any]] = []
+        for block in blocks:
+            if block["type"] == "text":
+                parts.append({"text": block["text"]})
+            else:
+                parts.append({
+                    "inlineData": {
+                        "mimeType": block["media_type"],
+                        "data": block["data"],
+                    }
+                })
+        if isinstance(message, SystemMessage):
+            system_parts.extend(parts)
+        else:
+            contents.append({
+                "role": "model" if _message_role(message) == "assistant" else "user",
+                "parts": parts,
+            })
+    payload: dict[str, Any] = {
+        "contents": contents,
+        "generationConfig": {"temperature": 0},
+    }
+    if system_parts:
+        payload["systemInstruction"] = {"parts": system_parts}
+    return payload
+
+
+def _response_error_code(status_code: int) -> str:
+    if status_code in {401, 403}:
+        return "provider_auth_failed"
+    if status_code == 404:
+        return "provider_model_or_endpoint_not_found"
+    if status_code == 429:
+        return "provider_rate_limited"
+    if status_code >= 500:
+        return "provider_upstream_unavailable"
+    return "provider_request_rejected"
+
+
+def _transport_error_code(exc: BaseException) -> str:
+    """Preserve a certificate failure without exposing its raw diagnostics."""
+    current: BaseException | None = exc
+    seen: set[int] = set()
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        if isinstance(current, ssl.SSLError):
+            return "provider_endpoint_tls_failed"
+        current = current.__cause__ or current.__context__
+    return "provider_unreachable"
+
+
+class SafeRelayProvider(BaseProvider):
+    """One owner-scoped custom endpoint using exactly one selected protocol."""
+
+    can_encode_vision = True
+
+    def __init__(self, config: ProviderConfig):
+        super().__init__(config)
+        self.provider_type = config.provider_type
+        self.wire_protocol = effective_wire_protocol(
+            config.provider_type,
+            config.wire_protocol,
+        )
+        # Preserve today's routing behavior. PR-C will let users explicitly
+        # choose a stage model and then rely on the real provider response.
+        self.supports_vision = (
+            config.provider_type in {"openai", "gemini", "anthropic"}
+            or (
+                config.provider_type == "zhipu"
+                and bool(_ZHIPU_VISION_MODEL_PATTERN.match(config.model.strip()))
+            )
+        )
+        self._safe_sync_client: httpx.Client | None = None
+        self._safe_async_client: httpx.AsyncClient | None = None
+        self._target_url = provider_operation_url(
+            effective_provider_base_url(config.provider_type, config.base_url),
+            self.wire_protocol,
+            model=config.model,
+        )
+
+    def _build_client_sync(self) -> Any:
+        sync_client, async_client = build_safe_provider_clients(
+            effective_provider_base_url(
+                self.config.provider_type,
+                self.config.base_url,
+            ),
+            timeout_seconds=float(settings.llm_timeout),
+            max_response_bytes=settings.custom_provider_max_response_bytes,
+            allowed_target_url=self._target_url,
+        )
+        self._safe_sync_client = sync_client
+        self._safe_async_client = async_client
+        return async_client
+
+    async def _relay_client(self) -> httpx.AsyncClient:
+        self._ensure_async_primitives()
+        if self._safe_async_client is None:
+            async with self._client_lock:
+                if self._safe_async_client is None:
+                    await asyncio.to_thread(self._build_client_sync)
+        assert self._safe_async_client is not None
+        return self._safe_async_client
+
+    def _request_parts(
+        self,
+        messages: List[BaseMessage],
+    ) -> tuple[dict[str, str], dict[str, Any]]:
+        headers = {"content-type": "application/json"}
+        if self.wire_protocol == "openai_chat_completions":
+            headers["authorization"] = f"Bearer {self.config.api_key}"
+            payload = _openai_payload(messages, self.model)
+        elif self.wire_protocol == "anthropic_messages":
+            headers.update({
+                "x-api-key": self.config.api_key,
+                "anthropic-version": "2023-06-01",
+            })
+            payload = _anthropic_payload(messages, self.model)
+        else:
+            headers["x-goog-api-key"] = self.config.api_key
+            payload = _gemini_payload(messages, self.model)
+        return headers, payload
+
+    def _parse_response(self, payload: Any, duration_ms: float) -> LLMResponse:
+        try:
+            if self.wire_protocol == "openai_chat_completions":
+                content = payload["choices"][0]["message"]["content"]
+                if isinstance(content, list):
+                    content = "".join(
+                        str(item.get("text", ""))
+                        for item in content
+                        if isinstance(item, dict)
+                    )
+                usage = payload.get("usage", {})
+                input_tokens = usage.get("prompt_tokens")
+                output_tokens = usage.get("completion_tokens")
+            elif self.wire_protocol == "anthropic_messages":
+                content = "".join(
+                    str(item.get("text", ""))
+                    for item in payload["content"]
+                    if isinstance(item, dict) and item.get("type") == "text"
+                )
+                usage = payload.get("usage", {})
+                input_tokens = usage.get("input_tokens")
+                output_tokens = usage.get("output_tokens")
+            else:
+                parts = payload["candidates"][0]["content"]["parts"]
+                content = "".join(
+                    str(item.get("text", ""))
+                    for item in parts
+                    if isinstance(item, dict)
+                )
+                usage = payload.get("usageMetadata", {})
+                input_tokens = usage.get("promptTokenCount")
+                output_tokens = usage.get("candidatesTokenCount")
+        except (KeyError, IndexError, TypeError) as exc:
+            raise ProviderRequestError("provider_response_invalid") from exc
+        if not isinstance(content, str):
+            raise ProviderRequestError("provider_response_invalid")
+        return LLMResponse(
+            content=content,
+            provider=self.provider_id,
+            model=self.model,
+            duration_ms=duration_ms,
+            input_tokens=input_tokens if isinstance(input_tokens, int) else None,
+            output_tokens=output_tokens if isinstance(output_tokens, int) else None,
+        )
+
+    async def ainvoke(self, messages: List[BaseMessage]) -> LLMResponse:
+        self._ensure_async_primitives()
+        await self._rpm_limiter.acquire()
+        async with self._semaphore:
+            started = time.perf_counter()
+            client = await self._relay_client()
+            headers, payload = self._request_parts(messages)
+            try:
+                response = await client.post(
+                    self._target_url,
+                    headers=headers,
+                    json=payload,
+                )
+            except httpx.TimeoutException as exc:
+                raise ProviderRequestError("provider_timeout") from exc
+            except httpx.TransportError as exc:
+                raise ProviderRequestError(_transport_error_code(exc)) from exc
+            if response.status_code >= 400:
+                raise ProviderRequestError(
+                    _response_error_code(response.status_code),
+                    status_code=response.status_code,
+                )
+            try:
+                response_payload = response.json()
+            except ValueError as exc:
+                raise ProviderRequestError("provider_response_invalid") from exc
+            duration_ms = (time.perf_counter() - started) * 1000
+            return self._parse_response(response_payload, duration_ms)
+
+    async def ainvoke_vision(
+        self,
+        prompt: str,
+        images: List[VisionImage],
+    ) -> LLMResponse:
+        if not images:
+            raise ValueError("ainvoke_vision requires at least one image.")
+        return await self.ainvoke(_build_vision_messages(prompt, images))
+
+
 # ─── Factory ─────────────────────────────────────────────────────────────────
 
 PROVIDER_CLASSES: Dict[str, type[BaseProvider]] = {
@@ -396,7 +781,17 @@ PROVIDER_CLASSES: Dict[str, type[BaseProvider]] = {
 
 
 def build_provider(config: ProviderConfig) -> BaseProvider:
+    protocol = effective_wire_protocol(config.provider_type, config.wire_protocol)
+    normalized_config = config.model_copy(update={"wire_protocol": protocol})
+    if is_user_defined_provider_endpoint(
+        normalized_config.provider_type,
+        normalized_config.base_url,
+        protocol,
+    ):
+        if not settings.custom_provider_endpoints_available:
+            raise ValueError("custom_provider_endpoints_disabled")
+        return SafeRelayProvider(normalized_config)
     provider_cls = PROVIDER_CLASSES.get(config.provider_type)
     if provider_cls is None:
         raise ValueError(f"Unknown provider type: {config.provider_type}. Supported: {list(PROVIDER_CLASSES.keys())}")
-    return provider_cls(config)
+    return provider_cls(normalized_config)

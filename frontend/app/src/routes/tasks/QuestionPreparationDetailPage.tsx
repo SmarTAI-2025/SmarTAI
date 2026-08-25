@@ -10,13 +10,13 @@ import {
   Pencil,
   Plus,
   Save,
-  Search,
   Trash2,
   X,
 } from "lucide-react";
 import { Link, Navigate, useBeforeUnload, useBlocker, useLocation, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { toast } from "sonner";
 import { useTask, useUpdateProblem } from "@/api/hooks/tasks";
+import { SmarTAIMascot } from "@/components/brand/SmarTAIMascot";
 import { NewTaskStepper } from "@/components/new-task/NewTaskStepper";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { MarkdownMath } from "@/components/ui/MarkdownMath";
@@ -50,6 +50,8 @@ export function QuestionPreparationDetailPage() {
   const pendingCompositionCommitRef = useRef<number | null>(null);
   const lastCommittedQueryRef = useRef(urlQuery);
   const positionedPathRef = useRef<string | null>(null);
+  const workflowRevisionTaskRef = useRef(stableTaskId);
+  const latestWorkflowRevisionRef = useRef<number | undefined>(taskQuery.data?.workflow_revision);
 
   const problems = useMemo(
     () => sortProblems(Object.values(taskQuery.data?.problem_data ?? {}), locale),
@@ -66,6 +68,21 @@ export function QuestionPreparationDetailPage() {
   const blocker = useBlocker(({ currentLocation, nextLocation }) => (
     hasDirty && currentLocation.pathname !== nextLocation.pathname
   ));
+
+  useEffect(() => {
+    const serverRevision = taskQuery.data?.workflow_revision;
+    if (workflowRevisionTaskRef.current !== stableTaskId) {
+      workflowRevisionTaskRef.current = stableTaskId;
+      latestWorkflowRevisionRef.current = serverRevision;
+      return;
+    }
+    if (
+      serverRevision !== undefined
+      && (latestWorkflowRevisionRef.current === undefined || serverRevision > latestWorkflowRevisionRef.current)
+    ) {
+      latestWorkflowRevisionRef.current = serverRevision;
+    }
+  }, [stableTaskId, taskQuery.data?.workflow_revision]);
 
   useEffect(() => {
     lastCommittedQueryRef.current = urlQuery;
@@ -200,30 +217,33 @@ export function QuestionPreparationDetailPage() {
   const overviewHref = `/tasks/${encodeURIComponent(taskId)}/questions${searchParams.size ? `?${searchParams.toString()}` : ""}`;
 
   async function saveText(problem: ProblemInfo, field: TextFieldKey, value: string) {
-    await updateProblem.mutateAsync({
+    const response = await updateProblem.mutateAsync({
       taskId: stableTaskId,
       qId: problem.q_id,
-      expectedWorkflowRevision: taskQuery.data?.workflow_revision,
+      expectedWorkflowRevision: latestWorkflowRevisionRef.current,
       [field]: value,
     });
+    latestWorkflowRevisionRef.current = response.workflow_revision;
   }
 
   async function saveTests(problem: ProblemInfo, cases: TestCase[]) {
-    await updateProblem.mutateAsync({
+    const response = await updateProblem.mutateAsync({
       taskId: stableTaskId,
       qId: problem.q_id,
-      expectedWorkflowRevision: taskQuery.data?.workflow_revision,
+      expectedWorkflowRevision: latestWorkflowRevisionRef.current,
       test_cases: cases,
     });
+    latestWorkflowRevisionRef.current = response.workflow_revision;
   }
 
   async function saveMaxScore(problem: ProblemInfo, maxScore: number) {
-    await updateProblem.mutateAsync({
+    const response = await updateProblem.mutateAsync({
       taskId: stableTaskId,
       qId: problem.q_id,
-      expectedWorkflowRevision: taskQuery.data?.workflow_revision,
+      expectedWorkflowRevision: latestWorkflowRevisionRef.current,
       max_score: maxScore,
     });
+    latestWorkflowRevisionRef.current = response.workflow_revision;
   }
 
   async function confirmAll() {
@@ -233,7 +253,7 @@ export function QuestionPreparationDetailPage() {
     }
     setConfirming(true);
     try {
-      let expectedWorkflowRevision = taskQuery.data?.workflow_revision;
+      let expectedWorkflowRevision = latestWorkflowRevisionRef.current;
       for (const problem of problems) {
         const response = await updateProblem.mutateAsync({
           taskId: stableTaskId,
@@ -249,6 +269,7 @@ export function QuestionPreparationDetailPage() {
           review_status: "confirmed",
         });
         expectedWorkflowRevision = response.workflow_revision;
+        latestWorkflowRevisionRef.current = response.workflow_revision;
       }
       toast.success(tx(locale, "全部题目资料已确认。", "All question materials are confirmed."));
       navigate(`/tasks/${taskId}/submissions/upload`);
@@ -270,10 +291,11 @@ export function QuestionPreparationDetailPage() {
       </div>
       <NewTaskStepper currentStep={2} />
 
-      <label className="relative mt-6 block">
-        <span className="sr-only">{tx(locale, "SmarTAI 智能筛选题目", "SmarTAI Smart question filter")}</span>
-        <Search aria-hidden="true" className="pointer-events-none absolute left-4 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-        <input
+      <div className="mt-6 flex items-center gap-2">
+        <SmarTAIMascot variant="thinking" size="xs" />
+        <label className="relative min-w-0 flex-1">
+          <span className="sr-only">{tx(locale, "本地快速筛选题目，不调用模型", "Local quick question filter, no model call")}</span>
+          <input
           value={query}
           inputMode="search"
           onCompositionStart={() => {
@@ -307,10 +329,11 @@ export function QuestionPreparationDetailPage() {
               flushComposition(event.currentTarget);
             }
           }}
-          placeholder={tx(locale, "SmarTAI 智能搜索：题号、题型、题目内容，或“编程题 / 低置信 / 冲突”", "SmarTAI Smart Search: number, type, content, or “programming / low confidence / conflict”")}
-          className="h-12 w-full rounded-[10px] border bg-card pl-11 pr-4 text-[13px] outline-none placeholder:text-muted-foreground focus:border-primary focus:ring-2 focus:ring-primary/15"
-        />
-      </label>
+          placeholder={tx(locale, "本地快速筛选：题号、题型、题目内容，或“编程题 / 低置信 / 冲突”", "Local quick filter: number, type, content, or “programming / low confidence / conflict”")}
+          className="h-12 w-full rounded-[10px] border bg-card pl-4 pr-4 text-[13px] outline-none placeholder:text-muted-foreground focus:border-primary focus:ring-2 focus:ring-primary/15"
+          />
+        </label>
+      </div>
 
       {readOnly ? <p className="mt-4 rounded-[8px] border border-amber-200 bg-amber-50 px-4 py-3 text-xs leading-5 text-amber-800 dark:border-amber-900 dark:bg-amber-950/20 dark:text-amber-200">{tx(locale, "当前任务已进入后续阶段，本页可浏览但不能修改。", "This task has moved to a later stage. The page is read-only.")}</p> : null}
 

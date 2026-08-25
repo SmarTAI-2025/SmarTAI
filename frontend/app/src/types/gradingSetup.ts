@@ -34,6 +34,8 @@ export interface GradingSetupExpert {
   editable: boolean;
   max_concurrent: number;
   rpm: number;
+  base_url?: string | null;
+  verification_status?: string | null;
 }
 
 export interface GradingSetupKnowledgeDocument {

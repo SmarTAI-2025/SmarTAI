@@ -102,16 +102,17 @@ SMARTAI_HTTPS_PROXY=http://HOST:PORT
 - 前端 BYOK 的 Key 仍在“模型与 BYOK”页面填写，并由后端加密保存。
 - 修改代理配置后必须重启后端。
 
-#### 配置本地 BYOK 加密主密钥（可选）
+#### 配置本地 BYOK 加密主密钥（使用 BYOK 时必需）
 
-`SMARTAI_PROVIDER_ENCRYPTION_KEY` 和 `SMARTAI_JWT_SECRET` 在本地开发时都有内置
-默认值，不创建 `.env` 文件也能直接启动。
+后端未配置 `SMARTAI_PROVIDER_ENCRYPTION_KEY` 时仍可启动，但不能保存持久化 BYOK
+凭据。需要测试 BYOK 时，在本地 `.env` 中为它设置至少 32 字节的随机值。若本地也
+覆盖 `SMARTAI_JWT_SECRET`，两项必须使用不同值。开发或测试环境中的缺失、过短、
+公开占位值或与 JWT 相同的主密钥都会被视为“未配置”：其他功能仍可启动，保存或
+读取持久化 BYOK 时会返回明确错误，不会使用不安全密钥，也不会改走共享模型。
+生成方法：
 
-**开发环境开箱即用**：跳过本节直接进入「首次运行前」即可。如果你已经运行过
-`cp .env.example .env`，请确保 `.env` 中这两项为空或是安全的自定义值。
-
-> ⚠️ **生产环境**：必须在平台的 Secret Manager 中为这两项分别设置至少 32 字节的
-> 随机值，生成方法：
+> ⚠️ **生产环境**：还必须设置 `SMARTAI_RUNTIME_ENVIRONMENT=production`，并在平台
+> Secret Manager 中配置上述两个随机值；配置缺失、不安全或相同时后端拒绝启动。
 >
 > ```bash
 > python -c "import secrets; print(secrets.token_hex(32))"
@@ -122,6 +123,44 @@ SMARTAI_HTTPS_PROXY=http://HOST:PORT
 > - 一旦保存过 BYOK，就必须在后续重启中继续使用同一个值；丢失或更换它会使已有密文
 >   无法解密。连接同一个共享数据库的后端实例必须从安全的 Secret Manager 读取同一主密钥。
 > - 新建且互不共享的本地数据库可以各自生成独立主密钥。
+
+从只配置旧变量 `JWT_SECRET` 的已有部署迁移时，先新增并确认
+`SMARTAI_JWT_SECRET`，完成一次部署后再删除旧变量。代码只读取统一后的
+`SMARTAI_JWT_SECRET`；不要同时借迁移机会更换 BYOK 加密主密钥，否则已有 BYOK
+密文将无法读取。
+
+#### 所有已支持厂商都可无感替换 Base URL
+
+“模型与 BYOK”页面支持项目现有的七类厂商：OpenAI、DeepSeek、智谱、Kimi/Moonshot、
+通义千问、Anthropic/Claude 和 Gemini。选择厂商后，Base URL 默认显示该厂商官网地址；
+用户也可以直接改成任意通过下述安全检查的公网中转地址。官网与中转站使用同一套保存、
+启用和任务调用流程，不需要额外选择“中转站类型”、勾选风险声明或先完成验证。页面上的
+连通性检查只是可选排错工具，不是启用门槛。
+
+例如，选择 DeepSeek 后可以把 `https://api.deepseek.com/v1` 直接改成 USTC 的
+`https://api.llm.ustc.edu.cn/v1`。USTC 只是普通自定义 URL，没有特殊域名白名单；保存后
+仍是 DeepSeek 配置并立即可用于任务。同一用户可以保存“同厂商 + 同模型 + 不同 URL”或
+“同端点 + 不同协议”的多个配置；配置名称留空时，系统会用厂商、模型、端点和协议自动
+生成不重复的显示名称。
+
+协议默认跟随所选厂商，无需用户操作：OpenAI、DeepSeek、智谱、Kimi 和通义千问使用
+OpenAI Chat Completions；Claude 使用 Anthropic Messages；Gemini 使用
+Gemini `generateContent`。只有当中转站文档明确说明“模型品牌与接口协议不同”时，才在
+折叠的“高级设置”中覆盖 API 协议。后端只发送所选协议的一次请求，不会静默改用第二种
+协议或重复产生计费。
+
+非官网 URL 没有域名特批。后端统一只接受域名形式、HTTPS 443、系统可信证书且不含
+userinfo、query 或 fragment 的服务 Base URL；拒绝 IP literal、localhost、内网、云元
+数据、特殊地址、完整 `/chat/completions`、`/messages` 或 `:generateContent` 操作终点
+以及所有重定向。DNS 在保存和每次新建连接前重新检查；任一解析结果不是公网地址即拒绝，
+socket 只连接本次批准的公网 IP，TLS/SNI 和 HTTP Host 仍使用原域名。客户端不继承系统
+代理、不自动重试，并限制响应大小。
+
+开发和测试环境默认开放编辑，方便同学直接用真实机构 API；production 仍由默认关闭的
+`SMARTAI_CUSTOM_PROVIDER_ENDPOINTS_ENABLED` 控制。自定义端点只使用当前教师加密保存的
+BYOK，绝不进入平台共享模型池。任务知识库继续使用本地 BM25；自定义端点不会收到隐式
+`/embeddings` 请求或课程资料。公网 production 在应用安全测试、网络出口防护和发布门禁
+没有同一 release SHA 的证据前，不应把该开关改为 `true`。
 
 首次运行前，在**仓库根目录**（该目录应能看到 `alembic.ini`、`backend/` 和
 `frontend/`）应用数据库迁移。请先激活上文创建并已安装后端依赖的 Python 环境，
@@ -246,9 +285,10 @@ VITE_SMARTAI_BACKEND_URL=https://your-backend.example.com
 
 后端生产环境至少需要配置以下项目：
 
+- `SMARTAI_RUNTIME_ENVIRONMENT=production`
 - `SMARTAI_DATABASE_HEAVY=ON` 与 `SMARTAI_DATABASE_URL_HEAVY`
 - `SMARTAI_STORAGE_BACKEND=object` 与 `SMARTAI_STORAGE_S3_*`
-- `SMARTAI_PROVIDER_ENCRYPTION_KEY` 与 JWT 签名密钥
+- `SMARTAI_PROVIDER_ENCRYPTION_KEY` 与 `SMARTAI_JWT_SECRET`（互不相同）
 - `SMARTAI_REFRESH_COOKIE_SECURE=true`
 - `SMARTAI_REFRESH_COOKIE_SAMESITE=none`
 - `FRONTEND_URLS`（填写真实前端域名，不带结尾 `/`）

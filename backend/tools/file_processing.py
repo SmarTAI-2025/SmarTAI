@@ -14,6 +14,7 @@ import json
 import logging
 import mimetypes
 import posixpath
+import re
 import sys
 import tarfile
 import tempfile
@@ -343,6 +344,36 @@ def _is_likely_scanned_pdf(text: str, page_count: int) -> bool:
     return page_count > 0 and (compact_len / page_count) < 30
 
 
+_MATH_LAYOUT_SIGNAL_RE = re.compile(
+    r"[=∫√Σ∥]|[A-Za-z0-9][²³ⁿ⁻⁺]|\b(?:sin|cos|tan|exp|sqrt|ker|rank)\b",
+    re.IGNORECASE,
+)
+_SPLIT_CODE_MARKERS = frozenset({"import", "from", "def", "class", "function"})
+
+
+def _is_likely_fragmented_math_pdf(text: str, purpose: OCRPurpose) -> bool:
+    """Detect selectable PDFs whose visual formula/code layout was flattened.
+
+    PyMuPDF is preferable for ordinary prose PDFs, but a TeX fraction, radical,
+    integral, superscript, or syntax-highlighted code block can be emitted as
+    several isolated text lines (for example ``v =`` / ``p`` / ``2as``).  That
+    output is technically non-empty yet materially worse than vision OCR.  Keep
+    this deliberately conservative and limited to math-bearing ingest purposes.
+    """
+    if purpose not in {"problems", "submissions", "reference"}:
+        return False
+    lines = [line.strip() for line in (text or "").splitlines() if line.strip()]
+    if len(lines) < 6:
+        return False
+    very_short_lines = sum(len(line) <= 3 for line in lines)
+    math_signals = len(_MATH_LAYOUT_SIGNAL_RE.findall(text or ""))
+    split_code_markers = sum(line.lower() in _SPLIT_CODE_MARKERS for line in lines)
+    return (
+        math_signals >= 3
+        and (very_short_lines >= 3 or split_code_markers >= 2)
+    )
+
+
 def _require_ocr_skill(ocr_skill: OCRIngestSkill | None, filename: str) -> OCRIngestSkill:
     if ocr_skill is None:
         raise HTTPException(
@@ -436,8 +467,9 @@ async def extract_text_from_upload(
 ) -> str:
     """Convert a supported upload into text.
 
-    Text/native PDF stays on the cheap deterministic path. Images and scanned
-    PDFs use the provided OCR ingest skill.
+    Ordinary text/native PDF stays on the cheap deterministic path. Images,
+    scanned PDFs, and visibly fragmented math-layout PDFs use the provided OCR
+    ingest skill when one is available.
     """
     safe_name = filename or "upload"
     inspection = inspect_upload_content(file_bytes, safe_name, content_type)
@@ -461,11 +493,16 @@ async def extract_text_from_upload(
             )
         text, page_count = await _extract_pdf_payload(file_bytes)
 
-        if not _is_likely_scanned_pdf(text, page_count):
+        scanned = _is_likely_scanned_pdf(text, page_count)
+        fragmented_math = _is_likely_fragmented_math_pdf(text, purpose)
+        if not scanned and not (fragmented_math and ocr_skill is not None):
             return text
 
         if reporter:
-            await reporter._emit_message(f"Detected scanned PDF: {safe_name}; rendering pages for OCR...")
+            reason = "scanned PDF" if scanned else "fragmented math/code layout"
+            await reporter._emit_message(
+                f"Detected {reason}: {safe_name}; rendering pages for vision OCR..."
+            )
         images = _render_pdf_pages_for_ocr(file_bytes, safe_name)
         text = await _ocr_images(
             images,

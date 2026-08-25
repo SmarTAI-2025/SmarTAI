@@ -77,6 +77,7 @@ def create_app() -> FastAPI:
     from backend.api.grading_runs import router as grading_runs_router
     from backend.api.results import router as results_router
     from backend.api.experts import router as experts_router
+    from backend.api.ocr_providers import router as ocr_providers_router
     from backend.api.tasks import router as tasks_router
     from backend.api.task_preparation import router as task_preparation_router
     from backend.api.materials import router as materials_router
@@ -94,6 +95,7 @@ def create_app() -> FastAPI:
     app.include_router(grading_runs_router)
     app.include_router(results_router)
     app.include_router(experts_router)
+    app.include_router(ocr_providers_router)
     app.include_router(tasks_router)
     app.include_router(task_preparation_router)
     app.include_router(materials_router)
@@ -102,7 +104,7 @@ def create_app() -> FastAPI:
 
     logger.info(
         "V2 routers loaded: auth, users, admin, courses, assignments, submissions, "
-        "knowledge, grading-runs, results, experts, tasks, task-preparation, "
+        "knowledge, grading-runs, results, experts, ocr-providers, tasks, task-preparation, "
         "course-materials, tags, analytics"
     )
 
@@ -206,6 +208,52 @@ def create_app() -> FastAPI:
                 pass
             except Exception:
                 pass
+
+    # ─── Durable workflow-operation worker (DB-W2-2) ──────────────────
+    # Only operation types with restart-safe handlers are registered. Adding a
+    # mapping is the cutover from request-memory dispatch to durable polling.
+    _workflow_worker: dict[str, object] = {"worker": None, "task": None}
+
+    @app.on_event("startup")
+    async def _start_workflow_worker():
+        import asyncio as _asyncio
+        from backend.services.workflow_worker import WorkflowWorker
+        from backend.services.task_facade import (
+            run_durable_problem_extraction,
+            run_durable_submission_recognition,
+        )
+        from backend.api.task_preparation import (
+            run_durable_ai_completion,
+            run_durable_material_import,
+        )
+
+        worker = WorkflowWorker(handlers={
+            "problem_extraction": run_durable_problem_extraction,
+            "submission_recognition": run_durable_submission_recognition,
+            "material_import": run_durable_material_import,
+            "ai_completion": run_durable_ai_completion,
+        })
+        _workflow_worker["worker"] = worker
+        _workflow_worker["task"] = _asyncio.create_task(worker.run_forever())
+
+    @app.on_event("shutdown")
+    async def _stop_workflow_worker():
+        import asyncio as _asyncio
+
+        worker = _workflow_worker.get("worker")
+        task = _workflow_worker.get("task")
+        if worker is not None:
+            worker.stop()
+        if task is not None:
+            task.cancel()
+            try:
+                await task
+            except _asyncio.CancelledError:
+                pass
+            except Exception:
+                logger.exception("workflow worker loop exited during shutdown")
+        if worker is not None:
+            await worker.shutdown()
 
     return app
 

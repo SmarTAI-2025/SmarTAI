@@ -22,6 +22,8 @@ services:
         value: "3.11"   # Render supports the backend's numpy/langchain stack.
       - key: SMARTAI_GRADING_ENGINE
         value: v2
+      - key: SMARTAI_RUNTIME_ENVIRONMENT
+        value: production
       # Leave empty when this host can reach overseas providers directly; set
       # only when the deployment needs an outbound proxy. Zhipu always bypasses it.
       - key: SMARTAI_HTTP_PROXY
@@ -30,7 +32,7 @@ services:
         value: ""   # ✅ 云端正确
       # Auth: Render auto-generates a strong random on first deploy and
       # keeps it stable across redeploys.
-      - key: JWT_SECRET
+      - key: SMARTAI_JWT_SECRET
         generateValue: true    # ✅ 自动生成
       - key: SMARTAI_REQUIRE_AUTH
         value: "true"
@@ -50,6 +52,8 @@ services:
         value: "object"
       - key: SMARTAI_PROVIDER_ENCRYPTION_KEY
         sync: false
+      - key: SMARTAI_CUSTOM_PROVIDER_ENDPOINTS_ENABLED
+        value: "false"
       - key: SMARTAI_STORAGE_S3_ENDPOINT
         sync: false
       - key: SMARTAI_STORAGE_S3_BUCKET

@@ -102,6 +102,10 @@ function renderPage(initialEntry = "/tasks/task-1/questions/Q1/content") {
       path: "/tasks/:taskId/questions",
       element: <div>Question overview destination</div>,
     },
+    {
+      path: "/tasks/:taskId/submissions/upload",
+      element: <div>Submission upload destination</div>,
+    },
   ], { initialEntries: [initialEntry] });
 
   render(<RouterProvider router={router} />);
@@ -160,6 +164,35 @@ describe("QuestionPreparationDetailPage navigation", () => {
       expectedWorkflowRevision: 7,
       max_score: 5,
     }));
+  });
+
+  it("carries the latest workflow revision across different maximum-score edits and final confirmation", async () => {
+    let workflowRevision = taskData.workflow_revision;
+    mutateAsync.mockImplementation(async () => ({
+      workflow_revision: ++workflowRevision,
+    }));
+    const user = userEvent.setup();
+    const router = renderPage();
+
+    await user.click(await screen.findByRole("button", { name: "修改第 1 题满分" }));
+    const firstScore = screen.getByRole("spinbutton", { name: "第 1 题满分" });
+    await user.clear(firstScore);
+    await user.type(firstScore, "5");
+    await user.click(screen.getByRole("button", { name: "保存" }));
+
+    await user.click(screen.getByRole("button", { name: "修改第 2 题满分" }));
+    const secondScore = screen.getByRole("spinbutton", { name: "第 2 题满分" });
+    await user.clear(secondScore);
+    await user.type(secondScore, "15");
+    await user.click(screen.getByRole("button", { name: "保存" }));
+
+    await user.click(screen.getByRole("button", { name: "确认全部题目资料" }));
+
+    expect(await screen.findByText("Submission upload destination")).toBeInTheDocument();
+    expect(router.state.location.pathname).toBe("/tasks/task-1/submissions/upload");
+    expect(mutateAsync.mock.calls.map(([input]) => input.expectedWorkflowRevision)).toEqual([
+      7, 8, 9, 10, 11, 12,
+    ]);
   });
 
   it("does not block navigation only because the default maximum score needs review", async () => {
@@ -223,7 +256,7 @@ describe("QuestionPreparationDetailPage navigation", () => {
     fireEvent.keyDown(window, { key: "ArrowUp" });
     await waitFor(() => expect(firstQuestion).toHaveAttribute("aria-current", "true"));
 
-    const search = screen.getByRole("textbox", { name: "SmarTAI 智能筛选题目" });
+    const search = screen.getByRole("textbox", { name: "本地快速筛选题目，不调用模型" });
     search.focus();
     fireEvent.keyDown(search, { key: "ArrowDown" });
 

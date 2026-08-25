@@ -14,14 +14,50 @@ import logging
 from datetime import datetime, timezone
 from typing import Dict, List, Optional, Any
 from threading import Lock
+from urllib.parse import urlsplit
 
-from fastapi import Depends, HTTPException
+from fastapi import Depends, HTTPException, status
 
 from backend.config import settings
+from backend.llm.endpoint_policy import (
+    ProviderEndpointError,
+    is_user_defined_provider_endpoint,
+)
 from backend.models import ProviderConfig
 from backend.llm.providers import BaseProvider, build_provider
+from backend.llm.provider_catalog import (
+    PROVIDER_CATALOG_BY_TYPE,
+    effective_wire_protocol,
+)
 
 logger = logging.getLogger(__name__)
+
+
+def provider_encryption_not_configured_error(
+    *,
+    api_key_was_submitted: bool = False,
+) -> HTTPException:
+    """Return the stable, environment-safe BYOK master-key error."""
+    if settings.runtime_environment == "production":
+        message = (
+            "Service configuration is temporarily unavailable. Contact an "
+            "administrator."
+        )
+    else:
+        message = (
+            "Server BYOK encryption is not configured. Set "
+            "SMARTAI_PROVIDER_ENCRYPTION_KEY to a private random value and "
+            "restart the backend."
+        )
+    if api_key_was_submitted:
+        message = f"{message} This API key was not saved."
+    return HTTPException(
+        status.HTTP_503_SERVICE_UNAVAILABLE,
+        detail={
+            "code": "provider_encryption_not_configured",
+            "message": message,
+        },
+    )
 
 
 def _iso_utc_timestamp(value: object) -> str | None:
@@ -106,7 +142,9 @@ class ExpertRegistry:
         self._verification: Dict[str, Dict[str, object]] = {}
         self._lock = Lock()
         self._shared_owner_id = shared_owner_id
-        self._uses_shared_pool = False
+        self._uses_shared_pool = bool(
+            seed_from_settings and settings.shared_pool_enabled
+        )
         if seed_from_settings and settings.shared_pool_enabled:
             self._seed_from_settings()
             self._uses_shared_pool = bool(self._providers)
@@ -114,52 +152,75 @@ class ExpertRegistry:
     def _seed_from_settings(self) -> None:
         """Populate from env vars at startup. User can override via API."""
         if settings.gemini_api_key:
-            self.register(ProviderConfig(
+            self._register_shared_setting(ProviderConfig(
                 provider_type="gemini",
                 api_key=settings.gemini_api_key,
                 model=settings.gemini_model,
             ))
         if settings.openai_api_key and settings.openai_api_key != "YOUR_API_KEY_HERE":
-            self.register(ProviderConfig(
+            self._register_shared_setting(ProviderConfig(
                 provider_type="openai",
                 api_key=settings.openai_api_key,
                 model=settings.openai_model,
                 base_url=settings.openai_api_base,
             ))
         if settings.zhipu_api_key:
-            self.register(ProviderConfig(
+            self._register_shared_setting(ProviderConfig(
                 provider_type="zhipu",
                 api_key=settings.zhipu_api_key,
                 model=settings.zhipu_model,
                 base_url=settings.zhipu_api_base,
             ))
         if settings.anthropic_api_key:
-            self.register(ProviderConfig(
+            self._register_shared_setting(ProviderConfig(
                 provider_type="anthropic",
                 api_key=settings.anthropic_api_key,
                 model=settings.anthropic_model,
             ))
         if settings.deepseek_api_key:
-            self.register(ProviderConfig(
+            self._register_shared_setting(ProviderConfig(
                 provider_type="deepseek",
                 api_key=settings.deepseek_api_key,
                 model=settings.deepseek_model,
                 base_url=settings.deepseek_api_base,
             ))
         if settings.moonshot_api_key:
-            self.register(ProviderConfig(
+            self._register_shared_setting(ProviderConfig(
                 provider_type="moonshot",
                 api_key=settings.moonshot_api_key,
                 model=settings.moonshot_model,
                 base_url=settings.moonshot_api_base,
             ))
         if settings.qwen_api_key:
-            self.register(ProviderConfig(
+            self._register_shared_setting(ProviderConfig(
                 provider_type="qwen",
                 api_key=settings.qwen_api_key,
                 model=settings.qwen_model,
                 base_url=settings.qwen_api_base,
             ))
+
+    def _register_shared_setting(self, config: ProviderConfig) -> None:
+        try:
+            custom_route = is_user_defined_provider_endpoint(
+                config.provider_type,
+                config.base_url,
+                config.wire_protocol,
+            )
+        except ProviderEndpointError as exc:
+            logger.error(
+                "Skipped shared provider with an invalid endpoint; "
+                "provider_type=%s code=%s",
+                config.provider_type,
+                exc.code,
+            )
+            return
+        if custom_route:
+            logger.error(
+                "Skipped shared provider with a user-defined route; provider_type=%s",
+                config.provider_type,
+            )
+            return
+        self.register(config)
 
     def register(
         self,
@@ -171,6 +232,29 @@ class ExpertRegistry:
         verification_error_code: str | None = None,
     ) -> str:
         """Register or update a provider. Returns its provider_id."""
+        custom_route = is_user_defined_provider_endpoint(
+            config.provider_type,
+            config.base_url,
+            config.wire_protocol,
+        )
+        if self._uses_shared_pool and custom_route:
+            raise ValueError("custom_provider_shared_pool_not_allowed")
+        if custom_route and not settings.custom_provider_endpoints_available:
+            registry_id = provider_id or f"{config.provider_type}:{config.model}"
+            with self._lock:
+                self._providers.pop(registry_id, None)
+                self._configs[registry_id] = config
+                self._verification[registry_id] = {
+                    "verification_status": verification_status,
+                    "last_checked_at": last_checked_at,
+                    "verified_at": (
+                        last_checked_at
+                        if verification_status == "verified"
+                        else None
+                    ),
+                    "verification_error_code": verification_error_code,
+                }
+            return registry_id
         provider = build_provider(config)
         registry_id = provider_id or provider.provider_id
         with self._lock:
@@ -199,33 +283,91 @@ class ExpertRegistry:
         return existed
 
     def get(self, provider_id: str) -> Optional[BaseProvider]:
-        """Look up a provider by its provider_id."""
+        """Look up one provider while honoring the production kill switch."""
         with self._lock:
             provider = self._providers.get(provider_id)
+            if (
+                provider is not None
+                and is_user_defined_provider_endpoint(
+                    self._configs[provider_id].provider_type,
+                    self._configs[provider_id].base_url,
+                    self._configs[provider_id].wire_protocol,
+                )
+                and not settings.custom_provider_endpoints_available
+            ):
+                provider = None
         return self._guard_shared(provider)
 
     def list_available(self) -> List[BaseProvider]:
         """Return all enabled providers. Order is deterministic (sorted by provider_id)."""
         with self._lock:
             available = sorted(
-                [p for pid, p in self._providers.items() if self._configs[pid].enabled],
+                [
+                    provider
+                    for provider_id, provider in self._providers.items()
+                    if self._is_text_available_unlocked(provider_id)
+                ],
                 key=lambda p: p.provider_id,
             )
         return [self._guard_shared(provider) for provider in available]
+
+    def _is_text_available_unlocked(self, provider_id: str) -> bool:
+        config = self._configs[provider_id]
+        return bool(
+            config.enabled
+            and (
+                not is_user_defined_provider_endpoint(
+                    config.provider_type,
+                    config.base_url,
+                    config.wire_protocol,
+                )
+                or settings.custom_provider_endpoints_available
+            )
+        )
 
     def _guard_shared(self, provider: Optional[BaseProvider]):
         if provider is None or not self._uses_shared_pool:
             return provider
         return _GuardedSharedProvider(provider, self._shared_owner_id or "anonymous")
 
+    def _registry_id_for_provider(self, provider: BaseProvider) -> str | None:
+        target = (
+            provider._provider
+            if isinstance(provider, _GuardedSharedProvider)
+            else provider
+        )
+        with self._lock:
+            return next(
+                (
+                    provider_id
+                    for provider_id, registered in self._providers.items()
+                    if registered is target
+                ),
+                None,
+            )
+
     def list_enabled_configs(self) -> List[ProviderConfig]:
         """Trusted backend-only view used by the owner-scoped RAG embedder."""
+        return list(self._embedding_eligible_configs_by_id().values())
+
+    def _embedding_eligible_configs_by_id(self) -> Dict[str, ProviderConfig]:
+        """Return exact provider-record mappings that may receive embeddings.
+
+        Keeping the stable record id in this internal view prevents a selected
+        custom route from being confused with an official configuration that
+        happens to use the same provider type and model name.
+        """
         with self._lock:
-            return [
-                config.model_copy(deep=True)
-                for config in self._configs.values()
-                if config.enabled
-            ]
+            return {
+                provider_id: config.model_copy(deep=True)
+                for provider_id, config in self._configs.items()
+                if self._is_text_available_unlocked(provider_id)
+                and not is_user_defined_provider_endpoint(
+                    config.provider_type,
+                    config.base_url,
+                    config.wire_protocol,
+                )
+            }
 
     def uses_shared_pool(self) -> bool:
         return self._uses_shared_pool
@@ -238,16 +380,74 @@ class ExpertRegistry:
         to re-derive the id.
         """
         with self._lock:
+            base_labels: dict[str, str] = {}
+            label_counts: dict[str, int] = {}
+            endpoint_descriptors: dict[str, str] = {}
+            protocols: dict[str, str] = {}
+            protocol_labels = {
+                "openai_chat_completions": "OpenAI Chat Completions",
+                "anthropic_messages": "Anthropic Messages",
+                "gemini_generate_content": "Gemini generateContent",
+            }
+            for provider_id, config in self._configs.items():
+                entry = PROVIDER_CATALOG_BY_TYPE.get(config.provider_type)
+                provider_label = entry.display_name if entry else config.provider_type
+                label = (
+                    (config.display_name or "").strip()
+                    or f"{provider_label} · {config.model}"
+                )
+                base_labels[provider_id] = label
+                label_key = label.casefold()
+                label_counts[label_key] = label_counts.get(label_key, 0) + 1
+                protocol = effective_wire_protocol(
+                    config.provider_type,
+                    config.wire_protocol,
+                )
+                protocols[provider_id] = protocol
+                identity = (
+                    config.endpoint_identity
+                    or (entry.default_base_url if entry else config.base_url)
+                    or ""
+                )
+                parsed = urlsplit(identity)
+                endpoint_label = f"{parsed.hostname or identity}{parsed.path.rstrip('/')}"
+                endpoint_descriptors[provider_id] = (
+                    f"{endpoint_label} · {protocol_labels.get(protocol, protocol)}"
+                )
+
+            candidate_labels = {
+                provider_id: (
+                    base_labels[provider_id]
+                    if label_counts[base_labels[provider_id].casefold()] == 1
+                    else f"{base_labels[provider_id]} · {endpoint_descriptors[provider_id]}"
+                )
+                for provider_id in self._configs
+            }
+            candidate_counts: dict[str, int] = {}
+            for label in candidate_labels.values():
+                key = label.casefold()
+                candidate_counts[key] = candidate_counts.get(key, 0) + 1
+
             out: List[Dict[str, object]] = []
             for pid, c in self._configs.items():
                 verification = self._verification.get(pid, {})
+                resolved_display_name = candidate_labels[pid]
+                if candidate_counts[resolved_display_name.casefold()] > 1:
+                    resolved_display_name = (
+                        f"{resolved_display_name} · {pid[-8:]}"
+                    )
                 out.append({
                     "provider_id": pid,
                     "provider_type": c.provider_type,
                     "model": c.model,
                     "base_url": c.base_url,
-                    "enabled": c.enabled,
-                    "display_name": c.display_name or pid,
+                    "endpoint_identity": c.endpoint_identity,
+                    "endpoint_descriptor": endpoint_descriptors[pid],
+                    "wire_protocol": protocols[pid],
+                    "enabled": self._is_text_available_unlocked(pid),
+                    "display_name": resolved_display_name,
+                    "configured_display_name": c.display_name,
+                    "resolved_display_name": resolved_display_name,
                     "max_concurrent": c.max_concurrent,
                     "rpm": c.rpm,
                     "scope": "shared" if self._uses_shared_pool else "owner",
@@ -322,7 +522,7 @@ class ExpertRegistry:
                 (
                     (provider_id, config)
                     for provider_id, config in self._configs.items()
-                    if config.enabled
+                    if self._is_text_available_unlocked(provider_id)
                 ),
                 key=lambda item: item[0],
             )
@@ -346,13 +546,16 @@ class ExpertRegistry:
         """
         available = self.list_available()
         if preferred is not None and getattr(preferred, "supports_vision", False):
-            if any(p.provider_id == preferred.provider_id for p in available):
+            preferred_id = self._registry_id_for_provider(preferred)
+            if preferred_id is not None and any(
+                self._registry_id_for_provider(provider) == preferred_id
+                for provider in available
+            ):
                 return preferred
         for p in available:
             if getattr(p, "supports_vision", False):
                 return p
         return None
-
 
 class ExpertRegistryView:
     """Read-only provider selection frozen for one operation or grading run."""
@@ -385,26 +588,12 @@ class ExpertRegistryView:
         ]
 
     def list_enabled_configs(self) -> List[ProviderConfig]:
-        allowed = set(self._provider_ids)
-        configs = {
-            str(item.get("provider_id")): item
-            for item in self._registry.list_configs()
-        }
-        # The embedder only needs provider configuration values, not selection
-        # metadata. Preserve registry order while filtering by the frozen ids.
-        enabled = self._registry.list_enabled_configs()
-        by_signature = {
-            (config.provider_type, config.model): config for config in enabled
-        }
-        output: List[ProviderConfig] = []
-        for provider_id in self._provider_ids:
-            meta = configs.get(provider_id)
-            if meta is None or provider_id not in allowed:
-                continue
-            config = by_signature.get((meta.get("provider_type"), meta.get("model")))
-            if config is not None:
-                output.append(config)
-        return output
+        eligible = self._registry._embedding_eligible_configs_by_id()
+        return [
+            eligible[provider_id]
+            for provider_id in self._provider_ids
+            if provider_id in eligible
+        ]
 
     def uses_shared_pool(self) -> bool:
         return self._registry.uses_shared_pool()
@@ -419,12 +608,22 @@ class ExpertRegistryView:
         return self._primary_provider_id if self.get(self._primary_provider_id) else None
 
     def pick_vision(self, preferred: Optional[BaseProvider] = None) -> Optional[BaseProvider]:
-        available = self.list_available()
+        available: List[tuple[str, BaseProvider]] = []
+        for provider_id in self._provider_ids:
+            provider = self._registry.get(provider_id)
+            if provider is None:
+                continue
+            available.append((provider_id, provider))
         if preferred is not None and getattr(preferred, "supports_vision", False):
-            if any(item.provider_id == preferred.provider_id for item in available):
+            preferred_id = self._registry._registry_id_for_provider(preferred)
+            if any(provider_id == preferred_id for provider_id, _ in available):
                 return preferred
         return next(
-            (item for item in available if getattr(item, "supports_vision", False)),
+            (
+                item
+                for _, item in available
+                if getattr(item, "supports_vision", False)
+            ),
             None,
         )
 
@@ -448,7 +647,16 @@ def get_expert_registry() -> ExpertRegistry:
 
 def _build_scoped_registry(current) -> ExpertRegistry:
     owner_id = getattr(current, "id", None) or "anonymous"
-    if current is None or not settings.provider_encryption_key:
+    if current is None:
+        return ExpertRegistry(shared_owner_id=owner_id)
+    if not settings.provider_encryption_key:
+        from backend.db.provider_repository import has_provider_configs
+
+        # Do not make existing BYOK records disappear and then silently route
+        # the same user's request through the shared provider pool. Checking
+        # record existence does not require decrypting or exposing a secret.
+        if has_provider_configs(current.id):
+            raise provider_encryption_not_configured_error()
         return ExpertRegistry(shared_owner_id=owner_id)
     try:
         from backend.db.provider_repository import list_provider_configs

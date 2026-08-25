@@ -8,6 +8,7 @@ import {
 import type { ReactNode } from "react";
 import { Navigate, useNavigate, useParams } from "react-router-dom";
 import { useTask } from "@/api/hooks/tasks";
+import { SmarTAIMascot } from "@/components/brand/SmarTAIMascot";
 import { NewTaskStepper } from "@/components/new-task/NewTaskStepper";
 import { Button } from "@/components/ui/Button";
 import { RecoverableActionState } from "@/components/ui/RecoverableActionState";
@@ -163,7 +164,8 @@ export function ProblemRecognitionProgressPage() {
         aria-live="polite"
         aria-busy="true"
       >
-        <div>
+        <div className="flex items-start justify-between gap-4">
+          <div>
           <h2 className="text-[22px] font-bold leading-8 tracking-[-0.01em] text-foreground sm:text-2xl">
             <span className="text-muted-foreground">{t("problemProgressActiveStage")}：</span>{" "}
             {activeStageLabel}
@@ -171,6 +173,8 @@ export function ProblemRecognitionProgressPage() {
           <p className="mt-2 text-sm leading-6 text-muted-foreground">
             {t("problemProgressBackgroundDescription")}
           </p>
+          </div>
+          <SmarTAIMascot variant="thinking" size="md" className="hidden sm:inline-flex" />
         </div>
 
         <div className="mt-6 flex items-center gap-3">
@@ -302,6 +306,7 @@ function LoadingState({ label }: { label: string }) {
   return (
     <section className="flex min-h-[430px] items-center justify-center rounded-[10px] border bg-card px-6 text-center">
       <div>
+        <SmarTAIMascot variant="thinking" size="lg" className="mx-auto" />
         <Loader2 aria-hidden="true" className="mx-auto h-7 w-7 animate-spin text-primary" />
         <p className="mt-4 text-sm font-medium text-muted-foreground">{label}</p>
       </div>

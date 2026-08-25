@@ -8,6 +8,10 @@ from sqlalchemy import select
 
 from backend.db.models import ProviderConfigRecord
 from backend.db.session import session_scope
+from backend.llm.endpoint_policy import (
+    normalize_provider_endpoint,
+)
+from backend.llm.provider_catalog import effective_wire_protocol
 from backend.models import ProviderConfig
 from backend.security.secrets import EncryptedSecret, decrypt_secret, encrypt_secret
 
@@ -19,10 +23,26 @@ class StoredProviderConfig:
     verification_status: str = "unverified"
     last_checked_at: float | None = None
     verification_error_code: str | None = None
+    updated_at: float | None = None
 
 
 def _associated_data(owner_id: str, record_id: str) -> str:
     return f"provider-config:{owner_id}:{record_id}"
+
+
+def _route_identity(config: ProviderConfig) -> tuple[str, str]:
+    wire_protocol = effective_wire_protocol(
+        config.provider_type,
+        config.wire_protocol,
+    )
+    _, canonical = normalize_provider_endpoint(
+        config.provider_type,
+        config.base_url,
+        wire_protocol,
+    )
+    if config.endpoint_identity not in {None, canonical}:
+        raise ValueError("provider_endpoint_identity_mismatch")
+    return canonical, wire_protocol
 
 
 def _to_config(record: ProviderConfigRecord, master_key: str) -> ProviderConfig:
@@ -36,6 +56,8 @@ def _to_config(record: ProviderConfigRecord, master_key: str) -> ProviderConfig:
         api_key=api_key,
         model=record.model,
         base_url=record.base_url,
+        endpoint_identity=record.endpoint_identity,
+        wire_protocol=record.wire_protocol,
         enabled=record.enabled,
         display_name=record.display_name,
         max_concurrent=max(1, record.max_concurrent),
@@ -43,12 +65,20 @@ def _to_config(record: ProviderConfigRecord, master_key: str) -> ProviderConfig:
     )
 
 
-def upsert_provider_config(owner_id: str, config: ProviderConfig, *, master_key: str) -> ProviderConfigRecord:
+def upsert_provider_config(
+    owner_id: str,
+    config: ProviderConfig,
+    *,
+    master_key: str,
+) -> ProviderConfigRecord:
     now = time.time()
+    endpoint_identity, wire_protocol = _route_identity(config)
     with session_scope() as session:
         record = session.scalar(select(ProviderConfigRecord).where(
             ProviderConfigRecord.owner_id == owner_id,
             ProviderConfigRecord.provider_type == config.provider_type,
+            ProviderConfigRecord.wire_protocol == wire_protocol,
+            ProviderConfigRecord.endpoint_identity == endpoint_identity,
             ProviderConfigRecord.model == config.model,
         ))
         if record is None:
@@ -56,6 +86,8 @@ def upsert_provider_config(owner_id: str, config: ProviderConfig, *, master_key:
                 id=uuid.uuid4().hex,
                 owner_id=owner_id,
                 provider_type=config.provider_type,
+                wire_protocol=wire_protocol,
+                endpoint_identity=endpoint_identity,
                 model=config.model,
                 created_at=now,
             )
@@ -66,6 +98,8 @@ def upsert_provider_config(owner_id: str, config: ProviderConfig, *, master_key:
             associated_data=_associated_data(owner_id, record.id),
         )
         record.base_url = config.base_url
+        record.endpoint_identity = endpoint_identity
+        record.wire_protocol = wire_protocol
         record.display_name = config.display_name
         record.encrypted_api_key = encrypted.ciphertext
         record.nonce = encrypted.nonce
@@ -91,9 +125,21 @@ def list_provider_configs(owner_id: str, *, master_key: str) -> list[StoredProvi
             verification_status=record.verification_status,
             last_checked_at=record.last_checked_at,
             verification_error_code=record.verification_error_code,
+            updated_at=record.updated_at,
         )
         for record in records
     ]
+
+
+def has_provider_configs(owner_id: str) -> bool:
+    """Check owner-scoped record existence without decrypting credentials."""
+    with session_scope() as session:
+        record_id = session.scalar(
+            select(ProviderConfigRecord.id)
+            .where(ProviderConfigRecord.owner_id == owner_id)
+            .limit(1)
+        )
+    return record_id is not None
 
 
 def get_provider_config(owner_id: str, provider_id: str, *, master_key: str) -> StoredProviderConfig | None:
@@ -110,6 +156,7 @@ def get_provider_config(owner_id: str, provider_id: str, *, master_key: str) -> 
         verification_status=record.verification_status,
         last_checked_at=record.last_checked_at,
         verification_error_code=record.verification_error_code,
+        updated_at=record.updated_at,
     )
 
 
@@ -127,6 +174,7 @@ def update_provider_config(
     never written to logs or returned by public API serializers.
     """
     now = time.time()
+    endpoint_identity, wire_protocol = _route_identity(config)
     with session_scope() as session:
         record = session.scalar(select(ProviderConfigRecord).where(
             ProviderConfigRecord.id == provider_id,
@@ -142,6 +190,8 @@ def update_provider_config(
         record.provider_type = config.provider_type
         record.model = config.model
         record.base_url = config.base_url
+        record.endpoint_identity = endpoint_identity
+        record.wire_protocol = wire_protocol
         record.display_name = config.display_name
         record.encrypted_api_key = encrypted.ciphertext
         record.nonce = encrypted.nonce
@@ -160,6 +210,7 @@ def update_provider_config(
             verification_status=record.verification_status,
             last_checked_at=record.last_checked_at,
             verification_error_code=record.verification_error_code,
+            updated_at=record.updated_at,
         )
 
 
@@ -170,6 +221,7 @@ def set_provider_verification(
     verification_status: str,
     checked_at: float,
     error_code: str | None = None,
+    expected_updated_at: float | None = None,
 ) -> bool:
     with session_scope() as session:
         record = session.scalar(
@@ -179,6 +231,8 @@ def set_provider_verification(
             )
         )
         if record is None:
+            return False
+        if expected_updated_at is not None and record.updated_at != expected_updated_at:
             return False
         record.verification_status = verification_status
         record.last_checked_at = checked_at
