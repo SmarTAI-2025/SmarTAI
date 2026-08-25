@@ -53,6 +53,7 @@ class UserRecord(Base):
     updated_at: Mapped[float] = mapped_column(
         Float, nullable=False, default=time.time, onupdate=time.time
     )
+    auth_invalid_before: Mapped[float | None] = mapped_column(Float, nullable=True)
 
     __table_args__ = (
         CheckConstraint(
@@ -125,6 +126,35 @@ class EmailVerificationRequestRecord(Base):
     resend_available_at: Mapped[float] = mapped_column(Float, nullable=False)
     superseded_at: Mapped[float | None] = mapped_column(Float, nullable=True)
     verified_at: Mapped[float | None] = mapped_column(Float, nullable=True)
+    delivery_status: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="pending", server_default="pending"
+    )
+    last_delivery_error_code: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    source_ip: Mapped[str | None] = mapped_column(String(64), nullable=True)
+
+
+class PasswordResetRequestRecord(Base):
+    """One-time password reset state for an existing account."""
+
+    __tablename__ = "password_reset_requests"
+    __table_args__ = (
+        Index("ix_password_reset_requests_created_at", "created_at"),
+        CheckConstraint(
+            "delivery_status IN ('pending', 'sent', 'failed')",
+            name="ck_password_reset_delivery_status",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    user_id: Mapped[str] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    token_digest: Mapped[str] = mapped_column(String(64), nullable=False, unique=True, index=True)
+    created_at: Mapped[float] = mapped_column(Float, nullable=False, default=time.time)
+    expires_at: Mapped[float] = mapped_column(Float, nullable=False, index=True)
+    resend_available_at: Mapped[float] = mapped_column(Float, nullable=False)
+    superseded_at: Mapped[float | None] = mapped_column(Float, nullable=True)
+    consumed_at: Mapped[float | None] = mapped_column(Float, nullable=True)
     delivery_status: Mapped[str] = mapped_column(
         String(32), nullable=False, default="pending", server_default="pending"
     )

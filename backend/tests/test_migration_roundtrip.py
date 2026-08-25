@@ -97,6 +97,32 @@ def test_normalized_tables_exist_after_roundtrip(tmp_path, monkeypatch):
     assert not ({"tasks", "grading_jobs", "task_knowledge_documents"} & tables)
 
 
+def test_password_reset_schema_exists_at_head(tmp_path, monkeypatch):
+    from sqlalchemy import create_engine, inspect
+
+    db_url = f"sqlite:///{(tmp_path / 'password-reset-schema.db').as_posix()}"
+    cfg = _alembic_config(db_url, monkeypatch)
+    command.upgrade(cfg, "head")
+    inspector = inspect(create_engine(db_url))
+
+    user_columns = {column["name"] for column in inspector.get_columns("users")}
+    assert "auth_invalid_before" in user_columns
+    reset_columns = {column["name"] for column in inspector.get_columns("password_reset_requests")}
+    assert {
+        "id",
+        "user_id",
+        "token_digest",
+        "created_at",
+        "expires_at",
+        "resend_available_at",
+        "superseded_at",
+        "consumed_at",
+        "delivery_status",
+        "last_delivery_error_code",
+        "source_ip",
+    } <= reset_columns
+
+
 def test_source_outcome_migration_has_contract_constraints(tmp_path, monkeypatch):
     from sqlalchemy import create_engine, inspect
 
