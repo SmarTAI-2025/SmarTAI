@@ -52,6 +52,8 @@ PDF_EXTRACTION_TIMEOUT_SECONDS = 10.0
 PDF_EXTRACTION_MAX_WORKERS = 2
 _PDF_EXTRACTION_SLOTS = threading.BoundedSemaphore(PDF_EXTRACTION_MAX_WORKERS)
 _PDF_WORKER_PATH = Path(__file__).with_name("_pdf_worker.py")
+BAIDU_OCR_MAX_PDF_PAGES = 500
+BAIDU_OCR_MAX_IMAGE_SIDE = 8192
 SUBMISSION_ARCHIVE_MAX_FILES = 500
 SUBMISSION_ARCHIVE_MAX_EXPANDED_BYTES = 100 * 1024 * 1024
 SUBMISSION_ARCHIVE_MAX_MEMBER_BYTES = 5 * 1024 * 1024
@@ -63,6 +65,9 @@ IMAGE_MEDIA_TYPES = {
     ".jpg": "image/jpeg",
     ".jpeg": "image/jpeg",
     ".png": "image/png",
+    ".bmp": "image/bmp",
+    ".tif": "image/tiff",
+    ".tiff": "image/tiff",
     ".webp": "image/webp",
 }
 ARCHIVE_EXTENSIONS = (
@@ -144,6 +149,10 @@ def _content_signature_type(data: bytes, filename: str) -> str:
         return "image/png"
     if data.startswith(b"\xff\xd8\xff"):
         return "image/jpeg"
+    if data.startswith(b"BM"):
+        return "image/bmp"
+    if data.startswith((b"II*\x00", b"MM\x00*")):
+        return "image/tiff"
     if len(data) >= 12 and data[:4] == b"RIFF" and data[8:12] == b"WEBP":
         return "image/webp"
     if data.startswith((b"PK\x03\x04", b"PK\x05\x06", b"PK\x07\x08")):
@@ -310,6 +319,118 @@ async def _extract_pdf_payload(
             detail={"code": "pdf_extraction_failed"},
         ) from exc
     finally:
+        _PDF_EXTRACTION_SLOTS.release()
+
+
+async def inspect_baidu_ocr_upload(
+    file_bytes: bytes,
+    filename: str,
+    *,
+    content_type: str | None = None,
+    timeout_seconds: float = PDF_EXTRACTION_TIMEOUT_SECONDS,
+) -> ContentInspection:
+    """Inspect Baidu-bound PDF/image bytes in the existing killable worker.
+
+    This performs only the provider contract's 500-page PDF and 8192-pixel
+    image-edge checks. It never extracts untrusted content in the Web process.
+    Other Baidu-supported task formats retain the Tool's fixed suffix/byte
+    validation and are not expanded into a general document-format matrix.
+    """
+    safe_name = _bounded_source_name(filename)
+    inspection = inspect_upload_content(file_bytes, safe_name, content_type)
+    if inspection.mismatch:
+        raise HTTPException(
+            status_code=415,
+            detail={"code": "submission_source_content_type_mismatch"},
+        )
+    suffix = _ext(safe_name)
+    mode: str | None = None
+    limit = 0
+    if suffix == ".pdf":
+        if inspection.content_type != "application/pdf":
+            raise HTTPException(
+                status_code=415,
+                detail={"code": "ocr_input_invalid"},
+            )
+        mode = "inspect-pdf"
+        limit = BAIDU_OCR_MAX_PDF_PAGES
+    elif suffix in {".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff"}:
+        if not inspection.content_type.startswith("image/"):
+            raise HTTPException(
+                status_code=415,
+                detail={"code": "ocr_input_invalid"},
+            )
+        mode = "inspect-image"
+        limit = BAIDU_OCR_MAX_IMAGE_SIDE
+    if mode is None:
+        return inspection
+    if fitz is None:
+        raise HTTPException(
+            status_code=503,
+            detail={"code": "media_inspection_unavailable"},
+        )
+    if not _PDF_EXTRACTION_SLOTS.acquire(blocking=False):
+        raise HTTPException(
+            status_code=429,
+            detail={"code": "media_inspection_busy"},
+        )
+    process = None
+    try:
+        process = await asyncio.create_subprocess_exec(
+            sys.executable,
+            str(_PDF_WORKER_PATH),
+            mode,
+            str(limit),
+            stdin=asyncio.subprocess.PIPE,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.DEVNULL,
+        )
+        try:
+            stdout, _ = await asyncio.wait_for(
+                process.communicate(file_bytes),
+                timeout=timeout_seconds,
+            )
+        except asyncio.TimeoutError as exc:
+            process.kill()
+            await process.wait()
+            raise HTTPException(
+                status_code=408,
+                detail={"code": "media_inspection_timeout"},
+            ) from exc
+        try:
+            payload = json.loads(stdout.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise HTTPException(
+                status_code=400,
+                detail={"code": "media_inspection_failed"},
+            ) from exc
+        worker_status = payload.get("status")
+        if worker_status == "page_limit":
+            raise HTTPException(
+                status_code=413,
+                detail={
+                    "code": "pdf_page_limit_exceeded",
+                    "max_pages": BAIDU_OCR_MAX_PDF_PAGES,
+                },
+            )
+        if worker_status == "image_side_limit":
+            raise HTTPException(
+                status_code=413,
+                detail={
+                    "code": "ocr_image_dimension_limit_exceeded",
+                    "max_side": BAIDU_OCR_MAX_IMAGE_SIDE,
+                },
+            )
+        if worker_status != "ok":
+            raise HTTPException(
+                status_code=400,
+                detail={"code": "media_inspection_failed"},
+            )
+        return inspection
+    finally:
+        if process is not None and process.returncode is None:
+            process.kill()
+            await process.wait()
         _PDF_EXTRACTION_SLOTS.release()
 
 

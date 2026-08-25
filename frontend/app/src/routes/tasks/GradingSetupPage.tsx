@@ -126,6 +126,9 @@ export function GradingSetupPage() {
     [expertsById, setup?.selected_provider_ids],
   );
   const usesSharedPool = selectedExperts.some((expert) => expert.is_shared);
+  const usesOCRService = selectedExperts.some(
+    (expert) => expert.provider_kind === "ocr",
+  );
   const validationMessage = setup && response
     ? validateSetup(setup, response.available_experts, response.knowledge.scope_options, locale)
     : gradingSetupText(locale, "invalidForm");
@@ -307,6 +310,11 @@ export function GradingSetupPage() {
             <div className="shrink-0 space-y-1.5" aria-live="polite">
               {syncNoticeKey ? <p className="mt-2 rounded-[6px] bg-amber-50 px-3 py-1.5 text-[11px] leading-4 text-amber-800 dark:bg-amber-950/20 dark:text-amber-200">{gradingSetupText(locale, syncNoticeKey)}</p> : null}
               {selectionNoticeKey ? <p className="mt-2 rounded-[6px] bg-blue-50 px-3 py-1.5 text-[11px] leading-4 text-primary dark:bg-blue-950/20">{gradingSetupText(locale, selectionNoticeKey)}</p> : null}
+              {usesOCRService ? (
+                <p role="alert" className="mt-2 rounded-[6px] bg-amber-50 px-3 py-1.5 text-[11px] leading-4 text-amber-800 dark:bg-amber-950/20 dark:text-amber-200">
+                  {gradingSetupText(locale, "ocrGradingUnsupported")}
+                </p>
+              ) : null}
               {validationMessage ? <p role="alert" className="mt-2 text-[11px] leading-4 text-danger">{validationMessage}</p> : null}
               {blockingMessage && blockingMessage !== validationMessage ? (
                 <div role="alert" className="mt-2 flex items-center justify-between gap-3 text-[11px] leading-4 text-danger">
@@ -1027,6 +1035,7 @@ function readinessMessage(code: string, locale: Locale): string {
     invalid_state: "workflowNotReady",
     workflow_busy: "workflowBusy",
     grading_setup_locked: "setupLocked",
+    ocr_provider_grading_not_supported: "ocrGradingUnsupported",
   } as const;
   return gradingSetupText(locale, keys[code as keyof typeof keys] ?? "workflowNotReady");
 }

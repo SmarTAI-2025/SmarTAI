@@ -44,19 +44,43 @@ WEBP = b"RIFF\x08\x00\x00\x00WEBPVP8 preview"
 
 
 class _Registry:
-    provider = SimpleNamespace(provider_id="test-provider")
+    provider = SimpleNamespace(
+        provider_id="test-provider",
+        supports_vision=False,
+    )
 
     def pick_default(self):
         return self.provider
 
+    def pick_default_id(self):
+        return self.provider.provider_id
+
     def pick_vision(self, _preferred=None):
         return None
+
+    def get(self, provider_id):
+        return self.provider if provider_id == self.provider.provider_id else None
+
+    def uses_shared_pool(self):
+        return True
+
+    def list_configs(self):
+        return [{
+            "provider_id": self.provider.provider_id,
+            "provider_type": "openai",
+            "model": "test-model",
+            "enabled": True,
+            "is_default": True,
+            "is_shared": False,
+            "scope": "owner",
+        }]
 
 
 class _VisionRegistry(_Registry):
     vision = SimpleNamespace(
         provider_id="vision-provider", supports_vision=True
     )
+    provider = vision
 
     def pick_vision(self, _preferred=None):
         return self.vision

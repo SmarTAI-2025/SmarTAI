@@ -18,6 +18,37 @@ def _write(payload: dict) -> None:
 
 def main() -> int:
     try:
+        if sys.argv[1] == "inspect-pdf":
+            max_pages = int(sys.argv[2])
+            body = sys.stdin.buffer.read()
+            doc = fitz.open(stream=body, filetype="pdf")
+            try:
+                _write({
+                    "status": (
+                        "page_limit" if doc.page_count > max_pages else "ok"
+                    ),
+                    "page_count": doc.page_count,
+                })
+                return 0
+            finally:
+                doc.close()
+        if sys.argv[1] == "inspect-image":
+            max_side = int(sys.argv[2])
+            body = sys.stdin.buffer.read()
+            pixmap = fitz.Pixmap(body)
+            try:
+                _write({
+                    "status": (
+                        "image_side_limit"
+                        if max(pixmap.width, pixmap.height) > max_side
+                        else "ok"
+                    ),
+                    "width": pixmap.width,
+                    "height": pixmap.height,
+                })
+                return 0
+            finally:
+                pixmap = None
         max_pages = int(sys.argv[1])
         max_characters = int(sys.argv[2])
         body = sys.stdin.buffer.read()

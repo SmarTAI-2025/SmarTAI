@@ -41,11 +41,10 @@ MAX_FILE_DATA_BYTES = 50_000_000
 MAX_IMAGE_BYTES = 10_000_000
 MAX_MARKDOWN_BYTES = 10 * 1024 * 1024
 
-# The official 8192-pixel image edge and 500-page PDF ceilings are not parsed
-# locally here.  Doing so safely would require another killable media-parser
-# boundary.  The existing upload pipeline already validates content type; this
-# provider boundary enforces conservative byte ceilings and projects Baidu's
-# own format/page errors without pretending to have inspected those fields.
+# The formal upload pipelines inspect the official 8192-pixel image edge and
+# 500-page PDF ceilings in their existing killable media-worker boundary before
+# calling this Tool. This final provider boundary independently retains suffix
+# and byte ceilings for defense in depth.
 
 SUPPORTED_SUFFIXES = frozenset(
     {
@@ -81,9 +80,16 @@ class BaiduUnlimitedOCRError(Exception):
     contents are never attached to this exception.
     """
 
-    def __init__(self, code: str, *, retryable: bool = False) -> None:
+    def __init__(
+        self,
+        code: str,
+        *,
+        retryable: bool = False,
+        submission_may_exist: bool = False,
+    ) -> None:
         self.code = code
         self.retryable = retryable
+        self.submission_may_exist = submission_may_exist
         super().__init__(code)
 
 
@@ -296,13 +302,35 @@ class BaiduUnlimitedOCRClient:
                 timeout=self._overall_timeout_seconds,
             )
         except BaiduUnlimitedOCRError as error:
-            if call_state.submit_started and error.retryable:
-                # The public method does not expose task_id/resume.  Once a
-                # submission may exist, advertising any outward failure as
-                # retryable could make a caller create a second OCR task.
+            submission_may_exist = (
+                error.submission_may_exist
+                or call_state.submit_completed
+                or (
+                    call_state.submit_started
+                    and error.code in {
+                        "provider_submit_uncertain",
+                        "provider_response_invalid",
+                    }
+                )
+            )
+            if submission_may_exist:
+                # Once a submission may exist, outward callers must retain
+                # their durable inflight fence instead of creating a second
+                # task. Explicit provider rejections before a task id exists
+                # remain safe to retry after the teacher fixes the cause.
                 raise BaiduUnlimitedOCRError(
                     error.code,
                     retryable=False,
+                    submission_may_exist=True,
+                ) from None
+            if call_state.submit_started:
+                # The submit endpoint explicitly rejected this single call.
+                # Do not replay inside the client; the durable caller may
+                # clear its inflight fence and wait for an explicit user retry.
+                raise BaiduUnlimitedOCRError(
+                    error.code,
+                    retryable=False,
+                    submission_may_exist=False,
                 ) from None
             raise
         except (asyncio.TimeoutError, TimeoutError):
@@ -310,11 +338,13 @@ class BaiduUnlimitedOCRClient:
                 # The request may have reached Baidu before cancellation.  A
                 # retryable timeout projection could induce a duplicate task.
                 raise BaiduUnlimitedOCRError(
-                    "provider_submit_uncertain"
+                    "provider_submit_uncertain",
+                    submission_may_exist=True,
                 ) from None
             raise BaiduUnlimitedOCRError(
                 "provider_timeout",
                 retryable=not call_state.submit_started,
+                submission_may_exist=call_state.submit_started,
             ) from None
         duration_ms = (time.perf_counter() - started) * 1000
         logger.info(

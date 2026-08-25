@@ -28,7 +28,7 @@ const sources: SubmissionSourceOutcome[] = [
     size_bytes: 4096,
     status: "failed",
     internal_status: "parse_failed",
-    reason_code: "vision_provider_required",
+    reason_code: "provider_vision_not_supported",
     failure_phase: "ocr",
     retryable: false,
     matched_answer_count: 0,
@@ -79,7 +79,7 @@ describe("SubmissionSourceOutcomePanel", () => {
 
     expect(screen.getByText(/3 份上传 = 1 份成功 \+ 1 份失败 \+ 1 份身份待确认/)).toBeInTheDocument();
     expect(screen.getByText("student-scan.png")).toBeInTheDocument();
-    expect(screen.getByText("当前模型不支持图片 OCR")).toBeInTheDocument();
+    expect(screen.getByText("所选模型不支持图片输入")).toBeInTheDocument();
     expect(screen.getByText("job-21:1:src-ocr")).toBeInTheDocument();
     expect(screen.getByText("student-unknown.pdf")).toBeInTheDocument();
     expect(screen.getByText("学生身份需要教师确认")).toBeInTheDocument();

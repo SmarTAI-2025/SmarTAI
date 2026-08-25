@@ -48,7 +48,7 @@ describe("question source recovery guidance", () => {
 
     expect(info.actionKind).toBe("byok");
     expect(info.actionHref).toContain("/settings/byok");
-    expect(info.description).toContain("BYOK");
+    expect(info.description).toContain("没有可用的视觉模型");
   });
 
   it("routes role or MIME rejection back to file selection", () => {
@@ -195,9 +195,21 @@ describe("background task failure guidance", () => {
   it("routes a vision-required background failure to BYOK with OCR-specific copy", () => {
     const info = classifyRecoverableError("vision_provider_required", { locale: "zh-CN" });
 
-    expect(info.title).toBe("当前模型不支持图片 OCR");
+    expect(info.title).toBe("尚未选择可用的视觉模型");
     expect(info.description).toContain("OCR");
     expect(info.actionKind).toBe("byok");
+  });
+
+  it("keeps a selected model's vision rejection on the current stage", () => {
+    const info = classifyRecoverableError("provider_vision_not_supported", {
+      locale: "zh-CN",
+      returnTo: "/tasks/t1/submissions/upload",
+    });
+
+    expect(info.title).toBe("当前识别模型不能读取图片/扫描件");
+    expect(info.description).toContain("原文件和已完成步骤均已保留");
+    expect(info.actionKind).toBe("retry");
+    expect(info.actionHref).toBeUndefined();
   });
 
   it("treats a bare rate-limit code like a 429 (retryable, with wait hint)", () => {

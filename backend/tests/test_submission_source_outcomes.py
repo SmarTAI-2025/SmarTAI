@@ -539,7 +539,7 @@ async def test_model_without_image_support_reaches_teacher_as_vision_reason(monk
 
     task = task_facade.get_task(task_id=task_id, owner_id=owner_id)
     assert task["status"] == "error"
-    assert task["error"] == "vision_provider_required"
+    assert task["error"] == "provider_vision_not_supported"
     assert task["last_failed_job_id"] == queued["job_id"]
     assert task["grading_job_id"] is None
     assert task["submission_source_summary"] == {
@@ -552,11 +552,18 @@ async def test_model_without_image_support_reaches_teacher_as_vision_reason(monk
     source = task["submission_sources"][0]
     assert source["status"] == "failed"
     assert source["internal_status"] == "parse_failed"
-    assert source["reason_code"] == "vision_provider_required"
+    assert source["reason_code"] == "provider_vision_not_supported"
     assert source["failure_phase"] == "ocr"
     operation = workflow_repository.get_operation(queued["job_id"], owner_id=owner_id)
-    assert operation.error_code == "vision_provider_required"
-    assert operation.progress["error_detail"] == "vision_provider_required"
+    assert operation.error_code == "provider_vision_not_supported"
+    assert operation.progress["error_detail"] == "provider_vision_not_supported"
+    retry_upload = task_facade.load_submission_retry_upload(
+        task_id=task_id,
+        owner_id=owner_id,
+        job_id=queued["job_id"],
+    )
+    assert retry_upload["filename"] == "scan.png"
+    assert retry_upload["content"] == content
 
     # Databases used with the pre-fix PR branch can retain an obsolete grading
     # pointer. The current source failure and its operation progress must still
@@ -571,9 +578,9 @@ async def test_model_without_image_support_reaches_teacher_as_vision_reason(monk
         task_id=task_id,
         owner_id=owner_id,
     )
-    assert state["error"] == "vision_provider_required"
+    assert state["error"] == "provider_vision_not_supported"
     assert state["last_failed_job_id"] == queued["job_id"]
-    assert state["progress"]["error_detail"] == "vision_provider_required"
+    assert state["progress"]["error_detail"] == "provider_vision_not_supported"
 
 
 def test_provider_failure_during_image_read_is_classified_as_ocr():

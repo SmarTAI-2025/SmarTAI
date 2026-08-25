@@ -36,6 +36,8 @@ export interface GradingSetupExpert {
   rpm: number;
   base_url?: string | null;
   verification_status?: string | null;
+  provider_kind?: "llm" | "ocr";
+  credential_id?: string | null;
 }
 
 export interface GradingSetupKnowledgeDocument {

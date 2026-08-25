@@ -24,12 +24,14 @@ SAFE_BACKGROUND_ERROR_CODES = frozenset({
     "provider_credentials_unavailable",
     "recognition_provider_not_enabled",
     "vision_provider_required",
+    "provider_vision_not_supported",
     "problem_extraction_failed",
     "provider_timeout",
     "provider_unreachable",
     "provider_rate_limited",
     "provider_auth_failed",
     "provider_model_or_endpoint_not_found",
+    "provider_model_not_found",
     "provider_request_rejected",
     "provider_upstream_unavailable",
     "provider_response_invalid",
@@ -40,6 +42,25 @@ SAFE_BACKGROUND_ERROR_CODES = frozenset({
     "provider_endpoint_redirect_blocked",
     "provider_endpoint_protocol_mismatch",
     "provider_endpoint_response_too_large",
+    "ocr_credential_not_found",
+    "provider_permission_denied",
+    "provider_quota_exceeded",
+    "provider_unavailable",
+    "provider_submit_uncertain",
+    "provider_task_failed",
+    "provider_request_failed",
+    "provider_download_url_rejected",
+    "provider_result_unavailable",
+    "provider_result_too_large",
+    "ocr_input_invalid",
+    "ocr_unsupported_file",
+    "ocr_file_too_large",
+    "ocr_image_dimension_limit_exceeded",
+    "media_inspection_unavailable",
+    "media_inspection_busy",
+    "media_inspection_timeout",
+    "media_inspection_failed",
+    "ocr_provider_grading_not_supported",
     "material_import_failed",
     "ai_completion_failed",
     "replacement_confirmation_required",
@@ -92,6 +113,10 @@ RETRYABLE_BACKGROUND_ERROR_CODES = frozenset({
     "provider_rate_limited",
     "provider_upstream_unavailable",
     "provider_endpoint_dns_failed",
+    "provider_vision_not_supported",
+    "provider_unavailable",
+    "media_inspection_busy",
+    "media_inspection_timeout",
     "pdf_extraction_busy",
     "pdf_extraction_timeout",
     "submission_parse_failed",
@@ -216,7 +241,7 @@ def classify_background_error(
             "image input is not supported",
             "vision input is not supported",
         )):
-            return "vision_provider_required"
+            return "provider_vision_not_supported"
 
     if any(isinstance(item, RateLimitError) for item in chain):
         return "provider_rate_limited"
@@ -232,6 +257,10 @@ def classify_background_error(
         status_code = _http_status(item)
         if status_code in {401, 403}:
             return "provider_auth_failed"
+        if status_code == 404:
+            return "provider_model_not_found"
+        if status_code == 400:
+            return "provider_request_rejected"
         if status_code == 429:
             return "provider_rate_limited"
         if isinstance(item, PermanentLLMError) and any(

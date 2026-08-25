@@ -13,8 +13,10 @@ import asyncio
 import hashlib
 import json
 import logging
+import re
 from collections import defaultdict
 from dataclasses import dataclass, replace
+from pathlib import PurePath
 from typing import Any, Callable, Dict, List, Literal, Optional, TYPE_CHECKING
 
 from langchain_core.messages import SystemMessage, HumanMessage
@@ -43,6 +45,83 @@ if TYPE_CHECKING:
     from backend.progress.tracker import ProgressReporter
 
 logger = logging.getLogger(__name__)
+
+
+_OCR_NUMBERED_HEADING = re.compile(
+    r"(?im)^\s*(?:#{1,6}\s*)?"
+    r"(?:(?:question|problem|q|题目?|第)\s*)?"
+    r"(?P<number>\d+(?:\.\d+)*)"
+    r"(?:\s*题)?\s*[.、):：]\s*(?P<title>[^\n]*)$"
+)
+
+
+def _ocr_markdown_sections(text: str) -> list[tuple[str, str]]:
+    """Split conservative numbered Markdown without inventing content."""
+    matches = list(_OCR_NUMBERED_HEADING.finditer(text))[:200]
+    if not matches:
+        body = text.strip()
+        return [("1", body)] if body else []
+    sections: list[tuple[str, str]] = []
+    for index, match in enumerate(matches):
+        end = matches[index + 1].start() if index + 1 < len(matches) else len(text)
+        title = match.group("title").strip()
+        remainder = text[match.end():end].strip()
+        body = "\n".join(part for part in (title, remainder) if part).strip()
+        if body:
+            sections.append((match.group("number"), body))
+    return sections
+
+
+def split_ocr_markdown_sections(text: str) -> list[tuple[str, str]]:
+    """Public deterministic section splitter shared by existing ingest flows."""
+    return _ocr_markdown_sections(text)
+
+
+async def extract_problems_from_ocr_markdown(
+    text: str,
+    problem_store: Dict[str, Dict[str, Any]],
+    reporter: Optional["ProgressReporter"] = None,
+) -> Dict[str, Dict[str, Any]]:
+    """Conservatively map OCR Markdown into review-required question rows.
+
+    This is the OCR-only continuation of the existing ingest agent. It does
+    not call, impersonate, or silently select a second LLM provider.
+    """
+    sections = _ocr_markdown_sections(text)
+    if not sections:
+        raise ValueError("OCR returned no question text")
+    problems: Dict[str, Dict[str, Any]] = {}
+    for index, (number, stem) in enumerate(sections, start=1):
+        problem = ProblemInfo(
+            q_id=f"q{index}",
+            number=number,
+            type="其他",
+            stem=stem,
+            criterion="",
+            max_score=10,
+            review_status="needs_review",
+        ).model_dump()
+        problem["max_score_source"] = "default_10"
+        problem["max_score_review_status"] = "needs_review"
+        problem["preparation_issues"] = [{
+            "issue_id": f"ocr_review_q{index}",
+            "q_id": f"q{index}",
+            "field": "source",
+            "code": "parse_anomaly",
+            "severity": "warning",
+            "source_ids": [],
+            "details": {"reason": "ocr_only_structure_requires_teacher_review"},
+            "status": "open",
+        }]
+        problems[f"q{index}"] = problem
+    problem_store.clear()
+    problem_store.update(problems)
+    if reporter:
+        await reporter.set_totals(students=0, questions=len(problems))
+        await reporter._emit_message(
+            f"Prepared {len(problems)} OCR question sections for teacher review."
+        )
+    return problem_store
 
 
 # ─── Prompt: problem extraction ──────────────────────────────────────────────
@@ -609,6 +688,243 @@ async def parse_student_answer_sources(
         await reporter.set_current_step(
             "consolidating_submission_results",
             message="Consolidating recognized submissions.",
+        )
+    return results
+
+
+_OCR_STUDENT_ID = re.compile(
+    r"(?im)^\s*(?:学号|student\s*id)\s*[:：]\s*(?P<value>[^\n]{1,160})$"
+)
+_OCR_STUDENT_NAME = re.compile(
+    r"(?im)^\s*(?:姓名|name)\s*[:：]\s*(?P<value>[^\n]{1,160})$"
+)
+
+
+def _ocr_identity_candidate(text: str, filename: str) -> tuple[str, str, bool]:
+    sample = text[:20_000]
+    id_match = _OCR_STUDENT_ID.search(sample)
+    name_match = _OCR_STUDENT_NAME.search(sample)
+    student_id = id_match.group("value").strip() if id_match else ""
+    student_name = name_match.group("value").strip() if name_match else ""
+    stem = PurePath(filename).stem[:160]
+    filename_parts = [
+        part.strip()
+        for part in re.split(r"[_\-\s]+", stem)
+        if part.strip()
+    ]
+    if not student_id and filename_parts and any(ch.isdigit() for ch in filename_parts[0]):
+        student_id = filename_parts[0][:160]
+    if not student_name and len(filename_parts) > 1:
+        student_name = filename_parts[1][:160]
+    return (
+        student_id or stem or "[Unknown Student]",
+        student_name or "[Unknown Student]",
+        bool(student_id and student_name),
+    )
+
+
+async def parse_student_answer_sources_from_ocr_markdown(
+    sources: List[Any],
+    problems_data: Dict[str, Dict[str, Any]],
+    reporter: Optional["ProgressReporter"] = None,
+    *,
+    identity_mode: Literal["filename", "roster", "manual_review"] = "filename",
+    roster_entries: Optional[List[Dict[str, str]]] = None,
+) -> list[SubmissionSourceParseResult]:
+    """Map Baidu OCR Markdown without selecting or impersonating an LLM."""
+    if not sources:
+        raise ValueError("No student files to process.")
+    safe_roster = [
+        {
+            "stu_id": str(entry.get("stu_id") or "").strip(),
+            "stu_name": str(entry.get("stu_name") or "").strip(),
+        }
+        for entry in (roster_entries or [])
+        if str(entry.get("stu_id") or "").strip()
+    ]
+    number_to_problem = {
+        str(problem.get("number") or "").strip(): (q_id, problem)
+        for q_id, problem in problems_data.items()
+    }
+    if reporter:
+        await reporter.set_phase("parsing")
+        await reporter.set_totals(students=len(sources), questions=len(problems_data))
+        await reporter.set_stage_metrics(
+            files_total=len(sources), files_processed=0,
+            submissions_recognized=0, identities_matched=0,
+            identities_needing_review=0, answers_split=0, parse_failures=0,
+        )
+        await reporter.set_current_step(
+            "recognizing_submissions",
+            message="Mapping OCR Markdown answers to known questions.",
+        )
+
+    results: list[SubmissionSourceParseResult] = []
+    for source in sources:
+        if source.pre_error_code or not (source.text or "").strip():
+            code = source.pre_error_code or "submission_source_empty"
+            results.append(SubmissionSourceParseResult(
+                source_id=source.source_id,
+                stored_file_id=source.stored_file_id,
+                filename=source.filename,
+                status="parse_failed",
+                student=None,
+                student_candidate=None,
+                matched_answer_count=0,
+                unknown_question_ids=(),
+                stable_error_code=code,
+                failure_phase=source.failure_phase or "source_read",
+                retryable=bool(source.retryable),
+            ))
+            continue
+
+        text = str(source.text).strip()
+        student_id, student_name, identity_matched = _ocr_identity_candidate(
+            text,
+            source.filename,
+        )
+        identity_payload = {"stu_id": student_id, "stu_name": student_name}
+        if identity_mode == "roster":
+            roster_match = _match_roster_identity(
+                identity_payload,
+                source.filename,
+                safe_roster,
+            )
+            if roster_match is not None:
+                student_id = roster_match["stu_id"]
+                student_name = roster_match["stu_name"]
+                identity_matched = True
+            else:
+                identity_matched = False
+        elif identity_mode == "manual_review":
+            identity_matched = False
+
+        sections = split_ocr_markdown_sections(text)
+        matched_answers: list[dict[str, Any]] = []
+        unknown_numbers: list[str] = []
+        for number, content in sections:
+            matched = number_to_problem.get(number.strip())
+            if matched is None:
+                unknown_numbers.append(f"number:{number}"[:64])
+                continue
+            q_id, problem = matched
+            if len(content) > 500_000:
+                matched_answers = []
+                unknown_numbers = []
+                break
+            matched_answers.append(StudentAnswerInfo(
+                q_id=q_id,
+                number=str(problem.get("number") or number),
+                type=str(problem.get("type") or "其他"),
+                content=content,
+                flag=["ocr_only_structure_requires_teacher_review"],
+            ).model_dump())
+
+        if not matched_answers and len(problems_data) == 1 and len(sections) == 1:
+            q_id, problem = next(iter(problems_data.items()))
+            only_section_text = sections[0][1]
+            if len(only_section_text) <= 500_000:
+                unknown_numbers = []
+                matched_answers = [StudentAnswerInfo(
+                    q_id=q_id,
+                    number=str(problem.get("number") or "1"),
+                    type=str(problem.get("type") or "其他"),
+                    content=only_section_text,
+                    flag=["ocr_only_structure_requires_teacher_review"],
+                ).model_dump()]
+
+        candidate = student_id or None
+        if not matched_answers:
+            too_long = any(len(content) > 500_000 for _number, content in sections)
+            results.append(SubmissionSourceParseResult(
+                source_id=source.source_id,
+                stored_file_id=source.stored_file_id,
+                filename=source.filename,
+                status="parse_failed" if too_long else "no_matching_answer",
+                student=None,
+                student_candidate=candidate,
+                matched_answer_count=0,
+                unknown_question_ids=tuple(dict.fromkeys(unknown_numbers))[:100],
+                stable_error_code=(
+                    "submission_model_field_too_long"
+                    if too_long else "no_matching_answer"
+                ),
+                failure_phase="structured_parse" if too_long else "question_matching",
+                retryable=False,
+            ))
+            continue
+
+        payload = {
+            "stu_id": student_id,
+            "stu_name": student_name,
+            "stu_ans": matched_answers,
+            "source_filename": source.filename,
+            "source_id": source.source_id,
+            "stored_file_id": source.stored_file_id,
+            "identity_match_method": identity_mode,
+            "identity_status": "matched" if identity_matched else "needs_review",
+        }
+        results.append(SubmissionSourceParseResult(
+            source_id=source.source_id,
+            stored_file_id=source.stored_file_id,
+            filename=source.filename,
+            status="parsed" if identity_matched else "identity_conflict",
+            student=payload,
+            student_candidate=candidate,
+            matched_answer_count=len(matched_answers),
+            unknown_question_ids=tuple(dict.fromkeys(unknown_numbers))[:100],
+            stable_error_code=None if identity_matched else "identity_needs_review",
+            failure_phase=None if identity_matched else "identity",
+            retryable=False,
+        ))
+
+    candidate_groups: dict[str, list[int]] = defaultdict(list)
+    for index, result in enumerate(results):
+        if result.student is not None and result.student_candidate:
+            candidate_groups[_normalize_identity_value(result.student_candidate)].append(index)
+    duplicate_positions = {
+        index: position
+        for indexes in candidate_groups.values()
+        if len(indexes) > 1
+        for position, index in enumerate(indexes, 1)
+    }
+    for index, position in duplicate_positions.items():
+        result = results[index]
+        assert result.student is not None
+        student = dict(result.student)
+        digest = hashlib.sha256(
+            f"{result.student_candidate}\0{result.source_id}\0{position}".encode()
+        ).hexdigest()[:24]
+        student["stu_id"] = f"duplicate_{digest}"
+        student["identity_status"] = "needs_review"
+        results[index] = replace(
+            result,
+            status="identity_conflict",
+            student=student,
+            stable_error_code="duplicate_student_identity",
+            failure_phase="identity",
+        )
+
+    if reporter:
+        recognized = [result for result in results if result.student is not None]
+        await reporter.set_stage_metrics(
+            files_total=len(results), files_processed=len(results),
+            submissions_recognized=len(recognized),
+            identities_matched=sum(result.status == "parsed" for result in results),
+            identities_needing_review=sum(
+                result.status == "identity_conflict" for result in results
+            ),
+            answers_split=sum(result.matched_answer_count for result in recognized),
+            parse_failures=sum(
+                result.status in {"parse_failed", "no_matching_answer"}
+                for result in results
+            ),
+        )
+        for result in results:
+            await reporter.increment_completed()
+        await reporter.set_current_step(
+            "consolidating_submission_results",
+            message="Consolidating OCR submission results.",
         )
     return results
 
