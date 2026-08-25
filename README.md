@@ -1,14 +1,10 @@
 # SmarTAI
 
-> SmarTAI 是一款面向高校理工科课程的 AI 作业批改平台。围绕课程、作业和学生作答组织批改流程，可在几分钟内完成初评，并通过多 AI 协同评审，让结果可追溯、可复核、可发布。
+> SmarTAI 是一款面向高校理工科课程的 AI 作业批改平台。围绕课程、作业和学生作答组织批改流程，协助教师完成初评，并通过多 AI 协同评审，让结果可追溯、可复核、可发布。
 
-## 在线 Demo
+## 在线体验
 
-🔗 **在线体验**：[https://smartai-course.pages.dev](https://smartai-course.pages.dev/)
-
-> 当前在线 Demo 尚未同步到仓库最新版，功能和界面可能与最新代码有所不同。
-
-🔗 **测试账号**：等待邀请发放
+公网体验：敬请期待。
 
 ---
 
@@ -129,7 +125,7 @@ SMARTAI_HTTPS_PROXY=http://HOST:PORT
 `SMARTAI_JWT_SECRET`；不要同时借迁移机会更换 BYOK 加密主密钥，否则已有 BYOK
 密文将无法读取。
 
-#### 所有已支持厂商都可无感替换 Base URL
+#### 官方 API 与兼容的公网 HTTPS 中转站均可使用
 
 “模型与 BYOK”页面支持项目现有的七类厂商：OpenAI、DeepSeek、智谱、Kimi/Moonshot、
 通义千问、Anthropic/Claude 和 Gemini。选择厂商后，Base URL 默认显示该厂商官网地址；
@@ -203,11 +199,20 @@ python scripts/generate_test_users.py
 
 ### 启动后端
 
-在仓库根目录执行：
+在 macOS/Linux 的仓库根目录执行：
 
 ```bash
 python -m uvicorn backend.main:app --reload --host 0.0.0.0 --port 8000
 ```
+
+Windows 本地开发请使用单 worker，并且不要添加 `--reload`：
+
+```powershell
+python -m uvicorn backend.main:app --host 0.0.0.0 --port 8000
+```
+
+Windows 下 Uvicorn 的 `--reload` 模式会使用不支持异步子进程的
+SelectorEventLoop，可能导致 PDF 提取返回 `pdf_extraction_failed`。
 
 后端服务监听 `8000` 端口：
 
@@ -304,7 +309,7 @@ VITE_SMARTAI_BACKEND_URL=https://your-backend.example.com
 
 ## 这是什么
 
-SmarTAI 以“建课、布置、提交、批改、复核、发布”为主线，形成完整的作业管理流程：
+SmarTAI 以“建课、布置、提交、批改、复核、发布”为主线，形成可复核的作业管理流程：
 
 ```text
 管理员建账号  →  教师建课 + 布置作业  →  学生提交答案  →  AI 多专家协同评分  →  教师复核 + 发布成绩
@@ -319,7 +324,7 @@ SmarTAI 以“建课、布置、提交、批改、复核、发布”为主线，
 
 ### 🎯 多 AI 协同评分（核心亮点）
 
-SmarTAI 支持用户**同时配置多家 LLM**（Gemini / OpenAI / Anthropic / 智谱 GLM）。不同模型可对同一份答案独立判断，系统再根据分数差异、置信度和异常状态，标记需要人工复核的结果。
+SmarTAI 支持用户**同时配置多家 LLM**（Gemini / OpenAI / Anthropic / DeepSeek / 智谱 GLM / Kimi / 通义千问）。不同模型可对同一份答案独立判断，系统再根据分数差异、置信度和异常状态，标记需要人工复核的结果。
 
 - **真并行调用**：多家 AI 可以同时执行，减少串行等待时间
 - **原始判断可追溯**：分别保存 AI 分数、评语和批改状态，完整保留评分过程
@@ -334,17 +339,23 @@ SmarTAI 支持用户**同时配置多家 LLM**（Gemini / OpenAI / Anthropic / �
 | --- | --- |
 | **概念题** | 知识检索 + 结构化评分 + 依据说明 |
 | **计算题** | SymPy 数值/符号验证 + LLM 步骤评分 |
-| **编程题** | Python 沙箱运行测试用例 + LLM 代码评价 |
+| **编程题** | Python 测试用例执行 + LLM 代码评价（正式链路目前使用宿主子进程） |
 | **证明题/推理题** | 分步骤分析 + 知识检索 + 长答案处理 |
 
 > 程序能否通过测试、计算结果能否通过验算，优先由确定性工具判断；LLM 主要负责理解解题过程和文字表达，以减少仅凭模型判断带来的偏差。
+
+> Python 执行边界：当前正式编程链路具备超时、Unix CPU/内存限制和全局并发上限，
+> 但仍在宿主 Python 子进程中执行，未隔离宿主环境和网络，因此不是生产级沙箱。
+> 仓库中的 OCI 隔离 runner 原型已通过 Linux CI 的禁网、秘密隔离、只读文件系统和资源限制探针，
+> 但尚未接入正式编程题测试流程。公网启用代码执行前必须完成接线和 AWS/Linux 验证；
+> 否则应关闭代码执行，并明确降级为人工或 LLM 复核。
 
 ### 🔑 BYOK（自带 API Key）
 
 用户自行配置 API Key，token 费用由各自的模型账号承担。凭据写入数据库前会使用服务端主密钥加密，接口返回时始终保持脱敏。
 
-- 国内可配置智谱 GLM
-- 海外可配置 OpenAI / Gemini / Anthropic
+- 当前支持 Gemini、OpenAI、Anthropic、DeepSeek、智谱 GLM、Kimi 和通义千问
+- 官网 API 与通过安全检查、协议兼容的公网 HTTPS 中转站都可使用，无需逐域名白名单
 - 至少配置一家模型即可批改；配置多家后可启用多专家协同
 - 每个账号只加载自己的 provider 配置，不与其他用户混用
 
@@ -429,8 +440,8 @@ AI 负责辅助批改，最终决定仍由教师作出。以下关键节点均�
 | 多 AI 协同 + 人工复核队列 | 完全无人值守地自动发布成绩 |
 | 概念 / 计算 / 编程 / 证明题批改工具 | 自动从任意题面生成可靠的编程测试用例 |
 | 结构化答案和文件提交 + 不可变修订 | 通用手写图片 OCR 的稳定识别 |
-| Python 沙箱 | C / C++ / Java 等多语言沙箱 |
-| 逐题统计与教师复核 | 自然语言班级分析和完整成绩导出 |
+| Python 测试用例执行（开发期宿主子进程） | 正式编程链路接入 OCI 隔离 runner；C / C++ / Java 等多语言执行 |
+| 逐题统计、自然语言图表与结果导出 | 跨课程长期趋势分析与自动定时报表 |
 | SQLite / PostgreSQL + 本地 / 对象存储 | 离线客户端与跨设备本地同步 |
 
 ---
