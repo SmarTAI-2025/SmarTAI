@@ -180,8 +180,8 @@ function PdfCanvasPage({
         if (!cancelled) setError(false);
       } catch (renderError: unknown) {
         if (cancelled || (renderError as { name?: string })?.name === "RenderingCancelledException") return;
-        // Do not include the source URL or document contents in diagnostics.
-        console.error(`PDF page ${pageNumber} render failed`, renderError);
+        // Do not include the source URL, document contents, or raw exception in diagnostics.
+        console.error(`PDF page ${pageNumber} render failed`);
         setError(true);
         onRenderError();
       }

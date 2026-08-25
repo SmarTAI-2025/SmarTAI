@@ -133,6 +133,10 @@ export function StudentAnswerReviewPage() {
     next: activeIndex >= 0 && activeIndex < filteredQuestions.length - 1 ? filteredQuestions[activeIndex + 1] : null,
   };
   const sourcePreview = useSourcePreview({
+    taskId,
+    workflowRevision: taskQuery.data?.workflow_revision,
+    sourceKind: "submission",
+    sourceId: student?.source_id,
     displayName: student?.source_filename,
   });
 
@@ -547,6 +551,7 @@ export function StudentAnswerReviewPage() {
                 loadState={sourcePreview.loadState}
                 errorCode={sourcePreview.errorCode}
                 previewUrl={sourcePreview.previewUrl}
+                unavailableReason={sourcePreview.unavailableReason}
                 onClose={sourcePreview.closePreview}
                 onRetry={sourcePreview.retryPreview}
                 t={t}

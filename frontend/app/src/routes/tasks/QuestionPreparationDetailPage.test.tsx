@@ -2,10 +2,25 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { createMemoryRouter, RouterProvider } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { SourceFileDescriptor } from "@/types/sourcePreview";
 import { QuestionPreparationDetailPage } from "./QuestionPreparationDetailPage";
 
 const testState = vi.hoisted(() => ({ locale: "zh-CN" }));
 const mutateAsync = vi.hoisted(() => vi.fn());
+const sourcePreviewApi = vi.hoisted(() => ({
+  getTaskSourceFiles: vi.fn(),
+  loadSourcePreviewFile: vi.fn(),
+}));
+const problemSource: SourceFileDescriptor = {
+  source_id: "source-problem-1",
+  file_id: "file-problem-1",
+  display_name: "geometry-problems.pdf",
+  mime_type: "application/pdf",
+  size_bytes: 42,
+  status: "available",
+  preview_kind: "pdf",
+  unavailable_reason: null,
+};
 const taskData = vi.hoisted(() => ({
   task_id: "task-1",
   name: "Geometry",
@@ -89,6 +104,18 @@ vi.mock("@/components/new-task/NewTaskStepper", () => ({
   NewTaskStepper: () => null,
 }));
 
+vi.mock("@/api/sourcePreview", () => ({
+  getTaskSourceFiles: sourcePreviewApi.getTaskSourceFiles,
+  loadSourcePreviewFile: sourcePreviewApi.loadSourcePreviewFile,
+  sourcePreviewErrorCode: () => "source_preview_load_failed",
+}));
+
+vi.mock("@/components/tasks/PdfDocumentPreview", () => ({
+  PdfDocumentPreview: ({ url, title }: { url: string; title: string }) => (
+    <object data={url} type="application/pdf" title={title} />
+  ),
+}));
+
 vi.mock("@/i18n/I18nProvider", async () => {
   const { messages } = await vi.importActual<typeof import("@/i18n/messages")>("@/i18n/messages");
   return {
@@ -122,6 +149,17 @@ function renderPage(initialEntry = "/tasks/task-1/questions/Q1/content") {
 beforeEach(() => {
   testState.locale = "zh-CN";
   mutateAsync.mockReset();
+  sourcePreviewApi.getTaskSourceFiles.mockReset().mockResolvedValue({
+    task_id: "task-1",
+    workflow_revision: 7,
+    problem_source: problemSource,
+    submission_sources: {},
+  });
+  sourcePreviewApi.loadSourcePreviewFile.mockReset().mockResolvedValue(
+    new Blob(["pdf"], { type: "application/pdf" }),
+  );
+  Object.defineProperty(URL, "createObjectURL", { configurable: true, value: vi.fn(() => "blob:problem-source") });
+  Object.defineProperty(URL, "revokeObjectURL", { configurable: true, value: vi.fn() });
   Object.defineProperty(window, "scrollTo", { configurable: true, value: vi.fn() });
   vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => {
     callback(0);
@@ -145,15 +183,16 @@ beforeEach(() => {
 });
 
 describe("QuestionPreparationDetailPage navigation", () => {
-  it("opens the 50/50 workspace and truthfully reports the pending backend integration", async () => {
+  it("opens the 50/50 workspace with the formal problem_source descriptor", async () => {
     const user = userEvent.setup();
     renderPage();
 
     await user.click(await screen.findByRole("button", { name: "查看题目原文件" }));
     expect(await screen.findByTestId("source-preview-panel")).toBeInTheDocument();
     expect(screen.getByRole("separator", { name: "拖动调整原文件与识别内容宽度" })).toHaveAttribute("aria-valuenow", "50");
-    expect(await screen.findByText("原文件读取接口尚未接通；识别内容仍可继续查看和编辑。")).toBeInTheDocument();
-    expect(document.querySelector("object")).not.toBeInTheDocument();
+    await waitFor(() => expect(sourcePreviewApi.getTaskSourceFiles).toHaveBeenCalledWith("task-1"));
+    await waitFor(() => expect(sourcePreviewApi.loadSourcePreviewFile).toHaveBeenCalledWith("task-1", problemSource));
+    expect(await screen.findByTitle("原文件 · geometry-problems.pdf")).toHaveAttribute("data", "blob:problem-source");
   });
 
   it("uses a bounded responsive question rail and preserves the full label on hover", async () => {

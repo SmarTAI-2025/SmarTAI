@@ -46,6 +46,9 @@ export function QuestionPreparationDetailPage() {
   const taskQuery = useTask(taskId);
   const updateProblem = useUpdateProblem();
   const sourcePreview = useSourcePreview({
+    taskId,
+    workflowRevision: taskQuery.data?.workflow_revision,
+    sourceKind: "problem",
     displayName: taskQuery.data?.problem_file_name,
   });
   const [activeQuestionId, setActiveQuestionId] = useState(questionId ?? "");
@@ -319,6 +322,7 @@ export function QuestionPreparationDetailPage() {
             loadState={sourcePreview.loadState}
             errorCode={sourcePreview.errorCode}
             previewUrl={sourcePreview.previewUrl}
+            unavailableReason={sourcePreview.unavailableReason}
             onClose={sourcePreview.closePreview}
             onRetry={sourcePreview.retryPreview}
             t={t}

@@ -12,9 +12,11 @@ vi.mock("./PdfDocumentPreview", () => ({
 
 const t = (key: MessageKey) => messages["zh-CN"][key];
 const availablePdf: SourceFileDescriptor = {
+  source_id: "source-problem-1",
   file_id: "file-problem-1",
   display_name: "期中题目.pdf",
   mime_type: "application/pdf",
+  size_bytes: 42,
   status: "available",
   preview_kind: "pdf",
   unavailable_reason: null,
@@ -37,7 +39,7 @@ describe("OriginalFilePreviewPanel", () => {
     expect(screen.getByText("Verified source note")).toBeInTheDocument();
   });
 
-  it("distinguishes the deterministic integration gap from recoverable read failures", async () => {
+  it("distinguishes safe storage failures from permanent missing files", async () => {
     const user = userEvent.setup();
     const onRetry = vi.fn();
     const processing: SourceFileDescriptor = { ...availablePdf, status: "processing" };
@@ -47,15 +49,16 @@ describe("OriginalFilePreviewPanel", () => {
     expect(screen.getByText("文件仍在处理中")).toBeInTheDocument();
 
     rerender(
-      <OriginalFilePreviewPanel descriptor={null} displayName={availablePdf.display_name} previewKind="pdf" loadState="error" errorCode="source_preview_not_connected" previewUrl={null} onClose={vi.fn()} onRetry={onRetry} t={t} />,
+      <OriginalFilePreviewPanel descriptor={null} displayName={availablePdf.display_name} previewKind="pdf" loadState="error" errorCode="source_preview_not_found" previewUrl={null} onClose={vi.fn()} onRetry={onRetry} t={t} />,
     );
-    expect(screen.getByText("原文件读取接口尚未接通；识别内容仍可继续查看和编辑。")).toBeInTheDocument();
+    expect(screen.getByText("原文件缺失或未记录，当前无法预览。请重新上传后再试。")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "重新读取" })).not.toBeInTheDocument();
     expect(onRetry).not.toHaveBeenCalled();
 
     rerender(
-      <OriginalFilePreviewPanel descriptor={availablePdf} displayName={availablePdf.display_name} previewKind="pdf" loadState="error" errorCode="source_preview_load_failed" previewUrl={null} onClose={vi.fn()} onRetry={onRetry} t={t} />,
+      <OriginalFilePreviewPanel descriptor={availablePdf} displayName={availablePdf.display_name} previewKind="pdf" loadState="error" errorCode="source_preview_storage_unavailable" previewUrl={null} onClose={vi.fn()} onRetry={onRetry} t={t} />,
     );
+    expect(screen.getByText("原文件存储暂时不可用，请稍后重新读取。")).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "重新读取" }));
     expect(onRetry).toHaveBeenCalledOnce();
   });
@@ -73,5 +76,30 @@ describe("OriginalFilePreviewPanel", () => {
 
     expect(screen.getByRole("button", { name: "查看原文件" })).toBeDisabled();
     expect(screen.getByRole("button", { name: "当前只支持 PDF 和常见图片格式。" })).toBeInTheDocument();
+  });
+
+  it("settles a pending open panel into the safe missing state", () => {
+    render(
+      <OriginalFilePreviewPanel descriptor={null} displayName="" previewKind="unsupported" loadState="idle" errorCode={null} previewUrl={null} unavailableReason="missing" onClose={vi.fn()} onRetry={vi.fn()} t={t} />,
+    );
+
+    expect(screen.getByText("原文件缺失或未记录，当前无法预览。请重新上传后再试。")).toBeInTheDocument();
+    expect(screen.queryByRole("status")).not.toBeInTheDocument();
+  });
+
+  it("renders an allowed image Blob without inventing a source URL", () => {
+    const image: SourceFileDescriptor = {
+      ...availablePdf,
+      file_id: "file-image-1",
+      display_name: "answer.webp",
+      mime_type: "image/webp",
+      size_bytes: 45,
+      preview_kind: "image",
+    };
+    render(
+      <OriginalFilePreviewPanel descriptor={image} displayName={image.display_name} previewKind="image" loadState="ready" errorCode={null} previewUrl="blob:safe-image" onClose={vi.fn()} onRetry={vi.fn()} t={t} />,
+    );
+
+    expect(screen.getByRole("img", { name: "answer.webp" })).toHaveAttribute("src", "blob:safe-image");
   });
 });

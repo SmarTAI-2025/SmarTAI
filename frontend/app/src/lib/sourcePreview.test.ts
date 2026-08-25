@@ -15,5 +15,7 @@ describe("source preview type inference", () => {
   it("rejects unsupported active-content formats", () => {
     expect(inferSourcePreviewKind("answer.svg", "image/svg+xml")).toBe("unsupported");
     expect(inferSourcePreviewKind("answer.html", "text/html")).toBe("unsupported");
+    expect(inferSourcePreviewKind("disguised.pdf", "text/html")).toBe("unsupported");
+    expect(inferSourcePreviewKind("scan.gif", "image/gif")).toBe("unsupported");
   });
 });

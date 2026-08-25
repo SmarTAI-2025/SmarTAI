@@ -62,12 +62,12 @@ export function OriginalFilePreviewTrigger({
 
 function unavailableReason(reason: SourceUnavailableReason | null | undefined, t: (key: MessageKey) => string) {
   switch (reason) {
-    case "task_finalized":
-      return t("sourcePreviewFinalizedReason");
     case "unsupported_type":
       return t("sourcePreviewUnsupportedReason");
     case "missing":
       return t("sourcePreviewMissingReason");
+    case "storage_unavailable":
+      return t("sourcePreviewStorageUnavailableReason");
     default:
       return t("sourcePreviewNotPersistedReason");
   }

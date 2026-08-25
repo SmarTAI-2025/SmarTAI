@@ -2,8 +2,8 @@
 
 > 周期：Week 1（2026-08-03～08-09）；Week 1 只表示任务排期，不构成运行环境开关。
 > 主责：gsy；本文件的完成范围是 Preview UI 与前端 adapter 边界。
-> 接口依赖：`LYJ-W1-ORIGINAL-FILES` / `LYJ-W2-RECOVERY-LIBRARY` 完成持久化、owner-scoped descriptor 与每次重新鉴权的二进制读取后，再接通真实文件。
-> 当前结论：UI complete; backend integration pending under LYJ-W1-ORIGINAL-FILES / LYJ-W2-RECOVERY-LIBRARY; no fabricated source content.
+> 接口依赖：F-A 已提供持久化、owner-scoped descriptor 与每次重新鉴权的二进制读取。
+> 当前结论：UI 与正式 source-files API 已接通；不生成伪造文件，不接收 storage key、路径或永久 URL。
 > 单一目标：教师不离开当前复核页，就能把整份 PDF/图片原稿与可编辑识别内容放在一起核对。
 
 ## 1. 范围
@@ -12,9 +12,9 @@
 
 - 学生作答复核页：打开/关闭整份学生原文件。
 - 题目资料审核页：打开/关闭整份题目原文件。
-- PDF、图片、加载、读取失败、处理中、不可用、任务完成后已清理七类状态。
+- PDF、图片、加载、读取失败、处理中、不支持、缺失和存储暂不可用状态。
 - 桌面默认原稿与识别内容各占 50%，教师可拖动中间分隔条调整比例。
-- 正式页面保留入口；接口未接通时显示真实读取失败，不生成或展示假原文件。
+- 正式页面通过认证 API client 读取 descriptor 与 Blob，不生成或展示假原文件。
 - 保持当前搜索、题目导航、编辑、保存、未保存拦截和键盘导航行为。
 
 ### 不做
@@ -44,7 +44,7 @@
 | 边框 | `#D9E0E9` | `#475569` | `border` |
 | 主色 | `#2563EB` | `#818CF8` | 打开态、焦点、对照脊线 |
 | 成功 | `#0F766E` | `#2DD4BF` | 文件可用 |
-| 警告 | `#B45309` | `#F59E0B` | 处理中、任务结束清理 |
+| 警告 | `#B45309` | `#F59E0B` | 处理中 |
 | 错误 | `#DC2626` | `#F87171` | 读取失败 |
 
 - 字体：`Inter, PingFang SC, Microsoft YaHei, Noto Sans SC, system-ui`，不新增字体。
@@ -114,24 +114,26 @@
 type SourceFileStatus = "available" | "processing" | "unavailable";
 type SourcePreviewKind = "pdf" | "image" | "unsupported";
 type SourceUnavailableReason =
-  | "task_finalized"
   | "unsupported_type"
   | "not_persisted"
+  | "storage_unavailable"
   | "missing";
 
 interface SourceFileDescriptor {
-  file_id: string;
+  source_id: string | null;
+  file_id: string | null;
   display_name: string;
-  mime_type: string;
+  mime_type: string | null;
+  size_bytes: number | null;
   status: SourceFileStatus;
   preview_kind: SourcePreviewKind;
   unavailable_reason?: SourceUnavailableReason | null;
 }
 ```
 
-约束：UI 模型只识别不透明 `file_id`，绝不接收服务器路径、storage key 或永久公开 URL。lyj 冻结真实 descriptor/download route 后，由 adapter 映射实际字段；字节端点必须每次重新鉴权。
+约束：UI 模型只识别不透明 `source_id` / `file_id`，绝不接收服务器路径、storage key 或永久公开 URL。题目精确使用 `problem_source`；学生精确使用 `student.source_id` 映射 `submission_sources[source_id]`。descriptor 与字节端点都必须每次重新鉴权。
 
-## 8. 七类可见状态
+## 8. 可见状态
 
 | 状态 | 入口 | 面板 | 主要文案/操作 |
 |---|---|---|---|
@@ -141,7 +143,7 @@ interface SourceFileDescriptor {
 | 处理中 | 可点并带 Loader | 中性等待态 | `文件仍在处理中，稍后重试` |
 | 读取失败 | 可点 | `InlineNotice danger` | `重新读取`、`关闭` |
 | 不支持/缺失 | 禁用 + `HelpTooltip` | 不打开 | 说明支持 PDF/常见图片 |
-| 任务结束已清理 | 禁用 + `HelpTooltip` | 不打开 | `线上临时副本已不再保存；本地文件未受影响` |
+| 存储暂不可用 | 可点 | `InlineNotice danger` | 安全文案与重新读取，不显示底层异常 |
 
 读取失败与 `unavailable` 必须区分：前者可重试，后者是后端权威生命周期状态。
 
@@ -164,15 +166,15 @@ interface SourceFileDescriptor {
 - `components/tasks/SourceComparisonWorkspace.tsx`：50/50 布局、比例状态、分隔条和响应式降级。
 - `types/sourcePreview.ts`：独立合同。
 - `lib/sourcePreview.ts`：安全显示名/MIME 到预览类型的纯映射。
-- `api/sourcePreview.ts`：真实文件 adapter 边界；当前不猜测后端 URL，稳定拒绝 `source_preview_not_connected`。
-- `hooks/useSourcePreview.ts`：面板生命周期、错误态、焦点返回与未来真实 object URL 清理。
+- `api/sourcePreview.ts`：使用认证 API client 调用冻结的 descriptor/content 路由，并核对响应 MIME 与长度。
+- `hooks/useSourcePreview.ts`：精确 source 映射、面板生命周期、错误态、焦点返回与 object URL 清理。
 
 ## 10. 正式数据接线边界
 
 - 正式产品不生成或加载 fake PDF/image blob，不提供 query 参数切换状态，也不按 build mode 改变入口。
-- 当前 `loadSourcePreviewFile` 不发网络请求、不猜测 URL，点击入口后进入确定性的“接口尚未接通”错误态；该状态不显示无效的“重新读取”，右侧识别内容仍可查看、编辑，草稿不丢失。未来真实 `source_preview_load_failed` 等瞬时错误才提供重试。
-- 学生作答原件与题目原件都要等待 lyj 提供正式持久化与 owner-scoped descriptor/download contract；前端不实现 owner 判断。
-- 后端合同冻结后只替换 `api/sourcePreview.ts` adapter 与 descriptor 映射，不改变已经确认的布局和交互。
+- descriptor 使用 `GET /tasks/{task_id}/source-files`；Blob 使用 `GET /tasks/{task_id}/source-files/{file_id}/content`，均沿用认证 API client。
+- 学生作答只按 `student.source_id` 精确映射；题目只取 `problem_source`，不按姓名、学号或文件名猜测。
+- owner/task/current-source 判断完全由后端重新验证；前端把安全 404 投影为缺失，不解释为“存在但无权”。
 - PDF、图片、processing、unavailable 等状态用组件级测试覆盖；它们不是正式页面中的伪造业务数据。
 
 ## 11. 交互与可访问性
@@ -200,9 +202,9 @@ interface SourceFileDescriptor {
 - 新增第 9 节组件、types、adapter、hook 与 tests。
 - 不改 `api/tasks.ts`、`api/hooks/tasks.ts`、`types/task.ts`，减少与并行 PR 的共享文件冲突。
 
-### 后端依赖完成后的接线（不属于本任务）
+### 已完成的正式接线
 
-- 以 lyj 最终冻结的路由和字段为准完善 `api/sourcePreview.ts`；不得预先发明 endpoint。
+- 按冻结的路由和字段完善 `api/sourcePreview.ts`，不发明 endpoint。
 - 映射真实 status，并从每次重新鉴权的 binary endpoint 取得 Blob。
 - 保留组件 public props，不改视觉层。
 
@@ -210,8 +212,8 @@ interface SourceFileDescriptor {
 
 1. 冻结第 7 节 UI 模型及中英文文案；后端 wire contract 由 lyj 另行冻结。
 2. 实现 `SourceComparisonWorkspace`：默认 50/50、拖动/键盘调节、边界和移动端降级。
-3. 实现纯展示 `OriginalFilePreviewPanel` 和七类组件测试。
-4. 接学生作答页，验证未接通错误、草稿、关闭后焦点及比例保留。
+3. 实现纯展示 `OriginalFilePreviewPanel` 和状态组件测试。
+4. 接学生作答页，验证 source_id 精确映射、草稿、关闭后焦点及比例保留。
 5. 接题目资料页，共用组件，不复制状态逻辑。
 6. 做 `1440×900`、`1280×720`、`768×1024`、`390×844` 亮/暗色检查。
 7. 运行定向测试、全量前端测试、scope audit、typecheck、build。
@@ -222,7 +224,7 @@ interface SourceFileDescriptor {
 - 打开/关闭不清除作答草稿；未保存离开拦截仍生效。
 - 桌面首次打开为 50/50；鼠标拖动、键盘调节、35%～65%/最小宽度约束和双击复位均有测试。
 - `< lg` 不出现分隔条或横向拖动手势，页面自然上下堆叠。
-- adapter 接入后，切学生时 source descriptor 更新且旧 object URL 被 revoke。
+- adapter 已接入；切学生时 source descriptor 更新且旧 object URL 被 revoke。
 - 不支持文件无法加载 active content，禁用原因键盘可读。
 - 手机无横向页面溢出；PDF/图片不越出面板。
 - 深色模式、中文、英文、200% zoom、键盘 focus 均可用。
@@ -231,10 +233,10 @@ interface SourceFileDescriptor {
 
 ## 15. 完成定义
 
-- 已完成正式复核页入口、50/50 工作区、分隔条、PDF/图片渲染组件及关闭/重试交互；真实原文件读取仍依赖 lyj 后端合同。
-- 当前点击入口显示“原文件读取接口尚未接通”，不生成、加载或展示假原文件；右侧内容和未保存草稿继续保留。
+- 已完成正式复核页入口、50/50 工作区、分隔条、PDF/图片渲染组件、关闭/重试交互及正式 source-files API 接线。
+- 点击入口读取当前 owner/task/workflow/source 绑定的真实原文件；不生成、加载或展示假原文件，右侧内容和未保存草稿继续保留。
 - 所有不可用状态都有明确原因和下一步，不出现空白/死按钮。
 - 无服务器路径、永久 URL、主动内容渲染或前端 owner 判断。
 - 默认关闭时现有页面像素与交互不变；打开时才进入对照布局。
 - Week 1 有已确认 Demo 同款 50/50/拖动 UI、正式页面错误态、测试结果和 gsy 自测记录。
-- `GSY-W1-PREVIEW-UI` 可按 UI complete 评审；上传→持久化→鉴权读取→Preview 的集成完成要等待 `LYJ-W1-ORIGINAL-FILES` / `LYJ-W2-RECOVERY-LIBRARY`，随后由 gxr 做退出/重登、后端重启和两教师隔离验收。
+- `GSY-W1-PREVIEW-UI` 已具备上传→持久化→鉴权读取→Preview 的代码集成；仍由 gxr 在上线前完成退出/重登、后端重启和两教师隔离的 integrated browser acceptance。

@@ -24,6 +24,7 @@ export function OriginalFilePreviewPanel({
   loadState,
   errorCode,
   previewUrl,
+  unavailableReason,
   onClose,
   onRetry,
   provenanceNote,
@@ -35,6 +36,7 @@ export function OriginalFilePreviewPanel({
   loadState: SourcePreviewLoadState;
   errorCode: SourcePreviewErrorCode | null;
   previewUrl: string | null;
+  unavailableReason?: SourceUnavailableReason | null;
   onClose: () => void;
   onRetry: () => void;
   provenanceNote?: string;
@@ -97,6 +99,7 @@ export function OriginalFilePreviewPanel({
           loadState={loadState}
           errorCode={errorCode}
           previewUrl={previewUrl}
+          unavailableReason={unavailableReason}
           onRetry={onRetry}
           t={t}
         />
@@ -106,13 +109,14 @@ export function OriginalFilePreviewPanel({
   );
 }
 
-function PreviewContent({ descriptor, displayName, previewKind, loadState, errorCode, previewUrl, onRetry, t }: {
+function PreviewContent({ descriptor, displayName, previewKind, loadState, errorCode, previewUrl, unavailableReason, onRetry, t }: {
   descriptor: SourceFileDescriptor | null;
   displayName: string;
   previewKind: SourcePreviewKind;
   loadState: SourcePreviewLoadState;
   errorCode: SourcePreviewErrorCode | null;
   previewUrl: string | null;
+  unavailableReason?: SourceUnavailableReason | null;
   onRetry: () => void;
   t: (key: MessageKey) => string;
 }) {
@@ -126,7 +130,7 @@ function PreviewContent({ descriptor, displayName, previewKind, loadState, error
   if (descriptor?.status === "unavailable") {
     return (
       <InlineNotice
-        tone={descriptor.unavailable_reason === "task_finalized" ? "warning" : "neutral"}
+        tone="neutral"
         title={t("sourcePreviewUnavailableTitle")}
         className="max-w-md bg-card"
       >
@@ -135,21 +139,35 @@ function PreviewContent({ descriptor, displayName, previewKind, loadState, error
     );
   }
   if (loadState === "error") {
+    const retryable = errorCode === "source_preview_processing"
+      || errorCode === "source_preview_storage_unavailable"
+      || errorCode === "source_preview_load_failed";
     return (
       <InlineNotice
         tone="danger"
-        title={t("sourcePreviewErrorTitle")}
+        title={t(errorCode === "source_preview_processing"
+          ? "sourcePreviewProcessingTitle"
+          : errorCode === "source_preview_not_found"
+              || errorCode === "source_preview_unavailable"
+              || errorCode === "source_preview_unsupported_type"
+            ? "sourcePreviewUnavailableTitle"
+            : "sourcePreviewErrorTitle")}
         className="max-w-md bg-card"
-        action={errorCode === "source_preview_not_connected" ? undefined : (
+        action={retryable ? (
           <Button type="button" variant="secondary" className="h-8 px-3" onClick={onRetry}>
             <RefreshCw aria-hidden="true" className="h-3.5 w-3.5" />
             {t("sourcePreviewRetry")}
           </Button>
-        )}
+        ) : undefined}
       >
-        {t(errorCode === "source_preview_not_connected"
-          ? "sourcePreviewNotConnectedDescription"
-          : "sourcePreviewErrorDescription")}
+        {errorDescription(errorCode, t)}
+      </InlineNotice>
+    );
+  }
+  if (!descriptor && unavailableReason) {
+    return (
+      <InlineNotice tone="neutral" title={t("sourcePreviewUnavailableTitle")} className="max-w-md bg-card">
+        {unavailableDescription(unavailableReason, t)}
       </InlineNotice>
     );
   }
@@ -218,13 +236,30 @@ function StatusBadge({ descriptor, t }: {
 
 function unavailableDescription(reason: SourceUnavailableReason | null | undefined, t: (key: MessageKey) => string) {
   switch (reason) {
-    case "task_finalized":
-      return t("sourcePreviewFinalizedReason");
     case "unsupported_type":
       return t("sourcePreviewUnsupportedReason");
     case "missing":
       return t("sourcePreviewMissingReason");
+    case "storage_unavailable":
+      return t("sourcePreviewStorageUnavailableReason");
     default:
       return t("sourcePreviewNotPersistedReason");
+  }
+}
+
+function errorDescription(errorCode: SourcePreviewErrorCode | null, t: (key: MessageKey) => string) {
+  switch (errorCode) {
+    case "source_preview_processing":
+      return t("sourcePreviewProcessingDescription");
+    case "source_preview_not_found":
+      return t("sourcePreviewMissingReason");
+    case "source_preview_unavailable":
+      return t("sourcePreviewNotPersistedReason");
+    case "source_preview_unsupported_type":
+      return t("sourcePreviewUnsupportedReason");
+    case "source_preview_storage_unavailable":
+      return t("sourcePreviewStorageUnavailableReason");
+    default:
+      return t("sourcePreviewErrorDescription");
   }
 }

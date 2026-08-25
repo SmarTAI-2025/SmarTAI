@@ -2,8 +2,23 @@ import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { createMemoryRouter, RouterProvider } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { SourceFileDescriptor } from "@/types/sourcePreview";
 import { StudentAnswerReviewPage } from "./StudentAnswerReviewPage";
 
+const sourcePreviewApi = vi.hoisted(() => ({
+  getTaskSourceFiles: vi.fn(),
+  loadSourcePreviewFile: vi.fn(),
+}));
+const studentSource: SourceFileDescriptor = {
+  source_id: "source-student-1",
+  file_id: "file-student-1",
+  display_name: "S001-calculus.pdf",
+  mime_type: "application/pdf",
+  size_bytes: 43,
+  status: "available",
+  preview_kind: "pdf",
+  unavailable_reason: null,
+};
 const taskData = vi.hoisted(() => ({
   task_id: "task-1",
   name: "Calculus Review",
@@ -32,6 +47,7 @@ const taskData = vi.hoisted(() => ({
       stu_id: "S001",
       stu_name: "Lin",
       source_filename: "S001-calculus.pdf",
+      source_id: "source-student-1",
       identity_status: "matched",
       identity_match_method: "filename",
       stu_ans: [{
@@ -54,6 +70,18 @@ vi.mock("@/api/hooks/tasks", () => ({
 
 vi.mock("@/components/new-task/NewTaskStepper", () => ({ NewTaskStepper: () => null }));
 
+vi.mock("@/api/sourcePreview", () => ({
+  getTaskSourceFiles: sourcePreviewApi.getTaskSourceFiles,
+  loadSourcePreviewFile: sourcePreviewApi.loadSourcePreviewFile,
+  sourcePreviewErrorCode: () => "source_preview_load_failed",
+}));
+
+vi.mock("@/components/tasks/PdfDocumentPreview", () => ({
+  PdfDocumentPreview: ({ url, title }: { url: string; title: string }) => (
+    <object data={url} type="application/pdf" title={title} />
+  ),
+}));
+
 vi.mock("@/i18n/I18nProvider", async () => {
   const { messages } = await vi.importActual<typeof import("@/i18n/messages")>("@/i18n/messages");
   return {
@@ -74,6 +102,20 @@ function renderPage() {
 }
 
 beforeEach(() => {
+  sourcePreviewApi.getTaskSourceFiles.mockReset().mockResolvedValue({
+    task_id: "task-1",
+    workflow_revision: 3,
+    problem_source: null,
+    submission_sources: {
+      "source-student-1": studentSource,
+      "source-other": { ...studentSource, source_id: "source-other", file_id: "file-other" },
+    },
+  });
+  sourcePreviewApi.loadSourcePreviewFile.mockReset().mockResolvedValue(
+    new Blob(["pdf"], { type: "application/pdf" }),
+  );
+  Object.defineProperty(URL, "createObjectURL", { configurable: true, value: vi.fn(() => "blob:student-source") });
+  Object.defineProperty(URL, "revokeObjectURL", { configurable: true, value: vi.fn() });
   Object.defineProperty(window, "scrollTo", { configurable: true, value: vi.fn() });
   vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => {
     callback(0);
@@ -94,7 +136,7 @@ beforeEach(() => {
 });
 
 describe("StudentAnswerReviewPage source preview", () => {
-  it("keeps an unsaved answer draft while the pending backend integration reports a truthful error", async () => {
+  it("maps the student by source_id and keeps an unsaved answer draft", async () => {
     const user = userEvent.setup();
     renderPage();
 
@@ -110,14 +152,14 @@ describe("StudentAnswerReviewPage source preview", () => {
 
     const panel = await screen.findByTestId("source-preview-panel");
     expect(screen.getByRole("separator", { name: "拖动调整原文件与识别内容宽度" })).toHaveAttribute("aria-valuenow", "50");
-    expect(await screen.findByText("原文件读取接口尚未接通；识别内容仍可继续查看和编辑。")).toBeInTheDocument();
-    expect(within(panel).queryByRole("button", { name: "重新读取" })).not.toBeInTheDocument();
-    expect(document.querySelector("object")).not.toBeInTheDocument();
+    await waitFor(() => expect(sourcePreviewApi.loadSourcePreviewFile).toHaveBeenCalledWith("task-1", studentSource));
+    expect(await within(panel).findByTitle("原文件 · S001-calculus.pdf")).toHaveAttribute("data", "blob:student-source");
     expect(draft).toHaveValue("Unsaved corrected answer");
 
     await user.click(within(panel).getByRole("button", { name: "关闭对照" }));
     expect(screen.queryByTestId("source-preview-panel")).not.toBeInTheDocument();
     expect(draft).toHaveValue("Unsaved corrected answer");
     expect(openButton).toHaveFocus();
+    await waitFor(() => expect(URL.revokeObjectURL).toHaveBeenCalledWith("blob:student-source"));
   });
 });
