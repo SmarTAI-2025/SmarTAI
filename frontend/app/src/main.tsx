@@ -23,6 +23,8 @@ const NotFoundPage = React.lazy(() =>
 );
 const RegisterPage = React.lazy(() => import("@/routes/RegisterPage").then((module) => ({ default: module.RegisterPage })));
 const RegisterVerifyPage = React.lazy(() => import("@/routes/RegisterVerifyPage").then((module) => ({ default: module.RegisterVerifyPage })));
+const ForgotPasswordPage = React.lazy(() => import("@/routes/ForgotPasswordPage").then((module) => ({ default: module.ForgotPasswordPage })));
+const ResetPasswordPage = React.lazy(() => import("@/routes/ResetPasswordPage").then((module) => ({ default: module.ResetPasswordPage })));
 const SettingsPage = React.lazy(() =>
   import("@/routes/SettingsPage").then((module) => ({ default: module.SettingsPage })),
 );
@@ -105,6 +107,8 @@ const router = createBrowserRouter([
   { path: "/login", element: routeElement(<LoginPage />) },
   { path: "/register", element: routeElement(<RegisterPage />) },
   { path: "/register/verify", element: routeElement(<RegisterVerifyPage />) },
+  { path: "/forgot-password", element: routeElement(<ForgotPasswordPage />) },
+  { path: "/reset-password", element: routeElement(<ResetPasswordPage />) },
   { path: "/student", element: <StudentUnavailablePage /> },
   {
     path: "/",

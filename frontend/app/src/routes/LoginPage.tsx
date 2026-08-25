@@ -123,6 +123,11 @@ export function LoginPage() {
               hideLabel={zh ? "隐藏密码" : "Hide password"}
             />
           </Field>
+          <div className="-mt-1 text-right text-sm">
+            <Link className="font-semibold text-primary hover:underline" to="/forgot-password">
+              {zh ? "忘记密码" : "Forgot password"}
+            </Link>
+          </div>
           {visibleError ? <AuthError message={visibleError} /> : null}
           <Button type="submit" className="mt-1 h-11 w-full" disabled={login.isPending}>
             {login.isPending ? <Loader2 aria-hidden="true" className="animate-spin" size={16} /> : null}

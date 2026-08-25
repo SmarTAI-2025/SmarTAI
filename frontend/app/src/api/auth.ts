@@ -1,5 +1,5 @@
 import { clearAuthToken, getAuthToken, getJSON, postJSON, setAuthToken } from "./client";
-import type { AuthResponse, EmailRegistrationRequest, EmailRegistrationResponse, EmailRegistrationVerifyResponse, LoginRequest, RefreshResponse, RegisterRequest, StatusResponse, User } from "@/types";
+import type { AuthResponse, EmailRegistrationRequest, EmailRegistrationResponse, EmailRegistrationVerifyResponse, LoginRequest, PasswordResetConfirmResponse, PasswordResetRequest, PasswordResetRequestResponse, RefreshResponse, RegisterRequest, StatusResponse, User } from "@/types";
 
 export async function login(request: LoginRequest): Promise<AuthResponse> {
   const response = await postJSON<AuthResponse, LoginRequest>("/auth/login", request);
@@ -23,6 +23,17 @@ export async function resendRegistration(requestId: string): Promise<EmailRegist
 
 export async function verifyRegistration(token: string): Promise<EmailRegistrationVerifyResponse> {
   return postJSON<EmailRegistrationVerifyResponse, { token: string }>("/auth/register/verify", { token });
+}
+
+export async function requestPasswordReset(request: PasswordResetRequest): Promise<PasswordResetRequestResponse> {
+  return postJSON<PasswordResetRequestResponse, PasswordResetRequest>("/auth/password-reset/request", request);
+}
+
+export async function confirmPasswordReset(token: string, newPassword: string): Promise<PasswordResetConfirmResponse> {
+  return postJSON<PasswordResetConfirmResponse, { token: string; new_password: string }>(
+    "/auth/password-reset/confirm",
+    { token, new_password: newPassword },
+  );
 }
 
 export async function getCurrentUser(): Promise<User> {

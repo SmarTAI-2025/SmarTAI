@@ -37,6 +37,20 @@ export interface EmailRegistrationVerifyResponse {
   status: "registered" | "already_verified";
 }
 
+export interface PasswordResetRequest {
+  email: string;
+}
+
+export interface PasswordResetRequestResponse {
+  status: "reset_link_requested";
+  expires_in_seconds: number;
+  resend_after_seconds: number;
+}
+
+export interface PasswordResetConfirmResponse {
+  status: "password_reset";
+}
+
 export interface AuthResponse {
   token: string;
   user: User;

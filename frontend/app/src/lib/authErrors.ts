@@ -45,3 +45,27 @@ export function localizedAuthError(
   }
   return zh ? "注册失败，请稍后重试。" : "Unable to create the account. Try again shortly.";
 }
+
+export function localizedPasswordResetError(
+  error: unknown,
+  locale: "zh-CN" | "en-US",
+) {
+  const normalized = normalizeAPIError(error);
+  const zh = locale === "zh-CN";
+  const code = normalized.payload?.detail && typeof normalized.payload.detail === "object"
+    ? String((normalized.payload.detail as { code?: unknown }).code ?? "")
+    : normalized.message;
+  if (code === "password_reset_link_expired") {
+    return zh ? "重置链接已过期，请重新申请。" : "This reset link has expired. Request a new one.";
+  }
+  if (code === "password_reset_link_already_used") {
+    return zh ? "重置链接已使用，请重新申请。" : "This reset link has already been used. Request a new one.";
+  }
+  if (code === "password_reset_link_invalid") {
+    return zh ? "重置链接无效，请重新申请。" : "This reset link is invalid. Request a new one.";
+  }
+  if (code === "password_reset_rate_limited") {
+    return zh ? "请求过于频繁，请稍后再试。" : "Too many requests. Try again later.";
+  }
+  return zh ? "密码重置失败，请稍后重试。" : "Unable to reset the password. Try again shortly.";
+}

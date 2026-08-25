@@ -41,6 +41,17 @@ export function useVerifyRegistration() {
   return useMutation({ mutationFn: authApi.verifyRegistration });
 }
 
+export function useRequestPasswordReset() {
+  return useMutation({ mutationFn: authApi.requestPasswordReset });
+}
+
+export function useConfirmPasswordReset() {
+  return useMutation({
+    mutationFn: ({ token, newPassword }: { token: string; newPassword: string }) =>
+      authApi.confirmPasswordReset(token, newPassword),
+  });
+}
+
 export function useRefreshToken() {
   return useMutation({
     mutationFn: authApi.refreshToken,
