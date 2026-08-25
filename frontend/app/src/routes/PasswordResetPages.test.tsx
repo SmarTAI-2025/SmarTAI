@@ -21,7 +21,7 @@ afterEach(() => {
   if (originalLocalStorage) {
     Object.defineProperty(window, "localStorage", originalLocalStorage);
   } else {
-    delete (window as Window & { localStorage?: Storage }).localStorage;
+    Reflect.deleteProperty(window, "localStorage");
   }
 });
 
