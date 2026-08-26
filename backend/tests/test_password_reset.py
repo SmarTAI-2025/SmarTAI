@@ -18,6 +18,7 @@ from backend.services.password_reset import (
     generate_reset_token,
     request_password_reset,
 )
+from backend.services.email_sender import password_reset_message
 from fastapi.testclient import TestClient
 
 
@@ -60,6 +61,14 @@ def test_reset_request_is_neutral_for_unknown_email(monkeypatch):
         "resend_after_seconds": 60,
     }
     assert sender.messages == []
+
+
+def test_password_reset_message_greets_username_and_escapes_html():
+    subject, text, html = password_reset_message("Teacher <A>", "token-value")
+
+    assert subject == "SmarTAI 密码重置"
+    assert "你好，Teacher <A>" in text
+    assert "你好，Teacher &lt;A&gt;" in html
 
 
 def test_reset_request_sends_link_and_persists_only_digest(monkeypatch):

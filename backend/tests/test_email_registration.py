@@ -10,6 +10,7 @@ from backend.services.email_registration import (
     generate_token,
     normalize_email,
 )
+from backend.services.email_sender import verification_message
 from backend.db.models import EmailVerificationRequestRecord
 from backend.db.session import create_schema, session_scope
 from backend.services.email_registration import (
@@ -51,6 +52,14 @@ def test_generated_token_is_high_entropy_and_only_digest_is_persisted():
     assert len(token) >= 32
     assert digest_token(token) == hashlib.sha256(token.encode()).hexdigest()
     assert token != digest_token(token)
+
+
+def test_verification_message_greets_user_and_escapes_html_username():
+    subject, text, html = verification_message("Teacher <A>", "token-value")
+
+    assert subject == "确认 SmarTAI 教师账号"
+    assert "你好，Teacher <A>" in text
+    assert "你好，Teacher &lt;A&gt;" in html
 
 
 def test_verification_request_persists_digest_and_identity_fields_only():

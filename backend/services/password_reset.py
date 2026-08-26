@@ -52,7 +52,6 @@ def request_password_reset(*, email: str, source_ip: str | None, sender: EmailSe
     sender = sender or get_email_sender()
     now = time.time()
     raw_token = generate_reset_token()
-    subject, text_body, html_body = password_reset_message(raw_token)
     try:
         with session_scope() as session:
             user = session.scalar(
@@ -62,6 +61,8 @@ def request_password_reset(*, email: str, source_ip: str | None, sender: EmailSe
             )
             if user is None:
                 return _neutral_response()
+
+            subject, text_body, html_body = password_reset_message(user.username, raw_token)
 
             window_start = now - 3600
             email_count = session.scalar(

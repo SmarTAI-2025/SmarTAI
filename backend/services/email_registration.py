@@ -73,7 +73,7 @@ def request_registration(*, username: str, email: str, password: str, source_ip:
     now = time.time()
     raw_token = generate_token()
     request_id = uuid.uuid4().hex
-    subject, text_body, html_body = verification_message(raw_token)
+    subject, text_body, html_body = verification_message(normalized_username, raw_token)
     try:
         with session_scope() as session:
             window_start = now - 3600
@@ -156,7 +156,7 @@ def resend_registration(*, request_id: str, source_ip: str | None,
             raise RegistrationError("registration_rate_limited", retry_after=retry_after)
         if not email_domain_allowed(previous.normalized_email, settings.allowed_email_domains):
             raise RegistrationError("registration_email_domain_not_allowed")
-        subject, text_body, html_body = verification_message(raw_token)
+        subject, text_body, html_body = verification_message(previous.normalized_username, raw_token)
         replacement = EmailVerificationRequestRecord(
             id=new_request_id,
             normalized_username=previous.normalized_username,
