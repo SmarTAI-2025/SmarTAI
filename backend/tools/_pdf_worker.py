@@ -1,8 +1,8 @@
 """Isolated PyMuPDF worker used by ``file_processing``.
 
 The parent process owns timeout/concurrency policy and kills this process on a
-deadline.  This module deliberately emits only a small JSON protocol and never
-returns raw parser exceptions.
+deadline.  This module deliberately emits only a small UTF-8 JSON protocol and
+never returns raw parser exceptions.
 """
 from __future__ import annotations
 
@@ -20,7 +20,7 @@ sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8")
 
 
 def _write(payload: dict) -> None:
-    sys.stdout.write(json.dumps(payload, ensure_ascii=False))
+    sys.stdout.buffer.write(json.dumps(payload, ensure_ascii=False).encode("utf-8"))
 
 
 def main() -> int:
