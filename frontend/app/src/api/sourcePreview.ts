@@ -31,10 +31,10 @@ export async function getTaskSourceFiles(
   expectedWorkflowRevision: number,
 ): Promise<TaskSourceFiles> {
   const catalog = await getJSON<TaskSourceFiles>(`/tasks/${encodeURIComponent(taskId)}/source-files`);
-  if (catalog.task_id !== taskId) {
-    throw new SourcePreviewResponseError("source_preview_load_failed");
-  }
-  if (catalog.workflow_revision !== expectedWorkflowRevision) {
+  if (
+    catalog.task_id !== taskId
+    || catalog.workflow_revision !== expectedWorkflowRevision
+  ) {
     throw new SourcePreviewResponseError("source_preview_load_failed", "catalog_scope_mismatch");
   }
   return catalog;

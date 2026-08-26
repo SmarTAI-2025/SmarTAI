@@ -51,6 +51,10 @@ const catalogMismatch = {
   code: "source_preview_load_failed",
   reason: "catalog_scope_mismatch",
 };
+const taskIdCatalogMismatch = {
+  ...catalogMismatch,
+  mismatch: "task_id",
+};
 
 beforeEach(() => {
   apiMocks.getTaskSourceFiles.mockReset().mockResolvedValue(catalog);
@@ -240,6 +244,30 @@ describe("useSourcePreview", () => {
     await waitFor(() => expect(apiMocks.getTaskSourceFiles).toHaveBeenCalledTimes(2));
     expect(refreshTask).toHaveBeenCalledTimes(1);
     await waitFor(() => expect(result.current.triggerState).toBe("unavailable"));
+    expect(apiMocks.getTaskSourceFiles).toHaveBeenCalledTimes(2);
+  });
+
+  it("recovers once when a delayed old response has a mismatched task id", async () => {
+    let rejectOldResponse: ((reason: unknown) => void) | null = null;
+    const refreshTask = vi.fn().mockResolvedValue(undefined);
+    apiMocks.getTaskSourceFiles
+      .mockImplementationOnce(() => new Promise<TaskSourceFiles>((_resolve, reject) => {
+        rejectOldResponse = reject;
+      }))
+      .mockResolvedValueOnce(catalog);
+    const { result } = renderHook(() => useSourcePreview({
+      taskId: "task-1",
+      workflowRevision: 9,
+      sourceKind: "submission",
+      sourceId: "source-1",
+      refreshTask,
+    }));
+
+    await waitFor(() => expect(apiMocks.getTaskSourceFiles).toHaveBeenCalledTimes(1));
+    act(() => rejectOldResponse?.(taskIdCatalogMismatch));
+
+    await waitFor(() => expect(result.current.descriptor?.file_id).toBe("file-1"));
+    expect(refreshTask).toHaveBeenCalledTimes(1);
     expect(apiMocks.getTaskSourceFiles).toHaveBeenCalledTimes(2);
   });
 

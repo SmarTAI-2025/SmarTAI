@@ -75,7 +75,7 @@ describe("source preview API", () => {
     await expect(loadSourcePreviewFile("task-1", imageDescriptor)).resolves.toBeInstanceOf(Blob);
   });
 
-  it("rejects a catalog for another task and truncated content", async () => {
+  it("marks a catalog for another task as a recoverable scope mismatch", async () => {
     clientMocks.getJSON.mockResolvedValue({
       task_id: "task-other",
       workflow_revision: 1,
@@ -84,8 +84,10 @@ describe("source preview API", () => {
     });
     const taskMismatch = await getTaskSourceFiles("task-1", 1).catch((caught: unknown) => caught);
     expect(taskMismatch).toMatchObject({ code: "source_preview_load_failed" });
-    expect(isSourcePreviewCatalogMismatch(taskMismatch)).toBe(false);
+    expect(isSourcePreviewCatalogMismatch(taskMismatch)).toBe(true);
+  });
 
+  it("rejects truncated content", async () => {
     clientMocks.getBlob.mockResolvedValue(new Blob(["shorter"], { type: "application/pdf" }));
     await expect(loadSourcePreviewFile("task-1", descriptor)).rejects.toMatchObject({
       code: "source_preview_load_failed",
