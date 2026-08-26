@@ -195,6 +195,54 @@ describe("useSourcePreview", () => {
     expect(apiMocks.getTaskSourceFiles).toHaveBeenCalledWith("task-1", 10);
   });
 
+  it("ignores a normally resolving task A catalog after the page moves to task B", async () => {
+    let resolveTaskOne: ((value: TaskSourceFiles) => void) | null = null;
+    const refreshTask = vi.fn().mockResolvedValue(undefined);
+    const taskTwoCatalog: TaskSourceFiles = {
+      ...catalog,
+      task_id: "task-2",
+      submission_sources: { "source-2": sourceTwo },
+    };
+    apiMocks.getTaskSourceFiles.mockImplementation(async (taskId) => {
+      if (taskId === "task-1") {
+        return new Promise<TaskSourceFiles>((resolve) => {
+          resolveTaskOne = resolve;
+        });
+      }
+      return taskTwoCatalog;
+    });
+    const { result, rerender } = renderHook(
+      ({ taskId, sourceId }) => useSourcePreview({
+        taskId,
+        workflowRevision: 9,
+        sourceKind: "submission",
+        sourceId,
+        refreshTask,
+      }),
+      { initialProps: { taskId: "task-1", sourceId: "source-1" } },
+    );
+
+    await waitFor(() => expect(apiMocks.getTaskSourceFiles).toHaveBeenCalledWith("task-1", 9));
+    rerender({ taskId: "task-2", sourceId: "source-2" });
+    await waitFor(() => expect(result.current.descriptor?.file_id).toBe("file-2"));
+    act(() => result.current.openPreview());
+    await waitFor(() => expect(result.current.previewUrl).not.toBeNull());
+    const taskTwoPreviewUrl = result.current.previewUrl;
+
+    await act(async () => {
+      resolveTaskOne?.(catalog);
+      await Promise.resolve();
+    });
+
+    expect(result.current.descriptor?.file_id).toBe("file-2");
+    expect(result.current.previewUrl).toBe(taskTwoPreviewUrl);
+    expect(apiMocks.getTaskSourceFiles).toHaveBeenCalledTimes(2);
+    expect(apiMocks.getTaskSourceFiles).toHaveBeenNthCalledWith(2, "task-2", 9);
+    expect(apiMocks.loadSourcePreviewFile).toHaveBeenCalledTimes(1);
+    expect(apiMocks.loadSourcePreviewFile).toHaveBeenCalledWith("task-2", sourceTwo);
+    expect(refreshTask).not.toHaveBeenCalled();
+  });
+
   it("refreshes the task on a revision jump and adopts only the new catalog scope", async () => {
     let finishRefresh: (() => void) | null = null;
     const refreshTask = vi.fn(() => new Promise<void>((resolve) => {
