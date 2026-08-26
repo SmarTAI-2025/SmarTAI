@@ -3,6 +3,7 @@ import { APIError } from "@/api/client";
 import type { SourceFileDescriptor, TaskSourceFiles } from "@/types/sourcePreview";
 import {
   getTaskSourceFiles,
+  isSourcePreviewCatalogMismatch,
   loadSourcePreviewFile,
   sourcePreviewErrorCode,
 } from "./sourcePreview";
@@ -45,7 +46,7 @@ describe("source preview API", () => {
     clientMocks.getJSON.mockResolvedValue(catalog);
     clientMocks.getBlob.mockResolvedValue(new Blob(["pdf"], { type: "application/pdf" }));
 
-    await expect(getTaskSourceFiles("task/1")).resolves.toBe(catalog);
+    await expect(getTaskSourceFiles("task/1", 7)).resolves.toBe(catalog);
     await expect(loadSourcePreviewFile("task/1", descriptor)).resolves.toBeInstanceOf(Blob);
 
     expect(clientMocks.getJSON).toHaveBeenCalledWith("/tasks/task%2F1/source-files");
@@ -81,14 +82,29 @@ describe("source preview API", () => {
       problem_source: null,
       submission_sources: {},
     });
-    await expect(getTaskSourceFiles("task-1")).rejects.toMatchObject({
-      code: "source_preview_load_failed",
-    });
+    const taskMismatch = await getTaskSourceFiles("task-1", 1).catch((caught: unknown) => caught);
+    expect(taskMismatch).toMatchObject({ code: "source_preview_load_failed" });
+    expect(isSourcePreviewCatalogMismatch(taskMismatch)).toBe(false);
 
     clientMocks.getBlob.mockResolvedValue(new Blob(["shorter"], { type: "application/pdf" }));
     await expect(loadSourcePreviewFile("task-1", descriptor)).rejects.toMatchObject({
       code: "source_preview_load_failed",
     });
+  });
+
+  it("rejects a catalog whose workflow revision does not match the page request", async () => {
+    clientMocks.getJSON.mockResolvedValue({
+      task_id: "task-1",
+      workflow_revision: 8,
+      problem_source: descriptor,
+      submission_sources: {},
+    });
+
+    const error = await getTaskSourceFiles("task-1", 7).catch((caught: unknown) => caught);
+
+    expect(error).toMatchObject({ code: "source_preview_load_failed" });
+    expect(isSourcePreviewCatalogMismatch(error)).toBe(true);
+    expect(sourcePreviewErrorCode(error)).toBe("source_preview_load_failed");
   });
 
   it("maps backend status safely without exposing raw errors", () => {

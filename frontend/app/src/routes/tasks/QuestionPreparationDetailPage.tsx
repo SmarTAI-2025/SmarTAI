@@ -50,6 +50,7 @@ export function QuestionPreparationDetailPage() {
     workflowRevision: taskQuery.data?.workflow_revision,
     sourceKind: "problem",
     displayName: taskQuery.data?.problem_file_name,
+    refreshTask: taskQuery.refetch,
   });
   const [activeQuestionId, setActiveQuestionId] = useState(questionId ?? "");
   const [dirtyKeys, setDirtyKeys] = useState<Set<string>>(new Set());
