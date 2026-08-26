@@ -261,7 +261,7 @@ def _seed_legacy_structured_case(
             model="gpt-test",
             base_url="https://api.openai.com/v1",
         ),
-        master_key="test-suite-provider-master-key",
+        master_key="test-suite-provider-master-key-0123456789abcdef",
     )
     setup = TaskGradingSetup(
         selected_provider_ids=[provider.id],
@@ -408,7 +408,7 @@ def test_structured_submission_without_answers_remains_blocked():
     ) == []
 
 
-def test_legacy_unresolved_identity_remains_blocked_without_source_id():
+def test_legacy_needs_review_without_source_id_does_not_block_saved_answers():
     from backend.services import task_facade
 
     seeded = _seed_legacy_structured_case(identity_status="needs_review")
@@ -417,7 +417,111 @@ def test_legacy_unresolved_identity_remains_blocked_without_source_id():
         owner_id=seeded["owner_id"],
     )
 
-    assert readiness["blocking_issues"] == ["submission_identities_unresolved"]
+    assert readiness == {
+        "ready": True,
+        "blocking_issues": [],
+        "warnings": [],
+    }
+    started = task_facade.start_task_grading(
+        task_id=seeded["assignment_id"],
+        owner_id=seeded["owner_id"],
+        expected_workflow_revision=seeded["workflow"].workflow_revision,
+    )
+    assert started["status"] == "started"
+
+
+def test_changed_grading_setup_stays_revision_locked_during_active_grading():
+    from fastapi.testclient import TestClient
+
+    from backend.auth import create_token
+    from backend.main import app
+    from backend.services import task_facade
+
+    seeded = _seed_legacy_structured_case()
+    task_facade.start_task_grading(
+        task_id=seeded["assignment_id"],
+        owner_id=seeded["owner_id"],
+        expected_workflow_revision=seeded["workflow"].workflow_revision,
+    )
+    locked = seeded["workflow_repository"].get_workflow(
+        seeded["assignment_id"], owner_id=seeded["owner_id"]
+    )
+    assert locked.active_operation == "grading"
+
+    client = TestClient(app)
+    headers = {
+        "Authorization": f"Bearer {create_token(seeded['owner_id'], 'teacher')}"
+    }
+    payload = client.get(
+        f"/tasks/{seeded['assignment_id']}/grading-setup", headers=headers
+    )
+    assert payload.status_code == 200
+    assert "grading_setup_locked" in payload.json()["readiness"]["blocking_issues"]
+
+    changed_setup = {**locked.grading_setup, "teacher_notes": "must not save"}
+    response = client.put(
+        f"/tasks/{seeded['assignment_id']}/grading-setup",
+        headers=headers,
+        json={
+            "expected_workflow_revision": locked.workflow_revision,
+            "grading_setup": changed_setup,
+        },
+    )
+
+    assert response.status_code == 409
+    assert response.json()["error"]["code"] == "grading_setup_locked"
+    unchanged = seeded["workflow_repository"].get_workflow(
+        seeded["assignment_id"], owner_id=seeded["owner_id"]
+    )
+    assert unchanged.workflow_revision == locked.workflow_revision
+    assert unchanged.grading_setup == locked.grading_setup
+
+
+def test_changed_grading_setup_stays_revision_locked_while_workflow_is_busy():
+    from fastapi.testclient import TestClient
+
+    from backend.auth import create_token
+    from backend.main import app
+
+    seeded = _seed_legacy_structured_case()
+    operation, _created = seeded["workflow_repository"].create_operation(
+        assignment_id=seeded["assignment_id"],
+        owner_id=seeded["owner_id"],
+        operation_type="submission_recognition",
+        input_hash="b" * 64,
+    )
+    seeded["workflow_repository"].update_operation(
+        operation.id,
+        owner_id=seeded["owner_id"],
+        expected_attempt=operation.attempt,
+        status="running",
+    )
+    busy = seeded["workflow_repository"].update_workflow(
+        seeded["assignment_id"],
+        owner_id=seeded["owner_id"],
+        active_operation="submission_recognition",
+        active_job_id=operation.id,
+    )
+
+    changed_setup = {**busy.grading_setup, "teacher_notes": "must not save"}
+    response = TestClient(app).put(
+        f"/tasks/{seeded['assignment_id']}/grading-setup",
+        headers={
+            "Authorization": f"Bearer {create_token(seeded['owner_id'], 'teacher')}"
+        },
+        json={
+            "expected_workflow_revision": busy.workflow_revision,
+            "grading_setup": changed_setup,
+        },
+    )
+
+    assert response.status_code == 409
+    assert response.json()["error"]["code"] == "workflow_busy"
+    unchanged = seeded["workflow_repository"].get_workflow(
+        seeded["assignment_id"], owner_id=seeded["owner_id"]
+    )
+    assert unchanged.workflow_revision == busy.workflow_revision
+    assert unchanged.grading_setup == busy.grading_setup
 
 
 def test_projection_sanitizes_legacy_unsafe_diagnostic():

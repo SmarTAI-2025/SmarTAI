@@ -131,7 +131,10 @@ export function GradingSetupPage() {
   const validationMessage = setup && response
     ? validateSetup(setup, response.available_experts, response.knowledge.scope_options, locale)
     : gradingSetupText(locale, "invalidForm");
-  const startBlockingIssue = response?.readiness.blocking_issues.find(
+  const saveBlockingIssue = response?.readiness.blocking_issues.find(
+    (issue) => issue === "workflow_busy" || issue === "grading_setup_locked",
+  );
+  const startBlockingIssue = saveBlockingIssue ?? response?.readiness.blocking_issues.find(
     (issue) => issue !== "grading_setup_required"
       && !(isRegrading && issue === "invalid_state"),
   );
@@ -141,6 +144,7 @@ export function GradingSetupPage() {
   const actionDisabled = !taskId
     || !setup
     || Boolean(validationMessage)
+    || Boolean(saveBlockingIssue)
     || saveSetup.isPending;
 
   function updateSetup(updater: (current: GradingSetup) => GradingSetup) {
@@ -188,8 +192,8 @@ export function GradingSetupPage() {
   }
 
   async function handleSubmit() {
-    if (!taskId || !response || !setup || validationMessage) {
-      setActionError(validationMessage ?? gradingSetupText(locale, "invalidForm"));
+    if (!taskId || !response || !setup || validationMessage || saveBlockingIssue) {
+      setActionError(validationMessage ?? startBlockingMessage ?? gradingSetupText(locale, "invalidForm"));
       return;
     }
 
@@ -255,8 +259,8 @@ export function GradingSetupPage() {
         ) : response && setup ? (
           <form className="flex h-full min-h-0 flex-col" onSubmit={(event) => { event.preventDefault(); void handleSubmit(); }}>
             <fieldset
-              disabled={saveSetup.isPending}
-              className="min-h-0 min-w-0 flex-1 border-0 p-0"
+              disabled={Boolean(saveBlockingIssue) || saveSetup.isPending}
+              className={cn("min-h-0 min-w-0 flex-1 border-0 p-0", saveBlockingIssue && "opacity-70")}
             >
               <div className="min-h-0">
                 <h2 className="text-[20px] font-bold leading-7 text-foreground">
@@ -1015,19 +1019,11 @@ function validateSetup(
 }
 
 function readinessMessage(code: string, locale: Locale): string {
-  if (code === "workflow_busy") {
-    return locale === "zh-CN"
-      ? "任务正在执行其他操作；当前设置仍可保存，待处理完成后再开始批改。"
-      : "Another task operation is running. You can still save these settings, then start grading after it finishes.";
-  }
-  if (code === "grading_setup_locked") {
-    return locale === "zh-CN"
-      ? "当前批改批次已经启动；设置仍可保存供下一次批改使用。"
-      : "The current grading run has started. You can still save settings for the next run.";
-  }
   const keys = {
     provider_required: "noModelsDescription",
     invalid_state: "workflowNotReady",
+    workflow_busy: "workflowBusy",
+    grading_setup_locked: "setupLocked",
     ocr_provider_grading_not_supported: "ocrGradingUnsupported",
   } as const;
   return gradingSetupText(locale, keys[code as keyof typeof keys] ?? "workflowNotReady");

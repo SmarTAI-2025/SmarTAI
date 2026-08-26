@@ -2988,7 +2988,16 @@ def grading_readiness(
                 issues.append("answers_required")
 
             presentation = presentations.get(submission.student_id)
-            if presentation is not None and presentation.identity_status != "matched":
+            # ``source_id`` was added after legacy structured submissions were
+            # already persisted.  A legacy presentation can therefore retain
+            # ``needs_review`` even though its normalized answers are usable.
+            # Only source-backed presentation conflicts are current evidence;
+            # source outcome conflicts above remain fail closed as well.
+            if (
+                presentation is not None
+                and presentation.source_id is not None
+                and presentation.identity_status != "matched"
+            ):
                 issues.append("submission_identities_unresolved")
 
     if any(row.get("unknown_question_ids") for row in source_rows):
