@@ -9,6 +9,7 @@ const sourcePreviewApi = vi.hoisted(() => ({
   getTaskSourceFiles: vi.fn(),
   loadSourcePreviewFile: vi.fn(),
 }));
+const taskRefetch = vi.hoisted(() => vi.fn());
 const studentSource: SourceFileDescriptor = {
   source_id: "source-student-1",
   file_id: "file-student-1",
@@ -63,7 +64,7 @@ const taskData = vi.hoisted(() => ({
 }));
 
 vi.mock("@/api/hooks/tasks", () => ({
-  useTask: () => ({ isLoading: false, isError: false, isSuccess: true, data: taskData, refetch: vi.fn() }),
+  useTask: () => ({ isLoading: false, isError: false, isSuccess: true, data: taskData, refetch: taskRefetch }),
   useUpdateStudentAnswer: () => ({ isPending: false, mutateAsync: vi.fn() }),
   useUpdateStudentIdentity: () => ({ isPending: false, mutateAsync: vi.fn() }),
 }));
@@ -72,6 +73,10 @@ vi.mock("@/components/new-task/NewTaskStepper", () => ({ NewTaskStepper: () => n
 
 vi.mock("@/api/sourcePreview", () => ({
   getTaskSourceFiles: sourcePreviewApi.getTaskSourceFiles,
+  isSourcePreviewCatalogMismatch: (error: unknown) => (
+    typeof error === "object" && error !== null && "reason" in error
+      && (error as { reason: unknown }).reason === "catalog_scope_mismatch"
+  ),
   loadSourcePreviewFile: sourcePreviewApi.loadSourcePreviewFile,
   sourcePreviewErrorCode: () => "source_preview_load_failed",
 }));
@@ -102,6 +107,7 @@ function renderPage() {
 }
 
 beforeEach(() => {
+  taskRefetch.mockReset().mockResolvedValue({ data: taskData });
   sourcePreviewApi.getTaskSourceFiles.mockReset().mockResolvedValue({
     task_id: "task-1",
     workflow_revision: 3,
@@ -152,6 +158,7 @@ describe("StudentAnswerReviewPage source preview", () => {
 
     const panel = await screen.findByTestId("source-preview-panel");
     expect(screen.getByRole("separator", { name: "拖动调整原文件与识别内容宽度" })).toHaveAttribute("aria-valuenow", "50");
+    await waitFor(() => expect(sourcePreviewApi.getTaskSourceFiles).toHaveBeenCalledWith("task-1", 3));
     await waitFor(() => expect(sourcePreviewApi.loadSourcePreviewFile).toHaveBeenCalledWith("task-1", studentSource));
     expect(await within(panel).findByTitle("原文件 · S001-calculus.pdf")).toHaveAttribute("data", "blob:student-source");
     expect(draft).toHaveValue("Unsaved corrected answer");

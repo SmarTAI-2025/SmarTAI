@@ -138,6 +138,7 @@ export function StudentAnswerReviewPage() {
     sourceKind: "submission",
     sourceId: student?.source_id,
     displayName: student?.source_filename,
+    refreshTask: taskQuery.refetch,
   });
 
   useEffect(() => {

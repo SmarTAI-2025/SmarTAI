@@ -7,6 +7,7 @@ import { QuestionPreparationDetailPage } from "./QuestionPreparationDetailPage";
 
 const testState = vi.hoisted(() => ({ locale: "zh-CN" }));
 const mutateAsync = vi.hoisted(() => vi.fn());
+const taskRefetch = vi.hoisted(() => vi.fn());
 const sourcePreviewApi = vi.hoisted(() => ({
   getTaskSourceFiles: vi.fn(),
   loadSourcePreviewFile: vi.fn(),
@@ -96,6 +97,7 @@ vi.mock("@/api/hooks/tasks", () => ({
     isLoading: false,
     isError: false,
     data: taskData,
+    refetch: taskRefetch,
   }),
   useUpdateProblem: () => ({ isPending: false, mutateAsync }),
 }));
@@ -106,6 +108,10 @@ vi.mock("@/components/new-task/NewTaskStepper", () => ({
 
 vi.mock("@/api/sourcePreview", () => ({
   getTaskSourceFiles: sourcePreviewApi.getTaskSourceFiles,
+  isSourcePreviewCatalogMismatch: (error: unknown) => (
+    typeof error === "object" && error !== null && "reason" in error
+      && (error as { reason: unknown }).reason === "catalog_scope_mismatch"
+  ),
   loadSourcePreviewFile: sourcePreviewApi.loadSourcePreviewFile,
   sourcePreviewErrorCode: () => "source_preview_load_failed",
 }));
@@ -149,6 +155,8 @@ function renderPage(initialEntry = "/tasks/task-1/questions/Q1/content") {
 beforeEach(() => {
   testState.locale = "zh-CN";
   mutateAsync.mockReset();
+  taskData.workflow_revision = 7;
+  taskRefetch.mockReset().mockResolvedValue({ data: taskData });
   sourcePreviewApi.getTaskSourceFiles.mockReset().mockResolvedValue({
     task_id: "task-1",
     workflow_revision: 7,
@@ -190,9 +198,42 @@ describe("QuestionPreparationDetailPage navigation", () => {
     await user.click(await screen.findByRole("button", { name: "查看题目原文件" }));
     expect(await screen.findByTestId("source-preview-panel")).toBeInTheDocument();
     expect(screen.getByRole("separator", { name: "拖动调整原文件与识别内容宽度" })).toHaveAttribute("aria-valuenow", "50");
-    await waitFor(() => expect(sourcePreviewApi.getTaskSourceFiles).toHaveBeenCalledWith("task-1"));
+    await waitFor(() => expect(sourcePreviewApi.getTaskSourceFiles).toHaveBeenCalledWith("task-1", 7));
     await waitFor(() => expect(sourcePreviewApi.loadSourcePreviewFile).toHaveBeenCalledWith("task-1", problemSource));
     expect(await screen.findByTitle("原文件 · geometry-problems.pdf")).toHaveAttribute("data", "blob:problem-source");
+  });
+
+  it("refreshes the task and adopts only the catalog for the new workflow revision", async () => {
+    const refreshedSource: SourceFileDescriptor = {
+      ...problemSource,
+      source_id: "source-problem-2",
+      file_id: "file-problem-2",
+      display_name: "geometry-problems-v2.pdf",
+    };
+    sourcePreviewApi.getTaskSourceFiles.mockImplementation(async (_taskId, expectedWorkflowRevision) => {
+      if (expectedWorkflowRevision === 7) {
+        throw { code: "source_preview_load_failed", reason: "catalog_scope_mismatch" };
+      }
+      return {
+        task_id: "task-1",
+        workflow_revision: 8,
+        problem_source: refreshedSource,
+        submission_sources: {},
+      };
+    });
+    taskRefetch.mockImplementation(async () => {
+      taskData.workflow_revision = 8;
+      return { data: taskData };
+    });
+    const user = userEvent.setup();
+    renderPage();
+
+    await waitFor(() => expect(taskRefetch).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(sourcePreviewApi.getTaskSourceFiles).toHaveBeenCalledWith("task-1", 8));
+    await user.click(screen.getByRole("button", { name: "查看题目原文件" }));
+
+    await waitFor(() => expect(sourcePreviewApi.loadSourcePreviewFile).toHaveBeenCalledWith("task-1", refreshedSource));
+    expect(sourcePreviewApi.loadSourcePreviewFile).not.toHaveBeenCalledWith("task-1", problemSource);
   });
 
   it("uses a bounded responsive question rail and preserves the full label on hover", async () => {
