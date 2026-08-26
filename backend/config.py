@@ -111,6 +111,26 @@ class Settings(BaseSettings):
     custom_provider_verification_timeout_seconds: int = 30
     custom_provider_verification_cooldown_seconds: int = 5
     custom_provider_max_response_bytes: int = 4 * 1024 * 1024
+    # Timeout for individual custom-provider (SafeRelay) LLM calls.  Some free
+    # relay endpoints (e.g. campus relays) silently hang on larger requests,
+    # while `llm_timeout` (600s) would otherwise let a single call block the
+    # whole question-preparation job for ten minutes.  A separate, shorter cap
+    # makes such endpoints fail into the normal retry/error flow instead of
+    # appearing to spin forever.  0 disables the override and falls back to
+    # `llm_timeout`.
+    custom_provider_timeout_seconds: int = int(
+        os.getenv("SMARTAI_CUSTOM_PROVIDER_TIMEOUT_SECONDS", "120")
+    )
+    # Problem extraction is normally a single LLM call whose body grows with
+    # the source text.  Some free relay endpoints hang on larger JSON bodies,
+    # so `extract_problems` chunks the source text into pieces of at most
+    # `source_chunk_chars` characters (with `source_chunk_overlap_chars`
+    # characters of overlap) and issues one bounded call per chunk, then merges
+    # the problems.  0 disables chunking (single call, legacy behaviour).
+    source_chunk_chars: int = int(os.getenv("SMARTAI_SOURCE_CHUNK_CHARS", "1200"))
+    source_chunk_overlap_chars: int = int(
+        os.getenv("SMARTAI_SOURCE_CHUNK_OVERLAP_CHARS", "200")
+    )
 
     @property
     def custom_provider_endpoints_available(self) -> bool:
