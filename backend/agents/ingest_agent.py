@@ -23,6 +23,7 @@ from langchain_core.messages import SystemMessage, HumanMessage
 from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel, Field
 
+from backend.config import settings
 from backend.models import (
     ProblemSet,
     StudentSubmission,
@@ -214,12 +215,95 @@ async def extract_problems(
         )
 
     confirmed_candidates = confirmed_candidates or []
+
+    chunk_limit = int(settings.source_chunk_chars or 0)
+    overlap = max(0, int(settings.source_chunk_overlap_chars or 0))
+    if chunk_limit > 0 and len(text) > chunk_limit:
+        chunk_texts = _chunk_problem_text(text, chunk_limit, overlap)
+        if reporter:
+            await reporter._emit_message(
+                f"Source text is large ({len(text)} chars); splitting into "
+                f"{len(chunk_texts)} extraction chunks..."
+            )
+        merged: Dict[str, Dict[str, Any]] = {}
+        global_index = 0
+        for index, chunk_text in enumerate(chunk_texts, start=1):
+            if reporter:
+                await reporter._emit_message(
+                    f"Extracting questions — chunk {index}/{len(chunk_texts)}"
+                )
+            chunk_problems = await _extract_problems_call(
+                chunk_text,
+                provider,
+                reporter=reporter,
+                structure_mode=structure_mode,
+                extraction_hint=extraction_hint,
+                confirmed_candidates=confirmed_candidates,
+                manage_progress_lifecycle=False,
+            )
+            for q in sorted(chunk_problems.values(), key=lambda item: str(item.get("q_id", ""))):
+                global_index += 1
+                item = dict(q)
+                item["q_id"] = f"q{global_index}"
+                merged[item["q_id"]] = item
+        prob_dict = merged
+    else:
+        prob_dict = await _extract_problems_call(
+            text,
+            provider,
+            reporter=reporter,
+            structure_mode=structure_mode,
+            extraction_hint=extraction_hint,
+            confirmed_candidates=confirmed_candidates,
+            manage_progress_lifecycle=manage_progress_lifecycle,
+        )
+
+    if not prob_dict:
+        if reporter and manage_progress_lifecycle:
+            await reporter.set_error("LLM did not extract any problems from the text.")
+        raise ValueError("LLM did not extract any problems from the text.")
+
+    problem_store.clear()
+    problem_store.update(prob_dict)
+    logger.info(f"extract_problems: stored {len(prob_dict)} problems")
+
+    if reporter:
+        await reporter.set_totals(students=0, questions=len(prob_dict))
+        if manage_progress_lifecycle:
+            await reporter.set_stage_progress(
+                "completed",
+                total_steps=4,
+                completed_steps=4,
+                message="Problem recognition completed.",
+            )
+            await reporter.set_phase("done")
+
+    return prob_dict
+
+
+async def _extract_problems_call(
+    text: str,
+    provider: BaseProvider,
+    reporter: Optional["ProgressReporter"] = None,
+    *,
+    structure_mode: str = "organized",
+    extraction_hint: str = "",
+    confirmed_candidates: Optional[List[Dict[str, Any]]] = None,
+    manage_progress_lifecycle: bool = True,
+) -> Dict[str, Dict[str, Any]]:
+    """Run one bounded LLM extraction call on a single chunk of source text.
+
+    Split out of ``extract_problems`` so large sources can be processed as
+    multiple small calls (workaround for relays that hang on bigger bodies)
+    while sharing the exact prompt and parsing contract.
+    """
+    confirmed_candidates = confirmed_candidates or []
     if structure_mode == "extract_from_source":
         candidate_context = [
             {
                 "question_number": item.get("question_number", ""),
                 "preview": item.get("preview", ""),
-                "line_number": item.get("line_number"),
+                "line_number": item.get("line_number", None),
             }
             for item in confirmed_candidates
         ]
@@ -279,23 +363,41 @@ async def extract_problems(
         raise ValueError("LLM did not extract any problems from the text.")
 
     prob_dict = {q.q_id: q.model_dump() for q in parsed.problems}
-
-    problem_store.clear()
-    problem_store.update(prob_dict)
     logger.info(f"extract_problems: stored {len(prob_dict)} problems")
-
-    if reporter:
-        await reporter.set_totals(students=0, questions=len(prob_dict))
-        if manage_progress_lifecycle:
-            await reporter.set_stage_progress(
-                "completed",
-                total_steps=4,
-                completed_steps=4,
-                message="Problem recognition completed.",
-            )
-            await reporter.set_phase("done")
-
     return prob_dict
+
+
+def _chunk_problem_text(
+    text: str,
+    chunk_limit: int,
+    overlap: int,
+) -> List[str]:
+    """Split long source text into bounded, paragraph-aligned chunks.
+
+    Avoids cutting mid-stem where possible by preferring a newline boundary
+    near the limit, and keeps a small overlap so a question spanning a split
+    still appears in at least one chunk.
+    """
+    text = text.strip()
+    if not text:
+        return []
+    chunks: List[str] = []
+    start = 0
+    length = len(text)
+    while start < length:
+        end = min(start + chunk_limit, length)
+        if end < length:
+            newline = text.rfind("\n", start + max(chunk_limit // 2, 1), end)
+            if newline > start:
+                end = newline + 1
+            next_start = max(start + 1, end - overlap)
+        else:
+            next_start = length
+        chunks.append(text[start:end].strip())
+        if next_start <= start:
+            next_start = start + 1
+        start = next_start
+    return [c for c in chunks if c]
 
 
 # ─── Student answer parsing ──────────────────────────────────────────────────

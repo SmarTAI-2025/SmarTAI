@@ -28,6 +28,7 @@ from tenacity import (
 
 from backend.config import settings
 from backend.llm.providers import BaseProvider, LLMResponse
+from backend.llm.endpoint_policy import ProviderEndpointError
 
 logger = logging.getLogger(__name__)
 
@@ -113,6 +114,28 @@ def _classify_exception(e: Exception) -> Exception:
     """
     if getattr(e, "retryable", True) is False:
         return PermanentLLMError("non_retryable_provider_limit")
+
+    # Endpoint safety-policy rejections (non-public address, host not allowed,
+    # DNS/config policy) are deterministic configuration/environment errors:
+    # retrying with backoff merely burns several attempts plus 1s/2s/4s waits
+    # before the same refusal repeats. Fail fast so the caller surfaces the
+    # concrete code instead of appearing to hang on a slow model call.
+    if isinstance(e, ProviderEndpointError):
+        code = str(e).strip()
+        if code in {
+            "provider_endpoint_non_public_address",
+            "provider_endpoint_host_not_allowed",
+            "provider_endpoint_https_required",
+            "provider_endpoint_port_not_allowed",
+            "provider_endpoint_invalid",
+            "provider_base_url_not_allowed",
+            "provider_wire_protocol_not_supported",
+            "provider_wire_protocol_requires_custom_endpoint",
+            "provider_model_invalid",
+            "provider_endpoint_protocol_mismatch",
+            "provider_endpoint_redirect_blocked",
+        }:
+            return PermanentLLMError(code)
 
     msg = str(e)
     lower = msg.lower()

@@ -642,12 +642,20 @@ class SafeRelayProvider(BaseProvider):
         )
 
     def _build_client_sync(self) -> Any:
+        timeout_seconds = (
+            float(settings.llm_timeout)
+            if not settings.custom_provider_timeout_seconds
+            else min(
+                float(settings.llm_timeout),
+                float(settings.custom_provider_timeout_seconds),
+            )
+        )
         sync_client, async_client = build_safe_provider_clients(
             effective_provider_base_url(
                 self.config.provider_type,
                 self.config.base_url,
             ),
-            timeout_seconds=float(settings.llm_timeout),
+            timeout_seconds=timeout_seconds,
             max_response_bytes=settings.custom_provider_max_response_bytes,
             allowed_target_url=self._target_url,
         )

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import ipaddress
+import logging
 import re
 import socket
 import ssl
@@ -19,6 +20,8 @@ from backend.llm.provider_catalog import (
     WIRE_PROTOCOLS,
     effective_wire_protocol,
 )
+
+logger = logging.getLogger(__name__)
 
 
 Resolver = Callable[[str, int], Iterable[str]]
@@ -310,6 +313,34 @@ def _resolve_for_connection(
     )
 
 
+def _resolve_for_connection_soft(
+    endpoint: ResolvedEndpoint,
+    resolver: Resolver | None,
+) -> ResolvedEndpoint | None:
+    """Re-resolve at socket time, but degrade softly on transient DNS answers.
+
+    ``_Pinned*Backend`` calls this when ``revalidate`` is enabled.  A fresh
+    answer that fails the public-address policy (e.g. a campus/CGNAT resolver
+    transiently returns the configured backend's RFC-6598 ``100.64/10`` or a
+    private IPv6 alongside the public A record) must not tear down a connection
+    to an endpoint that was already validated as public when the client was
+    built.  Returning ``None`` keeps the previously approved public address
+    set — the socket still never connects to a private address, so the
+    security invariant is unchanged; only the durability against flapping
+    resolvers improves.
+    """
+    try:
+        return _resolve_for_connection(endpoint, resolver)
+    except ProviderEndpointError as exc:
+        logger.warning(
+            "Endpoint revalidation degraded to previous public addresses; "
+            "endpoint=%s code=%s",
+            endpoint.hostname,
+            exc.code,
+        )
+        return None
+
+
 class _PinnedSyncBackend(httpcore.NetworkBackend):
     def __init__(
         self,
@@ -332,11 +363,11 @@ class _PinnedSyncBackend(httpcore.NetworkBackend):
         local_address: str | None = None,
         socket_options: Iterable[httpcore.SOCKET_OPTION] | None = None,
     ) -> httpcore.NetworkStream:
-        endpoint = (
-            _resolve_for_connection(self.endpoint, self.resolver)
-            if self.revalidate
-            else self.endpoint
-        )
+        endpoint = self.endpoint
+        if self.revalidate:
+            fresh = _resolve_for_connection_soft(self.endpoint, self.resolver)
+            if fresh is not None:
+                endpoint = fresh
         if host.lower().rstrip(".") != endpoint.hostname or port != 443:
             raise ProviderEndpointError("provider_endpoint_host_not_allowed")
         last_error: BaseException | None = None
@@ -384,15 +415,15 @@ class _PinnedAsyncBackend(httpcore.AsyncNetworkBackend):
         local_address: str | None = None,
         socket_options: Iterable[httpcore.SOCKET_OPTION] | None = None,
     ) -> httpcore.AsyncNetworkStream:
-        endpoint = (
-            await asyncio.to_thread(
-                _resolve_for_connection,
+        endpoint = self.endpoint
+        if self.revalidate:
+            fresh = await asyncio.to_thread(
+                _resolve_for_connection_soft,
                 self.endpoint,
                 self.resolver,
             )
-            if self.revalidate
-            else self.endpoint
-        )
+            if fresh is not None:
+                endpoint = fresh
         if host.lower().rstrip(".") != endpoint.hostname or port != 443:
             raise ProviderEndpointError("provider_endpoint_host_not_allowed")
         last_error: BaseException | None = None

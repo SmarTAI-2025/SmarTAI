@@ -17,6 +17,17 @@ def _write(payload: dict) -> None:
 
 
 def main() -> int:
+    # On Windows the subprocess's stdout pipe inherits the system ANSI/GBK
+    # codepage.  We always emit UTF-8 JSON (ensure_ascii=False), so ask the
+    # interpreter for UTF-8 stdio to prevent UnicodeEncodeError from silently
+    # degrading into a "{status: invalid}" payload.
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is not None:
+            try:
+                reconfigure(encoding="utf-8", errors="replace")
+            except Exception:
+                pass
     try:
         if sys.argv[1] == "inspect-pdf":
             max_pages = int(sys.argv[2])
