@@ -193,6 +193,97 @@ def _seed_source_case(second_status: str | None):
     }
 
 
+def _seed_legacy_structured_case(
+    *,
+    with_answers: bool = True,
+    identity_status: str = "matched",
+):
+    from backend.db import (
+        assignment_repository,
+        course_repository,
+        grading_repository,
+        submission_repository,
+        workflow_repository,
+    )
+    from backend.db.models import UserRecord
+    from backend.db.provider_repository import upsert_provider_config
+    from backend.db.session import session_scope
+    from backend.models import ProviderConfig, TaskGradingSetup
+    from backend.services import task_facade
+
+    owner_id = "legacy-readiness-owner"
+    with session_scope() as session:
+        session.add(UserRecord(
+            id=owner_id,
+            username=owner_id,
+            password_hash="hash",
+            role="teacher",
+            is_active=True,
+        ))
+    course = course_repository.create_course(
+        teacher_id=owner_id,
+        name="Legacy readiness",
+    )
+    assignment = assignment_repository.create_assignment(
+        teacher_id=owner_id,
+        course_id=course.id,
+        name="Legacy readiness",
+    )
+    assignment_repository.add_question(
+        assignment_id=assignment.id,
+        teacher_id=owner_id,
+        q_id="q1",
+        order_index=0,
+        type="short",
+        stem="Question",
+        max_score=10,
+    )
+    workflow = workflow_repository.ensure_workflow(
+        assignment_id=assignment.id,
+        owner_id=owner_id,
+    )
+    student = _student("", "S001", identity_status=identity_status)
+    if not with_answers:
+        student["stu_ans"] = []
+    task_facade._commit_imported_submissions(
+        task_id=assignment.id,
+        owner_id=owner_id,
+        course_id=course.id,
+        students=[student],
+        expected_workflow_revision=workflow.workflow_revision,
+        submission_file_name=None,
+    )
+    provider = upsert_provider_config(
+        owner_id,
+        ProviderConfig(
+            provider_type="openai",
+            api_key="legacy-provider-secret",
+            model="gpt-test",
+            base_url="https://api.openai.com/v1",
+        ),
+        master_key="test-suite-provider-master-key-0123456789abcdef",
+    )
+    setup = TaskGradingSetup(
+        selected_provider_ids=[provider.id],
+        primary_provider_id=provider.id,
+        knowledge_scope="none",
+    )
+    workflow = workflow_repository.update_workflow(
+        assignment.id,
+        owner_id=owner_id,
+        grading_setup=setup.model_dump(mode="json"),
+        grading_setup_fingerprint="approved",
+    )
+    return {
+        "owner_id": owner_id,
+        "assignment_id": assignment.id,
+        "workflow": workflow,
+        "grading_repository": grading_repository,
+        "submission_repository": submission_repository,
+        "workflow_repository": workflow_repository,
+    }
+
+
 @pytest.mark.parametrize(
     ("second_status", "blocker"),
     [
@@ -247,6 +338,190 @@ def test_stale_preflight_revision_cannot_create_grading_run():
         seeded["assignment_id"],
         actor_id=seeded["owner_id"],
     ) == []
+
+
+def test_legacy_structured_inputs_without_source_evidence_can_start_through_grade_endpoint():
+    from fastapi.testclient import TestClient
+
+    from backend.auth import create_token
+    from backend.main import app
+    from backend.services import task_facade
+
+    seeded = _seed_legacy_structured_case()
+    readiness = task_facade.grading_readiness(
+        task_id=seeded["assignment_id"],
+        owner_id=seeded["owner_id"],
+    )
+
+    assert readiness == {
+        "ready": True,
+        "blocking_issues": [],
+        "warnings": [],
+    }
+    response = TestClient(app).post(
+        f"/tasks/{seeded['assignment_id']}/grade",
+        headers={
+            "Authorization": (
+                f"Bearer {create_token(seeded['owner_id'], 'teacher')}"
+            )
+        },
+        json={
+            "expected_workflow_revision": seeded["workflow"].workflow_revision,
+        },
+    )
+    assert response.status_code == 200
+    started = response.json()
+    assert started["status"] == "started"
+
+    frozen = seeded["workflow_repository"].get_run_setup(started["job_id"])
+    submissions = seeded["submission_repository"].list_submissions(
+        seeded["assignment_id"],
+        actor_id=seeded["owner_id"],
+    )
+    assert frozen is not None
+    assert frozen.input_manifest["submission_revision_ids"] == [
+        submissions[0].current_revision_id
+    ]
+
+
+def test_structured_submission_without_answers_remains_blocked():
+    from backend.domain.errors import InvalidTransition
+    from backend.services import task_facade
+
+    seeded = _seed_legacy_structured_case(with_answers=False)
+    readiness = task_facade.grading_readiness(
+        task_id=seeded["assignment_id"],
+        owner_id=seeded["owner_id"],
+    )
+
+    assert readiness["blocking_issues"] == ["answers_required"]
+    with pytest.raises(InvalidTransition) as exc:
+        task_facade.start_task_grading(
+            task_id=seeded["assignment_id"],
+            owner_id=seeded["owner_id"],
+            expected_workflow_revision=seeded["workflow"].workflow_revision,
+        )
+    assert exc.value.code == "answers_required"
+    assert seeded["grading_repository"].list_runs_for_assignment(
+        seeded["assignment_id"],
+        actor_id=seeded["owner_id"],
+    ) == []
+
+
+def test_legacy_needs_review_without_source_id_does_not_block_saved_answers():
+    from backend.services import task_facade
+
+    seeded = _seed_legacy_structured_case(identity_status="needs_review")
+    readiness = task_facade.grading_readiness(
+        task_id=seeded["assignment_id"],
+        owner_id=seeded["owner_id"],
+    )
+
+    assert readiness == {
+        "ready": True,
+        "blocking_issues": [],
+        "warnings": [],
+    }
+    started = task_facade.start_task_grading(
+        task_id=seeded["assignment_id"],
+        owner_id=seeded["owner_id"],
+        expected_workflow_revision=seeded["workflow"].workflow_revision,
+    )
+    assert started["status"] == "started"
+
+
+def test_changed_grading_setup_stays_revision_locked_during_active_grading():
+    from fastapi.testclient import TestClient
+
+    from backend.auth import create_token
+    from backend.main import app
+    from backend.services import task_facade
+
+    seeded = _seed_legacy_structured_case()
+    task_facade.start_task_grading(
+        task_id=seeded["assignment_id"],
+        owner_id=seeded["owner_id"],
+        expected_workflow_revision=seeded["workflow"].workflow_revision,
+    )
+    locked = seeded["workflow_repository"].get_workflow(
+        seeded["assignment_id"], owner_id=seeded["owner_id"]
+    )
+    assert locked.active_operation == "grading"
+
+    client = TestClient(app)
+    headers = {
+        "Authorization": f"Bearer {create_token(seeded['owner_id'], 'teacher')}"
+    }
+    payload = client.get(
+        f"/tasks/{seeded['assignment_id']}/grading-setup", headers=headers
+    )
+    assert payload.status_code == 200
+    assert "grading_setup_locked" in payload.json()["readiness"]["blocking_issues"]
+
+    changed_setup = {**locked.grading_setup, "teacher_notes": "must not save"}
+    response = client.put(
+        f"/tasks/{seeded['assignment_id']}/grading-setup",
+        headers=headers,
+        json={
+            "expected_workflow_revision": locked.workflow_revision,
+            "grading_setup": changed_setup,
+        },
+    )
+
+    assert response.status_code == 409
+    assert response.json()["error"]["code"] == "grading_setup_locked"
+    unchanged = seeded["workflow_repository"].get_workflow(
+        seeded["assignment_id"], owner_id=seeded["owner_id"]
+    )
+    assert unchanged.workflow_revision == locked.workflow_revision
+    assert unchanged.grading_setup == locked.grading_setup
+
+
+def test_changed_grading_setup_stays_revision_locked_while_workflow_is_busy():
+    from fastapi.testclient import TestClient
+
+    from backend.auth import create_token
+    from backend.main import app
+
+    seeded = _seed_legacy_structured_case()
+    operation, _created = seeded["workflow_repository"].create_operation(
+        assignment_id=seeded["assignment_id"],
+        owner_id=seeded["owner_id"],
+        operation_type="submission_recognition",
+        input_hash="b" * 64,
+    )
+    seeded["workflow_repository"].update_operation(
+        operation.id,
+        owner_id=seeded["owner_id"],
+        expected_attempt=operation.attempt,
+        status="running",
+    )
+    busy = seeded["workflow_repository"].update_workflow(
+        seeded["assignment_id"],
+        owner_id=seeded["owner_id"],
+        active_operation="submission_recognition",
+        active_job_id=operation.id,
+    )
+
+    changed_setup = {**busy.grading_setup, "teacher_notes": "must not save"}
+    response = TestClient(app).put(
+        f"/tasks/{seeded['assignment_id']}/grading-setup",
+        headers={
+            "Authorization": f"Bearer {create_token(seeded['owner_id'], 'teacher')}"
+        },
+        json={
+            "expected_workflow_revision": busy.workflow_revision,
+            "grading_setup": changed_setup,
+        },
+    )
+
+    assert response.status_code == 409
+    assert response.json()["error"]["code"] == "workflow_busy"
+    unchanged = seeded["workflow_repository"].get_workflow(
+        seeded["assignment_id"], owner_id=seeded["owner_id"]
+    )
+    assert unchanged.workflow_revision == busy.workflow_revision
+    assert unchanged.grading_setup == busy.grading_setup
 
 
 def test_projection_sanitizes_legacy_unsafe_diagnostic():

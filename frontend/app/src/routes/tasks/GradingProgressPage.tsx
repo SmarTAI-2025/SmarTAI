@@ -63,6 +63,7 @@ export function GradingProgressPage() {
   }
 
   const refresh = () => {
+    retryGrading.reset();
     void Promise.all([taskQuery.refetch(), progressQuery.refetch()]);
   };
 
@@ -92,6 +93,7 @@ export function GradingProgressPage() {
       locale,
       phase: progress?.current_step ?? progress?.phase ?? "grading",
       jobId: task?.last_failed_job_id ?? task?.grading_job_id,
+      taskId,
       returnTo: `/tasks/${taskId}/grading/progress`,
     })
     : null;
@@ -128,16 +130,16 @@ export function GradingProgressPage() {
               locale={locale}
               className="min-h-[300px]"
               primaryAction={recoveryInfo.actionKind === "byok" ? undefined : {
-                label: recoveryInfo.actionKind === "refresh" || recoveryInfo.actionKind === "adjust_experts"
-                  ? recoveryInfo.actionLabel
-                  : copy(locale, retryGrading.isPending ? "retrying" : "retry"),
+                label: recoveryInfo.actionKind === "retry" && !recoveryInfo.actionHref
+                  ? copy(locale, retryGrading.isPending ? "retrying" : "retry")
+                  : recoveryInfo.actionLabel,
                 href: recoveryInfo.actionKind === "adjust_experts"
                   ? getTaskGradingSetupHref(taskId, `/tasks/${taskId}/grading/progress`)
-                  : undefined,
-                onClick: recoveryInfo.actionKind === "refresh"
-                  ? refresh
-                  : recoveryInfo.actionKind === "adjust_experts"
-                    ? undefined
+                  : recoveryInfo.actionHref,
+                onClick: recoveryInfo.actionHref || recoveryInfo.actionKind === "adjust_experts"
+                  ? undefined
+                  : recoveryInfo.actionKind === "refresh"
+                    ? refresh
                     : () => void handleRetry(),
                 busy: retryGrading.isPending || taskQuery.isFetching || progressQuery.isFetching,
               }}
