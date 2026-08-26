@@ -6,6 +6,7 @@ const WORKFLOW_REVISION_CONFLICT_CODES = new Set([
   "stale_revision",
   "task_workflow_changed",
   "version_conflict",
+  "workflow_revision_conflict",
 ]);
 
 export function isWorkflowRevisionConflictCode(code: string | null | undefined): boolean {
@@ -210,6 +211,7 @@ export interface RecoverableErrorContext {
   locale?: Locale;
   phase?: string;
   jobId?: string | null;
+  taskId?: string;
   returnTo?: string;
 }
 
@@ -304,6 +306,10 @@ export function classifyRecoverableError(
   const technicalDetails = buildTechnicalDetails(apiError.status, code, detail, context, locale);
   const retryAfterSeconds = apiError.retryAfterSeconds;
   const returnTo = context.returnTo?.trim();
+  const taskId = context.taskId?.trim();
+  const taskHref = (suffix: string) => taskId
+    ? `/tasks/${encodeURIComponent(taskId)}${suffix}`
+    : undefined;
 
   if (code === "ocr_provider_grading_not_supported") {
     return {
@@ -357,6 +363,163 @@ export function classifyRecoverableError(
         locale,
         "题目、作答或本次批改快照已不再匹配。任务原资料仍然保留；请刷新后重新启动批改，以当前内容生成新的批次。",
         "The questions, submissions, or grading snapshot no longer match. Source data is preserved. Refresh and start a new run from the current content.",
+      ),
+      actionLabel: tx(locale, "刷新任务状态", "Refresh task state"),
+      actionKind: "refresh",
+      tone: "warning",
+      technicalDetails,
+    };
+  }
+
+  if (code === "grading_setup_required") {
+    return {
+      title: tx(locale, "批改设置尚未保存", "Grading settings have not been saved"),
+      description: tx(
+        locale,
+        "任务的题目和作答仍然保留。请先保存本次批改设置，再从批改摘要确认启动。",
+        "The task questions and submissions are preserved. Save the grading settings, then confirm the run from the grading summary.",
+      ),
+      actionLabel: tx(locale, "打开批改设置", "Open grading settings"),
+      actionHref: taskHref("/grading-setup"),
+      actionKind: "adjust_experts",
+      tone: "warning",
+      technicalDetails,
+    };
+  }
+
+  if (code === "questions_required") {
+    return {
+      title: tx(locale, "当前任务没有可批改题目", "This task has no questions to grade"),
+      description: tx(
+        locale,
+        "批改没有启动，因为当前任务缺少结构化题目。请返回题目上传与校对阶段补齐题目。",
+        "Grading did not start because the task has no structured questions. Return to question upload and review to prepare them.",
+      ),
+      actionLabel: tx(locale, "返回上传题目", "Return to question upload"),
+      actionHref: taskHref("/upload/problems"),
+      actionKind: "reupload",
+      tone: "warning",
+      technicalDetails,
+    };
+  }
+
+  if (code === "submissions_required") {
+    return {
+      title: tx(locale, "当前任务没有可批改作答", "This task has no submissions to grade"),
+      description: tx(
+        locale,
+        "批改没有启动，因为当前任务缺少学生作答。请返回作答上传阶段添加作答。",
+        "Grading did not start because the task has no student submissions. Return to submission upload to add them.",
+      ),
+      actionLabel: tx(locale, "返回上传作答", "Return to submission upload"),
+      actionHref: taskHref("/submissions/upload"),
+      actionKind: "reupload",
+      tone: "warning",
+      technicalDetails,
+    };
+  }
+
+  if (code === "answers_required") {
+    return {
+      title: tx(locale, "学生作答尚未准备完整", "Student answers are not ready"),
+      description: tx(
+        locale,
+        "至少一名学生缺少当前结构化作答，系统没有创建空批改批次。请返回作答校对页面检查识别结果。",
+        "At least one student has no current structured answers, so no empty grading run was created. Return to submission review and check the recognition result.",
+      ),
+      actionLabel: tx(locale, "检查学生作答", "Review student submissions"),
+      actionHref: taskHref("/submissions"),
+      actionKind: "reselect",
+      tone: "warning",
+      technicalDetails,
+    };
+  }
+
+  if (code === "submission_sources_pending") {
+    return {
+      title: tx(locale, "学生作答仍在识别", "Submission recognition is still running"),
+      description: tx(
+        locale,
+        "批改没有启动，因为仍有作答来源正在处理。请查看识别进度，全部完成后再启动批改。",
+        "Grading did not start because some submission sources are still processing. Check recognition progress and start grading after they finish.",
+      ),
+      actionLabel: tx(locale, "查看识别进度", "View recognition progress"),
+      actionHref: taskHref("/submissions/progress"),
+      actionKind: "refresh",
+      tone: "warning",
+      technicalDetails,
+    };
+  }
+
+  if (code === "submission_sources_failed") {
+    return {
+      title: tx(locale, "部分学生作答识别失败", "Some submissions failed recognition"),
+      description: tx(
+        locale,
+        "批改没有启动，也没有丢弃已保存的任务资料。请返回作答识别页面查看失败文件和具体原因。",
+        "Grading did not start, and saved task data was not discarded. Return to submission recognition to inspect the failed files and exact reasons.",
+      ),
+      actionLabel: tx(locale, "查看识别失败", "Review recognition failures"),
+      actionHref: taskHref("/submissions/progress"),
+      actionKind: "reselect",
+      tone: "danger",
+      technicalDetails,
+    };
+  }
+
+  if (code === "submission_identities_unresolved") {
+    return {
+      title: tx(locale, "仍有学生身份待确认", "Some student identities are unresolved"),
+      description: tx(
+        locale,
+        "为避免把成绩记到错误学生，批改没有启动。请返回作答校对并确认学生身份。",
+        "Grading did not start to avoid assigning results to the wrong student. Return to submission review and confirm student identities.",
+      ),
+      actionLabel: tx(locale, "校对学生身份", "Review student identities"),
+      actionHref: taskHref("/submissions"),
+      actionKind: "reselect",
+      tone: "warning",
+      technicalDetails,
+    };
+  }
+
+  if (code === "submission_source_evidence_missing") {
+    return {
+      title: tx(locale, "作答状态需要重新确认", "The submission state needs confirmation"),
+      description: tx(
+        locale,
+        "服务器返回了旧版来源凭证错误。请刷新任务状态；若结构化题目和作答仍在，可直接重新尝试批改，无需仅为补凭证而重传文件。",
+        "The server returned a legacy source-evidence error. Refresh the task; if structured questions and answers remain, retry grading without re-uploading files only to restore evidence.",
+      ),
+      actionLabel: tx(locale, "刷新任务状态", "Refresh task state"),
+      actionKind: "refresh",
+      tone: "warning",
+      technicalDetails,
+    };
+  }
+
+  if (code === "workflow_busy" || normalized.includes("workflow_busy")) {
+    return {
+      title: tx(locale, "任务仍在处理", "The task is still processing"),
+      description: tx(
+        locale,
+        "另一阶段仍在运行，系统没有重复启动批改。请等待当前处理完成后刷新。",
+        "Another stage is still running, so SmarTAI did not start duplicate grading. Wait for it to finish, then refresh.",
+      ),
+      actionLabel: tx(locale, "刷新任务状态", "Refresh task state"),
+      actionKind: "refresh",
+      tone: "warning",
+      technicalDetails,
+    };
+  }
+
+  if (code === "already_running" || normalized.includes("already_running")) {
+    return {
+      title: tx(locale, "批改已经在运行", "Grading is already running"),
+      description: tx(
+        locale,
+        "系统已找到当前批改批次，没有重复创建任务。刷新后可继续查看同一批次。",
+        "SmarTAI found the active grading run and did not create a duplicate. Refresh to continue viewing the same run.",
       ),
       actionLabel: tx(locale, "刷新任务状态", "Refresh task state"),
       actionKind: "refresh",
@@ -733,10 +896,9 @@ export function classifyRecoverableError(
   }
 
   if (
-    apiError.status === 409
+    isWorkflowRevisionConflictCode(code)
     || normalized.includes("stale_revision")
-    || normalized.includes("workflow_busy")
-    || normalized.includes("already_running")
+    || normalized.includes("workflow_revision_conflict")
   ) {
     return {
       title: tx(locale, "任务状态已经变化", "The task state has changed"),

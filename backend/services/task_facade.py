@@ -2962,28 +2962,33 @@ def grading_readiness(
         issues.append("workflow_busy")
 
     if submissions:
-        if not workflow.parse_job_id or source_summary["uploaded"] == 0:
-            issues.append("submission_source_evidence_missing")
-        else:
-            if source_summary["pending"]:
-                issues.append("submission_sources_pending")
-            if source_summary["failed"]:
-                issues.append("submission_sources_failed")
-            if source_summary["identity_needs_review"]:
-                issues.append("submission_identities_unresolved")
-            evidenced_submission_count = (
-                source_summary["parsed"]
-                + source_summary["identity_needs_review"]
-            )
-            if evidenced_submission_count != len(submissions):
-                issues.append("submission_source_evidence_missing")
+        # Older tasks can have complete normalized questions and answers without
+        # the source-evidence rows introduced by the newer ingestion workflow.
+        # Missing evidence alone must not force a teacher to upload the same
+        # files again.  Explicit pending/failed/unresolved evidence remains a
+        # fail-closed grading boundary.
+        if source_summary["pending"]:
+            issues.append("submission_sources_pending")
+        if source_summary["failed"]:
+            issues.append("submission_sources_failed")
+        if source_summary["identity_needs_review"]:
+            issues.append("submission_identities_unresolved")
 
         for submission in submissions:
+            revision = None
+            if submission.current_revision_id:
+                try:
+                    revision = submission_repository.get_revision(
+                        revision_id=submission.current_revision_id,
+                        actor_id=owner_id,
+                    )
+                except NotFound:
+                    pass
+            if revision is None or not revision.answers:
+                issues.append("answers_required")
+
             presentation = presentations.get(submission.student_id)
-            if presentation is None or not presentation.source_id:
-                issues.append("submission_source_evidence_missing")
-                continue
-            if presentation.identity_status != "matched":
+            if presentation is not None and presentation.identity_status != "matched":
                 issues.append("submission_identities_unresolved")
 
     if any(row.get("unknown_question_ids") for row in source_rows):

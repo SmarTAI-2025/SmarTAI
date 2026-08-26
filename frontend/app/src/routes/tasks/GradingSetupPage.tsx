@@ -45,7 +45,6 @@ import type {
 
 const SAMPLE_OPTIONS = [1, 2, 3, 4, 5] as const;
 const MAX_NOTES_LENGTH = 500;
-const NON_BLOCKING_SETUP_ISSUES = new Set(["grading_setup_required"]);
 
 export function GradingSetupPage() {
   const { taskId } = useParams();
@@ -132,20 +131,16 @@ export function GradingSetupPage() {
   const validationMessage = setup && response
     ? validateSetup(setup, response.available_experts, response.knowledge.scope_options, locale)
     : gradingSetupText(locale, "invalidForm");
-  const blockingIssue = response?.readiness.blocking_issues.find(
-    (issue) => !NON_BLOCKING_SETUP_ISSUES.has(issue)
+  const startBlockingIssue = response?.readiness.blocking_issues.find(
+    (issue) => issue !== "grading_setup_required"
       && !(isRegrading && issue === "invalid_state"),
   );
-  const blockingMessage = blockingIssue
-    ? readinessMessage(blockingIssue, locale)
+  const startBlockingMessage = startBlockingIssue
+    ? readinessMessage(startBlockingIssue, locale)
     : null;
-  const isReadOnly = blockingIssue === "workflow_busy"
-    || blockingIssue === "grading_setup_locked"
-    || blockingIssue === "invalid_state";
   const actionDisabled = !taskId
     || !setup
     || Boolean(validationMessage)
-    || Boolean(blockingMessage)
     || saveSetup.isPending;
 
   function updateSetup(updater: (current: GradingSetup) => GradingSetup) {
@@ -193,8 +188,8 @@ export function GradingSetupPage() {
   }
 
   async function handleSubmit() {
-    if (!taskId || !response || !setup || validationMessage || blockingMessage) {
-      setActionError(validationMessage ?? blockingMessage ?? gradingSetupText(locale, "invalidForm"));
+    if (!taskId || !response || !setup || validationMessage) {
+      setActionError(validationMessage ?? gradingSetupText(locale, "invalidForm"));
       return;
     }
 
@@ -260,8 +255,8 @@ export function GradingSetupPage() {
         ) : response && setup ? (
           <form className="flex h-full min-h-0 flex-col" onSubmit={(event) => { event.preventDefault(); void handleSubmit(); }}>
             <fieldset
-              disabled={isReadOnly || saveSetup.isPending}
-              className={cn("min-h-0 min-w-0 flex-1 border-0 p-0", isReadOnly && "opacity-70")}
+              disabled={saveSetup.isPending}
+              className="min-h-0 min-w-0 flex-1 border-0 p-0"
             >
               <div className="min-h-0">
                 <h2 className="text-[20px] font-bold leading-7 text-foreground">
@@ -316,22 +311,12 @@ export function GradingSetupPage() {
                 </p>
               ) : null}
               {validationMessage ? <p role="alert" className="mt-2 text-[11px] leading-4 text-danger">{validationMessage}</p> : null}
-              {blockingMessage && blockingMessage !== validationMessage ? (
-                <div role="alert" className="mt-2 flex items-center justify-between gap-3 text-[11px] leading-4 text-danger">
-                  <span>{blockingMessage}</span>
-                  {blockingIssue === "provider_required" ? (
-                    <Link to={`/settings/byok?returnTo=${encodeURIComponent(setupHref ?? `/tasks/${taskId}/grading-setup`)}`} className="inline-flex h-7 shrink-0 items-center rounded-[6px] bg-primary px-2.5 font-semibold text-primary-foreground hover:opacity-90">
-                      {gradingSetupText(locale, "configureModels")}
-                    </Link>
-                  ) : isReadOnly ? (
-                    <button type="button" disabled={setupQuery.isFetching} onClick={() => void setupQuery.refetch()} className="inline-flex h-7 shrink-0 items-center gap-1 rounded-[6px] border bg-card px-2.5 font-semibold text-foreground hover:bg-muted disabled:opacity-50">
-                      {setupQuery.isFetching ? <LoaderCircle aria-hidden="true" className="h-3.5 w-3.5 animate-spin" /> : null}
-                      {gradingSetupText(locale, "refreshStatus")}
-                    </button>
-                  ) : null}
-                </div>
+              {startBlockingMessage && startBlockingMessage !== validationMessage ? (
+                <p role="status" className="mt-2 rounded-[6px] bg-amber-50 px-3 py-1.5 text-[11px] leading-4 text-amber-800 dark:bg-amber-950/20 dark:text-amber-200">
+                  {startBlockingMessage}
+                </p>
               ) : null}
-              {actionError && actionError !== validationMessage && actionError !== blockingMessage ? <p role="alert" className="mt-2 text-[11px] leading-4 text-danger">{actionError}</p> : null}
+              {actionError && actionError !== validationMessage ? <p role="alert" className="mt-2 text-[11px] leading-4 text-danger">{actionError}</p> : null}
             </div>
 
             <footer className="mt-4 grid shrink-0 gap-3 border-t pt-4 sm:-mx-5 sm:px-2 lg:grid-cols-[auto_minmax(0,1fr)_270px] lg:items-center">
@@ -1030,11 +1015,19 @@ function validateSetup(
 }
 
 function readinessMessage(code: string, locale: Locale): string {
+  if (code === "workflow_busy") {
+    return locale === "zh-CN"
+      ? "任务正在执行其他操作；当前设置仍可保存，待处理完成后再开始批改。"
+      : "Another task operation is running. You can still save these settings, then start grading after it finishes.";
+  }
+  if (code === "grading_setup_locked") {
+    return locale === "zh-CN"
+      ? "当前批改批次已经启动；设置仍可保存供下一次批改使用。"
+      : "The current grading run has started. You can still save settings for the next run.";
+  }
   const keys = {
     provider_required: "noModelsDescription",
     invalid_state: "workflowNotReady",
-    workflow_busy: "workflowBusy",
-    grading_setup_locked: "setupLocked",
     ocr_provider_grading_not_supported: "ocrGradingUnsupported",
   } as const;
   return gradingSetupText(locale, keys[code as keyof typeof keys] ?? "workflowNotReady");
