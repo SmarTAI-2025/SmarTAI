@@ -13,20 +13,36 @@ const SOURCE_PREVIEW_ERROR_CODES = new Set<SourcePreviewErrorCode>([
 
 class SourcePreviewResponseError extends Error {
   readonly code: SourcePreviewErrorCode;
+  readonly reason: "catalog_scope_mismatch" | null;
 
-  constructor(code: SourcePreviewErrorCode) {
+  constructor(
+    code: SourcePreviewErrorCode,
+    reason: "catalog_scope_mismatch" | null = null,
+  ) {
     super(code);
     this.name = "SourcePreviewResponseError";
     this.code = code;
+    this.reason = reason;
   }
 }
 
-export async function getTaskSourceFiles(taskId: string): Promise<TaskSourceFiles> {
+export async function getTaskSourceFiles(
+  taskId: string,
+  expectedWorkflowRevision: number,
+): Promise<TaskSourceFiles> {
   const catalog = await getJSON<TaskSourceFiles>(`/tasks/${encodeURIComponent(taskId)}/source-files`);
-  if (catalog.task_id !== taskId) {
-    throw new SourcePreviewResponseError("source_preview_load_failed");
+  if (
+    catalog.task_id !== taskId
+    || catalog.workflow_revision !== expectedWorkflowRevision
+  ) {
+    throw new SourcePreviewResponseError("source_preview_load_failed", "catalog_scope_mismatch");
   }
   return catalog;
+}
+
+export function isSourcePreviewCatalogMismatch(error: unknown): boolean {
+  return error instanceof SourcePreviewResponseError
+    && error.reason === "catalog_scope_mismatch";
 }
 
 export async function loadSourcePreviewFile(

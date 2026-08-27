@@ -41,6 +41,7 @@ def test_render_uses_canonical_production_secret_contract():
 def test_env_example_never_commits_secret_placeholders_as_values():
     env_example = (REPO_ROOT / ".env.example").read_text(encoding="utf-8")
 
+    assert re.search(r"^SMARTAI_SEED_TEST_USERS=false$", env_example, re.MULTILINE)
     assert env_example.count("# SMARTAI_PROVIDER_ENCRYPTION_KEY=") == 1
     assert env_example.count("# SMARTAI_JWT_SECRET=") == 1
     assert not re.search(

@@ -310,7 +310,7 @@ class Settings(BaseSettings):
     # The file MUST be gitignored — keep credentials out of the repo. Generate
     # via `python scripts/generate_test_users.py` (creates 50 random accounts).
     test_users_file: str = os.getenv("SMARTAI_TEST_USERS_FILE", "data/test_users.json")
-    seed_test_users: bool = os.getenv("SMARTAI_SEED_TEST_USERS", "true").lower() == "true"
+    seed_test_users: bool = os.getenv("SMARTAI_SEED_TEST_USERS", "false").lower() == "true"
 
     @model_validator(mode="after")
     def resolve_database_url(self) -> "Settings":

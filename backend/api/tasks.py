@@ -644,6 +644,16 @@ def save_grading_setup(
         body = setup.model_dump(mode="json")
         fingerprint = hashlib.sha256(json.dumps(body, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
         unchanged = workflow.grading_setup_fingerprint == fingerprint
+        if not unchanged and workflow.active_operation:
+            code = (
+                "grading_setup_locked"
+                if workflow.active_operation == "grading"
+                else "workflow_busy"
+            )
+            raise InvalidTransition(
+                "Grading setup cannot change while the workflow is active.",
+                code=code,
+            )
         if not unchanged:
             workflow_repository.update_workflow(
                 task_id, owner_id=current.id,
@@ -718,6 +728,8 @@ def _grading_setup_payload(task_id: str, owner_id: str, registry: ExpertRegistry
     warnings = []
     if not configs:
         blocking.append("provider_required")
+    if workflow.active_operation == "grading":
+        blocking.append("grading_setup_locked")
     if task["status"] not in {
         "submissions_ready", "graded", "review_confirmed", "finalized", "error",
     }:

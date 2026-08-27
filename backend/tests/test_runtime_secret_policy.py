@@ -1,3 +1,8 @@
+import os
+import subprocess
+import sys
+from pathlib import Path
+
 import pytest
 
 from backend.config import Settings, validate_runtime_secret_policy
@@ -5,6 +10,7 @@ from backend.config import Settings, validate_runtime_secret_policy
 
 PRIVATE_PROVIDER_KEY = "provider-private-test-key-0123456789abcdef"
 PRIVATE_JWT_SECRET = "jwt-private-test-secret-0123456789abcdef"
+REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
 def _production_settings(**overrides: str | bool) -> Settings:
@@ -71,6 +77,29 @@ def test_nonproduction_keeps_distinct_private_provider_key():
     assert config.provider_encryption_key == PRIVATE_PROVIDER_KEY
 
 
+def test_test_user_seeding_defaults_to_disabled():
+    env = os.environ.copy()
+    env.pop("SMARTAI_SEED_TEST_USERS", None)
+
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            (
+                "from backend.config import Settings; "
+                "assert Settings(_env_file=None).seed_test_users is False"
+            ),
+        ],
+        cwd=REPO_ROOT,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+
+
 @pytest.mark.parametrize(
     ("overrides", "expected_message"),
     [
@@ -115,6 +144,7 @@ def test_production_accepts_distinct_private_secrets_with_test_user_seeding():
     config = _production_settings(seed_test_users=True)
 
     validate_runtime_secret_policy(config)
+    assert config.seed_test_users is True
 
 
 def test_validation_error_never_echoes_secret_values():
