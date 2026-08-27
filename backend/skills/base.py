@@ -377,8 +377,10 @@ def classify_skill_error(e: Exception) -> tuple[str, str]:
     type so provider responses or credentials cannot leak into diagnostics.
 
     Recognition is text-based because by the time we reach the skill's
-    `except`, tenacity has unwrapped the original exception type — we only see
-    the message.
+    `except`, the exception is the classified one from the retry wrapper —
+    we only see its message. SafeRelayProvider surfaces stable code strings
+    ("provider_rate_limited", "provider_upstream_unavailable", …) that carry
+    no status digits, so they need their own keywords.
     """
     s = str(e).lower()
     if (
@@ -386,6 +388,7 @@ def classify_skill_error(e: Exception) -> tuple[str, str]:
         or "429" in s
         or "rate limit" in s
         or "ratelimit" in s
+        or "rate_limited" in s  # provider_rate_limited (relay 429)
         or "resourceexhausted" in s
         or "resource_exhausted" in s
     ):
@@ -394,12 +397,30 @@ def classify_skill_error(e: Exception) -> tuple[str, str]:
             "⏳ 该题暂未批改完成 — AI 服务的每分钟调用配额已用尽。"
             "请稍后重试，或在 BYOK 设置里调高该专家的 RPM/并发上限。",
         )
-    if "timeout" in s or "connection" in s or "503" in s or "502" in s or "504" in s:
+    if (
+        "timeout" in s
+        or "connection" in s
+        or "unreachable" in s  # provider_unreachable: DNS/TCP/TLS to relay failed
+        or "certificate" in s
+        or "tls" in s  # provider_endpoint_tls_failed
+        or "dns" in s  # provider_endpoint_dns_failed
+        or "reset" in s
+        or "refused" in s
+        or "503" in s
+        or "502" in s
+        or "504" in s
+        or "upstream_unavailable" in s  # provider_upstream_unavailable (relay 5xx)
+    ):
         return (
             "transient_llm",
             "🌐 该题暂未批改完成 — AI 服务出现网络/超时错误。请稍后重试。",
         )
-    if "no json found" in s or "could not parse" in s or "validation" in s:
+    if (
+        "no json found" in s
+        or "could not parse" in s
+        or "validation" in s
+        or "response_invalid" in s  # provider_response_invalid (unparseable 200 body)
+    ):
         return (
             "parse_failed",
             "⚠ 该题暂未批改完成 — AI 返回格式异常无法解析。请稍后重试，或更换专家。",

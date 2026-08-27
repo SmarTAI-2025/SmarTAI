@@ -111,6 +111,12 @@ def _classify_exception(e: Exception) -> Exception:
     Rate-limit / quota errors get a dedicated `RateLimitError` carrying the
     server-suggested wait so the retry wait function can honor it precisely
     (Gemini commonly suggests 20-40s, far beyond our exponential cap).
+
+    Exceptions carrying an exact HTTP status code (SafeRelayProvider's
+    ProviderRequestError, openai's APIStatusError) are classified on the code
+    itself — keyword-matching a stable error-code string such as
+    "provider_upstream_unavailable" would miss every branch below and fall
+    into the default 3-attempt transient path.
     """
     if getattr(e, "retryable", True) is False:
         return PermanentLLMError("non_retryable_provider_limit")
@@ -140,14 +146,41 @@ def _classify_exception(e: Exception) -> Exception:
     msg = str(e)
     lower = msg.lower()
 
+    # Structured status codes win over keyword guessing: the stable
+    # error-code strings ("provider_upstream_unavailable", …) carry no digits,
+    # so without this branch a relay 503 would fall into the default path.
+    status_code = getattr(e, "status_code", None)
+    if isinstance(status_code, int):
+        if status_code in {401, 403, 404}:
+            # Deterministic auth / routing failures — retrying only delays
+            # the same refusal.
+            return PermanentLLMError(msg)
+        if status_code in {429, 502, 503, 504}:
+            # 429 is an explicit rate limit; 502/503/504 is a shared-gateway
+            # overload (the campus-relay 503 storm). Ride both out with the
+            # rate-limit path: a larger attempt budget and long waits that
+            # honor Retry-After, instead of burning the 3-attempt /
+            # 1s-2s-4s transient budget in ~7 seconds.
+            retry_after = getattr(e, "retry_after", None)
+            return RateLimitError(
+                msg, retry_after=retry_after or _extract_retry_after(msg)
+            )
+
     # Auth/permission errors — never retry.
     if any(k in lower for k in ["401", "403", "authentication", "unauthorized", "invalid api key"]):
         return PermanentLLMError(msg)
 
-    # Quota / rate limit — retryable but with server-provided wait when available.
+    # Quota / rate limit / gateway overload — retryable with long waits.
     if (
         "429" in lower
+        or "502" in lower
+        or "503" in lower
+        or "504" in lower
+        or "bad gateway" in lower
+        or "service unavailable" in lower
+        or "gateway time" in lower
         or "rate limit" in lower
+        or "rate_limited" in lower
         or "quota" in lower
         or "resourceexhausted" in lower
         or "resource_exhausted" in lower
@@ -155,7 +188,7 @@ def _classify_exception(e: Exception) -> Exception:
         return RateLimitError(msg, retry_after=_extract_retry_after(msg))
 
     # Generic transient (timeout / 5xx / connection) — retryable.
-    if any(k in lower for k in ["timeout", "connection", "5xx", "internal", "503", "502", "504"]):
+    if any(k in lower for k in ["timeout", "connection", "5xx", "internal", "upstream_unavailable"]):
         return TransientLLMError(msg)
 
     # Default: treat as transient (safer for flaky APIs).

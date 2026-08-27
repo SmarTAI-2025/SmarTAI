@@ -416,3 +416,148 @@ async def test_grade_batch_threads_multi_sample_n(monkeypatch):
     assert len(results) == 1
     correction = results[0]["corrections"][0]
     assert correction.synthesis_method == "multi_sample"
+
+
+# ─── 7. Question-level retry on transient all-failure ───────────────────────
+#
+# The per-LLM-call tenacity retry runs inside each attempt; when the WHOLE
+# question still fails transiently (campus-relay hang across the fan-out),
+# _grade_single_answer re-runs the question once with backoff before
+# reporting "暂未批改" (题目识别与判卷问题记录 §4).
+
+
+import asyncio as _asyncio
+
+
+def _patch_sequenced_skill(monkeypatch, outcomes: list[dict]):
+    """get_skill_for_type → a skill whose grade() returns outcomes[i] per
+    call (cycling the last entry once exhausted)."""
+    import backend.agents.multi_expert as me
+
+    calls = {"n": 0}
+
+    class _SequencedSkill:
+        name = "Sequenced"
+        problem_type = "any"
+
+        def __init__(self, provider, **_kw):
+            self.provider = provider
+
+        async def grade(self, problem, answer, *, student_id=""):
+            i = min(calls["n"], len(outcomes) - 1)
+            calls["n"] += 1
+            spec = outcomes[i]
+            return ExpertResult(
+                provider=self.provider.provider_id,
+                score=spec.get("score", 0.0),
+                max_score=spec.get("max_score", 10.0),
+                confidence=spec.get("confidence", 0.0),
+                comment=spec.get("comment", ""),
+                error_kind=spec.get("error_kind"),
+            )
+
+    monkeypatch.setattr(me, "get_skill_for_type", lambda _t: _SequencedSkill)
+    return calls
+
+
+def _fast_sleep(monkeypatch):
+    """Question-level retry backoff must not slow the suite down."""
+    monkeypatch.setattr(_asyncio, "sleep", AsyncMock(return_value=None))
+
+
+def _set_item_retries(monkeypatch, n: int):
+    from backend.config import settings
+
+    monkeypatch.setattr(settings, "grading_item_max_retries", n)
+
+
+@pytest.mark.asyncio
+async def test_single_expert_transient_failure_retries_question(monkeypatch):
+    """Single-provider mode: a blank transient result (no AllExpertsFailed)
+    triggers exactly one extra question attempt, which succeeds."""
+    p1 = _FakeProvider("ustc:qwen2.5")
+    calls = _patch_sequenced_skill(monkeypatch, [
+        {"score": 0.0, "confidence": 0.0, "error_kind": "transient_llm",
+         "comment": "🌐 该题暂未批改完成 — AI 服务出现网络/超时错误。请稍后重试。"},
+        {"score": 9.0, "confidence": 0.9, "comment": "Looks correct."},
+    ])
+    _fast_sleep(monkeypatch)
+    _set_item_retries(monkeypatch, 1)
+
+    correction = await _grade_single_answer(
+        problem=_problem(), answer=_answer(), student_id="S1",
+        registry=_FakeRegistry([p1]),
+    )
+    # One initial pass + one question-level retry.
+    assert calls["n"] == 2
+    # The retry produced a real score — the question was NOT left 暂未批改.
+    assert correction.synthesis_method == "single"
+    assert correction.score == pytest.approx(9.0)
+    assert correction.confidence == pytest.approx(0.9)
+
+
+@pytest.mark.asyncio
+async def test_all_experts_transient_failure_retries_question(monkeypatch):
+    """Two providers both fail transiently → AllExpertsFailed → the whole
+    question is re-attempted and succeeds on the second pass."""
+    p1 = _FakeProvider("zhipu:glm-4.5-air")
+    p2 = _FakeProvider("gemini:gemini-3-flash-preview")
+    calls = _patch_sequenced_skill(monkeypatch, [
+        {"score": 0.0, "confidence": 0.0, "error_kind": "transient_llm"},
+        {"score": 0.0, "confidence": 0.0, "error_kind": "transient_llm"},
+        {"score": 8.0, "confidence": 0.85, "comment": "retry-1 ok"},
+        {"score": 8.5, "confidence": 0.9, "comment": "retry-2 ok"},
+    ])
+    _fast_sleep(monkeypatch)
+    _set_item_retries(monkeypatch, 1)
+
+    correction = await _grade_single_answer(
+        problem=_problem(), answer=_answer(), student_id="S1",
+        registry=_FakeRegistry([p1, p2]),
+    )
+    # First pass: 2 experts blank → AllExpertsFailed → retry. Second pass:
+    # both experts succeed → judge/weighted synthesis, real score.
+    assert calls["n"] == 4
+    assert correction.confidence > 0
+    assert correction.score > 0
+    assert correction.synthesis_method in {"judge_agent", "weighted_average"}
+
+
+@pytest.mark.asyncio
+async def test_non_transient_failure_is_not_retried(monkeypatch):
+    """parse_failed / general are deterministic: no question-level retry."""
+    p1 = _FakeProvider("zhipu:glm-4.5-air")
+    p2 = _FakeProvider("gemini:gemini-3-flash-preview")
+    calls = _patch_sequenced_skill(monkeypatch, [
+        {"score": 0.0, "confidence": 0.0, "error_kind": "parse_failed"},
+        {"score": 0.0, "confidence": 0.0, "error_kind": "parse_failed"},
+    ])
+    _fast_sleep(monkeypatch)
+    _set_item_retries(monkeypatch, 1)
+
+    correction = await _grade_single_answer(
+        problem=_problem(), answer=_answer(), student_id="S1",
+        registry=_FakeRegistry([p1, p2]),
+    )
+    assert calls["n"] == 2  # exactly one pass, no retry
+    assert correction.synthesis_method == "all_failed"
+    assert correction.confidence == 0.0
+
+
+@pytest.mark.asyncio
+async def test_retry_disabled_by_zero_max_retries(monkeypatch):
+    p1 = _FakeProvider("ustc:qwen2.5")
+    calls = _patch_sequenced_skill(monkeypatch, [
+        {"score": 0.0, "confidence": 0.0, "error_kind": "transient_llm"},
+    ])
+    _fast_sleep(monkeypatch)
+    monkeypatch.setattr(
+        "backend.agents.grading_agent._settings.grading_item_max_retries", 0,
+    )
+
+    correction = await _grade_single_answer(
+        problem=_problem(), answer=_answer(), student_id="S1",
+        registry=_FakeRegistry([p1]),
+    )
+    assert calls["n"] == 1
+    assert correction.confidence == 0.0

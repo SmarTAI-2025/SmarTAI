@@ -70,6 +70,12 @@ class Settings(BaseSettings):
     # 10+ — set fallback conservatively. Per-key override comes from BYOK config
     # (ProviderConfig.max_concurrent).
     max_concurrent_llm_per_provider: int = 5
+    # Shared cap on concurrent LLM calls to ONE endpoint (host), regardless of
+    # how many provider configs point at it.  A shared relay fronted by several
+    # BYOK entries would otherwise multiply the per-provider caps (4 entries ×
+    # 5 = 20 parallel calls to one gateway).  Keep at or below
+    # max_concurrent_llm_per_provider.
+    max_concurrent_llm_per_endpoint: int = 5
     llm_timeout: int = 600  # seconds
     llm_max_retries: int = 3
     # When the LLM returns a 429 / quota exceeded error AND the provider's
@@ -120,6 +126,17 @@ class Settings(BaseSettings):
     # `llm_timeout`.
     custom_provider_timeout_seconds: int = int(
         os.getenv("SMARTAI_CUSTOM_PROVIDER_TIMEOUT_SECONDS", "120")
+    )
+    # Question-level grading retry.  The per-LLM-call tenacity retry
+    # (`llm_max_retries`) already covers most flakes, but when EVERY expert of
+    # a question fails with a transient error (e.g. the USTC campus relay
+    # hanging across a whole fan-out) the question is reported as
+    # "暂未批改" until a teacher re-runs grading.  One extra full attempt per
+    # question, after a short backoff, recovers these bursts without adding
+    # meaningful latency in the common case (the retry only fires when every
+    # expert failed transiently).  0 disables it.
+    grading_item_max_retries: int = int(
+        os.getenv("SMARTAI_GRADING_ITEM_MAX_RETRIES", "1")
     )
     # Problem extraction is normally a single LLM call whose body grows with
     # the source text.  Some free relay endpoints hang on larger JSON bodies,

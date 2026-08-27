@@ -36,6 +36,7 @@ from backend.services.background_errors import (
     classify_background_error,
     is_retryable_background_error,
 )
+from backend.tools.problem_dedup import dedupe_extracted_problems
 from backend.tools.structured_llm import (
     StructuredOutputBoundsError,
     ainvoke_with_retry,
@@ -115,6 +116,8 @@ async def extract_problems_from_ocr_markdown(
             "status": "open",
         }]
         problems[f"q{index}"] = problem
+    # Defensive: OCR Markdown can repeat a numbered heading for one question.
+    problems = dedupe_extracted_problems(problems)
     problem_store.clear()
     problem_store.update(problems)
     if reporter:
@@ -142,12 +145,20 @@ PROB_SYSTEM_PROMPT = """You are a professional AI teaching assistant with gradua
     - **编程题**: Contains code snippets or requires writing code.
     - **证明题**: Requires logical deduction from known conditions to reach a stated conclusion.
     - **推理题**: Requires logical reasoning to reach a conclusion not provided in the stem.
-    - **其他**: Does not fit into the above 5 categories.
+    - **选择题**: A single-answer multiple-choice question: the stem offers lettered options (A/B/C/D) and exactly one is correct.
+    - **多选题**: A multiple-answer question: the stem explicitly states that more than one option is correct (e.g. "有多项符合题目要求", "部分选对的得部分分").
+    - **填空题**: A fill-in-the-blank question with one short unique answer and no options (a blank such as "____", "(  )", or "【　】").
+    - **其他**: Does not fit into the above 7 categories.
+
+    **Objective-question rules**: If the stem shows 3 or more option lines marked A./B./C./D., classify as 选择题, or as 多选题 when the stem says multiple options are correct. If the stem has no options but a blank to fill, classify as 填空题.
+    **Sub-questions (子问)**: A question containing sub-questions such as "(1) ... (2) ... (3) ..." must be emitted as ONE single problem whose `stem` keeps the full question including every sub-question. Never emit a sub-question (e.g. only "(1) ...") as a separate problem row.
+    **Fragment at the start of the text**: If the very first line of the provided text starts in the MIDDLE of a question (no question number on the first line because its beginning was cut off), still emit that fragment as a problem row with `number` set to the empty string "" — do not guess or invent a number, and do not invent the missing opening text.
 
     **[Important]: Preserve the stem information completely. Do not delete or translate content.**
     For Markdown rendering, enclose every inline LaTeX expression in `$...$` and every display expression in `$$...$$`; never leave commands such as `\\int`, `\\mu`, or `\\times` bare in prose. Do not add math delimiters inside code blocks.
 
 4. **Design Grading Criteria (`criterion`)**: Express rubric allocations only as percentages whose scoring steps add up to 100%. If source criteria use absolute points, preserve their relative weighting but convert the allocations to percentages. Do not state or infer the question's maximum score; it is configured separately by the authenticated teacher. If no criteria are provided, design an appropriate percentage-based rubric for the problem type.
+    **Exception for objective questions**: For 选择题 and 填空题 set the criterion exactly to "答案唯一: 答对满分, 答错 0 分" — never a percentage rubric, because these questions are graded on the final answer alone. For 多选题, keep the partial-credit rule stated in the stem if present (e.g. "全部选对的得6分, 部分选对的得部分分, 有选错的得0分"); otherwise use "全部选对方得分, 有选错的得0分".
 
 5. **Formatted Output**: Return a JSON object with key "problems" containing an array of objects with fields: "q_id", "number", "type", "stem", "criterion". ALL field values must be strings (quoted). Example shape:
 {"problems": [
@@ -257,6 +268,11 @@ async def extract_problems(
             confirmed_candidates=confirmed_candidates,
             manage_progress_lifecycle=manage_progress_lifecycle,
         )
+
+    # Chunked extraction can emit the same question twice (split sub-question,
+    # near-duplicate, or a question cut across the chunk overlap). Collapse
+    # duplicates before any score policy freezes a max_score per row.
+    prob_dict = dedupe_extracted_problems(prob_dict)
 
     if not prob_dict:
         if reporter and manage_progress_lifecycle:
@@ -1485,7 +1501,9 @@ Rules:
 - For criterion/reference_answer, use text_value and omit test_cases.
 - For criterion, express scoring allocations only as percentages totaling 100%. If the source
   uses absolute points, preserve the relative weights but convert them using the known question's
-  max_score. Never copy an absolute point total into text_value.
+  max_score. Never copy an absolute point total into text_value. Exception: for objective
+  questions (选择题/多选题/填空题) do not generate a percentage rubric — emit the result-based
+  rule only when the source supports it (e.g. "答案唯一: 答对满分, 答错 0 分"), otherwise omit.
 - For test_cases, only emit candidates for programming questions and use test_cases.
 - confidence is match confidence, not grading confidence.
 - exact is allowed only when the source has an explicit matching question number or title.
@@ -1623,7 +1641,10 @@ Return exactly one JSON object:
 Rules:
 - criterion: a concrete, usable scoring rubric whose numbered scoring steps align with the
   corresponding numbered reference-answer steps. Express weights only as percentages adding up
-  to 100%; never use absolute points or restate the question's maximum score.
+  to 100%; never use absolute points or restate the question's maximum score. Exception for
+  objective questions (选择题/多选题/填空题): never generate a percentage rubric — use a
+  result-based criterion such as "答案唯一: 答对满分, 答错 0 分" (for 多选题 keep the stem's
+  partial-credit rule when present).
 - reference_answer: a correct model answer or derivation suitable for teacher review. If an
   existing teacher answer contains only a final answer, preserve that conclusion and expand it
   into explicit, checkable solution steps rather than replacing it with an unrelated approach.

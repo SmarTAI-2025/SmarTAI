@@ -202,7 +202,7 @@ python scripts/generate_test_users.py
 在 macOS/Linux 的仓库根目录执行：
 
 ```bash
-python -m uvicorn backend.main:app --reload --host 0.0.0.0 --port 8000
+python -m uvicorn backend.main:app --host 0.0.0.0 --port 8000
 ```
 
 Windows 本地开发请使用单 worker，并且不要添加 `--reload`：

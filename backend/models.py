@@ -145,7 +145,7 @@ class TestCase(BaseModel):
 class ProblemInfo(BaseModel):
     q_id: str = Field(description="Unique question ID, starting from 'q1'")
     number: str = Field(description="Display question number, e.g. '1', '2.3', 'III.'")
-    type: str = Field(description="Question type: 概念题/计算题/编程题/证明题/推理题/其他")
+    type: str = Field(description="Question type: 概念题/计算题/编程题/证明题/推理题/选择题/多选题/填空题/其他")
     stem: str = Field(description="Complete question stem including all text, formulas, and code")
     criterion: str = Field(description="Grading rubric/criteria")
     max_score: float = Field(
