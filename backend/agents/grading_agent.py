@@ -13,19 +13,25 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import random
 import time
 from typing import Dict, Any, List, Optional, TYPE_CHECKING
 
+from backend.config import settings as _settings
 from backend.models import Correction, ProblemInfo, StudentAnswerInfo, TaskGradingSetup
 from backend.llm.registry import ExpertRegistry
-from backend.agents.multi_expert import run_multi_expert, AllExpertsFailed
+from backend.agents.multi_expert import (
+    AllExpertsFailed,
+    dominant_error_kind,
+    run_multi_expert,
+)
 from backend.skills.base import format_deterministic_feedback
 
 if TYPE_CHECKING:
     from backend.progress.tracker import ProgressReporter
 
 # Import all skills to trigger their @register_skill registrations
-from backend.skills import concept, calculation, proof, programming  # noqa: F401
+from backend.skills import concept, calculation, objective, proof, programming  # noqa: F401
 
 logger = logging.getLogger(__name__)
 
@@ -228,6 +234,30 @@ async def grade_student(
     }
 
 
+# Failure kinds where one more full attempt can plausibly succeed (network /
+# timeout / quota bursts on a flaky relay).  parse_failed / general are
+# treated as deterministic for this purpose — retrying just repeats the work.
+_RETRYABLE_ERROR_KINDS = frozenset({"transient_llm", "quota_exhausted"})
+
+
+def _retry_delay_seconds(attempt: int) -> float:
+    """Backoff before a question-level retry: 2s, 4s, 8s, … capped at 30s."""
+    base = min(30.0, 2.0 * (2 ** (max(1, attempt) - 1)))
+    return base + random.uniform(0.0, 0.5)
+
+
+def _is_retryable_full_failure(correction: Correction) -> bool:
+    """True when a produced Correction is a full transient failure.
+
+    Covers the single-expert fast path, where a blank expert result does NOT
+    raise AllExpertsFailed but returns a 0-confidence Correction tagged with
+    the failure kind.  Only then is a question-level retry worthwhile.
+    """
+    if correction.confidence > 0 or not correction.expert_results:
+        return False
+    return dominant_error_kind(correction.expert_results) in _RETRYABLE_ERROR_KINDS
+
+
 async def _grade_single_answer(
     *,
     problem: ProblemInfo,
@@ -241,80 +271,116 @@ async def _grade_single_answer(
     aggregation_method: Optional[str] = None,
     grading_setup: Optional[TaskGradingSetup] = None,
 ) -> Correction:
-    """Grade a single (problem, answer) pair. Wraps MultiExpertAgent."""
-    try:
-        t0 = time.perf_counter()
-        correction = await run_multi_expert(
-            problem=problem,
-            answer=answer,
-            student_id=student_id,
-            registry=registry,
-            reporter=reporter,
-            language=language,
-            task_id=task_id,
-            multi_sample_n=multi_sample_n,
-            aggregation_method=aggregation_method,
-            grading_setup=grading_setup,
-        )
-        duration = (time.perf_counter() - t0) * 1000
-        logger.info(
-            f"Graded {student_id}/{problem.q_id} [{problem.type}] "
-            f"score={correction.score}/{correction.max_score} "
-            f"confidence={correction.confidence:.2f} in {duration:.0f}ms"
-        )
-        if reporter:
-            await reporter.increment_completed()
-        return _apply_low_confidence_policy(correction, grading_setup)
-    except AllExpertsFailed as e:
-        # Every expert returned a blank/failed result. Produce a Correction
-        # with policy-aware fallback feedback + synthesis_method that the frontend
-        # can render distinctly. We deliberately do NOT splice the raw English
-        # error text (e.g. "Quota exceeded for metric: …") into the comment —
-        # teachers should see actionable guidance, not stack traces. The raw
-        # per-expert reasons remain in `expert_results` for ops triage.
-        logger.error(
-            "All experts failed for grading item; dominant_kind=%s",
-            e.dominant_kind,
-        )
-        if e.dominant_kind == "quota_exhausted":
-            synthesis_method = "quota_exhausted"
-        elif e.dominant_kind == "transient_llm":
-            synthesis_method = "all_failed"
-        elif e.dominant_kind == "parse_failed":
-            synthesis_method = "all_failed"
-        else:
-            synthesis_method = "all_failed"
-        comment = _grading_failure_feedback(e.dominant_kind, grading_setup)
-        if reporter:
-            await reporter.increment_completed()
-        return _apply_low_confidence_policy(Correction(
-            q_id=problem.q_id,
-            type=problem.type,
-            score=0.0,
-            max_score=problem.max_score,
-            confidence=0.0,
-            comment=comment,
-            steps=[],
-            expert_results=e.failures,
-            synthesis_method=synthesis_method,
-        ), grading_setup)
-    except Exception as e:
-        logger.error(
-            "Error grading student/q_id; exception_type=%s",
-            type(e).__name__,
-        )
-        # Return a zero-score Correction so the batch doesn't silently drop.
-        # Keep the comment friendly — raw stack traces don't belong in a batch.
-        return _apply_low_confidence_policy(Correction(
-            q_id=problem.q_id,
-            type=problem.type,
-            score=0.0,
-            max_score=problem.max_score,
-            confidence=0.0,
-            comment=_grading_failure_feedback("unknown", grading_setup),
-            steps=[],
-            synthesis_method="all_failed",
-        ), grading_setup)
+    """Grade a single (problem, answer) pair. Wraps MultiExpertAgent.
+
+    When the WHOLE question fails transiently — every expert hit a
+    network/timeout/quota error (the campus-relay hang pattern) — the
+    question is re-attempted up to ``settings.grading_item_max_retries``
+    extra times with backoff, so one burst of relay failures does not
+    leave the item as "暂未批改" until a teacher re-runs grading.  The
+    per-LLM-call tenacity retry already runs inside each attempt.
+    """
+    max_attempts = 1 + max(0, int(getattr(_settings, "grading_item_max_retries", 0) or 0))
+    for attempt in range(1, max_attempts + 1):
+        try:
+            t0 = time.perf_counter()
+            correction = await run_multi_expert(
+                problem=problem,
+                answer=answer,
+                student_id=student_id,
+                registry=registry,
+                reporter=reporter,
+                language=language,
+                task_id=task_id,
+                multi_sample_n=multi_sample_n,
+                aggregation_method=aggregation_method,
+                grading_setup=grading_setup,
+            )
+            duration = (time.perf_counter() - t0) * 1000
+            logger.info(
+                f"Graded {student_id}/{problem.q_id} [{problem.type}] "
+                f"score={correction.score}/{correction.max_score} "
+                f"confidence={correction.confidence:.2f} in {duration:.0f}ms"
+            )
+            if (
+                _is_retryable_full_failure(correction)
+                and attempt < max_attempts
+            ):
+                delay = _retry_delay_seconds(attempt)
+                logger.warning(
+                    "Grading %s/%s failed transiently (single-expert blank "
+                    "result); retrying question (attempt %d/%d) in %.1fs",
+                    student_id, problem.q_id, attempt, max_attempts, delay,
+                )
+                await asyncio.sleep(delay)
+                continue
+            if reporter:
+                await reporter.increment_completed()
+            return _apply_low_confidence_policy(correction, grading_setup)
+        except AllExpertsFailed as e:
+            if (
+                e.dominant_kind in _RETRYABLE_ERROR_KINDS
+                and attempt < max_attempts
+            ):
+                delay = _retry_delay_seconds(attempt)
+                logger.warning(
+                    "All experts failed transiently for %s/%s "
+                    "(dominant_kind=%s); retrying question "
+                    "(attempt %d/%d) in %.1fs",
+                    student_id, problem.q_id, e.dominant_kind,
+                    attempt, max_attempts, delay,
+                )
+                await asyncio.sleep(delay)
+                continue
+            # Every expert returned a blank/failed result. Produce a Correction
+            # with policy-aware fallback feedback + synthesis_method that the frontend
+            # can render distinctly. We deliberately do NOT splice the raw English
+            # error text (e.g. "Quota exceeded for metric: …") into the comment —
+            # teachers should see actionable guidance, not stack traces. The raw
+            # per-expert reasons remain in `expert_results` for ops triage.
+            logger.error(
+                "All experts failed for grading item; dominant_kind=%s",
+                e.dominant_kind,
+            )
+            if e.dominant_kind == "quota_exhausted":
+                synthesis_method = "quota_exhausted"
+            elif e.dominant_kind == "transient_llm":
+                synthesis_method = "all_failed"
+            elif e.dominant_kind == "parse_failed":
+                synthesis_method = "all_failed"
+            else:
+                synthesis_method = "all_failed"
+            comment = _grading_failure_feedback(e.dominant_kind, grading_setup)
+            if reporter:
+                await reporter.increment_completed()
+            return _apply_low_confidence_policy(Correction(
+                q_id=problem.q_id,
+                type=problem.type,
+                score=0.0,
+                max_score=problem.max_score,
+                confidence=0.0,
+                comment=comment,
+                steps=[],
+                expert_results=e.failures,
+                synthesis_method=synthesis_method,
+            ), grading_setup)
+        except Exception as e:
+            logger.error(
+                "Error grading student/q_id; exception_type=%s",
+                type(e).__name__,
+            )
+            # Return a zero-score Correction so the batch doesn't silently drop.
+            # Keep the comment friendly — raw stack traces don't belong in a batch.
+            return _apply_low_confidence_policy(Correction(
+                q_id=problem.q_id,
+                type=problem.type,
+                score=0.0,
+                max_score=problem.max_score,
+                confidence=0.0,
+                comment=_grading_failure_feedback("unknown", grading_setup),
+                steps=[],
+                synthesis_method="all_failed",
+            ), grading_setup)
 
 
 async def grade_batch(

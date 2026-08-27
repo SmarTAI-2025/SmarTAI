@@ -1,5 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { getTaskSourceFiles, loadSourcePreviewFile, sourcePreviewErrorCode } from "@/api/sourcePreview";
+import {
+  getTaskSourceFiles,
+  isSourcePreviewCatalogMismatch,
+  loadSourcePreviewFile,
+  sourcePreviewErrorCode,
+} from "@/api/sourcePreview";
 import { inferSourcePreviewKind } from "@/lib/sourcePreview";
 import type {
   SourceFileDescriptor,
@@ -16,19 +21,27 @@ export function useSourcePreview({
   sourceKind,
   sourceId = null,
   displayName,
+  refreshTask,
 }: {
   taskId?: string | null;
   workflowRevision?: number | null;
   sourceKind: "problem" | "submission";
   sourceId?: string | null;
   displayName?: string | null;
+  refreshTask?: () => Promise<unknown>;
 }) {
   const [catalogState, setCatalogState] = useState<"idle" | "loading" | "ready" | "error">("idle");
   const [catalog, setCatalog] = useState<TaskSourceFiles | null>(null);
   const [catalogScopeKey, setCatalogScopeKey] = useState<string | null>(null);
   const [catalogErrorCode, setCatalogErrorCode] = useState<SourcePreviewErrorCode | null>(null);
   const [catalogAttempt, setCatalogAttempt] = useState(0);
+  const catalogMismatchRecoveryTaskRef = useRef<string | null>(null);
+  const refreshTaskRef = useRef(refreshTask);
   const requestedCatalogScopeKey = `${taskId ?? "no-task"}:${workflowRevision ?? "unknown-revision"}`;
+
+  useEffect(() => {
+    refreshTaskRef.current = refreshTask;
+  }, [refreshTask]);
 
   useEffect(() => {
     let cancelled = false;
@@ -36,28 +49,50 @@ export function useSourcePreview({
     setCatalogScopeKey(null);
     setCatalogErrorCode(null);
     if (!taskId) {
+      catalogMismatchRecoveryTaskRef.current = null;
       setCatalogState("ready");
       return () => {
         cancelled = true;
       };
     }
+    if (workflowRevision === null || workflowRevision === undefined) {
+      setCatalogState("loading");
+      return () => {
+        cancelled = true;
+      };
+    }
     setCatalogState("loading");
-    void getTaskSourceFiles(taskId)
+    void getTaskSourceFiles(taskId, workflowRevision)
       .then((nextCatalog) => {
         if (cancelled) return;
+        catalogMismatchRecoveryTaskRef.current = null;
         setCatalog(nextCatalog);
         setCatalogScopeKey(requestedCatalogScopeKey);
         setCatalogState("ready");
       })
-      .catch((error: unknown) => {
+      .catch(async (error: unknown) => {
         if (cancelled) return;
+        if (
+          isSourcePreviewCatalogMismatch(error)
+          && catalogMismatchRecoveryTaskRef.current !== taskId
+        ) {
+          catalogMismatchRecoveryTaskRef.current = taskId;
+          try {
+            await refreshTaskRef.current?.();
+          } catch {
+            // The bounded catalog retry below still gets one chance to recover.
+          }
+          if (cancelled) return;
+          setCatalogAttempt((current) => current + 1);
+          return;
+        }
         setCatalogErrorCode(sourcePreviewErrorCode(error));
         setCatalogState("error");
       });
     return () => {
       cancelled = true;
     };
-  }, [catalogAttempt, requestedCatalogScopeKey, taskId]);
+  }, [catalogAttempt, requestedCatalogScopeKey, taskId, workflowRevision]);
 
   const descriptor = useMemo<SourceFileDescriptor | null>(() => {
     if (!catalog || catalog.task_id !== taskId || catalogScopeKey !== requestedCatalogScopeKey) return null;

@@ -8,7 +8,7 @@ import {
 } from "./taskActionGuards";
 
 describe("task contract compatibility", () => {
-  it.each(["stale_revision", "task_workflow_changed", "version_conflict"])(
+  it.each(["stale_revision", "task_workflow_changed", "version_conflict", "workflow_revision_conflict"])(
     "treats %s as a workflow revision conflict",
     (code) => {
       expect(isWorkflowRevisionConflictCode(code)).toBe(true);
@@ -34,6 +34,82 @@ describe("task contract compatibility", () => {
       status: "ready",
       fileCount: 0,
     })).toBe(false);
+  });
+});
+
+describe("grading retry recovery guidance", () => {
+  it("routes missing questions to the exact preparation stage", () => {
+    const info = classifyRecoverableError(
+      new APIError(409, "questions_required", {
+        detail: { code: "questions_required" },
+      }),
+      { locale: "en-US", taskId: "task-1" },
+    );
+
+    expect(info.title).toBe("This task has no questions to grade");
+    expect(info.actionHref).toBe("/tasks/task-1/upload/problems");
+    expect(info.actionKind).toBe("reupload");
+  });
+
+  it("routes an explicit recognition failure to its domain instead of a generic 409 refresh", () => {
+    const info = classifyRecoverableError(
+      new APIError(409, "submission_sources_failed", {
+        detail: { code: "submission_sources_failed" },
+      }),
+      { locale: "en-US", taskId: "task-1" },
+    );
+
+    expect(info.title).toBe("Some submissions failed recognition");
+    expect(info.actionHref).toBe("/tasks/task-1/submissions/progress");
+    expect(info.title).not.toContain("state has changed");
+  });
+
+  it("routes unresolved identity to submission review", () => {
+    const info = classifyRecoverableError(
+      new APIError(409, "submission_identities_unresolved", {
+        detail: { code: "submission_identities_unresolved" },
+      }),
+      { locale: "en-US", taskId: "task-1" },
+    );
+
+    expect(info.actionHref).toBe("/tasks/task-1/submissions");
+    expect(info.actionLabel).toBe("Review student identities");
+  });
+
+  it("keeps workflow busy domain-specific while still offering refresh", () => {
+    const info = classifyRecoverableError(
+      new APIError(409, "workflow_busy", {
+        detail: { code: "workflow_busy" },
+      }),
+      { locale: "en-US", taskId: "task-1" },
+    );
+
+    expect(info.title).toBe("The task is still processing");
+    expect(info.actionKind).toBe("refresh");
+  });
+
+  it("does not mislabel an unknown 409 as a revision conflict", () => {
+    const info = classifyRecoverableError(
+      new APIError(409, "domain_conflict", {
+        detail: { code: "domain_conflict" },
+      }),
+      { locale: "en-US", taskId: "task-1" },
+    );
+
+    expect(info.title).toBe("This action did not complete");
+    expect(info.actionKind).toBe("retry");
+  });
+
+  it("uses task-state copy only for an actual workflow revision conflict", () => {
+    const info = classifyRecoverableError(
+      new APIError(409, "workflow_revision_conflict", {
+        detail: { code: "workflow_revision_conflict" },
+      }),
+      { locale: "en-US", taskId: "task-1" },
+    );
+
+    expect(info.title).toBe("The task state has changed");
+    expect(info.actionKind).toBe("refresh");
   });
 });
 

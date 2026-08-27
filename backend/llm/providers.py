@@ -110,10 +110,17 @@ class VisionImage:
 class ProviderRequestError(RuntimeError):
     """Stable provider failure that never includes response bodies or secrets."""
 
-    def __init__(self, code: str, *, status_code: int | None = None):
+    def __init__(
+        self,
+        code: str,
+        *,
+        status_code: int | None = None,
+        retry_after: float | None = None,
+    ):
         super().__init__(code)
         self.code = code
         self.status_code = status_code
+        self.retry_after = retry_after
 
 
 def _image_data_url(image: VisionImage) -> str:
@@ -176,6 +183,147 @@ class _RPMLimiter:
                 await asyncio.sleep(wait)
 
 
+# ─── Per-endpoint overload guard ─────────────────────────────────────────────
+# One host (e.g. the USTC campus relay) can front several provider configs.
+# When that host starts returning 5xx, independent per-provider retries turn
+# every in-flight concurrency slot into a synchronized hammer that prolongs
+# the very overload causing the failures.  The breaker counts overload
+# failures across ALL providers hitting the same endpoint and, once the
+# sliding-window threshold trips, freezes new calls for a cooldown that
+# doubles per consecutive trip (30s → 60s → 120s → 240s, capped at 300s).
+# A successful call closes the breaker, so a recovering endpoint unlocks on
+# its own.
+
+_ENDPOINT_BREAKERS: Dict[str, "_EndpointBreaker"] = {}
+_ENDPOINT_SEMAPHORES: Dict[str, tuple[asyncio.Semaphore, int]] = {}
+
+
+def endpoint_key(config: ProviderConfig) -> str:
+    """Guard key shared by every provider pointed at the same relay host."""
+    return (
+        getattr(config, "endpoint_identity", None)
+        or config.base_url
+        or f"{config.provider_type}:default"
+    )
+
+
+def _is_overload_failure(exc: BaseException) -> bool:
+    """True when a failure signals endpoint overload, not a local/config bug.
+
+    Deterministic failures (auth, model-not-found, TLS policy, endpoint
+    policy) must NOT feed the breaker: retrying them is pointless and
+    freezing the endpoint would punish unrelated, healthy traffic.
+    """
+    if isinstance(exc, ProviderRequestError):
+        if exc.code in {"provider_timeout", "provider_unreachable"}:
+            return True
+        # Relay 5xx (status_code carried on the error) IS endpoint overload;
+        # 4xx codes (auth, rate-limit, model-not-found) are per-key or
+        # deterministic and must not feed the breaker.
+        status = getattr(exc, "status_code", None)
+        return isinstance(status, int) and status >= 500
+    status = getattr(exc, "status_code", None)
+    if isinstance(status, int):
+        return status >= 500
+    # google.api_core exceptions expose the HTTP status as an int `code`.
+    code = getattr(exc, "code", None)
+    if isinstance(code, int) and not isinstance(code, bool):
+        return code >= 500
+    # LangChain/OpenAI SDK connection-level failures (no HTTP response at all).
+    return type(exc).__name__ in {
+        "APITimeoutError", "APIConnectionError",
+        "ConnectError", "ConnectTimeout", "ReadError", "ReadTimeout",
+    }
+
+
+class _EndpointBreaker:
+    """Sliding-window overload counter with an escalating cooldown."""
+
+    def __init__(
+        self,
+        endpoint: str,
+        *,
+        window: float = 30.0,
+        threshold: int = 6,
+        base_cooldown: float = 30.0,
+        max_cooldown: float = 300.0,
+    ) -> None:
+        self.endpoint = endpoint
+        self._window = window
+        self._threshold = threshold
+        self._base_cooldown = base_cooldown
+        self._max_cooldown = max_cooldown
+        self._failures: Deque[float] = deque()
+        self._open_until: float = 0.0
+        self._consecutive_trips = 0
+
+    @property
+    def is_open(self) -> bool:
+        return time.monotonic() < self._open_until
+
+    def record_success(self) -> None:
+        if self._consecutive_trips:
+            logger.info(
+                "Endpoint overload breaker CLOSED for %s after a successful call",
+                self.endpoint,
+            )
+        self._consecutive_trips = 0
+        self._failures.clear()
+
+    def record_failure(self) -> None:
+        now = time.monotonic()
+        cutoff = now - self._window
+        while self._failures and self._failures[0] < cutoff:
+            self._failures.popleft()
+        self._failures.append(now)
+        if len(self._failures) >= self._threshold and not self.is_open:
+            self._consecutive_trips = min(self._consecutive_trips + 1, 4)
+            cooldown = min(
+                self._max_cooldown,
+                self._base_cooldown * (2 ** (self._consecutive_trips - 1)),
+            )
+            self._open_until = now + cooldown
+            self._failures.clear()
+            logger.warning(
+                "Endpoint overload breaker OPEN for %s: %d overload failures "
+                "in last %.0fs — freezing new calls for %.0fs (trip %d)",
+                self.endpoint, self._threshold, self._window, cooldown,
+                self._consecutive_trips,
+            )
+
+    async def before_call(self) -> None:
+        """Wait out the cooldown while the breaker is open.
+
+        Each waiter sleeps in ≤2s slices plus 0.5-1.5s of random padding, so
+        calls release staggered (no thundering herd) and a fresh trip that
+        extended the cooldown is observed by the next slice.
+        """
+        logged = False
+        while True:
+            remaining = self._open_until - time.monotonic()
+            if remaining <= 0:
+                return
+            if not logged:
+                logger.warning(
+                    "Endpoint overload breaker: holding new call to %s "
+                    "(~%.0fs of cooldown left)",
+                    self.endpoint, remaining,
+                )
+                logged = True
+            await asyncio.sleep(min(remaining, 2.0) + random.uniform(0.5, 1.5))
+
+
+def _parse_retry_after_header(value: Optional[str]) -> Optional[float]:
+    """Parse a `Retry-After: <seconds>` header; ignore the HTTP-date form."""
+    if not value:
+        return None
+    try:
+        seconds = float(value.strip())
+    except ValueError:
+        return None
+    return seconds if seconds > 0 else None
+
+
 class BaseProvider(ABC):
     """Abstract provider with async ainvoke interface."""
 
@@ -193,6 +341,28 @@ class BaseProvider(ABC):
     @property
     def provider_id(self) -> str:
         return f"{self.provider_type}:{self.model}"
+
+    def _endpoint_breaker(self) -> _EndpointBreaker:
+        key = endpoint_key(self.config)
+        breaker = _ENDPOINT_BREAKERS.get(key)
+        if breaker is None:
+            breaker = _EndpointBreaker(key)
+            _ENDPOINT_BREAKERS[key] = breaker
+        return breaker
+
+    def _endpoint_semaphore(self) -> asyncio.Semaphore:
+        """Shared concurrency cap for every provider on this endpoint.
+
+        Kept separate from the per-provider semaphore: N configs pointing at
+        one relay must not multiply its in-flight calls N-fold.
+        """
+        key = endpoint_key(self.config)
+        limit = max(1, int(settings.max_concurrent_llm_per_endpoint))
+        entry = _ENDPOINT_SEMAPHORES.get(key)
+        if entry is None or entry[1] != limit:
+            entry = (asyncio.Semaphore(limit), limit)
+            _ENDPOINT_SEMAPHORES[key] = entry
+        return entry[0]
 
     @abstractmethod
     def _build_client_sync(self) -> Any:
@@ -233,17 +403,23 @@ class BaseProvider(ABC):
     async def ainvoke(self, messages: List[BaseMessage]) -> LLMResponse:
         """Invoke the LLM. Default: native async. Gemini overrides this."""
         self._ensure_async_primitives()
+        # Breaker before RPM limiter: a call frozen by the cooldown must not
+        # burn this key's per-minute window while doing nothing.
+        await self._endpoint_breaker().before_call()
         await self._rpm_limiter.acquire()
-        async with self._semaphore:
+        async with self._endpoint_semaphore(), self._semaphore:
             t0 = time.perf_counter()
             client = await self._get_client()
             try:
                 response = await client.ainvoke(messages)
+                self._endpoint_breaker().record_success()
                 content = response.content if hasattr(response, "content") else str(response)
                 duration_ms = (time.perf_counter() - t0) * 1000
                 logger.info(f"LLM call OK on {self.provider_id} in {duration_ms:.0f}ms ({len(content)} chars)")
                 return LLMResponse(content=content, provider=self.provider_id, model=self.model, duration_ms=duration_ms)
             except Exception as e:
+                if _is_overload_failure(e):
+                    self._endpoint_breaker().record_failure()
                 duration_ms = (time.perf_counter() - t0) * 1000
                 logger.warning(
                     "LLM call failed on %s after %.0fms; exception_type=%s",
@@ -296,8 +472,9 @@ class GeminiProvider(BaseProvider):
 
         # Local proxy mode: sync invoke in threadpool, fresh client per call
         self._ensure_async_primitives()
+        await self._endpoint_breaker().before_call()
         await self._rpm_limiter.acquire()
-        async with self._semaphore:
+        async with self._endpoint_semaphore(), self._semaphore:
             t0 = time.perf_counter()
             try:
                 from fastapi.concurrency import run_in_threadpool
@@ -308,11 +485,14 @@ class GeminiProvider(BaseProvider):
                     return local_client.invoke(messages)
 
                 response = await run_in_threadpool(_sync_call)
+                self._endpoint_breaker().record_success()
                 content = response.content if hasattr(response, "content") else str(response)
                 duration_ms = (time.perf_counter() - t0) * 1000
                 logger.info(f"LLM call OK on {self.provider_id} in {duration_ms:.0f}ms ({len(content)} chars)")
                 return LLMResponse(content=content, provider=self.provider_id, model=self.model, duration_ms=duration_ms)
             except Exception as e:
+                if _is_overload_failure(e):
+                    self._endpoint_breaker().record_failure()
                 duration_ms = (time.perf_counter() - t0) * 1000
                 logger.warning(
                     "LLM call failed on %s after %.0fms; exception_type=%s",
@@ -642,12 +822,20 @@ class SafeRelayProvider(BaseProvider):
         )
 
     def _build_client_sync(self) -> Any:
+        timeout_seconds = (
+            float(settings.llm_timeout)
+            if not settings.custom_provider_timeout_seconds
+            else min(
+                float(settings.llm_timeout),
+                float(settings.custom_provider_timeout_seconds),
+            )
+        )
         sync_client, async_client = build_safe_provider_clients(
             effective_provider_base_url(
                 self.config.provider_type,
                 self.config.base_url,
             ),
-            timeout_seconds=float(settings.llm_timeout),
+            timeout_seconds=timeout_seconds,
             max_response_bytes=settings.custom_provider_max_response_bytes,
             allowed_target_url=self._target_url,
         )
@@ -728,34 +916,49 @@ class SafeRelayProvider(BaseProvider):
             output_tokens=output_tokens if isinstance(output_tokens, int) else None,
         )
 
+    async def _relay_call(self, messages: List[BaseMessage]) -> LLMResponse:
+        started = time.perf_counter()
+        client = await self._relay_client()
+        headers, payload = self._request_parts(messages)
+        try:
+            response = await client.post(
+                self._target_url,
+                headers=headers,
+                json=payload,
+            )
+        except httpx.TimeoutException as exc:
+            raise ProviderRequestError("provider_timeout") from exc
+        except httpx.TransportError as exc:
+            raise ProviderRequestError(_transport_error_code(exc)) from exc
+        if response.status_code >= 400:
+            raise ProviderRequestError(
+                _response_error_code(response.status_code),
+                status_code=response.status_code,
+                retry_after=_parse_retry_after_header(
+                    response.headers.get("retry-after")
+                ),
+            )
+        # A 200 response means the endpoint answered — recovery signal for the
+        # breaker, even if the body later turns out unparseable.
+        self._endpoint_breaker().record_success()
+        try:
+            response_payload = response.json()
+        except ValueError as exc:
+            raise ProviderRequestError("provider_response_invalid") from exc
+        duration_ms = (time.perf_counter() - started) * 1000
+        return self._parse_response(response_payload, duration_ms)
+
     async def ainvoke(self, messages: List[BaseMessage]) -> LLMResponse:
         self._ensure_async_primitives()
+        await self._endpoint_breaker().before_call()
         await self._rpm_limiter.acquire()
-        async with self._semaphore:
-            started = time.perf_counter()
-            client = await self._relay_client()
-            headers, payload = self._request_parts(messages)
+        async with self._endpoint_semaphore(), self._semaphore:
             try:
-                response = await client.post(
-                    self._target_url,
-                    headers=headers,
-                    json=payload,
-                )
-            except httpx.TimeoutException as exc:
-                raise ProviderRequestError("provider_timeout") from exc
-            except httpx.TransportError as exc:
-                raise ProviderRequestError(_transport_error_code(exc)) from exc
-            if response.status_code >= 400:
-                raise ProviderRequestError(
-                    _response_error_code(response.status_code),
-                    status_code=response.status_code,
-                )
-            try:
-                response_payload = response.json()
-            except ValueError as exc:
-                raise ProviderRequestError("provider_response_invalid") from exc
-            duration_ms = (time.perf_counter() - started) * 1000
-            return self._parse_response(response_payload, duration_ms)
+                return await self._relay_call(messages)
+            except Exception as e:
+                if _is_overload_failure(e):
+                    self._endpoint_breaker().record_failure()
+                raise
 
     async def ainvoke_vision(
         self,

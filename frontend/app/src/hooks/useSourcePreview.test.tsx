@@ -10,6 +10,10 @@ const apiMocks = vi.hoisted(() => ({
 
 vi.mock("@/api/sourcePreview", () => ({
   getTaskSourceFiles: apiMocks.getTaskSourceFiles,
+  isSourcePreviewCatalogMismatch: (error: unknown) => (
+    typeof error === "object" && error !== null && "reason" in error
+      && (error as { reason: unknown }).reason === "catalog_scope_mismatch"
+  ),
   loadSourcePreviewFile: apiMocks.loadSourcePreviewFile,
   sourcePreviewErrorCode: (error: unknown) => (
     typeof error === "object" && error && "code" in error
@@ -42,6 +46,14 @@ const catalog: TaskSourceFiles = {
     "source-1": sourceOne,
     "source-2": sourceTwo,
   },
+};
+const catalogMismatch = {
+  code: "source_preview_load_failed",
+  reason: "catalog_scope_mismatch",
+};
+const taskIdCatalogMismatch = {
+  ...catalogMismatch,
+  mismatch: "task_id",
 };
 
 beforeEach(() => {
@@ -78,6 +90,7 @@ describe("useSourcePreview", () => {
     const { result, rerender } = renderHook(
       ({ sourceId }) => useSourcePreview({
         taskId: "task-1",
+        workflowRevision: 9,
         sourceKind: "submission",
         sourceId,
         displayName: "same-name.pdf",
@@ -105,6 +118,7 @@ describe("useSourcePreview", () => {
   it("revokes the active object URL when the page unmounts", async () => {
     const { result, unmount } = renderHook(() => useSourcePreview({
       taskId: "task-1",
+      workflowRevision: 9,
       sourceKind: "submission",
       sourceId: "source-1",
     }));
@@ -129,6 +143,7 @@ describe("useSourcePreview", () => {
     const { result, rerender } = renderHook(
       ({ taskId, sourceId }) => useSourcePreview({
         taskId,
+        workflowRevision: 9,
         sourceKind: "submission",
         sourceId,
       }),
@@ -144,5 +159,191 @@ describe("useSourcePreview", () => {
 
     expect(apiMocks.loadSourcePreviewFile).not.toHaveBeenCalledWith("task-2", sourceOne);
     expect(apiMocks.loadSourcePreviewFile).toHaveBeenCalledWith("task-2", sourceTwo);
+  });
+
+  it("ignores a stale catalog response after the page moves from revision N to N+1", async () => {
+    let resolveRevisionNine: ((value: TaskSourceFiles) => void) | null = null;
+    const revisionTenCatalog: TaskSourceFiles = {
+      ...catalog,
+      workflow_revision: 10,
+      submission_sources: { "source-2": sourceTwo },
+    };
+    apiMocks.getTaskSourceFiles.mockImplementation(async (_taskId, expectedWorkflowRevision) => {
+      if (expectedWorkflowRevision === 9) {
+        return new Promise<TaskSourceFiles>((resolve) => {
+          resolveRevisionNine = resolve;
+        });
+      }
+      return revisionTenCatalog;
+    });
+    const { result, rerender } = renderHook(
+      ({ workflowRevision, sourceId }) => useSourcePreview({
+        taskId: "task-1",
+        workflowRevision,
+        sourceKind: "submission",
+        sourceId,
+      }),
+      { initialProps: { workflowRevision: 9, sourceId: "source-1" } },
+    );
+
+    rerender({ workflowRevision: 10, sourceId: "source-2" });
+    await waitFor(() => expect(result.current.descriptor?.file_id).toBe("file-2"));
+
+    act(() => resolveRevisionNine?.(catalog));
+    await waitFor(() => expect(result.current.descriptor?.file_id).toBe("file-2"));
+    expect(apiMocks.getTaskSourceFiles).toHaveBeenCalledWith("task-1", 9);
+    expect(apiMocks.getTaskSourceFiles).toHaveBeenCalledWith("task-1", 10);
+  });
+
+  it("ignores a normally resolving task A catalog after the page moves to task B", async () => {
+    let resolveTaskOne: ((value: TaskSourceFiles) => void) | null = null;
+    const refreshTask = vi.fn().mockResolvedValue(undefined);
+    const taskTwoCatalog: TaskSourceFiles = {
+      ...catalog,
+      task_id: "task-2",
+      submission_sources: { "source-2": sourceTwo },
+    };
+    apiMocks.getTaskSourceFiles.mockImplementation(async (taskId) => {
+      if (taskId === "task-1") {
+        return new Promise<TaskSourceFiles>((resolve) => {
+          resolveTaskOne = resolve;
+        });
+      }
+      return taskTwoCatalog;
+    });
+    const { result, rerender } = renderHook(
+      ({ taskId, sourceId }) => useSourcePreview({
+        taskId,
+        workflowRevision: 9,
+        sourceKind: "submission",
+        sourceId,
+        refreshTask,
+      }),
+      { initialProps: { taskId: "task-1", sourceId: "source-1" } },
+    );
+
+    await waitFor(() => expect(apiMocks.getTaskSourceFiles).toHaveBeenCalledWith("task-1", 9));
+    rerender({ taskId: "task-2", sourceId: "source-2" });
+    await waitFor(() => expect(result.current.descriptor?.file_id).toBe("file-2"));
+    act(() => result.current.openPreview());
+    await waitFor(() => expect(result.current.previewUrl).not.toBeNull());
+    const taskTwoPreviewUrl = result.current.previewUrl;
+
+    await act(async () => {
+      resolveTaskOne?.(catalog);
+      await Promise.resolve();
+    });
+
+    expect(result.current.descriptor?.file_id).toBe("file-2");
+    expect(result.current.previewUrl).toBe(taskTwoPreviewUrl);
+    expect(apiMocks.getTaskSourceFiles).toHaveBeenCalledTimes(2);
+    expect(apiMocks.getTaskSourceFiles).toHaveBeenNthCalledWith(2, "task-2", 9);
+    expect(apiMocks.loadSourcePreviewFile).toHaveBeenCalledTimes(1);
+    expect(apiMocks.loadSourcePreviewFile).toHaveBeenCalledWith("task-2", sourceTwo);
+    expect(refreshTask).not.toHaveBeenCalled();
+  });
+
+  it("refreshes the task on a revision jump and adopts only the new catalog scope", async () => {
+    let finishRefresh: (() => void) | null = null;
+    const refreshTask = vi.fn(() => new Promise<void>((resolve) => {
+      finishRefresh = resolve;
+    }));
+    const revisionTenCatalog: TaskSourceFiles = {
+      ...catalog,
+      workflow_revision: 10,
+      submission_sources: { "source-2": sourceTwo },
+    };
+    apiMocks.getTaskSourceFiles.mockImplementation(async (_taskId, expectedWorkflowRevision) => {
+      if (expectedWorkflowRevision === 9) throw catalogMismatch;
+      return revisionTenCatalog;
+    });
+    const { result, rerender } = renderHook(
+      ({ workflowRevision, sourceId }) => useSourcePreview({
+        taskId: "task-1",
+        workflowRevision,
+        sourceKind: "submission",
+        sourceId,
+        refreshTask,
+      }),
+      { initialProps: { workflowRevision: 9, sourceId: "source-1" } },
+    );
+
+    await waitFor(() => expect(refreshTask).toHaveBeenCalledTimes(1));
+    expect(result.current.descriptor).toBeNull();
+    rerender({ workflowRevision: 10, sourceId: "source-2" });
+    act(() => finishRefresh?.());
+
+    await waitFor(() => expect(result.current.descriptor?.file_id).toBe("file-2"));
+    expect(apiMocks.getTaskSourceFiles).toHaveBeenCalledWith("task-1", 9);
+    expect(apiMocks.getTaskSourceFiles).toHaveBeenCalledWith("task-1", 10);
+  });
+
+  it("bounds a persistent same-scope mismatch to one task refresh and one catalog retry", async () => {
+    const refreshTask = vi.fn().mockResolvedValue(undefined);
+    apiMocks.getTaskSourceFiles.mockRejectedValue(catalogMismatch);
+    const { result } = renderHook(() => useSourcePreview({
+      taskId: "task-1",
+      workflowRevision: 9,
+      sourceKind: "submission",
+      sourceId: "source-1",
+      refreshTask,
+    }));
+
+    await waitFor(() => expect(apiMocks.getTaskSourceFiles).toHaveBeenCalledTimes(2));
+    expect(refreshTask).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(result.current.triggerState).toBe("unavailable"));
+    expect(apiMocks.getTaskSourceFiles).toHaveBeenCalledTimes(2);
+  });
+
+  it("recovers once when a delayed old response has a mismatched task id", async () => {
+    let rejectOldResponse: ((reason: unknown) => void) | null = null;
+    const refreshTask = vi.fn().mockResolvedValue(undefined);
+    apiMocks.getTaskSourceFiles
+      .mockImplementationOnce(() => new Promise<TaskSourceFiles>((_resolve, reject) => {
+        rejectOldResponse = reject;
+      }))
+      .mockResolvedValueOnce(catalog);
+    const { result } = renderHook(() => useSourcePreview({
+      taskId: "task-1",
+      workflowRevision: 9,
+      sourceKind: "submission",
+      sourceId: "source-1",
+      refreshTask,
+    }));
+
+    await waitFor(() => expect(apiMocks.getTaskSourceFiles).toHaveBeenCalledTimes(1));
+    act(() => rejectOldResponse?.(taskIdCatalogMismatch));
+
+    await waitFor(() => expect(result.current.descriptor?.file_id).toBe("file-1"));
+    expect(refreshTask).toHaveBeenCalledTimes(1);
+    expect(apiMocks.getTaskSourceFiles).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not chase an always-ahead catalog across successive page revisions", async () => {
+    let finishRefresh: (() => void) | null = null;
+    const refreshTask = vi.fn(() => new Promise<void>((resolve) => {
+      finishRefresh = resolve;
+    }));
+    apiMocks.getTaskSourceFiles.mockRejectedValue(catalogMismatch);
+    const { result, rerender } = renderHook(
+      ({ workflowRevision }) => useSourcePreview({
+        taskId: "task-1",
+        workflowRevision,
+        sourceKind: "submission",
+        sourceId: "source-1",
+        refreshTask,
+      }),
+      { initialProps: { workflowRevision: 9 } },
+    );
+
+    await waitFor(() => expect(refreshTask).toHaveBeenCalledTimes(1));
+    rerender({ workflowRevision: 10 });
+    act(() => finishRefresh?.());
+
+    await waitFor(() => expect(result.current.triggerState).toBe("unavailable"));
+    expect(apiMocks.getTaskSourceFiles).toHaveBeenCalledTimes(2);
+    expect(apiMocks.getTaskSourceFiles).toHaveBeenNthCalledWith(1, "task-1", 9);
+    expect(apiMocks.getTaskSourceFiles).toHaveBeenNthCalledWith(2, "task-1", 10);
+    expect(refreshTask).toHaveBeenCalledTimes(1);
   });
 });

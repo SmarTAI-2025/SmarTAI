@@ -1,7 +1,8 @@
 """
 Problem classification tool.
 
-Uses an LLM to decide the type of a problem (概念题/计算题/编程题/证明题/推理题/其他).
+Uses an LLM to decide the type of a problem (概念题/计算题/编程题/证明题/推理题/
+选择题/多选题/填空题/其他).
 Classification is a TOOL, not a skill — skills consume a type that's already
 been decided.
 
@@ -22,13 +23,17 @@ from backend.tools.structured_llm import structured_llm_call
 logger = logging.getLogger(__name__)
 
 
-PROBLEM_TYPES = ("概念题", "计算题", "编程题", "证明题", "推理题", "其他")
+PROBLEM_TYPES = (
+    "概念题", "计算题", "编程题", "证明题", "推理题",
+    "选择题", "多选题", "填空题", "其他",
+)
 
 
 class ClassificationResult(BaseModel):
-    type: Literal["概念题", "计算题", "编程题", "证明题", "推理题", "其他"] = Field(
-        description="The problem type. Choose exactly one."
-    )
+    type: Literal[
+        "概念题", "计算题", "编程题", "证明题", "推理题",
+        "选择题", "多选题", "填空题", "其他",
+    ] = Field(description="The problem type. Choose exactly one.")
     confidence: float = Field(
         ge=0.0, le=1.0,
         description="Confidence in the classification, 0.0 to 1.0"
@@ -44,6 +49,9 @@ Classify the given problem into exactly ONE of these Chinese types:
 - 编程题: Contains code snippets or asks student to write code.
 - 证明题: Asks student to prove a stated conclusion by logical derivation.
 - 推理题: Asks student to derive a conclusion NOT given in the stem.
+- 选择题: Single-answer multiple choice (lettered options A/B/C/D, exactly one correct).
+- 多选题: Multiple-answer multiple choice (stem states several options are correct).
+- 填空题: Fill-in-the-blank with one short unique answer and no options.
 - 其他: None of the above.
 
 Return a JSON object with fields: type, confidence (0-1), rationale (1-2 sentences).

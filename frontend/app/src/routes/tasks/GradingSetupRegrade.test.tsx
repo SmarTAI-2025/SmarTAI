@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { createMemoryRouter, RouterProvider } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { GradingSetupPage } from "./GradingSetupPage";
@@ -31,6 +31,8 @@ const {
   useSaveGradingSetup,
   useUploadKBDoc,
 } = await import("@/api/hooks");
+
+const saveSetupMutate = vi.fn();
 
 describe("GradingSetupPage regrade mode", () => {
   beforeEach(() => {
@@ -89,7 +91,7 @@ describe("GradingSetupPage regrade mode", () => {
     });
     (useSaveGradingSetup as unknown as ReturnType<typeof vi.fn>).mockReturnValue({
       isPending: false,
-      mutateAsync: vi.fn(),
+      mutateAsync: saveSetupMutate,
     });
     (useKBDocs as unknown as ReturnType<typeof vi.fn>).mockReturnValue({
       data: { docs: [] },
@@ -171,5 +173,84 @@ describe("GradingSetupPage regrade mode", () => {
     )).toBeInTheDocument();
     expect(screen.getByText("Baidu Document Parsing (Unlimited-OCR)")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Save & Review Regrade" })).toBeEnabled();
+  });
+
+  it("saves settings independently while a source blocker still prevents grading start", async () => {
+    const current = (useGradingSetup as unknown as () => any)();
+    (useGradingSetup as unknown as ReturnType<typeof vi.fn>).mockReturnValue({
+      ...current,
+      data: {
+        ...current.data,
+        task_status: "error",
+        readiness: {
+          ready: false,
+          blocking_issues: ["submission_sources_failed"],
+          warnings: [],
+        },
+      },
+    });
+    const router = createMemoryRouter([
+      {
+        path: "/tasks/:taskId/grading-setup",
+        element: <GradingSetupPage />,
+      },
+      {
+        path: "/tasks/:taskId/grading/preflight",
+        element: <div>Grading preflight</div>,
+      },
+    ], {
+      initialEntries: ["/tasks/task-1/grading-setup"],
+    });
+
+    render(<RouterProvider router={router} />);
+
+    const saveButton = await screen.findByRole("button", { name: "Save & Review Grading" });
+    expect(saveButton).toBeEnabled();
+    expect(screen.getByText(/Grading cannot start yet, but you can still save/)).toBeInTheDocument();
+
+    fireEvent.click(saveButton);
+
+    await waitFor(() => expect(saveSetupMutate).toHaveBeenCalledWith({
+      taskId: "task-1",
+      expectedWorkflowRevision: 7,
+      gradingSetup: current.data.grading_setup,
+    }));
+    expect(await screen.findByText("Grading preflight")).toBeInTheDocument();
+  });
+
+  it.each([
+    ["workflow_busy", "The task is busy with another operation. Save after it finishes."],
+    ["grading_setup_locked", "Grading has started, so this setup is locked."],
+  ])("does not save or advance setup while blocked by %s", async (blockingIssue, message) => {
+    const current = (useGradingSetup as unknown as () => any)();
+    (useGradingSetup as unknown as ReturnType<typeof vi.fn>).mockReturnValue({
+      ...current,
+      data: {
+        ...current.data,
+        task_status: "error",
+        readiness: {
+          ready: false,
+          blocking_issues: [blockingIssue],
+          warnings: [],
+        },
+      },
+    });
+    const router = createMemoryRouter([
+      {
+        path: "/tasks/:taskId/grading-setup",
+        element: <GradingSetupPage />,
+      },
+    ], {
+      initialEntries: ["/tasks/task-1/grading-setup"],
+    });
+
+    render(<RouterProvider router={router} />);
+
+    expect(await screen.findByText(message)).toBeInTheDocument();
+    expect(screen.getByRole("slider")).toBeDisabled();
+    const saveButton = screen.getByRole("button", { name: "Save & Review Grading" });
+    expect(saveButton).toBeDisabled();
+    fireEvent.click(saveButton);
+    expect(saveSetupMutate).not.toHaveBeenCalled();
   });
 });

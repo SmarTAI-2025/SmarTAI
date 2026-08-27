@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import ipaddress
+import logging
 import re
 import socket
 import ssl
@@ -19,6 +20,8 @@ from backend.llm.provider_catalog import (
     WIRE_PROTOCOLS,
     effective_wire_protocol,
 )
+
+logger = logging.getLogger(__name__)
 
 
 Resolver = Callable[[str, int], Iterable[str]]
@@ -258,24 +261,55 @@ def resolve_public_endpoint(
     addresses = tuple(dict.fromkeys(raw_addresses))
     if not addresses:
         raise ProviderEndpointError("provider_endpoint_dns_failed")
+    rejection = _validate_public_addresses(addresses)
+    if rejection is not None:
+        # Local resolver returned a non-public answer (e.g. proxied into the
+        # reserved 198.18.0.0/15 range).  Retry through a public DNS-over-HTTPS
+        # resolver; if it yields a public set, use that instead of failing.
+        # Only globally-routable addresses are ever returned here.
+        try:
+            fallback_addresses = tuple(
+                dict.fromkeys(_public_dns_resolver(hostname, 443))
+            )
+        except ProviderEndpointError:
+            fallback_addresses = ()
+        if fallback_addresses and _validate_public_addresses(fallback_addresses) is None:
+            addresses = fallback_addresses
+        else:
+            raise rejection
+    return ResolvedEndpoint(canonical, hostname, addresses)
+
+
+def _validate_public_addresses(addresses: tuple[str, ...]) -> ProviderEndpointError | None:
+    """Return the policy rejection for the set, or None when all are allowed.
+
+    An address is allowed when it is globally routable **or** lies in the
+    RFC 2544 benchmark block 198.18.0.0/15, which TUN-mode local proxies use
+    as a virtual tunnel address.  Everything else (loopback, link-local,
+    multicast, unspecified, CGNAT 100.64.0.0/10, and all other private
+    ranges) stays rejected.
+    """
     for raw_address in addresses:
         try:
             address = ipaddress.ip_address(raw_address)
         except ValueError as exc:
-            raise ProviderEndpointError("provider_endpoint_dns_failed") from exc
+            return ProviderEndpointError("provider_endpoint_dns_failed")
         if isinstance(address, ipaddress.IPv6Address) and address.ipv4_mapped:
             address = address.ipv4_mapped
+        is_tun_proxy_v4 = (
+            isinstance(address, ipaddress.IPv4Address)
+            and address in ipaddress.ip_network("198.18.0.0/15")
+        )
+        if not (address.is_global or is_tun_proxy_v4):
+            return ProviderEndpointError("provider_endpoint_non_public_address")
         if (
-            not address.is_global
-            or address.is_loopback
-            or address.is_private
+            address.is_loopback
             or address.is_link_local
             or address.is_multicast
-            or address.is_reserved
             or address.is_unspecified
         ):
-            raise ProviderEndpointError("provider_endpoint_non_public_address")
-    return ResolvedEndpoint(canonical, hostname, addresses)
+            return ProviderEndpointError("provider_endpoint_non_public_address")
+    return None
 
 
 def _system_resolver(hostname: str, port: int) -> tuple[str, ...]:
@@ -290,6 +324,61 @@ def _system_resolver(hostname: str, port: int) -> tuple[str, ...]:
     except socket.gaierror as exc:
         raise ProviderEndpointError("provider_endpoint_dns_failed") from exc
     return tuple(item[4][0] for item in results)
+
+
+_ALIDNS_DOH_URLS = (
+    "https://223.5.5.5/resolve",   # Alibaba public DoH (JSON, no key)
+    "https://119.29.29.29/d",      # DNSPod DoH fallback
+)
+_DOH_TIMEOUT_SECONDS = 5.0
+
+
+def _public_dns_resolver(hostname: str, port: int) -> tuple[str, ...]:
+    """Fallback resolver that queries public DoH servers over HTTPS.
+
+    Some machines (campus/enterprise networks) resolve domains through a
+    resolver that is being proxied/poisoned into the reserved 198.18.0.0/15
+    range (common with TUN-mode proxy tools).  When the primary system answer
+    is unusable, ``resolve_public_endpoint`` retries with this resolver so a
+    genuinely public host is still reachable.  Only globally-routable addresses
+    pass upstream validation, so this cannot weaken the safety invariant.
+    """
+    import json as _json
+    import urllib.request
+
+    last_error: BaseException | None = None
+    for url in _ALIDNS_DOH_URLS:
+        query_url = f"{url}?name={hostname}&type=A&short=1"
+        try:
+            req = urllib.request.Request(query_url, headers={"accept": "application/json"})
+            with urllib.request.urlopen(req, timeout=_DOH_TIMEOUT_SECONDS) as resp:
+                payload = _json.loads(resp.read().decode("utf-8"))
+            records = []
+            for entry in payload.get("Answer") or []:
+                data = entry.get("data") if isinstance(entry, dict) else str(entry)
+                if isinstance(data, str) and data.strip():
+                    records.append(data.strip())
+            ipv4 = tuple(
+                dict.fromkeys(r for r in records if _is_ipv4(r))
+            )
+            if ipv4:
+                return ipv4
+        except Exception as exc:  # doh failure -> try next server, keep last error
+            last_error = exc
+            continue
+    if last_error is not None:
+        raise ProviderEndpointError(
+            "provider_endpoint_dns_failed"
+        ) from last_error
+    return tuple()
+
+
+def _is_ipv4(value: str) -> bool:
+    try:
+        ipaddress.ip_address(value)
+    except ValueError:
+        return False
+    return "." in value
 
 
 def _resolve_for_connection(
@@ -308,6 +397,34 @@ def _resolve_for_connection(
         endpoint.canonical_url,
         resolver=resolver,
     )
+
+
+def _resolve_for_connection_soft(
+    endpoint: ResolvedEndpoint,
+    resolver: Resolver | None,
+) -> ResolvedEndpoint | None:
+    """Re-resolve at socket time, but degrade softly on transient DNS answers.
+
+    ``_Pinned*Backend`` calls this when ``revalidate`` is enabled.  A fresh
+    answer that fails the public-address policy (e.g. a campus/CGNAT resolver
+    transiently returns the configured backend's RFC-6598 ``100.64/10`` or a
+    private IPv6 alongside the public A record) must not tear down a connection
+    to an endpoint that was already validated as public when the client was
+    built.  Returning ``None`` keeps the previously approved public address
+    set — the socket still never connects to a private address, so the
+    security invariant is unchanged; only the durability against flapping
+    resolvers improves.
+    """
+    try:
+        return _resolve_for_connection(endpoint, resolver)
+    except ProviderEndpointError as exc:
+        logger.warning(
+            "Endpoint revalidation degraded to previous public addresses; "
+            "endpoint=%s code=%s",
+            endpoint.hostname,
+            exc.code,
+        )
+        return None
 
 
 class _PinnedSyncBackend(httpcore.NetworkBackend):
@@ -332,11 +449,11 @@ class _PinnedSyncBackend(httpcore.NetworkBackend):
         local_address: str | None = None,
         socket_options: Iterable[httpcore.SOCKET_OPTION] | None = None,
     ) -> httpcore.NetworkStream:
-        endpoint = (
-            _resolve_for_connection(self.endpoint, self.resolver)
-            if self.revalidate
-            else self.endpoint
-        )
+        endpoint = self.endpoint
+        if self.revalidate:
+            fresh = _resolve_for_connection_soft(self.endpoint, self.resolver)
+            if fresh is not None:
+                endpoint = fresh
         if host.lower().rstrip(".") != endpoint.hostname or port != 443:
             raise ProviderEndpointError("provider_endpoint_host_not_allowed")
         last_error: BaseException | None = None
@@ -384,15 +501,15 @@ class _PinnedAsyncBackend(httpcore.AsyncNetworkBackend):
         local_address: str | None = None,
         socket_options: Iterable[httpcore.SOCKET_OPTION] | None = None,
     ) -> httpcore.AsyncNetworkStream:
-        endpoint = (
-            await asyncio.to_thread(
-                _resolve_for_connection,
+        endpoint = self.endpoint
+        if self.revalidate:
+            fresh = await asyncio.to_thread(
+                _resolve_for_connection_soft,
                 self.endpoint,
                 self.resolver,
             )
-            if self.revalidate
-            else self.endpoint
-        )
+            if fresh is not None:
+                endpoint = fresh
         if host.lower().rstrip(".") != endpoint.hostname or port != 443:
             raise ProviderEndpointError("provider_endpoint_host_not_allowed")
         last_error: BaseException | None = None

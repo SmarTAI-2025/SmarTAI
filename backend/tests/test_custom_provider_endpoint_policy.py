@@ -25,6 +25,21 @@ def _public_resolver(hostname: str, port: int):
     return ["93.184.216.34", "2606:2800:220:1:248:1893:25c8:1946"]
 
 
+@pytest.fixture(autouse=True)
+def _no_real_doh(monkeypatch):
+    """Keep endpoint tests hermetic: the DoH fallback never touches the network.
+
+    By default the public DoH lookup is simulated as finding no records
+    (NXDOMAIN / offline), preserving the fail-closed behaviour the existing
+    assertions were written against.  Tests that exercise the DoH fallback
+    override this by monkeypatching ``_public_dns_resolver`` themselves.
+    """
+    monkeypatch.setattr(
+        "backend.llm.endpoint_policy._public_dns_resolver",
+        lambda hostname, port: (),
+    )
+
+
 @pytest.mark.parametrize(
     ("value", "expected"),
     [
@@ -296,7 +311,16 @@ async def test_async_network_backend_connects_only_to_approved_ip():
     assert backend.hosts == ["93.184.216.34"]
 
 
-def test_rebinding_is_rechecked_before_connect():
+def test_rebinding_degrades_to_previously_approved_public_set():
+    """A fresh DNS answer violating the public-address policy must not steer
+    the socket to a private address.
+
+    Revalidation is rechecked before connect; when the fresh answer fails
+    policy (and the DoH fallback finds no public record), the client degrades
+    to the previously approved public address set — see
+    ``_resolve_for_connection_soft``.  The security invariant is that the
+    socket never connects to the private answer.
+    """
     calls = 0
 
     def rebinding_resolver(hostname, port):
@@ -315,10 +339,49 @@ def test_rebinding_is_rechecked_before_connect():
         revalidate=True,
     )
 
+    pinned.connect_tcp("relay.example.com", 443)
+    # The loopback answer was rejected by policy; the socket may only use
+    # the previously approved public address.
+    assert backend.hosts == ["93.184.216.34"]
+
+
+def test_doh_fallback_recovers_poisoned_local_resolver(monkeypatch):
+    """A local resolver proxied into a private range (TUN-mode / campus
+    networks) is superseded by a public DNS-over-HTTPS answer."""
+    monkeypatch.setattr(
+        "backend.llm.endpoint_policy._public_dns_resolver",
+        lambda hostname, port: ("93.184.216.34",),
+    )
+    endpoint = resolve_public_endpoint(
+        "https://relay.example.com/v1",
+        resolver=lambda hostname, port: ["10.0.0.1"],
+    )
+    assert endpoint.addresses == ("93.184.216.34",)
+
+
+def test_doh_fallback_failure_keeps_fail_closed():
+    """When DoH yields no public record, the original policy rejection
+    is still raised — the fallback never weakens the invariant.
+
+    The autouse ``_no_real_doh`` fixture simulates a DoH lookup with no
+    records, which is exactly the condition under test.
+    """
     with pytest.raises(ProviderEndpointError) as exc_info:
-        pinned.connect_tcp("relay.example.com", 443)
+        resolve_public_endpoint(
+            "https://relay.example.com/v1",
+            resolver=lambda hostname, port: ["10.0.0.1"],
+        )
     assert exc_info.value.code == "provider_endpoint_non_public_address"
-    assert backend.hosts == []
+
+
+def test_tun_proxy_benchmark_block_is_accepted():
+    """RFC 2544 198.18.0.0/15 is the virtual tunnel address used by
+    TUN-mode local proxies and is accepted as endpoint address."""
+    endpoint = resolve_public_endpoint(
+        "https://relay.example.com/v1",
+        resolver=lambda hostname, port: ["198.18.0.1"],
+    )
+    assert endpoint.addresses == ("198.18.0.1",)
 
 
 def test_public_dns_rotation_uses_only_the_freshly_approved_connection_set():

@@ -70,6 +70,12 @@ class Settings(BaseSettings):
     # 10+ — set fallback conservatively. Per-key override comes from BYOK config
     # (ProviderConfig.max_concurrent).
     max_concurrent_llm_per_provider: int = 5
+    # Shared cap on concurrent LLM calls to ONE endpoint (host), regardless of
+    # how many provider configs point at it.  A shared relay fronted by several
+    # BYOK entries would otherwise multiply the per-provider caps (4 entries ×
+    # 5 = 20 parallel calls to one gateway).  Keep at or below
+    # max_concurrent_llm_per_provider.
+    max_concurrent_llm_per_endpoint: int = 5
     llm_timeout: int = 600  # seconds
     llm_max_retries: int = 3
     # When the LLM returns a 429 / quota exceeded error AND the provider's
@@ -111,6 +117,37 @@ class Settings(BaseSettings):
     custom_provider_verification_timeout_seconds: int = 30
     custom_provider_verification_cooldown_seconds: int = 5
     custom_provider_max_response_bytes: int = 4 * 1024 * 1024
+    # Timeout for individual custom-provider (SafeRelay) LLM calls.  Some free
+    # relay endpoints (e.g. campus relays) silently hang on larger requests,
+    # while `llm_timeout` (600s) would otherwise let a single call block the
+    # whole question-preparation job for ten minutes.  A separate, shorter cap
+    # makes such endpoints fail into the normal retry/error flow instead of
+    # appearing to spin forever.  0 disables the override and falls back to
+    # `llm_timeout`.
+    custom_provider_timeout_seconds: int = int(
+        os.getenv("SMARTAI_CUSTOM_PROVIDER_TIMEOUT_SECONDS", "120")
+    )
+    # Question-level grading retry.  The per-LLM-call tenacity retry
+    # (`llm_max_retries`) already covers most flakes, but when EVERY expert of
+    # a question fails with a transient error (e.g. the USTC campus relay
+    # hanging across a whole fan-out) the question is reported as
+    # "暂未批改" until a teacher re-runs grading.  One extra full attempt per
+    # question, after a short backoff, recovers these bursts without adding
+    # meaningful latency in the common case (the retry only fires when every
+    # expert failed transiently).  0 disables it.
+    grading_item_max_retries: int = int(
+        os.getenv("SMARTAI_GRADING_ITEM_MAX_RETRIES", "1")
+    )
+    # Problem extraction is normally a single LLM call whose body grows with
+    # the source text.  Some free relay endpoints hang on larger JSON bodies,
+    # so `extract_problems` chunks the source text into pieces of at most
+    # `source_chunk_chars` characters (with `source_chunk_overlap_chars`
+    # characters of overlap) and issues one bounded call per chunk, then merges
+    # the problems.  0 disables chunking (single call, legacy behaviour).
+    source_chunk_chars: int = int(os.getenv("SMARTAI_SOURCE_CHUNK_CHARS", "1200"))
+    source_chunk_overlap_chars: int = int(
+        os.getenv("SMARTAI_SOURCE_CHUNK_OVERLAP_CHARS", "200")
+    )
 
     @property
     def custom_provider_endpoints_available(self) -> bool:
@@ -273,7 +310,7 @@ class Settings(BaseSettings):
     # The file MUST be gitignored — keep credentials out of the repo. Generate
     # via `python scripts/generate_test_users.py` (creates 50 random accounts).
     test_users_file: str = os.getenv("SMARTAI_TEST_USERS_FILE", "data/test_users.json")
-    seed_test_users: bool = os.getenv("SMARTAI_SEED_TEST_USERS", "true").lower() == "true"
+    seed_test_users: bool = os.getenv("SMARTAI_SEED_TEST_USERS", "false").lower() == "true"
 
     @model_validator(mode="after")
     def resolve_database_url(self) -> "Settings":

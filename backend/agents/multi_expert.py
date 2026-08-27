@@ -79,6 +79,30 @@ class SynthesisOutput(BaseModel):
     steps: List[dict] = Field(default_factory=list)
 
 
+# Priority: quota > transient > parse > general. Higher index = wins.
+_ERROR_KIND_PRIORITY = ("general", "parse_failed", "transient_llm", "quota_exhausted")
+
+
+def dominant_error_kind(failures: List[ExpertResult]) -> str:
+    """Most "actionable" error kind across a set of failed expert results.
+
+    `quota_exhausted` is surfaced preferentially because it's the only kind a
+    teacher can fix immediately (wait & retry, or raise the RPM cap).
+    """
+    best_rank = -1
+    best = "general"
+    for er in failures:
+        kind = er.error_kind or "general"
+        try:
+            rank = _ERROR_KIND_PRIORITY.index(kind)
+        except ValueError:
+            rank = 0
+        if rank > best_rank:
+            best_rank = rank
+            best = kind
+    return best
+
+
 class AllExpertsFailed(Exception):
     """Raised when every expert returned a blank/failed result.
 
@@ -92,12 +116,9 @@ class AllExpertsFailed(Exception):
     teacher can fix immediately (wait & retry, or raise RPM cap).
     """
 
-    # Priority: quota > transient > parse > general. Higher index = wins.
-    _PRIORITY = ("general", "parse_failed", "transient_llm", "quota_exhausted")
-
     def __init__(self, failures: List[ExpertResult]):
         self.failures = failures
-        self.dominant_kind = self._pick_dominant(failures)
+        self.dominant_kind = dominant_error_kind(failures)
         summary = "; ".join(
             f"{er.provider}: {(er.comment or 'unknown error').strip()[:160]}"
             for er in failures
@@ -105,21 +126,6 @@ class AllExpertsFailed(Exception):
         super().__init__(
             f"All {len(failures)} experts failed (dominant_kind={self.dominant_kind}). {summary}"
         )
-
-    @classmethod
-    def _pick_dominant(cls, failures: List[ExpertResult]) -> str:
-        best_rank = -1
-        best = "general"
-        for er in failures:
-            kind = er.error_kind or "general"
-            try:
-                rank = cls._PRIORITY.index(kind)
-            except ValueError:
-                rank = 0
-            if rank > best_rank:
-                best_rank = rank
-                best = kind
-        return best
 
 
 # ─── Multi-expert fan-out ─────────────────────────────────────────────────────
