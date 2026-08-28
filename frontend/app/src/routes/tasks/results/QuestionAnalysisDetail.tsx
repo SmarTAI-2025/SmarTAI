@@ -459,6 +459,7 @@ function reviewReasonLabel(reason: string, locale: Locale): string {
     high_indecisiveness: ["专家意见分歧", "Model disagreement"],
     score_spread_high: ["专家分差较大", "Large score spread across models"],
     parse_failed: ["解析失败", "Parsing failed"],
+    degraded_to_single: ["仅单专家成功（低置信度）", "Only one expert succeeded (low confidence)"],
     quota_exhausted: ["模型额度失败", "Model quota failure"],
   };
   const label = labels[reason];

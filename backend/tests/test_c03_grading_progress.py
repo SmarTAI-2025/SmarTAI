@@ -67,3 +67,60 @@ def test_failed_grading_state_overrides_stale_done_reporter(monkeypatch):
     assert snapshot["progress"]["phase"] == "error"
     assert snapshot["progress"]["error_detail"] == "grading_failed"
     assert snapshot["error"] == "grading_failed"
+
+
+def test_grading_state_exposes_live_active_units(monkeypatch):
+    """The durable projection hardcodes ``active: []``; the live reporter's
+    in-flight units must be merged in so the progress page's "running" count
+    is not stuck at 0 (2026-08-28 fix)."""
+    from backend.progress import tracker
+    from backend.services import task_facade
+
+    monkeypatch.setattr(
+        task_facade,
+        "task_state",
+        lambda **_kwargs: {
+            "status": "grading",
+            "grading_job_id": "run-live",
+            "active_job_id": None,
+            "active_operation": None,
+            "progress": None,
+            "error": None,
+        },
+    )
+    monkeypatch.setattr(
+        task_facade,
+        "_grading_progress",
+        lambda _run_id, _owner_id: {
+            "phase": "grading",
+            "completed_units": 0,
+            "active": [],
+            "messages": [],
+        },
+    )
+
+    async def exercise():
+        # A real reporter in the shared registry — get_reporter() (unpatched)
+        # must find it, exercising the merge path in async_task_state.
+        reporter = tracker.get_or_create_reporter("run-live", 2, 2)
+        await reporter.set_phase("grading")
+        await reporter.increment_completed()
+        step = reporter.step("anonymous-1", "q2", skill="ConceptSkill")
+        await step.__aenter__()
+        try:
+            return await task_facade.async_task_state(
+                task_id="task-1", owner_id="teacher-1"
+            )
+        finally:
+            await step.__aexit__(None, None, None)
+            tracker.remove_reporter("run-live")
+
+    snapshot = asyncio.run(exercise())
+    progress = snapshot["progress"]
+
+    # Durable fields stay durable; live fields are borrowed from the reporter.
+    assert progress["phase"] == "grading"
+    assert progress["completed_units"] == 1
+    assert len(progress["active"]) == 1
+    assert progress["active"][0]["student_id"] == "anonymous-1"
+    assert progress["active"][0]["q_id"] == "q2"
