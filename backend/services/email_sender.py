@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import smtplib
 import ssl
+from ipaddress import ip_address
 from email.message import EmailMessage
 from email.utils import formataddr
 from html import escape
@@ -22,9 +23,36 @@ class EmailDeliveryError(RuntimeError):
 
 def _frontend_origin() -> str:
     parts = urlsplit(settings.public_frontend_url.strip())
-    if parts.scheme not in {"http", "https"} or not parts.netloc or parts.query or parts.fragment:
+    try:
+        port = parts.port
+    except ValueError as exc:
+        raise EmailDeliveryError() from exc
+    if (
+        parts.scheme not in {"http", "https"}
+        or not parts.netloc
+        or not parts.hostname
+        or parts.username is not None
+        or parts.password is not None
+        or parts.path not in {"", "/"}
+        or parts.query
+        or parts.fragment
+        or port == 0
+    ):
+        raise EmailDeliveryError()
+    if settings.runtime_environment == "production" and parts.scheme != "https":
+        raise EmailDeliveryError()
+    if parts.scheme == "http" and not _is_loopback_host(parts.hostname):
         raise EmailDeliveryError()
     return urlunsplit((parts.scheme, parts.netloc, "", "", "")).rstrip("/")
+
+
+def _is_loopback_host(hostname: str) -> bool:
+    if hostname.casefold() == "localhost":
+        return True
+    try:
+        return ip_address(hostname).is_loopback
+    except ValueError:
+        return False
 
 
 def verification_message(username: str, token: str) -> tuple[str, str, str]:

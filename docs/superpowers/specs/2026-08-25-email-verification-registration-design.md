@@ -21,10 +21,11 @@ token is confirmed. Request and verify endpoints re-check the configured domain
 allowlist, and verification creates exactly one `teacher` user and marks the
 request consumed in one transaction.
 
-The old anonymous `/auth/register` route will reject requests in production and
-will no longer accept role, invite-code, or admin fields for public registration.
-Existing admin invite registration remains available as a separate controlled
-path for current test/administration workflows.
+The old anonymous `/auth/register` route is not publicly mounted and therefore
+returns `404` in every runtime environment. It cannot accept role, invite-code,
+or admin fields for public registration. Invite records and the administrator
+invite API remain available for future controlled workflows and internal tools,
+but they are not an anonymous HTTP registration bypass.
 
 ## API
 
@@ -49,7 +50,7 @@ SMTP failures return a stable delivery error and do not leave a usable pending
 request. Public responses do not reveal whether an existing username/email was
 found. Logs contain only request ids and stable error codes. Rate limits are
 implemented with the documented 60-second resend cooldown and configurable
-per-email/per-IP hourly caps.
+per-email/per-IP hourly caps (10 per email and 20 per source IP by default).
 
 ## Frontend
 

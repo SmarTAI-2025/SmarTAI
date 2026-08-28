@@ -14,12 +14,6 @@ export interface LoginRequest {
   password: string;
 }
 
-export interface RegisterRequest extends LoginRequest {
-  email: string;
-  role?: "teacher" | "student";
-  invite_code?: string | null;
-}
-
 export interface EmailRegistrationRequest {
   username: string;
   email: string;

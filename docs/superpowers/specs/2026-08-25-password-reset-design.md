@@ -24,7 +24,7 @@ JWTs already contain `iat`. Authentication will reject a token when its `iat` is
 
 ## Errors And Limits
 
-Stable reset errors are `password_reset_link_expired`, `password_reset_link_already_used`, `password_reset_link_invalid`, `password_reset_rate_limited`, and `password_reset_unavailable`. Rate limits reuse the existing email-flow configuration: 60 seconds between sends, five per email per hour, and twenty per source IP per hour. Responses include `Retry-After` only for rate limiting.
+Stable reset errors are `password_reset_link_expired`, `password_reset_link_already_used`, `password_reset_link_invalid`, `password_reset_rate_limited`, and `password_reset_unavailable`. Rate limits reuse the existing email-flow configuration: 60 seconds between sends, ten per email per hour, and twenty per source IP per hour. Responses include `Retry-After` only for rate limiting.
 
 ## Email And Frontend
 

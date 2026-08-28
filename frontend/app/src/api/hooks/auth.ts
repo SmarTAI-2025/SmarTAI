@@ -22,19 +22,12 @@ export function useLogin() {
   });
 }
 
-export function useRegister() {
-  const queryClient = useQueryClient();
-
-  return useMutation({
-    mutationFn: authApi.register,
-    onSuccess: (data) => {
-      queryClient.setQueryData(authKeys.me, data.user);
-    },
-  });
-}
-
 export function useRequestRegistration() {
   return useMutation({ mutationFn: authApi.requestRegistration });
+}
+
+export function useResendRegistration() {
+  return useMutation({ mutationFn: authApi.resendRegistration });
 }
 
 export function useVerifyRegistration() {

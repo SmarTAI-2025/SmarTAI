@@ -1,18 +1,13 @@
 """Configurable registration with short access tokens and rotating sessions."""
 from __future__ import annotations
 
-from typing import Optional
-
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from backend.auth import create_token, get_current_user, hash_password, verify_password
+from backend.auth import create_token, get_current_user, verify_password
 from backend.config import settings
 from backend.db.auth_repository import (
-    AuthRepositoryError,
     create_refresh_session,
-    register_with_invite,
-    register_without_invite,
     revoke_refresh_session,
     rotate_refresh_session,
 )
@@ -42,29 +37,6 @@ class LoginRequest(BaseModel):
     @classmethod
     def _strip_username(cls, value):
         return value.strip() if isinstance(value, str) else value
-
-
-class RegisterRequest(BaseModel):
-    username: str = Field(min_length=3, max_length=64)
-    password: str = Field(min_length=6, max_length=128)
-    email: str = ""
-    # Invite registration uses the invite's role; open registration accepts only
-    # teacher/student and never admin.
-    role: str = "teacher"
-    invite_code: Optional[str] = None
-
-    @field_validator("username", "email", mode="before")
-    @classmethod
-    def _strip_identity_fields(cls, value):
-        return value.strip() if isinstance(value, str) else value
-
-    @field_validator("invite_code", mode="before")
-    @classmethod
-    def _normalize_invite_code(cls, value):
-        if not isinstance(value, str):
-            return value
-        stripped = value.strip()
-        return stripped or None
 
 
 class EmailRegistrationRequest(BaseModel):
@@ -113,32 +85,6 @@ def _set_refresh_cookie(response: Response, raw: str) -> None:
     )
 
 
-@router.post("/register")
-def register(req: RegisterRequest, response: Response):
-    # Existing administrator-issued invites remain a controlled path. Anonymous
-    # public registration without an invite is permanently replaced by email
-    # verification below.
-    if req.invite_code:
-        try:
-            user = register_with_invite(
-                username=req.username,
-                email=req.email,
-                role=req.role,
-                password_hash=hash_password(req.password),
-                invite_code=req.invite_code,
-            )
-        except AuthRepositoryError as exc:
-            code = status.HTTP_409_CONFLICT if str(exc) in {"Username already exists", "Email already exists"} else status.HTTP_400_BAD_REQUEST
-            raise HTTPException(code, detail=str(exc)) from exc
-        refresh = create_refresh_session(user.id, settings.refresh_session_days)
-        _set_refresh_cookie(response, refresh)
-        return {"user_id": user.id, "token": create_token(user.id, user.role), "user": user.public()}
-    raise HTTPException(
-        status.HTTP_410_GONE,
-        detail={"code": "registration_verification_required"},
-    )
-
-
 def _registration_error(exc: RegistrationError) -> HTTPException:
     headers = {"Retry-After": str(exc.retry_after)} if exc.retry_after else None
     return HTTPException(exc.status_code, detail={"code": exc.code}, headers=headers)
@@ -171,9 +117,9 @@ def resend_email_registration(req: EmailRegistrationResendRequest, request: Requ
 
 
 @router.post("/register/verify")
-def verify_email_registration(req: EmailRegistrationVerifyRequest):
+def verify_email_registration(req: EmailRegistrationVerifyRequest, request: Request):
     try:
-        return verify_registration(req.token)
+        return verify_registration(req.token, request.client.host if request.client else None)
     except RegistrationError as exc:
         raise _registration_error(exc) from exc
 

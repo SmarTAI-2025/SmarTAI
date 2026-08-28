@@ -1,8 +1,10 @@
 from fastapi.testclient import TestClient
 from sqlalchemy import select
 import hashlib
+import pytest
 
 from backend.auth import hash_password
+from backend.db.auth_repository import AuthRepositoryError, register_with_invite
 from backend.db.models import RefreshSessionRecord
 from backend.db.session import session_scope
 from backend.main import app
@@ -27,11 +29,25 @@ def test_admin_invite_registration_and_one_time_consumption():
     assert invite.status_code == 200
     code = invite.json()["invite_code"]
 
-    registered = client.post("/auth/register", json={"username": "new-teacher", "password": "secret-pass", "invite_code": code})
-    assert registered.status_code == 200
+    registered = register_with_invite(
+        username="new-teacher",
+        email="new-teacher@example.edu",
+        role="teacher",
+        password_hash=hash_password("secret-pass"),
+        invite_code=code,
+    )
+    assert registered.username == "new-teacher"
+    login = client.post("/auth/login", json={"username": "new-teacher", "password": "secret-pass"})
+    assert login.status_code == 200
     assert client.cookies.get("smartai_refresh")
-    repeated = client.post("/auth/register", json={"username": "other", "password": "secret-pass", "invite_code": code})
-    assert repeated.status_code == 400
+    with pytest.raises(AuthRepositoryError, match="Invalid or expired invite code"):
+        register_with_invite(
+            username="other",
+            email="other@example.edu",
+            role="teacher",
+            password_hash=hash_password("secret-pass"),
+            invite_code=code,
+        )
 
 
 def test_refresh_rotates_cookie_and_logout_revokes_it():
@@ -71,8 +87,7 @@ def test_public_registration_without_invite_requires_email_verification(monkeypa
         "role": "teacher",
     })
 
-    assert response.status_code == 410, response.text
-    assert response.json()["detail"]["code"] == "registration_verification_required"
+    assert response.status_code == 404, response.text
     assert client.cookies.get("smartai_refresh") is None
 
 
@@ -86,7 +101,7 @@ def test_public_registration_cannot_select_student_role(monkeypatch):
         "role": "student",
     })
 
-    assert response.status_code == 410, response.text
+    assert response.status_code == 404, response.text
 
 
 def test_public_registration_cannot_select_admin_role(monkeypatch):
@@ -99,7 +114,7 @@ def test_public_registration_cannot_select_admin_role(monkeypatch):
         "role": "admin",
     })
 
-    assert response.status_code == 410
+    assert response.status_code == 404
 
 
 def test_closed_registration_without_invite_is_rejected(monkeypatch):
@@ -111,8 +126,7 @@ def test_closed_registration_without_invite_is_rejected(monkeypatch):
         "password": "secret-pass",
     })
 
-    assert response.status_code == 410
-    assert response.json()["detail"]["code"] == "registration_verification_required"
+    assert response.status_code == 404
 
 
 def test_demo_admin_token_is_rejected_and_not_persisted_by_default(monkeypatch):

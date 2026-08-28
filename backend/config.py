@@ -7,7 +7,7 @@ from __future__ import annotations
 import os
 from collections.abc import MutableMapping
 from typing import Optional, Literal
-from pydantic import model_validator
+from pydantic import AliasChoices, Field, model_validator
 from pydantic_settings import BaseSettings
 
 
@@ -213,10 +213,12 @@ class Settings(BaseSettings):
     mathpix_app_key: str = os.getenv("MATHPIX_APP_KEY", "")
 
     # ─── Frontend ──────────────────────────────────────────────────────────────
-    frontend_urls: str = os.getenv(
-        "FRONTEND_URLS",
-        "http://localhost:8501,http://localhost:3000,http://localhost:8001,"
-        "http://localhost:5173,http://127.0.0.1:5173",
+    frontend_urls: str = Field(
+        default=(
+            "http://localhost:8501,http://localhost:3000,http://localhost:8001,"
+            "http://localhost:5173,http://127.0.0.1:5173"
+        ),
+        validation_alias=AliasChoices("FRONTEND_URLS", "SMARTAI_FRONTEND_URLS"),
     )
     backend_port: int = 8000
 
@@ -266,7 +268,7 @@ class Settings(BaseSettings):
     smtp_timeout_seconds: float = 20.0
     email_verification_expiry_seconds: int = 1800
     email_verification_resend_seconds: int = 60
-    email_verification_hourly_email_limit: int = 5
+    email_verification_hourly_email_limit: int = 10
     email_verification_hourly_ip_limit: int = 20
 
     # If true, requests without a valid token are rejected by protected

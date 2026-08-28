@@ -1,14 +1,8 @@
 import { clearAuthToken, getAuthToken, getJSON, postJSON, setAuthToken } from "./client";
-import type { AuthResponse, EmailRegistrationRequest, EmailRegistrationResponse, EmailRegistrationVerifyResponse, LoginRequest, PasswordResetConfirmResponse, PasswordResetRequest, PasswordResetRequestResponse, RefreshResponse, RegisterRequest, StatusResponse, User } from "@/types";
+import type { AuthResponse, EmailRegistrationRequest, EmailRegistrationResponse, EmailRegistrationVerifyResponse, LoginRequest, PasswordResetConfirmResponse, PasswordResetRequest, PasswordResetRequestResponse, RefreshResponse, StatusResponse, User } from "@/types";
 
 export async function login(request: LoginRequest): Promise<AuthResponse> {
   const response = await postJSON<AuthResponse, LoginRequest>("/auth/login", request);
-  setAuthToken(response.token);
-  return response;
-}
-
-export async function register(request: RegisterRequest): Promise<AuthResponse> {
-  const response = await postJSON<AuthResponse, RegisterRequest>("/auth/register", request);
   setAuthToken(response.token);
   return response;
 }

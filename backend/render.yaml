@@ -70,6 +70,24 @@ services:
         value: "none"
       - key: SMARTAI_SEED_TEST_USERS
         value: "false"
+      # Email verification and password reset. Deployment-specific values and
+      # credentials must be entered in the Render dashboard.
+      - key: SMARTAI_SMTP_HOST
+        value: smtp.gmail.com
+      - key: SMARTAI_SMTP_PORT
+        value: "587"
+      - key: SMARTAI_SMTP_SECURITY
+        value: starttls
+      - key: SMARTAI_SMTP_USERNAME
+        sync: false
+      - key: SMARTAI_SMTP_PASSWORD
+        sync: false
+      - key: SMARTAI_MAIL_FROM_ADDRESS
+        sync: false
+      - key: SMARTAI_ALLOWED_EMAIL_DOMAINS
+        value: ustc.edu.cn
+      - key: SMARTAI_PUBLIC_FRONTEND_URL
+        sync: false
       # Frontend URL — fill in after Vercel deploys. Comma-separated list
       # for CORS. Localhost included so you can do mixed dev (frontend
       # local, backend deployed) while iterating.
