@@ -97,6 +97,7 @@ def _patch_skill_returning(monkeypatch, results_by_provider: dict[str, ExpertRes
                 max_score=er.max_score,
                 confidence=er.confidence,
                 comment=er.comment,
+                error_kind=er.error_kind,
             )
 
     import backend.agents.multi_expert as me
@@ -180,6 +181,144 @@ async def test_partial_failure_degrades_to_single(monkeypatch):
     # Both experts (success + failure) preserved for the frontend accordion
     pids = sorted(er.provider for er in correction.expert_results)
     assert pids == sorted([p1.provider_id, p2.provider_id])
+
+
+# ─── 2b. 2026-08-28 low-confidence merge policy ─────────────────────────────
+#
+# Model capabilities are uneven: Qwen cannot grade some free-response items
+# while DeepSeek only grades big questions. When only some models can grade
+# an item, the merged result must NOT be forced into the review queue by the
+# weaker model's low confidence — ANY confident expert makes the result high
+# confidence ("any high confidence wins").
+
+
+@pytest.mark.asyncio
+async def test_partial_failure_high_confidence_survivor_is_not_flagged(monkeypatch):
+    p1 = _FakeProvider("zhipu:glm-4.5-air")
+    p2 = _FakeProvider("gemini:gemini-3-flash-preview")
+    _patch_skill_returning(monkeypatch, {
+        p1.provider_id: _expert_result(p1.provider_id, 0.0, 0.0, "cannot grade this item"),
+        p2.provider_id: _expert_result(p2.provider_id, 8.5, 0.9, "Looks correct."),
+    })
+    import backend.agents.multi_expert as me
+    monkeypatch.setattr(me._settings, "confidence_threshold", 0.6, raising=False)
+
+    correction = await run_multi_expert(
+        problem=_problem(),
+        answer=_answer(),
+        student_id="S1",
+        registry=_FakeRegistry([p1, p2]),
+    )
+    assert correction.synthesis_method == "degraded_to_single"
+    assert correction.confidence == pytest.approx(0.9)
+    # One confident model is enough: no forced human review.
+    assert correction.requires_human_review is False
+    assert correction.review_reasons == []
+
+
+@pytest.mark.asyncio
+async def test_partial_failure_low_confidence_survivor_is_flagged(monkeypatch):
+    p1 = _FakeProvider("zhipu:glm-4.5-air")
+    p2 = _FakeProvider("gemini:gemini-3-flash-preview")
+    _patch_skill_returning(monkeypatch, {
+        p1.provider_id: _expert_result(p1.provider_id, 0.0, 0.0, "cannot grade this item"),
+        p2.provider_id: _expert_result(p2.provider_id, 4.0, 0.35, "unsure"),
+    })
+    import backend.agents.multi_expert as me
+    monkeypatch.setattr(me._settings, "confidence_threshold", 0.6, raising=False)
+
+    correction = await run_multi_expert(
+        problem=_problem(),
+        answer=_answer(),
+        student_id="S1",
+        registry=_FakeRegistry([p1, p2]),
+    )
+    assert correction.synthesis_method == "degraded_to_single"
+    assert correction.requires_human_review is True
+    assert "degraded_to_single" in correction.review_reasons
+
+
+def test_weighted_average_confidence_uses_best_expert():
+    successes = [
+        _expert_result("weak:m", 8.0, 0.3, "weak but tried"),
+        _expert_result("strong:m", 7.0, 0.95, "strong"),
+    ]
+    correction = _weighted_average_fallback(_problem(), successes)
+    # The merged result is as confident as the best expert — a weak model's
+    # self-doubt must not drag it below the review threshold.
+    assert correction.confidence == pytest.approx(0.95)
+    # The score is still confidence-weighted (strong expert dominates).
+    assert correction.score == pytest.approx((8.0 * 0.3 + 7.0 * 0.95) / 1.25, abs=1e-9)
+
+
+def _transient_result(provider: str, score: float = 0.0, conf: float = 0.0) -> ExpertResult:
+    """The network/timeout blank result a skill returns after classify_skill_error."""
+    return ExpertResult(
+        provider=provider,
+        score=score,
+        max_score=10.0,
+        confidence=conf,
+        comment="🌐 该题暂未批改完成 — AI 服务出现网络/超时错误。请稍后重试。",
+        error_kind="transient_llm",
+    )
+
+
+@pytest.mark.asyncio
+async def test_transient_network_failure_is_not_a_confidence_vote(monkeypatch):
+    """2026-08-28 fine-tune: a network/timeout error (conf 0, transient_llm)
+    is not a vote — the confident sibling fully determines the merged
+    confidence, and the result is not flagged for review."""
+    p1 = _FakeProvider("zhipu:glm-4.5-air")
+    p2 = _FakeProvider("gemini:gemini-3-flash-preview")
+    _patch_skill_returning(monkeypatch, {
+        p1.provider_id: _transient_result(p1.provider_id),
+        p2.provider_id: _expert_result(p2.provider_id, 8.0, 0.9, "Looks correct."),
+    })
+    import backend.agents.multi_expert as me
+    monkeypatch.setattr(me._settings, "confidence_threshold", 0.6, raising=False)
+
+    correction = await run_multi_expert(
+        problem=_problem(),
+        answer=_answer(),
+        student_id="S1",
+        registry=_FakeRegistry([p1, p2]),
+    )
+    assert correction.synthesis_method == "degraded_to_single"
+    assert correction.confidence == pytest.approx(0.9)
+    assert correction.requires_human_review is False
+    assert correction.review_reasons == []
+    # The failed expert stays visible for triage but cast no vote.
+    assert [er.provider for er in correction.expert_results] == [
+        p2.provider_id, p1.provider_id,
+    ]
+    assert correction.expert_results[1].error_kind == "transient_llm"
+
+
+@pytest.mark.asyncio
+async def test_transient_error_is_non_vote_even_with_spurious_confidence(monkeypatch):
+    """Defensive: an infrastructure failure must stay non-voting even if a
+    spurious non-zero confidence leaked into the result — it must not count
+    as a second vote nor drag the merged confidence down."""
+    p1 = _FakeProvider("zhipu:glm-4.5-air")
+    p2 = _FakeProvider("gemini:gemini-3-flash-preview")
+    _patch_skill_returning(monkeypatch, {
+        p1.provider_id: _transient_result(p1.provider_id, score=4.0, conf=0.3),
+        p2.provider_id: _expert_result(p2.provider_id, 8.0, 0.9, "Looks correct."),
+    })
+    import backend.agents.multi_expert as me
+    monkeypatch.setattr(me._settings, "confidence_threshold", 0.6, raising=False)
+
+    correction = await run_multi_expert(
+        problem=_problem(),
+        answer=_answer(),
+        student_id="S1",
+        registry=_FakeRegistry([p1, p2]),
+    )
+    # Only one real vote → degraded_to_single, not judge/weighted synthesis.
+    assert correction.synthesis_method == "degraded_to_single"
+    assert correction.confidence == pytest.approx(0.9)
+    assert correction.requires_human_review is False
+    assert correction.review_reasons == []
 
 
 # ─── 3. Weighted average no longer leaks failed experts ──────────────────────

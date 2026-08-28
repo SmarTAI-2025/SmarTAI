@@ -34,7 +34,7 @@ from backend.domain import education
 from backend.domain.errors import DomainError, NotFound, ValidationError, VersionConflict
 from backend.llm.registry import _build_scoped_registry
 from backend.models import TaskGradingSetup, User
-from backend.progress.tracker import get_or_create_reporter
+from backend.progress.tracker import get_or_create_reporter, remove_reporter
 from backend.services import grading_adapter
 from backend.services.background_errors import classify_background_error
 from backend.services.stage_provider_routing import assert_grading_routes_supported
@@ -234,6 +234,9 @@ async def process_run(*, run_id: str, worker_id: str, registry=None, language: s
     try:
         grading_repository.claim_lease(run_id=run_id, worker_id=worker_id, lease_seconds=settings.grading_lease_seconds)
     except DomainError:
+        # Not this worker's run — drop any stale in-process reporter for it so
+        # the progress page falls back to the durable projection.
+        remove_reporter(run_id)
         return  # someone else owns it or it is terminal
     run = grading_repository.get_run(run_id=run_id)
     heartbeat_task: Optional[asyncio.Task] = None
@@ -315,6 +318,11 @@ async def process_run(*, run_id: str, worker_id: str, registry=None, language: s
             run_id=run_id, level="info", message="grading_started",
             payload={"students": len(frozen_revisions), "questions": len(questions)},
         )
+        # A reclaimed/re-run pass must start from a clean counter. The reporter
+        # is a process-local singleton keyed by run_id; without this reset a
+        # second pass over the same run would keep accumulating completed_units
+        # past total_students*total_questions (progress bar overshoots 100%).
+        remove_reporter(run_id)
         reporter = get_or_create_reporter(
             run_id,
             total_students=len(frozen_revisions),
@@ -384,6 +392,10 @@ async def process_run(*, run_id: str, worker_id: str, registry=None, language: s
                 await heartbeat_task
             except (asyncio.CancelledError, Exception):
                 pass
+        # The run is terminal (completed/failed). Drop the live reporter so the
+        # progress page falls back to the durable projection (active: []) and
+        # "running" reads 0 instead of a stale in-memory snapshot.
+        remove_reporter(run_id)
 
 
 def list_review_queue(*, assignment_id: str, teacher_id: str) -> list[education.GradeResultDTO]:

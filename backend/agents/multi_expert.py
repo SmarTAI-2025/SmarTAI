@@ -23,6 +23,15 @@ Robustness:
       * len(successes) == 0 → raise AllExpertsFailed (caller renders error)
       * len(successes) == 1 → degraded_to_single (no judge call, clean comment)
       * len(successes) >= 2 → configured judge/weighted synthesis
+  - Infrastructure failures are non-voting (2026-08-28): a network/timeout
+    (transient_llm) or quota (quota_exhausted) error means the expert never
+    graded the item, so its confidence — 0, or a spurious partial value —
+    never enters the merge math ("不参与置信度计算").
+  - Confidence policy (2026-08-28): model capabilities are uneven, so ANY
+    confident expert makes the merged result high confidence — merged
+    confidence is floored at the best expert's confidence, and
+    degraded_to_single forces human review only when the surviving sample
+    itself is below the low-confidence threshold.
   - failures are still preserved in `expert_results` so the frontend can show
     *why* each one failed, but their comment text never bleeds into the main
     synthesized comment.
@@ -101,6 +110,23 @@ def dominant_error_kind(failures: List[ExpertResult]) -> str:
             best_rank = rank
             best = kind
     return best
+
+
+# Infrastructure failures are not votes: a network/timeout (transient_llm) or
+# quota (quota_exhausted) error means that expert never graded the item, so its
+# confidence — 0, or a spurious partial value — must not enter any confidence
+# math (2026-08-28 fine-tune).
+_NON_VOTING_ERROR_KINDS = frozenset({"transient_llm", "quota_exhausted"})
+
+
+def _casts_confidence_vote(result: ExpertResult) -> bool:
+    """True when the expert result counts as a real grading vote.
+
+    A zero-confidence blank result and any infrastructure failure
+    (network/timeout, quota) are both non-voting — the expert cast no
+    judgment on the item.
+    """
+    return result.confidence > 0 and result.error_kind not in _NON_VOTING_ERROR_KINDS
 
 
 class AllExpertsFailed(Exception):
@@ -254,8 +280,12 @@ async def run_multi_expert(
     logger.info(f"{mode} fan-out completed in {fan_out_ms:.0f}ms, {len(results)} results")
 
     # ── Split successes / failures ────────────────────────────────────────
-    successes = [er for er in results if er.confidence > 0]
-    failures = [er for er in results if er.confidence <= 0]
+    # Infrastructure failures (network/timeout, quota) are non-voting even if
+    # a spurious non-zero confidence leaked through — see
+    # _casts_confidence_vote. Their results stay in `failures` so the
+    # frontend can still show why that expert did not grade the item.
+    successes = [er for er in results if _casts_confidence_vote(er)]
+    failures = [er for er in results if not _casts_confidence_vote(er)]
 
     if not successes:
         # Every expert/sample failed — let caller produce an explicit
@@ -276,8 +306,20 @@ async def run_multi_expert(
             synthesis_method="degraded_to_single",
             extra_experts=failures,
         )
-        correction.requires_human_review = True
-        correction.review_reasons = ["degraded_to_single"]
+        # 2026-08-28 policy: model capabilities are uneven (e.g. Qwen cannot
+        # grade some free-response items while DeepSeek only grades big
+        # questions), so a surviving CONFIDENT sample is still a
+        # high-confidence result — "any high confidence wins". Only a
+        # low-confidence survivor forces human review; the teacher threshold
+        # (_apply_low_confidence_policy) re-checks this after the call.
+        threshold = (
+            grading_setup.low_confidence_threshold
+            if grading_setup is not None
+            else _settings.confidence_threshold
+        )
+        if successes[0].confidence < threshold:
+            correction.requires_human_review = True
+            correction.review_reasons = ["degraded_to_single"]
         return correction
 
     # ── Synthesis (≥ 2 successes) ─────────────────────────────────────────
@@ -311,6 +353,16 @@ async def run_multi_expert(
                 await reporter._emit_message(
                     f"{student_id}/{problem.q_id}: synthesize_experts_finished"
                 )
+
+    # 2026-08-28 policy ("any high confidence wins"): the merged result must
+    # not be less confident than its most confident contributing expert. A
+    # weaker model's self-doubt (Qwen on an item it cannot grade) must not
+    # drag a confident sibling's verdict into the low-confidence review
+    # queue — genuine disagreement is already covered by the fairness
+    # signals computed below (IS / minority veto).
+    best_expert_confidence = max(er.confidence for er in successes)
+    if correction.confidence < best_expert_confidence:
+        correction.confidence = round(best_expert_confidence, 2)
 
     # Re-attach failures so the frontend can show why they failed.
     if failures:
@@ -508,7 +560,11 @@ def _weighted_average_fallback(
     total_weight = sum(er.confidence for er in expert_results) or 1.0
     weighted_score = sum(er.score * er.confidence for er in expert_results) / total_weight
     max_score = problem.max_score
-    avg_confidence = sum(er.confidence for er in expert_results) / len(expert_results)
+    # 2026-08-28 policy: the merged result is as confident as the BEST
+    # contributing expert. Averaging confidences let a weak model's low
+    # self-confidence flag the whole verdict for review even when a sibling
+    # model was confident ("any high confidence wins").
+    best_confidence = max(er.confidence for er in expert_results)
 
     if len(expert_results) == 1:
         comment = expert_results[0].comment
@@ -524,7 +580,7 @@ def _weighted_average_fallback(
         type=problem.type,
         score=min(max(round(weighted_score, 2), 0.0), problem.max_score),
         max_score=max_score,
-        confidence=round(avg_confidence, 2),
+        confidence=round(best_confidence, 2),
         comment=comment,
         steps=[],
         expert_results=expert_results,

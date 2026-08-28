@@ -2894,6 +2894,22 @@ async def async_task_state(*, task_id: str, owner_id: str) -> dict:
         and (payload.get("status") == "grading" or grading_owns_failure)
     ):
         grading_progress = _grading_progress(grading_job_id, owner_id)
+        # The durable projection cannot reconstruct the volatile in-flight
+        # units; borrow them from the live reporter when it still exists.
+        # Without this merge the progress page's "running" count is always 0
+        # (2026-08-28 fix). ``phase`` intentionally stays durable: the
+        # reporter can reach ``done`` before result persistence finishes.
+        if (reporter := get_reporter(grading_job_id)) is not None:
+            live = (await reporter.snapshot()).model_dump(mode="json")
+            if live.get("active"):
+                grading_progress["active"] = live["active"]
+            live_completed = live.get("completed_units")
+            if (
+                isinstance(live_completed, int)
+                and not isinstance(live_completed, bool)
+                and live_completed > grading_progress.get("completed_units", 0)
+            ):
+                grading_progress["completed_units"] = live_completed
         # A reporter can reach ``done`` before result persistence finishes.
         # Prefer the durable failed-run projection so clients never render a
         # stale success phase after the database marks the run failed.
@@ -3437,6 +3453,22 @@ def update_student_answer(
         )
         session.add(new_revision)
         session.flush()
+        # Carry per-answer review statuses into the new revision. The copy
+        # below mints fresh answer rows; without this, confirming one answer
+        # would silently reset every sibling answer back to "pending"
+        # (2026-08-28 "按下葫芦浮起瓢" fix).
+        old_answer_ids = [answer.id for answer in answer_rows]
+        carried_review_statuses = {
+            row.answer_id: row.review_status
+            for row in session.scalars(
+                select(workflow_repository.SubmissionAnswerPresentationRecord)
+                .where(
+                    workflow_repository.SubmissionAnswerPresentationRecord.answer_id.in_(
+                        old_answer_ids
+                    )
+                )
+            ).all()
+        } if old_answer_ids else {}
         target_answer_id: str | None = None
         for answer in answer_rows:
             is_target = answer.q_id == q_id
@@ -3472,12 +3504,16 @@ def update_student_answer(
                     "flag": list(flags or []),
                     "review_status": patch.get("review_status") or "pending",
                 }
+                next_review_status = str(patch.get("review_status") or "pending")
+            else:
+                next_review_status = carried_review_statuses.get(answer.id)
+            if next_review_status is not None:
+                session.add(workflow_repository.SubmissionAnswerPresentationRecord(
+                    answer_id=answer_id,
+                    review_status=next_review_status,
+                    updated_at=now,
+                ))
         assert target_answer_id is not None and target_payload is not None
-        session.add(workflow_repository.SubmissionAnswerPresentationRecord(
-            answer_id=target_answer_id,
-            review_status=str(patch.get("review_status") or "pending"),
-            updated_at=now,
-        ))
         submission.current_revision_id = new_revision.id
         submission.updated_at = now
 
