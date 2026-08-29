@@ -131,12 +131,12 @@ export function LoginPage() {
         </form>
 
         <div className="mt-6 border-t pt-5 text-center text-sm text-muted-foreground">
-          {zh ? "收到测试邀请？" : "Received a testing invitation?"}{" "}
+          {zh ? "还没有教师账号？" : "Need a teacher account?"}{" "}
           <Link
             className="font-semibold text-primary outline-none hover:underline focus-visible:rounded focus-visible:ring-2 focus-visible:ring-ring"
             to="/register"
           >
-            {zh ? "使用邀请码注册" : "Create invited account"}
+            {zh ? "使用学校邮箱注册" : "Register with school email"}
           </Link>
         </div>
       </AuthCard>
@@ -165,7 +165,8 @@ function safeReturnPath(state: unknown): string {
     if (
       parsed.origin !== window.location.origin ||
       parsed.pathname === "/login" ||
-      parsed.pathname === "/register"
+      parsed.pathname === "/register" ||
+      parsed.pathname.startsWith("/register/")
     ) {
       return "/";
     }

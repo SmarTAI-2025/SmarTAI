@@ -64,7 +64,7 @@ apiClient.interceptors.response.use(
   async (error: AxiosError) => {
     const config = error.config as RefreshableRequestConfig | undefined;
     const path = config?.url ?? "";
-    if (error.response?.status !== 401 || !config || config._retry || config._skipAuthRefresh || path.includes("/auth/login") || path.includes("/auth/refresh")) {
+    if (error.response?.status !== 401 || !config || config._retry || config._skipAuthRefresh || path.includes("/auth/login") || path.includes("/auth/refresh") || path.includes("/auth/register")) {
       return Promise.reject(error);
     }
     config._retry = true;

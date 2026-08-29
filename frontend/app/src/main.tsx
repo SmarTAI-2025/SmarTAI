@@ -22,6 +22,12 @@ const NotFoundPage = React.lazy(() =>
   import("@/routes/NotFoundPage").then((module) => ({ default: module.NotFoundPage })),
 );
 const RegisterPage = React.lazy(() => import("@/routes/RegisterPage").then((module) => ({ default: module.RegisterPage })));
+const RegisterCheckEmailPage = React.lazy(() =>
+  import("@/routes/RegisterCheckEmailPage").then((module) => ({ default: module.RegisterCheckEmailPage })),
+);
+const RegisterVerifyPage = React.lazy(() =>
+  import("@/routes/RegisterVerifyPage").then((module) => ({ default: module.RegisterVerifyPage })),
+);
 const SettingsPage = React.lazy(() =>
   import("@/routes/SettingsPage").then((module) => ({ default: module.SettingsPage })),
 );
@@ -103,6 +109,8 @@ function routeElement(element: React.ReactNode) {
 const router = createBrowserRouter([
   { path: "/login", element: routeElement(<LoginPage />) },
   { path: "/register", element: routeElement(<RegisterPage />) },
+  { path: "/register/check-email", element: routeElement(<RegisterCheckEmailPage />) },
+  { path: "/register/verify", element: routeElement(<RegisterVerifyPage />) },
   { path: "/student", element: <StudentUnavailablePage /> },
   {
     path: "/",
