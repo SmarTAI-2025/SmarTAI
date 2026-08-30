@@ -63,7 +63,6 @@ async def generate_major_question_materials(
     test_case_count: int,
     provider: BaseProvider,
     reporter: ProgressReporter,
-    concurrency: int | None = None,
     on_question_completed: Callable[
         [str, list[AICompletionCandidateOutput]], Awaitable[None]
     ] | None = None,
@@ -103,13 +102,7 @@ async def generate_major_question_materials(
             code="provider_response_invalid",
         )
 
-    limit = (
-        settings.question_generation_concurrency
-        if concurrency is None
-        else concurrency
-    )
-    if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 4:
-        raise ValueError("question generation concurrency must be between 1 and 4")
+    limit = _major_question_generation_concurrency(provider)
     semaphore = asyncio.Semaphore(limit)
     results: dict[str, list[AICompletionCandidateOutput]] = {}
     failures: dict[str, Exception] = {}
@@ -175,6 +168,32 @@ async def generate_major_question_materials(
         first_failed = next(q_id for q_id in question_ids if q_id in failures)
         raise failures[first_failed]
     return [candidate for q_id in question_ids for candidate in results[q_id]]
+
+
+def _major_question_generation_concurrency(provider: BaseProvider) -> int:
+    """Use the same BYOK concurrency contract as grading.
+
+    This outer gate bounds active major-question units for truthful progress.
+    Actual calls remain protected by ``BaseProvider``'s RPM limiter,
+    per-provider semaphore, and process-wide endpoint semaphore. There is no
+    separate question-generation concurrency setting.
+    """
+
+    config = getattr(provider, "config", None)
+    configured = getattr(config, "max_concurrent", None)
+    if isinstance(configured, bool):
+        configured = None
+    try:
+        provider_limit = int(configured) if configured is not None else 0
+    except (TypeError, ValueError):
+        provider_limit = 0
+    if provider_limit <= 0:
+        provider_limit = max(
+            1, int(settings.max_concurrent_llm_per_provider)
+        )
+
+    endpoint_limit = max(1, int(settings.max_concurrent_llm_per_endpoint))
+    return min(provider_limit, endpoint_limit)
 
 
 def _validate_major_question_candidates(

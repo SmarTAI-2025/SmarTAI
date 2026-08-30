@@ -9,7 +9,6 @@ import pytest
 
 from backend.agents import ingest_agent, question_preparation_agent
 from backend.agents.ingest_agent import AICompletionCandidateOutput
-from backend.config import Settings
 from backend.domain.errors import ValidationError
 from backend.progress.tracker import ProgressReporter
 from backend.services.question_structure import build_major_question_structure
@@ -52,6 +51,13 @@ def _targets(problems: dict[str, dict]) -> list[dict[str, str]]:
         for q_id in problems
         for target in ("reference_answer", "criterion")
     ]
+
+
+def _provider(max_concurrent: int = 5):
+    return SimpleNamespace(
+        provider_id="fake:model",
+        config=SimpleNamespace(max_concurrent=max_concurrent, rpm=0),
+    )
 
 
 def _candidate(target: dict[str, str]) -> AICompletionCandidateOutput:
@@ -105,18 +111,13 @@ async def test_seven_major_questions_use_seven_bounded_calls_and_stable_order(
         "generate_missing_question_materials",
         fake_generate,
     )
-    monkeypatch.setattr(
-        question_preparation_agent.settings,
-        "question_generation_concurrency",
-        2,
-    )
     reporter = ProgressReporter("major-concurrency")
 
     result = await question_preparation_agent.generate_major_question_materials(
         problems_data=problems,
         requested_targets=targets,
         test_case_count=6,
-        provider=SimpleNamespace(provider_id="fake:model"),
+        provider=_provider(2),
         reporter=reporter,
     )
 
@@ -144,7 +145,7 @@ async def test_seven_major_questions_use_seven_bounded_calls_and_stable_order(
 
 
 @pytest.mark.asyncio
-async def test_configured_four_way_concurrency_is_effective(monkeypatch):
+async def test_byok_configured_four_way_concurrency_is_effective(monkeypatch):
     problems = _problems(4)
     entered = 0
     peak = 0
@@ -169,9 +170,8 @@ async def test_configured_four_way_concurrency_is_effective(monkeypatch):
         problems_data=problems,
         requested_targets=_targets(problems),
         test_case_count=6,
-        provider=SimpleNamespace(provider_id="fake:model"),
+        provider=_provider(4),
         reporter=reporter,
-        concurrency=4,
     )
     assert peak == 4
 
@@ -198,9 +198,8 @@ async def test_failed_major_question_is_not_counted_complete(monkeypatch):
             problems_data=problems,
             requested_targets=_targets(problems),
             test_case_count=6,
-            provider=SimpleNamespace(provider_id="fake:model"),
+            provider=_provider(2),
             reporter=reporter,
-            concurrency=2,
         )
 
     snapshot = await reporter.snapshot()
@@ -238,9 +237,8 @@ async def test_slow_question_does_not_block_other_major_question_progress(monkey
             problems_data=problems,
             requested_targets=_targets(problems),
             test_case_count=6,
-            provider=SimpleNamespace(provider_id="fake:model"),
+            provider=_provider(2),
             reporter=reporter,
-            concurrency=2,
         )
     )
     await asyncio.wait_for(third_started.wait(), timeout=1)
@@ -277,9 +275,8 @@ async def test_cancellation_clears_active_questions_without_false_failure(monkey
             problems_data=problems,
             requested_targets=_targets(problems),
             test_case_count=6,
-            provider=SimpleNamespace(provider_id="fake:model"),
+            provider=_provider(2),
             reporter=reporter,
-            concurrency=2,
         )
     )
     await asyncio.wait_for(two_started.wait(), timeout=1)
@@ -361,11 +358,18 @@ async def test_duplicate_target_is_rejected_before_any_provider_call(monkeypatch
     assert called is False
 
 
-def test_question_generation_concurrency_env_default_and_bounds(monkeypatch):
-    monkeypatch.delenv("SMARTAI_QUESTION_GENERATION_CONCURRENCY", raising=False)
-    assert Settings(_env_file=None).question_generation_concurrency == 2
-    monkeypatch.setenv("SMARTAI_QUESTION_GENERATION_CONCURRENCY", "4")
-    assert Settings(_env_file=None).question_generation_concurrency == 4
+def test_question_generation_concurrency_uses_byok_and_endpoint_cap(monkeypatch):
+    monkeypatch.setattr(
+        question_preparation_agent.settings,
+        "max_concurrent_llm_per_endpoint",
+        3,
+    )
+    assert question_preparation_agent._major_question_generation_concurrency(
+        _provider(1)
+    ) == 1
+    assert question_preparation_agent._major_question_generation_concurrency(
+        _provider(10)
+    ) == 3
 
 
 def test_subpart_rubric_is_regenerated_unless_teacher_material_was_imported():
