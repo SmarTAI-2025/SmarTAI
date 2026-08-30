@@ -76,10 +76,6 @@ class Settings(BaseSettings):
     # 5 = 20 parallel calls to one gateway).  Keep at or below
     # max_concurrent_llm_per_provider.
     max_concurrent_llm_per_endpoint: int = 5
-    # One provider request is issued per scored major question during question
-    # preparation. Keep this small: subparts such as (a)/(b) stay inside the
-    # same request and never consume an additional slot.
-    question_generation_concurrency: int = Field(default=2, ge=1, le=4)
     llm_timeout: int = 600  # seconds
     llm_max_retries: int = 3
     # When the LLM returns a 429 / quota exceeded error AND the provider's
