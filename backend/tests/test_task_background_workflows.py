@@ -756,6 +756,8 @@ async def test_question_preparation_timeout_persists_provider_timeout(monkeypatc
     workflow = workflow_repository.get_workflow(task_id, owner_id=owner_id)
     assert failed.status == "error"
     assert failed.error_code == "provider_timeout"
+    assert failed.progress["phase"] == "error"
+    assert failed.progress["error_detail"] == "provider_timeout"
     assert workflow.presentation_status == "error"
     assert workflow.active_job_id is None
     assert workflow.error_code == "provider_timeout"

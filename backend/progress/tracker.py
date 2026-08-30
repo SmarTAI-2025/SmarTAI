@@ -19,7 +19,7 @@ import asyncio
 from collections import OrderedDict, deque
 from contextlib import asynccontextmanager
 from threading import RLock
-from typing import Optional, Deque, Sequence, Callable, Any
+from typing import Optional, Deque, Sequence, Callable, Any, Mapping
 
 from backend.config import settings
 from backend.models import JobProgress, ActiveUnit, ProgressEvent
@@ -45,6 +45,7 @@ class ProgressReporter:
         # SSE subscribers (asyncio.Queue for each)
         self._subscribers: list[asyncio.Queue[ProgressEvent]] = []
         self._event_sink: Optional[Callable[[ProgressEvent, dict[str, Any]], None]] = None
+        self._question_generation_ids: tuple[str, ...] = ()
 
     def set_event_sink(
         self,
@@ -185,6 +186,134 @@ class ProgressReporter:
                     self._progress.stage_metrics.get(key, 0) + delta
                 )
 
+    async def configure_question_generation(
+        self,
+        question_ids: Sequence[str],
+        *,
+        completed_question_ids: Sequence[str] = (),
+        question_labels: Mapping[str, str] | None = None,
+    ) -> None:
+        """Initialize factual progress for major-question generation.
+
+        A question id is one scored major question. Labels such as ``(a)`` and
+        ``(b)`` never appear in this counter as separate units.
+        """
+
+        normalized = tuple(str(q_id).strip() for q_id in question_ids)
+        if not normalized or any(not q_id for q_id in normalized):
+            raise ValueError("question generation requires named major questions")
+        if len(normalized) != len(set(normalized)):
+            raise ValueError("question generation ids must be unique")
+        completed = [
+            str(q_id).strip()
+            for q_id in completed_question_ids
+            if str(q_id).strip()
+        ]
+        if len(completed) != len(set(completed)) or not set(completed) <= set(normalized):
+            raise ValueError("completed question ids must be unique configured ids")
+        labels = {
+            str(q_id): str(label).strip()[:120]
+            for q_id, label in (question_labels or {}).items()
+            if str(q_id) in normalized and str(label).strip()
+        }
+        now = time.time()
+        async with self._lock:
+            self._question_generation_ids = normalized
+            self._progress.total_questions = len(normalized)
+            self._progress.question_labels = labels
+            self._progress.question_error_codes = {}
+            self._progress.completed_question_ids = completed
+            self._progress.active_question_ids = []
+            self._progress.failed_question_ids = []
+            self._progress.last_activity_at = now
+            self._progress.stage_metrics.update({
+                "solution_total_questions": len(normalized),
+                "solution_completed_questions": len(completed),
+                "solution_failed_questions": 0,
+            })
+        await self._emit(ProgressEvent(
+            message=f"Preparing {len(normalized)} major-question generation units"
+        ))
+
+    async def mark_question_generation_started(self, q_id: str) -> None:
+        normalized = str(q_id).strip()
+        now = time.time()
+        async with self._lock:
+            if normalized not in self._question_generation_ids:
+                raise ValueError("question id is not part of this generation run")
+            if normalized in self._progress.completed_question_ids:
+                raise ValueError("completed question cannot start again")
+            if normalized not in self._progress.active_question_ids:
+                self._progress.active_question_ids.append(normalized)
+                self._progress.active_question_ids.sort(
+                    key=self._question_generation_ids.index
+                )
+            self._progress.last_activity_at = now
+        await self._emit(ProgressEvent(
+            message=f"Generating materials for major question {normalized}"
+        ))
+
+    async def mark_question_generation_finished(
+        self,
+        q_id: str,
+        *,
+        succeeded: bool,
+        error_code: str | None = None,
+    ) -> None:
+        normalized = str(q_id).strip()
+        now = time.time()
+        async with self._lock:
+            if normalized not in self._question_generation_ids:
+                raise ValueError("question id is not part of this generation run")
+            self._progress.active_question_ids = [
+                item for item in self._progress.active_question_ids
+                if item != normalized
+            ]
+            if succeeded:
+                self._progress.question_error_codes.pop(normalized, None)
+                if normalized not in self._progress.completed_question_ids:
+                    self._progress.completed_question_ids.append(normalized)
+                    self._progress.completed_question_ids.sort(
+                        key=self._question_generation_ids.index
+                    )
+                self._progress.stage_metrics["solution_completed_questions"] = len(
+                    self._progress.completed_question_ids
+                )
+            else:
+                if normalized not in self._progress.failed_question_ids:
+                    self._progress.failed_question_ids.append(normalized)
+                    self._progress.failed_question_ids.sort(
+                        key=self._question_generation_ids.index
+                    )
+                self._progress.stage_metrics["solution_failed_questions"] = len(
+                    self._progress.failed_question_ids
+                )
+                if error_code:
+                    self._progress.question_error_codes[normalized] = error_code
+            self._progress.last_activity_at = now
+        outcome = "completed" if succeeded else "failed"
+        await self._emit(ProgressEvent(
+            level="info" if succeeded else "error",
+            message=f"Major question {normalized} generation {outcome}",
+        ))
+
+    async def mark_question_generation_cancelled(self, q_id: str) -> None:
+        """Remove a cancelled unit without misreporting success or failure."""
+
+        normalized = str(q_id).strip()
+        async with self._lock:
+            if normalized not in self._question_generation_ids:
+                raise ValueError("question id is not part of this generation run")
+            self._progress.active_question_ids = [
+                item for item in self._progress.active_question_ids
+                if item != normalized
+            ]
+            self._progress.last_activity_at = time.time()
+        await self._emit(ProgressEvent(
+            level="warn",
+            message=f"Major question {normalized} generation cancelled",
+        ))
+
     async def set_error(self, detail: str) -> None:
         async with self._lock:
             self._progress.phase = "error"
@@ -264,6 +393,16 @@ class ProgressReporter:
                     "total_steps": self._progress.total_steps,
                     "completed_steps": self._progress.completed_steps,
                     "stage_metrics": dict(self._progress.stage_metrics),
+                    "question_labels": dict(self._progress.question_labels),
+                    "question_error_codes": dict(
+                        self._progress.question_error_codes
+                    ),
+                    "completed_question_ids": list(
+                        self._progress.completed_question_ids
+                    ),
+                    "active_question_ids": list(self._progress.active_question_ids),
+                    "failed_question_ids": list(self._progress.failed_question_ids),
+                    "last_activity_at": self._progress.last_activity_at,
                 }
             try:
                 self._event_sink(event, durable_payload)

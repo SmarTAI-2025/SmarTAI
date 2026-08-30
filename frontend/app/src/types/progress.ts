@@ -42,4 +42,10 @@ export interface JobProgress {
   total_steps?: number | null;
   completed_steps?: number | null;
   stage_metrics?: Record<string, number>;
+  question_labels?: Record<string, string>;
+  question_error_codes?: Record<string, string>;
+  completed_question_ids?: string[];
+  active_question_ids?: string[];
+  failed_question_ids?: string[];
+  last_activity_at?: number | null;
 }
