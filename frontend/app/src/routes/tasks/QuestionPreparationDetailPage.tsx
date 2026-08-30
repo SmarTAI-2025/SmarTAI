@@ -30,9 +30,10 @@ import { useI18n } from "@/i18n/I18nProvider";
 import { cn } from "@/lib/cn";
 import { isProgrammingProblem } from "@/lib/questionPreparation";
 import { questionSearchAliases } from "@/lib/questionSearch";
+import { parseScoreHundredths, summarizeRubricPoints } from "@/lib/rubricPoints";
 import type { ProblemInfo, TestCase } from "@/types";
 
-type TextFieldKey = "stem" | "reference_answer" | "criterion" | "solution_code";
+type TextFieldKey = "stem" | "reference_answer" | "solution_code";
 
 const EMPTY_TEST_CASES: TestCase[] = [];
 
@@ -247,12 +248,13 @@ export function QuestionPreparationDetailPage() {
     latestWorkflowRevisionRef.current = response.workflow_revision;
   }
 
-  async function saveMaxScore(problem: ProblemInfo, maxScore: number) {
+  async function saveScoring(problem: ProblemInfo, maxScore: number, criterion: string) {
     const response = await updateProblem.mutateAsync({
       taskId: stableTaskId,
       qId: problem.q_id,
       expectedWorkflowRevision: latestWorkflowRevisionRef.current,
       max_score: maxScore,
+      criterion,
     });
     latestWorkflowRevisionRef.current = response.workflow_revision;
   }
@@ -420,7 +422,7 @@ export function QuestionPreparationDetailPage() {
                 saving={updateProblem.isPending}
                 locale={locale}
                 onDirtyChange={setFieldDirty}
-                onSaveMaxScore={saveMaxScore}
+                onSaveScoring={saveScoring}
                 onSaveText={saveText}
                 onSaveTests={saveTests}
                 onNavigate={scrollToQuestion}
@@ -465,7 +467,7 @@ export function QuestionPreparationDetailPage() {
   );
 }
 
-function QuestionPackageCard({ problem, index, total, previous, next, readOnly, saving, locale, onDirtyChange, onSaveMaxScore, onSaveText, onSaveTests, onNavigate }: {
+function QuestionPackageCard({ problem, index, total, previous, next, readOnly, saving, locale, onDirtyChange, onSaveScoring, onSaveText, onSaveTests, onNavigate }: {
   problem: ProblemInfo;
   index: number;
   total: number;
@@ -475,7 +477,7 @@ function QuestionPackageCard({ problem, index, total, previous, next, readOnly, 
   saving: boolean;
   locale: string;
   onDirtyChange: (key: string, dirty: boolean) => void;
-  onSaveMaxScore: (problem: ProblemInfo, maxScore: number) => Promise<void>;
+  onSaveScoring: (problem: ProblemInfo, maxScore: number, criterion: string) => Promise<void>;
   onSaveText: (problem: ProblemInfo, field: TextFieldKey, value: string) => Promise<void>;
   onSaveTests: (problem: ProblemInfo, cases: TestCase[]) => Promise<void>;
   onNavigate: (qId: string) => void;
@@ -490,6 +492,7 @@ function QuestionPackageCard({ problem, index, total, previous, next, readOnly, 
             <h2 className="text-xl font-bold text-foreground">{tx(locale, `第 ${problem.number || problem.q_id} 题`, `Question ${problem.number || problem.q_id}`)}</h2>
             <span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs text-muted-foreground dark:bg-slate-800">{problem.type || tx(locale, "未分类", "Uncategorized")}</span>
             <span className={cn("rounded-full px-2.5 py-1 text-xs font-semibold", problem.max_score_review_status === "confirmed" ? "bg-blue-50 text-primary dark:bg-blue-950/35" : "bg-amber-100 text-amber-700 dark:bg-amber-950/35 dark:text-amber-300")}>{tx(locale, `满分 ${formatScore(problem.max_score ?? 10)} 分`, `${formatScore(problem.max_score ?? 10)} points max`)}</span>
+            {problem.question_structure?.subparts.length ? <span className="rounded-full bg-violet-50 px-2.5 py-1 text-xs font-semibold text-violet-700 dark:bg-violet-950/30 dark:text-violet-300">{tx(locale, `含 ${problem.question_structure.subparts.length} 个小问 · ${problem.question_structure.subparts.map((part) => part.label).join(" ")}`, `${problem.question_structure.subparts.length} subparts · ${problem.question_structure.subparts.map((part) => part.label).join(" ")}`)}</span> : null}
             {risks.length ? <span className="rounded-full bg-amber-100 px-2.5 py-1 text-xs font-semibold text-amber-700">{tx(locale, `${risks.length} 项需核对`, `${risks.length} ${risks.length === 1 ? "risk" : "risks"}`)}</span> : null}
           </div>
           <p className="mt-1 text-xs text-muted-foreground">{tx(locale, `筛选结果中的第 ${index + 1} / ${total} 题`, `${index + 1} of ${total}`)}</p>
@@ -504,20 +507,11 @@ function QuestionPackageCard({ problem, index, total, previous, next, readOnly, 
       ) : null}
 
       <div className="space-y-0 divide-y">
-        <EditableMaxScore
-          fieldKey={`${problem.q_id}:max-score`}
-          problem={problem}
-          readOnly={readOnly}
-          saving={saving}
-          locale={locale}
-          onDirtyChange={onDirtyChange}
-          onSave={onSaveMaxScore}
-        />
         <EditableTextField fieldKey={`${problem.q_id}:stem`} label={tx(locale, "题目", "Question")} value={problem.stem} problem={problem} field="stem" readOnly={readOnly} saving={saving} locale={locale} onDirtyChange={onDirtyChange} onSave={onSaveText} />
 
         <div className="grid divide-y md:grid-cols-2 md:divide-x md:divide-y-0">
           <EditableTextField fieldKey={`${problem.q_id}:answer`} label={tx(locale, "标答 / 解题步骤", "Reference Answer / Solution Steps")} value={problem.reference_answer ?? ""} problem={problem} field="reference_answer" readOnly={readOnly} saving={saving} locale={locale} onDirtyChange={onDirtyChange} onSave={onSaveText} />
-          <EditableTextField fieldKey={`${problem.q_id}:rubric`} label={tx(locale, "评分标准（与标答步骤对应）", "Rubric (Aligned with Reference Answer Steps)")} value={problem.criterion ?? ""} problem={problem} field="criterion" readOnly={readOnly} saving={saving} locale={locale} onDirtyChange={onDirtyChange} onSave={onSaveText} />
+          <EditableScoringField fieldKey={`${problem.q_id}:scoring`} problem={problem} readOnly={readOnly} saving={saving} locale={locale} onDirtyChange={onDirtyChange} onSave={onSaveScoring} />
         </div>
 
         {programming ? (
@@ -540,33 +534,50 @@ function QuestionPackageCard({ problem, index, total, previous, next, readOnly, 
   );
 }
 
-function EditableMaxScore({ fieldKey, problem, readOnly, saving, locale, onDirtyChange, onSave }: {
+function EditableScoringField({ fieldKey, problem, readOnly, saving, locale, onDirtyChange, onSave }: {
   fieldKey: string;
   problem: ProblemInfo;
   readOnly: boolean;
   saving: boolean;
   locale: string;
   onDirtyChange: (key: string, dirty: boolean) => void;
-  onSave: (problem: ProblemInfo, maxScore: number) => Promise<void>;
+  onSave: (problem: ProblemInfo, maxScore: number, criterion: string) => Promise<void>;
 }) {
-  const original = String(problem.max_score ?? 10);
+  const originalScore = String(problem.max_score ?? 10);
+  const originalCriterion = problem.criterion ?? "";
   const [editing, setEditing] = useState(false);
-  const [draft, setDraft] = useState(original);
+  const [scoreDraft, setScoreDraft] = useState(originalScore);
+  const [criterionDraft, setCriterionDraft] = useState(originalCriterion);
   const [error, setError] = useState<string | null>(null);
-  const dirty = editing && draft !== original;
+  const dirty = editing && (
+    scoreDraft !== originalScore || criterionDraft !== originalCriterion
+  );
+  const scoreHundredths = parseScoreHundredths(scoreDraft);
+  const scoreValid = scoreHundredths !== null && scoreHundredths > 0 && scoreHundredths <= 1_000_000;
+  const draftSummary = useMemo(
+    () => summarizeRubricPoints(criterionDraft, scoreDraft, problem.question_structure),
+    [criterionDraft, problem.question_structure, scoreDraft],
+  );
+  const savedSummary = problem.rubric_point_summary
+    ?? summarizeRubricPoints(originalCriterion, originalScore, problem.question_structure);
+  const needsReview = problem.max_score_review_status !== "confirmed";
 
-  useEffect(() => { if (!editing) setDraft(original); }, [editing, original]);
+  useEffect(() => {
+    if (!editing) {
+      setScoreDraft(originalScore);
+      setCriterionDraft(originalCriterion);
+    }
+  }, [editing, originalCriterion, originalScore]);
   useEffect(() => { onDirtyChange(fieldKey, dirty); return () => onDirtyChange(fieldKey, false); }, [dirty, fieldKey, onDirtyChange]);
 
   async function save() {
-    const parsed = Number(draft);
-    if (!Number.isFinite(parsed) || parsed <= 0 || parsed > 10_000) {
-      setError(tx(locale, "满分必须大于 0 且不超过 10000。", "The maximum score must be greater than 0 and no more than 10000."));
+    if (!scoreValid || !draftSummary.is_valid) {
+      setError(scoringValidationMessage(draftSummary, scoreValid, locale));
       return;
     }
     setError(null);
     try {
-      await onSave(problem, parsed);
+      await onSave(problem, Number(scoreDraft), criterionDraft);
       onDirtyChange(fieldKey, false);
       setEditing(false);
     } catch {
@@ -575,48 +586,86 @@ function EditableMaxScore({ fieldKey, problem, readOnly, saving, locale, onDirty
   }
 
   const sourceLabel = maxScoreSourceLabel(problem.max_score_source, locale);
-  const needsReview = problem.max_score_review_status !== "confirmed";
   return (
-    <section className="bg-blue-50/35 px-5 py-4 dark:bg-blue-950/10 sm:px-6">
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+    <section className="min-w-0 px-5 py-5 sm:px-6">
+      <div className="flex items-start justify-between gap-3">
         <div>
           <div className="flex flex-wrap items-center gap-2">
-            <h3 className="text-sm font-bold text-foreground">{tx(locale, "本题满分", "Question Maximum Score")}</h3>
+            <h3 className="text-sm font-bold text-foreground">{tx(locale, "本题满分与评分标准", "Maximum Score and Rubric")}</h3>
             <span className={cn("rounded-full px-2.5 py-1 text-xs font-semibold", needsReview ? "bg-amber-100 text-amber-700 dark:bg-amber-950/35 dark:text-amber-300" : "bg-emerald-100 text-emerald-700 dark:bg-emerald-950/35 dark:text-emerald-300")}>{needsReview ? tx(locale, "请确认", "Confirm") : tx(locale, "已确认", "Confirmed")}</span>
           </div>
-          <p className="mt-1 text-xs leading-5 text-muted-foreground">{sourceLabel} · {tx(locale, "评分标准中的步骤按百分比分配到该满分。", "Rubric percentages are applied to this maximum score.")}</p>
+          <p className="mt-1 text-xs leading-5 text-muted-foreground">{sourceLabel} · {tx(locale, "小问仍属于同一道大题；若评分标准写出分项分值，合计必须等于本题满分。", "Subparts remain inside one major question. Explicit rubric points must equal this maximum.")}</p>
         </div>
-        {editing ? (
-          <div className="flex flex-wrap items-center gap-2">
-            <label className="relative">
-              <span className="sr-only">{tx(locale, `第 ${problem.number || problem.q_id} 题满分`, `Maximum score for question ${problem.number || problem.q_id}`)}</span>
+        {!readOnly ? <button type="button" aria-label={tx(locale, `修改第 ${problem.number || problem.q_id} 题满分与评分标准`, `Edit score and rubric for question ${problem.number || problem.q_id}`)} onClick={() => { setEditing((current) => !current); setError(null); }} className="inline-flex h-8 shrink-0 items-center gap-1.5 rounded-[6px] border px-2.5 text-xs font-semibold text-foreground hover:bg-muted">
+          {editing ? <X aria-hidden="true" className="h-3.5 w-3.5" /> : <Pencil aria-hidden="true" className="h-3.5 w-3.5" />}
+          {editing ? tx(locale, "取消", "Cancel") : tx(locale, "修改", "Edit")}
+        </button> : null}
+      </div>
+
+      {editing ? (
+        <div className="mt-3 space-y-3">
+          <label className="block">
+            <span className="mb-1.5 block text-xs font-semibold text-foreground">{tx(locale, "本题满分", "Maximum score")}</span>
+            <div className="relative w-36">
               <input
                 aria-label={tx(locale, `第 ${problem.number || problem.q_id} 题满分`, `Maximum score for question ${problem.number || problem.q_id}`)}
                 type="number"
                 inputMode="decimal"
                 min="0.01"
                 max="10000"
-                step="0.5"
-                value={draft}
-                onChange={(event) => { setDraft(event.target.value); setError(null); }}
-                className="h-9 w-32 rounded-[7px] border bg-background px-3 pr-9 text-sm font-semibold outline-none focus:border-primary focus:ring-2 focus:ring-primary/15"
+                step="0.01"
+                value={scoreDraft}
+                onChange={(event) => { setScoreDraft(event.target.value); setError(null); }}
+                className="h-9 w-full rounded-[7px] border bg-background px-3 pr-9 text-sm font-semibold outline-none focus:border-primary focus:ring-2 focus:ring-primary/15"
               />
               <span className="pointer-events-none absolute right-3 top-2.5 text-[11px] text-muted-foreground">{tx(locale, "分", "pts")}</span>
-            </label>
-            <button type="button" disabled={saving || (!dirty && !needsReview)} onClick={() => void save()} className="inline-flex h-9 items-center gap-1.5 rounded-[7px] bg-primary px-3 text-xs font-semibold text-primary-foreground disabled:opacity-45">{saving ? <Loader2 aria-hidden="true" className="h-3.5 w-3.5 animate-spin" /> : <Save aria-hidden="true" className="h-3.5 w-3.5" />}{needsReview && !dirty ? tx(locale, "确认", "Confirm") : tx(locale, "保存", "Save")}</button>
-            <button type="button" onClick={() => { setEditing(false); setDraft(original); setError(null); }} className="inline-flex h-9 items-center gap-1 rounded-[7px] border px-3 text-xs font-semibold hover:bg-muted"><X aria-hidden="true" className="h-3.5 w-3.5" />{tx(locale, "取消", "Cancel")}</button>
+            </div>
+          </label>
+          <label className="block">
+            <span className="mb-1.5 block text-xs font-semibold text-foreground">{tx(locale, "评分标准（与标答步骤对应）", "Rubric (Aligned with Reference Answer Steps)")}</span>
+            <textarea aria-label={tx(locale, `第 ${problem.number || problem.q_id} 题评分标准`, `Rubric for question ${problem.number || problem.q_id}`)} value={criterionDraft} onChange={(event) => { setCriterionDraft(event.target.value); setError(null); }} rows={8} className="w-full resize-y rounded-[8px] border bg-background px-4 py-3 text-sm leading-6 text-foreground outline-none focus:border-primary focus:ring-2 focus:ring-primary/15" />
+          </label>
+          <RubricPointStatus summary={draftSummary} locale={locale} />
+          {error ? <p role="alert" className="text-xs text-danger">{error}</p> : null}
+          <div className="flex justify-end gap-2">
+            <button type="button" disabled={saving || (!dirty && !needsReview) || !scoreValid || !draftSummary.is_valid} onClick={() => void save()} className="inline-flex h-9 items-center gap-2 rounded-[7px] bg-primary px-4 text-xs font-semibold text-primary-foreground hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-45">{saving ? <Loader2 aria-hidden="true" className="h-3.5 w-3.5 animate-spin" /> : <Save aria-hidden="true" className="h-3.5 w-3.5" />}{needsReview && !dirty ? tx(locale, "确认并保存", "Confirm and Save") : tx(locale, "保存", "Save")}</button>
           </div>
-        ) : (
-          <div className="flex items-center gap-2">
-            <strong className="text-lg text-foreground">{formatScore(problem.max_score ?? 10)} {tx(locale, "分", "pts")}</strong>
-            {needsReview && !readOnly ? <button type="button" disabled={saving} onClick={() => void save()} className="inline-flex h-8 items-center gap-1.5 rounded-[6px] bg-primary px-2.5 text-xs font-semibold text-primary-foreground disabled:opacity-45"><Check aria-hidden="true" className="h-3.5 w-3.5" />{tx(locale, "确认此满分", "Confirm score")}</button> : null}
-            {!readOnly ? <button type="button" aria-label={tx(locale, `修改第 ${problem.number || problem.q_id} 题满分`, `Edit maximum score for question ${problem.number || problem.q_id}`)} onClick={() => setEditing(true)} className="inline-flex h-8 items-center gap-1.5 rounded-[6px] border px-2.5 text-xs font-semibold hover:bg-muted"><Pencil aria-hidden="true" className="h-3.5 w-3.5" />{tx(locale, "修改", "Edit")}</button> : null}
+        </div>
+      ) : (
+        <div className="mt-3 space-y-3">
+          <strong className="block text-lg text-foreground">{formatScore(problem.max_score ?? 10)} {tx(locale, "分", "pts")}</strong>
+          <div className="min-h-[92px] rounded-[8px] bg-slate-50 px-4 py-3 text-sm leading-6 dark:bg-slate-950/20">
+            {originalCriterion.trim() ? <MarkdownMath>{originalCriterion}</MarkdownMath> : <p className="text-sm text-muted-foreground">{tx(locale, "尚未提供评分标准。", "No rubric has been provided.")}</p>}
           </div>
-        )}
-      </div>
-      {error ? <p role="alert" className="mt-2 text-xs text-danger">{error}</p> : null}
+          <RubricPointStatus summary={savedSummary} locale={locale} />
+        </div>
+      )}
     </section>
   );
+}
+
+function RubricPointStatus({ summary, locale }: { summary: ProblemInfo["rubric_point_summary"]; locale: string }) {
+  if (!summary?.has_explicit_subpart_points) {
+    return <p className="text-xs text-muted-foreground">{tx(locale, "未写明小问绝对分值时，可继续使用百分比或自由文本评分标准。", "Percentage or free-text rubrics remain valid when no explicit subpart points are stated.")}</p>;
+  }
+  const label = tx(
+    locale,
+    `分项合计 ${summary.total_points ?? "0"}/${summary.major_max_score}`,
+    `Subpart total ${summary.total_points ?? "0"}/${summary.major_max_score}`,
+  );
+  return <p role={summary.is_valid ? undefined : "alert"} className={cn("text-xs font-semibold", summary.is_valid ? "text-emerald-700 dark:text-emerald-300" : "text-danger")}>{label}{summary.issue_code ? ` · ${rubricIssueLabel(summary.issue_code, locale)}` : ""}</p>;
+}
+
+function rubricIssueLabel(issueCode: NonNullable<NonNullable<ProblemInfo["rubric_point_summary"]>["issue_code"]>, locale: string) {
+  if (issueCode === "rubric_subpart_points_duplicate") return tx(locale, "存在重复小问分项", "A subpart allocation is repeated");
+  if (issueCode === "rubric_subpart_points_incomplete") return tx(locale, "仍有小问未分配", "A subpart allocation is missing");
+  return tx(locale, "请调整到与本题满分一致后再保存", "Match the major-question maximum before saving");
+}
+
+function scoringValidationMessage(summary: NonNullable<ProblemInfo["rubric_point_summary"]>, scoreValid: boolean, locale: string) {
+  if (!scoreValid) return tx(locale, "满分必须是 0.01–10000 之间、最多两位小数的数值。", "The maximum must be 0.01–10000 with at most two decimal places.");
+  if (summary.issue_code) return rubricIssueLabel(summary.issue_code, locale);
+  return tx(locale, "请检查本题满分与评分标准。", "Check the maximum score and rubric.");
 }
 
 function EditableTextField({ fieldKey, label, value, problem, field, readOnly, saving, locale, compact = false, onDirtyChange, onSave }: {
