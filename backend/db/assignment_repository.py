@@ -24,7 +24,18 @@ from sqlalchemy import func, select, update
 from backend.db.models import AssignmentQuestionRecord, AssignmentRecord, CourseRecord
 from backend.db.session import session_scope
 from backend.domain import education
-from backend.domain.errors import InvalidTransition, NotFound, VersionConflict
+from backend.domain.errors import (
+    InvalidTransition,
+    NotFound,
+    ValidationError,
+    VersionConflict,
+)
+from backend.services.question_structure import (
+    MajorQuestionStructureV1,
+    QuestionRubricValidationError,
+    build_major_question_structure,
+    validate_rubric_points,
+)
 
 
 def _new_assignment_id() -> str:
@@ -33,6 +44,43 @@ def _new_assignment_id() -> str:
 
 def _new_question_id() -> str:
     return f"q_{uuid.uuid4().hex[:12]}"
+
+
+def _normalise_question_source(
+    source: dict | None,
+    *,
+    number: str,
+    order_index: int,
+    stem: str,
+    criterion: str,
+    max_score: float,
+) -> dict:
+    """Persist the same major-question invariant for every creation route."""
+
+    normalized = dict(source or {})
+    presentation = dict(normalized.get("presentation") or {})
+    structure = MajorQuestionStructureV1.model_validate(
+        presentation.get("question_structure")
+        or build_major_question_structure(
+            {"number": number, "stem": stem},
+            major_order=order_index,
+            structure_source="deterministic",
+            review_status="needs_review",
+        ).model_dump()
+    )
+    try:
+        summary = validate_rubric_points(
+            criterion or "", max_score, structure
+        )
+    except QuestionRubricValidationError as exc:
+        raise ValidationError(
+            "Explicit subpart rubric points must add up to the major-question maximum.",
+            code=exc.summary.issue_code or "rubric_subpart_points_mismatch",
+        ) from exc
+    presentation["question_structure"] = structure.model_dump()
+    presentation["rubric_point_summary"] = summary.model_dump()
+    normalized["presentation"] = presentation
+    return normalized
 
 
 def _question_to_dto(record: AssignmentQuestionRecord) -> education.QuestionDTO:
@@ -268,6 +316,14 @@ def add_question(assignment_id: str, *, teacher_id: str, q_id: str, order_index:
             raise NotFound("assignment")
         if assignment.status not in education.EDITABLE_ASSIGNMENT_STATUSES:
             raise InvalidTransition("assignment_not_editable")
+        normalized_source = _normalise_question_source(
+            source,
+            number=number,
+            order_index=order_index,
+            stem=stem,
+            criterion=criterion,
+            max_score=max_score,
+        )
         record = AssignmentQuestionRecord(
             id=question_pk,
             assignment_id=assignment_id,
@@ -280,7 +336,7 @@ def add_question(assignment_id: str, *, teacher_id: str, q_id: str, order_index:
             max_score=max_score,
             reference_answer=reference_answer,
             test_cases=test_cases,
-            source=source,
+            source=normalized_source,
             version=1,
             created_at=now,
             updated_at=now,
@@ -331,6 +387,21 @@ def update_question(assignment_id: str, *, teacher_id: str, q_id: str, expected_
         allowed = {"stem", "number", "criterion", "max_score", "reference_answer",
                    "test_cases", "source", "order_index", "type"}
         changes = {k: v for k, v in fields.items() if k in allowed}
+        existing = session.scalar(
+            select(AssignmentQuestionRecord).where(
+                AssignmentQuestionRecord.assignment_id == assignment_id,
+                AssignmentQuestionRecord.q_id == q_id,
+            )
+        )
+        if existing is not None and existing.version == expected_version:
+            changes["source"] = _normalise_question_source(
+                changes.get("source", existing.source),
+                number=str(changes.get("number", existing.number) or ""),
+                order_index=int(changes.get("order_index", existing.order_index)),
+                stem=str(changes.get("stem", existing.stem) or ""),
+                criterion=str(changes.get("criterion", existing.criterion) or ""),
+                max_score=float(changes.get("max_score", existing.max_score)),
+            )
         now = time.time()
         result = session.execute(
             update(AssignmentQuestionRecord)
