@@ -16,11 +16,18 @@ from backend.agents.ingest_agent import (
 from backend.db import (
     assignment_repository,
     source_outcome_repository,
+    source_storage_repository,
     workflow_repository,
 )
 from backend.db.file_repository import list_files
-from backend.db.models import AssignmentRecord, CourseRecord, UserRecord
+from backend.db.models import (
+    AssignmentRecord,
+    CourseRecord,
+    SourceStorageReservationRecord,
+    UserRecord,
+)
 from backend.db.session import session_scope
+from backend.domain.errors import LeaseLost
 from backend.services import submission_source_pipeline, task_facade
 from backend.storage import get_storage
 from backend.tools.file_processing import RawUploadSource
@@ -145,6 +152,445 @@ async def test_register_failure_compensates_saved_file_metadata_and_object(monke
 
 
 @pytest.mark.asyncio
+async def test_expired_submission_worker_cannot_publish_a_raw_source():
+    owner_id, task_id = _seed_task()
+    queued = _create_operation(owner_id, task_id)
+    running = workflow_repository.claim_operation(
+        queued.id,
+        owner_id=owner_id,
+        worker_id="expired-submission-worker",
+        lease_seconds=60,
+    )
+    assert running.lease_token
+    with session_scope() as session:
+        operation = session.get(
+            workflow_repository.WorkflowOperationRecord, running.id
+        )
+        assert operation is not None
+        operation.lease_expires_at = time.time() - 1
+
+    with pytest.raises(RuntimeError, match="submission_source_persistence_failed"):
+        await submission_source_pipeline._persist_and_register(
+            raw=_raw_source(),
+            owner_id=owner_id,
+            task_id=task_id,
+            job_id=running.id,
+            job_attempt=running.attempt,
+            order_index=0,
+            operation_lease_token=running.lease_token,
+        )
+
+    assert list_files(owner_id=owner_id, assignment_id=task_id) == []
+    assert source_storage_repository.source_quota_usage(owner_id).used_bytes == 0
+    with session_scope() as session:
+        assert session.query(SourceStorageReservationRecord).count() == 0
+    assert source_outcome_repository.list_sources(
+        operation_id=running.id,
+        owner_id=owner_id,
+        attempt=running.attempt,
+    ) == []
+
+
+@pytest.mark.asyncio
+async def test_lease_loss_between_publication_and_registration_preserves_recovery(
+    monkeypatch,
+):
+    owner_id, task_id = _seed_task()
+    queued = _create_operation(owner_id, task_id)
+    running = workflow_repository.claim_operation(
+        queued.id,
+        owner_id=owner_id,
+        worker_id="registration-gap-worker",
+        lease_seconds=60,
+    )
+    assert running.lease_token
+    real_register = source_outcome_repository.register_source
+
+    def expire_then_register(**kwargs):
+        with session_scope() as session:
+            operation = session.get(
+                workflow_repository.WorkflowOperationRecord, running.id
+            )
+            assert operation is not None
+            operation.lease_expires_at = time.time() - 1
+        return real_register(**kwargs)
+
+    monkeypatch.setattr(
+        submission_source_pipeline.source_outcome_repository,
+        "register_source",
+        expire_then_register,
+    )
+
+    with pytest.raises(RuntimeError, match="submission_source_persistence_failed"):
+        await submission_source_pipeline._persist_and_register(
+            raw=_raw_source(),
+            owner_id=owner_id,
+            task_id=task_id,
+            job_id=running.id,
+            job_attempt=running.attempt,
+            order_index=0,
+            operation_lease_token=running.lease_token,
+        )
+
+    preserved = list_files(owner_id=owner_id, assignment_id=task_id)
+    assert len(preserved) == 1
+    assert source_storage_repository.source_quota_usage(
+        owner_id
+    ).used_bytes == len(_raw_source().content)
+    assert source_outcome_repository.list_sources(
+        operation_id=running.id,
+        owner_id=owner_id,
+        attempt=running.attempt,
+    ) == []
+    monkeypatch.setattr(
+        submission_source_pipeline.source_outcome_repository,
+        "register_source",
+        real_register,
+    )
+    replacement = workflow_repository.claim_operation(
+        running.id,
+        owner_id=owner_id,
+        worker_id="registration-gap-replacement-worker",
+        lease_seconds=60,
+    )
+    source_id, file_id = await submission_source_pipeline._persist_and_register(
+        raw=_raw_source(),
+        owner_id=owner_id,
+        task_id=task_id,
+        job_id=replacement.id,
+        job_attempt=replacement.attempt,
+        order_index=0,
+        operation_lease_token=replacement.lease_token,
+    )
+    assert file_id == preserved[0].id
+    assert [item.id for item in source_outcome_repository.list_sources(
+        operation_id=replacement.id,
+        owner_id=owner_id,
+        attempt=replacement.attempt,
+    )] == [source_id]
+
+
+@pytest.mark.asyncio
+async def test_stale_worker_cannot_recover_another_workers_source_registration(
+    monkeypatch,
+):
+    owner_id, task_id = _seed_task()
+    queued = _create_operation(owner_id, task_id)
+    running = workflow_repository.claim_operation(
+        queued.id,
+        owner_id=owner_id,
+        worker_id="stale-registration-worker",
+        lease_seconds=60,
+    )
+    assert running.lease_token
+    real_register = source_outcome_repository.register_source
+
+    def new_worker_wins_then_old_worker_loses(**kwargs):
+        with session_scope() as session:
+            operation = session.get(
+                workflow_repository.WorkflowOperationRecord, running.id
+            )
+            assert operation is not None
+            operation.lease_expires_at = time.time() - 1
+        replacement = workflow_repository.claim_operation(
+            running.id,
+            owner_id=owner_id,
+            worker_id="replacement-registration-worker",
+            lease_seconds=60,
+        )
+        real_register(
+            **{
+                **kwargs,
+                "expected_lease_token": replacement.lease_token,
+            }
+        )
+        raise LeaseLost("old worker lost registration race")
+
+    monkeypatch.setattr(
+        submission_source_pipeline.source_outcome_repository,
+        "register_source",
+        new_worker_wins_then_old_worker_loses,
+    )
+
+    with pytest.raises(LeaseLost):
+        await submission_source_pipeline._persist_and_register(
+            raw=_raw_source(),
+            owner_id=owner_id,
+            task_id=task_id,
+            job_id=running.id,
+            job_attempt=running.attempt,
+            order_index=0,
+            operation_lease_token=running.lease_token,
+        )
+
+    sources = source_outcome_repository.list_sources(
+        operation_id=running.id,
+        owner_id=owner_id,
+        attempt=running.attempt,
+    )
+    assert len(sources) == 1
+    assert [item.id for item in list_files(
+        owner_id=owner_id,
+        assignment_id=task_id,
+    )] == [sources[0].stored_file_id]
+
+
+@pytest.mark.asyncio
+async def test_stale_worker_cannot_delete_replacement_workers_unlinked_source():
+    owner_id, task_id = _seed_task()
+    queued = _create_operation(owner_id, task_id)
+    stale = workflow_repository.claim_operation(
+        queued.id,
+        owner_id=owner_id,
+        worker_id="stale-unlinked-source-worker",
+        lease_seconds=60,
+    )
+    assert stale.lease_token
+    with session_scope() as session:
+        operation = session.get(
+            workflow_repository.WorkflowOperationRecord, stale.id
+        )
+        assert operation is not None
+        operation.lease_expires_at = time.time() - 1
+    replacement = workflow_repository.claim_operation(
+        stale.id,
+        owner_id=owner_id,
+        worker_id="replacement-unlinked-source-worker",
+        lease_seconds=60,
+    )
+    assert replacement.lease_token
+    raw = _raw_source()
+    replacement_file = submission_source_pipeline.save_file(
+        storage=get_storage(),
+        owner_id=owner_id,
+        kind="submission_source",
+        original_name=raw.filename,
+        content=raw.content,
+        content_type=raw.content_type,
+        storage_prefix=(
+            f"assignments/{task_id}/submission-sources/"
+            f"{replacement.id}/{replacement.attempt}"
+        ),
+        assignment_id=task_id,
+        fence_operation_id=replacement.id,
+        fence_operation_attempt=replacement.attempt,
+        fence_lease_token=replacement.lease_token,
+    )
+
+    with pytest.raises(RuntimeError, match="submission_source_persistence_failed"):
+        await submission_source_pipeline._persist_and_register(
+            raw=raw,
+            owner_id=owner_id,
+            task_id=task_id,
+            job_id=stale.id,
+            job_attempt=stale.attempt,
+            order_index=0,
+            operation_lease_token=stale.lease_token,
+        )
+
+    preserved = list_files(owner_id=owner_id, assignment_id=task_id)
+    assert [item.id for item in preserved] == [replacement_file.id]
+    assert get_storage().exists(replacement_file.storage_key)
+    assert source_storage_repository.source_quota_usage(
+        owner_id
+    ).used_bytes == len(raw.content)
+
+    source_id, stored_file_id = await submission_source_pipeline._persist_and_register(
+        raw=raw,
+        owner_id=owner_id,
+        task_id=task_id,
+        job_id=replacement.id,
+        job_attempt=replacement.attempt,
+        order_index=0,
+        operation_lease_token=replacement.lease_token,
+    )
+    assert stored_file_id == replacement_file.id
+    assert [item.id for item in source_outcome_repository.list_sources(
+        operation_id=replacement.id,
+        owner_id=owner_id,
+        attempt=replacement.attempt,
+    )] == [source_id]
+
+
+@pytest.mark.asyncio
+async def test_expired_submission_worker_cannot_reuse_registered_source():
+    owner_id, task_id = _seed_task()
+    queued = _create_operation(owner_id, task_id)
+    source_id, file_id = await submission_source_pipeline._persist_and_register(
+        raw=_raw_source(),
+        owner_id=owner_id,
+        task_id=task_id,
+        job_id=queued.id,
+        job_attempt=queued.attempt,
+        order_index=0,
+    )
+    running = workflow_repository.claim_operation(
+        queued.id,
+        owner_id=owner_id,
+        worker_id="expired-source-reuse-worker",
+        lease_seconds=60,
+    )
+    assert running.lease_token
+    with session_scope() as session:
+        operation = session.get(
+            workflow_repository.WorkflowOperationRecord, running.id
+        )
+        assert operation is not None
+        operation.lease_expires_at = time.time() - 1
+
+    with pytest.raises(LeaseLost):
+        await submission_source_pipeline._persist_and_register(
+            raw=_raw_source(),
+            owner_id=owner_id,
+            task_id=task_id,
+            job_id=running.id,
+            job_attempt=running.attempt,
+            order_index=0,
+            operation_lease_token=running.lease_token,
+        )
+
+    assert [item.id for item in list_files(
+        owner_id=owner_id,
+        assignment_id=task_id,
+    )] == [file_id]
+    assert [item.id for item in source_outcome_repository.list_sources(
+        operation_id=running.id,
+        owner_id=owner_id,
+        attempt=running.attempt,
+    )] == [source_id]
+
+
+@pytest.mark.asyncio
+async def test_live_submission_worker_publishes_and_checkpoints_archive_container():
+    owner_id, task_id = _seed_task()
+    queued = _create_operation(owner_id, task_id)
+    running = workflow_repository.claim_operation(
+        queued.id,
+        owner_id=owner_id,
+        worker_id="live-archive-worker",
+        lease_seconds=60,
+    )
+    assert running.lease_token
+
+    stored = await submission_source_pipeline._persist_archive_container(
+        content=_zip_sources({"student.txt": b"answer"}),
+        filename="submissions.zip",
+        content_type="application/zip",
+        owner_id=owner_id,
+        task_id=task_id,
+        job_id=running.id,
+        job_attempt=running.attempt,
+        operation_lease_token=running.lease_token,
+    )
+
+    current = workflow_repository.get_operation(running.id, owner_id=owner_id)
+    assert current.artifact_refs == [stored.id]
+    assert current.checkpoint["container_file_id"] == stored.id
+    assert get_storage().exists(stored.storage_key)
+    assert source_storage_repository.source_quota_usage(
+        owner_id
+    ).used_bytes == stored.size_bytes
+
+
+@pytest.mark.asyncio
+async def test_expired_submission_worker_cannot_publish_archive_container():
+    owner_id, task_id = _seed_task()
+    queued = _create_operation(owner_id, task_id)
+    running = workflow_repository.claim_operation(
+        queued.id,
+        owner_id=owner_id,
+        worker_id="expired-archive-worker",
+        lease_seconds=60,
+    )
+    assert running.lease_token
+    with session_scope() as session:
+        operation = session.get(
+            workflow_repository.WorkflowOperationRecord, running.id
+        )
+        assert operation is not None
+        operation.lease_expires_at = time.time() - 1
+
+    with pytest.raises(LeaseLost):
+        await submission_source_pipeline._persist_archive_container(
+            content=_zip_sources({"student.txt": b"answer"}),
+            filename="submissions.zip",
+            content_type="application/zip",
+            owner_id=owner_id,
+            task_id=task_id,
+            job_id=running.id,
+            job_attempt=running.attempt,
+            operation_lease_token=running.lease_token,
+        )
+
+    assert list_files(owner_id=owner_id, assignment_id=task_id) == []
+    assert source_storage_repository.source_quota_usage(owner_id).used_bytes == 0
+    with session_scope() as session:
+        assert session.query(SourceStorageReservationRecord).count() == 0
+
+
+@pytest.mark.asyncio
+async def test_stale_worker_cannot_recover_another_workers_archive_checkpoint(
+    monkeypatch,
+):
+    owner_id, task_id = _seed_task()
+    queued = _create_operation(owner_id, task_id)
+    running = workflow_repository.claim_operation(
+        queued.id,
+        owner_id=owner_id,
+        worker_id="stale-archive-checkpoint-worker",
+        lease_seconds=60,
+    )
+    assert running.lease_token
+    real_checkpoint = workflow_repository.save_operation_checkpoint
+
+    def new_worker_checkpoints_then_old_worker_loses(*args, **kwargs):
+        with session_scope() as session:
+            operation = session.get(
+                workflow_repository.WorkflowOperationRecord, running.id
+            )
+            assert operation is not None
+            operation.lease_expires_at = time.time() - 1
+        replacement = workflow_repository.claim_operation(
+            running.id,
+            owner_id=owner_id,
+            worker_id="replacement-archive-checkpoint-worker",
+            lease_seconds=60,
+        )
+        real_checkpoint(
+            *args,
+            **{
+                **kwargs,
+                "expected_lease_token": replacement.lease_token,
+            },
+        )
+        raise LeaseLost("old worker lost archive checkpoint race")
+
+    monkeypatch.setattr(
+        submission_source_pipeline.workflow_repository,
+        "save_operation_checkpoint",
+        new_worker_checkpoints_then_old_worker_loses,
+    )
+
+    with pytest.raises(LeaseLost):
+        await submission_source_pipeline._persist_archive_container(
+            content=_zip_sources({"student.txt": b"answer"}),
+            filename="submissions.zip",
+            content_type="application/zip",
+            owner_id=owner_id,
+            task_id=task_id,
+            job_id=running.id,
+            job_attempt=running.attempt,
+            operation_lease_token=running.lease_token,
+        )
+
+    current = workflow_repository.get_operation(running.id, owner_id=owner_id)
+    assert len(current.artifact_refs) == 1
+    stored = list_files(owner_id=owner_id, assignment_id=task_id)
+    assert [item.id for item in stored] == current.artifact_refs
+    assert get_storage().exists(stored[0].storage_key)
+
+
+@pytest.mark.asyncio
 async def test_same_attempt_replay_reuses_source_and_stored_file():
     owner_id, task_id = _seed_task()
     operation = _create_operation(owner_id, task_id)
@@ -176,6 +622,180 @@ async def test_same_attempt_replay_reuses_source_and_stored_file():
         owner_id=owner_id,
         attempt=operation.attempt,
     )] == [first_source_id]
+
+
+@pytest.mark.asyncio
+async def test_restart_recovers_source_published_before_registration():
+    owner_id, task_id = _seed_task()
+    queued = _create_operation(owner_id, task_id)
+    running = workflow_repository.claim_operation(
+        queued.id,
+        owner_id=owner_id,
+        worker_id="source-publication-recovery-worker",
+        lease_seconds=60,
+    )
+    assert running.lease_token
+    raw = _raw_source()
+    orphan = submission_source_pipeline.save_file(
+        storage=get_storage(),
+        owner_id=owner_id,
+        kind="submission_source",
+        original_name=raw.filename,
+        content=raw.content,
+        content_type=raw.content_type,
+        storage_prefix=(
+            f"assignments/{task_id}/submission-sources/"
+            f"{running.id}/{running.attempt}"
+        ),
+        assignment_id=task_id,
+        fence_operation_id=running.id,
+        fence_operation_attempt=running.attempt,
+        fence_lease_token=running.lease_token,
+    )
+    assert source_outcome_repository.list_sources(
+        operation_id=running.id,
+        owner_id=owner_id,
+        attempt=running.attempt,
+    ) == []
+
+    source_id, stored_file_id = await submission_source_pipeline._persist_and_register(
+        raw=raw,
+        owner_id=owner_id,
+        task_id=task_id,
+        job_id=running.id,
+        job_attempt=running.attempt,
+        order_index=0,
+        operation_lease_token=running.lease_token,
+    )
+
+    assert stored_file_id == orphan.id
+    assert [item.id for item in list_files(
+        owner_id=owner_id,
+        assignment_id=task_id,
+    )] == [orphan.id]
+    assert [item.id for item in source_outcome_repository.list_sources(
+        operation_id=running.id,
+        owner_id=owner_id,
+        attempt=running.attempt,
+    )] == [source_id]
+    assert source_storage_repository.source_quota_usage(
+        owner_id
+    ).used_bytes == len(raw.content)
+
+
+@pytest.mark.asyncio
+async def test_restart_recovers_container_published_before_checkpoint():
+    owner_id, task_id = _seed_task()
+    queued = _create_operation(owner_id, task_id)
+    running = workflow_repository.claim_operation(
+        queued.id,
+        owner_id=owner_id,
+        worker_id="container-publication-recovery-worker",
+        lease_seconds=60,
+    )
+    assert running.lease_token
+    content = _zip_sources({"student.txt": b"answer"})
+    orphan = submission_source_pipeline.save_file(
+        storage=get_storage(),
+        owner_id=owner_id,
+        kind="submission_container",
+        original_name="submissions.zip",
+        content=content,
+        content_type="application/zip",
+        storage_prefix=(
+            f"assignments/{task_id}/submission-containers/"
+            f"{running.id}/{running.attempt}"
+        ),
+        assignment_id=task_id,
+        fence_operation_id=running.id,
+        fence_operation_attempt=running.attempt,
+        fence_lease_token=running.lease_token,
+    )
+
+    recovered = await submission_source_pipeline._persist_archive_container(
+        content=content,
+        filename="submissions.zip",
+        content_type="application/zip",
+        owner_id=owner_id,
+        task_id=task_id,
+        job_id=running.id,
+        job_attempt=running.attempt,
+        operation_lease_token=running.lease_token,
+    )
+
+    assert recovered.id == orphan.id
+    assert [item.id for item in list_files(
+        owner_id=owner_id,
+        assignment_id=task_id,
+    )] == [orphan.id]
+    current = workflow_repository.get_operation(running.id, owner_id=owner_id)
+    assert current.artifact_refs == [orphan.id]
+    assert source_storage_repository.source_quota_usage(
+        owner_id
+    ).used_bytes == len(content)
+
+
+@pytest.mark.asyncio
+async def test_restart_recovers_archive_reference_published_before_registration():
+    owner_id, task_id = _seed_task()
+    queued = _create_operation(owner_id, task_id)
+    running = workflow_repository.claim_operation(
+        queued.id,
+        owner_id=owner_id,
+        worker_id="reference-publication-recovery-worker",
+        lease_seconds=60,
+    )
+    assert running.lease_token
+    container = await submission_source_pipeline._persist_archive_container(
+        content=_zip_sources({"student.txt": b"answer"}),
+        filename="submissions.zip",
+        content_type="application/zip",
+        owner_id=owner_id,
+        task_id=task_id,
+        job_id=running.id,
+        job_attempt=running.attempt,
+        operation_lease_token=running.lease_token,
+    )
+    raw = RawUploadSource(
+        filename="student.txt",
+        content=None,
+        content_type="text/plain",
+    )
+    orphan = submission_source_pipeline.create_archive_member_reference(
+        storage=get_storage(),
+        source_file_id=container.id,
+        owner_id=owner_id,
+        assignment_id=task_id,
+        member_name=raw.filename,
+        fence_operation_id=running.id,
+        fence_operation_attempt=running.attempt,
+        fence_lease_token=running.lease_token,
+    )
+
+    source_id, stored_file_id = await submission_source_pipeline._persist_and_register(
+        raw=raw,
+        owner_id=owner_id,
+        task_id=task_id,
+        job_id=running.id,
+        job_attempt=running.attempt,
+        order_index=0,
+        container_file=container,
+        operation_lease_token=running.lease_token,
+    )
+
+    assert stored_file_id == orphan.id
+    assert {item.id for item in list_files(
+        owner_id=owner_id,
+        assignment_id=task_id,
+    )} == {container.id, orphan.id}
+    assert [item.id for item in source_outcome_repository.list_sources(
+        operation_id=running.id,
+        owner_id=owner_id,
+        attempt=running.attempt,
+    )] == [source_id]
+    assert source_storage_repository.source_quota_usage(
+        owner_id
+    ).used_bytes == container.size_bytes + orphan.size_bytes
 
 
 @pytest.mark.asyncio

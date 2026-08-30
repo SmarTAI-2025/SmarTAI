@@ -155,8 +155,49 @@ export async function getBlob(path: string, config?: AxiosRequestConfig): Promis
     const response = await apiClient.get<Blob>(path, { ...config, responseType: "blob" });
     return response.data;
   } catch (error) {
-    throw normalizeAPIError(error);
+    throw await normalizeBlobAPIError(error);
   }
+}
+
+async function normalizeBlobAPIError(error: unknown): Promise<APIError> {
+  if (!axios.isAxiosError(error) || !(error.response?.data instanceof Blob)) {
+    return normalizeAPIError(error);
+  }
+  const blob = error.response.data;
+  let payload: APIErrorPayload | undefined;
+  // Axios returns JSON error responses as Blob when responseType is "blob".
+  // Decode only a small valid JSON body so stable lifecycle codes survive a
+  // catalog/content race without treating arbitrary binary data as an error
+  // envelope or exposing it as UI copy.
+  if (blob.size <= 64 * 1024) {
+    try {
+      const body = await readBlobText(blob);
+      const parsed: unknown = JSON.parse(body);
+      payload = normalizePayload(parsed);
+    } catch {
+      payload = undefined;
+    }
+  }
+  const status = error.response.status ?? 0;
+  const message = responseMessage(status, payload, error.response.statusText);
+  const retryAfterSeconds = parseRetryAfter(
+    retryAfterHeader(error.response.headers),
+    payload,
+  );
+  return new APIError(status, message, payload, retryAfterSeconds);
+}
+
+async function readBlobText(blob: Blob): Promise<string> {
+  if (typeof blob.text === "function") return blob.text();
+  if (typeof FileReader !== "undefined") {
+    return new Promise<string>((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onerror = () => reject(reader.error ?? new Error("blob_read_failed"));
+      reader.onload = () => resolve(typeof reader.result === "string" ? reader.result : "");
+      reader.readAsText(blob);
+    });
+  }
+  throw new Error("blob_text_unavailable");
 }
 
 export async function postJSON<TResponse, TBody = unknown>(

@@ -33,6 +33,7 @@ from backend.db import (
     file_repository,
     grading_repository,
     source_outcome_repository,
+    source_storage_repository,
     submission_repository,
     workflow_repository,
 )
@@ -60,6 +61,7 @@ from backend.domain.errors import (
     VersionConflict,
 )
 from backend.domain.source_outcomes import safe_source_diagnostic
+from backend.domain.source_storage import DELAYED_SOURCE_OPERATION_TYPES
 from backend.models import TaskGradingSetup
 from backend.models import User
 from backend.llm.registry import (
@@ -250,14 +252,67 @@ def update_task(
 
 
 def delete_task(*, task_id: str, owner_id: str) -> None:
-    assignment_repository.get_assignment(task_id, actor_id=owner_id)
     with session_scope() as session:
-        result = session.execute(delete(AssignmentRecord).where(
-            AssignmentRecord.id == task_id,
-            AssignmentRecord.teacher_id == owner_id,
-        ))
-        if result.rowcount != 1:
+        # Source reserve/finalize paths lock workflow before lifecycle rows.
+        # Keep the same order so a task cascade cannot race a quota reservation
+        # into an object whose durable tracking row has just disappeared.
+        session.scalar(
+            select(workflow_repository.AssignmentWorkflowRecord)
+            .where(
+                workflow_repository.AssignmentWorkflowRecord.assignment_id
+                == task_id,
+                workflow_repository.AssignmentWorkflowRecord.owner_id == owner_id,
+            )
+            .with_for_update()
+        )
+        assignment = session.scalar(
+            select(AssignmentRecord)
+            .where(
+                AssignmentRecord.id == task_id,
+                AssignmentRecord.teacher_id == owner_id,
+            )
+            .with_for_update()
+        )
+        if assignment is None:
             raise NotFound("assignment")
+        # Do not cascade an in-flight operation while holding the workflow row.
+        # Workers lock operation -> workflow; this MVCC read intentionally
+        # takes no operation row lock and fails closed until the worker reaches
+        # a terminal state.
+        active_operation = session.scalar(
+            select(workflow_repository.WorkflowOperationRecord)
+            .where(
+                workflow_repository.WorkflowOperationRecord.assignment_id
+                == task_id,
+                workflow_repository.WorkflowOperationRecord.owner_id == owner_id,
+                workflow_repository.WorkflowOperationRecord.status.in_((
+                    "preparing", "pending", "ready", "running",
+                )),
+            )
+            .limit(1)
+        )
+        if active_operation is not None:
+            is_source_cleanup = (
+                active_operation.operation_type
+                in DELAYED_SOURCE_OPERATION_TYPES
+            )
+            raise InvalidTransition(
+                (
+                    "Task source cleanup is still running."
+                    if is_source_cleanup
+                    else "Another workflow operation is active."
+                ),
+                code=(
+                    "task_storage_cleanup_required"
+                    if is_source_cleanup
+                    else "workflow_busy"
+                ),
+            )
+        source_storage_repository.assert_assignment_storage_empty_in_session(
+            session,
+            assignment_id=task_id,
+        )
+        session.delete(assignment)
 
 
 def list_tasks(*, owner_id: str) -> dict[str, dict]:
@@ -1316,6 +1371,23 @@ def publish_checkpointed_operation_atomic(
     creating_new = False
     try:
         with session_scope() as session:
+            # Existing producers are always locked before their workflow row,
+            # matching supersede/failure/publication paths. The no-op UPDATE
+            # also establishes SQLite's write gate, where FOR UPDATE is ignored.
+            session.execute(
+                update(workflow_repository.WorkflowOperationRecord)
+                .where(*selector)
+                .values(
+                    updated_at=(
+                        workflow_repository.WorkflowOperationRecord.updated_at
+                    )
+                )
+            )
+            operation = session.scalar(
+                select(workflow_repository.WorkflowOperationRecord)
+                .where(*selector)
+                .with_for_update()
+            )
             workflow = session.scalar(
                 select(workflow_repository.AssignmentWorkflowRecord)
                 .where(
@@ -1328,11 +1400,6 @@ def publish_checkpointed_operation_atomic(
             )
             if workflow is None:
                 raise NotFound("workflow")
-            operation = session.scalar(
-                select(workflow_repository.WorkflowOperationRecord)
-                .where(*selector)
-                .with_for_update()
-            )
             retry_checkpoint_updates: dict[str, Any] = {}
             inherited_refs: list[str] = []
             if operation is not None:
@@ -1634,7 +1701,9 @@ def queue_task_problem_extraction(
             item for item in file_repository.list_files(
                 owner_id=owner_id, assignment_id=task_id
             )
-            if item.kind == "problem_source" and item.sha256 == source_sha256
+            if item.kind == "problem_source"
+            and item.sha256 == source_sha256
+            and item.availability_status == "available"
         ), None)
         if stored is None:
             stored = file_repository.save_file(
@@ -2119,6 +2188,7 @@ def queue_task_submission_parsing(
             )
             if item.kind == source_kind
             and item.sha256 == hashlib.sha256(content).hexdigest()
+            and item.availability_status == "available"
         ), None)
         if stored is None:
             stored = file_repository.save_file(
@@ -2491,6 +2561,11 @@ async def run_task_submission_parsing(
                 task_id=task_id,
                 job_id=job_id,
                 job_attempt=job_attempt,
+                operation_lease_token=(
+                    leased_operation.lease_token
+                    if leased_operation is not None
+                    else None
+                ),
                 ocr_skill=ocr_skill,
                 document_ocr_skill=document_ocr_skill,
                 recovered_ocr_text_by_source=recovered_ocr_text,
@@ -4295,6 +4370,9 @@ def finalization(*, task_id: str, owner_id: str) -> dict:
         "analysis_generated_at": workflow.analysis_generated_at,
         "analysis_error": workflow.analysis_error_code,
         "available_result_versions": len(workflow_repository.list_artifact_manifests(task_id, owner_id=owner_id)),
+        "source_cleanup": source_storage_repository.cleanup_summary(
+            assignment_id=task_id, owner_id=owner_id
+        ),
     }
 
 

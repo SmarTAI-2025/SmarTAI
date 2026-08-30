@@ -44,6 +44,10 @@ def test_app_starts_and_stops_empty_workflow_worker(monkeypatch):
             run_durable_material_import,
             run_durable_question_preparation,
         )
+        from backend.services.source_cleanup import (
+            run_source_cleanup,
+            run_source_reservation_cleanup,
+        )
 
         assert (
             "constructed",
@@ -53,6 +57,8 @@ def test_app_starts_and_stops_empty_workflow_worker(monkeypatch):
                 "material_import": run_durable_material_import,
                 "ai_completion": run_durable_ai_completion,
                 "question_preparation": run_durable_question_preparation,
+                "source_cleanup": run_source_cleanup,
+                "source_reservation_cleanup": run_source_reservation_cleanup,
             },
         ) in events
         assert "run_started" in events
@@ -83,6 +89,10 @@ def test_workflow_worker_lifecycle_never_bulk_releases_leases(monkeypatch):
                 run_durable_material_import,
                 run_durable_question_preparation,
             )
+            from backend.services.source_cleanup import (
+                run_source_cleanup,
+                run_source_reservation_cleanup,
+            )
 
             assert dict(handlers) == {
                 "problem_extraction": run_durable_problem_extraction,
@@ -90,6 +100,8 @@ def test_workflow_worker_lifecycle_never_bulk_releases_leases(monkeypatch):
                 "material_import": run_durable_material_import,
                 "ai_completion": run_durable_ai_completion,
                 "question_preparation": run_durable_question_preparation,
+                "source_cleanup": run_source_cleanup,
+                "source_reservation_cleanup": run_source_reservation_cleanup,
             }
 
         async def run_forever(self):

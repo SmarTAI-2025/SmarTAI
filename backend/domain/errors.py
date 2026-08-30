@@ -8,7 +8,7 @@ not inventing an ad-hoc string in a service.
 """
 from __future__ import annotations
 
-from typing import Optional
+from typing import Any, Optional
 
 
 class DomainError(Exception):
@@ -23,8 +23,13 @@ class DomainError(Exception):
     status_code: int = 400
 
     def __init__(self, message: Optional[str] = None, *, code: Optional[str] = None,
-                 status_code: Optional[int] = None) -> None:
+                 status_code: Optional[int] = None,
+                 details: dict[str, Any] | None = None) -> None:
         self.message = message or self.code
+        # Details are reserved for bounded, client-safe metadata such as the
+        # caller's own quota usage.  Storage keys, paths, buckets, and provider
+        # errors must never be placed here.
+        self.details = dict(details) if details is not None else None
         if code is not None:
             self.code = code
         if status_code is not None:
@@ -86,3 +91,31 @@ class AssignmentClosed(DomainError):
     """The assignment deadline has passed or the assignment is closed for submissions."""
     code = "assignment_closed"
     status_code = 409
+
+
+class SourceStorageQuotaExceeded(DomainError):
+    """The owner's durable raw-source allocation cannot fit an upload."""
+
+    code = "source_storage_quota_exceeded"
+    status_code = 413
+
+
+class SourceStorageReservationConflict(DomainError):
+    """A quota reservation could not be serialized safely."""
+
+    code = "source_storage_reservation_conflict"
+    status_code = 409
+
+
+class SourceStorageWriteFailed(DomainError):
+    """Storage did not confirm a raw-source write."""
+
+    code = "source_storage_write_failed"
+    status_code = 503
+
+
+class SourceStorageIntegrityFailed(DomainError):
+    """The stored raw-source bytes failed length or digest verification."""
+
+    code = "source_storage_integrity_failed"
+    status_code = 503

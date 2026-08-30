@@ -78,6 +78,53 @@ describe("OriginalFilePreviewPanel", () => {
     expect(screen.getByRole("button", { name: "当前只支持 PDF 和常见图片格式。" })).toBeInTheDocument();
   });
 
+  it("keeps automatic cleanup lifecycle states non-actionable", () => {
+    const onRetry = vi.fn();
+    const pending: SourceFileDescriptor = {
+      ...availablePdf,
+      status: "cleanup_pending",
+      unavailable_reason: "cleanup_pending",
+    };
+    const { rerender } = render(
+      <OriginalFilePreviewPanel descriptor={pending} displayName={pending.display_name} previewKind="pdf" loadState="idle" errorCode={null} previewUrl={null} onClose={vi.fn()} onRetry={onRetry} t={t} />,
+    );
+
+    expect(screen.getByText("系统正在自动清理原文件")).toBeInTheDocument();
+    expect(screen.getByText(/无需手动操作/)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "重新读取" })).not.toBeInTheDocument();
+
+    rerender(
+      <OriginalFilePreviewPanel descriptor={{ ...pending, unavailable_reason: "storage_delete_failed" }} displayName={pending.display_name} previewKind="pdf" loadState="idle" errorCode={null} previewUrl={null} onClose={vi.fn()} onRetry={onRetry} t={t} />,
+    );
+    expect(screen.getByText(/系统会在后台继续重试/)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "重新读取" })).not.toBeInTheDocument();
+
+    rerender(
+      <OriginalFilePreviewPanel descriptor={availablePdf} displayName={availablePdf.display_name} previewKind="pdf" loadState="error" errorCode="source_cleanup_pending" previewUrl={null} onClose={vi.fn()} onRetry={onRetry} t={t} />,
+    );
+    expect(screen.getByText("系统正在自动清理原文件")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "重新读取" })).not.toBeInTheDocument();
+
+    rerender(
+      <OriginalFilePreviewPanel descriptor={availablePdf} displayName={availablePdf.display_name} previewKind="pdf" loadState="error" errorCode="source_unavailable_task_finalized" previewUrl={null} onClose={vi.fn()} onRetry={onRetry} t={t} />,
+    );
+    expect(screen.getByText(/原文件已按保留规则清理/)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "重新读取" })).not.toBeInTheDocument();
+    expect(onRetry).not.toHaveBeenCalled();
+  });
+
+  it("disables the cleanup-pending preview trigger without exposing a retry action", () => {
+    const onOpen = vi.fn();
+    render(
+      <OriginalFilePreviewTrigger state="cleanup_pending" unavailableReason="storage_delete_failed" open={false} onOpen={onOpen} onClose={vi.fn()} t={t} />,
+    );
+
+    expect(screen.getByRole("button", { name: "查看原文件" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: /系统会在后台继续重试/ })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "重新读取" })).not.toBeInTheDocument();
+    expect(onOpen).not.toHaveBeenCalled();
+  });
+
   it("settles a pending open panel into the safe missing state", () => {
     render(
       <OriginalFilePreviewPanel descriptor={null} displayName="" previewKind="unsupported" loadState="idle" errorCode={null} previewUrl={null} unavailableReason="missing" onClose={vi.fn()} onRetry={vi.fn()} t={t} />,

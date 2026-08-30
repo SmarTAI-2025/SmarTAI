@@ -680,6 +680,20 @@ async def preflight_problem_source(
                     stored_file_id=stored.id,
                 )
                 artifact_refs.append(stored.id)
+            except DomainError as exc:
+                if stored_created and stored is not None:
+                    file_repository.delete_unlinked_file(
+                        storage=get_storage(),
+                        file_id=stored.id,
+                        owner_id=current.id,
+                        assignment_id=task_id,
+                    )
+                _mark_problem_source_failed(
+                    operation=operation,
+                    owner_id=current.id,
+                    error_code=exc.code,
+                )
+                raise
             except Exception as exc:
                 if stored_created and stored is not None:
                     file_repository.delete_unlinked_file(

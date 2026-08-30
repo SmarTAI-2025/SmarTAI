@@ -127,6 +127,13 @@ function PreviewContent({ descriptor, displayName, previewKind, loadState, error
       </InlineNotice>
     );
   }
+  if (descriptor?.status === "cleanup_pending") {
+    return (
+      <InlineNotice tone="warning" title={t("sourcePreviewCleanupTitle")} className="max-w-md bg-card">
+        {unavailableDescription(descriptor.unavailable_reason, t)}
+      </InlineNotice>
+    );
+  }
   if (descriptor?.status === "unavailable") {
     return (
       <InlineNotice
@@ -139,6 +146,20 @@ function PreviewContent({ descriptor, displayName, previewKind, loadState, error
     );
   }
   if (loadState === "error") {
+    if (errorCode === "source_cleanup_pending") {
+      return (
+        <InlineNotice tone="warning" title={t("sourcePreviewCleanupTitle")} className="max-w-md bg-card">
+          {errorDescription(errorCode, t)}
+        </InlineNotice>
+      );
+    }
+    if (errorCode === "source_unavailable_task_finalized" || errorCode === "source_unavailable_missing") {
+      return (
+        <InlineNotice tone="neutral" title={t("sourcePreviewUnavailableTitle")} className="max-w-md bg-card">
+          {errorDescription(errorCode, t)}
+        </InlineNotice>
+      );
+    }
     const retryable = errorCode === "source_preview_processing"
       || errorCode === "source_preview_storage_unavailable"
       || errorCode === "source_preview_load_failed";
@@ -220,7 +241,7 @@ function StatusBadge({ descriptor, t }: {
   t: (key: MessageKey) => string;
 }) {
   if (!descriptor) return null;
-  const processing = descriptor.status === "processing";
+  const processing = descriptor.status === "processing" || descriptor.status === "cleanup_pending";
   const unavailable = descriptor.status === "unavailable";
   return (
     <span className={cn(
@@ -229,7 +250,7 @@ function StatusBadge({ descriptor, t }: {
       unavailable && "bg-muted text-muted-foreground",
       !processing && !unavailable && "bg-accent/10 text-accent",
     )}>
-      {t(processing ? "sourcePreviewProcessingBadge" : unavailable ? "sourcePreviewUnavailableBadge" : "sourcePreviewReadyBadge")}
+      {t(descriptor.status === "cleanup_pending" ? "sourcePreviewCleanupBadge" : processing ? "sourcePreviewProcessingBadge" : unavailable ? "sourcePreviewUnavailableBadge" : "sourcePreviewReadyBadge")}
     </span>
   );
 }
@@ -242,6 +263,12 @@ function unavailableDescription(reason: SourceUnavailableReason | null | undefin
       return t("sourcePreviewMissingReason");
     case "storage_unavailable":
       return t("sourcePreviewStorageUnavailableReason");
+    case "cleanup_pending":
+      return t("sourcePreviewCleanupReason");
+    case "task_finalized":
+      return t("sourcePreviewTaskFinalizedReason");
+    case "storage_delete_failed":
+      return t("sourcePreviewCleanupRetryReason");
     default:
       return t("sourcePreviewNotPersistedReason");
   }
@@ -259,6 +286,12 @@ function errorDescription(errorCode: SourcePreviewErrorCode | null, t: (key: Mes
       return t("sourcePreviewUnsupportedReason");
     case "source_preview_storage_unavailable":
       return t("sourcePreviewStorageUnavailableReason");
+    case "source_cleanup_pending":
+      return t("sourcePreviewCleanupReason");
+    case "source_unavailable_task_finalized":
+      return t("sourcePreviewTaskFinalizedReason");
+    case "source_unavailable_missing":
+      return t("sourcePreviewMissingReason");
     default:
       return t("sourcePreviewErrorDescription");
   }

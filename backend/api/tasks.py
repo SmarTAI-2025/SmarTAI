@@ -31,7 +31,12 @@ from pydantic import BaseModel, Field, ValidationError as PydanticValidationErro
 
 from backend.api.errors import domain_error_response
 from backend.auth import require_teacher
-from backend.db import assignment_repository, grading_repository, workflow_repository
+from backend.db import (
+    assignment_repository,
+    grading_repository,
+    source_storage_repository,
+    workflow_repository,
+)
 from backend.domain.errors import DomainError, InvalidTransition, NotFound, ValidationError
 from backend.knowledge.service import ingest_document
 from backend.llm.registry import (
@@ -287,6 +292,16 @@ def interpret_task_query(
         "explanation": "Applied deterministic history filters.",
         "conditions": conditions, "ambiguities": [], "source": "deterministic",
         "query_id": f"query_{hashlib.sha256(text.encode()).hexdigest()[:12]}",
+    }
+
+
+@router.get("/source-storage/usage")
+def get_source_storage_usage(current: User = Depends(require_teacher)):
+    usage = source_storage_repository.source_quota_usage(current.id)
+    return {
+        **usage.as_dict(),
+        "scope": "task_originals",
+        "knowledge_storage_included": False,
     }
 
 

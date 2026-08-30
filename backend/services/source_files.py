@@ -17,9 +17,18 @@ from backend.db import (
     course_library_repository,
     file_repository,
     source_outcome_repository,
+    source_storage_repository,
     workflow_repository,
 )
 from backend.domain.errors import DomainError
+from backend.domain.source_storage import (
+    SOURCE_FILE_AVAILABLE,
+    SOURCE_FILE_CLEANUP_PENDING,
+    SOURCE_FILE_UNAVAILABLE,
+    SOURCE_REASON_MISSING,
+    SOURCE_REASON_STORAGE_DELETE_FAILED,
+    SOURCE_REASON_TASK_FINALIZED,
+)
 from backend.storage.base import (
     StorageBackend,
     StorageObjectNotFound,
@@ -55,6 +64,21 @@ class SourcePreviewUnavailable(DomainError):
     status_code = 410
 
 
+class SourceCleanupPending(DomainError):
+    code = "source_cleanup_pending"
+    status_code = 409
+
+
+class SourceUnavailableTaskFinalized(DomainError):
+    code = "source_unavailable_task_finalized"
+    status_code = 410
+
+
+class SourceUnavailableMissing(DomainError):
+    code = "source_unavailable_missing"
+    status_code = 404
+
+
 class SourcePreviewUnsupportedType(DomainError):
     code = "source_preview_unsupported_type"
     status_code = 415
@@ -76,6 +100,19 @@ class SourceFileContent:
 class _ResolvedSource:
     descriptor: dict
     stored: file_repository.StoredFile | None
+
+
+def _raise_if_source_not_available(stored: file_repository.StoredFile) -> None:
+    if stored.availability_status == SOURCE_FILE_CLEANUP_PENDING:
+        raise SourceCleanupPending(
+            "The task original is being cleaned automatically."
+        )
+    if stored.availability_status == SOURCE_FILE_UNAVAILABLE:
+        if stored.availability_reason == SOURCE_REASON_TASK_FINALIZED:
+            raise SourceUnavailableTaskFinalized(
+                "The task original was cleaned after completion."
+            )
+        raise SourceUnavailableMissing("The task original is missing.")
 
 
 def safe_display_name(value: str | None, *, fallback: str = "source") -> str:
@@ -136,7 +173,11 @@ def persist_problem_source(
     for candidate in file_repository.list_files(
         owner_id=owner_id, assignment_id=task_id
     ):
-        if candidate.kind != "problem_source" or candidate.sha256 != digest:
+        if (
+            candidate.kind != "problem_source"
+            or candidate.sha256 != digest
+            or candidate.availability_status != SOURCE_FILE_AVAILABLE
+        ):
             continue
         try:
             with closing(storage.open(candidate.storage_key)) as stream:
@@ -223,6 +264,43 @@ def _descriptor_for_stored(
     stored: file_repository.StoredFile,
 ) -> _ResolvedSource:
     display_name = safe_display_name(stored.original_name)
+    if stored.availability_status == SOURCE_FILE_CLEANUP_PENDING:
+        reason = (
+            SOURCE_REASON_STORAGE_DELETE_FAILED
+            if stored.availability_reason == SOURCE_REASON_STORAGE_DELETE_FAILED
+            else "cleanup_pending"
+        )
+        return _ResolvedSource(
+            descriptor={
+                **_unavailable_descriptor(
+                    source_id=source_id,
+                    file_id=stored.id,
+                    display_name=display_name,
+                    mime_type=stored.content_type,
+                    size_bytes=stored.size_bytes,
+                    reason=reason,
+                ),
+                "status": SOURCE_FILE_CLEANUP_PENDING,
+            },
+            stored=stored,
+        )
+    if stored.availability_status == SOURCE_FILE_UNAVAILABLE:
+        reason = (
+            SOURCE_REASON_TASK_FINALIZED
+            if stored.availability_reason == SOURCE_REASON_TASK_FINALIZED
+            else SOURCE_REASON_MISSING
+        )
+        return _ResolvedSource(
+            descriptor=_unavailable_descriptor(
+                source_id=source_id,
+                file_id=stored.id,
+                display_name=display_name,
+                mime_type=stored.content_type,
+                size_bytes=stored.size_bytes,
+                reason=reason,
+            ),
+            stored=stored,
+        )
     try:
         prefix, actual_size = _open_for_inspection(
             storage=storage, stored=stored, task_id=task_id
@@ -233,6 +311,36 @@ def _descriptor_for_stored(
             task_id,
             stored.id,
         )
+        current = file_repository.get_file(
+            file_id=stored.id, owner_id=stored.owner_id
+        )
+        if (
+            current is not None
+            and current.availability_status == SOURCE_FILE_AVAILABLE
+            and current.source_quota_owner_id is not None
+        ):
+            source_storage_repository.mark_available_source_missing(
+                file_id=current.id,
+                owner_id=current.owner_id,
+                assignment_id=task_id,
+            )
+            current = file_repository.get_file(
+                file_id=stored.id, owner_id=stored.owner_id
+            )
+        # Finalization may have changed lifecycle state after the initial DTO
+        # was loaded but before storage.open. Project that durable state instead
+        # of misclassifying a normal cleanup race as an independently missing
+        # object. The recursive call cannot reopen a non-available row.
+        if (
+            current is not None
+            and current.availability_status != SOURCE_FILE_AVAILABLE
+        ):
+            return _descriptor_for_stored(
+                storage=storage,
+                task_id=task_id,
+                source_id=source_id,
+                stored=current,
+            )
         return _ResolvedSource(
             descriptor=_unavailable_descriptor(
                 source_id=source_id,
@@ -240,9 +348,9 @@ def _descriptor_for_stored(
                 display_name=display_name,
                 mime_type=None,
                 size_bytes=stored.size_bytes,
-                reason="missing",
+                reason=SOURCE_REASON_MISSING,
             ),
-            stored=stored,
+            stored=current or stored,
         )
     except StorageUnavailable:
         raise SourcePreviewStorageUnavailable(
@@ -545,9 +653,14 @@ def describe_source_files(
     workflow, problem, submissions = _resolve_current_sources(
         task_id=task_id, owner_id=owner_id, storage=storage
     )
+    usage = source_storage_repository.source_quota_usage(owner_id)
     return {
         "task_id": task_id,
         "workflow_revision": workflow.workflow_revision,
+        "source_storage": usage.as_dict(),
+        "source_cleanup": source_storage_repository.cleanup_summary(
+            assignment_id=task_id, owner_id=owner_id
+        ),
         "problem_source": problem.descriptor if problem is not None else None,
         "submission_sources": {
             item.descriptor["source_id"]: item.descriptor
@@ -560,11 +673,35 @@ def describe_source_files(
 def _read_current_content(
     *, storage: StorageBackend, stored: file_repository.StoredFile, task_id: str
 ) -> bytes:
+    current = file_repository.get_file(
+        file_id=stored.id, owner_id=stored.owner_id
+    )
+    if current is None:
+        raise SourcePreviewNotFound("Source preview not found.")
+    _raise_if_source_not_available(current)
     try:
         with closing(storage.open(stored.storage_key)) as stream:
             content = stream.read()
     except StorageObjectNotFound:
-        raise SourcePreviewNotFound("Source preview not found.") from None
+        refreshed = file_repository.get_file(
+            file_id=current.id, owner_id=current.owner_id
+        )
+        if refreshed is None:
+            raise SourcePreviewNotFound("Source preview not found.") from None
+        _raise_if_source_not_available(refreshed)
+        if refreshed.source_quota_owner_id is not None:
+            source_storage_repository.mark_available_source_missing(
+                file_id=refreshed.id,
+                owner_id=refreshed.owner_id,
+                assignment_id=task_id,
+            )
+            refreshed = file_repository.get_file(
+                file_id=current.id, owner_id=current.owner_id
+            )
+            if refreshed is None:
+                raise SourcePreviewNotFound("Source preview not found.") from None
+            _raise_if_source_not_available(refreshed)
+        raise SourceUnavailableMissing("The task original is missing.") from None
     except StorageUnavailable:
         raise SourcePreviewStorageUnavailable(
             "Source storage is temporarily unavailable."
@@ -618,8 +755,16 @@ def read_source_file_content(
     descriptor = selected.descriptor
     if descriptor["status"] == "processing":
         raise SourcePreviewProcessing("Source preview is still processing.")
+    if descriptor["status"] == SOURCE_FILE_CLEANUP_PENDING:
+        raise SourceCleanupPending(
+            "The task original is being cleaned automatically."
+        )
+    if descriptor.get("unavailable_reason") == SOURCE_REASON_TASK_FINALIZED:
+        raise SourceUnavailableTaskFinalized(
+            "The task original was cleaned after completion."
+        )
     if descriptor.get("unavailable_reason") == "missing":
-        raise SourcePreviewNotFound("Source preview not found.")
+        raise SourceUnavailableMissing("The task original is missing.")
     if descriptor.get("unavailable_reason") == "unsupported_type":
         raise SourcePreviewUnsupportedType(
             "The current source type cannot be previewed."

@@ -28,8 +28,10 @@ from backend.domain.errors import (
     InvalidTransition,
     LeaseLost,
     NotFound,
+    ValidationError,
     VersionConflict,
 )
+from backend.domain.source_storage import DELAYED_SOURCE_OPERATION_TYPES
 
 logger = logging.getLogger(__name__)
 
@@ -244,6 +246,31 @@ class LeasedOperation:
                 terminal_summary=summary,
                 terminal_status=status,
                 expected_lease_token=self._operation.lease_token,
+            )
+        except LeaseLost:
+            self._lease_lost = True
+            raise
+        self._operation = saved
+
+    async def retry_later(
+        self,
+        *,
+        retry_at: float,
+        progress: dict,
+        error_code: str,
+    ) -> None:
+        """Release this lease into a persisted, not-before automatic retry."""
+        self._check_lease()
+        try:
+            saved = workflow_repository.reschedule_operation(
+                self._operation.id,
+                owner_id=self._operation.owner_id,
+                worker_id=self._worker_id,
+                lease_token=self._operation.lease_token,
+                expected_attempt=self._operation.attempt,
+                retry_at=retry_at,
+                progress=progress,
+                error_code=error_code,
             )
         except LeaseLost:
             self._lease_lost = True
@@ -493,6 +520,30 @@ class WorkflowWorker:
         logger.warning(
             "workflow operation %s failed (%s)", ctx.operation_id, code
         )
+        if (
+            ctx.operation_type in DELAYED_SOURCE_OPERATION_TYPES
+            and not isinstance(exc, ValidationError)
+        ):
+            retry_count = int(ctx.progress.get("retry_count") or 0) + 1
+            base = max(1, int(settings.source_cleanup_retry_base_seconds))
+            maximum = max(base, int(settings.source_cleanup_retry_max_seconds))
+            retry_at = time.time() + min(
+                maximum, base * (2 ** min(retry_count, 16))
+            )
+            try:
+                await ctx.retry_later(
+                    retry_at=retry_at,
+                    error_code=code,
+                    progress={
+                        **ctx.progress,
+                        "state": "retrying",
+                        "retry_count": retry_count,
+                        "retry_at": retry_at,
+                    },
+                )
+            except (LeaseLost, VersionConflict, InvalidTransition, NotFound):
+                pass
+            return
         try:
             workflow_repository.update_operation(
                 ctx.operation_id,

@@ -134,6 +134,23 @@ def test_delete_course_cascades_enrollments(teacher, course, student):
         assert rows == []
 
 
+def test_delete_course_refuses_to_cascade_nonempty_assignments(teacher, course):
+    assignment = assignment_repository.create_assignment(
+        teacher_id=teacher,
+        course_id=course.id,
+        name="Keep tracked task",
+    )
+
+    with pytest.raises(InvalidTransition) as error:
+        course_repository.delete_course(course.id, actor_id=teacher)
+
+    assert error.value.code == "course_not_empty"
+    assert assignment_repository.get_assignment(
+        assignment.id, actor_id=teacher
+    ).id == assignment.id
+    assert course_repository.get_course(course.id, actor_id=teacher).id == course.id
+
+
 # ─── enrollment: student role only ─────────────────────────────────────────────
 
 

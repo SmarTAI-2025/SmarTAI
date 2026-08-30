@@ -1,8 +1,10 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   APIError,
+  apiClient,
   getAPIErrorCode,
   getAPIErrorDetail,
+  getBlob,
   normalizeAPIError,
 } from "./client";
 
@@ -22,6 +24,10 @@ function axiosError(data: unknown, status = 409, headers: Record<string, string>
 }
 
 describe("API error envelope compatibility", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
   it.each([
     [{ error: { code: "domain_conflict", message: "Domain conflict" } }, "domain_conflict"],
     [{ detail: { code: "fastapi_conflict", message: "FastAPI conflict" } }, "fastapi_conflict"],
@@ -49,5 +55,30 @@ describe("API error envelope compatibility", () => {
     }, 429));
 
     expect(error.retryAfterSeconds).toBe(3);
+  });
+
+  it.each([
+    [409, "source_cleanup_pending"],
+    [410, "source_unavailable_task_finalized"],
+    [404, "source_unavailable_missing"],
+  ])("decodes a JSON error Blob at HTTP %i and retains %s", async (status, code) => {
+    vi.spyOn(apiClient, "get").mockRejectedValue(axiosError(
+      new Blob([
+        JSON.stringify({
+          error: {
+            code,
+            message: "Automatic cleanup is in progress.",
+          },
+        }),
+      ], { type: "application/json" }),
+      status,
+    ));
+
+    const error = await getBlob("/tasks/task-1/source-files/file-1/content")
+      .catch((caught: unknown) => caught);
+
+    expect(error).toBeInstanceOf(APIError);
+    expect(error).toMatchObject({ status, message: "Automatic cleanup is in progress." });
+    expect(getAPIErrorCode(error)).toBe(code);
   });
 });

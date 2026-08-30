@@ -1,6 +1,8 @@
-import { Languages, MonitorCog, ShieldCheck } from "lucide-react";
+import { HardDrive, Languages, LoaderCircle, MonitorCog, ShieldCheck } from "lucide-react";
+import { useQuery } from "@tanstack/react-query";
 import type { ReactNode } from "react";
 import { useCurrentUser } from "@/api/hooks";
+import { getSourceStorageUsage } from "@/api/tasks";
 import { useI18n } from "@/i18n/I18nProvider";
 import type { Locale } from "@/i18n/messages";
 import { cn } from "@/lib/cn";
@@ -17,6 +19,18 @@ export function SettingsPage() {
   const { theme, setTheme } = useTheme();
   const userQuery = useCurrentUser();
   const user = userQuery.data;
+  const sourceUsageQuery = useQuery({
+    queryKey: ["source-storage", "usage"],
+    queryFn: getSourceStorageUsage,
+    enabled: user?.role === "teacher",
+    refetchInterval: (query) => {
+      const usage = query.state.data;
+      return usage && (usage.cleanup_pending_count > 0 || usage.retrying_cleanup_count > 0)
+        ? 3_000
+        : false;
+    },
+  });
+  const sourceUsage = sourceUsageQuery.data;
 
   return (
     <div>
@@ -82,6 +96,78 @@ export function SettingsPage() {
           />
         </dl>
       </section>
+
+      {user?.role === "teacher" ? (
+        <section
+          aria-labelledby="source-storage-title"
+          className="mt-5 overflow-hidden rounded-[10px] border bg-card"
+        >
+          <div className="flex items-start gap-3 border-b px-5 py-4 sm:px-6">
+            <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-[8px] bg-blue-50 text-primary dark:bg-blue-950/40">
+              <HardDrive aria-hidden="true" className="h-[18px] w-[18px]" />
+            </span>
+            <div className="min-w-0 flex-1">
+              <h2 id="source-storage-title" className="text-[17px] font-bold text-foreground">
+                {tx(locale, "任务原文件空间", "Task-original storage")}
+              </h2>
+              <p className="mt-1 text-[11px] leading-4 text-muted-foreground">
+                {tx(
+                  locale,
+                  "只统计题目原件、提交包和学生作答原件；知识库长期资料使用独立空间，不在这里统计，也不会随任务自动删除。",
+                  "Counts problem originals, submission packages, and student-answer originals only. Long-lived knowledge documents use separate storage and are never auto-deleted with a task.",
+                )}
+              </p>
+            </div>
+          </div>
+          <div className="px-5 py-4 sm:px-6">
+            {sourceUsageQuery.isLoading ? (
+              <div role="status" className="flex items-center gap-2 text-[12px] text-muted-foreground">
+                <LoaderCircle aria-hidden="true" className="h-4 w-4 animate-spin" />
+                {tx(locale, "正在读取空间占用…", "Loading storage usage…")}
+              </div>
+            ) : sourceUsage ? (
+              <>
+                <div className="flex flex-wrap items-end justify-between gap-2">
+                  <div>
+                    <strong className="text-[20px] text-foreground">{formatBytes(sourceUsage.used_bytes)}</strong>
+                    <span className="ml-1.5 text-[11px] text-muted-foreground">/ {formatBytes(sourceUsage.limit_bytes)}</span>
+                  </div>
+                  <span className="text-[11px] font-semibold text-muted-foreground">
+                    {formatPercent(sourceUsage.used_bytes, sourceUsage.limit_bytes)}
+                  </span>
+                </div>
+                <div className="mt-3 h-2 overflow-hidden rounded-full bg-muted" aria-label={tx(locale, "原文件空间占用", "Original-file storage usage")}>
+                  <span
+                    className="block h-full rounded-full bg-primary transition-[width]"
+                    style={{ width: `${usagePercent(sourceUsage.used_bytes, sourceUsage.limit_bytes)}%` }}
+                  />
+                </div>
+                {sourceUsage.retrying_cleanup_count > 0 ? (
+                  <p className="mt-3 rounded-[8px] bg-amber-50 px-3 py-2 text-[11px] leading-4 text-amber-800">
+                    {tx(
+                      locale,
+                      `${sourceUsage.retrying_cleanup_count} 个原文件刚才未能彻底清理，系统正在自动重试；无需手动操作，成功前 ${formatBytes(sourceUsage.retrying_cleanup_bytes)} 仍计入占用。`,
+                      `${sourceUsage.retrying_cleanup_count} original file(s) could not be fully cleaned just now. The backend is retrying automatically; no manual action is needed, and ${formatBytes(sourceUsage.retrying_cleanup_bytes)} remains charged until cleanup succeeds.`,
+                    )}
+                  </p>
+                ) : sourceUsage.cleanup_pending_count > 0 ? (
+                  <p className="mt-3 text-[11px] leading-4 text-muted-foreground">
+                    {tx(
+                      locale,
+                      `系统正在自动清理 ${sourceUsage.cleanup_pending_count} 个已完成任务的原文件；清理成功后会自动释放 ${formatBytes(sourceUsage.cleanup_pending_bytes)}。`,
+                      `The backend is automatically cleaning ${sourceUsage.cleanup_pending_count} original file(s) from completed tasks. ${formatBytes(sourceUsage.cleanup_pending_bytes)} will be released when cleanup succeeds.`,
+                    )}
+                  </p>
+                ) : null}
+              </>
+            ) : (
+              <p className="text-[11px] text-muted-foreground">
+                {tx(locale, "暂时无法读取原文件空间占用。", "Task-original storage usage is temporarily unavailable.")}
+              </p>
+            )}
+          </div>
+        </section>
+      ) : null}
 
       <section
         aria-labelledby="preferences-title"
@@ -264,4 +350,21 @@ function roleLabel(locale: Locale, role: string): string {
 
 function tx(locale: Locale, zh: string, en: string): string {
   return locale === "zh-CN" ? zh : en;
+}
+
+function usagePercent(used: number, limit: number): number {
+  if (!Number.isFinite(limit) || limit <= 0) return used > 0 ? 100 : 0;
+  return Math.max(0, Math.min(100, (used / limit) * 100));
+}
+
+function formatPercent(used: number, limit: number): string {
+  return `${Math.round(usagePercent(used, limit))}%`;
+}
+
+function formatBytes(value: number): string {
+  if (!Number.isFinite(value) || value <= 0) return "0 B";
+  if (value < 1024) return `${Math.round(value)} B`;
+  if (value < 1024 * 1024) return `${(value / 1024).toFixed(1)} KB`;
+  if (value < 1024 * 1024 * 1024) return `${(value / 1024 / 1024).toFixed(1)} MB`;
+  return `${(value / 1024 / 1024 / 1024).toFixed(2)} GB`;
 }

@@ -834,6 +834,21 @@ export function classifyRecoverableError(
     };
   }
 
+  if (code === "source_storage_quota_exceeded") {
+    return {
+      title: tx(locale, "原文件空间已满", "Original-file storage is full"),
+      description: tx(
+        locale,
+        "本次文件尚未保存。后台会继续自动清理已完成任务的原文件，无需手动重试清理；请稍后再上传，或选择更小的文件。",
+        "This file was not saved. The backend will keep cleaning originals from completed tasks automatically; no manual cleanup retry is needed. Upload again later or choose a smaller file.",
+      ),
+      actionLabel: tx(locale, "选择更小文件", "Choose a smaller file"),
+      actionKind: "reupload",
+      tone: "warning",
+      technicalDetails,
+    };
+  }
+
   if (
     apiError.status === 429
     || code === "provider_rate_limited"
@@ -968,6 +983,9 @@ function buildTechnicalDetails(
     { label: tx(locale, "页数上限", "Page limit"), value: safeTechnicalValue(detail?.max_pages) },
     { label: tx(locale, "字符上限", "Character limit"), value: safeTechnicalValue(detail?.max_characters) },
     { label: tx(locale, "文件上限", "File-size limit"), value: formatByteLimit(detail?.max_bytes) },
+    { label: tx(locale, "原文件已用", "Original storage used"), value: formatByteLimit(detail?.used_bytes) },
+    { label: tx(locale, "原文件额度", "Original storage limit"), value: formatByteLimit(detail?.limit_bytes) },
+    { label: tx(locale, "本次上传", "Requested upload"), value: formatByteLimit(detail?.requested_bytes) },
   ];
   return rows
     .filter((row) => row.value !== null && row.value !== undefined && row.value !== "")

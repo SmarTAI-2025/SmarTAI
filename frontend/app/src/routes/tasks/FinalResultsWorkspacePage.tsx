@@ -236,6 +236,14 @@ function ResultStateBanner({ locale, taskId, finalization, provisional }: { loca
         <p className="mt-0.5 text-[12px] text-muted-foreground">
           {tx(locale, "确认时间", "Confirmed")}：{formatTaskTime(finalization.final_result_updated_at ?? undefined, true, locale)} · {analysisStatusLabel(locale, finalization.analysis_status)}
         </p>
+        {sourceCleanupCopy(locale, finalization) ? (
+          <p className={cn(
+            "mt-1 text-[11px] leading-4",
+            finalization.source_cleanup?.status === "retrying" ? "text-amber-800" : "text-muted-foreground",
+          )}>
+            {sourceCleanupCopy(locale, finalization)}
+          </p>
+        ) : null}
       </div>
       <Link
         to={stale ? `/tasks/${encodeURIComponent(taskId)}/review` : `/tasks/${encodeURIComponent(taskId)}/results/reports`}
@@ -248,6 +256,30 @@ function ResultStateBanner({ locale, taskId, finalization, provisional }: { loca
         <ArrowRight aria-hidden="true" className="h-3.5 w-3.5" />
       </Link>
     </section>
+  );
+}
+
+function sourceCleanupCopy(locale: Locale, finalization: TaskFinalizationResponse): string | null {
+  const cleanup = finalization.source_cleanup;
+  if (!cleanup || cleanup.status === "not_requested") return null;
+  if (cleanup.status === "retrying") {
+    return tx(
+      locale,
+      `有 ${cleanup.retrying_count} 个原文件刚才未能彻底清理，系统正在自动重试；无需手动操作，成功前仍计入空间占用。`,
+      `${cleanup.retrying_count} original file(s) could not be fully cleaned just now. Automatic retry is in progress; no manual action is needed, and their bytes remain charged until it succeeds.`,
+    );
+  }
+  if (cleanup.status === "pending") {
+    return tx(
+      locale,
+      `系统正在自动清理 ${cleanup.pending_count} 个任务原文件；无需等待或手动操作。`,
+      `${cleanup.pending_count} task original(s) are being cleaned automatically; no waiting or manual action is required.`,
+    );
+  }
+  return tx(
+    locale,
+    "任务原文件已按保留规则清理；结构化结果、分析和知识库资料继续保留。",
+    "Task originals were cleaned under the retention policy; structured results, analysis, and knowledge documents remain available.",
   );
 }
 

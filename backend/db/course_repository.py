@@ -14,12 +14,17 @@ from __future__ import annotations
 import time
 import uuid
 
-from sqlalchemy import delete, select
+from sqlalchemy import select
 
-from backend.db.models import CourseEnrollmentRecord, CourseRecord, UserRecord
+from backend.db.models import (
+    AssignmentRecord,
+    CourseEnrollmentRecord,
+    CourseRecord,
+    UserRecord,
+)
 from backend.db.session import session_scope
 from backend.domain import education
-from backend.domain.errors import NotFound, ValidationError
+from backend.domain.errors import InvalidTransition, NotFound, ValidationError
 
 
 def _new_course_id() -> str:
@@ -102,14 +107,27 @@ def get_course_unscoped(course_id: str) -> education.CourseDTO:
 
 def delete_course(course_id: str, *, actor_id: str) -> None:
     with session_scope() as session:
-        # Owner predicate gates the DELETE so another teacher cannot drop it.
-        result = session.execute(
-            delete(CourseRecord).where(
+        # A course cascade would bypass the assignment storage-lifecycle gate.
+        # Require the owner to remove every task through that guarded path.
+        course = session.scalar(
+            select(CourseRecord).where(
                 CourseRecord.id == course_id, CourseRecord.teacher_id == actor_id
-            )
+            ).with_for_update()
         )
-        if result.rowcount == 0:
+        if course is None:
             raise NotFound("course")
+        assignment_id = session.scalar(
+            select(AssignmentRecord.id)
+            .where(AssignmentRecord.course_id == course_id)
+            .limit(1)
+            .with_for_update()
+        )
+        if assignment_id is not None:
+            raise InvalidTransition(
+                "Delete the course's tasks before deleting the course.",
+                code="course_not_empty",
+            )
+        session.delete(course)
         # Enrollments cascade via ON DELETE; explicitness here would be redundant
         # but harmless — the FK rule is the source of truth.
 

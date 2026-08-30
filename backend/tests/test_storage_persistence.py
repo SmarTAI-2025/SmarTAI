@@ -19,6 +19,7 @@ from backend.db.file_repository import (
     save_file,
 )
 from backend.db.session import configure_database, get_engine, session_scope
+from backend.domain.errors import InvalidTransition
 from backend.storage import get_storage
 from backend.storage.local import LocalStorage
 
@@ -106,7 +107,7 @@ def test_file_linked_to_assignment_lists_and_deletes(tmp_path):
 
     storage = LocalStorage(tmp_path / "uploads2")
     saved = save_file(
-        storage=storage, owner_id="owner-1", kind="problem",
+        storage=storage, owner_id="owner-1", kind="ocr_artifact",
         original_name="题目.txt", content=b"visible", assignment_id="asg-2",
     )
     listed = list_files(owner_id="owner-1", assignment_id="asg-2")
@@ -121,6 +122,42 @@ def test_file_linked_to_assignment_lists_and_deletes(tmp_path):
     assert storage.exists(saved.storage_key) is False
 
 
+def test_legacy_delete_helpers_cannot_bypass_raw_source_lifecycle(tmp_path):
+    configure_database(f"sqlite:///{(tmp_path / 'raw-guard.db').as_posix()}")
+    Base.metadata.create_all(get_engine())
+    _seed_owner()
+    _seed_assignment("asg-raw-guard")
+    storage = LocalStorage(tmp_path / "raw-guard-uploads")
+    saved = save_file(
+        storage=storage,
+        owner_id="owner-1",
+        kind="problem_source",
+        original_name="problem.pdf",
+        content=b"tracked-original",
+        content_type="application/pdf",
+        assignment_id="asg-raw-guard",
+    )
+
+    from backend.db.file_repository import (
+        delete_file_record,
+        delete_files_for_assignment,
+    )
+
+    with pytest.raises(InvalidTransition) as bulk_error:
+        delete_files_for_assignment(
+            storage=storage,
+            assignment_id="asg-raw-guard",
+            owner_id="owner-1",
+        )
+    with pytest.raises(InvalidTransition) as row_error:
+        delete_file_record(file_id=saved.id, owner_id="owner-1")
+
+    assert bulk_error.value.code == "source_storage_lifecycle_required"
+    assert row_error.value.code == "source_storage_lifecycle_required"
+    assert get_file(file_id=saved.id, owner_id="owner-1") is not None
+    assert storage.exists(saved.storage_key)
+
+
 def test_save_file_recovers_when_commit_succeeds_but_acknowledgement_is_lost(
     tmp_path,
     monkeypatch,
@@ -133,21 +170,25 @@ def test_save_file_recovers_when_commit_succeeds_but_acknowledgement_is_lost(
     _seed_owner()
     _seed_assignment()
     storage = LocalStorage(tmp_path / "ambiguous-uploads")
-    real_session_scope = file_repository.session_scope
+    from backend.db import source_storage_repository
+
+    real_session_scope = source_storage_repository.session_scope
     calls = 0
 
     @contextmanager
     def commit_then_lose_ack():
         nonlocal calls
         calls += 1
-        if calls == 1:
+        if calls == 3:
             with real_session_scope() as session:
                 yield session
             raise RuntimeError("injected_commit_ack_loss")
         with real_session_scope() as session:
             yield session
 
-    monkeypatch.setattr(file_repository, "session_scope", commit_then_lose_ack)
+    monkeypatch.setattr(
+        source_storage_repository, "session_scope", commit_then_lose_ack
+    )
 
     saved = file_repository.save_file(
         storage=storage,
@@ -159,7 +200,7 @@ def test_save_file_recovers_when_commit_succeeds_but_acknowledgement_is_lost(
         assignment_id="asg-1",
     )
 
-    assert calls == 2
+    assert calls == 3
     assert storage.exists(saved.storage_key)
     assert get_file(file_id=saved.id, owner_id="owner-1") == saved
 
@@ -176,8 +217,12 @@ def test_save_file_preserves_object_when_commit_state_cannot_be_verified(
     _seed_owner()
     _seed_assignment()
     storage = LocalStorage(tmp_path / "unverified-uploads")
+    from backend.db import source_storage_repository
+
     saved_keys: list[str] = []
     real_save = storage.save
+    real_source_session_scope = source_storage_repository.session_scope
+    source_calls = 0
 
     def capture_save(key: str, content: bytes) -> None:
         saved_keys.append(key)
@@ -188,10 +233,24 @@ def test_save_file_preserves_object_when_commit_state_cannot_be_verified(
         raise RuntimeError("injected_database_unavailable")
         yield  # pragma: no cover
 
+    @contextmanager
+    def commit_then_lose_ack():
+        nonlocal source_calls
+        source_calls += 1
+        if source_calls == 3:
+            with real_source_session_scope() as session:
+                yield session
+            raise RuntimeError("injected_commit_ack_loss")
+        with real_source_session_scope() as session:
+            yield session
+
     monkeypatch.setattr(storage, "save", capture_save)
+    monkeypatch.setattr(
+        source_storage_repository, "session_scope", commit_then_lose_ack
+    )
     monkeypatch.setattr(file_repository, "session_scope", unavailable_database)
 
-    with pytest.raises(RuntimeError, match="injected_database_unavailable"):
+    with pytest.raises(RuntimeError, match="injected_commit_ack_loss"):
         file_repository.save_file(
             storage=storage,
             owner_id="owner-1",

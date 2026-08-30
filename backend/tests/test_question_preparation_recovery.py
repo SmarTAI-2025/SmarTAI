@@ -214,14 +214,13 @@ def _publish_atomic_for_test(
 
 
 @contextmanager
-def _force_two_publishers_to_read_same_sqlite_snapshot():
+def _force_two_publishers_to_reach_sqlite_write_gate():
     engine = get_engine()
     assert engine.dialect.name == "sqlite"
-    workflow_reads = Barrier(2)
-    operation_reads = Barrier(2)
+    operation_updates = Barrier(2)
     per_thread = local()
     hit_lock = Lock()
-    hits = {"workflow": 0, "operation": 0}
+    hits = {"operation_gate": 0}
 
     def before_cursor_execute(
         _conn,
@@ -234,27 +233,16 @@ def _force_two_publishers_to_read_same_sqlite_snapshot():
         if not hasattr(per_thread, "seen"):
             per_thread.seen = set()
         sql = " ".join(statement.lower().split())
-        kind = None
         if (
-            sql.startswith("select")
-            and "from assignment_workflows" in sql
-            and "workflow" not in per_thread.seen
+            not sql.startswith("update workflow_operations")
+            or "set updated_at=workflow_operations.updated_at" not in sql
+            or "operation_gate" in per_thread.seen
         ):
-            kind = "workflow"
-        elif (
-            sql.startswith("select")
-            and "from workflow_operations" in sql
-            and "operation" not in per_thread.seen
-        ):
-            kind = "operation"
-        if kind is None:
             return
-        per_thread.seen.add(kind)
+        per_thread.seen.add("operation_gate")
         with hit_lock:
-            hits[kind] += 1
-        (workflow_reads if kind == "workflow" else operation_reads).wait(
-            timeout=10
-        )
+            hits["operation_gate"] += 1
+        operation_updates.wait(timeout=10)
 
     event.listen(engine, "before_cursor_execute", before_cursor_execute)
     try:
@@ -1696,10 +1684,10 @@ def test_atomic_publish_same_hash_has_one_publisher_and_one_replay():
         input_hash=input_hash,
     )
 
-    with _force_two_publishers_to_read_same_sqlite_snapshot() as hits:
+    with _force_two_publishers_to_reach_sqlite_write_gate() as hits:
         results = _run_publish_pair(call, call)
 
-    assert hits == {"workflow": 2, "operation": 2}
+    assert hits == {"operation_gate": 2}
     assert all(result["kind"] == "ok" for result in results), results
     assert sorted(result["published"] for result in results) == [False, True]
     assert len({result["id"] for result in results}) == 1
@@ -1735,10 +1723,10 @@ def test_atomic_publish_different_hash_same_revision_has_no_orphan():
         input_hash="c" * 64,
     )
 
-    with _force_two_publishers_to_read_same_sqlite_snapshot() as hits:
+    with _force_two_publishers_to_reach_sqlite_write_gate() as hits:
         results = _run_publish_pair(first, second)
 
-    assert hits == {"workflow": 2, "operation": 2}
+    assert hits == {"operation_gate": 2}
     assert sum(
         result["kind"] == "ok" and result["published"]
         for result in results
@@ -1806,10 +1794,10 @@ def test_atomic_publish_uncertain_double_click_never_resets_attempt():
         retry_id=first.id,
         retry_attempt=first.attempt,
     )
-    with _force_two_publishers_to_read_same_sqlite_snapshot() as hits:
+    with _force_two_publishers_to_reach_sqlite_write_gate() as hits:
         results = _run_publish_pair(call, call)
 
-    assert hits == {"workflow": 2, "operation": 2}
+    assert hits == {"operation_gate": 2}
     assert all(
         result["kind"] == "ok" and result["published"] is False
         for result in results

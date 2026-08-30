@@ -17,6 +17,7 @@ from sqlalchemy import (
     String,
     UniqueConstraint,
     select,
+    update,
 )
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Mapped, mapped_column
@@ -25,7 +26,7 @@ from backend.db.base import Base
 from backend.db.models import AssignmentRecord, StoredFileRecord
 from backend.db.session import session_scope
 from backend.db.workflow_repository import WorkflowOperationRecord
-from backend.domain.errors import NotFound, ValidationError, VersionConflict
+from backend.domain.errors import LeaseLost, NotFound, ValidationError, VersionConflict
 from backend.domain.source_outcomes import (
     SOURCE_OUTCOME_STATUSES,
     source_diagnostic_is_valid,
@@ -319,6 +320,118 @@ def _owned_operation_for_update_statement(
     )
 
 
+def _validate_source_write_fence(
+    operation: WorkflowOperationRecord,
+    *,
+    expected_attempt: int,
+    expected_lease_token: str | None,
+) -> None:
+    if operation.attempt != expected_attempt:
+        raise VersionConflict(
+            "A newer workflow operation attempt is active.",
+            code="stale_operation_attempt",
+        )
+    if operation.status not in {"preparing", "pending", "ready", "running"}:
+        raise LeaseLost(
+            "The workflow operation no longer accepts source writes.",
+            code="lease_lost",
+        )
+    if expected_lease_token is None:
+        allowed = operation.lease_owner is None
+    else:
+        allowed = (
+            operation.status == "running"
+            and operation.lease_token == expected_lease_token
+            and operation.lease_expires_at is not None
+            and operation.lease_expires_at >= time.time()
+        )
+    if not allowed:
+        raise LeaseLost(
+            "The workflow operation lease was lost before source registration.",
+            code="lease_lost",
+        )
+
+
+def _lock_source_write_operation(
+    session,
+    *,
+    owner_id: str,
+    assignment_id: str,
+    operation_id: str,
+    expected_attempt: int,
+    expected_lease_token: str | None,
+) -> WorkflowOperationRecord:
+    now = time.time()
+    conditions = [
+        WorkflowOperationRecord.id == operation_id,
+        WorkflowOperationRecord.assignment_id == assignment_id,
+        WorkflowOperationRecord.owner_id == owner_id,
+        WorkflowOperationRecord.attempt == expected_attempt,
+        WorkflowOperationRecord.status.in_((
+            "preparing", "pending", "ready", "running",
+        )),
+    ]
+    if expected_lease_token is None:
+        conditions.append(WorkflowOperationRecord.lease_owner.is_(None))
+    else:
+        conditions.extend((
+            WorkflowOperationRecord.status == "running",
+            WorkflowOperationRecord.lease_token == expected_lease_token,
+            WorkflowOperationRecord.lease_expires_at.is_not(None),
+            WorkflowOperationRecord.lease_expires_at >= now,
+        ))
+    fenced = session.execute(
+        update(WorkflowOperationRecord)
+        .where(*conditions)
+        .values(updated_at=WorkflowOperationRecord.updated_at)
+    )
+    operation = session.scalar(select(WorkflowOperationRecord).where(
+        WorkflowOperationRecord.id == operation_id,
+        WorkflowOperationRecord.assignment_id == assignment_id,
+        WorkflowOperationRecord.owner_id == owner_id,
+    ))
+    if operation is None:
+        raise NotFound("workflow_source")
+    if fenced.rowcount != 1:
+        _validate_source_write_fence(
+            operation,
+            expected_attempt=expected_attempt,
+            expected_lease_token=expected_lease_token,
+        )
+        raise LeaseLost(
+            "The workflow operation no longer accepts source writes.",
+            code="lease_lost",
+        )
+    # The database predicate used the pre-lock clock. Recheck after any wait so
+    # a lease that expired while acquiring the row cannot publish a source.
+    _validate_source_write_fence(
+        operation,
+        expected_attempt=expected_attempt,
+        expected_lease_token=expected_lease_token,
+    )
+    return operation
+
+
+def assert_source_write_fence(
+    *,
+    owner_id: str,
+    assignment_id: str,
+    operation_id: str,
+    expected_attempt: int,
+    expected_lease_token: str | None,
+) -> None:
+    """Fail fast before reusing a source from a stale worker attempt."""
+    with session_scope() as session:
+        _lock_source_write_operation(
+            session,
+            owner_id=owner_id,
+            assignment_id=assignment_id,
+            operation_id=operation_id,
+            expected_attempt=expected_attempt,
+            expected_lease_token=expected_lease_token,
+        )
+
+
 def register_source(
     *,
     owner_id: str,
@@ -328,6 +441,7 @@ def register_source(
     order_index: int,
     stored_file_id: str,
     retry_of_source_id: str | None = None,
+    expected_lease_token: str | None = None,
 ) -> tuple[WorkflowSourceItem, bool]:
     if expected_attempt <= 0 or order_index < 0:
         raise ValidationError("Source attempt must be positive and order non-negative.")
@@ -341,20 +455,14 @@ def register_source(
             if assignment is None:
                 raise NotFound("workflow_source")
 
-            operation = session.scalar(
-                _owned_operation_for_update_statement(
-                    operation_id=operation_id,
-                    assignment_id=assignment_id,
-                    owner_id=owner_id,
-                )
+            operation = _lock_source_write_operation(
+                session,
+                owner_id=owner_id,
+                assignment_id=assignment_id,
+                operation_id=operation_id,
+                expected_attempt=expected_attempt,
+                expected_lease_token=expected_lease_token,
             )
-            if operation is None:
-                raise NotFound("workflow_source")
-            if operation.attempt != expected_attempt:
-                raise VersionConflict(
-                    "A newer workflow operation attempt is active.",
-                    code="stale_operation_attempt",
-                )
 
             stored_file = session.scalar(select(StoredFileRecord).where(
                 StoredFileRecord.id == stored_file_id,

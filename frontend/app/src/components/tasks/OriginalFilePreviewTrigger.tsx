@@ -25,20 +25,23 @@ export function OriginalFilePreviewTrigger({
   className?: string;
 }) {
   const unavailable = state === "unavailable";
+  const cleanupPending = state === "cleanup_pending";
   const resolvedOpenLabel = openLabel ?? t("sourcePreviewOpen");
   const label = open ? t("sourcePreviewClose") : resolvedOpenLabel;
   const icon = open
     ? <X aria-hidden="true" className="h-4 w-4" />
-    : state === "processing"
+    : state === "processing" || cleanupPending
       ? <LoaderCircle aria-hidden="true" className="h-4 w-4 animate-spin" />
       : <Eye aria-hidden="true" className="h-4 w-4" />;
 
-  if (unavailable) {
+  if (unavailable || cleanupPending) {
     const reason = unavailableReason(unavailableReasonCode, t);
     return (
       <span className={cn("inline-flex min-w-0 items-center gap-1", className)}>
         <Button type="button" variant="secondary" className="h-10 px-3" disabled>
-          <Eye aria-hidden="true" className="h-4 w-4" />
+          {cleanupPending
+            ? <LoaderCircle aria-hidden="true" className="h-4 w-4 animate-spin" />
+            : <Eye aria-hidden="true" className="h-4 w-4" />}
           {resolvedOpenLabel}
         </Button>
         <HelpTooltip label={reason} />
@@ -68,6 +71,12 @@ function unavailableReason(reason: SourceUnavailableReason | null | undefined, t
       return t("sourcePreviewMissingReason");
     case "storage_unavailable":
       return t("sourcePreviewStorageUnavailableReason");
+    case "cleanup_pending":
+      return t("sourcePreviewCleanupReason");
+    case "task_finalized":
+      return t("sourcePreviewTaskFinalizedReason");
+    case "storage_delete_failed":
+      return t("sourcePreviewCleanupRetryReason");
     default:
       return t("sourcePreviewNotPersistedReason");
   }

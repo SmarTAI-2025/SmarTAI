@@ -278,6 +278,28 @@ class Settings(BaseSettings):
     storage_s3_access_key: Optional[str] = os.getenv("SMARTAI_STORAGE_S3_ACCESS_KEY", "")
     storage_s3_secret_key: Optional[str] = os.getenv("SMARTAI_STORAGE_S3_SECRET_KEY", "")
 
+    # ─── Task-original storage lifecycle (F-B) ───────────────────────────
+    # This allocation covers task problem/submission originals only. Personal
+    # and course-library knowledge documents have a separate retention policy
+    # and are intentionally excluded.
+    unfinished_source_quota_bytes: int = int(
+        os.getenv("SMARTAI_UNFINISHED_SOURCE_QUOTA_BYTES", "536870912")
+    )
+    # A process that dies between durable reservation and metadata publication
+    # leaves a recoverable reservation. The existing workflow worker reaps it
+    # after this deadline; successful uploads remove the operation immediately.
+    source_storage_reservation_ttl_seconds: int = int(
+        os.getenv("SMARTAI_SOURCE_STORAGE_RESERVATION_TTL_SECONDS", "3600")
+    )
+    # Physical deletion failures are retried forever with bounded exponential
+    # backoff. They remain charged until storage confirms deletion.
+    source_cleanup_retry_base_seconds: int = int(
+        os.getenv("SMARTAI_SOURCE_CLEANUP_RETRY_BASE_SECONDS", "30")
+    )
+    source_cleanup_retry_max_seconds: int = int(
+        os.getenv("SMARTAI_SOURCE_CLEANUP_RETRY_MAX_SECONDS", "3600")
+    )
+
     # Stable master key for encrypting user BYOK provider credentials. It must
     # come from the process environment/secret manager and never from source
     # control or the database.

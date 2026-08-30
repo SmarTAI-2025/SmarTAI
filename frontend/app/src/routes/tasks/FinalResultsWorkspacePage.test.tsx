@@ -54,6 +54,11 @@ const gradedTask = {
   status: "graded",
 };
 
+const finalizedTask = {
+  ...gradedTask,
+  status: "finalized",
+};
+
 const finalization = {
   task_id: "task-1",
   task_status: "graded",
@@ -128,5 +133,41 @@ describe("FinalResultsWorkspacePage task-status refresh", () => {
 
     expect(await screen.findByText("submission-redirect-target")).toBeInTheDocument();
     expect(screen.getByTestId("location-pathname")).toHaveTextContent("/tasks/task-1/submissions");
+  });
+
+  it("reports automatic cleanup retry without exposing a manual retry action", async () => {
+    useTaskMock.mockReturnValue({
+      data: finalizedTask,
+      isLoading: false,
+      isFetching: false,
+      isError: false,
+      refetch: vi.fn(),
+    });
+    useTaskFinalizationMock.mockReturnValue({
+      data: {
+        ...finalization,
+        task_status: "finalized",
+        final_result_version: 1,
+        final_result_updated_at: 1_700_000_000,
+        source_cleanup: {
+          status: "retrying",
+          total_count: 2,
+          deleted_count: 0,
+          pending_count: 2,
+          retrying_count: 1,
+          pending_bytes: 2_048,
+          retrying_bytes: 1_024,
+          automatic_retry: true,
+        },
+      },
+      isLoading: false,
+      isError: false,
+      refetch: vi.fn(),
+    });
+
+    render(<TestTree />);
+
+    expect(await screen.findByText(/Automatic retry is in progress; no manual action is needed/)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /retry cleanup/i })).not.toBeInTheDocument();
   });
 });
