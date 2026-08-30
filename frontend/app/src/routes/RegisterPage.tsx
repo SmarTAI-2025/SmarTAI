@@ -1,163 +1,135 @@
-import { Loader2, TicketCheck } from "lucide-react";
-import { useState, type FormEvent } from "react";
+import { Loader2, MailCheck } from "lucide-react";
+import { useRef, useState, type FormEvent } from "react";
 import { Link, useNavigate } from "react-router-dom";
-import { useQueryClient } from "@tanstack/react-query";
-import { clearAuthToken } from "@/api/client";
-import { useRegister } from "@/api/hooks";
-import {
-  AuthCard,
-  AuthError,
-  AuthFrame,
-  AuthPasswordInput,
-} from "@/components/auth/AuthFrame";
+import { useRequestRegistration } from "@/api/hooks";
+import { AuthFlowHeader } from "@/components/auth/AuthFlowHeader";
+import { AuthCard, AuthError, AuthFrame, AuthPasswordInput } from "@/components/auth/AuthFrame";
 import { Button } from "@/components/ui/Button";
 import { Field } from "@/components/ui/Field";
 import { Input } from "@/components/ui/Input";
 import { useI18n } from "@/i18n/I18nProvider";
-import { localizedAuthError } from "@/lib/authErrors";
+import { formatCooldown, rateLimitDelay, useRetryCooldown } from "@/hooks/useRetryCooldown";
+import { localizedRegistrationRequestError } from "@/lib/authErrors";
+import { createPendingRegistrationFlow, savePendingRegistrationFlow } from "@/lib/registrationFlow";
+
+const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 export function RegisterPage() {
   const navigate = useNavigate();
-  const queryClient = useQueryClient();
   const { locale } = useI18n();
   const zh = locale === "zh-CN";
-  const register = useRegister();
+  const requestRegistration = useRequestRegistration();
+  const cooldown = useRetryCooldown();
+  const submitting = useRef(false);
   const [username, setUsername] = useState("");
   const [email, setEmail] = useState("");
-  const [inviteCode, setInviteCode] = useState("");
   const [password, setPassword] = useState("");
   const [confirmation, setConfirmation] = useState("");
   const [formError, setFormError] = useState<string | null>(null);
+  const steps = zh ? ["填写信息", "验证邮箱", "登录使用"] : ["Account details", "Verify email", "Sign in"];
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    if (submitting.current || requestRegistration.isPending || cooldown.active) return;
     setFormError(null);
-    const nextUsername = username.trim();
-    const nextEmail = email.trim();
-    const nextInvite = inviteCode.trim().toUpperCase();
 
-    if (nextUsername.length < 3) {
-      setFormError(
-        zh ? "用户名至少需要 3 个字符。" : "Username must contain at least 3 characters.",
-      );
-      return;
-    }
-    if (!nextEmail || !nextInvite) {
-      setFormError(
-        zh ? "请填写受邀邮箱和邀请码。" : "Enter the invited email and invitation code.",
-      );
-      return;
-    }
-    if (password.length < 6) {
-      setFormError(
-        zh ? "密码至少需要 6 个字符。" : "Password must contain at least 6 characters.",
-      );
-      return;
-    }
-    if (password !== confirmation) {
-      setFormError(zh ? "两次输入的密码不一致。" : "The passwords do not match.");
+    const normalizedUsername = username.trim();
+    const normalizedEmail = email.trim().toLowerCase();
+    const validationError = validateRegistration(
+      { username: normalizedUsername, email: normalizedEmail, password, confirmation },
+      zh,
+    );
+    if (validationError) {
+      setFormError(validationError);
       return;
     }
 
+    submitting.current = true;
     try {
-      const response = await register.mutateAsync({
-        username: nextUsername,
-        email: nextEmail,
+      const response = await requestRegistration.mutateAsync({
+        username: normalizedUsername,
+        email: normalizedEmail,
         password,
-        invite_code: nextInvite,
       });
-      if (response.user.role !== "teacher" && response.user.role !== "admin") {
-        clearAuthToken();
-        queryClient.clear();
-        navigate("/student", { replace: true });
-        return;
-      }
-      navigate("/", { replace: true });
-    } catch (error) {
+      const flow = createPendingRegistrationFlow(normalizedEmail, response);
+      requestRegistration.reset();
       setPassword("");
       setConfirmation("");
-      setFormError(localizedAuthError(error, locale, "register"));
+      setUsername("");
+      setEmail("");
+      savePendingRegistrationFlow(flow);
+      navigate("/register/check-email", { replace: true });
+    } catch (error) {
+      requestRegistration.reset();
+      cooldown.start(rateLimitDelay(error, "registration_rate_limited"));
+      setPassword("");
+      setConfirmation("");
+      setFormError(localizedRegistrationRequestError(error, locale));
+    } finally {
+      submitting.current = false;
     }
   }
 
   return (
     <AuthFrame>
       <AuthCard>
-        <div className="flex items-center gap-3">
-          <span className="inline-flex h-10 w-10 items-center justify-center rounded-[10px] bg-blue-50 text-primary dark:bg-blue-950/50">
-            <TicketCheck aria-hidden="true" size={21} />
-          </span>
-          <div>
-            <p className="text-xs font-semibold text-primary">
-              {zh ? "邀请制测试" : "Invite-only testing"}
-            </p>
-            <p className="mt-0.5 text-xs text-muted-foreground">
-              {zh ? "邀请码一次有效" : "Invitation codes are single-use"}
-            </p>
-          </div>
-        </div>
-
-        <h1 className="mt-5 text-[27px] font-semibold tracking-[-0.025em]">
-          {zh ? "创建受邀账号" : "Create invited account"}
-        </h1>
-        <p className="mt-2 text-sm leading-6 text-muted-foreground">
-          {zh
-            ? "请使用邀请邮件中的邮箱和邀请码。公开注册当前未开放。"
-            : "Use the email and code from your invitation. Public registration is currently closed."}
-        </p>
+        <AuthFlowHeader
+          icon={MailCheck}
+          eyebrow={zh ? "学校邮箱验证" : "School email verification"}
+          helper={zh ? "链接 30 分钟内有效" : "Link valid for 30 minutes"}
+          title={zh ? "创建教师账号" : "Create teacher account"}
+          description={zh
+            ? "填写账号信息。我们会向学校邮箱发送一次性链接，验证完成后才创建普通教师账号。"
+            : "Enter your account details. We create a teacher account only after the one-time school-email link is confirmed."}
+          steps={steps}
+          stepsLabel={zh ? "注册进度" : "Registration progress"}
+          currentStep={1}
+        />
 
         <form className="mt-6 grid gap-3.5" onSubmit={handleSubmit}>
-          <div className="grid gap-3.5 sm:grid-cols-2">
-            <Field label={zh ? "用户名" : "Username"}>
-              <Input
-                className="h-11 w-full"
-                autoComplete="username"
-                autoFocus
-                disabled={register.isPending}
-                minLength={3}
-                maxLength={64}
-                onChange={(event) => setUsername(event.target.value)}
-                placeholder={zh ? "至少 3 个字符" : "At least 3 characters"}
-                required
-                value={username}
-              />
-            </Field>
-            <Field label={zh ? "受邀邮箱" : "Invited email"}>
-              <Input
-                className="h-11 w-full"
-                autoComplete="email"
-                disabled={register.isPending}
-                maxLength={254}
-                onChange={(event) => setEmail(event.target.value)}
-                placeholder="name@example.com"
-                required
-                type="email"
-                value={email}
-              />
-            </Field>
-          </div>
-          <Field
-            label={zh ? "邀请码" : "Invitation code"}
-            hint={zh ? "不区分大小写，使用成功后立即失效。" : "Case-insensitive and consumed after successful use."}
-          >
+          <Field label={zh ? "用户名" : "Username"}>
             <Input
-              className="h-11 w-full uppercase tracking-[0.16em]"
-              autoComplete="one-time-code"
-              disabled={register.isPending}
-              onChange={(event) => setInviteCode(event.target.value)}
-              placeholder={zh ? "输入邀请码" : "Enter invitation code"}
+              aria-label={zh ? "用户名" : "Username"}
+              className="h-11 w-full"
+              autoComplete="username"
+              disabled={requestRegistration.isPending}
+              minLength={3}
+              maxLength={64}
+              placeholder={zh ? "至少 3 个字符" : "At least 3 characters"}
               required
-              value={inviteCode}
+              value={username}
+              onChange={(event) => setUsername(event.target.value)}
             />
+          </Field>
+          <Field label={zh ? "学校邮箱" : "School email"}>
+            <Input
+              aria-label={zh ? "学校邮箱" : "School email"}
+              className="h-11 w-full"
+              autoComplete="email"
+              disabled={requestRegistration.isPending}
+              maxLength={254}
+              placeholder="name@ustc.edu.cn"
+              required
+              type="email"
+              value={email}
+              onChange={(event) => setEmail(event.target.value)}
+            />
+            <p className="mt-1.5 text-xs leading-5 text-muted-foreground">
+              {zh
+                ? "首期支持 ustc.edu.cn 及其点边界子域名；最终资格以服务端校验为准。"
+                : "The first cohort uses ustc.edu.cn and its dot-boundary subdomains; the server makes the final eligibility decision."}
+            </p>
           </Field>
           <div className="grid gap-3.5 sm:grid-cols-2">
             <Field label={zh ? "设置密码" : "Password"}>
               <AuthPasswordInput
                 autoComplete="new-password"
-                disabled={register.isPending}
-                onChange={(event) => setPassword(event.target.value)}
-                placeholder={zh ? "至少 6 个字符" : "At least 6 characters"}
+                disabled={requestRegistration.isPending}
+                minLength={8}
+                maxLength={128}
+                required
                 value={password}
+                onChange={(event) => setPassword(event.target.value)}
                 showLabel={zh ? "显示密码" : "Show password"}
                 hideLabel={zh ? "隐藏密码" : "Hide password"}
               />
@@ -165,38 +137,51 @@ export function RegisterPage() {
             <Field label={zh ? "确认密码" : "Confirm password"}>
               <AuthPasswordInput
                 autoComplete="new-password"
-                disabled={register.isPending}
-                onChange={(event) => setConfirmation(event.target.value)}
-                placeholder={zh ? "再次输入密码" : "Enter password again"}
+                disabled={requestRegistration.isPending}
+                minLength={8}
+                maxLength={128}
+                required
                 value={confirmation}
+                onChange={(event) => setConfirmation(event.target.value)}
                 showLabel={zh ? "显示确认密码" : "Show confirmation password"}
                 hideLabel={zh ? "隐藏确认密码" : "Hide confirmation password"}
               />
             </Field>
           </div>
+          <p className="text-xs leading-5 text-muted-foreground">
+            {zh ? "密码需 8–128 个字符；验证邮件成功确认前不会创建账号。" : "Use 8–128 characters. No account is created until the email is confirmed."}
+          </p>
           {formError ? <AuthError message={formError} /> : null}
-          <Button type="submit" className="mt-1 h-11 w-full" disabled={register.isPending}>
-            {register.isPending ? <Loader2 aria-hidden="true" className="animate-spin" size={16} /> : null}
-            {register.isPending
-              ? zh
-                ? "正在创建…"
-                : "Creating account…"
-              : zh
-                ? "创建账号"
-                : "Create account"}
+          <Button type="submit" className="mt-1 h-11 w-full" disabled={requestRegistration.isPending || cooldown.active}>
+            {requestRegistration.isPending ? <Loader2 aria-hidden="true" className="animate-spin" size={16} /> : null}
+            {requestRegistration.isPending
+              ? (zh ? "正在发送…" : "Sending…")
+              : cooldown.active
+                ? (zh ? `${formatCooldown(cooldown.seconds)} 后可重试` : `Retry in ${formatCooldown(cooldown.seconds)}`)
+                : (zh ? "发送验证链接" : "Send verification link")}
           </Button>
         </form>
 
         <div className="mt-5 border-t pt-5 text-center text-sm text-muted-foreground">
           {zh ? "已有账号？" : "Already have an account?"}{" "}
-          <Link
-            className="font-semibold text-primary outline-none hover:underline focus-visible:rounded focus-visible:ring-2 focus-visible:ring-ring"
-            to="/login"
-          >
+          <Link className="font-semibold text-primary hover:underline" to="/login">
             {zh ? "返回登录" : "Back to sign in"}
           </Link>
         </div>
       </AuthCard>
     </AuthFrame>
   );
+}
+
+function validateRegistration(
+  values: { username: string; email: string; password: string; confirmation: string },
+  zh: boolean,
+): string | null {
+  if (values.username.length < 3) return zh ? "用户名至少需要 3 个字符。" : "Username must contain at least 3 characters.";
+  if (values.username.length > 64) return zh ? "用户名不能超过 64 个字符。" : "Username cannot exceed 64 characters.";
+  if (!EMAIL_PATTERN.test(values.email) || values.email.length > 254) return zh ? "请输入有效的学校邮箱地址。" : "Enter a valid school email address.";
+  if (values.password.length < 8) return zh ? "密码至少需要 8 个字符。" : "Password must contain at least 8 characters.";
+  if (values.password.length > 128) return zh ? "密码不能超过 128 个字符。" : "Password cannot exceed 128 characters.";
+  if (values.password !== values.confirmation) return zh ? "两次输入的密码不一致。" : "The passwords do not match.";
+  return null;
 }

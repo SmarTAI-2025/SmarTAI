@@ -14,10 +14,35 @@ export interface LoginRequest {
   password: string;
 }
 
-export interface RegisterRequest extends LoginRequest {
+export interface EmailRegistrationRequest {
+  username: string;
   email: string;
-  role?: "teacher" | "student";
-  invite_code?: string | null;
+  password: string;
+}
+
+export interface EmailRegistrationResponse {
+  status: "verification_required";
+  request_id: string;
+  expires_in_seconds: number;
+  resend_after_seconds: number;
+}
+
+export interface EmailRegistrationVerifyResponse {
+  status: "registered" | "already_verified";
+}
+
+export interface PasswordResetRequest {
+  email: string;
+}
+
+export interface PasswordResetRequestResponse {
+  status: "reset_link_requested";
+  expires_in_seconds: number;
+  resend_after_seconds: number;
+}
+
+export interface PasswordResetConfirmResponse {
+  status: "password_reset";
 }
 
 export interface AuthResponse {

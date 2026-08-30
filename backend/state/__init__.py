@@ -29,6 +29,7 @@ def _user_from_record(record: UserRecord) -> User:
         password_hash=record.password_hash,
         created_at=record.created_at,
         is_active=record.is_active,
+        auth_invalid_before=record.auth_invalid_before,
     )
 
 
@@ -59,6 +60,7 @@ class _UserStore:
                 is_active=user.is_active,
                 created_at=user.created_at,
                 updated_at=now,
+                auth_invalid_before=user.auth_invalid_before,
             )
             if record is None:
                 session.add(UserRecord(**values))

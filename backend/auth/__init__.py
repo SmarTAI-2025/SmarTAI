@@ -14,6 +14,8 @@ must be explicitly enabled with SMARTAI_ALLOW_DEMO_TOKENS=true.
 """
 from __future__ import annotations
 
+import base64
+import hashlib
 import time
 import uuid
 from typing import Optional
@@ -35,15 +37,39 @@ _oauth2 = OAuth2PasswordBearer(tokenUrl="/auth/login", auto_error=False)
 
 # ─── Password hashing ─────────────────────────────────────────────────────────
 
+_BCRYPT_SHA256_PREFIX = "$smartai-bcrypt-sha256$"
+
+
+def _password_digest(password: str) -> bytes:
+    """Return fixed-width bcrypt input for the documented 128-char contract.
+
+    bcrypt only accepts 72 input bytes. UTF-8 passwords can cross that limit
+    well before 72 characters, so new hashes use a SHA-256 pre-hash encoded as
+    base64 (44 bytes). The scheme is explicitly tagged; legacy raw bcrypt
+    hashes remain verifiable below.
+    """
+    return base64.b64encode(hashlib.sha256(password.encode("utf-8")).digest())
+
+
 def hash_password(password: str) -> str:
-    return bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
+    encoded = bcrypt.hashpw(_password_digest(password), bcrypt.gensalt()).decode("utf-8")
+    return f"{_BCRYPT_SHA256_PREFIX}{encoded}"
 
 
 def verify_password(password: str, hashed: str) -> bool:
     if not hashed:
         return False
     try:
-        return bcrypt.checkpw(password.encode("utf-8"), hashed.encode("utf-8"))
+        if hashed.startswith(_BCRYPT_SHA256_PREFIX):
+            encoded_hash = hashed[len(_BCRYPT_SHA256_PREFIX):]
+            return bcrypt.checkpw(_password_digest(password), encoded_hash.encode("utf-8"))
+        # Backward compatibility for accounts created before the tagged
+        # bcrypt-SHA256 scheme. bcrypt 5 rejects values longer than 72 bytes;
+        # returning False is the safe legacy behavior for such a credential.
+        raw_password = password.encode("utf-8")
+        if len(raw_password) > 72:
+            return False
+        return bcrypt.checkpw(raw_password, hashed.encode("utf-8"))
     except Exception:
         return False
 
@@ -52,8 +78,9 @@ def verify_password(password: str, hashed: str) -> bool:
 
 def create_token(user_id: str, role: str, expires_in_hours: Optional[int] = None, expires_in_minutes: Optional[int] = None) -> str:
     lifetime = expires_in_minutes * 60 if expires_in_minutes is not None else ((expires_in_hours * 3600) if expires_in_hours is not None else settings.jwt_expiry_minutes * 60)
-    exp = int(time.time()) + lifetime
-    payload = {"sub": user_id, "role": role, "exp": exp, "iat": int(time.time()), "jti": str(uuid.uuid4())[:12]}
+    issued_at = time.time()
+    exp = int(issued_at) + lifetime
+    payload = {"sub": user_id, "role": role, "exp": exp, "iat": issued_at, "jti": str(uuid.uuid4())[:12]}
     return jwt.encode(payload, settings.jwt_secret, algorithm=settings.jwt_algorithm)
 
 
@@ -136,6 +163,13 @@ def get_optional_user(
     user = user_store.get(user_id) if user_id else None
     if user is not None and not user.is_active:
         user = None
+    issued_at = payload.get("iat")
+    if user is not None and user.auth_invalid_before is not None:
+        try:
+            if issued_at is None or float(issued_at) <= user.auth_invalid_before:
+                user = None
+        except (TypeError, ValueError):
+            user = None
     if user is None and settings.require_auth:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, detail="User not found")
     return user
