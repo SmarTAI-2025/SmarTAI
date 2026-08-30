@@ -10,9 +10,15 @@ import pytest
 from backend.agents import ingest_agent, question_preparation_agent
 from backend.agents.ingest_agent import AICompletionCandidateOutput
 from backend.config import Settings
+from backend.db import workflow_repository
 from backend.domain.errors import ValidationError
+from backend.llm.endpoint_policy import ProviderEndpointError
+from backend.llm.providers import ProviderRequestError
+from backend.llm.registry import SharedPoolLimitError
+from backend.models import ProblemSourceDraft, QuestionScorePolicy
 from backend.progress.tracker import ProgressReporter
 from backend.services.question_structure import build_major_question_structure
+from backend.tools import structured_llm
 
 
 def _problems(count: int = 7) -> dict[str, dict]:
@@ -73,6 +79,44 @@ def _candidate(target: dict[str, str]) -> AICompletionCandidateOutput:
         target=target["target"],
         text_value=text,
     )
+
+
+@pytest.mark.asyncio
+async def test_two_hundred_multibyte_question_labels_fit_durable_progress():
+    question_ids = [f"q{index}" for index in range(1, 201)]
+    reporter = ProgressReporter("bounded-question-labels")
+    await reporter.configure_question_generation(
+        question_ids,
+        question_labels={
+            q_id: "\U0001f600" * 120
+            for q_id in question_ids
+        },
+    )
+    for q_id in question_ids:
+        await reporter.mark_question_generation_started(q_id)
+        await reporter.mark_question_generation_finished(q_id, succeeded=True)
+
+    snapshot = await reporter.snapshot()
+    progress = snapshot.model_dump(mode="json")
+    assert workflow_repository._validate_json_object(
+        progress,
+        field="progress",
+        max_bytes=workflow_repository.MAX_OPERATION_PROGRESS_BYTES,
+    ) == progress
+    assert snapshot.total_questions == 200
+    assert snapshot.completed_question_ids == question_ids
+    assert snapshot.stage_metrics["solution_total_questions"] == 200
+    assert snapshot.stage_metrics["solution_completed_questions"] == 200
+    assert set(snapshot.question_labels) <= set(question_ids)
+    assert snapshot.question_labels["q1"] == "\U0001f600" * 120
+    encoded_labels = json.dumps(
+        snapshot.question_labels,
+        ensure_ascii=False,
+        allow_nan=False,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    assert len(encoded_labels) <= 16 * 1024
+    assert len(snapshot.question_labels) < len(question_ids)
 
 
 @pytest.mark.asyncio
@@ -294,6 +338,152 @@ async def test_cancellation_clears_active_questions_without_false_failure(monkey
 
 
 @pytest.mark.asyncio
+async def test_recovered_major_question_skips_provider_and_seeds_full_progress(
+    monkeypatch,
+):
+    problems = _problems(2)
+    targets = _targets(problems)
+    calls: list[str] = []
+
+    async def fake_generate(*, problems_data, requested_targets, **_kwargs):
+        q_id = next(iter(problems_data))
+        calls.append(q_id)
+        return [_candidate(row) for row in requested_targets]
+
+    monkeypatch.setattr(
+        question_preparation_agent,
+        "generate_missing_question_materials",
+        fake_generate,
+    )
+    reporter = ProgressReporter("recover-one-major")
+    recovered_q1 = [
+        _candidate(target) for target in targets if target["q_id"] == "q1"
+    ]
+
+    result = await question_preparation_agent.generate_major_question_materials(
+        problems_data=problems,
+        requested_targets=targets,
+        test_case_count=6,
+        provider=SimpleNamespace(provider_id="fake:model"),
+        reporter=reporter,
+        concurrency=1,
+        recovered_candidates_by_question={"q1": recovered_q1},
+        completed_question_ids=["q1"],
+    )
+
+    assert calls == ["q2"]
+    assert [item.target_id for item in result] == [
+        row["target_id"] for row in targets
+    ]
+    snapshot = await reporter.snapshot()
+    assert snapshot.stage_metrics == {
+        "solution_total_questions": 2,
+        "solution_completed_questions": 2,
+        "solution_failed_questions": 0,
+    }
+    assert snapshot.completed_question_ids == ["q1", "q2"]
+    assert snapshot.active_question_ids == []
+    assert snapshot.failed_question_ids == []
+
+
+@pytest.mark.asyncio
+async def test_generation_lifecycle_hooks_run_before_provider_and_classification(
+    monkeypatch,
+):
+    problems = _problems(1)
+    events: list[str] = []
+    provider_error = TimeoutError("provider timed out")
+
+    async def fake_generate(**_kwargs):
+        events.append("provider")
+        raise provider_error
+
+    async def on_started(q_id: str) -> None:
+        assert q_id == "q1"
+        events.append("started")
+
+    async def on_failed(q_id: str, exc: Exception) -> None:
+        assert q_id == "q1"
+        assert exc is provider_error
+        events.append("failed-checkpoint")
+
+    def fake_classify(exc: Exception, _fallback: str) -> str:
+        assert exc is provider_error
+        events.append("classified")
+        return "provider_timeout"
+
+    monkeypatch.setattr(
+        question_preparation_agent,
+        "generate_missing_question_materials",
+        fake_generate,
+    )
+    monkeypatch.setattr(
+        question_preparation_agent,
+        "classify_background_error",
+        fake_classify,
+    )
+
+    with pytest.raises(TimeoutError) as exc_info:
+        await question_preparation_agent.generate_major_question_materials(
+            problems_data=problems,
+            requested_targets=_targets(problems),
+            test_case_count=6,
+            provider=SimpleNamespace(provider_id="fake:model"),
+            reporter=ProgressReporter("generation-hooks"),
+            on_question_started=on_started,
+            on_question_failed=on_failed,
+        )
+
+    assert exc_info.value is provider_error
+    assert events == [
+        "started",
+        "provider",
+        "failed-checkpoint",
+        "classified",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_invalid_recovered_candidate_is_rejected_before_provider_call(
+    monkeypatch,
+):
+    problems = _problems(2)
+    targets = _targets(problems)
+    called = False
+
+    async def unexpected_provider_call(**_kwargs):
+        nonlocal called
+        called = True
+        return []
+
+    recovered_q1 = [
+        _candidate(target) for target in targets if target["q_id"] == "q1"
+    ]
+    recovered_q1[0] = recovered_q1[0].model_copy(
+        update={"text_value": "(a) Only the first answer."}
+    )
+    monkeypatch.setattr(
+        question_preparation_agent,
+        "generate_missing_question_materials",
+        unexpected_provider_call,
+    )
+
+    with pytest.raises(ValidationError) as exc_info:
+        await question_preparation_agent.generate_major_question_materials(
+            problems_data=problems,
+            requested_targets=targets,
+            test_case_count=6,
+            provider=SimpleNamespace(provider_id="fake:model"),
+            reporter=ProgressReporter("invalid-recovered-major"),
+            recovered_candidates_by_question={"q1": recovered_q1},
+            completed_question_ids=["q1"],
+        )
+
+    assert exc_info.value.code == "provider_response_invalid"
+    assert called is False
+
+
+@pytest.mark.asyncio
 async def test_missing_or_invalid_subpart_material_fails_the_major_unit(monkeypatch):
     problems = _problems(1)
     targets = _targets(problems)
@@ -318,6 +508,13 @@ async def test_missing_or_invalid_subpart_material_fails_the_major_unit(monkeypa
         "generate_missing_question_materials",
         missing_subpart,
     )
+    submission_states: list[bool] = []
+
+    async def on_failed(_q_id: str, exc: Exception) -> None:
+        submission_states.append(
+            question_preparation_agent.provider_submission_is_uncertain(exc)
+        )
+
     reporter = ProgressReporter("invalid-subpart-generation")
     with pytest.raises(ValidationError) as exc:
         await question_preparation_agent.generate_major_question_materials(
@@ -326,8 +523,10 @@ async def test_missing_or_invalid_subpart_material_fails_the_major_unit(monkeypa
             test_case_count=6,
             provider=SimpleNamespace(provider_id="fake:model"),
             reporter=reporter,
+            on_question_failed=on_failed,
         )
     assert exc.value.code == "provider_response_invalid"
+    assert submission_states == [False]
     snapshot = await reporter.snapshot()
     assert snapshot.completed_question_ids == []
     assert snapshot.failed_question_ids == ["q1"]
@@ -366,6 +565,110 @@ def test_question_generation_concurrency_env_default_and_bounds(monkeypatch):
     assert Settings(_env_file=None).question_generation_concurrency == 2
     monkeypatch.setenv("SMARTAI_QUESTION_GENERATION_CONCURRENCY", "4")
     assert Settings(_env_file=None).question_generation_concurrency == 4
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("error_factory", "expected_uncertain"),
+    [
+        (lambda: TimeoutError("provider timed out"), True),
+        (
+            lambda: ProviderRequestError(
+                "provider_request_rejected",
+                status_code=401,
+            ),
+            False,
+        ),
+        (
+            lambda: ProviderRequestError(
+                "provider_rate_limited",
+                status_code=429,
+            ),
+            False,
+        ),
+        (lambda: SharedPoolLimitError("shared_pool_daily_limit_reached"), False),
+        (lambda: SharedPoolLimitError("shared_pool_disabled"), False),
+        (lambda: ProviderRequestError("provider_response_invalid"), False),
+        (
+            lambda: ProviderEndpointError(
+                "provider_endpoint_host_not_allowed"
+            ),
+            False,
+        ),
+    ],
+)
+async def test_base_provider_failure_hook_distinguishes_unknown_outcomes(
+    monkeypatch,
+    error_factory,
+    expected_uncertain,
+):
+    monkeypatch.setattr(structured_llm.settings, "llm_max_retries", 1)
+    monkeypatch.setattr(
+        structured_llm.settings,
+        "llm_rate_limit_max_retries",
+        0,
+    )
+    calls = 0
+
+    class FailingProvider:
+        provider_id = "fake:model"
+
+        async def ainvoke(self, _messages):
+            nonlocal calls
+            calls += 1
+            raise error_factory()
+
+    async def fake_extract(
+        _text,
+        provider,
+        _problem_data,
+        **_kwargs,
+    ):
+        await structured_llm.ainvoke_with_retry(provider, [])
+
+    failures: list[tuple[str, bool]] = []
+
+    async def on_base_failed(stage: str, exc: Exception) -> None:
+        failures.append((
+            stage,
+            question_preparation_agent.provider_submission_is_uncertain(exc),
+        ))
+
+    monkeypatch.setattr(
+        question_preparation_agent,
+        "extract_problems",
+        fake_extract,
+    )
+    source = ProblemSourceDraft(
+        source_token="source-one",
+        task_id="task-one",
+        owner_id="owner-one",
+        source_kind="inline_text",
+        structure_mode="organized",
+        filename="questions.txt",
+        content_type="text/plain",
+        size_bytes=10,
+        content_sha256="a" * 64,
+        resident_bytes=10,
+        expires_at=9_999_999_999,
+    )
+
+    with pytest.raises(Exception):
+        await question_preparation_agent.prepare_question_packages(
+            [(source, "1. Explain the result.")],
+            FailingProvider(),
+            provider_id="fake:model",
+            reporter=ProgressReporter("base-provider-failure"),
+            score_policy=QuestionScorePolicy(
+                mode="uniform",
+                uniform_max_score=10,
+            ),
+            on_base_failed=on_base_failed,
+            provider_submission_safe=True,
+        )
+
+    assert calls == 1
+    assert failures == [("questions_extracted", expected_uncertain)]
 
 
 def test_subpart_rubric_is_regenerated_unless_teacher_material_was_imported():
