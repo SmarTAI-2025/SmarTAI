@@ -98,6 +98,19 @@ SMARTAI_HTTPS_PROXY=http://HOST:PORT
 - 前端 BYOK 的 Key 仍在“模型与 BYOK”页面填写，并由后端加密保存。
 - 修改代理配置后必须重启后端。
 
+#### 配置大题答案生成并发
+
+题目准备会为每道需要补齐资料的计分大题发起一次模型请求；大题内部的 `(a)/(b)`
+等小问仍属于同一次请求，不会增加并发计数。默认同时处理 2 道大题：
+
+```dotenv
+SMARTAI_QUESTION_GENERATION_CONCURRENCY=2
+```
+
+允许值为 1–4，部署时建议按模型限流和费用预算配置为 2–4。修改后需要重启后端，
+无需修改代码，也没有对应的管理员页面。实际并发还会受到所选 provider 和相同端点的
+既有安全上限约束。
+
 #### 配置本地 BYOK 加密主密钥（使用 BYOK 时必需）
 
 后端未配置 `SMARTAI_PROVIDER_ENCRYPTION_KEY` 时仍可启动，但不能保存持久化 BYOK

@@ -6,18 +6,23 @@ this agent owns ordering, progress and the single atomic result payload.
 """
 from __future__ import annotations
 
+import asyncio
 import time
+import unicodedata
 import uuid
 from collections import defaultdict
+from collections.abc import Awaitable, Callable
 from typing import Any, Dict, Iterable, List, Tuple
 
 from backend.agents.ingest_agent import (
+    AICompletionCandidateOutput,
     extract_problems,
     extract_problems_from_ocr_markdown,
     generate_missing_question_materials,
     parse_material_import_to_candidates,
     split_ocr_markdown_sections,
 )
+from backend.config import settings
 from backend.llm.providers import BaseProvider
 from backend.domain.errors import ValidationError
 from backend.models import (
@@ -27,6 +32,7 @@ from backend.models import (
     is_programming_question_type,
 )
 from backend.progress.tracker import ProgressReporter
+from backend.services.background_errors import classify_background_error
 from backend.services.question_structure import (
     MajorQuestionStructureV1,
     QuestionRubricValidationError,
@@ -48,6 +54,230 @@ QUESTION_PREPARATION_STAGE_SEQUENCE = (
     "detecting_conflicts",
     "committing_question_packages",
 )
+
+
+async def generate_major_question_materials(
+    *,
+    problems_data: Dict[str, Dict[str, Any]],
+    requested_targets: List[Dict[str, str]],
+    test_case_count: int,
+    provider: BaseProvider,
+    reporter: ProgressReporter,
+    concurrency: int | None = None,
+    on_question_completed: Callable[
+        [str, list[AICompletionCandidateOutput]], Awaitable[None]
+    ] | None = None,
+) -> list[AICompletionCandidateOutput]:
+    """Generate one bounded provider request per scored major question.
+
+    All requested fields for a question stay in the same call, including every
+    internal subpart. Results are returned in source-question and target order,
+    regardless of completion order. The optional completion hook runs before a
+    question is counted as complete so 03C can durably checkpoint an artifact.
+    """
+
+    targets_by_question: dict[str, list[dict[str, str]]] = defaultdict(list)
+    seen_target_ids: set[str] = set()
+    for target in requested_targets:
+        q_id = str(target.get("q_id") or "")
+        target_name = str(target.get("target") or "")
+        target_id = str(target.get("target_id") or "")
+        if (
+            q_id not in problems_data
+            or target_name not in {
+                "criterion", "reference_answer", "solution_code", "test_cases"
+            }
+            or target_id != f"{q_id}:{target_name}"
+            or target_id in seen_target_ids
+        ):
+            raise ValidationError(
+                "A major-question generation target was invalid or duplicated.",
+                code="provider_response_invalid",
+            )
+        seen_target_ids.add(target_id)
+        targets_by_question[q_id].append(target)
+    question_ids = [q_id for q_id in problems_data if targets_by_question[q_id]]
+    if not question_ids:
+        raise ValidationError(
+            "No valid major-question generation targets were supplied.",
+            code="provider_response_invalid",
+        )
+
+    limit = (
+        settings.question_generation_concurrency
+        if concurrency is None
+        else concurrency
+    )
+    if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 4:
+        raise ValueError("question generation concurrency must be between 1 and 4")
+    semaphore = asyncio.Semaphore(limit)
+    results: dict[str, list[AICompletionCandidateOutput]] = {}
+    failures: dict[str, Exception] = {}
+    await reporter.configure_question_generation(
+        question_ids,
+        question_labels={
+            q_id: str(problems_data[q_id].get("number") or q_id)
+            for q_id in question_ids
+        },
+    )
+
+    async def run_unit(q_id: str) -> None:
+        started = False
+        try:
+            async with semaphore:
+                await reporter.mark_question_generation_started(q_id)
+                started = True
+                candidates = await generate_missing_question_materials(
+                    problems_data={q_id: problems_data[q_id]},
+                    requested_targets=targets_by_question[q_id],
+                    test_case_count=test_case_count,
+                    provider=provider,
+                    reporter=None,
+                    manage_progress_lifecycle=False,
+                )
+                validated = _validate_major_question_candidates(
+                    q_id,
+                    targets_by_question[q_id],
+                    candidates,
+                    problems_data[q_id],
+                )
+                if on_question_completed is not None:
+                    await on_question_completed(q_id, validated)
+                results[q_id] = validated
+                await reporter.mark_question_generation_finished(
+                    q_id, succeeded=True
+                )
+        except asyncio.CancelledError:
+            if started:
+                await reporter.mark_question_generation_cancelled(q_id)
+            raise
+        except Exception as exc:
+            failures[q_id] = exc
+            if started:
+                await reporter.mark_question_generation_finished(
+                    q_id,
+                    succeeded=False,
+                    error_code=classify_background_error(
+                        exc, "ai_completion_failed"
+                    ),
+                )
+
+    tasks = [asyncio.create_task(run_unit(q_id)) for q_id in question_ids]
+    try:
+        await asyncio.gather(*tasks)
+    except asyncio.CancelledError:
+        for task in tasks:
+            task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+        raise
+
+    if failures:
+        first_failed = next(q_id for q_id in question_ids if q_id in failures)
+        raise failures[first_failed]
+    return [candidate for q_id in question_ids for candidate in results[q_id]]
+
+
+def _validate_major_question_candidates(
+    q_id: str,
+    targets: list[dict[str, str]],
+    candidates: list[AICompletionCandidateOutput],
+    problem: dict[str, Any],
+) -> list[AICompletionCandidateOutput]:
+    expected = {target["target_id"]: target for target in targets}
+    accepted: dict[str, AICompletionCandidateOutput] = {}
+    for candidate in candidates:
+        target = expected.get(candidate.target_id)
+        value_present = (
+            bool(candidate.test_cases)
+            if candidate.target == "test_cases"
+            else bool((candidate.text_value or "").strip())
+        )
+        if (
+            target is None
+            or candidate.target_id in accepted
+            or candidate.q_id != q_id
+            or target["q_id"] != candidate.q_id
+            or target["target"] != candidate.target
+            or not value_present
+        ):
+            raise ValidationError(
+                "The provider returned an invalid major-question material candidate.",
+                code="provider_response_invalid",
+            )
+        structure = MajorQuestionStructureV1.model_validate(
+            problem.get("question_structure")
+        )
+        if candidate.target == "criterion" and structure.subparts:
+            try:
+                rubric_summary = validate_rubric_points(
+                    candidate.text_value or "",
+                    problem.get("max_score", 10),
+                    structure,
+                )
+            except QuestionRubricValidationError as exc:
+                raise ValidationError(
+                    "The generated rubric did not preserve the major-question score.",
+                    code="provider_response_invalid",
+                ) from exc
+            if not rubric_summary.has_explicit_subpart_points:
+                raise ValidationError(
+                    "The generated rubric omitted explicit subpart allocations.",
+                    code="provider_response_invalid",
+                )
+        if candidate.target == "reference_answer" and structure.subparts:
+            normalized_answer = unicodedata.normalize(
+                "NFKC", candidate.text_value or ""
+            ).casefold()
+            if any(
+                unicodedata.normalize("NFKC", part.label).casefold()
+                not in normalized_answer
+                for part in structure.subparts
+            ):
+                raise ValidationError(
+                    "The generated answer omitted a labelled subpart.",
+                    code="provider_response_invalid",
+                )
+        accepted[candidate.target_id] = candidate
+    if set(accepted) != set(expected):
+        raise ValidationError(
+            "The provider omitted a required major-question material candidate.",
+            code="provider_response_invalid",
+        )
+    return [accepted[target["target_id"]] for target in targets]
+
+
+def requested_major_question_materials(
+    problem_data: Dict[str, Dict[str, Any]],
+) -> list[dict[str, str]]:
+    """Return missing targets in stable major-question/field order."""
+
+    requested: list[dict[str, str]] = []
+    for q_id, problem in problem_data.items():
+        material_provenance = problem.get("material_provenance") or {}
+        # A teacher answer may contain only the final result. Ask the bounded
+        # generator to preserve it and expand it into reviewable steps.
+        if (
+            not str(problem.get("reference_answer") or "").strip()
+            or "reference_answer" in material_provenance
+        ):
+            requested.append(_target(q_id, "reference_answer"))
+        structure = MajorQuestionStructureV1.model_validate(
+            problem.get("question_structure")
+        )
+        if (
+            not str(problem.get("criterion") or "").strip()
+            or (
+                structure.subparts
+                and "criterion" not in material_provenance
+            )
+        ):
+            requested.append(_target(q_id, "criterion"))
+        if is_programming_question_type(problem.get("type")):
+            if not str(problem.get("solution_code") or "").strip():
+                requested.append(_target(q_id, "solution_code"))
+            if not list(problem.get("test_cases") or []):
+                requested.append(_target(q_id, "test_cases"))
+    return requested
 
 
 async def prepare_question_packages(
@@ -204,32 +434,15 @@ async def prepare_question_packages(
         completed_steps=3,
         message="Generating complete answers for material not supplied by the teacher",
     )
-    requested_targets: List[Dict[str, str]] = []
-    for q_id, problem in problem_data.items():
-        material_provenance = problem.get("material_provenance") or {}
-        # A teacher answer may contain only the final result. Ask the same
-        # bounded generator to preserve it and expand it into reviewable steps.
-        if (
-            not str(problem.get("reference_answer") or "").strip()
-            or "reference_answer" in material_provenance
-        ):
-            requested_targets.append(_target(q_id, "reference_answer"))
-        if not str(problem.get("criterion") or "").strip():
-            requested_targets.append(_target(q_id, "criterion"))
-        if is_programming_question_type(problem.get("type")):
-            if not str(problem.get("solution_code") or "").strip():
-                requested_targets.append(_target(q_id, "solution_code"))
-            if not list(problem.get("test_cases") or []):
-                requested_targets.append(_target(q_id, "test_cases"))
+    requested_targets = requested_major_question_materials(problem_data)
 
     if requested_targets:
-        generated = await generate_missing_question_materials(
+        generated = await generate_major_question_materials(
             problems_data=problem_data,
             requested_targets=requested_targets,
             test_case_count=6,
             provider=provider,
             reporter=reporter,
-            manage_progress_lifecycle=False,
         )
         now = time.time()
         generated_target_ids: set[str] = set()

@@ -146,6 +146,10 @@ export function ProblemRecognitionProgressPage() {
               }}
             />
           ) : null}
+          <QuestionGenerationFailureSummary
+            progress={progressQuery.progress}
+            locale={locale}
+          />
           <RecoverableActionState
             info={info}
             locale={locale}
@@ -228,6 +232,21 @@ export function ProblemRecognitionProgressPage() {
       typeof progress.completed_steps === "number",
   );
   const percent = hasDeterminateProgress ? progressQuery.percent : null;
+  const generationMetrics = progress?.stage_metrics ?? {};
+  const generationTotal = generationMetrics.solution_total_questions ?? 0;
+  const generationCompleted = Math.min(
+    generationTotal,
+    generationMetrics.solution_completed_questions ?? 0,
+  );
+  const questionLabel = (qId: string) => progress?.question_labels?.[qId] ?? qId;
+  const activeQuestionLabels = (progress?.active_question_ids ?? []).map(questionLabel);
+  const failedQuestionLabels = (progress?.failed_question_ids ?? []).map((qId) => {
+    const label = questionLabel(qId);
+    const errorCode = progress?.question_error_codes?.[qId];
+    return errorCode
+      ? `${label}${locale === "zh-CN" ? "（" : " ("}${questionGenerationErrorLabel(errorCode, locale)}${locale === "zh-CN" ? "）" : ")"}`
+      : label;
+  });
 
   return (
     <ProgressPageFrame title={t("problemProgressTitle")}>
@@ -272,6 +291,28 @@ export function ProblemRecognitionProgressPage() {
             {percent === null ? t("problemProgressProcessing") : `${percent}%`}
           </span>
         </div>
+
+        {generationTotal > 0 ? (
+          <div className="mt-4 rounded-lg border border-blue-100 bg-blue-50/60 px-4 py-3 text-sm dark:border-blue-900/50 dark:bg-blue-950/20">
+            <p className="font-semibold text-foreground">
+              {locale === "zh-CN"
+                ? `已完成 ${generationCompleted}/${generationTotal} 道大题`
+                : `${generationCompleted}/${generationTotal} major questions completed`}
+            </p>
+            {activeQuestionLabels.length > 0 ? (
+              <p className="mt-1 text-muted-foreground">
+                {locale === "zh-CN" ? "正在处理：" : "In progress: "}
+                {activeQuestionLabels.join(locale === "zh-CN" ? "、" : ", ")}
+              </p>
+            ) : null}
+            {failedQuestionLabels.length > 0 ? (
+              <p className="mt-1 font-medium text-danger">
+                {locale === "zh-CN" ? "未完成：" : "Not completed: "}
+                {failedQuestionLabels.join(locale === "zh-CN" ? "、" : ", ")}
+              </p>
+            ) : null}
+          </div>
+        ) : null}
 
         <div className="mt-8 grid min-h-0 flex-1 gap-6 md:grid-cols-[210px_minmax(0,1fr)] md:gap-16">
           <ol className="grid content-start gap-3" aria-label={t("problemProgressStepsLabel")}>
@@ -342,6 +383,48 @@ function ProgressPageFrame({ title, children }: { title: string; children: React
       <div className="mx-auto mt-[45px] w-full max-w-[800px]">{children}</div>
     </div>
   );
+}
+
+function QuestionGenerationFailureSummary({
+  progress,
+  locale,
+}: {
+  progress: JobProgress | null | undefined;
+  locale: string;
+}) {
+  const failed = progress?.failed_question_ids ?? [];
+  if (failed.length === 0) return null;
+  return (
+    <section className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm dark:border-red-900/50 dark:bg-red-950/20">
+      <h3 className="font-semibold text-danger">
+        {locale === "zh-CN" ? "以下大题未完成" : "Major questions not completed"}
+      </h3>
+      <ul className="mt-1 grid gap-1 text-muted-foreground">
+        {failed.map((qId) => {
+          const label = progress?.question_labels?.[qId] ?? qId;
+          const code = progress?.question_error_codes?.[qId];
+          return (
+            <li key={qId} title={code}>
+              {label}{code ? ` · ${questionGenerationErrorLabel(code, locale)}` : ""}
+            </li>
+          );
+        })}
+      </ul>
+    </section>
+  );
+}
+
+function questionGenerationErrorLabel(code: string, locale: string) {
+  const labels: Record<string, [string, string]> = {
+    provider_timeout: ["模型响应超时", "Model response timed out"],
+    provider_rate_limited: ["模型请求受限", "Model request was rate limited"],
+    provider_unreachable: ["暂时无法连接模型服务", "Model service is unreachable"],
+    provider_unavailable: ["模型服务暂不可用", "Model service is unavailable"],
+    provider_response_invalid: ["模型返回内容不完整", "Model response was incomplete"],
+    ai_completion_failed: ["答案与评分标准生成未完成", "Answer and rubric generation did not complete"],
+  };
+  const label = labels[code] ?? ["生成未完成", "Generation did not complete"];
+  return locale === "zh-CN" ? label[0] : label[1];
 }
 
 function RecognitionStepItem({

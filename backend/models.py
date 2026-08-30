@@ -372,6 +372,12 @@ class JobProgress(BaseModel):
     total_steps: Optional[int] = None
     completed_steps: Optional[int] = None
     stage_metrics: Dict[str, int] = Field(default_factory=dict)
+    question_labels: Dict[str, str] = Field(default_factory=dict)
+    question_error_codes: Dict[str, str] = Field(default_factory=dict)
+    completed_question_ids: List[str] = Field(default_factory=list)
+    active_question_ids: List[str] = Field(default_factory=list)
+    failed_question_ids: List[str] = Field(default_factory=list)
+    last_activity_at: Optional[float] = None
     active: List[ActiveUnit] = Field(default_factory=list, description="Currently running units")
     messages: List[ProgressEvent] = Field(default_factory=list, description="Ring buffer of last N events")
     error_detail: Optional[str] = None

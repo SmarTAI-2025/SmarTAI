@@ -1784,8 +1784,8 @@ async def _run_question_preparation(
     source_checkpoint: dict | None = None,
     source_artifact_refs: list[str] | None = None,
 ) -> None:
+    reporter = get_or_create_reporter(job_id)
     try:
-        reporter = get_or_create_reporter(job_id)
         if ocr_only:
             packages = await prepare_ocr_question_packages(
                 [(draft, text) for draft, text, _payload in sources],
@@ -1820,9 +1820,13 @@ async def _run_question_preparation(
             recognition_provider_id=recognition_provider_id,
         )
     except DomainError as exc:
+        error_code = task_facade._detail_error(exc, "problem_extraction_failed")
+        await reporter.set_error(error_code)
+        snapshot = (await reporter.snapshot()).model_dump(mode="json")
         task_facade._fail_operation(
             task_id, owner_id, job_id, job_attempt,
-            task_facade._detail_error(exc, "problem_extraction_failed"),
+            error_code,
+            operation_progress=snapshot,
         )
     except Exception as exc:
         error_code = _question_preparation_failure_code(exc)
@@ -1832,8 +1836,11 @@ async def _run_question_preparation(
             error_code,
             type(exc).__name__,
         )
+        await reporter.set_error(error_code)
+        snapshot = (await reporter.snapshot()).model_dump(mode="json")
         task_facade._fail_operation(
-            task_id, owner_id, job_id, job_attempt, error_code
+            task_id, owner_id, job_id, job_attempt, error_code,
+            operation_progress=snapshot,
         )
 
 

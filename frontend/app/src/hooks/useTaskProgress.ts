@@ -39,7 +39,32 @@ export function calculateProgressPercent(
     progress.total_steps > 0 &&
     typeof progress.completed_steps === "number"
   ) {
-    return Math.min(100, Math.round((progress.completed_steps / progress.total_steps) * 100));
+    const metrics = progress.stage_metrics ?? {};
+    const totalQuestions = metrics.solution_total_questions;
+    const completedQuestions = metrics.solution_completed_questions;
+    const hasQuestionGenerationProgress = progress.current_step === "generating_solutions"
+      && typeof totalQuestions === "number"
+      && Number.isFinite(totalQuestions)
+      && totalQuestions > 0
+      && typeof completedQuestions === "number"
+      && Number.isFinite(completedQuestions);
+    if (hasQuestionGenerationProgress) {
+      const generationFraction = Math.max(
+        0,
+        Math.min(1, completedQuestions / totalQuestions),
+      );
+      return Math.min(
+        100,
+        Math.max(
+          Math.round((progress.completed_steps / progress.total_steps) * 100),
+          Math.floor(((progress.completed_steps + generationFraction) / progress.total_steps) * 100),
+        ),
+      );
+    }
+    return Math.min(
+      100,
+      Math.round((progress.completed_steps / progress.total_steps) * 100),
+    );
   }
 
   if (progress.phase === "done") {
