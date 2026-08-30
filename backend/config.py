@@ -7,7 +7,7 @@ from __future__ import annotations
 import os
 from collections.abc import MutableMapping
 from typing import Optional, Literal
-from pydantic import model_validator
+from pydantic import AliasChoices, Field, model_validator
 from pydantic_settings import BaseSettings
 
 
@@ -250,10 +250,12 @@ class Settings(BaseSettings):
     mathpix_app_key: str = os.getenv("MATHPIX_APP_KEY", "")
 
     # ─── Frontend ──────────────────────────────────────────────────────────────
-    frontend_urls: str = os.getenv(
-        "FRONTEND_URLS",
-        "http://localhost:8501,http://localhost:3000,http://localhost:8001,"
-        "http://localhost:5173,http://127.0.0.1:5173",
+    frontend_urls: str = Field(
+        default=(
+            "http://localhost:8501,http://localhost:3000,http://localhost:8001,"
+            "http://localhost:5173,http://127.0.0.1:5173"
+        ),
+        validation_alias=AliasChoices("FRONTEND_URLS", "SMARTAI_FRONTEND_URLS"),
     )
     backend_port: int = 8000
 
@@ -289,6 +291,22 @@ class Settings(BaseSettings):
     refresh_cookie_name: str = "smartai_refresh"
     refresh_cookie_secure: bool = os.getenv("SMARTAI_REFRESH_COOKIE_SECURE", "false").lower() == "true"
     refresh_cookie_samesite: Literal["lax", "strict", "none"] = os.getenv("SMARTAI_REFRESH_COOKIE_SAMESITE", "lax")  # type: ignore[assignment]
+
+    # ─── Email verification registration ─────────────────────────────────────
+    smtp_host: str = ""
+    smtp_port: int = 587
+    smtp_security: Literal["starttls", "ssl"] = "starttls"
+    smtp_username: str = ""
+    smtp_password: str = ""
+    mail_from_address: str = ""
+    mail_from_name: str = "SmarTAI"
+    public_frontend_url: str = "http://localhost:5173"
+    allowed_email_domains: str = ""
+    smtp_timeout_seconds: float = 10.0
+    email_verification_expiry_seconds: int = 1800
+    email_verification_resend_seconds: int = 60
+    email_verification_hourly_email_limit: int = 5
+    email_verification_hourly_ip_limit: int = 20
 
     # If true, requests without a valid token are rejected by protected
     # endpoints. If false (dev default), missing tokens are silently mapped

@@ -16,6 +16,7 @@ from __future__ import annotations
 from fastapi.testclient import TestClient
 
 from backend.auth import hash_password
+from backend.db.auth_repository import register_with_invite
 from backend.db.course_repository import create_course
 from backend.main import app
 from backend.models import User
@@ -35,6 +36,20 @@ def _admin_client() -> tuple[TestClient, str]:
     resp = client.post("/auth/login", json={"username": "admin", "password": "admin-pass"})
     assert resp.status_code == 200, resp.text
     return client, resp.json()["token"]
+
+
+def _register_via_invite(client: TestClient, *, code: str, username: str, role: str):
+    """Consume an admin invite through the controlled repository path, then log in."""
+    register_with_invite(
+        username=username,
+        email=f"{username}@example.edu",
+        role=role,
+        password_hash=hash_password("secret-pass"),
+        invite_code=code,
+    )
+    response = client.post("/auth/login", json={"username": username, "password": "secret-pass"})
+    assert response.status_code == 200, response.text
+    return response
 
 
 def test_public_user_payload_has_no_course_ids():
@@ -63,8 +78,7 @@ def test_admin_can_activate_and_deactivate_user():
     invite = client.post("/admin/invites", headers={"Authorization": f"Bearer {token}"}, json={"role": "student"})
     assert invite.status_code == 200
     code = invite.json()["invite_code"]
-    reg = client.post("/auth/register", json={"username": "stu_one", "password": "secret-pass", "invite_code": code})
-    assert reg.status_code == 200, reg.text
+    reg = _register_via_invite(client, code=code, username="stu_one", role="student")
     stu_id = reg.json()["user"]["id"]
 
     # Deactivate
@@ -88,7 +102,7 @@ def test_admin_cannot_deactivate_teacher_who_owns_a_course():
     # Create a teacher + a course they own
     invite = client.post("/admin/invites", headers={"Authorization": f"Bearer {token}"}, json={"role": "teacher"})
     code = invite.json()["invite_code"]
-    reg = client.post("/auth/register", json={"username": "teach1", "password": "secret-pass", "invite_code": code})
+    reg = _register_via_invite(client, code=code, username="teach1", role="teacher")
     teacher_id = reg.json()["user"]["id"]
     create_course(teacher_id=teacher_id, name="Owned")
 
@@ -112,8 +126,7 @@ def test_teacher_cannot_call_admin_endpoints():
     admin_client, admin_token = _admin_client()
     invite = admin_client.post("/admin/invites", headers={"Authorization": f"Bearer {admin_token}"}, json={"role": "teacher"})
     code = invite.json()["invite_code"]
-    reg = admin_client.post("/auth/register", json={"username": "tchr", "password": "secret-pass", "invite_code": code})
-    assert reg.status_code == 200, reg.text
+    reg = _register_via_invite(admin_client, code=code, username="tchr", role="teacher")
     teacher_token = reg.json()["token"]
 
     client = TestClient(app)
@@ -127,8 +140,7 @@ def test_student_invite_with_course_enrolls_on_registration():
     # Admin creates a teacher who creates a course
     t_invite = client.post("/admin/invites", headers={"Authorization": f"Bearer {admin_token}"}, json={"role": "teacher"})
     t_code = t_invite.json()["invite_code"]
-    t_reg = client.post("/auth/register", json={"username": "teachx", "password": "secret-pass", "invite_code": t_code})
-    assert t_reg.status_code == 200, t_reg.text
+    t_reg = _register_via_invite(client, code=t_code, username="teachx", role="teacher")
     teacher_id = t_reg.json()["user"]["id"]
     course = create_course(teacher_id=teacher_id, name="Math")
 
@@ -137,8 +149,7 @@ def test_student_invite_with_course_enrolls_on_registration():
     assert s_invite.status_code == 200
     s_code = s_invite.json()["invite_code"]
 
-    s_reg = client.post("/auth/register", json={"username": "studx", "password": "secret-pass", "invite_code": s_code})
-    assert s_reg.status_code == 200, s_reg.text
+    s_reg = _register_via_invite(client, code=s_code, username="studx", role="student")
     student_id = s_reg.json()["user"]["id"]
 
     from backend.db.course_repository import is_enrolled
@@ -158,7 +169,7 @@ def test_disabled_user_cannot_refresh():
     client, admin_token = _admin_client()
     invite = client.post("/admin/invites", headers={"Authorization": f"Bearer {admin_token}"}, json={"role": "student"})
     code = invite.json()["invite_code"]
-    reg = client.post("/auth/register", json={"username": "srefresh_one", "password": "secret-pass", "invite_code": code})
+    reg = _register_via_invite(client, code=code, username="srefresh_one", role="student")
     stu_id = reg.json()["user"]["id"]
     assert client.post("/auth/refresh").status_code == 200  # active can refresh
     client.patch(f"/admin/users/{stu_id}/active", headers={"Authorization": f"Bearer {admin_token}"}, json={"is_active": False})
