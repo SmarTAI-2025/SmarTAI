@@ -40,7 +40,9 @@ def test_app_starts_and_stops_empty_workflow_worker(monkeypatch):
             run_durable_submission_recognition,
         )
         from backend.api.task_preparation import (
-            run_durable_ai_completion, run_durable_material_import,
+            run_durable_ai_completion,
+            run_durable_material_import,
+            run_durable_question_preparation,
         )
 
         assert (
@@ -50,6 +52,7 @@ def test_app_starts_and_stops_empty_workflow_worker(monkeypatch):
                 "submission_recognition": run_durable_submission_recognition,
                 "material_import": run_durable_material_import,
                 "ai_completion": run_durable_ai_completion,
+                "question_preparation": run_durable_question_preparation,
             },
         ) in events
         assert "run_started" in events
@@ -76,7 +79,9 @@ def test_workflow_worker_lifecycle_never_bulk_releases_leases(monkeypatch):
                 run_durable_submission_recognition,
             )
             from backend.api.task_preparation import (
-                run_durable_ai_completion, run_durable_material_import,
+                run_durable_ai_completion,
+                run_durable_material_import,
+                run_durable_question_preparation,
             )
 
             assert dict(handlers) == {
@@ -84,6 +89,7 @@ def test_workflow_worker_lifecycle_never_bulk_releases_leases(monkeypatch):
                 "submission_recognition": run_durable_submission_recognition,
                 "material_import": run_durable_material_import,
                 "ai_completion": run_durable_ai_completion,
+                "question_preparation": run_durable_question_preparation,
             }
 
         async def run_forever(self):

@@ -19,6 +19,7 @@ from typing import Any
 
 from pydantic import ValidationError as PydanticValidationError
 from sqlalchemy import delete, func, select, update
+from sqlalchemy.exc import IntegrityError
 
 from backend.agents.ingest_agent import (
     SubmissionSourceParseResult,
@@ -112,6 +113,26 @@ _AUXILIARY_QUESTION_OPERATION_TYPES = {"material_import", "ai_completion"}
 _OPERATION_PUBLICATION_TTL_SECONDS = 60
 _OPERATION_RUNTIME_TTL_SECONDS = 2 * 60 * 60
 logger = logging.getLogger(__name__)
+
+_QUESTION_PREPARATION_RETRY_FROZEN_FIELDS = (
+    "contract_version",
+    "owner_id",
+    "task_id",
+    "operation_type",
+    "input_hash",
+    "source_tokens",
+    "source_refs",
+    "source_content_hashes",
+    "source_text_hashes",
+    "requested_workflow_revision",
+    "replace_confirmed",
+    "generation_policy",
+    "score_policy",
+    "recognition_provider_id",
+    "provider_configuration_fingerprint",
+    "provider_capability",
+    "prepared_source_provider_ids",
+)
 
 
 def _hash_json(value: Any) -> str:
@@ -733,9 +754,29 @@ def _operation_is_retryable(operation, *, now: float | None = None) -> bool:
             # A provider task may already exist. Exact replay must never
             # create a second potentially billable OCR submission.
             return False
+        if (
+            operation.operation_type == "question_preparation"
+            and (
+                checkpoint.get("base_provider_inflight_stage")
+                or checkpoint.get("provider_inflight_question_ids")
+            )
+        ):
+            # At least one per-major-question request may have reached the
+            # provider without a verified result artifact. Reusing the same
+            # input hash must not create another potentially billable call.
+            return False
         if operation.error_code == "provider_submit_uncertain":
             return False
         return True
+    if (
+        operation.operation_type == "question_preparation"
+        and operation.status in {"pending", "running"}
+    ):
+        # Published work is reclaimed by the durable worker through its lease,
+        # so an HTTP replay can never erase its checkpoint or uncertain-submit
+        # proof. An expired pre-publication ``preparing`` row remains safe to
+        # retry because no worker or provider call can observe that status.
+        return False
     current_time = time.time() if now is None else now
     return bool(
         operation.status in {"preparing", "pending", "running"}
@@ -795,6 +836,7 @@ def _cas_operation_attempt_for_write(
     session, *, task_id: str, owner_id: str, operation_id: str,
     expected_operation_attempt: int, expected_statuses: tuple[str, ...],
     expected_lease_token: str | None = None,
+    expected_checkpoint_revision: int | None = None,
     changes: dict[str, Any] | None = None,
 ):
     """Lock one operation generation through an attempt-and-status CAS.
@@ -804,17 +846,23 @@ def _cas_operation_attempt_for_write(
     validated worker and then be overwritten by that worker's ORM flush.
     """
     now = time.time()
+    predicates = [
+        workflow_repository.WorkflowOperationRecord.id == operation_id,
+        workflow_repository.WorkflowOperationRecord.assignment_id == task_id,
+        workflow_repository.WorkflowOperationRecord.owner_id == owner_id,
+        workflow_repository.WorkflowOperationRecord.attempt
+        == expected_operation_attempt,
+        workflow_repository.WorkflowOperationRecord.status.in_(expected_statuses),
+        workflow_repository._lease_write_predicate(expected_lease_token, now),
+    ]
+    if expected_checkpoint_revision is not None:
+        predicates.append(
+            workflow_repository.WorkflowOperationRecord.checkpoint_revision
+            == expected_checkpoint_revision
+        )
     claimed = session.execute(
         update(workflow_repository.WorkflowOperationRecord)
-        .where(
-            workflow_repository.WorkflowOperationRecord.id == operation_id,
-            workflow_repository.WorkflowOperationRecord.assignment_id == task_id,
-            workflow_repository.WorkflowOperationRecord.owner_id == owner_id,
-            workflow_repository.WorkflowOperationRecord.attempt
-            == expected_operation_attempt,
-            workflow_repository.WorkflowOperationRecord.status.in_(expected_statuses),
-            workflow_repository._lease_write_predicate(expected_lease_token, now),
-        )
+        .where(*predicates)
         .values(**(changes or {}), updated_at=now)
     )
     if claimed.rowcount != 1:
@@ -839,6 +887,14 @@ def _cas_operation_attempt_for_write(
             raise LeaseLost(
                 "The operation lease is held by another worker or expired.",
                 code="lease_lost",
+            )
+        if (
+            expected_checkpoint_revision is not None
+            and current.checkpoint_revision != expected_checkpoint_revision
+        ):
+            raise VersionConflict(
+                "The workflow operation checkpoint changed.",
+                code="stale_checkpoint_revision",
             )
         raise InvalidTransition(
             "The workflow job is not in the expected state.", code="workflow_busy"
@@ -960,6 +1016,475 @@ def activate_workflow_operation_atomic(
         if claimed.rowcount != 1:
             _raise_stale_revision()
         return expected_workflow_revision + 1
+
+
+def _question_preparation_retry_checkpoint(
+    operation,
+    *,
+    next_attempt: int,
+    next_payload: dict[str, Any],
+) -> tuple[str, dict[str, Any], list[str]]:
+    """Carry only verified-success checkpoint references into a new attempt.
+
+    The artifacts remain immutable records of the attempts that created them.
+    ``artifact_attempts`` is explicit lineage: the next worker must validate
+    every inherited envelope against that exact prior attempt before it may
+    skip provider work. Failed and in-flight units are deliberately reset.
+    """
+
+    previous_payload = dict(operation.payload or {})
+    checkpoint = workflow_repository._validate_json_object(
+        dict(operation.checkpoint or {}),
+        field="checkpoint",
+        max_bytes=workflow_repository.MAX_OPERATION_CHECKPOINT_BYTES,
+    )
+    if any(
+        previous_payload.get(field) != next_payload.get(field)
+        for field in _QUESTION_PREPARATION_RETRY_FROZEN_FIELDS
+    ):
+        raise ValidationError(
+            "The question-preparation retry changed its frozen input contract.",
+            code="question_preparation_contract_invalid",
+        )
+    if (
+        checkpoint.get("operation_id") != operation.id
+        or checkpoint.get("attempt") != operation.attempt
+        or checkpoint.get("provider_record_id")
+        != previous_payload.get("recognition_provider_id")
+        or checkpoint.get("source_content_hashes")
+        != previous_payload.get("source_content_hashes")
+        or checkpoint.get("source_text_hashes")
+        != previous_payload.get("source_text_hashes")
+        or checkpoint.get("base_workflow_revision")
+        != previous_payload.get("base_workflow_revision")
+        or checkpoint.get("claimed_workflow_revision")
+        != previous_payload.get("claimed_workflow_revision")
+    ):
+        raise ValidationError(
+            "The question-preparation retry checkpoint is not frozen to its operation.",
+            code="question_preparation_contract_invalid",
+        )
+    previous_retry_contract = checkpoint.get("retry_frozen_contract")
+    if operation.attempt > 1:
+        expected_retry_contract = {
+            "contract_version": 1,
+            "operation_id": operation.id,
+            "from_attempt": operation.attempt - 1,
+            "to_attempt": operation.attempt,
+            "input_hash": operation.input_hash,
+            "provider_record_id": previous_payload.get(
+                "recognition_provider_id"
+            ),
+            "source_content_hashes": previous_payload.get(
+                "source_content_hashes"
+            ),
+            "source_text_hashes": previous_payload.get(
+                "source_text_hashes"
+            ),
+        }
+        if previous_retry_contract != expected_retry_contract:
+            raise ValidationError(
+                "The question-preparation retry lineage changed.",
+                code="question_preparation_contract_invalid",
+            )
+    elif previous_retry_contract is not None:
+        raise ValidationError(
+            "The first question-preparation attempt cannot inherit retry lineage.",
+            code="question_preparation_contract_invalid",
+        )
+    if (
+        checkpoint.get("base_provider_inflight_stage")
+        or list(checkpoint.get("provider_inflight_question_ids") or [])
+        or operation.error_code == "provider_submit_uncertain"
+    ):
+        raise InvalidTransition(
+            "The provider submission state must be verified before retry.",
+            code="provider_submit_uncertain",
+        )
+
+    def question_ids(field: str) -> list[str]:
+        value = checkpoint.get(field) or []
+        if (
+            not isinstance(value, list)
+            or len(value) > 200
+            or any(
+                not isinstance(q_id, str)
+                or re.fullmatch(r"q[1-9][0-9]{0,2}", q_id) is None
+                for q_id in value
+            )
+            or len(value) != len(set(value))
+        ):
+            raise ValidationError(
+                "The question-preparation retry question set is invalid.",
+                code="question_preparation_contract_invalid",
+            )
+        return list(value)
+
+    all_question_ids = question_ids("question_ids")
+    generation_question_ids = question_ids("generation_question_ids")
+    completed_question_ids = question_ids("completed_question_ids")
+    failed_question_ids = question_ids("failed_question_ids")
+    if (
+        not set(generation_question_ids) <= set(all_question_ids)
+        or not set(completed_question_ids) <= set(generation_question_ids)
+        or not set(failed_question_ids) <= set(generation_question_ids)
+    ):
+        raise ValidationError(
+            "The question-preparation retry progress is inconsistent.",
+            code="question_preparation_contract_invalid",
+        )
+
+    question_artifact_ids = checkpoint.get("question_artifact_ids") or {}
+    if (
+        not isinstance(question_artifact_ids, dict)
+        or any(
+            not isinstance(q_id, str)
+            or not isinstance(artifact_id, str)
+            or not artifact_id
+            for q_id, artifact_id in question_artifact_ids.items()
+        )
+        or set(question_artifact_ids) != set(completed_question_ids)
+    ):
+        raise ValidationError(
+            "A completed retry question has no exact artifact.",
+            code="question_preparation_contract_invalid",
+        )
+
+    artifact_fields = {
+        field: checkpoint.get(field)
+        for field in (
+            "questions_extracted_artifact_id",
+            "aligned_base_artifact_id",
+            "final_artifact_id",
+        )
+    }
+    if any(
+        artifact_id is not None
+        and (not isinstance(artifact_id, str) or not artifact_id)
+        for artifact_id in artifact_fields.values()
+    ):
+        raise ValidationError(
+            "A question-preparation retry artifact reference is invalid.",
+            code="question_preparation_contract_invalid",
+        )
+    if question_artifact_ids and artifact_fields["aligned_base_artifact_id"] is None:
+        raise ValidationError(
+            "Question artifacts require a verified aligned base.",
+            code="question_preparation_contract_invalid",
+        )
+
+    previous_refs = workflow_repository._validate_artifact_refs(
+        list(operation.artifact_refs or [])
+    )
+    inherited_ids = {
+        artifact_id
+        for artifact_id in artifact_fields.values()
+        if isinstance(artifact_id, str)
+    } | set(question_artifact_ids.values())
+    if not inherited_ids <= set(previous_refs):
+        raise ValidationError(
+            "A retry artifact is outside the previous operation manifest.",
+            code="question_preparation_contract_invalid",
+        )
+
+    raw_attempts = checkpoint.get("artifact_attempts") or {}
+    if not isinstance(raw_attempts, dict):
+        raise ValidationError(
+            "Question-preparation artifact lineage is invalid.",
+            code="question_preparation_contract_invalid",
+        )
+    artifact_attempts: dict[str, int] = {}
+    for artifact_id, attempt in raw_attempts.items():
+        if (
+            not isinstance(artifact_id, str)
+            or artifact_id not in previous_refs
+            or isinstance(attempt, bool)
+            or not isinstance(attempt, int)
+            or not 1 <= attempt <= operation.attempt
+        ):
+            raise ValidationError(
+                "Question-preparation artifact lineage is invalid.",
+                code="question_preparation_contract_invalid",
+            )
+        artifact_attempts[artifact_id] = attempt
+    for artifact_id in inherited_ids:
+        artifact_attempts.setdefault(artifact_id, operation.attempt)
+
+    frozen_contract = {
+        "contract_version": 1,
+        "operation_id": operation.id,
+        "from_attempt": operation.attempt,
+        "to_attempt": next_attempt,
+        "input_hash": operation.input_hash,
+        "provider_record_id": previous_payload.get("recognition_provider_id"),
+        "source_content_hashes": previous_payload.get("source_content_hashes"),
+        "source_text_hashes": previous_payload.get("source_text_hashes"),
+    }
+    updates: dict[str, Any] = {
+        "stage": "sources_validated",
+        "retry_frozen_contract": frozen_contract,
+        "artifact_attempts": artifact_attempts,
+        "question_ids": all_question_ids,
+        "generation_question_ids": generation_question_ids,
+        "completed_question_ids": completed_question_ids,
+        "failed_question_ids": [],
+        "provider_inflight_question_ids": [],
+        "question_error_codes": {},
+        "base_provider_inflight_stage": None,
+        "base_error_code": None,
+        "question_artifact_ids": dict(question_artifact_ids),
+    }
+    updates.update(artifact_fields)
+    if artifact_fields["final_artifact_id"] is not None:
+        updates["stage"] = "question_packages_prepared"
+    elif completed_question_ids:
+        updates["stage"] = "solution_units_generated"
+    elif artifact_fields["aligned_base_artifact_id"] is not None:
+        updates["stage"] = "uploaded_materials_aligned"
+    elif artifact_fields["questions_extracted_artifact_id"] is not None:
+        updates["stage"] = "questions_extracted"
+    return str(updates["stage"]), updates, previous_refs
+
+
+def publish_checkpointed_operation_atomic(
+    *,
+    task_id: str,
+    owner_id: str,
+    operation_type: str,
+    input_hash: str,
+    expected_workflow_revision: int,
+    operation_payload: dict[str, Any],
+    initial_checkpoint_stage: str,
+    initial_checkpoint: dict[str, Any],
+    artifact_refs: list[str],
+    workflow_changes: dict[str, Any],
+    workflow_job_id_fields: tuple[str, ...] = (),
+    retry_observed_operation_id: str | None = None,
+    retry_observed_attempt: int | None = None,
+) -> tuple[Any, bool, int]:
+    """Atomically publish a complete durable operation and workflow claim.
+
+    A retry may advance an existing generation only when the caller supplies
+    the exact id and attempt it already reviewed as safe. A row discovered
+    inside this transaction is always treated as an idempotent replay; this
+    prevents a concurrent uncertain provider failure from being reset.
+    """
+
+    validated_payload = workflow_repository._validate_json_object(
+        operation_payload,
+        field="payload",
+        max_bytes=workflow_repository.MAX_OPERATION_PAYLOAD_BYTES,
+    )
+    initial_checkpoint_stage = workflow_repository._validate_checkpoint_stage(
+        initial_checkpoint_stage
+    )
+    assert initial_checkpoint_stage is not None
+    validated_refs = workflow_repository._validate_artifact_refs(artifact_refs)
+    now = time.time()
+    allowed_workflow_fields = {
+        column.name
+        for column in workflow_repository.AssignmentWorkflowRecord.__table__.columns
+        if column.name not in {
+            "assignment_id",
+            "owner_id",
+            "created_at",
+            "updated_at",
+            "workflow_revision",
+        }
+    }
+    workflow_values = {
+        key: value
+        for key, value in workflow_changes.items()
+        if key in allowed_workflow_fields
+    }
+    if any(
+        field not in {"active_job_id", "extract_job_id", "parse_job_id"}
+        for field in workflow_job_id_fields
+    ):
+        raise ValidationError(
+            "Unsupported workflow operation pointer.",
+            code="invalid_operation_pointer",
+        )
+    selector = (
+        workflow_repository.WorkflowOperationRecord.assignment_id == task_id,
+        workflow_repository.WorkflowOperationRecord.owner_id == owner_id,
+        workflow_repository.WorkflowOperationRecord.operation_type
+        == operation_type,
+        workflow_repository.WorkflowOperationRecord.input_hash == input_hash,
+    )
+
+    creating_new = False
+    try:
+        with session_scope() as session:
+            workflow = session.scalar(
+                select(workflow_repository.AssignmentWorkflowRecord)
+                .where(
+                    workflow_repository.AssignmentWorkflowRecord.assignment_id
+                    == task_id,
+                    workflow_repository.AssignmentWorkflowRecord.owner_id
+                    == owner_id,
+                )
+                .with_for_update()
+            )
+            if workflow is None:
+                raise NotFound("workflow")
+            operation = session.scalar(
+                select(workflow_repository.WorkflowOperationRecord)
+                .where(*selector)
+                .with_for_update()
+            )
+            retry_checkpoint_updates: dict[str, Any] = {}
+            inherited_refs: list[str] = []
+            if operation is not None:
+                authorized_retry = (
+                    retry_observed_operation_id == operation.id
+                    and retry_observed_attempt == operation.attempt
+                    and _operation_is_retryable(operation, now=now)
+                )
+                if not authorized_retry:
+                    return (
+                        workflow_repository._detach_operation(operation),
+                        False,
+                        workflow.workflow_revision,
+                    )
+                next_attempt = operation.attempt + 1
+                if operation_type == "question_preparation":
+                    (
+                        initial_checkpoint_stage,
+                        retry_checkpoint_updates,
+                        inherited_refs,
+                    ) = _question_preparation_retry_checkpoint(
+                        operation,
+                        next_attempt=next_attempt,
+                        next_payload=validated_payload,
+                    )
+            else:
+                creating_new = True
+                next_attempt = 1
+                operation = workflow_repository.WorkflowOperationRecord(
+                    id=workflow_repository._new_id("op"),
+                    assignment_id=task_id,
+                    owner_id=owner_id,
+                    operation_type=operation_type,
+                    input_hash=input_hash,
+                    created_at=now,
+                )
+                session.add(operation)
+
+            combined_refs = workflow_repository._validate_artifact_refs(
+                list(dict.fromkeys([*validated_refs, *inherited_refs]))
+            )
+            if combined_refs:
+                matched_refs = set(session.scalars(
+                    select(file_repository.StoredFileRecord.id)
+                    .where(
+                        file_repository.StoredFileRecord.id.in_(combined_refs),
+                        file_repository.StoredFileRecord.owner_id == owner_id,
+                        file_repository.StoredFileRecord.assignment_id == task_id,
+                    )
+                    .with_for_update()
+                ))
+                if matched_refs != set(combined_refs):
+                    raise NotFound("stored_file")
+
+            checkpoint = {
+                **initial_checkpoint,
+                **retry_checkpoint_updates,
+                "operation_id": operation.id,
+                "attempt": next_attempt,
+            }
+            validated_checkpoint = workflow_repository._validate_json_object(
+                checkpoint,
+                field="checkpoint",
+                max_bytes=workflow_repository.MAX_OPERATION_CHECKPOINT_BYTES,
+            )
+            operation.attempt = next_attempt
+            operation.status = "pending"
+            operation.payload = validated_payload
+            operation.progress = {}
+            operation.checkpoint_revision = 1
+            operation.checkpoint_stage = initial_checkpoint_stage
+            operation.checkpoint = validated_checkpoint
+            operation.artifact_refs = combined_refs
+            operation.terminal_summary = None
+            operation.error_code = None
+            operation.completed_at = None
+            operation.expires_at = now + _OPERATION_RUNTIME_TTL_SECONDS
+            operation.lease_owner = None
+            operation.lease_token = None
+            operation.lease_expires_at = None
+            operation.lease_heartbeat_at = None
+            operation.updated_at = now
+
+            atomic_workflow_values = dict(workflow_values)
+            for field in workflow_job_id_fields:
+                atomic_workflow_values[field] = operation.id
+            claimed = session.execute(
+                update(workflow_repository.AssignmentWorkflowRecord)
+                .where(
+                    workflow_repository.AssignmentWorkflowRecord.assignment_id
+                    == task_id,
+                    workflow_repository.AssignmentWorkflowRecord.owner_id
+                    == owner_id,
+                    workflow_repository.AssignmentWorkflowRecord.workflow_revision
+                    == expected_workflow_revision,
+                    workflow_repository.AssignmentWorkflowRecord.active_operation
+                    .is_(None),
+                    workflow_repository.AssignmentWorkflowRecord.active_job_id
+                    .is_(None),
+                )
+                .values(
+                    **atomic_workflow_values,
+                    workflow_revision=(
+                        workflow_repository.AssignmentWorkflowRecord.workflow_revision
+                        + 1
+                    ),
+                    updated_at=now,
+                )
+            )
+            if claimed.rowcount != 1:
+                session.expire_all()
+                current_workflow = session.scalar(
+                    select(workflow_repository.AssignmentWorkflowRecord).where(
+                        workflow_repository.AssignmentWorkflowRecord.assignment_id
+                        == task_id,
+                        workflow_repository.AssignmentWorkflowRecord.owner_id
+                        == owner_id,
+                    )
+                )
+                if current_workflow is None:
+                    raise NotFound("workflow")
+                if (
+                    current_workflow.active_operation is not None
+                    or current_workflow.active_job_id is not None
+                ):
+                    raise InvalidTransition(
+                        "Another workflow operation is active.",
+                        code="workflow_busy",
+                    )
+                _raise_stale_revision()
+            session.flush()
+            return (
+                workflow_repository._detach_operation(operation),
+                True,
+                expected_workflow_revision + 1,
+            )
+    except IntegrityError:
+        # A concurrent same-input publisher may win the unique insert. It was
+        # not part of the caller's reviewed retry snapshot, so replay it
+        # without ever advancing its attempt.
+        if not creating_new:
+            raise
+        operation = find_task_operation(
+            task_id=task_id,
+            owner_id=owner_id,
+            operation_type=operation_type,
+            input_hash=input_hash,
+        )
+        if operation is None:
+            raise
+        workflow = workflow_repository.get_workflow(task_id, owner_id=owner_id)
+        return operation, False, workflow.workflow_revision
 
 
 def _detail_error(error: DomainError, fallback: str) -> str:
@@ -1293,9 +1818,12 @@ def _replace_draft_questions(
     replace_confirmed: bool = False, operation_id: str | None = None,
     expected_operation_attempt: int | None = None,
     expected_lease_token: str | None = None,
+    expected_checkpoint_revision: int | None = None,
+    expected_active_operation: str | None = None,
     operation_progress: dict | None = None,
     operation_checkpoint: dict | None = None,
     operation_artifact_refs: list[str] | None = None,
+    operation_checkpoint_stage: str = "completed",
     recognition_provider_id: str | None = None,
 ) -> int:
     """Atomically CAS the workflow and replace the complete draft question set."""
@@ -1329,6 +1857,7 @@ def _replace_draft_questions(
                 expected_operation_attempt=expected_operation_attempt,
                 expected_statuses=("running",),
                 expected_lease_token=expected_lease_token,
+                expected_checkpoint_revision=expected_checkpoint_revision,
             )
             if validated_refs:
                 matched_refs = set(session.scalars(select(
@@ -1366,13 +1895,21 @@ def _replace_draft_questions(
             if expected_workflow_revision is None
             else expected_workflow_revision
         )
+        workflow_predicates = [
+            workflow_repository.AssignmentWorkflowRecord.assignment_id == task_id,
+            workflow_repository.AssignmentWorkflowRecord.owner_id == owner_id,
+            workflow_repository.AssignmentWorkflowRecord.workflow_revision == expected,
+        ]
+        if expected_active_operation is not None:
+            workflow_predicates.extend((
+                workflow_repository.AssignmentWorkflowRecord.active_operation
+                == expected_active_operation,
+                workflow_repository.AssignmentWorkflowRecord.active_job_id
+                == operation_id,
+            ))
         result = session.execute(
             update(workflow_repository.AssignmentWorkflowRecord)
-            .where(
-                workflow_repository.AssignmentWorkflowRecord.assignment_id == task_id,
-                workflow_repository.AssignmentWorkflowRecord.owner_id == owner_id,
-                workflow_repository.AssignmentWorkflowRecord.workflow_revision == expected,
-            )
+            .where(*workflow_predicates)
             .values(
                 workflow_revision=workflow_repository.AssignmentWorkflowRecord.workflow_revision + 1,
                 presentation_status="problems_ready", active_operation=None,
@@ -1477,7 +2014,7 @@ def _replace_draft_questions(
             operation.completed_at = now
             operation.updated_at = now
             operation.checkpoint_revision += 1
-            operation.checkpoint_stage = "completed"
+            operation.checkpoint_stage = operation_checkpoint_stage
             operation.checkpoint = validated_checkpoint
             operation.artifact_refs = validated_refs
             operation.terminal_summary = terminal_summary

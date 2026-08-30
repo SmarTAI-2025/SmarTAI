@@ -16,6 +16,7 @@ from __future__ import annotations
 import time
 import logging
 import asyncio
+import json
 from collections import OrderedDict, deque
 from contextlib import asynccontextmanager
 from threading import RLock
@@ -25,6 +26,9 @@ from backend.config import settings
 from backend.models import JobProgress, ActiveUnit, ProgressEvent
 
 logger = logging.getLogger(__name__)
+
+_QUESTION_LABELS_UTF8_BUDGET_BYTES = 16 * 1024
+_QUESTION_LABEL_MAX_CHARACTERS = 120
 
 
 class ProgressReporter:
@@ -211,11 +215,7 @@ class ProgressReporter:
         ]
         if len(completed) != len(set(completed)) or not set(completed) <= set(normalized):
             raise ValueError("completed question ids must be unique configured ids")
-        labels = {
-            str(q_id): str(label).strip()[:120]
-            for q_id, label in (question_labels or {}).items()
-            if str(q_id) in normalized and str(label).strip()
-        }
+        labels = _bounded_question_labels(normalized, question_labels)
         now = time.time()
         async with self._lock:
             self._question_generation_ids = normalized
@@ -438,6 +438,47 @@ def _validated_stage_metrics(metrics: dict[str, int]) -> dict[str, int]:
             raise ValueError("stage metrics require named non-negative integers")
         normalized[key] = value
     return normalized
+
+
+def _bounded_question_labels(
+    question_ids: Sequence[str],
+    question_labels: Mapping[str, str] | None,
+) -> dict[str, str]:
+    """Keep optional display labels within a bounded UTF-8 JSON budget.
+
+    Durable operation progress has a 64 KiB limit and must always retain the
+    complete question-id and counter contract. Labels are optional UI hints,
+    so later labels are omitted when their encoded JSON entry would exceed a
+    smaller reserved budget. Iterating in question order keeps the result
+    deterministic, and whole strings are retained or omitted without cutting
+    a multi-byte UTF-8 sequence.
+    """
+
+    candidates = {
+        str(q_id): str(label).strip()[:_QUESTION_LABEL_MAX_CHARACTERS]
+        for q_id, label in (question_labels or {}).items()
+        if str(label).strip()
+    }
+    bounded: dict[str, str] = {}
+    encoded_bytes = len(b"{}")
+    for q_id in question_ids:
+        label = candidates.get(q_id)
+        if not label:
+            continue
+        encoded_entry = json.dumps(
+            {q_id: label},
+            ensure_ascii=False,
+            allow_nan=False,
+            separators=(",", ":"),
+        ).encode("utf-8")
+        additional_bytes = len(encoded_entry) - len(b"{}")
+        if bounded:
+            additional_bytes += len(b",")
+        if encoded_bytes + additional_bytes > _QUESTION_LABELS_UTF8_BUDGET_BYTES:
+            continue
+        bounded[q_id] = label
+        encoded_bytes += additional_bytes
+    return bounded
 
 
 # ─── Job-level progress store (in-memory, maps job_id → reporter) ──────────
