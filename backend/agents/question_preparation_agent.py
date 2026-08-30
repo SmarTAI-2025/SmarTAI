@@ -19,6 +19,7 @@ from backend.agents.ingest_agent import (
     split_ocr_markdown_sections,
 )
 from backend.llm.providers import BaseProvider
+from backend.domain.errors import ValidationError
 from backend.models import (
     ProblemSourceDraft,
     QuestionScorePolicy,
@@ -26,6 +27,11 @@ from backend.models import (
     is_programming_question_type,
 )
 from backend.progress.tracker import ProgressReporter
+from backend.services.question_structure import (
+    MajorQuestionStructureV1,
+    QuestionRubricValidationError,
+    validate_rubric_points,
+)
 from backend.skills.question_score import resolve_question_score_policy
 
 
@@ -313,6 +319,26 @@ async def prepare_question_packages(
         message="Detecting only risks that need teacher attention",
     )
     for q_id, problem in problem_data.items():
+        try:
+            structure = MajorQuestionStructureV1.model_validate(
+                problem.get("question_structure")
+            )
+            rubric_summary = validate_rubric_points(
+                str(problem.get("criterion") or ""),
+                problem.get("max_score", 10),
+                structure,
+            )
+        except QuestionRubricValidationError as exc:
+            raise ValidationError(
+                "Explicit subpart rubric points must add up to the major-question maximum.",
+                code=exc.summary.issue_code or "rubric_subpart_points_mismatch",
+            ) from exc
+        except Exception as exc:
+            raise ValidationError(
+                "Question structure could not be reduced to one scored row per major question.",
+                code="question_structure_mismatch",
+            ) from exc
+        problem["rubric_point_summary"] = rubric_summary.model_dump()
         problem["preparation_issues"] = issues.get(q_id, [])
 
     await reporter.set_stage_progress(
@@ -386,6 +412,26 @@ async def prepare_ocr_question_packages(
                 [],
             ))
         problem["preparation_issues"] = issues
+
+        try:
+            structure = MajorQuestionStructureV1.model_validate(
+                problem.get("question_structure")
+            )
+            problem["rubric_point_summary"] = validate_rubric_points(
+                str(problem.get("criterion") or ""),
+                problem.get("max_score", 10),
+                structure,
+            ).model_dump()
+        except QuestionRubricValidationError as exc:
+            raise ValidationError(
+                "Explicit subpart rubric points must add up to the major-question maximum.",
+                code=exc.summary.issue_code or "rubric_subpart_points_mismatch",
+            ) from exc
+        except Exception as exc:
+            raise ValidationError(
+                "Question structure could not be reduced to one scored row per major question.",
+                code="question_structure_mismatch",
+            ) from exc
 
     by_number = {
         str(problem.get("number") or "").strip(): q_id

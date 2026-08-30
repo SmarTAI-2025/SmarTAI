@@ -125,10 +125,12 @@ async def test_problem_upload_ocr_persists_normalized_questions(monkeypatch):
 
     assert [question.q_id for question in created] == ["q1"]
     assert created[0].stem == "OCR problem text"
-    assert created[0].source == {
-        "origin": "file_upload",
-        "filename": "problems.png",
-    }
+    assert created[0].source["origin"] == "file_upload"
+    assert created[0].source["filename"] == "problems.png"
+    structure = created[0].source["presentation"]["question_structure"]
+    assert structure["scoring_unit"] == "major_question"
+    assert structure["major_number"] == "1"
+    assert structure["subparts"] == []
     assert seen["text"] == "OCR problem text"
     assert ocr.calls[0]["purpose"] == "problems"
     stored_files = list_files(

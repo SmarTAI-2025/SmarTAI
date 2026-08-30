@@ -8,6 +8,11 @@ import time
 from typing import Annotated, List, Optional, Literal, Dict, Any
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from backend.services.question_structure import (
+    MajorQuestionStructureV1,
+    RubricPointSummaryV1,
+)
+
 
 # ─── Grading result models ────────────────────────────────────────────────────
 
@@ -155,6 +160,20 @@ class ProblemInfo(BaseModel):
         description=(
             "Authoritative maximum score frozen with the normalized question. "
             "Model output must never replace this value."
+        ),
+    )
+    question_structure: Optional[MajorQuestionStructureV1] = Field(
+        default=None,
+        description=(
+            "Versioned internal (a)/(b)/(1)/(2) metadata. The enclosing "
+            "ProblemInfo remains the only scored question and q_id."
+        ),
+    )
+    rubric_point_summary: Optional[RubricPointSummaryV1] = Field(
+        default=None,
+        description=(
+            "Derived summary of explicit subpart point allocations; never a "
+            "second source of scores."
         ),
     )
     review_status: Literal["needs_review", "edited", "confirmed"] = "needs_review"

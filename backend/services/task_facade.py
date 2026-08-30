@@ -79,6 +79,13 @@ from backend.services.result_artifacts import (
     build_artifact_files,
     build_artifact_manifest,
 )
+from backend.services.question_structure import (
+    MajorQuestionStructureV1,
+    QuestionRubricValidationError,
+    build_major_question_structure,
+    summarize_rubric_points,
+    validate_rubric_points,
+)
 from backend.services.submission_source_pipeline import (
     failure_phase_for_code,
     prepare_submission_sources,
@@ -581,6 +588,19 @@ def _workflow_grading_failure_code(workflow, run) -> str | None:
 def _serialize_problem(question) -> dict:
     presentation = dict((question.source or {}).get("presentation") or {})
     max_score = float(question.max_score)
+    structure = presentation.get("question_structure")
+    if structure:
+        structure = MajorQuestionStructureV1.model_validate(structure).model_dump()
+    else:
+        structure = build_major_question_structure(
+            {"number": question.number, "stem": question.stem},
+            major_order=question.order_index,
+            structure_source="legacy_single_question",
+            review_status="needs_review",
+        ).model_dump()
+    rubric_summary = summarize_rubric_points(
+        question.criterion or "", max_score, structure
+    ).model_dump()
     return {
         "q_id": question.q_id,
         "number": question.number,
@@ -594,6 +614,8 @@ def _serialize_problem(question) -> dict:
         "max_score_review_status": presentation.get(
             "max_score_review_status", "needs_review"
         ),
+        "question_structure": structure,
+        "rubric_point_summary": rubric_summary,
         "review_status": presentation.get("review_status", "needs_review"),
         "reference_answer": question.reference_answer,
         "solution_code": presentation.get("solution_code"),
@@ -1388,6 +1410,26 @@ def _replace_draft_questions(
             .values(is_active=False, updated_at=now)
         )
         for index, (q_id, raw) in enumerate(problem_data.items()):
+            structure = MajorQuestionStructureV1.model_validate(
+                raw.get("question_structure")
+                or build_major_question_structure(
+                    raw,
+                    major_order=index,
+                    structure_source="deterministic",
+                    review_status="needs_review",
+                ).model_dump()
+            )
+            try:
+                rubric_summary = validate_rubric_points(
+                    str(raw.get("criterion") or ""),
+                    float(raw.get("max_score") or 10),
+                    structure,
+                )
+            except QuestionRubricValidationError as exc:
+                raise ValidationError(
+                    "Explicit subpart rubric points must add up to the major-question maximum.",
+                    code=exc.summary.issue_code or "rubric_subpart_points_mismatch",
+                ) from exc
             source = {
                 "origin": "figma_task_facade",
                 "filename": filename,
@@ -1401,6 +1443,8 @@ def _replace_draft_questions(
                     "max_score_review_status": raw.get(
                         "max_score_review_status", "needs_review"
                     ),
+                    "question_structure": structure.model_dump(),
+                    "rubric_point_summary": rubric_summary.model_dump(),
                     "solution_code": raw.get("solution_code"),
                     "material_provenance": raw.get("material_provenance", {}),
                     "ai_completion_provenance": raw.get("ai_completion_provenance", {}),
@@ -2247,10 +2291,42 @@ def apply_question_patches_atomic(
                         code="invalid_max_score",
                     )
                 fields["max_score"] = max_score
-            if require_missing:
-                current_presentation = dict(
-                    (question.source or {}).get("presentation") or {}
+            current_presentation = dict(
+                (question.source or {}).get("presentation") or {}
+            )
+            if "stem" in fields:
+                structure = build_major_question_structure(
+                    {
+                        "number": question.number,
+                        "stem": fields["stem"],
+                    },
+                    major_order=question.order_index,
+                    review_status="needs_review",
                 )
+            else:
+                structure = MajorQuestionStructureV1.model_validate(
+                    current_presentation.get("question_structure")
+                    or build_major_question_structure(
+                        {"number": question.number, "stem": question.stem},
+                        major_order=question.order_index,
+                        structure_source="legacy_single_question",
+                        review_status="needs_review",
+                    ).model_dump()
+                )
+            try:
+                rubric_summary = validate_rubric_points(
+                    str(fields.get("criterion", question.criterion) or ""),
+                    fields.get("max_score", question.max_score),
+                    structure,
+                )
+            except QuestionRubricValidationError as exc:
+                raise ValidationError(
+                    "Explicit subpart rubric points must add up to the major-question maximum.",
+                    code=exc.summary.issue_code or "rubric_subpart_points_mismatch",
+                ) from exc
+            presentation_updates["question_structure"] = structure.model_dump()
+            presentation_updates["rubric_point_summary"] = rubric_summary.model_dump()
+            if require_missing:
                 for key in fields:
                     if getattr(question, key) not in (None, "", []):
                         raise InvalidTransition(
@@ -3292,6 +3368,36 @@ def update_problem(
                 issue for issue in presentation.get("preparation_issues", [])
                 if issue.get("field") != "max_score"
             ]
+        if "stem" in patch:
+            structure = build_major_question_structure(
+                {"number": question.number, "stem": patch["stem"]},
+                major_order=question.order_index,
+                structure_source="deterministic",
+                review_status="needs_review",
+            )
+        else:
+            structure = MajorQuestionStructureV1.model_validate(
+                presentation.get("question_structure")
+                or build_major_question_structure(
+                    {"number": question.number, "stem": question.stem},
+                    major_order=question.order_index,
+                    structure_source="legacy_single_question",
+                    review_status="needs_review",
+                ).model_dump()
+            )
+        try:
+            rubric_summary = validate_rubric_points(
+                str(patch.get("criterion", question.criterion) or ""),
+                patch.get("max_score", question.max_score),
+                structure,
+            )
+        except QuestionRubricValidationError as exc:
+            raise ValidationError(
+                "Explicit subpart rubric points must add up to the major-question maximum.",
+                code=exc.summary.issue_code or "rubric_subpart_points_mismatch",
+            ) from exc
+        presentation["question_structure"] = structure.model_dump()
+        presentation["rubric_point_summary"] = rubric_summary.model_dump()
         source["presentation"] = presentation
         for key in (
             "stem", "criterion", "max_score", "reference_answer", "test_cases"

@@ -271,7 +271,10 @@ def test_student_question_payload_excludes_teacher_only_fields():
     assert teacher_question["criterion"] == "Must show work"
     assert teacher_question["reference_answer"] == "2"
     assert teacher_question["test_cases"] == [{"input": "1+1", "output": "2"}]
-    assert teacher_question["source"] == {"origin": "teacher"}
+    assert teacher_question["source"]["origin"] == "teacher"
+    presentation = teacher_question["source"]["presentation"]
+    assert presentation["question_structure"]["scoring_unit"] == "major_question"
+    assert presentation["question_structure"]["subparts"] == []
 
     student_response = client.get(
         f"/assignments/{assignment['id']}/questions",
