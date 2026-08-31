@@ -215,8 +215,10 @@ def create_app() -> FastAPI:
         from backend.services.workflow_worker import WorkflowWorker
         from backend.services.source_cleanup import (
             run_source_cleanup,
+            run_source_replacement_cleanup,
             run_source_reservation_cleanup,
         )
+        from backend.services.task_deletion import run_task_deletion
         from backend.services.task_facade import (
             run_durable_problem_extraction,
             run_durable_submission_recognition,
@@ -234,7 +236,9 @@ def create_app() -> FastAPI:
             "ai_completion": run_durable_ai_completion,
             "question_preparation": run_durable_question_preparation,
             "source_cleanup": run_source_cleanup,
+            "source_replacement_cleanup": run_source_replacement_cleanup,
             "source_reservation_cleanup": run_source_reservation_cleanup,
+            "task_delete": run_task_deletion,
         })
         _workflow_worker["worker"] = worker
         _workflow_worker["task"] = _asyncio.create_task(worker.run_forever())

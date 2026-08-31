@@ -199,7 +199,8 @@ def set_assignment_tags(
             select(AssignmentRecord).where(
                 AssignmentRecord.id == assignment_id,
                 AssignmentRecord.teacher_id == owner_id,
-            )
+                AssignmentRecord.deletion_requested_at.is_(None),
+            ).with_for_update()
         )
         if assignment is None:
             raise NotFound("assignment")
@@ -218,6 +219,7 @@ def set_assignment_tags(
                     select(AssignmentRecord.id).where(
                         AssignmentRecord.id == assignment_id,
                         AssignmentRecord.teacher_id == owner_id,
+                        AssignmentRecord.deletion_requested_at.is_(None),
                     )
                 )
             )
@@ -241,6 +243,7 @@ def list_assignment_tags(*, assignment_id: str, owner_id: str) -> list[Tag]:
             select(AssignmentRecord.id).where(
                 AssignmentRecord.id == assignment_id,
                 AssignmentRecord.teacher_id == owner_id,
+                AssignmentRecord.deletion_requested_at.is_(None),
             )
         )
         if assignment is None:
@@ -255,6 +258,7 @@ def list_assignment_tags(*, assignment_id: str, owner_id: str) -> list[Tag]:
             .where(
                 AssignmentTagRecord.assignment_id == assignment_id,
                 AssignmentRecord.teacher_id == owner_id,
+                AssignmentRecord.deletion_requested_at.is_(None),
                 TagRecord.owner_id == owner_id,
             )
             .order_by(AssignmentTagRecord.assigned_at, TagRecord.id)
@@ -270,6 +274,7 @@ def list_assignment_tag_ids(*, assignment_id: str, owner_id: str) -> list[str]:
             select(AssignmentRecord.id).where(
                 AssignmentRecord.id == assignment_id,
                 AssignmentRecord.teacher_id == owner_id,
+                AssignmentRecord.deletion_requested_at.is_(None),
             )
         )
         if assignment is None:
@@ -284,6 +289,7 @@ def list_assignment_tag_ids(*, assignment_id: str, owner_id: str) -> list[str]:
             .where(
                 AssignmentTagRecord.assignment_id == assignment_id,
                 AssignmentRecord.teacher_id == owner_id,
+                AssignmentRecord.deletion_requested_at.is_(None),
                 TagRecord.owner_id == owner_id,
             )
             .order_by(AssignmentTagRecord.assigned_at, AssignmentTagRecord.tag_id)

@@ -252,6 +252,140 @@ async def run_source_cleanup(operation) -> None:
     )
 
 
+async def run_source_replacement_cleanup(operation) -> None:
+    """Delete originals superseded by an atomically adopted replacement."""
+    payload = operation.payload
+    if not isinstance(payload, dict):
+        raise ValidationError(
+            "The source-replacement payload is invalid.",
+            code="invalid_source_cleanup_payload",
+        )
+    _required_string(payload, "producer_operation_id")
+    _required_positive_int(payload, "producer_operation_attempt")
+    entries = payload.get("files")
+    if (
+        not isinstance(entries, list)
+        or any(not isinstance(entry, dict) for entry in entries)
+    ):
+        raise ValidationError(
+            "The source-replacement payload is invalid.",
+            code="invalid_source_cleanup_payload",
+        )
+
+    storage = get_storage()
+    deleted = 0
+    already_deleted = 0
+    superseded = 0
+    failed_ids: list[str] = []
+    for index, entry in enumerate(entries):
+        claim = await run_in_threadpool(
+            source_storage_repository.claim_replaced_source_delete,
+            operation_id=operation.operation_id,
+            owner_id=operation.owner_id,
+            assignment_id=operation.assignment_id,
+            operation_attempt=operation.attempt,
+            worker_id=operation.worker_id,
+            lease_token=str(operation.lease_token),
+            entry=entry,
+        )
+        if claim.status in {"already_deleted", "missing_record"}:
+            result = source_storage_repository.CleanupDeleteResult(
+                claim.status, claim.file_id, claim.size_bytes
+            )
+        elif claim.status == "superseded":
+            superseded += 1
+            result = source_storage_repository.CleanupDeleteResult(
+                claim.status, claim.file_id, claim.size_bytes
+            )
+        else:
+            storage_deleted = False
+            if (
+                claim.status == "ready"
+                and claim.storage_backend == getattr(storage, "name", "unknown")
+                and claim.storage_key
+                and claim.claim_token
+            ):
+                try:
+                    await run_in_threadpool(storage.delete, claim.storage_key)
+                except StorageObjectNotFound:
+                    storage_deleted = True
+                except Exception:
+                    storage_deleted = False
+                else:
+                    storage_deleted = True
+            result = await run_in_threadpool(
+                source_storage_repository.finish_replaced_source_delete,
+                operation_id=operation.operation_id,
+                owner_id=operation.owner_id,
+                assignment_id=operation.assignment_id,
+                operation_attempt=operation.attempt,
+                worker_id=operation.worker_id,
+                lease_token=str(operation.lease_token),
+                entry=entry,
+                claim_token=str(claim.claim_token),
+                deleted=storage_deleted,
+            )
+        if result.status == "deleted":
+            deleted += 1
+        elif result.status in {"already_deleted", "missing_record"}:
+            already_deleted += 1
+        elif result.status == "superseded":
+            if claim.status != "superseded":
+                superseded += 1
+        elif result.status == "failed":
+            failed_ids.append(result.file_id)
+        await operation.update_progress({
+            "state": "cleaning" if index + 1 < len(entries) else "settling",
+            "total": len(entries),
+            "processed": index + 1,
+            "deleted": deleted,
+            "already_deleted": already_deleted,
+            "superseded": superseded,
+            "failed": len(failed_ids),
+            "failed_file_ids": failed_ids[-128:],
+            "retry_count": int(operation.progress.get("retry_count") or 0),
+        })
+
+    if failed_ids:
+        retry_count = int(operation.progress.get("retry_count") or 0) + 1
+        retry_at = time.time() + _retry_delay(retry_count)
+        await operation.retry_later(
+            retry_at=retry_at,
+            error_code="source_replacement_cleanup_failed",
+            progress={
+                "state": "retrying",
+                "total": len(entries),
+                "deleted": deleted,
+                "already_deleted": already_deleted,
+                "superseded": superseded,
+                "failed": len(failed_ids),
+                "failed_file_ids": failed_ids[-128:],
+                "retry_count": retry_count,
+                "retry_at": retry_at,
+            },
+        )
+        return
+
+    await operation.complete(
+        status="completed",
+        summary={
+            "status": "completed",
+            "total_count": len(entries),
+            "deleted_count": deleted,
+            "already_deleted_count": already_deleted,
+            "superseded_count": superseded,
+            "failed_count": 0,
+        },
+        checkpoint={
+            "status": "completed",
+            "processed_count": len(entries),
+            "deleted_count": deleted,
+            "already_deleted_count": already_deleted,
+            "superseded_count": superseded,
+        },
+    )
+
+
 async def run_source_reservation_cleanup(operation) -> None:
     payload = operation.payload
     if not isinstance(payload, dict):

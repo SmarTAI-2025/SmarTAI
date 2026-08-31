@@ -25,7 +25,10 @@ from sqlalchemy.orm import Mapped, mapped_column
 from backend.db.base import Base
 from backend.db.models import AssignmentRecord, StoredFileRecord
 from backend.db.session import session_scope
-from backend.db.workflow_repository import WorkflowOperationRecord
+from backend.db.workflow_repository import (
+    AssignmentWorkflowRecord,
+    WorkflowOperationRecord,
+)
 from backend.domain.errors import LeaseLost, NotFound, ValidationError, VersionConflict
 from backend.domain.source_outcomes import (
     SOURCE_OUTCOME_STATUSES,
@@ -432,6 +435,38 @@ def assert_source_write_fence(
         )
 
 
+def _lock_live_source_task_after_operation(
+    session,
+    *,
+    owner_id: str,
+    assignment_id: str,
+) -> AssignmentRecord:
+    """Complete the canonical source write order O -> W -> live A."""
+
+    workflow = session.scalar(
+        select(AssignmentWorkflowRecord)
+        .where(
+            AssignmentWorkflowRecord.assignment_id == assignment_id,
+            AssignmentWorkflowRecord.owner_id == owner_id,
+        )
+        .with_for_update()
+    )
+    if workflow is None:
+        raise NotFound("workflow_source")
+    assignment = session.scalar(
+        select(AssignmentRecord)
+        .where(
+            AssignmentRecord.id == assignment_id,
+            AssignmentRecord.teacher_id == owner_id,
+            AssignmentRecord.deletion_requested_at.is_(None),
+        )
+        .with_for_update()
+    )
+    if assignment is None:
+        raise NotFound("workflow_source")
+    return assignment
+
+
 def register_source(
     *,
     owner_id: str,
@@ -448,13 +483,6 @@ def register_source(
 
     try:
         with session_scope() as session:
-            assignment = session.scalar(select(AssignmentRecord.id).where(
-                AssignmentRecord.id == assignment_id,
-                AssignmentRecord.teacher_id == owner_id,
-            ))
-            if assignment is None:
-                raise NotFound("workflow_source")
-
             operation = _lock_source_write_operation(
                 session,
                 owner_id=owner_id,
@@ -462,6 +490,11 @@ def register_source(
                 operation_id=operation_id,
                 expected_attempt=expected_attempt,
                 expected_lease_token=expected_lease_token,
+            )
+            _lock_live_source_task_after_operation(
+                session,
+                owner_id=owner_id,
+                assignment_id=assignment_id,
             )
 
             stored_file = session.scalar(select(StoredFileRecord).where(
@@ -515,6 +548,19 @@ def register_source(
             return _source_dto(row, stored_file), True
     except IntegrityError:
         with session_scope() as session:
+            _lock_source_write_operation(
+                session,
+                owner_id=owner_id,
+                assignment_id=assignment_id,
+                operation_id=operation_id,
+                expected_attempt=expected_attempt,
+                expected_lease_token=expected_lease_token,
+            )
+            _lock_live_source_task_after_operation(
+                session,
+                owner_id=owner_id,
+                assignment_id=assignment_id,
+            )
             existing = session.scalar(select(WorkflowSourceItemRecord).where(
                 WorkflowSourceItemRecord.operation_id == operation_id,
                 WorkflowSourceItemRecord.attempt == expected_attempt,
@@ -772,6 +818,8 @@ def finalize_pending_sources_as_failed(
                 stable_error_code=reason_code,
                 failure_phase=failure_phase,
                 retryable=retryable,
+                expected_attempt=expected_attempt,
+                _allow_terminal_diagnostic=True,
             )
             created_count += int(created)
         except VersionConflict:
@@ -802,6 +850,74 @@ def get_outcome(
         return _outcome_dto(row) if row is not None else None
 
 
+def _lock_outcome_source_for_write(
+    session,
+    *,
+    source_id: str,
+    owner_id: str,
+    expected_attempt: int | None,
+    expected_lease_token: str | None,
+    allow_terminal_diagnostic: bool,
+) -> WorkflowSourceItemRecord:
+    """Fence one immutable outcome through O -> W -> live A."""
+
+    hint = session.scalar(
+        select(WorkflowSourceItemRecord).where(
+            WorkflowSourceItemRecord.id == source_id,
+            WorkflowSourceItemRecord.owner_id == owner_id,
+        )
+    )
+    if hint is None:
+        raise NotFound("workflow_source")
+    attempt = hint.attempt if expected_attempt is None else expected_attempt
+    if hint.attempt != attempt:
+        raise VersionConflict(
+            "A newer workflow operation attempt is active.",
+            code="stale_operation_attempt",
+        )
+    if allow_terminal_diagnostic:
+        operation = session.scalar(
+            _owned_operation_for_update_statement(
+                operation_id=hint.operation_id,
+                assignment_id=hint.assignment_id,
+                owner_id=owner_id,
+            )
+        )
+        if operation is None:
+            raise NotFound("workflow_source")
+        if operation.attempt != attempt:
+            raise VersionConflict(
+                "A newer workflow operation attempt is active.",
+                code="stale_operation_attempt",
+            )
+    else:
+        _lock_source_write_operation(
+            session,
+            owner_id=owner_id,
+            assignment_id=hint.assignment_id,
+            operation_id=hint.operation_id,
+            expected_attempt=attempt,
+            expected_lease_token=expected_lease_token,
+        )
+    _lock_live_source_task_after_operation(
+        session,
+        owner_id=owner_id,
+        assignment_id=hint.assignment_id,
+    )
+    source = session.scalar(
+        select(WorkflowSourceItemRecord).where(
+            WorkflowSourceItemRecord.id == source_id,
+            WorkflowSourceItemRecord.owner_id == owner_id,
+            WorkflowSourceItemRecord.operation_id == hint.operation_id,
+            WorkflowSourceItemRecord.assignment_id == hint.assignment_id,
+            WorkflowSourceItemRecord.attempt == attempt,
+        )
+    )
+    if source is None:
+        raise NotFound("workflow_source")
+    return source
+
+
 def record_outcome(
     *,
     source_id: str,
@@ -814,66 +930,80 @@ def record_outcome(
     failure_phase: str | None,
     retryable: bool,
     artifact_file_id: str | None = None,
+    expected_attempt: int | None = None,
+    expected_lease_token: str | None = None,
+    _allow_terminal_diagnostic: bool = False,
 ) -> tuple[WorkflowSourceOutcome, bool]:
-    with session_scope() as session:
-        source = session.scalar(select(WorkflowSourceItemRecord).where(
-            WorkflowSourceItemRecord.id == source_id,
-            WorkflowSourceItemRecord.owner_id == owner_id,
-        ))
-        if source is None:
-            raise NotFound("workflow_source")
+    _validate_outcome_evidence(
+        status=status,
+        student_candidate=student_candidate,
+        matched_answer_count=matched_answer_count,
+        unknown_question_ids=unknown_question_ids,
+        stable_error_code=stable_error_code,
+        failure_phase=failure_phase,
+    )
 
-        _validate_outcome_evidence(
-            status=status,
-            student_candidate=student_candidate,
-            matched_answer_count=matched_answer_count,
-            unknown_question_ids=unknown_question_ids,
-            stable_error_code=stable_error_code,
-            failure_phase=failure_phase,
-        )
+    try:
+        with session_scope() as session:
+            source = _lock_outcome_source_for_write(
+                session,
+                source_id=source_id,
+                owner_id=owner_id,
+                expected_attempt=expected_attempt,
+                expected_lease_token=expected_lease_token,
+                allow_terminal_diagnostic=_allow_terminal_diagnostic,
+            )
 
-        if artifact_file_id is not None:
-            artifact = session.scalar(select(StoredFileRecord.id).where(
-                StoredFileRecord.id == artifact_file_id,
-                StoredFileRecord.owner_id == owner_id,
-                StoredFileRecord.assignment_id == source.assignment_id,
-            ))
-            if artifact is None:
-                raise NotFound("workflow_source")
+            if artifact_file_id is not None:
+                artifact = session.scalar(select(StoredFileRecord.id).where(
+                    StoredFileRecord.id == artifact_file_id,
+                    StoredFileRecord.owner_id == owner_id,
+                    StoredFileRecord.assignment_id == source.assignment_id,
+                ))
+                if artifact is None:
+                    raise NotFound("workflow_source")
 
-        existing = session.get(WorkflowSourceOutcomeRecord, source_id)
-        if existing is not None:
-            if not _same_outcome(
-                existing,
+            existing = session.get(WorkflowSourceOutcomeRecord, source_id)
+            if existing is not None:
+                if not _same_outcome(
+                    existing,
+                    status=status,
+                    student_candidate=student_candidate,
+                    matched_answer_count=matched_answer_count,
+                    unknown_question_ids=unknown_question_ids,
+                    stable_error_code=stable_error_code,
+                    failure_phase=failure_phase,
+                    retryable=retryable,
+                    artifact_file_id=artifact_file_id,
+                ):
+                    raise VersionConflict("Workflow source outcome already exists.")
+                return _outcome_dto(existing), False
+
+            row = WorkflowSourceOutcomeRecord(
+                source_id=source_id,
                 status=status,
                 student_candidate=student_candidate,
                 matched_answer_count=matched_answer_count,
-                unknown_question_ids=unknown_question_ids,
+                unknown_question_ids=list(unknown_question_ids),
                 stable_error_code=stable_error_code,
                 failure_phase=failure_phase,
                 retryable=retryable,
                 artifact_file_id=artifact_file_id,
-            ):
-                raise VersionConflict("Workflow source outcome already exists.")
-            return _outcome_dto(existing), False
-
-        row = WorkflowSourceOutcomeRecord(
-            source_id=source_id,
-            status=status,
-            student_candidate=student_candidate,
-            matched_answer_count=matched_answer_count,
-            unknown_question_ids=list(unknown_question_ids),
-            stable_error_code=stable_error_code,
-            failure_phase=failure_phase,
-            retryable=retryable,
-            artifact_file_id=artifact_file_id,
-            created_at=time.time(),
-        )
-        session.add(row)
-        try:
+                created_at=time.time(),
+            )
+            session.add(row)
             session.flush()
-        except IntegrityError:
-            session.rollback()
+            return _outcome_dto(row), True
+    except IntegrityError:
+        with session_scope() as session:
+            _lock_outcome_source_for_write(
+                session,
+                source_id=source_id,
+                owner_id=owner_id,
+                expected_attempt=expected_attempt,
+                expected_lease_token=expected_lease_token,
+                allow_terminal_diagnostic=_allow_terminal_diagnostic,
+            )
             existing = session.scalar(
                 select(WorkflowSourceOutcomeRecord)
                 .join(
@@ -901,4 +1031,3 @@ def record_outcome(
             ):
                 raise VersionConflict("Workflow source outcome already exists.")
             return _outcome_dto(existing), False
-        return _outcome_dto(row), True

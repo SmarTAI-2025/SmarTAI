@@ -25,5 +25,14 @@ class StorageBackend(ABC):
     @abstractmethod
     def exists(self, key: str) -> bool: ...
 
+    def list_keys(self, prefix: str) -> list[str]:
+        """List exact keys below a business prefix for orphan reconciliation.
+
+        Backends must opt in explicitly.  Task deletion retries instead of
+        claiming completion when a configured backend cannot prove its prefix
+        empty.
+        """
+        raise StorageUnavailable("storage_prefix_listing_unavailable")
+
     def ready(self) -> bool:
         return True

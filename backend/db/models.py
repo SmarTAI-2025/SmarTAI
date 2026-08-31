@@ -352,6 +352,12 @@ class AssignmentRecord(Base):
         Float, nullable=False, default=time.time, onupdate=time.time
     )
     published_at: Mapped[float | None] = mapped_column(Float, nullable=True)
+    # A delete request is immediately hidden from product reads, while the
+    # durable task-delete worker retains the parent until every physical
+    # object has been confirmed absent.
+    deletion_requested_at: Mapped[float | None] = mapped_column(
+        Float, nullable=True, index=True
+    )
     # Optimistic-lock version: every editable update must match the expected
     # value in its WHERE clause and bump it, so a stale client write is a 409
     # rather than a silent last-writer-wins overwrite.
@@ -797,6 +803,17 @@ class StoredFileRecord(Base):
         String(64), nullable=True
     )
     cleanup_claimed_at: Mapped[float | None] = mapped_column(Float, nullable=True)
+    replacement_claim_group_id: Mapped[str | None] = mapped_column(
+        String(64), nullable=True
+    )
+    replacement_claim_expires_at: Mapped[float | None] = mapped_column(
+        Float, nullable=True
+    )
+    # New originals retain the quota-credit group that admitted them until a
+    # workflow generation atomically adopts (or abandons) that group.
+    replacement_group_id: Mapped[str | None] = mapped_column(
+        String(64), nullable=True
+    )
     unavailable_at: Mapped[float | None] = mapped_column(Float, nullable=True)
     # Explicit resource links instead of a generic task_id. Exactly one of the
     # business FKs is expected to be set per file (enforced in application code;
@@ -830,8 +847,16 @@ class StoredFileRecord(Base):
         ),
         CheckConstraint(
             "availability_reason IS NULL OR availability_reason IN "
-            "('task_finalized', 'missing', 'storage_delete_failed')",
+            "('task_finalized', 'task_deleted', 'replaced', 'missing', "
+            "'storage_delete_failed')",
             name="ck_stored_files_availability_reason",
+        ),
+        CheckConstraint(
+            "(replacement_claim_group_id IS NULL AND "
+            "replacement_claim_expires_at IS NULL) OR "
+            "(replacement_claim_group_id IS NOT NULL AND "
+            "replacement_claim_expires_at IS NOT NULL)",
+            name="ck_stored_files_replacement_claim_consistency",
         ),
         CheckConstraint(
             "(source_quota_owner_id IS NULL AND source_quota_bytes = 0) OR "
@@ -887,6 +912,12 @@ class SourceStorageReservationRecord(Base):
     content_type: Mapped[str | None] = mapped_column(String(255), nullable=True)
     requested_bytes: Mapped[int] = mapped_column(Integer, nullable=False)
     sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    replacement_group_id: Mapped[str | None] = mapped_column(
+        String(64), nullable=True
+    )
+    replacement_credit_bytes: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default=text("0")
+    )
     purpose: Mapped[str] = mapped_column(
         String(32), nullable=False, default="upload", server_default="upload"
     )
@@ -907,12 +938,13 @@ class SourceStorageReservationRecord(Base):
 
     __table_args__ = (
         CheckConstraint(
-            "requested_bytes >= 0 AND retry_count >= 0 "
+            "requested_bytes >= 0 AND replacement_credit_bytes >= 0 "
+            "AND retry_count >= 0 "
             "AND source_lifecycle_epoch >= 0",
             name="ck_source_storage_reservations_counters_nonnegative",
         ),
         CheckConstraint(
-            "purpose IN ('upload', 'orphan_cleanup')",
+            "purpose IN ('upload', 'orphan_cleanup', 'artifact_write')",
             name="ck_source_storage_reservations_purpose",
         ),
         CheckConstraint(
@@ -920,9 +952,7 @@ class SourceStorageReservationRecord(Base):
             name="ck_source_storage_reservations_state",
         ),
         CheckConstraint(
-            "kind IN ('problem', 'problem_source', 'submission', "
-            "'submission_container', 'submission_source', "
-            "'submission_source_reference')",
+            "length(kind) BETWEEN 1 AND 64",
             name="ck_source_storage_reservations_kind",
         ),
         CheckConstraint(

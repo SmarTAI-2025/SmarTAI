@@ -188,7 +188,7 @@ def _all_results_for_assignment(
 ) -> list:
     """Results from the run selected by the current workflow generation."""
     try:
-        workflow = workflow_repository.get_workflow(
+        workflow = workflow_repository.get_live_workflow(
             assignment_id, owner_id=teacher_id
         )
     except NotFound:

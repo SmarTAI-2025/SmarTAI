@@ -154,8 +154,8 @@ export function SettingsPage() {
                   <p className="mt-3 text-[11px] leading-4 text-muted-foreground">
                     {tx(
                       locale,
-                      `系统正在自动清理 ${sourceUsage.cleanup_pending_count} 个已完成任务的原文件；清理成功后会自动释放 ${formatBytes(sourceUsage.cleanup_pending_bytes)}。`,
-                      `The backend is automatically cleaning ${sourceUsage.cleanup_pending_count} original file(s) from completed tasks. ${formatBytes(sourceUsage.cleanup_pending_bytes)} will be released when cleanup succeeds.`,
+                      `系统正在自动清理 ${sourceUsage.cleanup_pending_count} 个待删除原文件；清理成功后会自动释放 ${formatBytes(sourceUsage.cleanup_pending_bytes)}。`,
+                      `The backend is automatically cleaning ${sourceUsage.cleanup_pending_count} original file(s) pending deletion. ${formatBytes(sourceUsage.cleanup_pending_bytes)} will be released when cleanup succeeds.`,
                     )}
                   </p>
                 ) : null}

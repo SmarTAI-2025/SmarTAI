@@ -29,10 +29,16 @@ from backend.db.models import (
 from backend.db.session import session_scope
 from backend.domain.errors import (
     InvalidTransition,
+    LeaseLost,
+    NotFound,
     SourceStorageIntegrityFailed,
     SourceStorageWriteFailed,
 )
-from backend.domain.source_storage import RAW_SOURCE_KINDS, SOURCE_FILE_AVAILABLE
+from backend.domain.source_storage import (
+    RAW_SOURCE_KINDS,
+    SOURCE_FILE_AVAILABLE,
+    TASK_SOURCE_CLEANUP_KINDS,
+)
 from backend.storage.base import StorageBackend, StorageObjectNotFound
 
 
@@ -74,6 +80,9 @@ class StoredFile:
     cleanup_attempt_count: int = 0
     cleanup_claim_token: str | None = None
     cleanup_claimed_at: float | None = None
+    replacement_claim_group_id: str | None = None
+    replacement_claim_expires_at: float | None = None
+    replacement_group_id: str | None = None
     unavailable_at: float | None = None
     assignment_id: str | None = None
     submission_revision_id: str | None = None
@@ -104,6 +113,9 @@ def _record_to_dto(record: StoredFileRecord) -> StoredFile:
         cleanup_attempt_count=record.cleanup_attempt_count,
         cleanup_claim_token=record.cleanup_claim_token,
         cleanup_claimed_at=record.cleanup_claimed_at,
+        replacement_claim_group_id=record.replacement_claim_group_id,
+        replacement_claim_expires_at=record.replacement_claim_expires_at,
+        replacement_group_id=record.replacement_group_id,
         unavailable_at=record.unavailable_at,
         assignment_id=record.assignment_id,
         submission_revision_id=record.submission_revision_id,
@@ -118,16 +130,13 @@ def save_file(*, storage: StorageBackend, owner_id: str, kind: str,
               knowledge_document_id: str | None = None,
               fence_operation_id: str | None = None,
               fence_operation_attempt: int | None = None,
-              fence_lease_token: str | None = None) -> StoredFile:
-    fence_values = (
-        fence_operation_id,
-        fence_operation_attempt,
-        fence_lease_token,
-    )
-    if any(value is not None for value in fence_values) and not all(
-        value is not None for value in fence_values
-    ):
-        raise ValueError("Operation artifact fence must be provided in full.")
+              fence_lease_token: str | None = None,
+              replacement_file_ids: tuple[str, ...] = (),
+              replacement_group_id: str | None = None) -> StoredFile:
+    if (fence_operation_id is None) != (fence_operation_attempt is None):
+        raise ValueError("Operation artifact fence requires id and attempt.")
+    if fence_lease_token is not None and fence_operation_id is None:
+        raise ValueError("Operation artifact lease requires an operation fence.")
     if fence_operation_id is not None and assignment_id is None:
         raise ValueError("Operation artifact fence requires assignment_id.")
     file_id = uuid.uuid4().hex
@@ -161,6 +170,30 @@ def save_file(*, storage: StorageBackend, owner_id: str, kind: str,
             fence_operation_id=fence_operation_id,
             fence_operation_attempt=fence_operation_attempt,
             fence_lease_token=fence_lease_token,
+            replacement_file_ids=replacement_file_ids,
+            replacement_group_id=replacement_group_id,
+        )
+    if replacement_file_ids or replacement_group_id is not None:
+        raise ValueError("Only task originals support replacement quota credit.")
+    if assignment_id is not None and knowledge_document_id is None:
+        if submission_revision_id is not None:
+            raise ValueError(
+                "A task artifact cannot link an assignment and revision together."
+            )
+        return _save_task_artifact_with_intent(
+            storage=storage,
+            file_id=file_id,
+            owner_id=owner_id,
+            kind=kind,
+            original_name=bounded_original_name,
+            storage_key=key,
+            content=content,
+            content_type=content_type,
+            digest=digest,
+            assignment_id=assignment_id,
+            fence_operation_id=fence_operation_id,
+            fence_operation_attempt=fence_operation_attempt,
+            fence_lease_token=fence_lease_token,
         )
     storage.save(key, content)
     record = StoredFile(
@@ -176,24 +209,39 @@ def save_file(*, storage: StorageBackend, owner_id: str, kind: str,
             if fence_operation_id is not None:
                 # Import lazily to keep the normalized file-model module free
                 # of a module-initialization cycle with workflow_repository.
-                from backend.db.workflow_repository import WorkflowOperationRecord
-                from backend.domain.errors import LeaseLost
+                from backend.db.workflow_repository import (
+                    AssignmentWorkflowRecord,
+                    WorkflowOperationRecord,
+                )
 
                 checked_at = time.time()
-                fenced = session.execute(
-                    update(WorkflowOperationRecord)
-                    .where(
-                        WorkflowOperationRecord.id == fence_operation_id,
-                        WorkflowOperationRecord.owner_id == owner_id,
-                        WorkflowOperationRecord.assignment_id == assignment_id,
-                        WorkflowOperationRecord.attempt
-                        == fence_operation_attempt,
+                fence_conditions = [
+                    WorkflowOperationRecord.id == fence_operation_id,
+                    WorkflowOperationRecord.owner_id == owner_id,
+                    WorkflowOperationRecord.assignment_id == assignment_id,
+                    WorkflowOperationRecord.attempt == fence_operation_attempt,
+                ]
+                if fence_lease_token is None:
+                    # HTTP preflights create a durable preparing operation
+                    # before the external object write.  This keeps task
+                    # deletion from completing its prefix scan while the
+                    # upload is in flight, without inventing a worker lease.
+                    fence_conditions.extend((
+                        WorkflowOperationRecord.status == "preparing",
+                        WorkflowOperationRecord.expires_at.is_not(None),
+                        WorkflowOperationRecord.expires_at > checked_at,
+                    ))
+                else:
+                    fence_conditions.extend((
                         WorkflowOperationRecord.status == "running",
                         WorkflowOperationRecord.lease_token
                         == fence_lease_token,
                         WorkflowOperationRecord.lease_expires_at.is_not(None),
                         WorkflowOperationRecord.lease_expires_at > checked_at,
-                    )
+                    ))
+                fenced = session.execute(
+                    update(WorkflowOperationRecord)
+                    .where(*fence_conditions)
                     # A matched UPDATE both validates and locks the operation
                     # row until the StoredFile insert commits. Reclaim cannot
                     # rotate the lease between the fence and publication.
@@ -211,14 +259,77 @@ def save_file(*, storage: StorageBackend, owner_id: str, kind: str,
                 if (
                     operation is None
                     or operation.attempt != fence_operation_attempt
-                    or operation.status != "running"
-                    or operation.lease_token != fence_lease_token
-                    or operation.lease_expires_at is None
-                    or operation.lease_expires_at <= time.time()
+                    or (
+                        fence_lease_token is None
+                        and (
+                            operation.status != "preparing"
+                            or operation.expires_at is None
+                            or operation.expires_at <= time.time()
+                        )
+                    )
+                    or (
+                        fence_lease_token is not None
+                        and (
+                            operation.status != "running"
+                            or operation.lease_token != fence_lease_token
+                            or operation.lease_expires_at is None
+                            or operation.lease_expires_at <= time.time()
+                        )
+                    )
                 ):
                     raise LeaseLost(
                         "Operation lease lost before artifact publication."
                     )
+                # O -> W -> A is the canonical producer publication order.
+                # Task deletion owns W -> A, so once its tombstone commits a
+                # stale producer can no longer publish task metadata.
+                session.scalar(
+                    select(AssignmentWorkflowRecord)
+                    .where(
+                        AssignmentWorkflowRecord.assignment_id == assignment_id,
+                        AssignmentWorkflowRecord.owner_id == owner_id,
+                    )
+                    .with_for_update()
+                )
+                live_assignment = session.scalar(
+                    select(AssignmentRecord)
+                    .where(
+                        AssignmentRecord.id == assignment_id,
+                        AssignmentRecord.teacher_id == owner_id,
+                        AssignmentRecord.deletion_requested_at.is_(None),
+                    )
+                    .with_for_update()
+                )
+                if live_assignment is None:
+                    raise LeaseLost(
+                        "Task deletion fenced artifact publication.",
+                        code="task_deleted",
+                    )
+            elif assignment_id is not None:
+                # Non-worker setup paths still fail closed once the tombstone
+                # exists. Long-running external writes must use the operation
+                # fence above so deletion also waits for their in-flight span.
+                from backend.db.workflow_repository import AssignmentWorkflowRecord
+
+                session.scalar(
+                    select(AssignmentWorkflowRecord)
+                    .where(
+                        AssignmentWorkflowRecord.assignment_id == assignment_id,
+                        AssignmentWorkflowRecord.owner_id == owner_id,
+                    )
+                    .with_for_update()
+                )
+                live_assignment = session.scalar(
+                    select(AssignmentRecord)
+                    .where(
+                        AssignmentRecord.id == assignment_id,
+                        AssignmentRecord.teacher_id == owner_id,
+                        AssignmentRecord.deletion_requested_at.is_(None),
+                    )
+                    .with_for_update()
+                )
+                if live_assignment is None:
+                    raise NotFound("assignment")
             session.add(StoredFileRecord(**record.__dict__))
     except Exception:
         persisted: StoredFile | None = None
@@ -339,6 +450,8 @@ def _save_quota_managed_source(
     fence_operation_id: str | None,
     fence_operation_attempt: int | None,
     fence_lease_token: str | None,
+    replacement_file_ids: tuple[str, ...],
+    replacement_group_id: str | None,
 ) -> StoredFile:
     from backend.db import source_storage_repository
 
@@ -356,6 +469,8 @@ def _save_quota_managed_source(
         sha256=digest,
         assignment_id=assignment_id,
         submission_revision_id=submission_revision_id,
+        replacement_file_ids=replacement_file_ids,
+        replacement_group_id=replacement_group_id,
     )
     try:
         storage.save(storage_key, content)
@@ -425,6 +540,100 @@ def _save_quota_managed_source(
         raise
 
 
+def _save_task_artifact_with_intent(
+    *,
+    storage: StorageBackend,
+    file_id: str,
+    owner_id: str,
+    kind: str,
+    original_name: str,
+    storage_key: str,
+    content: bytes,
+    content_type: str | None,
+    digest: str,
+    assignment_id: str,
+    fence_operation_id: str | None,
+    fence_operation_attempt: int | None,
+    fence_lease_token: str | None,
+) -> StoredFile:
+    """Persist a derived task object behind a restart-safe exact-key intent."""
+
+    from backend.db import source_storage_repository
+
+    reservation = source_storage_repository.reserve_task_artifact_write(
+        file_id=file_id,
+        owner_id=owner_id,
+        assignment_id=assignment_id,
+        kind=kind,
+        original_name=original_name,
+        storage_backend=getattr(storage, "name", "unknown"),
+        storage_key=storage_key,
+        content_type=content_type,
+        requested_bytes=len(content),
+        sha256=digest,
+    )
+    try:
+        storage.save(storage_key, content)
+    except Exception as exc:
+        _cleanup_failed_source_reservation(
+            storage=storage,
+            reservation_id=reservation.id,
+            storage_key=storage_key,
+            error_code="artifact_storage_write_failed",
+        )
+        raise SourceStorageWriteFailed(
+            "Task artifact storage did not confirm the write."
+        ) from exc
+    try:
+        source_storage_repository.mark_reservation_object_written(reservation.id)
+        _verify_source_object(
+            storage=storage,
+            storage_key=storage_key,
+            expected_size=len(content),
+            expected_sha256=digest,
+        )
+        row = source_storage_repository.publish_task_artifact_reservation(
+            reservation_id=reservation.id,
+            assignment_id=assignment_id,
+            fence_operation_id=fence_operation_id,
+            fence_operation_attempt=fence_operation_attempt,
+            fence_lease_token=fence_lease_token,
+        )
+        return _record_to_dto(row)
+    except SourceStorageIntegrityFailed:
+        _cleanup_failed_source_reservation(
+            storage=storage,
+            reservation_id=reservation.id,
+            storage_key=storage_key,
+            error_code="artifact_storage_integrity_failed",
+        )
+        raise
+    except Exception:
+        persisted: StoredFile | None = None
+        verification_completed = False
+        try:
+            persisted = get_file(file_id=file_id, owner_id=owner_id)
+            verification_completed = True
+        except Exception:
+            logger.warning(
+                "Task artifact commit state could not be verified; file_id=%s",
+                file_id,
+            )
+        if (
+            persisted is not None
+            and persisted.storage_key == storage_key
+            and persisted.sha256 == digest
+            and persisted.size_bytes == len(content)
+        ):
+            return persisted
+        if verification_completed and persisted is None:
+            _cleanup_failed_source_reservation(
+                storage=storage,
+                reservation_id=reservation.id,
+                storage_key=storage_key,
+                error_code="artifact_storage_write_failed",
+            )
+        raise
 def archive_member_reference_content(
     *,
     container_sha256: str,
@@ -454,7 +663,7 @@ def create_archive_member_reference(
     fence_operation_attempt: int | None = None,
     fence_lease_token: str | None = None,
 ) -> StoredFile:
-    """Persist a bounded pointer when archive member bytes cannot be saved.
+    """Persist a bounded pointer for one member of a durable archive.
 
     The full archive is already durable and checkpoint-referenced.  A small
     independent object avoids duplicating a potentially 100 MB archive for
@@ -484,7 +693,7 @@ def create_archive_member_reference(
     return save_file(
         storage=storage,
         owner_id=owner_id,
-        kind="submission_source_reference",
+        kind="submission_archive_member_reference",
         original_name=f"{container_name} :: {member_name}",
         content=content,
         content_type="application/vnd.smartai.archive-member-reference+json",
@@ -579,7 +788,7 @@ def delete_unlinked_file(
                 return False
             stored = _record_to_dto(record)
             if (
-                record.kind in RAW_SOURCE_KINDS
+                record.kind in TASK_SOURCE_CLEANUP_KINDS
                 and record.source_quota_owner_id is not None
             ):
                 operation_id = f"op_{uuid.uuid4().hex}"
@@ -615,6 +824,8 @@ def delete_unlinked_file(
                     content_type=record.content_type,
                     requested_bytes=record.source_quota_bytes,
                     sha256=record.sha256,
+                    replacement_group_id=record.replacement_group_id,
+                    replacement_credit_bytes=record.source_quota_bytes,
                     purpose="orphan_cleanup",
                     state="cleanup_pending",
                     expires_at=now,
@@ -718,7 +929,7 @@ def find_unlinked_source_file(
 def delete_files_for_revision(*, storage: StorageBackend, submission_revision_id: str,
                               owner_id: str) -> int:
     files = list_files(owner_id=owner_id, submission_revision_id=submission_revision_id)
-    if any(file.kind in RAW_SOURCE_KINDS for file in files):
+    if any(file.kind in TASK_SOURCE_CLEANUP_KINDS for file in files):
         raise InvalidTransition(
             "Task originals require durable lifecycle cleanup.",
             code="source_storage_lifecycle_required",
@@ -736,7 +947,7 @@ def delete_files_for_revision(*, storage: StorageBackend, submission_revision_id
 def delete_files_for_assignment(*, storage: StorageBackend, assignment_id: str,
                                 owner_id: str) -> int:
     files = list_files(owner_id=owner_id, assignment_id=assignment_id)
-    if any(file.kind in RAW_SOURCE_KINDS for file in files):
+    if any(file.kind in TASK_SOURCE_CLEANUP_KINDS for file in files):
         raise InvalidTransition(
             "Task originals require durable lifecycle cleanup.",
             code="source_storage_lifecycle_required",
@@ -763,7 +974,7 @@ def delete_file_record(*, file_id: str, owner_id: str) -> bool:
         )
         if record is None:
             return False
-        if record.kind in RAW_SOURCE_KINDS:
+        if record.kind in TASK_SOURCE_CLEANUP_KINDS:
             raise InvalidTransition(
                 "Task originals require durable lifecycle cleanup.",
                 code="source_storage_lifecycle_required",

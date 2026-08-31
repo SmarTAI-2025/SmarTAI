@@ -56,7 +56,11 @@ from backend.domain.errors import (
     ValidationError,
     VersionConflict,
 )
-from backend.domain.source_storage import DELAYED_SOURCE_OPERATION_TYPES
+from backend.domain.source_storage import (
+    DELAYED_SOURCE_OPERATION_TYPES,
+    SOURCE_RESERVATION_CLEANUP_OPERATION,
+    TASK_DELETE_OPERATION,
+)
 
 
 MAX_OPERATION_PAYLOAD_BYTES = 4 * 1024 * 1024
@@ -536,6 +540,46 @@ def get_workflow(
         return _detach_workflow(row)
 
 
+def get_live_workflow(
+    assignment_id: str, *, owner_id: str
+) -> AssignmentWorkflowRecord:
+    """Owner-scoped workflow read that hides a task deletion tombstone."""
+    with session_scope() as session:
+        row = session.scalar(
+            select(AssignmentWorkflowRecord)
+            .join(
+                AssignmentRecord,
+                AssignmentRecord.id == AssignmentWorkflowRecord.assignment_id,
+            )
+            .where(
+                AssignmentWorkflowRecord.assignment_id == assignment_id,
+                AssignmentWorkflowRecord.owner_id == owner_id,
+                AssignmentRecord.teacher_id == owner_id,
+                AssignmentRecord.deletion_requested_at.is_(None),
+            )
+        )
+        if row is None:
+            raise NotFound("workflow")
+        return _detach_workflow(row)
+
+
+def _lock_live_assignment(
+    session, *, assignment_id: str, owner_id: str
+) -> AssignmentRecord:
+    row = session.scalar(
+        select(AssignmentRecord)
+        .where(
+            AssignmentRecord.id == assignment_id,
+            AssignmentRecord.teacher_id == owner_id,
+            AssignmentRecord.deletion_requested_at.is_(None),
+        )
+        .with_for_update()
+    )
+    if row is None:
+        raise NotFound("assignment")
+    return row
+
+
 def list_workflows(owner_id: str) -> list[AssignmentWorkflowRecord]:
     with session_scope() as session:
         rows = session.scalars(
@@ -587,6 +631,11 @@ def update_workflow(
                 if exists is None:
                     raise NotFound("workflow")
                 raise VersionConflict("workflow_revision_conflict")
+            # The UPDATE above owns W. Take live A before commit so every
+            # public workflow mutation serializes with task deletion as W -> A.
+            _lock_live_assignment(
+                session, assignment_id=assignment_id, owner_id=owner_id
+            )
             row = session.get(AssignmentWorkflowRecord, assignment_id)
             assert row is not None
             return _detach_workflow(row)
@@ -606,6 +655,9 @@ def update_workflow(
         )
         if result.rowcount != 1:
             raise NotFound("workflow")
+        _lock_live_assignment(
+            session, assignment_id=assignment_id, owner_id=owner_id
+        )
         row = session.get(AssignmentWorkflowRecord, assignment_id)
         assert row is not None
         return _detach_workflow(row)
@@ -665,16 +717,8 @@ def bind_existing_active_grading_run(
     """
     now = time.time()
     with session_scope() as session:
-        workflow = session.scalar(
-            select(AssignmentWorkflowRecord)
-            .where(
-                AssignmentWorkflowRecord.assignment_id == assignment_id,
-                AssignmentWorkflowRecord.owner_id == owner_id,
-            )
-            .with_for_update()
-        )
-        if workflow is None:
-            raise NotFound("workflow")
+        # Grading mutations use G -> W -> A everywhere.  Acquiring W first
+        # here could deadlock a grading heartbeat that already owns G.
         run = session.scalar(
             select(GradingRunRecord)
             .where(
@@ -689,6 +733,19 @@ def bind_existing_active_grading_run(
         )
         if run is None:
             raise NotFound("grading_run")
+        workflow = session.scalar(
+            select(AssignmentWorkflowRecord)
+            .where(
+                AssignmentWorkflowRecord.assignment_id == assignment_id,
+                AssignmentWorkflowRecord.owner_id == owner_id,
+            )
+            .with_for_update()
+        )
+        if workflow is None:
+            raise NotFound("workflow")
+        _lock_live_assignment(
+            session, assignment_id=assignment_id, owner_id=owner_id
+        )
         if workflow.grading_job_id not in {None, run_id}:
             raise InvalidTransition(
                 "The grading run is not the task's current result generation.",
@@ -797,16 +854,7 @@ def confirm_final_result_atomic(
     terminal_statuses = {"completed", "partial_failed"}
     unresolved_statuses = {"failed"}
     with session_scope() as session:
-        workflow = session.scalar(
-            select(AssignmentWorkflowRecord)
-            .where(
-                AssignmentWorkflowRecord.assignment_id == assignment_id,
-                AssignmentWorkflowRecord.owner_id == owner_id,
-            )
-            .with_for_update()
-        )
-        if workflow is None:
-            raise NotFound("workflow")
+        # Canonical grading lock order: G -> W -> A.
         run = session.scalar(
             select(GradingRunRecord)
             .where(
@@ -818,6 +866,19 @@ def confirm_final_result_atomic(
         )
         if run is None:
             raise NotFound("grading_run")
+        workflow = session.scalar(
+            select(AssignmentWorkflowRecord)
+            .where(
+                AssignmentWorkflowRecord.assignment_id == assignment_id,
+                AssignmentWorkflowRecord.owner_id == owner_id,
+            )
+            .with_for_update()
+        )
+        if workflow is None:
+            raise NotFound("workflow")
+        _lock_live_assignment(
+            session, assignment_id=assignment_id, owner_id=owner_id
+        )
         if workflow.grading_job_id not in {None, grading_run_id}:
             raise InvalidTransition(
                 "The grading run is not the workflow's current run.",
@@ -845,6 +906,7 @@ def confirm_final_result_atomic(
             # lock without publishing a new result version.
             from backend.db.source_storage_repository import (
                 enqueue_finalized_source_cleanup_in_session,
+                grading_run_source_file_ids_in_session,
             )
 
             enqueue_finalized_source_cleanup_in_session(
@@ -854,6 +916,9 @@ def confirm_final_result_atomic(
                 grading_run_id=grading_run_id,
                 final_result_version=workflow.final_result_version,
                 finalized_at=float(run.released_at),
+                source_file_ids=grading_run_source_file_ids_in_session(
+                    session, grading_run_id
+                ),
             )
             return _detach_workflow(workflow), float(run.released_at), False
 
@@ -904,7 +969,6 @@ def confirm_final_result_atomic(
         workflow.grading_job_id = grading_run_id
         workflow.final_result_version = max(1, workflow.final_result_version + 1)
         workflow.final_result_updated_at = released_at
-        workflow.source_lifecycle_epoch += 1
         workflow.analysis_status = "not_generated"
         workflow.analysis_result_version = None
         workflow.analysis_generated_at = None
@@ -914,14 +978,26 @@ def confirm_final_result_atomic(
         workflow.error_code = None
         workflow.workflow_revision += 1
         workflow.updated_at = now
-        # The latest product rule treats the persisted formal result (which
-        # immediately powers the results overview and visualizations) as task
-        # completion. Optional CSV/Markdown/LaTeX/ZIP generation is not a
-        # prerequisite. Snapshot and enqueue cleanup in this transaction so a
-        # process crash cannot leave finalized tasks permanently uncollected.
+        # Grading completion normally enqueues the run's immutable source
+        # manifest as soon as the visual result becomes available. Formal
+        # confirmation repeats that exact manifest transactionally as an
+        # idempotent repair. Legacy runs without a manifest retain the broader
+        # compatibility snapshot below. Optional CSV/Markdown/LaTeX/ZIP
+        # generation is never a prerequisite.
         from backend.db.source_storage_repository import (
             enqueue_finalized_source_cleanup_in_session,
+            grading_run_source_file_ids_in_session,
         )
+
+        frozen_source_file_ids = grading_run_source_file_ids_in_session(
+            session, grading_run_id
+        )
+        if frozen_source_file_ids is None:
+            # Legacy runs have no immutable source manifest, so their fallback
+            # cleanup snapshots every current task original.  Only that broad
+            # compatibility path advances the global epoch to fence an object
+            # that was reserved before the snapshot but publishes afterwards.
+            workflow.source_lifecycle_epoch += 1
 
         enqueue_finalized_source_cleanup_in_session(
             session,
@@ -930,6 +1006,7 @@ def confirm_final_result_atomic(
             grading_run_id=grading_run_id,
             final_result_version=workflow.final_result_version,
             finalized_at=released_at,
+            source_file_ids=frozen_source_file_ids,
         )
         session.flush()
         return _detach_workflow(workflow), released_at, True
@@ -981,6 +1058,31 @@ def create_operation(
         WorkflowOperationRecord.input_hash == input_hash,
     )
 
+    def lock_task_write_gate(session) -> None:
+        # Callers lock an existing operation first, then use the shared
+        # operation -> workflow -> assignment order. For a genuinely new row
+        # there is no operation to contend with yet, so workflow -> assignment
+        # remains the safe insertion gate.
+        session.scalar(
+            select(AssignmentWorkflowRecord)
+            .where(
+                AssignmentWorkflowRecord.assignment_id == assignment_id,
+                AssignmentWorkflowRecord.owner_id == owner_id,
+            )
+            .with_for_update()
+        )
+        assignment = session.scalar(
+            select(AssignmentRecord)
+            .where(
+                AssignmentRecord.id == assignment_id,
+                AssignmentRecord.teacher_id == owner_id,
+                AssignmentRecord.deletion_requested_at.is_(None),
+            )
+            .with_for_update()
+        )
+        if assignment is None:
+            raise NotFound("assignment")
+
     def existing_result(session, existing: WorkflowOperationRecord):
         retryable = or_(
             WorkflowOperationRecord.status == "error",
@@ -1027,10 +1129,14 @@ def create_operation(
     try:
         with session_scope() as session:
             existing = session.scalar(
-                select(WorkflowOperationRecord).where(*selector)
+                select(WorkflowOperationRecord)
+                .where(*selector)
+                .with_for_update()
             )
             if existing is not None:
+                lock_task_write_gate(session)
                 return existing_result(session, existing)
+            lock_task_write_gate(session)
             row = WorkflowOperationRecord(
                 id=_new_id("op"), assignment_id=assignment_id,
                 owner_id=owner_id, operation_type=operation_type,
@@ -1047,10 +1153,13 @@ def create_operation(
         # leaking a raw database exception to the API.
         with session_scope() as session:
             existing = session.scalar(
-                select(WorkflowOperationRecord).where(*selector)
+                select(WorkflowOperationRecord)
+                .where(*selector)
+                .with_for_update()
             )
             if existing is None:
                 raise
+            lock_task_write_gate(session)
             return existing_result(session, existing)
 
 
@@ -1125,6 +1234,26 @@ def update_operation(
             WorkflowOperationRecord.attempt == expected_attempt,
         ))
         assert row is not None
+        if (
+            row.operation_type not in {
+                TASK_DELETE_OPERATION,
+                SOURCE_RESERVATION_CLEANUP_OPERATION,
+            }
+            and values.get("status") != "error"
+        ):
+            session.scalar(
+                select(AssignmentWorkflowRecord)
+                .where(
+                    AssignmentWorkflowRecord.assignment_id == row.assignment_id,
+                    AssignmentWorkflowRecord.owner_id == owner_id,
+                )
+                .with_for_update()
+            )
+            _lock_live_assignment(
+                session,
+                assignment_id=row.assignment_id,
+                owner_id=owner_id,
+            )
         return _detach_operation(row)
 
 
@@ -1358,6 +1487,30 @@ def claim_operation(
             )
         )
         assert row is not None
+        if row.operation_type not in {
+            TASK_DELETE_OPERATION,
+            SOURCE_RESERVATION_CLEANUP_OPERATION,
+        }:
+            session.scalar(
+                select(AssignmentWorkflowRecord)
+                .where(
+                    AssignmentWorkflowRecord.assignment_id == row.assignment_id,
+                    AssignmentWorkflowRecord.owner_id == row.owner_id,
+                )
+                .with_for_update()
+            )
+            assignment = session.scalar(
+                select(AssignmentRecord)
+                .where(
+                    AssignmentRecord.id == row.assignment_id,
+                    AssignmentRecord.teacher_id == row.owner_id,
+                )
+                .with_for_update()
+            )
+            if assignment is None or assignment.deletion_requested_at is not None:
+                raise LeaseLost(
+                    "The task is being deleted.", code="task_deleted"
+                )
         return _detach_operation(row)
 
 
@@ -1408,6 +1561,34 @@ def heartbeat_operation(
             if current is None:
                 raise NotFound("workflow_operation")
             raise LeaseLost("lease_lost", code="lease_lost")
+        operation = session.scalar(select(WorkflowOperationRecord).where(
+            WorkflowOperationRecord.id == operation_id,
+            WorkflowOperationRecord.owner_id == owner_id,
+        ))
+        assert operation is not None
+        if operation.operation_type not in {
+            TASK_DELETE_OPERATION,
+            SOURCE_RESERVATION_CLEANUP_OPERATION,
+        }:
+            session.scalar(
+                select(AssignmentWorkflowRecord)
+                .where(
+                    AssignmentWorkflowRecord.assignment_id
+                    == operation.assignment_id,
+                    AssignmentWorkflowRecord.owner_id == owner_id,
+                )
+                .with_for_update()
+            )
+            assignment = session.scalar(
+                select(AssignmentRecord)
+                .where(
+                    AssignmentRecord.id == operation.assignment_id,
+                    AssignmentRecord.teacher_id == owner_id,
+                )
+                .with_for_update()
+            )
+            if assignment is None or assignment.deletion_requested_at is not None:
+                raise LeaseLost("lease_lost", code="task_deleted")
         return True
 
 
@@ -1580,6 +1761,16 @@ def upsert_student_presentation(
 ) -> AssignmentStudentPresentationRecord:
     now = time.time()
     with session_scope() as session:
+        assignment = session.scalar(
+            select(AssignmentRecord)
+            .where(
+                AssignmentRecord.id == assignment_id,
+                AssignmentRecord.deletion_requested_at.is_(None),
+            )
+            .with_for_update()
+        )
+        if assignment is None:
+            raise NotFound("assignment")
         row = session.scalar(
             select(AssignmentStudentPresentationRecord).where(
                 AssignmentStudentPresentationRecord.assignment_id == assignment_id,
@@ -1613,8 +1804,15 @@ def list_student_presentations(
 ) -> dict[str, AssignmentStudentPresentationRecord]:
     with session_scope() as session:
         rows = session.scalars(
-            select(AssignmentStudentPresentationRecord).where(
-                AssignmentStudentPresentationRecord.assignment_id == assignment_id
+            select(AssignmentStudentPresentationRecord)
+            .join(
+                AssignmentRecord,
+                AssignmentRecord.id
+                == AssignmentStudentPresentationRecord.assignment_id,
+            )
+            .where(
+                AssignmentStudentPresentationRecord.assignment_id == assignment_id,
+                AssignmentRecord.deletion_requested_at.is_(None),
             )
         ).all()
         return {row.student_id: _detach_student(row) for row in rows}
@@ -1682,6 +1880,9 @@ def save_artifact_manifest(
         else time.time()
     )
     with session_scope() as session:
+        _lock_live_assignment(
+            session, assignment_id=assignment_id, owner_id=owner_id
+        )
         row = session.scalar(
             select(ResultArtifactManifestRecord).where(
                 ResultArtifactManifestRecord.assignment_id == assignment_id,
@@ -1750,6 +1951,9 @@ def save_artifact_manifest_atomic(
         )
         if workflow is None:
             raise NotFound("workflow")
+        _lock_live_assignment(
+            session, assignment_id=assignment_id, owner_id=owner_id
+        )
         if workflow.final_result_version != result_version:
             raise VersionConflict("artifact_result_version_conflict")
         row = session.scalar(

@@ -47,5 +47,17 @@ class LocalStorage(StorageBackend):
     def exists(self, key: str) -> bool:
         return self._path(key).is_file()
 
+    def list_keys(self, prefix: str) -> list[str]:
+        root = self._path(prefix)
+        if not root.exists():
+            return []
+        if not root.is_dir():
+            return [prefix] if root.is_file() else []
+        return sorted(
+            path.relative_to(self.root).as_posix()
+            for path in root.rglob("*")
+            if path.is_file()
+        )
+
     def ready(self) -> bool:
         return self.root.is_dir()

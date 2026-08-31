@@ -16,6 +16,15 @@ depends_on = None
 
 
 def upgrade() -> None:
+    with op.batch_alter_table("assignments") as batch_op:
+        batch_op.add_column(sa.Column(
+            "deletion_requested_at", sa.Float(), nullable=True
+        ))
+        batch_op.create_index(
+            "ix_assignments_deletion_requested_at",
+            ["deletion_requested_at"], unique=False,
+        )
+
     with op.batch_alter_table("assignment_workflows") as batch_op:
         batch_op.add_column(sa.Column(
             "source_lifecycle_epoch", sa.Integer(), nullable=False,
@@ -68,6 +77,15 @@ def upgrade() -> None:
             "cleanup_claimed_at", sa.Float(), nullable=True
         ))
         batch_op.add_column(sa.Column(
+            "replacement_claim_group_id", sa.String(length=64), nullable=True
+        ))
+        batch_op.add_column(sa.Column(
+            "replacement_claim_expires_at", sa.Float(), nullable=True
+        ))
+        batch_op.add_column(sa.Column(
+            "replacement_group_id", sa.String(length=64), nullable=True
+        ))
+        batch_op.add_column(sa.Column(
             "unavailable_at", sa.Float(), nullable=True
         ))
         batch_op.create_foreign_key(
@@ -94,7 +112,15 @@ def upgrade() -> None:
         batch_op.create_check_constraint(
             "ck_stored_files_availability_reason",
             "availability_reason IS NULL OR availability_reason IN "
-            "('task_finalized', 'missing', 'storage_delete_failed')",
+            "('task_finalized', 'task_deleted', 'replaced', 'missing', "
+            "'storage_delete_failed')",
+        )
+        batch_op.create_check_constraint(
+            "ck_stored_files_replacement_claim_consistency",
+            "(replacement_claim_group_id IS NULL AND "
+            "replacement_claim_expires_at IS NULL) OR "
+            "(replacement_claim_group_id IS NOT NULL AND "
+            "replacement_claim_expires_at IS NOT NULL)",
         )
         batch_op.create_check_constraint(
             "ck_stored_files_source_quota_owner_consistency",
@@ -166,6 +192,11 @@ def upgrade() -> None:
         sa.Column("content_type", sa.String(length=255), nullable=True),
         sa.Column("requested_bytes", sa.Integer(), nullable=False),
         sa.Column("sha256", sa.String(length=64), nullable=False),
+        sa.Column("replacement_group_id", sa.String(length=64), nullable=True),
+        sa.Column(
+            "replacement_credit_bytes", sa.Integer(), nullable=False,
+            server_default=sa.text("0"),
+        ),
         sa.Column(
             "purpose", sa.String(length=32), nullable=False,
             server_default="upload",
@@ -185,12 +216,13 @@ def upgrade() -> None:
         sa.Column("created_at", sa.Float(), nullable=False),
         sa.Column("updated_at", sa.Float(), nullable=False),
         sa.CheckConstraint(
-            "requested_bytes >= 0 AND retry_count >= 0 "
+            "requested_bytes >= 0 AND replacement_credit_bytes >= 0 "
+            "AND retry_count >= 0 "
             "AND source_lifecycle_epoch >= 0",
             name="ck_source_storage_reservations_counters_nonnegative",
         ),
         sa.CheckConstraint(
-            "purpose IN ('upload', 'orphan_cleanup')",
+            "purpose IN ('upload', 'orphan_cleanup', 'artifact_write')",
             name="ck_source_storage_reservations_purpose",
         ),
         sa.CheckConstraint(
@@ -198,9 +230,7 @@ def upgrade() -> None:
             name="ck_source_storage_reservations_state",
         ),
         sa.CheckConstraint(
-            "kind IN ('problem', 'problem_source', 'submission', "
-            "'submission_container', 'submission_source', "
-            "'submission_source_reference')",
+            "length(kind) BETWEEN 1 AND 64",
             name="ck_source_storage_reservations_kind",
         ),
         sa.CheckConstraint(
@@ -302,6 +332,9 @@ def downgrade() -> None:
             "ck_stored_files_availability_reason", type_="check"
         )
         batch_op.drop_constraint(
+            "ck_stored_files_replacement_claim_consistency", type_="check"
+        )
+        batch_op.drop_constraint(
             "ck_stored_files_availability_status", type_="check"
         )
         batch_op.drop_constraint(
@@ -321,6 +354,9 @@ def downgrade() -> None:
         batch_op.drop_column("cleanup_attempt_count")
         batch_op.drop_column("cleanup_claimed_at")
         batch_op.drop_column("cleanup_claim_token")
+        batch_op.drop_column("replacement_claim_expires_at")
+        batch_op.drop_column("replacement_claim_group_id")
+        batch_op.drop_column("replacement_group_id")
         batch_op.drop_column("cleanup_last_attempt_at")
         batch_op.drop_column("cleanup_requested_at")
         batch_op.drop_column("cleanup_final_result_version")
@@ -337,3 +373,7 @@ def downgrade() -> None:
             type_="check",
         )
         batch_op.drop_column("source_lifecycle_epoch")
+
+    with op.batch_alter_table("assignments") as batch_op:
+        batch_op.drop_index("ix_assignments_deletion_requested_at")
+        batch_op.drop_column("deletion_requested_at")

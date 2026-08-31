@@ -166,6 +166,8 @@ def persist_problem_source(
     original_name: str,
     content: bytes,
     content_type: str,
+    replacement_file_ids: tuple[str, ...] = (),
+    replacement_group_id: str | None = None,
 ) -> tuple[file_repository.StoredFile, bool]:
     """Save one assignment-linked original, reusing only verified live bytes."""
 
@@ -189,6 +191,13 @@ def persist_problem_source(
         except Exception:
             raise StorageUnavailable("storage_unavailable") from None
         if existing == content:
+            source_storage_repository.renew_replacement_claim_for_staged_file(
+                owner_id=owner_id,
+                assignment_id=task_id,
+                staged_file_id=candidate.id,
+                replacement_file_ids=replacement_file_ids,
+                replacement_group_id=replacement_group_id,
+            )
             return candidate, False
 
     saved = file_repository.save_file(
@@ -199,6 +208,8 @@ def persist_problem_source(
         content=content,
         content_type=content_type,
         assignment_id=task_id,
+        replacement_file_ids=replacement_file_ids,
+        replacement_group_id=replacement_group_id,
     )
     return saved, True
 
@@ -612,7 +623,10 @@ def _resolve_submission_sources(
         stored = _owned_assignment_file(
             file_id=source.stored_file_id, owner_id=owner_id, task_id=task_id
         )
-        if stored.kind == "submission_source_reference":
+        if stored.kind in {
+            "submission_source_reference",
+            "submission_archive_member_reference",
+        }:
             resolved.append(_ResolvedSource(
                 descriptor=_unavailable_descriptor(
                     source_id=source.id,
@@ -622,7 +636,10 @@ def _resolve_submission_sources(
                 stored=None,
             ))
             continue
-        if stored.kind != "submission_source":
+        if stored.kind not in {
+            "submission_source",
+            "submission_archive_member",
+        }:
             raise SourcePreviewNotFound("Source preview not found.")
         resolved.append(_descriptor_for_stored(
             storage=storage, task_id=task_id, source_id=source.id, stored=stored
@@ -635,7 +652,9 @@ def _resolve_current_sources(
 ) -> tuple[object, _ResolvedSource | None, list[_ResolvedSource]]:
     try:
         assignment_repository.get_assignment(task_id, actor_id=owner_id)
-        workflow = workflow_repository.get_workflow(task_id, owner_id=owner_id)
+        workflow = workflow_repository.get_live_workflow(
+            task_id, owner_id=owner_id
+        )
     except DomainError:
         raise SourcePreviewNotFound("Source preview not found.") from None
     problem = _resolve_problem_source(

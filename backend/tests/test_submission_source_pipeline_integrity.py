@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import io
 import json
 import time
@@ -8,6 +9,7 @@ import zipfile
 from types import SimpleNamespace
 
 import pytest
+from sqlalchemy import select
 
 from backend.agents.ingest_agent import (
     SubmissionSourceInput,
@@ -19,7 +21,7 @@ from backend.db import (
     source_storage_repository,
     workflow_repository,
 )
-from backend.db.file_repository import list_files
+from backend.db.file_repository import get_file, list_files
 from backend.db.models import (
     AssignmentRecord,
     CourseRecord,
@@ -27,8 +29,16 @@ from backend.db.models import (
     UserRecord,
 )
 from backend.db.session import session_scope
+from backend.config import settings
 from backend.domain.errors import LeaseLost
-from backend.services import submission_source_pipeline, task_facade
+from backend.domain.source_storage import SOURCE_REPLACEMENT_CLEANUP_OPERATION
+from backend.services import (
+    source_cleanup,
+    source_files,
+    submission_source_pipeline,
+    task_facade,
+)
+from backend.services.workflow_worker import WorkflowWorker
 from backend.storage import get_storage
 from backend.tools.file_processing import RawUploadSource
 
@@ -91,6 +101,31 @@ def _zip_sources(items: dict[str, bytes]) -> bytes:
         for name, content in items.items():
             archive.writestr(name, content)
     return buffer.getvalue()
+
+
+async def _drain_replacement_worker(worker: WorkflowWorker) -> None:
+    for _ in range(500):
+        if worker.in_flight_count == 0:
+            return
+        await asyncio.sleep(0.01)
+    raise AssertionError("source replacement cleanup worker did not drain")
+
+
+def _replacement_cleanup_worker(worker_id: str) -> WorkflowWorker:
+    return WorkflowWorker(
+        handlers={
+            SOURCE_REPLACEMENT_CLEANUP_OPERATION: (
+                source_cleanup.run_source_replacement_cleanup
+            ),
+        },
+        worker_id=worker_id,
+        lease_seconds=60,
+        heartbeat_seconds=60,
+        poll_seconds=60,
+        claim_batch_size=10,
+        max_in_flight=1,
+        shutdown_seconds=1,
+    )
 
 
 class _Registry:
@@ -793,9 +828,11 @@ async def test_restart_recovers_archive_reference_published_before_registration(
         owner_id=owner_id,
         attempt=running.attempt,
     )] == [source_id]
+    # The archive is the sole charged original. Its bounded member pointer is
+    # lifecycle-managed but zero quota, so a retry cannot double-charge bytes.
     assert source_storage_repository.source_quota_usage(
         owner_id
-    ).used_bytes == container.size_bytes + orphan.size_bytes
+    ).used_bytes == container.size_bytes
 
 
 @pytest.mark.asyncio
@@ -1248,3 +1285,213 @@ async def test_archive_member_persistence_failure_is_terminal_and_does_not_skip_
         "identity_needs_review": 0,
         "pending": 0,
     }
+
+
+@pytest.mark.asyncio
+async def test_equal_size_zip_replacement_survives_old_delete_retry_and_keeps_preview(
+    monkeypatch,
+):
+    owner_id, task_id = _seed_task()
+    assignment_repository.add_question(
+        task_id,
+        teacher_id=owner_id,
+        q_id="q1",
+        order_index=0,
+        type="short",
+        stem="Question one",
+        criterion="",
+        max_score=10,
+    )
+    old_member_bytes = b"\x89PNG\r\n\x1a\nold-preview"
+    new_member_bytes = b"\x89PNG\r\n\x1a\nnew-preview"
+    old_archive = _zip_sources({"student.png": old_member_bytes})
+    new_archive = _zip_sources({"student.png": new_member_bytes})
+    assert len(old_archive) == len(new_archive)
+    assert old_archive != new_archive
+    monkeypatch.setattr(
+        settings, "unfinished_source_quota_bytes", len(old_archive)
+    )
+
+    async def fake_extract(*_args, **_kwargs):
+        return "answer"
+
+    async def fake_invoke(_provider, _messages):
+        return SimpleNamespace(content=json.dumps({
+            "stu_id": "S001",
+            "stu_name": "Student S001",
+            "stu_ans": [{
+                "q_id": "q1",
+                "number": "1",
+                "type": "short",
+                "content": "answer",
+                "flag": [],
+            }],
+        }))
+
+    monkeypatch.setattr(
+        submission_source_pipeline, "extract_text_from_upload", fake_extract
+    )
+    monkeypatch.setattr("backend.agents.ingest_agent.ainvoke_with_retry", fake_invoke)
+
+    async def parse_archive(content: bytes, *, replace_confirmed: bool) -> str:
+        queued = task_facade.queue_task_submission_parsing(
+            task_id=task_id,
+            owner_id=owner_id,
+            filename="submissions.zip",
+            content=content,
+            content_type="application/zip",
+            registry=_Registry(),
+            recognition_provider_id="test-provider",
+            replace_confirmed=replace_confirmed,
+        )
+        await task_facade.run_task_submission_parsing(
+            task_id=task_id,
+            owner_id=owner_id,
+            job_id=queued["job_id"],
+            filename="submissions.zip",
+            content=content,
+            content_type="application/zip",
+            registry=_Registry(),
+            job_attempt=queued["_job_attempt"],
+            identity_mode="filename",
+            roster_entries=None,
+            recognition_provider_id="test-provider",
+            replace_confirmed=replace_confirmed,
+            claimed_workflow_revision=queued["workflow_revision"],
+        )
+        return str(queued["job_id"])
+
+    first_job_id = await parse_archive(old_archive, replace_confirmed=False)
+    first_operation = workflow_repository.get_operation(
+        first_job_id, owner_id=owner_id
+    )
+    first_source = source_outcome_repository.list_sources(
+        operation_id=first_job_id,
+        owner_id=owner_id,
+        attempt=first_operation.attempt,
+    )[0]
+    old_member = get_file(
+        file_id=first_source.stored_file_id, owner_id=owner_id
+    )
+    old_container = next(
+        item
+        for item in list_files(owner_id=owner_id, assignment_id=task_id)
+        if item.kind == "submission_container"
+        and item.availability_status == "available"
+    )
+    assert old_member is not None
+    assert old_member.kind == "submission_archive_member"
+    assert old_member.source_quota_bytes == 0
+    assert source_storage_repository.source_quota_usage(
+        owner_id
+    ).used_bytes == len(old_archive)
+
+    queued_replacement = task_facade.queue_task_submission_parsing(
+        task_id=task_id,
+        owner_id=owner_id,
+        filename="submissions.zip",
+        content=new_archive,
+        content_type="application/zip",
+        registry=_Registry(),
+        recognition_provider_id="test-provider",
+        replace_confirmed=True,
+    )
+    old_container_pending = get_file(file_id=old_container.id, owner_id=owner_id)
+    old_member_pending = get_file(file_id=old_member.id, owner_id=owner_id)
+    assert old_container_pending is not None
+    assert old_member_pending is not None
+    assert old_container_pending.availability_status == "cleanup_pending"
+    assert old_member_pending.availability_status == "cleanup_pending"
+
+    storage = get_storage()
+    real_delete = storage.delete
+
+    def fail_old_delete(_key: str) -> None:
+        raise OSError("private provider detail")
+
+    monkeypatch.setattr(storage, "delete", fail_old_delete)
+    monkeypatch.setattr(source_cleanup, "get_storage", lambda: storage)
+    monkeypatch.setattr(settings, "source_cleanup_retry_base_seconds", 1)
+    monkeypatch.setattr(settings, "source_cleanup_retry_max_seconds", 1)
+    first_cleanup_worker = _replacement_cleanup_worker("zip-cleanup-failing")
+    assert await first_cleanup_worker.poll_once() == 1
+    await _drain_replacement_worker(first_cleanup_worker)
+    usage_while_retrying = source_storage_repository.source_quota_usage(owner_id)
+    assert usage_while_retrying.used_bytes == 2 * len(old_archive)
+    assert usage_while_retrying.retrying_cleanup_bytes == len(old_archive)
+
+    await task_facade.run_task_submission_parsing(
+        task_id=task_id,
+        owner_id=owner_id,
+        job_id=queued_replacement["job_id"],
+        filename="submissions.zip",
+        content=new_archive,
+        content_type="application/zip",
+        registry=_Registry(),
+        job_attempt=queued_replacement["_job_attempt"],
+        identity_mode="filename",
+        roster_entries=None,
+        recognition_provider_id="test-provider",
+        replace_confirmed=True,
+        claimed_workflow_revision=queued_replacement["workflow_revision"],
+    )
+    replacement_operation = workflow_repository.get_operation(
+        queued_replacement["job_id"], owner_id=owner_id
+    )
+    replacement_source = source_outcome_repository.list_sources(
+        operation_id=replacement_operation.id,
+        owner_id=owner_id,
+        attempt=replacement_operation.attempt,
+    )[0]
+    replacement_member = get_file(
+        file_id=replacement_source.stored_file_id, owner_id=owner_id
+    )
+    assert replacement_member is not None
+    assert replacement_member.kind == "submission_archive_member"
+    assert replacement_member.source_quota_bytes == 0
+    descriptor = source_files.describe_source_files(
+        task_id=task_id, owner_id=owner_id, storage=storage
+    )["submission_sources"][replacement_source.id]
+    assert descriptor["status"] == "available"
+    assert descriptor["preview_kind"] == "image"
+    preview = source_files.read_source_file_content(
+        task_id=task_id,
+        file_id=replacement_member.id,
+        owner_id=owner_id,
+        storage=storage,
+    )
+    assert preview.content == new_member_bytes
+    assert source_storage_repository.source_quota_usage(
+        owner_id
+    ).used_bytes == 2 * len(old_archive)
+
+    monkeypatch.setattr(storage, "delete", real_delete)
+    with session_scope() as session:
+        cleanup_operation = session.scalar(
+            select(workflow_repository.WorkflowOperationRecord).where(
+                workflow_repository.WorkflowOperationRecord.assignment_id
+                == task_id,
+                workflow_repository.WorkflowOperationRecord.owner_id == owner_id,
+                workflow_repository.WorkflowOperationRecord.operation_type
+                == SOURCE_REPLACEMENT_CLEANUP_OPERATION,
+            )
+        )
+        assert cleanup_operation is not None
+        assert cleanup_operation.status == "pending"
+        cleanup_operation.expires_at = 0.0
+    retry_worker = _replacement_cleanup_worker("zip-cleanup-retry")
+    assert await retry_worker.poll_once() == 1
+    await _drain_replacement_worker(retry_worker)
+
+    old_container_deleted = get_file(file_id=old_container.id, owner_id=owner_id)
+    old_member_deleted = get_file(file_id=old_member.id, owner_id=owner_id)
+    assert old_container_deleted is not None
+    assert old_member_deleted is not None
+    assert old_container_deleted.availability_status == "unavailable"
+    assert old_member_deleted.availability_status == "unavailable"
+    assert not storage.exists(old_container.storage_key)
+    assert not storage.exists(old_member.storage_key)
+    assert storage.exists(replacement_member.storage_key)
+    assert source_storage_repository.source_quota_usage(
+        owner_id
+    ).used_bytes == len(new_archive)

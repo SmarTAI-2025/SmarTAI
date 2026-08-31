@@ -71,6 +71,7 @@ export interface ProblemSourcePreflightInput {
   extractionHint?: string;
   saveToLibrary: boolean;
   recognitionProviderId: string;
+  replaceConfirmed?: boolean;
 }
 
 export interface StartProblemExtractionInput {

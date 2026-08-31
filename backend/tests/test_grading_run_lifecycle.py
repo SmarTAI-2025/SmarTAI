@@ -978,6 +978,264 @@ def test_adapter_marks_missing_student_batch_output_as_hard_failure(setup_assign
     assert result.review_reasons == ["missing_student_result"]
 
 
+def test_task_tombstone_hides_direct_grading_reads_and_rejects_review_release(
+    setup_assignment,
+):
+    """Child grading rows stay internal while storage cleanup is pending."""
+    import time as _time
+
+    from sqlalchemy import select
+
+    from backend.api import grading_runs as grading_api
+    from backend.api import results as results_api
+    from backend.db.models import AssignmentRecord, GradingRunRecord, TeacherReviewRecord
+    from backend.db.session import session_scope
+    from backend.domain.errors import NotFound
+    from backend.models import User
+
+    teacher_id = setup_assignment["teacher_id"]
+    run = grading_runs.create_run(
+        teacher_id=teacher_id,
+        assignment_id=setup_assignment["assignment_id"],
+    )
+    worker_id = "tombstone-read-worker"
+    grading_repository.claim_lease(
+        run.id, worker_id=worker_id, lease_seconds=60,
+    )
+    revision_id = grading_repository.list_frozen_submissions(run.id)[0].id
+    grading_repository.upsert_result(
+        run.id,
+        worker_id=worker_id,
+        grade_result=education.GradeResultDTO(
+            id="",
+            grading_run_id=run.id,
+            submission_revision_id=revision_id,
+            question_id=setup_assignment["question_id"],
+            student_id=setup_assignment["student_id"],
+            q_id=setup_assignment["q_id"],
+            ai_score=7.0,
+            ai_max_score=10.0,
+            ai_comment="AI",
+            result_status=education.GradeResultStatus.NEEDS_REVIEW.value,
+            requires_review=True,
+            review_reasons=["low_confidence"],
+            created_at=0,
+            updated_at=0,
+        ),
+    )
+    grading_repository.mark_completed(
+        run.id, worker_id=worker_id, completed=1, failed=0,
+    )
+    result_id = grading_repository.list_results_for_run(run.id)[0].id
+    grading_repository.add_teacher_review(
+        result_id,
+        teacher_id=teacher_id,
+        new_score=8.0,
+        new_comment="checked",
+    )
+
+    with session_scope() as session:
+        assignment = session.get(
+            AssignmentRecord, setup_assignment["assignment_id"]
+        )
+        assert assignment is not None
+        assignment.deletion_requested_at = _time.time()
+
+    with pytest.raises(NotFound):
+        grading_repository.get_run(run.id, actor_id=teacher_id)
+    assert grading_repository.list_runs_for_assignment(
+        setup_assignment["assignment_id"], actor_id=teacher_id
+    ) == []
+    with pytest.raises(NotFound):
+        grading_repository.list_results_for_run(run.id)
+    with pytest.raises(NotFound):
+        grading_repository.list_events(run.id, actor_id=teacher_id)
+    with pytest.raises(NotFound):
+        grading_repository.list_frozen_submissions(run.id)
+    assert grading_repository.list_results_for_review(
+        setup_assignment["assignment_id"]
+    ) == []
+    assert grading_repository.latest_teacher_review(result_id) is None
+    assert grading_repository.has_review_queue_items(run.id) is False
+    assert grading_repository.has_unresolved_failures(run.id) is False
+    assert grading_repository.is_released(run.id) is False
+    assert grading_runs.student_results(
+        student_id=setup_assignment["student_id"],
+        assignment_id=setup_assignment["assignment_id"],
+    ) == []
+    with pytest.raises(NotFound):
+        grading_runs.resolve_review(
+            grade_result_id=result_id, teacher_id=teacher_id
+        )
+    with pytest.raises(NotFound):
+        grading_repository.add_teacher_review(
+            result_id,
+            teacher_id=teacher_id,
+            new_score=9.0,
+            new_comment="must not persist",
+        )
+    with pytest.raises(NotFound):
+        grading_repository.release(run.id, teacher_id=teacher_id)
+
+    current = User(id=teacher_id, username=teacher_id, role="teacher")
+    assert grading_api.get_run(run.id, current=current).status_code == 404
+    assert grading_api.list_runs(
+        setup_assignment["assignment_id"], current=current
+    ) == []
+    assert grading_api.review_queue(
+        setup_assignment["assignment_id"], current=current
+    ).status_code == 404
+    assert grading_api.add_review(
+        result_id,
+        grading_api.ReviewRequest(new_score=9.0),
+        current=current,
+    ).status_code == 404
+    assert grading_api.release_run(run.id, current=current).status_code == 404
+    assert results_api.teacher_summary(
+        setup_assignment["assignment_id"], current=current
+    ).status_code == 404
+    student = User(
+        id=setup_assignment["student_id"],
+        username=setup_assignment["student_id"],
+        role="student",
+    )
+    assert results_api.student_result(
+        setup_assignment["assignment_id"], current=student
+    ).status_code == 404
+
+    with session_scope() as session:
+        persisted_run = session.get(GradingRunRecord, run.id)
+        assert persisted_run is not None
+        assert persisted_run.released_at is None
+        reviews = session.scalars(
+            select(TeacherReviewRecord).where(
+                TeacherReviewRecord.grade_result_id == result_id
+            )
+        ).all()
+        assert len(reviews) == 1
+
+
+def test_task_tombstone_fences_direct_grading_mutations(setup_assignment):
+    import time as _time
+
+    from sqlalchemy import select
+
+    from backend.db.models import AssignmentRecord, GradeResultRecord, GradingRunRecord
+    from backend.db.session import session_scope
+    from backend.domain.errors import LeaseLost, NotFound
+
+    teacher_id = setup_assignment["teacher_id"]
+    run = grading_runs.create_run(
+        teacher_id=teacher_id,
+        assignment_id=setup_assignment["assignment_id"],
+    )
+    worker_id = "tombstone-write-worker"
+    grading_repository.claim_lease(
+        run.id, worker_id=worker_id, lease_seconds=60,
+    )
+    revision_id = grading_repository.list_frozen_submissions(run.id)[0].id
+    with session_scope() as session:
+        assignment = session.get(
+            AssignmentRecord, setup_assignment["assignment_id"]
+        )
+        assert assignment is not None
+        assignment.deletion_requested_at = _time.time()
+
+    result = education.GradeResultDTO(
+        id="",
+        grading_run_id=run.id,
+        submission_revision_id=revision_id,
+        question_id=setup_assignment["question_id"],
+        student_id=setup_assignment["student_id"],
+        q_id=setup_assignment["q_id"],
+        ai_score=7.0,
+        ai_max_score=10.0,
+        result_status=education.GradeResultStatus.GRADED.value,
+        created_at=0,
+        updated_at=0,
+    )
+    with pytest.raises(LeaseLost):
+        grading_repository.upsert_result(
+            run.id, worker_id=worker_id, grade_result=result,
+        )
+    with pytest.raises(LeaseLost):
+        grading_repository.mark_completed(
+            run.id, worker_id=worker_id, completed=1, failed=0,
+        )
+    with pytest.raises(NotFound):
+        grading_repository.record_event(
+            run.id, level="info", message="must_not_persist"
+        )
+    with pytest.raises(NotFound):
+        grading_repository.cancel(run.id, teacher_id=teacher_id)
+    assert run.id not in grading_runs.poll_queued_runs()
+
+    with session_scope() as session:
+        persisted = session.get(GradingRunRecord, run.id)
+        assert persisted is not None
+        assert persisted.status == education.GradingRunStatus.RUNNING.value
+        assert session.scalar(
+            select(GradeResultRecord.id).where(
+                GradeResultRecord.grading_run_id == run.id
+            )
+        ) is None
+
+
+def test_heartbeat_tombstone_cancels_inflight_provider_work(
+    setup_assignment, monkeypatch,
+):
+    import time as _time
+
+    from backend.db.models import AssignmentRecord, GradingRunRecord
+    from backend.db.session import session_scope
+    from backend.domain.errors import LeaseLost
+
+    run = grading_runs.create_run(
+        teacher_id=setup_assignment["teacher_id"],
+        assignment_id=setup_assignment["assignment_id"],
+    )
+    provider_cancelled = {"value": False}
+
+    class _Registry:
+        @staticmethod
+        def count():
+            return 1
+
+    async def blocked_provider(**_kwargs):
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            provider_cancelled["value"] = True
+            raise
+
+    def tombstoned_heartbeat(*_args, **_kwargs):
+        with session_scope() as session:
+            assignment = session.get(
+                AssignmentRecord, setup_assignment["assignment_id"]
+            )
+            assert assignment is not None
+            assignment.deletion_requested_at = _time.time()
+        raise LeaseLost("task_deleted")
+
+    monkeypatch.setattr(grading_runs.settings, "grading_heartbeat_seconds", 0)
+    monkeypatch.setattr(grading_adapter, "run_grading", blocked_provider)
+    monkeypatch.setattr(
+        grading_repository, "heartbeat", tombstoned_heartbeat
+    )
+
+    with pytest.raises(LeaseLost, match="task_deleted"):
+        asyncio.run(grading_runs.process_run(
+            run_id=run.id,
+            worker_id="heartbeat-tombstone-worker",
+            registry=_Registry(),
+        ))
+    assert provider_cancelled["value"] is True
+    with session_scope() as session:
+        persisted = session.get(GradingRunRecord, run.id)
+        assert persisted is not None
+        assert persisted.status == education.GradingRunStatus.RUNNING.value
+
+
 def test_student_results_use_only_latest_released_run(setup_assignment):
     teacher_id = setup_assignment["teacher_id"]
     assignment_id = setup_assignment["assignment_id"]

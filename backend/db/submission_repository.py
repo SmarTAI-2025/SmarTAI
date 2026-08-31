@@ -56,11 +56,17 @@ def _submission_to_dto(record: SubmissionRecord, revision: SubmissionRevisionRec
     )
 
 
-def _require_open_assignment(session, assignment_id: str, student_id: str) -> AssignmentRecord:
+def _require_open_assignment(
+    session, assignment_id: str, student_id: str, *, lock: bool = False
+) -> AssignmentRecord:
     """Authorize a student submission without creating any rows."""
-    assignment = session.scalar(
-        select(AssignmentRecord).where(AssignmentRecord.id == assignment_id)
+    query = select(AssignmentRecord).where(
+        AssignmentRecord.id == assignment_id,
+        AssignmentRecord.deletion_requested_at.is_(None),
     )
+    if lock:
+        query = query.with_for_update()
+    assignment = session.scalar(query)
     if assignment is None:
         raise NotFound("assignment")
     enrolled = session.scalar(
@@ -79,7 +85,7 @@ def _require_open_assignment(session, assignment_id: str, student_id: str) -> As
 def validate_submission_access(assignment_id: str, *, student_id: str) -> None:
     """Validate enrollment/open state before an expensive OCR or LLM call."""
     with session_scope() as session:
-        _require_open_assignment(session, assignment_id, student_id)
+        _require_open_assignment(session, assignment_id, student_id, lock=True)
 
 
 def create_submission(assignment_id: str, *, student_id: str) -> education.SubmissionDTO:
@@ -91,7 +97,12 @@ def create_submission(assignment_id: str, *, student_id: str) -> education.Submi
     """
     now = time.time()
     with session_scope() as session:
-        _require_open_assignment(session, assignment_id, student_id)
+        # Serialize against the teacher's deletion tombstone.  Without the
+        # parent-row lock a submitter could authorize immediately before the
+        # tombstone commits and still insert a new child after DELETE returned.
+        _require_open_assignment(
+            session, assignment_id, student_id, lock=True
+        )
         existing = session.scalar(
             select(SubmissionRecord).where(
                 SubmissionRecord.assignment_id == assignment_id,
@@ -124,17 +135,34 @@ def add_revision(submission_id: str, *, student_id: str, source: str,
     """
     now = time.time()
     with session_scope() as session:
-        submission = session.scalar(
-            select(SubmissionRecord).where(
+        assignment_id = session.scalar(
+            select(SubmissionRecord.assignment_id).where(
                 SubmissionRecord.id == submission_id,
                 SubmissionRecord.student_id == student_id,
             )
         )
-        if submission is None:
+        if assignment_id is None:
             raise NotFound("submission")
-        assignment = session.get(AssignmentRecord, submission.assignment_id)
+        # Parent before child matches task-deletion cascade lock order.
+        assignment = session.scalar(
+            select(AssignmentRecord)
+            .where(
+                AssignmentRecord.id == assignment_id,
+                AssignmentRecord.deletion_requested_at.is_(None),
+            )
+            .with_for_update()
+        )
         if assignment is None:
             raise NotFound("assignment")
+        submission = session.scalar(
+            select(SubmissionRecord).where(
+                SubmissionRecord.id == submission_id,
+                SubmissionRecord.student_id == student_id,
+                SubmissionRecord.assignment_id == assignment_id,
+            ).with_for_update()
+        )
+        if submission is None:
+            raise NotFound("submission")
         if assignment.status != education.AssignmentStatus.PUBLISHED.value:
             raise AssignmentClosed("assignment_closed")
         next_number = (session.scalar(
@@ -211,7 +239,10 @@ def get_submission(submission_id: str, *, actor_id: str) -> education.Submission
 def list_submissions(assignment_id: str, *, actor_id: str) -> list[education.SubmissionDTO]:
     with session_scope() as session:
         assignment = session.scalar(
-            select(AssignmentRecord).where(AssignmentRecord.id == assignment_id)
+            select(AssignmentRecord).where(
+                AssignmentRecord.id == assignment_id,
+                AssignmentRecord.deletion_requested_at.is_(None),
+            )
         )
         if assignment is None:
             raise NotFound("assignment")
@@ -229,6 +260,12 @@ def list_submissions(assignment_id: str, *, actor_id: str) -> list[education.Sub
 
 def get_submission_for_student(assignment_id: str, *, student_id: str) -> education.SubmissionDTO | None:
     with session_scope() as session:
+        assignment = session.scalar(select(AssignmentRecord.id).where(
+            AssignmentRecord.id == assignment_id,
+            AssignmentRecord.deletion_requested_at.is_(None),
+        ))
+        if assignment is None:
+            raise NotFound("assignment")
         record = session.scalar(
             select(SubmissionRecord).where(
                 SubmissionRecord.assignment_id == assignment_id,
@@ -283,6 +320,12 @@ def get_current_revision_for_run(submission_id: str) -> education.SubmissionRevi
         submission = session.get(SubmissionRecord, submission_id)
         if submission is None or submission.current_revision_id is None:
             return None
+        assignment = session.scalar(select(AssignmentRecord.id).where(
+            AssignmentRecord.id == submission.assignment_id,
+            AssignmentRecord.deletion_requested_at.is_(None),
+        ))
+        if assignment is None:
+            return None
         revision = session.get(SubmissionRevisionRecord, submission.current_revision_id)
         assert revision is not None
         answers = session.scalars(
@@ -309,9 +352,12 @@ def get_current_revision_for_run(submission_id: str) -> education.SubmissionRevi
 
 
 def _authorize_read(session, submission: SubmissionRecord, actor_id: str) -> None:
-    if submission.student_id == actor_id:
-        return
-    assignment = session.get(AssignmentRecord, submission.assignment_id)
-    if assignment is not None and assignment.teacher_id == actor_id:
+    assignment = session.scalar(select(AssignmentRecord).where(
+        AssignmentRecord.id == submission.assignment_id,
+        AssignmentRecord.deletion_requested_at.is_(None),
+    ))
+    if assignment is None:
+        raise NotFound("submission")
+    if submission.student_id == actor_id or assignment.teacher_id == actor_id:
         return
     raise NotFound("submission")

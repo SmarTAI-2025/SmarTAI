@@ -307,7 +307,9 @@ async def _persist_and_register(
         else hashlib.sha256(archive_member_reference_content(
             container_sha256=container_file.sha256,
             member_name=raw.filename,
-        )).hexdigest() if container_file is not None else ""
+        )).hexdigest()
+        if container_file is not None
+        else ""
     )
     existing = await run_in_threadpool(
         source_outcome_repository.get_source_at_position,
@@ -331,16 +333,21 @@ async def _persist_and_register(
 
     recovered_kind: str | None = None
     recovered_prefix: str | None = None
-    if raw.content is not None:
-        recovered_kind = "submission_source"
+    if container_file is not None and raw.content is not None:
+        recovered_kind = "submission_archive_member"
         recovered_prefix = (
             f"assignments/{task_id}/submission-sources/{job_id}/{job_attempt}"
         )
     elif container_file is not None:
-        recovered_kind = "submission_source_reference"
+        recovered_kind = "submission_archive_member_reference"
         recovered_prefix = (
             f"assignments/{task_id}/submission-source-references/"
             f"{job_id}/{job_attempt}"
+        )
+    elif raw.content is not None:
+        recovered_kind = "submission_source"
+        recovered_prefix = (
+            f"assignments/{task_id}/submission-sources/{job_id}/{job_attempt}"
         )
     stored: StoredFile | None = None
     if recovered_kind is not None and recovered_prefix is not None:
@@ -355,9 +362,7 @@ async def _persist_and_register(
     try:
         if stored is not None:
             pass
-        elif raw.content is None:
-            if container_file is None:
-                raise RuntimeError("submission_source_persistence_failed")
+        elif container_file is not None and raw.content is None:
             stored = await run_in_threadpool(
                 create_archive_member_reference,
                 storage=storage,
@@ -373,12 +378,14 @@ async def _persist_and_register(
                 ),
                 fence_lease_token=operation_lease_token,
             )
+        elif raw.content is None:
+            raise RuntimeError("submission_source_persistence_failed")
         else:
             stored = await run_in_threadpool(
                 save_file,
                 storage=storage,
                 owner_id=owner_id,
-                kind="submission_source",
+                kind=(recovered_kind or "submission_source"),
                 original_name=raw.filename,
                 content=raw.content,
                 content_type=raw.content_type,

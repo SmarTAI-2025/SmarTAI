@@ -291,6 +291,12 @@ class Settings(BaseSettings):
     source_storage_reservation_ttl_seconds: int = int(
         os.getenv("SMARTAI_SOURCE_STORAGE_RESERVATION_TTL_SECONDS", "3600")
     )
+    # A replacement may preflight several originals before one atomic workflow
+    # switch. The claim prevents another concurrent replacement from reusing
+    # the same old-file quota credit; abandoned claims expire automatically.
+    source_replacement_claim_ttl_seconds: int = int(
+        os.getenv("SMARTAI_SOURCE_REPLACEMENT_CLAIM_TTL_SECONDS", "7200")
+    )
     # Physical deletion failures are retried forever with bounded exponential
     # backoff. They remain charged until storage confirms deletion.
     source_cleanup_retry_base_seconds: int = int(

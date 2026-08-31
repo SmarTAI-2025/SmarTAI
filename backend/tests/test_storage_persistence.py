@@ -316,3 +316,125 @@ def test_object_storage_open_distinguishes_missing_from_unavailable(
 
     assert "private-bucket" not in str(failure.value)
     assert "private/key" not in str(failure.value)
+
+
+def test_object_storage_permanent_delete_purges_versions_and_markers_with_pagination():
+    from backend.storage import S3Storage
+
+    target = "assignments/task-1/source.bin"
+    adjacent = "assignments/task-1/source.bin-adjacent"
+
+    class VersionedClient:
+        def __init__(self):
+            self.entries = [
+                ("Versions", target, "version-3"),
+                ("DeleteMarkers", target, "delete-marker-2"),
+                ("Versions", target, "version-1"),
+                ("Versions", adjacent, "adjacent-version"),
+            ]
+            self.deleted: list[tuple[str, str]] = []
+            self.paginated = False
+
+        def list_object_versions(
+            self,
+            *,
+            Bucket,
+            Prefix,
+            KeyMarker=None,
+            VersionIdMarker=None,
+        ):
+            assert Bucket == "private-bucket"
+            offset = 0
+            if KeyMarker is not None:
+                assert VersionIdMarker == "test-cursor"
+                offset = int(KeyMarker.removeprefix("page-"))
+                self.paginated = True
+            matching = [entry for entry in self.entries if entry[1].startswith(Prefix)]
+            selected = matching[offset : offset + 2]
+            response = {
+                "IsTruncated": offset + len(selected) < len(matching),
+                "Versions": [
+                    {"Key": key, "VersionId": version_id}
+                    for kind, key, version_id in selected
+                    if kind == "Versions"
+                ],
+                "DeleteMarkers": [
+                    {"Key": key, "VersionId": version_id}
+                    for kind, key, version_id in selected
+                    if kind == "DeleteMarkers"
+                ],
+            }
+            if response["IsTruncated"]:
+                response["NextKeyMarker"] = f"page-{offset + len(selected)}"
+                response["NextVersionIdMarker"] = "test-cursor"
+            return response
+
+        def delete_object(self, *, Bucket, Key, VersionId):
+            assert Bucket == "private-bucket"
+            self.deleted.append((Key, VersionId))
+            self.entries = [
+                entry
+                for entry in self.entries
+                if not (entry[1] == Key and entry[2] == VersionId)
+            ]
+            return {}
+
+    client = VersionedClient()
+    storage = S3Storage.__new__(S3Storage)
+    storage.bucket = "private-bucket"
+    storage.client = client
+
+    assert storage.list_keys(target) == sorted((adjacent, target))
+    storage.delete(target)
+
+    assert client.paginated
+    assert set(client.deleted) == {
+        (target, "version-3"),
+        (target, "delete-marker-2"),
+        (target, "version-1"),
+    }
+    assert storage.list_keys(target) == [adjacent]
+
+
+def test_object_storage_version_listing_failure_never_claims_delete_success():
+    from botocore.exceptions import ClientError
+
+    from backend.storage import S3Storage
+    from backend.storage.base import StorageUnavailable
+
+    class DeniedClient:
+        def list_object_versions(self, **_kwargs):
+            raise ClientError(
+                {
+                    "Error": {"Code": "AccessDenied", "Message": "denied"},
+                    "ResponseMetadata": {"HTTPStatusCode": 403},
+                },
+                "ListObjectVersions",
+            )
+
+    storage = S3Storage.__new__(S3Storage)
+    storage.bucket = "private-bucket"
+    storage.client = DeniedClient()
+
+    with pytest.raises(StorageUnavailable, match="storage_unavailable"):
+        storage.delete("private/key")
+
+
+def test_object_storage_rejects_non_advancing_version_pagination():
+    from backend.storage import S3Storage
+    from backend.storage.base import StorageUnavailable
+
+    class CyclingClient:
+        def list_object_versions(self, **_kwargs):
+            return {
+                "IsTruncated": True,
+                "NextKeyMarker": "same",
+                "NextVersionIdMarker": "same",
+            }
+
+    storage = S3Storage.__new__(S3Storage)
+    storage.bucket = "private-bucket"
+    storage.client = CyclingClient()
+
+    with pytest.raises(StorageUnavailable, match="storage_version_listing_invalid"):
+        storage.list_keys("assignments/task-1/")

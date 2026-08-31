@@ -8,13 +8,24 @@ from types import SimpleNamespace
 
 import pytest
 from fastapi import HTTPException, UploadFile
+from sqlalchemy import select
 from starlette.datastructures import Headers
 
 from backend.api import task_preparation, tasks
 from backend.db import assignment_repository, grading_repository, workflow_repository
-from backend.db.models import AssignmentRecord, CourseRecord, UserRecord
+from backend.db.models import (
+    AssignmentQuestionRecord,
+    AssignmentRecord,
+    CourseRecord,
+    UserRecord,
+)
 from backend.db.session import session_scope
-from backend.domain.errors import InvalidTransition, ValidationError, VersionConflict
+from backend.domain.errors import (
+    InvalidTransition,
+    NotFound,
+    ValidationError,
+    VersionConflict,
+)
 from backend.services import task_facade
 from backend.tools.structured_llm import PermanentLLMError, RateLimitError, TransientLLMError
 
@@ -87,6 +98,13 @@ def _problem(stem: str) -> dict[str, dict]:
             "stem": stem, "criterion": "", "max_score": 10,
         }
     }
+
+
+def _tombstone_task(task_id: str) -> None:
+    with session_scope() as session:
+        assignment = session.get(AssignmentRecord, task_id)
+        assert assignment is not None
+        assignment.deletion_requested_at = time.time()
 
 
 def test_grading_terminal_state_releases_task_workflow_atomically():
@@ -429,6 +447,179 @@ def test_atomic_question_batch_rolls_back_before_any_partial_write():
     applied = workflow_repository.get_operation(job.id, owner_id=owner_id)
     assert applied.status == "applied"
     assert applied.payload["applied_candidate_ids"] == ["candidate-1"]
+
+
+def test_task_tombstone_fences_atomic_question_patch_publication():
+    owner_id, task_id = _seed_task(with_question=True)
+    job, _ = workflow_repository.create_operation(
+        assignment_id=task_id,
+        owner_id=owner_id,
+        operation_type="material_import",
+        input_hash=uuid.uuid4().hex,
+        expires_at=time.time() + 60,
+    )
+    workflow_repository.update_operation(
+        job.id,
+        owner_id=owner_id,
+        expected_attempt=job.attempt,
+        status="ready",
+    )
+    _tombstone_task(task_id)
+
+    with pytest.raises(NotFound):
+        task_facade.apply_question_patches_atomic(
+            task_id=task_id,
+            owner_id=owner_id,
+            expected_workflow_revision=0,
+            patches=[{"q_id": "q1", "fields": {"criterion": "late"}}],
+            operation_id=job.id,
+            expected_operation_attempt=job.attempt,
+            required_operation_status="ready",
+            final_operation_status="applied",
+            operation_payload={},
+        )
+
+    with session_scope() as session:
+        question = session.scalar(
+            select(AssignmentQuestionRecord).where(
+                AssignmentQuestionRecord.assignment_id == task_id,
+                AssignmentQuestionRecord.q_id == "q1",
+            )
+        )
+        assert question is not None
+        assert question.criterion == ""
+    assert workflow_repository.get_workflow(
+        task_id, owner_id=owner_id
+    ).workflow_revision == 0
+    assert workflow_repository.get_operation(
+        job.id, owner_id=owner_id
+    ).status == "ready"
+
+
+def test_task_tombstone_fences_problem_extraction_publication():
+    owner_id, task_id = _seed_task(with_question=True)
+    job, _ = workflow_repository.create_operation(
+        assignment_id=task_id,
+        owner_id=owner_id,
+        operation_type="problem_extraction",
+        input_hash=uuid.uuid4().hex,
+        expires_at=time.time() + 60,
+    )
+    workflow_repository.update_operation(
+        job.id,
+        owner_id=owner_id,
+        expected_attempt=job.attempt,
+        status="running",
+    )
+    _tombstone_task(task_id)
+
+    with pytest.raises(NotFound):
+        task_facade._replace_draft_questions(
+            task_id,
+            owner_id,
+            _problem("late replacement"),
+            "late.txt",
+            expected_workflow_revision=0,
+            replace_confirmed=True,
+            operation_id=job.id,
+            expected_operation_attempt=job.attempt,
+        )
+
+    with session_scope() as session:
+        question = session.scalar(
+            select(AssignmentQuestionRecord).where(
+                AssignmentQuestionRecord.assignment_id == task_id,
+                AssignmentQuestionRecord.q_id == "q1",
+            )
+        )
+        assert question is not None
+        assert question.stem == "Original"
+    assert workflow_repository.get_operation(
+        job.id, owner_id=owner_id
+    ).status == "running"
+
+
+def test_task_tombstone_fences_submission_recognition_publication():
+    owner_id, task_id = _seed_task(with_question=True)
+    with session_scope() as session:
+        assignment = session.get(AssignmentRecord, task_id)
+        assert assignment is not None
+        course_id = assignment.course_id
+    job, _ = workflow_repository.create_operation(
+        assignment_id=task_id,
+        owner_id=owner_id,
+        operation_type="submission_recognition",
+        input_hash=uuid.uuid4().hex,
+        expires_at=time.time() + 60,
+    )
+    workflow_repository.update_operation(
+        job.id,
+        owner_id=owner_id,
+        expected_attempt=job.attempt,
+        status="running",
+    )
+    _tombstone_task(task_id)
+
+    with pytest.raises(NotFound):
+        task_facade._commit_imported_submissions(
+            task_id=task_id,
+            owner_id=owner_id,
+            course_id=course_id,
+            students=[],
+            expected_workflow_revision=0,
+            operation_id=job.id,
+            expected_operation_attempt=job.attempt,
+        )
+
+    with session_scope() as session:
+        assignment = session.get(AssignmentRecord, task_id)
+        assert assignment is not None
+        assert assignment.status == "draft"
+    assert workflow_repository.get_operation(
+        job.id, owner_id=owner_id
+    ).status == "running"
+
+
+def test_task_tombstone_fences_auxiliary_plan_publication():
+    owner_id, task_id = _seed_task(with_question=True)
+    job, _ = workflow_repository.create_operation(
+        assignment_id=task_id,
+        owner_id=owner_id,
+        operation_type="material_import",
+        input_hash=uuid.uuid4().hex,
+        expires_at=time.time() + 60,
+    )
+    workflow_repository.update_operation(
+        job.id,
+        owner_id=owner_id,
+        expected_attempt=job.attempt,
+        status="running",
+    )
+    workflow_repository.update_workflow(
+        task_id,
+        owner_id=owner_id,
+        bump_revision=False,
+        active_operation="material_import",
+        active_job_id=job.id,
+    )
+    _tombstone_task(task_id)
+
+    with pytest.raises(NotFound):
+        task_facade.complete_planning_operation_atomic(
+            task_id=task_id,
+            owner_id=owner_id,
+            expected_workflow_revision=0,
+            operation_id=job.id,
+            expected_operation_attempt=job.attempt,
+            payload={},
+            progress={},
+        )
+
+    workflow = workflow_repository.get_workflow(task_id, owner_id=owner_id)
+    assert workflow.active_job_id == job.id
+    assert workflow_repository.get_operation(
+        job.id, owner_id=owner_id
+    ).status == "running"
 
 
 def test_atomic_question_batch_rejects_non_finite_operation_payload():
