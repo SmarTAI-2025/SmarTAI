@@ -13,6 +13,10 @@ import {
 import { Button } from "@/components/ui/Button";
 import { Input } from "@/components/ui/Input";
 import { useI18n } from "@/i18n/I18nProvider";
+import {
+  isKnowledgeStorageQuotaExceeded,
+  knowledgeStorageQuotaCopy,
+} from "@/lib/knowledgeStorage";
 import type {
   Course,
   CourseMaterial,
@@ -208,8 +212,12 @@ export function UploadDialog({ courses, groups, onClose, onUploaded }: UploadDia
         : tx(locale, "相同资料已存在，已复用原文件", "The same material already exists and was reused"));
       onUploaded(result);
     } catch (error) {
+      const normalized = normalizeAPIError(error);
+      const quotaExceeded = isKnowledgeStorageQuotaExceeded(normalized);
       toast.error(tx(locale, "资料上传失败", "Material upload failed"), {
-        description: normalizeAPIError(error).message,
+        description: quotaExceeded
+          ? knowledgeStorageQuotaCopy(locale).description
+          : normalized.message,
       });
     }
   }
@@ -321,11 +329,21 @@ export function MaterialDialog({ material, courses, groups, onClose, onSaved, on
 
   async function deleteMaterial() {
     try {
-      await remove.mutateAsync({
+      const result = await remove.mutateAsync({
         materialId: material.material_id,
         confirmReferenced: material.task_reference_count > 0,
       });
-      toast.success(tx(locale, "资料已删除", "Material deleted"));
+      if (result.status === "deletion_pending") {
+        toast.success(tx(locale, "资料已移除", "Material removed"), {
+          description: tx(
+            locale,
+            "系统会在后台自动清理原文件；完成前仍计入知识库占用，无需手动重试。",
+            "The source file will be cleaned automatically in the background. It remains charged to knowledge storage until cleanup finishes; no manual retry is needed.",
+          ),
+        });
+      } else {
+        toast.success(tx(locale, "资料已删除", "Material deleted"));
+      }
       onDeleted();
     } catch (error) {
       toast.error(tx(locale, "无法删除资料", "Could not delete material"), {

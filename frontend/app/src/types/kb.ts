@@ -30,7 +30,8 @@ export interface KBUploadResponse {
 }
 
 export interface KBDeleteResponse {
-  status: "success";
+  status: "success" | "deletion_pending";
   doc_id: string;
   workflow_revision: number;
+  cleanup_operation_id?: string | null;
 }

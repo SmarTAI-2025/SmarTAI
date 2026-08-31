@@ -22,7 +22,6 @@ from backend.db.models import (
     CourseMaterialGroupRecord,
     CourseMaterialRecord,
     CourseRecord,
-    KnowledgeChunkRecord,
     KnowledgeDocumentRecord,
     StoredFileRecord,
 )
@@ -137,6 +136,8 @@ class DeletedMaterial:
     document_id: str
     storage_key: str | None
     detached_references: int
+    cleanup_operation_id: str | None
+    cleanup_status: str
 
 
 def get_owned_course(course_id: str, owner_id: str) -> CourseRef | None:
@@ -167,6 +168,11 @@ def _course_ref(session, course_id: str | None, owner_id: str) -> CourseRef | No
 
 
 def _group_counts(session, owner_id: str) -> dict[str, int]:
+    from backend.db.knowledge_storage_repository import visible_document_ids
+
+    visible = visible_document_ids(owner_id, include_task_only=False)
+    if not visible:
+        return {}
     return {
         group_id: int(count)
         for group_id, count in session.execute(
@@ -174,6 +180,7 @@ def _group_counts(session, owner_id: str) -> dict[str, int]:
             .where(
                 CourseMaterialRecord.owner_id == owner_id,
                 CourseMaterialRecord.group_id.is_not(None),
+                CourseMaterialRecord.document_id.in_(visible),
             )
             .group_by(CourseMaterialRecord.group_id)
         )
@@ -471,8 +478,15 @@ def list_materials(
     category: str | None = None,
     query: str | None = None,
 ) -> list[CourseMaterial]:
+    from backend.db.knowledge_storage_repository import visible_document_ids
+
+    visible = visible_document_ids(owner_id, include_task_only=False)
+    if not visible:
+        return []
     with session_scope() as session:
-        stmt = _material_statement(owner_id)
+        stmt = _material_statement(owner_id).where(
+            CourseMaterialRecord.document_id.in_(visible)
+        )
         if course_id is not None:
             stmt = stmt.where(CourseMaterialRecord.course_id == course_id)
         if ungrouped:
@@ -501,17 +515,33 @@ def list_materials(
 
 
 def get_material(material_id: str, owner_id: str) -> CourseMaterial | None:
+    from backend.db.knowledge_storage_repository import visible_document_ids
+
     with session_scope() as session:
         row = session.execute(
             _material_statement(owner_id).where(CourseMaterialRecord.id == material_id)
         ).first()
         if row is None:
             return None
+        if row[1].id not in visible_document_ids(
+            owner_id,
+            include_task_only=False,
+            document_ids=(row[1].id,),
+        ):
+            return None
         stats = _reference_stats(session, owner_id, [row[1].id])
         return _material_dto(row, stats)
 
 
 def get_material_by_document(document_id: str, owner_id: str) -> CourseMaterial | None:
+    from backend.db.knowledge_storage_repository import visible_document_ids
+
+    if document_id not in visible_document_ids(
+        owner_id,
+        include_task_only=False,
+        document_ids=(document_id,),
+    ):
+        return None
     with session_scope() as session:
         row = session.execute(
             _material_statement(owner_id).where(
@@ -541,6 +571,18 @@ def create_material(
     now = time.time()
     try:
         with session_scope() as session:
+            from backend.db.knowledge_storage_repository import (
+                lock_knowledge_owner_in_session,
+                promote_retained_in_session,
+            )
+
+            lock_knowledge_owner_in_session(session, owner_id)
+            # Creating global library metadata is an explicit retention action.
+            # Promotion is monotonic and happens in this transaction before the
+            # material row can become globally visible.
+            promote_retained_in_session(
+                session, document_id=document_id, owner_id=owner_id
+            )
             document = session.scalar(
                 select(KnowledgeDocumentRecord).where(
                     KnowledgeDocumentRecord.id == document_id,
@@ -647,13 +689,13 @@ def delete_material(
     *,
     confirm_referenced: bool,
 ) -> DeletedMaterial | None:
-    """Atomically detach assignment references and delete DB metadata.
-
-    The returned storage key is deleted by the service/API only after this
-    transaction commits, avoiding a live DB row that points to a missing object
-    if the SQL mutation fails.
-    """
+    """Atomically detach references and record durable asynchronous cleanup."""
     with session_scope() as session:
+        from backend.db.knowledge_storage_repository import (
+            lock_knowledge_owner_in_session,
+        )
+
+        lock_knowledge_owner_in_session(session, owner_id)
         row = session.execute(
             select(CourseMaterialRecord, KnowledgeDocumentRecord, StoredFileRecord)
             .join(
@@ -678,12 +720,11 @@ def delete_material(
         if row is None:
             return None
         material, document, stored = row
-        from backend.db.knowledge_repository import (
-            assert_document_not_frozen_by_active_run,
+        from backend.db.knowledge_storage_repository import (
+            request_document_cleanup_in_session,
         )
-
-        assert_document_not_frozen_by_active_run(
-            session, document_id=document.id, owner_id=owner_id,
+        from backend.domain.knowledge_storage import (
+            KNOWLEDGE_CLEANUP_EXPLICIT_DELETE,
         )
         reference_count = int(session.scalar(
             select(func.count(AssignmentKnowledgeDocumentRecord.assignment_id))
@@ -699,6 +740,16 @@ def delete_material(
         if reference_count and not confirm_referenced:
             raise MaterialReferenced(reference_count)
 
+        # The core cleanup request fails closed while an active grading run has
+        # frozen this document.  Only after that guard passes may references be
+        # detached and the material disappear from global available listings.
+        cleanup = request_document_cleanup_in_session(
+            session,
+            document_id=document.id,
+            owner_id=owner_id,
+            reason=KNOWLEDGE_CLEANUP_EXPLICIT_DELETE,
+        )
+
         owned_assignments = select(AssignmentRecord.id).where(
             AssignmentRecord.teacher_id == owner_id
         )
@@ -708,31 +759,11 @@ def delete_material(
                 AssignmentKnowledgeDocumentRecord.assignment_id.in_(owned_assignments),
             )
         )
-        # Break the deliberate KnowledgeDocument <-> StoredFile nullable cycle
-        # before deleting both records so SQLite and PostgreSQL behave equally.
-        if stored is not None:
-            document.stored_file_id = None
-            stored.knowledge_document_id = None
-            session.flush()
-        session.execute(delete(KnowledgeChunkRecord).where(
-            KnowledgeChunkRecord.document_id == document.id
-        ))
-        session.execute(delete(CourseMaterialRecord).where(
-            CourseMaterialRecord.id == material_id,
-            CourseMaterialRecord.owner_id == owner_id,
-        ))
-        session.execute(delete(KnowledgeDocumentRecord).where(
-            KnowledgeDocumentRecord.id == document.id,
-            KnowledgeDocumentRecord.owner_id == owner_id,
-        ))
-        if stored is not None:
-            session.execute(delete(StoredFileRecord).where(
-                StoredFileRecord.id == stored.id,
-                StoredFileRecord.owner_id == owner_id,
-            ))
         return DeletedMaterial(
             material_id=material_id,
             document_id=document.id,
             storage_key=stored.storage_key if stored is not None else None,
             detached_references=reference_count,
+            cleanup_operation_id=cleanup.cleanup_operation_id,
+            cleanup_status=cleanup.status,
         )

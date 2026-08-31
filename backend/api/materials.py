@@ -20,7 +20,6 @@ from backend.db import course_library_repository as library_repo
 from backend.knowledge.service import ingest_document
 from backend.models import User
 from backend.domain.errors import DomainError
-from backend.storage import get_storage
 from backend.tools.catalog_matching import match_catalog_items, normalize_catalog_text
 
 
@@ -246,6 +245,7 @@ async def upload_course_material(
             content=body,
             content_type=file.content_type,
             title=Path(filename).stem,
+            retention_policy="retained",
         )
     except HTTPException:
         raise
@@ -254,6 +254,8 @@ async def upload_course_material(
             status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail={"code": "invalid_course_material", "message": str(exc)},
         ) from exc
+    except DomainError as exc:
+        return domain_error_response(exc)
     if document.status != "ready":
         raise HTTPException(
             status.HTTP_409_CONFLICT,
@@ -469,7 +471,7 @@ def update_course_material(
     return _serialize_material(updated)
 
 
-@router.delete("/{material_id}")
+@router.delete("/{material_id}", status_code=status.HTTP_202_ACCEPTED)
 def delete_course_material(
     material_id: str,
     confirm_referenced: bool = Query(default=False),
@@ -493,10 +495,9 @@ def delete_course_material(
         return domain_error_response(exc)
     if deleted is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Course material not found")
-    if deleted.storage_key is not None:
-        get_storage().delete(deleted.storage_key)
     return {
-        "status": "success",
+        "status": "deletion_pending",
         "material_id": material_id,
         "detached_task_references": deleted.detached_references,
+        "cleanup_operation_id": deleted.cleanup_operation_id,
     }

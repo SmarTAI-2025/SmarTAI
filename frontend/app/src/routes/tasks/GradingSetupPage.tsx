@@ -30,6 +30,10 @@ import { useI18n } from "@/i18n/I18nProvider";
 import type { Locale } from "@/i18n/messages";
 import { cn } from "@/lib/cn";
 import { gradingSetupText, type GradingSetupCopyKey } from "@/lib/gradingSetupCopy";
+import {
+  isKnowledgeStorageQuotaExceeded,
+  knowledgeStorageQuotaCopy,
+} from "@/lib/knowledgeStorage";
 import { modelDisplayName, modelSecondaryLabel } from "@/lib/modelPresentation";
 import { isWorkflowRevisionConflictCode } from "@/lib/taskActionGuards";
 import { canTaskBeRegraded, getSafeTaskReturnTo, getTaskGradingSetupHref } from "@/lib/taskFlow";
@@ -547,7 +551,7 @@ export function KnowledgeSection({ locale, taskId, value, onChange }: {
           : `Added “${filename}” to this task.`,
       );
     } catch (error) {
-      setKnowledgeError(normalizeAPIError(error).message);
+      setKnowledgeError(localizeKnowledgeStorageError(error, locale));
     } finally {
       setPendingMaterialId(null);
     }
@@ -565,7 +569,7 @@ export function KnowledgeSection({ locale, taskId, value, onChange }: {
           : `Added “${file.name}” to this task.`,
       );
     } catch (error) {
-      setKnowledgeError(normalizeAPIError(error).message);
+      setKnowledgeError(localizeKnowledgeStorageError(error, locale));
     } finally {
       if (fileInputRef.current) fileInputRef.current.value = "";
     }
@@ -578,7 +582,7 @@ export function KnowledgeSection({ locale, taskId, value, onChange }: {
       await deleteDocument.mutateAsync({ taskId, docId });
       if (docs.length <= 1) onChange("none");
     } catch (error) {
-      setKnowledgeError(normalizeAPIError(error).message);
+      setKnowledgeError(localizeKnowledgeStorageError(error, locale));
     }
   }
 
@@ -1039,4 +1043,11 @@ function localizeSaveError(error: unknown, locale: Locale): string {
   if (["shared_pool_single_expert_required", "multi_sample_not_applicable"].includes(code)) return gradingSetupText(locale, "sharedPoolRestriction");
   if (isWorkflowRevisionConflictCode(code)) return gradingSetupText(locale, "staleReloaded");
   return gradingSetupText(locale, "saveErrorGeneric");
+}
+
+function localizeKnowledgeStorageError(error: unknown, locale: Locale): string {
+  if (isKnowledgeStorageQuotaExceeded(error)) {
+    return knowledgeStorageQuotaCopy(locale).description;
+  }
+  return normalizeAPIError(error).message;
 }

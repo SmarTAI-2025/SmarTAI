@@ -217,7 +217,7 @@ def test_mail_migrations_extend_provider_routing_as_one_head(tmp_path, monkeypat
     script = ScriptDirectory.from_config(cfg)
 
     assert [revision.revision for revision in script.get_revisions("heads")] == [
-        "0015_source_file_lifecycle"
+        "0016_knowledge_storage_quota"
     ]
 
     command.upgrade(cfg, "0012_provider_routing_pref")

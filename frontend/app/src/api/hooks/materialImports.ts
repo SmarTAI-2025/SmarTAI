@@ -1,9 +1,17 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import * as materialImportsApi from "@/api/materialImports";
-import { materialImportKeys, taskKeys } from "./keys";
+import { materialImportKeys, personalKnowledgeKeys, taskKeys } from "./keys";
 
 export function usePreflightMaterialImport() {
-  return useMutation({ mutationFn: materialImportsApi.preflightMaterialImport });
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: materialImportsApi.preflightMaterialImport,
+    onSettled: (_data, _error, variables) => {
+      if (variables?.saveToLibrary) {
+        queryClient.invalidateQueries({ queryKey: personalKnowledgeKeys.usage() });
+      }
+    },
+  });
 }
 
 export function useStartMaterialImport() {

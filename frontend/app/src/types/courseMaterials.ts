@@ -107,9 +107,10 @@ export interface UpdateCourseMaterialGroupInput {
 }
 
 export interface DeleteCourseMaterialResponse {
-  status: "success";
+  status: "success" | "deletion_pending";
   material_id: string;
   detached_task_references: number;
+  cleanup_operation_id?: string | null;
 }
 
 export interface DeleteCourseMaterialGroupResponse {

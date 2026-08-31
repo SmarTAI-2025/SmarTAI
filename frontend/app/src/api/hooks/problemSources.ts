@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import * as problemSourcesApi from "@/api/problemSources";
 import type { ProblemSourceScope, Task, TaskStateSnapshot } from "@/types";
-import { problemSourceKeys, taskKeys } from "./keys";
+import { personalKnowledgeKeys, problemSourceKeys, taskKeys } from "./keys";
 
 export function useProblemSourceLibrary(
   taskId: string | undefined,
@@ -26,7 +26,15 @@ export function useQuestionPreparationCapabilities(taskId?: string) {
 }
 
 export function useProblemSourcePreflight() {
-  return useMutation({ mutationFn: problemSourcesApi.preflightProblemSource });
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: problemSourcesApi.preflightProblemSource,
+    onSettled: (_data, _error, variables) => {
+      if (variables?.saveToLibrary) {
+        queryClient.invalidateQueries({ queryKey: personalKnowledgeKeys.usage() });
+      }
+    },
+  });
 }
 
 export function useStartProblemExtraction() {

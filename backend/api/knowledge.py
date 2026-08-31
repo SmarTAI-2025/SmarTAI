@@ -17,7 +17,7 @@ from backend.api.errors import domain_error_response
 from backend.auth import get_current_user, require_teacher
 from backend.db.knowledge_repository import (
     get_document,
-    list_documents,
+    list_visible_documents,
     list_selected_documents,
     set_task_documents,
 )
@@ -40,21 +40,54 @@ class AssignmentKnowledgeSelection(BaseModel):
 async def upload_document(file: UploadFile = File(...), current: User = Depends(get_current_user)):
     body = await file.read()
     try:
-        document = await ingest_document(owner_id=current.id, original_name=file.filename or "knowledge.txt",
-                                         content=body, content_type=file.content_type)
+        document = await ingest_document(
+            owner_id=current.id,
+            original_name=file.filename or "knowledge.txt",
+            content=body,
+            content_type=file.content_type,
+            retention_policy="retained",
+        )
     except ValueError as exc:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    except DomainError as exc:
+        return domain_error_response(exc)
     return document.public()
 
 
 @router.get("/documents")
 def get_documents(current: User = Depends(get_current_user)):
-    return {"documents": [document.public() for document in list_documents(current.id)]}
+    return {
+        "documents": [
+            document.public() for document in list_visible_documents(current.id)
+        ]
+    }
+
+
+@router.get("/storage/usage")
+def get_knowledge_storage_usage(current: User = Depends(get_current_user)):
+    from backend.db.knowledge_storage_repository import knowledge_storage_usage
+
+    try:
+        return knowledge_storage_usage(current.id).as_dict()
+    except DomainError as exc:
+        return domain_error_response(exc)
+
+
+def _visible_personal_document(document_id: str, owner_id: str):
+    from backend.db.knowledge_storage_repository import visible_document_ids
+
+    if document_id not in visible_document_ids(
+        owner_id,
+        include_task_only=False,
+        document_ids=(document_id,),
+    ):
+        return None
+    return get_document(document_id, owner_id)
 
 
 @router.get("/documents/{document_id}")
 def get_document_detail(document_id: str, current: User = Depends(get_current_user)):
-    document = get_document(document_id, current.id)
+    document = _visible_personal_document(document_id, current.id)
     if document is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Knowledge document not found")
     return document.public()
@@ -62,7 +95,7 @@ def get_document_detail(document_id: str, current: User = Depends(get_current_us
 
 @router.get("/documents/{document_id}/download")
 def download_document(document_id: str, current: User = Depends(get_current_user)):
-    document = get_document(document_id, current.id)
+    document = _visible_personal_document(document_id, current.id)
     if document is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Knowledge document not found")
     stored = document_file(document, current.id)
@@ -80,16 +113,20 @@ def download_document(document_id: str, current: User = Depends(get_current_user
                     headers={"Content-Disposition": f"attachment; filename*=UTF-8''{quote(stored.original_name, safe='')}"})
 
 
-@router.delete("/documents/{document_id}")
+@router.delete("/documents/{document_id}", status_code=status.HTTP_202_ACCEPTED)
 def delete_document_endpoint(document_id: str, current: User = Depends(get_current_user)):
-    document = get_document(document_id, current.id)
+    document = _visible_personal_document(document_id, current.id)
     if document is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Knowledge document not found")
     try:
-        remove_document(document=document, owner_id=current.id)
+        cleanup = remove_document(document=document, owner_id=current.id)
     except DomainError as exc:
         return domain_error_response(exc)
-    return {"status": "deleted", "id": document_id}
+    return {
+        "status": "deletion_pending",
+        "id": document_id,
+        "cleanup_operation_id": cleanup.cleanup_operation_id,
+    }
 
 
 # ─── Assignment-scoped selection ──────────────────────────────────────────────
