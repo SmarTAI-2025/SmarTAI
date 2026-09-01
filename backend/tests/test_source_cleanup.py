@@ -712,6 +712,71 @@ async def test_task_delete_hides_then_removes_an_available_original(
     ).used_bytes == 0
 
 
+@pytest.mark.asyncio
+async def test_unfinished_draft_task_delete_removes_structured_data_and_original(
+    tmp_path, monkeypatch,
+):
+    """Deletion is not gated on a completed run or generated report."""
+    owner_id = "unfinished-draft-delete-owner"
+    with session_scope() as session:
+        session.add(UserRecord(
+            id=owner_id,
+            username=owner_id,
+            password_hash="hash",
+            role="teacher",
+            is_active=True,
+        ))
+    task = task_facade.create_task(
+        owner_id=owner_id,
+        name="Unfinished draft",
+        semester_id=None,
+        course_id=None,
+        idempotency_key="unfinished-draft-delete",
+    )
+    task_id = task["task_id"]
+    question_id = "unfinished-draft-question"
+    with session_scope() as session:
+        session.add(AssignmentQuestionRecord(
+            id=question_id,
+            assignment_id=task_id,
+            q_id="Q1",
+            order_index=0,
+            number="1",
+            type="calculation",
+            stem="Unfinished structured question",
+            criterion="Not yet graded",
+            max_score=10,
+            version=1,
+        ))
+
+    storage = LocalStorage(tmp_path / "unfinished-draft-delete")
+    original = file_repository.save_file(
+        storage=storage,
+        owner_id=owner_id,
+        kind="problem_source",
+        original_name="draft-problems.pdf",
+        content=b"unfinished draft original",
+        content_type="application/pdf",
+        assignment_id=task_id,
+    )
+    with session_scope() as session:
+        assert session.scalar(select(GradeResultRecord.id).limit(1)) is None
+
+    monkeypatch.setattr(task_deletion, "get_storage", lambda: storage)
+    response = task_facade.delete_task(task_id=task_id, owner_id=owner_id)
+    assert response["status"] == "deletion_pending"
+    with pytest.raises(NotFound):
+        task_facade.get_task(task_id=task_id, owner_id=owner_id, full=False)
+    assert storage.exists(original.storage_key)
+
+    await _finish_task_delete(_task_delete_worker(), task_id)
+    assert not storage.exists(original.storage_key)
+    with session_scope() as session:
+        assert session.get(AssignmentRecord, task_id) is None
+        assert session.get(AssignmentQuestionRecord, question_id) is None
+        assert session.get(StoredFileRecord, original.id) is None
+
+
 def test_task_delete_accepts_zero_byte_revision_source_and_waits_for_reservation(
     tmp_path,
 ):
@@ -805,40 +870,32 @@ async def test_task_delete_removes_only_knowledge_link_and_retains_library_objec
 ):
     seeded = _prepared_task()
     storage = LocalStorage(tmp_path / "retained-knowledge")
-    document_id = "retained-task-knowledge"
     content = b"long-lived-knowledge"
-    with session_scope() as session:
-        session.add(KnowledgeDocumentRecord(
-            id=document_id,
-            owner_id=seeded["owner_id"],
-            stored_file_id=None,
-            title="Reference",
-            original_name="reference.pdf",
-            content_type="application/pdf",
-            size_bytes=len(content),
-            sha256=hashlib.sha256(content).hexdigest(),
-            status="ready",
-            parser_version="v1",
-            chunk_count=1,
-        ))
-    knowledge = file_repository.save_file(
+    from backend.db.knowledge_repository import (
+        replace_document_chunks,
+        set_task_documents,
+    )
+    from backend.services.knowledge_storage import persist_knowledge_upload
+
+    upload = persist_knowledge_upload(
         storage=storage,
         owner_id=seeded["owner_id"],
-        kind="personal_knowledge",
         original_name="reference.pdf",
         content=content,
         content_type="application/pdf",
-        knowledge_document_id=document_id,
+        retention_policy="retained",
     )
-    with session_scope() as session:
-        document = session.get(KnowledgeDocumentRecord, document_id)
-        assert document is not None
-        document.stored_file_id = knowledge.id
-        session.add(AssignmentKnowledgeDocumentRecord(
-            assignment_id=seeded["task_id"],
-            document_id=document_id,
-            selected_at=time.time(),
-        ))
+    document_id = upload.document_id
+    replace_document_chunks(document_id, ["long-lived knowledge"])
+    set_task_documents(
+        assignment_id=seeded["task_id"],
+        owner_id=seeded["owner_id"],
+        document_ids=[document_id],
+    )
+    knowledge = file_repository.get_file(
+        file_id=upload.file_id, owner_id=seeded["owner_id"]
+    )
+    assert knowledge is not None
 
     monkeypatch.setattr(task_deletion, "get_storage", lambda: storage)
     task_facade.delete_task(
@@ -858,6 +915,57 @@ async def test_task_delete_removes_only_knowledge_link_and_retains_library_objec
     assert retained.availability_status == "available"
     assert retained.source_quota_owner_id is None
     assert storage.exists(knowledge.storage_key)
+
+
+@pytest.mark.asyncio
+async def test_task_delete_enqueues_last_reference_task_only_knowledge_cleanup(
+    tmp_path, monkeypatch,
+):
+    seeded = _prepared_task()
+    storage = LocalStorage(tmp_path / "task-only-knowledge")
+    content = b"temporary-task-knowledge"
+    from backend.db.knowledge_repository import (
+        replace_document_chunks,
+        set_task_documents,
+    )
+    from backend.db.knowledge_storage_repository import get_document_storage
+    from backend.services.knowledge_storage import (
+        KnowledgeStorageWorker,
+        persist_knowledge_upload,
+    )
+
+    upload = persist_knowledge_upload(
+        storage=storage,
+        owner_id=seeded["owner_id"],
+        original_name="temporary.txt",
+        content=content,
+        content_type="text/plain",
+        retention_policy="task_only",
+        origin_assignment_id=seeded["task_id"],
+    )
+    replace_document_chunks(upload.document_id, ["temporary task knowledge"])
+    set_task_documents(
+        assignment_id=seeded["task_id"],
+        owner_id=seeded["owner_id"],
+        document_ids=[upload.document_id],
+    )
+    assert storage.exists(upload.entry.storage_key)
+
+    monkeypatch.setattr(task_deletion, "get_storage", lambda: storage)
+    task_facade.delete_task(
+        task_id=seeded["task_id"], owner_id=seeded["owner_id"]
+    )
+    await _finish_task_delete(_task_delete_worker(), seeded["task_id"])
+
+    pending = get_document_storage(upload.document_id, seeded["owner_id"])
+    assert pending is not None
+    assert pending.state == "cleanup_pending"
+    assert pending.cleanup_reason == "task_deleted"
+    assert storage.exists(upload.entry.storage_key)
+
+    assert await KnowledgeStorageWorker(storage=storage).run_once() == 1
+    assert get_document_storage(upload.document_id, seeded["owner_id"]) is None
+    assert not storage.exists(upload.entry.storage_key)
 
 
 def test_legacy_user_removal_deactivates_without_cascading_files(tmp_path):

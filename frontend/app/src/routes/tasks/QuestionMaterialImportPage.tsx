@@ -28,6 +28,10 @@ import { UnsavedChangesDialog } from "@/components/ui/UnsavedChangesDialog";
 import { useImeSafeQuery } from "@/hooks/useImeSafeQuery";
 import { useI18n } from "@/i18n/I18nProvider";
 import { cn } from "@/lib/cn";
+import {
+  isKnowledgeStorageQuotaExceeded,
+  knowledgeStorageQuotaCopy,
+} from "@/lib/knowledgeStorage";
 import { materialImportText } from "@/lib/materialImportCopy";
 import type { MaterialImportTarget, ProblemLibraryMaterial, ProblemSourceScope } from "@/types";
 
@@ -530,6 +534,9 @@ function toApiTarget(target: ImportTarget): MaterialImportTarget {
 
 function localizeImportError(error: unknown, locale: "zh-CN" | "en-US") {
   const normalized = normalizeAPIError(error);
+  if (isKnowledgeStorageQuotaExceeded(normalized)) {
+    return knowledgeStorageQuotaCopy(locale).description;
+  }
   const code = getAPIErrorCode(normalized) ?? "";
   const known: Record<string, [string, string]> = {
     material_import_requires_problems_ready: ["请先完成题目识别与准备。", "Finish question recognition and preparation first."],

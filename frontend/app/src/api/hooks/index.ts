@@ -10,6 +10,7 @@ export * from "./gradingSetup";
 export * from "./kb";
 export * from "./keys";
 export * from "./materialImports";
+export * from "./personalKnowledge";
 export * from "./problemSources";
 export * from "./tags";
 export * from "./tasks";

@@ -171,3 +171,60 @@ async def test_task_delete_worker_reconciles_only_the_exact_assignment_prefix(
     finally:
         storage.delete(orphan_key)
         storage.delete(adjacent_key)
+
+
+@pytest.mark.asyncio
+async def test_knowledge_cleanup_worker_permanently_removes_every_object_version() -> None:
+    """The knowledge ledger is released only after version-aware deletion."""
+    from backend.db.knowledge_storage_repository import (
+        get_document_storage,
+        knowledge_storage_usage,
+        request_document_cleanup,
+    )
+    from backend.db.models import UserRecord
+    from backend.db.session import session_scope
+    from backend.services.knowledge_storage import (
+        KnowledgeStorageWorker,
+        persist_knowledge_upload,
+    )
+    from backend.storage.object import S3Storage
+
+    storage = S3Storage()
+    owner_id = f"s3-knowledge-owner-{uuid.uuid4().hex}"
+    with session_scope() as session:
+        session.add(UserRecord(
+            id=owner_id,
+            username=owner_id,
+            password_hash="test-only",
+            role="teacher",
+            is_active=True,
+        ))
+
+    body = b"knowledge bytes with multiple physical versions"
+    uploaded = persist_knowledge_upload(
+        storage=storage,
+        owner_id=owner_id,
+        original_name="versioned-knowledge.txt",
+        content=body,
+        content_type="text/plain",
+    )
+    key = uploaded.entry.storage_key
+    prefix = key.rsplit("/", 1)[0] + "/"
+    try:
+        # Create a second physical version with identical verified bytes. A
+        # plain DeleteObject would leave both versions billable in the bucket.
+        storage.save(key, body)
+        assert storage.list_keys(prefix) == [key]
+        request = request_document_cleanup(uploaded.document_id, owner_id)
+        assert request.status == "cleanup_pending"
+        assert knowledge_storage_usage(owner_id).used_bytes == len(body)
+
+        assert await KnowledgeStorageWorker(storage=storage).run_once(
+            max_claims=1
+        ) == 1
+
+        assert get_document_storage(uploaded.document_id, owner_id) is None
+        assert knowledge_storage_usage(owner_id).used_bytes == 0
+        assert storage.list_keys(prefix) == []
+    finally:
+        storage.delete(key)

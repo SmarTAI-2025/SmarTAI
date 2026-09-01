@@ -10,6 +10,7 @@ import csv
 import hashlib
 import io
 import json
+import logging
 import time
 from typing import Any, Literal
 from urllib.parse import quote
@@ -56,6 +57,7 @@ from backend.tools.file_processing import SUBMISSION_UPLOAD_MAX_BYTES
 
 
 router = APIRouter(prefix="/tasks", tags=["tasks"])
+logger = logging.getLogger(__name__)
 
 
 class CreateTaskRequest(BaseModel):
@@ -857,6 +859,34 @@ async def upload_task_knowledge(
     expected_workflow_revision: int | None = Form(default=None),
     current: User = Depends(require_teacher),
 ):
+    unattached_task_only_document_id: str | None = None
+
+    def cleanup_unattached_task_only() -> None:
+        if unattached_task_only_document_id is None:
+            return
+        from backend.db.knowledge_storage_repository import (
+            request_task_only_cleanup_if_unreferenced,
+        )
+        from backend.domain.knowledge_storage import (
+            KNOWLEDGE_CLEANUP_TASK_ATTACH_FAILED,
+        )
+
+        try:
+            request_task_only_cleanup_if_unreferenced(
+                unattached_task_only_document_id,
+                current.id,
+                reason=KNOWLEDGE_CLEANUP_TASK_ATTACH_FAILED,
+            )
+        except Exception:
+            # Do not replace the actual upload/attachment response with a
+            # secondary cleanup error.  Task-only publication retains an
+            # unattached grace deadline that the durable worker will scan.
+            logger.warning(
+                "Failed to enqueue unattached task-only knowledge cleanup; document_id=%s",
+                unattached_task_only_document_id,
+                exc_info=True,
+            )
+
     try:
         assignment_repository.get_assignment(task_id, actor_id=current.id)
         workflow = workflow_repository.get_live_workflow(
@@ -882,8 +912,12 @@ async def upload_task_knowledge(
             document = await ingest_document(
                 owner_id=current.id, original_name=file.filename or "knowledge.txt",
                 content=body, content_type=file.content_type,
+                retention_policy=("retained" if save_to_library else "task_only"),
+                origin_assignment_id=(None if save_to_library else task_id),
             )
             document_id = document.id
+            if not save_to_library:
+                unattached_task_only_document_id = document_id
             created = True
             source_kind = "upload"
             from backend.db import course_library_repository as library_repo
@@ -917,6 +951,9 @@ async def upload_task_knowledge(
         if document_id not in ids:
             ids.append(document_id)
         set_task_documents(assignment_id=task_id, owner_id=current.id, document_ids=ids)
+        # From here on the assignment row is the durable owner of a task-only
+        # upload.  Later presentation/workflow errors must not clean it up.
+        unattached_task_only_document_id = None
         try:
             set_selected_document_metadata(
                 assignment_id=task_id,
@@ -942,7 +979,14 @@ async def upload_task_knowledge(
             "saved_material_created": saved_material_created,
         }
     except DomainError as exc:
+        cleanup_unattached_task_only()
         return domain_error_response(exc)
+    except ValueError as exc:
+        cleanup_unattached_task_only()
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    except Exception:
+        cleanup_unattached_task_only()
+        raise
 
 
 @router.get("/{task_id}/kb")

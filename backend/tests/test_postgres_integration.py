@@ -976,3 +976,337 @@ async def test_postgres_task_delete_worker_removes_full_restrict_graph_and_stora
             session.get(StoredFileRecord, row_id) is None
             for row_id in (source_file.id, artifact_file.id, revision_file.id)
         )
+
+
+def test_postgres_knowledge_quota_concurrent_admission_has_one_winner(
+    pg_database, monkeypatch,
+):
+    """The User quota gate serializes distinct hashes across processes."""
+    from backend.config import settings
+    from backend.db.knowledge_storage_repository import reserve_upload
+    from backend.domain.errors import KnowledgeStorageQuotaExceeded
+
+    owner_id = _seed_user("teacher")
+    monkeypatch.setattr(settings, "knowledge_storage_quota_bytes", 4)
+    barrier = threading.Barrier(2)
+
+    def admit(payload: bytes) -> str:
+        barrier.wait(timeout=5)
+        try:
+            reserve_upload(
+                owner_id=owner_id,
+                original_name=f"{payload.decode()}.txt",
+                size_bytes=len(payload),
+                sha256=hashlib.sha256(payload).hexdigest(),
+            )
+            return "reserved"
+        except KnowledgeStorageQuotaExceeded:
+            return "quota"
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        results = list(executor.map(admit, (b"aaaa", b"bbbb")))
+    assert results.count("reserved") == 1
+    assert results.count("quota") == 1
+
+
+def test_postgres_knowledge_attach_and_reserve_share_user_first_lock_order(
+    pg_database,
+):
+    """Attachment FK writes and task-only admission cannot deadlock A/User."""
+    from sqlalchemy import select
+
+    from backend.db import assignment_repository, course_repository
+    from backend.db.knowledge_storage_repository import (
+        lock_knowledge_owner_in_session,
+        mark_document_attached_in_session,
+        publish_upload,
+        reserve_upload,
+    )
+    from backend.db.models import (
+        AssignmentKnowledgeDocumentRecord,
+        AssignmentRecord,
+    )
+    from backend.db.session import session_scope
+    from backend.domain.knowledge_storage import KNOWLEDGE_RETENTION_TASK_ONLY
+
+    owner_id = _seed_user("teacher")
+    course = course_repository.create_course(teacher_id=owner_id, name="C")
+    assignment = assignment_repository.create_assignment(
+        teacher_id=owner_id, course_id=course.id, name="A"
+    )
+    initial = reserve_upload(
+        owner_id=owner_id,
+        original_name="initial.txt",
+        size_bytes=1,
+        sha256=hashlib.sha256(b"i").hexdigest(),
+        retention_policy=KNOWLEDGE_RETENTION_TASK_ONLY,
+        origin_assignment_id=assignment.id,
+    )
+    assert initial.entry.writer_claim_token is not None
+    publish_upload(
+        reservation_id=initial.entry.id,
+        owner_id=owner_id,
+        writer_claim_token=initial.entry.writer_claim_token,
+    )
+    barrier = threading.Barrier(2)
+
+    def attach() -> str:
+        barrier.wait(timeout=5)
+        with session_scope() as session:
+            lock_knowledge_owner_in_session(session, owner_id)
+            session.scalar(
+                select(AssignmentRecord)
+                .where(AssignmentRecord.id == assignment.id)
+                .with_for_update()
+            )
+            session.add(AssignmentKnowledgeDocumentRecord(
+                assignment_id=assignment.id,
+                document_id=initial.document_id,
+                source_kind="upload",
+            ))
+            session.flush()
+            mark_document_attached_in_session(
+                session,
+                assignment_id=assignment.id,
+                owner_id=owner_id,
+                document_id=initial.document_id,
+            )
+        return "attached"
+
+    def reserve_second() -> str:
+        barrier.wait(timeout=5)
+        reserve_upload(
+            owner_id=owner_id,
+            original_name="second.txt",
+            size_bytes=1,
+            sha256=hashlib.sha256(b"s").hexdigest(),
+            retention_policy=KNOWLEDGE_RETENTION_TASK_ONLY,
+            origin_assignment_id=assignment.id,
+        )
+        return "reserved"
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        futures = [executor.submit(attach), executor.submit(reserve_second)]
+        results = [future.result(timeout=10) for future in futures]
+    assert sorted(results) == ["attached", "reserved"]
+
+
+@pytest.mark.parametrize("same_task", [True, False], ids=["same-task", "cross-task"])
+def test_postgres_source_and_task_knowledge_use_compatible_owner_assignment_order(
+    pg_database,
+    same_task,
+):
+    """Source W->User->A cannot deadlock knowledge User->A.
+
+    The same-task case is the former concrete A/User cycle. The cross-task case
+    proves a shared owner gate also serializes independent task rows without a
+    hidden Workflow/Assignment inversion.
+    """
+    from backend.db import (
+        assignment_repository,
+        course_repository,
+        source_storage_repository,
+        workflow_repository,
+    )
+    from backend.db.knowledge_storage_repository import reserve_upload
+    from backend.domain.knowledge_storage import KNOWLEDGE_RETENTION_TASK_ONLY
+
+    owner_id = _seed_user("teacher")
+    course = course_repository.create_course(teacher_id=owner_id, name="C")
+    source_task = assignment_repository.create_assignment(
+        teacher_id=owner_id, course_id=course.id, name="Source task"
+    )
+    workflow_repository.ensure_workflow(
+        assignment_id=source_task.id, owner_id=owner_id,
+    )
+    if same_task:
+        knowledge_task = source_task
+    else:
+        knowledge_task = assignment_repository.create_assignment(
+            teacher_id=owner_id, course_id=course.id, name="Knowledge task"
+        )
+        workflow_repository.ensure_workflow(
+            assignment_id=knowledge_task.id, owner_id=owner_id,
+        )
+    barrier = threading.Barrier(2)
+
+    def reserve_source() -> str:
+        payload = b"source"
+        barrier.wait(timeout=5)
+        source_storage_repository.reserve_source_upload(
+            file_id=f"pg-source-{uuid.uuid4().hex}",
+            file_owner_id=owner_id,
+            kind="problem_source",
+            original_name="problem.pdf",
+            storage_backend="local",
+            storage_key=(
+                f"assignments/{source_task.id}/{uuid.uuid4().hex}/problem.pdf"
+            ),
+            content_type="application/pdf",
+            requested_bytes=len(payload),
+            sha256=hashlib.sha256(payload).hexdigest(),
+            assignment_id=source_task.id,
+            submission_revision_id=None,
+        )
+        return "source"
+
+    def reserve_knowledge() -> str:
+        barrier.wait(timeout=5)
+        reserve_upload(
+            owner_id=owner_id,
+            original_name="task-note.txt",
+            size_bytes=9,
+            sha256=hashlib.sha256(
+                f"knowledge-{knowledge_task.id}".encode()
+            ).hexdigest(),
+            retention_policy=KNOWLEDGE_RETENTION_TASK_ONLY,
+            origin_assignment_id=knowledge_task.id,
+        )
+        return "knowledge"
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        futures = [
+            executor.submit(reserve_source),
+            executor.submit(reserve_knowledge),
+        ]
+        assert sorted(future.result(timeout=10) for future in futures) == [
+            "knowledge", "source",
+        ]
+
+
+def test_postgres_grading_knowledge_fence_and_cleanup_are_mutually_exclusive(
+    pg_database,
+    tmp_path,
+):
+    """Run creation and cleanup serialize on User+ledger with no TOCTOU."""
+    from backend.db import (
+        assignment_repository,
+        course_repository,
+        grading_repository,
+        workflow_repository,
+    )
+    from backend.db.knowledge_storage_repository import request_document_cleanup
+    from backend.domain.errors import InvalidTransition
+    from backend.services.knowledge_storage import persist_knowledge_upload
+    from backend.storage.local import LocalStorage
+
+    owner_id = _seed_user("teacher")
+    course = course_repository.create_course(teacher_id=owner_id, name="C")
+    assignment = assignment_repository.create_assignment(
+        teacher_id=owner_id, course_id=course.id, name="A"
+    )
+    workflow = workflow_repository.ensure_workflow(
+        assignment_id=assignment.id, owner_id=owner_id,
+    )
+    uploaded = persist_knowledge_upload(
+        storage=LocalStorage(tmp_path / "grading-cleanup"),
+        owner_id=owner_id,
+        original_name="frozen.txt",
+        content=b"frozen",
+    )
+    barrier = threading.Barrier(2)
+
+    def start_grading() -> str:
+        barrier.wait(timeout=5)
+        try:
+            grading_repository.create_run_bundle(
+                assignment.id,
+                teacher_id=owner_id,
+                revision_ids=[],
+                setup={},
+                setup_fingerprint="f" * 64,
+                input_manifest={
+                    "knowledge_document_ids": [uploaded.document_id],
+                },
+                workflow_expected_revision=workflow.workflow_revision,
+            )
+            return "grading_created"
+        except InvalidTransition as exc:
+            return exc.code
+
+    def cleanup() -> str:
+        barrier.wait(timeout=5)
+        try:
+            request_document_cleanup(uploaded.document_id, owner_id)
+            return "cleanup_created"
+        except InvalidTransition as exc:
+            return exc.code
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        futures = [executor.submit(start_grading), executor.submit(cleanup)]
+        results = {future.result(timeout=10) for future in futures}
+    assert results in (
+        {"grading_created", "knowledge_document_in_active_grading_run"},
+        {"cleanup_created", "knowledge_storage_input_unavailable"},
+    )
+
+
+def test_postgres_grading_and_source_admission_share_workflow_first_order(
+    pg_database,
+    tmp_path,
+):
+    """Grading W->User->ledger->A and source W->User->A both complete."""
+    from backend.db import (
+        assignment_repository,
+        course_repository,
+        grading_repository,
+        source_storage_repository,
+        workflow_repository,
+    )
+    from backend.services.knowledge_storage import persist_knowledge_upload
+    from backend.storage.local import LocalStorage
+
+    owner_id = _seed_user("teacher")
+    course = course_repository.create_course(teacher_id=owner_id, name="C")
+    assignment = assignment_repository.create_assignment(
+        teacher_id=owner_id, course_id=course.id, name="A"
+    )
+    workflow = workflow_repository.ensure_workflow(
+        assignment_id=assignment.id, owner_id=owner_id,
+    )
+    uploaded = persist_knowledge_upload(
+        storage=LocalStorage(tmp_path / "grading-source"),
+        owner_id=owner_id,
+        original_name="frozen.txt",
+        content=b"frozen",
+    )
+    barrier = threading.Barrier(2)
+
+    def start_grading() -> str:
+        barrier.wait(timeout=5)
+        grading_repository.create_run_bundle(
+            assignment.id,
+            teacher_id=owner_id,
+            revision_ids=[],
+            setup={},
+            setup_fingerprint="g" * 64,
+            input_manifest={"knowledge_document_ids": [uploaded.document_id]},
+            workflow_expected_revision=workflow.workflow_revision,
+        )
+        return "grading"
+
+    def reserve_source() -> str:
+        payload = b"source"
+        barrier.wait(timeout=5)
+        source_storage_repository.reserve_source_upload(
+            file_id=f"pg-source-{uuid.uuid4().hex}",
+            file_owner_id=owner_id,
+            kind="problem_source",
+            original_name="problem.pdf",
+            storage_backend="local",
+            storage_key=(
+                f"assignments/{assignment.id}/{uuid.uuid4().hex}/problem.pdf"
+            ),
+            content_type="application/pdf",
+            requested_bytes=len(payload),
+            sha256=hashlib.sha256(payload).hexdigest(),
+            assignment_id=assignment.id,
+            submission_revision_id=None,
+        )
+        return "source"
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        futures = [executor.submit(start_grading), executor.submit(reserve_source)]
+        assert sorted(future.result(timeout=10) for future in futures) == [
+            "grading", "source",
+        ]

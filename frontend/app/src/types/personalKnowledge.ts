@@ -16,3 +16,22 @@ export interface PersonalKnowledgeDocument {
 export interface PersonalKnowledgeListResponse {
   documents: PersonalKnowledgeDocument[];
 }
+
+export interface KnowledgeStorageUsage {
+  used_bytes: number;
+  limit_bytes: number;
+  available_bytes: number;
+  available_document_bytes: number;
+  cleanup_pending_bytes: number;
+  retrying_cleanup_bytes: number;
+  reserved_bytes: number;
+  cleanup_pending_count: number;
+  retrying_cleanup_count: number;
+  reserved_count: number;
+}
+
+export interface DeletePersonalKnowledgeResponse {
+  status: "deleted" | "deletion_pending";
+  id: string;
+  cleanup_operation_id?: string | null;
+}

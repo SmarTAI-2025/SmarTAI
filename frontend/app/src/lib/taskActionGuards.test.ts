@@ -174,6 +174,20 @@ describe("question source recovery guidance", () => {
     expect(info.technicalDetails).toContainEqual({ label: "原文件额度", value: "512 MB" });
   });
 
+  it("classifies knowledge storage quota before the generic provider quota branch", () => {
+    const info = classifyRecoverableError(
+      new APIError(413, "knowledge_storage_quota_exceeded", {
+        error: { code: "knowledge_storage_quota_exceeded" },
+      }),
+      { locale: "zh-CN" },
+    );
+
+    expect(info.title).toBe("知识库空间不足");
+    expect(info.actionKind).toBe("reupload");
+    expect(info.description).toContain("等待自动完成后再上传");
+    expect(info.title).not.toContain("模型");
+  });
+
   it.each([
     "question_preparation_source_unavailable",
     "question_preparation_retry_source_unavailable",
