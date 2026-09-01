@@ -26,6 +26,7 @@ from backend.db.models import (
 from backend.db.session import session_scope
 from backend.llm.registry import get_scoped_expert_registry
 from backend.models import User
+from backend.services import task_facade
 from backend.state import get_user_store
 
 
@@ -339,14 +340,12 @@ def _seed_ungraded_assignment(owner: User) -> str:
 
 @pytest.fixture(autouse=True)
 def _clear_derived_state():
-    with analytics._cache_lock:
-        analytics._cache.clear()
     with analytics._query_rate_lock:
         analytics._query_last_at.clear()
     yield
 
 
-def test_per_question_uses_effective_normalized_results_and_owner_cache():
+def test_per_question_uses_effective_results_without_retaining_derived_prose():
     owner = _user("teacher", "analytics-owner")
     other = _user("teacher", "analytics-other")
     seeded = _seed_graded_assignment(owner)
@@ -388,11 +387,12 @@ def test_per_question_uses_effective_normalized_results_and_owner_cache():
     assert [mode for mode, _messages in replacement_provider.calls] == ["mistakes"]
     owner_registry.provider = provider
 
-    # The derived summary is cached by owner/task/question/result fingerprint.
+    # Returning to the first provider recomputes instead of retaining task
+    # content in this web worker.
     assert owner_client.get(
         f"/analytics/{seeded['task_id']}/per_question/{seeded['question_id']}"
     ).status_code == 200
-    assert [mode for mode, _messages in provider.calls] == ["mistakes"]
+    assert [mode for mode, _messages in provider.calls].count("mistakes") == 2
 
     hidden = other_client.get(
         f"/analytics/{seeded['task_id']}/per_question/Q1"
@@ -409,7 +409,7 @@ def test_per_question_uses_effective_normalized_results_and_owner_cache():
     assert owner_client.get(
         f"/analytics/{seeded['task_id']}/per_question/Q1"
     ).status_code == 200
-    assert [mode for mode, _messages in provider.calls].count("mistakes") == 2
+    assert [mode for mode, _messages in provider.calls].count("mistakes") == 3
     assert owner_client.delete(
         f"/analytics/{seeded['task_id']}/cache"
     ).json() == {"status": "cleared"}
@@ -418,6 +418,29 @@ def test_per_question_uses_effective_normalized_results_and_owner_cache():
     assert other_client.get(
         f"/analytics/{other_seeded['task_id']}/per_question/Q1"
     ).status_code == 200
+
+
+def test_task_deletion_tombstone_hides_analytics_and_cache_controls():
+    owner = _user("teacher", "analytics-deleted")
+    seeded = _seed_graded_assignment(owner)
+    client = _client(owner, _Registry(_Provider()))
+
+    assert client.get(
+        f"/analytics/{seeded['task_id']}/per_question/Q1"
+    ).status_code == 200
+    assert not hasattr(analytics, "_cache")
+    task_facade.delete_task(
+        task_id=seeded["task_id"], owner_id=owner.id
+    )
+
+    hidden = client.get(
+        f"/analytics/{seeded['task_id']}/per_question/Q1"
+    )
+    assert hidden.status_code == 404
+    assert hidden.json()["detail"] == {"code": "analytics_task_not_found"}
+    cache = client.delete(f"/analytics/{seeded['task_id']}/cache")
+    assert cache.status_code == 404
+    assert cache.json()["detail"] == {"code": "analytics_task_not_found"}
 
 
 def test_nl_query_filters_hallucinated_ids_and_emits_only_safe_chart_fields():

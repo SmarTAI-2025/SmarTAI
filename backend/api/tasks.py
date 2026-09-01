@@ -31,7 +31,12 @@ from pydantic import BaseModel, Field, ValidationError as PydanticValidationErro
 
 from backend.api.errors import domain_error_response
 from backend.auth import require_teacher
-from backend.db import assignment_repository, grading_repository, workflow_repository
+from backend.db import (
+    assignment_repository,
+    grading_repository,
+    source_storage_repository,
+    workflow_repository,
+)
 from backend.domain.errors import DomainError, InvalidTransition, NotFound, ValidationError
 from backend.knowledge.service import ingest_document
 from backend.llm.registry import (
@@ -290,6 +295,16 @@ def interpret_task_query(
     }
 
 
+@router.get("/source-storage/usage")
+def get_source_storage_usage(current: User = Depends(require_teacher)):
+    usage = source_storage_repository.source_quota_usage(current.id)
+    return {
+        **usage.as_dict(),
+        "scope": "task_originals",
+        "knowledge_storage_included": False,
+    }
+
+
 @router.get("/{task_id}")
 def get_task(task_id: str, current: User = Depends(require_teacher)):
     return _domain(lambda: task_facade.get_task(task_id=task_id, owner_id=current.id))
@@ -352,13 +367,12 @@ def update_task(task_id: str, request: UpdateTaskRequest, current: User = Depend
     ))
 
 
-@router.delete("/{task_id}")
+@router.delete("/{task_id}", status_code=status.HTTP_202_ACCEPTED)
 def delete_task(task_id: str, current: User = Depends(require_teacher)):
     try:
-        task_facade.delete_task(task_id=task_id, owner_id=current.id)
+        return task_facade.delete_task(task_id=task_id, owner_id=current.id)
     except DomainError as exc:
         return domain_error_response(exc)
-    return {"status": "success"}
 
 
 @router.post("/{task_id}/extract_problems")
@@ -452,7 +466,9 @@ async def retry_submission_recognition_endpoint(
 ):
     """Retry a failed recognition job from its durable original upload."""
     try:
-        workflow = workflow_repository.get_workflow(task_id, owner_id=current.id)
+        workflow = workflow_repository.get_live_workflow(
+            task_id, owner_id=current.id
+        )
         if workflow.workflow_revision != request.expected_workflow_revision:
             raise ValidationError(
                 "The task changed before recognition retry.",
@@ -585,7 +601,9 @@ def set_teacher_comment(
     current: User = Depends(require_teacher),
 ):
     try:
-        workflow = workflow_repository.get_workflow(task_id, owner_id=current.id)
+        workflow = workflow_repository.get_live_workflow(
+            task_id, owner_id=current.id
+        )
         results = task_facade.task_results(task_id=task_id, owner_id=current.id)
         student = next((item for item in results.get("results", []) if item["student_id"] == request.student_id), None)
         correction = next((item for item in (student or {}).get("corrections", []) if item["q_id"] == request.q_id), None)
@@ -638,7 +656,9 @@ def save_grading_setup(
     registry: ExpertRegistry = Depends(get_scoped_expert_registry),
 ):
     try:
-        workflow = workflow_repository.get_workflow(task_id, owner_id=current.id)
+        workflow = workflow_repository.get_live_workflow(
+            task_id, owner_id=current.id
+        )
         setup = TaskGradingSetup.model_validate(request.grading_setup)
         _validate_grading_setup(setup, registry, current.id)
         body = setup.model_dump(mode="json")
@@ -705,7 +725,9 @@ def _validate_grading_setup(
 
 def _grading_setup_payload(task_id: str, owner_id: str, registry: ExpertRegistry) -> dict:
     task = task_facade.get_task(task_id=task_id, owner_id=owner_id, full=False)
-    workflow = workflow_repository.get_workflow(task_id, owner_id=owner_id)
+    workflow = workflow_repository.get_live_workflow(
+        task_id, owner_id=owner_id
+    )
     configs = []
     for item in list_stage_provider_options(owner_id, registry):
         configs.append({
@@ -837,7 +859,9 @@ async def upload_task_knowledge(
 ):
     try:
         assignment_repository.get_assignment(task_id, actor_id=current.id)
-        workflow = workflow_repository.get_workflow(task_id, owner_id=current.id)
+        workflow = workflow_repository.get_live_workflow(
+            task_id, owner_id=current.id
+        )
         if expected_workflow_revision is not None and workflow.workflow_revision != expected_workflow_revision:
             from backend.domain.errors import VersionConflict
             raise VersionConflict("workflow_revision_conflict")
@@ -937,7 +961,9 @@ def delete_task_knowledge(
     current: User = Depends(require_teacher),
 ):
     try:
-        workflow = workflow_repository.get_workflow(task_id, owner_id=current.id)
+        workflow = workflow_repository.get_live_workflow(
+            task_id, owner_id=current.id
+        )
         if expected_workflow_revision is not None and workflow.workflow_revision != expected_workflow_revision:
             from backend.domain.errors import VersionConflict
             raise VersionConflict("workflow_revision_conflict")

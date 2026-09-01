@@ -13,6 +13,8 @@ differ between SQLite and PostgreSQL against a live database:
 """
 from __future__ import annotations
 
+import asyncio
+import hashlib
 import os
 import threading
 import time
@@ -165,6 +167,120 @@ def test_postgres_lease_claim_is_owner_scoped(pg_database):
     grading_repository.claim_lease(run_id=run.id, worker_id="w1", lease_seconds=60)
     with pytest.raises(LeaseLost):
         grading_repository.claim_lease(run_id=run.id, worker_id="w2", lease_seconds=60)
+
+
+def test_postgres_finalization_locks_grading_before_workflow(pg_database):
+    """A finalization waiting on G must not already own W.
+
+    This is the concrete PostgreSQL deadlock regression for the canonical
+    grading lock order G -> W -> A.  The controlling transaction holds G and
+    must still be able to take W while the real finalizer is blocked.
+    """
+    from sqlalchemy import select, text
+
+    from backend.db import workflow_repository
+    from backend.db.models import GradingRunRecord
+    from backend.db.session import get_engine
+    from backend.services import task_facade
+    from backend.tests.test_task_finalization_contract import _prepared_task
+
+    seeded = _prepared_task()
+    workflow = workflow_repository.get_live_workflow(
+        seeded["task_id"], owner_id=seeded["owner_id"]
+    )
+
+    def finalize() -> str:
+        try:
+            task_facade.confirm_finalization(
+                task_id=seeded["task_id"],
+                owner_id=seeded["owner_id"],
+                expected_revision=workflow.workflow_revision,
+            )
+        except Exception as exc:  # lock order is the assertion, not release readiness
+            return type(exc).__name__
+        return "completed"
+
+    with get_engine().connect() as connection:
+        transaction = connection.begin()
+        connection.execute(text("SET LOCAL lock_timeout = '750ms'"))
+        connection.execute(
+            select(GradingRunRecord)
+            .where(GradingRunRecord.id == seeded["run_id"])
+            .with_for_update()
+        )
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            future = pool.submit(finalize)
+            time.sleep(0.2)
+            # Old W -> G finalization times out here because it owns W while
+            # waiting for this transaction's G lock.
+            connection.execute(
+                select(workflow_repository.AssignmentWorkflowRecord)
+                .where(
+                    workflow_repository.AssignmentWorkflowRecord.assignment_id
+                    == seeded["task_id"]
+                )
+                .with_for_update()
+            )
+            transaction.commit()
+            assert future.result(timeout=5) in {
+                "ResultNotReleasable",
+                "completed",
+            }
+
+
+def test_postgres_task_delete_finalizer_locks_children_before_workflow(pg_database):
+    """Task CASCADE must wait on G before it owns W/A."""
+    from sqlalchemy import select, text
+
+    from backend.db import task_deletion_repository, workflow_repository
+    from backend.db.models import GradingRunRecord
+    from backend.db.session import get_engine
+    from backend.services import task_facade
+    from backend.tests.test_task_finalization_contract import _prepared_task
+
+    seeded = _prepared_task()
+    accepted = task_facade.delete_task(
+        task_id=seeded["task_id"], owner_id=seeded["owner_id"]
+    )
+    operation = workflow_repository.claim_operation(
+        accepted["cleanup_operation_id"],
+        owner_id=seeded["owner_id"],
+        worker_id="pg-delete-finalizer",
+        lease_seconds=30,
+    )
+
+    def finalize() -> bool:
+        return task_deletion_repository.finalize_task_deletion(
+            operation_id=operation.id,
+            owner_id=seeded["owner_id"],
+            assignment_id=seeded["task_id"],
+            attempt=operation.attempt,
+            worker_id="pg-delete-finalizer",
+            lease_token=str(operation.lease_token),
+        )
+
+    with get_engine().connect() as connection:
+        transaction = connection.begin()
+        connection.execute(text("SET LOCAL lock_timeout = '750ms'"))
+        connection.execute(
+            select(GradingRunRecord)
+            .where(GradingRunRecord.id == seeded["run_id"])
+            .with_for_update()
+        )
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            future = pool.submit(finalize)
+            time.sleep(0.2)
+            # An old O(delete) -> W -> A -> implicit G cascade blocks here.
+            connection.execute(
+                select(workflow_repository.AssignmentWorkflowRecord)
+                .where(
+                    workflow_repository.AssignmentWorkflowRecord.assignment_id
+                    == seeded["task_id"]
+                )
+                .with_for_update()
+            )
+            transaction.commit()
+            assert future.result(timeout=5) is True
 
 
 def test_postgres_role_scoped_reads_hide_other_owner(pg_database):
@@ -420,6 +536,126 @@ def test_postgres_live_lease_rejects_same_worker_claim(pg_database):
     assert persisted.lease_token == first.lease_token
 
 
+def test_postgres_missing_source_and_replacement_use_user_then_file_lock_order(
+    pg_database,
+    tmp_path,
+    monkeypatch,
+):
+    """Missing detection must not deadlock a concurrent replacement claim.
+
+    The replacement is paused immediately after it owns the quota User row.
+    The missing-object transition then reaches the same User lock. With the
+    canonical User -> StoredFile order, releasing the replacement lets both
+    transactions finish. The old StoredFile -> User order creates the exact
+    PostgreSQL cycle: marker owns S and waits for U while replacement owns U
+    and waits for S.
+    """
+
+    from backend.config import settings
+    from backend.db import (
+        assignment_repository,
+        course_repository,
+        file_repository,
+        source_storage_repository,
+    )
+    from backend.storage.local import LocalStorage
+
+    teacher = _seed_user("teacher")
+    course = course_repository.create_course(teacher_id=teacher, name="C")
+    assignment = assignment_repository.create_assignment(
+        teacher_id=teacher,
+        course_id=course.id,
+        name="A",
+    )
+    monkeypatch.setattr(settings, "unfinished_source_quota_bytes", 10)
+    storage = LocalStorage(tmp_path / "pg-missing-replacement-lock-order")
+    old = file_repository.save_file(
+        storage=storage,
+        owner_id=teacher,
+        kind="problem_source",
+        original_name="old.pdf",
+        content=b"old-source",
+        content_type="application/pdf",
+        assignment_id=assignment.id,
+    )
+
+    real_lock_quota_owner = source_storage_repository._lock_quota_owner
+    replacement_has_user = threading.Event()
+    marker_reached_user = threading.Event()
+    release_replacement = threading.Event()
+    pause_guard = threading.Lock()
+    replacement_paused = False
+
+    def controlled_lock_quota_owner(session, owner_id: str) -> None:
+        nonlocal replacement_paused
+        role = threading.current_thread().name
+        if role == "pg-missing-marker":
+            marker_reached_user.set()
+        real_lock_quota_owner(session, owner_id)
+        if role != "pg-replacement-reservation":
+            return
+        with pause_guard:
+            should_pause = not replacement_paused
+            replacement_paused = True
+        if should_pause:
+            replacement_has_user.set()
+            if not release_replacement.wait(timeout=5):
+                raise AssertionError("replacement lock-order test timed out")
+
+    monkeypatch.setattr(
+        source_storage_repository,
+        "_lock_quota_owner",
+        controlled_lock_quota_owner,
+    )
+
+    def reserve_replacement():
+        threading.current_thread().name = "pg-replacement-reservation"
+        content = b"new-source"
+        return source_storage_repository.reserve_source_upload(
+            file_id=f"pg-replacement-{uuid.uuid4().hex}",
+            file_owner_id=teacher,
+            kind="problem_source",
+            original_name="new.pdf",
+            storage_backend="local",
+            storage_key=f"{teacher}/problem_source/new.pdf",
+            content_type="application/pdf",
+            requested_bytes=len(content),
+            sha256=hashlib.sha256(content).hexdigest(),
+            assignment_id=assignment.id,
+            submission_revision_id=None,
+            replacement_file_ids=(old.id,),
+            replacement_group_id="pg-missing-replacement-group",
+        )
+
+    def mark_missing():
+        threading.current_thread().name = "pg-missing-marker"
+        return source_storage_repository.mark_available_source_missing(
+            file_id=old.id,
+            owner_id=teacher,
+            assignment_id=assignment.id,
+        )
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        replacement_future = executor.submit(reserve_replacement)
+        try:
+            assert replacement_has_user.wait(timeout=5)
+            missing_future = executor.submit(mark_missing)
+            assert marker_reached_user.wait(timeout=5)
+        finally:
+            release_replacement.set()
+        reservation = replacement_future.result(timeout=10)
+        assert missing_future.result(timeout=10) is True
+
+    assert reservation.replacement_credit_bytes == len(b"old-source")
+    retired = file_repository.get_file(file_id=old.id, owner_id=teacher)
+    assert retired.availability_status == "unavailable"
+    assert retired.availability_reason == "missing"
+    usage = source_storage_repository.source_quota_usage(teacher)
+    assert usage.used_bytes == len(b"new-source")
+    assert usage.available_source_bytes == 0
+    assert usage.reserved_bytes == len(b"new-source")
+
+
 def test_postgres_question_preparation_atomic_publication_has_one_winner(
     pg_database,
 ):
@@ -493,3 +729,250 @@ def test_postgres_question_preparation_atomic_publication_has_one_winner(
         ).all()
     assert len(rows) == 1
     assert rows[0].status == "pending"
+
+
+@pytest.mark.asyncio
+async def test_postgres_task_delete_worker_removes_full_restrict_graph_and_storage(
+    pg_database,
+    tmp_path,
+    monkeypatch,
+):
+    """A tombstoned task is physically and relationally erased on PostgreSQL.
+
+    The source item/outcome rows deliberately add PostgreSQL-enforced RESTRICT
+    links to two StoredFile rows.  The rest of the fixture covers the complete
+    grading graph, including questions, submissions, revisions, answers,
+    results, and a teacher review.  Running the real task-delete worker proves
+    its explicit source-graph teardown happens before the assignment CASCADE.
+    """
+    from sqlalchemy import select, update
+
+    from backend.db import (
+        file_repository,
+        grading_repository,
+        source_outcome_repository,
+        workflow_repository,
+    )
+    from backend.db.models import (
+        AssignmentQuestionRecord,
+        AssignmentRecord,
+        CourseEnrollmentRecord,
+        GradeResultRecord,
+        GradingRunRecord,
+        StoredFileRecord,
+        SubmissionAnswerRecord,
+        SubmissionRecord,
+        SubmissionRevisionRecord,
+        TeacherReviewRecord,
+        UserRecord,
+    )
+    from backend.db.session import session_scope
+    from backend.domain.source_storage import TASK_DELETE_OPERATION
+    from backend.services import task_deletion, task_facade
+    from backend.services.workflow_worker import WorkflowWorker
+    from backend.storage.local import LocalStorage
+    from backend.tests.test_task_finalization_contract import _prepared_task
+
+    seeded = _prepared_task()
+    storage = LocalStorage(tmp_path / "postgres-task-delete")
+    monkeypatch.setattr(task_deletion, "get_storage", lambda: storage)
+
+    producer, created = workflow_repository.create_operation(
+        assignment_id=seeded["task_id"],
+        owner_id=seeded["owner_id"],
+        operation_type="submission_recognition",
+        input_hash=uuid.uuid4().hex,
+    )
+    assert created is True
+
+    source_file = file_repository.save_file(
+        storage=storage,
+        owner_id=seeded["owner_id"],
+        kind="submission_source",
+        original_name="student-answer.pdf",
+        content=b"student source",
+        content_type="application/pdf",
+        assignment_id=seeded["task_id"],
+    )
+    artifact_file = file_repository.save_file(
+        storage=storage,
+        owner_id=seeded["owner_id"],
+        kind="submission_parse_artifact",
+        original_name="recognized.json",
+        content=b'{"answers": ["structured"]}',
+        content_type="application/json",
+        assignment_id=seeded["task_id"],
+    )
+    source, source_created = source_outcome_repository.register_source(
+        owner_id=seeded["owner_id"],
+        assignment_id=seeded["task_id"],
+        operation_id=producer.id,
+        expected_attempt=producer.attempt,
+        order_index=0,
+        stored_file_id=source_file.id,
+    )
+    assert source_created is True
+    source_outcome_repository.record_outcome(
+        source_id=source.id,
+        owner_id=seeded["owner_id"],
+        status="parsed",
+        student_candidate=seeded["student_id"],
+        matched_answer_count=2,
+        unknown_question_ids=[],
+        stable_error_code=None,
+        failure_phase=None,
+        retryable=False,
+        artifact_file_id=artifact_file.id,
+    )
+    review = grading_repository.add_teacher_review(
+        seeded["required_result_id"],
+        teacher_id=seeded["owner_id"],
+        new_score=7,
+        new_comment="confirmed",
+        confirm=True,
+    )
+
+    with session_scope() as session:
+        target = session.get(AssignmentRecord, seeded["task_id"])
+        assert target is not None
+        course_id = target.course_id
+        imported_user_id = "imported_pg_task_only"
+        session.add(UserRecord(
+            id=imported_user_id,
+            username="imported-pg-task-only",
+            email=None,
+            password_hash="!disabled-imported-account",
+            role="student",
+            is_active=False,
+        ))
+        session.flush()
+        session.add_all([
+            CourseEnrollmentRecord(
+                course_id=course_id,
+                student_id=imported_user_id,
+            ),
+            SubmissionRecord(
+                id="sub-imported-pg-task-only",
+                assignment_id=seeded["task_id"],
+                student_id=imported_user_id,
+                current_revision_id=None,
+            ),
+        ])
+        session.flush()
+        question_ids = tuple(session.scalars(
+            select(AssignmentQuestionRecord.id).where(
+                AssignmentQuestionRecord.assignment_id == seeded["task_id"]
+            )
+        ))
+        submission_ids = tuple(session.scalars(
+            select(SubmissionRecord.id).where(
+                SubmissionRecord.assignment_id == seeded["task_id"]
+            )
+        ))
+        revision_ids = tuple(session.scalars(
+            select(SubmissionRevisionRecord.id).where(
+                SubmissionRevisionRecord.submission_id.in_(submission_ids)
+            )
+        ))
+        answer_ids = tuple(session.scalars(
+            select(SubmissionAnswerRecord.id).where(
+                SubmissionAnswerRecord.revision_id.in_(revision_ids)
+            )
+        ))
+
+    revision_file = file_repository.save_file(
+        storage=storage,
+        owner_id=seeded["student_id"],
+        kind="submission",
+        original_name="revision-source.pdf",
+        content=b"revision source",
+        content_type="application/pdf",
+        submission_revision_id=revision_ids[0],
+    )
+    physical_keys = (
+        source_file.storage_key,
+        artifact_file.storage_key,
+        revision_file.storage_key,
+    )
+    assert all(storage.exists(key) for key in physical_keys)
+
+    response = task_facade.delete_task(
+        task_id=seeded["task_id"], owner_id=seeded["owner_id"]
+    )
+    assert response["status"] == "deletion_pending"
+    delete_operation_id = response["cleanup_operation_id"]
+    with session_scope() as session:
+        tombstoned = session.get(AssignmentRecord, seeded["task_id"])
+        assert tombstoned is not None
+        assert tombstoned.deletion_requested_at is not None
+
+    worker = WorkflowWorker(
+        handlers={TASK_DELETE_OPERATION: task_deletion.run_task_deletion},
+        worker_id="postgres-task-delete-worker",
+        lease_seconds=60,
+        heartbeat_seconds=60,
+        poll_seconds=60,
+        claim_batch_size=10,
+        max_in_flight=1,
+        shutdown_seconds=1,
+    )
+    for _ in range(12):
+        with session_scope() as session:
+            if session.get(AssignmentRecord, seeded["task_id"]) is None:
+                break
+            session.execute(
+                update(workflow_repository.WorkflowOperationRecord)
+                .where(
+                    workflow_repository.WorkflowOperationRecord.id
+                    == delete_operation_id,
+                    workflow_repository.WorkflowOperationRecord.status == "pending",
+                )
+                .values(expires_at=0.0)
+            )
+        await worker.poll_once()
+        for _ in range(500):
+            if worker.in_flight_count == 0:
+                break
+            await asyncio.sleep(0.01)
+        else:
+            raise AssertionError("PostgreSQL task-delete worker did not drain")
+    else:
+        raise AssertionError("PostgreSQL task deletion did not finish")
+
+    assert all(not storage.exists(key) for key in physical_keys)
+    with session_scope() as session:
+        assert session.get(AssignmentRecord, seeded["task_id"]) is None
+        assert all(
+            session.get(AssignmentQuestionRecord, row_id) is None
+            for row_id in question_ids
+        )
+        assert all(
+            session.get(SubmissionRecord, row_id) is None
+            for row_id in submission_ids
+        )
+        assert all(
+            session.get(SubmissionRevisionRecord, row_id) is None
+            for row_id in revision_ids
+        )
+        assert all(
+            session.get(SubmissionAnswerRecord, row_id) is None
+            for row_id in answer_ids
+        )
+        assert session.get(GradingRunRecord, seeded["run_id"]) is None
+        assert session.get(GradeResultRecord, seeded["required_result_id"]) is None
+        assert session.get(GradeResultRecord, seeded["optional_result_id"]) is None
+        assert session.get(TeacherReviewRecord, review.id) is None
+        assert session.get(UserRecord, imported_user_id) is None
+        assert session.get(
+            CourseEnrollmentRecord,
+            {"course_id": course_id, "student_id": imported_user_id},
+        ) is None
+        assert session.get(UserRecord, seeded["student_id"]) is not None
+        assert session.get(source_outcome_repository.WorkflowSourceItemRecord, source.id) is None
+        assert session.get(source_outcome_repository.WorkflowSourceOutcomeRecord, source.id) is None
+        assert session.get(workflow_repository.WorkflowOperationRecord, producer.id) is None
+        assert session.get(workflow_repository.WorkflowOperationRecord, delete_operation_id) is None
+        assert all(
+            session.get(StoredFileRecord, row_id) is None
+            for row_id in (source_file.id, artifact_file.id, revision_file.id)
+        )

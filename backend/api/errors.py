@@ -13,9 +13,12 @@ from backend.domain.errors import DomainError
 
 
 def domain_error_response(exc: DomainError) -> JSONResponse:
+    error = {"code": exc.code, "message": exc.message}
+    if exc.details is not None:
+        error["details"] = exc.details
     return JSONResponse(
         status_code=exc.status_code,
-        content={"error": {"code": exc.code, "message": exc.message}},
+        content={"error": error},
     )
 
 

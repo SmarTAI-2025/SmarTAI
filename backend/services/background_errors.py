@@ -100,6 +100,10 @@ SAFE_BACKGROUND_ERROR_CODES = frozenset({
     "source_text_too_large",
     "source_too_large",
     "source_type_not_allowed",
+    "source_storage_quota_exceeded",
+    "source_storage_reservation_conflict",
+    "source_storage_write_failed",
+    "source_storage_integrity_failed",
     "problem_source_decode_failed",
     "pdf_character_limit_exceeded",
     "pdf_extraction_busy",
@@ -134,6 +138,9 @@ RETRYABLE_BACKGROUND_ERROR_CODES = frozenset({
     "submission_persistence_failed",
     "submission_outcome_persistence_failed",
     "submission_source_persistence_failed",
+    "source_storage_reservation_conflict",
+    "source_storage_write_failed",
+    "source_storage_integrity_failed",
     "workflow_failed",
 })
 

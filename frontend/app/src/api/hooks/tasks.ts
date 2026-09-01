@@ -82,6 +82,10 @@ export function useTaskFinalization(taskId?: string, options: { enabled?: boolea
     queryKey: taskKeys.finalization(taskId ?? ""),
     queryFn: () => tasksApi.getTaskFinalization(taskId as string),
     enabled: Boolean(taskId) && (options.enabled ?? true),
+    refetchInterval: (query) => {
+      const status = query.state.data?.source_cleanup?.status;
+      return status === "pending" || status === "retrying" ? 3_000 : false;
+    },
   });
 }
 

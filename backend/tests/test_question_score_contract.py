@@ -78,7 +78,7 @@ async def test_failed_question_preparation_reuses_sources_with_frozen_model(
         },
     )
     monkeypatch.setattr(
-        "backend.api.task_preparation.workflow_repository.get_workflow",
+        "backend.api.task_preparation.workflow_repository.get_live_workflow",
         lambda *_args, **_kwargs: workflow,
     )
     monkeypatch.setattr(

@@ -1,9 +1,9 @@
 """Normalized post-grading analytics for the Figma presentation API.
 
 The assignment, frozen grading run, grade results, teacher reviews, answers,
-and student identities are loaded from normalized SQL rows.  The bounded
-in-process cache below contains only derived common-mistake prose; it is never
-used as a source of grading facts.
+and student identities are loaded from normalized SQL rows. Derived prose is
+not cached in process: task deletion must not leave content in another web
+worker that cannot observe a local invalidation hook.
 """
 from __future__ import annotations
 
@@ -12,7 +12,7 @@ import logging
 import math
 import re
 import time
-from collections import OrderedDict, defaultdict
+from collections import defaultdict
 from dataclasses import dataclass
 from threading import RLock
 from typing import Any, Literal
@@ -39,7 +39,6 @@ from backend.llm.registry import (
     SharedPoolLimitError,
     get_scoped_expert_registry,
     resolve_owner_default_provider,
-    resolve_owner_default_provider_id,
 )
 from backend.models import User
 
@@ -49,8 +48,6 @@ logger = logging.getLogger(__name__)
 
 _USABLE_RUN_STATUSES = frozenset({"completed", "partial_failed"})
 _RATE_WINDOW_SECONDS = 30.0
-_CACHE_TTL_SECONDS = 2 * 60 * 60
-_CACHE_MAX_ENTRIES = 1000
 
 
 class QueryRequest(BaseModel):
@@ -138,14 +135,6 @@ class _AnalyticsFacts:
         return {result.student_id for result in self.results}
 
 
-@dataclass(frozen=True)
-class _CacheEntry:
-    markdown: str
-    created_at: float
-
-
-_cache: "OrderedDict[tuple[str, str, str, str, str], _CacheEntry]" = OrderedDict()
-_cache_lock = RLock()
 _query_last_at: dict[str, float] = {}
 _query_rate_lock = RLock()
 
@@ -191,6 +180,7 @@ def _load_facts(task_id: str, owner_id: str) -> _AnalyticsFacts:
             select(AssignmentRecord).where(
                 AssignmentRecord.id == task_id,
                 AssignmentRecord.teacher_id == owner_id,
+                AssignmentRecord.deletion_requested_at.is_(None),
             )
         )
         if assignment is None:
@@ -756,43 +746,9 @@ def _question_breakdown(
     }
 
 
-def _cache_get(key: tuple[str, str, str, str, str]) -> str | None:
-    now = time.monotonic()
-    with _cache_lock:
-        _prune_cache(now)
-        entry = _cache.get(key)
-        if entry is None:
-            return None
-        _cache.move_to_end(key)
-        return entry.markdown
-
-
-def _cache_put(key: tuple[str, str, str, str, str], markdown: str) -> None:
-    with _cache_lock:
-        _cache[key] = _CacheEntry(markdown=markdown, created_at=time.monotonic())
-        _cache.move_to_end(key)
-        _prune_cache()
-
-
-def _prune_cache(now: float | None = None) -> None:
-    current = time.monotonic() if now is None else now
-    for key, entry in list(_cache.items()):
-        if current - entry.created_at > _CACHE_TTL_SECONDS:
-            _cache.pop(key, None)
-    while len(_cache) > _CACHE_MAX_ENTRIES:
-        _cache.popitem(last=False)
-
-
 def _clear_cache(owner_id: str, task_id: str, question_id: str | None = None) -> None:
-    with _cache_lock:
-        for key in list(_cache):
-            key_owner, key_task, key_question, _version, _provider_id = key
-            if (
-                key_owner == owner_id
-                and key_task == task_id
-                and (question_id is None or key_question == question_id)
-            ):
-                _cache.pop(key, None)
+    """Compatibility no-op: task-derived prose is intentionally not cached."""
+    del owner_id, task_id, question_id
 
 
 @router.get("/{task_id}/per_question/{question_id}")
@@ -805,16 +761,8 @@ async def per_question(
     facts = _load_facts(task_id, current.id)
     question = _resolve_question(facts, question_id)
     breakdown = _question_breakdown(facts, question)
-    provider_id = resolve_owner_default_provider_id(current.id, registry)
-    cache_key = (
-        current.id,
-        task_id,
-        question.q_id,
-        facts.cache_version,
-        provider_id or "none",
-    )
-    common_mistakes_md = _cache_get(cache_key)
-    if common_mistakes_md is None and breakdown["rows"]:
+    common_mistakes_md = ""
+    if breakdown["rows"]:
         provider = resolve_owner_default_provider(current.id, registry)
         if provider is not None:
             try:
@@ -824,7 +772,6 @@ async def per_question(
                     provider=provider,
                 )
                 common_mistakes_md = _safe_text(output.common_mistakes_md, 4000)
-                _cache_put(cache_key, common_mistakes_md)
             except SharedPoolLimitError:
                 common_mistakes_md = ""
             except Exception as exc:
@@ -834,8 +781,6 @@ async def per_question(
                     type(exc).__name__,
                 )
                 common_mistakes_md = ""
-    if common_mistakes_md is None:
-        common_mistakes_md = ""
     return {**breakdown, "common_mistakes_md": common_mistakes_md}
 
 
@@ -845,6 +790,7 @@ def _authorize_cache_clear(task_id: str, owner_id: str) -> None:
             select(AssignmentRecord.id).where(
                 AssignmentRecord.id == task_id,
                 AssignmentRecord.teacher_id == owner_id,
+                AssignmentRecord.deletion_requested_at.is_(None),
             )
         )
     if owned is None:
@@ -861,8 +807,8 @@ def reset_task_cache(
     return {"status": "cleared"}
 
 
-# Current Figma client compatibility. The canonical task-level endpoint above
-# clears all derived entries and is preferred by new callers.
+# Current Figma client compatibility. Both endpoints are safe no-ops now that
+# derived task prose is deliberately never retained in process.
 @router.delete("/{task_id}/per_question/{question_id}/cache")
 def reset_per_question_cache(
     task_id: str,

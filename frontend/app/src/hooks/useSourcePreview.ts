@@ -103,7 +103,7 @@ export function useSourcePreview({
   }, [catalog, catalogScopeKey, requestedCatalogScopeKey, sourceId, sourceKind, taskId]);
 
   useEffect(() => {
-    if (descriptor?.status !== "processing") return;
+    if (descriptor?.status !== "processing" && descriptor?.status !== "cleanup_pending") return;
     const timer = window.setTimeout(() => setCatalogAttempt((current) => current + 1), 3_000);
     return () => window.clearTimeout(timer);
   }, [descriptor?.status]);
@@ -130,11 +130,11 @@ export function useSourcePreview({
     ? "processing"
     : catalogState === "error" && resolvedDisplayName
       ? "ready"
-      : unavailableReason
-        ? "unavailable"
-        : descriptor?.status === "processing"
-          ? "processing"
-          : descriptor?.status === "unavailable"
+      : descriptor?.status === "processing"
+        ? "processing"
+        : descriptor?.status === "cleanup_pending"
+          ? "cleanup_pending"
+          : descriptor?.status === "unavailable" || unavailableReason
             ? "unavailable"
             : "ready";
   const sourceKey = `${requestedCatalogScopeKey}:${sourceKind}:${sourceId ?? "no-source"}:${descriptor?.file_id ?? "no-file"}:${descriptor?.status ?? catalogState}:${resolvedDisplayName}:${previewKind}`;
@@ -205,8 +205,19 @@ export function useSourcePreview({
       })
       .catch((error: unknown) => {
         if (cancelled) return;
-        setErrorCode(sourcePreviewErrorCode(error));
+        const code = sourcePreviewErrorCode(error);
+        setErrorCode(code);
         setLoadState("error");
+        if (
+          code === "source_cleanup_pending"
+          || code === "source_unavailable_task_finalized"
+          || code === "source_unavailable_missing"
+        ) {
+          // The catalog was valid when the panel opened, but lifecycle state
+          // changed before content arrived. Refresh the descriptor so the
+          // trigger becomes non-actionable and cleanup polling continues.
+          setCatalogAttempt((current) => current + 1);
+        }
       });
 
     return () => {
@@ -218,7 +229,7 @@ export function useSourcePreview({
   useEffect(() => () => releaseResource(), [releaseResource]);
 
   const openPreview = useCallback(() => {
-    if (triggerState === "unavailable") return;
+    if (triggerState === "unavailable" || triggerState === "cleanup_pending") return;
     openerRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     setIsOpen(true);
   }, [triggerState]);

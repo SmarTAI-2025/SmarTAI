@@ -21,6 +21,7 @@ import type {
   TeacherCommentResponse,
   TeacherCommentsResponse,
 } from "@/types";
+import type { SourceStorageUsage } from "@/types/sourcePreview";
 
 // The React UI intentionally does not expose a grading-language control.
 // Current backend compatibility: GradeRequest.language still accepts "en" /
@@ -180,6 +181,10 @@ export function getTaskState(taskId: string): Promise<TaskStateSnapshot> {
 
 export function getTaskResult(taskId: string): Promise<TaskResultResponse> {
   return getJSON<TaskResultResponse>(`/tasks/${taskId}/result`);
+}
+
+export function getSourceStorageUsage(): Promise<SourceStorageUsage> {
+  return getJSON<SourceStorageUsage>("/tasks/source-storage/usage");
 }
 
 export function getTaskFinalization(taskId: string): Promise<TaskFinalizationResponse> {

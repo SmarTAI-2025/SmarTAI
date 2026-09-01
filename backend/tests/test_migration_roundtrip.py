@@ -101,6 +101,7 @@ def test_normalized_tables_exist_after_roundtrip(tmp_path, monkeypatch):
         "submission_answer_presentations",
         "grading_run_setups",
         "result_artifact_manifests",
+        "source_storage_reservations",
     } <= tables
     # Legacy tables must not reappear after the roundtrip.
     assert not ({"tasks", "grading_jobs", "task_knowledge_documents"} & tables)
@@ -216,11 +217,91 @@ def test_mail_migrations_extend_provider_routing_as_one_head(tmp_path, monkeypat
     script = ScriptDirectory.from_config(cfg)
 
     assert [revision.revision for revision in script.get_revisions("heads")] == [
-        "0014_password_reset_requests"
+        "0015_source_file_lifecycle"
     ]
 
     command.upgrade(cfg, "0012_provider_routing_pref")
     command.upgrade(cfg, "head")
+
+
+def test_source_file_lifecycle_schema_and_backfill_at_head(tmp_path, monkeypatch):
+    from sqlalchemy import create_engine, inspect, text
+
+    db_url = f"sqlite:///{(tmp_path / 'source-lifecycle.db').as_posix()}"
+    cfg = _alembic_config(db_url, monkeypatch)
+    command.upgrade(cfg, "0014_password_reset_requests")
+    engine = create_engine(db_url)
+    with engine.begin() as connection:
+        connection.execute(text(
+            "INSERT INTO users "
+            "(id, username, role, password_hash, is_active, created_at, updated_at) "
+            "VALUES "
+            "('source-teacher', 'source-teacher', 'teacher', 'hash', true, 1, 1), "
+            "('source-student', 'source-student', 'student', 'hash', true, 1, 1)"
+        ))
+        connection.execute(text(
+            "INSERT INTO courses "
+            "(id, name, code, description, teacher_id, created_at, updated_at) "
+            "VALUES ('source-course', 'C', '', '', 'source-teacher', 1, 1)"
+        ))
+        connection.execute(text(
+            "INSERT INTO assignments "
+            "(id, course_id, teacher_id, name, description, status, created_at, updated_at, version) "
+            "VALUES ('source-task', 'source-course', 'source-teacher', 'A', '', 'draft', 1, 1, 1)"
+        ))
+        connection.execute(text(
+            "INSERT INTO submissions "
+            "(id, assignment_id, student_id, current_revision_id, created_at, updated_at) "
+            "VALUES ('source-submission', 'source-task', 'source-student', NULL, 1, 1)"
+        ))
+        connection.execute(text(
+            "INSERT INTO submission_revisions "
+            "(id, submission_id, revision_number, source, file_name, created_at) "
+            "VALUES ('source-revision', 'source-submission', 1, 'online', 'answer.pdf', 1)"
+        ))
+        connection.execute(text(
+            "UPDATE submissions SET current_revision_id='source-revision' "
+            "WHERE id='source-submission'"
+        ))
+        connection.execute(text(
+            "INSERT INTO stored_files "
+            "(id, owner_id, kind, original_name, storage_backend, storage_key, "
+            "content_type, size_bytes, sha256, assignment_id, "
+            "submission_revision_id, knowledge_document_id, created_at) VALUES "
+            "('problem-file', 'source-teacher', 'problem_source', 'problem.pdf', "
+            "'local', 'problem-key', 'application/pdf', 11, 'problem-sha', "
+            "'source-task', NULL, NULL, 1), "
+            "('answer-file', 'source-student', 'submission', 'answer.pdf', "
+            "'local', 'answer-key', 'application/pdf', 13, 'answer-sha', "
+            "NULL, 'source-revision', NULL, 1), "
+            "('derived-file', 'source-teacher', 'ocr_artifact', 'ocr.json', "
+            "'local', 'derived-key', 'application/json', 17, 'derived-sha', "
+            "'source-task', NULL, NULL, 1)"
+        ))
+
+    command.upgrade(cfg, "head")
+    inspector = inspect(engine)
+    columns = {column["name"] for column in inspector.get_columns("stored_files")}
+    assert {
+        "source_quota_owner_id",
+        "source_quota_bytes",
+        "availability_status",
+        "availability_reason",
+        "cleanup_operation_id",
+        "cleanup_attempt_count",
+        "unavailable_at",
+    } <= columns
+    assert "source_storage_reservations" in inspector.get_table_names()
+    with engine.connect() as connection:
+        rows = connection.execute(text(
+            "SELECT id, source_quota_owner_id, source_quota_bytes, availability_status "
+            "FROM stored_files ORDER BY id"
+        )).all()
+    assert [tuple(row) for row in rows] == [
+        ("answer-file", "source-teacher", 13, "available"),
+        ("derived-file", None, 0, "available"),
+        ("problem-file", "source-teacher", 11, "available"),
+    ]
 
 
 def test_mail_migration_canonicalizes_existing_identity_emails(tmp_path, monkeypatch):
@@ -1213,6 +1294,33 @@ def test_postgresql_operation_lease_ddl_is_portable(monkeypatch):
         assert f"{column} IS NULL" in lease_check_sql
         assert f"{column} IS NOT NULL" in lease_check_sql
     assert "CREATE INDEX ix_workflow_operations_claimable" in sql
+
+
+def test_postgresql_source_lifecycle_ddl_is_portable(monkeypatch):
+    sql = _postgresql_sql(monkeypatch, "0015_source_file_lifecycle")
+    normalized = " ".join(sql.lower().split())
+
+    assert "create table source_storage_reservations" in normalized
+    assert "source_lifecycle_epoch integer default 0 not null" in normalized
+    assert "availability_status varchar(32) default 'available' not null" in normalized
+    assert (
+        "create unique index ix_source_storage_reservations_operation_id "
+        "on source_storage_reservations (operation_id)"
+    ) in normalized
+    assert normalized.count(
+        "create unique index ix_source_storage_reservations_operation_id"
+    ) == 1
+    assert (
+        "foreign key(assignment_id) references assignments (id) on delete restrict"
+        in normalized
+    )
+    assert (
+        "foreign key(cleanup_operation_id) references workflow_operations (id) "
+        "on delete set null"
+        in normalized
+    )
+
+
 def test_alembic_migration_keeps_application_loggers_enabled(tmp_path, monkeypatch):
     """Running Alembic must not disable workflow worker security logging."""
     db_url = f"sqlite:///{(tmp_path / 'logger.db').as_posix()}"

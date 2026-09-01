@@ -77,6 +77,80 @@ beforeEach(() => {
 });
 
 describe("useSourcePreview", () => {
+  it("does not read cleanup-pending content and polls the catalog until cleanup completes", async () => {
+    const cleanupPending: SourceFileDescriptor = {
+      ...sourceOne,
+      status: "cleanup_pending",
+      unavailable_reason: "cleanup_pending",
+    };
+    const cleaned: SourceFileDescriptor = {
+      ...sourceOne,
+      status: "unavailable",
+      unavailable_reason: "task_finalized",
+    };
+    apiMocks.getTaskSourceFiles
+      .mockResolvedValueOnce({
+        ...catalog,
+        submission_sources: { "source-1": cleanupPending },
+      })
+      .mockResolvedValueOnce({
+        ...catalog,
+        submission_sources: { "source-1": cleaned },
+      });
+
+    const scheduledCleanupPolls: Array<() => void> = [];
+    const syntheticTimerIds = new Set<number>();
+    const originalSetTimeout = window.setTimeout.bind(window);
+    const originalClearTimeout = window.clearTimeout.bind(window);
+    let nextSyntheticTimerId = 900_000;
+    const setTimeoutSpy = vi.spyOn(window, "setTimeout").mockImplementation((handler, timeout, ...args) => {
+      if (timeout === 3_000) {
+        const timerId = nextSyntheticTimerId++;
+        syntheticTimerIds.add(timerId);
+        scheduledCleanupPolls.push(() => {
+          if (typeof handler === "function") handler(...args);
+        });
+        return timerId;
+      }
+      return originalSetTimeout(handler, timeout, ...args);
+    });
+    const clearTimeoutSpy = vi.spyOn(window, "clearTimeout").mockImplementation((timerId) => {
+      if (typeof timerId === "number" && syntheticTimerIds.has(timerId)) return;
+      originalClearTimeout(timerId);
+    });
+
+    try {
+      const { result } = renderHook(() => useSourcePreview({
+        taskId: "task-1",
+        workflowRevision: 9,
+        sourceKind: "submission",
+        sourceId: "source-1",
+      }));
+
+      await waitFor(() => expect(result.current.triggerState).toBe("cleanup_pending"));
+      expect(result.current.unavailableReason).toBe("cleanup_pending");
+      expect(scheduledCleanupPolls).toHaveLength(1);
+
+      act(() => result.current.openPreview());
+      expect(result.current.isOpen).toBe(false);
+      expect(apiMocks.loadSourcePreviewFile).not.toHaveBeenCalled();
+
+      await act(async () => {
+        scheduledCleanupPolls.shift()?.();
+        await Promise.resolve();
+      });
+
+      await waitFor(() => expect(result.current.triggerState).toBe("unavailable"));
+      expect(result.current.unavailableReason).toBe("task_finalized");
+      expect(apiMocks.getTaskSourceFiles).toHaveBeenCalledTimes(2);
+      expect(scheduledCleanupPolls).toHaveLength(0);
+      expect(apiMocks.loadSourcePreviewFile).not.toHaveBeenCalled();
+    } finally {
+      clearTimeoutSpy.mockRestore();
+      setTimeoutSpy.mockRestore();
+    }
+  });
+
   it("maps students only by source_id and revokes URLs on switch and close", async () => {
     let resolveSecond: ((blob: Blob) => void) | null = null;
     apiMocks.loadSourcePreviewFile.mockImplementation(async (_taskId, descriptor) => {

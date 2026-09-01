@@ -25,7 +25,7 @@ from backend.db import (
 from backend.db.file_repository import save_file
 from backend.db.models import AssignmentRecord, CourseRecord, UserRecord
 from backend.db.session import session_scope
-from backend.domain.errors import NotFound
+from backend.domain.errors import NotFound, VersionConflict
 from backend.models import User
 from backend.services import task_facade
 from backend.services.background_errors import classify_background_error
@@ -298,18 +298,21 @@ def test_retry_projection_hides_old_attempt_even_when_old_worker_finishes_late()
         retryable=False,
     )
 
-    # The superseded worker returns after attempt 2 is already authoritative.
-    source_outcome_repository.record_outcome(
-        source_id=old_source.id,
-        owner_id=owner_id,
-        status="parse_failed",
-        student_candidate=None,
-        matched_answer_count=0,
-        unknown_question_ids=[],
-        stable_error_code="provider_timeout",
-        failure_phase="recognition",
-        retryable=True,
-    )
+    # The superseded worker returns after attempt 2 is already authoritative;
+    # its structured late write is fenced instead of merely hidden on reads.
+    with pytest.raises(VersionConflict) as stale_outcome:
+        source_outcome_repository.record_outcome(
+            source_id=old_source.id,
+            owner_id=owner_id,
+            status="parse_failed",
+            student_candidate=None,
+            matched_answer_count=0,
+            unknown_question_ids=[],
+            stable_error_code="provider_timeout",
+            failure_phase="recognition",
+            retryable=True,
+        )
+    assert stale_outcome.value.code == "stale_operation_attempt"
 
     task = task_facade.get_task(task_id=task_id, owner_id=owner_id)
     assert task["submission_source_summary"] == {

@@ -28,13 +28,19 @@ from backend.db import (
     grading_repository,
     submission_repository,
 )
-from backend.db.models import GradingRunRecord, UserRecord
+from backend.db.models import AssignmentRecord, GradingRunRecord, UserRecord
 from backend.db.session import session_scope
 from backend.domain import education
-from backend.domain.errors import DomainError, NotFound, ValidationError, VersionConflict
+from backend.domain.errors import (
+    DomainError,
+    LeaseLost,
+    NotFound,
+    ValidationError,
+    VersionConflict,
+)
 from backend.llm.registry import _build_scoped_registry
 from backend.models import TaskGradingSetup, User
-from backend.progress.tracker import get_or_create_reporter
+from backend.progress.tracker import get_or_create_reporter, remove_reporter
 from backend.services import grading_adapter
 from backend.services.background_errors import classify_background_error
 from backend.services.stage_provider_routing import assert_grading_routes_supported
@@ -121,7 +127,13 @@ def poll_queued_runs() -> list[str]:
     with session_scope() as session:
         rows = session.scalars(
             select(GradingRunRecord.id)
+            .join(
+                AssignmentRecord,
+                (AssignmentRecord.id == GradingRunRecord.assignment_id)
+                & (AssignmentRecord.teacher_id == GradingRunRecord.teacher_id),
+            )
             .where(
+                AssignmentRecord.deletion_requested_at.is_(None),
                 (GradingRunRecord.status == education.GradingRunStatus.QUEUED.value)
                 | (
                     (GradingRunRecord.status == education.GradingRunStatus.RUNNING.value)
@@ -237,17 +249,15 @@ async def process_run(*, run_id: str, worker_id: str, registry=None, language: s
         return  # someone else owns it or it is terminal
     run = grading_repository.get_run(run_id=run_id)
     heartbeat_task: Optional[asyncio.Task] = None
+    grading_task: Optional[asyncio.Task] = None
 
     async def _heartbeat():
         while True:
             await asyncio.sleep(settings.grading_heartbeat_seconds)
-            try:
-                grading_repository.heartbeat(
-                    run_id=run_id, worker_id=worker_id,
-                    lease_seconds=settings.grading_lease_seconds,
-                )
-            except DomainError:
-                return  # lease lost; stop heartbeating
+            grading_repository.heartbeat(
+                run_id=run_id, worker_id=worker_id,
+                lease_seconds=settings.grading_lease_seconds,
+            )
 
     try:
         heartbeat_task = asyncio.create_task(_heartbeat())
@@ -330,12 +340,37 @@ async def process_run(*, run_id: str, worker_id: str, registry=None, language: s
             )
 
         reporter.set_event_sink(_persist_progress)
-        outcomes = await grading_adapter.run_grading(
-            run_id=run_id, assignment_id=run.assignment_id, teacher_id=run.teacher_id,
-            questions=questions, frozen_revisions=frozen_revisions,
-            registry=run_registry, language=language, reporter=reporter,
-            grading_setup=grading_setup,
+        grading_task = asyncio.create_task(
+            grading_adapter.run_grading(
+                run_id=run_id,
+                assignment_id=run.assignment_id,
+                teacher_id=run.teacher_id,
+                questions=questions,
+                frozen_revisions=frozen_revisions,
+                registry=run_registry,
+                language=language,
+                reporter=reporter,
+                grading_setup=grading_setup,
+            )
         )
+        done, _pending = await asyncio.wait(
+            (grading_task, heartbeat_task),
+            return_when=asyncio.FIRST_COMPLETED,
+        )
+        if heartbeat_task in done:
+            # Losing the durable lease (including a task tombstone) must stop
+            # provider work immediately. Merely ending the heartbeat coroutine
+            # would let an expensive grading call continue and attempt writes.
+            heartbeat_error = heartbeat_task.exception()
+            grading_task.cancel()
+            try:
+                await grading_task
+            except asyncio.CancelledError:
+                pass
+            if heartbeat_error is not None:
+                raise heartbeat_error
+            raise LeaseLost("grading_heartbeat_stopped")
+        outcomes = grading_task.result()
         for outcome in outcomes:
             for res in outcome.results:
                 try:
@@ -352,6 +387,10 @@ async def process_run(*, run_id: str, worker_id: str, registry=None, language: s
             run_id=run_id, level="info", message="run_completed",
             payload={"completed": completed, "failed": failed},
         )
+    except LeaseLost:
+        # Lease loss is an expected fencing outcome (including task deletion),
+        # not a grading failure to persist onto a run we no longer own.
+        raise
     except Exception as exc:
         error_code = classify_background_error(
             exc,
@@ -378,12 +417,19 @@ async def process_run(*, run_id: str, worker_id: str, registry=None, language: s
             pass  # lease already lost; another worker will reclaim
         raise
     finally:
-        if heartbeat_task is not None:
-            heartbeat_task.cancel()
+        for background_task in (grading_task, heartbeat_task):
+            if background_task is None:
+                continue
+            if not background_task.done():
+                background_task.cancel()
             try:
-                await heartbeat_task
+                await background_task
             except (asyncio.CancelledError, Exception):
                 pass
+        # Durable run/events are the source of truth after this worker exits.
+        # The in-memory reporter may contain student/question identifiers and
+        # must not outlive completion, failure, or a deletion-driven lease loss.
+        remove_reporter(run_id)
 
 
 def list_review_queue(*, assignment_id: str, teacher_id: str) -> list[education.GradeResultDTO]:
@@ -446,15 +492,27 @@ def persist_results(*, run_id: str, worker_id: str,
 
 def resolve_review(*, grade_result_id: str, teacher_id: str) -> education.GradeResultDTO:
     """Compatibility read after ``add_teacher_review`` resolved the result."""
-    from backend.db.models import GradeResultRecord, GradingRunRecord
+    from backend.db.models import AssignmentRecord, GradeResultRecord, GradingRunRecord
     from backend.db.session import session_scope
 
     with session_scope() as session:
         result = session.get(GradeResultRecord, grade_result_id)
         if result is None:
             raise NotFound("grade_result")
-        run = session.get(GradingRunRecord, result.grading_run_id)
-        if run is None or run.teacher_id != teacher_id:
+        run = session.scalar(
+            select(GradingRunRecord)
+            .join(
+                AssignmentRecord,
+                (AssignmentRecord.id == GradingRunRecord.assignment_id)
+                & (AssignmentRecord.teacher_id == GradingRunRecord.teacher_id),
+            )
+            .where(
+                GradingRunRecord.id == result.grading_run_id,
+                GradingRunRecord.teacher_id == teacher_id,
+                AssignmentRecord.deletion_requested_at.is_(None),
+            )
+        )
+        if run is None:
             raise NotFound("grade_result")
         review = grading_repository._latest_reviews_by_result(session, [result.id]).get(result.id)
         return grading_repository._result_to_dto(result, review)
@@ -496,15 +554,21 @@ def student_results(*, student_id: str, assignment_id: str) -> list[education.Gr
     belongs to a future grading run.
     """
     from sqlalchemy import select as _select
-    from backend.db.models import GradeResultRecord, GradingRunRecord
+    from backend.db.models import AssignmentRecord, GradeResultRecord, GradingRunRecord
     from backend.db.session import session_scope
 
     with session_scope() as session:
         latest_run_id = session.scalar(
             _select(GradingRunRecord.id)
+            .join(
+                AssignmentRecord,
+                (AssignmentRecord.id == GradingRunRecord.assignment_id)
+                & (AssignmentRecord.teacher_id == GradingRunRecord.teacher_id),
+            )
             .where(
                 GradingRunRecord.assignment_id == assignment_id,
                 GradingRunRecord.released_at.is_not(None),
+                AssignmentRecord.deletion_requested_at.is_(None),
             )
             .order_by(GradingRunRecord.released_at.desc())
             .limit(1)

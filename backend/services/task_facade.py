@@ -33,6 +33,7 @@ from backend.db import (
     file_repository,
     grading_repository,
     source_outcome_repository,
+    source_storage_repository,
     submission_repository,
     workflow_repository,
 )
@@ -60,6 +61,10 @@ from backend.domain.errors import (
     VersionConflict,
 )
 from backend.domain.source_outcomes import safe_source_diagnostic
+from backend.domain.source_storage import (
+    DELAYED_SOURCE_OPERATION_TYPES,
+    TASK_DELETE_OPERATION,
+)
 from backend.models import TaskGradingSetup
 from backend.models import User
 from backend.llm.registry import (
@@ -228,7 +233,8 @@ def update_task(
             row = session.scalar(select(AssignmentRecord).where(
                 AssignmentRecord.id == task_id,
                 AssignmentRecord.teacher_id == owner_id,
-            ))
+                AssignmentRecord.deletion_requested_at.is_(None),
+            ).with_for_update())
             if row is None:
                 raise NotFound("assignment")
             for key, value in changes.items():
@@ -249,22 +255,112 @@ def update_task(
     return get_task(task_id=task_id, owner_id=owner_id, full=False)
 
 
-def delete_task(*, task_id: str, owner_id: str) -> None:
-    assignment_repository.get_assignment(task_id, actor_id=owner_id)
+def delete_task(*, task_id: str, owner_id: str) -> dict[str, Any]:
+    """Logically remove a task and enqueue restart-safe physical cleanup.
+
+    The request is idempotent and is accepted for every workflow state.  The
+    parent assignment remains only as an internal tombstone until task-owned
+    files and outstanding upload reservations are confirmed absent; its final
+    database cascade then removes questions, submissions, answers, grading
+    results, reviews, workflow state, and report manifests.
+    """
+    now = time.time()
+    reporter_ids: set[str] = set()
     with session_scope() as session:
-        result = session.execute(delete(AssignmentRecord).where(
-            AssignmentRecord.id == task_id,
-            AssignmentRecord.teacher_id == owner_id,
-        ))
-        if result.rowcount != 1:
+        workflow = session.scalar(
+            select(workflow_repository.AssignmentWorkflowRecord)
+            .where(
+                workflow_repository.AssignmentWorkflowRecord.assignment_id
+                == task_id,
+                workflow_repository.AssignmentWorkflowRecord.owner_id == owner_id,
+            )
+            .with_for_update()
+        )
+        assignment = session.scalar(
+            select(AssignmentRecord)
+            .where(
+                AssignmentRecord.id == task_id,
+                AssignmentRecord.teacher_id == owner_id,
+            )
+            .with_for_update()
+        )
+        if assignment is None:
             raise NotFound("assignment")
+        reporter_ids.update(str(operation_id) for operation_id in session.scalars(
+            select(workflow_repository.WorkflowOperationRecord.id).where(
+                workflow_repository.WorkflowOperationRecord.assignment_id
+                == task_id,
+                workflow_repository.WorkflowOperationRecord.owner_id == owner_id,
+            )
+        ))
+        reporter_ids.update(str(run_id) for run_id in session.scalars(
+            select(GradingRunRecord.id).where(
+                GradingRunRecord.assignment_id == task_id,
+                GradingRunRecord.teacher_id == owner_id,
+            )
+        ))
+        existing = session.scalar(
+            select(workflow_repository.WorkflowOperationRecord)
+            .where(
+                workflow_repository.WorkflowOperationRecord.assignment_id
+                == task_id,
+                workflow_repository.WorkflowOperationRecord.owner_id == owner_id,
+                workflow_repository.WorkflowOperationRecord.operation_type
+                == TASK_DELETE_OPERATION,
+            )
+            .limit(1)
+        )
+        if assignment.deletion_requested_at is None:
+            assignment.deletion_requested_at = now
+            assignment.updated_at = now
+            assignment.version += 1
+            if workflow is not None:
+                # Fence any raw upload reserved against the previous epoch.
+                workflow.source_lifecycle_epoch += 1
+                workflow.updated_at = now
+        if existing is None:
+            operation_id = f"op_{uuid.uuid4().hex}"
+            existing = workflow_repository.WorkflowOperationRecord(
+                id=operation_id,
+                assignment_id=task_id,
+                owner_id=owner_id,
+                operation_type=TASK_DELETE_OPERATION,
+                input_hash=hashlib.sha256(
+                    f"task-delete:{task_id}".encode("utf-8")
+                ).hexdigest(),
+                attempt=1,
+                status="pending",
+                payload={"schema": 1},
+                progress={"state": "pending", "retry_count": 0},
+                expires_at=now,
+                created_at=now,
+                updated_at=now,
+            )
+            session.add(existing)
+            session.flush()
+        reporter_ids.add(existing.id)
+        response = {
+            "status": "deletion_pending",
+            "task_id": task_id,
+            "cleanup_operation_id": existing.id,
+        }
+    # Reporters are rebuildable views over durable operation/run rows and may
+    # contain student ids or question ids. Purge every known task reporter only
+    # after the tombstone commits, so an accepted delete leaves no local RAM
+    # copy even while physical object cleanup continues in the background.
+    for reporter_id in reporter_ids:
+        remove_reporter(reporter_id)
+    return response
 
 
 def list_tasks(*, owner_id: str) -> dict[str, dict]:
     with session_scope() as session:
         assignments = session.scalars(
             select(AssignmentRecord)
-            .where(AssignmentRecord.teacher_id == owner_id)
+            .where(
+                AssignmentRecord.teacher_id == owner_id,
+                AssignmentRecord.deletion_requested_at.is_(None),
+            )
             .order_by(AssignmentRecord.updated_at.desc())
         ).all()
         ids = [row.id for row in assignments]
@@ -280,7 +376,9 @@ def list_tasks(*, owner_id: str) -> dict[str, dict]:
 def get_task(*, task_id: str, owner_id: str, full: bool = True) -> dict:
     assignment = assignment_repository.get_assignment(task_id, actor_id=owner_id)
     try:
-        workflow = workflow_repository.get_workflow(task_id, owner_id=owner_id)
+        workflow = workflow_repository.get_live_workflow(
+            task_id, owner_id=owner_id
+        )
     except NotFound:
         workflow = workflow_repository.ensure_workflow(
             assignment_id=task_id, owner_id=owner_id
@@ -559,7 +657,7 @@ def _reconcile_terminal_active_operation(*, task_id: str, owner_id: str, workflo
             last_failed_job_id=job_id,
             error_code="grading_persistence_failed",
         )
-        return repaired or workflow_repository.get_workflow(
+        return repaired or workflow_repository.get_live_workflow(
             task_id, owner_id=owner_id
         )
     if run.status in education.ACTIVE_GRADING_RUN_STATUSES:
@@ -575,7 +673,7 @@ def _reconcile_terminal_active_operation(*, task_id: str, owner_id: str, workflo
         last_failed_job_id=(job_id if failed else None),
         error_code=grading_error_code,
     )
-    return repaired or workflow_repository.get_workflow(
+    return repaired or workflow_repository.get_live_workflow(
         task_id, owner_id=owner_id
     )
 
@@ -958,6 +1056,9 @@ def claim_workflow_operation_atomic(
         )
         if claimed.rowcount != 1:
             _raise_stale_revision()
+        workflow_repository._lock_live_assignment(
+            session, assignment_id=task_id, owner_id=owner_id
+        )
         session.flush()
         return expected_workflow_revision + 1
 
@@ -966,6 +1067,8 @@ def activate_workflow_operation_atomic(
     *, task_id: str, owner_id: str, operation_id: str,
     expected_operation_attempt: int, expected_workflow_revision: int,
     operation_payload: dict[str, Any], workflow_changes: dict[str, Any],
+    replacement_file_ids: tuple[str, ...] = (),
+    replacement_keep_file_ids: tuple[str, ...] = (),
 ) -> int:
     """Publish a fully persisted operation to the durable worker queue."""
     validated_payload = workflow_repository._validate_json_object(
@@ -1015,6 +1118,18 @@ def activate_workflow_operation_atomic(
         )
         if claimed.rowcount != 1:
             _raise_stale_revision()
+        workflow_repository._lock_live_assignment(
+            session, assignment_id=task_id, owner_id=owner_id
+        )
+        source_storage_repository.enqueue_replaced_source_cleanup_in_session(
+            session,
+            assignment_id=task_id,
+            owner_id=owner_id,
+            producer_operation_id=operation_id,
+            producer_operation_attempt=expected_operation_attempt,
+            source_file_ids=replacement_file_ids,
+            keep_file_ids=replacement_keep_file_ids,
+        )
         return expected_workflow_revision + 1
 
 
@@ -1261,6 +1376,7 @@ def publish_checkpointed_operation_atomic(
     workflow_job_id_fields: tuple[str, ...] = (),
     retry_observed_operation_id: str | None = None,
     retry_observed_attempt: int | None = None,
+    replacement_file_ids: tuple[str, ...] = (),
 ) -> tuple[Any, bool, int]:
     """Atomically publish a complete durable operation and workflow claim.
 
@@ -1316,6 +1432,23 @@ def publish_checkpointed_operation_atomic(
     creating_new = False
     try:
         with session_scope() as session:
+            # Existing producers are always locked before their workflow row,
+            # matching supersede/failure/publication paths. The no-op UPDATE
+            # also establishes SQLite's write gate, where FOR UPDATE is ignored.
+            session.execute(
+                update(workflow_repository.WorkflowOperationRecord)
+                .where(*selector)
+                .values(
+                    updated_at=(
+                        workflow_repository.WorkflowOperationRecord.updated_at
+                    )
+                )
+            )
+            operation = session.scalar(
+                select(workflow_repository.WorkflowOperationRecord)
+                .where(*selector)
+                .with_for_update()
+            )
             workflow = session.scalar(
                 select(workflow_repository.AssignmentWorkflowRecord)
                 .where(
@@ -1328,10 +1461,8 @@ def publish_checkpointed_operation_atomic(
             )
             if workflow is None:
                 raise NotFound("workflow")
-            operation = session.scalar(
-                select(workflow_repository.WorkflowOperationRecord)
-                .where(*selector)
-                .with_for_update()
+            workflow_repository._lock_live_assignment(
+                session, assignment_id=task_id, owner_id=owner_id
             )
             retry_checkpoint_updates: dict[str, Any] = {}
             inherited_refs: list[str] = []
@@ -1463,6 +1594,15 @@ def publish_checkpointed_operation_atomic(
                         code="workflow_busy",
                     )
                 _raise_stale_revision()
+            source_storage_repository.enqueue_replaced_source_cleanup_in_session(
+                session,
+                assignment_id=task_id,
+                owner_id=owner_id,
+                producer_operation_id=operation.id,
+                producer_operation_attempt=next_attempt,
+                source_file_ids=replacement_file_ids,
+                keep_file_ids=tuple(combined_refs),
+            )
             session.flush()
             return (
                 workflow_repository._detach_operation(operation),
@@ -1483,7 +1623,9 @@ def publish_checkpointed_operation_atomic(
         )
         if operation is None:
             raise
-        workflow = workflow_repository.get_workflow(task_id, owner_id=owner_id)
+        workflow = workflow_repository.get_live_workflow(
+            task_id, owner_id=owner_id
+        )
         return operation, False, workflow.workflow_revision
 
 
@@ -1509,7 +1651,9 @@ def _ensure_no_other_active_operation(
     *, task_id: str, owner_id: str, operation_type: str, input_hash: str,
     allow_supersede: bool = False,
 ):
-    workflow = workflow_repository.get_workflow(task_id, owner_id=owner_id)
+    workflow = workflow_repository.get_live_workflow(
+        task_id, owner_id=owner_id
+    )
     workflow = _reconcile_terminal_active_operation(
         task_id=task_id, owner_id=owner_id, workflow=workflow
     )
@@ -1523,7 +1667,7 @@ def _ensure_no_other_active_operation(
             grading_repository.cancel(
                 workflow.active_job_id, teacher_id=owner_id
             )
-            return workflow_repository.get_workflow(
+            return workflow_repository.get_live_workflow(
                 task_id, owner_id=owner_id
             ), None
         raise InvalidTransition("The task is busy.", code="workflow_busy")
@@ -1569,7 +1713,20 @@ def queue_task_problem_extraction(
     assignment = assignment_repository.get_assignment(task_id, actor_id=owner_id)
     if assignment.status not in education.EDITABLE_ASSIGNMENT_STATUSES:
         raise InvalidTransition("assignment_not_editable")
-    workflow = workflow_repository.get_workflow(task_id, owner_id=owner_id)
+    has_draft_questions = _has_draft_questions(task_id)
+    workflow = workflow_repository.get_live_workflow(
+        task_id, owner_id=owner_id
+    )
+    replacement_file_ids = (
+        source_storage_repository.replacement_source_file_ids(
+            assignment_id=task_id,
+            owner_id=owner_id,
+            operation_id=workflow.extract_job_id,
+            family="problem",
+        )
+        if replace_confirmed or not has_draft_questions
+        else ()
+    )
     base_revision = (
         workflow.workflow_revision
         if expected_workflow_revision is None
@@ -1589,6 +1746,11 @@ def queue_task_problem_extraction(
         "extraction_options": extraction_options or {},
         "recognition_provider_id": recognition_provider_id,
     })
+    replacement_group_id = source_storage_repository.replacement_claim_group_id(
+        assignment_id=task_id,
+        family="problem",
+        replacement_file_ids=replacement_file_ids,
+    )
     replay = find_task_operation(
         task_id=task_id, owner_id=owner_id,
         operation_type="problem_extraction", input_hash=digest,
@@ -1601,7 +1763,7 @@ def queue_task_problem_extraction(
     claim_base_revision = retryable_operation_claim_revision(
         workflow=workflow, replay=replay, requested_revision=base_revision,
     )
-    if _has_draft_questions(task_id) and not replace_confirmed:
+    if has_draft_questions and not replace_confirmed:
         _raise_replacement_confirmation_required()
     workflow, active = _ensure_no_other_active_operation(
         task_id=task_id, owner_id=owner_id,
@@ -1634,14 +1796,26 @@ def queue_task_problem_extraction(
             item for item in file_repository.list_files(
                 owner_id=owner_id, assignment_id=task_id
             )
-            if item.kind == "problem_source" and item.sha256 == source_sha256
+            if item.kind == "problem_source"
+            and item.sha256 == source_sha256
+            and item.availability_status == "available"
         ), None)
+        if stored is not None:
+            source_storage_repository.renew_replacement_claim_for_staged_file(
+                owner_id=owner_id,
+                assignment_id=task_id,
+                staged_file_id=stored.id,
+                replacement_file_ids=replacement_file_ids,
+                replacement_group_id=replacement_group_id,
+            )
         if stored is None:
             stored = file_repository.save_file(
                 storage=get_storage(), owner_id=owner_id,
                 kind="problem_source", original_name=filename, content=content,
                 content_type=content_type or "application/octet-stream",
                 assignment_id=task_id,
+                replacement_file_ids=replacement_file_ids,
+                replacement_group_id=replacement_group_id,
             )
         source, _ = source_outcome_repository.register_source(
             owner_id=owner_id, assignment_id=task_id,
@@ -1666,6 +1840,8 @@ def queue_task_problem_extraction(
                 "problem_file_name": filename, "error_code": None,
                 "question_recognition_provider_id": recognition_provider_id,
             },
+            replacement_file_ids=replacement_file_ids,
+            replacement_keep_file_ids=(stored.id,),
         )
     except VersionConflict:
         workflow_repository.update_operation(
@@ -1760,6 +1936,10 @@ async def run_task_problem_extraction(
         _fail_operation(
             task_id, owner_id, job_id, job_attempt, code
         )
+    finally:
+        # The operation row stores the terminal snapshot. Do not retain a
+        # second in-memory copy of task/question progress after the worker.
+        remove_reporter(job_id)
 
 
 def _registry_for_owner(owner_id: str):
@@ -1869,69 +2049,63 @@ def _replace_draft_questions(
                 )))
                 if matched_refs != set(validated_refs):
                     raise NotFound("stored_file")
+        workflow = session.scalar(
+            select(workflow_repository.AssignmentWorkflowRecord)
+            .where(
+                workflow_repository.AssignmentWorkflowRecord.assignment_id
+                == task_id,
+                workflow_repository.AssignmentWorkflowRecord.owner_id == owner_id,
+            )
+            .with_for_update()
+        )
+        if workflow is None:
+            raise NotFound("workflow")
+        assignment = workflow_repository._lock_live_assignment(
+            session, assignment_id=task_id, owner_id=owner_id
+        )
         allowed_statuses = list(education.EDITABLE_ASSIGNMENT_STATUSES)
         if replace_confirmed:
             allowed_statuses.append(education.AssignmentStatus.PUBLISHED.value)
-        assignment = session.scalar(select(AssignmentRecord).where(
-            AssignmentRecord.id == task_id,
-            AssignmentRecord.teacher_id == owner_id,
-            AssignmentRecord.status.in_(allowed_statuses),
-        ))
-        if assignment is None:
+        if assignment.status not in allowed_statuses:
             raise InvalidTransition("assignment_not_editable")
         existing = session.scalars(select(AssignmentQuestionRecord).where(
             AssignmentQuestionRecord.assignment_id == task_id
         )).all()
         if existing and not replace_confirmed:
             _raise_replacement_confirmation_required()
-        workflow = session.scalar(select(workflow_repository.AssignmentWorkflowRecord).where(
-            workflow_repository.AssignmentWorkflowRecord.assignment_id == task_id,
-            workflow_repository.AssignmentWorkflowRecord.owner_id == owner_id,
-        ))
-        if workflow is None:
-            raise NotFound("workflow")
         expected = (
             workflow.workflow_revision
             if expected_workflow_revision is None
             else expected_workflow_revision
         )
-        workflow_predicates = [
-            workflow_repository.AssignmentWorkflowRecord.assignment_id == task_id,
-            workflow_repository.AssignmentWorkflowRecord.owner_id == owner_id,
-            workflow_repository.AssignmentWorkflowRecord.workflow_revision == expected,
-        ]
-        if expected_active_operation is not None:
-            workflow_predicates.extend((
-                workflow_repository.AssignmentWorkflowRecord.active_operation
-                == expected_active_operation,
-                workflow_repository.AssignmentWorkflowRecord.active_job_id
-                == operation_id,
-            ))
-        result = session.execute(
-            update(workflow_repository.AssignmentWorkflowRecord)
-            .where(*workflow_predicates)
-            .values(
-                workflow_revision=workflow_repository.AssignmentWorkflowRecord.workflow_revision + 1,
-                presentation_status="problems_ready", active_operation=None,
-                active_job_id=None, problem_file_name=filename,
-                question_recognition_provider_id=recognition_provider_id,
-                parse_job_id=None, grading_job_id=None,
-                last_failed_job_id=None,
-                submission_file_name=None,
-                pending_submission_file_name=None,
-                submission_roster_name=None,
-                submission_recognition_provider_id=None,
-                reference_file_name=None,
-                test_cases_file_name=None,
-                analysis_status="not_generated",
-                analysis_result_version=None,
-                analysis_generated_at=None,
-                analysis_error_code=None,
-                error_code=None, updated_at=now,
-            )
-        )
-        if result.rowcount != 1:
+        if workflow.workflow_revision != expected:
             _raise_stale_revision()
+        if expected_active_operation is not None and (
+            workflow.active_operation != expected_active_operation
+            or workflow.active_job_id != operation_id
+        ):
+            _raise_stale_revision()
+        workflow.workflow_revision += 1
+        workflow.presentation_status = "problems_ready"
+        workflow.active_operation = None
+        workflow.active_job_id = None
+        workflow.problem_file_name = filename
+        workflow.question_recognition_provider_id = recognition_provider_id
+        workflow.parse_job_id = None
+        workflow.grading_job_id = None
+        workflow.last_failed_job_id = None
+        workflow.submission_file_name = None
+        workflow.pending_submission_file_name = None
+        workflow.submission_roster_name = None
+        workflow.submission_recognition_provider_id = None
+        workflow.reference_file_name = None
+        workflow.test_cases_file_name = None
+        workflow.analysis_status = "not_generated"
+        workflow.analysis_result_version = None
+        workflow.analysis_generated_at = None
+        workflow.analysis_error_code = None
+        workflow.error_code = None
+        workflow.updated_at = now
         session.execute(delete(AssignmentQuestionRecord).where(
             AssignmentQuestionRecord.assignment_id == task_id
         ))
@@ -2036,7 +2210,8 @@ def queue_task_submission_parsing(
     questions = assignment_repository.list_questions(task_id, teacher_id=owner_id)
     if not questions:
         raise InvalidTransition("problems_required")
-    if _active_submissions(task_id, owner_id) and not replace_confirmed:
+    active_submissions = _active_submissions(task_id, owner_id)
+    if active_submissions and not replace_confirmed:
         _raise_replacement_confirmation_required()
     route = resolve_stage_provider_route(
         owner_id=owner_id,
@@ -2044,7 +2219,19 @@ def queue_task_submission_parsing(
         requested_route_id=recognition_provider_id,
     )
     resolved_provider_id = route.route_id
-    workflow = workflow_repository.get_workflow(task_id, owner_id=owner_id)
+    workflow = workflow_repository.get_live_workflow(
+        task_id, owner_id=owner_id
+    )
+    replacement_file_ids = (
+        source_storage_repository.replacement_source_file_ids(
+            assignment_id=task_id,
+            owner_id=owner_id,
+            operation_id=workflow.parse_job_id,
+            family="submission",
+        )
+        if replace_confirmed or not active_submissions
+        else ()
+    )
     digest = _hash_json({
         "sha256": hashlib.sha256(content).hexdigest(),
         "identity_mode": identity_mode,
@@ -2052,6 +2239,11 @@ def queue_task_submission_parsing(
         "provider": resolved_provider_id,
         "replace_confirmed": replace_confirmed,
     })
+    replacement_group_id = source_storage_repository.replacement_claim_group_id(
+        assignment_id=task_id,
+        family="submission",
+        replacement_file_ids=replacement_file_ids,
+    )
     replay = find_task_operation(
         task_id=task_id,
         owner_id=owner_id,
@@ -2119,7 +2311,16 @@ def queue_task_submission_parsing(
             )
             if item.kind == source_kind
             and item.sha256 == hashlib.sha256(content).hexdigest()
+            and item.availability_status == "available"
         ), None)
+        if stored is not None:
+            source_storage_repository.renew_replacement_claim_for_staged_file(
+                owner_id=owner_id,
+                assignment_id=task_id,
+                staged_file_id=stored.id,
+                replacement_file_ids=replacement_file_ids,
+                replacement_group_id=replacement_group_id,
+            )
         if stored is None:
             stored = file_repository.save_file(
                 storage=get_storage(), owner_id=owner_id,
@@ -2129,6 +2330,8 @@ def queue_task_submission_parsing(
                     filename, content_type, content
                 ),
                 assignment_id=task_id,
+                replacement_file_ids=replacement_file_ids,
+                replacement_group_id=replacement_group_id,
             )
         source_ids: list[str] = []
         if not is_archive:
@@ -2162,6 +2365,8 @@ def queue_task_submission_parsing(
                 "replace_confirmed": replace_confirmed,
             },
             workflow_changes=workflow_changes,
+            replacement_file_ids=replacement_file_ids,
+            replacement_keep_file_ids=(stored.id,),
         )
     except VersionConflict:
         workflow_repository.update_operation(
@@ -2445,6 +2650,9 @@ async def run_task_submission_parsing(
                     content=text.encode("utf-8"),
                     content_type="text/markdown",
                     assignment_id=task_id,
+                    fence_operation_id=leased_operation.operation_id,
+                    fence_operation_attempt=leased_operation.attempt,
+                    fence_lease_token=leased_operation.lease_token,
                 )
                 recovered_ocr_text[source_id] = text
                 ocr_artifact_ids.append(artifact.id)
@@ -2491,6 +2699,11 @@ async def run_task_submission_parsing(
                 task_id=task_id,
                 job_id=job_id,
                 job_attempt=job_attempt,
+                operation_lease_token=(
+                    leased_operation.lease_token
+                    if leased_operation is not None
+                    else None
+                ),
                 ocr_skill=ocr_skill,
                 document_ocr_skill=document_ocr_skill,
                 recovered_ocr_text_by_source=recovered_ocr_text,
@@ -2536,6 +2749,9 @@ async def run_task_submission_parsing(
                     content=_serialize_submission_results(results),
                     content_type="application/json",
                     assignment_id=task_id,
+                    fence_operation_id=leased_operation.operation_id,
+                    fence_operation_attempt=leased_operation.attempt,
+                    fence_lease_token=leased_operation.lease_token,
                 )
                 await leased_operation.checkpoint(
                     stage="submissions_parsed",
@@ -2560,6 +2776,12 @@ async def run_task_submission_parsing(
                 retryable=result.retryable,
                 artifact_file_id=(
                     parsed_artifact.id if parsed_artifact is not None else None
+                ),
+                expected_attempt=job_attempt,
+                expected_lease_token=(
+                    leased_operation.lease_token
+                    if leased_operation is not None
+                    else None
                 ),
             )
 
@@ -2684,6 +2906,7 @@ async def run_task_submission_parsing(
             operation_progress=snapshot,
         )
     finally:
+        remove_reporter(job_id)
         if document_ocr_skill is not None:
             close = getattr(document_ocr_skill.client, "aclose", None)
             if close is not None:
@@ -2782,15 +3005,6 @@ def apply_question_patches_atomic(
         "max_score_source", "max_score_review_status",
     }
     with session_scope() as session:
-        assignment = session.scalar(select(AssignmentRecord).where(
-            AssignmentRecord.id == task_id,
-            AssignmentRecord.teacher_id == owner_id,
-        ))
-        if assignment is None:
-            raise NotFound("assignment")
-        if assignment.status not in education.EDITABLE_ASSIGNMENT_STATUSES:
-            raise InvalidTransition("assignment_not_editable")
-
         operation = _cas_operation_attempt_for_write(
             session, task_id=task_id, owner_id=owner_id,
             operation_id=operation_id,
@@ -2800,6 +3014,25 @@ def apply_question_patches_atomic(
         )
         if operation.expires_at is not None and operation.expires_at <= now:
             raise InvalidTransition("The workflow job expired.", code="stale_revision")
+
+        workflow = session.scalar(
+            select(workflow_repository.AssignmentWorkflowRecord)
+            .where(
+                workflow_repository.AssignmentWorkflowRecord.assignment_id
+                == task_id,
+                workflow_repository.AssignmentWorkflowRecord.owner_id == owner_id,
+            )
+            .with_for_update()
+        )
+        if workflow is None:
+            raise NotFound("workflow")
+        if workflow.workflow_revision != expected_workflow_revision:
+            _raise_stale_revision()
+        assignment = workflow_repository._lock_live_assignment(
+            session, assignment_id=task_id, owner_id=owner_id
+        )
+        if assignment.status not in education.EDITABLE_ASSIGNMENT_STATUSES:
+            raise InvalidTransition("assignment_not_editable")
 
         questions = session.scalars(select(AssignmentQuestionRecord).where(
             AssignmentQuestionRecord.assignment_id == task_id
@@ -2880,35 +3113,14 @@ def apply_question_patches_atomic(
                     )
             normalized.append((question, fields, presentation_updates))
 
-        workflow = session.scalar(select(workflow_repository.AssignmentWorkflowRecord).where(
-            workflow_repository.AssignmentWorkflowRecord.assignment_id == task_id,
-            workflow_repository.AssignmentWorkflowRecord.owner_id == owner_id,
-        ))
-        if workflow is None:
-            raise NotFound("workflow")
-        workflow_values: dict[str, Any] = {
-            "workflow_revision": (
-                workflow_repository.AssignmentWorkflowRecord.workflow_revision + 1
-            ),
-            "error_code": None,
-            "updated_at": now,
-        }
+        workflow.workflow_revision += 1
+        workflow.error_code = None
+        workflow.updated_at = now
         if operation.operation_type in _AUXILIARY_QUESTION_OPERATION_TYPES:
-            workflow_values["presentation_status"] = "problems_ready"
+            workflow.presentation_status = "problems_ready"
         if workflow.active_job_id == operation_id:
-            workflow_values.update(active_job_id=None, active_operation=None)
-        claimed = session.execute(
-            update(workflow_repository.AssignmentWorkflowRecord)
-            .where(
-                workflow_repository.AssignmentWorkflowRecord.assignment_id == task_id,
-                workflow_repository.AssignmentWorkflowRecord.owner_id == owner_id,
-                workflow_repository.AssignmentWorkflowRecord.workflow_revision
-                == expected_workflow_revision,
-            )
-            .values(**workflow_values)
-        )
-        if claimed.rowcount != 1:
-            _raise_stale_revision()
+            workflow.active_job_id = None
+            workflow.active_operation = None
 
         for question, fields, presentation_updates in normalized:
             source = dict(question.source or {})
@@ -2978,27 +3190,30 @@ def complete_planning_operation_atomic(
         )
         if operation.expires_at is not None and operation.expires_at <= now:
             _raise_stale_revision()
-        claimed = session.execute(
-            update(workflow_repository.AssignmentWorkflowRecord)
+        workflow = session.scalar(
+            select(workflow_repository.AssignmentWorkflowRecord)
             .where(
                 workflow_repository.AssignmentWorkflowRecord.assignment_id == task_id,
                 workflow_repository.AssignmentWorkflowRecord.owner_id == owner_id,
-                workflow_repository.AssignmentWorkflowRecord.workflow_revision
-                == expected_workflow_revision,
-                workflow_repository.AssignmentWorkflowRecord.active_job_id == operation_id,
             )
-            .values(
-                active_job_id=None, active_operation=None, error_code=None,
-                presentation_status=(
-                    "problems_ready"
-                    if operation.operation_type in _AUXILIARY_QUESTION_OPERATION_TYPES
-                    else workflow_repository.AssignmentWorkflowRecord.presentation_status
-                ),
-                updated_at=now,
-            )
+            .with_for_update()
         )
-        if claimed.rowcount != 1:
+        if workflow is None:
+            raise NotFound("workflow")
+        if (
+            workflow.workflow_revision != expected_workflow_revision
+            or workflow.active_job_id != operation_id
+        ):
             _raise_stale_revision()
+        workflow_repository._lock_live_assignment(
+            session, assignment_id=task_id, owner_id=owner_id
+        )
+        workflow.active_job_id = None
+        workflow.active_operation = None
+        workflow.error_code = None
+        if operation.operation_type in _AUXILIARY_QUESTION_OPERATION_TYPES:
+            workflow.presentation_status = "problems_ready"
+        workflow.updated_at = now
         operation.status = final_status
         operation.payload = validated_payload
         operation.progress = validated_progress
@@ -3050,6 +3265,25 @@ def _commit_imported_submissions(
                 expected_statuses=("running",),
                 expected_lease_token=expected_lease_token,
             )
+        workflow = session.scalar(
+            select(workflow_repository.AssignmentWorkflowRecord)
+            .where(
+                workflow_repository.AssignmentWorkflowRecord.assignment_id
+                == task_id,
+                workflow_repository.AssignmentWorkflowRecord.owner_id == owner_id,
+            )
+            .with_for_update()
+        )
+        if workflow is None:
+            raise NotFound("workflow")
+        if (
+            expected_workflow_revision is not None
+            and workflow.workflow_revision != expected_workflow_revision
+        ):
+            _raise_stale_revision()
+        assignment = workflow_repository._lock_live_assignment(
+            session, assignment_id=task_id, owner_id=owner_id
+        )
         source = None
         if source_id is not None:
             if operation is None or source_artifact_file_id is None:
@@ -3077,14 +3311,6 @@ def _commit_imported_submissions(
                 source_outcome_repository.WorkflowSourceOutcomeRecord, source_id
             ) is not None:
                 raise VersionConflict("Workflow source outcome already exists.")
-        assignment = session.scalar(
-            select(AssignmentRecord).where(
-                AssignmentRecord.id == task_id,
-                AssignmentRecord.teacher_id == owner_id,
-            )
-        )
-        if assignment is None:
-            raise NotFound("assignment")
         if assignment.status not in (
             *education.EDITABLE_ASSIGNMENT_STATUSES,
             education.AssignmentStatus.PUBLISHED.value,
@@ -3113,35 +3339,20 @@ def _commit_imported_submissions(
             _raise_replacement_confirmation_required()
 
         if expected_workflow_revision is not None:
-            claimed = session.execute(
-                update(workflow_repository.AssignmentWorkflowRecord)
-                .where(
-                    workflow_repository.AssignmentWorkflowRecord.assignment_id == task_id,
-                    workflow_repository.AssignmentWorkflowRecord.owner_id == owner_id,
-                    workflow_repository.AssignmentWorkflowRecord.workflow_revision
-                    == expected_workflow_revision,
-                )
-                .values(
-                    workflow_revision=(
-                        workflow_repository.AssignmentWorkflowRecord.workflow_revision + 1
-                    ),
-                    presentation_status="submissions_ready",
-                    active_operation=None,
-                    active_job_id=None,
-                    submission_file_name=submission_file_name,
-                    pending_submission_file_name=None,
-                    grading_job_id=None,
-                    last_failed_job_id=None,
-                    analysis_status="not_generated",
-                    analysis_result_version=None,
-                    analysis_generated_at=None,
-                    analysis_error_code=None,
-                    error_code=None,
-                    updated_at=now,
-                )
-            )
-            if claimed.rowcount != 1:
-                _raise_stale_revision()
+            workflow.workflow_revision += 1
+            workflow.presentation_status = "submissions_ready"
+            workflow.active_operation = None
+            workflow.active_job_id = None
+            workflow.submission_file_name = submission_file_name
+            workflow.pending_submission_file_name = None
+            workflow.grading_job_id = None
+            workflow.last_failed_job_id = None
+            workflow.analysis_status = "not_generated"
+            workflow.analysis_result_version = None
+            workflow.analysis_generated_at = None
+            workflow.analysis_error_code = None
+            workflow.error_code = None
+            workflow.updated_at = now
 
         if replace_existing:
             session.execute(
@@ -3449,7 +3660,9 @@ def _fail_operation(
 def task_state(*, task_id: str, owner_id: str) -> dict:
     payload = get_task(task_id=task_id, owner_id=owner_id, full=False)
     try:
-        workflow = workflow_repository.get_workflow(task_id, owner_id=owner_id)
+        workflow = workflow_repository.get_live_workflow(
+            task_id, owner_id=owner_id
+        )
     except NotFound:
         return payload
     _source_summary, source_rows = _submission_source_projection(workflow, owner_id)
@@ -3559,7 +3772,9 @@ def grading_readiness(
     owner_id: str,
 ) -> dict[str, list[str] | bool]:
     """Authoritative, fail-closed gate shared by preflight and mutation."""
-    workflow = workflow_repository.get_workflow(task_id, owner_id=owner_id)
+    workflow = workflow_repository.get_live_workflow(
+        task_id, owner_id=owner_id
+    )
     questions = assignment_repository.get_questions_by_assignment(task_id)
     submissions = _active_submissions(task_id, owner_id)
     presentations = workflow_repository.list_student_presentations(task_id)
@@ -3629,7 +3844,9 @@ def start_task_grading(
     owner_id: str,
     expected_workflow_revision: int,
 ) -> dict:
-    workflow = workflow_repository.get_workflow(task_id, owner_id=owner_id)
+    workflow = workflow_repository.get_live_workflow(
+        task_id, owner_id=owner_id
+    )
     workflow = _reconcile_terminal_active_operation(
         task_id=task_id, owner_id=owner_id, workflow=workflow
     )
@@ -3679,13 +3896,22 @@ def start_task_grading(
         provider_configuration_fingerprint,
     )
 
+    frozen_revision_ids = tuple(sorted(
+        submission.current_revision_id
+        for submission in submissions
+        if submission.current_revision_id is not None
+    ))
+    source_file_ids = source_storage_repository.grading_source_file_ids(
+        assignment_id=task_id,
+        owner_id=owner_id,
+        problem_operation_id=workflow.extract_job_id,
+        submission_operation_id=workflow.parse_job_id,
+        frozen_revision_ids=frozen_revision_ids,
+    )
     input_manifest = {
         "questions": [question.model_dump(mode="json") for question in questions],
-        "submission_revision_ids": sorted(
-            submission.current_revision_id
-            for submission in submissions
-            if submission.current_revision_id is not None
-        ),
+        "submission_revision_ids": list(frozen_revision_ids),
+        "source_file_ids": list(source_file_ids),
         "knowledge_document_ids": sorted(_selected_knowledge(task_id, owner_id)),
         "provider_configuration_fingerprint": provider_configuration_fingerprint(
             owner_id=owner_id,
@@ -3775,7 +4001,9 @@ def start_task_grading(
 
 def task_results(*, task_id: str, owner_id: str) -> dict:
     task = get_task(task_id=task_id, owner_id=owner_id, full=True)
-    workflow = workflow_repository.get_workflow(task_id, owner_id=owner_id)
+    workflow = workflow_repository.get_live_workflow(
+        task_id, owner_id=owner_id
+    )
     runs = grading_repository.list_runs_for_assignment(task_id, actor_id=owner_id)
     run = _current_grading_run(workflow, runs)
     if run is None:
@@ -3845,7 +4073,9 @@ def update_problem(
     *, task_id: str, owner_id: str, q_id: str, patch: dict,
     expected_revision: int | None = None,
 ) -> dict:
-    workflow = workflow_repository.get_workflow(task_id, owner_id=owner_id)
+    workflow = workflow_repository.get_live_workflow(
+        task_id, owner_id=owner_id
+    )
     workflow = _reconcile_terminal_active_operation(
         task_id=task_id, owner_id=owner_id, workflow=workflow
     )
@@ -3865,6 +4095,9 @@ def update_problem(
         ).with_for_update())
         if workflow_row is None:
             raise NotFound("workflow")
+        assignment = workflow_repository._lock_live_assignment(
+            session, assignment_id=task_id, owner_id=owner_id
+        )
         if workflow_row.active_job_id:
             raise InvalidTransition("The task is busy.", code="workflow_busy")
         if (
@@ -3964,12 +4197,6 @@ def update_problem(
             workflow_row.analysis_generated_at = None
             workflow_row.analysis_error_code = None
             workflow_row.error_code = None
-            assignment = session.scalar(select(AssignmentRecord).where(
-                AssignmentRecord.id == task_id,
-                AssignmentRecord.teacher_id == owner_id,
-            ))
-            if assignment is None:
-                raise NotFound("assignment")
             assignment.status = education.AssignmentStatus.READY.value
             assignment.published_at = None
             assignment.version += 1
@@ -3994,7 +4221,9 @@ def update_student_answer(
     *, task_id: str, owner_id: str, display_student_id: str,
     q_id: str, patch: dict, expected_revision: int | None,
 ) -> dict:
-    workflow = workflow_repository.get_workflow(task_id, owner_id=owner_id)
+    workflow = workflow_repository.get_live_workflow(
+        task_id, owner_id=owner_id
+    )
     workflow = _reconcile_terminal_active_operation(
         task_id=task_id, owner_id=owner_id, workflow=workflow
     )
@@ -4013,6 +4242,9 @@ def update_student_answer(
         )
         if workflow_row is None:
             raise NotFound("workflow")
+        assignment = workflow_repository._lock_live_assignment(
+            session, assignment_id=task_id, owner_id=owner_id
+        )
         if workflow_row.active_job_id:
             raise InvalidTransition("The task is busy.", code="workflow_busy")
         if (
@@ -4037,12 +4269,7 @@ def update_student_answer(
         ))
         if submission is None or submission.current_revision_id is None:
             raise NotFound("submission")
-        assignment = session.scalar(select(AssignmentRecord).where(
-            AssignmentRecord.id == task_id,
-            AssignmentRecord.teacher_id == owner_id,
-            AssignmentRecord.status == education.AssignmentStatus.PUBLISHED.value,
-        ))
-        if assignment is None:
+        if assignment.status != education.AssignmentStatus.PUBLISHED.value:
             raise InvalidTransition("assignment_closed", code="assignment_closed")
         current_revision = session.get(
             SubmissionRevisionRecord, submission.current_revision_id
@@ -4149,7 +4376,9 @@ def update_student_identity(
     *, task_id: str, owner_id: str, current_display_id: str,
     new_display_id: str, new_display_name: str, expected_revision: int,
 ) -> dict:
-    workflow = workflow_repository.get_workflow(task_id, owner_id=owner_id)
+    workflow = workflow_repository.get_live_workflow(
+        task_id, owner_id=owner_id
+    )
     if workflow.workflow_revision != expected_revision:
         _raise_stale_revision()
     normalized_display_id = new_display_id.strip()
@@ -4207,7 +4436,9 @@ def update_correction_review(
         None,
     )
     internal_id = presentation.student_id if presentation else display_student_id
-    workflow = workflow_repository.get_workflow(task_id, owner_id=owner_id)
+    workflow = workflow_repository.get_live_workflow(
+        task_id, owner_id=owner_id
+    )
     runs = grading_repository.list_runs_for_assignment(task_id, actor_id=owner_id)
     target_run = _current_grading_run(workflow, runs)
     if target_run is None:
@@ -4248,7 +4479,9 @@ def update_correction_review(
 
 
 def finalization(*, task_id: str, owner_id: str) -> dict:
-    workflow = workflow_repository.get_workflow(task_id, owner_id=owner_id)
+    workflow = workflow_repository.get_live_workflow(
+        task_id, owner_id=owner_id
+    )
     runs = grading_repository.list_runs_for_assignment(task_id, actor_id=owner_id)
     run = _current_grading_run(workflow, runs)
     remaining = []
@@ -4295,13 +4528,18 @@ def finalization(*, task_id: str, owner_id: str) -> dict:
         "analysis_generated_at": workflow.analysis_generated_at,
         "analysis_error": workflow.analysis_error_code,
         "available_result_versions": len(workflow_repository.list_artifact_manifests(task_id, owner_id=owner_id)),
+        "source_cleanup": source_storage_repository.cleanup_summary(
+            assignment_id=task_id, owner_id=owner_id
+        ),
     }
 
 
 def confirm_finalization(
     *, task_id: str, owner_id: str, expected_revision: int
 ) -> dict:
-    workflow = workflow_repository.get_workflow(task_id, owner_id=owner_id)
+    workflow = workflow_repository.get_live_workflow(
+        task_id, owner_id=owner_id
+    )
     runs = grading_repository.list_runs_for_assignment(task_id, actor_id=owner_id)
     run = _current_grading_run(workflow, runs)
     if run is None:
@@ -4446,7 +4684,9 @@ def result_snapshot(
     grading_run_id: str | None = None,
 ) -> dict:
     runs = grading_repository.list_runs_for_assignment(task_id, actor_id=owner_id)
-    workflow = workflow_repository.get_workflow(task_id, owner_id=owner_id)
+    workflow = workflow_repository.get_live_workflow(
+        task_id, owner_id=owner_id
+    )
     run = (
         next((item for item in runs if item.id == grading_run_id), None)
         if grading_run_id is not None
@@ -4468,7 +4708,9 @@ def result_snapshot(
 def generate_artifacts(
     *, task_id: str, owner_id: str, expected_revision: int
 ) -> dict:
-    workflow = workflow_repository.get_workflow(task_id, owner_id=owner_id)
+    workflow = workflow_repository.get_live_workflow(
+        task_id, owner_id=owner_id
+    )
     runs = grading_repository.list_runs_for_assignment(task_id, actor_id=owner_id)
     run = _current_grading_run(workflow, runs)
     if run is None or run.released_at is None:
@@ -4518,7 +4760,9 @@ def generate_artifacts(
 
 
 def artifact_index(*, task_id: str, owner_id: str) -> dict:
-    workflow = workflow_repository.get_workflow(task_id, owner_id=owner_id)
+    workflow = workflow_repository.get_live_workflow(
+        task_id, owner_id=owner_id
+    )
     records = workflow_repository.list_artifact_manifests(task_id, owner_id=owner_id)
     runs = grading_repository.list_runs_for_assignment(task_id, actor_id=owner_id)
     current_run = _current_grading_run(workflow, runs)
@@ -4564,6 +4808,7 @@ def artifact_index(*, task_id: str, owner_id: str) -> dict:
 def artifact_bytes(
     *, task_id: str, owner_id: str, version: int, artifact_id: str
 ) -> tuple[bytes, str, str]:
+    workflow_repository.get_live_workflow(task_id, owner_id=owner_id)
     record = workflow_repository.get_artifact_manifest(
         task_id, version, owner_id=owner_id
     )
