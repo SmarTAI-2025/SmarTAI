@@ -205,6 +205,11 @@ def classify_background_error(
             return "provider_auth_failed"
         if status_code == 429:
             return "provider_rate_limited"
+        if (
+            status_code is not None and 500 <= status_code < 600
+            and not isinstance(item, HTTPException)
+        ):
+            return "provider_unreachable"
         if isinstance(item, PermanentLLMError) and any(
             marker in f"{item}".lower()
             for marker in (

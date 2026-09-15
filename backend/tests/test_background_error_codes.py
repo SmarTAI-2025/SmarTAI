@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import httpx
+import pytest
 from fastapi import HTTPException
+from openai import InternalServerError
 from sqlalchemy.exc import SQLAlchemyError
 
 from backend.domain.errors import ValidationError
@@ -23,6 +26,25 @@ def test_classifier_walks_wrapped_provider_cause():
         error.__cause__ = cause
 
     assert classify_background_error(error, "grading_failed") == "provider_timeout"
+
+
+@pytest.mark.parametrize("status", [500, 502, 503, 504])
+def test_wrapped_upstream_server_error_is_safe_and_actionable(status):
+    response = httpx.Response(
+        status, request=httpx.Request("POST", "https://relay.example.com/responses"),
+    )
+    error = TransientLLMError("provider request failed")
+    error.__cause__ = InternalServerError(
+        "private upstream response", response=response, body=None,
+    )
+
+    assert classify_background_error(error, "problem_extraction_failed") == "provider_unreachable"
+
+
+def test_local_http_500_is_not_misreported_as_provider_failure():
+    error = HTTPException(500, detail="private local error")
+
+    assert classify_background_error(error, "problem_extraction_failed") == "problem_extraction_failed"
 
 
 def test_explicit_pdf_429_code_is_not_misreported_as_provider_rate_limit():

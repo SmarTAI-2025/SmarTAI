@@ -138,6 +138,7 @@ class Settings(BaseSettings):
                 "openai_chat_completions" if protocol == "auto" else protocol
             ) if compatible else None,
             reasoning_effort=self.shared_reasoning_effort.strip() or None,
+            max_concurrent=max(1, self.max_concurrent_llm_per_provider),
         )
 
     # ─── Passwordless AWS Frontier demo ──────────────────────────────

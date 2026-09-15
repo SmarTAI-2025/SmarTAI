@@ -80,6 +80,57 @@ describe("FrontierLiveDemoPage", () => {
 
     expect(await screen.findByText(/已超出每日体验限额/)).toBeInTheDocument();
     expect(screen.queryByText(/submission_parse_failed/i)).not.toBeInTheDocument();
+    expect(screen.getByText("识别混合作答").closest("li")).toHaveClass("border-danger/30");
+    expect(screen.getByText("创建专属 Demo 任务").closest("li")).toHaveClass("border-accent/25");
+  });
+
+  it("keeps a question-preparation failure on its running step after polling stops", async () => {
+    vi.mocked(getTaskState)
+      .mockResolvedValueOnce({ ...taskState("extracting_problems"), problem_count: 0 })
+      .mockResolvedValueOnce({ ...taskState("error"), error: "provider_unreachable" });
+
+    render(
+      <I18nProvider>
+        <MemoryRouter initialEntries={["/frontier/live?taskId=asg_demo123"]}>
+          <FrontierLiveDemoPage />
+        </MemoryRouter>
+      </I18nProvider>,
+    );
+
+    expect(await screen.findByText(/The model service is temporarily unavailable/)).toBeInTheDocument();
+    expect(screen.getByText("Prepare and confirm questions").closest("li")).toHaveClass("border-danger/30");
+    expect(screen.getByText("Create a dedicated demo task").closest("li")).toHaveClass("border-accent/25");
+    expect(screen.getByText("Recognize mixed submissions").closest("li")).not.toHaveClass("border-danger/30");
+  });
+
+  it.each([
+    ["extract-job", "Prepare and confirm questions"],
+    ["parse-job", "Recognize mixed submissions"],
+    ["grading-job", "Run AI grading"],
+  ])("restores the failed %s without moving the error to task creation", async (failedJobId, failedStep) => {
+    vi.mocked(getTaskState).mockResolvedValue({
+      ...taskState("error"),
+      student_count: 4,
+      extract_job_id: "extract-job",
+      parse_job_id: "parse-job",
+      grading_job_id: "grading-job",
+      last_failed_job_id: failedJobId,
+      error: "provider_unreachable",
+    });
+
+    render(
+      <I18nProvider>
+        <MemoryRouter initialEntries={["/frontier/live?taskId=asg_demo123"]}>
+          <FrontierLiveDemoPage />
+        </MemoryRouter>
+      </I18nProvider>,
+    );
+
+    expect(await screen.findByText(/The model service is temporarily unavailable/)).toBeInTheDocument();
+    expect(screen.getByText(failedStep).closest("li")).toHaveClass("border-danger/30");
+    expect(screen.getByText("Create a dedicated demo task").closest("li")).toHaveClass("border-accent/25");
+    expect(getTask).not.toHaveBeenCalled();
+    expect(startQuestionPreparation).not.toHaveBeenCalled();
   });
 
   it("preserves real recognized content instead of testing it against fixture keywords", () => {

@@ -1,6 +1,7 @@
 """Deployment-only shared provider selection; no model or network calls."""
 from __future__ import annotations
 
+import asyncio
 import json
 from types import SimpleNamespace
 
@@ -10,6 +11,7 @@ from backend.config import Settings, settings
 from backend.domain.errors import ValidationError
 from backend.llm import registry as registry_module
 from backend.llm.registry import ExpertRegistry
+from backend.llm.providers import build_provider
 from backend.models import ProviderConfig
 from backend.rag import embedder as embedder_module
 from backend.services.grading_input_security import (
@@ -71,6 +73,52 @@ def test_generic_shared_environment_variables_resolve_one_provider(monkeypatch):
     assert configured.base_url == RELAY_URL
     assert configured.wire_protocol == "openai_responses"
     assert configured.reasoning_effort == "high"
+
+
+@pytest.mark.parametrize("vendor", ["openai", "gemini"])
+def test_shared_calls_obey_deployed_concurrency_limit(monkeypatch, vendor):
+    monkeypatch.setenv("SMARTAI_MAX_CONCURRENT_LLM_PER_PROVIDER", "2")
+    configured = Settings(
+        _env_file=None, shared_provider=vendor, shared_api_key=DUMMY_KEY,
+        shared_model=MODEL, shared_wire_protocol="auto", shared_base_url="",
+    ).configured_shared_provider()
+    provider = build_provider(configured)
+    monkeypatch.setattr(settings, "http_proxy", "")
+    monkeypatch.setattr(settings, "https_proxy", "")
+
+    async def exercise():
+        active = peak = started = 0
+        limit_reached = asyncio.Event()
+        release = asyncio.Event()
+
+        class Client:
+            async def ainvoke(self, _messages):
+                nonlocal active, peak, started
+                active += 1
+                started += 1
+                peak = max(peak, active)
+                if active == 2:
+                    limit_reached.set()
+                try:
+                    await release.wait()
+                    return SimpleNamespace(content="ok", response_metadata={}, usage_metadata={})
+                finally:
+                    active -= 1
+
+        provider._client = Client()
+        calls = [asyncio.create_task(provider.ainvoke([])) for _ in range(5)]
+        try:
+            await asyncio.wait_for(limit_reached.wait(), timeout=2)
+            await asyncio.sleep(0)
+            assert started == 2
+            assert peak == 2
+        finally:
+            release.set()
+            await asyncio.gather(*calls)
+        assert started == 5
+        assert peak == 2
+
+    asyncio.run(exercise())
 
 
 @pytest.mark.parametrize("vendor", COMPATIBLE_VENDORS)

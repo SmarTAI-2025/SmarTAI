@@ -101,6 +101,11 @@ export function FrontierLiveDemoPage() {
         setTaskId(restoredTaskId);
         setSnapshot(state);
         setSteps((current) => current.some((step) => step.state === "error") ? current : stepsFromSnapshot(state, locale));
+        if (state.status === "error") {
+          const detail = state.progress?.error_detail || state.error || "workflow_error";
+          setError({ message: liveDemoWorkflowFailureMessage(locale, detail), code: detail });
+          return;
+        }
         if (state.problem_count > 0) {
           const task = await getTask(restoredTaskId);
           if (cancelled) return;
@@ -148,7 +153,7 @@ export function FrontierLiveDemoPage() {
 
   useEffect(() => {
     if (busy) return;
-    setSteps(snapshot ? stepsFromSnapshot(snapshot, locale) : initialSteps(locale));
+    setSteps((current) => current.some((step) => step.state === "error") ? current : snapshot ? stepsFromSnapshot(snapshot, locale) : initialSteps(locale));
   }, [busy, locale, snapshot]);
 
   const elapsed = startedAt ? Math.max(0, Math.round((Date.now() - startedAt) / 1_000)) : null;
@@ -1066,6 +1071,10 @@ function latestProgressMessage(snapshot: TaskStateSnapshot) {
 }
 
 function stepsFromSnapshot(snapshot: TaskStateSnapshot, locale: Locale): RunStep[] {
+  const failedJobId = snapshot.last_failed_job_id ?? snapshot.progress?.job_id;
+  const failedJobRank = failedJobId
+    ? [snapshot.extract_job_id, snapshot.parse_job_id, snapshot.grading_job_id].indexOf(failedJobId) + 1
+    : 0;
   const rank: Record<TaskStatus, number> = {
     draft: 0,
     extracting_problems: 1,
@@ -1077,7 +1086,7 @@ function stepsFromSnapshot(snapshot: TaskStateSnapshot, locale: Locale): RunStep
     review_confirmed: 4,
     generating_analysis: 4,
     finalized: 4,
-    error: 0,
+    error: failedJobRank || (snapshot.student_count > 0 ? 3 : snapshot.problem_count > 0 ? 2 : 1),
   };
   const completedRank = rank[snapshot.status];
   return initialSteps(locale).map((step, index) => {
@@ -1112,6 +1121,13 @@ function tx(locale: Locale, zh: string, en: string) {
 }
 
 function liveDemoWorkflowFailureMessage(locale: Locale, detail: string) {
+  if (detail === "provider_unreachable") {
+    return tx(
+      locale,
+      "模型服务暂时不可用：上游服务调用失败，请稍后重试。可打开任务查看已完成的内容。",
+      "The model service is temporarily unavailable. The upstream request failed; please retry shortly. Open the task to inspect any completed work.",
+    );
+  }
   if (detail === "shared_pool_daily_limit_reached") {
     return tx(
       locale,
