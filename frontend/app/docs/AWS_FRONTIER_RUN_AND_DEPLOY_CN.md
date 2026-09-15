@@ -66,6 +66,7 @@ SMARTAI_E2E_FAKE_PROVIDER=false
 | 你要使用的服务 | SHARED_PROVIDER | SHARED_WIRE_PROTOCOL | SHARED_BASE_URL |
 | --- | --- | --- | --- |
 | Gemini 官方 API | `gemini` | `auto` | 留空 |
+| OpenAI 官方 API | `openai` | `openai_responses`（本示例） | `https://api.openai.com/v1` |
 | 智谱官方 API | `zhipu` | `openai_chat_completions` | `https://open.bigmodel.cn/api/paas/v4` |
 | Claude 官方 API | `anthropic` | `auto` | 留空 |
 | GPT 中转，提供 Chat Completions | `openai` | `openai_chat_completions` | 中转提供的 API 前缀 |
@@ -171,18 +172,43 @@ SMARTAI_SHARED_API_KEY=
 
 **如果中转只有原生 Claude Messages 或 Gemini generateContent 接口，当前 Demo 没有可用的环境变量组合。** 填 `anthropic/gemini` 加非空 Base URL 会使配置不可用；`anthropic_messages`／`gemini_generate_content` 也不是当前允许的协议值。这类接口需要另补相应后端适配，不能通过这份配置说明冒充已经支持。
 
-### 0.7 Claude 官方 API
+### 0.7 OpenAI 与 Claude 官方 API：完整可复制配置
+
+以下两组包含共享池开关。选择一组填写，`SMARTAI_SHARED_API_KEY` 由你在 Render 中填入对应厂商的**官方 API Key**。其余空值要实际清空，尤其不能残留旧中转 URL。
+
+#### 0.7.1 OpenAI 官方（GPT-6 Astra 示例）
 
 ```dotenv
+SMARTAI_SHARED_POOL_ENABLED=true
+SMARTAI_SHARED_PROVIDER=openai
+SMARTAI_SHARED_MODEL=gpt-6-astra
+SMARTAI_SHARED_BASE_URL=https://api.openai.com/v1
+SMARTAI_SHARED_WIRE_PROTOCOL=openai_responses
+SMARTAI_SHARED_REASONING_EFFORT=high
+SMARTAI_SHARED_API_KEY=
+```
+
+该配置请求 OpenAI 官方 `https://api.openai.com/v1/responses`。Base URL 也可以清空以采用程序的官方默认值；不要只填 `https://api.openai.com` 而漏掉 `/v1`。模型 ID 和 `high` 推理参数已对照 [GPT-6 Astra 官方说明](https://developers.openai.com/api/docs/models/gpt-6-astra)核对，但尚未使用你的账户实测。
+
+如果选用支持 Chat Completions 的官方模型，可将协议改为 `openai_chat_completions`，URL 保持 `https://api.openai.com/v1`，请求就会使用 `/v1/chat/completions`。不支持推理参数的模型须将 `SMARTAI_SHARED_REASONING_EFFORT` 清空。
+
+#### 0.7.2 Claude 官方（Sonnet 4.6 示例）
+
+```dotenv
+SMARTAI_SHARED_POOL_ENABLED=true
 SMARTAI_SHARED_PROVIDER=anthropic
-SMARTAI_SHARED_MODEL=<你的Claude模型名>
+SMARTAI_SHARED_MODEL=claude-sonnet-4-6
 SMARTAI_SHARED_BASE_URL=
 SMARTAI_SHARED_WIRE_PROTOCOL=auto
 SMARTAI_SHARED_REASONING_EFFORT=
 SMARTAI_SHARED_API_KEY=
 ```
 
-Key 填 Anthropic 官方 API Key；Base URL 留空，走既有官方原生适配器。
+在 `SMARTAI_SHARED_API_KEY` 填 Anthropic 官方 API Key。**当前 Demo 的 Claude 官方配置必须让 Base URL 留空**，由原生 SDK 使用官方地址；不要把 `https://api.anthropic.com` 写进此字段，当前配置检查会拒绝非空原生 Base URL。协议填 `auto`，不是 `openai_chat_completions`。
+
+这里以官方仍提供的 `claude-sonnet-4-6` 为具体示例，支持文字和图片输入，账户可用性仍需你验证。[Sonnet 4.6 官方说明](https://platform.claude.com/docs/en/models/sonnet-4-6/overview)。
+
+当前 Claude 适配器固定发送 `temperature=0`。官方说明 Claude 4.7 及以后不再接受非默认采样参数，因此**不能据此保证任意新 Claude 型号仅换模型名就可用**；这类模型需先补参数适配。本示例采用 4.6，不把它宣称为最新型号。[Claude Messages 参数说明](https://platform.claude.com/docs/en/build-with-claude/working-with-messages)。
 
 ### 0.8 切换后生效、旧变量与回退
 
