@@ -15,4 +15,16 @@ describe("student analysis natural-language presets", () => {
     expect(plan.sort).toBe("score_desc");
     expect(plan.terms).toEqual([]);
   });
+
+  it.each([["学生按姓名升序排列", "name_asc"], ["按姓名降序排序", "name_desc"]])("understands %s without treating it as a student name", (query, sort) => {
+    const plan = parseSemanticStudentQuery(query, "zh-CN");
+    expect(plan.sort).toBe(sort);
+    expect(plan.terms).toEqual([]);
+  });
+
+  it("retains an unsupported restriction so a partial local match cannot suppress semantic routing", () => {
+    const plan = parseSemanticStudentQuery("学生按姓名升序排列，只要最近经常缺课的", "zh-CN");
+    expect(plan.sort).toBe("name_asc");
+    expect(plan.terms.length).toBeGreaterThan(0);
+  });
 });

@@ -58,7 +58,7 @@ class QueryRequest(BaseModel):
 
 class FilterIntentRequest(BaseModel):
     question: str = Field(min_length=1, max_length=500)
-    surface: Literal["student_analysis", "review_overview"]
+    surface: Literal["student_analysis", "review_overview", "question_analysis"]
 
 
 @dataclass(frozen=True)
@@ -407,6 +407,18 @@ def _presentation_payload(
         total = sum(float(result.score or 0.0) for result in scored)
         maximum = sum(result.max_score for result in scored)
         percentage = round(total / maximum * 100, 1) if maximum > 0 else None
+        confidences = [
+            value for result in student_results
+            if (value := _normalized_confidence(result.confidence)) is not None
+        ]
+        review_signals = [
+            result for result in student_results
+            if result.requires_review or result.review_reasons or not result.is_scored
+            or (
+                (value := _normalized_confidence(result.confidence)) is not None
+                and value < 0.65
+            )
+        ]
         name = student_names.get(student_id, student_id)
         students.append({
             "student_id": student_id,
@@ -422,16 +434,30 @@ def _presentation_payload(
             "pct": percentage,
             "graded_items": len(scored),
             "unresolved_items": len(student_results) - len(scored),
+            "avg_confidence": round(sum(confidences) / len(confidences), 4) if confidences else None,
+            "low_confidence_count": sum(value < 0.65 for value in confidences),
+            "review_signal_count": len(review_signals),
+            "pending_review_count": sum(result.review_id is None for result in review_signals),
             "per_q": [
                 {
                     "q_id": result.q_id,
-                    "score": result.score,
+                    "score": result.score if result.is_scored else None,
                     "max_score": result.max_score,
+                    "confidence": _normalized_confidence(result.confidence),
+                    "requires_review": result in review_signals,
+                    "reviewed": result.review_id is not None,
+                    "result_status": result.result_status,
                 }
-                for result in scored
+                for result in student_results
             ],
         })
     return {"results": students}, stats
+
+
+def _normalized_confidence(value: float | None) -> float | None:
+    if value is None or not math.isfinite(value) or not 0 <= value <= 100:
+        return None
+    return value / 100 if value > 1 else value
 
 
 def _check_rate_limit(owner_id: str) -> None:
@@ -550,18 +576,41 @@ def _provider_error(exc: SharedPoolLimitError) -> HTTPException:
     )
 
 
-def _redact_filter_question(question: str, facts: _AnalyticsFacts) -> str:
+def _redact_filter_question(question: str, facts: _AnalyticsFacts) -> tuple[str, dict[str, str]]:
     """Remove known student identifiers before sending query text to a provider."""
-    redacted = question
     identifiers = {
         identifier.strip()
         for row in facts.per_student_stats
         for identifier in (str(row.get("id", "")), str(row.get("name", "")))
         if identifier and identifier.strip()
     }
-    for identifier in sorted(identifiers, key=len, reverse=True):
-        redacted = re.sub(re.escape(identifier), "<student>", redacted, flags=re.IGNORECASE)
-    return redacted
+    if not identifiers:
+        return question, {}
+    placeholders: dict[str, str] = {}
+    originals: dict[str, str] = {}
+    def replace(match: re.Match[str]) -> str:
+        literal = match.groupdict().get("numeric_id") or match.group(0)
+        identity = literal.casefold()
+        placeholder = placeholders.setdefault(identity, f"<student_{len(placeholders) + 1}>")
+        originals[placeholder] = literal
+        return (match.groupdict().get("numeric_prefix") or "") + placeholder
+    patterns = []
+    for value in sorted(identifiers, key=len, reverse=True):
+        if value.isdigit() and len(value) < 6:
+            continue
+        escaped = re.escape(value)
+        patterns.append(
+            rf"(?<![a-z0-9_]){escaped}(?![a-z0-9_])"
+            if re.search(r"[a-z0-9]", value, re.IGNORECASE) else escaped
+        )
+    numeric_ids = "|".join(re.escape(value) for value in sorted(identifiers, key=len, reverse=True) if value.isdigit() and len(value) < 6)
+    if numeric_ids:
+        # A short numeric ID must not consume a score limit or Q1's number.
+        patterns.append(
+            rf"(?P<numeric_prefix>(?<![a-z0-9_])(?:学号|student(?:\s*id)?|id|#)\s*[:：#]?\s*)"
+            rf"(?P<numeric_id>{numeric_ids})(?![a-z0-9_])"
+        )
+    return re.sub("|".join(patterns), replace, question, flags=re.IGNORECASE), originals
 
 
 @router.post("/{task_id}/filter-intent")
@@ -579,7 +628,7 @@ async def interpret_filter_intent(
             detail={"code": "analytics_provider_unavailable"},
         )
     _check_rate_limit(f"{current.id}:filter-intent")
-    provider_question = _redact_filter_question(req.question, facts)
+    provider_question, identifiers = _redact_filter_question(req.question, facts)
 
     try:
         output = await analytics_agent.interpret_filter_intent(
@@ -587,12 +636,22 @@ async def interpret_filter_intent(
             surface=req.surface,
             provider=provider,
         )
+        text_terms = []
+        for term in output.text_terms:
+            normalized = term.strip().casefold()
+            if normalized in identifiers and req.surface != "question_analysis":
+                text_terms.append(identifiers[normalized])
+            elif re.search(r"<student(?:_[^>]*)?>", term, re.IGNORECASE):
+                output.recognized = False
+            else:
+                text_terms.append(_safe_text(term, 80))
         return {
             **output.model_dump(),
             "question_tokens": [
                 _safe_text(value, 40) for value in output.question_tokens
             ],
-            "text_terms": [_safe_text(value, 80) for value in output.text_terms],
+            "question_types": [_safe_text(value, 40) for value in output.question_types],
+            "text_terms": text_terms,
             "explanation": _safe_text(output.explanation, 500),
         }
     except SharedPoolLimitError as exc:

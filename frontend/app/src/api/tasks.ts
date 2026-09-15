@@ -82,7 +82,7 @@ export function updateTask(taskId: string, patch: TaskMetadataPatch): Promise<Ta
 }
 
 export function interpretTaskHistoryQuery(query: string): Promise<HistoryInterpretation> {
-  return postJSON<HistoryInterpretation, { query: string }>("/tasks/query/interpret", { query });
+  return postJSON<HistoryInterpretation, { query: string }>("/tasks/query/interpret", { query }, { timeout: 300_000 });
 }
 
 export function deleteTask(taskId: string): Promise<{ status: string }> {

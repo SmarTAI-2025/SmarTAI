@@ -49,8 +49,14 @@ class FilterIntentOutput(BaseModel):
     review_status: Optional[Literal["pending", "confirmed", "none"]] = None
     disagreement: bool = False
     annotated: bool = False
-    sort: Optional[Literal["score_asc", "score_desc", "confidence_asc", "review_desc"]] = None
+    sort: Optional[Literal[
+        "score_asc", "score_desc", "confidence_asc", "review_desc",
+        "name_asc", "name_desc", "question",
+    ]] = None
     question_tokens: List[str] = Field(default_factory=list, max_length=4)
+    question_types: List[str] = Field(default_factory=list, max_length=4)
+    max_average_confidence: Optional[float] = Field(None, ge=0, le=1)
+    missing_knowledge: bool = False
     text_terms: List[str] = Field(default_factory=list, max_length=4)
     explanation: str = Field("", max_length=500)
 
@@ -129,6 +135,9 @@ Return JSON with exactly these fields:
   "annotated": false,
   "sort": null,
   "question_tokens": [],
+  "question_types": [],
+  "max_average_confidence": null,
+  "missing_knowledge": false,
   "text_terms": [],
   "explanation": "short explanation in the query language"
 }
@@ -136,11 +145,31 @@ Return JSON with exactly these fields:
 Allowed values:
 - pass_status: "pass", "fail", "unscored", or null.
 - review_status: "pending", "confirmed", "none", or null.
-- sort: "score_asc", "score_desc", "confidence_asc", "review_desc", or null.
+- sort: "score_asc", "score_desc", "confidence_asc", "review_desc",
+  "name_asc", "name_desc", "question", or null. Use name_asc/name_desc for
+  student names or IDs; use question for question-number order.
 - Score limits are percentages from 0 to 100. Phrases such as "90分以下" mean
   max_score_percent=90. Bare "从高到低" means sort="score_desc".
 - Use question_tokens only for explicit question references such as Q2 or 第3题.
+- On question_analysis, question_types can contain calculation, programming,
+  proof, concept, choice, fill_blank, or short_answer. Use max_average_confidence
+  for an explicit mean-confidence limit (e.g. below 80% -> 0.8), and
+  missing_knowledge for questions without a knowledge-point label.
+- On student_analysis, only score limits, pass_status, low_confidence,
+  review_status, disagreement, student sort, and text_terms are supported.
+- On review_overview, the same controls plus question_tokens and annotated
+  are supported.
+- On question_analysis, only score limits, low_confidence, review_status,
+  question_tokens, question_types, max_average_confidence, missing_knowledge,
+  text_terms, and score/confidence/review/question sort are supported.
+- If ANY requested condition is unsupported on the surface, return
+  recognized=false. Do not silently apply only part of the request.
 - Use text_terms only for literal words that should still be matched locally.
+- Numbered <student_1> placeholders are private student identities. When filtering
+  that student on student_analysis/review_overview, return the EXACT placeholder
+  as a separate text_terms item; never replace it with a guessed name. Each term
+  is an AND condition. Excluding identities or an OR between identities is not
+  supported; return recognized=false for those instructions.
 - If the request cannot map to these controls, set recognized=false and explain why.
 - Do not invent names, IDs, score thresholds, or question numbers.
 - Output must start with { and end with }.
@@ -175,6 +204,12 @@ Hard rules:
 - Only the trace types above. No 3D, no maps, no scattergeo, etc.
 - Maximum 4 traces. Maximum 50 data points per trace.
 - All values must be valid JSON. No JS function bodies.
+- Use only the supplied facts. pct is a score percentage (0-100);
+  avg_confidence and per_q.confidence are normalized (0-1). Null means unknown,
+  never zero. low_confidence_count counts confidence below 0.65.
+- review_signal_count counts items with a review signal; pending_review_count
+  counts those without a teacher review. Group these facts when asked to compare
+  questions or reviewed/unreviewed students. Never invent a missing metric.
 - Output must start with { and end with }.
 """
 
@@ -263,7 +298,7 @@ async def filter_students(
 async def interpret_filter_intent(
     *,
     question: str,
-    surface: Literal["student_analysis", "review_overview"],
+    surface: Literal["student_analysis", "review_overview", "question_analysis"],
     provider: BaseProvider,
 ) -> FilterIntentOutput:
     """Interpret only the query text; no grading or student payload is accepted."""
@@ -275,7 +310,29 @@ async def interpret_filter_intent(
         SystemMessage(content=FILTER_INTENT_SYS),
         HumanMessage(content=user_msg),
     ])
-    return extract_and_parse_json(response.content, FilterIntentOutput)
+    output = extract_and_parse_json(response.content, FilterIntentOutput)
+    unsupported = {
+        "student_analysis": (
+            "question_tokens", "question_types", "max_average_confidence",
+            "missing_knowledge", "annotated",
+        ),
+        "review_overview": (
+            "question_types", "max_average_confidence", "missing_knowledge",
+        ),
+        "question_analysis": ("pass_status", "disagreement", "annotated"),
+    }[surface]
+    wrong_sort = (
+        output.sort in {"name_asc", "name_desc"} if surface == "question_analysis"
+        else output.sort == "question"
+    )
+    if wrong_sort or any(
+        getattr(output, field) is not None
+        and getattr(output, field) is not False
+        and getattr(output, field) != []
+        for field in unsupported
+    ):
+        output.recognized = False
+    return output
 
 
 async def summarize(

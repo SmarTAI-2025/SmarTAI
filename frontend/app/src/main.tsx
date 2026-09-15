@@ -3,7 +3,9 @@ import ReactDOM from "react-dom/client";
 import { createBrowserRouter, Navigate, RouterProvider } from "react-router-dom";
 import { RequireTeacherSession } from "@/components/auth/RequireTeacherSession";
 import { AppShell } from "@/components/layout/AppShell";
+import { RouteErrorPage } from "@/components/ui/RouteErrorPage";
 import { useI18n } from "@/i18n/I18nProvider";
+import { installAssetLoadRecovery } from "@/lib/assetLoadRecovery";
 import { Providers } from "@/providers/Providers";
 import { StudentUnavailablePage } from "@/routes/StudentUnavailablePage";
 import "@/styles/globals.css";
@@ -109,14 +111,17 @@ function routeElement(element: React.ReactNode) {
   return <React.Suspense fallback={<RouteFallback />}>{element}</React.Suspense>;
 }
 
+installAssetLoadRecovery();
+
 const router = createBrowserRouter([
-  { path: "/frontier", element: routeElement(<FrontierLandingPage />) },
-  { path: "/frontier/enter", element: routeElement(<FrontierDemoEntryPage />) },
-  { path: "/login", element: routeElement(<LoginPage />) },
-  { path: "/register", element: routeElement(<RegisterPage />) },
+  { path: "/frontier", element: routeElement(<FrontierLandingPage />), errorElement: <RouteErrorPage /> },
+  { path: "/frontier/enter", element: routeElement(<FrontierDemoEntryPage />), errorElement: <RouteErrorPage /> },
+  { path: "/login", element: routeElement(<LoginPage />), errorElement: <RouteErrorPage /> },
+  { path: "/register", element: routeElement(<RegisterPage />), errorElement: <RouteErrorPage /> },
   { path: "/student", element: <StudentUnavailablePage /> },
   {
     path: "/",
+    errorElement: <RouteErrorPage />,
     element: (
       <RequireTeacherSession>
         <AppShell />

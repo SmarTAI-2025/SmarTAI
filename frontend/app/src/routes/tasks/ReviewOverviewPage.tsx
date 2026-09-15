@@ -38,7 +38,9 @@ export function ReviewOverviewPage() {
   const searchParamsRef = useRef(searchParams);
   const smartSearch = useImeSafeQuery({ value: urlQuery, onCommit: commitFilter });
   const intentQuery = useAnalyticsFilterIntent();
-  const [intentState, setIntentState] = useState<{ question: string; result: FilterIntentResult } | null>(null);
+  const [intentState, setIntentState] = useState<{ taskId: string; question: string; result: FilterIntentResult } | null>(null);
+  const contextRef = useRef({ taskId, query });
+  contextRef.current = { taskId, query };
   const [resolution, setResolution] = useState<"idle" | "local" | "llm">("idle");
   const task = taskQuery.data;
   const model = useMemo(() => buildResultsModel(task, resultQuery.data), [resultQuery.data, task]);
@@ -61,12 +63,14 @@ export function ReviewOverviewPage() {
     () => selectReviewOverview(model, reviewItems, annotatedKeys, query),
     [annotatedKeys, model, query, reviewItems],
   );
-  const activeIntent = intentState?.question === query && intentState.result.recognized ? intentState.result : null;
+  const currentIntent = intentState?.taskId === taskId && intentState?.question === query ? intentState : null;
+  const activeIntent = currentIntent?.result.recognized ? currentIntent.result : null;
+  const unsupportedIntent = currentIntent && !currentIntent.result.recognized;
   const selection = useMemo(
     () => activeIntent
       ? selectReviewOverviewFromIntent(model, reviewItems, annotatedKeys, activeIntent)
-      : localSelection,
-    [activeIntent, annotatedKeys, localSelection, model, reviewItems],
+      : unsupportedIntent ? selectReviewOverview(model, reviewItems, annotatedKeys, "") : localSelection,
+    [activeIntent, annotatedKeys, localSelection, model, reviewItems, unsupportedIntent],
   );
 
   useEffect(() => {
@@ -137,6 +141,7 @@ export function ReviewOverviewPage() {
   }
 
   function applySmartFilter(value: string) {
+    if (intentQuery.isPending) return;
     const normalized = value.trim();
     smartSearch.commitValue(normalized);
     setIntentState(null);
@@ -153,7 +158,8 @@ export function ReviewOverviewPage() {
     if (!taskId) return;
     intentQuery.mutate({ taskId, question: normalized, surface: "review_overview" }, {
       onSuccess: (result) => {
-        setIntentState({ question: normalized, result });
+        if (contextRef.current.taskId !== taskId || contextRef.current.query !== normalized) return;
+        setIntentState({ taskId, question: normalized, result });
         setResolution("llm");
       },
     });
@@ -246,7 +252,7 @@ export function ReviewOverviewPage() {
             <div className="mt-2 flex min-h-6 flex-wrap items-center gap-2 text-[11px] text-muted-foreground">
               <span>{copy(locale, "filterPrivacyHint")}</span>
               {resolution === "local" ? <span className="rounded-full bg-slate-100 px-2.5 py-1 text-[10px] font-semibold text-slate-600">{copy(locale, "localRecognized")}</span> : null}
-              {resolution === "llm" && intentState ? <><span className="rounded-full bg-emerald-100 px-2.5 py-1 text-[10px] font-semibold text-emerald-700">{copy(locale, "modelInterpreted")}</span><span>{intentState.result.explanation}</span></> : null}
+              {resolution === "llm" && currentIntent ? <><span className="rounded-full bg-slate-100 px-2.5 py-1 text-[10px] font-semibold text-slate-700">{unsupportedIntent ? (locale === "en-US" ? "Could not interpret the full instruction; no partial filter applied" : "未能完整转换指令，未应用部分条件") : copy(locale, "modelInterpreted")}</span><span>{currentIntent.result.explanation}</span></> : null}
             </div>
             {recoveryInfo ? <RecoverableActionState info={recoveryInfo} locale={locale} compact className="mt-2" primaryAction={recoveryInfo.actionKind === "byok" ? undefined : { label: recoveryInfo.actionLabel, onClick: () => applySmartFilter(smartSearch.draftValue), busy: intentQuery.isPending }} secondaryAction={recoveryInfo.actionKind === "byok" ? { label: copy(locale, "dismiss"), onClick: () => intentQuery.reset() } : { label: copy(locale, "modelSettings"), href: `/settings/byok?returnTo=${encodeURIComponent(taskId ? `/tasks/${taskId}/review` : "/history")}` }} /> : null}
           </form>

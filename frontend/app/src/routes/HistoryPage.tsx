@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { toast } from "sonner";
 import { normalizeAPIError } from "@/api/client";
@@ -41,6 +41,7 @@ export function HistoryPage() {
   const [interpretation, setInterpretation] = useState<HistoryInterpretation | null>(null);
   const [preSmartQuery, setPreSmartQuery] = useState<TaskHistoryQuery | null>(null);
   const [smartError, setSmartError] = useState(false);
+  const interpretationRequest = useRef(0);
   const [deletingTaskId, setDeletingTaskId] = useState<string | null>(null);
 
   const data = historyQuery.data;
@@ -64,6 +65,7 @@ export function HistoryPage() {
   }
 
   function handleChange(patch: Partial<TaskHistoryQuery>, keepPage = false) {
+    interpretationRequest.current += 1;
     setInterpretation(null);
     setPreSmartQuery(null);
     setSmartError(false);
@@ -71,6 +73,7 @@ export function HistoryPage() {
   }
 
   function clearAll() {
+    interpretationRequest.current += 1;
     setInterpretation(null);
     setPreSmartQuery(null);
     setSmartError(false);
@@ -79,19 +82,24 @@ export function HistoryPage() {
   }
 
   async function handleInterpret(value: string) {
+    if (interpretQuery.isPending || !value.trim()) return;
+    const request = ++interpretationRequest.current;
     setSmartError(false);
     try {
       const result = await interpretQuery.mutateAsync(value);
+      if (request !== interpretationRequest.current) return;
       setPreSmartQuery(query);
       setInterpretation(result);
       writeQuery(applyHistoryInterpretation(query, result));
     } catch {
+      if (request !== interpretationRequest.current) return;
       setInterpretation(null);
       setSmartError(true);
     }
   }
 
   function clearSmart() {
+    interpretationRequest.current += 1;
     setInterpretation(null);
     setSmartError(false);
     interpretQuery.reset();

@@ -6,7 +6,7 @@ export interface FilterAnalyticsResult {
   explanation: string;
 }
 
-export type FilterIntentSurface = "student_analysis" | "review_overview";
+export type FilterIntentSurface = "student_analysis" | "review_overview" | "question_analysis";
 
 export interface FilterIntentResult {
   recognized: boolean;
@@ -17,8 +17,11 @@ export interface FilterIntentResult {
   review_status: "pending" | "confirmed" | "none" | null;
   disagreement: boolean;
   annotated: boolean;
-  sort: "score_asc" | "score_desc" | "confidence_asc" | "review_desc" | null;
+  sort: "score_asc" | "score_desc" | "confidence_asc" | "review_desc" | "name_asc" | "name_desc" | "question" | null;
   question_tokens: string[];
+  question_types?: string[];
+  max_average_confidence?: number | null;
+  missing_knowledge?: boolean;
   text_terms: string[];
   explanation: string;
 }

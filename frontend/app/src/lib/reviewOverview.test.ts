@@ -94,6 +94,17 @@ const model = {
 } as ResultsModel;
 
 describe("review overview smart filter", () => {
+  it("distinguishes name ordering from score ordering, locally and through semantic intent", () => {
+    const byName = selectReviewOverview(model, [], new Set(), "学生按姓名降序排列");
+    expect(byName.students.map((item) => item.name)).toEqual(["Low", "High"]);
+    expect(reviewQueryNeedsIntentFallback(byName)).toBe(false);
+    const interpreted = selectReviewOverviewFromIntent(model, [], new Set(), intent({ sort: "name_asc" }));
+    expect(interpreted.students.map((item) => item.name)).toEqual(["High", "Low"]);
+  });
+
+  it("routes incomplete compound requests instead of applying only the local score fragment", () => {
+    expect(reviewQueryNeedsIntentFallback(selectReviewOverview(model, [], new Set(), "低于90分且最近经常缺课"))).toBe(true);
+  });
   it("treats 90分以下 as a total-score student filter", () => {
     const selection = selectReviewOverview(model, [], new Set(), "90分以下的学生");
 

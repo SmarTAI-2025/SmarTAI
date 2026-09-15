@@ -66,6 +66,7 @@ export function HistoryFilters({
   }
 
   function submitSmart() {
+    if (isInterpreting) return;
     const value = smartSearch.commitDraft().trim();
     if (value) onInterpret(value);
   }
@@ -97,6 +98,7 @@ export function HistoryFilters({
             <span className="sr-only">{t("historySmartLabel")}</span>
             <input
               value={smartSearch.draftValue}
+              disabled={isInterpreting}
               onBlur={smartSearch.handleBlur}
               onChange={smartSearch.handleChange}
               onCompositionEnd={smartSearch.handleCompositionEnd}
@@ -232,6 +234,7 @@ export function HistoryFilters({
                 : `Applied ${interpretation.conditions.length} editable ${interpretation.conditions.length === 1 ? "condition" : "conditions"}.`
               : t("historySmartNoCondition")}
           </p>
+          {interpretation.explanation ? <p role="status" className="mt-1 text-xs leading-5 text-muted-foreground">{interpretation.explanation}</p> : null}
           {interpretation.ambiguities.length ? (
             <div className="mt-2 rounded-md bg-amber-50 px-3 py-2 text-xs leading-5 text-amber-800 dark:bg-amber-950/40 dark:text-amber-200">
               <strong>{t("historySmartAmbiguity")}</strong>

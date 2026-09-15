@@ -336,6 +336,12 @@ name_asc, name_desc, attention_first, stage_asc, stage_desc.
 Use q only for a task-name/free-text term. If meaning is uncertain, leave that
 filter unset and add an ambiguity. Keep explanation short and in the query's
 language.
+Interpret the COMPLETE query, including negation and combined conditions.
+already_parsed contains tentative hints: correct them when the full query says
+otherwise. For example, "不要草稿，只看已完成" means statuses=["finalized"].
+Return each filter you intend to set; an omitted field preserves its hint,
+while an explicit null (or [] for lists) clears it. A provided sort replaces
+the hint, and sort=null clears ordering. Preserve valid stated conditions.
 """
 
 
@@ -421,18 +427,19 @@ async def interpret_history_query(
             valid_courses = {item["id"] for item in courses}
             valid_tags = {item["id"] for item in tags}
 
-            if filters.q is None and llm.filters.q:
-                filters.q = llm.filters.q.strip() or None
-            if filters.semester_id is None and llm.filters.semester_id:
-                if llm.filters.semester_id in valid_semesters:
+            supplied = llm.filters.model_fields_set
+            if "q" in supplied:
+                filters.q = (llm.filters.q or "").strip() or None
+            if "semester_id" in supplied:
+                if llm.filters.semester_id is None or llm.filters.semester_id in valid_semesters:
                     filters.semester_id = llm.filters.semester_id
                 else:
                     ambiguities.append(HistoryQueryAmbiguity(
                         fragment=llm.filters.semester_id,
                         message="模型建议的学期不在可选范围内，已忽略。",
                     ))
-            if filters.course_id is None and llm.filters.course_id:
-                if llm.filters.course_id in valid_courses:
+            if "course_id" in supplied:
+                if llm.filters.course_id is None or llm.filters.course_id in valid_courses:
                     filters.course_id = llm.filters.course_id
                 else:
                     ambiguities.append(HistoryQueryAmbiguity(
@@ -443,24 +450,26 @@ async def interpret_history_query(
                 tag_id for tag_id in llm.filters.tag_ids
                 if tag_id not in valid_tags
             ]
-            filters.tag_ids = list(dict.fromkeys([
-                *filters.tag_ids,
-                *(tag_id for tag_id in llm.filters.tag_ids if tag_id in valid_tags),
-            ]))
+            if "tag_ids" in supplied:
+                valid_tag_ids = list(dict.fromkeys(
+                    tag_id for tag_id in llm.filters.tag_ids if tag_id in valid_tags
+                ))
+                if valid_tag_ids or not llm.filters.tag_ids:
+                    filters.tag_ids = valid_tag_ids
             if invalid_tag_ids:
                 ambiguities.append(HistoryQueryAmbiguity(
                     fragment=", ".join(invalid_tag_ids)[:120],
                     message="模型建议的标签不属于当前用户，已忽略。",
                 ))
-            if not filters.statuses:
+            if "statuses" in supplied:
                 filters.statuses = [
                     item for item in llm.filters.statuses if item in _STATUSES
                 ]
-            if filters.unfinished is None:
+            if "unfinished" in supplied:
                 filters.unfinished = llm.filters.unfinished
-            if filters.needs_attention is None:
+            if "needs_attention" in supplied:
                 filters.needs_attention = llm.filters.needs_attention
-            if sort is None:
+            if "sort" in llm.model_fields_set:
                 sort = llm.sort
             allowed_candidates = {*semesters, *_STATUSES, *_SORTS}
             for course in courses:

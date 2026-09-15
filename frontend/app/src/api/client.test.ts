@@ -1,9 +1,14 @@
-import { describe, expect, it } from "vitest";
+import { AxiosError, type AxiosAdapter } from "axios";
+import { afterEach, describe, expect, it } from "vitest";
 import {
   APIError,
+  apiClient,
+  clearAuthToken,
+  getAuthToken,
   getAPIErrorCode,
   getAPIErrorDetail,
   normalizeAPIError,
+  setAuthToken,
 } from "./client";
 
 function axiosError(data: unknown, status = 409, headers: Record<string, string> = {}) {
@@ -49,5 +54,59 @@ describe("API error envelope compatibility", () => {
     }, 429));
 
     expect(error.retryAfterSeconds).toBe(3);
+  });
+});
+
+describe("Demo token renewal through the existing refresh interceptor", () => {
+  const originalAdapter = apiClient.defaults.adapter;
+  afterEach(() => {
+    apiClient.defaults.adapter = originalAdapter;
+    clearAuthToken();
+  });
+
+  it("shares one renewal and replays concurrent task requests with the renewed token", async () => {
+    setAuthToken("expired-demo-capability");
+    const refreshTokens: unknown[] = [];
+    const replayedPaths: string[] = [];
+    const adapter: AxiosAdapter = async (config) => {
+      const response = { data: {}, status: 200, statusText: "OK", headers: {}, config };
+      if (config.url === "/auth/refresh") {
+        refreshTokens.push(config.headers.Authorization);
+        return { ...response, data: { token: "renewed-same-owner-capability" } };
+      }
+      if (config.headers.Authorization === "Bearer expired-demo-capability") {
+        throw new AxiosError("expired", "ERR_BAD_REQUEST", config, undefined, { ...response, status: 401 });
+      }
+      expect(config.headers.Authorization).toBe("Bearer renewed-same-owner-capability");
+      replayedPaths.push(config.url!);
+      return response;
+    };
+    apiClient.defaults.adapter = adapter;
+
+    await Promise.all([
+      apiClient.post("/analytics/synthetic-task/filter-intent", { query: "sort by name" }),
+      apiClient.get("/tasks/synthetic-task"),
+    ]);
+
+    expect(refreshTokens).toEqual(["Bearer expired-demo-capability"]);
+    expect(replayedPaths.sort()).toEqual(["/analytics/synthetic-task/filter-intent", "/tasks/synthetic-task"]);
+    expect(getAuthToken()).toBe("renewed-same-owner-capability");
+  });
+
+  it("stops after a refused renewal instead of issuing a new demo identity", async () => {
+    setAuthToken("expired-demo-capability");
+    const paths: string[] = [];
+    apiClient.defaults.adapter = async (config) => {
+      paths.push(config.url!);
+      throw new AxiosError("expired", "ERR_BAD_REQUEST", config, undefined, {
+        data: { detail: { code: "frontier_demo_session_expired" } },
+        status: 401, statusText: "Unauthorized", headers: {}, config,
+      });
+    };
+
+    await expect(apiClient.get("/tasks/synthetic-task")).rejects.toBeInstanceOf(AxiosError);
+
+    expect(paths).toEqual(["/tasks/synthetic-task", "/auth/refresh"]);
+    expect(getAuthToken()).toBeNull();
   });
 });

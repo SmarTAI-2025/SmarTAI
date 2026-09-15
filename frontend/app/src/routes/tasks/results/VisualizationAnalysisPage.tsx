@@ -85,7 +85,7 @@ export function VisualizationAnalysisPage({ locale, taskId, version, model, prov
   };
 
   const runChart = (question: string) => {
-    if (!question.trim()) return;
+    if (chartQuery.isPending || !question.trim()) return;
     chartQuery.mutate({ taskId, question, mode: "chart" }, {
       onSuccess: (result) => {
         if (result.mode !== "chart") {
@@ -104,6 +104,7 @@ export function VisualizationAnalysisPage({ locale, taskId, version, model, prov
   };
 
   const updatePrompt = (value: string) => {
+    if (chartQuery.isPending) return;
     chartQuery.reset();
     setPrompt(value);
   };

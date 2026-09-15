@@ -1,11 +1,16 @@
 from __future__ import annotations
 
+import time
+
+import jwt
+import pytest
 from fastapi.testclient import TestClient
 
 from backend.api import auth as auth_api
 from backend.auth import decode_token
 from backend.config import settings
 from backend.main import app
+from backend.state import get_user_store
 
 
 def _enable_frontier_demo(monkeypatch) -> None:
@@ -198,3 +203,93 @@ def test_frontier_demo_non_positive_daily_limit_is_unlimited(monkeypatch):
     responses = [client.post("/auth/frontier-demo-session") for _ in range(6)]
 
     assert {response.status_code for response in responses} == {200}
+
+
+def _expired_demo_token(issued: dict, **claims) -> str:
+    payload = decode_token(issued["token"])
+    now = int(time.time())
+    payload.update(iat=now - 1300, exp=now - 100, session_exp=now + 5900)
+    payload.update(claims)
+    return jwt.encode(payload, settings.jwt_secret, algorithm=settings.jwt_algorithm)
+
+
+def test_demo_refresh_preserves_owner_task_scope_and_absolute_deadline(monkeypatch):
+    _enable_frontier_demo(monkeypatch)
+    monkeypatch.setattr(settings, "require_auth", True)
+    monkeypatch.setattr(settings, "frontier_demo_daily_session_limit", 1)
+    client = TestClient(app)
+    issued = client.post("/auth/frontier-demo-session").json()
+    task = client.post(
+        "/tasks/", json={"name": "Renewal sample"},
+        headers={"Authorization": f"Bearer {issued['token']}", "Idempotency-Key": "renewal"},
+    ).json()
+    deadline = int(time.time()) + 40
+    old = _expired_demo_token(issued, session_exp=deadline)
+    assert decode_token(old) is None  # Expired credentials cannot read tasks.
+    assert client.get(f"/tasks/{task['task_id']}", headers={"Authorization": f"Bearer {old}"}).status_code == 401
+
+    refreshed = client.post("/auth/refresh", headers={"Authorization": f"Bearer {old}"})
+
+    assert refreshed.status_code == 200, refreshed.text
+    assert refreshed.headers["cache-control"] == "no-store"
+    assert "set-cookie" not in refreshed.headers
+    assert refreshed.json()["user"]["id"] == issued["user"]["id"]
+    token = refreshed.json()["token"]
+    claims = decode_token(token)
+    assert claims["sub"] == issued["user"]["id"]
+    assert claims["scope"] == "frontier_demo"
+    assert claims["exp"] == claims["session_exp"] == deadline
+    headers = {"Authorization": f"Bearer {token}"}
+    assert client.get(f"/tasks/{task['task_id']}", headers=headers).status_code == 200
+    assert client.get("/courses", headers=headers).status_code == 403
+    again = client.post("/auth/refresh", headers=headers)
+    assert decode_token(again.json()["token"])["session_exp"] == deadline
+    assert client.post("/auth/frontier-demo-session").status_code == 429
+
+
+@pytest.mark.parametrize("case", ["deadline", "disabled", "inactive", "missing_user", "wrong_scope", "bad_signature", "bad_deadline"])
+def test_demo_refresh_rejects_unusable_capabilities(monkeypatch, case):
+    _enable_frontier_demo(monkeypatch)
+    client = TestClient(app)
+    issued = client.post("/auth/frontier-demo-session").json()
+    claims = {}
+    if case == "deadline":
+        claims["session_exp"] = int(time.time()) - 1
+    elif case == "disabled":
+        monkeypatch.setattr(settings, "frontier_demo_enabled", False)
+    elif case == "inactive":
+        user = get_user_store().get(issued["user"]["id"])
+        get_user_store()[user.id] = user.model_copy(update={"is_active": False})
+    elif case == "missing_user":
+        claims["sub"] = "frontier_missing"
+    elif case == "wrong_scope":
+        claims["scope"] = "user"
+    elif case == "bad_deadline":
+        claims["session_exp"] = "invalid"
+    token = _expired_demo_token(issued, **claims)
+    if case == "bad_signature":
+        token = token.rsplit(".", 1)[0] + ".invalid"
+
+    response = client.post("/auth/refresh", headers={"Authorization": f"Bearer {token}"})
+
+    assert response.status_code == 401, response.text
+    assert "token" not in response.json()
+
+
+def test_preexisting_demo_token_can_renew_only_within_original_two_hours(monkeypatch):
+    _enable_frontier_demo(monkeypatch)
+    client = TestClient(app)
+    issued = client.post("/auth/frontier-demo-session").json()
+    now = int(time.time())
+    payload = decode_token(issued["token"])
+    payload.pop("session_exp")
+    payload.update(iat=now - 1300, exp=now - 100)
+    token = jwt.encode(payload, settings.jwt_secret, algorithm=settings.jwt_algorithm)
+
+    renewed = client.post("/auth/refresh", headers={"Authorization": f"Bearer {token}"})
+
+    assert renewed.status_code == 200
+    assert decode_token(renewed.json()["token"])["session_exp"] == payload["iat"] + 7200
+    payload.update(iat=now - 7300, exp=now - 6100)
+    token = jwt.encode(payload, settings.jwt_secret, algorithm=settings.jwt_algorithm)
+    assert client.post("/auth/refresh", headers={"Authorization": f"Bearer {token}"}).status_code == 401

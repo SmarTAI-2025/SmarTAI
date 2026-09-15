@@ -1,5 +1,5 @@
 import { ArrowRight, LoaderCircle, X } from "lucide-react";
-import { useMemo, useState, type FormEvent, type ReactNode } from "react";
+import { useMemo, useRef, useState, type FormEvent, type ReactNode } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { useAnalyticsFilterIntent } from "@/api/hooks/analytics";
 import { SmarTAIMascot } from "@/components/brand/SmarTAIMascot";
@@ -26,7 +26,7 @@ type PassFilter = "all" | "pass" | "fail" | "unscored";
 type ConfidenceFilter = "all" | "low_items" | "avg_low";
 type ReviewFilter = "all" | "pending" | "confirmed" | "none";
 type ReviewState = Exclude<ReviewFilter, "all">;
-type SortMode = "student" | "score_asc" | "score_desc" | "confidence_asc" | "review_desc";
+type SortMode = "student" | "score_asc" | "score_desc" | "confidence_asc" | "review_desc" | "name_asc" | "name_desc";
 
 interface StudentAnalysisRow {
   student: StudentSummary;
@@ -63,7 +63,9 @@ export function StudentAnalysisOverview({ locale, taskId, model }: { locale: Loc
   const query = searchParams.get("q") ?? "";
   const smartSearch = useImeSafeQuery({ value: query, onCommit: (value) => updateParam("q", value, "") });
   const intentQuery = useAnalyticsFilterIntent();
-  const [intentState, setIntentState] = useState<{ question: string; result: FilterIntentResult } | null>(null);
+  const [intentState, setIntentState] = useState<{ taskId: string; question: string; result: FilterIntentResult } | null>(null);
+  const contextRef = useRef({ taskId, query });
+  contextRef.current = { taskId, query };
   const [resolution, setResolution] = useState<"idle" | "local" | "llm">("idle");
   const scoreFilter = normalizeScoreFilter(searchParams.get("score"));
   const passFilter = normalizePassFilter(searchParams.get("pass"));
@@ -75,10 +77,12 @@ export function StudentAnalysisOverview({ locale, taskId, model }: { locale: Loc
 
   const rows = useMemo(() => model.students.map(buildStudentRow), [model.students]);
   const localSemanticPlan = useMemo(() => parseSemanticStudentQuery(query, locale), [locale, query]);
-  const activeIntent = intentState?.question === query && intentState.result.recognized ? intentState.result : null;
+  const currentIntent = intentState?.taskId === taskId && intentState.question === query ? intentState : null;
+  const activeIntent = currentIntent?.result.recognized ? currentIntent.result : null;
+  const unsupportedIntent = currentIntent && !currentIntent.result.recognized;
   const semanticPlan = useMemo(
-    () => activeIntent ? intentToStudentPlan(activeIntent, locale) : localSemanticPlan,
-    [activeIntent, localSemanticPlan, locale],
+    () => activeIntent ? intentToStudentPlan(activeIntent, locale) : unsupportedIntent ? parseSemanticStudentQuery("", locale) : localSemanticPlan,
+    [activeIntent, localSemanticPlan, locale, unsupportedIntent],
   );
   const effectiveSort = semanticPlan.sort ?? sortMode;
   const filteredRows = useMemo(() => rows
@@ -120,6 +124,7 @@ export function StudentAnalysisOverview({ locale, taskId, model }: { locale: Loc
   };
 
   const applySmartFilter = (question: string) => {
+    if (intentQuery.isPending) return;
     const normalized = question.trim();
     smartSearch.commitValue(normalized);
     setIntentState(null);
@@ -135,7 +140,8 @@ export function StudentAnalysisOverview({ locale, taskId, model }: { locale: Loc
     }
     intentQuery.mutate({ taskId, question: normalized, surface: "student_analysis" }, {
       onSuccess: (result) => {
-        setIntentState({ question: normalized, result });
+        if (contextRef.current.taskId !== taskId || contextRef.current.query !== normalized) return;
+        setIntentState({ taskId, question: normalized, result });
         setResolution("llm");
       },
     });
@@ -205,7 +211,7 @@ export function StudentAnalysisOverview({ locale, taskId, model }: { locale: Loc
               </button>
             )) : <span className="text-[11px] text-muted-foreground">{tx(locale, "本地预设优先；无法识别时，模型只解析这句指令，不会接收学生成绩。", "Local presets run first. If they cannot understand the query, the model sees only this instruction—not student scores.")}</span>}
             {resolution === "local" ? <span className="rounded-full bg-slate-100 px-2.5 py-1 text-[10px] font-semibold text-slate-600">{tx(locale, "本地规则已识别 · 未调用模型", "Matched locally · no model call")}</span> : null}
-            {resolution === "llm" && intentState ? <><span className="rounded-full bg-emerald-100 px-2.5 py-1 text-[10px] font-semibold text-emerald-700">{tx(locale, "模型仅解析指令", "Model interpreted instruction only")}</span><span className="text-[11px] text-muted-foreground">{intentState.result.explanation}</span></> : null}
+            {resolution === "llm" && currentIntent ? <><span className="rounded-full bg-slate-100 px-2.5 py-1 text-[10px] font-semibold text-slate-700">{unsupportedIntent ? tx(locale, "未能完整转换指令，未应用部分条件", "Could not interpret the full instruction; no partial filter applied") : tx(locale, "模型仅解析指令", "Model interpreted instruction only")}</span><span className="text-[11px] text-muted-foreground">{currentIntent.result.explanation}</span></> : null}
           </div>
           {recoveryInfo ? <RecoverableActionState info={recoveryInfo} locale={locale} compact className="mt-2" primaryAction={recoveryInfo.actionKind === "byok" ? undefined : { label: recoveryInfo.actionLabel, onClick: () => applySmartFilter(smartSearch.draftValue), busy: intentQuery.isPending }} secondaryAction={recoveryInfo.actionKind === "byok" ? { label: tx(locale, "关闭提示", "Dismiss"), onClick: () => intentQuery.reset() } : { label: tx(locale, "查看模型配置", "View model settings"), href: `/settings/byok?returnTo=${encodeURIComponent(`/tasks/${taskId}/results/students`)}` }} /> : null}
         </form>
@@ -376,7 +382,9 @@ export function parseSemanticStudentQuery(raw: string, locale: Locale): Semantic
   consume(/待复核|待确认|未复核|未人工处理|pending[\s-]*review|not[\s-]*reviewed/i, "pending", () => tx(locale, "有未人工处理信号", "Has unreviewed signals"), () => { reviewState = "pending"; });
   if (!reviewState) consume(/已复核|已确认|教师已处理|reviewed|confirmed|teacher[\s-]*handled/i, "confirmed", () => tx(locale, "信号已由教师处理", "Signals handled by teacher"), () => { reviewState = "confirmed"; });
   if (!reviewState) consume(/无复核|无需复核|no[\s-]*review/i, "none", () => tx(locale, "无复核信号", "No review signals"), () => { reviewState = "none"; });
-  consume(/低分优先|得分(?:率)?从低到高|(?:^|\s)从低到高(?:\s|$)|score\s*(?:asc|low)/i, "sort-low", () => tx(locale, "低分优先", "Low score first"), () => { sort = "score_asc"; });
+  consume(/(?:按)?姓名\s*(?:升序|从[小低]到[大高]|a[\s-]*z)(?:排列|排序)?|(?:sort\s+(?:by\s+)?)?name\s*(?:asc(?:ending)?|a[\s-]*z)/i, "sort-name", () => tx(locale, "姓名升序", "Name A–Z"), () => { sort = "name_asc"; });
+  if (!sort) consume(/(?:按)?姓名\s*(?:降序|从[大高]到[小低]|z[\s-]*a)(?:排列|排序)?|(?:sort\s+(?:by\s+)?)?name\s*(?:desc(?:ending)?|z[\s-]*a)/i, "sort-name-desc", () => tx(locale, "姓名降序", "Name Z–A"), () => { sort = "name_desc"; });
+  if (!sort) consume(/低分优先|得分(?:率)?从低到高|(?:^|\s)从低到高(?:\s|$)|score\s*(?:asc|low)/i, "sort-low", () => tx(locale, "低分优先", "Low score first"), () => { sort = "score_asc"; });
   if (!sort) consume(/高分优先|得分(?:率)?从高到低|(?:^|\s)从高到低(?:\s|$)|score\s*(?:desc|high)/i, "sort-high", () => tx(locale, "高分优先", "High score first"), () => { sort = "score_desc"; });
 
   remaining = remaining.replace(/学生|同学|哪些|所有|查看|显示|筛选|找出|请|的|了|一下/gi, " ");
@@ -415,7 +423,7 @@ function intentToStudentPlan(intent: FilterIntentResult, locale: Locale): Semant
     lowConfidence: intent.low_confidence,
     reviewState: intent.review_status,
     disagreement: intent.disagreement,
-    sort: intent.sort,
+    sort: intent.sort === "question" ? null : intent.sort,
     terms: intent.text_terms.map(normalizeText).filter(Boolean),
     conditions,
   };
@@ -431,6 +439,8 @@ function studentQueryNeedsIntentFallback(plan: SemanticStudentPlan, rows: Studen
 }
 
 function formatIntentSort(sort: NonNullable<FilterIntentResult["sort"]>, locale: Locale): string {
+  if (sort === "name_asc") return tx(locale, "姓名升序", "Name A–Z");
+  if (sort === "name_desc") return tx(locale, "姓名降序", "Name Z–A");
   if (sort === "score_asc") return tx(locale, "得分率从低到高", "Score low to high");
   if (sort === "score_desc") return tx(locale, "得分率从高到低", "Score high to low");
   if (sort === "confidence_asc") return tx(locale, "置信度从低到高", "Confidence low to high");
@@ -460,6 +470,7 @@ function matchesConfidenceFilter(student: StudentSummary, filter: ConfidenceFilt
 }
 
 function compareRows(left: StudentAnalysisRow, right: StudentAnalysisRow, sort: SortMode): number {
+  if (sort === "name_desc") return compareStudents(right.student, left.student);
   if (sort === "score_asc") return nullable(left.student.percent, Number.POSITIVE_INFINITY) - nullable(right.student.percent, Number.POSITIVE_INFINITY) || compareStudents(left.student, right.student);
   if (sort === "score_desc") return nullable(right.student.percent, Number.NEGATIVE_INFINITY) - nullable(left.student.percent, Number.NEGATIVE_INFINITY) || compareStudents(left.student, right.student);
   if (sort === "confidence_asc") return nullable(normalizeConfidence(left.student.avgConfidence), Number.POSITIVE_INFINITY) - nullable(normalizeConfidence(right.student.avgConfidence), Number.POSITIVE_INFINITY) || compareStudents(left.student, right.student);
@@ -491,7 +502,7 @@ function normalizeScoreFilter(value: string | null): ScoreFilter { return value 
 function normalizePassFilter(value: string | null): PassFilter { return value === "pass" || value === "fail" || value === "unscored" ? value : "all"; }
 function normalizeConfidenceFilter(value: string | null): ConfidenceFilter { return value === "low_items" || value === "avg_low" ? value : "all"; }
 function normalizeReviewFilter(value: string | null): ReviewFilter { return value === "pending" || value === "confirmed" || value === "none" ? value : "all"; }
-function normalizeSortMode(value: string | null): SortMode { return value === "score_asc" || value === "score_desc" || value === "confidence_asc" || value === "review_desc" ? value : "student"; }
+function normalizeSortMode(value: string | null): SortMode { return value === "score_asc" || value === "score_desc" || value === "confidence_asc" || value === "review_desc" || value === "name_asc" || value === "name_desc" ? value : "student"; }
 function normalizeConfidence(value: number | null | undefined): number | null { if (typeof value !== "number" || !Number.isFinite(value)) return null; return value > 1 ? value / 100 : value; }
 function averageOrNull(values: number[]): number | null { return values.length ? values.reduce((sum, value) => sum + value, 0) / values.length : null; }
 function medianOrNull(values: number[]): number | null { if (!values.length) return null; const sorted = [...values].sort((a, b) => a - b); const middle = Math.floor(sorted.length / 2); return sorted.length % 2 ? sorted[middle] : (sorted[middle - 1] + sorted[middle]) / 2; }

@@ -13,6 +13,7 @@ from pydantic import BaseModel, Field, field_validator
 from backend.auth import (
     create_frontier_demo_token,
     create_token,
+    decode_frontier_demo_refresh_token,
     get_current_user,
     get_task_user,
     hash_password,
@@ -28,7 +29,7 @@ from backend.db.auth_repository import (
     rotate_refresh_session,
 )
 from backend.models import User
-from backend.state import find_user_by_username, register_user
+from backend.state import find_user_by_username, get_user_store, register_user
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -197,6 +198,24 @@ def create_frontier_demo_session(response: Response):
 
 @router.post("/refresh")
 def refresh(request: Request, response: Response):
+    # Demo sessions deliberately have no normal-login refresh cookie. Renew
+    # their signed capability with the same owner and scope, never a new user.
+    authorization = request.headers.get("authorization", "")
+    if authorization.lower().startswith("bearer "):
+        payload = decode_frontier_demo_refresh_token(authorization[7:].strip())
+        if payload is not None:
+            user = get_user_store().get(payload["sub"])
+            if user is None or not user.is_active or user.role != "teacher":
+                raise HTTPException(status.HTTP_401_UNAUTHORIZED, detail={"code": "frontier_demo_session_expired"})
+            lifetime_minutes = max(1, min(int(settings.frontier_demo_session_minutes), 60))
+            response.headers["Cache-Control"] = "no-store"
+            return {
+                "token": create_frontier_demo_token(
+                    user.id, expires_in_minutes=lifetime_minutes,
+                    session_expires_at=payload["session_exp"],
+                ),
+                "user": user.public(),
+            }
     raw = request.cookies.get(settings.refresh_cookie_name)
     if not raw:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, detail="Refresh session missing")

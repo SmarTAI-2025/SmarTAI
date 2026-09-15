@@ -57,18 +57,54 @@ def create_token(user_id: str, role: str, expires_in_hours: Optional[int] = None
     return jwt.encode(payload, settings.jwt_secret, algorithm=settings.jwt_algorithm)
 
 
-def create_frontier_demo_token(user_id: str, *, expires_in_minutes: int) -> str:
+def create_frontier_demo_token(
+    user_id: str, *, expires_in_minutes: int, session_expires_at: Optional[int] = None,
+) -> str:
     """Create a short capability accepted by task routes, not teacher routes."""
     now = int(time.time())
+    # Renew the same task capability during a demo without extending its
+    # absolute two-hour lifetime or turning it into a normal teacher session.
+    if session_expires_at is None:
+        session_expires_at = now + 2 * 3600
     payload = {
         "sub": user_id,
         "role": "teacher",
         "scope": "frontier_demo",
-        "exp": now + expires_in_minutes * 60,
+        "exp": min(now + expires_in_minutes * 60, session_expires_at),
+        "session_exp": session_expires_at,
         "iat": now,
         "jti": uuid.uuid4().hex,
     }
     return jwt.encode(payload, settings.jwt_secret, algorithm=settings.jwt_algorithm)
+
+
+def decode_frontier_demo_refresh_token(token: str) -> Optional[dict]:
+    """Validate a bounded demo renewal; ordinary routes still enforce exp."""
+    try:
+        payload = jwt.decode(
+            token, settings.jwt_secret, algorithms=[settings.jwt_algorithm],
+            options={"verify_exp": False, "require": ["sub", "iat", "exp"]},
+        )
+    except jwt.InvalidTokenError:
+        return None
+    if payload.get("scope") != "frontier_demo":
+        return None
+    # Existing pre-renewal tokens use their signed original issue time.
+    try:
+        session_exp = int(payload.get("session_exp", int(payload["iat"]) + 2 * 3600))
+    except (TypeError, ValueError, OverflowError):
+        raise HTTPException(
+            status.HTTP_401_UNAUTHORIZED, detail={"code": "frontier_demo_session_expired"},
+        ) from None
+    if (
+        not settings.frontier_demo_enabled or payload.get("role") != "teacher"
+        or session_exp <= time.time()
+    ):
+        raise HTTPException(
+            status.HTTP_401_UNAUTHORIZED, detail={"code": "frontier_demo_session_expired"},
+        )
+    payload["session_exp"] = int(session_exp)
+    return payload
 
 
 def decode_token(token: str) -> Optional[dict]:
