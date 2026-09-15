@@ -1,6 +1,6 @@
 # SmarTAI 产品 Demo：本地运行与公网部署手册
 
-> 核对日期：2026-08-11（Asia/Singapore）
+> 共享模型配置更新：2026-09-15；其余部署记录保留原核对日期 2026-08-11（Asia/Singapore）。
 >
 > 当前工作分支：`codex/aws-frontier-demo-20260812`
 >
@@ -46,12 +46,177 @@ Base URL 留空。它们的自定义原生协议中转不在本轮小补丁范�
 已有共享开关、逐用户请求和估算额度保持生效；这些仍是进程内 Demo 额度，不是供应商实际计费账本。
 Codex 成功只证明 Codex 请求可用；应用仍需验证文字、图片 OCR、批改结果和部署网络。
 
+每次切换只选下面一组配置，并一并更新 6 个 `SMARTAI_SHARED_*` 字段：厂商、模型、地址、协议、推理参数、Key。示例中的模型占位文字需要替换；Key 行故意留空，由你在 Render 后端填写对应 Key。
+
+所有方案都保留：
+
+```dotenv
+SMARTAI_SHARED_POOL_ENABLED=true
+SMARTAI_FRONTIER_DEMO_ENABLED=true
+SMARTAI_OCR_DEFAULT_PROVIDER=llm_vision
+SMARTAI_E2E_FAKE_PROVIDER=false
+```
+
+**示例中的空值表示需要清空旧值，不能跳过。** 尤其从 GPT Responses 切到 Gemini／Claude 官方接口时，要把旧 Base URL 清空、协议改为 `auto`、推理参数清空。标为 `字段=` 的空值可以清空或删除；协议字段请填 `auto` 或删除以采用默认值，不能填空字符串。
+
+### 0.1 先按中转的实际接口选择配置
+
+当前 `SMARTAI_SHARED_PROVIDER` 选择的是后端调用适配器；模型品牌与中转接口协议可能不同。
+
+| 你要使用的服务 | SHARED_PROVIDER | SHARED_WIRE_PROTOCOL | SHARED_BASE_URL |
+| --- | --- | --- | --- |
+| Gemini 官方 API | `gemini` | `auto` | 留空 |
+| 智谱官方 API | `zhipu` | `openai_chat_completions` | `https://open.bigmodel.cn/api/paas/v4` |
+| Claude 官方 API | `anthropic` | `auto` | 留空 |
+| GPT 中转，提供 Chat Completions | `openai` | `openai_chat_completions` | 中转提供的 API 前缀 |
+| GPT 中转，提供 Responses | `openai` | `openai_responses` | 中转提供的 API 前缀 |
+| Claude／Gemini 模型中转，提供 OpenAI 兼容接口 | `openai` | 按服务方选上述 Chat 或 Responses | 中转提供的 API 前缀 |
+| 只提供 Claude 原生 Messages 的中转 | **当前不支持仅改配置接入** | — | — |
+| 只提供 Gemini 原生 generateContent 的中转 | **当前不支持仅改配置接入** | — | — |
+
+表中后三列均省略了 `SMARTAI_` 前缀。厂商值区分合法枚举，Claude 官方填 `anthropic`，不是 `claude`；智谱填 `zhipu`，不是 `glm`。
+
+`auto` 对 `openai/zhipu/deepseek/moonshot/qwen` 固定选择 Chat Completions，**不会探测或自动切换协议**。GPT、Claude、Gemini 这些模型名字本身不能证明中转支持哪种接口。
+
+### 0.2 恢复你之前的 Gemini 配置
+
+最少只需清空或删除 `SMARTAI_SHARED_PROVIDER`，代码就恢复旧厂商变量方式。为避免下次切换误用残留值，可以同时清空其余 5 项：
+
+```dotenv
+SMARTAI_SHARED_PROVIDER=
+SMARTAI_SHARED_MODEL=
+SMARTAI_SHARED_BASE_URL=
+SMARTAI_SHARED_WIRE_PROTOCOL=auto
+SMARTAI_SHARED_REASONING_EFFORT=
+SMARTAI_SHARED_API_KEY=
+SMARTAI_DEFAULT_PROVIDER=gemini
+```
+
+保留原来的 `SMARTAI_GEMINI_API_KEY` 和 `SMARTAI_GEMINI_MODEL`，不要重新填写到公开文件。你之前提供的 Render 导出只有 Gemini 的旧厂商 Key，因此这一操作会恢复那套 Gemini 配置。若以后另加了其他旧厂商 Key，旧模式会一并注册它们；想只保留一个明确共享模型，请使用下一节的新方式。
+
+### 0.3 用新统一配置选择 Gemini 官方 API
+
+```dotenv
+SMARTAI_SHARED_PROVIDER=gemini
+SMARTAI_SHARED_MODEL=<你的Gemini模型名>
+SMARTAI_SHARED_BASE_URL=
+SMARTAI_SHARED_WIRE_PROTOCOL=auto
+SMARTAI_SHARED_REASONING_EFFORT=
+SMARTAI_SHARED_API_KEY=
+```
+
+在 Render 的 `SMARTAI_SHARED_API_KEY` 中填写 Gemini 官方 API Key；模型可填此前已使用的 `SMARTAI_GEMINI_MODEL` 值。这里不会自动读取旧 `SMARTAI_GEMINI_API_KEY`，需要你自行复制对应值。无需把旧变量删除。
+
+### 0.4 智谱官方 API，或 OpenAI 兼容的智谱中转
+
+```dotenv
+SMARTAI_SHARED_PROVIDER=zhipu
+SMARTAI_SHARED_MODEL=<你的GLM模型名>
+SMARTAI_SHARED_BASE_URL=https://open.bigmodel.cn/api/paas/v4
+SMARTAI_SHARED_WIRE_PROTOCOL=openai_chat_completions
+SMARTAI_SHARED_REASONING_EFFORT=
+SMARTAI_SHARED_API_KEY=
+```
+
+官方 Key 填入 `SMARTAI_SHARED_API_KEY`；官方 Base URL 也可留空，由程序采用上面的地址。使用智谱中转时，把 Base URL 和 Key 换成中转提供的对应值，模型名也按中转目录填写。
+
+完整 Live Demo 包含图片 OCR，需要选择支持图片的模型。当前智谱适配器按 `glm-数字v`／`glm-数字.数字v`（可带后缀）识别视觉型号，例如名称形式 `glm-4v`；实际可调用型号以你的账户为准。普通纯文字 GLM 不能完成图片步骤。若中转把视觉模型改成了不符合此形式的别名，可在确认它提供 OpenAI 兼容图片输入后，按第 0.6 节使用 `openai` 适配器。
+
+### 0.5 GPT 中转：Chat 与 Responses 两种示例
+
+**A. 中转提供 Chat Completions**
+
+```dotenv
+SMARTAI_SHARED_PROVIDER=openai
+SMARTAI_SHARED_MODEL=<中转提供的GPT模型名>
+SMARTAI_SHARED_BASE_URL=https://relay.example.com/v1
+SMARTAI_SHARED_WIRE_PROTOCOL=openai_chat_completions
+SMARTAI_SHARED_REASONING_EFFORT=
+SMARTAI_SHARED_API_KEY=
+```
+
+`relay.example.com` 是占位地址，必须替换。上面的 Base URL 会产生 `/v1/chat/completions` 请求。
+
+**B. 你提供的 Responses 中转配置**
+
+```dotenv
+SMARTAI_SHARED_PROVIDER=openai
+SMARTAI_SHARED_MODEL=gpt-6-astra
+SMARTAI_SHARED_BASE_URL=https://mirror.xinshu.ai
+SMARTAI_SHARED_WIRE_PROTOCOL=openai_responses
+SMARTAI_SHARED_REASONING_EFFORT=high
+SMARTAI_SHARED_API_KEY=
+```
+
+这组地址／模型／协议来自你提供的 Codex 配置，尚未进行 SmarTAI 真实请求验证。根地址会产生 `/responses` 请求；若服务方实际要求 `/v1/responses`，Base URL 应改为 `https://mirror.xinshu.ai/v1`。不要把完整的 `/responses` 或 `/chat/completions` 终点填入 Base URL，程序不会擅自补 `/v1`。
+
+Responses 固定发送 `store=false`，不传 `temperature`。只有服务方明确支持时才保留 `reasoning_effort=high`，否则将该字段留空；不自动尝试其他协议。
+
+### 0.6 Claude／Gemini 中转，使用 OpenAI 兼容接口
+
+如果中转文档写的是 OpenAI SDK／`/chat/completions`，即便出售的是 Claude 或 Gemini 模型，也按下面填写：
+
+```dotenv
+SMARTAI_SHARED_PROVIDER=openai
+SMARTAI_SHARED_MODEL=<中转提供的Claude或Gemini模型名>
+SMARTAI_SHARED_BASE_URL=https://relay.example.com/v1
+SMARTAI_SHARED_WIRE_PROTOCOL=openai_chat_completions
+SMARTAI_SHARED_REASONING_EFFORT=
+SMARTAI_SHARED_API_KEY=
+```
+
+把模型名原样换成服务方目录中的 Claude／Gemini 名称，并填写该中转的实际地址与 Key。这里的 `openai` 表示采用 OpenAI 兼容调用，不会把你填写的 Claude／Gemini 模型改成 GPT。
+
+如果服务方明确提供 OpenAI Responses 兼容接口，可把协议改为 `openai_responses`，并按其文档填写对应 API 前缀；不要仅凭模型名猜协议。图片、文本输出和参数兼容仍需在应用中验证。
+
+**如果中转只有原生 Claude Messages 或 Gemini generateContent 接口，当前 Demo 没有可用的环境变量组合。** 填 `anthropic/gemini` 加非空 Base URL 会使配置不可用；`anthropic_messages`／`gemini_generate_content` 也不是当前允许的协议值。这类接口需要另补相应后端适配，不能通过这份配置说明冒充已经支持。
+
+### 0.7 Claude 官方 API
+
+```dotenv
+SMARTAI_SHARED_PROVIDER=anthropic
+SMARTAI_SHARED_MODEL=<你的Claude模型名>
+SMARTAI_SHARED_BASE_URL=
+SMARTAI_SHARED_WIRE_PROTOCOL=auto
+SMARTAI_SHARED_REASONING_EFFORT=
+SMARTAI_SHARED_API_KEY=
+```
+
+Key 填 Anthropic 官方 API Key；Base URL 留空，走既有官方原生适配器。
+
+### 0.8 切换后生效、旧变量与回退
+
+- 明确填写 `SMARTAI_SHARED_PROVIDER` 后，只注册该组共享模型，旧 Gemini／其他厂商 Key 不会混入。缺少新 Key 或模型名会显示不可用，不会自动回退旧 Key。
+- `SMARTAI_DEFAULT_PROVIDER=gemini` 可以保留；在新模式只有一个共享模型时，不会覆盖 `SMARTAI_SHARED_PROVIDER` 的选择。
+- 数据库、存储、认证、CORS、并发和共享额度设置继续使用原值；`SMARTAI_OCR_DEFAULT_PROVIDER` 保持 `llm_vision`，不要填模型厂商品牌。
+- 在已有本轮代码的 Render 服务中保存环境变量并部署；仅切换模型配置无需重新修改或部署前端代码。新建一次 Demo 验证文字、图片识别和批改，避免只依赖切换前的旧任务。
+- `/ready` 只确认服务依赖，不证明中转可用。Key 仅由你在后端填写，不放前端环境变量、仓库或反馈消息。
+- 新共享配置不自动调用同一中转的 `/embeddings`，知识检索保持现有 BM25。已有共享开关和逐用户额度继续生效。
+- 切回旧 Gemini 使用第 0.2 节；整版代码回退可让前后端同时恢复 `92c3ad397683810f57418b1001654d7303869e95`，并恢复当时有效的环境配置。
+
+### 0.9 现有环境变量哪些可以删除
+
+**这次切换没有必须删除的旧变量。** “新共享池当前不依赖”不等于“整个应用不再使用”。
+
+| 变量 | 当前用途与处理建议 |
+| --- | --- |
+| `SMARTAI_PROVIDER_ENCRYPTION_KEY` | 加密／解密数据库里的用户自带 API Key（BYOK）。新环境共享池本身不依赖它。纯共享 Demo 技术上可省略，但省略后 BYOK 保存／修改接口返回 503，已保存配置不会加载；建议保留原值 |
+| `SMARTAI_GEMINI_API_KEY`、`SMARTAI_GEMINI_MODEL` | 新共享模式不读取，用于清空 `SMARTAI_SHARED_PROVIDER` 后恢复旧 Gemini。想保留回退能力就保留；不需要回退时才可删 |
+| `SMARTAI_DEFAULT_PROVIDER=gemini` | 旧模式的优先厂商；新模式只有一个共享模型时不会覆盖新选择，可保留 |
+| `SMARTAI_REFRESH_COOKIE_SECURE`、`SMARTAI_REFRESH_COOKIE_SAMESITE` | 无密码 Demo 会话不发 refresh cookie，但普通登录／刷新仍使用，建议保留 |
+| `SMARTAI_E2E_FAKE_PROVIDER=false`、`SMARTAI_ALLOW_DEMO_TOKENS=false` | 与当前默认值一致，删除会回到 false；保留可明确关闭假模型和测试令牌，无需清理 |
+| `JWT_SECRET`、`SMARTAI_PROVIDER_ENCRYPTION_KEY` | 两把用途不同的密钥：前者签发登录／Demo token，后者保护 BYOK。不能拿新的 `SMARTAI_SHARED_API_KEY` 替换其中任何一项 |
+| 数据库／存储、`FRONTEND_URLS`、`PYTHON_VERSION`、并发／额度、Demo／认证开关 | 继续负责原有运行行为，换模型时保留 |
+| `SMARTAI_SEED_TEST_USERS=false` | 明确保留。当前 Demo 代码的默认值仍为 true，删除会改变播种行为；不能套用 main 的默认值判断 |
+
+不要为“清理无用变量”重新生成 `SMARTAI_PROVIDER_ENCRYPTION_KEY`；如果数据库已有用原值加密的 BYOK 记录，换值后将无法用新值解密，保留／恢复原值才能继续读取。这里只核对了代码和你提供的变量名称，没有查看线上数据库，不能假定没有已保存记录。
+
 ## 1. 结论先行
 
 报名突击期采用一套前端构建、一个独立 Demo 后端：
 
 - **前端：一个 Cloudflare Pages 项目。** 同一个 `frontend/app` 构建同时提供 `/frontier`、`/frontier/enter`、`/frontier/live` 和现有真实 App 路由。不要把宣传页和 Live Demo 拆成两个分支、两个 Pages 项目或两个前端实例。
-- **后端：一个独立 FastAPI Demo 服务。** 截止日前优先沿用 Render，Gemini Key 只写入 Render Secret Environment，不进入 Vite 环境、仓库、URL、fixture 或网页。
+- **后端：一个独立 FastAPI Demo 服务。** 截止日前优先沿用 Render，模型 Key 只写入 Render Secret Environment，不进入 Vite 环境、仓库、URL、fixture 或网页。
 - **源码：前后端锁定同一个最终 Demo 分支和 SHA。** 前后端分别部署是运行形态，不是两套源码。部署成功后关闭不必要的自动部署，避免 `main` 或后续开发自动改变 Demo。
 - **入口：一个稳定的产品链接，另有一个稳定 API 域名。** 推荐 `https://demo.<你的域名>/frontier` 和 `https://api-demo.<你的域名>`。若暂时没有自定义域名，可先用稳定的 `<project>.pages.dev` 与 `<service>.onrender.com`，但后端迁移会要求重建前端。
 - **8 月 12 日截止方案：Render Free 可以作为报名临时方案，但不是持续在线保证。** 它会休眠、冷启动、丢失本地盘，且 512 MB / 0.1 CPU 对当前 Python、PDF/OCR 依赖是否足够仍须以公网真实 E2E 为准。若冷启动后或完整批改出现 OOM/超时，直接把**同一个 Render 服务**升级到付费实例，不另建新 URL。
@@ -67,7 +232,7 @@ flowchart LR
     F --> E["/frontier/enter<br/>passwordless session"]
     F --> L["/frontier/live<br/>real workflow UI"]
     L --> A["api-demo.example.com<br/>FastAPI Demo backend"]
-    A --> G["Gemini API<br/>server-side key only"]
+    A --> G["Shared model API<br/>server-side key only"]
     A --> D["Demo database/storage<br/>synthetic data only"]
     A -. "later, same API hostname" .-> W["AWS Lightsail"]
 ```
@@ -76,7 +241,7 @@ flowchart LR
 
 - `VITE_SMARTAI_BACKEND_URL` 只包含后端 URL；它会在 `npm run build` 时写入静态 bundle，不能放任何秘密。
 - `FRONTEND_URLS` 是 FastAPI CORS 的**精确 origin 列表**，只能写 `scheme://host[:port]`，不要带路径、尾斜杠或空格。
-- `/auth/frontier-demo-session` 只有在 Demo、shared pool 和后端 Gemini Key 都启用时才签发短时随机 owner；无密码、无 refresh cookie。
+- `/auth/frontier-demo-session` 只有在 Demo、shared pool 启用且后端存在可用共享模型配置时才签发短时随机 owner；无密码、无 refresh cookie。
 - `SMARTAI_FRONTIER_DEMO_ENABLED=false` 是 Demo 会话 kill switch；`SMARTAI_SHARED_POOL_ENABLED=false` 是共享模型 kill switch。
 - 当前签发计数和 shared-pool 额度均有进程内状态成分；进程重启或多 worker 不共享。这是报名演示简化边界，不得宣传为生产级平台总预算控制。
 
@@ -102,8 +267,8 @@ flowchart LR
 
 - [ ] 最终 Demo 改动已经提交，`git status --short` 无输出。
 - [ ] 记录最终分支、完整 SHA；Cloudflare 与 Render 都显示同一个 SHA。
-- [ ] 本地或服务端 secret store 中有可用 Gemini Key；没有任何 `VITE_*` 变量包含 Key。
-- [ ] 确认 `SMARTAI_GEMINI_MODEL` 是该 Key 当前可调用且支持视觉输入的模型。仓库当前 Blueprint 值为 `gemini-3.5-flash`，本文没有完成真实 provider 验证。
+- [ ] 服务端 secret store 中有选定模型对应的 Key；没有任何 `VITE_*` 变量包含 Key。
+- [ ] 确认 `SMARTAI_SHARED_MODEL`（旧模式为 `SMARTAI_GEMINI_MODEL` 等厂商变量）是该 Key 可调用且支持视觉输入的模型；真实 provider 能力需要部署后验证。
 - [ ] `SMARTAI_REQUIRE_AUTH=true`、`SMARTAI_ALLOW_DEMO_TOKENS=false`、`SMARTAI_REGISTRATION_CLOSED=true`。
 - [ ] `SMARTAI_FRONTIER_DEMO_ENABLED=true`、`SMARTAI_SHARED_POOL_ENABLED=true`，并设置保守并发、请求与 token 上限。
 - [ ] 数据环境只含合成 fixture；禁止真实学生、教师或学校数据。
@@ -111,7 +276,7 @@ flowchart LR
 - [ ] `/health` 返回 200；`/ready` 返回 200 且 `database=true, storage=true`。
 - [ ] 冷启动后完整跑通一次 `/frontier/enter → /frontier/live → graded`，记录 task ID、job ID、用时和模型调用量。
 - [ ] 从无缓存浏览器重新打开 `/frontier`、`/frontier/enter`、`/frontier/live` 深链接。
-- [ ] 公网 bundle 搜索不到 Gemini Key、JWT secret 或数据库/storage credentials。
+- [ ] 公网 bundle 搜索不到模型 Key、JWT secret 或数据库/storage credentials。
 - [ ] 报名只填写稳定前端 URL，不填写原始临时 task URL。
 
 ## 5. 本地运行：按顺序复制
@@ -131,7 +296,7 @@ git status --short
 
 ### 5.2 第一次本地 smoke：先在当前 shell 导出变量
 
-这套命令不会把 Gemini Key写进文件或 shell history；输入时终端不回显。
+以下保留旧 Gemini 模式示例；使用新共享模式时，把模型相关变量替换为第 0 节所选的一组。输入 Key 时终端不回显。
 
 ```bash
 cd /private/tmp/SmarTAI-aws-frontier-demo
@@ -369,7 +534,7 @@ SMARTAI_STORAGE_BACKEND=local
 SMARTAI_STORAGE_ROOT=/tmp/smartai-frontier-uploads
 ```
 
-其余 auth、Demo、shared-pool、Gemini model、并发和 CORS 变量沿用第 5 节；Gemini Key 与 JWT secret 只在 Dashboard secret 中填写。
+其余 auth、Demo、并发和 CORS 变量沿用第 5 节；共享模型按第 0 节选择配置，模型 Key 与 JWT secret 只在 Dashboard secret 中填写。
 
 公网环境把 `SMARTAI_FRONTIER_DEMO_DAILY_SESSION_LIMIT` 显式设为 `100`、`SMARTAI_FRONTIER_DEMO_SESSION_COOLDOWN_SECONDS` 设为 `1`；这是该 Render 进程的全局签发次数，不是每 IP 或每人 100 次。
 
