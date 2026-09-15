@@ -67,11 +67,31 @@ def provider_configuration_fingerprint(
 def _shared_provider_row(provider_id: str) -> dict | None:
     if not settings.shared_pool_enabled:
         return None
+    if settings.shared_provider:
+        config = settings.configured_shared_provider()
+        if config is None or provider_id not in {
+            f"{config.provider_type}:{config.model}",
+            f"{config.provider_type}/{config.model}",
+        }:
+            return None
+        return {
+            "provider_id": provider_id,
+            "provider_type": config.provider_type,
+            "model": config.model,
+            "base_url": config.base_url,
+            "wire_protocol": config.wire_protocol,
+            "reasoning_effort": config.reasoning_effort,
+            "secret_digest": hashlib.sha256(config.api_key.encode("utf-8")).hexdigest(),
+            "scope": "shared",
+        }
     candidates = (
         ("gemini", settings.gemini_model, settings.gemini_api_key, None),
         ("openai", settings.openai_model, settings.openai_api_key, settings.openai_api_base),
         ("zhipu", settings.zhipu_model, settings.zhipu_api_key, settings.zhipu_api_base),
         ("anthropic", settings.anthropic_model, settings.anthropic_api_key, None),
+        ("deepseek", settings.deepseek_model, settings.deepseek_api_key, settings.deepseek_api_base),
+        ("moonshot", settings.moonshot_model, settings.moonshot_api_key, settings.moonshot_api_base),
+        ("qwen", settings.qwen_model, settings.qwen_api_key, settings.qwen_api_base),
     )
     for provider_type, model, api_key, base_url in candidates:
         if not api_key:

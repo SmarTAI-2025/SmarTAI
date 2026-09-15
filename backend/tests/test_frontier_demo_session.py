@@ -14,6 +14,7 @@ def _enable_frontier_demo(monkeypatch) -> None:
     monkeypatch.setattr(settings, "frontier_demo_daily_session_limit", 4)
     monkeypatch.setattr(settings, "frontier_demo_session_cooldown_seconds", 0.0)
     monkeypatch.setattr(settings, "shared_pool_enabled", True)
+    monkeypatch.setattr(settings, "shared_provider", "")
     monkeypatch.setattr(settings, "gemini_api_key", "server-side-test-key")
     monkeypatch.setattr(
         auth_api,
@@ -31,10 +32,41 @@ def test_frontier_demo_session_is_disabled_by_default(monkeypatch):
     assert response.json()["detail"]["code"] == "frontier_demo_disabled"
 
 
-def test_frontier_demo_session_requires_backend_shared_gemini(monkeypatch):
+def test_frontier_demo_session_requires_backend_shared_provider(monkeypatch):
     monkeypatch.setattr(settings, "frontier_demo_enabled", True)
     monkeypatch.setattr(settings, "shared_pool_enabled", False)
     monkeypatch.setattr(settings, "gemini_api_key", "")
+
+    response = TestClient(app).post("/auth/frontier-demo-session")
+
+    assert response.status_code == 503
+    assert response.json()["detail"]["code"] == "frontier_demo_provider_unavailable"
+
+
+def test_frontier_demo_session_accepts_configured_openai_without_gemini(monkeypatch):
+    _enable_frontier_demo(monkeypatch)
+    monkeypatch.setattr(settings, "gemini_api_key", "")
+    monkeypatch.setattr(settings, "shared_provider", "openai")
+    monkeypatch.setattr(settings, "shared_api_key", "test-only-demo-relay-key")
+    monkeypatch.setattr(settings, "shared_model", "demo-relay-model")
+    monkeypatch.setattr(settings, "shared_base_url", "https://relay.example.com/v1")
+    monkeypatch.setattr(settings, "shared_wire_protocol", "openai_responses")
+
+    response = TestClient(app).post("/auth/frontier-demo-session")
+
+    assert response.status_code == 200, response.text
+    assert response.json()["synthetic_data_only"] is True
+    assert "test-only-demo-relay-key" not in response.text
+    assert "api_key" not in response.text.casefold()
+
+
+def test_frontier_demo_session_does_not_fallback_from_incomplete_shared_selection(
+    monkeypatch,
+):
+    _enable_frontier_demo(monkeypatch)
+    monkeypatch.setattr(settings, "shared_provider", "openai")
+    monkeypatch.setattr(settings, "shared_api_key", "")
+    monkeypatch.setattr(settings, "shared_model", "demo-relay-model")
 
     response = TestClient(app).post("/auth/frontier-demo-session")
 

@@ -344,6 +344,9 @@ class ProviderConfig(BaseModel):
     api_key: str
     model: str = Field(description="Model name, e.g. 'gpt-4o', 'gemini-2.5-pro'")
     base_url: Optional[str] = None
+    # Deployment-selected protocol; omitted for existing BYOK/native adapters.
+    wire_protocol: Optional[Literal["openai_chat_completions", "openai_responses"]] = None
+    reasoning_effort: Optional[str] = None
     enabled: bool = True
     display_name: Optional[str] = Field(
         default=None,
