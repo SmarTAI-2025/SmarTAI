@@ -56,8 +56,8 @@ export function FrontierDemoEntryPage() {
           {error
             ? errorMessage
             : zh
-              ? "后端正在签发免密码短时会话。Gemini 密钥不会发送到浏览器。"
-              : "The backend is issuing a short-lived passwordless session. The Gemini key is never sent to the browser."}
+              ? "后端正在签发免密码短时会话。模型 API Key 不会发送到浏览器。"
+              : "The backend is issuing a short-lived passwordless session. The model API key is never sent to the browser."}
         </p>
         {error ? (
           <Button type="button" className="mt-5 h-11 px-5" onClick={() => setAttempt((value) => value + 1)}>

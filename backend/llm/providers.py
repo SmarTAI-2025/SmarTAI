@@ -55,6 +55,25 @@ def _build_httpx_clients(proxy_url: Optional[str]) -> tuple[Any, Any]:
     return httpx.Client(**kwargs), httpx.AsyncClient(**kwargs)
 
 
+def _openai_protocol_options(config: ProviderConfig) -> Dict[str, Any]:
+    """Choose the configured shared protocol without changing legacy clients."""
+    protocol = config.wire_protocol
+    if protocol is None:
+        return {"temperature": 0.0}
+
+    responses = protocol == "openai_responses"
+    options: Dict[str, Any] = {
+        "use_responses_api": responses,
+        # Reasoning models may reject temperature, even when it is zero.
+        "temperature": None,
+    }
+    if responses:
+        options["store"] = False
+    if config.reasoning_effort:
+        options["reasoning_effort"] = config.reasoning_effort
+    return options
+
+
 @dataclass
 class LLMResponse:
     content: str
@@ -150,6 +169,52 @@ class BaseProvider(ABC):
     def provider_id(self) -> str:
         return f"{self.provider_type}:{self.model}"
 
+    def _to_llm_response(self, response: Any, duration_ms: float) -> LLMResponse:
+        raw_content = getattr(response, "content", None)
+        if isinstance(raw_content, str):
+            content = raw_content
+        elif isinstance(raw_content, list):
+            # Responses returns content blocks even with LangChain's default
+            # output format. Reasoning and tool blocks are not answer text.
+            content = "".join(
+                block if isinstance(block, str) else block["text"]
+                for block in raw_content
+                if isinstance(block, str)
+                or (
+                    isinstance(block, dict)
+                    and block.get("type") in {"text", "output_text"}
+                    and isinstance(block.get("text"), str)
+                )
+            )
+        elif not hasattr(response, "content"):
+            content = str(response)
+        else:
+            raise ValueError("provider_response_content_invalid")
+
+        if self.config.wire_protocol == "openai_responses":
+            metadata = getattr(response, "response_metadata", {}) or {}
+            if metadata.get("status") == "incomplete":
+                raise ValueError("provider_response_incomplete")
+            if not content.strip():
+                raise ValueError("provider_response_empty")
+
+        usage = getattr(response, "usage_metadata", {}) or {}
+
+        def token_count(name: str) -> Optional[int]:
+            value = usage.get(name) if isinstance(usage, dict) else None
+            if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
+                return value
+            return None
+
+        return LLMResponse(
+            content=content,
+            provider=self.provider_id,
+            model=self.model,
+            duration_ms=duration_ms,
+            input_tokens=token_count("input_tokens"),
+            output_tokens=token_count("output_tokens"),
+        )
+
     @abstractmethod
     def _build_client_sync(self) -> Any:
         """Build a LangChain client. Must be callable from any thread."""
@@ -186,10 +251,10 @@ class BaseProvider(ABC):
             client = await self._get_client()
             try:
                 response = await client.ainvoke(messages)
-                content = response.content if hasattr(response, "content") else str(response)
                 duration_ms = (time.perf_counter() - t0) * 1000
-                logger.info(f"LLM call OK on {self.provider_id} in {duration_ms:.0f}ms ({len(content)} chars)")
-                return LLMResponse(content=content, provider=self.provider_id, model=self.model, duration_ms=duration_ms)
+                result = self._to_llm_response(response, duration_ms)
+                logger.info(f"LLM call OK on {self.provider_id} in {duration_ms:.0f}ms ({len(result.content)} chars)")
+                return result
             except Exception as e:
                 duration_ms = (time.perf_counter() - t0) * 1000
                 logger.warning(
@@ -255,10 +320,10 @@ class GeminiProvider(BaseProvider):
                     return local_client.invoke(messages)
 
                 response = await run_in_threadpool(_sync_call)
-                content = response.content if hasattr(response, "content") else str(response)
                 duration_ms = (time.perf_counter() - t0) * 1000
-                logger.info(f"LLM call OK on {self.provider_id} in {duration_ms:.0f}ms ({len(content)} chars)")
-                return LLMResponse(content=content, provider=self.provider_id, model=self.model, duration_ms=duration_ms)
+                result = self._to_llm_response(response, duration_ms)
+                logger.info(f"LLM call OK on {self.provider_id} in {duration_ms:.0f}ms ({len(result.content)} chars)")
+                return result
             except Exception as e:
                 duration_ms = (time.perf_counter() - t0) * 1000
                 logger.warning(
@@ -284,7 +349,7 @@ class OpenAIProvider(BaseProvider):
 
         return ChatOpenAI(
             model=self.model,
-            temperature=0.0,
+            **_openai_protocol_options(self.config),
             timeout=settings.llm_timeout,
             max_retries=0,
             api_key=self.config.api_key,
@@ -311,7 +376,7 @@ class ZhipuProvider(BaseProvider):
 
         return ChatOpenAI(
             model=self.model,
-            temperature=0.0,
+            **_openai_protocol_options(self.config),
             timeout=settings.llm_timeout,
             max_retries=0,
             api_key=self.config.api_key,
@@ -357,7 +422,7 @@ class _DomesticOpenAICompatibleProvider(BaseProvider):
         http_client, http_async_client = _build_httpx_clients(None)
         return ChatOpenAI(
             model=self.model,
-            temperature=0.0,
+            **_openai_protocol_options(self.config),
             timeout=settings.llm_timeout,
             max_retries=0,
             api_key=self.config.api_key,

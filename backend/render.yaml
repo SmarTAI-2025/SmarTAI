@@ -67,7 +67,11 @@ services:
       - key: SMARTAI_SEED_TEST_USERS
         value: "false"
       # AWS Frontier application demo: passwordless short task sessions backed
-      # by one server-side Gemini key. This branch uses synthetic fixtures only.
+      # by a server-side model key. This branch uses synthetic fixtures only.
+      # Optional Dashboard override: SMARTAI_SHARED_PROVIDER, SHARED_API_KEY,
+      # SHARED_MODEL, SHARED_BASE_URL, SHARED_WIRE_PROTOCOL and
+      # SHARED_REASONING_EFFORT (all names start with SMARTAI_).
+      # An explicit shared provider uses only that model; empty keeps Gemini below.
       - key: SMARTAI_FRONTIER_DEMO_ENABLED
         value: "true"
       - key: SMARTAI_FRONTIER_DEMO_SESSION_MINUTES

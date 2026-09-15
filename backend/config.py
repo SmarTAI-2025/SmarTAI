@@ -99,6 +99,46 @@ class Settings(BaseSettings):
     shared_pool_enabled: bool = False
     shared_pool_daily_request_limit: int = 100
     shared_pool_daily_estimated_token_limit: int = 100_000
+    # Optional single shared model. Empty provider preserves legacy env seeding.
+    shared_provider: Literal["", "openai", "gemini", "zhipu", "anthropic", "deepseek", "moonshot", "qwen"] = ""
+    shared_api_key: str = ""
+    shared_model: str = ""
+    shared_base_url: str = ""
+    shared_wire_protocol: Literal["auto", "openai_chat_completions", "openai_responses"] = "auto"
+    shared_reasoning_effort: str = ""
+
+    def configured_shared_provider(self):
+        """Resolve only the administrator's explicit shared selection.
+
+        Incomplete selections stay unavailable instead of using another key.
+        Existing provider variables are used only when shared_provider is empty.
+        """
+        from backend.models import ProviderConfig
+
+        if not self.shared_provider or not self.shared_api_key.strip() or not self.shared_model.strip():
+            return None
+        compatible_defaults = {
+            "openai": "https://api.openai.com/v1",
+            "zhipu": "https://open.bigmodel.cn/api/paas/v4",
+            "deepseek": "https://api.deepseek.com/v1",
+            "moonshot": "https://api.moonshot.cn/v1",
+            "qwen": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+        }
+        compatible = self.shared_provider in compatible_defaults
+        protocol = self.shared_wire_protocol
+        if not compatible and (protocol != "auto" or self.shared_base_url.strip()):
+            # Native Gemini/Anthropic keep their existing official adapters.
+            return None
+        return ProviderConfig(
+            provider_type=self.shared_provider,
+            api_key=self.shared_api_key.strip(),
+            model=self.shared_model.strip(),
+            base_url=self.shared_base_url.strip().rstrip("/") or compatible_defaults.get(self.shared_provider),
+            wire_protocol=(
+                "openai_chat_completions" if protocol == "auto" else protocol
+            ) if compatible else None,
+            reasoning_effort=self.shared_reasoning_effort.strip() or None,
+        )
 
     # ─── Passwordless AWS Frontier demo ──────────────────────────────
     # Disabled by default. When enabled, the backend may issue a short-lived,

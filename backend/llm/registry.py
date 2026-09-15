@@ -138,6 +138,11 @@ class ExpertRegistry:
 
     def _seed_from_settings(self) -> None:
         """Populate from env vars at startup. User can override via API."""
+        if settings.shared_provider:
+            config = settings.configured_shared_provider()
+            if config is not None:
+                self.register(config)
+            return
         if settings.gemini_api_key:
             self.register(ProviderConfig(
                 provider_type="gemini",
@@ -245,6 +250,9 @@ class ExpertRegistry:
 
     def list_enabled_configs(self) -> List[ProviderConfig]:
         """Trusted backend-only view used by the owner-scoped RAG embedder."""
+        # A shared chat/vision selection does not configure an embedding API.
+        if self._uses_shared_pool and settings.shared_provider:
+            return []
         with self._lock:
             return [
                 config.model_copy(deep=True)

@@ -1096,7 +1096,7 @@ function answerErrorMessage(error: unknown, t: (key: MessageKey) => string) {
 
 function isKeyboardNavigationBlocked(target: EventTarget | null) {
   if (!(target instanceof HTMLElement)) return false;
-  return Boolean(target.closest("input, textarea, select, [contenteditable='true'], [role='dialog']"));
+  return Boolean(target.closest("input, textarea, select, [contenteditable='true'], [role='dialog'], [role='separator'], [data-source-preview-panel]"));
 }
 
 function scrollQuestionIntoView(questionId: string, behavior: ScrollBehavior) {

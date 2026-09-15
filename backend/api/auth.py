@@ -163,7 +163,9 @@ def create_frontier_demo_session(response: Response):
             status.HTTP_503_SERVICE_UNAVAILABLE,
             detail={"code": "frontier_demo_disabled"},
         )
-    if not settings.shared_pool_enabled or not settings.gemini_api_key:
+    from backend.llm.registry import ExpertRegistry
+
+    if not settings.shared_pool_enabled or ExpertRegistry().pick_default() is None:
         raise HTTPException(
             status.HTTP_503_SERVICE_UNAVAILABLE,
             detail={"code": "frontier_demo_provider_unavailable"},

@@ -1,5 +1,5 @@
 import { FileText, Image, LoaderCircle, RefreshCw, X } from "lucide-react";
-import { useEffect, useRef, type KeyboardEvent } from "react";
+import { useEffect, useRef, useState, type KeyboardEvent } from "react";
 import { Button } from "@/components/ui/Button";
 import { InlineNotice } from "@/components/ui/InlineNotice";
 import type { MessageKey } from "@/i18n/messages";
@@ -7,15 +7,9 @@ import { cn } from "@/lib/cn";
 import type { SourceFileDescriptor, SourcePreviewLoadState, SourceUnavailableReason } from "@/types/sourcePreview";
 import { PdfDocumentPreview } from "./PdfDocumentPreview";
 
-export function OriginalFilePreviewPanel({
-  descriptor,
-  loadState,
-  previewUrl,
-  onClose,
-  onRetry,
-  provenanceNote,
-  t,
-}: {
+type ImagePreviewState = "loading" | "ready" | "error";
+
+interface OriginalFilePreviewPanelProps {
   descriptor: SourceFileDescriptor;
   loadState: SourcePreviewLoadState;
   previewUrl: string | null;
@@ -23,8 +17,26 @@ export function OriginalFilePreviewPanel({
   onRetry: () => void;
   provenanceNote?: string;
   t: (key: MessageKey) => string;
-}) {
+}
+
+export function OriginalFilePreviewPanel(props: OriginalFilePreviewPanelProps) {
+  return <SourcePreviewPanel key={`${props.descriptor.file_id}:${props.previewUrl ?? ""}:${props.loadState}`} {...props} />;
+}
+
+function SourcePreviewPanel({
+  descriptor,
+  loadState,
+  previewUrl,
+  onClose,
+  onRetry,
+  provenanceNote,
+  t,
+}: OriginalFilePreviewPanelProps) {
   const closeButtonRef = useRef<HTMLButtonElement>(null);
+  const [imageState, setImageState] = useState<ImagePreviewState>("loading");
+  const showStatusBadge = descriptor.preview_kind !== "image"
+    || descriptor.status !== "available"
+    || (loadState === "ready" && imageState === "ready");
 
   useEffect(() => {
     closeButtonRef.current?.focus();
@@ -60,7 +72,7 @@ export function OriginalFilePreviewPanel({
           </div>
         </div>
         <div className="flex shrink-0 items-center gap-2">
-          <StatusBadge descriptor={descriptor} t={t} />
+          {showStatusBadge ? <StatusBadge descriptor={descriptor} t={t} /> : null}
           <button
             ref={closeButtonRef}
             type="button"
@@ -74,18 +86,20 @@ export function OriginalFilePreviewPanel({
       </header>
 
       <div className="flex h-[42vh] min-h-[280px] items-center justify-center overflow-hidden bg-muted p-3 md:h-[52vh] md:p-4 lg:h-auto lg:min-h-0 lg:flex-1">
-        <PreviewContent descriptor={descriptor} loadState={loadState} previewUrl={previewUrl} onRetry={onRetry} t={t} />
+        <PreviewContent descriptor={descriptor} loadState={loadState} previewUrl={previewUrl} onRetry={onRetry} imageState={imageState} onImageStateChange={setImageState} t={t} />
       </div>
       {provenanceNote ? <p className="border-t bg-card px-4 py-2.5 text-[11px] leading-4 text-muted-foreground">{provenanceNote}</p> : null}
     </section>
   );
 }
 
-function PreviewContent({ descriptor, loadState, previewUrl, onRetry, t }: {
+function PreviewContent({ descriptor, loadState, previewUrl, onRetry, imageState, onImageStateChange, t }: {
   descriptor: SourceFileDescriptor;
   loadState: SourcePreviewLoadState;
   previewUrl: string | null;
   onRetry: () => void;
+  imageState: ImagePreviewState;
+  onImageStateChange: (state: ImagePreviewState) => void;
   t: (key: MessageKey) => string;
 }) {
   if (descriptor.status === "processing") {
@@ -120,11 +134,7 @@ function PreviewContent({ descriptor, loadState, previewUrl, onRetry, t }: {
     );
   }
   if (descriptor.preview_kind === "image") {
-    return (
-      <div className="flex h-full w-full items-center justify-center overflow-auto rounded-[8px] bg-slate-200/70 p-3 dark:bg-slate-950/35">
-        <img src={previewUrl} alt={descriptor.display_name} className="max-h-full max-w-full rounded-[3px] bg-white object-contain shadow-[0_8px_28px_rgb(15_23_42_/_0.12)]" />
-      </div>
-    );
+    return <ImageFilePreview url={previewUrl} displayName={descriptor.display_name} state={imageState} onStateChange={onImageStateChange} t={t} />;
   }
   return <PdfDocumentPreview
     url={previewUrl}
@@ -135,6 +145,63 @@ function PreviewContent({ descriptor, loadState, previewUrl, onRetry, t }: {
     retryLabel={t("sourcePreviewRetry")}
     openLabel={t("sourcePreviewPdfFallback")}
   />;
+}
+
+function ImageFilePreview({ url, displayName, state, onStateChange, t }: {
+  url: string;
+  displayName: string;
+  state: ImagePreviewState;
+  onStateChange: (state: ImagePreviewState) => void;
+  t: (key: MessageKey) => string;
+}) {
+  const [attempt, setAttempt] = useState(0);
+  let imageUrl = url;
+  if (attempt > 0) {
+    const retryUrl = new URL(url, window.location.href);
+    retryUrl.searchParams.set("preview_retry", String(attempt));
+    imageUrl = retryUrl.href;
+  }
+
+  if (state === "error") {
+    return (
+      <div role="alert">
+        <InlineNotice
+          tone="danger"
+          title={t("sourcePreviewErrorTitle")}
+          className="max-w-md bg-card"
+          action={(
+            <Button type="button" variant="secondary" className="h-8 px-3" onClick={() => {
+              onStateChange("loading");
+              setAttempt((current) => current + 1);
+            }}>
+              <RefreshCw aria-hidden="true" className="h-3.5 w-3.5" />{t("sourcePreviewRetry")}
+            </Button>
+          )}
+        >
+          {t("sourcePreviewErrorDescription")}
+        </InlineNotice>
+      </div>
+    );
+  }
+
+  return (
+    <div aria-busy={state === "loading"} className="flex h-full w-full items-center justify-center overflow-auto rounded-[8px] bg-slate-200/70 p-3 dark:bg-slate-950/35">
+      {state === "loading" ? (
+        <div role="status" className="flex flex-col items-center text-center text-muted-foreground">
+          <LoaderCircle aria-hidden="true" className="h-7 w-7 animate-spin text-primary" />
+          <p className="mt-3 text-sm font-semibold">{t("sourcePreviewLoading")}</p>
+        </div>
+      ) : null}
+      <img
+        key={attempt}
+        src={imageUrl}
+        alt={displayName}
+        onLoad={() => onStateChange("ready")}
+        onError={() => onStateChange("error")}
+        className={cn("max-h-full max-w-full rounded-[3px] bg-white object-contain shadow-[0_8px_28px_rgb(15_23_42_/_0.12)]", state !== "ready" && "hidden")}
+      />
+    </div>
+  );
 }
 
 function StatusBadge({ descriptor, t }: { descriptor: SourceFileDescriptor; t: (key: MessageKey) => string }) {

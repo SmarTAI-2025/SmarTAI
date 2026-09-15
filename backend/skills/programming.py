@@ -61,7 +61,8 @@ class ProgrammingGradingOutput(BaseModel):
     confidence: float = Field(ge=0, le=1, allow_inf_nan=False)
     comment: str
     steps: List[dict] = Field(default_factory=list)
-    logs: str = Field(default="")
+    # A null optional log must not discard an otherwise valid model grade.
+    logs: Optional[str] = Field(default="")
 
 
 class TestCaseList(BaseModel):

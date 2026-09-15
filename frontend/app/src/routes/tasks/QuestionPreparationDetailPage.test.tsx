@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { createMemoryRouter, RouterProvider } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -87,8 +87,12 @@ vi.mock("@/components/new-task/NewTaskStepper", () => ({
   NewTaskStepper: () => null,
 }));
 
+vi.mock("@/components/tasks/PdfDocumentPreview", () => ({
+  PdfDocumentPreview: () => <div>Question PDF preview</div>,
+}));
+
 vi.mock("@/i18n/I18nProvider", () => ({
-  useI18n: () => ({ locale: testState.locale }),
+  useI18n: () => ({ locale: testState.locale, t: (key: string) => key }),
 }));
 
 function renderPage(initialEntry = "/tasks/task-1/questions/Q1/content") {
@@ -109,6 +113,7 @@ function renderPage(initialEntry = "/tasks/task-1/questions/Q1/content") {
 
 beforeEach(() => {
   testState.locale = "zh-CN";
+  taskData.name = "Geometry";
   mutateAsync.mockReset();
   Object.defineProperty(window, "scrollTo", { configurable: true, value: vi.fn() });
   vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => {
@@ -239,5 +244,20 @@ describe("QuestionPreparationDetailPage navigation", () => {
     expect(pythonBadge.closest("[data-code-language]")).toHaveAttribute("data-code-language", "python");
     expect(javaBadge.closest("[data-code-language]")).toHaveAttribute("data-code-language", "java");
     expect(document.querySelectorAll("[data-code-token='keyword']").length).toBeGreaterThan(0);
+  });
+
+  it("does not switch questions with arrow keys inside the original-file preview or separator", async () => {
+    taskData.name = "SmarTAI Live Demo keyboard review";
+    renderPage();
+    fireEvent.click(await screen.findByRole("button", { name: "sourcePreviewOpenProblem" }));
+    const preview = screen.getByTestId("source-preview-panel");
+    const close = within(preview).getByRole("button", { name: "sourcePreviewClose" });
+    expect(close).toHaveFocus();
+
+    vi.mocked(window.scrollTo).mockClear();
+    fireEvent.keyDown(close, { key: "ArrowDown" });
+    fireEvent.keyDown(screen.getByRole("separator"), { key: "ArrowDown" });
+    expect(window.scrollTo).not.toHaveBeenCalled();
+    expect(screen.getByRole("button", { name: "第 1 题" })).toHaveAttribute("aria-current", "true");
   });
 });

@@ -10,6 +10,42 @@
 
 `docs/active_beta_launch/20260803_leader_replan/PRE_PRODUCTION_SECURITY_RELEASE_GATE_CN.md`
 
+## 0. 2026-09-15 更新：通过部署切换共享模型
+
+本节替代下文旧 Gemini 示例的“只能用 Gemini”限制。后端与前端代码仍来自同一 Demo SHA。
+所有地址和 Key 由管理员在后端配置，前端不接收 Key。开启共享池后，可设置一个明确的共享模型：
+
+```dotenv
+SMARTAI_SHARED_POOL_ENABLED=true
+SMARTAI_SHARED_PROVIDER=openai
+SMARTAI_SHARED_MODEL=gpt-6-astra
+SMARTAI_SHARED_BASE_URL=https://mirror.xinshu.ai
+SMARTAI_SHARED_WIRE_PROTOCOL=openai_responses
+SMARTAI_SHARED_REASONING_EFFORT=high
+```
+
+另在 Render Secret Environment 中设置 `SMARTAI_SHARED_API_KEY`，不要把实际 Key 写入此文件。
+上例根据用户提供的 Codex 配置填写，真实中转连通、模型可用性和图片能力仍需通过应用验证。
+Base URL 精确决定前缀：根地址请求 `/responses`；配置末尾为 `/v1` 则请求 `/v1/responses`，
+程序不会擅自补 `/v1`。Responses 固定发送 `store=false`，不传 `temperature`，不自动重试另一种协议。
+
+| 配置 | 含义 |
+| --- | --- |
+| `SMARTAI_SHARED_PROVIDER` | `openai`、`zhipu`、`deepseek`、`moonshot`、`qwen` 使用 OpenAI 兼容调用；中转使用 OpenAI 模型时仍填 `openai` |
+| `SMARTAI_SHARED_WIRE_PROTOCOL` | `auto` 对上述厂商选择 Chat Completions；也可明确填 `openai_chat_completions` 或 `openai_responses` |
+| `SMARTAI_SHARED_BASE_URL` | 管理员指定的 API Base URL，不填完整操作终点；兼容厂商留空时使用该厂商官方地址，不继承旧厂商变量中的中转 URL |
+| `SMARTAI_SHARED_REASONING_EFFORT` | 可选的 OpenAI 兼容推理参数；不需要时留空 |
+
+明确填写 `SMARTAI_SHARED_PROVIDER` 后，只注册该共享模型，旧 Gemini 等厂商 Key 不会混入；
+若缺少该模型的 Key 或模型名，Demo 显示模型暂不可用，不会静默改用旧 Key。
+清空 `SMARTAI_SHARED_PROVIDER` 即恢复下文旧厂商环境变量方式，可用于回退当前 Gemini 部署。
+Gemini / Anthropic 官方原生适配仍保留：共享厂商可填 `gemini` / `anthropic`，协议设 `auto`，
+Base URL 留空。它们的自定义原生协议中转不在本轮小补丁范围内。
+
+共享模型只供文字/图片流程使用，不自动向同一中转发送 `/embeddings`；Demo 知识检索保持 BM25。
+已有共享开关、逐用户请求和估算额度保持生效；这些仍是进程内 Demo 额度，不是供应商实际计费账本。
+Codex 成功只证明 Codex 请求可用；应用仍需验证文字、图片 OCR、批改结果和部署网络。
+
 ## 1. 结论先行
 
 报名突击期采用一套前端构建、一个独立 Demo 后端：

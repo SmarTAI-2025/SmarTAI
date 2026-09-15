@@ -752,7 +752,7 @@ function QuestionNavigator({ previous, next, locale, onNavigate, compact = false
 
 function isKeyboardNavigationBlocked(target: EventTarget | null) {
   if (!(target instanceof HTMLElement)) return false;
-  return Boolean(target.closest("input, textarea, select, [contenteditable='true'], [role='dialog']"));
+  return Boolean(target.closest("input, textarea, select, [contenteditable='true'], [role='dialog'], [role='separator'], [data-source-preview-panel]"));
 }
 
 function updateCase(cases: TestCase[], index: number, patch: Partial<TestCase>) {

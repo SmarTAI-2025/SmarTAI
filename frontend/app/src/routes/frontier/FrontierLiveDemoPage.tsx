@@ -381,7 +381,7 @@ export function FrontierLiveDemoPage() {
       </div>
 
       <InlineNotice tone="info" title={tx(locale, "免密码 Demo 会话，不暴露模型密钥", "Passwordless demo session, no exposed model key")} className="mt-6">
-        {tx(locale, "从展示页进入时，后端会签发短时 Demo 会话。Gemini API Key 仅保存在后端，不会写入本页面、文件包或 URL。", "Entering from the showcase creates a short-lived demo session. The Gemini API key remains server-side and is never embedded in this page, fixture archive, or URL.")}
+        {tx(locale, "从展示页进入时，后端会签发短时 Demo 会话。模型 API Key 仅保存在后端，不会写入本页面、文件包或 URL。", "Entering from the showcase creates a short-lived demo session. The model API key remains server-side and is never embedded in this page, fixture archive, or URL.")}
       </InlineNotice>
 
       <div className="mt-6 grid gap-6 xl:grid-cols-[minmax(0,1.1fr)_minmax(330px,0.9fr)]">
