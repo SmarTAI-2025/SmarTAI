@@ -5,6 +5,11 @@ SmarTAI FastAPI application entry point.
 Runs the V2 agents/skills/tools architecture exclusively. The legacy V1
 routers (backend/routers/* + backend/correct/*) have been removed from the
 codebase post-migration; only `SMARTAI_GRADING_ENGINE=v2` is valid here.
+
+On Windows, start with:
+  set PYTHONASYNCIO_LOOP_POLICY=WindowsSelectorEventLoopPolicy
+  python -m uvicorn backend.main:app ...
+because ProactorEventLoop does not support subprocess transports.
 """
 import sys
 import os
