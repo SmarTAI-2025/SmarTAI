@@ -17,6 +17,8 @@ export interface ReviewOverviewSelection {
   unresolvedText: string;
 }
 
+export type ReviewOverviewHeaderSort = "id_asc" | "id_desc" | "name_asc" | "name_desc";
+
 const LOW_CONFIDENCE_TOKENS = ["低置信", "置信度低", "low confidence"];
 const DISAGREEMENT_TOKENS = ["专家分歧", "分歧大", "评分差异", "disagreement", "score spread"];
 const REVIEW_TOKENS = ["待复核", "需复核", "复核项", "review", "flagged"];
@@ -136,6 +138,20 @@ export function reviewQueryNeedsIntentFallback(selection: ReviewOverviewSelectio
   return Boolean(selection.unresolvedText && selection.matchedCellKeys.size === 0);
 }
 
+export function sortReviewOverviewSelection(
+  selection: ReviewOverviewSelection,
+  sort: ReviewOverviewHeaderSort | null,
+): ReviewOverviewSelection {
+  if (!sort) return selection;
+  const students = [...selection.students].sort((left, right) => {
+    if (sort === "id_asc") return left.id.localeCompare(right.id, undefined, { numeric: true, sensitivity: "base" });
+    if (sort === "id_desc") return right.id.localeCompare(left.id, undefined, { numeric: true, sensitivity: "base" });
+    if (sort === "name_asc") return compareNames(left, right);
+    return compareNames(right, left);
+  });
+  return { ...selection, students };
+}
+
 function cellDescriptor(student: StudentSummary, question: QuestionSummary | undefined, correction: Correction): string {
   return normalize([
     student.id,
@@ -194,7 +210,13 @@ function parseScoreFloor(query: string): { raw: string; value: number } | null {
 
 function parseReviewSort(query: string): { raw: string; sort: NonNullable<FilterIntentResult["sort"]> } | null {
   const patterns: Array<[RegExp, NonNullable<FilterIntentResult["sort"]>]> = [
+    [/(?:按)?(?:学号|学生\s*id|id)\s*(?:升序|从[小低]到[大高]|a[\s-]*z)(?:排列|排序)?|(?:sort\s+(?:by\s+)?)?(?:student\s*)?id\s*(?:asc(?:ending)?|a[\s-]*z)/i, "id_asc"],
+    [/(?:按)?(?:学号|学生\s*id|id)\s*(?:降序|从[大高]到[小低]|z[\s-]*a)(?:排列|排序)?|(?:sort\s+(?:by\s+)?)?(?:student\s*)?id\s*(?:desc(?:ending)?|z[\s-]*a)/i, "id_desc"],
+    [/(?:按)?姓名\s*(?:升序|从[小低]到[大高]|a[\s-]*z)(?:排列|排序)?|(?:sort\s+(?:by\s+)?)?name\s*(?:asc(?:ending)?|a[\s-]*z)/i, "name_asc"],
+    [/(?:按)?姓名\s*(?:降序|从[大高]到[小低]|z[\s-]*a)(?:排列|排序)?|(?:sort\s+(?:by\s+)?)?name\s*(?:desc(?:ending)?|z[\s-]*a)/i, "name_desc"],
     [/(?:置信度).*(?:从低到高|低到高)|confidence\s*(?:asc|low)/i, "confidence_asc"],
+    [/(?:置信度).*(?:从高到低|高到低)|confidence\s*(?:desc|high)/i, "confidence_desc"],
+    [/(?:复核信号|复核项).*(?:从少到多|少到多)|review\s*(?:asc|few)/i, "review_asc"],
     [/(?:复核信号|复核项).*(?:最多|优先)|review\s*(?:desc|most)/i, "review_desc"],
     [/(?:得分率)?\s*(?:从高到低|高到低|降序)|score\s*(?:desc|high)/i, "score_desc"],
     [/(?:得分率)?\s*(?:从低到高|低到高|升序)|score\s*(?:asc|low)/i, "score_asc"],
@@ -212,12 +234,18 @@ function compareReviewStudents(
   sort: NonNullable<FilterIntentResult["sort"]>,
   reviewKeys: Set<string>,
 ): number {
+  if (sort === "id_asc") return left.id.localeCompare(right.id, undefined, { numeric: true, sensitivity: "base" });
+  if (sort === "id_desc") return right.id.localeCompare(left.id, undefined, { numeric: true, sensitivity: "base" });
+  if (sort === "name_asc") return compareNames(left, right);
+  if (sort === "name_desc") return compareNames(right, left);
   if (sort === "score_asc") return nullable(left.percent, Number.POSITIVE_INFINITY) - nullable(right.percent, Number.POSITIVE_INFINITY) || compareNames(left, right);
   if (sort === "score_desc") return nullable(right.percent, Number.NEGATIVE_INFINITY) - nullable(left.percent, Number.NEGATIVE_INFINITY) || compareNames(left, right);
   if (sort === "confidence_asc") return nullable(left.avgConfidence, Number.POSITIVE_INFINITY) - nullable(right.avgConfidence, Number.POSITIVE_INFINITY) || compareNames(left, right);
+  if (sort === "confidence_desc") return nullable(right.avgConfidence, Number.NEGATIVE_INFINITY) - nullable(left.avgConfidence, Number.NEGATIVE_INFINITY) || compareNames(left, right);
   const reviewCount = (student: StudentSummary) => student.corrections
     .filter((correction) => reviewKeys.has(reviewCellKey(student.id, correction.q_id))).length;
-  return reviewCount(right) - reviewCount(left) || compareNames(left, right);
+  const delta = reviewCount(left) - reviewCount(right);
+  return (sort === "review_asc" ? delta : -delta) || compareNames(left, right);
 }
 
 function reviewIntentCanonicalQuery(intent: FilterIntentResult): string {
@@ -236,7 +264,13 @@ function reviewIntentCanonicalQuery(intent: FilterIntentResult): string {
   if (intent.sort === "score_asc") parts.push("得分率从低到高");
   if (intent.sort === "score_desc") parts.push("得分率从高到低");
   if (intent.sort === "confidence_asc") parts.push("置信度从低到高");
+  if (intent.sort === "confidence_desc") parts.push("置信度从高到低");
+  if (intent.sort === "review_asc") parts.push("复核信号从少到多");
   if (intent.sort === "review_desc") parts.push("复核信号最多优先");
+  if (intent.sort === "id_asc") parts.push("学号升序");
+  if (intent.sort === "id_desc") parts.push("学号降序");
+  if (intent.sort === "name_asc") parts.push("姓名升序");
+  if (intent.sort === "name_desc") parts.push("姓名降序");
   parts.push(...intent.question_tokens, ...intent.text_terms);
   return parts.join(" ");
 }

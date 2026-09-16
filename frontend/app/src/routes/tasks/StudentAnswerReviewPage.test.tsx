@@ -9,6 +9,10 @@ const sourcePreviewApi = vi.hoisted(() => ({
   getTaskSourceFiles: vi.fn(),
   loadSourcePreviewFile: vi.fn(),
 }));
+const filterIntentMocks = vi.hoisted(() => ({
+  mutate: vi.fn(),
+  reset: vi.fn(),
+}));
 const taskRefetch = vi.hoisted(() => vi.fn());
 const studentSource: SourceFileDescriptor = {
   source_id: "source-student-1",
@@ -69,6 +73,16 @@ vi.mock("@/api/hooks/tasks", () => ({
   useUpdateStudentIdentity: () => ({ isPending: false, mutateAsync: vi.fn() }),
 }));
 
+vi.mock("@/api/hooks/analytics", () => ({
+  useAnalyticsFilterIntent: () => ({
+    isPending: false,
+    isError: false,
+    error: null,
+    mutate: filterIntentMocks.mutate,
+    reset: filterIntentMocks.reset,
+  }),
+}));
+
 vi.mock("@/components/new-task/NewTaskStepper", () => ({ NewTaskStepper: () => null }));
 
 vi.mock("@/api/sourcePreview", () => ({
@@ -108,6 +122,8 @@ function renderPage() {
 
 beforeEach(() => {
   taskRefetch.mockReset().mockResolvedValue({ data: taskData });
+  filterIntentMocks.mutate.mockReset();
+  filterIntentMocks.reset.mockReset();
   sourcePreviewApi.getTaskSourceFiles.mockReset().mockResolvedValue({
     task_id: "task-1",
     workflow_revision: 3,

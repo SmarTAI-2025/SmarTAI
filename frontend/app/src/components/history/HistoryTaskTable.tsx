@@ -5,6 +5,7 @@ import { useTaskProgress } from "@/hooks/useTaskProgress";
 import { useI18n } from "@/i18n/I18nProvider";
 import { cn } from "@/lib/cn";
 import { getTaskDestination, isTaskProcessing } from "@/lib/taskFlow";
+import { SortableHeaderButton, type TableSortDirection } from "@/components/ui/SortableTableHead";
 import type { HistoryCourseFacet, TaskHistoryQuery, TaskLite, TaskTag } from "@/types";
 import { HistoryTagPopover } from "./HistoryTagPopover";
 import {
@@ -16,7 +17,10 @@ import {
   TAG_TONE_CLASSES,
 } from "./historyPresentation";
 
+export type HistoryTableSortColumn = "task" | "stage" | "updated";
+
 interface HistoryTaskTableProps {
+  query: TaskHistoryQuery;
   tasks: TaskLite[];
   courses: HistoryCourseFacet[];
   tags: TaskTag[];
@@ -26,6 +30,7 @@ interface HistoryTaskTableProps {
   deletingTaskId: string | null;
   hasFilters: boolean;
   onFilter: (patch: Partial<TaskHistoryQuery>) => void;
+  onSort: (column: HistoryTableSortColumn) => void;
   onDelete: (task: TaskLite) => void;
   onRetry: () => void;
   onClear: () => void;
@@ -34,6 +39,7 @@ interface HistoryTaskTableProps {
 const COLUMNS = "grid-cols-[minmax(0,1fr)_140px] md:grid-cols-[minmax(280px,1fr)_215px_120px_120px_160px_185px]";
 
 export function HistoryTaskTable({
+  query,
   tasks,
   courses,
   tags,
@@ -43,21 +49,31 @@ export function HistoryTaskTable({
   deletingTaskId,
   hasFilters,
   onFilter,
+  onSort,
   onDelete,
   onRetry,
   onClear,
 }: HistoryTaskTableProps) {
-  const { t } = useI18n();
+  const { locale, t } = useI18n();
+  const taskSortDirection = historySortDirection(query.sort, "name_asc", "name_desc");
+  const stageSortDirection = historySortDirection(query.sort, "stage_asc", "stage_desc");
+  const updatedSortDirection = historySortDirection(query.sort, "updated_asc", "updated_desc");
   return (
     <section aria-label={t("historyTableRegion")} className="w-full">
       <div className="overflow-visible pb-2 md:overflow-x-auto">
         <div role="table" aria-label={t("historyTableRegion")} aria-busy={isLoading} className="min-w-0 text-left md:min-w-[1080px]">
           <div role="row" className={cn("grid h-[42px] items-center text-[13px] font-semibold leading-4 text-muted-foreground", COLUMNS)}>
-            <div role="columnheader" className="px-[14px]">{t("historyColumnTask")}</div>
-            <div role="columnheader" className="px-[14px]">{t("historyColumnStage")}</div>
+            <div role="columnheader" aria-sort={ariaSort(taskSortDirection)} className="px-[14px]">
+              <SortableHeaderButton label={t("historyColumnTask")} direction={taskSortDirection} onSort={() => onSort("task")} ariaLabel={historySortAriaLabel(locale, t("historyColumnTask"), taskSortDirection)} />
+            </div>
+            <div role="columnheader" aria-sort={ariaSort(stageSortDirection)} className="px-[14px]">
+              <SortableHeaderButton label={t("historyColumnStage")} direction={stageSortDirection} onSort={() => onSort("stage")} ariaLabel={historySortAriaLabel(locale, t("historyColumnStage"), stageSortDirection)} />
+            </div>
             <div role="columnheader" className="hidden px-[14px] md:block">{t("historyColumnProgress")}</div>
             <div role="columnheader" className="hidden px-[14px] md:block">{t("historyColumnEta")}</div>
-            <div role="columnheader" className="hidden px-[14px] md:block">{t("historyColumnUpdated")}</div>
+            <div role="columnheader" aria-sort={ariaSort(updatedSortDirection)} className="hidden px-[14px] md:block">
+              <SortableHeaderButton label={t("historyColumnUpdated")} direction={updatedSortDirection} onSort={() => onSort("updated")} ariaLabel={historySortAriaLabel(locale, t("historyColumnUpdated"), updatedSortDirection)} />
+            </div>
             <div role="columnheader" className="hidden px-[14px] md:block">{t("historyColumnNext")}</div>
           </div>
 
@@ -97,6 +113,31 @@ export function HistoryTaskTable({
       </div>
     </section>
   );
+}
+
+function historySortDirection(current: string, ascending: string, descending: string): TableSortDirection {
+  if (current === ascending) return "asc";
+  if (current === descending) return "desc";
+  return null;
+}
+
+function ariaSort(direction: TableSortDirection): "ascending" | "descending" | "none" {
+  return direction === "asc" ? "ascending" : direction === "desc" ? "descending" : "none";
+}
+
+function historySortAriaLabel(locale: string, label: string, direction: TableSortDirection): string {
+  if (locale === "en-US") {
+    return direction === "asc"
+      ? `${label}, ascending. Activate to sort descending.`
+      : direction === "desc"
+        ? `${label}, descending. Activate to sort ascending.`
+        : `${label}. Activate to sort ascending.`;
+  }
+  return direction === "asc"
+    ? `${label}，当前升序。点击切换为降序。`
+    : direction === "desc"
+      ? `${label}，当前降序。点击切换为升序。`
+      : `${label}。点击按升序排序。`;
 }
 
 function HistoryTaskRow({

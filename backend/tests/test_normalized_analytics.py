@@ -24,6 +24,10 @@ from backend.db.models import (
     UserRecord,
 )
 from backend.db.session import session_scope
+from backend.db.workflow_repository import (
+    AssignmentStudentPresentationRecord,
+    GradingRunSetupRecord,
+)
 from backend.llm.registry import get_scoped_expert_registry
 from backend.models import User
 from backend.state import get_user_store
@@ -500,11 +504,11 @@ def test_filter_intent_sends_only_redacted_query_and_returns_fixed_controls():
     provider_payload = json.loads(provider_prompt)
     assert provider_payload == {
         "surface": "student_analysis",
-        "teacher_query": "<student>（学号 <student>）的成绩排个名，从高到低",
+        "teacher_query": "<student_1>（学号 <student_2>）的成绩排个名，从高到低",
     }
     assert student.username not in provider_prompt
     assert student.id not in provider_prompt
-    assert "<student>" in provider_prompt
+    assert "<student_1>" in provider_prompt
     for sensitive_value in (
         "2x",
         "AI comment one",
@@ -597,6 +601,260 @@ def test_filter_intent_unknown_requests_fail_closed():
     assert tainted.recognized is False
     assert tainted.sort is None
     assert tainted.text_terms == []
+
+
+def test_filter_intent_uses_owner_selected_provider(monkeypatch):
+    owner = _user("teacher", "intent-selected-provider")
+    seeded = _seed_graded_assignment(owner)
+    registry_default = _Provider()
+    selected = _Provider()
+    owners = []
+
+    def resolve(owner_id, registry):
+        owners.append(owner_id)
+        return selected
+
+    monkeypatch.setattr(analytics, "resolve_owner_default_provider", resolve)
+    response = _client(owner, _Registry(registry_default)).post(
+        f"/analytics/{seeded['task_id']}/filter-intent",
+        json={"question": "从高到低", "surface": "student_analysis"},
+    )
+    assert response.status_code == 200, response.text
+    assert owners == [owner.id]
+    assert len(selected.calls) == 1
+    assert registry_default.calls == []
+
+
+@pytest.mark.parametrize("surface", ["student_analysis", "review_overview"])
+def test_filter_intent_restores_only_authorized_identifiers_after_model_routing(surface):
+    owner = _user("teacher", "intent-identity")
+    seeded = _seed_graded_assignment(owner)
+    student = seeded["students"][0]
+    provider = _Provider()
+    provider.outputs["intent"]["text_terms"] = ["<student_1>"]
+    response = _client(owner, _Registry(provider)).post(
+        f"/analytics/{seeded['task_id']}/filter-intent",
+        json={"question": f"请帮我看看 {student.username}，按分数排一下", "surface": surface},
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()["text_terms"] == [student.username]
+    assert response.json()["recognized"] is True
+    prompt = str(provider.calls[-1][1][-1].content)
+    assert student.username not in prompt and student.id not in prompt
+
+
+def test_filter_intent_does_not_resolve_unknown_or_composite_identity_placeholders():
+    owner = _user("teacher", "intent-unknown")
+    seeded = _seed_graded_assignment(owner)
+    provider = _Provider()
+    provider.outputs["intent"]["text_terms"] = ["<student_999>", "<student_1> extra"]
+    response = _client(owner, _Registry(provider)).post(
+        f"/analytics/{seeded['task_id']}/filter-intent",
+        json={"question": f"看看 {seeded['students'][0].username}", "surface": "student_analysis"},
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()["recognized"] is False
+    assert response.json()["text_terms"] == []
+
+
+def test_identity_redaction_preserves_question_numbers_and_score_thresholds():
+    text, identities = analytics._redact_filter_question(
+        "Annie 和 Ann：Q1 低于90分，学号1 / ID: 90", {"1", "Ann", "90", "Annie"},
+    )
+    assert text == "<student_1> 和 <student_2>：Q1 低于90分，学号<student_3> / ID: <student_4>"
+    assert identities == {
+        "<student_1>": "Annie", "<student_2>": "Ann",
+        "<student_3>": "1", "<student_4>": "90",
+    }
+
+
+def test_identity_redaction_masks_short_student_ids_only_in_explicit_identity_context():
+    text, identities = analytics._redact_filter_question(
+        "90同学、学生90、学号90、ID: 90；Q1 低于90分", {"90"},
+    )
+
+    assert text == "<student_1>同学、学生<student_1>、学号<student_1>、ID: <student_1>；Q1 低于90分"
+    assert identities == {"<student_1>": "90"}
+
+
+def test_identity_redaction_masks_known_long_student_number_without_a_prefix():
+    text, identities = analytics._redact_filter_question(
+        "只看202600000001同学，分数低于60", {"202600000001", "Alice"},
+    )
+    assert text == "只看<student_1>同学，分数低于60"
+    assert identities == {"<student_1>": "202600000001"}
+
+
+@pytest.mark.parametrize("surface, fields, recognized", [
+    ("student_analysis", {"sort": "name_asc"}, True),
+    ("review_overview", {"sort": "name_desc", "annotated": True}, True),
+    ("question_analysis", {
+        "sort": "question", "question_types": ["calculation"],
+        "max_average_confidence": 0.8, "missing_knowledge": True,
+    }, True),
+    ("question_analysis", {"sort": "name_asc"}, False),
+    ("student_analysis", {"max_average_confidence": 0}, False),
+    ("review_overview", {"question_types": ["proof"]}, False),
+    ("question_preparation", {"sort": "max_score_asc", "min_max_score": 0}, True),
+    ("question_preparation", {
+        "sort": "review_desc", "material_field": "answer", "material_status": "missing",
+    }, True),
+    ("question_preparation", {"sort": "question_desc", "low_confidence": True}, True),
+    ("question_preparation", {"sort": "type_desc", "preparation_status": "ready"}, True),
+    ("question_preparation", {"sort": "max_score_asc", "max_score_percent": 80}, False),
+    ("question_preparation", {"sort": "max_score_asc", "material_field": "answer"}, False),
+    ("submission_review", {
+        "sort": "coverage_desc", "submission_status": "review", "question_tokens": ["Q2"],
+    }, True),
+    ("submission_review", {"sort": "id_asc", "submission_status": "identity"}, True),
+    ("submission_review", {"sort": "review_asc", "submission_status": "reviewed"}, True),
+    ("submission_review", {"sort": "coverage_desc", "min_score_percent": 60}, False),
+    ("submission_review", {"sort": "score_desc"}, False),
+    ("student_answer_review", {
+        "sort": "question_desc", "submission_status": "missing", "question_tokens": ["Q1"],
+    }, True),
+    ("student_answer_review", {"sort": "score_desc"}, False),
+    ("student_analysis", {"sort": "id_desc"}, True),
+    ("student_analysis", {"sort": "confidence_desc"}, True),
+    ("review_overview", {"sort": "review_asc"}, True),
+    ("question_analysis", {"sort": "coverage_desc"}, True),
+    ("question_analysis", {"sort": "max_score_desc"}, True),
+    ("question_analysis", {"sort": "type_asc"}, True),
+    ("question_analysis", {"sort": "question_desc"}, True),
+    ("question_analysis", {"sort": "review_desc", "submission_status": "missing"}, False),
+    ("review_overview", {"sort": "score_asc", "unsupported_filter": True}, False),
+    ("student_analysis", {"sort": "invented_order", "low_confidence": True}, False),
+    ("question_preparation", {"sort": "max_score_asc", "min_max_score": 10, "max_max_score": 5}, False),
+    ("question_preparation", {"sort": "type_asc", "question_types": ["invented_type"]}, False),
+])
+def test_filter_intent_supports_surface_controls_without_silently_dropping_them(
+    surface, fields, recognized,
+):
+    owner = _user("teacher", "intent-controls")
+    seeded = _seed_graded_assignment(owner)
+    provider = _Provider()
+    provider.outputs["intent"].update(fields)
+    response = _client(owner, _Registry(provider)).post(
+        f"/analytics/{seeded['task_id']}/filter-intent",
+        json={"question": "按我的要求筛选和排序", "surface": surface},
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()["recognized"] is recognized
+    if recognized:
+        assert response.json()["sort"] == fields.get("sort", "score_desc")
+    else:
+        # No valid portion of a rejected compound request may remain executable.
+        assert response.json() == analytics.analytics_agent.FilterIntentOutput(
+            recognized=False, explanation=response.json()["explanation"],
+        ).model_dump()
+    prompt = json.loads(str(provider.calls[-1][1][-1].content))
+    assert set(prompt) == {"surface", "teacher_query"}
+
+
+@pytest.mark.parametrize("surface, sort", [
+    ("question_preparation", "max_score_asc"),
+    ("submission_review", "coverage_asc"),
+])
+def test_pregrading_intent_works_without_results_and_checks_owner_first(monkeypatch, surface, sort):
+    owner = _user("teacher", "pregrade-owner")
+    other = _user("teacher", "pregrade-other")
+    task_id = _seed_ungraded_assignment(owner)
+    provider = _Provider()
+    provider.outputs["intent"]["sort"] = sort
+    monkeypatch.setattr(analytics, "_load_facts", lambda *_: pytest.fail("Intent must not load grading facts"))
+    response = _client(owner, _Registry(provider)).post(
+        f"/analytics/{task_id}/filter-intent",
+        json={"question": "按我的要求排序", "surface": surface},
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()["recognized"] is True
+    assert response.json()["sort"] == sort
+    assert len(provider.calls) == 1
+    denied = _client(other, _Registry(None)).post(
+        f"/analytics/{task_id}/filter-intent",
+        json={"question": "排序", "surface": surface},
+    )
+    assert denied.status_code == 404
+    assert denied.json()["detail"] == {"code": "analytics_task_not_found"}
+    assert len(provider.calls) == 1
+
+
+def test_pregrading_intent_masks_display_identity_before_model_call():
+    owner = _user("teacher", "pregrade-private")
+    student = _user("student", "internal-only")
+    task_id = _seed_ungraded_assignment(owner)
+    with session_scope() as session:
+        session.add(SubmissionRecord(id=_id("submission"), assignment_id=task_id, student_id=student.id))
+        session.add(AssignmentStudentPresentationRecord(
+            id=_id("presentation"), assignment_id=task_id, student_id=student.id,
+            display_student_id="202600012345", display_name="张同学",
+        ))
+    provider = _Provider()
+    provider.outputs["intent"].update(sort="coverage_asc", text_terms=["<student_1>"])
+    response = _client(owner, _Registry(provider)).post(
+        f"/analytics/{task_id}/filter-intent",
+        json={"question": "看看张同学，按识别题数升序", "surface": "submission_review"},
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()["recognized"] is True
+    assert response.json()["text_terms"] == ["张同学"]
+    prompt = json.loads(str(provider.calls[0][1][-1].content))
+    assert prompt == {"surface": "submission_review", "teacher_query": "看看<student_1>，按识别题数升序"}
+    assert analytics._load_filter_identifiers(task_id, owner.id) >= {
+        "张同学", "202600012345", student.id, student.username,
+    }
+
+
+def test_intent_masks_frozen_display_identity_without_sending_manifest_data():
+    owner = _user("teacher", "frozen-private")
+    seeded = _seed_graded_assignment(owner)
+    with session_scope() as session:
+        session.add(GradingRunSetupRecord(
+            grading_run_id=seeded["run_id"], assignment_id=seeded["task_id"],
+            owner_id=owner.id, setup={}, fingerprint="fixture",
+            input_manifest={"student_presentations": [{
+                "student_id": seeded["students"][0].id,
+                "display_student_id": "202699999999", "display_name": "历史姓名",
+            }], "answers": "private-answer-never-sent"},
+        ))
+    provider = _Provider()
+    provider.outputs["intent"].update(sort="score_asc", text_terms=["<student_1>"])
+    response = _client(owner, _Registry(provider)).post(
+        f"/analytics/{seeded['task_id']}/filter-intent",
+        json={"question": "历史姓名 按分数升序", "surface": "student_analysis"},
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()["text_terms"] == ["历史姓名"]
+    prompt = json.loads(str(provider.calls[0][1][-1].content))
+    assert prompt == {"surface": "student_analysis", "teacher_query": "<student_1> 按分数升序"}
+
+
+def test_chart_prompt_contains_real_confidence_and_review_metrics_with_unknowns():
+    owner = _user("teacher", "chart-metrics")
+    seeded = _seed_graded_assignment(owner)
+    with session_scope() as session:
+        session.get(GradeResultRecord, seeded["result_ids"][0]).ai_confidence = None
+        session.get(GradeResultRecord, seeded["result_ids"][1]).ai_confidence = 70
+    provider = _Provider()
+    response = _client(owner, _Registry(provider)).post(
+        f"/analytics/{seeded['task_id']}/query",
+        json={"question": "画出总分率与平均置信度散点图", "mode": "chart"},
+    )
+    assert response.status_code == 200, response.text
+    prompt = str(provider.calls[-1][1][-1].content)
+    context = json.loads(prompt.split("**[Class Data (JSON)]**:\n", 1)[1].split("\n\n**[", 1)[0])
+    rows = {row["id"]: row for row in context["students"]}
+    reviewed = rows[seeded["students"][0].id]
+    pending = rows[seeded["students"][1].id]
+    failed = rows[seeded["students"][2].id]
+    assert reviewed["avg_confidence"] is None
+    assert reviewed["per_q"][0]["confidence"] is None
+    assert reviewed["per_q"][0]["reviewed"] is True
+    assert pending["avg_confidence"] == 0.7
+    assert pending["review_signal_count"] == pending["pending_review_count"] == 1
+    assert failed["pct"] is None
+    assert failed["per_q"][0]["score"] is None
+    assert failed["low_confidence_count"] == 1
 
 
 def test_analytics_readiness_and_generation_errors_are_stable_and_redacted():

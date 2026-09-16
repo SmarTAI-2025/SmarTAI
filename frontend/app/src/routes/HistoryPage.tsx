@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { toast } from "sonner";
 import { normalizeAPIError } from "@/api/client";
@@ -10,7 +10,7 @@ import {
 } from "@/api/hooks";
 import { HistoryFilters } from "@/components/history/HistoryFilters";
 import { HistoryPagination } from "@/components/history/HistoryPagination";
-import { HistoryTaskTable } from "@/components/history/HistoryTaskTable";
+import { HistoryTaskTable, type HistoryTableSortColumn } from "@/components/history/HistoryTaskTable";
 import {
   applyHistoryInterpretation,
   clearHistoryCondition,
@@ -21,13 +21,19 @@ import {
   serializeHistoryQuery,
 } from "@/components/history/historyQuery";
 import { useI18n } from "@/i18n/I18nProvider";
-import type { HistoryFacets, HistoryInterpretation, TaskHistoryQuery, TaskLite } from "@/types";
+import type { HistoryFacets, HistoryInterpretation, HistorySort, TaskHistoryQuery, TaskLite } from "@/types";
 
 const EMPTY_FACETS: HistoryFacets = {
   semesters: [],
   courses: [],
   tags: [],
   statuses: {},
+};
+
+const TABLE_SORTS: Record<HistoryTableSortColumn, readonly [HistorySort, HistorySort]> = {
+  task: ["name_asc", "name_desc"],
+  stage: ["stage_asc", "stage_desc"],
+  updated: ["updated_asc", "updated_desc"],
 };
 
 export function HistoryPage() {
@@ -41,6 +47,7 @@ export function HistoryPage() {
   const [interpretation, setInterpretation] = useState<HistoryInterpretation | null>(null);
   const [preSmartQuery, setPreSmartQuery] = useState<TaskHistoryQuery | null>(null);
   const [smartError, setSmartError] = useState(false);
+  const interpretationRequest = useRef(0);
   const [deletingTaskId, setDeletingTaskId] = useState<string | null>(null);
 
   const data = historyQuery.data;
@@ -64,13 +71,20 @@ export function HistoryPage() {
   }
 
   function handleChange(patch: Partial<TaskHistoryQuery>, keepPage = false) {
+    interpretationRequest.current += 1;
     setInterpretation(null);
     setPreSmartQuery(null);
     setSmartError(false);
     writeQuery(patchHistoryQuery(query, patch, { keepPage }));
   }
 
+  function handleTableSort(column: HistoryTableSortColumn) {
+    const [ascending, descending] = TABLE_SORTS[column];
+    handleChange({ sort: query.sort === ascending ? descending : ascending });
+  }
+
   function clearAll() {
+    interpretationRequest.current += 1;
     setInterpretation(null);
     setPreSmartQuery(null);
     setSmartError(false);
@@ -79,19 +93,24 @@ export function HistoryPage() {
   }
 
   async function handleInterpret(value: string) {
+    if (interpretQuery.isPending || !value.trim()) return;
+    const request = ++interpretationRequest.current;
     setSmartError(false);
     try {
       const result = await interpretQuery.mutateAsync(value);
+      if (request !== interpretationRequest.current) return;
       setPreSmartQuery(query);
       setInterpretation(result);
       writeQuery(applyHistoryInterpretation(query, result));
     } catch {
+      if (request !== interpretationRequest.current) return;
       setInterpretation(null);
       setSmartError(true);
     }
   }
 
   function clearSmart() {
+    interpretationRequest.current += 1;
     setInterpretation(null);
     setSmartError(false);
     interpretQuery.reset();
@@ -159,6 +178,7 @@ export function HistoryPage() {
 
       <div className="mt-1">
         <HistoryTaskTable
+          query={query}
           tasks={tasks}
           courses={facets.courses}
           tags={tags}
@@ -168,6 +188,7 @@ export function HistoryPage() {
           deletingTaskId={deletingTaskId}
           hasFilters={hasFilters}
           onFilter={handleChange}
+          onSort={handleTableSort}
           onDelete={(task) => void handleDelete(task)}
           onRetry={() => void historyQuery.refetch()}
           onClear={clearAll}

@@ -1,7 +1,10 @@
-import { ArrowRight, X } from "lucide-react";
-import { useMemo, type ReactNode } from "react";
+import { ArrowRight, LoaderCircle, X } from "lucide-react";
+import { useMemo, useRef, useState, type FormEvent, type ReactNode } from "react";
 import { Link, useSearchParams } from "react-router-dom";
+import { useAnalyticsFilterIntent } from "@/api/hooks/analytics";
 import { SmarTAIMascot } from "@/components/brand/SmarTAIMascot";
+import { RecoverableActionState } from "@/components/ui/RecoverableActionState";
+import { SortableTableHead, type TableSortDirection } from "@/components/ui/SortableTableHead";
 import {
   clampPercent,
   correctionScoreSource,
@@ -15,14 +18,31 @@ import {
 import { useImeSafeQuery } from "@/hooks/useImeSafeQuery";
 import type { Locale } from "@/i18n/messages";
 import { cn } from "@/lib/cn";
+import { classifyRecoverableError } from "@/lib/taskActionGuards";
 import { ResultsSummaryMetric as SummaryMetric } from "@/routes/tasks/results/ResultsSummaryMetric";
-import type { Correction, ProblemInfo } from "@/types";
+import type { Correction, FilterIntentResult, ProblemInfo } from "@/types";
 
 type ReviewFilter = "all" | "pending" | "confirmed" | "none";
 type ReviewState = Exclude<ReviewFilter, "all">;
 type ScoreFilter = "all" | "under60" | "under70" | "atleast80";
 type ConfidenceFilter = "all" | "low_items" | "avg_low";
-type SortMode = "question" | "score_asc" | "score_desc" | "confidence_asc" | "review_desc";
+type SortMode =
+  | "question"
+  | "question_desc"
+  | "coverage_asc"
+  | "coverage_desc"
+  | "score_asc"
+  | "score_desc"
+  | "confidence_asc"
+  | "confidence_desc"
+  | "review_asc"
+  | "review_desc"
+  | "max_score_asc"
+  | "max_score_desc"
+  | "type_asc"
+  | "type_desc";
+
+type QuestionSortColumn = "question" | "coverage" | "score" | "confidence" | "review";
 
 interface QuestionAnalysisRow {
   question: QuestionSummary;
@@ -54,6 +74,7 @@ interface SemanticQuestionPlan {
   avgConfidenceBelow: number | null;
   reviewState: ReviewState | null;
   missingKnowledge: boolean;
+  sort: SortMode | null;
   terms: string[];
   conditions: SemanticCondition[];
 }
@@ -70,17 +91,28 @@ export function QuestionAnalysisOverview({
   const [searchParams, setSearchParams] = useSearchParams();
   const query = searchParams.get("q") ?? "";
   const smartSearch = useImeSafeQuery({ value: query, onCommit: (value) => updateParam("q", value, "") });
+  const intentQuery = useAnalyticsFilterIntent();
+  const [intentState, setIntentState] = useState<{ taskId: string; question: string; result: FilterIntentResult } | null>(null);
+  const contextRef = useRef({ taskId, query });
+  contextRef.current = { taskId, query };
+  const [resolution, setResolution] = useState<"idle" | "local" | "llm">("idle");
   const typeFilter = searchParams.get("type") ?? "all";
   const scoreFilter = normalizeScoreFilter(searchParams.get("score"));
   const confidenceFilter = normalizeConfidenceFilter(searchParams.get("confidence"));
   const reviewFilter = normalizeReviewFilter(searchParams.get("review"));
   const sortMode = normalizeSortMode(searchParams.get("sort"));
+  const hasExplicitHeaderSort = searchParams.has("sort");
   const returnParams = new URLSearchParams(searchParams);
   returnParams.delete("page");
   const returnQuery = returnParams.toString();
 
   const rows = useMemo(() => model.questions.map((question) => buildQuestionRow(question, locale)), [locale, model.questions]);
-  const semanticPlan = useMemo(() => parseSemanticQuestionQuery(query, locale), [locale, query]);
+  const currentIntent = intentState?.taskId === taskId && intentState.question === query ? intentState : null;
+  const activeIntent = currentIntent?.result.recognized ? currentIntent.result : null;
+  const unsupportedIntent = currentIntent && !currentIntent.result.recognized;
+  const semanticPlan = useMemo(() => activeIntent ? intentToQuestionPlan(activeIntent, locale)
+    : parseSemanticQuestionQuery(unsupportedIntent ? "" : query, locale), [activeIntent, locale, query, unsupportedIntent]);
+  const effectiveSort = hasExplicitHeaderSort ? sortMode : semanticPlan.sort ?? sortMode;
   const types = useMemo(
     () => Array.from(new Set(rows.map((row) => row.type).filter((value) => value !== "—"))).sort((a, b) => a.localeCompare(b, locale === "en-US" ? "en" : "zh-Hans-CN")),
     [locale, rows],
@@ -93,8 +125,8 @@ export function QuestionAnalysisOverview({
       && matchesConfidenceFilter(row, confidenceFilter)
       && (reviewFilter === "all" || row.reviewState === reviewFilter)
     ));
-    return matches.sort((left, right) => compareRows(left, right, sortMode));
-  }, [confidenceFilter, reviewFilter, rows, scoreFilter, semanticPlan, sortMode, typeFilter]);
+    return matches.sort((left, right) => compareRows(left, right, effectiveSort));
+  }, [confidenceFilter, reviewFilter, rows, scoreFilter, semanticPlan, effectiveSort, typeFilter]);
 
   const averageQuestionPercent = averageOrNull(rows.map((row) => row.question.avgPercent));
   const weakQuestionCount = rows.filter((row) => (row.question.avgPercent ?? 100) < 60).length;
@@ -108,12 +140,51 @@ export function QuestionAnalysisOverview({
     setSearchParams(next, { replace: true });
   }
 
+  function sortByHeader(column: QuestionSortColumn) {
+    const [ascending, descending] = questionSortPair(column);
+    updateParam("sort", effectiveSort === ascending ? descending : ascending, "");
+  }
+
   const removeSemanticCondition = (condition: SemanticCondition) => {
     const start = query.toLocaleLowerCase().indexOf(condition.source.toLocaleLowerCase());
     if (start < 0) return;
     const nextQuery = `${query.slice(0, start)} ${query.slice(start + condition.source.length)}`.replace(/\s+/g, " ").trim();
     updateParam("q", nextQuery, "");
   };
+
+  function clearIntent() {
+    setIntentState(null);
+    setResolution("idle");
+    intentQuery.reset();
+  }
+
+  function applySmartFilter(value: string) {
+    if (intentQuery.isPending) return;
+    const question = value.trim();
+    smartSearch.commitValue(question);
+    clearIntent();
+    if (!question) return;
+    const plan = parseSemanticQuestionQuery(question, locale);
+    if (plan.conditions.length && (!plan.terms.length || rows.some((row) => plan.terms.every((term) => termMatchesRow(term, row))))) {
+      setResolution("local");
+      return;
+    }
+    intentQuery.mutate({ taskId, question, surface: "question_analysis" }, {
+      onSuccess: (result) => {
+        if (contextRef.current.taskId !== taskId || contextRef.current.query !== question) return;
+        setIntentState({ taskId, question, result }); setResolution("llm");
+      },
+    });
+  }
+
+  function submitSmartFilter(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    applySmartFilter(smartSearch.draftValue);
+  }
+
+  const recoveryInfo = intentQuery.isError ? classifyRecoverableError(intentQuery.error, {
+    locale, phase: "analytics_filter_intent", returnTo: `/tasks/${encodeURIComponent(taskId)}/results/questions`,
+  }) : null;
 
   return (
     <section className="rounded-[10px] border bg-card">
@@ -132,9 +203,9 @@ export function QuestionAnalysisOverview({
           <SummaryMetric label={tx(locale, "含复核信号", "With review signals")} value={String(reviewSignalCount)} tone="danger" />
         </div>
 
-        <div className="mt-4">
+        <form onSubmit={submitSmartFilter} className="mt-4">
           <div className="flex items-center gap-3">
-            <SmarTAIMascot variant="thinking" size="xs" />
+            <SmarTAIMascot variant={intentQuery.isPending ? "grading" : "thinking"} size="xs" />
             <label className="relative block min-w-0 flex-1">
               <input
                 value={smartSearch.draftValue}
@@ -142,21 +213,25 @@ export function QuestionAnalysisOverview({
                 onBlur={smartSearch.handleBlur}
                 onCompositionStart={smartSearch.handleCompositionStart}
                 onCompositionEnd={smartSearch.handleCompositionEnd}
-                onChange={smartSearch.handleChange}
-                placeholder={tx(locale, "本地快速筛选：例如 计算题 得分率低于 70% 低置信 已复核 Q3", "Local quick filter: calculation below 70% low confidence reviewed Q3")}
-                aria-label={tx(locale, "本地快速筛选题目，不调用模型", "Filter questions locally without a model call")}
-                className="h-11 w-full rounded-[9px] border bg-background pl-3 pr-10 text-[13px] text-foreground outline-none placeholder:text-muted-foreground focus:border-primary focus:ring-2 focus:ring-primary/15"
+                onChange={(event) => { clearIntent(); smartSearch.handleChange(event); }}
+                disabled={intentQuery.isPending}
+                placeholder={tx(locale, "例如：找出得分较低的计算题，按得分率从低到高排列", "For example: show calculation questions with low scores, lowest first")}
+                aria-label={tx(locale, "智能筛选题目", "Smart-filter questions")}
+                className="h-11 w-full rounded-[9px] border bg-background pl-3 pr-36 text-[13px] text-foreground outline-none placeholder:text-muted-foreground focus:border-primary focus:ring-2 focus:ring-primary/15"
               />
               {smartSearch.draftValue ? (
-                <button type="button" onClick={() => smartSearch.commitValue("")} aria-label={tx(locale, "清除本地筛选", "Clear local filter")} className="absolute right-2 top-1/2 inline-flex h-7 w-7 -translate-y-1/2 items-center justify-center rounded-full text-muted-foreground hover:bg-muted hover:text-foreground">
+                <button type="button" onClick={() => { clearIntent(); smartSearch.commitValue(""); }} aria-label={tx(locale, "清除智能筛选", "Clear smart filter")} className="absolute right-[7.25rem] top-1/2 inline-flex h-7 w-7 -translate-y-1/2 items-center justify-center rounded-full text-muted-foreground hover:bg-muted hover:text-foreground">
                   <X aria-hidden="true" className="h-4 w-4" />
                 </button>
               ) : null}
+              <button type="submit" disabled={intentQuery.isPending || !smartSearch.draftValue.trim()} className="absolute right-1 top-1/2 inline-flex h-9 -translate-y-1/2 items-center justify-center gap-1.5 rounded-[8px] bg-primary px-3 text-[11px] font-semibold text-primary-foreground disabled:opacity-50">{intentQuery.isPending ? <LoaderCircle aria-hidden="true" className="h-3.5 w-3.5 animate-spin" /> : null}{intentQuery.isPending ? tx(locale, "理解中…", "Interpreting…") : tx(locale, "应用筛选", "Apply filter")}</button>
             </label>
           </div>
 
           <div className="mt-2 flex min-h-7 flex-wrap items-center gap-2">
-            {semanticPlan.conditions.length ? semanticPlan.conditions.map((condition) => (
+            {semanticPlan.conditions.length ? semanticPlan.conditions.map((condition) => activeIntent ? (
+              <span key={condition.id} className="inline-flex h-7 items-center rounded-full bg-blue-50 px-2.5 text-[11px] font-semibold text-primary">{condition.label}</span>
+            ) : (
               <button
                 key={condition.id}
                 type="button"
@@ -169,11 +244,14 @@ export function QuestionAnalysisOverview({
               </button>
             )) : (
               <span className="text-[11px] text-muted-foreground">
-                {tx(locale, "本地可解释筛选，不消耗模型额度；条件会显示为可移除标签。", "Explainable local filtering; no model call. Parsed conditions appear as removable chips.")}
+                {tx(locale, "本地预设优先；无法完整识别时，模型只解析这句指令，不会接收题目或作答内容。", "Local presets run first. If needed, the model sees only this instruction—not question or response content.")}
               </span>
             )}
+            {resolution === "local" ? <span className="text-[11px] text-muted-foreground">{tx(locale, "本地规则已识别 · 未调用模型", "Matched locally · no model call")}</span> : null}
+            {resolution === "llm" && currentIntent ? <span role="status" className="text-[11px] text-muted-foreground">{unsupportedIntent ? tx(locale, "未能完整转换指令，未应用部分条件。", "Could not interpret the full instruction; no partial filter applied. ") : tx(locale, "模型仅解析指令：", "Model interpreted instruction only: ")}{currentIntent.result.explanation}</span> : null}
           </div>
-        </div>
+          {recoveryInfo ? <RecoverableActionState info={recoveryInfo} locale={locale} compact className="mt-2" primaryAction={recoveryInfo.actionKind === "byok" ? undefined : { label: recoveryInfo.actionLabel, onClick: () => applySmartFilter(smartSearch.draftValue), busy: intentQuery.isPending }} /> : null}
+        </form>
 
         <div className="mt-3 grid grid-cols-2 gap-2 xl:grid-cols-5">
           <FilterSelect value={typeFilter} onChange={(value) => updateParam("type", value)} label={tx(locale, "题型", "Type")}>
@@ -197,13 +275,6 @@ export function QuestionAnalysisOverview({
             <option value="confirmed">{tx(locale, "信号已由教师处理", "Signals handled by teacher")}</option>
             <option value="none">{tx(locale, "无复核信号", "No review signals")}</option>
           </FilterSelect>
-          <FilterSelect value={sortMode} onChange={(value) => updateParam("sort", value, "question")} label={tx(locale, "排序", "Sort")}>
-            <option value="question">{tx(locale, "按题号", "Question order")}</option>
-            <option value="score_asc">{tx(locale, "得分率从低到高", "Score low to high")}</option>
-            <option value="score_desc">{tx(locale, "得分率从高到低", "Score high to low")}</option>
-            <option value="confidence_asc">{tx(locale, "置信度从低到高", "Confidence low to high")}</option>
-            <option value="review_desc">{tx(locale, "复核信号最多优先", "Most review signals first")}</option>
-          </FilterSelect>
         </div>
 
         <div className="mt-3 flex flex-wrap items-center justify-between gap-2 pb-3 text-[11px] text-muted-foreground">
@@ -216,7 +287,7 @@ export function QuestionAnalysisOverview({
 
       {filteredRows.length ? (
         <>
-          <QuestionDesktopTable locale={locale} taskId={taskId} rows={filteredRows} returnQuery={returnQuery} />
+          <QuestionDesktopTable locale={locale} taskId={taskId} rows={filteredRows} returnQuery={returnQuery} sort={effectiveSort} onSort={sortByHeader} />
           <QuestionMobileCards locale={locale} taskId={taskId} rows={filteredRows} returnQuery={returnQuery} />
         </>
       ) : (
@@ -237,17 +308,31 @@ export function QuestionAnalysisOverview({
   );
 }
 
-function QuestionDesktopTable({ locale, taskId, rows, returnQuery }: { locale: Locale; taskId: string; rows: QuestionAnalysisRow[]; returnQuery: string }) {
+function QuestionDesktopTable({
+  locale,
+  taskId,
+  rows,
+  returnQuery,
+  sort,
+  onSort,
+}: {
+  locale: Locale;
+  taskId: string;
+  rows: QuestionAnalysisRow[];
+  returnQuery: string;
+  sort: SortMode;
+  onSort: (column: QuestionSortColumn) => void;
+}) {
   return (
     <div className="hidden border-t lg:block">
       <table className="w-full table-fixed text-left">
         <thead className="bg-slate-50 text-[11px] font-medium text-muted-foreground">
           <tr>
-            <th className="w-[31%] px-4 py-3 font-medium">{tx(locale, "题目", "Question")}</th>
-            <th className="w-[9%] px-3 py-3 font-medium">{tx(locale, "作答", "Responses")}</th>
-            <th className="w-[14%] px-3 py-3 font-medium">{tx(locale, "平均分", "Mean score")}</th>
-            <th className="w-[13%] px-3 py-3 font-medium">{tx(locale, "置信度", "Confidence")}</th>
-            <th className="w-[13%] px-3 py-3 font-medium">{tx(locale, "复核", "Review")}</th>
+            <SortableTableHead label={tx(locale, "题目", "Question")} direction={questionSortDirection(sort, "question")} onSort={() => onSort("question")} ariaLabel={questionSortAriaLabel(locale, tx(locale, "题目", "Question"), questionSortDirection(sort, "question"))} className="w-[31%] px-4 py-3 font-medium" />
+            <SortableTableHead label={tx(locale, "作答", "Responses")} direction={questionSortDirection(sort, "coverage")} onSort={() => onSort("coverage")} ariaLabel={questionSortAriaLabel(locale, tx(locale, "作答", "Responses"), questionSortDirection(sort, "coverage"))} className="w-[9%] px-3 py-3 font-medium" />
+            <SortableTableHead label={tx(locale, "平均分", "Mean score")} direction={questionSortDirection(sort, "score")} onSort={() => onSort("score")} ariaLabel={questionSortAriaLabel(locale, tx(locale, "平均分", "Mean score"), questionSortDirection(sort, "score"))} className="w-[14%] px-3 py-3 font-medium" />
+            <SortableTableHead label={tx(locale, "置信度", "Confidence")} direction={questionSortDirection(sort, "confidence")} onSort={() => onSort("confidence")} ariaLabel={questionSortAriaLabel(locale, tx(locale, "置信度", "Confidence"), questionSortDirection(sort, "confidence"))} className="w-[13%] px-3 py-3 font-medium" />
+            <SortableTableHead label={tx(locale, "复核", "Review")} direction={questionSortDirection(sort, "review")} onSort={() => onSort("review")} ariaLabel={questionSortAriaLabel(locale, tx(locale, "复核", "Review"), questionSortDirection(sort, "review"))} className="w-[13%] px-3 py-3 font-medium" />
             <th className="w-[14%] px-3 py-3 font-medium">{tx(locale, "易错 / 风险摘要", "Error / risk summary")}</th>
             <th className="w-[6%] px-3 py-3 text-right font-medium">{tx(locale, "操作", "Action")}</th>
           </tr>
@@ -441,7 +526,7 @@ function getKnowledgePoints(problem?: ProblemInfo): string[] {
   return Array.from(new Set(values.map((value) => String(value).trim()).filter(Boolean))).slice(0, 6);
 }
 
-function parseSemanticQuestionQuery(rawQuery: string, locale: Locale): SemanticQuestionPlan {
+export function parseSemanticQuestionQuery(rawQuery: string, locale: Locale): SemanticQuestionPlan {
   const query = rawQuery.trim();
   const plan: SemanticQuestionPlan = {
     qTokens: [],
@@ -452,6 +537,7 @@ function parseSemanticQuestionQuery(rawQuery: string, locale: Locale): SemanticQ
     avgConfidenceBelow: null,
     reviewState: null,
     missingKnowledge: false,
+    sort: null,
     terms: [],
     conditions: [],
   };
@@ -464,7 +550,7 @@ function parseSemanticQuestionQuery(rawQuery: string, locale: Locale): SemanticQ
     plan.conditions.push({ id: `${plan.conditions.length}-${source}`, label, source });
   };
 
-  for (const match of query.matchAll(/\bq\s*([a-z0-9._-]+)/gi)) {
+  for (const match of query.matchAll(/\bq\s*(\d+(?:[._-]\d+)*)(?![a-z0-9._-])/gi)) {
     plan.qTokens.push(match[1]);
     addCondition(tx(locale, `题号：Q${match[1]}`, `Question: Q${match[1]}`), match[0]);
   }
@@ -529,6 +615,27 @@ function parseSemanticQuestionQuery(rawQuery: string, locale: Locale): SemanticQ
     addCondition(tx(locale, "知识点：未标注", "Knowledge point: unlabeled"), missingKnowledge[0]);
   }
 
+  const sortPatterns: Array<[RegExp, SortMode, string]> = [
+    [/(?:按)?题号\s*(?:从高到低|降序)|question\s*(?:desc|z[\s-]*a)/i, "question_desc", tx(locale, "题号从高到低", "Question order descending")],
+    [/(?:按)?题号(?:排序|排列)?|question\s*(?:asc|a[\s-]*z)/i, "question", tx(locale, "按题号", "Question order")],
+    [/(?:作答|responses?)(?:数|数量)?\s*(?:从低到高|升序)|(?:responses?\s*(?:asc|low))/i, "coverage_asc", tx(locale, "作答数从少到多", "Responses low to high")],
+    [/(?:作答|responses?)(?:数|数量)?\s*(?:从高到低|降序)|(?:responses?\s*(?:desc|high))/i, "coverage_desc", tx(locale, "作答数从多到少", "Responses high to low")],
+    [/(?:平均)?(?:得分率|分数)\s*(?:从低到高|升序)|低分优先|score\s*(?:asc|low)/i, "score_asc", tx(locale, "得分率从低到高", "Score low to high")],
+    [/(?:平均)?(?:得分率|分数)\s*(?:从高到低|降序)|高分优先|score\s*(?:desc|high)/i, "score_desc", tx(locale, "得分率从高到低", "Score high to low")],
+    [/置信度\s*(?:从低到高|升序)|confidence\s*(?:asc|low)/i, "confidence_asc", tx(locale, "置信度从低到高", "Confidence low to high")],
+    [/置信度\s*(?:从高到低|降序)|confidence\s*(?:desc|high)/i, "confidence_desc", tx(locale, "置信度从高到低", "Confidence high to low")],
+    [/复核(?:信号|项)?\s*(?:从少到多|升序)|review\s*(?:asc|few)/i, "review_asc", tx(locale, "复核信号从少到多", "Fewest review signals first")],
+    [/复核(?:信号|项)?\s*(?:最多|优先|从多到少|降序)|review\s*(?:desc|most)/i, "review_desc", tx(locale, "复核信号最多优先", "Most review signals first")],
+    [/(?:按)?满分\s*(?:从低到高|升序)|max(?:imum)?\s*score\s*(?:asc|low)/i, "max_score_asc", tx(locale, "满分从低到高", "Full marks low to high")],
+    [/(?:按)?满分\s*(?:从高到低|降序)|max(?:imum)?\s*score\s*(?:desc|high)/i, "max_score_desc", tx(locale, "满分从高到低", "Full marks high to low")],
+    [/(?:按)?题型\s*(?:从低到高|升序)|type\s*(?:asc|a[\s-]*z)/i, "type_asc", tx(locale, "题型升序", "Question type ascending")],
+    [/(?:按)?题型\s*(?:从高到低|降序)|type\s*(?:desc|z[\s-]*a)/i, "type_desc", tx(locale, "题型降序", "Question type descending")],
+  ];
+  for (const [pattern, sort, label] of sortPatterns) {
+    const match = query.match(pattern);
+    if (match) { plan.sort = sort; addCondition(label, match[0]); break; }
+  }
+
   let remaining = query;
   for (const source of consumed) remaining = remaining.replace(source, " ");
   remaining = remaining
@@ -545,7 +652,7 @@ function parseSemanticQuestionQuery(rawQuery: string, locale: Locale): SemanticQ
 
 function matchesSemanticPlan(row: QuestionAnalysisRow, plan: SemanticQuestionPlan): boolean {
   if (plan.qTokens.length && !plan.qTokens.some((token) => questionTokenMatches(row, token))) return false;
-  if (plan.types.length && !plan.types.some((type) => normalizeText(row.type).includes(normalizeText(type)))) return false;
+  if (plan.types.length && !plan.types.some((type) => normalizeQuestionType(row.type) === normalizeQuestionType(type))) return false;
   if (plan.maxPercent !== null && (row.question.avgPercent === null || row.question.avgPercent >= plan.maxPercent)) return false;
   if (plan.minPercent !== null && (row.question.avgPercent === null || row.question.avgPercent < plan.minPercent)) return false;
   if (plan.lowConfidence && row.lowConfidenceCount === 0) return false;
@@ -555,11 +662,82 @@ function matchesSemanticPlan(row: QuestionAnalysisRow, plan: SemanticQuestionPla
   return plan.terms.every((term) => termMatchesRow(term, row));
 }
 
+function normalizeQuestionType(value: string): string {
+  const normalized = normalizeText(value);
+  const aliases: Record<string, string> = {
+    "计算题": "calculation", "编程题": "programming", "证明题": "proof", "概念题": "concept",
+    "选择题": "choice", "填空题": "fill_blank", "问答题": "short_answer",
+  };
+  return aliases[normalized] ?? normalized;
+}
+
+function intentToQuestionPlan(intent: FilterIntentResult, locale: Locale): SemanticQuestionPlan {
+  const plan = parseSemanticQuestionQuery("", locale);
+  plan.qTokens = intent.question_tokens;
+  plan.types = intent.question_types ?? [];
+  plan.minPercent = intent.min_score_percent;
+  plan.maxPercent = intent.max_score_percent;
+  plan.lowConfidence = intent.low_confidence;
+  plan.avgConfidenceBelow = intent.max_average_confidence ?? null;
+  plan.reviewState = intent.review_status;
+  plan.missingKnowledge = intent.missing_knowledge ?? false;
+  plan.sort = questionSortFromIntent(intent);
+  plan.terms = intent.text_terms;
+  const add = (label: string) => plan.conditions.push({ id: `intent-${plan.conditions.length}`, label, source: "" });
+  plan.qTokens.forEach((token) => add(tx(locale, `题号：${token}`, `Question: ${token}`)));
+  plan.types.forEach((type) => add(tx(locale, `题型：${type}`, `Type: ${type}`)));
+  if (plan.minPercent !== null) add(tx(locale, `平均得分率 ≥ ${plan.minPercent}%`, `Mean score ≥ ${plan.minPercent}%`));
+  if (plan.maxPercent !== null) add(tx(locale, `平均得分率 < ${plan.maxPercent}%`, `Mean score < ${plan.maxPercent}%`));
+  if (plan.lowConfidence) add(tx(locale, "含低置信题次", "Has low-confidence items"));
+  if (plan.avgConfidenceBelow !== null) add(tx(locale, `平均置信度 < ${plan.avgConfidenceBelow * 100}%`, `Mean confidence < ${plan.avgConfidenceBelow * 100}%`));
+  if (plan.reviewState) add(plan.reviewState === "pending" ? tx(locale, "有未人工处理信号", "Has unreviewed signals") : plan.reviewState === "confirmed" ? tx(locale, "信号已由教师处理", "Signals handled by teacher") : tx(locale, "无复核信号", "No review signals"));
+  if (plan.missingKnowledge) add(tx(locale, "知识点未标注", "Unlabeled knowledge points"));
+  const sortLabels: Record<SortMode, string> = {
+    question: tx(locale, "按题号", "Question order"),
+    question_desc: tx(locale, "题号从高到低", "Question order descending"),
+    coverage_asc: tx(locale, "作答数从少到多", "Responses low to high"),
+    coverage_desc: tx(locale, "作答数从多到少", "Responses high to low"),
+    score_asc: tx(locale, "得分率从低到高", "Score low to high"),
+    score_desc: tx(locale, "得分率从高到低", "Score high to low"),
+    confidence_asc: tx(locale, "置信度从低到高", "Confidence low to high"),
+    confidence_desc: tx(locale, "置信度从高到低", "Confidence high to low"),
+    review_asc: tx(locale, "复核信号从少到多", "Fewest review signals first"),
+    review_desc: tx(locale, "复核信号最多优先", "Most review signals first"),
+    max_score_asc: tx(locale, "满分从低到高", "Full marks low to high"),
+    max_score_desc: tx(locale, "满分从高到低", "Full marks high to low"),
+    type_asc: tx(locale, "题型升序", "Question type ascending"),
+    type_desc: tx(locale, "题型降序", "Question type descending"),
+  };
+  if (plan.sort) add(sortLabels[plan.sort]);
+  plan.terms.forEach((term) => add(tx(locale, `关键词：${term}`, `Keyword: ${term}`)));
+  return plan;
+}
+
+function questionSortFromIntent(intent: FilterIntentResult): SortMode | null {
+  switch (intent.sort) {
+    case "question": return "question";
+    case "question_desc": return "question_desc";
+    case "coverage_asc": return "coverage_asc";
+    case "coverage_desc": return "coverage_desc";
+    case "score_asc": return "score_asc";
+    case "score_desc": return "score_desc";
+    case "confidence_asc": return "confidence_asc";
+    case "confidence_desc": return "confidence_desc";
+    case "review_asc": return "review_asc";
+    case "review_desc": return "review_desc";
+    case "max_score_asc": return "max_score_asc";
+    case "max_score_desc": return "max_score_desc";
+    case "type_asc": return "type_asc";
+    case "type_desc": return "type_desc";
+    default: return null;
+  }
+}
+
 function questionTokenMatches(row: QuestionAnalysisRow, token: string): boolean {
   const normalized = normalizeText(token).replace(/^q/, "");
   const candidates = [row.question.id, row.label, row.question.problem?.number ?? ""]
     .map((value) => normalizeText(String(value)).replace(/^q/, ""));
-  return candidates.some((candidate) => candidate === normalized || candidate.includes(normalized));
+  return candidates.some((candidate) => candidate === normalized);
 }
 
 function termMatchesRow(term: string, row: QuestionAnalysisRow): boolean {
@@ -589,10 +767,19 @@ function matchesConfidenceFilter(row: QuestionAnalysisRow, filter: ConfidenceFil
 }
 
 function compareRows(left: QuestionAnalysisRow, right: QuestionAnalysisRow, sort: SortMode): number {
+  if (sort === "question_desc") return compareQuestionLabels(right.label, left.label);
+  if (sort === "coverage_asc") return left.question.count - right.question.count || compareQuestionLabels(left.label, right.label);
+  if (sort === "coverage_desc") return right.question.count - left.question.count || compareQuestionLabels(left.label, right.label);
   if (sort === "score_asc") return nullableNumber(left.question.avgPercent, Number.POSITIVE_INFINITY) - nullableNumber(right.question.avgPercent, Number.POSITIVE_INFINITY) || compareQuestionLabels(left.label, right.label);
   if (sort === "score_desc") return nullableNumber(right.question.avgPercent, Number.NEGATIVE_INFINITY) - nullableNumber(left.question.avgPercent, Number.NEGATIVE_INFINITY) || compareQuestionLabels(left.label, right.label);
   if (sort === "confidence_asc") return nullableNumber(left.avgConfidence, Number.POSITIVE_INFINITY) - nullableNumber(right.avgConfidence, Number.POSITIVE_INFINITY) || compareQuestionLabels(left.label, right.label);
+  if (sort === "confidence_desc") return nullableNumber(right.avgConfidence, Number.NEGATIVE_INFINITY) - nullableNumber(left.avgConfidence, Number.NEGATIVE_INFINITY) || compareQuestionLabels(left.label, right.label);
+  if (sort === "review_asc") return left.requiredReviewCount - right.requiredReviewCount || compareQuestionLabels(left.label, right.label);
   if (sort === "review_desc") return right.requiredReviewCount - left.requiredReviewCount || compareQuestionLabels(left.label, right.label);
+  if (sort === "max_score_asc") return left.question.maxScore - right.question.maxScore || compareQuestionLabels(left.label, right.label);
+  if (sort === "max_score_desc") return right.question.maxScore - left.question.maxScore || compareQuestionLabels(left.label, right.label);
+  if (sort === "type_asc") return left.type.localeCompare(right.type, undefined, { numeric: true, sensitivity: "base" }) || compareQuestionLabels(left.label, right.label);
+  if (sort === "type_desc") return right.type.localeCompare(left.type, undefined, { numeric: true, sensitivity: "base" }) || compareQuestionLabels(left.label, right.label);
   return compareQuestionLabels(left.label, right.label);
 }
 
@@ -614,7 +801,55 @@ function normalizeReviewFilter(value: string | null): ReviewFilter {
 }
 
 function normalizeSortMode(value: string | null): SortMode {
-  return value === "score_asc" || value === "score_desc" || value === "confidence_asc" || value === "review_desc" ? value : "question";
+  switch (value) {
+    case "question":
+    case "question_desc":
+    case "coverage_asc":
+    case "coverage_desc":
+    case "score_asc":
+    case "score_desc":
+    case "confidence_asc":
+    case "confidence_desc":
+    case "review_asc":
+    case "review_desc":
+    case "max_score_asc":
+    case "max_score_desc":
+    case "type_asc":
+    case "type_desc":
+      return value;
+    default:
+      return "question";
+  }
+}
+
+function questionSortPair(column: QuestionSortColumn): [SortMode, SortMode] {
+  switch (column) {
+    case "question": return ["question", "question_desc"];
+    case "coverage": return ["coverage_asc", "coverage_desc"];
+    case "score": return ["score_asc", "score_desc"];
+    case "confidence": return ["confidence_asc", "confidence_desc"];
+    case "review": return ["review_asc", "review_desc"];
+  }
+}
+
+function questionSortDirection(sort: SortMode, column: QuestionSortColumn): TableSortDirection {
+  const [ascending, descending] = questionSortPair(column);
+  return sort === ascending ? "asc" : sort === descending ? "desc" : null;
+}
+
+function questionSortAriaLabel(locale: Locale, label: string, direction: TableSortDirection): string {
+  if (locale === "en-US") {
+    return direction === "asc"
+      ? `${label}, ascending. Activate to sort descending.`
+      : direction === "desc"
+        ? `${label}, descending. Activate to sort ascending.`
+        : `${label}. Activate to sort ascending.`;
+  }
+  return direction === "asc"
+    ? `${label}，当前升序。点击改为降序。`
+    : direction === "desc"
+      ? `${label}，当前降序。点击改为升序。`
+      : `${label}。点击按升序排序。`;
 }
 
 function normalizeConfidence(value: number | null | undefined): number | null {

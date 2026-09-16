@@ -29,6 +29,7 @@ from fastapi import (
 )
 from pydantic import BaseModel, Field, ValidationError as PydanticValidationError
 
+from backend.agents.history_query_agent import interpret_history_query
 from backend.api.errors import domain_error_response
 from backend.auth import require_teacher
 from backend.db import assignment_repository, grading_repository, workflow_repository
@@ -37,9 +38,11 @@ from backend.knowledge.service import ingest_document
 from backend.llm.registry import (
     ExpertRegistry,
     get_scoped_expert_registry,
+    resolve_owner_default_provider,
     resolve_owner_default_provider_id,
 )
 from backend.models import TaskGradingSetup, User
+from backend.progress.tracker import ProgressReporter
 from backend.services import source_files as source_file_service
 from backend.services import task_facade
 from backend.services.stage_provider_routing import (
@@ -251,42 +254,30 @@ def _history_facets(items: list[dict], owner_id: str) -> dict:
 
 
 @router.post("/query/interpret")
-def interpret_task_query(
+async def interpret_task_query(
     request: InterpretTaskQueryRequest,
     current: User = Depends(require_teacher),
+    registry: ExpertRegistry = Depends(get_scoped_expert_registry),
 ):
-    """Safe deterministic fallback for the history natural-language box.
-
-    It recognizes stable status/attention words and leaves the remaining text
-    as a keyword. This avoids an LLM call (and BYOK use) for a filter action.
-    """
-    text = request.query.strip()
-    folded = text.casefold()
-    filters: dict[str, Any] = {}
-    conditions = []
-    status_words = {
-        "draft": ("draft", "草稿"), "grading": ("grading", "批改中"),
-        "graded": ("graded", "已批改"), "finalized": ("finalized", "已完成"),
-        "error": ("error", "失败", "错误"),
-    }
-    matched = []
-    for status_name, words in status_words.items():
-        if any(word in folded for word in words):
-            matched.append(status_name)
-    if matched:
-        filters["statuses"] = matched
-        conditions.append({"field": "statuses", "label": "Status", "value": matched})
-    if any(word in folded for word in ("attention", "待处理", "需关注")):
-        filters["needs_attention"] = True
-        conditions.append({"field": "needs_attention", "label": "Needs attention", "value": True})
-    if not filters:
-        filters["q"] = text
-        conditions.append({"field": "q", "label": "Keyword", "value": text})
+    """Use bounded semantic routing after owner-scoped deterministic filters."""
+    try:
+        task_map = task_facade.list_tasks(owner_id=current.id)
+        facets = _history_facets(list(task_map.values()), current.id)
+    except DomainError as exc:
+        return domain_error_response(exc)
+    query_id = f"query_{hashlib.sha256(request.query.encode()).hexdigest()[:12]}"
+    result = await interpret_history_query(
+        request.query,
+        semesters=facets["semesters"],
+        courses=facets["courses"],
+        tags=[{"id": tag["id"], "name": tag["name"]} for tag in facets["tags"]],
+        provider=resolve_owner_default_provider(current.id, registry),
+        reporter=ProgressReporter(query_id),
+        owner_id=current.id,
+    )
     return {
-        "filters": filters, "sort": "updated_desc",
-        "explanation": "Applied deterministic history filters.",
-        "conditions": conditions, "ambiguities": [], "source": "deterministic",
-        "query_id": f"query_{hashlib.sha256(text.encode()).hexdigest()[:12]}",
+        **result,
+        "query_id": query_id,
     }
 
 

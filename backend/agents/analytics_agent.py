@@ -23,7 +23,7 @@ import logging
 from typing import Any, Dict, List, Literal, Optional
 
 from langchain_core.messages import SystemMessage, HumanMessage
-from pydantic import BaseModel, Field, ValidationError, model_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
 from backend.llm.providers import BaseProvider
 from backend.tools.structured_llm import extract_and_parse_json
@@ -38,8 +38,16 @@ class FilterOutput(BaseModel):
     explanation: str = Field("", description="One-sentence rationale for the filter")
 
 
+FilterIntentSurface = Literal[
+    "student_analysis", "review_overview", "question_analysis",
+    "question_preparation", "submission_review", "student_answer_review",
+]
+
+
 class FilterIntentOutput(BaseModel):
     """A data-free translation from natural language to local filter controls."""
+
+    model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
 
     recognized: bool = True
     min_score_percent: Optional[float] = Field(None, ge=0, le=100)
@@ -49,41 +57,90 @@ class FilterIntentOutput(BaseModel):
     review_status: Optional[Literal["pending", "confirmed", "none"]] = None
     disagreement: bool = False
     annotated: bool = False
-    sort: Optional[Literal["score_asc", "score_desc", "confidence_asc", "review_desc"]] = None
+    sort: Optional[Literal[
+        "score_asc", "score_desc", "confidence_asc", "review_desc",
+        "name_asc", "name_desc", "question", "confidence_desc", "review_asc",
+        "id_asc", "id_desc", "question_desc", "max_score_asc", "max_score_desc",
+        "type_asc", "type_desc", "coverage_asc", "coverage_desc",
+    ]] = None
     question_tokens: List[str] = Field(default_factory=list, max_length=4)
+    question_types: List[Literal[
+        "calculation", "programming", "proof", "concept", "choice", "fill_blank", "short_answer",
+    ]] = Field(default_factory=list, max_length=4)
+    max_average_confidence: Optional[float] = Field(None, ge=0, le=1)
+    missing_knowledge: bool = False
+    min_max_score: Optional[float] = Field(None, ge=0)
+    max_max_score: Optional[float] = Field(None, ge=0)
+    preparation_status: Optional[Literal[
+        "attention", "low_confidence", "source_conflict", "parse_anomaly", "ready",
+    ]] = None
+    material_field: Optional[Literal["stem", "answer", "rubric", "tests"]] = None
+    material_status: Optional[Literal["missing", "ready", "generated", "recognized"]] = None
+    submission_status: Optional[Literal[
+        "review", "missing", "identity", "recognized", "reviewed",
+    ]] = None
     text_terms: List[str] = Field(default_factory=list, max_length=4)
     explanation: str = Field("", max_length=500)
 
     @model_validator(mode="after")
     def fail_closed_when_unrecognized_or_empty(self) -> "FilterIntentOutput":
-        """Never let an unknown request smuggle in controls or match everything."""
-        actionable = any((
-            self.min_score_percent is not None,
-            self.max_score_percent is not None,
-            self.pass_status is not None,
-            self.low_confidence,
-            self.review_status is not None,
-            self.disagreement,
-            self.annotated,
-            self.sort is not None,
-            bool(self.question_tokens),
-            bool(self.text_terms),
-        ))
+        """An unsupported compound request must not execute a supported subset."""
+        controls = self.model_dump(exclude={"recognized", "explanation"})
+        actionable = any(
+            value is not None and value is not False and value != []
+            for value in controls.values()
+        )
         if self.recognized and actionable:
             return self
-
         self.recognized = False
-        self.min_score_percent = None
-        self.max_score_percent = None
-        self.pass_status = None
-        self.low_confidence = False
-        self.review_status = None
-        self.disagreement = False
-        self.annotated = False
-        self.sort = None
-        self.question_tokens = []
-        self.text_terms = []
+        for name in controls:
+            setattr(self, name, type(self).model_fields[name].get_default(call_default_factory=True))
         return self
+
+
+_STUDENT_FILTER_FIELDS = {
+    "min_score_percent", "max_score_percent", "pass_status", "low_confidence",
+    "review_status", "disagreement", "text_terms",
+}
+_STUDENT_SORTS = {
+    "score_asc", "score_desc", "confidence_asc", "confidence_desc",
+    "review_asc", "review_desc", "name_asc", "name_desc", "id_asc", "id_desc",
+}
+_QUESTION_SORTS = {
+    "question", "question_desc", "max_score_asc", "max_score_desc",
+    "type_asc", "type_desc", "review_asc", "review_desc",
+}
+_QUESTION_ANALYSIS_SORTS = _QUESTION_SORTS | {
+    "coverage_asc", "coverage_desc", "score_asc", "score_desc",
+    "confidence_asc", "confidence_desc",
+}
+_FILTER_CAPABILITIES = {
+    "student_analysis": (_STUDENT_FILTER_FIELDS, _STUDENT_SORTS),
+    "review_overview": (
+        _STUDENT_FILTER_FIELDS | {"question_tokens", "annotated"}, _STUDENT_SORTS,
+    ),
+    "question_analysis": (
+        {"min_score_percent", "max_score_percent", "low_confidence", "review_status",
+         "question_tokens", "question_types", "max_average_confidence",
+         "missing_knowledge", "text_terms"},
+        _QUESTION_ANALYSIS_SORTS,
+    ),
+    "question_preparation": (
+        {"question_tokens", "question_types", "text_terms", "min_max_score",
+         "max_max_score", "preparation_status", "material_field", "material_status",
+         "low_confidence"},
+        _QUESTION_SORTS,
+    ),
+    "submission_review": (
+        {"question_tokens", "text_terms", "submission_status"},
+        {"name_asc", "name_desc", "id_asc", "id_desc", "coverage_asc",
+         "coverage_desc", "review_asc", "review_desc"},
+    ),
+    "student_answer_review": (
+        {"question_tokens", "text_terms", "submission_status"},
+        {"question", "question_desc"},
+    ),
+}
 
 
 class SummaryOutput(BaseModel):
@@ -160,6 +217,15 @@ Return JSON with exactly these fields:
   "annotated": false,
   "sort": null,
   "question_tokens": [],
+  "question_types": [],
+  "max_average_confidence": null,
+  "missing_knowledge": false,
+  "min_max_score": null,
+  "max_max_score": null,
+  "preparation_status": null,
+  "material_field": null,
+  "material_status": null,
+  "submission_status": null,
   "text_terms": [],
   "explanation": "short explanation in the query language"
 }
@@ -167,13 +233,51 @@ Return JSON with exactly these fields:
 Allowed values:
 - pass_status: "pass", "fail", "unscored", or null.
 - review_status: "pending", "confirmed", "none", or null.
-- sort: "score_asc", "score_desc", "confidence_asc", "review_desc", or null.
-- Score limits are percentages from 0 to 100. Phrases such as "90分以下" mean
-  max_score_percent=90. Bare "从高到低" means sort="score_desc".
+- sort: "score_asc", "score_desc", "confidence_asc", "confidence_desc",
+  "review_asc", "review_desc", "name_asc", "name_desc", "id_asc", "id_desc",
+  "question", "question_desc", "max_score_asc", "max_score_desc",
+  "type_asc", "type_desc", "coverage_asc", "coverage_desc", or null.
+  Name and ID order are distinct. question is ascending question-number order.
+  review sorts count items needing attention; coverage sorts recognized answer count.
+- On graded surfaces, score limits are percentages from 0 to 100. Phrases such
+  as "90分以下" mean max_score_percent=90. Bare "从高到低" means sort="score_desc".
 - Use question_tokens only for explicit question references such as Q2 or 第3题.
+- On question_analysis, question_types can contain calculation, programming,
+  proof, concept, choice, fill_blank, or short_answer. Use max_average_confidence
+  for an explicit mean-confidence limit (e.g. below 80% -> 0.8), and
+  missing_knowledge for questions without a knowledge-point label.
+- On student_analysis, only score limits, pass_status, low_confidence,
+  review_status, disagreement, student sort, and text_terms are supported.
+- On review_overview, the same controls plus question_tokens and annotated
+  are supported.
+- On question_analysis, only score limits, low_confidence, review_status,
+  question_tokens, question_types, max_average_confidence, missing_knowledge,
+  text_terms, and score/confidence/review/question/max_score/type sort are supported.
+- On question_preparation, grading has not happened. Only question_tokens,
+  question_types, text_terms, low_confidence, min_max_score/max_max_score,
+  preparation_status, material_field/material_status, and question/max_score/type/
+  review sort are supported. Full marks are absolute points (e.g. 满分至少10分 ->
+  min_max_score=10); 按满分升序 -> sort="max_score_asc", not a text search.
+  preparation_status is attention, low_confidence, source_conflict, parse_anomaly,
+  or ready. material_field is stem, answer, rubric, or tests; material_status is
+  missing, ready, generated, or recognized. Supply both material fields together
+  (e.g. 缺少标答 -> material_field="answer", material_status="missing").
+- On submission_review, grading has not happened. Only question_tokens, text_terms,
+  submission_status, and name/id/coverage/review sort are supported.
+  submission_status is review (answers needing attention), missing (missing answers),
+  identity (identity needs checking), recognized, or reviewed (all answers reviewed).
+- On student_answer_review, there is already one selected student. Only
+  question_tokens, literal text_terms for that student, submission_status, and
+  question/question_desc sort are supported. Do not return student-list sorts.
+- The exact field and sort allowlists for this surface are appended below.
+- If ANY requested condition is unsupported on the surface, return
+  recognized=false. Do not silently apply only part of the request.
 - Use text_terms only for literal words that should still be matched locally.
-- On student_analysis, annotated must be false and question_tokens must be empty;
-  those controls exist only on review_overview.
+- Numbered <student_1> placeholders are private student identities. When filtering
+  that student on student_analysis/review_overview/submission_review/student_answer_review, return the EXACT placeholder
+  as a separate text_terms item; never replace it with a guessed name. Each term
+  is an AND condition. Excluding identities or an OR between identities is not
+  supported; return recognized=false for those instructions.
 - If the request cannot map to these controls, set recognized=false and explain why.
 - Do not invent names, IDs, score thresholds, or question numbers.
 - Output must start with { and end with }.
@@ -208,6 +312,12 @@ Hard rules:
 - Only the trace types above. No 3D, no maps, no scattergeo, etc.
 - Maximum 4 traces. Maximum 50 data points per trace.
 - All values must be valid JSON. No JS function bodies.
+- Use only the supplied facts. pct is a score percentage (0-100);
+  avg_confidence and per_q.confidence are normalized (0-1). Null means unknown,
+  never zero. low_confidence_count counts confidence below 0.65.
+- review_signal_count counts items with a review signal; pending_review_count
+  counts those without a teacher review. Group these facts when asked to compare
+  questions or reviewed/unreviewed students. Never invent a missing metric.
 - Output must start with { and end with }.
 """
 
@@ -296,7 +406,7 @@ async def filter_students(
 async def interpret_filter_intent(
     *,
     question: str,
-    surface: Literal["student_analysis", "review_overview"],
+    surface: FilterIntentSurface,
     provider: BaseProvider,
 ) -> FilterIntentOutput:
     """Interpret only the query text; no grading or student payload is accepted."""
@@ -304,21 +414,37 @@ async def interpret_filter_intent(
         {"surface": surface, "teacher_query": question},
         ensure_ascii=False,
     )
+    allowed_fields, allowed_sorts = _FILTER_CAPABILITIES[surface]
+    controls = json.dumps({
+        "allowed_filter_fields": sorted(allowed_fields),
+        "allowed_sorts": sorted(allowed_sorts),
+    })
     response = await provider.ainvoke([
-        SystemMessage(content=FILTER_INTENT_SYS),
+        SystemMessage(content=f"{FILTER_INTENT_SYS}\nSurface capabilities: {controls}"),
         HumanMessage(content=user_msg),
     ])
-    output = extract_and_parse_json(response.content, FilterIntentOutput)
-    if surface == "student_analysis":
-        # These controls are implemented only by the review matrix. Revalidate
-        # after removing them so a response containing only unsupported fields
-        # becomes recognized=false instead of silently matching every student.
-        output = FilterIntentOutput.model_validate({
-            **output.model_dump(),
-            "annotated": False,
-            "question_tokens": [],
-        })
-    return output
+    try:
+        output = extract_and_parse_json(response.content, FilterIntentOutput)
+    except ValueError:
+        # Unknown fields/enums must not be dropped while executing the remainder.
+        return FilterIntentOutput(recognized=False)
+    unsupported = set(FilterIntentOutput.model_fields) - allowed_fields - {
+        "recognized", "sort", "explanation",
+    }
+    if (output.sort is not None and output.sort not in allowed_sorts) or any(
+        getattr(output, field) is not None
+        and getattr(output, field) is not False
+        and getattr(output, field) != []
+        for field in unsupported
+    ) or bool(output.material_field) != bool(output.material_status):
+        output.recognized = False
+    for lower, upper in (
+        (output.min_score_percent, output.max_score_percent),
+        (output.min_max_score, output.max_max_score),
+    ):
+        if lower is not None and upper is not None and lower > upper:
+            output.recognized = False
+    return FilterIntentOutput.model_validate(output.model_dump())
 
 
 async def summarize(

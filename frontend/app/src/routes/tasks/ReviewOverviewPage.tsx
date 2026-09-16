@@ -7,6 +7,7 @@ import { useConfirmTaskFinalization, useTask, useTaskFinalization, useTaskResult
 import { SmarTAIMascot } from "@/components/brand/SmarTAIMascot";
 import { NewTaskStepper } from "@/components/new-task/NewTaskStepper";
 import { RecoverableActionState } from "@/components/ui/RecoverableActionState";
+import { SortableTableHead, type TableSortDirection } from "@/components/ui/SortableTableHead";
 import { MatrixQueueWorkspace } from "@/components/tasks/MatrixQueueWorkspace";
 import { MatrixStatusCell, type MatrixStatusTone } from "@/components/tasks/MatrixStatusCell";
 import { getMatrixIdentityLayout, MATRIX_ACTION_COLUMN_WIDTH, MATRIX_QUESTION_COLUMN_WIDTH } from "@/components/tasks/matrixLayout";
@@ -16,7 +17,7 @@ import { useI18n } from "@/i18n/I18nProvider";
 import type { Locale } from "@/i18n/messages";
 import { useImeSafeQuery } from "@/hooks/useImeSafeQuery";
 import { cn } from "@/lib/cn";
-import { isExpertDisagreement, reviewCellKey, reviewQueryNeedsIntentFallback, selectReviewOverview, selectReviewOverviewFromIntent } from "@/lib/reviewOverview";
+import { isExpertDisagreement, reviewCellKey, reviewQueryNeedsIntentFallback, selectReviewOverview, selectReviewOverviewFromIntent, sortReviewOverviewSelection, type ReviewOverviewHeaderSort } from "@/lib/reviewOverview";
 import { reviewOverviewText as copy } from "@/lib/reviewOverviewCopy";
 import { classifyRecoverableError } from "@/lib/taskActionGuards";
 import { getTaskDestination, hasTaskReachedStep } from "@/lib/taskFlow";
@@ -35,10 +36,14 @@ export function ReviewOverviewPage() {
   const confirmFinalization = useConfirmTaskFinalization();
   const urlQuery = searchParams.get("q") ?? "";
   const query = urlQuery.trim();
+  const headerSort = normalizeReviewHeaderSort(searchParams.get("sort"));
   const searchParamsRef = useRef(searchParams);
   const smartSearch = useImeSafeQuery({ value: urlQuery, onCommit: commitFilter });
   const intentQuery = useAnalyticsFilterIntent();
-  const [intentState, setIntentState] = useState<{ question: string; result: FilterIntentResult } | null>(null);
+  const [intentState, setIntentState] = useState<{ taskId: string; question: string; result: FilterIntentResult } | null>(null);
+  const intentVersionRef = useRef(0);
+  const contextRef = useRef({ taskId, query });
+  contextRef.current = { taskId, query };
   const [resolution, setResolution] = useState<"idle" | "local" | "llm">("idle");
   const task = taskQuery.data;
   const model = useMemo(() => buildResultsModel(task, resultQuery.data), [resultQuery.data, task]);
@@ -61,12 +66,18 @@ export function ReviewOverviewPage() {
     () => selectReviewOverview(model, reviewItems, annotatedKeys, query),
     [annotatedKeys, model, query, reviewItems],
   );
-  const activeIntent = intentState?.question === query && intentState.result.recognized ? intentState.result : null;
-  const selection = useMemo(
+  const currentIntent = intentState?.taskId === taskId && intentState?.question === query ? intentState : null;
+  const activeIntent = currentIntent?.result.recognized ? currentIntent.result : null;
+  const unsupportedIntent = currentIntent && !currentIntent.result.recognized;
+  const baseSelection = useMemo(
     () => activeIntent
       ? selectReviewOverviewFromIntent(model, reviewItems, annotatedKeys, activeIntent)
-      : localSelection,
-    [activeIntent, annotatedKeys, localSelection, model, reviewItems],
+      : unsupportedIntent ? selectReviewOverview(model, reviewItems, annotatedKeys, "") : localSelection,
+    [activeIntent, annotatedKeys, localSelection, model, reviewItems, unsupportedIntent],
+  );
+  const selection = useMemo(
+    () => sortReviewOverviewSelection(baseSelection, headerSort),
+    [baseSelection, headerSort],
   );
 
   useEffect(() => {
@@ -137,7 +148,9 @@ export function ReviewOverviewPage() {
   }
 
   function applySmartFilter(value: string) {
+    if (intentQuery.isPending) return;
     const normalized = value.trim();
+    const intentVersion = ++intentVersionRef.current;
     smartSearch.commitValue(normalized);
     setIntentState(null);
     intentQuery.reset();
@@ -153,13 +166,16 @@ export function ReviewOverviewPage() {
     if (!taskId) return;
     intentQuery.mutate({ taskId, question: normalized, surface: "review_overview" }, {
       onSuccess: (result) => {
-        setIntentState({ question: normalized, result });
+        if (intentVersionRef.current !== intentVersion) return;
+        if (contextRef.current.taskId !== taskId || contextRef.current.query !== normalized) return;
+        setIntentState({ taskId, question: normalized, result });
         setResolution("llm");
       },
     });
   }
 
   function clearSmartFilter() {
+    intentVersionRef.current += 1;
     setIntentState(null);
     setResolution("idle");
     intentQuery.reset();
@@ -171,6 +187,18 @@ export function ReviewOverviewPage() {
     const next = new URLSearchParams(searchParamsRef.current);
     if (normalized) next.set("q", normalized);
     else next.delete("q");
+    searchParamsRef.current = next;
+    setSearchParams(next, { replace: true });
+  }
+
+  function sortReviewHeader(column: "id" | "name") {
+    // A table-header sort is authoritative while a semantic request may still be in flight.
+    intentVersionRef.current += 1;
+    intentQuery.reset();
+    const ascending: ReviewOverviewHeaderSort = column === "id" ? "id_asc" : "name_asc";
+    const descending: ReviewOverviewHeaderSort = column === "id" ? "id_desc" : "name_desc";
+    const next = new URLSearchParams(searchParamsRef.current);
+    next.set("sort", headerSort === ascending ? descending : ascending);
     searchParamsRef.current = next;
     setSearchParams(next, { replace: true });
   }
@@ -224,7 +252,7 @@ export function ReviewOverviewPage() {
                   value={smartSearch.draftValue}
                   inputMode="search"
                   onBlur={smartSearch.handleBlur}
-                  onChange={(event) => { setIntentState(null); setResolution("idle"); intentQuery.reset(); smartSearch.handleChange(event); }}
+                  onChange={(event) => { intentVersionRef.current += 1; setIntentState(null); setResolution("idle"); intentQuery.reset(); smartSearch.handleChange(event); }}
                   onCompositionEnd={smartSearch.handleCompositionEnd}
                   onCompositionStart={smartSearch.handleCompositionStart}
                   disabled={intentQuery.isPending}
@@ -246,7 +274,7 @@ export function ReviewOverviewPage() {
             <div className="mt-2 flex min-h-6 flex-wrap items-center gap-2 text-[11px] text-muted-foreground">
               <span>{copy(locale, "filterPrivacyHint")}</span>
               {resolution === "local" ? <span className="rounded-full bg-slate-100 px-2.5 py-1 text-[10px] font-semibold text-slate-600">{copy(locale, "localRecognized")}</span> : null}
-              {resolution === "llm" && intentState ? <><span className="rounded-full bg-emerald-100 px-2.5 py-1 text-[10px] font-semibold text-emerald-700">{copy(locale, "modelInterpreted")}</span><span>{intentState.result.explanation}</span></> : null}
+              {resolution === "llm" && currentIntent ? <><span className="rounded-full bg-slate-100 px-2.5 py-1 text-[10px] font-semibold text-slate-700">{unsupportedIntent ? (locale === "en-US" ? "Could not interpret the full instruction; no partial filter applied" : "未能完整转换指令，未应用部分条件") : copy(locale, "modelInterpreted")}</span><span>{currentIntent.result.explanation}</span></> : null}
             </div>
             {recoveryInfo ? <RecoverableActionState info={recoveryInfo} locale={locale} compact className="mt-2" primaryAction={recoveryInfo.actionKind === "byok" ? undefined : { label: recoveryInfo.actionLabel, onClick: () => applySmartFilter(smartSearch.draftValue), busy: intentQuery.isPending }} secondaryAction={recoveryInfo.actionKind === "byok" ? { label: copy(locale, "dismiss"), onClick: () => intentQuery.reset() } : { label: copy(locale, "modelSettings"), href: `/settings/byok?returnTo=${encodeURIComponent(taskId ? `/tasks/${taskId}/review` : "/history")}` }} /> : null}
           </form>
@@ -276,6 +304,8 @@ export function ReviewOverviewPage() {
                 annotatedKeys={annotatedKeys}
                 confirmedKeys={confirmedKeys}
                 returnTo={overviewReturnTo}
+                sort={headerSort}
+                onSort={sortReviewHeader}
               />
             )}
             queue={(
@@ -369,6 +399,8 @@ function ReviewHeatmap({
   annotatedKeys,
   confirmedKeys,
   returnTo,
+  sort,
+  onSort,
 }: {
   locale: Locale;
   taskId: string;
@@ -380,6 +412,8 @@ function ReviewHeatmap({
   annotatedKeys: Set<string>;
   confirmedKeys: Set<string>;
   returnTo: string;
+  sort: ReviewOverviewHeaderSort | null;
+  onSort: (column: "id" | "name") => void;
 }) {
   const reviewByKey = new Map(reviewItems.map((item) => [reviewCellKey(item.student.id, item.question.id), item]));
   const questionById = new Map(model.questions.map((question) => [question.id, question]));
@@ -416,18 +450,22 @@ function ReviewHeatmap({
           >
             <thead className="sticky top-0 z-20 bg-slate-100/95 text-[12px] font-semibold text-muted-foreground backdrop-blur-sm dark:bg-slate-800/95">
               <tr className="h-[42px] border-b">
-                <th
+                <SortableTableHead
+                  label={studentIdLabel}
+                  direction={reviewHeaderSortDirection(sort, "id")}
+                  onSort={() => onSort("id")}
+                  ariaLabel={reviewHeaderSortAriaLabel(locale, studentIdLabel, reviewHeaderSortDirection(sort, "id"))}
                   className="sticky left-0 z-30 whitespace-nowrap bg-slate-100/95 px-3 dark:bg-slate-800/95"
                   style={{ width: identityLayout.studentIdWidth, minWidth: identityLayout.studentIdWidth, maxWidth: identityLayout.studentIdWidth }}
-                >
-                  {studentIdLabel}
-                </th>
-                <th
+                />
+                <SortableTableHead
+                  label={studentNameLabel}
+                  direction={reviewHeaderSortDirection(sort, "name")}
+                  onSort={() => onSort("name")}
+                  ariaLabel={reviewHeaderSortAriaLabel(locale, studentNameLabel, reviewHeaderSortDirection(sort, "name"))}
                   className="sticky z-30 whitespace-nowrap bg-slate-100/95 px-3 dark:bg-slate-800/95"
                   style={{ left: identityLayout.studentIdWidth, width: identityLayout.studentNameWidth, minWidth: identityLayout.studentNameWidth, maxWidth: identityLayout.studentNameWidth }}
-                >
-                  {studentNameLabel}
-                </th>
+                />
                 {questions.map((question) => (
                   <th key={question.id} className="w-[60px] min-w-[60px] max-w-[60px] px-1 text-center">
                     {question.label}
@@ -596,4 +634,30 @@ function reviewDetailHref(taskId: string, studentId: string, questionId: string,
 function formatMetricPercent(value: number | null): string {
   if (value == null || !Number.isFinite(value)) return "—";
   return `${value.toFixed(1)}%`;
+}
+
+function normalizeReviewHeaderSort(value: string | null): ReviewOverviewHeaderSort | null {
+  return value === "id_asc" || value === "id_desc" || value === "name_asc" || value === "name_desc"
+    ? value
+    : null;
+}
+
+function reviewHeaderSortDirection(sort: ReviewOverviewHeaderSort | null, column: "id" | "name"): TableSortDirection {
+  if (column === "id") return sort === "id_asc" ? "asc" : sort === "id_desc" ? "desc" : null;
+  return sort === "name_asc" ? "asc" : sort === "name_desc" ? "desc" : null;
+}
+
+function reviewHeaderSortAriaLabel(locale: Locale, label: string, direction: TableSortDirection): string {
+  if (locale === "en-US") {
+    return direction === "asc"
+      ? `${label}, ascending. Activate to sort descending.`
+      : direction === "desc"
+        ? `${label}, descending. Activate to sort ascending.`
+        : `${label}. Activate to sort ascending.`;
+  }
+  return direction === "asc"
+    ? `${label}，当前升序。点击改为降序。`
+    : direction === "desc"
+      ? `${label}，当前降序。点击改为升序。`
+      : `${label}。点击按升序排序。`;
 }

@@ -1,8 +1,18 @@
-import type { ProblemInfo, StudentAnswerInfo, StudentSubmission } from "@/types";
+import type { FilterIntentResult, ProblemInfo, StudentAnswerInfo, StudentSubmission } from "@/types";
 
 export type SubmissionAnswerState = "recognized" | "reviewed" | "flagged" | "empty" | "missing";
 export type SubmissionReviewFilter = "all" | "review" | "missing" | "identity";
-export type SubmissionReviewSort = "student_id" | "student_name" | "attention";
+export type SubmissionQuestionSort = `question:${string}:asc` | `question:${string}:desc`;
+export type SubmissionReviewSort =
+  | "id_asc"
+  | "id_desc"
+  | "name_asc"
+  | "name_desc"
+  | "coverage_asc"
+  | "coverage_desc"
+  | "review_asc"
+  | "review_desc"
+  | SubmissionQuestionSort;
 
 export interface SubmissionQuestion {
   id: string;
@@ -114,14 +124,16 @@ export function selectSubmissionReview(
   const wantsRecognized = includesToken(normalized, RECOGNIZED_TOKENS);
   const wantsIdentity = includesToken(normalized, IDENTITY_TOKENS);
   const explicitQuestionTokens = getQuestionTokens(normalized);
-  const residual = stripTokens(normalized, [
+  const requestedSort = parseSubmissionReviewLocalSort(normalized);
+  const residual = stripQueryWords(stripTokens(normalized, [
     ...REVIEW_TOKENS,
     ...CONFIDENCE_TOKENS,
     ...MISSING_TOKENS,
     ...RECOGNIZED_TOKENS,
     ...IDENTITY_TOKENS,
     ...explicitQuestionTokens.raw,
-  ]);
+    ...(requestedSort ? [requestedSort.raw] : []),
+  ]));
 
   const descriptorMatches = normalized
     ? allQuestions.filter((question) => {
@@ -166,6 +178,94 @@ export function selectSubmissionReview(
   };
 }
 
+export function selectSubmissionReviewFromIntent(
+  students: StudentSubmission[],
+  allQuestions: SubmissionQuestion[],
+  intent: FilterIntentResult,
+  filter: SubmissionReviewFilter,
+  sort: SubmissionReviewSort,
+): SubmissionReviewSelection {
+  const requestedQuestions = intent.question_tokens.length
+    ? allQuestions.filter((question) => intent.question_tokens.some((token) => matchesQuestion(question, normalizeQuestionToken(token))))
+    : allQuestions;
+  const questions = intent.question_tokens.length ? requestedQuestions : allQuestions;
+  const scopedQuestions = questions.length ? questions : allQuestions;
+  const selected = students.filter((student) => {
+    if (!matchesFilter(student, scopedQuestions, filter)) return false;
+    if (!matchesSubmissionStatus(student, scopedQuestions, intent.submission_status ?? null)) return false;
+    return intent.text_terms.every((term) => matchesIntentTextTerm(student, scopedQuestions, term));
+  });
+  selected.sort((left, right) => compareStudents(left, right, scopedQuestions, sort));
+
+  let explanation: SubmissionReviewSelection["explanation"] = "all";
+  if (!selected.length || (intent.question_tokens.length > 0 && !requestedQuestions.length)) explanation = "no_match";
+  else if (filter === "identity" || intent.submission_status === "identity") explanation = "identity";
+  else if (filter === "missing" || intent.submission_status === "missing") explanation = "missing";
+  else if (filter === "review" || intent.submission_status === "review") explanation = "review";
+  else if (intent.question_tokens.length) explanation = "question";
+  else if (intent.text_terms.length) explanation = "student";
+
+  return { students: selected, questions, explanation, confidenceAlias: false };
+}
+
+export function submissionReviewQueryNeedsIntentFallback(
+  query: string,
+  students: StudentSubmission[],
+  questions: SubmissionQuestion[],
+): boolean {
+  const normalized = normalize(query);
+  if (!normalized) return false;
+  const questionTokens = getQuestionTokens(normalized);
+  const requestedSort = parseSubmissionReviewLocalSort(normalized);
+  let residual = stripQueryWords(stripTokens(normalized, [
+    ...REVIEW_TOKENS,
+    ...CONFIDENCE_TOKENS,
+    ...MISSING_TOKENS,
+    ...RECOGNIZED_TOKENS,
+    ...IDENTITY_TOKENS,
+    ...questionTokens.raw,
+    ...(requestedSort ? [requestedSort.raw] : []),
+  ]));
+  if (!residual) return false;
+
+  const identityMatches = students.some((student) => normalize(`${student.stu_id} ${student.stu_name}`).includes(residual));
+  if (identityMatches) return false;
+  const questionMatches = questions.some((question) => normalize(`${question.label} ${question.id} ${question.type} ${question.stem}`).includes(residual));
+  return !questionMatches;
+}
+
+export function parseSubmissionReviewLocalSort(query: string): { raw: string; sort: SubmissionReviewSort } | null {
+  const patterns: Array<[RegExp, SubmissionReviewSort]> = [
+    [/(?:按)?(?:学号|学生\s*id|id)\s*(?:降序|从[大高]到[小低]|z[\s-]*a)|(?:sort\s+(?:by\s+)?)?(?:student\s*)?id\s*(?:desc(?:ending)?|z[\s-]*a)/i, "id_desc"],
+    [/(?:按)?(?:学号|学生\s*id|id)\s*(?:升序|从[小低]到[大高]|a[\s-]*z)|(?:sort\s+(?:by\s+)?)?(?:student\s*)?id\s*(?:asc(?:ending)?|a[\s-]*z)/i, "id_asc"],
+    [/(?:按)?(?:姓名|名字|name)\s*(?:降序|从[大高]到[小低]|z[\s-]*a)|(?:sort\s+(?:by\s+)?)?name\s*(?:desc(?:ending)?|z[\s-]*a)/i, "name_desc"],
+    [/(?:按)?(?:姓名|名字|name)\s*(?:升序|从[小低]到[大高]|a[\s-]*z)|(?:sort\s+(?:by\s+)?)?name\s*(?:asc(?:ending)?|a[\s-]*z)/i, "name_asc"],
+    [/(?:作答)?覆盖率\s*(?:从低到高|升序)|coverage\s*(?:asc|low)/i, "coverage_asc"],
+    [/(?:作答)?覆盖率\s*(?:从高到低|降序)|coverage\s*(?:desc|high)/i, "coverage_desc"],
+    [/(?:待复核|异常|需复核|复核项|review)\s*(?:从少到多|升序)|review\s*(?:asc|few)/i, "review_asc"],
+    [/(?:待复核|异常|需复核|复核项|review)\s*(?:最多|优先|从多到少|降序)|review\s*(?:desc|most)/i, "review_desc"],
+  ];
+  for (const [pattern, sort] of patterns) {
+    const match = query.match(pattern);
+    if (match) return { raw: match[0], sort };
+  }
+  return null;
+}
+
+export function submissionReviewSortFromIntent(intent: FilterIntentResult): SubmissionReviewSort | null {
+  switch (intent.sort) {
+    case "id_asc": return "id_asc";
+    case "id_desc": return "id_desc";
+    case "name_asc": return "name_asc";
+    case "name_desc": return "name_desc";
+    case "coverage_asc": return "coverage_asc";
+    case "coverage_desc": return "coverage_desc";
+    case "review_asc": return "review_asc";
+    case "review_desc": return "review_desc";
+    default: return null;
+  }
+}
+
 export function answerMap(student: StudentSubmission): Map<string, StudentAnswerInfo> {
   return new Map((student.stu_ans ?? []).map((answer) => [answer.q_id, answer]));
 }
@@ -182,15 +282,45 @@ function compareStudents(
   questions: SubmissionQuestion[],
   sort: SubmissionReviewSort,
 ) {
-  if (sort === "attention") {
-    const delta = Number(studentNeedsAttention(b, questions)) - Number(studentNeedsAttention(a, questions));
-    if (delta) return delta;
+  const questionSort = parseSubmissionQuestionSort(sort);
+  if (questionSort) {
+    const leftSeverity = answerStateSeverity(getAnswerState(answerMap(a).get(questionSort.questionId)));
+    const rightSeverity = answerStateSeverity(getAnswerState(answerMap(b).get(questionSort.questionId)));
+    const delta = leftSeverity - rightSeverity;
+    if (delta) return questionSort.direction === "asc" ? delta : -delta;
   }
-  if (sort === "student_name") {
-    const byName = naturalCompare(a.stu_name || a.stu_id, b.stu_name || b.stu_id);
-    if (byName) return byName;
+  if (sort === "id_desc") return naturalCompare(b.stu_id, a.stu_id);
+  if (sort === "name_asc") return compareNames(a, b);
+  if (sort === "name_desc") return compareNames(b, a);
+  if (sort === "coverage_asc" || sort === "coverage_desc") {
+    const delta = coverageCount(a, questions) - coverageCount(b, questions);
+    if (delta) return sort === "coverage_asc" ? delta : -delta;
+  }
+  if (sort === "review_asc" || sort === "review_desc") {
+    const delta = reviewCount(a, questions) - reviewCount(b, questions);
+    if (delta) return sort === "review_asc" ? delta : -delta;
   }
   return naturalCompare(a.stu_id, b.stu_id);
+}
+
+export function parseSubmissionQuestionSort(value: string | null | undefined): { questionId: string; direction: "asc" | "desc" } | null {
+  const match = value?.match(/^question:(.+):(asc|desc)$/);
+  return match ? { questionId: match[1], direction: match[2] as "asc" | "desc" } : null;
+}
+
+/** Lower values are safer answer states; equal states retain the stable student-ID order. */
+function answerStateSeverity(state: SubmissionAnswerState): number {
+  switch (state) {
+    case "recognized":
+    case "reviewed":
+      return 0;
+    case "flagged":
+      return 1;
+    case "empty":
+      return 2;
+    case "missing":
+      return 3;
+  }
 }
 
 function getQuestionTokens(query: string): { raw: string[]; values: string[] } {
@@ -207,6 +337,52 @@ function matchesQuestion(question: SubmissionQuestion, token: string) {
   return candidates.some((value) => value === token || value.endsWith(token));
 }
 
+function matchesFilter(student: StudentSubmission, questions: SubmissionQuestion[], filter: SubmissionReviewFilter): boolean {
+  if (filter === "all") return true;
+  return matchesSubmissionStatus(student, questions, filter === "identity" ? "identity" : filter);
+}
+
+function matchesSubmissionStatus(
+  student: StudentSubmission,
+  questions: SubmissionQuestion[],
+  status: NonNullable<FilterIntentResult["submission_status"]> | null,
+): boolean {
+  if (!status) return true;
+  if (status === "identity") return student.identity_status === "needs_review";
+  const states = questions.map((question) => getAnswerState(answerMap(student).get(question.id)));
+  if (status === "review") return states.some((state) => !["recognized", "reviewed"].includes(state));
+  if (status === "missing") return states.some((state) => state === "missing" || state === "empty");
+  if (status === "reviewed") return states.length > 0 && states.every((state) => state === "reviewed");
+  return states.length > 0 && states.every((state) => ["recognized", "reviewed"].includes(state)) && states.some((state) => state === "recognized");
+}
+
+function matchesIntentTextTerm(student: StudentSubmission, questions: SubmissionQuestion[], term: string): boolean {
+  const normalizedTerm = normalize(term);
+  if (!normalizedTerm) return true;
+  const studentDescriptor = normalize(`${student.stu_id} ${student.stu_name}`);
+  if (studentDescriptor.includes(normalizedTerm)) return true;
+  return questions.some((question) => normalize(`${question.label} ${question.id} ${question.type} ${question.stem}`).includes(normalizedTerm));
+}
+
+function coverageCount(student: StudentSubmission, questions: SubmissionQuestion[]): number {
+  const answers = answerMap(student);
+  return questions.filter((question) => {
+    const state = getAnswerState(answers.get(question.id));
+    return state === "recognized" || state === "reviewed";
+  }).length;
+}
+
+function reviewCount(student: StudentSubmission, questions: SubmissionQuestion[]): number {
+  const answers = answerMap(student);
+  return questions.filter((question) => !["recognized", "reviewed"].includes(getAnswerState(answers.get(question.id)))).length
+    + Number(student.identity_status === "needs_review");
+}
+
+function compareNames(left: StudentSubmission, right: StudentSubmission): number {
+  return naturalCompare(left.stu_name || left.stu_id, right.stu_name || right.stu_id)
+    || naturalCompare(left.stu_id, right.stu_id);
+}
+
 function includesToken(query: string, tokens: string[]) {
   return tokens.some((token) => query.includes(token));
 }
@@ -217,6 +393,17 @@ function stripTokens(query: string, tokens: string[]) {
     next = next.replaceAll(token, " ");
   }
   return next.replace(/[，,。；;：:、/]+/g, " ").replace(/\s+/g, " ").trim();
+}
+
+function stripQueryWords(query: string): string {
+  return query
+    .replace(/(?:帮我|请|显示|查看|筛选|找出|学生|同学|作答|答案|哪些|所有|的|了|一下|按|排序|排列|show|filter|find|students?|responses?|answers?|please|the|with|and)/gi, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function normalizeQuestionToken(value: string): string {
+  return normalize(value).replace(/第|题|\s/gi, "").replace(/^q/i, "");
 }
 
 function normalize(value: string) {

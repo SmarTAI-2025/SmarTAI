@@ -26,6 +26,7 @@ import {
 import { Link, Navigate, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { toast } from "sonner";
 import { getAPIErrorCode, normalizeAPIError } from "@/api/client";
+import { useAnalyticsFilterIntent } from "@/api/hooks/analytics";
 import { useTask, useUpdateStudentAnswer, useUpdateStudentIdentity } from "@/api/hooks/tasks";
 import { SmarTAIMascot } from "@/components/brand/SmarTAIMascot";
 import { NewTaskStepper } from "@/components/new-task/NewTaskStepper";
@@ -49,7 +50,7 @@ import {
   type SubmissionQuestion,
 } from "@/lib/submissionReview";
 import { getTaskDestination, hasTaskReachedStep } from "@/lib/taskFlow";
-import type { StudentAnswerInfo, StudentSubmission } from "@/types";
+import type { FilterIntentResult, StudentAnswerInfo, StudentSubmission } from "@/types";
 
 type PickerItem = {
   id: string;
@@ -67,6 +68,11 @@ type PickerMatch = {
 
 type AnswerDraft = {
   content: string;
+};
+
+type LocalStudentAnswerIntent = {
+  submissionStatus?: NonNullable<FilterIntentResult["submission_status"]>;
+  sort?: "question" | "question_desc";
 };
 
 const STATUS_KEYS: Record<SubmissionAnswerState, MessageKey> = {
@@ -98,6 +104,13 @@ export function StudentAnswerReviewPage() {
   const [identityName, setIdentityName] = useState("");
   const [identityError, setIdentityError] = useState<string | null>(null);
   const questionFilterParam = searchParams.get("questionFilter") ?? "";
+  const intentQuery = useAnalyticsFilterIntent();
+  const [questionIntentState, setQuestionIntentState] = useState<{ query: string; result: FilterIntentResult } | null>(null);
+  const [questionFilterResolution, setQuestionFilterResolution] = useState<"idle" | "local" | "llm">("idle");
+  const [questionFilterError, setQuestionFilterError] = useState(false);
+  const questionIntentVersionRef = useRef(0);
+  const questionFilterRef = useRef(questionFilterParam);
+  questionFilterRef.current = questionFilterParam;
   const initializedStudentRef = useRef<string | null>(null);
   const positionedRouteRef = useRef<string | null>(null);
   const selectedQuestionRef = useRef(requestedQuestionId);
@@ -121,9 +134,22 @@ export function StudentAnswerReviewPage() {
     () => matchPickerItems(questionItems, questionFilterParam),
     [questionFilterParam, questionItems],
   );
+  const currentQuestionIntent = questionIntentState?.query === questionFilterParam
+    ? questionIntentState.result
+    : null;
+  const supportedQuestionIntent = currentQuestionIntent && supportsStudentQuestionIntent(currentQuestionIntent)
+    ? currentQuestionIntent
+    : null;
+  const unsupportedQuestionIntent = currentQuestionIntent && !supportsStudentQuestionIntent(currentQuestionIntent);
   const filteredQuestions = useMemo(
-    () => selectMatched(questions, questionMatches, questionFilterParam, (value) => value.id),
-    [questionFilterParam, questionMatches, questions],
+    () => selectStudentAnswerQuestions({
+      questions,
+      student,
+      intent: supportedQuestionIntent,
+      directMatches: questionMatches,
+      query: questionFilterParam,
+    }),
+    [questionFilterParam, questionMatches, questions, student, supportedQuestionIntent],
   );
   const studentNeighbors = neighbors(students, studentId, (value) => value.stu_id);
   const activeIndex = Math.max(0, filteredQuestions.findIndex((question) => question.id === activeQuestionId));
@@ -286,6 +312,54 @@ export function StudentAnswerReviewPage() {
       else next.delete(key);
       return next;
     }, { replace: true });
+  }
+
+  function clearQuestionIntent() {
+    questionIntentVersionRef.current += 1;
+    setQuestionIntentState(null);
+    setQuestionFilterResolution("idle");
+    setQuestionFilterError(false);
+    intentQuery.reset();
+  }
+
+  function updateQuestionFilter(value: string) {
+    clearQuestionIntent();
+    if (value.trim() && hasLocalStudentAnswerIntent(value, questionItems)) {
+      setQuestionFilterResolution("local");
+    }
+    setFilterParam("questionFilter", value);
+  }
+
+  function applyQuestionFilter(value: string) {
+    if (intentQuery.isPending) return;
+    const query = value.trim();
+    const version = ++questionIntentVersionRef.current;
+    setQuestionIntentState(null);
+    setQuestionFilterError(false);
+    intentQuery.reset();
+    setFilterParam("questionFilter", query);
+
+    if (!query) {
+      setQuestionFilterResolution("idle");
+      return;
+    }
+    if (hasLocalStudentAnswerIntent(query, questionItems)) {
+      setQuestionFilterResolution("local");
+      return;
+    }
+    if (!taskId) return;
+    setQuestionFilterResolution("idle");
+    intentQuery.mutate({ taskId, question: query, surface: "student_answer_review" }, {
+      onSuccess: (result) => {
+        if (questionIntentVersionRef.current !== version || questionFilterRef.current !== query) return;
+        setQuestionIntentState({ query, result });
+        setQuestionFilterResolution("llm");
+      },
+      onError: () => {
+        if (questionIntentVersionRef.current !== version || questionFilterRef.current !== query) return;
+        setQuestionFilterError(true);
+      },
+    });
   }
 
   function confirmLeave() {
@@ -603,18 +677,26 @@ export function StudentAnswerReviewPage() {
           <div className={identityOpen ? "mt-3" : undefined}>
             <div className="rounded-[10px] border bg-card p-2">
               <SmartPicker
-                label={t("answerReviewQuestionSearchLabel")}
-                placeholder={t("answerReviewQuestionSearchPlaceholder")}
+                label={tx(locale, "Ask SmarTAI：筛选当前学生的作答", "Ask SmarTAI: filter this student's answers")}
+                placeholder={tx(locale, "Ask SmarTAI：找出缺答或待复核题目", "Ask SmarTAI: show missing or review-needed answers")}
                 query={questionFilterParam}
                 matches={questionMatches}
                 currentId={activeQuestion?.id ?? ""}
-                onCommit={(value) => setFilterParam("questionFilter", value)}
+                onCommit={updateQuestionFilter}
+                onApply={applyQuestionFilter}
                 onSelect={(id) => scrollToQuestion(id)}
+                onDraftChange={clearQuestionIntent}
+                pending={intentQuery.isPending}
+                resolution={questionFilterResolution}
+                unsupported={Boolean(unsupportedQuestionIntent)}
+                explanation={supportedQuestionIntent?.explanation ?? ""}
+                hasError={questionFilterError}
+                locale={locale}
                 t={t}
               />
             </div>
             <div className="mt-1.5 grid gap-0.5 px-1 text-[11px] leading-5 text-muted-foreground">
-              <span>{tx(locale, "搜索只筛选题目；当前学生保持不变。输入中文时会在选词完成后再应用筛选。", "Question search only filters questions; the selected student stays unchanged. IME text is applied after composition finishes.")}</span>
+              <span>{tx(locale, "本地匹配优先；其他表达点击应用后仅由模型理解筛选指令，当前学生保持不变。", "Local matches run first. Other wording is interpreted only as a filter instruction after you apply it; the selected student stays unchanged.")}</span>
               <span className="flex items-center gap-1.5 font-medium text-foreground/70">
                 <Keyboard aria-hidden="true" className="h-3.5 w-3.5" />
                 {t("answerReviewKeyboardHint")}
@@ -765,18 +847,33 @@ function StudentNavigation({ student, previous, next, onPrevious, onNext, identi
   );
 }
 
-function SmartPicker({ label, placeholder, query, matches, currentId, onCommit, onSelect, t }: {
+function SmartPicker({ label, placeholder, query, matches, currentId, onCommit, onApply, onSelect, onDraftChange, pending, resolution, unsupported, explanation, hasError, locale, t }: {
   label: string;
   placeholder: string;
   query: string;
   matches: PickerMatch[];
   currentId: string;
   onCommit: (value: string) => void;
+  onApply: (value: string) => void;
   onSelect: (id: string) => void;
+  onDraftChange: () => void;
+  pending: boolean;
+  resolution: "idle" | "local" | "llm";
+  unsupported: boolean;
+  explanation: string;
+  hasError: boolean;
+  locale: Locale;
   t: (key: MessageKey) => string;
 }) {
   const [open, setOpen] = useState(false);
-  const smartSearch = useImeSafeQuery({ value: query, onCommit, onDraftChange: () => setOpen(true) });
+  const smartSearch = useImeSafeQuery({
+    value: query,
+    onCommit,
+    onDraftChange: () => {
+      onDraftChange();
+      setOpen(true);
+    },
+  });
 
   function handleBlur(event: FocusEvent<HTMLDivElement>) {
     if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setOpen(false);
@@ -784,19 +881,23 @@ function SmartPicker({ label, placeholder, query, matches, currentId, onCommit, 
 
   return (
     <div className="relative" onFocusCapture={() => setOpen(true)} onBlurCapture={handleBlur}>
-      <div className="flex items-center gap-2">
-        <SmarTAIMascot variant="thinking" size="xs" />
+      <form className="flex items-center gap-2" onSubmit={(event) => {
+        event.preventDefault();
+        onApply(smartSearch.commitDraft());
+        setOpen(false);
+      }}>
+        <SmarTAIMascot variant={pending ? "grading" : "thinking"} size="xs" />
         <label className="relative min-w-0 flex-1">
           <span className="sr-only">{label}</span>
           <input
-          type="text"
-          inputMode="search"
-          value={smartSearch.draftValue}
-          onBlur={smartSearch.handleBlur}
-          onCompositionStart={smartSearch.handleCompositionStart}
-          onCompositionEnd={smartSearch.handleCompositionEnd}
-          onChange={smartSearch.handleChange}
-          placeholder={placeholder}
+            type="text"
+            inputMode="search"
+            value={smartSearch.draftValue}
+            onBlur={smartSearch.handleBlur}
+            onCompositionStart={smartSearch.handleCompositionStart}
+            onCompositionEnd={smartSearch.handleCompositionEnd}
+            onChange={smartSearch.handleChange}
+            placeholder={placeholder}
             className="h-10 w-full rounded-[7px] border-0 bg-slate-50 pl-3 pr-9 text-[13px] text-foreground outline-none placeholder:text-muted-foreground focus:ring-2 focus:ring-primary/20 dark:bg-slate-900/50"
           />
           {smartSearch.draftValue ? (
@@ -813,9 +914,20 @@ function SmartPicker({ label, placeholder, query, matches, currentId, onCommit, 
             </button>
           ) : null}
         </label>
+        <Button type="submit" className="h-9 shrink-0 px-3 text-xs" disabled={pending || !smartSearch.draftValue.trim()}>
+          {pending ? <LoaderCircle aria-hidden="true" className="h-3.5 w-3.5 animate-spin" /> : null}
+          {tx(locale, "应用", "Apply")}
+        </Button>
+      </form>
+      <div className="px-1 pt-1.5 text-[11px] leading-5">
+        {resolution === "local" ? <p className="font-medium text-muted-foreground" role="status">{tx(locale, "本地规则已识别，未调用模型。", "Matched locally; no model call.")}</p> : null}
+        {pending ? <p className="text-muted-foreground" role="status">{tx(locale, "模型正在理解筛选指令；不会发送该学生的作答内容。", "The model is interpreting only the filter instruction; this student's answer content is not sent.")}</p> : null}
+        {resolution === "llm" && !unsupported ? <p className="text-muted-foreground" role="status">{explanation || tx(locale, "已将自然语言理解为当前页面支持的筛选条件。", "The request was translated into filters supported on this page.")}</p> : null}
+        {unsupported ? <p className="font-medium text-amber-700 dark:text-amber-300" role="alert">{tx(locale, "当前学生作答页不能应用该条件；未应用部分筛选。", "This student-answer view cannot apply that condition; no partial filter was applied.")}</p> : null}
+        {hasError ? <p className="font-medium text-danger" role="alert">{tx(locale, "暂时无法理解此筛选请求，请重试或换一种说法。", "The filter request could not be interpreted. Try again or rephrase it.")}</p> : null}
       </div>
       {open ? (
-        <div className="absolute left-0 right-0 top-[44px] z-40 max-h-[280px] overflow-auto rounded-[9px] border bg-card p-1.5 shadow-xl">
+        <div className="absolute left-0 right-0 top-[calc(100%+4px)] z-40 max-h-[280px] overflow-auto rounded-[9px] border bg-card p-1.5 shadow-xl">
           <p className="px-2 py-1 text-[10px] leading-4 text-muted-foreground">
             {smartSearch.draftValue ? `${matches.length} ${t("answerReviewMatches")}` : t("answerReviewLocalMatchHint")}
           </p>
@@ -1083,6 +1195,110 @@ function selectMatched<T>(values: T[], matches: PickerMatch[], query: string, ge
   if (!matches.length) return keepAllWhenEmpty ? values : [];
   const ids = new Set(matches.map((match) => match.item.id));
   return values.filter((value) => ids.has(getId(value)));
+}
+
+function hasLocalStudentAnswerIntent(query: string, items: PickerItem[]) {
+  return Boolean(parseLocalStudentAnswerIntent(query)) || matchPickerItems(items, query).length > 0;
+}
+
+function parseLocalStudentAnswerIntent(query: string): LocalStudentAnswerIntent | null {
+  const normalized = normalize(query);
+  if (!normalized) return null;
+
+  const intent: LocalStudentAnswerIntent = {};
+  if (/已复核|\breviewed\b|\bconfirmed\b/i.test(normalized)) intent.submissionStatus = "reviewed";
+  else if (/已识别|\brecognized\b/i.test(normalized)) intent.submissionStatus = "recognized";
+  else if (/缺答|未作答|漏答|\bmissing\b|\bincomplete\b|\bempty\b/i.test(normalized)) intent.submissionStatus = "missing";
+  else if (/待复核|需(?:要)?复核|未复核|\breview(?:\s*-?needed)?\b/i.test(normalized)) intent.submissionStatus = "review";
+
+  const mentionsQuestionOrder = /题号|题目|\bquestions?\b/i.test(normalized);
+  if (mentionsQuestionOrder && /倒序|降序|从大到小|\bdesc(?:ending)?\b|\breverse\b/i.test(normalized)) {
+    intent.sort = "question_desc";
+  } else if (mentionsQuestionOrder && /升序|从小到大|\basc(?:ending)?\b|\bforward\b/i.test(normalized)) {
+    intent.sort = "question";
+  }
+
+  return intent.submissionStatus || intent.sort ? intent : null;
+}
+
+/** This detail view has one student, so student-list controls must fail closed. */
+function supportsStudentQuestionIntent(intent: FilterIntentResult) {
+  return intent.recognized
+    && intent.min_score_percent === null
+    && intent.max_score_percent === null
+    && intent.pass_status === null
+    && !intent.low_confidence
+    && intent.review_status === null
+    && !intent.disagreement
+    && !intent.annotated
+    && !intent.question_types?.length
+    && intent.max_average_confidence == null
+    && !intent.missing_knowledge
+    && intent.min_max_score == null
+    && intent.max_max_score == null
+    && intent.preparation_status == null
+    && intent.material_field == null
+    && intent.material_status == null
+    && (!intent.sort || intent.sort === "question" || intent.sort === "question_desc");
+}
+
+function selectStudentAnswerQuestions({
+  questions,
+  student,
+  intent,
+  directMatches,
+  query,
+}: {
+  questions: SubmissionQuestion[];
+  student: StudentSubmission | undefined;
+  intent: FilterIntentResult | null;
+  directMatches: PickerMatch[];
+  query: string;
+}) {
+  if (!query.trim()) return questions;
+
+  const directSelection = directMatches.length
+    ? selectMatched(questions, directMatches, query, (value) => value.id)
+    : null;
+  const localIntent = parseLocalStudentAnswerIntent(query);
+  const appliedIntent = intent?.recognized ? intent : localIntent;
+  if (!appliedIntent) return directSelection ?? questions;
+
+  let selected = directSelection ?? questions;
+  if (!directSelection) {
+    if (!student) return [];
+    const identity = normalize(`${student.stu_id} ${student.stu_name}`);
+    const modelIntent = isModelStudentAnswerIntent(appliedIntent) ? appliedIntent : null;
+    const localAppliedIntent = modelIntent ? null : appliedIntent as LocalStudentAnswerIntent;
+    const textTerms = modelIntent?.text_terms ?? [];
+    if (!textTerms.every((term) => identity.includes(normalize(term)))) return [];
+
+    const submissionStatus = modelIntent?.submission_status ?? localAppliedIntent?.submissionStatus;
+    if (submissionStatus === "identity" && student.identity_status !== "needs_review") return [];
+
+    const questionTokens = modelIntent?.question_tokens ?? [];
+    const answers = answerMap(student);
+    selected = questions.filter((question) => {
+      if (questionTokens.length && !questionTokens.some((token) => matchesIntentQuestion(question, token))) return false;
+      const state = getAnswerState(answers.get(question.id));
+      if (submissionStatus === "missing") return state === "missing" || state === "empty";
+      if (submissionStatus === "review") return !["recognized", "reviewed"].includes(state);
+      if (submissionStatus === "recognized") return state === "recognized";
+      if (submissionStatus === "reviewed") return state === "reviewed";
+      return true;
+    });
+  }
+
+  return appliedIntent.sort === "question_desc" ? [...selected].reverse() : selected;
+}
+
+function isModelStudentAnswerIntent(intent: FilterIntentResult | LocalStudentAnswerIntent): intent is FilterIntentResult {
+  return "question_tokens" in intent;
+}
+
+function matchesIntentQuestion(question: SubmissionQuestion, token: string) {
+  const normalized = normalizeComparable(token);
+  return [question.id, question.label].some((value) => normalizeComparable(value) === normalized);
 }
 
 function neighbors<T>(values: T[], currentId: string | undefined, getId: (value: T) => string) {

@@ -1,12 +1,15 @@
 import { deleteJSON, getJSON, postJSON } from "./client";
 import type { AnalyticsMode, AnalyticsResult, FilterIntentResult, FilterIntentSurface, PerQuestionBreakdown } from "@/types";
 
+// Model-backed operations can outlast the ordinary 30-second data-request limit.
+export const ANALYTICS_REQUEST_TIMEOUT_MS = 300_000;
+
 export function runAnalyticsQuery(
   taskId: string,
   question: string,
   mode: AnalyticsMode,
 ): Promise<AnalyticsResult> {
-  return postJSON<AnalyticsResult>(`/analytics/${taskId}/query`, { question, mode });
+  return postJSON<AnalyticsResult>(`/analytics/${taskId}/query`, { question, mode }, { timeout: ANALYTICS_REQUEST_TIMEOUT_MS });
 }
 
 export function interpretFilterIntent(
@@ -14,11 +17,11 @@ export function interpretFilterIntent(
   question: string,
   surface: FilterIntentSurface,
 ): Promise<FilterIntentResult> {
-  return postJSON<FilterIntentResult>(`/analytics/${taskId}/filter-intent`, { question, surface });
+  return postJSON<FilterIntentResult>(`/analytics/${taskId}/filter-intent`, { question, surface }, { timeout: ANALYTICS_REQUEST_TIMEOUT_MS });
 }
 
 export function getPerQuestionBreakdown(taskId: string, qId: string): Promise<PerQuestionBreakdown> {
-  return getJSON<PerQuestionBreakdown>(`/analytics/${taskId}/per_question/${qId}`);
+  return getJSON<PerQuestionBreakdown>(`/analytics/${taskId}/per_question/${qId}`, { timeout: ANALYTICS_REQUEST_TIMEOUT_MS });
 }
 
 export function resetPerQuestionCache(taskId: string, qId: string): Promise<{ status: "cleared" }> {

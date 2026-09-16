@@ -66,6 +66,7 @@ export function HistoryFilters({
   }
 
   function submitSmart() {
+    if (isInterpreting) return;
     const value = smartSearch.commitDraft().trim();
     if (value) onInterpret(value);
   }
@@ -97,6 +98,7 @@ export function HistoryFilters({
             <span className="sr-only">{t("historySmartLabel")}</span>
             <input
               value={smartSearch.draftValue}
+              disabled={isInterpreting}
               onBlur={smartSearch.handleBlur}
               onChange={smartSearch.handleChange}
               onCompositionEnd={smartSearch.handleCompositionEnd}
@@ -178,25 +180,6 @@ export function HistoryFilters({
           onChange={(checked) => onChange({ needs_attention: checked || undefined })}
         />
 
-        <label className="relative shrink-0">
-          <span className="sr-only">{t("historySort")}</span>
-          <select
-            className={cn(CONTROL_CLASS, "w-[150px]")}
-            value={query.sort}
-            onChange={(event) => onChange({ sort: event.target.value as HistorySort })}
-          >
-            <option value="updated_desc">{t("historySortUpdated")}</option>
-            <option value="updated_asc">{t("historySortUpdatedAsc")}</option>
-            <option value="created_desc">{t("historySortCreated")}</option>
-            <option value="created_asc">{t("historySortCreatedAsc")}</option>
-            <option value="name_asc">{t("historySortName")}</option>
-            <option value="name_desc">{t("historySortNameDesc")}</option>
-            <option value="attention_first">{t("historySortAttention")}</option>
-            <option value="stage_asc">{t("historySortStage")}</option>
-            <option value="stage_desc">{t("historySortStageDesc")}</option>
-          </select>
-        </label>
-
         <button type="button" className="h-8 shrink-0 px-2 text-[13px] font-medium text-muted-foreground outline-none hover:text-primary focus-visible:rounded focus-visible:ring-2 focus-visible:ring-ring" onClick={onClear}>
           {t("historyClearFilters")}
         </button>
@@ -206,6 +189,11 @@ export function HistoryFilters({
         <div className="mt-3 border-t pt-3" aria-live="polite">
           <div className="flex flex-wrap items-center gap-2">
             <span className="text-xs font-semibold text-foreground">{t("historySmartResult")}</span>
+            {interpretation.source === "deterministic" ? (
+              <span role="status" className="text-xs text-muted-foreground">
+                {locale === "zh-CN" ? "本地规则已识别，未调用模型。" : "Matched locally; no model call."}
+              </span>
+            ) : null}
             {interpretation.conditions.map((condition, index) => (
               <button
                 key={`${condition.field}-${index}`}
@@ -232,6 +220,7 @@ export function HistoryFilters({
                 : `Applied ${interpretation.conditions.length} editable ${interpretation.conditions.length === 1 ? "condition" : "conditions"}.`
               : t("historySmartNoCondition")}
           </p>
+          {interpretation.explanation ? <p role="status" className="mt-1 text-xs leading-5 text-muted-foreground">{interpretation.explanation}</p> : null}
           {interpretation.ambiguities.length ? (
             <div className="mt-2 rounded-md bg-amber-50 px-3 py-2 text-xs leading-5 text-amber-800 dark:bg-amber-950/40 dark:text-amber-200">
               <strong>{t("historySmartAmbiguity")}</strong>
