@@ -49,6 +49,8 @@ export function AuthPasswordInput({
   onChange,
   showLabel,
   hideLabel,
+  minLength,
+  maxLength,
 }: {
   value: string;
   disabled?: boolean;
@@ -57,6 +59,8 @@ export function AuthPasswordInput({
   onChange: ChangeEventHandler<HTMLInputElement>;
   showLabel: string;
   hideLabel: string;
+  minLength?: number;
+  maxLength?: number;
 }) {
   const [visible, setVisible] = useState(false);
   return (
@@ -65,6 +69,8 @@ export function AuthPasswordInput({
         className="h-11 w-full pr-11"
         autoComplete={autoComplete}
         disabled={disabled}
+        minLength={minLength}
+        maxLength={maxLength}
         onChange={onChange}
         placeholder={placeholder}
         required
