@@ -31,6 +31,7 @@ import { NewTaskStepper } from "@/components/new-task/NewTaskStepper";
 import { OriginalFilePreviewPanel } from "@/components/tasks/OriginalFilePreviewPanel";
 import { OriginalFilePreviewTrigger } from "@/components/tasks/OriginalFilePreviewTrigger";
 import { SourceComparisonWorkspace } from "@/components/tasks/SourceComparisonWorkspace";
+import { problemLabel } from "@/components/tasks/resultsModel";
 import { Button } from "@/components/ui/Button";
 import { MarkdownMath } from "@/components/ui/MarkdownMath";
 import { useImeSafeQuery } from "@/hooks/useImeSafeQuery";
@@ -637,7 +638,7 @@ export function StudentAnswerReviewPage() {
                           active ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted hover:text-foreground",
                         )}
                       >
-                        <span className="truncate" title={tx(locale, `第 ${question.label} 题`, `Q${question.label}`)}>{tx(locale, `第 ${question.label} 题`, `Q${question.label}`)}</span>
+                        <span className="truncate" title={tx(locale, `第 ${question.label} 题`, problemLabel({ q_id: question.id, number: question.label }))}>{tx(locale, `第 ${question.label} 题`, problemLabel({ q_id: question.id, number: question.label }))}</span>
                         <span className={cn(
                           "ml-1 h-2 w-2 shrink-0 rounded-full",
                           active ? "bg-white" : state === "recognized" ? "bg-emerald-500" : state === "reviewed" ? "bg-blue-500" : state === "flagged" ? "bg-amber-500" : "bg-red-500",
@@ -1058,7 +1059,7 @@ function questionPickerItem(question: SubmissionQuestion): PickerItem {
   const descriptor = `${question.label} ${question.id} ${question.type} ${question.stem}`;
   return {
     id: question.id,
-    primary: `Q${question.label}`,
+    primary: problemLabel({ q_id: question.id, number: question.label }),
     secondary: question.type || question.stem || question.id,
     searchable: `${descriptor} ${questionSearchAliases(descriptor)}`,
     exactValues: [question.id, question.label, `q${question.label}`, `第${question.label}题`, question.type],

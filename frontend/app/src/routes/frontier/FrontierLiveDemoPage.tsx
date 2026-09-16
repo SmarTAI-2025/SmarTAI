@@ -36,7 +36,7 @@ import { InlineNotice } from "@/components/ui/InlineNotice";
 import { MarkdownMath } from "@/components/ui/MarkdownMath";
 import { SyntaxHighlightedCode } from "@/components/ui/SyntaxHighlightedCode";
 import { PdfDocumentPreview } from "@/components/tasks/PdfDocumentPreview";
-import { buildResultsModel, formatPercent, formatScore } from "@/components/tasks/resultsModel";
+import { buildResultsModel, formatPercent, formatScore, problemLabel } from "@/components/tasks/resultsModel";
 import { useI18n } from "@/i18n/I18nProvider";
 import type { Locale } from "@/i18n/messages";
 import { cn } from "@/lib/cn";
@@ -838,7 +838,7 @@ function TeacherMaterialConfirmation({
         {aligned.map((problem, index) => (
           <details key={problem.q_id} className="rounded-lg border bg-card px-3 py-2.5" open={index === 0}>
             <summary className="cursor-pointer text-sm font-semibold">
-              Q{problem.number} · {problem.type} · {tx(locale, `${problem.max_score} 分`, `${problem.max_score} points`)}
+              {problemLabel(problem)} · {problem.type} · {tx(locale, `${problem.max_score} 分`, `${problem.max_score} points`)}
             </summary>
             <div className="mt-3 grid gap-3 lg:grid-cols-2">
               <div>
