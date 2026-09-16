@@ -1,7 +1,8 @@
-import { ArrowDown, ArrowLeft, ArrowRight, ArrowUp, X } from "lucide-react";
-import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
+import { ResultQuestionSearch as QuestionFilterBar } from "@/components/tasks/ResultQuestionSearch";
+import { useResultQuestionFilter } from "@/hooks/useResultQuestionFilter";
+import { ArrowDown, ArrowLeft, ArrowRight, ArrowUp } from "lucide-react";
+import { useCallback, useEffect, useState, type ReactNode } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
-import { SmarTAIMascot } from "@/components/brand/SmarTAIMascot";
 import {
   aiCorrectionScore,
   correctionScoreSource,
@@ -15,14 +16,8 @@ import {
   type StudentSummary,
 } from "@/components/tasks/resultsModel";
 import { MarkdownMath } from "@/components/ui/MarkdownMath";
-import { useImeSafeQuery } from "@/hooks/useImeSafeQuery";
 import type { Locale } from "@/i18n/messages";
 import { cn } from "@/lib/cn";
-import {
-  matchReviewItems,
-  questionSearchItems,
-  type ReviewSearchMatch,
-} from "@/lib/reviewDetail";
 import { ResultQuestionSidebar, type ResultQuestionState } from "@/routes/tasks/results/ResultQuestionSidebar";
 import type { Correction } from "@/types";
 
@@ -34,8 +29,7 @@ export function StudentAnalysisDetail({ locale, taskId, studentId, model }: { lo
   const selectedQuestionId = searchParams.get("question") ?? "";
   const returnQuery = searchParams.get("return") ?? "";
   const student = model.students.find((item) => item.id === studentId) ?? null;
-  const questionMatches = useMemo(() => matchReviewItems(questionSearchItems(model.questions), questionQuery), [model.questions, questionQuery]);
-  const visibleQuestions = useMemo(() => questionMatches.map((match) => model.questions.find((item) => item.id === match.item.id)).filter((item): item is QuestionSummary => Boolean(item)), [model.questions, questionMatches]);
+  const { filter: questionFilter, matches: questionMatches, visibleQuestions } = useResultQuestionFilter({ taskId, query: questionQuery, questions: model.questions, locale, studentId });
   const studentIndex = model.students.findIndex((item) => item.id === studentId);
   const previousStudent = studentIndex > 0 ? model.students[studentIndex - 1] : null;
   const nextStudent = studentIndex >= 0 && studentIndex < model.students.length - 1 ? model.students[studentIndex + 1] : null;
@@ -162,6 +156,8 @@ export function StudentAnalysisDetail({ locale, taskId, studentId, model }: { lo
       </div>
 
       <QuestionFilterBar
+        filter={questionFilter}
+        taskId={taskId}
         className="mt-4"
         locale={locale}
         value={questionQuery}
@@ -194,53 +190,6 @@ export function StudentAnalysisDetail({ locale, taskId, studentId, model }: { lo
       </div>
     </section>
   );
-}
-
-function QuestionFilterBar({ className, locale, value, matches, onQuery, onSelect }: {
-  className?: string;
-  locale: Locale;
-  value: string;
-  matches: ReviewSearchMatch[];
-  onQuery: (value: string) => void;
-  onSelect: (id: string) => void;
-}) {
-  const [open, setOpen] = useState(false);
-  const smartSearch = useImeSafeQuery({ value, onCommit: onQuery, onDraftChange: () => setOpen(true) });
-
-  return (
-    <section className={cn("relative rounded-[9px] border bg-background p-2.5", className)} aria-label={tx(locale, "题目筛选", "Question filter")}>
-      <div className="flex items-start gap-2">
-        <SmarTAIMascot variant="thinking" size="xs" />
-        <label className="relative block min-w-0 flex-1">
-          <span className="sr-only">{tx(locale, "搜索题目", "Search questions")}</span>
-          <input
-            value={smartSearch.draftValue}
-            inputMode="search"
-            onFocus={() => setOpen(true)}
-            onCompositionStart={smartSearch.handleCompositionStart}
-            onCompositionEnd={smartSearch.handleCompositionEnd}
-            onChange={smartSearch.handleChange}
-            onBlur={(event) => {
-              smartSearch.handleBlur(event);
-              window.setTimeout(() => setOpen(false), 120);
-            }}
-            placeholder={tx(locale, "本地快速筛选：题号、题型、题干，或“积分题”", "Local quick filter: number, type, stem, or “integration”")}
-            className="h-10 w-full rounded-[8px] border bg-card pl-3 pr-10 text-xs text-foreground outline-none focus:border-primary focus:ring-2 focus:ring-primary/15"
-          />
-          {smartSearch.draftValue ? <button type="button" onMouseDown={(event) => event.preventDefault()} onClick={() => { smartSearch.commitValue(""); setOpen(false); }} aria-label={tx(locale, "清空题目筛选", "Clear question filter")} className="absolute right-2 top-1/2 inline-flex h-7 w-7 -translate-y-1/2 items-center justify-center rounded-full text-muted-foreground hover:bg-muted"><X aria-hidden="true" className="h-3.5 w-3.5" /></button> : null}
-          {open && smartSearch.draftValue.trim() && smartSearch.draftValue === value ? <SearchResults locale={locale} matches={matches} onSelect={(id) => { onSelect(id); setOpen(false); }} /> : null}
-        </label>
-      </div>
-      <div className="mt-2 grid gap-0.5 px-1 text-[10px] leading-4 text-muted-foreground">
-        <p>{tx(locale, "搜索只筛选题目，当前学生保持不变；输入中文时在选词完成后应用。", "Search filters questions only and keeps the current student; IME text is applied after composition.")}</p>
-        <p>{tx(locale, "输入框聚焦时方向键只编辑文本；退出输入框后，←/→ 切换学生，↑/↓ 切换题目。", "Arrow keys edit text while an input is focused; after leaving it, ←/→ switch students and ↑/↓ switch questions.")}</p>
-      </div>
-    </section>
-  );
-}
-
-function SearchResults({ locale, matches, onSelect }: { locale: Locale; matches: ReviewSearchMatch[]; onSelect: (id: string) => void }) {
-  return <div className="absolute left-0 right-0 top-9 z-30 max-h-60 overflow-y-auto rounded-[8px] border bg-card p-1.5 shadow-lg">{matches.length ? matches.slice(0, 12).map((match) => <button key={match.item.id} type="button" onMouseDown={(event) => event.preventDefault()} onClick={() => onSelect(match.item.id)} className="flex w-full items-center gap-3 rounded-[6px] px-2.5 py-2 text-left hover:bg-muted"><span className="min-w-0 flex-1"><span className="block truncate text-xs font-semibold text-foreground">{match.item.primary}</span><span className="block truncate text-[10px] text-muted-foreground">{match.item.secondary}</span></span><span className={cn("rounded-full px-2 py-1 text-[9px] font-semibold", match.kind === "exact" ? "bg-emerald-100 text-emerald-700" : "bg-blue-50 text-primary")}>{match.kind === "exact" ? tx(locale, "完全匹配", "Exact") : tx(locale, "相关匹配", "Related")}</span></button>) : <p className="px-3 py-4 text-center text-xs text-muted-foreground">{tx(locale, "没有匹配项，可清空当前筛选。", "No matches. Clear this filter to reset.")}</p>}</div>;
 }
 
 function ContinuousQuestionsView({ locale, taskId, student, questions, validCorrectionCount, studentReturn, onSelect }: { locale: Locale; taskId: string; student: StudentSummary; questions: QuestionSummary[]; validCorrectionCount: number; studentReturn: string; onSelect: (id: string) => void }) {

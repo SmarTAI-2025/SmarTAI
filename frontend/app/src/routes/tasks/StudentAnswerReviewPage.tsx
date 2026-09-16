@@ -31,14 +31,17 @@ import { NewTaskStepper } from "@/components/new-task/NewTaskStepper";
 import { OriginalFilePreviewPanel } from "@/components/tasks/OriginalFilePreviewPanel";
 import { OriginalFilePreviewTrigger } from "@/components/tasks/OriginalFilePreviewTrigger";
 import { SourceComparisonWorkspace } from "@/components/tasks/SourceComparisonWorkspace";
+import { TaskFilterFeedback } from "@/components/tasks/TaskFilterFeedback";
 import { problemLabel } from "@/components/tasks/resultsModel";
 import { Button } from "@/components/ui/Button";
 import { MarkdownMath } from "@/components/ui/MarkdownMath";
 import { useImeSafeQuery } from "@/hooks/useImeSafeQuery";
+import { useTaskFilterIntent, type TaskFilterController } from "@/hooks/useTaskFilterIntent";
 import { isFrontierDemoTask, useFrontierDemoSourcePreview } from "@/hooks/useFrontierDemoSourcePreview";
 import { useI18n } from "@/i18n/I18nProvider";
 import type { Locale, MessageKey } from "@/i18n/messages";
 import { cn } from "@/lib/cn";
+import { emptyFilterIntent, parsePreparationQuery } from "@/lib/preparationQuery";
 import { questionSearchAliases } from "@/lib/questionSearch";
 import { isWorkflowRevisionConflictCode } from "@/lib/taskActionGuards";
 import {
@@ -49,7 +52,7 @@ import {
   type SubmissionQuestion,
 } from "@/lib/submissionReview";
 import { getTaskDestination, hasTaskReachedStep } from "@/lib/taskFlow";
-import type { StudentAnswerInfo, StudentSubmission } from "@/types";
+import type { FilterIntentResult, StudentAnswerInfo, StudentSubmission } from "@/types";
 
 type PickerItem = {
   id: string;
@@ -98,6 +101,7 @@ export function StudentAnswerReviewPage() {
   const [identityName, setIdentityName] = useState("");
   const [identityError, setIdentityError] = useState<string | null>(null);
   const questionFilterParam = searchParams.get("questionFilter") ?? "";
+  const [submittedQuestionFilter, setSubmittedQuestionFilter] = useState<string | null>(null);
   const initializedStudentRef = useRef<string | null>(null);
   const positionedRouteRef = useRef<string | null>(null);
   const selectedQuestionRef = useRef(requestedQuestionId);
@@ -125,9 +129,50 @@ export function StudentAnswerReviewPage() {
     () => matchPickerItems(questionItems, questionFilterParam),
     [questionFilterParam, questionItems],
   );
+  const parsedQuestionIntent = useMemo(
+    () => parsePreparationQuery(questionFilterParam, "student_answer_review"),
+    [questionFilterParam],
+  );
+  const localQuestionIntent = useMemo(() => (
+    parsedQuestionIntent
+    ?? (questionFilterParam.trim() && questionMatches.length ? emptyFilterIntent() : null)
+  ), [parsedQuestionIntent, questionFilterParam, questionMatches.length]);
+  const questionFilter = useTaskFilterIntent({
+    taskId,
+    query: questionFilterParam,
+    surface: "student_answer_review",
+    localIntent: localQuestionIntent,
+    resolveLocalIntent: (value) => {
+      const parsed = parsePreparationQuery(value, "student_answer_review");
+      if (parsed) return parsed;
+      return matchPickerItems(questionItems, value).length ? emptyFilterIntent() : null;
+    },
+    contextKey: studentId ?? "",
+  });
+  const questionIntentUnsupported = Boolean(
+    questionFilter.intent && !supportsStudentQuestionIntent(questionFilter.intent),
+  );
+  const displayedQuestionFilter: TaskFilterController = questionIntentUnsupported
+    ? {
+      ...questionFilter,
+      intent: null,
+      unrecognized: true,
+      explanation: tx(
+        locale,
+        "当前学生作答页不能按这个条件排序；未应用部分筛选。",
+        "This student-answer view cannot apply that sort; no partial filter was applied.",
+      ),
+    }
+    : questionFilter;
   const filteredQuestions = useMemo(
-    () => selectMatched(questions, questionMatches, questionFilterParam, (value) => value.id),
-    [questionFilterParam, questionMatches, questions],
+    () => selectStudentAnswerQuestions({
+      questions,
+      student,
+      intent: displayedQuestionFilter.intent,
+      directMatches: questionMatches,
+      query: questionFilterParam,
+    }),
+    [displayedQuestionFilter.intent, questionFilterParam, questionMatches, questions, student],
   );
   const studentNeighbors = neighbors(students, studentId, (value) => value.stu_id);
   const activeIndex = Math.max(0, filteredQuestions.findIndex((question) => question.id === activeQuestionId));
@@ -140,6 +185,12 @@ export function StudentAnswerReviewPage() {
   useEffect(() => {
     if (requestedQuestionId) selectedQuestionRef.current = requestedQuestionId;
   }, [requestedQuestionId]);
+
+  useEffect(() => {
+    if (submittedQuestionFilter === null || submittedQuestionFilter !== questionFilterParam) return;
+    setSubmittedQuestionFilter(null);
+    void questionFilter.apply();
+  }, [questionFilter.apply, questionFilterParam, submittedQuestionFilter]);
 
   useEffect(() => {
     setIdentityOpen(false);
@@ -282,6 +333,18 @@ export function StudentAnswerReviewPage() {
       else next.delete(key);
       return next;
     }, { replace: true });
+  }
+
+  function updateQuestionFilter(value: string) {
+    setSubmittedQuestionFilter(null);
+    questionFilter.cancel();
+    setFilterParam("questionFilter", value);
+  }
+
+  function applyQuestionFilter(value: string) {
+    questionFilter.cancel();
+    setSubmittedQuestionFilter(value);
+    setFilterParam("questionFilter", value);
   }
 
   function confirmLeave() {
@@ -596,18 +659,22 @@ export function StudentAnswerReviewPage() {
           <div className="mt-3">
             <div className="rounded-[10px] border bg-card p-2">
               <SmartPicker
-                label={t("answerReviewQuestionSearchLabel")}
-                placeholder={t("answerReviewQuestionSearchPlaceholder")}
+                label={tx(locale, "Ask SmarTAI：筛选当前学生的作答", "Ask SmarTAI: filter this student's answers")}
+                placeholder={tx(locale, "Ask SmarTAI：找出缺答或待复核题目", "Ask SmarTAI: show missing or review-needed answers")}
                 query={questionFilterParam}
                 matches={questionMatches}
                 currentId={activeQuestion?.id ?? ""}
-                onCommit={(value) => setFilterParam("questionFilter", value)}
+                onCommit={updateQuestionFilter}
+                onApply={applyQuestionFilter}
                 onSelect={(id) => scrollToQuestion(id)}
+                filter={displayedQuestionFilter}
+                taskId={taskId}
+                locale={locale}
                 t={t}
               />
             </div>
             <div className="mt-1.5 grid gap-0.5 px-1 text-[11px] leading-5 text-muted-foreground">
-              <span>{tx(locale, "搜索只筛选题目；当前学生保持不变。输入中文时会在选词完成后再应用筛选。", "Question search only filters questions; the selected student stays unchanged. IME text is applied after composition finishes.")}</span>
+              <span>{tx(locale, "本地匹配优先；其他表达点击应用后仅由模型理解筛选指令，当前学生保持不变。", "Local matches run first. Other wording is interpreted only as a filter instruction after you apply it; the selected student stays unchanged.")}</span>
               <span className="flex items-center gap-1.5 font-medium text-foreground/70">
                 <Keyboard aria-hidden="true" className="h-3.5 w-3.5" />
                 {t("answerReviewKeyboardHint")}
@@ -753,14 +820,18 @@ function StudentNavigation({ student, previous, next, onPrevious, onNext, identi
   );
 }
 
-function SmartPicker({ label, placeholder, query, matches, currentId, onCommit, onSelect, t }: {
+function SmartPicker({ label, placeholder, query, matches, currentId, onCommit, onApply, onSelect, filter, taskId, locale, t }: {
   label: string;
   placeholder: string;
   query: string;
   matches: PickerMatch[];
   currentId: string;
   onCommit: (value: string) => void;
+  onApply: (value: string) => void;
   onSelect: (id: string) => void;
+  filter: TaskFilterController;
+  taskId?: string;
+  locale: Locale;
   t: (key: MessageKey) => string;
 }) {
   const [open, setOpen] = useState(false);
@@ -772,19 +843,26 @@ function SmartPicker({ label, placeholder, query, matches, currentId, onCommit, 
 
   return (
     <div className="relative" onFocusCapture={() => setOpen(true)} onBlurCapture={handleBlur}>
-      <div className="flex items-center gap-2">
-        <SmarTAIMascot variant="thinking" size="xs" />
+      <form className="flex items-center gap-2" onSubmit={(event) => {
+        event.preventDefault();
+        onApply(smartSearch.commitDraft());
+        setOpen(false);
+      }}>
+        <SmarTAIMascot variant={filter.pending ? "grading" : "thinking"} size="xs" />
         <label className="relative min-w-0 flex-1">
           <span className="sr-only">{label}</span>
           <input
-          type="text"
-          inputMode="search"
-          value={smartSearch.draftValue}
-          onBlur={smartSearch.handleBlur}
-          onCompositionStart={smartSearch.handleCompositionStart}
-          onCompositionEnd={smartSearch.handleCompositionEnd}
-          onChange={smartSearch.handleChange}
-          placeholder={placeholder}
+            type="text"
+            inputMode="search"
+            value={smartSearch.draftValue}
+            onBlur={smartSearch.handleBlur}
+            onCompositionStart={smartSearch.handleCompositionStart}
+            onCompositionEnd={smartSearch.handleCompositionEnd}
+            onChange={(event) => {
+              filter.cancel();
+              smartSearch.handleChange(event);
+            }}
+            placeholder={placeholder}
             className="h-10 w-full rounded-[7px] border-0 bg-slate-50 pl-3 pr-9 text-[13px] text-foreground outline-none placeholder:text-muted-foreground focus:ring-2 focus:ring-primary/20 dark:bg-slate-900/50"
           />
           {smartSearch.draftValue ? (
@@ -792,6 +870,7 @@ function SmartPicker({ label, placeholder, query, matches, currentId, onCommit, 
               type="button"
               onMouseDown={(event) => event.preventDefault()}
               onClick={() => {
+                filter.cancel();
                 smartSearch.commitValue("");
               }}
               className="absolute right-2 top-1/2 inline-flex h-7 w-7 -translate-y-1/2 items-center justify-center rounded-full text-muted-foreground outline-none hover:bg-muted hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
@@ -801,7 +880,12 @@ function SmartPicker({ label, placeholder, query, matches, currentId, onCommit, 
             </button>
           ) : null}
         </label>
-      </div>
+        <button type="submit" disabled={filter.pending || !smartSearch.draftValue.trim()} className="inline-flex h-9 shrink-0 items-center gap-1 rounded-[7px] bg-primary px-3 text-xs font-semibold text-primary-foreground disabled:opacity-50">
+          {filter.pending ? <LoaderCircle aria-hidden="true" className="h-3.5 w-3.5 animate-spin" /> : null}
+          {locale === "zh-CN" ? "应用" : "Apply"}
+        </button>
+      </form>
+      <TaskFilterFeedback filter={filter} taskId={taskId} />
       {open ? (
         <div className="absolute left-0 right-0 top-[44px] z-40 max-h-[280px] overflow-auto rounded-[9px] border bg-card p-1.5 shadow-xl">
           <p className="px-2 py-1 text-[10px] leading-4 text-muted-foreground">
@@ -1071,6 +1155,68 @@ function selectMatched<T>(values: T[], matches: PickerMatch[], query: string, ge
   if (!matches.length) return keepAllWhenEmpty ? values : [];
   const ids = new Set(matches.map((match) => match.item.id));
   return values.filter((value) => ids.has(getId(value)));
+}
+
+/** This detail view has one student, so student-list sorts must fail closed. */
+function supportsStudentQuestionIntent(intent: FilterIntentResult) {
+  return (
+    intent.min_score_percent === null
+    && intent.max_score_percent === null
+    && intent.pass_status === null
+    && !intent.low_confidence
+    && intent.review_status === null
+    && !intent.disagreement
+    && !intent.annotated
+    && !intent.question_types?.length
+    && intent.max_average_confidence == null
+    && !intent.missing_knowledge
+    && intent.min_max_score == null
+    && intent.max_max_score == null
+    && intent.preparation_status == null
+    && intent.material_field == null
+    && intent.material_status == null
+    && (!intent.sort || intent.sort === "question" || intent.sort === "question_desc")
+  );
+}
+
+function selectStudentAnswerQuestions({
+  questions,
+  student,
+  intent,
+  directMatches,
+  query,
+}: {
+  questions: SubmissionQuestion[];
+  student: StudentSubmission | undefined;
+  intent: FilterIntentResult | null;
+  directMatches: PickerMatch[];
+  query: string;
+}) {
+  if (!query.trim()) return questions;
+  if (!intent?.recognized) return questions;
+  if (directMatches.length) return selectMatched(questions, directMatches, query, (value) => value.id);
+  if (!student) return [];
+
+  const identity = normalize(`${student.stu_id} ${student.stu_name}`);
+  if (!intent.text_terms.every((term) => identity.includes(normalize(term)))) return [];
+  if (intent.submission_status === "identity" && student.identity_status !== "needs_review") return [];
+
+  const answers = answerMap(student);
+  const selected = questions.filter((question) => {
+    if (intent.question_tokens.length && !intent.question_tokens.some((token) => matchesIntentQuestion(question, token))) return false;
+    const state = getAnswerState(answers.get(question.id));
+    if (intent.submission_status === "missing") return state === "missing" || state === "empty";
+    if (intent.submission_status === "review") return !["recognized", "reviewed"].includes(state);
+    if (intent.submission_status === "recognized") return state === "recognized";
+    if (intent.submission_status === "reviewed") return state === "reviewed";
+    return true;
+  });
+  return intent.sort === "question_desc" ? [...selected].reverse() : selected;
+}
+
+function matchesIntentQuestion(question: SubmissionQuestion, token: string) {
+  const normalized = normalizeComparable(token);
+  return [question.id, question.label].some((value) => normalizeComparable(value) === normalized);
 }
 
 function neighbors<T>(values: T[], currentId: string | undefined, getId: (value: T) => string) {

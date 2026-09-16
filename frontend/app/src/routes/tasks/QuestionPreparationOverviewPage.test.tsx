@@ -29,6 +29,16 @@ vi.mock("@/api/hooks/tasks", () => ({
             status: "open",
           }],
         },
+        Q2: {
+          q_id: "Q2",
+          number: "Q2",
+          type: "计算题",
+          stem: "二次函数计算",
+          max_score: 5,
+          max_score_source: "recognized",
+          max_score_review_status: "confirmed",
+          reference_answer: "计算过程",
+        },
       },
     },
   }),
@@ -63,17 +73,43 @@ function renderPage(initialEntry: string) {
       </Routes>
     </MemoryRouter>,
   );
-  return screen.getByRole("textbox", { name: "本地快速筛选题目资料，不调用模型" }) as HTMLInputElement;
+  return screen.getByRole("textbox", { name: "Ask SmarTAI 筛选题目资料" }) as HTMLInputElement;
 }
 
 describe("QuestionPreparationOverviewPage smart search", () => {
+  it("announces and reverses the table-header sort direction", async () => {
+    const user = userEvent.setup();
+    renderPage("/tasks/task-1/questions");
+
+    await user.click(screen.getByRole("button", { name: "满分，当前未排序；点击升序" }));
+    expect(screen.getByRole("button", { name: "满分，当前升序；点击降序" })).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "满分，当前升序；点击降序" }));
+    expect(screen.getByRole("button", { name: "满分，当前降序；点击升序" })).toBeInTheDocument();
+  });
+
   it("shows each maximum score and the total while flagging defaults", () => {
     renderPage("/tasks/task-1/questions");
 
     expect(screen.getByRole("columnheader", { name: "满分" })).toBeInTheDocument();
     expect(screen.getByTitle("系统默认，需确认")).toHaveTextContent("10 分");
-    expect(screen.getByText(/作业总分 10/)).toBeInTheDocument();
+    expect(screen.getByText(/作业总分 15/)).toBeInTheDocument();
     expect(screen.getByTitle("当前使用默认 10 分，请确认题目满分")).toBeInTheDocument();
+  });
+
+  it("treats 按满分升序 as a local sort instead of filtering every question", async () => {
+    const input = renderPage("/tasks/task-1/questions");
+
+    fireEvent.change(input, { target: { value: "按满分升序" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+
+    await waitFor(() => {
+      const rows = screen.getAllByRole("row").slice(1);
+      expect(rows).toHaveLength(2);
+      expect(rows[0]).toHaveTextContent("Q2");
+      expect(rows[1]).toHaveTextContent("Q1");
+    });
+    expect(screen.getByText("已本地匹配，未调用模型。")).toBeInTheDocument();
   });
 
   it("does not apply a native composing input event before composition ends", async () => {

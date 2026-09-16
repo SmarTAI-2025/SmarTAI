@@ -1,6 +1,7 @@
 import { MoreHorizontal, Trash2 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
+import { SortableTableHead, type SortDirection } from "@/components/ui/SortableTableHead";
 import { useTaskProgress } from "@/hooks/useTaskProgress";
 import { useI18n } from "@/i18n/I18nProvider";
 import { cn } from "@/lib/cn";
@@ -25,7 +26,9 @@ interface HistoryTaskTableProps {
   isDeleting: boolean;
   deletingTaskId: string | null;
   hasFilters: boolean;
+  sort: TaskHistoryQuery["sort"];
   onFilter: (patch: Partial<TaskHistoryQuery>) => void;
+  onSort: (column: "name" | "stage" | "updated") => void;
   onDelete: (task: TaskLite) => void;
   onRetry: () => void;
   onClear: () => void;
@@ -42,7 +45,9 @@ export function HistoryTaskTable({
   isDeleting,
   deletingTaskId,
   hasFilters,
+  sort,
   onFilter,
+  onSort,
   onDelete,
   onRetry,
   onClear,
@@ -53,11 +58,11 @@ export function HistoryTaskTable({
       <div className="overflow-visible pb-2 md:overflow-x-auto">
         <div role="table" aria-label={t("historyTableRegion")} aria-busy={isLoading} className="min-w-0 text-left md:min-w-[1080px]">
           <div role="row" className={cn("grid h-[42px] items-center text-[13px] font-semibold leading-4 text-muted-foreground", COLUMNS)}>
-            <div role="columnheader" className="px-[14px]">{t("historyColumnTask")}</div>
-            <div role="columnheader" className="px-[14px]">{t("historyColumnStage")}</div>
+            <SortableTableHead as="div" className="px-[14px]" direction={historySortDirection(sort, "name")} onSort={() => onSort("name")} sortLabel={t("historyColumnTask")}>{t("historyColumnTask")}</SortableTableHead>
+            <SortableTableHead as="div" className="px-[14px]" direction={historySortDirection(sort, "stage")} onSort={() => onSort("stage")} sortLabel={t("historyColumnStage")}>{t("historyColumnStage")}</SortableTableHead>
             <div role="columnheader" className="hidden px-[14px] md:block">{t("historyColumnProgress")}</div>
             <div role="columnheader" className="hidden px-[14px] md:block">{t("historyColumnEta")}</div>
-            <div role="columnheader" className="hidden px-[14px] md:block">{t("historyColumnUpdated")}</div>
+            <SortableTableHead as="div" className="hidden px-[14px] md:block" direction={historySortDirection(sort, "updated")} onSort={() => onSort("updated")} sortLabel={t("historyColumnUpdated")}>{t("historyColumnUpdated")}</SortableTableHead>
             <div role="columnheader" className="hidden px-[14px] md:block">{t("historyColumnNext")}</div>
           </div>
 
@@ -97,6 +102,13 @@ export function HistoryTaskTable({
       </div>
     </section>
   );
+}
+
+function historySortDirection(sort: TaskHistoryQuery["sort"], column: "name" | "stage" | "updated"): SortDirection | null {
+  const prefix = column === "name" ? "name" : column;
+  if (sort === `${prefix}_asc`) return "asc";
+  if (sort === `${prefix}_desc`) return "desc";
+  return null;
 }
 
 function HistoryTaskRow({

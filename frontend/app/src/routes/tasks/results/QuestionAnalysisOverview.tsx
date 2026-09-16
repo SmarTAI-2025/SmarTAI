@@ -3,6 +3,7 @@ import { useMemo, useRef, useState, type FormEvent, type ReactNode } from "react
 import { Link, useSearchParams } from "react-router-dom";
 import { useAnalyticsFilterIntent } from "@/api/hooks/analytics";
 import { SmarTAIMascot } from "@/components/brand/SmarTAIMascot";
+import { SortableTableHead, compareSortableValues, toggleColumnSort, type ColumnSort } from "@/components/ui/SortableTableHead";
 import { RecoverableActionState } from "@/components/ui/RecoverableActionState";
 import {
   clampPercent,
@@ -25,7 +26,7 @@ type ReviewFilter = "all" | "pending" | "confirmed" | "none";
 type ReviewState = Exclude<ReviewFilter, "all">;
 type ScoreFilter = "all" | "under60" | "under70" | "atleast80";
 type ConfidenceFilter = "all" | "low_items" | "avg_low";
-type SortMode = "question" | "score_asc" | "score_desc" | "confidence_asc" | "review_desc";
+type SortMode = "question" | "question_desc" | "score_asc" | "score_desc" | "confidence_asc" | "confidence_desc" | "review_asc" | "review_desc" | "max_score_asc" | "max_score_desc" | "type_asc" | "type_desc";
 
 interface QuestionAnalysisRow {
   question: QuestionSummary;
@@ -75,6 +76,8 @@ export function QuestionAnalysisOverview({
   const query = searchParams.get("q") ?? "";
   const smartSearch = useImeSafeQuery({ value: query, onCommit: (value) => updateParam("q", value, "") });
   const intentQuery = useAnalyticsFilterIntent();
+  const intentGeneration = useRef(0);
+  const [columnSort, setColumnSort] = useState<ColumnSort | null>(null);
   const [intentState, setIntentState] = useState<{ taskId: string; question: string; result: FilterIntentResult } | null>(null);
   const contextRef = useRef({ taskId, query });
   contextRef.current = { taskId, query };
@@ -90,10 +93,10 @@ export function QuestionAnalysisOverview({
 
   const rows = useMemo(() => model.questions.map((question) => buildQuestionRow(question, locale)), [locale, model.questions]);
   const currentIntent = intentState?.taskId === taskId && intentState.question === query ? intentState : null;
-  const activeIntent = currentIntent?.result.recognized ? currentIntent.result : null;
-  const unsupportedIntent = currentIntent && !currentIntent.result.recognized;
+  const activeIntent = currentIntent?.result.recognized && questionIntentSupported(currentIntent.result) ? currentIntent.result : null;
+  const unsupportedIntent = currentIntent && !activeIntent;
   const semanticPlan = useMemo(() => activeIntent ? intentToQuestionPlan(activeIntent, locale)
-    : parseSemanticQuestionQuery(unsupportedIntent ? "" : query, locale), [activeIntent, locale, query, unsupportedIntent]);
+    : parseSemanticQuestionQuery(unsupportedIntent || (query && !localQuestionIntent(model.questions, query, locale)) ? "" : query, locale), [activeIntent, locale, model.questions, query, unsupportedIntent]);
   const effectiveSort = semanticPlan.sort ?? sortMode;
   const types = useMemo(
     () => Array.from(new Set(rows.map((row) => row.type).filter((value) => value !== "—"))).sort((a, b) => a.localeCompare(b, locale === "en-US" ? "en" : "zh-Hans-CN")),
@@ -107,8 +110,8 @@ export function QuestionAnalysisOverview({
       && matchesConfidenceFilter(row, confidenceFilter)
       && (reviewFilter === "all" || row.reviewState === reviewFilter)
     ));
-    return matches.sort((left, right) => compareRows(left, right, effectiveSort));
-  }, [confidenceFilter, reviewFilter, rows, scoreFilter, semanticPlan, effectiveSort, typeFilter]);
+    return matches.sort((left, right) => columnSort ? compareQuestionColumn(left, right, columnSort) : compareRows(left, right, effectiveSort));
+  }, [columnSort, confidenceFilter, reviewFilter, rows, scoreFilter, semanticPlan, effectiveSort, typeFilter]);
 
   const averageQuestionPercent = averageOrNull(rows.map((row) => row.question.avgPercent));
   const weakQuestionCount = rows.filter((row) => (row.question.avgPercent ?? 100) < 60).length;
@@ -129,7 +132,13 @@ export function QuestionAnalysisOverview({
     updateParam("q", nextQuery, "");
   };
 
+  function sortColumn(key: string) {
+    intentGeneration.current += 1;
+    setColumnSort((current) => toggleColumnSort(current, key));
+  }
+
   function clearIntent() {
+    intentGeneration.current += 1;
     setIntentState(null);
     setResolution("idle");
     intentQuery.reset();
@@ -140,6 +149,8 @@ export function QuestionAnalysisOverview({
     const question = value.trim();
     smartSearch.commitValue(question);
     clearIntent();
+    setColumnSort(null);
+    const generation = intentGeneration.current;
     if (!question) return;
     const plan = parseSemanticQuestionQuery(question, locale);
     if (plan.conditions.length && (!plan.terms.length || rows.some((row) => plan.terms.every((term) => termMatchesRow(term, row))))) {
@@ -148,7 +159,7 @@ export function QuestionAnalysisOverview({
     }
     intentQuery.mutate({ taskId, question, surface: "question_analysis" }, {
       onSuccess: (result) => {
-        if (contextRef.current.taskId !== taskId || contextRef.current.query !== question) return;
+        if (generation !== intentGeneration.current || contextRef.current.taskId !== taskId || contextRef.current.query !== question) return;
         setIntentState({ taskId, question, result }); setResolution("llm");
       },
     });
@@ -252,13 +263,7 @@ export function QuestionAnalysisOverview({
             <option value="confirmed">{tx(locale, "信号已由教师处理", "Signals handled by teacher")}</option>
             <option value="none">{tx(locale, "无复核信号", "No review signals")}</option>
           </FilterSelect>
-          <FilterSelect value={sortMode} onChange={(value) => updateParam("sort", value, "question")} label={tx(locale, "排序", "Sort")}>
-            <option value="question">{tx(locale, "按题号", "Question order")}</option>
-            <option value="score_asc">{tx(locale, "得分率从低到高", "Score low to high")}</option>
-            <option value="score_desc">{tx(locale, "得分率从高到低", "Score high to low")}</option>
-            <option value="confidence_asc">{tx(locale, "置信度从低到高", "Confidence low to high")}</option>
-            <option value="review_desc">{tx(locale, "复核信号最多优先", "Most review signals first")}</option>
-          </FilterSelect>
+
         </div>
 
         <div className="mt-3 flex flex-wrap items-center justify-between gap-2 pb-3 text-[11px] text-muted-foreground">
@@ -271,13 +276,13 @@ export function QuestionAnalysisOverview({
 
       {filteredRows.length ? (
         <>
-          <QuestionDesktopTable locale={locale} taskId={taskId} rows={filteredRows} returnQuery={returnQuery} />
+          <QuestionDesktopTable locale={locale} taskId={taskId} rows={filteredRows} returnQuery={returnQuery} columnSort={columnSort} onSort={sortColumn} />
           <QuestionMobileCards locale={locale} taskId={taskId} rows={filteredRows} returnQuery={returnQuery} />
         </>
       ) : (
         <div className="border-t px-5 py-12 text-center">
           <p className="text-[14px] font-bold text-foreground">{tx(locale, "没有匹配的题目", "No questions matched")}</p>
-          <p className="mt-1 text-[12px] text-muted-foreground">{tx(locale, "移除一个条件，或清除本地快速筛选后重试。", "Remove a condition or clear the local quick filter.")}</p>
+          <p className="mt-1 text-[12px] text-muted-foreground">{tx(locale, "移除一个条件，或清除筛选条件后重试。", "Remove a condition or clear filters.")}</p>
         </div>
       )}
 
@@ -292,18 +297,18 @@ export function QuestionAnalysisOverview({
   );
 }
 
-function QuestionDesktopTable({ locale, taskId, rows, returnQuery }: { locale: Locale; taskId: string; rows: QuestionAnalysisRow[]; returnQuery: string }) {
+function QuestionDesktopTable({ locale, taskId, rows, returnQuery, columnSort, onSort }: { locale: Locale; taskId: string; rows: QuestionAnalysisRow[]; returnQuery: string; columnSort: ColumnSort | null; onSort: (key: string) => void }) {
   return (
     <div className="hidden border-t lg:block">
       <table className="w-full table-fixed text-left">
         <thead className="bg-slate-50 text-[11px] font-medium text-muted-foreground">
           <tr>
-            <th className="w-[31%] px-4 py-3 font-medium">{tx(locale, "题目", "Question")}</th>
-            <th className="w-[9%] px-3 py-3 font-medium">{tx(locale, "作答", "Responses")}</th>
-            <th className="w-[14%] px-3 py-3 font-medium">{tx(locale, "平均分", "Mean score")}</th>
-            <th className="w-[13%] px-3 py-3 font-medium">{tx(locale, "置信度", "Confidence")}</th>
-            <th className="w-[13%] px-3 py-3 font-medium">{tx(locale, "复核", "Review")}</th>
-            <th className="w-[14%] px-3 py-3 font-medium">{tx(locale, "易错 / 风险摘要", "Error / risk summary")}</th>
+            <SortableTableHead className="w-[31%] px-4 py-3 font-medium" direction={columnSort?.key === "question" ? columnSort.direction : null} onSort={() => onSort("question")}>{tx(locale, "题目", "Question")}</SortableTableHead>
+            <SortableTableHead className="w-[9%] px-3 py-3 font-medium" direction={columnSort?.key === "count" ? columnSort.direction : null} onSort={() => onSort("count")}>{tx(locale, "作答", "Responses")}</SortableTableHead>
+            <SortableTableHead className="w-[14%] px-3 py-3 font-medium" direction={columnSort?.key === "mean" ? columnSort.direction : null} onSort={() => onSort("mean")}>{tx(locale, "平均分", "Mean score")}</SortableTableHead>
+            <SortableTableHead className="w-[13%] px-3 py-3 font-medium" direction={columnSort?.key === "confidence" ? columnSort.direction : null} onSort={() => onSort("confidence")}>{tx(locale, "置信度", "Confidence")}</SortableTableHead>
+            <SortableTableHead className="w-[13%] px-3 py-3 font-medium" direction={columnSort?.key === "review" ? columnSort.direction : null} onSort={() => onSort("review")}>{tx(locale, "复核", "Review")}</SortableTableHead>
+            <SortableTableHead className="w-[14%] px-3 py-3 font-medium" direction={columnSort?.key === "risk" ? columnSort.direction : null} onSort={() => onSort("risk")}>{tx(locale, "易错 / 风险摘要", "Error / risk summary")}</SortableTableHead>
             <th className="w-[6%] px-3 py-3 text-right font-medium">{tx(locale, "操作", "Action")}</th>
           </tr>
         </thead>
@@ -642,7 +647,7 @@ function intentToQuestionPlan(intent: FilterIntentResult, locale: Locale): Seman
   plan.avgConfidenceBelow = intent.max_average_confidence ?? null;
   plan.reviewState = intent.review_status;
   plan.missingKnowledge = intent.missing_knowledge ?? false;
-  plan.sort = intent.sort === "name_asc" || intent.sort === "name_desc" ? null : intent.sort;
+  plan.sort = intent.sort as SortMode | null;
   plan.terms = intent.text_terms;
   const add = (label: string) => plan.conditions.push({ id: `intent-${plan.conditions.length}`, label, source: "" });
   plan.qTokens.forEach((token) => add(tx(locale, `题号：${token}`, `Question: ${token}`)));
@@ -657,6 +662,13 @@ function intentToQuestionPlan(intent: FilterIntentResult, locale: Locale): Seman
     question: tx(locale, "按题号", "Question order"), score_asc: tx(locale, "得分率从低到高", "Score low to high"),
     score_desc: tx(locale, "得分率从高到低", "Score high to low"), confidence_asc: tx(locale, "置信度从低到高", "Confidence low to high"),
     review_desc: tx(locale, "复核信号最多优先", "Most review signals first"),
+    review_asc: tx(locale, "复核信号最少优先", "Fewest review signals first"),
+    confidence_desc: tx(locale, "置信度从高到低", "Confidence high to low"),
+    question_desc: tx(locale, "题号降序", "Question descending"),
+    max_score_asc: tx(locale, "满分从低到高", "Maximum score low to high"),
+    max_score_desc: tx(locale, "满分从高到低", "Maximum score high to low"),
+    type_asc: tx(locale, "题型升序", "Type ascending"),
+    type_desc: tx(locale, "题型降序", "Type descending"),
   };
   if (plan.sort) add(sortLabels[plan.sort]);
   plan.terms.forEach((term) => add(tx(locale, `关键词：${term}`, `Keyword: ${term}`)));
@@ -697,11 +709,47 @@ function matchesConfidenceFilter(row: QuestionAnalysisRow, filter: ConfidenceFil
 }
 
 function compareRows(left: QuestionAnalysisRow, right: QuestionAnalysisRow, sort: SortMode): number {
-  if (sort === "score_asc") return nullableNumber(left.question.avgPercent, Number.POSITIVE_INFINITY) - nullableNumber(right.question.avgPercent, Number.POSITIVE_INFINITY) || compareQuestionLabels(left.label, right.label);
-  if (sort === "score_desc") return nullableNumber(right.question.avgPercent, Number.NEGATIVE_INFINITY) - nullableNumber(left.question.avgPercent, Number.NEGATIVE_INFINITY) || compareQuestionLabels(left.label, right.label);
-  if (sort === "confidence_asc") return nullableNumber(left.avgConfidence, Number.POSITIVE_INFINITY) - nullableNumber(right.avgConfidence, Number.POSITIVE_INFINITY) || compareQuestionLabels(left.label, right.label);
-  if (sort === "review_desc") return right.requiredReviewCount - left.requiredReviewCount || compareQuestionLabels(left.label, right.label);
-  return compareQuestionLabels(left.label, right.label);
+  const direction = sort.endsWith("_desc") ? "desc" : "asc";
+  const value = (row: QuestionAnalysisRow): string | number | null => {
+    if (sort.startsWith("score_")) return row.question.avgPercent;
+    if (sort.startsWith("confidence_")) return row.avgConfidence;
+    if (sort.startsWith("review_")) return row.requiredReviewCount;
+    if (sort.startsWith("max_score_")) return row.question.maxScore;
+    if (sort.startsWith("type_")) return row.type;
+    return row.label;
+  };
+  return compareSortableValues(value(left), value(right), direction) || compareQuestionLabels(left.label, right.label);
+}
+
+function compareQuestionColumn(left: QuestionAnalysisRow, right: QuestionAnalysisRow, sort: ColumnSort): number {
+  const value = (row: QuestionAnalysisRow) => ({ question: row.label, count: row.question.count, mean: row.question.avgScore, confidence: row.avgConfidence, review: row.requiredReviewCount, risk: row.riskSummary })[sort.key];
+  return compareSortableValues(value(left), value(right), sort.direction) || compareQuestionLabels(left.label, right.label);
+}
+
+const QUESTION_SORTS = new Set<string>(["question", "question_desc", "score_asc", "score_desc", "confidence_asc", "confidence_desc", "review_asc", "review_desc", "max_score_asc", "max_score_desc", "type_asc", "type_desc"]);
+export function questionIntentSupported(intent: FilterIntentResult): boolean {
+  return !intent.pass_status && !intent.annotated && !intent.disagreement && (!intent.sort || QUESTION_SORTS.has(intent.sort));
+}
+
+/** Shared by all three question-navigation Ask surfaces, with local facts only. */
+export function localQuestionIntent(questions: QuestionSummary[], query: string, locale: Locale): FilterIntentResult | null {
+  const plan = parseSemanticQuestionQuery(query, locale);
+  const rows = questions.map((question) => buildQuestionRow(question, locale));
+  if (query.trim() && (!plan.conditions.length || (plan.terms.length && !rows.some((row) => plan.terms.every((term) => termMatchesRow(term, row)))))) return null;
+  return {
+    recognized: true, min_score_percent: plan.minPercent, max_score_percent: plan.maxPercent,
+    pass_status: null, low_confidence: plan.lowConfidence, review_status: plan.reviewState,
+    disagreement: false, annotated: false, sort: plan.sort, question_tokens: plan.qTokens,
+    question_types: plan.types, max_average_confidence: plan.avgConfidenceBelow,
+    missing_knowledge: plan.missingKnowledge, text_terms: plan.terms, explanation: "",
+  };
+}
+
+export function selectResultQuestions(questions: QuestionSummary[], intent: FilterIntentResult | null, locale: Locale): QuestionSummary[] {
+  if (!intent || !intent.recognized || !questionIntentSupported(intent)) return questions;
+  const plan = intentToQuestionPlan(intent, locale);
+  return questions.map((question) => buildQuestionRow(question, locale)).filter((row) => matchesSemanticPlan(row, plan))
+    .sort((a, b) => compareRows(a, b, plan.sort ?? "question")).map((row) => row.question);
 }
 
 function questionDetailHref(taskId: string, questionId: string, returnQuery: string): string {
@@ -722,7 +770,7 @@ function normalizeReviewFilter(value: string | null): ReviewFilter {
 }
 
 function normalizeSortMode(value: string | null): SortMode {
-  return value === "score_asc" || value === "score_desc" || value === "confidence_asc" || value === "review_desc" ? value : "question";
+  return value && QUESTION_SORTS.has(value) ? value as SortMode : "question";
 }
 
 function normalizeConfidence(value: number | null | undefined): number | null {

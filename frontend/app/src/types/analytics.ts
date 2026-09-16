@@ -6,7 +6,8 @@ export interface FilterAnalyticsResult {
   explanation: string;
 }
 
-export type FilterIntentSurface = "student_analysis" | "review_overview" | "question_analysis";
+export type FilterIntentSurface = "student_analysis" | "review_overview" | "question_analysis"
+  | "question_preparation" | "submission_review" | "student_answer_review";
 
 export interface FilterIntentResult {
   recognized: boolean;
@@ -17,11 +18,20 @@ export interface FilterIntentResult {
   review_status: "pending" | "confirmed" | "none" | null;
   disagreement: boolean;
   annotated: boolean;
-  sort: "score_asc" | "score_desc" | "confidence_asc" | "review_desc" | "name_asc" | "name_desc" | "question" | null;
+  sort: "score_asc" | "score_desc" | "confidence_asc" | "confidence_desc"
+    | "review_desc" | "review_asc" | "name_asc" | "name_desc" | "id_asc" | "id_desc"
+    | "question" | "question_desc" | "max_score_asc" | "max_score_desc"
+    | "type_asc" | "type_desc" | "coverage_asc" | "coverage_desc" | null;
   question_tokens: string[];
   question_types?: string[];
   max_average_confidence?: number | null;
   missing_knowledge?: boolean;
+  min_max_score?: number | null;
+  max_max_score?: number | null;
+  preparation_status?: "attention" | "low_confidence" | "source_conflict" | "parse_anomaly" | "ready" | null;
+  material_field?: "stem" | "answer" | "rubric" | "tests" | null;
+  material_status?: "missing" | "ready" | "generated" | "recognized" | null;
+  submission_status?: "review" | "missing" | "identity" | "recognized" | "reviewed" | null;
   text_terms: string[];
   explanation: string;
 }

@@ -1,30 +1,32 @@
-import { AlertCircle, CheckCircle2, ChevronRight, RotateCcw } from "lucide-react";
-import { useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
+import { AlertCircle, CheckCircle2, ChevronRight, LoaderCircle, RotateCcw } from "lucide-react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, Navigate, useParams, useSearchParams } from "react-router-dom";
 import { useTask } from "@/api/hooks/tasks";
 import { SmarTAIMascot } from "@/components/brand/SmarTAIMascot";
 import { NewTaskStepper } from "@/components/new-task/NewTaskStepper";
 import { MatrixQueueWorkspace } from "@/components/tasks/MatrixQueueWorkspace";
 import { MatrixStatusCell, type MatrixStatusTone } from "@/components/tasks/MatrixStatusCell";
+import { TaskFilterFeedback } from "@/components/tasks/TaskFilterFeedback";
+import { SortableTableHead, compareSortableValues, toggleColumnSort, type ColumnSort, type SortDirection } from "@/components/ui/SortableTableHead";
+import { useTaskFilterIntent } from "@/hooks/useTaskFilterIntent";
 import { getMatrixIdentityLayout, MATRIX_ACTION_COLUMN_WIDTH, MATRIX_QUESTION_COLUMN_WIDTH } from "@/components/tasks/matrixLayout";
 import { useI18n } from "@/i18n/I18nProvider";
 import type { MessageKey } from "@/i18n/messages";
 import { cn } from "@/lib/cn";
+import { emptyFilterIntent, parsePreparationQuery, selectSubmissionIntent, submissionStateMatches } from "@/lib/preparationQuery";
 import {
   answerMap,
   buildSubmissionQuestions,
   getAnswerState,
   getSubmissionReviewStats,
-  selectSubmissionReview,
   studentNeedsAttention,
   type SubmissionAnswerState,
   type SubmissionQuestion,
   type SubmissionReviewFilter,
   type SubmissionReviewSelection,
-  type SubmissionReviewSort,
 } from "@/lib/submissionReview";
 import { getTaskDestination, hasTaskReachedStep } from "@/lib/taskFlow";
-import type { StudentAnswerInfo, StudentSubmission } from "@/types";
+import type { FilterIntentResult, StudentAnswerInfo, StudentSubmission } from "@/types";
 
 const EXPLANATION_KEYS: Record<SubmissionReviewSelection["explanation"], MessageKey> = {
   all: "submissionReviewFilterAllHint",
@@ -45,6 +47,10 @@ interface SubmissionQueueItem {
   reasonKey: MessageKey;
 }
 
+type SubmissionSortKey = "id" | "name" | "coverage" | "review" | `question:${string}`;
+type SubmissionSort = { key: SubmissionSortKey; direction: SortDirection };
+const DEFAULT_SUBMISSION_SORT: SubmissionSort = { key: "id", direction: "asc" };
+
 export function SubmissionReviewOverviewPage() {
   const { taskId } = useParams();
   const [searchParams, setSearchParams] = useSearchParams();
@@ -56,9 +62,10 @@ export function SubmissionReviewOverviewPage() {
   const pendingCompositionCommitRef = useRef<number | null>(null);
   const lastCommittedQueryRef = useRef(query);
   const [queryDraft, setQueryDraft] = useState(query);
-  const deferredQuery = useDeferredValue(query);
+  const [tableSort, setTableSort] = useState<SubmissionSort | null>(null);
   const filter = normalizeFilter(searchParams.get("status"));
-  const sort = normalizeSort(searchParams.get("sort"));
+  const sortParam = searchParams.get("sort");
+  const urlSort = normalizeSort(sortParam);
 
   const students = useMemo(
     () => Object.values(taskQuery.data?.student_data ?? {}),
@@ -69,9 +76,23 @@ export function SubmissionReviewOverviewPage() {
     [students, taskQuery.data?.problem_data],
   );
   const stats = useMemo(() => getSubmissionReviewStats(students, questions), [questions, students]);
+  const localIntent = useMemo(
+    () => resolveSubmissionLocalIntent(query, students, questions),
+    [query, questions, students],
+  );
+  const smartFilter = useTaskFilterIntent({
+    taskId,
+    query,
+    surface: "submission_review",
+    localIntent,
+    resolveLocalIntent: (value) => resolveSubmissionLocalIntent(value, students, questions),
+  });
+  const intent = smartFilter.unrecognized ? null : smartFilter.intent;
+  const naturalSort = intent ? intentToSubmissionSort(intent.sort) : null;
+  const effectiveSort = tableSort ?? (sortParam ? urlSort : naturalSort ?? DEFAULT_SUBMISSION_SORT);
   const selection = useMemo(
-    () => selectSubmissionReview(students, questions, deferredQuery, filter, sort),
-    [deferredQuery, filter, questions, sort, students],
+    () => selectSubmissionOverview(students, questions, intent, filter, effectiveSort),
+    [effectiveSort, filter, intent, questions, students],
   );
 
   useEffect(() => {
@@ -111,6 +132,12 @@ export function SubmissionReviewOverviewPage() {
     setParam("q", value, "");
   }
 
+  function applyQuery(value: string) {
+    const normalized = value.trim();
+    commitQuery(normalized);
+    void smartFilter.apply(normalized);
+  }
+
   function flushComposition(input: HTMLInputElement) {
     if (pendingCompositionCommitRef.current !== null) {
       window.clearTimeout(pendingCompositionCommitRef.current);
@@ -120,6 +147,18 @@ export function SubmissionReviewOverviewPage() {
     const finalValue = input.value;
     setQueryDraft(finalValue);
     commitQuery(finalValue);
+  }
+
+  function sortByColumn(key: "id" | "name" | `question:${string}`) {
+    smartFilter.cancel();
+    const current: ColumnSort | null = tableSort ?? (sortParam ? { key: urlSort.key, direction: urlSort.direction } : null);
+    const next = toggleColumnSort(current, key) as SubmissionSort;
+    setTableSort(next);
+    if (key === "id" || key === "name") {
+      setParam("sort", `${next.key}_${next.direction}`, "id_asc");
+      return;
+    }
+    setParam("sort", "", "");
   }
 
   const attentionStudent = selection.students.find((student) => studentNeedsAttention(student, selection.questions));
@@ -168,11 +207,17 @@ export function SubmissionReviewOverviewPage() {
           />
         </dl>
 
-        <div className="mt-6 min-w-0 rounded-[10px] border bg-card p-2.5 sm:flex sm:min-h-[52px] sm:items-center sm:gap-2.5 sm:p-1.5">
+        <form
+          className="mt-6 min-w-0 rounded-[10px] border bg-card p-2.5 sm:flex sm:min-h-[52px] sm:items-center sm:gap-2.5 sm:p-1.5"
+          onSubmit={(event) => {
+            event.preventDefault();
+            applyQuery(queryDraft);
+          }}
+        >
           <div className="flex min-w-0 flex-1 items-center gap-2">
-            <SmarTAIMascot variant="thinking" size="xs" />
+            <SmarTAIMascot variant={smartFilter.pending ? "grading" : "thinking"} size="xs" />
             <label className="relative block min-w-0 flex-1">
-              <span className="sr-only">{t("submissionReviewSearchLabel")}</span>
+              <span className="sr-only">{locale === "zh-CN" ? "Ask SmarTAI：筛选与排序学生作答" : "Ask SmarTAI: filter and sort student answers"}</span>
               <input
               type="search"
               value={queryDraft}
@@ -193,6 +238,7 @@ export function SubmissionReviewOverviewPage() {
               }}
               onChange={(event) => {
                 const value = event.currentTarget.value;
+                smartFilter.cancel();
                 setQueryDraft(value);
                 if (
                   !queryComposingRef.current
@@ -207,11 +253,15 @@ export function SubmissionReviewOverviewPage() {
                   flushComposition(event.currentTarget);
                 }
               }}
-              placeholder={t("submissionReviewSearchPlaceholder")}
+              placeholder={locale === "zh-CN" ? "Ask SmarTAI：找出缺答作答，或按覆盖率排序" : "Ask SmarTAI: show missing answers, or sort by coverage"}
                 className="h-10 w-full rounded-[7px] border-0 bg-slate-50 pl-3 pr-3 text-[13px] text-foreground outline-none placeholder:text-muted-foreground focus:ring-2 focus:ring-primary/20 dark:bg-slate-900/50"
               />
             </label>
           </div>
+          <button type="submit" disabled={smartFilter.pending || !queryDraft.trim()} className="mt-2 inline-flex h-10 shrink-0 items-center justify-center gap-1.5 rounded-[7px] bg-primary px-3 text-xs font-semibold text-primary-foreground disabled:opacity-50 sm:mt-0">
+            {smartFilter.pending ? <LoaderCircle aria-hidden="true" className="h-3.5 w-3.5 animate-spin" /> : null}
+            {locale === "zh-CN" ? "应用" : "Apply"}
+          </button>
           <label className="mt-2 block shrink-0 sm:mt-0 sm:w-[170px]">
             <span className="sr-only">{t("submissionReviewStatusLabel")}</span>
             <select
@@ -225,25 +275,14 @@ export function SubmissionReviewOverviewPage() {
               <option value="identity">{t("submissionReviewStatusIdentity")}</option>
             </select>
           </label>
-          <label className="mt-2 block shrink-0 sm:mt-0 sm:w-[160px]">
-            <span className="sr-only">{t("submissionReviewSortLabel")}</span>
-            <select
-              value={sort}
-              onChange={(event) => setParam("sort", event.target.value, "student_id")}
-              className="h-10 w-full rounded-[7px] border bg-card px-3 text-[13px] text-foreground outline-none focus:border-primary focus:ring-2 focus:ring-primary/15"
-            >
-              <option value="student_id">{t("submissionReviewSortId")}</option>
-              <option value="student_name">{t("submissionReviewSortName")}</option>
-              <option value="attention">{t("submissionReviewSortAttention")}</option>
-            </select>
-          </label>
-        </div>
+        </form>
+        <TaskFilterFeedback filter={smartFilter} taskId={taskId} />
         <div className="mt-2 flex min-h-5 items-start justify-between gap-3 px-1">
           <p className="text-[11px] leading-5 text-muted-foreground">
             {t(EXPLANATION_KEYS[selection.explanation])}
             {selection.confidenceAlias ? ` ${t("submissionReviewConfidenceAliasHint")}` : ""}
           </p>
-          {query || filter !== "all" || sort !== "student_id" ? (
+          {query || filter !== "all" || sortParam ? (
             <button
               type="button"
               onClick={() => {
@@ -253,6 +292,8 @@ export function SubmissionReviewOverviewPage() {
                 }
                 queryComposingRef.current = false;
                 lastCommittedQueryRef.current = "";
+                smartFilter.cancel();
+                setTableSort(null);
                 latestSearchParamsRef.current = new URLSearchParams();
                 setQueryDraft("");
                 setSearchParams({}, { replace: true });
@@ -301,6 +342,8 @@ export function SubmissionReviewOverviewPage() {
                       questions={selection.questions}
                       taskId={taskId}
                       returnSearch={returnSearch}
+                      columnSort={effectiveSort}
+                      onSort={sortByColumn}
                       t={t}
                     />
                   </section>
@@ -353,12 +396,16 @@ function SubmissionMatrix({
   questions,
   taskId,
   returnSearch,
+  columnSort,
+  onSort,
   t,
 }: {
   students: StudentSubmission[];
   questions: SubmissionQuestion[];
   taskId: string;
   returnSearch: string;
+  columnSort: SubmissionSort | null;
+  onSort: (key: "id" | "name" | `question:${string}`) => void;
   t: (key: MessageKey) => string;
 }) {
   if (students.length === 0 || questions.length === 0) {
@@ -396,22 +443,35 @@ function SubmissionMatrix({
       >
         <thead className="sticky top-0 z-20 bg-slate-100/95 text-[12px] font-semibold text-muted-foreground backdrop-blur-sm dark:bg-slate-800/95">
           <tr className="h-[42px] border-b">
-            <th
+            <SortableTableHead
               className="sticky left-0 z-30 whitespace-nowrap bg-slate-100/95 px-3 dark:bg-slate-800/95"
               style={{ width: identityLayout.studentIdWidth, minWidth: identityLayout.studentIdWidth, maxWidth: identityLayout.studentIdWidth }}
+              direction={columnSort?.key === "id" ? columnSort.direction : null}
+              onSort={() => onSort("id")}
+              sortLabel={t("submissionReviewSortId")}
             >
               {studentIdLabel}
-            </th>
-            <th
+            </SortableTableHead>
+            <SortableTableHead
               className="sticky z-30 whitespace-nowrap bg-slate-100/95 px-3 dark:bg-slate-800/95"
               style={{ left: identityLayout.studentIdWidth, width: identityLayout.studentNameWidth, minWidth: identityLayout.studentNameWidth, maxWidth: identityLayout.studentNameWidth }}
+              direction={columnSort?.key === "name" ? columnSort.direction : null}
+              onSort={() => onSort("name")}
+              sortLabel={t("submissionReviewSortName")}
             >
               {studentNameLabel}
-            </th>
+            </SortableTableHead>
             {questions.map((question) => (
-              <th key={question.id} className="w-[60px] min-w-[60px] max-w-[60px] px-1 text-center" title={question.type || question.label}>
+              <SortableTableHead
+                key={question.id}
+                className="w-[60px] min-w-[60px] max-w-[60px] px-1 text-center"
+                direction={columnSort?.key === `question:${question.id}` ? columnSort.direction : null}
+                onSort={() => onSort(`question:${question.id}`)}
+                sortLabel={question.type || question.label}
+                title={question.type || question.label}
+              >
                 {question.label}
-              </th>
+              </SortableTableHead>
             ))}
             <th className="w-[72px] px-3 text-right">{t("submissionReviewColumnAction")}</th>
           </tr>
@@ -617,8 +677,111 @@ function normalizeFilter(value: string | null): SubmissionReviewFilter {
   return value === "review" || value === "missing" || value === "identity" ? value : "all";
 }
 
-function normalizeSort(value: string | null): SubmissionReviewSort {
-  return value === "student_name" || value === "attention" ? value : "student_id";
+function normalizeSort(value: string | null): SubmissionSort {
+  if (value === "student_name" || value === "name_asc") return { key: "name", direction: "asc" };
+  if (value === "name_desc") return { key: "name", direction: "desc" };
+  if (value === "id_desc") return { key: "id", direction: "desc" };
+  if (value === "coverage_asc") return { key: "coverage", direction: "asc" };
+  if (value === "coverage_desc") return { key: "coverage", direction: "desc" };
+  if (value === "review_asc") return { key: "review", direction: "asc" };
+  if (value === "attention" || value === "review_desc") return { key: "review", direction: "desc" };
+  return DEFAULT_SUBMISSION_SORT;
+}
+
+function intentToSubmissionSort(sort: FilterIntentResult["sort"]): SubmissionSort | null {
+  if (sort === "name_asc") return { key: "name", direction: "asc" };
+  if (sort === "name_desc") return { key: "name", direction: "desc" };
+  if (sort === "id_asc") return { key: "id", direction: "asc" };
+  if (sort === "id_desc") return { key: "id", direction: "desc" };
+  if (sort === "coverage_asc") return { key: "coverage", direction: "asc" };
+  if (sort === "coverage_desc") return { key: "coverage", direction: "desc" };
+  if (sort === "review_asc") return { key: "review", direction: "asc" };
+  if (sort === "review_desc") return { key: "review", direction: "desc" };
+  return null;
+}
+
+function resolveSubmissionLocalIntent(
+  raw: string,
+  students: StudentSubmission[],
+  questions: SubmissionQuestion[],
+): FilterIntentResult | null {
+  const parsed = parsePreparationQuery(raw, "submission_review");
+  if (parsed) return parsed;
+  const normalized = normalizeSearchTerm(raw);
+  if (!normalized) return emptyFilterIntent();
+  if (students.some((student) => [student.stu_id, student.stu_name].some((value) => normalizeSearchTerm(value) === normalized))) {
+    return { ...emptyFilterIntent(), text_terms: [raw.trim()] };
+  }
+  if (questions.some((question) => [question.id, question.label].some((value) => normalizeSearchTerm(value) === normalized))) {
+    return { ...emptyFilterIntent(), question_tokens: [raw.trim()] };
+  }
+  return null;
+}
+
+function selectSubmissionOverview(
+  students: StudentSubmission[],
+  questions: SubmissionQuestion[],
+  intent: FilterIntentResult | null,
+  filter: SubmissionReviewFilter,
+  sort: SubmissionSort,
+): SubmissionReviewSelection {
+  const interpreted = selectSubmissionIntent(students, questions, intent);
+  const filteredStudents = interpreted.students.filter((student) => submissionStateMatches(student, interpreted.questions, filter === "all" ? null : filter));
+  const sortedStudents = sortSubmissionStudents(filteredStudents, interpreted.questions, sort);
+  const requestedStatus = intent?.submission_status;
+  const explanation: SubmissionReviewSelection["explanation"] = !sortedStudents.length
+    ? "no_match"
+    : filter === "identity" || requestedStatus === "identity"
+      ? "identity"
+      : filter === "missing" || requestedStatus === "missing"
+        ? "missing"
+        : filter === "review" || requestedStatus === "review"
+          ? "review"
+          : intent?.question_tokens.length
+            ? "question"
+            : intent?.text_terms.length
+              ? "student"
+              : "all";
+  return {
+    students: sortedStudents,
+    questions: interpreted.questions,
+    explanation,
+    confidenceAlias: false,
+  };
+}
+
+function sortSubmissionStudents(
+  students: StudentSubmission[],
+  questions: SubmissionQuestion[],
+  sort: SubmissionSort,
+) {
+  const answerCount = (student: StudentSubmission) => questions.filter((question) => Boolean(answerMap(student).get(question.id)?.content?.trim())).length;
+  const reviewCount = (student: StudentSubmission) => questions.filter((question) => !["recognized", "reviewed"].includes(getAnswerState(answerMap(student).get(question.id)))).length;
+  const value = (student: StudentSubmission): string | number => {
+    if (sort.key.startsWith("question:")) {
+      const questionId = sort.key.slice("question:".length);
+      return answerStateSeverity(getAnswerState(answerMap(student).get(questionId)));
+    }
+    if (sort.key === "name") return student.stu_name || student.stu_id;
+    if (sort.key === "coverage") return answerCount(student);
+    if (sort.key === "review") return reviewCount(student);
+    return student.stu_id;
+  };
+  return [...students].sort((left, right) => (
+    compareSortableValues(value(left), value(right), sort.direction)
+    || compareSortableValues(left.stu_id, right.stu_id, "asc")
+  ));
+}
+
+function answerStateSeverity(state: SubmissionAnswerState) {
+  if (state === "missing") return 3;
+  if (state === "empty") return 2;
+  if (state === "flagged") return 1;
+  return 0;
+}
+
+function normalizeSearchTerm(value: string | null | undefined) {
+  return (value ?? "").trim().toLocaleLowerCase().replace(/\s+/g, " ");
 }
 
 function studentPath(taskId: string, studentId: string) {

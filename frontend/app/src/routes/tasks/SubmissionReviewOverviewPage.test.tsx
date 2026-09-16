@@ -37,7 +37,7 @@ function renderPage(initialEntry: string) {
       </Routes>
     </MemoryRouter>,
   );
-  return screen.getByRole("searchbox", { name: "submissionReviewSearchLabel" }) as HTMLInputElement;
+  return screen.getByRole("searchbox", { name: "Ask SmarTAI: filter and sort student answers" }) as HTMLInputElement;
 }
 
 describe("SubmissionReviewOverviewPage smart search", () => {

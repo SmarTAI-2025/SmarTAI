@@ -51,4 +51,14 @@ describe("Current task Ask SmarTAI", () => {
     expect(screen.queryByText(interpretation.explanation)).not.toBeInTheDocument();
     expect(mocks.history).toHaveBeenLastCalledWith(expect.not.objectContaining({ unfinished: true }));
   });
+
+  it("toggles task-column sorting between ascending and descending", async () => {
+    mount();
+
+    fireEvent.click(screen.getByRole("button", { name: /任务，当前未排序；点击升序/ }));
+    await waitFor(() => expect(mocks.history).toHaveBeenLastCalledWith(expect.objectContaining({ sort: "name_asc" })));
+
+    fireEvent.click(screen.getByRole("button", { name: /任务，当前升序；点击降序/ }));
+    await waitFor(() => expect(mocks.history).toHaveBeenLastCalledWith(expect.objectContaining({ sort: "name_desc" })));
+  });
 });

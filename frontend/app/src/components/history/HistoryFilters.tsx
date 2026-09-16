@@ -180,25 +180,6 @@ export function HistoryFilters({
           onChange={(checked) => onChange({ needs_attention: checked || undefined })}
         />
 
-        <label className="relative shrink-0">
-          <span className="sr-only">{t("historySort")}</span>
-          <select
-            className={cn(CONTROL_CLASS, "w-[150px]")}
-            value={query.sort}
-            onChange={(event) => onChange({ sort: event.target.value as HistorySort })}
-          >
-            <option value="updated_desc">{t("historySortUpdated")}</option>
-            <option value="updated_asc">{t("historySortUpdatedAsc")}</option>
-            <option value="created_desc">{t("historySortCreated")}</option>
-            <option value="created_asc">{t("historySortCreatedAsc")}</option>
-            <option value="name_asc">{t("historySortName")}</option>
-            <option value="name_desc">{t("historySortNameDesc")}</option>
-            <option value="attention_first">{t("historySortAttention")}</option>
-            <option value="stage_asc">{t("historySortStage")}</option>
-            <option value="stage_desc">{t("historySortStageDesc")}</option>
-          </select>
-        </label>
-
         <button type="button" className="h-8 shrink-0 px-2 text-[13px] font-medium text-muted-foreground outline-none hover:text-primary focus-visible:rounded focus-visible:ring-2 focus-visible:ring-ring" onClick={onClear}>
           {t("historyClearFilters")}
         </button>

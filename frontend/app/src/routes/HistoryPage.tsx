@@ -72,6 +72,15 @@ export function HistoryPage() {
     writeQuery(patchHistoryQuery(query, patch, { keepPage }));
   }
 
+  function handleTableSort(column: "name" | "stage" | "updated") {
+    const nextSort = column === "name"
+      ? query.sort === "name_asc" ? "name_desc" : "name_asc"
+      : column === "stage"
+        ? query.sort === "stage_asc" ? "stage_desc" : "stage_asc"
+        : query.sort === "updated_desc" ? "updated_asc" : "updated_desc";
+    handleChange({ sort: nextSort });
+  }
+
   function clearAll() {
     interpretationRequest.current += 1;
     setInterpretation(null);
@@ -175,7 +184,9 @@ export function HistoryPage() {
           isDeleting={deleteTask.isPending}
           deletingTaskId={deletingTaskId}
           hasFilters={hasFilters}
+          sort={query.sort}
           onFilter={handleChange}
+          onSort={handleTableSort}
           onDelete={(task) => void handleDelete(task)}
           onRetry={() => void historyQuery.refetch()}
           onClear={clearAll}

@@ -16,6 +16,9 @@ import {
 import { Link, Navigate, useBeforeUnload, useBlocker, useLocation, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { toast } from "sonner";
 import { useTask, useUpdateProblem } from "@/api/hooks/tasks";
+import { useTaskFilterIntent } from "@/hooks/useTaskFilterIntent";
+import { TaskFilterFeedback } from "@/components/tasks/TaskFilterFeedback";
+import { parsePreparationQuery, selectPreparationProblems } from "@/lib/preparationQuery";
 import { SmarTAIMascot } from "@/components/brand/SmarTAIMascot";
 import { NewTaskStepper } from "@/components/new-task/NewTaskStepper";
 import { OriginalFilePreviewPanel } from "@/components/tasks/OriginalFilePreviewPanel";
@@ -64,7 +67,15 @@ export function QuestionPreparationDetailPage() {
     () => sortProblems(Object.values(taskQuery.data?.problem_data ?? {}), locale),
     [locale, taskQuery.data?.problem_data],
   );
-  const filtered = useMemo(() => filterProblems(problems, urlQuery), [problems, urlQuery]);
+  const localIntent = useMemo(() => parsePreparationQuery(urlQuery, "question_preparation", problems.flatMap((p) => [p.number, p.q_id, p.type])), [problems, urlQuery]);
+  const smartFilter = useTaskFilterIntent({
+    taskId,
+    query: urlQuery,
+    surface: "question_preparation",
+    localIntent,
+    resolveLocalIntent: (value) => parsePreparationQuery(value, "question_preparation", problems.flatMap((p) => [p.number, p.q_id, p.type])),
+  });
+  const filtered = useMemo(() => selectPreparationProblems(problems, smartFilter.intent), [problems, smartFilter.intent]);
   const activeQuestionIndex = filtered.findIndex((problem) => problem.q_id === activeQuestionId);
   const previousQuestion = activeQuestionIndex > 0 ? filtered[activeQuestionIndex - 1] : null;
   const nextQuestion = activeQuestionIndex >= 0 && activeQuestionIndex < filtered.length - 1
@@ -276,9 +287,10 @@ export function QuestionPreparationDetailPage() {
       <div className="mt-6 flex items-center gap-2">
         <SmarTAIMascot variant="thinking" size="xs" />
         <label className="relative min-w-0 flex-1">
-          <span className="sr-only">{tx(locale, "本地快速筛选题目，不调用模型", "Local quick question filter, no model call")}</span>
+          <span className="sr-only">{tx(locale, "Ask SmarTAI 筛选题目", "Ask SmarTAI to filter questions")}</span>
           <input
           value={query}
+          onKeyDown={(event) => { if (event.key === "Enter" && !composingRef.current && !event.nativeEvent.isComposing) { updateQuery(query); void smartFilter.apply(query); } }}
           inputMode="search"
           onCompositionStart={() => {
             if (pendingCompositionCommitRef.current !== null) {
@@ -311,11 +323,13 @@ export function QuestionPreparationDetailPage() {
               flushComposition(event.currentTarget);
             }
           }}
-          placeholder={tx(locale, "本地快速筛选：题号、题型、题目内容，或“编程题 / 低置信 / 冲突”", "Local quick filter: number, type, content, or “programming / low confidence / conflict”")}
+          placeholder={tx(locale, "Ask SmarTAI：先看缺少标答的题目，或按满分升序", "Ask SmarTAI: missing reference answers first, or sort by max score")}
           className="h-12 w-full rounded-[10px] border bg-card pl-4 pr-4 text-[13px] outline-none placeholder:text-muted-foreground focus:border-primary focus:ring-2 focus:ring-primary/15"
           />
         </label>
+        <button type="button" disabled={smartFilter.pending} onClick={() => { updateQuery(query); void smartFilter.apply(query); }} className="h-10 shrink-0 rounded-[7px] bg-primary px-3 text-sm text-primary-foreground disabled:opacity-50">{tx(locale, "应用筛选", "Apply filter")}</button>
       </div>
+      <TaskFilterFeedback filter={smartFilter} taskId={taskId} />
 
       {readOnly ? <p className="mt-4 rounded-[8px] border border-amber-200 bg-amber-50 px-4 py-3 text-xs leading-5 text-amber-800 dark:border-amber-900 dark:bg-amber-950/20 dark:text-amber-200">{tx(locale, "当前任务已进入后续阶段，本页可浏览但不能修改。", "This task has moved to a later stage. The page is read-only.")}</p> : null}
 
