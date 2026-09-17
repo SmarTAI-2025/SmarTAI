@@ -1,8 +1,11 @@
 import { AlertCircle, CheckCircle2, ChevronRight, RotateCcw } from "lucide-react";
-import { useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef } from "react";
 import { Link, Navigate, useParams, useSearchParams } from "react-router-dom";
 import { useTask } from "@/api/hooks/tasks";
-import { SmarTAIMascot } from "@/components/brand/SmarTAIMascot";
+import { TaskQueryBar } from "@/components/tasks/AskQueryBar";
+import { useTaskFilterIntent } from "@/hooks/useTaskFilterIntent";
+import { EMPTY_FILTER_INTENT, supportsFilterIntent } from "@/lib/taskFilterIntent";
+import { resolveSubmissionQuery, selectSubmissionQuestions } from "@/lib/taskPreparationFilter";
 import { NewTaskStepper } from "@/components/new-task/NewTaskStepper";
 import { MatrixQueueWorkspace } from "@/components/tasks/MatrixQueueWorkspace";
 import { MatrixStatusCell, type MatrixStatusTone } from "@/components/tasks/MatrixStatusCell";
@@ -15,7 +18,6 @@ import {
   buildSubmissionQuestions,
   getAnswerState,
   getSubmissionReviewStats,
-  selectSubmissionReview,
   studentNeedsAttention,
   type SubmissionAnswerState,
   type SubmissionQuestion,
@@ -24,7 +26,7 @@ import {
   type SubmissionReviewSort,
 } from "@/lib/submissionReview";
 import { getTaskDestination, hasTaskReachedStep } from "@/lib/taskFlow";
-import type { StudentAnswerInfo, StudentSubmission } from "@/types";
+import type { FilterIntentResult, StudentAnswerInfo, StudentSubmission } from "@/types";
 
 const EXPLANATION_KEYS: Record<SubmissionReviewSelection["explanation"], MessageKey> = {
   all: "submissionReviewFilterAllHint",
@@ -52,11 +54,6 @@ export function SubmissionReviewOverviewPage() {
   const taskQuery = useTask(taskId);
   const query = searchParams.get("q") ?? "";
   const latestSearchParamsRef = useRef(new URLSearchParams(searchParams));
-  const queryComposingRef = useRef(false);
-  const pendingCompositionCommitRef = useRef<number | null>(null);
-  const lastCommittedQueryRef = useRef(query);
-  const [queryDraft, setQueryDraft] = useState(query);
-  const deferredQuery = useDeferredValue(query);
   const filter = normalizeFilter(searchParams.get("status"));
   const sort = normalizeSort(searchParams.get("sort"));
 
@@ -69,27 +66,19 @@ export function SubmissionReviewOverviewPage() {
     [students, taskQuery.data?.problem_data],
   );
   const stats = useMemo(() => getSubmissionReviewStats(students, questions), [questions, students]);
-  const selection = useMemo(
-    () => selectSubmissionReview(students, questions, deferredQuery, filter, sort),
-    [deferredQuery, filter, questions, sort, students],
-  );
+  const smartFilter = useTaskFilterIntent({
+    taskId, surface: "submission_review",
+    resolveLocal: (value) => resolveSubmissionQuery(students, questions, value),
+  });
+  const selection = useMemo(() => {
+    const current = smartFilter.intent ?? EMPTY_FILTER_INTENT;
+    const requested = searchParams.get("sort");
+    const aliases: Record<string, FilterIntentResult["sort"]> = { student_id: "id_asc", student_name: "name_asc", attention: "review_desc" };
+    const withSort = { ...current, sort: (requested ? aliases[requested] ?? requested : current.sort ?? "id_asc") as FilterIntentResult["sort"] };
+    return selectSubmissionQuestions(students, questions, supportsFilterIntent(withSort, "submission_review") ? withSort : current, filter);
+  }, [filter, questions, searchParams, smartFilter.intent, students]);
 
-  useEffect(() => {
-    lastCommittedQueryRef.current = query;
-    if (!queryComposingRef.current && pendingCompositionCommitRef.current === null) {
-      setQueryDraft((current) => current === query ? current : query);
-    }
-  }, [query]);
-
-  useEffect(() => {
-    latestSearchParamsRef.current = new URLSearchParams(searchParams);
-  }, [searchParams]);
-
-  useEffect(() => () => {
-    if (pendingCompositionCommitRef.current !== null) {
-      window.clearTimeout(pendingCompositionCommitRef.current);
-    }
-  }, []);
+  useEffect(() => { latestSearchParamsRef.current = new URLSearchParams(searchParams); }, [searchParams]);
 
   if (taskQuery.isSuccess && taskId) {
     if (!hasTaskReachedStep(taskQuery.data, 4)) {
@@ -98,28 +87,12 @@ export function SubmissionReviewOverviewPage() {
   }
 
   function setParam(key: string, value: string, defaultValue: string) {
+    smartFilter.cancel();
     const next = new URLSearchParams(latestSearchParamsRef.current);
     if (!value || value === defaultValue) next.delete(key);
     else next.set(key, value);
     latestSearchParamsRef.current = next;
     setSearchParams(next, { replace: true });
-  }
-
-  function commitQuery(value: string) {
-    if (lastCommittedQueryRef.current === value) return;
-    lastCommittedQueryRef.current = value;
-    setParam("q", value, "");
-  }
-
-  function flushComposition(input: HTMLInputElement) {
-    if (pendingCompositionCommitRef.current !== null) {
-      window.clearTimeout(pendingCompositionCommitRef.current);
-      pendingCompositionCommitRef.current = null;
-    }
-    queryComposingRef.current = false;
-    const finalValue = input.value;
-    setQueryDraft(finalValue);
-    commitQuery(finalValue);
   }
 
   const attentionStudent = selection.students.find((student) => studentNeedsAttention(student, selection.questions));
@@ -168,50 +141,10 @@ export function SubmissionReviewOverviewPage() {
           />
         </dl>
 
-        <div className="mt-6 min-w-0 rounded-[10px] border bg-card p-2.5 sm:flex sm:min-h-[52px] sm:items-center sm:gap-2.5 sm:p-1.5">
-          <div className="flex min-w-0 flex-1 items-center gap-2">
-            <SmarTAIMascot variant="thinking" size="xs" />
-            <label className="relative block min-w-0 flex-1">
-              <span className="sr-only">{t("submissionReviewSearchLabel")}</span>
-              <input
-              type="search"
-              value={queryDraft}
-              onCompositionStart={() => {
-                if (pendingCompositionCommitRef.current !== null) {
-                  window.clearTimeout(pendingCompositionCommitRef.current);
-                  pendingCompositionCommitRef.current = null;
-                }
-                queryComposingRef.current = true;
-              }}
-              onCompositionEnd={(event) => {
-                const input = event.currentTarget;
-                queryComposingRef.current = false;
-                setQueryDraft(input.value);
-                pendingCompositionCommitRef.current = window.setTimeout(() => {
-                  flushComposition(input);
-                }, 0);
-              }}
-              onChange={(event) => {
-                const value = event.currentTarget.value;
-                setQueryDraft(value);
-                if (
-                  !queryComposingRef.current
-                  && pendingCompositionCommitRef.current === null
-                  && !(event.nativeEvent as InputEvent).isComposing
-                ) {
-                  commitQuery(value);
-                }
-              }}
-              onBlur={(event) => {
-                if (queryComposingRef.current || pendingCompositionCommitRef.current !== null) {
-                  flushComposition(event.currentTarget);
-                }
-              }}
-              placeholder={t("submissionReviewSearchPlaceholder")}
-                className="h-10 w-full rounded-[7px] border-0 bg-slate-50 pl-3 pr-3 text-[13px] text-foreground outline-none placeholder:text-muted-foreground focus:ring-2 focus:ring-primary/20 dark:bg-slate-900/50"
-              />
-            </label>
-          </div>
+        <TaskQueryBar className="mt-6" filter={smartFilter} taskId={taskId} locale={locale}
+          label={locale === "zh-CN" ? "Ask SmarTAI：学生作答" : "Ask SmarTAI: student answers"}
+          placeholder={locale === "zh-CN" ? "找出缺答的学生，或按覆盖率排序" : "Find missing answers, or sort by coverage"} />
+        <div className="mt-2 flex flex-wrap items-center gap-2">
           <label className="mt-2 block shrink-0 sm:mt-0 sm:w-[170px]">
             <span className="sr-only">{t("submissionReviewStatusLabel")}</span>
             <select
@@ -240,21 +173,15 @@ export function SubmissionReviewOverviewPage() {
         </div>
         <div className="mt-2 flex min-h-5 items-start justify-between gap-3 px-1">
           <p className="text-[11px] leading-5 text-muted-foreground">
-            {t(EXPLANATION_KEYS[selection.explanation])}
+            {selection.explanation !== "all" ? t(EXPLANATION_KEYS[selection.explanation]) : null}
             {selection.confidenceAlias ? ` ${t("submissionReviewConfidenceAliasHint")}` : ""}
           </p>
           {query || filter !== "all" || sort !== "student_id" ? (
             <button
               type="button"
               onClick={() => {
-                if (pendingCompositionCommitRef.current !== null) {
-                  window.clearTimeout(pendingCompositionCommitRef.current);
-                  pendingCompositionCommitRef.current = null;
-                }
-                queryComposingRef.current = false;
-                lastCommittedQueryRef.current = "";
+                smartFilter.cancel();
                 latestSearchParamsRef.current = new URLSearchParams();
-                setQueryDraft("");
                 setSearchParams({}, { replace: true });
               }}
               className="inline-flex shrink-0 items-center gap-1 text-[11px] font-semibold text-primary outline-none hover:underline focus-visible:rounded focus-visible:ring-2 focus-visible:ring-ring"

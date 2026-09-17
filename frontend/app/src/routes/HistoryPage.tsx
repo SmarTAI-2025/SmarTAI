@@ -42,6 +42,8 @@ export function HistoryPage() {
   const [preSmartQuery, setPreSmartQuery] = useState<TaskHistoryQuery | null>(null);
   const [smartError, setSmartError] = useState(false);
   const interpretationRequest = useRef(0);
+  useEffect(() => () => { interpretationRequest.current += 1; }, []);
+  useEffect(() => { interpretationRequest.current += 1; }, [searchParams]);
   const [deletingTaskId, setDeletingTaskId] = useState<string | null>(null);
 
   const data = historyQuery.data;
@@ -81,6 +83,12 @@ export function HistoryPage() {
     writeQuery({ ...DEFAULT_HISTORY_QUERY, page_size: query.page_size });
   }
 
+  function cancelInterpretation() {
+    interpretationRequest.current += 1;
+    interpretQuery.reset();
+    setSmartError(false);
+  }
+
   async function handleInterpret(value: string) {
     if (interpretQuery.isPending || !value.trim()) return;
     const request = ++interpretationRequest.current;
@@ -88,6 +96,10 @@ export function HistoryPage() {
     try {
       const result = await interpretQuery.mutateAsync(value);
       if (request !== interpretationRequest.current) return;
+      if (result.ambiguities.length) {
+        setInterpretation({ ...result, conditions: [] });
+        return;
+      }
       setPreSmartQuery(query);
       setInterpretation(result);
       writeQuery(applyHistoryInterpretation(query, result));
@@ -108,6 +120,7 @@ export function HistoryPage() {
   }
 
   function handleRemoveCondition(field: string) {
+    cancelInterpretation();
     const next = clearHistoryCondition(query, field);
     writeQuery(next);
     setInterpretation((current) => {
@@ -154,6 +167,7 @@ export function HistoryPage() {
           isInterpreting={interpretQuery.isPending}
           onChange={handleChange}
           onInterpret={(value) => void handleInterpret(value)}
+          onCancelInterpret={cancelInterpretation}
           onRemoveCondition={handleRemoveCondition}
           onClearSmart={clearSmart}
           onClear={clearAll}

@@ -1,7 +1,6 @@
 import { ChevronDown, Search, Sparkles, X } from "lucide-react";
 import { useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
-import { SmarTAIMascot } from "@/components/brand/SmarTAIMascot";
-import { useImeSafeQuery } from "@/hooks/useImeSafeQuery";
+import { AskQueryBar } from "@/components/tasks/AskQueryBar";
 import { useI18n } from "@/i18n/I18nProvider";
 import type { MessageKey } from "@/i18n/messages";
 import type {
@@ -29,6 +28,7 @@ interface HistoryFiltersProps {
   isInterpreting: boolean;
   onChange: (patch: Partial<TaskHistoryQuery>) => void;
   onInterpret: (query: string) => void;
+  onCancelInterpret: () => void;
   onRemoveCondition: (field: string) => void;
   onClearSmart: () => void;
   onClear: () => void;
@@ -45,6 +45,7 @@ export function HistoryFilters({
   isInterpreting,
   onChange,
   onInterpret,
+  onCancelInterpret,
   onRemoveCondition,
   onClearSmart,
   onClear,
@@ -52,23 +53,13 @@ export function HistoryFilters({
   const { locale, t } = useI18n();
   const [keywordDraft, setKeywordDraft] = useState(query.q ?? "");
   const [smartDraft, setSmartDraft] = useState("");
-  const smartSearch = useImeSafeQuery({ value: smartDraft, onCommit: setSmartDraft });
   const semesterOptions = buildSemesterOptions();
 
   useEffect(() => setKeywordDraft(query.q ?? ""), [query.q]);
-  useEffect(() => {
-    if (interpretation) setSmartDraft("");
-  }, [interpretation]);
 
   function submitKeyword(event: FormEvent) {
     event.preventDefault();
     onChange({ q: keywordDraft.trim() || undefined });
-  }
-
-  function submitSmart() {
-    if (isInterpreting) return;
-    const value = smartSearch.commitDraft().trim();
-    if (value) onInterpret(value);
   }
 
   return (
@@ -92,30 +83,10 @@ export function HistoryFilters({
             {t("historySearchAction")}
           </button>
         </form>
-        <form className="flex min-w-0 gap-2" onSubmit={(event) => { event.preventDefault(); submitSmart(); }}>
-          <SmarTAIMascot variant={isInterpreting ? "grading" : "thinking"} size="xs" />
-          <label className="relative min-w-0 flex-1">
-            <span className="sr-only">{t("historySmartLabel")}</span>
-            <input
-              value={smartSearch.draftValue}
-              disabled={isInterpreting}
-              onBlur={smartSearch.handleBlur}
-              onChange={smartSearch.handleChange}
-              onCompositionEnd={smartSearch.handleCompositionEnd}
-              onCompositionStart={smartSearch.handleCompositionStart}
-              className="h-9 w-full rounded-full border bg-background pl-3 pr-3 text-[13px] text-foreground outline-none placeholder:text-muted-foreground focus:border-primary focus:ring-2 focus:ring-primary/15"
-              placeholder={t("historySmartPlaceholder")}
-            />
-          </label>
-          <button
-            type="submit"
-            disabled={isInterpreting || !smartSearch.draftValue.trim()}
-            className="inline-flex h-9 shrink-0 items-center justify-center gap-2 rounded-full bg-primary px-5 text-[13px] font-semibold text-primary-foreground outline-none transition-colors hover:bg-primary/90 focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50"
-          >
-            <Sparkles aria-hidden="true" className="h-4 w-4" />
-            {isInterpreting ? t("historySmartRunning") : t("historySmartAction")}
-          </button>
-        </form>
+        <AskQueryBar locale={locale} value={smartDraft} pending={isInterpreting}
+          label={t("historySmartLabel")} placeholder={t("historySmartPlaceholder")}
+          onChange={(value) => { setSmartDraft(value); if (!value.trim()) onClearSmart(); }}
+          onCancel={onCancelInterpret} onApply={onInterpret} />
       </div>
 
       <div className="mt-3 flex items-center gap-2 overflow-x-auto pb-1" role="group" aria-label={t("historyFilterRegion")}>

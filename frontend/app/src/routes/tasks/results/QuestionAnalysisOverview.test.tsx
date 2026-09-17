@@ -29,8 +29,8 @@ function mount() {
   </QueryClientProvider>);
 }
 function submit(value: string) {
-  fireEvent.change(screen.getByRole("textbox", { name: "智能筛选题目" }), { target: { value } });
-  fireEvent.click(screen.getByRole("button", { name: "应用筛选" }));
+  fireEvent.change(screen.getByRole("textbox", { name: "Ask SmarTAI：题目分析" }), { target: { value } });
+  fireEvent.click(screen.getByRole("button", { name: "Ask SmarTAI" }));
 }
 function visibleQuestions() {
   return within(screen.getByRole("table")).getAllByRole("row").slice(1).map((row) => row.querySelector("strong")?.textContent);
@@ -55,14 +55,14 @@ describe("question analysis Ask SmarTAI", () => {
     mount();
     submit("计算题按大家表现排一下，最差的先看");
     await waitFor(() => expect(visibleQuestions()).toEqual(["Q2", "Q1"]));
-    expect(interpretFilterIntent).toHaveBeenCalledExactlyOnceWith("task-demo", "计算题按大家表现排一下，最差的先看", "question_analysis");
+    expect(interpretFilterIntent).toHaveBeenCalledExactlyOnceWith("task-demo", "计算题按大家表现排一下，最差的先看", "question_analysis", expect.any(AbortSignal));
   });
 
   it("does not apply a recognized fragment after the model rejects the complete instruction", async () => {
     vi.mocked(interpretFilterIntent).mockResolvedValue(intent({ recognized: false, max_score_percent: 70, explanation: "无法按未提供的出勤率筛选。" }));
     mount();
     submit("得分率低于70%且上课缺勤最多的题目");
-    expect(await screen.findByText(/未能完整转换指令，未应用部分条件/)).toBeInTheDocument();
+    expect(await screen.findByText(/未应用部分筛选/)).toBeInTheDocument();
     expect(visibleQuestions()).toEqual(["Q1", "Q2", "Q11"]);
     expect(interpretFilterIntent).toHaveBeenCalledTimes(1);
   });
