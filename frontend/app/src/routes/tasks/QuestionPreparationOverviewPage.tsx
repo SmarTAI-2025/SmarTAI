@@ -1,13 +1,15 @@
 import { ArrowDown, ArrowUp, ArrowUpDown, CheckCircle2, ChevronRight, Filter, X } from "lucide-react";
-import { useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
+import { useMemo, useState } from "react";
 import { Link, Navigate, useParams, useSearchParams } from "react-router-dom";
 import { useTask } from "@/api/hooks/tasks";
-import { SmarTAIMascot } from "@/components/brand/SmarTAIMascot";
+import { TaskQueryBar } from "@/components/tasks/AskQueryBar";
+import { useTaskFilterIntent } from "@/hooks/useTaskFilterIntent";
+import { resolvePreparationQuery, selectPreparationQuestions } from "@/lib/taskPreparationFilter";
 import { NewTaskStepper } from "@/components/new-task/NewTaskStepper";
 import { useI18n } from "@/i18n/I18nProvider";
 import { cn } from "@/lib/cn";
+import { compareValues } from "@/lib/sortValues";
 import { isProgrammingProblem } from "@/lib/questionPreparation";
-import { questionSearchAliases } from "@/lib/questionSearch";
 import type { PreparationIssue, ProblemInfo } from "@/types";
 
 type QuestionMatrixRow = {
@@ -20,7 +22,7 @@ type OpenRiskRow = {
   issue: PreparationIssue;
 };
 
-type MatrixSortKey = "number" | "type" | "attention";
+type MatrixSortKey = "number" | "type" | "attention" | "max_score";
 type MatrixSortDirection = "asc" | "desc";
 type MaterialField = "stem" | "answer" | "rubric" | "tests";
 
@@ -30,32 +32,16 @@ export function QuestionPreparationOverviewPage() {
   const { locale } = useI18n();
   const taskQuery = useTask(taskId);
   const urlQuery = searchParams.get("q") ?? "";
-  const [query, setQuery] = useState(urlQuery);
-  const composingRef = useRef(false);
-  const pendingCompositionCommitRef = useRef<number | null>(null);
-  const lastCommittedQueryRef = useRef(urlQuery);
+  const query = urlQuery;
   const [selectedTypes, setSelectedTypes] = useState<Set<string>>(new Set());
-  const [sortKey, setSortKey] = useState<MatrixSortKey>("number");
-  const [sortDirection, setSortDirection] = useState<MatrixSortDirection>("asc");
-  const deferredQuery = useDeferredValue(urlQuery);
-
-  useEffect(() => {
-    lastCommittedQueryRef.current = urlQuery;
-    if (!composingRef.current && pendingCompositionCommitRef.current === null) {
-      setQuery((current) => current === urlQuery ? current : urlQuery);
-    }
-  }, [urlQuery]);
-
-  useEffect(() => () => {
-    if (pendingCompositionCommitRef.current !== null) {
-      window.clearTimeout(pendingCompositionCommitRef.current);
-    }
-  }, []);
-
   const problems = useMemo(
     () => sortProblems(Object.values(taskQuery.data?.problem_data ?? {}), locale),
     [locale, taskQuery.data?.problem_data],
   );
+  const smartFilter = useTaskFilterIntent({ taskId, surface: "question_preparation", resolveLocal: (value) => resolvePreparationQuery(problems, value) });
+  const activeSort = searchParams.get("sort") ?? smartFilter.intent?.sort ?? "question";
+  const sortKey: MatrixSortKey = activeSort.startsWith("max_score") ? "max_score" : activeSort.startsWith("type") ? "type" : activeSort.startsWith("review") ? "attention" : "number";
+  const sortDirection: MatrixSortDirection = activeSort.endsWith("_desc") ? "desc" : "asc";
   const allRisks = useMemo(() => collectRiskRows(problems), [problems]);
   const allRows = useMemo<QuestionMatrixRow[]>(() => problems.map((problem) => ({
     problem,
@@ -66,12 +52,13 @@ export function QuestionPreparationOverviewPage() {
     [locale, problems],
   );
   const rows = useMemo(() => {
-    const textFiltered = filterMatrixRows(allRows, deferredQuery, locale);
+    const selected = new Set(selectPreparationQuestions(problems, smartFilter.intent).map((problem) => problem.q_id));
+    const textFiltered = allRows.filter((row) => selected.has(row.problem.q_id));
     const typeFiltered = selectedTypes.size
       ? textFiltered.filter((row) => selectedTypes.has(row.problem.type || tx(locale, "未分类", "Uncategorized")))
       : textFiltered;
     return sortMatrixRows(typeFiltered, sortKey, sortDirection, locale);
-  }, [allRows, deferredQuery, locale, selectedTypes, sortDirection, sortKey]);
+  }, [allRows, problems, smartFilter.intent, locale, selectedTypes, sortDirection, sortKey]);
   const metrics = useMemo(() => ({
     questions: new Set(allRisks.map((row) => row.problem.q_id)).size,
     lowConfidence: allRisks.filter((row) => row.issue.code === "low_confidence").length,
@@ -86,33 +73,13 @@ export function QuestionPreparationOverviewPage() {
     return <Navigate replace to={`/tasks/${taskId}/problems/progress`} />;
   }
 
-  function updateQuery(value: string) {
-    if (lastCommittedQueryRef.current === value) return;
-    lastCommittedQueryRef.current = value;
-    const next = new URLSearchParams(searchParams);
-    if (value.trim()) next.set("q", value);
-    else next.delete("q");
-    setSearchParams(next, { replace: true });
-  }
-
-  function flushComposition(input: HTMLInputElement) {
-    if (pendingCompositionCommitRef.current !== null) {
-      window.clearTimeout(pendingCompositionCommitRef.current);
-      pendingCompositionCommitRef.current = null;
-    }
-    composingRef.current = false;
-    const finalValue = input.value;
-    setQuery(finalValue);
-    updateQuery(finalValue);
-  }
-
   function toggleSort(key: MatrixSortKey) {
-    if (sortKey === key) {
-      setSortDirection((current) => current === "asc" ? "desc" : "asc");
-      return;
-    }
-    setSortKey(key);
-    setSortDirection("asc");
+    smartFilter.cancel();
+    const direction = sortKey === key && sortDirection === "asc" ? "desc" : "asc";
+    const field = key === "number" ? "question" : key === "attention" ? "review" : key;
+    const next = new URLSearchParams(searchParams);
+    next.set("sort", field === "question" && direction === "asc" ? "question" : `${field}_${direction}`);
+    setSearchParams(next, { replace: true });
   }
 
   function toggleType(type: string) {
@@ -124,7 +91,7 @@ export function QuestionPreparationOverviewPage() {
     });
   }
 
-  const firstQuestionId = problems[0]?.q_id;
+  const firstQuestionId = rows[0]?.problem.q_id;
   const totalMaxScore = problems.reduce((total, problem) => total + (problem.max_score ?? 10), 0);
   return (
     <div className="w-full max-w-[1300px]">
@@ -142,50 +109,9 @@ export function QuestionPreparationOverviewPage() {
           <RiskMetric label={tx(locale, "解析异常", "Parse Anomalies")} value={metrics.anomalies} tone="accent" />
         </dl>
 
-        <div className="mt-4 flex items-center gap-2">
-          <SmarTAIMascot variant="thinking" size="xs" />
-          <label className="relative min-w-0 flex-1">
-            <span className="sr-only">{tx(locale, "本地快速筛选题目资料，不调用模型", "Local quick filter for question materials, no model call")}</span>
-            <input
-            type="text"
-            inputMode="search"
-            value={query}
-            onCompositionStart={() => {
-              if (pendingCompositionCommitRef.current !== null) {
-                window.clearTimeout(pendingCompositionCommitRef.current);
-                pendingCompositionCommitRef.current = null;
-              }
-              composingRef.current = true;
-            }}
-            onCompositionEnd={(event) => {
-              const input = event.currentTarget;
-              composingRef.current = false;
-              setQuery(input.value);
-              pendingCompositionCommitRef.current = window.setTimeout(() => {
-                flushComposition(input);
-              }, 0);
-            }}
-            onChange={(event) => {
-              const value = event.currentTarget.value;
-              setQuery(value);
-              if (
-                !composingRef.current
-                && pendingCompositionCommitRef.current === null
-                && !(event.nativeEvent as InputEvent).isComposing
-              ) {
-                updateQuery(value);
-              }
-            }}
-            onBlur={(event) => {
-              if (composingRef.current || pendingCompositionCommitRef.current !== null) {
-                flushComposition(event.currentTarget);
-              }
-            }}
-            placeholder={tx(locale, "本地快速筛选：题号、题型、资料状态或风险原因", "Local quick filter: question, type, material status, or risk")}
-            className="h-12 w-full rounded-[10px] border bg-card pl-4 pr-4 text-[13px] text-foreground outline-none placeholder:text-muted-foreground focus:border-primary focus:ring-2 focus:ring-primary/15"
-            />
-          </label>
-        </div>
+        <TaskQueryBar className="mt-4" filter={smartFilter} taskId={taskId} locale={locale}
+          label={tx(locale, "Ask SmarTAI：题目资料", "Ask SmarTAI: question materials")}
+          placeholder={tx(locale, "按满分升序，或找出缺少标答的题目", "Sort by maximum score, or find missing reference answers")} />
 
         <div className="mt-4 overflow-hidden rounded-[10px] border bg-card">
           {taskQuery.isLoading ? (
@@ -409,43 +335,17 @@ function collectRiskRows(problems: ProblemInfo[]): OpenRiskRow[] {
     .map((issue) => ({ problem, issue })));
 }
 
-function filterMatrixRows(rows: QuestionMatrixRow[], rawQuery: string, locale: string) {
-  const query = rawQuery.trim().toLocaleLowerCase();
-  if (!query) return rows;
-  const tokens = query.split(/[\s,，;；]+/).filter(Boolean);
-  return rows.filter(({ problem, issues }) => {
-    const statuses = (["stem", "answer", "rubric", "tests"] as const).map((field) => getMaterialStatus(problem, field, locale).label);
-    const sourceText = [
-      problem.number,
-      problem.q_id,
-      problem.type,
-      problem.max_score,
-      problem.max_score_source,
-      problem.max_score_review_status,
-      problem.stem,
-      problem.reference_answer,
-      problem.criterion,
-      ...statuses,
-      ...(issues.flatMap((issue) => [issue.field, issue.code, issueCodeLabel(issue.code, locale), ...(issue.source_ids ?? [])])),
-    ].filter(Boolean).join(" ");
-    const haystack = `${sourceText} ${questionSearchAliases(sourceText)}`.toLocaleLowerCase();
-    return tokens.every((token) => haystack.includes(token));
-  });
-}
-
 function sortMatrixRows(rows: QuestionMatrixRow[], key: MatrixSortKey, direction: MatrixSortDirection, locale: string) {
   const value = (row: QuestionMatrixRow) => {
     if (key === "number") return row.problem.number || row.problem.q_id;
     if (key === "type") return row.problem.type || "";
+    if (key === "max_score") return row.problem.max_score;
     return row.issues.length;
   };
   return [...rows].sort((left, right) => {
     const a = value(left);
     const b = value(right);
-    const compared = typeof a === "number" && typeof b === "number"
-      ? a - b
-      : String(a).localeCompare(String(b), locale, { numeric: true });
-    return direction === "asc" ? compared : -compared;
+    return compareValues(a, b, direction);
   });
 }
 

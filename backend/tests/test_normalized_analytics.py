@@ -99,7 +99,7 @@ class _Provider:
 
     async def ainvoke(self, messages):
         system = str(messages[0].content)
-        if "translate a teacher" in system:
+        if "teacher_query" in str(messages[-1].content) and '"surface"' in str(messages[-1].content):
             mode = "intent"
         elif "subset of students" in system:
             mode = "filter"
@@ -500,11 +500,11 @@ def test_filter_intent_sends_only_redacted_query_and_returns_fixed_controls():
     provider_payload = json.loads(provider_prompt)
     assert provider_payload == {
         "surface": "student_analysis",
-        "teacher_query": "<student>（学号 <student>）的成绩排个名，从高到低",
+        "teacher_query": "<student_1>（学号 <student_2>）的成绩排个名，从高到低",
     }
     assert student.username not in provider_prompt
     assert student.id not in provider_prompt
-    assert "<student>" in provider_prompt
+    assert "<student_1>" in provider_prompt and "<student_2>" in provider_prompt
     for sensitive_value in (
         "2x",
         "AI comment one",

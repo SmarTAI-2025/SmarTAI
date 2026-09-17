@@ -27,7 +27,9 @@ import { Link, Navigate, useNavigate, useParams, useSearchParams } from "react-r
 import { toast } from "sonner";
 import { getAPIErrorCode, normalizeAPIError } from "@/api/client";
 import { useTask, useUpdateStudentAnswer, useUpdateStudentIdentity } from "@/api/hooks/tasks";
-import { SmarTAIMascot } from "@/components/brand/SmarTAIMascot";
+import { TaskQueryBar } from "@/components/tasks/AskQueryBar";
+import { useTaskFilterIntent, type TaskFilterController } from "@/hooks/useTaskFilterIntent";
+import { resolveSubmissionQuery, selectStudentAnswerQuestions } from "@/lib/taskPreparationFilter";
 import { NewTaskStepper } from "@/components/new-task/NewTaskStepper";
 import { OriginalFilePreviewPanel } from "@/components/tasks/OriginalFilePreviewPanel";
 import { OriginalFilePreviewTrigger } from "@/components/tasks/OriginalFilePreviewTrigger";
@@ -35,7 +37,6 @@ import { SourceComparisonWorkspace } from "@/components/tasks/SourceComparisonWo
 import { Button } from "@/components/ui/Button";
 import { MarkdownMath } from "@/components/ui/MarkdownMath";
 import { useSourcePreview } from "@/hooks/useSourcePreview";
-import { useImeSafeQuery } from "@/hooks/useImeSafeQuery";
 import { useI18n } from "@/i18n/I18nProvider";
 import type { Locale, MessageKey } from "@/i18n/messages";
 import { cn } from "@/lib/cn";
@@ -116,15 +117,17 @@ export function StudentAnswerReviewPage() {
     [studentId, students],
   );
   const answers = useMemo(() => student ? answerMap(student) : new Map(), [student]);
-  const questionItems = useMemo(() => questions.map(questionPickerItem), [questions]);
-  const questionMatches = useMemo(
-    () => matchPickerItems(questionItems, questionFilterParam),
-    [questionFilterParam, questionItems],
-  );
+  const smartFilter = useTaskFilterIntent({
+    taskId, surface: "student_answer_review", queryParam: "questionFilter", contextKey: studentId,
+    resolveLocal: (value) => resolveSubmissionQuery(students, questions, value, student),
+  });
   const filteredQuestions = useMemo(
-    () => selectMatched(questions, questionMatches, questionFilterParam, (value) => value.id),
-    [questionFilterParam, questionMatches, questions],
+    () => selectStudentAnswerQuestions(questions, student, smartFilter.intent),
+    [questions, smartFilter.intent, student],
   );
+  const questionMatches: PickerMatch[] = useMemo(() => filteredQuestions.map((question) => ({
+    item: questionPickerItem(question), kind: "related" as const,
+  })), [filteredQuestions]);
   const studentNeighbors = neighbors(students, studentId, (value) => value.stu_id);
   const activeIndex = Math.max(0, filteredQuestions.findIndex((question) => question.id === activeQuestionId));
   const activeQuestion = filteredQuestions[activeIndex] ?? filteredQuestions[0] ?? null;
@@ -601,14 +604,16 @@ export function StudentAnswerReviewPage() {
           ) : null}
 
           <div className={identityOpen ? "mt-3" : undefined}>
-            <div className="rounded-[10px] border bg-card p-2">
+            <div>
               <SmartPicker
-                label={t("answerReviewQuestionSearchLabel")}
-                placeholder={t("answerReviewQuestionSearchPlaceholder")}
+                label={tx(locale, "Ask SmarTAI：当前学生的作答", "Ask SmarTAI: this student’s answers")}
+                placeholder={tx(locale, "找出缺答或待复核题目，或按题号降序", "Find missing answers, or reverse the question order")}
                 query={questionFilterParam}
                 matches={questionMatches}
                 currentId={activeQuestion?.id ?? ""}
-                onCommit={(value) => setFilterParam("questionFilter", value)}
+                filter={smartFilter}
+                taskId={taskId}
+                locale={locale}
                 onSelect={(id) => scrollToQuestion(id)}
                 t={t}
               />
@@ -765,18 +770,19 @@ function StudentNavigation({ student, previous, next, onPrevious, onNext, identi
   );
 }
 
-function SmartPicker({ label, placeholder, query, matches, currentId, onCommit, onSelect, t }: {
+function SmartPicker({ label, placeholder, query, matches, currentId, filter, taskId, locale, onSelect, t }: {
   label: string;
   placeholder: string;
   query: string;
   matches: PickerMatch[];
   currentId: string;
-  onCommit: (value: string) => void;
+  filter: TaskFilterController;
+  taskId?: string;
+  locale: Locale;
   onSelect: (id: string) => void;
   t: (key: MessageKey) => string;
 }) {
   const [open, setOpen] = useState(false);
-  const smartSearch = useImeSafeQuery({ value: query, onCommit, onDraftChange: () => setOpen(true) });
 
   function handleBlur(event: FocusEvent<HTMLDivElement>) {
     if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setOpen(false);
@@ -784,40 +790,11 @@ function SmartPicker({ label, placeholder, query, matches, currentId, onCommit, 
 
   return (
     <div className="relative" onFocusCapture={() => setOpen(true)} onBlurCapture={handleBlur}>
-      <div className="flex items-center gap-2">
-        <SmarTAIMascot variant="thinking" size="xs" />
-        <label className="relative min-w-0 flex-1">
-          <span className="sr-only">{label}</span>
-          <input
-          type="text"
-          inputMode="search"
-          value={smartSearch.draftValue}
-          onBlur={smartSearch.handleBlur}
-          onCompositionStart={smartSearch.handleCompositionStart}
-          onCompositionEnd={smartSearch.handleCompositionEnd}
-          onChange={smartSearch.handleChange}
-          placeholder={placeholder}
-            className="h-10 w-full rounded-[7px] border-0 bg-slate-50 pl-3 pr-9 text-[13px] text-foreground outline-none placeholder:text-muted-foreground focus:ring-2 focus:ring-primary/20 dark:bg-slate-900/50"
-          />
-          {smartSearch.draftValue ? (
-            <button
-              type="button"
-              onMouseDown={(event) => event.preventDefault()}
-              onClick={() => {
-                smartSearch.commitValue("");
-              }}
-              className="absolute right-2 top-1/2 inline-flex h-7 w-7 -translate-y-1/2 items-center justify-center rounded-full text-muted-foreground outline-none hover:bg-muted hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
-              aria-label={t("answerReviewClearSearch")}
-            >
-              <RotateCcw aria-hidden="true" className="h-3.5 w-3.5" />
-            </button>
-          ) : null}
-        </label>
-      </div>
-      {open ? (
-        <div className="absolute left-0 right-0 top-[44px] z-40 max-h-[280px] overflow-auto rounded-[9px] border bg-card p-1.5 shadow-xl">
+      <TaskQueryBar filter={filter} taskId={taskId} locale={locale} label={label} placeholder={placeholder} />
+      {open && !filter.pending && !filter.unrecognized ? (
+        <div className="absolute left-0 right-0 top-full z-40 max-h-[280px] overflow-auto rounded-[9px] border bg-card p-1.5 shadow-xl">
           <p className="px-2 py-1 text-[10px] leading-4 text-muted-foreground">
-            {smartSearch.draftValue ? `${matches.length} ${t("answerReviewMatches")}` : t("answerReviewLocalMatchHint")}
+            {query ? `${matches.length} ${t("answerReviewMatches")}` : t("answerReviewLocalMatchHint")}
           </p>
           {matches.length ? matches.slice(0, 40).map(({ item, kind }) => (
             <button
