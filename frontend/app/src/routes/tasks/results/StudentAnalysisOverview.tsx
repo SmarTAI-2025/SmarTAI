@@ -1,3 +1,4 @@
+import { SortableTableHead, useColumnSort, directionFor, type ColumnSort } from "@/components/ui/SortableTableHead";
 import { TaskQueryBar } from "@/components/tasks/AskQueryBar";
 import { useTaskFilterIntent } from "@/hooks/useTaskFilterIntent";
 import { EMPTY_FILTER_INTENT, parseLocalTaskFilter, supportsFilterIntent } from "@/lib/taskFilterIntent";
@@ -76,6 +77,10 @@ export function StudentAnalysisOverview({ locale, taskId, model }: { locale: Loc
       ? parseSemanticStudentQuery(query, locale) : intentToStudentPlan(smartFilter.intent, locale);
   }, [locale, query, smartFilter.intent, smartFilter.source]);
   const effectiveSort = searchParams.has("sort") ? sortMode : semanticPlan.sort ?? sortMode;
+  const headerSort = useColumnSort(["student", "total", "rate", "status", "confidence", ...model.questions.map((question) => `question:${question.id}`)],
+    effectiveSort === "student" || effectiveSort.startsWith("name_") ? { key: "student", direction: effectiveSort.endsWith("desc") ? "desc" : "asc" }
+      : effectiveSort.startsWith("score_") || effectiveSort.startsWith("confidence_") ? { key: effectiveSort.startsWith("score_") ? "rate" : "confidence", direction: effectiveSort.endsWith("desc") ? "desc" : "asc" } : null,
+    smartFilter.cancel);
   const filteredRows = useMemo(() => rows
     .filter((row) => (
       matchesSemanticPlan(row, semanticPlan)
@@ -84,7 +89,7 @@ export function StudentAnalysisOverview({ locale, taskId, model }: { locale: Loc
       && matchesConfidenceFilter(row.student, confidenceFilter)
       && (reviewFilter === "all" || row.reviewState === reviewFilter)
     ))
-    .sort((left, right) => compareRows(left, right, effectiveSort)), [confidenceFilter, effectiveSort, passFilter, reviewFilter, rows, scoreFilter, semanticPlan]);
+    .sort((left, right) => headerSort.current ? compareStudentHeader(left, right, headerSort.current) : compareRows(left, right, effectiveSort)), [confidenceFilter, effectiveSort, passFilter, reviewFilter, rows, scoreFilter, semanticPlan, headerSort.current?.key, headerSort.current?.direction]);
 
   const pageCount = Math.max(1, Math.ceil(filteredRows.length / PAGE_SIZE));
   const page = Math.min(requestedPage, pageCount);
@@ -141,7 +146,7 @@ export function StudentAnalysisOverview({ locale, taskId, model }: { locale: Loc
           ) : <span key={condition.id} className="rounded-full bg-blue-50 px-2.5 py-1 text-[11px] text-primary">{condition.label}</span>)}
         </div>
 
-        <div className="mt-3 grid grid-cols-2 gap-2 xl:grid-cols-5">
+        <div className="mt-3 grid grid-cols-2 gap-2 xl:grid-cols-4">
           <FilterSelect label={tx(locale, "得分率", "Score Percentage")} value={scoreFilter} onChange={(value) => updateParam("score", value)}>
             <option value="all">{tx(locale, "全部得分率", "All score percentages")}</option><option value="under60">{tx(locale, "低于 60%", "Below 60%")}</option><option value="60to79">60%–79%</option><option value="atleast80">{tx(locale, "80% 及以上", "80% and above")}</option>
           </FilterSelect>
@@ -154,9 +159,7 @@ export function StudentAnalysisOverview({ locale, taskId, model }: { locale: Loc
           <FilterSelect label={tx(locale, "复核状态", "Review status")} value={reviewFilter} onChange={(value) => updateParam("review", value)}>
             <option value="all">{tx(locale, "全部复核状态", "All review states")}</option><option value="pending">{tx(locale, "有未人工处理信号", "Has unreviewed signals")}</option><option value="confirmed">{tx(locale, "信号已由教师处理", "Signals handled by teacher")}</option><option value="none">{tx(locale, "无复核信号", "No review signals")}</option>
           </FilterSelect>
-          <FilterSelect label={tx(locale, "排序", "Sort")} value={sortMode} onChange={(value) => updateParam("sort", value, "student")}>
-            <option value="student">{tx(locale, "按姓名 / 学号", "Name / ID")}</option><option value="score_asc">{tx(locale, "得分率从低到高", "Score low to high")}</option><option value="score_desc">{tx(locale, "得分率从高到低", "Score high to low")}</option><option value="confidence_asc">{tx(locale, "置信度从低到高", "Confidence low to high")}</option><option value="review_desc">{tx(locale, "复核信号最多优先", "Most review signals first")}</option>
-          </FilterSelect>
+
         </div>
 
         <div className="mt-3 flex flex-wrap items-center justify-between gap-2 pb-3 text-[11px] text-muted-foreground">
@@ -167,7 +170,7 @@ export function StudentAnalysisOverview({ locale, taskId, model }: { locale: Loc
 
       {visibleRows.length ? (
         <>
-          <StudentDesktopMatrix locale={locale} taskId={taskId} questions={model.questions} rows={visibleRows} returnQuery={returnQuery} />
+          <StudentDesktopMatrix locale={locale} taskId={taskId} questions={model.questions} rows={visibleRows} returnQuery={returnQuery} columnSort={headerSort.current} onSort={headerSort.toggle} />
           <StudentMobileCards locale={locale} taskId={taskId} questions={model.questions} rows={visibleRows} returnQuery={returnQuery} />
         </>
       ) : <EmptyResult locale={locale} />}
@@ -180,16 +183,22 @@ export function StudentAnalysisOverview({ locale, taskId, model }: { locale: Loc
   );
 }
 
-function StudentDesktopMatrix({ locale, taskId, questions, rows, returnQuery }: { locale: Locale; taskId: string; questions: QuestionSummary[]; rows: StudentAnalysisRow[]; returnQuery: string }) {
+function StudentDesktopMatrix({ locale, taskId, questions, rows, returnQuery, columnSort, onSort }: { locale: Locale; taskId: string; questions: QuestionSummary[]; rows: StudentAnalysisRow[]; returnQuery: string; columnSort: ColumnSort | null; onSort: (key: string) => void }) {
   const minWidth = Math.max(1120, 650 + questions.length * 92);
   return (
     <div className="hidden border-t lg:block">
       <div className="max-w-full overflow-x-auto" tabIndex={0} aria-label={tx(locale, "学生逐题得分矩阵，可横向滚动", "Student per-question score matrix, horizontally scrollable")}>
         <table className="table-fixed text-left" style={{ minWidth }}>
           <thead className="bg-slate-50 text-[10px] font-medium text-muted-foreground"><tr>
-            <th className="sticky left-0 z-10 w-[190px] bg-slate-50 px-4 py-3 font-medium">{tx(locale, "学生", "Student")}</th>
-            <th className="w-[94px] px-3 py-3 font-medium">{tx(locale, "总分", "Total")}</th><th className="w-[78px] px-3 py-3 font-medium">{tx(locale, "得分率", "Rate")}</th><th className="w-[72px] px-3 py-3 font-medium">{tx(locale, "状态", "Status")}</th><th className="w-[128px] px-3 py-3 font-medium">{tx(locale, "置信 / 复核", "Confidence / review")}</th>
-            {questions.map((question) => <th key={question.id} className="w-[92px] px-2 py-3 text-center font-medium"><Link to={`/tasks/${encodeURIComponent(taskId)}/results/questions/${encodeURIComponent(question.id)}`} className="font-semibold text-primary hover:underline">{question.label}</Link></th>)}
+            <SortableTableHead className="sticky left-0 z-10 w-[190px] bg-slate-50 px-4 py-3 font-medium" direction={directionFor(columnSort, "student")} onSort={() => onSort("student")} locale={locale}>{tx(locale, "学生", "Student")}</SortableTableHead>
+            <SortableTableHead className="w-[94px] px-3 py-3 font-medium" direction={directionFor(columnSort, "total")} onSort={() => onSort("total")} locale={locale}>{tx(locale, "总分", "Total")}</SortableTableHead><SortableTableHead className="w-[78px] px-3 py-3 font-medium" direction={directionFor(columnSort, "rate")} onSort={() => onSort("rate")} locale={locale}>{tx(locale, "得分率", "Rate")}</SortableTableHead><SortableTableHead className="w-[72px] px-3 py-3 font-medium" direction={directionFor(columnSort, "status")} onSort={() => onSort("status")} locale={locale}>{tx(locale, "状态", "Status")}</SortableTableHead><SortableTableHead className="w-[128px] px-3 py-3 font-medium" direction={directionFor(columnSort, "confidence")} onSort={() => onSort("confidence")} locale={locale}>{tx(locale, "置信 / 复核", "Confidence / review")}</SortableTableHead>
+            {questions.map((question) => <SortableTableHead key={question.id} className="w-[92px] px-2 py-3 text-center font-medium"
+              direction={directionFor(columnSort, `question:${question.id}`)} onSort={() => onSort(`question:${question.id}`)} locale={locale} label={question.label}
+              secondary={<Link to={`/tasks/${encodeURIComponent(taskId)}/results/questions/${encodeURIComponent(question.id)}`}
+                title={tx(locale, `查看 ${question.label} 题目分析`, `View ${question.label} analysis`)}
+                aria-label={tx(locale, `查看 ${question.label} 题目分析`, `View ${question.label} analysis`)} className="ml-1 inline-flex text-primary hover:underline"><ArrowRight aria-hidden="true" className="h-3 w-3" /></Link>}>
+              {question.label}
+            </SortableTableHead>)}
             <th className="w-[68px] px-3 py-3 text-right font-medium">{tx(locale, "操作", "Action")}</th>
           </tr></thead>
           <tbody className="divide-y">{rows.map((row) => <StudentMatrixRow key={row.student.id} locale={locale} taskId={taskId} questions={questions} row={row} returnQuery={returnQuery} />)}</tbody>
@@ -399,6 +408,19 @@ function matchesConfidenceFilter(student: StudentSummary, filter: ConfidenceFilt
   if (filter === "low_items") return student.lowConfidenceCount > 0;
   const confidence = normalizeConfidence(student.avgConfidence);
   return confidence !== null && confidence < 0.65;
+}
+
+function compareStudentHeader(left: StudentAnalysisRow, right: StudentAnalysisRow, sort: ColumnSort): number {
+  const value = (row: StudentAnalysisRow): string | number | null => {
+    if (sort.key === "student") return row.student.name || row.student.id;
+    if (sort.key === "total") return row.student.totalScore;
+    if (sort.key === "rate") return row.student.percent;
+    if (sort.key === "status") return row.student.percent === null ? null : row.student.percent >= 60 ? 1 : 0;
+    if (sort.key === "confidence") return normalizeConfidence(row.student.avgConfidence);
+    const correction = row.correctionByQuestion.get(sort.key.slice("question:".length));
+    return correction ? effectiveCorrectionScore(correction) : null;
+  };
+  return compareValues(value(left), value(right), sort.direction) || compareStudents(left.student, right.student);
 }
 
 function compareRows(left: StudentAnalysisRow, right: StudentAnalysisRow, sort: SortMode): number {

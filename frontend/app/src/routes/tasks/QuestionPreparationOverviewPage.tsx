@@ -1,4 +1,5 @@
-import { ArrowDown, ArrowUp, ArrowUpDown, CheckCircle2, ChevronRight, Filter, X } from "lucide-react";
+import { SortButton as HeaderSortButton, SortableTableHead, useColumnSort, sortColumnRows, directionFor, type ColumnSort } from "@/components/ui/SortableTableHead";
+import { CheckCircle2, ChevronRight, Filter, X } from "lucide-react";
 import { useMemo, useState } from "react";
 import { Link, Navigate, useParams, useSearchParams } from "react-router-dom";
 import { useTask } from "@/api/hooks/tasks";
@@ -22,7 +23,7 @@ type OpenRiskRow = {
   issue: PreparationIssue;
 };
 
-type MatrixSortKey = "number" | "type" | "attention" | "max_score";
+type MatrixSortKey = "number" | "type" | "attention" | "max_score" | "stem" | "answer" | "rubric" | "tests";
 type MatrixSortDirection = "asc" | "desc";
 type MaterialField = "stem" | "answer" | "rubric" | "tests";
 
@@ -40,8 +41,11 @@ export function QuestionPreparationOverviewPage() {
   );
   const smartFilter = useTaskFilterIntent({ taskId, surface: "question_preparation", resolveLocal: (value) => resolvePreparationQuery(problems, value) });
   const activeSort = searchParams.get("sort") ?? smartFilter.intent?.sort ?? "question";
-  const sortKey: MatrixSortKey = activeSort.startsWith("max_score") ? "max_score" : activeSort.startsWith("type") ? "type" : activeSort.startsWith("review") ? "attention" : "number";
-  const sortDirection: MatrixSortDirection = activeSort.endsWith("_desc") ? "desc" : "asc";
+  const naturalKey: MatrixSortKey = activeSort.startsWith("max_score") ? "max_score" : activeSort.startsWith("type") ? "type" : activeSort.startsWith("review") ? "attention" : "number";
+  const headerSort = useColumnSort(["number", "type", "attention", "max_score", "stem", "answer", "rubric", "tests"],
+    { key: naturalKey, direction: activeSort.endsWith("_desc") ? "desc" : "asc" }, smartFilter.cancel);
+  const sortKey = (headerSort.current?.key ?? naturalKey) as MatrixSortKey;
+  const sortDirection = headerSort.current?.direction ?? "asc";
   const allRisks = useMemo(() => collectRiskRows(problems), [problems]);
   const allRows = useMemo<QuestionMatrixRow[]>(() => problems.map((problem) => ({
     problem,
@@ -73,14 +77,7 @@ export function QuestionPreparationOverviewPage() {
     return <Navigate replace to={`/tasks/${taskId}/problems/progress`} />;
   }
 
-  function toggleSort(key: MatrixSortKey) {
-    smartFilter.cancel();
-    const direction = sortKey === key && sortDirection === "asc" ? "desc" : "asc";
-    const field = key === "number" ? "question" : key === "attention" ? "review" : key;
-    const next = new URLSearchParams(searchParams);
-    next.set("sort", field === "question" && direction === "asc" ? "question" : `${field}_${direction}`);
-    setSearchParams(next, { replace: true });
-  }
+  function toggleSort(key: MatrixSortKey) { headerSort.toggle(key); }
 
   function toggleType(type: string) {
     setSelectedTypes((current) => {
@@ -185,11 +182,11 @@ function QuestionMatrix({ rows, taskId, locale, sortKey, sortDirection, availabl
                 </details>
               </div>
             </th>
-            <th className="w-[105px] px-3 py-3">{tx(locale, "满分", "Max Score")}</th>
-            <th className="w-[145px] px-3 py-3">{tx(locale, "题目", "Question")}</th>
-            <th className="w-[145px] px-3 py-3">{tx(locale, "标答", "Reference Answer")}</th>
-            <th className="w-[145px] px-3 py-3">{tx(locale, "评分标准", "Rubric")}</th>
-            <th className="w-[145px] px-3 py-3">{tx(locale, "测试样例", "Tests")}</th>
+            <SortableHeading className="w-[105px] px-3" label={tx(locale, "满分", "Max Score")} sortKey="max_score" activeKey={sortKey} direction={sortDirection} locale={locale} onSort={onSort} />
+            <SortableHeading className="w-[145px] px-3" label={tx(locale, "题目", "Question")} sortKey="stem" activeKey={sortKey} direction={sortDirection} locale={locale} onSort={onSort} />
+            <SortableHeading className="w-[145px] px-3" label={tx(locale, "标答", "Reference Answer")} sortKey="answer" activeKey={sortKey} direction={sortDirection} locale={locale} onSort={onSort} />
+            <SortableHeading className="w-[145px] px-3" label={tx(locale, "评分标准", "Rubric")} sortKey="rubric" activeKey={sortKey} direction={sortDirection} locale={locale} onSort={onSort} />
+            <SortableHeading className="w-[145px] px-3" label={tx(locale, "测试样例", "Tests")} sortKey="tests" activeKey={sortKey} direction={sortDirection} locale={locale} onSort={onSort} />
             <SortableHeading className="w-[145px] px-3" label={tx(locale, "审核提示", "Attention")} sortKey="attention" activeKey={sortKey} direction={sortDirection} locale={locale} onSort={onSort} />
             <th className="w-[100px] px-5 py-3 text-right">{tx(locale, "操作", "Action")}</th>
           </tr>
@@ -215,13 +212,11 @@ function QuestionMatrix({ rows, taskId, locale, sortKey, sortDirection, availabl
 }
 
 function SortableHeading({ className, label, sortKey, activeKey, direction, locale, onSort }: { className: string; label: string; sortKey: MatrixSortKey; activeKey: MatrixSortKey; direction: MatrixSortDirection; locale: string; onSort: (key: MatrixSortKey) => void }) {
-  return <th className={cn("py-3", className)} aria-sort={activeKey === sortKey ? direction === "asc" ? "ascending" : "descending" : "none"}><SortButton label={label} sortKey={sortKey} activeKey={activeKey} direction={direction} locale={locale} onSort={onSort} /></th>;
+  return <SortableTableHead className={cn("py-3", className)} direction={activeKey === sortKey ? direction : null} onSort={() => onSort(sortKey)} locale={locale}>{label}</SortableTableHead>;
 }
 
 function SortButton({ label, sortKey, activeKey, direction, locale, onSort }: { label: string; sortKey: MatrixSortKey; activeKey: MatrixSortKey; direction: MatrixSortDirection; locale: string; onSort: (key: MatrixSortKey) => void }) {
-  const active = activeKey === sortKey;
-  const Icon = active ? direction === "asc" ? ArrowUp : ArrowDown : ArrowUpDown;
-  return <button type="button" onClick={() => onSort(sortKey)} className="inline-flex h-7 items-center gap-1 rounded-[5px] text-left font-semibold hover:text-foreground" aria-label={tx(locale, `按${label}排序`, `Sort by ${label}`)}>{label}<Icon aria-hidden="true" className={cn("h-3.5 w-3.5", active ? "text-primary" : "text-slate-400")} /></button>;
+  return <HeaderSortButton label={label} direction={activeKey === sortKey ? direction : null} onSort={() => onSort(sortKey)} locale={locale}>{label}</HeaderSortButton>;
 }
 
 function RiskMetric({ label, value, tone }: { label: string; value: number; tone: "primary" | "warning" | "danger" | "accent" }) {
@@ -340,6 +335,10 @@ function sortMatrixRows(rows: QuestionMatrixRow[], key: MatrixSortKey, direction
     if (key === "number") return row.problem.number || row.problem.q_id;
     if (key === "type") return row.problem.type || "";
     if (key === "max_score") return row.problem.max_score;
+    if (["stem", "answer", "rubric", "tests"].includes(key)) {
+      const status = getMaterialStatus(row.problem, key as MaterialField, locale);
+      return status.tone === "neutral" ? null : status.tone === "success" ? 0 : status.tone === "warning" ? 1 : 2;
+    }
     return row.issues.length;
   };
   return [...rows].sort((left, right) => {
