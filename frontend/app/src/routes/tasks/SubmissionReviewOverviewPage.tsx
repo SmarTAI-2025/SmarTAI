@@ -1,3 +1,4 @@
+import { SortableTableHead, useColumnSort, sortColumnRows, directionFor, type ColumnSort } from "@/components/ui/SortableTableHead";
 import { AlertCircle, CheckCircle2, ChevronRight, RotateCcw } from "lucide-react";
 import { useEffect, useMemo, useRef } from "react";
 import { Link, Navigate, useParams, useSearchParams } from "react-router-dom";
@@ -70,13 +71,27 @@ export function SubmissionReviewOverviewPage() {
     taskId, surface: "submission_review",
     resolveLocal: (value) => resolveSubmissionQuery(students, questions, value),
   });
-  const selection = useMemo(() => {
+  const naturalSelection = useMemo(() => {
     const current = smartFilter.intent ?? EMPTY_FILTER_INTENT;
     const requested = searchParams.get("sort");
     const aliases: Record<string, FilterIntentResult["sort"]> = { student_id: "id_asc", student_name: "name_asc", attention: "review_desc" };
     const withSort = { ...current, sort: (requested ? aliases[requested] ?? requested : current.sort ?? "id_asc") as FilterIntentResult["sort"] };
     return selectSubmissionQuestions(students, questions, supportsFilterIntent(withSort, "submission_review") ? withSort : current, filter);
   }, [filter, questions, searchParams, smartFilter.intent, students]);
+
+  const rawSort = searchParams.get("sort") ?? smartFilter.intent?.sort ?? "id_asc";
+  const headerSort = useColumnSort(["id", "name", ...questions.map((question) => `question:${question.id}`)],
+    /^(?:id|name)_(?:asc|desc)$/.test(rawSort) ? { key: rawSort.split("_")[0], direction: rawSort.endsWith("desc") ? "desc" : "asc" }
+      : rawSort === "student_id" || rawSort === "student_name" ? { key: rawSort === "student_id" ? "id" : "name", direction: "asc" } : null,
+    smartFilter.cancel);
+  const selection = useMemo(() => ({ ...naturalSelection,
+    students: sortColumnRows(naturalSelection.students, headerSort.current, (student, key) => {
+      if (key === "name") return student.stu_name || student.stu_id;
+      if (key === "id") return student.stu_id;
+      const state = getAnswerState(answerMap(student).get(key.slice("question:".length)));
+      return { reviewed: 0, recognized: 1, flagged: 2, empty: 3, missing: 4 }[state];
+    }),
+  }), [naturalSelection, headerSort.current?.key, headerSort.current?.direction]);
 
   useEffect(() => { latestSearchParamsRef.current = new URLSearchParams(searchParams); }, [searchParams]);
 
@@ -158,25 +173,14 @@ export function SubmissionReviewOverviewPage() {
               <option value="identity">{t("submissionReviewStatusIdentity")}</option>
             </select>
           </label>
-          <label className="mt-2 block shrink-0 sm:mt-0 sm:w-[160px]">
-            <span className="sr-only">{t("submissionReviewSortLabel")}</span>
-            <select
-              value={sort}
-              onChange={(event) => setParam("sort", event.target.value, "student_id")}
-              className="h-10 w-full rounded-[7px] border bg-card px-3 text-[13px] text-foreground outline-none focus:border-primary focus:ring-2 focus:ring-primary/15"
-            >
-              <option value="student_id">{t("submissionReviewSortId")}</option>
-              <option value="student_name">{t("submissionReviewSortName")}</option>
-              <option value="attention">{t("submissionReviewSortAttention")}</option>
-            </select>
-          </label>
+
         </div>
         <div className="mt-2 flex min-h-5 items-start justify-between gap-3 px-1">
           <p className="text-[11px] leading-5 text-muted-foreground">
             {selection.explanation !== "all" ? t(EXPLANATION_KEYS[selection.explanation]) : null}
             {selection.confidenceAlias ? ` ${t("submissionReviewConfidenceAliasHint")}` : ""}
           </p>
-          {query || filter !== "all" || sort !== "student_id" ? (
+          {query || filter !== "all" || searchParams.has("sort") || searchParams.has("column_sort") ? (
             <button
               type="button"
               onClick={() => {
@@ -228,6 +232,8 @@ export function SubmissionReviewOverviewPage() {
                       questions={selection.questions}
                       taskId={taskId}
                       returnSearch={returnSearch}
+                      columnSort={headerSort.current}
+                      onSort={headerSort.toggle}
                       t={t}
                     />
                   </section>
@@ -280,12 +286,16 @@ function SubmissionMatrix({
   questions,
   taskId,
   returnSearch,
+  columnSort,
+  onSort,
   t,
 }: {
   students: StudentSubmission[];
   questions: SubmissionQuestion[];
   taskId: string;
   returnSearch: string;
+  columnSort: ColumnSort | null;
+  onSort: (key: string) => void;
   t: (key: MessageKey) => string;
 }) {
   if (students.length === 0 || questions.length === 0) {
@@ -323,22 +333,18 @@ function SubmissionMatrix({
       >
         <thead className="sticky top-0 z-20 bg-slate-100/95 text-[12px] font-semibold text-muted-foreground backdrop-blur-sm dark:bg-slate-800/95">
           <tr className="h-[42px] border-b">
-            <th
+            <SortableTableHead
               className="sticky left-0 z-30 whitespace-nowrap bg-slate-100/95 px-3 dark:bg-slate-800/95"
               style={{ width: identityLayout.studentIdWidth, minWidth: identityLayout.studentIdWidth, maxWidth: identityLayout.studentIdWidth }}
-            >
-              {studentIdLabel}
-            </th>
-            <th
+             direction={directionFor(columnSort, "id")} onSort={() => onSort("id")}>{studentIdLabel}</SortableTableHead>
+            <SortableTableHead
               className="sticky z-30 whitespace-nowrap bg-slate-100/95 px-3 dark:bg-slate-800/95"
               style={{ left: identityLayout.studentIdWidth, width: identityLayout.studentNameWidth, minWidth: identityLayout.studentNameWidth, maxWidth: identityLayout.studentNameWidth }}
-            >
-              {studentNameLabel}
-            </th>
+             direction={directionFor(columnSort, "name")} onSort={() => onSort("name")}>{studentNameLabel}</SortableTableHead>
             {questions.map((question) => (
-              <th key={question.id} className="w-[60px] min-w-[60px] max-w-[60px] px-1 text-center" title={question.type || question.label}>
+              <SortableTableHead direction={directionFor(columnSort, `question:${question.id}`)} onSort={() => onSort(`question:${question.id}`)} label={question.label} key={question.id} className="w-[60px] min-w-[60px] max-w-[60px] px-1 text-center" title={question.type || question.label}>
                 {question.label}
-              </th>
+              </SortableTableHead>
             ))}
             <th className="w-[72px] px-3 text-right">{t("submissionReviewColumnAction")}</th>
           </tr>

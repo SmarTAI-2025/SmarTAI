@@ -189,6 +189,7 @@ export function HistoryPage() {
           isDeleting={deleteTask.isPending}
           deletingTaskId={deletingTaskId}
           hasFilters={hasFilters}
+          sort={query.sort}
           onFilter={handleChange}
           onDelete={(task) => void handleDelete(task)}
           onRetry={() => void historyQuery.refetch()}

@@ -1,3 +1,4 @@
+import { SortableTableHead } from "@/components/ui/SortableTableHead";
 import { MoreHorizontal, Trash2 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
@@ -25,6 +26,7 @@ interface HistoryTaskTableProps {
   isDeleting: boolean;
   deletingTaskId: string | null;
   hasFilters: boolean;
+  sort: TaskHistoryQuery["sort"];
   onFilter: (patch: Partial<TaskHistoryQuery>) => void;
   onDelete: (task: TaskLite) => void;
   onRetry: () => void;
@@ -42,6 +44,7 @@ export function HistoryTaskTable({
   isDeleting,
   deletingTaskId,
   hasFilters,
+  sort,
   onFilter,
   onDelete,
   onRetry,
@@ -53,11 +56,17 @@ export function HistoryTaskTable({
       <div className="overflow-visible pb-2 md:overflow-x-auto">
         <div role="table" aria-label={t("historyTableRegion")} aria-busy={isLoading} className="min-w-0 text-left md:min-w-[1080px]">
           <div role="row" className={cn("grid h-[42px] items-center text-[13px] font-semibold leading-4 text-muted-foreground", COLUMNS)}>
-            <div role="columnheader" className="px-[14px]">{t("historyColumnTask")}</div>
-            <div role="columnheader" className="px-[14px]">{t("historyColumnStage")}</div>
+            <SortableTableHead as="div" className="px-[14px]"
+              direction={sort === "name_asc" ? "asc" : sort === "name_desc" ? "desc" : null}
+              onSort={() => onFilter({ sort: sort === "name_asc" ? "name_desc" : "name_asc" })}>{t("historyColumnTask")}</SortableTableHead>
+            <SortableTableHead as="div" className="px-[14px]"
+              direction={sort === "stage_asc" ? "asc" : sort === "stage_desc" ? "desc" : null}
+              onSort={() => onFilter({ sort: sort === "stage_asc" ? "stage_desc" : "stage_asc" })}>{t("historyColumnStage")}</SortableTableHead>
             <div role="columnheader" className="hidden px-[14px] md:block">{t("historyColumnProgress")}</div>
             <div role="columnheader" className="hidden px-[14px] md:block">{t("historyColumnEta")}</div>
-            <div role="columnheader" className="hidden px-[14px] md:block">{t("historyColumnUpdated")}</div>
+            <SortableTableHead as="div" className="hidden px-[14px] md:block"
+              direction={sort === "updated_asc" ? "asc" : sort === "updated_desc" ? "desc" : null}
+              onSort={() => onFilter({ sort: sort === "updated_asc" ? "updated_desc" : "updated_asc" })}>{t("historyColumnUpdated")}</SortableTableHead>
             <div role="columnheader" className="hidden px-[14px] md:block">{t("historyColumnNext")}</div>
           </div>
 
