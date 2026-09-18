@@ -34,7 +34,6 @@ export function QuestionPreparationOverviewPage() {
   const taskQuery = useTask(taskId);
   const urlQuery = searchParams.get("q") ?? "";
   const query = urlQuery;
-  const [selectedTypes, setSelectedTypes] = useState<Set<string>>(new Set());
   const problems = useMemo(
     () => sortProblems(Object.values(taskQuery.data?.problem_data ?? {}), locale),
     [locale, taskQuery.data?.problem_data],
@@ -51,18 +50,11 @@ export function QuestionPreparationOverviewPage() {
     problem,
     issues: (problem.preparation_issues ?? []).filter((issue) => issue.status === "open"),
   })), [problems]);
-  const availableTypes = useMemo(
-    () => [...new Set(problems.map((problem) => problem.type || tx(locale, "未分类", "Uncategorized")))].sort((a, b) => a.localeCompare(b, locale)),
-    [locale, problems],
-  );
   const rows = useMemo(() => {
     const selected = new Set(selectPreparationQuestions(problems, smartFilter.intent).map((problem) => problem.q_id));
     const textFiltered = allRows.filter((row) => selected.has(row.problem.q_id));
-    const typeFiltered = selectedTypes.size
-      ? textFiltered.filter((row) => selectedTypes.has(row.problem.type || tx(locale, "未分类", "Uncategorized")))
-      : textFiltered;
-    return sortMatrixRows(typeFiltered, sortKey, sortDirection, locale);
-  }, [allRows, problems, smartFilter.intent, locale, selectedTypes, sortDirection, sortKey]);
+    return sortMatrixRows(textFiltered, sortKey, sortDirection, locale);
+  }, [allRows, problems, smartFilter.intent, locale, sortDirection, sortKey]);
   const metrics = useMemo(() => ({
     questions: new Set(allRisks.map((row) => row.problem.q_id)).size,
     lowConfidence: allRisks.filter((row) => row.issue.code === "low_confidence").length,
@@ -78,15 +70,6 @@ export function QuestionPreparationOverviewPage() {
   }
 
   function toggleSort(key: MatrixSortKey) { headerSort.toggle(key); }
-
-  function toggleType(type: string) {
-    setSelectedTypes((current) => {
-      const next = new Set(current);
-      if (next.has(type)) next.delete(type);
-      else next.add(type);
-      return next;
-    });
-  }
 
   const firstQuestionId = rows[0]?.problem.q_id;
   const totalMaxScore = problems.reduce((total, problem) => total + (problem.max_score ?? 10), 0);
@@ -125,13 +108,9 @@ export function QuestionPreparationOverviewPage() {
               locale={locale}
               sortKey={sortKey}
               sortDirection={sortDirection}
-              availableTypes={availableTypes}
-              selectedTypes={selectedTypes}
               onSort={toggleSort}
-              onToggleType={toggleType}
-              onClearTypes={() => setSelectedTypes(new Set())}
             />
-          ) : <MatrixEmpty filtered={Boolean(query || selectedTypes.size)} locale={locale} />}
+          ) : <MatrixEmpty filtered={Boolean(query)} locale={locale} />}
           <footer className="flex min-h-[58px] flex-col gap-2 border-t px-4 py-2.5 sm:flex-row sm:items-center sm:justify-between xl:px-5">
             <p className="text-xs text-muted-foreground">{locale === "zh-CN"
               ? `显示 ${rows.length} / ${problems.length} 道题 · 作业总分 ${formatScore(totalMaxScore)} · ${allRisks.length} 个开放风险`
@@ -149,17 +128,13 @@ export function QuestionPreparationOverviewPage() {
   );
 }
 
-function QuestionMatrix({ rows, taskId, locale, sortKey, sortDirection, availableTypes, selectedTypes, onSort, onToggleType, onClearTypes }: {
+function QuestionMatrix({ rows, taskId, locale, sortKey, sortDirection, onSort }: {
   rows: QuestionMatrixRow[];
   taskId: string;
   locale: string;
   sortKey: MatrixSortKey;
   sortDirection: MatrixSortDirection;
-  availableTypes: string[];
-  selectedTypes: Set<string>;
   onSort: (key: MatrixSortKey) => void;
-  onToggleType: (type: string) => void;
-  onClearTypes: () => void;
 }) {
   return (
     <div className="max-h-[calc(100vh-520px)] min-h-[280px] overflow-auto overscroll-contain">
@@ -170,16 +145,6 @@ function QuestionMatrix({ rows, taskId, locale, sortKey, sortDirection, availabl
             <th className="relative w-[140px] px-3 py-3" aria-sort={sortKey === "type" ? sortDirection === "asc" ? "ascending" : "descending" : "none"}>
               <div className="flex items-center gap-1">
                 <SortButton label={tx(locale, "题型", "Type")} sortKey="type" activeKey={sortKey} direction={sortDirection} locale={locale} onSort={onSort} />
-                <details className="relative">
-                  <summary aria-label={tx(locale, "筛选题型", "Filter types")} className={cn("flex h-7 w-7 cursor-pointer list-none items-center justify-center rounded-[5px] hover:bg-slate-200 dark:hover:bg-slate-700", selectedTypes.size && "bg-blue-100 text-primary dark:bg-blue-950/40")}><Filter aria-hidden="true" className="h-3.5 w-3.5" /></summary>
-                  <div className="absolute left-0 top-8 z-30 w-56 rounded-[8px] border bg-card p-2 shadow-xl">
-                    <div className="mb-1 flex items-center justify-between px-2 py-1">
-                      <span className="text-xs font-semibold text-foreground">{tx(locale, "选择一个或多个题型", "Select one or more types")}</span>
-                      {selectedTypes.size ? <button type="button" onClick={onClearTypes} className="inline-flex h-6 w-6 items-center justify-center rounded text-muted-foreground hover:bg-muted" aria-label={tx(locale, "清空题型筛选", "Clear type filter")}><X aria-hidden="true" className="h-3.5 w-3.5" /></button> : null}
-                    </div>
-                    {availableTypes.map((type) => <label key={type} className="flex cursor-pointer items-center gap-2 rounded-[6px] px-2 py-2 text-xs font-medium text-foreground hover:bg-muted"><input type="checkbox" checked={selectedTypes.has(type)} onChange={() => onToggleType(type)} className="h-4 w-4 accent-primary" />{type}</label>)}
-                  </div>
-                </details>
               </div>
             </th>
             <SortableHeading className="w-[105px] px-3" label={tx(locale, "满分", "Max Score")} sortKey="max_score" activeKey={sortKey} direction={sortDirection} locale={locale} onSort={onSort} />
@@ -284,7 +249,7 @@ function MatrixEmpty({ filtered, locale }: { filtered: boolean; locale: string }
   return (
     <div className="flex min-h-[220px] flex-col items-center justify-center px-5 text-center">
       <p className="text-sm font-semibold text-foreground">{filtered ? tx(locale, "没有匹配的题目", "No matching questions") : tx(locale, "尚未识别到题目", "No questions recognized yet")}</p>
-      <p className="mt-1 text-xs leading-5 text-muted-foreground">{filtered ? tx(locale, "清空搜索或题型筛选后查看全部题目资料。", "Clear the search or type filter to see every question.") : tx(locale, "完成题目识别后，这里会显示全题资料矩阵。", "The full material matrix appears after recognition.")}</p>
+      <p className="mt-1 text-xs leading-5 text-muted-foreground">{filtered ? tx(locale, "清空查询后查看全部题目资料。", "Clear the query to see every question.") : tx(locale, "完成题目识别后，这里会显示全题资料矩阵。", "The full material matrix appears after recognition.")}</p>
     </div>
   );
 }

@@ -62,10 +62,6 @@ const PAGE_SIZE = 5;
 export function StudentAnalysisOverview({ locale, taskId, model }: { locale: Locale; taskId: string; model: ResultsModel }) {
   const [searchParams, setSearchParams] = useSearchParams();
   const query = searchParams.get("q") ?? "";
-  const scoreFilter = normalizeScoreFilter(searchParams.get("score"));
-  const passFilter = normalizePassFilter(searchParams.get("pass"));
-  const confidenceFilter = normalizeConfidenceFilter(searchParams.get("confidence"));
-  const reviewFilter = normalizeReviewFilter(searchParams.get("review"));
   const sortMode = normalizeSortMode(searchParams.get("sort"));
   const requestedPage = Math.max(1, Number(searchParams.get("page")) || 1);
   const returnQuery = searchParams.toString();
@@ -85,12 +81,8 @@ export function StudentAnalysisOverview({ locale, taskId, model }: { locale: Loc
   const filteredRows = useMemo(() => rows
     .filter((row) => (
       matchesSemanticPlan(row, semanticPlan)
-      && matchesScoreFilter(row.student.percent, scoreFilter)
-      && matchesPassFilter(row.student.percent, passFilter)
-      && matchesConfidenceFilter(row.student, confidenceFilter)
-      && (reviewFilter === "all" || row.reviewState === reviewFilter)
     ))
-    .sort((left, right) => headerSort.current ? compareStudentHeader(left, right, headerSort.current) : compareRows(left, right, effectiveSort)), [confidenceFilter, effectiveSort, passFilter, reviewFilter, rows, scoreFilter, semanticPlan, headerSort.current?.key, headerSort.current?.direction]);
+    .sort((left, right) => headerSort.current ? compareStudentHeader(left, right, headerSort.current) : compareRows(left, right, effectiveSort)), [effectiveSort, rows, semanticPlan, headerSort.current?.key, headerSort.current?.direction]);
 
   const pageCount = Math.max(1, Math.ceil(filteredRows.length / PAGE_SIZE));
   const page = Math.min(requestedPage, pageCount);
@@ -147,22 +139,6 @@ export function StudentAnalysisOverview({ locale, taskId, model }: { locale: Loc
           ) : <span key={condition.id} className="rounded-full bg-blue-50 px-2.5 py-1 text-[11px] text-primary">{condition.label}</span>)}
         </div>
 
-        <div className="mt-3 grid grid-cols-2 gap-2 xl:grid-cols-4">
-          <FilterSelect label={tx(locale, "得分率", "Score Percentage")} value={scoreFilter} onChange={(value) => updateParam("score", value)}>
-            <option value="all">{tx(locale, "全部得分率", "All score percentages")}</option><option value="under60">{tx(locale, "低于 60%", "Below 60%")}</option><option value="60to79">60%–79%</option><option value="atleast80">{tx(locale, "80% 及以上", "80% and above")}</option>
-          </FilterSelect>
-          <FilterSelect label={tx(locale, "及格状态", "Pass status")} value={passFilter} onChange={(value) => updateParam("pass", value)}>
-            <option value="all">{tx(locale, "全部状态", "All states")}</option><option value="pass">{tx(locale, "及格", "Passed")}</option><option value="fail">{tx(locale, "未及格", "Failed")}</option><option value="unscored">{tx(locale, "无可比总分", "No comparable total")}</option>
-          </FilterSelect>
-          <FilterSelect label={tx(locale, "置信度", "Confidence")} value={confidenceFilter} onChange={(value) => updateParam("confidence", value)}>
-            <option value="all">{tx(locale, "全部置信度", "All confidence")}</option><option value="low_items">{tx(locale, "含低置信题次", "Has low-confidence items")}</option><option value="avg_low">{tx(locale, "平均低于 65%", "Mean below 65%")}</option>
-          </FilterSelect>
-          <FilterSelect label={tx(locale, "复核状态", "Review status")} value={reviewFilter} onChange={(value) => updateParam("review", value)}>
-            <option value="all">{tx(locale, "全部复核状态", "All review states")}</option><option value="pending">{tx(locale, "有未人工处理信号", "Has unreviewed signals")}</option><option value="confirmed">{tx(locale, "信号已由教师处理", "Signals handled by teacher")}</option><option value="none">{tx(locale, "无复核信号", "No review signals")}</option>
-          </FilterSelect>
-
-        </div>
-
         <div className="mt-3 flex flex-wrap items-center justify-between gap-2 pb-3 text-[11px] text-muted-foreground">
           <span>{tx(locale, `匹配 ${filteredRows.length} / ${rows.length} 位学生`, `${filteredRows.length} / ${rows.length} students matched`)}</span>
           <span>{tx(locale, "逐题单元格显示得分 / 满分与得分率；点击可在学生详情聚焦该题。", "Per-question cells show score / maximum and rate; open one to focus that question in student detail.")}</span>
@@ -172,7 +148,6 @@ export function StudentAnalysisOverview({ locale, taskId, model }: { locale: Loc
       {visibleRows.length ? (
         <>
           <StudentDesktopMatrix locale={locale} taskId={taskId} questions={model.questions} rows={visibleRows} returnQuery={returnQuery} columnSort={headerSort.current} onSort={headerSort.toggle} />
-          <StudentMobileCards locale={locale} taskId={taskId} questions={model.questions} rows={visibleRows} returnQuery={returnQuery} />
         </>
       ) : <EmptyResult locale={locale} />}
 
@@ -187,7 +162,7 @@ export function StudentAnalysisOverview({ locale, taskId, model }: { locale: Loc
 function StudentDesktopMatrix({ locale, taskId, questions, rows, returnQuery, columnSort, onSort }: { locale: Locale; taskId: string; questions: QuestionSummary[]; rows: StudentAnalysisRow[]; returnQuery: string; columnSort: ColumnSort | null; onSort: (key: string) => void }) {
   const minWidth = Math.max(1120, 650 + questions.length * 92);
   return (
-    <div className="hidden border-t lg:block">
+    <div className="max-w-full overflow-x-auto border-t">
       <div className="max-w-full overflow-x-auto" tabIndex={0} aria-label={tx(locale, "学生逐题得分矩阵，可横向滚动", "Student per-question score matrix, horizontally scrollable")}>
         <table className="table-fixed text-left" style={{ minWidth }}>
           <thead className="bg-slate-50 text-[10px] font-medium text-muted-foreground"><tr>
@@ -243,10 +218,6 @@ function StudentMobileCards({ locale, taskId, questions, rows, returnQuery }: { 
       </div>
     </article>
   ))}</div>;
-}
-
-function FilterSelect({ label, value, onChange, children }: { label: string; value: string; onChange: (value: string) => void; children: ReactNode }) {
-  return <label><span className="sr-only">{label}</span><select value={value} onChange={(event) => onChange(event.target.value)} className="h-9 w-full rounded-[8px] border bg-background px-2.5 text-[11px] font-medium text-foreground outline-none focus:border-primary focus:ring-2 focus:ring-primary/15">{children}</select></label>;
 }
 
 function SmallFact({ label, value }: { label: string; value: string }) {

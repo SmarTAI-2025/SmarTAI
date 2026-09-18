@@ -147,19 +147,19 @@ function HistoryTaskRow({
         </div>
         <div className="mt-1 hidden min-w-0 items-center gap-1 overflow-visible whitespace-nowrap md:flex">
           {task.semester_id ? (
-            <button type="button" title={formatSemesterLabel(task.semester_id, t)} onClick={() => onFilter({ semester_id: task.semester_id ?? undefined })} className="max-w-[132px] truncate rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5 text-[11px] text-slate-600 outline-none hover:border-primary/30 hover:text-primary focus-visible:ring-2 focus-visible:ring-ring dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300">
+            <span title={formatSemesterLabel(task.semester_id, t)} className="max-w-[132px] truncate rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5 text-[11px] text-slate-600 outline-none hover:border-primary/30 hover:text-primary focus-visible:ring-2 focus-visible:ring-ring dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300">
               {formatSemesterLabel(task.semester_id, t)}
-            </button>
+            </span>
           ) : null}
           {course ? (
-            <button type="button" title={course.name} onClick={() => onFilter({ course_id: course.id })} className="max-w-[100px] truncate rounded-full border border-blue-200 bg-blue-50 px-2 py-0.5 text-[11px] text-blue-700 outline-none hover:border-primary/40 focus-visible:ring-2 focus-visible:ring-ring dark:border-blue-800 dark:bg-blue-950/50 dark:text-blue-200">
+            <span title={course.name} className="max-w-[100px] truncate rounded-full border border-blue-200 bg-blue-50 px-2 py-0.5 text-[11px] text-blue-700 outline-none hover:border-primary/40 focus-visible:ring-2 focus-visible:ring-ring dark:border-blue-800 dark:bg-blue-950/50 dark:text-blue-200">
               {course.name}
-            </button>
+            </span>
           ) : null}
           {taskTags.slice(0, 2).map((tag) => (
-            <button key={tag.id} type="button" title={tag.name} onClick={() => onFilter({ tag_ids: [tag.id] })} className={cn("max-w-[82px] truncate rounded-full border px-2 py-0.5 text-[11px] outline-none focus-visible:ring-2 focus-visible:ring-ring", TAG_TONE_CLASSES[tag.color])}>
+            <span key={tag.id} title={tag.name} className={cn("max-w-[82px] truncate rounded-full border px-2 py-0.5 text-[11px] outline-none focus-visible:ring-2 focus-visible:ring-ring", TAG_TONE_CLASSES[tag.color])}>
               {tag.name}
-            </button>
+            </span>
           ))}
           {taskTags.length > 2 ? <span className="text-[11px] text-muted-foreground">+{taskTags.length - 2}</span> : null}
           {!task.semester_id && !course && taskTags.length === 0 ? <span className="truncate text-[11px] text-muted-foreground">{t("historyMetadataUnset")}</span> : null}
@@ -175,9 +175,9 @@ function HistoryTaskRow({
       </div>
 
       <div role="cell" className="min-w-0 px-2 py-2 md:px-[14px]">
-        <button type="button" title={t(HISTORY_STAGE_KEYS[task.status])} onClick={() => onFilter({ statuses: [task.status] })} className={cn("inline-flex h-7 max-w-[185px] items-center rounded-full px-3 text-[13px] font-semibold outline-none focus-visible:ring-2 focus-visible:ring-ring", historyStatusTone(task.status))}>
+        <span title={t(HISTORY_STAGE_KEYS[task.status])} className={cn("inline-flex h-7 max-w-[185px] items-center rounded-full px-3 text-[13px] font-semibold outline-none focus-visible:ring-2 focus-visible:ring-ring", historyStatusTone(task.status))}>
           <span className="truncate">{t(HISTORY_STAGE_KEYS[task.status])}</span>
-        </button>
+        </span>
         <div className="mt-1 flex min-w-0 items-center gap-1 md:hidden">
           <Link to={destination} className="min-w-0 flex-1 truncate text-[11px] font-medium text-muted-foreground outline-none hover:text-primary focus-visible:rounded focus-visible:ring-2 focus-visible:ring-ring">
             {t(HISTORY_ACTION_KEYS[task.status])}
