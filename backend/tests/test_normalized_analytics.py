@@ -10,6 +10,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from backend.api import analytics
+from backend.tests.test_grounded_ask import Provider as _PlanProvider
 from backend.auth import require_task_teacher
 from backend.db.models import (
     AssignmentQuestionRecord,
@@ -400,56 +401,30 @@ def test_per_question_uses_effective_normalized_results_and_owner_cache():
 
 
 def test_nl_query_filters_hallucinated_ids_and_emits_only_safe_chart_fields():
-    owner = _user("teacher", "query-owner")
-    other = _user("teacher", "query-other")
-    seeded = _seed_graded_assignment(owner)
-    other_seeded = _seed_graded_assignment(other, "query-other")
-    provider = _Provider()
-    valid_id = seeded["students"][0].id
-    provider.outputs["filter"] = {
-        "student_ids": [valid_id, other_seeded["students"][0].id, valid_id],
-        "explanation": "Only the requested student",
-    }
+    owner, other = _user("teacher", "query-owner"), _user("teacher", "query-other")
+    seeded, other_seeded = _seed_graded_assignment(owner), _seed_graded_assignment(other, "other")
+    valid_id, outsider = seeded["students"][0].id, other_seeded["students"][0].id
+    provider = _PlanProvider({}, {"result_kind":"students", "sql":"SELECT student_id FROM students WHERE student_id IN (:valid,:other)", "parameters":{"valid":valid_id,"other":outsider}},
+        {}, {"result_kind":"chart", "sql":"SELECT student_id,q_id,score FROM grades WHERE score IS NOT NULL ORDER BY student_id", "chart":{"type":"bar","x":"q_id","y":["score"]}})
     client = _client(owner, _Registry(provider))
-
-    filtered = client.post(
-        f"/analytics/{seeded['task_id']}/query",
-        json={"question": "Who needs support?", "mode": "filter"},
-    )
-    assert filtered.status_code == 200, filtered.text
-    assert filtered.json() == {
-        "mode": "filter",
-        "student_ids": [valid_id],
-        "explanation": "Only the requested student",
-    }
-    prompt = str(provider.calls[-1][1][-1].content)
-    assert other_seeded["students"][0].username not in prompt
-
-    limited = client.post(
-        f"/analytics/{seeded['task_id']}/query",
-        json={"question": "Again", "mode": "summary"},
-    )
-    assert limited.status_code == 429
-    assert limited.json()["detail"]["code"] == "analytics_rate_limited"
-    assert int(limited.headers["retry-after"]) >= 1
-
+    response = client.post(f"/analytics/{seeded['task_id']}/query", json={"question":"Who needs support?","mode":"filter"})
+    assert response.status_code == 200, response.text
+    assert response.json()["student_ids"] == [valid_id]
+    assert other_seeded["students"][0].username not in str(provider.calls[0])
     with analytics._query_rate_lock:
-        analytics._query_last_at.clear()
-    chart = client.post(
-        f"/analytics/{seeded['task_id']}/query",
-        json={"question": "Chart the scores", "mode": "chart"},
-    )
+        analytics._ask_bursts[owner.id] = [time.monotonic()] * 12
+    limited = client.post(f"/analytics/{seeded['task_id']}/query", json={"question":"Again","mode":"summary"})
+    assert limited.status_code == 429
+    assert int(limited.headers["retry-after"]) >= 1
+    with analytics._query_rate_lock:
+        analytics._ask_bursts.clear()
+    chart = client.post(f"/analytics/{seeded['task_id']}/query",json={"question":"Chart the scores","mode":"chart"})
     assert chart.status_code == 200, chart.text
-    body = chart.json()
+    body=chart.json()
     assert body["mode"] == "chart"
-    assert body["traces"][0] == {
-        "type": "bar",
-        "name": "Scores",
-        "x": ["A", "B"],
-        "y": [8.5, 4.0],
-    }
-    assert "marker" not in body["traces"][0]
-    assert "mode" not in body["traces"][0]
+    assert [trace["y"] for trace in body["traces"]] == [[8.5], [4.0]]
+    assert all(set(trace)=={"type","name","x","y"} for trace in body["traces"])
+    assert body["execution"]["recognized"]
 
 
 def test_filter_intent_sends_only_redacted_query_and_returns_fixed_controls():
@@ -569,75 +544,34 @@ def test_chart_prompt_contains_real_confidence_and_review_metrics_with_unknowns(
     owner = _user("teacher", "chart-metrics")
     seeded = _seed_graded_assignment(owner)
     with session_scope() as session:
-        session.get(GradeResultRecord, seeded["result_ids"][0]).ai_confidence = None
         session.get(GradeResultRecord, seeded["result_ids"][1]).ai_confidence = 70
-    provider = _Provider()
-    response = _client(owner, _Registry(provider)).post(
-        f"/analytics/{seeded['task_id']}/query",
-        json={"question": "画出总分率与平均置信度散点图", "mode": "chart"},
-    )
+    provider = _PlanProvider({}, {"result_kind":"chart", "sql":"SELECT student_id,score_percent,avg_confidence,review_count,pending_review_count FROM students ORDER BY student_id", "chart":{"type":"scatter","x":"score_percent","y":["avg_confidence"]}})
+    response = _client(owner,_Registry(provider)).post(f"/analytics/{seeded['task_id']}/query",json={"question":"画出总分率与平均置信度散点图","mode":"chart"})
     assert response.status_code == 200, response.text
-    prompt = str(provider.calls[-1][1][-1].content)
-    context = json.loads(prompt.split("**[Class Data (JSON)]**:\n", 1)[1].split("\n\n**[", 1)[0])
-    rows = {row["id"]: row for row in context["students"]}
-    reviewed = rows[seeded["students"][0].id]
-    pending = rows[seeded["students"][1].id]
-    failed = rows[seeded["students"][2].id]
-    assert reviewed["avg_confidence"] is None
-    assert reviewed["per_q"][0]["confidence"] is None
-    assert reviewed["per_q"][0]["reviewed"] is True
-    assert pending["avg_confidence"] == 0.7
-    assert pending["review_signal_count"] == pending["pending_review_count"] == 1
-    assert failed["pct"] is None
-    assert failed["per_q"][0]["score"] is None
-    assert failed["low_confidence_count"] == 1
+    execution=response.json()["execution"]
+    rows={r[0]:r for r in execution["data"]["rows"]}
+    assert rows[seeded["students"][0].id][1:3] == [85,0.8]
+    assert rows[seeded["students"][1].id][2:] == [0.7,1,1]
+    assert rows[seeded["students"][2].id][1] is None
+    prompt=json.loads(provider.calls[-1][1].content)
+    assert prompt["schema"]["grades"]["confidence"] == "REAL"
+    assert "students" not in prompt  # schema and tools, not a truncated 50-person dump
 
 
 def test_analytics_readiness_and_generation_errors_are_stable_and_redacted():
     owner = _user("teacher", "error-owner")
     ungraded_id = _seed_ungraded_assignment(owner)
-    provider = _Provider()
+    provider = _PlanProvider({}, *[{"result_kind":"chart","traces":[{"y":[99]}]}]*3)
     client = _client(owner, _Registry(provider))
-
     not_ready = client.get(f"/analytics/{ungraded_id}/per_question/Q1")
-    assert not_ready.status_code == 409
-    assert not_ready.json()["detail"] == {"code": "analytics_not_ready"}
-    assert provider.calls == []
-
-    seeded = _seed_graded_assignment(owner, "error")
-    provider.outputs["chart"] = {
-        "title": "Unsafe",
-        "rationale": "Too many points",
-        "traces": [{"type": "bar", "x": list(range(51)), "y": list(range(51))}],
-        "layout": {"height": 360},
-    }
-    invalid_chart = client.post(
-        f"/analytics/{seeded['task_id']}/query",
-        json={"question": "Make a huge chart", "mode": "chart"},
-    )
-    assert invalid_chart.status_code == 502
-    assert invalid_chart.json()["detail"] == {
-        "code": "analytics_generation_failed"
-    }
-
-    with analytics._query_rate_lock:
-        analytics._query_last_at.clear()
-    provider.outputs["summary"] = RuntimeError("secret-provider-payload")
-    failed = client.post(
-        f"/analytics/{seeded['task_id']}/query",
-        json={"question": "Summarize", "mode": "summary"},
-    )
+    assert not_ready.status_code == 409 and provider.calls == []
+    seeded = _seed_graded_assignment(owner,"error")
+    invalid = client.post(f"/analytics/{seeded['task_id']}/query",json={"question":"Make a chart","mode":"chart"})
+    assert invalid.status_code == 200
+    assert invalid.json()["execution"]["recognized"] is False
+    assert invalid.json()["execution"]["chart"] is None
+    provider.outputs=[RuntimeError("secret-provider-payload")]
+    failed=client.post(f"/analytics/{seeded['task_id']}/query",json={"question":"Summarize","mode":"summary"})
     assert failed.status_code == 502
-    assert failed.json()["detail"] == {
-        "code": "analytics_generation_failed"
-    }
+    assert failed.json()["detail"] == {"code":"analytics_generation_failed"}
     assert "secret-provider-payload" not in failed.text
-
-    no_provider = _client(owner, _Registry(None)).post(
-        f"/analytics/{seeded['task_id']}/query",
-        json={"question": "Summarize", "mode": "summary"},
-    )
-    assert no_provider.status_code == 503
-    assert no_provider.json()["detail"] == {
-        "code": "analytics_provider_unavailable"
-    }

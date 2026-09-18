@@ -164,9 +164,9 @@ export function useUpdateTask() {
   });
 }
 
-export function useInterpretTaskHistoryQuery() {
+export function useInterpretTaskHistoryQuery(history?: () => string[]) {
   return useMutation({
-    mutationFn: tasksApi.interpretTaskHistoryQuery,
+    mutationFn: (query: string) => tasksApi.interpretTaskHistoryQuery(query, history?.()),
   });
 }
 

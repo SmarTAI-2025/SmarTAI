@@ -1,3 +1,4 @@
+import { runGroundedAsk } from "./analytics";
 import { deleteJSON, getBlob, getJSON, postJSON, postMultipart, putJSON, type UploadOptions } from "./client";
 import type {
   CorrectionReviewResponse,
@@ -81,8 +82,9 @@ export function updateTask(taskId: string, patch: TaskMetadataPatch): Promise<Ta
   return putJSON<TaskLite, TaskMetadataPatch>(`/tasks/${taskId}`, patch);
 }
 
-export function interpretTaskHistoryQuery(query: string): Promise<HistoryInterpretation> {
-  return postJSON<HistoryInterpretation, { query: string }>("/tasks/query/interpret", { query }, { timeout: 300_000 });
+export async function interpretTaskHistoryQuery(query: string, history?: string[]): Promise<HistoryInterpretation> {
+  const execution = await runGroundedAsk(undefined, query, "history", undefined, { history });
+  return { filters: {}, conditions: [], ambiguities: [], explanation: execution.explanation, source: "grounded", execution };
 }
 
 export function deleteTask(taskId: string): Promise<{ status: string }> {

@@ -14,7 +14,7 @@ export function sortColumnRows<T>(rows: T[], sort: ColumnSort | null, value: (ro
 /** URLs preserve the order through detail navigation; every new header starts at page 1. */
 export function useColumnSort(keys: string[], fallback: ColumnSort | null, onChange: () => void) {
   const [params, setParams] = useSearchParams();
-  let current = fallback;
+  let current = params.get("ask_order") === "1" ? null : fallback;
   try {
     const parsed: unknown = JSON.parse(params.get("column_sort") ?? "null");
     if (Array.isArray(parsed) && parsed.length === 2 && keys.includes(parsed[0]) && ["asc", "desc"].includes(parsed[1])) {
