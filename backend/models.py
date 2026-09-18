@@ -486,6 +486,7 @@ class User(BaseModel):
     password_hash: str = Field("", description="bcrypt hash; never returned to clients")
     created_at: float = Field(default_factory=time.time)
     is_active: bool = True
+    auth_invalid_before: float | None = Field(default=None, exclude=True)
 
     def public(self) -> Dict[str, Any]:
         """Dict safe to return to clients (no password hash, no course_ids)."""

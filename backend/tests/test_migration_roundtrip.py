@@ -143,6 +143,110 @@ def test_provider_routing_migration_backfills_default_and_question_column(
     assert tuple(preference) == ("owner", "first")
 
 
+def test_email_verification_schema_exists_at_head(tmp_path, monkeypatch):
+    from sqlalchemy import create_engine, inspect
+
+    db_url = f"sqlite:///{(tmp_path / 'email-verification-schema.db').as_posix()}"
+    cfg = _alembic_config(db_url, monkeypatch)
+    command.upgrade(cfg, "head")
+    inspector = inspect(create_engine(db_url))
+
+    columns = {
+        column["name"]
+        for column in inspector.get_columns("email_verification_requests")
+    }
+    assert {
+        "id",
+        "normalized_username",
+        "normalized_email",
+        "password_hash",
+        "token_digest",
+        "created_at",
+        "expires_at",
+        "resend_available_at",
+        "superseded_at",
+        "verified_at",
+        "delivery_status",
+        "last_delivery_error_code",
+        "source_ip",
+    } <= columns
+    indexes = {index["name"] for index in inspector.get_indexes("email_verification_requests")}
+    assert "ix_email_verification_requests_expires_at" in indexes
+
+
+def test_password_reset_schema_exists_at_head(tmp_path, monkeypatch):
+    from sqlalchemy import create_engine, inspect
+
+    db_url = f"sqlite:///{(tmp_path / 'password-reset-schema.db').as_posix()}"
+    cfg = _alembic_config(db_url, monkeypatch)
+    command.upgrade(cfg, "head")
+    inspector = inspect(create_engine(db_url))
+
+    user_columns = {column["name"] for column in inspector.get_columns("users")}
+    assert "auth_invalid_before" in user_columns
+    reset_columns = {column["name"] for column in inspector.get_columns("password_reset_requests")}
+    assert {
+        "id",
+        "user_id",
+        "token_digest",
+        "created_at",
+        "expires_at",
+        "resend_available_at",
+        "superseded_at",
+        "consumed_at",
+        "delivery_status",
+        "last_delivery_error_code",
+        "source_ip",
+    } <= reset_columns
+    rate_event_columns = {
+        column["name"]
+        for column in inspector.get_columns("password_reset_rate_events")
+    }
+    assert {"id", "email_digest", "source_ip_digest", "created_at"} == rate_event_columns
+    rate_event_indexes = {
+        index["name"]
+        for index in inspector.get_indexes("password_reset_rate_events")
+    }
+    assert "ix_password_reset_rate_events_created_at" in rate_event_indexes
+
+
+def test_mail_migrations_extend_provider_routing_as_one_head(tmp_path, monkeypatch):
+    db_url = f"sqlite:///{(tmp_path / 'mail-linear-upgrade.db').as_posix()}"
+    cfg = _alembic_config(db_url, monkeypatch)
+    script = ScriptDirectory.from_config(cfg)
+
+    assert [revision.revision for revision in script.get_revisions("heads")] == [
+        "0014_password_reset_requests"
+    ]
+
+    command.upgrade(cfg, "0012_provider_routing_pref")
+    command.upgrade(cfg, "head")
+
+
+def test_mail_migration_canonicalizes_existing_identity_emails(tmp_path, monkeypatch):
+    from sqlalchemy import create_engine, text
+
+    db_url = f"sqlite:///{(tmp_path / 'mail-email-canonicalization.db').as_posix()}"
+    cfg = _alembic_config(db_url, monkeypatch)
+    command.upgrade(cfg, "0012_provider_routing_pref")
+    engine = create_engine(db_url)
+    with engine.begin() as connection:
+        connection.execute(text(
+            "INSERT INTO users "
+            "(id, username, email, role, password_hash, is_active, created_at, updated_at) "
+            "VALUES ('mail-owner', 'mail-owner', ' Teacher@MAIL.USTC.EDU.CN. ', "
+            "'teacher', 'hash', true, 1, 1)"
+        ))
+
+    command.upgrade(cfg, "head")
+    with engine.connect() as connection:
+        canonical_email = connection.execute(text(
+            "SELECT email FROM users WHERE id = 'mail-owner'"
+        )).scalar_one()
+
+    assert canonical_email == "teacher@mail.ustc.edu.cn"
+
+
 def test_source_outcome_migration_has_contract_constraints(tmp_path, monkeypatch):
     from sqlalchemy import create_engine, inspect
 
