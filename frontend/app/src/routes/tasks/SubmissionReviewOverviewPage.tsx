@@ -55,7 +55,7 @@ export function SubmissionReviewOverviewPage() {
   const taskQuery = useTask(taskId);
   const query = searchParams.get("q") ?? "";
   const latestSearchParamsRef = useRef(new URLSearchParams(searchParams));
-  const filter = normalizeFilter(searchParams.get("status"));
+  const filter: SubmissionReviewFilter = "all";
   const sort = normalizeSort(searchParams.get("sort"));
 
   const students = useMemo(
@@ -159,22 +159,6 @@ export function SubmissionReviewOverviewPage() {
         <TaskQueryBar className="mt-6" filter={smartFilter} taskId={taskId} locale={locale}
           label={locale === "zh-CN" ? "Ask SmarTAI：学生作答" : "Ask SmarTAI: student answers"}
           placeholder={locale === "zh-CN" ? "找出缺答的学生，或按覆盖率排序" : "Find missing answers, or sort by coverage"} />
-        <div className="mt-2 flex flex-wrap items-center gap-2">
-          <label className="mt-2 block shrink-0 sm:mt-0 sm:w-[170px]">
-            <span className="sr-only">{t("submissionReviewStatusLabel")}</span>
-            <select
-              value={filter}
-              onChange={(event) => setParam("status", event.target.value, "all")}
-              className="h-10 w-full rounded-[7px] border bg-card px-3 text-[13px] text-foreground outline-none focus:border-primary focus:ring-2 focus:ring-primary/15"
-            >
-              <option value="all">{t("submissionReviewStatusAll")}</option>
-              <option value="review">{t("submissionReviewStatusReview")}</option>
-              <option value="missing">{t("submissionReviewStatusMissing")}</option>
-              <option value="identity">{t("submissionReviewStatusIdentity")}</option>
-            </select>
-          </label>
-
-        </div>
         <div className="mt-2 flex min-h-5 items-start justify-between gap-3 px-1">
           <p className="text-[11px] leading-5 text-muted-foreground">
             {selection.explanation !== "all" ? t(EXPLANATION_KEYS[selection.explanation]) : null}

@@ -58,7 +58,7 @@ const PIE_COLORS = [COLORS.teal, COLORS.rose, COLORS.violet];
 
 export function VisualizationAnalysisPage({ locale, taskId, version, model, provisional = false }: { locale: Locale; taskId: string; version: number; model: ResultsModel; provisional?: boolean }) {
   const [searchParams, setSearchParams] = useSearchParams();
-  const scope = normalizeScope(searchParams.get("scope"));
+  const scope: ScopeFilter = "all";
   const students = useMemo(() => model.students.filter((student) => matchesScope(student, scope)), [model.students, scope]);
   const studentIds = useMemo(() => new Set(students.map((student) => student.id)), [students]);
   const validPercents = students.map((student) => student.percent).filter((value): value is number => typeof value === "number" && Number.isFinite(value));
@@ -127,7 +127,7 @@ export function VisualizationAnalysisPage({ locale, taskId, version, model, prov
       <div className="px-5 pt-5">
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div><h2 className="text-[20px] font-bold tracking-[-0.01em] text-foreground">{tx(locale, "可视化分析", "Visual analysis")}</h2><p className="mt-1 text-[13px] text-muted-foreground">{tx(locale, "先用 SmarTAI 自然语言生成你关心的图表，也可继续查看下方默认分析。", "Start with SmarTAI natural-language charts, or continue to the default analysis below.")}</p></div>
-          <div className="flex items-center gap-2"><select value={scope} onChange={(event) => updateScope(event.target.value)} aria-label={tx(locale, "选择图表数据范围", "Select chart data scope")} className="h-9 rounded-[8px] border bg-background px-3 text-[11px] font-semibold text-foreground outline-none focus:border-primary"><option value="all">{tx(locale, "全部学生", "All students")}</option><option value="pass">{tx(locale, "仅及格", "Passed only")}</option><option value="fail">{tx(locale, "仅未及格", "Failed only")}</option><option value="review">{tx(locale, "含复核信号", "With review signals")}</option></select><button type="button" onClick={() => window.print()} className="inline-flex h-9 items-center gap-1.5 rounded-[8px] border bg-card px-3 text-[11px] font-semibold text-foreground hover:bg-muted"><Printer aria-hidden="true" className="h-3.5 w-3.5" />{tx(locale, "打印 / 存为 PDF", "Print / save PDF")}</button></div>
+          <div className="flex items-center gap-2"><button type="button" onClick={() => window.print()} className="inline-flex h-9 items-center gap-1.5 rounded-[8px] border bg-card px-3 text-[11px] font-semibold text-foreground hover:bg-muted"><Printer aria-hidden="true" className="h-3.5 w-3.5" />{tx(locale, "打印 / 存为 PDF", "Print / save PDF")}</button></div>
         </div>
 
         <div className="mt-4 grid grid-cols-2 gap-3 xl:grid-cols-6">
