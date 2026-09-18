@@ -2,7 +2,7 @@ import { QueryClientContext } from "@tanstack/react-query";
 import { useContext, useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { interpretFilterIntent } from "@/api/analytics";
-import { requiresModelInterpretation, supportsFilterIntent } from "@/lib/taskFilterIntent";
+import { parseLocalTaskFilter, supportsFilterIntent } from "@/lib/taskFilterIntent";
 import type { FilterIntentResult, FilterIntentSurface } from "@/types";
 
 interface Options {
@@ -20,13 +20,23 @@ interface Resolution {
   source: "local" | "model" | null;
 }
 
-/** Interpretation is instruction-only; the caller always filters its own records. */
+/** The server executes a scoped query; the caller selects records by stable IDs. */
 export function useTaskFilterIntent({ taskId, surface, resolveLocal, queryParam = "q", contextKey = "" }: Options) {
   const [params, setParams] = useSearchParams();
   const queryClient = useContext(QueryClientContext);
-  const resolve = (value: string) => requiresModelInterpretation(value) ? null : resolveLocal(value);
+  // Only exact, whole-command shortcuts run locally; no substring parser may
+  // decide that a compound instruction was fully understood.
+  const resolve = (value: string) => parseLocalTaskFilter(value, surface);
+  const conversationKey = ["ask-conversation", taskId, surface, contextKey];
+  const previousQuestions = useRef<string[]>(queryClient?.getQueryData<string[]>(conversationKey) ?? []);
+  useEffect(() => {
+    previousQuestions.current = queryClient?.getQueryData<string[]>(conversationKey) ?? [];
+  }, [taskId, surface, contextKey, queryClient]);
+  const taskData = queryClient?.getQueryData<{ workflow_revision?: number; final_result_version?: number }>(["tasks", "detail", taskId]);
+  const resultData = queryClient?.getQueryData<{ timestamp?: number }>(["tasks", "result", taskId]);
+  const dataVersion = JSON.stringify([taskData?.workflow_revision, taskData?.final_result_version, resultData?.timestamp]);
   const query = params.get(queryParam) ?? "";
-  const keyFor = (value: string) => JSON.stringify([taskId, surface, contextKey, value.trim()]);
+  const keyFor = (value: string) => JSON.stringify([taskId, surface, contextKey, dataVersion, value.trim()]);
   const key = keyFor(query);
   const paramsRef = useRef(params);
   paramsRef.current = params;
@@ -48,10 +58,12 @@ export function useTaskFilterIntent({ taskId, surface, resolveLocal, queryParam 
   }, [key, manualSort]);
   useEffect(() => () => { generation.current += 1; requestRef.current?.abort.abort(); }, []);
 
-  function writeQuery(value: string, sort?: FilterIntentResult["sort"]) {
+  function writeQuery(value: string, sort?: FilterIntentResult["sort"], ordered = false) {
     const next = new URLSearchParams(paramsRef.current);
     if (value) next.set(queryParam, value); else next.delete(queryParam);
     next.delete("page");
+    next.delete("ask_order");
+    if (ordered) { next.set("ask_order", "1"); next.delete("sort"); next.delete("column_sort"); }
     if (sort) {
       next.set("sort", sort);
       next.delete("column_sort");
@@ -64,6 +76,7 @@ export function useTaskFilterIntent({ taskId, surface, resolveLocal, queryParam 
     queryClient?.removeQueries({ queryKey: ["task-filter-intent", key], exact: true });
     queryClient?.removeQueries({ queryKey: ["task-filter-intent", keyFor(value)], exact: true });
     setState({ key: keyFor(value), result: null, pending: false, error: null, source: null });
+    if (!value.trim()) { previousQuestions.current = []; queryClient?.removeQueries({ queryKey: conversationKey, exact: true }); }
     writeQuery(value, resolve(value)?.sort);
   }
 
@@ -85,16 +98,24 @@ export function useTaskFilterIntent({ taskId, surface, resolveLocal, queryParam 
     requestRef.current = { key: requestKey, abort };
     setState({ key: requestKey, result: null, pending: true, error: null, source: null });
     try {
-      const result = await interpretFilterIntent(taskId, text, surface, abort.signal);
+      const context = { studentId: ["question_analysis", "student_answer_review"].includes(surface) ? contextKey || undefined : undefined,
+        history: previousQuestions.current };
+      const result = context.studentId || context.history.length
+        ? await interpretFilterIntent(taskId, text, surface, abort.signal, context)
+        : await interpretFilterIntent(taskId, text, surface, abort.signal);
       if (ticket !== generation.current) return;
       requestRef.current = null;
       const accepted = supportsFilterIntent(result, surface)
         ? result : { ...result, recognized: false };
       const resolution: Resolution = { key: requestKey, result: accepted, pending: false, error: null, source: "model" };
       setState(resolution);
-      // Session-owned, instruction-only cache; logout clears it with task data.
+      // Session-owned query cache; revision changes and logout invalidate results.
       if (accepted.recognized) queryClient?.setQueryData(["task-filter-intent", requestKey], resolution);
-      if (accepted.recognized && accepted.sort) writeQuery(text, accepted.sort);
+      if (accepted.recognized) {
+        previousQuestions.current = [...previousQuestions.current, text].slice(-4);
+        queryClient?.setQueryData(conversationKey, previousQuestions.current);
+        if (accepted.sort || accepted.execution?.selection) writeQuery(text, accepted.sort, Boolean(accepted.execution?.selection));
+      }
     } catch (error) {
       if (ticket !== generation.current) return;
       requestRef.current = null;
@@ -111,6 +132,7 @@ export function useTaskFilterIntent({ taskId, surface, resolveLocal, queryParam 
   const result = current?.result ?? local;
   return {
     query, setQuery, apply, cancel,
+    execution: current?.result?.execution,
     intent: result?.recognized && supportsFilterIntent(result, surface) ? result : null,
     pending: current?.pending ?? false, error: current?.error ?? null,
     needsApply: Boolean(query.trim() && !result && !current?.pending && !current?.error),

@@ -1,3 +1,4 @@
+import { isGroundedExecution } from "./groundedAsk";
 import type { FilterIntentResult, FilterIntentSurface } from "@/types";
 
 export const EMPTY_FILTER_INTENT: FilterIntentResult = {
@@ -33,6 +34,7 @@ const capabilities: Record<FilterIntentSurface, { fields: string[]; sorts: strin
 
 /** Reject a mismatched/partial response even when frontend and backend versions differ. */
 export function supportsFilterIntent(intent: FilterIntentResult, surface: FilterIntentSurface): boolean {
+  if (intent.execution) return intent.recognized && isGroundedExecution(intent.execution) && intent.execution.recognized;
   if (!intent.recognized || !Array.isArray(intent.question_tokens) || !Array.isArray(intent.text_terms)) return false;
   const allowed = capabilities[surface];
   if (intent.sort && !allowed.sorts.includes(intent.sort)) return false;

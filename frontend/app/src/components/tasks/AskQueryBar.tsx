@@ -1,3 +1,4 @@
+import { GroundedAskAnswer } from "./GroundedAskAnswer";
 import { LoaderCircle, X } from "lucide-react";
 import { useRef, type ReactNode } from "react";
 import { SmarTAIMascot } from "@/components/brand/SmarTAIMascot";
@@ -37,7 +38,7 @@ export function AskQueryBar({ locale, value, onChange, onApply, onCancel, pendin
         <label className="relative min-w-0 flex-1">
           <span className="sr-only">{label ?? (zh ? "Ask SmarTAI：筛选与排序" : "Ask SmarTAI: filter and sort")}</span>
           <input
-            type="text" inputMode="search" value={input.draftValue} maxLength={500}
+            type="text" inputMode="search" value={input.draftValue} maxLength={2000}
             placeholder={placeholder}
             className="h-10 w-full min-w-0 rounded-[7px] bg-muted/30 pl-3 pr-9 text-[13px] text-foreground outline-none placeholder:text-muted-foreground focus:ring-2 focus:ring-primary/20"
             onChange={input.handleChange}
@@ -72,14 +73,21 @@ export function TaskQueryBar({ filter, taskId, ...props }: Omit<AskQueryBarProps
   const info = filter.error ? classifyRecoverableError(filter.error, {
     locale, phase: "analytics_filter_intent", returnTo: taskId ? `/tasks/${encodeURIComponent(taskId)}` : "/history",
   }) : null;
-  const message = filter.pending ? (zh ? "正在理解筛选与排序…" : "Interpreting the filter and sort…")
+  const message = filter.execution ? "" : filter.pending ? (zh ? "正在理解筛选与排序…" : "Interpreting the filter and sort…")
     : filter.unrecognized ? ((zh ? "暂时无法完整理解此条件，未应用部分筛选。" : "The full instruction could not be understood; no partial filter was applied.") + (filter.explanation ? ` ${filter.explanation}` : ""))
       : filter.needsApply ? (zh ? "查询尚未应用，请点击 Ask SmarTAI。" : "Query not applied yet. Click Ask SmarTAI.")
       : filter.source === "local" ? (zh ? "已本地匹配，未调用模型。" : "Matched locally; no model call.")
         : filter.explanation;
-  return <AskQueryBar {...props} value={filter.query} onChange={filter.setQuery} onApply={(value) => void filter.apply(value)} onCancel={filter.cancel} pending={filter.pending} feedback={
-    info ? <RecoverableActionState compact locale={locale} info={info}
+  return <AskQueryBar {...props} value={filter.query} onChange={filter.setQuery} onApply={(value) => void filter.apply(value)} onCancel={filter.cancel} pending={filter.pending} feedback={<>
+    <GroundedAskAnswer execution={filter.execution} locale={props.locale} onClarify={(text) => {
+      const mention = filter.execution?.candidates?.[0]?.text;
+      const next = mention && filter.query.toLocaleLowerCase().includes(mention.toLocaleLowerCase())
+        ? filter.query.replace(new RegExp(mention.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i"), text)
+        : `${filter.query}；明确对象：${text}`;
+      void filter.apply(next);
+    }} />
+    {info ? <RecoverableActionState compact locale={locale} info={info}
       primaryAction={info.actionKind === "byok" ? undefined : { label: info.actionLabel, onClick: () => void filter.apply() }} />
-      : message ? <p role="status" className={cn("mt-2 text-xs leading-5", filter.unrecognized ? "text-amber-700" : "text-muted-foreground")}>{message}</p> : null
+      : message ? <p role="status" className={cn("mt-2 text-xs leading-5", filter.unrecognized ? "text-amber-700" : "text-muted-foreground")}>{message}</p> : null}</>
   } />;
 }
