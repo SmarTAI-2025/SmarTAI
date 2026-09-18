@@ -127,6 +127,8 @@ export function selectReviewOverviewFromIntent(
   const reviewKeys = new Set(reviewItems.map((item) => reviewCellKey(item.student.id, item.question.id)));
   const matchedCellKeys = new Set<string>();
   for (const student of model.students) {
+    const confidence = student.avgConfidence == null ? null : student.avgConfidence > 1 ? student.avgConfidence / 100 : student.avgConfidence;
+    if (intent.max_average_confidence != null && (confidence == null || confidence >= intent.max_average_confidence)) continue;
     if (intent.min_score_percent != null && (student.percent == null || student.percent < intent.min_score_percent)) continue;
     if (intent.max_score_percent != null && (student.percent == null || student.percent >= intent.max_score_percent)) continue;
     if (intent.pass_status === "unscored" && student.percent != null) continue;
@@ -241,8 +243,8 @@ function parseReviewSort(query: string): { raw: string; sort: NonNullable<Filter
   const patterns: Array<[RegExp, NonNullable<FilterIntentResult["sort"]>]> = [
     [/(?:按)?姓名\s*(?:升序|从[小低]到[大高]|a[\s-]*z)(?:排列|排序)?|(?:sort\s+(?:by\s+)?)?name\s*(?:asc(?:ending)?|a[\s-]*z)/i, "name_asc"],
     [/(?:按)?姓名\s*(?:降序|从[大高]到[小低]|z[\s-]*a)(?:排列|排序)?|(?:sort\s+(?:by\s+)?)?name\s*(?:desc(?:ending)?|z[\s-]*a)/i, "name_desc"],
-    [/(?:置信度).*(?:从低到高|低到高)|confidence\s*(?:asc|low)/i, "confidence_asc"],
-    [/(?:复核信号|复核项).*(?:最多|优先)|review\s*(?:desc|most)/i, "review_desc"],
+    [/(?:置信度)\s*(?:从低到高|低到高)|confidence\s*(?:asc|low)/i, "confidence_asc"],
+    [/(?:复核信号|复核项)\s*(?:最多(?:优先)?|优先)|review\s*(?:desc|most)/i, "review_desc"],
     [/(?:得分率)?\s*(?:从高到低|高到低|降序)|score\s*(?:desc|high)/i, "score_desc"],
     [/(?:得分率)?\s*(?:从低到高|低到高|升序)|score\s*(?:asc|low)/i, "score_asc"],
   ];
