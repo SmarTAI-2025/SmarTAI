@@ -90,7 +90,7 @@ class FilterIntentOutput(BaseModel):
         return self
 
 
-_STUDENT_FIELDS = {"min_score_percent", "max_score_percent", "pass_status", "low_confidence", "review_status", "disagreement", "text_terms"}
+_STUDENT_FIELDS = {"max_average_confidence", "min_score_percent", "max_score_percent", "pass_status", "low_confidence", "review_status", "disagreement", "text_terms"}
 _STUDENT_SORTS = {"score_asc", "score_desc", "confidence_asc", "confidence_desc", "review_asc", "review_desc", "name_asc", "name_desc", "id_asc", "id_desc"}
 _QUESTION_SORTS = {"question", "question_desc", "type_asc", "type_desc", "max_score_asc", "max_score_desc", "review_asc", "review_desc"}
 _FILTER_CAPABILITIES = {

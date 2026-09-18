@@ -49,6 +49,7 @@ interface SemanticStudentPlan {
   maxPercent: number | null;
   pass: PassFilter | null;
   lowConfidence: boolean;
+  avgConfidenceBelow: number | null;
   reviewState: ReviewState | null;
   disagreement: boolean;
   sort: SortMode | null;
@@ -322,7 +323,7 @@ export function parseSemanticStudentQuery(raw: string, locale: Locale): Semantic
   remaining = remaining.replace(/学生|同学|哪些|所有|查看|显示|筛选|找出|请|的|了|一下/gi, " ");
   const terms = remaining.split(/[\s,，;；。.!！？?：:、/]+/).map(normalizeText).filter(Boolean);
   for (const term of terms) conditions.push({ id: `term-${conditions.length}`, label: tx(locale, `匹配：${term}`, `Match: ${term}`), source: term });
-  return { minPercent, maxPercent, pass, lowConfidence, reviewState, disagreement, sort, terms, conditions };
+  return { minPercent, maxPercent, pass, lowConfidence, avgConfidenceBelow: null, reviewState, disagreement, sort, terms, conditions };
 }
 
 function matchesSemanticPlan(row: StudentAnalysisRow, plan: SemanticStudentPlan): boolean {
@@ -331,6 +332,8 @@ function matchesSemanticPlan(row: StudentAnalysisRow, plan: SemanticStudentPlan)
   if (plan.maxPercent !== null && (percent === null || percent >= plan.maxPercent)) return false;
   if (plan.pass && !matchesPassFilter(percent, plan.pass)) return false;
   if (plan.lowConfidence && row.student.lowConfidenceCount === 0) return false;
+  const confidence = normalizeConfidence(row.student.avgConfidence);
+  if (plan.avgConfidenceBelow !== null && (confidence === null || confidence >= plan.avgConfidenceBelow)) return false;
   if (plan.reviewState && row.reviewState !== plan.reviewState) return false;
   if (plan.disagreement && row.disagreementCount === 0) return false;
   const haystack = normalizeText(`${row.student.id} ${row.student.name}`);
@@ -343,6 +346,7 @@ function intentToStudentPlan(intent: FilterIntentResult, locale: Locale): Semant
   if (intent.min_score_percent !== null) add("intent-min", tx(locale, `得分率 ≥ ${intent.min_score_percent}%`, `Score ≥ ${intent.min_score_percent}%`));
   if (intent.max_score_percent !== null) add("intent-max", tx(locale, `得分率 < ${intent.max_score_percent}%`, `Score < ${intent.max_score_percent}%`));
   if (intent.pass_status) add("intent-pass", intent.pass_status === "pass" ? tx(locale, "及格", "Passed") : intent.pass_status === "fail" ? tx(locale, "未及格", "Failed") : tx(locale, "无可比总分", "Unscored"));
+  if (intent.max_average_confidence != null) add("intent-mean-confidence", tx(locale, `平均置信度 < ${intent.max_average_confidence * 100}%`, `Mean confidence < ${intent.max_average_confidence * 100}%`));
   if (intent.low_confidence) add("intent-confidence", tx(locale, "含低置信题次", "Has low-confidence items"));
   if (intent.review_status) add("intent-review", intent.review_status === "pending" ? tx(locale, "有未人工处理信号", "Has unreviewed signals") : intent.review_status === "confirmed" ? tx(locale, "信号已由教师处理", "Signals handled") : tx(locale, "无复核信号", "No review signals"));
   if (intent.disagreement) add("intent-disagreement", tx(locale, "含专家分歧", "Has model disagreement"));
@@ -353,6 +357,7 @@ function intentToStudentPlan(intent: FilterIntentResult, locale: Locale): Semant
     maxPercent: intent.max_score_percent,
     pass: intent.pass_status,
     lowConfidence: intent.low_confidence,
+    avgConfidenceBelow: intent.max_average_confidence ?? null,
     reviewState: intent.review_status,
     disagreement: intent.disagreement,
     sort: intent.sort && supportsFilterIntent(intent, "student_analysis") ? intent.sort as SortMode : null,
@@ -382,6 +387,12 @@ function studentQueryNeedsIntentFallback(plan: SemanticStudentPlan, rows: Studen
 }
 
 function formatIntentSort(sort: NonNullable<FilterIntentResult["sort"]>, locale: Locale): string {
+  if (sort === "id_asc") return tx(locale, "学号升序", "Student ID ascending");
+  if (sort === "id_desc") return tx(locale, "学号降序", "Student ID descending");
+  if (sort === "confidence_desc") return tx(locale, "置信度从高到低", "Confidence high to low");
+  if (sort === "review_asc") return tx(locale, "复核信号从少到多", "Fewest review signals first");
+  if (sort === "name_asc") return tx(locale, "姓名升序", "Name A–Z");
+  if (sort === "name_desc") return tx(locale, "姓名降序", "Name Z–A");
   if (sort === "score_asc") return tx(locale, "得分率从低到高", "Score low to high");
   if (sort === "score_desc") return tx(locale, "得分率从高到低", "Score high to low");
   if (sort === "confidence_asc") return tx(locale, "置信度从低到高", "Confidence low to high");

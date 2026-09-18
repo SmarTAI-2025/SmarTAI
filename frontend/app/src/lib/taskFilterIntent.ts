@@ -7,7 +7,7 @@ export const EMPTY_FILTER_INTENT: FilterIntentResult = {
   question_tokens: [], text_terms: [], explanation: "",
 };
 
-const studentFields = ["min_score_percent", "max_score_percent", "pass_status", "low_confidence", "review_status", "disagreement", "text_terms"];
+const studentFields = ["max_average_confidence", "min_score_percent", "max_score_percent", "pass_status", "low_confidence", "review_status", "disagreement", "text_terms"];
 const studentSorts = ["score_asc", "score_desc", "confidence_asc", "confidence_desc", "review_asc", "review_desc", "name_asc", "name_desc", "id_asc", "id_desc"];
 const questionSorts = ["question", "question_desc", "type_asc", "type_desc", "max_score_asc", "max_score_desc", "review_asc", "review_desc"];
 const capabilities: Record<FilterIntentSurface, { fields: string[]; sorts: string[] }> = {
@@ -98,4 +98,13 @@ export function parseLocalTaskFilter(raw: string, surface: FilterIntentSurface):
     if (states[query]) result = { ...EMPTY_FILTER_INTENT, submission_status: states[query] };
   }
   return result && supportsFilterIntent(result, surface) ? result : null;
+}
+
+
+/** Do not let a legacy fast parser approximate bounds or swallow negations. */
+export function requiresModelInterpretation(raw: string): boolean {
+  const text = normalizeFilterText(raw);
+  return /(?:及以下|以内|不高于|不超过|至多|高于|大于(?!等于)|超过|<=|≤|(?<![<>=])>(?!=)|\b(?:at most|above|more than|greater than|no more than)\b)/i.test(text)
+    || /(?:不要|排除|不是|或者|除外|\b(?:not|except|excluding|or)\b)/i.test(text)
+    || /(?:\d+\.\d+\s*(?:%|分)|(?:低于|小于|至少|不低于|[<>]=?)\s*-?\d+\.\d+|(?:[<>]=?|低于|小于|至少|不低于)\s*-\d)/i.test(text);
 }
