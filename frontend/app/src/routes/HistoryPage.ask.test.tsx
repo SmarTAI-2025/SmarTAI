@@ -41,6 +41,15 @@ describe("Current task Ask SmarTAI", () => {
     await waitFor(() => expect(mocks.history).toHaveBeenLastCalledWith(expect.objectContaining({ unfinished: true })));
   });
 
+  it("sorts task history on the server and reverses a second header click", async () => {
+    mount();
+    fireEvent.click(screen.getByRole("button", { name: "任务，当前未排序；点击升序" }));
+    await waitFor(() => expect(mocks.history).toHaveBeenLastCalledWith(expect.objectContaining({ sort: "name_asc" })));
+    fireEvent.click(screen.getByRole("button", { name: "任务，当前升序；点击降序" }));
+    await waitFor(() => expect(mocks.history).toHaveBeenLastCalledWith(expect.objectContaining({ sort: "name_desc" })));
+    expect(screen.queryByRole("combobox", { name: "排序" })).not.toBeInTheDocument();
+  });
+
   it("does not replace a user's cleared filter when an older model response arrives", async () => {
     let finish!: (value: HistoryInterpretation) => void;
     mocks.interpret.mockReturnValue(new Promise<HistoryInterpretation>((resolve) => { finish = resolve; }));
