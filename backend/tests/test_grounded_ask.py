@@ -27,6 +27,10 @@ def snapshot():
 
 
 class Provider:
+    provider_id = "grounded-test"
+    provider_type = "test"
+    model = "deterministic"
+
     def __init__(self, *outputs):
         self.outputs = list(outputs); self.calls = []
     async def ainvoke(self, messages):
