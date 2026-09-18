@@ -539,7 +539,7 @@ def test_identity_redaction_masks_known_long_student_number_without_a_prefix():
         "max_average_confidence": 0.8, "missing_knowledge": True,
     }, True),
     ("question_analysis", {"sort": "name_asc"}, False),
-    ("student_analysis", {"max_average_confidence": 0}, False),
+    ("student_analysis", {"max_average_confidence": 0}, True),
     ("review_overview", {"question_types": ["proof"]}, False),
 ])
 def test_filter_intent_supports_surface_controls_without_silently_dropping_them(

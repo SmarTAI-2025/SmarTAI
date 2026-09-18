@@ -29,6 +29,8 @@ def _reset_rate_limit():
     ("student_answer_review", {"sort": "question_desc", "submission_status": "missing"}),
     ("question_analysis", {"sort": "confidence_desc", "max_average_confidence": 0.8}),
     ("student_analysis", {"sort": "id_desc"}),
+    ("student_analysis", {"max_average_confidence": 0.65}),
+    ("review_overview", {"max_average_confidence": 0.65}),
     ("review_overview", {"sort": "review_asc"}),
 ])
 def test_instruction_contract_does_not_require_grading_or_load_task_facts(monkeypatch, surface, fields):

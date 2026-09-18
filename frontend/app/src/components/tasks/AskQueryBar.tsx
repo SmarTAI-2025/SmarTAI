@@ -74,6 +74,7 @@ export function TaskQueryBar({ filter, taskId, ...props }: Omit<AskQueryBarProps
   }) : null;
   const message = filter.pending ? (zh ? "正在理解筛选与排序…" : "Interpreting the filter and sort…")
     : filter.unrecognized ? ((zh ? "暂时无法完整理解此条件，未应用部分筛选。" : "The full instruction could not be understood; no partial filter was applied.") + (filter.explanation ? ` ${filter.explanation}` : ""))
+      : filter.needsApply ? (zh ? "查询尚未应用，请点击 Ask SmarTAI。" : "Query not applied yet. Click Ask SmarTAI.")
       : filter.source === "local" ? (zh ? "已本地匹配，未调用模型。" : "Matched locally; no model call.")
         : filter.explanation;
   return <AskQueryBar {...props} value={filter.query} onChange={filter.setQuery} onApply={(value) => void filter.apply(value)} onCancel={filter.cancel} pending={filter.pending} feedback={
