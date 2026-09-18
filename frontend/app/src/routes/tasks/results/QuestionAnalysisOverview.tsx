@@ -1,3 +1,4 @@
+import { SortableTableHead, useColumnSort, directionFor, type ColumnSort } from "@/components/ui/SortableTableHead";
 import { ArrowRight, X } from "lucide-react";
 import { useMemo, type ReactNode } from "react";
 import { Link, useSearchParams } from "react-router-dom";
@@ -72,10 +73,6 @@ export function QuestionAnalysisOverview({
 }) {
   const [searchParams, setSearchParams] = useSearchParams();
   const query = searchParams.get("q") ?? "";
-  const typeFilter = searchParams.get("type") ?? "all";
-  const scoreFilter = normalizeScoreFilter(searchParams.get("score"));
-  const confidenceFilter = normalizeConfidenceFilter(searchParams.get("confidence"));
-  const reviewFilter = normalizeReviewFilter(searchParams.get("review"));
   const sortMode = normalizeSortMode(searchParams.get("sort"));
   const returnParams = new URLSearchParams(searchParams);
   returnParams.delete("page");
@@ -95,16 +92,16 @@ export function QuestionAnalysisOverview({
     () => Array.from(new Set(rows.map((row) => row.type).filter((value) => value !== "—"))).sort((a, b) => a.localeCompare(b, locale === "en-US" ? "en" : "zh-Hans-CN")),
     [locale, rows],
   );
+  const headerSort = useColumnSort(["question", "count", "mean", "confidence", "review", "risk"],
+    effectiveSort.startsWith("question") ? { key: "question", direction: effectiveSort.endsWith("desc") ? "desc" : "asc" }
+      : /^(?:confidence|review)_/.test(effectiveSort) ? { key: effectiveSort.split("_")[0], direction: effectiveSort.endsWith("desc") ? "desc" : "asc" } : null,
+    smartFilter.cancel);
   const filteredRows = useMemo(() => {
     const matches = rows.filter((row) => (
       matchesSemanticPlan(row, semanticPlan)
-      && (typeFilter === "all" || normalizeText(row.type) === normalizeText(typeFilter))
-      && matchesScoreFilter(row, scoreFilter)
-      && matchesConfidenceFilter(row, confidenceFilter)
-      && (reviewFilter === "all" || row.reviewState === reviewFilter)
     ));
-    return matches.sort((left, right) => compareRows(left, right, effectiveSort));
-  }, [confidenceFilter, reviewFilter, rows, scoreFilter, semanticPlan, effectiveSort, typeFilter]);
+    return matches.sort((left, right) => headerSort.current ? compareQuestionHeader(left, right, headerSort.current) : compareRows(left, right, effectiveSort));
+  }, [rows, semanticPlan, effectiveSort, headerSort.current?.key, headerSort.current?.direction]);
 
   const averageQuestionPercent = averageOrNull(rows.map((row) => row.question.avgPercent));
   const weakQuestionCount = rows.filter((row) => (row.question.avgPercent ?? 100) < 60).length;
@@ -156,37 +153,6 @@ export function QuestionAnalysisOverview({
           ) : <span key={condition.id} className="rounded-full bg-blue-50 px-2.5 py-1 text-[11px] text-primary">{condition.label}</span>)}
         </div>
 
-        <div className="mt-3 grid grid-cols-2 gap-2 xl:grid-cols-5">
-          <FilterSelect value={typeFilter} onChange={(value) => updateParam("type", value)} label={tx(locale, "题型", "Type")}>
-            <option value="all">{tx(locale, "全部题型", "All types")}</option>
-            {types.map((type) => <option key={type} value={type}>{type}</option>)}
-          </FilterSelect>
-          <FilterSelect value={scoreFilter} onChange={(value) => updateParam("score", value)} label={tx(locale, "得分率", "Score Percentage")}>
-            <option value="all">{tx(locale, "全部得分率", "All score percentages")}</option>
-            <option value="under60">{tx(locale, "低于 60%", "Below 60%")}</option>
-            <option value="under70">{tx(locale, "低于 70%", "Below 70%")}</option>
-            <option value="atleast80">{tx(locale, "80% 及以上", "80% and above")}</option>
-          </FilterSelect>
-          <FilterSelect value={confidenceFilter} onChange={(value) => updateParam("confidence", value)} label={tx(locale, "置信度", "Confidence")}>
-            <option value="all">{tx(locale, "全部置信度", "All confidence")}</option>
-            <option value="low_items">{tx(locale, "含低置信题次", "Has low-confidence items")}</option>
-            <option value="avg_low">{tx(locale, "平均置信度低于 65%", "Mean confidence below 65%")}</option>
-          </FilterSelect>
-          <FilterSelect value={reviewFilter} onChange={(value) => updateParam("review", value)} label={tx(locale, "复核状态", "Review status")}>
-            <option value="all">{tx(locale, "全部复核状态", "All review states")}</option>
-            <option value="pending">{tx(locale, "有未人工处理信号", "Has unreviewed signals")}</option>
-            <option value="confirmed">{tx(locale, "信号已由教师处理", "Signals handled by teacher")}</option>
-            <option value="none">{tx(locale, "无复核信号", "No review signals")}</option>
-          </FilterSelect>
-          <FilterSelect value={sortMode} onChange={(value) => updateParam("sort", value, "question")} label={tx(locale, "排序", "Sort")}>
-            <option value="question">{tx(locale, "按题号", "Question order")}</option>
-            <option value="score_asc">{tx(locale, "得分率从低到高", "Score low to high")}</option>
-            <option value="score_desc">{tx(locale, "得分率从高到低", "Score high to low")}</option>
-            <option value="confidence_asc">{tx(locale, "置信度从低到高", "Confidence low to high")}</option>
-            <option value="review_desc">{tx(locale, "复核信号最多优先", "Most review signals first")}</option>
-          </FilterSelect>
-        </div>
-
         <div className="mt-3 flex flex-wrap items-center justify-between gap-2 pb-3 text-[11px] text-muted-foreground">
           <span>{tx(locale, `匹配 ${filteredRows.length} / ${rows.length} 道题`, `${filteredRows.length} / ${rows.length} questions matched`)}</span>
           {rows.some((row) => row.knowledgePoints.length === 0) ? (
@@ -197,8 +163,7 @@ export function QuestionAnalysisOverview({
 
       {filteredRows.length ? (
         <>
-          <QuestionDesktopTable locale={locale} taskId={taskId} rows={filteredRows} returnQuery={returnQuery} />
-          <QuestionMobileCards locale={locale} taskId={taskId} rows={filteredRows} returnQuery={returnQuery} />
+          <QuestionDesktopTable locale={locale} taskId={taskId} rows={filteredRows} returnQuery={returnQuery} columnSort={headerSort.current} onSort={headerSort.toggle} />
         </>
       ) : (
         <div className="border-t px-5 py-12 text-center">
@@ -218,18 +183,18 @@ export function QuestionAnalysisOverview({
   );
 }
 
-function QuestionDesktopTable({ locale, taskId, rows, returnQuery }: { locale: Locale; taskId: string; rows: QuestionAnalysisRow[]; returnQuery: string }) {
+function QuestionDesktopTable({ locale, taskId, rows, returnQuery, columnSort, onSort }: { locale: Locale; taskId: string; rows: QuestionAnalysisRow[]; returnQuery: string; columnSort: ColumnSort | null; onSort: (key: string) => void }) {
   return (
-    <div className="hidden border-t lg:block">
-      <table className="w-full table-fixed text-left">
+    <div className="max-w-full overflow-x-auto border-t">
+      <table className="w-full min-w-[950px] table-fixed text-left">
         <thead className="bg-slate-50 text-[11px] font-medium text-muted-foreground">
           <tr>
-            <th className="w-[31%] px-4 py-3 font-medium">{tx(locale, "题目", "Question")}</th>
-            <th className="w-[9%] px-3 py-3 font-medium">{tx(locale, "作答", "Responses")}</th>
-            <th className="w-[14%] px-3 py-3 font-medium">{tx(locale, "平均分", "Mean score")}</th>
-            <th className="w-[13%] px-3 py-3 font-medium">{tx(locale, "置信度", "Confidence")}</th>
-            <th className="w-[13%] px-3 py-3 font-medium">{tx(locale, "复核", "Review")}</th>
-            <th className="w-[14%] px-3 py-3 font-medium">{tx(locale, "易错 / 风险摘要", "Error / risk summary")}</th>
+            <SortableTableHead className="w-[31%] px-4 py-3 font-medium" direction={directionFor(columnSort, "question")} onSort={() => onSort("question")} locale={locale}>{tx(locale, "题目", "Question")}</SortableTableHead>
+            <SortableTableHead className="w-[9%] px-3 py-3 font-medium" direction={directionFor(columnSort, "count")} onSort={() => onSort("count")} locale={locale}>{tx(locale, "作答", "Responses")}</SortableTableHead>
+            <SortableTableHead className="w-[14%] px-3 py-3 font-medium" direction={directionFor(columnSort, "mean")} onSort={() => onSort("mean")} locale={locale}>{tx(locale, "平均分", "Mean score")}</SortableTableHead>
+            <SortableTableHead className="w-[13%] px-3 py-3 font-medium" direction={directionFor(columnSort, "confidence")} onSort={() => onSort("confidence")} locale={locale}>{tx(locale, "置信度", "Confidence")}</SortableTableHead>
+            <SortableTableHead className="w-[13%] px-3 py-3 font-medium" direction={directionFor(columnSort, "review")} onSort={() => onSort("review")} locale={locale}>{tx(locale, "复核", "Review")}</SortableTableHead>
+            <SortableTableHead className="w-[14%] px-3 py-3 font-medium" direction={directionFor(columnSort, "risk")} onSort={() => onSort("risk")} locale={locale}>{tx(locale, "易错 / 风险摘要", "Error / risk summary")}</SortableTableHead>
             <th className="w-[6%] px-3 py-3 text-right font-medium">{tx(locale, "操作", "Action")}</th>
           </tr>
         </thead>
@@ -298,17 +263,6 @@ function QuestionMobileCards({ locale, taskId, rows, returnQuery }: { locale: Lo
         </article>
       ))}
     </div>
-  );
-}
-
-function FilterSelect({ label, value, onChange, children }: { label: string; value: string; onChange: (value: string) => void; children: ReactNode }) {
-  return (
-    <label className="min-w-0">
-      <span className="sr-only">{label}</span>
-      <select value={value} onChange={(event) => onChange(event.target.value)} className="h-10 w-full rounded-[8px] border bg-background px-3 text-[12px] font-medium text-foreground outline-none focus:border-primary focus:ring-2 focus:ring-primary/15">
-        {children}
-      </select>
-    </label>
   );
 }
 
@@ -615,6 +569,14 @@ function matchesConfidenceFilter(row: QuestionAnalysisRow, filter: ConfidenceFil
   if (filter === "all") return true;
   if (filter === "low_items") return row.lowConfidenceCount > 0;
   return row.avgConfidence !== null && row.avgConfidence < LOW_CONFIDENCE_THRESHOLD;
+}
+
+function compareQuestionHeader(left: QuestionAnalysisRow, right: QuestionAnalysisRow, sort: ColumnSort): number {
+  const value = (row: QuestionAnalysisRow) => ({
+    question: row.label, count: row.question.count, mean: row.question.avgScore,
+    confidence: row.avgConfidence, review: row.requiredReviewCount, risk: row.riskSummary,
+  })[sort.key];
+  return compareValues(value(left), value(right), sort.direction) || compareQuestionLabels(left.label, right.label);
 }
 
 function compareRows(left: QuestionAnalysisRow, right: QuestionAnalysisRow, sort: SortMode): number {
