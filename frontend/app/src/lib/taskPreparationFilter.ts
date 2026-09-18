@@ -1,3 +1,4 @@
+import { groundedRows } from "./groundedAsk";
 import type { FilterIntentResult, ProblemInfo, StudentSubmission } from "@/types";
 import { isProgrammingProblem } from "@/lib/questionPreparation";
 import { questionSearchAliases } from "@/lib/questionSearch";
@@ -32,6 +33,7 @@ export function materialStatus(problem: ProblemInfo, field: NonNullable<FilterIn
 }
 
 export function selectPreparationQuestions(problems: ProblemInfo[], intent: FilterIntentResult | null): ProblemInfo[] {
+  if (intent?.execution) return groundedRows(problems, intent, "questions", p => p.q_id);
   if (!intent?.recognized) return problems;
   const selected = problems.filter((problem) => {
     const issues = (problem.preparation_issues ?? []).filter((issue) => issue.status === "open");
@@ -81,6 +83,7 @@ function answerMatches(state: ReturnType<typeof getAnswerState>, status: FilterI
 }
 
 export function selectStudentAnswerQuestions(questions: SubmissionQuestion[], student: StudentSubmission | undefined, intent: FilterIntentResult | null): SubmissionQuestion[] {
+  if (intent?.execution) return groundedRows(questions, intent, "questions", q => q.id);
   if (!intent?.recognized) return questions;
   if (!student || (intent.submission_status === "identity" && student.identity_status !== "needs_review")) return [];
   const answers = answerMap(student);
@@ -91,6 +94,8 @@ export function selectStudentAnswerQuestions(questions: SubmissionQuestion[], st
 }
 
 export function selectSubmissionQuestions(students: StudentSubmission[], questions: SubmissionQuestion[], intent: FilterIntentResult | null, filter: SubmissionReviewFilter): SubmissionReviewSelection {
+  if (intent?.execution) return { students: groundedRows(students, intent, "students", s => s.stu_id), questions,
+    confidenceAlias: false, explanation: "all" };
   const plan = intent?.recognized ? intent : EMPTY_FILTER_INTENT;
   const selectedQuestions = questions.filter((question) => questionMatches(question, plan));
   const records = students.map((student) => {

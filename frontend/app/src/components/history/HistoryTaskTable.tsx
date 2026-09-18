@@ -26,7 +26,7 @@ interface HistoryTaskTableProps {
   isDeleting: boolean;
   deletingTaskId: string | null;
   hasFilters: boolean;
-  sort: TaskHistoryQuery["sort"];
+  sort?: TaskHistoryQuery["sort"];
   onFilter: (patch: Partial<TaskHistoryQuery>) => void;
   onDelete: (task: TaskLite) => void;
   onRetry: () => void;

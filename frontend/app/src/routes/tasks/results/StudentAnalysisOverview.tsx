@@ -1,3 +1,4 @@
+import { groundedRows, hasGroundedOrder } from "@/lib/groundedAsk";
 import { SortableTableHead, useColumnSort, directionFor, type ColumnSort } from "@/components/ui/SortableTableHead";
 import { ArrowRight, X } from "lucide-react";
 import { useMemo, type ReactNode } from "react";
@@ -78,11 +79,11 @@ export function StudentAnalysisOverview({ locale, taskId, model }: { locale: Loc
     effectiveSort === "student" || effectiveSort.startsWith("name_") ? { key: "student", direction: effectiveSort.endsWith("desc") ? "desc" : "asc" }
       : effectiveSort.startsWith("score_") || effectiveSort.startsWith("confidence_") ? { key: effectiveSort.startsWith("score_") ? "rate" : "confidence", direction: effectiveSort.endsWith("desc") ? "desc" : "asc" } : null,
     smartFilter.cancel);
-  const filteredRows = useMemo(() => rows
+  const filteredRows = useMemo(() => groundedRows(rows, smartFilter.intent, "students", row => row.student.id)
     .filter((row) => (
       matchesSemanticPlan(row, semanticPlan)
     ))
-    .sort((left, right) => headerSort.current ? compareStudentHeader(left, right, headerSort.current) : compareRows(left, right, effectiveSort)), [effectiveSort, rows, semanticPlan, headerSort.current?.key, headerSort.current?.direction]);
+    .sort((left, right) => hasGroundedOrder(smartFilter.intent) && !headerSort.current ? 0 : headerSort.current ? compareStudentHeader(left, right, headerSort.current) : compareRows(left, right, effectiveSort)), [effectiveSort, rows, smartFilter.intent, semanticPlan, headerSort.current?.key, headerSort.current?.direction]);
 
   const pageCount = Math.max(1, Math.ceil(filteredRows.length / PAGE_SIZE));
   const page = Math.min(requestedPage, pageCount);

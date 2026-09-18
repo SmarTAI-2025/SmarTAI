@@ -1,3 +1,4 @@
+import { compareValues } from "@/lib/sortValues";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { toast } from "sonner";
@@ -37,7 +38,9 @@ export function HistoryPage() {
   const historyQuery = useTaskHistory(query);
   const tagsQuery = useTags();
   const deleteTask = useDeleteTask();
-  const interpretQuery = useInterpretTaskHistoryQuery();
+  const conversation = useRef<string[]>([]);
+  const interpretQuery = useInterpretTaskHistoryQuery(() => conversation.current);
+  const [manualSort, setManualSort] = useState<TaskHistoryQuery["sort"] | null>(null);
   const [interpretation, setInterpretation] = useState<HistoryInterpretation | null>(null);
   const [preSmartQuery, setPreSmartQuery] = useState<TaskHistoryQuery | null>(null);
   const [smartError, setSmartError] = useState(false);
@@ -49,18 +52,24 @@ export function HistoryPage() {
   const data = historyQuery.data;
   const facets = data?.available_facets ?? data?.facets ?? EMPTY_FACETS;
   const tags = tagsQuery.data ?? facets.tags;
-  const total = data?.total ?? 0;
-  const tasks = data?.items ?? [];
+  const selectedTasks = interpretation?.execution?.selection?.kind === "tasks" ? interpretation.execution.tasks : undefined;
+  const orderedTasks = useMemo(() => {
+    if (!selectedTasks || !manualSort) return selectedTasks;
+    const value = (task: TaskLite) => manualSort.startsWith("name") ? task.name : manualSort.startsWith("stage") ? task.status : manualSort.startsWith("created") ? task.created_at : task.updated_at;
+    return [...selectedTasks].sort((a, b) => compareValues(value(a), value(b), manualSort.endsWith("desc") ? "desc" : "asc"));
+  }, [selectedTasks, manualSort]);
+  const total = orderedTasks?.length ?? data?.total ?? 0;
+  const tasks = orderedTasks ? orderedTasks.slice((query.page - 1) * query.page_size, query.page * query.page_size) : data?.items ?? [];
   const hasFilters = countHistoryFilters(query) > 0;
   const errorMessage = historyQuery.error ? normalizeAPIError(historyQuery.error).message : null;
 
   useEffect(() => {
-    if (!data || data.total <= 0) return;
-    const lastPage = Math.max(1, Math.ceil(data.total / query.page_size));
+    if (!data || total <= 0) return;
+    const lastPage = Math.max(1, Math.ceil(total / query.page_size));
     if (query.page > lastPage) {
       setSearchParams(serializeHistoryQuery(patchHistoryQuery(query, { page: lastPage }, { keepPage: true })), { replace: true });
     }
-  }, [data, query, setSearchParams]);
+  }, [data, total, query, setSearchParams]);
 
   function writeQuery(next: TaskHistoryQuery) {
     setSearchParams(serializeHistoryQuery(next), { replace: true });
@@ -68,13 +77,16 @@ export function HistoryPage() {
 
   function handleChange(patch: Partial<TaskHistoryQuery>, keepPage = false) {
     interpretationRequest.current += 1;
-    setInterpretation(null);
-    setPreSmartQuery(null);
+    if (!interpretation?.execution || !(patch.sort || patch.page || patch.page_size)) {
+      setInterpretation(null); setPreSmartQuery(null);
+    }
+    if (patch.sort) setManualSort(patch.sort);
     setSmartError(false);
     writeQuery(patchHistoryQuery(query, patch, { keepPage }));
   }
 
   function clearAll() {
+    conversation.current = []; setManualSort(null);
     interpretationRequest.current += 1;
     setInterpretation(null);
     setPreSmartQuery(null);
@@ -101,8 +113,11 @@ export function HistoryPage() {
         return;
       }
       setPreSmartQuery(query);
-      setInterpretation(result);
-      writeQuery(applyHistoryInterpretation(query, result));
+      setInterpretation(result); setManualSort(null);
+      if (result.execution) {
+        if (result.execution.recognized) conversation.current = [...conversation.current, value].slice(-4);
+        writeQuery({ ...DEFAULT_HISTORY_QUERY, page_size: query.page_size });
+      } else writeQuery(applyHistoryInterpretation(query, result));
     } catch {
       if (request !== interpretationRequest.current) return;
       setInterpretation(null);
@@ -111,6 +126,7 @@ export function HistoryPage() {
   }
 
   function clearSmart() {
+    conversation.current = []; setManualSort(null);
     interpretationRequest.current += 1;
     setInterpretation(null);
     setSmartError(false);
@@ -189,7 +205,7 @@ export function HistoryPage() {
           isDeleting={deleteTask.isPending}
           deletingTaskId={deletingTaskId}
           hasFilters={hasFilters}
-          sort={query.sort}
+          sort={interpretation?.execution ? manualSort ?? undefined : query.sort}
           onFilter={handleChange}
           onDelete={(task) => void handleDelete(task)}
           onRetry={() => void historyQuery.refetch()}

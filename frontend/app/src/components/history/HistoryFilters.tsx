@@ -1,3 +1,4 @@
+import { GroundedAskAnswer } from "@/components/tasks/GroundedAskAnswer";
 import { Search, X } from "lucide-react";
 import { useEffect, useState, type FormEvent } from "react";
 import { AskQueryBar } from "@/components/tasks/AskQueryBar";
@@ -92,7 +93,12 @@ export function HistoryFilters({
         </button>
       </div>
 
-      {interpretation ? (
+      <GroundedAskAnswer execution={interpretation?.execution} locale={locale} onClarify={(text) => {
+        const original = interpretation?.execution?.candidates?.[0]?.text;
+        const next = original ? smartDraft.replace(new RegExp(original.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i"), text) : `${smartDraft}；明确对象：${text}`;
+        setSmartDraft(next); onInterpret(next);
+      }} />
+      {interpretation && !interpretation.execution ? (
         <div className="mt-3 border-t pt-3" aria-live="polite">
           <div className="flex flex-wrap items-center gap-2">
             <span className="text-xs font-semibold text-foreground">{t("historySmartResult")}</span>

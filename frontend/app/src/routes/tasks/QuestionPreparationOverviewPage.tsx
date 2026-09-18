@@ -1,3 +1,4 @@
+import { groundedRows, hasGroundedOrder } from "@/lib/groundedAsk";
 import { SortButton as HeaderSortButton, SortableTableHead, useColumnSort, sortColumnRows, directionFor, type ColumnSort } from "@/components/ui/SortableTableHead";
 import { CheckCircle2, ChevronRight, Filter, X } from "lucide-react";
 import { useMemo, useState } from "react";
@@ -53,6 +54,7 @@ export function QuestionPreparationOverviewPage() {
   const rows = useMemo(() => {
     const selected = new Set(selectPreparationQuestions(problems, smartFilter.intent).map((problem) => problem.q_id));
     const textFiltered = allRows.filter((row) => selected.has(row.problem.q_id));
+    if (hasGroundedOrder(smartFilter.intent) && !headerSort.current) return groundedRows(textFiltered, smartFilter.intent, "questions", r => r.problem.q_id);
     return sortMatrixRows(textFiltered, sortKey, sortDirection, locale);
   }, [allRows, problems, smartFilter.intent, locale, sortDirection, sortKey]);
   const metrics = useMemo(() => ({

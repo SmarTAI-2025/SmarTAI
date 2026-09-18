@@ -1,3 +1,4 @@
+import { groundedRows } from "./groundedAsk";
 import { EMPTY_FILTER_INTENT, matchesQuestionToken, parseLocalTaskFilter, supportsFilterIntent } from "@/lib/taskFilterIntent";
 import { compareValues } from "@/lib/sortValues";
 import type { Correction, FilterIntentResult } from "@/types";
@@ -123,6 +124,10 @@ export function selectReviewOverview(
 export function selectReviewOverviewFromIntent(
   model: ResultsModel, reviewItems: ReviewItem[], annotatedKeys: Set<string>, intent: FilterIntentResult,
 ): ReviewOverviewSelection {
+  if (intent.execution) {
+    const students = groundedRows(model.students, intent, "students", student => student.id);
+    return { students, questions: model.questions, matchedCellKeys: new Set(students.flatMap(student => student.corrections.map(c => reviewCellKey(student.id, c.q_id)))), unresolvedText: "", explanation: "all" };
+  }
   if (!supportsFilterIntent(intent, "review_overview")) return selectReviewOverview(model, reviewItems, annotatedKeys, "");
   const reviewKeys = new Set(reviewItems.map((item) => reviewCellKey(item.student.id, item.question.id)));
   const matchedCellKeys = new Set<string>();
