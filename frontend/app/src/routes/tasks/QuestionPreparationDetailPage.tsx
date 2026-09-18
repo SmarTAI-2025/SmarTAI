@@ -21,6 +21,7 @@ import { NewTaskStepper } from "@/components/new-task/NewTaskStepper";
 import { OriginalFilePreviewPanel } from "@/components/tasks/OriginalFilePreviewPanel";
 import { OriginalFilePreviewTrigger } from "@/components/tasks/OriginalFilePreviewTrigger";
 import { SourceComparisonWorkspace } from "@/components/tasks/SourceComparisonWorkspace";
+import { problemLabel } from "@/components/tasks/resultsModel";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { MarkdownMath } from "@/components/ui/MarkdownMath";
 import { SyntaxHighlightedCode } from "@/components/ui/SyntaxHighlightedCode";
@@ -399,7 +400,7 @@ export function QuestionPreparationDetailPage() {
                 const number = problem.number || problem.q_id;
                 return (
                   <button key={problem.q_id} type="button" aria-current={active ? "true" : undefined} onClick={() => scrollToQuestion(problem.q_id)} className={cn("mb-1 flex min-h-10 w-full items-center justify-between rounded-[7px] px-2.5 text-left text-xs font-semibold transition last:mb-0", active ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted hover:text-foreground")}>
-                    <span className="truncate" title={tx(locale, `第 ${number} 题`, `Q${number}`)}>{tx(locale, `第 ${number} 题`, `Q${number}`)}</span>
+                    <span className="truncate" title={tx(locale, `第 ${number} 题`, problemLabel(problem))}>{tx(locale, `第 ${number} 题`, problemLabel(problem))}</span>
                     {riskCount ? <span className={cn("ml-1 inline-flex h-5 min-w-5 items-center justify-center rounded-full px-1 text-[10px]", active ? "bg-white/20 text-white" : "bg-amber-100 text-amber-700")}>{riskCount}</span> : null}
                   </button>
                 );

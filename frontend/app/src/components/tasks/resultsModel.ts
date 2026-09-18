@@ -144,7 +144,7 @@ export function compareProblems(a: ProblemInfo, b: ProblemInfo) {
 export function problemLabel(problem?: Pick<ProblemInfo, "q_id" | "number"> | null, fallbackId?: string) {
   const number = String(problem?.number ?? "").trim();
   if (number) {
-    return `Q${number}`;
+    return `Q${number.replace(/^q\s*/i, "")}`;
   }
   return String(problem?.q_id ?? fallbackId ?? "题目");
 }
