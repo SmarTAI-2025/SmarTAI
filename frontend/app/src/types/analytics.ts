@@ -10,6 +10,7 @@ export type FilterIntentSurface = "student_analysis" | "review_overview" | "ques
   | "question_preparation" | "submission_review" | "student_answer_review";
 
 export interface FilterIntentResult {
+  execution?: GroundedAskExecution;
   recognized: boolean;
   min_score_percent: number | null;
   max_score_percent: number | null;
@@ -41,14 +42,14 @@ export interface SummaryAnalyticsResult {
   markdown: string;
 }
 
-export type ChartTraceType = "bar" | "scatter" | "pie" | "histogram" | "box";
+export type ChartTraceType = "line" | "bar" | "scatter" | "pie" | "histogram" | "box";
 
 export interface ChartTrace {
   type: ChartTraceType;
-  x?: Array<string | number>;
-  y?: Array<string | number>;
+  x?: Array<string | number | null>;
+  y?: Array<string | number | null>;
   labels?: string[];
-  values?: number[];
+  values?: Array<number | null>;
   name?: string;
 }
 
@@ -61,6 +62,7 @@ export interface ChartLayout {
 }
 
 export interface ChartAnalyticsResult {
+  execution?: GroundedAskExecution;
   mode: "chart";
   title: string;
   rationale: string;
@@ -71,7 +73,8 @@ export interface ChartAnalyticsResult {
 export type AnalyticsResult =
   | FilterAnalyticsResult
   | SummaryAnalyticsResult
-  | ChartAnalyticsResult;
+  | ChartAnalyticsResult
+  | { mode: "query"; execution: GroundedAskExecution };
 
 export interface QuestionBreakdownRow {
   student_id: string;
@@ -93,4 +96,23 @@ export interface PerQuestionBreakdown {
   rows: QuestionBreakdownRow[];
   common_mistakes_md: string;
   [key: string]: unknown;
+}
+
+
+export interface GroundedAskExecution {
+  recognized: boolean;
+  kind: "students" | "questions" | "tasks" | "table" | "chart" | "clarification";
+  explanation: string;
+  data: { columns: string[]; rows: Array<Array<string | number | null>> };
+  selection: { kind: "students" | "questions" | "tasks"; ids: string[] } | null;
+  chart: ChartAnalyticsResult | null;
+  candidates?: Array<{ kind: string; text: string; task_id: string; student_id?: string; student_name?: string; q_id?: string; number?: string; name?: string }>;
+  bindings?: Array<{ kind: string; text: string; role: string; rows: Array<Record<string, string | number | null>> }>;
+  tasks?: import("@/types").TaskLite[];
+  sql?: string;
+  parameters?: Record<string, string | number | null>;
+  assumptions?: string[];
+  fingerprint?: string;
+  source_counts?: Record<string, number>;
+  scope?: string;
 }
