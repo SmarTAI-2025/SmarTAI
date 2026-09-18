@@ -16,8 +16,9 @@ export function interpretFilterIntent(
   taskId: string,
   question: string,
   surface: FilterIntentSurface,
+  signal?: AbortSignal,
 ): Promise<FilterIntentResult> {
-  return postJSON<FilterIntentResult>(`/analytics/${taskId}/filter-intent`, { question, surface }, { timeout: ANALYTICS_REQUEST_TIMEOUT_MS });
+  return postJSON<FilterIntentResult>(`/analytics/${taskId}/filter-intent`, { question, surface }, { timeout: ANALYTICS_REQUEST_TIMEOUT_MS, ...(signal ? { signal } : {}) });
 }
 
 export function getPerQuestionBreakdown(taskId: string, qId: string): Promise<PerQuestionBreakdown> {

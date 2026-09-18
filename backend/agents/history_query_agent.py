@@ -514,6 +514,12 @@ async def interpret_history_query(
         filters.q = unresolved[:120]
         explanation += " 模型增强失败，剩余文本按普通关键词搜索。"
 
+    if unresolved and (provider is None or source == "deterministic"):
+        ambiguities.append(HistoryQueryAmbiguity(
+            fragment=unresolved[:120],
+            message="未能完整理解这句指令，未应用部分筛选。请检查模型配置或换一种表达。",
+        ))
+
     await reporter.set_phase("done")
     return {
         "filters": filters.model_dump(exclude_none=True),

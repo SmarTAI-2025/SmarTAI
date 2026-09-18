@@ -98,7 +98,7 @@ class _Provider:
 
     async def ainvoke(self, messages):
         system = str(messages[0].content)
-        if "translate a teacher" in system:
+        if "teacher_query" in str(messages[-1].content) and '"surface"' in str(messages[-1].content):
             mode = "intent"
         elif "subset of students" in system:
             mode = "filter"
@@ -515,7 +515,7 @@ def test_identity_redaction_preserves_question_numbers_and_score_thresholds():
         {"id": "1", "name": "Ann"}, {"id": "90", "name": "Annie"},
     ])
     text, identities = analytics._redact_filter_question(
-        "Annie 和 Ann：Q1 低于90分，学号1 / ID: 90", facts,
+        "Annie 和 Ann：Q1 低于90分，学号1 / ID: 90", {"1", "Ann", "90", "Annie"},
     )
     assert text == "<student_1> 和 <student_2>：Q1 低于90分，学号<student_3> / ID: <student_4>"
     assert identities == {
@@ -526,7 +526,7 @@ def test_identity_redaction_preserves_question_numbers_and_score_thresholds():
 
 def test_identity_redaction_masks_known_long_student_number_without_a_prefix():
     facts = SimpleNamespace(per_student_stats=[{"id": "202600000001", "name": "Alice"}])
-    text, identities = analytics._redact_filter_question("只看202600000001同学，分数低于60", facts)
+    text, identities = analytics._redact_filter_question("只看202600000001同学，分数低于60", {"202600000001", "Alice"})
     assert text == "只看<student_1>同学，分数低于60"
     assert identities == {"<student_1>": "202600000001"}
 
@@ -539,7 +539,7 @@ def test_identity_redaction_masks_known_long_student_number_without_a_prefix():
         "max_average_confidence": 0.8, "missing_knowledge": True,
     }, True),
     ("question_analysis", {"sort": "name_asc"}, False),
-    ("student_analysis", {"max_average_confidence": 0}, False),
+    ("student_analysis", {"max_average_confidence": 0}, True),
     ("review_overview", {"question_types": ["proof"]}, False),
 ])
 def test_filter_intent_supports_surface_controls_without_silently_dropping_them(
@@ -555,7 +555,12 @@ def test_filter_intent_supports_surface_controls_without_silently_dropping_them(
     )
     assert response.status_code == 200, response.text
     assert response.json()["recognized"] is recognized
-    assert response.json()["sort"] == fields.get("sort", "score_desc")
+    if recognized:
+        assert response.json()["sort"] == fields.get("sort", "score_desc")
+    else:
+        assert response.json() == analytics.analytics_agent.FilterIntentOutput(
+            recognized=False, explanation=response.json()["explanation"],
+        ).model_dump()
     prompt = json.loads(str(provider.calls[-1][1][-1].content))
     assert set(prompt) == {"surface", "teacher_query"}
 

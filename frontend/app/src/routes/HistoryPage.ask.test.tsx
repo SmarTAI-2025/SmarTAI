@@ -18,7 +18,7 @@ function mount() {
 }
 function ask() {
   fireEvent.change(screen.getByRole("textbox", { name: "SmarTAI 智能筛选任务" }), { target: { value: "还有什么没有批完" } });
-  fireEvent.click(screen.getByRole("button", { name: "SmarTAI 智能筛选" }));
+  fireEvent.click(screen.getByRole("button", { name: "Ask SmarTAI" }));
 }
 const interpretation: HistoryInterpretation = {
   filters: { unfinished: true }, sort: "updated_desc", conditions: [], ambiguities: [],

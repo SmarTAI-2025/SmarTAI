@@ -1,9 +1,10 @@
-import { ArrowRight, LoaderCircle, X } from "lucide-react";
-import { useMemo, useRef, useState, type FormEvent, type ReactNode } from "react";
+import { ArrowRight, X } from "lucide-react";
+import { useMemo, type ReactNode } from "react";
 import { Link, useSearchParams } from "react-router-dom";
-import { useAnalyticsFilterIntent } from "@/api/hooks/analytics";
-import { SmarTAIMascot } from "@/components/brand/SmarTAIMascot";
-import { RecoverableActionState } from "@/components/ui/RecoverableActionState";
+import { TaskQueryBar } from "@/components/tasks/AskQueryBar";
+import { useTaskFilterIntent } from "@/hooks/useTaskFilterIntent";
+import { EMPTY_FILTER_INTENT, matchesQuestionToken, normalizeFilterType, parseLocalTaskFilter, supportsFilterIntent } from "@/lib/taskFilterIntent";
+import { compareValues } from "@/lib/sortValues";
 import {
   clampPercent,
   correctionScoreSource,
@@ -14,10 +15,8 @@ import {
   type QuestionSummary,
   type ResultsModel,
 } from "@/components/tasks/resultsModel";
-import { useImeSafeQuery } from "@/hooks/useImeSafeQuery";
 import type { Locale } from "@/i18n/messages";
 import { cn } from "@/lib/cn";
-import { classifyRecoverableError } from "@/lib/taskActionGuards";
 import { ResultsSummaryMetric as SummaryMetric } from "@/routes/tasks/results/ResultsSummaryMetric";
 import type { Correction, FilterIntentResult, ProblemInfo } from "@/types";
 
@@ -25,7 +24,7 @@ type ReviewFilter = "all" | "pending" | "confirmed" | "none";
 type ReviewState = Exclude<ReviewFilter, "all">;
 type ScoreFilter = "all" | "under60" | "under70" | "atleast80";
 type ConfidenceFilter = "all" | "low_items" | "avg_low";
-type SortMode = "question" | "score_asc" | "score_desc" | "confidence_asc" | "review_desc";
+type SortMode = "question" | "question_desc" | "score_asc" | "score_desc" | "confidence_asc" | "confidence_desc" | "review_asc" | "review_desc" | "max_score_asc" | "max_score_desc" | "type_asc" | "type_desc";
 
 interface QuestionAnalysisRow {
   question: QuestionSummary;
@@ -73,12 +72,6 @@ export function QuestionAnalysisOverview({
 }) {
   const [searchParams, setSearchParams] = useSearchParams();
   const query = searchParams.get("q") ?? "";
-  const smartSearch = useImeSafeQuery({ value: query, onCommit: (value) => updateParam("q", value, "") });
-  const intentQuery = useAnalyticsFilterIntent();
-  const [intentState, setIntentState] = useState<{ taskId: string; question: string; result: FilterIntentResult } | null>(null);
-  const contextRef = useRef({ taskId, query });
-  contextRef.current = { taskId, query };
-  const [resolution, setResolution] = useState<"idle" | "local" | "llm">("idle");
   const typeFilter = searchParams.get("type") ?? "all";
   const scoreFilter = normalizeScoreFilter(searchParams.get("score"));
   const confidenceFilter = normalizeConfidenceFilter(searchParams.get("confidence"));
@@ -89,12 +82,15 @@ export function QuestionAnalysisOverview({
   const returnQuery = returnParams.toString();
 
   const rows = useMemo(() => model.questions.map((question) => buildQuestionRow(question, locale)), [locale, model.questions]);
-  const currentIntent = intentState?.taskId === taskId && intentState.question === query ? intentState : null;
-  const activeIntent = currentIntent?.result.recognized ? currentIntent.result : null;
-  const unsupportedIntent = currentIntent && !currentIntent.result.recognized;
-  const semanticPlan = useMemo(() => activeIntent ? intentToQuestionPlan(activeIntent, locale)
-    : parseSemanticQuestionQuery(unsupportedIntent ? "" : query, locale), [activeIntent, locale, query, unsupportedIntent]);
-  const effectiveSort = semanticPlan.sort ?? sortMode;
+  const smartFilter = useTaskFilterIntent({
+    taskId, surface: "question_analysis", resolveLocal: (value) => resolveResultQuestionQuery(model.questions, value, locale),
+  });
+  const semanticPlan = useMemo(() => {
+    if (!smartFilter.intent) return parseSemanticQuestionQuery("", locale);
+    return smartFilter.source === "local" && !parseLocalTaskFilter(query, "question_analysis")
+      ? parseSemanticQuestionQuery(query, locale) : intentToQuestionPlan(smartFilter.intent, locale);
+  }, [locale, query, smartFilter.intent, smartFilter.source]);
+  const effectiveSort = searchParams.has("sort") ? sortMode : semanticPlan.sort ?? sortMode;
   const types = useMemo(
     () => Array.from(new Set(rows.map((row) => row.type).filter((value) => value !== "—"))).sort((a, b) => a.localeCompare(b, locale === "en-US" ? "en" : "zh-Hans-CN")),
     [locale, rows],
@@ -115,6 +111,7 @@ export function QuestionAnalysisOverview({
   const reviewSignalCount = rows.filter((row) => row.requiredReviewCount > 0).length;
 
   function updateParam(key: string, value: string, defaultValue = "all") {
+    smartFilter.cancel();
     const next = new URLSearchParams(searchParams);
     if (!value || value === defaultValue) next.delete(key);
     else next.set(key, value);
@@ -128,40 +125,6 @@ export function QuestionAnalysisOverview({
     const nextQuery = `${query.slice(0, start)} ${query.slice(start + condition.source.length)}`.replace(/\s+/g, " ").trim();
     updateParam("q", nextQuery, "");
   };
-
-  function clearIntent() {
-    setIntentState(null);
-    setResolution("idle");
-    intentQuery.reset();
-  }
-
-  function applySmartFilter(value: string) {
-    if (intentQuery.isPending) return;
-    const question = value.trim();
-    smartSearch.commitValue(question);
-    clearIntent();
-    if (!question) return;
-    const plan = parseSemanticQuestionQuery(question, locale);
-    if (plan.conditions.length && (!plan.terms.length || rows.some((row) => plan.terms.every((term) => termMatchesRow(term, row))))) {
-      setResolution("local");
-      return;
-    }
-    intentQuery.mutate({ taskId, question, surface: "question_analysis" }, {
-      onSuccess: (result) => {
-        if (contextRef.current.taskId !== taskId || contextRef.current.query !== question) return;
-        setIntentState({ taskId, question, result }); setResolution("llm");
-      },
-    });
-  }
-
-  function submitSmartFilter(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    applySmartFilter(smartSearch.draftValue);
-  }
-
-  const recoveryInfo = intentQuery.isError ? classifyRecoverableError(intentQuery.error, {
-    locale, phase: "analytics_filter_intent", returnTo: `/tasks/${encodeURIComponent(taskId)}/results/questions`,
-  }) : null;
 
   return (
     <section className="rounded-[10px] border bg-card">
@@ -180,55 +143,18 @@ export function QuestionAnalysisOverview({
           <SummaryMetric label={tx(locale, "含复核信号", "With review signals")} value={String(reviewSignalCount)} tone="danger" />
         </div>
 
-        <form onSubmit={submitSmartFilter} className="mt-4">
-          <div className="flex items-center gap-3">
-            <SmarTAIMascot variant={intentQuery.isPending ? "grading" : "thinking"} size="xs" />
-            <label className="relative block min-w-0 flex-1">
-              <input
-                value={smartSearch.draftValue}
-                inputMode="search"
-                onBlur={smartSearch.handleBlur}
-                onCompositionStart={smartSearch.handleCompositionStart}
-                onCompositionEnd={smartSearch.handleCompositionEnd}
-                onChange={(event) => { clearIntent(); smartSearch.handleChange(event); }}
-                disabled={intentQuery.isPending}
-                placeholder={tx(locale, "例如：找出得分较低的计算题，按得分率从低到高排列", "For example: show calculation questions with low scores, lowest first")}
-                aria-label={tx(locale, "智能筛选题目", "Smart-filter questions")}
-                className="h-11 w-full rounded-[9px] border bg-background pl-3 pr-36 text-[13px] text-foreground outline-none placeholder:text-muted-foreground focus:border-primary focus:ring-2 focus:ring-primary/15"
-              />
-              {smartSearch.draftValue ? (
-                <button type="button" onClick={() => { clearIntent(); smartSearch.commitValue(""); }} aria-label={tx(locale, "清除智能筛选", "Clear smart filter")} className="absolute right-[7.25rem] top-1/2 inline-flex h-7 w-7 -translate-y-1/2 items-center justify-center rounded-full text-muted-foreground hover:bg-muted hover:text-foreground">
-                  <X aria-hidden="true" className="h-4 w-4" />
-                </button>
-              ) : null}
-              <button type="submit" disabled={intentQuery.isPending || !smartSearch.draftValue.trim()} className="absolute right-1 top-1/2 inline-flex h-9 -translate-y-1/2 items-center justify-center gap-1.5 rounded-[8px] bg-primary px-3 text-[11px] font-semibold text-primary-foreground disabled:opacity-50">{intentQuery.isPending ? <LoaderCircle aria-hidden="true" className="h-3.5 w-3.5 animate-spin" /> : null}{intentQuery.isPending ? tx(locale, "理解中…", "Interpreting…") : tx(locale, "应用筛选", "Apply filter")}</button>
-            </label>
-          </div>
-
-          <div className="mt-2 flex min-h-7 flex-wrap items-center gap-2">
-            {semanticPlan.conditions.length ? semanticPlan.conditions.map((condition) => activeIntent ? (
-              <span key={condition.id} className="inline-flex h-7 items-center rounded-full bg-blue-50 px-2.5 text-[11px] font-semibold text-primary">{condition.label}</span>
-            ) : (
-              <button
-                key={condition.id}
-                type="button"
-                onClick={() => removeSemanticCondition(condition)}
-                className="inline-flex h-7 items-center gap-1 rounded-full bg-blue-50 px-2.5 text-[11px] font-semibold text-primary hover:bg-blue-100"
-                title={tx(locale, "点击移除此条件", "Click to remove this condition")}
-              >
-                {condition.label}
-                <X aria-hidden="true" className="h-3 w-3" />
-              </button>
-            )) : (
-              <span className="text-[11px] text-muted-foreground">
-                {tx(locale, "本地预设优先；无法完整识别时，由模型解析指令，再筛选当前真实结果。", "Local presets run first; otherwise a model interprets the instruction and filters the current results.")}
-              </span>
-            )}
-            {resolution === "local" ? <span className="text-[11px] text-muted-foreground">{tx(locale, "本地规则已识别 · 未调用模型", "Matched locally · no model call")}</span> : null}
-            {resolution === "llm" && currentIntent ? <span role="status" className="text-[11px] text-muted-foreground">{unsupportedIntent ? tx(locale, "未能完整转换指令，未应用部分条件。", "Could not interpret the full instruction; no partial filter applied. ") : tx(locale, "模型仅解析指令：", "Model interpreted instruction only: ")}{currentIntent.result.explanation}</span> : null}
-          </div>
-          {recoveryInfo ? <RecoverableActionState info={recoveryInfo} locale={locale} compact className="mt-2" primaryAction={recoveryInfo.actionKind === "byok" ? undefined : { label: recoveryInfo.actionLabel, onClick: () => applySmartFilter(smartSearch.draftValue), busy: intentQuery.isPending }} /> : null}
-        </form>
+        <TaskQueryBar className="mt-4" filter={smartFilter} taskId={taskId} locale={locale}
+          label={tx(locale, "Ask SmarTAI：题目分析", "Ask SmarTAI: question analysis")}
+          placeholder={tx(locale, "找出低置信题目，或按得分率排序", "Find low-confidence questions, or sort by score percentage")} />
+        <div className="mt-2 flex min-h-7 flex-wrap items-center gap-2">
+          {semanticPlan.conditions.map((condition) => condition.source ? (
+            <button key={condition.id} type="button" onClick={() => removeSemanticCondition(condition)}
+              className="inline-flex h-7 items-center gap-1 rounded-full bg-blue-50 px-2.5 text-[11px] font-semibold text-primary hover:bg-blue-100"
+              title={tx(locale, "点击移除此条件", "Click to remove this condition")}>
+              {condition.label}<X aria-hidden="true" className="h-3 w-3" />
+            </button>
+          ) : <span key={condition.id} className="rounded-full bg-blue-50 px-2.5 py-1 text-[11px] text-primary">{condition.label}</span>)}
+        </div>
 
         <div className="mt-3 grid grid-cols-2 gap-2 xl:grid-cols-5">
           <FilterSelect value={typeFilter} onChange={(value) => updateParam("type", value)} label={tx(locale, "题型", "Type")}>
@@ -277,7 +203,7 @@ export function QuestionAnalysisOverview({
       ) : (
         <div className="border-t px-5 py-12 text-center">
           <p className="text-[14px] font-bold text-foreground">{tx(locale, "没有匹配的题目", "No questions matched")}</p>
-          <p className="mt-1 text-[12px] text-muted-foreground">{tx(locale, "移除一个条件，或清除本地快速筛选后重试。", "Remove a condition or clear the local quick filter.")}</p>
+          <p className="mt-1 text-[12px] text-muted-foreground">{tx(locale, "移除一个条件，或清空查询后重试。", "Remove a condition or clear the query.")}</p>
         </div>
       )}
 
@@ -613,7 +539,7 @@ export function parseSemanticQuestionQuery(rawQuery: string, locale: Locale): Se
 
 function matchesSemanticPlan(row: QuestionAnalysisRow, plan: SemanticQuestionPlan): boolean {
   if (plan.qTokens.length && !plan.qTokens.some((token) => questionTokenMatches(row, token))) return false;
-  if (plan.types.length && !plan.types.some((type) => normalizeQuestionType(row.type) === normalizeQuestionType(type))) return false;
+  if (plan.types.length && !plan.types.some((type) => normalizeFilterType(row.type) === normalizeFilterType(type))) return false;
   if (plan.maxPercent !== null && (row.question.avgPercent === null || row.question.avgPercent >= plan.maxPercent)) return false;
   if (plan.minPercent !== null && (row.question.avgPercent === null || row.question.avgPercent < plan.minPercent)) return false;
   if (plan.lowConfidence && row.lowConfidenceCount === 0) return false;
@@ -621,15 +547,6 @@ function matchesSemanticPlan(row: QuestionAnalysisRow, plan: SemanticQuestionPla
   if (plan.reviewState && row.reviewState !== plan.reviewState) return false;
   if (plan.missingKnowledge && row.knowledgePoints.length > 0) return false;
   return plan.terms.every((term) => termMatchesRow(term, row));
-}
-
-function normalizeQuestionType(value: string): string {
-  const normalized = normalizeText(value);
-  const aliases: Record<string, string> = {
-    "计算题": "calculation", "编程题": "programming", "证明题": "proof", "概念题": "concept",
-    "选择题": "choice", "填空题": "fill_blank", "问答题": "short_answer",
-  };
-  return aliases[normalized] ?? normalized;
 }
 
 function intentToQuestionPlan(intent: FilterIntentResult, locale: Locale): SemanticQuestionPlan {
@@ -642,7 +559,7 @@ function intentToQuestionPlan(intent: FilterIntentResult, locale: Locale): Seman
   plan.avgConfidenceBelow = intent.max_average_confidence ?? null;
   plan.reviewState = intent.review_status;
   plan.missingKnowledge = intent.missing_knowledge ?? false;
-  plan.sort = intent.sort === "name_asc" || intent.sort === "name_desc" ? null : intent.sort;
+  plan.sort = intent.sort && supportsFilterIntent(intent, "question_analysis") ? intent.sort as SortMode : null;
   plan.terms = intent.text_terms;
   const add = (label: string) => plan.conditions.push({ id: `intent-${plan.conditions.length}`, label, source: "" });
   plan.qTokens.forEach((token) => add(tx(locale, `题号：${token}`, `Question: ${token}`)));
@@ -657,6 +574,13 @@ function intentToQuestionPlan(intent: FilterIntentResult, locale: Locale): Seman
     question: tx(locale, "按题号", "Question order"), score_asc: tx(locale, "得分率从低到高", "Score low to high"),
     score_desc: tx(locale, "得分率从高到低", "Score high to low"), confidence_asc: tx(locale, "置信度从低到高", "Confidence low to high"),
     review_desc: tx(locale, "复核信号最多优先", "Most review signals first"),
+    review_asc: tx(locale, "复核信号从少到多", "Fewest review signals first"),
+    confidence_desc: tx(locale, "置信度从高到低", "Confidence high to low"),
+    question_desc: tx(locale, "题号降序", "Question descending"),
+    max_score_asc: tx(locale, "满分升序", "Maximum score ascending"),
+    max_score_desc: tx(locale, "满分降序", "Maximum score descending"),
+    type_asc: tx(locale, "题型升序", "Type ascending"),
+    type_desc: tx(locale, "题型降序", "Type descending"),
   };
   if (plan.sort) add(sortLabels[plan.sort]);
   plan.terms.forEach((term) => add(tx(locale, `关键词：${term}`, `Keyword: ${term}`)));
@@ -664,10 +588,7 @@ function intentToQuestionPlan(intent: FilterIntentResult, locale: Locale): Seman
 }
 
 function questionTokenMatches(row: QuestionAnalysisRow, token: string): boolean {
-  const normalized = normalizeText(token).replace(/^q/, "");
-  const candidates = [row.question.id, row.label, row.question.problem?.number ?? ""]
-    .map((value) => normalizeText(String(value)).replace(/^q/, ""));
-  return candidates.some((candidate) => candidate === normalized);
+  return matchesQuestionToken(row.question.id, row.question.problem?.number || row.label, token);
 }
 
 function termMatchesRow(term: string, row: QuestionAnalysisRow): boolean {
@@ -697,11 +618,31 @@ function matchesConfidenceFilter(row: QuestionAnalysisRow, filter: ConfidenceFil
 }
 
 function compareRows(left: QuestionAnalysisRow, right: QuestionAnalysisRow, sort: SortMode): number {
-  if (sort === "score_asc") return nullableNumber(left.question.avgPercent, Number.POSITIVE_INFINITY) - nullableNumber(right.question.avgPercent, Number.POSITIVE_INFINITY) || compareQuestionLabels(left.label, right.label);
-  if (sort === "score_desc") return nullableNumber(right.question.avgPercent, Number.NEGATIVE_INFINITY) - nullableNumber(left.question.avgPercent, Number.NEGATIVE_INFINITY) || compareQuestionLabels(left.label, right.label);
-  if (sort === "confidence_asc") return nullableNumber(left.avgConfidence, Number.POSITIVE_INFINITY) - nullableNumber(right.avgConfidence, Number.POSITIVE_INFINITY) || compareQuestionLabels(left.label, right.label);
-  if (sort === "review_desc") return right.requiredReviewCount - left.requiredReviewCount || compareQuestionLabels(left.label, right.label);
-  return compareQuestionLabels(left.label, right.label);
+  const value = (row: QuestionAnalysisRow) => sort.startsWith("score_") ? row.question.avgPercent
+    : sort.startsWith("confidence_") ? row.avgConfidence : sort.startsWith("review_") ? row.requiredReviewCount
+      : sort.startsWith("max_score_") ? row.question.maxScore : sort.startsWith("type_") ? row.type : row.label;
+  return compareValues(value(left), value(right), sort.endsWith("_desc") ? "desc" : "asc") || compareQuestionLabels(left.label, right.label);
+}
+
+/** Shared by the overview and the three question-navigation surfaces. */
+export function resolveResultQuestionQuery(questions: QuestionSummary[], raw: string, locale: Locale): FilterIntentResult | null {
+  const preset = parseLocalTaskFilter(raw, "question_analysis");
+  if (preset) return preset;
+  const plan = parseSemanticQuestionQuery(raw, locale);
+  const rows = questions.map((question) => buildQuestionRow(question, locale));
+  if (!plan.conditions.length || (plan.terms.length && !rows.some((row) => plan.terms.every((term) => termMatchesRow(term, row))))) return null;
+  return { ...EMPTY_FILTER_INTENT, min_score_percent: plan.minPercent, max_score_percent: plan.maxPercent,
+    low_confidence: plan.lowConfidence, review_status: plan.reviewState, sort: plan.sort,
+    question_tokens: plan.qTokens, question_types: plan.types, max_average_confidence: plan.avgConfidenceBelow,
+    missing_knowledge: plan.missingKnowledge, text_terms: plan.terms };
+}
+
+export function selectResultQuestions(questions: QuestionSummary[], intent: FilterIntentResult | null, locale: Locale): QuestionSummary[] {
+  if (!intent || !supportsFilterIntent(intent, "question_analysis")) return questions;
+  const plan = intentToQuestionPlan(intent, locale);
+  return questions.map((question) => buildQuestionRow(question, locale))
+    .filter((row) => matchesSemanticPlan(row, plan))
+    .sort((a, b) => compareRows(a, b, plan.sort ?? "question")).map((row) => row.question);
 }
 
 function questionDetailHref(taskId: string, questionId: string, returnQuery: string): string {
@@ -722,7 +663,8 @@ function normalizeReviewFilter(value: string | null): ReviewFilter {
 }
 
 function normalizeSortMode(value: string | null): SortMode {
-  return value === "score_asc" || value === "score_desc" || value === "confidence_asc" || value === "review_desc" ? value : "question";
+  return value && supportsFilterIntent({ ...EMPTY_FILTER_INTENT, sort: value as FilterIntentResult["sort"] }, "question_analysis")
+    ? value as SortMode : "question";
 }
 
 function normalizeConfidence(value: number | null | undefined): number | null {

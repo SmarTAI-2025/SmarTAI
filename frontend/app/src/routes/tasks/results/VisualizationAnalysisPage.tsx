@@ -1,5 +1,5 @@
 import { BarChart3, Download, LoaderCircle, Printer, Save, Trash2 } from "lucide-react";
-import { useMemo, useState, type FormEvent, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import {
   Bar,
@@ -20,7 +20,7 @@ import {
 } from "recharts";
 import { toast } from "sonner";
 import { useAnalyticsQuery } from "@/api/hooks/analytics";
-import { SmarTAIMascot } from "@/components/brand/SmarTAIMascot";
+import { AskQueryBar } from "@/components/tasks/AskQueryBar";
 import { RecoverableActionState } from "@/components/ui/RecoverableActionState";
 import {
   effectiveCorrectionScore,
@@ -75,6 +75,9 @@ export function VisualizationAnalysisPage({ locale, taskId, version, model, prov
   const [preview, setPreview] = useState<ChartAnalyticsResult | null>(null);
   const [savedCharts, setSavedCharts] = useState<SavedChart[]>([]);
   const chartQuery = useAnalyticsQuery();
+  const generation = useRef(0);
+  useEffect(() => () => { generation.current += 1; }, [taskId, version]);
+  const cancelChart = () => { generation.current += 1; chartQuery.reset(); };
   const root = `/tasks/${encodeURIComponent(taskId)}/results`;
 
   const updateScope = (value: string) => {
@@ -86,8 +89,10 @@ export function VisualizationAnalysisPage({ locale, taskId, version, model, prov
 
   const runChart = (question: string) => {
     if (chartQuery.isPending || !question.trim()) return;
+    const ticket = ++generation.current;
     chartQuery.mutate({ taskId, question, mode: "chart" }, {
       onSuccess: (result) => {
+        if (ticket !== generation.current) return;
         if (result.mode !== "chart") {
           toast.error(tx(locale, "图表返回格式不匹配", "Chart response format did not match"));
           return;
@@ -98,14 +103,8 @@ export function VisualizationAnalysisPage({ locale, taskId, version, model, prov
     });
   };
 
-  const submitChart = (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
-    runChart(prompt.trim());
-  };
-
   const updatePrompt = (value: string) => {
-    if (chartQuery.isPending) return;
-    chartQuery.reset();
+    cancelChart();
     setPrompt(value);
   };
 
@@ -153,13 +152,10 @@ export function VisualizationAnalysisPage({ locale, taskId, version, model, prov
             </div>
           </div>
           <div className="relative mt-3 flex flex-wrap gap-2">{[tx(locale, "比较各题得分率与低置信题次", "Compare question score percentages and low-confidence counts"), tx(locale, "画出总分率与平均置信度散点图", "Plot overall score percentage against average confidence"), tx(locale, "显示及格与未及格人数", "Show pass and fail counts")].map((suggestion) => <button key={suggestion} type="button" onClick={() => updatePrompt(suggestion)} className="rounded-full border bg-card px-2.5 py-1 text-[10px] font-medium text-muted-foreground shadow-sm hover:border-primary/20 hover:text-primary">{suggestion}</button>)}</div>
-          <form onSubmit={submitChart} className="relative mt-3 grid gap-2 lg:grid-cols-[minmax(0,1fr)_auto]">
-            <div className="flex min-w-0 items-start gap-2">
-              <SmarTAIMascot variant={chartQuery.isPending ? "grading" : "thinking"} size="xs" className="mt-1" />
-              <textarea value={prompt} onChange={(event) => updatePrompt(event.target.value)} rows={2} maxLength={500} disabled={chartQuery.isPending} aria-label={tx(locale, "SmarTAI 自然语言图表请求", "SmarTAI natural-language chart request")} className="min-h-20 min-w-0 flex-1 resize-y rounded-[8px] border bg-background px-3 py-2 text-[12px] leading-5 text-foreground outline-none focus:border-primary focus:ring-2 focus:ring-primary/15" />
-            </div>
-            <button type="submit" disabled={chartQuery.isPending || !prompt.trim()} className="inline-flex h-10 items-center justify-center gap-1.5 rounded-[8px] bg-primary px-4 text-[11px] font-semibold text-primary-foreground disabled:opacity-50 lg:self-end">{chartQuery.isPending ? <LoaderCircle aria-hidden="true" className="h-4 w-4 animate-spin" /> : <BarChart3 aria-hidden="true" className="h-4 w-4" />}{chartQuery.isPending ? tx(locale, "SmarTAI 生成中…", "SmarTAI is generating…") : tx(locale, "让 SmarTAI 生成", "Generate with SmarTAI")}</button>
-          </form>
+          <AskQueryBar className="relative mt-3" locale={locale} value={prompt} onChange={updatePrompt}
+            onCancel={cancelChart} onApply={runChart} pending={chartQuery.isPending}
+            label={tx(locale, "Ask SmarTAI：图表分析", "Ask SmarTAI: chart analysis")}
+            placeholder={tx(locale, "描述希望比较的对象、指标和图表形式", "Describe the groups, metrics, and chart to compare")} />
           {recoveryInfo ? (
             <RecoverableActionState
               info={recoveryInfo}
