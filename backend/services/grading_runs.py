@@ -246,12 +246,11 @@ async def process_run(*, run_id: str, worker_id: str, registry=None, language: s
     try:
         grading_repository.claim_lease(run_id=run_id, worker_id=worker_id, lease_seconds=settings.grading_lease_seconds)
     except DomainError:
-        # Not this worker's run — drop any stale in-process reporter for it so
-        # the progress page falls back to the durable projection.
-        remove_reporter(run_id)
+        # A failed duplicate claim does not own the existing live reporter.
         return  # someone else owns it or it is terminal
     run = grading_repository.get_run(run_id=run_id)
     heartbeat_task: Optional[asyncio.Task] = None
+    reporter = None
     grading_task: Optional[asyncio.Task] = None
 
     async def _heartbeat():
@@ -405,7 +404,7 @@ async def process_run(*, run_id: str, worker_id: str, registry=None, language: s
             "grading_failed",
             persistence_code="grading_persistence_failed",
         )
-        logger.exception(
+        logger.error(
             "Grading run %s failed; error_code=%s exception_type=%s",
             run_id,
             error_code,
@@ -434,10 +433,10 @@ async def process_run(*, run_id: str, worker_id: str, registry=None, language: s
                 await background_task
             except (asyncio.CancelledError, Exception):
                 pass
-        # Durable run/events are the source of truth after this worker exits.
-        # The in-memory reporter may contain student/question identifiers and
-        # must not outlive completion, failure, or a deletion-driven lease loss.
-        remove_reporter(run_id)
+        # Release only this worker's reporter; a reclaimed run may already
+        # have a replacement reporter while this stale worker is exiting.
+        if reporter is not None:
+            remove_reporter(run_id, expected=reporter)
 
 
 def list_review_queue(*, assignment_id: str, teacher_id: str) -> list[education.GradeResultDTO]:
