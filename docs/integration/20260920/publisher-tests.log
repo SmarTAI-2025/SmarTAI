@@ -1,0 +1,13 @@
+test_changed_main_refused (test_publish_candidate.Tests.test_changed_main_refused) ... ok
+test_dirty_tree_refused (test_publish_candidate.Tests.test_dirty_tree_refused) ... ok
+test_existing_comment_not_duplicated (test_publish_candidate.Tests.test_existing_comment_not_duplicated) ... ok
+test_local_ok (test_publish_candidate.Tests.test_local_ok) ... ok
+test_new_comment_created_once (test_publish_candidate.Tests.test_new_comment_created_once) ... ok
+test_other_base_refused (test_publish_candidate.Tests.test_other_base_refused) ... ok
+test_untested_runtime_refused (test_publish_candidate.Tests.test_untested_runtime_refused) ... ok
+test_wrong_repo_refused (test_publish_candidate.Tests.test_wrong_repo_refused) ... ok
+
+----------------------------------------------------------------------
+Ran 8 tests in 0.001s
+
+OK

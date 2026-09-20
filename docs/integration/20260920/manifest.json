@@ -1,0 +1,324 @@
+{
+  "repository": "SmarTAI-2025/SmarTAI",
+  "branch": "fix/verified-integration-20260920",
+  "base_sha": "edfdabceca369ccba3f1d62178908303b8f8dec4",
+  "code_sha": "3977108642ce23fbbd149326c8e8df6d9c8ba6cf",
+  "integration_baseline": "714038104b1a04f47d2a0487925e9526142df32b",
+  "workspace": "/tmp/smartai-integration-20260920-sMxfeA",
+  "recorded_at": "2026-09-20T15:50:03.189768+00:00",
+  "new_commits": [
+    {
+      "sha": "de7b51f0b7cd9fc754b19f39cae1c188ff598dc5",
+      "summary": "题目结构、rubric、首个小问标签、reporter 所有权"
+    },
+    {
+      "sha": "d4b98cdb44293adfaf8a5a2fa994c4439ed87b28",
+      "summary": "密码找回在中性响应后查询账号、发送邮件"
+    },
+    {
+      "sha": "c3cb24677d367ec4c33d3990a12ce381dfd6467c",
+      "summary": "PDF 取消/超时的进程回收"
+    },
+    {
+      "sha": "80b461b54fa41f9223e4a03b633172a23499ddee",
+      "summary": "识别/结构化重试所需原件保留"
+    },
+    {
+      "sha": "b735e73259b628d26e7db2bdb77fde1df622373a",
+      "summary": "生产宿主执行拒绝、Linux worker 测试平台边界"
+    },
+    {
+      "sha": "d1be6c450f8a9d02e2a519f35e8e00dde8509c6b",
+      "summary": "前端安全升级和可干净安装的锁文件"
+    },
+    {
+      "sha": "3977108642ce23fbbd149326c8e8df6d9c8ba6cf",
+      "summary": "后端安全版本下限、Google SDK 参数及 SDK 构造回归"
+    }
+  ],
+  "source_prs": [
+    {
+      "number": 40,
+      "sha": "401bc0d153ca1c9906e6f9848ab27d3b4f1ca3f2",
+      "original_base": "main",
+      "included_in_history": false
+    },
+    {
+      "number": 58,
+      "sha": "91e83845ed45cced77407fee489ec84556b00315",
+      "original_base": "main",
+      "included_in_history": false
+    },
+    {
+      "number": 59,
+      "sha": "b0a3c02adb87692b384eec80b541ef25f8a22604",
+      "original_base": "main",
+      "included_in_history": true
+    },
+    {
+      "number": 60,
+      "sha": "121bfd01b045f58e624d6b278b2f2ffa3c53681a",
+      "original_base": "main",
+      "included_in_history": true
+    },
+    {
+      "number": 61,
+      "sha": "08f3deb721a14233f1653f1ae40745cad4c9576d",
+      "original_base": "main",
+      "included_in_history": true
+    },
+    {
+      "number": 62,
+      "sha": "404e46dde970cd54db3f0513f46f35fa3bcd9fde",
+      "original_base": "#61 branch",
+      "included_in_history": true
+    },
+    {
+      "number": 63,
+      "sha": "197f8803640578731d4ccf46716958588b299a01",
+      "original_base": "#62 branch",
+      "included_in_history": true
+    },
+    {
+      "number": 64,
+      "sha": "49db5f99819595fdf5f2cb1360d82ca5f67a6fdd",
+      "original_base": "#63 branch",
+      "included_in_history": true
+    },
+    {
+      "number": 65,
+      "sha": "98658f3417329eed97f55406b5de34e5f030e849",
+      "original_base": "#64 branch",
+      "included_in_history": true
+    },
+    {
+      "number": 66,
+      "sha": "ea3f41fee1c036956dfe9cf8eb43ca1a349bb784",
+      "original_base": "#65 branch",
+      "included_in_history": true
+    },
+    {
+      "number": 67,
+      "sha": "82a16123b07943915a7615ed66287097d4eed41c",
+      "original_base": "#66 branch",
+      "included_in_history": true
+    }
+  ],
+  "test_results": [
+    {
+      "name": "backend_fresh",
+      "result": "1460 passed, 30 skipped",
+      "log": "backend-code-head-final.log",
+      "sha256": "c3785386c2d9ae993dd4434f84e4a73102b931225c07736718f92a81d8eb9943"
+    },
+    {
+      "name": "frontend",
+      "result": "80 files / 378 passed",
+      "log": "frontend-final.log",
+      "sha256": "77ee095cc15d3fec3eadbc5888bc3d1e8a60ae9f58ae33f2fb8c125dfcee177f"
+    },
+    {
+      "name": "postgres_fresh",
+      "result": "23 passed",
+      "log": "postgres-fresh-final.log",
+      "sha256": "4cd9b6f39987b5dda10e973195b66b172b1cba4086fd04c212ccce7c92739d2f"
+    },
+    {
+      "name": "e2e_fresh",
+      "result": "2 passed",
+      "log": "e2e-fresh-final.log",
+      "sha256": "603cf012d2903e999475ea54252f7bd55b24cc4d540012b8d015f0144d52fa30"
+    },
+    {
+      "name": "sdk_and_network",
+      "result": "43 passed",
+      "log": "patched-sdk-tests.log",
+      "sha256": "ae4d879ad2d2e17a89bf7146aecf643b1b40d2e886c87a5d8acc3f4fc15c8615"
+    },
+    {
+      "name": "retention",
+      "result": "68 passed",
+      "log": "retention-final-tests.log",
+      "sha256": "32f2d720946edea05f780b3128eb07e6b9681341a581b75988a608458cf4e370"
+    }
+  ],
+  "runtime_dependency_audit": {
+    "packages": 93,
+    "known_advisory_records": 0
+  },
+  "frontend_dependency_audit": {
+    "known_advisory_records": 0
+  },
+  "migration_head": "0016_knowledge_storage_quota",
+  "postgres_version": "16.15",
+  "repair_patch_sha256": "773c1a3fbcde231475a23ffa23d3e675b8534656112d42acd0a9154d5680fa2a",
+  "publication": {
+    "branch_create": {
+      "status": "blocked",
+      "http_status": 403,
+      "message": "Resource not accessible by integration"
+    },
+    "comment_write": {
+      "status": "blocked",
+      "pr_number": 61,
+      "http_status": 403,
+      "message": "Resource not accessible by integration"
+    },
+    "push": "not_completed",
+    "new_pr": "not_created",
+    "comments_published": false,
+    "approved": false,
+    "merged": false
+  },
+  "unverified": [
+    "real Gmail delivery",
+    "real model/OCR service",
+    "AWS/S3 live storage",
+    "Windows PDF runtime",
+    "full Docker/Podman isolation",
+    "school release acceptance",
+    "remote candidate CI"
+  ],
+  "notes": [
+    "Test counts overlap; do not sum as independent coverage.",
+    "Code SHA is fixed; a later documentation-only delivery commit is recorded separately.",
+    "No absolute zero-error or production-security guarantee."
+  ],
+  "diff_numstat": [
+    {
+      "path": "backend/api/auth.py",
+      "insertions": 5,
+      "deletions": 2
+    },
+    {
+      "path": "backend/db/assignment_repository.py",
+      "insertions": 18,
+      "deletions": 7
+    },
+    {
+      "path": "backend/db/source_retention.py",
+      "insertions": 128,
+      "deletions": 0
+    },
+    {
+      "path": "backend/db/source_storage_repository.py",
+      "insertions": 15,
+      "deletions": 1
+    },
+    {
+      "path": "backend/llm/providers.py",
+      "insertions": 5,
+      "deletions": 7
+    },
+    {
+      "path": "backend/progress/tracker.py",
+      "insertions": 10,
+      "deletions": 1
+    },
+    {
+      "path": "backend/services/grading_runs.py",
+      "insertions": 7,
+      "deletions": 8
+    },
+    {
+      "path": "backend/services/password_reset.py",
+      "insertions": 53,
+      "deletions": 9
+    },
+    {
+      "path": "backend/services/question_structure.py",
+      "insertions": 51,
+      "deletions": 10
+    },
+    {
+      "path": "backend/skills/base.py",
+      "insertions": 5,
+      "deletions": 0
+    },
+    {
+      "path": "backend/tests/test_integration_regressions.py",
+      "insertions": 107,
+      "deletions": 0
+    },
+    {
+      "path": "backend/tests/test_password_reset_deferred.py",
+      "insertions": 80,
+      "deletions": 0
+    },
+    {
+      "path": "backend/tests/test_pdf_worker_lifecycle.py",
+      "insertions": 71,
+      "deletions": 0
+    },
+    {
+      "path": "backend/tests/test_postgres_integration.py",
+      "insertions": 18,
+      "deletions": 0
+    },
+    {
+      "path": "backend/tests/test_production_host_execution.py",
+      "insertions": 34,
+      "deletions": 0
+    },
+    {
+      "path": "backend/tests/test_runner_spike.py",
+      "insertions": 6,
+      "deletions": 0
+    },
+    {
+      "path": "backend/tests/test_security_dependency_contract.py",
+      "insertions": 50,
+      "deletions": 0
+    },
+    {
+      "path": "backend/tests/test_source_retention.py",
+      "insertions": 141,
+      "deletions": 0
+    },
+    {
+      "path": "backend/tools/code_interpreter.py",
+      "insertions": 17,
+      "deletions": 3
+    },
+    {
+      "path": "backend/tools/file_processing.py",
+      "insertions": 17,
+      "deletions": 18
+    },
+    {
+      "path": "backend/tools/pdf_worker_lifecycle.py",
+      "insertions": 41,
+      "deletions": 0
+    },
+    {
+      "path": "frontend/app/package-lock.json",
+      "insertions": 540,
+      "deletions": 1582
+    },
+    {
+      "path": "frontend/app/package.json",
+      "insertions": 1,
+      "deletions": 1
+    },
+    {
+      "path": "frontend/app/src/lib/rubricPoints.test.ts",
+      "insertions": 14,
+      "deletions": 0
+    },
+    {
+      "path": "frontend/app/src/lib/rubricPoints.ts",
+      "insertions": 2,
+      "deletions": 0
+    },
+    {
+      "path": "render-requirements.txt",
+      "insertions": 13,
+      "deletions": 10
+    },
+    {
+      "path": "security-constraints.txt",
+      "insertions": 12,
+      "deletions": 0
+    }
+  ]
+}

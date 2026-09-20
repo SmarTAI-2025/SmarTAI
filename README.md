@@ -480,3 +480,11 @@ AI 负责辅助批改，最终决定仍由教师作出。以下关键节点均�
 4. 成绩是否必须经过教师确认才会对学生可见？
 
 SmarTAI 希望在不削弱教师最终决定权的前提下，减少重复批改所占用的时间。
+
+## 2026-09-20 integration handoff
+
+The current accepted design uses one scored major question per `q_id`; subparts
+remain internal metadata. See [human integration notes](docs/integration/20260920/README.md)
+and [AI contract overrides](docs/integration/20260920/03_当前设计与原文档差异_AI版.md)
+before implementing downstream recognition, mapping, storage or runner changes.
+The notes separate tested local code from remote publication and live release evidence.

@@ -1,3 +1,12 @@
+# 2026-09-20 approved contract overrides and integration
+
+Read `docs/integration/20260920/01_完成与修改总结_AI版.md` and
+`docs/integration/20260920/03_当前设计与原文档差异_AI版.md` before changing
+question identity, concurrency, source retention or production code execution.
+The owner accepted major-question-only units and BYOK concurrency. Do not silently
+restore the older group/leaf or hard 1–2 concurrency requirements. Code validation,
+publication authorization and real deployment evidence are separate facts.
+
 # Claude Collaboration Handoff
 
 ## Week 2 final delivery (2026-08-13)
