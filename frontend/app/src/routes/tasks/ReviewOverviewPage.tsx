@@ -1,3 +1,4 @@
+import { SortableTableHead, useColumnSort, sortColumnRows, directionFor, type ColumnSort } from "@/components/ui/SortableTableHead";
 import { AlertTriangle, ArrowRight, CheckCircle2, ChevronRight, LoaderCircle, Search } from "lucide-react";
 import { useMemo } from "react";
 import { Link, Navigate, useNavigate, useParams, useSearchParams } from "react-router-dom";
@@ -51,12 +52,28 @@ export function ReviewOverviewPage() {
       .map((correction) => reviewCellKey(student.id, correction.q_id))),
   ), [model.students]);
   const smartFilter = useTaskFilterIntent({ taskId, surface: "review_overview", resolveLocal: (value) => resolveReviewFilter(model, reviewItems, annotatedKeys, value) });
-  const selection = useMemo(() => {
+  const naturalSelection = useMemo(() => {
     const intent = smartFilter.intent ?? EMPTY_FILTER_INTENT;
     const requested = searchParams.get("sort") as FilterIntentResult["sort"];
     const withSort = requested ? { ...intent, sort: requested } : intent;
     return selectReviewOverviewFromIntent(model, reviewItems, annotatedKeys, supportsFilterIntent(withSort, "review_overview") ? withSort : intent);
   }, [annotatedKeys, model, reviewItems, searchParams, smartFilter.intent]);
+
+  const rawSort = searchParams.get("sort") ?? smartFilter.intent?.sort;
+  const headerSort = useColumnSort(["id", "name", ...model.questions.map((question) => `question:${question.id}`)],
+    rawSort && /^(?:id|name)_(?:asc|desc)$/.test(rawSort) ? { key: rawSort.split("_")[0], direction: rawSort.endsWith("desc") ? "desc" : "asc" } : null,
+    smartFilter.cancel);
+  const selection = useMemo(() => ({ ...naturalSelection,
+    students: sortColumnRows(naturalSelection.students, headerSort.current, (student, key) => {
+      if (key === "id") return student.id;
+      if (key === "name") return student.name;
+      const correction = student.corrections.find((item) => item.q_id === key.slice("question:".length));
+      if (!correction) return null;
+      if (effectiveCorrectionScore(correction) === null) return 3;
+      if (confirmedKeys.has(reviewCellKey(student.id, correction.q_id))) return 0;
+      return reviewItems.some((item) => item.student.id === student.id && item.question.id === correction.q_id) ? 2 : 1;
+    }),
+  }), [naturalSelection, headerSort.current?.key, headerSort.current?.direction, confirmedKeys, reviewItems]);
 
   if (taskId && task && !hasTaskReachedStep(task, 6)) {
     if (task.status === "grading") return <Navigate replace to={`/tasks/${taskId}/grading/progress`} />;
@@ -178,6 +195,8 @@ export function ReviewOverviewPage() {
                 annotatedKeys={annotatedKeys}
                 confirmedKeys={confirmedKeys}
                 returnTo={overviewReturnTo}
+                columnSort={headerSort.current}
+                onSort={headerSort.toggle}
               />
             )}
             queue={(
@@ -271,6 +290,8 @@ function ReviewHeatmap({
   annotatedKeys,
   confirmedKeys,
   returnTo,
+  columnSort,
+  onSort,
 }: {
   locale: Locale;
   taskId: string;
@@ -282,6 +303,8 @@ function ReviewHeatmap({
   annotatedKeys: Set<string>;
   confirmedKeys: Set<string>;
   returnTo: string;
+  columnSort: ColumnSort | null;
+  onSort: (key: string) => void;
 }) {
   const reviewByKey = new Map(reviewItems.map((item) => [reviewCellKey(item.student.id, item.question.id), item]));
   const questionById = new Map(model.questions.map((question) => [question.id, question]));
@@ -318,22 +341,18 @@ function ReviewHeatmap({
           >
             <thead className="sticky top-0 z-20 bg-slate-100/95 text-[12px] font-semibold text-muted-foreground backdrop-blur-sm dark:bg-slate-800/95">
               <tr className="h-[42px] border-b">
-                <th
+                <SortableTableHead
                   className="sticky left-0 z-30 whitespace-nowrap bg-slate-100/95 px-3 dark:bg-slate-800/95"
                   style={{ width: identityLayout.studentIdWidth, minWidth: identityLayout.studentIdWidth, maxWidth: identityLayout.studentIdWidth }}
-                >
-                  {studentIdLabel}
-                </th>
-                <th
+                 direction={directionFor(columnSort, "id")} onSort={() => onSort("id")} locale={locale}>{studentIdLabel}</SortableTableHead>
+                <SortableTableHead
                   className="sticky z-30 whitespace-nowrap bg-slate-100/95 px-3 dark:bg-slate-800/95"
                   style={{ left: identityLayout.studentIdWidth, width: identityLayout.studentNameWidth, minWidth: identityLayout.studentNameWidth, maxWidth: identityLayout.studentNameWidth }}
-                >
-                  {studentNameLabel}
-                </th>
+                 direction={directionFor(columnSort, "name")} onSort={() => onSort("name")} locale={locale}>{studentNameLabel}</SortableTableHead>
                 {questions.map((question) => (
-                  <th key={question.id} className="w-[60px] min-w-[60px] max-w-[60px] px-1 text-center">
+                  <SortableTableHead direction={directionFor(columnSort, `question:${question.id}`)} onSort={() => onSort(`question:${question.id}`)} label={question.label} locale={locale} title={locale === "zh-CN" ? "按该题复核状态排序" : "Sort by this question’s review status"} key={question.id} className="w-[60px] min-w-[60px] max-w-[60px] px-1 text-center">
                     {question.label}
-                  </th>
+                  </SortableTableHead>
                 ))}
                 <th className="w-[72px] px-3 text-right">{copy(locale, "action")}</th>
               </tr>
