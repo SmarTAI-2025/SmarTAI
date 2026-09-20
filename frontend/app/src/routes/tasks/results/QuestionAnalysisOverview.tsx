@@ -1,3 +1,4 @@
+import { groundedRows, hasGroundedOrder } from "@/lib/groundedAsk";
 import { SortableTableHead, useColumnSort, directionFor, type ColumnSort } from "@/components/ui/SortableTableHead";
 import { ArrowRight, X } from "lucide-react";
 import { useMemo, type ReactNode } from "react";
@@ -97,11 +98,11 @@ export function QuestionAnalysisOverview({
       : /^(?:confidence|review)_/.test(effectiveSort) ? { key: effectiveSort.split("_")[0], direction: effectiveSort.endsWith("desc") ? "desc" : "asc" } : null,
     smartFilter.cancel);
   const filteredRows = useMemo(() => {
-    const matches = rows.filter((row) => (
+    const matches = groundedRows(rows, smartFilter.intent, "questions", row => row.question.id).filter((row) => (
       matchesSemanticPlan(row, semanticPlan)
     ));
-    return matches.sort((left, right) => headerSort.current ? compareQuestionHeader(left, right, headerSort.current) : compareRows(left, right, effectiveSort));
-  }, [rows, semanticPlan, effectiveSort, headerSort.current?.key, headerSort.current?.direction]);
+    return matches.sort((left, right) => hasGroundedOrder(smartFilter.intent) && !headerSort.current ? 0 : headerSort.current ? compareQuestionHeader(left, right, headerSort.current) : compareRows(left, right, effectiveSort));
+  }, [rows, smartFilter.intent, semanticPlan, effectiveSort, headerSort.current?.key, headerSort.current?.direction]);
 
   const averageQuestionPercent = averageOrNull(rows.map((row) => row.question.avgPercent));
   const weakQuestionCount = rows.filter((row) => (row.question.avgPercent ?? 100) < 60).length;
@@ -600,6 +601,7 @@ export function resolveResultQuestionQuery(questions: QuestionSummary[], raw: st
 }
 
 export function selectResultQuestions(questions: QuestionSummary[], intent: FilterIntentResult | null, locale: Locale): QuestionSummary[] {
+  if (intent?.execution) return groundedRows(questions, intent, "questions", q => q.id);
   if (!intent || !supportsFilterIntent(intent, "question_analysis")) return questions;
   const plan = intentToQuestionPlan(intent, locale);
   return questions.map((question) => buildQuestionRow(question, locale))
