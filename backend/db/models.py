@@ -53,6 +53,7 @@ class UserRecord(Base):
     updated_at: Mapped[float] = mapped_column(
         Float, nullable=False, default=time.time, onupdate=time.time
     )
+    auth_invalid_before: Mapped[float | None] = mapped_column(Float, nullable=True)
 
     __table_args__ = (
         CheckConstraint(
@@ -100,6 +101,82 @@ class RefreshSessionRecord(Base):
     last_used_at: Mapped[float] = mapped_column(Float, nullable=False, default=time.time)
     expires_at: Mapped[float] = mapped_column(Float, nullable=False, index=True)
     revoked_at: Mapped[float | None] = mapped_column(Float, nullable=True)
+
+
+class EmailVerificationRequestRecord(Base):
+    """One-time email verification state for public teacher registration."""
+
+    __tablename__ = "email_verification_requests"
+    __table_args__ = (
+        Index("ix_email_verification_requests_email", "normalized_email"),
+        Index("ix_email_verification_requests_created_at", "created_at"),
+        CheckConstraint(
+            "delivery_status IN ('pending', 'sent', 'failed')",
+            name="ck_email_verification_delivery_status",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    normalized_username: Mapped[str] = mapped_column(String(128), nullable=False)
+    normalized_email: Mapped[str] = mapped_column(String(320), nullable=False)
+    password_hash: Mapped[str] = mapped_column(String(255), nullable=False)
+    token_digest: Mapped[str] = mapped_column(String(64), nullable=False, unique=True, index=True)
+    created_at: Mapped[float] = mapped_column(Float, nullable=False, default=time.time)
+    expires_at: Mapped[float] = mapped_column(Float, nullable=False, index=True)
+    resend_available_at: Mapped[float] = mapped_column(Float, nullable=False)
+    superseded_at: Mapped[float | None] = mapped_column(Float, nullable=True)
+    verified_at: Mapped[float | None] = mapped_column(Float, nullable=True)
+    delivery_status: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="pending", server_default="pending"
+    )
+    last_delivery_error_code: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    source_ip: Mapped[str | None] = mapped_column(String(64), nullable=True)
+
+
+class PasswordResetRequestRecord(Base):
+    """One-time password reset state for an existing account."""
+
+    __tablename__ = "password_reset_requests"
+    __table_args__ = (
+        Index("ix_password_reset_requests_created_at", "created_at"),
+        CheckConstraint(
+            "delivery_status IN ('pending', 'sent', 'failed')",
+            name="ck_password_reset_delivery_status",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    user_id: Mapped[str] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    token_digest: Mapped[str] = mapped_column(String(64), nullable=False, unique=True, index=True)
+    created_at: Mapped[float] = mapped_column(Float, nullable=False, default=time.time)
+    expires_at: Mapped[float] = mapped_column(Float, nullable=False, index=True)
+    resend_available_at: Mapped[float] = mapped_column(Float, nullable=False)
+    superseded_at: Mapped[float | None] = mapped_column(Float, nullable=True)
+    consumed_at: Mapped[float | None] = mapped_column(Float, nullable=True)
+    delivery_status: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="pending", server_default="pending"
+    )
+    last_delivery_error_code: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    source_ip: Mapped[str | None] = mapped_column(String(64), nullable=True)
+
+
+class PasswordResetRateEventRecord(Base):
+    """Enumeration-safe hourly counters without plaintext identity data."""
+
+    __tablename__ = "password_reset_rate_events"
+    __table_args__ = (
+        Index("ix_password_reset_rate_events_email_created", "email_digest", "created_at"),
+        Index("ix_password_reset_rate_events_ip_created", "source_ip_digest", "created_at"),
+    )
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    email_digest: Mapped[str] = mapped_column(String(64), nullable=False)
+    source_ip_digest: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    created_at: Mapped[float] = mapped_column(
+        Float, nullable=False, default=time.time, index=True
+    )
 
 
 # ─── LLM provider config (retained) ───────────────────────────────────────────
@@ -275,6 +352,12 @@ class AssignmentRecord(Base):
         Float, nullable=False, default=time.time, onupdate=time.time
     )
     published_at: Mapped[float | None] = mapped_column(Float, nullable=True)
+    # A delete request is immediately hidden from product reads, while the
+    # durable task-delete worker retains the parent until every physical
+    # object has been confirmed absent.
+    deletion_requested_at: Mapped[float | None] = mapped_column(
+        Float, nullable=True, index=True
+    )
     # Optimistic-lock version: every editable update must match the expected
     # value in its WHERE clause and bump it, so a stale client write is a 409
     # rather than a silent last-writer-wins overwrite.
@@ -684,6 +767,54 @@ class StoredFileRecord(Base):
     content_type: Mapped[str | None] = mapped_column(String(255), nullable=True)
     size_bytes: Mapped[int] = mapped_column(Integer, nullable=False)
     sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    # Raw task originals use a quota owner distinct from the access-control
+    # owner. A student-owned legacy submission, for example, is charged to the
+    # teacher who owns its assignment. Derived artifacts and knowledge files
+    # keep this null and source_quota_bytes=0.
+    source_quota_owner_id: Mapped[str | None] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), nullable=True, index=True
+    )
+    source_quota_bytes: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default=text("0")
+    )
+    availability_status: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="available",
+        server_default="available", index=True,
+    )
+    availability_reason: Mapped[str | None] = mapped_column(
+        String(64), nullable=True
+    )
+    lifecycle_revision: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default=text("0")
+    )
+    cleanup_operation_id: Mapped[str | None] = mapped_column(
+        ForeignKey("workflow_operations.id", ondelete="SET NULL"),
+        nullable=True, index=True,
+    )
+    cleanup_final_result_version: Mapped[int | None] = mapped_column(
+        Integer, nullable=True
+    )
+    cleanup_requested_at: Mapped[float | None] = mapped_column(Float, nullable=True)
+    cleanup_last_attempt_at: Mapped[float | None] = mapped_column(Float, nullable=True)
+    cleanup_attempt_count: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default=text("0")
+    )
+    cleanup_claim_token: Mapped[str | None] = mapped_column(
+        String(64), nullable=True
+    )
+    cleanup_claimed_at: Mapped[float | None] = mapped_column(Float, nullable=True)
+    replacement_claim_group_id: Mapped[str | None] = mapped_column(
+        String(64), nullable=True
+    )
+    replacement_claim_expires_at: Mapped[float | None] = mapped_column(
+        Float, nullable=True
+    )
+    # New originals retain the quota-credit group that admitted them until a
+    # workflow generation atomically adopts (or abandons) that group.
+    replacement_group_id: Mapped[str | None] = mapped_column(
+        String(64), nullable=True
+    )
+    unavailable_at: Mapped[float | None] = mapped_column(Float, nullable=True)
     # Explicit resource links instead of a generic task_id. Exactly one of the
     # business FKs is expected to be set per file (enforced in application code;
     # kept nullable here so a knowledge-only upload that predates a document row
@@ -700,6 +831,140 @@ class StoredFileRecord(Base):
         nullable=True, index=True,
     )
     created_at: Mapped[float] = mapped_column(Float, nullable=False, default=time.time)
+
+    __table_args__ = (
+        CheckConstraint(
+            "source_quota_bytes >= 0",
+            name="ck_stored_files_source_quota_bytes_nonnegative",
+        ),
+        CheckConstraint(
+            "lifecycle_revision >= 0 AND cleanup_attempt_count >= 0",
+            name="ck_stored_files_source_lifecycle_counters_nonnegative",
+        ),
+        CheckConstraint(
+            "availability_status IN ('available', 'cleanup_pending', 'unavailable')",
+            name="ck_stored_files_availability_status",
+        ),
+        CheckConstraint(
+            "availability_reason IS NULL OR availability_reason IN "
+            "('task_finalized', 'task_deleted', 'replaced', 'missing', "
+            "'storage_delete_failed')",
+            name="ck_stored_files_availability_reason",
+        ),
+        CheckConstraint(
+            "(replacement_claim_group_id IS NULL AND "
+            "replacement_claim_expires_at IS NULL) OR "
+            "(replacement_claim_group_id IS NOT NULL AND "
+            "replacement_claim_expires_at IS NOT NULL)",
+            name="ck_stored_files_replacement_claim_consistency",
+        ),
+        CheckConstraint(
+            "(source_quota_owner_id IS NULL AND source_quota_bytes = 0) OR "
+            "(source_quota_owner_id IS NOT NULL AND source_quota_bytes >= 0)",
+            name="ck_stored_files_source_quota_owner_consistency",
+        ),
+        Index(
+            "ix_stored_files_source_quota_status",
+            "source_quota_owner_id", "availability_status",
+        ),
+        Index(
+            "ix_stored_files_assignment_source_status",
+            "assignment_id", "availability_status", "kind",
+        ),
+    )
+
+
+class SourceStorageReservationRecord(Base):
+    """Durable quota charge before a raw object becomes a StoredFile row.
+
+    A reservation remains charged if a write outcome or orphan deletion cannot
+    be confirmed. Its paired delayed workflow operation is the restart-safe
+    garbage collector for that exact UUID storage key.
+    """
+
+    __tablename__ = "source_storage_reservations"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    operation_id: Mapped[str] = mapped_column(
+        ForeignKey("workflow_operations.id", ondelete="RESTRICT"),
+        nullable=False, unique=True, index=True,
+    )
+    file_owner_id: Mapped[str] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    quota_owner_id: Mapped[str] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    assignment_id: Mapped[str] = mapped_column(
+        ForeignKey("assignments.id", ondelete="RESTRICT"), nullable=False, index=True
+    )
+    submission_revision_id: Mapped[str | None] = mapped_column(
+        ForeignKey("submission_revisions.id", ondelete="RESTRICT"),
+        nullable=True, index=True,
+    )
+    source_lifecycle_epoch: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default=text("0")
+    )
+    kind: Mapped[str] = mapped_column(String(64), nullable=False)
+    original_name: Mapped[str] = mapped_column(String(512), nullable=False)
+    storage_backend: Mapped[str] = mapped_column(String(64), nullable=False)
+    storage_key: Mapped[str] = mapped_column(String(1024), nullable=False, unique=True)
+    content_type: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    requested_bytes: Mapped[int] = mapped_column(Integer, nullable=False)
+    sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    replacement_group_id: Mapped[str | None] = mapped_column(
+        String(64), nullable=True
+    )
+    replacement_credit_bytes: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default=text("0")
+    )
+    purpose: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="upload", server_default="upload"
+    )
+    state: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="reserved", server_default="reserved"
+    )
+    error_code: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    retry_count: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default=text("0")
+    )
+    cleanup_claim_token: Mapped[str | None] = mapped_column(
+        String(64), nullable=True
+    )
+    cleanup_claimed_at: Mapped[float | None] = mapped_column(Float, nullable=True)
+    expires_at: Mapped[float] = mapped_column(Float, nullable=False, index=True)
+    created_at: Mapped[float] = mapped_column(Float, nullable=False, default=time.time)
+    updated_at: Mapped[float] = mapped_column(Float, nullable=False, default=time.time)
+
+    __table_args__ = (
+        CheckConstraint(
+            "requested_bytes >= 0 AND replacement_credit_bytes >= 0 "
+            "AND retry_count >= 0 "
+            "AND source_lifecycle_epoch >= 0",
+            name="ck_source_storage_reservations_counters_nonnegative",
+        ),
+        CheckConstraint(
+            "purpose IN ('upload', 'orphan_cleanup', 'artifact_write')",
+            name="ck_source_storage_reservations_purpose",
+        ),
+        CheckConstraint(
+            "state IN ('reserved', 'object_written', 'cleanup_pending')",
+            name="ck_source_storage_reservations_state",
+        ),
+        CheckConstraint(
+            "length(kind) BETWEEN 1 AND 64",
+            name="ck_source_storage_reservations_kind",
+        ),
+        CheckConstraint(
+            "(kind = 'submission' AND submission_revision_id IS NOT NULL) OR "
+            "(kind <> 'submission' AND submission_revision_id IS NULL)",
+            name="ck_source_storage_reservations_revision_link",
+        ),
+        Index(
+            "ix_source_storage_reservations_owner_expiry",
+            "quota_owner_id", "expires_at",
+        ),
+    )
 
 
 # ─── Knowledge documents & chunks (retained) ──────────────────────────────────
@@ -748,6 +1013,166 @@ class KnowledgeChunkRecord(Base):
     chunk_metadata: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
     token_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     created_at: Mapped[float] = mapped_column(Float, nullable=False, default=time.time)
+
+
+class KnowledgeStorageRecord(Base):
+    """Durable quota/lifecycle ledger for one canonical knowledge object.
+
+    The row exists before object I/O and normal lifecycle code deletes it only
+    after exact-key deletion succeeds (or the backend proves the key absent).
+    An administrative User CASCADE is the exceptional account-removal path and
+    must first run storage cleanup; the separately pre-created, non-FK orphan
+    guard still survives that cascade and reconciles any late PUT.
+    """
+
+    __tablename__ = "knowledge_storage_records"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    owner_id: Mapped[str] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    document_id: Mapped[str | None] = mapped_column(
+        ForeignKey("knowledge_documents.id", ondelete="SET NULL"),
+        nullable=True, unique=True, index=True,
+    )
+    stored_file_id: Mapped[str | None] = mapped_column(
+        ForeignKey("stored_files.id", ondelete="SET NULL"),
+        nullable=True, unique=True, index=True,
+    )
+    origin_assignment_id: Mapped[str | None] = mapped_column(
+        ForeignKey("assignments.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    retention_policy: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="retained", server_default="retained", index=True
+    )
+    state: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="reserved", server_default="reserved", index=True
+    )
+    original_name: Mapped[str] = mapped_column(String(512), nullable=False)
+    content_type: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    size_bytes: Mapped[int] = mapped_column(Integer, nullable=False)
+    sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    storage_backend: Mapped[str] = mapped_column(String(64), nullable=False)
+    storage_key: Mapped[str] = mapped_column(String(1024), nullable=False, unique=True)
+    cleanup_reason: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    error_code: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    cleanup_operation_id: Mapped[str | None] = mapped_column(
+        String(64), nullable=True, unique=True, index=True
+    )
+    reservation_expires_at: Mapped[float | None] = mapped_column(Float, nullable=True, index=True)
+    unattached_expires_at: Mapped[float | None] = mapped_column(Float, nullable=True, index=True)
+    available_at: Mapped[float | None] = mapped_column(Float, nullable=True)
+    cleanup_requested_at: Mapped[float | None] = mapped_column(Float, nullable=True)
+    cleanup_last_attempt_at: Mapped[float | None] = mapped_column(Float, nullable=True)
+    cleanup_retry_at: Mapped[float | None] = mapped_column(Float, nullable=True, index=True)
+    cleanup_attempt_count: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default=text("0")
+    )
+    cleanup_claim_token: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    cleanup_claimed_at: Mapped[float | None] = mapped_column(Float, nullable=True)
+    writer_claim_token: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    writer_claimed_at: Mapped[float | None] = mapped_column(Float, nullable=True)
+    writer_heartbeat_at: Mapped[float | None] = mapped_column(Float, nullable=True)
+    writer_lease_expires_at: Mapped[float | None] = mapped_column(
+        Float, nullable=True, index=True
+    )
+    created_at: Mapped[float] = mapped_column(Float, nullable=False, default=time.time)
+    updated_at: Mapped[float] = mapped_column(
+        Float, nullable=False, default=time.time, onupdate=time.time
+    )
+
+    __table_args__ = (
+        UniqueConstraint(
+            "owner_id", "sha256", name="uq_knowledge_storage_owner_sha256"
+        ),
+        CheckConstraint(
+            "retention_policy IN ('retained', 'task_only')",
+            name="ck_knowledge_storage_retention_policy",
+        ),
+        CheckConstraint(
+            "state IN ('reserved', 'available', 'cleanup_pending')",
+            name="ck_knowledge_storage_state",
+        ),
+        CheckConstraint(
+            "size_bytes >= 0 AND cleanup_attempt_count >= 0",
+            name="ck_knowledge_storage_counters_nonnegative",
+        ),
+        CheckConstraint(
+            "cleanup_reason IS NULL OR cleanup_reason IN "
+            "('explicit_delete', 'task_unreferenced', 'task_deleted', "
+            "'task_attach_failed', 'upload_abandoned', 'upload_write_failed', "
+            "'upload_integrity_failed', 'storage_delete_failed')",
+            name="ck_knowledge_storage_cleanup_reason",
+        ),
+        CheckConstraint(
+            "(cleanup_claim_token IS NULL AND cleanup_claimed_at IS NULL) OR "
+            "(cleanup_claim_token IS NOT NULL AND cleanup_claimed_at IS NOT NULL)",
+            name="ck_knowledge_storage_claim_consistency",
+        ),
+        CheckConstraint(
+            "(writer_claim_token IS NULL AND writer_claimed_at IS NULL AND "
+            "writer_heartbeat_at IS NULL AND writer_lease_expires_at IS NULL) OR "
+            "(writer_claim_token IS NOT NULL AND writer_claimed_at IS NOT NULL AND "
+            "writer_heartbeat_at IS NOT NULL AND writer_lease_expires_at IS NOT NULL)",
+            name="ck_knowledge_storage_writer_claim_consistency",
+        ),
+        CheckConstraint(
+            "(state = 'cleanup_pending' AND cleanup_operation_id IS NOT NULL) OR "
+            "(state <> 'cleanup_pending' AND cleanup_operation_id IS NULL)",
+            name="ck_knowledge_storage_operation_consistency",
+        ),
+        Index(
+            "ix_knowledge_storage_owner_state",
+            "owner_id", "state",
+        ),
+        Index(
+            "ix_knowledge_storage_cleanup_scan",
+            "state", "cleanup_retry_at", "cleanup_claimed_at",
+        ),
+    )
+
+
+class KnowledgeStorageOrphanGuardRecord(Base):
+    """Permanent exact-key reconciliation for an expired upload writer.
+
+    ``owner_id`` intentionally has no user FK: deleting an account must not
+    erase the only durable guard against a late object-store PUT. Keys are
+    opaque and contain no original filename.
+    """
+
+    __tablename__ = "knowledge_storage_orphan_guards"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    owner_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    storage_backend: Mapped[str] = mapped_column(String(64), nullable=False)
+    storage_key: Mapped[str] = mapped_column(String(1024), nullable=False, unique=True)
+    writer_claim_token: Mapped[str] = mapped_column(String(64), nullable=False)
+    next_check_at: Mapped[float] = mapped_column(Float, nullable=False, index=True)
+    last_attempt_at: Mapped[float | None] = mapped_column(Float, nullable=True)
+    attempt_count: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default=text("0")
+    )
+    error_code: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    claim_token: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    claimed_at: Mapped[float | None] = mapped_column(Float, nullable=True)
+    created_at: Mapped[float] = mapped_column(Float, nullable=False, default=time.time)
+    updated_at: Mapped[float] = mapped_column(Float, nullable=False, default=time.time)
+
+    __table_args__ = (
+        CheckConstraint(
+            "attempt_count >= 0",
+            name="ck_knowledge_orphan_guards_attempt_nonnegative",
+        ),
+        CheckConstraint(
+            "(claim_token IS NULL AND claimed_at IS NULL) OR "
+            "(claim_token IS NOT NULL AND claimed_at IS NOT NULL)",
+            name="ck_knowledge_orphan_guards_claim_consistency",
+        ),
+        Index(
+            "ix_knowledge_orphan_guards_scan",
+            "next_check_at", "claimed_at",
+        ),
+    )
 
 
 # ─── Course library metadata (document/file content stays canonical) ─────────────

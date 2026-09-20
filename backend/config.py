@@ -7,7 +7,7 @@ from __future__ import annotations
 import os
 from collections.abc import MutableMapping
 from typing import Optional, Literal
-from pydantic import model_validator
+from pydantic import AliasChoices, Field, model_validator
 from pydantic_settings import BaseSettings
 
 
@@ -250,10 +250,12 @@ class Settings(BaseSettings):
     mathpix_app_key: str = os.getenv("MATHPIX_APP_KEY", "")
 
     # ─── Frontend ──────────────────────────────────────────────────────────────
-    frontend_urls: str = os.getenv(
-        "FRONTEND_URLS",
-        "http://localhost:8501,http://localhost:3000,http://localhost:8001,"
-        "http://localhost:5173,http://127.0.0.1:5173",
+    frontend_urls: str = Field(
+        default=(
+            "http://localhost:8501,http://localhost:3000,http://localhost:8001,"
+            "http://localhost:5173,http://127.0.0.1:5173"
+        ),
+        validation_alias=AliasChoices("FRONTEND_URLS", "SMARTAI_FRONTEND_URLS"),
     )
     backend_port: int = 8000
 
@@ -276,6 +278,81 @@ class Settings(BaseSettings):
     storage_s3_access_key: Optional[str] = os.getenv("SMARTAI_STORAGE_S3_ACCESS_KEY", "")
     storage_s3_secret_key: Optional[str] = os.getenv("SMARTAI_STORAGE_S3_SECRET_KEY", "")
 
+    # ─── Task-original storage lifecycle (F-B) ───────────────────────────
+    # This allocation covers task problem/submission originals only. Personal
+    # and course-library knowledge documents have a separate retention policy
+    # and are intentionally excluded.
+    unfinished_source_quota_bytes: int = int(
+        os.getenv("SMARTAI_UNFINISHED_SOURCE_QUOTA_BYTES", "536870912")
+    )
+    # A process that dies between durable reservation and metadata publication
+    # leaves a recoverable reservation. The existing workflow worker reaps it
+    # after this deadline; successful uploads remove the operation immediately.
+    source_storage_reservation_ttl_seconds: int = int(
+        os.getenv("SMARTAI_SOURCE_STORAGE_RESERVATION_TTL_SECONDS", "3600")
+    )
+    # A replacement may preflight several originals before one atomic workflow
+    # switch. The claim prevents another concurrent replacement from reusing
+    # the same old-file quota credit; abandoned claims expire automatically.
+    source_replacement_claim_ttl_seconds: int = int(
+        os.getenv("SMARTAI_SOURCE_REPLACEMENT_CLAIM_TTL_SECONDS", "7200")
+    )
+    # Physical deletion failures are retried forever with bounded exponential
+    # backoff. They remain charged until storage confirms deletion.
+    source_cleanup_retry_base_seconds: int = int(
+        os.getenv("SMARTAI_SOURCE_CLEANUP_RETRY_BASE_SECONDS", "30")
+    )
+    source_cleanup_retry_max_seconds: int = int(
+        os.getenv("SMARTAI_SOURCE_CLEANUP_RETRY_MAX_SECONDS", "3600")
+    )
+
+    # ─── Personal/course knowledge storage ──────────────────────────────
+    # This is a separate per-user allocation.  It never includes task problem
+    # or submission originals managed by ``unfinished_source_quota_bytes``.
+    knowledge_storage_quota_bytes: int = int(
+        os.getenv("SMARTAI_KNOWLEDGE_STORAGE_QUOTA_BYTES", "536870912")
+    )
+    # Reserved bytes remain charged while an upload is in flight. A crashed
+    # writer is converted to cleanup_pending after this deadline.
+    knowledge_storage_reservation_ttl_seconds: int = int(
+        os.getenv("SMARTAI_KNOWLEDGE_STORAGE_RESERVATION_TTL_SECONDS", "3600")
+    )
+    # A writer owns a renewable claim throughout save/verify/publish. Cleanup
+    # cannot reap a reservation until both this lease and its reservation TTL
+    # expire. The heartbeat runs independently of blocking storage I/O.
+    knowledge_storage_writer_lease_seconds: int = int(
+        os.getenv("SMARTAI_KNOWLEDGE_STORAGE_WRITER_LEASE_SECONDS", "300")
+    )
+    knowledge_storage_writer_heartbeat_seconds: float = float(
+        os.getenv("SMARTAI_KNOWLEDGE_STORAGE_WRITER_HEARTBEAT_SECONDS", "30")
+    )
+    # task_only uploads have a bounded attach window. If the process dies after
+    # publication but before assignment attachment, the worker reclaims them.
+    knowledge_storage_unattached_ttl_seconds: int = int(
+        os.getenv("SMARTAI_KNOWLEDGE_STORAGE_UNATTACHED_TTL_SECONDS", "3600")
+    )
+    knowledge_cleanup_retry_base_seconds: int = int(
+        os.getenv("SMARTAI_KNOWLEDGE_CLEANUP_RETRY_BASE_SECONDS", "30")
+    )
+    knowledge_cleanup_retry_max_seconds: int = int(
+        os.getenv("SMARTAI_KNOWLEDGE_CLEANUP_RETRY_MAX_SECONDS", "3600")
+    )
+    knowledge_cleanup_claim_seconds: int = int(
+        os.getenv("SMARTAI_KNOWLEDGE_CLEANUP_CLAIM_SECONDS", "300")
+    )
+    knowledge_cleanup_poll_seconds: int = int(
+        os.getenv("SMARTAI_KNOWLEDGE_CLEANUP_POLL_SECONDS", "5")
+    )
+    knowledge_cleanup_batch_size: int = int(
+        os.getenv("SMARTAI_KNOWLEDGE_CLEANUP_BATCH_SIZE", "10")
+    )
+    # Expired-writer guards contain only opaque keys and are deliberately
+    # rechecked forever until that writer returns and acknowledges exact-key
+    # deletion. This closes crash-after-late-PUT orphan races.
+    knowledge_orphan_guard_recheck_seconds: int = int(
+        os.getenv("SMARTAI_KNOWLEDGE_ORPHAN_GUARD_RECHECK_SECONDS", "300")
+    )
+
     # Stable master key for encrypting user BYOK provider credentials. It must
     # come from the process environment/secret manager and never from source
     # control or the database.
@@ -289,6 +366,22 @@ class Settings(BaseSettings):
     refresh_cookie_name: str = "smartai_refresh"
     refresh_cookie_secure: bool = os.getenv("SMARTAI_REFRESH_COOKIE_SECURE", "false").lower() == "true"
     refresh_cookie_samesite: Literal["lax", "strict", "none"] = os.getenv("SMARTAI_REFRESH_COOKIE_SAMESITE", "lax")  # type: ignore[assignment]
+
+    # ─── Email verification registration ─────────────────────────────────────
+    smtp_host: str = ""
+    smtp_port: int = 587
+    smtp_security: Literal["starttls", "ssl"] = "starttls"
+    smtp_username: str = ""
+    smtp_password: str = ""
+    mail_from_address: str = ""
+    mail_from_name: str = "SmarTAI"
+    public_frontend_url: str = "http://localhost:5173"
+    allowed_email_domains: str = ""
+    smtp_timeout_seconds: float = 10.0
+    email_verification_expiry_seconds: int = 1800
+    email_verification_resend_seconds: int = 60
+    email_verification_hourly_email_limit: int = 5
+    email_verification_hourly_ip_limit: int = 20
 
     # If true, requests without a valid token are rejected by protected
     # endpoints. If false (dev default), missing tokens are silently mapped

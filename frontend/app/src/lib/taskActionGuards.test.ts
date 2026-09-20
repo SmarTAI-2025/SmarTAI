@@ -152,6 +152,57 @@ describe("question source recovery guidance", () => {
     expect(info.description).not.toContain("格式");
     expect(info.technicalDetails).toContainEqual({ label: "文件上限", value: "5 MB" });
   });
+
+  it("distinguishes owner source-storage quota from file and model limits", () => {
+    const info = classifyRecoverableError(
+      new APIError(413, "source_storage_quota_exceeded", {
+        detail: {
+          code: "source_storage_quota_exceeded",
+          used_bytes: 500 * 1024 * 1024,
+          limit_bytes: 512 * 1024 * 1024,
+          requested_bytes: 20 * 1024 * 1024,
+        },
+      }),
+      { locale: "zh-CN" },
+    );
+
+    expect(info.title).toBe("原文件空间已满");
+    expect(info.actionKind).toBe("reupload");
+    expect(info.actionLabel).toBe("选择更小文件");
+    expect(info.description).toContain("无需手动重试清理");
+    expect(info.title).not.toContain("模型");
+    expect(info.technicalDetails).toContainEqual({ label: "原文件额度", value: "512 MB" });
+  });
+
+  it("classifies knowledge storage quota before the generic provider quota branch", () => {
+    const info = classifyRecoverableError(
+      new APIError(413, "knowledge_storage_quota_exceeded", {
+        error: { code: "knowledge_storage_quota_exceeded" },
+      }),
+      { locale: "zh-CN" },
+    );
+
+    expect(info.title).toBe("知识库空间不足");
+    expect(info.actionKind).toBe("reupload");
+    expect(info.description).toContain("等待自动完成后再上传");
+    expect(info.title).not.toContain("模型");
+  });
+
+  it.each([
+    "question_preparation_source_unavailable",
+    "question_preparation_retry_source_unavailable",
+  ])("routes %s to selecting source material again", (code) => {
+    const info = classifyRecoverableError(
+      new APIError(409, code, {
+        detail: { code },
+      }),
+      { locale: "zh-CN", taskId: "task-1" },
+    );
+
+    expect(info.title).toBe("资料来源已变化");
+    expect(info.actionKind).toBe("reselect");
+    expect(info.actionLabel).toBe("重新选择资料");
+  });
 });
 
 describe("background task failure guidance", () => {
@@ -202,6 +253,19 @@ describe("background task failure guidance", () => {
     expect(info.description).toContain("VPN");
     expect(info.actionKind).toBe("retry");
     expect(info.tone).toBe("warning");
+  });
+
+  it("does not mislabel an uncertain question-generation request as OCR-only", () => {
+    const info = classifyRecoverableError("provider_submit_uncertain", {
+      locale: "zh-CN",
+      phase: "question_preparation",
+      jobId: "op-question-generation",
+    });
+
+    expect(info.title).toBe("模型请求状态无法确认");
+    expect(info.description).toContain("服务商");
+    expect(info.description).not.toContain("百度");
+    expect(info.actionKind).toBe("refresh");
   });
 
   it("routes an auth failure to BYOK with an access/quota explanation", () => {

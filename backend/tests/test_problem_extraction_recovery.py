@@ -9,8 +9,14 @@ from fastapi import UploadFile
 from starlette.datastructures import Headers
 
 from backend.api import tasks
-from backend.db import file_repository, source_outcome_repository, workflow_repository
-from backend.domain.errors import LeaseLost
+from backend.config import settings
+from backend.db import (
+    file_repository,
+    source_outcome_repository,
+    source_storage_repository,
+    workflow_repository,
+)
+from backend.domain.errors import LeaseLost, VersionConflict
 from backend.services import problem_extraction, task_facade
 from backend.services.workflow_worker import LeasedOperation
 from backend.storage import get_storage
@@ -19,6 +25,33 @@ from backend.tests.test_task_background_workflows import (
     _Registry,
     _seed_task,
 )
+
+
+def test_problem_replacement_group_is_server_owned_and_reload_stable():
+    first = source_storage_repository.replacement_claim_group_id(
+        assignment_id="task-1",
+        family="problem",
+        replacement_file_ids=("file-b", "file-a"),
+    )
+    reloaded = source_storage_repository.replacement_claim_group_id(
+        assignment_id="task-1",
+        family="problem",
+        replacement_file_ids=("file-a", "file-b"),
+    )
+
+    assert first == reloaded
+    assert first is not None and first.startswith("replace_")
+    assert len(first) <= 64
+    assert source_storage_repository.replacement_claim_group_id(
+        assignment_id="task-1",
+        family="problem",
+        replacement_file_ids=(),
+    ) is None
+    assert source_storage_repository.replacement_claim_group_id(
+        assignment_id="task-2",
+        family="problem",
+        replacement_file_ids=("file-a", "file-b"),
+    ) != first
 
 
 def test_problem_queue_persists_owner_scoped_source_before_dispatch():
@@ -94,6 +127,136 @@ def test_problem_queue_storage_failure_leaves_retryable_operation(monkeypatch):
     assert operation is not None
     assert operation.status == "error"
     assert operation.error_code == "problem_extraction_failed"
+
+
+def test_failed_problem_generation_retries_at_quota_without_replace_confirmation(
+    monkeypatch,
+):
+    owner_id, task_id = _seed_task()
+    content = b"equal-size"
+    monkeypatch.setattr(settings, "unfinished_source_quota_bytes", len(content))
+    first_request = {
+        "task_id": task_id,
+        "owner_id": owner_id,
+        "filename": "questions.txt",
+        "content": b"old-source",
+        "content_type": "text/plain",
+        "registry": _Registry(),
+        "replace_confirmed": False,
+    }
+    first = task_facade.queue_task_problem_extraction(**first_request)
+    first_operation = workflow_repository.get_operation(
+        first["job_id"], owner_id=owner_id
+    )
+    first_source = source_outcome_repository.list_sources(
+        operation_id=first_operation.id,
+        owner_id=owner_id,
+        attempt=first_operation.attempt,
+    )[0]
+    assert task_facade._fail_operation(
+        task_id,
+        owner_id,
+        first_operation.id,
+        first_operation.attempt,
+        "problem_extraction_failed",
+    ) is True
+
+    retry_request = {**first_request, "content": b"new-source"}
+    retried = task_facade.queue_task_problem_extraction(**retry_request)
+
+    assert retried["status"] == "started"
+    assert retried["job_id"] != first["job_id"]
+    retired = file_repository.get_file(
+        file_id=first_source.stored_file_id, owner_id=owner_id
+    )
+    assert retired.availability_status == "cleanup_pending"
+    assert retired.availability_reason == "replaced"
+    # Physical deletion has not run yet, so both generations remain charged.
+    assert source_storage_repository.source_quota_usage(owner_id).used_bytes == (
+        2 * len(content)
+    )
+
+
+def test_direct_problem_retry_with_changed_options_reuses_generation_claim(
+    monkeypatch,
+):
+    owner_id, task_id = _seed_task()
+    old_content = b"old-source"
+    new_content = b"new-source"
+    monkeypatch.setattr(
+        settings, "unfinished_source_quota_bytes", len(old_content)
+    )
+    old = task_facade.queue_task_problem_extraction(
+        task_id=task_id,
+        owner_id=owner_id,
+        filename="questions.txt",
+        content=old_content,
+        content_type="text/plain",
+        registry=_Registry(),
+    )
+    old_operation = workflow_repository.get_operation(
+        old["job_id"], owner_id=owner_id
+    )
+    old_source = source_outcome_repository.list_sources(
+        operation_id=old_operation.id,
+        owner_id=owner_id,
+        attempt=old_operation.attempt,
+    )[0]
+    assert task_facade._fail_operation(
+        task_id,
+        owner_id,
+        old_operation.id,
+        old_operation.attempt,
+        "problem_extraction_failed",
+    ) is True
+
+    real_activate = task_facade.activate_workflow_operation_atomic
+
+    def stale_once(**_kwargs):
+        raise VersionConflict("stale", code="stale_revision")
+
+    monkeypatch.setattr(
+        task_facade, "activate_workflow_operation_atomic", stale_once
+    )
+    with pytest.raises(VersionConflict):
+        task_facade.queue_task_problem_extraction(
+            task_id=task_id,
+            owner_id=owner_id,
+            filename="questions.txt",
+            content=new_content,
+            content_type="text/plain",
+            registry=_Registry(),
+            extraction_options={"language": "en"},
+        )
+
+    staged = next(
+        item
+        for item in file_repository.list_files(
+            owner_id=owner_id, assignment_id=task_id
+        )
+        if item.sha256 == task_facade.hashlib.sha256(new_content).hexdigest()
+    )
+    assert staged.replacement_group_id is not None
+
+    monkeypatch.setattr(
+        task_facade, "activate_workflow_operation_atomic", real_activate
+    )
+    retried = task_facade.queue_task_problem_extraction(
+        task_id=task_id,
+        owner_id=owner_id,
+        filename="questions.txt",
+        content=new_content,
+        content_type="text/plain",
+        registry=_Registry(),
+        extraction_options={"language": "zh"},
+    )
+
+    assert retried["status"] == "started"
+    retired = file_repository.get_file(
+        file_id=old_source.stored_file_id, owner_id=owner_id
+    )
+    assert retired.availability_status == "cleanup_pending"
+    assert retired.availability_reason == "replaced"
 
 
 def test_expired_preparing_problem_operation_is_reclaimed():

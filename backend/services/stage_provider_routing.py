@@ -8,15 +8,21 @@ task workflow, or credential fallback.
 """
 from __future__ import annotations
 
+import hashlib
+import json
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Literal
 
+from sqlalchemy import select
+
+from backend.db.models import OCRProviderCredentialRecord
 from backend.db.ocr_provider_repository import (
     BAIDU_UNLIMITED_OCR_PROVIDER_TYPE,
     get_baidu_unlimited_ocr_credential_metadata,
     get_current_baidu_unlimited_ocr_credential_metadata,
 )
+from backend.db.session import session_scope
 from backend.domain.errors import ValidationError
 from backend.llm.registry import resolve_owner_default_provider_id
 from backend.services.baidu_unlimited_ocr_factory import (
@@ -40,6 +46,113 @@ class StageProviderRoute:
     @property
     def is_baidu_ocr(self) -> bool:
         return self.kind == "ocr" and self.credential_id is not None
+
+
+def stage_provider_configuration_fingerprint(
+    *,
+    owner_id: str,
+    route: StageProviderRoute,
+    registry,
+) -> str:
+    """Hash the exact invocation route without persisting plaintext secrets."""
+
+    if route.is_baidu_ocr:
+        assert route.credential_id is not None
+        with session_scope() as session:
+            record = session.scalar(
+                select(OCRProviderCredentialRecord).where(
+                    OCRProviderCredentialRecord.id == route.credential_id,
+                    OCRProviderCredentialRecord.owner_id == owner_id,
+                    OCRProviderCredentialRecord.provider_type
+                    == BAIDU_UNLIMITED_OCR_PROVIDER_TYPE,
+                )
+            )
+            if record is None:
+                raise ValidationError(
+                    "The selected OCR credential is unavailable.",
+                    code="ocr_credential_not_found",
+                )
+            row = {
+                "route_id": route.route_id,
+                "provider_type": record.provider_type,
+                "api_key_version": record.api_key_version,
+                "secret_key_version": record.secret_key_version,
+                "api_key_secret_digest": hashlib.sha256(
+                    (
+                        f"{record.encrypted_api_key}:"
+                        f"{record.api_key_nonce}"
+                    ).encode("utf-8")
+                ).hexdigest(),
+                "secret_key_secret_digest": hashlib.sha256(
+                    (
+                        f"{record.encrypted_secret_key}:"
+                        f"{record.secret_key_nonce}"
+                    ).encode("utf-8")
+                ).hexdigest(),
+                "scope": "owner_ocr",
+            }
+    else:
+        provider = route.provider
+        config = getattr(provider, "config", None)
+        if config is not None and callable(getattr(config, "model_dump", None)):
+            config_row = config.model_dump(mode="json")
+            api_key = str(config_row.pop("api_key", ""))
+            row = {
+                "route_id": route.route_id,
+                "provider_type": config_row.get("provider_type"),
+                "model": config_row.get("model"),
+                "base_url": config_row.get("base_url"),
+                "endpoint_identity": config_row.get("endpoint_identity"),
+                "wire_protocol": config_row.get("wire_protocol"),
+                "enabled": config_row.get("enabled"),
+                "max_concurrent": config_row.get("max_concurrent"),
+                "rpm": config_row.get("rpm"),
+                "secret_digest": hashlib.sha256(
+                    api_key.encode("utf-8")
+                ).hexdigest(),
+                "scope": "llm",
+            }
+        else:
+            # Deterministic injected providers used by tests and local E2E do
+            # not carry a ProviderConfig. Their redacted registry row remains
+            # sufficient to detect route/model changes without storing data.
+            config_rows = [
+                item
+                for item in registry.list_configs()
+                if str(item.get("provider_id")) == route.route_id
+                and item.get("enabled")
+            ]
+            if len(config_rows) != 1 or provider is None:
+                raise ValidationError(
+                    "The selected recognition provider is not enabled.",
+                    code="recognition_provider_not_enabled",
+                )
+            item = config_rows[0]
+            row = {
+                key: item.get(key)
+                for key in (
+                    "provider_id",
+                    "provider_type",
+                    "model",
+                    "base_url",
+                    "endpoint_identity",
+                    "wire_protocol",
+                    "enabled",
+                    "max_concurrent",
+                    "rpm",
+                    "scope",
+                    "is_shared",
+                    "supports_vision",
+                )
+            }
+    return hashlib.sha256(
+        json.dumps(
+            row,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
 
 
 def baidu_ocr_route_id(credential_id: str) -> str:

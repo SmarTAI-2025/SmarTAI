@@ -213,6 +213,12 @@ def create_app() -> FastAPI:
     async def _start_workflow_worker():
         import asyncio as _asyncio
         from backend.services.workflow_worker import WorkflowWorker
+        from backend.services.source_cleanup import (
+            run_source_cleanup,
+            run_source_replacement_cleanup,
+            run_source_reservation_cleanup,
+        )
+        from backend.services.task_deletion import run_task_deletion
         from backend.services.task_facade import (
             run_durable_problem_extraction,
             run_durable_submission_recognition,
@@ -220,6 +226,7 @@ def create_app() -> FastAPI:
         from backend.api.task_preparation import (
             run_durable_ai_completion,
             run_durable_material_import,
+            run_durable_question_preparation,
         )
 
         worker = WorkflowWorker(handlers={
@@ -227,6 +234,11 @@ def create_app() -> FastAPI:
             "submission_recognition": run_durable_submission_recognition,
             "material_import": run_durable_material_import,
             "ai_completion": run_durable_ai_completion,
+            "question_preparation": run_durable_question_preparation,
+            "source_cleanup": run_source_cleanup,
+            "source_replacement_cleanup": run_source_replacement_cleanup,
+            "source_reservation_cleanup": run_source_reservation_cleanup,
+            "task_delete": run_task_deletion,
         })
         _workflow_worker["worker"] = worker
         _workflow_worker["task"] = _asyncio.create_task(worker.run_forever())
@@ -249,6 +261,44 @@ def create_app() -> FastAPI:
                 logger.exception("workflow worker loop exited during shutdown")
         if worker is not None:
             await worker.shutdown()
+
+    # ─── Independent knowledge-storage cleanup worker ─────────────────
+    # Knowledge objects do not use assignment workflow operations. Their own
+    # durable ledger retains quota and an exact object key across every retry.
+    _knowledge_storage_worker: dict[str, object] = {
+        "worker": None,
+        "task": None,
+    }
+
+    @app.on_event("startup")
+    async def _start_knowledge_storage_worker():
+        import asyncio as _asyncio
+        from backend.services.knowledge_storage import KnowledgeStorageWorker
+
+        worker = KnowledgeStorageWorker()
+        _knowledge_storage_worker["worker"] = worker
+        _knowledge_storage_worker["task"] = _asyncio.create_task(
+            worker.run_forever()
+        )
+
+    @app.on_event("shutdown")
+    async def _stop_knowledge_storage_worker():
+        import asyncio as _asyncio
+
+        worker = _knowledge_storage_worker.get("worker")
+        task = _knowledge_storage_worker.get("task")
+        if worker is not None:
+            worker.stop()
+        if task is not None:
+            task.cancel()
+            try:
+                await task
+            except _asyncio.CancelledError:
+                pass
+            except Exception:
+                logger.exception(
+                    "knowledge storage worker exited during shutdown"
+                )
 
     return app
 

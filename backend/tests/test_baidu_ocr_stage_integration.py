@@ -225,9 +225,25 @@ async def test_question_ocr_success_reuses_artifact_and_freezes_three_stage_rout
         registry=registry,
     )
     assert started["recognition_provider_id"] == route_id
-    assert len(background.calls) == 1
-    function, args, kwargs = background.calls[0]
-    await function(*args, **kwargs)
+    assert background.calls == []
+    monkeypatch.setattr(
+        task_facade,
+        "_registry_for_owner",
+        lambda _owner: registry,
+    )
+    claimed_question_job = workflow_repository.claim_operation(
+        started["job_id"],
+        owner_id=owner_id,
+        worker_id="question-stage-route-worker",
+        lease_seconds=60,
+    )
+    await task_preparation.run_durable_question_preparation(
+        LeasedOperation(
+            claimed_question_job,
+            worker_id="question-stage-route-worker",
+            lease_seconds=60,
+        )
+    )
 
     question_job = workflow_repository.get_operation(
         started["job_id"],

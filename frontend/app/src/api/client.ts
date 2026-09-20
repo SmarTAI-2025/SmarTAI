@@ -44,16 +44,18 @@ export const apiClient = axios.create({
   },
 });
 
-interface RefreshableRequestConfig extends AxiosRequestConfig {
+export interface AuthAwareRequestConfig extends AxiosRequestConfig {
   _retry?: boolean;
   _skipAuthRefresh?: boolean;
+  _skipAuthHeader?: boolean;
 }
 
 let refreshPromise: Promise<string> | null = null;
 
 apiClient.interceptors.request.use((config) => {
+  const authConfig = config as AuthAwareRequestConfig;
   const token = getAuthToken();
-  if (token) {
+  if (token && !authConfig._skipAuthHeader) {
     config.headers.Authorization = `Bearer ${token}`;
   }
   return config;
@@ -62,14 +64,14 @@ apiClient.interceptors.request.use((config) => {
 apiClient.interceptors.response.use(
   (response) => response,
   async (error: AxiosError) => {
-    const config = error.config as RefreshableRequestConfig | undefined;
+    const config = error.config as AuthAwareRequestConfig | undefined;
     const path = config?.url ?? "";
     if (error.response?.status !== 401 || !config || config._retry || config._skipAuthRefresh || path.includes("/auth/login") || path.includes("/auth/refresh")) {
       return Promise.reject(error);
     }
     config._retry = true;
     refreshPromise ??= apiClient
-      .post<{ token: string }>("/auth/refresh", {}, { _skipAuthRefresh: true } as RefreshableRequestConfig)
+      .post<{ token: string }>("/auth/refresh", {}, { _skipAuthRefresh: true } as AuthAwareRequestConfig)
       .then((response) => {
         setAuthToken(response.data.token);
         return response.data.token;
@@ -153,8 +155,49 @@ export async function getBlob(path: string, config?: AxiosRequestConfig): Promis
     const response = await apiClient.get<Blob>(path, { ...config, responseType: "blob" });
     return response.data;
   } catch (error) {
-    throw normalizeAPIError(error);
+    throw await normalizeBlobAPIError(error);
   }
+}
+
+async function normalizeBlobAPIError(error: unknown): Promise<APIError> {
+  if (!axios.isAxiosError(error) || !(error.response?.data instanceof Blob)) {
+    return normalizeAPIError(error);
+  }
+  const blob = error.response.data;
+  let payload: APIErrorPayload | undefined;
+  // Axios returns JSON error responses as Blob when responseType is "blob".
+  // Decode only a small valid JSON body so stable lifecycle codes survive a
+  // catalog/content race without treating arbitrary binary data as an error
+  // envelope or exposing it as UI copy.
+  if (blob.size <= 64 * 1024) {
+    try {
+      const body = await readBlobText(blob);
+      const parsed: unknown = JSON.parse(body);
+      payload = normalizePayload(parsed);
+    } catch {
+      payload = undefined;
+    }
+  }
+  const status = error.response.status ?? 0;
+  const message = responseMessage(status, payload, error.response.statusText);
+  const retryAfterSeconds = parseRetryAfter(
+    retryAfterHeader(error.response.headers),
+    payload,
+  );
+  return new APIError(status, message, payload, retryAfterSeconds);
+}
+
+async function readBlobText(blob: Blob): Promise<string> {
+  if (typeof blob.text === "function") return blob.text();
+  if (typeof FileReader !== "undefined") {
+    return new Promise<string>((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onerror = () => reject(reader.error ?? new Error("blob_read_failed"));
+      reader.onload = () => resolve(typeof reader.result === "string" ? reader.result : "");
+      reader.readAsText(blob);
+    });
+  }
+  throw new Error("blob_text_unavailable");
 }
 
 export async function postJSON<TResponse, TBody = unknown>(
@@ -244,11 +287,24 @@ function normalizeAxiosError(error: AxiosError): APIError {
     ? responseMessage(status, payload, error.response.statusText)
     : networkMessage(error);
   const retryAfterSeconds = parseRetryAfter(
-    error.response?.headers?.["retry-after"],
+    retryAfterHeader(error.response?.headers),
     payload,
   );
 
   return new APIError(status, message, payload, retryAfterSeconds);
+}
+
+function retryAfterHeader(headers: unknown): unknown {
+  if (!headers || typeof headers !== "object") return undefined;
+  const get = (headers as { get?: unknown }).get;
+  if (typeof get === "function") {
+    const value = get.call(headers, "retry-after");
+    if (value !== null && value !== undefined) return value;
+  }
+  for (const [key, value] of Object.entries(headers)) {
+    if (key.toLowerCase() === "retry-after") return value;
+  }
+  return undefined;
 }
 
 function normalizePayload(data: unknown): APIErrorPayload | undefined {

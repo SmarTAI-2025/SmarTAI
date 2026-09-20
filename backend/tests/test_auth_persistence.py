@@ -1,9 +1,17 @@
 from fastapi.testclient import TestClient
 from sqlalchemy import select
+import bcrypt
 import hashlib
+import pytest
 
-from backend.auth import hash_password
-from backend.db.models import RefreshSessionRecord
+from backend.auth import hash_password, verify_password
+from backend.db.auth_repository import (
+    AuthRepositoryError,
+    create_invite,
+    register_with_invite,
+    register_without_invite,
+)
+from backend.db.models import InviteCodeRecord, RefreshSessionRecord, UserRecord
 from backend.db.session import session_scope
 from backend.main import app
 from backend.models import User
@@ -27,11 +35,25 @@ def test_admin_invite_registration_and_one_time_consumption():
     assert invite.status_code == 200
     code = invite.json()["invite_code"]
 
-    registered = client.post("/auth/register", json={"username": "new-teacher", "password": "secret-pass", "invite_code": code})
-    assert registered.status_code == 200
+    registered = register_with_invite(
+        username="new-teacher",
+        email="new-teacher@example.edu",
+        role="teacher",
+        password_hash=hash_password("secret-pass"),
+        invite_code=code,
+    )
+    assert registered.username == "new-teacher"
+    login = client.post("/auth/login", json={"username": "new-teacher", "password": "secret-pass"})
+    assert login.status_code == 200
     assert client.cookies.get("smartai_refresh")
-    repeated = client.post("/auth/register", json={"username": "other", "password": "secret-pass", "invite_code": code})
-    assert repeated.status_code == 400
+    with pytest.raises(AuthRepositoryError, match="Invalid or expired invite code"):
+        register_with_invite(
+            username="other",
+            email="other@example.edu",
+            role="teacher",
+            password_hash=hash_password("secret-pass"),
+            invite_code=code,
+        )
 
 
 def test_refresh_rotates_cookie_and_logout_revokes_it():
@@ -61,7 +83,7 @@ def test_expired_refresh_session_is_rejected():
     assert client.post("/auth/refresh").status_code == 401
 
 
-def test_open_registration_without_invite_creates_teacher(monkeypatch):
+def test_public_registration_without_invite_requires_email_verification(monkeypatch):
     monkeypatch.setattr(settings, "registration_closed", False)
     client = TestClient(app)
 
@@ -71,12 +93,11 @@ def test_open_registration_without_invite_creates_teacher(monkeypatch):
         "role": "teacher",
     })
 
-    assert response.status_code == 200, response.text
-    assert response.json()["user"]["role"] == "teacher"
-    assert client.cookies.get("smartai_refresh")
+    assert response.status_code == 404, response.text
+    assert client.cookies.get("smartai_refresh") is None
 
 
-def test_open_registration_allows_student_role(monkeypatch):
+def test_public_registration_cannot_select_student_role(monkeypatch):
     monkeypatch.setattr(settings, "registration_closed", False)
     client = TestClient(app)
 
@@ -86,11 +107,10 @@ def test_open_registration_allows_student_role(monkeypatch):
         "role": "student",
     })
 
-    assert response.status_code == 200, response.text
-    assert response.json()["user"]["role"] == "student"
+    assert response.status_code == 404, response.text
 
 
-def test_open_registration_rejects_admin_role(monkeypatch):
+def test_public_registration_cannot_select_admin_role(monkeypatch):
     monkeypatch.setattr(settings, "registration_closed", False)
     client = TestClient(app)
 
@@ -100,8 +120,7 @@ def test_open_registration_rejects_admin_role(monkeypatch):
         "role": "admin",
     })
 
-    assert response.status_code == 400
-    assert response.json()["detail"] == "Invalid registration role"
+    assert response.status_code == 404
 
 
 def test_closed_registration_without_invite_is_rejected(monkeypatch):
@@ -113,8 +132,7 @@ def test_closed_registration_without_invite_is_rejected(monkeypatch):
         "password": "secret-pass",
     })
 
-    assert response.status_code == 403
-    assert response.json()["detail"] == "Invitation code required"
+    assert response.status_code == 404
 
 
 def test_demo_admin_token_is_rejected_and_not_persisted_by_default(monkeypatch):
@@ -182,3 +200,66 @@ def test_real_jwt_authentication_is_unchanged(monkeypatch):
 
     assert response.status_code == 200
     assert response.json()["id"] == "jwt-teacher"
+
+
+def test_password_hash_supports_128_unicode_chars_and_legacy_bcrypt():
+    long_password = "密" * 128
+    password_hash = hash_password(long_password)
+
+    assert verify_password(long_password, password_hash)
+    assert not verify_password(("密" * 127) + "错", password_hash)
+
+    legacy_hash = bcrypt.hashpw(b"legacy-password", bcrypt.gensalt()).decode("utf-8")
+    assert verify_password("legacy-password", legacy_hash)
+    assert not verify_password("wrong-password", legacy_hash)
+
+
+def test_login_accepts_128_character_unicode_password():
+    password = "教" * 128
+    get_user_store()["unicode-password"] = User(
+        id="unicode-password",
+        username="unicode-password",
+        role="teacher",
+        password_hash=hash_password(password),
+    )
+
+    response = TestClient(app).post(
+        "/auth/login",
+        json={"username": "unicode-password", "password": password},
+    )
+
+    assert response.status_code == 200, response.text
+
+
+def test_repository_canonicalizes_email_and_blocks_case_variant_duplicate():
+    first = register_without_invite(
+        username="canonical-one",
+        email="  Teacher@Example.EDU.  ",
+        password_hash=hash_password("secret-pass"),
+    )
+    assert first.email == "teacher@example.edu"
+    with session_scope() as session:
+        assert session.get(UserRecord, first.id).email == "teacher@example.edu"
+
+    with pytest.raises(AuthRepositoryError, match="Email already exists"):
+        register_without_invite(
+            username="canonical-two",
+            email="TEACHER@example.edu",
+            password_hash=hash_password("secret-pass"),
+        )
+
+
+def test_invite_email_is_canonicalized_before_persistence():
+    _seed_admin()
+    invite = create_invite(
+        invited_by="admin-1",
+        email="  Invitee@Example.EDU ",
+        role="teacher",
+        course_id=None,
+        expires_in_hours=24,
+    )
+
+    with session_scope() as session:
+        stored = session.get(InviteCodeRecord, invite.code)
+        assert stored is not None
+        assert stored.email == "invitee@example.edu"

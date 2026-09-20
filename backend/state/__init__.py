@@ -9,6 +9,7 @@ membership is read only from ``course_enrollments``, so there is no
 from __future__ import annotations
 
 import logging
+import time
 from typing import Optional
 
 from sqlalchemy import select
@@ -29,6 +30,7 @@ def _user_from_record(record: UserRecord) -> User:
         password_hash=record.password_hash,
         created_at=record.created_at,
         is_active=record.is_active,
+        auth_invalid_before=record.auth_invalid_before,
     )
 
 
@@ -59,6 +61,7 @@ class _UserStore:
                 is_active=user.is_active,
                 created_at=user.created_at,
                 updated_at=now,
+                auth_invalid_before=user.auth_invalid_before,
             )
             if record is None:
                 session.add(UserRecord(**values))
@@ -67,12 +70,21 @@ class _UserStore:
                     setattr(record, k, v)
 
     def __delitem__(self, key: str) -> None:
-        from sqlalchemy import delete
-
         with session_scope() as session:
-            result = session.execute(delete(UserRecord).where(UserRecord.id == key))
-            if result.rowcount == 0:
+            record = session.scalar(
+                select(UserRecord)
+                .where(UserRecord.id == key)
+                .with_for_update()
+            )
+            if record is None:
                 raise KeyError(key)
+            # Never cascade-delete retained knowledge or durable file tracking
+            # through this legacy mapping facade. Public deletion follows the
+            # same deactivation contract.
+            now = time.time()
+            record.is_active = False
+            record.auth_invalid_before = now
+            record.updated_at = now
 
     def __contains__(self, key: str) -> bool:
         with session_scope() as session:
