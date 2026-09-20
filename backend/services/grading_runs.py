@@ -246,6 +246,9 @@ async def process_run(*, run_id: str, worker_id: str, registry=None, language: s
     try:
         grading_repository.claim_lease(run_id=run_id, worker_id=worker_id, lease_seconds=settings.grading_lease_seconds)
     except DomainError:
+        # Not this worker's run — drop any stale in-process reporter for it so
+        # the progress page falls back to the durable projection.
+        remove_reporter(run_id)
         return  # someone else owns it or it is terminal
     run = grading_repository.get_run(run_id=run_id)
     heartbeat_task: Optional[asyncio.Task] = None
@@ -325,6 +328,11 @@ async def process_run(*, run_id: str, worker_id: str, registry=None, language: s
             run_id=run_id, level="info", message="grading_started",
             payload={"students": len(frozen_revisions), "questions": len(questions)},
         )
+        # A reclaimed/re-run pass must start from a clean counter. The reporter
+        # is a process-local singleton keyed by run_id; without this reset a
+        # second pass over the same run would keep accumulating completed_units
+        # past total_students*total_questions (progress bar overshoots 100%).
+        remove_reporter(run_id)
         reporter = get_or_create_reporter(
             run_id,
             total_students=len(frozen_revisions),
