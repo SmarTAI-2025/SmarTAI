@@ -72,6 +72,7 @@ export interface HistoryInterpretAmbiguity {
 }
 
 export interface HistoryInterpretation {
+  execution?: import("./analytics").GroundedAskExecution;
   filters: {
     q?: string;
     semester_id?: string;
