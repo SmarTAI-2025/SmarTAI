@@ -8,8 +8,9 @@ import secrets
 import time
 import uuid
 from contextlib import contextmanager
+from functools import partial
 from threading import Lock
-from typing import Iterator
+from typing import Callable, Iterator
 
 from sqlalchemy import and_, delete, func, or_, select, text
 
@@ -196,8 +197,16 @@ def _activate_delivered_request(*, user_id: str, request_id: str) -> None:
             older.superseded_at = activated_at
 
 
-def request_password_reset(*, email: str, source_ip: str | None, sender: EmailSender | None = None) -> dict[str, int | str]:
-    """Request a reset without disclosing whether an account is present."""
+def request_password_reset(
+    *, email: str, source_ip: str | None, sender: EmailSender | None = None,
+    delivery_scheduler: Callable[[Callable[[], None]], None] | None = None,
+) -> dict[str, int | str]:
+    """Reserve the anonymous budget before deferring account lookup and SMTP.
+
+    HTTP callers supply a response-background scheduler for every accepted
+    address, known or unknown. The compatibility service path remains
+    synchronous when no scheduler is provided (for direct callers and tests).
+    """
     try:
         normalized_email = normalize_email(email)
     except ValueError:
@@ -210,6 +219,7 @@ def request_password_reset(*, email: str, source_ip: str | None, sender: EmailSe
             normalized_email=normalized_email,
             source_ip=source_ip,
             sender=sender,
+            delivery_scheduler=delivery_scheduler,
         )
 
 
@@ -218,10 +228,10 @@ def _request_password_reset_locked(
     normalized_email: str,
     source_ip: str | None,
     sender: EmailSender | None,
+    delivery_scheduler: Callable[[Callable[[], None]], None] | None = None,
 ) -> dict[str, int | str]:
     sender = sender or get_email_sender()
     now = time.time()
-    raw_token = generate_reset_token()
 
     email_digest = _rate_limit_digest("email", normalized_email)
     source_ip_digest = (
@@ -302,6 +312,36 @@ def _request_password_reset_locked(
             retry_after=max(retry_candidates),
         )
 
+    delivery = partial(
+        _deliver_password_reset,
+        normalized_email=normalized_email,
+        source_ip=source_ip,
+        sender=sender,
+        requested_at=now,
+    )
+    if delivery_scheduler is None:
+        delivery()
+    else:
+        # Do not look up the account before this common scheduling boundary.
+        # Otherwise SMTP (or a known-account-only scheduling path) can leak
+        # account existence through the anonymous HTTP response latency.
+        delivery_scheduler(delivery)
+    return _neutral_response()
+
+
+def _deliver_password_reset(
+    *, normalized_email: str, source_ip: str | None,
+    sender: EmailSender, requested_at: float,
+) -> None:
+    """Best-effort delivery after response; never a claim of durable mail.
+
+    Existing SMTP timeout and the ASGI thread-pool limiter bound active sends.
+    A process exit before delivery may lose this attempt; the user can request
+    another link after cooldown. Persisted token states and newest-successful-
+    wins semantics are unchanged. No separate queue or migration is introduced.
+    """
+    now = requested_at
+    raw_token = generate_reset_token()
     request_id = uuid.uuid4().hex
     user_id: str | None = None
     username: str | None = None
@@ -320,8 +360,12 @@ def _request_password_reset_locked(
                 )
                 .with_for_update()
             )
-            if user is None:
-                return _neutral_response()
+            if (
+                user is None
+                or now + settings.email_verification_expiry_seconds <= time.time()
+                or (user.auth_invalid_before is not None and now <= user.auth_invalid_before)
+            ):
+                return
             user_id = user.id
             username = user.username
 
@@ -358,7 +402,7 @@ def _request_password_reset_locked(
                 if failed is not None and failed.delivery_status == "pending":
                     failed.delivery_status = "failed"
                     failed.last_delivery_error_code = "password_reset_unavailable"
-            return _neutral_response()
+            return
 
         # Phase 2: only after SMTP returns successfully do we activate the new
         # token and supersede older usable tokens in one transaction. If this
@@ -376,8 +420,8 @@ def _request_password_reset_locked(
             request_id,
             delivery_stage,
         )
-        return _neutral_response()
-    return _neutral_response()
+        return
+    return
 
 
 def confirm_password_reset(token: str, new_password: str) -> dict[str, str]:
