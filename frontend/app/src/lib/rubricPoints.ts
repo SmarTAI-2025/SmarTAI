@@ -89,10 +89,17 @@ export function summarizeRubricPoints(
     const segment = criterion.slice(occurrence.end, segmentEnd);
     const componentScores: number[] = [];
     const pointPattern = new RegExp(POINT_PATTERN_SOURCE, "giu");
-    for (const pointMatch of segment.matchAll(pointPattern)) {
+    let pointMatches = [...segment.matchAll(pointPattern)];
+    // A declared total followed by included components is counted only once.
+    const firstPoint = pointMatches[0];
+    const includedBreakdown = Boolean(firstPoint && /^\s*[,，:：;；(（-]*\s*(?:其中|包括|包含|含|分解为|分配为|including\b|comprising\b|consisting\s+of\b|of\s+which\b)/iu.test(
+      segment.slice((firstPoint.index ?? 0) + firstPoint[0].length),
+    ));
+    if (includedBreakdown) pointMatches = pointMatches.slice(0, 1);
+    for (const pointMatch of pointMatches) {
       const pointStart = pointMatch.index ?? 0;
       const prefix = segment.slice(Math.max(0, pointStart - 20), pointStart);
-      if (/(?:总分|合计|total)\s*[:：=为-]?\s*$/iu.test(prefix)) continue;
+      if (!includedBreakdown && /(?:总分|合计|total)\s*[:：=为-]?\s*$/iu.test(prefix)) continue;
       // Keep deduction semantics aligned with backend question_structure.py.
       if (/(?:扣(?:除)?|减(?:去|少)?|罚|deduct(?:ion)?|subtract|minus|penalty(?:\s+of)?|lose|loss\s+of|lost)\s*(?:最多|至多|up\s+to|at\s+most)?\s*[:：=-]?\s*$/iu.test(prefix)) continue;
       const parsed = parseScoreHundredths(pointMatch[1]);
