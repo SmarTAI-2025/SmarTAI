@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useState } from "react";
+import { compareValues } from "@/lib/sortValues";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { toast } from "sonner";
 import { normalizeAPIError } from "@/api/client";
@@ -37,40 +38,56 @@ export function HistoryPage() {
   const historyQuery = useTaskHistory(query);
   const tagsQuery = useTags();
   const deleteTask = useDeleteTask();
-  const interpretQuery = useInterpretTaskHistoryQuery();
+  const conversation = useRef<string[]>([]);
+  const interpretQuery = useInterpretTaskHistoryQuery(() => conversation.current);
+  const [manualSort, setManualSort] = useState<TaskHistoryQuery["sort"] | null>(null);
   const [interpretation, setInterpretation] = useState<HistoryInterpretation | null>(null);
   const [preSmartQuery, setPreSmartQuery] = useState<TaskHistoryQuery | null>(null);
   const [smartError, setSmartError] = useState(false);
+  const interpretationRequest = useRef(0);
+  useEffect(() => () => { interpretationRequest.current += 1; }, []);
+  useEffect(() => { interpretationRequest.current += 1; }, [searchParams]);
   const [deletingTaskId, setDeletingTaskId] = useState<string | null>(null);
 
   const data = historyQuery.data;
   const facets = data?.available_facets ?? data?.facets ?? EMPTY_FACETS;
   const tags = tagsQuery.data ?? facets.tags;
-  const total = data?.total ?? 0;
-  const tasks = data?.items ?? [];
+  const selectedTasks = interpretation?.execution?.selection?.kind === "tasks" ? interpretation.execution.tasks : undefined;
+  const orderedTasks = useMemo(() => {
+    if (!selectedTasks || !manualSort) return selectedTasks;
+    const value = (task: TaskLite) => manualSort.startsWith("name") ? task.name : manualSort.startsWith("stage") ? task.status : manualSort.startsWith("created") ? task.created_at : task.updated_at;
+    return [...selectedTasks].sort((a, b) => compareValues(value(a), value(b), manualSort.endsWith("desc") ? "desc" : "asc"));
+  }, [selectedTasks, manualSort]);
+  const total = orderedTasks?.length ?? data?.total ?? 0;
+  const tasks = orderedTasks ? orderedTasks.slice((query.page - 1) * query.page_size, query.page * query.page_size) : data?.items ?? [];
   const hasFilters = countHistoryFilters(query) > 0;
   const errorMessage = historyQuery.error ? normalizeAPIError(historyQuery.error).message : null;
 
   useEffect(() => {
-    if (!data || data.total <= 0) return;
-    const lastPage = Math.max(1, Math.ceil(data.total / query.page_size));
+    if (!data || total <= 0) return;
+    const lastPage = Math.max(1, Math.ceil(total / query.page_size));
     if (query.page > lastPage) {
       setSearchParams(serializeHistoryQuery(patchHistoryQuery(query, { page: lastPage }, { keepPage: true })), { replace: true });
     }
-  }, [data, query, setSearchParams]);
+  }, [data, total, query, setSearchParams]);
 
   function writeQuery(next: TaskHistoryQuery) {
     setSearchParams(serializeHistoryQuery(next), { replace: true });
   }
 
   function handleChange(patch: Partial<TaskHistoryQuery>, keepPage = false) {
-    setInterpretation(null);
-    setPreSmartQuery(null);
+    interpretationRequest.current += 1;
+    if (!interpretation?.execution || !(patch.sort || patch.page || patch.page_size)) {
+      setInterpretation(null); setPreSmartQuery(null);
+    }
+    if (patch.sort) setManualSort(patch.sort);
     setSmartError(false);
     writeQuery(patchHistoryQuery(query, patch, { keepPage }));
   }
 
   function clearAll() {
+    conversation.current = []; setManualSort(null);
+    interpretationRequest.current += 1;
     setInterpretation(null);
     setPreSmartQuery(null);
     setSmartError(false);
@@ -78,20 +95,39 @@ export function HistoryPage() {
     writeQuery({ ...DEFAULT_HISTORY_QUERY, page_size: query.page_size });
   }
 
+  function cancelInterpretation() {
+    interpretationRequest.current += 1;
+    interpretQuery.reset();
+    setSmartError(false);
+  }
+
   async function handleInterpret(value: string) {
+    if (interpretQuery.isPending || !value.trim()) return;
+    const request = ++interpretationRequest.current;
     setSmartError(false);
     try {
       const result = await interpretQuery.mutateAsync(value);
+      if (request !== interpretationRequest.current) return;
+      if (result.ambiguities.length) {
+        setInterpretation({ ...result, conditions: [] });
+        return;
+      }
       setPreSmartQuery(query);
-      setInterpretation(result);
-      writeQuery(applyHistoryInterpretation(query, result));
+      setInterpretation(result); setManualSort(null);
+      if (result.execution) {
+        if (result.execution.recognized) conversation.current = [...conversation.current, value].slice(-4);
+        writeQuery({ ...DEFAULT_HISTORY_QUERY, page_size: query.page_size });
+      } else writeQuery(applyHistoryInterpretation(query, result));
     } catch {
+      if (request !== interpretationRequest.current) return;
       setInterpretation(null);
       setSmartError(true);
     }
   }
 
   function clearSmart() {
+    conversation.current = []; setManualSort(null);
+    interpretationRequest.current += 1;
     setInterpretation(null);
     setSmartError(false);
     interpretQuery.reset();
@@ -100,6 +136,7 @@ export function HistoryPage() {
   }
 
   function handleRemoveCondition(field: string) {
+    cancelInterpretation();
     const next = clearHistoryCondition(query, field);
     writeQuery(next);
     setInterpretation((current) => {
@@ -146,6 +183,7 @@ export function HistoryPage() {
           isInterpreting={interpretQuery.isPending}
           onChange={handleChange}
           onInterpret={(value) => void handleInterpret(value)}
+          onCancelInterpret={cancelInterpretation}
           onRemoveCondition={handleRemoveCondition}
           onClearSmart={clearSmart}
           onClear={clearAll}
@@ -167,6 +205,7 @@ export function HistoryPage() {
           isDeleting={deleteTask.isPending}
           deletingTaskId={deletingTaskId}
           hasFilters={hasFilters}
+          sort={interpretation?.execution ? manualSort ?? undefined : query.sort}
           onFilter={handleChange}
           onDelete={(task) => void handleDelete(task)}
           onRetry={() => void historyQuery.refetch()}

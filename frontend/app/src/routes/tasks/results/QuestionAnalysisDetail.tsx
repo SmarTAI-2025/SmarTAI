@@ -1,7 +1,7 @@
-import { ArrowDown, ArrowLeft, ArrowRight, ArrowUp, UserRound, X } from "lucide-react";
-import { useEffect, useMemo, type ReactNode } from "react";
+import { ResultQuestionQuery, useResultQuestionFilter } from "@/components/tasks/ResultQuestionQuery";
+import { ArrowDown, ArrowLeft, ArrowRight, ArrowUp, UserRound } from "lucide-react";
+import { useEffect, type ReactNode } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
-import { SmarTAIMascot } from "@/components/brand/SmarTAIMascot";
 import {
   effectiveCorrectionScore,
   formatCorrectionScoreSource,
@@ -14,10 +14,8 @@ import {
 } from "@/components/tasks/resultsModel";
 import { MarkdownMath } from "@/components/ui/MarkdownMath";
 import { normalizeCodeLineBreaks } from "@/components/ui/SyntaxHighlightedCode";
-import { useImeSafeQuery } from "@/hooks/useImeSafeQuery";
 import type { Locale } from "@/i18n/messages";
 import { cn } from "@/lib/cn";
-import { matchReviewItems, questionSearchItems } from "@/lib/reviewDetail";
 import { ResultQuestionSidebar } from "@/routes/tasks/results/ResultQuestionSidebar";
 import type { Correction, ProblemInfo } from "@/types";
 
@@ -47,7 +45,6 @@ export function QuestionAnalysisDetail({
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
   const query = searchParams.get("question_q") ?? "";
-  const smartSearch = useImeSafeQuery({ value: query, onCommit: updateQuery });
   const questionIndex = model.questions.findIndex((item) => item.id === questionId);
   const question = questionIndex >= 0 ? model.questions[questionIndex] : null;
   const root = `/tasks/${encodeURIComponent(taskId)}/results/questions`;
@@ -62,10 +59,7 @@ export function QuestionAnalysisDetail({
   if (query) detailParams.set("question_q", query);
   const detailReturnSuffix = detailParams.size ? `?${detailParams.toString()}` : "";
   const studentContextHref = studentContext ? buildStudentContextHref(taskId, studentContext, questionId, studentReturnQuery) : "";
-  const matches = useMemo(() => matchReviewItems(questionSearchItems(model.questions), query), [model.questions, query]);
-  const visibleQuestions = useMemo(() => matches
-    .map((match) => model.questions.find((item) => item.id === match.item.id))
-    .filter((item): item is QuestionSummary => Boolean(item)), [matches, model.questions]);
+  const { filter: questionFilter, visibleQuestions } = useResultQuestionFilter({ taskId, questions: model.questions, locale });
   const filteredQuestionIndex = visibleQuestions.findIndex((item) => item.id === questionId);
   const previous = filteredQuestionIndex > 0 ? visibleQuestions[filteredQuestionIndex - 1] : null;
   const next = filteredQuestionIndex >= 0 && filteredQuestionIndex < visibleQuestions.length - 1 ? visibleQuestions[filteredQuestionIndex + 1] : null;
@@ -140,36 +134,8 @@ export function QuestionAnalysisDetail({
         <QuestionStepButtons locale={locale} previous={previous} next={next} onSelect={goToQuestion} />
       </div>
 
-      <div className="relative mt-4">
-        <div className="flex items-center gap-2">
-          <SmarTAIMascot variant="thinking" size="xs" />
-          <label className="relative min-w-0 flex-1">
-            <input
-              value={smartSearch.draftValue}
-              inputMode="search"
-              onBlur={smartSearch.handleBlur}
-              onCompositionStart={smartSearch.handleCompositionStart}
-              onCompositionEnd={smartSearch.handleCompositionEnd}
-              onChange={smartSearch.handleChange}
-              placeholder={tx(locale, "本地快速筛选：题号、题干、题型或知识点，例如“积分题”", "Local quick filter: number, stem, type, or knowledge point")}
-              aria-label={tx(locale, "本地快速查找题目，不调用模型", "Find questions locally without a model call")}
-              className="h-12 w-full rounded-[10px] border bg-background pl-3 pr-11 text-[13px] text-foreground outline-none focus:border-primary focus:ring-2 focus:ring-primary/15"
-            />
-            {smartSearch.draftValue ? <button type="button" onClick={() => smartSearch.commitValue("")} aria-label={tx(locale, "清空题目筛选", "Clear question filter")} className="absolute right-2.5 top-2.5 inline-flex h-7 w-7 items-center justify-center rounded-full text-muted-foreground hover:bg-muted hover:text-foreground"><X aria-hidden="true" className="h-4 w-4" /></button> : null}
-          </label>
-        </div>
-        {query && smartSearch.draftValue === query ? (
-          <div className="absolute left-0 right-0 top-[52px] z-30 max-h-64 overflow-y-auto rounded-[8px] border bg-card p-1.5 shadow-lg">
-            {matches.length ? matches.slice(0, 10).map((match) => (
-              <button key={match.item.id} type="button" onMouseDown={(event) => event.preventDefault()} onClick={() => goToQuestion(match.item.id)} className="flex w-full items-center gap-3 rounded-[6px] px-3 py-2 text-left hover:bg-muted">
-                <span className="min-w-14 text-[12px] font-bold text-foreground">{match.item.primary}</span>
-                <span className={cn("shrink-0 rounded-full px-2 py-0.5 text-[10px] font-semibold", match.kind === "exact" ? "bg-emerald-100 text-emerald-700" : "bg-blue-50 text-primary")}>{match.kind === "exact" ? tx(locale, "完全匹配", "Exact") : tx(locale, "相关匹配", "Related")}</span>
-                <span className="min-w-0 flex-1 truncate text-[11px] text-muted-foreground">{match.item.secondary || "—"}</span>
-              </button>
-            )) : <p className="px-3 py-5 text-center text-[11px] text-muted-foreground">{tx(locale, "没有匹配题目；清空筛选即可恢复全部。", "No question matched; clear the filter to restore all questions.")}</p>}
-          </div>
-        ) : null}
-      </div>
+      <ResultQuestionQuery className="mt-4" locale={locale} taskId={taskId} filter={questionFilter}
+        questions={visibleQuestions} onSelect={goToQuestion} />
 
       <div className="mt-2 grid gap-0.5 text-[10px] leading-4 text-muted-foreground">
         <p>{tx(locale, "搜索只筛选题目；输入中文时在选词完成后应用。", "Search filters questions only and waits for IME composition.")}</p>
@@ -459,6 +425,7 @@ function reviewReasonLabel(reason: string, locale: Locale): string {
     high_indecisiveness: ["专家意见分歧", "Model disagreement"],
     score_spread_high: ["专家分差较大", "Large score spread across models"],
     parse_failed: ["解析失败", "Parsing failed"],
+    degraded_to_single: ["仅单专家成功（低置信度）", "Only one expert succeeded (low confidence)"],
     quota_exhausted: ["模型额度失败", "Model quota failure"],
   };
   const label = labels[reason];

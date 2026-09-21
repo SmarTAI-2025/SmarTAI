@@ -42,6 +42,7 @@ except ImportError:
 from fastapi import HTTPException
 
 from backend.config import settings
+from backend.tools.pdf_worker_lifecycle import reap_pdf_worker
 from backend.skills.ocr_ingest import OCRImage, OCRIngestSkill, OCRPurpose
 
 logger = logging.getLogger(__name__)
@@ -253,9 +254,9 @@ async def _extract_pdf_payload(
         )
     if not _PDF_EXTRACTION_SLOTS.acquire(blocking=False):
         raise HTTPException(status_code=429, detail={"code": "pdf_extraction_busy"})
-    process = None
+    launch_task = None
     try:
-        process = await asyncio.create_subprocess_exec(
+        launch_task = asyncio.create_task(asyncio.create_subprocess_exec(
             sys.executable,
             str(_PDF_WORKER_PATH),
             str(max_pages),
@@ -263,15 +264,14 @@ async def _extract_pdf_payload(
             stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.DEVNULL,
-        )
+        ))
+        process = await asyncio.shield(launch_task)
         try:
             stdout, _ = await asyncio.wait_for(
                 process.communicate(pdf_bytes),
                 timeout=timeout_seconds,
             )
         except asyncio.TimeoutError as exc:
-            process.kill()
-            await process.wait()
             logger.warning("PDF extraction timed out")
             raise HTTPException(
                 status_code=408,
@@ -307,9 +307,6 @@ async def _extract_pdf_payload(
     except HTTPException:
         raise
     except Exception as exc:
-        if process is not None and process.returncode is None:
-            process.kill()
-            await process.wait()
         logger.warning(
             "PDF extraction failed; exception_type=%s",
             type(exc).__name__,
@@ -319,7 +316,10 @@ async def _extract_pdf_payload(
             detail={"code": "pdf_extraction_failed"},
         ) from exc
     finally:
-        _PDF_EXTRACTION_SLOTS.release()
+        try:
+            await reap_pdf_worker(launch_task)
+        finally:
+            _PDF_EXTRACTION_SLOTS.release()
 
 
 async def inspect_baidu_ocr_upload(
@@ -374,9 +374,9 @@ async def inspect_baidu_ocr_upload(
             status_code=429,
             detail={"code": "media_inspection_busy"},
         )
-    process = None
+    launch_task = None
     try:
-        process = await asyncio.create_subprocess_exec(
+        launch_task = asyncio.create_task(asyncio.create_subprocess_exec(
             sys.executable,
             str(_PDF_WORKER_PATH),
             mode,
@@ -384,15 +384,14 @@ async def inspect_baidu_ocr_upload(
             stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.DEVNULL,
-        )
+        ))
+        process = await asyncio.shield(launch_task)
         try:
             stdout, _ = await asyncio.wait_for(
                 process.communicate(file_bytes),
                 timeout=timeout_seconds,
             )
         except asyncio.TimeoutError as exc:
-            process.kill()
-            await process.wait()
             raise HTTPException(
                 status_code=408,
                 detail={"code": "media_inspection_timeout"},
@@ -428,10 +427,10 @@ async def inspect_baidu_ocr_upload(
             )
         return inspection
     finally:
-        if process is not None and process.returncode is None:
-            process.kill()
-            await process.wait()
-        _PDF_EXTRACTION_SLOTS.release()
+        try:
+            await reap_pdf_worker(launch_task)
+        finally:
+            _PDF_EXTRACTION_SLOTS.release()
 
 
 async def extract_text_from_pdf(

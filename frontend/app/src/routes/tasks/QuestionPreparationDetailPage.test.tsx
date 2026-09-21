@@ -418,7 +418,7 @@ describe("QuestionPreparationDetailPage navigation", () => {
     fireEvent.keyDown(window, { key: "ArrowUp" });
     await waitFor(() => expect(firstQuestion).toHaveAttribute("aria-current", "true"));
 
-    const search = screen.getByRole("textbox", { name: "本地快速筛选题目，不调用模型" });
+    const search = screen.getByRole("textbox", { name: "Ask SmarTAI：题目资料" });
     search.focus();
     fireEvent.keyDown(search, { key: "ArrowDown" });
 
