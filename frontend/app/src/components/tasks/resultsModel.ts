@@ -144,7 +144,7 @@ export function compareProblems(a: ProblemInfo, b: ProblemInfo) {
 export function problemLabel(problem?: Pick<ProblemInfo, "q_id" | "number"> | null, fallbackId?: string) {
   const number = String(problem?.number ?? "").trim();
   if (number) {
-    return `Q${number}`;
+    return `Q${number.replace(/^q\s*/i, "")}`;
   }
   return String(problem?.q_id ?? fallbackId ?? "题目");
 }
@@ -283,6 +283,7 @@ export function reviewReasonLabel(reason: string) {
     low_confidence: "置信度偏低",
     score_spread_high: "评分差异较大",
     parse_failed: "解析失败",
+    degraded_to_single: "仅单专家成功（低置信度）",
     transient_llm: "模型临时错误",
     quota_exhausted: "额度不足",
     general: "需要人工确认",

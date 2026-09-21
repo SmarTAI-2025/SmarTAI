@@ -494,7 +494,16 @@ def get_reporter(job_id: str) -> Optional[ProgressReporter]:
         return reporter
 
 
-def remove_reporter(job_id: str) -> None:
+def remove_reporter(
+    job_id: str, *, expected: Optional[ProgressReporter] = None,
+) -> None:
+    """Remove a reporter, optionally only the instance owned by the caller.
+
+    A stale worker must not delete a replacement worker's live progress. Task
+    deletion still intentionally calls this without an expected instance.
+    """
     with _reporters_lock:
+        if expected is not None and _reporters.get(job_id) is not expected:
+            return
         _reporters.pop(job_id, None)
         _reporter_last_seen.pop(job_id, None)
