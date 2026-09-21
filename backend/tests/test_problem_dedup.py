@@ -426,3 +426,24 @@ def test_empty_extraction_stems_are_preserved_for_validation(first, second, numb
     assert len(result) == 2
     assert [item["stem"] for item in result.values()] == [first, second]
     assert rows["q1"]["stem"] == first
+
+
+@pytest.mark.parametrize("mode", ["identical", "contained", "overlap"])
+@pytest.mark.parametrize("numbers", [
+    ("1.1", "1.2"), ("1", "2"),
+    ("Question 1.1", "Question 1.2"), ("第1.1题", "第1.2题"),
+])
+def test_distinct_explicit_major_numbers_survive_text_deduplication(mode, numbers):
+    from backend.services.question_structure import annotate_major_question_structures
+    common = "Use the definition of a finite group and carefully justify every algebraic step. "
+    first = common if mode != "overlap" else "First independent setup. " + common
+    second = common if mode == "identical" else common + "Then explain the additional conclusion."
+    rows = {
+        "q1": _problem("q1", numbers[0], first),
+        "q2": _problem("q2", numbers[1], second),
+    }
+    deduped = dedupe_extracted_problems(rows)
+    assert [row["number"] for row in deduped.values()] == list(numbers)
+    result = annotate_major_question_structures(deduped)
+    assert len(result) == 2
+    assert [row["stem"] for row in result.values()] == [first, second]
