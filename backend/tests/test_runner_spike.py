@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import os
+import sys
 from pathlib import Path
+
+import pytest
 
 from backend.tools.grading_runner import RunnerResult
 from tools.runner_spike.harness import (
@@ -79,6 +82,7 @@ def test_podman_command_disables_implicit_writable_tmpfs_and_proxy_env(
     assert mount.endswith(",readonly,relabel=private")
 
 
+@pytest.mark.skipif(sys.platform != "linux", reason="Linux container worker uses Linux resource-limit semantics; OCI command tests remain cross-platform")
 def test_worker_clears_launcher_environment_and_matches_runner_contract(
     tmp_path: Path,
     monkeypatch,
@@ -99,6 +103,7 @@ def test_worker_clears_launcher_environment_and_matches_runner_contract(
     assert not (tmp_path / "main.py").exists()
 
 
+@pytest.mark.skipif(sys.platform != "linux", reason="Linux container worker uses Linux resource-limit semantics; OCI command tests remain cross-platform")
 def test_worker_enforces_wall_timeout_without_returning_a_host_path(tmp_path: Path):
     request = _request("while True:\n    pass\n")
     request["limits"]["timeout_seconds"] = 0.1
@@ -110,6 +115,7 @@ def test_worker_enforces_wall_timeout_without_returning_a_host_path(tmp_path: Pa
     assert str(tmp_path) not in result.stderr
 
 
+@pytest.mark.skipif(sys.platform != "linux", reason="Linux container worker uses Linux resource-limit semantics; OCI command tests remain cross-platform")
 def test_worker_bounds_output_before_serializing_it(tmp_path: Path):
     result = RunnerResult.model_validate(
         execute_request(

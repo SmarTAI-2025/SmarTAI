@@ -1,3 +1,4 @@
+import { SortableTableHead } from "@/components/ui/SortableTableHead";
 import { MoreHorizontal, Trash2 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
@@ -25,6 +26,7 @@ interface HistoryTaskTableProps {
   isDeleting: boolean;
   deletingTaskId: string | null;
   hasFilters: boolean;
+  sort?: TaskHistoryQuery["sort"];
   onFilter: (patch: Partial<TaskHistoryQuery>) => void;
   onDelete: (task: TaskLite) => void;
   onRetry: () => void;
@@ -42,6 +44,7 @@ export function HistoryTaskTable({
   isDeleting,
   deletingTaskId,
   hasFilters,
+  sort,
   onFilter,
   onDelete,
   onRetry,
@@ -53,11 +56,17 @@ export function HistoryTaskTable({
       <div className="overflow-visible pb-2 md:overflow-x-auto">
         <div role="table" aria-label={t("historyTableRegion")} aria-busy={isLoading} className="min-w-0 text-left md:min-w-[1080px]">
           <div role="row" className={cn("grid h-[42px] items-center text-[13px] font-semibold leading-4 text-muted-foreground", COLUMNS)}>
-            <div role="columnheader" className="px-[14px]">{t("historyColumnTask")}</div>
-            <div role="columnheader" className="px-[14px]">{t("historyColumnStage")}</div>
+            <SortableTableHead as="div" className="px-[14px]"
+              direction={sort === "name_asc" ? "asc" : sort === "name_desc" ? "desc" : null}
+              onSort={() => onFilter({ sort: sort === "name_asc" ? "name_desc" : "name_asc" })}>{t("historyColumnTask")}</SortableTableHead>
+            <SortableTableHead as="div" className="px-[14px]"
+              direction={sort === "stage_asc" ? "asc" : sort === "stage_desc" ? "desc" : null}
+              onSort={() => onFilter({ sort: sort === "stage_asc" ? "stage_desc" : "stage_asc" })}>{t("historyColumnStage")}</SortableTableHead>
             <div role="columnheader" className="hidden px-[14px] md:block">{t("historyColumnProgress")}</div>
             <div role="columnheader" className="hidden px-[14px] md:block">{t("historyColumnEta")}</div>
-            <div role="columnheader" className="hidden px-[14px] md:block">{t("historyColumnUpdated")}</div>
+            <SortableTableHead as="div" className="hidden px-[14px] md:block"
+              direction={sort === "updated_asc" ? "asc" : sort === "updated_desc" ? "desc" : null}
+              onSort={() => onFilter({ sort: sort === "updated_asc" ? "updated_desc" : "updated_asc" })}>{t("historyColumnUpdated")}</SortableTableHead>
             <div role="columnheader" className="hidden px-[14px] md:block">{t("historyColumnNext")}</div>
           </div>
 
@@ -138,19 +147,19 @@ function HistoryTaskRow({
         </div>
         <div className="mt-1 hidden min-w-0 items-center gap-1 overflow-visible whitespace-nowrap md:flex">
           {task.semester_id ? (
-            <button type="button" title={formatSemesterLabel(task.semester_id, t)} onClick={() => onFilter({ semester_id: task.semester_id ?? undefined })} className="max-w-[132px] truncate rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5 text-[11px] text-slate-600 outline-none hover:border-primary/30 hover:text-primary focus-visible:ring-2 focus-visible:ring-ring dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300">
+            <span title={formatSemesterLabel(task.semester_id, t)} className="max-w-[132px] truncate rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5 text-[11px] text-slate-600 outline-none hover:border-primary/30 hover:text-primary focus-visible:ring-2 focus-visible:ring-ring dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300">
               {formatSemesterLabel(task.semester_id, t)}
-            </button>
+            </span>
           ) : null}
           {course ? (
-            <button type="button" title={course.name} onClick={() => onFilter({ course_id: course.id })} className="max-w-[100px] truncate rounded-full border border-blue-200 bg-blue-50 px-2 py-0.5 text-[11px] text-blue-700 outline-none hover:border-primary/40 focus-visible:ring-2 focus-visible:ring-ring dark:border-blue-800 dark:bg-blue-950/50 dark:text-blue-200">
+            <span title={course.name} className="max-w-[100px] truncate rounded-full border border-blue-200 bg-blue-50 px-2 py-0.5 text-[11px] text-blue-700 outline-none hover:border-primary/40 focus-visible:ring-2 focus-visible:ring-ring dark:border-blue-800 dark:bg-blue-950/50 dark:text-blue-200">
               {course.name}
-            </button>
+            </span>
           ) : null}
           {taskTags.slice(0, 2).map((tag) => (
-            <button key={tag.id} type="button" title={tag.name} onClick={() => onFilter({ tag_ids: [tag.id] })} className={cn("max-w-[82px] truncate rounded-full border px-2 py-0.5 text-[11px] outline-none focus-visible:ring-2 focus-visible:ring-ring", TAG_TONE_CLASSES[tag.color])}>
+            <span key={tag.id} title={tag.name} className={cn("max-w-[82px] truncate rounded-full border px-2 py-0.5 text-[11px] outline-none focus-visible:ring-2 focus-visible:ring-ring", TAG_TONE_CLASSES[tag.color])}>
               {tag.name}
-            </button>
+            </span>
           ))}
           {taskTags.length > 2 ? <span className="text-[11px] text-muted-foreground">+{taskTags.length - 2}</span> : null}
           {!task.semester_id && !course && taskTags.length === 0 ? <span className="truncate text-[11px] text-muted-foreground">{t("historyMetadataUnset")}</span> : null}
@@ -166,9 +175,9 @@ function HistoryTaskRow({
       </div>
 
       <div role="cell" className="min-w-0 px-2 py-2 md:px-[14px]">
-        <button type="button" title={t(HISTORY_STAGE_KEYS[task.status])} onClick={() => onFilter({ statuses: [task.status] })} className={cn("inline-flex h-7 max-w-[185px] items-center rounded-full px-3 text-[13px] font-semibold outline-none focus-visible:ring-2 focus-visible:ring-ring", historyStatusTone(task.status))}>
+        <span title={t(HISTORY_STAGE_KEYS[task.status])} className={cn("inline-flex h-7 max-w-[185px] items-center rounded-full px-3 text-[13px] font-semibold outline-none focus-visible:ring-2 focus-visible:ring-ring", historyStatusTone(task.status))}>
           <span className="truncate">{t(HISTORY_STAGE_KEYS[task.status])}</span>
-        </button>
+        </span>
         <div className="mt-1 flex min-w-0 items-center gap-1 md:hidden">
           <Link to={destination} className="min-w-0 flex-1 truncate text-[11px] font-medium text-muted-foreground outline-none hover:text-primary focus-visible:rounded focus-visible:ring-2 focus-visible:ring-ring">
             {t(HISTORY_ACTION_KEYS[task.status])}

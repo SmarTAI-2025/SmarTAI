@@ -34,7 +34,7 @@ from backend.domain import education
 from backend.domain.errors import DomainError, NotFound, ValidationError, VersionConflict
 from backend.llm.registry import _build_scoped_registry
 from backend.models import TaskGradingSetup, User
-from backend.progress.tracker import get_or_create_reporter
+from backend.progress.tracker import get_or_create_reporter, remove_reporter
 from backend.services import grading_adapter
 from backend.services.background_errors import classify_background_error
 from backend.services.stage_provider_routing import assert_grading_routes_supported
@@ -234,9 +234,11 @@ async def process_run(*, run_id: str, worker_id: str, registry=None, language: s
     try:
         grading_repository.claim_lease(run_id=run_id, worker_id=worker_id, lease_seconds=settings.grading_lease_seconds)
     except DomainError:
+        # A failed duplicate claim does not own the existing live reporter.
         return  # someone else owns it or it is terminal
     run = grading_repository.get_run(run_id=run_id)
     heartbeat_task: Optional[asyncio.Task] = None
+    reporter = None
 
     async def _heartbeat():
         while True:
@@ -315,6 +317,11 @@ async def process_run(*, run_id: str, worker_id: str, registry=None, language: s
             run_id=run_id, level="info", message="grading_started",
             payload={"students": len(frozen_revisions), "questions": len(questions)},
         )
+        # A reclaimed/re-run pass must start from a clean counter. The reporter
+        # is a process-local singleton keyed by run_id; without this reset a
+        # second pass over the same run would keep accumulating completed_units
+        # past total_students*total_questions (progress bar overshoots 100%).
+        remove_reporter(run_id)
         reporter = get_or_create_reporter(
             run_id,
             total_students=len(frozen_revisions),
@@ -358,7 +365,7 @@ async def process_run(*, run_id: str, worker_id: str, registry=None, language: s
             "grading_failed",
             persistence_code="grading_persistence_failed",
         )
-        logger.exception(
+        logger.error(
             "Grading run %s failed; error_code=%s exception_type=%s",
             run_id,
             error_code,
@@ -384,6 +391,10 @@ async def process_run(*, run_id: str, worker_id: str, registry=None, language: s
                 await heartbeat_task
             except (asyncio.CancelledError, Exception):
                 pass
+        # Release only this worker's reporter; a reclaimed run may already
+        # have a replacement reporter while this stale worker is exiting.
+        if reporter is not None:
+            remove_reporter(run_id, expected=reporter)
 
 
 def list_review_queue(*, assignment_id: str, teacher_id: str) -> list[education.GradeResultDTO]:
