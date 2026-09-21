@@ -59,15 +59,26 @@ def _normalise_question_source(
 
     normalized = dict(source or {})
     presentation = dict(normalized.get("presentation") or {})
-    structure = MajorQuestionStructureV1.model_validate(
-        presentation.get("question_structure")
-        or build_major_question_structure(
-            {"number": number, "stem": stem},
-            major_order=order_index,
-            structure_source="deterministic",
-            review_status="needs_review",
-        ).model_dump()
+    current_structure = build_major_question_structure(
+        {"number": number, "stem": stem},
+        major_order=order_index,
+        structure_source="deterministic",
+        review_status="needs_review",
     )
+    structure = MajorQuestionStructureV1.model_validate(
+        presentation.get("question_structure") or current_structure.model_dump()
+    )
+    # Existing source metadata is often sent back with an edited stem/number.
+    # Retain evidence and other presentation fields, but never persist stale
+    # structural text or labels alongside a different authoritative question.
+    if (
+        structure.major_number != current_structure.major_number
+        or structure.major_order != current_structure.major_order
+        or structure.shared_stem != current_structure.shared_stem
+        or [(p.label, p.order, p.stem) for p in structure.subparts]
+        != [(p.label, p.order, p.stem) for p in current_structure.subparts]
+    ):
+        structure = current_structure
     try:
         summary = validate_rubric_points(
             criterion or "", max_score, structure

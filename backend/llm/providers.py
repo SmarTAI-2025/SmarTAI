@@ -3,12 +3,11 @@ LLM provider adapters with async interface.
 
 Each provider implements: `ainvoke(messages) -> LLMResponse`.
 
-IMPORTANT — Gemini proxy issue:
-  langchain-google-genai's ainvoke() uses gRPC async client internally,
-  which ignores HTTP_PROXY. The sync invoke() correctly uses REST transport
-  with proxy. Therefore when a proxy is configured (local dev behind GFW),
-  GeminiProvider uses run_in_threadpool with a per-call client factory for
-  parallel safety. When no proxy (cloud deployment), it uses native ainvoke.
+Gemini proxy compatibility:
+  The supported langchain-google-genai 4.x client uses Google's HTTP SDK.
+  Keep the established per-call synchronous client path when an explicit
+  SmarTAI proxy is configured, and native async otherwise. Do not reintroduce
+  the removed legacy transport="rest" parameter or infer machine credentials.
 """
 from __future__ import annotations
 
@@ -455,7 +454,6 @@ class GeminiProvider(BaseProvider):
         return ChatGoogleGenerativeAI(
             model=self.model,
             temperature=0.0,
-            transport="rest",
             timeout=settings.llm_timeout,
             max_retries=0,
             google_api_key=self.config.api_key,

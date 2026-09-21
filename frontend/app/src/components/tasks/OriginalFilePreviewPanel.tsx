@@ -1,5 +1,5 @@
 import { FileText, Image, LoaderCircle, RefreshCw, X } from "lucide-react";
-import { lazy, Suspense, useEffect, useRef, type KeyboardEvent } from "react";
+import { lazy, Suspense, useEffect, useRef, useState, type KeyboardEvent } from "react";
 import { Button } from "@/components/ui/Button";
 import { InlineNotice } from "@/components/ui/InlineNotice";
 import type { MessageKey } from "@/i18n/messages";
@@ -17,19 +17,9 @@ const PdfDocumentPreview = lazy(async () => {
   return { default: module.PdfDocumentPreview };
 });
 
-export function OriginalFilePreviewPanel({
-  descriptor,
-  displayName,
-  previewKind,
-  loadState,
-  errorCode,
-  previewUrl,
-  unavailableReason,
-  onClose,
-  onRetry,
-  provenanceNote,
-  t,
-}: {
+type ImagePreviewState = "loading" | "ready" | "error";
+
+interface OriginalFilePreviewPanelProps {
   descriptor: SourceFileDescriptor | null;
   displayName: string;
   previewKind: SourcePreviewKind;
@@ -41,8 +31,33 @@ export function OriginalFilePreviewPanel({
   onRetry: () => void;
   provenanceNote?: string;
   t: (key: MessageKey) => string;
-}) {
+}
+
+export function OriginalFilePreviewPanel(props: OriginalFilePreviewPanelProps) {
+  const imageKey = props.previewKind === "image"
+    ? `${props.descriptor?.file_id ?? ""}:${props.previewUrl ?? ""}:${props.loadState}`
+    : undefined;
+  return <SourcePreviewPanel key={imageKey} {...props} />;
+}
+
+function SourcePreviewPanel({
+  descriptor,
+  displayName,
+  previewKind,
+  loadState,
+  errorCode,
+  previewUrl,
+  unavailableReason,
+  onClose,
+  onRetry,
+  provenanceNote,
+  t,
+}: OriginalFilePreviewPanelProps) {
   const closeButtonRef = useRef<HTMLButtonElement>(null);
+  const [imageState, setImageState] = useState<ImagePreviewState>("loading");
+  const imageFailed = previewKind === "image" && loadState === "ready" && imageState === "error";
+  const showStatusBadge = previewKind !== "image" || descriptor?.status !== "available"
+    || (loadState === "ready" && imageState === "ready");
 
   useEffect(() => {
     closeButtonRef.current?.focus();
@@ -78,7 +93,7 @@ export function OriginalFilePreviewPanel({
           </div>
         </div>
         <div className="flex shrink-0 items-center gap-2">
-          <StatusBadge descriptor={descriptor} t={t} />
+          {showStatusBadge ? <StatusBadge descriptor={descriptor} t={t} /> : null}
           <button
             ref={closeButtonRef}
             type="button"
@@ -96,11 +111,13 @@ export function OriginalFilePreviewPanel({
           descriptor={descriptor}
           displayName={displayName}
           previewKind={previewKind}
-          loadState={loadState}
-          errorCode={errorCode}
+          loadState={imageFailed ? "error" : loadState}
+          errorCode={imageFailed ? "source_preview_load_failed" : errorCode}
           previewUrl={previewUrl}
           unavailableReason={unavailableReason}
           onRetry={onRetry}
+          imageState={imageState}
+          onImageStateChange={setImageState}
           t={t}
         />
       </div>
@@ -109,7 +126,7 @@ export function OriginalFilePreviewPanel({
   );
 }
 
-function PreviewContent({ descriptor, displayName, previewKind, loadState, errorCode, previewUrl, unavailableReason, onRetry, t }: {
+function PreviewContent({ descriptor, displayName, previewKind, loadState, errorCode, previewUrl, unavailableReason, onRetry, imageState, onImageStateChange, t }: {
   descriptor: SourceFileDescriptor | null;
   displayName: string;
   previewKind: SourcePreviewKind;
@@ -118,6 +135,8 @@ function PreviewContent({ descriptor, displayName, previewKind, loadState, error
   previewUrl: string | null;
   unavailableReason?: SourceUnavailableReason | null;
   onRetry: () => void;
+  imageState: ImagePreviewState;
+  onImageStateChange: (state: ImagePreviewState) => void;
   t: (key: MessageKey) => string;
 }) {
   if (descriptor?.status === "processing") {
@@ -203,11 +222,14 @@ function PreviewContent({ descriptor, displayName, previewKind, loadState, error
   }
   if (previewKind === "image") {
     return (
-      <div className="flex h-full w-full items-center justify-center overflow-auto rounded-[8px] bg-slate-200/70 p-3 dark:bg-slate-950/35">
+      <div aria-busy={imageState === "loading"} className="flex h-full w-full items-center justify-center overflow-auto rounded-[8px] bg-slate-200/70 p-3 dark:bg-slate-950/35">
+        {imageState === "loading" ? <PreviewLoading t={t} /> : null}
         <img
           src={previewUrl}
           alt={displayName}
-          className="max-h-full max-w-full rounded-[3px] bg-white object-contain shadow-[0_8px_28px_rgb(15_23_42_/_0.12)]"
+          onLoad={() => onImageStateChange("ready")}
+          onError={() => onImageStateChange("error")}
+          className={cn("max-h-full max-w-full rounded-[3px] bg-white object-contain shadow-[0_8px_28px_rgb(15_23_42_/_0.12)]", imageState !== "ready" && "hidden")}
         />
       </div>
     );

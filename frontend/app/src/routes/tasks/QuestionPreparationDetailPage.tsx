@@ -16,11 +16,14 @@ import {
 import { Link, Navigate, useBeforeUnload, useBlocker, useLocation, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { toast } from "sonner";
 import { useTask, useUpdateProblem } from "@/api/hooks/tasks";
-import { SmarTAIMascot } from "@/components/brand/SmarTAIMascot";
+import { TaskQueryBar } from "@/components/tasks/AskQueryBar";
+import { useTaskFilterIntent } from "@/hooks/useTaskFilterIntent";
+import { resolvePreparationQuery, selectPreparationQuestions } from "@/lib/taskPreparationFilter";
 import { NewTaskStepper } from "@/components/new-task/NewTaskStepper";
 import { OriginalFilePreviewPanel } from "@/components/tasks/OriginalFilePreviewPanel";
 import { OriginalFilePreviewTrigger } from "@/components/tasks/OriginalFilePreviewTrigger";
 import { SourceComparisonWorkspace } from "@/components/tasks/SourceComparisonWorkspace";
+import { problemLabel } from "@/components/tasks/resultsModel";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { MarkdownMath } from "@/components/ui/MarkdownMath";
 import { SyntaxHighlightedCode } from "@/components/ui/SyntaxHighlightedCode";
@@ -29,7 +32,6 @@ import { useSourcePreview } from "@/hooks/useSourcePreview";
 import { useI18n } from "@/i18n/I18nProvider";
 import { cn } from "@/lib/cn";
 import { isProgrammingProblem } from "@/lib/questionPreparation";
-import { questionSearchAliases } from "@/lib/questionSearch";
 import { parseScoreHundredths, summarizeRubricPoints } from "@/lib/rubricPoints";
 import type { ProblemInfo, TestCase } from "@/types";
 
@@ -57,10 +59,7 @@ export function QuestionPreparationDetailPage() {
   const [dirtyKeys, setDirtyKeys] = useState<Set<string>>(new Set());
   const [confirming, setConfirming] = useState(false);
   const urlQuery = searchParams.get("q") ?? "";
-  const [query, setQuery] = useState(urlQuery);
-  const composingRef = useRef(false);
-  const pendingCompositionCommitRef = useRef<number | null>(null);
-  const lastCommittedQueryRef = useRef(urlQuery);
+  const query = urlQuery;
   const positionedPathRef = useRef<string | null>(null);
   const workflowRevisionTaskRef = useRef(stableTaskId);
   const latestWorkflowRevisionRef = useRef<number | undefined>(taskQuery.data?.workflow_revision);
@@ -69,7 +68,8 @@ export function QuestionPreparationDetailPage() {
     () => sortProblems(Object.values(taskQuery.data?.problem_data ?? {}), locale),
     [locale, taskQuery.data?.problem_data],
   );
-  const filtered = useMemo(() => filterProblems(problems, urlQuery), [problems, urlQuery]);
+  const smartFilter = useTaskFilterIntent({ taskId, surface: "question_preparation", resolveLocal: (value) => resolvePreparationQuery(problems, value) });
+  const filtered = useMemo(() => selectPreparationQuestions(problems, smartFilter.intent), [problems, smartFilter.intent]);
   const activeQuestionIndex = filtered.findIndex((problem) => problem.q_id === activeQuestionId);
   const previousQuestion = activeQuestionIndex > 0 ? filtered[activeQuestionIndex - 1] : null;
   const nextQuestion = activeQuestionIndex >= 0 && activeQuestionIndex < filtered.length - 1
@@ -95,19 +95,6 @@ export function QuestionPreparationDetailPage() {
       latestWorkflowRevisionRef.current = serverRevision;
     }
   }, [stableTaskId, taskQuery.data?.workflow_revision]);
-
-  useEffect(() => {
-    lastCommittedQueryRef.current = urlQuery;
-    if (!composingRef.current && pendingCompositionCommitRef.current === null) {
-      setQuery((current) => current === urlQuery ? current : urlQuery);
-    }
-  }, [urlQuery]);
-
-  useEffect(() => () => {
-    if (pendingCompositionCommitRef.current !== null) {
-      window.clearTimeout(pendingCompositionCommitRef.current);
-    }
-  }, []);
 
   useBeforeUnload(useCallback((event) => {
     if (hasDirty) {
@@ -191,26 +178,6 @@ export function QuestionPreparationDetailPage() {
   }
   if (taskQuery.data?.status === "draft") return <Navigate to={`/tasks/${taskId}/upload/problems`} replace />;
   if (taskQuery.data?.status === "extracting_problems") return <Navigate to={`/tasks/${taskId}/problems/progress`} replace />;
-
-  function updateQuery(value: string) {
-    if (lastCommittedQueryRef.current === value) return;
-    lastCommittedQueryRef.current = value;
-    const next = new URLSearchParams(searchParams);
-    if (value.trim()) next.set("q", value);
-    else next.delete("q");
-    setSearchParams(next, { replace: true });
-  }
-
-  function flushComposition(input: HTMLInputElement) {
-    if (pendingCompositionCommitRef.current !== null) {
-      window.clearTimeout(pendingCompositionCommitRef.current);
-      pendingCompositionCommitRef.current = null;
-    }
-    composingRef.current = false;
-    const finalValue = input.value;
-    setQuery(finalValue);
-    updateQuery(finalValue);
-  }
 
   const setFieldDirty = useCallback((key: string, dirty: boolean) => {
     setDirtyKeys((current) => {
@@ -335,49 +302,9 @@ export function QuestionPreparationDetailPage() {
         className="mt-6"
       >
       <div className="min-w-0">
-      <div className="flex items-center gap-2">
-        <SmarTAIMascot variant="thinking" size="xs" />
-        <label className="relative min-w-0 flex-1">
-          <span className="sr-only">{tx(locale, "本地快速筛选题目，不调用模型", "Local quick question filter, no model call")}</span>
-          <input
-          value={query}
-          inputMode="search"
-          onCompositionStart={() => {
-            if (pendingCompositionCommitRef.current !== null) {
-              window.clearTimeout(pendingCompositionCommitRef.current);
-              pendingCompositionCommitRef.current = null;
-            }
-            composingRef.current = true;
-          }}
-          onCompositionEnd={(event) => {
-            const input = event.currentTarget;
-            composingRef.current = false;
-            setQuery(input.value);
-            pendingCompositionCommitRef.current = window.setTimeout(() => {
-              flushComposition(input);
-            }, 0);
-          }}
-          onChange={(event) => {
-            const value = event.currentTarget.value;
-            setQuery(value);
-            if (
-              !composingRef.current
-              && pendingCompositionCommitRef.current === null
-              && !(event.nativeEvent as InputEvent).isComposing
-            ) {
-              updateQuery(value);
-            }
-          }}
-          onBlur={(event) => {
-            if (composingRef.current || pendingCompositionCommitRef.current !== null) {
-              flushComposition(event.currentTarget);
-            }
-          }}
-          placeholder={tx(locale, "本地快速筛选：题号、题型、题目内容，或“编程题 / 低置信 / 冲突”", "Local quick filter: number, type, content, or “programming / low confidence / conflict”")}
-          className="h-12 w-full rounded-[10px] border bg-card pl-4 pr-4 text-[13px] outline-none placeholder:text-muted-foreground focus:border-primary focus:ring-2 focus:ring-primary/15"
-          />
-        </label>
-      </div>
+      <TaskQueryBar className="mt-6" filter={smartFilter} taskId={taskId} locale={locale}
+        label={tx(locale, "Ask SmarTAI：题目资料", "Ask SmarTAI: question materials")}
+        placeholder={tx(locale, "按满分升序，或找出缺少标答的题目", "Sort by maximum score, or find missing reference answers")} />
 
       {readOnly ? <p className="mt-4 rounded-[8px] border border-amber-200 bg-amber-50 px-4 py-3 text-xs leading-5 text-amber-800 dark:border-amber-900 dark:bg-amber-950/20 dark:text-amber-200">{tx(locale, "当前任务已进入后续阶段，本页可浏览但不能修改。", "This task has moved to a later stage. The page is read-only.")}</p> : null}
 
@@ -401,7 +328,7 @@ export function QuestionPreparationDetailPage() {
                 const number = problem.number || problem.q_id;
                 return (
                   <button key={problem.q_id} type="button" aria-current={active ? "true" : undefined} onClick={() => scrollToQuestion(problem.q_id)} className={cn("mb-1 flex min-h-10 w-full items-center justify-between rounded-[7px] px-2.5 text-left text-xs font-semibold transition last:mb-0", active ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted hover:text-foreground")}>
-                    <span className="truncate" title={tx(locale, `第 ${number} 题`, `Q${number}`)}>{tx(locale, `第 ${number} 题`, `Q${number}`)}</span>
+                    <span className="truncate" title={tx(locale, `第 ${number} 题`, problemLabel(problem))}>{tx(locale, `第 ${number} 题`, problemLabel(problem))}</span>
                     {riskCount ? <span className={cn("ml-1 inline-flex h-5 min-w-5 items-center justify-center rounded-full px-1 text-[10px]", active ? "bg-white/20 text-white" : "bg-amber-100 text-amber-700")}>{riskCount}</span> : null}
                   </button>
                 );
@@ -856,19 +783,6 @@ function updateCase(cases: TestCase[], index: number, patch: Partial<TestCase>) 
 
 function emptyTestCase(index: number): TestCase {
   return { title: `样例 ${index}`, visibility: "example", purpose: "normal", io_mode: "stdin", input: "", expected_output: "", description: "", source: "teacher", sandbox_feasible: true };
-}
-
-function filterProblems(problems: ProblemInfo[], rawQuery: string) {
-  const query = rawQuery.trim().toLocaleLowerCase();
-  if (!query) return problems;
-  const tokens = query.split(/[\s,，;；]+/).filter(Boolean);
-  return problems.filter((problem) => tokens.every((token) => {
-    if (["编程", "编程题", "programming"].includes(token)) return isProgrammingProblem(problem);
-    if (["低置信", "low-confidence"].includes(token)) return (problem.preparation_issues ?? []).some((issue) => issue.status === "open" && issue.code === "low_confidence");
-    if (["冲突", "conflict"].includes(token)) return (problem.preparation_issues ?? []).some((issue) => issue.status === "open" && issue.code.includes("conflict"));
-    const sourceText = [problem.number, problem.q_id, problem.type, problem.max_score, problem.max_score_source, problem.stem, problem.reference_answer, problem.criterion].join(" ");
-    return `${sourceText} ${questionSearchAliases(sourceText)}`.toLocaleLowerCase().includes(token);
-  }));
 }
 
 function sortProblems(problems: ProblemInfo[], locale: string) {

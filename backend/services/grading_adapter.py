@@ -11,8 +11,11 @@ parameter, and maps each returned
 Failure semantics (no publishable real zero):
 * ``confidence == 0`` or ``synthesis_method in {all_failed, quota_exhausted}``
   → hard failure with no provisional score;
-* low confidence, expert disagreement, or ``degraded_to_single`` → soft
-  review that preserves the provisional score;
+* low confidence or expert disagreement → soft review that preserves the
+  provisional score. (2026-08-28: ``degraded_to_single`` is no longer
+  automatically a review reason — ``run_multi_expert`` only flags the
+  Correction when the surviving sample itself is low confidence, because
+  model capabilities are uneven and one confident model is enough.)
 * a missing correction/student result → hard failure with no provisional score;
 * an exception raised by ``grade_batch`` → the whole run fails, not silent zeros.
 """
@@ -35,7 +38,6 @@ from backend.skills.base import (
 
 # Synthesis methods that prove no expert produced a publishable score.
 _HARD_FAILURE_METHODS = frozenset({"all_failed", "quota_exhausted"})
-_SOFT_REVIEW_METHODS = frozenset({"degraded_to_single"})
 
 
 def _stable_review_reasons(*groups: list[str] | tuple[str, ...]) -> list[str]:
@@ -142,8 +144,6 @@ def correction_to_result(
     review_reasons = _stable_review_reasons(
         list(correction.review_reasons or [])
     )
-    if method in _SOFT_REVIEW_METHODS and method not in review_reasons:
-        review_reasons.append(method)
     soft_review = correction.requires_human_review or bool(review_reasons)
     needs_review = hard_failure or soft_review
     if invalid_scale:

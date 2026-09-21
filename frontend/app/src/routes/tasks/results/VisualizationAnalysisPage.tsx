@@ -1,5 +1,8 @@
+import { GroundedAskAnswer } from "@/components/tasks/GroundedAskAnswer";
+import { GroundedTrace } from "@/components/tasks/GroundedChart";
+import type { GroundedAskExecution } from "@/types";
 import { BarChart3, Download, LoaderCircle, Printer, Save, Trash2 } from "lucide-react";
-import { useMemo, useState, type FormEvent, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import {
   Bar,
@@ -20,7 +23,7 @@ import {
 } from "recharts";
 import { toast } from "sonner";
 import { useAnalyticsQuery } from "@/api/hooks/analytics";
-import { SmarTAIMascot } from "@/components/brand/SmarTAIMascot";
+import { AskQueryBar } from "@/components/tasks/AskQueryBar";
 import { RecoverableActionState } from "@/components/ui/RecoverableActionState";
 import {
   effectiveCorrectionScore,
@@ -58,7 +61,7 @@ const PIE_COLORS = [COLORS.teal, COLORS.rose, COLORS.violet];
 
 export function VisualizationAnalysisPage({ locale, taskId, version, model, provisional = false }: { locale: Locale; taskId: string; version: number; model: ResultsModel; provisional?: boolean }) {
   const [searchParams, setSearchParams] = useSearchParams();
-  const scope = normalizeScope(searchParams.get("scope"));
+  const scope: ScopeFilter = "all";
   const students = useMemo(() => model.students.filter((student) => matchesScope(student, scope)), [model.students, scope]);
   const studentIds = useMemo(() => new Set(students.map((student) => student.id)), [students]);
   const validPercents = students.map((student) => student.percent).filter((value): value is number => typeof value === "number" && Number.isFinite(value));
@@ -72,9 +75,16 @@ export function VisualizationAnalysisPage({ locale, taskId, version, model, prov
   const scatterData = buildConfidenceScatter(students);
   const pieData = buildPassComposition(students);
   const [prompt, setPrompt] = useState(tx(locale, "画出学生得分率与平均置信度的关系，并区分需要复核的学生。", "Plot score percentage against average confidence and distinguish students who need review."));
+  const [execution, setExecution] = useState<GroundedAskExecution | null>(null);
+  const conversation = useRef<string[]>([]);
   const [preview, setPreview] = useState<ChartAnalyticsResult | null>(null);
   const [savedCharts, setSavedCharts] = useState<SavedChart[]>([]);
   const chartQuery = useAnalyticsQuery();
+  const generation = useRef(0);
+  useEffect(() => { setPreview(null); setExecution(null); setSavedCharts([]); conversation.current = [];
+    return () => { generation.current += 1; };
+  }, [taskId, version]);
+  const cancelChart = () => { generation.current += 1; chartQuery.reset(); };
   const root = `/tasks/${encodeURIComponent(taskId)}/results`;
 
   const updateScope = (value: string) => {
@@ -85,27 +95,29 @@ export function VisualizationAnalysisPage({ locale, taskId, version, model, prov
   };
 
   const runChart = (question: string) => {
-    if (!question.trim()) return;
-    chartQuery.mutate({ taskId, question, mode: "chart" }, {
+    if (!question.trim() || chartQuery.isPending) return;
+    const ticket = ++generation.current;
+    chartQuery.mutate({ taskId, question, mode: "chart", history: conversation.current }, {
       onSuccess: (result) => {
+        if (ticket !== generation.current) return;
+        if (result.mode === "query") { setExecution(result.execution); setPreview(null);
+          if (result.execution.recognized) conversation.current = [...conversation.current, question].slice(-4);
+          return; }
         if (result.mode !== "chart") {
           toast.error(tx(locale, "图表返回格式不匹配", "Chart response format did not match"));
           return;
         }
-        setPreview(result);
+        setPreview(result); setExecution(result.execution ?? null);
+        conversation.current = [...conversation.current, question].slice(-4);
         toast.success(tx(locale, "图表已生成", "Chart generated"));
       },
     });
   };
 
-  const submitChart = (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
-    runChart(prompt.trim());
-  };
-
   const updatePrompt = (value: string) => {
-    chartQuery.reset();
-    setPrompt(value);
+    cancelChart();
+    setPrompt(value); setPreview(null); setExecution(null);
+    if (!value.trim()) conversation.current = [];
   };
 
   const recoveryInfo = chartQuery.isError
@@ -127,7 +139,7 @@ export function VisualizationAnalysisPage({ locale, taskId, version, model, prov
       <div className="px-5 pt-5">
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div><h2 className="text-[20px] font-bold tracking-[-0.01em] text-foreground">{tx(locale, "可视化分析", "Visual analysis")}</h2><p className="mt-1 text-[13px] text-muted-foreground">{tx(locale, "先用 SmarTAI 自然语言生成你关心的图表，也可继续查看下方默认分析。", "Start with SmarTAI natural-language charts, or continue to the default analysis below.")}</p></div>
-          <div className="flex items-center gap-2"><select value={scope} onChange={(event) => updateScope(event.target.value)} aria-label={tx(locale, "选择图表数据范围", "Select chart data scope")} className="h-9 rounded-[8px] border bg-background px-3 text-[11px] font-semibold text-foreground outline-none focus:border-primary"><option value="all">{tx(locale, "全部学生", "All students")}</option><option value="pass">{tx(locale, "仅及格", "Passed only")}</option><option value="fail">{tx(locale, "仅未及格", "Failed only")}</option><option value="review">{tx(locale, "含复核信号", "With review signals")}</option></select><button type="button" onClick={() => window.print()} className="inline-flex h-9 items-center gap-1.5 rounded-[8px] border bg-card px-3 text-[11px] font-semibold text-foreground hover:bg-muted"><Printer aria-hidden="true" className="h-3.5 w-3.5" />{tx(locale, "打印 / 存为 PDF", "Print / save PDF")}</button></div>
+          <div className="flex items-center gap-2"><button type="button" onClick={() => window.print()} className="inline-flex h-9 items-center gap-1.5 rounded-[8px] border bg-card px-3 text-[11px] font-semibold text-foreground hover:bg-muted"><Printer aria-hidden="true" className="h-3.5 w-3.5" />{tx(locale, "打印 / 存为 PDF", "Print / save PDF")}</button></div>
         </div>
 
         <div className="mt-4 grid grid-cols-2 gap-3 xl:grid-cols-6">
@@ -145,20 +157,22 @@ export function VisualizationAnalysisPage({ locale, taskId, version, model, prov
           <div className="relative flex flex-wrap items-start justify-between gap-3">
             <div className="min-w-0">
               <h3 className="text-[16px] font-bold tracking-[-0.01em] text-foreground">{tx(locale, "SmarTAI 自然语言生成更多图表", "Generate more charts with SmarTAI")}</h3>
-              <p className="mt-1 max-w-4xl text-[11px] leading-5 text-muted-foreground">{tx(locale, "直接描述希望比较的对象、指标和图表形式。每次提交只调用当前模型一次；支持柱状图、散点图、饼图、直方图或箱线图，单次最多 4 组、每组 50 个点。", "Describe what to compare, which metrics matter, and the chart form. Each submission calls the current model once and supports bar, scatter, pie, histogram, or box charts, with up to 4 series and 50 points per series.")}</p>
+              <p className="mt-1 max-w-4xl text-[11px] leading-5 text-muted-foreground">{tx(locale, "直接描述希望比较的对象、指标和图表形式。系统先理解对象，再生成并校验只读查询；支持柱状图、散点图、饼图、直方图或箱线图，单次最多 12 组、2000 行查询结果，数值由数据库计算。", "Describe what to compare, which metrics matter, and the chart form. The agent resolves entities and validates a read-only query; it supports bar, scatter, pie, histogram, or box charts, with up to 12 series and 2000 query rows; values are computed from the database.")}</p>
             </div>
             <div className="flex items-center gap-2">
               <span className="rounded-full border bg-card px-2.5 py-1 text-[10px] font-semibold text-primary">{tx(locale, "按需调用模型", "Uses a model on demand")}</span>
             </div>
           </div>
           <div className="relative mt-3 flex flex-wrap gap-2">{[tx(locale, "比较各题得分率与低置信题次", "Compare question score percentages and low-confidence counts"), tx(locale, "画出总分率与平均置信度散点图", "Plot overall score percentage against average confidence"), tx(locale, "显示及格与未及格人数", "Show pass and fail counts")].map((suggestion) => <button key={suggestion} type="button" onClick={() => updatePrompt(suggestion)} className="rounded-full border bg-card px-2.5 py-1 text-[10px] font-medium text-muted-foreground shadow-sm hover:border-primary/20 hover:text-primary">{suggestion}</button>)}</div>
-          <form onSubmit={submitChart} className="relative mt-3 grid gap-2 lg:grid-cols-[minmax(0,1fr)_auto]">
-            <div className="flex min-w-0 items-start gap-2">
-              <SmarTAIMascot variant={chartQuery.isPending ? "grading" : "thinking"} size="xs" className="mt-1" />
-              <textarea value={prompt} onChange={(event) => updatePrompt(event.target.value)} rows={2} maxLength={500} disabled={chartQuery.isPending} aria-label={tx(locale, "SmarTAI 自然语言图表请求", "SmarTAI natural-language chart request")} className="min-h-20 min-w-0 flex-1 resize-y rounded-[8px] border bg-background px-3 py-2 text-[12px] leading-5 text-foreground outline-none focus:border-primary focus:ring-2 focus:ring-primary/15" />
-            </div>
-            <button type="submit" disabled={chartQuery.isPending || !prompt.trim()} className="inline-flex h-10 items-center justify-center gap-1.5 rounded-[8px] bg-primary px-4 text-[11px] font-semibold text-primary-foreground disabled:opacity-50 lg:self-end">{chartQuery.isPending ? <LoaderCircle aria-hidden="true" className="h-4 w-4 animate-spin" /> : <BarChart3 aria-hidden="true" className="h-4 w-4" />}{chartQuery.isPending ? tx(locale, "SmarTAI 生成中…", "SmarTAI is generating…") : tx(locale, "让 SmarTAI 生成", "Generate with SmarTAI")}</button>
-          </form>
+          <AskQueryBar className="relative mt-3" locale={locale} value={prompt} onChange={updatePrompt}
+            onCancel={cancelChart} onApply={runChart} pending={chartQuery.isPending}
+            label={tx(locale, "Ask SmarTAI：图表分析", "Ask SmarTAI: chart analysis")}
+            placeholder={tx(locale, "描述希望比较的对象、指标和图表形式", "Describe the groups, metrics, and chart to compare")} />
+          <GroundedAskAnswer execution={execution} locale={locale} renderChart={false} onClarify={(text) => {
+            const original = execution?.candidates?.[0]?.text;
+            const next = original ? prompt.replace(new RegExp(original.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i"), text) : `${prompt}；明确对象：${text}`;
+            setPrompt(next); runChart(next);
+          }} />
           {recoveryInfo ? (
             <RecoverableActionState
               info={recoveryInfo}
@@ -212,8 +226,8 @@ function ChartCard({ locale, id, title, description, metadata, detailHref, wide 
 }
 
 function GeneratedResult({ locale, id, result, version, provisional, prompt, onSave, onDelete }: { locale: Locale; id: string; result: ChartAnalyticsResult; version: number; provisional: boolean; prompt?: string; onSave?: () => void; onDelete?: () => void }) {
-  const traces = result.traces.filter(isAllowedTrace).slice(0, 4);
-  return <article className="mt-3 rounded-[9px] border px-4 py-4"><div className="flex flex-wrap items-start justify-between gap-3"><div><h4 className="text-[13px] font-bold text-foreground">{result.title || tx(locale, "自定义图表", "Custom chart")}</h4><p className="mt-1 text-[10px] leading-4 text-muted-foreground">{result.rationale || prompt}</p></div><div className="flex items-center gap-2"><button type="button" onClick={() => void exportChartPng(id, result.title, locale)} className="inline-flex h-8 items-center gap-1 rounded-[7px] border px-2 text-[10px] font-semibold"><Download aria-hidden="true" className="h-3.5 w-3.5" />{traces.length > 1 ? tx(locale, "首图 PNG", "Download First Chart") : "PNG"}</button>{onSave ? <button type="button" onClick={onSave} className="inline-flex h-8 items-center gap-1 rounded-[7px] bg-primary px-2.5 text-[10px] font-semibold text-primary-foreground"><Save aria-hidden="true" className="h-3.5 w-3.5" />{tx(locale, "保存本次", "Save")}</button> : null}{onDelete ? <button type="button" onClick={onDelete} aria-label={tx(locale, "删除本次保存图表", "Delete saved chart")} className="inline-flex h-8 w-8 items-center justify-center rounded-[7px] border text-rose-600 hover:bg-rose-50"><Trash2 aria-hidden="true" className="h-3.5 w-3.5" /></button> : null}</div></div><div className="mt-2 flex flex-wrap gap-1.5"><span className="rounded-full bg-slate-100 px-2 py-0.5 text-[9px] text-muted-foreground">{provisional ? tx(locale, "未确认结果", "Unconfirmed results") : `v${version}`}</span><span className="rounded-full bg-slate-100 px-2 py-0.5 text-[9px] text-muted-foreground">{traces.length} series</span></div><div data-chart-export={id} className="mt-3 grid gap-3 xl:grid-cols-2">{traces.length ? traces.map((trace, index) => <GeneratedTrace key={`${trace.type}-${index}`} locale={locale} trace={trace} index={index} />) : <p className="col-span-full py-6 text-center text-[11px] text-muted-foreground">{tx(locale, "没有可安全渲染的 trace。", "No supported chart data to display.")}</p>}</div></article>;
+  const traces = result.traces.filter(isAllowedTrace);
+  return <article className="mt-3 rounded-[9px] border px-4 py-4"><div className="flex flex-wrap items-start justify-between gap-3"><div><h4 className="text-[13px] font-bold text-foreground">{result.title || tx(locale, "自定义图表", "Custom chart")}</h4><p className="mt-1 text-[10px] leading-4 text-muted-foreground">{result.rationale || prompt}</p></div><div className="flex items-center gap-2"><button type="button" onClick={() => void exportChartPng(id, result.title, locale)} className="inline-flex h-8 items-center gap-1 rounded-[7px] border px-2 text-[10px] font-semibold"><Download aria-hidden="true" className="h-3.5 w-3.5" />{traces.length > 1 ? tx(locale, "首图 PNG", "Download First Chart") : "PNG"}</button>{onSave ? <button type="button" onClick={onSave} className="inline-flex h-8 items-center gap-1 rounded-[7px] bg-primary px-2.5 text-[10px] font-semibold text-primary-foreground"><Save aria-hidden="true" className="h-3.5 w-3.5" />{tx(locale, "保存本次", "Save")}</button> : null}{onDelete ? <button type="button" onClick={onDelete} aria-label={tx(locale, "删除本次保存图表", "Delete saved chart")} className="inline-flex h-8 w-8 items-center justify-center rounded-[7px] border text-rose-600 hover:bg-rose-50"><Trash2 aria-hidden="true" className="h-3.5 w-3.5" /></button> : null}</div></div><div className="mt-2 flex flex-wrap gap-1.5"><span className="rounded-full bg-slate-100 px-2 py-0.5 text-[9px] text-muted-foreground">{provisional ? tx(locale, "未确认结果", "Unconfirmed results") : `v${version}`}</span><span className="rounded-full bg-slate-100 px-2 py-0.5 text-[9px] text-muted-foreground">{traces.length} series</span></div><div data-chart-export={id} className="mt-3 grid gap-3 xl:grid-cols-2">{traces.length ? traces.map((trace, index) => <GroundedTrace key={`${trace.type}-${index}`} trace={trace} locale={locale} />) : <p className="col-span-full py-6 text-center text-[11px] text-muted-foreground">{tx(locale, "没有可安全渲染的 trace。", "No supported chart data to display.")}</p>}</div></article>;
 }
 
 function GeneratedTrace({ locale, trace, index }: { locale: Locale; trace: ChartTrace; index: number }) {
@@ -272,7 +286,7 @@ function traceSeries(trace: ChartTrace) { const labels = (trace.x ?? trace.label
 function traceValues(trace: ChartTrace): number[] { return (trace.y ?? trace.values ?? []).slice(0, 50).map(numeric).filter((value): value is number => value !== null); }
 function tracePoints(trace: ChartTrace) { const xs = (trace.x ?? []).slice(0, 50); const ys = (trace.y ?? []).slice(0, 50); return ys.map((value, index) => ({ x: numeric(xs[index]) ?? index + 1, y: numeric(value) ?? 0, label: String(xs[index] ?? index + 1) })); }
 function numeric(value: unknown): number | null { const number = Number(value); return Number.isFinite(number) ? number : null; }
-function isAllowedTrace(trace: ChartTrace): boolean { return ["bar", "scatter", "pie", "histogram", "box"].includes(trace.type); }
+function isAllowedTrace(trace: ChartTrace): boolean { return ["bar", "line", "scatter", "pie", "histogram", "box"].includes(trace.type); }
 function heatColor(percent: number | null): string { if (percent === null) return "#f1f5f9"; if (percent < 60) return "#ffe4e6"; if (percent < 75) return "#fef3c7"; if (percent < 90) return "#dbeafe"; return "#ccfbf1"; }
 function compactLabel(value: string, max: number): string { return value.length > max ? `${value.slice(0, max - 1)}…` : value; }
 

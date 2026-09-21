@@ -1,3 +1,6 @@
+import { groundedRows } from "./groundedAsk";
+import { EMPTY_FILTER_INTENT, matchesQuestionToken, parseLocalTaskFilter, supportsFilterIntent } from "@/lib/taskFilterIntent";
+import { compareValues } from "@/lib/sortValues";
 import type { Correction, FilterIntentResult } from "@/types";
 import {
   correctionScoreSource,
@@ -119,21 +122,68 @@ export function selectReviewOverview(
 }
 
 export function selectReviewOverviewFromIntent(
-  model: ResultsModel,
-  reviewItems: ReviewItem[],
-  annotatedKeys: Set<string>,
-  intent: FilterIntentResult,
+  model: ResultsModel, reviewItems: ReviewItem[], annotatedKeys: Set<string>, intent: FilterIntentResult,
 ): ReviewOverviewSelection {
-  return selectReviewOverview(
-    model,
-    reviewItems,
-    annotatedKeys,
-    reviewIntentCanonicalQuery(intent),
-  );
+  if (intent.execution) {
+    const students = groundedRows(model.students, intent, "students", student => student.id);
+    return { students, questions: model.questions, matchedCellKeys: new Set(students.flatMap(student => student.corrections.map(c => reviewCellKey(student.id, c.q_id)))), unresolvedText: "", explanation: "all" };
+  }
+  if (!supportsFilterIntent(intent, "review_overview")) return selectReviewOverview(model, reviewItems, annotatedKeys, "");
+  const reviewKeys = new Set(reviewItems.map((item) => reviewCellKey(item.student.id, item.question.id)));
+  const matchedCellKeys = new Set<string>();
+  for (const student of model.students) {
+    const confidence = student.avgConfidence == null ? null : student.avgConfidence > 1 ? student.avgConfidence / 100 : student.avgConfidence;
+    if (intent.max_average_confidence != null && (confidence == null || confidence >= intent.max_average_confidence)) continue;
+    if (intent.min_score_percent != null && (student.percent == null || student.percent < intent.min_score_percent)) continue;
+    if (intent.max_score_percent != null && (student.percent == null || student.percent >= intent.max_score_percent)) continue;
+    if (intent.pass_status === "unscored" && student.percent != null) continue;
+    if (intent.pass_status === "pass" && (student.percent == null || student.percent < 60)) continue;
+    if (intent.pass_status === "fail" && (student.percent == null || student.percent >= 60)) continue;
+    for (const correction of student.corrections) {
+      const question = model.questions.find((item) => item.id === correction.q_id);
+      const key = reviewCellKey(student.id, correction.q_id);
+      const confidence = Number.isFinite(correction.confidence) ? (correction.confidence > 1 ? correction.confidence / 100 : correction.confidence) : null;
+      if (intent.low_confidence && (confidence == null || confidence >= 0.65)) continue;
+      if (intent.disagreement && !isExpertDisagreement(correction)) continue;
+      if (intent.annotated && !annotatedKeys.has(key)) continue;
+      if (intent.review_status === "pending" && (!reviewKeys.has(key) || isConfirmedReview(correction))) continue;
+      if (intent.review_status === "confirmed" && (!reviewKeys.has(key) || !isConfirmedReview(correction))) continue;
+      if (intent.review_status === "none" && reviewKeys.has(key)) continue;
+      if (intent.question_tokens.length && !intent.question_tokens.some((token) => matchesQuestionToken(correction.q_id, question?.label ?? correction.q_id, token))) continue;
+      if (!intent.text_terms.every((term) => cellDescriptor(student, question, correction).includes(normalize(term)))) continue;
+      matchedCellKeys.add(key);
+    }
+  }
+  const students = model.students.filter((student) => student.corrections.some((correction) => matchedCellKeys.has(reviewCellKey(student.id, correction.q_id))));
+  if (intent.sort) students.sort((a, b) => compareReviewStudents(a, b, intent.sort!, reviewKeys));
+  const questions = model.questions.filter((question) => students.some((student) => matchedCellKeys.has(reviewCellKey(student.id, question.id))));
+  return { students, questions, matchedCellKeys, unresolvedText: "", explanation: matchedCellKeys.size ? "text" : "no-match" };
+}
+
+export function resolveReviewFilter(model: ResultsModel, reviewItems: ReviewItem[], annotatedKeys: Set<string>, query: string): FilterIntentResult | null {
+  const preset = parseLocalTaskFilter(query, "review_overview");
+  if (preset) return preset;
+  const selection = selectReviewOverview(model, reviewItems, annotatedKeys, query);
+  if (reviewQueryNeedsIntentFallback(selection)) return null;
+  const normalized = normalize(query);
+  const noReview = includesAny(normalized, NO_REVIEW_TOKENS);
+  const confirmed = includesAny(normalized, CONFIRMED_REVIEW_TOKENS);
+  return { ...EMPTY_FILTER_INTENT,
+    min_score_percent: parseScoreFloor(normalized)?.value ?? null,
+    max_score_percent: parseScoreLimit(normalized)?.value ?? null,
+    pass_status: includesAny(normalized, UNSCORED_TOKENS) ? "unscored" : null,
+    low_confidence: includesAny(normalized, LOW_CONFIDENCE_TOKENS),
+    disagreement: includesAny(normalized, DISAGREEMENT_TOKENS),
+    annotated: includesAny(normalized, ANNOTATED_TOKENS),
+    review_status: noReview ? "none" : confirmed ? "confirmed" : includesAny(normalized, REVIEW_TOKENS) ? "pending" : null,
+    sort: parseReviewSort(normalized)?.sort ?? null,
+    question_tokens: getQuestionTokens(normalized).values,
+    text_terms: selection.unresolvedText ? [selection.unresolvedText] : [],
+  };
 }
 
 export function reviewQueryNeedsIntentFallback(selection: ReviewOverviewSelection): boolean {
-  return Boolean(selection.unresolvedText && selection.matchedCellKeys.size === 0);
+  return Boolean(selection.unresolvedText && (selection.matchedCellKeys.size === 0 || /不要|排除|不是|或者|(?:^|\s)(?:not|except|or)(?:\s|$)/i.test(selection.unresolvedText)));
 }
 
 function cellDescriptor(student: StudentSummary, question: QuestionSummary | undefined, correction: Correction): string {
@@ -193,9 +243,11 @@ function parseScoreFloor(query: string): { raw: string; value: number } | null {
 }
 
 function parseReviewSort(query: string): { raw: string; sort: NonNullable<FilterIntentResult["sort"]> } | null {
+  const preset = parseLocalTaskFilter(query, "review_overview");
+  if (preset?.sort) return { raw: query, sort: preset.sort };
   const patterns: Array<[RegExp, NonNullable<FilterIntentResult["sort"]>]> = [
-    [/(?:置信度).*(?:从低到高|低到高)|confidence\s*(?:asc|low)/i, "confidence_asc"],
-    [/(?:复核信号|复核项).*(?:最多|优先)|review\s*(?:desc|most)/i, "review_desc"],
+    [/(?:置信度)\s*(?:从低到高|低到高)|confidence\s*(?:asc|low)/i, "confidence_asc"],
+    [/(?:复核信号|复核项)\s*(?:最多(?:优先)?|优先)|review\s*(?:desc|most)/i, "review_desc"],
     [/(?:得分率)?\s*(?:从高到低|高到低|降序)|score\s*(?:desc|high)/i, "score_desc"],
     [/(?:得分率)?\s*(?:从低到高|低到高|升序)|score\s*(?:asc|low)/i, "score_asc"],
   ];
@@ -206,39 +258,13 @@ function parseReviewSort(query: string): { raw: string; sort: NonNullable<Filter
   return null;
 }
 
-function compareReviewStudents(
-  left: StudentSummary,
-  right: StudentSummary,
-  sort: NonNullable<FilterIntentResult["sort"]>,
-  reviewKeys: Set<string>,
-): number {
-  if (sort === "score_asc") return nullable(left.percent, Number.POSITIVE_INFINITY) - nullable(right.percent, Number.POSITIVE_INFINITY) || compareNames(left, right);
-  if (sort === "score_desc") return nullable(right.percent, Number.NEGATIVE_INFINITY) - nullable(left.percent, Number.NEGATIVE_INFINITY) || compareNames(left, right);
-  if (sort === "confidence_asc") return nullable(left.avgConfidence, Number.POSITIVE_INFINITY) - nullable(right.avgConfidence, Number.POSITIVE_INFINITY) || compareNames(left, right);
-  const reviewCount = (student: StudentSummary) => student.corrections
-    .filter((correction) => reviewKeys.has(reviewCellKey(student.id, correction.q_id))).length;
-  return reviewCount(right) - reviewCount(left) || compareNames(left, right);
-}
-
-function reviewIntentCanonicalQuery(intent: FilterIntentResult): string {
-  const parts: string[] = [];
-  if (intent.max_score_percent !== null) parts.push(`低于 ${intent.max_score_percent} 分`);
-  if (intent.min_score_percent !== null) parts.push(`至少 ${intent.min_score_percent} 分`);
-  if (intent.pass_status === "fail") parts.push("低于 60 分");
-  if (intent.pass_status === "pass") parts.push("至少 60 分");
-  if (intent.low_confidence) parts.push("低置信");
-  if (intent.disagreement) parts.push("专家分歧");
-  if (intent.review_status === "pending") parts.push("待复核");
-  if (intent.review_status === "confirmed") parts.push("教师已处理");
-  if (intent.annotated) parts.push("已批注");
-  if (intent.review_status === "none") parts.push("无复核信号");
-  if (intent.pass_status === "unscored") parts.push("无可比总分");
-  if (intent.sort === "score_asc") parts.push("得分率从低到高");
-  if (intent.sort === "score_desc") parts.push("得分率从高到低");
-  if (intent.sort === "confidence_asc") parts.push("置信度从低到高");
-  if (intent.sort === "review_desc") parts.push("复核信号最多优先");
-  parts.push(...intent.question_tokens, ...intent.text_terms);
-  return parts.join(" ");
+function compareReviewStudents(left: StudentSummary, right: StudentSummary, sort: NonNullable<FilterIntentResult["sort"]>, reviewKeys: Set<string>): number {
+  const direction = sort.endsWith("_desc") ? "desc" : "asc";
+  if (sort.startsWith("name_")) return direction === "asc" ? compareNames(left, right) : compareNames(right, left);
+  const value = (student: StudentSummary) => sort.startsWith("id_") ? student.id : sort.startsWith("score_") ? student.percent
+    : sort.startsWith("confidence_") ? student.avgConfidence
+      : student.corrections.filter((correction) => reviewKeys.has(reviewCellKey(student.id, correction.q_id))).length;
+  return compareValues(value(left), value(right), direction) || compareNames(left, right);
 }
 
 function isConfirmedReview(correction: Correction): boolean {

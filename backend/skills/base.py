@@ -383,6 +383,11 @@ def classify_skill_error(e: Exception) -> tuple[str, str]:
     no status digits, so they need their own keywords.
     """
     s = str(e).lower()
+    if s == "host_code_execution_disabled":
+        return (
+            "general",
+            "该题未执行：生产环境禁止宿主代码执行。隔离执行尚未接通，请人工复核。",
+        )
     if (
         "quota" in s
         or "429" in s
