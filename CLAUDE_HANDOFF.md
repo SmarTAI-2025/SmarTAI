@@ -1,3 +1,5 @@
+> **2026-09-21 发布更新：** 已推送并创建整合 PR [#79](https://github.com/SmarTAI-2025/SmarTAI/pull/79)，只合并这一项、base=main。旧 #40/#58–#67 已评论关闭。最新[人读交接](docs/integration/20260921/发布与合并_人读版.md)与[AI交接](docs/integration/20260921/发布与合并_AI版.md)覆盖下方历史未发布状态；未代替用户合并。
+
 # 2026-09-20 approved contract overrides and integration
 
 Read `docs/integration/20260920/01_完成与修改总结_AI版.md` and

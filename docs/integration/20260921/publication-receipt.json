@@ -1,0 +1,126 @@
+{
+  "repository": "SmarTAI-2025/SmarTAI",
+  "integration_pr": 79,
+  "url": "https://github.com/SmarTAI-2025/SmarTAI/pull/79",
+  "branch": "fix/verified-integration-20260920",
+  "base": "main",
+  "base_sha": "edfdabceca369ccba3f1d62178908303b8f8dec4",
+  "tested_runtime_sha": "9f762640a9cd7bd24016cea0cb0d52e07a808a7b",
+  "authorized_account": "SmarTAI-2025",
+  "pushed": true,
+  "pr_created": true,
+  "closed_prs": [
+    {
+      "number": 40,
+      "state": "closed",
+      "merged": false,
+      "head_sha": "401bc0d153ca1c9906e6f9848ab27d3b4f1ca3f2",
+      "comment_url": "https://github.com/SmarTAI-2025/SmarTAI/pull/40#issuecomment-5755101578",
+      "comment_id": 5755101578,
+      "superseded_by": 79
+    },
+    {
+      "number": 58,
+      "state": "closed",
+      "merged": false,
+      "head_sha": "91e83845ed45cced77407fee489ec84556b00315",
+      "comment_url": "https://github.com/SmarTAI-2025/SmarTAI/pull/58#issuecomment-5755101520",
+      "comment_id": 5755101520,
+      "superseded_by": 79
+    },
+    {
+      "number": 59,
+      "state": "closed",
+      "merged": false,
+      "head_sha": "b0a3c02adb87692b384eec80b541ef25f8a22604",
+      "comment_url": "https://github.com/SmarTAI-2025/SmarTAI/pull/59#issuecomment-5755102212",
+      "comment_id": 5755102212,
+      "superseded_by": 79
+    },
+    {
+      "number": 60,
+      "state": "closed",
+      "merged": false,
+      "head_sha": "121bfd01b045f58e624d6b278b2f2ffa3c53681a",
+      "comment_url": "https://github.com/SmarTAI-2025/SmarTAI/pull/60#issuecomment-5755102223",
+      "comment_id": 5755102223,
+      "superseded_by": 79
+    },
+    {
+      "number": 61,
+      "state": "closed",
+      "merged": false,
+      "head_sha": "08f3deb721a14233f1653f1ae40745cad4c9576d",
+      "comment_url": "https://github.com/SmarTAI-2025/SmarTAI/pull/61#issuecomment-5755102773",
+      "comment_id": 5755102773,
+      "superseded_by": 79
+    },
+    {
+      "number": 62,
+      "state": "closed",
+      "merged": false,
+      "head_sha": "404e46dde970cd54db3f0513f46f35fa3bcd9fde",
+      "comment_url": "https://github.com/SmarTAI-2025/SmarTAI/pull/62#issuecomment-5755102804",
+      "comment_id": 5755102804,
+      "superseded_by": 79
+    },
+    {
+      "number": 63,
+      "state": "closed",
+      "merged": false,
+      "head_sha": "197f8803640578731d4ccf46716958588b299a01",
+      "comment_url": "https://github.com/SmarTAI-2025/SmarTAI/pull/63#issuecomment-5755103361",
+      "comment_id": 5755103361,
+      "superseded_by": 79
+    },
+    {
+      "number": 64,
+      "state": "closed",
+      "merged": false,
+      "head_sha": "49db5f99819595fdf5f2cb1360d82ca5f67a6fdd",
+      "comment_url": "https://github.com/SmarTAI-2025/SmarTAI/pull/64#issuecomment-5755103427",
+      "comment_id": 5755103427,
+      "superseded_by": 79
+    },
+    {
+      "number": 65,
+      "state": "closed",
+      "merged": false,
+      "head_sha": "98658f3417329eed97f55406b5de34e5f030e849",
+      "comment_url": "https://github.com/SmarTAI-2025/SmarTAI/pull/65#issuecomment-5755103987",
+      "comment_id": 5755103987,
+      "superseded_by": 79
+    },
+    {
+      "number": 66,
+      "state": "closed",
+      "merged": false,
+      "head_sha": "ea3f41fee1c036956dfe9cf8eb43ca1a349bb784",
+      "comment_url": "https://github.com/SmarTAI-2025/SmarTAI/pull/66#issuecomment-5755103988",
+      "comment_id": 5755103988,
+      "superseded_by": 79
+    },
+    {
+      "number": 67,
+      "state": "closed",
+      "merged": false,
+      "head_sha": "82a16123b07943915a7615ed66287097d4eed41c",
+      "comment_url": "https://github.com/SmarTAI-2025/SmarTAI/pull/67#issuecomment-5755104556",
+      "comment_id": 5755104556,
+      "superseded_by": 79
+    }
+  ],
+  "merged": false,
+  "approved_by_agent": false,
+  "main_ancestor": true,
+  "merge_simulation_conflicts": false,
+  "results": {
+    "backend": "1480 passed, 30 skipped, zero failed",
+    "frontend": "80 files, 378 passed; clean npm ci/typecheck/scope/build passed",
+    "postgres": "23 passed; upgrade/downgrade/upgrade passed",
+    "e2e_exact_runtime_head": "2 passed",
+    "dependency_audit": "no known advisories found; not a zero-risk guarantee"
+  },
+  "remote_ci": "See the latest final-head PR Checks and verification comment; early-run results are not reused as final-head evidence.",
+  "recorded_at": "2026-09-21T03:48:25.909680+00:00"
+}
