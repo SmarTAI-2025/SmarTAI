@@ -23,6 +23,7 @@ from backend.db.models import (
     UserRecord,
 )
 from backend.db.session import session_scope
+from backend.db.source_retention import completion_inputs_are_recoverable
 from backend.domain.errors import (
     InvalidTransition,
     LeaseLost,
@@ -1918,6 +1919,13 @@ def enqueue_finalized_source_cleanup_in_session(
         if bounded_source_ids is None or bounded_source_ids
         else []
     )
+    # Completion never discards inputs still required for recognition retry.
+    if candidates and not completion_inputs_are_recoverable(
+        session, assignment_id=assignment_id, owner_id=owner_id,
+        grading_run_id=grading_run_id,
+        source_file_ids=tuple(row.id for row in candidates),
+    ):
+        return None
     if active_match is not None and all(
         row.availability_status == SOURCE_FILE_CLEANUP_PENDING
         and row.cleanup_operation_id == active_match.id
@@ -2035,7 +2043,13 @@ def _cleanup_generation_authorized(
         run.status in {"completed", "partial_failed"}
         and run.completed_at == finalized_at
     )
-    return formal_result_authorized or grading_completion_authorized
+    if not (formal_result_authorized or grading_completion_authorized):
+        return False
+    return completion_inputs_are_recoverable(
+        session, assignment_id=assignment_id, owner_id=owner_id,
+        grading_run_id=grading_run_id,
+        source_file_ids=grading_run_source_file_ids_in_session(session, grading_run_id),
+    )
 
 
 def cleanup_generation_is_authorized(

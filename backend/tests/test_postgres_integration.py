@@ -976,3 +976,21 @@ async def test_postgres_task_delete_worker_removes_full_restrict_graph_and_stora
             session.get(StoredFileRecord, row_id) is None
             for row_id in (source_file.id, artifact_file.id, revision_file.id)
         )
+
+
+@pytest.mark.parametrize("archive", [False, True])
+def test_postgres_completion_retains_failed_recognition_source(pg_database, tmp_path, archive):
+    from backend.tests.test_source_retention import (
+        test_completion_retains_unresolved_recognition_source_and_archive,
+    )
+    test_completion_retains_unresolved_recognition_source_and_archive(
+        tmp_path, status="parse_failed", archive=archive,
+    )
+
+
+@pytest.mark.asyncio
+async def test_postgres_cleanup_rechecks_saved_inputs(pg_database, tmp_path, monkeypatch):
+    from backend.tests.test_source_retention import (
+        test_queued_cleanup_rechecks_missing_structured_input_before_delete,
+    )
+    await test_queued_cleanup_rechecks_missing_structured_input_before_delete(tmp_path, monkeypatch)
