@@ -134,7 +134,11 @@ async def resolve_question_score_policy(
     matched = 0
     for q_id in problems_data:
         teacher = explicit.get(normalize_question_number(problems_data[q_id].get("number")))
-        distinct = {float(teacher.maximum)} if teacher is not None else set(candidates.get(q_id, []))
+        distinct = (
+            {float(teacher.maximum)}
+            if teacher is not None and teacher.maximum is not None
+            else set(candidates.get(q_id, []))
+        )
         if len(distinct) == 1:
             resolved[q_id] = ResolvedQuestionScore(
                 max_score=distinct.pop(),
