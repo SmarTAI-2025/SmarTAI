@@ -124,6 +124,11 @@ def _merge_decision(
     dropped_norm: str,
 ) -> Optional[Tuple[str, int]]:
     """Return (kind, overlap) if the later row must merge into the earlier one."""
+    # Empty extraction candidates supply no evidence of identity. Keep them
+    # for the existing validation gate instead of crashing or merging two
+    # empty rows merely because their display numbers happen to match.
+    if not keeper_norm or not dropped_norm:
+        return None
     overlap = _suffix_prefix_overlap(keeper_norm, dropped_norm)
     if overlap:
         return ("splice", overlap)

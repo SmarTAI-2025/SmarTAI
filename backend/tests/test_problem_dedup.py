@@ -413,3 +413,16 @@ async def test_deduped_extraction_feeds_score_policy(monkeypatch):
     assert len(resolved) == 19
     assert all(r.issue_code != "max_score_not_found" for r in resolved.values())
     assert sum(r.max_score for r in resolved.values()) == 150
+
+
+@pytest.mark.parametrize("first,second", [("", "Explain continuity."), ("Explain continuity.", ""), ("", ""), (" \n\t", "Explain continuity.")])
+@pytest.mark.parametrize("numbers", [("1", "1"), ("1", "2")])
+def test_empty_extraction_stems_are_preserved_for_validation(first, second, numbers):
+    rows = {
+        "q1": {"q_id": "q1", "number": numbers[0], "stem": first},
+        "q2": {"q_id": "q2", "number": numbers[1], "stem": second},
+    }
+    result = dedupe_extracted_problems(rows)
+    assert len(result) == 2
+    assert [item["stem"] for item in result.values()] == [first, second]
+    assert rows["q1"]["stem"] == first
