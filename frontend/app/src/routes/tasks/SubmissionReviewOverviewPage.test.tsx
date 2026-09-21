@@ -37,7 +37,7 @@ function renderPage(initialEntry: string) {
       </Routes>
     </MemoryRouter>,
   );
-  return screen.getByRole("searchbox", { name: "submissionReviewSearchLabel" }) as HTMLInputElement;
+  return screen.getByRole("textbox", { name: "Ask SmarTAI: student answers" }) as HTMLInputElement;
 }
 
 describe("SubmissionReviewOverviewPage smart search", () => {
@@ -55,12 +55,10 @@ describe("SubmissionReviewOverviewPage smart search", () => {
 
     fireEvent.compositionEnd(input);
     fireEvent.blur(input);
-    fireEvent.change(screen.getByRole("combobox", { name: "submissionReviewStatusLabel" }), {
-      target: { value: "missing" },
-    });
+    expect(screen.queryByRole("combobox")).not.toBeInTheDocument();
 
     await waitFor(() => {
-      expect(screen.getByTestId("location-search")).toHaveTextContent("status=missing");
+      expect(screen.getByTestId("location-search")).toHaveTextContent("status=review");
       expect(screen.getByTestId("location-search")).toHaveTextContent("q=%E4%B8%89");
     });
   });
