@@ -1652,6 +1652,9 @@ Rules:
   up to 100% and never restate the maximum score; if that no-subpart question is objective
   (选择题/多选题/填空题), use a result-based criterion such as
   "答案唯一: 答对满分, 答错 0 分" instead (for 多选题 keep the stem's partial-credit rule when present).
+- teacher_subpart_points contains authoritative teacher allocations. Preserve each named label's
+  points exactly in criterion; allocate only the unspecified remainder. Do not replace explicit
+  allocations with an even split. A subpart remains inside its single major-question package.
 - reference_answer: a correct model answer or derivation suitable for teacher review. Cover every
   labelled subpart in question_structure, in source order, without creating separate q_ids. If an
   existing teacher answer contains only a final answer, preserve that conclusion and expand it
@@ -1732,6 +1735,7 @@ async def generate_missing_question_materials(
             "question_structure": _generation_question_structure(
                 problem.get("question_structure")
             ),
+            "teacher_subpart_points": dict(problem.get("teacher_subpart_points") or {}),
             "existing_criterion": str(problem.get("criterion") or "")[:existing_budget],
             "existing_reference_answer": str(
                 problem.get("reference_answer") or ""
