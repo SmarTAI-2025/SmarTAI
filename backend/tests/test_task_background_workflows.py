@@ -343,6 +343,60 @@ def test_editing_student_answer_atomically_invalidates_current_grading():
     assert workflow.analysis_status == "not_generated"
 
 
+def test_confirming_one_answer_does_not_reset_sibling_answers():
+    """2026-08-28 "按下葫芦浮起瓢" fix: confirming one answer in solution
+    review mints a fresh revision copying every answer row; each sibling's
+    review status must be carried over, not silently reset to "pending"."""
+    owner_id, task_id = _seed_task(with_question=True)
+    assignment_repository.add_question(
+        task_id, teacher_id=owner_id, q_id="q2", order_index=1,
+        type="short", stem="Second", criterion="", max_score=10,
+    )
+    assignment = assignment_repository.get_assignment(task_id, actor_id=owner_id)
+    task_facade._commit_imported_submissions(
+        task_id=task_id,
+        owner_id=owner_id,
+        course_id=assignment.course_id,
+        students=[{
+            "stu_id": "S001",
+            "stu_name": "Student",
+            "source_filename": "old.txt",
+            "stu_ans": [
+                {"q_id": "q1", "content": "first answer"},
+                {"q_id": "q2", "content": "second answer"},
+            ],
+        }],
+        expected_workflow_revision=0,
+        submission_file_name="old.txt",
+    )
+
+    task_facade.update_student_answer(
+        task_id=task_id,
+        owner_id=owner_id,
+        display_student_id="S001",
+        q_id="q1",
+        patch={"review_status": "confirmed"},
+        expected_revision=1,
+    )
+    task_facade.update_student_answer(
+        task_id=task_id,
+        owner_id=owner_id,
+        display_student_id="S001",
+        q_id="q2",
+        patch={"review_status": "confirmed"},
+        expected_revision=2,
+    )
+
+    student_data = task_facade.get_task(
+        task_id=task_id, owner_id=owner_id, full=True
+    )["student_data"]
+    statuses = {
+        answer["q_id"]: answer["review_status"]
+        for answer in student_data["S001"]["stu_ans"]
+    }
+    assert statuses == {"q1": "confirmed", "q2": "confirmed"}
+
+
 def test_question_replace_requires_confirmation_and_cas_is_atomic():
     owner_id, task_id = _seed_task()
     assert task_facade._replace_draft_questions(

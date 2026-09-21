@@ -136,6 +136,23 @@ def _label_family_and_value(label: str) -> tuple[str, int] | None:
     return None
 
 
+def _is_subpart_marker(stem: str, match: re.Match[str]) -> bool:
+    """Exclude function arguments and inline mathematical expressions.
+
+    Subparts are presentation metadata, not inferred scoring units. A marker
+    attached to an identifier (``f(a)``) or followed by an operator is not a
+    heading. Both newline headings and existing inline ``(a) Explain`` forms
+    remain supported; the complete authoritative stem is never rewritten.
+    """
+    before = stem[:match.start()]
+    after = stem[match.end():].lstrip()
+    if before and (before[-1].isalnum() or before[-1] in "_\\"):
+        return False
+    if not after or after[0] in "=+*/^_,)]}<>≤≥±−":
+        return False
+    return True
+
+
 def _select_subpart_matches(stem: str) -> list[re.Match[str]]:
     """Return a conservative sequential marker run.
 
@@ -144,7 +161,10 @@ def _select_subpart_matches(stem: str) -> list[re.Match[str]]:
     emitted.  This never changes the authoritative stem.
     """
 
-    matches = list(_PAREN_LABEL_RE.finditer(stem or ""))
+    matches = [
+        match for match in _PAREN_LABEL_RE.finditer(stem or "")
+        if _is_subpart_marker(stem, match)
+    ]
     if len(matches) < 2:
         return []
     for start in range(len(matches)):
@@ -223,16 +243,31 @@ def _append_distinct(base: str, addition: str) -> str:
     return f"{base.rstrip()}\n\n{addition.lstrip()}"
 
 
+def _labelled_subpart_text(value: str, label: str) -> str:
+    value = value.strip()
+    if not value:
+        return value
+    if normalize_stem(value).startswith(normalize_stem(label)):
+        return value
+    return f"{label} {value}"
+
+
+def _label_first_subpart(row: dict[str, Any], label: str) -> None:
+    # Uploaded materials on the first row need the same label as later rows;
+    # otherwise merging (a)/(b) can leave only (b) in the rubric/answer.
+    for field in ("stem", "criterion", "reference_answer"):
+        if row.get(field):
+            row[field] = _labelled_subpart_text(str(row[field]), label)
+
+
 def _merge_major_rows(target: dict[str, Any], row: Mapping[str, Any], label: str) -> None:
-    labelled_stem = str(row.get("stem") or "")
-    if label and normalize_stem(label) not in normalize_stem(labelled_stem[:16]):
-        labelled_stem = f"{label} {labelled_stem}".strip()
+    labelled_stem = _labelled_subpart_text(str(row.get("stem") or ""), label)
     target["stem"] = _append_distinct(str(target.get("stem") or ""), labelled_stem)
     for field in ("criterion", "reference_answer"):
         value = str(row.get(field) or "").strip()
         if value:
             target[field] = _append_distinct(
-                str(target.get(field) or ""), f"{label} {value}".strip()
+                str(target.get(field) or ""), _labelled_subpart_text(value, label)
             )
     target["preparation_issues"] = [
         *list(target.get("preparation_issues") or []),
@@ -278,9 +313,7 @@ def collapse_explicit_subpart_rows(
     ):
         recovered = leading[0][0]
         recovered["number"] = "1"
-        recovered["stem"] = (
-            f"{leading[0][1]} {str(recovered.get('stem') or '').lstrip()}".strip()
-        )
+        _label_first_subpart(recovered, leading[0][1])
         recovered["_structure_review_status"] = "needs_review"
         for row, label, _ in leading[1:]:
             _merge_major_rows(recovered, row, label)
@@ -307,7 +340,7 @@ def collapse_explicit_subpart_rows(
                 active_parent = len(collapsed) - 1
             else:
                 row["number"] = parent
-                row["stem"] = f"{label} {str(row.get('stem') or '').lstrip()}".strip()
+                _label_first_subpart(row, label)
                 row["_structure_review_status"] = "needs_review"
                 collapsed.append(row)
                 active_parent = len(collapsed) - 1
@@ -442,6 +475,15 @@ def _parse_allocations(
             prefix = segment[max(0, match.start() - 20):match.start()].casefold()
             if re.search(r"(?:总分|合计|total)\s*[:：=为-]?\s*$", prefix):
                 continue
+            # Deductions describe how to lose credit, never extra available
+            # points. Keep this same bounded rule in the frontend parser.
+            if re.search(
+                r"(?:扣(?:除)?|减(?:去|少)?|罚|deduct(?:ion)?|subtract|minus|"
+                r"penalty(?:\s+of)?|lose|loss\s+of|lost)"
+                r"\s*(?:最多|至多|up\s+to|at\s+most)?\s*[:：=-]?\s*$",
+                prefix,
+            ):
+                continue
             component_scores.append(Decimal(match.group("points")))
         if component_scores:
             # Multiple point-bearing criteria inside one labelled item are
@@ -532,4 +574,3 @@ def presentation_question_structure(source: Mapping[str, Any] | None) -> dict | 
     if not value:
         return None
     return MajorQuestionStructureV1.model_validate(value).model_dump()
-

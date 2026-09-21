@@ -330,12 +330,39 @@ def test_adapter_normalizes_untrusted_model_scale(setup_assignment):
     assert [step["score"] for step in result.ai_steps] == [6.0, 2.0]
 
 
-def test_adapter_treats_degraded_to_single_as_soft_review(setup_assignment):
+def test_adapter_keeps_high_confidence_degraded_single_graded(setup_assignment):
+    """2026-08-28 policy: one confident model is enough. A degraded run whose
+    surviving sample is confident is a publishable GRADED result — model
+    capabilities are uneven (Qwen cannot grade some items, DeepSeek only big
+    ones), so the weaker sibling's failure must not force teacher review."""
     from backend.models import Correction
 
     correction = Correction(
         q_id="q1", type="short", score=7.0, max_score=10.0, confidence=0.85,
         comment="one expert succeeded", steps=[], synthesis_method="degraded_to_single",
+    )
+    result = grading_adapter.correction_to_result(
+        run_id="run-x", revision_id="rev-x",
+        question=assignment_repository.get_questions_by_assignment(
+            assignment_id=setup_assignment["assignment_id"]
+        )[0],
+        student_id=setup_assignment["student_id"], correction=correction,
+    )
+    assert result.result_status == education.GradeResultStatus.GRADED.value
+    assert result.ai_score == 7.0
+    assert result.requires_review is False
+    assert result.review_reasons == []
+
+
+def test_adapter_flags_low_confidence_degraded_single_for_review(setup_assignment):
+    """The same degraded run with a low-confidence survivor still needs
+    review — the flag travels on the Correction from run_multi_expert."""
+    from backend.models import Correction
+
+    correction = Correction(
+        q_id="q1", type="short", score=7.0, max_score=10.0, confidence=0.4,
+        comment="one expert succeeded", steps=[], synthesis_method="degraded_to_single",
+        requires_human_review=True, review_reasons=["degraded_to_single"],
     )
     result = grading_adapter.correction_to_result(
         run_id="run-x", revision_id="rev-x",
@@ -866,6 +893,134 @@ def test_reclaimed_worker_recomputes_counters_from_existing_results(
     assert recovered.failed_submissions == 0
 
 
+def test_reclaimed_pass_starts_fresh_progress_reporter(setup_assignment, monkeypatch):
+    """A reclaimed pass must not accumulate on the previous pass's counter.
+
+    Regression: a live run graded twice (lease-expiry reclaim) shared one
+    in-memory reporter and ended with completed_units = 2 × total
+    (progress bar past 100%, "running" pinned to 0 mid-run).
+    """
+    import time as _time
+
+    from backend.db.models import GradingRunRecord
+    from backend.db.session import session_scope
+    from backend.progress.tracker import get_or_create_reporter
+
+    run = grading_runs.create_run(
+        teacher_id=setup_assignment["teacher_id"],
+        assignment_id=setup_assignment["assignment_id"],
+    )
+    grading_repository.claim_lease(
+        run_id=run.id, worker_id="w-dead", lease_seconds=60,
+    )
+    revision = submission_repository.get_current_revision_for_run(
+        submission_id=setup_assignment["submission_id"]
+    )
+    question = assignment_repository.get_questions_by_assignment(
+        assignment_id=setup_assignment["assignment_id"]
+    )[0]
+    result = grading_adapter.correction_to_result(
+        run_id=run.id, revision_id=revision.id, question=question,
+        student_id=setup_assignment["student_id"],
+        correction=__import__("backend.models", fromlist=["Correction"]).Correction(
+            q_id=question.q_id, type=question.type, score=8.0,
+            max_score=question.max_score, confidence=1, comment="ok", steps=[],
+        ),
+    )
+    grading_repository.upsert_result(
+        run.id, worker_id="w-dead", grade_result=result,
+    )
+    with session_scope() as session:
+        record = session.get(GradingRunRecord, run.id)
+        record.lease_expiry = _time.time() - 1
+
+    async def replay_and_count(**kwargs):
+        # Mimic one graded unit in this pass (the real grade_batch calls
+        # reporter.increment_completed per unit).
+        await kwargs["reporter"].increment_completed()
+        return [grading_adapter.AdapterOutcome(
+            student_id=setup_assignment["student_id"], results=[result],
+        )]
+
+    class _Registry:
+        @staticmethod
+        def count():
+            return 1
+
+    monkeypatch.setattr(grading_adapter, "run_grading", replay_and_count)
+
+    async def exercise():
+        # Stale residue from the interrupted first pass (completed=1), the
+        # same run_id, same process — what a crash/reclaim leaves behind.
+        stale = get_or_create_reporter(run.id, total_students=1, total_questions=1)
+        await stale.increment_completed()
+        await grading_runs.process_run(
+            run_id=run.id, worker_id="w-reclaimed", registry=_Registry(),
+        )
+
+    asyncio.run(exercise())
+
+    progress_events = [
+        event for event in grading_repository.list_events(run_id=run.id)
+        if event["message"] == "grading_progress"
+    ]
+    assert progress_events, "pass persisted no grading_progress events"
+    last = progress_events[-1]["payload"]
+    # This pass graded exactly 1 unit — NOT 1 (stale) + 1 (this pass) = 2.
+    assert last["completed_units"] == 1
+    assert last["active_units"] == 0
+
+
+def test_process_run_removes_reporter_on_terminal(setup_assignment, monkeypatch):
+    """A terminal run leaves no live reporter (page shows durable active: [])."""
+    from backend.progress.tracker import get_reporter
+
+    run = grading_runs.create_run(
+        teacher_id=setup_assignment["teacher_id"],
+        assignment_id=setup_assignment["assignment_id"],
+    )
+    grading_repository.claim_lease(
+        run_id=run.id, worker_id="w-terminal", lease_seconds=60,
+    )
+    revision = submission_repository.get_current_revision_for_run(
+        submission_id=setup_assignment["submission_id"]
+    )
+    question = assignment_repository.get_questions_by_assignment(
+        assignment_id=setup_assignment["assignment_id"]
+    )[0]
+    result = grading_adapter.correction_to_result(
+        run_id=run.id, revision_id=revision.id, question=question,
+        student_id=setup_assignment["student_id"],
+        correction=__import__("backend.models", fromlist=["Correction"]).Correction(
+            q_id=question.q_id, type=question.type, score=8.0,
+            max_score=question.max_score, confidence=1, comment="ok", steps=[],
+        ),
+    )
+    grading_repository.upsert_result(
+        run.id, worker_id="w-terminal", grade_result=result,
+    )
+
+    async def replay_existing_result(**_kwargs):
+        return [grading_adapter.AdapterOutcome(
+            student_id=setup_assignment["student_id"], results=[result],
+        )]
+
+    class _Registry:
+        @staticmethod
+        def count():
+            return 1
+
+    monkeypatch.setattr(grading_adapter, "run_grading", replay_existing_result)
+
+    asyncio.run(grading_runs.process_run(
+        run_id=run.id, worker_id="w-terminal", registry=_Registry(),
+    ))
+
+    assert get_reporter(run.id) is None
+    assert grading_repository.get_run(run.id).status == \
+        education.GradingRunStatus.COMPLETED.value
+
+
 def test_explicit_e2e_provider_does_not_require_persisted_provider_config(
     setup_assignment, monkeypatch,
 ):
@@ -940,6 +1095,10 @@ def test_failed_run_persists_and_projects_the_classified_reason(
 
     progress = task_facade._grading_progress(run.id, setup_assignment["teacher_id"])
     assert progress["error_detail"] == expected_code
+
+    # A failed run is terminal too — no live reporter may linger.
+    from backend.progress.tracker import get_reporter
+    assert get_reporter(run.id) is None
     task = task_facade.get_task(
         task_id=setup_assignment["assignment_id"],
         owner_id=setup_assignment["teacher_id"],

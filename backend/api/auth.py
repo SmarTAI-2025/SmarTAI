@@ -1,7 +1,7 @@
 """Configurable registration with short access tokens and rotating sessions."""
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request, Response, status
 from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
@@ -176,12 +176,15 @@ def _password_reset_error(exc: PasswordResetError) -> HTTPException:
 
 
 @router.post("/password-reset/request", status_code=status.HTTP_202_ACCEPTED)
-def request_password_reset_email(req: PasswordResetRequest, request: Request):
+def request_password_reset_email(
+    req: PasswordResetRequest, request: Request, background_tasks: BackgroundTasks,
+):
     try:
         return request_password_reset(
             email=req.email,
             source_ip=request.client.host if request.client else None,
             sender=get_email_sender(),
+            delivery_scheduler=background_tasks.add_task,
         )
     except PasswordResetError as exc:
         raise _password_reset_error(exc) from exc

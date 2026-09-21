@@ -87,7 +87,7 @@ function renderPage(initialEntry: string) {
       </Routes>
     </MemoryRouter>,
   );
-  return screen.getByRole("textbox", { name: "本地快速筛选题目资料，不调用模型" }) as HTMLInputElement;
+  return screen.getByRole("textbox", { name: "Ask SmarTAI：题目资料" }) as HTMLInputElement;
 }
 
 describe("QuestionPreparationOverviewPage smart search", () => {

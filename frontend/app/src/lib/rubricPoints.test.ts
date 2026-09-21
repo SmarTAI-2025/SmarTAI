@@ -68,3 +68,17 @@ describe("summarizeRubricPoints", () => {
     expect(summarizeRubricPoints("综合评价方法与结论", 10, LETTER_STRUCTURE).is_valid).toBe(true);
   });
 });
+
+
+describe("deductions are not additional available points", () => {
+  it.each([
+    "(a) 4分，漏步骤扣1分；(b) 6分",
+    "(a) 4 points; deduct 1 point for a missing step. (b) 6 points",
+    "(a) 方法2分、结果2分，错误减去1分；(b) 证明6分",
+    "(a) 4 points, subtract 0.5 points for a missing unit; (b) 6 points",
+  ])("matches the backend allocation for %s", (criterion) => {
+    const summary = summarizeRubricPoints(criterion, 10, LETTER_STRUCTURE);
+    expect(summary).toMatchObject({ is_valid: true, total_points: "10" });
+    expect(summary.items.map((item) => item.points)).toEqual(["4", "6"]);
+  });
+});

@@ -5,8 +5,8 @@ import { analyticsKeys } from "./keys";
 
 export function useAnalyticsQuery() {
   return useMutation({
-    mutationFn: ({ taskId, question, mode }: { taskId: string; question: string; mode: AnalyticsMode }) =>
-      analyticsApi.runAnalyticsQuery(taskId, question, mode),
+    mutationFn: ({ taskId, question, mode, history }: { taskId: string; question: string; mode: AnalyticsMode; history?: string[] }) =>
+      analyticsApi.runAnalyticsQuery(taskId, question, mode, history),
   });
 }
 
