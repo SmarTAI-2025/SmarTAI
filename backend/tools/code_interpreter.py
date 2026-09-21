@@ -5,9 +5,9 @@ Per docs §4.2.1, should use Docker or subprocess sandbox to run student code
 against test cases. This initial implementation uses subprocess with strict
 resource limits. Docker support can be added later via the same interface.
 
-SAFETY: This code runs UNTRUSTED student input. The subprocess runner applies
-timeout, memory limits, and CPU limits via resource.setrlimit. For production
-use with hostile input, wrap in Docker with --network=none --read-only.
+SAFETY: Host execution is disabled when runtime_environment=production.
+Development/test subprocesses are not isolation against hostile code. Formal
+production execution must use the separately implemented OCI adapter.
 
 CONCURRENCY: Every subprocess invocation is gated by a global asyncio.Semaphore
 from :mod:`backend.tools.sandbox_runtime` — without it, the grading pipeline's
@@ -47,10 +47,19 @@ from typing import List, Optional
 # for upload parsing, storage, and execution. Re-export under the same name so
 # legacy imports `from backend.tools.code_interpreter import TestCase` keep
 # working.
+from backend.config import settings
 from backend.models import TestCase
 from backend.tools.sandbox_runtime import get_sandbox_semaphore
 
 logger = logging.getLogger(__name__)
+
+
+class HostCodeExecutionDisabled(RuntimeError):
+    """Production must not execute untrusted code in the website process host."""
+
+    def __init__(self) -> None:
+        super().__init__("host_code_execution_disabled")
+
 
 
 @dataclass
@@ -102,6 +111,11 @@ async def run_python_subprocess(
     are alive at once. Without this guard the grading pipeline can spawn
     hundreds of processes (students × questions × test cases) and OOM the host.
     """
+    # Resource limits are not filesystem/network isolation. Until the formal
+    # OCI adapter is connected, production must fail closed, not run code on
+    # the application host or turn infrastructure unavailability into 0/N.
+    if settings.runtime_environment == "production":
+        raise HostCodeExecutionDisabled()
     sem = get_sandbox_semaphore()
     async with sem:
         started_at = time.perf_counter()

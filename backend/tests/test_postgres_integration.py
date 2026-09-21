@@ -1310,3 +1310,21 @@ def test_postgres_grading_and_source_admission_share_workflow_first_order(
         assert sorted(future.result(timeout=10) for future in futures) == [
             "grading", "source",
         ]
+
+
+@pytest.mark.parametrize("archive", [False, True])
+def test_postgres_completion_retains_failed_recognition_source(pg_database, tmp_path, archive):
+    from backend.tests.test_source_retention import (
+        test_completion_retains_unresolved_recognition_source_and_archive,
+    )
+    test_completion_retains_unresolved_recognition_source_and_archive(
+        tmp_path, status="parse_failed", archive=archive,
+    )
+
+
+@pytest.mark.asyncio
+async def test_postgres_cleanup_rechecks_saved_inputs(pg_database, tmp_path, monkeypatch):
+    from backend.tests.test_source_retention import (
+        test_queued_cleanup_rechecks_missing_structured_input_before_delete,
+    )
+    await test_queued_cleanup_rechecks_missing_structured_input_before_delete(tmp_path, monkeypatch)

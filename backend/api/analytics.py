@@ -7,6 +7,7 @@ worker that cannot observe a local invalidation hook.
 """
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import logging
 import math
@@ -21,7 +22,10 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
 from sqlalchemy import and_, select
 
-from backend.agents import analytics_agent
+from backend.agents import analytics_agent, grounded_ask
+from backend.analytics.ask_workspace import AskDataError, load_snapshot
+from backend.domain.errors import DomainError, NotFound
+from backend.api.errors import domain_error_response
 from backend.auth import require_teacher
 from backend.db.models import (
     AssignmentQuestionRecord,
@@ -29,10 +33,12 @@ from backend.db.models import (
     GradeResultRecord,
     GradingRunRecord,
     SubmissionAnswerRecord,
+    SubmissionRecord,
     TeacherReviewRecord,
     UserRecord,
 )
 from backend.db.session import session_scope
+from backend.db.workflow_repository import AssignmentStudentPresentationRecord, GradingRunSetupRecord
 from backend.domain import education
 from backend.llm.registry import (
     ExpertRegistry,
@@ -51,13 +57,14 @@ _RATE_WINDOW_SECONDS = 30.0
 
 
 class QueryRequest(BaseModel):
-    question: str = Field(min_length=1, max_length=500)
+    question: str = Field(min_length=1, max_length=2000)
     mode: Literal["filter", "summary", "chart"] = "filter"
+    history: list[str] = Field(default_factory=list, max_length=4)
 
 
 class FilterIntentRequest(BaseModel):
     question: str = Field(min_length=1, max_length=500)
-    surface: Literal["student_analysis", "review_overview"]
+    surface: analytics_agent.FilterIntentSurface
 
 
 @dataclass(frozen=True)
@@ -542,18 +549,65 @@ def _provider_error(exc: SharedPoolLimitError) -> HTTPException:
     )
 
 
-def _redact_filter_question(question: str, facts: _AnalyticsFacts) -> str:
+def _load_filter_identifiers(task_id: str, owner_id: str) -> set[str]:
+    """Authorize the task and read identities without requiring a grading run."""
+    with session_scope() as session:
+        owned = session.scalar(select(AssignmentRecord.id).where(
+            AssignmentRecord.id == task_id, AssignmentRecord.teacher_id == owner_id,
+        ))
+        if owned is None:
+            raise _not_found()
+        students = session.execute(
+            select(UserRecord.id, UserRecord.username)
+            .join(SubmissionRecord, SubmissionRecord.student_id == UserRecord.id)
+            .where(SubmissionRecord.assignment_id == task_id)
+        ).all()
+        presentations = session.execute(select(
+            AssignmentStudentPresentationRecord.student_id,
+            AssignmentStudentPresentationRecord.display_student_id,
+            AssignmentStudentPresentationRecord.display_name,
+        ).where(AssignmentStudentPresentationRecord.assignment_id == task_id)).all()
+        identifiers = {str(value).strip() for row in [*students, *presentations] for value in row if value}
+        # Results may still show the frozen identity after a presentation edit.
+        for rows in session.scalars(select(GradingRunSetupRecord.input_manifest["student_presentations"]).where(
+            GradingRunSetupRecord.assignment_id == task_id, GradingRunSetupRecord.owner_id == owner_id,
+        )):
+            for row in rows if isinstance(rows, list) else []:
+                if isinstance(row, dict):
+                    identifiers.update(str(row[field]).strip() for field in ("student_id", "display_student_id", "display_name") if row.get(field))
+        return identifiers - {""}
+
+
+def _redact_filter_question(question: str, identifiers: set[str]) -> tuple[str, dict[str, str]]:
     """Remove known student identifiers before sending query text to a provider."""
-    redacted = question
-    identifiers = {
-        identifier.strip()
-        for row in facts.per_student_stats
-        for identifier in (str(row.get("id", "")), str(row.get("name", "")))
-        if identifier and identifier.strip()
-    }
-    for identifier in sorted(identifiers, key=len, reverse=True):
-        redacted = re.sub(re.escape(identifier), "<student>", redacted, flags=re.IGNORECASE)
-    return redacted
+    if not identifiers:
+        return question, {}
+    placeholders: dict[str, str] = {}
+    originals: dict[str, str] = {}
+    def replace(match: re.Match[str]) -> str:
+        literal = match.groupdict().get("numeric_id") or match.groupdict().get("trailing_id") or match.group(0)
+        identity = literal.casefold()
+        placeholder = placeholders.setdefault(identity, f"<student_{len(placeholders) + 1}>")
+        originals[placeholder] = literal
+        return (match.groupdict().get("numeric_prefix") or "") + placeholder
+    patterns = []
+    for value in sorted(identifiers, key=len, reverse=True):
+        if value.isdigit() and len(value) < 6:
+            continue
+        escaped = re.escape(value)
+        patterns.append(
+            rf"(?<![a-z0-9_]){escaped}(?![a-z0-9_])"
+            if re.search(r"[a-z0-9]", value, re.IGNORECASE) else escaped
+        )
+    numeric_ids = "|".join(re.escape(value) for value in sorted(identifiers, key=len, reverse=True) if value.isdigit() and len(value) < 6)
+    if numeric_ids:
+        # A short numeric ID must not consume a score limit or Q1's number.
+        patterns.append(
+            rf"(?P<numeric_prefix>(?<![a-z0-9_])(?:学号|学生|同学|student(?:\s*id)?|id|#)\s*[:：#]?\s*)"
+            rf"(?P<numeric_id>{numeric_ids})(?![a-z0-9_])"
+        )
+        patterns.append(rf"(?<![a-z0-9_])(?P<trailing_id>{numeric_ids})(?=\s*(?:同学|学生))")
+    return re.sub("|".join(patterns), replace, question, flags=re.IGNORECASE), originals
 
 
 @router.post("/{task_id}/filter-intent")
@@ -563,15 +617,15 @@ async def interpret_filter_intent(
     current: User = Depends(require_teacher),
     registry: ExpertRegistry = Depends(get_scoped_expert_registry),
 ):
-    facts = _load_facts(task_id, current.id)
-    provider = registry.pick_default()
+    known_identifiers = _load_filter_identifiers(task_id, current.id)
+    provider = resolve_owner_default_provider(current.id, registry)
     if provider is None:
         raise HTTPException(
             status.HTTP_503_SERVICE_UNAVAILABLE,
             detail={"code": "analytics_provider_unavailable"},
         )
     _check_rate_limit(f"{current.id}:filter-intent")
-    provider_question = _redact_filter_question(req.question, facts)
+    provider_question, identities = _redact_filter_question(req.question, known_identifiers)
 
     try:
         output = await analytics_agent.interpret_filter_intent(
@@ -579,12 +633,22 @@ async def interpret_filter_intent(
             surface=req.surface,
             provider=provider,
         )
+        text_terms = []
+        for term in output.text_terms:
+            normalized = term.strip().casefold()
+            if normalized in identities and req.surface in {"student_analysis", "review_overview", "submission_review"}:
+                text_terms.append(identities[normalized])
+            elif re.search(r"<student(?:_[^>]*)?>", term, re.IGNORECASE):
+                output.recognized = False
+            else:
+                text_terms.append(_safe_text(term, 80))
+        if not output.recognized:
+            output = analytics_agent.FilterIntentOutput(recognized=False, explanation=output.explanation)
+            text_terms = []
         return {
             **output.model_dump(),
-            "question_tokens": [
-                _safe_text(value, 40) for value in output.question_tokens
-            ],
-            "text_terms": [_safe_text(value, 80) for value in output.text_terms],
+            "question_tokens": [_safe_text(value, 40) for value in output.question_tokens],
+            "text_terms": text_terms,
             "explanation": _safe_text(output.explanation, 500),
         }
     except SharedPoolLimitError as exc:
@@ -602,83 +666,83 @@ async def interpret_filter_intent(
         ) from exc
 
 
-@router.post("/{task_id}/query")
-async def nl_query(
-    task_id: str,
-    req: QueryRequest,
-    current: User = Depends(require_teacher),
-    registry: ExpertRegistry = Depends(get_scoped_expert_registry),
-):
-    facts = _load_facts(task_id, current.id)
-    if not facts.results:
-        raise HTTPException(
-            status.HTTP_409_CONFLICT,
-            detail={"code": "analytics_no_results"},
-        )
-    provider = resolve_owner_default_provider(current.id, registry)
-    if provider is None:
-        raise HTTPException(
-            status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail={"code": "analytics_provider_unavailable"},
-        )
-    _check_rate_limit(current.id)
+class AskRequest(BaseModel):
+    question: str = Field(min_length=1, max_length=2000)
+    surface: str = Field(default="student_analysis", max_length=64)
+    context_student_id: str | None = Field(default=None, max_length=160)
+    history: list[str] = Field(default_factory=list, max_length=4)
 
+
+_ask_bursts: dict[str, list[float]] = {}
+
+
+def _check_ask_limit(owner_id: str) -> None:
+    now = time.monotonic()
+    with _query_rate_lock:
+        for actor in list(_ask_bursts):
+            _ask_bursts[actor] = [t for t in _ask_bursts[actor] if now - t < 60]
+            if not _ask_bursts[actor]:
+                del _ask_bursts[actor]
+        requests = _ask_bursts.setdefault(owner_id, [])
+        if len(requests) >= 12:
+            raise HTTPException(429, detail={"code": "analytics_rate_limited"}, headers={"Retry-After": "60"})
+        requests.append(now)
+
+
+async def _run_grounded_ask(task_id: str | None, req: AskRequest, current: User, registry: ExpertRegistry):
     try:
-        if req.mode == "filter":
-            output = await analytics_agent.filter_students(
-                question=req.question,
-                results_payload=facts.results_payload,
-                problem_data=facts.problem_data,
-                per_student_stats=facts.per_student_stats,
-                provider=provider,
-            )
-            student_ids = [
-                student_id
-                for student_id in dict.fromkeys(output.student_ids)
-                if student_id in facts.student_ids
-            ]
-            return {
-                "mode": "filter",
-                "student_ids": student_ids,
-                "explanation": _safe_text(output.explanation, 1000),
-            }
-        if req.mode == "summary":
-            output = await analytics_agent.summarize(
-                question=req.question,
-                results_payload=facts.results_payload,
-                problem_data=facts.problem_data,
-                per_student_stats=facts.per_student_stats,
-                provider=provider,
-            )
-            return {
-                "mode": "summary",
-                "markdown": _safe_text(output.markdown, 4000),
-            }
-        output = await analytics_agent.make_chart(
-            question=req.question,
-            results_payload=facts.results_payload,
-            problem_data=facts.problem_data,
-            per_student_stats=facts.per_student_stats,
-            provider=provider,
-        )
-        return _safe_chart(output)
-    except HTTPException:
-        raise
+        if any(len(turn) > 2000 for turn in req.history):
+            raise HTTPException(422, detail={"code": "ask_history_too_long"})
+        snapshot = await asyncio.to_thread(load_snapshot, task_id, current.id)
+        provider = resolve_owner_default_provider(current.id, registry)
+        if provider is None:
+            raise HTTPException(503, detail={"code": "analytics_provider_unavailable"})
+        _check_ask_limit(current.id)
+        return await grounded_ask.ask(task_id=task_id, owner_id=current.id, question=req.question,
+            surface=req.surface, provider=provider, context_student_id=req.context_student_id,
+            history=req.history, snapshot=snapshot)
+    except DomainError as exc:
+        if isinstance(exc, NotFound):
+            raise _not_found() from exc
+        return domain_error_response(exc)
+    except AskDataError as exc:
+        return {"recognized": False, "kind": "clarification", "explanation": str(exc),
+            "data": {"columns": [], "rows": []}, "selection": None, "chart": None, "candidates": []}
     except SharedPoolLimitError as exc:
         raise _provider_error(exc) from exc
+    except HTTPException:
+        raise
     except Exception as exc:
-        # Never return provider, parser, prompt, student-answer, or credential
-        # details. Exception type is sufficient for server-side diagnosis.
-        logger.warning(
-            "Analytics generation failed; task_id=%s mode=%s exception_type=%s",
-            task_id,
-            req.mode,
-            type(exc).__name__,
-        )
-        raise HTTPException(
-            status.HTTP_502_BAD_GATEWAY,
-            detail={"code": "analytics_generation_failed"},
-        ) from exc
+        logger.warning("Grounded Ask failed; task_id=%s exception_type=%s", task_id, type(exc).__name__)
+        raise HTTPException(502, detail={"code": "analytics_generation_failed"}) from exc
+
+
+@router.post("/ask")
+async def ask_teacher(req: AskRequest, current: User = Depends(require_teacher),
+                      registry: ExpertRegistry = Depends(get_scoped_expert_registry)):
+    return await _run_grounded_ask(None, req, current, registry)
+
+
+@router.post("/{task_id}/ask")
+async def ask_task(task_id: str, req: AskRequest, current: User = Depends(require_teacher),
+                   registry: ExpertRegistry = Depends(get_scoped_expert_registry)):
+    return await _run_grounded_ask(task_id, req, current, registry)
+
+
+@router.post("/{task_id}/query")
+async def nl_query(task_id: str, req: QueryRequest, current: User = Depends(require_teacher),
+                   registry: ExpertRegistry = Depends(get_scoped_expert_registry)):
+    # Compatibility route: old clients cannot bypass grounded chart execution.
+    executed = await _run_grounded_ask(task_id, AskRequest(question=req.question,
+        surface="chart" if req.mode == "chart" else "student_analysis", history=req.history), current, registry)
+    if not isinstance(executed, dict):
+        return executed
+    if executed.get("chart"):
+        return {**executed["chart"], "execution": executed}
+    if req.mode == "filter" and (executed.get("selection") or {}).get("kind") == "students":
+        return {"mode": "filter", "student_ids": executed["selection"]["ids"],
+                "explanation": executed["explanation"], "execution": executed}
+    return {"mode": "query", "execution": executed}
 
 
 def _resolve_question(facts: _AnalyticsFacts, identifier: str) -> _QuestionFact:

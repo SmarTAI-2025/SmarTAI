@@ -93,6 +93,8 @@ export function summarizeRubricPoints(
       const pointStart = pointMatch.index ?? 0;
       const prefix = segment.slice(Math.max(0, pointStart - 20), pointStart);
       if (/(?:总分|合计|total)\s*[:：=为-]?\s*$/iu.test(prefix)) continue;
+      // Keep deduction semantics aligned with backend question_structure.py.
+      if (/(?:扣(?:除)?|减(?:去|少)?|罚|deduct(?:ion)?|subtract|minus|penalty(?:\s+of)?|lose|loss\s+of|lost)\s*(?:最多|至多|up\s+to|at\s+most)?\s*[:：=-]?\s*$/iu.test(prefix)) continue;
       const parsed = parseScoreHundredths(pointMatch[1]);
       if (parsed !== null) componentScores.push(parsed);
     }
