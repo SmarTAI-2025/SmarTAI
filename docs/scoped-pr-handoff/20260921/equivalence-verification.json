@@ -1,0 +1,115 @@
+{
+  "reference_pr": 79,
+  "reference_sha": "3e4426d687e6b0d5e079068ca684411ec83b997d",
+  "base_sha": "edfdabceca369ccba3f1d62178908303b8f8dec4",
+  "runtime_tip": "f93efbcbd888b82a8079e24d9bfc842eb2455b70",
+  "runtime_bytes_identical": true,
+  "moved_test_asts_identical": true,
+  "local_merge_simulation": {
+    "base": "edfdabceca369ccba3f1d62178908303b8f8dec4",
+    "all_merges_clean": true,
+    "steps": [
+      {
+        "key": "backend-deps",
+        "head": "86e34af38c8427937214e4d69afc8a9e922f27ec",
+        "merged_tree": "4f6b5ca361968b034db291eb8b3f2e9b183cf787"
+      },
+      {
+        "key": "frontend-deps",
+        "head": "07264a35ea80a750a4ae107f9bd5304592aaa48d",
+        "merged_tree": "5b359352fc473ee73a887d16f392a756a76a5c53"
+      },
+      {
+        "key": "pdf-safety",
+        "head": "e8122b401812a328d66726af6ea57b3d76f29443",
+        "merged_tree": "a8518e646c9819e232e0795d544a6a8ec725bc38"
+      },
+      {
+        "key": "execution-guard",
+        "head": "a0a44571673482359f6ca3af2bd6ee5a26db6580",
+        "merged_tree": "2fc982ee72508577385b175cc0a9175435916207"
+      },
+      {
+        "key": "pr60",
+        "head": "ae0cdba275d0cf9132b40cb382594d2ac1114c42",
+        "merged_tree": "25a9cb3118be5fc1b5940b0d92da465d7a440ab4"
+      },
+      {
+        "key": "pr61",
+        "head": "e275adebd96dde6c5309c82778c374e4f162ce96",
+        "merged_tree": "cc50ae02ffaa1f403a2e494fdd67514e7cfa0ec9"
+      },
+      {
+        "key": "pr62",
+        "head": "8a25249f3a5d2c1c4e7c4a77cb4d97ed0c57126e",
+        "merged_tree": "e1512ae4aa5860a33ebdd59a4f3ccf9477946323"
+      },
+      {
+        "key": "pr63",
+        "head": "3db278c3b8ac5be05f1450d387fb5a155f2ee51e",
+        "merged_tree": "d91922eafa813d4827663aff0e0bb15e4b9cf39a"
+      },
+      {
+        "key": "pr64",
+        "head": "5b85b167a340b4eaf34482634ff8b252bda7a862",
+        "merged_tree": "d3fef7c7891b7f4079b1b4cd33d0839ba20bcd2b"
+      },
+      {
+        "key": "pr65",
+        "head": "402c662cfe180476fd3eafef6afd740cc39026f7",
+        "merged_tree": "baf41357a2d6eb2698f42bfa72fcef0b898acb20"
+      },
+      {
+        "key": "pr66",
+        "head": "65eca618661b781af271996a3e1eecbc40d3fa8b",
+        "merged_tree": "dd2a2f0bae94224d24dc5735e9258779ba0e04b9"
+      },
+      {
+        "key": "pr67",
+        "head": "f93efbcbd888b82a8079e24d9bfc842eb2455b70",
+        "merged_tree": "287215d8600fb536024ae429e5b9a5a7a3f2a79f"
+      }
+    ]
+  },
+  "independent_ai_subagents_requested": 3,
+  "independent_ai_subagents_executed": 0,
+  "subagent_limitation": "No authorized independent subagent invocation available; tests are not agents.",
+  "local_results": {
+    "combined_backend": "1480 passed, 30 skipped",
+    "security": "93 passed",
+    "browser_e2e": "2 passed",
+    "postgres": {
+      "61": 9,
+      "66": 17,
+      "67": 23
+    }
+  },
+  "differences_from_pr79": [
+    "CLAUDE_HANDOFF.md",
+    "README.md",
+    "backend/tests/test_progress_ownership_regressions.py",
+    "backend/tests/test_question_structure_regressions.py",
+    "docs/integration/20260920/01_完成与修改总结_AI版.md",
+    "docs/integration/20260920/01_完成与修改总结_人读版.md",
+    "docs/integration/20260920/02_合并审核与后续交接_AI版.md",
+    "docs/integration/20260920/02_合并审核与后续交接_人读版.md",
+    "docs/integration/20260920/03_当前设计与原文档差异_AI版.md",
+    "docs/integration/20260920/03_当前设计与原文档差异_人读版.md",
+    "docs/integration/20260920/PR_BODY.md",
+    "docs/integration/20260920/README.md",
+    "docs/integration/20260920/REVIEW_COMMENT.md",
+    "docs/integration/20260920/manifest.json",
+    "docs/integration/20260920/publish_candidate.py",
+    "docs/integration/20260920/publisher-tests.log",
+    "docs/integration/20260920/test_publish_candidate.py",
+    "docs/integration/20260921/README.md",
+    "docs/integration/20260921/publication-receipt.json",
+    "docs/integration/20260921/发布与合并_AI版.md",
+    "docs/integration/20260921/发布与合并_人读版.md"
+  ],
+  "logs": {
+    "combined-backend.log": "cdc959235f07aeffc17657a48c9543ce694467df1ddd0c4e0d02cc2b27fb50f8",
+    "review-security.log": "9f10e3a3e156c26a476ed669039297825cf248458ce7dfd1a66cee374b123302",
+    "combined-e2e.log": "95238f5e1056cd4a69cefecd7c2a8972b9bcdccb7f32b22df075223a02573416"
+  }
+}
