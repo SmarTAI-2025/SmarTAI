@@ -76,6 +76,7 @@ from backend.models import (
 from backend.progress.tracker import get_or_create_reporter, get_reporter, remove_reporter
 from backend.services import source_files as source_file_service
 from backend.services import task_facade
+from backend.services.teacher_score_constraints import teacher_score_requirements
 from backend.services.stage_provider_routing import (
     StageProviderRoute,
     build_owner_baidu_ocr_skill,
@@ -3133,6 +3134,8 @@ async def _run_question_preparation(
                 on_question_failed=on_question_failed,
                 provider_submission_safe=(durable_operation is not None),
             )
+        # Restored final artifacts must obey the same frozen teacher policy.
+        teacher_score_requirements(packages, score_policy, check_rubrics=True)
         if on_packages_prepared is not None:
             packages = await on_packages_prepared(packages)
         snapshot = (await reporter.snapshot()).model_dump(mode="json")

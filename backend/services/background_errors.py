@@ -27,6 +27,7 @@ SAFE_BACKGROUND_ERROR_CODES = frozenset({
     "provider_vision_not_supported",
     "problem_extraction_failed",
     "question_preparation_contract_invalid",
+    "question_structure_score_mismatch",
     "question_preparation_source_unavailable",
     "question_preparation_retry_source_unavailable",
     "question_preparation_artifact_invalid",

@@ -770,6 +770,21 @@ export function classifyRecoverableError(
     };
   }
 
+  if (code === "question_structure_score_mismatch") {
+    return {
+      title: tx(locale, "题号或分项分值与教师设置不一致", "Question numbers or points differ from teacher instructions"),
+      description: tx(locale,
+        "请核对题号与分值说明后重新准备；系统没有采用不一致的题目包。",
+        "Check the question numbers and score instructions, then prepare again. The inconsistent package was not accepted.",
+      ),
+      actionLabel: tx(locale, "重新准备题目", "Prepare questions again"),
+      actionHref: taskId ? `/tasks/${taskId}/upload/problems` : undefined,
+      actionKind: "reupload",
+      tone: "warning",
+      technicalDetails,
+    };
+  }
+
   if (code === "submission_parse_invalid") {
     return {
       title: tx(locale, "模型返回格式无法解析", "The model returned an invalid structure"),

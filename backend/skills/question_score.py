@@ -14,6 +14,7 @@ from pydantic import BaseModel, Field
 
 from backend.llm.providers import BaseProvider
 from backend.models import QuestionScorePolicy
+from backend.services.teacher_score_constraints import explicit_teacher_scores, normalize_question_number
 from backend.tools.structured_llm import structured_llm_call
 
 if TYPE_CHECKING:
@@ -122,6 +123,7 @@ async def resolve_question_score_policy(
         output_model=InterpretedQuestionScorePlan,
     )
 
+    explicit = explicit_teacher_scores(policy.per_question_text or "")
     known_ids = set(problems_data)
     candidates: dict[str, list[float]] = defaultdict(list)
     for row in interpreted.scores:
@@ -131,7 +133,8 @@ async def resolve_question_score_policy(
     resolved: Dict[str, ResolvedQuestionScore] = {}
     matched = 0
     for q_id in problems_data:
-        distinct = set(candidates.get(q_id, []))
+        teacher = explicit.get(normalize_question_number(problems_data[q_id].get("number")))
+        distinct = {float(teacher.maximum)} if teacher is not None else set(candidates.get(q_id, []))
         if len(distinct) == 1:
             resolved[q_id] = ResolvedQuestionScore(
                 max_score=distinct.pop(),

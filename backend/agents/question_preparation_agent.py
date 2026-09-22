@@ -41,6 +41,7 @@ from backend.services.question_structure import (
     validate_rubric_points,
 )
 from backend.skills.question_score import resolve_question_score_policy
+from backend.services.teacher_score_constraints import teacher_score_requirements, validate_teacher_subpart_rubric
 
 
 SourceRow = Tuple[ProblemSourceDraft, str]
@@ -439,6 +440,10 @@ def _validate_major_question_candidates(
                     "The generated rubric omitted explicit subpart allocations.",
                     code="provider_response_invalid",
                 )
+        if candidate.target == "criterion":
+            validate_teacher_subpart_rubric(
+                candidate.text_value or "", problem, problem.get("teacher_subpart_points") or {},
+            )
         if candidate.target == "reference_answer" and structure.subparts:
             normalized_answer = unicodedata.normalize(
                 "NFKC", candidate.text_value or ""
@@ -802,9 +807,15 @@ async def prepare_question_packages(
     )
     requested_targets = requested_major_question_materials(problem_data)
 
+    teacher_points = teacher_score_requirements(problem_data, score_policy)
     if requested_targets:
+        # Keep constraints in the bounded generation request, not in stored rows.
+        generation_problems = {
+            q_id: {**problem, "teacher_subpart_points": teacher_points.get(q_id, {})}
+            for q_id, problem in problem_data.items()
+        } if teacher_points else problem_data
         generated = await generate_major_question_materials(
-            problems_data=problem_data,
+            problems_data=generation_problems,
             requested_targets=requested_targets,
             test_case_count=6,
             provider=provider,
@@ -931,6 +942,7 @@ async def prepare_question_packages(
         completed_steps=7,
         message="Question packages ready for transactional commit",
     )
+    teacher_score_requirements(problem_data, score_policy, check_rubrics=True)
     return problem_data
 
 
