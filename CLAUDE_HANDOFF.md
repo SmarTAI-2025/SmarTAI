@@ -1,3 +1,5 @@
+> 2026-09-21 更正：按独立功能 PR 合并，不合 #79。当前设计、修复归属、审核及通知见 [逐功能交接](docs/scoped-pr-handoff/20260921/README.md)。
+
 # Claude Collaboration Handoff
 
 ## Week 2 final delivery (2026-08-13)

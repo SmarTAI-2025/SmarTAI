@@ -1,0 +1,125 @@
+{
+  "review_kind": "deterministic history/scope/equivalence, not AI subagent",
+  "base": "edfdabceca369ccba3f1d62178908303b8f8dec4",
+  "reference_pr79": "3e4426d687e6b0d5e079068ca684411ec83b997d",
+  "split_tip": "f93efbcbd888b82a8079e24d9bfc842eb2455b70",
+  "all_steps_passed": true,
+  "runtime_bytes_identical": true,
+  "moved_test_AST_identical": true,
+  "moved_test_functions": 6,
+  "steps": [
+    {
+      "pr": 80,
+      "head": "86e34af38c8427937214e4d69afc8a9e922f27ec",
+      "files": 4,
+      "tree": "4f6b5ca361968b034db291eb8b3f2e9b183cf787"
+    },
+    {
+      "pr": 81,
+      "head": "07264a35ea80a750a4ae107f9bd5304592aaa48d",
+      "files": 2,
+      "tree": "5b359352fc473ee73a887d16f392a756a76a5c53"
+    },
+    {
+      "pr": 82,
+      "head": "e8122b401812a328d66726af6ea57b3d76f29443",
+      "files": 3,
+      "tree": "a8518e646c9819e232e0795d544a6a8ec725bc38"
+    },
+    {
+      "pr": 83,
+      "head": "a0a44571673482359f6ca3af2bd6ee5a26db6580",
+      "files": 4,
+      "tree": "2fc982ee72508577385b175cc0a9175435916207"
+    },
+    {
+      "pr": 60,
+      "head": "ae0cdba275d0cf9132b40cb382594d2ac1114c42",
+      "files": 12,
+      "tree": "25a9cb3118be5fc1b5940b0d92da465d7a440ab4"
+    },
+    {
+      "pr": 61,
+      "head": "e275adebd96dde6c5309c82778c374e4f162ce96",
+      "files": 67,
+      "tree": "cc50ae02ffaa1f403a2e494fdd67514e7cfa0ec9"
+    },
+    {
+      "pr": 62,
+      "head": "8a25249f3a5d2c1c4e7c4a77cb4d97ed0c57126e",
+      "files": 13,
+      "tree": "e1512ae4aa5860a33ebdd59a4f3ccf9477946323"
+    },
+    {
+      "pr": 63,
+      "head": "3db278c3b8ac5be05f1450d387fb5a155f2ee51e",
+      "files": 6,
+      "tree": "d91922eafa813d4827663aff0e0bb15e4b9cf39a"
+    },
+    {
+      "pr": 64,
+      "head": "5b85b167a340b4eaf34482634ff8b252bda7a862",
+      "files": 15,
+      "tree": "d3fef7c7891b7f4079b1b4cd33d0839ba20bcd2b"
+    },
+    {
+      "pr": 65,
+      "head": "402c662cfe180476fd3eafef6afd740cc39026f7",
+      "files": 21,
+      "tree": "baf41357a2d6eb2698f42bfa72fcef0b898acb20"
+    },
+    {
+      "pr": 66,
+      "head": "65eca618661b781af271996a3e1eecbc40d3fa8b",
+      "files": 77,
+      "tree": "dd2a2f0bae94224d24dc5735e9258779ba0e04b9"
+    },
+    {
+      "pr": 67,
+      "head": "f93efbcbd888b82a8079e24d9bfc842eb2455b70",
+      "files": 54,
+      "tree": "287215d8600fb536024ae429e5b9a5a7a3f2a79f"
+    }
+  ],
+  "differences": [
+    "CLAUDE_HANDOFF.md",
+    "README.md",
+    "backend/tests/test_progress_ownership_regressions.py",
+    "backend/tests/test_question_structure_regressions.py",
+    "docs/integration/20260920/01_完成与修改总结_AI版.md",
+    "docs/integration/20260920/01_完成与修改总结_人读版.md",
+    "docs/integration/20260920/02_合并审核与后续交接_AI版.md",
+    "docs/integration/20260920/02_合并审核与后续交接_人读版.md",
+    "docs/integration/20260920/03_当前设计与原文档差异_AI版.md",
+    "docs/integration/20260920/03_当前设计与原文档差异_人读版.md",
+    "docs/integration/20260920/PR_BODY.md",
+    "docs/integration/20260920/README.md",
+    "docs/integration/20260920/REVIEW_COMMENT.md",
+    "docs/integration/20260920/manifest.json",
+    "docs/integration/20260920/publish_candidate.py",
+    "docs/integration/20260920/publisher-tests.log",
+    "docs/integration/20260920/test_publish_candidate.py",
+    "docs/integration/20260921/README.md",
+    "docs/integration/20260921/publication-receipt.json",
+    "docs/integration/20260921/发布与合并_AI版.md",
+    "docs/integration/20260921/发布与合并_人读版.md"
+  ],
+  "recorded_at": "2026-09-21T08:41:33.720150+00:00",
+  "independent_subagents_requested": 3,
+  "independent_subagents_executed": 0,
+  "independent_subagent_limitation": "No authorized independent subagent invocation was available. Test processes and repeat self-review are not agents.",
+  "checks": {
+    "security": "179 passed",
+    "combined_backend": "1480 passed, 30 skipped",
+    "combined_frontend": "80 files / 378 passed; typecheck, scope, build passed"
+  },
+  "logs": {
+    "security-review.log": "1dfc0354b996f82a022981a1da7b6cf488821ad24c649a9f0a305b0746e02ee2",
+    "combined-frontend.log": "5729651a9bf770eda9bc8ae116cf24c3ced55be664175932a916234529dbfef0",
+    "history-scope.log": "d1f4d0809adf2af4cc785fbe868707f830442929244ac31e5039765ca0648e7d",
+    "combined-build.log": "9787bac8719c044bca8f1712cb265de0da0c8bca82eb9d13d8e2e3e00ca0d53f",
+    "combined-typecheck.log": "b53a94bcb7d933d4e9b39958de96489c9b87b1d672a7e990d004b6956c6ba72f",
+    "combined-final-backend.log": "852c2c5e0a1ff2b7e1fe95b3d85595de25e35fa0e469cc1330f5a36e1cc426eb",
+    "combined-scope.log": "4b1a970c735b3a4e796dad9c0806d5f4c79850d80434306b7c1f86df6522ced0"
+  }
+}
