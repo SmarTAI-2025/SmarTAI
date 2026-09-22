@@ -153,6 +153,27 @@ describe("question source recovery guidance", () => {
     expect(info.technicalDetails).toContainEqual({ label: "文件上限", value: "5 MB" });
   });
 
+  it("distinguishes owner source-storage quota from file and model limits", () => {
+    const info = classifyRecoverableError(
+      new APIError(413, "source_storage_quota_exceeded", {
+        detail: {
+          code: "source_storage_quota_exceeded",
+          used_bytes: 500 * 1024 * 1024,
+          limit_bytes: 512 * 1024 * 1024,
+          requested_bytes: 20 * 1024 * 1024,
+        },
+      }),
+      { locale: "zh-CN" },
+    );
+
+    expect(info.title).toBe("原文件空间已满");
+    expect(info.actionKind).toBe("reupload");
+    expect(info.actionLabel).toBe("选择更小文件");
+    expect(info.description).toContain("无需手动重试清理");
+    expect(info.title).not.toContain("模型");
+    expect(info.technicalDetails).toContainEqual({ label: "原文件额度", value: "512 MB" });
+  });
+
   it.each([
     "question_preparation_source_unavailable",
     "question_preparation_retry_source_unavailable",

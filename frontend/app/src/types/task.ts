@@ -1,6 +1,7 @@
 import type { KBDoc } from "./kb";
 import type { JobProgress } from "./progress";
 import type { AICompletionTarget } from "./aiCompletions";
+import type { SourceCleanupSummary } from "./sourcePreview";
 
 export type TaskStatus =
   | "draft"
@@ -386,6 +387,7 @@ export interface TaskFinalizationResponse {
   analysis_generated_at?: number | null;
   analysis_error?: string | null;
   available_result_versions: number;
+  source_cleanup?: SourceCleanupSummary;
 }
 
 export type ResultArtifactStatus = "not_generated" | "ready" | "stale" | "historical";

@@ -185,7 +185,9 @@ def get_assignment(assignment_id: str, *, actor_id: str) -> education.Assignment
     with session_scope() as session:
         record = session.scalar(
             select(AssignmentRecord).where(
-                AssignmentRecord.id == assignment_id, AssignmentRecord.teacher_id == actor_id
+                AssignmentRecord.id == assignment_id,
+                AssignmentRecord.teacher_id == actor_id,
+                AssignmentRecord.deletion_requested_at.is_(None),
             )
         )
         if record is None:
@@ -202,7 +204,11 @@ def list_assignments(course_id: str, *, actor_id: str) -> list[education.Assignm
     with session_scope() as session:
         records = session.scalars(
             select(AssignmentRecord)
-            .where(AssignmentRecord.course_id == course_id, AssignmentRecord.teacher_id == actor_id)
+            .where(
+                AssignmentRecord.course_id == course_id,
+                AssignmentRecord.teacher_id == actor_id,
+                AssignmentRecord.deletion_requested_at.is_(None),
+            )
             .order_by(AssignmentRecord.created_at)
         ).all()
         out: list[education.AssignmentDTO] = []
@@ -234,6 +240,7 @@ def list_assignments_for_student(student_id: str) -> list[education.AssignmentDT
                     education.AssignmentStatus.PUBLISHED.value,
                     education.AssignmentStatus.CLOSED.value,
                 ]),
+                AssignmentRecord.deletion_requested_at.is_(None),
             )
             .order_by(AssignmentRecord.created_at)
         ).all()
@@ -251,7 +258,10 @@ def list_assignments_for_student(student_id: str) -> list[education.AssignmentDT
 def get_assignment_unscoped(assignment_id: str) -> education.AssignmentDTO:
     """Admin unscoped read of a single assignment."""
     with session_scope() as session:
-        record = session.get(AssignmentRecord, assignment_id)
+        record = session.scalar(select(AssignmentRecord).where(
+            AssignmentRecord.id == assignment_id,
+            AssignmentRecord.deletion_requested_at.is_(None),
+        ))
         if record is None:
             raise NotFound("assignment")
         count = session.scalar(
@@ -266,7 +276,10 @@ def list_assignments_unscoped(course_id: str) -> list[education.AssignmentDTO]:
     """Admin unscoped read of every assignment in a course."""
     with session_scope() as session:
         records = session.scalars(
-            select(AssignmentRecord).where(AssignmentRecord.course_id == course_id)
+            select(AssignmentRecord).where(
+                AssignmentRecord.course_id == course_id,
+                AssignmentRecord.deletion_requested_at.is_(None),
+            )
             .order_by(AssignmentRecord.created_at)
         ).all()
         out: list[education.AssignmentDTO] = []
@@ -291,8 +304,10 @@ def set_question_order(assignment_id: str, *, teacher_id: str,
     with session_scope() as session:
         assignment = session.scalar(
             select(AssignmentRecord).where(
-                AssignmentRecord.id == assignment_id, AssignmentRecord.teacher_id == teacher_id
-            )
+                AssignmentRecord.id == assignment_id,
+                AssignmentRecord.teacher_id == teacher_id,
+                AssignmentRecord.deletion_requested_at.is_(None),
+            ).with_for_update()
         )
         if assignment is None:
             raise NotFound("assignment")
@@ -320,8 +335,10 @@ def add_question(assignment_id: str, *, teacher_id: str, q_id: str, order_index:
         # Owner predicate: only the assignment's teacher may add questions.
         assignment = session.scalar(
             select(AssignmentRecord).where(
-                AssignmentRecord.id == assignment_id, AssignmentRecord.teacher_id == teacher_id
-            )
+                AssignmentRecord.id == assignment_id,
+                AssignmentRecord.teacher_id == teacher_id,
+                AssignmentRecord.deletion_requested_at.is_(None),
+            ).with_for_update()
         )
         if assignment is None:
             raise NotFound("assignment")
@@ -366,6 +383,7 @@ def list_questions(assignment_id: str, *, teacher_id: str) -> list[education.Que
             .where(
                 AssignmentQuestionRecord.assignment_id == assignment_id,
                 AssignmentRecord.teacher_id == teacher_id,
+                AssignmentRecord.deletion_requested_at.is_(None),
             )
             .order_by(AssignmentQuestionRecord.order_index, AssignmentQuestionRecord.created_at)
         ).all()
@@ -388,8 +406,10 @@ def update_question(assignment_id: str, *, teacher_id: str, q_id: str, expected_
     with session_scope() as session:
         assignment = session.scalar(
             select(AssignmentRecord).where(
-                AssignmentRecord.id == assignment_id, AssignmentRecord.teacher_id == teacher_id
-            )
+                AssignmentRecord.id == assignment_id,
+                AssignmentRecord.teacher_id == teacher_id,
+                AssignmentRecord.deletion_requested_at.is_(None),
+            ).with_for_update()
         )
         if assignment is None:
             raise NotFound("assignment")
@@ -459,6 +479,7 @@ def _optimistic_update(assignment_id: str, *, teacher_id: str, expected_version:
             .where(
                 AssignmentRecord.id == assignment_id,
                 AssignmentRecord.teacher_id == teacher_id,
+                AssignmentRecord.deletion_requested_at.is_(None),
                 AssignmentRecord.version == expected_version,
             )
             .values(**changes, version=expected_version + 1, updated_at=now)
@@ -466,7 +487,9 @@ def _optimistic_update(assignment_id: str, *, teacher_id: str, expected_version:
         if result.rowcount != 1:
             existing = session.scalar(
                 select(AssignmentRecord).where(
-                    AssignmentRecord.id == assignment_id, AssignmentRecord.teacher_id == teacher_id
+                    AssignmentRecord.id == assignment_id,
+                    AssignmentRecord.teacher_id == teacher_id,
+                    AssignmentRecord.deletion_requested_at.is_(None),
                 )
             )
             if existing is None:
@@ -495,6 +518,7 @@ def publish(assignment_id: str, *, teacher_id: str, expected_version: int) -> ed
             .where(
                 AssignmentRecord.id == assignment_id,
                 AssignmentRecord.teacher_id == teacher_id,
+                AssignmentRecord.deletion_requested_at.is_(None),
                 AssignmentRecord.version == expected_version,
                 AssignmentRecord.status.in_(list(education.EDITABLE_ASSIGNMENT_STATUSES)),
             )
@@ -508,7 +532,9 @@ def publish(assignment_id: str, *, teacher_id: str, expected_version: int) -> ed
         if result.rowcount != 1:
             existing = session.scalar(
                 select(AssignmentRecord).where(
-                    AssignmentRecord.id == assignment_id, AssignmentRecord.teacher_id == teacher_id
+                    AssignmentRecord.id == assignment_id,
+                    AssignmentRecord.teacher_id == teacher_id,
+                    AssignmentRecord.deletion_requested_at.is_(None),
                 )
             )
             if existing is None:
@@ -531,6 +557,7 @@ def close(assignment_id: str, *, teacher_id: str, expected_version: int) -> educ
             .where(
                 AssignmentRecord.id == assignment_id,
                 AssignmentRecord.teacher_id == teacher_id,
+                AssignmentRecord.deletion_requested_at.is_(None),
                 AssignmentRecord.version == expected_version,
                 AssignmentRecord.status == education.AssignmentStatus.PUBLISHED.value,
             )
@@ -543,7 +570,9 @@ def close(assignment_id: str, *, teacher_id: str, expected_version: int) -> educ
         if result.rowcount != 1:
             existing = session.scalar(
                 select(AssignmentRecord).where(
-                    AssignmentRecord.id == assignment_id, AssignmentRecord.teacher_id == teacher_id
+                    AssignmentRecord.id == assignment_id,
+                    AssignmentRecord.teacher_id == teacher_id,
+                    AssignmentRecord.deletion_requested_at.is_(None),
                 )
             )
             if existing is None:

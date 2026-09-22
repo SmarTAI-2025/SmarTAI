@@ -25,14 +25,19 @@ from backend.db.models import (
     AssignmentRecord,
     CourseRecord,
     KnowledgeDocumentRecord,
+    StoredFileRecord,
     UserRecord,
 )
 from backend.db.session import configure_database, session_scope
-from backend.domain.errors import DomainError
+from backend.domain.errors import DomainError, SourceStorageQuotaExceeded
 from backend.models import User
 from backend.services import source_files, task_facade
 from backend.storage import get_storage
-from backend.storage.base import StorageBackend, StorageUnavailable
+from backend.storage.base import (
+    StorageBackend,
+    StorageObjectNotFound,
+    StorageUnavailable,
+)
 from backend.storage.local import LocalStorage
 
 
@@ -550,6 +555,55 @@ async def test_preflight_storage_failure_never_reports_ready(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_preflight_quota_error_keeps_its_stable_contract(monkeypatch):
+    owner_id = "quota-preflight-owner"
+    task_id = "quota-preflight-task"
+    _seed_task(owner_id, task_id)
+
+    def reject_quota(**_kwargs):
+        raise SourceStorageQuotaExceeded(
+            "The task-original storage allocation is full.",
+            details={
+                "used_bytes": 10,
+                "limit_bytes": 10,
+                "requested_bytes": len(PDF),
+            },
+        )
+
+    monkeypatch.setattr(source_files, "persist_problem_source", reject_quota)
+    response = await task_preparation.preflight_problem_source(
+        task_id=task_id,
+        file=UploadFile(
+            file=io.BytesIO(PDF),
+            filename="questions.pdf",
+            headers=Headers({"content-type": "application/pdf"}),
+        ),
+        library_material_id=None,
+        inline_text=None,
+        structure_mode="organized",
+        role="problem",
+        extraction_hint="",
+        save_to_library=False,
+        current=SimpleNamespace(id=owner_id),
+        registry=_Registry(),
+    )
+
+    assert response.status_code == 413
+    payload = json.loads(response.body)
+    assert payload["error"]["code"] == "source_storage_quota_exceeded"
+    assert payload["error"]["details"] == {
+        "used_bytes": 10,
+        "limit_bytes": 10,
+        "requested_bytes": len(PDF),
+    }
+    source_operation = workflow_repository.get_operation(
+        _operations(owner_id)[0].id, owner_id=owner_id
+    )
+    assert source_operation.status == "error"
+    assert source_operation.error_code == "source_storage_quota_exceeded"
+
+
+@pytest.mark.asyncio
 async def test_formal_preflight_rejects_disguised_pdf_before_persistence():
     owner_id = "signature-owner"
     task_id = "signature-task"
@@ -783,7 +837,96 @@ def test_missing_object_is_unavailable_and_content_is_not_empty_200(
         f"/tasks/{task_id}/source-files/{current.stored.id}/content"
     )
     assert response.status_code == 404
-    assert response.json()["error"]["code"] == "source_preview_not_found"
+    assert response.json()["error"]["code"] == "source_unavailable_missing"
+
+
+@pytest.mark.parametrize(
+    ("lifecycle_status", "reason", "expected_status", "expected_reason"),
+    [
+        ("cleanup_pending", "task_finalized", "cleanup_pending", "cleanup_pending"),
+        ("unavailable", "task_finalized", "unavailable", "task_finalized"),
+    ],
+)
+def test_descriptor_storage_race_projects_current_lifecycle_state(
+    tmp_path,
+    monkeypatch,
+    lifecycle_status,
+    reason,
+    expected_status,
+    expected_reason,
+):
+    owner_id = f"descriptor-race-{lifecycle_status}"
+    task_id = f"descriptor-race-task-{lifecycle_status}"
+    _seed_task(owner_id, task_id)
+    storage = LocalStorage(tmp_path / lifecycle_status)
+    current = _create_problem_selection(
+        owner_id=owner_id, task_id=task_id, storage=storage
+    )
+
+    def finalize_during_open(_key):
+        with session_scope() as session:
+            row = session.get(StoredFileRecord, current.stored.id)
+            assert row is not None
+            row.availability_status = lifecycle_status
+            row.availability_reason = reason
+            if lifecycle_status == "unavailable":
+                row.unavailable_at = time.time()
+        raise StorageObjectNotFound("cleanup won the race")
+
+    monkeypatch.setattr(storage, "open", finalize_during_open)
+    client = _client(monkeypatch, owner_id=owner_id, storage=storage)
+
+    response = client.get(f"/tasks/{task_id}/source-files")
+
+    assert response.status_code == 200
+    descriptor = response.json()["problem_source"]
+    assert descriptor["status"] == expected_status
+    assert descriptor["unavailable_reason"] == expected_reason
+
+
+@pytest.mark.parametrize(
+    ("lifecycle_status", "expected_http", "expected_code"),
+    [
+        ("cleanup_pending", 409, "source_cleanup_pending"),
+        ("unavailable", 410, "source_unavailable_task_finalized"),
+    ],
+)
+def test_content_storage_race_projects_current_lifecycle_error(
+    tmp_path, monkeypatch, lifecycle_status, expected_http, expected_code,
+):
+    owner_id = f"content-race-{lifecycle_status}"
+    task_id = f"content-race-task-{lifecycle_status}"
+    _seed_task(owner_id, task_id)
+    storage = LocalStorage(tmp_path / lifecycle_status)
+    current = _create_problem_selection(
+        owner_id=owner_id, task_id=task_id, storage=storage
+    )
+    original_open = storage.open
+    open_count = 0
+
+    def finalize_during_content_open(key):
+        nonlocal open_count
+        open_count += 1
+        if open_count == 1:
+            return original_open(key)
+        with session_scope() as session:
+            row = session.get(StoredFileRecord, current.stored.id)
+            assert row is not None
+            row.availability_status = lifecycle_status
+            row.availability_reason = "task_finalized"
+            if lifecycle_status == "unavailable":
+                row.unavailable_at = time.time()
+        raise StorageObjectNotFound("cleanup won the content race")
+
+    monkeypatch.setattr(storage, "open", finalize_during_content_open)
+    client = _client(monkeypatch, owner_id=owner_id, storage=storage)
+
+    response = client.get(
+        f"/tasks/{task_id}/source-files/{current.stored.id}/content"
+    )
+
+    assert response.status_code == expected_http
+    assert response.json()["error"]["code"] == expected_code
 
 
 def test_content_disposition_strips_paths_and_header_controls(

@@ -94,6 +94,9 @@ async def run_problem_extraction(
             content=text.encode("utf-8"),
             content_type="text/plain",
             assignment_id=operation.assignment_id,
+            fence_operation_id=operation.operation_id,
+            fence_operation_attempt=operation.attempt,
+            fence_lease_token=operation.lease_token,
         )
         text_artifact_id = artifact.id
         artifact_refs = [artifact.id]
@@ -159,6 +162,9 @@ async def run_problem_extraction(
             content=body,
             content_type="application/json",
             assignment_id=operation.assignment_id,
+            fence_operation_id=operation.operation_id,
+            fence_operation_attempt=operation.attempt,
+            fence_lease_token=operation.lease_token,
         )
         structured_artifact_id = artifact.id
         artifact_refs = [str(text_artifact_id), artifact.id]

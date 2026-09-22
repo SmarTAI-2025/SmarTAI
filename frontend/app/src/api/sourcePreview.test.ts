@@ -111,7 +111,20 @@ describe("source preview API", () => {
 
   it("maps backend status safely without exposing raw errors", () => {
     expect(sourcePreviewErrorCode(new APIError(404, "private path"))).toBe("source_preview_not_found");
+    expect(sourcePreviewErrorCode(new APIError(409, "generic conflict"))).toBe("source_preview_processing");
     expect(sourcePreviewErrorCode(new APIError(503, "bucket detail"))).toBe("source_preview_storage_unavailable");
     expect(sourcePreviewErrorCode(new Error("network"))).toBe("source_preview_load_failed");
+  });
+
+  it.each([
+    ["source_cleanup_pending", 409],
+    ["source_unavailable_task_finalized", 410],
+    ["source_unavailable_missing", 404],
+  ] as const)("prefers the explicit lifecycle code %s at HTTP %i", (code, status) => {
+    const error = new APIError(status, "safe lifecycle failure", {
+      error: { code, message: "safe lifecycle failure" },
+    });
+
+    expect(sourcePreviewErrorCode(error)).toBe(code);
   });
 });

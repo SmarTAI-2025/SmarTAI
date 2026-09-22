@@ -64,6 +64,70 @@ def _new_event_id() -> str:
     return f"evt_{uuid.uuid4().hex[:12]}"
 
 
+def _active_assignment_for_run(
+    session,
+    run_id: str,
+    *,
+    actor_id: str | None = None,
+    lock: bool = False,
+) -> AssignmentRecord | None:
+    """Return the live parent assignment for one grading run.
+
+    Grading rows deliberately outlive the public task while automatic storage
+    cleanup is pending.  Every direct grading path must therefore join back to
+    the assignment tombstone instead of treating the child row's presence as
+    proof that the task is still usable.  Mutations lock the run first and then
+    this assignment, matching the task-deletion worker's G -> W -> A order.
+    """
+    statement = (
+        select(AssignmentRecord)
+        .join(
+            GradingRunRecord,
+            (GradingRunRecord.assignment_id == AssignmentRecord.id)
+            & (GradingRunRecord.teacher_id == AssignmentRecord.teacher_id),
+        )
+        .where(
+            GradingRunRecord.id == run_id,
+            AssignmentRecord.deletion_requested_at.is_(None),
+        )
+    )
+    if actor_id is not None:
+        statement = statement.where(AssignmentRecord.teacher_id == actor_id)
+    if lock:
+        statement = statement.with_for_update(of=AssignmentRecord)
+    return session.scalar(statement)
+
+
+def _active_assignment_for_result(
+    session,
+    grade_result_id: str,
+    *,
+    actor_id: str | None = None,
+    lock: bool = False,
+) -> AssignmentRecord | None:
+    statement = (
+        select(AssignmentRecord)
+        .join(
+            GradingRunRecord,
+            (GradingRunRecord.assignment_id == AssignmentRecord.id)
+            & (GradingRunRecord.teacher_id == AssignmentRecord.teacher_id),
+        )
+        .join(
+            GradeResultRecord,
+            GradeResultRecord.grading_run_id == GradingRunRecord.id,
+        )
+        .where(
+            GradeResultRecord.id == grade_result_id,
+            AssignmentRecord.deletion_requested_at.is_(None),
+        )
+    )
+    if actor_id is not None:
+        statement = statement.where(AssignmentRecord.teacher_id == actor_id)
+    if lock:
+        statement = statement.with_for_update(of=AssignmentRecord)
+    return session.scalar(statement)
+
+
 def _run_to_dto(record: GradingRunRecord) -> education.GradingRunDTO:
     return education.GradingRunDTO(
         id=record.id,
@@ -90,8 +154,10 @@ def create_run(assignment_id: str, *, teacher_id: str, total_submissions: int) -
     with session_scope() as session:
         assignment = session.scalar(
             select(AssignmentRecord).where(
-                AssignmentRecord.id == assignment_id, AssignmentRecord.teacher_id == teacher_id
-            )
+                AssignmentRecord.id == assignment_id,
+                AssignmentRecord.teacher_id == teacher_id,
+                AssignmentRecord.deletion_requested_at.is_(None),
+            ).with_for_update()
         )
         if assignment is None:
             raise NotFound("assignment")
@@ -153,15 +219,6 @@ def create_run_bundle(
     run_id = _new_run_id()
     now = time.time()
     with session_scope() as session:
-        assignment = session.scalar(
-            select(AssignmentRecord).where(
-                AssignmentRecord.id == assignment_id,
-                AssignmentRecord.teacher_id == teacher_id,
-            )
-        )
-        if assignment is None:
-            raise NotFound("assignment")
-
         workflow = None
         if workflow_expected_revision is not None:
             workflow = session.scalar(
@@ -172,6 +229,16 @@ def create_run_bundle(
                 )
                 .with_for_update()
             )
+        assignment = session.scalar(
+            select(AssignmentRecord).where(
+                AssignmentRecord.id == assignment_id,
+                AssignmentRecord.teacher_id == teacher_id,
+                AssignmentRecord.deletion_requested_at.is_(None),
+            ).with_for_update()
+        )
+        if assignment is None:
+            raise NotFound("assignment")
+        if workflow_expected_revision is not None:
             if workflow is None:
                 raise NotFound("workflow")
             if workflow.workflow_revision != workflow_expected_revision:
@@ -281,9 +348,15 @@ def clone_released_run_for_review(
                 GradingRunRecord.id == run_id,
                 GradingRunRecord.teacher_id == teacher_id,
                 GradingRunRecord.released_at.is_not(None),
-            )
+            ).with_for_update()
         )
-        if source is None:
+        if (
+            source is None
+            or _active_assignment_for_run(
+                session, run_id, actor_id=teacher_id, lock=True
+            )
+            is None
+        ):
             raise InvalidTransition("released_run_required")
 
         clone = GradingRunRecord(
@@ -405,11 +478,23 @@ def clone_released_run_for_review(
 
 def get_run(run_id: str, *, actor_id: str | None = None) -> education.GradingRunDTO:
     with session_scope() as session:
-        record = session.get(GradingRunRecord, run_id)
+        statement = (
+            select(GradingRunRecord)
+            .join(
+                AssignmentRecord,
+                (AssignmentRecord.id == GradingRunRecord.assignment_id)
+                & (AssignmentRecord.teacher_id == GradingRunRecord.teacher_id),
+            )
+            .where(
+                GradingRunRecord.id == run_id,
+                AssignmentRecord.deletion_requested_at.is_(None),
+            )
+        )
+        if actor_id is not None:
+            statement = statement.where(GradingRunRecord.teacher_id == actor_id)
+        record = session.scalar(statement)
         if record is None:
-            raise NotFound("grading_run")
-        if actor_id is not None and record.teacher_id != actor_id:
-            # Scope by teacher; non-owner reads no run (no payload leak).
+            # Scope by live parent and teacher; no tombstone or ownership leak.
             raise NotFound("grading_run")
         return _run_to_dto(record)
 
@@ -418,7 +503,16 @@ def list_runs_for_assignment(assignment_id: str, *, actor_id: str) -> list[educa
     with session_scope() as session:
         records = session.scalars(
             select(GradingRunRecord)
-            .where(GradingRunRecord.assignment_id == assignment_id, GradingRunRecord.teacher_id == actor_id)
+            .join(
+                AssignmentRecord,
+                (AssignmentRecord.id == GradingRunRecord.assignment_id)
+                & (AssignmentRecord.teacher_id == GradingRunRecord.teacher_id),
+            )
+            .where(
+                GradingRunRecord.assignment_id == assignment_id,
+                GradingRunRecord.teacher_id == actor_id,
+                AssignmentRecord.deletion_requested_at.is_(None),
+            )
             .order_by(GradingRunRecord.created_at)
         ).all()
         return [_run_to_dto(r) for r in records]
@@ -461,6 +555,26 @@ def claim_lease(run_id: str, *, worker_id: str, lease_seconds: int) -> education
             raise LeaseLost("run_not_claimable")
         record = session.get(GradingRunRecord, run_id)
         assert record is not None
+        from backend.db.workflow_repository import AssignmentWorkflowRecord
+
+        session.scalar(
+            select(AssignmentWorkflowRecord)
+            .where(
+                AssignmentWorkflowRecord.assignment_id == record.assignment_id,
+                AssignmentWorkflowRecord.owner_id == record.teacher_id,
+            )
+            .with_for_update()
+        )
+        assignment = session.scalar(
+            select(AssignmentRecord)
+            .where(
+                AssignmentRecord.id == record.assignment_id,
+                AssignmentRecord.teacher_id == record.teacher_id,
+            )
+            .with_for_update()
+        )
+        if assignment is None or assignment.deletion_requested_at is not None:
+            raise LeaseLost("task_deleted")
         return _run_to_dto(record)
 
 
@@ -482,6 +596,28 @@ def heartbeat(run_id: str, *, worker_id: str, lease_seconds: int) -> bool:
         )
         if result.rowcount != 1:
             raise LeaseLost("lease_lost")
+        record = session.get(GradingRunRecord, run_id)
+        assert record is not None
+        from backend.db.workflow_repository import AssignmentWorkflowRecord
+
+        workflow = session.scalar(
+            select(AssignmentWorkflowRecord)
+            .where(
+                AssignmentWorkflowRecord.assignment_id == record.assignment_id,
+                AssignmentWorkflowRecord.owner_id == record.teacher_id,
+            )
+            .with_for_update()
+        )
+        assignment = session.scalar(
+            select(AssignmentRecord)
+            .where(
+                AssignmentRecord.id == record.assignment_id,
+                AssignmentRecord.teacher_id == record.teacher_id,
+            )
+            .with_for_update()
+        )
+        if assignment is None or assignment.deletion_requested_at is not None:
+            raise LeaseLost("task_deleted")
         return True
 
 
@@ -516,6 +652,19 @@ def _terminal_update(run_id: str, *, worker_id: str, status: str,
         # failed run can leave the task permanently reporting ``workflow_busy``.
         from backend.db.workflow_repository import AssignmentWorkflowRecord
 
+        workflow = session.scalar(
+            select(AssignmentWorkflowRecord)
+            .where(
+                AssignmentWorkflowRecord.assignment_id == record.assignment_id,
+                AssignmentWorkflowRecord.owner_id == record.teacher_id,
+            )
+            .with_for_update()
+        )
+        if _active_assignment_for_run(session, run_id, lock=True) is None:
+            # Raising rolls back the terminal run update above.  A tombstoned
+            # task cannot acquire new result state while deletion is draining.
+            raise LeaseLost("task_deleted")
+
         workflow_values = {
             "presentation_status": (
                 "error"
@@ -534,7 +683,7 @@ def _terminal_update(run_id: str, *, worker_id: str, status: str,
             workflow_values["last_failed_job_id"] = run_id
         else:
             workflow_values["last_failed_job_id"] = None
-        session.execute(
+        transitioned = session.execute(
             update(AssignmentWorkflowRecord)
             .where(
                 AssignmentWorkflowRecord.assignment_id == record.assignment_id,
@@ -543,6 +692,41 @@ def _terminal_update(run_id: str, *, worker_id: str, status: str,
             )
             .values(**workflow_values)
         )
+        if (
+            transitioned.rowcount == 1
+            and workflow is not None
+            and status in {
+                education.GradingRunStatus.COMPLETED.value,
+                education.GradingRunStatus.PARTIAL_FAILED.value,
+            }
+            and record.completed_at is not None
+        ):
+            # A terminal grading run immediately powers the teacher's result
+            # overview and visual analytics. That is the product completion
+            # boundary for task originals; optional formal confirmation and
+            # report exports must not delay automatic physical cleanup.
+            from backend.db.source_storage_repository import (
+                enqueue_finalized_source_cleanup_in_session,
+                grading_run_source_file_ids_in_session,
+            )
+
+            frozen_source_file_ids = grading_run_source_file_ids_in_session(
+                session, record.id
+            )
+            if frozen_source_file_ids is not None:
+                # This cleanup is bounded to the immutable source IDs captured
+                # when the run started.  Do not advance the task-wide source
+                # epoch: a newer revision may already have reserved/written an
+                # object and must remain publishable for a later run.
+                enqueue_finalized_source_cleanup_in_session(
+                    session,
+                    assignment_id=record.assignment_id,
+                    owner_id=record.teacher_id,
+                    grading_run_id=record.id,
+                    final_result_version=max(1, workflow.final_result_version),
+                    finalized_at=float(record.completed_at),
+                    source_file_ids=frozen_source_file_ids,
+                )
         return _run_to_dto(record)
 
 
@@ -591,11 +775,29 @@ def cancel(run_id: str, *, teacher_id: str) -> education.GradingRunDTO:
             raise InvalidTransition("run_not_active")
         record = session.get(GradingRunRecord, run_id)
         assert record is not None
+        # Preserve the deletion worker's G -> W -> A lock order.
+        from backend.db.workflow_repository import AssignmentWorkflowRecord
+
+        session.scalar(
+            select(AssignmentWorkflowRecord)
+            .where(
+                AssignmentWorkflowRecord.assignment_id == record.assignment_id,
+                AssignmentWorkflowRecord.owner_id == teacher_id,
+            )
+            .with_for_update()
+        )
+        if (
+            _active_assignment_for_run(
+                session, run_id, actor_id=teacher_id, lock=True
+            )
+            is None
+        ):
+            # The conditional run update is part of this transaction and is
+            # rolled back together with this hidden-parent failure.
+            raise NotFound("grading_run")
         # A cancelled run is no longer the current workflow generation.  Keep
         # this cleanup atomic with cancellation so an upstream replacement can
         # claim the task immediately and a late grading worker loses its lease.
-        from backend.db.workflow_repository import AssignmentWorkflowRecord
-
         session.execute(
             update(AssignmentWorkflowRecord)
             .where(
@@ -618,6 +820,15 @@ def add_frozen_submissions(run_id: str, *, revision_ids: list[str]) -> None:
     """Record the (run, revision) pairs graded by this run, frozen at creation."""
     now = time.time()
     with session_scope() as session:
+        run = session.scalar(
+            select(GradingRunRecord)
+            .where(GradingRunRecord.id == run_id)
+            .with_for_update()
+        )
+        if run is None or _active_assignment_for_run(
+            session, run_id, actor_id=run.teacher_id, lock=True
+        ) is None:
+            raise NotFound("grading_run")
         for revision_id in revision_ids:
             revision = session.get(SubmissionRevisionRecord, revision_id)
             assert revision is not None
@@ -642,6 +853,8 @@ def list_frozen_submissions(run_id: str) -> list["FrozenSubmission"]:
     revision id (the value results point at).
     """
     with session_scope() as session:
+        if _active_assignment_for_run(session, run_id) is None:
+            raise NotFound("grading_run")
         rows = session.scalars(
             select(GradingRunSubmissionRecord)
             .where(GradingRunSubmissionRecord.grading_run_id == run_id)
@@ -671,6 +884,15 @@ class FrozenSubmission:
 def record_event(run_id: str, *, level: str, message: str, payload: dict | None = None) -> None:
     now = time.time()
     with session_scope() as session:
+        run = session.scalar(
+            select(GradingRunRecord)
+            .where(GradingRunRecord.id == run_id)
+            .with_for_update()
+        )
+        if run is None or _active_assignment_for_run(
+            session, run_id, actor_id=run.teacher_id, lock=True
+        ) is None:
+            raise NotFound("grading_run")
         next_seq = (session.scalar(
             select(func.max(GradingRunEventRecord.sequence)).where(
                 GradingRunEventRecord.grading_run_id == run_id
@@ -691,10 +913,10 @@ def record_event(run_id: str, *, level: str, message: str, payload: dict | None 
 
 def list_events(run_id: str, *, actor_id: str | None = None) -> list[dict]:
     with session_scope() as session:
-        if actor_id is not None:
-            run = session.get(GradingRunRecord, run_id)
-            if run is None or run.teacher_id != actor_id:
-                raise NotFound("grading_run")
+        if _active_assignment_for_run(
+            session, run_id, actor_id=actor_id
+        ) is None:
+            raise NotFound("grading_run")
         rows = session.scalars(
             select(GradingRunEventRecord)
             .where(GradingRunEventRecord.grading_run_id == run_id)
@@ -757,7 +979,7 @@ def persisted_result_counters(run_id: str) -> tuple[int, int]:
     """
     with session_scope() as session:
         run = session.get(GradingRunRecord, run_id)
-        if run is None:
+        if run is None or _active_assignment_for_run(session, run_id) is None:
             raise NotFound("grading_run")
         revision_ids, question_ids = _result_matrix_axes(session, run)
         rows = session.execute(
@@ -806,10 +1028,14 @@ def upsert_result(run_id: str, *, worker_id: str,
                 GradingRunRecord.lease_owner == worker_id,
                 GradingRunRecord.lease_expiry > now,
                 GradingRunRecord.released_at.is_(None),
-            )
+            ).with_for_update()
         )
         if run is None:
             raise LeaseLost("result_write_lease_lost")
+        if _active_assignment_for_run(
+            session, run_id, actor_id=run.teacher_id, lock=True
+        ) is None:
+            raise LeaseLost("task_deleted")
         if grade_result.grading_run_id != run_id:
             raise ValidationError("result_run_mismatch")
         frozen = session.scalar(
@@ -903,6 +1129,8 @@ def upsert_result(run_id: str, *, worker_id: str,
 
 def list_results_for_run(run_id: str) -> list[education.GradeResultDTO]:
     with session_scope() as session:
+        if _active_assignment_for_run(session, run_id) is None:
+            raise NotFound("grading_run")
         records = session.scalars(
             select(GradeResultRecord)
             .where(GradeResultRecord.grading_run_id == run_id)
@@ -918,8 +1146,14 @@ def list_results_for_review(assignment_id: str) -> list[education.GradeResultDTO
         records = session.scalars(
             select(GradeResultRecord)
             .join(GradingRunRecord, GradingRunRecord.id == GradeResultRecord.grading_run_id)
+            .join(
+                AssignmentRecord,
+                (AssignmentRecord.id == GradingRunRecord.assignment_id)
+                & (AssignmentRecord.teacher_id == GradingRunRecord.teacher_id),
+            )
             .where(
                 GradingRunRecord.assignment_id == assignment_id,
+                AssignmentRecord.deletion_requested_at.is_(None),
                 GradeResultRecord.result_status.in_(
                     education.REVIEW_QUEUE_RESULT_STATUSES
                 ),
@@ -1014,6 +1248,13 @@ def add_teacher_review(
         )
         if run is None or run.teacher_id != teacher_id:
             raise NotFound("grade_result")
+        if (
+            _active_assignment_for_result(
+                session, grade_result_id, actor_id=teacher_id, lock=True
+            )
+            is None
+        ):
+            raise NotFound("grade_result")
         if run.status not in (
             education.GradingRunStatus.COMPLETED.value,
             education.GradingRunStatus.PARTIAL_FAILED.value,
@@ -1073,6 +1314,8 @@ def add_teacher_review(
 
 def latest_teacher_review(grade_result_id: str) -> education.TeacherReviewDTO | None:
     with session_scope() as session:
+        if _active_assignment_for_result(session, grade_result_id) is None:
+            return None
         record = session.scalar(
             select(TeacherReviewRecord)
             .where(TeacherReviewRecord.grade_result_id == grade_result_id)
@@ -1091,6 +1334,8 @@ def latest_teacher_review(grade_result_id: str) -> education.TeacherReviewDTO | 
 def has_review_queue_items(run_id: str) -> bool:
     """Return whether this run still has hard failures or soft review signals."""
     with session_scope() as session:
+        if _active_assignment_for_run(session, run_id) is None:
+            return False
         return session.scalar(
             select(func.count()).select_from(GradeResultRecord).where(
                 GradeResultRecord.grading_run_id == run_id,
@@ -1104,6 +1349,8 @@ def has_review_queue_items(run_id: str) -> bool:
 def has_unresolved_failures(run_id: str) -> bool:
     """Return whether this run contains a release-blocking hard failure."""
     with session_scope() as session:
+        if _active_assignment_for_run(session, run_id) is None:
+            return False
         return session.scalar(
             select(func.count()).select_from(GradeResultRecord).where(
                 GradeResultRecord.grading_run_id == run_id,
@@ -1134,6 +1381,13 @@ def release(run_id: str, *, teacher_id: str) -> education.GradingRunDTO:
             .with_for_update()
         )
         if run is None or run.teacher_id != teacher_id:
+            raise NotFound("grading_run")
+        if (
+            _active_assignment_for_run(
+                session, run_id, actor_id=teacher_id, lock=True
+            )
+            is None
+        ):
             raise NotFound("grading_run")
         if run.status not in (education.GradingRunStatus.COMPLETED.value,
                               education.GradingRunStatus.PARTIAL_FAILED.value):
@@ -1198,5 +1452,16 @@ def release(run_id: str, *, teacher_id: str) -> education.GradingRunDTO:
 
 def is_released(run_id: str) -> bool:
     with session_scope() as session:
-        record = session.get(GradingRunRecord, run_id)
+        record = session.scalar(
+            select(GradingRunRecord)
+            .join(
+                AssignmentRecord,
+                (AssignmentRecord.id == GradingRunRecord.assignment_id)
+                & (AssignmentRecord.teacher_id == GradingRunRecord.teacher_id),
+            )
+            .where(
+                GradingRunRecord.id == run_id,
+                AssignmentRecord.deletion_requested_at.is_(None),
+            )
+        )
         return record is not None and record.released_at is not None

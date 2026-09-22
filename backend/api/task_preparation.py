@@ -12,6 +12,7 @@ import json
 import logging
 import re
 import time
+import uuid
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from pathlib import Path
 from typing import Any, Literal
@@ -50,6 +51,7 @@ from backend.db import (
     assignment_repository,
     file_repository,
     source_outcome_repository,
+    source_storage_repository,
     workflow_repository,
 )
 from backend.domain.errors import (
@@ -545,10 +547,16 @@ async def preflight_problem_source(
     extraction_hint: str = Form(default=""),
     save_to_library: bool = Form(default=False),
     recognition_provider_id: str | None = Form(default=None),
+    replace_confirmed: bool = Form(default=False),
     current: User = Depends(require_teacher),
     registry: ExpertRegistry = Depends(get_scoped_expert_registry),
 ):
     try:
+        # Endpoint functions are also exercised directly by service tests;
+        # FastAPI's Form sentinel is not a submitted boolean in that path.
+        replace_confirmed = (
+            replace_confirmed if isinstance(replace_confirmed, bool) else False
+        )
         stored_file_id = (
             stored_file_id.strip()
             if isinstance(stored_file_id, str) and stored_file_id.strip()
@@ -560,7 +568,33 @@ async def preflight_problem_source(
             and recognition_provider_id.strip()
             else None
         )
-        workflow = workflow_repository.get_workflow(task_id, owner_id=current.id)
+        workflow = workflow_repository.get_live_workflow(
+            task_id, owner_id=current.id
+        )
+        task = task_facade.get_task(task_id=task_id, owner_id=current.id, full=False)
+        may_supersede_raw_generation = (
+            replace_confirmed or not bool(task.get("problem_count"))
+        )
+        replacement_file_ids = (
+            source_storage_repository.replacement_source_file_ids(
+                assignment_id=task_id,
+                owner_id=current.id,
+                operation_id=workflow.extract_job_id,
+                family="problem",
+            )
+            if may_supersede_raw_generation
+            else ()
+        )
+        # One server-derived group is shared by every source preflight in this
+        # workflow generation.  It survives page reloads and failed requests,
+        # while an untrusted client cannot select or steal another live claim.
+        replacement_group_id = (
+            source_storage_repository.replacement_claim_group_id(
+                assignment_id=task_id,
+                family="problem",
+                replacement_file_ids=replacement_file_ids,
+            )
+        )
         resolved_provider_id, route = _resolve_recognition_provider(
             owner_id=current.id,
             registry=registry,
@@ -591,6 +625,8 @@ async def preflight_problem_source(
             "save_to_library": save_to_library,
             "base_workflow_revision": workflow.workflow_revision,
             "recognition_provider_id": resolved_provider_id,
+            "replace_confirmed": replace_confirmed,
+            "replacement_group_id": replacement_group_id,
         }
         input_hash = _source_fingerprint(provisional_payload)
         replay = task_facade.find_task_operation(
@@ -666,6 +702,8 @@ async def preflight_problem_source(
                         original_name=descriptor["filename"],
                         content=descriptor["_body"],
                         content_type=descriptor["content_type"],
+                        replacement_file_ids=replacement_file_ids,
+                        replacement_group_id=replacement_group_id,
                     )
                 source, _ = source_outcome_repository.register_source(
                     owner_id=current.id,
@@ -680,6 +718,20 @@ async def preflight_problem_source(
                     stored_file_id=stored.id,
                 )
                 artifact_refs.append(stored.id)
+            except DomainError as exc:
+                if stored_created and stored is not None:
+                    file_repository.delete_unlinked_file(
+                        storage=get_storage(),
+                        file_id=stored.id,
+                        owner_id=current.id,
+                        assignment_id=task_id,
+                    )
+                _mark_problem_source_failed(
+                    operation=operation,
+                    owner_id=current.id,
+                    error_code=exc.code,
+                )
+                raise
             except Exception as exc:
                 if stored_created and stored is not None:
                     file_repository.delete_unlinked_file(
@@ -1569,7 +1621,23 @@ async def _start_question_preparation(
     # preparation is published only to the durable workflow worker below.
     del background_tasks
     try:
-        workflow = workflow_repository.get_workflow(task_id, owner_id=current.id)
+        workflow = workflow_repository.get_live_workflow(
+            task_id, owner_id=current.id
+        )
+        task = task_facade.get_task(task_id=task_id, owner_id=current.id, full=False)
+        may_supersede_raw_generation = (
+            request.replace_confirmed or not bool(task.get("problem_count"))
+        )
+        replacement_file_ids = (
+            source_storage_repository.replacement_source_file_ids(
+                assignment_id=task_id,
+                owner_id=current.id,
+                operation_id=workflow.extract_job_id,
+                family="problem",
+            )
+            if may_supersede_raw_generation
+            else ()
+        )
         recognition_provider_id, route = _resolve_recognition_provider(
             owner_id=current.id,
             registry=registry,
@@ -1735,7 +1803,6 @@ async def _start_question_preparation(
             workflow=workflow, replay=replay,
             requested_revision=request.expected_workflow_revision,
         )
-        task = task_facade.get_task(task_id=task_id, owner_id=current.id, full=False)
         if task.get("problem_count") and not request.replace_confirmed:
             task_facade._raise_replacement_confirmation_required()
         if not allow_prepared_source_reuse and any(
@@ -1830,6 +1897,7 @@ async def _start_question_preparation(
                     ),
                 },
                 workflow_job_id_fields=("active_job_id", "extract_job_id"),
+                replacement_file_ids=replacement_file_ids,
                 retry_observed_operation_id=(
                     replay.id if replay is not None else None
                 ),
@@ -1868,7 +1936,9 @@ async def retry_question_preparation(
 ):
     """Retry the failed generation stage from its durable prepared sources."""
     try:
-        workflow = workflow_repository.get_workflow(task_id, owner_id=current.id)
+        workflow = workflow_repository.get_live_workflow(
+            task_id, owner_id=current.id
+        )
         failed = workflow_repository.get_operation(job_id, owner_id=current.id)
         if (
             failed.assignment_id != task_id
@@ -2975,6 +3045,8 @@ async def run_durable_question_preparation(operation) -> None:
             expected_lease_token=operation.lease_token,
             operation_progress=snapshot,
         )
+    finally:
+        remove_reporter(operation.operation_id)
 
 
 async def _run_question_preparation(
@@ -3184,6 +3256,8 @@ async def _run_question_preparation(
             ),
             operation_progress=snapshot,
         )
+    finally:
+        remove_reporter(job_id)
 
 
 # ─── Q08 material import ─────────────────────────────────────────────────────
@@ -3201,6 +3275,7 @@ async def preflight_material_import(
     current: User = Depends(require_teacher),
     registry: ExpertRegistry = Depends(get_scoped_expert_registry),
 ):
+    draft = None
     try:
         requested_targets = json.loads(targets)
         if not isinstance(requested_targets, list):
@@ -3208,7 +3283,9 @@ async def preflight_material_import(
     except (json.JSONDecodeError, ValueError):
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, detail={"code": "invalid_targets"})
     try:
-        workflow = workflow_repository.get_workflow(task_id, owner_id=current.id)
+        workflow = workflow_repository.get_live_workflow(
+            task_id, owner_id=current.id
+        )
         _provider_id, route = _resolve_recognition_provider(
             owner_id=current.id,
             registry=registry,
@@ -3219,6 +3296,30 @@ async def preflight_material_import(
             inline_text=None, owner_id=current.id, registry=registry,
             role=_material_import_source_role(requested_targets),
             provider=route.provider,
+        )
+        text_sha256 = hashlib.sha256(text.encode("utf-8")).hexdigest()
+        # Create the durable producer before any task-owned object write.  The
+        # request nonce preserves the endpoint's existing one-token-per-
+        # preflight behavior, while the preparing row lets task deletion wait
+        # for or fence this external-write window.
+        draft, _ = workflow_repository.create_operation(
+            assignment_id=task_id,
+            owner_id=current.id,
+            operation_type="material_source",
+            input_hash=_source_fingerprint({
+                "role": "material_import",
+                "sha256": text_sha256,
+                "targets": requested_targets,
+                "structure_mode": structure_mode,
+                "extraction_hint": extraction_hint,
+                "nonce": uuid.uuid4().hex,
+            }),
+            payload={
+                "base_workflow_revision": workflow.workflow_revision,
+                "state": "preparing_artifact",
+            },
+            expires_at=time.time() + SOURCE_TTL_SECONDS,
+            initial_status="preparing",
         )
         target_role = (
             "rubric" if requested_targets == ["criterion"]
@@ -3242,21 +3343,25 @@ async def preflight_material_import(
             kind="material_import_text", original_name="material-source.txt",
             content=text.encode("utf-8"), content_type="text/plain",
             assignment_id=task_id,
+            fence_operation_id=draft.id,
+            fence_operation_attempt=draft.attempt,
         )
         payload = {
             "text_artifact_id": text_artifact.id, "filename": descriptor["filename"],
             "source_kind": descriptor["kind"], "size_bytes": descriptor["size_bytes"],
-            "sha256": hashlib.sha256(text.encode()).hexdigest(),
+            "sha256": text_sha256,
             "library_material_id": effective_material_id,
             "targets": requested_targets, "structure_mode": structure_mode,
             "extraction_hint": extraction_hint,
             "base_workflow_revision": workflow.workflow_revision,
         }
-        draft, _ = workflow_repository.create_operation(
-            assignment_id=task_id, owner_id=current.id,
-            operation_type="material_source", input_hash=_source_fingerprint({
-                **payload, "role": "material_import",
-            }), payload=payload, expires_at=time.time() + SOURCE_TTL_SECONDS,
+        draft = workflow_repository.update_operation(
+            draft.id,
+            owner_id=current.id,
+            expected_attempt=draft.attempt,
+            status="pending",
+            payload=payload,
+            expires_at=time.time() + SOURCE_TTL_SECONDS,
         )
         return {
             "status": "ready", "source_token": draft.id,
@@ -3278,7 +3383,41 @@ async def preflight_material_import(
             "saved_material": saved_material,
         }
     except DomainError as exc:
+        if draft is not None and draft.status == "preparing":
+            try:
+                workflow_repository.update_operation(
+                    draft.id,
+                    owner_id=current.id,
+                    expected_attempt=draft.attempt,
+                    status="error",
+                    error_code=getattr(exc, "code", "material_source_failed"),
+                    completed_at=time.time(),
+                )
+            except DomainError:
+                pass
         return domain_error_response(exc)
+    except Exception as exc:
+        if draft is not None and draft.status == "preparing":
+            try:
+                workflow_repository.update_operation(
+                    draft.id,
+                    owner_id=current.id,
+                    expected_attempt=draft.attempt,
+                    status="error",
+                    error_code="material_source_persistence_failed",
+                    completed_at=time.time(),
+                )
+            except DomainError:
+                pass
+        logger.warning(
+            "Material-source preflight persistence failed; task_id=%s exception_type=%s",
+            task_id,
+            type(exc).__name__,
+        )
+        raise HTTPException(
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={"code": "material_source_persistence_failed"},
+        ) from None
 
 
 @router.post("/{task_id}/material-imports")
@@ -3297,7 +3436,9 @@ async def start_material_import(
             raise InvalidTransition("Material source expired.", code="stale_revision")
         payload = dict(source.payload or {})
         base_revision = int(payload.get("base_workflow_revision") or 0)
-        workflow = workflow_repository.get_workflow(task_id, owner_id=current.id)
+        workflow = workflow_repository.get_live_workflow(
+            task_id, owner_id=current.id
+        )
         provider_id, route = _resolve_recognition_provider(
             owner_id=current.id,
             registry=registry,
@@ -3474,6 +3615,8 @@ async def _run_material_import(
             classify_background_error(exc, "material_import_failed"),
             expected_lease_token=expected_lease_token,
         )
+    finally:
+        remove_reporter(job_id)
 
 
 async def run_durable_material_import(operation) -> None:
@@ -3525,7 +3668,9 @@ async def get_material_import(
         if job.assignment_id != task_id or job.operation_type != "material_import":
             raise NotFound("material_import")
         payload = dict(job.payload or {})
-        workflow = workflow_repository.get_workflow(task_id, owner_id=current.id)
+        workflow = workflow_repository.get_live_workflow(
+            task_id, owner_id=current.id
+        )
         candidates = list(payload.get("candidates") or [])
         progress = job.progress or None
         if job.status == "running" and (reporter := get_reporter(job.id)) is not None:
@@ -3583,7 +3728,9 @@ def apply_material_import(
             raise NotFound("material_import")
         payload = dict(job.payload or {})
         if job.status == "applied":
-            workflow = workflow_repository.get_workflow(task_id, owner_id=current.id)
+            workflow = workflow_repository.get_live_workflow(
+                task_id, owner_id=current.id
+            )
             return {
                 "status": "already_done", "job_id": job_id, "task_id": task_id,
                 "summary": _material_summary(payload.get("candidates", []), payload.get("applied_candidate_ids", [])),
@@ -3745,7 +3892,9 @@ async def confirm_ai_completion(
                 "request_fingerprint": input_hash,
                 "workflow_revision": task["workflow_revision"],
             }
-        workflow = workflow_repository.get_workflow(task_id, owner_id=current.id)
+        workflow = workflow_repository.get_live_workflow(
+            task_id, owner_id=current.id
+        )
         claim_base_revision = task_facade.retryable_operation_claim_revision(
             workflow=workflow, replay=replay,
             requested_revision=request.expected_workflow_revision,
@@ -3937,6 +4086,8 @@ async def _run_ai_completion(
             classify_background_error(exc, "ai_completion_failed"),
             expected_lease_token=expected_lease_token,
         )
+    finally:
+        remove_reporter(job_id)
 
 
 async def run_durable_ai_completion(operation) -> None:
@@ -4010,6 +4161,9 @@ def _save_auxiliary_result_artifact(*, operation, kind: str, stage: str, payload
             payload, ensure_ascii=False, allow_nan=False, separators=(",", ":")
         ).encode("utf-8"),
         content_type="application/json", assignment_id=operation.assignment_id,
+        fence_operation_id=operation.operation_id,
+        fence_operation_attempt=operation.attempt,
+        fence_lease_token=operation.lease_token,
     )
 
 
@@ -4032,7 +4186,9 @@ async def get_ai_completion(task_id: str, job_id: str, current: User = Depends(r
         if job.assignment_id != task_id or job.operation_type != "ai_completion":
             raise NotFound("ai_completion")
         payload = dict(job.payload or {})
-        workflow = workflow_repository.get_workflow(task_id, owner_id=current.id)
+        workflow = workflow_repository.get_live_workflow(
+            task_id, owner_id=current.id
+        )
         requested = list(payload.get("target_ids") or [])
         applied = list(payload.get("applied_target_ids") or [])
         skipped = list(payload.get("skipped_target_ids") or [])

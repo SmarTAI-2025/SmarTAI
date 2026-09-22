@@ -9,6 +9,9 @@ const SOURCE_PREVIEW_ERROR_CODES = new Set<SourcePreviewErrorCode>([
   "source_preview_unsupported_type",
   "source_preview_storage_unavailable",
   "source_preview_load_failed",
+  "source_cleanup_pending",
+  "source_unavailable_task_finalized",
+  "source_unavailable_missing",
 ]);
 
 class SourcePreviewResponseError extends Error {
