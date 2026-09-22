@@ -36,6 +36,7 @@ from backend.services.background_errors import (
     classify_background_error,
     is_retryable_background_error,
 )
+from backend.services.question_structure import annotate_major_question_structures
 from backend.tools.problem_dedup import dedupe_extracted_problems
 from backend.tools.structured_llm import (
     StructuredOutputBoundsError,
@@ -117,7 +118,9 @@ async def extract_problems_from_ocr_markdown(
         }]
         problems[f"q{index}"] = problem
     # Defensive: OCR Markdown can repeat a numbered heading for one question.
-    problems = dedupe_extracted_problems(problems)
+    problems = annotate_major_question_structures(
+        dedupe_extracted_problems(problems)
+    )
     problem_store.clear()
     problem_store.update(problems)
     if reporter:
@@ -132,7 +135,7 @@ async def extract_problems_from_ocr_markdown(
 
 PROB_SYSTEM_PROMPT = """You are a professional AI teaching assistant with graduate-level expertise in relevant fields, specializing in analyzing assignment content in plain text format. Your task is:
 
-1. **Problem Segmentation**: Split the identified content into independent problems based on question numbers (e.g., "1.1", "Question 2", "III.", etc.).
+1. **Major-question Segmentation**: Split the identified content into scored major questions based on top-level question numbers (e.g., "1.1", "Question 2", "III.", etc.). One output object always represents one complete scored major question.
 
 2. **Content Extraction**: Extract these key pieces of information for each problem:
     - `q_id`: Unique question identifier as a STRING, starting from "q1" and incrementing as "q2", "q3", etc. **Must be a string with the `q` prefix — not a bare integer.**
@@ -151,7 +154,8 @@ PROB_SYSTEM_PROMPT = """You are a professional AI teaching assistant with gradua
     - **其他**: Does not fit into the above 7 categories.
 
     **Objective-question rules**: If the stem shows 3 or more option lines marked A./B./C./D., classify as 选择题, or as 多选题 when the stem says multiple options are correct. If the stem has no options but a blank to fill, classify as 填空题.
-    **Sub-questions (子问)**: A question containing sub-questions such as "(1) ... (2) ... (3) ..." must be emitted as ONE single problem whose `stem` keeps the full question including every sub-question. Never emit a sub-question (e.g. only "(1) ...") as a separate problem row.
+    **Sub-questions (子问)**: A question containing sub-questions such as "(1) ... (2) ... (3) ..." or "(a) ... (b) ..." must be emitted as ONE single problem whose `stem` keeps the shared conditions and every sub-question in source order. A sub-question never receives its own q_id, score row, answer row, or progress unit. For example, major question 1 containing (a) and (b) is exactly q1; the next major question 2 is q2. Never emit only "(a)" or "(1)" as a separate problem row.
+    **Numbering rule**: Dot-separated identifiers such as `1.1`, `1.2`, and `2.3.4` are normally complete major-question numbers. A suffix such as `1.1(a)` or `1.1(2)` is a sub-question marker inside major question `1.1`.
     **Fragment at the start of the text**: If the very first line of the provided text starts in the MIDDLE of a question (no question number on the first line because its beginning was cut off), still emit that fragment as a problem row with `number` set to the empty string "" — do not guess or invent a number, and do not invent the missing opening text.
 
     **[Important]: Preserve the stem information completely. Do not delete or translate content.**
@@ -272,7 +276,9 @@ async def extract_problems(
     # Chunked extraction can emit the same question twice (split sub-question,
     # near-duplicate, or a question cut across the chunk overlap). Collapse
     # duplicates before any score policy freezes a max_score per row.
-    prob_dict = dedupe_extracted_problems(prob_dict)
+    prob_dict = annotate_major_question_structures(
+        dedupe_extracted_problems(prob_dict)
+    )
 
     if not prob_dict:
         if reporter and manage_progress_lifecycle:
