@@ -30,6 +30,42 @@ export interface TestCase {
   expected_return?: string | null;
 }
 
+export interface MajorQuestionSubpartV1 {
+  subpart_id: string;
+  label: string;
+  order: number;
+  stem: string;
+  type_hint?: string | null;
+  source_span_ids: string[];
+}
+
+export interface MajorQuestionStructureV1 {
+  contract_version: 1;
+  scoring_unit: "major_question";
+  major_number: string;
+  major_order: number;
+  shared_stem: string;
+  subparts: MajorQuestionSubpartV1[];
+  structure_source: "deterministic" | "bounded_repair" | "legacy_single_question";
+  review_status: "confirmed" | "needs_review";
+}
+
+export interface RubricPointItemV1 {
+  subpart_id: string;
+  label: string;
+  points: string;
+}
+
+export interface RubricPointSummaryV1 {
+  contract_version: 1;
+  has_explicit_subpart_points: boolean;
+  items: RubricPointItemV1[];
+  total_points?: string | null;
+  major_max_score: string;
+  is_valid: boolean;
+  issue_code?: "rubric_subpart_points_incomplete" | "rubric_subpart_points_duplicate" | "rubric_subpart_points_mismatch" | null;
+}
+
 export interface ProblemInfo {
   q_id: string;
   number: string;
@@ -39,6 +75,8 @@ export interface ProblemInfo {
   max_score: number;
   max_score_source?: "default_10" | "uniform" | "per_question_text" | "teacher_edited" | "legacy";
   max_score_review_status?: "needs_review" | "confirmed";
+  question_structure?: MajorQuestionStructureV1 | null;
+  rubric_point_summary?: RubricPointSummaryV1 | null;
   review_status?: "needs_review" | "edited" | "confirmed";
   reference_answer?: string | null;
   solution_code?: string | null;

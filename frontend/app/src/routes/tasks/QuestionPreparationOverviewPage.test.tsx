@@ -21,6 +21,19 @@ vi.mock("@/api/hooks/tasks", () => ({
           max_score_source: "default_10",
           max_score_review_status: "needs_review",
           criterion: "说明基本概念",
+          question_structure: {
+            contract_version: 1,
+            scoring_unit: "major_question",
+            major_number: "Q1",
+            major_order: 0,
+            shared_stem: "三角函数基础",
+            subparts: [
+              { subpart_id: "sp1", label: "(a)", order: 0, stem: "定义", source_span_ids: [] },
+              { subpart_id: "sp2", label: "(b)", order: 1, stem: "证明", source_span_ids: [] },
+            ],
+            structure_source: "deterministic",
+            review_status: "confirmed",
+          },
           preparation_issues: [{
             issue_id: "score-risk-1",
             field: "max_score",
@@ -28,6 +41,17 @@ vi.mock("@/api/hooks/tasks", () => ({
             severity: "warning",
             status: "open",
           }],
+        },
+        Q2: {
+          q_id: "Q2",
+          number: "Q2",
+          type: "计算题",
+          stem: "计算积分",
+          max_score: 6,
+          max_score_source: "per_question_text",
+          max_score_review_status: "confirmed",
+          criterion: "步骤正确",
+          preparation_issues: [],
         },
       },
     },
@@ -72,8 +96,11 @@ describe("QuestionPreparationOverviewPage smart search", () => {
 
     expect(screen.getByRole("columnheader", { name: "满分" })).toBeInTheDocument();
     expect(screen.getByTitle("系统默认，需确认")).toHaveTextContent("10 分");
-    expect(screen.getByText(/作业总分 10/)).toBeInTheDocument();
+    expect(screen.getByText(/作业总分 16/)).toBeInTheDocument();
     expect(screen.getByTitle("当前使用默认 10 分，请确认题目满分")).toBeInTheDocument();
+    expect(screen.getAllByRole("row")).toHaveLength(3);
+    expect(screen.queryByRole("row", { name: /\(a\)/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole("row", { name: /\(b\)/ })).not.toBeInTheDocument();
   });
 
   it("does not apply a native composing input event before composition ends", async () => {

@@ -33,11 +33,33 @@ const taskData = vi.hoisted(() => ({
       q_id: "Q1",
       number: "1",
       type: "Proof",
-      stem: "Proof question one",
+      stem: "Proof question one. (a) Establish the base case. (b) Complete the proof.",
       max_score: 10,
       max_score_source: "default_10",
       max_score_review_status: "needs_review",
       criterion: "Rubric one",
+      question_structure: {
+        contract_version: 1,
+        scoring_unit: "major_question",
+        major_number: "1",
+        major_order: 0,
+        shared_stem: "Proof question one.",
+        subparts: [
+          { subpart_id: "sp1", label: "(a)", order: 0, stem: "Establish the base case.", source_span_ids: [] },
+          { subpart_id: "sp2", label: "(b)", order: 1, stem: "Complete the proof.", source_span_ids: [] },
+        ],
+        structure_source: "deterministic",
+        review_status: "confirmed",
+      },
+      rubric_point_summary: {
+        contract_version: 1,
+        has_explicit_subpart_points: false,
+        items: [],
+        total_points: null,
+        major_max_score: "10",
+        is_valid: true,
+        issue_code: null,
+      },
       reference_answer: "Answer one",
       preparation_issues: [],
     },
@@ -248,9 +270,9 @@ describe("QuestionPreparationDetailPage navigation", () => {
     const user = userEvent.setup();
     renderPage();
 
-    expect((await screen.findAllByText("本题满分")).length).toBeGreaterThan(0);
+    expect((await screen.findAllByText("本题满分与评分标准")).length).toBeGreaterThan(0);
     expect(screen.getByText(/系统暂按默认 10 分/)).toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: "修改第 1 题满分" }));
+    await user.click(screen.getByRole("button", { name: "修改第 1 题满分与评分标准" }));
     const input = screen.getByRole("spinbutton", { name: "第 1 题满分" });
     await user.clear(input);
     await user.type(input, "5");
@@ -261,7 +283,49 @@ describe("QuestionPreparationDetailPage navigation", () => {
       qId: "Q1",
       expectedWorkflowRevision: 7,
       max_score: 5,
+      criterion: "Rubric one",
     }));
+  });
+
+  it("keeps two subparts inside one major-question card", async () => {
+    renderPage();
+
+    await screen.findByText("含 2 个小问 · (a) (b)");
+    expect(document.querySelectorAll('[data-question-id="Q1"]')).toHaveLength(1);
+    expect(document.querySelector('[data-question-id="Q1(a)"]')).not.toBeInTheDocument();
+    expect(document.querySelector('[data-question-id="Q1(b)"]')).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "第 1 题" })).toBeInTheDocument();
+  });
+
+  it("blocks 11/10 and atomically saves matching 11/11 score plus rubric", async () => {
+    mutateAsync.mockResolvedValue({ workflow_revision: 8 });
+    const user = userEvent.setup();
+    renderPage();
+
+    await user.click(await screen.findByRole("button", { name: "修改第 1 题满分与评分标准" }));
+    const rubric = screen.getByRole("textbox", { name: "第 1 题评分标准" });
+    await user.clear(rubric);
+    await user.type(rubric, "(a) 5 分\n(b) 6 分");
+
+    expect(screen.getByRole("alert")).toHaveTextContent("分项合计 11/10");
+    expect(screen.getByRole("button", { name: "保存" })).toBeDisabled();
+    expect(mutateAsync).not.toHaveBeenCalled();
+
+    const maximum = screen.getByRole("spinbutton", { name: "第 1 题满分" });
+    await user.clear(maximum);
+    await user.type(maximum, "11");
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    expect(screen.getByText("分项合计 11/11")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "保存" }));
+
+    await waitFor(() => expect(mutateAsync).toHaveBeenCalledTimes(1));
+    expect(mutateAsync).toHaveBeenCalledWith({
+      taskId: "task-1",
+      qId: "Q1",
+      expectedWorkflowRevision: 7,
+      max_score: 11,
+      criterion: "(a) 5 分\n(b) 6 分",
+    });
   });
 
   it("carries the latest workflow revision across different maximum-score edits and final confirmation", async () => {
@@ -272,13 +336,13 @@ describe("QuestionPreparationDetailPage navigation", () => {
     const user = userEvent.setup();
     const router = renderPage();
 
-    await user.click(await screen.findByRole("button", { name: "修改第 1 题满分" }));
+    await user.click(await screen.findByRole("button", { name: "修改第 1 题满分与评分标准" }));
     const firstScore = screen.getByRole("spinbutton", { name: "第 1 题满分" });
     await user.clear(firstScore);
     await user.type(firstScore, "5");
     await user.click(screen.getByRole("button", { name: "保存" }));
 
-    await user.click(screen.getByRole("button", { name: "修改第 2 题满分" }));
+    await user.click(screen.getByRole("button", { name: "修改第 2 题满分与评分标准" }));
     const secondScore = screen.getByRole("spinbutton", { name: "第 2 题满分" });
     await user.clear(secondScore);
     await user.type(secondScore, "15");
@@ -308,7 +372,7 @@ describe("QuestionPreparationDetailPage navigation", () => {
     const user = userEvent.setup();
     renderPage();
 
-    await user.click(await screen.findByRole("button", { name: "修改第 1 题满分" }));
+    await user.click(await screen.findByRole("button", { name: "修改第 1 题满分与评分标准" }));
     const input = screen.getByRole("spinbutton", { name: "第 1 题满分" });
     await user.clear(input);
     await user.type(input, "8");
