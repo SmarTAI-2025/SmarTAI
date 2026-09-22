@@ -54,7 +54,7 @@ def test_question_preparation_request_defaults_to_reviewable_ten_points():
 
 
 @pytest.mark.asyncio
-async def test_failed_question_preparation_reuses_sources_with_selected_model(
+async def test_failed_question_preparation_reuses_sources_with_frozen_model(
     monkeypatch,
 ):
     workflow = SimpleNamespace(
@@ -66,11 +66,15 @@ async def test_failed_question_preparation_reuses_sources_with_selected_model(
         assignment_id="question-task",
         operation_type="question_preparation",
         status="error",
+        error_code="provider_timeout",
+        checkpoint={},
         payload={
             "source_tokens": ["prepared-source-1"],
             "base_workflow_revision": 7,
+            "requested_workflow_revision": 7,
             "replace_confirmed": False,
             "score_policy": {"mode": "default_10"},
+            "recognition_provider_id": "provider-original",
         },
     )
     monkeypatch.setattr(
@@ -96,7 +100,7 @@ async def test_failed_question_preparation_reuses_sources_with_selected_model(
         task_id="question-task",
         job_id="failed-question-job",
         request=RetryQuestionPreparationRequest(
-            recognition_provider_id="provider-new",
+            recognition_provider_id="provider-original",
             expected_workflow_revision=8,
         ),
         background_tasks=BackgroundTasks(),
@@ -111,8 +115,10 @@ async def test_failed_question_preparation_reuses_sources_with_selected_model(
     }
     assert captured["allow_prepared_source_reuse"] is True
     assert captured["request"].source_tokens == ["prepared-source-1"]
-    assert captured["request"].recognition_provider_id == "provider-new"
+    assert captured["request"].recognition_provider_id == "provider-original"
     assert captured["request"].expected_workflow_revision == 8
+    assert captured["input_workflow_revision"] == 7
+    assert captured["retry_source_contract"] == failed.payload
 
 
 @pytest.mark.parametrize(

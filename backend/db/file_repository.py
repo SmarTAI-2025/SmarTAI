@@ -19,7 +19,7 @@ import uuid
 from dataclasses import dataclass
 from pathlib import Path
 
-from sqlalchemy import delete, select
+from sqlalchemy import delete, select, update
 
 from backend.db.models import StoredFileRecord
 from backend.db.session import session_scope
@@ -79,7 +79,21 @@ def save_file(*, storage: StorageBackend, owner_id: str, kind: str,
               original_name: str, content: bytes, content_type: str | None = None,
               storage_prefix: str | None = None, assignment_id: str | None = None,
               submission_revision_id: str | None = None,
-              knowledge_document_id: str | None = None) -> StoredFile:
+              knowledge_document_id: str | None = None,
+              fence_operation_id: str | None = None,
+              fence_operation_attempt: int | None = None,
+              fence_lease_token: str | None = None) -> StoredFile:
+    fence_values = (
+        fence_operation_id,
+        fence_operation_attempt,
+        fence_lease_token,
+    )
+    if any(value is not None for value in fence_values) and not all(
+        value is not None for value in fence_values
+    ):
+        raise ValueError("Operation artifact fence must be provided in full.")
+    if fence_operation_id is not None and assignment_id is None:
+        raise ValueError("Operation artifact fence requires assignment_id.")
     file_id = uuid.uuid4().hex
     bounded_original_name = _bounded_original_name(original_name)
     safe_name = Path(bounded_original_name).name or "upload.bin"
@@ -105,6 +119,35 @@ def save_file(*, storage: StorageBackend, owner_id: str, kind: str,
     )
     try:
         with session_scope() as session:
+            if fence_operation_id is not None:
+                # Import lazily to keep the normalized file-model module free
+                # of a module-initialization cycle with workflow_repository.
+                from backend.db.workflow_repository import WorkflowOperationRecord
+                from backend.domain.errors import LeaseLost
+
+                fenced = session.execute(
+                    update(WorkflowOperationRecord)
+                    .where(
+                        WorkflowOperationRecord.id == fence_operation_id,
+                        WorkflowOperationRecord.owner_id == owner_id,
+                        WorkflowOperationRecord.assignment_id == assignment_id,
+                        WorkflowOperationRecord.attempt
+                        == fence_operation_attempt,
+                        WorkflowOperationRecord.status == "running",
+                        WorkflowOperationRecord.lease_token
+                        == fence_lease_token,
+                        WorkflowOperationRecord.lease_expires_at.is_not(None),
+                        WorkflowOperationRecord.lease_expires_at > time.time(),
+                    )
+                    # A matched UPDATE both validates and locks the operation
+                    # row until the StoredFile insert commits. Reclaim cannot
+                    # rotate the lease between the fence and publication.
+                    .values(updated_at=WorkflowOperationRecord.updated_at)
+                )
+                if fenced.rowcount != 1:
+                    raise LeaseLost(
+                        "Operation lease lost before artifact publication."
+                    )
             session.add(StoredFileRecord(**record.__dict__))
     except Exception:
         persisted: StoredFile | None = None

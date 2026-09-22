@@ -285,6 +285,8 @@ const GRADING_INPUT_CODES = new Set([
 ]);
 
 const SOURCE_CHANGED_CODES = new Set([
+  "question_preparation_source_unavailable",
+  "question_preparation_retry_source_unavailable",
   "question_preparation_source_expired",
   "question_preparation_library_source_changed",
   "problem_source_material_changed",
@@ -328,11 +330,11 @@ export function classifyRecoverableError(
 
   if (code === "provider_submit_uncertain") {
     return {
-      title: tx(locale, "OCR 提交状态无法确认", "The OCR submission state is uncertain"),
+      title: tx(locale, "模型请求状态无法确认", "The provider request state is uncertain"),
       description: tx(
         locale,
-        "请求可能已经到达百度。为避免重复提交或重复计费，系统不会自动重试这份文件；请保留任务编号并让管理员先核对服务商状态。",
-        "The request may have reached Baidu. To avoid duplicate submission or billing, SmarTAI will not retry this file automatically. Keep the job ID and ask an administrator to verify the provider state first.",
+        "请求可能已经到达服务商。为避免重复提交或重复计费，系统不会自动重试这一步；请保留任务编号并让管理员先核对服务商状态。",
+        "The request may have reached the provider. To avoid duplicate submission or billing, SmarTAI will not retry this step automatically. Keep the job ID and ask an administrator to verify the provider state first.",
       ),
       actionLabel: tx(locale, "刷新任务状态", "Refresh task state"),
       actionKind: "refresh",

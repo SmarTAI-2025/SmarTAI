@@ -418,3 +418,78 @@ def test_postgres_live_lease_rejects_same_worker_claim(pg_database):
     persisted = workflow_repository.get_operation(operation.id, owner_id=teacher)
     assert persisted.lease_owner == "worker-a"
     assert persisted.lease_token == first.lease_token
+
+
+def test_postgres_question_preparation_atomic_publication_has_one_winner(
+    pg_database,
+):
+    from backend.db import (
+        assignment_repository,
+        course_repository,
+        workflow_repository,
+    )
+    from backend.domain.errors import DomainError
+    from backend.db.session import session_scope
+    from backend.services import task_facade
+    from sqlalchemy import select
+
+    teacher = _seed_user("teacher")
+    course = course_repository.create_course(teacher_id=teacher, name="C")
+    assignment = assignment_repository.create_assignment(
+        teacher_id=teacher,
+        course_id=course.id,
+        name="A",
+    )
+    workflow_repository.ensure_workflow(
+        assignment_id=assignment.id,
+        owner_id=teacher,
+    )
+    start = threading.Barrier(2)
+
+    def publish(input_hash: str):
+        start.wait(timeout=10)
+        try:
+            operation, published, revision = (
+                task_facade.publish_checkpointed_operation_atomic(
+                    task_id=assignment.id,
+                    owner_id=teacher,
+                    operation_type="question_preparation",
+                    input_hash=input_hash,
+                    expected_workflow_revision=0,
+                    operation_payload={"input_hash": input_hash},
+                    initial_checkpoint_stage="sources_validated",
+                    initial_checkpoint={"stage": "sources_validated"},
+                    artifact_refs=[],
+                    workflow_changes={
+                        "active_operation": "question_preparation",
+                        "presentation_status": "extracting_problems",
+                    },
+                    workflow_job_id_fields=(
+                        "active_job_id",
+                        "extract_job_id",
+                    ),
+                )
+            )
+            return "published", published, revision, operation.id
+        except DomainError as exc:
+            return "error", exc.code, None, None
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        results = list(executor.map(publish, ("a" * 64, "b" * 64)))
+
+    assert sum(
+        result[0] == "published" and result[1] is True
+        for result in results
+    ) == 1
+    assert [result[1] for result in results if result[0] == "error"] == [
+        "workflow_busy"
+    ]
+    with session_scope() as session:
+        rows = session.scalars(
+            select(workflow_repository.WorkflowOperationRecord).where(
+                workflow_repository.WorkflowOperationRecord.assignment_id
+                == assignment.id
+            )
+        ).all()
+    assert len(rows) == 1
+    assert rows[0].status == "pending"

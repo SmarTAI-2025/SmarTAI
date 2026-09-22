@@ -152,6 +152,22 @@ describe("question source recovery guidance", () => {
     expect(info.description).not.toContain("格式");
     expect(info.technicalDetails).toContainEqual({ label: "文件上限", value: "5 MB" });
   });
+
+  it.each([
+    "question_preparation_source_unavailable",
+    "question_preparation_retry_source_unavailable",
+  ])("routes %s to selecting source material again", (code) => {
+    const info = classifyRecoverableError(
+      new APIError(409, code, {
+        detail: { code },
+      }),
+      { locale: "zh-CN", taskId: "task-1" },
+    );
+
+    expect(info.title).toBe("资料来源已变化");
+    expect(info.actionKind).toBe("reselect");
+    expect(info.actionLabel).toBe("重新选择资料");
+  });
 });
 
 describe("background task failure guidance", () => {
@@ -202,6 +218,19 @@ describe("background task failure guidance", () => {
     expect(info.description).toContain("VPN");
     expect(info.actionKind).toBe("retry");
     expect(info.tone).toBe("warning");
+  });
+
+  it("does not mislabel an uncertain question-generation request as OCR-only", () => {
+    const info = classifyRecoverableError("provider_submit_uncertain", {
+      locale: "zh-CN",
+      phase: "question_preparation",
+      jobId: "op-question-generation",
+    });
+
+    expect(info.title).toBe("模型请求状态无法确认");
+    expect(info.description).toContain("服务商");
+    expect(info.description).not.toContain("百度");
+    expect(info.actionKind).toBe("refresh");
   });
 
   it("routes an auth failure to BYOK with an access/quota explanation", () => {
