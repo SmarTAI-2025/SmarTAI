@@ -41,7 +41,9 @@ from backend.services.question_structure import (
     validate_rubric_points,
 )
 from backend.skills.question_score import resolve_question_score_policy
-from backend.services.teacher_score_constraints import teacher_score_requirements, validate_teacher_subpart_rubric
+from backend.services.teacher_score_constraints import (
+    teacher_score_requirements, validate_teacher_subpart_rubric, validate_teacher_question_coverage,
+)
 
 
 SourceRow = Tuple[ProblemSourceDraft, str]
@@ -172,9 +174,13 @@ async def _run_base_provider_stage(
     *,
     stage: str,
     on_failed: Callable[[str, Exception], Awaitable[None]] | None,
+    validator: Callable[[], None] | None = None,
 ):
     try:
-        return await call
+        result = await call
+        if validator is not None:
+            validator()
+        return result
     except Exception as exc:
         if on_failed is not None:
             await on_failed(stage, exc)
@@ -665,10 +671,13 @@ async def prepare_question_packages(
                 ),
                 stage="questions_extracted",
                 on_failed=on_base_failed,
+                validator=lambda: validate_teacher_question_coverage(problem_data, score_policy),
             )
             if on_questions_extracted is not None:
                 await on_questions_extracted(problem_data)
 
+        # Also reject a pre-fix extracted artifact before saving aligned data.
+        validate_teacher_question_coverage(problem_data, score_policy)
         issues = defaultdict(list)
         has_provider_alignment_work = bool(
             score_policy.mode == "per_question"
