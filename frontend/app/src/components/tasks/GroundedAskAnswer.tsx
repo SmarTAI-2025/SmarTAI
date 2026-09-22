@@ -1,4 +1,5 @@
-import { lazy, Suspense, useEffect, useState } from "react";
+import { lazy, Suspense, useEffect, useMemo, useState } from "react";
+import { SortableTableHead, directionFor, sortColumnRows, toggleColumnSort, type ColumnSort } from "@/components/ui/SortableTableHead";
 import type { GroundedAskExecution } from "@/types";
 const GroundedChart = lazy(() => import("./GroundedChart").then(module => ({default: module.GroundedChart})));
 
@@ -6,7 +7,14 @@ export function GroundedAskAnswer({ execution, locale, onClarify, renderChart = 
   execution?: GroundedAskExecution | null; locale: string; onClarify?: (text: string) => void; renderChart?: boolean;
 }) {
   const [page, setPage] = useState(0);
-  useEffect(() => setPage(0), [execution]);
+  const [sort, setSort] = useState<ColumnSort | null>(null);
+  useEffect(() => { setPage(0); setSort(null); }, [execution]);
+  const rows = useMemo(() => sortColumnRows(execution?.data.rows ?? [], sort,
+    (row, column) => row[execution?.data.columns.indexOf(column) ?? -1]), [execution, sort]);
+  function toggleSort(column: string) {
+    setSort(current => toggleColumnSort(current, column));
+    setPage(0);
+  }
   if (!execution) return null;
   const zh = locale === "zh-CN", { data } = execution;
   const pages = Math.max(1, Math.ceil(data.rows.length / 25));
@@ -17,8 +25,8 @@ export function GroundedAskAnswer({ execution, locale, onClarify, renderChart = 
     {execution.assumptions?.map((a, i) => <p key={i} className="mt-1 text-xs text-muted-foreground">{a}</p>)}
     {renderChart && execution.chart ? <Suspense fallback={<p className="mt-2 text-xs">{zh ? "正在加载图表…" : "Loading chart…"}</p>}><GroundedChart result={execution.chart} locale={locale} /></Suspense> : null}
     {execution.recognized && !execution.selection && data.columns.length > 0 ? <div className="mt-3 overflow-x-auto">
-      <table className="min-w-full text-left text-xs"><thead><tr>{data.columns.map(c => <th key={c} className="border-b p-2">{c}</th>)}</tr></thead>
-        <tbody>{data.rows.slice(page * 25, (page + 1) * 25).map((row, i) => <tr key={i}>{row.map((v, j) => <td key={j} className="max-w-sm whitespace-pre-wrap break-words border-b p-2">{v === null ? "—" : String(v)}</td>)}</tr>)}</tbody>
+      <table className="min-w-full text-left text-xs"><thead><tr>{data.columns.map(c => <SortableTableHead key={c} className="border-b p-2" direction={directionFor(sort, c)} onSort={() => toggleSort(c)} locale={locale}>{c}</SortableTableHead>)}</tr></thead>
+        <tbody>{rows.slice(page * 25, (page + 1) * 25).map((row, i) => <tr key={i}>{row.map((v, j) => <td key={j} className="max-w-sm whitespace-pre-wrap break-words border-b p-2">{v === null ? "—" : String(v)}</td>)}</tr>)}</tbody>
       </table>
       {data.rows.length === 0 ? <p className="py-3">{zh ? "没有匹配记录。" : "No matching records."}</p> : null}
       {pages > 1 ? <div className="mt-2 flex items-center gap-3"><button type="button" disabled={page === 0} onClick={() => setPage(p => p - 1)}>{zh ? "上一页" : "Previous"}</button><span>{page + 1}/{pages} · {data.rows.length}</span><button type="button" disabled={page + 1 >= pages} onClick={() => setPage(p => p + 1)}>{zh ? "下一页" : "Next"}</button></div> : null}
