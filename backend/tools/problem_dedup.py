@@ -14,6 +14,9 @@ The LLM extraction pass can emit one real question as several rows:
 ``resolve_question_score_policy`` freezes max scores, so every real question
 owns exactly one row and therefore exactly one max_score.
 
+Empty stems remain available for validation. Distinct explicit numeric major
+labels, including dotted IDs, are never merged by textual similarity.
+
 Merge rules (checked in priority order for each pair; the first-seen position
 is always kept):
 
@@ -22,7 +25,7 @@ is always kept):
    spliced back into the full question;
 1. same normalized number and (similarity >= ``SIMILARITY_THRESHOLD`` or one
    stem contains the other): keep the longer stem;
-2. different numbers but one stem contains the other (shorter stem >=
+2. ambiguous/subpart or missing numbers but one stem contains the other (shorter stem >=
    ``MIN_CONTAINMENT_CHARS`` and at least ``CONTAINMENT_RATIO`` of the longer):
    keep the longer stem — this is the sub-question-fragment case.
 
@@ -33,6 +36,7 @@ carried onto their survivor). The input dict is not mutated.
 from __future__ import annotations
 
 import logging
+import re
 import unicodedata
 from difflib import SequenceMatcher
 from typing import Any, Dict, List, Optional, Tuple
@@ -71,6 +75,17 @@ def _normalize_number(number: Any) -> str:
     while s and s[-1] in "）)】] .、,，：:;；":
         s = s[:-1]
     return s.strip()
+
+
+def _explicit_major_number(value: Any) -> Optional[str]:
+    """Read a numeric major label, never a parenthesized subpart label."""
+    label = unicodedata.normalize("NFKC", str(value or "")).strip()
+    match = re.fullmatch(
+        r"(?:(?:Question|Problem|Q|第)\s*)?(\d+(?:\.\d+)*)(?:\s*题)?[.、:：]?",
+        label,
+        flags=re.IGNORECASE,
+    )
+    return match.group(1) if match else None
 
 
 def _suffix_prefix_overlap(a_norm: str, b_norm: str) -> int:
@@ -124,6 +139,17 @@ def _merge_decision(
     dropped_norm: str,
 ) -> Optional[Tuple[str, int]]:
     """Return (kind, overlap) if the later row must merge into the earlier one."""
+    # Empty extraction candidates supply no evidence of identity. Keep them
+    # for the existing validation gate instead of crashing or merging two
+    # empty rows merely because their display numbers happen to match.
+    if not keeper_norm or not dropped_norm:
+        return None
+    keeper_major = _explicit_major_number(keeper.get("number"))
+    dropped_major = _explicit_major_number(dropped.get("number"))
+    if keeper_major and dropped_major and keeper_major != dropped_major:
+        # Shared prose does not establish identity across explicit major IDs.
+        # Unnumbered fragments and contextual subparts retain existing rules.
+        return None
     overlap = _suffix_prefix_overlap(keeper_norm, dropped_norm)
     if overlap:
         return ("splice", overlap)

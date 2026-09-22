@@ -1,0 +1,98 @@
+[
+  {
+    "pr": 80,
+    "head": "86e34af38c8427937214e4d69afc8a9e922f27ec",
+    "base": "main",
+    "ci_run_id": 35563636508,
+    "ci_url": "https://github.com/SmarTAI-2025/SmarTAI/actions/runs/35563636508",
+    "conclusion": "success"
+  },
+  {
+    "pr": 81,
+    "head": "07264a35ea80a750a4ae107f9bd5304592aaa48d",
+    "base": "fix/backend-security-floors-20260921",
+    "ci_run_id": 35563638805,
+    "ci_url": "https://github.com/SmarTAI-2025/SmarTAI/actions/runs/35563638805",
+    "conclusion": "success"
+  },
+  {
+    "pr": 82,
+    "head": "e8122b401812a328d66726af6ea57b3d76f29443",
+    "base": "fix/frontend-security-lock-20260921",
+    "ci_run_id": 35563641690,
+    "ci_url": "https://github.com/SmarTAI-2025/SmarTAI/actions/runs/35563641690",
+    "conclusion": "success"
+  },
+  {
+    "pr": 83,
+    "head": "a0a44571673482359f6ca3af2bd6ee5a26db6580",
+    "base": "fix/pdf-worker-cleanup-20260921",
+    "ci_run_id": 35563644350,
+    "ci_url": "https://github.com/SmarTAI-2025/SmarTAI/actions/runs/35563644350",
+    "conclusion": "success"
+  },
+  {
+    "pr": 60,
+    "head": "ae0cdba275d0cf9132b40cb382594d2ac1114c42",
+    "base": "fix/production-host-execution-20260921",
+    "ci_run_id": 35563646725,
+    "ci_url": "https://github.com/SmarTAI-2025/SmarTAI/actions/runs/35563646725",
+    "conclusion": "success"
+  },
+  {
+    "pr": 61,
+    "head": "e275adebd96dde6c5309c82778c374e4f162ce96",
+    "base": "codex/grading-confidence-policy-20260829",
+    "ci_run_id": 35563649318,
+    "ci_url": "https://github.com/SmarTAI-2025/SmarTAI/actions/runs/35563649318",
+    "conclusion": "success"
+  },
+  {
+    "pr": 62,
+    "head": "8a25249f3a5d2c1c4e7c4a77cb4d97ed0c57126e",
+    "base": "codex/mail-auth-complete-20260830",
+    "ci_run_id": 35563651756,
+    "ci_url": "https://github.com/SmarTAI-2025/SmarTAI/actions/runs/35563651756",
+    "conclusion": "success"
+  },
+  {
+    "pr": 63,
+    "head": "3db278c3b8ac5be05f1450d387fb5a155f2ee51e",
+    "base": "codex/03a-question-structure-backend-20260830",
+    "ci_run_id": 35563654860,
+    "ci_url": "https://github.com/SmarTAI-2025/SmarTAI/actions/runs/35563654860",
+    "conclusion": "success"
+  },
+  {
+    "pr": 64,
+    "head": "5b85b167a340b4eaf34482634ff8b252bda7a862",
+    "base": "codex/03a-question-structure-frontend-20260830",
+    "ci_run_id": 35563657380,
+    "ci_url": "https://github.com/SmarTAI-2025/SmarTAI/actions/runs/35563657380",
+    "conclusion": "success"
+  },
+  {
+    "pr": 65,
+    "head": "402c662cfe180476fd3eafef6afd740cc39026f7",
+    "base": "codex/03b-question-generation-progress-20260830",
+    "ci_run_id": 35563659577,
+    "ci_url": "https://github.com/SmarTAI-2025/SmarTAI/actions/runs/35563659577",
+    "conclusion": "success"
+  },
+  {
+    "pr": 66,
+    "head": "65eca618661b781af271996a3e1eecbc40d3fa8b",
+    "base": "codex/03c-question-preparation-recovery-20260830",
+    "ci_run_id": 35563661773,
+    "ci_url": "https://github.com/SmarTAI-2025/SmarTAI/actions/runs/35563661773",
+    "conclusion": "success"
+  },
+  {
+    "pr": 67,
+    "head": "f93efbcbd888b82a8079e24d9bfc842eb2455b70",
+    "base": "codex/fb-source-lifecycle-20260830",
+    "ci_run_id": 35563664040,
+    "ci_url": "https://github.com/SmarTAI-2025/SmarTAI/actions/runs/35563664040",
+    "conclusion": "success"
+  }
+]

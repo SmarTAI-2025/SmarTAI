@@ -24,7 +24,18 @@ from sqlalchemy import func, select, update
 from backend.db.models import AssignmentQuestionRecord, AssignmentRecord, CourseRecord
 from backend.db.session import session_scope
 from backend.domain import education
-from backend.domain.errors import InvalidTransition, NotFound, VersionConflict
+from backend.domain.errors import (
+    InvalidTransition,
+    NotFound,
+    ValidationError,
+    VersionConflict,
+)
+from backend.services.question_structure import (
+    MajorQuestionStructureV1,
+    QuestionRubricValidationError,
+    build_major_question_structure,
+    validate_rubric_points,
+)
 
 
 def _new_assignment_id() -> str:
@@ -33,6 +44,54 @@ def _new_assignment_id() -> str:
 
 def _new_question_id() -> str:
     return f"q_{uuid.uuid4().hex[:12]}"
+
+
+def _normalise_question_source(
+    source: dict | None,
+    *,
+    number: str,
+    order_index: int,
+    stem: str,
+    criterion: str,
+    max_score: float,
+) -> dict:
+    """Persist the same major-question invariant for every creation route."""
+
+    normalized = dict(source or {})
+    presentation = dict(normalized.get("presentation") or {})
+    current_structure = build_major_question_structure(
+        {"number": number, "stem": stem},
+        major_order=order_index,
+        structure_source="deterministic",
+        review_status="needs_review",
+    )
+    structure = MajorQuestionStructureV1.model_validate(
+        presentation.get("question_structure") or current_structure.model_dump()
+    )
+    # Existing source metadata is often sent back with an edited stem/number.
+    # Retain evidence and other presentation fields, but never persist stale
+    # structural text or labels alongside a different authoritative question.
+    if (
+        structure.major_number != current_structure.major_number
+        or structure.major_order != current_structure.major_order
+        or structure.shared_stem != current_structure.shared_stem
+        or [(p.label, p.order, p.stem) for p in structure.subparts]
+        != [(p.label, p.order, p.stem) for p in current_structure.subparts]
+    ):
+        structure = current_structure
+    try:
+        summary = validate_rubric_points(
+            criterion or "", max_score, structure
+        )
+    except QuestionRubricValidationError as exc:
+        raise ValidationError(
+            "Explicit subpart rubric points must add up to the major-question maximum.",
+            code=exc.summary.issue_code or "rubric_subpart_points_mismatch",
+        ) from exc
+    presentation["question_structure"] = structure.model_dump()
+    presentation["rubric_point_summary"] = summary.model_dump()
+    normalized["presentation"] = presentation
+    return normalized
 
 
 def _question_to_dto(record: AssignmentQuestionRecord) -> education.QuestionDTO:
@@ -126,7 +185,9 @@ def get_assignment(assignment_id: str, *, actor_id: str) -> education.Assignment
     with session_scope() as session:
         record = session.scalar(
             select(AssignmentRecord).where(
-                AssignmentRecord.id == assignment_id, AssignmentRecord.teacher_id == actor_id
+                AssignmentRecord.id == assignment_id,
+                AssignmentRecord.teacher_id == actor_id,
+                AssignmentRecord.deletion_requested_at.is_(None),
             )
         )
         if record is None:
@@ -143,7 +204,11 @@ def list_assignments(course_id: str, *, actor_id: str) -> list[education.Assignm
     with session_scope() as session:
         records = session.scalars(
             select(AssignmentRecord)
-            .where(AssignmentRecord.course_id == course_id, AssignmentRecord.teacher_id == actor_id)
+            .where(
+                AssignmentRecord.course_id == course_id,
+                AssignmentRecord.teacher_id == actor_id,
+                AssignmentRecord.deletion_requested_at.is_(None),
+            )
             .order_by(AssignmentRecord.created_at)
         ).all()
         out: list[education.AssignmentDTO] = []
@@ -175,6 +240,7 @@ def list_assignments_for_student(student_id: str) -> list[education.AssignmentDT
                     education.AssignmentStatus.PUBLISHED.value,
                     education.AssignmentStatus.CLOSED.value,
                 ]),
+                AssignmentRecord.deletion_requested_at.is_(None),
             )
             .order_by(AssignmentRecord.created_at)
         ).all()
@@ -192,7 +258,10 @@ def list_assignments_for_student(student_id: str) -> list[education.AssignmentDT
 def get_assignment_unscoped(assignment_id: str) -> education.AssignmentDTO:
     """Admin unscoped read of a single assignment."""
     with session_scope() as session:
-        record = session.get(AssignmentRecord, assignment_id)
+        record = session.scalar(select(AssignmentRecord).where(
+            AssignmentRecord.id == assignment_id,
+            AssignmentRecord.deletion_requested_at.is_(None),
+        ))
         if record is None:
             raise NotFound("assignment")
         count = session.scalar(
@@ -207,7 +276,10 @@ def list_assignments_unscoped(course_id: str) -> list[education.AssignmentDTO]:
     """Admin unscoped read of every assignment in a course."""
     with session_scope() as session:
         records = session.scalars(
-            select(AssignmentRecord).where(AssignmentRecord.course_id == course_id)
+            select(AssignmentRecord).where(
+                AssignmentRecord.course_id == course_id,
+                AssignmentRecord.deletion_requested_at.is_(None),
+            )
             .order_by(AssignmentRecord.created_at)
         ).all()
         out: list[education.AssignmentDTO] = []
@@ -232,8 +304,10 @@ def set_question_order(assignment_id: str, *, teacher_id: str,
     with session_scope() as session:
         assignment = session.scalar(
             select(AssignmentRecord).where(
-                AssignmentRecord.id == assignment_id, AssignmentRecord.teacher_id == teacher_id
-            )
+                AssignmentRecord.id == assignment_id,
+                AssignmentRecord.teacher_id == teacher_id,
+                AssignmentRecord.deletion_requested_at.is_(None),
+            ).with_for_update()
         )
         if assignment is None:
             raise NotFound("assignment")
@@ -261,13 +335,23 @@ def add_question(assignment_id: str, *, teacher_id: str, q_id: str, order_index:
         # Owner predicate: only the assignment's teacher may add questions.
         assignment = session.scalar(
             select(AssignmentRecord).where(
-                AssignmentRecord.id == assignment_id, AssignmentRecord.teacher_id == teacher_id
-            )
+                AssignmentRecord.id == assignment_id,
+                AssignmentRecord.teacher_id == teacher_id,
+                AssignmentRecord.deletion_requested_at.is_(None),
+            ).with_for_update()
         )
         if assignment is None:
             raise NotFound("assignment")
         if assignment.status not in education.EDITABLE_ASSIGNMENT_STATUSES:
             raise InvalidTransition("assignment_not_editable")
+        normalized_source = _normalise_question_source(
+            source,
+            number=number,
+            order_index=order_index,
+            stem=stem,
+            criterion=criterion,
+            max_score=max_score,
+        )
         record = AssignmentQuestionRecord(
             id=question_pk,
             assignment_id=assignment_id,
@@ -280,7 +364,7 @@ def add_question(assignment_id: str, *, teacher_id: str, q_id: str, order_index:
             max_score=max_score,
             reference_answer=reference_answer,
             test_cases=test_cases,
-            source=source,
+            source=normalized_source,
             version=1,
             created_at=now,
             updated_at=now,
@@ -299,6 +383,7 @@ def list_questions(assignment_id: str, *, teacher_id: str) -> list[education.Que
             .where(
                 AssignmentQuestionRecord.assignment_id == assignment_id,
                 AssignmentRecord.teacher_id == teacher_id,
+                AssignmentRecord.deletion_requested_at.is_(None),
             )
             .order_by(AssignmentQuestionRecord.order_index, AssignmentQuestionRecord.created_at)
         ).all()
@@ -321,8 +406,10 @@ def update_question(assignment_id: str, *, teacher_id: str, q_id: str, expected_
     with session_scope() as session:
         assignment = session.scalar(
             select(AssignmentRecord).where(
-                AssignmentRecord.id == assignment_id, AssignmentRecord.teacher_id == teacher_id
-            )
+                AssignmentRecord.id == assignment_id,
+                AssignmentRecord.teacher_id == teacher_id,
+                AssignmentRecord.deletion_requested_at.is_(None),
+            ).with_for_update()
         )
         if assignment is None:
             raise NotFound("assignment")
@@ -331,6 +418,21 @@ def update_question(assignment_id: str, *, teacher_id: str, q_id: str, expected_
         allowed = {"stem", "number", "criterion", "max_score", "reference_answer",
                    "test_cases", "source", "order_index", "type"}
         changes = {k: v for k, v in fields.items() if k in allowed}
+        existing = session.scalar(
+            select(AssignmentQuestionRecord).where(
+                AssignmentQuestionRecord.assignment_id == assignment_id,
+                AssignmentQuestionRecord.q_id == q_id,
+            )
+        )
+        if existing is not None and existing.version == expected_version:
+            changes["source"] = _normalise_question_source(
+                changes.get("source", existing.source),
+                number=str(changes.get("number", existing.number) or ""),
+                order_index=int(changes.get("order_index", existing.order_index)),
+                stem=str(changes.get("stem", existing.stem) or ""),
+                criterion=str(changes.get("criterion", existing.criterion) or ""),
+                max_score=float(changes.get("max_score", existing.max_score)),
+            )
         now = time.time()
         result = session.execute(
             update(AssignmentQuestionRecord)
@@ -377,6 +479,7 @@ def _optimistic_update(assignment_id: str, *, teacher_id: str, expected_version:
             .where(
                 AssignmentRecord.id == assignment_id,
                 AssignmentRecord.teacher_id == teacher_id,
+                AssignmentRecord.deletion_requested_at.is_(None),
                 AssignmentRecord.version == expected_version,
             )
             .values(**changes, version=expected_version + 1, updated_at=now)
@@ -384,7 +487,9 @@ def _optimistic_update(assignment_id: str, *, teacher_id: str, expected_version:
         if result.rowcount != 1:
             existing = session.scalar(
                 select(AssignmentRecord).where(
-                    AssignmentRecord.id == assignment_id, AssignmentRecord.teacher_id == teacher_id
+                    AssignmentRecord.id == assignment_id,
+                    AssignmentRecord.teacher_id == teacher_id,
+                    AssignmentRecord.deletion_requested_at.is_(None),
                 )
             )
             if existing is None:
@@ -413,6 +518,7 @@ def publish(assignment_id: str, *, teacher_id: str, expected_version: int) -> ed
             .where(
                 AssignmentRecord.id == assignment_id,
                 AssignmentRecord.teacher_id == teacher_id,
+                AssignmentRecord.deletion_requested_at.is_(None),
                 AssignmentRecord.version == expected_version,
                 AssignmentRecord.status.in_(list(education.EDITABLE_ASSIGNMENT_STATUSES)),
             )
@@ -426,7 +532,9 @@ def publish(assignment_id: str, *, teacher_id: str, expected_version: int) -> ed
         if result.rowcount != 1:
             existing = session.scalar(
                 select(AssignmentRecord).where(
-                    AssignmentRecord.id == assignment_id, AssignmentRecord.teacher_id == teacher_id
+                    AssignmentRecord.id == assignment_id,
+                    AssignmentRecord.teacher_id == teacher_id,
+                    AssignmentRecord.deletion_requested_at.is_(None),
                 )
             )
             if existing is None:
@@ -449,6 +557,7 @@ def close(assignment_id: str, *, teacher_id: str, expected_version: int) -> educ
             .where(
                 AssignmentRecord.id == assignment_id,
                 AssignmentRecord.teacher_id == teacher_id,
+                AssignmentRecord.deletion_requested_at.is_(None),
                 AssignmentRecord.version == expected_version,
                 AssignmentRecord.status == education.AssignmentStatus.PUBLISHED.value,
             )
@@ -461,7 +570,9 @@ def close(assignment_id: str, *, teacher_id: str, expected_version: int) -> educ
         if result.rowcount != 1:
             existing = session.scalar(
                 select(AssignmentRecord).where(
-                    AssignmentRecord.id == assignment_id, AssignmentRecord.teacher_id == teacher_id
+                    AssignmentRecord.id == assignment_id,
+                    AssignmentRecord.teacher_id == teacher_id,
+                    AssignmentRecord.deletion_requested_at.is_(None),
                 )
             )
             if existing is None:

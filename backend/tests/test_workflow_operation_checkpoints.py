@@ -524,7 +524,7 @@ def test_checkpoint_owner_and_artifact_predicates_hide_other_owners(tmp_path):
         ({"artifact_refs": [""]}, "invalid_operation_artifact_refs"),
         ({"artifact_refs": ["x" * 65]}, "invalid_operation_artifact_refs"),
         (
-            {"artifact_refs": [f"artifact-{index}" for index in range(101)]},
+            {"artifact_refs": [f"artifact-{index}" for index in range(257)]},
             "operation_artifact_refs_too_large",
         ),
         ({"terminal_summary": []}, "invalid_operation_terminal_summary"),

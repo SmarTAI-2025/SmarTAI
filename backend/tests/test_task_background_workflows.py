@@ -8,13 +8,24 @@ from types import SimpleNamespace
 
 import pytest
 from fastapi import HTTPException, UploadFile
+from sqlalchemy import select
 from starlette.datastructures import Headers
 
 from backend.api import task_preparation, tasks
 from backend.db import assignment_repository, grading_repository, workflow_repository
-from backend.db.models import AssignmentRecord, CourseRecord, UserRecord
+from backend.db.models import (
+    AssignmentQuestionRecord,
+    AssignmentRecord,
+    CourseRecord,
+    UserRecord,
+)
 from backend.db.session import session_scope
-from backend.domain.errors import InvalidTransition, ValidationError, VersionConflict
+from backend.domain.errors import (
+    InvalidTransition,
+    NotFound,
+    ValidationError,
+    VersionConflict,
+)
 from backend.services import task_facade
 from backend.tools.structured_llm import PermanentLLMError, RateLimitError, TransientLLMError
 
@@ -87,6 +98,13 @@ def _problem(stem: str) -> dict[str, dict]:
             "stem": stem, "criterion": "", "max_score": 10,
         }
     }
+
+
+def _tombstone_task(task_id: str) -> None:
+    with session_scope() as session:
+        assignment = session.get(AssignmentRecord, task_id)
+        assert assignment is not None
+        assignment.deletion_requested_at = time.time()
 
 
 def test_grading_terminal_state_releases_task_workflow_atomically():
@@ -343,6 +361,60 @@ def test_editing_student_answer_atomically_invalidates_current_grading():
     assert workflow.analysis_status == "not_generated"
 
 
+def test_confirming_one_answer_does_not_reset_sibling_answers():
+    """2026-08-28 "按下葫芦浮起瓢" fix: confirming one answer in solution
+    review mints a fresh revision copying every answer row; each sibling's
+    review status must be carried over, not silently reset to "pending"."""
+    owner_id, task_id = _seed_task(with_question=True)
+    assignment_repository.add_question(
+        task_id, teacher_id=owner_id, q_id="q2", order_index=1,
+        type="short", stem="Second", criterion="", max_score=10,
+    )
+    assignment = assignment_repository.get_assignment(task_id, actor_id=owner_id)
+    task_facade._commit_imported_submissions(
+        task_id=task_id,
+        owner_id=owner_id,
+        course_id=assignment.course_id,
+        students=[{
+            "stu_id": "S001",
+            "stu_name": "Student",
+            "source_filename": "old.txt",
+            "stu_ans": [
+                {"q_id": "q1", "content": "first answer"},
+                {"q_id": "q2", "content": "second answer"},
+            ],
+        }],
+        expected_workflow_revision=0,
+        submission_file_name="old.txt",
+    )
+
+    task_facade.update_student_answer(
+        task_id=task_id,
+        owner_id=owner_id,
+        display_student_id="S001",
+        q_id="q1",
+        patch={"review_status": "confirmed"},
+        expected_revision=1,
+    )
+    task_facade.update_student_answer(
+        task_id=task_id,
+        owner_id=owner_id,
+        display_student_id="S001",
+        q_id="q2",
+        patch={"review_status": "confirmed"},
+        expected_revision=2,
+    )
+
+    student_data = task_facade.get_task(
+        task_id=task_id, owner_id=owner_id, full=True
+    )["student_data"]
+    statuses = {
+        answer["q_id"]: answer["review_status"]
+        for answer in student_data["S001"]["stu_ans"]
+    }
+    assert statuses == {"q1": "confirmed", "q2": "confirmed"}
+
+
 def test_question_replace_requires_confirmation_and_cas_is_atomic():
     owner_id, task_id = _seed_task()
     assert task_facade._replace_draft_questions(
@@ -429,6 +501,179 @@ def test_atomic_question_batch_rolls_back_before_any_partial_write():
     applied = workflow_repository.get_operation(job.id, owner_id=owner_id)
     assert applied.status == "applied"
     assert applied.payload["applied_candidate_ids"] == ["candidate-1"]
+
+
+def test_task_tombstone_fences_atomic_question_patch_publication():
+    owner_id, task_id = _seed_task(with_question=True)
+    job, _ = workflow_repository.create_operation(
+        assignment_id=task_id,
+        owner_id=owner_id,
+        operation_type="material_import",
+        input_hash=uuid.uuid4().hex,
+        expires_at=time.time() + 60,
+    )
+    workflow_repository.update_operation(
+        job.id,
+        owner_id=owner_id,
+        expected_attempt=job.attempt,
+        status="ready",
+    )
+    _tombstone_task(task_id)
+
+    with pytest.raises(NotFound):
+        task_facade.apply_question_patches_atomic(
+            task_id=task_id,
+            owner_id=owner_id,
+            expected_workflow_revision=0,
+            patches=[{"q_id": "q1", "fields": {"criterion": "late"}}],
+            operation_id=job.id,
+            expected_operation_attempt=job.attempt,
+            required_operation_status="ready",
+            final_operation_status="applied",
+            operation_payload={},
+        )
+
+    with session_scope() as session:
+        question = session.scalar(
+            select(AssignmentQuestionRecord).where(
+                AssignmentQuestionRecord.assignment_id == task_id,
+                AssignmentQuestionRecord.q_id == "q1",
+            )
+        )
+        assert question is not None
+        assert question.criterion == ""
+    assert workflow_repository.get_workflow(
+        task_id, owner_id=owner_id
+    ).workflow_revision == 0
+    assert workflow_repository.get_operation(
+        job.id, owner_id=owner_id
+    ).status == "ready"
+
+
+def test_task_tombstone_fences_problem_extraction_publication():
+    owner_id, task_id = _seed_task(with_question=True)
+    job, _ = workflow_repository.create_operation(
+        assignment_id=task_id,
+        owner_id=owner_id,
+        operation_type="problem_extraction",
+        input_hash=uuid.uuid4().hex,
+        expires_at=time.time() + 60,
+    )
+    workflow_repository.update_operation(
+        job.id,
+        owner_id=owner_id,
+        expected_attempt=job.attempt,
+        status="running",
+    )
+    _tombstone_task(task_id)
+
+    with pytest.raises(NotFound):
+        task_facade._replace_draft_questions(
+            task_id,
+            owner_id,
+            _problem("late replacement"),
+            "late.txt",
+            expected_workflow_revision=0,
+            replace_confirmed=True,
+            operation_id=job.id,
+            expected_operation_attempt=job.attempt,
+        )
+
+    with session_scope() as session:
+        question = session.scalar(
+            select(AssignmentQuestionRecord).where(
+                AssignmentQuestionRecord.assignment_id == task_id,
+                AssignmentQuestionRecord.q_id == "q1",
+            )
+        )
+        assert question is not None
+        assert question.stem == "Original"
+    assert workflow_repository.get_operation(
+        job.id, owner_id=owner_id
+    ).status == "running"
+
+
+def test_task_tombstone_fences_submission_recognition_publication():
+    owner_id, task_id = _seed_task(with_question=True)
+    with session_scope() as session:
+        assignment = session.get(AssignmentRecord, task_id)
+        assert assignment is not None
+        course_id = assignment.course_id
+    job, _ = workflow_repository.create_operation(
+        assignment_id=task_id,
+        owner_id=owner_id,
+        operation_type="submission_recognition",
+        input_hash=uuid.uuid4().hex,
+        expires_at=time.time() + 60,
+    )
+    workflow_repository.update_operation(
+        job.id,
+        owner_id=owner_id,
+        expected_attempt=job.attempt,
+        status="running",
+    )
+    _tombstone_task(task_id)
+
+    with pytest.raises(NotFound):
+        task_facade._commit_imported_submissions(
+            task_id=task_id,
+            owner_id=owner_id,
+            course_id=course_id,
+            students=[],
+            expected_workflow_revision=0,
+            operation_id=job.id,
+            expected_operation_attempt=job.attempt,
+        )
+
+    with session_scope() as session:
+        assignment = session.get(AssignmentRecord, task_id)
+        assert assignment is not None
+        assert assignment.status == "draft"
+    assert workflow_repository.get_operation(
+        job.id, owner_id=owner_id
+    ).status == "running"
+
+
+def test_task_tombstone_fences_auxiliary_plan_publication():
+    owner_id, task_id = _seed_task(with_question=True)
+    job, _ = workflow_repository.create_operation(
+        assignment_id=task_id,
+        owner_id=owner_id,
+        operation_type="material_import",
+        input_hash=uuid.uuid4().hex,
+        expires_at=time.time() + 60,
+    )
+    workflow_repository.update_operation(
+        job.id,
+        owner_id=owner_id,
+        expected_attempt=job.attempt,
+        status="running",
+    )
+    workflow_repository.update_workflow(
+        task_id,
+        owner_id=owner_id,
+        bump_revision=False,
+        active_operation="material_import",
+        active_job_id=job.id,
+    )
+    _tombstone_task(task_id)
+
+    with pytest.raises(NotFound):
+        task_facade.complete_planning_operation_atomic(
+            task_id=task_id,
+            owner_id=owner_id,
+            expected_workflow_revision=0,
+            operation_id=job.id,
+            expected_operation_attempt=job.attempt,
+            payload={},
+            progress={},
+        )
+
+    workflow = workflow_repository.get_workflow(task_id, owner_id=owner_id)
+    assert workflow.active_job_id == job.id
+    assert workflow_repository.get_operation(
+        job.id, owner_id=owner_id
+    ).status == "running"
 
 
 def test_atomic_question_batch_rejects_non_finite_operation_payload():
@@ -756,6 +1001,8 @@ async def test_question_preparation_timeout_persists_provider_timeout(monkeypatc
     workflow = workflow_repository.get_workflow(task_id, owner_id=owner_id)
     assert failed.status == "error"
     assert failed.error_code == "provider_timeout"
+    assert failed.progress["phase"] == "error"
+    assert failed.progress["error_detail"] == "provider_timeout"
     assert workflow.presentation_status == "error"
     assert workflow.active_job_id is None
     assert workflow.error_code == "provider_timeout"

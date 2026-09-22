@@ -14,6 +14,7 @@ from backend.db.file_repository import (
     archive_member_reference_content,
     create_archive_member_reference,
     delete_unlinked_file,
+    find_unlinked_source_file,
     get_file,
     save_file,
 )
@@ -56,6 +57,7 @@ async def _persist_archive_container(
     task_id: str,
     job_id: str,
     job_attempt: int,
+    operation_lease_token: str | None = None,
 ) -> StoredFile:
     digest = hashlib.sha256(content).hexdigest()
     operation = await run_in_threadpool(
@@ -65,6 +67,14 @@ async def _persist_archive_container(
     )
     if operation.attempt != job_attempt:
         raise RuntimeError("submission_source_persistence_failed")
+    await run_in_threadpool(
+        source_outcome_repository.assert_source_write_fence,
+        owner_id=owner_id,
+        assignment_id=task_id,
+        operation_id=job_id,
+        expected_attempt=job_attempt,
+        expected_lease_token=operation_lease_token,
+    )
     for file_id in operation.artifact_refs:
         candidate = await run_in_threadpool(get_file, file_id=file_id, owner_id=owner_id)
         if (
@@ -72,23 +82,41 @@ async def _persist_archive_container(
             and candidate.assignment_id == task_id
             and candidate.kind == "submission_container"
             and candidate.sha256 == digest
+            and candidate.availability_status == "available"
         ):
             return candidate
 
     storage = get_storage()
-    stored = await run_in_threadpool(
-        save_file,
-        storage=storage,
-        owner_id=owner_id,
-        kind="submission_container",
-        original_name=filename,
-        content=content,
-        content_type=infer_upload_content_type(filename, content_type, content),
-        storage_prefix=(
-            f"assignments/{task_id}/submission-containers/{job_id}/{job_attempt}"
-        ),
-        assignment_id=task_id,
+    storage_prefix = (
+        f"assignments/{task_id}/submission-containers/{job_id}/{job_attempt}"
     )
+    stored = await run_in_threadpool(
+        find_unlinked_source_file,
+        owner_id=owner_id,
+        assignment_id=task_id,
+        kind="submission_container",
+        sha256=digest,
+        storage_prefix=storage_prefix,
+    )
+    if stored is None:
+        stored = await run_in_threadpool(
+            save_file,
+            storage=storage,
+            owner_id=owner_id,
+            kind="submission_container",
+            original_name=filename,
+            content=content,
+            content_type=infer_upload_content_type(filename, content_type, content),
+            storage_prefix=storage_prefix,
+            assignment_id=task_id,
+            fence_operation_id=(
+                job_id if operation_lease_token is not None else None
+            ),
+            fence_operation_attempt=(
+                job_attempt if operation_lease_token is not None else None
+            ),
+            fence_lease_token=operation_lease_token,
+        )
     try:
         await run_in_threadpool(
             workflow_repository.save_operation_checkpoint,
@@ -99,6 +127,7 @@ async def _persist_archive_container(
             stage="submission_container_saved",
             checkpoint={"container_file_id": stored.id},
             artifact_refs=[stored.id],
+            expected_lease_token=operation_lease_token,
         )
     except Exception:
         winner: StoredFile | None = None
@@ -119,6 +148,7 @@ async def _persist_archive_container(
                     and candidate.assignment_id == task_id
                     and candidate.kind == "submission_container"
                     and candidate.sha256 == digest
+                    and candidate.availability_status == "available"
                 ):
                     winner = candidate
                     break
@@ -133,8 +163,19 @@ async def _persist_archive_container(
             file_id=stored.id,
             owner_id=owner_id,
             assignment_id=task_id,
+            fence_operation_id=job_id,
+            fence_operation_attempt=job_attempt,
+            fence_lease_token=operation_lease_token,
         )
         if winner is not None:
+            await run_in_threadpool(
+                source_outcome_repository.assert_source_write_fence,
+                owner_id=owner_id,
+                assignment_id=task_id,
+                operation_id=job_id,
+                expected_attempt=job_attempt,
+                expected_lease_token=operation_lease_token,
+            )
             return winner
         raise
     return stored
@@ -257,6 +298,7 @@ async def _persist_and_register(
     job_attempt: int,
     order_index: int,
     container_file: StoredFile | None = None,
+    operation_lease_token: str | None = None,
 ) -> tuple[str, str]:
     storage = get_storage()
     expected_sha256 = (
@@ -265,7 +307,9 @@ async def _persist_and_register(
         else hashlib.sha256(archive_member_reference_content(
             container_sha256=container_file.sha256,
             member_name=raw.filename,
-        )).hexdigest() if container_file is not None else ""
+        )).hexdigest()
+        if container_file is not None
+        else ""
     )
     existing = await run_in_threadpool(
         source_outcome_repository.get_source_at_position,
@@ -277,13 +321,48 @@ async def _persist_and_register(
     if existing is not None:
         if not expected_sha256 or existing.sha256 != expected_sha256:
             raise RuntimeError("submission_source_persistence_failed")
+        await run_in_threadpool(
+            source_outcome_repository.assert_source_write_fence,
+            owner_id=owner_id,
+            assignment_id=task_id,
+            operation_id=job_id,
+            expected_attempt=job_attempt,
+            expected_lease_token=operation_lease_token,
+        )
         return existing.id, existing.stored_file_id
 
+    recovered_kind: str | None = None
+    recovered_prefix: str | None = None
+    if container_file is not None and raw.content is not None:
+        recovered_kind = "submission_archive_member"
+        recovered_prefix = (
+            f"assignments/{task_id}/submission-sources/{job_id}/{job_attempt}"
+        )
+    elif container_file is not None:
+        recovered_kind = "submission_archive_member_reference"
+        recovered_prefix = (
+            f"assignments/{task_id}/submission-source-references/"
+            f"{job_id}/{job_attempt}"
+        )
+    elif raw.content is not None:
+        recovered_kind = "submission_source"
+        recovered_prefix = (
+            f"assignments/{task_id}/submission-sources/{job_id}/{job_attempt}"
+        )
     stored: StoredFile | None = None
+    if recovered_kind is not None and recovered_prefix is not None:
+        stored = await run_in_threadpool(
+            find_unlinked_source_file,
+            owner_id=owner_id,
+            assignment_id=task_id,
+            kind=recovered_kind,
+            sha256=expected_sha256,
+            storage_prefix=recovered_prefix,
+        )
     try:
-        if raw.content is None:
-            if container_file is None:
-                raise RuntimeError("submission_source_persistence_failed")
+        if stored is not None:
+            pass
+        elif container_file is not None and raw.content is None:
             stored = await run_in_threadpool(
                 create_archive_member_reference,
                 storage=storage,
@@ -291,18 +370,34 @@ async def _persist_and_register(
                 owner_id=owner_id,
                 assignment_id=task_id,
                 member_name=raw.filename,
+                fence_operation_id=(
+                    job_id if operation_lease_token is not None else None
+                ),
+                fence_operation_attempt=(
+                    job_attempt if operation_lease_token is not None else None
+                ),
+                fence_lease_token=operation_lease_token,
             )
+        elif raw.content is None:
+            raise RuntimeError("submission_source_persistence_failed")
         else:
             stored = await run_in_threadpool(
                 save_file,
                 storage=storage,
                 owner_id=owner_id,
-                kind="submission_source",
+                kind=(recovered_kind or "submission_source"),
                 original_name=raw.filename,
                 content=raw.content,
                 content_type=raw.content_type,
                 storage_prefix=f"assignments/{task_id}/submission-sources/{job_id}/{job_attempt}",
                 assignment_id=task_id,
+                fence_operation_id=(
+                    job_id if operation_lease_token is not None else None
+                ),
+                fence_operation_attempt=(
+                    job_attempt if operation_lease_token is not None else None
+                ),
+                fence_lease_token=operation_lease_token,
             )
         retry_of_source_id = await run_in_threadpool(
             source_outcome_repository.find_retry_source_id,
@@ -321,6 +416,7 @@ async def _persist_and_register(
             order_index=order_index,
             stored_file_id=stored.id,
             retry_of_source_id=retry_of_source_id,
+            expected_lease_token=operation_lease_token,
         )
     except Exception as exc:
         if stored is not None:
@@ -330,6 +426,9 @@ async def _persist_and_register(
                 file_id=stored.id,
                 owner_id=owner_id,
                 assignment_id=task_id,
+                fence_operation_id=job_id,
+                fence_operation_attempt=job_attempt,
+                fence_lease_token=operation_lease_token,
             )
         try:
             committed = await run_in_threadpool(
@@ -346,6 +445,14 @@ async def _persist_and_register(
             and expected_sha256
             and committed.sha256 == expected_sha256
         ):
+            await run_in_threadpool(
+                source_outcome_repository.assert_source_write_fence,
+                owner_id=owner_id,
+                assignment_id=task_id,
+                operation_id=job_id,
+                expected_attempt=job_attempt,
+                expected_lease_token=operation_lease_token,
+            )
             return committed.id, committed.stored_file_id
         logger.warning(
             "Submission source persistence failed; exception_type=%s",
@@ -365,6 +472,7 @@ async def prepare_submission_sources(
     job_id: str,
     job_attempt: int,
     ocr_skill,
+    operation_lease_token: str | None = None,
     document_ocr_skill=None,
     recovered_ocr_text_by_source: dict[str, str] | None = None,
     blocked_ocr_source_ids: set[str] | None = None,
@@ -387,6 +495,7 @@ async def prepare_submission_sources(
                 task_id=task_id,
                 job_id=job_id,
                 job_attempt=job_attempt,
+                operation_lease_token=operation_lease_token,
             )
         except Exception as exc:
             logger.warning(
@@ -431,6 +540,7 @@ async def prepare_submission_sources(
             job_attempt=job_attempt,
             order_index=0,
             container_file=container_file,
+            operation_lease_token=operation_lease_token,
         )
         return [PreparedSubmissionSource(
             source_id=source_id,
@@ -454,6 +564,7 @@ async def prepare_submission_sources(
                 job_attempt=job_attempt,
                 order_index=order_index,
                 container_file=container_file,
+                operation_lease_token=operation_lease_token,
             )
         except Exception:
             if container_file is None or raw.content is None:
@@ -474,6 +585,7 @@ async def prepare_submission_sources(
                 job_attempt=job_attempt,
                 order_index=order_index,
                 container_file=container_file,
+                operation_lease_token=operation_lease_token,
             )
             raw = failed_raw
         if raw.pre_error_code:

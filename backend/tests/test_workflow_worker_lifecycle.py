@@ -40,8 +40,16 @@ def test_app_starts_and_stops_empty_workflow_worker(monkeypatch):
             run_durable_submission_recognition,
         )
         from backend.api.task_preparation import (
-            run_durable_ai_completion, run_durable_material_import,
+            run_durable_ai_completion,
+            run_durable_material_import,
+            run_durable_question_preparation,
         )
+        from backend.services.source_cleanup import (
+            run_source_cleanup,
+            run_source_replacement_cleanup,
+            run_source_reservation_cleanup,
+        )
+        from backend.services.task_deletion import run_task_deletion
 
         assert (
             "constructed",
@@ -50,6 +58,11 @@ def test_app_starts_and_stops_empty_workflow_worker(monkeypatch):
                 "submission_recognition": run_durable_submission_recognition,
                 "material_import": run_durable_material_import,
                 "ai_completion": run_durable_ai_completion,
+                "question_preparation": run_durable_question_preparation,
+                "source_cleanup": run_source_cleanup,
+                "source_replacement_cleanup": run_source_replacement_cleanup,
+                "source_reservation_cleanup": run_source_reservation_cleanup,
+                "task_delete": run_task_deletion,
             },
         ) in events
         assert "run_started" in events
@@ -76,14 +89,27 @@ def test_workflow_worker_lifecycle_never_bulk_releases_leases(monkeypatch):
                 run_durable_submission_recognition,
             )
             from backend.api.task_preparation import (
-                run_durable_ai_completion, run_durable_material_import,
+                run_durable_ai_completion,
+                run_durable_material_import,
+                run_durable_question_preparation,
             )
+            from backend.services.source_cleanup import (
+                run_source_cleanup,
+                run_source_replacement_cleanup,
+                run_source_reservation_cleanup,
+            )
+            from backend.services.task_deletion import run_task_deletion
 
             assert dict(handlers) == {
                 "problem_extraction": run_durable_problem_extraction,
                 "submission_recognition": run_durable_submission_recognition,
                 "material_import": run_durable_material_import,
                 "ai_completion": run_durable_ai_completion,
+                "question_preparation": run_durable_question_preparation,
+                "source_cleanup": run_source_cleanup,
+                "source_replacement_cleanup": run_source_replacement_cleanup,
+                "source_reservation_cleanup": run_source_reservation_cleanup,
+                "task_delete": run_task_deletion,
             }
 
         async def run_forever(self):

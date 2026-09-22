@@ -52,6 +52,7 @@ export async function preflightProblemSource(
   formData.append("extraction_hint", input.extractionHint?.trim() ?? "");
   formData.append("save_to_library", String(input.saveToLibrary));
   formData.append("recognition_provider_id", input.recognitionProviderId);
+  formData.append("replace_confirmed", String(input.replaceConfirmed ?? false));
 
   try {
     const response = await apiClient.post<ProblemSourcePreflightResponse>(

@@ -236,6 +236,7 @@ export function AddProblemsPage() {
           extractionHint: source.extractionHint,
           saveToLibrary: source.sourceMode === "upload" && source.saveToLibrary,
           recognitionProviderId,
+          replaceConfirmed,
         });
         if (typeof result.source === "object" && result.source?.stored_file_id) {
           updateSource(source.id, { storedFileId: result.source.stored_file_id });

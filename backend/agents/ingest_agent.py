@@ -36,6 +36,7 @@ from backend.services.background_errors import (
     classify_background_error,
     is_retryable_background_error,
 )
+from backend.services.question_structure import annotate_major_question_structures
 from backend.tools.problem_dedup import dedupe_extracted_problems
 from backend.tools.structured_llm import (
     StructuredOutputBoundsError,
@@ -117,7 +118,9 @@ async def extract_problems_from_ocr_markdown(
         }]
         problems[f"q{index}"] = problem
     # Defensive: OCR Markdown can repeat a numbered heading for one question.
-    problems = dedupe_extracted_problems(problems)
+    problems = annotate_major_question_structures(
+        dedupe_extracted_problems(problems)
+    )
     problem_store.clear()
     problem_store.update(problems)
     if reporter:
@@ -132,7 +135,7 @@ async def extract_problems_from_ocr_markdown(
 
 PROB_SYSTEM_PROMPT = """You are a professional AI teaching assistant with graduate-level expertise in relevant fields, specializing in analyzing assignment content in plain text format. Your task is:
 
-1. **Problem Segmentation**: Split the identified content into independent problems based on question numbers (e.g., "1.1", "Question 2", "III.", etc.).
+1. **Major-question Segmentation**: Split the identified content into scored major questions based on top-level question numbers (e.g., "1.1", "Question 2", "III.", etc.). One output object always represents one complete scored major question.
 
 2. **Content Extraction**: Extract these key pieces of information for each problem:
     - `q_id`: Unique question identifier as a STRING, starting from "q1" and incrementing as "q2", "q3", etc. **Must be a string with the `q` prefix — not a bare integer.**
@@ -151,7 +154,8 @@ PROB_SYSTEM_PROMPT = """You are a professional AI teaching assistant with gradua
     - **其他**: Does not fit into the above 7 categories.
 
     **Objective-question rules**: If the stem shows 3 or more option lines marked A./B./C./D., classify as 选择题, or as 多选题 when the stem says multiple options are correct. If the stem has no options but a blank to fill, classify as 填空题.
-    **Sub-questions (子问)**: A question containing sub-questions such as "(1) ... (2) ... (3) ..." must be emitted as ONE single problem whose `stem` keeps the full question including every sub-question. Never emit a sub-question (e.g. only "(1) ...") as a separate problem row.
+    **Sub-questions (子问)**: A question containing sub-questions such as "(1) ... (2) ... (3) ..." or "(a) ... (b) ..." must be emitted as ONE single problem whose `stem` keeps the shared conditions and every sub-question in source order. A sub-question never receives its own q_id, score row, answer row, or progress unit. For example, major question 1 containing (a) and (b) is exactly q1; the next major question 2 is q2. Never emit only "(a)" or "(1)" as a separate problem row.
+    **Numbering rule**: Dot-separated identifiers such as `1.1`, `1.2`, and `2.3.4` are normally complete major-question numbers. A suffix such as `1.1(a)` or `1.1(2)` is a sub-question marker inside major question `1.1`.
     **Fragment at the start of the text**: If the very first line of the provided text starts in the MIDDLE of a question (no question number on the first line because its beginning was cut off), still emit that fragment as a problem row with `number` set to the empty string "" — do not guess or invent a number, and do not invent the missing opening text.
 
     **[Important]: Preserve the stem information completely. Do not delete or translate content.**
@@ -272,7 +276,9 @@ async def extract_problems(
     # Chunked extraction can emit the same question twice (split sub-question,
     # near-duplicate, or a question cut across the chunk overlap). Collapse
     # duplicates before any score policy freezes a max_score per row.
-    prob_dict = dedupe_extracted_problems(prob_dict)
+    prob_dict = annotate_major_question_structures(
+        dedupe_extracted_problems(prob_dict)
+    )
 
     if not prob_dict:
         if reporter and manage_progress_lifecycle:
@@ -1639,13 +1645,18 @@ Return exactly one JSON object:
 }]}
 
 Rules:
-- criterion: a concrete, usable scoring rubric whose numbered scoring steps align with the
-  corresponding numbered reference-answer steps. Express weights only as percentages adding up
-  to 100%; never use absolute points or restate the question's maximum score. Exception for
-  objective questions (选择题/多选题/填空题): never generate a percentage rubric — use a
-  result-based criterion such as "答案唯一: 答对满分, 答错 0 分" (for 多选题 keep the stem's
-  partial-credit rule when present).
-- reference_answer: a correct model answer or derivation suitable for teacher review. If an
+- criterion: a concrete, usable scoring rubric aligned with the reference answer. When
+  question_structure.subparts is non-empty, name every subpart label exactly once and assign
+  explicit absolute points whose sum equals that major question's max_score. The subparts remain
+  inside this one major-question rubric. For a question without subparts, use percentages adding
+  up to 100% and never restate the maximum score; if that no-subpart question is objective
+  (选择题/多选题/填空题), use a result-based criterion such as
+  "答案唯一: 答对满分, 答错 0 分" instead (for 多选题 keep the stem's partial-credit rule when present).
+- teacher_subpart_points contains authoritative teacher allocations. Preserve each named label's
+  points exactly in criterion; allocate only the unspecified remainder. Do not replace explicit
+  allocations with an even split. A subpart remains inside its single major-question package.
+- reference_answer: a correct model answer or derivation suitable for teacher review. Cover every
+  labelled subpart in question_structure, in source order, without creating separate q_ids. If an
   existing teacher answer contains only a final answer, preserve that conclusion and expand it
   into explicit, checkable solution steps rather than replacing it with an unrelated approach.
 - solution_code: only for programming questions; return reference implementation text, never run it.
@@ -1721,6 +1732,10 @@ async def generate_missing_question_materials(
             "type": str(problem.get("type") or "")[:120],
             "stem": str(problem.get("stem") or "")[:stem_budget],
             "max_score": float(problem.get("max_score") or 10),
+            "question_structure": _generation_question_structure(
+                problem.get("question_structure")
+            ),
+            "teacher_subpart_points": dict(problem.get("teacher_subpart_points") or {}),
             "existing_criterion": str(problem.get("criterion") or "")[:existing_budget],
             "existing_reference_answer": str(
                 problem.get("reference_answer") or ""
@@ -1757,3 +1772,26 @@ async def generate_missing_question_materials(
             f"Generated {len(parsed.candidates[:200])} teacher-review material candidates"
         )
     return parsed.candidates[:200]
+
+
+def _generation_question_structure(value: Any) -> Dict[str, Any] | None:
+    """Project only bounded subpart hints into a generation request."""
+
+    if not isinstance(value, dict):
+        return None
+    subparts = value.get("subparts")
+    if not isinstance(subparts, list):
+        return None
+    return {
+        "contract_version": value.get("contract_version"),
+        "scoring_unit": value.get("scoring_unit"),
+        "subparts": [
+            {
+                "label": str(part.get("label") or "")[:32],
+                "order": part.get("order"),
+                "type_hint": str(part.get("type_hint") or "")[:64] or None,
+            }
+            for part in subparts[:100]
+            if isinstance(part, dict)
+        ],
+    }

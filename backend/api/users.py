@@ -74,8 +74,14 @@ def patch_user(user_id: str, req: PatchUserRequest, current: User = Depends(get_
     if req.username and req.username != user.username:
         # Disallow username changes for now (would require re-indexing)
         raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="Username cannot be changed")
-    if req.email is not None:
-        user.email = req.email
+    if req.email is not None and req.email.strip().casefold() != user.email.strip().casefold():
+        # Email ownership now gates registration and password recovery. Changing
+        # it requires a separate verified-email flow; silently mutating it here
+        # would let an authenticated session bypass that proof.
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            detail="Email cannot be changed",
+        )
     if req.role is not None and current.role == "admin":
         # Admin may reassign roles, but never to a role that would orphan a
         # course they own (a course needs a teacher owner).

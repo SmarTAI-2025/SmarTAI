@@ -155,3 +155,49 @@ def test_task_state_keeps_reporter_on_event_loop_and_database_off_loop(monkeypat
     assert response.json()["progress_percent"] == 25
     assert response.json()["eta_seconds"] is None
     assert threads["database"] != threads["reporter"]
+
+
+@pytest.mark.parametrize("status,durable_phase", [("grading", "grading"), ("error", "error")])
+def test_grading_state_merges_live_counts_and_preserves_durable_phase_off_loop(monkeypatch, status, durable_phase):
+    threads = {}
+    active = [{"student_id": "student-1", "q_id": "q2", "skill": "ConceptSkill"}]
+
+    def database_state(*, task_id, owner_id):
+        assert (task_id, owner_id) == ("owned-task", "owner")
+        threads["state"] = threading.get_ident()
+        with pytest.raises(RuntimeError):
+            asyncio.get_running_loop()
+        return {"status": status, "grading_job_id": "run", "active_job_id": None,
+                "last_failed_job_id": "run" if status == "error" else None, "error": None}
+
+    def database_progress(run_id, owner_id):
+        assert (run_id, owner_id) == ("run", "owner")
+        threads["grading"] = threading.get_ident()
+        with pytest.raises(RuntimeError):
+            asyncio.get_running_loop()
+        return _grading(phase=durable_phase, completed_units=1, active=[],
+                        error_detail="grading_failed" if status == "error" else None)
+
+    async def snapshot():
+        threads["reporter"] = threading.get_ident()
+        asyncio.get_running_loop()
+        return SimpleNamespace(model_dump=lambda **_: {
+            "phase": "done", "completed_units": 2, "active": active, "error_detail": None,
+        })
+
+    monkeypatch.setattr(task_facade, "task_state", database_state)
+    monkeypatch.setattr(task_facade, "_grading_progress", database_progress)
+    monkeypatch.setattr(task_facade, "get_reporter", lambda job_id: SimpleNamespace(snapshot=snapshot) if job_id == "run" else None)
+    app = FastAPI()
+    app.include_router(tasks.router)
+    app.dependency_overrides[tasks.require_teacher] = lambda: SimpleNamespace(id="owner")
+    response = TestClient(app).get("/tasks/owned-task/state")
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["progress"]["completed_units"] == 2
+    assert body["progress"]["active"] == active
+    assert body["progress"]["phase"] == durable_phase
+    assert body["error"] == ("grading_failed" if status == "error" else None)
+    assert body["progress_percent"] == (10 if status == "grading" else None)
+    assert threads["state"] != threads["reporter"]
+    assert threads["grading"] != threads["reporter"]

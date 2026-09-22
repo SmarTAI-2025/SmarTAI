@@ -1,67 +1,51 @@
 from __future__ import annotations
 
-import hashlib
+import logging
 from pathlib import Path
 
-from sqlalchemy.exc import IntegrityError
-
-from backend.db.file_repository import StoredFile, delete_file_record, get_file, save_file
+from backend.db.file_repository import StoredFile, get_file
 from backend.db.knowledge_repository import (
     KnowledgeDocument,
-    create_document,
-    delete_document,
-    get_document_by_hash,
+    get_document,
+    request_document_deletion,
     replace_document_chunks,
     update_document,
 )
 from backend.rag.chunker import MAX_FILE_BYTES, chunk_text, extract_text
+from backend.services.knowledge_storage import persist_knowledge_upload
 from backend.storage import get_storage
 
 
+logger = logging.getLogger(__name__)
+
+
 async def ingest_document(*, owner_id: str, original_name: str, content: bytes,
-                          content_type: str | None = None, title: str | None = None) -> KnowledgeDocument:
+                          content_type: str | None = None, title: str | None = None,
+                          retention_policy: str = "retained",
+                          origin_assignment_id: str | None = None) -> KnowledgeDocument:
     if len(content) > MAX_FILE_BYTES:
         raise ValueError(f"Knowledge file too large ({len(content)} bytes > {MAX_FILE_BYTES}).")
     safe_name = Path(original_name).name or "knowledge.txt"
-    digest = hashlib.sha256(content).hexdigest()
-    existing = get_document_by_hash(owner_id, digest)
-    if existing is not None:
-        return existing
+    upload = persist_knowledge_upload(
+        storage=get_storage(),
+        owner_id=owner_id,
+        original_name=safe_name,
+        content=content,
+        content_type=content_type,
+        title=(title or Path(safe_name).stem or safe_name)[:512],
+        retention_policy=retention_policy,
+        origin_assignment_id=origin_assignment_id,
+    )
+    document = get_document(upload.document_id, owner_id)
+    if document is None:
+        raise RuntimeError("Published knowledge upload has no document record")
+    # Existing owner/hash content is canonical.  ``persist_knowledge_upload``
+    # applies the monotonic task_only -> retained promotion before returning;
+    # parsing belongs only to the process that created this upload.
+    if not upload.created:
+        return document
 
-    # ``knowledge_documents`` de-duplicates by (owner_id, sha256), so its PK
-    # must be owner-aware as well. A digest-only ID collided when two teachers
-    # uploaded identical bytes even though the SQL uniqueness rule permits it.
-    identity = hashlib.sha256(f"{owner_id}\0{digest}".encode("utf-8")).hexdigest()
-    document_id = f"doc_{identity[:16]}"
-    stored: StoredFile | None = None
     try:
-        # Create the document row first (stored_file_id=None) so the subsequent
-        # stored_files row can reference it via knowledge_document_id under
-        # SQLite's immediate FK check; we back-fill stored_file_id after saving.
-        try:
-            document = create_document(
-                document_id=document_id,
-                owner_id=owner_id,
-                stored_file_id=None,
-                title=(title or Path(safe_name).stem or safe_name)[:512],
-                original_name=safe_name,
-                content_type=content_type,
-                size_bytes=len(content),
-                sha256=digest,
-            )
-        except IntegrityError:
-            # A concurrent upload by the same owner may win the unique
-            # (owner_id, sha256) race. Return that canonical record instead of
-            # creating a second object-storage copy.
-            concurrent = get_document_by_hash(owner_id, digest)
-            if concurrent is not None:
-                return concurrent
-            raise
-        stored = save_file(storage=get_storage(), owner_id=owner_id, kind="personal_knowledge",
-                           original_name=safe_name, content=content, content_type=content_type,
-                           storage_prefix=f"users/{owner_id}/knowledge/{document_id}",
-                           knowledge_document_id=document_id)
-        update_document(document.id, owner_id, stored_file_id=stored.id)
         text = await extract_text(safe_name, content)
         chunks = chunk_text(text)
         if not chunks:
@@ -69,9 +53,34 @@ async def ingest_document(*, owner_id: str, original_name: str, content: bytes,
         replace_document_chunks(document.id, chunks)
         return update_document(document.id, owner_id, status="ready", chunk_count=len(chunks)) or document
     except Exception:
-        if stored is not None:
-            update_document(document_id, owner_id, status="failed", error_code="parse_failed")
-            # Keep the original file for user deletion/retry; metadata records the failure.
+        update_document(document.id, owner_id, status="failed", error_code="parse_failed")
+        if retention_policy == "task_only":
+            # Publication succeeded but the document can never be attached if
+            # parsing fails.  Record cleanup now; the worker owns physical
+            # deletion/retry and quota remains charged until it succeeds.
+            from backend.db.knowledge_storage_repository import (
+                request_task_only_cleanup_if_unreferenced,
+            )
+            from backend.domain.knowledge_storage import (
+                KNOWLEDGE_CLEANUP_TASK_ATTACH_FAILED,
+            )
+
+            try:
+                request_task_only_cleanup_if_unreferenced(
+                    document.id,
+                    owner_id,
+                    reason=KNOWLEDGE_CLEANUP_TASK_ATTACH_FAILED,
+                )
+            except Exception:
+                # Preserve the parser failure seen by the caller.  Publication
+                # gave every unattached task-only record a durable grace
+                # deadline, so the cleanup worker can still reclaim it if this
+                # eager enqueue attempt hits a transient database failure.
+                logger.warning(
+                    "Failed to enqueue task-only knowledge parse cleanup; document_id=%s",
+                    document.id,
+                    exc_info=True,
+                )
         raise
 
 
@@ -81,9 +90,6 @@ def document_file(document: KnowledgeDocument, owner_id: str) -> StoredFile | No
     return get_file(file_id=document.stored_file_id, owner_id=owner_id)
 
 
-def remove_document(*, document: KnowledgeDocument, owner_id: str) -> None:
-    stored = document_file(document, owner_id)
-    delete_document(document.id, owner_id)
-    if stored is not None:
-        get_storage().delete(stored.storage_key)
-        delete_file_record(file_id=stored.id, owner_id=owner_id)
+def remove_document(*, document: KnowledgeDocument, owner_id: str):
+    """Durably request cleanup; the background worker performs object delete."""
+    return request_document_deletion(document.id, owner_id)

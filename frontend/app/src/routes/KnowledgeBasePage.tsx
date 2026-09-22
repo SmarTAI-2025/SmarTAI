@@ -1,9 +1,10 @@
-import { FolderPlus, Search, Upload, X } from "lucide-react";
+import { FolderPlus, HardDrive, LoaderCircle, Search, Upload, X } from "lucide-react";
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import {
   useCourseMaterialGroups,
   useCourseMaterials,
   useCourses,
+  useKnowledgeStorageUsage,
 } from "@/api/hooks";
 import {
   GroupDialog,
@@ -17,6 +18,7 @@ import type {
   CourseMaterial,
   CourseMaterialCategory,
   CourseMaterialGroup,
+  KnowledgeStorageUsage,
 } from "@/types";
 
 type CategoryFilter = "all" | CourseMaterialCategory;
@@ -53,6 +55,7 @@ export function KnowledgeBasePage() {
   const visibleGroupsQuery = useCourseMaterialGroups(query);
   const allGroupsQuery = useCourseMaterialGroups();
   const coursesQuery = useCourses();
+  const storageUsageQuery = useKnowledgeStorageUsage();
   const groups = allGroupsQuery.data?.items ?? [];
   const activeGroup = groups.find((group) => group.group_id === groupId) ?? null;
   const showGroups = category === "all" && !groupId;
@@ -156,7 +159,13 @@ export function KnowledgeBasePage() {
         />
       </div>
 
-      <section className="mt-10 flex min-h-[88px] flex-col gap-3 rounded-[10px] border bg-card px-5 py-4 sm:flex-row sm:items-center">
+      <KnowledgeStorageOverview
+        locale={locale}
+        usage={storageUsageQuery.data}
+        isLoading={storageUsageQuery.isLoading}
+      />
+
+      <section className="mt-5 flex min-h-[88px] flex-col gap-3 rounded-[10px] border bg-card px-5 py-4 sm:flex-row sm:items-center">
         <h2 className="shrink-0 text-sm font-semibold">{tx(locale, "资料库概况", "Library overview")}</h2>
         <div className="flex flex-wrap gap-2 sm:ml-8">
           <SummaryPill tone="blue">{summary?.materials ?? 0} {tx(locale, "份资料", "materials")}</SummaryPill>
@@ -164,7 +173,7 @@ export function KnowledgeBasePage() {
           <SummaryPill tone="slate">{summary?.referenced ?? 0} {tx(locale, "份被任务引用", "used by tasks")}</SummaryPill>
         </div>
         <p className="text-xs leading-5 text-muted-foreground sm:ml-auto sm:max-w-[300px] sm:text-right">
-          {tx(locale, "试用存储可能在服务重启后清空，请保留本地原文件。", "Trial storage may reset when the service restarts. Keep local originals.")}
+          {tx(locale, "保存到个人或课程资料库的内容会长期保留，不会随批改任务删除。", "Content saved to personal or course libraries is retained long term and is not removed with a grading task.")}
         </p>
       </section>
 
@@ -222,4 +231,159 @@ function SummaryPill({ children, tone }: { children: ReactNode; tone: "blue" | "
     slate: "bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-300",
   };
   return <span className={`rounded-full px-3 py-1 text-xs font-medium ${classes[tone]}`}>{children}</span>;
+}
+
+function KnowledgeStorageOverview({
+  locale,
+  usage,
+  isLoading,
+}: {
+  locale: "zh-CN" | "en-US";
+  usage?: KnowledgeStorageUsage;
+  isLoading: boolean;
+}) {
+  return (
+    <section
+      aria-labelledby="knowledge-storage-title"
+      className="mt-10 overflow-hidden rounded-[10px] border bg-card"
+    >
+      <div className="flex items-start gap-3 border-b px-5 py-4">
+        <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-[8px] bg-blue-50 text-primary dark:bg-blue-950/40">
+          <HardDrive aria-hidden="true" className="h-[18px] w-[18px]" />
+        </span>
+        <div className="min-w-0 flex-1">
+          <h2 id="knowledge-storage-title" className="text-[17px] font-bold text-foreground">
+            {tx(locale, "知识库独立空间", "Knowledge storage")}
+          </h2>
+          <p className="mt-1 text-[11px] leading-4 text-muted-foreground">
+            {tx(
+              locale,
+              "统计个人、课程及任务内知识资料原文件；与批改题目、作答原件空间分开。保存到资料库的内容不会随任务删除。",
+              "Counts personal, course, and task-scoped knowledge source files. This is separate from grading problem and submission originals. Content saved to a library is not deleted with a task.",
+            )}
+          </p>
+        </div>
+      </div>
+
+      <div className="px-5 py-4">
+        {isLoading ? (
+          <div role="status" className="flex items-center gap-2 text-[12px] text-muted-foreground">
+            <LoaderCircle aria-hidden="true" className="h-4 w-4 animate-spin" />
+            {tx(locale, "正在读取知识库空间占用…", "Loading knowledge storage usage…")}
+          </div>
+        ) : usage ? (
+          <KnowledgeStorageUsageDetails locale={locale} usage={usage} />
+        ) : (
+          <p className="text-[11px] text-muted-foreground">
+            {tx(locale, "暂时无法读取知识库空间占用。", "Knowledge storage usage is temporarily unavailable.")}
+          </p>
+        )}
+      </div>
+    </section>
+  );
+}
+
+function KnowledgeStorageUsageDetails({
+  locale,
+  usage,
+}: {
+  locale: "zh-CN" | "en-US";
+  usage: KnowledgeStorageUsage;
+}) {
+  const percent = usagePercent(usage.used_bytes, usage.limit_bytes);
+  return (
+    <>
+      <div className="flex flex-wrap items-end justify-between gap-2">
+        <div>
+          <strong className="text-[20px] text-foreground">{formatBytes(usage.used_bytes)}</strong>
+          <span className="ml-1.5 text-[11px] text-muted-foreground">/ {formatBytes(usage.limit_bytes)}</span>
+        </div>
+        <span className="text-[11px] font-semibold text-muted-foreground">{percent.toFixed(1)}%</span>
+      </div>
+      <div
+        role="progressbar"
+        aria-label={tx(locale, "知识库空间占用", "Knowledge storage usage")}
+        aria-valuemin={0}
+        aria-valuemax={100}
+        aria-valuenow={percent}
+        className="mt-3 h-2 overflow-hidden rounded-full bg-muted"
+      >
+        <span
+          className="block h-full rounded-full bg-primary transition-[width]"
+          style={{ width: `${percent}%` }}
+        />
+      </div>
+
+      <dl className="mt-3 flex flex-wrap gap-x-6 gap-y-2 text-[11px] leading-4">
+        <StorageFact
+          label={tx(locale, "剩余空间", "Available")}
+          value={formatBytes(usage.available_bytes)}
+        />
+        <StorageFact
+          label={tx(locale, "正常资料占用", "Available documents")}
+          value={formatBytes(usage.available_document_bytes)}
+        />
+        {usage.reserved_bytes > 0 ? (
+          <StorageFact
+            label={tx(locale, "上传处理中", "Upload reserved")}
+            value={formatBytes(usage.reserved_bytes)}
+          />
+        ) : null}
+      </dl>
+
+      {usage.retrying_cleanup_count > 0 ? (
+        <div role="status" className="mt-3 rounded-[8px] bg-amber-50 px-3 py-2 text-[11px] leading-4 text-amber-800 dark:bg-amber-950/30 dark:text-amber-200">
+          <p>{tx(
+            locale,
+            "刚删除失败，系统正在后台自动重试；完成前仍计入占用，无需手动操作。",
+            "A recent deletion did not finish. The system is retrying automatically in the background; it remains charged until complete, and no manual action is needed.",
+          )}</p>
+          <p className="mt-1">{tx(
+            locale,
+            `涉及 ${usage.retrying_cleanup_count} 份资料、${formatBytes(usage.retrying_cleanup_bytes)}。`,
+            `${usage.retrying_cleanup_count} document(s), ${formatBytes(usage.retrying_cleanup_bytes)}, are affected.`,
+          )}</p>
+        </div>
+      ) : usage.cleanup_pending_count > 0 ? (
+        <p role="status" className="mt-3 text-[11px] leading-4 text-muted-foreground">
+          {tx(
+            locale,
+            `系统正在后台自动清理 ${usage.cleanup_pending_count} 份资料；完成前 ${formatBytes(usage.cleanup_pending_bytes)} 仍计入占用，无需手动操作。`,
+            `The system is automatically cleaning ${usage.cleanup_pending_count} document(s) in the background. ${formatBytes(usage.cleanup_pending_bytes)} remains charged until complete; no manual action is needed.`,
+          )}
+        </p>
+      ) : (
+        <p className="mt-3 text-[11px] leading-4 text-muted-foreground">
+          {tx(
+            locale,
+            "只要不超过个人分配空间，保存到个人或课程资料库的内容会长期保留；删除后的空间由系统自动回收。",
+            "Content saved to personal or course libraries is retained long term within your allocation. Storage is reclaimed automatically after deletion.",
+          )}
+        </p>
+      )}
+    </>
+  );
+}
+
+function StorageFact({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="flex gap-1.5">
+      <dt className="text-muted-foreground">{label}</dt>
+      <dd className="font-semibold text-foreground">{value}</dd>
+    </div>
+  );
+}
+
+function usagePercent(usedBytes: number, limitBytes: number) {
+  if (!Number.isFinite(usedBytes) || !Number.isFinite(limitBytes) || limitBytes <= 0) return 0;
+  return Math.min(100, Math.max(0, usedBytes / limitBytes * 100));
+}
+
+function formatBytes(value: number) {
+  const bytes = Number.isFinite(value) ? Math.max(0, value) : 0;
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 ** 2) return `${(bytes / 1024).toFixed(1)} KB`;
+  if (bytes < 1024 ** 3) return `${(bytes / 1024 ** 2).toFixed(1)} MB`;
+  if (bytes < 1024 ** 4) return `${(bytes / 1024 ** 3).toFixed(1)} GB`;
+  return `${(bytes / 1024 ** 4).toFixed(1)} TB`;
 }

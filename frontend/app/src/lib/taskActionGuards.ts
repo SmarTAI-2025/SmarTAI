@@ -1,5 +1,9 @@
 import { getAPIErrorCode, getAPIErrorDetail, normalizeAPIError } from "@/api/client";
 import type { Locale } from "@/i18n/messages";
+import {
+  isKnowledgeStorageQuotaExceeded,
+  knowledgeStorageQuotaCopy,
+} from "@/lib/knowledgeStorage";
 import type { ExpertConfig, ResultArtifactStatus, Task, TaskLite, TaskStatus } from "@/types";
 
 const WORKFLOW_REVISION_CONFLICT_CODES = new Set([
@@ -285,6 +289,8 @@ const GRADING_INPUT_CODES = new Set([
 ]);
 
 const SOURCE_CHANGED_CODES = new Set([
+  "question_preparation_source_unavailable",
+  "question_preparation_retry_source_unavailable",
   "question_preparation_source_expired",
   "question_preparation_library_source_changed",
   "problem_source_material_changed",
@@ -328,11 +334,11 @@ export function classifyRecoverableError(
 
   if (code === "provider_submit_uncertain") {
     return {
-      title: tx(locale, "OCR 提交状态无法确认", "The OCR submission state is uncertain"),
+      title: tx(locale, "模型请求状态无法确认", "The provider request state is uncertain"),
       description: tx(
         locale,
-        "请求可能已经到达百度。为避免重复提交或重复计费，系统不会自动重试这份文件；请保留任务编号并让管理员先核对服务商状态。",
-        "The request may have reached Baidu. To avoid duplicate submission or billing, SmarTAI will not retry this file automatically. Keep the job ID and ask an administrator to verify the provider state first.",
+        "请求可能已经到达服务商。为避免重复提交或重复计费，系统不会自动重试这一步；请保留任务编号并让管理员先核对服务商状态。",
+        "The request may have reached the provider. To avoid duplicate submission or billing, SmarTAI will not retry this step automatically. Keep the job ID and ask an administrator to verify the provider state first.",
       ),
       actionLabel: tx(locale, "刷新任务状态", "Refresh task state"),
       actionKind: "refresh",
@@ -764,6 +770,21 @@ export function classifyRecoverableError(
     };
   }
 
+  if (code === "question_structure_score_mismatch") {
+    return {
+      title: tx(locale, "题号或分项分值与教师设置不一致", "Question numbers or points differ from teacher instructions"),
+      description: tx(locale,
+        "请核对题号与分值说明后重新准备；系统没有采用不一致的题目包。",
+        "Check the question numbers and score instructions, then prepare again. The inconsistent package was not accepted.",
+      ),
+      actionLabel: tx(locale, "重新准备题目", "Prepare questions again"),
+      actionHref: taskId ? `/tasks/${taskId}/upload/problems` : undefined,
+      actionKind: "reupload",
+      tone: "warning",
+      technicalDetails,
+    };
+  }
+
   if (code === "submission_parse_invalid") {
     return {
       title: tx(locale, "模型返回格式无法解析", "The model returned an invalid structure"),
@@ -828,6 +849,33 @@ export function classifyRecoverableError(
       actionHref: `/settings/byok${returnTo ? `?returnTo=${encodeURIComponent(returnTo)}` : ""}`,
       actionKind: "byok",
       tone: "primary",
+      technicalDetails,
+    };
+  }
+
+  if (code === "source_storage_quota_exceeded") {
+    return {
+      title: tx(locale, "原文件空间已满", "Original-file storage is full"),
+      description: tx(
+        locale,
+        "本次文件尚未保存。后台会继续自动清理已完成任务的原文件，无需手动重试清理；请稍后再上传，或选择更小的文件。",
+        "This file was not saved. The backend will keep cleaning originals from completed tasks automatically; no manual cleanup retry is needed. Upload again later or choose a smaller file.",
+      ),
+      actionLabel: tx(locale, "选择更小文件", "Choose a smaller file"),
+      actionKind: "reupload",
+      tone: "warning",
+      technicalDetails,
+    };
+  }
+
+  if (isKnowledgeStorageQuotaExceeded(apiError)) {
+    const copy = knowledgeStorageQuotaCopy(locale);
+    return {
+      title: copy.title,
+      description: copy.description,
+      actionLabel: tx(locale, "调整上传资料", "Review upload"),
+      actionKind: "reupload",
+      tone: "warning",
       technicalDetails,
     };
   }
@@ -966,6 +1014,9 @@ function buildTechnicalDetails(
     { label: tx(locale, "页数上限", "Page limit"), value: safeTechnicalValue(detail?.max_pages) },
     { label: tx(locale, "字符上限", "Character limit"), value: safeTechnicalValue(detail?.max_characters) },
     { label: tx(locale, "文件上限", "File-size limit"), value: formatByteLimit(detail?.max_bytes) },
+    { label: tx(locale, "原文件已用", "Original storage used"), value: formatByteLimit(detail?.used_bytes) },
+    { label: tx(locale, "原文件额度", "Original storage limit"), value: formatByteLimit(detail?.limit_bytes) },
+    { label: tx(locale, "本次上传", "Requested upload"), value: formatByteLimit(detail?.requested_bytes) },
   ];
   return rows
     .filter((row) => row.value !== null && row.value !== undefined && row.value !== "")

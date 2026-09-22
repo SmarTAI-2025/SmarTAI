@@ -99,6 +99,23 @@ def list_documents(owner_id: str) -> list[KnowledgeDocument]:
         return [_document(record) for record in records]
 
 
+def list_visible_documents(owner_id: str) -> list[KnowledgeDocument]:
+    """Return the retained, available documents shown in the personal library."""
+    from backend.db.knowledge_storage_repository import visible_document_ids
+
+    visible = set(visible_document_ids(owner_id, include_task_only=False))
+    if not visible:
+        return []
+    with session_scope() as session:
+        records = list(session.scalars(
+            select(KnowledgeDocumentRecord).where(
+                KnowledgeDocumentRecord.owner_id == owner_id,
+                KnowledgeDocumentRecord.id.in_(visible),
+            ).order_by(KnowledgeDocumentRecord.created_at.desc())
+        ))
+        return [_document(record) for record in records]
+
+
 def update_document(document_id: str, owner_id: str, **fields) -> KnowledgeDocument | None:
     allowed = {"status", "chunk_count", "error_code", "stored_file_id", "title"}
     values = {key: value for key, value in fields.items() if key in allowed}
@@ -140,6 +157,11 @@ def list_selected_documents(assignment_id: str, owner_id: str) -> list[Knowledge
     task-scoped table). Only ready documents are returned so retrieval never
     surfaces a document still being parsed.
     """
+    from backend.db.knowledge_storage_repository import visible_document_ids
+
+    visible = visible_document_ids(owner_id, include_task_only=True)
+    if not visible:
+        return []
     with session_scope() as session:
         records = list(session.scalars(
             select(KnowledgeDocumentRecord)
@@ -149,6 +171,7 @@ def list_selected_documents(assignment_id: str, owner_id: str) -> list[Knowledge
             .where(AssignmentKnowledgeDocumentRecord.assignment_id == assignment_id,
                    AssignmentRecord.teacher_id == owner_id,
                    KnowledgeDocumentRecord.owner_id == owner_id,
+                   KnowledgeDocumentRecord.id.in_(visible),
                    KnowledgeDocumentRecord.status == "ready")
             .order_by(AssignmentKnowledgeDocumentRecord.selected_at)
         ))
@@ -232,10 +255,20 @@ def set_task_documents(*, assignment_id: str, owner_id: str, document_ids: list[
     assignment scope (Task 6). Ownership is checked through the assignment.
     """
     with session_scope() as session:
+        from backend.db.knowledge_storage_repository import (
+            lock_knowledge_owner_in_session,
+        )
+
+        # Reserve/publish takes User -> Assignment.  Take the same owner gate
+        # before touching the assignment or its attachment FKs so PostgreSQL
+        # cannot deadlock an upload racing attachment publication.
+        lock_knowledge_owner_in_session(session, owner_id)
         assignment = session.scalar(
             select(AssignmentRecord).where(
-                AssignmentRecord.id == assignment_id, AssignmentRecord.teacher_id == owner_id
-            )
+                AssignmentRecord.id == assignment_id,
+                AssignmentRecord.teacher_id == owner_id,
+                AssignmentRecord.deletion_requested_at.is_(None),
+            ).with_for_update()
         )
         if assignment is None:
             raise ValueError("Assignment not found")
@@ -258,18 +291,40 @@ def set_task_documents(*, assignment_id: str, owner_id: str, document_ids: list[
             row.document_id: (row.source_kind, row.library_material_id)
             for row in existing_rows
         }
+        previous_ids = tuple(existing)
         session.execute(delete(AssignmentKnowledgeDocumentRecord).where(
             AssignmentKnowledgeDocumentRecord.assignment_id == assignment_id
         ))
+        selection_timestamp = time.time()
         session.add_all([
             AssignmentKnowledgeDocumentRecord(
                 assignment_id=assignment_id,
                 document_id=document_id,
                 source_kind=existing.get(document_id, ("upload", None))[0],
                 library_material_id=existing.get(document_id, ("upload", None))[1],
+                # Preserve the caller's explicit selection order even on
+                # databases whose timestamp/default precision would tie a
+                # bulk insert and fall back to random document UUID order.
+                selected_at=selection_timestamp + index * 0.000001,
             )
-            for document_id in unique_ids
+            for index, document_id in enumerate(unique_ids)
         ])
+        session.flush()
+        from backend.db.knowledge_storage_repository import (
+            reconcile_assignment_documents_in_session,
+        )
+
+        # Clear the upload grace window in the same transaction that publishes
+        # the assignment reference.  Reconciliation only schedules cleanup for
+        # removed task-only documents after their final reference disappears;
+        # retained documents are merely detached.
+        reconcile_assignment_documents_in_session(
+            session,
+            assignment_id=assignment_id,
+            owner_id=owner_id,
+            previous_document_ids=previous_ids,
+            current_document_ids=unique_ids,
+        )
     return list_selected_documents(assignment_id, owner_id)
 
 
@@ -302,23 +357,35 @@ def assert_document_not_frozen_by_active_run(
 
 
 def delete_document(document_id: str, owner_id: str) -> KnowledgeDocument | None:
+    """Compatibility wrapper for durable explicit document cleanup."""
+    result = get_document(document_id, owner_id)
+    if result is None:
+        return None
+    request_document_deletion(document_id, owner_id)
+    return result
+
+
+def request_document_deletion(document_id: str, owner_id: str):
+    """Hide a personal document and detach its task links in one transaction."""
+    from backend.db.knowledge_storage_repository import (
+        lock_knowledge_owner_in_session,
+        request_document_cleanup_in_session,
+    )
+    from backend.domain.knowledge_storage import KNOWLEDGE_CLEANUP_EXPLICIT_DELETE
+
     with session_scope() as session:
-        record = session.scalar(select(KnowledgeDocumentRecord).where(
-            KnowledgeDocumentRecord.id == document_id, KnowledgeDocumentRecord.owner_id == owner_id
-        ))
-        if record is None:
-            return None
-        # A queued/running grading run must keep access to the exact immutable
-        # knowledge selection captured in its input manifest.  Unselecting a
-        # document from an assignment is safe; deleting its chunks mid-run is
-        # not, so defer physical deletion until the run is terminal.
-        assert_document_not_frozen_by_active_run(
-            session, document_id=document_id, owner_id=owner_id,
+        lock_knowledge_owner_in_session(session, owner_id)
+        cleanup = request_document_cleanup_in_session(
+            session,
+            document_id=document_id,
+            owner_id=owner_id,
+            reason=KNOWLEDGE_CLEANUP_EXPLICIT_DELETE,
         )
-        result = _document(record)
+        owned_assignments = select(AssignmentRecord.id).where(
+            AssignmentRecord.teacher_id == owner_id
+        )
         session.execute(delete(AssignmentKnowledgeDocumentRecord).where(
-            AssignmentKnowledgeDocumentRecord.document_id == document_id
+            AssignmentKnowledgeDocumentRecord.document_id == document_id,
+            AssignmentKnowledgeDocumentRecord.assignment_id.in_(owned_assignments),
         ))
-        session.execute(delete(KnowledgeChunkRecord).where(KnowledgeChunkRecord.document_id == document_id))
-        session.delete(record)
-        return result
+        return cleanup

@@ -8,6 +8,11 @@ import time
 from typing import Annotated, List, Optional, Literal, Dict, Any
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from backend.services.question_structure import (
+    MajorQuestionStructureV1,
+    RubricPointSummaryV1,
+)
+
 
 # ─── Grading result models ────────────────────────────────────────────────────
 
@@ -155,6 +160,20 @@ class ProblemInfo(BaseModel):
         description=(
             "Authoritative maximum score frozen with the normalized question. "
             "Model output must never replace this value."
+        ),
+    )
+    question_structure: Optional[MajorQuestionStructureV1] = Field(
+        default=None,
+        description=(
+            "Versioned internal (a)/(b)/(1)/(2) metadata. The enclosing "
+            "ProblemInfo remains the only scored question and q_id."
+        ),
+    )
+    rubric_point_summary: Optional[RubricPointSummaryV1] = Field(
+        default=None,
+        description=(
+            "Derived summary of explicit subpart point allocations; never a "
+            "second source of scores."
         ),
     )
     review_status: Literal["needs_review", "edited", "confirmed"] = "needs_review"
@@ -353,6 +372,12 @@ class JobProgress(BaseModel):
     total_steps: Optional[int] = None
     completed_steps: Optional[int] = None
     stage_metrics: Dict[str, int] = Field(default_factory=dict)
+    question_labels: Dict[str, str] = Field(default_factory=dict)
+    question_error_codes: Dict[str, str] = Field(default_factory=dict)
+    completed_question_ids: List[str] = Field(default_factory=list)
+    active_question_ids: List[str] = Field(default_factory=list)
+    failed_question_ids: List[str] = Field(default_factory=list)
+    last_activity_at: Optional[float] = None
     active: List[ActiveUnit] = Field(default_factory=list, description="Currently running units")
     messages: List[ProgressEvent] = Field(default_factory=list, description="Ring buffer of last N events")
     error_detail: Optional[str] = None
@@ -486,6 +511,7 @@ class User(BaseModel):
     password_hash: str = Field("", description="bcrypt hash; never returned to clients")
     created_at: float = Field(default_factory=time.time)
     is_active: bool = True
+    auth_invalid_before: float | None = Field(default=None, exclude=True)
 
     def public(self) -> Dict[str, Any]:
         """Dict safe to return to clients (no password hash, no course_ids)."""

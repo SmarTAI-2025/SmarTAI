@@ -14,6 +14,7 @@ import csv
 import hashlib
 import io
 import json
+import logging
 import time
 from typing import Any, Literal
 from urllib.parse import quote
@@ -35,7 +36,12 @@ from pydantic import BaseModel, Field, ValidationError as PydanticValidationErro
 
 from backend.api.errors import domain_error_response
 from backend.auth import require_teacher
-from backend.db import assignment_repository, grading_repository, workflow_repository
+from backend.db import (
+    assignment_repository,
+    grading_repository,
+    source_storage_repository,
+    workflow_repository,
+)
 from backend.domain.errors import DomainError, InvalidTransition, NotFound, ValidationError
 from backend.knowledge.service import ingest_document
 from backend.llm.registry import (
@@ -57,6 +63,7 @@ from backend.services.task_history_progress import enrich_history_progress, prog
 
 
 router = APIRouter(prefix="/tasks", tags=["tasks"])
+logger = logging.getLogger(__name__)
 
 
 class CreateTaskRequest(BaseModel):
@@ -289,6 +296,16 @@ async def interpret_task_query(
     }
 
 
+@router.get("/source-storage/usage")
+def get_source_storage_usage(current: User = Depends(require_teacher)):
+    usage = source_storage_repository.source_quota_usage(current.id)
+    return {
+        **usage.as_dict(),
+        "scope": "task_originals",
+        "knowledge_storage_included": False,
+    }
+
+
 @router.get("/{task_id}")
 def get_task(task_id: str, current: User = Depends(require_teacher)):
     return _domain(lambda: task_facade.get_task(task_id=task_id, owner_id=current.id))
@@ -351,13 +368,12 @@ def update_task(task_id: str, request: UpdateTaskRequest, current: User = Depend
     ))
 
 
-@router.delete("/{task_id}")
+@router.delete("/{task_id}", status_code=status.HTTP_202_ACCEPTED)
 def delete_task(task_id: str, current: User = Depends(require_teacher)):
     try:
-        task_facade.delete_task(task_id=task_id, owner_id=current.id)
+        return task_facade.delete_task(task_id=task_id, owner_id=current.id)
     except DomainError as exc:
         return domain_error_response(exc)
-    return {"status": "success"}
 
 
 @router.post("/{task_id}/extract_problems")
@@ -451,7 +467,9 @@ async def retry_submission_recognition_endpoint(
 ):
     """Retry a failed recognition job from its durable original upload."""
     try:
-        workflow = workflow_repository.get_workflow(task_id, owner_id=current.id)
+        workflow = workflow_repository.get_live_workflow(
+            task_id, owner_id=current.id
+        )
         if workflow.workflow_revision != request.expected_workflow_revision:
             raise ValidationError(
                 "The task changed before recognition retry.",
@@ -585,7 +603,9 @@ def set_teacher_comment(
     current: User = Depends(require_teacher),
 ):
     try:
-        workflow = workflow_repository.get_workflow(task_id, owner_id=current.id)
+        workflow = workflow_repository.get_live_workflow(
+            task_id, owner_id=current.id
+        )
         results = task_facade.task_results(task_id=task_id, owner_id=current.id)
         student = next((item for item in results.get("results", []) if item["student_id"] == request.student_id), None)
         correction = next((item for item in (student or {}).get("corrections", []) if item["q_id"] == request.q_id), None)
@@ -638,7 +658,9 @@ def save_grading_setup(
     registry: ExpertRegistry = Depends(get_scoped_expert_registry),
 ):
     try:
-        workflow = workflow_repository.get_workflow(task_id, owner_id=current.id)
+        workflow = workflow_repository.get_live_workflow(
+            task_id, owner_id=current.id
+        )
         setup = TaskGradingSetup.model_validate(request.grading_setup)
         _validate_grading_setup(setup, registry, current.id)
         body = setup.model_dump(mode="json")
@@ -705,7 +727,9 @@ def _validate_grading_setup(
 
 def _grading_setup_payload(task_id: str, owner_id: str, registry: ExpertRegistry) -> dict:
     task = task_facade.get_task(task_id=task_id, owner_id=owner_id, full=False)
-    workflow = workflow_repository.get_workflow(task_id, owner_id=owner_id)
+    workflow = workflow_repository.get_live_workflow(
+        task_id, owner_id=owner_id
+    )
     configs = []
     for item in list_stage_provider_options(owner_id, registry):
         configs.append({
@@ -835,9 +859,39 @@ async def upload_task_knowledge(
     expected_workflow_revision: int | None = Form(default=None),
     current: User = Depends(require_teacher),
 ):
+    unattached_task_only_document_id: str | None = None
+
+    def cleanup_unattached_task_only() -> None:
+        if unattached_task_only_document_id is None:
+            return
+        from backend.db.knowledge_storage_repository import (
+            request_task_only_cleanup_if_unreferenced,
+        )
+        from backend.domain.knowledge_storage import (
+            KNOWLEDGE_CLEANUP_TASK_ATTACH_FAILED,
+        )
+
+        try:
+            request_task_only_cleanup_if_unreferenced(
+                unattached_task_only_document_id,
+                current.id,
+                reason=KNOWLEDGE_CLEANUP_TASK_ATTACH_FAILED,
+            )
+        except Exception:
+            # Do not replace the actual upload/attachment response with a
+            # secondary cleanup error.  Task-only publication retains an
+            # unattached grace deadline that the durable worker will scan.
+            logger.warning(
+                "Failed to enqueue unattached task-only knowledge cleanup; document_id=%s",
+                unattached_task_only_document_id,
+                exc_info=True,
+            )
+
     try:
         assignment_repository.get_assignment(task_id, actor_id=current.id)
-        workflow = workflow_repository.get_workflow(task_id, owner_id=current.id)
+        workflow = workflow_repository.get_live_workflow(
+            task_id, owner_id=current.id
+        )
         if expected_workflow_revision is not None and workflow.workflow_revision != expected_workflow_revision:
             from backend.domain.errors import VersionConflict
             raise VersionConflict("workflow_revision_conflict")
@@ -858,8 +912,12 @@ async def upload_task_knowledge(
             document = await ingest_document(
                 owner_id=current.id, original_name=file.filename or "knowledge.txt",
                 content=body, content_type=file.content_type,
+                retention_policy=("retained" if save_to_library else "task_only"),
+                origin_assignment_id=(None if save_to_library else task_id),
             )
             document_id = document.id
+            if not save_to_library:
+                unattached_task_only_document_id = document_id
             created = True
             source_kind = "upload"
             from backend.db import course_library_repository as library_repo
@@ -893,6 +951,9 @@ async def upload_task_knowledge(
         if document_id not in ids:
             ids.append(document_id)
         set_task_documents(assignment_id=task_id, owner_id=current.id, document_ids=ids)
+        # From here on the assignment row is the durable owner of a task-only
+        # upload.  Later presentation/workflow errors must not clean it up.
+        unattached_task_only_document_id = None
         try:
             set_selected_document_metadata(
                 assignment_id=task_id,
@@ -918,7 +979,14 @@ async def upload_task_knowledge(
             "saved_material_created": saved_material_created,
         }
     except DomainError as exc:
+        cleanup_unattached_task_only()
         return domain_error_response(exc)
+    except ValueError as exc:
+        cleanup_unattached_task_only()
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    except Exception:
+        cleanup_unattached_task_only()
+        raise
 
 
 @router.get("/{task_id}/kb")
@@ -937,7 +1005,9 @@ def delete_task_knowledge(
     current: User = Depends(require_teacher),
 ):
     try:
-        workflow = workflow_repository.get_workflow(task_id, owner_id=current.id)
+        workflow = workflow_repository.get_live_workflow(
+            task_id, owner_id=current.id
+        )
         if expected_workflow_revision is not None and workflow.workflow_revision != expected_workflow_revision:
             from backend.domain.errors import VersionConflict
             raise VersionConflict("workflow_revision_conflict")
