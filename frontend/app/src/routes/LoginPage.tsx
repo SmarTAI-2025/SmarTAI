@@ -46,12 +46,12 @@ export function LoginPage() {
     }
 
     try {
-      const response = await login.mutateAsync({
+      const user = await login.mutateAsync({
         username: normalizedUsername,
         password,
       });
 
-      if (response.user.role !== "teacher" && response.user.role !== "admin") {
+      if (user.role !== "teacher" && user.role !== "admin") {
         clearAuthToken();
         queryClient.clear();
         setPassword("");
@@ -123,6 +123,11 @@ export function LoginPage() {
               hideLabel={zh ? "隐藏密码" : "Hide password"}
             />
           </Field>
+          <div className="-mt-1 text-right text-sm">
+            <Link className="font-semibold text-primary hover:underline" to="/forgot-password">
+              {zh ? "忘记密码" : "Forgot password"}
+            </Link>
+          </div>
           {visibleError ? <AuthError message={visibleError} /> : null}
           <Button type="submit" className="mt-1 h-11 w-full" disabled={login.isPending}>
             {login.isPending ? <Loader2 aria-hidden="true" className="animate-spin" size={16} /> : null}
@@ -131,12 +136,12 @@ export function LoginPage() {
         </form>
 
         <div className="mt-6 border-t pt-5 text-center text-sm text-muted-foreground">
-          {zh ? "收到测试邀请？" : "Received a testing invitation?"}{" "}
+          {zh ? "还没有账号？" : "Need an account?"}{" "}
           <Link
             className="font-semibold text-primary outline-none hover:underline focus-visible:rounded focus-visible:ring-2 focus-visible:ring-ring"
             to="/register"
           >
-            {zh ? "使用邀请码注册" : "Create invited account"}
+            {zh ? "邮箱验证注册" : "Register with email verification"}
           </Link>
         </div>
       </AuthCard>

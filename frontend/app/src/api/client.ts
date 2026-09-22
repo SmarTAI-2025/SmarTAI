@@ -44,16 +44,18 @@ export const apiClient = axios.create({
   },
 });
 
-interface RefreshableRequestConfig extends AxiosRequestConfig {
+export interface AuthAwareRequestConfig extends AxiosRequestConfig {
   _retry?: boolean;
   _skipAuthRefresh?: boolean;
+  _skipAuthHeader?: boolean;
 }
 
 let refreshPromise: Promise<string> | null = null;
 
 apiClient.interceptors.request.use((config) => {
+  const authConfig = config as AuthAwareRequestConfig;
   const token = getAuthToken();
-  if (token) {
+  if (token && !authConfig._skipAuthHeader) {
     config.headers.Authorization = `Bearer ${token}`;
   }
   return config;
@@ -62,14 +64,14 @@ apiClient.interceptors.request.use((config) => {
 apiClient.interceptors.response.use(
   (response) => response,
   async (error: AxiosError) => {
-    const config = error.config as RefreshableRequestConfig | undefined;
+    const config = error.config as AuthAwareRequestConfig | undefined;
     const path = config?.url ?? "";
     if (error.response?.status !== 401 || !config || config._retry || config._skipAuthRefresh || path.includes("/auth/login") || path.includes("/auth/refresh")) {
       return Promise.reject(error);
     }
     config._retry = true;
     refreshPromise ??= apiClient
-      .post<{ token: string }>("/auth/refresh", {}, { _skipAuthRefresh: true } as RefreshableRequestConfig)
+      .post<{ token: string }>("/auth/refresh", {}, { _skipAuthRefresh: true } as AuthAwareRequestConfig)
       .then((response) => {
         setAuthToken(response.data.token);
         return response.data.token;
@@ -244,11 +246,24 @@ function normalizeAxiosError(error: AxiosError): APIError {
     ? responseMessage(status, payload, error.response.statusText)
     : networkMessage(error);
   const retryAfterSeconds = parseRetryAfter(
-    error.response?.headers?.["retry-after"],
+    retryAfterHeader(error.response?.headers),
     payload,
   );
 
   return new APIError(status, message, payload, retryAfterSeconds);
+}
+
+function retryAfterHeader(headers: unknown): unknown {
+  if (!headers || typeof headers !== "object") return undefined;
+  const get = (headers as { get?: unknown }).get;
+  if (typeof get === "function") {
+    const value = get.call(headers, "retry-after");
+    if (value !== null && value !== undefined) return value;
+  }
+  for (const [key, value] of Object.entries(headers)) {
+    if (key.toLowerCase() === "retry-after") return value;
+  }
+  return undefined;
 }
 
 function normalizePayload(data: unknown): APIErrorPayload | undefined {

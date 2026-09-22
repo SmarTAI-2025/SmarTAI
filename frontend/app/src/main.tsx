@@ -22,6 +22,11 @@ const NotFoundPage = React.lazy(() =>
   import("@/routes/NotFoundPage").then((module) => ({ default: module.NotFoundPage })),
 );
 const RegisterPage = React.lazy(() => import("@/routes/RegisterPage").then((module) => ({ default: module.RegisterPage })));
+const RegisterCheckEmailPage = React.lazy(() => import("@/routes/RegisterCheckEmailPage").then((module) => ({ default: module.RegisterCheckEmailPage })));
+const RegisterVerifyPage = React.lazy(() => import("@/routes/RegisterVerifyPage").then((module) => ({ default: module.RegisterVerifyPage })));
+const ForgotPasswordPage = React.lazy(() => import("@/routes/ForgotPasswordPage").then((module) => ({ default: module.ForgotPasswordPage })));
+const PasswordResetCheckEmailPage = React.lazy(() => import("@/routes/PasswordResetCheckEmailPage").then((module) => ({ default: module.PasswordResetCheckEmailPage })));
+const ResetPasswordPage = React.lazy(() => import("@/routes/ResetPasswordPage").then((module) => ({ default: module.ResetPasswordPage })));
 const SettingsPage = React.lazy(() =>
   import("@/routes/SettingsPage").then((module) => ({ default: module.SettingsPage })),
 );
@@ -103,6 +108,11 @@ function routeElement(element: React.ReactNode) {
 const router = createBrowserRouter([
   { path: "/login", element: routeElement(<LoginPage />) },
   { path: "/register", element: routeElement(<RegisterPage />) },
+  { path: "/register/check-email", element: routeElement(<RegisterCheckEmailPage />) },
+  { path: "/register/verify", element: routeElement(<RegisterVerifyPage />) },
+  { path: "/forgot-password", element: routeElement(<ForgotPasswordPage />) },
+  { path: "/forgot-password/check-email", element: routeElement(<PasswordResetCheckEmailPage />) },
+  { path: "/reset-password", element: routeElement(<ResetPasswordPage />) },
   { path: "/student", element: <StudentUnavailablePage /> },
   {
     path: "/",

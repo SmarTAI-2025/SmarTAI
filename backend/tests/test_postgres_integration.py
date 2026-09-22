@@ -14,6 +14,8 @@ differ between SQLite and PostgreSQL against a live database:
 from __future__ import annotations
 
 import os
+import threading
+import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 
@@ -75,6 +77,41 @@ def _seed_user(role: str) -> str:
     with session_scope() as session:
         session.add(UserRecord(id=uid, username=uid, role=role, password_hash="x", is_active=True))
     return uid
+
+
+def test_postgres_registration_waits_for_cross_worker_flow_lock(pg_database, monkeypatch):
+    from backend.services import email_registration
+    from backend.db.session import get_engine
+    from sqlalchemy import text
+
+    monkeypatch.setattr(email_registration.settings, "allowed_email_domains", "ustc.edu.cn")
+    source_ip = "203.0.113.199"
+    lock_id = email_registration._database_flow_lock_id(f"ip:{source_ip}")
+    sender_called = threading.Event()
+
+    class Sender:
+        def send(self, *_args):
+            sender_called.set()
+
+    with get_engine().connect() as connection:
+        transaction = connection.begin()
+        connection.execute(text("SELECT pg_advisory_xact_lock(:lock_id)"), {"lock_id": lock_id})
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            future = pool.submit(
+                email_registration.request_registration,
+                username="pg-cross-worker",
+                email="pg-cross-worker@ustc.edu.cn",
+                password="long-enough-password",
+                source_ip=source_ip,
+                sender=Sender(),
+            )
+            time.sleep(0.2)
+            assert not sender_called.is_set(), "request must block on the database advisory lock"
+            transaction.commit()
+            result = future.result(timeout=5)
+
+    assert result["status"] == "verification_required"
+    assert sender_called.is_set()
 
 
 def test_postgres_single_active_run(pg_database):
