@@ -1645,13 +1645,15 @@ Return exactly one JSON object:
 }]}
 
 Rules:
-- criterion: a concrete, usable scoring rubric whose numbered scoring steps align with the
-  corresponding numbered reference-answer steps. Express weights only as percentages adding up
-  to 100%; never use absolute points or restate the question's maximum score. Exception for
-  objective questions (选择题/多选题/填空题): never generate a percentage rubric — use a
-  result-based criterion such as "答案唯一: 答对满分, 答错 0 分" (for 多选题 keep the stem's
-  partial-credit rule when present).
-- reference_answer: a correct model answer or derivation suitable for teacher review. If an
+- criterion: a concrete, usable scoring rubric aligned with the reference answer. When
+  question_structure.subparts is non-empty, name every subpart label exactly once and assign
+  explicit absolute points whose sum equals that major question's max_score. The subparts remain
+  inside this one major-question rubric. For a question without subparts, use percentages adding
+  up to 100% and never restate the maximum score; if that no-subpart question is objective
+  (选择题/多选题/填空题), use a result-based criterion such as
+  "答案唯一: 答对满分, 答错 0 分" instead (for 多选题 keep the stem's partial-credit rule when present).
+- reference_answer: a correct model answer or derivation suitable for teacher review. Cover every
+  labelled subpart in question_structure, in source order, without creating separate q_ids. If an
   existing teacher answer contains only a final answer, preserve that conclusion and expand it
   into explicit, checkable solution steps rather than replacing it with an unrelated approach.
 - solution_code: only for programming questions; return reference implementation text, never run it.
@@ -1727,6 +1729,9 @@ async def generate_missing_question_materials(
             "type": str(problem.get("type") or "")[:120],
             "stem": str(problem.get("stem") or "")[:stem_budget],
             "max_score": float(problem.get("max_score") or 10),
+            "question_structure": _generation_question_structure(
+                problem.get("question_structure")
+            ),
             "existing_criterion": str(problem.get("criterion") or "")[:existing_budget],
             "existing_reference_answer": str(
                 problem.get("reference_answer") or ""
@@ -1763,3 +1768,26 @@ async def generate_missing_question_materials(
             f"Generated {len(parsed.candidates[:200])} teacher-review material candidates"
         )
     return parsed.candidates[:200]
+
+
+def _generation_question_structure(value: Any) -> Dict[str, Any] | None:
+    """Project only bounded subpart hints into a generation request."""
+
+    if not isinstance(value, dict):
+        return None
+    subparts = value.get("subparts")
+    if not isinstance(subparts, list):
+        return None
+    return {
+        "contract_version": value.get("contract_version"),
+        "scoring_unit": value.get("scoring_unit"),
+        "subparts": [
+            {
+                "label": str(part.get("label") or "")[:32],
+                "order": part.get("order"),
+                "type_hint": str(part.get("type_hint") or "")[:64] or None,
+            }
+            for part in subparts[:100]
+            if isinstance(part, dict)
+        ],
+    }
