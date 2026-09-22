@@ -470,10 +470,18 @@ def _parse_allocations(
         )
         segment = text[end:segment_end]
         point_matches = list(re.finditer(_POINT_TOKEN, segment, flags=re.IGNORECASE))
+        # "4 points, including 2 + 2" declares one total, not 8 points.
+        included_breakdown = bool(point_matches and re.match(
+            r"\s*[,，:：;；(（-]*\s*(?:其中|包括|包含|含|分解为|分配为|"
+            r"including\b|comprising\b|consisting\s+of\b|of\s+which\b)",
+            segment[point_matches[0].end():], flags=re.IGNORECASE,
+        ))
+        if included_breakdown:
+            point_matches = point_matches[:1]
         component_scores: list[Decimal] = []
         for match in point_matches:
             prefix = segment[max(0, match.start() - 20):match.start()].casefold()
-            if re.search(r"(?:总分|合计|total)\s*[:：=为-]?\s*$", prefix):
+            if not included_breakdown and re.search(r"(?:总分|合计|total)\s*[:：=为-]?\s*$", prefix):
                 continue
             # Deductions describe how to lose credit, never extra available
             # points. Keep this same bounded rule in the frontend parser.
