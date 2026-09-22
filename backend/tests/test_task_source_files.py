@@ -1118,34 +1118,27 @@ def test_current_library_file_is_revalidated_and_inline_source_is_not_persisted(
     _seed_task(owner_id, library_task_id)
     _seed_task(owner_id, inline_task_id)
     storage = LocalStorage(tmp_path / "storage")
-    document_id = "doc-current-library"
-    with session_scope() as session:
-        session.add(KnowledgeDocumentRecord(
-            id=document_id,
-            owner_id=owner_id,
-            stored_file_id=None,
-            title="Library problem",
-            original_name="library.pdf",
-            content_type="application/pdf",
-            size_bytes=len(PDF),
-            sha256=hashlib.sha256(PDF).hexdigest(),
-            status="ready",
-            parser_version="v1",
-            chunk_count=1,
-        ))
-    stored = file_repository.save_file(
+    from backend.db.knowledge_repository import update_document
+    from backend.services.knowledge_storage import persist_knowledge_upload
+
+    upload = persist_knowledge_upload(
         storage=storage,
         owner_id=owner_id,
-        kind="personal_knowledge",
         original_name="library.pdf",
         content=PDF,
         content_type="application/pdf",
-        knowledge_document_id=document_id,
+        title="Library problem",
     )
-    with session_scope() as session:
-        document = session.get(KnowledgeDocumentRecord, document_id)
-        assert document is not None
-        document.stored_file_id = stored.id
+    document_id = upload.document_id
+    document = update_document(
+        document_id,
+        owner_id,
+        status="ready",
+        chunk_count=1,
+    )
+    assert document is not None
+    stored = file_repository.get_file(file_id=upload.file_id, owner_id=owner_id)
+    assert stored is not None
     material, _ = course_library_repository.create_material(
         owner_id=owner_id,
         document_id=document_id,

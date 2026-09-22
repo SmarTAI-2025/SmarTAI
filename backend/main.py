@@ -262,6 +262,44 @@ def create_app() -> FastAPI:
         if worker is not None:
             await worker.shutdown()
 
+    # ─── Independent knowledge-storage cleanup worker ─────────────────
+    # Knowledge objects do not use assignment workflow operations. Their own
+    # durable ledger retains quota and an exact object key across every retry.
+    _knowledge_storage_worker: dict[str, object] = {
+        "worker": None,
+        "task": None,
+    }
+
+    @app.on_event("startup")
+    async def _start_knowledge_storage_worker():
+        import asyncio as _asyncio
+        from backend.services.knowledge_storage import KnowledgeStorageWorker
+
+        worker = KnowledgeStorageWorker()
+        _knowledge_storage_worker["worker"] = worker
+        _knowledge_storage_worker["task"] = _asyncio.create_task(
+            worker.run_forever()
+        )
+
+    @app.on_event("shutdown")
+    async def _stop_knowledge_storage_worker():
+        import asyncio as _asyncio
+
+        worker = _knowledge_storage_worker.get("worker")
+        task = _knowledge_storage_worker.get("task")
+        if worker is not None:
+            worker.stop()
+        if task is not None:
+            task.cancel()
+            try:
+                await task
+            except _asyncio.CancelledError:
+                pass
+            except Exception:
+                logger.exception(
+                    "knowledge storage worker exited during shutdown"
+                )
+
     return app
 
 

@@ -1,5 +1,9 @@
 import { getAPIErrorCode, getAPIErrorDetail, normalizeAPIError } from "@/api/client";
 import type { Locale } from "@/i18n/messages";
+import {
+  isKnowledgeStorageQuotaExceeded,
+  knowledgeStorageQuotaCopy,
+} from "@/lib/knowledgeStorage";
 import type { ExpertConfig, ResultArtifactStatus, Task, TaskLite, TaskStatus } from "@/types";
 
 const WORKFLOW_REVISION_CONFLICT_CODES = new Set([
@@ -843,6 +847,18 @@ export function classifyRecoverableError(
         "This file was not saved. The backend will keep cleaning originals from completed tasks automatically; no manual cleanup retry is needed. Upload again later or choose a smaller file.",
       ),
       actionLabel: tx(locale, "选择更小文件", "Choose a smaller file"),
+      actionKind: "reupload",
+      tone: "warning",
+      technicalDetails,
+    };
+  }
+
+  if (isKnowledgeStorageQuotaExceeded(apiError)) {
+    const copy = knowledgeStorageQuotaCopy(locale);
+    return {
+      title: copy.title,
+      description: copy.description,
+      actionLabel: tx(locale, "调整上传资料", "Review upload"),
       actionKind: "reupload",
       tone: "warning",
       technicalDetails,

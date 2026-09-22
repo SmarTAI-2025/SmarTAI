@@ -1248,6 +1248,7 @@ async def _save_source_to_library(
         content=body,
         content_type=descriptor.get("content_type"),
         title=Path(filename).stem,
+        retention_policy="retained",
     )
     if document.status != "ready":
         raise InvalidTransition("knowledge_document_not_ready")

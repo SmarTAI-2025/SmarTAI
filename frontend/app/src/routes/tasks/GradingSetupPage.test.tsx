@@ -2,6 +2,7 @@ import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { APIError } from "@/api/client";
 import { KnowledgeSection } from "./GradingSetupPage";
 
 const attachMaterial = vi.fn();
@@ -87,5 +88,37 @@ describe("GradingSetupPage task-material picker", () => {
         "已将“Calculus notes.pdf”加入本任务。",
       );
     });
+  });
+
+  it("shows friendly knowledge quota copy for a task-only upload", async () => {
+    attachMaterial.mockRejectedValue(new APIError(
+      413,
+      "knowledge_storage_quota_exceeded",
+      { error: { code: "knowledge_storage_quota_exceeded" } },
+    ));
+    const user = userEvent.setup();
+
+    const { container } = render(
+      <MemoryRouter>
+        <KnowledgeSection
+          locale="zh-CN"
+          taskId="task-1"
+          value="none"
+          onChange={vi.fn()}
+        />
+      </MemoryRouter>,
+    );
+
+    const input = container.querySelector<HTMLInputElement>('input[type="file"]');
+    expect(input).not.toBeNull();
+    await user.upload(
+      input as HTMLInputElement,
+      new File(["notes"], "notes.md", { type: "text/markdown" }),
+    );
+
+    await waitFor(() => {
+      expect(screen.getByRole("alert")).toHaveTextContent("知识库空间已满或剩余空间不足");
+    });
+    expect(screen.getByRole("alert")).not.toHaveTextContent("knowledge_storage_quota_exceeded");
   });
 });

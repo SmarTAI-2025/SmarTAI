@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import * as courseMaterialsApi from "@/api/courseMaterials";
 import type { CourseMaterialListParams } from "@/types";
-import { courseMaterialKeys, problemSourceKeys } from "./keys";
+import { courseMaterialKeys, personalKnowledgeKeys, problemSourceKeys } from "./keys";
 
 function paramsKey(params: CourseMaterialListParams) {
   return JSON.stringify({
@@ -17,6 +17,10 @@ function paramsKey(params: CourseMaterialListParams) {
 function invalidateLibrary(queryClient: ReturnType<typeof useQueryClient>) {
   queryClient.invalidateQueries({ queryKey: courseMaterialKeys.all });
   queryClient.invalidateQueries({ queryKey: problemSourceKeys.all });
+}
+
+function invalidateStorageUsage(queryClient: ReturnType<typeof useQueryClient>) {
+  queryClient.invalidateQueries({ queryKey: personalKnowledgeKeys.usage() });
 }
 
 export function useCourseMaterials(params: CourseMaterialListParams) {
@@ -39,6 +43,7 @@ export function useUploadCourseMaterial() {
   return useMutation({
     mutationFn: courseMaterialsApi.uploadCourseMaterial,
     onSuccess: () => invalidateLibrary(queryClient),
+    onSettled: () => invalidateStorageUsage(queryClient),
   });
 }
 
@@ -56,6 +61,7 @@ export function useDeleteCourseMaterial() {
     mutationFn: ({ materialId, confirmReferenced }: { materialId: string; confirmReferenced: boolean }) =>
       courseMaterialsApi.deleteCourseMaterial(materialId, confirmReferenced),
     onSuccess: () => invalidateLibrary(queryClient),
+    onSettled: () => invalidateStorageUsage(queryClient),
   });
 }
 

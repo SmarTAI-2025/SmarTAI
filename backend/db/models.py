@@ -1015,6 +1015,166 @@ class KnowledgeChunkRecord(Base):
     created_at: Mapped[float] = mapped_column(Float, nullable=False, default=time.time)
 
 
+class KnowledgeStorageRecord(Base):
+    """Durable quota/lifecycle ledger for one canonical knowledge object.
+
+    The row exists before object I/O and normal lifecycle code deletes it only
+    after exact-key deletion succeeds (or the backend proves the key absent).
+    An administrative User CASCADE is the exceptional account-removal path and
+    must first run storage cleanup; the separately pre-created, non-FK orphan
+    guard still survives that cascade and reconciles any late PUT.
+    """
+
+    __tablename__ = "knowledge_storage_records"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    owner_id: Mapped[str] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    document_id: Mapped[str | None] = mapped_column(
+        ForeignKey("knowledge_documents.id", ondelete="SET NULL"),
+        nullable=True, unique=True, index=True,
+    )
+    stored_file_id: Mapped[str | None] = mapped_column(
+        ForeignKey("stored_files.id", ondelete="SET NULL"),
+        nullable=True, unique=True, index=True,
+    )
+    origin_assignment_id: Mapped[str | None] = mapped_column(
+        ForeignKey("assignments.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    retention_policy: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="retained", server_default="retained", index=True
+    )
+    state: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="reserved", server_default="reserved", index=True
+    )
+    original_name: Mapped[str] = mapped_column(String(512), nullable=False)
+    content_type: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    size_bytes: Mapped[int] = mapped_column(Integer, nullable=False)
+    sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    storage_backend: Mapped[str] = mapped_column(String(64), nullable=False)
+    storage_key: Mapped[str] = mapped_column(String(1024), nullable=False, unique=True)
+    cleanup_reason: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    error_code: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    cleanup_operation_id: Mapped[str | None] = mapped_column(
+        String(64), nullable=True, unique=True, index=True
+    )
+    reservation_expires_at: Mapped[float | None] = mapped_column(Float, nullable=True, index=True)
+    unattached_expires_at: Mapped[float | None] = mapped_column(Float, nullable=True, index=True)
+    available_at: Mapped[float | None] = mapped_column(Float, nullable=True)
+    cleanup_requested_at: Mapped[float | None] = mapped_column(Float, nullable=True)
+    cleanup_last_attempt_at: Mapped[float | None] = mapped_column(Float, nullable=True)
+    cleanup_retry_at: Mapped[float | None] = mapped_column(Float, nullable=True, index=True)
+    cleanup_attempt_count: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default=text("0")
+    )
+    cleanup_claim_token: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    cleanup_claimed_at: Mapped[float | None] = mapped_column(Float, nullable=True)
+    writer_claim_token: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    writer_claimed_at: Mapped[float | None] = mapped_column(Float, nullable=True)
+    writer_heartbeat_at: Mapped[float | None] = mapped_column(Float, nullable=True)
+    writer_lease_expires_at: Mapped[float | None] = mapped_column(
+        Float, nullable=True, index=True
+    )
+    created_at: Mapped[float] = mapped_column(Float, nullable=False, default=time.time)
+    updated_at: Mapped[float] = mapped_column(
+        Float, nullable=False, default=time.time, onupdate=time.time
+    )
+
+    __table_args__ = (
+        UniqueConstraint(
+            "owner_id", "sha256", name="uq_knowledge_storage_owner_sha256"
+        ),
+        CheckConstraint(
+            "retention_policy IN ('retained', 'task_only')",
+            name="ck_knowledge_storage_retention_policy",
+        ),
+        CheckConstraint(
+            "state IN ('reserved', 'available', 'cleanup_pending')",
+            name="ck_knowledge_storage_state",
+        ),
+        CheckConstraint(
+            "size_bytes >= 0 AND cleanup_attempt_count >= 0",
+            name="ck_knowledge_storage_counters_nonnegative",
+        ),
+        CheckConstraint(
+            "cleanup_reason IS NULL OR cleanup_reason IN "
+            "('explicit_delete', 'task_unreferenced', 'task_deleted', "
+            "'task_attach_failed', 'upload_abandoned', 'upload_write_failed', "
+            "'upload_integrity_failed', 'storage_delete_failed')",
+            name="ck_knowledge_storage_cleanup_reason",
+        ),
+        CheckConstraint(
+            "(cleanup_claim_token IS NULL AND cleanup_claimed_at IS NULL) OR "
+            "(cleanup_claim_token IS NOT NULL AND cleanup_claimed_at IS NOT NULL)",
+            name="ck_knowledge_storage_claim_consistency",
+        ),
+        CheckConstraint(
+            "(writer_claim_token IS NULL AND writer_claimed_at IS NULL AND "
+            "writer_heartbeat_at IS NULL AND writer_lease_expires_at IS NULL) OR "
+            "(writer_claim_token IS NOT NULL AND writer_claimed_at IS NOT NULL AND "
+            "writer_heartbeat_at IS NOT NULL AND writer_lease_expires_at IS NOT NULL)",
+            name="ck_knowledge_storage_writer_claim_consistency",
+        ),
+        CheckConstraint(
+            "(state = 'cleanup_pending' AND cleanup_operation_id IS NOT NULL) OR "
+            "(state <> 'cleanup_pending' AND cleanup_operation_id IS NULL)",
+            name="ck_knowledge_storage_operation_consistency",
+        ),
+        Index(
+            "ix_knowledge_storage_owner_state",
+            "owner_id", "state",
+        ),
+        Index(
+            "ix_knowledge_storage_cleanup_scan",
+            "state", "cleanup_retry_at", "cleanup_claimed_at",
+        ),
+    )
+
+
+class KnowledgeStorageOrphanGuardRecord(Base):
+    """Permanent exact-key reconciliation for an expired upload writer.
+
+    ``owner_id`` intentionally has no user FK: deleting an account must not
+    erase the only durable guard against a late object-store PUT. Keys are
+    opaque and contain no original filename.
+    """
+
+    __tablename__ = "knowledge_storage_orphan_guards"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    owner_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    storage_backend: Mapped[str] = mapped_column(String(64), nullable=False)
+    storage_key: Mapped[str] = mapped_column(String(1024), nullable=False, unique=True)
+    writer_claim_token: Mapped[str] = mapped_column(String(64), nullable=False)
+    next_check_at: Mapped[float] = mapped_column(Float, nullable=False, index=True)
+    last_attempt_at: Mapped[float | None] = mapped_column(Float, nullable=True)
+    attempt_count: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default=text("0")
+    )
+    error_code: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    claim_token: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    claimed_at: Mapped[float | None] = mapped_column(Float, nullable=True)
+    created_at: Mapped[float] = mapped_column(Float, nullable=False, default=time.time)
+    updated_at: Mapped[float] = mapped_column(Float, nullable=False, default=time.time)
+
+    __table_args__ = (
+        CheckConstraint(
+            "attempt_count >= 0",
+            name="ck_knowledge_orphan_guards_attempt_nonnegative",
+        ),
+        CheckConstraint(
+            "(claim_token IS NULL AND claimed_at IS NULL) OR "
+            "(claim_token IS NOT NULL AND claimed_at IS NOT NULL)",
+            name="ck_knowledge_orphan_guards_claim_consistency",
+        ),
+        Index(
+            "ix_knowledge_orphan_guards_scan",
+            "next_check_at", "claimed_at",
+        ),
+    )
+
+
 # ─── Course library metadata (document/file content stays canonical) ─────────────
 
 

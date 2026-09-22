@@ -207,6 +207,30 @@ def create_run_bundle(
     """
     if (setup is None) != (setup_fingerprint is None):
         raise ValidationError("grading_setup_bundle_incomplete")
+    if input_manifest is not None and not isinstance(input_manifest, dict):
+        raise ValidationError(
+            "The grading input manifest is invalid.",
+            code="grading_input_manifest_invalid",
+        )
+    raw_knowledge_ids = (input_manifest or {}).get(
+        "knowledge_document_ids", []
+    )
+    if not isinstance(raw_knowledge_ids, list) or any(
+        not isinstance(document_id, str) for document_id in raw_knowledge_ids
+    ):
+        raise ValidationError(
+            "The grading knowledge manifest is invalid.",
+            code="knowledge_storage_manifest_invalid",
+        )
+    if raw_knowledge_ids and workflow_expected_revision is None:
+        # Knowledge-frozen grading is a task-facing transition and must bind the
+        # same workflow revision that orders source admission. Do not silently
+        # create an unfenced normalized bundle whose manifest cannot be proven
+        # current against the presentation workflow.
+        raise ValidationError(
+            "A workflow revision is required to freeze knowledge inputs.",
+            code="knowledge_storage_workflow_fence_required",
+        )
 
     # Imported lazily to keep the normalized repository usable independently
     # while still sharing this transaction with façade-only presentation data.
@@ -228,6 +252,20 @@ def create_run_bundle(
                     AssignmentWorkflowRecord.owner_id == teacher_id,
                 )
                 .with_for_update()
+            )
+        if raw_knowledge_ids:
+            from backend.db.knowledge_storage_repository import (
+                fence_grading_knowledge_in_session,
+            )
+
+            # Source admission takes Workflow -> User -> Assignment.
+            # The workflow row above is therefore the first lock. Cleanup does
+            # not wait on W, so holding W -> User -> sorted knowledge ledger
+            # through setup commit still closes cleanup/run TOCTOU safely.
+            fence_grading_knowledge_in_session(
+                session,
+                owner_id=teacher_id,
+                document_ids=raw_knowledge_ids,
             )
         assignment = session.scalar(
             select(AssignmentRecord).where(

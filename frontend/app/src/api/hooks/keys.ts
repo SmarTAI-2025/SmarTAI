@@ -88,6 +88,7 @@ export const healthKeys = {
 export const personalKnowledgeKeys = {
   all: ["personal-knowledge"] as const,
   list: () => ["personal-knowledge", "list"] as const,
+  usage: () => ["personal-knowledge", "storage", "usage"] as const,
 };
 
 export const educationCourseKeys = {

@@ -119,3 +119,27 @@ class SourceStorageIntegrityFailed(DomainError):
 
     code = "source_storage_integrity_failed"
     status_code = 503
+
+
+class KnowledgeStorageQuotaExceeded(DomainError):
+    """The owner's independent knowledge-library allocation is full."""
+
+    code = "knowledge_storage_quota_exceeded"
+    status_code = 413
+
+
+class KnowledgeStorageReservationConflict(DomainError):
+    """A knowledge upload/lifecycle transition cannot be serialized safely."""
+
+    code = "knowledge_storage_reservation_conflict"
+    status_code = 409
+
+
+class KnowledgeStorageWriteFailed(DomainError):
+    code = "knowledge_storage_write_failed"
+    status_code = 503
+
+
+class KnowledgeStorageIntegrityFailed(DomainError):
+    code = "knowledge_storage_integrity_failed"
+    status_code = 503

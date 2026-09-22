@@ -736,7 +736,7 @@ def test_fenced_publication_locks_producer_before_workflow(
 
     lock_order: list[str] = []
     real_validate = source_storage_repository._validate_publication_fence
-    real_lock_epoch = source_storage_repository._lock_source_epoch
+    real_lock_epoch = source_storage_repository._lock_source_workflow_epoch
 
     def record_producer_lock(*args, **kwargs):
         lock_order.append("producer_operation")
@@ -753,7 +753,7 @@ def test_fenced_publication_locks_producer_before_workflow(
     )
     monkeypatch.setattr(
         source_storage_repository,
-        "_lock_source_epoch",
+        "_lock_source_workflow_epoch",
         record_workflow_lock,
     )
 

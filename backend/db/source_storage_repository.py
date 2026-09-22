@@ -146,7 +146,7 @@ def _lock_quota_owner(session: Session, owner_id: str) -> None:
         raise NotFound("source_quota_owner")
 
 
-def _lock_source_epoch(
+def _lock_source_workflow_epoch(
     session: Session,
     *,
     assignment_id: str,
@@ -163,6 +163,24 @@ def _lock_source_epoch(
         )
         .with_for_update()
     )
+    if workflow is not None:
+        if not allow_finalized and workflow.presentation_status == "finalized":
+            raise InvalidTransition(
+                "The task is already finalized and no longer accepts originals.",
+                code="source_storage_task_finalized",
+            )
+        return int(workflow.source_lifecycle_epoch)
+    # Normalized legacy routes can persist originals without a presentation
+    # workflow. Their epoch stays at zero.
+    return 0
+
+
+def _lock_source_assignment(
+    session: Session,
+    *,
+    assignment_id: str,
+    owner_id: str,
+) -> None:
     assignment = session.scalar(
         select(AssignmentRecord)
         .where(
@@ -174,17 +192,35 @@ def _lock_source_epoch(
     )
     if assignment is None:
         raise NotFound("assignment")
-    # Normalized legacy routes can persist originals without a presentation
-    # workflow. Their epoch stays at zero; task-centric finalization always has
-    # a workflow and therefore receives the upload/finalization fence.
-    if workflow is None:
-        return 0
-    if not allow_finalized and workflow.presentation_status == "finalized":
-        raise InvalidTransition(
-            "The task is already finalized and no longer accepts originals.",
-            code="source_storage_task_finalized",
-        )
-    return int(workflow.source_lifecycle_epoch)
+
+
+def _lock_source_epoch(
+    session: Session,
+    *,
+    assignment_id: str,
+    owner_id: str,
+    allow_finalized: bool = False,
+) -> int:
+    """Canonical admission order for paths without an existing collector.
+
+    ``Workflow -> User -> Assignment`` matches knowledge task mutations
+    (``User -> Assignment``) and grading start (``Workflow -> User -> ... ->
+    Assignment``), eliminating the former Assignment <-> User inversion.
+    Publication uses the split helpers so its existing producer/collector rows
+    remain ahead of User: ``Producer -> Workflow -> Collector -> Reservation ->
+    User -> Assignment``.
+    """
+    epoch = _lock_source_workflow_epoch(
+        session,
+        assignment_id=assignment_id,
+        owner_id=owner_id,
+        allow_finalized=allow_finalized,
+    )
+    _lock_quota_owner(session, owner_id)
+    _lock_source_assignment(
+        session, assignment_id=assignment_id, owner_id=owner_id,
+    )
+    return epoch
 
 
 def _task_revision_ids(assignment_id: str):
@@ -674,7 +710,6 @@ def renew_replacement_claim_for_staged_file(
             assignment_id=assignment_id,
             owner_id=owner_id,
         )
-        _lock_quota_owner(session, owner_id)
         staged = session.scalar(
             select(StoredFileRecord)
             .where(
@@ -794,10 +829,9 @@ def reserve_source_upload(
                 assignment_id=resolved_assignment_id,
                 owner_id=quota_owner_id,
             )
-            # Quota-changing source transitions use one PostgreSQL row-lock
-            # order: User -> StoredFile.  Claim and fully revalidate the old
-            # generation under those locks before taking the quota snapshot.
-            _lock_quota_owner(session, quota_owner_id)
+            # `_lock_source_epoch` already holds Workflow -> User -> Assignment.
+            # Claim and fully revalidate the old generation under that quota
+            # gate before taking the snapshot.
             claim_ttl = max(
                 ttl, int(settings.source_replacement_claim_ttl_seconds), 1
             )
@@ -1152,7 +1186,7 @@ def publish_source_reservation(
             operation_attempt=fence_operation_attempt,
             lease_token=fence_lease_token,
         )
-        current_epoch = _lock_source_epoch(
+        current_epoch = _lock_source_workflow_epoch(
             session,
             assignment_id=hint.assignment_id,
             owner_id=hint.quota_owner_id,
@@ -1201,6 +1235,16 @@ def publish_source_reservation(
             raise SourceStorageReservationConflict(
                 "A task original cannot become a knowledge document."
             )
+        # Publication preserves the collector-first order used by release and
+        # cleanup: Producer -> Workflow -> Collector -> Reservation -> User ->
+        # Assignment. The Assignment tombstone is revalidated only after every
+        # preceding lock is held.
+        _lock_quota_owner(session, reservation.quota_owner_id)
+        _lock_source_assignment(
+            session,
+            assignment_id=reservation.assignment_id,
+            owner_id=reservation.quota_owner_id,
+        )
         if current_epoch != reservation.source_lifecycle_epoch:
             now = time.time()
             reservation.state = "cleanup_pending"
@@ -1218,7 +1262,6 @@ def publish_source_reservation(
             collector.updated_at = now
             stale_generation = True
         else:
-            _lock_quota_owner(session, reservation.quota_owner_id)
             published = StoredFileRecord(
                 id=reservation.id,
                 owner_id=reservation.file_owner_id,
@@ -1297,7 +1340,7 @@ def publish_task_artifact_reservation(
                 expected_attempt=int(fence_operation_attempt),
                 expected_lease_token=fence_lease_token,
             )
-        current_epoch = _lock_source_epoch(
+        current_epoch = _lock_source_workflow_epoch(
             session,
             assignment_id=assignment_id,
             owner_id=hint.quota_owner_id,
@@ -1330,6 +1373,12 @@ def publish_task_artifact_reservation(
             raise SourceStorageReservationConflict(
                 "The task artifact reservation is already being reconciled."
             )
+        _lock_quota_owner(session, reservation.quota_owner_id)
+        _lock_source_assignment(
+            session,
+            assignment_id=reservation.assignment_id,
+            owner_id=reservation.quota_owner_id,
+        )
         if current_epoch != reservation.source_lifecycle_epoch:
             now = time.time()
             reservation.state = "cleanup_pending"

@@ -306,6 +306,53 @@ class Settings(BaseSettings):
         os.getenv("SMARTAI_SOURCE_CLEANUP_RETRY_MAX_SECONDS", "3600")
     )
 
+    # ─── Personal/course knowledge storage ──────────────────────────────
+    # This is a separate per-user allocation.  It never includes task problem
+    # or submission originals managed by ``unfinished_source_quota_bytes``.
+    knowledge_storage_quota_bytes: int = int(
+        os.getenv("SMARTAI_KNOWLEDGE_STORAGE_QUOTA_BYTES", "536870912")
+    )
+    # Reserved bytes remain charged while an upload is in flight. A crashed
+    # writer is converted to cleanup_pending after this deadline.
+    knowledge_storage_reservation_ttl_seconds: int = int(
+        os.getenv("SMARTAI_KNOWLEDGE_STORAGE_RESERVATION_TTL_SECONDS", "3600")
+    )
+    # A writer owns a renewable claim throughout save/verify/publish. Cleanup
+    # cannot reap a reservation until both this lease and its reservation TTL
+    # expire. The heartbeat runs independently of blocking storage I/O.
+    knowledge_storage_writer_lease_seconds: int = int(
+        os.getenv("SMARTAI_KNOWLEDGE_STORAGE_WRITER_LEASE_SECONDS", "300")
+    )
+    knowledge_storage_writer_heartbeat_seconds: float = float(
+        os.getenv("SMARTAI_KNOWLEDGE_STORAGE_WRITER_HEARTBEAT_SECONDS", "30")
+    )
+    # task_only uploads have a bounded attach window. If the process dies after
+    # publication but before assignment attachment, the worker reclaims them.
+    knowledge_storage_unattached_ttl_seconds: int = int(
+        os.getenv("SMARTAI_KNOWLEDGE_STORAGE_UNATTACHED_TTL_SECONDS", "3600")
+    )
+    knowledge_cleanup_retry_base_seconds: int = int(
+        os.getenv("SMARTAI_KNOWLEDGE_CLEANUP_RETRY_BASE_SECONDS", "30")
+    )
+    knowledge_cleanup_retry_max_seconds: int = int(
+        os.getenv("SMARTAI_KNOWLEDGE_CLEANUP_RETRY_MAX_SECONDS", "3600")
+    )
+    knowledge_cleanup_claim_seconds: int = int(
+        os.getenv("SMARTAI_KNOWLEDGE_CLEANUP_CLAIM_SECONDS", "300")
+    )
+    knowledge_cleanup_poll_seconds: int = int(
+        os.getenv("SMARTAI_KNOWLEDGE_CLEANUP_POLL_SECONDS", "5")
+    )
+    knowledge_cleanup_batch_size: int = int(
+        os.getenv("SMARTAI_KNOWLEDGE_CLEANUP_BATCH_SIZE", "10")
+    )
+    # Expired-writer guards contain only opaque keys and are deliberately
+    # rechecked forever until that writer returns and acknowledges exact-key
+    # deletion. This closes crash-after-late-PUT orphan races.
+    knowledge_orphan_guard_recheck_seconds: int = int(
+        os.getenv("SMARTAI_KNOWLEDGE_ORPHAN_GUARD_RECHECK_SECONDS", "300")
+    )
+
     # Stable master key for encrypting user BYOK provider credentials. It must
     # come from the process environment/secret manager and never from source
     # control or the database.

@@ -384,6 +384,23 @@ def prepare_task_deletion_pass(
             next_reservation_retry_at=None,
             pending_files=0,
         )
+
+    # The task is already tombstoned, so no new task-only upload can publish.
+    # Detach knowledge in its own User-first transaction before taking the
+    # source-deletion O/W/Assignment locks below.  Retained documents survive;
+    # each task-only document is enqueued only after its final reference.
+    from backend.db.knowledge_storage_repository import (
+        detach_assignment_documents_in_session,
+    )
+    from backend.domain.knowledge_storage import KNOWLEDGE_CLEANUP_TASK_DELETED
+
+    with session_scope() as knowledge_session:
+        detach_assignment_documents_in_session(
+            knowledge_session,
+            assignment_id=assignment_id,
+            owner_id=owner_id,
+            reason=KNOWLEDGE_CLEANUP_TASK_DELETED,
+        )
     with session_scope() as session:
         _lock_live_delete_operation(
             session,

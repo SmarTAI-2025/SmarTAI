@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import time
 import uuid
 
@@ -9,7 +10,12 @@ from sqlalchemy import select
 
 from backend.api import materials, tags
 from backend.auth import require_teacher
-from backend.db import course_library_repository, grading_repository, tag_repository
+from backend.db import (
+    course_library_repository,
+    grading_repository,
+    tag_repository,
+    workflow_repository,
+)
 from backend.db.knowledge_repository import set_task_documents
 from backend.db.models import (
     AssignmentKnowledgeDocumentRecord,
@@ -174,6 +180,9 @@ def test_course_library_uses_canonical_file_storage_and_guards_references():
     assert referenced["task_reference_count"] == 1
     assert referenced["last_used_at"] is not None
 
+    workflow = workflow_repository.ensure_workflow(
+        assignment_id=assignment_id, owner_id=owner.id
+    )
     run = grading_repository.create_run_bundle(
         assignment_id,
         teacher_id=owner.id,
@@ -181,6 +190,7 @@ def test_course_library_uses_canonical_file_storage_and_guards_references():
         setup={},
         setup_fingerprint="course-library-frozen-kb",
         input_manifest={"knowledge_document_ids": [persisted.document_id]},
+        workflow_expected_revision=workflow.workflow_revision,
     )
     frozen_guard = owner_client.delete(
         f"/course-materials/{persisted.material_id}",
@@ -202,17 +212,33 @@ def test_course_library_uses_canonical_file_storage_and_guards_references():
         f"/course-materials/{persisted.material_id}",
         params={"confirm_referenced": "true"},
     )
-    assert deleted.status_code == 200
+    assert deleted.status_code == 202
+    assert deleted.json()["status"] == "deletion_pending"
+    assert deleted.json()["cleanup_operation_id"]
     assert deleted.json()["detached_task_references"] == 1
+    # The API only records a durable deletion intent.  The worker owns the
+    # physical object/row cleanup and may need to retry a backend failure.
+    assert get_storage().exists(persisted.storage_key)
+    assert owner_client.get("/course-materials/").json()["items"] == []
+    with session_scope() as session:
+        assert session.get(CourseMaterialRecord, persisted.material_id) is not None
+        assert session.get(KnowledgeDocumentRecord, persisted.document_id) is not None
+        assert session.get(StoredFileRecord, persisted.stored_file_id) is not None
+        assert session.scalar(select(AssignmentKnowledgeDocumentRecord).where(
+            AssignmentKnowledgeDocumentRecord.assignment_id == assignment_id,
+            AssignmentKnowledgeDocumentRecord.document_id == persisted.document_id,
+        )) is None
+
+    from backend.services.knowledge_storage import KnowledgeStorageWorker
+
+    assert asyncio.run(
+        KnowledgeStorageWorker(storage=get_storage()).run_once(max_claims=1)
+    ) == 1
     assert not get_storage().exists(persisted.storage_key)
     with session_scope() as session:
         assert session.get(CourseMaterialRecord, persisted.material_id) is None
         assert session.get(KnowledgeDocumentRecord, persisted.document_id) is None
         assert session.get(StoredFileRecord, persisted.stored_file_id) is None
-        assert session.scalar(select(AssignmentKnowledgeDocumentRecord).where(
-            AssignmentKnowledgeDocumentRecord.assignment_id == assignment_id,
-            AssignmentKnowledgeDocumentRecord.document_id == persisted.document_id,
-        )) is None
 
 
 def test_normalized_tags_are_owner_scoped_unique_and_detach_on_delete():
