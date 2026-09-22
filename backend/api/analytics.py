@@ -24,6 +24,7 @@ from sqlalchemy import and_, select
 
 from backend.agents import analytics_agent, grounded_ask
 from backend.analytics.ask_workspace import AskDataError, load_snapshot
+from backend.services.task_history_progress import enrich_history_progress
 from backend.domain.errors import DomainError, NotFound
 from backend.api.errors import domain_error_response
 from backend.auth import require_teacher
@@ -708,9 +709,12 @@ async def _run_grounded_ask(task_id: str | None, req: AskRequest, current: User,
         if provider is None:
             raise HTTPException(503, detail={"code": "analytics_provider_unavailable"})
         _check_ask_limit(current.id)
-        return await grounded_ask.ask(task_id=task_id, owner_id=current.id, question=req.question,
+        result = await grounded_ask.ask(task_id=task_id, owner_id=current.id, question=req.question,
             surface=req.surface, provider=provider, context_student_id=req.context_student_id,
             history=req.history, snapshot=snapshot)
+        if req.surface == "history" and result.get("tasks") is not None:
+            result["tasks"] = await enrich_history_progress(result["tasks"], owner_id=current.id)
+        return result
     except DomainError as exc:
         if isinstance(exc, NotFound):
             raise _not_found() from exc

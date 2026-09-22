@@ -9,6 +9,7 @@ from __future__ import annotations
 from backend.agents.history_query_agent import interpret_history_query
 from backend.progress.tracker import ProgressReporter
 
+import asyncio
 import csv
 import hashlib
 import io
@@ -52,6 +53,7 @@ from backend.services.stage_provider_routing import (
 )
 from backend.storage import get_storage
 from backend.tools.file_processing import SUBMISSION_UPLOAD_MAX_BYTES
+from backend.services.task_history_progress import enrich_history_progress, progress_fields
 
 
 router = APIRouter(prefix="/tasks", tags=["tasks"])
@@ -163,7 +165,7 @@ def create_task(
 
 
 @router.get("/")
-def list_tasks(
+async def list_tasks(
     page: int | None = Query(default=None, ge=1),
     page_size: int | None = Query(default=None, ge=1, le=100),
     q: str | None = Query(default=None, max_length=200),
@@ -177,7 +179,7 @@ def list_tasks(
     current: User = Depends(require_teacher),
 ):
     try:
-        task_map = task_facade.list_tasks(owner_id=current.id)
+        task_map = await asyncio.to_thread(task_facade.list_tasks, owner_id=current.id)
     except DomainError as exc:
         return domain_error_response(exc)
     # The dashboard contract is a mapping. Supplying page/page_size selects the
@@ -204,18 +206,23 @@ def list_tasks(
         items = [item for item in items if item.get("status") not in {"finalized"}]
     if needs_attention is not None:
         items = [item for item in items if bool(item.get("needs_attention")) == needs_attention]
-    items = _sort_tasks(items, sort)
+    items = _sort_tasks(await enrich_history_progress(items, owner_id=current.id), sort)
     current_page = page or 1
     size = page_size or 25
     start = (current_page - 1) * size
     return {
         "items": items[start:start + size], "total": len(items),
         "page": current_page, "page_size": size,
-        "available_facets": _history_facets(list(task_map.values()), current.id),
+        "available_facets": await asyncio.to_thread(_history_facets, list(task_map.values()), current.id),
     }
 
 
 def _sort_tasks(items: list[dict], sort: str) -> list[dict]:
+    if sort in {"progress_asc", "progress_desc", "eta_asc", "eta_desc"}:
+        field = "progress_percent" if sort.startswith("progress") else "eta_seconds"
+        known = [item for item in items if item.get(field) is not None]
+        unknown = [item for item in items if item.get(field) is None]
+        return sorted(known, key=lambda item: item[field], reverse=sort.endswith("_desc")) + unknown
     reverse = sort in {"updated_desc", "created_desc", "name_desc", "attention_first", "stage_desc"}
     if sort.startswith("created"):
         key = lambda item: item.get("created_at") or 0
@@ -511,7 +518,8 @@ def start_grading(
 @router.get("/{task_id}/state")
 async def task_state(task_id: str, current: User = Depends(require_teacher)):
     try:
-        return await task_facade.async_task_state(task_id=task_id, owner_id=current.id)
+        state = await task_facade.async_task_state(task_id=task_id, owner_id=current.id)
+        return {**state, **progress_fields(state.get("status"), state.get("progress"), now=time.time())}
     except DomainError as exc:
         return domain_error_response(exc)
 
