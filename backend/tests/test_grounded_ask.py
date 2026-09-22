@@ -127,6 +127,22 @@ def test_teacher_score_overrides_ai_and_failed_score_stays_unknown():
         db.close()
 
 
+def test_answer_review_state_keeps_confirmed_blanks_distinct_from_pending_and_missing():
+    task, result = payload()
+    answers = task["student_data"]["DEMO-001"]["stu_ans"]
+    answers[0].update(content="", review_status="confirmed")
+    answers[1].update(content=" \n", review_status="confirmed", flag=["empty_answer"])
+    answers[2].update(content="", review_status="pending")
+    answers.pop()  # Q4 has no answer record at all.
+    db = QueryWorkspace(Snapshot.from_payloads([(task, result)], "task"))
+    try:
+        assert db.execute(
+            "SELECT q_id,state FROM answers WHERE student_id='DEMO-001' ORDER BY q_id"
+        )["rows"] == [["Q1", "reviewed"], ["Q2", "reviewed"], ["Q3", "empty"], ["Q4", "missing"]]
+    finally:
+        db.close()
+
+
 @pytest.mark.parametrize("sql,expected", [
     ("SELECT COUNT(*) AS n FROM grades WHERE is_incorrect=1", [[7]]),
     ("SELECT student_id FROM students WHERE total_score>21.5 AND total_score<=24 ORDER BY total_score DESC", [["DEMO-001"], ["DEMO-004"]]),

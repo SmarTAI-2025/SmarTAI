@@ -7,6 +7,7 @@ recreate the removed TaskStore or JobStore.
 """
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import logging
@@ -3698,7 +3699,7 @@ def task_state(*, task_id: str, owner_id: str) -> dict:
 
 
 async def async_task_state(*, task_id: str, owner_id: str) -> dict:
-    payload = task_state(task_id=task_id, owner_id=owner_id)
+    payload = await asyncio.to_thread(task_state, task_id=task_id, owner_id=owner_id)
     active_job_id = payload.get("active_job_id")
     if active_job_id and (reporter := get_reporter(active_job_id)) is not None:
         payload["progress"] = (await reporter.snapshot()).model_dump(mode="json")
@@ -3719,7 +3720,7 @@ async def async_task_state(*, task_id: str, owner_id: str) -> dict:
         grading_job_id
         and (payload.get("status") == "grading" or grading_owns_failure)
     ):
-        grading_progress = _grading_progress(grading_job_id, owner_id)
+        grading_progress = await asyncio.to_thread(_grading_progress, grading_job_id, owner_id)
         # The durable projection cannot reconstruct the volatile in-flight
         # units; borrow them from the live reporter when it still exists.
         # Without this merge the progress page's "running" count is always 0
