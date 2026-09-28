@@ -1,4 +1,4 @@
-# Recognition Foundation (Work Items A-C2b)
+# Recognition Foundation (Work Items A-C2c)
 
 This package is not wired to an upload endpoint yet. It defines the first
 version of the evidence and planning contracts plus callable existing-engine
@@ -133,8 +133,7 @@ question; cross-page duplicate identities are not resolved by taking the first.
 Unlocated means absent from the supplied evidence only, not from a whole book.
 The locator never inherits a section or continuation from mere page adjacency.
 
-C2c still must supply bounded scan localization and unified Agent execution; D
-still must supply fusion, actual bounded extra calls and durable caching.
+D still must supply fusion, actual bounded extra calls and durable caching.
 No foundational result establishes end-user OCR quality or full 05/06 completion.
 
 ## C2a Media Boundary
@@ -193,3 +192,61 @@ Per-batch `usage` covers only that reader's units. `budget.snapshot()` covers th
 entire workflow, including preceding localization and pending submissions; these
 two views must not be added together. No new storage, endpoint, engine, hidden
 companion, fallback, retry or real-model accuracy claim is introduced in C2b.
+
+## C2c Bounded Localization And Agent
+
+`agents.recognition_agent.RecognitionAgent.read()` is the unified PDF/image raw
+evidence workflow. It authorizes the caller/source identity and byte digest,
+freezes one injected engine and policy, then shares one C2b budget across local
+inspection, optional scan localization and reading. It does not choose a vendor,
+fetch credentials, create business records, merge evidence or perform repairs.
+
+Explicit source-page hints come first. Native full identifiers and compound
+section/local labels retain exact text proofs. Section-prefix index candidates
+remain pending until inspected, including candidates beyond the detail budget;
+filtering them away would falsely make an early exercise unique. Nearby pages
+may be inspected as context but do not inherit sections merely by adjacency.
+
+An unresolved target can use the selected engine's declared `target_location`
+capability. OCR-only engines without it never acquire an LLM companion. The LLM
+adapter reuses the same provider, request bounds, metadata, errors and identity
+guards for a dedicated locator prompt. It defaults to one contact sheet per call
+for compatibility; an explicitly declared two-image capability permits two.
+Each sheet contains at most eight labeled source pages, never printed book page
+numbers. The local index window is at most 500 pages, scan calls at most 12, and
+target detail pages at most `min(policy.max_detail_pages, 2 * targets + 4)`.
+These limits do not implement whole-book knowledge ingestion; H remains separate.
+
+`scan_locator.py` accepts strict bounded JSON (optionally one complete JSON
+fence), complete exact target identities and only actually submitted source
+pages. Duplicate keys, nonfinite values, extra fields, wrong pages, truncated,
+empty or refused responses cannot become successful locations. No paid JSON
+repair or resubmission occurs. A visible uncertain cue goes to full-resolution
+reading instead of additional low-resolution search, while its target remains
+unresolved. All scan suggestions remain unverified and scoped to inspected pages;
+they neither prove question completeness nor absence from the rest of the book.
+
+Malformed/failed localization or a scan tool error halts downstream dispatch,
+retaining earlier native detail. Competing native identities cannot be erased by
+a low-resolution guess. Overbroad page selection is explicit, never silently
+truncated to the first candidates. Workflow artifacts retain sheet geometry and
+payload digests, raw responses, native proofs, all call outcomes and global budget
+snapshots, but not transient image payloads. Removing paid-call evidence invalidates
+the artifact. A scan/read workflow always has `recognition_complete=False`.
+
+Offline tests use generated PDFs/images and fake model outcomes to verify these
+boundaries. The actual AA seven-target file can also exercise native orchestration
+with zero model calls. Neither test establishes real-model OCR quality; D-J and
+authorized real-model ablations remain necessary before any acceptance claim.
+
+Local AA orchestration smoke (2026-09-28): the historical 15-page,
+1,527,595-byte fixture with SHA-256
+`6a8e6d6feab72f3eddcc16cea36f2c8536c1264837ac39bb0603389ccf06e620`
+requested `1.1.5`, `1.1.7`, `1.1.20`, `1.1.29`, `1.1.31`, `1.2.3`,
+`1.2.16`. With no engine, native inspection selected source pages 1 and 4;
+the four targets `1.1.20`, `1.1.29`, `1.1.31`, `1.2.16` remained unlocated.
+The result retained `target_location_needs_hint`,
+`visual_capability_unavailable` and `recognition_complete=False`. The single
+local run took 0.564 seconds and made zero model calls. This is a local
+orchestration check, not OCR accuracy, latency-distribution or user acceptance
+evidence. The private fixture is not included in this repository change.

@@ -60,7 +60,9 @@ class NativeLocatorRequestV1(EvidenceModel):
                 if any(getattr(page, field) != getattr(summary, field) for field in
                        ("width_points", "height_points", "rotation", "observation")):
                     raise ValueError("index and detail snapshots disagree")
-        if any(set(page.target_matches) - set(self.targets) for page in self.index_pages):
+        allowed_terms = set(self.targets) | {target.rsplit(".", 1)[0] for target in self.targets
+                                            if re.fullmatch(r"\d+(?:\.\d+)+", target)}
+        if any(set(page.target_matches) - allowed_terms for page in self.index_pages):
             raise ValueError("index candidates must belong to the requested targets")
         return self
 
@@ -232,7 +234,10 @@ def _locate_one(request: NativeLocatorRequestV1, target: str) -> NativeTargetLoc
     # Explicit full-ID labels and composite labels are peers; inline mentions are weaker.
     starts = [anchor for anchor in anchors if not anchor.continued and not anchor.weak_literal]
     detail_numbers = {page.page_number for page in details}
-    indexed = {page.page_number for page in request.index_pages if target in page.target_matches
+    terms = {target}
+    if re.fullmatch(r"\d+(?:\.\d+)+", target):
+        terms.add(target.rsplit(".", 1)[0])
+    indexed = {page.page_number for page in request.index_pages if terms & set(page.target_matches)
                and (not hints or page.page_number in hints)}
     pending = indexed - detail_numbers
     candidates = sorted(indexed | {anchor.page_number for anchor in anchors})

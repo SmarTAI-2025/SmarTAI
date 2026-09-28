@@ -213,7 +213,7 @@ class PdfContactTile(EvidenceModel):
     render_height: int = Field(strict=True, ge=1, le=1024)
 
 
-class PdfContactSheetResult(PdfEnvelope):
+class PdfContactSheetMetadata(PdfEnvelope):
     operation: Literal["contact_sheet"]
     page_numbers: list[PageNumber] = Field(min_length=1, max_length=8)
     tile_long_edge: int = Field(strict=True, ge=64, le=1024)
@@ -221,7 +221,6 @@ class PdfContactSheetResult(PdfEnvelope):
     width: int = Field(strict=True, ge=1, le=8192)
     height: int = Field(strict=True, ge=1, le=8192)
     content_type: Literal["image/png"]
-    payload_b64: str = Field(min_length=1, max_length=DETAIL_RESPONSE_BYTES, repr=False)
 
     @model_validator(mode="after")
     def exact_tile_mapping(self):
@@ -248,6 +247,10 @@ class PdfContactSheetResult(PdfEnvelope):
             if any(abs(a - b) > 1e-9 for a, b in zip(tile.page_region, expected)):
                 raise ValueError("contact sheet normalized geometry mismatch")
         return self
+
+
+class PdfContactSheetResult(PdfContactSheetMetadata):
+    payload_b64: str = Field(min_length=1, max_length=DETAIL_RESPONSE_BYTES, repr=False)
 
 
 class ImagePreparedMetadata(EvidenceModel):
