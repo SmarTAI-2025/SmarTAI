@@ -67,6 +67,14 @@ class RecognitionLocalEvidenceReader:
             raise RecognitionError("recognition_request_invalid") from None
         self.store, self.cache, self.owner, self.progress = store, cache, authorized_owner_id, progress
 
+    def assert_context(self, source: RecognitionSourceRefV1, *, authorized_owner_id: str) -> None:
+        try:
+            source = RecognitionSourceRefV1.model_validate(source.model_dump(warnings=False))
+            if source != self._source or authorized_owner_id != self.owner:
+                raise ValueError
+        except (ValidationError, ValueError, TypeError, AttributeError):
+            raise RecognitionError("recognition_source_mismatch") from None
+
     def _context(self, identity):
         return dict(source=self._source, identity=identity, binding=self._binding, authorized_owner_id=self.owner)
 

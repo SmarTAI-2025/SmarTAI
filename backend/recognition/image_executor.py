@@ -20,6 +20,7 @@ from backend.tools.pdf_evidence import (
 
 if TYPE_CHECKING:
     from backend.progress.tracker import ProgressReporter
+    from backend.services.recognition_local_evidence import RecognitionLocalEvidenceReader
 
 
 async def read_image_plan(
@@ -32,6 +33,7 @@ async def read_image_plan(
     capacity: RecognitionCapacity,
     progress: ProgressReporter | None = None,
     budget: RecognitionBudget | None = None,
+    local_reader: RecognitionLocalEvidenceReader | None = None,
 ) -> RecognitionReadBatchV1:
     source, plan = _snapshot(source, plan, engine)
     if source.owner_id != authorized_owner_id or source.content_type not in {"image/png", "image/jpeg", "image/webp"} or not isinstance(image_bytes, bytes) or hashlib.sha256(image_bytes).hexdigest() != source.input_sha256:
@@ -40,6 +42,8 @@ async def read_image_plan(
         raise RecognitionError("recognition_plan_changed")
     if any(page.action in {"native", "blank"} or page.input_mode == "document" for page in plan.decisions):
         raise RecognitionError("recognition_plan_changed")
+    if local_reader is not None:
+        local_reader.assert_context(source, authorized_owner_id=authorized_owner_id)
     budget = budget or RecognitionBudget(source, plan.policy, plan.engine_capabilities)
     budget.assert_context(source, plan.policy, plan.engine_capabilities)
     started = time.monotonic()
@@ -57,10 +61,15 @@ async def read_image_plan(
                 if engine.capabilities != plan.engine_capabilities:
                     raise RecognitionError("recognition_route_changed")
                 token_limit = budget.output_limit(4096)
-                prepared = await read_image_evidence(
-                    image_bytes, ImagePrepareRequest(content_type=source.content_type, region=region.as_tuple()),
-                    timeout_seconds=min(10, budget.remaining("read")), progress=progress,
-                )
+                command = ImagePrepareRequest(content_type=source.content_type, region=region.as_tuple())
+                if local_reader is not None:
+                    prepared = (await local_reader.read(
+                        image_bytes, command, timeout_seconds=min(10, budget.remaining("read")),
+                    )).evidence
+                else:
+                    prepared = await read_image_evidence(
+                        image_bytes, command, timeout_seconds=min(10, budget.remaining("read")), progress=progress,
+                    )
                 metadata = ImagePreparedMetadata.model_validate({
                     name: getattr(prepared, name) for name in ImagePreparedMetadata.model_fields
                 })

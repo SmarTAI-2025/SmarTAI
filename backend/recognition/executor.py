@@ -29,6 +29,7 @@ from backend.tools.pdf_evidence import (
 
 if TYPE_CHECKING:
     from backend.progress.tracker import ProgressReporter
+    from backend.services.recognition_local_evidence import RecognitionLocalEvidenceReader
 
 
 class ImageDetailPageV1(EvidenceModel):
@@ -191,6 +192,7 @@ async def read_pdf_plan(
     capacity: RecognitionCapacity,
     progress: ProgressReporter | None = None,
     budget: RecognitionBudget | None = None,
+    local_reader: RecognitionLocalEvidenceReader | None = None,
 ) -> RecognitionReadBatchV1:
     """Read a bounded, owner-authorized PDF batch, preserving both evidence paths.
 
@@ -203,6 +205,8 @@ checks here do not replace the caller's storage ACL and operation lease.
         raise RecognitionError("recognition_source_mismatch")
     if plan.source_kind != "pdf":
         raise RecognitionError("recognition_plan_changed")
+    if local_reader is not None:
+        local_reader.assert_context(source, authorized_owner_id=authorized_owner_id)
     started = time.monotonic()
     budget = budget or RecognitionBudget(source, plan.policy, plan.engine_capabilities)
     budget.assert_context(source, plan.policy, plan.engine_capabilities)
@@ -214,6 +218,10 @@ checks here do not replace the caller's storage ACL and operation lease.
     stops: list[str] = []
 
     async def pdf_read(request):
+        if local_reader is not None:
+            return (await local_reader.read(
+                pdf_bytes, request, timeout_seconds=min(10, budget.remaining("read")),
+            )).evidence
         return await read_pdf_evidence(
             pdf_bytes, request, timeout_seconds=min(10, budget.remaining("read")), progress=progress,
         )
