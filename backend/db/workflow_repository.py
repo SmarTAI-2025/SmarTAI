@@ -1034,7 +1034,10 @@ def create_operation(
     progress: dict | None = None,
     expires_at: float | None = None,
     initial_status: str = "pending",
+    retry_existing: bool = True,
 ) -> tuple[WorkflowOperationRecord, bool]:
+    if type(retry_existing) is not bool:
+        raise ValidationError("Invalid retry policy.", code="invalid_operation_retry_policy")
     if initial_status not in {"pending", "preparing"}:
         raise ValidationError(
             "Invalid initial workflow operation status.",
@@ -1084,6 +1087,8 @@ def create_operation(
             raise NotFound("assignment")
 
     def existing_result(session, existing: WorkflowOperationRecord):
+        if not retry_existing:
+            return _detach_operation(existing), False
         retryable = or_(
             WorkflowOperationRecord.status == "error",
             and_(

@@ -565,3 +565,30 @@ preserved; it neither clips text nor loses the completed call. This bounded
 transcription artifact is not a whole-book knowledge store. H/I still implement
 lossless page-batched ingestion and retrieval. Full business wiring and real-model
 accuracy/teacher-effort acceptance remain E-J, not established by fake-engine tests.
+
+## D: Durable Run Boundary
+
+`RecognitionRunService` is the internal assignment-bound entry point for the
+versioned harness. It freezes the final input identity, claims one stable child
+operation and checkpoints a content-free pending dispatch before calling the
+selected engine. Artifact writes and checkpoints use the same lease fence.
+`retry_existing=False` preserves the operation's attempt and budget on expiry;
+the repository's legacy default is unchanged.
+
+A restart reuses confirmed successful leaves and retains cumulative physical
+call/token usage separately from the current invocation. Pending submissions,
+including cancellation or a lost result write, require review and never replay.
+Unknown token usage remains unknown. A recovered final artifact does not call a
+model. Completed execution still requires existing teacher review; it is not an
+OCR accuracy claim. Missing coverage or a stopped read returns `needs_review`.
+
+Call, shared-extra and output budgets survive restart. The original wall-clock
+deadline survives too; resumed per-phase limits conservatively include elapsed
+operation time, so recovery cannot replenish a phase. An incompatible exact
+request (including changed output bounds) does not bypass duplicate-region
+protection. The service does not register a new public endpoint or start work on
+polling. Business adapters are implemented in the following stages.
+
+Validation: seven durable integration/ledger cases and 26 existing V2 workflow
+reuse cases pass together (33); the earlier budget run passed 76 budget cases.
+These are synthetic local SQLite tests, not provider or deployment acceptance.
