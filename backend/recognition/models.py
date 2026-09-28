@@ -262,6 +262,9 @@ class RecognitionUsageV1(EvidenceModel):
 
 class RecognitionPolicyV1(EvidenceModel):
     version: str = "faithful-v2"
+    max_locator_calls: int = Field(default=12, ge=0, le=12)
+    locator_seconds: float = Field(default=360, gt=0, le=360)
+    read_seconds: float = Field(default=600, gt=0, le=600)
     max_detail_pages: int = Field(default=24, ge=1, le=24)
     max_regions: int = Field(default=24, ge=1, le=24)
     max_initial_calls: int = Field(default=12, ge=0, le=12)

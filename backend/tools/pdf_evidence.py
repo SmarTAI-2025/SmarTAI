@@ -250,11 +250,8 @@ class PdfContactSheetResult(PdfEnvelope):
         return self
 
 
-class ImagePreparedResult(EvidenceModel):
-    contract: Literal["smartai.image.evidence"]
-    schema_version: Literal[1]
-    status: Literal["ok"]
-    operation: Literal["image_prepare"]
+class ImagePreparedMetadata(EvidenceModel):
+    """Persistable preparation provenance, without the ephemeral PNG payload."""
     source_sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
     source_content_type: Literal["image/jpeg", "image/png", "image/webp"]
     source_mode: Literal["1", "L", "LA", "P", "RGB", "RGBA", "CMYK"]
@@ -270,7 +267,6 @@ class ImagePreparedResult(EvidenceModel):
     width: int = Field(strict=True, ge=1, le=8192)
     height: int = Field(strict=True, ge=1, le=8192)
     content_type: Literal["image/png"]
-    payload_b64: str = Field(min_length=1, max_length=DETAIL_RESPONSE_BYTES, repr=False)
     alpha_background: Literal["white"]
     resampled: Literal[False]
     metadata_stripped: Literal[True]
@@ -301,6 +297,14 @@ class ImagePreparedResult(EvidenceModel):
         if any(abs(a - b) > 1e-9 for a, b in zip(effective, self.effective_region)):
             raise ValueError("image effective region mismatch")
         return self
+
+
+class ImagePreparedResult(ImagePreparedMetadata):
+    contract: Literal["smartai.image.evidence"]
+    schema_version: Literal[1]
+    status: Literal["ok"]
+    operation: Literal["image_prepare"]
+    payload_b64: str = Field(min_length=1, max_length=DETAIL_RESPONSE_BYTES, repr=False)
 
 
 PdfResult = PdfIndexResult | PdfDetailResult | PdfRenderResult | PdfExportResult | PdfContactSheetResult

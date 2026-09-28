@@ -77,6 +77,7 @@ class PageObservationV1(EvidenceModel):
 
 class RecognitionPlanRequestV1(EvidenceModel):
     purpose: Purpose
+    source_kind: Literal["pdf", "image"] = "pdf"
     scope: Literal["targets", "pages", "document"]
     total_pages: int = Field(ge=1, le=10000)
     requested_pages: list[int] = Field(min_length=1, max_length=10000)
@@ -86,6 +87,11 @@ class RecognitionPlanRequestV1(EvidenceModel):
 
     @model_validator(mode="after")
     def valid_scope(self):
+        if self.source_kind == "image" and (
+            self.total_pages != 1 or self.requested_pages != [1]
+            or any(page.native_char_count or page.verified_blank for page in self.observations)
+        ):
+            raise ValueError("images require one pixel page without native or blank proof")
         if len(set(self.requested_pages)) != len(self.requested_pages):
             raise ValueError("duplicate requested page")
         if any(page < 1 or page > self.total_pages for page in self.requested_pages):
@@ -139,6 +145,7 @@ class RecognitionPlanV1(EvidenceModel):
     policy_version: str
     policy: RecognitionPolicyV1
     purpose: Purpose
+    source_kind: Literal["pdf", "image"] = "pdf"
     scope: Literal["targets", "pages", "document"]
     total_pages: int = Field(ge=1, le=10000)
     requested_pages: list[int] = Field(min_length=1, max_length=10000)
@@ -160,7 +167,7 @@ class RecognitionPlanV1(EvidenceModel):
     @model_validator(mode="after")
     def consistent_summary(self):
         RecognitionPlanRequestV1(
-            purpose=self.purpose, scope=self.scope, total_pages=self.total_pages,
+            purpose=self.purpose, source_kind=self.source_kind, scope=self.scope, total_pages=self.total_pages,
             requested_pages=self.requested_pages, requested_targets=self.requested_targets,
             unlocated_targets=self.unlocated_targets,
         )
@@ -194,6 +201,8 @@ class RecognitionPlanV1(EvidenceModel):
             raise ValueError("plan exceeds recheck capability or budget")
         groups: dict[str, list[PageDecisionV1]] = {}
         for page in self.decisions:
+            if self.source_kind == "image" and (page.action in {"native", "blank"} or page.input_mode == "document"):
+                raise ValueError("images cannot use PDF/native execution modes")
             if page.action != "visual":
                 continue
             if engine is None or page.input_mode not in engine.visual_inputs:
@@ -250,7 +259,8 @@ def plan_recognition(
     mode = None
     if engine:
         preference = ("document", "page_image") if engine.document_batching else ("page_image", "document")
-        mode = next((value for value in preference if value in engine.visual_inputs), None)
+        mode = next((value for value in preference if value in engine.visual_inputs
+                     and (request.source_kind == "pdf" or value == "page_image")), None)
 
     for number in sorted(request.requested_pages):
         page = observations.get(number)
@@ -309,6 +319,7 @@ def plan_recognition(
             decision.repair_allowed = False
     return RecognitionPlanV1(
         policy_version=policy.version, policy=policy.model_copy(deep=True), purpose=request.purpose,
+        source_kind=request.source_kind,
         scope=request.scope, total_pages=request.total_pages, requested_pages=sorted(request.requested_pages),
         requested_targets=list(request.requested_targets),
         engine_capabilities=engine.model_copy(deep=True) if engine else None,
