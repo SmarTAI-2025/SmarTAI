@@ -1,4 +1,4 @@
-# Recognition Foundation (Work Items A-D2a)
+# Recognition Foundation (Work Items A-D2b)
 
 This package is not wired to an upload endpoint yet. It defines the first
 version of the evidence and planning contracts plus callable existing-engine
@@ -343,3 +343,47 @@ purpose, region, original candidates and inspected source image all belong
 together, then retain repair outcomes and reconcile final usage. A caller-supplied
 key alone is not evidence of that relationship. D3 still owns durable recovery.
 No upload route, credential behavior, new vendor or paid service is added here.
+
+## D2b Source-Bound Agent Rechecks
+
+`RecognitionAgent.read()` still returns initial raw evidence only.
+`RecognitionAgent.recognize()` now retains that exact initial snapshot, assembles
+it, then uses the **same live budget** for optional rechecks. It never reconstructs
+reservation authority from an artifact. The final assembly adds `repair_execution`:
+selection/skip reasons, original-unit binding, prepared-image metadata and digest,
+bounded raw responses, explicit decisions, stop reasons and final total usage.
+The initial `raw.budget` remains initial-only; it is not overwritten or added to
+the final totals a second time. No persistent cache or restart recovery is added.
+
+The pure selector accepts only one-to-one whole-page evidence with a concrete
+empty outcome or actionable transcription/packaging issue. Wrong mathematics,
+unfinished student work and a generic low confidence label do not trigger calls.
+Partial pages, overlapping unaligned regions, multi-page Markdown, refused or
+truncated output and contexts exceeding 6,000 characters per candidate are skipped
+explicitly, not truncated or assigned an invented region. Two empty recoveries
+and four patches share six extras and the original total-call limit. One region
+gets at most one extra. Whole-workflow initial errors or pending submissions halt
+all rechecks, including otherwise eligible pages.
+
+Rechecks use authorized original bytes, the same purpose and frozen route,
+existing killable media tools and the original region. D2b changes the evidence
+prompt, not image quality: PDF scale stays two and image transformations/pixel
+digests must match the initial read. PDF dimensions use the same MuPDF geometric
+rounding as rendering, including fractional sizes and rotated pages. No document
+parsing happens in the small parent-side geometric calculation.
+
+Only an explicit valid decision can change final text. Initial native/visual
+candidates remain untouched; a replacement has `adopted_from=repair` and records
+before/proposal/after. Even a successful replacement remains low-confidence and
+unverified. Empty recovery can restore evidence-read coverage for that full page,
+never prove target completeness or OCR accuracy. Failed/malformed/uncertain
+responses retain before-text and stop further extras. Cancellation retains the
+live reservation; durable cancellation recovery remains D3's responsibility.
+
+Serialization re-derives selection, source/geometry bindings, decisions, coverage,
+and usage from retained evidence. A final render exceeding 400,000 characters
+returns an explicit assembly-limit result with all initial and paid repair records
+preserved; it neither clips text nor loses the completed call. This bounded
+transcription artifact is not a whole-book knowledge store. H/I still implement
+lossless page-batched ingestion and retrieval. Full business wiring and real-model
+accuracy/teacher-effort acceptance remain E-J, not established by fake-engine tests.

@@ -332,6 +332,14 @@ def decode_image_payload(result: ImagePreparedResult) -> bytes:
     return decode_pdf_payload(result)
 
 
+def whole_page_render_size(width_points: float, height_points: float, *, scale: float = 2) -> tuple[int, int]:
+    """Match MuPDF's pixel rounding without opening or parsing any document."""
+    from pymupdf import Matrix, Rect
+
+    bounds = (Rect(0, 0, width_points, height_points) * Matrix(scale, scale)).irect
+    return bounds.width, bounds.height
+
+
 def _validate_result(payload: object, request: PdfRequest | ImagePrepareRequest) -> PdfResult | ImagePreparedResult:
     if not isinstance(payload, dict):
         raise PdfEvidenceError("pdf_evidence_protocol_invalid")

@@ -16,12 +16,12 @@ from backend.llm.providers import BaseProvider, ProviderRequestError, VisionImag
 from backend.recognition.engine import EngineLocateInputV1, EngineReadInputV1, EngineRepairInputV1, freeze_engine_input
 from backend.recognition.models import Purpose, RecognitionCandidateV1
 from backend.recognition.planner import EngineCapabilitiesV1
+from backend.recognition.repair_response import REPAIR_PROMPT_VERSION
 from backend.services.background_errors import classify_background_error
 from backend.tools.baidu_unlimited_ocr import BaiduUnlimitedOCRClient, BaiduUnlimitedOCRError
 
 PROMPT_VERSION = "faithful-reader-v1"
 LOCATOR_PROMPT_VERSION = "bounded-page-locator-v1"
-REPAIR_PROMPT_VERSION = "faithful-region-recheck-v1"
 _PURPOSES: dict[Purpose, str] = {
     "problems": "Transcribe the problem statements, conditions, question labels, options and figures. Do not solve them or generate answers or scores.",
     "submissions": "Transcribe exactly what the student actually wrote, including incorrect mathematics, spelling, code, deletions, insertions, arrows and unfinished steps. Never correct their answer or infer their intended solution. Preserve identifying text only when actually visible. Distinguish blank space from unreadable writing.",

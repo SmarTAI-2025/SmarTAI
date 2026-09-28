@@ -13,7 +13,7 @@ from typing import Callable, Literal, TYPE_CHECKING
 from pydantic import Field, ValidationError, model_validator
 
 from backend.domain.errors import PdfEvidenceError, RecognitionError
-from backend.recognition.budget import BudgetSnapshot, RecognitionBudget
+from backend.recognition.budget import BudgetSnapshot, RecognitionBudget, validate_budget_accounting
 from backend.recognition.engine import EngineLocateInputV1, LocatorImageV1, RecognitionEngine
 from backend.recognition.executor import RecognitionReadBatchV1, read_pdf_plan
 from backend.recognition.image_executor import read_image_plan
@@ -174,26 +174,7 @@ def _validate_workflow_usage(raw: RecognitionWorkflowReadV1) -> None:
     records = [(call.result.candidate, call.submission_may_exist, call.requested_output_tokens) for call in raw.locator_calls]
     if raw.read_batch:
         records.extend((unit.candidate, unit.submission_may_exist, unit.requested_output_tokens) for unit in raw.read_batch.units)
-    pending = sum(uncertain for _, uncertain, _ in records)
-    known_input = sum(candidate.input_tokens or 0 for candidate, uncertain, _ in records if not uncertain)
-    known_output = sum(candidate.output_tokens or 0 for candidate, uncertain, _ in records if not uncertain)
-    unknown_input = sum(uncertain or candidate.input_tokens is None for candidate, uncertain, _ in records)
-    unknown_output = sum(uncertain or candidate.output_tokens is None for candidate, uncertain, _ in records)
-    bounded = bool(raw.engine_capabilities and raw.engine_capabilities.bounded_output_tokens)
-    reserved = sum(limit for candidate, uncertain, limit in records if uncertain or candidate.output_tokens is None) if bounded else 0
-    overrun = bounded and any(not uncertain and candidate.output_tokens is not None and candidate.output_tokens > limit
-                              for candidate, uncertain, limit in records)
-    expected = {
-        "pending_calls": pending, "settled_calls": len(records) - pending,
-        "known_input_tokens": known_input, "known_output_tokens": known_output,
-        "unknown_input_calls": unknown_input, "unknown_output_calls": unknown_output,
-        "input_tokens": None if unknown_input else known_input, "output_tokens": None if unknown_output else known_output,
-        "usage_complete": not (pending or unknown_input or unknown_output), "bounded_output_tokens": bounded,
-        "reserved_output_tokens": reserved, "charged_output_tokens": known_output + reserved if bounded else None,
-        "output_limit_exceeded": overrun,
-    }
-    if any(getattr(raw.budget, name) != value for name, value in expected.items()):
-        raise ValueError("workflow budget must match every retained call outcome")
+    validate_budget_accounting(raw.budget, raw.engine_capabilities, records)
     if raw.read_batch:
         candidates = [unit.candidate for unit in raw.read_batch.units]
         inputs = None if any(c.input_tokens is None for c in candidates) else sum(c.input_tokens for c in candidates)
@@ -231,6 +212,10 @@ class RecognitionAgent:
         self.engine, self.capacity, self.progress, self.clock = engine, capacity, progress, clock
 
     async def read(self, request: RecognitionReadRequestV1, source_bytes: bytes, *, authorized_owner_id: str) -> RecognitionWorkflowReadV1:
+        raw, _budget = await self._read(request, source_bytes, authorized_owner_id=authorized_owner_id)
+        return raw
+
+    async def _read(self, request: RecognitionReadRequestV1, source_bytes: bytes, *, authorized_owner_id: str):
         try:
             request = RecognitionReadRequestV1.model_validate(request.model_dump(warnings=False))
         except (ValidationError, AttributeError, TypeError):
@@ -339,25 +324,30 @@ class RecognitionAgent:
             stops.extend(batch.stop_codes)
             if any("visual_capability_unavailable" in page.reason_codes for page in batch.plan.decisions):
                 stops.append("visual_capability_unavailable")
-        return RecognitionWorkflowReadV1(
+        raw = RecognitionWorkflowReadV1(
             request=request, execution_policy=policy, engine_capabilities=capabilities,
             total_pages=total, indexed_pages=indexed, native_details=details, native_location=native,
             locator_calls=calls, selected_pages=selected, unlocated_targets=unresolved, read_batch=batch,
             locator_halted=locator_halted,
             stop_codes=list(dict.fromkeys(stops)), budget=budget.snapshot(),
         )
+        return raw, budget
 
     async def recognize(self, request: RecognitionReadRequestV1, source_bytes: bytes, *,
                         authorized_owner_id: str, prompt_version: str):
         from backend.recognition.fusion import assemble_recognition
+        from backend.recognition.recheck import recheck_recognition
 
-        raw = await self.read(request, source_bytes, authorized_owner_id=authorized_owner_id)
+        raw, budget = await self._read(request, source_bytes, authorized_owner_id=authorized_owner_id)
         if self.progress:
             await self.progress.set_current_step("recognition_assess", message="Checking recognition evidence")
         result = assemble_recognition(raw, prompt_version=prompt_version)
         if self.progress:
             await self.progress.increment_stage_metrics(recognition_assemblies=1)
-        return result
+        return await recheck_recognition(
+            result, source_bytes, authorized_owner_id=authorized_owner_id, engine=self.engine,
+            budget=budget, capacity=self.capacity, progress=self.progress,
+        )
 
     async def _scan(self, request, source_bytes, index, details, native, targets, policy, budget, capabilities):
         calls, stops = [], []
