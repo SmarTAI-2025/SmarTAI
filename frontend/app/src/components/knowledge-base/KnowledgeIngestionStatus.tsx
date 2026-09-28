@@ -21,9 +21,25 @@ export function KnowledgeIngestionStatus({ documentId, status = "ready", ingesti
   const summary = coverage?.summary ?? ingestion;
   const active = ["queued", "processing"].includes(summary?.status ?? "");
   const paused = ["paused", "cancelled"].includes(summary?.status ?? "");
+  useEffect(() => {
+    if (!active || !documentId) return;
+    let cancelled = false;
+    let pending = false;
+    const timer = window.setInterval(async () => {
+      if (pending) return;
+      pending = true;
+      try {
+        const result = await getJSON<Coverage>(`/knowledge/documents/${documentId}/coverage?offset=0&limit=20`);
+        if (!cancelled && identity.current === documentId) { setCoverage(result); setError(false); }
+      } catch { if (!cancelled) setError(true); }
+      finally { pending = false; }
+    }, 5000);
+    return () => { cancelled = true; window.clearInterval(timer); };
+  }, [active, documentId, summary?.id]);
+  const effectiveStatus = summary?.status ?? status;
   const label = paused ? (zh ? "已暂停" : "Paused") : active ? (zh ? "后台处理中" : "Processing")
-    : status === "partial" || summary?.status === "partial" ? (zh ? "部分可检索" : "Partial coverage")
-    : status === "failed" || summary?.status === "failed" ? (zh ? "处理未完成" : "Incomplete")
+    : effectiveStatus === "partial" ? (zh ? "部分可检索" : "Partial coverage")
+    : effectiveStatus === "failed" ? (zh ? "处理未完成" : "Incomplete")
     : summary?.warning_pages ? (zh ? "可检索，有待核对" : "Searchable, with warnings") : (zh ? "已解析" : "Parsed");
 
   async function load(offset = 0) {
@@ -49,6 +65,7 @@ export function KnowledgeIngestionStatus({ documentId, status = "ready", ingesti
     </summary>
     <div className="mt-2 max-w-xs space-y-2 break-words">
       {summary.total_pages ? <p>{zh ? "可检索 / 空白 / 失败" : "Searchable / blank / failed"}: {summary.searchable_pages ?? 0} / {summary.blank_pages ?? 0} / {summary.failed_pages ?? 0}</p> : null}
+      {summary.partially_searchable_pages ? <p>{zh ? "可检索页中仍有内容缺口" : "Searchable pages with content gaps"}: {summary.partially_searchable_pages}</p> : null}
       {summary.error_code ? <p role="status">{summary.error_code}</p> : null}
       {coverage?.pages.map((page) => <p key={page.page_number}>{page.page_number}: {page.state}{page.error_code ? ` · ${page.error_code}` : ""}</p>)}
       {error ? <p role="alert">{zh ? "暂时无法更新状态" : "Unable to update status"}</p> : null}

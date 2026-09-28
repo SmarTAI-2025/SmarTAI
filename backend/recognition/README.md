@@ -754,3 +754,9 @@ Tests cover version freezing, incremental prefix stability, cache ownership
 and revocation, same-page adjacency, empty search, authenticated citation
 reads, 2500-page capacity and long-PDF navigation. Real-provider ablation,
 semantic holdout evaluation and combined end-to-end checks remain J work.
+# Integrated Acceptance Evidence
+
+See [the layered OCR/RAG acceptance report](../../tools/ocr_benchmark/HARNESS_ACCEPTANCE_CN.md)
+for the 2026-09-29 integrated test results, 1000/2500-page capacity evidence,
+legacy 05/06 traceability, offline ablation input contract and remaining real-model
+quality gates. Engineering tests do not establish OCR accuracy or launch readiness.

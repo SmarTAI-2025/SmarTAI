@@ -95,6 +95,45 @@ async def test_pdf_batches_resume_native_evidence_and_paginated_manifest():
     assert await worker.run_once(job_id) is False
 
 
+@pytest.mark.asyncio
+async def test_no_visual_route_keeps_native_text_searchable_without_complete_coverage():
+    with fitz.open() as book:
+        page = book.new_page()
+        page.insert_text((50, 50), "Exercise 1.110.7: group homomorphism")
+        page.draw_rect((50, 100, 500, 600))
+        body = book.tobytes()
+    who, doc_id, job_id = queued(body)
+    await KnowledgeIngestionWorker(registry_factory=lambda _: Registry()).run_once(job_id)
+    doc = get_document(doc_id, who)
+    assert doc.status == "partial" and doc.ingestion_summary["status"] == "partial"
+    assert doc.ingestion_summary["searchable_pages"] == 1
+    assert doc.ingestion_summary["partially_searchable_pages"] == 1
+    assert doc.ingestion_summary["failed_pages"] == 1
+    assert not doc.ingestion_summary["coverage_complete"]
+    chunks = list_chunks([doc_id])
+    assert "Exercise 1.110.7" in chunks[0].content
+    assert "coverage_incomplete" in chunks[0].chunk_metadata["warning_codes"]
+    assert chunks[0].chunk_metadata["artifact_ids"]
+    assert doc.ingestion_summary["usage"]["initial_calls"] == 0
+
+
+@pytest.mark.asyncio
+async def test_economy_math_native_plan_and_executor_agree():
+    with fitz.open() as book:
+        page = book.new_page()
+        page.insert_text((50, 50), "A theorem with x^2 + y^2 = 1 and x^{-1}.")
+        body = book.tobytes()
+    who, doc_id, job_id = queued(body)
+    await KnowledgeIngestionWorker(registry_factory=lambda _: Registry()).run_once(job_id)
+    doc = get_document(doc_id, who)
+    assert doc.status == "ready" and doc.ingestion_summary["coverage_complete"]
+    chunks = list_chunks([doc_id])
+    assert "knowledge_native_math_unverified" in chunks[0].chunk_metadata["warning_codes"]
+    assert "recognition_plan_changed" not in chunks[0].chunk_metadata["warning_codes"]
+    assert chunks[0].chunk_metadata["error_code"] is None
+    assert doc.ingestion_summary["usage"]["initial_calls"] == 0
+
+
 def test_failed_new_version_keeps_published_chunks_and_cancel_fences():
     who, doc_id, job_id = queued()
     job = repo.claim_next(job_id=job_id)
