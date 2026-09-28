@@ -39,7 +39,7 @@ type ImportTarget = "rubric" | "answer" | "tests";
 type SourceMode = "library" | "upload";
 type StructureMode = "organized" | "extract_from_source";
 
-const ACCEPTED_EXTENSIONS = [".pdf", ".txt", ".md", ".markdown"] as const;
+const ACCEPTED_EXTENSIONS = [".pdf", ".txt", ".md", ".markdown", ".json", ".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tif", ".tiff"] as const;
 
 export function QuestionMaterialImportPage() {
   const { taskId } = useParams();
@@ -62,6 +62,7 @@ export function QuestionMaterialImportPage() {
   const [showLibraryPicker, setShowLibraryPicker] = useState(true);
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [saveToLibrary, setSaveToLibrary] = useState(false);
+  const [enableMaterialOcr, setEnableMaterialOcr] = useState(false);
   const [structureMode, setStructureMode] = useState<StructureMode>("organized");
   const [extractionHint, setExtractionHint] = useState("");
   const [formError, setFormError] = useState<string | null>(null);
@@ -167,6 +168,7 @@ export function QuestionMaterialImportPage() {
         structureMode,
         extractionHint: structureMode === "extract_from_source" ? extractionHint : "",
         saveToLibrary: sourceMode === "upload" && saveToLibrary,
+        enableMaterialOcr,
       });
       const started = await startImport.mutateAsync({ taskId, sourceToken: preflight.source_token });
       allowLeaveRef.current = true;
@@ -316,6 +318,12 @@ export function QuestionMaterialImportPage() {
         </fieldset>
 
         <div className="mt-5 flex min-h-10 flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          {targets.includes("rubric") || targets.includes("tests") ? (
+            <label className="flex items-center gap-2 text-xs">
+              <input type="checkbox" checked={enableMaterialOcr} disabled={isSubmitting} onChange={(event) => { setEnableMaterialOcr(event.target.checked); markChanged(); }} />
+              {locale === "zh-CN" ? "启用该资料的视觉 OCR" : "Enable visual OCR for this material"}
+            </label>
+          ) : null}
           <p id="material-import-action-message" role={formError ? "alert" : undefined} className={cn(
             "min-w-0 text-[13px] leading-5",
             formError ? "text-danger" : "text-muted-foreground",
@@ -506,7 +514,7 @@ function UploadSourcePicker({ locale, file, inputRef, saveToLibrary, onChoose, o
         <button type="button" className="h-[30px] min-w-[90px] rounded-full bg-[#DBE8FF] px-4 text-[13px] font-semibold text-primary" onClick={onChoose}>
           {file ? materialImportText(locale, "change") : materialImportText(locale, "chooseFile")}
         </button>
-        <input ref={inputRef} type="file" className="sr-only" accept=".pdf,.txt,.md,.markdown,application/pdf,text/plain,text/markdown" onChange={onFileChange} />
+        <input ref={inputRef} type="file" className="sr-only" accept={ACCEPTED_EXTENSIONS.join(",")} onChange={onFileChange} />
       </div>
       <label className="mt-3 inline-flex items-center gap-2 text-[12px] text-muted-foreground">
         <input type="checkbox" checked={saveToLibrary} onChange={(event) => onSaveChange(event.target.checked)} className="h-4 w-4 rounded border-border accent-primary" />
@@ -539,6 +547,9 @@ function localizeImportError(error: unknown, locale: "zh-CN" | "en-US") {
   }
   const code = getAPIErrorCode(normalized) ?? "";
   const known: Record<string, [string, string]> = {
+    material_ocr_confirmation_required: ["该资料需要视觉识别，请勾选启用 OCR 或改用文本文件。", "Enable visual OCR for this material or use a text file."],
+    material_parser_provider_required: ["请为资料解析选择文本模型。", "Choose a text model for material parsing."],
+    recognition_route_changed: ["模型配置已变化，请重新准备资料。", "The model configuration changed. Prepare the material again."],
     material_import_requires_problems_ready: ["请先完成题目识别与准备。", "Finish question recognition and preparation first."],
     material_import_source_changed: ["课程资料已发生变化，请重新选择。", "The Course Library material changed. Select it again."],
     material_import_source_unavailable: ["资料来源已失效，请重新选择。", "The material source expired. Select it again."],

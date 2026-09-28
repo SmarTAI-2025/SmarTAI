@@ -609,3 +609,31 @@ low-confidence evidence feed the existing final teacher review without changing
 the major-question scoring contract or adding an intermediate confirmation.
 Preflight remains a bounded synchronous request; it is not a background whole-book
 ingestion job. Knowledge coverage and student-source lifecycle follow in H and G.
+
+## F: Teacher Materials
+
+Reference answers, rubrics and test-case sources now use the same assignment
+adapter, including library originals. Their `purpose` remains distinct; rubric
+and test-case vision is off by default in the API, UI and adapter. Native PDF
+text still works without opting into vision. Recognition never runs test code.
+OCR-only material matching requires an explicitly selected text parser; an
+existing LLM route freezes that same provider/configuration through recovery.
+No companion model is selected silently.
+
+Material imports remain candidates until explicit apply. Recognition provenance
+and uncertainty survive parsing; unsafe test candidates (low recognition,
+low matching confidence or ambiguous question identity) cannot be applied.
+Rejection preserves the plan and existing confirmed fields. The old auxiliary
+upload endpoints now start the same candidate workflow instead of directly
+overwriting questions. Uploaded references remain separate from generated ones.
+The OCR-only initial question path preserves exactly headed rubrics/references
+and flags test material requiring a text parser, without executing or inventing it.
+
+The material-review original viewer reuses the existing bounded PDF/image UI.
+Its source endpoint checks owner, task, operation, file availability, exact size
+and digest and returns private no-store content. No OCR runs on preview.
+
+Validation is synthetic: 73/78 impacted cases initially passed; five new-test
+assertions/fixtures were corrected, then all nine new cases passed (one later
+preview fixture correction included). Existing AddProblemsPage: nine passed;
+TypeScript typecheck passed. New material-preview visual checks remain part of J.

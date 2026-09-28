@@ -182,6 +182,7 @@ class PdfEvidenceError(DomainError):
 
 
 RECOGNITION_ERROR_CODES = frozenset({
+    "material_ocr_confirmation_required", "material_recognition_review_required", "material_parser_provider_required",
     "recognition_request_invalid", "recognition_source_mismatch", "recognition_plan_changed",
     "recognition_route_changed", "recognition_input_unsupported", "recognition_budget_exhausted",
     "recognition_response_invalid", "recognition_response_too_large", "recognition_timeout",

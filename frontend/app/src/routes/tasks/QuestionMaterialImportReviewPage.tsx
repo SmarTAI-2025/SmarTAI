@@ -4,6 +4,7 @@ import { Link, useBeforeUnload, useBlocker, useNavigate, useParams } from "react
 import { useApplyMaterialImport, useMaterialImport, useTask } from "@/api/hooks";
 import { getAPIErrorCode, normalizeAPIError } from "@/api/client";
 import { NewTaskStepper } from "@/components/new-task/NewTaskStepper";
+import { MaterialOriginalPreview } from "@/components/tasks/MaterialOriginalPreview";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { UnsavedChangesDialog } from "@/components/ui/UnsavedChangesDialog";
 import { useI18n } from "@/i18n/I18nProvider";
@@ -46,7 +47,8 @@ export function QuestionMaterialImportReviewPage() {
     if (!jobId || plan?.status !== "ready" || initializedJobRef.current === jobId) return;
     initializedJobRef.current = jobId;
     const defaultAccepted = plan.candidates
-      .filter((candidate) => !candidate.would_overwrite && candidate.match_status === "exact")
+      .filter((candidate) => !candidate.would_overwrite && candidate.match_status === "exact"
+        && candidate.confidence >= 0.72 && !candidate.recognition_requires_review)
       .map((candidate) => candidate.candidate_id);
     setAcceptedIds(defaultAccepted);
     setOverwriteIds([]);
@@ -147,6 +149,7 @@ export function QuestionMaterialImportReviewPage() {
         </Link>
       </div>
       <NewTaskStepper currentStep={2} />
+      {taskId && jobId && plan?.status === "ready" ? <MaterialOriginalPreview key={jobId} taskId={taskId} jobId={jobId} filename={plan.source.filename} /> : null}
 
       <section className="mt-[30px] min-w-0 overflow-hidden rounded-[10px] border bg-card">
         <div className="flex min-h-[64px] flex-col gap-2 border-b px-5 py-3 sm:flex-row sm:items-center sm:justify-between">
@@ -287,6 +290,8 @@ function CandidateMatrix({ candidates, problems, acceptedIds, overwriteIds, disa
             const possible = !conflict && candidate.match_status === "possible";
             const accepted = acceptedIds.includes(candidate.candidate_id);
             const overwrite = overwriteIds.includes(candidate.candidate_id);
+            const testBlocked = candidate.target === "test_cases" && (candidate.recognition_requires_review
+              || candidate.match_status !== "exact" || candidate.confidence < 0.72);
             return (
               <tr key={candidate.candidate_id} className="align-top hover:bg-muted/20">
                 <td className="px-5 py-3 font-semibold text-foreground">{problem?.number || candidate.q_id}</td>
@@ -297,6 +302,7 @@ function CandidateMatrix({ candidates, problems, acceptedIds, overwriteIds, disa
                     {materialImportText(locale, conflict ? "conflict" : possible ? "possible" : "exact")}
                   </span>
                   <span className="mt-1 block text-[11px] text-muted-foreground">{Math.round(candidate.confidence * 100)}%</span>
+                  {candidate.recognition_requires_review ? <span className="mt-1 block text-[11px] text-warning">{locale === "zh-CN" ? "原件识别待核对" : "Source recognition needs review"}</span> : null}
                 </td>
                 <td className="px-3 py-3">
                   <p className="line-clamp-3 whitespace-pre-wrap leading-5 text-foreground">{candidateValue(candidate, locale)}</p>
@@ -310,12 +316,12 @@ function CandidateMatrix({ candidates, problems, acceptedIds, overwriteIds, disa
                 <td className="px-5 py-3">
                   {conflict ? (
                     <label className="inline-flex cursor-pointer items-start gap-2 text-[12px] font-semibold text-danger">
-                      <input type="checkbox" disabled={disabled} className="mt-0.5 h-4 w-4 accent-primary disabled:cursor-not-allowed disabled:opacity-50" checked={overwrite} onChange={(event) => onToggleOverwrite(candidate, event.target.checked)} />
+                      <input type="checkbox" disabled={disabled || testBlocked} className="mt-0.5 h-4 w-4 accent-primary disabled:cursor-not-allowed disabled:opacity-50" checked={overwrite} onChange={(event) => onToggleOverwrite(candidate, event.target.checked)} />
                       <span>{overwrite ? materialImportText(locale, "overwrite") : materialImportText(locale, "noOverwrite")}</span>
                     </label>
                   ) : (
                     <label className="inline-flex cursor-pointer items-center gap-2 text-[12px] font-semibold text-foreground">
-                      <input type="checkbox" disabled={disabled} className="h-4 w-4 accent-primary disabled:cursor-not-allowed disabled:opacity-50" checked={accepted} onChange={(event) => onToggleCandidate(candidate, event.target.checked)} />
+                      <input type="checkbox" disabled={disabled || testBlocked} className="h-4 w-4 accent-primary disabled:cursor-not-allowed disabled:opacity-50" checked={accepted} onChange={(event) => onToggleCandidate(candidate, event.target.checked)} />
                       {materialImportText(locale, "selected")}
                     </label>
                   )}

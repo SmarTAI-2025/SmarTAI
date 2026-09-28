@@ -17,6 +17,7 @@ from starlette.concurrency import run_in_threadpool
 
 from backend.agents.recognition_agent import RecognitionReadRequestV1
 from backend.domain.errors import RecognitionError
+from backend.progress.tracker import ProgressReporter
 from backend.recognition.local_cache import RecognitionByteCache
 from backend.recognition.models import EvidenceModel, RecognitionSourceRefV1
 from backend.recognition.runtime import RecognitionCapacity
@@ -123,15 +124,20 @@ class QuestionSourceRead:
 
 async def read_question_source(*, owner_id, task_id, content, filename, content_type=None,
                                route: StageProviderRoute, registry, stored_file_id=None,
-                               extraction_hint="", options=None, purpose="problems", reporter=None, text_reader=None):
+                               extraction_hint="", options=None, purpose="problems", reporter=None, text_reader=None,
+                               allow_vision=None):
     from backend.services.source_files import persist_problem_source
 
     scope = question_recognition_options(options, extraction_hint=extraction_hint)
+    allow_vision = purpose not in {"rubric", "test_cases"} if allow_vision is None else allow_vision is True
+    reporter = reporter or ProgressReporter(f"recognition-{task_id}")
     inspection = inspect_upload_content(content, filename, content_type)
     media_type = inspection.content_type
     if media_type not in _VISUAL_TYPES:
         text = await (text_reader or extract_text_from_upload)(content, filename, purpose=purpose, reporter=reporter)
         return QuestionSourceRead(text, stored_file_id=stored_file_id)
+    if not allow_vision and media_type.startswith("image/"):
+        raise RecognitionError("material_ocr_confirmation_required")
     if stored_file_id is None:
         stored, _ = await run_in_threadpool(
             persist_problem_source, storage=get_storage(), owner_id=owner_id, task_id=task_id,
@@ -143,11 +149,11 @@ async def read_question_source(*, owner_id, task_id, content, filename, content_
         original_name=filename, content_type=media_type, input_sha256=hashlib.sha256(content).hexdigest(),
     )
     skill, engine = None, None
-    if route.is_baidu_ocr:
+    if allow_vision and route.is_baidu_ocr:
         fingerprint = stage_provider_configuration_fingerprint(owner_id=owner_id, route=route, registry=registry)
         skill = build_owner_baidu_ocr_skill(owner_id, route)
         engine = BaiduRecognitionEngine(skill.client, route_id=route.route_id, fingerprint=fingerprint, max_document_pages=1)
-    elif route.provider is not None and getattr(route.provider, "supports_vision", False):
+    elif allow_vision and route.provider is not None and getattr(route.provider, "supports_vision", False):
         fingerprint = stage_provider_configuration_fingerprint(owner_id=owner_id, route=route, registry=registry)
         engine = LLMRecognitionEngine(route.provider, route_id=route.route_id, fingerprint=fingerprint)
     if media_type.startswith("image/") and engine is None:
@@ -174,6 +180,8 @@ async def read_question_source(*, owner_id, task_id, content, filename, content_
     document = assembly.document
     text = document.final_markdown
     if not text.strip():
+        if not allow_vision and run.safe_error_code == "visual_capability_unavailable":
+            raise RecognitionError("material_ocr_confirmation_required")
         if run.safe_error_code == "visual_capability_unavailable" and route.provider is not None:
             raise RecognitionError("provider_vision_not_supported")
         raise RecognitionError(run.safe_error_code or assembly.safe_error_code or "ocr_empty_result")
@@ -186,6 +194,15 @@ async def read_question_source(*, owner_id, task_id, content, filename, content_
         requires_review=True,
     )
     return QuestionSourceRead(text, summary, stored_file_id)
+
+
+def recognition_needs_review(summary):
+    if not summary:
+        return False
+    coverage = summary.get("coverage") or {}
+    return bool(summary.get("confidence") == "low" or summary.get("error_code") or any(
+        coverage.get(key) for key in ("failed_pages", "unprocessed_pages", "missing_targets", "unverified_targets")
+    ))
 
 
 def attach_recognition_review(packages, sources):
