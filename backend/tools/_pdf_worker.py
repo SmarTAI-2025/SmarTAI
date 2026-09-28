@@ -18,6 +18,10 @@ def _write(payload: dict) -> None:
 
 def main() -> int:
     try:
+        if sys.argv[1] == "evidence-v1":
+            from pdf_evidence_worker import run_cli
+
+            return run_cli(sys.argv[2] if len(sys.argv) > 2 else "")
         if sys.argv[1] == "inspect-pdf":
             max_pages = int(sys.argv[2])
             body = sys.stdin.buffer.read()
