@@ -19,6 +19,7 @@
 | J 第一组合定向 | 137 passed / 1 failed；失败是新增测试导入位置错误 | 导入修正后纳入下一组 |
 | J 最终后端组合 | 121 passed，28.50 秒 | acceptance、knowledge ingestion/retrieval、executor、fusion；含新增缺口修复和全部 acceptance 测试 |
 | 上传格式最终核对 | 30 passed，12.68 秒 | ingestion/personal knowledge；四种未公开格式拒绝，PDF/文本及历史行为回归 |
+| PostgreSQL 收口 | 本地隔离 PostgreSQL 16.15：23 passed，9.00 秒；head/base/head 迁移往返通过 | CI36479764475发现旧并发夹具未创建可读教材块；补齐两处夹具，不放宽未就绪教材门禁 |
 | 前端全量 | 86 files / 409 tests passed | J 最后状态刷新前；不称最终 head 全量 |
 | J 前端定向 | 错误文案相关 16 passed；最终知识状态/检索/引用 7 passed | 最后新增 active retry 轮询测试通过 |
 | 前端构建 | build 通过；只有既有大 chunk 提示 | 最后状态字段变动另行 typecheck |
