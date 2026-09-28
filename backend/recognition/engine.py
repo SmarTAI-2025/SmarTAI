@@ -19,6 +19,7 @@ from backend.recognition.models import (
     RecognitionCandidateV1,
 )
 from backend.recognition.planner import EngineCapabilitiesV1, VisualInput
+from backend.recognition.repair_response import RepairContextV1
 
 
 class EngineReadInputV1(EvidenceModel):
@@ -61,6 +62,28 @@ class RecognitionEngine(Protocol):
         ...
 
 
+class EngineRepairInputV1(EngineReadInputV1):
+    input_mode: Literal["page_image"] = "page_image"
+    max_output_tokens: int = Field(default=2048, strict=True, ge=1, le=2048)
+    repair_context: RepairContextV1
+
+    @model_validator(mode="after")
+    def repair_scope(self):
+        context = self.repair_context
+        if self.document_pages or self.purpose != context.purpose or self.page_number != context.page_number:
+            raise ValueError("repair must refer to one original page and purpose")
+        if not (self.region.x0 <= context.region.x0 < context.region.x1 <= self.region.x1
+                and self.region.y0 <= context.region.y0 < context.region.y1 <= self.region.y1):
+            raise ValueError("repair image must include its complete target region")
+        return self
+
+
+class SemanticRepairEngine(RecognitionEngine, Protocol):
+    async def repair(self, request: EngineRepairInputV1) -> RecognitionCandidateV1:
+        """One explicit image recheck; never solve, score, loop or use another engine."""
+        ...
+
+
 class LocatorImageV1(EvidenceModel):
     page_numbers: list[Annotated[int, Field(strict=True, ge=1, le=10000)]] = Field(min_length=1, max_length=8)
     payload: bytes = Field(min_length=1, max_length=10 * 1024 * 1024, repr=False, exclude=True)
@@ -92,9 +115,11 @@ class EngineLocateInputV1(EvidenceModel):
         return self
 
 
-def freeze_engine_input(request: EngineReadInputV1 | EngineLocateInputV1):
+def freeze_engine_input(request: EngineReadInputV1 | EngineLocateInputV1 | EngineRepairInputV1):
     """Revalidate a mutable input, retaining only its explicit ephemeral payloads."""
     try:
+        if isinstance(request, EngineRepairInputV1):
+            return EngineRepairInputV1.model_validate({**request.model_dump(warnings=False), "payload": request.payload})
         if isinstance(request, EngineReadInputV1):
             return EngineReadInputV1.model_validate({**request.model_dump(warnings=False), "payload": request.payload})
         if isinstance(request, EngineLocateInputV1):

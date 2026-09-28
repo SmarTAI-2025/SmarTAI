@@ -1,4 +1,4 @@
-# Recognition Foundation (Work Items A-D1)
+# Recognition Foundation (Work Items A-D2a)
 
 This package is not wired to an upload endpoint yet. It defines the first
 version of the evidence and planning contracts plus callable existing-engine
@@ -58,7 +58,8 @@ Dependent PRs may stack; none is merged automatically.
 | C2b | Shared execution budgets, dispatch and image-source reader |
 | C2c | Bounded scan localization and unified Agent orchestration |
 | D1 | Faithful evidence assembly, purpose checks and honest coverage |
-| D2 | One bounded extra read and explicit repair decisions |
+| D2a | Strict repair response, same-provider adapter and bounded extra dispatch |
+| D2b | Agent repair selection, source binding and recorded final assembly |
 | D3 | Durable evidence, layered owner-scoped cache and submit-once recovery |
 | E | Problem extraction and compatibility routes |
 | F | Teacher reference/rubric/test materials and confirmation gates |
@@ -311,3 +312,34 @@ an equal JSON round-trip. Four targets remained missing; the other three were
 located but their complete bodies still unverified. Both selected pages stayed
 unprocessed for required visual evidence, and confidence remained low. This
 checks honest evidence retention only, not improved OCR accuracy.
+
+## D2a Repair Protocol Boundary
+
+`EngineRepairInputV1` permits one inspected page image, an explicit target region,
+bounded raw native/visual candidates and the exact pre-repair text. It retains
+the same injected provider and limits output to 2,048 tokens. The dedicated
+prompt requests `keep_native`, `keep_visual`, `replace` or `still_unknown` with a
+visible source cue. It prohibits solving, completing missing conditions and
+correcting student mistakes. This instruction is not a measured fidelity claim.
+
+`repair_response.parse_repair_response()` accepts only a complete bounded JSON
+object (or one complete JSON fence). Unknown/duplicate fields, nonfinite values,
+truncation, refusal, native PDF JSON masquerading as a model response and invalid
+keep/replace operations fail closed. Invalid or unknown output preserves the
+original text. Replacements require a nonempty source cue and remain explicitly
+unverified and subject to review; a model-generated cue cannot prove fidelity.
+There is no paid JSON repair, answer checking or automatic high-confidence label.
+
+`runtime.run_repair_call()` shares the original live budget, route, deadline and
+capacity. Recovery and patch consume the same one-extra-per-initial-region credit;
+failed or pending initial submissions cannot authorize either. Unsupported
+engines and disabled policy make zero extra calls. Explicit submission uncertainty
+stays pending even when an adapter omits its redundant flag. Error-bearing empty
+results cannot be relabeled as successful empty transcriptions and retried.
+
+This item exposes the protocol and dispatch boundary only. The Agent does not
+trigger repair yet. D2b must prove that the initial budget key, unit, page,
+purpose, region, original candidates and inspected source image all belong
+together, then retain repair outcomes and reconcile final usage. A caller-supplied
+key alone is not evidence of that relationship. D3 still owns durable recovery.
+No upload route, credential behavior, new vendor or paid service is added here.
