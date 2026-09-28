@@ -31,6 +31,10 @@ class EngineCapabilitiesV1(EvidenceModel):
     structured_output: Literal["supported", "unsupported", "unknown"] = "unknown"
     # Only completed empty/uncertain responses qualify, never ambiguous submits.
     response_recheck: bool = False
+    candidate_kind: Literal["vision", "ocr"] = "vision"
+    document_batching: bool = False
+    max_document_pages: int = Field(default=1, ge=1, le=24)
+    bounded_output_tokens: bool = False
 
     @model_validator(mode="after")
     def consistent_capabilities(self):
@@ -40,6 +44,10 @@ class EngineCapabilitiesV1(EvidenceModel):
             raise ValueError("region reads require page images")
         if self.semantic_repair and not self.visual_inputs:
             raise ValueError("visual repair requires visual input")
+        if self.document_batching and "document" not in self.visual_inputs:
+            raise ValueError("document batching requires document input")
+        if not self.document_batching and self.max_document_pages != 1:
+            raise ValueError("multiple document pages require batching")
         return self
 
 
@@ -103,16 +111,24 @@ class PageDecisionV1(EvidenceModel):
     regions: list[NormalizedRegionV1] = Field(default_factory=list, max_length=24)
     reason_codes: list[Code] = Field(min_length=1, max_length=16)
     initial_calls: int = Field(default=0, ge=0, le=24)
+    document_call_group: str | None = Field(default=None, pattern=r"^d\d{4}$")
     repair_allowed: bool = False
     # Native evidence is retained even when visual candidates disagree with it.
     retain_native: Literal[True] = True
 
     @model_validator(mode="after")
     def consistent_action(self):
+        if len({region.as_tuple() for region in self.regions}) != len(self.regions):
+            raise ValueError("call regions must be unique within a page")
         if self.action == "visual":
-            if self.input_mode is None or not self.regions or self.initial_calls != len(self.regions):
+            if self.input_mode is None or not self.regions:
                 raise ValueError("visual decisions require explicit call units")
-        elif self.input_mode is not None or self.regions or self.initial_calls or self.repair_allowed:
+            if self.document_call_group is not None:
+                if self.input_mode != "document" or self.initial_calls not in {0, 1}:
+                    raise ValueError("document group pages share one initial call")
+            elif self.initial_calls != len(self.regions):
+                raise ValueError("visual decisions require explicit call units")
+        elif self.input_mode is not None or self.regions or self.initial_calls or self.repair_allowed or self.document_call_group:
             raise ValueError("non-visual decisions cannot issue calls")
         return self
 
@@ -176,6 +192,7 @@ class RecognitionPlanV1(EvidenceModel):
                 retry_limit += self.policy.max_patches
         if self.reserved_extra_calls > retry_limit:
             raise ValueError("plan exceeds recheck capability or budget")
+        groups: dict[str, list[PageDecisionV1]] = {}
         for page in self.decisions:
             if page.action != "visual":
                 continue
@@ -183,11 +200,20 @@ class RecognitionPlanV1(EvidenceModel):
                 raise ValueError("plan requires unavailable input capability")
             if (page.input_mode == "document" or not engine.region_reads) and page.regions != [NormalizedRegionV1()]:
                 raise ValueError("engine cannot read localized regions")
+            if page.document_call_group:
+                if not engine.document_batching:
+                    raise ValueError("engine cannot batch document pages")
+                groups.setdefault(page.document_call_group, []).append(page)
+            elif engine.document_batching and page.input_mode == "document":
+                raise ValueError("document batching requires a frozen group")
             if page.repair_allowed and not (
                 engine.semantic_repair and engine.response_recheck and self.policy.enable_repair
                 and self.policy.max_patches and self.reserved_extra_calls
             ):
                 raise ValueError("plan cannot authorize unavailable repair")
+        for pages in groups.values():
+            if len(pages) > engine.max_document_pages or [page.initial_calls for page in pages] != [1] + [0] * (len(pages) - 1):
+                raise ValueError("document group must charge one call and preserve page limits")
         return self
 
 
@@ -220,10 +246,11 @@ def plan_recognition(
     policy = policy or RecognitionPolicyV1()
     observations = {page.page_number: page for page in request.observations}
     decisions: list[PageDecisionV1] = []
-    used_pages = used_regions = calls = 0
+    used_pages = used_regions = calls = document_pages = 0
     mode = None
     if engine:
-        mode = next((value for value in ("page_image", "document") if value in engine.visual_inputs), None)
+        preference = ("document", "page_image") if engine.document_batching else ("page_image", "document")
+        mode = next((value for value in preference if value in engine.visual_inputs), None)
 
     for number in sorted(request.requested_pages):
         page = observations.get(number)
@@ -251,18 +278,24 @@ def plan_recognition(
             and "layout" not in page.risks and request.purpose != "submissions" and not policy.force_visual
         )
         regions = page.regions if region_safe else [NormalizedRegionV1()]
-        units = len(regions)
-        if used_regions + units > policy.max_regions or calls + units > min(policy.max_initial_calls, policy.max_calls):
+        regions_count = len(regions)
+        group = None
+        units = regions_count
+        if mode == "document" and engine.document_batching:
+            group = f"d{document_pages // engine.max_document_pages:04d}"
+            units = int(document_pages % engine.max_document_pages == 0)
+        if used_regions + regions_count > policy.max_regions or calls + units > min(policy.max_initial_calls, policy.max_calls):
             decisions.append(PageDecisionV1(page_number=number, action="deferred", reason_codes=reasons + ["batch_call_budget"]))
             continue
         decisions.append(PageDecisionV1(
             page_number=number, action="visual", input_mode=mode,
             regions=regions, reason_codes=reasons + ["localized_risks" if region_safe else "full_page_context"],
-            initial_calls=units,
+            initial_calls=units, document_call_group=group,
             repair_allowed=policy.enable_repair and policy.max_patches > 0 and engine.semantic_repair and engine.response_recheck,
         ))
         used_pages += 1
-        used_regions += units
+        used_regions += regions_count
+        document_pages += int(group is not None)
         calls += units
 
     extra = 0

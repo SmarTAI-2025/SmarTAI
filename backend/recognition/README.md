@@ -1,9 +1,10 @@
-# Recognition Foundation (Work Item A)
+# Recognition Foundation (Work Items A-C1)
 
 This package is not wired to an upload endpoint yet. It defines the first
-version of the evidence and planning contracts; it does not establish an OCR
-accuracy improvement. No new dependencies, migrations, settings, provider
-calls, credential probes or billing services are introduced.
+version of the evidence and planning contracts plus callable existing-engine
+adapters; it does not establish an OCR accuracy improvement. No new dependencies,
+migrations, settings, credential probes or billing services are introduced.
+The existing upload routes remain unchanged until the later wiring items.
 
 ## Boundaries
 
@@ -52,7 +53,8 @@ Dependent PRs may stack; none is merged automatically.
 | --- | --- |
 | A | Evidence, capabilities, policy, pure planner and engine port (this PR) |
 | B | Killable PDF indexing, bounded detail and targeted rendering |
-| C | Faithful reader and controlled existing-engine execution |
+| C1 | Faithful adapters, native locator and controlled PDF evidence execution |
+| C2 | Bounded scan localization, inspected image input and unified orchestration |
 | D | Evidence merge, purpose checks, one bounded repair and durable caching |
 | E | Problem extraction and compatibility routes |
 | F | Teacher reference/rubric/test materials and confirmation gates |
@@ -82,3 +84,53 @@ Tests cover coverage partitions, faithful rendering, explicit changes, page and
 region identities, unknown usage, fixed-route planning, capability failures,
 1000-page batch accounting and randomized deterministic budget bounds. Real
 problem/student accuracy, knowledge recall and runtime UX remain unverified.
+
+## C1 Execution Boundary
+
+`skills/recognition_reader.py` implements the injected LLM and existing Baidu
+ports. Prompts distinguish all six purposes and treat document instructions as
+source data. Raw text is retained without math rewriting, whitespace stripping
+or answer correction. A completed empty response remains empty. There is no
+repair, retry, fallback, solving, scoring, JSON repair or hidden companion.
+
+LLM requests send a per-call token limit through the selected SDK/wire protocol.
+SDK visible text blocks are joined in order; reasoning/signature metadata is not
+source text. Known token usage and a safe finish category are preserved; missing
+usage remains unknown. Truncated/refused output is not upgraded to confidence.
+Both local older SDKs and the deployment minimum versions are tested offline.
+
+`executor.read_pdf_plan()` checks owner identity, byte digest, source type,
+serialized plan and frozen engine capability snapshots before work. It uses B's
+killable detail/render/export tool and emits progress without resetting outer
+workflow counters. Source authorization and durable submit-once ownership remain
+the caller's responsibility, not something a source-ref string proves.
+
+One application-scoped `RecognitionCapacity` must be shared across purposes;
+limits are process-local, not a distributed quota. No engine error triggers a
+retry. Waiting, local reads and dispatch share the total deadline. Sync Gemini
+SDK calls cannot be forcibly killed: on cancellation their leases remain held
+until the SDK thread drains under its existing request timeout. This may exceed
+the logical deadline and must not be marketed as hard real-time cancellation.
+
+Plans preserve explicit document call groups. Up to the engine's page limit is
+one submitted PDF group, not one billed call per page, including mixed-mode
+plans. A multi-page Markdown response has `output_mapping=document_only`;
+submitted input page numbers never prove output-to-page alignment. Unknown OCR
+token usage is not recorded as zero and OCR-only cannot silently invoke an LLM.
+
+The read-batch artifact is not the final recognition document. It preserves
+native pages, independent visual units, failed/unprocessed pages and the exact
+unprocessed regions. `partial_pages` is derived from these regions. D must use
+all of these before deciding coverage or quality; a nonempty unit is not proof
+that its page is complete. Rendering payload bytes are not serialized.
+
+`locator.py` is a pure native-evidence locator. It keeps complete literal
+boundaries, chapter/section plus local-label proofs and exact raw offsets. A
+same-page ambiguity can select full-page context without claiming a unique
+question; cross-page duplicate identities are not resolved by taking the first.
+Unlocated means absent from the supplied evidence only, not from a whole book.
+The locator never inherits a section or continuation from mere page adjacency.
+
+C2 still must supply bounded scan localization and inspected image input; D
+still must supply fusion, the shared one-extra-call budget and durable caching.
+No current C1 result establishes end-user OCR quality or full 05/06 completion.
