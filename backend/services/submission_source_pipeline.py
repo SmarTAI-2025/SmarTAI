@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Awaitable, Callable
 
 from fastapi.concurrency import run_in_threadpool
@@ -23,6 +23,7 @@ from backend.services.background_errors import (
     is_retryable_background_error,
 )
 from backend.storage import get_storage
+from backend.services.question_sources import recognition_needs_review
 from backend.tools.file_processing import (
     ARCHIVE_EXTENSIONS,
     RawUploadSource,
@@ -46,6 +47,29 @@ class PreparedSubmissionSource:
     pre_error_code: str | None = None
     failure_phase: str | None = None
     retryable: bool = False
+    recognition: dict | None = None
+
+
+def attach_submission_recognition(results, sources):
+    """Keep reading uncertainty separate from student identity and correctness."""
+    by_source = {source.source_id: source.recognition for source in sources if source.recognition}
+    output = []
+    for result in results:
+        summary = by_source.get(result.source_id)
+        if result.student is None or summary is None:
+            output.append(result)
+            continue
+        student = {**result.student, "recognition": summary}
+        if recognition_needs_review(summary):
+            flags = ["recognition_needs_review"]
+            for key in ("failed_pages", "unprocessed_pages"):
+                pages = (summary.get("coverage") or {}).get(key) or []
+                if pages:
+                    flags.append(f"recognition_{key}:" + ",".join(str(page) for page in pages))
+            student["stu_ans"] = [dict(answer, flag=list(dict.fromkeys([*answer.get("flag", []), *flags])))
+                                   for answer in student.get("stu_ans", [])]
+        output.append(replace(result, student=student))
+    return output
 
 
 async def _persist_archive_container(
@@ -350,7 +374,18 @@ async def _persist_and_register(
             f"assignments/{task_id}/submission-sources/{job_id}/{job_attempt}"
         )
     stored: StoredFile | None = None
-    if recovered_kind is not None and recovered_prefix is not None:
+    retry_source_id = await run_in_threadpool(
+        source_outcome_repository.find_retry_source_id, operation_id=job_id, owner_id=owner_id,
+        expected_attempt=job_attempt, order_index=order_index, sha256=expected_sha256,
+    )
+    if retry_source_id is not None:
+        previous = await run_in_threadpool(source_outcome_repository.get_source, retry_source_id, owner_id=owner_id)
+        candidate = await run_in_threadpool(get_file, file_id=previous.stored_file_id, owner_id=owner_id)
+        if (candidate is not None and candidate.assignment_id == task_id
+                and candidate.sha256 == expected_sha256 and candidate.availability_status == "available"
+                and candidate.kind == recovered_kind):
+            stored = candidate
+    if stored is None and recovered_kind is not None and recovered_prefix is not None:
         stored = await run_in_threadpool(
             find_unlinked_source_file,
             owner_id=owner_id,
@@ -481,6 +516,7 @@ async def prepare_submission_sources(
     document_ocr_failed: Callable[[str, Exception], Awaitable[None]] | None = None,
     vision_unavailable_code: str | None = None,
     reporter=None,
+    recognition_reader=None,
 ) -> list[PreparedSubmissionSource]:
     """Persist originals, then OCR/read each source without batch-wide collapse."""
     container_file: StoredFile | None = None
@@ -605,8 +641,18 @@ async def prepare_submission_sources(
         if raw.content is None:
             raise RuntimeError("submission_source_persistence_failed")
         document_ocr_checkpointed = False
+        recognition = None
         try:
-            if document_ocr_skill is not None:
+            if recognition_reader is not None:
+                recovered = (recovered_ocr_text_by_source or {}).get(source_id)
+                if recovered is not None:
+                    text = recovered
+                elif source_id in (blocked_ocr_source_ids or set()):
+                    raise RuntimeError("provider_submit_uncertain")
+                else:
+                    read = await recognition_reader(raw, stored_file_id)
+                    text, recognition = read.text, read.recognition
+            elif document_ocr_skill is not None:
                 recovered = (recovered_ocr_text_by_source or {}).get(source_id)
                 if recovered is not None:
                     text = recovered
@@ -658,6 +704,7 @@ async def prepare_submission_sources(
                     filename=raw.filename,
                     content_type=raw.content_type,
                     text=text,
+                    recognition=recognition,
                 ))
         except Exception as exc:
             if document_ocr_checkpointed and document_ocr_failed is not None:

@@ -984,8 +984,8 @@ async def test_new_attempt_automatically_links_matching_prior_source():
     )
 
     assert retried_source.retry_of_source_id == first_source_id
-    assert retried_file_id != first_file_id
-    assert len(list_files(owner_id=owner_id, assignment_id=task_id)) == 2
+    assert retried_file_id == first_file_id
+    assert len(list_files(owner_id=owner_id, assignment_id=task_id)) == 1
 
 
 @pytest.mark.asyncio
@@ -1006,6 +1006,11 @@ async def test_oversized_model_field_fails_only_its_source(monkeypatch):
         }))
 
     monkeypatch.setattr("backend.agents.ingest_agent.ainvoke_with_retry", fake_invoke)
+
+    async def single_invoke(messages):
+        return await fake_invoke(_Registry.provider, messages)
+
+    monkeypatch.setattr(_Registry.provider, "ainvoke", single_invoke, raising=False)
     results = await parse_student_answer_sources(
         [
             SubmissionSourceInput(
@@ -1239,6 +1244,11 @@ async def test_archive_member_persistence_failure_is_terminal_and_does_not_skip_
         fail_one_member,
     )
     monkeypatch.setattr("backend.agents.ingest_agent.ainvoke_with_retry", fake_invoke)
+
+    async def single_invoke(messages):
+        return await fake_invoke(_Registry.provider, messages)
+
+    monkeypatch.setattr(_Registry.provider, "ainvoke", single_invoke, raising=False)
 
     await task_facade.run_task_submission_parsing(
         task_id=task_id,

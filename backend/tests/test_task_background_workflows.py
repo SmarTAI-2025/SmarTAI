@@ -1091,8 +1091,8 @@ async def test_submission_ocr_without_vision_provider_has_figma_error_code(monke
         )
 
     monkeypatch.setattr(
-        submission_source_pipeline,
-        "extract_text_from_upload",
+        task_facade,
+        "read_question_source",
         _requires_vision,
     )
     registry = NoVisionRegistry()
@@ -1187,8 +1187,8 @@ async def test_submission_rate_limit_persists_provider_rate_limited(monkeypatch)
         raise RateLimitError("429 Too Many Requests")
 
     monkeypatch.setattr(
-        submission_source_pipeline,
-        "extract_text_from_upload",
+        task_facade,
+        "read_question_source",
         _rate_limited,
     )
     registry = _VisionlessRegistry()
@@ -1232,8 +1232,8 @@ async def test_submission_connection_error_persists_provider_unreachable(monkeyp
         raise ConnectionError("failed to connect to provider")
 
     monkeypatch.setattr(
-        submission_source_pipeline,
-        "extract_text_from_upload",
+        task_facade,
+        "read_question_source",
         _unreachable,
     )
     registry = _VisionlessRegistry()

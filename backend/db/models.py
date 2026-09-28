@@ -957,7 +957,8 @@ class SourceStorageReservationRecord(Base):
         ),
         CheckConstraint(
             "(kind = 'submission' AND submission_revision_id IS NOT NULL) OR "
-            "(kind <> 'submission' AND submission_revision_id IS NULL)",
+            "(kind <> 'submission' AND submission_revision_id IS NULL) OR "
+            "(purpose = 'artifact_write' AND submission_revision_id IS NOT NULL)",
             name="ck_source_storage_reservations_revision_link",
         ),
         Index(

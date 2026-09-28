@@ -49,6 +49,7 @@ const taskData = vi.hoisted(() => ({
       stu_name: "Lin",
       source_filename: "S001-calculus.pdf",
       source_id: "source-student-1",
+      source_choices: [] as Array<{ source_id: string; filename: string }>,
       identity_status: "matched",
       identity_match_method: "filename",
       stu_ans: [{
@@ -107,6 +108,7 @@ function renderPage() {
 }
 
 beforeEach(() => {
+  taskData.student_data.S001.source_choices = [];
   taskRefetch.mockReset().mockResolvedValue({ data: taskData });
   sourcePreviewApi.getTaskSourceFiles.mockReset().mockResolvedValue({
     task_id: "task-1",
@@ -142,6 +144,19 @@ beforeEach(() => {
 });
 
 describe("StudentAnswerReviewPage source preview", () => {
+  it("selects an individual original from a multi-file student upload", async () => {
+    taskData.student_data.S001.source_choices = [
+      { source_id: "source-student-1", filename: "Page 1.pdf" },
+      { source_id: "source-other", filename: "Page 2.pdf" },
+    ];
+    const user = userEvent.setup();
+    renderPage();
+    await user.selectOptions(await screen.findByRole("combobox"), "source-other");
+    await user.click(screen.getByRole("button", { name: "查看原文件" }));
+    await waitFor(() => expect(sourcePreviewApi.loadSourcePreviewFile).toHaveBeenCalledWith(
+      "task-1", expect.objectContaining({ file_id: "file-other" }),
+    ));
+  });
   it("maps the student by source_id and keeps an unsaved answer draft", async () => {
     const user = userEvent.setup();
     renderPage();

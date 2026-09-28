@@ -137,7 +137,7 @@ def save_file(*, storage: StorageBackend, owner_id: str, kind: str,
         raise ValueError("Operation artifact fence requires id and attempt.")
     if fence_lease_token is not None and fence_operation_id is None:
         raise ValueError("Operation artifact lease requires an operation fence.")
-    if fence_operation_id is not None and assignment_id is None:
+    if fence_operation_id is not None and assignment_id is None and submission_revision_id is None:
         raise ValueError("Operation artifact fence requires assignment_id.")
     file_id = uuid.uuid4().hex
     bounded_original_name = _bounded_original_name(original_name)
@@ -175,8 +175,8 @@ def save_file(*, storage: StorageBackend, owner_id: str, kind: str,
         )
     if replacement_file_ids or replacement_group_id is not None:
         raise ValueError("Only task originals support replacement quota credit.")
-    if assignment_id is not None and knowledge_document_id is None:
-        if submission_revision_id is not None:
+    if (assignment_id is not None or submission_revision_id is not None) and knowledge_document_id is None:
+        if submission_revision_id is not None and assignment_id is not None:
             raise ValueError(
                 "A task artifact cannot link an assignment and revision together."
             )
@@ -191,6 +191,7 @@ def save_file(*, storage: StorageBackend, owner_id: str, kind: str,
             content_type=content_type,
             digest=digest,
             assignment_id=assignment_id,
+            submission_revision_id=submission_revision_id,
             fence_operation_id=fence_operation_id,
             fence_operation_attempt=fence_operation_attempt,
             fence_lease_token=fence_lease_token,
@@ -551,10 +552,11 @@ def _save_task_artifact_with_intent(
     content: bytes,
     content_type: str | None,
     digest: str,
-    assignment_id: str,
+    assignment_id: str | None,
     fence_operation_id: str | None,
     fence_operation_attempt: int | None,
     fence_lease_token: str | None,
+    submission_revision_id: str | None = None,
 ) -> StoredFile:
     """Persist a derived task object behind a restart-safe exact-key intent."""
 
@@ -564,6 +566,7 @@ def _save_task_artifact_with_intent(
         file_id=file_id,
         owner_id=owner_id,
         assignment_id=assignment_id,
+        submission_revision_id=submission_revision_id,
         kind=kind,
         original_name=original_name,
         storage_backend=getattr(storage, "name", "unknown"),
@@ -571,6 +574,9 @@ def _save_task_artifact_with_intent(
         content_type=content_type,
         requested_bytes=len(content),
         sha256=digest,
+        fence_operation_id=fence_operation_id,
+        fence_operation_attempt=fence_operation_attempt,
+        fence_lease_token=fence_lease_token,
     )
     try:
         storage.save(storage_key, content)
@@ -594,7 +600,7 @@ def _save_task_artifact_with_intent(
         )
         row = source_storage_repository.publish_task_artifact_reservation(
             reservation_id=reservation.id,
-            assignment_id=assignment_id,
+            assignment_id=reservation.assignment_id,
             fence_operation_id=fence_operation_id,
             fence_operation_attempt=fence_operation_attempt,
             fence_lease_token=fence_lease_token,
@@ -879,6 +885,21 @@ def list_files(*, owner_id: str, assignment_id: str | None = None,
     return [_record_to_dto(r) for r in records]
 
 
+def list_current_submission_originals(*, assignment_id: str, teacher_id: str) -> list[StoredFile]:
+    """Teacher-authorized originals, including student-owned revision uploads."""
+    from backend.db.models import AssignmentRecord, SubmissionRecord
+    from sqlalchemy import or_
+    with session_scope() as session:
+        records = session.scalars(select(StoredFileRecord)
+            .join(SubmissionRecord, SubmissionRecord.current_revision_id == StoredFileRecord.submission_revision_id)
+            .join(AssignmentRecord, AssignmentRecord.id == SubmissionRecord.assignment_id)
+            .where(AssignmentRecord.id == assignment_id, AssignmentRecord.teacher_id == teacher_id,
+                   AssignmentRecord.deletion_requested_at.is_(None), StoredFileRecord.kind == "submission",
+                   or_(StoredFileRecord.owner_id == teacher_id, StoredFileRecord.owner_id == SubmissionRecord.student_id))
+            .order_by(StoredFileRecord.created_at, StoredFileRecord.id)).all()
+        return [_record_to_dto(row) for row in records]
+
+
 def get_file(*, file_id: str, owner_id: str) -> StoredFile | None:
     with session_scope() as session:
         record = session.get(StoredFileRecord, file_id)
@@ -889,11 +910,20 @@ def get_file(*, file_id: str, owner_id: str) -> StoredFile | None:
 
 def find_latest_assignment_file(*, owner_id: str, assignment_id: str, kind: str,
                                 original_name_prefix: str) -> StoredFile | None:
+    return find_latest_linked_file(owner_id=owner_id, assignment_id=assignment_id, kind=kind,
+                                   original_name_prefix=original_name_prefix)
+
+
+def find_latest_linked_file(*, owner_id: str, kind: str, original_name_prefix: str,
+                            assignment_id: str | None = None, submission_revision_id: str | None = None) -> StoredFile | None:
     """Bounded metadata lookup; callers still validate the object and context."""
+    if (assignment_id is None) == (submission_revision_id is None):
+        raise ValueError("Exactly one file link is required.")
     with session_scope() as session:
         record = session.scalar(select(StoredFileRecord).where(
             StoredFileRecord.owner_id == owner_id,
             StoredFileRecord.assignment_id == assignment_id,
+            StoredFileRecord.submission_revision_id == submission_revision_id,
             StoredFileRecord.kind == kind,
             StoredFileRecord.original_name.startswith(original_name_prefix, autoescape=True),
         ).order_by(StoredFileRecord.created_at.desc(), StoredFileRecord.id.desc()).limit(1))

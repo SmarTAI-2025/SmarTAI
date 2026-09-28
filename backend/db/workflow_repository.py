@@ -45,6 +45,8 @@ from backend.db.models import (  # noqa: F401
     GradeResultRecord,
     GradingRunRecord,
     StoredFileRecord,
+    SubmissionRecord,
+    SubmissionRevisionRecord,
 )
 from backend.db.session import session_scope
 from backend.domain import education
@@ -1388,7 +1390,14 @@ def save_operation_checkpoint(
                 select(StoredFileRecord.id).where(
                     StoredFileRecord.id.in_(refs),
                     StoredFileRecord.owner_id == owner_id,
-                    StoredFileRecord.assignment_id == current.assignment_id,
+                    or_(
+                        StoredFileRecord.assignment_id == current.assignment_id,
+                        StoredFileRecord.submission_revision_id.in_(
+                            select(SubmissionRevisionRecord.id)
+                            .join(SubmissionRecord, SubmissionRecord.id == SubmissionRevisionRecord.submission_id)
+                            .where(SubmissionRecord.assignment_id == current.assignment_id)
+                        ),
+                    ),
                 ).with_for_update()
             ))
             if matched_refs != set(refs):

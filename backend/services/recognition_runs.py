@@ -29,7 +29,7 @@ from backend.recognition.local_cache import RecognitionByteCache
 from backend.recognition.models import RecognitionUsageV1
 from backend.recognition.planner import EngineCapabilitiesV1
 from backend.recognition.workflow_v2 import RecognitionAssemblyV2
-from backend.services.recognition_artifacts import RecognitionArtifactBindingV1, RecognitionArtifactFenceV1
+from backend.services.recognition_artifacts import RecognitionArtifactBindingV1, RecognitionArtifactFenceV1, artifact_assignment_id
 from backend.services.recognition_calls import RecognitionCallService, _leaf
 from backend.services.recognition_local_evidence import RecognitionLocalEvidenceReader
 from backend.services.recognition_results import RecognitionResultService
@@ -54,10 +54,10 @@ def _zero():
 
 
 class _RunContext:
-    def __init__(self, row, *, identity, request, capabilities, store, progress, clock):
+    def __init__(self, row, *, identity, request, capabilities, store, progress, clock, binding):
         self.row, self.identity, self.request, self.capabilities = row, identity, request, capabilities
         self.store, self.progress, self.clock = store, progress, clock
-        self.binding = RecognitionArtifactBindingV1(link="assignment", business_id=request.source.business_id)
+        self.binding = binding
         self.policy = request.policy.model_copy(deep=True)
         if request.scope == "targets":
             self.policy.max_detail_pages = min(self.policy.max_detail_pages, 2 * len(request.targets) + 4)
@@ -146,7 +146,8 @@ class RecognitionRunService:
             if checkpoint.final_artifact_id:
                 envelope = await self.store.load(
                     checkpoint.final_artifact_id, source=request.source, identity=identity,
-                    binding=RecognitionArtifactBindingV1(link="assignment", business_id=request.source.business_id),
+                    binding=RecognitionArtifactBindingV1.model_validate((row.payload or {}).get("binding") or
+                        dict(link="assignment", business_id=request.source.business_id)),
                     authorized_owner_id=row.owner_id,
                 )
                 if envelope.payload_kind != "assembly_v2":
@@ -161,7 +162,7 @@ class RecognitionRunService:
                                           RecognitionUsageV1(input_tokens=None, output_tokens=None, usage_complete=False),
                                           safe_error_code="recognition_artifact_invalid")
 
-    async def run(self, request, source_bytes, *, engine, prompt_version, authorized_owner_id):
+    async def run(self, request, source_bytes, *, engine, prompt_version, authorized_owner_id, binding=None):
         try:
             request = RecognitionReadRequestV1.model_validate(request.model_dump(warnings=False))
             caps = None if engine is None else EngineCapabilitiesV1.model_validate(engine.capabilities.model_dump(warnings=False))
@@ -171,13 +172,17 @@ class RecognitionRunService:
         if source.owner_id != authorized_owner_id:
             raise RecognitionError("recognition_source_mismatch")
         identity = final_cache_identity(request, capabilities=caps, prompt_version=prompt_version, workflow_version=2)
-        binding = RecognitionArtifactBindingV1(link="assignment", business_id=source.business_id)
+        binding = binding or RecognitionArtifactBindingV1(link="assignment", business_id=source.business_id)
+        binding = RecognitionArtifactBindingV1.model_validate(binding.model_dump())
+        if binding.business_id != source.business_id:
+            raise RecognitionError("recognition_source_mismatch")
+        assignment_id = await run_in_threadpool(artifact_assignment_id, binding, authorized_owner_id)
         # create_operation checks live assignment ownership. Crucially, this
         # internal operation never uses the legacy error/expiry retry reset.
         row, _ = await run_in_threadpool(
-            workflow_repository.create_operation, assignment_id=source.business_id, owner_id=authorized_owner_id,
+            workflow_repository.create_operation, assignment_id=assignment_id, owner_id=authorized_owner_id,
             operation_type=OPERATION_TYPE, input_hash=identity.key, retry_existing=False,
-            payload=dict(identity_key=identity.key),
+            payload=dict(identity_key=identity.key, binding=binding.model_dump()),
         )
         if row.terminal_summary is not None:
             return await self._restored(row, request, identity,
@@ -203,7 +208,7 @@ class RecognitionRunService:
                 return await self._restored(latest, request, identity, status="already_running")
             return RecognitionRunResultV1("already_running", row.id, None, _zero(), _zero())
         context = _RunContext(row, identity=identity, request=request, capabilities=caps,
-                              store=self.store, progress=self.progress, clock=self.clock)
+                              store=self.store, progress=self.progress, clock=self.clock, binding=binding)
         assembly = None
         try:
             if row.checkpoint:

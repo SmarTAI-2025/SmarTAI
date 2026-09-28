@@ -125,7 +125,7 @@ class QuestionSourceRead:
 async def read_question_source(*, owner_id, task_id, content, filename, content_type=None,
                                route: StageProviderRoute, registry, stored_file_id=None,
                                extraction_hint="", options=None, purpose="problems", reporter=None, text_reader=None,
-                               allow_vision=None):
+                               allow_vision=None, binding=None):
     from backend.services.source_files import persist_problem_source
 
     scope = question_recognition_options(options, extraction_hint=extraction_hint)
@@ -139,13 +139,16 @@ async def read_question_source(*, owner_id, task_id, content, filename, content_
     if not allow_vision and media_type.startswith("image/"):
         raise RecognitionError("material_ocr_confirmation_required")
     if stored_file_id is None:
+        if binding is not None and binding.link != "assignment":
+            raise RecognitionError("recognition_source_unavailable")
         stored, _ = await run_in_threadpool(
             persist_problem_source, storage=get_storage(), owner_id=owner_id, task_id=task_id,
             original_name=filename, content=content, content_type=media_type,
         )
         stored_file_id = stored.id
     source = RecognitionSourceRefV1(
-        owner_id=owner_id, scope="assignment_source", business_id=task_id, stored_file_id=stored_file_id,
+        owner_id=owner_id, scope="submission_source" if purpose == "submissions" else "assignment_source",
+        business_id=binding.business_id if binding is not None else task_id, stored_file_id=stored_file_id,
         original_name=filename, content_type=media_type, input_sha256=hashlib.sha256(content).hexdigest(),
     )
     skill, engine = None, None
@@ -167,7 +170,7 @@ async def read_question_source(*, owner_id, task_id, content, filename, content_
     try:
         run = await RecognitionRunService(store=RecognitionArtifactStore(get_storage()), capacity=recognition_capacity(),
                                            cache=_CACHE, progress=reporter).run(
-            request, content, engine=engine, prompt_version=PROMPT_VERSION, authorized_owner_id=owner_id,
+            request, content, engine=engine, prompt_version=PROMPT_VERSION, authorized_owner_id=owner_id, binding=binding,
         )
     finally:
         if skill is not None:

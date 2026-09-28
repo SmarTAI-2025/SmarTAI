@@ -136,12 +136,17 @@ export function StudentAnswerReviewPage() {
     previous: activeIndex > 0 ? filteredQuestions[activeIndex - 1] : null,
     next: activeIndex >= 0 && activeIndex < filteredQuestions.length - 1 ? filteredQuestions[activeIndex + 1] : null,
   };
+  const [selectedSource, setSelectedSource] = useState<{ student: string; source: string } | null>(null);
+  const sourceChoices = student?.source_choices ?? [];
+  const sourceScope = `${taskId}:${studentId}`;
+  const selectedSourceChoice = sourceChoices.find((choice) => selectedSource?.student === sourceScope
+    && selectedSource.source === choice.source_id) ?? sourceChoices[0];
   const sourcePreview = useSourcePreview({
     taskId,
     workflowRevision: taskQuery.data?.workflow_revision,
     sourceKind: "submission",
-    sourceId: student?.source_id,
-    displayName: student?.source_filename,
+    sourceId: selectedSourceChoice?.source_id ?? student?.source_id,
+    displayName: selectedSourceChoice?.filename ?? student?.source_filename,
     refreshTask: taskQuery.refetch,
   });
 
@@ -533,6 +538,18 @@ export function StudentAnswerReviewPage() {
               setIdentityError(null);
             }}
             previewAction={(
+              <div className="flex min-w-0 flex-wrap items-center gap-2">
+              {sourceChoices.length > 1 ? (
+                <select
+                  aria-label={t("sourcePreviewTitle")}
+                  title={selectedSourceChoice?.filename}
+                  value={selectedSourceChoice?.source_id}
+                  onChange={(event) => setSelectedSource({ student: sourceScope, source: event.target.value })}
+                  className="h-8 min-w-0 max-w-48 rounded-md border bg-background px-2 text-xs"
+                >
+                  {sourceChoices.map((choice) => <option key={choice.source_id} value={choice.source_id}>{choice.filename}</option>)}
+                </select>
+              ) : null}
               <OriginalFilePreviewTrigger
                 state={sourcePreview.triggerState}
                 unavailableReason={sourcePreview.unavailableReason}
@@ -541,6 +558,7 @@ export function StudentAnswerReviewPage() {
                 onClose={sourcePreview.closePreview}
                 t={t}
               />
+              </div>
             )}
             t={t}
           />
