@@ -3972,11 +3972,15 @@ def start_task_grading(
         submission_operation_id=workflow.parse_job_id,
         frozen_revision_ids=frozen_revision_ids,
     )
+    from backend.knowledge.snapshots import freeze_documents
+    knowledge_ids = sorted(_selected_knowledge(task_id, owner_id)) if setup.knowledge_scope != "none" else []
+    knowledge_versions = freeze_documents(owner_id, knowledge_ids)
     input_manifest = {
         "questions": [question.model_dump(mode="json") for question in questions],
         "submission_revision_ids": list(frozen_revision_ids),
         "source_file_ids": list(source_file_ids),
-        "knowledge_document_ids": sorted(_selected_knowledge(task_id, owner_id)),
+        "knowledge_document_ids": knowledge_ids,
+        "knowledge_content_versions": knowledge_versions,
         "provider_configuration_fingerprint": provider_configuration_fingerprint(
             owner_id=owner_id,
             selected_provider_ids=setup.selected_provider_ids,

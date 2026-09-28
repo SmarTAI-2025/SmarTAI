@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { PdfDocumentPreview } from "./PdfDocumentPreview";
 
@@ -88,5 +88,16 @@ describe("PdfDocumentPreview", () => {
     const fallback = document.querySelector('object[data="/fixture.pdf"]');
     expect(fallback).toHaveAttribute("type", "application/pdf");
     expect(screen.getByRole("button", { name: "Retry" })).toBeEnabled();
+  });
+
+  it("reaches the last page of a thousand-page book with only three mounted canvases", async () => {
+    mocks.getDocument.mockReturnValue({ promise: Promise.resolve({ numPages: 1000, getPage: mocks.getPage }), destroy: mocks.destroy });
+    render(<PdfDocumentPreview url="/long.pdf" title="Long book" initialPage={800} loadingLabel="Loading" errorTitle="Failed" errorDescription="Retry" retryLabel="Retry" openLabel="Open" />);
+    expect(await screen.findByLabelText("PDF page 800")).toBeVisible();
+    expect(document.querySelectorAll("canvas")).toHaveLength(3);
+    fireEvent.change(screen.getByRole("spinbutton", { name: "PDF page" }), { target: { value: "1000" } });
+    expect(await screen.findByLabelText("PDF page 1000")).toBeVisible();
+    expect(document.querySelectorAll("canvas")).toHaveLength(1);
+    expect(screen.getByRole("button", { name: "Next pages" })).toBeDisabled();
   });
 });

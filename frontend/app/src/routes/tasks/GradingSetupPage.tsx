@@ -745,6 +745,7 @@ export function KnowledgeSection({ locale, taskId, value, onChange }: {
           </div>
         )}
       </div>
+      <KnowledgeSearchPanel documentIds={docs.map((doc) => doc.doc_id)} />
       {knowledgeNotice ? <p role="status" className="mt-2 text-[13px] leading-5 text-emerald-700 dark:text-emerald-300">{knowledgeNotice}</p> : null}
       {knowledgeError ? <p role="alert" className="mt-2 text-[13px] leading-5 text-danger">{knowledgeError}</p> : null}
     </section>
@@ -1037,6 +1038,8 @@ function readinessMessage(code: string, locale: Locale): string {
 function localizeSaveError(error: unknown, locale: Locale): string {
   const normalized = normalizeAPIError(error);
   const code = getAPIErrorCode(normalized) ?? "";
+  if (code === "knowledge_content_not_ready") return locale === "zh-CN" ? "所选资料还没有可检索内容，请等待入库或暂时移除该资料。" : "Selected material is not searchable yet. Wait for ingestion or remove it from this task.";
+  if (code === "knowledge_content_version_unavailable") return locale === "zh-CN" ? "资料版本已变化，请刷新后重新开始。" : "Material version unavailable. Refresh before starting again.";
   if (["workflow_busy"].includes(code)) return gradingSetupText(locale, "workflowBusy");
   if (["invalid_state"].includes(code)) return gradingSetupText(locale, "workflowNotReady");
   if (["grading_setup_locked"].includes(code)) return gradingSetupText(locale, "setupLocked");
@@ -1053,3 +1056,4 @@ function localizeKnowledgeStorageError(error: unknown, locale: Locale): string {
   return normalizeAPIError(error).message;
 }
 import { KnowledgeIngestionStatus } from "@/components/knowledge-base/KnowledgeIngestionStatus";
+import { KnowledgeSearchPanel } from "@/components/knowledge-base/KnowledgeSearchPanel";

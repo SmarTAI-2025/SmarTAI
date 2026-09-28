@@ -12,6 +12,7 @@ import {
   UploadDialog,
 } from "@/components/knowledge-base/CourseLibraryDialogs";
 import { CourseLibraryTable } from "@/components/knowledge-base/CourseLibraryTable";
+import { KnowledgeSearchPanel } from "@/components/knowledge-base/KnowledgeSearchPanel";
 import { Button } from "@/components/ui/Button";
 import { useI18n } from "@/i18n/I18nProvider";
 import type {
@@ -159,6 +160,7 @@ export function KnowledgeBasePage() {
         />
       </div>
 
+      <KnowledgeSearchPanel documentIds={materials.flatMap((material) => material.document_id ? [material.document_id] : [])} />
       <KnowledgeStorageOverview
         locale={locale}
         usage={storageUsageQuery.data}

@@ -36,6 +36,49 @@ class AssignmentKnowledgeSelection(BaseModel):
     document_ids: list[str] = Field(default_factory=list, max_length=20)
 
 
+class KnowledgeSearchRequest(BaseModel):
+    query: str = Field(min_length=1, max_length=4000)
+    document_ids: list[str] = Field(min_length=1, max_length=20)
+    limit: int = Field(default=5, ge=1, le=10)
+
+
+@router.post("/search")
+async def search_knowledge(request: KnowledgeSearchRequest, current: User = Depends(get_current_user)):
+    from dataclasses import asdict
+    from backend.knowledge.retriever import PersistentKnowledgeRetriever, _reference
+    from backend.db.knowledge_ingestion_repository import live_document
+    from backend.db.knowledge_repository import _document
+    from backend.db.session import session_scope
+    try:
+        with session_scope() as session:
+            documents = [_document(live_document(session, key, current.id)) for key in dict.fromkeys(request.document_ids)]
+        refs = [_reference(doc) for doc in documents if doc.chunk_count and doc.status in {"ready", "partial"}]
+        chunks = await PersistentKnowledgeRetriever().retrieve_documents(request.query, request.limit,
+            owner_id=current.id, documents=documents, refs=refs)
+        return dict(matches=[asdict(chunk) for chunk in chunks], documents=[doc.public() for doc in documents],
+                    matched=bool(chunks), retrieval="local_bm25", provider_calls=0)
+    except DomainError as exc:
+        return domain_error_response(exc)
+
+
+@router.get("/documents/{document_id}/citations/{chunk_id}")
+def get_citation(document_id: str, chunk_id: str, current: User = Depends(get_current_user)):
+    from backend.db.knowledge_ingestion_repository import live_document
+    from backend.db.models import KnowledgeChunkRecord
+    from backend.db.session import session_scope
+    try:
+        with session_scope() as session:
+            doc = live_document(session, document_id, current.id)
+            chunk = session.get(KnowledgeChunkRecord, chunk_id)
+            if chunk is None or chunk.document_id != doc.id:
+                raise NotFound("knowledge_citation")
+            return dict(chunk_id=chunk.id, content=chunk.content, document_id=doc.id,
+                        content_version=chunk.content_version, source_sha256=doc.sha256,
+                        metadata=chunk.chunk_metadata, original_name=doc.original_name)
+    except DomainError as exc:
+        return domain_error_response(exc)
+
+
 @router.post("/documents", status_code=status.HTTP_201_CREATED)
 async def upload_document(file: UploadFile = File(...), recognition_route_id: str | None = Form(default=None),
                           current: User = Depends(get_current_user)):
@@ -156,7 +199,32 @@ async def retry_document(document_id: str, recognition_route_id: str | None = Fo
 
 @router.get("/documents/{document_id}/download")
 def download_document(document_id: str, current: User = Depends(get_current_user)):
-    document = _visible_personal_document(document_id, current.id)
+    return _download_original(document_id, current)
+
+
+@router.get("/documents/{document_id}/citations/{chunk_id}/download")
+def download_citation_original(document_id: str, chunk_id: str, current: User = Depends(get_current_user)):
+    return _download_original(document_id, current, chunk_id=chunk_id)
+
+
+def _download_original(document_id, current, *, chunk_id=None):
+    from backend.db.knowledge_storage_repository import visible_document_ids
+    def current_document():
+        if chunk_id is not None:
+            from backend.db.knowledge_ingestion_repository import live_document
+            from backend.db.knowledge_repository import _document
+            from backend.db.models import KnowledgeChunkRecord
+            from backend.db.session import session_scope
+            with session_scope() as session:
+                try:
+                    doc = live_document(session, document_id, current.id)
+                except DomainError:
+                    return None
+                chunk = session.get(KnowledgeChunkRecord, chunk_id)
+                return _document(doc) if chunk is not None and chunk.document_id == doc.id else None
+        return get_document(document_id, current.id) if document_id in visible_document_ids(
+            current.id, include_task_only=False, document_ids=(document_id,)) else None
+    document = current_document()
     if document is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Knowledge document not found")
     stored = document_file(document, current.id)
@@ -172,10 +240,10 @@ def download_document(document_id: str, current: User = Depends(get_current_user
     except (FileNotFoundError, ValueError):
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Knowledge file content not found")
     import hashlib
-    if len(body) != stored.size_bytes or hashlib.sha256(body).hexdigest() != stored.sha256 or _visible_personal_document(document_id, current.id) is None:
+    if len(body) != stored.size_bytes or hashlib.sha256(body).hexdigest() != stored.sha256 or current_document() is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Knowledge file unavailable")
     return Response(content=body, media_type=stored.content_type or "application/octet-stream",
-                    headers={"Content-Disposition": f"attachment; filename*=UTF-8''{quote(stored.original_name, safe='')}"})
+                    headers={"Content-Disposition": f"attachment; filename*=UTF-8''{quote(stored.original_name, safe='')}", "Cache-Control": "private, no-store"})
 
 
 @router.delete("/documents/{document_id}", status_code=status.HTTP_202_ACCEPTED)

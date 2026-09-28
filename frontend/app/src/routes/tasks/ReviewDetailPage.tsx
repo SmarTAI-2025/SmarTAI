@@ -1,4 +1,5 @@
 import { ResultQuestionQuery, useResultQuestionFilter } from "@/components/tasks/ResultQuestionQuery";
+import { KnowledgeCitationPreview } from "@/components/knowledge-base/KnowledgeCitationPreview";
 import {
   AlertTriangle,
   ArrowDown,
@@ -801,6 +802,10 @@ function ReviewQuestionCard({ locale, student, question, correction, draft, requ
                         <li key={`${expert.provider}-${index}`} className="rounded-md bg-muted/60 px-3 py-2">
                           <p className="font-semibold text-foreground">{expert.provider} · {formatScore(expert.score)}/{formatScore(expert.max_score)} · {formatConfidence(expert.confidence)}</p>
                           {expert.comment ? <MarkdownMath className="mt-1 text-[11px] leading-5">{expert.comment}</MarkdownMath> : null}
+                          {expert.knowledge_citations?.length ? <div className="mt-2 border-t pt-2">
+                            <p>{tx(locale, "检索参考（不等于结论已核实）", "Retrieved references (not verified support)")}</p>
+                            {expert.knowledge_citations.map((citation) => <KnowledgeCitationPreview key={citation.citation_id} citation={citation} />)}
+                          </div> : null}
                         </li>
                       ))}
                     </ul>
