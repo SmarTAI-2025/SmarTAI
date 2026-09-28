@@ -22,6 +22,10 @@ const SORT_VALUES = new Set<HistorySort>([
   "attention_first",
   "stage_asc",
   "stage_desc",
+  "progress_asc",
+  "progress_desc",
+  "eta_asc",
+  "eta_desc",
 ]);
 const STATUS_VALUES = new Set<TaskStatus>([
   "draft",

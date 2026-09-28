@@ -46,6 +46,7 @@ export function QuestionPreparationOverviewPage() {
     { key: naturalKey, direction: activeSort.endsWith("_desc") ? "desc" : "asc" }, smartFilter.cancel);
   const sortKey = (headerSort.current?.key ?? naturalKey) as MatrixSortKey;
   const sortDirection = headerSort.current?.direction ?? "asc";
+  const preserveGroundedOrder = hasGroundedOrder(smartFilter.intent) && !headerSort.current;
   const allRisks = useMemo(() => collectRiskRows(problems), [problems]);
   const allRows = useMemo<QuestionMatrixRow[]>(() => problems.map((problem) => ({
     problem,
@@ -54,9 +55,9 @@ export function QuestionPreparationOverviewPage() {
   const rows = useMemo(() => {
     const selected = new Set(selectPreparationQuestions(problems, smartFilter.intent).map((problem) => problem.q_id));
     const textFiltered = allRows.filter((row) => selected.has(row.problem.q_id));
-    if (hasGroundedOrder(smartFilter.intent) && !headerSort.current) return groundedRows(textFiltered, smartFilter.intent, "questions", r => r.problem.q_id);
+    if (preserveGroundedOrder) return groundedRows(textFiltered, smartFilter.intent, "questions", r => r.problem.q_id);
     return sortMatrixRows(textFiltered, sortKey, sortDirection, locale);
-  }, [allRows, problems, smartFilter.intent, locale, sortDirection, sortKey]);
+  }, [allRows, problems, smartFilter.intent, locale, sortDirection, sortKey, preserveGroundedOrder]);
   const metrics = useMemo(() => ({
     questions: new Set(allRisks.map((row) => row.problem.q_id)).size,
     lowConfidence: allRisks.filter((row) => row.issue.code === "low_confidence").length,
@@ -108,7 +109,7 @@ export function QuestionPreparationOverviewPage() {
               rows={rows}
               taskId={taskId ?? ""}
               locale={locale}
-              sortKey={sortKey}
+              sortKey={preserveGroundedOrder ? undefined : sortKey}
               sortDirection={sortDirection}
               onSort={toggleSort}
             />
@@ -134,7 +135,7 @@ function QuestionMatrix({ rows, taskId, locale, sortKey, sortDirection, onSort }
   rows: QuestionMatrixRow[];
   taskId: string;
   locale: string;
-  sortKey: MatrixSortKey;
+  sortKey: MatrixSortKey | undefined;
   sortDirection: MatrixSortDirection;
   onSort: (key: MatrixSortKey) => void;
 }) {
@@ -178,11 +179,11 @@ function QuestionMatrix({ rows, taskId, locale, sortKey, sortDirection, onSort }
   );
 }
 
-function SortableHeading({ className, label, sortKey, activeKey, direction, locale, onSort }: { className: string; label: string; sortKey: MatrixSortKey; activeKey: MatrixSortKey; direction: MatrixSortDirection; locale: string; onSort: (key: MatrixSortKey) => void }) {
+function SortableHeading({ className, label, sortKey, activeKey, direction, locale, onSort }: { className: string; label: string; sortKey: MatrixSortKey; activeKey: MatrixSortKey | undefined; direction: MatrixSortDirection; locale: string; onSort: (key: MatrixSortKey) => void }) {
   return <SortableTableHead className={cn("py-3", className)} direction={activeKey === sortKey ? direction : null} onSort={() => onSort(sortKey)} locale={locale}>{label}</SortableTableHead>;
 }
 
-function SortButton({ label, sortKey, activeKey, direction, locale, onSort }: { label: string; sortKey: MatrixSortKey; activeKey: MatrixSortKey; direction: MatrixSortDirection; locale: string; onSort: (key: MatrixSortKey) => void }) {
+function SortButton({ label, sortKey, activeKey, direction, locale, onSort }: { label: string; sortKey: MatrixSortKey; activeKey: MatrixSortKey | undefined; direction: MatrixSortDirection; locale: string; onSort: (key: MatrixSortKey) => void }) {
   return <HeaderSortButton label={label} direction={activeKey === sortKey ? direction : null} onSort={() => onSort(sortKey)} locale={locale}>{label}</HeaderSortButton>;
 }
 

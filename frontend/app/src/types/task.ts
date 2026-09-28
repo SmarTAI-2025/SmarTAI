@@ -173,6 +173,8 @@ export interface TaskLite {
   course_id?: string | null;
   tag_ids?: string[];
   needs_attention?: boolean;
+  progress_percent?: number | null;
+  eta_seconds?: number | null;
   extract_job_id?: string | null;
   parse_job_id?: string | null;
   grading_job_id?: string | null;

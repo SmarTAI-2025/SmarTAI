@@ -2,14 +2,14 @@ import { SortableTableHead } from "@/components/ui/SortableTableHead";
 import { MoreHorizontal, Trash2 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
-import { useTaskProgress } from "@/hooks/useTaskProgress";
 import { useI18n } from "@/i18n/I18nProvider";
 import { cn } from "@/lib/cn";
-import { getTaskDestination, isTaskProcessing } from "@/lib/taskFlow";
+import { getTaskDestination } from "@/lib/taskFlow";
 import type { HistoryCourseFacet, TaskHistoryQuery, TaskLite, TaskTag } from "@/types";
 import { HistoryTagPopover } from "./HistoryTagPopover";
 import {
   formatHistoryTime,
+  formatHistoryEta,
   formatSemesterLabel,
   HISTORY_ACTION_KEYS,
   HISTORY_STAGE_KEYS,
@@ -62,8 +62,12 @@ export function HistoryTaskTable({
             <SortableTableHead as="div" className="px-[14px]"
               direction={sort === "stage_asc" ? "asc" : sort === "stage_desc" ? "desc" : null}
               onSort={() => onFilter({ sort: sort === "stage_asc" ? "stage_desc" : "stage_asc" })}>{t("historyColumnStage")}</SortableTableHead>
-            <div role="columnheader" className="hidden px-[14px] md:block">{t("historyColumnProgress")}</div>
-            <div role="columnheader" className="hidden px-[14px] md:block">{t("historyColumnEta")}</div>
+            <SortableTableHead as="div" className="hidden px-[14px] md:block"
+              direction={sort === "progress_asc" ? "asc" : sort === "progress_desc" ? "desc" : null}
+              onSort={() => onFilter({ sort: sort === "progress_asc" ? "progress_desc" : "progress_asc" })}>{t("historyColumnProgress")}</SortableTableHead>
+            <SortableTableHead as="div" className="hidden px-[14px] md:block"
+              direction={sort === "eta_asc" ? "asc" : sort === "eta_desc" ? "desc" : null}
+              onSort={() => onFilter({ sort: sort === "eta_asc" ? "eta_desc" : "eta_asc" })}>{t("historyColumnEta")}</SortableTableHead>
             <SortableTableHead as="div" className="hidden px-[14px] md:block"
               direction={sort === "updated_asc" ? "asc" : sort === "updated_desc" ? "desc" : null}
               onSort={() => onFilter({ sort: sort === "updated_asc" ? "updated_desc" : "updated_asc" })}>{t("historyColumnUpdated")}</SortableTableHead>
@@ -187,7 +191,7 @@ function HistoryTaskRow({
       </div>
 
       <HistoryProgressCell task={task} />
-      <div role="cell" className="hidden px-[14px] tabular-nums text-muted-foreground md:block">—</div>
+      <div role="cell" className="hidden px-[14px] tabular-nums text-muted-foreground md:block">{formatHistoryEta(task.eta_seconds, locale)}</div>
       <div role="cell" className="hidden px-[14px] tabular-nums text-muted-foreground md:block">{formatHistoryTime(task.updated_at, locale)}</div>
       <div role="cell" className="hidden min-w-0 items-center gap-1 px-[14px] md:flex">
           <Link to={destination} title={t(HISTORY_ACTION_KEYS[task.status])} className="min-w-0 flex-1 truncate font-medium text-muted-foreground outline-none hover:text-primary focus-visible:rounded focus-visible:ring-2 focus-visible:ring-ring">
@@ -206,10 +210,7 @@ function HistoryTaskRow({
 
 function HistoryProgressCell({ task }: { task: TaskLite }) {
   const { t } = useI18n();
-  const active = isTaskProcessing(task.status);
-  const progress = useTaskProgress(task.task_id, { enabled: active });
-  let value = "—";
-  if (active && progress.progress) value = `${progress.percent}%`;
+  let value = task.progress_percent != null && Number.isFinite(task.progress_percent) ? `${task.progress_percent}%` : "—";
   if (task.status === "draft") value = t("historyProgressPending");
   if (["graded", "review_confirmed", "finalized"].includes(task.status)) value = "100%";
   return <div role="cell" className="hidden px-[14px] tabular-nums text-muted-foreground md:block">{value}</div>;

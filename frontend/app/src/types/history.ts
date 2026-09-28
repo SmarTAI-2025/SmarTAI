@@ -35,7 +35,11 @@ export type HistorySort =
   | "name_desc"
   | "attention_first"
   | "stage_asc"
-  | "stage_desc";
+  | "stage_desc"
+  | "progress_asc"
+  | "progress_desc"
+  | "eta_asc"
+  | "eta_desc";
 
 export interface TaskHistoryQuery {
   page: number;

@@ -157,7 +157,7 @@ def project_task(task: dict, result: dict) -> dict[str, list[dict]]:
         answers = {str(a["q_id"]): a for a in (student.get("stu_ans") or item.get("student_answers") or [])}
         for qid in dict.fromkeys([*questions, *answers]):
             a = answers.get(qid); content = (a or {}).get("content") or ""
-            state = "missing" if a is None else "empty" if not content.strip() else "reviewed" if a.get("review_status") == "confirmed" else "flagged" if a.get("flag") else "recognized"
+            state = "missing" if a is None else "reviewed" if a.get("review_status") == "confirmed" else "empty" if not content.strip() else "flagged" if a.get("flag") else "recognized"
             tables["answers"].append({"task_id": tid, "student_id": sid, "q_id": qid, "content": content, "state": state,
                 "review_status": (a or {}).get("review_status"), "flags": dumps((a or {}).get("flag") or []), "metadata": dumps({"number": (a or {}).get("number"), "type": (a or {}).get("type")})})
     for index, q in enumerate(sorted(questions.values(), key=_question_order)):

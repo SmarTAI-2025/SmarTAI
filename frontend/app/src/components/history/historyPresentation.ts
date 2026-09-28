@@ -94,3 +94,12 @@ export function formatHistoryTime(timestamp: number | undefined, locale: string)
   return new Intl.DateTimeFormat(locale, { year: "numeric", month: "2-digit", day: "2-digit" })
     .format(new Date(timestamp * 1_000));
 }
+
+export function formatHistoryEta(seconds: number | null | undefined, locale: string): string {
+  if (seconds == null || !Number.isFinite(seconds) || seconds < 0) return "—";
+  const zh = locale === "zh-CN";
+  if (seconds === 0) return zh ? "0 秒" : "0 s";
+  if (seconds < 60) return zh ? `约 ${Math.ceil(seconds)} 秒` : `~${Math.ceil(seconds)} s`;
+  if (seconds < 3600) return zh ? `约 ${Math.ceil(seconds / 60)} 分钟` : `~${Math.ceil(seconds / 60)} min`;
+  return zh ? `约 ${Math.ceil(seconds / 3600)} 小时` : `~${Math.ceil(seconds / 3600)} h`;
+}

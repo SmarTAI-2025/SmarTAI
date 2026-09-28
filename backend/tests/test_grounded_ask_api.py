@@ -3,9 +3,10 @@ import json
 import pytest
 from sqlalchemy import select
 from backend.api import analytics
-from backend.db.models import GradeResultRecord, UserRecord
+from backend.db.models import AssignmentRecord, GradeResultRecord, UserRecord
 from backend.db.session import session_scope
 from backend.db.workflow_repository import AssignmentStudentPresentationRecord
+from backend.services import task_facade
 from backend.tests.test_grounded_ask import Provider
 from backend.tests.test_normalized_analytics import _client, _Registry, _seed_graded_assignment, _user, _id
 
@@ -51,6 +52,8 @@ def test_history_is_authorized_by_owner_even_when_query_requests_every_task():
     response=_client(owner,_Registry(provider)).post("/analytics/ask",json={"question":"列出所有任务","surface":"history"})
     assert response.status_code==200,response.text
     assert response.json()["selection"]["ids"]==[own["task_id"]]
+    assert response.json()["tasks"][0]["progress_percent"] == 100
+    assert response.json()["tasks"][0]["eta_seconds"] == 0
     assert hidden["task_id"] not in response.text
 
 
@@ -59,6 +62,34 @@ def test_invalid_detail_student_cannot_invoke_model():
     provider=Provider()
     response=_client(owner,_Registry(provider)).post(f"/analytics/{seeded['task_id']}/ask",json={"question":"错题","surface":"question_analysis","context_student_id":"NOT_IN_TASK"})
     assert response.status_code==404 and provider.calls==[]
+
+
+def test_ask_reviewed_answers_includes_teacher_confirmed_blank():
+    owner = _user("teacher", "confirmed-blank")
+    seeded = _seed_graded_assignment(owner)
+    task_id, student_id = seeded["task_id"], seeded["students"][0].id
+    with session_scope() as session:
+        session.get(AssignmentRecord, task_id).status = "published"
+    task = task_facade.get_task(task_id=task_id, owner_id=owner.id)
+    updated = task_facade.update_student_answer(
+        task_id=task_id, owner_id=owner.id, display_student_id=student_id,
+        q_id="Q1", patch={"content": "", "review_status": "confirmed"},
+        expected_revision=task["workflow_revision"],
+    )
+    assert updated["status"] == "ok"
+    task = task_facade.get_task(task_id=task_id, owner_id=owner.id)
+    answer = task["student_data"][student_id]["stu_ans"][0]
+    assert answer["content"] == "" and answer["review_status"] == "confirmed"
+    provider = Provider({}, {
+        "result_kind": "questions",
+        "sql": "SELECT q_id FROM answers WHERE state='reviewed' ORDER BY q_id",
+    })
+    response = _client(owner, _Registry(provider)).post(f"/analytics/{task_id}/ask", json={
+        "question": "已校对的作答", "surface": "student_answer_review", "context_student_id": student_id,
+    })
+    assert response.status_code == 200, response.text
+    assert response.json()["recognized"]
+    assert response.json()["selection"]["ids"] == ["Q1"]
 
 
 def test_rejected_write_does_not_touch_production_grade_rows():
