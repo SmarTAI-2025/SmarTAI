@@ -161,11 +161,20 @@ PDF_EVIDENCE_STATUS_CODES = {
     "pdf_evidence_timeout": 408,
     "pdf_evidence_protocol_invalid": 502,
     "pdf_processing_unavailable": 503,
+    "image_invalid": 400,
+    "image_input_too_large": 413,
+    "image_format_mismatch": 422,
+    "image_multiframe_unsupported": 422,
+    "image_orientation_invalid": 422,
+    "image_mode_unsupported": 422,
+    "image_pixel_limit_exceeded": 413,
+    "image_response_too_large": 413,
+    "image_processing_failed": 400,
 }
 
 
 class PdfEvidenceError(DomainError):
-    """Bounded public errors from the owned PDF evidence worker, never its text."""
+    """Safe codes from the owned PDF/image worker; legacy exception name retained."""
 
     def __init__(self, code: str):
         safe_code = code if code in PDF_EVIDENCE_STATUS_CODES else "pdf_evidence_protocol_invalid"

@@ -10,6 +10,11 @@ import unicodedata
 
 import pymupdf as fitz
 
+if __package__:
+    from . import image_evidence_worker
+else:
+    import image_evidence_worker
+
 CONTRACT = "smartai.pdf.evidence"
 MAX_INPUT_BYTES = 100 * 1024 * 1024
 MAX_REQUEST_BYTES = 64 * 1024
@@ -22,12 +27,15 @@ MAX_RESPONSE_BYTES = 8 * 1024 * 1024
 MAX_RENDER_PIXELS = 16_000_000
 MAX_RENDER_RGB_BYTES = 48 * 1024 * 1024
 MAX_RENDER_SIDE = 8192
-OPERATIONS = frozenset({"index", "detail", "render", "export_pages"})
+OPERATIONS = frozenset({"index", "detail", "render", "export_pages", "contact_sheet", "image_prepare"})
 ERROR_CODES = frozenset({
     "pdf_invalid_request", "pdf_input_too_large", "pdf_invalid", "pdf_encrypted",
     "pdf_page_limit_exceeded", "pdf_page_out_of_range", "pdf_character_limit_exceeded",
     "pdf_structure_limit_exceeded", "pdf_response_too_large", "pdf_render_limit_exceeded",
     "pdf_processing_failed",
+    "image_invalid", "image_input_too_large", "image_format_mismatch", "image_multiframe_unsupported",
+    "image_orientation_invalid", "image_mode_unsupported", "image_pixel_limit_exceeded",
+    "image_response_too_large", "image_processing_failed",
 })
 
 
@@ -38,7 +46,8 @@ class EvidenceFailure(Exception):
 
 
 def _base(operation: str | None, *, code: str | None = None) -> dict:
-    result = {"contract": CONTRACT, "schema_version": 1, "status": "error" if code else "ok"}
+    result = {"contract": "smartai.image.evidence" if operation == "image_prepare" else CONTRACT,
+              "schema_version": 1, "status": "error" if code else "ok"}
     if isinstance(operation, str) and operation in OPERATIONS:
         result["operation"] = operation
     if code:
@@ -72,6 +81,8 @@ def _validate_request(request: object) -> dict:
         "detail": {"operation", "pages"},
         "render": {"operation", "page_number", "region", "scale"},
         "export_pages": {"operation", "pages"},
+        "contact_sheet": {"operation", "pages", "tile_long_edge"},
+        "image_prepare": {"operation", "content_type", "region"},
     }[operation]
     if set(request) - allowed:
         raise EvidenceFailure("pdf_invalid_request")
@@ -88,14 +99,20 @@ def _validate_request(request: object) -> dict:
         if len(set(targets)) != len(targets):
             raise EvidenceFailure("pdf_invalid_request")
         result["targets"] = targets
-    elif operation in {"detail", "export_pages"}:
+    elif operation in {"detail", "export_pages", "contact_sheet"}:
         pages = request.get("pages")
-        if not isinstance(pages, list) or not 1 <= len(pages) <= 24:
+        if not isinstance(pages, list) or not 1 <= len(pages) <= (8 if operation == "contact_sheet" else 24):
             raise EvidenceFailure("pdf_invalid_request")
         for number in pages:
             _integer(number, 1, MAX_PAGES)
         if pages != sorted(set(pages)):
             raise EvidenceFailure("pdf_invalid_request")
+        if operation == "contact_sheet":
+            result["tile_long_edge"] = _integer(request.get("tile_long_edge", 768), 64, 1024)
+    elif operation == "image_prepare":
+        if not isinstance(request.get("content_type"), str) or request["content_type"] not in image_evidence_worker.FORMATS:
+            raise EvidenceFailure("pdf_invalid_request")
+        result["region"] = _region(request.get("region", [0, 0, 1, 1]))
     else:
         result["page_number"] = _integer(request.get("page_number"), 1, MAX_PAGES)
         result["region"] = _region(request.get("region", [0, 0, 1, 1]))
@@ -298,7 +315,60 @@ def _render(page, request: dict, total_pages: int) -> dict:
             "payload_b64": base64.b64encode(png).decode("ascii")}
 
 
+def _contact_sheet(document, request: dict) -> dict:
+    from PIL import Image, ImageDraw, ImageFont
+
+    numbers, edge = request["pages"], request["tile_long_edge"]
+    columns = min(2, len(numbers))
+    rows = math.ceil(len(numbers) / columns)
+    gap, label_height = 8, 24
+    width = columns * edge + (columns + 1) * gap
+    height = rows * (edge + label_height) + (rows + 1) * gap
+    if max(width, height) > MAX_RENDER_SIDE or width * height > MAX_RENDER_PIXELS:
+        raise EvidenceFailure("pdf_render_limit_exceeded")
+    sheet = Image.new("RGB", (width, height), "white")
+    try:
+        draw = ImageDraw.Draw(sheet)
+        try:
+            font = ImageFont.load_default(size=16)
+        except TypeError:
+            font = ImageFont.load_default()
+        tiles = []
+        for index, number in enumerate(numbers):
+            page = document[number - 1]
+            visual, geometry = _geometry(page)
+            scale = (edge - 0.001) / max(visual.width, visual.height)
+            pixmap = page.get_pixmap(matrix=fitz.Matrix(scale, scale), colorspace=fitz.csRGB,
+                                     alpha=False, annots=True)
+            if min(pixmap.width, pixmap.height) < 1 or max(pixmap.width, pixmap.height) > edge:
+                raise EvidenceFailure("pdf_render_limit_exceeded")
+            column, row = index % columns, index // columns
+            left, top = gap + column * (edge + gap), gap + row * (edge + label_height + gap)
+            image_left = left + (edge - pixmap.width) // 2
+            image_top = top + label_height + (edge - pixmap.height) // 2
+            page_box = [image_left, image_top, image_left + pixmap.width, image_top + pixmap.height]
+            with Image.frombytes("RGB", (pixmap.width, pixmap.height), pixmap.samples) as rendered:
+                sheet.paste(rendered, (image_left, image_top))
+            draw.text((left + 2, top + 3), f"Page {number}", fill="black", font=font)
+            tiles.append({
+                **geometry, "tile_id": index + 1,
+                "tile_bbox_pixels": [left, top, left + edge, top + label_height + edge],
+                "page_bbox_pixels": page_box,
+                "page_region": [page_box[0] / width, page_box[1] / height,
+                                page_box[2] / width, page_box[3] / height],
+                "render_width": pixmap.width, "render_height": pixmap.height,
+            })
+        payload = image_evidence_worker.png_payload(sheet, limit=MAX_RESPONSE_BYTES, code="pdf_response_too_large")
+        return {"total_pages": document.page_count, "page_numbers": numbers, "tile_long_edge": edge,
+                "tiles": tiles, "width": width, "height": height, "content_type": "image/png",
+                "payload_b64": payload}
+    finally:
+        sheet.close()
+
+
 def _process(request: dict, body: bytes) -> dict:
+    if request["operation"] == "image_prepare":
+        return image_evidence_worker.prepare_image(body, request)
     if len(body) > MAX_INPUT_BYTES:
         raise EvidenceFailure("pdf_input_too_large")
     fitz.TOOLS.mupdf_display_errors(False)
@@ -331,6 +401,8 @@ def _process(request: dict, body: bytes) -> dict:
                                                    for number in numbers]}
         if operation == "render":
             return _render(document[numbers[0] - 1], request, total)
+        if operation == "contact_sheet":
+            return _contact_sheet(document, request)
         with fitz.open() as selected:
             for number in numbers:
                 selected.insert_pdf(document, from_page=number - 1, to_page=number - 1)
@@ -351,21 +423,24 @@ def response_bytes(request: object, body: bytes) -> bytes:
         serialized = json.dumps(payload, ensure_ascii=False, allow_nan=False, separators=(",", ":")).encode("utf-8")
         limit = MAX_INDEX_BYTES if operation == "index" else MAX_RESPONSE_BYTES
         if len(serialized) > limit:
-            raise EvidenceFailure("pdf_response_too_large")
+            raise EvidenceFailure("image_response_too_large" if operation == "image_prepare" else "pdf_response_too_large")
         return serialized
     except EvidenceFailure as exc:
         payload = _base(operation, code=exc.code)
+    except image_evidence_worker.ImageFailure as exc:
+        payload = _base(operation, code=exc.code)
     except (MemoryError, OverflowError, RecursionError):
-        payload = _base(operation, code="pdf_structure_limit_exceeded")
+        payload = _base(operation, code="image_pixel_limit_exceeded" if operation == "image_prepare" else "pdf_structure_limit_exceeded")
     except Exception:
-        payload = _base(operation, code="pdf_processing_failed")
+        payload = _base(operation, code="image_processing_failed" if operation == "image_prepare" else "pdf_processing_failed")
     return json.dumps(payload, separators=(",", ":")).encode("utf-8")
 
 
 def run_cli(raw_request: str) -> int:
     try:
         request = parse_request(raw_request)
-        response = response_bytes(request, sys.stdin.buffer.read(MAX_INPUT_BYTES + 1))
+        limit = image_evidence_worker.MAX_INPUT_BYTES if request["operation"] == "image_prepare" else MAX_INPUT_BYTES
+        response = response_bytes(request, sys.stdin.buffer.read(limit + 1))
     except EvidenceFailure as exc:
         response = json.dumps(_base(None, code=exc.code), separators=(",", ":")).encode("utf-8")
     except Exception:
