@@ -18,6 +18,7 @@
 | 上述失败分类 | 预检 artifact fence、原件 owner 二次校验、前端错误代码缺失为实际回归；其余为旧 mock/输入合同 | J 修复并定向复测 |
 | J 第一组合定向 | 137 passed / 1 failed；失败是新增测试导入位置错误 | 导入修正后纳入下一组 |
 | J 最终后端组合 | 121 passed，28.50 秒 | acceptance、knowledge ingestion/retrieval、executor、fusion；含新增缺口修复和全部 acceptance 测试 |
+| 上传格式最终核对 | 30 passed，12.68 秒 | ingestion/personal knowledge；四种未公开格式拒绝，PDF/文本及历史行为回归 |
 | 前端全量 | 86 files / 409 tests passed | J 最后状态刷新前；不称最终 head 全量 |
 | J 前端定向 | 错误文案相关 16 passed；最终知识状态/检索/引用 7 passed | 最后新增 active retry 轮询测试通过 |
 | 前端构建 | build 通过；只有既有大 chunk 提示 | 最后状态字段变动另行 typecheck |
@@ -39,6 +40,7 @@
 4. `knowledge-economy-v1` 的干净数学 native 规则在 planner 与 executor 中一致；保留 `knowledge_native_math_unverified`，不误报 plan changed、不增加调用。
 5. 缺页重试后状态每 5 秒只读刷新，终止后停止；不由刷新发起 OCR。用户不用反复刷新整页。引用保留版本、页码、hash、artifact 和缺口警告。
 6. 47 个新识别错误代码有明确中文/英文动作，提交不明不引导盲目重试；未知识别不写成学生答错。
+7. 公开知识库上传保持已确认的 PDF/TXT/Markdown 范围，其他格式先转 PDF。既有 Office/native 读取与历史文件下载不删除，内部原语能力不等于新增公开格式承诺。
 
 ## 4. 原 05/06 追踪
 

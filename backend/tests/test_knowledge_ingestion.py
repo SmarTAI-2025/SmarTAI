@@ -74,6 +74,13 @@ async def test_small_text_same_pipeline_ready_without_model():
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("name", ["book.png", "book.docx", "book.pptx", "book.rst"])
+async def test_public_knowledge_upload_does_not_expand_confirmed_formats(name):
+    with pytest.raises(ValueError, match="support PDF, TXT and Markdown"):
+        await ingest_document(owner_id=owner(), original_name=name, content=b"synthetic", registry=Registry())
+
+
+@pytest.mark.asyncio
 async def test_pdf_batches_resume_native_evidence_and_paginated_manifest():
     who, doc_id, job_id = queued(pdf(25))
     worker = KnowledgeIngestionWorker(registry_factory=lambda _: Registry())

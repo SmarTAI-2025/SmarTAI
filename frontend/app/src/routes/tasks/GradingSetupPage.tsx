@@ -687,7 +687,7 @@ export function KnowledgeSection({ locale, taskId, value, onChange }: {
         <input
           ref={fileInputRef}
           type="file"
-          accept=".pdf,.docx,.pptx,.txt,.md,.markdown,.rst,.png,.jpg,.jpeg,.webp,.bmp,.tiff"
+          accept=".pdf,.txt,.md,.markdown"
           className="hidden"
           onChange={(event) => {
             const file = event.target.files?.[0];
