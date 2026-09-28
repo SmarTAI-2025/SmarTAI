@@ -148,7 +148,7 @@ def test_all_typed_payloads_have_deterministic_digest_and_gzip_roundtrip(kind):
     assert encoded == codec.encode_artifact(restored) == codec.encode_artifact(original)
     assert encoded[:3] == b"\x1f\x8b\x08" and encoded[4:8] == b"\0" * 4
     assert json.loads(gzip.decompress(encoded)) == original.model_dump(mode="json")
-    assert original.cacheable_success
+    assert original.cacheable_success is (kind != "repair")
 
 
 @pytest.mark.parametrize("reply", [
@@ -176,7 +176,7 @@ def test_locator_suggestion_and_inspected_scope_do_not_become_success(status):
     assert not artifact("locator", locator(status)).cacheable_success
 
 
-@pytest.mark.parametrize("decision", ["replace", "still_unknown"])
+@pytest.mark.parametrize("decision", ["replace", "still_unknown", "keep_native", "keep_visual"])
 def test_unverified_repair_decision_is_persisted_without_success(decision):
     result = artifact("repair", repair(decision))
     assert not result.cacheable_success

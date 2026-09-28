@@ -1,4 +1,4 @@
-# Recognition Foundation (Work Items A-D3a)
+# Recognition Foundation (Work Items A-D3b1)
 
 This package is not wired to an upload endpoint yet. It defines the first
 version of the evidence and planning contracts plus callable existing-engine
@@ -61,7 +61,8 @@ Dependent PRs may stack; none is merged automatically.
 | D2a | Strict repair response, same-provider adapter and bounded extra dispatch |
 | D2b | Agent repair selection, source binding and recorded final assembly |
 | D3a | Versioned evidence codec, cache identities and owner-bound persistence |
-| D3b | Layered cache reuse with current versus historical usage accounting |
+| D3b1 | Authorized cache lookup and bounded local evidence reuse |
+| D3b2 | Model evidence reuse and current versus historical usage accounting |
 | D3c | Durable pre-submit checkpoint, restart and uncertain-submit recovery |
 | E | Problem extraction and compatibility routes |
 | F | Teacher reference/rubric/test materials and confirmation gates |
@@ -121,10 +122,37 @@ transient storage failure. Neither outcome invokes a model or permits resubmissi
 Failures, empty outcomes, pending submissions, low quality and assembly overflow
 remain persistable. `cacheable_success` is computed after revalidation, not trusted
 from stored JSON; it never means teacher acceptance or measured OCR accuracy.
-Replace/unknown repair proposals are not successful repair cache entries. D3a
+Repair proposals (including keep decisions) are not successful cache entries. D3a
 does not enable automatic cache hits, deduct old usage from a current budget,
 resume jobs or replace the existing Baidu uncertain-submit guard. Those changes
 belong to separate D3b/D3c PRs before business wiring.
+
+### D3b1 Local Reuse Boundary
+
+`RecognitionArtifactStore.find_success()` freezes mutable inputs before awaiting,
+rechecks the original and live task, and queries only the newest exact identity
+in that owner/task. Hit, miss, unsuccessful, corrupt, unavailable and unavailable
+source are distinct outcomes. A newer failure does not fall back to an older
+success. Storage failure never silently starts a model. Locator warnings and low
+quality visual candidates cannot become success hits; mathematical mistakes are
+not OCR errors. Locator hits remain location suggestions, not verified geometry.
+
+`RecognitionByteCache` is injected process-local storage, capped at 64 MiB of
+payloads and 512 entries with an absolute 30-minute TTL and LRU eviction. Native
+and render keys include the exact source/business binding. It contains immutable
+bytes, not credentials, model replies or exported PDF payloads. These limits are
+not RSS or distributed guarantees; expired entries are removed during accesses.
+
+`RecognitionLocalEvidenceReader` verifies actual source bytes, current original
+availability and task deletion state before reuse and after local work. Native
+index/detail results use durable artifacts; prepared/rendered/contact-sheet
+pixels use RAM only. Every hit is paired with its current typed request, validated
+and returned as a fresh copy. Corrupt evidence fails explicitly, not as a miss.
+Cache checks, hashing and local work share a finite deadline. Provider work is
+absent. Artifact I/O runs in threads and may drain after cancellation; assignment
+write intents still enforce deletion/fencing. This callable service is not yet
+injected into the Agent or any upload route. D3b2 must integrate it with model
+reuse and separate historical evidence usage from new dispatch accounting.
 
 Run the focused contracts with the project's Python environment:
 

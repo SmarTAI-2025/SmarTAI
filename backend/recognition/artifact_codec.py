@@ -19,6 +19,7 @@ from backend.recognition.cache_identity import RecognitionCacheIdentityV1, final
 from backend.recognition.executor import ReadUnitV1
 from backend.recognition.fusion import RecognitionAssemblyV1
 from backend.recognition.models import EvidenceModel, RecognitionSourceRefV1
+from backend.recognition.quality import assess_candidates
 from backend.recognition.repair_records import RepairCallEvidenceV1
 from backend.tools.pdf_evidence import PdfDetailResult, PdfIndexResult
 
@@ -127,7 +128,7 @@ class RecognitionArtifactV1(EvidenceModel):
     @property
     def cacheable_success(self) -> bool:
         verified = _validated(self)
-        return _cacheable(verified.payload_kind, verified.payload)
+        return _cacheable(verified.payload_kind, verified.payload, verified.identity.purpose)
 
 
 def _candidate_success(candidate):
@@ -136,19 +137,21 @@ def _candidate_success(candidate):
             and not {"provider_refused", "output_truncated"}.intersection(candidate.warning_codes))
 
 
-def _cacheable(kind, payload):
+def _cacheable(kind, payload, purpose):
     if kind in {"native_index", "native_detail"}:
         return True
     if kind == "visual_read":
-        return not payload.submission_may_exist and _candidate_success(payload.candidate)
+        return (not payload.submission_may_exist and _candidate_success(payload.candidate)
+                and assess_candidates(None, payload.candidate, purpose=purpose).confidence != "low")
     if kind == "locator":
         return (not payload.submission_may_exist and _candidate_success(payload.result.candidate)
+                and not payload.result.candidate.warning_codes
                 and payload.result.parse_status == "ok"
                 and all(location.status == "candidate" for location in payload.result.locations))
     if kind == "repair":
-        return (payload.result is not None and not payload.submission_may_exist
-                and _candidate_success(payload.result.candidate) and payload.result.parse_status == "ok"
-                and payload.result.decision in {"keep_native", "keep_visual"})
+        # A repair decision is an unverified proposal, including keep_*; reuse
+        # must not turn the original uncertainty into a successful recognition.
+        return False
     document = payload.document
     execution = payload.repair_execution
     return bool(
