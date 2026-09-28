@@ -1,4 +1,4 @@
-# Recognition Foundation (Work Items A-D3b2a)
+# Recognition Foundation (Work Items A-D3b2b1)
 
 This package is not wired to an upload endpoint yet. It defines the first
 version of the evidence and planning contracts plus callable existing-engine
@@ -63,7 +63,8 @@ Dependent PRs may stack; none is merged automatically.
 | D3a | Versioned evidence codec, cache identities and owner-bound persistence |
 | D3b1 | Authorized cache lookup and bounded local evidence reuse |
 | D3b2a | Terminal final reuse receipts and Agent local-cache injection |
-| D3b2b | Versioned per-call reuse provenance and current execution accounting |
+| D3b2b1 | Exact per-call artifact lookup/record and separate occurrence receipts |
+| D3b2b2 | Versioned workflow reuse provenance and current execution accounting |
 | D3c | Durable pre-submit checkpoint, restart and uncertain-submit recovery |
 | E | Problem extraction and compatibility routes |
 | F | Teacher reference/rubric/test materials and confirmation gates |
@@ -78,6 +79,48 @@ and must not overwrite raw transcription. No new specialized OCR integrations
 or commercial charging mechanisms are included in this series.
 
 ## Verification
+
+### D3b2b1 Per-Call Reuse Boundary
+
+`services/recognition_calls.py` adds assignment-bound lookup/record for locator,
+initial read and repair leaves. Keys come from the frozen actual engine input,
+including output limit, pixels, page mapping, purpose, route, capabilities,
+policy and prompt version. A hit also checks the leaf against those submitted
+inputs and rechecks live source availability after validation. Non-pixel-aligned
+image crops retain both the requested region and its outward-rounded effective
+region; they are checked against the corresponding preparation fields.
+
+Storage lookup names now include a versioned, complete source-binding digest.
+Two identical uploads under different stored-file IDs cannot poison each other's
+latest-cache lookup. Old names remain readable and are consulted only when no
+new scoped row exists. An intact legacy row for another original is a miss, not
+corruption; it never authorizes a new submission. Direct historical reads still
+require the exact source. A failed/corrupt scoped row never falls back to legacy
+success. If the latest legacy row matches the source, its failure/uncertainty
+remains unsuccessful; legacy lookup does not scan or fall back to older rows.
+
+`RecognitionCallReceiptV2` wraps the original V1 artifact without changing its
+unit ID, fields or digest. The new occurrence ID belongs to this execution only.
+A hit has zero current model dispatches, tokens and model duration, while the
+referenced evidence retains its original known/unknown usage and duration.
+Artifact I/O duration is separate. Uncertain submissions cannot report settled
+tokens. Historical projections are not deduplicated invoices. Independent static
+gzip fixtures lock the old V1 visual, locator, repair and assembly wire formats.
+
+This service has no engine, fallback, automatic get-or-dispatch, logical budget
+credit or pre-submit authority. The caller must obtain source-bound inputs from
+authorized tools and only record its own fresh dispatched outcome. Schema/hash
+checks cannot prove arbitrary pixels came from the original. Failed evidence is
+stored without being reused as success; repair proposals always return
+`not_success`, including syntactically valid keep decisions. Bad storage, source
+cleanup or a newer failed result never automatically retries an older paid call.
+The injected store supplies progress events and assignment deletion fences.
+
+This item is not connected to the Agent. D3b2b2 must introduce versioned aggregate
+provenance, count cached occurrences against logical work limits, and charge only
+new dispatches to the current spending ledger without changing V1 serialization.
+D3c then supplies durable job/checkpoint/recovery authority. Business wiring and
+actual OCR/whole-book quality remain E-J; cache integrity is not OCR accuracy.
 
 ### D3a Persistence Boundary
 

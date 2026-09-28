@@ -18,7 +18,7 @@ from backend.db import assignment_repository, file_repository
 from backend.db.file_repository import StoredFile
 from backend.domain.errors import DomainError, NotFound, RecognitionError
 from backend.recognition.artifact_codec import MAX_COMPRESSED_BYTES, PayloadKind, RecognitionArtifactV1, decode_artifact, encode_artifact
-from backend.recognition.cache_identity import RecognitionCacheIdentityV1
+from backend.recognition.cache_identity import RecognitionCacheIdentityV1, canonical_digest
 from backend.recognition.models import EvidenceModel, RecognitionSourceRefV1
 from backend.storage.base import StorageBackend, StorageObjectNotFound
 
@@ -75,8 +75,21 @@ def _matches_binding(row, binding):
     return all(getattr(row, key) == value for key, value in binding.repository_links.items())
 
 
-def artifact_name(envelope: RecognitionArtifactV1) -> str:
+def _legacy_artifact_name(envelope: RecognitionArtifactV1) -> str:
     return f"ocr-{envelope.identity.layer}-{envelope.identity.key}-{envelope.payload_sha256}.json.gz"
+
+
+def _source_prefix(source, identity):
+    return f"ocr-v2-{identity.layer}-{identity.key}-{canonical_digest(source.model_dump(mode='json'))}-"
+
+
+def artifact_name(envelope: RecognitionArtifactV1) -> str:
+    # Namespace the storage lookup, not the persisted V1 identity or payload.
+    return f"{_source_prefix(envelope.source, envelope.identity)}{envelope.payload_sha256}.json.gz"
+
+
+class _LegacyOtherOriginal(Exception):
+    """A valid old row for another original is not a corrupted cache object."""
 
 
 def _get_file(file_id, owner_id):
@@ -116,8 +129,14 @@ def _find_success(storage, source, identity, binding, owner_id, payload_kind):
             return RecognitionCacheLookup("source_unavailable")
         row = file_repository.find_latest_assignment_file(
             owner_id=owner_id, assignment_id=binding.business_id, kind=ARTIFACT_KIND,
-            original_name_prefix=f"ocr-{identity.layer}-{identity.key}-",
+            original_name_prefix=_source_prefix(source, identity),
         )
+        legacy = row is None
+        if legacy:
+            row = file_repository.find_latest_assignment_file(
+                owner_id=owner_id, assignment_id=binding.business_id, kind=ARTIFACT_KIND,
+                original_name_prefix=f"ocr-{identity.layer}-{identity.key}-",
+            )
     except RecognitionError as exc:
         if exc.code != "recognition_artifact_unavailable":
             raise
@@ -127,7 +146,7 @@ def _find_success(storage, source, identity, binding, owner_id, payload_kind):
     if row is None:
         return RecognitionCacheLookup("miss")
     try:
-        envelope = _load(storage, row.id, source, identity, binding, owner_id)
+        envelope = _load(storage, row.id, source, identity, binding, owner_id, legacy_source_miss=legacy)
         if envelope.payload_kind != payload_kind:
             return RecognitionCacheLookup("corrupt", row.id)
         if not envelope.cacheable_success:
@@ -136,6 +155,8 @@ def _find_success(storage, source, identity, binding, owner_id, payload_kind):
         if not _active_source(source, identity, binding, owner_id):
             return RecognitionCacheLookup("source_unavailable")
         return RecognitionCacheLookup("hit", row.id, envelope)
+    except _LegacyOtherOriginal:
+        return RecognitionCacheLookup("miss")
     except RecognitionError as exc:
         if exc.code == "recognition_artifact_unavailable":
             return RecognitionCacheLookup("unavailable", row.id)
@@ -179,7 +200,7 @@ def _save(storage, envelope, binding, owner_id, fence):
         raise RecognitionError("recognition_artifact_unavailable") from None
 
 
-def _load(storage, file_id, source, identity, binding, owner_id):
+def _load(storage, file_id, source, identity, binding, owner_id, *, legacy_source_miss=False):
     source, identity, binding = _context(source, identity, binding, owner_id)
     if not isinstance(file_id, str) or not file_id or len(file_id) > 240:
         raise RecognitionError("recognition_artifact_invalid") from None
@@ -200,7 +221,14 @@ def _load(storage, file_id, source, identity, binding, owner_id):
             or hashlib.sha256(content).hexdigest() != artifact.sha256):
         raise RecognitionError("recognition_artifact_invalid") from None
     envelope = decode_artifact(content)
-    if envelope.source != source or envelope.identity != identity or artifact.original_name != artifact_name(envelope):
+    if envelope.identity != identity or artifact.original_name not in {artifact_name(envelope), _legacy_artifact_name(envelope)}:
+        raise RecognitionError("recognition_artifact_invalid") from None
+    if envelope.source != source:
+        if (legacy_source_miss and artifact.original_name == _legacy_artifact_name(envelope)
+                and envelope.source.stored_file_id != source.stored_file_id
+                and envelope.source.model_dump(exclude={"stored_file_id", "original_name"})
+                == source.model_dump(exclude={"stored_file_id", "original_name"})):
+            raise _LegacyOtherOriginal from None
         raise RecognitionError("recognition_artifact_invalid") from None
     return envelope
 
