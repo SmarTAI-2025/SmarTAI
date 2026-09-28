@@ -246,8 +246,9 @@ class RecognitionRunService:
                 pending = any(call.state == "pending" for call in checkpoint.calls)
                 codes = [*assembly.raw.stop_codes,
                          *(assembly.raw.read_batch.stop_codes if assembly.raw.read_batch else [])]
-                error = "provider_submit_uncertain" if pending else codes[0] if codes else None
-                status = "needs_review" if error or not assembly.document.coverage.complete else "completed"
+                error = "provider_submit_uncertain" if pending else assembly.safe_error_code or (codes[0] if codes else None)
+                complete = assembly.document is not None and assembly.document.coverage.complete
+                status = "needs_review" if error or not complete else "completed"
                 await context.write(checkpoint, status=status, error=error)
                 return RecognitionRunResultV1(status, row.id, assembly, receipt.current_usage,
                                               operation_usage(checkpoint, now=self.clock()), tuple(context.row.artifact_refs), error)
