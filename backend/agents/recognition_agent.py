@@ -124,14 +124,6 @@ class RecognitionWorkflowReadV1(EvidenceModel):
             or self.native_location.requested_targets != self.request.targets
         ):
             raise ValueError("native locator belongs to another request")
-        if self.budget.locator_calls != len(self.locator_calls):
-            raise ValueError("workflow must retain every locator call outcome")
-        if self.budget.initial_calls != (self.read_batch.usage.initial_calls if self.read_batch else 0):
-            raise ValueError("workflow must retain every initial read outcome")
-        if (self.budget.empty_recovery_calls or self.budget.patch_calls
-                or self.budget.read_calls != self.budget.initial_calls
-                or self.budget.total_calls != self.budget.locator_calls + self.budget.initial_calls):
-            raise ValueError("raw read workflow cannot invent additional calls")
         if self.locator_halted and self.read_batch is not None:
             raise ValueError("failed localization must stop downstream dispatch")
         for call in self.locator_calls:
@@ -167,8 +159,19 @@ class RecognitionWorkflowReadV1(EvidenceModel):
                 if (self.engine_capabilities is None or unit.candidate.provider_route_id != self.engine_capabilities.route_id
                         or unit.candidate.kind != self.engine_capabilities.candidate_kind):
                     raise ValueError("read evidence belongs to another engine")
-        _validate_workflow_usage(self)
+        self._validate_accounting()
         return self
+
+    def _validate_accounting(self):
+        if self.budget.locator_calls != len(self.locator_calls):
+            raise ValueError("workflow must retain every locator call outcome")
+        if self.budget.initial_calls != (self.read_batch.usage.initial_calls if self.read_batch else 0):
+            raise ValueError("workflow must retain every initial read outcome")
+        if (self.budget.empty_recovery_calls or self.budget.patch_calls
+                or self.budget.read_calls != self.budget.initial_calls
+                or self.budget.total_calls != self.budget.locator_calls + self.budget.initial_calls):
+            raise ValueError("raw read workflow cannot invent additional calls")
+        _validate_workflow_usage(self)
 
 
 def _validate_workflow_usage(raw: RecognitionWorkflowReadV1) -> None:
@@ -210,15 +213,17 @@ def _detail_candidates(index: PdfIndexResult, request: RecognitionReadRequestV1,
 class RecognitionAgent:
     def __init__(self, engine: RecognitionEngine | None, *, capacity: RecognitionCapacity,
                  progress: ProgressReporter | None = None, clock: Callable[[], float] = time.monotonic,
-                 local_reader: RecognitionLocalEvidenceReader | None = None):
+                 local_reader: RecognitionLocalEvidenceReader | None = None,
+                 call_service=None):
         self.engine, self.capacity, self.progress, self.clock = engine, capacity, progress, clock
         self.local_reader = local_reader
+        self.call_service = call_service
 
     async def read(self, request: RecognitionReadRequestV1, source_bytes: bytes, *, authorized_owner_id: str) -> RecognitionWorkflowReadV1:
         raw, _budget = await self._read(request, source_bytes, authorized_owner_id=authorized_owner_id)
         return raw
 
-    async def _read(self, request: RecognitionReadRequestV1, source_bytes: bytes, *, authorized_owner_id: str):
+    async def _read(self, request: RecognitionReadRequestV1, source_bytes: bytes, *, authorized_owner_id: str, _with_session=False):
         try:
             request = RecognitionReadRequestV1.model_validate(request.model_dump(warnings=False))
         except (ValidationError, AttributeError, TypeError):
@@ -237,6 +242,11 @@ class RecognitionAgent:
         if request.scope == "targets":
             policy.max_detail_pages = min(policy.max_detail_pages, 2 * len(request.targets) + 4)
         budget = RecognitionBudget(source, policy, capabilities, clock=self.clock)
+        call_session = None
+        if self.call_service is not None:
+            from backend.services.recognition_session import RecognitionCallSessionV2
+            call_session = RecognitionCallSessionV2(self.call_service, source=source,
+                                                    authorized_owner_id=authorized_owner_id)
         total, indexed, details, native, calls, selected, stops, batch = None, [], [], None, [], [], [], None
         locator_halted = False
         unresolved = list(request.targets) if request.scope == "targets" else []
@@ -263,7 +273,7 @@ class RecognitionAgent:
                 ), engine=capabilities, policy=policy)
                 batch = await read_image_plan(source_bytes, authorized_owner_id=authorized_owner_id, source=source,
                                              plan=plan, engine=self.engine, capacity=self.capacity, progress=self.progress, budget=budget,
-                                             local_reader=local_reader)
+                                             local_reader=local_reader, call_session=call_session)
             else:
                 start = min(request.pages) if request.pages else request.search_start_page
                 index = await pdf_read(PdfIndexRequest(start_page=start, window_pages=request.search_window_pages,
@@ -290,7 +300,7 @@ class RecognitionAgent:
                     if unresolved and capabilities and capabilities.target_location:
                         scanned, scan_stops, locator_halted = await self._scan(
                             request, source_bytes, index, details, native, unresolved, policy, budget, capabilities,
-                            local_reader=local_reader,
+                            local_reader=local_reader, call_session=call_session,
                         )
                         calls.extend(scanned)
                         stops.extend(scan_stops)
@@ -330,21 +340,27 @@ class RecognitionAgent:
                     ), engine=capabilities, policy=policy)
                     batch = await read_pdf_plan(source_bytes, authorized_owner_id=authorized_owner_id, source=source,
                                                plan=plan, engine=self.engine, capacity=self.capacity, progress=self.progress, budget=budget,
-                                               local_reader=local_reader)
+                                               local_reader=local_reader, call_session=call_session)
         except (RecognitionError, PdfEvidenceError) as exc:
             stops.append(exc.code)
         if batch:
             stops.extend(batch.stop_codes)
             if any("visual_capability_unavailable" in page.reason_codes for page in batch.plan.decisions):
                 stops.append("visual_capability_unavailable")
-        raw = RecognitionWorkflowReadV1(
+        workflow_type, extra = RecognitionWorkflowReadV1, {}
+        if call_session is not None:
+            from backend.recognition.workflow_v2 import RecognitionWorkflowReadV2
+            workflow_type = RecognitionWorkflowReadV2
+            extra = dict(locator_provenance=call_session.records("locator"), logical_budget=budget.logical_snapshot())
+        raw = workflow_type(
+            **extra,
             request=request, execution_policy=policy, engine_capabilities=capabilities,
             total_pages=total, indexed_pages=indexed, native_details=details, native_location=native,
             locator_calls=calls, selected_pages=selected, unlocated_targets=unresolved, read_batch=batch,
             locator_halted=locator_halted,
             stop_codes=list(dict.fromkeys(stops)), budget=budget.snapshot(),
         )
-        return raw, budget
+        return (raw, budget, call_session) if _with_session else (raw, budget)
 
     async def recognize(self, request: RecognitionReadRequestV1, source_bytes: bytes, *,
                         authorized_owner_id: str, prompt_version: str):
@@ -352,18 +368,23 @@ class RecognitionAgent:
         from backend.recognition.recheck import recheck_recognition
 
         local_reader = self.local_reader
-        raw, budget = await self._read(request, source_bytes, authorized_owner_id=authorized_owner_id)
+        raw, budget, call_session = await self._read(request, source_bytes, authorized_owner_id=authorized_owner_id, _with_session=True)
         if self.progress:
             await self.progress.set_current_step("recognition_assess", message="Checking recognition evidence")
-        result = assemble_recognition(raw, prompt_version=prompt_version)
+        if call_session is not None:
+            from backend.recognition.workflow_v2 import assemble_recognition_v2
+            result = assemble_recognition_v2(raw, prompt_version=prompt_version)
+        else:
+            result = assemble_recognition(raw, prompt_version=prompt_version)
         if self.progress:
             await self.progress.increment_stage_metrics(recognition_assemblies=1)
         return await recheck_recognition(
             result, source_bytes, authorized_owner_id=authorized_owner_id, engine=self.engine,
             budget=budget, capacity=self.capacity, progress=self.progress, local_reader=local_reader,
+            call_session=call_session,
         )
 
-    async def _scan(self, request, source_bytes, index, details, native, targets, policy, budget, capabilities, *, local_reader=None):
+    async def _scan(self, request, source_bytes, index, details, native, targets, policy, budget, capabilities, *, local_reader=None, call_session=None):
         calls, stops = [], []
         halted = False
         candidates = [p for item in native.locations if item.target in targets for p in item.candidate_pages]
@@ -401,10 +422,17 @@ class RecognitionAgent:
                         payload_sha256=hashlib.sha256(payload).hexdigest()))
                 outcome = await run_locator_call(self.engine, EngineLocateInputV1(
                     purpose=request.purpose, targets=remaining, images=images, max_output_tokens=token_limit,
-                ), source=request.source, policy=policy, capabilities=capabilities, budget=budget, capacity=self.capacity, progress=self.progress)
+                ), source=request.source, policy=policy, capabilities=capabilities, budget=budget, capacity=self.capacity, progress=self.progress,
+                    call_session=call_session)
                 result = parse_scan_locations(outcome.candidate, requested_targets=remaining, inspected_pages=sorted(numbers))
                 calls.append(LocatorCallEvidenceV1(sheets=evidence, result=result, requested_output_tokens=token_limit,
                                                   submission_may_exist=outcome.submission_may_exist))
+                if call_session is not None:
+                    error = await call_session.record("locator", calls[-1])
+                    if error:
+                        stops.append(error)
+                        halted = True
+                        break
                 if result.parse_status != "ok":
                     stops.extend(result.reason_codes)
                     halted = True

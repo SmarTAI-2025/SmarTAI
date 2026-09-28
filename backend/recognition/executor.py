@@ -155,8 +155,7 @@ class RecognitionReadBatchV1(EvidenceModel):
             raise ValueError("unprocessed pages cannot also have outcomes")
         if seen | set(self.failed_pages) | set(self.unprocessed_pages) != requested:
             raise ValueError("all requested pages need an outcome")
-        if self.usage.initial_calls != len(self.units) or self.usage.empty_recovery_calls or self.usage.patch_calls:
-            raise ValueError("reader usage must match initial call evidence")
+        self._validate_accounting()
         planned = {(page.page_number, page.input_mode, region.as_tuple())
                    for page in self.plan.decisions for region in page.regions}
         attempted = [(number, unit.input_mode, unit.region.as_tuple())
@@ -168,6 +167,10 @@ class RecognitionReadBatchV1(EvidenceModel):
         if len(pending) != len(set(pending)) or set(pending) != planned - set(attempted):
             raise ValueError("unread regions must remain explicit, including partially read pages")
         return self
+
+    def _validate_accounting(self):
+        if self.usage.initial_calls != len(self.units) or self.usage.empty_recovery_calls or self.usage.patch_calls:
+            raise ValueError("reader usage must match initial call evidence")
 
 
 def _snapshot(source, plan, engine):
@@ -193,6 +196,7 @@ async def read_pdf_plan(
     progress: ProgressReporter | None = None,
     budget: RecognitionBudget | None = None,
     local_reader: RecognitionLocalEvidenceReader | None = None,
+    call_session=None,
 ) -> RecognitionReadBatchV1:
     """Read a bounded, owner-authorized PDF batch, preserving both evidence paths.
 
@@ -286,6 +290,7 @@ checks here do not replace the caller's storage ACL and operation lease.
                 engine, request, source=source, policy=plan.policy, capabilities=plan.engine_capabilities,
                 region_keys=tuple(region_budget_key(number, region) for number in numbers),
                 budget=budget, capacity=capacity, progress=progress,
+                call_session=call_session,
             )
             candidate = outcome.candidate
             units.append(ReadUnitV1(
@@ -295,6 +300,11 @@ checks here do not replace the caller's storage ACL and operation lease.
                 submission_may_exist=outcome.submission_may_exist,
                 output_mapping="document_only" if len(numbers) > 1 else "single_region",
             ))
+            if call_session is not None:
+                error = await call_session.record("initial", units[-1])
+                if error:
+                    stops.append(error)
+                    break
             if candidate.status == "error":
                 failed.update(numbers)
                 stops.append(candidate.safe_error_code or "recognition_response_invalid")
@@ -307,13 +317,15 @@ checks here do not replace the caller's storage ACL and operation lease.
         stops.append(exc.code)
 
     return build_read_batch(source=source, plan=plan, pages=detail_pages, units=units,
-                            native_pages=native_pages, failed=failed, stops=stops, started=started)
+                            native_pages=native_pages, failed=failed, stops=stops, started=started,
+                            call_session=call_session)
 
 
 def build_read_batch(
     *, source: RecognitionSourceRefV1, plan: RecognitionPlanV1,
     pages: list[PdfDetailPage | ImageDetailPageV1], units: list[ReadUnitV1],
     native_pages: list[int], failed: set[int], stops: list[str], started: float,
+    call_session=None,
 ) -> RecognitionReadBatchV1:
     """Account for every planned region, including partially read source pages."""
     seen = set(native_pages)
@@ -324,15 +336,23 @@ def build_read_batch(
     pending_regions = [PendingReadRegionV1(page_number=page.page_number, region=region, input_mode=page.input_mode)
                        for page in plan.decisions for region in page.regions
                        if (page.page_number, page.input_mode, region.as_tuple()) not in attempted]
-    candidates = [unit.candidate for unit in units]
+    provenance = call_session.records("initial") if call_session is not None else []
+    candidates = [unit.candidate for index, unit in enumerate(units)
+                  if call_session is None or provenance[index].origin == "dispatch"]
     input_known = all(candidate.input_tokens is not None for candidate in candidates)
     output_known = all(candidate.output_tokens is not None for candidate in candidates)
-    return RecognitionReadBatchV1(
+    batch_type, extra = RecognitionReadBatchV1, {}
+    if call_session is not None:
+        from backend.recognition.workflow_v2 import RecognitionReadBatchV2
+        batch_type, extra = RecognitionReadBatchV2, {"provenance": provenance}
+    return batch_type(
+        **extra,
         source=source, plan=plan, pages=pages, units=units, native_only_pages=native_pages,
         failed_pages=sorted(failed), unprocessed_pages=unprocessed, unprocessed_regions=pending_regions,
         stop_codes=list(dict.fromkeys(stops)),
         usage=RecognitionUsageV1(
-            initial_calls=len(units), duration_ms=(time.monotonic() - started) * 1000,
+            initial_calls=len(candidates), duration_ms=(time.monotonic() - started) * 1000,
+            cache_hits=len(units) - len(candidates),
             input_tokens=sum(candidate.input_tokens for candidate in candidates) if input_known else None,
             output_tokens=sum(candidate.output_tokens for candidate in candidates) if output_known else None,
             usage_complete=input_known and output_known,

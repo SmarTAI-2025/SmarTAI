@@ -121,7 +121,7 @@ def _active_source(source, identity, binding, owner_id):
 def _find_success(storage, source, identity, binding, owner_id, payload_kind):
     source, identity, binding = _context(source, identity, binding, owner_id)
     layers = {"native_index": "native", "native_detail": "native", "visual_read": "visual",
-              "locator": "visual", "repair": "patch", "assembly": "final"}
+              "locator": "visual", "repair": "patch", "assembly": "final", "assembly_v2": "final"}
     if type(payload_kind) is not str or payload_kind not in layers or identity.layer != layers[payload_kind]:
         raise RecognitionError("recognition_artifact_invalid") from None
     try:

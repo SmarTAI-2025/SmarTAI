@@ -21,6 +21,7 @@ from backend.domain.errors import RecognitionError
 from backend.recognition.artifact_codec import build_artifact
 from backend.recognition.cache_identity import final_cache_identity
 from backend.recognition.fusion import RecognitionAssemblyV1
+from backend.recognition.workflow_v2 import RecognitionAssemblyV2
 from backend.recognition.invocation import RecognitionInvocationV1, invocation_receipt
 from backend.recognition.planner import EngineCapabilitiesV1
 from backend.services.recognition_artifacts import (
@@ -62,7 +63,7 @@ class RecognitionResultService:
 
     async def lookup(self, request: RecognitionReadRequestV1, source_bytes: bytes, *,
                      capabilities: EngineCapabilitiesV1 | None, prompt_version: str,
-                     timeout_seconds: float = 10) -> RecognitionFinalLookup:
+                     timeout_seconds: float = 10, workflow_version: Literal[1, 2] = 1) -> RecognitionFinalLookup:
         timeout_seconds = _timeout(timeout_seconds)
         try:
             request = RecognitionReadRequestV1.model_validate(request.model_dump(warnings=False))
@@ -73,7 +74,8 @@ class RecognitionResultService:
         maximum = MAX_INPUT_BYTES if request.source.content_type == "application/pdf" else MAX_IMAGE_INPUT_BYTES
         if type(source_bytes) is not bytes or not source_bytes or len(source_bytes) > maximum:
             raise RecognitionError("recognition_request_invalid") from None
-        identity = final_cache_identity(request, capabilities=capabilities, prompt_version=prompt_version)
+        identity = final_cache_identity(request, capabilities=capabilities, prompt_version=prompt_version,
+                                        workflow_version=workflow_version)
         context = dict(source=request.source, identity=identity, binding=self.binding.model_copy(deep=True), authorized_owner_id=self.owner)
         started = time.monotonic()
         try:
@@ -81,7 +83,7 @@ class RecognitionResultService:
                 digest = await run_in_threadpool(lambda: hashlib.sha256(source_bytes).hexdigest())
                 if digest != request.source.input_sha256:
                     raise RecognitionError("recognition_source_mismatch")
-                found = await self.store.find_success(**context, payload_kind="assembly")
+                found = await self.store.find_success(**context, payload_kind="assembly_v2" if workflow_version == 2 else "assembly")
                 if found.status != "hit":
                     return RecognitionFinalLookup(found.status, found.artifact_id)
                 receipt = await run_in_threadpool(
@@ -112,12 +114,13 @@ class RecognitionResultService:
         started = time.monotonic()
         try:
             async with asyncio.timeout(timeout_seconds):
-                assembly = await run_in_threadpool(lambda: RecognitionAssemblyV1.model_validate(assembly.model_dump(warnings=False)))
+                assembly_type = RecognitionAssemblyV2 if assembly.schema_version == 2 else RecognitionAssemblyV1
+                assembly = await run_in_threadpool(lambda: assembly_type.model_validate(assembly.model_dump(warnings=False)))
                 self._binding(assembly.raw.request)
                 identity = final_cache_identity(assembly.raw.request, capabilities=assembly.raw.engine_capabilities,
-                                                prompt_version=assembly.prompt_version)
+                                                prompt_version=assembly.prompt_version, workflow_version=assembly.schema_version)
                 envelope = await run_in_threadpool(build_artifact, identity=identity, source=assembly.raw.request.source,
-                                                   payload_kind="assembly", payload=assembly)
+                                                   payload_kind="assembly_v2" if assembly.schema_version == 2 else "assembly", payload=assembly)
                 row = await self.store.save(envelope, binding=binding, authorized_owner_id=self.owner, fence=fence)
                 receipt = await run_in_threadpool(invocation_receipt, assembly=assembly, identity=identity,
                                                 artifact_id=row.id, reused=False,

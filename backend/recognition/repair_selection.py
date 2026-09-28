@@ -125,7 +125,11 @@ def select_repair_targets(initial: RecognitionAssemblyV1) -> RepairSelectionV1:
     try:
         if not isinstance(initial, RecognitionAssemblyV1) or getattr(initial, "repair_execution", None) is not None:
             raise ValueError
-        initial = RecognitionAssemblyV1.model_validate(initial.model_dump(warnings=False))
+        assembly_type = RecognitionAssemblyV1
+        if initial.schema_version == 2:
+            from backend.recognition.workflow_v2 import RecognitionAssemblyV2
+            assembly_type = RecognitionAssemblyV2
+        initial = assembly_type.model_validate(initial.model_dump(warnings=False))
     except (ValidationError, ValueError, AttributeError, TypeError):
         raise RecognitionError("recognition_request_invalid") from None
     batch, document = initial.raw.read_batch, initial.document
@@ -142,7 +146,8 @@ def select_repair_targets(initial: RecognitionAssemblyV1) -> RepairSelectionV1:
                         | {number for unit in document.unaligned_units for number in unit.page_numbers}
                         | {region.page_number for region in batch.unprocessed_regions})
     policy = initial.raw.execution_policy
-    remaining = max(0, policy.max_calls - initial.raw.budget.read_calls)
+    ledger = initial.raw.logical_budget if initial.raw.schema_version == 2 else initial.raw.budget
+    remaining = max(0, policy.max_calls - ledger.read_calls)
     counts = {"empty_recovery": 0, "patch": 0}
     limits = {"empty_recovery": policy.max_empty_recoveries, "patch": policy.max_patches}
     targets, skipped, selected_regions = [], [], set()

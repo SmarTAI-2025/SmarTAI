@@ -12,7 +12,7 @@ import threading
 import time
 from typing import Callable, Literal
 
-from pydantic import ValidationError
+from pydantic import Field, ValidationError, model_validator
 
 from backend.domain.errors import RecognitionError
 from backend.recognition.models import EvidenceModel, RecognitionCandidateV1, RecognitionPolicyV1, RecognitionSourceRefV1
@@ -58,6 +58,32 @@ class BudgetSnapshot(EvidenceModel):
     read_duration_ms: float | None
     locator_remaining_seconds: float | None
     read_remaining_seconds: float | None
+
+
+class LogicalBudgetSnapshotV2(EvidenceModel):
+    """Bounded evidence occurrences, not spend or authority to recreate credit."""
+
+    locator_calls: int = Field(strict=True, ge=0, le=12)
+    initial_calls: int = Field(strict=True, ge=0, le=12)
+    empty_recovery_calls: int = Field(strict=True, ge=0, le=2)
+    patch_calls: int = Field(strict=True, ge=0, le=4)
+    read_calls: int = Field(strict=True, ge=0, le=18)
+    total_calls: int = Field(strict=True, ge=0, le=30)
+    cache_hits: int = Field(strict=True, ge=0, le=24)
+    locator_cache_hits: int = Field(strict=True, ge=0, le=12)
+    initial_cache_hits: int = Field(strict=True, ge=0, le=12)
+    region_count: int = Field(strict=True, ge=0, le=24)
+
+    @model_validator(mode="after")
+    def consistent_counts(self):
+        if (self.read_calls != self.initial_calls + self.empty_recovery_calls + self.patch_calls
+                or self.total_calls != self.locator_calls + self.read_calls
+                or self.cache_hits != self.locator_cache_hits + self.initial_cache_hits
+                or self.locator_cache_hits > self.locator_calls or self.initial_cache_hits > self.initial_calls
+                or self.region_count < self.initial_calls
+                or bool(self.region_count) != bool(self.initial_calls)):
+            raise ValueError("logical counts must retain every dispatch and cached occurrence")
+        return self
 
 
 def validate_budget_accounting(
@@ -130,6 +156,8 @@ class RecognitionBudget:
         self._phase_starts: dict[Phase, float] = {}
         self._reservations: dict[BudgetTicket, _Reservation] = {}
         self._initial_regions: dict[str, BudgetTicket] = {}
+        self._cached_counts = {"locator": 0, "initial": 0}
+        self._cached_initial_regions: set[str] = set()
         self._extra_regions: set[str] = set()
         self._output_overrun = False
 
@@ -200,6 +228,75 @@ class RecognitionBudget:
                 raise RecognitionError("recognition_budget_exhausted")
             return min(requested, remaining)
 
+    @staticmethod
+    def _valid_regions(kind, region_keys):
+        if (type(region_keys) is not tuple or len(region_keys) > 24
+                or any(type(key) is not str or not key.strip() or len(key) > 512 for key in region_keys)
+                or len(region_keys) != len(set(region_keys))):
+            raise RecognitionError("recognition_request_invalid")
+        if (kind == "locator" and region_keys) or (kind == "initial" and not region_keys):
+            raise RecognitionError("recognition_request_invalid")
+        if kind in {"empty_recovery", "patch"} and len(region_keys) != 1:
+            raise RecognitionError("recognition_request_invalid")
+
+    def _logical_counts(self):
+        return {name: sum(record.kind == name for record in self._reservations.values()) + self._cached_counts.get(name, 0)
+                for name in ("locator", "initial", "empty_recovery", "patch")}
+
+    def _check_initial_limit(self, counts, region_keys):
+        regions = self._initial_regions.keys() | self._cached_initial_regions
+        if (counts["initial"] >= self._policy.max_initial_calls
+                or len(regions) + len(region_keys) > self._policy.max_regions
+                or any(key in regions for key in region_keys)):
+            raise RecognitionError("recognition_budget_exhausted")
+
+    def register_cached_success(
+        self,
+        kind: Literal["locator", "initial"],
+        *,
+        region_keys: tuple[str, ...] = (),
+        candidate: RecognitionCandidateV1,
+    ) -> None:
+        """Register a verified hit without issuing a ticket or charging old usage.
+
+        The caller must first authorize and validate the exact successful artifact
+        and assert its frozen workflow context. This is only a logical limit gate;
+        it does not establish fidelity, permissions, or durable submit-once state.
+        """
+        if type(kind) is not str or kind not in {"locator", "initial"}:
+            raise RecognitionError("recognition_request_invalid")
+        self._valid_regions(kind, region_keys)
+        try:
+            if not isinstance(candidate, RecognitionCandidateV1):
+                raise ValueError
+            candidate = RecognitionCandidateV1.model_validate(candidate.model_dump(warnings=False))
+        except (ValidationError, ValueError, TypeError, AttributeError):
+            raise RecognitionError("recognition_response_invalid") from None
+        with self._lock:
+            if self._remaining(self._now(), "locator" if kind == "locator" else "read", start=True) <= 0:
+                raise RecognitionError("recognition_timeout")
+            caps = self._capabilities
+            if caps is None or not caps.visual_inputs or (kind == "locator" and not caps.target_location):
+                raise RecognitionError("recognition_input_unsupported")
+            if candidate.provider_route_id != caps.route_id or candidate.kind != caps.candidate_kind:
+                raise RecognitionError("recognition_route_changed")
+            if (candidate.status != "ok" or candidate.safe_error_code is not None
+                    or candidate.finish_reason in {"refused", "length"}
+                    or {"provider_refused", "output_truncated"}.intersection(candidate.warning_codes)):
+                raise RecognitionError("recognition_response_invalid")
+            counts = self._logical_counts()
+            if kind == "locator":
+                if counts[kind] >= self._policy.max_locator_calls:
+                    raise RecognitionError("recognition_budget_exhausted")
+            else:
+                if sum(counts[name] for name in ("initial", "empty_recovery", "patch")) >= self._policy.max_calls:
+                    raise RecognitionError("recognition_budget_exhausted")
+                self._check_initial_limit(counts, region_keys)
+            # Commit only after every check; no text or historical tokens remain.
+            self._cached_counts[kind] += 1
+            if kind == "initial":
+                self._cached_initial_regions.update(region_keys)
+
     def reserve(
         self,
         kind: CallKind,
@@ -210,22 +307,14 @@ class RecognitionBudget:
         if type(kind) is not str or kind not in {"locator", "initial", "empty_recovery", "patch"}:
             raise RecognitionError("recognition_request_invalid")
         self._valid_output_request(max_output_tokens)
-        if (type(region_keys) is not tuple or len(region_keys) > 24
-                or any(type(key) is not str or not key.strip() or len(key) > 512 for key in region_keys)
-                or len(region_keys) != len(set(region_keys))):
-            raise RecognitionError("recognition_request_invalid")
-        if (kind == "locator" and region_keys) or (kind == "initial" and not region_keys):
-            raise RecognitionError("recognition_request_invalid")
-        if kind in {"empty_recovery", "patch"} and len(region_keys) != 1:
-            raise RecognitionError("recognition_request_invalid")
+        self._valid_regions(kind, region_keys)
         with self._lock:
             if self._remaining(self._now(), "locator" if kind == "locator" else "read", start=True) <= 0:
                 raise RecognitionError("recognition_timeout")
             caps = self._capabilities
             if caps is None or not caps.visual_inputs:
                 raise RecognitionError("recognition_input_unsupported")
-            counts = {name: sum(record.kind == name for record in self._reservations.values())
-                      for name in ("locator", "initial", "empty_recovery", "patch")}
+            counts = self._logical_counts()
             if self._bounded_output and (
                 self._output_overrun or self._charged_output() + max_output_tokens > self._policy.max_output_tokens
             ):
@@ -237,10 +326,7 @@ class RecognitionBudget:
                 if sum(counts[name] for name in ("initial", "empty_recovery", "patch")) >= self._policy.max_calls:
                     raise RecognitionError("recognition_budget_exhausted")
                 if kind == "initial":
-                    if (counts[kind] >= self._policy.max_initial_calls
-                            or len(self._initial_regions) + len(region_keys) > self._policy.max_regions
-                            or any(key in self._initial_regions for key in region_keys)):
-                        raise RecognitionError("recognition_budget_exhausted")
+                    self._check_initial_limit(counts, region_keys)
                 else:
                     if (not caps.response_recheck
                             or (kind == "patch" and (not caps.semantic_repair or not self._policy.enable_repair))):
@@ -252,7 +338,8 @@ class RecognitionBudget:
                         raise RecognitionError("recognition_budget_exhausted")
                     initial = self._reservations.get(self._initial_regions.get(key))
                     expected = "empty" if kind == "empty_recovery" else "ok"
-                    if initial is None or initial.outcome != expected:
+                    cached_ok = kind == "patch" and key in self._cached_initial_regions
+                    if not cached_ok and (initial is None or initial.outcome != expected):
                         raise RecognitionError("recognition_request_invalid")
             ticket = BudgetTicket()
             self._reservations[ticket] = _Reservation(kind, max_output_tokens, region_keys)
@@ -325,3 +412,16 @@ class RecognitionBudget:
     def snapshot(self) -> BudgetSnapshot:
         with self._lock:
             return self._snapshot(self._now())
+
+    def logical_snapshot(self) -> LogicalBudgetSnapshotV2:
+        with self._lock:
+            counts = self._logical_counts()
+            read_calls = sum(counts[name] for name in ("initial", "empty_recovery", "patch"))
+            return LogicalBudgetSnapshotV2(
+                locator_calls=counts["locator"], initial_calls=counts["initial"],
+                empty_recovery_calls=counts["empty_recovery"], patch_calls=counts["patch"],
+                read_calls=read_calls, total_calls=counts["locator"] + read_calls,
+                cache_hits=sum(self._cached_counts.values()), locator_cache_hits=self._cached_counts["locator"],
+                initial_cache_hits=self._cached_counts["initial"],
+                region_count=len(self._initial_regions) + len(self._cached_initial_regions),
+            )

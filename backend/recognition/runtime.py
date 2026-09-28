@@ -72,20 +72,22 @@ async def run_initial_read(
     budget: RecognitionBudget,
     capacity: RecognitionCapacity,
     progress: ProgressReporter | None = None,
+    call_session=None,
 ) -> RecognitionCallResultV1:
     return await _dispatch(engine, request, kind="initial", source=source, policy=policy,
                            capabilities=capabilities, region_keys=region_keys, budget=budget,
-                           capacity=capacity, progress=progress)
+                           capacity=capacity, progress=progress, call_session=call_session)
 
 
 async def run_locator_call(
     engine: RecognitionEngine, request: EngineLocateInputV1, *, source: RecognitionSourceRefV1,
     policy: RecognitionPolicyV1, capabilities: EngineCapabilitiesV1, budget: RecognitionBudget,
     capacity: RecognitionCapacity, progress: ProgressReporter | None = None,
+    call_session=None,
 ) -> RecognitionCallResultV1:
     return await _dispatch(engine, request, kind="locator", source=source, policy=policy,
                            capabilities=capabilities, region_keys=(), budget=budget,
-                           capacity=capacity, progress=progress)
+                           capacity=capacity, progress=progress, call_session=call_session)
 
 
 async def run_repair_call(
@@ -93,6 +95,7 @@ async def run_repair_call(
     source: RecognitionSourceRefV1, policy: RecognitionPolicyV1, capabilities: EngineCapabilitiesV1,
     initial_region_key: str, budget: RecognitionBudget, capacity: RecognitionCapacity,
     progress: ProgressReporter | None = None,
+    call_session=None,
 ) -> RecognitionCallResultV1:
     """One extra dispatch charged to the original region, never to a new span ID.
 
@@ -104,7 +107,7 @@ async def run_repair_call(
         raise RecognitionError("recognition_request_invalid")
     return await _dispatch(engine, request, kind=kind, source=source, policy=policy,
                            capabilities=capabilities, region_keys=(initial_region_key,), budget=budget,
-                           capacity=capacity, progress=progress)
+                           capacity=capacity, progress=progress, call_session=call_session)
 
 
 async def _dispatch(
@@ -112,6 +115,7 @@ async def _dispatch(
     kind: Literal["initial", "locator", "empty_recovery", "patch"], source: RecognitionSourceRefV1, policy: RecognitionPolicyV1,
     capabilities: EngineCapabilitiesV1, region_keys: tuple[str, ...], budget: RecognitionBudget,
     capacity: RecognitionCapacity, progress: ProgressReporter | None,
+    call_session=None,
 ) -> RecognitionCallResultV1:
     """Dispatch once; an ambiguous completion remains charged and pending.
 
@@ -140,6 +144,14 @@ async def _dispatch(
     if not callable(dispatch):
         raise RecognitionError("recognition_input_unsupported")
     phase = "locator" if kind == "locator" else "read"
+    if call_session is not None:
+        return await call_session.dispatch(
+            kind, request, source=source, policy=policy, capabilities=capabilities,
+            region_keys=region_keys, budget=budget,
+            dispatch=lambda: _dispatch(engine, request, kind=kind, source=source, policy=policy,
+                                      capabilities=capabilities, region_keys=region_keys, budget=budget,
+                                      capacity=capacity, progress=progress),
+        )
     ticket = None
     uncertain = False
     try:

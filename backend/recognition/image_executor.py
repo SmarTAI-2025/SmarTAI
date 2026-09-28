@@ -34,6 +34,7 @@ async def read_image_plan(
     progress: ProgressReporter | None = None,
     budget: RecognitionBudget | None = None,
     local_reader: RecognitionLocalEvidenceReader | None = None,
+    call_session=None,
 ) -> RecognitionReadBatchV1:
     source, plan = _snapshot(source, plan, engine)
     if source.owner_id != authorized_owner_id or source.content_type not in {"image/png", "image/jpeg", "image/webp"} or not isinstance(image_bytes, bytes) or hashlib.sha256(image_bytes).hexdigest() != source.input_sha256:
@@ -87,6 +88,7 @@ async def read_image_plan(
                 outcome = await run_initial_read(
                     engine, request, source=source, policy=plan.policy, capabilities=plan.engine_capabilities,
                     region_keys=(region_budget_key(1, region),), budget=budget, capacity=capacity, progress=progress,
+                    call_session=call_session,
                 )
                 candidate = outcome.candidate
                 units.append(ReadUnitV1(
@@ -96,6 +98,11 @@ async def read_image_plan(
                     submission_may_exist=outcome.submission_may_exist,
                     output_mapping="single_region", image_preparation=metadata,
                 ))
+                if call_session is not None:
+                    error = await call_session.record("initial", units[-1])
+                    if error:
+                        stops.append(error)
+                        break
                 if candidate.status == "error":
                     failed.add(1)
                     stops.append(candidate.safe_error_code or "recognition_response_invalid")
@@ -107,4 +114,4 @@ async def read_image_plan(
     except (RecognitionError, PdfEvidenceError) as exc:
         stops.append(exc.code)
     return build_read_batch(source=source, plan=plan, pages=pages, units=units,
-                            native_pages=[], failed=failed, stops=stops, started=started)
+                            native_pages=[], failed=failed, stops=stops, started=started, call_session=call_session)

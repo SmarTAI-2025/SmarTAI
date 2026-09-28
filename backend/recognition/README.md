@@ -1,4 +1,4 @@
-# Recognition Foundation (Work Items A-D3b2b1)
+# Recognition Foundation (Work Items A-D3b2b2)
 
 This package is not wired to an upload endpoint yet. It defines the first
 version of the evidence and planning contracts plus callable existing-engine
@@ -80,6 +80,32 @@ or commercial charging mechanisms are included in this series.
 
 ## Verification
 
+### D3b2b2 Versioned Workflow Reuse
+
+`RecognitionAgent(..., call_service=...)` opts into V2 workflow, read-batch,
+assembly and invocation contracts. Omitting the service retains the original V1
+path and serialized fields. The V2 aggregate shares scope checks, source tools,
+fusion and repair selection with V1; it does not reinterpret old artifacts.
+An occurrence keeps the original typed leaf, digest, source and storage reference
+alongside its current position. Historical unit IDs and known/unknown tokens stay
+intact. Final V2 results use a distinct assembly identity and payload kind.
+
+`RecognitionBudget.logical_snapshot()` counts both fresh and cached occurrences
+against page/region/call limits. The original spending snapshot counts only new
+reservations. Hits never reserve/settle a fake call or consume historical tokens;
+a successful initial hit may permit one source-bound patch, never an empty
+recovery. Recheck selection uses logical remaining calls but fresh token spend.
+Repair proposals remain ineligible for successful cache reuse.
+
+Lookup precedes dispatch. Miss permits the current caller-owned execution path;
+unsuccessful, corrupt, unavailable and deleted-source outcomes stop it. A failed
+result write retains the paid candidate and spending ledger and halts subsequent
+dispatch, including rechecks. Cancellation propagates; it is not a refund or
+retry permission. **Durable pre-submit ownership and restart protection are still
+D3c**, required before any business endpoint enables this path. Exact cache keys
+include output bounds; changing that bound can produce a legitimate cache miss.
+No runtime success is a fidelity/accuracy certificate.
+
 ### D3b2b1 Per-Call Reuse Boundary
 
 `services/recognition_calls.py` adds assignment-bound lookup/record for locator,
@@ -116,10 +142,9 @@ stored without being reused as success; repair proposals always return
 cleanup or a newer failed result never automatically retries an older paid call.
 The injected store supplies progress events and assignment deletion fences.
 
-This item is not connected to the Agent. D3b2b2 must introduce versioned aggregate
-provenance, count cached occurrences against logical work limits, and charge only
-new dispatches to the current spending ledger without changing V1 serialization.
-D3c then supplies durable job/checkpoint/recovery authority. Business wiring and
+The original D3b2b1 service did not connect to the Agent; D3b2b2 supplies the
+versioned integration described above. D3c supplies durable job/checkpoint/recovery
+authority. Business wiring and
 actual OCR/whole-book quality remain E-J; cache integrity is not OCR accuracy.
 
 ### D3a Persistence Boundary

@@ -35,6 +35,12 @@ def _codes(values, limit=32):
 
 def _initial_halt(initial):
     raw = initial.raw
+    if raw.schema_version == 2:
+        provenance = [*raw.locator_provenance, *(raw.read_batch.provenance if raw.read_batch else [])]
+        if any(record.storage_error for record in provenance):
+            return "repair_initial_persistence_failed"
+        if any(code.startswith("recognition_cache_") for code in raw.stop_codes):
+            return "repair_initial_cache_failed"
     if raw.budget.pending_calls:
         return "repair_initial_submission_pending"
     if raw.locator_halted:
@@ -49,6 +55,9 @@ def _initial_halt(initial):
 
 
 def _records(raw):
+    if raw.schema_version == 2:
+        from backend.recognition.workflow_v2 import current_records
+        return current_records(raw)
     result = [(call.result.candidate, call.submission_may_exist, call.requested_output_tokens)
               for call in raw.locator_calls]
     if raw.read_batch:
@@ -124,11 +133,32 @@ def _validate_execution(initial, execution):
     validate_budget_accounting(budget, caps, records)
     if budget.duration_ms < raw.budget.duration_ms or budget.global_remaining_seconds > raw.budget.global_remaining_seconds:
         raise ValueError("recheck cannot restart the original deadline")
+    if raw.schema_version == 2:
+        from backend.recognition.workflow_v2 import validate_logical, validate_provenance
+        for kind in ("empty_recovery", "patch"):
+            leaves = [call for call in execution.calls if call.result is not None
+                      and next(target for target in expected.targets if target.unit_id == call.unit_id).kind == kind]
+            provenance = [record for record in execution.provenance if record.kind == kind]
+            if any(record.origin != "dispatch" for record in provenance):
+                raise ValueError("unverified repair proposals cannot be reused as successful calls")
+            validate_provenance(leaves, provenance, kind=kind, source=raw.request.source,
+                                purpose=raw.request.purpose, policy=raw.execution_policy, capabilities=caps)
+        if len(execution.provenance) != sum(call.result is not None for call in execution.calls):
+            raise ValueError("repair provenance must account for dispatched calls only")
+        for record in execution.provenance:
+            if record.storage_error and (record.storage_error not in execution.stop_codes
+                                         or not execution.calls or execution.calls[-1] != record.original):
+                raise ValueError("repair persistence failure must halt all subsequent work")
+        validate_logical(raw, execution.logical_budget, execution.calls, expected)
 
 
 def build_rechecked_document(initial: RecognitionAssemblyV1, execution: RepairExecutionV1):
     """Re-derive final output from original evidence and explicit bounded changes."""
-    execution = RepairExecutionV1.model_validate(execution.model_dump(warnings=False))
+    execution_type = RepairExecutionV1
+    if initial.schema_version == 2:
+        from backend.recognition.workflow_v2 import RepairExecutionV2
+        execution_type = RepairExecutionV2
+    execution = execution_type.model_validate(execution.model_dump(warnings=False))
     _validate_execution(initial, execution)
     if initial.document is None:
         return None, initial.safe_error_code
@@ -221,12 +251,17 @@ async def recheck_recognition(
     engine: RecognitionEngine | None, budget: RecognitionBudget, capacity: RecognitionCapacity,
     progress: ProgressReporter | None = None,
     local_reader: RecognitionLocalEvidenceReader | None = None,
+    call_session=None,
 ) -> RecognitionAssemblyV1:
     """Use the original live reservation authority, never a reconstituted ledger."""
     from backend.recognition.fusion import RecognitionAssemblyV1
 
+    assembly_type, execution_type = RecognitionAssemblyV1, RepairExecutionV1
+    if call_session is not None:
+        from backend.recognition.workflow_v2 import RecognitionAssemblyV2, RepairExecutionV2
+        assembly_type, execution_type = RecognitionAssemblyV2, RepairExecutionV2
     try:
-        initial = RecognitionAssemblyV1.model_validate(initial.model_dump(warnings=False))
+        initial = assembly_type.model_validate(initial.model_dump(warnings=False))
     except (ValidationError, AttributeError, TypeError):
         raise RecognitionError("recognition_request_invalid") from None
     if initial.repair_execution is not None:
@@ -238,6 +273,8 @@ async def recheck_recognition(
     if local_reader is not None:
         local_reader.assert_context(source, authorized_owner_id=authorized_owner_id)
     budget.assert_context(source, raw.execution_policy, raw.engine_capabilities)
+    if call_session is not None and budget.logical_snapshot() != raw.logical_budget:
+        raise RecognitionError("recognition_plan_changed")
     # Reading consumed these calls on this exact live ledger. A fresh same-context
     # budget is not authority to replay them or to obtain additional credits.
     snapshot = budget.snapshot()
@@ -275,10 +312,16 @@ async def recheck_recognition(
                     ), kind=target.kind, source=source, policy=raw.execution_policy, capabilities=raw.engine_capabilities,
                     initial_region_key=region_budget_key(unit.page_numbers[0], unit.region), budget=budget,
                     capacity=capacity, progress=progress,
+                    call_session=call_session,
                 )
                 parsed = parse_repair_response(result.candidate, target.context)
                 calls.append(RepairCallEvidenceV1(unit_id=unit.unit_id, image=image, requested_output_tokens=token_limit,
                                                   result=parsed, submission_may_exist=result.submission_may_exist))
+                if call_session is not None:
+                    error = await call_session.record(target.kind, calls[-1])
+                    if error:
+                        stops.append(error)
+                        break
                 if result.submission_may_exist or parsed.parse_status != "ok":
                     stops.append("repair_submission_pending" if result.submission_may_exist else parsed.reason_codes[0])
                     break
@@ -286,10 +329,12 @@ async def recheck_recognition(
                 calls.append(RepairCallEvidenceV1(unit_id=target.unit_id, safe_error_code=exc.code))
                 stops.append(exc.code)
                 break
-    execution = RepairExecutionV1(prompt_version=REPAIR_PROMPT_VERSION, selection=selection, calls=calls,
+    extra = {} if call_session is None else dict(logical_budget=budget.logical_snapshot(),
+                                                provenance=call_session.records("empty_recovery") + call_session.records("patch"))
+    execution = execution_type(**extra, prompt_version=REPAIR_PROMPT_VERSION, selection=selection, calls=calls,
                                   stop_codes=stops, budget=budget.snapshot())
     document, error = build_rechecked_document(initial, execution)
     if progress:
         await progress.increment_stage_metrics(recognition_rechecks_finished=1)
-    return RecognitionAssemblyV1(raw=raw, prompt_version=initial.prompt_version, document=document,
+    return assembly_type(raw=raw, prompt_version=initial.prompt_version, document=document,
                                 safe_error_code=error, repair_execution=execution)
