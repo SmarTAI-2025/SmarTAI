@@ -145,7 +145,11 @@ def test_pr101_static_gzip_reencodes_without_hash_or_field_drift(kind):
     assert set(_field_paths(current)) == set(_field_paths(historical))
     assert current == historical
     assert _canonical_hash(current["payload"]) == fixture["payload_sha256"]
-    assert encode_artifact(restored) == blob
+    encoded = encode_artifact(restored)
+    # gzip OS headers and deflate output vary by platform/zlib version. The
+    # immutable fixture SHA above and canonical uncompressed bytes must not drift.
+    assert gzip.decompress(encoded) == gzip.decompress(blob)
+    assert encode_artifact(restored) == encoded
 
 
 @pytest.mark.parametrize("kind", ["visual_read", "locator", "repair"])
