@@ -54,10 +54,11 @@ def _zero():
 
 
 class _RunContext:
-    def __init__(self, row, *, identity, request, capabilities, store, progress, clock, binding):
+    def __init__(self, row, *, identity, request, capabilities, store, progress, clock, binding, repository):
         self.row, self.identity, self.request, self.capabilities = row, identity, request, capabilities
         self.store, self.progress, self.clock = store, progress, clock
         self.binding = binding
+        self.repository = repository
         self.policy = request.policy.model_copy(deep=True)
         if request.scope == "targets":
             self.policy.max_detail_pages = min(self.policy.max_detail_pages, 2 * len(request.targets) + 4)
@@ -73,7 +74,7 @@ class _RunContext:
         refs = list(dict.fromkeys([*(call.artifact_id for call in checkpoint.calls if call.artifact_id),
                                    *([checkpoint.final_artifact_id] if checkpoint.final_artifact_id else [])]))
         row = await run_in_threadpool(
-            workflow_repository.save_operation_checkpoint, self.row.id, owner_id=self.row.owner_id,
+            self.repository.save_operation_checkpoint, self.row.id, owner_id=self.row.owner_id,
             expected_attempt=self.row.attempt, expected_checkpoint_revision=self.row.checkpoint_revision,
             expected_lease_token=self.row.lease_token, stage="recognition_" + (status or "checkpoint"),
             checkpoint=checkpoint.model_dump(mode="json"), artifact_refs=refs,
@@ -131,10 +132,12 @@ class RecognitionRunService:
     A new policy/route/source is a different explicitly requested run, not fallback.
     """
 
-    def __init__(self, *, store, capacity, cache=None, progress=None, clock=time.time):
+    def __init__(self, *, store, capacity, cache=None, progress=None, clock=time.time,
+                 operation_repository=workflow_repository, binding_resolver=artifact_assignment_id):
         self.store, self.capacity = store, capacity
         self.cache = cache if cache is not None else RecognitionByteCache()
         self.progress, self.clock = progress, clock
+        self.repository, self.binding_resolver = operation_repository, binding_resolver
 
     async def _restored(self, row, request, identity, *, status):
         try:
@@ -176,11 +179,11 @@ class RecognitionRunService:
         binding = RecognitionArtifactBindingV1.model_validate(binding.model_dump())
         if binding.business_id != source.business_id:
             raise RecognitionError("recognition_source_mismatch")
-        assignment_id = await run_in_threadpool(artifact_assignment_id, binding, authorized_owner_id)
+        assignment_id = await run_in_threadpool(self.binding_resolver, binding, authorized_owner_id)
         # create_operation checks live assignment ownership. Crucially, this
         # internal operation never uses the legacy error/expiry retry reset.
         row, _ = await run_in_threadpool(
-            workflow_repository.create_operation, assignment_id=assignment_id, owner_id=authorized_owner_id,
+            self.repository.create_operation, assignment_id=assignment_id, owner_id=authorized_owner_id,
             operation_type=OPERATION_TYPE, input_hash=identity.key, retry_existing=False,
             payload=dict(identity_key=identity.key, binding=binding.model_dump()),
         )
@@ -197,10 +200,10 @@ class RecognitionRunService:
             raise RecognitionError("recognition_source_unavailable")
         worker = "recognition-" + uuid.uuid4().hex
         try:
-            row = await run_in_threadpool(workflow_repository.claim_operation, row.id, owner_id=authorized_owner_id,
+            row = await run_in_threadpool(self.repository.claim_operation, row.id, owner_id=authorized_owner_id,
                                           worker_id=worker, lease_seconds=math.ceil(request.policy.total_seconds) + 60)
         except LeaseLost:
-            latest = await run_in_threadpool(workflow_repository.get_operation, row.id, owner_id=authorized_owner_id)
+            latest = await run_in_threadpool(self.repository.get_operation, row.id, owner_id=authorized_owner_id)
             if latest.terminal_summary is not None:
                 return await self._restored(latest, request, identity,
                                             status="already_done" if latest.status == "completed" else "needs_review")
@@ -208,7 +211,8 @@ class RecognitionRunService:
                 return await self._restored(latest, request, identity, status="already_running")
             return RecognitionRunResultV1("already_running", row.id, None, _zero(), _zero())
         context = _RunContext(row, identity=identity, request=request, capabilities=caps,
-                              store=self.store, progress=self.progress, clock=self.clock, binding=binding)
+                              store=self.store, progress=self.progress, clock=self.clock, binding=binding,
+                              repository=self.repository)
         assembly = None
         try:
             if row.checkpoint:
@@ -276,7 +280,7 @@ class RecognitionRunService:
                                           usage, tuple(context.row.artifact_refs or []), code)
         finally:
             try:
-                await asyncio.shield(run_in_threadpool(workflow_repository.release_operation, row.id,
+                await asyncio.shield(run_in_threadpool(self.repository.release_operation, row.id,
                                                       owner_id=authorized_owner_id, worker_id=worker,
                                                       lease_token=row.lease_token))
             except DomainError:

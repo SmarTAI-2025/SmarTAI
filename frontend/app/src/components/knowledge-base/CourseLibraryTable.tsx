@@ -1,5 +1,6 @@
 import { FileText, Folder, MoreHorizontal, Pencil, Trash2 } from "lucide-react";
 import type { ReactNode } from "react";
+import { KnowledgeIngestionStatus } from "./KnowledgeIngestionStatus";
 import type { Locale } from "@/i18n/messages";
 import type { CourseMaterial, CourseMaterialGroup } from "@/types";
 
@@ -110,7 +111,7 @@ export function CourseLibraryTable({
                         ))}
                       </div>
                     </td>
-                    <td className="px-3"><span className="inline-flex min-w-[84px] justify-center rounded-full bg-emerald-50 px-3 py-1 text-xs font-semibold text-emerald-700 dark:bg-emerald-950/50 dark:text-emerald-200">{zh(locale) ? "已解析" : "Parsed"}</span></td>
+                    <td className="px-3 py-2"><KnowledgeIngestionStatus documentId={material.document_id} status={material.parse_status} ingestion={material.ingestion} zh={zh(locale)} /></td>
                     <td className="px-3 text-muted-foreground">{relativeTime(material.last_used_at ?? material.updated_at, locale)}</td>
                     <td className="px-3 text-muted-foreground">{material.task_reference_count ? `${material.task_reference_count} ${zh(locale) ? "个任务" : material.task_reference_count === 1 ? "task" : "tasks"}` : (zh(locale) ? "尚未使用" : "Not used")}</td>
                     <td className="px-2">

@@ -515,7 +515,7 @@ export function KnowledgeSection({ locale, taskId, value, onChange }: {
       || material.category === "other",
   );
   const isBusy = uploadDocument.isPending || deleteDocument.isPending;
-  const atLimit = docs.length >= 3;
+  const atLimit = docs.length >= 20;
 
   useEffect(() => {
     if (!libraryOpen) return;
@@ -679,7 +679,7 @@ export function KnowledgeSection({ locale, taskId, value, onChange }: {
           disabled={atLimit || isBusy}
           onClick={() => fileInputRef.current?.click()}
           className="inline-flex h-11 items-center justify-center gap-2 rounded-[8px] border bg-card px-4 text-[14px] font-semibold text-foreground outline-none hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50"
-          title={atLimit ? (locale === "zh-CN" ? "本任务最多选择 3 份资料" : "Up to 3 task documents") : undefined}
+          title={atLimit ? (locale === "zh-CN" ? "本任务最多选择 20 份资料" : "Up to 20 task documents") : undefined}
         >
           <Upload aria-hidden="true" className="h-4 w-4" />
           {locale === "zh-CN" ? "上传资料" : "Upload"}
@@ -687,7 +687,7 @@ export function KnowledgeSection({ locale, taskId, value, onChange }: {
         <input
           ref={fileInputRef}
           type="file"
-          accept=".pdf,.txt,.md,.markdown,.rst"
+          accept=".pdf,.docx,.pptx,.txt,.md,.markdown,.rst,.png,.jpg,.jpeg,.webp,.bmp,.tiff"
           className="hidden"
           onChange={(event) => {
             const file = event.target.files?.[0];
@@ -702,7 +702,7 @@ export function KnowledgeSection({ locale, taskId, value, onChange }: {
           {locale === "zh-CN" ? "上传时同时加入课程资料库" : "Also add uploads to course library"}
         </label>
         <span className="text-[13px] text-muted-foreground">
-          {locale === "zh-CN" ? `已选择 ${docs.length}/3 份` : `${docs.length}/3 selected`}
+          {locale === "zh-CN" ? `已选择 ${docs.length}/20 份` : `${docs.length}/20 selected`}
         </span>
       </div>
 
@@ -714,7 +714,7 @@ export function KnowledgeSection({ locale, taskId, value, onChange }: {
             {docs.map((doc) => (
               <li key={doc.doc_id} className="flex min-h-[58px] items-center gap-3 px-4 py-2">
                 <FilePlus2 aria-hidden="true" className="h-5 w-5 shrink-0 text-primary" />
-                <span className="min-w-0 flex-1">
+                <div className="min-w-0 flex-1">
                   <span className="block truncate text-[13px] font-semibold text-foreground">{doc.filename}</span>
                   <span className="mt-0.5 block text-[12px] text-muted-foreground">
                     {doc.source_kind === "library"
@@ -724,7 +724,8 @@ export function KnowledgeSection({ locale, taskId, value, onChange }: {
                         : (locale === "zh-CN" ? "仅用于本任务" : "This task only")}
                     {` · ${doc.chunk_count} ${locale === "zh-CN" ? "个片段" : "chunks"}`}
                   </span>
-                </span>
+                  <KnowledgeIngestionStatus documentId={doc.doc_id} status={doc.status} ingestion={doc.ingestion} zh={locale === "zh-CN"} />
+                </div>
                 <button
                   type="button"
                   disabled={isBusy}
@@ -1051,3 +1052,4 @@ function localizeKnowledgeStorageError(error: unknown, locale: Locale): string {
   }
   return normalizeAPIError(error).message;
 }
+import { KnowledgeIngestionStatus } from "@/components/knowledge-base/KnowledgeIngestionStatus";

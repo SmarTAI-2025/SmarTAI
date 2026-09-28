@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from urllib.parse import quote
 
-from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
+from fastapi import APIRouter, Depends, File, Form, Query, HTTPException, UploadFile, status
 from fastapi.responses import Response
 from pydantic import BaseModel, Field
 
@@ -37,8 +37,10 @@ class AssignmentKnowledgeSelection(BaseModel):
 
 
 @router.post("/documents", status_code=status.HTTP_201_CREATED)
-async def upload_document(file: UploadFile = File(...), current: User = Depends(get_current_user)):
-    body = await file.read()
+async def upload_document(file: UploadFile = File(...), recognition_route_id: str | None = Form(default=None),
+                          current: User = Depends(get_current_user)):
+    from backend.rag.chunker import MAX_FILE_BYTES
+    body = await file.read(MAX_FILE_BYTES + 1)
     try:
         document = await ingest_document(
             owner_id=current.id,
@@ -46,6 +48,7 @@ async def upload_document(file: UploadFile = File(...), current: User = Depends(
             content=body,
             content_type=file.content_type,
             retention_policy="retained",
+            recognition_route_id=recognition_route_id,
         )
     except ValueError as exc:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
@@ -68,7 +71,17 @@ def get_knowledge_storage_usage(current: User = Depends(get_current_user)):
     from backend.db.knowledge_storage_repository import knowledge_storage_usage
 
     try:
-        return knowledge_storage_usage(current.id).as_dict()
+        from sqlalchemy import select, func
+        from backend.db.models import KnowledgeEvidenceRecord, KnowledgeChunkRecord, KnowledgeDocumentRecord
+        from backend.db.session import session_scope
+        with session_scope() as session:
+            evidence_bytes = session.scalar(select(func.coalesce(func.sum(KnowledgeEvidenceRecord.size_bytes), 0))
+                .join(KnowledgeDocumentRecord, KnowledgeDocumentRecord.id == KnowledgeEvidenceRecord.document_id)
+                .where(KnowledgeDocumentRecord.owner_id == current.id))
+            text_chars = session.scalar(select(func.coalesce(func.sum(func.length(KnowledgeChunkRecord.content)), 0))
+                .join(KnowledgeDocumentRecord, KnowledgeDocumentRecord.id == KnowledgeChunkRecord.document_id)
+                .where(KnowledgeDocumentRecord.owner_id == current.id))
+        return dict(knowledge_storage_usage(current.id).as_dict(), recognition_evidence_bytes=evidence_bytes, indexed_text_characters=text_chars)
     except DomainError as exc:
         return domain_error_response(exc)
 
@@ -93,6 +106,54 @@ def get_document_detail(document_id: str, current: User = Depends(get_current_us
     return document.public()
 
 
+@router.get("/documents/{document_id}/coverage")
+def document_coverage(document_id: str, offset: int = Query(default=0, ge=0),
+                      limit: int = Query(default=100, ge=1, le=100), current: User = Depends(get_current_user)):
+    from backend.db.knowledge_ingestion_repository import manifest
+    try:
+        return manifest(document_id, current.id, offset=offset, limit=limit)
+    except DomainError as exc:
+        return domain_error_response(exc)
+
+
+@router.post("/documents/{document_id}/resume")
+def resume_document(document_id: str, current: User = Depends(get_current_user)):
+    from backend.db.knowledge_ingestion_repository import resume
+    try:
+        resume(document_id, current.id)
+        return {"status": "queued"}
+    except DomainError as exc:
+        return domain_error_response(exc)
+
+
+@router.post("/documents/{document_id}/cancel")
+def cancel_document(document_id: str, current: User = Depends(get_current_user)):
+    from backend.db.knowledge_ingestion_repository import cancel
+    try:
+        cancel(document_id, current.id)
+        return {"status": "cancelled"}
+    except DomainError as exc:
+        return domain_error_response(exc)
+
+
+@router.post("/documents/{document_id}/retry-failed")
+async def retry_document(document_id: str, recognition_route_id: str | None = Form(default=None),
+                         current: User = Depends(get_current_user)):
+    from backend.db.knowledge_ingestion_repository import queue_document, manifest
+    from backend.knowledge.ingestion import frozen_configuration
+    from backend.services.task_facade import _registry_for_owner
+    from starlette.concurrency import run_in_threadpool
+    try:
+        # Authorize before loading provider credentials or creating a job.
+        await run_in_threadpool(manifest, document_id, current.id, limit=1)
+        registry = await run_in_threadpool(_registry_for_owner, current.id)
+        configuration = frozen_configuration(current.id, registry, recognition_route_id)
+        job_id = await run_in_threadpool(queue_document, document_id, current.id, configuration, new_version=True)
+        return {"status": "queued", "id": job_id}
+    except DomainError as exc:
+        return domain_error_response(exc)
+
+
 @router.get("/documents/{document_id}/download")
 def download_document(document_id: str, current: User = Depends(get_current_user)):
     document = _visible_personal_document(document_id, current.id)
@@ -104,11 +165,15 @@ def download_document(document_id: str, current: User = Depends(get_current_user
     try:
         stream = get_storage().open(stored.storage_key)
         try:
-            body = stream.read()
+            from backend.rag.chunker import MAX_FILE_BYTES
+            body = stream.read(MAX_FILE_BYTES + 1)
         finally:
             stream.close()
     except (FileNotFoundError, ValueError):
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Knowledge file content not found")
+    import hashlib
+    if len(body) != stored.size_bytes or hashlib.sha256(body).hexdigest() != stored.sha256 or _visible_personal_document(document_id, current.id) is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Knowledge file unavailable")
     return Response(content=body, media_type=stored.content_type or "application/octet-stream",
                     headers={"Content-Disposition": f"attachment; filename*=UTF-8''{quote(stored.original_name, safe='')}"})
 
@@ -147,7 +212,7 @@ def _owned_assignment(assignment_id: str, current: User):
 def assignment_knowledge_documents(assignment_id: str, current: User = Depends(require_teacher)):
     _owned_assignment(assignment_id, current)
     try:
-        selected = list_selected_documents(assignment_id, current.id)
+        selected = list_selected_documents(assignment_id, current.id, include_pending=True)
     except DomainError as exc:
         return domain_error_response(exc)
     return {"documents": [document.public() for document in selected]}

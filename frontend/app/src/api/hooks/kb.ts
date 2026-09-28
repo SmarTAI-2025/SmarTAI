@@ -8,6 +8,7 @@ export function useKBDocs(taskId?: string) {
     queryKey: kbKeys.list(taskId ?? ""),
     queryFn: () => kbApi.listKBDocs(taskId as string),
     enabled: Boolean(taskId),
+    refetchInterval: (query) => query.state.data?.docs.some((doc) => ["queued", "processing"].includes(doc.ingestion?.status ?? "")) ? 5_000 : false,
   });
 }
 

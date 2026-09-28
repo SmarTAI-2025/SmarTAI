@@ -300,6 +300,28 @@ def create_app() -> FastAPI:
                     "knowledge storage worker exited during shutdown"
                 )
 
+    _knowledge_ingestion_worker = {}
+
+    @app.on_event("startup")
+    async def _start_knowledge_ingestion_worker():
+        import asyncio
+        from backend.knowledge.ingestion import KnowledgeIngestionWorker
+        worker = KnowledgeIngestionWorker()
+        _knowledge_ingestion_worker.update(worker=worker, task=asyncio.create_task(worker.run_forever()))
+
+    @app.on_event("shutdown")
+    async def _stop_knowledge_ingestion_worker():
+        import asyncio
+        worker, task = _knowledge_ingestion_worker.get("worker"), _knowledge_ingestion_worker.get("task")
+        if worker:
+            worker.stop()
+        if task:
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+
     return app
 
 

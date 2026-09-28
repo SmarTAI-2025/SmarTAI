@@ -1,95 +1,55 @@
 from __future__ import annotations
 
-import logging
 from pathlib import Path
+from starlette.concurrency import run_in_threadpool
 
 from backend.db.file_repository import StoredFile, get_file
-from backend.db.knowledge_repository import (
-    KnowledgeDocument,
-    get_document,
-    request_document_deletion,
-    replace_document_chunks,
-    update_document,
-)
-from backend.rag.chunker import MAX_FILE_BYTES, chunk_text, extract_text
+from backend.db.knowledge_repository import KnowledgeDocument, get_document, request_document_deletion
+from backend.rag.chunker import MAX_FILE_BYTES, SUPPORTED_EXTS
 from backend.services.knowledge_storage import persist_knowledge_upload
 from backend.storage import get_storage
-
-
-logger = logging.getLogger(__name__)
+from backend.tools.file_processing import inspect_upload_content
 
 
 async def ingest_document(*, owner_id: str, original_name: str, content: bytes,
                           content_type: str | None = None, title: str | None = None,
-                          retention_policy: str = "retained",
-                          origin_assignment_id: str | None = None) -> KnowledgeDocument:
-    if len(content) > MAX_FILE_BYTES:
-        raise ValueError(f"Knowledge file too large ({len(content)} bytes > {MAX_FILE_BYTES}).")
+                          retention_policy: str = "retained", origin_assignment_id: str | None = None,
+                          registry=None, recognition_route_id=None) -> KnowledgeDocument:
+    """Persist before queueing. Upload completion is not whole-book completion."""
+    from backend.db.knowledge_ingestion_repository import queue_document
+    from backend.knowledge.ingestion import frozen_configuration, KnowledgeIngestionWorker
+
+    if not content or len(content) > MAX_FILE_BYTES:
+        raise ValueError("Knowledge files must contain 1 byte to 64 MiB.")
     safe_name = Path(original_name).name or "knowledge.txt"
-    upload = persist_knowledge_upload(
-        storage=get_storage(),
-        owner_id=owner_id,
-        original_name=safe_name,
-        content=content,
-        content_type=content_type,
-        title=(title or Path(safe_name).stem or safe_name)[:512],
-        retention_policy=retention_policy,
-        origin_assignment_id=origin_assignment_id,
-    )
+    media_type = inspect_upload_content(content, safe_name, content_type).content_type
+    visual = media_type == "application/pdf" or media_type in {"image/png", "image/jpeg", "image/webp", "image/bmp", "image/tiff"}
+    if not visual and Path(safe_name).suffix.lower() not in SUPPORTED_EXTS:
+        raise ValueError("Unsupported knowledge document type.")
+    if registry is None:
+        from backend.services.task_facade import _registry_for_owner
+        registry = await run_in_threadpool(_registry_for_owner, owner_id)
+    configuration = frozen_configuration(owner_id, registry, recognition_route_id)
+    upload = await run_in_threadpool(persist_knowledge_upload,
+        storage=get_storage(), owner_id=owner_id, original_name=safe_name, content=content,
+        content_type=media_type, title=(title or Path(safe_name).stem or safe_name)[:512],
+        retention_policy=retention_policy, origin_assignment_id=origin_assignment_id,
+        ingestion_configuration=configuration)
     document = get_document(upload.document_id, owner_id)
     if document is None:
         raise RuntimeError("Published knowledge upload has no document record")
-    # Existing owner/hash content is canonical.  ``persist_knowledge_upload``
-    # applies the monotonic task_only -> retained promotion before returning;
-    # parsing belongs only to the process that created this upload.
-    if not upload.created:
+    if not upload.created and document.status == "ready":
         return document
-
-    try:
-        text = await extract_text(safe_name, content)
-        chunks = chunk_text(text)
-        if not chunks:
-            raise ValueError("Document produced no usable text chunks.")
-        replace_document_chunks(document.id, chunks)
-        return update_document(document.id, owner_id, status="ready", chunk_count=len(chunks)) or document
-    except Exception:
-        update_document(document.id, owner_id, status="failed", error_code="parse_failed")
-        if retention_policy == "task_only":
-            # Publication succeeded but the document can never be attached if
-            # parsing fails.  Record cleanup now; the worker owns physical
-            # deletion/retry and quota remains charged until it succeeds.
-            from backend.db.knowledge_storage_repository import (
-                request_task_only_cleanup_if_unreferenced,
-            )
-            from backend.domain.knowledge_storage import (
-                KNOWLEDGE_CLEANUP_TASK_ATTACH_FAILED,
-            )
-
-            try:
-                request_task_only_cleanup_if_unreferenced(
-                    document.id,
-                    owner_id,
-                    reason=KNOWLEDGE_CLEANUP_TASK_ATTACH_FAILED,
-                )
-            except Exception:
-                # Preserve the parser failure seen by the caller.  Publication
-                # gave every unattached task-only record a durable grace
-                # deadline, so the cleanup worker can still reclaim it if this
-                # eager enqueue attempt hits a transient database failure.
-                logger.warning(
-                    "Failed to enqueue task-only knowledge parse cleanup; document_id=%s",
-                    document.id,
-                    exc_info=True,
-                )
-        raise
+    # Repair a crash between original publication and queue creation as well.
+    job_id = await run_in_threadpool(queue_document, document.id, owner_id, configuration)
+    if not visual and len(content) <= 256 * 1024:
+        await KnowledgeIngestionWorker(registry_factory=lambda _: registry).run_once(job_id)
+    return get_document(document.id, owner_id) or document
 
 
 def document_file(document: KnowledgeDocument, owner_id: str) -> StoredFile | None:
-    if not document.stored_file_id:
-        return None
-    return get_file(file_id=document.stored_file_id, owner_id=owner_id)
+    return get_file(file_id=document.stored_file_id, owner_id=owner_id) if document.stored_file_id else None
 
 
 def remove_document(*, document: KnowledgeDocument, owner_id: str):
-    """Durably request cleanup; the background worker performs object delete."""
     return request_document_deletion(document.id, owner_id)
