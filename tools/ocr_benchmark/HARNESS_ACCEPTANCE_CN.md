@@ -20,6 +20,8 @@
 | J 最终后端组合 | 121 passed，28.50 秒 | acceptance、knowledge ingestion/retrieval、executor、fusion；含新增缺口修复和全部 acceptance 测试 |
 | 上传格式最终核对 | 30 passed，12.68 秒 | ingestion/personal knowledge；四种未公开格式拒绝，PDF/文本及历史行为回归 |
 | PostgreSQL 收口 | 本地隔离 PostgreSQL 16.15：23 passed，9.00 秒；head/base/head 迁移往返通过 | CI36479764475发现旧并发夹具未创建可读教材块；补齐两处夹具，不放宽未就绪教材门禁 |
+| 非识别动作零 OCR 防回归 | 原有生成、批改/重批、编程测试执行、分析、模型/百度凭据、原件/引用读取、material apply 测试加 dispatch 禁止计数；组合196 passed | `backend/tests/conftest.py`列明受保护模块/动作，直接拦住共享runtime、旧skill和provider边界；不重复建立另一套同义测试 |
+| 资料挂载/进度/apply 补充 | 38 passed / 32 deselected，4.91 秒 | course library、task history、受影响 atomic apply；同一零 OCR guard，不重跑全量 |
 | 前端全量 | 86 files / 409 tests passed | J 最后状态刷新前；不称最终 head 全量 |
 | J 前端定向 | 错误文案相关 16 passed；最终知识状态/检索/引用 7 passed | 最后新增 active retry 轮询测试通过 |
 | 前端构建 | build 通过；只有既有大 chunk 提示 | 最后状态字段变动另行 typecheck |
@@ -76,7 +78,7 @@
 | course-materials、personal knowledge、task KB | 同 `knowledge.service.ingest_document` | 选择已入库材料只关联，不重新入库 |
 | RAG search / citation / citation download | `test_search_citation_api_is_owner_scoped_and_read_only` 将 ingestion 设为 forbidden，provider_calls=0 | owner、删除/原件失效、版本均测试 |
 | Preview/material source content、状态/列表、原件下载 | API 读取持久记录/artifact；预检 preview/owner 测试，浏览器状态 GET | 不由 GET 恢复任务 |
-| 生成参考答案/rubric/solution_code、mapping/apply、开始/重批、测试运行、analytics/export、凭据验证 | 调用图无新增 recognition 服务依赖；既有全量回归覆盖 | 尚未给每个活别名单独构建端到端 OCR 计数 fixture，不宣称全矩阵动态证明 |
+| 生成参考答案/rubric/solution_code、mapping/apply、开始/重批、测试运行、analytics、凭据验证 | 现有动作测试加入多层dispatch禁止计数；生成/批改/runner/分析/配置/读取/apply等组合196通过；调用图同时核对 | 动态覆盖以conftest显式清单为准，不声称每种参数/别名都单独端到端验收；导出仍为静态调用图证据 |
 
 ## 5. 真实消融执行协议
 
