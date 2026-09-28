@@ -19,7 +19,7 @@ from starlette.concurrency import run_in_threadpool
 
 from backend.agents.recognition_agent import RecognitionAgent, RecognitionReadRequestV1
 from backend.db import workflow_repository
-from backend.domain.errors import DomainError, LeaseLost, RecognitionError
+from backend.domain.errors import DomainError, LeaseLost, RecognitionError, RECOGNITION_ERROR_CODES
 from backend.recognition.cache_identity import final_cache_identity, model_cache_identity
 from backend.recognition.durable_records import (
     RecognitionRunCheckpointV1, authorize_dispatch, finish_dispatch, operation_usage,
@@ -258,7 +258,7 @@ class RecognitionRunService:
             raise
         except (DomainError, ValidationError, TimeoutError) as exc:
             code = "recognition_timeout" if isinstance(exc, TimeoutError) else (
-                exc.code if isinstance(exc, RecognitionError) else "recognition_artifact_unavailable")
+                exc.code if isinstance(exc, DomainError) and exc.code in RECOGNITION_ERROR_CODES else "recognition_artifact_unavailable")
             if context.checkpoint is not None:
                 try:
                     await context.write(context.checkpoint, status="needs_review", error=code)

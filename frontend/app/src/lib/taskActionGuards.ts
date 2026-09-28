@@ -317,6 +317,15 @@ export function classifyRecoverableError(
     ? `/tasks/${encodeURIComponent(taskId)}${suffix}`
     : undefined;
 
+  if (code === "recognition_already_running") {
+    return {
+      title: tx(locale, "这份资料仍在识别", "This source is still being recognized"),
+      description: tx(locale, "已有任务正在处理同一份资料，本次没有重复提交。", "An existing run is processing this source. No duplicate request was submitted."),
+      actionLabel: tx(locale, "查看任务", "View task"), actionHref: taskHref(""),
+      actionKind: "refresh", tone: "warning", technicalDetails,
+    };
+  }
+
   if (code === "ocr_provider_grading_not_supported") {
     return {
       title: tx(locale, "该 OCR 服务不支持批改", "This OCR service does not support grading"),
@@ -663,7 +672,7 @@ export function classifyRecoverableError(
     };
   }
 
-  if (code === "vision_provider_required") {
+  if (code === "vision_provider_required" || code === "visual_capability_unavailable") {
     const byokReturnTo = context.returnTo?.trim();
     return {
       title: tx(locale, "尚未选择可用的视觉模型", "No usable vision model is selected"),
@@ -680,6 +689,14 @@ export function classifyRecoverableError(
     };
   }
 
+  if (["target_location_needs_hint", "target_selection_limit_exceeded", "recognition_budget_exhausted", "recognition_timeout"].includes(code ?? "")) {
+    return {
+      title: tx(locale, "本次识别范围尚未完成", "Recognition coverage is incomplete"),
+      description: tx(locale, "已保存的识别结果仍然保留。请缩小页码范围或补充目标题号；系统不会自动增加付费调用。", "Saved evidence is retained. Narrow the page range or specify question numbers; no extra paid calls are started automatically."),
+      actionLabel: tx(locale, "调整识别范围", "Adjust source range"),
+      actionKind: "retry", tone: "warning", technicalDetails,
+    };
+  }
   if (code === "ocr_empty_result") {
     return {
       title: tx(locale, "OCR 没有读到可用文字", "OCR found no usable text"),

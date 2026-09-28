@@ -794,6 +794,8 @@ function openRiskCount(problem: ProblemInfo) {
 }
 
 function riskShortLabel(code: string, locale: string) {
+  if (code === "recognition_partial") return tx(locale, "原件有未完成识别的范围", "Source coverage is incomplete");
+  if (code === "recognition_needs_review") return tx(locale, "转写内容需对照原件", "Check transcription against the source");
   const zh: Record<string, string> = { low_confidence: "低置信匹配", source_conflict: "来源冲突", ai_source_conflict: "SmarTAI 与原文件冲突", parse_anomaly: "解析异常", generation_failed: "生成失败", invalid_test_case: "测试样例无效", reference_solution_failed_case: "参考解未通过测试", rubric_step_reference_conflict: "评分步骤未对应", default_max_score_requires_review: "默认 10 分待确认", max_score_not_found: "未匹配到本题满分，暂按 10 分" };
   const en: Record<string, string> = { low_confidence: "Low confidence", source_conflict: "Source conflict", ai_source_conflict: "SmarTAI/source conflict", parse_anomaly: "Parse anomaly", generation_failed: "Generation failed", invalid_test_case: "Invalid test case", reference_solution_failed_case: "Reference solution failed", rubric_step_reference_conflict: "Rubric alignment issue", default_max_score_requires_review: "Default 10-point score needs confirmation", max_score_not_found: "No matched score; temporarily 10" };
   return locale === "zh-CN" ? zh[code] ?? code : en[code] ?? code;

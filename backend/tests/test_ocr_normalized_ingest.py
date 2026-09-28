@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
@@ -111,16 +112,20 @@ async def test_problem_upload_ocr_persists_normalized_questions(monkeypatch):
     monkeypatch.setattr(
         "backend.services.assignments.extract_problems", fake_extract
     )
-    ocr = FakeOCRSkill("OCR problem text")
+    from backend.tests.test_recognition_reader import llm
+    provider, _engine = llm(text="OCR problem text")
+    registry = SimpleNamespace(list_configs=lambda: [dict(provider_id=provider.provider_id, enabled=True)])
+    from backend.tests.test_recognition_recheck import source_file
+    valid_image, _ = source_file()
 
     created = await assignment_service.import_questions_from_upload(
         assignment_id=assignment.id,
         teacher_id=teacher_id,
         filename="problems.png",
-        content=PNG_1X1,
+        content=valid_image,
         content_type="image/png",
-        provider=_provider(),
-        ocr_skill=ocr,
+        provider=provider,
+        registry=registry,
     )
 
     assert [question.q_id for question in created] == ["q1"]
@@ -132,11 +137,12 @@ async def test_problem_upload_ocr_persists_normalized_questions(monkeypatch):
     assert structure["major_number"] == "1"
     assert structure["subparts"] == []
     assert seen["text"] == "OCR problem text"
-    assert ocr.calls[0]["purpose"] == "problems"
+    assert provider.ainvoke_vision.await_count == 1
+    assert "problem statements" in provider.ainvoke_vision.call_args.args[0]
     stored_files = list_files(
         owner_id=teacher_id, assignment_id=assignment.id
     )
-    assert [item.original_name for item in stored_files] == ["problems.png"]
+    assert [item.original_name for item in stored_files if item.kind == "problem_source"] == ["problems.png"]
 
 
 @pytest.mark.asyncio

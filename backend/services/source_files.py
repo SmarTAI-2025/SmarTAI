@@ -484,7 +484,13 @@ def _problem_from_question_preparation(
             ),
             stored=None,
         )
-    if source_kind == "library":
+    if source_kind == "library" and selected.get("source_id"):
+        material = course_library_repository.get_material(selected.get("library_material_id"), owner_id)
+        clone = file_repository.get_file(file_id=selected.get("stored_file_id"), owner_id=owner_id)
+        if material is None or clone is None or clone.sha256 != material.sha256:
+            raise SourcePreviewNotFound("Source preview not found.")
+        # Assignment-bound copies use the same operation/source fences as uploads.
+    elif source_kind == "library":
         material_id = selected.get("library_material_id")
         file_id = selected.get("stored_file_id")
         if not isinstance(material_id, str) or not isinstance(file_id, str):

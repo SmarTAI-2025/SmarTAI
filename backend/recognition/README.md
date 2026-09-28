@@ -592,3 +592,20 @@ polling. Business adapters are implemented in the following stages.
 Validation: seven durable integration/ledger cases and 26 existing V2 workflow
 reuse cases pass together (33); the earlier budget run passed 76 budget cases.
 These are synthetic local SQLite tests, not provider or deployment acceptance.
+
+## E: Question Sources
+
+Formal source preflight and mounted compatibility question imports use
+`services.question_sources`. Visual inputs keep their assignment-bound original,
+frozen owner route and durable evidence; plain text makes no OCR call. Library
+inputs use an authorized original-file copy, not lossy knowledge chunks. Explicit
+pages and target IDs bound recognition, including hierarchical textbook IDs.
+Baidu batches one page so unaligned multi-page Markdown cannot invent page
+provenance. Existing BMP/TIFF uploads use the same killable single-frame worker.
+
+Recognition and structured question parsing are separate. Literal criteria may
+be preserved, but parsing does not invent solutions or scores. Coverage gaps and
+low-confidence evidence feed the existing final teacher review without changing
+the major-question scoring contract or adding an intermediate confirmation.
+Preflight remains a bounded synchronous request; it is not a background whole-book
+ingestion job. Knowledge coverage and student-source lifecycle follow in H and G.

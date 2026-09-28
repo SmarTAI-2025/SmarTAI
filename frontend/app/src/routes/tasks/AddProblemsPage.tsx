@@ -56,6 +56,8 @@ type SourceDraft = {
   inlineText: string;
   structureMode: ProblemStructureMode;
   extractionHint: string;
+  recognitionPages?: string;
+  recognitionTargets?: string;
   saveToLibrary: boolean;
   storedFileId: string | null;
 };
@@ -233,7 +235,8 @@ export function AddProblemsPage() {
           libraryMaterialId: source.libraryMaterial?.material_id,
           inlineText: source.inlineText,
           structureMode: source.structureMode,
-          extractionHint: source.extractionHint,
+          extractionHint: [source.extractionHint, source.recognitionPages?.trim() ? `页码: ${source.recognitionPages.trim()}` : "",
+            source.recognitionTargets?.trim() ? `题号: ${source.recognitionTargets.trim()}` : ""].filter(Boolean).join("\n"),
           saveToLibrary: source.sourceMode === "upload" && source.saveToLibrary,
           recognitionProviderId,
           replaceConfirmed,
@@ -689,6 +692,18 @@ function SourceEditor({
           <ModeButton active={source.sourceMode === "library"} disabled={disabled} onClick={() => onUpdate({ sourceMode: "library", file: null })} icon={<BookOpen className="h-4 w-4" />} label={tx(locale, "课程资料库", "Course Library")} />
         </div>
 
+        {source.role === "problem" && source.sourceMode !== "inline_text" && source.structureMode === "extract_from_source" ? (
+          <div className="mt-3 grid grid-cols-2 gap-3">
+            <label className="grid gap-1 text-xs font-semibold text-muted-foreground">
+              {tx(locale, "页码", "Pages")}
+              <input value={source.recognitionPages ?? ""} disabled={disabled} maxLength={160} onChange={(event) => onUpdate({ recognitionPages: event.target.value })} className="h-9 min-w-0 rounded-[7px] border bg-card px-3 text-sm font-normal text-foreground" />
+            </label>
+            <label className="grid gap-1 text-xs font-semibold text-muted-foreground">
+              {tx(locale, "目标题号", "Question Numbers")}
+              <input value={source.recognitionTargets ?? ""} disabled={disabled} maxLength={600} onChange={(event) => onUpdate({ recognitionTargets: event.target.value })} className="h-9 min-w-0 rounded-[7px] border bg-card px-3 text-sm font-normal text-foreground" />
+            </label>
+          </div>
+        ) : null}
         {source.sourceMode === "upload" ? (
           <div
             aria-label={tx(locale, `${roleMeta(source.role, locale).sourceLabel}文件上传`, `${roleMeta(source.role, locale).sourceLabel} file upload`)}
@@ -770,7 +785,7 @@ function SourceEditor({
           ) : source.structureMode === "extract_from_source" ? (
             <label className="grid gap-2 text-xs font-semibold text-muted-foreground">
               {tx(locale, "提取说明", "Extraction Hint")}
-              <textarea value={source.extractionHint} disabled={disabled} maxLength={2000} onChange={(event) => onUpdate({ extractionHint: event.target.value })} placeholder={tx(locale, "例如：第 3 章习题 1–8，只提取正文中的题目与对应答案", "Example: Chapter 3, exercises 1–8; extract only the question text and matching reference answers")} className="min-h-[74px] resize-y rounded-[7px] border bg-card px-3 py-2 text-sm font-normal leading-5 text-foreground outline-none focus:border-primary focus:ring-2 focus:ring-primary/15" />
+              <textarea value={source.extractionHint} disabled={disabled} maxLength={source.role === "problem" ? 1200 : 2000} onChange={(event) => onUpdate({ extractionHint: event.target.value })} placeholder={tx(locale, "例如：第 3 章习题 1–8，保留完整题干和图表", "Example: Chapter 3, exercises 1–8, including complete conditions and diagrams")} className="min-h-[74px] resize-y rounded-[7px] border bg-card px-3 py-2 text-sm font-normal leading-5 text-foreground outline-none focus:border-primary focus:ring-2 focus:ring-primary/15" />
             </label>
           ) : <p className="self-end pb-1 text-xs leading-5 text-muted-foreground">{tx(locale, "系统按明确题号匹配到同一道题。", "Content is matched by explicit question numbers.")}</p>}
         </div>

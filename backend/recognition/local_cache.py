@@ -22,7 +22,7 @@ from backend.recognition.models import RecognitionSourceRefV1
 MAX_BYTES = 64 * 1024 * 1024
 MAX_TTL_SECONDS = 1800
 MAX_ENTRIES = 512
-_MEDIA_TYPES = {"application/pdf", "image/png", "image/jpeg", "image/webp"}
+_MEDIA_TYPES = {"application/pdf", "image/png", "image/jpeg", "image/webp", "image/bmp", "image/tiff"}
 _SourceKey = tuple[str, str, str, str, str, str]
 _CacheKey = tuple[_SourceKey, str]
 

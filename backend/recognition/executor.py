@@ -123,7 +123,7 @@ class RecognitionReadBatchV1(EvidenceModel):
             if any(not isinstance(page, PdfDetailPage) for page in self.pages) or any(unit.image_preparation is not None for unit in self.units):
                 raise ValueError("PDF evidence cannot contain image-source geometry")
         else:
-            if self.source.content_type not in {"image/png", "image/jpeg", "image/webp"} or self.plan.total_pages != 1 or requested != {1}:
+            if self.source.content_type not in {"image/png", "image/jpeg", "image/webp", "image/bmp", "image/tiff"} or self.plan.total_pages != 1 or requested != {1}:
                 raise ValueError("image sources require one explicitly requested page")
             if any(not isinstance(page, ImageDetailPageV1) for page in self.pages) or self.native_only_pages:
                 raise ValueError("images cannot invent native PDF evidence")

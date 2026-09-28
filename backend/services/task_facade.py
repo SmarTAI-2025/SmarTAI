@@ -1884,8 +1884,6 @@ async def run_task_problem_extraction(
             raise ValidationError(
                 "No enabled provider is available.", code="no_provider_configured"
             )
-        vision = provider if getattr(provider, "supports_vision", False) else None
-        ocr_skill = LLMVisionOCRSkill(vision) if vision is not None else None
         reporter = get_or_create_reporter(job_id)
         await reporter.configure_workflow(
             "problem_recognition",
@@ -1896,9 +1894,16 @@ async def run_task_problem_extraction(
             "reading_source", total_steps=4, completed_steps=0,
             message="Reading problem source.",
         )
-        text = await extract_text_from_upload(
-            content, filename, ocr_skill=ocr_skill, purpose="problems", reporter=reporter
+        from backend.services.question_sources import read_question_source, attach_recognition_review
+        from backend.services.stage_provider_routing import StageProviderRoute
+        read = await read_question_source(
+            owner_id=owner_id, task_id=task_id, content=content, filename=filename,
+            route=StageProviderRoute(route_id=recognition_provider_id, kind="llm", provider=provider),
+            registry=registry, extraction_hint=str((extraction_options or {}).get("extraction_hint") or ""),
+            options=(extraction_options or {}).get("recognition_options"), reporter=reporter,
+            text_reader=extract_text_from_upload,
         )
+        text = read.text
         problem_data: dict[str, dict] = {}
         await extract_problems(
             text, provider, problem_data, reporter=reporter,
@@ -1907,6 +1912,7 @@ async def run_task_problem_extraction(
             confirmed_candidates=list((extraction_options or {}).get("confirmed_candidates") or []),
             manage_progress_lifecycle=False,
         )
+        attach_recognition_review(problem_data, [{"recognition": read.recognition}])
         await reporter.set_stage_progress(
             "validating_questions", total_steps=4, completed_steps=3,
             message="Validating recognized questions.",

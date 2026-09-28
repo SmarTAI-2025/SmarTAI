@@ -188,6 +188,8 @@ RECOGNITION_ERROR_CODES = frozenset({
     "recognition_artifact_invalid", "recognition_artifact_limit", "recognition_artifact_unavailable",
     "recognition_artifact_scope_unsupported",
     "recognition_source_unavailable",
+    "recognition_already_running",
+    "target_location_needs_hint", "target_selection_limit_exceeded", "visual_capability_unavailable",
     "recognition_cache_not_success", "recognition_cache_corrupt", "recognition_cache_unavailable",
     "recognition_cache_source_unavailable",
     "provider_credentials_required", "provider_vision_not_supported", "provider_auth_failed",
@@ -201,7 +203,7 @@ RECOGNITION_ERROR_CODES = frozenset({
     "provider_model_not_found", "provider_image_payload_invalid", "provider_message_payload_not_supported",
     "provider_endpoint_dns_failed", "provider_endpoint_redirect_blocked", "provider_endpoint_protocol_mismatch",
     "provider_endpoint_response_too_large",
-})
+}) | frozenset(PDF_EVIDENCE_STATUS_CODES)
 
 
 class RecognitionError(DomainError):
