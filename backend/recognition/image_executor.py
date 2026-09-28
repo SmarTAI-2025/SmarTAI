@@ -83,7 +83,8 @@ async def read_image_plan(
                 units.append(ReadUnitV1(
                     unit_id=f"u{len(units):04d}", page_numbers=[1], region=region, input_mode="page_image",
                     payload_sha256=hashlib.sha256(payload).hexdigest(), payload_bytes=len(payload),
-                    candidate=candidate, submission_may_exist=outcome.submission_may_exist,
+                    candidate=candidate, requested_output_tokens=request.max_output_tokens,
+                    submission_may_exist=outcome.submission_may_exist,
                     output_mapping="single_region", image_preparation=metadata,
                 ))
                 if candidate.status == "error":

@@ -64,6 +64,7 @@ class ReadUnitV1(EvidenceModel):
     payload_sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
     payload_bytes: int = Field(ge=1, le=10 * 1024 * 1024)
     candidate: RecognitionCandidateV1
+    requested_output_tokens: int = Field(strict=True, ge=1, le=32768)
     submission_may_exist: bool = False
     # Multiple submitted pages do not provide output-to-page correspondence.
     output_mapping: Literal["single_region", "document_only"]
@@ -282,7 +283,8 @@ checks here do not replace the caller's storage ACL and operation lease.
             units.append(ReadUnitV1(
                 unit_id=f"u{len(units):04d}", page_numbers=numbers, region=region,
                 input_mode=mode, payload_sha256=hashlib.sha256(payload).hexdigest(), payload_bytes=len(payload),
-                candidate=candidate, submission_may_exist=outcome.submission_may_exist,
+                candidate=candidate, requested_output_tokens=request.max_output_tokens,
+                submission_may_exist=outcome.submission_may_exist,
                 output_mapping="document_only" if len(numbers) > 1 else "single_region",
             ))
             if candidate.status == "error":

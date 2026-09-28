@@ -1,4 +1,4 @@
-# Recognition Foundation (Work Items A-C2c)
+# Recognition Foundation (Work Items A-D1)
 
 This package is not wired to an upload endpoint yet. It defines the first
 version of the evidence and planning contracts plus callable existing-engine
@@ -57,7 +57,9 @@ Dependent PRs may stack; none is merged automatically.
 | C2a | Killable image preparation and mapped PDF contact sheets |
 | C2b | Shared execution budgets, dispatch and image-source reader |
 | C2c | Bounded scan localization and unified Agent orchestration |
-| D | Evidence merge, purpose checks, one bounded repair and durable caching |
+| D1 | Faithful evidence assembly, purpose checks and honest coverage |
+| D2 | One bounded extra read and explicit repair decisions |
+| D3 | Durable evidence, layered owner-scoped cache and submit-once recovery |
 | E | Problem extraction and compatibility routes |
 | F | Teacher reference/rubric/test materials and confirmation gates |
 | G | Student submission sources, faithful transcription and retry |
@@ -250,3 +252,62 @@ The result retained `target_location_needs_hint`,
 local run took 0.564 seconds and made zero model calls. This is a local
 orchestration check, not OCR accuracy, latency-distribution or user acceptance
 evidence. The private fixture is not included in this repository change.
+
+## D1 Evidence Assembly Boundary
+
+`RecognitionAgent.recognize(..., prompt_version=...)` adds a deterministic
+assembly after the same read workflow. It reports progress without resetting
+existing counters. `fusion.assemble_recognition()` is also callable on validated
+raw evidence. Neither path makes an additional model call. The caller supplies
+the actual adapter prompt version; the API has no implicit vendor selection.
+
+Whole-page native/visual candidates can be compared because their input scope
+matches. The selected span is exactly one retained raw candidate, not a guessed
+hybrid. Both candidates remain available. NFC, CRLF and explicit outer math
+wrappers are the only allowed equivalence comparison; digits, negatives,
+exponents, command words and internal whitespace cannot be normalized away.
+Submissions prefer available visual evidence so native text cannot silently
+correct handwriting. Refused output is never adopted, empty visual output never
+erases native text, and partial/error outcomes prevent complete page coverage.
+
+`quality.assess_candidates()` labels disagreement, incomplete coverage, visible
+uncertainty and limited packaging defects. It does not check mathematical
+correctness, fix student errors, invent identities or authorize another call.
+Labels are uncalibrated and at most `medium`; even agreement is not proof of
+missing-line absence. Located target labels retain `unverified_targets` until
+downstream target-content checks establish the requested bodies. A page read
+does not make an entire exercise, document or knowledge corpus accurate.
+
+The assembly retains its complete raw workflow. Image pages carry actual pixel
+dimensions, never invented PDF point dimensions. Multi-page document-only output
+remains in `unaligned_units`, not falsely attached to page one. Crop output is
+also retained there when its placement relative to native text is unproven;
+automatic spatial composition/alignment is not implemented in D1. These units
+are not appended to overlapping native text to manufacture completeness, and
+their pages remain incomplete. Downstream callers must inspect both coverage
+and the independent candidates, not treat `final_markdown` alone as success.
+
+Native/page or final-render length limits produce an explicit assembly error
+with the complete raw workflow still present; no first-N-character truncation.
+Malformed original PDFs preserve their failed workflow without an invented page.
+Round-trip validators rederive the document and enforce frozen scope, policy,
+engine, overlapping native snapshots and paid call evidence. This does not
+replace durable artifact hashes, authorized storage access or submit-once locks.
+
+Usage is the workflow ledger including localization, never reader-plus-ledger
+double counting. Each call retains its actual requested output-token bound.
+Workflow validation reconciles settled/pending outcomes, known/unknown tokens,
+reservations, charges and overrun flags against those call records. Reader-only
+usage is checked separately. Unknown tokens remain unknown. `result_cache_key` is a future
+identity over owner/source/scope, policy, engine capabilities/fingerprint,
+assembly and prompt versions; D1 does not read or write any cache. D2/D3 still
+own bounded extra calls, alignment/repair decisions and persistent recovery.
+Existing upload/business routes, real-model quality, whole-book RAG and UI
+acceptance remain later items. `recognition_complete` is still false.
+
+D1 local AA smoke reused the seven-target file above with no engine: 0.626
+seconds in one local run, zero model calls, 5,869 native characters retained and
+an equal JSON round-trip. Four targets remained missing; the other three were
+located but their complete bodies still unverified. Both selected pages stayed
+unprocessed for required visual evidence, and confidence remained low. This
+checks honest evidence retention only, not improved OCR accuracy.
