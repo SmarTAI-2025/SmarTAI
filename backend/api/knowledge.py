@@ -8,6 +8,7 @@ that selection via the assignment scope. Document CRUD stays owner-scoped.
 from __future__ import annotations
 
 from urllib.parse import quote
+from typing import Literal
 
 from fastapi import APIRouter, Depends, File, Form, Query, HTTPException, UploadFile, status
 from fastapi.responses import Response
@@ -40,6 +41,18 @@ class KnowledgeSearchRequest(BaseModel):
     query: str = Field(min_length=1, max_length=4000)
     document_ids: list[str] = Field(min_length=1, max_length=20)
     limit: int = Field(default=5, ge=1, le=10)
+
+
+@router.get("/activity")
+def knowledge_activity(q: str = Query(default="", max_length=128),
+                       state: Literal["all", "active", "attention", "completed"] = "all",
+                       page: int = Query(default=1, ge=1, le=10000),
+                       page_size: int = Query(default=20, ge=1, le=100),
+                       prioritize_active: bool = False,
+                       current: User = Depends(require_teacher)):
+    from backend.knowledge.activity import list_activity
+    return list_activity(current.id, query=q, state=state, page=page,
+                         page_size=page_size, prioritize_active=prioritize_active)
 
 
 @router.post("/search")

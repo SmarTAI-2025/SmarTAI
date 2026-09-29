@@ -14,6 +14,7 @@ import {
   useTaskHistory,
 } from "@/api/hooks";
 import { HistoryFilters } from "@/components/history/HistoryFilters";
+import { KnowledgeActivityPanel } from "@/components/knowledge-base/KnowledgeActivityPanel";
 import { HistoryPagination } from "@/components/history/HistoryPagination";
 import { HistoryTaskTable } from "@/components/history/HistoryTaskTable";
 import {
@@ -36,6 +37,38 @@ const EMPTY_FACETS: HistoryFacets = {
 };
 
 export function HistoryPage() {
+  const { locale, t } = useI18n();
+  const [params, setParams] = useSearchParams();
+  const knowledge = params.get("view") === "knowledge";
+  function choose(value: boolean) {
+    const next = new URLSearchParams(params);
+    if (value) next.set("view", "knowledge"); else next.delete("view");
+    setParams(next);
+  }
+  return <div className="w-full max-w-[1290px]">
+    <h1 className="text-[30px] font-bold leading-9 text-foreground">{t("historyTitle")}</h1>
+    <div role="tablist" aria-label={locale === "zh-CN" ? "任务类型" : "Task type"} className="mt-4 flex gap-5 border-b">
+      {[false, true].map(value => <button key={String(value)} type="button" role="tab" aria-selected={knowledge === value}
+        tabIndex={knowledge === value ? 0 : -1}
+        id={value ? "knowledge-history-tab" : "grading-history-tab"} aria-controls="history-content"
+        onKeyDown={event => {
+          if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
+          event.preventDefault();
+          const next = event.key === "Home" ? false : event.key === "End" ? true : !knowledge;
+          choose(next);
+          document.getElementById(next ? "knowledge-history-tab" : "grading-history-tab")?.focus();
+        }}
+        onClick={() => choose(value)} className={`border-b-2 py-2 text-sm font-medium ${knowledge === value ? "border-primary text-primary" : "border-transparent text-muted-foreground"}`}>
+        {value ? (locale === "zh-CN" ? "教材识别" : "Textbook recognition") : (locale === "zh-CN" ? "作业批改" : "Grading")}
+      </button>)}
+    </div>
+    <div id="history-content" role="tabpanel" aria-labelledby={knowledge ? "knowledge-history-tab" : "grading-history-tab"} className="mt-5">
+      {knowledge ? <KnowledgeActivityPanel /> : <GradingHistoryPanel />}
+    </div>
+  </div>;
+}
+
+function GradingHistoryPanel() {
   const { locale, t } = useI18n();
   const [searchParams, setSearchParams] = useSearchParams();
   const query = useMemo(() => parseHistorySearchParams(searchParams), [searchParams]);
@@ -191,7 +224,6 @@ export function HistoryPage() {
   return (
     <div className="w-full max-w-[1290px]">
       <header>
-        <h1 className="text-[30px] font-bold leading-9 tracking-[-0.02em] text-foreground">{t("historyTitle")}</h1>
         <p className="mt-1 text-[13px] leading-4 text-muted-foreground">{t("historyDescription")}</p>
       </header>
 

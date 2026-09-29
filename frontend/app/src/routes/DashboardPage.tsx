@@ -3,6 +3,7 @@ import { Link } from "react-router-dom";
 import { normalizeAPIError } from "@/api/client";
 import { useExperts, useTasks } from "@/api/hooks";
 import { useTaskProgress } from "@/hooks/useTaskProgress";
+import { KnowledgeActivityPanel } from "@/components/knowledge-base/KnowledgeActivityPanel";
 import { useI18n } from "@/i18n/I18nProvider";
 import type { Locale, MessageKey } from "@/i18n/messages";
 import { cn } from "@/lib/cn";
@@ -188,6 +189,8 @@ export function DashboardPage() {
           onRetry={() => void tasksQuery.refetch()}
         />
       </section>
+
+      <div className="mt-8"><KnowledgeActivityPanel compact /></div>
 
       <DashboardInsight
         counts={counts}

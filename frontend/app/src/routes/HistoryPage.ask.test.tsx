@@ -9,6 +9,7 @@ import { HistoryPage } from "./HistoryPage";
 const mocks = vi.hoisted(() => ({ history: vi.fn(), interpret: vi.fn(), state: vi.fn() }));
 vi.mock("@/api/tasks", () => ({ getTaskState: mocks.state }));
 vi.mock("@/components/history/HistoryTagPopover", () => ({ HistoryTagPopover: () => null }));
+vi.mock("@/components/knowledge-base/KnowledgeActivityPanel", () => ({ KnowledgeActivityPanel: () => <div>教材进度测试面板</div> }));
 vi.mock("@/api/hooks", () => ({
   useTaskHistory: mocks.history,
   useTags: () => ({ data: [] }),
@@ -39,6 +40,16 @@ describe("Current task Ask SmarTAI", () => {
     mocks.state.mockReset().mockImplementation(async (taskId: string) => ({ task_id: taskId, status: "grading" }));
     window.localStorage.removeItem("smartai_locale");
     mocks.history.mockReturnValue({ data: { items: [], total: 0 }, isLoading: false, isFetching: false, error: null });
+  });
+
+  it("opens textbook history from its URL without loading grading tasks, and preserves grading filters", () => {
+    mount("/history?view=knowledge&sort=name_asc");
+    expect(screen.getByText("教材进度测试面板")).toBeInTheDocument();
+    expect(mocks.history).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("tab", { name: "作业批改" }));
+    expect(mocks.history).toHaveBeenLastCalledWith(expect.objectContaining({ sort: "name_asc" }));
+    fireEvent.click(screen.getByRole("tab", { name: "教材识别" }));
+    expect(screen.getByText("教材进度测试面板")).toBeInTheDocument();
   });
 
   it("applies the semantic interpretation and shows its explanation", async () => {
