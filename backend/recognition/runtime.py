@@ -5,13 +5,11 @@ import asyncio
 from contextlib import asynccontextmanager
 import hashlib
 import json
-from typing import TYPE_CHECKING
-
-from pydantic import ValidationError
+from typing import Literal, TYPE_CHECKING
 
 from backend.domain.errors import RecognitionError
 from backend.recognition.budget import RecognitionBudget
-from backend.recognition.engine import EngineReadInputV1, RecognitionEngine
+from backend.recognition.engine import EngineLocateInputV1, EngineReadInputV1, RecognitionEngine, freeze_engine_input
 from backend.recognition.models import (
     EvidenceModel, NormalizedRegionV1, RecognitionCandidateV1,
     RecognitionPolicyV1, RecognitionSourceRefV1,
@@ -75,6 +73,27 @@ async def run_initial_read(
     capacity: RecognitionCapacity,
     progress: ProgressReporter | None = None,
 ) -> RecognitionCallResultV1:
+    return await _dispatch(engine, request, kind="initial", source=source, policy=policy,
+                           capabilities=capabilities, region_keys=region_keys, budget=budget,
+                           capacity=capacity, progress=progress)
+
+
+async def run_locator_call(
+    engine: RecognitionEngine, request: EngineLocateInputV1, *, source: RecognitionSourceRefV1,
+    policy: RecognitionPolicyV1, capabilities: EngineCapabilitiesV1, budget: RecognitionBudget,
+    capacity: RecognitionCapacity, progress: ProgressReporter | None = None,
+) -> RecognitionCallResultV1:
+    return await _dispatch(engine, request, kind="locator", source=source, policy=policy,
+                           capabilities=capabilities, region_keys=(), budget=budget,
+                           capacity=capacity, progress=progress)
+
+
+async def _dispatch(
+    engine: RecognitionEngine, request: EngineReadInputV1 | EngineLocateInputV1, *,
+    kind: Literal["initial", "locator"], source: RecognitionSourceRefV1, policy: RecognitionPolicyV1,
+    capabilities: EngineCapabilitiesV1, region_keys: tuple[str, ...], budget: RecognitionBudget,
+    capacity: RecognitionCapacity, progress: ProgressReporter | None,
+) -> RecognitionCallResultV1:
     """Dispatch once; an ambiguous completion remains charged and pending.
 
     Durable ownership and cancellation recovery belong to the application job.
@@ -82,23 +101,28 @@ async def run_initial_read(
     """
     budget.assert_context(source, policy, capabilities)
     source, policy, capabilities = (value.model_copy(deep=True) for value in (source, policy, capabilities))
-    try:
-        request = EngineReadInputV1.model_validate({**request.model_dump(warnings=False), "payload": request.payload})
-    except (ValidationError, AttributeError, TypeError):
-        raise RecognitionError("recognition_request_invalid") from None
+    request = freeze_engine_input(request)
+    if (kind == "locator") != isinstance(request, EngineLocateInputV1):
+        raise RecognitionError("recognition_request_invalid")
     if engine.capabilities != capabilities:
         raise RecognitionError("recognition_route_changed")
     if request.input_mode not in capabilities.visual_inputs:
         raise RecognitionError("recognition_input_unsupported")
+    if kind == "locator" and (not capabilities.target_location or len(request.images) > capabilities.max_locator_images):
+        raise RecognitionError("recognition_input_unsupported")
+    dispatch = getattr(engine, "locate" if kind == "locator" else "recognize", None)
+    if not callable(dispatch):
+        raise RecognitionError("recognition_input_unsupported")
+    phase = "locator" if kind == "locator" else "read"
     ticket = None
     uncertain = False
     try:
-        async with asyncio.timeout(budget.remaining("read")), capacity.lease(source.owner_id):
+        async with asyncio.timeout(budget.remaining(phase)), capacity.lease(source.owner_id):
             budget.assert_context(source, policy, engine.capabilities)
-            seconds = min(policy.per_call_seconds, budget.remaining("read"))
-            ticket = budget.reserve("initial", max_output_tokens=request.max_output_tokens, region_keys=region_keys)
+            seconds = min(policy.per_call_seconds, budget.remaining(phase))
+            ticket = budget.reserve(kind, max_output_tokens=request.max_output_tokens, region_keys=region_keys)
             async with asyncio.timeout(seconds):
-                candidate = await engine.recognize(request)
+                candidate = await dispatch(request)
             candidate = RecognitionCandidateV1.model_validate(candidate.model_dump(warnings=False))
             if engine.capabilities != capabilities:
                 raise RecognitionError("recognition_route_changed", submission_may_exist=True)
@@ -133,5 +157,5 @@ async def run_initial_read(
         budget.settle(ticket, outcome="failed" if failed else candidate.status,
                       input_tokens=candidate.input_tokens, output_tokens=candidate.output_tokens)
     if progress:
-        await progress.increment_stage_metrics(recognition_initial_calls=1)
+        await progress.increment_stage_metrics(**{f"recognition_{kind}_calls": 1})
     return RecognitionCallResultV1(candidate=candidate, submission_may_exist=uncertain)

@@ -35,6 +35,8 @@ class EngineCapabilitiesV1(EvidenceModel):
     document_batching: bool = False
     max_document_pages: int = Field(default=1, ge=1, le=24)
     bounded_output_tokens: bool = False
+    target_location: bool = False
+    max_locator_images: int = Field(default=1, ge=1, le=2)
 
     @model_validator(mode="after")
     def consistent_capabilities(self):
@@ -48,6 +50,8 @@ class EngineCapabilitiesV1(EvidenceModel):
             raise ValueError("document batching requires document input")
         if not self.document_batching and self.max_document_pages != 1:
             raise ValueError("multiple document pages require batching")
+        if self.target_location and "page_image" not in self.visual_inputs:
+            raise ValueError("scan location requires image input")
         return self
 
 
