@@ -2,6 +2,10 @@ import { describe, expect, it } from "vitest";
 import { normalizeMarkdownMathInput } from "./MarkdownMath";
 
 describe("normalizeMarkdownMathInput", () => {
+  it("keeps literal display fences in fenced code unchanged", () => {
+    const code = "```text\n$$example\nnext$$\n```";
+    expect(normalizeMarkdownMathInput(code)).toBe(code);
+  });
   it("repairs double-escaped model prose already stored in a task", () => {
     expect(normalizeMarkdownMathInput(
       String.raw`1. Substitute.\\n\\n2. Compute $$$\\frac{1}{2}\\left(e-1\\right)$$$.`,

@@ -219,6 +219,7 @@ def cancel_document(document_id: str, current: User = Depends(get_current_user))
 
 @router.post("/documents/{document_id}/retry-failed")
 async def retry_document(document_id: str, recognition_route_id: str | None = Form(default=None),
+                         accept_uncertain_resubmission: bool = Form(default=False),
                          current: User = Depends(get_current_user)):
     from backend.db.knowledge_ingestion_repository import queue_document, manifest
     from backend.knowledge.ingestion import frozen_configuration
@@ -229,7 +230,8 @@ async def retry_document(document_id: str, recognition_route_id: str | None = Fo
         await run_in_threadpool(manifest, document_id, current.id, limit=1)
         registry = await run_in_threadpool(_registry_for_owner, current.id)
         configuration = frozen_configuration(current.id, registry, recognition_route_id)
-        job_id = await run_in_threadpool(queue_document, document_id, current.id, configuration, new_version=True)
+        job_id = await run_in_threadpool(queue_document, document_id, current.id, configuration,
+                                        new_version=True, resubmit_uncertain=accept_uncertain_resubmission)
         return {"status": "queued", "id": job_id}
     except DomainError as exc:
         return domain_error_response(exc)

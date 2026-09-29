@@ -1161,6 +1161,12 @@ function providerTransientErrorCopy(
   code: string | null,
   locale: Locale,
 ): Pick<RecoverableErrorInfo, "title" | "description"> | null {
+  if (code === "provider_overloaded") {
+    return {
+      title: tx(locale, "模型服务当前拥堵", "The model service is busy"),
+      description: tx(locale, "供应商暂时无法接收请求，并非已确认的每日额度耗尽。资料已保留，请稍后重试或选择另一个已启用模型。", "The provider is temporarily overloaded; this does not confirm a daily quota limit. Your files are preserved. Retry later or select another enabled model."),
+    };
+  }
   if (code === "provider_upstream_unavailable") {
     return {
       title: tx(locale, "模型服务暂时不可用", "The model service is temporarily unavailable"),

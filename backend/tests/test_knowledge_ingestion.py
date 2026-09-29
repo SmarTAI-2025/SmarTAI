@@ -304,6 +304,13 @@ async def test_cancelled_paid_page_is_never_resubmitted_on_resume_or_retry(monke
     retry = repo.queue_document(doc.id, who, config, new_version=True)
     await worker.run_once(retry)
     assert len(calls) == 1
+    authorized = repo.queue_document(doc.id, who, config, new_version=True, resubmit_uncertain=True)
+    claimed = repo.claim_next(job_id=authorized)
+    repo.initialize(claimed, 1)
+    assert repo.reusable_page(claimed, repo.next_pages(claimed)[0]) is None
+    with session_scope() as session:
+        assert session.get(KnowledgeIngestionRecord, retry).configuration["resubmit_uncertain"] is False
+        assert session.get(KnowledgeIngestionRecord, authorized).configuration["resubmit_uncertain"] is True
 
 
 @pytest.mark.asyncio
@@ -320,3 +327,22 @@ async def test_successful_pages_reused_in_explicit_gap_retry(monkeypatch):
     pages = repo.manifest(doc_id, who)["pages"]
     assert all(p["reused_page_id"] for p in pages)
     assert len(list_chunks([doc_id])) == 2
+
+
+def test_uncertain_page_keeps_native_text_until_explicit_resubmission():
+    who, doc_id, job_id = queued()
+    job = repo.claim_next(job_id=job_id)
+    repo.initialize(job, 1)
+    page = repo.next_pages(job)[0]
+    repo.prepare_page(job, page.id, batch_extra_remaining=0)
+    repo.finish_page(job, page.id, text="Native text still searchable", state="failed",
+                     evidence={"error_code": "provider_submit_uncertain"})
+    repo.release(job)
+    retry = repo.queue_document(doc_id, who, dict(job.configuration, resubmit_uncertain=True), new_version=True)
+    next_job = repo.claim_next(job_id=retry)
+    repo.initialize(next_job, 1)
+    reused = repo.reusable_page(next_job, repo.next_pages(next_job)[0])
+    assert reused["text"] == "Native text still searchable"
+    assert reused["state"] == "failed"
+    assert reused["evidence"]["error_code"] == "provider_submit_uncertain"
+    assert next_job.configuration["resubmit_uncertain"] is False

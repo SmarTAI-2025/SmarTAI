@@ -12,3 +12,17 @@ it("does not add ordinal values to unordered source lists", () => {
   render(<MarkdownMath>{"- First\n- Second"}</MarkdownMath>);
   for (const item of screen.getAllByRole("listitem")) expect(item).not.toHaveAttribute("value");
 });
+
+it("renders compact multiline math fences without swallowing the next paragraph", () => {
+  const { container } = render(<MarkdownMath>{String.raw`Before.
+$$\begin{aligned}
+x &= 1 \\
+y &= 2
+\end{aligned}$$
+
+After: $x+y=3$.`}</MarkdownMath>);
+  expect(container.querySelector(".katex-display .katex")).not.toBeNull();
+  expect(container.querySelector(".katex-error")).toBeNull();
+  expect(screen.getByText(/After:/).tagName).toBe("P");
+  expect(container.querySelectorAll(".katex")).toHaveLength(2);
+});

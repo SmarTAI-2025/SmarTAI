@@ -25,6 +25,7 @@ function source(overrides: Partial<SubmissionSourceOutcome>): SubmissionSourceOu
 
 describe("submission source reason copy", () => {
   it.each([
+    ["provider_overloaded", "ocr", "OCR：模型服务当前拥堵", "OCR: The model service is busy"],
     [
       "submission_model_field_too_long",
       "structured_parse",

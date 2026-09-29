@@ -46,14 +46,21 @@ const DOUBLE_ESCAPED_LATEX = /\\\\(?=(?:int|sum|prod|lim|frac|dfrac|tfrac|sqrt|k
 const OVERESCAPED_NEWLINE = /\\{1,2}n(?=(?:\\{1,2}n|[\s\-*#>0-9(A-Z]|[\u3400-\u9fff]|$))/g;
 const OVERESCAPED_CODE_NEWLINE = /\\{1,2}n(?=(?:(?:async\s+)?def|class|from|import|return|if|elif|else|for|while|function|const|let|var|public|private|protected|#include)\b)/g;
 
+function normalizeDisplayMathFences(value: string): string {
+  // remark-math treats text after an opening $$ line as metadata, not math.
+  return value.replace(/(`{3,}[^\n]*\n[\s\S]*?`{3,}|~{3,}[^\n]*\n[\s\S]*?~{3,}|`[^`\n]*`)|\$\$([\s\S]*?)\$\$/g,
+    (match, code: string | undefined, math: string | undefined) =>
+      code || !math?.includes("\n") ? match : `\n$$\n${math.trim()}\n$$\n`);
+}
+
 /** Presentation fallback for already-persisted over-escaped model prose. */
 export function normalizeMarkdownMathInput(value: string): string {
-  return value
+  return normalizeDisplayMathFences(value
     .replace(/\\{1,2}r\\{1,2}n/g, "\n")
     .replace(OVERESCAPED_NEWLINE, "\n")
     .replace(OVERESCAPED_CODE_NEWLINE, "\n")
     .replace(DOUBLE_ESCAPED_LATEX, "\\")
     .replace(/\\\\(?=[\[\]()])/g, "\\")
     .replace(/(?<!\$)\${3,}(?!\$)/g, () => "$$")
-    .replace(/\n{3,}/g, "\n\n");
+    .replace(/\n{3,}/g, "\n\n"));
 }

@@ -270,6 +270,7 @@ def failure_phase_for_code(code: str) -> str:
 def _source_read_failure_phase(code: str, content_type: str) -> str:
     if (
         code in {
+            "provider_overloaded",
             "provider_timeout",
             "provider_unreachable",
             "provider_rate_limited",

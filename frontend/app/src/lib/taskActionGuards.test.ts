@@ -380,6 +380,13 @@ describe("background task failure guidance", () => {
     expect(info.tone).toBe("warning");
   });
 
+  it("does not call provider overload a daily account limit", () => {
+    const info = classifyRecoverableError("provider_overloaded", { locale: "zh-CN" });
+    expect(info.title).toBe("模型服务当前拥堵");
+    expect(info.description).toContain("并非已确认的每日额度耗尽");
+    expect(info.actionKind).toBe("retry");
+  });
+
   it("keeps a stable grading failure code and job id visible", () => {
     const info = classifyRecoverableError("grading_failed", {
       locale: "zh-CN",

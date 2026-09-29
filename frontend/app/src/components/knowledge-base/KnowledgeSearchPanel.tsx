@@ -34,6 +34,21 @@ export function KnowledgeSearchPanel({ documentIds }: { documentIds: string[] })
     return () => { active = false; };
   }, []);
   const ids = JSON.parse(scope) as string[];
+  function search() {
+    if (!query.trim() || pending || ids.length > 20) return;
+    const current = ++generation.current;
+    setPending(true); setFailed(false); setRewriteFailed(false); setMatches(null); setQueryUsage(null);
+    void postJSON<{ matches: KnowledgeMatch[]; query_plan?: QueryUsage }>("/knowledge/search", {
+      query: query.trim(), document_ids: ids, limit: 5, ...(providerId ? { query_provider_id: providerId } : {}),
+    })
+      .then((result) => { if (current === generation.current) {
+        setMatches(result.matches);
+        setQueryUsage(result.query_plan ?? null);
+        setRewriteFailed(Boolean(providerId && result.query_plan?.status.startsWith("rewrite_") && result.query_plan.status !== "rewritten"));
+      } })
+      .catch(() => { if (current === generation.current) setFailed(true); })
+      .finally(() => { if (current === generation.current) setPending(false); });
+  }
   if (!ids.length) return null;
   return <section className="mt-4 min-w-0 border-t pt-3" aria-label={zh ? "资料内容检索" : "Search material content"}>
     <select value={providerId} onChange={(event) => setProviderId(event.target.value)} disabled={pending}
@@ -44,30 +59,20 @@ export function KnowledgeSearchPanel({ documentIds }: { documentIds: string[] })
       </option>)}
     </select>
     {providerId ? <p className="mb-2 text-xs text-muted-foreground">{zh ? "仅发送查询，不发送教材；可能产生模型费用。" : "Only your query is sent, not textbooks; model charges may apply."}</p> : null}
-    <form className="flex items-center gap-2" onSubmit={(event) => {
-      event.preventDefault();
-      if (!query.trim() || pending || ids.length > 20) return;
-      const current = ++generation.current;
-      setPending(true); setFailed(false); setRewriteFailed(false); setMatches(null); setQueryUsage(null);
-      void postJSON<{ matches: KnowledgeMatch[]; query_plan?: QueryUsage }>("/knowledge/search", {
-        query: query.trim(), document_ids: ids, limit: 5, ...(providerId ? { query_provider_id: providerId } : {}),
-      })
-        .then((result) => { if (current === generation.current) {
-          setMatches(result.matches);
-          setQueryUsage(result.query_plan ?? null);
-          setRewriteFailed(Boolean(providerId && result.query_plan?.status.startsWith("rewrite_") && result.query_plan.status !== "rewritten"));
-        } })
-        .catch(() => { if (current === generation.current) setFailed(true); })
-        .finally(() => { if (current === generation.current) setPending(false); });
-    }}>
+    <div role="search" className="flex items-center gap-2">
       <input value={query} onChange={(event) => setQuery(event.target.value)} maxLength={4000}
+        onKeyDown={(event) => {
+          if (event.key === "Enter" && !event.nativeEvent.isComposing) {
+            event.preventDefault(); event.stopPropagation(); search();
+          }
+        }}
         aria-label={zh ? "检索词或题目" : "Search terms or question"} placeholder={zh ? "检索资料内容" : "Search material content"}
         className="h-9 min-w-0 flex-1 rounded-md border bg-background px-3 text-sm" />
-      <button type="submit" disabled={pending || !query.trim() || ids.length > 20} title={zh ? "检索" : "Search"}
+      <button type="button" onClick={search} disabled={pending || !query.trim() || ids.length > 20} title={zh ? "检索" : "Search"}
         aria-label={zh ? "检索" : "Search"} className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md border text-primary disabled:opacity-50">
         {pending ? <LoaderCircle aria-hidden="true" className="h-4 w-4 animate-spin" /> : <Search aria-hidden="true" className="h-4 w-4" />}
       </button>
-    </form>
+    </div>
     {providerId && queryUsage?.provider_calls != null ? <p role="status" className="mt-2 text-xs text-muted-foreground">
       {zh ? "本次模型调用" : "Model calls this search"}: {queryUsage.provider_calls}
       {queryUsage.cached ? (zh ? " · 已复用查询" : " · Reused query") : ""}

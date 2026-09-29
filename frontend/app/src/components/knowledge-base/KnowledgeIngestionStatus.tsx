@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { ChevronRight, Pause, Play, RefreshCw, RotateCcw } from "lucide-react";
-import { getJSON, postJSON } from "@/api/client";
+import { getJSON, postJSON, postMultipart } from "@/api/client";
 import type { KnowledgeIngestionSummary } from "@/types/personalKnowledge";
 import { backgroundErrorTitle } from "@/lib/taskActionGuards";
 
@@ -26,9 +26,11 @@ export function KnowledgeIngestionStatus({ documentId, status = "ready", ingesti
   const [coverage, setCoverage] = useState<Coverage | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(false);
+  const [resubmitUncertain, setResubmitUncertain] = useState(false);
   const identity = useRef(documentId);
   identity.current = documentId;
   useEffect(() => { setCoverage(null); setError(false); }, [documentId, ingestion?.id, ingestion?.processed_pages, ingestion?.status]);
+  useEffect(() => { setResubmitUncertain(false); }, [documentId, ingestion?.id]);
   const summary = coverage?.summary ?? ingestion;
   const active = ["queued", "processing"].includes(summary?.status ?? "");
   const paused = ["paused", "cancelled"].includes(summary?.status ?? "");
@@ -65,7 +67,14 @@ export function KnowledgeIngestionStatus({ documentId, status = "ready", ingesti
   async function command(action: "resume" | "cancel" | "retry-failed") {
     if (!documentId) return;
     setBusy(true); setError(false);
-    try { await postJSON(`/knowledge/documents/${documentId}/${action}`, {}); await load(); onChange?.(); }
+    try {
+      const path = `/knowledge/documents/${documentId}/${action}`;
+      if (action === "retry-failed") {
+        await postMultipart(path, null, { fields: { accept_uncertain_resubmission: resubmitUncertain } });
+        setResubmitUncertain(false);
+      } else await postJSON(path, {});
+      await load(); onChange?.();
+    }
     catch { setError(true); }
     finally { setBusy(false); }
   }
@@ -80,6 +89,10 @@ export function KnowledgeIngestionStatus({ documentId, status = "ready", ingesti
       {summary.error_code ? <p role="status">{backgroundErrorTitle(summary.error_code, zh ? "zh-CN" : "en-US")}</p> : null}
       {coverage?.pages.map((page) => <p key={page.page_number}>{page.page_number}: {pageStateLabel(page.state, zh)}{page.error_code ? ` · ${backgroundErrorTitle(page.error_code, zh ? "zh-CN" : "en-US")}` : ""}</p>)}
       {error ? <p role="alert">{zh ? "暂时无法更新状态" : "Unable to update status"}</p> : null}
+      {!active && !!summary.failed_pages ? <label className="flex items-start gap-2">
+        <input type="checkbox" checked={resubmitUncertain} disabled={busy} onChange={(event) => setResubmitUncertain(event.target.checked)} />
+        <span>{zh ? "同时重试请求状态不明的页面（可能重复计费）" : "Also retry pages with unknown request status (may incur duplicate charges)"}</span>
+      </label> : null}
       <div className="flex gap-2">
         <button type="button" disabled={busy} onClick={() => void load()} title={zh ? "刷新状态" : "Refresh status"} aria-label={zh ? "刷新状态" : "Refresh status"}><RefreshCw className="h-4 w-4" /></button>
         {active || paused ? <button type="button" disabled={busy} onClick={() => void command(paused ? "resume" : "cancel")} title={paused ? (zh ? "继续处理" : "Resume") : (zh ? "暂停处理" : "Pause")} aria-label={paused ? (zh ? "继续处理" : "Resume") : (zh ? "暂停处理" : "Pause")}>{paused ? <Play className="h-4 w-4" /> : <Pause className="h-4 w-4" />}</button> : null}

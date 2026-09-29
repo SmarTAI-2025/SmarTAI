@@ -124,6 +124,7 @@ SAFE_BACKGROUND_ERROR_CODES = frozenset({
 }) | SAFE_SOURCE_REASON_CODES | RECOGNITION_ERROR_CODES
 
 RETRYABLE_BACKGROUND_ERROR_CODES = frozenset({
+    "provider_overloaded",
     "provider_timeout",
     "provider_unreachable",
     "provider_rate_limited",

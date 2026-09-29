@@ -10,6 +10,18 @@ vi.mock("@/i18n/I18nProvider", () => ({ useI18n: () => ({ locale: "en-US" }) }))
 vi.mock("./KnowledgeCitationPreview", () => ({ KnowledgeCitationPreview: () => <span>Citation</span> }));
 beforeEach(() => api.postJSON.mockReset());
 
+it("searches inside a settings form without submitting the settings", async () => {
+  api.postJSON.mockResolvedValue({ matches: [] });
+  const saveSettings = vi.fn((event) => event.preventDefault());
+  render(<form onSubmit={saveSettings}><KnowledgeSearchPanel documentIds={["book"]} /></form>);
+  await userEvent.type(screen.getByRole("textbox"), "even order{Enter}");
+  expect(await screen.findByRole("status")).toHaveTextContent("No matching passages");
+  await userEvent.click(screen.getByRole("button", { name: "Search" }));
+  expect(api.postJSON).toHaveBeenCalledTimes(2);
+  expect(saveSettings).not.toHaveBeenCalled();
+  expect(document.querySelectorAll("form")).toHaveLength(1);
+});
+
 it("searches selected materials only on submission and reports an honest empty result", async () => {
   api.postJSON.mockResolvedValue({ matches: [] });
   render(<KnowledgeSearchPanel documentIds={["book"]} />);
