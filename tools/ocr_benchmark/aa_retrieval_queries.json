@@ -1,0 +1,11 @@
+[
+  {"id":"inverse_order_en","query":"Show that a group element and its inverse have the same order.","expected_pages":[2]},
+  {"id":"direct_product_en","query":"When is the direct product of two groups abelian?","expected_pages":[3]},
+  {"id":"even_order_en","query":"Show that a finite group of even order has an element of order two.","expected_pages":[3]},
+  {"id":"dihedral_en","query":"Dihedral group elements that are not powers of the rotation have order two.","expected_pages":[4,5]},
+  {"id":"inverse_order_zh","query":"群元素和它的逆元为什么具有相同的阶？","expected_pages":[2]},
+  {"id":"direct_product_zh","query":"两个群的直积何时为交换群？","expected_pages":[3]},
+  {"id":"even_order_zh","query":"偶数阶有限群为什么存在二阶元素？","expected_pages":[3]},
+  {"id":"exercise_id","query":"Exercise 1.1.20","expected_pages":[2]},
+  {"id":"absent_id","query":"Exercise 9.9.99","expected_pages":[]}
+]

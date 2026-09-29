@@ -900,6 +900,12 @@ function VerificationBadge({
           {formatCheckedAt(expert.last_checked_at, locale)}
         </p>
       ) : null}
+      {status === "failed" && expert.verification_error_code ? (
+        <p className="mt-1 max-w-[240px] whitespace-normal break-words text-xs text-danger">
+          {expertErrorMessage(expert.verification_error_code, locale)
+            ?? (zh ? "服务商拒绝了验证请求。" : "The provider rejected the verification request.")}
+        </p>
+      ) : null}
     </div>
   );
 }
@@ -1426,9 +1432,15 @@ function safeExpertsReturnTo(value: string | null): string | null {
 function safeExpertError(error: unknown, locale: "zh-CN" | "en-US") {
   const normalized = normalizeAPIError(error);
   const code = getAPIErrorCode(normalized);
+  return expertErrorMessage(code, locale) || normalized.message
+    || (locale === "zh-CN" ? "请求失败，请稍后重试。" : "Request failed. Try again later.");
+}
+
+function expertErrorMessage(code: string | null | undefined, locale: "zh-CN" | "en-US") {
   const zh = locale === "zh-CN";
   const messages: Record<string, [string, string]> = {
     expert_verification_auth_failed: ["密钥无效或没有调用权限。", "The key is invalid or lacks permission."],
+    expert_verification_region_unsupported: ["服务商不支持当前网络出口所在地区。请确认网络和服务可用地区；更换密钥未必能解决。", "The provider does not support the current network region. Check network and regional availability; replacing the key may not help."],
     expert_verification_model_not_found: ["模型名称不存在或当前账户无权使用。", "The model was not found or is unavailable to this account."],
     expert_verification_rate_limited: ["服务商限制了本次请求，请稍后再试。", "The provider rate-limited this request. Try again later."],
     expert_verification_timeout: ["服务商响应超时，配置仍然保留。", "The provider timed out. Your configuration is unchanged."],
@@ -1464,5 +1476,5 @@ function safeExpertError(error: unknown, locale: "zh-CN" | "en-US") {
     default_provider_replacement_required: ["请先把另一个已启用模型设为默认，再停用或删除当前默认模型。", "Set another enabled model as default before disabling or deleting the current default."],
   };
   if (code && messages[code]) return zh ? messages[code][0] : messages[code][1];
-  return normalized.message || (zh ? "请求失败，请稍后重试。" : "Request failed. Try again later.");
+  return null;
 }

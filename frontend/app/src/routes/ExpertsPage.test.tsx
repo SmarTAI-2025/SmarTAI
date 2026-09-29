@@ -247,6 +247,28 @@ describe("ExpertsPage editable vendor Base URL", () => {
     expect(window.localStorage.getItem("fake-baidu-sk")).toBeNull();
   });
 
+  it("keeps a safe verification failure reason visible after the toast is gone", () => {
+    hookState.experts = [{
+      provider_id: "gemini-test", provider_type: "gemini", model: "test-model",
+      enabled: true, verification_status: "failed", max_concurrent: 1, rpm: 15,
+      verification_error_code: "expert_verification_region_unsupported",
+    }];
+    renderPage();
+    expect(screen.getAllByText(/服务商不支持当前网络出口所在地区/).length).toBeGreaterThan(0);
+    expect(screen.queryByText("expert_verification_region_unsupported")).not.toBeInTheDocument();
+  });
+
+  it("does not display an unknown persisted upstream error as raw text", () => {
+    hookState.experts = [{
+      provider_id: "gemini-test", provider_type: "gemini", model: "test-model",
+      enabled: true, verification_status: "failed", max_concurrent: 1, rpm: 15,
+      verification_error_code: "private-upstream-body",
+    }];
+    renderPage();
+    expect(screen.queryByText("private-upstream-body")).not.toBeInTheDocument();
+    expect(screen.getAllByText("服务商拒绝了验证请求。").length).toBeGreaterThan(0);
+  });
+
   it("shows only Baidu OCR metadata and supports verify and confirmed delete", async () => {
     hookState.baiduOCR = {
       credential_id: "ocr-record-1",
