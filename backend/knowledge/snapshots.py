@@ -9,7 +9,9 @@ from backend.db.knowledge_storage_repository import lock_knowledge_owner_in_sess
 from backend.db.session import session_scope
 from backend.domain.errors import InvalidTransition, ValidationError
 
-INDEX_VERSION = "bm25-cjk2-ids-v1"
+LEGACY_INDEX_VERSION = "bm25-cjk2-ids-v1"
+INDEX_VERSION = "bm25-cjk2-terms-v2"
+SUPPORTED_INDEX_VERSIONS = frozenset({LEGACY_INDEX_VERSION, INDEX_VERSION})
 
 
 def freeze_in_session(session, owner_id, document_ids, expected=None):
@@ -37,7 +39,7 @@ def freeze_in_session(session, owner_id, document_ids, expected=None):
             ref = dict(matches[0])
             if (type(ref.get("chunk_count")) is not int or not 0 < ref["chunk_count"] <= 1_000_000
                     or not isinstance(ref.get("content_version"), str) or len(ref["content_version"]) > 64
-                    or ref.get("source_sha256") != doc.sha256 or ref.get("index_version") != INDEX_VERSION):
+                    or ref.get("source_sha256") != doc.sha256 or ref.get("index_version") not in SUPPORTED_INDEX_VERSIONS):
                 raise ValidationError("knowledge_storage_manifest_invalid", code="knowledge_storage_manifest_invalid")
         actual = session.scalar(select(func.count()).select_from(KnowledgeChunkRecord).where(
             KnowledgeChunkRecord.document_id == doc.id, KnowledgeChunkRecord.content_version == ref["content_version"],

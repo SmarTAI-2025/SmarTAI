@@ -55,6 +55,9 @@ _ZERO_OCR_MODULES = {
     "test_provider_persistence.py", "test_custom_provider_api.py",
     "test_baidu_unlimited_ocr_credentials.py",
     "test_course_library_tags.py", "test_task_history_progress.py",
+    "test_task_finalization_contract.py", "test_workflow_facade_integrity.py",
+    "test_knowledge_activity.py", "test_task_kb_contract.py",
+    "test_ocr_readonly_routes.py",
 }
 _ZERO_OCR_READS = {
     "test_search_citation_api_is_owner_scoped_and_read_only",
@@ -100,5 +103,29 @@ def non_recognition_paths_never_dispatch_ocr(request, monkeypatch):
         (BaiduUnlimitedOCRClient, "_submit_once"), (BaseProvider, "ainvoke_vision"),
     ):
         monkeypatch.setattr(cls, method, forbidden)
+    yield
+    assert calls == []
+
+
+@pytest.fixture(autouse=True)
+def material_candidates_never_execute_code(request, monkeypatch):
+    if request.path.name not in {
+        "test_material_recognition_integration.py", "test_ocr_mounted_routes.py",
+        "test_auxiliary_operation_recovery.py", "test_question_generation_concurrency.py",
+    }:
+        yield
+        return
+    from backend.tools import code_interpreter, grading_runner
+    from backend.skills import programming
+    calls = []
+
+    async def forbidden(*args, **kwargs):
+        calls.append(request.node.nodeid)
+        pytest.fail("Material recognition/generation/review must not execute code")
+
+    for module, name in ((code_interpreter, "run_sandbox"), (code_interpreter, "run_python_subprocess"),
+                         (code_interpreter, "_run_function_call"), (grading_runner, "run_grading_request"),
+                         (programming, "run_sandbox")):
+        monkeypatch.setattr(module, name, forbidden)
     yield
     assert calls == []

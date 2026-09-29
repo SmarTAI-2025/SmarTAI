@@ -1,5 +1,11 @@
 # OCR Benchmark 工具
 
+## Harness 与检索验收
+
+- [分层验收报告](HARNESS_ACCEPTANCE_CN.md)：05/06映射、真实与合成证据、成本边界、待授权事项；第8节为未阻塞工程收口。
+- `python -m tools.ocr_benchmark.evaluate_harness /absolute/path/private-manifest.json`：离线比较保存的E0–E4结果，不调用provider；样本/GT和输出正文不得提交仓库。
+- `python -m tools.ocr_benchmark.evaluate_retrieval`：运行[自编检索诊断语料](retrieval_cases.json)，对照旧版可追加`--index-version bm25-cjk2-ids-v1`。[已保存结果](RETRIEVAL_DIAGNOSTIC_RESULTS.json)包含失败与限制，不是实际教材留出集或语义支持证明。
+
 ## OmniDocBench manifest 生成器
 
 脚本：

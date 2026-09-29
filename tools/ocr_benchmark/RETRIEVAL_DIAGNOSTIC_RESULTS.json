@@ -1,0 +1,977 @@
+{
+  "date": "2026-09-29",
+  "provenance": "Local synthetic diagnostic; no provider, real textbook holdout, grading quality or deployment claim.",
+  "baseline": {
+    "provenance": "Authored synthetic diagnostic corpus. Not a real textbook or held-out quality claim.",
+    "index_version": "bm25-cjk2-ids-v1",
+    "provider_calls": 0,
+    "query_count": 32,
+    "latency_ms_including_cold": {
+      "p50": 0.0735623762011528,
+      "p95": 0.1760413870215416
+    },
+    "by_kind": {
+      "bilingual": {
+        "count": 6,
+        "recall_at_5": 0,
+        "recall_at_10": 0,
+        "abstention_rate": null
+      },
+      "conflict": {
+        "count": 1,
+        "recall_at_5": 1,
+        "recall_at_10": 1,
+        "abstention_rate": null
+      },
+      "formula": {
+        "count": 2,
+        "recall_at_5": 1,
+        "recall_at_10": 1,
+        "abstention_rate": null
+      },
+      "identifier": {
+        "count": 2,
+        "recall_at_5": 1,
+        "recall_at_10": 1,
+        "abstention_rate": null
+      },
+      "no_answer": {
+        "count": 7,
+        "recall_at_5": null,
+        "recall_at_10": null,
+        "abstention_rate": 0.7142857142857143
+      },
+      "paraphrase": {
+        "count": 6,
+        "recall_at_5": 1,
+        "recall_at_10": 1,
+        "abstention_rate": null
+      },
+      "scope": {
+        "count": 1,
+        "recall_at_5": 1,
+        "recall_at_10": 1,
+        "abstention_rate": null
+      },
+      "terminology": {
+        "count": 6,
+        "recall_at_5": 1,
+        "recall_at_10": 1,
+        "abstention_rate": null
+      },
+      "unsupported_language": {
+        "count": 1,
+        "recall_at_5": 0,
+        "recall_at_10": 0,
+        "abstention_rate": null
+      }
+    },
+    "cases": [
+      {
+        "id": "exact-short-id",
+        "kind": "identifier",
+        "recall_at_5": 1,
+        "recall_at_10": 1,
+        "abstained": false,
+        "expected_pages": [
+          "algebra:12"
+        ],
+        "matched_pages": [
+          "algebra:12",
+          "algebra:13"
+        ]
+      },
+      {
+        "id": "exact-long-id",
+        "kind": "identifier",
+        "recall_at_5": 1,
+        "recall_at_10": 1,
+        "abstained": false,
+        "expected_pages": [
+          "algebra:13"
+        ],
+        "matched_pages": [
+          "algebra:13",
+          "algebra:12"
+        ]
+      },
+      {
+        "id": "missing-id",
+        "kind": "no_answer",
+        "recall_at_5": null,
+        "recall_at_10": null,
+        "abstained": false,
+        "expected_pages": [],
+        "matched_pages": [
+          "algebra:13",
+          "algebra:12",
+          "algebra:80"
+        ]
+      },
+      {
+        "id": "missing-only-id",
+        "kind": "no_answer",
+        "recall_at_5": null,
+        "recall_at_10": null,
+        "abstained": true,
+        "expected_pages": [],
+        "matched_pages": []
+      },
+      {
+        "id": "homomorphism",
+        "kind": "terminology",
+        "recall_at_5": 1,
+        "recall_at_10": 1,
+        "abstained": false,
+        "expected_pages": [
+          "algebra:12"
+        ],
+        "matched_pages": [
+          "algebra:12",
+          "algebra:13",
+          "algebra:80"
+        ]
+      },
+      {
+        "id": "isomorphism",
+        "kind": "terminology",
+        "recall_at_5": 1,
+        "recall_at_10": 1,
+        "abstained": false,
+        "expected_pages": [
+          "algebra:13"
+        ],
+        "matched_pages": [
+          "algebra:13",
+          "algebra:12",
+          "algebra:80"
+        ]
+      },
+      {
+        "id": "direction",
+        "kind": "paraphrase",
+        "recall_at_5": 1,
+        "recall_at_10": 1,
+        "abstained": false,
+        "expected_pages": [
+          "linear:16"
+        ],
+        "matched_pages": [
+          "linear:16",
+          "linear:31",
+          "probability:23",
+          "algorithms:9",
+          "linear:24"
+        ]
+      },
+      {
+        "id": "zero-coefficients",
+        "kind": "paraphrase",
+        "recall_at_5": 1,
+        "recall_at_10": 1,
+        "abstained": false,
+        "expected_pages": [
+          "linear:31"
+        ],
+        "matched_pages": [
+          "linear:31",
+          "linear:16",
+          "algorithms:9",
+          "linear:24"
+        ]
+      },
+      {
+        "id": "instant-rate",
+        "kind": "paraphrase",
+        "recall_at_5": 1,
+        "recall_at_10": 1,
+        "abstained": false,
+        "expected_pages": [
+          "calculus:45"
+        ],
+        "matched_pages": [
+          "calculus:45",
+          "calculus:102",
+          "probability:70"
+        ]
+      },
+      {
+        "id": "accumulation",
+        "kind": "paraphrase",
+        "recall_at_5": 1,
+        "recall_at_10": 1,
+        "abstained": false,
+        "expected_pages": [
+          "calculus:102"
+        ],
+        "matched_pages": [
+          "calculus:102",
+          "calculus:45",
+          "algorithms:8"
+        ]
+      },
+      {
+        "id": "dispersion",
+        "kind": "paraphrase",
+        "recall_at_5": 1,
+        "recall_at_10": 1,
+        "abstained": false,
+        "expected_pages": [
+          "probability:49"
+        ],
+        "matched_pages": [
+          "probability:49"
+        ]
+      },
+      {
+        "id": "halve-search",
+        "kind": "paraphrase",
+        "recall_at_5": 1,
+        "recall_at_10": 1,
+        "abstained": false,
+        "expected_pages": [
+          "algorithms:8"
+        ],
+        "matched_pages": [
+          "algorithms:8",
+          "algorithms:9",
+          "algorithms:33",
+          "calculus:102"
+        ]
+      },
+      {
+        "id": "linear-search",
+        "kind": "terminology",
+        "recall_at_5": 1,
+        "recall_at_10": 1,
+        "abstained": false,
+        "expected_pages": [
+          "algorithms:9"
+        ],
+        "matched_pages": [
+          "algorithms:9",
+          "algebra:12",
+          "algorithms:8",
+          "calculus:110",
+          "algebra:80",
+          "algebra:35",
+          "probability:23"
+        ]
+      },
+      {
+        "id": "kernel",
+        "kind": "terminology",
+        "recall_at_5": 1,
+        "recall_at_10": 1,
+        "abstained": false,
+        "expected_pages": [
+          "linear:24"
+        ],
+        "matched_pages": [
+          "linear:24",
+          "linear:17",
+          "probability:23",
+          "convention-a:4",
+          "algebra:80",
+          "convention-b:7"
+        ]
+      },
+      {
+        "id": "negative-exponent",
+        "kind": "formula",
+        "recall_at_5": 1,
+        "recall_at_10": 1,
+        "abstained": false,
+        "expected_pages": [
+          "calculus:110"
+        ],
+        "matched_pages": [
+          "calculus:110",
+          "calculus:111",
+          "probability:49",
+          "convention-b:7"
+        ]
+      },
+      {
+        "id": "positive-exponent",
+        "kind": "formula",
+        "recall_at_5": 1,
+        "recall_at_10": 1,
+        "abstained": false,
+        "expected_pages": [
+          "calculus:111"
+        ],
+        "matched_pages": [
+          "calculus:111",
+          "calculus:110",
+          "probability:49",
+          "convention-b:7"
+        ]
+      },
+      {
+        "id": "missing-exponent",
+        "kind": "no_answer",
+        "recall_at_5": null,
+        "recall_at_10": null,
+        "abstained": false,
+        "expected_pages": [],
+        "matched_pages": [
+          "calculus:110",
+          "calculus:111",
+          "probability:49"
+        ]
+      },
+      {
+        "id": "en-eigen",
+        "kind": "bilingual",
+        "recall_at_5": 0,
+        "recall_at_10": 0,
+        "abstained": true,
+        "expected_pages": [
+          "linear:16"
+        ],
+        "matched_pages": []
+      },
+      {
+        "id": "zh-eigen",
+        "kind": "bilingual",
+        "recall_at_5": 0,
+        "recall_at_10": 0,
+        "abstained": true,
+        "expected_pages": [
+          "english:90"
+        ],
+        "matched_pages": []
+      },
+      {
+        "id": "en-derivative",
+        "kind": "bilingual",
+        "recall_at_5": 0,
+        "recall_at_10": 0,
+        "abstained": true,
+        "expected_pages": [
+          "calculus:45"
+        ],
+        "matched_pages": []
+      },
+      {
+        "id": "en-conditional",
+        "kind": "bilingual",
+        "recall_at_5": 0,
+        "recall_at_10": 0,
+        "abstained": true,
+        "expected_pages": [
+          "probability:23"
+        ],
+        "matched_pages": []
+      },
+      {
+        "id": "en-independent",
+        "kind": "bilingual",
+        "recall_at_5": 0,
+        "recall_at_10": 0,
+        "abstained": true,
+        "expected_pages": [
+          "probability:24"
+        ],
+        "matched_pages": []
+      },
+      {
+        "id": "en-binary",
+        "kind": "bilingual",
+        "recall_at_5": 0,
+        "recall_at_10": 0,
+        "abstained": true,
+        "expected_pages": [
+          "algorithms:8"
+        ],
+        "matched_pages": []
+      },
+      {
+        "id": "alias-binary",
+        "kind": "terminology",
+        "recall_at_5": 1,
+        "recall_at_10": 1,
+        "abstained": false,
+        "expected_pages": [
+          "algorithms:8"
+        ],
+        "matched_pages": [
+          "algorithms:9",
+          "algorithms:8"
+        ]
+      },
+      {
+        "id": "alias-bayes",
+        "kind": "terminology",
+        "recall_at_5": 1,
+        "recall_at_10": 1,
+        "abstained": false,
+        "expected_pages": [
+          "probability:70"
+        ],
+        "matched_pages": [
+          "probability:70"
+        ]
+      },
+      {
+        "id": "unknown-concept",
+        "kind": "no_answer",
+        "recall_at_5": null,
+        "recall_at_10": null,
+        "abstained": true,
+        "expected_pages": [],
+        "matched_pages": []
+      },
+      {
+        "id": "outside-book",
+        "kind": "no_answer",
+        "recall_at_5": null,
+        "recall_at_10": null,
+        "abstained": true,
+        "expected_pages": [],
+        "matched_pages": []
+      },
+      {
+        "id": "unknown-topic",
+        "kind": "no_answer",
+        "recall_at_5": null,
+        "recall_at_10": null,
+        "abstained": true,
+        "expected_pages": [],
+        "matched_pages": []
+      },
+      {
+        "id": "question-boilerplate",
+        "kind": "no_answer",
+        "recall_at_5": null,
+        "recall_at_10": null,
+        "abstained": true,
+        "expected_pages": [],
+        "matched_pages": []
+      },
+      {
+        "id": "both-conventions",
+        "kind": "conflict",
+        "recall_at_5": 1,
+        "recall_at_10": 1,
+        "abstained": false,
+        "expected_pages": [
+          "convention-a:4",
+          "convention-b:7"
+        ],
+        "matched_pages": [
+          "convention-a:4",
+          "convention-b:7"
+        ]
+      },
+      {
+        "id": "selected-convention",
+        "kind": "scope",
+        "recall_at_5": 1,
+        "recall_at_10": 1,
+        "abstained": false,
+        "expected_pages": [
+          "convention-b:7"
+        ],
+        "matched_pages": [
+          "convention-b:7"
+        ]
+      },
+      {
+        "id": "uncovered-translation",
+        "kind": "unsupported_language",
+        "recall_at_5": 0,
+        "recall_at_10": 0,
+        "abstained": true,
+        "expected_pages": [
+          "english:90",
+          "linear:16"
+        ],
+        "matched_pages": []
+      }
+    ],
+    "limitation": "Page retrieval is not a semantic-support verdict. Synthetic diagnostic, not a held-out teacher evaluation."
+  },
+  "candidate": {
+    "provenance": "Authored synthetic diagnostic corpus. Not a real textbook or held-out quality claim.",
+    "index_version": "bm25-cjk2-terms-v2",
+    "provider_calls": 0,
+    "query_count": 32,
+    "latency_ms_including_cold": {
+      "p50": 0.07385388016700745,
+      "p95": 0.3497907891869545
+    },
+    "by_kind": {
+      "bilingual": {
+        "count": 6,
+        "recall_at_5": 1,
+        "recall_at_10": 1,
+        "abstention_rate": null
+      },
+      "conflict": {
+        "count": 1,
+        "recall_at_5": 1,
+        "recall_at_10": 1,
+        "abstention_rate": null
+      },
+      "formula": {
+        "count": 2,
+        "recall_at_5": 1,
+        "recall_at_10": 1,
+        "abstention_rate": null
+      },
+      "identifier": {
+        "count": 2,
+        "recall_at_5": 1,
+        "recall_at_10": 1,
+        "abstention_rate": null
+      },
+      "no_answer": {
+        "count": 7,
+        "recall_at_5": null,
+        "recall_at_10": null,
+        "abstention_rate": 1
+      },
+      "paraphrase": {
+        "count": 6,
+        "recall_at_5": 1,
+        "recall_at_10": 1,
+        "abstention_rate": null
+      },
+      "scope": {
+        "count": 1,
+        "recall_at_5": 1,
+        "recall_at_10": 1,
+        "abstention_rate": null
+      },
+      "terminology": {
+        "count": 6,
+        "recall_at_5": 1,
+        "recall_at_10": 1,
+        "abstention_rate": null
+      },
+      "unsupported_language": {
+        "count": 1,
+        "recall_at_5": 0,
+        "recall_at_10": 0,
+        "abstention_rate": null
+      }
+    },
+    "cases": [
+      {
+        "id": "exact-short-id",
+        "kind": "identifier",
+        "recall_at_5": 1,
+        "recall_at_10": 1,
+        "abstained": false,
+        "expected_pages": [
+          "algebra:12"
+        ],
+        "matched_pages": [
+          "algebra:12"
+        ]
+      },
+      {
+        "id": "exact-long-id",
+        "kind": "identifier",
+        "recall_at_5": 1,
+        "recall_at_10": 1,
+        "abstained": false,
+        "expected_pages": [
+          "algebra:13"
+        ],
+        "matched_pages": [
+          "algebra:13"
+        ]
+      },
+      {
+        "id": "missing-id",
+        "kind": "no_answer",
+        "recall_at_5": null,
+        "recall_at_10": null,
+        "abstained": true,
+        "expected_pages": [],
+        "matched_pages": []
+      },
+      {
+        "id": "missing-only-id",
+        "kind": "no_answer",
+        "recall_at_5": null,
+        "recall_at_10": null,
+        "abstained": true,
+        "expected_pages": [],
+        "matched_pages": []
+      },
+      {
+        "id": "homomorphism",
+        "kind": "terminology",
+        "recall_at_5": 1,
+        "recall_at_10": 1,
+        "abstained": false,
+        "expected_pages": [
+          "algebra:12"
+        ],
+        "matched_pages": [
+          "algebra:12",
+          "algebra:13",
+          "algebra:80"
+        ]
+      },
+      {
+        "id": "isomorphism",
+        "kind": "terminology",
+        "recall_at_5": 1,
+        "recall_at_10": 1,
+        "abstained": false,
+        "expected_pages": [
+          "algebra:13"
+        ],
+        "matched_pages": [
+          "algebra:13"
+        ]
+      },
+      {
+        "id": "direction",
+        "kind": "paraphrase",
+        "recall_at_5": 1,
+        "recall_at_10": 1,
+        "abstained": false,
+        "expected_pages": [
+          "linear:16"
+        ],
+        "matched_pages": [
+          "linear:16",
+          "linear:31",
+          "probability:23",
+          "algorithms:9",
+          "linear:24"
+        ]
+      },
+      {
+        "id": "zero-coefficients",
+        "kind": "paraphrase",
+        "recall_at_5": 1,
+        "recall_at_10": 1,
+        "abstained": false,
+        "expected_pages": [
+          "linear:31"
+        ],
+        "matched_pages": [
+          "linear:31",
+          "linear:16",
+          "algorithms:9",
+          "linear:24"
+        ]
+      },
+      {
+        "id": "instant-rate",
+        "kind": "paraphrase",
+        "recall_at_5": 1,
+        "recall_at_10": 1,
+        "abstained": false,
+        "expected_pages": [
+          "calculus:45"
+        ],
+        "matched_pages": [
+          "calculus:45",
+          "calculus:57"
+        ]
+      },
+      {
+        "id": "accumulation",
+        "kind": "paraphrase",
+        "recall_at_5": 1,
+        "recall_at_10": 1,
+        "abstained": false,
+        "expected_pages": [
+          "calculus:102"
+        ],
+        "matched_pages": [
+          "calculus:102",
+          "calculus:45",
+          "algorithms:8"
+        ]
+      },
+      {
+        "id": "dispersion",
+        "kind": "paraphrase",
+        "recall_at_5": 1,
+        "recall_at_10": 1,
+        "abstained": false,
+        "expected_pages": [
+          "probability:49"
+        ],
+        "matched_pages": [
+          "probability:49"
+        ]
+      },
+      {
+        "id": "halve-search",
+        "kind": "paraphrase",
+        "recall_at_5": 1,
+        "recall_at_10": 1,
+        "abstained": false,
+        "expected_pages": [
+          "algorithms:8"
+        ],
+        "matched_pages": [
+          "algorithms:8",
+          "algorithms:9",
+          "algorithms:33",
+          "calculus:102"
+        ]
+      },
+      {
+        "id": "linear-search",
+        "kind": "terminology",
+        "recall_at_5": 1,
+        "recall_at_10": 1,
+        "abstained": false,
+        "expected_pages": [
+          "algorithms:9"
+        ],
+        "matched_pages": [
+          "algorithms:9",
+          "algebra:12",
+          "algorithms:8",
+          "calculus:110",
+          "algebra:80",
+          "probability:23",
+          "algebra:35"
+        ]
+      },
+      {
+        "id": "kernel",
+        "kind": "terminology",
+        "recall_at_5": 1,
+        "recall_at_10": 1,
+        "abstained": false,
+        "expected_pages": [
+          "linear:24"
+        ],
+        "matched_pages": [
+          "linear:24",
+          "algebra:80"
+        ]
+      },
+      {
+        "id": "negative-exponent",
+        "kind": "formula",
+        "recall_at_5": 1,
+        "recall_at_10": 1,
+        "abstained": false,
+        "expected_pages": [
+          "calculus:110"
+        ],
+        "matched_pages": [
+          "calculus:110"
+        ]
+      },
+      {
+        "id": "positive-exponent",
+        "kind": "formula",
+        "recall_at_5": 1,
+        "recall_at_10": 1,
+        "abstained": false,
+        "expected_pages": [
+          "calculus:111"
+        ],
+        "matched_pages": [
+          "calculus:111"
+        ]
+      },
+      {
+        "id": "missing-exponent",
+        "kind": "no_answer",
+        "recall_at_5": null,
+        "recall_at_10": null,
+        "abstained": true,
+        "expected_pages": [],
+        "matched_pages": []
+      },
+      {
+        "id": "en-eigen",
+        "kind": "bilingual",
+        "recall_at_5": 1,
+        "recall_at_10": 1,
+        "abstained": false,
+        "expected_pages": [
+          "linear:16"
+        ],
+        "matched_pages": [
+          "linear:16"
+        ]
+      },
+      {
+        "id": "zh-eigen",
+        "kind": "bilingual",
+        "recall_at_5": 1,
+        "recall_at_10": 1,
+        "abstained": false,
+        "expected_pages": [
+          "english:90"
+        ],
+        "matched_pages": [
+          "english:90"
+        ]
+      },
+      {
+        "id": "en-derivative",
+        "kind": "bilingual",
+        "recall_at_5": 1,
+        "recall_at_10": 1,
+        "abstained": false,
+        "expected_pages": [
+          "calculus:45"
+        ],
+        "matched_pages": [
+          "calculus:57",
+          "calculus:45"
+        ]
+      },
+      {
+        "id": "en-conditional",
+        "kind": "bilingual",
+        "recall_at_5": 1,
+        "recall_at_10": 1,
+        "abstained": false,
+        "expected_pages": [
+          "probability:23"
+        ],
+        "matched_pages": [
+          "probability:23"
+        ]
+      },
+      {
+        "id": "en-independent",
+        "kind": "bilingual",
+        "recall_at_5": 1,
+        "recall_at_10": 1,
+        "abstained": false,
+        "expected_pages": [
+          "probability:24"
+        ],
+        "matched_pages": [
+          "probability:24"
+        ]
+      },
+      {
+        "id": "en-binary",
+        "kind": "bilingual",
+        "recall_at_5": 1,
+        "recall_at_10": 1,
+        "abstained": false,
+        "expected_pages": [
+          "algorithms:8"
+        ],
+        "matched_pages": [
+          "algorithms:8"
+        ]
+      },
+      {
+        "id": "alias-binary",
+        "kind": "terminology",
+        "recall_at_5": 1,
+        "recall_at_10": 1,
+        "abstained": false,
+        "expected_pages": [
+          "algorithms:8"
+        ],
+        "matched_pages": [
+          "algorithms:8"
+        ]
+      },
+      {
+        "id": "alias-bayes",
+        "kind": "terminology",
+        "recall_at_5": 1,
+        "recall_at_10": 1,
+        "abstained": false,
+        "expected_pages": [
+          "probability:70"
+        ],
+        "matched_pages": [
+          "probability:70"
+        ]
+      },
+      {
+        "id": "unknown-concept",
+        "kind": "no_answer",
+        "recall_at_5": null,
+        "recall_at_10": null,
+        "abstained": true,
+        "expected_pages": [],
+        "matched_pages": []
+      },
+      {
+        "id": "outside-book",
+        "kind": "no_answer",
+        "recall_at_5": null,
+        "recall_at_10": null,
+        "abstained": true,
+        "expected_pages": [],
+        "matched_pages": []
+      },
+      {
+        "id": "unknown-topic",
+        "kind": "no_answer",
+        "recall_at_5": null,
+        "recall_at_10": null,
+        "abstained": true,
+        "expected_pages": [],
+        "matched_pages": []
+      },
+      {
+        "id": "question-boilerplate",
+        "kind": "no_answer",
+        "recall_at_5": null,
+        "recall_at_10": null,
+        "abstained": true,
+        "expected_pages": [],
+        "matched_pages": []
+      },
+      {
+        "id": "both-conventions",
+        "kind": "conflict",
+        "recall_at_5": 1,
+        "recall_at_10": 1,
+        "abstained": false,
+        "expected_pages": [
+          "convention-a:4",
+          "convention-b:7"
+        ],
+        "matched_pages": [
+          "convention-a:4",
+          "convention-b:7"
+        ]
+      },
+      {
+        "id": "selected-convention",
+        "kind": "scope",
+        "recall_at_5": 1,
+        "recall_at_10": 1,
+        "abstained": false,
+        "expected_pages": [
+          "convention-b:7"
+        ],
+        "matched_pages": [
+          "convention-b:7"
+        ]
+      },
+      {
+        "id": "uncovered-translation",
+        "kind": "unsupported_language",
+        "recall_at_5": 0,
+        "recall_at_10": 0,
+        "abstained": true,
+        "expected_pages": [
+          "english:90",
+          "linear:16"
+        ],
+        "matched_pages": []
+      }
+    ],
+    "limitation": "Page retrieval is not a semantic-support verdict. Synthetic diagnostic, not a held-out teacher evaluation."
+  }
+}

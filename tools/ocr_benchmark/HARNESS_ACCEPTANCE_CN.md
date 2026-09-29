@@ -8,7 +8,7 @@
 - 本轮没有新增 OCR 厂商、下载模型、订阅或共享 Key。题目/作答继续忠实识别；知识库使用独立经济策略，但复用源文件、可终止 PDF 工具、engine、预算和证据服务。
 - 真实 AA/手写准确率、教师修改量、同模型 E0/E1/E2 消融和百度 E3/E4 对照仍为 **unverified**。没有用 fake 测试代替这些结果。
 - 计算题/编程题新增教材片段注入尚未实施，等待用户确认向其当前 BYOK 模型发送已选教材片段的范围。现有概念/客观/证明题检索路径保留，增加可追溯引用。不能宣称所有题型都已接入 RAG。
-- 索引当前是本地 BM25，适合题号、术语和公式片段；不是语义向量检索。跨语言、纯同义改写和缺少术语的查询没有代表性留出集证据，不能据精确题号测试宣称语义召回优秀。
+- 索引当前是本地 BM25 加有限术语桥接，适合题号、术语和公式片段；不是语义向量检索。第8节补齐了改写/中英文术语/无答案的本地诊断及旧索引版本兼容，但真实教材、任意跨语言和缺少术语的查询仍没有代表性留出集证据。
 
 ## 2. 验证证据
 
@@ -62,7 +62,7 @@
 | 06 §6.1-4 | task_preparation material preflight/plan/apply；test_material_recognition_integration | reference 来源分离；rubric/tests opt-in；candidate 不能自动执行 |
 | 06 §7.1/2 | task_facade、submission_source_pipeline、submission_uploads；submission source/outcome/recovery tests | 逐 source、原错/顺序/身份、只补失败；旧上传委托同服务 |
 | 06 §8.1/8.2.1-8/8.3 | knowledge/{service,ingestion,native_worker,evidence}、knowledge repositories、migration 0018、三上传入口 | 全页批处理、部分可检索、恢复/删除 fence；64 MiB/1000 页与派生限额 |
-| 06 §9.1/2 | 下方活入口/零 OCR 表 | 有测试/静态证据分别列出，不夸大矩阵 |
+| 06 §9.1/2 | 下方活入口/零 OCR 表及第8节补充 | 挂载路由、共用adapter和零调用动态守卫组合验证；不是所有参数穷举 |
 | 06 §9.3/10.1-3 | RecognitionEvidenceSummary、KnowledgeIngestionStatus、KnowledgeSearchPanel、KnowledgeCitationPreview、PdfPreview、ReviewDetailPage、submissionSourceOutcomes | 前端回归 + 110 页真实浏览器工程验证 |
 | 06 §1/2.1/2.4/3.1/3.2/4/11 | V2 责任/顺序/共用基础、原 07 身份映射合同、已确认架构 | 不改合作方所有权/计分/原件保留，旧文档不覆盖 |
 | 06 §12.1/12.2 | 共用 recognition tests + 六用途 integration、知识版本/权限测试 | fake/本地合同已验证；真实用途质量待测 |
@@ -78,7 +78,7 @@
 | course-materials、personal knowledge、task KB | 同 `knowledge.service.ingest_document` | 选择已入库材料只关联，不重新入库 |
 | RAG search / citation / citation download | `test_search_citation_api_is_owner_scoped_and_read_only` 将 ingestion 设为 forbidden，provider_calls=0 | owner、删除/原件失效、版本均测试 |
 | Preview/material source content、状态/列表、原件下载 | API 读取持久记录/artifact；预检 preview/owner 测试，浏览器状态 GET | 不由 GET 恢复任务 |
-| 生成参考答案/rubric/solution_code、mapping/apply、开始/重批、测试运行、analytics、凭据验证 | 现有动作测试加入多层dispatch禁止计数；生成/批改/runner/分析/配置/读取/apply等组合196通过；调用图同时核对 | 动态覆盖以conftest显式清单为准，不声称每种参数/别名都单独端到端验收；导出仍为静态调用图证据 |
+| 生成参考答案/rubric/solution_code、mapping/apply、开始/重批、测试运行、analytics、凭据验证、导出 | 现有动作测试加入多层dispatch禁止计数；原组合196通过。第8节增加导出HTTP及finalization/workflow/KB关联等动态保护 | 动态覆盖以conftest显式清单为准，不声称每种参数/别名都单独端到端验收；导出不再仅有静态证据 |
 
 ## 5. 真实消融执行协议
 
@@ -117,3 +117,49 @@
 - 后端初次影响面36通过/1新测试夹具错误（直接构造cleanup状态违反数据库约束），改用正式删除入口后新增组11通过；既有26项未重复跑。前端3文件18通过，最终进度条颜色/可访问性调整仅组件7通过；typecheck、build、visible-scope审计通过。最后统计标签为文案变化，未再全套构建。重叠数量不相加。
 - 浏览器合成接口检查工作台/教材历史、1280与320布局；320时scrollWidth=320，长文件名换行，最终工作台0 console errors。截图在`frontend/app/output/playwright/kb-progress-*.png`，未提交。浏览器夹具早期URL解析与任务响应形状错误已修正，不是产品失败；不把合成界面验证称真实provider或部署验收。
 - 这是进度可发现性补充，不关闭第1/5/6节的真实OCR质量、语义检索、其他题型接线及独立review门槛。未新增供应商/订阅/通知服务，未merge或部署。
+
+## 8. 未阻塞工程收口（2026-09-29）
+
+本节对应用户“先补齐所有可以独立完成的工作”。基于PR111，单一增量PR；不用subagent。没有新增教材外发、厂商、模型下载或付费调用。
+
+### 8.1 已补齐的工作
+
+- 挂载入口矩阵：`test_ocr_mounted_routes.py` 的21项HTTP合同覆盖两个题目预检别名的四种用途、三种资料preflight、两个辅助upload、assignment import、task extract/parse、学生/教师单份上传和三个知识库上传入口。测试在共用reader/queue/ingest边界设探针；真实共用实现另由现有adapter、worker、恢复测试验证，不冒称21项都跑过真实模型端到端。
+- 零OCR矩阵：`conftest.py`复用现有生成、开始/重批、runner、分析、凭据、原件/引用读取、apply测试的禁止dispatch计数；本轮新增finalization、导出生成/下载/重复刷新、workflow、KB关联、活动列表模块。`test_ocr_readonly_routes.py`实际走HTTP生成并下载ZIP，零OCR。
+- 零runner矩阵：资料识别、解析、候选生成/映射/apply阶段对sandbox/subprocess/函数执行/统一runner入口设动态禁止计数。未确认、parser失败、低把握、映射不明都有对应测试；既有显式编程批改runner测试不被禁用。
+- 检索纠错：未知题号不再退化为其他题号的普通词命中；纯公式查询区分正负指数；普通正文的9.8不当题号；抑制无意义提问词。增加27组可审计的常见中英文数学/计算机术语，只扩展本地索引，不改原文、不调用LLM。邻接补块也遵守每页两块预算。
+- 冻结兼容：新快照使用`bm25-cjk2-terms-v2`；旧`bm25-cjk2-ids-v1`批改快照仍保留旧分词/排序规则与缓存隔离，未知或混合索引版本明确拒绝。没有重跑OCR或更换教材内容版本。
+- 引用可信度：现有RAG提示明确“检索命中不等于支持结论”、冲突来源分开、参考文字不能成为指令。低把握/未校准/覆盖不完整的引用在原文按钮旁可见；长文件名在320px换行。课程资料接口声明的公开格式收敛为PDF/TXT/MD/Markdown，与实际校验一致。
+
+### 8.2 检索诊断与成本
+
+`retrieval_cases.json`为自行编写的23页短文、32个查询，不是实际教材留出集。`evaluate_retrieval.py`执行真实本地索引代码，`RETRIEVAL_DIAGNOSTIC_RESULTS.json`保存逐项页号结果；不包含私有教材或学生数据。检索页命中不能自动验证批改结论是否得到支持。
+
+| 诊断类别 | 旧版 | 新版 | 边界 |
+|---|---|---|---|
+| 中英文术语6项 | Recall@5=0 | Recall@5=1 | 仅词表覆盖范围，不是通用跨语言能力 |
+| 无答案7项 | 正确留空5/7 | 正确留空7/7 | 未证明所有无答案问题都能识别 |
+| 改写6项、术语6项、题号2项、公式2项 | Recall@5=1 | Recall@5=1 | 不用已通过的合成例子夸大提升 |
+| 冲突多书1项、单书限定1项 | Recall@5=1 | Recall@5=1 | 两本不同约定分别保留，不合成为一个“真答案” |
+| 未支持法语1项 | Recall@5=0 | Recall@5=0 | 显式记录失败，不改标注或补齐该例掩盖限制 |
+
+两版均零provider调用；保存的毫秒级小样本时延只说明本机诊断开销，不是生产SLA。另复用了2500页/五书真实本地索引容量回归，新版仍通过精确页号、缓存只构建一次及热p95<2秒断言。没有重跑耗时的1000页入库压力测试，因为本次未改入库和PDF/OCR worker。
+
+复现：`python -m tools.ocr_benchmark.evaluate_retrieval`；基线追加`--index-version bm25-cjk2-ids-v1`。允许显式传入自有JSON语料（最多16MiB/10000页条目/1000查询）；输出只有页标识与指标，但自有书/查询ID也应去标识后才分享。
+
+### 8.3 验证记录
+
+- 首组检索16通过/1容量用例未选；后续入口/导出组合52通过/8新测试夹具失败。失败原因是TXT按设计绕过视觉adapter，改成图片夹具后入口21通过。
+- 较大影响面组合138通过/1新断言字段错误；修正后，最终检索/快照/资料安全组合32通过（包含新增旧版兼容、2500页测试）。数量重叠，不相加成全量；旧失败保留，不改写为首轮全绿。
+- 前端两组件5通过、typecheck/build通过。最后去重提示及长文件名样式通过浏览器检查，不为样式重复全套构建。已有大chunk构建警告仍在。
+- 合成浏览器检查1280/320的引用提示及检索显示。初次预览环境变量拼错导致本地8000连接失败，修正为`VITE_SMARTAI_BACKEND_URL`后合成接口正常；没有连接真实模型。截图在`frontend/app/output/playwright/ocr-completion-citation-*`，不提交。
+- 主线程完成diff自查；没有独立review、最终head全套CI、merge、部署或真实教师验收证据。此前J整体CI失败及后续本地PG修复记录不因本PR被改写。
+
+### 8.4 必须保留的未完成项
+
+1. **真实OCR质量验收**：需要指定现有可用BYOK/百度路由、允许发送的样本范围和调用/费用上限。AA七题、真实手写的原错/删改/跨页和教师修改用时仍未验证。代码工具与本地合同不是模型准确率证明。
+2. **真实检索/引用验收**：需要代表性教材和教师认可的查询/参考页/支持关系，诊断与留出分开。此类样本可以先仅在本地做检索，不必发送外部模型；任意同义/跨语言召回不能靠小词表承诺。
+3. **计算/编程题的新增教材上下文**：此前外发授权问题尚无回复，未加入其LLM prompt；现有概念/客观/证明题路径不变。明确确认仅向本次选定BYOK发送任务主动选中教材的少量片段后，才能补该接线与测试。
+4. **独立当前head代码审查及正式上线验收**：按用户指令不使用subagent，不以主线程自查冒充独立review；PR保持未合并。公开发布仍受项目安全发布门禁约束。
+
+结论：本节关闭已知的未阻塞入口/零调用验证和本地检索诊断缺口，不把整个05/06或真实OCR效果标为全部验收完成。

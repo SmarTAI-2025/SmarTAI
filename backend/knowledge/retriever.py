@@ -10,7 +10,7 @@ from backend.db.models import AssignmentRecord
 from backend.db.session import session_scope
 from backend.domain.errors import DomainError
 from backend.knowledge.index import INDEX_CACHE
-from backend.knowledge.snapshots import INDEX_VERSION
+from backend.knowledge.snapshots import INDEX_VERSION, SUPPORTED_INDEX_VERSIONS
 from backend.db.knowledge_ingestion_repository import live_document
 from backend.rag.store import InMemoryTaskRetriever
 from backend.tools.knowledge import KnowledgeChunk, KnowledgeRetriever
@@ -46,7 +46,7 @@ def resolve_scope(scope):
         if "knowledge_content_versions" in manifest:
             allowed = {doc.id: doc for doc in documents}
             refs = [dict(ref) for ref in manifest["knowledge_content_versions"] if isinstance(ref, dict)
-                    and ref.get("document_id") in allowed and ref.get("index_version") == INDEX_VERSION
+                    and ref.get("document_id") in allowed and ref.get("index_version") in SUPPORTED_INDEX_VERSIONS
                     and ref.get("source_sha256") == allowed[ref["document_id"]].sha256
                     and isinstance(ref.get("content_version"), str) and type(ref.get("chunk_count")) is int
                     and ref["chunk_count"] > 0]
@@ -130,7 +130,7 @@ class PersistentKnowledgeRetriever(KnowledgeRetriever):
                 unit=metadata.get("unit", "page"), start=metadata.get("start"), end=metadata.get("end"),
                 artifact_ids=metadata.get("artifact_ids", []), confidence=metadata.get("confidence", "unverified"),
                 warning_codes=metadata.get("warning_codes", []), coverage_complete=ref.get("coverage_complete", False),
-                page_state=metadata.get("page_state"), index_version=INDEX_VERSION,
+                page_state=metadata.get("page_state"), index_version=ref["index_version"],
                 provenance="retrieved_reference_not_verified_claim")
             label = document.original_name
             if citation["page_number"] is not None:

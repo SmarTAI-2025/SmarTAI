@@ -17,16 +17,20 @@ from sqlalchemy import func, or_, select
 
 from backend.db.models import KnowledgeChunkRecord
 from backend.db.session import session_scope
-from backend.knowledge.snapshots import INDEX_VERSION
+from backend.knowledge.snapshots import INDEX_VERSION, LEGACY_INDEX_VERSION, SUPPORTED_INDEX_VERSIONS
 from backend.domain.errors import InvalidTransition
+from backend.knowledge.terms import concept_terms, QUERY_BOILERPLATE
 
-STOP_WORDS = frozenset("the a an of is are to in on and or for with that this prove show let find given using determine".split())
+LEGACY_STOP_WORDS = frozenset("the a an of is are to in on and or for with that this prove show let find given using determine".split())
+STOP_WORDS = frozenset(("the a an of is are to in on and or for with that this prove show let find given using determine "
+    "what why how does do can please explain definition theorem exercise chapter textbook about it its be as by from").split())
 
 
-def tokenize(text):
+def tokenize(text, *, legacy=False):
     normalized = unicodedata.normalize("NFKC", text).lower().replace("−", "-")
-    identifier_pattern = r"(?<![\w.])\d+(?:\.\d+)+(?![\w.])"
-    words = [word for word in re.findall(r"[a-z0-9_]+", re.sub(identifier_pattern, " ", normalized)) if word not in STOP_WORDS]
+    identifier_pattern = r"(?<![\w.])\d+(?:\.\d+)+(?![\w.])" if legacy else r"(?<![\w.])\d+(?:\.\d+){2,}(?![\w.])"
+    stop_words = LEGACY_STOP_WORDS if legacy else STOP_WORDS
+    words = [word for word in re.findall(r"[a-z0-9_]+", re.sub(identifier_pattern, " ", normalized)) if word not in stop_words]
     # Bigrams distinguish terms such as 同态/同构 without a large dictionary.
     # Isolated characters remain searchable, but do not dominate whole queries.
     for run in re.findall(r"[\u3400-\u9fff]+", normalized):
@@ -34,9 +38,21 @@ def tokenize(text):
         if len(run) == 1:
             words.append("c:" + run)
     words.extend("id:" + value for value in re.findall(identifier_pattern, normalized))
+    # A bare 1.2 or an explicitly labelled exercise may be an ID; 9.8 in
+    # ordinary prose/equations is a decimal, not an exercise constraint.
+    if not legacy:
+        words.extend("id:" + value for value in re.findall(
+            r"(?:exercise|problem|例题|习题|练习|题号)\s*[:：]?\s*(\d+\.\d+)(?![\w.])", normalized))
+        if re.fullmatch(r"\s*\d+\.\d+\s*", normalized):
+            words.append("id:" + normalized.strip())
     words.extend("math:" + variable + "^" + exponent for variable, exponent in
                  re.findall(r"([a-z])\s*\^\s*[{(]?\s*([+-]?\d+)\s*[})]?", normalized))
     return words
+
+
+def index_terms(text):
+    normalized = unicodedata.normalize("NFKC", text).lower()
+    return tokenize(normalized) + sorted(concept_terms(normalized))
 
 
 @dataclass(frozen=True)
@@ -49,13 +65,18 @@ class IndexedChunk:
 
 
 class KnowledgeIndex:
-    def __init__(self, chunks):
+    def __init__(self, chunks, *, version=INDEX_VERSION):
+        if version not in SUPPORTED_INDEX_VERSIONS:
+            raise InvalidTransition("Unknown knowledge index version.", code="knowledge_content_version_unavailable")
+        self.version = version
+        self.legacy = version == LEGACY_INDEX_VERSION
         self.chunks = tuple(chunks)
         self.positions = {chunk.id: i for i, chunk in enumerate(self.chunks)}
         pool = {}
         def corpus():
             for chunk in chunks:
-                yield [pool.setdefault(term, term) for term in (tokenize(chunk.content) or ["__empty__"])]
+                terms = tokenize(chunk.content, legacy=True) if self.legacy else index_terms(chunk.content)
+                yield [pool.setdefault(term, term) for term in (terms or ["__empty__"])]
         self.bm25 = BM25Okapi(corpus()) if chunks else None
         if self.bm25:
             # Okapi's negative/common-term IDF otherwise makes a one-chunk
@@ -69,7 +90,10 @@ class KnowledgeIndex:
     def search(self, query, k):
         if self.bm25 is None or not query.strip() or k <= 0:
             return []
-        terms = set(tokenize(query))
+        terms = set(index_terms(QUERY_BOILERPLATE.sub(" ", query)))
+        terms.update(term for term in tokenize(query) if term.startswith("id:"))
+        if self.legacy:
+            terms = set(tokenize(query, legacy=True))
         salient = sorted((term for term in terms if term in self.bm25.idf),
                          key=lambda term: (term.startswith(("id:", "math:")), self.bm25.idf[term]), reverse=True)[:96]
         if not salient:
@@ -79,10 +103,24 @@ class KnowledgeIndex:
         ranked = []
         identifiers = {term for term in terms if term.startswith("id:")}
         formulas = {term for term in terms if term.startswith("math:")}
+        concepts = {term for term in terms if term.startswith("term:")}
+        lexical = {term for term in terms if not term.startswith(("id:", "math:", "term:"))}
+        formula_only = formulas and not concepts and not identifiers and all(
+            len(t) <= 1 or t.lstrip("+-").isdigit() for t in lexical)
         for i, score in enumerate(raw):
             if score <= 0:
                 continue
             frequencies = self.bm25.doc_freqs[i]
+            # An explicit exercise ID must not degrade to an unrelated lexical
+            # hit. Likewise, incidental words cannot substitute for a named
+            # technical concept when none of those concepts occurs here.
+            if not self.legacy and identifiers and not identifiers.intersection(frequencies):
+                continue
+            if not self.legacy and concepts and not concepts.intersection(frequencies):
+                continue
+            if not self.legacy and formula_only:
+                if not formulas.issubset(frequencies):
+                    continue
             covered = sum(term in frequencies for term in salient) / len(salient)
             exact_id = sum(term in frequencies for term in identifiers) / max(1, len(identifiers))
             exact_formula = sum(term in frequencies for term in formulas) / max(1, len(formulas))
@@ -98,6 +136,8 @@ class KnowledgeIndex:
                 continue
             seen.add(digest)
             page_counts[page_key] = page_counts.get(page_key, 0) + 1
+            # Relative ranking is not confidence that a passage supports a
+            # conclusion; the citation contract keeps that distinction.
             selected.append((chunk, min(1., score / best)))
             if len(selected) >= k:
                 break
@@ -107,6 +147,10 @@ class KnowledgeIndex:
         """Add only source-contiguous spans, each with its own unchanged citation."""
         selected = list(anchors)
         seen = {chunk.id for chunk, _ in anchors}
+        page_counts = {}
+        for chunk, _ in anchors:
+            key = (chunk.document_id, chunk.metadata.get("page_number"))
+            page_counts[key] = page_counts.get(key, 0) + 1
         for chunk, score in anchors:
             position = self.positions[chunk.id]
             for offset in (1, -1):
@@ -114,8 +158,10 @@ class KnowledgeIndex:
                 if not 0 <= target < len(self.chunks):
                     continue
                 other = self.chunks[target]
+                key = (other.document_id, other.metadata.get("page_number"))
                 if (other.id in seen or other.document_id != chunk.document_id or other.content_version != chunk.content_version
-                        or not chunk.metadata.get("page_number") or other.metadata.get("page_number") != chunk.metadata["page_number"]):
+                        or not chunk.metadata.get("page_number") or other.metadata.get("page_number") != chunk.metadata["page_number"]
+                        or (not self.legacy and page_counts.get(key, 0) >= 2)):
                     continue
                 left, right = (chunk, other) if offset == 1 else (other, chunk)
                 if not (type(left.metadata.get("end")) is int and type(right.metadata.get("start")) is int
@@ -123,12 +169,16 @@ class KnowledgeIndex:
                     continue
                 selected.append((other, score * .5))
                 seen.add(other.id)
+                page_counts[key] = page_counts.get(key, 0) + 1
                 if len(selected) >= limit:
                     return selected
         return selected
 
 
 def load_index(refs):
+    versions = {ref.get("index_version", INDEX_VERSION) for ref in refs}
+    if len(versions) > 1 or not versions.issubset(SUPPORTED_INDEX_VERSIONS):
+        raise InvalidTransition("Incompatible knowledge index versions.", code="knowledge_content_version_unavailable")
     predicates = [((KnowledgeChunkRecord.document_id == ref["document_id"])
         & (KnowledgeChunkRecord.content_version == ref["content_version"])
         & (KnowledgeChunkRecord.chunk_index < ref["chunk_count"])) for ref in refs]
@@ -142,7 +192,7 @@ def load_index(refs):
         rows = session.scalars(select(KnowledgeChunkRecord).where(or_(*predicates))
             .order_by(KnowledgeChunkRecord.document_id, KnowledgeChunkRecord.chunk_index))
         chunks = [IndexedChunk(row.id, row.document_id, row.content_version, row.content, dict(row.chunk_metadata or {})) for row in rows]
-    return KnowledgeIndex(chunks)
+    return KnowledgeIndex(chunks, version=next(iter(versions), INDEX_VERSION))
 
 
 class KnowledgeIndexCache:
@@ -155,7 +205,8 @@ class KnowledgeIndexCache:
         self.bytes = self.builds = self.hits = 0
 
     def get(self, owner_id, refs):
-        key = (owner_id, INDEX_VERSION, tuple(sorted((r["document_id"], r["content_version"], r["chunk_count"], r["source_sha256"]) for r in refs)))
+        key = (owner_id, tuple(sorted((r["document_id"], r["content_version"], r["chunk_count"], r["source_sha256"],
+                                     r.get("index_version", INDEX_VERSION)) for r in refs)))
         with self._lock:
             now = time.monotonic()
             for old in list(self._items):

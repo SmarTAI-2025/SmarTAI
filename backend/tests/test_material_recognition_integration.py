@@ -114,3 +114,25 @@ def test_mixed_materials_use_strictest_role_and_opt_in_is_hashed():
     assert api._material_import_source_role(["criterion", "reference_answer"]) == "rubric"
     assert api._material_import_source_role(["criterion", "test_cases"]) == "programming_tests"
     assert api._source_fingerprint({"enable_material_ocr": True}) != api._source_fingerprint({"enable_material_ocr": False})
+
+
+@pytest.mark.parametrize("state", ["unconfirmed", "parser_failed"])
+def test_unconfirmed_or_unparsed_cases_cannot_reach_runner(monkeypatch, state):
+    job = SimpleNamespace(id="job", assignment_id="task", operation_type="material_import",
+        status="ready" if state == "unconfirmed" else "error", attempt=1, expires_at=None, progress={},
+        payload=dict(candidates=[dict(candidate_id="c", q_id="q1", target="test_cases",
+            test_cases=[dict(input="1", expected_output="2")], confidence=.99, match_status="exact")]))
+    monkeypatch.setattr(api.workflow_repository, "get_operation", lambda *a, **k: job)
+    monkeypatch.setattr(api.task_facade, "get_task", lambda **k: dict(problem_data={"q1":{"type":"programming"}}))
+    apply = Mock(return_value=1)
+    monkeypatch.setattr(api.task_facade, "apply_question_patches_atomic", apply)
+    result = api.apply_material_import("task", "job", api.ApplyMaterialImportRequest(
+        accepted_candidate_ids=[] if state == "unconfirmed" else ["c"], expected_workflow_revision=0),
+        current=SimpleNamespace(id="owner"))
+    if state == "unconfirmed":
+        assert result["status"] == "applied"
+        assert result["summary"]["applied_candidate_ids"] == []
+        assert apply.call_args.kwargs["patches"] == []
+    else:
+        assert result.status_code == 409
+        apply.assert_not_called()
