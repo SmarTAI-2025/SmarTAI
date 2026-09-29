@@ -1,4 +1,4 @@
-# Recognition Foundation (Work Items A-D2b)
+# Recognition Foundation (Work Items A-D3a)
 
 This package is not wired to an upload endpoint yet. It defines the first
 version of the evidence and planning contracts plus callable existing-engine
@@ -60,7 +60,9 @@ Dependent PRs may stack; none is merged automatically.
 | D1 | Faithful evidence assembly, purpose checks and honest coverage |
 | D2a | Strict repair response, same-provider adapter and bounded extra dispatch |
 | D2b | Agent repair selection, source binding and recorded final assembly |
-| D3 | Durable evidence, layered owner-scoped cache and submit-once recovery |
+| D3a | Versioned evidence codec, cache identities and owner-bound persistence |
+| D3b | Layered cache reuse with current versus historical usage accounting |
+| D3c | Durable pre-submit checkpoint, restart and uncertain-submit recovery |
 | E | Problem extraction and compatibility routes |
 | F | Teacher reference/rubric/test materials and confirmation gates |
 | G | Student submission sources, faithful transcription and retry |
@@ -74,6 +76,55 @@ and must not overwrite raw transcription. No new specialized OCR integrations
 or commercial charging mechanisms are included in this series.
 
 ## Verification
+
+### D3a Persistence Boundary
+
+`cache_identity.py` distinguishes native, render, visual, patch and final layers.
+Every key includes owner, input SHA256, MIME, tool version and exact request
+parameters. Model layers also freeze purpose, route/model fingerprint, complete
+capabilities, policy, prompt version and actual submitted payload digests. Local
+native/render evidence does not depend on a model or purpose. Final assemblies
+include the original business source binding. Keys never contain credentials and
+do not authorize access. Standalone call results cannot reconstruct their entire
+request from a digest; their producer must compute the identity from the actual
+request, and the future cache consumer must compare against its current request.
+
+`artifact_codec.py` persists six typed evidence kinds as canonical, single-member
+gzip JSON with schema and payload hashes. Decode is bounded to 16 MiB compressed
+and 64 MiB decompressed; concatenated members, trailing bytes, truncated streams,
+duplicate JSON keys and nonfinite values are rejected. These byte ceilings are
+not process-memory guarantees. Render pixels, credentials and arbitrary payload
+dictionaries are not persisted. These are integrity checks, not encryption or
+proof of transcription fidelity. Storage retains sensitive source-derived text
+under the project's existing access and retention controls.
+
+`services/recognition_artifacts.py` accepts injected storage and emits progress.
+Database/storage/codec work runs off the event loop. Save validates the authorized
+owner, original stored-file row, SHA/MIME, availability and exactly one business
+link. Assignment artifacts reuse existing restart-safe write intents and optional
+operation/attempt/lease fences. Revision and knowledge save/load explicitly fail
+closed. Plain revision artifact writes do not join task deletion's intent drain;
+the current library deletion worker collects its canonical original, not new
+derived objects. G/H must enroll all recognition artifacts in their actual
+lifecycles before enabling these bindings. The shared codec and identities do
+not imply storage support for those bindings. Task-linked submission sources can
+use the assignment path after the application authorizes that association.
+Callers must first authorize the business operation. Legacy
+student-owned sources do not become teacher-owned merely by changing a source-ref.
+
+Load checks owner, business link, storage backend, kind, MIME, bounded size, object
+SHA, envelope identity, source and payload hash. It does not reopen the original,
+so original cleanup does not erase existing evidence. Recognition artifacts are
+not added to original-file cleanup kinds. Missing/corrupt evidence differs from
+transient storage failure. Neither outcome invokes a model or permits resubmission.
+
+Failures, empty outcomes, pending submissions, low quality and assembly overflow
+remain persistable. `cacheable_success` is computed after revalidation, not trusted
+from stored JSON; it never means teacher acceptance or measured OCR accuracy.
+Replace/unknown repair proposals are not successful repair cache entries. D3a
+does not enable automatic cache hits, deduct old usage from a current budget,
+resume jobs or replace the existing Baidu uncertain-submit guard. Those changes
+belong to separate D3b/D3c PRs before business wiring.
 
 Run the focused contracts with the project's Python environment:
 
