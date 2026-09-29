@@ -7,7 +7,7 @@ import { cn } from "@/lib/cn";
 const markdownMathComponents: Components = {
   p: ({ children }) => <p className="mb-2 whitespace-pre-wrap last:mb-0">{children}</p>,
   ul: ({ children }) => <ul className="mb-2 list-disc space-y-1 pl-5 last:mb-0">{children}</ul>,
-  ol: ({ children }) => <ol className="mb-2 list-decimal space-y-1 pl-5 last:mb-0">{children}</ol>,
+  ol: ({ children, start }) => <ol start={start} className="mb-2 list-decimal space-y-1 pl-5 last:mb-0">{children}</ol>,
   li: ({ children }) => <li>{children}</li>,
   strong: ({ children }) => <strong className="font-semibold text-foreground">{children}</strong>,
   code: ({ children }) => <code className="rounded bg-muted px-1 py-0.5 text-xs">{children}</code>,
@@ -27,7 +27,12 @@ export function MarkdownMath({ children, className }: { children?: string | null
       )}
     >
       <ReactMarkdown
-        components={markdownMathComponents}
+        components={{ ...markdownMathComponents, li: ({ node, children }) => {
+          // Keep source exercise labels, including skipped or repeated numbers.
+          const offset = node?.position?.start.offset;
+          const marker = offset == null ? null : /^(\d{1,9})[.)][ \t]/.exec(content.slice(offset));
+          return <li value={marker ? Number(marker[1]) : undefined}>{children}</li>;
+        } }}
         remarkPlugins={[remarkMath]}
         rehypePlugins={[[rehypeKatex, { strict: false, throwOnError: false }]]}
       >

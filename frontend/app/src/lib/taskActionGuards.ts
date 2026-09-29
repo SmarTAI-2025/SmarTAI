@@ -227,6 +227,7 @@ const BYOK_CODES = new Set([
   "provider_auth_failed",
   "ocr_credential_not_found",
   "provider_permission_denied",
+  "provider_region_unsupported",
   "vision_provider_required",
   "shared_pool_kb_requires_byok",
   "no_enabled_expert",
@@ -1100,6 +1101,12 @@ function providerConfigurationErrorCopy(
       "The OCR account lacks service permission",
       "请在百度控制台确认已开通文档解析权限，或替换为有权限的 AK/SK。",
       "Confirm Document Parsing access in the Baidu console or replace the AK/SK with an authorized pair.",
+    ],
+    provider_region_unsupported: [
+      "模型服务不支持当前网络地区",
+      "The model service does not support the current network region",
+      "请使用供应商支持的接入环境，或在 BYOK 中选择其他已获授权的模型。剩余页面不会自动重复请求。",
+      "Use a provider-supported access environment or select another authorized BYOK model. Remaining pages are not retried automatically.",
     ],
     provider_quota_exceeded: [
       "OCR 额度已用完",

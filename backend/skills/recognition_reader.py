@@ -200,7 +200,7 @@ class LLMRecognitionEngine:
         except Exception as exc:
             code = classify_background_error(exc, "provider_request_failed")
             raise RecognitionError(code, submission_may_exist=code not in {
-                "provider_auth_failed", "provider_permission_denied", "provider_quota_exceeded",
+                "provider_auth_failed", "provider_permission_denied", "provider_region_unsupported", "provider_quota_exceeded",
                 "provider_rate_limited", "provider_model_not_found", "provider_request_rejected",
                 "provider_vision_not_supported",
             }) from None

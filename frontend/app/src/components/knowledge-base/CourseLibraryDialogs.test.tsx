@@ -2,11 +2,12 @@ import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { CourseMaterial } from "@/types";
-import { MaterialDialog } from "./CourseLibraryDialogs";
+import { MaterialDialog, UploadDialog } from "./CourseLibraryDialogs";
 
 const mocks = vi.hoisted(() => ({
   deleteMaterial: vi.fn(),
   toastSuccess: vi.fn(),
+  upload: vi.fn(),
 }));
 
 vi.mock("@/api/hooks", () => ({
@@ -15,7 +16,7 @@ vi.mock("@/api/hooks", () => ({
   useDeleteCourseMaterialGroup: () => ({ isPending: false, mutateAsync: vi.fn() }),
   useUpdateCourseMaterial: () => ({ isPending: false, mutateAsync: vi.fn() }),
   useUpdateCourseMaterialGroup: () => ({ isPending: false, mutateAsync: vi.fn() }),
-  useUploadCourseMaterial: () => ({ isPending: false, mutateAsync: vi.fn() }),
+  useUploadCourseMaterial: () => ({ isPending: false, mutateAsync: mocks.upload }),
 }));
 
 vi.mock("@/i18n/I18nProvider", () => ({
@@ -58,6 +59,20 @@ describe("course material deletion", () => {
       detached_task_references: 0,
       cleanup_operation_id: "cleanup-1",
     });
+  });
+
+  it("uploads native-only knowledge only when explicitly selected", async () => {
+    const user = userEvent.setup();
+    mocks.upload.mockResolvedValue({ ...material, created: true, parse_status: "processing" });
+    render(<UploadDialog courses={[]} groups={[]} onClose={vi.fn()} onUploaded={vi.fn()} />);
+    const checkbox = screen.getByRole("checkbox", { name: "仅提取已有文字（不调用模型）" });
+    expect(checkbox).not.toBeChecked();
+    const file = new File(["synthetic PDF"], "book.pdf", { type: "application/pdf" });
+    await user.upload(screen.getByLabelText(/选择一份资料文件/), file);
+    await user.click(checkbox);
+    await user.click(screen.getByRole("button", { name: "上传资料" }));
+    await waitFor(() => expect(mocks.upload).toHaveBeenCalledWith(expect.objectContaining({ file, nativeOnly: true })));
+    expect(mocks.toastSuccess).toHaveBeenCalledWith("资料已保存，已进入处理队列");
   });
 
   it("reports async deletion truthfully without offering a manual retry", async () => {

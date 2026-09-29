@@ -2,6 +2,8 @@
 
 ## Harness 与检索验收
 
+- [AA 检索与前端实测修复补充](AA_RETRIEVAL_REPAIR_20260929_CN.md)：保留失败基线，记录通用检索修复、显式模型查询、零模型教材入库、真实前端命中/引用及 2,500 页资源回归；视觉识别与完整批改仍未验收。
+
 - [AA 真实测试启动记录与失败项](AA_LIVE_VALIDATION_20260929_CN.md)：前端登录/BYOK真实调用、Gemini地区阻塞、AA原生层检索未通过项。不是完整OCR/RAG验收通过。
 
 - `python -m tools.ocr_benchmark.evaluate_pdf_retrieval /absolute/path/authorized.pdf tools/ocr_benchmark/aa_retrieval_queries.json`：实际 AA PDF 原生文字层的零模型基线，复用产品 PDF worker、无损切块和检索器；只输出页号/计数/命中结果，不输出教材正文。题目清单的页号是源 PDF 页，不是书上印刷页。它不是 OCR 后或前端入库的验收。

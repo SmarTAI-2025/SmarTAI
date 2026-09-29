@@ -202,6 +202,8 @@ def _http_status(item: BaseException) -> int | None:
     status_code = getattr(item, "status_code", None)
     if status_code is None:
         status_code = getattr(getattr(item, "response", None), "status_code", None)
+    if status_code is None:
+        status_code = getattr(item, "code", None)
     return status_code if isinstance(status_code, int) else None
 
 
@@ -273,6 +275,17 @@ def classify_background_error(
 
     for item in chain:
         status_code = _http_status(item)
+        details = getattr(item, "details", None)
+        if status_code == 400 and isinstance(details, dict):
+            error = details.get("error", details)
+            if isinstance(error, dict):
+                if "user location is not supported" in str(error.get("message", "")).lower():
+                    return "provider_region_unsupported"
+                reasons = error.get("details", [])
+                if isinstance(reasons, list) and any(isinstance(d, dict) and d.get("reason") in {
+                    "API_KEY_INVALID", "API_KEY_EXPIRED", "API_KEY_SERVICE_BLOCKED",
+                } for d in reasons):
+                    return "provider_auth_failed"
         if status_code in {401, 403}:
             return "provider_auth_failed"
         if status_code == 404:

@@ -84,7 +84,7 @@ export function KnowledgeActivityPanel({ compact = false }: { compact?: boolean 
                 aria-valuenow={progress.processed} aria-valuemin={0} aria-valuemax={progress.total} className="h-1.5 w-full overflow-hidden rounded bg-muted">
                 <div className={`h-full ${active ? "bg-primary" : status === "complete" ? "bg-emerald-600" : "bg-amber-500"}`} style={{ width: `${progress.percent}%` }} />
               </div>
-              <p className="break-words text-xs text-muted-foreground">{zh ? "可检索" : "Searchable"} {summary?.searchable_pages ?? 0} · {zh ? "失败" : "Failed"} {summary?.failed_pages ?? 0} · {zh ? "待核对" : "Warnings"} {(summary?.warning_pages ?? 0) + (summary?.partially_searchable_pages ?? 0)}{summary?.blank_pages ? ` · ${zh ? "空白" : "Blank"} ${summary.blank_pages}` : ""}</p>
+              <p className="break-words text-xs text-muted-foreground">{zh ? "可检索" : "Searchable"} {summary?.searchable_pages ?? 0} · {zh ? "未完整识别" : "Incomplete"} {summary?.failed_pages ?? 0} · {zh ? "待核对" : "Warnings"} {(summary?.warning_pages ?? 0) + (summary?.partially_searchable_pages ?? 0)}{summary?.blank_pages ? ` · ${zh ? "空白" : "Blank"} ${summary.blank_pages}` : ""}</p>
             </> : active ? <p className="text-xs text-muted-foreground">{zh ? "总页数确认中" : "Checking page count"}</p> : null}
             {oldVersion ? <p className="text-xs text-muted-foreground">{zh ? "仍可检索此前已保存版本" : "Previously saved version remains searchable"}</p> : null}
             <KnowledgeIngestionStatus documentId={doc.id} status={doc.status} ingestion={summary} zh={zh}

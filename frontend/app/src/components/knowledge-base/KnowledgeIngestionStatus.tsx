@@ -2,11 +2,21 @@ import { useEffect, useRef, useState } from "react";
 import { ChevronRight, Pause, Play, RefreshCw, RotateCcw } from "lucide-react";
 import { getJSON, postJSON } from "@/api/client";
 import type { KnowledgeIngestionSummary } from "@/types/personalKnowledge";
+import { backgroundErrorTitle } from "@/lib/taskActionGuards";
 
 interface Coverage {
   summary: KnowledgeIngestionSummary;
   pages: { page_number: number; state: string; error_code?: string; warning_codes?: string[] }[];
   next_offset: number | null;
+}
+
+function pageStateLabel(state: string, zh: boolean) {
+  const labels: Record<string, [string, string]> = {
+    unprocessed: ["待处理", "Pending"], processing: ["处理中", "Processing"],
+    searchable: ["可检索", "Searchable"], searchable_with_warning: ["可检索，待核对", "Searchable, unverified"],
+    blank_confirmed: ["已确认空白", "Confirmed blank"], failed: ["内容不完整", "Incomplete"],
+  };
+  return labels[state]?.[zh ? 0 : 1] ?? (zh ? "状态待确认" : "Unknown status");
 }
 
 export function KnowledgeIngestionStatus({ documentId, status = "ready", ingestion, zh, poll = true, onChange, detailsLabel }: {
@@ -65,10 +75,10 @@ export function KnowledgeIngestionStatus({ documentId, status = "ready", ingesti
       {!detailsLabel && summary.total_pages ? ` · ${summary.processed_pages ?? 0}/${summary.total_pages}` : ""}
     </summary>
     <div className="mt-2 max-w-xs space-y-2 break-words">
-      {summary.total_pages ? <p>{zh ? "可检索 / 空白 / 失败" : "Searchable / blank / failed"}: {summary.searchable_pages ?? 0} / {summary.blank_pages ?? 0} / {summary.failed_pages ?? 0}</p> : null}
+      {summary.total_pages ? <p>{zh ? "可检索 / 空白 / 未完整识别" : "Searchable / blank / incomplete"}: {summary.searchable_pages ?? 0} / {summary.blank_pages ?? 0} / {summary.failed_pages ?? 0}</p> : null}
       {summary.partially_searchable_pages ? <p>{zh ? "可检索页中仍有内容缺口" : "Searchable pages with content gaps"}: {summary.partially_searchable_pages}</p> : null}
-      {summary.error_code ? <p role="status">{summary.error_code}</p> : null}
-      {coverage?.pages.map((page) => <p key={page.page_number}>{page.page_number}: {page.state}{page.error_code ? ` · ${page.error_code}` : ""}</p>)}
+      {summary.error_code ? <p role="status">{backgroundErrorTitle(summary.error_code, zh ? "zh-CN" : "en-US")}</p> : null}
+      {coverage?.pages.map((page) => <p key={page.page_number}>{page.page_number}: {pageStateLabel(page.state, zh)}{page.error_code ? ` · ${backgroundErrorTitle(page.error_code, zh ? "zh-CN" : "en-US")}` : ""}</p>)}
       {error ? <p role="alert">{zh ? "暂时无法更新状态" : "Unable to update status"}</p> : null}
       <div className="flex gap-2">
         <button type="button" disabled={busy} onClick={() => void load()} title={zh ? "刷新状态" : "Refresh status"} aria-label={zh ? "刷新状态" : "Refresh status"}><RefreshCw className="h-4 w-4" /></button>

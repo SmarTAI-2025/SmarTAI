@@ -40,7 +40,7 @@ it("opens the original at its cited page and revokes the blob on close", async (
   const view = render(<KnowledgeCitationPreview citation={citation} />);
   await userEvent.click(screen.getByRole("button"));
   await waitFor(() => expect(screen.getByText("Page 801: ready")).toBeInTheDocument());
-  expect(screen.getByText("exact passage")).toBeInTheDocument();
+  expect(screen.queryByText("exact passage")).not.toBeInTheDocument();
   await userEvent.click(screen.getByRole("button"));
   expect(revoke).toHaveBeenCalledWith("blob:original");
   view.unmount(); vi.unstubAllGlobals();

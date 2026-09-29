@@ -856,6 +856,7 @@ async def upload_task_knowledge(
     file: UploadFile | None = File(default=None),
     library_material_id: str | None = Form(default=None),
     save_to_library: bool = Form(default=False),
+    native_only: bool = Form(default=False),
     expected_workflow_revision: int | None = Form(default=None),
     current: User = Depends(require_teacher),
 ):
@@ -915,6 +916,7 @@ async def upload_task_knowledge(
                 content=body, content_type=file.content_type,
                 retention_policy=("retained" if save_to_library else "task_only"),
                 origin_assignment_id=(None if save_to_library else task_id),
+                native_only=native_only,
             )
             document_id = document.id
             if not save_to_library:

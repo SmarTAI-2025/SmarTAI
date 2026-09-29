@@ -4,7 +4,7 @@ import { beforeEach, expect, it, vi } from "vitest";
 import { KnowledgeIngestionStatus } from "./KnowledgeIngestionStatus";
 
 const api = vi.hoisted(() => ({ getJSON: vi.fn(), postJSON: vi.fn() }));
-vi.mock("@/api/client", () => api);
+vi.mock("@/api/client", async (importOriginal) => ({ ...await importOriginal<typeof import("@/api/client")>(), ...api }));
 beforeEach(() => { api.getJSON.mockReset(); api.postJSON.mockReset(); });
 
 it("does not label a partial book as fully parsed, and loads coverage only on demand", async () => {
@@ -14,7 +14,7 @@ it("does not label a partial book as fully parsed, and loads coverage only on de
   expect(api.getJSON).not.toHaveBeenCalled();
   expect(screen.queryByText("已解析")).not.toBeInTheDocument();
   await userEvent.click(screen.getByText("部分可检索 · 25/25"));
-  await screen.findByText("25: failed · provider_submit_uncertain");
+  await screen.findByText("25: 内容不完整 · 模型请求状态无法确认");
   expect(api.getJSON).toHaveBeenCalledWith("/knowledge/documents/book/coverage?offset=0&limit=20");
 });
 
