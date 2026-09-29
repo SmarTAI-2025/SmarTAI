@@ -21,18 +21,20 @@ from backend.recognition.fusion import RecognitionAssemblyV1
 from backend.recognition.models import EvidenceModel, RecognitionSourceRefV1
 from backend.recognition.quality import assess_candidates
 from backend.recognition.repair_records import RepairCallEvidenceV1
+from backend.recognition.workflow_v2 import RecognitionAssemblyV2
 from backend.tools.pdf_evidence import PdfDetailResult, PdfIndexResult
 
 MAX_COMPRESSED_BYTES = 16 * 1024 * 1024
 MAX_DECOMPRESSED_BYTES = 64 * 1024 * 1024
-PayloadKind = Literal["native_index", "native_detail", "visual_read", "locator", "repair", "assembly"]
-ArtifactPayload = PdfIndexResult | PdfDetailResult | ReadUnitV1 | LocatorCallEvidenceV1 | RepairCallEvidenceV1 | RecognitionAssemblyV1
+PayloadKind = Literal["native_index", "native_detail", "visual_read", "locator", "repair", "assembly", "assembly_v2"]
+ArtifactPayload = PdfIndexResult | PdfDetailResult | ReadUnitV1 | LocatorCallEvidenceV1 | RepairCallEvidenceV1 | RecognitionAssemblyV1 | RecognitionAssemblyV2
 _PAYLOAD_TYPES = {
     "native_index": PdfIndexResult, "native_detail": PdfDetailResult, "visual_read": ReadUnitV1,
     "locator": LocatorCallEvidenceV1, "repair": RepairCallEvidenceV1, "assembly": RecognitionAssemblyV1,
+    "assembly_v2": RecognitionAssemblyV2,
 }
 _LAYERS = {"native_index": "native", "native_detail": "native", "visual_read": "visual",
-           "locator": "visual", "repair": "patch", "assembly": "final"}
+           "locator": "visual", "repair": "patch", "assembly": "final", "assembly_v2": "final"}
 _ENCODER = json.JSONEncoder(sort_keys=True, separators=(",", ":"), ensure_ascii=True, allow_nan=False)
 
 
@@ -114,10 +116,11 @@ class RecognitionArtifactV1(EvidenceModel):
             if payload.result is not None and (payload.image.page_number != payload.result.context.page_number
                                                 or payload.image.region != payload.result.context.region):
                 raise ValueError("repair image belongs to another context region")
-        elif self.payload_kind == "assembly":
+        elif self.payload_kind in {"assembly", "assembly_v2"}:
             expected_identity = final_cache_identity(
                 payload.raw.request, capabilities=payload.raw.engine_capabilities,
                 prompt_version=payload.prompt_version, tool_version=identity.tool_version,
+                workflow_version=2 if self.payload_kind == "assembly_v2" else 1,
             )
             if payload.raw.request.source != source or identity != expected_identity:
                 raise ValueError("assembly artifact belongs to another source or purpose")

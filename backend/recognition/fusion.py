@@ -45,7 +45,8 @@ def _failed(unit):
 
 
 def _identity(raw, prompt_version):
-    value = {"assembly_version": ASSEMBLY_VERSION, "request": raw.request.model_dump(mode="json"),
+    value = {"assembly_version": "faithful-assembly-v2" if raw.schema_version == 2 else ASSEMBLY_VERSION,
+             "request": raw.request.model_dump(mode="json"),
              "execution_policy": raw.execution_policy.model_dump(mode="json"),
              "engine": raw.engine_capabilities.model_dump(mode="json") if raw.engine_capabilities else None,
              "prompt_version": prompt_version}
@@ -151,6 +152,7 @@ def _build_document(raw: RecognitionWorkflowReadV1, prompt_version: str):
         empty_recovery_calls=raw.budget.empty_recovery_calls, patch_calls=raw.budget.patch_calls,
         input_tokens=raw.budget.input_tokens, output_tokens=raw.budget.output_tokens,
         duration_ms=raw.budget.duration_ms, usage_complete=raw.budget.usage_complete,
+        cache_hits=raw.logical_budget.cache_hits if raw.schema_version == 2 else 0,
     )
     return RecognitionDocumentV1(
         policy_version=raw.execution_policy.version, prompt_version=prompt_version, source=request.source,

@@ -127,13 +127,15 @@ def model_cache_identity(
 
 
 def final_cache_identity(request, *, capabilities: EngineCapabilitiesV1 | None, prompt_version: str,
-                         tool_version: str = TOOL_VERSION) -> RecognitionCacheIdentityV1:
+                         tool_version: str = TOOL_VERSION, workflow_version: Literal[1, 2] = 1) -> RecognitionCacheIdentityV1:
     from backend.agents.recognition_agent import RecognitionReadRequestV1
     from backend.recognition.fusion import ASSEMBLY_VERSION
     from backend.recognition.repair_records import RECHECK_VERSION
     from backend.recognition.repair_response import REPAIR_PROMPT_VERSION
 
     try:
+        if type(workflow_version) is not int or workflow_version not in {1, 2}:
+            raise ValueError
         request = RecognitionReadRequestV1.model_validate(request.model_dump(warnings=False))
         caps = None if capabilities is None else EngineCapabilitiesV1.model_validate(capabilities.model_dump(warnings=False))
         return RecognitionCacheIdentityV1(
@@ -142,7 +144,8 @@ def final_cache_identity(request, *, capabilities: EngineCapabilitiesV1 | None, 
             engine_fingerprint=caps.fingerprint if caps else "native-only",
             capabilities_sha256=canonical_digest(caps.model_dump(mode="json") if caps else None),
             policy_sha256=canonical_digest(request.policy.model_dump(mode="json")), prompt_version=prompt_version,
-            parameters_sha256=canonical_digest({"request": request.model_dump(mode="json"), "assembly": ASSEMBLY_VERSION,
+            parameters_sha256=canonical_digest({"request": request.model_dump(mode="json"),
+                                                 "assembly": "faithful-assembly-v2" if workflow_version == 2 else ASSEMBLY_VERSION,
                                                  "recheck": RECHECK_VERSION, "repair_prompt": REPAIR_PROMPT_VERSION}),
         )
     except (ValidationError, ValueError, TypeError, AttributeError):

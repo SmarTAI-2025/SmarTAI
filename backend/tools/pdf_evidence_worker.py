@@ -406,7 +406,9 @@ def _process(request: dict, body: bytes) -> dict:
         with fitz.open() as selected:
             for number in numbers:
                 selected.insert_pdf(document, from_page=number - 1, to_page=number - 1)
-            output = selected.tobytes(garbage=3, deflate=True)
+            # A fresh trailer ID would change otherwise identical model inputs
+            # on every export and defeat exact, byte-bound evidence reuse.
+            output = selected.tobytes(garbage=3, deflate=True, no_new_id=True)
         if len(output) * 4 // 3 > MAX_RESPONSE_BYTES:
             raise EvidenceFailure("pdf_response_too_large")
         return {"total_pages": total, "page_numbers": numbers, "content_type": "application/pdf",
