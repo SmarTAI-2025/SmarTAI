@@ -143,3 +143,30 @@ class KnowledgeStorageWriteFailed(DomainError):
 class KnowledgeStorageIntegrityFailed(DomainError):
     code = "knowledge_storage_integrity_failed"
     status_code = 503
+
+
+PDF_EVIDENCE_STATUS_CODES = {
+    "pdf_invalid_request": 422,
+    "pdf_input_too_large": 413,
+    "pdf_invalid": 400,
+    "pdf_encrypted": 422,
+    "pdf_page_limit_exceeded": 413,
+    "pdf_page_out_of_range": 422,
+    "pdf_character_limit_exceeded": 413,
+    "pdf_structure_limit_exceeded": 413,
+    "pdf_response_too_large": 413,
+    "pdf_render_limit_exceeded": 413,
+    "pdf_processing_failed": 400,
+    "pdf_evidence_busy": 429,
+    "pdf_evidence_timeout": 408,
+    "pdf_evidence_protocol_invalid": 502,
+    "pdf_processing_unavailable": 503,
+}
+
+
+class PdfEvidenceError(DomainError):
+    """Bounded public errors from the owned PDF evidence worker, never its text."""
+
+    def __init__(self, code: str):
+        safe_code = code if code in PDF_EVIDENCE_STATUS_CODES else "pdf_evidence_protocol_invalid"
+        super().__init__(safe_code, code=safe_code, status_code=PDF_EVIDENCE_STATUS_CODES[safe_code])
