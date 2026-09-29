@@ -1,6 +1,6 @@
 # AA 检索与前端实测修复补充
 
-证据截至 2026-09-29 14:25 Asia/Singapore。来源：`01a0e604-d902-7223-8a94-62c0cb96e8b4`，规划共享 OCR 能力提升。
+首轮证据截至 2026-09-29 14:25 Asia/Singapore；末轮边界复查补充截至 14:47。来源：`01a0e604-d902-7223-8a94-62c0cb96e8b4`，规划共享 OCR 能力提升。
 
 这是 [12:09 失败基线](AA_LIVE_VALIDATION_20260929_CN.md) 的后续，不覆盖旧结果，不代表 05/06 或真实 OCR 全部验收。继续同一隔离分支和 PR113，不使用 subagent，不合并或部署。
 
@@ -44,7 +44,17 @@
 
 ## 复用与下一步边界
 
-新增依赖仅 `snowballstemmer==3.1.1`，复用 [Snowball 官方实现](https://snowballstem.org/)；[官方许可](https://snowballstem.org/license.html)为 BSD 3-Clause，发行包仍须保留其版权/许可。RRF 复用已有排序结果，[算法参考](https://www.elastic.co/docs/reference/elasticsearch/rest-apis/reciprocal-rank-fusion)，不引入 Elasticsearch、向量数据库或 embedding 服务。
+新增 Python 依赖仅 `snowballstemmer==3.1.1`，复用 [Snowball 官方实现](https://snowballstem.org/)；[官方许可](https://snowballstem.org/license.html)为 BSD 3-Clause，发行包仍须保留其版权/许可。RRF 复用已有排序结果，[算法参考](https://www.elastic.co/docs/reference/elasticsearch/rest-apis/reciprocal-rank-fusion)，不引入 Elasticsearch、向量数据库或 embedding 服务。末轮 PDF 资源修复另增一项前端构建期依赖，见下方。
+
+## 14:47 末轮边界复查
+
+- **普通检索误依赖密钥**：原查询 API 即使不选择模型也会加载/解密所有 BYOK 配置，损坏或不可用的配置可能阻断纯本地搜索。现在只有教师明确选择辅助模型时才加载凭据，加入凭据读取必须为零的回归。
+- **检索中途更换教材**：原持久检索完成后只复查 owner，未比较原选择/版本；补查完整引用范围。批改辅助在首次检索前固定范围，首次读取后及改写后均复查，防止更换教材时混入旧结果，且不为已失效范围继续发起模型调用。并发批改复用及撤销测试仍通过。
+- **压缩 PDF 漏图**：较早的“第 3 页打开”只能证明文字/部分页面显示。退出开发服务时发现 JBIG2 缺少 WASM 和 JS fallback 资源，部分图像解码失败，原结果不应视为全页呈现验收。现按 [PDF.js 官方参数](https://mozilla.github.io/pdf.js/api/draft/module-pdfjsLib.html) 配齐 WASM、CMap、标准字体及 ICC 本地静态资源；启用严格解码错误，失败走明确降级，不继续当作完整页面。原生浏览器降级和“打开原件”链接也保留引用页码。
+- **构建与体积**：复用 [vite-plugin-static-copy](https://github.com/sapphi-red/vite-plugin-static-copy) `4.1.1`（MIT，精确锁定 devDependency），复制现有 `pdfjs-dist` 的 200 项资源及随包许可证。新增静态目录约 4.3 MiB，按需加载而不是全部塞入首屏 JS，不使用外部 CDN。安装时未执行脚本，npm audit 当时为 0 vulnerabilities；这不是无漏洞担保。
+- **最终回归**：后端查询 API、规划器、批改辅助和版本检索合计 34 passed / 16.08 秒；前端 PDF/查询/引用三个文件 11 passed / 1.05 秒；最终 TypeScript 与生产 build 通过。之前后端 19、前端 24 及更大分组是重叠过程证据，不累加为独立覆盖。新增 PDF 错误注入测试最初提前构造 rejected Promise 产生一次未处理拒绝，已改为调用时注入并重测无该错误。
+- **真实页面复查**：生产 preview 中 AA 源页 3、4、5 正常加载，手机端截图可见源页图形，新标签的 warn/error 记录为空；390 视口下文档宽 375，三个 canvas 显示尺寸各 278×365，无全页横向溢出。仅作截图/布局/控制台核查，未声称做过 canvas 像素级比对。最后页码降级改动由新增单元测试和生产构建覆盖，实际源图复查针对同一资源修复。
+- **更小候选集**：另外把已保存的同一 9 问计划限制到前 3，所有有预期源页的样本仍覆盖目标页，无效题号仍为空；本轮零新增模型调用。它仍是小样本目标页召回，不是段落支持度或泛化准确率证明。
 
 指定 Gemini 的官方接口仍拒绝当前地区；没有修改全局代理、绕限制或暗换模型。已询问是否允许保留 Gemini、用现有智谱密钥另建官方视觉配置测试。候选 [GLM-4.6V-Flash 官方文档](https://docs.bigmodel.cn/cn/guide/models/free/glm-4.6v-flash)标注免费版本及图像输入；这不等于本账号实际可用、无限额度或精度合格，未未经回复实际添加或调用视觉配置。
 

@@ -13,6 +13,10 @@ GlobalWorkerOptions.workerSrc = pdfWorkerUrl;
 
 const PAGE_WINDOW = 3;
 
+function validPage(value: number) {
+  return Number.isFinite(value) ? Math.max(1, Math.floor(value)) : 1;
+}
+
 export function PdfDocumentPreview({
   url,
   title,
@@ -36,13 +40,20 @@ export function PdfDocumentPreview({
   const [document, setDocument] = useState<PDFDocumentProxy | null>(null);
   const [error, setError] = useState(false);
   const [canvasFailed, setCanvasFailed] = useState(false);
-  const [pageStart, setPageStart] = useState(initialPage);
+  const [pageStart, setPageStart] = useState(() => validPage(initialPage));
   const onRenderError = useCallback(() => setCanvasFailed(true), []);
-  useEffect(() => { setPageStart(Math.max(1, Math.floor(initialPage))); }, [initialPage, url]);
+  useEffect(() => { setPageStart(validPage(initialPage)); }, [initialPage, url]);
+  const sourcePage = document ? Math.min(document.numPages, validPage(pageStart)) : validPage(initialPage);
+  const sourceUrl = `${url.split("#")[0]}#page=${sourcePage}`;
 
   useEffect(() => {
     let cancelled = false;
-    const loadingTask = getDocument({ url });
+    const assets = new URL(`${import.meta.env.BASE_URL}pdfjs/`, window.location.href).href;
+    const loadingTask = getDocument({
+      url, wasmUrl: `${assets}wasm/`, cMapUrl: `${assets}cmaps/`, cMapPacked: true,
+      standardFontDataUrl: `${assets}standard_fonts/`, iccUrl: `${assets}iccs/`,
+      stopAtErrors: true,
+    });
     setDocument(null);
     setError(false);
     setCanvasFailed(false);
@@ -69,7 +80,7 @@ export function PdfDocumentPreview({
             <RefreshCw aria-hidden="true" className="h-3.5 w-3.5" />
             {retryLabel}
           </Button>
-          <a href={url} target="_blank" rel="noreferrer" className="inline-flex h-8 items-center rounded-md border px-3 text-xs font-semibold text-primary hover:bg-muted">
+          <a href={sourceUrl} target="_blank" rel="noreferrer" className="inline-flex h-8 items-center rounded-md border px-3 text-xs font-semibold text-primary hover:bg-muted">
             {openLabel}
           </a>
         </div>
@@ -96,13 +107,13 @@ export function PdfDocumentPreview({
               <RefreshCw aria-hidden="true" className="h-3.5 w-3.5" />
               {retryLabel}
             </Button>
-            <a href={url} target="_blank" rel="noreferrer" className="inline-flex h-7 items-center rounded-md border px-2.5 text-xs font-semibold text-primary hover:bg-muted">
+            <a href={sourceUrl} target="_blank" rel="noreferrer" className="inline-flex h-7 items-center rounded-md border px-2.5 text-xs font-semibold text-primary hover:bg-muted">
               {openLabel}
             </a>
           </div>
         </div>
-        <object data={url} type="application/pdf" title={title} className="min-h-0 flex-1 bg-white">
-          <a href={url} target="_blank" rel="noreferrer" className="p-4 text-sm font-semibold text-primary">{openLabel}</a>
+        <object data={sourceUrl} type="application/pdf" title={title} className="min-h-0 flex-1 bg-white">
+          <a href={sourceUrl} target="_blank" rel="noreferrer" className="p-4 text-sm font-semibold text-primary">{openLabel}</a>
         </object>
       </div>
     );

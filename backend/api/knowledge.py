@@ -1,8 +1,8 @@
 """Personal knowledge API — document upload/list/download/delete + assignment-
 scoped selection.
 
-The legacy task-scoped selection route is gone: a teacher selects up to three
-ready personal documents per *assignment* they own, and the retriever reads
+The legacy task-scoped selection route is gone: a teacher selects a bounded set
+of readable personal documents per *assignment* they own, and the retriever reads
 that selection via the assignment scope. Document CRUD stays owner-scoped.
 """
 from __future__ import annotations
@@ -13,6 +13,7 @@ from typing import Literal
 from fastapi import APIRouter, Depends, File, Form, Query, HTTPException, UploadFile, status
 from fastapi.responses import Response
 from pydantic import BaseModel, Field
+from starlette.concurrency import run_in_threadpool
 
 from backend.api.errors import domain_error_response
 from backend.auth import get_current_user, require_teacher
@@ -27,7 +28,7 @@ from backend.domain.errors import DomainError, NotFound
 from backend.knowledge.service import document_file, ingest_document, remove_document
 from backend.models import User
 from backend.storage import get_storage
-from backend.llm.registry import ExpertRegistry, get_scoped_expert_registry
+from backend.llm.registry import get_scoped_expert_registry
 
 router = APIRouter(prefix="/knowledge", tags=["knowledge"])
 # Assignment-scoped knowledge selection (replaces the legacy task_router).
@@ -58,8 +59,7 @@ def knowledge_activity(q: str = Query(default="", max_length=128),
 
 
 @router.post("/search")
-async def search_knowledge(request: KnowledgeSearchRequest, current: User = Depends(get_current_user),
-                           registry: ExpertRegistry = Depends(get_scoped_expert_registry)):
+async def search_knowledge(request: KnowledgeSearchRequest, current: User = Depends(get_current_user)):
     from dataclasses import asdict
     from backend.knowledge.retriever import PersistentKnowledgeRetriever, _reference
     from backend.db.knowledge_ingestion_repository import live_document
@@ -75,6 +75,7 @@ async def search_knowledge(request: KnowledgeSearchRequest, current: User = Depe
             owner_id=current.id, documents=documents, refs=refs)
         plan = QueryPlan()
         if request.query_provider_id:
+            registry = await run_in_threadpool(get_scoped_expert_registry, current)
             provider = registry.get(request.query_provider_id)
             if registry.uses_shared_pool() or provider is None or not provider.config.enabled:
                 raise HTTPException(status.HTTP_404_NOT_FOUND, detail={"code":"knowledge_query_provider_unavailable"})
@@ -87,7 +88,6 @@ async def search_knowledge(request: KnowledgeSearchRequest, current: User = Depe
                 chunks = fuse_results(groups, request.limit)
                 # Recheck after model work, including all cached original results.
                 from backend.knowledge.retriever import live_references
-                from starlette.concurrency import run_in_threadpool
                 visible = await run_in_threadpool(live_references, current.id, refs)
                 chunks = [c for c in chunks if c.citation.get("document_id") in visible]
         return dict(matches=[asdict(chunk) for chunk in chunks], documents=[doc.public() for doc in documents],

@@ -4,7 +4,6 @@ from types import SimpleNamespace
 from backend.auth import create_token
 from backend.db.knowledge_storage_repository import request_document_cleanup
 from backend.knowledge.query_plan import QueryPlan
-from backend.llm.registry import get_scoped_expert_registry
 from backend.main import app
 from backend.tests.test_knowledge_ingestion import owner
 from backend.tests.test_knowledge_retrieval_versions import document
@@ -30,7 +29,7 @@ def test_query_expansion_is_explicit_owner_scoped_and_revocable(monkeypatch):
         calls.append((query, kwargs["scope"]))
         return QueryPlan(queries=("finite group even order",), status="rewritten", provider_calls=1)
     monkeypatch.setattr(QUERY_PLANNER, "plan", plan)
-    app.dependency_overrides[get_scoped_expert_registry] = lambda: Registry()
+    monkeypatch.setattr("backend.api.knowledge.get_scoped_expert_registry", lambda _: Registry())
     try:
         payload = dict(query="偶数阶有限群", document_ids=[doc.id])
         assert client.post("/knowledge/search", headers=headers, json=payload).json()["provider_calls"] == 0
@@ -51,4 +50,19 @@ def test_query_expansion_is_explicit_owner_scoped_and_revocable(monkeypatch):
         response = client.post("/knowledge/search", headers=headers, json={**payload, "query":"finite group"})
         assert response.status_code == 200 and response.json()["matches"] == []
     finally:
-        app.dependency_overrides.pop(get_scoped_expert_registry, None)
+        client.close()
+
+
+def test_local_search_does_not_load_saved_provider_credentials(monkeypatch):
+    who = owner()
+    doc = document(who, ["finite group evidence"])
+
+    def unavailable(_):
+        raise AssertionError("Local search must not load credentials")
+
+    monkeypatch.setattr("backend.api.knowledge.get_scoped_expert_registry", unavailable)
+    with TestClient(app) as client:
+        response = client.post("/knowledge/search", headers={"Authorization": "Bearer " + create_token(who, "teacher")},
+                               json={"query": "finite group", "document_ids": [doc.id]})
+    assert response.status_code == 200
+    assert response.json()["matches"] and response.json()["provider_calls"] == 0

@@ -80,3 +80,42 @@ async def test_deselecting_knowledge_during_rewrite_discards_old_results(monkeyp
             return await super().ainvoke(messages, **kwargs)
 
     assert await knowledge.retrieve_for_grading("finite group", scope=task, provider=RevokingProvider()) == []
+
+
+@pytest.mark.asyncio
+async def test_switching_selection_during_local_retrieval_discards_old_results():
+    who = owner()
+    task = assignment(who)
+    old = document(who, ["finite group original evidence"])
+    new = document(who, ["finite group replacement evidence"])
+    set_task_documents(assignment_id=task, owner_id=who, document_ids=[old.id])
+
+    class ChangingRetriever(PersistentKnowledgeRetriever):
+        async def retrieve_documents(self, *args, **kwargs):
+            result = await super().retrieve_documents(*args, **kwargs)
+            assert result
+            set_task_documents(assignment_id=task, owner_id=who, document_ids=[new.id])
+            return result
+
+    assert await ChangingRetriever().retrieve("finite group", scope=task) == []
+
+
+@pytest.mark.asyncio
+async def test_switching_selection_before_rewrite_does_not_charge_or_mix_results(monkeypatch):
+    who = owner()
+    task = assignment(who)
+    old = document(who, ["finite group original evidence"])
+    new = document(who, ["finite group replacement evidence"])
+    set_task_documents(assignment_id=task, owner_id=who, document_ids=[old.id])
+    retriever = PersistentKnowledgeRetriever()
+
+    async def change_after_read(*args, **kwargs):
+        result = await retriever.retrieve(*args, **kwargs)
+        assert result
+        set_task_documents(assignment_id=task, owner_id=who, document_ids=[new.id])
+        return result
+
+    monkeypatch.setattr(knowledge, "retrieve", change_after_read)
+    provider = Provider()
+    assert await knowledge.retrieve_for_grading("finite group", scope=task, provider=provider) == []
+    assert not provider.calls
