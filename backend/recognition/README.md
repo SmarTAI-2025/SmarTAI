@@ -1,4 +1,4 @@
-# Recognition Foundation (Work Items A-C2a)
+# Recognition Foundation (Work Items A-C2b)
 
 This package is not wired to an upload endpoint yet. It defines the first
 version of the evidence and planning contracts plus callable existing-engine
@@ -55,7 +55,8 @@ Dependent PRs may stack; none is merged automatically.
 | B | Killable PDF indexing, bounded detail and targeted rendering |
 | C1 | Faithful adapters, native locator and controlled PDF evidence execution |
 | C2a | Killable image preparation and mapped PDF contact sheets |
-| C2b | Bounded scan localization, shared budgets and unified input orchestration |
+| C2b | Shared execution budgets, dispatch and image-source reader |
+| C2c | Bounded scan localization and unified Agent orchestration |
 | D | Evidence merge, purpose checks, one bounded repair and durable caching |
 | E | Problem extraction and compatibility routes |
 | F | Teacher reference/rubric/test materials and confirmation gates |
@@ -132,8 +133,8 @@ question; cross-page duplicate identities are not resolved by taking the first.
 Unlocated means absent from the supplied evidence only, not from a whole book.
 The locator never inherits a section or continuation from mere page adjacency.
 
-C2b still must supply bounded scan localization and unified image execution; D
-still must supply fusion, the shared one-extra-call budget and durable caching.
+C2c still must supply bounded scan localization and unified Agent execution; D
+still must supply fusion, actual bounded extra calls and durable caching.
 No foundational result establishes end-user OCR quality or full 05/06 completion.
 
 ## C2a Media Boundary
@@ -153,3 +154,42 @@ candidate location, not automatically verified geometry or complete coverage.
 Input/output limits protect each local operation, not whole-book quotas. Files
 are prepared from already-authorized bytes with no credential, cache or storage
 lookup. There are still no changes to existing upload routes in C2a.
+
+## C2b Shared Execution Boundary
+
+`budget.RecognitionBudget` belongs to one source, policy and frozen engine route.
+The future Agent must create it before localization and pass the same instance
+to every reader and repair stage. A reader creates a budget only for standalone
+use; this default is not permission to reset it between workflow stages. Total,
+locator (360 seconds) and read (600 seconds) deadlines include local work and
+capacity waits. Phase entry is idempotent and never extends the global deadline.
+Locator calls have a separate cap of 12; detail calls retain the 12 initial / 18
+total limits. Recovery and repair share one extra dispatch per initial region.
+These are bounded batch limits, not book quotas or promised response times.
+
+Dispatch reserves first. Cancelled or ambiguous submissions retain their calls,
+regions and unknown usage. A completed failure is not eligible for empty-output
+recovery. The same region cannot silently be submitted as another initial call,
+including across batches sharing the ledger. Capacity remains process-local and
+must be application-scoped; persistent submit-once ownership is still required.
+
+Bounded LLM output requests consume the shared output allowance. Known usage
+replaces the reservation; unknown usage conservatively retains it. A reported
+overrun is retained and blocks further calls. Unbounded OCR adapters retain
+call/time/region limits but do **not** pretend to enforce token allowances:
+`charged_output_tokens=None` and `reserved_output_tokens=0` mean no enforceable
+token accounting, not free usage. Unknown usage stays `None` and known usage is
+reported separately. This is execution accounting, never a provider invoice.
+
+`runtime.run_initial_read()` is the one frozen-route initial dispatch boundary
+used by PDF and image readers. `image_executor.read_image_plan()` uses C2a's
+killable preparation, no invented native text or verified blankness, and pixel
+geometry rather than fictional PDF points. Units retain both requested regions
+and actual outward-rounded pixel crops; payloads remain ephemeral. Plans freeze
+`source_kind`, so dual-input OCR engines select image mode for image files while
+preserving their document batching capability for PDFs.
+
+Per-batch `usage` covers only that reader's units. `budget.snapshot()` covers the
+entire workflow, including preceding localization and pending submissions; these
+two views must not be added together. No new storage, endpoint, engine, hidden
+companion, fallback, retry or real-model accuracy claim is introduced in C2b.

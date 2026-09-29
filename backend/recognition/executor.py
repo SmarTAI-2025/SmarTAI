@@ -6,8 +6,6 @@ Page coverage here means evidence read, not a claim of correct transcription.
 """
 from __future__ import annotations
 
-import asyncio
-from contextlib import asynccontextmanager
 import hashlib
 import time
 from typing import Literal, TYPE_CHECKING
@@ -15,13 +13,16 @@ from typing import Literal, TYPE_CHECKING
 from pydantic import Field, ValidationError, model_validator
 
 from backend.domain.errors import PdfEvidenceError, RecognitionError
+from backend.recognition.budget import RecognitionBudget
 from backend.recognition.engine import EngineReadInputV1, RecognitionEngine
 from backend.recognition.models import (
     Code, EvidenceModel, NormalizedRegionV1, RecognitionCandidateV1,
     RecognitionSourceRefV1, RecognitionUsageV1,
 )
-from backend.recognition.planner import RecognitionPlanV1
+from backend.recognition.planner import PageObservationV1, RecognitionPlanV1
+from backend.recognition.runtime import RecognitionCapacity, region_budget_key, run_initial_read
 from backend.tools.pdf_evidence import (
+    ImagePreparedMetadata,
     PdfDetailPage, PdfDetailResult, PdfExportResult, PdfPagesRequest,
     PdfRenderRequest, PdfRenderResult, decode_pdf_payload, read_pdf_evidence,
 )
@@ -30,34 +31,29 @@ if TYPE_CHECKING:
     from backend.progress.tracker import ProgressReporter
 
 
-class RecognitionCapacity:
-    """Process-local limits, shared across purposes; not a distributed quota."""
+class ImageDetailPageV1(EvidenceModel):
+    """An image is one pixel-space page, never a fabricated physical PDF page."""
 
-    def __init__(self, *, global_limit: int = 2, owner_limit: int = 2):
-        if type(global_limit) is not int or not 1 <= global_limit <= 64 or type(owner_limit) is not int or not 1 <= owner_limit <= 2:
-            raise RecognitionError("recognition_request_invalid")
-        self._global = asyncio.Semaphore(global_limit)
-        self._owner_limit = owner_limit
-        self._owners: dict[str, tuple[asyncio.Semaphore, int]] = {}
-        self._loop = None
+    page_number: Literal[1] = 1
+    page_index: Literal[0] = 0
+    geometry_unit: Literal["pixels"] = "pixels"
+    native_text: Literal[""] = ""
+    preparation: ImagePreparedMetadata
+    observation: PageObservationV1 = Field(default_factory=lambda: PageObservationV1(page_number=1))
 
-    @asynccontextmanager
-    async def lease(self, owner_id: str):
-        loop = asyncio.get_running_loop()
-        if self._loop is not None and self._loop is not loop:
-            raise RecognitionError("recognition_request_invalid")
-        self._loop = loop
-        semaphore, users = self._owners.get(owner_id, (asyncio.Semaphore(self._owner_limit), 0))
-        self._owners[owner_id] = semaphore, users + 1
-        try:
-            async with semaphore, self._global:
-                yield
-        finally:
-            _, users = self._owners[owner_id]
-            if users == 1:
-                del self._owners[owner_id]
-            else:
-                self._owners[owner_id] = semaphore, users - 1
+    @model_validator(mode="after")
+    def image_has_no_native_or_blank_proof(self):
+        if self.observation != PageObservationV1(page_number=1):
+            raise ValueError("decoded pixels do not prove native text or blankness")
+        return self
+
+    @property
+    def width_pixels(self) -> int:
+        return self.preparation.oriented_width
+
+    @property
+    def height_pixels(self) -> int:
+        return self.preparation.oriented_height
 
 
 class ReadUnitV1(EvidenceModel):
@@ -71,6 +67,7 @@ class ReadUnitV1(EvidenceModel):
     submission_may_exist: bool = False
     # Multiple submitted pages do not provide output-to-page correspondence.
     output_mapping: Literal["single_region", "document_only"]
+    image_preparation: ImagePreparedMetadata | None = None
 
     @model_validator(mode="after")
     def valid_mapping(self):
@@ -80,6 +77,11 @@ class ReadUnitV1(EvidenceModel):
             raise ValueError("multi-page candidates cannot claim page alignment")
         if self.input_mode == "document" and self.region != NormalizedRegionV1():
             raise ValueError("document units require the full page")
+        if self.image_preparation is not None and (
+            self.input_mode != "page_image" or self.page_numbers != [1]
+            or self.region.as_tuple() != self.image_preparation.region
+        ):
+            raise ValueError("image input must preserve its planned source region")
         return self
 
 
@@ -94,7 +96,7 @@ class RecognitionReadBatchV1(EvidenceModel):
     schema_version: Literal[1] = 1
     source: RecognitionSourceRefV1
     plan: RecognitionPlanV1
-    pages: list[PdfDetailPage] = Field(default_factory=list, max_length=24)
+    pages: list[PdfDetailPage | ImageDetailPageV1] = Field(default_factory=list, max_length=24)
     units: list[ReadUnitV1] = Field(default_factory=list, max_length=24)
     native_only_pages: list[int] = Field(default_factory=list, max_length=24)
     failed_pages: list[int] = Field(default_factory=list, max_length=10000)
@@ -113,6 +115,28 @@ class RecognitionReadBatchV1(EvidenceModel):
     @model_validator(mode="after")
     def valid_scope(self):
         requested = set(self.plan.requested_pages)
+        if self.plan.source_kind != ("pdf" if self.source.content_type == "application/pdf" else "image"):
+            raise ValueError("plan kind must match source evidence")
+        if self.source.content_type == "application/pdf":
+            if any(not isinstance(page, PdfDetailPage) for page in self.pages) or any(unit.image_preparation is not None for unit in self.units):
+                raise ValueError("PDF evidence cannot contain image-source geometry")
+        else:
+            if self.source.content_type not in {"image/png", "image/jpeg", "image/webp"} or self.plan.total_pages != 1 or requested != {1}:
+                raise ValueError("image sources require one explicitly requested page")
+            if any(not isinstance(page, ImageDetailPageV1) for page in self.pages) or self.native_only_pages:
+                raise ValueError("images cannot invent native PDF evidence")
+            preparations = [page.preparation for page in self.pages]
+            for unit in self.units:
+                if unit.image_preparation is None:
+                    raise ValueError("image call units require preparation provenance")
+                preparations.append(unit.image_preparation)
+            for metadata in preparations:
+                if metadata.source_sha256 != self.source.input_sha256 or metadata.source_content_type != self.source.content_type:
+                    raise ValueError("image preparation belongs to a different source")
+                if preparations and any(getattr(metadata, name) != getattr(preparations[0], name) for name in (
+                    "source_width", "source_height", "source_mode", "exif_orientation", "oriented_width", "oriented_height",
+                )):
+                    raise ValueError("image preparations disagree about source geometry")
         numbers = [page.page_number for page in self.pages]
         if numbers != sorted(set(numbers)) or not set(numbers).issubset(requested):
             raise ValueError("detail outside plan")
@@ -165,6 +189,7 @@ async def read_pdf_plan(
     engine: RecognitionEngine | None,
     capacity: RecognitionCapacity,
     progress: ProgressReporter | None = None,
+    budget: RecognitionBudget | None = None,
 ) -> RecognitionReadBatchV1:
     """Read a bounded, owner-authorized PDF batch, preserving both evidence paths.
 
@@ -175,25 +200,21 @@ checks here do not replace the caller's storage ACL and operation lease.
     source, plan = _snapshot(source, plan, engine)
     if source.owner_id != authorized_owner_id or source.content_type != "application/pdf" or not isinstance(pdf_bytes, bytes) or hashlib.sha256(pdf_bytes).hexdigest() != source.input_sha256:
         raise RecognitionError("recognition_source_mismatch")
+    if plan.source_kind != "pdf":
+        raise RecognitionError("recognition_plan_changed")
     started = time.monotonic()
-    deadline = started + plan.policy.total_seconds
+    budget = budget or RecognitionBudget(source, plan.policy, plan.engine_capabilities)
+    budget.assert_context(source, plan.policy, plan.engine_capabilities)
     eligible = [page for page in plan.decisions if page.action in {"native", "blank", "visual"}]
     detail_pages: list[PdfDetailPage] = []
     units: list[ReadUnitV1] = []
     native_pages: list[int] = []
     failed: set[int] = set()
     stops: list[str] = []
-    used_output_budget = 0
-
-    def remaining() -> float:
-        seconds = deadline - time.monotonic()
-        if seconds <= 0:
-            raise RecognitionError("recognition_timeout")
-        return seconds
 
     async def pdf_read(request):
         return await read_pdf_evidence(
-            pdf_bytes, request, timeout_seconds=min(10, remaining()), progress=progress,
+            pdf_bytes, request, timeout_seconds=min(10, budget.remaining("read")), progress=progress,
         )
 
     try:
@@ -230,14 +251,12 @@ checks here do not replace the caller's storage ACL and operation lease.
                     calls.extend(([page.page_number], region, page.input_mode) for region in page.regions)
 
         for numbers, region, mode in calls:
-            remaining()
+            budget.remaining("read")
             if len(units) >= min(plan.initial_calls, plan.policy.max_initial_calls, plan.policy.max_calls):
                 raise RecognitionError("recognition_budget_exhausted")
             if engine.capabilities != plan.engine_capabilities:
                 raise RecognitionError("recognition_route_changed")
-            token_limit = min(4096, plan.policy.max_output_tokens - used_output_budget)
-            if token_limit <= 0:
-                raise RecognitionError("recognition_budget_exhausted")
+            token_limit = budget.output_limit(4096)
             if mode == "document":
                 rendered = await pdf_read(PdfPagesRequest(operation="export_pages", pages=numbers))
                 if not isinstance(rendered, PdfExportResult):
@@ -254,54 +273,18 @@ checks here do not replace the caller's storage ACL and operation lease.
             )
             if progress:
                 await progress.set_current_step("recognition_read", message="Reading source evidence")
-            uncertain = False
-            dispatched = False
-            try:
-                # Waiting for capacity counts toward the same frozen total deadline.
-                async with asyncio.timeout(remaining()), capacity.lease(source.owner_id):
-                    if engine.capabilities != plan.engine_capabilities:
-                        raise RecognitionError("recognition_route_changed")
-                    dispatched = True
-                    async with asyncio.timeout(min(plan.policy.per_call_seconds, remaining())):
-                        candidate = await engine.recognize(request)
-                    candidate = RecognitionCandidateV1.model_validate(candidate.model_dump(warnings=False))
-                    if candidate.status == "not_run" or candidate.provider_route_id != plan.route_id or candidate.kind != plan.engine_capabilities.candidate_kind:
-                        raise RecognitionError("recognition_response_invalid", submission_may_exist=True)
-            except TimeoutError:
-                if not dispatched:
-                    raise RecognitionError("recognition_timeout") from None
-                uncertain = True
-                candidate = RecognitionCandidateV1(
-                    kind=plan.engine_capabilities.candidate_kind, status="error",
-                    provider_route_id=plan.route_id, safe_error_code="provider_submit_uncertain",
-                )
-            except RecognitionError as exc:
-                if not dispatched:
-                    raise
-                uncertain = exc.submission_may_exist
-                candidate = RecognitionCandidateV1(
-                    kind=plan.engine_capabilities.candidate_kind, status="error",
-                    provider_route_id=plan.route_id, safe_error_code=exc.code,
-                )
-            except Exception:
-                if not dispatched:
-                    raise RecognitionError("recognition_response_invalid") from None
-                uncertain = True
-                candidate = RecognitionCandidateV1(
-                    kind=plan.engine_capabilities.candidate_kind, status="error",
-                    provider_route_id=plan.route_id, safe_error_code="recognition_response_invalid",
-                )
+            outcome = await run_initial_read(
+                engine, request, source=source, policy=plan.policy, capabilities=plan.engine_capabilities,
+                region_keys=tuple(region_budget_key(number, region) for number in numbers),
+                budget=budget, capacity=capacity, progress=progress,
+            )
+            candidate = outcome.candidate
             units.append(ReadUnitV1(
                 unit_id=f"u{len(units):04d}", page_numbers=numbers, region=region,
                 input_mode=mode, payload_sha256=hashlib.sha256(payload).hexdigest(), payload_bytes=len(payload),
-                candidate=candidate, submission_may_exist=uncertain,
+                candidate=candidate, submission_may_exist=outcome.submission_may_exist,
                 output_mapping="document_only" if len(numbers) > 1 else "single_region",
             ))
-            # Unknown usage reserves the requested bound; OCR has no token meter.
-            if plan.engine_capabilities.bounded_output_tokens:
-                used_output_budget += candidate.output_tokens if candidate.output_tokens is not None else token_limit
-            if progress:
-                await progress.increment_stage_metrics(recognition_initial_calls=1)
             if candidate.status == "error":
                 failed.update(numbers)
                 stops.append(candidate.safe_error_code or "recognition_response_invalid")
@@ -313,6 +296,16 @@ checks here do not replace the caller's storage ACL and operation lease.
     except (RecognitionError, PdfEvidenceError) as exc:
         stops.append(exc.code)
 
+    return build_read_batch(source=source, plan=plan, pages=detail_pages, units=units,
+                            native_pages=native_pages, failed=failed, stops=stops, started=started)
+
+
+def build_read_batch(
+    *, source: RecognitionSourceRefV1, plan: RecognitionPlanV1,
+    pages: list[PdfDetailPage | ImageDetailPageV1], units: list[ReadUnitV1],
+    native_pages: list[int], failed: set[int], stops: list[str], started: float,
+) -> RecognitionReadBatchV1:
+    """Account for every planned region, including partially read source pages."""
     seen = set(native_pages)
     for unit in units:
         seen.update(unit.page_numbers)
@@ -325,7 +318,7 @@ checks here do not replace the caller's storage ACL and operation lease.
     input_known = all(candidate.input_tokens is not None for candidate in candidates)
     output_known = all(candidate.output_tokens is not None for candidate in candidates)
     return RecognitionReadBatchV1(
-        source=source, plan=plan, pages=detail_pages, units=units, native_only_pages=native_pages,
+        source=source, plan=plan, pages=pages, units=units, native_only_pages=native_pages,
         failed_pages=sorted(failed), unprocessed_pages=unprocessed, unprocessed_regions=pending_regions,
         stop_codes=list(dict.fromkeys(stops)),
         usage=RecognitionUsageV1(
