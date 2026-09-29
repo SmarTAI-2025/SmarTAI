@@ -31,6 +31,7 @@ from backend.tools.pdf_evidence import (
 
 if TYPE_CHECKING:
     from backend.progress.tracker import ProgressReporter
+    from backend.services.recognition_local_evidence import RecognitionLocalEvidenceReader
 
 
 class RecognitionReadRequestV1(EvidenceModel):
@@ -208,8 +209,10 @@ def _detail_candidates(index: PdfIndexResult, request: RecognitionReadRequestV1,
 
 class RecognitionAgent:
     def __init__(self, engine: RecognitionEngine | None, *, capacity: RecognitionCapacity,
-                 progress: ProgressReporter | None = None, clock: Callable[[], float] = time.monotonic):
+                 progress: ProgressReporter | None = None, clock: Callable[[], float] = time.monotonic,
+                 local_reader: RecognitionLocalEvidenceReader | None = None):
         self.engine, self.capacity, self.progress, self.clock = engine, capacity, progress, clock
+        self.local_reader = local_reader
 
     async def read(self, request: RecognitionReadRequestV1, source_bytes: bytes, *, authorized_owner_id: str) -> RecognitionWorkflowReadV1:
         raw, _budget = await self._read(request, source_bytes, authorized_owner_id=authorized_owner_id)
@@ -226,6 +229,9 @@ class RecognitionAgent:
             raise RecognitionError("recognition_source_mismatch")
         if source.content_type not in {"application/pdf", "image/png", "image/jpeg", "image/webp"}:
             raise RecognitionError("recognition_input_unsupported")
+        local_reader = self.local_reader
+        if local_reader is not None:
+            local_reader.assert_context(source, authorized_owner_id=authorized_owner_id)
         capabilities = self.engine.capabilities.model_copy(deep=True) if self.engine else None
         policy = request.policy.model_copy(deep=True)
         if request.scope == "targets":
@@ -236,6 +242,10 @@ class RecognitionAgent:
         unresolved = list(request.targets) if request.scope == "targets" else []
 
         async def pdf_read(command, phase="locator"):
+            if local_reader is not None:
+                return (await local_reader.read(
+                    source_bytes, command, timeout_seconds=min(10, budget.remaining(phase)),
+                )).evidence
             return await read_pdf_evidence(source_bytes, command, timeout_seconds=min(10, budget.remaining(phase)), progress=self.progress)
 
         try:
@@ -252,7 +262,8 @@ class RecognitionAgent:
                     observations=[PageObservationV1(page_number=1)],
                 ), engine=capabilities, policy=policy)
                 batch = await read_image_plan(source_bytes, authorized_owner_id=authorized_owner_id, source=source,
-                                             plan=plan, engine=self.engine, capacity=self.capacity, progress=self.progress, budget=budget)
+                                             plan=plan, engine=self.engine, capacity=self.capacity, progress=self.progress, budget=budget,
+                                             local_reader=local_reader)
             else:
                 start = min(request.pages) if request.pages else request.search_start_page
                 index = await pdf_read(PdfIndexRequest(start_page=start, window_pages=request.search_window_pages,
@@ -279,6 +290,7 @@ class RecognitionAgent:
                     if unresolved and capabilities and capabilities.target_location:
                         scanned, scan_stops, locator_halted = await self._scan(
                             request, source_bytes, index, details, native, unresolved, policy, budget, capabilities,
+                            local_reader=local_reader,
                         )
                         calls.extend(scanned)
                         stops.extend(scan_stops)
@@ -317,7 +329,8 @@ class RecognitionAgent:
                         unlocated_targets=unresolved, observations=[known[p] for p in requested if p in known],
                     ), engine=capabilities, policy=policy)
                     batch = await read_pdf_plan(source_bytes, authorized_owner_id=authorized_owner_id, source=source,
-                                               plan=plan, engine=self.engine, capacity=self.capacity, progress=self.progress, budget=budget)
+                                               plan=plan, engine=self.engine, capacity=self.capacity, progress=self.progress, budget=budget,
+                                               local_reader=local_reader)
         except (RecognitionError, PdfEvidenceError) as exc:
             stops.append(exc.code)
         if batch:
@@ -338,6 +351,7 @@ class RecognitionAgent:
         from backend.recognition.fusion import assemble_recognition
         from backend.recognition.recheck import recheck_recognition
 
+        local_reader = self.local_reader
         raw, budget = await self._read(request, source_bytes, authorized_owner_id=authorized_owner_id)
         if self.progress:
             await self.progress.set_current_step("recognition_assess", message="Checking recognition evidence")
@@ -346,10 +360,10 @@ class RecognitionAgent:
             await self.progress.increment_stage_metrics(recognition_assemblies=1)
         return await recheck_recognition(
             result, source_bytes, authorized_owner_id=authorized_owner_id, engine=self.engine,
-            budget=budget, capacity=self.capacity, progress=self.progress,
+            budget=budget, capacity=self.capacity, progress=self.progress, local_reader=local_reader,
         )
 
-    async def _scan(self, request, source_bytes, index, details, native, targets, policy, budget, capabilities):
+    async def _scan(self, request, source_bytes, index, details, native, targets, policy, budget, capabilities, *, local_reader=None):
         calls, stops = [], []
         halted = False
         candidates = [p for item in native.locations if item.target in targets for p in item.candidate_pages]
@@ -370,8 +384,14 @@ class RecognitionAgent:
                 numbers = ordered[offset:offset + width]
                 images, evidence = [], []
                 for part in range(0, len(numbers), 8):
-                    sheet = await read_pdf_evidence(source_bytes, PdfContactSheetRequest(pages=sorted(numbers[part:part + 8])),
-                                                    timeout_seconds=min(10, budget.remaining("locator")), progress=self.progress)
+                    command = PdfContactSheetRequest(pages=sorted(numbers[part:part + 8]))
+                    if local_reader is not None:
+                        sheet = (await local_reader.read(
+                            source_bytes, command, timeout_seconds=min(10, budget.remaining("locator")),
+                        )).evidence
+                    else:
+                        sheet = await read_pdf_evidence(source_bytes, command,
+                                                       timeout_seconds=min(10, budget.remaining("locator")), progress=self.progress)
                     if not isinstance(sheet, PdfContactSheetResult) or sheet.total_pages != index.total_pages:
                         raise RecognitionError("recognition_response_invalid")
                     payload = decode_pdf_payload(sheet)

@@ -25,6 +25,7 @@ from backend.tools.pdf_evidence import (
 if TYPE_CHECKING:
     from backend.progress.tracker import ProgressReporter
     from backend.recognition.fusion import RecognitionAssemblyV1
+    from backend.services.recognition_local_evidence import RecognitionLocalEvidenceReader
 
 
 def _codes(values, limit=32):
@@ -179,22 +180,28 @@ def build_rechecked_document(initial: RecognitionAssemblyV1, execution: RepairEx
     return RecognitionDocumentV1.model_validate(document.model_dump(warnings=False)), None
 
 
-async def _prepare_image(source_bytes, source, target, budget, progress, *, total_pages):
+async def _prepare_image(source_bytes, source, target, budget, progress, *, total_pages, local_reader=None):
     context = target.context
     if source.content_type == "application/pdf":
-        result = await read_pdf_evidence(
-            source_bytes, PdfRenderRequest(page_number=context.page_number, region=context.region.as_tuple(), scale=2),
-            timeout_seconds=min(10, budget.remaining("read")), progress=progress,
-        )
+        command = PdfRenderRequest(page_number=context.page_number, region=context.region.as_tuple(), scale=2)
+        if local_reader is not None:
+            result = (await local_reader.read(source_bytes, command, timeout_seconds=min(10, budget.remaining("read")))).evidence
+        else:
+            result = await read_pdf_evidence(
+                source_bytes, command, timeout_seconds=min(10, budget.remaining("read")), progress=progress,
+            )
         if (not isinstance(result, PdfRenderResult) or result.total_pages != total_pages
                 or result.page_number != context.page_number or result.region != context.region.as_tuple()):
             raise RecognitionError("recognition_response_invalid")
         preparation, metadata, region = "pdf_render_scale_2", None, result.region
     else:
-        result = await read_image_evidence(
-            source_bytes, ImagePrepareRequest(content_type=source.content_type, region=context.region.as_tuple()),
-            timeout_seconds=min(10, budget.remaining("read")), progress=progress,
-        )
+        command = ImagePrepareRequest(content_type=source.content_type, region=context.region.as_tuple())
+        if local_reader is not None:
+            result = (await local_reader.read(source_bytes, command, timeout_seconds=min(10, budget.remaining("read")))).evidence
+        else:
+            result = await read_image_evidence(
+                source_bytes, command, timeout_seconds=min(10, budget.remaining("read")), progress=progress,
+            )
         if not isinstance(result, ImagePreparedResult):
             raise RecognitionError("recognition_response_invalid")
         metadata = ImagePreparedMetadata.model_validate({name: getattr(result, name) for name in ImagePreparedMetadata.model_fields})
@@ -213,6 +220,7 @@ async def recheck_recognition(
     initial: RecognitionAssemblyV1, source_bytes: bytes, *, authorized_owner_id: str,
     engine: RecognitionEngine | None, budget: RecognitionBudget, capacity: RecognitionCapacity,
     progress: ProgressReporter | None = None,
+    local_reader: RecognitionLocalEvidenceReader | None = None,
 ) -> RecognitionAssemblyV1:
     """Use the original live reservation authority, never a reconstituted ledger."""
     from backend.recognition.fusion import RecognitionAssemblyV1
@@ -227,6 +235,8 @@ async def recheck_recognition(
     if (authorized_owner_id != source.owner_id or not isinstance(source_bytes, bytes)
             or hashlib.sha256(source_bytes).hexdigest() != source.input_sha256):
         raise RecognitionError("recognition_source_mismatch")
+    if local_reader is not None:
+        local_reader.assert_context(source, authorized_owner_id=authorized_owner_id)
     budget.assert_context(source, raw.execution_policy, raw.engine_capabilities)
     # Reading consumed these calls on this exact live ledger. A fresh same-context
     # budget is not authority to replay them or to obtain additional credits.
@@ -251,7 +261,8 @@ async def recheck_recognition(
                 if progress:
                     await progress.set_current_step("recognition_recheck", message="Rechecking uncertain source evidence")
                 token_limit = budget.output_limit(2048)
-                payload, image = await _prepare_image(source_bytes, source, target, budget, progress, total_pages=raw.total_pages)
+                payload, image = await _prepare_image(source_bytes, source, target, budget, progress,
+                                                      total_pages=raw.total_pages, local_reader=local_reader)
                 unit = units[target.unit_id]
                 try:
                     _validate_image(raw, target, unit, image)

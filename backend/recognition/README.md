@@ -1,4 +1,4 @@
-# Recognition Foundation (Work Items A-D3b1)
+# Recognition Foundation (Work Items A-D3b2a)
 
 This package is not wired to an upload endpoint yet. It defines the first
 version of the evidence and planning contracts plus callable existing-engine
@@ -62,7 +62,8 @@ Dependent PRs may stack; none is merged automatically.
 | D2b | Agent repair selection, source binding and recorded final assembly |
 | D3a | Versioned evidence codec, cache identities and owner-bound persistence |
 | D3b1 | Authorized cache lookup and bounded local evidence reuse |
-| D3b2 | Model evidence reuse and current versus historical usage accounting |
+| D3b2a | Terminal final reuse receipts and Agent local-cache injection |
+| D3b2b | Versioned per-call reuse provenance and current execution accounting |
 | D3c | Durable pre-submit checkpoint, restart and uncertain-submit recovery |
 | E | Problem extraction and compatibility routes |
 | F | Teacher reference/rubric/test materials and confirmation gates |
@@ -151,8 +152,38 @@ and returned as a fresh copy. Corrupt evidence fails explicitly, not as a miss.
 Cache checks, hashing and local work share a finite deadline. Provider work is
 absent. Artifact I/O runs in threads and may drain after cancellation; assignment
 write intents still enforce deletion/fencing. This callable service is not yet
-injected into the Agent or any upload route. D3b2 must integrate it with model
-reuse and separate historical evidence usage from new dispatch accounting.
+injected into upload routes. D3b2a now injects it into the callable Agent path;
+D3b2b still must implement per-call reuse and current execution accounting.
+
+### D3b2a Terminal Reuse Boundary
+
+The Agent and standalone PDF/image readers and recheck accept an optional,
+source-bound local reader. Index/detail/export/render/contact-sheet/image/recheck
+paths use the same injected reader and remaining phase budget; the default path
+is unchanged. Local reuse does not itself reuse a model response. Business
+upload routes remain unchanged.
+
+`services/recognition_results.py` provides terminal final-artifact lookup and
+recording, not get-or-dispatch. Only a successful, exact request/purpose/route/
+policy/prompt/source hit returns an invocation receipt. It never reruns a model,
+re-enters recheck with a historical assembly, or treats a miss as permission to
+submit. Failures, unknown submissions and low confidence remain stored without
+becoming terminal hits. Source access is rechecked after receipt validation.
+
+`invocation.py` is a separate new contract. Original V1 evidence models, their
+serialized field sets, raw candidate tokens and artifact hashes are untouched.
+A reused final result has zero current dispatch usage and the original usage
+in a separate historical field, including unknown tokens. A newly recorded run
+reports its actual original ledger. Artifact I/O timing is separate from model
+workflow timing. These projections are not invoices, authorization or job leases.
+
+The caller must record only its own fresh run; D3c must enforce that provenance
+through its durable pre-submit/result checkpoint. This API alone does not prove
+single submission, and a record/storage failure is not permission to repeat a
+paid call. There is still no per-locator/read/patch cache hit in this item.
+D3b2b needs a new versioned per-call ledger: adding default fields to V1 payloads
+would change old hashes, and settling historical candidates in a new live budget
+would misattribute their cost. All four cache-layer goals remain required.
 
 Run the focused contracts with the project's Python environment:
 

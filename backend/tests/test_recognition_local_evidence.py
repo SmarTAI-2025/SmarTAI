@@ -41,6 +41,18 @@ def setup(tmp_path, image=False):
     return reader, data, source, binding, original
 
 
+@pytest.mark.parametrize("field,value", [("owner_id", "other"), ("business_id", "other"),
+                                         ("stored_file_id", "other"), ("input_sha256", "f" * 64),
+                                         ("scope", "submission_source"), ("content_type", "image/png")])
+def test_injected_reader_context_requires_exact_source_binding(tmp_path, field, value):
+    reader, _, source, _, _ = setup(tmp_path)
+    reader.assert_context(source, authorized_owner_id=source.owner_id)
+    with pytest.raises(RecognitionError, match="recognition_source_mismatch"):
+        reader.assert_context(source.model_copy(update={field: value}), authorized_owner_id=source.owner_id)
+    with pytest.raises(RecognitionError, match="recognition_source_mismatch"):
+        reader.assert_context(source, authorized_owner_id="other")
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("command", [PdfIndexRequest(), PdfPagesRequest(pages=[1])])
 async def test_native_second_read_in_fresh_reader_reuses_durable_artifact(tmp_path, monkeypatch, command):
