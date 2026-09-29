@@ -340,7 +340,14 @@ def whole_page_render_size(width_points: float, height_points: float, *, scale: 
     return bounds.width, bounds.height
 
 
-def _validate_result(payload: object, request: PdfRequest | ImagePrepareRequest) -> PdfResult | ImagePreparedResult:
+def validate_evidence_result(payload: object, request: PdfRequest | ImagePrepareRequest) -> PdfResult | ImagePreparedResult:
+    """Pair a worker or cached response with the actual bounded request."""
+    try:
+        if not isinstance(request, (PdfIndexRequest, PdfPagesRequest, PdfRenderRequest, PdfContactSheetRequest, ImagePrepareRequest)):
+            raise ValueError
+        request = type(request).model_validate(request.model_dump(warnings=False))
+    except (ValidationError, ValueError, TypeError, AttributeError):
+        raise PdfEvidenceError("pdf_invalid_request") from None
     if not isinstance(payload, dict):
         raise PdfEvidenceError("pdf_evidence_protocol_invalid")
     contract = "smartai.image.evidence" if isinstance(request, ImagePrepareRequest) else "smartai.pdf.evidence"
@@ -510,7 +517,7 @@ async def _read_evidence(
                 payload = json.loads(output.decode("utf-8"))
             except (ValueError, UnicodeDecodeError):
                 raise PdfEvidenceError("pdf_evidence_protocol_invalid") from None
-            result = _validate_result(payload, request)
+            result = validate_evidence_result(payload, request)
             if isinstance(result, ImagePreparedResult) and result.source_sha256 != hashlib.sha256(pdf_bytes).hexdigest():
                 raise PdfEvidenceError("pdf_evidence_protocol_invalid")
             if progress:

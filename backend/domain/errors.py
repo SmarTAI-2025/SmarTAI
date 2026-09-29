@@ -187,6 +187,7 @@ RECOGNITION_ERROR_CODES = frozenset({
     "recognition_response_invalid", "recognition_response_too_large", "recognition_timeout",
     "recognition_artifact_invalid", "recognition_artifact_limit", "recognition_artifact_unavailable",
     "recognition_artifact_scope_unsupported",
+    "recognition_source_unavailable",
     "provider_credentials_required", "provider_vision_not_supported", "provider_auth_failed",
     "provider_permission_denied", "provider_quota_exceeded", "provider_rate_limited",
     "provider_request_failed", "provider_request_rejected", "provider_response_invalid",

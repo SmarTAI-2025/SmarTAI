@@ -887,6 +887,19 @@ def get_file(*, file_id: str, owner_id: str) -> StoredFile | None:
         return _record_to_dto(record)
 
 
+def find_latest_assignment_file(*, owner_id: str, assignment_id: str, kind: str,
+                                original_name_prefix: str) -> StoredFile | None:
+    """Bounded metadata lookup; callers still validate the object and context."""
+    with session_scope() as session:
+        record = session.scalar(select(StoredFileRecord).where(
+            StoredFileRecord.owner_id == owner_id,
+            StoredFileRecord.assignment_id == assignment_id,
+            StoredFileRecord.kind == kind,
+            StoredFileRecord.original_name.startswith(original_name_prefix, autoescape=True),
+        ).order_by(StoredFileRecord.created_at.desc(), StoredFileRecord.id.desc()).limit(1))
+        return None if record is None else _record_to_dto(record)
+
+
 def find_unlinked_source_file(
     *,
     owner_id: str,

@@ -41,6 +41,12 @@ class Writer:
         self.closed = True
 
 
+@pytest.mark.parametrize("command", [None, {}, PdfIndexRequest().model_copy(update={"start_page": 0})])
+def test_public_evidence_validator_revalidates_request_before_matching_result(command):
+    with pytest.raises(PdfEvidenceError, match="pdf_invalid_request"):
+        pdf_evidence.validate_evidence_result(index_payload(), command)
+
+
 class Process:
     def __init__(self, output=None):
         self.returncode = None
