@@ -97,6 +97,7 @@ class LLMResponse:
     duration_ms: float
     input_tokens: Optional[int] = None
     output_tokens: Optional[int] = None
+    finish_reason: Optional[str] = None
 
 
 @dataclass
@@ -120,6 +121,62 @@ class ProviderRequestError(RuntimeError):
         self.code = code
         self.status_code = status_code
         self.retry_after = retry_after
+
+
+def _validate_output_limit(value: int | None) -> None:
+    if value is not None and (type(value) is not int or not 1 <= value <= 32768):
+        raise ProviderRequestError("provider_output_limit_invalid")
+
+
+def _safe_finish_reason(value: Any) -> str | None:
+    # Never preserve arbitrary upstream metadata in recognition evidence.
+    if not isinstance(value, str):
+        return None
+    reason = value.lower()
+    if reason in {"stop", "end_turn", "stop_sequence"}:
+        return "stop"
+    if reason in {"length", "max_tokens", "max_output_tokens"}:
+        return "length"
+    if reason in {"safety", "content_filter", "recitation", "refusal"}:
+        return "refused"
+    return "unknown"
+
+
+def _response_metadata(response: Any) -> dict[str, Any]:
+    usage = getattr(response, "usage_metadata", None) or {}
+    metadata = getattr(response, "response_metadata", None) or {}
+    if not isinstance(usage, dict):
+        usage = {}
+    if not isinstance(metadata, dict):
+        metadata = {}
+    tokens = {
+        name: value if type(value := usage.get(name)) is int and value >= 0 else None
+        for name in ("input_tokens", "output_tokens")
+    }
+    additional = getattr(response, "additional_kwargs", None)
+    refused = isinstance(additional, dict) and bool(additional.get("refusal"))
+    return {**tokens, "finish_reason": "refused" if refused else _safe_finish_reason(
+        metadata.get("finish_reason", metadata.get("stop_reason"))
+    )}
+
+
+def _response_text(content: Any) -> str:
+    """Read visible SDK text blocks, excluding non-visible reasoning metadata."""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts = []
+        for block in content:
+            if isinstance(block, str):
+                parts.append(block)
+            elif isinstance(block, dict) and block.get("type") == "text" and isinstance(block.get("text"), str):
+                parts.append(block["text"])
+            elif isinstance(block, dict) and block.get("type") in {"thinking", "redacted_thinking", "reasoning"}:
+                continue
+            else:
+                raise ProviderRequestError("provider_response_invalid")
+        return "".join(parts)
+    raise ProviderRequestError("provider_response_invalid")
 
 
 def _image_data_url(image: VisionImage) -> str:
@@ -399,8 +456,13 @@ class BaseProvider(ABC):
                         self._client = self._build_client_sync()
         return self._client
 
-    async def ainvoke(self, messages: List[BaseMessage]) -> LLMResponse:
+    def _generation_kwargs(self, max_output_tokens: int | None) -> dict[str, Any]:
+        _validate_output_limit(max_output_tokens)
+        return {} if max_output_tokens is None else {"max_tokens": max_output_tokens}
+
+    async def ainvoke(self, messages: List[BaseMessage], *, max_output_tokens: int | None = None) -> LLMResponse:
         """Invoke the LLM. Default: native async. Gemini overrides this."""
+        generation_kwargs = self._generation_kwargs(max_output_tokens)
         self._ensure_async_primitives()
         # Breaker before RPM limiter: a call frozen by the cooldown must not
         # burn this key's per-minute window while doing nothing.
@@ -410,12 +472,13 @@ class BaseProvider(ABC):
             t0 = time.perf_counter()
             client = await self._get_client()
             try:
-                response = await client.ainvoke(messages)
+                response = await client.ainvoke(messages, **generation_kwargs)
                 self._endpoint_breaker().record_success()
-                content = response.content if hasattr(response, "content") else str(response)
+                content = _response_text(response.content if hasattr(response, "content") else response)
                 duration_ms = (time.perf_counter() - t0) * 1000
                 logger.info(f"LLM call OK on {self.provider_id} in {duration_ms:.0f}ms ({len(content)} chars)")
-                return LLMResponse(content=content, provider=self.provider_id, model=self.model, duration_ms=duration_ms)
+                return LLMResponse(content=content, provider=self.provider_id, model=self.model,
+                                   duration_ms=duration_ms, **_response_metadata(response))
             except Exception as e:
                 if _is_overload_failure(e):
                     self._endpoint_breaker().record_failure()
@@ -428,13 +491,15 @@ class BaseProvider(ABC):
                 )
                 raise
 
-    async def ainvoke_vision(self, prompt: str, images: List[VisionImage]) -> LLMResponse:
+    async def ainvoke_vision(self, prompt: str, images: List[VisionImage], *, max_output_tokens: int | None = None) -> LLMResponse:
         """Invoke a vision-capable model with text prompt plus one or more images."""
         if not self.supports_vision:
             raise NotImplementedError(f"{self.provider_id} does not support vision input.")
         if not images:
             raise ValueError("ainvoke_vision requires at least one image.")
-        return await self.ainvoke(_build_vision_messages(prompt, images))
+        _validate_output_limit(max_output_tokens)
+        options = {} if max_output_tokens is None else {"max_output_tokens": max_output_tokens}
+        return await self.ainvoke(_build_vision_messages(prompt, images), **options)
 
 
 # ─── Gemini ───────────────────────────────────────────────────────────────────
@@ -463,10 +528,17 @@ class GeminiProvider(BaseProvider):
     def _needs_proxy_mode(self) -> bool:
         return _configured_proxy_url() is not None
 
-    async def ainvoke(self, messages: List[BaseMessage]) -> LLMResponse:
+    def _generation_kwargs(self, max_output_tokens: int | None) -> dict[str, Any]:
+        _validate_output_limit(max_output_tokens)
+        return {} if max_output_tokens is None else {
+            "generation_config": {"max_output_tokens": max_output_tokens}
+        }
+
+    async def ainvoke(self, messages: List[BaseMessage], *, max_output_tokens: int | None = None) -> LLMResponse:
+        generation_kwargs = self._generation_kwargs(max_output_tokens)
         if not self._needs_proxy_mode:
             # Cloud mode: native async, shared client
-            return await super().ainvoke(messages)
+            return await super().ainvoke(messages, max_output_tokens=max_output_tokens)
 
         # Local proxy mode: sync invoke in threadpool, fresh client per call
         self._ensure_async_primitives()
@@ -480,14 +552,30 @@ class GeminiProvider(BaseProvider):
                 def _sync_call():
                     # Each thread gets its own client → no lock contention → true parallel
                     local_client = self._build_client_sync()
-                    return local_client.invoke(messages)
+                    return local_client.invoke(messages, **generation_kwargs)
 
-                response = await run_in_threadpool(_sync_call)
+                # Cancellation cannot stop a running sync SDK thread. Keep its
+                # capacity leases until it drains; never start replacement work.
+                call = asyncio.create_task(run_in_threadpool(_sync_call))
+                try:
+                    response = await asyncio.shield(call)
+                except asyncio.CancelledError:
+                    while not call.done():
+                        try:
+                            await asyncio.shield(call)
+                        except asyncio.CancelledError:
+                            continue
+                        except Exception:
+                            break
+                    if not call.cancelled():
+                        call.exception()
+                    raise
                 self._endpoint_breaker().record_success()
-                content = response.content if hasattr(response, "content") else str(response)
+                content = _response_text(response.content if hasattr(response, "content") else response)
                 duration_ms = (time.perf_counter() - t0) * 1000
                 logger.info(f"LLM call OK on {self.provider_id} in {duration_ms:.0f}ms ({len(content)} chars)")
-                return LLMResponse(content=content, provider=self.provider_id, model=self.model, duration_ms=duration_ms)
+                return LLMResponse(content=content, provider=self.provider_id, model=self.model,
+                                   duration_ms=duration_ms, **_response_metadata(response))
             except Exception as e:
                 if _is_overload_failure(e):
                     self._endpoint_breaker().record_failure()
@@ -853,7 +941,9 @@ class SafeRelayProvider(BaseProvider):
     def _request_parts(
         self,
         messages: List[BaseMessage],
+        *, max_output_tokens: int | None = None,
     ) -> tuple[dict[str, str], dict[str, Any]]:
+        _validate_output_limit(max_output_tokens)
         headers = {"content-type": "application/json"}
         if self.wire_protocol == "openai_chat_completions":
             headers["authorization"] = f"Bearer {self.config.api_key}"
@@ -867,11 +957,19 @@ class SafeRelayProvider(BaseProvider):
         else:
             headers["x-goog-api-key"] = self.config.api_key
             payload = _gemini_payload(messages, self.model)
+        if max_output_tokens is not None:
+            if self.wire_protocol == "gemini_generate_content":
+                payload["generationConfig"]["maxOutputTokens"] = max_output_tokens
+            else:
+                payload["max_tokens"] = max_output_tokens
         return headers, payload
 
     def _parse_response(self, payload: Any, duration_ms: float) -> LLMResponse:
         try:
             if self.wire_protocol == "openai_chat_completions":
+                finish_reason = payload["choices"][0].get("finish_reason")
+                if payload["choices"][0]["message"].get("refusal"):
+                    finish_reason = "refusal"
                 content = payload["choices"][0]["message"]["content"]
                 if isinstance(content, list):
                     content = "".join(
@@ -883,6 +981,7 @@ class SafeRelayProvider(BaseProvider):
                 input_tokens = usage.get("prompt_tokens")
                 output_tokens = usage.get("completion_tokens")
             elif self.wire_protocol == "anthropic_messages":
+                finish_reason = payload.get("stop_reason")
                 content = "".join(
                     str(item.get("text", ""))
                     for item in payload["content"]
@@ -892,6 +991,7 @@ class SafeRelayProvider(BaseProvider):
                 input_tokens = usage.get("input_tokens")
                 output_tokens = usage.get("output_tokens")
             else:
+                finish_reason = payload["candidates"][0].get("finishReason")
                 parts = payload["candidates"][0]["content"]["parts"]
                 content = "".join(
                     str(item.get("text", ""))
@@ -910,14 +1010,15 @@ class SafeRelayProvider(BaseProvider):
             provider=self.provider_id,
             model=self.model,
             duration_ms=duration_ms,
-            input_tokens=input_tokens if isinstance(input_tokens, int) else None,
-            output_tokens=output_tokens if isinstance(output_tokens, int) else None,
+            input_tokens=input_tokens if type(input_tokens) is int and input_tokens >= 0 else None,
+            output_tokens=output_tokens if type(output_tokens) is int and output_tokens >= 0 else None,
+            finish_reason=_safe_finish_reason(finish_reason),
         )
 
-    async def _relay_call(self, messages: List[BaseMessage]) -> LLMResponse:
+    async def _relay_call(self, messages: List[BaseMessage], *, max_output_tokens: int | None = None) -> LLMResponse:
         started = time.perf_counter()
         client = await self._relay_client()
-        headers, payload = self._request_parts(messages)
+        headers, payload = self._request_parts(messages, max_output_tokens=max_output_tokens)
         try:
             response = await client.post(
                 self._target_url,
@@ -946,13 +1047,15 @@ class SafeRelayProvider(BaseProvider):
         duration_ms = (time.perf_counter() - started) * 1000
         return self._parse_response(response_payload, duration_ms)
 
-    async def ainvoke(self, messages: List[BaseMessage]) -> LLMResponse:
+    async def ainvoke(self, messages: List[BaseMessage], *, max_output_tokens: int | None = None) -> LLMResponse:
+        _validate_output_limit(max_output_tokens)
         self._ensure_async_primitives()
         await self._endpoint_breaker().before_call()
         await self._rpm_limiter.acquire()
         async with self._endpoint_semaphore(), self._semaphore:
             try:
-                return await self._relay_call(messages)
+                options = {} if max_output_tokens is None else {"max_output_tokens": max_output_tokens}
+                return await self._relay_call(messages, **options)
             except Exception as e:
                 if _is_overload_failure(e):
                     self._endpoint_breaker().record_failure()
@@ -962,10 +1065,13 @@ class SafeRelayProvider(BaseProvider):
         self,
         prompt: str,
         images: List[VisionImage],
+        *, max_output_tokens: int | None = None,
     ) -> LLMResponse:
         if not images:
             raise ValueError("ainvoke_vision requires at least one image.")
-        return await self.ainvoke(_build_vision_messages(prompt, images))
+        _validate_output_limit(max_output_tokens)
+        options = {} if max_output_tokens is None else {"max_output_tokens": max_output_tokens}
+        return await self.ainvoke(_build_vision_messages(prompt, images), **options)
 
 
 # ─── Factory ─────────────────────────────────────────────────────────────────

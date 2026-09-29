@@ -27,6 +27,8 @@ class EngineReadInputV1(EvidenceModel):
     content_type: Literal["application/pdf", "image/png", "image/jpeg", "image/webp"]
     payload: bytes = Field(min_length=1, max_length=10 * 1024 * 1024, repr=False, exclude=True)
     max_output_tokens: int = Field(default=4096, ge=1, le=32768)
+    # Input mapping, not a claim that the returned Markdown has page boundaries.
+    document_pages: list[int] = Field(default_factory=list, max_length=24)
 
     @model_validator(mode="after")
     def input_shape(self):
@@ -34,6 +36,12 @@ class EngineReadInputV1(EvidenceModel):
             raise ValueError("input mode and media type disagree")
         if self.input_mode == "document" and self.region != NormalizedRegionV1():
             raise ValueError("document input must represent a full mapped page")
+        if self.document_pages and (
+            self.input_mode != "document" or self.document_pages != sorted(set(self.document_pages))
+            or self.document_pages[0] != self.page_number
+            or any(type(page) is not int or not 1 <= page <= 10000 for page in self.document_pages)
+        ):
+            raise ValueError("document pages must preserve ordered original page identities")
         return self
 
 

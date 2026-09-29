@@ -170,3 +170,30 @@ class PdfEvidenceError(DomainError):
     def __init__(self, code: str):
         safe_code = code if code in PDF_EVIDENCE_STATUS_CODES else "pdf_evidence_protocol_invalid"
         super().__init__(safe_code, code=safe_code, status_code=PDF_EVIDENCE_STATUS_CODES[safe_code])
+
+
+RECOGNITION_ERROR_CODES = frozenset({
+    "recognition_request_invalid", "recognition_source_mismatch", "recognition_plan_changed",
+    "recognition_route_changed", "recognition_input_unsupported", "recognition_budget_exhausted",
+    "recognition_response_invalid", "recognition_response_too_large", "recognition_timeout",
+    "provider_credentials_required", "provider_vision_not_supported", "provider_auth_failed",
+    "provider_permission_denied", "provider_quota_exceeded", "provider_rate_limited",
+    "provider_request_failed", "provider_request_rejected", "provider_response_invalid",
+    "provider_result_too_large", "provider_result_unavailable", "provider_download_url_rejected",
+    "provider_submit_uncertain", "provider_task_failed", "provider_timeout", "provider_unavailable",
+    "provider_unreachable", "provider_endpoint_tls_failed", "provider_upstream_unavailable",
+    "provider_model_or_endpoint_not_found", "ocr_empty_result", "ocr_file_too_large",
+    "ocr_input_invalid", "ocr_unsupported_file",
+    "provider_model_not_found", "provider_image_payload_invalid", "provider_message_payload_not_supported",
+    "provider_endpoint_dns_failed", "provider_endpoint_redirect_blocked", "provider_endpoint_protocol_mismatch",
+    "provider_endpoint_response_too_large",
+})
+
+
+class RecognitionError(DomainError):
+    """A safe failure; ambiguous submissions are never eligible for auto-reread."""
+
+    def __init__(self, code: str, *, submission_may_exist: bool = False):
+        safe_code = code if code in RECOGNITION_ERROR_CODES else "recognition_response_invalid"
+        self.submission_may_exist = submission_may_exist
+        super().__init__(safe_code, code=safe_code, status_code=422)

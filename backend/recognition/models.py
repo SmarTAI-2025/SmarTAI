@@ -62,6 +62,7 @@ class RecognitionCandidateV1(EvidenceModel):
     duration_ms: float | None = Field(default=None, ge=0)
     input_tokens: int | None = Field(default=None, ge=0)
     output_tokens: int | None = Field(default=None, ge=0)
+    finish_reason: Literal["stop", "length", "refused", "unknown"] | None = None
     warning_codes: list[Code] = Field(default_factory=list, max_length=32)
     safe_error_code: Code | None = None
 
