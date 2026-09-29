@@ -9,7 +9,7 @@ from typing import Literal, TYPE_CHECKING
 
 from backend.domain.errors import RecognitionError
 from backend.recognition.budget import RecognitionBudget
-from backend.recognition.engine import EngineLocateInputV1, EngineReadInputV1, RecognitionEngine, freeze_engine_input
+from backend.recognition.engine import EngineLocateInputV1, EngineReadInputV1, EngineRepairInputV1, RecognitionEngine, freeze_engine_input
 from backend.recognition.models import (
     EvidenceModel, NormalizedRegionV1, RecognitionCandidateV1,
     RecognitionPolicyV1, RecognitionSourceRefV1,
@@ -88,9 +88,28 @@ async def run_locator_call(
                            capacity=capacity, progress=progress)
 
 
+async def run_repair_call(
+    engine: RecognitionEngine, request: EngineRepairInputV1, *, kind: Literal["empty_recovery", "patch"],
+    source: RecognitionSourceRefV1, policy: RecognitionPolicyV1, capabilities: EngineCapabilitiesV1,
+    initial_region_key: str, budget: RecognitionBudget, capacity: RecognitionCapacity,
+    progress: ProgressReporter | None = None,
+) -> RecognitionCallResultV1:
+    """One extra dispatch charged to the original region, never to a new span ID.
+
+    The caller proves the repair's relationship to an initial unit and prepares
+    the authorized image. The live budget enforces its settled outcome and shared
+    extra-call allowance. No snapshot can reconstruct that reservation authority.
+    """
+    if kind not in {"empty_recovery", "patch"}:
+        raise RecognitionError("recognition_request_invalid")
+    return await _dispatch(engine, request, kind=kind, source=source, policy=policy,
+                           capabilities=capabilities, region_keys=(initial_region_key,), budget=budget,
+                           capacity=capacity, progress=progress)
+
+
 async def _dispatch(
-    engine: RecognitionEngine, request: EngineReadInputV1 | EngineLocateInputV1, *,
-    kind: Literal["initial", "locator"], source: RecognitionSourceRefV1, policy: RecognitionPolicyV1,
+    engine: RecognitionEngine, request: EngineReadInputV1 | EngineLocateInputV1 | EngineRepairInputV1, *,
+    kind: Literal["initial", "locator", "empty_recovery", "patch"], source: RecognitionSourceRefV1, policy: RecognitionPolicyV1,
     capabilities: EngineCapabilitiesV1, region_keys: tuple[str, ...], budget: RecognitionBudget,
     capacity: RecognitionCapacity, progress: ProgressReporter | None,
 ) -> RecognitionCallResultV1:
@@ -104,13 +123,20 @@ async def _dispatch(
     request = freeze_engine_input(request)
     if (kind == "locator") != isinstance(request, EngineLocateInputV1):
         raise RecognitionError("recognition_request_invalid")
+    if (kind in {"empty_recovery", "patch"}) != isinstance(request, EngineRepairInputV1):
+        raise RecognitionError("recognition_request_invalid")
     if engine.capabilities != capabilities:
         raise RecognitionError("recognition_route_changed")
     if request.input_mode not in capabilities.visual_inputs:
         raise RecognitionError("recognition_input_unsupported")
     if kind == "locator" and (not capabilities.target_location or len(request.images) > capabilities.max_locator_images):
         raise RecognitionError("recognition_input_unsupported")
-    dispatch = getattr(engine, "locate" if kind == "locator" else "recognize", None)
+    if kind in {"empty_recovery", "patch"} and (
+        not capabilities.response_recheck or not capabilities.semantic_repair or not policy.enable_repair
+    ):
+        raise RecognitionError("recognition_input_unsupported")
+    method = "locate" if kind == "locator" else "repair" if kind in {"empty_recovery", "patch"} else "recognize"
+    dispatch = getattr(engine, method, None)
     if not callable(dispatch):
         raise RecognitionError("recognition_input_unsupported")
     phase = "locator" if kind == "locator" else "read"
@@ -128,6 +154,10 @@ async def _dispatch(
                 raise RecognitionError("recognition_route_changed", submission_may_exist=True)
             if candidate.status == "not_run" or candidate.provider_route_id != capabilities.route_id or candidate.kind != capabilities.candidate_kind:
                 raise RecognitionError("recognition_response_invalid", submission_may_exist=True)
+            if candidate.status != "error" and candidate.safe_error_code is not None:
+                raise RecognitionError("recognition_response_invalid", submission_may_exist=True)
+            if candidate.safe_error_code == "provider_submit_uncertain":
+                uncertain = True
     except TimeoutError:
         if ticket is None:
             raise RecognitionError("recognition_timeout") from None
@@ -139,7 +169,7 @@ async def _dispatch(
     except RecognitionError as exc:
         if ticket is None:
             raise
-        uncertain = exc.submission_may_exist
+        uncertain = exc.submission_may_exist or exc.code == "provider_submit_uncertain"
         candidate = RecognitionCandidateV1(
             kind=capabilities.candidate_kind, status="error", provider_route_id=capabilities.route_id,
             safe_error_code=exc.code,
