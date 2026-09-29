@@ -20,7 +20,7 @@ from backend.recognition.models import (
 
 MAX_RESPONSE_CHARS = 8000
 MAX_RESPONSE_BYTES = 32 * 1024
-REPAIR_PROMPT_VERSION = "faithful-region-recheck-v1"
+REPAIR_PROMPT_VERSION = "faithful-region-recheck-v2"
 ParseStatus = Literal["ok", "invalid", "empty", "error", "refused", "truncated"]
 RepairDecision = Literal["keep_native", "keep_visual", "replace", "still_unknown"]
 _JSON_FENCE = re.compile(r"```json[ \t]*\r?\n(?P<body>.*)\r?\n```", re.DOTALL)

@@ -12,6 +12,11 @@ describe("normalizeMarkdownMathInput", () => {
     expect(normalizeMarkdownMathInput(String.raw`$\nu$ and $\nabla f$`)).toBe(String.raw`$\nu$ and $\nabla f$`);
   });
 
+  it("repairs overescaped group notation from persisted candidates", () => {
+    expect(normalizeMarkdownMathInput(String.raw`$G=\\langle r,s\\rangle$, $x \\star y$, $r,\\dots,r^n$.`))
+      .toBe(String.raw`$G=\langle r,s\rangle$, $x \star y$, $r,\dots,r^n$.`);
+  });
+
   it("turns escaped separators before lowercase code into real line breaks", () => {
     expect(normalizeMarkdownMathInput(
       String.raw`Required signature:\ndef stable_softmax(xs):\n    return []`,
