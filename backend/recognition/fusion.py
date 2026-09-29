@@ -22,6 +22,7 @@ from backend.recognition.models import (
     RecognitionSpanV1, RecognitionUnalignedUnitV1, RecognitionUsageV1,
 )
 from backend.recognition.quality import assess_candidates
+from backend.recognition.repair_records import RepairExecutionV1
 
 ASSEMBLY_VERSION = "faithful-assembly-v1"
 
@@ -167,6 +168,7 @@ class RecognitionAssemblyV1(EvidenceModel):
     prompt_version: str = Field(min_length=1, max_length=120)
     raw: RecognitionWorkflowReadV1 = Field(repr=False)
     document: RecognitionDocumentV1 | None
+    repair_execution: RepairExecutionV1 | None = Field(default=None, repr=False)
     safe_error_code: Code | None = None
     recognition_complete: Literal[False] = False
 
@@ -174,6 +176,12 @@ class RecognitionAssemblyV1(EvidenceModel):
     def exact_derivation(self):
         self.raw = RecognitionWorkflowReadV1.model_validate(self.raw.model_dump(warnings=False))
         expected, error = _build_document(self.raw, self.prompt_version)
+        if self.repair_execution is not None:
+            from backend.recognition.recheck import build_rechecked_document
+
+            initial = RecognitionAssemblyV1(raw=self.raw, prompt_version=self.prompt_version,
+                                            document=expected, safe_error_code=error)
+            expected, error = build_rechecked_document(initial, self.repair_execution)
         if self.document != expected or self.safe_error_code != error:
             raise ValueError("assembled output must derive from its complete raw evidence")
         return self

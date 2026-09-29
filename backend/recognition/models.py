@@ -110,7 +110,7 @@ class RecognitionSpanV1(EvidenceModel):
     native: RecognitionCandidateV1 | None = None
     visual: RecognitionCandidateV1 | None = None
     final_text: str = Field(default="", max_length=400_000)
-    adopted_from: Literal["native", "vision", "ocr", "fused", "none"] = "none"
+    adopted_from: Literal["native", "vision", "ocr", "fused", "repair", "none"] = "none"
     confidence: Confidence = "low"
     confidence_reasons: list[Code] = Field(default_factory=list, max_length=32)
     issues: list[Code] = Field(default_factory=list, max_length=32)
@@ -122,6 +122,8 @@ class RecognitionSpanV1(EvidenceModel):
             raise ValueError("empty spans must remain unconfirmed")
         if self.final_text.strip() and self.adopted_from == "none":
             raise ValueError("content requires attribution")
+        if self.adopted_from == "repair" and (self.patch.status != "applied" or self.patch.decision != "replace"):
+            raise ValueError("repair attribution requires an explicit applied replacement")
         if self.native is not None and self.native.kind != "native":
             raise ValueError("native slot requires native evidence")
         if self.visual is not None and self.visual.kind not in {"vision", "ocr"}:

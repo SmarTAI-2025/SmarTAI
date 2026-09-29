@@ -15,7 +15,7 @@ from typing import Callable, Literal
 from pydantic import ValidationError
 
 from backend.domain.errors import RecognitionError
-from backend.recognition.models import EvidenceModel, RecognitionPolicyV1, RecognitionSourceRefV1
+from backend.recognition.models import EvidenceModel, RecognitionCandidateV1, RecognitionPolicyV1, RecognitionSourceRefV1
 from backend.recognition.planner import EngineCapabilitiesV1
 
 Phase = Literal["locator", "read"]
@@ -58,6 +58,33 @@ class BudgetSnapshot(EvidenceModel):
     read_duration_ms: float | None
     locator_remaining_seconds: float | None
     read_remaining_seconds: float | None
+
+
+def validate_budget_accounting(
+    snapshot: BudgetSnapshot, capabilities: EngineCapabilitiesV1 | None,
+    records: list[tuple[RecognitionCandidateV1, bool, int]],
+) -> None:
+    """Reconcile a persisted summary with raw call evidence, never recreate credit."""
+    pending = sum(uncertain for _, uncertain, _ in records)
+    known_input = sum(candidate.input_tokens or 0 for candidate, uncertain, _ in records if not uncertain)
+    known_output = sum(candidate.output_tokens or 0 for candidate, uncertain, _ in records if not uncertain)
+    unknown_input = sum(uncertain or candidate.input_tokens is None for candidate, uncertain, _ in records)
+    unknown_output = sum(uncertain or candidate.output_tokens is None for candidate, uncertain, _ in records)
+    bounded = bool(capabilities and capabilities.bounded_output_tokens)
+    reserved = sum(limit for candidate, uncertain, limit in records if uncertain or candidate.output_tokens is None) if bounded else 0
+    overrun = bounded and any(not uncertain and candidate.output_tokens is not None and candidate.output_tokens > limit
+                              for candidate, uncertain, limit in records)
+    expected = {
+        "pending_calls": pending, "settled_calls": len(records) - pending,
+        "known_input_tokens": known_input, "known_output_tokens": known_output,
+        "unknown_input_calls": unknown_input, "unknown_output_calls": unknown_output,
+        "input_tokens": None if unknown_input else known_input, "output_tokens": None if unknown_output else known_output,
+        "usage_complete": not (pending or unknown_input or unknown_output), "bounded_output_tokens": bounded,
+        "reserved_output_tokens": reserved, "charged_output_tokens": known_output + reserved if bounded else None,
+        "output_limit_exceeded": overrun,
+    }
+    if any(getattr(snapshot, name) != value for name, value in expected.items()):
+        raise ValueError("workflow budget must match every retained call outcome")
 
 
 @dataclass
