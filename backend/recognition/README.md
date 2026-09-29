@@ -1,4 +1,4 @@
-# Recognition Foundation (Work Items A-C1)
+# Recognition Foundation (Work Items A-C2a)
 
 This package is not wired to an upload endpoint yet. It defines the first
 version of the evidence and planning contracts plus callable existing-engine
@@ -51,10 +51,11 @@ Dependent PRs may stack; none is merged automatically.
 
 | Item | Scope |
 | --- | --- |
-| A | Evidence, capabilities, policy, pure planner and engine port (this PR) |
+| A | Evidence, capabilities, policy, pure planner and engine port |
 | B | Killable PDF indexing, bounded detail and targeted rendering |
 | C1 | Faithful adapters, native locator and controlled PDF evidence execution |
-| C2 | Bounded scan localization, inspected image input and unified orchestration |
+| C2a | Killable image preparation and mapped PDF contact sheets |
+| C2b | Bounded scan localization, shared budgets and unified input orchestration |
 | D | Evidence merge, purpose checks, one bounded repair and durable caching |
 | E | Problem extraction and compatibility routes |
 | F | Teacher reference/rubric/test materials and confirmation gates |
@@ -131,6 +132,24 @@ question; cross-page duplicate identities are not resolved by taking the first.
 Unlocated means absent from the supplied evidence only, not from a whole book.
 The locator never inherits a section or continuation from mere page adjacency.
 
-C2 still must supply bounded scan localization and inspected image input; D
+C2b still must supply bounded scan localization and unified image execution; D
 still must supply fusion, the shared one-extra-call budget and durable caching.
-No current C1 result establishes end-user OCR quality or full 05/06 completion.
+No foundational result establishes end-user OCR quality or full 05/06 completion.
+
+## C2a Media Boundary
+
+The existing killable worker now prepares JPEG/PNG/WebP input and bounded PDF
+contact sheets. See [tool contracts](../tools/PDF_EVIDENCE.md). Image preparation
+records the source digest, EXIF transform, requested and actual crop, and output
+dimensions. It does not denoise, resize, invent native PDF coordinates or call a
+model. Explicit size/decode errors never become successful empty transcription.
+
+A contact sheet is a low-resolution locator input only, not a transcription or
+substitute for the full-resolution region. Its labels are one-based source PDF
+page numbers, which can differ from printed book page numbers. Image rectangles
+exclude added labels and padding. A model's future interpretation must remain a
+candidate location, not automatically verified geometry or complete coverage.
+
+Input/output limits protect each local operation, not whole-book quotas. Files
+are prepared from already-authorized bytes with no credential, cache or storage
+lookup. There are still no changes to existing upload routes in C2a.
