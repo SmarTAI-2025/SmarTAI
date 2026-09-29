@@ -700,7 +700,7 @@ export function classifyRecoverableError(
     };
   }
 
-  if (["target_location_needs_hint", "target_selection_limit_exceeded", "recognition_budget_exhausted", "recognition_timeout"].includes(code ?? "")) {
+  if (["target_location_needs_hint", "target_selection_limit_exceeded", "recognition_budget_exhausted", "recognition_timeout", "question_targets_incomplete"].includes(code ?? "")) {
     return {
       title: tx(locale, "本次识别范围尚未完成", "Recognition coverage is incomplete"),
       description: tx(locale, "已保存的识别结果仍然保留。请缩小页码范围或补充目标题号；系统不会自动增加付费调用。", "Saved evidence is retained. Narrow the page range or specify question numbers; no extra paid calls are started automatically."),

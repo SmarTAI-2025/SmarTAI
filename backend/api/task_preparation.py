@@ -369,6 +369,7 @@ class StartQuestionPreparationRequest(BaseModel):
 class RetryQuestionPreparationRequest(BaseModel):
     recognition_provider_id: str | None = Field(default=None, max_length=240)
     expected_workflow_revision: int = Field(ge=0)
+    acknowledge_possible_duplicate_call: bool = Field(default=False, strict=True)
 
 
 def _question_preparation_input_hash(
@@ -380,6 +381,7 @@ def _question_preparation_input_hash(
     score_policy: Mapping[str, Any],
     recognition_provider_id: str,
     provider_configuration_fingerprint: str,
+    acknowledged_restart_from: str | None = None,
 ) -> str:
     """Hash the ordered logical input independently of retry claim revisions."""
 
@@ -395,6 +397,8 @@ def _question_preparation_input_hash(
                 "provider_configuration_fingerprint": (
                     provider_configuration_fingerprint
                 ),
+                **({"acknowledged_restart_from": acknowledged_restart_from}
+                   if acknowledged_restart_from else {}),
             },
             sort_keys=True,
             separators=(",", ":"),
@@ -1405,6 +1409,7 @@ async def _start_question_preparation(
     allow_prepared_source_reuse: bool,
     input_workflow_revision: int | None = None,
     retry_source_contract: Mapping[str, Any] | None = None,
+    acknowledged_restart_from: str | None = None,
 ):
     # Kept in the endpoint signature for API compatibility. Question
     # preparation is published only to the durable workflow worker below.
@@ -1561,6 +1566,7 @@ async def _start_question_preparation(
                 "The question-preparation input revision is invalid.",
                 code="stale_revision",
             )
+        restart_origin = acknowledged_restart_from or (retry_source_contract or {}).get("acknowledged_restart_from")
         operation_hash = _question_preparation_input_hash(
             ordered_source_inputs=ordered_source_inputs,
             logical_input_revision=logical_input_revision,
@@ -1571,6 +1577,7 @@ async def _start_question_preparation(
             provider_configuration_fingerprint=(
                 provider_configuration_fingerprint
             ),
+            acknowledged_restart_from=restart_origin,
         )
         replay = task_facade.find_task_operation(
             task_id=task_id, owner_id=current.id,
@@ -1616,6 +1623,7 @@ async def _start_question_preparation(
                 "workflow_revision": workflow.workflow_revision,
             }
         operation_payload = {
+            **({"acknowledged_restart_from": restart_origin} if restart_origin else {}),
             "contract_version": 1,
             "owner_id": current.id,
             "task_id": task_id,
@@ -1741,7 +1749,7 @@ async def retry_question_preparation(
                 "Only the task's latest failed question preparation can be retried.",
                 code="question_preparation_retry_not_available",
             )
-        if (
+        submission_uncertain = bool(
             failed.error_code == "provider_submit_uncertain"
             or (failed.checkpoint or {}).get("base_provider_inflight_stage")
             or list(
@@ -1750,7 +1758,8 @@ async def retry_question_preparation(
                 )
                 or []
             )
-        ):
+        )
+        if submission_uncertain and not request.acknowledge_possible_duplicate_call:
             raise InvalidTransition(
                 "The provider submission state must be verified before retry.",
                 code="provider_submit_uncertain",
@@ -1825,6 +1834,9 @@ async def retry_question_preparation(
             allow_prepared_source_reuse=True,
             input_workflow_revision=original_input_revision,
             retry_source_contract=payload,
+            # Acknowledged uncertainty starts a distinct operation, preserving the
+            # original evidence and never weakening automatic replay protection.
+            acknowledged_restart_from=(f"{failed.id}:{failed.attempt}" if submission_uncertain else None),
         )
         if isinstance(response, dict):
             return {**response, "reused_prepared_sources": True}
@@ -2107,6 +2119,7 @@ def _rehydrate_question_preparation_inputs(operation):
         score_policy=score_policy.model_dump(mode="json"),
         recognition_provider_id=recognition_provider_id,
         provider_configuration_fingerprint=frozen_provider_fingerprint,
+        acknowledged_restart_from=payload.get("acknowledged_restart_from"),
     )
     if expected_input_hash != operation.input_hash:
         raise _question_preparation_recovery_error(

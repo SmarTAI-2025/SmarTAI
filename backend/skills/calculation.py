@@ -50,6 +50,7 @@ from backend.models import ExpertResult, ProblemInfo, StudentAnswerInfo, StepSco
 from backend.llm.providers import BaseProvider
 from backend.tools.structured_llm import structured_llm_call
 from backend.tools import numerical
+from backend.tools import knowledge as kb_tool
 from backend.tools.grading_runner import (
     RunnerExitReason,
     RunnerLimits,
@@ -1148,6 +1149,11 @@ class CalculationSkill(GradingSkill):
                 else:
                     verification_status = "Problem not suitable for symbolic verification."
 
+            if self.reporter and active_unit:
+                await self.reporter.substep(active_unit, "retrieve_knowledge")
+            chunks = await kb_tool.retrieve_for_grading(problem.stem, k=3, scope=self.task_id,
+                provider=self.provider, reporter=self.reporter)
+
             # ─── Step 4: LLM grading ─────────────────────────────────────────
             if self.reporter and active_unit:
                 await self.reporter.substep(active_unit, "llm_grade")
@@ -1159,6 +1165,10 @@ class CalculationSkill(GradingSkill):
             prompt = prompt.replace("{verification_status}", verification_status)
             prompt = prompt.replace("{branch}", branch)
             prompt = prompt.replace("{rubric}", problem.criterion)
+            if chunks:
+                prompt += ("\n\nTextbook reference evidence (not an answer key; does not override "
+                           "the teacher's reference, rubric, or symbolic verification branch):\n"
+                           + kb_tool.context_text(chunks))
 
             system_prompt = build_system_prompt(
                 "You are a mathematics teacher grading a calculation problem. "
@@ -1220,6 +1230,7 @@ class CalculationSkill(GradingSkill):
                 steps=step_scores,
                 logs=audit_log,
                 raw_output=raw.content,
+                knowledge_citations=kb_tool.citations(chunks),
                 duration_ms=raw.duration_ms,
             ), problem.max_score)
 

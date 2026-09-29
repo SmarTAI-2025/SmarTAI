@@ -45,6 +45,7 @@ from backend.skills.base import (
 from backend.models import ExpertResult, ProblemInfo, StudentAnswerInfo, StepScore, TaskGradingSetup, TestCase
 from backend.llm.providers import BaseProvider
 from backend.tools.structured_llm import structured_llm_call
+from backend.tools import knowledge as kb_tool
 from backend.tools.code_interpreter import run_sandbox, ExecutionReport
 
 if TYPE_CHECKING:
@@ -619,6 +620,11 @@ class ProgrammingSkill(GradingSkill):
                     per_case_timeout=SANDBOX_PER_CASE_TIMEOUT_S,
                 )
 
+            if self.reporter and active_unit:
+                await self.reporter.substep(active_unit, "retrieve_knowledge")
+            chunks = await kb_tool.retrieve_for_grading(problem.stem, k=3, scope=self.task_id,
+                provider=self.provider, reporter=self.reporter)
+
             # ─── Step 4: Build prompt ───────────────────────────────────────
             if self.reporter and active_unit:
                 await self.reporter.substep(active_unit, "build_prompt")
@@ -634,6 +640,10 @@ class ProgrammingSkill(GradingSkill):
             # Backwards compat with legacy template that used {execution_results}
             prompt = prompt.replace("{execution_results}", branch_info)
             prompt = prompt.replace("{rubric}", problem.criterion)
+            if chunks:
+                prompt += ("\n\nTextbook reference evidence (not executable code or test cases; "
+                           "does not override the teacher's rubric or actual sandbox results):\n"
+                           + kb_tool.context_text(chunks))
 
             # ─── Step 5: LLM grading ────────────────────────────────────────
             if self.reporter and active_unit:
@@ -691,6 +701,7 @@ class ProgrammingSkill(GradingSkill):
                 steps=step_scores,
                 logs=result.logs,
                 raw_output=raw.content,
+                knowledge_citations=kb_tool.citations(chunks),
                 duration_ms=raw.duration_ms,
             ), problem.max_score)
 

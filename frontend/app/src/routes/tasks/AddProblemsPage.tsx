@@ -98,7 +98,7 @@ export function AddProblemsPage() {
   const navigate = useNavigate();
   const { locale, t } = useI18n();
   const restored = getRestoredDraft(location.state, taskId);
-  const taskQuery = useTask(taskId);
+  const taskQuery = useTask(taskId, { refetchOnMount: "always" });
   const capabilitiesQuery = useQuestionPreparationCapabilities(taskId);
   const expertsQuery = useStageProviders();
   const preflight = useProblemSourcePreflight();
@@ -332,6 +332,15 @@ export function AddProblemsPage() {
       <NewTaskStepper currentStep={1} reachableStep={hasRecognizedProblems ? 2 : 1} returnState={routeState} />
 
       <div className="mx-auto mt-6 w-full max-w-[940px]">
+        {taskQuery.data?.status === "error" && taskQuery.data.last_failed_job_id === taskQuery.data.extract_job_id && taskQuery.data.last_failed_job_id ? (
+          <div role="status" className="mb-5 flex flex-wrap items-center justify-between gap-3 border-l-4 border-primary bg-muted px-4 py-3 text-sm">
+            <p>{tx(locale, "上次题目准备未完成，已上传资料仍保留。", "The previous preparation did not finish. Your uploaded materials are preserved.")}</p>
+            <Link className="inline-flex items-center gap-2 font-medium text-primary underline" to={`/tasks/${taskId}/problems/progress`}>
+              {tx(locale, "返回进度并重试", "Return to progress and retry")}
+              <ArrowRight aria-hidden="true" className="h-4 w-4" />
+            </Link>
+          </div>
+        ) : null}
         <section className="overflow-hidden rounded-[10px] border bg-card">
           <div className="flex items-center justify-between border-b px-5 py-3 sm:px-7">
             <button

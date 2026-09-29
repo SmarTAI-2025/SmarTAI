@@ -477,9 +477,50 @@ def _escape_latex_backslashes(s: str) -> str:
     escapes and double every other backslash.
 
     Naive ``s.replace("\\", "\\\\")`` would *double* already-correct escapes.
-    The negative-lookahead regex preserves them.
+    Consume valid escape pairs together so the second slash is never repaired
+    again when a response mixes correctly escaped and raw TeX commands.
     """
-    return re.sub(r'\\(?!["\\/nrtu])', r'\\\\', s)
+    out = []
+    index = 0
+    while index < len(s):
+        char = s[index]
+        if char == "\\":
+            if index + 1 < len(s) and s[index + 1] in '"\\/nrtu':
+                out.append(s[index:index + 2])
+                index += 2
+                continue
+            out.append("\\\\")
+        else:
+            out.append(char)
+        index += 1
+    return "".join(out)
+
+
+def _collapse_duplicate_json_colons(s: str) -> str:
+    """Repair repeated key separators, never punctuation inside string values."""
+    out = []
+    in_string = escaped = after_colon = False
+    for char in s:
+        if in_string:
+            out.append(char)
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == '"':
+                in_string = False
+            continue
+        if char == '"':
+            in_string = True
+            after_colon = False
+        elif char == ":":
+            if after_colon:
+                continue
+            after_colon = True
+        elif not char.isspace():
+            after_colon = False
+        out.append(char)
+    return "".join(out)
 
 
 def _normalize_inline_newlines(s: str) -> str:
@@ -591,6 +632,8 @@ def extract_and_parse_json(raw: str, model: Type[T]) -> T:
         ("latex_backslashes", _escape_latex_backslashes),
         ("normalize_newlines", _normalize_inline_newlines),
         ("latex+newlines", lambda s: _normalize_inline_newlines(_escape_latex_backslashes(s))),
+        ("duplicate_separator", lambda s: _collapse_duplicate_json_colons(
+            _normalize_inline_newlines(_escape_latex_backslashes(s)))),
         ("escape_all_backslashes", lambda s: s.replace("\\", "\\\\")),
         ("remove_trailing_commas", lambda s: re.sub(r",(\s*[}\]])", r"\1", s)),
         ("fix_incomplete", _fix_incomplete_json),

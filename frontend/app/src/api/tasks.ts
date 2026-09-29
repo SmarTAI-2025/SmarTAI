@@ -152,12 +152,14 @@ export function retryQuestionPreparation(input: {
   jobId: string;
   recognitionProviderId: string;
   expectedWorkflowRevision: number;
+  acknowledgePossibleDuplicateCall?: boolean;
 }): Promise<TaskMutationResponse & { reused_prepared_sources?: boolean }> {
   return postJSON(
     `/tasks/${encodeURIComponent(input.taskId)}/question-preparation/${encodeURIComponent(input.jobId)}/retry`,
     {
       recognition_provider_id: input.recognitionProviderId,
       expected_workflow_revision: input.expectedWorkflowRevision,
+      ...(input.acknowledgePossibleDuplicateCall ? { acknowledge_possible_duplicate_call: true } : {}),
     },
   );
 }

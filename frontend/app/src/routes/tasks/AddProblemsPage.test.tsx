@@ -9,6 +9,7 @@ const preflightMutateAsync = vi.hoisted(() => vi.fn());
 const startMutateAsync = vi.hoisted(() => vi.fn());
 const taskRefetch = vi.hoisted(() => vi.fn());
 const expertsRefetch = vi.hoisted(() => vi.fn());
+const taskState = vi.hoisted(() => ({ status: "draft", last_failed_job_id: null as string | null, extract_job_id: null as string | null }));
 const capabilityState = vi.hoisted(() => ({
   available: true,
   data: {
@@ -60,7 +61,7 @@ vi.mock("@/api/hooks", () => ({
     data: {
       task_id: "task-1",
       name: "Assignment",
-      status: "draft",
+      ...taskState,
       workflow_revision: 0,
       problem_count: 0,
       problem_file_name: null,
@@ -99,6 +100,7 @@ async function uploadProblemFile(user: ReturnType<typeof userEvent.setup>) {
 }
 
 beforeEach(() => {
+  Object.assign(taskState, { status: "draft", last_failed_job_id: null, extract_job_id: null });
   capabilityState.available = true;
   capabilityState.data.source_roles.problem.accepted_extensions = [".pdf", ".txt", ".md", ".markdown", ".jpg", ".jpeg", ".png", ".webp"];
   capabilityState.data.source_roles.reference_answer.accepted_extensions = [".pdf", ".txt", ".md", ".markdown", ".jpg", ".jpeg", ".png", ".webp"];
@@ -246,6 +248,15 @@ describe("AddProblemsPage upload capability contract", () => {
 });
 
 describe("AddProblemsPage workflow recovery", () => {
+  it("links back to the retained preparation after reopening the upload page", async () => {
+    Object.assign(taskState, { status: "error", last_failed_job_id: "failed-job", extract_job_id: "failed-job" });
+    renderPage();
+    expect(screen.getByRole("status")).toHaveTextContent("已上传资料仍保留");
+    fireEvent.click(screen.getByRole("link", { name: "返回进度并重试" }));
+    expect(await screen.findByText("Preparation started")).toBeInTheDocument();
+    expect(preflightMutateAsync).not.toHaveBeenCalled();
+  });
+
   it("refreshes the server snapshot and dismisses a stale workflow-busy warning", async () => {
     const user = userEvent.setup();
     startMutateAsync.mockRejectedValueOnce(new APIError(

@@ -138,15 +138,12 @@ class Settings(BaseSettings):
     grading_item_max_retries: int = int(
         os.getenv("SMARTAI_GRADING_ITEM_MAX_RETRIES", "1")
     )
-    # Problem extraction is normally a single LLM call whose body grows with
-    # the source text.  Some free relay endpoints hang on larger JSON bodies,
-    # so `extract_problems` chunks the source text into pieces of at most
-    # `source_chunk_chars` characters (with `source_chunk_overlap_chars`
-    # characters of overlap) and issues one bounded call per chunk, then merges
-    # the problems.  0 disables chunking (single call, legacy behaviour).
-    source_chunk_chars: int = int(os.getenv("SMARTAI_SOURCE_CHUNK_CHARS", "1200"))
+    # Keep enough context for section labels and multi-part questions without
+    # repeating the extraction prompt for each short paragraph. Constrained
+    # relays can explicitly lower this bound; 0 retains single-call behavior.
+    source_chunk_chars: int = int(os.getenv("SMARTAI_SOURCE_CHUNK_CHARS", "24000"))
     source_chunk_overlap_chars: int = int(
-        os.getenv("SMARTAI_SOURCE_CHUNK_OVERLAP_CHARS", "200")
+        os.getenv("SMARTAI_SOURCE_CHUNK_OVERLAP_CHARS", "400")
     )
 
     @property

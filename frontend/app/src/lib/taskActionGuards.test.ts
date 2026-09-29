@@ -15,7 +15,7 @@ describe("task contract compatibility", () => {
     expect(result.actionHref).toContain("submissions?filter=review");
     expect(result.description).toContain("student");
   });
-  it.each(["target_location_needs_hint", "target_selection_limit_exceeded", "recognition_budget_exhausted", "recognition_timeout"])(
+  it.each(["target_location_needs_hint", "target_selection_limit_exceeded", "recognition_budget_exhausted", "recognition_timeout", "question_targets_incomplete"])(
     "offers range adjustment for %s without claiming a fresh submit", (code) => {
       const result = classifyRecoverableError(new APIError(422, code, { detail: { code } }), { locale: "en-US" });
       expect(result.title).toBe("Recognition coverage is incomplete");
