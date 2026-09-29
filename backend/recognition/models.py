@@ -172,8 +172,11 @@ class RecognitionSpanV1(EvidenceModel):
 class RecognitionPageV1(EvidenceModel):
     page_index: int = Field(ge=0, le=9999)
     page_number: int = Field(ge=1, le=10000)
-    width_points: float = Field(gt=0)
-    height_points: float = Field(gt=0)
+    geometry_unit: Literal["points", "pixels"] = "points"
+    width_points: float | None = Field(default=None, gt=0)
+    height_points: float | None = Field(default=None, gt=0)
+    width_pixels: int | None = Field(default=None, strict=True, gt=0)
+    height_pixels: int | None = Field(default=None, strict=True, gt=0)
     native_text: str = Field(default="", max_length=500_000)
     verified_blank: bool = False
     selected_for_visual: bool = False
@@ -182,6 +185,11 @@ class RecognitionPageV1(EvidenceModel):
 
     @model_validator(mode="after")
     def page_identity(self):
+        if self.geometry_unit == "points":
+            if self.width_points is None or self.height_points is None or self.width_pixels is not None or self.height_pixels is not None:
+                raise ValueError("PDF pages require physical geometry only")
+        elif self.width_pixels is None or self.height_pixels is None or self.width_points is not None or self.height_points is not None:
+            raise ValueError("image pages require pixel geometry only")
         if self.page_number != self.page_index + 1:
             raise ValueError("page number/index mismatch")
         if len({span.span_id for span in self.spans}) != len(self.spans):
@@ -210,6 +218,7 @@ class RecognitionCoverageV1(EvidenceModel):
     unprocessed_pages: list[int] = Field(default_factory=list, max_length=10000)
     requested_targets: list[str] = Field(default_factory=list, max_length=256)
     missing_targets: list[str] = Field(default_factory=list, max_length=256)
+    unverified_targets: list[str] = Field(default_factory=list, max_length=256)
 
     @model_validator(mode="after")
     def disjoint_partition(self):
@@ -223,8 +232,9 @@ class RecognitionCoverageV1(EvidenceModel):
             raise ValueError("coverage states must partition requested pages")
         if self.scope == "document" and set(self.requested_pages) != set(range(1, self.total_pages + 1)):
             raise ValueError("document scope requires every page")
-        if not set(self.missing_targets).issubset(self.requested_targets):
-            raise ValueError("unknown missing target")
+        for targets in (self.missing_targets, self.unverified_targets):
+            if len(targets) != len(set(targets)) or not set(targets).issubset(self.requested_targets):
+                raise ValueError("invalid unresolved targets")
         if self.scope == "targets" and not self.requested_targets:
             raise ValueError("target scope requires target identities")
         if len(set(self.requested_targets)) != len(self.requested_targets):
@@ -234,11 +244,12 @@ class RecognitionCoverageV1(EvidenceModel):
     @property
     def complete(self) -> bool:
         return bool(self.requested_pages) and not (
-            self.failed_pages or self.unprocessed_pages or self.missing_targets
+            self.failed_pages or self.unprocessed_pages or self.missing_targets or self.unverified_targets
         )
 
 
 class RecognitionUsageV1(EvidenceModel):
+    locator_calls: int = Field(default=0, ge=0)
     initial_calls: int = Field(default=0, ge=0)
     empty_recovery_calls: int = Field(default=0, ge=0)
     patch_calls: int = Field(default=0, ge=0)
@@ -251,7 +262,7 @@ class RecognitionUsageV1(EvidenceModel):
 
     @property
     def total_calls(self) -> int:
-        return self.initial_calls + self.empty_recovery_calls + self.patch_calls
+        return self.locator_calls + self.initial_calls + self.empty_recovery_calls + self.patch_calls
 
     @model_validator(mode="after")
     def unknown_usage_is_not_zero(self):
@@ -278,6 +289,27 @@ class RecognitionPolicyV1(EvidenceModel):
     force_visual: bool = False
 
 
+class RecognitionUnalignedUnitV1(EvidenceModel):
+    """Raw visual output whose input mapping does not prove text placement."""
+
+    unit_id: str = Field(pattern=r"^u\d{4}$")
+    page_numbers: list[int] = Field(min_length=1, max_length=24)
+    region: NormalizedRegionV1
+    candidate: RecognitionCandidateV1
+    reason: Literal["document_page_alignment_unverified", "region_composition_unverified"]
+    submission_may_exist: bool = False
+
+    @model_validator(mode="after")
+    def valid_scope(self):
+        if self.page_numbers != sorted(set(self.page_numbers)) or any(not 1 <= p <= 10000 for p in self.page_numbers):
+            raise ValueError("invalid unaligned unit pages")
+        if self.candidate.kind == "native":
+            raise ValueError("unaligned units require visual evidence")
+        if self.reason == "document_page_alignment_unverified" and len(self.page_numbers) < 2:
+            raise ValueError("document alignment requires multiple pages")
+        return self
+
+
 class RecognitionDocumentV1(EvidenceModel):
     contract: Literal["smartai.recognition.document"] = "smartai.recognition.document"
     schema_version: Literal[1] = 1
@@ -287,6 +319,7 @@ class RecognitionDocumentV1(EvidenceModel):
     purpose: Purpose
     provider_fingerprint: str = Field(min_length=1, max_length=256)
     pages: list[RecognitionPageV1] = Field(default_factory=list, max_length=24)
+    unaligned_units: list[RecognitionUnalignedUnitV1] = Field(default_factory=list, max_length=24)
     final_markdown: str = Field(default="", max_length=400_000)
     coverage: RecognitionCoverageV1
     confidence: Confidence = "low"
@@ -304,6 +337,13 @@ class RecognitionDocumentV1(EvidenceModel):
             raise ValueError("processed pages need evidence")
         if not set(numbers).issubset(self.coverage.requested_pages):
             raise ValueError("evidence belongs outside requested scope")
+        if len({unit.unit_id for unit in self.unaligned_units}) != len(self.unaligned_units):
+            raise ValueError("duplicate unaligned evidence")
+        for unit in self.unaligned_units:
+            if not set(unit.page_numbers).issubset(numbers) or set(unit.page_numbers) & set(self.coverage.processed_pages):
+                raise ValueError("unaligned output cannot prove processed pages")
+        if self.unaligned_units and self.confidence != "low":
+            raise ValueError("unaligned evidence requires review")
         for page in self.pages:
             if page.page_number in self.coverage.processed_pages and not (page.spans or page.verified_blank):
                 raise ValueError("processed pages require spans or verified blank evidence")

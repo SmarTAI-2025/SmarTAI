@@ -21,7 +21,7 @@ from backend.recognition.locator import (
     NativeLocatorRequestV1, NativeLocatorResultV1, PageNumber, TargetId, locate_native_targets,
 )
 from backend.recognition.models import Code, EvidenceModel, Purpose, RecognitionPolicyV1, RecognitionSourceRefV1
-from backend.recognition.planner import PageObservationV1, RecognitionPlanRequestV1, plan_recognition
+from backend.recognition.planner import EngineCapabilitiesV1, PageObservationV1, RecognitionPlanRequestV1, plan_recognition
 from backend.recognition.runtime import RecognitionCapacity, run_locator_call
 from backend.recognition.scan_locator import ScanLocatorResultV1, parse_scan_locations
 from backend.tools.pdf_evidence import (
@@ -71,6 +71,7 @@ class LocatorSheetEvidenceV1(EvidenceModel):
 class LocatorCallEvidenceV1(EvidenceModel):
     sheets: list[LocatorSheetEvidenceV1] = Field(min_length=1, max_length=2)
     result: ScanLocatorResultV1
+    requested_output_tokens: int = Field(strict=True, ge=1, le=32768)
     submission_may_exist: bool = False
 
     @model_validator(mode="after")
@@ -85,6 +86,8 @@ class RecognitionWorkflowReadV1(EvidenceModel):
     contract: Literal["smartai.recognition.workflow_read"] = "smartai.recognition.workflow_read"
     schema_version: Literal[1] = 1
     request: RecognitionReadRequestV1
+    execution_policy: RecognitionPolicyV1
+    engine_capabilities: EngineCapabilitiesV1 | None
     total_pages: int | None = Field(default=None, ge=1, le=10000)
     indexed_pages: list[PageNumber] = Field(default_factory=list, max_length=500)
     native_details: list[PdfDetailPage] = Field(default_factory=list, max_length=24)
@@ -100,11 +103,19 @@ class RecognitionWorkflowReadV1(EvidenceModel):
 
     @model_validator(mode="after")
     def evidence_scope(self):
+        expected_policy = self.request.policy.model_copy(deep=True)
+        if self.request.scope == "targets":
+            expected_policy.max_detail_pages = min(expected_policy.max_detail_pages, 2 * len(self.request.targets) + 4)
+        if self.execution_policy != expected_policy:
+            raise ValueError("workflow must retain the effective request policy")
         if self.selected_pages != sorted(set(self.selected_pages)) or self.indexed_pages != sorted(set(self.indexed_pages)):
             raise ValueError("workflow page sets must be ordered and unique")
         pages = [*self.indexed_pages, *self.selected_pages, *(p.page_number for p in self.native_details)]
         if pages and (self.total_pages is None or max(pages) > self.total_pages):
             raise ValueError("workflow evidence exceeds source extent")
+        detail_numbers = [page.page_number for page in self.native_details]
+        if detail_numbers != sorted(set(detail_numbers)) or (detail_numbers and self.request.source.content_type != "application/pdf"):
+            raise ValueError("native detail must uniquely belong to a PDF")
         if len(set(self.unlocated_targets)) != len(self.unlocated_targets) or not set(self.unlocated_targets).issubset(self.request.targets):
             raise ValueError("unlocated targets must belong to the request")
         if self.native_location is not None and (
@@ -116,9 +127,18 @@ class RecognitionWorkflowReadV1(EvidenceModel):
             raise ValueError("workflow must retain every locator call outcome")
         if self.budget.initial_calls != (self.read_batch.usage.initial_calls if self.read_batch else 0):
             raise ValueError("workflow must retain every initial read outcome")
+        if (self.budget.empty_recovery_calls or self.budget.patch_calls
+                or self.budget.read_calls != self.budget.initial_calls
+                or self.budget.total_calls != self.budget.locator_calls + self.budget.initial_calls):
+            raise ValueError("raw read workflow cannot invent additional calls")
         if self.locator_halted and self.read_batch is not None:
             raise ValueError("failed localization must stop downstream dispatch")
         for call in self.locator_calls:
+            if self.engine_capabilities is None or not self.engine_capabilities.target_location:
+                raise ValueError("locator evidence requires its frozen capability")
+            if (call.result.candidate.provider_route_id != self.engine_capabilities.route_id
+                    or call.result.candidate.kind != self.engine_capabilities.candidate_kind):
+                raise ValueError("locator evidence belongs to another route")
             if (call.submission_may_exist or call.result.parse_status != "ok") and not self.locator_halted:
                 raise ValueError("failed locator outcomes cannot be ignored")
             if any(sheet.metadata.total_pages != self.total_pages for sheet in call.sheets):
@@ -129,9 +149,59 @@ class RecognitionWorkflowReadV1(EvidenceModel):
             batch = self.read_batch
             if batch.source != self.request.source or batch.plan.total_pages != self.total_pages or batch.plan.purpose != self.request.purpose:
                 raise ValueError("reader belongs to another request")
+            if (batch.plan.scope != self.request.scope or batch.plan.requested_targets != self.request.targets
+                    or batch.plan.policy != self.execution_policy or batch.plan.engine_capabilities != self.engine_capabilities):
+                raise ValueError("reader must preserve frozen scope, policy and capabilities")
             if not set(self.selected_pages).issubset(batch.plan.requested_pages):
                 raise ValueError("selected pages must be accounted for in the read plan")
+            expected_pages = (self.request.pages if self.request.scope == "pages" else self.selected_pages
+                              if self.request.scope == "targets" else list(range(1, self.total_pages + 1)))
+            if batch.plan.requested_pages != expected_pages:
+                raise ValueError("reader page scope differs from the workflow")
+            native_by_number = {page.page_number: page for page in self.native_details}
+            for page in batch.pages:
+                if page.page_number in native_by_number and page != native_by_number[page.page_number]:
+                    raise ValueError("native snapshots changed within one workflow")
+            for unit in batch.units:
+                if (self.engine_capabilities is None or unit.candidate.provider_route_id != self.engine_capabilities.route_id
+                        or unit.candidate.kind != self.engine_capabilities.candidate_kind):
+                    raise ValueError("read evidence belongs to another engine")
+        _validate_workflow_usage(self)
         return self
+
+
+def _validate_workflow_usage(raw: RecognitionWorkflowReadV1) -> None:
+    records = [(call.result.candidate, call.submission_may_exist, call.requested_output_tokens) for call in raw.locator_calls]
+    if raw.read_batch:
+        records.extend((unit.candidate, unit.submission_may_exist, unit.requested_output_tokens) for unit in raw.read_batch.units)
+    pending = sum(uncertain for _, uncertain, _ in records)
+    known_input = sum(candidate.input_tokens or 0 for candidate, uncertain, _ in records if not uncertain)
+    known_output = sum(candidate.output_tokens or 0 for candidate, uncertain, _ in records if not uncertain)
+    unknown_input = sum(uncertain or candidate.input_tokens is None for candidate, uncertain, _ in records)
+    unknown_output = sum(uncertain or candidate.output_tokens is None for candidate, uncertain, _ in records)
+    bounded = bool(raw.engine_capabilities and raw.engine_capabilities.bounded_output_tokens)
+    reserved = sum(limit for candidate, uncertain, limit in records if uncertain or candidate.output_tokens is None) if bounded else 0
+    overrun = bounded and any(not uncertain and candidate.output_tokens is not None and candidate.output_tokens > limit
+                              for candidate, uncertain, limit in records)
+    expected = {
+        "pending_calls": pending, "settled_calls": len(records) - pending,
+        "known_input_tokens": known_input, "known_output_tokens": known_output,
+        "unknown_input_calls": unknown_input, "unknown_output_calls": unknown_output,
+        "input_tokens": None if unknown_input else known_input, "output_tokens": None if unknown_output else known_output,
+        "usage_complete": not (pending or unknown_input or unknown_output), "bounded_output_tokens": bounded,
+        "reserved_output_tokens": reserved, "charged_output_tokens": known_output + reserved if bounded else None,
+        "output_limit_exceeded": overrun,
+    }
+    if any(getattr(raw.budget, name) != value for name, value in expected.items()):
+        raise ValueError("workflow budget must match every retained call outcome")
+    if raw.read_batch:
+        candidates = [unit.candidate for unit in raw.read_batch.units]
+        inputs = None if any(c.input_tokens is None for c in candidates) else sum(c.input_tokens for c in candidates)
+        outputs = None if any(c.output_tokens is None for c in candidates) else sum(c.output_tokens for c in candidates)
+        usage = raw.read_batch.usage
+        if (usage.locator_calls or usage.input_tokens != inputs or usage.output_tokens != outputs
+                or usage.usage_complete != (inputs is not None and outputs is not None)):
+            raise ValueError("reader usage must match its own call evidence without adding localization")
 
 
 def _index_terms(targets: list[str]) -> list[str]:
@@ -270,11 +340,24 @@ class RecognitionAgent:
             if any("visual_capability_unavailable" in page.reason_codes for page in batch.plan.decisions):
                 stops.append("visual_capability_unavailable")
         return RecognitionWorkflowReadV1(
-            request=request, total_pages=total, indexed_pages=indexed, native_details=details, native_location=native,
+            request=request, execution_policy=policy, engine_capabilities=capabilities,
+            total_pages=total, indexed_pages=indexed, native_details=details, native_location=native,
             locator_calls=calls, selected_pages=selected, unlocated_targets=unresolved, read_batch=batch,
             locator_halted=locator_halted,
             stop_codes=list(dict.fromkeys(stops)), budget=budget.snapshot(),
         )
+
+    async def recognize(self, request: RecognitionReadRequestV1, source_bytes: bytes, *,
+                        authorized_owner_id: str, prompt_version: str):
+        from backend.recognition.fusion import assemble_recognition
+
+        raw = await self.read(request, source_bytes, authorized_owner_id=authorized_owner_id)
+        if self.progress:
+            await self.progress.set_current_step("recognition_assess", message="Checking recognition evidence")
+        result = assemble_recognition(raw, prompt_version=prompt_version)
+        if self.progress:
+            await self.progress.increment_stage_metrics(recognition_assemblies=1)
+        return result
 
     async def _scan(self, request, source_bytes, index, details, native, targets, policy, budget, capabilities):
         calls, stops = [], []
@@ -310,7 +393,8 @@ class RecognitionAgent:
                     purpose=request.purpose, targets=remaining, images=images, max_output_tokens=token_limit,
                 ), source=request.source, policy=policy, capabilities=capabilities, budget=budget, capacity=self.capacity, progress=self.progress)
                 result = parse_scan_locations(outcome.candidate, requested_targets=remaining, inspected_pages=sorted(numbers))
-                calls.append(LocatorCallEvidenceV1(sheets=evidence, result=result, submission_may_exist=outcome.submission_may_exist))
+                calls.append(LocatorCallEvidenceV1(sheets=evidence, result=result, requested_output_tokens=token_limit,
+                                                  submission_may_exist=outcome.submission_may_exist))
                 if result.parse_status != "ok":
                     stops.extend(result.reason_codes)
                     halted = True
