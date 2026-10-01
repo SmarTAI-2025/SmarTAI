@@ -1204,6 +1204,8 @@ def test_postgres_grading_knowledge_fence_and_cleanup_are_mutually_exclusive(
         original_name="frozen.txt",
         content=b"frozen",
     )
+    from backend.db.knowledge_repository import replace_document_chunks
+    replace_document_chunks(uploaded.document_id, ["frozen"])
     barrier = threading.Barrier(2)
 
     def start_grading() -> str:
@@ -1270,6 +1272,8 @@ def test_postgres_grading_and_source_admission_share_workflow_first_order(
         original_name="frozen.txt",
         content=b"frozen",
     )
+    from backend.db.knowledge_repository import replace_document_chunks
+    replace_document_chunks(uploaded.document_id, ["frozen"])
     barrier = threading.Barrier(2)
 
     def start_grading() -> str:
