@@ -187,6 +187,7 @@ export function UploadDialog({ courses, groups, onClose, onUploaded }: UploadDia
   const upload = useUploadCourseMaterial();
   const inputId = useId();
   const [file, setFile] = useState<File | null>(null);
+  const [nativeOnly, setNativeOnly] = useState(false);
   const [courseId, setCourseId] = useState("");
   const [groupId, setGroupId] = useState("");
   const [category, setCategory] = useState<CourseMaterialCategory>("other");
@@ -206,6 +207,7 @@ export function UploadDialog({ courses, groups, onClose, onUploaded }: UploadDia
         groupId: groupId || undefined,
         category,
         labels: parseLabels(labels),
+        nativeOnly,
       });
       toast.success(result.created
         ? result.parse_status === "ready" ? tx(locale, "资料已上传并解析", "Material uploaded and parsed") : tx(locale, "资料已保存，已进入处理队列", "Material saved and queued")
@@ -228,7 +230,7 @@ export function UploadDialog({ courses, groups, onClose, onUploaded }: UploadDia
       description={tx(locale, "PDF / TXT / Markdown · 64 MiB", "PDF / TXT / Markdown · 64 MiB")}
       closeLabel={tx(locale, "关闭", "Close")}
       onClose={onClose}
-      footer={<><Button type="button" variant="secondary" onClick={onClose} disabled={upload.isPending}>{tx(locale, "取消", "Cancel")}</Button><Button type="submit" form="course-material-upload-form" disabled={upload.isPending || !file}>{upload.isPending ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <FileUp className="h-4 w-4" />}{upload.isPending ? tx(locale, "正在解析…", "Parsing…") : tx(locale, "上传资料", "Upload")}</Button></>}
+      footer={<><Button type="button" variant="secondary" onClick={onClose} disabled={upload.isPending}>{tx(locale, "取消", "Cancel")}</Button><Button type="submit" form="course-material-upload-form" disabled={upload.isPending || !file}>{upload.isPending ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <FileUp className="h-4 w-4" />}{upload.isPending ? tx(locale, "正在上传…", "Uploading…") : tx(locale, "上传资料", "Upload")}</Button></>}
     >
       <form id="course-material-upload-form" className="grid gap-4" onSubmit={(event) => void submit(event)}>
         <div>
@@ -239,6 +241,10 @@ export function UploadDialog({ courses, groups, onClose, onUploaded }: UploadDia
           </label>
           <input id={inputId} className="sr-only" type="file" accept=".pdf,.txt,.md,.markdown" onChange={(event) => setFile(event.target.files?.[0] ?? null)} />
         </div>
+        <label className="flex items-start gap-2 text-sm">
+          <input type="checkbox" className="mt-1" checked={nativeOnly} onChange={(event) => setNativeOnly(event.target.checked)} />
+          <span>{tx(locale, "仅提取已有文字（不调用模型）", "Existing text only (no model calls)")}</span>
+        </label>
         <div className="grid gap-4 sm:grid-cols-2">
           <FormField label={tx(locale, "课程（可选）", "Course (optional)")}>
             <select className={SELECT_CLASS} value={courseId} onChange={(event) => {

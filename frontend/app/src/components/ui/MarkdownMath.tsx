@@ -7,7 +7,7 @@ import { cn } from "@/lib/cn";
 const markdownMathComponents: Components = {
   p: ({ children }) => <p className="mb-2 whitespace-pre-wrap last:mb-0">{children}</p>,
   ul: ({ children }) => <ul className="mb-2 list-disc space-y-1 pl-5 last:mb-0">{children}</ul>,
-  ol: ({ children }) => <ol className="mb-2 list-decimal space-y-1 pl-5 last:mb-0">{children}</ol>,
+  ol: ({ children, start }) => <ol start={start} className="mb-2 list-decimal space-y-1 pl-5 last:mb-0">{children}</ol>,
   li: ({ children }) => <li>{children}</li>,
   strong: ({ children }) => <strong className="font-semibold text-foreground">{children}</strong>,
   code: ({ children }) => <code className="rounded bg-muted px-1 py-0.5 text-xs">{children}</code>,
@@ -27,7 +27,12 @@ export function MarkdownMath({ children, className }: { children?: string | null
       )}
     >
       <ReactMarkdown
-        components={markdownMathComponents}
+        components={{ ...markdownMathComponents, li: ({ node, children }) => {
+          // Keep source exercise labels, including skipped or repeated numbers.
+          const offset = node?.position?.start.offset;
+          const marker = offset == null ? null : /^(\d{1,9})[.)][ \t]/.exec(content.slice(offset));
+          return <li value={marker ? Number(marker[1]) : undefined}>{children}</li>;
+        } }}
         remarkPlugins={[remarkMath]}
         rehypePlugins={[[rehypeKatex, { strict: false, throwOnError: false }]]}
       >
@@ -37,18 +42,25 @@ export function MarkdownMath({ children, className }: { children?: string | null
   );
 }
 
-const DOUBLE_ESCAPED_LATEX = /\\\\(?=(?:int|sum|prod|lim|frac|dfrac|tfrac|sqrt|ker|rank|sin|cos|tan|log|ln|exp|det|max|min|alpha|beta|gamma|delta|epsilon|theta|lambda|mu|nu|pi|rho|sigma|tau|phi|psi|omega|infty|partial|nabla|ell|lVert|rVert|Vert|text|mathrm|mathbf|mathit|operatorname|left|right|begin|end|times|cdot|div|pm|mp|leq?|geq?|neq|approx|equiv|in|notin|subseteq|supseteq|to|mapsto|circ)(?![A-Za-z]))/g;
+const DOUBLE_ESCAPED_LATEX = /\\\\(?=(?:int|sum|prod|lim|frac|dfrac|tfrac|sqrt|ker|rank|sin|cos|tan|log|ln|exp|det|max|min|alpha|beta|gamma|delta|epsilon|theta|lambda|mu|nu|pi|rho|sigma|tau|phi|psi|omega|infty|partial|nabla|ell|lVert|rVert|Vert|text|mathrm|mathbf|mathit|operatorname|left|right|begin|end|times|cdot|div|pm|mp|leq?|geq?|neq|approx|equiv|in|notin|subseteq|supseteq|to|mapsto|circ|star|langle|rangle|dots|ldots|cdots|iota|mid|forall|exists)(?![A-Za-z]))/g;
 const OVERESCAPED_NEWLINE = /\\{1,2}n(?=(?:\\{1,2}n|[\s\-*#>0-9(A-Z]|[\u3400-\u9fff]|$))/g;
 const OVERESCAPED_CODE_NEWLINE = /\\{1,2}n(?=(?:(?:async\s+)?def|class|from|import|return|if|elif|else|for|while|function|const|let|var|public|private|protected|#include)\b)/g;
 
+function normalizeDisplayMathFences(value: string): string {
+  // remark-math treats text after an opening $$ line as metadata, not math.
+  return value.replace(/(`{3,}[^\n]*\n[\s\S]*?`{3,}|~{3,}[^\n]*\n[\s\S]*?~{3,}|`[^`\n]*`)|\$\$([\s\S]*?)\$\$/g,
+    (match, code: string | undefined, math: string | undefined) =>
+      code || !math?.includes("\n") ? match : `\n$$\n${math.trim()}\n$$\n`);
+}
+
 /** Presentation fallback for already-persisted over-escaped model prose. */
 export function normalizeMarkdownMathInput(value: string): string {
-  return value
+  return normalizeDisplayMathFences(value
     .replace(/\\{1,2}r\\{1,2}n/g, "\n")
     .replace(OVERESCAPED_NEWLINE, "\n")
     .replace(OVERESCAPED_CODE_NEWLINE, "\n")
     .replace(DOUBLE_ESCAPED_LATEX, "\\")
     .replace(/\\\\(?=[\[\]()])/g, "\\")
     .replace(/(?<!\$)\${3,}(?!\$)/g, () => "$$")
-    .replace(/\n{3,}/g, "\n\n");
+    .replace(/\n{3,}/g, "\n\n"));
 }

@@ -227,6 +227,7 @@ const BYOK_CODES = new Set([
   "provider_auth_failed",
   "ocr_credential_not_found",
   "provider_permission_denied",
+  "provider_region_unsupported",
   "vision_provider_required",
   "shared_pool_kb_requires_byok",
   "no_enabled_expert",
@@ -699,7 +700,7 @@ export function classifyRecoverableError(
     };
   }
 
-  if (["target_location_needs_hint", "target_selection_limit_exceeded", "recognition_budget_exhausted", "recognition_timeout"].includes(code ?? "")) {
+  if (["target_location_needs_hint", "target_selection_limit_exceeded", "recognition_budget_exhausted", "recognition_timeout", "question_targets_incomplete"].includes(code ?? "")) {
     return {
       title: tx(locale, "本次识别范围尚未完成", "Recognition coverage is incomplete"),
       description: tx(locale, "已保存的识别结果仍然保留。请缩小页码范围或补充目标题号；系统不会自动增加付费调用。", "Saved evidence is retained. Narrow the page range or specify question numbers; no extra paid calls are started automatically."),
@@ -1101,6 +1102,12 @@ function providerConfigurationErrorCopy(
       "请在百度控制台确认已开通文档解析权限，或替换为有权限的 AK/SK。",
       "Confirm Document Parsing access in the Baidu console or replace the AK/SK with an authorized pair.",
     ],
+    provider_region_unsupported: [
+      "模型服务不支持当前网络地区",
+      "The model service does not support the current network region",
+      "请使用供应商支持的接入环境，或在 BYOK 中选择其他已获授权的模型。剩余页面不会自动重复请求。",
+      "Use a provider-supported access environment or select another authorized BYOK model. Remaining pages are not retried automatically.",
+    ],
     provider_quota_exceeded: [
       "OCR 额度已用完",
       "The OCR quota is exhausted",
@@ -1154,6 +1161,12 @@ function providerTransientErrorCopy(
   code: string | null,
   locale: Locale,
 ): Pick<RecoverableErrorInfo, "title" | "description"> | null {
+  if (code === "provider_overloaded") {
+    return {
+      title: tx(locale, "模型服务当前拥堵", "The model service is busy"),
+      description: tx(locale, "供应商暂时无法接收请求，并非已确认的每日额度耗尽。资料已保留，请稍后重试或选择另一个已启用模型。", "The provider is temporarily overloaded; this does not confirm a daily quota limit. Your files are preserved. Retry later or select another enabled model."),
+    };
+  }
   if (code === "provider_upstream_unavailable") {
     return {
       title: tx(locale, "模型服务暂时不可用", "The model service is temporarily unavailable"),

@@ -20,11 +20,11 @@ from backend.recognition.repair_response import REPAIR_PROMPT_VERSION
 from backend.services.background_errors import classify_background_error
 from backend.tools.baidu_unlimited_ocr import BaiduUnlimitedOCRClient, BaiduUnlimitedOCRError
 
-PROMPT_VERSION = "faithful-reader-v1"
+PROMPT_VERSION = "faithful-reader-v2"
 LOCATOR_PROMPT_VERSION = "bounded-page-locator-v1"
 _PURPOSES: dict[Purpose, str] = {
     "problems": "Transcribe the problem statements, conditions, question labels, options and figures. Do not solve them or generate answers or scores.",
-    "submissions": "Transcribe exactly what the student actually wrote, including incorrect mathematics, spelling, code, deletions, insertions, arrows and unfinished steps. Never correct their answer or infer their intended solution. Preserve identifying text only when actually visible. Distinguish blank space from unreadable writing.",
+    "submissions": "Transcribe exactly what the student actually wrote, including incorrect mathematics, spelling, code, deletions, insertions, arrows and unfinished steps. Never correct their answer or infer their intended solution. Preserve identifying text only when actually visible. Distinguish blank space from unreadable writing. Separate clearly external teacher feedback, ticks, awarded scores and marginal corrections as [annotation: ...], never merge them into the student's derivation. Ink color alone does not establish authorship: retain uncertain authorship as [unclear authorship: ...] rather than discard possible student work. Mark crossed-out student text as crossed out, not boxed or active reasoning. Do not use a teacher correction to fill an omitted student step.",
     "reference": "Transcribe only the supplied reference answers and derivations. Do not generate a missing answer or revise the problem.",
     "rubric": "Transcribe the literal assessment criteria, weights, point values and deduction conditions. Do not improve the rubric, assign scores or apply it.",
     "test_cases": "Transcribe literal input, expected output, labels, tables and comments. Preserve code whitespace and line breaks in fenced code blocks. Never execute or invent tests.",
@@ -200,7 +200,7 @@ class LLMRecognitionEngine:
         except Exception as exc:
             code = classify_background_error(exc, "provider_request_failed")
             raise RecognitionError(code, submission_may_exist=code not in {
-                "provider_auth_failed", "provider_permission_denied", "provider_quota_exceeded",
+                "provider_auth_failed", "provider_permission_denied", "provider_region_unsupported", "provider_quota_exceeded",
                 "provider_rate_limited", "provider_model_not_found", "provider_request_rejected",
                 "provider_vision_not_supported",
             }) from None

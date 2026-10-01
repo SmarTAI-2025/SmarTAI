@@ -603,6 +603,21 @@ def _verification_error_code(exc: Exception) -> str:
         current = current.__cause__ or current.__context__
 
     for item in exception_chain:
+        # Google's SDK uses `code` and a structured error body, not status_code.
+        # Classify known reasons without returning the provider's raw message.
+        body = getattr(item, "details", None)
+        error = body.get("error", body) if isinstance(body, dict) else None
+        if isinstance(error, dict):
+            if error.get("code") == 400 and error.get("message") == "User location is not supported for the API use.":
+                return "expert_verification_region_unsupported"
+            details = error.get("details", [])
+            if isinstance(details, list) and any(
+                isinstance(detail, dict) and detail.get("reason") in {
+                    "API_KEY_INVALID", "API_KEY_EXPIRED", "API_KEY_SERVICE_BLOCKED",
+                }
+                for detail in details
+            ):
+                return "expert_verification_auth_failed"
         if isinstance(item, ProviderEndpointError):
             return item.code
         if isinstance(item, ProviderRequestError):
@@ -650,11 +665,13 @@ def _verification_error_code(exc: Exception) -> str:
         (
             getattr(item, "status_code", None)
             or getattr(getattr(item, "response", None), "status_code", None)
+            or (getattr(item, "code", None) if isinstance(getattr(item, "code", None), int) else None)
             for item in exception_chain
             if (
                 getattr(item, "status_code", None) is not None
                 or getattr(getattr(item, "response", None), "status_code", None)
                 is not None
+                or isinstance(getattr(item, "code", None), int)
             )
         ),
         None,

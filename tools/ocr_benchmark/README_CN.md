@@ -2,6 +2,13 @@
 
 ## Harness 与检索验收
 
+- [AA 检索与前端实测修复补充](AA_RETRIEVAL_REPAIR_20260929_CN.md)：保留失败基线，记录检索/恢复修复及 Gemini 两份作答完整本地流程；这不等于自动转写和评分精度达标。
+- [AA OCR 误差、原件对照与延迟诊断](AA_OCR_ERROR_CATALOG_20260929_CN.md)：12 个局部对照、人工修改负担、智谱拥堵与 Gemini 教材拒绝输出；全文字符准确率未测。
+
+- [AA 真实测试启动记录与失败项](AA_LIVE_VALIDATION_20260929_CN.md)：前端登录/BYOK真实调用、Gemini地区阻塞、AA原生层检索未通过项。不是完整OCR/RAG验收通过。
+
+- `python -m tools.ocr_benchmark.evaluate_pdf_retrieval /absolute/path/authorized.pdf tools/ocr_benchmark/aa_retrieval_queries.json`：实际 AA PDF 原生文字层的零模型基线，复用产品 PDF worker、无损切块和检索器；只输出页号/计数/命中结果，不输出教材正文。题目清单的页号是源 PDF 页，不是书上印刷页。它不是 OCR 后或前端入库的验收。
+
 - [分层验收报告](HARNESS_ACCEPTANCE_CN.md)：05/06映射、真实与合成证据、成本边界、待授权事项；第8节为未阻塞工程收口。
 - `python -m tools.ocr_benchmark.evaluate_harness /absolute/path/private-manifest.json`：离线比较保存的E0–E4结果，不调用provider；样本/GT和输出正文不得提交仓库。
 - `python -m tools.ocr_benchmark.evaluate_retrieval`：运行[自编检索诊断语料](retrieval_cases.json)，对照旧版可追加`--index-version bm25-cjk2-ids-v1`。[已保存结果](RETRIEVAL_DIAGNOSTIC_RESULTS.json)包含失败与限制，不是实际教材留出集或语义支持证明。

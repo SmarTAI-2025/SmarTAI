@@ -5,7 +5,7 @@ import {
   Loader2,
   RefreshCw,
 } from "lucide-react";
-import { useEffect, useState, type ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import { Navigate, useNavigate, useParams } from "react-router-dom";
 import { useRetryQuestionPreparation, useStageProviders, useTask } from "@/api/hooks";
 import { SmarTAIMascot } from "@/components/brand/SmarTAIMascot";
@@ -45,29 +45,13 @@ export function ProblemRecognitionProgressPage() {
   const expertsQuery = useStageProviders();
   const retryPreparation = useRetryQuestionPreparation();
   const progressQuery = useTaskProgress(taskId);
-  const [recognitionProviderId, setRecognitionProviderId] = useState("");
   const [retryFailure, setRetryFailure] = useState<unknown>(null);
-  const status = (progressQuery.data?.status ?? taskQuery.data?.status) as TaskStatus | undefined;
+  const [acknowledgedJobId, setAcknowledgedJobId] = useState<string | null>(null);
+  // The polled snapshot also owns recovery metadata; detail can predate the failure.
+  const taskState = progressQuery.data ?? taskQuery.data;
+  const status = taskState?.status as TaskStatus | undefined;
+  const recognitionProviderId = taskState?.question_recognition_provider_id ?? "";
   const enabledExperts = (expertsQuery.data ?? []).filter((expert) => expert.enabled);
-
-  useEffect(() => {
-    if (expertsQuery.isLoading || expertsQuery.isError) return;
-    setRecognitionProviderId((current) => {
-      if (enabledExperts.some((expert) => expert.provider_id === current)) return current;
-      const frozenProviderId = taskQuery.data?.question_recognition_provider_id;
-      if (
-        frozenProviderId
-        && enabledExperts.some((expert) => expert.provider_id === frozenProviderId)
-      ) {
-        return frozenProviderId;
-      }
-      return (
-        enabledExperts.find((expert) => expert.is_default)?.provider_id
-        ?? enabledExperts[0]?.provider_id
-        ?? ""
-      );
-    });
-  }, [enabledExperts, expertsQuery.isError, expertsQuery.isLoading, taskQuery.data?.question_recognition_provider_id]);
 
   if (taskId && status === "draft" && !taskQuery.isFetching && !progressQuery.isFetching) {
     return <Navigate to={`/tasks/${taskId}/upload/problems`} replace />;
@@ -83,7 +67,7 @@ export function ProblemRecognitionProgressPage() {
   const progressFailure = retryFailure
     ?? progressQuery.progress?.error_detail
     ?? [...(progressQuery.progress?.messages ?? [])].reverse().find((event) => event.level === "error")?.message
-    ?? taskQuery.data?.error
+    ?? taskState?.error
     ?? progressQuery.error
     ?? taskQuery.error;
 
@@ -104,23 +88,33 @@ export function ProblemRecognitionProgressPage() {
     const info = classifyRecoverableError(progressFailure, {
       locale,
       phase: progressQuery.progress?.current_step ?? progressQuery.progress?.phase ?? "question_preparation",
-      jobId: taskQuery.data?.last_failed_job_id,
+      jobId: taskState?.last_failed_job_id,
       returnTo: `/tasks/${taskId}/problems/progress`,
     });
-    const failedJobId = taskQuery.data?.last_failed_job_id;
+    const failedJobId = taskState?.last_failed_job_id;
+    const submissionUncertain = taskState?.error === "provider_submit_uncertain";
+    if (submissionUncertain) {
+      info.description = locale === "zh-CN"
+        ? "上次请求可能已计费，但没有可用结果。系统不会自动重试。确认后可复用已识别资料，重新准备题目；此操作可能再次产生模型费用。"
+        : "The previous request may have been billed without a usable result. Nothing retries automatically. You may reuse recognized sources to restart preparation, which may incur additional model charges.";
+      info.actionKind = "retry";
+    }
     const canRetryPreparedSources = Boolean(
-      failedJobId && recognitionProviderId && taskQuery.data,
+      failedJobId && recognitionProviderId && taskState,
     );
     const retryPreparedSources = async () => {
-      if (!taskId || !failedJobId || !recognitionProviderId || !taskQuery.data) return;
+      if (!taskId || !failedJobId || !recognitionProviderId || !taskState) return;
+      if (submissionUncertain && acknowledgedJobId !== failedJobId) return;
       setRetryFailure(null);
       try {
         await retryPreparation.mutateAsync({
           taskId,
           jobId: failedJobId,
           recognitionProviderId,
-          expectedWorkflowRevision: taskQuery.data.workflow_revision,
+          expectedWorkflowRevision: taskState.workflow_revision,
+          ...(submissionUncertain ? { acknowledgePossibleDuplicateCall: true } : {}),
         });
+        setAcknowledgedJobId(null);
         refresh();
       } catch (error) {
         setRetryFailure(error);
@@ -134,22 +128,27 @@ export function ProblemRecognitionProgressPage() {
               id="question-retry-provider"
               label={locale === "zh-CN" ? "题目识别模型" : "Question recognition model"}
               hint={locale === "zh-CN"
-                ? "原资料和已完成步骤已保留；可直接改选模型，只重试失败的题目准备阶段。"
-                : "The original materials and completed steps are preserved. Choose a model and retry only the failed preparation stage."}
+                ? "原资料和已完成步骤已保留。继续使用本次模型重试，无需重新上传。"
+                : "Your materials and completed steps are preserved. Retry with the original model without uploading again."}
               experts={enabledExperts}
               value={recognitionProviderId}
-              disabled={retryPreparation.isPending || expertsQuery.isLoading}
+              disabled
               locale={locale}
-              onChange={(providerId) => {
-                setRecognitionProviderId(providerId);
-                setRetryFailure(null);
-              }}
+              onChange={() => undefined}
             />
           ) : null}
           <QuestionGenerationFailureSummary
             progress={progressQuery.progress}
             locale={locale}
           />
+          {submissionUncertain && failedJobId ? (
+            <label className="flex items-start gap-3 text-sm">
+              <input type="checkbox" className="mt-1" checked={acknowledgedJobId === failedJobId}
+                disabled={retryPreparation.isPending}
+                onChange={(event) => setAcknowledgedJobId(event.target.checked ? failedJobId : null)} />
+              {locale === "zh-CN" ? "我了解可能再次计费，确认重新准备题目" : "I understand possible additional charges and confirm restarting preparation"}
+            </label>
+          ) : null}
           <RecoverableActionState
             info={info}
             locale={locale}
@@ -158,7 +157,9 @@ export function ProblemRecognitionProgressPage() {
               label: info.actionKind === "refresh"
                 ? info.actionLabel
                 : canRetryPreparedSources
-                  ? (locale === "zh-CN" ? "用所选模型重试" : "Retry with selected model")
+                  ? (submissionUncertain
+                    ? (locale === "zh-CN" ? "确认重新准备题目" : "Confirm restart")
+                    : (locale === "zh-CN" ? "重试未完成步骤" : "Retry unfinished steps"))
                   : t("problemProgressChooseAgain"),
               onClick: info.actionKind === "refresh"
                 ? refresh
@@ -166,6 +167,7 @@ export function ProblemRecognitionProgressPage() {
                   ? () => void retryPreparedSources()
                   : () => navigate(`/tasks/${taskId}/upload/problems`),
               busy: taskQuery.isFetching || progressQuery.isFetching || retryPreparation.isPending,
+              disabled: submissionUncertain && acknowledgedJobId !== failedJobId,
             }}
             secondaryAction={{
               label: t("problemProgressRefresh"),

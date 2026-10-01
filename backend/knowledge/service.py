@@ -16,7 +16,7 @@ KNOWLEDGE_UPLOAD_EXTENSIONS = {".pdf", ".txt", ".md", ".markdown"}
 async def ingest_document(*, owner_id: str, original_name: str, content: bytes,
                           content_type: str | None = None, title: str | None = None,
                           retention_policy: str = "retained", origin_assignment_id: str | None = None,
-                          registry=None, recognition_route_id=None) -> KnowledgeDocument:
+                          registry=None, recognition_route_id=None, native_only: bool = False) -> KnowledgeDocument:
     """Persist before queueing. Upload completion is not whole-book completion."""
     from backend.db.knowledge_ingestion_repository import queue_document
     from backend.knowledge.ingestion import frozen_configuration, KnowledgeIngestionWorker
@@ -30,10 +30,10 @@ async def ingest_document(*, owner_id: str, original_name: str, content: bytes,
     visual = media_type == "application/pdf"
     if media_type.startswith("image/"):
         raise ValueError("Unsupported knowledge document type.")
-    if registry is None:
+    if registry is None and not native_only:
         from backend.services.task_facade import _registry_for_owner
         registry = await run_in_threadpool(_registry_for_owner, owner_id)
-    configuration = frozen_configuration(owner_id, registry, recognition_route_id)
+    configuration = frozen_configuration(owner_id, registry, recognition_route_id, native_only=native_only)
     upload = await run_in_threadpool(persist_knowledge_upload,
         storage=get_storage(), owner_id=owner_id, original_name=safe_name, content=content,
         content_type=media_type, title=(title or Path(safe_name).stem or safe_name)[:512],

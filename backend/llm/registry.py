@@ -107,6 +107,8 @@ _shared_pool_usage = _SharedPoolUsageLimiter()
 class _GuardedSharedProvider:
     """Owner-bound provider proxy that charges every shared invocation."""
 
+    is_shared_pool = True
+
     def __init__(self, provider: BaseProvider, owner_id: str) -> None:
         self._provider = provider
         self._owner_id = owner_id

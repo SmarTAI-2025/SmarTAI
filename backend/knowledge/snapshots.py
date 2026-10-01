@@ -10,8 +10,9 @@ from backend.db.session import session_scope
 from backend.domain.errors import InvalidTransition, ValidationError
 
 LEGACY_INDEX_VERSION = "bm25-cjk2-ids-v1"
-INDEX_VERSION = "bm25-cjk2-terms-v2"
-SUPPORTED_INDEX_VERSIONS = frozenset({LEGACY_INDEX_VERSION, INDEX_VERSION})
+TERMS_INDEX_VERSION = "bm25-cjk2-terms-v2"
+INDEX_VERSION = "bm25-structure-stems-v3"
+SUPPORTED_INDEX_VERSIONS = frozenset({LEGACY_INDEX_VERSION, TERMS_INDEX_VERSION, INDEX_VERSION})
 
 
 def freeze_in_session(session, owner_id, document_ids, expected=None):

@@ -19,6 +19,7 @@ import {
   answerMap,
   buildSubmissionQuestions,
   getAnswerState,
+  formatSubmissionFlag,
   getSubmissionReviewStats,
   studentNeedsAttention,
   type SubmissionAnswerState,
@@ -408,6 +409,7 @@ function AnswerStatusLink({
   to: string;
   t: (key: MessageKey) => string;
 }) {
+  const { locale } = useI18n();
   const state = getAnswerState(answer);
   const labels: Record<SubmissionAnswerState, MessageKey> = {
     recognized: "submissionReviewCellRecognized",
@@ -417,7 +419,7 @@ function AnswerStatusLink({
     missing: "submissionReviewCellMissing",
   };
   const stateLabel = t(labels[state]);
-  const label = answer?.flag?.length ? `${stateLabel} · ${answer.flag.join(" · ")}` : stateLabel;
+  const label = answer?.flag?.length ? `${stateLabel} · ${answer.flag.map((flag) => formatSubmissionFlag(flag, locale)).join(" · ")}` : stateLabel;
   const tone: MatrixStatusTone = state === "recognized"
     ? "ok"
     : state === "reviewed"

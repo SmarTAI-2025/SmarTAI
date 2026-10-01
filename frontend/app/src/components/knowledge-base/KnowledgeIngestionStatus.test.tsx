@@ -3,9 +3,27 @@ import userEvent from "@testing-library/user-event";
 import { beforeEach, expect, it, vi } from "vitest";
 import { KnowledgeIngestionStatus } from "./KnowledgeIngestionStatus";
 
-const api = vi.hoisted(() => ({ getJSON: vi.fn(), postJSON: vi.fn() }));
-vi.mock("@/api/client", () => api);
-beforeEach(() => { api.getJSON.mockReset(); api.postJSON.mockReset(); });
+const api = vi.hoisted(() => ({ getJSON: vi.fn(), postJSON: vi.fn(), postMultipart: vi.fn() }));
+vi.mock("@/api/client", async (importOriginal) => ({ ...await importOriginal<typeof import("@/api/client")>(), ...api }));
+beforeEach(() => { api.getJSON.mockReset(); api.postJSON.mockReset(); api.postMultipart.mockReset(); });
+
+it("requires opt-in to resubmit unknown requests and resets it after retry", async () => {
+  const summary = { id: "run", status: "partial", total_pages: 1, processed_pages: 1, failed_pages: 1 };
+  api.getJSON.mockResolvedValue({ summary, pages: [], next_offset: null });
+  render(<KnowledgeIngestionStatus documentId="book" ingestion={summary} zh />);
+  await userEvent.click(screen.getByText("部分可检索 · 1/1"));
+  const checkbox = screen.getByRole("checkbox");
+  expect(checkbox).not.toBeChecked();
+  await waitFor(() => expect(screen.getByRole("button", { name: "用当前默认模型重试缺页" })).not.toBeDisabled());
+  await userEvent.click(screen.getByRole("button", { name: "用当前默认模型重试缺页" }));
+  expect(api.postMultipart).toHaveBeenLastCalledWith("/knowledge/documents/book/retry-failed", null,
+    { fields: { accept_uncertain_resubmission: false } });
+  await userEvent.click(checkbox);
+  await userEvent.click(screen.getByRole("button", { name: "用当前默认模型重试缺页" }));
+  expect(api.postMultipart).toHaveBeenLastCalledWith("/knowledge/documents/book/retry-failed", null,
+    { fields: { accept_uncertain_resubmission: true } });
+  await waitFor(() => expect(checkbox).not.toBeChecked());
+});
 
 it("does not label a partial book as fully parsed, and loads coverage only on demand", async () => {
   const summary = { id: "run", status: "partial", total_pages: 25, processed_pages: 25, searchable_pages: 24, failed_pages: 1 };
@@ -14,7 +32,7 @@ it("does not label a partial book as fully parsed, and loads coverage only on de
   expect(api.getJSON).not.toHaveBeenCalled();
   expect(screen.queryByText("已解析")).not.toBeInTheDocument();
   await userEvent.click(screen.getByText("部分可检索 · 25/25"));
-  await screen.findByText("25: failed · provider_submit_uncertain");
+  await screen.findByText("25: 内容不完整 · 模型请求状态无法确认");
   expect(api.getJSON).toHaveBeenCalledWith("/knowledge/documents/book/coverage?offset=0&limit=20");
 });
 

@@ -44,7 +44,7 @@ export function KnowledgeCitationPreview({ citation }: { citation: KnowledgeCita
       {locale === "zh-CN" ? "原文覆盖不完整或识别待核对。" : "Incomplete coverage or unverified recognition."}
     </p> : null}
     {open ? <div className="mt-2 space-y-2">
-      {text ? <MarkdownMath className="text-xs leading-5">{text}</MarkdownMath> : null}
+      {text && kind === "unsupported" ? <MarkdownMath className="text-xs leading-5">{text}</MarkdownMath> : null}
       {kind !== "unsupported" ? <OriginalFilePreviewPanel descriptor={null} displayName={citation.original_name} previewKind={kind}
         initialPage={citation.unit === "page" ? citation.page_number ?? 1 : 1}
         loadState={failed ? "error" : url ? "ready" : "loading"} errorCode={failed ? "source_preview_load_failed" : null}

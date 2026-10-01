@@ -96,8 +96,8 @@ class PersistentKnowledgeRetriever(KnowledgeRetriever):
             return []
         owner_id, documents, refs = await run_in_threadpool(resolve_scope, scope)
         result = await self.retrieve_documents(query, k, owner_id=owner_id, documents=documents, refs=refs)
-        current_owner, _, _ = await run_in_threadpool(resolve_scope, scope)
-        return result if current_owner == owner_id else []
+        current_owner, _, current_refs = await run_in_threadpool(resolve_scope, scope)
+        return result if current_owner == owner_id and current_refs == refs else []
 
     async def retrieve_documents(self, query, k=5, *, owner_id, documents, refs):
         if not owner_id or not query.strip() or not refs:

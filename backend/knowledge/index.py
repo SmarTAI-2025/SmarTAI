@@ -20,6 +20,8 @@ from backend.db.session import session_scope
 from backend.knowledge.snapshots import INDEX_VERSION, LEGACY_INDEX_VERSION, SUPPORTED_INDEX_VERSIONS
 from backend.domain.errors import InvalidTransition
 from backend.knowledge.terms import concept_terms, QUERY_BOILERPLATE
+from backend.knowledge.lexical import stems, windows
+from backend.knowledge.structure import exercise_hints
 
 LEGACY_STOP_WORDS = frozenset("the a an of is are to in on and or for with that this prove show let find given using determine".split())
 STOP_WORDS = frozenset(("the a an of is are to in on and or for with that this prove show let find given using determine "
@@ -50,9 +52,13 @@ def tokenize(text, *, legacy=False):
     return words
 
 
-def index_terms(text):
+def index_terms(text, *, structured=False):
     normalized = unicodedata.normalize("NFKC", text).lower()
-    return tokenize(normalized) + sorted(concept_terms(normalized))
+    terms = tokenize(normalized) + sorted(concept_terms(normalized))
+    if structured:
+        noise = {"have", "has", "had", "which", "when", "where", "whose", "their", "them", "these", "those", "proof"}
+        terms = [term for term in terms if term not in noise]
+    return terms + stems(terms) if structured else terms
 
 
 @dataclass(frozen=True)
@@ -70,12 +76,23 @@ class KnowledgeIndex:
             raise InvalidTransition("Unknown knowledge index version.", code="knowledge_content_version_unavailable")
         self.version = version
         self.legacy = version == LEGACY_INDEX_VERSION
+        self.structured = version == INDEX_VERSION
         self.chunks = tuple(chunks)
         self.positions = {chunk.id: i for i, chunk in enumerate(self.chunks)}
+        hints, self.continuations = exercise_hints(self.chunks) if self.structured else ({}, {})
+        self.passages = []
         pool = {}
+        passage_pool = {}
         def corpus():
             for chunk in chunks:
-                terms = tokenize(chunk.content, legacy=True) if self.legacy else index_terms(chunk.content)
+                terms = tokenize(chunk.content, legacy=True) if self.legacy else index_terms(chunk.content, structured=self.structured)
+                terms += sorted(hints.get(chunk.id, ()))
+                if self.structured:
+                    # Compact immutable tuples avoid one oversized hash table
+                    # per sentence in non-repetitive, whole-book corpora.
+                    passages = {tuple(sorted({pool.setdefault(t, t) for t in index_terms(part, structured=True)}))
+                                for part in windows(chunk.content)}
+                    self.passages.append(tuple(passage_pool.setdefault(p, p) for p in passages))
                 yield [pool.setdefault(term, term) for term in (terms or ["__empty__"])]
         self.bm25 = BM25Okapi(corpus()) if chunks else None
         if self.bm25:
@@ -86,11 +103,13 @@ class KnowledgeIndex:
         if self.bm25:
             self.size_bytes += sum(sys.getsizeof(d) + 28 * len(d) for d in self.bm25.doc_freqs)
             self.size_bytes += sys.getsizeof(self.bm25.idf) + sum(sys.getsizeof(k) + 24 for k in self.bm25.idf)
+        self.size_bytes += sum(sys.getsizeof(p) for p in passage_pool)
+        self.size_bytes += sum(sys.getsizeof(group) for group in self.passages)
 
     def search(self, query, k):
         if self.bm25 is None or not query.strip() or k <= 0:
             return []
-        terms = set(index_terms(QUERY_BOILERPLATE.sub(" ", query)))
+        terms = set(index_terms(QUERY_BOILERPLATE.sub(" ", query), structured=self.structured))
         terms.update(term for term in tokenize(query) if term.startswith("id:"))
         if self.legacy:
             terms = set(tokenize(query, legacy=True))
@@ -104,7 +123,7 @@ class KnowledgeIndex:
         identifiers = {term for term in terms if term.startswith("id:")}
         formulas = {term for term in terms if term.startswith("math:")}
         concepts = {term for term in terms if term.startswith("term:")}
-        lexical = {term for term in terms if not term.startswith(("id:", "math:", "term:"))}
+        lexical = {term for term in terms if not term.startswith(("id:", "math:", "term:", "stem:"))}
         formula_only = formulas and not concepts and not identifiers and all(
             len(t) <= 1 or t.lstrip("+-").isdigit() for t in lexical)
         for i, score in enumerate(raw):
@@ -124,8 +143,23 @@ class KnowledgeIndex:
             covered = sum(term in frequencies for term in salient) / len(salient)
             exact_id = sum(term in frequencies for term in identifiers) / max(1, len(identifiers))
             exact_formula = sum(term in frequencies for term in formulas) / max(1, len(formulas))
-            ranked.append((.6 * float(score) / maximum + .4 * covered + 2 * exact_id + exact_formula, i))
+            passage = 0
+            if self.structured:
+                focused = {term for term in salient if term.startswith(("stem:", "c:", "term:", "math:"))}
+                weights = {t: max(.1, self.bm25.idf[t]) for t in focused}
+                total = sum(weights.values()) or 1
+                passage = max((sum(weights[t] for t in focused.intersection(p)) / total
+                               for p in self.passages[i]), default=0)
+            ranked.append((.6 * float(score) / maximum + .4 * covered + .6 * passage + 2 * exact_id + exact_formula, i))
         ranked.sort(key=lambda item: (-item[0], self.chunks[item[1]].id))
+        if self.structured:
+            expanded = []
+            for rank, (score, index) in enumerate(ranked):
+                expanded.append((score, index))
+                if rank < 3:
+                    for key in sorted(self.continuations.get(self.chunks[index].id, ())):
+                        expanded.append((score * .7, self.positions[key]))
+            ranked = expanded
         selected, seen, page_counts = [], set(), {}
         best = ranked[0][0] if ranked else 1
         for score, index in ranked:

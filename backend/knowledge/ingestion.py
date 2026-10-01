@@ -29,9 +29,20 @@ from backend.rag.chunker import MAX_FILE_BYTES
 
 logger = logging.getLogger(__name__)
 POLICY = "knowledge-economy-v1"
+PAUSE_PROVIDER_ERRORS = frozenset({
+    "provider_overloaded",
+    "provider_auth_failed", "provider_permission_denied", "provider_region_unsupported", "provider_quota_exceeded",
+    "provider_rate_limited", "provider_model_not_found", "provider_model_or_endpoint_not_found",
+    "provider_vision_not_supported", "provider_unreachable", "provider_credentials_unavailable",
+})
 
 
-def frozen_configuration(owner_id, registry, requested_route_id=None):
+def frozen_configuration(owner_id, registry, requested_route_id=None, *, native_only=False):
+    if native_only:
+        if requested_route_id:
+            raise ValueError("Native-only ingestion cannot select an OCR model.")
+        return dict(policy_version=POLICY, prompt_version=PROMPT_VERSION,
+                    route_id=None, route_fingerprint=None, native_only=True)
     route = None
     try:
         route = resolve_stage_provider_route(owner_id=owner_id, registry=registry, requested_route_id=requested_route_id)
@@ -178,6 +189,9 @@ class KnowledgeIngestionWorker:
                         text, state, evidence = _page_result(run)
                         extra_left -= min(1, run.operation_usage.patch_calls + run.operation_usage.empty_recovery_calls)
                     await run_in_threadpool(repo.finish_page, job, page.id, text=text, state=state, evidence=evidence)
+                    if evidence.get("error_code") in PAUSE_PROVIDER_ERRORS:
+                        await run_in_threadpool(repo.release, job, status="paused", error=evidence["error_code"])
+                        return True
             await run_in_threadpool(repo.release, job)
         except asyncio.CancelledError:
             # Keep any before-submit marker. Resumption never assumes a cancelled

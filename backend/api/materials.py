@@ -215,6 +215,7 @@ async def upload_course_material(
     group_id: Optional[str] = Form(default=None),
     category: MaterialCategory = Form(default="other"),
     labels: str = Form(default="[]"),
+    native_only: bool = Form(default=False),
     current: User = Depends(require_teacher),
 ):
     group = None
@@ -247,6 +248,7 @@ async def upload_course_material(
             content_type=file.content_type,
             title=Path(filename).stem,
             retention_policy="retained",
+            native_only=native_only,
         )
     except HTTPException:
         raise

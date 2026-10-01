@@ -74,6 +74,29 @@ async def test_small_text_same_pipeline_ready_without_model():
 
 
 @pytest.mark.asyncio
+async def test_native_only_never_resolves_credentials_and_keeps_all_pdf_pages(monkeypatch):
+    from backend.knowledge import ingestion
+    from backend.services import task_facade
+
+    def forbidden(*args, **kwargs):
+        raise AssertionError("Native-only mode must not resolve a model or credentials")
+
+    monkeypatch.setattr(task_facade, "_registry_for_owner", forbidden)
+    monkeypatch.setattr(ingestion, "resolve_stage_provider_route", forbidden)
+    who = owner()
+    doc = await ingest_document(owner_id=who, original_name="book.pdf", content=pdf(3), native_only=True)
+    job_id = doc.ingestion_summary["id"]
+    worker = KnowledgeIngestionWorker(registry_factory=forbidden)
+    await worker.run_once(job_id)
+    final = get_document(doc.id, who)
+    assert final.ingestion_summary["processed_pages"] == 3
+    assert len(list_chunks([doc.id])) == 3
+    assert final.ingestion_summary["usage"].get("initial_calls", 0) == 0
+    with pytest.raises(ValueError, match="cannot select"):
+        ingestion.frozen_configuration(who, None, "selected", native_only=True)
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("name", ["book.png", "book.docx", "book.pptx", "book.rst"])
 async def test_public_knowledge_upload_does_not_expand_confirmed_formats(name):
     with pytest.raises(ValueError, match="support PDF, TXT and Markdown"):
@@ -122,6 +145,27 @@ async def test_no_visual_route_keeps_native_text_searchable_without_complete_cov
     assert "coverage_incomplete" in chunks[0].chunk_metadata["warning_codes"]
     assert chunks[0].chunk_metadata["artifact_ids"]
     assert doc.ingestion_summary["usage"]["initial_calls"] == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("code", ["provider_region_unsupported", "provider_auth_failed", "provider_quota_exceeded"])
+async def test_provider_wide_rejection_pauses_before_requesting_remaining_pages(code):
+    who, doc_id, job_id = queued(pdf(3))
+    calls = []
+    async def reject(request, *args, **kwargs):
+        calls.append(request.pages)
+        usage = SimpleNamespace(patch_calls=0, empty_recovery_calls=0,
+            model_dump=lambda **_: dict(initial_calls=1, usage_complete=False))
+        return SimpleNamespace(assembly=None, artifact_ids=[], operation_usage=usage, safe_error_code=code)
+    worker = KnowledgeIngestionWorker(registry_factory=lambda _: Registry(), page_reader=reject)
+    assert await worker.run_once(job_id)
+    doc = get_document(doc_id, who)
+    assert doc.ingestion_summary["status"] == "paused"
+    assert doc.ingestion_summary["processed_pages"] == 1
+    assert doc.ingestion_summary["error_code"] == code
+    assert not await worker.run_once(job_id)
+    assert calls == [[1]]
+    assert [p["state"] for p in repo.manifest(doc_id, who)["pages"]] == ["failed", "unprocessed", "unprocessed"]
 
 
 @pytest.mark.asyncio
@@ -260,6 +304,13 @@ async def test_cancelled_paid_page_is_never_resubmitted_on_resume_or_retry(monke
     retry = repo.queue_document(doc.id, who, config, new_version=True)
     await worker.run_once(retry)
     assert len(calls) == 1
+    authorized = repo.queue_document(doc.id, who, config, new_version=True, resubmit_uncertain=True)
+    claimed = repo.claim_next(job_id=authorized)
+    repo.initialize(claimed, 1)
+    assert repo.reusable_page(claimed, repo.next_pages(claimed)[0]) is None
+    with session_scope() as session:
+        assert session.get(KnowledgeIngestionRecord, retry).configuration["resubmit_uncertain"] is False
+        assert session.get(KnowledgeIngestionRecord, authorized).configuration["resubmit_uncertain"] is True
 
 
 @pytest.mark.asyncio
@@ -276,3 +327,22 @@ async def test_successful_pages_reused_in_explicit_gap_retry(monkeypatch):
     pages = repo.manifest(doc_id, who)["pages"]
     assert all(p["reused_page_id"] for p in pages)
     assert len(list_chunks([doc_id])) == 2
+
+
+def test_uncertain_page_keeps_native_text_until_explicit_resubmission():
+    who, doc_id, job_id = queued()
+    job = repo.claim_next(job_id=job_id)
+    repo.initialize(job, 1)
+    page = repo.next_pages(job)[0]
+    repo.prepare_page(job, page.id, batch_extra_remaining=0)
+    repo.finish_page(job, page.id, text="Native text still searchable", state="failed",
+                     evidence={"error_code": "provider_submit_uncertain"})
+    repo.release(job)
+    retry = repo.queue_document(doc_id, who, dict(job.configuration, resubmit_uncertain=True), new_version=True)
+    next_job = repo.claim_next(job_id=retry)
+    repo.initialize(next_job, 1)
+    reused = repo.reusable_page(next_job, repo.next_pages(next_job)[0])
+    assert reused["text"] == "Native text still searchable"
+    assert reused["state"] == "failed"
+    assert reused["evidence"]["error_code"] == "provider_submit_uncertain"
+    assert next_job.configuration["resubmit_uncertain"] is False

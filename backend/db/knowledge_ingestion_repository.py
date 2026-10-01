@@ -58,14 +58,15 @@ def _job(session, job_id, owner_id, token=None):
     return row
 
 
-def queue_document(document_id, owner_id, configuration, *, new_version=False):
+def queue_document(document_id, owner_id, configuration, *, new_version=False, resubmit_uncertain=False):
     with session_scope() as session:
         doc = live_document(session, document_id, owner_id, lock=True)
         existing = session.scalar(select(KnowledgeIngestionRecord).where(
             KnowledgeIngestionRecord.document_id == document_id).order_by(KnowledgeIngestionRecord.created_at.desc()))
         if existing and (not new_version or existing.status in {"queued", "processing"}):
             return existing.id
-        return create_ingestion_in_session(session, doc, configuration)
+        return create_ingestion_in_session(session, doc, dict(configuration,
+            resubmit_uncertain=bool(new_version and resubmit_uncertain)))
 
 
 def create_ingestion_in_session(session, doc, configuration):
@@ -156,7 +157,7 @@ def prepare_page(job, page_id, *, batch_extra_remaining):
 
 
 def reusable_page(job, page):
-    """Retry only gaps; known pages and uncertain submits never get resubmitted."""
+    """Reuse known pages; uncertain submits require a new, explicitly authorized job."""
     with session_scope() as session:
         row = _job(session, job.id, job.owner_id, job.lease_token)
         if page.state != "unprocessed":
@@ -172,9 +173,9 @@ def reusable_page(job, page):
                        ("source_sha256", "policy_version", "prompt_version", "route_id", "route_fingerprint"))
             uncertain = previous.evidence.get("error_code") == "provider_submit_uncertain" or any(
                 call.get("state") == "pending" for call in (previous.operation.get("checkpoint") or {}).get("calls", []))
-            if uncertain:
-                return dict(text="", state="failed", evidence=dict(previous.evidence, error_code="provider_submit_uncertain", reused_page_id=previous.id))
-            if not same or previous.state not in GOOD_PAGES:
+            if uncertain and row.configuration.get("resubmit_uncertain"):
+                continue
+            if not uncertain and (not same or previous.state not in GOOD_PAGES):
                 continue
             start, count = previous.evidence.get("chunk_start", 0), previous.evidence.get("chunk_count", 0)
             chunks = session.scalars(select(KnowledgeChunkRecord).where(KnowledgeChunkRecord.document_id == row.document_id,
@@ -187,7 +188,10 @@ def reusable_page(job, page):
                     raise RecognitionError("recognition_artifact_invalid")
                 text += chunk.content[end - offset:]
                 end = chunk.chunk_metadata["end"]
-            return dict(text=text, state=previous.state, evidence=dict(previous.evidence, reused_page_id=previous.id,
+            evidence = dict(previous.evidence)
+            if uncertain:
+                evidence["error_code"] = "provider_submit_uncertain"
+            return dict(text=text, state="failed" if uncertain else previous.state, evidence=dict(evidence, reused_page_id=previous.id,
                 current_usage=dict(initial_calls=0, input_tokens=0, output_tokens=0, usage_complete=True)))
     return None
 

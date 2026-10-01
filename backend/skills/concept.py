@@ -142,7 +142,8 @@ class ConceptSkill(GradingSkill):
             if self.reporter and active_unit:
                 await self.reporter.substep(active_unit, "retrieve_knowledge")
 
-            chunks = await kb_tool.retrieve(problem.stem, k=5, scope=self.task_id)
+            chunks = await kb_tool.retrieve_for_grading(problem.stem, k=5, scope=self.task_id,
+                provider=self.provider, reporter=self.reporter)
             context_str = kb_tool.context_text(chunks)
 
             # Step 2: Build prompt

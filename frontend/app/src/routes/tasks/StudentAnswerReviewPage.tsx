@@ -47,6 +47,7 @@ import {
   answerMap,
   buildSubmissionQuestions,
   getAnswerState,
+  formatSubmissionFlag,
   type SubmissionAnswerState,
   type SubmissionQuestion,
 } from "@/lib/submissionReview";
@@ -994,7 +995,7 @@ function AnswerStateBadge({ state, answer, locale, t }: {
       state === "reviewed" && "bg-blue-100 text-primary dark:bg-blue-950/60 dark:text-blue-200",
       state === "flagged" && "bg-amber-100 text-amber-700 dark:bg-amber-950/70 dark:text-amber-200",
       (state === "empty" || state === "missing") && "bg-red-100 text-red-600 dark:bg-red-950/60 dark:text-red-200",
-    )} title={flagText || undefined}>
+    )} title={(answer?.flag ?? []).map((flag) => formatSubmissionFlag(flag, locale)).join(" · ") || undefined}>
       {state === "flagged" && lowConfidence ? tx(locale, "低置信", "Low confidence") : t(STATUS_KEYS[state])}
     </span>
   );

@@ -15,7 +15,7 @@ describe("task contract compatibility", () => {
     expect(result.actionHref).toContain("submissions?filter=review");
     expect(result.description).toContain("student");
   });
-  it.each(["target_location_needs_hint", "target_selection_limit_exceeded", "recognition_budget_exhausted", "recognition_timeout"])(
+  it.each(["target_location_needs_hint", "target_selection_limit_exceeded", "recognition_budget_exhausted", "recognition_timeout", "question_targets_incomplete"])(
     "offers range adjustment for %s without claiming a fresh submit", (code) => {
       const result = classifyRecoverableError(new APIError(422, code, { detail: { code } }), { locale: "en-US" });
       expect(result.title).toBe("Recognition coverage is incomplete");
@@ -378,6 +378,13 @@ describe("background task failure guidance", () => {
 
     expect(info.actionKind).toBe("retry");
     expect(info.tone).toBe("warning");
+  });
+
+  it("does not call provider overload a daily account limit", () => {
+    const info = classifyRecoverableError("provider_overloaded", { locale: "zh-CN" });
+    expect(info.title).toBe("模型服务当前拥堵");
+    expect(info.description).toContain("并非已确认的每日额度耗尽");
+    expect(info.actionKind).toBe("retry");
   });
 
   it("keeps a stable grading failure code and job id visible", () => {
