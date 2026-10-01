@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 from io import BytesIO
 from typing import List
 
@@ -21,8 +22,8 @@ logger = logging.getLogger(__name__)
 
 
 # ─── Limits (per CLAUDE plan) ─────────────────────────────────────────────────
-MAX_FILE_BYTES = 5 * 1024 * 1024   # 5 MB per upload
-MAX_CHUNKS_PER_DOC = 500
+MAX_FILE_BYTES = 64 * 1024 * 1024
+MAX_CHUNKS_PER_DOC = 500  # Legacy display constant, no longer a truncation limit.
 MAX_CHARS_PER_CHUNK = 2000          # safety belt against runaway docs
 DEFAULT_CHUNK_WORDS = 500
 DEFAULT_OVERLAP_WORDS = 50
@@ -105,44 +106,32 @@ def chunk_text(
     chunk_words: int = DEFAULT_CHUNK_WORDS,
     overlap_words: int = DEFAULT_OVERLAP_WORDS,
 ) -> List[str]:
-    """Split text into overlapping word-window chunks.
+    """Compatibility list API, without dropping long tokens or later chunks."""
+    return [item["content"] for item in chunk_spans(text, chunk_words=chunk_words, overlap_words=overlap_words)]
 
-    Returns at most MAX_CHUNKS_PER_DOC chunks; later content is dropped with a
-    warning. We split on whitespace (not real tokens) to keep this dependency
-    free — embed providers re-tokenize anyway, and BM25 fallback wants words.
+
+def chunk_spans(text: str, *, chunk_words=DEFAULT_CHUNK_WORDS, overlap_words=DEFAULT_OVERLAP_WORDS):
+    """Lossless windows with exact character offsets into the original page.
+
+    Prefer word boundaries, but split oversized Chinese/code/formula runs by
+    characters. Whitespace and formatting are retained; overlapping windows can
+    be reconstructed using offsets without counting their overlap twice.
     """
     if not text or not text.strip():
         return []
-
-    words = text.split()
-    if not words:
-        return []
-
-    if chunk_words <= 0:
-        chunk_words = DEFAULT_CHUNK_WORDS
-    if overlap_words < 0 or overlap_words >= chunk_words:
-        overlap_words = max(0, chunk_words // 10)
-
-    step = chunk_words - overlap_words
-    chunks: List[str] = []
-    i = 0
-    while i < len(words) and len(chunks) < MAX_CHUNKS_PER_DOC:
-        window = words[i : i + chunk_words]
-        chunk = " ".join(window).strip()
-        if chunk:
-            # Hard cap per-chunk char length so a doc of giant pseudo-words
-            # can't blow up downstream embedding payloads.
-            if len(chunk) > MAX_CHARS_PER_CHUNK:
-                chunk = chunk[:MAX_CHARS_PER_CHUNK]
-            chunks.append(chunk)
-        if step <= 0:
+    chunk_words = chunk_words if chunk_words > 0 else DEFAULT_CHUNK_WORDS
+    overlap_words = overlap_words if 0 <= overlap_words < chunk_words else chunk_words // 10
+    result, start = [], 0
+    while start < len(text):
+        limit = min(len(text), start + MAX_CHARS_PER_CHUNK)
+        words = list(re.finditer(r"\S+", text[start:limit]))
+        end = start + words[chunk_words].start() if len(words) > chunk_words else limit
+        result.append(dict(content=text[start:end], start=start, end=end))
+        if end == len(text):
             break
-        i += step
-
-    if len(chunks) >= MAX_CHUNKS_PER_DOC and i < len(words):
-        logger.warning(
-            f"chunk_text truncated at {MAX_CHUNKS_PER_DOC} chunks "
-            f"({len(words) - i} words discarded)"
-        )
-
-    return chunks
+        if len(words) > chunk_words:
+            next_start = start + words[chunk_words - overlap_words].start()
+        else:
+            next_start = end - (min(200, (end - start) // 10) if overlap_words else 0)
+        start = max(start + 1, next_start)
+    return result

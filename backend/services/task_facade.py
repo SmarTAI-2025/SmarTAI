@@ -821,7 +821,7 @@ def _selected_knowledge(task_id: str, owner_id: str) -> dict[str, dict]:
 
     metadata = selected_document_metadata(task_id, owner_id)
     output: dict[str, dict] = {}
-    for document in list_selected_documents(task_id, owner_id):
+    for document in list_selected_documents(task_id, owner_id, include_pending=True):
         attachment = metadata.get(document.id, {})
         material_id = attachment.get("library_material_id")
         if material_id is None:
@@ -833,6 +833,9 @@ def _selected_knowledge(task_id: str, owner_id: str) -> dict[str, dict]:
             "doc_id": document.id,
             "filename": document.original_name,
             "chunk_count": document.chunk_count,
+            "status": document.status,
+            "ingestion": document.ingestion_summary or {},
+            "content_version": document.active_version or "legacy",
             "uploaded_at": document.created_at,
             "source_kind": attachment.get("source_kind") or "upload",
             "library_material_id": material_id,

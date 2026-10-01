@@ -653,6 +653,7 @@ def publish_upload(
     owner_id: str,
     writer_claim_token: str,
     now: float | None = None,
+    ingestion_configuration: dict | None = None,
 ) -> KnowledgeUploadReservation:
     with session_scope() as session:
         _lock_owner(session, owner_id)
@@ -732,6 +733,9 @@ def publish_upload(
             session.flush()
         document.stored_file_id = stored.id
         document.updated_at = timestamp
+        if ingestion_configuration is not None:
+            from backend.db.knowledge_ingestion_repository import create_ingestion_in_session
+            create_ingestion_in_session(session, document, ingestion_configuration)
         record.stored_file_id = stored.id
         record.state = KNOWLEDGE_STORAGE_AVAILABLE
         record.available_at = timestamp

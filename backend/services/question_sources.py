@@ -10,6 +10,7 @@ import asyncio
 import hashlib
 import re
 import weakref
+from contextlib import asynccontextmanager
 from typing import Annotated
 
 from pydantic import Field, ValidationError, model_validator
@@ -40,6 +41,26 @@ def recognition_capacity():
     if loop not in _CAPACITIES:
         _CAPACITIES[loop] = RecognitionCapacity()
     return _CAPACITIES[loop]
+
+
+@asynccontextmanager
+async def recognition_engine(*, owner_id, route, registry):
+    """One reusable engine adapter; the caller freezes and authorizes the route."""
+    skill, engine = None, None
+    if route is not None and route.is_baidu_ocr:
+        fingerprint = stage_provider_configuration_fingerprint(owner_id=owner_id, route=route, registry=registry)
+        skill = build_owner_baidu_ocr_skill(owner_id, route)
+        engine = BaiduRecognitionEngine(skill.client, route_id=route.route_id, fingerprint=fingerprint, max_document_pages=1)
+    elif route is not None and route.provider is not None and getattr(route.provider, "supports_vision", False):
+        fingerprint = stage_provider_configuration_fingerprint(owner_id=owner_id, route=route, registry=registry)
+        engine = LLMRecognitionEngine(route.provider, route_id=route.route_id, fingerprint=fingerprint)
+    try:
+        yield engine
+    finally:
+        if skill is not None:
+            await skill.client.aclose()
+
+
 Page = Annotated[int, Field(strict=True, ge=1, le=10000)]
 Target = Annotated[str, Field(min_length=1, max_length=80)]
 
@@ -151,30 +172,19 @@ async def read_question_source(*, owner_id, task_id, content, filename, content_
         business_id=binding.business_id if binding is not None else task_id, stored_file_id=stored_file_id,
         original_name=filename, content_type=media_type, input_sha256=hashlib.sha256(content).hexdigest(),
     )
-    skill, engine = None, None
-    if allow_vision and route.is_baidu_ocr:
-        fingerprint = stage_provider_configuration_fingerprint(owner_id=owner_id, route=route, registry=registry)
-        skill = build_owner_baidu_ocr_skill(owner_id, route)
-        engine = BaiduRecognitionEngine(skill.client, route_id=route.route_id, fingerprint=fingerprint, max_document_pages=1)
-    elif allow_vision and route.provider is not None and getattr(route.provider, "supports_vision", False):
-        fingerprint = stage_provider_configuration_fingerprint(owner_id=owner_id, route=route, registry=registry)
-        engine = LLMRecognitionEngine(route.provider, route_id=route.route_id, fingerprint=fingerprint)
-    if media_type.startswith("image/") and engine is None:
-        raise RecognitionError("provider_vision_not_supported" if route.provider is not None else "visual_capability_unavailable")
     request = RecognitionReadRequestV1(
         source=source, purpose=purpose, scope="targets" if scope.targets else "pages" if scope.pages else "document",
         targets=scope.targets, pages=scope.pages if not scope.targets else [],
         page_hints={target: scope.pages for target in scope.targets} if scope.targets and scope.pages else {},
         search_start_page=scope.search_start_page, search_window_pages=scope.search_window_pages,
     )
-    try:
+    async with recognition_engine(owner_id=owner_id, route=route if allow_vision else None, registry=registry) as engine:
+        if media_type.startswith("image/") and engine is None:
+            raise RecognitionError("provider_vision_not_supported" if route.provider is not None else "visual_capability_unavailable")
         run = await RecognitionRunService(store=RecognitionArtifactStore(get_storage()), capacity=recognition_capacity(),
                                            cache=_CACHE, progress=reporter).run(
             request, content, engine=engine, prompt_version=PROMPT_VERSION, authorized_owner_id=owner_id, binding=binding,
         )
-    finally:
-        if skill is not None:
-            await skill.client.aclose()
     if run.status == "already_running":
         raise RecognitionError("recognition_already_running")
     assembly = run.assembly

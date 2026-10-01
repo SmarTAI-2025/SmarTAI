@@ -107,10 +107,12 @@ class CourseMaterial:
     group_name: str | None
     course_name: str | None
     course_code: str | None
+    ingestion: dict | None = None
 
     def public(self) -> dict[str, Any]:
         return {
             "material_id": self.material_id,
+            "document_id": self.document_id,
             "course_id": self.course_id,
             "group_id": self.group_id,
             "filename": self.filename,
@@ -124,6 +126,7 @@ class CourseMaterial:
             "last_used_at": self.last_used_at,
             "task_reference_count": self.task_reference_count,
             "parse_status": self.parse_status,
+            "ingestion": self.ingestion or {},
             "group_name": self.group_name,
             "course_name": self.course_name,
             "course_code": self.course_code,
@@ -463,6 +466,7 @@ def _material_dto(row, stats: dict[str, tuple[int, float | None]]) -> CourseMate
         last_used_at=last_used_at,
         task_reference_count=reference_count,
         parse_status=document.status,
+        ingestion=document.ingestion_summary,
         group_name=group_name,
         course_name=course_name,
         course_code=course_code or None,
@@ -591,7 +595,7 @@ def create_material(
             )
             if document is None:
                 raise LookupError("knowledge_document")
-            if document.status != "ready":
+            if document.status not in {"ready", "partial", "processing", "failed"}:
                 raise MaterialDocumentUnavailable(document.status)
             if course_id is not None and _course_ref(session, course_id, owner_id) is None:
                 raise LookupError("course")

@@ -26,28 +26,44 @@ class RecognitionCapacity:
     def __init__(self, *, global_limit: int = 2, owner_limit: int = 2):
         if type(global_limit) is not int or not 1 <= global_limit <= 64 or type(owner_limit) is not int or not 1 <= owner_limit <= 2:
             raise RecognitionError("recognition_request_invalid")
-        self._global = asyncio.Semaphore(global_limit)
+        self._condition = asyncio.Condition()
+        self._global_limit, self._active, self._background = global_limit, 0, 0
+        self._interactive_waiters = 0
         self._owner_limit = owner_limit
-        self._owners: dict[str, tuple[asyncio.Semaphore, int]] = {}
+        self._owners: dict[str, int] = {}
         self._loop = None
 
     @asynccontextmanager
-    async def lease(self, owner_id: str):
+    async def lease(self, owner_id: str, *, background: bool = False):
         loop = asyncio.get_running_loop()
         if self._loop is not None and self._loop is not loop:
             raise RecognitionError("recognition_request_invalid")
         self._loop = loop
-        semaphore, users = self._owners.get(owner_id, (asyncio.Semaphore(self._owner_limit), 0))
-        self._owners[owner_id] = semaphore, users + 1
+        acquired = False
+        async with self._condition:
+            self._interactive_waiters += int(not background)
+            try:
+                await self._condition.wait_for(lambda: self._active < self._global_limit
+                    and self._owners.get(owner_id, 0) < self._owner_limit
+                    and (not background or (self._background == 0 and not self._interactive_waiters)))
+                self._active += 1
+                self._background += int(background)
+                self._owners[owner_id] = self._owners.get(owner_id, 0) + 1
+                acquired = True
+            finally:
+                self._interactive_waiters -= int(not background)
+                self._condition.notify_all()
         try:
-            async with semaphore, self._global:
-                yield
+            yield
         finally:
-            _, users = self._owners[owner_id]
-            if users == 1:
-                del self._owners[owner_id]
-            else:
-                self._owners[owner_id] = semaphore, users - 1
+            if acquired:
+                async with self._condition:
+                    self._active -= 1
+                    self._background -= int(background)
+                    self._owners[owner_id] -= 1
+                    if not self._owners[owner_id]:
+                        del self._owners[owner_id]
+                    self._condition.notify_all()
 
 
 class RecognitionCallResultV1(EvidenceModel):
@@ -155,7 +171,8 @@ async def _dispatch(
     ticket = None
     uncertain = False
     try:
-        async with asyncio.timeout(budget.remaining(phase)), capacity.lease(source.owner_id):
+        lease = capacity.lease(source.owner_id, background=True) if source.scope == "knowledge_document" else capacity.lease(source.owner_id)
+        async with asyncio.timeout(budget.remaining(phase)), lease:
             budget.assert_context(source, policy, engine.capabilities)
             seconds = min(policy.per_call_seconds, budget.remaining(phase))
             ticket = budget.reserve(kind, max_output_tokens=request.max_output_tokens, region_keys=region_keys)

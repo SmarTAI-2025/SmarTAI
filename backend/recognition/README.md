@@ -672,3 +672,43 @@ The new tests use deterministic providers and injected storage/lease failures.
 They prove persistence, isolation, recovery and review contracts, not measured
 handwriting accuracy. Real-provider ablation and combined OCR/RAG acceptance
 remain in J; the knowledge pipeline is the separate H/I stage.
+
+## H: Whole-Book Knowledge Ingestion
+
+Original publication atomically queues a separate knowledge ingestion version.
+The personal, course-library and task upload routes return saved/processing
+state; only small native documents finish inline. A durable background worker
+processes at most 24 pages per claim. Each PDF/image page uses the same frozen
+engine, codec and before-submit checkpoint as target recognition, through
+knowledge-specific operation and artifact repositories. No assignment is faked.
+
+`knowledge-economy-v1` preserves clean native text, including explicitly
+unverified native math, and recognizes missing/risky visual content. Each page
+has at most one initial and one extra call; extras are limited to two per fixed
+24-page range and ceil(2% of pages) per requested ingestion. Background visual
+calls share the owner limit of two and yield to waiting interactive work.
+The original is bounded to 64 MiB, not the former 5 MiB limit. A PDF book is not
+limited to target recognition's 24-page/900-second whole-request envelope.
+
+Page states distinguish unprocessed, processing, searchable, warning, failed
+and observed blank. Coverage is paginated. Pause/resume and explicit gap retry
+do not replay ambiguous submits; already successful pages can be copied with
+their original evidence. Partial content is labeled partial, and failed
+reprocessing preserves the previously published version. Text chunks preserve
+all source characters and offsets; neither 500 chunks nor a long Chinese/code
+token silently cuts off the rest of a book.
+
+Migration `0018_knowledge_ingestion` retains versioned chunks, page manifests
+and bounded compressed recognition evidence in the database. These derived
+rows use the original's owner/deletion gate and FK cascade, avoiding external
+late-write orphan objects. Per-document safety guards are 128 MiB compressed
+evidence and 32 Mi characters of retained chunk text (overlap included); a
+reached guard is explicit failure, never successful truncation. The storage
+API reports derived evidence bytes and indexed characters separately from the
+existing raw-object quota. Text/Office parsing runs in a killable child; Office
+embedded images or unhandled supplementary content keep coverage incomplete.
+
+Five selected books are supported; the attachment request guard is now twenty.
+UI coverage, pause/resume and gap retry reuse current owner credentials, with
+no new provider setup screens. OCR precision, 1000/2500-page retrieval recall,
+frozen grading citations and end-to-end preview UX remain I/J acceptance work.

@@ -4,7 +4,7 @@ import time
 import uuid
 from dataclasses import dataclass
 
-from sqlalchemy import delete, select
+from sqlalchemy import delete, select, func
 
 from backend.db.models import (
     AssignmentKnowledgeDocumentRecord,
@@ -32,6 +32,8 @@ class KnowledgeDocument:
     error_code: str | None
     created_at: float
     updated_at: float
+    active_version: str | None = None
+    ingestion_summary: dict | None = None
 
     def public(self) -> dict:
         return {
@@ -47,6 +49,8 @@ class KnowledgeDocument:
             "error_code": self.error_code,
             "created_at": self.created_at,
             "updated_at": self.updated_at,
+            "content_version": self.active_version or "legacy",
+            "ingestion": self.ingestion_summary or {},
         }
 
 
@@ -149,7 +153,7 @@ def replace_document_chunks(document_id: str, chunks: list[str]) -> None:
             record.updated_at = time.time()
 
 
-def list_selected_documents(assignment_id: str, owner_id: str) -> list[KnowledgeDocument]:
+def list_selected_documents(assignment_id: str, owner_id: str, *, include_pending=False) -> list[KnowledgeDocument]:
     """Personal documents selected for an assignment.
 
     Teacher ownership is resolved through the assignment; the selection itself
@@ -172,7 +176,8 @@ def list_selected_documents(assignment_id: str, owner_id: str) -> list[Knowledge
                    AssignmentRecord.teacher_id == owner_id,
                    KnowledgeDocumentRecord.owner_id == owner_id,
                    KnowledgeDocumentRecord.id.in_(visible),
-                   KnowledgeDocumentRecord.status == "ready")
+                   AssignmentRecord.deletion_requested_at.is_(None),
+                   KnowledgeDocumentRecord.status.in_(["ready", "partial", "processing", "failed"] if include_pending else ["ready", "partial"]))
             .order_by(AssignmentKnowledgeDocumentRecord.selected_at)
         ))
         return [_document(record) for record in records]
@@ -243,8 +248,10 @@ def list_chunks(document_ids: list[str]) -> list[KnowledgeChunkRecord]:
     if not document_ids:
         return []
     with session_scope() as session:
-        return list(session.scalars(select(KnowledgeChunkRecord).where(
-            KnowledgeChunkRecord.document_id.in_(document_ids)
+        return list(session.scalars(select(KnowledgeChunkRecord).join(KnowledgeDocumentRecord,
+            KnowledgeDocumentRecord.id == KnowledgeChunkRecord.document_id).where(
+            KnowledgeChunkRecord.document_id.in_(document_ids),
+            KnowledgeChunkRecord.content_version == func.coalesce(KnowledgeDocumentRecord.active_version, "legacy")
         ).order_by(KnowledgeChunkRecord.document_id, KnowledgeChunkRecord.chunk_index)))
 
 
@@ -273,12 +280,12 @@ def set_task_documents(*, assignment_id: str, owner_id: str, document_ids: list[
         if assignment is None:
             raise ValueError("Assignment not found")
         unique_ids = list(dict.fromkeys(document_ids))
-        if len(unique_ids) > 3:
-            raise ValueError("An assignment can select at most 3 personal knowledge documents")
+        if len(unique_ids) > 20:
+            raise ValueError("An assignment can select at most 20 personal knowledge documents")
         if unique_ids:
             valid = set(session.scalars(select(KnowledgeDocumentRecord.id).where(
                 KnowledgeDocumentRecord.id.in_(unique_ids), KnowledgeDocumentRecord.owner_id == owner_id,
-                KnowledgeDocumentRecord.status == "ready"
+                KnowledgeDocumentRecord.status.in_(["ready", "partial", "processing", "failed"])
             )))
             if valid != set(unique_ids):
                 raise ValueError("One or more knowledge documents are unavailable")
@@ -325,7 +332,7 @@ def set_task_documents(*, assignment_id: str, owner_id: str, document_ids: list[
             previous_document_ids=previous_ids,
             current_document_ids=unique_ids,
         )
-    return list_selected_documents(assignment_id, owner_id)
+    return list_selected_documents(assignment_id, owner_id, include_pending=True)
 
 
 def assert_document_not_frozen_by_active_run(

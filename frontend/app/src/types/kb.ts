@@ -1,8 +1,13 @@
+import type { KnowledgeIngestionSummary } from "./personalKnowledge";
+
 export interface KBDoc {
   doc_id: string;
   filename: string;
   sha256?: string;
   chunk_count: number;
+  status?: string;
+  ingestion?: KnowledgeIngestionSummary;
+  content_version?: string;
   embedder?: string;
   uploaded_at?: number;
   source_kind?: "upload" | "library";

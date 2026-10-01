@@ -202,8 +202,8 @@ def list_course_materials(
         "storage": settings.storage_backend,
         "capabilities": {
             "durable": True,
-            "ocr": False,
-            "accepted_types": ["pdf", "docx", "pptx", "md", "txt", "rst"],
+            "ocr": True,
+            "accepted_types": ["pdf", "docx", "pptx", "md", "txt", "rst", "png", "jpg", "jpeg", "webp", "bmp", "tiff"],
         },
     }
 
@@ -237,7 +237,8 @@ async def upload_course_material(
             detail={"code": "material_filename_too_long", "max_length": 240},
         )
     normalized_labels = _parse_labels(labels)
-    body = await file.read()
+    from backend.rag.chunker import MAX_FILE_BYTES
+    body = await file.read(MAX_FILE_BYTES + 1)
     try:
         document = await ingest_document(
             owner_id=current.id,
@@ -256,7 +257,7 @@ async def upload_course_material(
         ) from exc
     except DomainError as exc:
         return domain_error_response(exc)
-    if document.status != "ready":
+    if document.status not in {"ready", "partial", "processing", "failed"}:
         raise HTTPException(
             status.HTTP_409_CONFLICT,
             detail={

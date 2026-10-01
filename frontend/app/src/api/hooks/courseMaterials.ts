@@ -27,6 +27,7 @@ export function useCourseMaterials(params: CourseMaterialListParams) {
   return useQuery({
     queryKey: courseMaterialKeys.list(paramsKey(params)),
     queryFn: () => courseMaterialsApi.listCourseMaterials(params),
+    refetchInterval: (query) => query.state.data?.items.some((item) => ["queued", "processing"].includes(item.ingestion?.status ?? "")) ? 5_000 : false,
   });
 }
 

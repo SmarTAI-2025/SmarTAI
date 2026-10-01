@@ -1243,7 +1243,7 @@ async def _save_source_to_library(
         title=Path(filename).stem,
         retention_policy="retained",
     )
-    if document.status != "ready":
+    if document.status not in {"ready", "partial", "processing", "failed"}:
         raise InvalidTransition("knowledge_document_not_ready")
     task = task_facade.get_task(task_id=task_id, owner_id=owner_id, full=False)
     category = {
