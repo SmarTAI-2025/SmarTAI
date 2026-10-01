@@ -58,6 +58,7 @@ type SourceDraft = {
   extractionHint: string;
   recognitionPages?: string;
   recognitionTargets?: string;
+  enableMaterialOcr?: boolean;
   saveToLibrary: boolean;
   storedFileId: string | null;
 };
@@ -239,6 +240,7 @@ export function AddProblemsPage() {
             source.recognitionTargets?.trim() ? `题号: ${source.recognitionTargets.trim()}` : ""].filter(Boolean).join("\n"),
           saveToLibrary: source.sourceMode === "upload" && source.saveToLibrary,
           recognitionProviderId,
+          enableMaterialOcr: source.enableMaterialOcr ?? false,
           replaceConfirmed,
         });
         if (typeof result.source === "object" && result.source?.stored_file_id) {
@@ -767,6 +769,12 @@ function SourceEditor({
         )}
 
         <div className="mt-3 grid gap-3 border-t pt-3 sm:grid-cols-[220px_minmax(0,1fr)]">
+          {source.sourceMode !== "inline_text" && (source.role === "rubric" || source.role === "programming_tests") ? (
+            <label className="flex items-center gap-2 text-xs sm:col-span-2">
+              <input type="checkbox" checked={source.enableMaterialOcr ?? false} disabled={disabled} onChange={(event) => onUpdate({ enableMaterialOcr: event.target.checked })} />
+              {tx(locale, "启用该资料的视觉 OCR", "Enable visual OCR for this material")}
+            </label>
+          ) : null}
           <div>
             <p className="text-xs font-semibold text-muted-foreground">
               {source.sourceMode === "inline_text" ? tx(locale, "描述范围", "Description Scope") : tx(locale, "文件结构", "File Structure")}

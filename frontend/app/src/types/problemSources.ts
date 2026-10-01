@@ -83,6 +83,7 @@ export interface ProblemSourcePreflightInput {
   structureMode: ProblemStructureMode;
   extractionHint?: string;
   recognitionOptions?: { pages?: number[]; targets?: string[]; search_start_page?: number; search_window_pages?: number };
+  enableMaterialOcr?: boolean;
   saveToLibrary: boolean;
   recognitionProviderId: string;
   replaceConfirmed?: boolean;

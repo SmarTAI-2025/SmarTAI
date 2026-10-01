@@ -16,6 +16,7 @@ import uuid
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from pathlib import Path
 from typing import Any, Literal
+from urllib.parse import quote
 
 from fastapi import (
     APIRouter,
@@ -28,6 +29,7 @@ from fastapi import (
     status,
 )
 from fastapi.concurrency import run_in_threadpool
+from fastapi.responses import Response
 from pydantic import BaseModel, Field, field_validator
 
 from backend.agents.ingest_agent import (
@@ -35,8 +37,6 @@ from backend.agents.ingest_agent import (
     MaterialImportCandidateOutput,
     generate_missing_question_materials,
     parse_material_import_to_candidates,
-    parse_reference_to_per_question,
-    parse_test_cases_to_per_question,
 )
 from backend.agents.question_preparation_agent import (
     QUESTION_PREPARATION_STAGE_SEQUENCE,
@@ -81,7 +81,6 @@ from backend.services import task_facade
 from backend.services.teacher_score_constraints import teacher_score_requirements
 from backend.services.stage_provider_routing import (
     StageProviderRoute,
-    build_owner_baidu_ocr_skill,
     list_stage_provider_options,
     resolve_stage_provider_route,
     stage_provider_configuration_fingerprint,
@@ -104,13 +103,11 @@ from backend.services.question_preparation_artifacts import (
     save_final_question_packages_artifact,
     save_question_candidate_artifact,
 )
-from backend.skills.ocr_ingest import LLMVisionOCRSkill, OCRPurpose
-from backend.services.question_sources import read_question_source, question_recognition_options, attach_recognition_review
+from backend.services.question_sources import read_question_source, question_recognition_options, attach_recognition_review, recognition_needs_review
 from backend.tools.file_processing import (
     IMAGE_MEDIA_TYPES,
     extract_text_from_upload,
     inspect_upload_content,
-    inspect_baidu_ocr_upload,
 )
 
 
@@ -123,17 +120,17 @@ SOURCE_TTL_SECONDS = 2 * 60 * 60
 
 _DOCUMENT_SOURCE_EXTENSIONS = (".pdf", ".txt", ".md", ".markdown")
 _IMAGE_SOURCE_EXTENSIONS = tuple(IMAGE_MEDIA_TYPES)
-_VISION_SOURCE_ROLES = frozenset({"problem", "reference_answer", "rubric"})
+_VISION_SOURCE_ROLES = frozenset({"problem", "reference_answer", "rubric", "programming_tests"})
 _SOURCE_ROLE_EXTENSIONS = {
     "problem": _DOCUMENT_SOURCE_EXTENSIONS,
     "reference_answer": _DOCUMENT_SOURCE_EXTENSIONS,
     "rubric": _DOCUMENT_SOURCE_EXTENSIONS,
     "programming_tests": (*_DOCUMENT_SOURCE_EXTENSIONS, ".json"),
 }
-_SOURCE_ROLE_OCR_PURPOSE: dict[str, OCRPurpose] = {
+_SOURCE_ROLE_OCR_PURPOSE = {
     "problem": "problems",
     "reference_answer": "reference",
-    "rubric": "problems",
+    "rubric": "rubric",
     "programming_tests": "test_cases",
 }
 
@@ -241,12 +238,12 @@ def _material_import_source_role(targets: list[str]) -> str:
         return "programming_tests"
     if targets == ["reference_answer"]:
         return "reference_answer"
-    if targets == ["criterion"]:
+    if "criterion" in targets:
         return "rubric"
     return "problem"
 
 
-def _source_role_ocr_purpose(role: str) -> OCRPurpose:
+def _source_role_ocr_purpose(role: str) -> str:
     """Keep OCR instructions aligned with the uploaded material's role."""
 
     try:
@@ -489,6 +486,7 @@ def question_preparation_capabilities(
             "markdown": True,
             "json_programming_tests": True,
             "ocr": has_vision,
+            "material_ocr_default_enabled": False,
             "vision": has_vision,
             "scanned_pdf": has_vision,
             "images": has_vision,
@@ -559,6 +557,7 @@ async def preflight_problem_source(
     recognition_provider_id: str | None = Form(default=None),
     replace_confirmed: bool = Form(default=False),
     recognition_options: str | None = Form(default=None),
+    enable_material_ocr: bool = Form(default=False),
     current: User = Depends(require_teacher),
     registry: ExpertRegistry = Depends(get_scoped_expert_registry),
 ):
@@ -568,6 +567,7 @@ async def preflight_problem_source(
         replace_confirmed = (
             replace_confirmed if isinstance(replace_confirmed, bool) else False
         )
+        enable_material_ocr = enable_material_ocr is True
         stored_file_id = (
             stored_file_id.strip()
             if isinstance(stored_file_id, str) and stored_file_id.strip()
@@ -643,6 +643,7 @@ async def preflight_problem_source(
             "base_workflow_revision": workflow.workflow_revision,
             "recognition_provider_id": resolved_provider_id,
             "replace_confirmed": replace_confirmed,
+            "enable_material_ocr": enable_material_ocr,
             "replacement_group_id": replacement_group_id,
             "recognition_options": parsed_recognition_options.model_dump(mode="json"),
             "recognition_configuration_fingerprint": stage_provider_configuration_fingerprint(
@@ -792,7 +793,7 @@ async def preflight_problem_source(
                 expected_attempt=operation.attempt,
                 payload={**provisional_payload, "source_ref": source_ref},
             )
-            if (role == "problem" and descriptor.get("content_type") in {"application/pdf", "image/png", "image/jpeg", "image/webp", "image/bmp", "image/tiff"}
+            if (descriptor.get("content_type") in {"application/pdf", "image/png", "image/jpeg", "image/webp", "image/bmp", "image/tiff"}
                     and (descriptor["kind"] == "upload" or descriptor.get("_recognition_original"))):
                 try:
                     read = await read_question_source(
@@ -800,6 +801,8 @@ async def preflight_problem_source(
                         filename=descriptor["filename"], content_type=descriptor.get("content_type"),
                         route=route, registry=registry, stored_file_id=stored.id if stored else None,
                         extraction_hint=extraction_hint, options=parsed_recognition_options.model_dump(),
+                        purpose=_source_role_ocr_purpose(role),
+                        allow_vision=role not in {"rubric", "programming_tests"} or enable_material_ocr,
                         reporter=get_or_create_reporter(operation.id),
                     )
                 except RecognitionError as exc:
@@ -813,20 +816,6 @@ async def preflight_problem_source(
                 text = read.text
                 descriptor["recognition"] = read.recognition
                 source_ref["recognition"] = read.recognition
-            elif route.is_baidu_ocr and descriptor["kind"] == "upload":
-                if stored is None:
-                    raise RuntimeError("source_persistence_failed")
-                text, operation = await _run_durable_question_source_ocr(
-                    operation=operation,
-                    body=descriptor["_body"],
-                    filename=descriptor["filename"],
-                    content_type=descriptor.get("content_type"),
-                    stored_source_id=stored.id,
-                    task_id=task_id,
-                    owner_id=current.id,
-                    route=route,
-                    role=role,
-                )
             else:
                 text = await _extract_selected_source(
                     descriptor=descriptor,
@@ -1145,7 +1134,7 @@ async def _select_source(
             "knowledge_document_id": material.document_id,
             "stored_file_id": material.stored_file_id,
         }
-        if role == "problem" and material.content_type in {"application/pdf", "image/png", "image/jpeg", "image/webp", "image/bmp", "image/tiff"}:
+        if material.content_type in {"application/pdf", "image/png", "image/jpeg", "image/webp", "image/bmp", "image/tiff"}:
             original = file_repository.get_file(file_id=material.stored_file_id, owner_id=owner_id)
             if original is None or original.knowledge_document_id != material.document_id:
                 raise NotFound("stored_file")
@@ -1172,111 +1161,57 @@ async def _select_source(
 
 
 async def _extract_selected_source(
-    *,
-    descriptor: dict,
-    registry: ExpertRegistry,
-    role: str,
-    provider=None,
-    vision_error_code: str | None = None,
-    stored_file_id: str | None = None,
+    *, descriptor: dict, registry: ExpertRegistry, role: str, provider=None,
+    vision_error_code: str | None = None, stored_file_id: str | None = None,
 ) -> str:
+    """Text-only fallback. Visual business inputs must use the durable adapter."""
     if descriptor["kind"] == "upload":
-        vision = descriptor.get("_vision")
-        resolved_vision_error = (
-            vision_error_code
-            or descriptor.get("_vision_error_code")
-            or (
-                "provider_vision_not_supported"
-                if provider is not None
-                else "vision_provider_required"
-            )
-        )
-        filename = descriptor["filename"]
-        if (
-            Path(filename.lower()).suffix in _IMAGE_SOURCE_EXTENSIONS
-            and role in _VISION_SOURCE_ROLES
-            and vision is None
-        ):
-            detail: dict[str, Any] = {
-                "code": resolved_vision_error,
-                "role": role,
-                "filename": filename,
-                "recovery": (
-                    "choose_another_provider"
-                    if resolved_vision_error == "provider_vision_not_supported"
-                    else "configure_vision_provider"
-                ),
-            }
-            if stored_file_id is not None:
-                detail["stored_file_id"] = stored_file_id
-            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, detail=detail)
-        ocr_skill = LLMVisionOCRSkill(vision) if vision is not None else None
-        try:
-            text = await extract_text_from_upload(
-                descriptor["_body"],
-                filename,
-                ocr_skill=ocr_skill,
-                purpose=_source_role_ocr_purpose(role),
-                reporter=None,
-            )
-        except HTTPException as exc:
-            _stable_vision_error(
-                exc,
-                role=role,
-                filename=filename,
-                vision_error_code=resolved_vision_error,
-                stored_file_id=stored_file_id,
-            )
+        if descriptor.get("content_type") in {"application/pdf", *IMAGE_MEDIA_TYPES.values()}:
+            raise RecognitionError("recognition_request_invalid")
+        text = await extract_text_from_upload(descriptor["_body"], descriptor["filename"],
+                                             purpose=_source_role_ocr_purpose(role))
     elif descriptor["kind"] == "library":
         from backend.db.knowledge_repository import list_chunks
-
-        chunks = list_chunks([descriptor["knowledge_document_id"]])
-        text = "\n\n".join(chunk.content for chunk in chunks)
+        text = "\n\n".join(chunk.content for chunk in list_chunks([descriptor["knowledge_document_id"]]))
     else:
         text = str(descriptor.get("_text") or "")
-    text = text.strip()
-    if not text:
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail={"code": "source_empty"})
+    if not text.strip():
+        raise HTTPException(400, detail={"code": "source_empty"})
     if len(text) > MAX_SOURCE_CHARACTERS:
-        raise HTTPException(status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, detail={"code": "source_text_too_large"})
+        raise HTTPException(413, detail={"code": "source_text_too_large"})
     return text
 
 
 async def _read_source(
     *, file: UploadFile | None, library_material_id: str | None,
-    stored_file_id: str | None = None,
-    inline_text: str | None, owner_id: str, registry: ExpertRegistry,
-    role: str, provider=None, task_id: str | None = None,
+    stored_file_id: str | None = None, inline_text: str | None, owner_id: str,
+    registry: ExpertRegistry, role: str, provider=None, task_id: str | None = None,
+    route: StageProviderRoute | None = None, enable_material_ocr: bool = False,
+    extraction_hint: str = "", reporter=None,
 ) -> tuple[str, dict]:
-    """Compatibility reader for auxiliary material paths.
-
-    The formal problem-source preflight uses ``_select_source`` directly so it
-    can persist upload bytes and their source relation before this extraction.
-    """
-
+    if task_id is None:
+        raise RecognitionError("recognition_request_invalid")
+    route = route or resolve_stage_provider_route(
+        owner_id=owner_id, registry=registry, requested_route_id=getattr(provider, "provider_id", None))
     descriptor = await _select_source(
-        file=file,
-        library_material_id=library_material_id,
-        stored_file_id=stored_file_id,
-        inline_text=inline_text,
-        owner_id=owner_id,
-        registry=registry,
-        role=role,
-        provider=provider,
-        task_id=task_id,
+        file=file, library_material_id=library_material_id, stored_file_id=stored_file_id,
+        inline_text=inline_text, owner_id=owner_id, registry=registry, role=role,
+        provider=route.provider, document_ocr_available=route.is_baidu_ocr, task_id=task_id,
     )
-    text = await _extract_selected_source(
-        descriptor=descriptor,
-        registry=registry,
-        role=role,
-        provider=provider,
-        vision_error_code=(
-            "provider_vision_not_supported"
-            if provider is not None
-            else "vision_provider_required"
-        ),
-        stored_file_id=descriptor.get("stored_file_id"),
-    )
+    if descriptor["kind"] == "upload" or descriptor.get("_recognition_original"):
+        result = await read_question_source(
+            owner_id=owner_id, task_id=task_id, content=descriptor["_body"], filename=descriptor["filename"],
+            content_type=descriptor.get("content_type"), route=route, registry=registry,
+            stored_file_id=descriptor.get("stored_file_id") if descriptor["kind"] == "upload" else None,
+            purpose=_source_role_ocr_purpose(role), extraction_hint=extraction_hint, reporter=reporter,
+            allow_vision=role not in {"rubric", "programming_tests"} or enable_material_ocr,
+        )
+        text = result.text
+        descriptor.update(recognition=result.recognition, recognition_stored_file_id=result.stored_file_id)
+    else:
+        text = await _extract_selected_source(descriptor=descriptor, registry=registry, role=role, provider=provider)
+    if len(text) > MAX_SOURCE_CHARACTERS:
+        raise HTTPException(413, detail={"code": "source_text_too_large"})
     return text, descriptor
 
 
@@ -1349,7 +1284,7 @@ def _source_fingerprint(payload: dict) -> str:
         for key in (
             "sha256", "filename", "content_type", "source_kind",
             "library_material_id", "structure_mode", "role",
-            "extraction_hint", "save_to_library", "targets", "recognition_options",
+            "extraction_hint", "save_to_library", "targets", "recognition_options", "enable_material_ocr",
             "base_workflow_revision", "recognition_provider_id",
             "recognition_configuration_fingerprint",
         )
@@ -1440,218 +1375,6 @@ def _validated_question_source_ref(
     else:
         ref.update(source_id=None, stored_file_id=None)
     return ref
-
-
-def _question_ocr_artifact_name(operation_id: str, attempt: int) -> str:
-    return f"{operation_id}-attempt-{attempt}-ocr.md"
-
-
-def _load_question_ocr_artifact(
-    *,
-    owner_id: str,
-    task_id: str,
-    operation_id: str,
-    attempt: int,
-) -> tuple[str, str] | None:
-    expected_name = _question_ocr_artifact_name(operation_id, attempt)
-    artifact = next((
-        item
-        for item in file_repository.list_files(
-            owner_id=owner_id,
-            assignment_id=task_id,
-        )
-        if item.kind == "question_ocr_text"
-        and item.original_name == expected_name
-    ), None)
-    if artifact is None:
-        return None
-    with get_storage().open(artifact.storage_key) as stream:
-        body = stream.read(10 * 1024 * 1024 + 1)
-    if not body or len(body) > 10 * 1024 * 1024:
-        return None
-    try:
-        text = body.decode("utf-8")
-    except UnicodeDecodeError:
-        return None
-    return (text, artifact.id) if text.strip() else None
-
-
-async def _run_durable_question_source_ocr(
-    *,
-    operation,
-    body: bytes,
-    filename: str,
-    content_type: str | None,
-    stored_source_id: str,
-    task_id: str,
-    owner_id: str,
-    route: StageProviderRoute,
-    role: str,
-):
-    """Submit one question source once and durably reuse its Markdown."""
-    if not route.is_baidu_ocr:
-        raise ValueError("route is not Baidu Unlimited-OCR")
-    recovered = _load_question_ocr_artifact(
-        owner_id=owner_id,
-        task_id=task_id,
-        operation_id=operation.id,
-        attempt=operation.attempt,
-    )
-    if recovered is not None:
-        return recovered[0], operation
-    if (operation.checkpoint or {}).get("ocr_inflight_source_id"):
-        raise RuntimeError("provider_submit_uncertain")
-
-    # Every untrusted PDF/image check completes in the killable media worker
-    # before the provider checkpoint or network call.
-    await inspect_baidu_ocr_upload(
-        body,
-        filename,
-        content_type=content_type,
-    )
-    try:
-        operation = workflow_repository.save_operation_checkpoint(
-            operation.id,
-            owner_id=owner_id,
-            expected_attempt=operation.attempt,
-            expected_checkpoint_revision=operation.checkpoint_revision,
-            stage="question_ocr_submitting",
-            checkpoint={
-                **dict(operation.checkpoint or {}),
-                "ocr_inflight_source_id": stored_source_id,
-            },
-            artifact_refs=list(dict.fromkeys([
-                *operation.artifact_refs,
-                stored_source_id,
-            ])),
-        )
-    except VersionConflict as exc:
-        current = workflow_repository.get_operation(operation.id, owner_id=owner_id)
-        recovered = _load_question_ocr_artifact(
-            owner_id=owner_id,
-            task_id=task_id,
-            operation_id=current.id,
-            attempt=current.attempt,
-        )
-        if recovered is not None:
-            return recovered[0], current
-        raise RuntimeError("provider_submit_uncertain") from exc
-
-    skill = None
-    try:
-        skill = build_owner_baidu_ocr_skill(owner_id, route)
-        result = await skill.recognize_document(
-            body,
-            filename,
-            _source_role_ocr_purpose(role),
-        )
-        text = result.text.strip()
-        if not text:
-            raise RuntimeError("ocr_empty_result")
-        try:
-            artifact = await run_in_threadpool(
-                file_repository.save_file,
-                storage=get_storage(),
-                owner_id=owner_id,
-                kind="question_ocr_text",
-                original_name=_question_ocr_artifact_name(
-                    operation.id,
-                    operation.attempt,
-                ),
-                content=text.encode("utf-8"),
-                content_type="text/markdown",
-                assignment_id=task_id,
-            )
-        except Exception as exc:
-            raise RuntimeError("provider_submit_uncertain") from exc
-        try:
-            checkpoint = dict(operation.checkpoint or {})
-            checkpoint.pop("ocr_inflight_source_id", None)
-            checkpoint["ocr_completed_source_id"] = stored_source_id
-            operation = workflow_repository.save_operation_checkpoint(
-                operation.id,
-                owner_id=owner_id,
-                expected_attempt=operation.attempt,
-                expected_checkpoint_revision=operation.checkpoint_revision,
-                stage="question_ocr_saved",
-                checkpoint=checkpoint,
-                artifact_refs=list(dict.fromkeys([
-                    *operation.artifact_refs,
-                    artifact.id,
-                ])),
-            )
-        except VersionConflict:
-            operation = workflow_repository.get_operation(
-                operation.id,
-                owner_id=owner_id,
-            )
-        return text, operation
-    except Exception as exc:
-        code = classify_background_error(exc, "problem_extraction_failed")
-        submission_may_exist = bool(
-            getattr(exc, "submission_may_exist", True)
-        )
-        projected_code = (
-            "provider_submit_uncertain"
-            if submission_may_exist
-            and code in {
-                "provider_timeout",
-                "provider_unreachable",
-                "provider_rate_limited",
-                "provider_unavailable",
-            }
-            else code
-        )
-        if not submission_may_exist:
-            try:
-                current = workflow_repository.get_operation(
-                    operation.id,
-                    owner_id=owner_id,
-                )
-                checkpoint = dict(current.checkpoint or {})
-                checkpoint.pop("ocr_inflight_source_id", None)
-                operation = workflow_repository.save_operation_checkpoint(
-                    current.id,
-                    owner_id=owner_id,
-                    expected_attempt=current.attempt,
-                    expected_checkpoint_revision=current.checkpoint_revision,
-                    stage="question_ocr_failed_before_submit",
-                    checkpoint=checkpoint,
-                    artifact_refs=current.artifact_refs,
-                )
-            except Exception as checkpoint_exc:
-                logger.warning(
-                    "Question OCR checkpoint cleanup failed; exception_type=%s",
-                    type(checkpoint_exc).__name__,
-                )
-        try:
-            workflow_repository.update_operation(
-                operation.id,
-                owner_id=owner_id,
-                expected_attempt=operation.attempt,
-                status="error",
-                error_code=projected_code,
-                completed_at=time.time(),
-            )
-        except Exception as persistence_exc:
-            logger.warning(
-                "Question OCR failure state persistence failed; exception_type=%s",
-                type(persistence_exc).__name__,
-            )
-        if projected_code != code:
-            raise RuntimeError(projected_code) from exc
-        raise
-    finally:
-        if skill is not None:
-            close = getattr(skill.client, "aclose", None)
-            if close is not None:
-                try:
-                    await close()
-                except Exception as close_exc:
-                    logger.warning(
-                        "Question OCR client close failed; exception_type=%s",
-                        type(close_exc).__name__,
-                    )
 
 
 @router.post("/{task_id}/question-preparation/jobs")
@@ -1748,6 +1471,8 @@ async def _start_question_preparation(
                 size_bytes=int(payload.get("size_bytes") or 0),
                 content_sha256=payload.get("sha256", operation.input_hash),
                 library_material_id=payload.get("library_material_id"),
+                recognition=payload.get("recognition"),
+                recognition_requires_review=recognition_needs_review(payload.get("recognition")),
                 base_workflow_revision=int(payload.get("base_workflow_revision") or 0),
                 resident_bytes=len(str(payload.get("text") or "").encode("utf-8")),
                 candidates=list(payload.get("candidates") or []),
@@ -2308,6 +2033,8 @@ def _rehydrate_question_preparation_inputs(operation):
             size_bytes=int(source_payload.get("size_bytes") or 0),
             content_sha256=frozen_sha,
             library_material_id=source_payload.get("library_material_id"),
+            recognition=source_payload.get("recognition"),
+            recognition_requires_review=recognition_needs_review(source_payload.get("recognition")),
             base_workflow_revision=int(
                 source_payload.get("base_workflow_revision") or 0
             ),
@@ -3341,13 +3068,18 @@ async def preflight_material_import(
     structure_mode: str = Form(default="organized"),
     extraction_hint: str = Form(default=""),
     save_to_library: bool = Form(default=False),
+    recognition_provider_id: str | None = Form(default=None),
+    parser_provider_id: str | None = Form(default=None),
+    enable_material_ocr: bool = Form(default=False),
     current: User = Depends(require_teacher),
     registry: ExpertRegistry = Depends(get_scoped_expert_registry),
 ):
     draft = None
     try:
         requested_targets = json.loads(targets)
-        if not isinstance(requested_targets, list):
+        if (not isinstance(requested_targets, list) or not requested_targets
+                or any(not isinstance(target, str) or target not in {"criterion", "reference_answer", "test_cases"} for target in requested_targets)
+                or len(set(requested_targets)) != len(requested_targets)):
             raise ValueError
     except (json.JSONDecodeError, ValueError):
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, detail={"code": "invalid_targets"})
@@ -3358,13 +3090,24 @@ async def preflight_material_import(
         _provider_id, route = _resolve_recognition_provider(
             owner_id=current.id,
             registry=registry,
-            requested_provider_id=None,
+            requested_provider_id=recognition_provider_id if isinstance(recognition_provider_id, str) else None,
         )
+        parser_id = parser_provider_id if isinstance(parser_provider_id, str) and parser_provider_id.strip() else None
+        if route.is_baidu_ocr and parser_id is None:
+            raise ValidationError("Choose a text model for material parsing.", code="material_parser_provider_required")
+        parser_route = (resolve_stage_provider_route(owner_id=current.id, registry=registry, requested_route_id=parser_id)
+                        if parser_id else route)
+        if parser_route.provider is None:
+            raise ValidationError("Material parsing requires a text model.", code="material_parser_provider_required")
+        parser_fingerprint = stage_provider_configuration_fingerprint(owner_id=current.id, registry=registry, route=parser_route)
+        if not isinstance(extraction_hint, str) or len(extraction_hint) > 2000:
+            raise RecognitionError("recognition_request_invalid")
         text, descriptor = await _read_source(
             file=file, library_material_id=library_material_id,
             inline_text=None, owner_id=current.id, registry=registry,
             role=_material_import_source_role(requested_targets),
-            provider=route.provider,
+            provider=route.provider, route=route, task_id=task_id,
+            enable_material_ocr=enable_material_ocr is True, extraction_hint=extraction_hint,
         )
         text_sha256 = hashlib.sha256(text.encode("utf-8")).hexdigest()
         # Create the durable producer before any task-owned object write.  The
@@ -3423,6 +3166,11 @@ async def preflight_material_import(
             "targets": requested_targets, "structure_mode": structure_mode,
             "extraction_hint": extraction_hint,
             "base_workflow_revision": workflow.workflow_revision,
+            "parser_provider_id": parser_route.route_id,
+            "parser_fingerprint": parser_fingerprint,
+            "recognition": descriptor.get("recognition"),
+            "recognition_stored_file_id": descriptor.get("recognition_stored_file_id"),
+            "source_authority": "uploaded_material",
         }
         draft = workflow_repository.update_operation(
             draft.id,
@@ -3450,7 +3198,10 @@ async def preflight_material_import(
             "workflow_revision": workflow.workflow_revision,
             "expires_at": draft.expires_at,
             "saved_material": saved_material,
+            "recognition": descriptor.get("recognition"),
         }
+    except HTTPException:
+        raise
     except DomainError as exc:
         if draft is not None and draft.status == "preparing":
             try:
@@ -3511,12 +3262,14 @@ async def start_material_import(
         provider_id, route = _resolve_recognition_provider(
             owner_id=current.id,
             registry=registry,
-            requested_provider_id=None,
+            requested_provider_id=payload.get("parser_provider_id"),
         )
+        _validate_material_parser_route(payload, route, registry, current.id)
         operation_hash = hashlib.sha256(json.dumps({
             "source": source.input_hash,
             "base_revision": base_revision,
             "provider_id": provider_id,
+            "parser_fingerprint": payload.get("parser_fingerprint"),
         }, sort_keys=True).encode()).hexdigest()
         replay = task_facade.find_task_operation(
             task_id=task_id, owner_id=current.id,
@@ -3651,6 +3404,8 @@ async def _run_material_import(
                 "source_location": candidate.source_location[:160],
                 "reason": candidate.reason[:300],
                 "would_overwrite": bool(existing),
+                "recognition": source_payload.get("recognition"),
+                "recognition_requires_review": recognition_needs_review(source_payload.get("recognition")),
             })
         snapshot = (await reporter.snapshot()).model_dump(mode="json")
         completed_at = time.time()
@@ -3711,7 +3466,12 @@ async def run_durable_material_import(operation) -> None:
         if result_artifact is not None else None
     )
     registry = task_facade._registry_for_owner(operation.owner_id)
-    provider = registry.pick_default()
+    provider = None
+    if recovered_candidates is None:
+        route = resolve_stage_provider_route(owner_id=operation.owner_id, registry=registry,
+            requested_route_id=source_payload.get("parser_provider_id") or (operation.payload or {}).get("provider_id"))
+        _validate_material_parser_route(source_payload, route, registry, operation.owner_id)
+        provider = route.provider
     if provider is None and recovered_candidates is None:
         raise ValidationError("No enabled provider is available.", code="no_provider_configured")
     task = task_facade.get_task(task_id=operation.assignment_id, owner_id=operation.owner_id, full=True)
@@ -3726,6 +3486,14 @@ async def run_durable_material_import(operation) -> None:
         recovered_candidates=recovered_candidates,
         result_artifact=result_artifact,
     )
+
+
+def _validate_material_parser_route(payload, route, registry, owner_id):
+    if route.provider is None:
+        raise ValidationError("Material parsing requires a text model.", code="material_parser_provider_required")
+    frozen = payload.get("parser_fingerprint")
+    if frozen and frozen != stage_provider_configuration_fingerprint(owner_id=owner_id, route=route, registry=registry):
+        raise RecognitionError("recognition_route_changed")
 
 
 @router.get("/{task_id}/material-imports/{job_id}")
@@ -3785,6 +3553,40 @@ def _material_summary(candidates: list[dict], applied: list[str]) -> dict:
     }
 
 
+@router.get("/{task_id}/material-imports/{job_id}/source")
+def material_import_source_content(task_id: str, job_id: str, current: User = Depends(require_teacher)):
+    try:
+        workflow_repository.get_live_workflow(task_id, owner_id=current.id)
+        job = workflow_repository.get_operation(job_id, owner_id=current.id)
+        if job.assignment_id != task_id or job.operation_type != "material_import":
+            raise NotFound("material_import")
+        payload = job.payload or {}
+        file_id = payload.get("recognition_stored_file_id") or payload.get("text_artifact_id")
+        stored = file_repository.get_file(file_id=str(file_id or ""), owner_id=current.id)
+        if stored is None or stored.assignment_id != task_id or stored.availability_status != "available":
+            raise NotFound("stored_file")
+        maximum = 64 * 1024 * 1024
+        if stored.size_bytes > maximum:
+            raise RecognitionError("recognition_artifact_limit")
+        with get_storage().open(stored.storage_key) as stream:
+            body = stream.read(maximum + 1)
+        if len(body) != stored.size_bytes or hashlib.sha256(body).hexdigest() != stored.sha256:
+            raise RecognitionError("recognition_source_mismatch")
+        current_file = file_repository.get_file(file_id=stored.id, owner_id=current.id)
+        if current_file is None or current_file.availability_status != "available":
+            raise NotFound("stored_file")
+        workflow_repository.get_live_workflow(task_id, owner_id=current.id)
+        mime = source_file_service.detected_preview_mime(body[:4096], stored.original_name)
+        if mime not in {"application/pdf", "image/png", "image/jpeg", "image/webp", "image/bmp", "image/tiff"}:
+            mime = "text/plain"
+        return Response(content=body, media_type=mime, headers={
+            "Cache-Control": "private, no-store", "X-Content-Type-Options": "nosniff",
+            "Content-Disposition": "inline; filename*=UTF-8''" + quote(source_file_service.safe_display_name(stored.original_name), safe=""),
+        })
+    except DomainError as exc:
+        return domain_error_response(exc)
+
+
 @router.post("/{task_id}/material-imports/{job_id}/apply")
 def apply_material_import(
     task_id: str, job_id: str, request: ApplyMaterialImportRequest,
@@ -3842,6 +3644,10 @@ def apply_material_import(
                 raise VersionConflict("Question no longer exists.", code="stale_revision")
             if target == "test_cases" and not is_programming_question_type(problem.get("type")):
                 raise ValidationError("Test cases require a programming question.")
+            if target == "test_cases" and (candidate.get("match_status") != "exact"
+                    or float(candidate.get("confidence") or 0) < 0.72
+                    or recognition_needs_review(payload.get("recognition"))):
+                raise RecognitionError("material_recognition_review_required")
             provenance = {
                 "import_job_id": job_id, "candidate_id": candidate_id,
                 "source_kind": payload.get("source_kind", "upload"),
@@ -3853,6 +3659,9 @@ def apply_material_import(
                 "source_location": candidate.get("source_location", ""),
                 "reason": candidate.get("reason", ""),
                 "review_status": "pending", "imported_at": time.time(), "updated_at": time.time(),
+                "authority": "uploaded_reference" if target == "reference_answer" else "uploaded_material",
+                "recognition": payload.get("recognition"),
+                "stored_file_id": payload.get("recognition_stored_file_id"),
             }
             q_id = str(candidate["q_id"])
             patch = patch_map.setdefault(q_id, {
@@ -3877,7 +3686,8 @@ def apply_material_import(
             "workflow_revision": revised_revision,
         }
     except DomainError as exc:
-        if job is not None and job.status not in {"applied", "error"}:
+        if (job is not None and job.status not in {"applied", "error"}
+                and exc.code != "material_recognition_review_required"):
             task_facade._fail_operation(
                 task_id, current.id, job.id, job.attempt,
                 task_facade._detail_error(exc, "material_import_failed"),
@@ -4316,54 +4126,18 @@ async def upload_test_cases(
 
 async def _apply_auxiliary_upload(
     *, task_id: str, file: UploadFile, current: User,
-    registry: ExpertRegistry, target: str,
+    registry: ExpertRegistry, target: str, enable_material_ocr: bool = False,
 ):
-    try:
-        task = task_facade.get_task(task_id=task_id, owner_id=current.id, full=True)
-        _provider_id, route = _resolve_recognition_provider(
-            owner_id=current.id,
-            registry=registry,
-            requested_provider_id=None,
-        )
-        text, _ = await _read_source(
-            file=file,
-            library_material_id=None,
-            inline_text=None,
-            owner_id=current.id,
-            registry=registry,
-            role=(
-                "reference_answer"
-                if target == "reference_answer"
-                else "programming_tests"
-            ),
-            provider=route.provider,
-        )
-        if target == "reference_answer":
-            mapping = await parse_reference_to_per_question(
-                text, task["problem_data"], route.provider
-            )
-        else:
-            mapping = await parse_test_cases_to_per_question(
-                text, task["problem_data"], route.provider
-            )
-        count = 0
-        for q_id, value in mapping.items():
-            if q_id not in task["problem_data"]:
-                continue
-            if target == "test_cases":
-                value = [
-                    item.model_dump(mode="json") if hasattr(item, "model_dump") else item
-                    for item in value
-                ]
-            task_facade.update_problem(
-                task_id=task_id, owner_id=current.id, q_id=q_id,
-                patch={target: value},
-            )
-            count += 1
-        workflow_repository.update_workflow(
-            task_id, owner_id=current.id,
-            **({"reference_file_name": file.filename} if target == "reference_answer" else {"test_cases_file_name": file.filename}),
-        )
-        return {"status": "success", "task_id": task_id, f"{target}_count": count}
-    except DomainError as exc:
-        return domain_error_response(exc)
+    """Compatibility uploads create candidates; only the apply endpoint mutates."""
+    preflight = await preflight_material_import(
+        task_id=task_id, file=file, library_material_id=None, targets=json.dumps([target]),
+        structure_mode="organized", extraction_hint="", save_to_library=False,
+        recognition_provider_id=None, parser_provider_id=None,
+        enable_material_ocr=enable_material_ocr, current=current, registry=registry,
+    )
+    if not isinstance(preflight, dict):
+        return preflight
+    return await start_material_import(
+        task_id=task_id, request=StartMaterialImportRequest(source_token=preflight["source_token"]),
+        background_tasks=BackgroundTasks(), current=current, registry=registry,
+    )

@@ -323,6 +323,8 @@ class ProblemSourceDraft(BaseModel):
     candidates: List[Dict[str, Any]] = Field(default_factory=list)
     not_found: List[str] = Field(default_factory=list)
     requires_confirmation: bool = False
+    recognition: Optional[Dict[str, Any]] = None
+    recognition_requires_review: bool = False
     created_at: float = Field(default_factory=time.time)
     expires_at: float
 

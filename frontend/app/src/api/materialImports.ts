@@ -18,12 +18,13 @@ export async function preflightMaterialImport(
   formData.append("structure_mode", input.structureMode);
   formData.append("extraction_hint", input.extractionHint.trim());
   formData.append("save_to_library", String(input.saveToLibrary));
+  formData.append("enable_material_ocr", String(input.enableMaterialOcr ?? false));
 
   try {
     const response = await apiClient.post<MaterialImportPreflightResponse>(
       `/tasks/${input.taskId}/material-imports/preflight`,
       formData,
-      { timeout: 180_000 },
+      { timeout: 960_000 },
     );
     return response.data;
   } catch (error) {

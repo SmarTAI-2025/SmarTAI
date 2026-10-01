@@ -53,6 +53,7 @@ export async function preflightProblemSource(
   if (input.recognitionOptions) formData.append("recognition_options", JSON.stringify(input.recognitionOptions));
   formData.append("save_to_library", String(input.saveToLibrary));
   formData.append("recognition_provider_id", input.recognitionProviderId);
+  formData.append("enable_material_ocr", String(input.enableMaterialOcr ?? false));
   formData.append("replace_confirmed", String(input.replaceConfirmed ?? false));
 
   try {

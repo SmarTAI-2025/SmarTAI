@@ -22,6 +22,7 @@ export interface MaterialImportPreflightInput {
   structureMode: ProblemStructureMode;
   extractionHint: string;
   saveToLibrary: boolean;
+  enableMaterialOcr?: boolean;
 }
 
 export interface MaterialImportPreflightResponse {
@@ -58,6 +59,7 @@ export interface MaterialImportCandidate {
   source_location: string;
   reason: string;
   would_overwrite: boolean;
+  recognition_requires_review?: boolean;
 }
 
 export interface MaterialImportSummary {
