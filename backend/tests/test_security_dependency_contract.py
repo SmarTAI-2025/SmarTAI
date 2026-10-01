@@ -12,7 +12,7 @@ ROOT = Path(__file__).resolve().parents[2]
 def _requirements(path):
     return {canonicalize_name(r.name): r for raw in map(str.strip, path.read_text().splitlines())
             if raw and not raw.startswith(("#", "-"))
-            for r in [Requirement(raw)]}
+            for r in [Requirement(raw.removesuffix("\\").strip())]}
 
 
 @pytest.mark.parametrize("name,vulnerable", [
@@ -26,7 +26,24 @@ def test_deployment_excludes_audited_vulnerable_versions(name, vulnerable):
     requirements = _requirements(ROOT / "render-requirements.txt")
     requirements.update(_requirements(ROOT / "security-constraints.txt"))
     assert vulnerable not in requirements[name].specifier
-    assert "-c security-constraints.txt" in (ROOT / "render-requirements.txt").read_text()
+    assert "-c security-constraints.txt" in (ROOT / "requirements.in").read_text()
+
+
+def test_runtime_lock_satisfies_direct_requirements_and_security_floors():
+    locked = _requirements(ROOT / "render-requirements.txt")
+    for source in ("requirements.in", "security-constraints.txt"):
+        for name, requirement in _requirements(ROOT / source).items():
+            pin, = locked[name].specifier
+            assert pin.operator == "=="
+            assert pin.version in requirement.specifier, (name, pin, requirement)
+
+
+def test_test_lock_preserves_runtime_versions_and_platform_markers():
+    runtime = _requirements(ROOT / "render-requirements.txt")
+    development = _requirements(ROOT / "requirements-dev.txt")
+    for name, requirement in runtime.items():
+        assert development[name].specifier == requirement.specifier, name
+        assert development[name].marker == requirement.marker, name
 
 
 @pytest.mark.parametrize("kind,model,cls_name", [

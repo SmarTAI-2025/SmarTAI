@@ -14,12 +14,14 @@ services:
     env: python
     plan: free
     rootDir: .
-    buildCommand: pip install -r render-requirements.txt
+    buildCommand: >-
+      python -m pip install --require-hashes --only-binary=:all: -r render-requirements.txt
+      && python -m pip check
     startCommand: alembic upgrade head && uvicorn backend.main:app --host 0.0.0.0 --port $PORT
     healthCheckPath: /ready
     envVars:
       - key: PYTHON_VERSION
-        value: "3.11"   # Render supports the backend's numpy/langchain stack.
+        value: "3.12.15"   # Keep in sync with the root .python-version.
       - key: SMARTAI_GRADING_ENGINE
         value: v2
       - key: SMARTAI_RUNTIME_ENVIRONMENT

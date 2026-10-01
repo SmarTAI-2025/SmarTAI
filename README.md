@@ -22,35 +22,56 @@
 
 ### 环境分工
 
-- **后端使用 Python 3.11 或 3.12**：FastAPI、LLM、RAG、SymPy 和数据库迁移等依赖均在 Python 环境中运行。
+- **后端固定 CPython 3.12.15**：版本以根目录 `.python-version` 为准，本地、CI 和部署使用同一补丁版本。
 - **React 前端使用 Node.js 20 + npm**：依赖版本由 `frontend/app/package-lock.json` 锁定，无需安装 Python 前端包。
 - **本地默认使用轻量模式**：SQLite 数据库位于 `data/smartai.db`，上传文件保存在 `data/uploads/`。
 
 ### 准备后端 Python 环境
 
-可以使用 Conda 创建并激活专用环境：
+先安装 `.python-version` 指定的 CPython，再创建全新环境。macOS/Linux 可使用
+[pyenv](https://github.com/pyenv/pyenv#installation)（需要其 Python 编译依赖）：
 
 ```bash
-conda create -n smartai python=3.11
-conda activate smartai
+pyenv install -s "$(cat .python-version)"
+PYENV_VERSION="$(cat .python-version)" pyenv exec python -m venv .venv
+source .venv/bin/activate
 ```
 
-也可以使用标准虚拟环境：
+已经安装该版本时，直接用对应解释器执行 `python -m venv .venv`，然后激活。
+Windows 使用 `.venv\Scripts\Activate.ps1`。也可用 Conda 的全新环境：
 
 ```bash
-python -m venv .venv
+conda create -n smartai-py312 --override-channels -c conda-forge --no-default-packages python=3.12.15 pip
+conda activate smartai-py312
 ```
 
-环境激活后请统一使用 `python` / `pip`，避免与系统 Python 混淆。
+2026-10-01 核验时 Conda 频道尚未提供 3.12.15；在其构建发布前使用上面的
+pyenv/CPython + venv 方式。不要因为频道暂缺而修改项目版本或复用旧 `smartai` 环境。
+环境激活后统一使用 `python` / `python -m pip`，并确认解释器：
+
+```bash
+python -c "import pathlib, platform, bz2, lzma, sqlite3, ssl; assert platform.python_version() == pathlib.Path('.python-version').read_text().strip(); print(platform.python_version())"
+```
 
 ### 安装后端依赖
 
 在仓库根目录执行：
 
 ```bash
-python -m pip install --upgrade pip
-pip install -r render-requirements.txt
+python -m pip install --require-hashes --only-binary=:all: -r render-requirements.txt
+python -m pip check
 ```
+
+`render-requirements.txt` 是本地和 AWS/Render 共用的完整运行依赖锁文件，名称保留以兼容
+既有部署；`backend/requirements.txt` 只是同一文件的入口。所有实际版本和下载哈希已经锁定，
+安装时不会重新选择最新版。仅使用预编译 wheel，缺少匹配 wheel 时明确失败，避免服务器临时
+编译 Python 包。不要在服务器运行 `pip freeze` 覆盖它，也不要另写一份手工 AWS 依赖清单。
+
+直接依赖在 `requirements.in` 中维护，锁文件中较多的包是它们必需的传递依赖。
+现有 PDF、图片、DOCX、PPTX、RAR/7Z、BM25、词干处理和数据库功能所需的包均保留。
+其中 **RAR 解压还需要操作系统提供 `unrar` 等受 rarfile 支持的可执行程序**，pip 安装
+无法提供它；部署启用 RAR 时需安装并用实际压缩样本验证。Python 前端框架及历史本地
+环境的额外包不在依赖源中。
 
 从示例创建本地配置：
 
@@ -268,9 +289,14 @@ VITE_SMARTAI_BACKEND_URL=http://localhost:8000
 后端测试（在仓库根目录执行）：
 
 ```bash
-pip install pytest pytest-asyncio
+python -m pip install --require-hashes --only-binary=:all: -r requirements-dev.txt
+python -m pip check
 python -m pytest backend/tests -q
 ```
+
+`requirements-dev.txt` 包含运行依赖和 pytest、pytest-asyncio 等测试工具，运行部分与
+部署锁文件保持一致。PostgreSQL 集成和 Linux 专属资源隔离检查由 Ubuntu 24.04 CI 执行；
+本地 SQLite 通过不替代这些检查，也不代表真实模型或 AWS 已验收。
 
 前端检查（在 `frontend/app/` 执行）：
 
@@ -281,9 +307,69 @@ npm test
 npm run build
 ```
 
+### 更新依赖（维护者）
+
+锁文件使用 **uv 0.12.17** 生成；uv 只用于维护锁文件，服务器安装依赖只需 pip。
+修改 `requirements.in` 或 `requirements-dev.in` 后，在根目录依次执行：
+
+```bash
+uv pip compile requirements.in --python-version "$(cat .python-version)" --universal --generate-hashes -o render-requirements.txt
+uv pip compile requirements-dev.in --python-version "$(cat .python-version)" --universal --generate-hashes -o requirements-dev.txt
+```
+
+`requirements-dev.in` 以运行锁文件为约束，必须先生成运行锁。保留 `security-constraints.txt`
+中的安全下限；有意升级时对第一条命令增加 `--upgrade`（或 `--upgrade-package 包名`），
+再生成测试锁、用全新环境安装并通过 CI 后一起提交。版本锁定减少部署漂移，但安全更新
+仍需定期通过 PR 更新并测试；不要在部署过程中自动升级包。Python 升级时同步
+`.python-version` 和 `backend/render.yaml`，重新生成两份锁并验证。
+
 ---
 
 ## 部署到公网
+
+### AWS Linux 标准环境
+
+以下适用于 **EC2 上的 Amazon Linux 2023 或 Ubuntu 24.04，CPython 3.12.15，x86_64**。
+依赖使用 glibc Linux wheel；其他架构或 Alpine/musl 需单独验证。以下安装步骤不创建 AWS
+资源，也不改变已有数据库。部署应检出已合并且 CI 通过的确定 commit，并在每个 release
+目录创建新 `.venv`，避免旧包残留。
+
+首次准备主机时，先按系统安装 Python 编译依赖（二选一）：
+
+```bash
+# Amazon Linux 2023
+sudo dnf install -y git gcc make patch openssl-devel zlib-devel bzip2-devel readline-devel sqlite-devel libffi-devel xz-devel libuuid-devel
+
+# Ubuntu 24.04
+sudo apt-get update
+sudo apt-get install -y git build-essential patch libssl-dev zlib1g-dev libbz2-dev libreadline-dev libsqlite3-dev libffi-dev liblzma-dev uuid-dev
+```
+
+用部署服务账号按 [pyenv 官方说明](https://github.com/pyenv/pyenv#installation)安装并初始化
+pyenv（需包含 3.12.15 的版本定义）。不要修改 Amazon Linux 的系统 Python 链接。
+在确定版本的仓库根目录执行：
+
+```bash
+pyenv install -s "$(cat .python-version)"
+PYENV_VERSION="$(cat .python-version)" pyenv exec python -m venv .venv
+source .venv/bin/activate
+python -c "import pathlib, platform, bz2, lzma, sqlite3, ssl; assert platform.python_version() == pathlib.Path('.python-version').read_text().strip()"
+python -m pip install --require-hashes --only-binary=:all: -r render-requirements.txt
+python -m pip check
+```
+
+随后通过服务的环境文件或秘密管理系统配置下文的生产变量，备份数据库后执行
+`.venv/bin/python -m alembic upgrade head`。服务管理器使用仓库根目录作为工作目录，
+以非 root 服务账号启动 `.venv/bin/python -m uvicorn backend.main:app --host 127.0.0.1 --port 8000`，
+由 HTTPS 反向代理转发。先沿用单 worker；多 worker 的后台任务调度需要单独验证。
+用 `curl --fail http://127.0.0.1:8000/ready` 检查就绪，再验证目标 PostgreSQL、对象存储
+和所启用模型的真实流程。数据库/存储地址、CORS、密钥和 RAR 系统工具不能由 requirements 配置。
+
+公开使用前仍需按团队的
+`docs/active_beta_launch/20260803_leader_replan/PRE_PRODUCTION_SECURITY_RELEASE_GATE_CN.md`
+完成发布门禁；安装成功和 CI 通过只证明本次环境检查的范围。
+
+### 现有托管部署配置
 
 仓库已提供后端的 Render 部署配置，推荐使用以下组合：
 

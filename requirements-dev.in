@@ -1,0 +1,8 @@
+# Test dependencies plus the exact same runtime versions used in deployment.
+-r requirements.in
+-c render-requirements.txt
+
+pytest>=8.4,<10
+pytest-asyncio>=1.2,<2
+PyYAML>=6.0.3,<7
+packaging>=25,<27
