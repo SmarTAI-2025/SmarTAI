@@ -50,6 +50,7 @@ export async function preflightProblemSource(
   formData.append("structure_mode", input.structureMode);
   formData.append("role", input.role ?? "problem");
   formData.append("extraction_hint", input.extractionHint?.trim() ?? "");
+  if (input.recognitionOptions) formData.append("recognition_options", JSON.stringify(input.recognitionOptions));
   formData.append("save_to_library", String(input.saveToLibrary));
   formData.append("recognition_provider_id", input.recognitionProviderId);
   formData.append("replace_confirmed", String(input.replaceConfirmed ?? false));
@@ -58,7 +59,7 @@ export async function preflightProblemSource(
     const response = await apiClient.post<ProblemSourcePreflightResponse>(
       `/tasks/${input.taskId}/question-preparation/sources/preflight`,
       formData,
-      { timeout: 180_000 },
+      { timeout: 960_000 },
     );
     return response.data;
   } catch (error) {

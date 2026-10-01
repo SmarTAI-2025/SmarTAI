@@ -59,6 +59,8 @@ from backend.domain.errors import (
     InvalidTransition,
     LeaseLost,
     NotFound,
+    RecognitionError,
+    PDF_EVIDENCE_STATUS_CODES,
     ValidationError,
     VersionConflict,
 )
@@ -103,6 +105,7 @@ from backend.services.question_preparation_artifacts import (
     save_question_candidate_artifact,
 )
 from backend.skills.ocr_ingest import LLMVisionOCRSkill, OCRPurpose
+from backend.services.question_sources import read_question_source, question_recognition_options, attach_recognition_review
 from backend.tools.file_processing import (
     IMAGE_MEDIA_TYPES,
     extract_text_from_upload,
@@ -166,6 +169,12 @@ def _failed_question_preparation_replay_response(operation):
 
 
 def _provider_http_status_for_code(code: str) -> int:
+    if code in PDF_EVIDENCE_STATUS_CODES:
+        return PDF_EVIDENCE_STATUS_CODES[code]
+    if code == "recognition_already_running":
+        return 409
+    if code.startswith("recognition_") or code.startswith("target_") or code == "visual_capability_unavailable":
+        return 422
     if code in {"provider_rate_limited", "media_inspection_busy"}:
         return status.HTTP_429_TOO_MANY_REQUESTS
     if code in {
@@ -549,6 +558,7 @@ async def preflight_problem_source(
     save_to_library: bool = Form(default=False),
     recognition_provider_id: str | None = Form(default=None),
     replace_confirmed: bool = Form(default=False),
+    recognition_options: str | None = Form(default=None),
     current: User = Depends(require_teacher),
     registry: ExpertRegistry = Depends(get_scoped_expert_registry),
 ):
@@ -601,6 +611,12 @@ async def preflight_problem_source(
             registry=registry,
             requested_provider_id=recognition_provider_id,
         )
+        parsed_recognition_options = question_recognition_options(
+            recognition_options if isinstance(recognition_options, str) else None,
+            extraction_hint=extraction_hint if isinstance(extraction_hint, str) else "",
+        )
+        if not isinstance(extraction_hint, str) or len(extraction_hint) > 2000:
+            raise ValidationError("Recognition hints exceed the supported length.", code="recognition_request_invalid")
         descriptor = await _select_source(
             file=file,
             library_material_id=library_material_id,
@@ -628,6 +644,10 @@ async def preflight_problem_source(
             "recognition_provider_id": resolved_provider_id,
             "replace_confirmed": replace_confirmed,
             "replacement_group_id": replacement_group_id,
+            "recognition_options": parsed_recognition_options.model_dump(mode="json"),
+            "recognition_configuration_fingerprint": stage_provider_configuration_fingerprint(
+                owner_id=current.id, route=route, registry=registry,
+            ),
         }
         input_hash = _source_fingerprint(provisional_payload)
         replay = task_facade.find_task_operation(
@@ -693,7 +713,7 @@ async def preflight_problem_source(
         artifact_refs: list[str] = []
         stored_created = False
         stored = descriptor.get("_stored")
-        if descriptor["kind"] == "upload":
+        if descriptor["kind"] == "upload" or descriptor.get("_recognition_original"):
             try:
                 if stored is None:
                     stored, stored_created = source_file_service.persist_problem_source(
@@ -772,7 +792,28 @@ async def preflight_problem_source(
                 expected_attempt=operation.attempt,
                 payload={**provisional_payload, "source_ref": source_ref},
             )
-            if route.is_baidu_ocr and descriptor["kind"] == "upload":
+            if (role == "problem" and descriptor.get("content_type") in {"application/pdf", "image/png", "image/jpeg", "image/webp", "image/bmp", "image/tiff"}
+                    and (descriptor["kind"] == "upload" or descriptor.get("_recognition_original"))):
+                try:
+                    read = await read_question_source(
+                        owner_id=current.id, task_id=task_id, content=descriptor["_body"],
+                        filename=descriptor["filename"], content_type=descriptor.get("content_type"),
+                        route=route, registry=registry, stored_file_id=stored.id if stored else None,
+                        extraction_hint=extraction_hint, options=parsed_recognition_options.model_dump(),
+                        reporter=get_or_create_reporter(operation.id),
+                    )
+                except RecognitionError as exc:
+                    detail = {"code": exc.code, "role": role, "filename": descriptor["filename"],
+                              "stored_file_id": stored.id if stored else None}
+                    if exc.code == "provider_vision_not_supported":
+                        detail["recovery"] = "choose_another_provider"
+                    raise HTTPException(_provider_http_status_for_code(exc.code), detail=detail) from None
+                finally:
+                    remove_reporter(operation.id)
+                text = read.text
+                descriptor["recognition"] = read.recognition
+                source_ref["recognition"] = read.recognition
+            elif route.is_baidu_ocr and descriptor["kind"] == "upload":
                 if stored is None:
                     raise RuntimeError("source_persistence_failed")
                 text, operation = await _run_durable_question_source_ocr(
@@ -890,6 +931,7 @@ async def preflight_problem_source(
             "candidates": candidates,
             "source_ref": source_ref,
             "saved_material": saved_material,
+            "recognition": descriptor.get("recognition"),
         }
         operation = workflow_repository.update_operation(
             operation.id,
@@ -952,6 +994,7 @@ def _problem_source_preflight_response(*, operation, workflow_revision: int) -> 
         "workflow_revision": workflow_revision,
         "recognition_provider_id": payload.get("recognition_provider_id"),
         "saved_material": payload.get("saved_material"),
+        "recognition": payload.get("recognition"),
     }
 
 
@@ -1102,6 +1145,20 @@ async def _select_source(
             "knowledge_document_id": material.document_id,
             "stored_file_id": material.stored_file_id,
         }
+        if role == "problem" and material.content_type in {"application/pdf", "image/png", "image/jpeg", "image/webp", "image/bmp", "image/tiff"}:
+            original = file_repository.get_file(file_id=material.stored_file_id, owner_id=owner_id)
+            if original is None or original.knowledge_document_id != material.document_id:
+                raise NotFound("stored_file")
+            maximum = 64 * 1024 * 1024
+            if original.size_bytes > maximum:
+                raise HTTPException(413, detail={"code": "source_too_large", "max_bytes": maximum})
+            def read_original():
+                with get_storage().open(original.storage_key) as stream:
+                    return stream.read(maximum + 1)
+            body = await run_in_threadpool(read_original)
+            if len(body) > maximum or hashlib.sha256(body).hexdigest() != material.sha256:
+                raise HTTPException(422, detail={"code": "recognition_source_mismatch"})
+            descriptor.update(_body=body, _recognition_original=True)
     else:
         text = (inline_text or "").strip()
         descriptor = {
@@ -1292,8 +1349,9 @@ def _source_fingerprint(payload: dict) -> str:
         for key in (
             "sha256", "filename", "content_type", "source_kind",
             "library_material_id", "structure_mode", "role",
-            "extraction_hint", "save_to_library", "targets",
+            "extraction_hint", "save_to_library", "targets", "recognition_options",
             "base_workflow_revision", "recognition_provider_id",
+            "recognition_configuration_fingerprint",
         )
     }
     return hashlib.sha256(json.dumps(selected, sort_keys=True).encode()).hexdigest()
@@ -1359,10 +1417,16 @@ def _validated_question_source_ref(
         material = course_library_repository.get_material(material_id, owner_id)
         if material is None:
             raise NotFound("problem_source")
-        ref.update(
-            stored_file_id=material.stored_file_id,
-            knowledge_document_id=material.document_id,
-        )
+        clone_id = ref["stored_file_id"] if ref.get("source_id") and ref["stored_file_id"] != material.stored_file_id else None
+        if clone_id:
+            clone = file_repository.get_file(file_id=clone_id, owner_id=owner_id)
+            original_source = source_outcome_repository.get_source(ref["source_id"], owner_id=owner_id)
+            if (clone is None or clone.assignment_id != task_id or clone.kind != "problem_source" or clone.sha256 != material.sha256
+                    or original_source.assignment_id != task_id
+                    or original_source.operation_id != operation.id or original_source.attempt != operation.attempt
+                    or original_source.stored_file_id != clone_id):
+                raise NotFound("problem_source")
+        ref.update(stored_file_id=clone_id or material.stored_file_id, knowledge_document_id=material.document_id)
         if material.stored_file_id is not None:
             stored = file_repository.get_file(
                 file_id=material.stored_file_id, owner_id=owner_id
@@ -3135,6 +3199,7 @@ async def _run_question_preparation(
                 provider_submission_safe=(durable_operation is not None),
             )
         # Restored final artifacts must obey the same frozen teacher policy.
+        attach_recognition_review(packages, [payload for _draft, _text, payload in sources])
         teacher_score_requirements(packages, score_policy, check_rubrics=True)
         if on_packages_prepared is not None:
             packages = await on_packages_prepared(packages)

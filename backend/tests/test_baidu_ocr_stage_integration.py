@@ -107,6 +107,11 @@ class _FakeDocumentOCRSkill:
         self.markdown = markdown
         self.client = _FakeClient()
         self.calls: list[tuple[bytes, str, str]] = []
+        self.client.recognize_document = self._engine_read
+
+    async def _engine_read(self, data, filename):
+        result = await self.recognize_document(data, filename, "problems")
+        return SimpleNamespace(markdown=result.text, duration_ms=1)
 
     async def recognize_document(
         self,
@@ -179,8 +184,7 @@ async def test_question_ocr_success_reuses_artifact_and_freezes_three_stage_rout
         return question_skill
 
     monkeypatch.setattr(
-        task_preparation,
-        "build_owner_baidu_ocr_skill",
+        "backend.services.question_sources.build_owner_baidu_ocr_skill",
         fake_factory,
     )
 
@@ -208,7 +212,9 @@ async def test_question_ocr_success_reuses_artifact_and_freezes_three_stage_rout
     replayed = await preflight_once()
     assert replayed["source_token"] == prepared["source_token"]
     assert factory_calls == [(owner_id, route_id, credential_id)]
-    assert question_skill.calls == [(PNG_1X1, "questions.png", "problems")]
+    assert len(question_skill.calls) == 1
+    assert question_skill.calls[0][1:] == ("source.png", "problems")
+    assert prepared["recognition"]["coverage"]["processed_pages"] == [1]
     assert question_skill.client.closed is True
 
     background = _BackgroundTasks()
@@ -363,8 +369,7 @@ async def test_question_ocr_uncertain_submit_is_not_repeated(monkeypatch):
         return skill
 
     monkeypatch.setattr(
-        task_preparation,
-        "build_owner_baidu_ocr_skill",
+        "backend.services.question_sources.build_owner_baidu_ocr_skill",
         fake_factory,
     )
 

@@ -12,7 +12,7 @@ from typing import Any
 from fastapi import HTTPException
 from sqlalchemy.exc import SQLAlchemyError
 
-from backend.domain.errors import DomainError
+from backend.domain.errors import DomainError, RECOGNITION_ERROR_CODES
 from backend.domain.source_outcomes import SAFE_SOURCE_REASON_CODES
 from backend.tools.structured_llm import PermanentLLMError, RateLimitError
 
@@ -120,7 +120,7 @@ SAFE_BACKGROUND_ERROR_CODES = frozenset({
     "submission_source_empty",
     "submission_source_unsupported",
     "submission_source_too_large",
-}) | SAFE_SOURCE_REASON_CODES
+}) | SAFE_SOURCE_REASON_CODES | RECOGNITION_ERROR_CODES
 
 RETRYABLE_BACKGROUND_ERROR_CODES = frozenset({
     "provider_timeout",

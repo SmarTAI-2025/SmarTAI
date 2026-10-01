@@ -25,7 +25,7 @@ class RecognitionCacheIdentityV1(EvidenceModel):
     layer: Literal["native", "render", "visual", "patch", "final"]
     owner_id: str = Field(strict=True, min_length=1, max_length=240)
     source_sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
-    source_content_type: Literal["application/pdf", "image/png", "image/jpeg", "image/webp"]
+    source_content_type: Literal["application/pdf", "image/png", "image/jpeg", "image/webp", "image/bmp", "image/tiff"]
     parameters_sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
     tool_version: str = Field(strict=True, min_length=1, max_length=120)
     purpose: Purpose | None = None

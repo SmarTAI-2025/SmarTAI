@@ -126,10 +126,6 @@ async def import_questions_file(
         raise HTTPException(
             503, detail="No LLM provider configured. Add an API key first."
         )
-    vision_provider = registry.pick_vision(provider)
-    ocr_skill = (
-        LLMVisionOCRSkill(vision_provider) if vision_provider is not None else None
-    )
     content = await file.read()
     try:
         questions = await assignment_service.import_questions_from_upload(
@@ -139,7 +135,7 @@ async def import_questions_file(
             content=content,
             content_type=file.content_type,
             provider=provider,
-            ocr_skill=ocr_skill,
+            registry=registry,
         )
     except DomainError as exc:
         return domain_error_response(exc)

@@ -62,7 +62,7 @@ and the PNG header dimensions without decoding pixels.
 
 `read_image_evidence(authorized_image_bytes, ImagePrepareRequest(...))` reuses the
 same isolated worker process lifecycle and shared slots. It accepts declared
-`image/jpeg`, `image/png` or `image/webp`, checks the decoded format matches, and
+`image/jpeg`, `image/png`, `image/webp`, `image/bmp` or `image/tiff`, checks the decoded format matches, and
 rejects multi-frame, truncated, corrupt, unsupported-mode or oversized input.
 Pillow is imported lazily: existing PDF-only worker operations do not require a
 Pillow import. Neither API resolves files, selects providers, performs OCR,

@@ -229,13 +229,13 @@ class LLMRecognitionEngine:
 
 
 class BaiduRecognitionEngine:
-    def __init__(self, client: BaiduUnlimitedOCRClient, *, route_id: str, fingerprint: str):
+    def __init__(self, client: BaiduUnlimitedOCRClient, *, route_id: str, fingerprint: str, max_document_pages: int = 24):
         self.client = client
         self._identity = _private_identity(client, _BAIDU_IDENTITY)
         self._capabilities = EngineCapabilitiesV1(
             route_id=route_id, fingerprint=fingerprint,
             visual_inputs=["document", "page_image"], candidate_kind="ocr",
-            document_batching=True, max_document_pages=24,
+            document_batching=True, max_document_pages=max_document_pages,
             # No prompt/semantic repair, output token control or automatic replay.
             semantic_repair=False, response_recheck=False,
         )

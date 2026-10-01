@@ -631,7 +631,7 @@ async def test_problem_worker_failure_atomically_clears_active_workflow(monkeypa
 
 
 @pytest.mark.asyncio
-async def test_problem_worker_preserves_no_provider_error_code(monkeypatch):
+async def test_problem_worker_preserves_disabled_frozen_provider_error_code(monkeypatch):
     owner_id, task_id = _seed_task()
     queued = task_facade.queue_task_problem_extraction(
         task_id=task_id, owner_id=owner_id,
@@ -641,6 +641,12 @@ async def test_problem_worker_preserves_no_provider_error_code(monkeypatch):
 
     class EmptyRegistry:
         def pick_default(self):
+            return None
+
+        def list_configs(self):
+            return []
+
+        def get(self, _provider_id):
             return None
 
     monkeypatch.setattr(
@@ -654,7 +660,7 @@ async def test_problem_worker_preserves_no_provider_error_code(monkeypatch):
         queued["job_id"], owner_id=owner_id
     )
     assert operation.status == "error"
-    assert operation.error_code == "no_provider_configured"
+    assert operation.error_code == "recognition_provider_not_enabled"
 
 
 def test_completed_problem_replay_creates_no_duplicate_questions():

@@ -233,7 +233,7 @@ class RecognitionAgent:
         if (source.owner_id != authorized_owner_id or not isinstance(source_bytes, bytes)
                 or hashlib.sha256(source_bytes).hexdigest() != source.input_sha256):
             raise RecognitionError("recognition_source_mismatch")
-        if source.content_type not in {"application/pdf", "image/png", "image/jpeg", "image/webp"}:
+        if source.content_type not in {"application/pdf", "image/png", "image/jpeg", "image/webp", "image/bmp", "image/tiff"}:
             raise RecognitionError("recognition_input_unsupported")
         local_reader = self.local_reader
         if local_reader is not None:
