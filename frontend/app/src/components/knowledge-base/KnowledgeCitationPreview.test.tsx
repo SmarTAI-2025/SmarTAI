@@ -10,6 +10,17 @@ vi.mock("@/components/tasks/OriginalFilePreviewPanel", () => ({ OriginalFilePrev
 const citation = { citation_id: "kb:chunk", chunk_id: "chunk", document_id: "book", content_version: "v1", source_sha256: "sha", original_name: "Book.pdf", unit: "page", page_number: 801 };
 beforeEach(() => { api.getJSON.mockReset(); api.getBlob.mockReset(); });
 
+it("shows partial or unverified evidence before opening the original without a request", () => {
+  const view = render(<KnowledgeCitationPreview citation={{ ...citation, coverage_complete: false }} />);
+  expect(screen.getByText("Incomplete coverage or unverified recognition.")).toBeInTheDocument();
+  view.rerender(<KnowledgeCitationPreview citation={{ ...citation, coverage_complete: true, confidence: "unverified" }} />);
+  expect(screen.getByText("Incomplete coverage or unverified recognition.")).toBeInTheDocument();
+  view.rerender(<KnowledgeCitationPreview citation={{ ...citation, coverage_complete: true, confidence: "high" }} />);
+  expect(screen.queryByText("Incomplete coverage or unverified recognition.")).not.toBeInTheDocument();
+  expect(api.getJSON).not.toHaveBeenCalled();
+  expect(api.getBlob).not.toHaveBeenCalled();
+});
+
 it("loads only on demand and refuses a changed citation before fetching its original", async () => {
   api.getJSON.mockResolvedValue({ content: "wrong version", content_version: "v2", source_sha256: "sha" });
   render(<KnowledgeCitationPreview citation={citation} />);

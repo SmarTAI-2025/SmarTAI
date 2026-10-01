@@ -15,6 +15,8 @@ export function KnowledgeCitationPreview({ citation }: { citation: KnowledgeCita
   const [text, setText] = useState<string | null>(null);
   const [failed, setFailed] = useState(false);
   const kind = inferSourcePreviewKind(citation.original_name);
+  const needsReview = citation.coverage_complete === false || Boolean(citation.warning_codes?.length)
+    || citation.confidence === "low" || citation.confidence === "unverified";
   useEffect(() => {
     if (!open) return;
     const controller = new AbortController();
@@ -35,9 +37,12 @@ export function KnowledgeCitationPreview({ citation }: { citation: KnowledgeCita
     return () => { controller.abort(); if (resource) URL.revokeObjectURL(resource); };
   }, [open, attempt, citation.document_id, citation.chunk_id, citation.content_version, citation.source_sha256, kind]);
   return <div className="min-w-0">
-    <button type="button" className="inline-flex max-w-full items-center gap-1 py-1 text-left text-xs text-primary" onClick={() => setOpen(!open)}>
-      <FileSearch aria-hidden="true" className="h-4 w-4 shrink-0" /><span className="break-words">{citation.original_name}{citation.page_number ? ` · ${citation.unit === "page" ? (locale === "zh-CN" ? "页" : "p.") : citation.unit} ${citation.page_number}` : ""}</span>
+    <button type="button" aria-expanded={open} className="inline-flex max-w-full items-center gap-1 py-1 text-left text-xs text-primary" onClick={() => setOpen(!open)}>
+      <FileSearch aria-hidden="true" className="h-4 w-4 shrink-0" /><span className="min-w-0 [overflow-wrap:anywhere]">{citation.original_name}{citation.page_number ? ` · ${citation.unit === "page" ? (locale === "zh-CN" ? "页" : "p.") : citation.unit} ${citation.page_number}` : ""}</span>
     </button>
+    {needsReview ? <p className="break-words text-xs text-amber-700 dark:text-amber-300">
+      {locale === "zh-CN" ? "原文覆盖不完整或识别待核对。" : "Incomplete coverage or unverified recognition."}
+    </p> : null}
     {open ? <div className="mt-2 space-y-2">
       {text ? <MarkdownMath className="text-xs leading-5">{text}</MarkdownMath> : null}
       {kind !== "unsupported" ? <OriginalFilePreviewPanel descriptor={null} displayName={citation.original_name} previewKind={kind}

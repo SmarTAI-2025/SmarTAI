@@ -203,7 +203,7 @@ def list_course_materials(
         "capabilities": {
             "durable": True,
             "ocr": True,
-            "accepted_types": ["pdf", "docx", "pptx", "md", "txt", "rst", "png", "jpg", "jpeg", "webp", "bmp", "tiff"],
+            "accepted_types": ["pdf", "txt", "md", "markdown"],
         },
     }
 

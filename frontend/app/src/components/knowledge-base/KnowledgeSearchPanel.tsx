@@ -43,7 +43,6 @@ export function KnowledgeSearchPanel({ documentIds }: { documentIds: string[] })
     {matches?.length === 0 ? <p role="status" className="mt-2 text-xs text-muted-foreground">{zh ? "已入库内容中未找到相关片段。" : "No matching passages in indexed content."}</p> : null}
     <ol className="mt-3 divide-y">
       {matches?.map((match) => <li key={match.citation.citation_id} className="min-w-0 py-3">
-        {!match.citation.coverage_complete || match.citation.warning_codes?.length ? <p className="mb-1 text-xs text-amber-700 dark:text-amber-300">{zh ? "内容覆盖不完整或识别有疑点，请核对原文。" : "Incomplete coverage or recognition warnings. Check the original."}</p> : null}
         <MarkdownMath className="break-words text-sm leading-6">{match.content}</MarkdownMath>
         <KnowledgeCitationPreview citation={match.citation} />
       </li>)}

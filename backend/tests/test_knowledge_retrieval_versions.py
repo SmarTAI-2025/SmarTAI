@@ -128,6 +128,35 @@ def test_adjacent_span_keeps_separate_source_identity():
 
 
 @pytest.mark.asyncio
+async def test_index_upgrade_preserves_legacy_frozen_runs_and_separates_cache():
+    from backend.knowledge.snapshots import INDEX_VERSION, LEGACY_INDEX_VERSION, freeze_in_session
+    who = owner()
+    doc = document(who, ["特征值满足 Av=lambda v"])
+    current = freeze_documents(who, [doc.id])
+    legacy = [{**ref, "index_version":LEGACY_INDEX_VERSION} for ref in current]
+    with session_scope() as session:
+        assert freeze_in_session(session, who, [doc.id], expected=legacy) == legacy
+    cache = KnowledgeIndexCache()
+    retriever = PersistentKnowledgeRetriever(cache=cache)
+    old = await retriever.retrieve_documents("特征值", owner_id=who, documents=[doc], refs=legacy)
+    assert old[0].citation["index_version"] == LEGACY_INDEX_VERSION
+    assert await retriever.retrieve_documents("eigenvalues", owner_id=who, documents=[doc], refs=legacy) == []
+    new = await retriever.retrieve_documents("eigenvalues", owner_id=who, documents=[doc], refs=current)
+    assert new[0].citation["index_version"] == INDEX_VERSION
+    assert cache.builds == 2
+
+
+def test_unknown_or_mixed_index_versions_are_not_silently_upgraded():
+    from backend.knowledge.index import load_index
+    from backend.knowledge.snapshots import INDEX_VERSION, LEGACY_INDEX_VERSION
+    from backend.domain.errors import InvalidTransition
+    with pytest.raises(InvalidTransition):
+        load_index([dict(index_version="unknown")])
+    with pytest.raises(InvalidTransition):
+        load_index([dict(index_version=INDEX_VERSION), dict(index_version=LEGACY_INDEX_VERSION)])
+
+
+@pytest.mark.asyncio
 async def test_unavailable_original_revokes_cached_index():
     from backend.db.models import StoredFileRecord
     who = owner()
