@@ -12,10 +12,13 @@ from dataclasses import dataclass
 from typing import Literal, TYPE_CHECKING
 
 from pydantic import Field, ValidationError
+from sqlalchemy import select
 from starlette.concurrency import run_in_threadpool
 
 from backend.db import assignment_repository, file_repository
 from backend.db.file_repository import StoredFile
+from backend.db.models import AssignmentRecord, SubmissionRecord, SubmissionRevisionRecord
+from backend.db.session import session_scope
 from backend.domain.errors import DomainError, NotFound, RecognitionError
 from backend.recognition.artifact_codec import MAX_COMPRESSED_BYTES, PayloadKind, RecognitionArtifactV1, decode_artifact, encode_artifact
 from backend.recognition.cache_identity import RecognitionCacheIdentityV1, canonical_digest
@@ -57,14 +60,14 @@ def _context(source, identity, binding, authorized_owner_id):
         source = RecognitionSourceRefV1.model_validate(source.model_dump(warnings=False))
         identity = RecognitionCacheIdentityV1.model_validate(identity.model_dump(warnings=False))
         binding = RecognitionArtifactBindingV1.model_validate(binding.model_dump(warnings=False))
-        # Only assignment artifacts have restart-safe intents and deletion
-        # fencing. G/H must enroll other scopes in their actual lifecycles.
-        if binding.link != "assignment":
+        if binding.link == "knowledge_document":
             raise RecognitionError("recognition_artifact_scope_unsupported")
         if (source.owner_id != authorized_owner_id or identity.owner_id != authorized_owner_id
                 or not source.stored_file_id or source.input_sha256 != identity.source_sha256
                 or source.content_type != identity.source_content_type or source.business_id != binding.business_id
                 or source.scope not in {"assignment_source", "submission_source"}):
+            raise ValueError
+        if binding.link == "submission_revision" and source.scope != "submission_source":
             raise ValueError
         return source, identity, binding
     except (ValidationError, ValueError, AttributeError, TypeError):
@@ -101,18 +104,52 @@ def _get_file(file_id, owner_id):
         raise RecognitionError("recognition_artifact_unavailable") from None
 
 
+def revision_context(revision_id, teacher_id):
+    """Authorize the immutable student original separately from teacher artifacts."""
+    with session_scope() as session:
+        row = session.execute(select(SubmissionRecord.assignment_id, SubmissionRecord.student_id)
+            .join(SubmissionRevisionRecord, SubmissionRevisionRecord.submission_id == SubmissionRecord.id)
+            .join(AssignmentRecord, AssignmentRecord.id == SubmissionRecord.assignment_id)
+            .where(SubmissionRevisionRecord.id == revision_id, AssignmentRecord.teacher_id == teacher_id,
+                   AssignmentRecord.deletion_requested_at.is_(None))).one_or_none()
+        if row is None:
+            raise NotFound("submission_revision")
+        return str(row[0]), str(row[1])
+
+
+def artifact_assignment_id(binding, owner_id):
+    if binding.link == "assignment":
+        return binding.business_id
+    if binding.link == "submission_revision":
+        return revision_context(binding.business_id, owner_id)[0]
+    raise RecognitionError("recognition_artifact_scope_unsupported")
+
+
+def _original_file(source, binding, owner_id):
+    original = _get_file(source.stored_file_id, owner_id)
+    allowed_owners = {owner_id}
+    if binding.link == "submission_revision":
+        _assignment, student_id = revision_context(binding.business_id, owner_id)
+        allowed_owners.add(student_id)
+        if original is None:
+            original = _get_file(source.stored_file_id, student_id)
+    if original is not None and (original.owner_id not in allowed_owners or original.id != source.stored_file_id):
+        raise RecognitionError("recognition_source_mismatch")
+    return original
+
+
 def _active_source(source, identity, binding, owner_id):
     source, identity, binding = _context(source, identity, binding, owner_id)
     try:
-        assignment_repository.get_assignment(binding.business_id, actor_id=owner_id)
+        assignment_repository.get_assignment(artifact_assignment_id(binding, owner_id), actor_id=owner_id)
     except NotFound:
         return False
     except Exception:
         raise RecognitionError("recognition_artifact_unavailable") from None
-    original = _get_file(source.stored_file_id, owner_id)
+    original = _original_file(source, binding, owner_id)
     if original is None:
         return False
-    if (original.owner_id != owner_id or not _matches_binding(original, binding)
+    if (not _matches_binding(original, binding)
             or original.sha256 != source.input_sha256 or original.content_type != source.content_type):
         raise RecognitionError("recognition_source_mismatch") from None
     return original.availability_status == "available"
@@ -127,14 +164,17 @@ def _find_success(storage, source, identity, binding, owner_id, payload_kind):
     try:
         if not _active_source(source, identity, binding, owner_id):
             return RecognitionCacheLookup("source_unavailable")
-        row = file_repository.find_latest_assignment_file(
-            owner_id=owner_id, assignment_id=binding.business_id, kind=ARTIFACT_KIND,
+        finder = (file_repository.find_latest_assignment_file if binding.link == "assignment"
+                  else file_repository.find_latest_linked_file)
+        links = {f"{binding.link}_id": binding.business_id}
+        row = finder(
+            owner_id=owner_id, **links, kind=ARTIFACT_KIND,
             original_name_prefix=_source_prefix(source, identity),
         )
         legacy = row is None
         if legacy:
-            row = file_repository.find_latest_assignment_file(
-                owner_id=owner_id, assignment_id=binding.business_id, kind=ARTIFACT_KIND,
+            row = finder(
+                owner_id=owner_id, **links, kind=ARTIFACT_KIND,
                 original_name_prefix=f"ocr-{identity.layer}-{identity.key}-",
             )
     except RecognitionError as exc:
@@ -174,13 +214,11 @@ def _save(storage, envelope, binding, owner_id, fence):
     try:
         if fence is not None:
             fence = RecognitionArtifactFenceV1.model_validate(fence.model_dump(warnings=False))
-            if binding.link != "assignment":
-                raise ValueError
     except (ValidationError, ValueError, AttributeError, TypeError):
         raise RecognitionError("recognition_artifact_invalid") from None
     # Verify the persisted original before writing any derived object.
-    original = _get_file(source.stored_file_id, owner_id)
-    if (original is None or original.owner_id != owner_id or not _matches_binding(original, binding)
+    original = _original_file(source, binding, owner_id)
+    if (original is None or not _matches_binding(original, binding)
             or original.sha256 != source.input_sha256 or original.content_type != source.content_type
             or original.availability_status != "available"):
         raise RecognitionError("recognition_artifact_invalid") from None
@@ -234,7 +272,7 @@ def _load(storage, file_id, source, identity, binding, owner_id, *, legacy_sourc
 
 
 class RecognitionArtifactStore:
-    """Assignment persistence only; other scopes need their deletion fencing."""
+    """Assignment/revision evidence with parent-task write and deletion fences."""
 
     def __init__(self, storage: StorageBackend, *, progress: ProgressReporter | None = None):
         self.storage, self.progress = storage, progress

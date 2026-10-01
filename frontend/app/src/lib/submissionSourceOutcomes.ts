@@ -36,6 +36,53 @@ export function getSubmissionSourceReasonCopy(
 type ReasonFactory = (locale: Locale, source: SubmissionSourceOutcome) => SubmissionSourceReasonCopy;
 
 const REASON_COPY: Record<string, ReasonFactory> = {
+  image_format_mismatch: recognitionFileCopy,
+  image_input_too_large: recognitionLimitCopy,
+  image_invalid: recognitionFileCopy,
+  image_mode_unsupported: recognitionFileCopy,
+  image_multiframe_unsupported: recognitionFileCopy,
+  image_orientation_invalid: recognitionFileCopy,
+  image_pixel_limit_exceeded: recognitionLimitCopy,
+  image_processing_failed: recognitionProcessingCopy,
+  image_response_too_large: recognitionLimitCopy,
+  material_ocr_confirmation_required: recognitionOptInCopy,
+  material_parser_provider_required: recognitionProviderCopy,
+  material_recognition_review_required: recognitionReviewCopy,
+  pdf_encrypted: recognitionFileCopy,
+  pdf_evidence_busy: recognitionProcessingCopy,
+  pdf_evidence_protocol_invalid: recognitionProcessingCopy,
+  pdf_evidence_timeout: recognitionProcessingCopy,
+  pdf_input_too_large: recognitionLimitCopy,
+  pdf_invalid: recognitionFileCopy,
+  pdf_invalid_request: recognitionFileCopy,
+  pdf_page_out_of_range: recognitionFileCopy,
+  pdf_processing_failed: recognitionProcessingCopy,
+  pdf_render_limit_exceeded: recognitionLimitCopy,
+  pdf_response_too_large: recognitionLimitCopy,
+  pdf_structure_limit_exceeded: recognitionLimitCopy,
+  provider_credentials_required: recognitionProviderCopy,
+  recognition_already_running: recognitionStateCopy,
+  recognition_artifact_invalid: recognitionStorageCopy,
+  recognition_artifact_limit: recognitionLimitCopy,
+  recognition_artifact_scope_unsupported: recognitionStateCopy,
+  recognition_artifact_unavailable: recognitionStorageCopy,
+  recognition_budget_exhausted: recognitionLimitCopy,
+  recognition_cache_corrupt: recognitionStorageCopy,
+  recognition_cache_not_success: recognitionStateCopy,
+  recognition_cache_source_unavailable: recognitionStorageCopy,
+  recognition_cache_unavailable: recognitionStorageCopy,
+  recognition_input_unsupported: recognitionFileCopy,
+  recognition_plan_changed: recognitionStateCopy,
+  recognition_request_invalid: recognitionStateCopy,
+  recognition_response_invalid: recognitionReviewCopy,
+  recognition_response_too_large: recognitionLimitCopy,
+  recognition_route_changed: recognitionStateCopy,
+  recognition_source_mismatch: recognitionStorageCopy,
+  recognition_source_unavailable: recognitionStorageCopy,
+  recognition_timeout: recognitionStateCopy,
+  target_location_needs_hint: recognitionScopeCopy,
+  target_selection_limit_exceeded: recognitionScopeCopy,
+  visual_capability_unavailable: recognitionProviderCopy,
   workflow_failed: (locale) => ({
     title: tx(locale, "识别任务意外终止", "The recognition task stopped unexpectedly"),
     description: tx(locale, "系统已停止本次任务并保留原文件；没有把未确认的结果继续显示为处理中或送入批改。", "The run stopped and the originals were preserved. Unconfirmed results were not left processing or sent to grading."),
@@ -295,4 +342,40 @@ function archiveMemberCopy(locale: Locale, zhTitle: string, enTitle: string, zhS
 
 function tx(locale: Locale, zh: string, en: string): string {
   return locale === "en-US" ? en : zh;
+}
+
+function recognitionFileCopy(locale: Locale): SubmissionSourceReasonCopy {
+  return fileCopy(locale, "原文件格式或页码需要检查", "Check source format or page range", "核对文件是否损坏、加密或含多帧图片；重新导出 PDF/PNG，或修正页码后再上传。", "Check for damage, encryption or multi-frame images. Export PDF/PNG or correct the page range before uploading again.");
+}
+
+function recognitionLimitCopy(locale: Locale): SubmissionSourceReasonCopy {
+  return { title: tx(locale, "达到本次识别资源上限", "Recognition resource limit reached"), description: tx(locale, "已保留可用内容和缺口状态，没有截断后冒充完整结果。", "Available content and gaps were preserved; truncated content is not marked complete."), nextStep: tx(locale, "缩小题目或页码范围，检查缺失部分；不要直接重复提交整批文件。", "Narrow the question or page range and inspect missing content. Do not blindly resubmit the entire batch.") };
+}
+
+function recognitionProcessingCopy(locale: Locale): SubmissionSourceReasonCopy {
+  return fileCopy(locale, "本地文件处理未完成", "Local source processing incomplete", "稍后重试本地读取；若反复失败，请核对原件或携带任务编号联系管理员。", "Retry local reading later. If it repeats, inspect the original or contact an administrator with the job ID.");
+}
+
+function recognitionOptInCopy(locale: Locale): SubmissionSourceReasonCopy {
+  return { title: tx(locale, "此资料尚未启用图像识别", "Image recognition is not enabled for this material"), description: tx(locale, "当前资料需要视觉读取，尚未提交模型调用。", "This material needs visual reading; no model request was submitted."), nextStep: tx(locale, "在资料上传设置中明确启用图像识别，或改用可复制文字版本。", "Explicitly enable image recognition in the upload settings or use a text-based version.") };
+}
+
+function recognitionProviderCopy(locale: Locale): SubmissionSourceReasonCopy {
+  return { title: tx(locale, "需要匹配的识别或解析模型", "A compatible recognition or parsing model is required"), description: tx(locale, "当前配置不能执行这个阶段；系统没有自动改用其他模型。", "The current configuration cannot run this stage. No other model was selected automatically."), nextStep: tx(locale, "核对本阶段已选模型及凭据；专用 OCR 的结果需要另行选择结构化解析模型。", "Check the selected stage model and credentials. Dedicated OCR output needs a separately selected structured parser.") };
+}
+
+function recognitionReviewCopy(locale: Locale): SubmissionSourceReasonCopy {
+  return { title: tx(locale, "识别结果需要核对", "Recognition needs review"), description: tx(locale, "内容仍有疑点或结构不完整，不表示学生答错。", "The content is uncertain or incomplete; this is not a student mistake."), nextStep: tx(locale, "对照原文件，在现有复核页面修正或确认可辨认内容。", "Compare with the original and correct or confirm readable content in the review page.") };
+}
+
+function recognitionStateCopy(locale: Locale): SubmissionSourceReasonCopy {
+  return { title: tx(locale, "识别状态需要核实", "Verify recognition state"), description: tx(locale, "任务仍在处理，或来源、模型及执行状态已变化。系统没有自动重提不确定调用。", "The job is still running, or its source, model or execution state changed. Uncertain calls were not resubmitted automatically."), nextStep: tx(locale, "先刷新任务状态；如持续停滞，携带任务编号核对已提交调用后再决定是否重试。", "Refresh the job first. If it remains stuck, verify submitted calls using the job ID before retrying.") };
+}
+
+function recognitionStorageCopy(locale: Locale): SubmissionSourceReasonCopy {
+  return { title: tx(locale, "识别证据暂不可用", "Recognition evidence unavailable"), description: tx(locale, "原件或缓存证据的可用性与版本校验未通过，没有使用不匹配内容。", "Source or cached-evidence availability/version validation failed; mismatched content was not used."), nextStep: tx(locale, "刷新后核对原件状态；携带任务编号排查存储，不要反复调用模型。", "Refresh and check the original's status. Diagnose storage using the job ID instead of repeating model calls.") };
+}
+
+function recognitionScopeCopy(locale: Locale): SubmissionSourceReasonCopy {
+  return { title: tx(locale, "请缩小或明确识别范围", "Narrow or clarify the recognition scope"), description: tx(locale, "目标题未能可靠定位，或所选范围超过本次上限。", "Target questions were not reliably located or the selected scope exceeded this request's limit."), nextStep: tx(locale, "补充题号及页码，再识别需要的范围；未找到不等于原文不存在。", "Provide question IDs and page hints, then recognize the needed scope. Not located does not mean absent.") };
 }

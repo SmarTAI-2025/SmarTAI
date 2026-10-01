@@ -637,3 +637,38 @@ Validation is synthetic: 73/78 impacted cases initially passed; five new-test
 assertions/fixtures were corrected, then all nine new cases passed (one later
 preview fixture correction included). Existing AddProblemsPage: nine passed;
 TypeScript typecheck passed. New material-preview visual checks remain part of J.
+
+## G: Student Submissions
+
+Task batch ingestion and authenticated student/teacher uploads now share the
+recognition adapter with purpose `submissions`. The selected LLM remains the
+parser; OCR-only batch input retains its deterministic parser with no hidden
+companion. Transcription preserves mistakes, crossed-out work and unfinished
+code, while identity and question mapping remain separate review concerns.
+Recognition uncertainty becomes answer flags, not a student-error judgment;
+the existing final review clears the grading gate. No intermediate review step
+was added, and the order-independent question mapping contract is unchanged.
+
+Per-source parser results and pending submissions are durable. Exact-input
+retry retains original files and reuses saved parses; cancellation or a lost
+response cannot silently cause another paid submit. Configuration and question
+versions are frozen. Original-source lineage remains distinct from retry IDs.
+
+Authenticated single-student uploads stage an unpublished revision, save the
+original before recognition, and publish answers atomically only on success.
+The authenticated student ID wins over model-extracted identity. Failed uploads
+and concurrent manual corrections retain the previous current revision. A
+single upload is bounded to 64 MiB, 24 members, 200,000 transcript characters and
+900 seconds; exceeded bounds fail explicitly, never truncate.
+
+Revision evidence now uses task-lifecycle write intents and parent deletion
+fences. Migration `0017_revision_recognition` extends the reservation constraint;
+downgrade refuses to discard outstanding revision artifact intents. Teachers
+can preview student-owned current originals through task authorization, with
+file selection for multi-file uploads. Replaced revisions and other teachers
+cannot use that current-original route. Preview is read-only and does no OCR.
+
+The new tests use deterministic providers and injected storage/lease failures.
+They prove persistence, isolation, recovery and review contracts, not measured
+handwriting accuracy. Real-provider ablation and combined OCR/RAG acceptance
+remain in J; the knowledge pipeline is the separate H/I stage.

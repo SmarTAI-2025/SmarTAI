@@ -960,7 +960,7 @@ def reserve_task_artifact_write(
     *,
     file_id: str,
     owner_id: str,
-    assignment_id: str,
+    assignment_id: str | None,
     kind: str,
     original_name: str,
     storage_backend: str,
@@ -968,6 +968,10 @@ def reserve_task_artifact_write(
     content_type: str | None,
     requested_bytes: int,
     sha256: str,
+    submission_revision_id: str | None = None,
+    fence_operation_id: str | None = None,
+    fence_operation_attempt: int | None = None,
+    fence_lease_token: str | None = None,
 ) -> SourceReservation:
     """Persist an exact-key, zero-quota intent before a derived task PUT.
 
@@ -990,10 +994,24 @@ def reserve_task_artifact_write(
     ttl = max(1, int(settings.source_storage_reservation_ttl_seconds))
     try:
         with session_scope() as session:
+            quota_owner_id = owner_id
+            if submission_revision_id is not None:
+                resolved_assignment, quota_owner_id = _resolve_source_context(
+                    session, file_owner_id=owner_id, kind="submission", assignment_id=None,
+                    submission_revision_id=submission_revision_id,
+                )
+                if assignment_id is not None and assignment_id != resolved_assignment:
+                    raise NotFound("assignment")
+                assignment_id = resolved_assignment
+            if assignment_id is None:
+                raise NotFound("assignment")
+            _validate_publication_fence(session, owner_id=quota_owner_id, assignment_id=assignment_id,
+                operation_id=fence_operation_id, operation_attempt=fence_operation_attempt,
+                lease_token=fence_lease_token)
             source_lifecycle_epoch = _lock_source_epoch(
                 session,
                 assignment_id=assignment_id,
-                owner_id=owner_id,
+                owner_id=quota_owner_id,
             )
             from backend.db.workflow_repository import WorkflowOperationRecord
 
@@ -1002,7 +1020,7 @@ def reserve_task_artifact_write(
             operation = WorkflowOperationRecord(
                 id=operation_id,
                 assignment_id=assignment_id,
-                owner_id=owner_id,
+                owner_id=quota_owner_id,
                 operation_type=SOURCE_RESERVATION_CLEANUP_OPERATION,
                 input_hash=hashlib.sha256(
                     f"artifact-write:{file_id}".encode("utf-8")
@@ -1019,9 +1037,9 @@ def reserve_task_artifact_write(
                 id=file_id,
                 operation_id=operation_id,
                 file_owner_id=owner_id,
-                quota_owner_id=owner_id,
+                quota_owner_id=quota_owner_id,
                 assignment_id=assignment_id,
-                submission_revision_id=None,
+                submission_revision_id=submission_revision_id,
                 source_lifecycle_epoch=source_lifecycle_epoch,
                 kind=kind,
                 original_name=original_name,
@@ -1046,9 +1064,9 @@ def reserve_task_artifact_write(
                 id=reservation.id,
                 operation_id=operation.id,
                 file_owner_id=owner_id,
-                quota_owner_id=owner_id,
+                quota_owner_id=quota_owner_id,
                 assignment_id=assignment_id,
-                submission_revision_id=None,
+                submission_revision_id=submission_revision_id,
                 source_lifecycle_epoch=source_lifecycle_epoch,
                 kind=kind,
                 original_name=original_name,
@@ -1115,11 +1133,29 @@ def _validate_publication_fence(
     values = (operation_id, operation_attempt, lease_token)
     if not any(value is not None for value in values):
         return
-    if not all(value is not None for value in values):
+    if operation_id is None or operation_attempt is None:
         raise ValueError("Operation artifact fence must be provided in full.")
     from backend.db.workflow_repository import WorkflowOperationRecord
 
     checked_at = time.time()
+    # Synchronous preflight artifacts have an expiring preparing operation,
+    # not a worker lease. Never admit an unleased running/pending operation.
+    if lease_token is None:
+        fenced = session.execute(update(WorkflowOperationRecord).where(
+            WorkflowOperationRecord.id == operation_id,
+            WorkflowOperationRecord.owner_id == owner_id,
+            WorkflowOperationRecord.assignment_id == assignment_id,
+            WorkflowOperationRecord.attempt == operation_attempt,
+            WorkflowOperationRecord.status == "preparing",
+            WorkflowOperationRecord.lease_owner.is_(None),
+            WorkflowOperationRecord.lease_token.is_(None),
+            WorkflowOperationRecord.expires_at > checked_at,
+        ).values(updated_at=WorkflowOperationRecord.updated_at))
+        operation = session.get(WorkflowOperationRecord, operation_id, populate_existing=True)
+        if (fenced.rowcount != 1 or operation is None or operation.status != "preparing"
+                or operation.attempt != operation_attempt or not operation.expires_at or operation.expires_at <= time.time()):
+            raise LeaseLost("Preflight expired before artifact publication.")
+        return
     fenced = session.execute(
         update(WorkflowOperationRecord)
         .where(
@@ -1397,6 +1433,13 @@ def publish_task_artifact_reservation(
             stale_generation = True
         else:
             lifecycle_managed = reservation.kind in TASK_SOURCE_DERIVED_KINDS
+            if reservation.submission_revision_id is not None:
+                resolved_assignment, resolved_owner = _resolve_source_context(
+                    session, file_owner_id=reservation.file_owner_id, kind="submission", assignment_id=None,
+                    submission_revision_id=reservation.submission_revision_id,
+                )
+                if (resolved_assignment, resolved_owner) != (reservation.assignment_id, reservation.quota_owner_id):
+                    raise SourceStorageReservationConflict("The revision artifact scope changed.")
             published = StoredFileRecord(
                 id=reservation.id,
                 owner_id=reservation.file_owner_id,
@@ -1415,8 +1458,8 @@ def publish_task_artifact_reservation(
                 availability_reason=None,
                 lifecycle_revision=0,
                 cleanup_attempt_count=0,
-                assignment_id=assignment_id,
-                submission_revision_id=None,
+                assignment_id=assignment_id if reservation.submission_revision_id is None else None,
+                submission_revision_id=reservation.submission_revision_id,
                 knowledge_document_id=None,
                 created_at=time.time(),
             )

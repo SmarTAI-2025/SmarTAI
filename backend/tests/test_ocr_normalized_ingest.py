@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import base64
 from types import SimpleNamespace
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
+import json
 
 import pytest
 
@@ -172,27 +173,32 @@ async def test_student_upload_ocr_creates_answer_revision(monkeypatch):
         }
         return student_store
 
-    monkeypatch.setattr(
-        "backend.services.submissions.parse_student_answers", fake_parse
-    )
-    ocr = FakeOCRSkill("OCR answer text")
+    from backend.tests.test_recognition_reader import llm
+    from backend.tests.test_recognition_recheck import source_file
+    provider, _ = llm(text="OCR answer text")
+    provider.ainvoke = AsyncMock(return_value=SimpleNamespace(content=json.dumps({
+        "stu_id": "wrong-ocr-id", "stu_name": "Untrusted identity",
+        "stu_ans": [{"q_id": "q1", "number": "1", "type": "short", "content": "OCR answer text", "flag": []}],
+    })))
+    registry = SimpleNamespace(list_configs=lambda: [dict(provider_id=provider.provider_id, enabled=True)])
+    image, _ = source_file()
 
     revision = await submission_service.submit_student_file_with_ocr(
         student_id=student_id,
         assignment_id=assignment_id,
         filename="answer.png",
-        content=PNG_1X1,
+        content=image,
         content_type="image/png",
-        provider=_provider(),
-        ocr_skill=ocr,
+        provider=provider,
+        registry=registry,
     )
 
     assert revision.source == "online"
     assert revision.answers[0].q_id == "q1"
     assert revision.answers[0].content == "OCR answer text"
-    assert seen["problems_data"]["q1"]["stem"] == "Question"
-    assert "OCR answer text" in seen["files_data"][0]["content"]
-    assert ocr.calls[0]["purpose"] == "submissions"
+    assert "OCR answer text" in provider.ainvoke.call_args.args[0][1].content
+    assert "student" in provider.ainvoke_vision.call_args.args[0].lower()
+    assert provider.ainvoke_vision.await_count == 1
     stored_files = list_files(
         owner_id=student_id, submission_revision_id=revision.id
     )
@@ -225,9 +231,12 @@ async def test_teacher_upload_uses_selected_student_and_teacher_import_source(
         }
         return student_store
 
-    monkeypatch.setattr(
-        "backend.services.submissions.parse_student_answers", fake_parse
-    )
+    provider = SimpleNamespace(provider_id="mock:text", config=None, supports_vision=False,
+        ainvoke=AsyncMock(return_value=SimpleNamespace(content=json.dumps({
+            "stu_id": "wrong-ocr-id", "stu_name": "Ignored identity",
+            "stu_ans": [{"q_id": "q1", "number": "1", "type": "short", "content": "teacher imported answer", "flag": []}],
+        }))))
+    registry = SimpleNamespace(list_configs=lambda: [dict(provider_id=provider.provider_id, enabled=True)])
 
     revision = await submission_service.teacher_import_file_with_ocr(
         teacher_id=teacher_id,
@@ -236,7 +245,8 @@ async def test_teacher_upload_uses_selected_student_and_teacher_import_source(
         filename="answer.txt",
         content=b"teacher imported answer",
         content_type="text/plain",
-        provider=_provider(),
+        provider=provider,
+        registry=registry,
     )
 
     assert revision.source == "teacher_import"
@@ -244,4 +254,10 @@ async def test_teacher_upload_uses_selected_student_and_teacher_import_source(
     stored_files = list_files(
         owner_id=teacher_id, submission_revision_id=revision.id
     )
-    assert [item.original_name for item in stored_files] == ["answer.txt"]
+    assert [item.original_name for item in stored_files if item.kind == "submission"] == ["answer.txt"]
+    replay = await submission_service.teacher_import_file_with_ocr(
+        teacher_id=teacher_id, student_id=student_id, assignment_id=assignment_id,
+        filename="answer.txt", content=b"teacher imported answer", content_type="text/plain",
+        provider=provider, registry=registry)
+    assert replay.id == revision.id
+    assert provider.ainvoke.await_count == 1

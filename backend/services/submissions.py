@@ -253,27 +253,23 @@ async def submit_student_file_with_ocr(
     content_type: str | None,
     provider: "BaseProvider",
     ocr_skill: "OCRIngestSkill | None" = None,
+    registry=None,
 ) -> education.SubmissionRevisionDTO:
     """Create an immutable online revision populated from OCR/LLM parsing."""
     submission_repository.validate_submission_access(
         assignment_id=assignment_id, student_id=student_id
     )
-    answers = await _parse_upload_answers(
-        assignment_id=assignment_id,
-        filename=filename,
-        content=content,
-        provider=provider,
-        ocr_skill=ocr_skill,
-    )
-    return _persist_file_revision(
+    from backend.services.submission_uploads import recognize_submission_upload
+    return await recognize_submission_upload(
         student_id=student_id,
+        actor_id=student_id,
         assignment_id=assignment_id,
         filename=filename,
         content=content,
         content_type=content_type,
-        answers=answers,
+        provider=provider,
+        registry=registry,
         source=education.SubmissionRevisionSource.ONLINE.value,
-        file_owner_id=student_id,
     )
 
 
@@ -287,6 +283,7 @@ async def teacher_import_file_with_ocr(
     content_type: str | None,
     provider: "BaseProvider",
     ocr_skill: "OCRIngestSkill | None" = None,
+    registry=None,
 ) -> education.SubmissionRevisionDTO:
     """Teacher upload for one enrolled student, persisted as teacher_import."""
     assignment = assignment_repository.get_assignment(
@@ -299,22 +296,17 @@ async def teacher_import_file_with_ocr(
     ):
         raise ValidationError("student not enrolled")
 
-    answers = await _parse_upload_answers(
-        assignment_id=assignment_id,
-        filename=filename,
-        content=content,
-        provider=provider,
-        ocr_skill=ocr_skill,
-    )
-    return _persist_file_revision(
+    from backend.services.submission_uploads import recognize_submission_upload
+    return await recognize_submission_upload(
         student_id=student_id,
+        actor_id=teacher_id,
         assignment_id=assignment_id,
         filename=filename,
         content=content,
         content_type=content_type,
-        answers=answers,
+        provider=provider,
+        registry=registry,
         source=education.SubmissionRevisionSource.TEACHER_IMPORT.value,
-        file_owner_id=teacher_id,
     )
 
 

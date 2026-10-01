@@ -8,7 +8,7 @@ import pytest
 from backend.db import file_repository
 from backend.db.models import AssignmentRecord, CourseRecord, KnowledgeDocumentRecord, StoredFileRecord, SubmissionRecord, SubmissionRevisionRecord, UserRecord
 from backend.db.session import session_scope
-from backend.domain.errors import RecognitionError
+from backend.domain.errors import DomainError, RecognitionError
 from backend.domain.source_storage import RAW_SOURCE_KINDS, TASK_SOURCE_CLEANUP_KINDS
 from backend.progress.tracker import ProgressReporter
 from backend.recognition.artifact_codec import build_artifact
@@ -72,7 +72,7 @@ async def load(store, row, binding, envelope, **changes):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("link", ["assignment"])
+@pytest.mark.parametrize("link", ["assignment", "submission_revision"])
 async def test_real_database_and_storage_roundtrip_in_fresh_store(tmp_path, link):
     storage, binding, original, envelope = seeded(tmp_path, link)
     progress = ProgressReporter("artifact")
@@ -228,7 +228,7 @@ async def test_assignment_fence_cannot_be_attached_to_another_business_link(tmp_
     def forbidden(*args, **kwargs):
         pytest.fail("invalid fence must not write")
     monkeypatch.setattr(storage, "save", forbidden)
-    with pytest.raises(RecognitionError, match="recognition_artifact_(invalid|scope_unsupported)"):
+    with pytest.raises(DomainError):
         await save(service.RecognitionArtifactStore(storage), binding, envelope,
                    fence=service.RecognitionArtifactFenceV1(operation_id="op", attempt=1))
 

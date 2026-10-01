@@ -141,6 +141,7 @@ export interface StudentSubmission {
   identity_match_method?: SubmissionIdentityMode | null;
   identity_status?: "matched" | "needs_review";
   source_id?: string | null;
+  source_choices?: Array<{ source_id: string; filename: string }>;
 }
 
 export interface StudentIdentityUpdateResponse {

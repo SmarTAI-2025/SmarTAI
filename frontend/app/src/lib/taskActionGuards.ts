@@ -498,6 +498,16 @@ export function classifyRecoverableError(
     };
   }
 
+  if (code === "submission_recognition_needs_review") {
+    return {
+      title: tx(locale, "仍有作答识别待核对", "Some transcriptions need review"),
+      description: tx(locale, "请核对标记的作答与原件后确认；识别不确定不会被当成学生答错。", "Confirm the flagged transcriptions against the originals before grading. Uncertainty is not a student error."),
+      actionLabel: tx(locale, "核对作答", "Review submissions"),
+      actionHref: taskHref("/submissions?filter=review"),
+      actionKind: "reselect", tone: "warning", technicalDetails,
+    };
+  }
+
   if (code === "submission_source_evidence_missing") {
     return {
       title: tx(locale, "作答状态需要重新确认", "The submission state needs confirmation"),
