@@ -1176,7 +1176,7 @@ export const messages = {
     loading: "Loading...",
     retry: "Retry",
     dashboardMetrics: "Workspace overview",
-    dashboardProcessingTasks: "Assignments in progress",
+    dashboardProcessingTasks: "Grading tasks in progress",
     dashboardNeedsAction: "Needs your input",
     dashboardGeneratedResults: "Results generated",
     dashboardAvailableModels: "Models / BYOK",
