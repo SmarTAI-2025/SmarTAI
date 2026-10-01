@@ -22,32 +22,24 @@
 
 ### 环境分工
 
-- **后端固定 CPython 3.12.15**：版本以根目录 `.python-version` 为准，本地、CI 和部署使用同一补丁版本。
+- **后端固定 CPython 3.12.14**：版本以根目录 `.python-version` 为准，本地、CI 和部署使用同一补丁版本。
 - **React 前端使用 Node.js 20 + npm**：依赖版本由 `frontend/app/package-lock.json` 锁定，无需安装 Python 前端包。
 - **本地默认使用轻量模式**：SQLite 数据库位于 `data/smartai.db`，上传文件保存在 `data/uploads/`。
 
 ### 准备后端 Python 环境
 
-先安装 `.python-version` 指定的 CPython，再创建全新环境。macOS/Linux 可使用
-[pyenv](https://github.com/pyenv/pyenv#installation)（需要其 Python 编译依赖）：
+使用已有 Conda（或先安装 [Miniforge](https://github.com/conda-forge/miniforge#install)），
+创建全新环境。Conda 只安装 Python 和 pip，应用包统一通过下文的锁文件安装：
 
 ```bash
-pyenv install -s "$(cat .python-version)"
-PYENV_VERSION="$(cat .python-version)" pyenv exec python -m venv .venv
-source .venv/bin/activate
-```
-
-已经安装该版本时，直接用对应解释器执行 `python -m venv .venv`，然后激活。
-Windows 使用 `.venv\Scripts\Activate.ps1`。也可用 Conda 的全新环境：
-
-```bash
-conda create -n smartai-py312 --override-channels -c conda-forge --no-default-packages python=3.12.15 pip
+conda create -n smartai-py312 --override-channels -c conda-forge --no-default-packages python=3.12.14 pip
 conda activate smartai-py312
 ```
 
-2026-10-01 核验时 Conda 频道尚未提供 3.12.15；在其构建发布前使用上面的
-pyenv/CPython + venv 方式。不要因为频道暂缺而修改项目版本或复用旧 `smartai` 环境。
-环境激活后统一使用 `python` / `python -m pip`，并确认解释器：
+选用已有预编译包的 3.12 维护版本，无需自行编译 Python。保留旧 `smartai` 环境，
+不要在其中混装新依赖。已安装同版本 CPython 的机器也可用 `python -m venv .venv`
+创建新环境，macOS/Linux 用 `source .venv/bin/activate`，Windows 用
+`.venv\Scripts\Activate.ps1` 激活。激活后统一使用 `python` / `python -m pip`，并确认解释器：
 
 ```bash
 python -c "import pathlib, platform, bz2, lzma, sqlite3, ssl; assert platform.python_version() == pathlib.Path('.python-version').read_text().strip(); print(platform.python_version())"
@@ -200,12 +192,12 @@ BYOK，绝不进入平台共享模型池。任务知识库继续使用本地 BM2
 
 首次运行前，在**仓库根目录**（该目录应能看到 `alembic.ini`、`backend/` 和
 `frontend/`）应用数据库迁移。请先激活上文创建并已安装后端依赖的 Python 环境，
-例如 Conda `smartai` 或项目 `.venv`；不要在 `frontend/app/` 或未安装依赖的系统
+例如 Conda `smartai-py312` 或项目 `.venv`；不要在 `frontend/app/` 或未安装依赖的系统
 Python 环境中执行。
 
 ```bash
 cd /path/to/SmarTAI
-conda activate smartai  # 使用 .venv 时改为 source .venv/bin/activate
+conda activate smartai-py312  # 使用 venv 时改为 source .venv/bin/activate
 python -m alembic upgrade head
 ```
 
@@ -329,30 +321,19 @@ uv pip compile requirements-dev.in --python-version "$(cat .python-version)" --u
 
 ### AWS Linux 标准环境
 
-以下适用于 **EC2 上的 Amazon Linux 2023 或 Ubuntu 24.04，CPython 3.12.15，x86_64**。
+以下适用于 **EC2 上的 Amazon Linux 2023 或 Ubuntu 24.04，CPython 3.12.14，x86_64**。
 依赖使用 glibc Linux wheel；其他架构或 Alpine/musl 需单独验证。以下安装步骤不创建 AWS
 资源，也不改变已有数据库。部署应检出已合并且 CI 通过的确定 commit，并在每个 release
 目录创建新 `.venv`，避免旧包残留。
 
-首次准备主机时，先按系统安装 Python 编译依赖（二选一）：
+主机需有 Git 和 Conda；推荐用非 root 部署账号按
+[Miniforge 官方说明](https://github.com/conda-forge/miniforge#install)安装 Linux x86_64
+发行包并初始化 Conda。以下使用现成二进制，无需 Python 编译工具链，也不要修改系统
+Python 链接。在确定版本的仓库根目录执行：
 
 ```bash
-# Amazon Linux 2023
-sudo dnf install -y git gcc make patch openssl-devel zlib-devel bzip2-devel readline-devel sqlite-devel libffi-devel xz-devel libuuid-devel
-
-# Ubuntu 24.04
-sudo apt-get update
-sudo apt-get install -y git build-essential patch libssl-dev zlib1g-dev libbz2-dev libreadline-dev libsqlite3-dev libffi-dev liblzma-dev uuid-dev
-```
-
-用部署服务账号按 [pyenv 官方说明](https://github.com/pyenv/pyenv#installation)安装并初始化
-pyenv（需包含 3.12.15 的版本定义）。不要修改 Amazon Linux 的系统 Python 链接。
-在确定版本的仓库根目录执行：
-
-```bash
-pyenv install -s "$(cat .python-version)"
-PYENV_VERSION="$(cat .python-version)" pyenv exec python -m venv .venv
-source .venv/bin/activate
+conda create --prefix "$PWD/.venv" --override-channels -c conda-forge --no-default-packages "python=$(cat .python-version)" pip -y
+conda activate "$PWD/.venv"
 python -c "import pathlib, platform, bz2, lzma, sqlite3, ssl; assert platform.python_version() == pathlib.Path('.python-version').read_text().strip()"
 python -m pip install --require-hashes --only-binary=:all: -r render-requirements.txt
 python -m pip check
