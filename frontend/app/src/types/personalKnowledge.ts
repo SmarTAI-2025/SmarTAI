@@ -34,6 +34,17 @@ export interface PersonalKnowledgeListResponse {
   documents: PersonalKnowledgeDocument[];
 }
 
+export type KnowledgeActivityFilter = "all" | "active" | "attention" | "completed";
+
+export interface KnowledgeActivityResponse {
+  items: (PersonalKnowledgeDocument & { activity_status: string })[];
+  total: number;
+  active_count: number;
+  counts: Partial<Record<Exclude<KnowledgeActivityFilter, "all">, number>>;
+  page: number;
+  page_size: number;
+}
+
 export interface KnowledgeStorageUsage {
   used_bytes: number;
   limit_bytes: number;

@@ -9,8 +9,9 @@ interface Coverage {
   next_offset: number | null;
 }
 
-export function KnowledgeIngestionStatus({ documentId, status = "ready", ingestion, zh }: {
+export function KnowledgeIngestionStatus({ documentId, status = "ready", ingestion, zh, poll = true, onChange, detailsLabel }: {
   documentId?: string; status?: string; ingestion?: KnowledgeIngestionSummary; zh: boolean;
+  poll?: boolean; onChange?: () => void; detailsLabel?: string;
 }) {
   const [coverage, setCoverage] = useState<Coverage | null>(null);
   const [busy, setBusy] = useState(false);
@@ -22,7 +23,7 @@ export function KnowledgeIngestionStatus({ documentId, status = "ready", ingesti
   const active = ["queued", "processing"].includes(summary?.status ?? "");
   const paused = ["paused", "cancelled"].includes(summary?.status ?? "");
   useEffect(() => {
-    if (!active || !documentId) return;
+    if (!poll || !active || !documentId) return;
     let cancelled = false;
     let pending = false;
     const timer = window.setInterval(async () => {
@@ -35,7 +36,7 @@ export function KnowledgeIngestionStatus({ documentId, status = "ready", ingesti
       finally { pending = false; }
     }, 5000);
     return () => { cancelled = true; window.clearInterval(timer); };
-  }, [active, documentId, summary?.id]);
+  }, [active, documentId, summary?.id, poll]);
   const effectiveStatus = summary?.status ?? status;
   const label = paused ? (zh ? "已暂停" : "Paused") : active ? (zh ? "后台处理中" : "Processing")
     : effectiveStatus === "partial" ? (zh ? "部分可检索" : "Partial coverage")
@@ -54,14 +55,14 @@ export function KnowledgeIngestionStatus({ documentId, status = "ready", ingesti
   async function command(action: "resume" | "cancel" | "retry-failed") {
     if (!documentId) return;
     setBusy(true); setError(false);
-    try { await postJSON(`/knowledge/documents/${documentId}/${action}`, {}); await load(); }
+    try { await postJSON(`/knowledge/documents/${documentId}/${action}`, {}); await load(); onChange?.(); }
     catch { setError(true); }
     finally { setBusy(false); }
   }
   if (!documentId || !summary?.id) return <span className="text-xs text-muted-foreground">{label}</span>;
   return <details className="min-w-0 text-xs" onToggle={(event) => { if (event.currentTarget.open && !coverage && !busy) void load(); }}>
-    <summary className="cursor-pointer break-words text-muted-foreground">{label}
-      {summary.total_pages ? ` · ${summary.processed_pages ?? 0}/${summary.total_pages}` : ""}
+    <summary className="cursor-pointer break-words text-muted-foreground">{detailsLabel ?? label}
+      {!detailsLabel && summary.total_pages ? ` · ${summary.processed_pages ?? 0}/${summary.total_pages}` : ""}
     </summary>
     <div className="mt-2 max-w-xs space-y-2 break-words">
       {summary.total_pages ? <p>{zh ? "可检索 / 空白 / 失败" : "Searchable / blank / failed"}: {summary.searchable_pages ?? 0} / {summary.blank_pages ?? 0} / {summary.failed_pages ?? 0}</p> : null}
