@@ -10,7 +10,7 @@ on:
 jobs:
   backend-sqlite:
     name: Backend (SQLite)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     env:
       SMARTAI_RUNTIME_ENVIRONMENT: "test"
       SMARTAI_PROVIDER_ENCRYPTION_KEY: "ci-provider-master-key-0123456789abcdef"
@@ -19,18 +19,15 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.12"
+          python-version-file: .python-version
           cache: pip
+          cache-dependency-path: |
+            render-requirements.txt
+            requirements-dev.txt
       - name: Install dependencies
         run: |
-          python -m pip install --upgrade pip
-          pip install -r render-requirements.txt
-          # render-requirements.txt is the deployment pin list and does not
-          # declare test-only deps; pytest is required by the test step below.
-          # pytest-asyncio is required because the async test functions are
-          # decorated with @pytest.mark.asyncio; without it they fail with
-          # "async def functions are not natively supported".
-          pip install pytest pytest-asyncio
+          python -m pip install --require-hashes --only-binary=:all: -r requirements-dev.txt
+          python -m pip check
       - name: Compile
         run: python -m compileall -q backend
       - name: Test (SQLite)
@@ -45,7 +42,7 @@ jobs:
 
   backend-postgres:
     name: Backend (PostgreSQL)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     env:
       SMARTAI_RUNTIME_ENVIRONMENT: "test"
       SMARTAI_PROVIDER_ENCRYPTION_KEY: "ci-postgres-provider-key-0123456789abcdef"
@@ -66,18 +63,15 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.12"
+          python-version-file: .python-version
           cache: pip
+          cache-dependency-path: |
+            render-requirements.txt
+            requirements-dev.txt
       - name: Install dependencies
         run: |
-          python -m pip install --upgrade pip
-          pip install -r render-requirements.txt
-          # render-requirements.txt is the deployment pin list and does not
-          # declare test-only deps; pytest is required by the test step below.
-          # pytest-asyncio is required because the async test functions are
-          # decorated with @pytest.mark.asyncio; without it they fail with
-          # "async def functions are not natively supported".
-          pip install pytest pytest-asyncio
+          python -m pip install --require-hashes --only-binary=:all: -r requirements-dev.txt
+          python -m pip check
       - name: Apply PostgreSQL migration
         env:
           SMARTAI_DATABASE_HEAVY: "ON"
@@ -132,7 +126,7 @@ jobs:
 
   e2e:
     name: E2E (Playwright)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     env:
       SMARTAI_RUNTIME_ENVIRONMENT: "test"
       SMARTAI_PROVIDER_ENCRYPTION_KEY: "e2e-provider-master-key-0123456789abcdef"
@@ -144,7 +138,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.12"
+          python-version-file: .python-version
       - uses: actions/setup-node@v4
         with:
           node-version: "20"
@@ -153,8 +147,8 @@ jobs:
       - name: Install backend dependencies
         working-directory: backend
         run: |
-          python -m pip install --upgrade pip
-          pip install -r ../render-requirements.txt
+          python -m pip install --require-hashes --only-binary=:all: -r requirements.txt
+          python -m pip check
       - name: Install frontend dependencies
         run: npm ci
       - name: Install Playwright browsers

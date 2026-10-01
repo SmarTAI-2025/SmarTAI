@@ -17,6 +17,8 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
+from packaging.requirements import Requirement
+from packaging.utils import canonicalize_name
 
 WORKFLOW = Path(__file__).resolve().parents[2] / ".github" / "workflows" / "ci.yml"
 
@@ -32,7 +34,7 @@ def test_sqlite_backend_job_installs_pytest(workflow_text: str) -> None:
     The original job only ran ``pip install -r render-requirements.txt``; that
     file does not include ``pytest``, so ``python -m pytest backend/tests -q``
     failed with ``No module named pytest`` in GitHub Actions. The fix is to
-    install ``pytest`` explicitly in the job before the test step.
+    install a test lock that includes ``pytest`` before the test step.
     """
     assert "name: Backend (SQLite)" in workflow_text, "SQLite backend job must exist"
 
@@ -40,10 +42,7 @@ def test_sqlite_backend_job_installs_pytest(workflow_text: str) -> None:
     assert "python -m pytest" in sqlite_section, (
         "SQLite backend job must still run pytest"
     )
-    assert "pytest" in _install_step(sqlite_section), (
-        "SQLite backend job's dependency install step must include pytest "
-        "(render-requirements.txt does not declare it)"
-    )
+    _assert_locked_test_dependency(sqlite_section, "pytest")
 
 
 def test_e2e_readiness_probe_uses_http_get(workflow_text: str) -> None:
@@ -90,17 +89,12 @@ def test_sqlite_backend_job_installs_pytest_asyncio(workflow_text: str) -> None:
     ``PytestUnknownMarkWarning`` for ``pytest.mark.asyncio``.
     ``render-requirements.txt`` is the deployment pin list and does not declare
     test-only dependencies, so the job must install ``pytest-asyncio``
-    explicitly alongside ``pytest``.
+    through the test lock alongside ``pytest``.
     """
     assert "name: Backend (SQLite)" in workflow_text, "SQLite backend job must exist"
 
     sqlite_section = _job_section(workflow_text, "backend-sqlite")
-    install_step = _install_step(sqlite_section)
-    assert "pytest-asyncio" in install_step, (
-        "SQLite backend job's dependency install step must include "
-        "pytest-asyncio (async tests use @pytest.mark.asyncio and fail with "
-        "'async def functions are not natively supported' without it)"
-    )
+    _assert_locked_test_dependency(sqlite_section, "pytest-asyncio")
 
 
 def test_postgres_backend_job_installs_pytest_asyncio(workflow_text: str) -> None:
@@ -112,18 +106,30 @@ def test_postgres_backend_job_installs_pytest_asyncio(workflow_text: str) -> Non
     test suite and must install ``pytest-asyncio`` so the async test
     infrastructure (and the ``@pytest.mark.asyncio`` mark handling) is
     available. ``render-requirements.txt`` does not declare it, so it must be
-    installed explicitly, mirroring the SQLite backend job.
+    installed through the test lock, mirroring the SQLite backend job.
     """
     assert "name: Backend (PostgreSQL)" in workflow_text, (
         "PostgreSQL backend job must exist"
     )
 
     postgres_section = _job_section(workflow_text, "backend-postgres")
-    install_step = _install_step(postgres_section)
-    assert "pytest-asyncio" in install_step, (
-        "PostgreSQL backend job's dependency install step must include "
-        "pytest-asyncio so the async test infrastructure is available"
-    )
+    _assert_locked_test_dependency(postgres_section, "pytest-asyncio")
+
+
+def _assert_locked_test_dependency(job_text: str, package: str) -> None:
+    install_step = _install_step(job_text)
+    assert "-r requirements-dev.txt" in install_step
+    assert "--require-hashes" in install_step
+    locked = {
+        canonicalize_name(requirement.name): requirement
+        for line in (WORKFLOW.parents[2] / "requirements-dev.txt").read_text().splitlines()
+        if line.strip() and not line.strip().startswith(("#", "-"))
+        for requirement in [Requirement(line.removesuffix("\\").strip())]
+    }
+    requirement = locked[canonicalize_name(package)]
+    pin, = requirement.specifier
+    assert pin.operator == "==", f"{package} must be pinned in the CI test lock"
+    assert requirement.marker is None, f"{package} must be installed on every CI platform"
 
 
 def _job_section(workflow_text: str, job_id: str) -> str:

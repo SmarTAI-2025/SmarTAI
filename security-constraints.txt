@@ -1,5 +1,5 @@
 # Minimum fixed releases from the 2026-09-20 dependency audit.
-# Constraints apply to deployment and backend/requirements.txt alike.
+# Input constraints for requirements.in; both generated locks preserve these floors.
 # This is a security floor, not a claim that future releases are vulnerability-free.
 anyio>=4.14.2,<5
 click>=8.3.3,<9
