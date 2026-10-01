@@ -77,7 +77,14 @@ def _seed_task() -> tuple[str, str]:
 
 
 class _Registry:
-    provider = SimpleNamespace(provider_id="test-provider")
+    class Provider:
+        provider_id = "test-provider"
+
+        async def ainvoke(self, messages):
+            from backend.agents.ingest_agent import ainvoke_with_retry
+            return await ainvoke_with_retry(self, messages)
+
+    provider = Provider()
 
     def pick_default(self):
         return self.provider

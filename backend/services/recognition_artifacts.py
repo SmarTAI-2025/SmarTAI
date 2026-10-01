@@ -127,10 +127,14 @@ def artifact_assignment_id(binding, owner_id):
 
 def _original_file(source, binding, owner_id):
     original = _get_file(source.stored_file_id, owner_id)
+    allowed_owners = {owner_id}
     if binding.link == "submission_revision":
         _assignment, student_id = revision_context(binding.business_id, owner_id)
+        allowed_owners.add(student_id)
         if original is None:
             original = _get_file(source.stored_file_id, student_id)
+    if original is not None and (original.owner_id not in allowed_owners or original.id != source.stored_file_id):
+        raise RecognitionError("recognition_source_mismatch")
     return original
 
 

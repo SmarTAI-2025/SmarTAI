@@ -1133,11 +1133,29 @@ def _validate_publication_fence(
     values = (operation_id, operation_attempt, lease_token)
     if not any(value is not None for value in values):
         return
-    if not all(value is not None for value in values):
+    if operation_id is None or operation_attempt is None:
         raise ValueError("Operation artifact fence must be provided in full.")
     from backend.db.workflow_repository import WorkflowOperationRecord
 
     checked_at = time.time()
+    # Synchronous preflight artifacts have an expiring preparing operation,
+    # not a worker lease. Never admit an unleased running/pending operation.
+    if lease_token is None:
+        fenced = session.execute(update(WorkflowOperationRecord).where(
+            WorkflowOperationRecord.id == operation_id,
+            WorkflowOperationRecord.owner_id == owner_id,
+            WorkflowOperationRecord.assignment_id == assignment_id,
+            WorkflowOperationRecord.attempt == operation_attempt,
+            WorkflowOperationRecord.status == "preparing",
+            WorkflowOperationRecord.lease_owner.is_(None),
+            WorkflowOperationRecord.lease_token.is_(None),
+            WorkflowOperationRecord.expires_at > checked_at,
+        ).values(updated_at=WorkflowOperationRecord.updated_at))
+        operation = session.get(WorkflowOperationRecord, operation_id, populate_existing=True)
+        if (fenced.rowcount != 1 or operation is None or operation.status != "preparing"
+                or operation.attempt != operation_attempt or not operation.expires_at or operation.expires_at <= time.time()):
+            raise LeaseLost("Preflight expired before artifact publication.")
+        return
     fenced = session.execute(
         update(WorkflowOperationRecord)
         .where(
