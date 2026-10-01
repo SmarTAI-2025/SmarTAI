@@ -267,6 +267,10 @@ def create_run_bundle(
                 owner_id=teacher_id,
                 document_ids=raw_knowledge_ids,
             )
+            from backend.knowledge.snapshots import freeze_in_session
+            versions = freeze_in_session(session, teacher_id, raw_knowledge_ids,
+                                         expected=(input_manifest or {}).get("knowledge_content_versions"))
+            input_manifest = dict(input_manifest or {}, knowledge_content_versions=versions)
         assignment = session.scalar(
             select(AssignmentRecord).where(
                 AssignmentRecord.id == assignment_id,

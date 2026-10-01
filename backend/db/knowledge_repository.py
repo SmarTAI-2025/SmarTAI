@@ -138,15 +138,20 @@ def update_document(document_id: str, owner_id: str, **fields) -> KnowledgeDocum
 
 def replace_document_chunks(document_id: str, chunks: list[str]) -> None:
     with session_scope() as session:
-        session.execute(delete(KnowledgeChunkRecord).where(KnowledgeChunkRecord.document_id == document_id))
+        record = session.get(KnowledgeDocumentRecord, document_id)
+        if record is None:
+            return
+        from backend.db.knowledge_storage_repository import lock_knowledge_owner_in_session
+        lock_knowledge_owner_in_session(session, record.owner_id)
+        version = "native_" + uuid.uuid4().hex
         session.add_all([
             KnowledgeChunkRecord(id=f"chunk_{uuid.uuid4().hex[:16]}", document_id=document_id,
-                                 chunk_index=index, content=content,
-                                 chunk_metadata={}, token_count=len(content.split()))
+                                 content_version=version, chunk_index=index, content=content,
+                                 chunk_metadata=dict(content_version=version, source_sha256=record.sha256), token_count=len(content.split()))
             for index, content in enumerate(chunks)
         ])
-        record = session.get(KnowledgeDocumentRecord, document_id)
         if record:
+            record.active_version = version
             record.chunk_count = len(chunks)
             record.status = "ready"
             record.error_code = None

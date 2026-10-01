@@ -204,6 +204,7 @@ export interface StepScore {
 }
 
 export interface ExpertResult {
+  knowledge_citations?: import("./knowledgeCitation").KnowledgeCitation[];
   provider: string;
   score: number;
   max_score: number;

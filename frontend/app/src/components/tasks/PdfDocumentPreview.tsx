@@ -1,5 +1,5 @@
-import { LoaderCircle, RefreshCw } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { ChevronLeft, ChevronRight, LoaderCircle, RefreshCw } from "lucide-react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   GlobalWorkerOptions,
   getDocument,
@@ -11,7 +11,7 @@ import { Button } from "@/components/ui/Button";
 
 GlobalWorkerOptions.workerSrc = pdfWorkerUrl;
 
-const MAX_RENDERED_PAGES = 100;
+const PAGE_WINDOW = 3;
 
 export function PdfDocumentPreview({
   url,
@@ -21,6 +21,7 @@ export function PdfDocumentPreview({
   errorDescription,
   retryLabel,
   openLabel,
+  initialPage = 1,
 }: {
   url: string;
   title: string;
@@ -29,11 +30,15 @@ export function PdfDocumentPreview({
   errorDescription: string;
   retryLabel: string;
   openLabel: string;
+  initialPage?: number;
 }) {
   const [attempt, setAttempt] = useState(0);
   const [document, setDocument] = useState<PDFDocumentProxy | null>(null);
   const [error, setError] = useState(false);
   const [canvasFailed, setCanvasFailed] = useState(false);
+  const [pageStart, setPageStart] = useState(initialPage);
+  const onRenderError = useCallback(() => setCanvasFailed(true), []);
+  useEffect(() => { setPageStart(Math.max(1, Math.floor(initialPage))); }, [initialPage, url]);
 
   useEffect(() => {
     let cancelled = false;
@@ -44,6 +49,7 @@ export function PdfDocumentPreview({
     void loadingTask.promise.then((nextDocument) => {
       if (cancelled) return;
       setDocument(nextDocument);
+      setPageStart((value) => Math.min(nextDocument.numPages, Math.max(1, value)));
     }).catch(() => {
       if (!cancelled) setError(true);
     });
@@ -102,20 +108,27 @@ export function PdfDocumentPreview({
     );
   }
 
-  const pageCount = Math.min(document.numPages, MAX_RENDERED_PAGES);
+  const start = Math.min(document.numPages, Math.max(1, pageStart));
+  const pageCount = Math.min(PAGE_WINDOW, document.numPages - start + 1);
   return (
     <div
       role="document"
       aria-label={title}
       className="h-full w-full overflow-auto rounded-[7px] bg-slate-300/80 px-2 py-3 dark:bg-slate-950/45 sm:px-3"
     >
+      <div className="sticky top-0 z-10 mx-auto mb-3 flex h-10 w-fit items-center gap-2 rounded-md border bg-card px-2 text-xs">
+        <button type="button" title="Previous pages" aria-label="Previous pages" disabled={start === 1} onClick={() => setPageStart(Math.max(1, start - PAGE_WINDOW))} className="h-8 w-8 disabled:opacity-40"><ChevronLeft className="mx-auto h-4 w-4" /></button>
+        <input type="number" aria-label="PDF page" min={1} max={document.numPages} value={start} onChange={(event) => { const value = event.target.valueAsNumber; if (Number.isFinite(value)) setPageStart(Math.min(document.numPages, Math.max(1, Math.floor(value)))); }} className="h-8 w-20 rounded border bg-background px-2 tabular-nums" />
+        <span className="min-w-12 tabular-nums">/ {document.numPages}</span>
+        <button type="button" title="Next pages" aria-label="Next pages" disabled={start + pageCount > document.numPages} onClick={() => setPageStart(Math.min(document.numPages, start + PAGE_WINDOW))} className="h-8 w-8 disabled:opacity-40"><ChevronRight className="mx-auto h-4 w-4" /></button>
+      </div>
       <div className="mx-auto grid w-full max-w-[960px] gap-3">
         {Array.from({ length: pageCount }, (_, index) => (
           <PdfCanvasPage
-            key={`${url}:${index + 1}`}
+            key={`${url}:${start + index}`}
             document={document}
-            pageNumber={index + 1}
-            onRenderError={() => setCanvasFailed(true)}
+            pageNumber={start + index}
+            onRenderError={onRenderError}
           />
         ))}
       </div>
@@ -158,13 +171,14 @@ function PdfCanvasPage({
         const baseViewport = page.getViewport({ scale: 1 });
         const cssScale = width / Math.max(1, baseViewport.width);
         const pixelRatio = Math.min(2, window.devicePixelRatio || 1);
-        const viewport = page.getViewport({ scale: cssScale * pixelRatio });
+        const renderScale = Math.min(cssScale * pixelRatio, Math.sqrt(8_000_000 / (baseViewport.width * baseViewport.height)), 16384 / Math.max(baseViewport.width, baseViewport.height));
+        const viewport = page.getViewport({ scale: renderScale });
         const canvas = canvasRef.current;
         if (!canvas) return;
         canvas.width = Math.ceil(viewport.width);
         canvas.height = Math.ceil(viewport.height);
-        canvas.style.width = `${Math.round(viewport.width / pixelRatio)}px`;
-        canvas.style.height = `${Math.round(viewport.height / pixelRatio)}px`;
+        canvas.style.width = `${Math.round(baseViewport.width * cssScale)}px`;
+        canvas.style.height = `${Math.round(baseViewport.height * cssScale)}px`;
 
         // Supplying the context explicitly avoids Safari's intermittent failure
         // when pdf.js lazily creates a 2D context with Chromium-only hints.

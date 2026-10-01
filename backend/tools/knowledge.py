@@ -22,7 +22,7 @@ from __future__ import annotations
 
 import logging
 from typing import List, Optional
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 logger = logging.getLogger(__name__)
 
@@ -33,6 +33,26 @@ class KnowledgeChunk:
     content: str
     source: str
     score: float  # relevance score 0-1
+    citation: dict = field(default_factory=dict)
+
+
+def context_text(chunks):
+    if not chunks:
+        return "No matching textbook evidence was retrieved. Do not invent a textbook citation."
+    parts = []
+    for chunk in chunks:
+        citation = chunk.citation
+        label = citation.get("citation_id") or chunk.source
+        warning = " UNVERIFIED/PARTIAL SOURCE: confirm critical formulas against the original." if (
+            citation.get("warning_codes") or not citation.get("coverage_complete", True)
+            or citation.get("confidence") == "low") else ""
+        parts.append(f"[{label}] {chunk.source}{warning}\n{chunk.content}")
+    return "\n\n".join(parts)
+
+
+def citations(chunks):
+    """System-supplied retrieval evidence, not model-claimed attribution."""
+    return [dict(chunk.citation) for chunk in chunks if chunk.citation]
 
 
 class KnowledgeRetriever:

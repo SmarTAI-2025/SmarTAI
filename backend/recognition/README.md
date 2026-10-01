@@ -712,3 +712,45 @@ Five selected books are supported; the attachment request guard is now twenty.
 UI coverage, pause/resume and gap retry reuse current owner credentials, with
 no new provider setup screens. OCR precision, 1000/2500-page retrieval recall,
 frozen grading citations and end-to-end preview UX remain I/J acceptance work.
+
+## I: Versioned Local Retrieval and Citations
+
+Knowledge retrieval reuses the existing `rank-bm25` dependency. The local index
+adds Chinese bigrams, hierarchical exercise IDs and signed exponent tokens,
+suppresses duplicate passages and adds source-contiguous neighboring spans
+when the result budget allows. Native/OCR source text is never normalized in
+place. No embedding service, OCR request or model-assisted retrieval is used.
+
+Grading setup freezes the document IDs, published content version, readable
+chunk prefix, source hash and index version in the input fingerprint. Later
+page completion or replacement cannot change that grading run. Old versions
+remain until document cleanup; owner/source availability is rechecked before
+and after cache access. Selected documents with no readable content block
+grading rather than disappearing silently from its evidence.
+
+The single-flight LRU keeps up to 16 indexes / approximately 96 MiB with a
+15-minute absolute TTL. An individual selection above 100,000 chunks or 16 Mi
+characters fails explicitly; this is a local resource guard, not truncation.
+Only one index builds at a time. Cache accounting estimates retained Python
+objects; it is not a process RSS guarantee. Raw originals and all content
+versions continue using the ingestion/storage boundaries described above.
+
+The library and task setup expose content search. Retrieved references are
+system-supplied, not model-certified claim support. Existing concept,
+objective and proof grading carry those references into saved expert results;
+teacher review can inspect the frozen passage and original page. PDF preview
+mounts at most three canvases and can reach every page, including page 1000.
+Calculation/programming prompt expansion is held for explicit data-egress
+confirmation; it is not part of this stage's quality claim.
+
+Synthetic capacity validation: five books, 2500 pages (largest 1000), 2,981,961
+characters; 15 head/middle/tail exact-ID queries repeated twice, Recall@5 1.0,
+one index build, approximately 10.08 MB retained index. On the local SQLite
+validation environment: cold 0.829 s, hot p50 0.0037 s / p95 0.0046 s. These are
+synthetic exact-match and cache results, not OCR accuracy, paraphrase recall,
+production latency, whole-book ingestion time or measured teacher workload.
+
+Tests cover version freezing, incremental prefix stability, cache ownership
+and revocation, same-page adjacency, empty search, authenticated citation
+reads, 2500-page capacity and long-PDF navigation. Real-provider ablation,
+semantic holdout evaluation and combined end-to-end checks remain J work.
