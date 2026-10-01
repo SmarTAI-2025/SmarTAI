@@ -5,10 +5,12 @@ from starlette.concurrency import run_in_threadpool
 
 from backend.db.file_repository import StoredFile, get_file
 from backend.db.knowledge_repository import KnowledgeDocument, get_document, request_document_deletion
-from backend.rag.chunker import MAX_FILE_BYTES, SUPPORTED_EXTS
+from backend.rag.chunker import MAX_FILE_BYTES
 from backend.services.knowledge_storage import persist_knowledge_upload
 from backend.storage import get_storage
 from backend.tools.file_processing import inspect_upload_content
+
+KNOWLEDGE_UPLOAD_EXTENSIONS = {".pdf", ".txt", ".md", ".markdown"}
 
 
 async def ingest_document(*, owner_id: str, original_name: str, content: bytes,
@@ -22,9 +24,11 @@ async def ingest_document(*, owner_id: str, original_name: str, content: bytes,
     if not content or len(content) > MAX_FILE_BYTES:
         raise ValueError("Knowledge files must contain 1 byte to 64 MiB.")
     safe_name = Path(original_name).name or "knowledge.txt"
+    if Path(safe_name).suffix.lower() not in KNOWLEDGE_UPLOAD_EXTENSIONS:
+        raise ValueError("Knowledge uploads support PDF, TXT and Markdown; convert other formats to PDF.")
     media_type = inspect_upload_content(content, safe_name, content_type).content_type
-    visual = media_type == "application/pdf" or media_type in {"image/png", "image/jpeg", "image/webp", "image/bmp", "image/tiff"}
-    if not visual and Path(safe_name).suffix.lower() not in SUPPORTED_EXTS:
+    visual = media_type == "application/pdf"
+    if media_type.startswith("image/"):
         raise ValueError("Unsupported knowledge document type.")
     if registry is None:
         from backend.services.task_facade import _registry_for_owner
