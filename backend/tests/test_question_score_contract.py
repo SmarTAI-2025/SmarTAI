@@ -278,7 +278,7 @@ def test_task_problem_contract_serializes_and_edits_authoritative_max_score():
     ]
 
 
-def test_question_preparation_capabilities_expose_ocr_images_but_not_test_images():
+def test_question_preparation_capabilities_expose_all_role_images_with_test_ocr_opt_in():
     owner_id = "score-capability-owner"
     task_id = "score-capability-task"
     _seed_question_task(owner_id, task_id)
@@ -293,7 +293,7 @@ def test_question_preparation_capabilities_expose_ocr_images_but_not_test_images
 
     assert ".jpg" in capabilities["source_roles"]["problem"]["accepted_extensions"]
     assert ".webp" in capabilities["source_roles"]["rubric"]["accepted_extensions"]
-    assert ".jpg" not in capabilities["source_roles"]["programming_tests"]["accepted_extensions"]
+    assert ".jpg" in capabilities["source_roles"]["programming_tests"]["accepted_extensions"]
     assert capabilities["reader"]["images"] is True
 
 
@@ -310,11 +310,9 @@ def test_question_preparation_capabilities_keep_images_selectable_without_vision
         registry=registry,
     )
 
-    for role in ("problem", "reference_answer", "rubric"):
+    for role in ("problem", "reference_answer", "rubric", "programming_tests"):
         assert ".png" in capabilities["source_roles"][role]["accepted_extensions"]
-    assert capabilities["source_roles"]["programming_tests"]["accepted_extensions"] == [
-        ".pdf", ".txt", ".md", ".markdown", ".json"
-    ]
+    assert ".json" in capabilities["source_roles"]["programming_tests"]["accepted_extensions"]
     assert capabilities["reader"]["ocr"] is False
     assert capabilities["reader"]["images"] is False
     assert capabilities["reader"]["scanned_pdf"] is False
@@ -327,7 +325,7 @@ def test_question_preparation_capabilities_keep_images_selectable_without_vision
         ("reference_answer", "answers.webp", "image/webp", True, None),
         ("rubric", "rubric.jpg", "image/jpeg", True, None),
         ("problem", "questions.png", "image/png", False, "vision_provider_required"),
-        ("programming_tests", "cases.png", "image/png", True, "source_type_not_allowed"),
+        ("programming_tests", "cases.png", "image/png", True, None),
         ("programming_tests", "cases.json", "application/json", False, None),
         ("rubric", "rubric.json", "application/json", True, "source_type_not_allowed"),
     ],
@@ -375,7 +373,7 @@ class _FakeVisionProvider:
     def __init__(self):
         self.calls = []
 
-    async def ainvoke_vision(self, prompt, images):
+    async def ainvoke_vision(self, prompt, images, **kwargs):
         self.calls.append({"prompt": prompt, "images": images})
         return SimpleNamespace(
             content="Question 1: OCR result",
@@ -384,6 +382,7 @@ class _FakeVisionProvider:
             duration_ms=1,
             input_tokens=5,
             output_tokens=5,
+            finish_reason="stop",
         )
 
 
@@ -397,12 +396,18 @@ class _VisionRegistry:
     def pick_vision(self, _preferred=None):
         return self.provider
 
+    def list_configs(self):
+        return [{"provider_id": self.provider.provider_id, "enabled": True}]
+
+    def get(self, provider_id):
+        return self.provider if provider_id == self.provider.provider_id else None
+
 
 @pytest.mark.parametrize(
     ("role", "filename", "prompt_fragment"),
     [
-        ("problem", "questions.png", "数理题目 OCR"),
-        ("reference_answer", "answers.png", "数理参考答案 OCR"),
+        ("problem", "questions.png", "problem statements"),
+        ("reference_answer", "answers.png", "reference"),
     ],
 )
 @pytest.mark.asyncio
@@ -410,8 +415,12 @@ async def test_source_image_uses_role_specific_normalized_vision_ocr_path(
     role, filename, prompt_fragment
 ):
     registry = _VisionRegistry()
+    _seed_question_task("ocr-owner", "ocr-task")
+    from PIL import Image
+    image = io.BytesIO()
+    Image.new("RGB", (40, 60), "white").save(image, "PNG")
     upload = UploadFile(
-        file=io.BytesIO(PNG_1X1),
+        file=io.BytesIO(image.getvalue()),
         filename=filename,
         headers=Headers({"content-type": "image/png"}),
     )
@@ -422,6 +431,7 @@ async def test_source_image_uses_role_specific_normalized_vision_ocr_path(
         stored_file_id=None,
         inline_text=None,
         owner_id="ocr-owner",
+        task_id="ocr-task",
         registry=registry,
         role=role,
     )
@@ -481,6 +491,9 @@ async def test_missing_provider_stops_preflight_before_reading_or_creating_opera
 
 @pytest.mark.asyncio
 async def test_vision_off_scanned_pdf_returns_stable_preflight_error():
+    from backend.domain.errors import RecognitionError
+    from backend.services.stage_provider_routing import StageProviderRoute
+    _seed_question_task("scan-owner", "scan-task")
     fitz = pytest.importorskip("fitz")
     document = fitz.open()
     document.new_page(width=300, height=200)
@@ -494,23 +507,19 @@ async def test_vision_off_scanned_pdf_returns_stable_preflight_error():
     registry.pick_default.return_value = None
     registry.pick_vision.return_value = None
 
-    with pytest.raises(HTTPException) as exc:
+    with pytest.raises(RecognitionError) as exc:
         await _read_source(
             file=upload,
             library_material_id=None,
             inline_text=None,
             owner_id="scan-owner",
+            task_id="scan-task",
+            route=StageProviderRoute(route_id="no-vision", kind="llm", provider=None),
             registry=registry,
             role="problem",
         )
 
-    assert exc.value.status_code == 422
-    assert exc.value.detail == {
-        "code": "vision_provider_required",
-        "role": "problem",
-        "filename": "scanned.pdf",
-        "recovery": "configure_vision_provider",
-    }
+    assert exc.value.code == "ocr_empty_result"  # A verified blank page is not a missing vision service.
 
 
 @pytest.mark.asyncio
@@ -582,6 +591,7 @@ async def test_selected_text_model_preserves_question_image_for_model_switch(
 
 @pytest.mark.asyncio
 async def test_oversized_question_source_reports_the_exact_limit():
+    from backend.services.stage_provider_routing import StageProviderRoute
     upload = UploadFile(
         file=io.BytesIO(b"x" * (MAX_SOURCE_BYTES + 1)),
         filename="questions.txt",
@@ -597,6 +607,8 @@ async def test_oversized_question_source_reports_the_exact_limit():
             library_material_id=None,
             inline_text=None,
             owner_id="size-owner",
+            task_id="size-task",
+            route=StageProviderRoute(route_id="no-vision", kind="llm", provider=None),
             registry=registry,
             role="problem",
         )
