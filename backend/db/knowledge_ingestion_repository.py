@@ -242,14 +242,18 @@ def _publish(session, row):
         KnowledgePageRecord.ingestion_id == row.id).group_by(KnowledgePageRecord.state)).all())
     processed = sum(counts.get(key, 0) for key in TERMINAL_PAGES)
     available = sum(counts.get(key, 0) for key in GOOD_PAGES)
+    partial_readable = sum(bool(evidence.get("chunk_count")) for evidence in session.scalars(
+        select(KnowledgePageRecord.evidence).where(KnowledgePageRecord.ingestion_id == row.id,
+                                                  KnowledgePageRecord.state == "failed")))
     done = bool(row.total_pages and processed == row.total_pages)
     complete = done and not counts.get("failed")
     if done:
-        row.status = ("complete_with_warning" if counts.get("searchable_with_warning") else "complete") if complete else "partial" if available else "failed"
+        row.status = ("complete_with_warning" if counts.get("searchable_with_warning") else "complete") if complete else "partial" if available or partial_readable else "failed"
         row.lease_token = row.lease_expires_at = None
     doc = session.get(KnowledgeDocumentRecord, row.document_id)
     summary = dict(id=row.id, status=row.status, total_pages=row.total_pages or None,
-        processed_pages=processed, searchable_pages=available - counts.get("blank_confirmed", 0),
+        processed_pages=processed, searchable_pages=available - counts.get("blank_confirmed", 0) + partial_readable,
+        partially_searchable_pages=partial_readable,
         blank_pages=counts.get("blank_confirmed", 0), warning_pages=counts.get("searchable_with_warning", 0),
         failed_pages=counts.get("failed", 0), coverage_complete=complete,
         unit=row.configuration.get("unit", "page"), error_code=row.error_code,

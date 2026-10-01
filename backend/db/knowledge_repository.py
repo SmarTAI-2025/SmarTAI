@@ -261,7 +261,7 @@ def list_chunks(document_ids: list[str]) -> list[KnowledgeChunkRecord]:
 
 
 def set_task_documents(*, assignment_id: str, owner_id: str, document_ids: list[str]) -> list[KnowledgeDocument]:
-    """Select up to three ready personal documents for an assignment.
+    """Select up to twenty owned documents for an assignment, including pending.
 
     Name kept for import compatibility while the retriever/API migrate to the
     assignment scope (Task 6). Ownership is checked through the assignment.

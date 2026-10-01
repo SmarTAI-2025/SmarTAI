@@ -90,6 +90,7 @@ def _page_result(run):
     evidence.update(confidence=document.confidence, warning_codes=sorted(set(warnings)))
     if not document.coverage.complete:
         state = "failed"
+        evidence["warning_codes"] = sorted(set(warnings + ["coverage_incomplete"]))
     elif all(page.verified_blank for page in document.pages) and document.pages:
         state = "blank_confirmed"
     elif not document.final_markdown.strip():

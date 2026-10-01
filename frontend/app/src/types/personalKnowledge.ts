@@ -4,6 +4,7 @@ export interface KnowledgeIngestionSummary {
   total_pages?: number | null;
   processed_pages?: number;
   searchable_pages?: number;
+  partially_searchable_pages?: number;
   blank_pages?: number;
   failed_pages?: number;
   warning_pages?: number;

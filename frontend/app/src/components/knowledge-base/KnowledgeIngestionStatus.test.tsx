@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, expect, it, vi } from "vitest";
 import { KnowledgeIngestionStatus } from "./KnowledgeIngestionStatus";
@@ -28,4 +28,21 @@ it("resumes a paused ingestion through an explicit command, not through its stat
   expect(api.postJSON).not.toHaveBeenCalled();
   await userEvent.click(screen.getByRole("button", { name: "继续处理" }));
   expect(api.postJSON).toHaveBeenCalledWith("/knowledge/documents/book/resume", {});
+});
+
+it("refreshes an active retry and stops polling when its current summary is terminal", async () => {
+  vi.useFakeTimers();
+  try {
+    const summary = { id: "retry", status: "queued", processed_pages: 0 };
+    api.getJSON.mockResolvedValue({ summary: { ...summary, status: "partial", total_pages: 110,
+      processed_pages: 110, searchable_pages: 110, partially_searchable_pages: 110, failed_pages: 110 }, pages: [], next_offset: null });
+    const view = render(<KnowledgeIngestionStatus documentId="book" status="failed" ingestion={summary} zh />);
+    expect(api.getJSON).not.toHaveBeenCalled();
+    await act(async () => { await vi.advanceTimersByTimeAsync(5000); });
+    expect(screen.getByText("部分可检索 · 110/110")).toBeInTheDocument();
+    await act(async () => { await vi.advanceTimersByTimeAsync(15000); });
+    expect(api.getJSON).toHaveBeenCalledTimes(1);
+    expect(api.postJSON).not.toHaveBeenCalled();
+    view.unmount();
+  } finally { vi.useRealTimers(); }
 });

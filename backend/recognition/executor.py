@@ -215,6 +215,14 @@ checks here do not replace the caller's storage ACL and operation lease.
     budget = budget or RecognitionBudget(source, plan.policy, plan.engine_capabilities)
     budget.assert_context(source, plan.policy, plan.engine_capabilities)
     eligible = [page for page in plan.decisions if page.action in {"native", "blank", "visual"}]
+    # Knowledge can index a blocked page's native text without claiming that
+    # its diagrams were read. Keep the same detail budget and persisted evidence.
+    detail_decisions = list(eligible)
+    if plan.purpose == "knowledge" and plan.policy.version == "knowledge-economy-v1":
+        remaining = max(0, plan.policy.max_detail_pages - len(eligible))
+        detail_decisions.extend([page for page in plan.decisions if page.action == "blocked"
+                                 and "visual_capability_unavailable" in page.reason_codes][:remaining])
+    detail_decisions.sort(key=lambda page: page.page_number)
     detail_pages: list[PdfDetailPage] = []
     units: list[ReadUnitV1] = []
     native_pages: list[int] = []
@@ -231,8 +239,8 @@ checks here do not replace the caller's storage ACL and operation lease.
         )
 
     try:
-        if eligible:
-            result = await pdf_read(PdfPagesRequest(pages=[page.page_number for page in eligible]))
+        if detail_decisions:
+            result = await pdf_read(PdfPagesRequest(pages=[page.page_number for page in detail_decisions]))
             if not isinstance(result, PdfDetailResult) or result.total_pages != plan.total_pages:
                 raise RecognitionError("recognition_plan_changed")
             detail_pages = result.pages
@@ -241,7 +249,12 @@ checks here do not replace the caller's storage ACL and operation lease.
             observed = by_number[decision.page_number].observation
             if decision.action == "blank" and not observed.verified_blank:
                 raise RecognitionError("recognition_plan_changed")
-            if decision.action == "native" and (observed.native_quality != "clean" or observed.risks or plan.purpose == "submissions"):
+            economy_math = (plan.purpose == "knowledge" and plan.policy.version == "knowledge-economy-v1"
+                            and observed.risks == ["math"] and not plan.policy.force_visual
+                            and "knowledge_native_math_unverified" in decision.reason_codes)
+            if decision.action == "native" and (observed.native_quality != "clean"
+                                                 or (observed.risks and not economy_math)
+                                                 or plan.purpose == "submissions"):
                 raise RecognitionError("recognition_plan_changed")
             if decision.action in {"native", "blank"}:
                 native_pages.append(decision.page_number)

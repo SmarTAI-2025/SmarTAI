@@ -225,7 +225,7 @@ export function UploadDialog({ courses, groups, onClose, onUploaded }: UploadDia
   return (
     <LibraryDialog
       title={tx(locale, "上传资料", "Upload material")}
-      description={tx(locale, "PDF / 图像 / Office / 文本 · 64 MiB", "PDF / images / Office / text · 64 MiB")}
+      description={tx(locale, "PDF / TXT / Markdown · 64 MiB", "PDF / TXT / Markdown · 64 MiB")}
       closeLabel={tx(locale, "关闭", "Close")}
       onClose={onClose}
       footer={<><Button type="button" variant="secondary" onClick={onClose} disabled={upload.isPending}>{tx(locale, "取消", "Cancel")}</Button><Button type="submit" form="course-material-upload-form" disabled={upload.isPending || !file}>{upload.isPending ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <FileUp className="h-4 w-4" />}{upload.isPending ? tx(locale, "正在解析…", "Parsing…") : tx(locale, "上传资料", "Upload")}</Button></>}
@@ -235,9 +235,9 @@ export function UploadDialog({ courses, groups, onClose, onUploaded }: UploadDia
           <label htmlFor={inputId} className="flex min-h-[92px] cursor-pointer flex-col items-center justify-center rounded-[8px] border border-dashed bg-slate-50/60 px-4 py-4 text-center outline-none hover:border-primary dark:bg-slate-900/30">
             <FileUp className="h-5 w-5 text-primary" />
             <span className="mt-2 max-w-full truncate text-sm font-semibold">{file?.name ?? tx(locale, "选择一份资料文件", "Choose a material file")}</span>
-            <span className="mt-1 text-xs text-muted-foreground">{file ? formatBytes(file.size) : "PDF · TXT · MD"}</span>
+            <span className="mt-1 text-xs text-muted-foreground">{file ? formatBytes(file.size) : "PDF / TXT / Markdown"}</span>
           </label>
-          <input id={inputId} className="sr-only" type="file" accept=".pdf,.docx,.pptx,.txt,.md,.markdown,.rst,.png,.jpg,.jpeg,.webp,.bmp,.tiff" onChange={(event) => setFile(event.target.files?.[0] ?? null)} />
+          <input id={inputId} className="sr-only" type="file" accept=".pdf,.txt,.md,.markdown" onChange={(event) => setFile(event.target.files?.[0] ?? null)} />
         </div>
         <div className="grid gap-4 sm:grid-cols-2">
           <FormField label={tx(locale, "课程（可选）", "Course (optional)")}>
