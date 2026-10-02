@@ -24,12 +24,14 @@ from backend.recognition.models import EvidenceModel, RecognitionSourceRefV1
 from backend.recognition.runtime import RecognitionCapacity
 from backend.services.recognition_artifacts import RecognitionArtifactStore
 from backend.services.recognition_runs import RecognitionRunService
+from backend.services.question_source_batches import read_question_pdf_batches
 from backend.services.stage_provider_routing import (
     StageProviderRoute, build_owner_baidu_ocr_skill, stage_provider_configuration_fingerprint,
 )
 from backend.skills.recognition_reader import BaiduRecognitionEngine, LLMRecognitionEngine, PROMPT_VERSION
 from backend.storage import get_storage
 from backend.tools.file_processing import extract_text_from_upload, inspect_upload_content
+from backend.tools.pdf_evidence import PdfIndexRequest, read_pdf_evidence
 
 _CAPACITIES = weakref.WeakKeyDictionary()
 _CACHE = RecognitionByteCache()
@@ -66,7 +68,7 @@ Target = Annotated[str, Field(min_length=1, max_length=80)]
 
 
 class QuestionRecognitionOptionsV1(EvidenceModel):
-    pages: list[Page] = Field(default_factory=list, max_length=24)
+    pages: list[Page] = Field(default_factory=list, max_length=10000)
     targets: list[Target] = Field(default_factory=list, max_length=64)
     search_start_page: Page = 1
     search_window_pages: int = Field(default=500, strict=True, ge=1, le=500)
@@ -126,7 +128,7 @@ def question_recognition_options(value=None, *, extraction_hint=""):
                 if len(ends) > 2 or not all(end.isdigit() for end in ends):
                     raise RecognitionError("recognition_request_invalid")
                 start, end = int(ends[0]), int(ends[-1])
-                if not 1 <= start <= end <= 10000 or end - start >= 24:
+                if not 1 <= start <= end <= 10000:
                     raise RecognitionError("recognition_request_invalid")
                 pages.update(range(start, end + 1))
             try:
@@ -157,6 +159,12 @@ async def read_question_source(*, owner_id, task_id, content, filename, content_
     if media_type not in _VISUAL_TYPES:
         text = await (text_reader or extract_text_from_upload)(content, filename, purpose=purpose, reporter=reporter)
         return QuestionSourceRead(text, stored_file_id=stored_file_id)
+    total_pages = None
+    if media_type == "application/pdf" and purpose == "problems":
+        index = await read_pdf_evidence(content, PdfIndexRequest(window_pages=1), progress=reporter)
+        total_pages = index.total_pages
+        if scope.pages and max(scope.pages) > index.total_pages:
+            raise RecognitionError("question_source_pages_out_of_range")
     if not allow_vision and media_type.startswith("image/"):
         raise RecognitionError("material_ocr_confirmation_required")
     if stored_file_id is None:
@@ -172,17 +180,27 @@ async def read_question_source(*, owner_id, task_id, content, filename, content_
         business_id=binding.business_id if binding is not None else task_id, stored_file_id=stored_file_id,
         original_name=filename, content_type=media_type, input_sha256=hashlib.sha256(content).hexdigest(),
     )
+    # Broad page hints are read in full; the structure extractor still applies
+    # the teacher's target IDs. Never silently truncate an explicit page range.
+    locate_targets = bool(scope.targets) and len(scope.pages) <= 24
     request = RecognitionReadRequestV1(
-        source=source, purpose=purpose, scope="targets" if scope.targets else "pages" if scope.pages else "document",
-        targets=scope.targets, pages=scope.pages if not scope.targets else [],
-        page_hints={target: scope.pages for target in scope.targets} if scope.targets and scope.pages else {},
+        source=source, purpose=purpose, scope="targets" if locate_targets else "pages" if scope.pages else "document",
+        targets=scope.targets if locate_targets else [], pages=[] if locate_targets else scope.pages,
+        page_hints={target: scope.pages for target in scope.targets} if locate_targets and scope.pages else {},
         search_start_page=scope.search_start_page, search_window_pages=scope.search_window_pages,
     )
     async with recognition_engine(owner_id=owner_id, route=route if allow_vision else None, registry=registry) as engine:
         if media_type.startswith("image/") and engine is None:
             raise RecognitionError("provider_vision_not_supported" if route.provider is not None else "visual_capability_unavailable")
-        run = await RecognitionRunService(store=RecognitionArtifactStore(get_storage()), capacity=recognition_capacity(),
-                                           cache=_CACHE, progress=reporter).run(
+        service = RecognitionRunService(store=RecognitionArtifactStore(get_storage()), capacity=recognition_capacity(),
+                                        cache=_CACHE, progress=reporter)
+        if total_pages is not None and not locate_targets:
+            text, summary = await read_question_pdf_batches(
+                service=service, request=request, content=content, engine=engine,
+                total_pages=total_pages, reporter=reporter, binding=binding,
+            )
+            return QuestionSourceRead(text, summary, stored_file_id)
+        run = await service.run(
             request, content, engine=engine, prompt_version=PROMPT_VERSION, authorized_owner_id=owner_id, binding=binding,
         )
     if run.status == "already_running":

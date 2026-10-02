@@ -46,6 +46,7 @@ export function ProblemRecognitionProgressPage() {
   const retryPreparation = useRetryQuestionPreparation();
   const progressQuery = useTaskProgress(taskId);
   const [retryFailure, setRetryFailure] = useState<unknown>(null);
+  const [isRefreshing, setIsRefreshing] = useState(false);
   const [acknowledgedJobId, setAcknowledgedJobId] = useState<string | null>(null);
   // The polled snapshot also owns recovery metadata; detail can predate the failure.
   const taskState = progressQuery.data ?? taskQuery.data;
@@ -61,8 +62,13 @@ export function ProblemRecognitionProgressPage() {
     return <Navigate to={`/tasks/${taskId}/questions`} replace />;
   }
 
-  const refresh = () => {
-    void Promise.all([taskQuery.refetch(), progressQuery.refetch()]);
+  const refresh = async () => {
+    setIsRefreshing(true);
+    try {
+      await Promise.all([taskQuery.refetch(), progressQuery.refetch()]);
+    } finally {
+      setIsRefreshing(false);
+    }
   };
   const progressFailure = retryFailure
     ?? progressQuery.progress?.error_detail
@@ -115,7 +121,7 @@ export function ProblemRecognitionProgressPage() {
           ...(submissionUncertain ? { acknowledgePossibleDuplicateCall: true } : {}),
         });
         setAcknowledgedJobId(null);
-        refresh();
+        await refresh();
       } catch (error) {
         setRetryFailure(error);
       }
@@ -166,13 +172,13 @@ export function ProblemRecognitionProgressPage() {
                 : canRetryPreparedSources
                   ? () => void retryPreparedSources()
                   : () => navigate(`/tasks/${taskId}/upload/problems`),
-              busy: taskQuery.isFetching || progressQuery.isFetching || retryPreparation.isPending,
+              busy: isRefreshing || retryPreparation.isPending,
               disabled: submissionUncertain && acknowledgedJobId !== failedJobId,
             }}
             secondaryAction={{
               label: t("problemProgressRefresh"),
               onClick: refresh,
-              busy: taskQuery.isFetching || progressQuery.isFetching || retryPreparation.isPending,
+              busy: isRefreshing || retryPreparation.isPending,
             }}
           />
         </div>

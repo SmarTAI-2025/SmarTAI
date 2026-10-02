@@ -119,6 +119,38 @@ beforeEach(() => {
 });
 
 describe("AddProblemsPage score configuration", () => {
+  it.each([
+    ["", "", ""],
+    ["", "1.1.5, 1.1.7, 1.1.20, 1.1.29, 1.1.31, 1.2.3, 1.2.16", ""],
+    ["3-5", "", ""],
+    ["", "", "仅提取第一节的习题"],
+  ])("allows independently omitted scope fields (%s, %s, %s)", async (pages, targets, hint) => {
+    const user = userEvent.setup();
+    renderPage();
+    await uploadProblemFile(user);
+    await user.click(screen.getByRole("button", { name: "从原文提取" }));
+    fireEvent.change(screen.getByLabelText("页码（选填）"), { target: { value: pages } });
+    fireEvent.change(screen.getByLabelText("目标题号（选填）"), { target: { value: targets } });
+    fireEvent.change(screen.getByLabelText("补充说明（选填）"), { target: { value: hint } });
+    await user.click(screen.getByRole("button", { name: "识别并准备题目资料" }));
+    await waitFor(() => expect(startMutateAsync).toHaveBeenCalledTimes(1));
+    expect(preflightMutateAsync).toHaveBeenCalledWith(expect.objectContaining({
+      recognitionOptions: { pages: pages ? [3, 4, 5] : [], targets: targets ? targets.split(", ") : [] },
+    }));
+  });
+
+  it("explains malformed pages before any upload/model request", async () => {
+    const user = userEvent.setup();
+    renderPage();
+    await uploadProblemFile(user);
+    await user.click(screen.getByRole("button", { name: "从原文提取" }));
+    fireEvent.change(screen.getByLabelText("页码（选填）"), { target: { value: "5-2" } });
+    await user.click(screen.getByRole("button", { name: "识别并准备题目资料" }));
+    expect(screen.getByText(/页码请填写 PDF 文件页序号/)).toBeInTheDocument();
+    expect(preflightMutateAsync).not.toHaveBeenCalled();
+    expect(startMutateAsync).not.toHaveBeenCalled();
+  });
+
   it("keeps the explicit default-10 contract when the teacher does not edit scores", async () => {
     const user = userEvent.setup();
     renderPage();

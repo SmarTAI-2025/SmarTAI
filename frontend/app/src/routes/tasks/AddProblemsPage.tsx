@@ -29,6 +29,7 @@ import { RecoverableActionState, type RecoveryAction } from "@/components/ui/Rec
 import { useImeSafeQuery } from "@/hooks/useImeSafeQuery";
 import { useI18n } from "@/i18n/I18nProvider";
 import { cn } from "@/lib/cn";
+import { parseQuestionRecognitionScope } from "@/lib/questionRecognitionScope";
 import { classifyRecoverableError } from "@/lib/taskActionGuards";
 import type {
   PreparationSourceRole,
@@ -205,6 +206,17 @@ export function AddProblemsPage() {
       else setFormError(primaryDisabledReason);
       return;
     }
+    for (const source of configuredSources) {
+      if (source.role !== "problem" || source.structureMode !== "extract_from_source") continue;
+      const { error } = parseQuestionRecognitionScope(source.recognitionPages ?? "", source.recognitionTargets ?? "");
+      if (error) {
+        setActiveRole("problem");
+        setFormError(error === "pages"
+          ? tx(locale, "页码请填写 PDF 文件页序号，如 3-5, 8；范围起点不能大于终点。也可留空识别整份文件。", "Use PDF page positions, e.g. 3-5, 8; range endpoints must be ascending. Leave blank to use the whole file.")
+          : tx(locale, "题号请用逗号分隔，如 1.1.5, 1.2.3；范围须在同一节内，如 1.1.5-1.1.7，最多 64 题。自然语言请填入补充说明。", "Separate question IDs with commas, e.g. 1.1.5, 1.2.3. Ranges must stay in one section, e.g. 1.1.5-1.1.7; at most 64 IDs. Put prose in the additional instructions."));
+        return;
+      }
+    }
     const resolvedScorePolicy = validateScorePolicy(
       scorePolicy,
       locale,
@@ -236,8 +248,13 @@ export function AddProblemsPage() {
           libraryMaterialId: source.libraryMaterial?.material_id,
           inlineText: source.inlineText,
           structureMode: source.structureMode,
-          extractionHint: [source.extractionHint, source.recognitionPages?.trim() ? `页码: ${source.recognitionPages.trim()}` : "",
-            source.recognitionTargets?.trim() ? `题号: ${source.recognitionTargets.trim()}` : ""].filter(Boolean).join("\n"),
+          extractionHint: source.structureMode === "extract_from_source"
+            ? [source.extractionHint, source.recognitionPages?.trim() ? `页码: ${source.recognitionPages.trim()}` : "",
+              source.recognitionTargets?.trim() ? `题号: ${parseQuestionRecognitionScope("", source.recognitionTargets).options?.targets?.join(", ")}` : ""].filter(Boolean).join("\n")
+            : "",
+          recognitionOptions: source.role === "problem" && source.structureMode === "extract_from_source"
+            ? parseQuestionRecognitionScope(source.recognitionPages ?? "", source.recognitionTargets ?? "").options
+            : undefined,
           saveToLibrary: source.sourceMode === "upload" && source.saveToLibrary,
           recognitionProviderId,
           enableMaterialOcr: source.enableMaterialOcr ?? false,
@@ -706,13 +723,16 @@ function SourceEditor({
         {source.role === "problem" && source.sourceMode !== "inline_text" && source.structureMode === "extract_from_source" ? (
           <div className="mt-3 grid grid-cols-2 gap-3">
             <label className="grid gap-1 text-xs font-semibold text-muted-foreground">
-              {tx(locale, "页码", "Pages")}
-              <input value={source.recognitionPages ?? ""} disabled={disabled} maxLength={160} onChange={(event) => onUpdate({ recognitionPages: event.target.value })} className="h-9 min-w-0 rounded-[7px] border bg-card px-3 text-sm font-normal text-foreground" />
+              {tx(locale, "页码（选填）", "Pages (optional)")}
+              <input placeholder={tx(locale, "PDF 页序号，如 3-5, 8", "PDF positions, e.g. 3-5, 8")} value={source.recognitionPages ?? ""} disabled={disabled} maxLength={160} onChange={(event) => onUpdate({ recognitionPages: event.target.value })} className="h-9 min-w-0 rounded-[7px] border bg-card px-3 text-sm font-normal text-foreground" />
             </label>
             <label className="grid gap-1 text-xs font-semibold text-muted-foreground">
-              {tx(locale, "目标题号", "Question Numbers")}
-              <input value={source.recognitionTargets ?? ""} disabled={disabled} maxLength={600} onChange={(event) => onUpdate({ recognitionTargets: event.target.value })} className="h-9 min-w-0 rounded-[7px] border bg-card px-3 text-sm font-normal text-foreground" />
+              {tx(locale, "目标题号（选填）", "Question Numbers (optional)")}
+              <input placeholder={tx(locale, "如 1.1.5, 1.2.3", "e.g. 1.1.5, 1.2.3")} value={source.recognitionTargets ?? ""} disabled={disabled} maxLength={600} onChange={(event) => onUpdate({ recognitionTargets: event.target.value })} className="h-9 min-w-0 rounded-[7px] border bg-card px-3 text-sm font-normal text-foreground" />
             </label>
+            <p className="col-span-2 text-xs leading-5 text-muted-foreground">{tx(locale,
+              "三项均可留空：默认提取整份文件中的所有习题，长文件自动分批处理。只填题号则在文件中定位指定题目，页码用于帮助定位；只填页码则提取这些页中的全部习题。补充说明不必重复题号。目录、讲解、例题解答不会作为独立题目。",
+              "All three fields are optional: blank means all exercises, with long files processed in batches. Question IDs select specific exercises; pages help locate them. Pages alone select all exercises on those pages. Additional instructions need not repeat IDs. Contents, explanations and worked solutions are not separate questions.")}</p>
           </div>
         ) : null}
         {source.sourceMode === "upload" ? (
@@ -801,7 +821,7 @@ function SourceEditor({
             </p>
           ) : source.structureMode === "extract_from_source" ? (
             <label className="grid gap-2 text-xs font-semibold text-muted-foreground">
-              {tx(locale, "提取说明", "Extraction Hint")}
+              {tx(locale, "补充说明（选填）", "Additional instructions (optional)")}
               <textarea value={source.extractionHint} disabled={disabled} maxLength={source.role === "problem" ? 1200 : 2000} onChange={(event) => onUpdate({ extractionHint: event.target.value })} placeholder={tx(locale, "例如：第 3 章习题 1–8，保留完整题干和图表", "Example: Chapter 3, exercises 1–8, including complete conditions and diagrams")} className="min-h-[74px] resize-y rounded-[7px] border bg-card px-3 py-2 text-sm font-normal leading-5 text-foreground outline-none focus:border-primary focus:ring-2 focus:ring-primary/15" />
             </label>
           ) : <p className="self-end pb-1 text-xs leading-5 text-muted-foreground">{tx(locale, "系统按明确题号匹配到同一道题。", "Content is matched by explicit question numbers.")}</p>}
