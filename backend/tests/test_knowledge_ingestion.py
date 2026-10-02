@@ -104,6 +104,24 @@ async def test_public_knowledge_upload_does_not_expand_confirmed_formats(name):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("name,body", [
+    ("renamed.pdf", b"this is plain text"),
+    ("renamed.txt", pdf()),
+    ("renamed.md", b"PK\x03\x04not a text file"),
+    ("binary.txt", b"\x00\xff\x00"),
+])
+async def test_knowledge_rejects_mislabeled_content_before_storage(name, body, monkeypatch):
+    from backend.knowledge import service
+
+    def unexpected_storage(**kwargs):
+        pytest.fail("Invalid content must not be stored or queued")
+
+    monkeypatch.setattr(service, "persist_knowledge_upload", unexpected_storage)
+    with pytest.raises(ValueError, match="does not match its format"):
+        await ingest_document(owner_id="format-check", original_name=name, content=body, native_only=True)
+
+
+@pytest.mark.asyncio
 async def test_pdf_batches_resume_native_evidence_and_paginated_manifest():
     who, doc_id, job_id = queued(pdf(25))
     worker = KnowledgeIngestionWorker(registry_factory=lambda _: Registry())
