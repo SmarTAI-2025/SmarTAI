@@ -451,6 +451,7 @@ describe("background task failure guidance", () => {
 describe("unusable upload recovery", () => {
   it.each([
     ["source_empty", "文件为空", "empty"],
+    ["source_content_type_not_allowed", "扩展名", "extension"],
     ["pdf_invalid", "重新导出", "export"],
     ["pdf_encrypted", "解锁", "Unlock"],
     ["image_invalid", "JPG", "JPG"],

@@ -236,6 +236,7 @@ const BYOK_CODES = new Set([
 ]);
 
 const FILE_CODES = new Set([
+  "source_content_type_not_allowed",
   "pdf_invalid", "pdf_encrypted", "pdf_page_out_of_range",
   "image_invalid", "image_format_mismatch", "image_mode_unsupported",
   "image_multiframe_unsupported", "image_pixel_limit_exceeded",
@@ -1217,6 +1218,9 @@ function fileErrorDescription(
 ): string {
   if (["source_empty", "submission_source_empty"].includes(code ?? "") || /file is empty|contains no usable text|no extractable text/i.test(message)) {
     return tx(locale, "文件为空或只含空白字符，没有可识别正文。请打开文件确认内容，重新保存后上传；重复提交同一空文件无法解决。", "The file is empty or contains only whitespace, with no readable content. Open it, check the content, and save it again before uploading; retrying the same empty file will not help.");
+  }
+  if (code === "source_content_type_not_allowed" || code === "submission_source_content_type_mismatch") {
+    return tx(locale, "文件内容与扩展名不符，或文件已损坏。请确认能在本地打开，并重新导出为上传区域支持的格式；只修改文件后缀无效。", "The file contents do not match its extension, or the file is damaged. Check that it opens locally and export it in a format supported by this upload area; renaming the extension does not convert it.");
   }
   if (code === "pdf_encrypted") {
     return tx(locale, "PDF 已加密或需要密码。请在本地解锁并另存为无需密码的 PDF 后上传。", "This PDF is encrypted or password-protected. Unlock it locally and save a PDF that opens without a password before uploading.");
