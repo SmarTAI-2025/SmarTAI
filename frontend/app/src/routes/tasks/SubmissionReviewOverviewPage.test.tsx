@@ -6,6 +6,8 @@ import { SubmissionReviewOverviewPage } from "./SubmissionReviewOverviewPage";
 
 vi.mock("@/api/hooks/tasks", () => ({
   useTask: () => ({ isLoading: true, isSuccess: false }),
+  useUpdateStudentIdentity: () => ({ mutateAsync: vi.fn() }),
+  useUpdateStudentAnswer: () => ({ mutateAsync: vi.fn() }),
 }));
 
 vi.mock("@/components/new-task/NewTaskStepper", () => ({

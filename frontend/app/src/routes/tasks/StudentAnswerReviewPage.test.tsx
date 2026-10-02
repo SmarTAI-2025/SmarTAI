@@ -10,6 +10,7 @@ const sourcePreviewApi = vi.hoisted(() => ({
   loadSourcePreviewFile: vi.fn(),
 }));
 const taskRefetch = vi.hoisted(() => vi.fn());
+const mutations = vi.hoisted(() => ({ answer: vi.fn(), identity: vi.fn() }));
 const studentSource: SourceFileDescriptor = {
   source_id: "source-student-1",
   file_id: "file-student-1",
@@ -66,8 +67,8 @@ const taskData = vi.hoisted(() => ({
 
 vi.mock("@/api/hooks/tasks", () => ({
   useTask: () => ({ isLoading: false, isError: false, isSuccess: true, data: taskData, refetch: taskRefetch }),
-  useUpdateStudentAnswer: () => ({ isPending: false, mutateAsync: vi.fn() }),
-  useUpdateStudentIdentity: () => ({ isPending: false, mutateAsync: vi.fn() }),
+  useUpdateStudentAnswer: () => ({ isPending: false, mutateAsync: mutations.answer }),
+  useUpdateStudentIdentity: () => ({ isPending: false, mutateAsync: mutations.identity }),
 }));
 
 vi.mock("@/components/new-task/NewTaskStepper", () => ({ NewTaskStepper: () => null }));
@@ -98,16 +99,20 @@ vi.mock("@/i18n/I18nProvider", async () => {
   };
 });
 
-function renderPage() {
+function renderPage(search = "?question=Q1") {
   const router = createMemoryRouter([
     { path: "/tasks/:taskId/students/:studentId", element: <StudentAnswerReviewPage /> },
     { path: "/tasks/:taskId/submissions", element: <div>Submission overview</div> },
     { path: "/tasks/:taskId/grading-setup", element: <div>Grading setup</div> },
-  ], { initialEntries: ["/tasks/task-1/students/S001?question=Q1"] });
+  ], { initialEntries: [`/tasks/task-1/students/S001${search}`] });
   render(<RouterProvider router={router} />);
 }
 
 beforeEach(() => {
+  taskData.student_data.S001.identity_status = "matched";
+  taskData.student_data.S001.stu_ans[0].review_status = "pending";
+  mutations.answer.mockReset().mockResolvedValue({ workflow_revision: 4 });
+  mutations.identity.mockReset().mockResolvedValue({ workflow_revision: 4, student: taskData.student_data.S001 });
   taskData.student_data.S001.source_choices = [];
   taskRefetch.mockReset().mockResolvedValue({ data: taskData });
   sourcePreviewApi.getTaskSourceFiles.mockReset().mockResolvedValue({
@@ -140,6 +145,48 @@ beforeEach(() => {
     width: 100,
     height: 100,
     toJSON: () => ({}),
+  });
+});
+
+describe("StudentAnswerReviewPage review shortcuts", () => {
+  it("opens the editable identity form from the queue and confirms unchanged values", async () => {
+    taskData.student_data.S001.identity_status = "needs_review";
+    const user = userEvent.setup();
+    renderPage("?identity=edit");
+    expect(await screen.findByRole("textbox", { name: "学号" })).toHaveValue("S001");
+    expect(screen.getByRole("textbox", { name: "姓名" })).toHaveValue("Lin");
+    await user.click(screen.getByRole("button", { name: "确认身份已复核" }));
+    expect(mutations.identity).toHaveBeenCalledWith({ taskId: "task-1", currentStudentId: "S001", studentId: "S001", studentName: "Lin", expectedWorkflowRevision: 3 });
+  });
+
+  it("confirms an identity from the student page without opening its editor", async () => {
+    taskData.student_data.S001.identity_status = "needs_review";
+    const user = userEvent.setup();
+    renderPage();
+    expect(screen.queryByRole("textbox", { name: "学号" })).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "确认身份已复核" }));
+    expect(mutations.identity).toHaveBeenCalledTimes(1);
+  });
+
+  it("allows confirming recognized unflagged answers without editing their text", async () => {
+    const user = userEvent.setup();
+    renderPage();
+    await user.click(screen.getByRole("button", { name: "确认已复核" }));
+    expect(mutations.answer).toHaveBeenCalledWith({ taskId: "task-1", studentId: "S001", qId: "Q1", expectedWorkflowRevision: 3, reviewStatus: "confirmed" });
+  });
+
+  it("keeps an unsaved answer draft and directs bulk review back to the edit", async () => {
+    const user = userEvent.setup();
+    renderPage();
+    await user.click(screen.getByRole("button", { name: "修改" }));
+    const draft = document.querySelector("textarea")!;
+    await user.type(draft, " corrected");
+    await user.click(screen.getByRole("button", { name: "一键确认本学生全部作答" }));
+    expect(mutations.answer).not.toHaveBeenCalled();
+    expect(draft).toHaveValue("Student answer one corrected");
+    expect(screen.getByRole("status")).toHaveTextContent("请先保存正在修改的作答");
+    await user.click(screen.getByRole("button", { name: "保存并确认复核" }));
+    expect(mutations.answer).toHaveBeenCalledWith(expect.objectContaining({ content: "Student answer one corrected", reviewStatus: "confirmed" }));
   });
 });
 

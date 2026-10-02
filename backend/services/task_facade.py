@@ -4357,6 +4357,33 @@ def update_student_answer(
         if target is None or question_exists is None:
             raise NotFound("answer")
 
+        # Confirming recognition is metadata-only. Keep the submission revision,
+        # grading generation and analysis intact when the recognized text/flags
+        # did not change (including an unchanged save from the editor).
+        content_changed = patch.get("content") is not None and patch["content"] != target.content
+        flags_changed = patch.get("flag") is not None and list(patch["flag"]) != list(target.flag or [])
+        if not content_changed and not flags_changed and patch.get("review_status") is not None:
+            review = session.get(
+                workflow_repository.SubmissionAnswerPresentationRecord, target.id
+            )
+            if review is None:
+                review = workflow_repository.SubmissionAnswerPresentationRecord(answer_id=target.id)
+                session.add(review)
+            review.review_status = str(patch["review_status"])
+            review.updated_at = now
+            workflow_row.workflow_revision += 1
+            workflow_row.updated_at = now
+            session.flush()
+            return {
+                "status": "ok", "stu_id": display_student_id, "q_id": q_id,
+                "answer": {
+                    "q_id": target.q_id, "number": target.number, "type": target.type,
+                    "content": target.content, "flag": list(target.flag or []),
+                    "review_status": review.review_status,
+                },
+                "workflow_revision": workflow_row.workflow_revision,
+            }
+
         next_number = (
             session.scalar(select(func.max(
                 SubmissionRevisionRecord.revision_number
@@ -4467,46 +4494,62 @@ def update_student_identity(
     workflow = workflow_repository.get_live_workflow(
         task_id, owner_id=owner_id
     )
-    if workflow.workflow_revision != expected_revision:
-        _raise_stale_revision()
+    _reconcile_terminal_active_operation(
+        task_id=task_id, owner_id=owner_id, workflow=workflow
+    )
     normalized_display_id = new_display_id.strip()
     normalized_display_name = new_display_name.strip()
-    presentations = workflow_repository.list_student_presentations(task_id)
-    presentation = next(
-        (item for item in presentations.values() if item.display_student_id == current_display_id),
-        None,
-    )
-    if presentation is None:
-        raise NotFound("student")
-    duplicate = next(
-        (item for item in presentations.values()
-         if item.display_student_id == normalized_display_id
-         and item.student_id != presentation.student_id),
-        None,
-    )
-    if duplicate is not None:
+    if not normalized_display_id or not normalized_display_name:
         raise ValidationError(
-            "The student ID is already used in this task.",
-            code="student_identity_conflict",
+            "Student ID and name are required.", code="student_identity_required",
         )
-    # The revision CAS comes after every deterministic validation.  A rejected
-    # identity edit must not silently advance the task revision.
-    claimed_workflow = workflow_repository.update_workflow(
-        task_id, owner_id=owner_id, expected_revision=expected_revision
-    )
-    updated = workflow_repository.upsert_student_presentation(
-        assignment_id=task_id, student_id=presentation.student_id,
-        display_student_id=normalized_display_id,
-        display_name=normalized_display_name,
-        source_filename=presentation.source_filename,
-        identity_match_method=presentation.identity_match_method,
-        identity_status="matched",
-    )
+    # Serialize identity confirmation/editing with other workflow mutations.
+    # A failed or busy item must not consume a revision during bulk review.
+    with session_scope() as session:
+        workflow_row = session.scalar(
+            select(workflow_repository.AssignmentWorkflowRecord).where(
+                workflow_repository.AssignmentWorkflowRecord.assignment_id == task_id,
+                workflow_repository.AssignmentWorkflowRecord.owner_id == owner_id,
+            ).with_for_update()
+        )
+        if workflow_row is None:
+            raise NotFound("workflow")
+        workflow_repository._lock_live_assignment(
+            session, assignment_id=task_id, owner_id=owner_id
+        )
+        if workflow_row.active_job_id:
+            raise InvalidTransition("The task is busy.", code="workflow_busy")
+        if workflow_row.workflow_revision != expected_revision:
+            _raise_stale_revision()
+        presentations = session.scalars(
+            select(workflow_repository.AssignmentStudentPresentationRecord).where(
+                workflow_repository.AssignmentStudentPresentationRecord.assignment_id == task_id,
+                workflow_repository.AssignmentStudentPresentationRecord.is_active.is_(True),
+            )
+        ).all()
+        presentation = next(
+            (item for item in presentations if item.display_student_id == current_display_id), None,
+        )
+        if presentation is None:
+            raise NotFound("student")
+        if any(item.display_student_id == normalized_display_id
+               and item.student_id != presentation.student_id for item in presentations):
+            raise ValidationError(
+                "The student ID is already used in this task.", code="student_identity_conflict",
+            )
+        presentation.display_student_id = normalized_display_id
+        presentation.display_name = normalized_display_name
+        presentation.identity_status = "matched"
+        presentation.updated_at = time.time()
+        workflow_row.workflow_revision += 1
+        workflow_row.updated_at = presentation.updated_at
+        session.flush()
+        workflow_revision = workflow_row.workflow_revision
     task = get_task(task_id=task_id, owner_id=owner_id, full=True)
     return {
         "status": "ok", "previous_student_id": current_display_id,
-        "student": task["student_data"][updated.display_student_id],
-        "workflow_revision": claimed_workflow.workflow_revision,
+        "student": task["student_data"][normalized_display_id],
+        "workflow_revision": workflow_revision,
     }
 
 
