@@ -10,6 +10,24 @@ from backend.services import question_sources
 from backend.services.stage_provider_routing import StageProviderRoute
 from backend.tests.test_recognition_reader import llm
 from backend.tests.test_recognition_v2_artifacts import setup
+from backend.tests.test_recognition_agent import pdf
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("count,options,code", [
+    (2, {"pages": [3]}, "question_source_pages_out_of_range"),
+])
+async def test_unsupported_pdf_scope_stops_before_provider(monkeypatch, count, options, code):
+    run = AsyncMock()
+    monkeypatch.setattr(question_sources.RecognitionRunService, "run", run)
+    with pytest.raises(RecognitionError) as caught:
+        await question_sources.read_question_source(
+            owner_id="owner", task_id="task", content=pdf(["Exercise 1. Explain A."] * count),
+            filename="exercises.pdf", options=options,
+            route=StageProviderRoute(route_id="ocr:unused", kind="ocr", credential_id="never-read"), registry=None,
+        )
+    assert caught.value.code == code
+    run.assert_not_awaited()
 
 
 def test_scope_hint_is_bounded_and_does_not_treat_decimal_as_question():

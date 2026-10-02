@@ -318,6 +318,25 @@ export function classifyRecoverableError(
     ? `/tasks/${encodeURIComponent(taskId)}${suffix}`
     : undefined;
 
+  if (code === "question_source_pages_out_of_range") {
+    return {
+      title: tx(locale, "请调整识别范围", "Adjust the recognition scope"),
+      description: tx(locale, "填写的页码超出了 PDF 总页数。请使用文件中的页序号，而非书上印刷的页码。这份资料尚未调用识别模型。", "A page is outside this PDF. Use file page positions, not printed page numbers. No recognition model was called for this source."),
+      actionLabel: tx(locale, "修改资料范围", "Edit source scope"),
+      actionKind: "reselect", actionHref: taskHref("/upload/problems"),
+      tone: "warning", technicalDetails,
+    };
+  }
+
+  if (code === "question_source_incomplete") {
+    return {
+      title: tx(locale, "资料尚未完整读取", "Source reading is incomplete"),
+      description: tx(locale, "仍有页面未成功读取，已暂停题目生成。已完成的页面证据已保存，重新检查资料时会复用；不会把部分内容当作整份文件完成。", "Some pages could not be read, so question generation is paused. Completed page evidence is saved for reuse when checking the source again; partial input is not treated as a complete document."),
+      actionLabel: tx(locale, "检查资料", "Check source"), actionKind: "reselect",
+      actionHref: taskHref("/upload/problems"), tone: "warning", technicalDetails,
+    };
+  }
+
   if (code === "recognition_already_running") {
     return {
       title: tx(locale, "这份资料仍在识别", "This source is still being recognized"),

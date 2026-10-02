@@ -17,6 +17,7 @@ const failedTask = {
 };
 let task = { ...failedTask };
 let snapshot = { ...failedTask };
+let isPolling = false;
 
 vi.mock("@/api/hooks", () => ({
   useStageProviders: () => ({
@@ -55,7 +56,7 @@ vi.mock("@/hooks/useTaskProgress", () => ({
   useTaskProgress: () => ({
     data: snapshot,
     error: null,
-    isFetching: false,
+    isFetching: isPolling,
     progress: {
       error_detail: new APIError(422, "vision rejected", {
         detail: { code: "provider_vision_not_supported" },
@@ -78,10 +79,29 @@ describe("ProblemRecognitionProgressPage recovery", () => {
   beforeEach(() => {
     task = { ...failedTask };
     snapshot = { ...failedTask };
+    isPolling = false;
     retryMutateAsync.mockReset();
     refetchTask.mockReset();
     refetchProgress.mockReset();
     retryMutateAsync.mockResolvedValue({ status: "started", job_id: "retry-job" });
+  });
+
+  it("keeps retry idle during background status polls and only retries on click", async () => {
+    const page = <MemoryRouter initialEntries={["/tasks/question-task/problems/progress"]}><Routes>
+      <Route path="/tasks/:taskId/problems/progress" element={<ProblemRecognitionProgressPage />} />
+    </Routes></MemoryRouter>;
+    const { rerender } = render(page);
+    isPolling = true;
+    rerender(<MemoryRouter initialEntries={["/tasks/question-task/problems/progress"]}><Routes>
+      <Route path="/tasks/:taskId/problems/progress" element={<ProblemRecognitionProgressPage />} />
+    </Routes></MemoryRouter>);
+    const retry = screen.getByRole("button", { name: "重试未完成步骤" });
+    expect(retry).toBeEnabled();
+    expect(retry.querySelector(".animate-spin")).toBeNull();
+    expect(screen.getByRole("button", { name: "problemProgressRefresh" }).querySelector(".animate-spin")).toBeNull();
+    expect(retryMutateAsync).not.toHaveBeenCalled();
+    fireEvent.click(retry);
+    await waitFor(() => expect(retryMutateAsync).toHaveBeenCalledTimes(1));
   });
 
   it.each([false, true])("retries preserved sources with a frozen provider (stale detail: %s)", async (staleDetail) => {
