@@ -18,7 +18,7 @@ from backend.domain.errors import DomainError
 from backend.llm.registry import ExpertRegistry, get_scoped_expert_registry
 from backend.models import User
 from backend.services import submissions as submission_service
-from backend.skills.ocr_ingest import LLMVisionOCRSkill
+from backend.services.submission_uploads import MAX_UPLOAD_BYTES
 
 router = APIRouter(prefix="/submissions", tags=["submissions"])
 
@@ -124,11 +124,7 @@ async def submit_upload(current: User = Depends(require_student),
         raise HTTPException(
             503, detail="No LLM provider configured. Add an API key first."
         )
-    vision_provider = registry.pick_vision(provider)
-    ocr_skill = (
-        LLMVisionOCRSkill(vision_provider) if vision_provider is not None else None
-    )
-    content = await file.read()
+    content = await file.read(MAX_UPLOAD_BYTES + 1)
     try:
         rev = await submission_service.submit_student_file_with_ocr(
             student_id=current.id,
@@ -137,7 +133,7 @@ async def submit_upload(current: User = Depends(require_student),
             content=content,
             content_type=file.content_type,
             provider=provider,
-            ocr_skill=ocr_skill,
+            registry=registry,
         )
     except DomainError as exc:
         return domain_error_response(exc)
@@ -159,11 +155,7 @@ async def teacher_upload(
         raise HTTPException(
             503, detail="No LLM provider configured. Add an API key first."
         )
-    vision_provider = registry.pick_vision(provider)
-    ocr_skill = (
-        LLMVisionOCRSkill(vision_provider) if vision_provider is not None else None
-    )
-    content = await file.read()
+    content = await file.read(MAX_UPLOAD_BYTES + 1)
     try:
         rev = await submission_service.teacher_import_file_with_ocr(
             teacher_id=current.id,
@@ -173,7 +165,7 @@ async def teacher_upload(
             content=content,
             content_type=file.content_type,
             provider=provider,
-            ocr_skill=ocr_skill,
+            registry=registry,
         )
     except DomainError as exc:
         return domain_error_response(exc)

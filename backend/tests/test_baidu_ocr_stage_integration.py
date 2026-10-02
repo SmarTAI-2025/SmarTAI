@@ -107,6 +107,11 @@ class _FakeDocumentOCRSkill:
         self.markdown = markdown
         self.client = _FakeClient()
         self.calls: list[tuple[bytes, str, str]] = []
+        self.client.recognize_document = self._engine_read
+
+    async def _engine_read(self, data, filename):
+        result = await self.recognize_document(data, filename, "problems")
+        return SimpleNamespace(markdown=result.text, duration_ms=1)
 
     async def recognize_document(
         self,
@@ -179,8 +184,7 @@ async def test_question_ocr_success_reuses_artifact_and_freezes_three_stage_rout
         return question_skill
 
     monkeypatch.setattr(
-        task_preparation,
-        "build_owner_baidu_ocr_skill",
+        "backend.services.question_sources.build_owner_baidu_ocr_skill",
         fake_factory,
     )
 
@@ -208,7 +212,9 @@ async def test_question_ocr_success_reuses_artifact_and_freezes_three_stage_rout
     replayed = await preflight_once()
     assert replayed["source_token"] == prepared["source_token"]
     assert factory_calls == [(owner_id, route_id, credential_id)]
-    assert question_skill.calls == [(PNG_1X1, "questions.png", "problems")]
+    assert len(question_skill.calls) == 1
+    assert question_skill.calls[0][1:] == ("source.png", "problems")
+    assert prepared["recognition"]["coverage"]["processed_pages"] == [1]
     assert question_skill.client.closed is True
 
     background = _BackgroundTasks()
@@ -363,8 +369,7 @@ async def test_question_ocr_uncertain_submit_is_not_repeated(monkeypatch):
         return skill
 
     monkeypatch.setattr(
-        task_preparation,
-        "build_owner_baidu_ocr_skill",
+        "backend.services.question_sources.build_owner_baidu_ocr_skill",
         fake_factory,
     )
 
@@ -420,7 +425,7 @@ async def test_submission_ocr_uses_original_bytes_and_preserves_source_outcome(
         factory_calls.append((request_owner, route.route_id, route.credential_id))
         return skill
 
-    monkeypatch.setattr(task_facade, "build_owner_baidu_ocr_skill", fake_factory)
+    monkeypatch.setattr("backend.services.question_sources.build_owner_baidu_ocr_skill", fake_factory)
     monkeypatch.setattr(
         task_facade,
         "_registry_for_owner",
@@ -462,7 +467,13 @@ async def test_submission_ocr_uses_original_bytes_and_preserves_source_outcome(
     workflow = workflow_repository.get_workflow(task_id, owner_id=owner_id)
     assert operation.status == "done"
     assert factory_calls == [(owner_id, route_id, credential_id)]
-    assert skill.calls == [(PNG_1X1, "S002_Li.png", "submissions")]
+    assert len(skill.calls) == 1
+    assert skill.calls[0][1] == "source.png"
+    from backend.db import file_repository
+    from backend.storage import get_storage
+    original = file_repository.get_file(file_id=source.stored_file_id, owner_id=owner_id)
+    with get_storage().open(original.storage_key) as stream:
+        assert stream.read() == PNG_1X1
     assert skill.client.closed is True
     assert workflow.submission_recognition_provider_id == route_id
     assert outcome is not None

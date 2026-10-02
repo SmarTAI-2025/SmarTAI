@@ -83,7 +83,19 @@ async def test_revision_artifacts_cannot_bypass_parent_task_write_intents(tmp_pa
             assignment = db.scalar(select(AssignmentRecord).where(AssignmentRecord.teacher_id == owner))
             assignment.deletion_requested_at = time.time()
         assert file_repository.get_file(file_id=original.id, owner_id=owner).availability_status == "available"
-    await assert_no_save(storage, binding, envelope)
+    store = service.RecognitionArtifactStore(storage)
+    if deleting:
+        keys_before = sorted(storage.list_keys(""))
+        with pytest.raises(DomainError):
+            await store.save(envelope, binding=binding, authorized_owner_id=owner)
+        assert sorted(storage.list_keys("")) == keys_before
+        assert_no_artifact_rows(owner)
+    else:
+        row = await store.save(envelope, binding=binding, authorized_owner_id=owner)
+        assert row.submission_revision_id == binding.business_id
+        assert row.assignment_id is None
+        assert await store.load(row.id, source=envelope.source, identity=envelope.identity,
+                                binding=binding, authorized_owner_id=owner) == envelope
 
 
 @pytest.mark.asyncio
@@ -109,7 +121,7 @@ async def test_assignment_write_intent_accepts_live_task_and_rejects_late_tombst
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("link", ["knowledge_document", "submission_revision"])
+@pytest.mark.parametrize("link", ["knowledge_document"])
 async def test_unsupported_scope_history_load_is_rejected_before_storage_access(tmp_path, monkeypatch, link):
     storage, binding, _, envelope = knowledge_upload(tmp_path) if link == "knowledge_document" else seeded(tmp_path, link)
 

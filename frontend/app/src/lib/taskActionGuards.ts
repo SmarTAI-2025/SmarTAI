@@ -227,6 +227,7 @@ const BYOK_CODES = new Set([
   "provider_auth_failed",
   "ocr_credential_not_found",
   "provider_permission_denied",
+  "provider_region_unsupported",
   "vision_provider_required",
   "shared_pool_kb_requires_byok",
   "no_enabled_expert",
@@ -316,6 +317,15 @@ export function classifyRecoverableError(
   const taskHref = (suffix: string) => taskId
     ? `/tasks/${encodeURIComponent(taskId)}${suffix}`
     : undefined;
+
+  if (code === "recognition_already_running") {
+    return {
+      title: tx(locale, "这份资料仍在识别", "This source is still being recognized"),
+      description: tx(locale, "已有任务正在处理同一份资料，本次没有重复提交。", "An existing run is processing this source. No duplicate request was submitted."),
+      actionLabel: tx(locale, "查看任务", "View task"), actionHref: taskHref(""),
+      actionKind: "refresh", tone: "warning", technicalDetails,
+    };
+  }
 
   if (code === "ocr_provider_grading_not_supported") {
     return {
@@ -486,6 +496,16 @@ export function classifyRecoverableError(
       actionKind: "reselect",
       tone: "warning",
       technicalDetails,
+    };
+  }
+
+  if (code === "submission_recognition_needs_review") {
+    return {
+      title: tx(locale, "仍有作答识别待核对", "Some transcriptions need review"),
+      description: tx(locale, "请核对标记的作答与原件后确认；识别不确定不会被当成学生答错。", "Confirm the flagged transcriptions against the originals before grading. Uncertainty is not a student error."),
+      actionLabel: tx(locale, "核对作答", "Review submissions"),
+      actionHref: taskHref("/submissions?filter=review"),
+      actionKind: "reselect", tone: "warning", technicalDetails,
     };
   }
 
@@ -663,7 +683,7 @@ export function classifyRecoverableError(
     };
   }
 
-  if (code === "vision_provider_required") {
+  if (code === "vision_provider_required" || code === "visual_capability_unavailable") {
     const byokReturnTo = context.returnTo?.trim();
     return {
       title: tx(locale, "尚未选择可用的视觉模型", "No usable vision model is selected"),
@@ -680,6 +700,14 @@ export function classifyRecoverableError(
     };
   }
 
+  if (["target_location_needs_hint", "target_selection_limit_exceeded", "recognition_budget_exhausted", "recognition_timeout", "question_targets_incomplete"].includes(code ?? "")) {
+    return {
+      title: tx(locale, "本次识别范围尚未完成", "Recognition coverage is incomplete"),
+      description: tx(locale, "已保存的识别结果仍然保留。请缩小页码范围或补充目标题号；系统不会自动增加付费调用。", "Saved evidence is retained. Narrow the page range or specify question numbers; no extra paid calls are started automatically."),
+      actionLabel: tx(locale, "调整识别范围", "Adjust source range"),
+      actionKind: "retry", tone: "warning", technicalDetails,
+    };
+  }
   if (code === "ocr_empty_result") {
     return {
       title: tx(locale, "OCR 没有读到可用文字", "OCR found no usable text"),
@@ -1074,6 +1102,12 @@ function providerConfigurationErrorCopy(
       "请在百度控制台确认已开通文档解析权限，或替换为有权限的 AK/SK。",
       "Confirm Document Parsing access in the Baidu console or replace the AK/SK with an authorized pair.",
     ],
+    provider_region_unsupported: [
+      "模型服务不支持当前网络地区",
+      "The model service does not support the current network region",
+      "请使用供应商支持的接入环境，或在 BYOK 中选择其他已获授权的模型。剩余页面不会自动重复请求。",
+      "Use a provider-supported access environment or select another authorized BYOK model. Remaining pages are not retried automatically.",
+    ],
     provider_quota_exceeded: [
       "OCR 额度已用完",
       "The OCR quota is exhausted",
@@ -1127,6 +1161,12 @@ function providerTransientErrorCopy(
   code: string | null,
   locale: Locale,
 ): Pick<RecoverableErrorInfo, "title" | "description"> | null {
+  if (code === "provider_overloaded") {
+    return {
+      title: tx(locale, "模型服务当前拥堵", "The model service is busy"),
+      description: tx(locale, "供应商暂时无法接收请求，并非已确认的每日额度耗尽。资料已保留，请稍后重试或选择另一个已启用模型。", "The provider is temporarily overloaded; this does not confirm a daily quota limit. Your files are preserved. Retry later or select another enabled model."),
+    };
+  }
   if (code === "provider_upstream_unavailable") {
     return {
       title: tx(locale, "模型服务暂时不可用", "The model service is temporarily unavailable"),

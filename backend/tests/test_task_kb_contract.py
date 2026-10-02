@@ -54,6 +54,9 @@ def test_task_kb_save_to_library_and_attachment_provenance_persist():
         "doc_id": payload["doc_id"],
         "filename": "teacher-notes.txt",
         "chunk_count": 1,
+        "status": "ready",
+        "content_version": listed.json()["docs"][0]["content_version"],
+        "ingestion": listed.json()["docs"][0]["ingestion"],
         "uploaded_at": listed.json()["docs"][0]["uploaded_at"],
         "source_kind": "upload",
         "library_material_id": payload["library_material_id"],
@@ -293,7 +296,7 @@ def test_failed_task_only_attachment_enqueues_cleanup_instead_of_leaking_quota()
     client = TestClient(app)
     headers = {"Authorization": f"Bearer {create_token(owner_id, 'teacher')}"}
     retained_ids = []
-    for index in range(3):
+    for index in range(20):
         uploaded = client.post(
             "/knowledge/documents",
             headers=headers,
@@ -313,7 +316,7 @@ def test_failed_task_only_attachment_enqueues_cleanup_instead_of_leaking_quota()
         document_ids=retained_ids,
     )
 
-    orphan_body = b"fourth task-only attachment cannot fit the selection"
+    orphan_body = b"twenty-first task-only attachment cannot fit the selection"
     failed = client.post(
         f"/tasks/{task['task_id']}/kb",
         headers=headers,

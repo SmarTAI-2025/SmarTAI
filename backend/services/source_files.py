@@ -484,7 +484,13 @@ def _problem_from_question_preparation(
             ),
             stored=None,
         )
-    if source_kind == "library":
+    if source_kind == "library" and selected.get("source_id"):
+        material = course_library_repository.get_material(selected.get("library_material_id"), owner_id)
+        clone = file_repository.get_file(file_id=selected.get("stored_file_id"), owner_id=owner_id)
+        if material is None or clone is None or clone.sha256 != material.sha256:
+            raise SourcePreviewNotFound("Source preview not found.")
+        # Assignment-bound copies use the same operation/source fences as uploads.
+    elif source_kind == "library":
         material_id = selected.get("library_material_id")
         file_id = selected.get("stored_file_id")
         if not isinstance(material_id, str) or not isinstance(file_id, str):
@@ -663,6 +669,9 @@ def _resolve_current_sources(
     submissions = _resolve_submission_sources(
         storage=storage, task_id=task_id, owner_id=owner_id, workflow=workflow
     )
+    for stored in file_repository.list_current_submission_originals(assignment_id=task_id, teacher_id=owner_id):
+        submissions.append(_descriptor_for_stored(storage=storage, task_id=task_id,
+            source_id=f"revision-{stored.submission_revision_id}-{stored.id}", stored=stored))
     return workflow, problem, submissions
 
 
@@ -697,10 +706,12 @@ def _read_current_content(
     )
     if current is None:
         raise SourcePreviewNotFound("Source preview not found.")
+    if current.size_bytes > 64 * 1024 * 1024:
+        raise SourcePreviewUnsupportedType("Source exceeds the supported preview byte limit.")
     _raise_if_source_not_available(current)
     try:
         with closing(storage.open(stored.storage_key)) as stream:
-            content = stream.read()
+            content = stream.read(64 * 1024 * 1024 + 1)
     except StorageObjectNotFound:
         refreshed = file_repository.get_file(
             file_id=current.id, owner_id=current.owner_id
@@ -794,6 +805,13 @@ def read_source_file_content(
     content = _read_current_content(
         storage=storage, stored=selected.stored, task_id=task_id
     )
+    # A deletion or revision replacement during object I/O revokes this preview.
+    _, current_problem, current_submissions = _resolve_current_sources(
+        task_id=task_id, owner_id=owner_id, storage=storage)
+    current_candidates = ([current_problem] if current_problem is not None else []) + current_submissions
+    if not any(item.stored is not None and item.stored.id == file_id
+               and item.descriptor.get("status") == "available" for item in current_candidates):
+        raise SourcePreviewNotFound("Source preview not found.")
     mime_type = detected_preview_mime(
         content[:_SNIFF_BYTES], descriptor["display_name"]
     )

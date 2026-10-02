@@ -7,7 +7,7 @@ import { ProblemRecognitionProgressPage } from "./ProblemRecognitionProgressPage
 const retryMutateAsync = vi.fn();
 const refetchTask = vi.fn();
 const refetchProgress = vi.fn();
-const task = {
+const failedTask = {
   task_id: "question-task",
   status: "error",
   workflow_revision: 8,
@@ -15,6 +15,8 @@ const task = {
   question_recognition_provider_id: "provider-old",
   error: "provider_vision_not_supported",
 };
+let task = { ...failedTask };
+let snapshot = { ...failedTask };
 
 vi.mock("@/api/hooks", () => ({
   useStageProviders: () => ({
@@ -51,7 +53,7 @@ vi.mock("@/api/hooks", () => ({
 
 vi.mock("@/hooks/useTaskProgress", () => ({
   useTaskProgress: () => ({
-    data: { status: "error" },
+    data: snapshot,
     error: null,
     isFetching: false,
     progress: {
@@ -74,13 +76,18 @@ vi.mock("@/i18n/I18nProvider", () => ({
 
 describe("ProblemRecognitionProgressPage recovery", () => {
   beforeEach(() => {
+    task = { ...failedTask };
+    snapshot = { ...failedTask };
     retryMutateAsync.mockReset();
     refetchTask.mockReset();
     refetchProgress.mockReset();
     retryMutateAsync.mockResolvedValue({ status: "started", job_id: "retry-job" });
   });
 
-  it("switches models and retries the failed stage without asking for an upload", async () => {
+  it.each([false, true])("retries preserved sources with a frozen provider (stale detail: %s)", async (staleDetail) => {
+    if (staleDetail) {
+      task = { ...task, status: "extracting_problems", workflow_revision: 7, last_failed_job_id: "" };
+    }
     render(
       <MemoryRouter initialEntries={["/tasks/question-task/problems/progress"]}>
         <Routes>
@@ -94,14 +101,30 @@ describe("ProblemRecognitionProgressPage recovery", () => {
 
     const select = screen.getByRole("combobox", { name: "题目识别模型" });
     expect(select).toHaveValue("provider-old");
-    fireEvent.change(select, { target: { value: "provider-new" } });
-    fireEvent.click(screen.getByRole("button", { name: "用所选模型重试" }));
+    expect(select).toBeDisabled();
+    fireEvent.click(screen.getByRole("button", { name: "重试未完成步骤" }));
 
     await waitFor(() => expect(retryMutateAsync).toHaveBeenCalledWith({
       taskId: "question-task",
       jobId: "failed-question-job",
-      recognitionProviderId: "provider-new",
+      recognitionProviderId: "provider-old",
       expectedWorkflowRevision: 8,
     }));
+  });
+
+  it("requires explicit acknowledgement before restarting uncertain provider work", async () => {
+    snapshot.error = "provider_submit_uncertain";
+    render(<MemoryRouter initialEntries={["/tasks/question-task/problems/progress"]}><Routes>
+      <Route path="/tasks/:taskId/problems/progress" element={<ProblemRecognitionProgressPage />} />
+    </Routes></MemoryRouter>);
+    const restart = screen.getByRole("button", { name: "确认重新准备题目" });
+    expect(restart).toBeDisabled();
+    fireEvent.click(restart);
+    expect(retryMutateAsync).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("checkbox"));
+    fireEvent.click(restart);
+    await waitFor(() => expect(retryMutateAsync).toHaveBeenCalledWith(expect.objectContaining({
+      jobId: "failed-question-job", acknowledgePossibleDuplicateCall: true,
+    })));
   });
 });

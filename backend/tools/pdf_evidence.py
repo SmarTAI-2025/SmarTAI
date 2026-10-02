@@ -87,7 +87,7 @@ class PdfContactSheetRequest(EvidenceModel):
 
 class ImagePrepareRequest(EvidenceModel):
     operation: Literal["image_prepare"] = "image_prepare"
-    content_type: Literal["image/jpeg", "image/png", "image/webp"]
+    content_type: Literal["image/jpeg", "image/png", "image/webp", "image/bmp", "image/tiff"]
     region: Region = (0, 0, 1, 1)
 
     @model_validator(mode="after")
@@ -256,7 +256,7 @@ class PdfContactSheetResult(PdfContactSheetMetadata):
 class ImagePreparedMetadata(EvidenceModel):
     """Persistable preparation provenance, without the ephemeral PNG payload."""
     source_sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
-    source_content_type: Literal["image/jpeg", "image/png", "image/webp"]
+    source_content_type: Literal["image/jpeg", "image/png", "image/webp", "image/bmp", "image/tiff"]
     source_mode: Literal["1", "L", "LA", "P", "RGB", "RGBA", "CMYK"]
     source_width: int = Field(strict=True, ge=1, le=8192)
     source_height: int = Field(strict=True, ge=1, le=8192)

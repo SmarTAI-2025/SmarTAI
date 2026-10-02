@@ -50,6 +50,9 @@ class RecognitionCallSessionV2:
             return RecognitionCallResultV1(candidate=candidate.model_copy(deep=True))
         if found.status != "miss":
             raise RecognitionError("recognition_cache_" + found.status)
+        guard = getattr(self.service, "before_dispatch", None)
+        if guard is not None:
+            await guard(source, request, region_keys=region_keys, **options)
         outcome = await dispatch()
         self._pending = request, options, None, budget
         return outcome

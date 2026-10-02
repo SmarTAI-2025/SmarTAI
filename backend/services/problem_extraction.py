@@ -7,7 +7,9 @@ from typing import Any
 
 from backend.db import file_repository, source_outcome_repository
 from backend.domain.errors import NotFound, ValidationError
-from backend.skills.ocr_ingest import LLMVisionOCRSkill
+from backend.progress.tracker import get_or_create_reporter, remove_reporter
+from backend.services.question_sources import read_question_source, attach_recognition_review
+from backend.services.stage_provider_routing import resolve_stage_provider_route
 from backend.storage import get_storage
 
 
@@ -69,21 +71,29 @@ async def run_problem_extraction(
     if text is None:
         await operation.update_progress(_stage_progress("reading_source", 0))
         registry = registry_factory(operation.owner_id)
-        provider = registry.pick_default()
+        route = resolve_stage_provider_route(owner_id=operation.owner_id, registry=registry,
+                                             requested_route_id=payload.get("recognition_provider_id"))
+        provider = route.provider
         if provider is None:
             raise ValidationError(
                 "No enabled provider is available.",
                 code="no_provider_configured",
             )
-        vision = registry.pick_vision(provider)
         with get_storage().open(source.storage_key) as stream:
             content = stream.read()
-        text = await extract_text(
-            content,
-            source.original_name,
-            ocr_skill=LLMVisionOCRSkill(vision) if vision is not None else None,
-            purpose="problems",
-        )
+        options = dict(payload.get("extraction_options") or {})
+        reporter = get_or_create_reporter(operation.operation_id)
+        try:
+            read = await read_question_source(
+                owner_id=operation.owner_id, task_id=operation.assignment_id, content=content,
+                filename=source.original_name, content_type=source.content_type,
+                stored_file_id=source.stored_file_id, route=route, registry=registry,
+                extraction_hint=str(options.get("extraction_hint") or ""), options=options.get("recognition_options"),
+                text_reader=extract_text, reporter=reporter,
+            )
+        finally:
+            remove_reporter(operation.operation_id, expected=reporter)
+        text = read.text
         artifact = file_repository.save_file(
             storage=get_storage(),
             owner_id=operation.owner_id,
@@ -100,7 +110,7 @@ async def run_problem_extraction(
         )
         text_artifact_id = artifact.id
         artifact_refs = [artifact.id]
-        checkpoint = {"text_artifact_id": artifact.id}
+        checkpoint = {"text_artifact_id": artifact.id, "recognition": read.recognition}
         await operation.checkpoint(
             stage="source_text_extracted",
             checkpoint=checkpoint,
@@ -126,7 +136,8 @@ async def run_problem_extraction(
         if registry is None:
             registry = registry_factory(operation.owner_id)
         if provider is None:
-            provider = registry.pick_default()
+            provider = resolve_stage_provider_route(owner_id=operation.owner_id, registry=registry,
+                                                     requested_route_id=payload.get("recognition_provider_id")).provider
         if provider is None:
             raise ValidationError(
                 "No enabled provider is available.",
@@ -169,6 +180,7 @@ async def run_problem_extraction(
         structured_artifact_id = artifact.id
         artifact_refs = [str(text_artifact_id), artifact.id]
         checkpoint = {
+            **checkpoint,
             "text_artifact_id": text_artifact_id,
             "structured_artifact_id": artifact.id,
         }
@@ -179,6 +191,7 @@ async def run_problem_extraction(
         )
     await operation.update_progress(_stage_progress("validating_questions", 3))
 
+    attach_recognition_review(problem_data, [checkpoint])
     commit(
         operation.assignment_id,
         operation.owner_id,

@@ -1,3 +1,18 @@
+export interface KnowledgeIngestionSummary {
+  id?: string;
+  status?: string;
+  total_pages?: number | null;
+  processed_pages?: number;
+  searchable_pages?: number;
+  partially_searchable_pages?: number;
+  blank_pages?: number;
+  failed_pages?: number;
+  warning_pages?: number;
+  coverage_complete?: boolean;
+  unit?: "page" | "section" | "slide";
+  error_code?: string | null;
+}
+
 export interface PersonalKnowledgeDocument {
   id: string;
   title: string;
@@ -11,10 +26,23 @@ export interface PersonalKnowledgeDocument {
   error_code?: string | null;
   created_at: number;
   updated_at: number;
+  ingestion?: KnowledgeIngestionSummary;
+  content_version?: string;
 }
 
 export interface PersonalKnowledgeListResponse {
   documents: PersonalKnowledgeDocument[];
+}
+
+export type KnowledgeActivityFilter = "all" | "active" | "attention" | "completed";
+
+export interface KnowledgeActivityResponse {
+  items: (PersonalKnowledgeDocument & { activity_status: string })[];
+  total: number;
+  active_count: number;
+  counts: Partial<Record<Exclude<KnowledgeActivityFilter, "all">, number>>;
+  page: number;
+  page_size: number;
 }
 
 export interface KnowledgeStorageUsage {

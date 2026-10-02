@@ -618,6 +618,16 @@ class OpenAIProvider(BaseProvider):
 class ZhipuProvider(BaseProvider):
     provider_type = "zhipu"
 
+    async def ainvoke(self, messages: List[BaseMessage], *, max_output_tokens: int | None = None) -> LLMResponse:
+        try:
+            return await super().ainvoke(messages, max_output_tokens=max_output_tokens)
+        except Exception as exc:
+            body = getattr(exc, "body", None)
+            detail = body.get("error", body) if isinstance(body, dict) else {}
+            if getattr(exc, "status_code", None) == 429 and isinstance(detail, dict) and str(detail.get("code")) == "1305":
+                raise ProviderRequestError("provider_overloaded", status_code=429) from None
+            raise
+
     def __init__(self, config: ProviderConfig):
         super().__init__(config)
         self.supports_vision = bool(
@@ -1030,8 +1040,17 @@ class SafeRelayProvider(BaseProvider):
         except httpx.TransportError as exc:
             raise ProviderRequestError(_transport_error_code(exc)) from exc
         if response.status_code >= 400:
+            code = _response_error_code(response.status_code)
+            if self.provider_type == "zhipu" and response.status_code == 429:
+                try:
+                    body = response.json()
+                    detail = body.get("error", body) if isinstance(body, dict) else {}
+                    if isinstance(detail, dict) and str(detail.get("code")) == "1305":
+                        code = "provider_overloaded"
+                except ValueError:
+                    pass
             raise ProviderRequestError(
-                _response_error_code(response.status_code),
+                code,
                 status_code=response.status_code,
                 retry_after=_parse_retry_after_header(
                     response.headers.get("retry-after")

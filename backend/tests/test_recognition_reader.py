@@ -51,6 +51,14 @@ def test_every_purpose_has_faithful_not_solver_prompt(purpose):
     assert "source language" in prompt
 
 
+def test_student_transcription_separates_annotations_without_color_based_deletion():
+    prompt = faithful_reader_prompt("submissions")
+    assert "[annotation: ...]" in prompt
+    assert "[unclear authorship: ...]" in prompt
+    assert "Ink color alone does not establish authorship" in prompt
+    assert "not boxed or active reasoning" in prompt
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("finish,warning", [("length", "output_truncated"), ("refused", "provider_refused")])
 async def test_incomplete_or_refused_output_is_marked_not_silently_repaired(finish, warning):

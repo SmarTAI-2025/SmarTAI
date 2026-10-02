@@ -25,7 +25,7 @@ class RecognitionCacheIdentityV1(EvidenceModel):
     layer: Literal["native", "render", "visual", "patch", "final"]
     owner_id: str = Field(strict=True, min_length=1, max_length=240)
     source_sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
-    source_content_type: Literal["application/pdf", "image/png", "image/jpeg", "image/webp"]
+    source_content_type: Literal["application/pdf", "image/png", "image/jpeg", "image/webp", "image/bmp", "image/tiff"]
     parameters_sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
     tool_version: str = Field(strict=True, min_length=1, max_length=120)
     purpose: Purpose | None = None
@@ -127,7 +127,8 @@ def model_cache_identity(
 
 
 def final_cache_identity(request, *, capabilities: EngineCapabilitiesV1 | None, prompt_version: str,
-                         tool_version: str = TOOL_VERSION, workflow_version: Literal[1, 2] = 1) -> RecognitionCacheIdentityV1:
+                         tool_version: str = TOOL_VERSION, workflow_version: Literal[1, 2] = 1,
+                         repair_prompt_version: str | None = None) -> RecognitionCacheIdentityV1:
     from backend.agents.recognition_agent import RecognitionReadRequestV1
     from backend.recognition.fusion import ASSEMBLY_VERSION
     from backend.recognition.repair_records import RECHECK_VERSION
@@ -135,6 +136,9 @@ def final_cache_identity(request, *, capabilities: EngineCapabilitiesV1 | None, 
 
     try:
         if type(workflow_version) is not int or workflow_version not in {1, 2}:
+            raise ValueError
+        repair_prompt_version = REPAIR_PROMPT_VERSION if repair_prompt_version is None else repair_prompt_version
+        if repair_prompt_version not in {"faithful-region-recheck-v1", REPAIR_PROMPT_VERSION}:
             raise ValueError
         request = RecognitionReadRequestV1.model_validate(request.model_dump(warnings=False))
         caps = None if capabilities is None else EngineCapabilitiesV1.model_validate(capabilities.model_dump(warnings=False))
@@ -146,7 +150,7 @@ def final_cache_identity(request, *, capabilities: EngineCapabilitiesV1 | None, 
             policy_sha256=canonical_digest(request.policy.model_dump(mode="json")), prompt_version=prompt_version,
             parameters_sha256=canonical_digest({"request": request.model_dump(mode="json"),
                                                  "assembly": "faithful-assembly-v2" if workflow_version == 2 else ASSEMBLY_VERSION,
-                                                 "recheck": RECHECK_VERSION, "repair_prompt": REPAIR_PROMPT_VERSION}),
+                                                 "recheck": RECHECK_VERSION, "repair_prompt": repair_prompt_version}),
         )
     except (ValidationError, ValueError, TypeError, AttributeError):
         raise RecognitionError("recognition_request_invalid") from None

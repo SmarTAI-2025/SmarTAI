@@ -146,13 +146,17 @@ class RecognitionBudget:
         capabilities: EngineCapabilitiesV1 | None,
         *,
         clock: Callable[[], float] = time.monotonic,
+        elapsed_seconds: float = 0,
     ):
         self._source, self._policy, self._capabilities = _copy_context(source, policy, capabilities)
         self._bounded_output = bool(self._capabilities and self._capabilities.bounded_output_tokens)
         self._clock = clock
         self._lock = threading.Lock()
         self._last_time: float | None = None
-        self._started = self._now()
+        if type(elapsed_seconds) not in {int, float} or not math.isfinite(elapsed_seconds) or elapsed_seconds < 0:
+            raise RecognitionError("recognition_request_invalid")
+        self._elapsed_seconds = elapsed_seconds
+        self._started = self._now() - elapsed_seconds
         self._phase_starts: dict[Phase, float] = {}
         self._reservations: dict[BudgetTicket, _Reservation] = {}
         self._initial_regions: dict[str, BudgetTicket] = {}
@@ -193,7 +197,8 @@ class RecognitionBudget:
         if phase is not None:
             self._valid_phase(phase)
             if start:
-                self._phase_starts.setdefault(phase, now)
+                # A resumed phase conservatively includes elapsed operation time.
+                self._phase_starts.setdefault(phase, now - self._elapsed_seconds)
             if phase in self._phase_starts:
                 limit = self._policy.locator_seconds if phase == "locator" else self._policy.read_seconds
                 remaining = min(remaining, limit - (now - self._phase_starts[phase]))

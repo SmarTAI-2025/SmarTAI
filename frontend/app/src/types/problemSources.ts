@@ -57,6 +57,19 @@ export interface ProblemSourcePreflightResponse {
   base_workflow_revision?: number;
   workflow_revision?: number;
   recognition_provider_id?: string | null;
+  recognition?: {
+    status: string;
+    confidence: "low" | "medium" | "high";
+    warning_codes: string[];
+    requires_review: boolean;
+    coverage: {
+      processed_pages: number[];
+      failed_pages: number[];
+      unprocessed_pages: number[];
+      missing_targets: string[];
+      unverified_targets: string[];
+    };
+  } | null;
 }
 
 export interface ProblemSourcePreflightInput {
@@ -69,6 +82,8 @@ export interface ProblemSourcePreflightInput {
   inlineText?: string;
   structureMode: ProblemStructureMode;
   extractionHint?: string;
+  recognitionOptions?: { pages?: number[]; targets?: string[]; search_start_page?: number; search_window_pages?: number };
+  enableMaterialOcr?: boolean;
   saveToLibrary: boolean;
   recognitionProviderId: string;
   replaceConfirmed?: boolean;

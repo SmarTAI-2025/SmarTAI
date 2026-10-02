@@ -122,6 +122,15 @@ class RecognitionArtifactV1(EvidenceModel):
                 prompt_version=payload.prompt_version, tool_version=identity.tool_version,
                 workflow_version=2 if self.payload_kind == "assembly_v2" else 1,
             )
+            # Persisted assemblies predate prompt upgrades. Validate their exact
+            # historical identity while new cache lookups use the current prompt.
+            if identity != expected_identity:
+                expected_identity = final_cache_identity(
+                    payload.raw.request, capabilities=payload.raw.engine_capabilities,
+                    prompt_version=payload.prompt_version, tool_version=identity.tool_version,
+                    workflow_version=2 if self.payload_kind == "assembly_v2" else 1,
+                    repair_prompt_version="faithful-region-recheck-v1",
+                )
             if payload.raw.request.source != source or identity != expected_identity:
                 raise ValueError("assembly artifact belongs to another source or purpose")
         if self.payload_sha256 != _payload_hash(payload):

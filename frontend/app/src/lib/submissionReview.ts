@@ -1,4 +1,5 @@
 import type { ProblemInfo, StudentAnswerInfo, StudentSubmission } from "@/types";
+import type { Locale } from "@/i18n/messages";
 
 export type SubmissionAnswerState = "recognized" | "reviewed" | "flagged" | "empty" | "missing";
 export type SubmissionReviewFilter = "all" | "review" | "missing" | "identity";
@@ -33,6 +34,17 @@ const CONFIDENCE_TOKENS = ["低置信", "置信度低", "low confidence"];
 const MISSING_TOKENS = ["缺失", "空白", "未作答", "没作答", "missing", "blank", "empty"];
 const RECOGNIZED_TOKENS = ["已识别", "正常", "完整", "recognized", "ready"];
 const IDENTITY_TOKENS = ["身份异常", "身份待复核", "学号异常", "姓名异常", "identity"];
+
+export function formatSubmissionFlag(flag: string, locale: Locale): string {
+  const labels: Record<string, [string, string]> = {
+    recognition_needs_review: ["识别结果需对照原件核对", "Check transcription against the original"],
+    external_annotation_present: ["原件含外部批注，不属于学生作答", "External annotations are not student answers"],
+    authorship_uncertain: ["部分笔迹归属不明，需核对", "Some writing has uncertain authorship"],
+    ocr_only_structure_requires_teacher_review: ["题号匹配需教师核对", "Question matching needs teacher review"],
+  };
+  const label = labels[flag];
+  return label ? label[locale === "zh-CN" ? 0 : 1] : flag;
+}
 
 export function buildSubmissionQuestions(
   problems: ProblemInfo[],

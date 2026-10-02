@@ -228,7 +228,11 @@ _PROTECTED_MARKDOWN_RE = re.compile(
     r"(```[\s\S]*?```|`[^`\n]*`|\$\$[\s\S]*?\$\$|(?<!\\)\$(?:\\.|[^$\n])+\$)"
 )
 _LEADING_MATH_RE = re.compile(
-    r"^\\(?:int|sum|prod|lim|frac|dfrac|tfrac|sqrt|ker|operatorname|lVert|Vert|begin)(?![A-Za-z])"
+    r"^\\(?:int|sum|prod|lim|frac|dfrac|tfrac|sqrt|ker|operatorname|lVert|Vert)(?![A-Za-z])"
+)
+_BARE_MATH_ENVIRONMENT_RE = re.compile(
+    r"\\begin\{(?P<environment>align\*?|aligned|alignat\*?|alignedat|gather\*?|gathered|"
+    r"equation\*?|array|[pbBvV]?matrix\*?|cases)\}[\s\S]*?\\end\{(?P=environment)\}"
 )
 _SOURCE_CODE_START_RE = re.compile(
     r"^\s*(?:def|class|async\s+def|import|from\s+\S+\s+import|function|const|let|var|"
@@ -259,7 +263,7 @@ _DOUBLE_ESCAPED_LATEX_RE = re.compile(
     r"alpha|beta|gamma|delta|epsilon|theta|lambda|mu|nu|pi|rho|sigma|tau|phi|psi|omega|"
     r"infty|partial|nabla|ell|lVert|rVert|Vert|text|mathrm|mathbf|mathit|operatorname|"
     r"left|right|begin|end|times|cdot|div|pm|mp|leq?|geq?|neq|approx|equiv|in|notin|"
-    r"subseteq|supseteq|to|mapsto|circ)(?![A-Za-z]))"
+    r"subseteq|supseteq|to|mapsto|circ|star|langle|rangle|dots|ldots|cdots|iota|mid|forall|exists)(?![A-Za-z]))"
 )
 _OVERESCAPED_NEWLINE_RE = re.compile(
     r"\\{1,2}n(?=(?:\\{1,2}n|[\s\-\*#>0-9(A-Z]|[\u3400-\u9fff]|$))"
@@ -315,8 +319,15 @@ def _wrap_bare_latex(text: str) -> str:
 
 
 def _wrap_bare_latex_segment(segment: str) -> str:
-    lines = segment.splitlines(keepends=True)
-    return "".join(_wrap_bare_latex_line(line) for line in lines)
+    # A multi-line environment is one math expression, not a series of atoms.
+    output = []
+    offset = 0
+    for match in _BARE_MATH_ENVIRONMENT_RE.finditer(segment):
+        output.extend(_wrap_bare_latex_line(line) for line in segment[offset:match.start()].splitlines(keepends=True))
+        output.append("\n$$\n" + match.group(0) + "\n$$\n")
+        offset = match.end()
+    output.extend(_wrap_bare_latex_line(line) for line in segment[offset:].splitlines(keepends=True))
+    return "".join(output)
 
 
 def _wrap_bare_latex_line(line: str) -> str:
@@ -447,7 +458,12 @@ def _escaped_code_line_break_end(text: str, index: int) -> Optional[int]:
 def _clean_strings(data: Any, field_name: Optional[str] = None) -> Any:
     """Recursively clean strings in dicts/lists: strip literal quotes, format math."""
     if isinstance(data, dict):
-        return {k: _clean_strings(v, field_name=k) for k, v in data.items()}
+        return {
+            k: _clean_strings(
+                v, field_name="solution_code" if k == "text_value" and data.get("target") == "solution_code" else k
+            )
+            for k, v in data.items()
+        }
     elif isinstance(data, list):
         return [_clean_strings(v, field_name=field_name) for v in data]
     elif isinstance(data, str):
@@ -457,6 +473,58 @@ def _clean_strings(data: Any, field_name: Optional[str] = None) -> Any:
             return data
         return format_math_and_quotes(data)
     return data
+
+
+_JSON_STRING_RE = re.compile(r'"(?:\\.|[^"\\])*"', re.DOTALL)
+_JSON_KEY_SEPARATOR_RE = re.compile(r"\s*:")
+_RAW_MATH_SPAN_RE = re.compile(r"(```[\s\S]*?```|`[^`]*`|\$\$[\s\S]*?\$\$|(?<!\\)\$(?!\$)[^$]*\$)")
+_JSON_TEX_COLLISION_RE = re.compile(
+    r"\\(?:[\\\"/]|(?:n(?:eq?|u|abla|ot(?:in)?|subseteq)|"
+    r"t(?:imes|heta|au|ext|frac|o)|r(?:angle|ight|ho|Vert)|"
+    r"f(?:rac|orall)|b(?:ar|eta|egin|inom))(?![A-Za-z]))"
+)
+
+
+def _protect_json_math_escapes(source: str) -> str:
+    """Preserve raw TeX that is also a valid JSON control escape, before decoding.
+
+    In a math span, raw ``\\neq`` otherwise silently becomes LF + ``eq``.
+    Consume valid pairs as units and leave code/test fields and Markdown code
+    spans untouched. Unknown/ambiguous prose escapes keep normal JSON meaning.
+    """
+    field_name = ""
+    has_code_candidate = bool(re.search(r'"target"\s*:\s*"solution_code"', source))
+
+    def repair_token(match: re.Match) -> str:
+        nonlocal field_name
+        token = match.group(0)
+        if _JSON_KEY_SEPARATOR_RE.match(source, match.end()):
+            field_name = token[1:-1]
+            return token
+        if (
+            field_name in _CODE_FIELD_NAMES
+            or (field_name == "text_value" and has_code_candidate)
+            or _SOURCE_CODE_START_RE.match(token[1:-1])
+        ):
+            return token
+
+        def repair_math(span: re.Match) -> str:
+            value = span.group(0)
+            if value.startswith("`"):
+                return value
+            def preserve_command(escape: re.Match) -> str:
+                token = escape.group(0)
+                if len(token) == 2 and token[1] in '\\"/':
+                    return token
+                return "\\" + token
+
+            return _JSON_TEX_COLLISION_RE.sub(
+                preserve_command, value,
+            )
+
+        return _RAW_MATH_SPAN_RE.sub(repair_math, token)
+
+    return _JSON_STRING_RE.sub(repair_token, source)
 
 def _escape_latex_backslashes(s: str) -> str:
     """Double up backslashes that aren't part of a valid JSON escape.
@@ -477,9 +545,50 @@ def _escape_latex_backslashes(s: str) -> str:
     escapes and double every other backslash.
 
     Naive ``s.replace("\\", "\\\\")`` would *double* already-correct escapes.
-    The negative-lookahead regex preserves them.
+    Consume valid escape pairs together so the second slash is never repaired
+    again when a response mixes correctly escaped and raw TeX commands.
     """
-    return re.sub(r'\\(?!["\\/nrtu])', r'\\\\', s)
+    out = []
+    index = 0
+    while index < len(s):
+        char = s[index]
+        if char == "\\":
+            if index + 1 < len(s) and s[index + 1] in '"\\/nrtu':
+                out.append(s[index:index + 2])
+                index += 2
+                continue
+            out.append("\\\\")
+        else:
+            out.append(char)
+        index += 1
+    return "".join(out)
+
+
+def _collapse_duplicate_json_colons(s: str) -> str:
+    """Repair repeated key separators, never punctuation inside string values."""
+    out = []
+    in_string = escaped = after_colon = False
+    for char in s:
+        if in_string:
+            out.append(char)
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == '"':
+                in_string = False
+            continue
+        if char == '"':
+            in_string = True
+            after_colon = False
+        elif char == ":":
+            if after_colon:
+                continue
+            after_colon = True
+        elif not char.isspace():
+            after_colon = False
+        out.append(char)
+    return "".join(out)
 
 
 def _normalize_inline_newlines(s: str) -> str:
@@ -580,6 +689,7 @@ def extract_and_parse_json(raw: str, model: Type[T]) -> T:
     json_str = _extract_balanced_json(cleaned)
     if json_str is None:
         raise ValueError(f"No JSON found in LLM output. First 200 chars: {raw[:200]}")
+    json_str = _protect_json_math_escapes(json_str)
 
     # 3. Try repair attempts in escalating order. Attempt list intentionally
     # composes transforms — `latex+newlines` is the realistic LLM math case
@@ -591,6 +701,8 @@ def extract_and_parse_json(raw: str, model: Type[T]) -> T:
         ("latex_backslashes", _escape_latex_backslashes),
         ("normalize_newlines", _normalize_inline_newlines),
         ("latex+newlines", lambda s: _normalize_inline_newlines(_escape_latex_backslashes(s))),
+        ("duplicate_separator", lambda s: _collapse_duplicate_json_colons(
+            _normalize_inline_newlines(_escape_latex_backslashes(s)))),
         ("escape_all_backslashes", lambda s: s.replace("\\", "\\\\")),
         ("remove_trailing_commas", lambda s: re.sub(r",(\s*[}\]])", r"\1", s)),
         ("fix_incomplete", _fix_incomplete_json),

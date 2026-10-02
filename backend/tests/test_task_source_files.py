@@ -342,7 +342,7 @@ async def test_formal_preflight_persists_pdf_and_source_before_extraction_failur
         raise RuntimeError("injected OCR detail /private/secret")
 
     monkeypatch.setattr(
-        task_preparation, "extract_text_from_upload", fail_after_asserting_persistence
+        task_preparation, "read_question_source", fail_after_asserting_persistence
     )
     upload = UploadFile(
         file=io.BytesIO(PDF),
@@ -403,9 +403,9 @@ async def test_question_job_copies_source_refs_and_survives_failure_and_restart(
     _seed_task(owner_id, task_id)
 
     async def extracted(*_args, **_kwargs):
-        return "1. What is 1 + 1?"
+        return SimpleNamespace(text="1. What is 1 + 1?", recognition=None)
 
-    monkeypatch.setattr(task_preparation, "extract_text_from_upload", extracted)
+    monkeypatch.setattr(task_preparation, "read_question_source", extracted)
     result = await task_preparation.preflight_problem_source(
         task_id=task_id,
         file=UploadFile(
@@ -481,9 +481,9 @@ async def test_formal_image_preflight_persists_original_before_ocr(monkeypatch):
         with get_storage().open(files[0].storage_key) as stream:
             assert stream.read() == PNG
         observed = True
-        return "1. Image question"
+        return SimpleNamespace(text="1. Image question", recognition=None)
 
-    monkeypatch.setattr(task_preparation, "extract_text_from_upload", extracted)
+    monkeypatch.setattr(task_preparation, "read_question_source", extracted)
     result = await task_preparation.preflight_problem_source(
         task_id=task_id,
         file=UploadFile(

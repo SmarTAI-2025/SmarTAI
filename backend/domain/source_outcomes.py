@@ -1,9 +1,10 @@
 """Public-safe diagnostics for immutable submission-source outcomes.
 
-This module is deliberately dependency-free so both persistence and service
-layers share one contract without importing each other.
+Persistence and service layers share this pure domain contract without importing
+each other.
 """
 from __future__ import annotations
+from backend.domain.errors import RECOGNITION_ERROR_CODES
 
 
 SOURCE_OUTCOME_STATUSES = frozenset({
@@ -27,7 +28,7 @@ SOURCE_FAILURE_PHASES = frozenset({
     "result_persistence",
 })
 
-SAFE_SOURCE_REASON_CODES = frozenset({
+SAFE_SOURCE_REASON_CODES = RECOGNITION_ERROR_CODES | frozenset({
     "workflow_failed",
     "no_provider_configured",
     "provider_not_enabled",

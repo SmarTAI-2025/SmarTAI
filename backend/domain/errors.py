@@ -182,16 +182,19 @@ class PdfEvidenceError(DomainError):
 
 
 RECOGNITION_ERROR_CODES = frozenset({
+    "material_ocr_confirmation_required", "material_recognition_review_required", "material_parser_provider_required",
     "recognition_request_invalid", "recognition_source_mismatch", "recognition_plan_changed",
     "recognition_route_changed", "recognition_input_unsupported", "recognition_budget_exhausted",
     "recognition_response_invalid", "recognition_response_too_large", "recognition_timeout",
     "recognition_artifact_invalid", "recognition_artifact_limit", "recognition_artifact_unavailable",
     "recognition_artifact_scope_unsupported",
     "recognition_source_unavailable",
+    "recognition_already_running",
+    "target_location_needs_hint", "target_selection_limit_exceeded", "visual_capability_unavailable",
     "recognition_cache_not_success", "recognition_cache_corrupt", "recognition_cache_unavailable",
     "recognition_cache_source_unavailable",
     "provider_credentials_required", "provider_vision_not_supported", "provider_auth_failed",
-    "provider_permission_denied", "provider_quota_exceeded", "provider_rate_limited",
+    "provider_permission_denied", "provider_region_unsupported", "provider_quota_exceeded", "provider_rate_limited", "provider_overloaded",
     "provider_request_failed", "provider_request_rejected", "provider_response_invalid",
     "provider_result_too_large", "provider_result_unavailable", "provider_download_url_rejected",
     "provider_submit_uncertain", "provider_task_failed", "provider_timeout", "provider_unavailable",
@@ -201,7 +204,7 @@ RECOGNITION_ERROR_CODES = frozenset({
     "provider_model_not_found", "provider_image_payload_invalid", "provider_message_payload_not_supported",
     "provider_endpoint_dns_failed", "provider_endpoint_redirect_blocked", "provider_endpoint_protocol_mismatch",
     "provider_endpoint_response_too_large",
-})
+}) | frozenset(PDF_EVIDENCE_STATUS_CODES)
 
 
 class RecognitionError(DomainError):

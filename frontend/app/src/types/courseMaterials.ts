@@ -1,10 +1,12 @@
 import type { Course } from "./catalog";
+import type { KnowledgeIngestionSummary } from "./personalKnowledge";
 
 export type CourseMaterialCategory = "textbook" | "answer" | "lecture" | "rubric" | "other";
 export type CourseMaterialMatchKind = "exact" | "related";
 
 export interface CourseMaterial {
   material_id: string;
+  document_id?: string;
   course_id: string | null;
   group_id: string | null;
   filename: string;
@@ -17,7 +19,8 @@ export interface CourseMaterial {
   updated_at: number;
   last_used_at: number | null;
   task_reference_count: number;
-  parse_status: "ready";
+  parse_status: "ready" | "partial" | "processing" | "failed";
+  ingestion?: KnowledgeIngestionSummary;
   group_name: string | null;
   course_name: string | null;
   course_code: string | null;
@@ -75,6 +78,7 @@ export interface CourseMaterialGroupListResponse {
 
 export interface UploadCourseMaterialInput {
   file: File;
+  nativeOnly?: boolean;
   courseId?: string;
   groupId?: string;
   category: CourseMaterialCategory;

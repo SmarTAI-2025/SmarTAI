@@ -1,1 +1,2 @@
+# Compatibility entry point; the shared runtime lock is generated at repo root.
 -r ../render-requirements.txt

@@ -4,7 +4,9 @@ import type { UploadOptions } from "@/api/client";
 import { personalKnowledgeKeys } from "./keys";
 
 export function usePersonalKnowledge() {
-  return useQuery({ queryKey: personalKnowledgeKeys.list(), queryFn: personalKnowledgeApi.listPersonalKnowledge });
+  return useQuery({ queryKey: personalKnowledgeKeys.list(), queryFn: personalKnowledgeApi.listPersonalKnowledge,
+    refetchInterval: (query) => query.state.data?.documents.some((doc) => ["queued", "processing"].includes(doc.ingestion?.status ?? "")) ? 5_000 : false,
+  });
 }
 
 export function useKnowledgeStorageUsage() {

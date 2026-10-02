@@ -6,6 +6,7 @@ import { AppShell } from "@/components/layout/AppShell";
 import { useI18n } from "@/i18n/I18nProvider";
 import { Providers } from "@/providers/Providers";
 import { StudentUnavailablePage } from "@/routes/StudentUnavailablePage";
+import { RouteRecoveryPage } from "@/routes/RouteRecoveryPage";
 import "@/styles/globals.css";
 
 const DashboardPage = React.lazy(() =>
@@ -116,6 +117,7 @@ const router = createBrowserRouter([
   { path: "/student", element: <StudentUnavailablePage /> },
   {
     path: "/",
+    errorElement: <RouteRecoveryPage />,
     element: (
       <RequireTeacherSession>
         <AppShell />

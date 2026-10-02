@@ -758,6 +758,11 @@ async def prepare_question_packages(
             )
             if not value:
                 continue
+            if target == "test_cases" and (draft.recognition_requires_review
+                    or candidate.confidence < 0.72 or candidate.match_status != "exact"):
+                issues[q_id].append(_issue(q_id, "programming_tests", "material_recognition_review_required",
+                                          "error", [draft.source_token]))
+                continue
             problem_data[q_id][target] = value
             provenance = dict(problem_data[q_id].get("material_provenance") or {})
             provenance[target] = {
@@ -774,6 +779,8 @@ async def prepare_question_packages(
                 "review_status": "pending",
                 "imported_at": time.time(),
                 "updated_at": time.time(),
+                "authority": "uploaded_reference" if target == "reference_answer" else "uploaded_material",
+                "recognition": draft.recognition,
             }
             problem_data[q_id]["material_provenance"] = provenance
 
@@ -1049,8 +1056,13 @@ async def prepare_ocr_question_packages(
     for draft, text in source_rows:
         target = {
             "reference_answer": "reference_answer",
+            "rubric": "criterion",
         }.get(draft.role)
         if target is None:
+            if draft.role == "programming_tests":
+                for q_id, problem in problem_data.items():
+                    problem.setdefault("preparation_issues", []).append(_issue(
+                        q_id, "programming_tests", "material_parser_provider_required", "warning", [draft.source_token]))
             continue
         for number, value in split_ocr_markdown_sections(text):
             q_id = by_number.get(number.strip())
@@ -1068,6 +1080,8 @@ async def prepare_ocr_question_packages(
                 "source_excerpt": value.strip()[:600],
                 "source_location": f"question {number}",
                 "reason": "Exact OCR question-number heading",
+                "authority": "uploaded_reference" if target == "reference_answer" else "uploaded_material",
+                "recognition": draft.recognition,
                 "review_status": "pending",
                 "imported_at": time.time(),
                 "updated_at": time.time(),

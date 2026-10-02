@@ -7,6 +7,8 @@ import json
 import pytest
 
 from backend.recognition.artifact_codec import decode_artifact, encode_artifact
+from backend.recognition.cache_identity import final_cache_identity
+from backend.domain.errors import RecognitionError
 
 
 # Captured from PR101 commit 40b1c2bfa73fec51ceeaf38c6756ef47a6281110.
@@ -187,3 +189,27 @@ def test_legacy_repair_is_preserved_without_becoming_a_successful_cache_entry():
     assert envelope.payload.result.decision == "keep_visual"
     assert envelope.payload.result.final_text == "x = -2"
     assert not envelope.cacheable_success
+
+
+def test_historical_assembly_remains_readable_without_reusing_current_prompt_cache():
+    envelope = decode_artifact(base64.b64decode(LEGACY_FIXTURES["assembly"]["base64"], validate=True))
+    assembly = envelope.payload
+    current = final_cache_identity(
+        assembly.raw.request, capabilities=assembly.raw.engine_capabilities,
+        prompt_version=assembly.prompt_version, tool_version=envelope.identity.tool_version,
+    )
+    assert current.key != envelope.identity.key
+    assert current.parameters_sha256 != envelope.identity.parameters_sha256
+
+
+@pytest.mark.parametrize("field,value", [
+    ("owner_id", "another-owner"),
+    ("purpose", "knowledge"),
+    ("parameters_sha256", "0" * 64),
+])
+def test_historical_assembly_still_rejects_tampered_identity(field, value):
+    historical = json.loads(gzip.decompress(base64.b64decode(LEGACY_FIXTURES["assembly"]["base64"])))
+    historical["identity"][field] = value
+    blob = gzip.compress(json.dumps(historical).encode("utf-8"), mtime=0)
+    with pytest.raises(RecognitionError, match="recognition_artifact_invalid"):
+        decode_artifact(blob)

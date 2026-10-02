@@ -275,10 +275,15 @@ def plan_recognition(
             decisions.append(PageDecisionV1(page_number=number, action="deferred", reason_codes=["batch_page_budget"]))
             continue
         reasons = _visual_reasons(page, request.purpose, policy.force_visual)
+        economy_math = (request.purpose == "knowledge" and policy.version == "knowledge-economy-v1"
+                        and page.native_quality == "clean" and page.risks == ["math"] and not policy.force_visual)
+        if economy_math:
+            reasons = []
         if page.verified_blank or not reasons:
             decisions.append(PageDecisionV1(
                 page_number=number, action="blank" if page.verified_blank else "native",
-                reason_codes=["verified_blank" if page.verified_blank else "clean_native_text"],
+                reason_codes=["verified_blank" if page.verified_blank else "knowledge_native_math_unverified"
+                              if economy_math else "clean_native_text"],
             ))
             used_pages += 1
             continue
@@ -290,6 +295,8 @@ def plan_recognition(
         region_safe = (
             engine.region_reads and page.regions_cover_all_risks and page.native_quality == "clean"
             and "layout" not in page.risks and request.purpose != "submissions" and not policy.force_visual
+            and (request.purpose != "knowledge" or policy.version != "knowledge-economy-v1"
+                 or len(page.regions) <= min(policy.max_regions, policy.max_initial_calls))
         )
         regions = page.regions if region_safe else [NormalizedRegionV1()]
         regions_count = len(regions)

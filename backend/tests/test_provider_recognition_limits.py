@@ -7,9 +7,47 @@ import pytest
 
 from backend.llm.providers import (
     AnthropicProvider, GeminiProvider, OpenAIProvider, ProviderRequestError,
-    SafeRelayProvider, VisionImage, _response_metadata, _response_text,
+    SafeRelayProvider, VisionImage, ZhipuProvider, BaseProvider, _response_metadata, _response_text,
 )
 from backend.models import ProviderConfig
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("code,expected", [("1305", "provider_overloaded"), ("1302", "provider_rate_limited"), ("1308", "provider_rate_limited")])
+async def test_zhipu_busy_is_distinct_from_unspecified_quota(monkeypatch, code, expected):
+    import httpx
+    from openai import RateLimitError
+    from backend.services.background_errors import classify_background_error
+    from backend.skills.recognition_reader import LLMRecognitionEngine
+    from backend.recognition.engine import EngineReadInputV1
+    from backend.domain.errors import RecognitionError
+
+    async def reject(*args, **kwargs):
+        raise RateLimitError("PRIVATE_BODY", response=httpx.Response(429, request=httpx.Request("POST", "https://open.bigmodel.cn")), body={"error": {"code": code, "message": "PRIVATE_BODY"}})
+
+    monkeypatch.setattr(BaseProvider, "ainvoke", reject)
+    provider = ZhipuProvider(ProviderConfig(provider_type="zhipu", model="glm-4.6v-flash", api_key="fixture"))
+    engine = LLMRecognitionEngine(provider, route_id="owned", fingerprint="frozen")
+    with pytest.raises(RecognitionError) as caught:
+        await engine.recognize(EngineReadInputV1(purpose="submissions", input_mode="page_image", page_number=1, content_type="image/png", payload=b"fixture", max_output_tokens=512))
+    assert classify_background_error(caught.value, "workflow_failed") == expected
+    assert not caught.value.submission_may_exist
+    assert "PRIVATE_BODY" not in str(caught.value)
+
+
+@pytest.mark.asyncio
+async def test_zhipu_relay_busy_response_is_sanitized(monkeypatch):
+    import httpx
+
+    provider = SafeRelayProvider(ProviderConfig(provider_type="zhipu", model="glm-4.6v-flash", api_key="fixture", base_url="https://relay.example/v1"))
+    async def post(*args, **kwargs):
+        return httpx.Response(429, json={"error": {"code": 1305, "message": "PRIVATE_BODY"}})
+    async def client():
+        return SimpleNamespace(post=post)
+    monkeypatch.setattr(provider, "_relay_client", client)
+    with pytest.raises(ProviderRequestError, match="^provider_overloaded$") as caught:
+        await provider._relay_call([HumanMessage(content="read")])
+    assert caught.value.status_code == 429
 
 
 @pytest.mark.asyncio

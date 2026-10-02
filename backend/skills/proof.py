@@ -122,8 +122,9 @@ class ProofSkill(GradingSkill):
             # Step 2: Retrieve reference knowledge (use problem stem as query)
             if self.reporter and active_unit:
                 await self.reporter.substep(active_unit, "retrieve_knowledge")
-            chunks = await kb_tool.retrieve(problem.stem, k=3, scope=self.task_id)
-            context_str = "\n".join(f"[{c.source}] {c.content}" for c in chunks) if chunks else "(no reference knowledge)"
+            chunks = await kb_tool.retrieve_for_grading(problem.stem, k=3, scope=self.task_id,
+                provider=self.provider, reporter=self.reporter)
+            context_str = kb_tool.context_text(chunks)
 
             # Step 3: Build prompt
             if self.reporter and active_unit:
@@ -171,6 +172,7 @@ class ProofSkill(GradingSkill):
                 comment=result.comment,
                 steps=step_scores,
                 raw_output=raw.content,
+                knowledge_citations=kb_tool.citations(chunks),
                 duration_ms=raw.duration_ms,
             ), problem.max_score)
 

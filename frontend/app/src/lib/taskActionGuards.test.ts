@@ -8,6 +8,27 @@ import {
 } from "./taskActionGuards";
 
 describe("task contract compatibility", () => {
+  it("routes uncertain transcription to the existing answer review", () => {
+    const result = classifyRecoverableError(new APIError(409, "submission_recognition_needs_review", {
+      detail: { code: "submission_recognition_needs_review" },
+    }), { locale: "en-US", taskId: "task" });
+    expect(result.actionHref).toContain("submissions?filter=review");
+    expect(result.description).toContain("student");
+  });
+  it.each(["target_location_needs_hint", "target_selection_limit_exceeded", "recognition_budget_exhausted", "recognition_timeout", "question_targets_incomplete"])(
+    "offers range adjustment for %s without claiming a fresh submit", (code) => {
+      const result = classifyRecoverableError(new APIError(422, code, { detail: { code } }), { locale: "en-US" });
+      expect(result.title).toBe("Recognition coverage is incomplete");
+      expect(result.description).toContain("no extra paid calls");
+    },
+  );
+  it("keeps concurrent recognition on a refresh action", () => {
+    const result = classifyRecoverableError(new APIError(422, "recognition_already_running", {
+      detail: { code: "recognition_already_running" },
+    }), { locale: "en-US", taskId: "task" });
+    expect(result.actionKind).toBe("refresh");
+    expect(result.description).toContain("No duplicate request");
+  });
   it.each(["stale_revision", "task_workflow_changed", "version_conflict", "workflow_revision_conflict"])(
     "treats %s as a workflow revision conflict",
     (code) => {
@@ -357,6 +378,13 @@ describe("background task failure guidance", () => {
 
     expect(info.actionKind).toBe("retry");
     expect(info.tone).toBe("warning");
+  });
+
+  it("does not call provider overload a daily account limit", () => {
+    const info = classifyRecoverableError("provider_overloaded", { locale: "zh-CN" });
+    expect(info.title).toBe("模型服务当前拥堵");
+    expect(info.description).toContain("并非已确认的每日额度耗尽");
+    expect(info.actionKind).toBe("retry");
   });
 
   it("keeps a stable grading failure code and job id visible", () => {

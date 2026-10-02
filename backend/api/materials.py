@@ -202,8 +202,8 @@ def list_course_materials(
         "storage": settings.storage_backend,
         "capabilities": {
             "durable": True,
-            "ocr": False,
-            "accepted_types": ["pdf", "docx", "pptx", "md", "txt", "rst"],
+            "ocr": True,
+            "accepted_types": ["pdf", "txt", "md", "markdown"],
         },
     }
 
@@ -215,6 +215,7 @@ async def upload_course_material(
     group_id: Optional[str] = Form(default=None),
     category: MaterialCategory = Form(default="other"),
     labels: str = Form(default="[]"),
+    native_only: bool = Form(default=False),
     current: User = Depends(require_teacher),
 ):
     group = None
@@ -237,7 +238,8 @@ async def upload_course_material(
             detail={"code": "material_filename_too_long", "max_length": 240},
         )
     normalized_labels = _parse_labels(labels)
-    body = await file.read()
+    from backend.rag.chunker import MAX_FILE_BYTES
+    body = await file.read(MAX_FILE_BYTES + 1)
     try:
         document = await ingest_document(
             owner_id=current.id,
@@ -246,6 +248,7 @@ async def upload_course_material(
             content_type=file.content_type,
             title=Path(filename).stem,
             retention_policy="retained",
+            native_only=native_only,
         )
     except HTTPException:
         raise
@@ -256,7 +259,7 @@ async def upload_course_material(
         ) from exc
     except DomainError as exc:
         return domain_error_response(exc)
-    if document.status != "ready":
+    if document.status not in {"ready", "partial", "processing", "failed"}:
         raise HTTPException(
             status.HTTP_409_CONFLICT,
             detail={

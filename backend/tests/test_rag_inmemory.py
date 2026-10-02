@@ -85,12 +85,13 @@ def test_chunk_text_overlap():
     assert last10_of_first == first10_of_second
 
 
-def test_chunk_text_truncates_at_max_chunks(monkeypatch):
+def test_chunk_text_preserves_content_beyond_old_max_chunks(monkeypatch):
     # Give it more words than MAX_CHUNKS_PER_DOC * step would consume
     n_words = (MAX_CHUNKS_PER_DOC + 50) * 50
     text = " ".join("w" for _ in range(n_words))
     chunks = chunk_text(text, chunk_words=50, overlap_words=0)
-    assert len(chunks) == MAX_CHUNKS_PER_DOC
+    assert len(chunks) == MAX_CHUNKS_PER_DOC + 50
+    assert sum(len(chunk.split()) for chunk in chunks) == n_words
 
 
 # ─── InMemoryTaskRetriever ───────────────────────────────────────────────────

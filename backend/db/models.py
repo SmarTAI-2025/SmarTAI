@@ -17,6 +17,7 @@ from __future__ import annotations
 import time
 
 from sqlalchemy import (
+    Boolean,
     CheckConstraint,
     Boolean,
     Float,
@@ -24,6 +25,7 @@ from sqlalchemy import (
     Index,
     Integer,
     JSON,
+    LargeBinary,
     String,
     Text,
     UniqueConstraint,
@@ -1023,7 +1025,8 @@ class SourceStorageReservationRecord(Base):
         ),
         CheckConstraint(
             "(kind = 'submission' AND submission_revision_id IS NOT NULL) OR "
-            "(kind <> 'submission' AND submission_revision_id IS NULL)",
+            "(kind <> 'submission' AND submission_revision_id IS NULL) OR "
+            "(purpose = 'artifact_write' AND submission_revision_id IS NOT NULL)",
             name="ck_source_storage_reservations_revision_link",
         ),
         Index(
@@ -1057,6 +1060,8 @@ class KnowledgeDocumentRecord(Base):
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="processing", index=True)
     parser_version: Mapped[str] = mapped_column(String(64), nullable=False, default="v1")
     chunk_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    active_version: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    ingestion_summary: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
     error_code: Mapped[str | None] = mapped_column(String(128), nullable=True)
     created_at: Mapped[float] = mapped_column(Float, nullable=False, default=time.time)
     updated_at: Mapped[float] = mapped_column(
@@ -1067,7 +1072,7 @@ class KnowledgeDocumentRecord(Base):
 class KnowledgeChunkRecord(Base):
     __tablename__ = "knowledge_chunks"
     __table_args__ = (
-        UniqueConstraint("document_id", "chunk_index", name="uq_knowledge_chunks_document_index"),
+        UniqueConstraint("document_id", "content_version", "chunk_index", name="uq_knowledge_chunks_version_index"),
     )
 
     id: Mapped[str] = mapped_column(String(64), primary_key=True)
@@ -1075,10 +1080,54 @@ class KnowledgeChunkRecord(Base):
         ForeignKey("knowledge_documents.id", ondelete="CASCADE"), nullable=False, index=True
     )
     chunk_index: Mapped[int] = mapped_column(Integer, nullable=False)
+    content_version: Mapped[str] = mapped_column(String(64), nullable=False, default="legacy", server_default="legacy")
     content: Mapped[str] = mapped_column(Text, nullable=False)
     chunk_metadata: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
     token_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     created_at: Mapped[float] = mapped_column(Float, nullable=False, default=time.time)
+
+
+class KnowledgeIngestionRecord(Base):
+    __tablename__ = "knowledge_ingestions"
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    document_id: Mapped[str] = mapped_column(ForeignKey("knowledge_documents.id", ondelete="CASCADE"), index=True)
+    owner_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    status: Mapped[str] = mapped_column(String(32), default="queued", index=True)
+    configuration: Mapped[dict] = mapped_column(JSON, default=dict)
+    total_pages: Mapped[int] = mapped_column(Integer, default=0)
+    extra_reserved: Mapped[int] = mapped_column(Integer, default=0)
+    next_chunk_index: Mapped[int] = mapped_column(Integer, default=0)
+    lease_token: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    lease_expires_at: Mapped[float | None] = mapped_column(Float, nullable=True)
+    error_code: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    created_at: Mapped[float] = mapped_column(Float, default=time.time)
+    updated_at: Mapped[float] = mapped_column(Float, default=time.time, index=True)
+
+
+class KnowledgePageRecord(Base):
+    __tablename__ = "knowledge_pages"
+    __table_args__ = (UniqueConstraint("ingestion_id", "page_number", name="uq_knowledge_page"),)
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    ingestion_id: Mapped[str] = mapped_column(ForeignKey("knowledge_ingestions.id", ondelete="CASCADE"), index=True)
+    page_number: Mapped[int] = mapped_column(Integer)
+    state: Mapped[str] = mapped_column(String(32), default="unprocessed", index=True)
+    evidence: Mapped[dict] = mapped_column(JSON, default=dict)
+    operation: Mapped[dict] = mapped_column(JSON, default=dict)
+    extra_allowed: Mapped[bool] = mapped_column(Boolean, default=False)
+    extra_reserved: Mapped[bool] = mapped_column(Boolean, default=False)
+
+
+class KnowledgeEvidenceRecord(Base):
+    __tablename__ = "knowledge_evidence"
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    document_id: Mapped[str] = mapped_column(ForeignKey("knowledge_documents.id", ondelete="CASCADE"), index=True)
+    page_id: Mapped[str] = mapped_column(ForeignKey("knowledge_pages.id", ondelete="CASCADE"), index=True)
+    identity_key: Mapped[str] = mapped_column(String(64), index=True)
+    # Compressed, bounded per-page evidence shares the document's transactional
+    # deletion fence. It cannot leave untracked objects after a late write.
+    content: Mapped[bytes] = mapped_column(LargeBinary)
+    sha256: Mapped[str] = mapped_column(String(64))
+    size_bytes: Mapped[int] = mapped_column(Integer)
 
 
 class KnowledgeStorageRecord(Base):

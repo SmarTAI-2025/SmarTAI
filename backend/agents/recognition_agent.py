@@ -214,10 +214,11 @@ class RecognitionAgent:
     def __init__(self, engine: RecognitionEngine | None, *, capacity: RecognitionCapacity,
                  progress: ProgressReporter | None = None, clock: Callable[[], float] = time.monotonic,
                  local_reader: RecognitionLocalEvidenceReader | None = None,
-                 call_service=None):
+                 call_service=None, elapsed_seconds: float = 0):
         self.engine, self.capacity, self.progress, self.clock = engine, capacity, progress, clock
         self.local_reader = local_reader
         self.call_service = call_service
+        self.elapsed_seconds = elapsed_seconds
 
     async def read(self, request: RecognitionReadRequestV1, source_bytes: bytes, *, authorized_owner_id: str) -> RecognitionWorkflowReadV1:
         raw, _budget = await self._read(request, source_bytes, authorized_owner_id=authorized_owner_id)
@@ -232,7 +233,7 @@ class RecognitionAgent:
         if (source.owner_id != authorized_owner_id or not isinstance(source_bytes, bytes)
                 or hashlib.sha256(source_bytes).hexdigest() != source.input_sha256):
             raise RecognitionError("recognition_source_mismatch")
-        if source.content_type not in {"application/pdf", "image/png", "image/jpeg", "image/webp"}:
+        if source.content_type not in {"application/pdf", "image/png", "image/jpeg", "image/webp", "image/bmp", "image/tiff"}:
             raise RecognitionError("recognition_input_unsupported")
         local_reader = self.local_reader
         if local_reader is not None:
@@ -241,7 +242,7 @@ class RecognitionAgent:
         policy = request.policy.model_copy(deep=True)
         if request.scope == "targets":
             policy.max_detail_pages = min(policy.max_detail_pages, 2 * len(request.targets) + 4)
-        budget = RecognitionBudget(source, policy, capabilities, clock=self.clock)
+        budget = RecognitionBudget(source, policy, capabilities, clock=self.clock, elapsed_seconds=self.elapsed_seconds)
         call_session = None
         if self.call_service is not None:
             from backend.services.recognition_session import RecognitionCallSessionV2

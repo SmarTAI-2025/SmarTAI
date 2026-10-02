@@ -45,6 +45,8 @@ from backend.db.models import (  # noqa: F401
     GradeResultRecord,
     GradingRunRecord,
     StoredFileRecord,
+    SubmissionRecord,
+    SubmissionRevisionRecord,
 )
 from backend.db.session import session_scope
 from backend.domain import education
@@ -1034,7 +1036,10 @@ def create_operation(
     progress: dict | None = None,
     expires_at: float | None = None,
     initial_status: str = "pending",
+    retry_existing: bool = True,
 ) -> tuple[WorkflowOperationRecord, bool]:
+    if type(retry_existing) is not bool:
+        raise ValidationError("Invalid retry policy.", code="invalid_operation_retry_policy")
     if initial_status not in {"pending", "preparing"}:
         raise ValidationError(
             "Invalid initial workflow operation status.",
@@ -1084,6 +1089,8 @@ def create_operation(
             raise NotFound("assignment")
 
     def existing_result(session, existing: WorkflowOperationRecord):
+        if not retry_existing:
+            return _detach_operation(existing), False
         retryable = or_(
             WorkflowOperationRecord.status == "error",
             and_(
@@ -1383,7 +1390,14 @@ def save_operation_checkpoint(
                 select(StoredFileRecord.id).where(
                     StoredFileRecord.id.in_(refs),
                     StoredFileRecord.owner_id == owner_id,
-                    StoredFileRecord.assignment_id == current.assignment_id,
+                    or_(
+                        StoredFileRecord.assignment_id == current.assignment_id,
+                        StoredFileRecord.submission_revision_id.in_(
+                            select(SubmissionRevisionRecord.id)
+                            .join(SubmissionRecord, SubmissionRecord.id == SubmissionRevisionRecord.submission_id)
+                            .where(SubmissionRecord.assignment_id == current.assignment_id)
+                        ),
+                    ),
                 ).with_for_update()
             ))
             if matched_refs != set(refs):

@@ -86,6 +86,8 @@ async def import_questions_from_upload(
     content_type: str | None,
     provider: "BaseProvider",
     ocr_skill: "OCRIngestSkill | None" = None,
+    registry=None,
+    recognition_route=None,
 ) -> list[education.QuestionDTO]:
     """Extract an uploaded problem sheet and persist normalized questions.
 
@@ -98,12 +100,14 @@ async def import_questions_from_upload(
     if assignment.status not in education.EDITABLE_ASSIGNMENT_STATUSES:
         raise InvalidTransition("assignment_not_editable")
 
-    text = await extract_text_from_upload(
-        content,
-        filename,
-        ocr_skill=ocr_skill,
-        purpose="problems",
+    from backend.services.question_sources import read_question_source
+    from backend.services.stage_provider_routing import StageProviderRoute
+    read = await read_question_source(
+        owner_id=teacher_id, task_id=assignment_id, content=content, filename=filename, content_type=content_type,
+        route=recognition_route or StageProviderRoute(route_id=provider.provider_id, kind="llm", provider=provider),
+        registry=registry,
     )
+    text = read.text
     extracted: dict[str, dict] = {}
     await extract_problems(text, provider, extracted)
     if not extracted:
@@ -133,19 +137,13 @@ async def import_questions_from_upload(
                 stem=str(problem.get("stem", "")),
                 criterion=str(problem.get("criterion", "")),
                 max_score=float(problem.get("max_score", 10.0)),
-                source={"origin": "file_upload", "filename": filename},
+                source={"origin": "file_upload", "filename": filename, "recognition": read.recognition},
             )
         )
 
-    save_file(
-        storage=get_storage(),
-        owner_id=teacher_id,
-        kind="problem",
-        original_name=filename,
-        content=content,
-        content_type=content_type,
-        assignment_id=assignment_id,
-    )
+    if read.stored_file_id is None:
+        save_file(storage=get_storage(), owner_id=teacher_id, kind="problem", original_name=filename,
+                  content=content, content_type=content_type, assignment_id=assignment_id)
     return created
 
 

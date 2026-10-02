@@ -16,11 +16,13 @@ import re
 import time
 import uuid
 from collections import defaultdict
+from dataclasses import replace
 from typing import Any
 
 from pydantic import ValidationError as PydanticValidationError
 from sqlalchemy import delete, func, select, update
 from sqlalchemy.exc import IntegrityError
+from starlette.concurrency import run_in_threadpool
 
 from backend.agents.ingest_agent import (
     SubmissionSourceParseResult,
@@ -74,6 +76,7 @@ from backend.llm.registry import (
 )
 from backend.progress.tracker import get_or_create_reporter, get_reporter, remove_reporter
 from backend.services import grading_runs
+from backend.services.question_sources import read_question_source
 from backend.services.background_errors import (
     SAFE_BACKGROUND_ERROR_CODES,
     classify_background_error,
@@ -94,6 +97,7 @@ from backend.services.question_structure import (
     validate_rubric_points,
 )
 from backend.services.submission_source_pipeline import (
+    attach_submission_recognition,
     failure_phase_for_code,
     prepare_submission_sources,
 )
@@ -101,6 +105,7 @@ from backend.services.stage_provider_routing import (
     assert_grading_routes_supported,
     build_owner_baidu_ocr_skill,
     resolve_stage_provider_route,
+    stage_provider_configuration_fingerprint,
 )
 from backend.skills.ocr_ingest import LLMVisionOCRSkill
 from backend.storage import get_storage
@@ -748,6 +753,11 @@ def _serialize_problem(question) -> dict:
 
 def _serialize_student_data(task_id: str, owner_id: str, submissions) -> dict[str, dict]:
     presentations = workflow_repository.list_student_presentations(task_id)
+    revision_sources = defaultdict(list)
+    for stored in file_repository.list_current_submission_originals(assignment_id=task_id, teacher_id=owner_id):
+        if stored.content_type in {"application/pdf", "image/png", "image/jpeg", "image/webp", "image/bmp", "image/tiff"}:
+            revision_sources[stored.submission_revision_id].append({
+                "source_id": f"revision-{stored.submission_revision_id}-{stored.id}", "filename": stored.original_name})
     revisions = []
     for submission in submissions:
         if submission.current_revision_id:
@@ -781,7 +791,9 @@ def _serialize_student_data(task_id: str, owner_id: str, submissions) -> dict[st
                 presentation.identity_match_method if presentation else "filename"
             ),
             "identity_status": presentation.identity_status if presentation else "matched",
-            "source_id": presentation.source_id if presentation else None,
+            "source_id": (revision_sources[revision.id][0]["source_id"] if revision_sources[revision.id]
+                          else presentation.source_id if presentation else None),
+            "source_choices": revision_sources[revision.id],
         }
     return output
 
@@ -809,7 +821,7 @@ def _selected_knowledge(task_id: str, owner_id: str) -> dict[str, dict]:
 
     metadata = selected_document_metadata(task_id, owner_id)
     output: dict[str, dict] = {}
-    for document in list_selected_documents(task_id, owner_id):
+    for document in list_selected_documents(task_id, owner_id, include_pending=True):
         attachment = metadata.get(document.id, {})
         material_id = attachment.get("library_material_id")
         if material_id is None:
@@ -821,6 +833,9 @@ def _selected_knowledge(task_id: str, owner_id: str) -> dict[str, dict]:
             "doc_id": document.id,
             "filename": document.original_name,
             "chunk_count": document.chunk_count,
+            "status": document.status,
+            "ingestion": document.ingestion_summary or {},
+            "content_version": document.active_version or "legacy",
             "uploaded_at": document.created_at,
             "source_kind": attachment.get("source_kind") or "upload",
             "library_material_id": material_id,
@@ -1884,8 +1899,6 @@ async def run_task_problem_extraction(
             raise ValidationError(
                 "No enabled provider is available.", code="no_provider_configured"
             )
-        vision = provider if getattr(provider, "supports_vision", False) else None
-        ocr_skill = LLMVisionOCRSkill(vision) if vision is not None else None
         reporter = get_or_create_reporter(job_id)
         await reporter.configure_workflow(
             "problem_recognition",
@@ -1896,9 +1909,16 @@ async def run_task_problem_extraction(
             "reading_source", total_steps=4, completed_steps=0,
             message="Reading problem source.",
         )
-        text = await extract_text_from_upload(
-            content, filename, ocr_skill=ocr_skill, purpose="problems", reporter=reporter
+        from backend.services.question_sources import read_question_source, attach_recognition_review
+        from backend.services.stage_provider_routing import StageProviderRoute
+        read = await read_question_source(
+            owner_id=owner_id, task_id=task_id, content=content, filename=filename,
+            route=StageProviderRoute(route_id=recognition_provider_id, kind="llm", provider=provider),
+            registry=registry, extraction_hint=str((extraction_options or {}).get("extraction_hint") or ""),
+            options=(extraction_options or {}).get("recognition_options"), reporter=reporter,
+            text_reader=extract_text_from_upload,
         )
+        text = read.text
         problem_data: dict[str, dict] = {}
         await extract_problems(
             text, provider, problem_data, reporter=reporter,
@@ -1907,6 +1927,7 @@ async def run_task_problem_extraction(
             confirmed_candidates=list((extraction_options or {}).get("confirmed_candidates") or []),
             manage_progress_lifecycle=False,
         )
+        attach_recognition_review(problem_data, [{"recognition": read.recognition}])
         await reporter.set_stage_progress(
             "validating_questions", total_steps=4, completed_steps=3,
             message="Validating recognized questions.",
@@ -2220,6 +2241,8 @@ def queue_task_submission_parsing(
         requested_route_id=recognition_provider_id,
     )
     resolved_provider_id = route.route_id
+    route_fingerprint = stage_provider_configuration_fingerprint(owner_id=owner_id, route=route, registry=registry)
+    question_snapshot = [(q.id, q.version) for q in questions]
     workflow = workflow_repository.get_live_workflow(
         task_id, owner_id=owner_id
     )
@@ -2238,6 +2261,8 @@ def queue_task_submission_parsing(
         "identity_mode": identity_mode,
         "roster": roster_entries or [],
         "provider": resolved_provider_id,
+        "provider_configuration_fingerprint": route_fingerprint,
+        "question_snapshot": question_snapshot,
         "replace_confirmed": replace_confirmed,
     })
     replacement_group_id = source_storage_repository.replacement_claim_group_id(
@@ -2258,6 +2283,11 @@ def queue_task_submission_parsing(
             "job_id": replay.id,
             "workflow_revision": workflow.workflow_revision,
         }
+    if replay is not None:
+        # Exact-input retry reuses registered originals and per-source results.
+        # Retiring those files here would invalidate OCR caches before recovery.
+        replacement_file_ids = ()
+        replacement_group_id = None
     workflow, active = _ensure_no_other_active_operation(
         task_id=task_id, owner_id=owner_id,
         operation_type="submission_recognition", input_hash=digest,
@@ -2363,6 +2393,8 @@ def queue_task_submission_parsing(
                 "roster_entries": roster_entries or [],
                 "roster_name": roster_name,
                 "recognition_provider_id": resolved_provider_id,
+                "provider_configuration_fingerprint": route_fingerprint,
+                "question_snapshot": question_snapshot,
                 "replace_confirmed": replace_confirmed,
             },
             workflow_changes=workflow_changes,
@@ -2496,8 +2528,14 @@ def _serialize_submission_results(
 
 
 def _load_submission_results(artifact) -> list[SubmissionSourceParseResult]:
+    limit = 16 * 1024 * 1024
+    if artifact.availability_status != "available" or artifact.size_bytes > limit:
+        raise RuntimeError("recognition_artifact_unavailable")
     with get_storage().open(artifact.storage_key) as stream:
-        payload = json.loads(stream.read().decode("utf-8"))
+        body = stream.read(limit + 1)
+    if len(body) != artifact.size_bytes or hashlib.sha256(body).hexdigest() != artifact.sha256:
+        raise RuntimeError("recognition_artifact_invalid")
+    payload = json.loads(body.decode("utf-8"))
     if not isinstance(payload, list) or not payload:
         raise RuntimeError("submission_parse_invalid")
     return [SubmissionSourceParseResult(
@@ -2600,10 +2638,13 @@ async def run_task_submission_parsing(
                 requested_route_id=recognition_provider_id,
             )
             provider = route.provider
-            if route.is_baidu_ocr:
-                document_ocr_skill = build_owner_baidu_ocr_skill(owner_id, route)
+            route_fingerprint = stage_provider_configuration_fingerprint(owner_id=owner_id, route=route, registry=registry)
+            frozen = workflow_repository.get_operation(job_id, owner_id=owner_id).payload or {}
+            if (frozen.get("provider_configuration_fingerprint") not in {None, route_fingerprint}
+                    or (frozen.get("question_snapshot") is not None and
+                        frozen["question_snapshot"] != [[q.id, q.version] for q in questions])):
+                raise ValidationError("Recognition inputs changed.", code="recognition_plan_changed")
             vision = provider if getattr(provider, "supports_vision", False) else None
-            ocr_skill = LLMVisionOCRSkill(vision) if vision is not None else None
             recovered_ocr_text: dict[str, str] = {}
             ocr_artifact_ids: list[str] = []
             blocked_source_ids: set[str] = set()
@@ -2621,75 +2662,11 @@ async def run_task_submission_parsing(
                 if inflight and inflight not in recovered_ocr_text:
                     blocked_source_ids.add(inflight)
 
-            async def before_document_ocr(source_id: str) -> None:
-                if leased_operation is None:
-                    return
-                await leased_operation.checkpoint(
-                    stage="submission_ocr_submitting",
-                    checkpoint={
-                        **leased_operation.checkpoint_data,
-                        "ocr_inflight_source_id": source_id,
-                    },
-                    artifact_refs=list(dict.fromkeys([
-                        *leased_operation.artifact_refs,
-                        *ocr_artifact_ids,
-                    ])),
-                )
-
-            async def save_document_ocr(source_id: str, text: str) -> None:
-                if leased_operation is None:
-                    return
-                artifact = file_repository.save_file(
-                    storage=get_storage(),
-                    owner_id=owner_id,
-                    kind="submission_ocr_text",
-                    original_name=_submission_ocr_artifact_name(
-                        job_id,
-                        job_attempt,
-                        source_id,
-                    ),
-                    content=text.encode("utf-8"),
-                    content_type="text/markdown",
-                    assignment_id=task_id,
-                    fence_operation_id=leased_operation.operation_id,
-                    fence_operation_attempt=leased_operation.attempt,
-                    fence_lease_token=leased_operation.lease_token,
-                )
-                recovered_ocr_text[source_id] = text
-                ocr_artifact_ids.append(artifact.id)
-                checkpoint = dict(leased_operation.checkpoint_data)
-                checkpoint.pop("ocr_inflight_source_id", None)
-                checkpoint["ocr_completed_source_ids"] = sorted(
-                    recovered_ocr_text
-                )
-                await leased_operation.checkpoint(
-                    stage="submission_ocr_saved",
-                    checkpoint=checkpoint,
-                    artifact_refs=list(dict.fromkeys([
-                        *leased_operation.artifact_refs,
-                        *ocr_artifact_ids,
-                    ])),
-                )
-
-            async def document_ocr_failed(
-                source_id: str,
-                exc: Exception,
-            ) -> None:
-                if leased_operation is None:
-                    return
-                if bool(getattr(exc, "submission_may_exist", True)):
-                    return
-                checkpoint = dict(leased_operation.checkpoint_data)
-                if checkpoint.get("ocr_inflight_source_id") != source_id:
-                    return
-                checkpoint.pop("ocr_inflight_source_id", None)
-                await leased_operation.checkpoint(
-                    stage="submission_ocr_failed_before_submit",
-                    checkpoint=checkpoint,
-                    artifact_refs=list(dict.fromkeys([
-                        *leased_operation.artifact_refs,
-                        *ocr_artifact_ids,
-                    ])),
+            async def read_submission_source(raw, stored_file_id):
+                return await read_question_source(
+                    owner_id=owner_id, task_id=task_id, content=raw.content, filename=raw.filename,
+                    content_type=raw.content_type, stored_file_id=stored_file_id,
+                    route=route, registry=registry, purpose="submissions", reporter=reporter,
                 )
 
             sources = await prepare_submission_sources(
@@ -2705,13 +2682,10 @@ async def run_task_submission_parsing(
                     if leased_operation is not None
                     else None
                 ),
-                ocr_skill=ocr_skill,
-                document_ocr_skill=document_ocr_skill,
+                ocr_skill=None,
+                recognition_reader=read_submission_source,
                 recovered_ocr_text_by_source=recovered_ocr_text,
                 blocked_ocr_source_ids=blocked_source_ids,
-                before_document_ocr=before_document_ocr,
-                save_document_ocr=save_document_ocr,
-                document_ocr_failed=document_ocr_failed,
                 vision_unavailable_code=(
                     None
                     if route.is_baidu_ocr or vision is not None
@@ -2730,6 +2704,69 @@ async def run_task_submission_parsing(
                     roster_entries=roster_entries,
                 )
             else:
+                parse_capacity = asyncio.Semaphore(2)
+
+                async def durable_source_parse(source, invoke):
+                    if leased_operation is None:
+                        return await invoke()
+                    async with parse_capacity:
+                        # Local failures have no paid dispatch to recover.
+                        if source.pre_error_code or not source.text:
+                            return await invoke()
+                        await run_in_threadpool(source_outcome_repository.assert_source_write_fence,
+                            owner_id=owner_id, assignment_id=task_id, operation_id=job_id,
+                            expected_attempt=job_attempt, expected_lease_token=leased_operation.lease_token)
+                        key = _hash_json(dict(version=1, file_id=source.stored_file_id, filename=source.filename,
+                            text_sha256=hashlib.sha256(source.text.encode()).hexdigest(), questions=problem_data,
+                            route=route_fingerprint, identity_mode=identity_mode, roster=roster_entries or []))
+                        child, _ = await run_in_threadpool(workflow_repository.create_operation,
+                            assignment_id=task_id, owner_id=owner_id, operation_type="submission_structure_v1",
+                            input_hash=key, retry_existing=False)
+                        name = f"{child.id}-result.json"
+                        saved = await run_in_threadpool(file_repository.find_latest_assignment_file,
+                            owner_id=owner_id, assignment_id=task_id,
+                            kind="submission_source_parse_v1", original_name_prefix=name)
+                        if saved is not None:
+                            restored = await run_in_threadpool(_load_submission_results, saved)
+                            if len(restored) != 1 or restored[0].stored_file_id != source.stored_file_id:
+                                raise RuntimeError("recognition_artifact_invalid")
+                            student = None if restored[0].student is None else {
+                                **restored[0].student, "source_id": source.source_id, "stored_file_id": source.stored_file_id}
+                            return replace(restored[0], source_id=source.source_id, student=student)
+                        worker = "submission-parser-" + uuid.uuid4().hex
+                        child = await run_in_threadpool(workflow_repository.claim_operation, child.id,
+                            owner_id=owner_id, worker_id=worker, lease_seconds=960)
+                        try:
+                            if child.checkpoint:
+                                return SubmissionSourceParseResult(
+                                    source.source_id, source.stored_file_id, source.filename,
+                                    "parse_failed", None, None, 0, (), "provider_submit_uncertain",
+                                    "recognition", False,
+                                )
+                            child = await run_in_threadpool(workflow_repository.save_operation_checkpoint, child.id,
+                                owner_id=owner_id, expected_attempt=child.attempt,
+                                expected_checkpoint_revision=child.checkpoint_revision,
+                                expected_lease_token=child.lease_token, stage="parser_pending", checkpoint={"pending": True})
+                            async with asyncio.timeout(900):
+                                result = attach_submission_recognition([await invoke()], [source])[0]
+                            saved = await run_in_threadpool(file_repository.save_file, storage=get_storage(),
+                                owner_id=owner_id, assignment_id=task_id, kind="submission_source_parse_v1",
+                                original_name=name, content=_serialize_submission_results([result]),
+                                content_type="application/json", fence_operation_id=child.id,
+                                fence_operation_attempt=child.attempt, fence_lease_token=child.lease_token)
+                            await run_in_threadpool(workflow_repository.save_operation_checkpoint, child.id,
+                                owner_id=owner_id, expected_attempt=child.attempt,
+                                expected_checkpoint_revision=child.checkpoint_revision,
+                                expected_lease_token=child.lease_token, stage="parser_saved", checkpoint={"artifact_id": saved.id},
+                                artifact_refs=[saved.id], terminal_status="completed", terminal_summary={"artifact_id": saved.id})
+                            return result
+                        finally:
+                            try:
+                                await asyncio.shield(run_in_threadpool(workflow_repository.release_operation, child.id,
+                                    owner_id=owner_id, worker_id=worker, lease_token=child.lease_token))
+                            except DomainError:
+                                pass
+
                 results = await parse_student_answer_sources(
                     sources,
                     problem_data,
@@ -2737,7 +2774,10 @@ async def run_task_submission_parsing(
                     reporter=reporter,
                     identity_mode=identity_mode,
                     roster_entries=roster_entries,
+                    single_attempt=True,
+                    source_runner=durable_source_parse,
                 )
+            results = attach_submission_recognition(results, sources)
             if leased_operation is not None:
                 current_failure_phase = "outcome_persistence"
                 parsed_artifact = file_repository.save_file(
@@ -3806,6 +3846,7 @@ def grading_readiness(
     if workflow.active_operation and workflow.active_operation != "grading":
         issues.append("workflow_busy")
 
+    recognition_review_ids = []
     if submissions:
         # Older tasks can have complete normalized questions and answers without
         # the source-evidence rows introduced by the newer ingestion workflow.
@@ -3831,6 +3872,9 @@ def grading_readiness(
                     pass
             if revision is None or not revision.answers:
                 issues.append("answers_required")
+            elif revision is not None:
+                recognition_review_ids.extend(answer.id for answer in revision.answers
+                                              if "recognition_needs_review" in (answer.flag or []))
 
             presentation = presentations.get(submission.student_id)
             # ``source_id`` was added after legacy structured submissions were
@@ -3845,6 +3889,9 @@ def grading_readiness(
             ):
                 issues.append("submission_identities_unresolved")
 
+    reviewed = workflow_repository.answer_review_statuses(recognition_review_ids) if recognition_review_ids else {}
+    if any(reviewed.get(answer_id) != "confirmed" for answer_id in recognition_review_ids):
+        issues.append("submission_recognition_needs_review")
     if any(row.get("unknown_question_ids") for row in source_rows):
         warnings.append("submission_question_ids_unmatched")
     ordered_issues = list(dict.fromkeys(issues))
@@ -3925,11 +3972,15 @@ def start_task_grading(
         submission_operation_id=workflow.parse_job_id,
         frozen_revision_ids=frozen_revision_ids,
     )
+    from backend.knowledge.snapshots import freeze_documents
+    knowledge_ids = sorted(_selected_knowledge(task_id, owner_id)) if setup.knowledge_scope != "none" else []
+    knowledge_versions = freeze_documents(owner_id, knowledge_ids)
     input_manifest = {
         "questions": [question.model_dump(mode="json") for question in questions],
         "submission_revision_ids": list(frozen_revision_ids),
         "source_file_ids": list(source_file_ids),
-        "knowledge_document_ids": sorted(_selected_knowledge(task_id, owner_id)),
+        "knowledge_document_ids": knowledge_ids,
+        "knowledge_content_versions": knowledge_versions,
         "provider_configuration_fingerprint": provider_configuration_fingerprint(
             owner_id=owner_id,
             selected_provider_ids=setup.selected_provider_ids,

@@ -223,10 +223,9 @@ class ObjectiveSkill(GradingSkill):
             if self.reporter and active_unit:
                 await self.reporter.substep(active_unit, "retrieve_knowledge")
 
-            chunks = await kb_tool.retrieve(problem.stem, k=5, scope=self.task_id)
-            context_str = "\n".join(
-                f"[{c.source}] {c.content}" for c in chunks
-            ) if chunks else "No reference knowledge available. Please use your own expertise."
+            chunks = await kb_tool.retrieve_for_grading(problem.stem, k=5, scope=self.task_id,
+                provider=self.provider, reporter=self.reporter)
+            context_str = kb_tool.context_text(chunks)
 
             # Step 2: Build prompt
             if self.reporter and active_unit:
@@ -286,6 +285,7 @@ class ObjectiveSkill(GradingSkill):
                     comment=result.comment,
                     steps=[],  # objective questions never carry process scores
                     raw_output=raw_response.content,
+                    knowledge_citations=kb_tool.citations(chunks),
                     duration_ms=raw_response.duration_ms,
                 ), problem.max_score)
 

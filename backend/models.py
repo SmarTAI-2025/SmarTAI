@@ -34,6 +34,8 @@ class ExpertResult(BaseModel):
     hits: Optional[List[str]] = None
     logs: Optional[str] = None
     raw_output: Optional[str] = Field(None, description="Raw LLM output for traceability")
+    knowledge_citations: List[Dict[str, Any]] = Field(default_factory=list, max_length=10,
+        description="System-supplied retrieved references, not verified support for a model claim")
     duration_ms: Optional[float] = Field(None, description="Wall-clock time for this expert's grading")
     error_kind: Optional[str] = Field(
         None,
@@ -323,6 +325,8 @@ class ProblemSourceDraft(BaseModel):
     candidates: List[Dict[str, Any]] = Field(default_factory=list)
     not_found: List[str] = Field(default_factory=list)
     requires_confirmation: bool = False
+    recognition: Optional[Dict[str, Any]] = None
+    recognition_requires_review: bool = False
     created_at: float = Field(default_factory=time.time)
     expires_at: float
 

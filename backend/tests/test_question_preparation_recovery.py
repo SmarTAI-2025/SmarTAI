@@ -1193,6 +1193,51 @@ async def test_safe_retry_inherits_frozen_provider_and_reuses_operation_id(
 
 
 @pytest.mark.asyncio
+async def test_uncertain_restart_requires_ack_and_preserves_original_evidence(monkeypatch):
+    owner_id, task_id = _seed_task()
+    _source, response, _background = await _queue_question_preparation(owner_id, task_id)
+    first = _claim(owner_id, response["job_id"], "worker-uncertain")
+    assert task_facade._fail_operation(
+        task_id, owner_id, first.operation_id, first.attempt,
+        "provider_submit_uncertain", expected_lease_token=first.lease_token,
+    )
+    workflow = workflow_repository.get_workflow(task_id, owner_id=owner_id)
+    kwargs = dict(task_id=task_id, job_id=first.operation_id,
+                  background_tasks=_BackgroundTasks(), current=SimpleNamespace(id=owner_id),
+                  registry=_RecoveryRegistry())
+    rejected = await task_preparation.retry_question_preparation(
+        **kwargs, request=task_preparation.RetryQuestionPreparationRequest(
+            expected_workflow_revision=workflow.workflow_revision),
+    )
+    assert json.loads(rejected.body)["error"]["code"] == "provider_submit_uncertain"
+    restarted = await task_preparation.retry_question_preparation(
+        **kwargs, request=task_preparation.RetryQuestionPreparationRequest(
+            expected_workflow_revision=workflow.workflow_revision,
+            acknowledge_possible_duplicate_call=True),
+    )
+    assert restarted["status"] == "started"
+    assert restarted["job_id"] != first.operation_id
+    assert restarted["reused_prepared_sources"] is True
+    original = workflow_repository.get_operation(first.operation_id, owner_id=owner_id)
+    assert original.status == "error" and original.error_code == "provider_submit_uncertain"
+    pending = workflow_repository.get_operation(restarted["job_id"], owner_id=owner_id)
+    assert pending.payload["acknowledged_restart_from"] == f"{first.operation_id}:{first.attempt}"
+    assert pending.payload["source_tokens"] == original.payload["source_tokens"]
+    calls = []
+    monkeypatch.setattr(task_facade, "_registry_for_owner", lambda _owner: _RecoveryRegistry())
+    monkeypatch.setattr(task_preparation, "prepare_question_packages", _fake_preparer(calls, question_count=1))
+    await task_preparation.run_durable_question_preparation(
+        _claim(owner_id, pending.id, "worker-acknowledged-restart"))
+    assert workflow_repository.get_operation(pending.id, owner_id=owner_id).status == "done"
+    duplicate = await task_preparation.retry_question_preparation(
+        **kwargs, request=task_preparation.RetryQuestionPreparationRequest(
+            expected_workflow_revision=workflow.workflow_revision,
+            acknowledge_possible_duplicate_call=True),
+    )
+    assert json.loads(duplicate.body)["error"]["code"] == "question_preparation_retry_not_available"
+
+
+@pytest.mark.asyncio
 async def test_safe_retry_rejects_explicit_provider_change_before_publication():
     owner_id, task_id = _seed_task()
     _source, response, _background = await _queue_question_preparation(

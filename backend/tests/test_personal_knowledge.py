@@ -87,7 +87,7 @@ async def test_extract_text_rejects_unsupported_personal_knowledge_format():
 
 
 @pytest.mark.asyncio
-async def test_task_only_parse_failure_durably_enqueues_cleanup(monkeypatch):
+async def test_task_only_parse_failure_stays_recoverable_until_attach_or_grace_cleanup(monkeypatch):
     from sqlalchemy import select
 
     from backend.db.models import (
@@ -131,10 +131,9 @@ async def test_task_only_parse_failure_durably_enqueues_cleanup(monkeypatch):
     async def fail_parse(_filename: str, _content: bytes) -> str:
         raise ValueError("synthetic parse failure")
 
-    monkeypatch.setattr("backend.knowledge.service.extract_text", fail_parse)
+    monkeypatch.setattr("backend.knowledge.ingestion.native_units", fail_parse)
     body = b"task-only bytes whose parser fails"
-    with pytest.raises(ValueError, match="synthetic parse failure"):
-        await ingest_document(
+    document = await ingest_document(
             owner_id=owner_id,
             original_name="broken.txt",
             content=body,
@@ -148,13 +147,15 @@ async def test_task_only_parse_failure_durably_enqueues_cleanup(monkeypatch):
             KnowledgeStorageRecord.owner_id == owner_id
         ))
         assert ledger is not None
-        assert ledger.state == "cleanup_pending"
-        assert ledger.cleanup_reason == KNOWLEDGE_CLEANUP_TASK_ATTACH_FAILED
+        assert ledger.state == "available"
+        assert ledger.unattached_expires_at is not None
         assert ledger.size_bytes == len(body)
+    assert document.ingestion_summary["status"] == "paused"
+    assert document.ingestion_summary["coverage_complete"] is False
 
 
 @pytest.mark.asyncio
-async def test_task_only_parse_cleanup_enqueue_failure_does_not_mask_parser_error(
+async def test_task_only_parser_failure_does_not_call_eager_cleanup(
     monkeypatch,
 ):
     from sqlalchemy import select
@@ -200,13 +201,12 @@ async def test_task_only_parse_cleanup_enqueue_failure_does_not_mask_parser_erro
     def fail_cleanup(*_args, **_kwargs):
         raise RuntimeError("secondary cleanup enqueue failure")
 
-    monkeypatch.setattr("backend.knowledge.service.extract_text", fail_parse)
+    monkeypatch.setattr("backend.knowledge.ingestion.native_units", fail_parse)
     monkeypatch.setattr(
         "backend.db.knowledge_storage_repository.request_task_only_cleanup_if_unreferenced",
         fail_cleanup,
     )
-    with pytest.raises(ValueError, match="primary parser failure"):
-        await ingest_document(
+    document = await ingest_document(
             owner_id=owner_id,
             original_name="broken.txt",
             content=b"task-only bytes with two failures",
@@ -222,6 +222,7 @@ async def test_task_only_parse_cleanup_enqueue_failure_does_not_mask_parser_erro
         assert ledger is not None
         assert ledger.state == "available"
         assert ledger.unattached_expires_at is not None
+    assert document.ingestion_summary["error_code"] == "knowledge_ingestion_failed"
 
 
 def test_knowledge_repository_is_owner_scoped_and_persists_assignment_selection():
@@ -523,9 +524,8 @@ def test_knowledge_storage_usage_api_reports_pending_retrying_and_reserved_bytes
     assert usage["reserved_count"] == 1
 
 
-def test_assignment_knowledge_selection_caps_at_three_ready_documents():
-    """A teacher may select at most three ready personal documents per assignment,
-    and the selection survives repository recreation (DB is the source of truth)."""
+def test_assignment_knowledge_selection_allows_five_books_and_caps_at_twenty():
+    """The old three-book cap must not block the requested five-book workload."""
     from backend.db.knowledge_repository import (
         list_selected_documents, set_task_documents,
     )
@@ -541,7 +541,7 @@ def test_assignment_knowledge_selection_caps_at_three_ready_documents():
                                      status="draft", version=1))
 
     doc_ids = []
-    for i in range(4):
+    for i in range(21):
         doc = _persist_ready_document(
             owner_id="cap-owner",
             filename=f"d{i}.txt",
@@ -550,10 +550,9 @@ def test_assignment_knowledge_selection_caps_at_three_ready_documents():
         )
         doc_ids.append(doc.id)
 
-    # Selecting four must be rejected.
+    # A request resource guard, not a teacher's library capacity limit.
     with pytest.raises(ValueError):
         set_task_documents(assignment_id="cap-asg", owner_id="cap-owner", document_ids=doc_ids)
 
-    # Three is the cap and persists across a fresh repository call.
-    set_task_documents(assignment_id="cap-asg", owner_id="cap-owner", document_ids=doc_ids[:3])
-    assert [d.id for d in list_selected_documents("cap-asg", "cap-owner")] == doc_ids[:3]
+    set_task_documents(assignment_id="cap-asg", owner_id="cap-owner", document_ids=doc_ids[:5])
+    assert [d.id for d in list_selected_documents("cap-asg", "cap-owner")] == doc_ids[:5]

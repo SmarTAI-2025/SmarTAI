@@ -106,3 +106,16 @@ def test_does_not_decode_real_latex_nu_or_nabla_as_newlines():
     value = r"Use \nu and \nabla f in the proof."
 
     assert format_math_and_quotes(value) == r"Use $\nu$ and $\nabla$ f in the proof."
+
+
+def test_repairs_overescaped_group_notation_without_inserting_new_math_spans():
+    value = r"$G=\\langle r,s\\rangle$, $x \\star y$, $r,\\dots,r^n$."
+    assert format_math_and_quotes(value) == r"$G=\langle r,s\rangle$, $x \star y$, $r,\dots,r^n$."
+
+
+def test_bare_multiline_environment_remains_one_complete_math_block():
+    environment = "\\begin{align*}\nx &= 1 \\\\\ny &= 2\n\\end{align*}"
+    assert format_math_and_quotes(environment) == "\n$$\n" + environment + "\n$$\n"
+    assert format_math_and_quotes("$$\n" + environment + "\n$$") == "$$\n" + environment + "\n$$"
+    assert format_math_and_quotes("```tex\n" + environment + "\n```") == "```tex\n" + environment + "\n```"
+    assert format_math_and_quotes(r"\begin{align*}") == r"\begin{align*}"

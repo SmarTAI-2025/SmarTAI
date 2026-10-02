@@ -300,6 +300,7 @@ def persist_knowledge_upload(
     retention_policy: str = KNOWLEDGE_RETENTION_RETAINED,
     origin_assignment_id: str | None = None,
     parser_version: str = "v1",
+    ingestion_configuration: dict | None = None,
 ) -> KnowledgeUploadReservation:
     """Reserve quota, save and verify bytes, then publish metadata atomically.
 
@@ -377,6 +378,7 @@ def persist_knowledge_upload(
                 reservation_id=reservation.entry.id,
                 owner_id=owner_id,
                 writer_claim_token=_writer_token(reservation),
+                **({"ingestion_configuration": ingestion_configuration} if ingestion_configuration is not None else {}),
             )
         except Exception:
             # Resolve a lost commit acknowledgement before touching verified

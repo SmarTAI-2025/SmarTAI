@@ -867,6 +867,7 @@ async def upload_task_knowledge(
     file: UploadFile | None = File(default=None),
     library_material_id: str | None = Form(default=None),
     save_to_library: bool = Form(default=False),
+    native_only: bool = Form(default=False),
     expected_workflow_revision: int | None = Form(default=None),
     current: User = Depends(require_teacher),
 ):
@@ -919,12 +920,14 @@ async def upload_task_knowledge(
             effective_material_id = material.material_id
             saved_material_created = False
         elif file is not None:
-            body = await file.read()
+            from backend.rag.chunker import MAX_FILE_BYTES
+            body = await file.read(MAX_FILE_BYTES + 1)
             document = await ingest_document(
                 owner_id=current.id, original_name=file.filename or "knowledge.txt",
                 content=body, content_type=file.content_type,
                 retention_policy=("retained" if save_to_library else "task_only"),
                 origin_assignment_id=(None if save_to_library else task_id),
+                native_only=native_only,
             )
             document_id = document.id
             if not save_to_library:
@@ -957,7 +960,7 @@ async def upload_task_knowledge(
             set_selected_document_metadata,
             set_task_documents,
         )
-        selected = list_selected_documents(task_id, current.id)
+        selected = list_selected_documents(task_id, current.id, include_pending=True)
         ids = [item.id for item in selected]
         if document_id not in ids:
             ids.append(document_id)
@@ -1023,7 +1026,7 @@ def delete_task_knowledge(
             from backend.domain.errors import VersionConflict
             raise VersionConflict("workflow_revision_conflict")
         from backend.db.knowledge_repository import list_selected_documents, set_task_documents
-        selected = list_selected_documents(task_id, current.id)
+        selected = list_selected_documents(task_id, current.id, include_pending=True)
         if doc_id not in {item.id for item in selected}:
             raise NotFound("knowledge_document")
         set_task_documents(
@@ -1048,7 +1051,7 @@ def _material_document_id(material_id: str, owner_id: str) -> str:
 def _knowledge_document(document_id: str, owner_id: str):
     from backend.db.knowledge_repository import get_document
     document = get_document(document_id, owner_id)
-    if document is None or document.status != "ready":
+    if document is None or document.status not in {"ready", "partial", "processing", "failed"}:
         raise NotFound("knowledge_document")
     return document
 

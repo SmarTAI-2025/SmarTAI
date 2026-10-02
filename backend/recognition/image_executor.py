@@ -37,7 +37,7 @@ async def read_image_plan(
     call_session=None,
 ) -> RecognitionReadBatchV1:
     source, plan = _snapshot(source, plan, engine)
-    if source.owner_id != authorized_owner_id or source.content_type not in {"image/png", "image/jpeg", "image/webp"} or not isinstance(image_bytes, bytes) or hashlib.sha256(image_bytes).hexdigest() != source.input_sha256:
+    if source.owner_id != authorized_owner_id or source.content_type not in {"image/png", "image/jpeg", "image/webp", "image/bmp", "image/tiff"} or not isinstance(image_bytes, bytes) or hashlib.sha256(image_bytes).hexdigest() != source.input_sha256:
         raise RecognitionError("recognition_source_mismatch")
     if plan.source_kind != "image" or plan.total_pages != 1 or plan.requested_pages != [1]:
         raise RecognitionError("recognition_plan_changed")

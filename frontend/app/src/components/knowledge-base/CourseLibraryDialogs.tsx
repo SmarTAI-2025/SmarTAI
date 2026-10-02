@@ -187,6 +187,7 @@ export function UploadDialog({ courses, groups, onClose, onUploaded }: UploadDia
   const upload = useUploadCourseMaterial();
   const inputId = useId();
   const [file, setFile] = useState<File | null>(null);
+  const [nativeOnly, setNativeOnly] = useState(false);
   const [courseId, setCourseId] = useState("");
   const [groupId, setGroupId] = useState("");
   const [category, setCategory] = useState<CourseMaterialCategory>("other");
@@ -206,9 +207,10 @@ export function UploadDialog({ courses, groups, onClose, onUploaded }: UploadDia
         groupId: groupId || undefined,
         category,
         labels: parseLabels(labels),
+        nativeOnly,
       });
       toast.success(result.created
-        ? tx(locale, "资料已上传并解析", "Material uploaded and parsed")
+        ? result.parse_status === "ready" ? tx(locale, "资料已上传并解析", "Material uploaded and parsed") : tx(locale, "资料已保存，已进入处理队列", "Material saved and queued")
         : tx(locale, "相同资料已存在，已复用原文件", "The same material already exists and was reused"));
       onUploaded(result);
     } catch (error) {
@@ -225,20 +227,24 @@ export function UploadDialog({ courses, groups, onClose, onUploaded }: UploadDia
   return (
     <LibraryDialog
       title={tx(locale, "上传资料", "Upload material")}
-      description={tx(locale, "支持可复制文字的 PDF、TXT、Markdown；单份不超过 5 MB。", "Supports text-based PDF, TXT and Markdown files up to 5 MB.")}
+      description={tx(locale, "PDF / TXT / Markdown · 64 MiB", "PDF / TXT / Markdown · 64 MiB")}
       closeLabel={tx(locale, "关闭", "Close")}
       onClose={onClose}
-      footer={<><Button type="button" variant="secondary" onClick={onClose} disabled={upload.isPending}>{tx(locale, "取消", "Cancel")}</Button><Button type="submit" form="course-material-upload-form" disabled={upload.isPending || !file}>{upload.isPending ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <FileUp className="h-4 w-4" />}{upload.isPending ? tx(locale, "正在解析…", "Parsing…") : tx(locale, "上传资料", "Upload")}</Button></>}
+      footer={<><Button type="button" variant="secondary" onClick={onClose} disabled={upload.isPending}>{tx(locale, "取消", "Cancel")}</Button><Button type="submit" form="course-material-upload-form" disabled={upload.isPending || !file}>{upload.isPending ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <FileUp className="h-4 w-4" />}{upload.isPending ? tx(locale, "正在上传…", "Uploading…") : tx(locale, "上传资料", "Upload")}</Button></>}
     >
       <form id="course-material-upload-form" className="grid gap-4" onSubmit={(event) => void submit(event)}>
         <div>
           <label htmlFor={inputId} className="flex min-h-[92px] cursor-pointer flex-col items-center justify-center rounded-[8px] border border-dashed bg-slate-50/60 px-4 py-4 text-center outline-none hover:border-primary dark:bg-slate-900/30">
             <FileUp className="h-5 w-5 text-primary" />
             <span className="mt-2 max-w-full truncate text-sm font-semibold">{file?.name ?? tx(locale, "选择一份资料文件", "Choose a material file")}</span>
-            <span className="mt-1 text-xs text-muted-foreground">{file ? formatBytes(file.size) : "PDF · TXT · MD"}</span>
+            <span className="mt-1 text-xs text-muted-foreground">{file ? formatBytes(file.size) : "PDF / TXT / Markdown"}</span>
           </label>
-          <input id={inputId} className="sr-only" type="file" accept=".pdf,.txt,.md,.markdown,text/plain,text/markdown,application/pdf" onChange={(event) => setFile(event.target.files?.[0] ?? null)} />
+          <input id={inputId} className="sr-only" type="file" accept=".pdf,.txt,.md,.markdown" onChange={(event) => setFile(event.target.files?.[0] ?? null)} />
         </div>
+        <label className="flex items-start gap-2 text-sm">
+          <input type="checkbox" className="mt-1" checked={nativeOnly} onChange={(event) => setNativeOnly(event.target.checked)} />
+          <span>{tx(locale, "仅提取已有文字（不调用模型）", "Existing text only (no model calls)")}</span>
+        </label>
         <div className="grid gap-4 sm:grid-cols-2">
           <FormField label={tx(locale, "课程（可选）", "Course (optional)")}>
             <select className={SELECT_CLASS} value={courseId} onChange={(event) => {
@@ -273,7 +279,6 @@ export function UploadDialog({ courses, groups, onClose, onUploaded }: UploadDia
             <Input className="h-10 w-full" value={labels} onChange={(event) => setLabels(event.target.value)} placeholder={tx(locale, "例如：第 7 章，期中", "For example: Chapter 7, midterm")} />
           </FormField>
         </div>
-        <p className="text-xs leading-5 text-muted-foreground">{tx(locale, "图片、扫描 PDF 和 DOCX 暂不支持；请保留本地原文件。", "Images, scanned PDFs and DOCX are not supported yet. Keep your original file locally.")}</p>
       </form>
     </LibraryDialog>
   );

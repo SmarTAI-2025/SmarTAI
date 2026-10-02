@@ -30,6 +30,7 @@ interface OriginalFilePreviewPanelProps {
   onClose: () => void;
   onRetry: () => void;
   provenanceNote?: string;
+  initialPage?: number;
   t: (key: MessageKey) => string;
 }
 
@@ -51,6 +52,7 @@ function SourcePreviewPanel({
   onClose,
   onRetry,
   provenanceNote,
+  initialPage,
   t,
 }: OriginalFilePreviewPanelProps) {
   const closeButtonRef = useRef<HTMLButtonElement>(null);
@@ -114,6 +116,7 @@ function SourcePreviewPanel({
           loadState={imageFailed ? "error" : loadState}
           errorCode={imageFailed ? "source_preview_load_failed" : errorCode}
           previewUrl={previewUrl}
+          initialPage={initialPage}
           unavailableReason={unavailableReason}
           onRetry={onRetry}
           imageState={imageState}
@@ -126,13 +129,14 @@ function SourcePreviewPanel({
   );
 }
 
-function PreviewContent({ descriptor, displayName, previewKind, loadState, errorCode, previewUrl, unavailableReason, onRetry, imageState, onImageStateChange, t }: {
+function PreviewContent({ descriptor, displayName, previewKind, loadState, errorCode, previewUrl, initialPage, unavailableReason, onRetry, imageState, onImageStateChange, t }: {
   descriptor: SourceFileDescriptor | null;
   displayName: string;
   previewKind: SourcePreviewKind;
   loadState: SourcePreviewLoadState;
   errorCode: SourcePreviewErrorCode | null;
   previewUrl: string | null;
+  initialPage?: number;
   unavailableReason?: SourceUnavailableReason | null;
   onRetry: () => void;
   imageState: ImagePreviewState;
@@ -237,6 +241,7 @@ function PreviewContent({ descriptor, displayName, previewKind, loadState, error
   return (
     <Suspense fallback={<PreviewLoading t={t} />}>
       <PdfDocumentPreview
+        initialPage={initialPage}
         url={previewUrl}
         title={`${t("sourcePreviewTitle")} · ${displayName}`}
         loadingLabel={t("sourcePreviewLoading")}

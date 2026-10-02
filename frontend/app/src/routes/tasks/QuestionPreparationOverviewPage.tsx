@@ -60,7 +60,7 @@ export function QuestionPreparationOverviewPage() {
   }, [allRows, problems, smartFilter.intent, locale, sortDirection, sortKey, preserveGroundedOrder]);
   const metrics = useMemo(() => ({
     questions: new Set(allRisks.map((row) => row.problem.q_id)).size,
-    lowConfidence: allRisks.filter((row) => row.issue.code === "low_confidence").length,
+    lowConfidence: allRisks.filter((row) => ["low_confidence", "recognition_partial", "recognition_needs_review"].includes(row.issue.code)).length,
     conflicts: allRisks.filter((row) => ["source_conflict", "ai_source_conflict", "rubric_step_reference_conflict"].includes(row.issue.code)).length,
     anomalies: allRisks.filter((row) => ["parse_anomaly", "generation_failed", "invalid_test_case", "reference_solution_failed_case"].includes(row.issue.code)).length,
   }), [allRisks]);
@@ -87,7 +87,7 @@ export function QuestionPreparationOverviewPage() {
         <h2 id="risk-matrix-title" className="sr-only">{tx(locale, "全部题目资料状态矩阵", "All question material status matrix")}</h2>
         <dl className="grid grid-cols-2 gap-3 sm:grid-cols-4 sm:gap-4">
           <RiskMetric label={tx(locale, "待关注题目", "Questions to Review")} value={metrics.questions} tone="primary" />
-          <RiskMetric label={tx(locale, "低置信项", "Low Confidence")} value={metrics.lowConfidence} tone="warning" />
+          <RiskMetric label={tx(locale, "识别不确定项", "Recognition Uncertainty")} value={metrics.lowConfidence} tone="warning" />
           <RiskMetric label={tx(locale, "来源冲突", "Source Conflicts")} value={metrics.conflicts} tone="danger" />
           <RiskMetric label={tx(locale, "解析异常", "Parse Anomalies")} value={metrics.anomalies} tone="accent" />
         </dl>
@@ -334,8 +334,12 @@ function issueCodeLabel(code: PreparationIssue["code"], locale: string) {
     reference_solution_failed_case: ["参考解未通过测试样例", "Reference solution failed a test"],
     default_max_score_requires_review: ["当前使用默认 10 分，请确认题目满分", "Default 10-point maximum; confirm the score"],
     max_score_not_found: ["未从每题分值说明中匹配到本题，已暂按 10 分", "No score matched this question; temporarily set to 10"],
+    recognition_partial: ["识别覆盖或内容尚待核对，请对照原文", "Recognition coverage or content needs review against the source"],
+    recognition_needs_review: ["识别结果存在不确定内容，请对照原文", "Uncertain recognition content; compare with the source"],
   };
-  return locale === "zh-CN" ? labels[code][0] : labels[code][1];
+  const label = labels[code];
+  return label ? label[locale === "zh-CN" ? 0 : 1]
+    : tx(locale, "资料存在待核对项，请打开详情", "Material needs review; open the details");
 }
 
 function formatScore(value: number) {

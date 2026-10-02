@@ -565,3 +565,198 @@ preserved; it neither clips text nor loses the completed call. This bounded
 transcription artifact is not a whole-book knowledge store. H/I still implement
 lossless page-batched ingestion and retrieval. Full business wiring and real-model
 accuracy/teacher-effort acceptance remain E-J, not established by fake-engine tests.
+
+## D: Durable Run Boundary
+
+`RecognitionRunService` is the internal assignment-bound entry point for the
+versioned harness. It freezes the final input identity, claims one stable child
+operation and checkpoints a content-free pending dispatch before calling the
+selected engine. Artifact writes and checkpoints use the same lease fence.
+`retry_existing=False` preserves the operation's attempt and budget on expiry;
+the repository's legacy default is unchanged.
+
+A restart reuses confirmed successful leaves and retains cumulative physical
+call/token usage separately from the current invocation. Pending submissions,
+including cancellation or a lost result write, require review and never replay.
+Unknown token usage remains unknown. A recovered final artifact does not call a
+model. Completed execution still requires existing teacher review; it is not an
+OCR accuracy claim. Missing coverage or a stopped read returns `needs_review`.
+
+Call, shared-extra and output budgets survive restart. The original wall-clock
+deadline survives too; resumed per-phase limits conservatively include elapsed
+operation time, so recovery cannot replenish a phase. An incompatible exact
+request (including changed output bounds) does not bypass duplicate-region
+protection. The service does not register a new public endpoint or start work on
+polling. Business adapters are implemented in the following stages.
+
+Validation: seven durable integration/ledger cases and 26 existing V2 workflow
+reuse cases pass together (33); the earlier budget run passed 76 budget cases.
+These are synthetic local SQLite tests, not provider or deployment acceptance.
+
+## E: Question Sources
+
+Formal source preflight and mounted compatibility question imports use
+`services.question_sources`. Visual inputs keep their assignment-bound original,
+frozen owner route and durable evidence; plain text makes no OCR call. Library
+inputs use an authorized original-file copy, not lossy knowledge chunks. Explicit
+pages and target IDs bound recognition, including hierarchical textbook IDs.
+Baidu batches one page so unaligned multi-page Markdown cannot invent page
+provenance. Existing BMP/TIFF uploads use the same killable single-frame worker.
+
+Recognition and structured question parsing are separate. Literal criteria may
+be preserved, but parsing does not invent solutions or scores. Coverage gaps and
+low-confidence evidence feed the existing final teacher review without changing
+the major-question scoring contract or adding an intermediate confirmation.
+Preflight remains a bounded synchronous request; it is not a background whole-book
+ingestion job. Knowledge coverage and student-source lifecycle follow in H and G.
+
+## F: Teacher Materials
+
+Reference answers, rubrics and test-case sources now use the same assignment
+adapter, including library originals. Their `purpose` remains distinct; rubric
+and test-case vision is off by default in the API, UI and adapter. Native PDF
+text still works without opting into vision. Recognition never runs test code.
+OCR-only material matching requires an explicitly selected text parser; an
+existing LLM route freezes that same provider/configuration through recovery.
+No companion model is selected silently.
+
+Material imports remain candidates until explicit apply. Recognition provenance
+and uncertainty survive parsing; unsafe test candidates (low recognition,
+low matching confidence or ambiguous question identity) cannot be applied.
+Rejection preserves the plan and existing confirmed fields. The old auxiliary
+upload endpoints now start the same candidate workflow instead of directly
+overwriting questions. Uploaded references remain separate from generated ones.
+The OCR-only initial question path preserves exactly headed rubrics/references
+and flags test material requiring a text parser, without executing or inventing it.
+
+The material-review original viewer reuses the existing bounded PDF/image UI.
+Its source endpoint checks owner, task, operation, file availability, exact size
+and digest and returns private no-store content. No OCR runs on preview.
+
+Validation is synthetic: 73/78 impacted cases initially passed; five new-test
+assertions/fixtures were corrected, then all nine new cases passed (one later
+preview fixture correction included). Existing AddProblemsPage: nine passed;
+TypeScript typecheck passed. New material-preview visual checks remain part of J.
+
+## G: Student Submissions
+
+Task batch ingestion and authenticated student/teacher uploads now share the
+recognition adapter with purpose `submissions`. The selected LLM remains the
+parser; OCR-only batch input retains its deterministic parser with no hidden
+companion. Transcription preserves mistakes, crossed-out work and unfinished
+code, while identity and question mapping remain separate review concerns.
+Recognition uncertainty becomes answer flags, not a student-error judgment;
+the existing final review clears the grading gate. No intermediate review step
+was added, and the order-independent question mapping contract is unchanged.
+
+Per-source parser results and pending submissions are durable. Exact-input
+retry retains original files and reuses saved parses; cancellation or a lost
+response cannot silently cause another paid submit. Configuration and question
+versions are frozen. Original-source lineage remains distinct from retry IDs.
+
+Authenticated single-student uploads stage an unpublished revision, save the
+original before recognition, and publish answers atomically only on success.
+The authenticated student ID wins over model-extracted identity. Failed uploads
+and concurrent manual corrections retain the previous current revision. A
+single upload is bounded to 64 MiB, 24 members, 200,000 transcript characters and
+900 seconds; exceeded bounds fail explicitly, never truncate.
+
+Revision evidence now uses task-lifecycle write intents and parent deletion
+fences. Migration `0017_revision_recognition` extends the reservation constraint;
+downgrade refuses to discard outstanding revision artifact intents. Teachers
+can preview student-owned current originals through task authorization, with
+file selection for multi-file uploads. Replaced revisions and other teachers
+cannot use that current-original route. Preview is read-only and does no OCR.
+
+The new tests use deterministic providers and injected storage/lease failures.
+They prove persistence, isolation, recovery and review contracts, not measured
+handwriting accuracy. Real-provider ablation and combined OCR/RAG acceptance
+remain in J; the knowledge pipeline is the separate H/I stage.
+
+## H: Whole-Book Knowledge Ingestion
+
+Original publication atomically queues a separate knowledge ingestion version.
+The personal, course-library and task upload routes return saved/processing
+state; only small native documents finish inline. A durable background worker
+processes at most 24 pages per claim. Each PDF/image page uses the same frozen
+engine, codec and before-submit checkpoint as target recognition, through
+knowledge-specific operation and artifact repositories. No assignment is faked.
+
+`knowledge-economy-v1` preserves clean native text, including explicitly
+unverified native math, and recognizes missing/risky visual content. Each page
+has at most one initial and one extra call; extras are limited to two per fixed
+24-page range and ceil(2% of pages) per requested ingestion. Background visual
+calls share the owner limit of two and yield to waiting interactive work.
+The original is bounded to 64 MiB, not the former 5 MiB limit. A PDF book is not
+limited to target recognition's 24-page/900-second whole-request envelope.
+
+Page states distinguish unprocessed, processing, searchable, warning, failed
+and observed blank. Coverage is paginated. Pause/resume and explicit gap retry
+do not replay ambiguous submits; already successful pages can be copied with
+their original evidence. Partial content is labeled partial, and failed
+reprocessing preserves the previously published version. Text chunks preserve
+all source characters and offsets; neither 500 chunks nor a long Chinese/code
+token silently cuts off the rest of a book.
+
+Migration `0018_knowledge_ingestion` retains versioned chunks, page manifests
+and bounded compressed recognition evidence in the database. These derived
+rows use the original's owner/deletion gate and FK cascade, avoiding external
+late-write orphan objects. Per-document safety guards are 128 MiB compressed
+evidence and 32 Mi characters of retained chunk text (overlap included); a
+reached guard is explicit failure, never successful truncation. The storage
+API reports derived evidence bytes and indexed characters separately from the
+existing raw-object quota. Text/Office parsing runs in a killable child; Office
+embedded images or unhandled supplementary content keep coverage incomplete.
+
+Five selected books are supported; the attachment request guard is now twenty.
+UI coverage, pause/resume and gap retry reuse current owner credentials, with
+no new provider setup screens. OCR precision, 1000/2500-page retrieval recall,
+frozen grading citations and end-to-end preview UX remain I/J acceptance work.
+
+## I: Versioned Local Retrieval and Citations
+
+Knowledge retrieval reuses the existing `rank-bm25` dependency. The local index
+adds Chinese bigrams, hierarchical exercise IDs and signed exponent tokens,
+suppresses duplicate passages and adds source-contiguous neighboring spans
+when the result budget allows. Native/OCR source text is never normalized in
+place. No embedding service, OCR request or model-assisted retrieval is used.
+
+Grading setup freezes the document IDs, published content version, readable
+chunk prefix, source hash and index version in the input fingerprint. Later
+page completion or replacement cannot change that grading run. Old versions
+remain until document cleanup; owner/source availability is rechecked before
+and after cache access. Selected documents with no readable content block
+grading rather than disappearing silently from its evidence.
+
+The single-flight LRU keeps up to 16 indexes / approximately 96 MiB with a
+15-minute absolute TTL. An individual selection above 100,000 chunks or 16 Mi
+characters fails explicitly; this is a local resource guard, not truncation.
+Only one index builds at a time. Cache accounting estimates retained Python
+objects; it is not a process RSS guarantee. Raw originals and all content
+versions continue using the ingestion/storage boundaries described above.
+
+The library and task setup expose content search. Retrieved references are
+system-supplied, not model-certified claim support. Existing concept,
+objective and proof grading carry those references into saved expert results;
+teacher review can inspect the frozen passage and original page. PDF preview
+mounts at most three canvases and can reach every page, including page 1000.
+Calculation/programming prompt expansion is held for explicit data-egress
+confirmation; it is not part of this stage's quality claim.
+
+Synthetic capacity validation: five books, 2500 pages (largest 1000), 2,981,961
+characters; 15 head/middle/tail exact-ID queries repeated twice, Recall@5 1.0,
+one index build, approximately 10.08 MB retained index. On the local SQLite
+validation environment: cold 0.829 s, hot p50 0.0037 s / p95 0.0046 s. These are
+synthetic exact-match and cache results, not OCR accuracy, paraphrase recall,
+production latency, whole-book ingestion time or measured teacher workload.
+
+Tests cover version freezing, incremental prefix stability, cache ownership
+and revocation, same-page adjacency, empty search, authenticated citation
+reads, 2500-page capacity and long-PDF navigation. Real-provider ablation,
+semantic holdout evaluation and combined end-to-end checks remain J work.
+# Integrated Acceptance Evidence
+
+See [the layered OCR/RAG acceptance report](../../tools/ocr_benchmark/HARNESS_ACCEPTANCE_CN.md)
+for the 2026-09-29 integrated test results, 1000/2500-page capacity evidence,
+legacy 05/06 traceability, offline ablation input contract and remaining real-model
+quality gates. Engineering tests do not establish OCR accuracy or launch readiness.

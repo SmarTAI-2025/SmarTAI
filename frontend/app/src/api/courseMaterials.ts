@@ -26,6 +26,7 @@ export function uploadCourseMaterial(input: UploadCourseMaterialInput): Promise<
       group_id: input.groupId,
       category: input.category,
       labels: JSON.stringify(input.labels),
+      native_only: input.nativeOnly ? "true" : undefined,
     },
   });
 }

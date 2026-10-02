@@ -15,6 +15,23 @@ from backend.main import app
 from backend.models import ProviderConfig, User
 
 
+@pytest.mark.parametrize(('body', 'expected'), [
+    ({'code': 400, 'message': 'User location is not supported for the API use.'}, 'expert_verification_region_unsupported'),
+    ({'code': 400, 'details': [{'reason': 'API_KEY_INVALID'}]}, 'expert_verification_auth_failed'),
+    ({'code': 400, 'message': 'private upstream body'}, 'expert_verification_provider_error'),
+    ({'code': 404}, 'expert_verification_model_not_found'),
+    ({'code': 429}, 'expert_verification_rate_limited'),
+])
+def test_google_structured_verification_errors_are_safe(body, expected):
+    from backend.api.experts import _verification_error_code
+
+    errors = pytest.importorskip('google.genai.errors')
+    error = errors.ClientError(body['code'], {'error': body, 'sensitive': 'must-not-be-returned'})
+    wrapper = RuntimeError('SDK wrapper')
+    wrapper.__cause__ = error
+    assert _verification_error_code(wrapper) == expected
+
+
 def _teacher(owner_id: str) -> dict[str, str]:
     with session_scope() as session:
         session.add(UserRecord(
