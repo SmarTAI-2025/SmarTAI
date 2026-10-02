@@ -61,6 +61,16 @@ const REASON_COPY: Record<string, ReasonFactory> = {
   pdf_response_too_large: recognitionLimitCopy,
   pdf_structure_limit_exceeded: recognitionLimitCopy,
   provider_credentials_required: recognitionProviderCopy,
+  question_source_pages_out_of_range: (locale) => ({
+    title: tx(locale, "请调整识别范围", "Adjust the recognition scope"),
+    description: tx(locale, "填写的页码超出了 PDF 总页数，这份资料尚未调用识别模型。", "A selected page is outside this PDF. No recognition model was called for this source."),
+    nextStep: tx(locale, "使用文件中的页序号，而非书上印刷的页码；页码留空则读取全部页面。", "Use file page positions rather than printed page numbers, or leave pages blank to read the full document."),
+  }),
+  question_source_incomplete: (locale) => ({
+    title: tx(locale, "资料尚未完整读取", "Source reading is incomplete"),
+    description: tx(locale, "仍有页面未成功读取，已暂停题目生成。已完成的页面证据已保存；不会把部分内容当作整份文件完成。", "Some pages could not be read, so question generation is paused. Completed page evidence is saved; partial input is not treated as a complete document."),
+    nextStep: tx(locale, "检查资料识别状态后继续；已完成页面会复用，结果未知的模型请求需要确认后才能重新提交。", "Check the source recognition status before continuing. Completed pages are reused; model requests with unknown outcomes need confirmation before resubmission."),
+  }),
   recognition_already_running: recognitionStateCopy,
   recognition_artifact_invalid: recognitionStorageCopy,
   recognition_artifact_limit: recognitionLimitCopy,
