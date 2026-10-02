@@ -479,6 +479,7 @@ def confirm_password_reset(token: str, new_password: str) -> dict[str, str]:
                 other.superseded_at = now
             user.password_hash = hash_password(new_password)
             user.auth_invalid_before = now
+            user.auth_version += 1
             row.consumed_at = now
             revoke_all_refresh_sessions(session, user.id, now=now)
     return {"status": "password_reset"}

@@ -76,11 +76,13 @@ def verify_password(password: str, hashed: str) -> bool:
 
 # ─── JWT encode / decode ──────────────────────────────────────────────────────
 
-def create_token(user_id: str, role: str, expires_in_hours: Optional[int] = None, expires_in_minutes: Optional[int] = None) -> str:
+def create_token(user_id: str, role: str, expires_in_hours: Optional[int] = None, expires_in_minutes: Optional[int] = None, auth_version: int | None = None) -> str:
     lifetime = expires_in_minutes * 60 if expires_in_minutes is not None else ((expires_in_hours * 3600) if expires_in_hours is not None else settings.jwt_expiry_minutes * 60)
     issued_at = time.time()
     exp = int(issued_at) + lifetime
     payload = {"sub": user_id, "role": role, "exp": exp, "iat": issued_at, "jti": str(uuid.uuid4())[:12]}
+    if auth_version is not None:
+        payload["auth_version"] = int(auth_version)
     return jwt.encode(payload, settings.jwt_secret, algorithm=settings.jwt_algorithm)
 
 
@@ -164,6 +166,13 @@ def get_optional_user(
     if user is not None and not user.is_active:
         user = None
     issued_at = payload.get("iat")
+    token_auth_version = payload.get("auth_version")
+    if user is not None and token_auth_version is not None:
+        try:
+            if int(token_auth_version) != user.auth_version:
+                user = None
+        except (TypeError, ValueError):
+            user = None
     if user is not None and user.auth_invalid_before is not None:
         try:
             if issued_at is None or float(issued_at) <= user.auth_invalid_before:

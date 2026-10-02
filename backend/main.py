@@ -63,8 +63,6 @@ def create_app() -> FastAPI:
     # below is a presentation adapter over those same repositories for the Figma
     # teacher workflow; it does not restore the removed TaskStore/JobStore.
     from backend.api.auth import router as auth_router
-    from backend.api.users import router as users_router
-    from backend.api.admin import router as admin_router
     from backend.api.courses import router as courses_router
     from backend.api.assignments import router as assignments_router
     from backend.api.submissions import router as submissions_router
@@ -80,9 +78,16 @@ def create_app() -> FastAPI:
     from backend.api.analytics import router as analytics_router
 
     app.include_router(auth_router)
-    app.include_router(users_router)
-    app.include_router(admin_router)
+    if settings.runtime_environment != "production":
+        from backend.api.users import router as users_router
+        app.include_router(users_router)
     app.include_router(courses_router)
+    # The public production app deliberately has no administrator surface.
+    # Tests/local development may opt in to exercise the API contract; the
+    # deployed console uses backend.private_main instead.
+    if settings.runtime_environment != "production":
+        from backend.api.admin import router as admin_router
+        app.include_router(admin_router)
     app.include_router(assignments_router)
     app.include_router(submissions_router)
     app.include_router(knowledge_router)
@@ -98,7 +103,7 @@ def create_app() -> FastAPI:
     app.include_router(analytics_router)
 
     logger.info(
-        "V2 routers loaded: auth, users, admin, courses, assignments, submissions, "
+        "V2 routers loaded: auth, courses, assignments, submissions, "
         "knowledge, grading-runs, results, experts, ocr-providers, tasks, task-preparation, "
         "course-materials, tags, analytics"
     )

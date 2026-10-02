@@ -1,4 +1,6 @@
 import { useState } from "react";
+import { useMutation } from "@tanstack/react-query";
+import { adminRequestPasswordReset, adminRevokeSessions, type AdminUsersPage } from "@/api/admin";
 import { useAdminUsers, useAdminSetActive } from "@/api/hooks/admin";
 import { Button } from "@/components/ui/Button";
 import { Card, SectionHeader } from "@/components/ui/Card";
@@ -13,11 +15,26 @@ import { EmptyState } from "@/components/ui/EmptyState";
 export function AdminUsersPage() {
   const [role, setRole] = useState<string>("");
   const [activeOnly, setActiveOnly] = useState<boolean>(false);
+  const [search, setSearch] = useState<string>("");
+  const [page, setPage] = useState(1);
   const users = useAdminUsers({
     role: role || undefined,
     is_active: activeOnly ? true : undefined,
+    search: search || undefined,
+    page,
+    page_size: 25,
   });
   const setActive = useAdminSetActive();
+  const revokeSessions = useMutation({ mutationFn: (userId: string) => adminRevokeSessions(userId, "device_or_session_support") });
+  const resetPassword = useMutation({ mutationFn: (userId: string) => adminRequestPasswordReset(userId, "account_support") });
+  const rawData = users.data;
+  const pagedData = rawData && !Array.isArray(rawData) ? rawData as AdminUsersPage : null;
+  const items = rawData ? (Array.isArray(rawData) ? rawData : rawData.items) : [];
+
+  function askReason(action: string): string | null {
+    const reason = window.prompt(`${action}原因（会写入操作审计）：`, "account_support");
+    return reason?.trim() || null;
+  }
 
   return (
     <div className="mx-auto max-w-5xl space-y-5">
@@ -39,7 +56,16 @@ export function AdminUsersPage() {
             <option value="admin">admin</option>
           </select>
         </label>
-        <label className="flex items-center gap-2 text-sm">
+          <label className="grid min-w-56 gap-1 text-sm">
+            <span className="font-medium">搜索</span>
+            <input
+              className="h-9 rounded-md border bg-background px-2 text-sm"
+              value={search}
+              onChange={(e) => { setSearch(e.target.value); setPage(1); }}
+              placeholder="用户名或邮箱"
+            />
+          </label>
+          <label className="flex items-center gap-2 text-sm">
           <input
             type="checkbox"
             checked={activeOnly}
@@ -54,7 +80,7 @@ export function AdminUsersPage() {
           <div className="p-6 text-sm text-muted-foreground">加载中...</div>
         ) : users.isError ? (
           <div className="p-6 text-sm text-danger">加载失败，请稍后重试。</div>
-        ) : !users.data || users.data.length === 0 ? (
+        ) : items.length === 0 ? (
           <EmptyState title="暂无用户" description="没有符合筛选条件的账号。" />
         ) : (
           <table className="w-full text-sm">
@@ -68,7 +94,7 @@ export function AdminUsersPage() {
               </tr>
             </thead>
             <tbody>
-              {users.data.map((u) => (
+              {items.map((u) => (
                 <tr key={u.id} className="border-b last:border-0">
                   <td className="px-4 py-2 font-medium">{u.username}</td>
                   <td className="px-4 py-2 text-muted-foreground">{u.email || "—"}</td>
@@ -85,11 +111,28 @@ export function AdminUsersPage() {
                       variant={u.is_active ? "secondary" : "primary"}
                       className="h-8"
                       disabled={setActive.isPending}
-                      onClick={() =>
-                        setActive.mutate({ userId: u.id, isActive: !u.is_active })
-                      }
+                      onClick={() => {
+                        const reason = askReason(u.is_active ? "停用账号" : "恢复账号");
+                        if (reason) setActive.mutate({ userId: u.id, isActive: !u.is_active, reason });
+                      }}
                     >
                       {u.is_active ? "停用" : "启用"}
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      className="ml-2 h-8"
+                      disabled={revokeSessions.isPending}
+                      onClick={() => { if (askReason("撤销全部会话")) revokeSessions.mutate(u.id); }}
+                    >
+                      撤销会话
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      className="ml-2 h-8"
+                      disabled={resetPassword.isPending || !u.email}
+                      onClick={() => { if (askReason("发送重置邮件")) resetPassword.mutate(u.id); }}
+                    >
+                      重置密码
                     </Button>
                   </td>
                 </tr>
@@ -98,6 +141,14 @@ export function AdminUsersPage() {
           </table>
         )}
       </Card>
+      {pagedData && pagedData.total > 0 ? (
+        <div className="flex items-center justify-between text-sm text-muted-foreground">
+          <span>共 {pagedData.total} 个账号</span>
+          <Button variant="secondary" disabled={page <= 1} onClick={() => setPage((value) => Math.max(1, value - 1))}>上一页</Button>
+          <span>第 {page} 页</span>
+          <Button variant="secondary" disabled={!pagedData.has_next} onClick={() => setPage((value) => value + 1)}>下一页</Button>
+        </div>
+      ) : null}
     </div>
   );
 }

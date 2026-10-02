@@ -13,6 +13,7 @@ from pydantic import BaseModel
 
 from backend.auth import get_current_user, require_student, require_teacher
 from backend.api.errors import domain_error_response
+from backend.analytics.admin_usage import track_usage_event
 from backend.domain.errors import DomainError
 from backend.llm.registry import ExpertRegistry, get_scoped_expert_registry
 from backend.models import User
@@ -72,6 +73,7 @@ def submit(req: SubmitRequest, current: User = Depends(require_student)):
         )
     except DomainError as exc:
         return domain_error_response(exc)
+    track_usage_event(event_name="submission_created", user_id=current.id, role=current.role, dimensions={"source": "online"})
     return _serialize_revision(rev)
 
 
@@ -139,6 +141,7 @@ async def submit_upload(current: User = Depends(require_student),
         )
     except DomainError as exc:
         return domain_error_response(exc)
+    track_usage_event(event_name="submission_created", user_id=current.id, role=current.role, dimensions={"source": "upload"})
     return _serialize_revision(rev)
 
 
@@ -174,6 +177,7 @@ async def teacher_upload(
         )
     except DomainError as exc:
         return domain_error_response(exc)
+    track_usage_event(event_name="submission_created", user_id=current.id, role=current.role, dimensions={"source": "teacher_upload"})
     return _serialize_revision(rev)
 
 

@@ -512,6 +512,7 @@ class User(BaseModel):
     created_at: float = Field(default_factory=time.time)
     is_active: bool = True
     auth_invalid_before: float | None = Field(default=None, exclude=True)
+    auth_version: int = Field(default=0, exclude=True)
 
     def public(self) -> Dict[str, Any]:
         """Dict safe to return to clients (no password hash, no course_ids)."""

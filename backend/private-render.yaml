@@ -1,0 +1,28 @@
+services:
+  - type: web
+    name: smartai-admin-private
+    env: python
+    plan: starter
+    rootDir: .
+    buildCommand: pip install -r render-requirements.txt
+    startCommand: alembic upgrade head && SMARTAI_ADMIN_PRIVATE_ENABLED=true uvicorn backend.private_main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /health
+    envVars:
+      - key: SMARTAI_RUNTIME_ENVIRONMENT
+        value: production
+      - key: SMARTAI_GRADING_ENGINE
+        value: v2
+      - key: SMARTAI_REQUIRE_AUTH
+        value: "true"
+      - key: SMARTAI_DATABASE_HEAVY
+        value: "ON"
+      - key: SMARTAI_DATABASE_URL_HEAVY
+        sync: false
+      - key: SMARTAI_JWT_SECRET
+        sync: false
+      - key: SMARTAI_REFRESH_COOKIE_SECURE
+        value: "true"
+      - key: SMARTAI_REFRESH_COOKIE_SAMESITE
+        value: "strict"
+      - key: SMARTAI_ADMIN_FRONTEND_ORIGIN
+        sync: false

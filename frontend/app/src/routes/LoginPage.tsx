@@ -63,6 +63,17 @@ export function LoginPage() {
         return;
       }
 
+      if (user.role === "admin") {
+        queryClient.removeQueries({ predicate: (query) => query.queryKey[0] !== authKeys.me[0] });
+        const adminUrl = import.meta.env.VITE_SMARTAI_ADMIN_URL?.trim();
+        if (adminUrl) {
+          window.location.assign(adminUrl);
+        } else {
+          navigate("/admin", { replace: true });
+        }
+        return;
+      }
+
       queryClient.removeQueries({
         predicate: (query) => query.queryKey[0] !== authKeys.me[0],
       });

@@ -18,6 +18,7 @@ import time
 
 from sqlalchemy import (
     CheckConstraint,
+    Boolean,
     Float,
     ForeignKey,
     Index,
@@ -54,6 +55,7 @@ class UserRecord(Base):
         Float, nullable=False, default=time.time, onupdate=time.time
     )
     auth_invalid_before: Mapped[float | None] = mapped_column(Float, nullable=True)
+    auth_version: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default=text("0"))
 
     __table_args__ = (
         CheckConstraint(
@@ -177,6 +179,70 @@ class PasswordResetRateEventRecord(Base):
     created_at: Mapped[float] = mapped_column(
         Float, nullable=False, default=time.time, index=True
     )
+
+
+class AdminAuditLogRecord(Base):
+    """Durable, non-sensitive audit trail for private administrator actions.
+
+    The record deliberately stores state summaries rather than passwords,
+    reset tokens, prompts, or provider credentials.  ``idempotency_key`` and
+    ``request_hash`` make status/session operations safe to replay from a
+    flaky admin client without duplicating the side effect.
+    """
+
+    __tablename__ = "admin_audit_logs"
+    __table_args__ = (
+        UniqueConstraint(
+            "actor_id", "idempotency_key", name="uq_admin_audit_actor_idempotency"
+        ),
+        Index("ix_admin_audit_logs_created_at", "created_at"),
+        Index("ix_admin_audit_logs_target_created", "target_user_id", "created_at"),
+    )
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    actor_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    target_user_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    action: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    reason: Mapped[str] = mapped_column(String(80), nullable=False)
+    note: Mapped[str] = mapped_column(String(1000), nullable=False, default="")
+    idempotency_key: Mapped[str] = mapped_column(String(128), nullable=False)
+    request_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    before_state: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    after_state: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    result: Mapped[str] = mapped_column(String(32), nullable=False, default="success")
+    response_body: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    created_at: Mapped[float] = mapped_column(Float, nullable=False, default=time.time)
+
+
+class AdminUsageEventRecord(Base):
+    """Append-only product usage facts used by the private metrics API.
+
+    The event row intentionally has no foreign key to ``users``: metrics must
+    remain useful after an account is removed, and historical events must not
+    be cascaded away with identity data.  Dimensions contain bounded,
+    non-sensitive labels only (never prompts, tokens, or credentials).
+    """
+
+    __tablename__ = "admin_usage_events"
+    __table_args__ = (
+        Index("ix_admin_usage_events_occurred_at", "occurred_at"),
+        Index("ix_admin_usage_events_name_occurred", "event_name", "occurred_at"),
+        Index("ix_admin_usage_events_user_occurred", "user_id", "occurred_at"),
+    )
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    event_name: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    user_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    role: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    occurred_at: Mapped[float] = mapped_column(Float, nullable=False, default=time.time)
+    success: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, server_default=text("true"))
+    duration_ms: Mapped[float | None] = mapped_column(Float, nullable=True)
+    provider: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    model: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    input_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    output_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    cost_usd: Mapped[float | None] = mapped_column(Float, nullable=True)
+    dimensions: Mapped[dict | None] = mapped_column(JSON, nullable=True)
 
 
 # ─── LLM provider config (retained) ───────────────────────────────────────────

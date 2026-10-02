@@ -131,7 +131,9 @@ export const resultKeys = {
 
 export const adminKeys = {
   all: ["admin"] as const,
-  users: (filter?: { role?: string; is_active?: boolean }) =>
+  users: (filter?: { role?: string; is_active?: boolean; search?: string; page?: number; page_size?: number }) =>
     ["admin", "users", filter ?? {}] as const,
   invites: () => ["admin", "invites"] as const,
+  overview: () => ["admin", "overview"] as const,
+  audit: () => ["admin", "audit"] as const,
 };
