@@ -1,7 +1,7 @@
 import { FileUp, FolderPlus, LoaderCircle, Trash2 } from "lucide-react";
 import { useId, useMemo, useState, type FormEvent, type ReactNode } from "react";
 import { toast } from "sonner";
-import { getAPIErrorDetail, normalizeAPIError } from "@/api/client";
+import { getAPIErrorCode, getAPIErrorDetail, normalizeAPIError } from "@/api/client";
 import {
   useCreateCourseMaterialGroup,
   useDeleteCourseMaterial,
@@ -188,6 +188,7 @@ export function UploadDialog({ courses, groups, onClose, onUploaded }: UploadDia
   const inputId = useId();
   const [file, setFile] = useState<File | null>(null);
   const [nativeOnly, setNativeOnly] = useState(false);
+  const [uploadError, setUploadError] = useState<string | null>(null);
   const [courseId, setCourseId] = useState("");
   const [groupId, setGroupId] = useState("");
   const [category, setCategory] = useState<CourseMaterialCategory>("other");
@@ -197,9 +198,23 @@ export function UploadDialog({ courses, groups, onClose, onUploaded }: UploadDia
     [courseId, groups],
   );
 
+  function selectFile(selected: File | undefined) {
+    if (!selected) return;
+    const error = selected.size === 0
+      ? tx(locale, "文件为空（0 字节），请确认有内容后重新上传。", "The file is empty (0 bytes). Add content before uploading again.")
+      : selected.size > 64 * 1024 * 1024
+        ? tx(locale, "文件超过 64 MiB，请拆分或压缩后重新上传。", "The file exceeds 64 MiB. Split or compress it before uploading again.")
+        : !/\.(pdf|txt|md|markdown)$/i.test(selected.name)
+          ? tx(locale, "资料库仅支持 PDF、TXT 和 Markdown。请先导出为支持的格式，不要只修改扩展名。", "The library supports PDF, TXT and Markdown. Export to a supported format; do not just rename the extension.")
+          : null;
+    setFile(error ? null : selected);
+    setUploadError(error);
+  }
+
   async function submit(event: FormEvent) {
     event.preventDefault();
     if (!file) return;
+    setUploadError(null);
     try {
       const result = await upload.mutateAsync({
         file,
@@ -216,11 +231,18 @@ export function UploadDialog({ courses, groups, onClose, onUploaded }: UploadDia
     } catch (error) {
       const normalized = normalizeAPIError(error);
       const quotaExceeded = isKnowledgeStorageQuotaExceeded(normalized);
-      toast.error(tx(locale, "资料上传失败", "Material upload failed"), {
-        description: quotaExceeded
-          ? knowledgeStorageQuotaCopy(locale).description
-          : normalized.message,
-      });
+      const code = getAPIErrorCode(normalized);
+      const description = quotaExceeded
+        ? knowledgeStorageQuotaCopy(locale).description
+        : code === "source_content_type_not_allowed" || code === "invalid_course_material"
+          ? tx(locale, "文件内容无法作为资料读取。请确认文件能正常打开，并重新导出为 PDF、TXT 或 Markdown 后上传。", "The file content could not be read as course material. Check that it opens, then export it again as PDF, TXT or Markdown.")
+          : code === "material_label_too_long"
+            ? tx(locale, "单个标签不能超过 60 个字符，请缩短后再上传。", "Each label must be at most 60 characters. Shorten it before uploading.")
+            : code === "too_many_material_labels"
+              ? tx(locale, "最多添加 20 个标签，请减少后再上传。", "Use at most 20 labels before uploading.")
+              : normalized.message;
+      setUploadError(description);
+      toast.error(tx(locale, "资料上传失败", "Material upload failed"), { description });
     }
   }
 
@@ -239,8 +261,9 @@ export function UploadDialog({ courses, groups, onClose, onUploaded }: UploadDia
             <span className="mt-2 max-w-full truncate text-sm font-semibold">{file?.name ?? tx(locale, "选择一份资料文件", "Choose a material file")}</span>
             <span className="mt-1 text-xs text-muted-foreground">{file ? formatBytes(file.size) : "PDF / TXT / Markdown"}</span>
           </label>
-          <input id={inputId} className="sr-only" type="file" accept=".pdf,.txt,.md,.markdown" onChange={(event) => setFile(event.target.files?.[0] ?? null)} />
+          <input id={inputId} className="sr-only" type="file" accept=".pdf,.txt,.md,.markdown" aria-invalid={Boolean(uploadError)} aria-describedby={uploadError ? `${inputId}-error` : undefined} onChange={(event) => { selectFile(event.target.files?.[0]); event.target.value = ""; }} />
         </div>
+        {uploadError ? <p id={`${inputId}-error`} role="alert" className="text-sm text-danger">{uploadError}</p> : null}
         <label className="flex items-start gap-2 text-sm">
           <input type="checkbox" className="mt-1" checked={nativeOnly} onChange={(event) => setNativeOnly(event.target.checked)} />
           <span>{tx(locale, "仅提取已有文字（不调用模型）", "Existing text only (no model calls)")}</span>
