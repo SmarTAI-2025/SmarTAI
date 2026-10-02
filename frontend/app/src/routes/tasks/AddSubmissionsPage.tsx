@@ -140,6 +140,10 @@ export function AddSubmissionsPage() {
       setFormError(t("submissionUploadUnsupported"));
       return;
     }
+    if (file.size === 0) {
+      setFormError(localText(locale, "所选作答文件为空（0 字节），请打开文件确认有内容后重新上传。", "The selected submission is empty (0 bytes). Check that it contains content before uploading again."));
+      return;
+    }
     setSelectedFile(file);
     setUploadPercent(0);
     setFormError(null);
@@ -150,6 +154,10 @@ export function AddSubmissionsPage() {
     if (!file || isPending) return;
     if (!hasSuffix(file.name, ROSTER_SUFFIXES)) {
       setFormError(t("submissionUploadErrorRoster"));
+      return;
+    }
+    if (file.size === 0) {
+      setFormError(localText(locale, "所选名单文件为空（0 字节），请填写学生名单后重新上传。", "The selected roster is empty (0 bytes). Add student records before uploading again."));
       return;
     }
     setRosterFile(file);
