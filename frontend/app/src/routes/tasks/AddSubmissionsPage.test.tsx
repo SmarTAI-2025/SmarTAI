@@ -121,6 +121,20 @@ describe("AddSubmissionsPage OCR uploads", () => {
     expect(screen.getByText("S003_Li.txt")).toBeInTheDocument();
   });
 
+  it("rejects empty submissions before starting recognition and accepts a replacement", async () => {
+    const { container } = renderPage("empty-upload-test");
+    const input = container.querySelector('input[type="file"]') as HTMLInputElement;
+    fireEvent.change(input, { target: { files: [new File([], "empty.txt")] } });
+    expect(screen.getByText(/所选作答文件为空/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "submissionUploadStart" }));
+    expect(mutateAsync).not.toHaveBeenCalled();
+    const valid = new File(["1. answer"], "student.txt");
+    fireEvent.change(input, { target: { files: [valid] } });
+    expect(screen.queryByText(/所选作答文件为空/)).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "submissionUploadStart" }));
+    await waitFor(() => expect(mutateAsync).toHaveBeenCalledWith(expect.objectContaining({ file: valid })));
+  });
+
   it("reuses a failed job's preserved original after the teacher switches models", async () => {
     taskState.data = {
       ...taskState.data,

@@ -446,3 +446,22 @@ describe("background task failure guidance", () => {
     expect(backgroundErrorTitle("", "zh-CN")).toBe("");
   });
 });
+
+
+describe("unusable upload recovery", () => {
+  it.each([
+    ["source_empty", "文件为空", "empty"],
+    ["source_content_type_not_allowed", "扩展名", "extension"],
+    ["pdf_invalid", "重新导出", "export"],
+    ["pdf_encrypted", "解锁", "Unlock"],
+    ["image_invalid", "JPG", "JPG"],
+    ["image_format_mismatch", "扩展名", "extension"],
+    ["image_pixel_limit_exceeded", "像素", "pixel"],
+  ])("explains %s and offers replacement instead of a futile retry", (code, zh, en) => {
+    for (const [locale, expected] of [["zh-CN", zh], ["en-US", en]] as const) {
+      const info = classifyRecoverableError(new APIError(400, code, { detail: { code } }), { locale });
+      expect(info.actionKind).toBe("reupload");
+      expect(info.description).toContain(expected);
+    }
+  });
+});

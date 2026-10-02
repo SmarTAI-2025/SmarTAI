@@ -306,3 +306,14 @@ describe("AddProblemsPage workflow recovery", () => {
     expect(screen.queryByRole("button", { name: "刷新任务状态" })).not.toBeInTheDocument();
   });
 });
+
+
+it("rejects an empty file before preflight and accepts a corrected replacement", async () => {
+  const user = userEvent.setup();
+  renderPage();
+  await user.upload(screen.getByLabelText("选择文件"), new File([], "empty.txt", { type: "text/plain" }));
+  expect(screen.getByText(/文件为空（0 字节）/)).toBeInTheDocument();
+  expect(preflightMutateAsync).not.toHaveBeenCalled();
+  await user.upload(screen.getByLabelText("选择文件"), new File(["1. Calculate 2+3"], "fixed.txt", { type: "text/plain" }));
+  expect(screen.queryByText(/文件为空（0 字节）/)).not.toBeInTheDocument();
+});

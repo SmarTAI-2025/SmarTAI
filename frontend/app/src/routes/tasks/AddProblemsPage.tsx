@@ -951,6 +951,9 @@ function sourceFileValidationError(
   maxFileBytes: number | undefined,
   locale: string,
 ) {
+  if (file.size === 0) {
+    return tx(locale, "文件为空（0 字节），请选择包含题目或资料内容的文件。", "This file is empty (0 bytes). Choose a file containing questions or supporting material.");
+  }
   if (maxFileBytes && file.size > maxFileBytes) {
     return tx(
       locale,
