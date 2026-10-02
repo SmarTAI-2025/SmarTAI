@@ -838,7 +838,7 @@ function ReviewQuestionCard({ locale, student, question, correction, draft, requ
               </label>
             </div>
             {scoreError ? <p className="mt-1 text-right text-xs font-medium text-red-500">{scoreError}</p> : null}
-            {!draft.score.trim() && correction && reviewConfirmationScore(correction, "") !== null ? <p className="mt-1 text-right text-xs text-muted-foreground">{tx(locale, `留空将沿用当前有效分数 ${formatScore(reviewConfirmationScore(correction, "")!)} 分；如需给零分，请输入 0。`, `Leaving this blank keeps the current valid score of ${formatScore(reviewConfirmationScore(correction, "")!)}. Enter 0 to award zero points.`)}</p> : null}
+            {!draft.score.trim() && correction && reviewConfirmationScore(correction, "") !== null ? <p className="mt-1 text-right text-xs text-muted-foreground">{tx(locale, `留空将采用 AI 分数 ${formatScore(reviewConfirmationScore(correction, "")!)} 分；如需给零分，请输入 0。`, `Leaving this blank uses the AI score of ${formatScore(reviewConfirmationScore(correction, "")!)}. Enter 0 to award zero points.`)}</p> : null}
             <label className="mt-4 grid gap-1.5 text-xs font-medium text-muted-foreground">
               {tx(locale, "补充评语（可选）", "Additional comment (optional)")}
               <textarea
