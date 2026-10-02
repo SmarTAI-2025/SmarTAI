@@ -1,0 +1,132 @@
+name: Deploy AWS backend
+
+on:
+  workflow_run:
+    workflows: ["CI"]
+    types: [completed]
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: smartai-aws-production
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Deploy tested main to Lightsail
+    if: >-
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'push' &&
+      github.event.workflow_run.head_branch == 'main'
+
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+
+    steps:
+      - name: Check CI result is still current main
+        id: freshness
+        env:
+          DEPLOY_SHA: ${{ github.event.workflow_run.head_sha }}
+          REPOSITORY: ${{ github.repository }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          latest="$(
+            git ls-remote \
+              "https://github.com/${REPOSITORY}.git" \
+              refs/heads/main |
+            awk '{print $1}'
+          )"
+
+          if [[ -z "${latest}" ]]; then
+            echo "Could not resolve current main SHA." >&2
+            exit 1
+          fi
+
+          echo "CI-tested SHA: ${DEPLOY_SHA}"
+          echo "Current main:  ${latest}"
+
+          if [[ "${latest}" != "${DEPLOY_SHA}" ]]; then
+            echo "stale=true" >> "${GITHUB_OUTPUT}"
+            echo "This successful CI run is stale; skipping deployment."
+          else
+            echo "stale=false" >> "${GITHUB_OUTPUT}"
+            echo "This CI run matches current main."
+          fi
+
+      - name: Configure deployment SSH key
+        if: steps.freshness.outputs.stale != 'true'
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.AWS_BACKEND_DEPLOY_SSH_KEY }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [[ -z "${SSH_PRIVATE_KEY}" ]]; then
+            echo "AWS_BACKEND_DEPLOY_SSH_KEY is missing." >&2
+            exit 1
+          fi
+
+          install -d -m 700 "${HOME}/.ssh"
+
+          printf '%s\n' "${SSH_PRIVATE_KEY}" \
+            > "${HOME}/.ssh/id_ed25519"
+
+          chmod 600 "${HOME}/.ssh/id_ed25519"
+
+          scan_file="$(mktemp)"
+          trap 'rm -f "${scan_file}"' EXIT
+
+          ssh-keyscan \
+            -T 10 \
+            -t ed25519 \
+            47.131.29.218 \
+            2>/dev/null \
+            > "${scan_file}"
+
+          if [[ ! -s "${scan_file}" ]]; then
+            echo "Could not obtain Lightsail SSH host key." >&2
+            exit 1
+          fi
+
+          actual_fingerprint="$(
+            ssh-keygen \
+              -lf "${scan_file}" \
+              -E sha256 |
+            awk 'NR == 1 {print $2}'
+          )"
+
+          expected_fingerprint="SHA256:cgktb0NI4LqHxY2WjyhRwd1CIfzQv9oxAxHiAA58whU"
+
+          if [[ "${actual_fingerprint}" != "${expected_fingerprint}" ]]; then
+            echo "SSH host-key fingerprint mismatch." >&2
+            echo "Expected: ${expected_fingerprint}" >&2
+            echo "Actual:   ${actual_fingerprint}" >&2
+            exit 1
+          fi
+
+          cat "${scan_file}" >> "${HOME}/.ssh/known_hosts"
+          chmod 600 "${HOME}/.ssh/known_hosts"
+
+          echo "Lightsail SSH host key verified."
+
+      - name: Deploy exact CI-tested commit
+        if: steps.freshness.outputs.stale != 'true'
+        env:
+          DEPLOY_SHA: ${{ github.event.workflow_run.head_sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          ssh \
+            -T \
+            -i "${HOME}/.ssh/id_ed25519" \
+            -o BatchMode=yes \
+            -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=yes \
+            -o ConnectTimeout=10 \
+            smartai-deploy@47.131.29.218 \
+            "deploy ${DEPLOY_SHA}"
