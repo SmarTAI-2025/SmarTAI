@@ -1,8 +1,11 @@
 import { SortableTableHead, useColumnSort, sortColumnRows, directionFor, type ColumnSort } from "@/components/ui/SortableTableHead";
 import { AlertTriangle, ArrowRight, CheckCircle2, ChevronRight, LoaderCircle, Search } from "lucide-react";
-import { useMemo } from "react";
+import { useMemo, useRef, useState } from "react";
 import { Link, Navigate, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { toast } from "sonner";
+import { normalizeAPIError } from "@/api/client";
+import { useConfirmResultReviews } from "@/hooks/useConfirmResultReviews";
+import { UnsavedChangesDialog } from "@/components/ui/UnsavedChangesDialog";
 import { useConfirmTaskFinalization, useTask, useTaskFinalization, useTaskResult, useTeacherComments } from "@/api/hooks/tasks";
 import { TaskQueryBar } from "@/components/tasks/AskQueryBar";
 import { useTaskFilterIntent } from "@/hooks/useTaskFilterIntent";
@@ -32,6 +35,10 @@ export function ReviewOverviewPage() {
   const commentsQuery = useTeacherComments(taskId);
   const finalizationQuery = useTaskFinalization(taskId);
   const confirmFinalization = useConfirmTaskFinalization();
+  const confirmReviews = useConfirmResultReviews();
+  const confirmingRef = useRef(false);
+  const [blockedDialog, setBlockedDialog] = useState(false);
+  const [batchError, setBatchError] = useState("");
   const urlQuery = searchParams.get("q") ?? "";
   const query = urlQuery.trim();
   const task = taskQuery.data;
@@ -48,7 +55,7 @@ export function ReviewOverviewPage() {
   }, [commentsQuery.data?.comments, model.students]);
   const confirmedKeys = useMemo(() => new Set(
     model.students.flatMap((student) => student.corrections
-      .filter((correction) => typeof correction.teacher_score === "number" && Number.isFinite(correction.teacher_score))
+      .filter((correction) => Number.isFinite(correction.teacher_score) && correction.review_status === "confirmed")
       .map((correction) => reviewCellKey(student.id, correction.q_id))),
   ), [model.students]);
   const smartFilter = useTaskFilterIntent({ taskId, surface: "review_overview", resolveLocal: (value) => resolveReviewFilter(model, reviewItems, annotatedKeys, value) });
@@ -102,6 +109,18 @@ export function ReviewOverviewPage() {
   );
   const remainingReviewCount = finalizationQuery.data?.remaining_review_count ?? blockingReviewItems.length;
   const readyForConfirmation = finalizationQuery.data?.ready_for_confirmation === true;
+  const confirmableReviews = model.students.flatMap((student) => student.corrections.flatMap((correction) => {
+    const score = effectiveCorrectionScore(correction);
+    const teacherConfirmed = Number.isFinite(correction.teacher_score) && correction.review_status === "confirmed";
+    return !teacherConfirmed && score !== null && score >= 0 && score <= correction.max_score
+      ? [{ studentId: student.id, qId: correction.q_id, score, comment: correction.teacher_comment ?? "" }]
+      : [];
+  }));
+  // Find unresolved scores across the whole task, even when Ask has filtered them out.
+  const unresolvedReview = blockingReviewItems[0];
+  const unresolvedHref = taskId && unresolvedReview
+    ? reviewDetailHref(taskId, unresolvedReview.student.id, unresolvedReview.question.id, overviewReturnTo)
+    : null;
   const lockedResultsReason = remainingReviewCount > 0
     ? copy(locale, "lockedResultsRemaining").replace("{count}", String(remainingReviewCount))
     : copy(locale, "lockedResultsReady");
@@ -115,12 +134,33 @@ export function ReviewOverviewPage() {
     });
   }
 
-  function activateLockedResults() {
-    toast.info(lockedResultsReason);
-    if (remainingReviewCount > 0 && targetHref) {
-      navigate(targetHref);
+  async function confirmAllReviews() {
+    if (!taskId || confirmingRef.current || confirmFinalization.isPending) return;
+    if (!confirmableReviews.length) {
+      if (remainingReviewCount > 0) setBlockedDialog(true);
       return;
     }
+    confirmingRef.current = true;
+    setBatchError("");
+    try {
+      await confirmReviews.mutateAsync({
+        taskId, revision: task?.workflow_revision ?? 0, entries: confirmableReviews,
+      });
+      toast.success(locale === "en-US" ? `${confirmableReviews.length} reviews confirmed.` : `已确认 ${confirmableReviews.length} 个题次的复核。`);
+      if (remainingReviewCount > 0) setBlockedDialog(true);
+    } catch (error) {
+      setBatchError(normalizeAPIError(error).message);
+    } finally {
+      confirmingRef.current = false;
+    }
+  }
+
+  function activateLockedResults() {
+    if (remainingReviewCount > 0) {
+      setBlockedDialog(true);
+      return;
+    }
+    toast.info(lockedResultsReason);
     const confirmButton = document.getElementById("confirm-review-complete");
     confirmButton?.scrollIntoView({ behavior: "smooth", block: "center" });
     window.requestAnimationFrame(() => confirmButton?.focus());
@@ -157,7 +197,7 @@ export function ReviewOverviewPage() {
             <MetricCard value={formatMetricPercent(model.classAveragePercent)} label={copy(locale, "average")} tone="primary" />
             <MetricCard value={String(model.lowConfidenceCount)} label={copy(locale, "lowConfidence")} tone="warning" />
             <MetricCard value={String(disagreementCount)} label={copy(locale, "disagreement")} tone="primary" />
-            <MetricCard value={`${reviewItems.filter((item) => confirmedKeys.has(reviewCellKey(item.student.id, item.question.id))).length}/${reviewItems.length}`} label={copy(locale, "annotated")} tone="accent" />
+            <MetricCard value={`${confirmedKeys.size}/${model.students.reduce((total, student) => total + student.corrections.length, 0)}`} label={copy(locale, "annotated")} tone="accent" />
           </div>
 
           {!historyView && confirmFinalization.isError ? (
@@ -169,6 +209,24 @@ export function ReviewOverviewPage() {
           <TaskQueryBar className="mt-6" filter={smartFilter} taskId={taskId} locale={locale}
             label={locale === "zh-CN" ? "Ask SmarTAI：复核批改" : "Ask SmarTAI: grading review"}
             placeholder={copy(locale, "searchPlaceholder")} />
+
+          {!historyView ? <div className="mt-3 flex flex-wrap items-center justify-between gap-3 rounded-[10px] border bg-card p-3">
+            <p className="text-xs text-muted-foreground">{locale === "en-US"
+              ? "Confirm every valid score in this task, including filtered-out results. Existing teacher scores and comments are preserved."
+              : "确认本任务全部有效评分（包含筛选外的题次），保留已有教师分数和评语；无有效分数的题次仍需填写。"}</p>
+            <button type="button" onClick={() => void confirmAllReviews()}
+              disabled={confirmReviews.isPending || confirmFinalization.isPending || (!confirmableReviews.length && remainingReviewCount === 0)}
+              className="inline-flex h-9 shrink-0 items-center gap-2 rounded-lg border border-primary px-4 text-sm font-semibold text-primary disabled:opacity-50">
+              {confirmReviews.isPending ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <CheckCircle2 className="h-4 w-4" />}
+              {confirmReviews.isPending ? `${confirmReviews.progress.completed}/${confirmReviews.progress.total}`
+                : !confirmableReviews.length && remainingReviewCount === 0
+                  ? locale === "en-US" ? "All reviews confirmed" : "全部已复核"
+                  : locale === "en-US" ? `Confirm all reviews (${confirmableReviews.length})` : `一键确认全部复核（${confirmableReviews.length}）`}
+            </button>
+            {batchError ? <p role="alert" className="w-full text-sm text-destructive">{locale === "en-US"
+              ? `Confirmed ${confirmReviews.progress.completed}/${confirmReviews.progress.total}; the rest were not confirmed. ${batchError}`
+              : `已确认 ${confirmReviews.progress.completed}/${confirmReviews.progress.total}，其余未确认。${batchError}`}</p> : null}
+          </div> : null}
 
           {query ? (
             <p className="mt-2 text-[12px] text-muted-foreground" aria-live="polite">
@@ -246,9 +304,9 @@ export function ReviewOverviewPage() {
                 <button
                   id="confirm-review-complete"
                   type="button"
-                  disabled={!readyForConfirmation || confirmFinalization.isPending}
+                  disabled={confirmFinalization.isPending || confirmReviews.isPending}
                   title={!readyForConfirmation ? copy(locale, "confirmDisabled") : undefined}
-                  onClick={confirmReviewComplete}
+                  onClick={() => readyForConfirmation ? confirmReviewComplete() : setBlockedDialog(true)}
                   className="inline-flex h-9 w-full items-center justify-center gap-1.5 rounded-[7px] bg-primary px-4 text-sm font-semibold text-primary-foreground outline-none transition hover:opacity-90 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50 sm:w-auto"
                 >
                   {confirmFinalization.isPending ? copy(locale, "confirming") : copy(locale, "confirmReview")}
@@ -261,6 +319,14 @@ export function ReviewOverviewPage() {
           </footer>
         </>
       )}
+      {blockedDialog ? <UnsavedChangesDialog
+        title={locale === "en-US" ? "Some results need a score" : "还有结果需要填写分数"}
+        description={lockedResultsReason}
+        stayLabel={locale === "en-US" ? "Stay here" : "留在此页"}
+        leaveLabel={locale === "en-US" ? "Go to the missing score" : "直接前往填写分数"}
+        onStay={() => setBlockedDialog(false)}
+        onLeave={() => { setBlockedDialog(false); if (unresolvedHref) navigate(unresolvedHref); else void finalizationQuery.refetch(); }}
+      /> : null}
     </div>
   );
 }
