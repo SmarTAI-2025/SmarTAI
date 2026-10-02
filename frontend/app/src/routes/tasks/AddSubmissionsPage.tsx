@@ -294,7 +294,7 @@ export function AddSubmissionsPage() {
             {selectedFile
               ? `${formatFileSize(selectedFile.size)} · ${t("submissionUploadOcrLimit")}`
               : canRetryOriginal
-                ? localText(locale, "原文件已安全保留，可直接改选模型后重试。", "The original file is preserved; switch models and retry without uploading again.")
+                ? localText(locale, "原文件已安全保留。请按失败原因处理：文件为空、损坏或格式不支持时需更换文件；模型问题可改选模型后重试，无需重复上传。", "The original file is preserved. Replace empty, damaged or unsupported files; for model errors, select another model and retry without uploading again.")
               : t("submissionUploadFormats")}
           </p>
           <span className="mt-[17px] inline-flex h-10 min-w-[130px] items-center justify-center rounded-[8px] border bg-card px-4 text-[14px] font-semibold text-foreground">
