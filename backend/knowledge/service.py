@@ -28,8 +28,9 @@ async def ingest_document(*, owner_id: str, original_name: str, content: bytes,
         raise ValueError("Knowledge uploads support PDF, TXT and Markdown; convert other formats to PDF.")
     media_type = inspect_upload_content(content, safe_name, content_type).content_type
     visual = media_type == "application/pdf"
-    if media_type.startswith("image/"):
-        raise ValueError("Unsupported knowledge document type.")
+    expected_pdf = Path(safe_name).suffix.lower() == ".pdf"
+    if expected_pdf != visual or (not visual and not media_type.startswith("text/")):
+        raise ValueError("Knowledge file content does not match its format; re-export as PDF, TXT or Markdown.")
     if registry is None and not native_only:
         from backend.services.task_facade import _registry_for_owner
         registry = await run_in_threadpool(_registry_for_owner, owner_id)
