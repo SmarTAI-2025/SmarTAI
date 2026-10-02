@@ -541,6 +541,8 @@ function EditableScoringField({ fieldKey, problem, readOnly, saving, locale, onD
                 min="0.01"
                 max="10000"
                 step="0.01"
+                aria-invalid={!scoreValid}
+                aria-describedby={!scoreValid ? `${fieldKey}-score-error` : undefined}
                 value={scoreDraft}
                 onChange={(event) => { setScoreDraft(event.target.value); setError(null); }}
                 className="h-9 w-full rounded-[7px] border bg-background px-3 pr-9 text-sm font-semibold outline-none focus:border-primary focus:ring-2 focus:ring-primary/15"
@@ -548,6 +550,7 @@ function EditableScoringField({ fieldKey, problem, readOnly, saving, locale, onD
               <span className="pointer-events-none absolute right-3 top-2.5 text-[11px] text-muted-foreground">{tx(locale, "分", "pts")}</span>
             </div>
           </label>
+          {!scoreValid ? <p id={`${fieldKey}-score-error`} role="alert" className="text-xs text-danger">{scoringValidationMessage(draftSummary, false, locale)}</p> : null}
           <label className="block">
             <span className="mb-1.5 block text-xs font-semibold text-foreground">{tx(locale, "评分标准（与标答步骤对应）", "Rubric (Aligned with Reference Answer Steps)")}</span>
             <textarea aria-label={tx(locale, `第 ${problem.number || problem.q_id} 题评分标准`, `Rubric for question ${problem.number || problem.q_id}`)} value={criterionDraft} onChange={(event) => { setCriterionDraft(event.target.value); setError(null); }} rows={8} className="w-full resize-y rounded-[8px] border bg-background px-4 py-3 text-sm leading-6 text-foreground outline-none focus:border-primary focus:ring-2 focus:ring-primary/15" />

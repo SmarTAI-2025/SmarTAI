@@ -287,6 +287,22 @@ describe("QuestionPreparationDetailPage navigation", () => {
     }));
   });
 
+  it.each(["", "0", "-1", "10001", "0.001"])("explains invalid maximum %s and recovers after correction", async (value) => {
+    const user = userEvent.setup();
+    renderPage();
+    await user.click(await screen.findByRole("button", { name: "修改第 1 题满分与评分标准" }));
+    const input = screen.getByRole("spinbutton", { name: "第 1 题满分" });
+    fireEvent.change(input, { target: { value } });
+    expect(input).toHaveAttribute("aria-invalid", "true");
+    expect(input).toHaveAccessibleDescription("满分必须是 0.01–10000 之间、最多两位小数的数值。");
+    expect(screen.getByRole("button", { name: "保存" })).toBeDisabled();
+    expect(mutateAsync).not.toHaveBeenCalled();
+    fireEvent.change(input, { target: { value: "5" } });
+    expect(input).toHaveAttribute("aria-invalid", "false");
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "保存" })).toBeEnabled();
+  });
+
   it("keeps two subparts inside one major-question card", async () => {
     renderPage();
 
