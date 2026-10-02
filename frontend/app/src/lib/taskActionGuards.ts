@@ -236,6 +236,9 @@ const BYOK_CODES = new Set([
 ]);
 
 const FILE_CODES = new Set([
+  "pdf_invalid", "pdf_encrypted", "pdf_page_out_of_range",
+  "image_invalid", "image_format_mismatch", "image_mode_unsupported",
+  "image_multiframe_unsupported", "image_pixel_limit_exceeded",
   "ocr_empty_result",
   "pdf_extraction_failed",
   "pdf_ocr_render_failed",
@@ -1212,6 +1215,24 @@ function fileErrorDescription(
   detail: Record<string, unknown> | null,
   locale: Locale,
 ): string {
+  if (["source_empty", "submission_source_empty"].includes(code ?? "") || /file is empty|contains no usable text|no extractable text/i.test(message)) {
+    return tx(locale, "文件为空或只含空白字符，没有可识别正文。请打开文件确认内容，重新保存后上传；重复提交同一空文件无法解决。", "The file is empty or contains only whitespace, with no readable content. Open it, check the content, and save it again before uploading; retrying the same empty file will not help.");
+  }
+  if (code === "pdf_encrypted") {
+    return tx(locale, "PDF 已加密或需要密码。请在本地解锁并另存为无需密码的 PDF 后上传。", "This PDF is encrypted or password-protected. Unlock it locally and save a PDF that opens without a password before uploading.");
+  }
+  if (["pdf_invalid", "pdf_extraction_failed"].includes(code ?? "")) {
+    return tx(locale, "PDF 损坏或文件内容并非 PDF。请确认能在本地打开，再重新导出为 PDF；只修改扩展名无效。", "The PDF is damaged or its contents are not a PDF. Check that it opens locally and export it as PDF again; renaming the extension does not convert it.");
+  }
+  if (code === "pdf_page_out_of_range") {
+    return tx(locale, "所选页码超出 PDF 范围。请使用文件页序号，检查起止页后重试。", "The selected page is outside the PDF. Check the start and end positions using the file's page order, then retry.");
+  }
+  if (["image_invalid", "image_format_mismatch", "image_mode_unsupported", "image_multiframe_unsupported"].includes(code ?? "")) {
+    return tx(locale, "图片损坏、内容与扩展名不符，或使用了不支持的图片模式。请确认能在本地打开，重新导出为单张 JPG 或 PNG 后上传；不要只修改扩展名。", "The image is damaged, its contents do not match its extension, or its image mode is unsupported. Check that it opens locally and export it as a single JPG or PNG; do not just rename the extension.");
+  }
+  if (code === "image_pixel_limit_exceeded") {
+    return tx(locale, "图片像素尺寸超过处理上限。请缩小图片尺寸并保留文字清晰度，再上传。", "The image dimensions exceed the processing limit. Reduce its pixel dimensions while keeping the text readable, then upload again.");
+  }
   if (code === "source_too_large") {
     const limit = formatByteLimit(detail?.max_bytes);
     return limit
