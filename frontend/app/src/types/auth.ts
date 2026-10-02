@@ -6,6 +6,7 @@ export interface User {
   email: string;
   role: UserRole;
   is_active: boolean;
+  is_read_only?: boolean;
   created_at: number;
 }
 

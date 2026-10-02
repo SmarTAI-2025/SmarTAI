@@ -31,6 +31,7 @@ from backend.db.models import (
 from backend.db.session import session_scope
 from backend.analytics.admin_usage import metrics_catalog, query_usage_metrics
 from backend.models import User
+from backend.services.admin_transactions import administrator_transaction, protect_administrator
 from backend.services.email_sender import get_email_sender
 from backend.services.password_reset import PasswordResetError, request_password_reset
 
@@ -83,6 +84,7 @@ def _user_public(record: UserRecord) -> dict[str, Any]:
         "email": record.email or "",
         "role": record.role,
         "is_active": record.is_active,
+        "is_read_only": record.is_read_only,
         "created_at": record.created_at,
         "updated_at": record.updated_at,
     }
@@ -205,38 +207,18 @@ def admin_set_active(
     """Suspend or restore an account while invalidating its old sessions."""
     key = _idempotency_key(idempotency_key)
     request_hash = _request_hash("user_status", user_id, req.model_dump())
-    with session_scope() as session:
-        if session.get_bind().dialect.name == "sqlite":
-            # SQLite has no row-level FOR UPDATE. BEGIN IMMEDIATE serializes
-            # the count + state transition so two admins cannot both disable
-            # the final active administrator in separate workers.
-            session.execute(text("BEGIN IMMEDIATE"))
+    with administrator_transaction(current) as session:
         replay = _replay_or_conflict(session, actor_id=current.id, idempotency_key=key, request_hash=request_hash)
         if replay is not None:
             return replay
         record = session.scalar(select(UserRecord).where(UserRecord.id == user_id).with_for_update())
         if record is None:
             raise HTTPException(status.HTTP_404_NOT_FOUND, detail="User not found")
-        if record.id == current.id and not req.is_active:
-            raise HTTPException(status.HTTP_409_CONFLICT, detail="An administrator cannot deactivate their own account")
-        if not req.is_active and record.role == "admin":
-            # Lock the complete active-admin set before counting. This keeps
-            # two concurrent requests from both observing two admins and
-            # deactivating the last pair on PostgreSQL.
-            active_admin_ids = session.scalars(
-                select(UserRecord.id)
-                .where(UserRecord.role == "admin", UserRecord.is_active.is_(True))
-                .with_for_update()
-            ).all()
-            if len(active_admin_ids) <= 1:
-                raise HTTPException(status.HTTP_409_CONFLICT, detail="At least one active administrator is required")
-        # Legacy callers that omit both reason and idempotency key retain the
-        # old safety response. New admin clients send a reason and can suspend
-        # a teacher without deleting their courses.
-        if req.reason == "manual_review" and not req.is_active and record.role == "teacher" and "Idempotency-Key" not in request.headers:
-            owns_course = session.scalar(select(CourseRecord.id).where(CourseRecord.teacher_id == user_id))
-            if owns_course is not None:
-                raise HTTPException(status.HTTP_409_CONFLICT, detail="A reason is required to deactivate a course owner")
+        if not req.is_active:
+            protect_administrator(session, current.id, record)
+        from backend.db.models import AccountClosureRecord
+        if session.scalar(select(AccountClosureRecord.id).where(AccountClosureRecord.user_id == user_id)):
+            raise HTTPException(409, detail="Account closure is in progress")
         before = _user_public(record)
         now = time.time()
         record.is_active = req.is_active
@@ -271,11 +253,11 @@ def admin_revoke_sessions(
 ):
     key = _idempotency_key(idempotency_key)
     request_hash = _request_hash("revoke_sessions", user_id, req.model_dump())
-    with session_scope() as session:
+    with administrator_transaction(current) as session:
         replay = _replay_or_conflict(session, actor_id=current.id, idempotency_key=key, request_hash=request_hash)
         if replay is not None:
             return replay
-        record = session.get(UserRecord, user_id)
+        record = session.scalar(select(UserRecord).where(UserRecord.id == user_id).with_for_update())
         if record is None:
             raise HTTPException(status.HTTP_404_NOT_FOUND, detail="User not found")
         now = time.time()
@@ -299,23 +281,31 @@ def admin_password_reset_assistance(
     """Ask the existing one-time reset flow to email the account address."""
     key = _idempotency_key(idempotency_key)
     request_hash = _request_hash("password_reset_assistance", user_id, req.model_dump())
-    with session_scope() as session:
+    with administrator_transaction(current) as session:
         replay = _replay_or_conflict(session, actor_id=current.id, idempotency_key=key, request_hash=request_hash)
         if replay is not None:
             return replay
-        record = session.get(UserRecord, user_id)
+        record = session.scalar(select(UserRecord).where(UserRecord.id == user_id).with_for_update())
         if record is None:
-            raise HTTPException(status.HTTP_404_NOT_FOUND, detail="User not found")
-        if not record.email:
-            raise HTTPException(status.HTTP_409_CONFLICT, detail="The account has no verified email address")
+            raise HTTPException(404, detail="User not found")
+        if not record.email or not record.is_active:
+            raise HTTPException(409, detail="An active account with an email is required")
         email = record.email
+        # Reserve BEFORE network I/O. Retries/crashes never automatically send
+        # a second email; a new explicit request remains subject to cooldown.
+        pending = {"status": "reset_request_recorded", "user_id": user_id, "delivery": "unconfirmed"}
+        _audit(session, actor_id=current.id, target_user_id=user_id,
+            action="password_reset_assistance_requested", reason=req.reason, note=req.note,
+            idempotency_key=key, request_hash=request_hash, before_state=None, after_state=None, response_body=pending)
     try:
         result = request_password_reset(email=email, source_ip=request.client.host if request.client else None, sender=get_email_sender())
-    except PasswordResetError as exc:
-        raise HTTPException(exc.status_code, detail={"code": exc.code}) from exc
-    response_body = {"status": "reset_link_requested", "user_id": user_id, "delivery": result.get("status")}
+        response_body = {"status": "reset_link_requested", "user_id": user_id, "delivery": result.get("status")}
+    except PasswordResetError:
+        response_body = {"status": "reset_request_recorded", "user_id": user_id, "delivery": "unconfirmed"}
     with session_scope() as session:
-        _audit(session, actor_id=current.id, target_user_id=user_id, action="password_reset_assistance_requested", reason=req.reason, note=req.note, idempotency_key=key, request_hash=request_hash, before_state=None, after_state=None, response_body=response_body)
+        row = session.scalar(select(AdminAuditLogRecord).where(AdminAuditLogRecord.actor_id == current.id, AdminAuditLogRecord.idempotency_key == key).with_for_update())
+        row.response_body = response_body
+        row.result = "requested" if response_body["status"] == "reset_link_requested" else "unconfirmed"
     return response_body
 
 

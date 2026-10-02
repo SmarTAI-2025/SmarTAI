@@ -22,7 +22,7 @@ from typing import Optional
 
 import bcrypt
 import jwt
-from fastapi import Depends, HTTPException, status
+from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import OAuth2PasswordBearer
 
 from backend.config import settings
@@ -184,10 +184,13 @@ def get_optional_user(
     return user
 
 
-def get_current_user(user: Optional[User] = Depends(get_optional_user)) -> User:
+def get_current_user(request: Request, user: Optional[User] = Depends(get_optional_user)) -> User:
     """Required-auth dependency. Used by all new (auth/users/courses/assignments) endpoints."""
     if user is None:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, detail="Authentication required")
+    if (user.is_read_only and request.method not in {"GET", "HEAD", "OPTIONS"}
+            and request.url.path not in {"/auth/logout", "/auth/password-change", "/api/auth/logout", "/api/auth/password-change"}):
+        raise HTTPException(status.HTTP_403_FORBIDDEN, detail={"code": "account_read_only", "message": "账号当前为只读，可浏览历史批改任务，暂不能进行此操作。"})
     return user
 
 
@@ -204,6 +207,6 @@ def require_student(user: User = Depends(get_current_user)) -> User:
 
 
 def require_admin(user: User = Depends(get_current_user)) -> User:
-    if user.role != "admin":
+    if user.role != "admin" or user.is_read_only or user.id.startswith("demo_"):
         raise HTTPException(status.HTTP_403_FORBIDDEN, detail="Admin access required")
     return user

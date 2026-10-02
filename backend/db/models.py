@@ -56,6 +56,7 @@ class UserRecord(Base):
     updated_at: Mapped[float] = mapped_column(
         Float, nullable=False, default=time.time, onupdate=time.time
     )
+    is_read_only: Mapped[bool] = mapped_column(default=False, server_default=text("false"), nullable=False)
     auth_invalid_before: Mapped[float | None] = mapped_column(Float, nullable=True)
     auth_version: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default=text("0"))
 
@@ -1410,3 +1411,23 @@ class AssignmentTagRecord(Base):
         ForeignKey("tags.id", ondelete="CASCADE"), primary_key=True, index=True
     )
     assigned_at: Mapped[float] = mapped_column(Float, nullable=False, default=time.time)
+
+
+class AccountClosureRecord(Base):
+    """A durable, restart-safe request; retain user until storage cleanup finishes."""
+    __tablename__ = "account_closures"
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    user_id: Mapped[str] = mapped_column(String(64), unique=True, nullable=False)
+    mode: Mapped[str] = mapped_column(String(32), nullable=False)
+    status: Mapped[str] = mapped_column(String(32), default="pending", nullable=False)
+    created_at: Mapped[float] = mapped_column(Float, nullable=False)
+    completed_at: Mapped[float | None] = mapped_column(Float, nullable=True)
+    lease_token: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    lease_until: Mapped[float | None] = mapped_column(Float, nullable=True)
+    error_code: Mapped[str | None] = mapped_column(String(80), nullable=True)
+
+
+class BlockedRegistrationEmailRecord(Base):
+    __tablename__ = "blocked_registration_emails"
+    normalized_email: Mapped[str] = mapped_column(String(320), primary_key=True)
+    created_at: Mapped[float] = mapped_column(Float, nullable=False)

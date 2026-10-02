@@ -368,6 +368,7 @@ def _deliver_password_reset(
                 return
             user_id = user.id
             username = user.username
+            admin_account = user.role == "admin"
 
             row = PasswordResetRequestRecord(
                 id=request_id,
@@ -385,7 +386,14 @@ def _deliver_password_reset(
         assert user_id is not None and username is not None
         delivery_stage = "smtp"
         try:
-            subject, text_body, html_body = password_reset_message(username, raw_token)
+            if admin_account:
+                import os
+                origin = os.getenv("SMARTAI_ADMIN_FRONTEND_ORIGIN", "").strip()
+                if not origin:
+                    raise ValueError("Private administrator origin is required")
+                subject, text_body, html_body = password_reset_message(username, raw_token, origin=origin)
+            else:
+                subject, text_body, html_body = password_reset_message(username, raw_token)
             sender.send(normalized_email, subject, text_body, html_body)
         except Exception:
             logger.warning(

@@ -67,7 +67,9 @@ describe("AdminUsersPage", () => {
     renderPage();
     expect(await screen.findByText("alice")).toBeInTheDocument();
     expect(screen.getByText("bob")).toBeInTheDocument();
-    expect(screen.getAllByRole("button", { name: /停用|启用/ })).toHaveLength(2);
+    expect(screen.getAllByRole("link", { name: "管理账号" })).toHaveLength(2);
+    expect(screen.getByText("正常使用")).toBeInTheDocument();
+    expect(screen.getByText("禁止登录")).toBeInTheDocument();
   });
 
   it("filters by role via the select", async () => {

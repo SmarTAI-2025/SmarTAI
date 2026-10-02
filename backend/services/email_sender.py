@@ -21,8 +21,8 @@ class EmailDeliveryError(RuntimeError):
     code = "registration_email_delivery_failed"
 
 
-def _frontend_origin() -> str:
-    parts = urlsplit(settings.public_frontend_url.strip())
+def _frontend_origin(origin: str | None = None) -> str:
+    parts = urlsplit((settings.public_frontend_url if origin is None else origin).strip())
     try:
         port = parts.port
     except ValueError as exc:
@@ -73,8 +73,8 @@ def verification_message(username: str, token: str) -> tuple[str, str, str]:
     return subject, text, html
 
 
-def password_reset_message(username: str, token: str) -> tuple[str, str, str]:
-    link = f"{_frontend_origin()}/reset-password#token={token}"
+def password_reset_message(username: str, token: str, *, origin: str | None = None) -> tuple[str, str, str]:
+    link = f"{_frontend_origin(origin)}/reset-password#token={token}"
     html_username = escape(username)
     subject = "SmarTAI 密码重置"
     text = (

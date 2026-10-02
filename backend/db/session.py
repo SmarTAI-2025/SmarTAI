@@ -195,3 +195,22 @@ def database_ready() -> bool:
         return True
     except Exception:
         return False
+
+
+def admin_schema_ready() -> bool:
+    """Readiness must prove the migration graph, not merely SELECT 1."""
+    try:
+        from alembic.config import Config
+        from alembic.script import ScriptDirectory
+        cfg = Config(str(Path(__file__).resolve().parents[2] / "alembic.ini"))
+        cfg.set_main_option("script_location", str(Path(__file__).parent / "migrations"))
+        expected = set(ScriptDirectory.from_config(cfg).get_heads())
+        engine = get_engine()
+        with engine.connect() as connection:
+            actual = set(connection.execute(text("SELECT version_num FROM alembic_version")).scalars())
+            connection.execute(text("SELECT auth_version, is_read_only FROM users LIMIT 0"))
+            connection.execute(text("SELECT id FROM admin_audit_logs LIMIT 0"))
+            connection.execute(text("SELECT id FROM admin_usage_events LIMIT 0"))
+        return len(expected) == 1 and actual == expected
+    except Exception:
+        return False

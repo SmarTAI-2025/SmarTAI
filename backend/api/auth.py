@@ -8,7 +8,7 @@ from fastapi.responses import JSONResponse
 from fastapi.routing import APIRoute
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from backend.auth import get_current_user
+from backend.auth import get_current_user, hash_password, verify_password
 from backend.config import settings
 from backend.db.auth_repository import (
     authenticate_and_create_session,
@@ -16,6 +16,12 @@ from backend.db.auth_repository import (
     rotate_refresh_session,
 )
 from backend.models import User
+from backend.db.auth_repository import user_auth_lock, revoke_all_refresh_sessions
+from backend.db.models import UserRecord, PasswordResetRequestRecord, AdminAuditLogRecord
+from backend.db.session import session_scope
+from sqlalchemy import select
+import time
+import uuid
 from backend.services.email_registration import (
     RegistrationError,
     request_registration,
@@ -109,9 +115,13 @@ class PasswordResetConfirmRequest(BaseModel):
     new_password: str = Field(min_length=8, max_length=128)
 
 
-def _set_refresh_cookie(response: Response, raw: str) -> None:
+def _cookie_name(request: Request) -> str:
+    return "smartai_admin_refresh" if getattr(request.app.state, "private_admin", False) else settings.refresh_cookie_name
+
+
+def _set_refresh_cookie(response: Response, raw: str, request: Request) -> None:
     response.set_cookie(
-        settings.refresh_cookie_name,
+        _cookie_name(request),
         raw,
         httponly=True,
         secure=settings.refresh_cookie_secure,
@@ -121,9 +131,9 @@ def _set_refresh_cookie(response: Response, raw: str) -> None:
     )
 
 
-def _delete_refresh_cookie(response: Response) -> None:
+def _delete_refresh_cookie(response: Response, request: Request) -> None:
     response.delete_cookie(
-        settings.refresh_cookie_name,
+        _cookie_name(request),
         path="/",
         secure=settings.refresh_cookie_secure,
         httponly=True,
@@ -191,17 +201,17 @@ def request_password_reset_email(
 
 
 @router.post("/password-reset/confirm")
-def confirm_password_reset_email(req: PasswordResetConfirmRequest, response: Response):
+def confirm_password_reset_email(req: PasswordResetConfirmRequest, response: Response, request: Request):
     try:
         result = confirm_password_reset(req.token, req.new_password)
     except PasswordResetError as exc:
         raise _password_reset_error(exc) from exc
-    _delete_refresh_cookie(response)
+    _delete_refresh_cookie(response, request)
     return result
 
 
 @router.post("/login")
-def login(req: LoginRequest, response: Response):
+def login(req: LoginRequest, response: Response, request: Request):
     authenticated = authenticate_and_create_session(
         req.username,
         req.password,
@@ -210,30 +220,76 @@ def login(req: LoginRequest, response: Response):
     if authenticated is None:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, detail="Invalid username or password")
     refresh, user, access = authenticated
-    _set_refresh_cookie(response, refresh)
+    if getattr(request.app.state, "private_admin", False) and (user.role != "admin" or user.is_read_only):
+        revoke_refresh_session(refresh)
+        raise HTTPException(403, detail="Admin access required")
+    _set_refresh_cookie(response, refresh, request)
     return {"token": access, "user": user.public()}
 
 
 @router.post("/refresh")
 def refresh(request: Request, response: Response):
-    raw = request.cookies.get(settings.refresh_cookie_name)
+    raw = request.cookies.get(_cookie_name(request))
     if not raw:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, detail="Refresh session missing")
     rotated = rotate_refresh_session(raw, settings.refresh_session_days)
     if rotated is None:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, detail="Refresh session expired or revoked")
     new_raw, user, access = rotated
-    _set_refresh_cookie(response, new_raw)
+    if getattr(request.app.state, "private_admin", False) and (user.role != "admin" or user.is_read_only):
+        revoke_refresh_session(new_raw)
+        raise HTTPException(403, detail="Admin access required")
+    _set_refresh_cookie(response, new_raw, request)
     return {"token": access, "user": user.public()}
 
 
 @router.post("/logout")
 def logout(request: Request, response: Response, current: User = Depends(get_current_user)):
-    revoke_refresh_session(request.cookies.get(settings.refresh_cookie_name))
-    _delete_refresh_cookie(response)
+    revoke_refresh_session(request.cookies.get(_cookie_name(request)))
+    _delete_refresh_cookie(response, request)
     return {"status": "success"}
 
 
 @router.get("/me")
 def me(current: User = Depends(get_current_user)):
     return current.public()
+
+
+class PasswordChangeRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    current_password: str = Field(min_length=1, max_length=128)
+    new_password: str = Field(min_length=8, max_length=128)
+
+
+@router.post("/password-change")
+def change_password(req: PasswordChangeRequest, response: Response, request: Request, current: User = Depends(get_current_user)):
+    with user_auth_lock(current.id):
+        with session_scope() as session:
+            user = session.scalar(select(UserRecord).where(UserRecord.id == current.id).with_for_update())
+            if (user is None or not user.is_active or user.auth_version != current.auth_version
+                    or user.auth_invalid_before != current.auth_invalid_before):
+                raise HTTPException(401, detail="Sign in again")
+            if not verify_password(req.current_password, user.password_hash):
+                raise HTTPException(400, detail={"code": "current_password_incorrect"})
+            if req.current_password == req.new_password:
+                raise HTTPException(400, detail={"code": "new_password_unchanged"})
+            now = time.time()
+            user.password_hash = hash_password(req.new_password)
+            user.auth_version += 1
+            user.auth_invalid_before = now
+            user.updated_at = now
+            revoke_all_refresh_sessions(session, user.id, now=now)
+            for row in session.scalars(select(PasswordResetRequestRecord).where(
+                PasswordResetRequestRecord.user_id == user.id,
+                PasswordResetRequestRecord.consumed_at.is_(None),
+                PasswordResetRequestRecord.superseded_at.is_(None),
+            ).with_for_update()):
+                row.superseded_at = now
+            if user.role == "admin":
+                action_id = uuid.uuid4().hex
+                session.add(AdminAuditLogRecord(id=action_id, actor_id=user.id,
+                    target_user_id=user.id, action="own_password_changed", reason="account_security",
+                    note="", idempotency_key=action_id, request_hash="credential_not_recorded",
+                    result="success", created_at=now))
+    _delete_refresh_cookie(response, request)
+    return {"status": "password_changed", "sign_in_required": True}

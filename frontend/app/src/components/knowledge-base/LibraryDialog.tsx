@@ -28,8 +28,10 @@ export function LibraryDialog({
       : null;
     const previousOverflow = document.body.style.overflow;
     document.body.style.overflow = "hidden";
-    window.requestAnimationFrame(() => {
-      dialogRef.current?.querySelector<HTMLElement>("input, select, button")?.focus();
+    const focusFrame = window.requestAnimationFrame(() => {
+      // Do not steal focus if a user already clicked a field before this frame.
+      if (dialogRef.current?.contains(document.activeElement)) return;
+      dialogRef.current?.querySelector<HTMLElement>("input, textarea, select, button")?.focus();
     });
 
     function handleKeyDown(event: KeyboardEvent) {
@@ -56,6 +58,7 @@ export function LibraryDialog({
 
     document.addEventListener("keydown", handleKeyDown);
     return () => {
+      window.cancelAnimationFrame(focusFrame);
       document.body.style.overflow = previousOverflow;
       document.removeEventListener("keydown", handleKeyDown);
       if (previouslyFocused?.isConnected) previouslyFocused.focus();

@@ -66,6 +66,7 @@ def _user_from_record(record: UserRecord) -> User:
         password_hash=record.password_hash,
         created_at=record.created_at,
         is_active=record.is_active,
+        is_read_only=record.is_read_only,
         auth_invalid_before=record.auth_invalid_before,
         auth_version=record.auth_version,
     )
@@ -84,6 +85,9 @@ def create_invite(*, invited_by: str, email: str | None, role: str, course_id: s
 
 def _ensure_unique_identity(session, *, username: str, email: str) -> None:
     normalized_email = _canonical_email(email)
+    from backend.db.models import BlockedRegistrationEmailRecord
+    if normalized_email and session.get(BlockedRegistrationEmailRecord, normalized_email) is not None:
+        raise AuthRepositoryError("Registration unavailable")
     if session.scalar(select(UserRecord).where(UserRecord.username == username)) is not None:
         raise AuthRepositoryError("Username already exists")
     if normalized_email and session.scalar(
