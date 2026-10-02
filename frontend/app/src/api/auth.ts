@@ -29,6 +29,17 @@ export async function requestRegistration(request: EmailRegistrationRequest): Pr
   return parseRegistrationResponse(response);
 }
 
+export async function checkRegistrationUsername(username: string, signal?: AbortSignal): Promise<boolean> {
+  const response = await postJSON<unknown, { username: string }>(
+    "/auth/register/username-check",
+    { username },
+    { ...PUBLIC_AUTH_REQUEST_CONFIG, signal },
+  );
+  const value = exactRecord(response, ["available"]);
+  if (!value || typeof value.available !== "boolean") throw invalidPublicAuthResponse();
+  return value.available;
+}
+
 export async function resendRegistration(requestId: string): Promise<EmailRegistrationResponse> {
   const response = await postJSON<unknown, { request_id: string }>(
     "/auth/register/resend",

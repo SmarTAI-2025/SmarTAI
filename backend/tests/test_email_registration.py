@@ -186,7 +186,7 @@ def _seed_user(*, user_id: str, username: str, email: str) -> None:
         )
 
 
-def test_request_does_not_enumerate_existing_username_before_email_proof(monkeypatch):
+def test_request_rejects_existing_username_before_sending_mail(monkeypatch):
     _seed_user(
         user_id="u_existing_username",
         username="already-taken",
@@ -205,6 +205,11 @@ def test_request_does_not_enumerate_existing_username_before_email_proof(monkeyp
             "password": "long-enough-password",
         },
     )
+    assert existing.status_code == 409
+    assert existing.json() == {"detail": {"code": "registration_username_taken"}}
+    assert sender.messages == []
+    with session_scope() as session:
+        assert session.query(EmailVerificationRequestRecord).count() == 0
     available = client.post(
         "/auth/register/request",
         json={
@@ -214,17 +219,9 @@ def test_request_does_not_enumerate_existing_username_before_email_proof(monkeyp
         },
     )
 
-    assert existing.status_code == available.status_code == 202
-    assert set(existing.json()) == set(available.json())
-    assert existing.json()["status"] == available.json()["status"] == "verification_required"
-    assert existing.json()["expires_in_seconds"] == available.json()["expires_in_seconds"]
-    assert existing.json()["resend_after_seconds"] == available.json()["resend_after_seconds"]
-    assert len(sender.messages) == 2
-
-    collision_token = sender.messages[0]["text"].split("#token=", 1)[1].split()[0]
-    verified = client.post("/auth/register/verify", json={"token": collision_token})
-    assert verified.status_code == 409
-    assert verified.json() == {"detail": {"code": "registration_unavailable"}}
+    assert available.status_code == 202
+    assert available.json()["status"] == "verification_required"
+    assert len(sender.messages) == 1
 
 
 def test_request_canonicalizes_existing_email_and_only_rejects_after_proof(monkeypatch):

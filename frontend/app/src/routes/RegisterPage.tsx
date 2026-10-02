@@ -1,7 +1,10 @@
 import { Loader2, MailCheck } from "lucide-react";
-import { useRef, useState, type FormEvent } from "react";
+import { useEffect, useRef, useState, type FormEvent } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { useRequestRegistration } from "@/api/hooks";
+import { checkRegistrationUsername } from "@/api/auth";
+import { getAPIErrorCode } from "@/api/client";
+import { RegistrationDomainDialog } from "@/components/auth/RegistrationDomainDialog";
 import { AuthFlowHeader } from "@/components/auth/AuthFlowHeader";
 import { AuthCard, AuthError, AuthFrame, AuthPasswordInput } from "@/components/auth/AuthFrame";
 import { Button } from "@/components/ui/Button";
@@ -26,7 +29,37 @@ export function RegisterPage() {
   const [password, setPassword] = useState("");
   const [confirmation, setConfirmation] = useState("");
   const [formError, setFormError] = useState<string | null>(null);
+  const [domainRejected, setDomainRejected] = useState(false);
+  const [usernameCheck, setUsernameCheck] = useState<"idle" | "checking" | "available" | "taken" | "failed">("idle");
+  const checkVersion = useRef(0);
+  const checkAbort = useRef<AbortController | null>(null);
+  const checkedUsername = useRef("");
+  const checkRetryAt = useRef(0);
+  useEffect(() => () => {
+    checkVersion.current += 1;
+    checkAbort.current?.abort();
+  }, []);
   const steps = zh ? ["填写信息", "验证邮箱", "登录使用"] : ["Account details", "Verify email", "Sign in"];
+
+  async function checkUsername() {
+    const value = username.trim();
+    if (value.length < 3 || value.length > 64 || submitting.current || value === checkedUsername.current || Date.now() < checkRetryAt.current) return;
+    checkedUsername.current = value;
+    checkAbort.current?.abort();
+    const controller = new AbortController();
+    checkAbort.current = controller;
+    const version = ++checkVersion.current;
+    setUsernameCheck("checking");
+    try {
+      const available = await checkRegistrationUsername(value, controller.signal);
+      if (version === checkVersion.current) setUsernameCheck(available ? "available" : "taken");
+    } catch (error) {
+      if (version !== checkVersion.current) return;
+      checkedUsername.current = "";
+      checkRetryAt.current = Date.now() + rateLimitDelay(error, "registration_rate_limited") * 1000;
+      setUsernameCheck("failed");
+    }
+  }
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -45,6 +78,9 @@ export function RegisterPage() {
     }
 
     submitting.current = true;
+    checkVersion.current += 1;
+    checkAbort.current?.abort();
+    setUsernameCheck("idle");
     try {
       const response = await requestRegistration.mutateAsync({
         username: normalizedUsername,
@@ -64,7 +100,13 @@ export function RegisterPage() {
       cooldown.start(rateLimitDelay(error, "registration_rate_limited"));
       setPassword("");
       setConfirmation("");
-      setFormError(localizedRegistrationRequestError(error, locale));
+      const code = getAPIErrorCode(error);
+      if (code === "registration_email_domain_not_allowed") {
+        setDomainRejected(true);
+      } else {
+        setFormError(localizedRegistrationRequestError(error, locale));
+        if (code === "registration_username_taken") setUsernameCheck("taken");
+      }
     } finally {
       submitting.current = false;
     }
@@ -98,8 +140,24 @@ export function RegisterPage() {
               placeholder={zh ? "至少 3 个字符" : "At least 3 characters"}
               required
               value={username}
-              onChange={(event) => setUsername(event.target.value)}
+              aria-describedby="registration-username-status"
+              aria-invalid={usernameCheck === "taken" || undefined}
+              onBlur={() => void checkUsername()}
+              onChange={(event) => {
+                checkVersion.current += 1;
+                checkAbort.current?.abort();
+                checkedUsername.current = "";
+                setUsernameCheck("idle");
+                setFormError(null);
+                setUsername(event.target.value);
+              }}
             />
+            <p id="registration-username-status" aria-live="polite" className={`mt-1 text-xs leading-5 ${usernameCheck === "taken" ? "text-danger" : "text-muted-foreground"}`}>
+              {usernameCheck === "checking" ? (zh ? "正在检查用户名…" : "Checking username…")
+                : usernameCheck === "taken" ? (zh ? "该用户名已被使用，请更换" : "This username is already in use. Choose another.")
+                  : usernameCheck === "available" ? (zh ? "当前用户名可用，提交时将再次确认。" : "Currently available; checked again on submission.")
+                    : usernameCheck === "failed" ? (zh ? "暂时无法检查用户名，可继续填写并提交重试。" : "Unable to check now. Continue and retry on submission.") : null}
+            </p>
           </Field>
           <Field label={zh ? "学校邮箱" : "School email"}>
             <Input
@@ -108,17 +166,12 @@ export function RegisterPage() {
               autoComplete="email"
               disabled={requestRegistration.isPending}
               maxLength={254}
-              placeholder="name@ustc.edu.cn"
+              placeholder={zh ? "输入学校邮箱" : "Enter school email"}
               required
               type="email"
               value={email}
               onChange={(event) => setEmail(event.target.value)}
             />
-            <p className="mt-1.5 text-xs leading-5 text-muted-foreground">
-              {zh
-                ? "首期支持 ustc.edu.cn 及其点边界子域名；最终资格以服务端校验为准。"
-                : "The first cohort uses ustc.edu.cn and its dot-boundary subdomains; the server makes the final eligibility decision."}
-            </p>
           </Field>
           <div className="grid gap-3.5 sm:grid-cols-2">
             <Field label={zh ? "设置密码" : "Password"}>
@@ -169,6 +222,7 @@ export function RegisterPage() {
           </Link>
         </div>
       </AuthCard>
+      {domainRejected ? <RegistrationDomainDialog zh={zh} onClose={() => setDomainRejected(false)} /> : null}
     </AuthFrame>
   );
 }

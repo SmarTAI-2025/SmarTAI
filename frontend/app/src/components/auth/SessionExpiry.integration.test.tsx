@@ -55,7 +55,7 @@ afterEach(() => {
 });
 
 describe("live session expiry", () => {
-  it("leaves cached authenticated UI, clears private cache, explains expiry and returns after signing in", async () => {
+  it.each(["username", "email"])("leaves cached authenticated UI and returns to the full path after %s sign-in", async (mode) => {
     const calls: string[] = [];
     apiClient.defaults.adapter = async (config) => {
       calls.push(config.url ?? "");
@@ -72,7 +72,8 @@ describe("live session expiry", () => {
     expect(calls).toEqual(["/tasks/", "/auth/refresh"]);
 
     const user = userEvent.setup();
-    await user.type(screen.getByPlaceholderText("输入用户名"), "test");
+    if (mode === "email") await user.click(screen.getByRole("radio", { name: "邮箱登录" }));
+    await user.type(screen.getByPlaceholderText(mode === "email" ? "输入邮箱" : "输入用户名"), mode === "email" ? "test@ustc.edu.cn" : "test");
     await user.type(screen.getByPlaceholderText("输入密码"), "test-password");
     await user.click(screen.getByRole("button", { name: "登录" }));
     expect(await screen.findByText(/Signed-in history/)).toHaveTextContent("/history?q=algebra#results");
