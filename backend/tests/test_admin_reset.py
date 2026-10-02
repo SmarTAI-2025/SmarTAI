@@ -51,6 +51,10 @@ def scope(tmp_path, request):
         connection.execute(PasswordResetRequestRecord.__table__.insert().values(id="reset", user_id="test-owner", token_digest="c" * 64, expires_at=9, resend_available_at=2))
         connection.execute(AccountClosureRecord.__table__.insert().values(id="closure", user_id="test-owner", mode="delete", created_at=1))
         connection.execute(AdminAuditLogRecord.__table__.insert().values(id="audit", actor_id="test-owner", target_user_id="test-owner", action="fixture", reason="fixture", idempotency_key="fixture", request_hash="d" * 64))
+    from backend.db.business_config_models import BusinessConfigRecord, UserStorageConfigRecord
+    with engine.begin() as connection:
+        connection.execute(BusinessConfigRecord.__table__.insert().values(id="global", overrides={"allowed_email_domains": "blocked.invalid", "knowledge_storage_quota_bytes": 0}, version=3, registration_rules_managed=True, updated_at=1))
+        connection.execute(UserStorageConfigRecord.__table__.insert().values(owner_id="test-owner", overrides={"unfinished_source_quota_bytes": 12}, version=1, updated_at=1))
     uploads = tmp_path / "uploads"
     uploads.mkdir()
     (uploads / reset.SENTINEL).write_text(json.dumps(reset.SENTINEL_CONTENT))
@@ -77,6 +81,8 @@ def test_preview_is_read_only_includes_dynamic_tables_and_no_identity(scope):
     preview = reset.preview_reset(scope)
     assert preview["tables"]["users"] == 1
     assert preview["tables"]["blocked_registration_emails"] == 1
+    assert preview["tables"]["business_configuration"] == 1
+    assert preview["tables"]["user_storage_configuration"] == 1
     assert {"workflow_operations", "workflow_source_items", "account_closures"} <= set(preview["tables"])
     assert preview["storage"]["files"] == 2
     assert not scope.maintenance_dir.exists()
@@ -96,6 +102,14 @@ def test_reset_clears_every_table_orphan_and_releases_identity(scope):
             assert connection.execute(text(f'SELECT count(*) FROM "{table.name}"')).scalar_one() == 0
         assert connection.execute(text("SELECT version_num FROM alembic_version")).scalar_one() == "test-reset-head"
         connection.execute(text("INSERT INTO users (id, username, email, role, password_hash, is_active, auth_version, created_at, updated_at) VALUES ('new-user', 'reusable-name', 'reusable@example.invalid', 'teacher', 'new-fake-hash', true, 0, 1, 1)"))
+    from sqlalchemy.orm import Session
+    from backend.services.business_config import read_business_config
+    from backend.config import settings
+    with Session(scope.engine) as session:
+        config = read_business_config(session, "new-user")
+        assert config.global_version == config.user_version == 0
+        assert config.values["allowed_email_domains"] == settings.allowed_email_domains
+        assert not config.registration_rules_managed
     assert list(scope.local_roots[0].iterdir()) == [scope.local_roots[0] / reset.SENTINEL]
     assert not (scope.maintenance_dir / "active-reset.json").exists()
     serialized = json.dumps(receipt)

@@ -17,6 +17,7 @@ from backend.config import settings
 from backend.db.auth_repository import AuthRepositoryError, _ensure_unique_identity, _persist_user
 from backend.db.models import EmailVerificationRequestRecord, UserRecord
 from backend.db.session import session_scope
+from backend.services.business_config import read_business_config
 from backend.services.email_sender import EmailSender, get_email_sender, verification_message
 
 
@@ -182,8 +183,6 @@ def _validate_identity(username: str, email: str, password: str) -> tuple[str, s
         normalized_email = normalize_email(email)
     except ValueError as exc:
         raise RegistrationError("registration_unavailable") from exc
-    if not email_domain_allowed(normalized_email, settings.allowed_email_domains):
-        raise RegistrationError("registration_email_domain_not_allowed")
     if not 8 <= len(password) <= 128:
         raise RegistrationError("registration_unavailable")
     return normalized_username, normalized_email
@@ -226,6 +225,9 @@ def _request_registration_locked(
                 source_ip=source_ip,
                 normalized_username=normalized_username,
             )
+            config = read_business_config(session).values
+            if not email_domain_allowed(normalized_email, config["allowed_email_domains"]):
+                raise RegistrationError("registration_email_domain_not_allowed")
             window_start = now - 3600
             email_count = session.scalar(
                 select(func.count(EmailVerificationRequestRecord.id)).where(
@@ -241,7 +243,7 @@ def _request_registration_locked(
                         EmailVerificationRequestRecord.created_at >= window_start,
                     )
                 ) or 0
-            if email_count >= settings.email_verification_hourly_email_limit or ip_count >= settings.email_verification_hourly_ip_limit:
+            if email_count >= config["email_verification_hourly_email_limit"] or ip_count >= config["email_verification_hourly_ip_limit"]:
                 raise RegistrationError("registration_rate_limited", retry_after=3600)
             active = session.scalars(
                 select(EmailVerificationRequestRecord).where(
@@ -271,7 +273,7 @@ def _request_registration_locked(
                 token_digest=digest_token(raw_token),
                 created_at=now,
                 expires_at=now + settings.email_verification_expiry_seconds,
-                resend_available_at=now + settings.email_verification_resend_seconds,
+                resend_available_at=now + config["email_verification_resend_seconds"],
                 delivery_status="pending",
                 source_ip=source_ip,
             )
@@ -307,7 +309,7 @@ def _request_registration_locked(
         "status": "verification_required",
         "request_id": request_id,
         "expires_in_seconds": settings.email_verification_expiry_seconds,
-        "resend_after_seconds": settings.email_verification_resend_seconds,
+        "resend_after_seconds": config["email_verification_resend_seconds"],
     }
 
 
@@ -354,6 +356,7 @@ def _resend_registration_locked(
             source_ip=source_ip,
             normalized_username=normalized_username,
         )
+        config = read_business_config(session).values
         previous = session.scalar(
             select(EmailVerificationRequestRecord)
             .where(EmailVerificationRequestRecord.id == request_id)
@@ -371,7 +374,7 @@ def _resend_registration_locked(
         if previous.resend_available_at > now:
             retry_after = max(1, math.ceil(previous.resend_available_at - now))
             raise RegistrationError("registration_rate_limited", retry_after=retry_after)
-        if not email_domain_allowed(previous.normalized_email, settings.allowed_email_domains):
+        if not email_domain_allowed(previous.normalized_email, config["allowed_email_domains"]):
             raise RegistrationError("registration_email_domain_not_allowed")
         window_start = now - 3600
         email_count = session.scalar(
@@ -389,8 +392,8 @@ def _resend_registration_locked(
                 )
             ) or 0
         if (
-            email_count >= settings.email_verification_hourly_email_limit
-            or ip_count >= settings.email_verification_hourly_ip_limit
+            email_count >= config["email_verification_hourly_email_limit"]
+            or ip_count >= config["email_verification_hourly_ip_limit"]
         ):
             raise RegistrationError("registration_rate_limited", retry_after=3600)
         try:
@@ -405,11 +408,11 @@ def _resend_registration_locked(
             token_digest=digest_token(raw_token),
             created_at=now,
             expires_at=now + settings.email_verification_expiry_seconds,
-            resend_available_at=now + settings.email_verification_resend_seconds,
+            resend_available_at=now + config["email_verification_resend_seconds"],
             delivery_status="pending",
             source_ip=source_ip,
         )
-        previous.resend_available_at = now + settings.email_verification_resend_seconds
+        previous.resend_available_at = now + config["email_verification_resend_seconds"]
         session.add(replacement)
         session.flush()
     try:
@@ -438,7 +441,7 @@ def _resend_registration_locked(
         "status": "verification_required",
         "request_id": new_request_id,
         "expires_in_seconds": settings.email_verification_expiry_seconds,
-        "resend_after_seconds": settings.email_verification_resend_seconds,
+        "resend_after_seconds": config["email_verification_resend_seconds"],
     }
 
 
@@ -496,7 +499,8 @@ def _verify_registration_locked(
                 raise RegistrationError("verification_link_already_used")
             if row.expires_at <= now:
                 raise RegistrationError("verification_link_expired")
-            if not email_domain_allowed(row.normalized_email, settings.allowed_email_domains):
+            config = read_business_config(session).values
+            if not email_domain_allowed(row.normalized_email, config["allowed_email_domains"]):
                 raise RegistrationError("registration_email_domain_not_allowed")
             stored_email = func.lower(func.trim(UserRecord.email))
             identity_exists = (

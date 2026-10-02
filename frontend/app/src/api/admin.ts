@@ -72,11 +72,15 @@ export interface AdminMetricsResult {
 export interface AdminAuditEntry {
   id: string;
   actor_id: string;
+  actor_name?: string | null;
+  target_name?: string | null;
   target_user_id: string | null;
   action: string;
   reason: string;
   note: string;
   result: string;
+  before_state?: Record<string, unknown> | null;
+  after_state?: Record<string, unknown> | null;
   created_at: number;
 }
 

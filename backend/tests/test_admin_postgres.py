@@ -8,7 +8,7 @@ from backend.tests.test_postgres_integration import pg_database
 pytestmark = pytest.mark.skipif(not os.environ.get("SMARTAI_TEST_POSTGRES_URL"), reason="Requires disposable PostgreSQL")
 
 
-@pytest.mark.parametrize("previous", ["base", "0018_knowledge_ingestion", "0019_admin_usage_events"])
+@pytest.mark.parametrize("previous", ["base", "0018_knowledge_ingestion", "0019_admin_usage_events", "0022_account_closures"])
 def test_existing_postgres_branches_upgrade_with_legacy_identity(pg_database, monkeypatch, previous):
     from alembic import command
     from alembic.config import Config
@@ -58,3 +58,30 @@ def test_two_admins_cannot_concurrently_remove_all_management(pg_database):
     assert all(status in {200,401,403,409} for status in statuses)
     with session_scope() as session:
         assert len(list(session.scalars(select(UserRecord.id).where(UserRecord.role == "admin", UserRecord.is_active.is_(True), UserRecord.is_read_only.is_(False))))) == 1
+
+
+def test_business_config_concurrency_live_quota_and_private_permissions(pg_database, monkeypatch, tmp_path):
+    from backend.tests.test_admin_account_lifecycle import accounts, headers
+    from backend.tests.test_private_admin_app import private_app
+    from backend.db.knowledge_storage_repository import knowledge_storage_usage
+    _, user, admin, teacher = accounts()
+    client = private_app(monkeypatch, tmp_path)
+    path = "/api/admin/business-config"
+    assert client.get(path, headers=headers(teacher)).status_code == 403
+    def save(value):
+        return client.patch(path, json={"changes": {"knowledge_storage_quota_bytes": value},
+            "expected_version": 0, "reason": "isolated_postgres_concurrency"}, headers=headers(admin)).status_code
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        assert sorted(pool.map(save, [10, 20])) == [200, 409]
+    view = client.get(path, headers=headers(admin)).json()
+    global_limit = view["fields"]["knowledge_storage_quota_bytes"]["effective"]
+    assert knowledge_storage_usage(user.id).limit_bytes == global_limit
+    result = client.patch(path + "/users/" + user.id, json={
+        "changes": {"knowledge_storage_quota_bytes": 0}, "expected_version": 0,
+        "expected_global_version": view["version"], "reason": "isolated_user_quota"}, headers=headers(admin))
+    assert result.status_code == 200, result.text
+    assert knowledge_storage_usage(user.id).limit_bytes == 0
+    audit = client.get("/api/admin/audit", headers=headers(admin)).json()
+    assert all(item["actor_name"] == "manager" for item in audit)
+    assert {item["action"] for item in audit} >= {"business_configuration_changed", "user_storage_configuration_changed"}
+    assert next(item for item in audit if item["action"] == "user_storage_configuration_changed")["after_state"]["overrides"] == {"knowledge_storage_quota_bytes": 0}

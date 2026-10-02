@@ -44,6 +44,8 @@ def create_private_app() -> FastAPI:
     from backend.api.admin_maintenance import router as maintenance_router
     app.include_router(monitoring_router, prefix="/api")
     app.include_router(maintenance_router, prefix="/api")
+    from backend.api.admin_business_config import router as business_config_router
+    app.include_router(business_config_router, prefix="/api")
 
     @app.api_route("/api/{path:path}", methods=["GET", "POST", "PATCH", "PUT", "DELETE", "OPTIONS", "HEAD"], include_in_schema=False)
     def unknown_api(path: str):

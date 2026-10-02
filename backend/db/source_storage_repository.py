@@ -23,6 +23,7 @@ from backend.db.models import (
     UserRecord,
 )
 from backend.db.session import session_scope
+from backend.services.business_config import storage_quota_limit
 from backend.db.source_retention import completion_inputs_are_recoverable
 from backend.domain.errors import (
     InvalidTransition,
@@ -123,8 +124,8 @@ def _new_operation_id() -> str:
     return f"op_{uuid.uuid4().hex}"
 
 
-def _quota_limit() -> int:
-    return max(0, int(settings.unfinished_source_quota_bytes))
+def _quota_limit(session: Session, owner_id: str) -> int:
+    return storage_quota_limit(session, owner_id, "unfinished_source_quota_bytes")
 
 
 def _retry_delay(retry_count: int) -> int:
@@ -416,7 +417,7 @@ def _usage_in_session(session: Session, owner_id: str) -> SourceQuotaUsage:
     stored_total = int(stored[0] or 0)
     return SourceQuotaUsage(
         used_bytes=stored_total + reserved,
-        limit_bytes=_quota_limit(),
+        limit_bytes=_quota_limit(session, owner_id),
         available_source_bytes=int(stored[1] or 0),
         cleanup_pending_bytes=(
             int(stored[2] or 0) + int(reservations[1] or 0)

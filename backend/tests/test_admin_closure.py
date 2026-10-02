@@ -15,6 +15,10 @@ def test_closure_releases_expected_identity_only_after_storage_cleanup(mode, tmp
     storage = LocalStorage(tmp_path / "uploads")
     storage.save(f"users/{user.id}/orphan.bin", b"discardable test bytes")
     monkeypatch.setattr("backend.services.account_closure.get_storage", lambda: storage)
+    from backend.db.business_config_models import UserStorageConfigRecord
+    from backend.db.models import AdminAuditLogRecord
+    with session_scope() as session:
+        session.add(UserStorageConfigRecord(owner_id=user.id, overrides={"knowledge_storage_quota_bytes": 0}, version=1, updated_at=1))
     request_headers = headers(admin, "close-once")
     body = {"mode": mode, "confirm_username": "teacher", "reason": "requested_or_abuse"}
     response = client.post(f"/admin/users/{user.id}/closure", json=body, headers=request_headers)
@@ -30,6 +34,11 @@ def test_closure_releases_expected_identity_only_after_storage_cleanup(mode, tmp
     assert storage.list_keys("") == []
     with session_scope() as session:
         assert session.get(UserRecord, user.id) is None
+        assert session.get(UserStorageConfigRecord, user.id) is None
+        completed = session.scalar(select(AdminAuditLogRecord).where(AdminAuditLogRecord.action == "account_closure_completed"))
+        assert completed.actor_id == "manager"
+        assert completed.after_state == {"status": "completed", "mode": mode}
+    assert not process_one_closure(raise_errors=True)
     if mode == "blacklist":
         with pytest.raises(AuthRepositoryError):
             register_without_invite(username="newname", email="TEACHER@EXAMPLE.EDU", password_hash="unused")

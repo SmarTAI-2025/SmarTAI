@@ -323,7 +323,9 @@ def admin_list_audit(
         if action:
             stmt = stmt.where(AdminAuditLogRecord.action == action)
         records = session.scalars(stmt).all()
-        return [{"id": row.id, "actor_id": row.actor_id, "target_user_id": row.target_user_id, "action": row.action, "reason": row.reason, "note": row.note, "result": row.result, "created_at": row.created_at} for row in records]
+        identities = {value for row in records for value in (row.actor_id, row.target_user_id) if value}
+        names = dict(session.execute(select(UserRecord.id, UserRecord.username).where(UserRecord.id.in_(identities))).all()) if identities else {}
+        return [{"actor_name": names.get(row.actor_id), "target_name": names.get(row.target_user_id), "id": row.id, "actor_id": row.actor_id, "target_user_id": row.target_user_id, "action": row.action, "reason": row.reason, "note": row.note, "result": row.result, "before_state": row.before_state, "after_state": row.after_state, "created_at": row.created_at} for row in records]
 
 
 @router.get("/overview")

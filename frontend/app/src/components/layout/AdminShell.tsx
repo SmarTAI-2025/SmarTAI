@@ -1,5 +1,5 @@
 import { useI18n } from "@/i18n/I18nProvider";
-import { Activity, Wrench, TrendingUp, BarChart3, Settings, FileClock, LogOut, Shield, Users } from "lucide-react";
+import { SlidersHorizontal, Activity, Wrench, TrendingUp, BarChart3, Settings, FileClock, LogOut, Shield, Users } from "lucide-react";
 import { Link, NavLink, Outlet, useNavigate } from "react-router-dom";
 import { useCurrentUser } from "@/api/hooks";
 import { useState, useRef } from "react";
@@ -12,6 +12,7 @@ import { cn } from "@/lib/cn";
 const links = [
   { to: "/admin", label: "概览", icon: BarChart3, end: true },
   { to: "/admin/users", label: "用户管理", icon: Users },
+  { to: "/admin/business-config", label: "业务配置", icon: SlidersHorizontal },
   { to: "/admin/monitoring", label: "运行监控", icon: Activity },
   { to: "/admin/analytics", label: "运营统计", icon: TrendingUp },
   { to: "/admin/maintenance", label: "系统维护", icon: Wrench },

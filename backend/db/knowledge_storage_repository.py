@@ -27,6 +27,7 @@ from backend.db.models import (
     UserRecord,
 )
 from backend.db.session import session_scope
+from backend.services.business_config import storage_quota_limit
 from backend.domain.errors import (
     InvalidTransition,
     KnowledgeStorageQuotaExceeded,
@@ -64,8 +65,8 @@ def _entry(record: KnowledgeStorageRecord) -> KnowledgeStorageEntry:
     })
 
 
-def _quota_limit() -> int:
-    return max(0, int(settings.knowledge_storage_quota_bytes))
+def _quota_limit(session: Session, owner_id: str) -> int:
+    return storage_quota_limit(session, owner_id, "knowledge_storage_quota_bytes")
 
 
 def _retry_delay(attempt: int) -> int:
@@ -219,7 +220,7 @@ def _usage_in_session(session: Session, owner_id: str) -> KnowledgeStorageUsage:
     ).one()
     return KnowledgeStorageUsage(
         used_bytes=int(row[0] or 0),
-        limit_bytes=_quota_limit(),
+        limit_bytes=_quota_limit(session, owner_id),
         available_document_bytes=int(row[1] or 0),
         cleanup_pending_bytes=int(row[2] or 0),
         retrying_cleanup_bytes=int(row[3] or 0),

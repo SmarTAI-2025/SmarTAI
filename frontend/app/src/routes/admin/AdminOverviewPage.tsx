@@ -17,7 +17,7 @@ export function AdminOverviewPage() {
           </div>
           <Card>
             <h2 className="font-semibold">平台共用额度</h2>
-            <p className="mt-2 text-sm text-muted-foreground">{overview.data.shared_pool.enabled ? "已由运行配置开启" : "默认关闭"}。页面只读，额度与密钥需通过受控配置管理。</p>
+            <p className="mt-2 text-sm text-muted-foreground">{overview.data.shared_pool.enabled ? "已由运行配置开启" : "默认关闭"}。页面只读。现有模型额度按进程计数，尚非跨进程的全局预算；部署侧维持原有规则。存储额度可在“业务配置”调整。</p>
             <div className="mt-4 grid gap-2 text-sm sm:grid-cols-2"><span>每日请求上限：{overview.data.shared_pool.daily_request_limit}</span><span>估算输入 token 上限：{overview.data.shared_pool.daily_estimated_token_limit.toLocaleString()}</span></div>
           </Card>
           <UsageSummary usage={overview.data.usage} />

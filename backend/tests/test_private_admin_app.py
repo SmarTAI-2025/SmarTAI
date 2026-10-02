@@ -47,7 +47,7 @@ def test_bootstrap_never_overwrites_existing_admin_or_identity(monkeypatch):
 def test_private_observations_and_preview_enforce_admin(monkeypatch, tmp_path):
     client, user, admin, teacher = accounts()
     private = private_app(monkeypatch, tmp_path)
-    for path in ("/api/admin/monitoring", "/api/admin/maintenance/preview"):
+    for path in ("/api/admin/monitoring", "/api/admin/maintenance/preview", "/api/admin/business-config"):
         assert private.get(path).status_code == 401
         assert private.get(path, headers=headers(teacher)).status_code == 403
         assert private.get(path, headers=headers(admin)).status_code == 200
@@ -82,3 +82,19 @@ def test_existing_private_session_can_sign_out_after_read_only_restriction(monke
     from backend.db.models import UserRecord
     with session_scope() as session: session.get(UserRecord, "manager").is_read_only = True
     assert client.post("/api/auth/logout", headers=headers(result.json()["token"])).status_code == 200
+
+
+def test_ready_checks_business_configuration_tables_not_only_version(monkeypatch, tmp_path):
+    from sqlalchemy import text
+    from alembic.config import Config
+    from alembic.script import ScriptDirectory
+    from backend.db.session import get_engine
+    head = ScriptDirectory.from_config(Config("alembic.ini")).get_current_head()
+    with get_engine().begin() as connection:
+        connection.execute(text("CREATE TABLE alembic_version (version_num VARCHAR(32) NOT NULL)"))
+        connection.execute(text("INSERT INTO alembic_version VALUES (:head)"), {"head": head})
+    client = private_app(monkeypatch, tmp_path)
+    assert client.get("/ready").status_code == 200
+    with get_engine().begin() as connection:
+        connection.execute(text("DROP TABLE business_configuration"))
+    assert client.get("/ready").status_code == 503

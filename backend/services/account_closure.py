@@ -12,7 +12,7 @@ from backend.db.session import session_scope
 from backend.db.models import (AccountClosureRecord, BlockedRegistrationEmailRecord, UserRecord,
     AssignmentRecord, KnowledgeDocumentRecord, KnowledgeStorageRecord, StoredFileRecord,
     SourceStorageReservationRecord, EmailVerificationRequestRecord, InviteCodeRecord,
-    KnowledgeIngestionRecord, AdminUsageEventRecord)
+    KnowledgeIngestionRecord, AdminUsageEventRecord, AdminAuditLogRecord)
 from backend.services.admin_transactions import lock_administration
 from backend.services.email_registration import normalize_email
 from backend.storage import get_storage
@@ -118,6 +118,17 @@ def process_one_closure(*, raise_errors: bool = False) -> bool:
                 session.execute(update(AdminUsageEventRecord).where(AdminUsageEventRecord.user_id == user_id).values(user_id="closed_" + uuid.uuid4().hex, dimensions=None))
                 session.delete(user)
                 session.flush()
+            requested = session.scalar(select(AdminAuditLogRecord).where(
+                AdminAuditLogRecord.target_user_id == user_id,
+                AdminAuditLogRecord.action == "account_closure_requested"
+            ).order_by(AdminAuditLogRecord.created_at.desc()).limit(1))
+            if requested is not None:
+                session.add(AdminAuditLogRecord(
+                    id=uuid.uuid4().hex, actor_id=requested.actor_id, target_user_id=user_id,
+                    action="account_closure_completed", reason=requested.reason, note="",
+                    idempotency_key="closure-completed:" + closure_id, request_hash=requested.request_hash,
+                    before_state={"status": "pending"}, after_state={"status": "completed", "mode": closure.mode},
+                    result="success", created_at=time.time()))
             closure.status = "completed"
             closure.completed_at = time.time()
             closure.error_code = None

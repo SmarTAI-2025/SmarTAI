@@ -21,7 +21,7 @@ from alembic.script import ScriptDirectory
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
-@pytest.mark.parametrize("previous_head", ["0018_knowledge_ingestion", "0019_admin_usage_events"])
+@pytest.mark.parametrize("previous_head", ["0018_knowledge_ingestion", "0019_admin_usage_events", "0022_account_closures"])
 def test_admin_knowledge_merge_preserves_existing_users(previous_head, tmp_path, monkeypatch):
     from sqlalchemy import create_engine, inspect, text
     url = f"sqlite:///{tmp_path / 'existing.db'}"
@@ -33,8 +33,8 @@ def test_admin_knowledge_merge_preserves_existing_users(previous_head, tmp_path,
     command.upgrade(cfg, "head")
     with engine.connect() as connection:
         assert connection.execute(text("SELECT password_hash, auth_version FROM users WHERE id='existing'")).one() == ("legacy-hash", 0)
-        assert connection.execute(text("SELECT version_num FROM alembic_version")).scalars().all() == ["0022_account_closures"]
-    assert {"admin_audit_logs", "admin_usage_events", "knowledge_ingestions"} <= set(inspect(engine).get_table_names())
+        assert connection.execute(text("SELECT version_num FROM alembic_version")).scalars().all() == ["0023_business_configuration"]
+    assert {"admin_audit_logs", "admin_usage_events", "knowledge_ingestions", "business_configuration", "user_storage_configuration"} <= set(inspect(engine).get_table_names())
 
 
 def _alembic_config(db_url: str, monkeypatch) -> Config:
@@ -234,7 +234,7 @@ def test_mail_migrations_extend_provider_routing_as_one_head(tmp_path, monkeypat
     script = ScriptDirectory.from_config(cfg)
 
     assert [revision.revision for revision in script.get_revisions("heads")] == [
-        "0022_account_closures"
+        "0023_business_configuration"
     ]
 
     command.upgrade(cfg, "0012_provider_routing_pref")

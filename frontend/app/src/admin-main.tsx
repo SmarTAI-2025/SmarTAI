@@ -14,6 +14,7 @@ import { AdminClosurePage } from "@/routes/admin/AdminClosurePage";
 import { AdminAccountPage } from "@/routes/admin/AdminAccountPage";
 import { ForgotPasswordPage } from "@/routes/ForgotPasswordPage";
 import { ResetPasswordPage } from "@/routes/ResetPasswordPage";
+import { AdminBusinessConfigPage } from "@/routes/admin/AdminBusinessConfigPage";
 import { AdminAuditPage } from "@/routes/admin/AdminAuditPage";
 import { LoginPage } from "@/routes/LoginPage";
 import "@/styles/globals.css";
@@ -31,6 +32,7 @@ const router = createBrowserRouter([{
     { path: "monitoring", element: <AdminMonitoringPage /> },
     { path: "analytics", element: <AdminAnalyticsPage /> },
     { path: "maintenance", element: <AdminMaintenancePage /> },
+    { path: "business-config", element: <AdminBusinessConfigPage /> },
     { path: "users", element: <AdminUsersPage /> },
     { path: "users/:userId", element: <AdminUserDetailPage /> },
     { path: "account", element: <AdminAccountPage /> },
