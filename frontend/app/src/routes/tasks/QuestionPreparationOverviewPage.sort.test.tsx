@@ -14,7 +14,7 @@ const { task } = vi.hoisted(() => ({ task: {
   },
 } }));
 vi.mock("@/api/analytics", () => ({ interpretFilterIntent: vi.fn() }));
-vi.mock("@/api/hooks/tasks", () => ({ useTask: () => ({ isSuccess: true, isLoading: false, data: task }) }));
+vi.mock("@/api/hooks/tasks", () => ({ useTask: () => ({ isSuccess: true, isLoading: false, data: task }), useUpdateProblem: () => ({ isPending: false, mutateAsync: vi.fn() }) }));
 vi.mock("@/components/new-task/NewTaskStepper", () => ({ NewTaskStepper: () => null }));
 vi.mock("@/i18n/I18nProvider", () => ({ useI18n: () => ({ locale: "zh-CN" }) }));
 

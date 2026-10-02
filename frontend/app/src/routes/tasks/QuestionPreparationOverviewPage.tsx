@@ -4,6 +4,8 @@ import { CheckCircle2, ChevronRight, Filter, X } from "lucide-react";
 import { useMemo, useState } from "react";
 import { Link, Navigate, useParams, useSearchParams } from "react-router-dom";
 import { useTask } from "@/api/hooks/tasks";
+import { useQuestionReview } from "@/hooks/useQuestionReview";
+import { toast } from "sonner";
 import { TaskQueryBar } from "@/components/tasks/AskQueryBar";
 import { useTaskFilterIntent } from "@/hooks/useTaskFilterIntent";
 import { resolvePreparationQuery, selectPreparationQuestions } from "@/lib/taskPreparationFilter";
@@ -33,6 +35,7 @@ export function QuestionPreparationOverviewPage() {
   const [searchParams, setSearchParams] = useSearchParams();
   const { locale } = useI18n();
   const taskQuery = useTask(taskId);
+  const { confirm, confirming, updateProblem, failure } = useQuestionReview(taskId ?? "", taskQuery.data?.workflow_revision);
   const urlQuery = searchParams.get("q") ?? "";
   const query = urlQuery;
   const problems = useMemo(
@@ -96,6 +99,12 @@ export function QuestionPreparationOverviewPage() {
           label={tx(locale, "Ask SmarTAI：题目资料", "Ask SmarTAI: question materials")}
           placeholder={tx(locale, "按满分升序，或找出缺少标答的题目", "Sort by maximum score, or find missing reference answers")} />
 
+        {failure ? <div role="alert" className="mt-4 rounded-lg border border-amber-300 p-4 text-sm">
+          <p>{tx(locale, `已确认 ${failure.completed} 道题；第 ${failure.problem.number || failure.problem.q_id} 题未能保存，可能内容已更新或任务正在处理。请重新加载并核对后重试。`, `${failure.completed} questions confirmed; question ${failure.problem.number || failure.problem.q_id} could not be saved. Content may have changed or the task may be busy. Reload and review before retrying.`)}</p>
+          <button type="button" onClick={() => void taskQuery.refetch()} className="mt-2 mr-4 font-semibold text-primary">{tx(locale, "重新加载", "Reload")}</button>
+          <Link to={`/tasks/${taskId}/questions/${encodeURIComponent(failure.problem.q_id)}/content#question-${encodeURIComponent(failure.problem.q_id)}`} className="mt-2 font-semibold text-primary">{tx(locale, "前往该题", "Go to question")}</Link>
+        </div> : null}
+
         <div className="mt-4 overflow-hidden rounded-[10px] border bg-card">
           {taskQuery.isLoading ? (
             <div className="min-h-[300px] animate-pulse bg-muted/20" aria-busy="true" />
@@ -112,6 +121,10 @@ export function QuestionPreparationOverviewPage() {
               sortKey={preserveGroundedOrder ? undefined : sortKey}
               sortDirection={sortDirection}
               onSort={toggleSort}
+              confirming={confirming || updateProblem.isPending}
+              onConfirm={async (selected) => {
+                if (await confirm(selected)) toast.success(tx(locale, "题目资料已确认复核。", "Question materials marked as reviewed."));
+              }}
             />
           ) : <MatrixEmpty filtered={Boolean(query)} locale={locale} />}
           <footer className="flex min-h-[58px] flex-col gap-2 border-t px-4 py-2.5 sm:flex-row sm:items-center sm:justify-between xl:px-5">
@@ -119,10 +132,18 @@ export function QuestionPreparationOverviewPage() {
               ? `显示 ${rows.length} / ${problems.length} 道题 · 作业总分 ${formatScore(totalMaxScore)} · ${allRisks.length} 个开放风险`
               : `Showing ${rows.length} of ${problems.length} ${problems.length === 1 ? "question" : "questions"} · ${formatScore(totalMaxScore)} total points · ${allRisks.length} open ${allRisks.length === 1 ? "risk" : "risks"}`}</p>
             {taskId && firstQuestionId ? (
+              <div className="flex flex-wrap items-center gap-2">
+              <button type="button" disabled={confirming || updateProblem.isPending} onClick={async () => {
+                if (await confirm(rows.map((row) => row.problem))) toast.success(tx(locale, "题目资料已确认复核。", "Question materials marked as reviewed."));
+              }} className="inline-flex min-h-9 items-center justify-center gap-1.5 rounded-[7px] border px-4 py-2 text-sm font-semibold text-primary disabled:opacity-50">
+                <CheckCircle2 aria-hidden="true" className="h-4 w-4" />
+                {rows.length === problems.length ? tx(locale, "一键确认全部题目已复核", "Confirm All Questions Reviewed") : tx(locale, `确认当前 ${rows.length} 道题已复核`, `Confirm ${rows.length} Shown Questions Reviewed`)}
+              </button>
               <Link to={`/tasks/${taskId}/questions/${encodeURIComponent(firstQuestionId)}/content`} className="inline-flex h-9 items-center justify-center gap-1.5 rounded-[7px] bg-primary px-4 text-sm font-semibold text-primary-foreground outline-none hover:opacity-90 focus-visible:ring-2 focus-visible:ring-ring">
                 {tx(locale, "进入完整审核", "Open Full Review")}
                 <ChevronRight aria-hidden="true" className="h-4 w-4" />
               </Link>
+              </div>
             ) : null}
           </footer>
         </div>
@@ -131,13 +152,15 @@ export function QuestionPreparationOverviewPage() {
   );
 }
 
-function QuestionMatrix({ rows, taskId, locale, sortKey, sortDirection, onSort }: {
+function QuestionMatrix({ rows, taskId, locale, sortKey, sortDirection, onSort, confirming, onConfirm }: {
   rows: QuestionMatrixRow[];
   taskId: string;
   locale: string;
   sortKey: MatrixSortKey | undefined;
   sortDirection: MatrixSortDirection;
   onSort: (key: MatrixSortKey) => void;
+  confirming: boolean;
+  onConfirm: (problems: ProblemInfo[]) => Promise<void>;
 }) {
   return (
     <div className="max-h-[calc(100vh-520px)] min-h-[280px] overflow-auto overscroll-contain">
@@ -170,7 +193,11 @@ function QuestionMatrix({ rows, taskId, locale, sortKey, sortDirection, onSort }
               <td className="px-3 py-3"><MaterialStatus problem={problem} field="rubric" locale={locale} /></td>
               <td className="px-3 py-3"><MaterialStatus problem={problem} field="tests" locale={locale} /></td>
               <td className="px-3 py-3"><AttentionStatus issues={issues} locale={locale} /></td>
-              <td className="px-5 py-3 text-right"><Link to={`/tasks/${taskId}/questions/${encodeURIComponent(problem.q_id)}/content#question-${encodeURIComponent(problem.q_id)}`} className="text-xs font-semibold text-primary hover:underline">{tx(locale, "审核", "Review")}</Link></td>
+              <td className="px-5 py-3 text-right"><div className="flex flex-col items-end gap-2">
+                {problem.review_status === "confirmed" ? <span className="text-xs text-emerald-700">{tx(locale, "已复核", "Reviewed")}</span> : null}
+                <button type="button" disabled={confirming} onClick={() => void onConfirm([problem])} aria-label={tx(locale, `确认第 ${problem.number || problem.q_id} 题已复核`, `Confirm question ${problem.number || problem.q_id} reviewed`)} className="whitespace-nowrap text-xs font-semibold text-primary hover:underline disabled:opacity-50">{tx(locale, "确认已复核", "Confirm Reviewed")}</button>
+                <Link to={`/tasks/${taskId}/questions/${encodeURIComponent(problem.q_id)}/content#question-${encodeURIComponent(problem.q_id)}`} className="text-xs font-semibold text-primary hover:underline">{tx(locale, "审核", "Review")}</Link>
+              </div></td>
             </tr>
           ))}
         </tbody>

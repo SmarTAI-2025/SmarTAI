@@ -4189,8 +4189,19 @@ def update_problem(
                 presentation[key] = patch[key]
         if patch.get("review_status") == "confirmed":
             presentation["max_score_review_status"] = "confirmed"
+            # A teacher may accept unchanged recognition. Keep its evidence,
+            # while acknowledging review warnings rather than hiding failures.
+            reviewable_codes = {
+                "low_confidence", "source_conflict", "ai_source_conflict",
+                "ambiguous_question_match", "unmapped_source_content",
+                "rubric_step_reference_conflict", "recognition_partial",
+                "recognition_needs_review",
+            }
             presentation["preparation_issues"] = [
-                issue for issue in presentation.get("preparation_issues", [])
+                {**issue, "status": "acknowledged"}
+                if issue.get("status") == "open"
+                and issue.get("code") in reviewable_codes else issue
+                for issue in presentation.get("preparation_issues", [])
                 if issue.get("field") != "max_score"
             ]
         if "max_score" in patch:
