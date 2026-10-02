@@ -3,12 +3,15 @@ import { useCallback, useRef } from "react";
 import * as authApi from "@/api/auth";
 import { clearAuthToken } from "@/api/client";
 import { authKeys } from "./keys";
+import { useSessionExpired } from "@/lib/sessionExpiry";
 
 export function useCurrentUser() {
+  const expired = useSessionExpired();
   return useQuery({
     queryKey: authKeys.me,
     queryFn: authApi.restoreSession,
     retry: false,
+    enabled: !expired,
   });
 }
 

@@ -25,6 +25,8 @@ function source(overrides: Partial<SubmissionSourceOutcome>): SubmissionSourceOu
 
 describe("submission source reason copy", () => {
   it.each([
+    ["question_source_pages_out_of_range", "source_read", "请调整识别范围", "Adjust the recognition scope"],
+    ["question_source_incomplete", "source_read", "资料尚未完整读取", "Source reading is incomplete"],
     ["provider_overloaded", "ocr", "OCR：模型服务当前拥堵", "OCR: The model service is busy"],
     [
       "submission_model_field_too_long",

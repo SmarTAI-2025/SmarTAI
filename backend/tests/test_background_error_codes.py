@@ -86,3 +86,17 @@ def test_question_preparation_retry_source_unavailable_is_not_collapsed():
     assert classify_background_error(error, "problem_extraction_failed") == (
         "question_preparation_retry_source_unavailable"
     )
+
+
+@pytest.mark.parametrize("status", [500, 502, 503, 504])
+def test_google_server_errors_explain_provider_outage_without_exposing_response(status):
+    from langchain_google_genai.chat_models import GoogleAPIError
+
+    error = GoogleAPIError(code=status, response_json={"error": {"code": status, "message": "private provider response"}})
+    assert classify_background_error(error, "submission_parse_failed") == "provider_upstream_unavailable"
+
+
+def test_wrapped_provider_server_error_retains_specific_outage_reason():
+    error = RuntimeError("recognition failed")
+    error.__cause__ = HTTPException(503, detail="private provider response")
+    assert classify_background_error(error, "submission_parse_failed") == "provider_upstream_unavailable"

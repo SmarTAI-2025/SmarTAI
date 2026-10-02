@@ -1,6 +1,7 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { APIError } from "@/api/client";
 import type { CourseMaterial } from "@/types";
 import { MaterialDialog, UploadDialog } from "./CourseLibraryDialogs";
 
@@ -73,6 +74,34 @@ describe("course material deletion", () => {
     await user.click(screen.getByRole("button", { name: "上传资料" }));
     await waitFor(() => expect(mocks.upload).toHaveBeenCalledWith(expect.objectContaining({ file, nativeOnly: true })));
     expect(mocks.toastSuccess).toHaveBeenCalledWith("资料已保存，已进入处理队列");
+  });
+
+  it.each([
+    ["empty.txt", "", "文件为空"],
+    ["answer.docx", "text", "资料库仅支持"],
+    ["large.pdf", "pdf", "文件超过"],
+  ])("explains rejected upload %s and recovers with a valid replacement", async (name, content, message) => {
+    const user = userEvent.setup();
+    render(<UploadDialog courses={[]} groups={[]} onClose={vi.fn()} onUploaded={vi.fn()} />);
+    const input = screen.getByLabelText(/选择一份资料文件/);
+    const file = new File([content], name);
+    if (name === "large.pdf") Object.defineProperty(file, "size", { value: 64 * 1024 * 1024 + 1 });
+    fireEvent.change(input, { target: { files: [file] } });
+    expect(screen.getByRole("alert")).toHaveTextContent(message);
+    expect(screen.getByRole("button", { name: "上传资料" })).toBeDisabled();
+    expect(mocks.upload).not.toHaveBeenCalled();
+    fireEvent.change(input, { target: { files: [new File(["notes"], "valid.txt", { type: "text/plain" })] } });
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "上传资料" })).toBeEnabled();
+  });
+
+  it("keeps server upload failures visible in the dialog", async () => {
+    const user = userEvent.setup();
+    mocks.upload.mockRejectedValue(new APIError(422, "unreadable", { code: "invalid_course_material" }));
+    render(<UploadDialog courses={[]} groups={[]} onClose={vi.fn()} onUploaded={vi.fn()} />);
+    await user.upload(screen.getByLabelText(/选择一份资料文件/), new File(["bad pdf"], "broken.pdf", { type: "application/pdf" }));
+    await user.click(screen.getByRole("button", { name: "上传资料" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("文件内容无法作为资料读取");
   });
 
   it("reports async deletion truthfully without offering a manual retry", async () => {

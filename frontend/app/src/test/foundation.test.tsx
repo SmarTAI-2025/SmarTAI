@@ -12,7 +12,8 @@ import type { User, UserRole } from "@/types/auth";
 vi.mock("@/api/hooks", () => ({
   useCurrentUser: vi.fn(),
 }));
-vi.mock("@/api/client", () => ({
+vi.mock("@/api/client", async (importOriginal) => ({
+  ...await importOriginal<typeof import("@/api/client")>(),
   clearAuthToken: vi.fn(),
 }));
 
@@ -24,6 +25,7 @@ function wrap(user: User | null, loading = false, errored = false) {
     data: user,
     isLoading: loading,
     isError: errored,
+    error: errored ? { isAxiosError: true, response: { status: 401, data: { detail: "Unauthenticated" } } } : null,
   });
   return ({ children }: { children: React.ReactNode }) => (
     <QueryClientProvider client={qc}>

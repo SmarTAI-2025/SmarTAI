@@ -1,10 +1,13 @@
 import type { ReactNode } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import { useEffect } from "react";
 import { Navigate, useLocation } from "react-router-dom";
-import { clearAuthToken } from "@/api/client";
+import { clearAuthToken, normalizeAPIError } from "@/api/client";
 import { useCurrentUser } from "@/api/hooks";
 import { Card } from "@/components/ui/Card";
 import type { UserRole } from "@/types/auth";
+import { useSessionExpired } from "@/lib/sessionExpiry";
+import { SessionRestoreError } from "./SessionRestoreError";
 
 /**
  * Role-aware route guard. Wraps a workspace root so that a logged-in user of
@@ -23,10 +26,11 @@ export function RequireRoleSession({
   children: ReactNode;
 }) {
   const currentUser = useCurrentUser();
+  const expired = useSessionExpired();
   const location = useLocation();
   const allowedRoles = Array.isArray(allowed) ? allowed : [allowed];
 
-  if (currentUser.isLoading) {
+  if (!expired && currentUser.isLoading) {
     return (
       <main className="flex min-h-screen items-center justify-center bg-background px-4">
         <Card className="w-full max-w-sm text-center text-sm text-muted-foreground">
@@ -36,8 +40,12 @@ export function RequireRoleSession({
     );
   }
 
-  if (currentUser.isError || !currentUser.data) {
-    return <ResetSessionAndRedirect message="登录状态已过期，请重新登录。" />;
+  if (!expired && currentUser.isError && normalizeAPIError(currentUser.error).status !== 401) {
+    return <SessionRestoreError retry={() => void currentUser.refetch()} busy={currentUser.isFetching} />;
+  }
+
+  if (expired || currentUser.isError || !currentUser.data) {
+    return <ResetSessionAndRedirect message="登录状态已过期，请重新登录。" returnTo={`${location.pathname}${location.search}${location.hash}`} />;
   }
 
   const role = currentUser.data.role;
@@ -49,9 +57,11 @@ export function RequireRoleSession({
   return <>{children}</>;
 }
 
-function ResetSessionAndRedirect({ message }: { message: string }) {
+function ResetSessionAndRedirect({ message, returnTo }: { message: string; returnTo: string }) {
+  const queryClient = useQueryClient();
   useEffect(() => {
     clearAuthToken();
-  }, []);
-  return <Navigate to="/login" replace state={{ authError: message }} />;
+    queryClient.clear();
+  }, [queryClient]);
+  return <Navigate to="/login" replace state={{ authError: message, from: returnTo }} />;
 }

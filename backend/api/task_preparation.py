@@ -1293,6 +1293,13 @@ def _source_fingerprint(payload: dict) -> str:
             "recognition_configuration_fingerprint",
         )
     }
+    # For an upload/inline source, this ID is an output of optional library
+    # retention, assigned after input_hash was frozen. Only a library-selected
+    # source uses the material ID as input identity. This also preserves retry
+    # compatibility for previously saved uploads without weakening their
+    # content, source-file, provider or prepared-text checks.
+    if selected["source_kind"] != "library":
+        selected["library_material_id"] = None
     return hashlib.sha256(json.dumps(selected, sort_keys=True).encode()).hexdigest()
 
 

@@ -140,6 +140,10 @@ export function AddSubmissionsPage() {
       setFormError(t("submissionUploadUnsupported"));
       return;
     }
+    if (file.size === 0) {
+      setFormError(localText(locale, "所选作答文件为空（0 字节），请打开文件确认有内容后重新上传。", "The selected submission is empty (0 bytes). Check that it contains content before uploading again."));
+      return;
+    }
     setSelectedFile(file);
     setUploadPercent(0);
     setFormError(null);
@@ -150,6 +154,10 @@ export function AddSubmissionsPage() {
     if (!file || isPending) return;
     if (!hasSuffix(file.name, ROSTER_SUFFIXES)) {
       setFormError(t("submissionUploadErrorRoster"));
+      return;
+    }
+    if (file.size === 0) {
+      setFormError(localText(locale, "所选名单文件为空（0 字节），请填写学生名单后重新上传。", "The selected roster is empty (0 bytes). Add student records before uploading again."));
       return;
     }
     setRosterFile(file);
@@ -286,7 +294,7 @@ export function AddSubmissionsPage() {
             {selectedFile
               ? `${formatFileSize(selectedFile.size)} · ${t("submissionUploadOcrLimit")}`
               : canRetryOriginal
-                ? localText(locale, "原文件已安全保留，可直接改选模型后重试。", "The original file is preserved; switch models and retry without uploading again.")
+                ? localText(locale, "原文件已安全保留。请按失败原因处理：文件为空、损坏或格式不支持时需更换文件；模型问题可改选模型后重试，无需重复上传。", "The original file is preserved. Replace empty, damaged or unsupported files; for model errors, select another model and retry without uploading again.")
               : t("submissionUploadFormats")}
           </p>
           <span className="mt-[17px] inline-flex h-10 min-w-[130px] items-center justify-center rounded-[8px] border bg-card px-4 text-[14px] font-semibold text-foreground">
