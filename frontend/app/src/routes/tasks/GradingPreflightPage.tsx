@@ -47,6 +47,12 @@ export function GradingPreflightPage() {
     [task?.student_data],
   );
   const summary = useMemo(() => summarizeTask(problems, students), [problems, students]);
+  const pendingIdentityStudent = students.find((student) => student.identity_status === "needs_review");
+  const pendingAnswerStudent = students.find((student) => student.stu_ans.some((answer) => answer.review_status !== "confirmed"));
+  const pendingAnswer = pendingAnswerStudent?.stu_ans.find((answer) => answer.review_status !== "confirmed");
+  const submissionReviewHref = pendingAnswerStudent && pendingAnswer
+    ? `/tasks/${encodeURIComponent(taskId ?? "")}/students/${encodeURIComponent(pendingAnswerStudent.stu_id)}?${new URLSearchParams({ question: pendingAnswer.q_id })}`
+    : `/tasks/${taskId}/submissions`;
   const selectedExperts = useMemo(() => {
     if (!setup || !setupResponse) return [];
     const selected = new Set(setup.selected_provider_ids);
@@ -354,11 +360,12 @@ export function GradingPreflightPage() {
               </span>
             </p>
             {riskItems.length > 0 ? (
-              <div className="flex shrink-0 gap-4 text-[12px] font-semibold">
+              <div className="flex shrink-0 flex-wrap gap-4 text-[12px] font-semibold">
                 <Link to={summary.flaggedQuestions
                   ? `/tasks/${taskId}/questions/${encodeURIComponent(problems.find((problem) => problem.review_status !== "confirmed")!.q_id)}/content`
                   : `/tasks/${taskId}/questions`} className="hover:underline">{copy(locale, "editQuestions")}</Link>
-                <Link to={`/tasks/${taskId}/submissions?q=${encodeURIComponent(locale === "zh-CN" ? "待复核" : "review")}`} className="hover:underline">{copy(locale, "editSubmissions")}</Link>
+                {pendingIdentityStudent ? <Link to={`/tasks/${encodeURIComponent(taskId ?? "")}/students/${encodeURIComponent(pendingIdentityStudent.stu_id)}?identity=edit`} className="hover:underline">{locale === "zh-CN" ? "核对姓名学号" : "Review student identity"}</Link> : null}
+                <Link to={submissionReviewHref} className="hover:underline">{copy(locale, "editSubmissions")}</Link>
               </div>
             ) : null}
           </section>

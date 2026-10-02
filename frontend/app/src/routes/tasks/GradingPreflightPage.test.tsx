@@ -125,6 +125,38 @@ describe("GradingPreflightPage regrade mode", () => {
     vi.useRealTimers();
   });
 
+  it("opens the identity editor when only the student's identity needs review", () => {
+    const task = (useTask as unknown as () => any)();
+    task.data.student_data.student1.identity_status = "needs_review";
+    render(<MemoryRouter initialEntries={["/tasks/task-1/grading/preflight"]}>
+      <Routes><Route path="/tasks/:taskId/grading/preflight" element={<GradingPreflightPage />} /></Routes>
+    </MemoryRouter>);
+    expect(screen.getByRole("link", { name: "Review student identity" })).toHaveAttribute("href", "/tasks/task-1/students/student1?identity=edit");
+    expect(screen.getByRole("link", { name: "Review submissions" })).toHaveAttribute("href", "/tasks/task-1/submissions");
+  });
+
+  it("opens an unconfirmed answer directly even when it has no recognition flag", () => {
+    const task = (useTask as unknown as () => any)();
+    task.data.student_data.student1.stu_id = "student / 1";
+    task.data.student_data.student1.stu_ans[0] = { q_id: "q 1/2", content: "42", review_status: "pending", flag: [] };
+    render(<MemoryRouter initialEntries={["/tasks/task-1/grading/preflight"]}>
+      <Routes><Route path="/tasks/:taskId/grading/preflight" element={<GradingPreflightPage />} /></Routes>
+    </MemoryRouter>);
+    expect(screen.getByRole("link", { name: "Review submissions" })).toHaveAttribute("href", "/tasks/task-1/students/student%20%2F%201?question=q+1%2F2");
+    expect(screen.getByRole("button", { name: "Start Grading Anyway" })).toBeEnabled();
+  });
+
+  it("keeps identity and answer review destinations separate when both need attention", () => {
+    const task = (useTask as unknown as () => any)();
+    task.data.student_data.student1.identity_status = "needs_review";
+    task.data.student_data.student1.stu_ans[0].review_status = "pending";
+    render(<MemoryRouter initialEntries={["/tasks/task-1/grading/preflight"]}>
+      <Routes><Route path="/tasks/:taskId/grading/preflight" element={<GradingPreflightPage />} /></Routes>
+    </MemoryRouter>);
+    expect(screen.getByRole("link", { name: "Review student identity" })).toHaveAttribute("href", "/tasks/task-1/students/student1?identity=edit");
+    expect(screen.getByRole("link", { name: "Review submissions" })).toHaveAttribute("href", "/tasks/task-1/students/student1?question=q1");
+  });
+
   it("treats a completed task as a startable regrade after setup is saved", () => {
     render(
       <MemoryRouter initialEntries={["/tasks/task-1/grading/preflight"]}>
