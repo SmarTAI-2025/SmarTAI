@@ -1,7 +1,8 @@
+import { getAuthToken } from "@/api/client";
 import { useQueryClient } from "@tanstack/react-query";
 import { Loader2 } from "lucide-react";
 import type { ReactNode } from "react";
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 import { Navigate, useLocation } from "react-router-dom";
 import { clearAuthToken, normalizeAPIError } from "@/api/client";
 import { useCurrentUser } from "@/api/hooks";
@@ -15,6 +16,10 @@ export function RequireTeacherSession({ children }: { children: ReactNode }) {
   const expired = useSessionExpired();
   const location = useLocation();
   const { locale } = useI18n();
+  const hadSession = useRef(Boolean(currentUser.data || getAuthToken()));
+  useEffect(() => {
+    if (currentUser.data) hadSession.current = true;
+  }, [currentUser.data]);
   const zh = locale === "zh-CN";
   const returnTo = `${location.pathname}${location.search}${location.hash}`;
 
@@ -41,7 +46,9 @@ export function RequireTeacherSession({ children }: { children: ReactNode }) {
   if (expired || currentUser.isError || !currentUser.data) {
     return (
       <ResetSessionAndRedirect
-        message={zh ? "登录状态已过期，请重新登录。" : "Your session expired. Sign in again."}
+        message={hadSession.current
+          ? (zh ? "登录状态已过期，请重新登录。" : "Your session expired. Sign in again.")
+          : (zh ? "请登录后继续。" : "Sign in to continue.")}
         returnTo={returnTo}
       />
     );
