@@ -1,4 +1,5 @@
-import axios, { AxiosError, type AxiosProgressEvent, type AxiosRequestConfig } from "axios";
+import axios, { AxiosError, CanceledError, type AxiosProgressEvent, type AxiosRequestConfig } from "axios";
+import { setSessionExpired } from "@/lib/sessionExpiry";
 
 export const SMARTAI_TOKEN_STORAGE_KEY = "smartai_token";
 
@@ -48,12 +49,18 @@ export interface AuthAwareRequestConfig extends AxiosRequestConfig {
   _retry?: boolean;
   _skipAuthRefresh?: boolean;
   _skipAuthHeader?: boolean;
+  _sessionVersion?: number;
 }
 
-let refreshPromise: Promise<string> | null = null;
+let sessionVersion = 0;
+let refreshFlight: { version: number; promise: Promise<string> } | null = null;
 
 apiClient.interceptors.request.use((config) => {
   const authConfig = config as AuthAwareRequestConfig;
+  if (authConfig._sessionVersion !== undefined && authConfig._sessionVersion !== sessionVersion) {
+    throw new CanceledError("Session changed before request replay");
+  }
+  authConfig._sessionVersion = sessionVersion;
   const token = getAuthToken();
   if (token && !authConfig._skipAuthHeader) {
     config.headers.Authorization = `Bearer ${token}`;
@@ -66,25 +73,48 @@ apiClient.interceptors.response.use(
   async (error: AxiosError) => {
     const config = error.config as AuthAwareRequestConfig | undefined;
     const path = config?.url ?? "";
-    if (error.response?.status !== 401 || !config || config._retry || config._skipAuthRefresh || path.includes("/auth/login") || path.includes("/auth/refresh")) {
+    if (error.response?.status !== 401 || !config || config._skipAuthRefresh || path.includes("/auth/login") || path.includes("/auth/refresh")) {
+      return Promise.reject(error);
+    }
+    // Responses from a prior login must not expire or replay into a new login.
+    if (config._sessionVersion !== sessionVersion) return Promise.reject(error);
+    if (config._retry) {
+      expireSession();
       return Promise.reject(error);
     }
     config._retry = true;
-    refreshPromise ??= apiClient
-      .post<{ token: string }>("/auth/refresh", {}, { _skipAuthRefresh: true } as AuthAwareRequestConfig)
-      .then((response) => {
-        setAuthToken(response.data.token);
-        return response.data.token;
-      })
-      .finally(() => {
-        refreshPromise = null;
-      });
+    const currentToken = getAuthToken();
+    if (currentToken && config.headers?.Authorization !== `Bearer ${currentToken}`) {
+      // A concurrent request already refreshed this same login.
+      return apiClient.request(config);
+    }
+    const version = sessionVersion;
+    if (!refreshFlight || refreshFlight.version !== version) {
+      const promise = apiClient
+        .post<{ token: string }>("/auth/refresh", {}, { _skipAuthRefresh: true } as AuthAwareRequestConfig)
+        .then((response) => {
+          if (version !== sessionVersion) throw new CanceledError("Session changed during refresh");
+          // Rotation stays in the same login generation, unlike a new login.
+          localStorage.setItem(SMARTAI_TOKEN_STORAGE_KEY, response.data.token);
+          return response.data.token;
+        })
+        .catch((refreshError: unknown) => {
+          if (version === sessionVersion && axios.isAxiosError(refreshError) && refreshError.response?.status === 401) {
+            expireSession();
+          }
+          throw refreshError;
+        })
+        .finally(() => {
+          if (refreshFlight?.promise === promise) refreshFlight = null;
+        });
+      refreshFlight = { version, promise };
+    }
     try {
-      const token = await refreshPromise;
+      const token = await refreshFlight.promise;
+      if (version !== sessionVersion) throw new CanceledError("Session changed during refresh");
       config.headers = { ...config.headers, Authorization: `Bearer ${token}` };
       return apiClient.request(config);
     } catch (refreshError) {
-      clearAuthToken();
       return Promise.reject(refreshError);
     }
   },
@@ -98,11 +128,19 @@ export function getAuthToken(): string | null {
 }
 
 export function setAuthToken(token: string): void {
+  sessionVersion += 1;
   localStorage.setItem(SMARTAI_TOKEN_STORAGE_KEY, token);
+  setSessionExpired(false);
 }
 
 export function clearAuthToken(): void {
+  sessionVersion += 1;
   localStorage.removeItem(SMARTAI_TOKEN_STORAGE_KEY);
+}
+
+function expireSession() {
+  clearAuthToken();
+  setSessionExpired(true);
 }
 
 export function normalizeAPIError(error: unknown): APIError {
