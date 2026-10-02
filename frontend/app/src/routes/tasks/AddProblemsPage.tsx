@@ -12,7 +12,7 @@ import {
   UploadCloud,
 } from "lucide-react";
 import { useEffect, useRef, useState, type ChangeEvent, type DragEvent, type ReactNode } from "react";
-import { Link, useLocation, useNavigate, useParams } from "react-router-dom";
+import { Link, useNavigate, useParams } from "react-router-dom";
 import { toast } from "sonner";
 import { getAPIErrorCode, getAPIErrorDetail } from "@/api/client";
 import {
@@ -26,6 +26,10 @@ import {
 import { StageProviderSelect } from "@/components/models/StageProviderSelect";
 import { NewTaskStepper } from "@/components/new-task/NewTaskStepper";
 import { RecoverableActionState, type RecoveryAction } from "@/components/ui/RecoverableActionState";
+import { usePageDraft } from "@/hooks/usePageDraft";
+import { useProblemDraftReferences } from "@/hooks/useProblemDraftReferences";
+import { PageDraftNotice } from "@/components/ui/PageDraftNotice";
+import { createSourceDraft, initialProblemDraft, problemDraftCodec, sourceSignature, type SourceDraft, type ScorePolicyDraft } from "@/lib/taskPageDrafts";
 import { useImeSafeQuery } from "@/hooks/useImeSafeQuery";
 import { useI18n } from "@/i18n/I18nProvider";
 import { cn } from "@/lib/cn";
@@ -46,45 +50,7 @@ const IMAGE_SOURCE_EXTENSIONS = new Set([
   ".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff", ".webp",
 ]);
 
-type SourceDraft = {
-  id: string;
-  role: PreparationSourceRole;
-  sourceMode: ProblemSourceMode;
-  file: File | null;
-  libraryScope: ProblemSourceScope;
-  librarySearch: string;
-  libraryMaterial: ProblemLibraryMaterial | null;
-  inlineText: string;
-  structureMode: ProblemStructureMode;
-  extractionHint: string;
-  recognitionPages?: string;
-  recognitionTargets?: string;
-  enableMaterialOcr?: boolean;
-  saveToLibrary: boolean;
-  storedFileId: string | null;
-};
-
-type ScorePolicyDraft = {
-  mode: QuestionScorePolicyInput["mode"];
-  uniformMaxScore: string;
-  perQuestionText: string;
-};
-
-const DEFAULT_SCORE_POLICY_DRAFT: ScorePolicyDraft = {
-  mode: "default_10",
-  uniformMaxScore: "10",
-  perQuestionText: "",
-};
-
-type AddProblemsRouteState = {
-  questionPreparationDraft?: {
-    taskId: string;
-    activeRole: PreparationSourceRole;
-    sources: SourceDraft[];
-    scorePolicy?: ScorePolicyDraft;
-    recognitionProviderId?: string;
-  };
-};
+type AddProblemsRouteState = Record<string, never>;
 
 type PreparationFailure = {
   error: unknown;
@@ -95,24 +61,26 @@ type PreparationFailure = {
 
 export function AddProblemsPage() {
   const { taskId } = useParams();
-  const location = useLocation();
+  const taskQuery = useTask(taskId, { refetchOnMount: "always" });
+  if (taskQuery.isLoading || (taskQuery.isFetching && !taskQuery.isFetchedAfterMount)) return <div role="status"><LoaderCircle className="animate-spin" /></div>;
+  return <AddProblemsForm key={`${taskId}:${taskQuery.data?.course_id}:${taskQuery.data?.workflow_revision}`} taskQuery={taskQuery} />;
+}
+
+function AddProblemsForm({ taskQuery }: { taskQuery: ReturnType<typeof useTask> }) {
+  const { taskId } = useParams();
   const navigate = useNavigate();
   const { locale, t } = useI18n();
-  const restored = getRestoredDraft(location.state, taskId);
-  const taskQuery = useTask(taskId, { refetchOnMount: "always" });
   const capabilitiesQuery = useQuestionPreparationCapabilities(taskId);
   const expertsQuery = useStageProviders();
   const preflight = useProblemSourcePreflight();
   const startPreparation = useStartQuestionPreparation();
-  const [activeRole, setActiveRole] = useState<PreparationSourceRole>(restored?.activeRole ?? "problem");
-  const [sources, setSources] = useState<SourceDraft[]>(restored?.sources ?? [createSourceDraft("problem")]);
-  const [scorePolicy, setScorePolicy] = useState<ScorePolicyDraft>(() => (
-    restored?.scorePolicy ?? DEFAULT_SCORE_POLICY_DRAFT
-  ));
-  const [recognitionProviderId, setRecognitionProviderId] = useState(
-    restored?.recognitionProviderId ?? "",
-  );
-  const [formError, setFormError] = useState<string | null>(null);
+  const draft = usePageDraft(`problems:${taskId}:${taskQuery.data?.course_id}:${taskQuery.data?.workflow_revision}`, initialProblemDraft, problemDraftCodec);
+  const [activeRole, setActiveRole] = draft.field("activeRole");
+  const [sources, setSources] = draft.field("sources");
+  const [scorePolicy, setScorePolicy] = draft.field("scorePolicy");
+  const [recognitionProviderId, setRecognitionProviderId] = draft.field("recognitionProviderId");
+  const references = useProblemDraftReferences(taskId, sources, updateSource);
+  const [formError, setFormError] = draft.field("formError");
   const [preparationFailure, setPreparationFailure] = useState<PreparationFailure | null>(null);
   const [busyLabel, setBusyLabel] = useState<string | null>(null);
   const [showStartRequirements, setShowStartRequirements] = useState(false);
@@ -124,27 +92,17 @@ export function AddProblemsPage() {
   const hasExistingProblems = Boolean(taskQuery.data?.problem_file_name || taskQuery.data?.problem_count);
   const hasRecognizedProblems = (taskQuery.data?.problem_count ?? 0) > 0;
   const hasProblemSource = configuredSources.some((source) => source.role === "problem");
+  const missingLocalFiles = sources.some((source) => source.sourceMode === "upload" && source.fileName && !source.file && !source.storedFileId);
   const taskReturnPath = taskId ? `/tasks/${taskId}/upload/problems` : "/tasks/new";
-  const routeState: AddProblemsRouteState = {
-    questionPreparationDraft: {
-      taskId: taskId ?? "",
-      activeRole,
-      sources,
-      scorePolicy,
-      recognitionProviderId,
-    },
-  };
+  const routeState: AddProblemsRouteState = {};
 
   useEffect(() => {
     if (expertsQuery.isLoading || expertsQuery.isError) return;
     const enabled = (expertsQuery.data ?? []).filter((expert) => expert.enabled);
     setRecognitionProviderId((current) => {
-      if (enabled.some((expert) => expert.provider_id === current)) return current;
+      if (current) return current;
       const frozenProviderId = taskQuery.data?.question_recognition_provider_id;
-      if (
-        frozenProviderId
-        && enabled.some((expert) => expert.provider_id === frozenProviderId)
-      ) {
+      if (frozenProviderId) {
         return frozenProviderId;
       }
       return (
@@ -155,10 +113,16 @@ export function AddProblemsPage() {
     });
   }, [expertsQuery.data, expertsQuery.isError, expertsQuery.isLoading, taskQuery.data?.question_recognition_provider_id]);
 
-  const needsByok = (!enabledExperts.length || !recognitionProviderId) && !expertsQuery.isLoading && !expertsQuery.isError;
+  const needsByok = (!enabledExperts.some((expert) => expert.provider_id === recognitionProviderId)) && !expertsQuery.isLoading && !expertsQuery.isError;
   const needsProblemSource = !hasProblemSource;
   const startBlocked = needsByok || needsProblemSource;
-  const primaryDisabledReason = expertsQuery.isLoading
+  const primaryDisabledReason = taskQuery.isError || !taskQuery.data
+    ? tx(locale, "任务信息不可用，请刷新后重试。", "Task details are unavailable. Refresh and retry.")
+    : missingLocalFiles
+    ? tx(locale, "未上传文件需要重新选择；也可删除不再需要的资料。", "Reselect unuploaded files, or remove sources you no longer need.")
+    : references.blocked
+    ? tx(locale, "请先核对草稿中的文件状态。", "Check the draft file status first.")
+    : expertsQuery.isLoading
     ? tx(locale, "正在读取模型配置。", "Loading model configuration.")
     : expertsQuery.isError
       ? tx(locale, "模型配置暂时不可用。", "Model configuration is unavailable.")
@@ -238,6 +202,10 @@ export function AddProblemsPage() {
       for (let index = 0; index < configuredSources.length; index += 1) {
         const source = configuredSources[index];
         activeSource = source;
+        if (source.prepared?.signature === sourceSignature(source, recognitionProviderId)) {
+          tokens.push(source.prepared.operationId);
+          continue;
+        }
         setBusyLabel(tx(locale, `正在检查资料 ${index + 1}/${configuredSources.length}`, `Checking source ${index + 1}/${configuredSources.length}`));
         const result = await preflight.mutateAsync({
           taskId,
@@ -260,9 +228,11 @@ export function AddProblemsPage() {
           enableMaterialOcr: source.enableMaterialOcr ?? false,
           replaceConfirmed,
         });
-        if (typeof result.source === "object" && result.source?.stored_file_id) {
-          updateSource(source.id, { storedFileId: result.source.stored_file_id });
-        }
+        const storedFileId = typeof result.source === "object" ? result.source?.stored_file_id ?? source.storedFileId : source.storedFileId;
+        updateSource(source.id, { storedFileId, prepared: {
+          operationId: result.source_token,
+          signature: sourceSignature({ ...source, storedFileId }, recognitionProviderId),
+        } });
         tokens.push(result.source_token);
       }
       phase = "question_preparation";
@@ -281,6 +251,7 @@ export function AddProblemsPage() {
           ? tx(locale, "已有相同的题目准备任务。", "The same preparation job already exists.")
           : tx(locale, "题目与资料已进入统一识别。", "Question materials are being prepared."),
       );
+      draft.clear();
       navigate(`/tasks/${taskId}/problems/progress`);
     } catch (error) {
       const storedFileId = getAPIErrorDetail(error)?.stored_file_id;
@@ -349,6 +320,7 @@ export function AddProblemsPage() {
       <NewTaskStepper currentStep={1} reachableStep={hasRecognizedProblems ? 2 : 1} returnState={routeState} />
 
       <div className="mx-auto mt-6 w-full max-w-[940px]">
+        <PageDraftNotice notice={draft.notice} disabled={isBusy} onDiscard={() => { draft.reset(); setFormError(null); setPreparationFailure(null); }} />
         {taskQuery.data?.status === "error" && taskQuery.data.last_failed_job_id === taskQuery.data.extract_job_id && taskQuery.data.last_failed_job_id ? (
           <div role="status" className="mb-5 flex flex-wrap items-center justify-between gap-3 border-l-4 border-primary bg-muted px-4 py-3 text-sm">
             <p>{tx(locale, "上次题目准备未完成，已上传资料仍保留。", "The previous preparation did not finish. Your uploaded materials are preserved.")}</p>
@@ -424,6 +396,8 @@ export function AddProblemsPage() {
               <SourceEditor
                 key={source.id}
                 source={source}
+                referenceStatus={references.status(source.id)}
+                onRetryReference={references.retry}
                 number={index + 1}
                 taskId={taskId}
                 taskReady={taskQuery.isSuccess}
@@ -494,7 +468,7 @@ export function AddProblemsPage() {
           <button
             type="button"
             onClick={() => void handleStart()}
-            disabled={isBusy || expertsQuery.isLoading || expertsQuery.isError}
+            disabled={isBusy || expertsQuery.isLoading || expertsQuery.isError || references.blocked || missingLocalFiles || taskQuery.isError}
             title={primaryDisabledReason ?? undefined}
             className={cn(
               "inline-flex h-10 w-full shrink-0 items-center justify-center rounded-[8px] bg-primary px-5 text-sm font-semibold text-primary-foreground outline-none transition hover:opacity-90 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-45 sm:w-[210px]",
@@ -629,6 +603,8 @@ function ScorePolicyEditor({ value, disabled, maximumMaxScore, maxTextLength, lo
 function SourceEditor({
   source,
   number,
+  referenceStatus,
+  onRetryReference,
   taskId,
   taskReady,
   disabled,
@@ -641,6 +617,8 @@ function SourceEditor({
 }: {
   source: SourceDraft;
   number: number;
+  referenceStatus: "ready" | "checking" | "missing" | "unavailable";
+  onRetryReference: () => void;
   taskId: string | undefined;
   taskReady: boolean;
   disabled: boolean;
@@ -690,7 +668,7 @@ function SourceEditor({
       return;
     }
     setFileError(null);
-    onUpdate({ file, storedFileId: null, sourceMode: "upload", libraryMaterial: null });
+    onUpdate({ file, fileName: file.name, storedFileId: null, prepared: null, sourceMode: "upload", libraryMaterial: null });
   }
 
   function handleDrop(event: DragEvent<HTMLDivElement>) {
@@ -712,6 +690,11 @@ function SourceEditor({
       </header>
 
       <div className="p-3 sm:p-4">
+        {referenceStatus === "checking" ? <p role="status" className="mb-3 text-xs text-muted-foreground">{tx(locale, "正在核对已上传文件…", "Checking uploaded files…")}</p> : null}
+        {referenceStatus === "missing" ? <p role="alert" className="mb-3 text-xs text-danger">{tx(locale, "原文件已过期、删除或不可用，请重新选择文件或资料库条目。填写的信息仍保留。", "The original file expired, was deleted, or is unavailable. Reselect a file or library item; your form is preserved.")}</p> : null}
+        {referenceStatus === "unavailable" ? <p role="alert" className="mb-3 text-xs text-danger">{tx(locale, "暂时无法核对文件，请重试；不会自动上传或识别。", "Unable to check the file. Retry; no upload or recognition will start automatically.")} <button type="button" className="underline" onClick={onRetryReference}>{tx(locale, "重试检查", "Retry check")}</button></p> : null}
+        {source.sourceMode === "upload" && source.fileName && !source.file && !source.storedFileId ? <p role="alert" className="mb-3 text-xs text-warning">{tx(locale, `“${source.fileName}” 尚未上传，刷新后请重新选择。`, `“${source.fileName}” was not uploaded. Reselect it after reloading.`)}</p> : null}
+        {source.sourceMode === "upload" && source.storedFileId && referenceStatus === "ready" ? <p role="status" className="mb-3 text-xs text-muted-foreground">{tx(locale, "已上传文件可继续使用，无需重新选择。", "Uploaded file is available. No need to select it again.")}</p> : null}
         <div className={cn("grid gap-2 rounded-[8px] bg-muted/60 p-1", source.role === "rubric" ? "grid-cols-3" : "grid-cols-2")}>
           <ModeButton active={source.sourceMode === "upload"} disabled={disabled} onClick={() => onUpdate({ sourceMode: "upload", libraryMaterial: null })} icon={<UploadCloud className="h-4 w-4" />} label={tx(locale, "上传新文件", "Upload File")} />
           {source.role === "rubric" ? (
@@ -745,7 +728,7 @@ function SourceEditor({
             className={cn("mt-3 flex min-h-[112px] flex-col items-center justify-center rounded-[9px] border border-dashed px-5 text-center transition-colors", dragging ? "border-primary bg-blue-50/60 dark:bg-blue-950/20" : "bg-slate-50/70 dark:bg-slate-950/20")}
           >
             <FileText aria-hidden="true" className="h-6 w-6 text-primary" />
-            <p className="mt-1.5 max-w-full truncate text-sm font-semibold text-foreground">{source.file?.name ?? tx(locale, "拖入或选择文件", "Drop or choose a file")}</p>
+            <p className="mt-1.5 max-w-full truncate text-sm font-semibold text-foreground">{source.file?.name || source.fileName || tx(locale, "拖入或选择文件", "Drop or choose a file")}</p>
             <p className="mt-1 text-xs text-muted-foreground">
               {accept.replaceAll(".", "").toUpperCase().replaceAll(",", " / ")}
               {maxFileBytes
@@ -753,7 +736,7 @@ function SourceEditor({
                 : ""}
             </p>
             <label className="mt-2 inline-flex h-9 cursor-pointer items-center rounded-[7px] border bg-card px-4 text-xs font-semibold text-foreground hover:bg-muted">
-              {source.file ? tx(locale, "替换文件", "Replace File") : tx(locale, "选择文件", "Choose File")}
+              {source.file || source.storedFileId ? tx(locale, "替换文件", "Replace File") : tx(locale, "选择文件", "Choose File")}
               <input id={`problem-source-file-${source.id}`} type="file" accept={accept} className="sr-only" disabled={disabled} onChange={(event: ChangeEvent<HTMLInputElement>) => { selectFile(event.target.files?.[0]); event.target.value = ""; }} />
             </label>
             {fileError ? <p role="alert" className="mt-2 text-xs font-medium text-danger">{fileError}</p> : null}
@@ -909,28 +892,6 @@ function StartRequirementsDialog({
   );
 }
 
-function createSourceDraft(role: PreparationSourceRole): SourceDraft {
-  return {
-    id: globalThis.crypto?.randomUUID?.() ?? `source-${Date.now()}-${Math.random().toString(16).slice(2)}`,
-    role,
-    sourceMode: "upload",
-    file: null,
-    libraryScope: "course",
-    librarySearch: "",
-    libraryMaterial: null,
-    inlineText: "",
-    structureMode: "organized",
-    extractionHint: "",
-    saveToLibrary: false,
-    storedFileId: null,
-  };
-}
-
-function getRestoredDraft(state: unknown, taskId?: string) {
-  const draft = (state as AddProblemsRouteState | null)?.questionPreparationDraft;
-  return draft && draft.taskId === taskId && draft.sources?.length ? draft : null;
-}
-
 function sourceHasValue(source: SourceDraft) {
   if (source.sourceMode === "upload") return Boolean(source.file || source.storedFileId);
   if (source.sourceMode === "inline_text") return Boolean(source.inlineText?.trim());
@@ -938,7 +899,7 @@ function sourceHasValue(source: SourceDraft) {
 }
 
 function sourceSummary(source: SourceDraft, locale: string) {
-  if (source.sourceMode === "upload" && source.file) return source.file.name;
+  if (source.sourceMode === "upload" && (source.file || source.fileName)) return source.file?.name || source.fileName;
   if (source.sourceMode === "library" && source.libraryMaterial) return source.libraryMaterial.filename;
   if (source.sourceMode === "inline_text" && source.inlineText?.trim()) return tx(locale, "自然语言评分标准", "Natural-language rubric");
   return roleMeta(source.role, locale).sourceLabel;

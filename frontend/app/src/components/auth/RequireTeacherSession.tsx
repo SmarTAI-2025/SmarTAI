@@ -10,6 +10,7 @@ import { AuthCard, AuthFrame } from "@/components/auth/AuthFrame";
 import { useI18n } from "@/i18n/I18nProvider";
 import { useSessionExpired } from "@/lib/sessionExpiry";
 import { SessionRestoreError } from "./SessionRestoreError";
+import { PageDraftSession } from "@/hooks/usePageDraft";
 
 export function RequireTeacherSession({ children }: { children: ReactNode }) {
   const currentUser = useCurrentUser();
@@ -67,7 +68,7 @@ export function RequireTeacherSession({ children }: { children: ReactNode }) {
     );
   }
 
-  return children;
+  return <PageDraftSession ownerId={currentUser.data.id}>{children}</PageDraftSession>;
 }
 
 function ResetSessionAndRedirect({ message, returnTo }: { message: string; returnTo: string }) {

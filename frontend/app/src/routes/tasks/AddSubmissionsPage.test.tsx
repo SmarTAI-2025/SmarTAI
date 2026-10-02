@@ -1,6 +1,8 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { MemoryRouter, Route, Routes } from "react-router-dom";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { createMemoryRouter, RouterProvider } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { PageDraftSession } from "@/hooks/usePageDraft";
+import { clearPageDrafts } from "@/lib/pageDraftStore";
 import { AddSubmissionsPage } from "./AddSubmissionsPage";
 
 const mutateAsync = vi.fn();
@@ -53,19 +55,18 @@ vi.mock("@/i18n/I18nProvider", () => ({
   useI18n: () => ({ locale: "zh-CN", t: (key: string) => key }),
 }));
 
-function renderPage(taskId = "task-1") {
-  return render(
-    <MemoryRouter initialEntries={[`/tasks/${taskId}/submissions/upload`]}>
-      <Routes>
-        <Route path="/tasks/:taskId/submissions/upload" element={<AddSubmissionsPage />} />
-        <Route path="/tasks/:taskId/submissions/progress" element={<div>progress page</div>} />
-      </Routes>
-    </MemoryRouter>,
-  );
+function renderPage(taskId = "task-1", owner = "submission-teacher") {
+  const router = createMemoryRouter([
+    { path: "/tasks/:taskId/submissions/upload", element: <AddSubmissionsPage /> },
+    { path: "/tasks/:taskId/submissions/progress", element: <div>progress page</div> },
+    { path: "/settings/byok", element: <div>BYOK</div> },
+  ], { initialEntries: [`/tasks/${taskId}/submissions/upload`] });
+  return { ...render(<PageDraftSession ownerId={owner}><RouterProvider router={router} /></PageDraftSession>), router };
 }
 
 describe("AddSubmissionsPage OCR uploads", () => {
   beforeEach(() => {
+    clearPageDrafts();
     mutateAsync.mockReset();
     retryMutateAsync.mockReset();
     mutateAsync.mockResolvedValue({ status: "started", task_id: "task-1" });
@@ -159,4 +160,24 @@ describe("AddSubmissionsPage OCR uploads", () => {
     expect(mutateAsync).not.toHaveBeenCalled();
     expect(await screen.findByText("progress page")).toBeInTheDocument();
   });
+});
+
+
+it("keeps unsubmitted local files through task navigation but clears after a normal start", async () => {
+  clearPageDrafts(); mutateAsync.mockResolvedValue({ status: "started", task_id: "task-a" });
+  taskState.data = { ...taskState.data, status: "problems_ready", pending_submission_file_name: null, submission_file_name: null, last_failed_job_id: null, student_count: 0 };
+  const { container, router } = renderPage("task-a");
+  fireEvent.change(container.querySelector('input[type="file"]')!, { target: { files: [new File(["answer"], "local-answer.txt")] } });
+  await act(async () => { await router.navigate("/tasks/task-b/submissions/upload"); });
+  expect(screen.queryByText("local-answer.txt")).not.toBeInTheDocument();
+  await act(async () => { await router.navigate(-1); });
+  expect(screen.getByText("local-answer.txt")).toBeInTheDocument();
+  await act(async () => { await router.navigate("/settings/byok"); await router.navigate(-1); });
+  expect(screen.getByText("local-answer.txt")).toBeInTheDocument();
+  mutateAsync.mockClear();
+  fireEvent.click(screen.getByRole("button", { name: "submissionUploadStart" }));
+  expect(await screen.findByText("progress page")).toBeInTheDocument();
+  expect(mutateAsync).toHaveBeenCalledTimes(1);
+  await act(async () => { await router.navigate(-1); });
+  expect(screen.queryByText("local-answer.txt")).not.toBeInTheDocument();
 });

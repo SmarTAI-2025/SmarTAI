@@ -8,6 +8,7 @@ import {
   type AuthAwareRequestConfig,
 } from "./client";
 import type { AuthResponse, EmailRegistrationRequest, EmailRegistrationResponse, EmailRegistrationVerifyResponse, LoginRequest, PasswordResetConfirmResponse, PasswordResetRequest, PasswordResetRequestResponse, RefreshResponse, StatusResponse, User } from "@/types";
+import { clearPageDrafts } from "@/lib/pageDraftStore";
 
 const PUBLIC_AUTH_REQUEST_CONFIG: AuthAwareRequestConfig = Object.freeze({
   _skipAuthHeader: true,
@@ -16,6 +17,7 @@ const PUBLIC_AUTH_REQUEST_CONFIG: AuthAwareRequestConfig = Object.freeze({
 
 export async function login(request: LoginRequest): Promise<AuthResponse> {
   const response = await postJSON<AuthResponse, LoginRequest>("/auth/login", request);
+  clearPageDrafts();
   setAuthToken(response.token);
   return response;
 }
