@@ -36,7 +36,7 @@ const copy = {
   criteriaMissing: ["道题缺少评分标准", "questions are missing rubrics"],
   answersMissing: ["道题缺少标答", "questions are missing reference answers"],
   testsMissing: ["道编程题缺少测试样例", "programming questions are missing test cases"],
-  answersFlagged: ["个作答仍有识别标记", "responses still have recognition flags"],
+  answersFlagged: ["个作答待复核", "responses still need review"],
   identitiesFlagged: ["名学生身份待确认", "student identities need confirmation"],
   editQuestions: ["校对题目资料", "Review question materials"],
   editSubmissions: ["校对学生作答", "Review submissions"],
@@ -49,7 +49,7 @@ const copy = {
   retry: ["重新加载", "Reload"],
   missingTask: ["缺少任务信息，请从工作台或历史任务重新进入。", "Task information is missing. Reopen it from the workspace or history."],
   setupRequired: ["请先保存本任务的批改设置。", "Save the grading setup for this task first."],
-  unavailable: ["当前任务还不能开始批改，请先完成题目与作答校对。", "This task cannot start grading yet. Finish reviewing questions and submissions first."],
+  unavailable: ["当前任务还没有可批改的完整输入，请检查题目、作答或正在运行的任务。", "Grading inputs are not ready yet. Check questions, submissions, or the operation currently running."],
   startError: ["暂时无法开始批改，请检查任务状态后重试。", "Grading could not be started. Check the task state and try again."],
   exactTaskSetup: ["已保存的任务级设置", "Saved task-level setup"],
 } as const;

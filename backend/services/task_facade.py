@@ -3828,7 +3828,7 @@ def grading_readiness(
     task_id: str,
     owner_id: str,
 ) -> dict[str, list[str] | bool]:
-    """Authoritative, fail-closed gate shared by preflight and mutation."""
+    """Separate unusable inputs from review advice for preflight and grading."""
     workflow = workflow_repository.get_live_workflow(
         task_id, owner_id=owner_id
     )
@@ -3851,14 +3851,14 @@ def grading_readiness(
         # Older tasks can have complete normalized questions and answers without
         # the source-evidence rows introduced by the newer ingestion workflow.
         # Missing evidence alone must not force a teacher to upload the same
-        # files again.  Explicit pending/failed/unresolved evidence remains a
-        # fail-closed grading boundary.
+        # files again. Pending/failed recognition still blocks grading, while
+        # usable inputs awaiting teacher review remain available for grading.
         if source_summary["pending"]:
             issues.append("submission_sources_pending")
         if source_summary["failed"]:
             issues.append("submission_sources_failed")
         if source_summary["identity_needs_review"]:
-            issues.append("submission_identities_unresolved")
+            warnings.append("submission_identities_unresolved")
 
         for submission in submissions:
             revision = None
@@ -3880,18 +3880,19 @@ def grading_readiness(
             # ``source_id`` was added after legacy structured submissions were
             # already persisted.  A legacy presentation can therefore retain
             # ``needs_review`` even though its normalized answers are usable.
-            # Only source-backed presentation conflicts are current evidence;
-            # source outcome conflicts above remain fail closed as well.
+            # Only source-backed presentation conflicts are current evidence.
+            # Grading retains the existing internal student/source identity;
+            # proceeding does not confirm or remap an uncertain identity.
             if (
                 presentation is not None
                 and presentation.source_id is not None
                 and presentation.identity_status != "matched"
             ):
-                issues.append("submission_identities_unresolved")
+                warnings.append("submission_identities_unresolved")
 
     reviewed = workflow_repository.answer_review_statuses(recognition_review_ids) if recognition_review_ids else {}
     if any(reviewed.get(answer_id) != "confirmed" for answer_id in recognition_review_ids):
-        issues.append("submission_recognition_needs_review")
+        warnings.append("submission_recognition_needs_review")
     if any(row.get("unknown_question_ids") for row in source_rows):
         warnings.append("submission_question_ids_unmatched")
     ordered_issues = list(dict.fromkeys(issues))

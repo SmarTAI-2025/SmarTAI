@@ -5,6 +5,7 @@ import { getAPIErrorCode, normalizeAPIError } from "@/api/client";
 import { useGradingSetup, useStartGrading, useTask } from "@/api/hooks";
 import { NewTaskStepper } from "@/components/new-task/NewTaskStepper";
 import { SubmissionSourceOutcomePanel } from "@/components/tasks/SubmissionSourceOutcomePanel";
+import { UnsavedChangesDialog } from "@/components/ui/UnsavedChangesDialog";
 import { useI18n } from "@/i18n/I18nProvider";
 import type { Locale } from "@/i18n/messages";
 import { cn } from "@/lib/cn";
@@ -30,6 +31,7 @@ export function GradingPreflightPage() {
   const startGrading = useStartGrading();
   const [countdown, setCountdown] = useState(AUTO_START_SECONDS);
   const [autoStartEnabled, setAutoStartEnabled] = useState(true);
+  const [showBlocker, setShowBlocker] = useState(false);
   const startTriggeredRef = useRef(false);
   const startHandlerRef = useRef<() => void>(() => undefined);
 
@@ -62,7 +64,11 @@ export function GradingPreflightPage() {
   const hasSourceWarnings = (setupResponse?.readiness.warnings ?? []).some(
     (warning) => warning.startsWith("submission_"),
   );
-  const hasEnabledSelection = selectedExperts.length > 0 && selectedExperts.every((expert) => expert.enabled);
+  const hasReviewWarnings = summary.flaggedQuestions > 0 || summary.flaggedAnswers > 0
+    || summary.flaggedIdentities > 0 || hasSourceWarnings;
+  const hasEnabledSelection = selectedExperts.length > 0
+    && selectedExperts.length === setup?.selected_provider_ids.length
+    && selectedExperts.every((expert) => expert.enabled);
   const canStart = Boolean(
     taskId
     && (task?.status === "submissions_ready" || isRegrading)
@@ -73,10 +79,14 @@ export function GradingPreflightPage() {
     && summary.problemCount > 0
     && summary.studentCount > 0,
   );
-  const countdownActive = canStart && autoStartEnabled && !hasSourceWarnings && !startGrading.isPending;
+  const countdownActive = canStart && autoStartEnabled && !hasReviewWarnings && !startGrading.isPending;
 
   async function handleStart() {
-    if (!taskId || !task || !canStart || startTriggeredRef.current) return;
+    if (!taskId || !task || startTriggeredRef.current) return;
+    if (!canStart) {
+      setShowBlocker(true);
+      return;
+    }
     startTriggeredRef.current = true;
     setAutoStartEnabled(false);
     try {
@@ -98,7 +108,7 @@ export function GradingPreflightPage() {
   startHandlerRef.current = () => { void handleStart(); };
 
   useEffect(() => {
-    if (!canStart || historyView || !autoStartEnabled || hasSourceWarnings) {
+    if (!canStart || historyView || !autoStartEnabled || hasReviewWarnings) {
       setCountdown(AUTO_START_SECONDS);
       return;
     }
@@ -108,7 +118,7 @@ export function GradingPreflightPage() {
       setCountdown((current) => Math.max(0, current - 1));
     }, 1000);
     return () => window.clearInterval(intervalId);
-  }, [autoStartEnabled, canStart, hasSourceWarnings, historyView, taskId]);
+  }, [autoStartEnabled, canStart, hasReviewWarnings, historyView, taskId]);
 
   useEffect(() => {
     if (countdownActive && countdown === 0) startHandlerRef.current();
@@ -127,6 +137,12 @@ export function GradingPreflightPage() {
     blockingIssues: effectiveBlockingIssues,
     hasEnabledSelection,
   });
+  const recoveryCode = !setupResponse?.configured || effectiveBlockingIssues.includes("grading_setup_required")
+    ? "grading_setup_required"
+    : !hasEnabledSelection || effectiveBlockingIssues.some((issue) => ["provider_required", "provider_not_enabled"].includes(issue))
+      ? "provider_required"
+      : effectiveBlockingIssues[0] ?? (summary.problemCount === 0 ? "questions_required" : summary.studentCount === 0 ? "submissions_required" : undefined);
+  const recovery = taskId ? gradingRecovery(taskId, recoveryCode, locale) : null;
 
   if (taskQuery.isSuccess && taskId && task) {
     if (task.status === "grading" || (task.status === "error" && task.grading_job_id)) {
@@ -173,7 +189,9 @@ export function GradingPreflightPage() {
                     <p className="mt-1.5 text-[12px] leading-5 text-muted-foreground">
                       {countdownActive
                         ? copy(locale, isRegrading ? "regradeCountdownDescription" : "countdownDescription")
-                        : disabledReason ?? copy(locale, isRegrading ? "regradeReadyMessage" : "readyMessage")}
+                        : disabledReason ?? (hasReviewWarnings
+                          ? (locale === "zh-CN" ? "仍有内容待复核。你可以直接继续批改，待复核标记会保留；本次不会自动开始。" : "Some inputs still need review. You can grade now and keep their review flags. Automatic start is paused.")
+                          : copy(locale, isRegrading ? "regradeReadyMessage" : "readyMessage"))}
                     </p>
                     {countdownActive ? <p className="mt-1 text-[11px] font-semibold text-primary">{countdown} {copy(locale, "countdownUnit")}</p> : null}
                   </div>
@@ -188,12 +206,14 @@ export function GradingPreflightPage() {
                   </Link>
                   <button
                     type="button"
-                    disabled={!canStart || startGrading.isPending}
+                    disabled={startGrading.isPending}
                     onClick={() => void handleStart()}
                     className="inline-flex h-10 items-center justify-center gap-1.5 rounded-[8px] bg-primary px-5 text-[13px] font-semibold text-primary-foreground outline-none hover:opacity-90 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
                   >
                     {startGrading.isPending ? <LoaderCircle aria-hidden="true" className="h-4 w-4 animate-spin" /> : null}
-                    {copy(locale, startGrading.isPending ? "starting" : isRegrading ? "regradeNow" : "startNow")}
+                    {hasReviewWarnings && canStart && !startGrading.isPending
+                      ? (locale === "zh-CN" ? "仍然开始批改" : "Start Grading Anyway")
+                      : copy(locale, startGrading.isPending ? "starting" : isRegrading ? "regradeNow" : "startNow")}
                     {!startGrading.isPending ? <ChevronRight aria-hidden="true" className="h-4 w-4" /> : null}
                   </button>
                 </div>
@@ -335,8 +355,10 @@ export function GradingPreflightPage() {
             </p>
             {riskItems.length > 0 ? (
               <div className="flex shrink-0 gap-4 text-[12px] font-semibold">
-                <Link to={`/tasks/${taskId}/questions`} className="hover:underline">{copy(locale, "editQuestions")}</Link>
-                <Link to={`/tasks/${taskId}/submissions`} className="hover:underline">{copy(locale, "editSubmissions")}</Link>
+                <Link to={summary.flaggedQuestions
+                  ? `/tasks/${taskId}/questions/${encodeURIComponent(problems.find((problem) => problem.review_status !== "confirmed")!.q_id)}/content`
+                  : `/tasks/${taskId}/questions`} className="hover:underline">{copy(locale, "editQuestions")}</Link>
+                <Link to={`/tasks/${taskId}/submissions?q=${encodeURIComponent(locale === "zh-CN" ? "待复核" : "review")}`} className="hover:underline">{copy(locale, "editSubmissions")}</Link>
               </div>
             ) : null}
           </section>
@@ -359,6 +381,16 @@ export function GradingPreflightPage() {
           </div>
         </div>
       )}
+      {showBlocker && recovery ? (
+        <UnsavedChangesDialog
+          title={locale === "zh-CN" ? "还需要处理一项内容" : "One more thing before grading"}
+          description={disabledReason ?? copy(locale, "unavailable")}
+          stayLabel={locale === "zh-CN" ? "关闭" : "Close"}
+          leaveLabel={recovery.label}
+          onStay={() => setShowBlocker(false)}
+          onLeave={() => navigate(recovery.href)}
+        />
+      ) : null}
     </div>
   );
 }
@@ -372,6 +404,7 @@ type TaskSummary = {
   testsComplete: number;
   flaggedAnswers: number;
   flaggedIdentities: number;
+  flaggedQuestions: number;
 };
 
 function summarizeTask(problems: ProblemInfo[], students: StudentSubmission[]): TaskSummary {
@@ -383,8 +416,9 @@ function summarizeTask(problems: ProblemInfo[], students: StudentSubmission[]): 
     answersComplete: problems.filter((problem) => Boolean(problem.reference_answer?.trim())).length,
     programmingCount: programming.length,
     testsComplete: programming.filter((problem) => (problem.test_cases?.length ?? 0) > 0).length,
+    flaggedQuestions: problems.filter((problem) => problem.review_status !== "confirmed").length,
     flaggedAnswers: students.reduce(
-      (count, student) => count + student.stu_ans.filter((answer) => answer.review_status !== "confirmed" && ((answer.flag?.length ?? 0) > 0 || !answer.content?.trim())).length,
+      (count, student) => count + student.stu_ans.filter((answer) => answer.review_status !== "confirmed").length,
       0,
     ),
     flaggedIdentities: students.filter((student) => student.identity_status === "needs_review").length,
@@ -405,6 +439,10 @@ function buildRiskItems(summary: TaskSummary, warnings: string[], locale: Locale
   const criteriaMissing = summary.problemCount - summary.criteriaComplete;
   const answersMissing = summary.problemCount - summary.answersComplete;
   const testsMissing = summary.programmingCount - summary.testsComplete;
+  if (summary.flaggedQuestions > 0) {
+    items.push(locale === "zh-CN" ? `${summary.flaggedQuestions}道题目待复核`
+      : summary.flaggedQuestions === 1 ? "1 question still needs review" : `${summary.flaggedQuestions} questions still need review`);
+  }
   if (criteriaMissing > 0) {
     items.push(locale === "zh-CN"
       ? `${criteriaMissing}${copy(locale, "criteriaMissing")}`
@@ -423,7 +461,7 @@ function buildRiskItems(summary: TaskSummary, warnings: string[], locale: Locale
   if (summary.flaggedAnswers > 0) {
     items.push(locale === "zh-CN"
       ? `${summary.flaggedAnswers}${copy(locale, "answersFlagged")}`
-      : summary.flaggedAnswers === 1 ? "1 response still has a recognition flag" : `${summary.flaggedAnswers} responses still have recognition flags`);
+      : summary.flaggedAnswers === 1 ? "1 response still needs review" : `${summary.flaggedAnswers} responses still need review`);
   }
   if (summary.flaggedIdentities > 0) {
     items.push(locale === "zh-CN"
@@ -462,7 +500,6 @@ function getDisabledReason({
 function gradingBlockerMessage(code: string | null, locale: Locale): string | null {
   const messages: Record<string, [string, string]> = {
     submission_sources_failed: ["仍有文件识别失败。请在上方查看具体原因并重新处理后再开始批改。", "Some files failed recognition. Review the exact reasons above and resolve them before grading."],
-    submission_identities_unresolved: ["仍有学生身份待确认。请先核对并确认身份，避免把成绩记到错误学生。", "Some student identities are unresolved. Confirm them before grading to avoid assigning results to the wrong student."],
     submission_sources_pending: ["仍有文件正在处理。全部来源得到终态后才能开始批改。", "Some files are still processing. Grading can start only after every source has a terminal result."],
     submission_source_evidence_missing: ["作答来源状态需要重新确认。请刷新；若结构化题目和作答仍在，可直接重试批改。", "The submission source state needs confirmation. Refresh; if the structured questions and answers remain, retry grading directly."],
     submissions_required: ["当前没有可批改的学生作答。", "There are no student submissions to grade."],
@@ -474,6 +511,16 @@ function gradingBlockerMessage(code: string | null, locale: Locale): string | nu
   };
   const message = code ? messages[code] : undefined;
   return message ? message[locale === "en-US" ? 1 : 0] : null;
+}
+
+function gradingRecovery(taskId: string, code: string | undefined, locale: Locale) {
+  const root = `/tasks/${taskId}`;
+  if (code === "questions_required") return { href: `${root}/upload/problems`, label: locale === "zh-CN" ? "添加题目" : "Add questions" };
+  if (code === "submissions_required" || code === "submission_sources_failed") return { href: `${root}/submissions/upload`, label: locale === "zh-CN" ? "处理作答文件" : "Fix submission files" };
+  if (code === "answers_required" || code === "submission_source_evidence_missing") return { href: `${root}/submissions`, label: locale === "zh-CN" ? "查看作答" : "Review submissions" };
+  if (code === "submission_sources_pending") return { href: `${root}/submissions/progress`, label: locale === "zh-CN" ? "查看识别进度" : "View recognition progress" };
+  if (code === "workflow_busy" || code === "grading_setup_locked") return { href: root, label: locale === "zh-CN" ? "查看当前进度" : "View current progress" };
+  return { href: getTaskGradingSetupHref(taskId, `${root}/grading/preflight`), label: locale === "zh-CN" ? "修改批改设置" : "Fix grading settings" };
 }
 
 function compareProblems(left: ProblemInfo, right: ProblemInfo): number {

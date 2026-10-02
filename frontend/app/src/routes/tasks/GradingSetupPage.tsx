@@ -65,6 +65,7 @@ export function GradingSetupPage() {
   const [setup, setSetup] = useState<GradingSetup | null>(null);
   const [advancedOpen, setAdvancedOpen] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
+  const [showActionHelp, setShowActionHelp] = useState(false);
   const [syncNoticeKey, setSyncNoticeKey] = useState<GradingSetupCopyKey | null>(null);
   const [selectionNoticeKey, setSelectionNoticeKey] = useState<GradingSetupCopyKey | null>(null);
 
@@ -147,8 +148,6 @@ export function GradingSetupPage() {
     : null;
   const actionDisabled = !taskId
     || !setup
-    || Boolean(validationMessage)
-    || Boolean(saveBlockingIssue)
     || saveSetup.isPending;
 
   function updateSetup(updater: (current: GradingSetup) => GradingSetup) {
@@ -198,6 +197,7 @@ export function GradingSetupPage() {
   async function handleSubmit() {
     if (!taskId || !response || !setup || validationMessage || saveBlockingIssue) {
       setActionError(validationMessage ?? startBlockingMessage ?? gradingSetupText(locale, "invalidForm"));
+      setShowActionHelp(true);
       return;
     }
 
@@ -276,7 +276,7 @@ export function GradingSetupPage() {
                   </p>
                 ) : null}
 
-                <div className="mt-3">
+                <div id="grading-model-selection" tabIndex={-1} className="mt-3">
                   <ModelSection
                     locale={locale}
                     experts={response.available_experts}
@@ -299,14 +299,16 @@ export function GradingSetupPage() {
 
                 <div className="my-3 h-px bg-border sm:-mx-5" />
 
-                <StrategySection
-                  locale={locale}
-                  setup={setup}
-                  advancedOpen={advancedOpen}
-                  usesSharedPool={usesSharedPool}
-                  onAdvancedToggle={() => setAdvancedOpen((current) => !current)}
-                  onChange={updateSetup}
-                />
+                <div id="grading-strategy-settings" tabIndex={-1}>
+                  <StrategySection
+                    locale={locale}
+                    setup={setup}
+                    advancedOpen={advancedOpen}
+                    usesSharedPool={usesSharedPool}
+                    onAdvancedToggle={() => setAdvancedOpen((current) => !current)}
+                    onChange={updateSetup}
+                  />
+                </div>
               </div>
             </fieldset>
 
@@ -349,6 +351,33 @@ export function GradingSetupPage() {
         ) : null}
       </section>
 
+      {showActionHelp ? (
+        <UnsavedChangesDialog
+          title={locale === "zh-CN" ? "还需要处理一项内容" : "One more thing before continuing"}
+          description={actionError ?? gradingSetupText(locale, "invalidForm")}
+          stayLabel={locale === "zh-CN" ? "关闭" : "Close"}
+          leaveLabel={saveBlockingIssue
+            ? (locale === "zh-CN" ? "查看当前进度" : "View current progress")
+            : (locale === "zh-CN" ? "前往修改" : "Fix settings")}
+          onStay={() => setShowActionHelp(false)}
+          onLeave={() => {
+            setShowActionHelp(false);
+            if (saveBlockingIssue) {
+              navigate(`/tasks/${taskId}`);
+              return;
+            }
+            const invalidModels = !selectedExperts.length
+              || selectedExperts.some((expert) => !expert.enabled)
+              || selectedExperts.length !== setup?.selected_provider_ids.length;
+            if (!invalidModels) setAdvancedOpen(true);
+            window.requestAnimationFrame(() => {
+              const target = document.getElementById(invalidModels ? "grading-model-selection" : "grading-strategy-settings");
+              target?.scrollIntoView?.({ behavior: "smooth", block: "center" });
+              target?.focus();
+            });
+          }}
+        />
+      ) : null}
       {blocker.state === "blocked" ? (
         <UnsavedChangesDialog
           title={gradingSetupText(locale, "leaveTitle")}

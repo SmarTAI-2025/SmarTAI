@@ -107,16 +107,16 @@ async def test_unknown_question_is_not_silently_discarded():
 
 
 @pytest.mark.asyncio
-async def test_uncertain_transcription_blocks_normalized_grading_until_review():
+async def test_uncertain_transcription_can_be_graded_without_confirming_review():
     teacher, student, assignment = _published_assignment("review_gate")
     provider, registry = provider_fixture(flags=["recognition_needs_review"])
     revision = await submissions.submit_student_file_with_ocr(**upload_args(student, assignment, provider, registry))
-    with pytest.raises(DomainError) as error:
-        grading_runs.start_run(assignment_id=assignment, teacher_id=teacher)
-    assert error.value.code == "submission_recognition_needs_review"
-    workflow_repository.set_answer_review_status(revision.answers[0].id, "confirmed")
     run = grading_runs.start_run(assignment_id=assignment, teacher_id=teacher)
     assert run.id
+    assert workflow_repository.answer_review_statuses([revision.answers[0].id]).get(revision.answers[0].id) != "confirmed"
+    saved = submission_repository.get_revision(revision.id, actor_id=teacher)
+    assert saved.answers[0].flag == ["recognition_needs_review"]
+    assert saved.answers[0].content == revision.answers[0].content
     assert provider.ainvoke.await_count == 1
 
 
