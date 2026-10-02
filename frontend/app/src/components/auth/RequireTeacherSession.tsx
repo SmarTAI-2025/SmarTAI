@@ -1,21 +1,22 @@
+import { getAuthToken } from "@/api/client";
 import { useQueryClient } from "@tanstack/react-query";
 import { Loader2 } from "lucide-react";
 import type { ReactNode } from "react";
 import { useEffect, useRef } from "react";
 import { Navigate, useLocation } from "react-router-dom";
-import { clearAuthToken, getAuthToken } from "@/api/client";
+import { clearAuthToken } from "@/api/client";
 import { useCurrentUser } from "@/api/hooks";
 import { AuthCard, AuthFrame } from "@/components/auth/AuthFrame";
 import { useI18n } from "@/i18n/I18nProvider";
 
 export function RequireTeacherSession({ children }: { children: ReactNode }) {
   const currentUser = useCurrentUser();
+  const location = useLocation();
+  const { locale } = useI18n();
   const hadSession = useRef(Boolean(currentUser.data || getAuthToken()));
   useEffect(() => {
     if (currentUser.data) hadSession.current = true;
   }, [currentUser.data]);
-  const location = useLocation();
-  const { locale } = useI18n();
   const zh = locale === "zh-CN";
   const returnTo = `${location.pathname}${location.search}${location.hash}`;
 
