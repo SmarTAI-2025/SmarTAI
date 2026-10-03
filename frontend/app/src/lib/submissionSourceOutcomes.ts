@@ -61,6 +61,16 @@ const REASON_COPY: Record<string, ReasonFactory> = {
   pdf_response_too_large: recognitionLimitCopy,
   pdf_structure_limit_exceeded: recognitionLimitCopy,
   provider_credentials_required: recognitionProviderCopy,
+  shared_pool_daily_limit_reached: (locale) => ({
+    title: tx(locale, "共享模型日额度已用完。", "Shared model daily allowance exhausted."),
+    description: tx(locale, "共享模型今日额度不足，本次识别请求未发送。", "The shared model daily allowance is insufficient. This recognition request was not sent."),
+    nextStep: tx(locale, "请等待 UTC 00:00 重置、联系管理员调整，或在模型与 BYOK 页面配置自己的模型。", "Wait for UTC midnight, contact an administrator, or use your own BYOK model."),
+  }),
+  shared_pool_disabled: (locale) => ({
+    title: tx(locale, "平台共享模型当前关闭。", "The shared model pool is disabled."),
+    description: tx(locale, "平台共享模型当前不可用，本次识别请求未发送。", "The shared model pool is currently unavailable. This recognition request was not sent."),
+    nextStep: tx(locale, "请在模型与 BYOK 页面配置自己的模型。", "Configure your own BYOK model."),
+  }),
   question_source_pages_out_of_range: (locale) => ({
     title: tx(locale, "请调整识别范围", "Adjust the recognition scope"),
     description: tx(locale, "填写的页码超出了 PDF 总页数，这份资料尚未调用识别模型。", "A selected page is outside this PDF. No recognition model was called for this source."),

@@ -25,6 +25,8 @@ function source(overrides: Partial<SubmissionSourceOutcome>): SubmissionSourceOu
 
 describe("submission source reason copy", () => {
   it.each([
+    ["shared_pool_daily_limit_reached", "recognition", "共享模型日额度已用完。", "Shared model daily allowance exhausted."],
+    ["shared_pool_disabled", "recognition", "平台共享模型当前关闭。", "The shared model pool is disabled."],
     ["question_source_pages_out_of_range", "source_read", "请调整识别范围", "Adjust the recognition scope"],
     ["question_source_incomplete", "source_read", "资料尚未完整读取", "Source reading is incomplete"],
     ["provider_overloaded", "ocr", "OCR：模型服务当前拥堵", "OCR: The model service is busy"],
