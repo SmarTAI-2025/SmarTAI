@@ -87,7 +87,7 @@ jobs:
           SMARTAI_SEED_TEST_USERS: "false"
           SMARTAI_GRADING_ENGINE: v2
           SMARTAI_TEST_POSTGRES_URL: "postgresql+psycopg://smartai:smartai@localhost:5432/smartai_test"
-        run: python -m pytest backend/tests/test_postgres_integration.py -q
+        run: python -m pytest backend/tests/test_postgres_integration.py backend/tests/test_database_target.py -q
       - name: Verify PostgreSQL migration round trip
         env:
           SMARTAI_DATABASE_HEAVY: "ON"
