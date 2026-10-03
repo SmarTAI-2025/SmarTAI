@@ -2,8 +2,8 @@
 from alembic import op
 import sqlalchemy as sa
 
-revision = "0025_image_capability"
-down_revision = "0024_model_daily_usage"
+revision = "0026_image_capability"
+down_revision = "0025_grading_requests"
 branch_labels = None
 depends_on = None
 

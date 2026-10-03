@@ -3909,6 +3909,7 @@ def start_task_grading(
     task_id: str,
     owner_id: str,
     expected_workflow_revision: int,
+    request_id: str | None = None,
 ) -> dict:
     workflow = workflow_repository.get_live_workflow(
         task_id, owner_id=owner_id
@@ -3916,6 +3917,29 @@ def start_task_grading(
     workflow = _reconcile_terminal_active_operation(
         task_id=task_id, owner_id=owner_id, workflow=workflow
     )
+    # Legacy callers retain revision-based deduplication. New clients give one
+    # click a stable id, independent of the reusable input/configuration hash.
+    request_id = request_id or f"workflow-{expected_workflow_revision}"
+    replay = grading_repository.bind_grading_request(
+        assignment_id=task_id, teacher_id=owner_id, request_id=request_id,
+        request_revision=expected_workflow_revision,
+    )
+    if replay is not None:
+        if replay.status in {"queued", "running"} and (
+            workflow.grading_job_id != replay.id or workflow.active_job_id != replay.id
+        ):
+            try:
+                workflow_repository.bind_existing_active_grading_run(
+                    task_id, owner_id=owner_id, run_id=replay.id,
+                )
+            except NotFound:
+                # A fast worker may finish between binding the request and
+                # repairing a legacy pointer. The durable intent still wins.
+                replay = grading_repository.bind_grading_request(
+                    assignment_id=task_id, teacher_id=owner_id, request_id=request_id,
+                    request_revision=expected_workflow_revision,
+                )
+        return _grading_request_response(task_id, replay)
     if workflow.grading_setup is None:
         raise InvalidTransition("grading_setup_required")
     if workflow.active_job_id and workflow.active_operation != "grading":
@@ -3928,7 +3952,11 @@ def start_task_grading(
             owner_id=owner_id,
             run_id=active.id,
         )
-        return {"status": "already_running", "task_id": task_id, "job_id": active.id}
+        bound = grading_repository.bind_grading_request(
+            assignment_id=task_id, teacher_id=owner_id, request_id=request_id,
+            request_revision=expected_workflow_revision, run_id=active.id,
+        )
+        return _grading_request_response(task_id, bound)
     if workflow.active_job_id:
         raise InvalidTransition("The task is busy.", code="workflow_busy")
     if workflow.workflow_revision != expected_workflow_revision:
@@ -4028,10 +4056,23 @@ def start_task_grading(
         "input_manifest": input_manifest,
     })
     latest = runs[-1] if runs else None
-    if latest and latest.status in {"completed", "partial_failed"}:
+    if latest and latest.status == "completed":
         frozen = workflow_repository.get_run_setup(latest.id)
         if frozen is not None and frozen.fingerprint == run_fingerprint:
+            cached = grading_repository.bind_grading_request(
+                assignment_id=task_id, teacher_id=owner_id, request_id=request_id,
+                request_revision=expected_workflow_revision, run_id=latest.id,
+            )
+            if cached.status in {"queued", "running"}:
+                return _grading_request_response(task_id, cached)
             return {"status": "already_done", "task_id": task_id, "job_id": latest.id}
+    # Intent metadata is not part of the input fingerprint: completed results
+    # remain reusable, while every new explicit retry can execute failed work.
+    input_manifest.update(
+        grading_request_id=request_id,
+        grading_request_revision=expected_workflow_revision,
+        grading_recovery_policy="manual_retry",
+    )
     try:
         run = grading_runs.start_run(
             assignment_id=task_id,
@@ -4042,6 +4083,12 @@ def start_task_grading(
             workflow_expected_revision=expected_workflow_revision,
         )
     except (DuplicateActiveRun, VersionConflict):
+        replay = grading_repository.bind_grading_request(
+            assignment_id=task_id, teacher_id=owner_id, request_id=request_id,
+            request_revision=expected_workflow_revision,
+        )
+        if replay is not None:
+            return _grading_request_response(task_id, replay)
         concurrent_runs = grading_repository.list_runs_for_assignment(
             task_id,
             actor_id=owner_id,
@@ -4066,7 +4113,18 @@ def start_task_grading(
             "task_id": task_id,
             "job_id": concurrent.id,
         }
+    if run.status not in {"queued", "running"}:
+        return _grading_request_response(task_id, run)
     return {"status": "started", "task_id": task_id, "job_id": run.id}
+
+
+def _grading_request_response(task_id, run):
+    if run.status in {"queued", "running"}:
+        return {"status": "already_running", "task_id": task_id, "job_id": run.id}
+    return {
+        "status": "already_finished",
+        "task_id": task_id, "job_id": run.id, "run_status": run.status,
+    }
 
 
 def task_results(*, task_id: str, owner_id: str) -> dict:
@@ -4102,6 +4160,8 @@ def task_results(*, task_id: str, owner_id: str) -> dict:
         })
     return {
         "status": "completed", "task_id": task_id, "results": rendered,
+        "grading_run_id": run.id, "grading_run_status": run.status,
+        "retry_scope": "full_batch" if run.status == "partial_failed" else None,
         "problem_data": task["problem_data"],
         "student_data": task["student_data"], "timestamp": run.completed_at,
     }

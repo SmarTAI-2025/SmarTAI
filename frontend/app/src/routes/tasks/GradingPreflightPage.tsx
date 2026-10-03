@@ -4,9 +4,11 @@ import { Link, Navigate, useNavigate, useParams } from "react-router-dom";
 import { getAPIErrorCode, normalizeAPIError } from "@/api/client";
 import { useGradingSetup, useStartGrading, useTask } from "@/api/hooks";
 import { NewTaskStepper } from "@/components/new-task/NewTaskStepper";
+import { GradingRetryNotice } from "@/components/tasks/GradingRetryNotice";
 import { SubmissionSourceOutcomePanel } from "@/components/tasks/SubmissionSourceOutcomePanel";
 import { UnsavedChangesDialog } from "@/components/ui/UnsavedChangesDialog";
 import { useI18n } from "@/i18n/I18nProvider";
+import { useGradingIntent } from "@/hooks/useGradingIntent";
 import type { Locale } from "@/i18n/messages";
 import { cn } from "@/lib/cn";
 import { gradingPreflightText as copy } from "@/lib/gradingPreflightCopy";
@@ -29,6 +31,7 @@ export function GradingPreflightPage() {
   const taskQuery = useTask(taskId);
   const setupQuery = useGradingSetup(taskId);
   const startGrading = useStartGrading();
+  const intent = useGradingIntent();
   const [countdown, setCountdown] = useState(AUTO_START_SECONDS);
   const [autoStartEnabled, setAutoStartEnabled] = useState(true);
   const [showBlocker, setShowBlocker] = useState(false);
@@ -85,7 +88,7 @@ export function GradingPreflightPage() {
     && summary.problemCount > 0
     && summary.studentCount > 0,
   );
-  const countdownActive = canStart && autoStartEnabled && !hasReviewWarnings && !startGrading.isPending;
+  const countdownActive = canStart && !isRegrading && autoStartEnabled && !hasReviewWarnings && !startGrading.isPending;
 
   async function handleStart() {
     if (!taskId || !task || startTriggeredRef.current) return;
@@ -96,11 +99,9 @@ export function GradingPreflightPage() {
     startTriggeredRef.current = true;
     setAutoStartEnabled(false);
     try {
-      const response = await startGrading.mutateAsync({
-        taskId,
-        expectedWorkflowRevision: task.workflow_revision,
-      });
-      if (response.status === "already_done") {
+      const response = await intent.execute(task.workflow_revision, (request) => startGrading.mutateAsync({ taskId, ...request }));
+      if (!response) return;
+      if (response.status === "already_done" || (response.status === "already_finished" && ["completed", "partial_failed"].includes(response.run_status ?? ""))) {
         navigate(`/tasks/${taskId}/review`, { replace: true });
         return;
       }
@@ -114,7 +115,7 @@ export function GradingPreflightPage() {
   startHandlerRef.current = () => { void handleStart(); };
 
   useEffect(() => {
-    if (!canStart || historyView || !autoStartEnabled || hasReviewWarnings) {
+    if (!canStart || isRegrading || historyView || !autoStartEnabled || hasReviewWarnings) {
       setCountdown(AUTO_START_SECONDS);
       return;
     }
@@ -124,7 +125,7 @@ export function GradingPreflightPage() {
       setCountdown((current) => Math.max(0, current - 1));
     }, 1000);
     return () => window.clearInterval(intervalId);
-  }, [autoStartEnabled, canStart, hasReviewWarnings, historyView, taskId]);
+  }, [autoStartEnabled, canStart, hasReviewWarnings, historyView, isRegrading, taskId]);
 
   useEffect(() => {
     if (countdownActive && countdown === 0) startHandlerRef.current();
@@ -231,6 +232,7 @@ export function GradingPreflightPage() {
                 />
               </div>
               {startError ? <p role="alert" className="border-t px-6 py-2 text-[11px] font-medium text-danger sm:px-8">{startError || copy(locale, "startError")}</p> : null}
+              {isRegrading ? <div className="border-t px-6 py-3 sm:px-8"><GradingRetryNotice locale={locale} /></div> : null}
             </section>
           ) : null}
 

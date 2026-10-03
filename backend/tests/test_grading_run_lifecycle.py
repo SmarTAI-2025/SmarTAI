@@ -979,9 +979,6 @@ def test_process_run_removes_reporter_on_terminal(setup_assignment, monkeypatch)
         teacher_id=setup_assignment["teacher_id"],
         assignment_id=setup_assignment["assignment_id"],
     )
-    grading_repository.claim_lease(
-        run_id=run.id, worker_id="w-terminal", lease_seconds=60,
-    )
     revision = submission_repository.get_current_revision_for_run(
         submission_id=setup_assignment["submission_id"]
     )
@@ -995,9 +992,6 @@ def test_process_run_removes_reporter_on_terminal(setup_assignment, monkeypatch)
             q_id=question.q_id, type=question.type, score=8.0,
             max_score=question.max_score, confidence=1, comment="ok", steps=[],
         ),
-    )
-    grading_repository.upsert_result(
-        run.id, worker_id="w-terminal", grade_result=result,
     )
 
     async def replay_existing_result(**_kwargs):

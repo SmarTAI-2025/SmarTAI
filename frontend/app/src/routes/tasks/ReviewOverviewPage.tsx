@@ -11,6 +11,7 @@ import { TaskQueryBar } from "@/components/tasks/AskQueryBar";
 import { useTaskFilterIntent } from "@/hooks/useTaskFilterIntent";
 import { EMPTY_FILTER_INTENT, supportsFilterIntent } from "@/lib/taskFilterIntent";
 import { NewTaskStepper } from "@/components/new-task/NewTaskStepper";
+import { GradingRetryNotice } from "@/components/tasks/GradingRetryNotice";
 import { MatrixQueueWorkspace } from "@/components/tasks/MatrixQueueWorkspace";
 import { MatrixStatusCell, type MatrixStatusTone } from "@/components/tasks/MatrixStatusCell";
 import { getMatrixIdentityLayout, MATRIX_ACTION_COLUMN_WIDTH, MATRIX_QUESTION_COLUMN_WIDTH } from "@/components/tasks/matrixLayout";
@@ -193,6 +194,15 @@ export function ReviewOverviewPage() {
         <PageState title={copy(locale, "empty")} href="/history" action={copy(locale, "viewHistory")} />
       ) : (
         <>
+          {!historyView && resultQuery.data?.grading_run_status === "partial_failed" ? (
+            <section className="mt-5 rounded-[10px] border border-warning/40 bg-warning/5 p-5" aria-label={locale === "zh-CN" ? "批改失败重试" : "Retry failed grading"}>
+              <h2 className="mb-2 text-base font-semibold">{locale === "zh-CN" ? "部分作答未完成批改" : "Some answers could not be graded"}</h2>
+              <GradingRetryNotice locale={locale} />
+              <Link className="mt-3 inline-flex rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground" to={`/tasks/${taskId}/grading/preflight`}>
+                {locale === "zh-CN" ? "重试批改整批" : "Retry entire batch"}
+              </Link>
+            </section>
+          ) : null}
           <div className="mt-5 grid grid-cols-2 gap-4 xl:grid-cols-4 xl:gap-5">
             <MetricCard value={formatMetricPercent(model.classAveragePercent)} label={copy(locale, "average")} tone="primary" />
             <MetricCard value={String(model.lowConfidenceCount)} label={copy(locale, "lowConfidence")} tone="warning" />

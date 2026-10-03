@@ -239,6 +239,24 @@ class TaskCreateIdempotencyRecord(Base):
     created_at: Mapped[float] = mapped_column(Float, nullable=False, default=time.time)
 
 
+class GradingRequestRecord(Base):
+    """One explicit grading intent, including requests joining an active run."""
+
+    __tablename__ = "grading_requests"
+    assignment_id: Mapped[str] = mapped_column(
+        ForeignKey("assignments.id", ondelete="CASCADE"), primary_key=True
+    )
+    owner_id: Mapped[str] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), primary_key=True
+    )
+    request_id: Mapped[str] = mapped_column(String(160), primary_key=True)
+    workflow_revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    run_id: Mapped[str] = mapped_column(
+        ForeignKey("grading_runs.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    created_at: Mapped[float] = mapped_column(Float, nullable=False, default=time.time)
+
+
 class WorkflowOperationRecord(Base):
     """Durable, bounded state for extraction/import/generation operations."""
 
