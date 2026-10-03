@@ -295,6 +295,39 @@ async def test_fairness_is_per_teacher_and_not_per_model_count(scheduler, host):
         await cleanup(tasks)
 
 
+@pytest.mark.parametrize(("occupied", "capacity"), [(0, 1), (49, 50)])
+@pytest.mark.asyncio
+async def test_backlogged_teachers_alternate_when_slots_free_one_at_a_time(
+    scheduler, host, occupied, capacity,
+):
+    held = [await scheduler.acquire(**call("held", owner="holder")) for _ in range(occupied)]
+    host.capacity = occupied
+    tasks = []
+    owners = {}
+    for owner in ("teacher-a", "teacher-b"):
+        for index in range(4):
+            task = asyncio.create_task(scheduler.acquire(**call(f"{owner}-{index}", owner=owner)))
+            tasks.append(task)
+            owners[task] = owner
+    try:
+        await turns()
+        host.capacity = capacity
+        scheduler.wake.set()
+        seen, served = set(), []
+        for _ in range(4):
+            await turns(50)
+            fresh = [task for task in tasks if task.done() and task not in seen]
+            assert len(fresh) == 1
+            seen.add(fresh[0])
+            served.append(owners[fresh[0]])
+            fresh[0].result().release()
+        assert all(left != right for left, right in zip(served, served[1:])), served
+    finally:
+        await cleanup(tasks)
+        for lease in held:
+            lease.release()
+
+
 @pytest.mark.asyncio
 async def test_quota_blocked_model_does_not_block_other_ready_work(scheduler):
     lease = await scheduler.acquire(**call("blocked", rpm=1))

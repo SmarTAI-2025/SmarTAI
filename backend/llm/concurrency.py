@@ -289,6 +289,8 @@ class ModelScheduler:
         # One turn per owner. A quota-blocked model must not block that owner's
         # other models or any other user's ready requests.
         for _ in range(len(self.owners)):
+            if self.active >= HARD_LIMIT:
+                return made_progress
             owner = self.owners.popleft()
             queue = self.queues[owner]
             candidate = None
@@ -310,7 +312,7 @@ class ModelScheduler:
                     raise
                 if host is None:
                     queue.appendleft(candidate)
-                    self.owners.append(owner)
+                    self.owners.appendleft(owner)
                     # All callers use the same 50 host slots; checking every
                     # queued owner again cannot find a free slot this round.
                     return made_progress

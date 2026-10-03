@@ -109,7 +109,9 @@ export function ExpertsPage() {
     if (recovery && path) rememberImageReturn(owner, path, model);
   }
   useEffect(() => {
-    if (targetId) document.getElementById(`image-capability-${targetId}`)?.scrollIntoView?.({ block: "center" });
+    if (targetId) Array.from(document.querySelectorAll<HTMLElement>("[data-image-provider]"))
+      .find(element => element.dataset.imageProvider === targetId && element.getClientRects().length > 0)
+      ?.scrollIntoView?.({ block: "center" });
   }, [targetId, expertsQuery.data]);
   const removeExpert = useRemoveExpert();
   const [editor, setEditor] = useState<EditorTarget | null>(null);
@@ -805,7 +807,7 @@ function ExpertActions({
     <RowAction label={zh ? "验证图片能力" : "Verify image capability"} onClick={onVerifyImage} disabled={disabled}>
       <ShieldCheck aria-hidden="true" size={14} />
     </RowAction>
-    <div id={`image-capability-${expert.provider_id}`} className="w-full text-left text-xs text-muted-foreground">
+    <div data-image-provider={expert.provider_id} className="w-full text-left text-xs text-muted-foreground">
       <p>{zh ? "发送系统生成的测试图片，可能消耗少量额度，不上传你的题目或作业。" : "Sends a generated test image; may use a little quota. Your questions and homework are not uploaded."}</p>
       <p className="mt-1">{zh ? "图片能力：" : "Image capability: "}{imageCapabilityLabel(expert, zh)}{expert.image_checked_at ? ` · ${formatCheckedAt(expert.image_checked_at, locale)}` : ""}</p>
       {expert.image_reason ? <p>{imageReasonLabel(expert.image_reason, zh)}</p> : null}
