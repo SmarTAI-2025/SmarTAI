@@ -1,8 +1,12 @@
 import { SortableTableHead, useColumnSort, sortColumnRows, directionFor, type ColumnSort } from "@/components/ui/SortableTableHead";
 import { AlertCircle, CheckCircle2, ChevronRight, RotateCcw } from "lucide-react";
-import { useEffect, useMemo, useRef } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, Navigate, useParams, useSearchParams } from "react-router-dom";
-import { useTask } from "@/api/hooks/tasks";
+import { useTask, useUpdateStudentAnswer, useUpdateStudentIdentity } from "@/api/hooks/tasks";
+import { getAPIErrorCode } from "@/api/client";
+import { Button } from "@/components/ui/Button";
+import { confirmSubmissionBatch } from "@/lib/submissionReviewBatch";
+import { isWorkflowRevisionConflictCode } from "@/lib/taskActionGuards";
 import { TaskQueryBar } from "@/components/tasks/AskQueryBar";
 import { useTaskFilterIntent } from "@/hooks/useTaskFilterIntent";
 import { EMPTY_FILTER_INTENT, supportsFilterIntent } from "@/lib/taskFilterIntent";
@@ -55,6 +59,11 @@ export function SubmissionReviewOverviewPage() {
   const [searchParams, setSearchParams] = useSearchParams();
   const { locale, t } = useI18n();
   const taskQuery = useTask(taskId);
+  const identityMutation = useUpdateStudentIdentity();
+  const answerMutation = useUpdateStudentAnswer();
+  const batchLock = useRef(false);
+  const [batchProgress, setBatchProgress] = useState<{ completed: number; total: number } | null>(null);
+  const [batchResult, setBatchResult] = useState<{ message: string; href?: string } | null>(null);
   const query = searchParams.get("q") ?? "";
   const latestSearchParamsRef = useRef(new URLSearchParams(searchParams));
   const filter: SubmissionReviewFilter = "all";
@@ -69,6 +78,10 @@ export function SubmissionReviewOverviewPage() {
     [students, taskQuery.data?.problem_data],
   );
   const stats = useMemo(() => getSubmissionReviewStats(students, questions), [questions, students]);
+  const pendingIdentities = students.filter((student) => student.identity_status === "needs_review");
+  const pendingAnswers = students.flatMap((student) => (student.stu_ans ?? [])
+    .filter((answer) => answer.review_status !== "confirmed")
+    .map((answer) => ({ student, answer })));
   const smartFilter = useTaskFilterIntent({
     taskId, surface: "submission_review",
     resolveLocal: (value) => resolveSubmissionQuery(students, questions, value),
@@ -122,6 +135,46 @@ export function SubmissionReviewOverviewPage() {
     ? buildSubmissionQueueItems(selection.students, selection.questions, taskId, returnSearch)
     : [];
 
+  async function confirmAll(kind: "identity" | "answers") {
+    if (!taskId || !taskQuery.data || taskQuery.data.status !== "submissions_ready" || batchLock.current) return;
+    batchLock.current = true;
+    setBatchResult(null);
+    const total = kind === "identity" ? pendingIdentities.length : pendingAnswers.length;
+    setBatchProgress({ completed: 0, total });
+    try {
+      const progress = (completed: number) => setBatchProgress({ completed, total });
+      const revision = taskQuery.data.workflow_revision;
+      const result = kind === "identity"
+        ? await confirmSubmissionBatch(pendingIdentities, revision, (student, expectedWorkflowRevision) => identityMutation.mutateAsync({
+          taskId, currentStudentId: student.stu_id, studentId: student.stu_id, studentName: student.stu_name, expectedWorkflowRevision,
+        }), progress)
+        : await confirmSubmissionBatch(pendingAnswers, revision, ({ student, answer }, expectedWorkflowRevision) => answerMutation.mutateAsync({
+          taskId, studentId: student.stu_id, qId: answer.q_id, reviewStatus: "confirmed", expectedWorkflowRevision,
+        }), progress);
+      const unit = kind === "identity" ? (locale === "zh-CN" ? "位学生身份" : "student identities") : (locale === "zh-CN" ? "份作答" : "responses");
+      if (result.error) {
+        const code = getAPIErrorCode(result.error);
+        const reason = isWorkflowRevisionConflictCode(code)
+          ? (locale === "zh-CN" ? "任务内容已更新，已停止确认；请核对最新内容后继续。" : "Task changed. Review the latest content before continuing.")
+          : code === "workflow_busy"
+            ? (locale === "zh-CN" ? "任务正在处理，请完成后再试。" : "The task is busy. Retry after it finishes.")
+            : (locale === "zh-CN" ? "确认失败，请打开未完成的记录检查后重试。" : "Confirmation failed. Open the unfinished record and retry.");
+        const failed = result.failedItem;
+        const target = failed && "student" in failed ? failed.student : failed;
+        setBatchResult({
+          message: locale === "zh-CN" ? `已确认 ${result.completed} ${unit}，剩余 ${result.remaining} 项未确认。${reason}` : `Confirmed ${result.completed} ${unit}; ${result.remaining} remain. ${reason}`,
+          href: target ? (kind === "identity" ? identityReviewPath(taskId, target.stu_id, returnSearch) : studentReviewPath(taskId, target.stu_id, failed && "answer" in failed ? failed.answer.q_id : "", returnSearch)) : undefined,
+        });
+        await taskQuery.refetch();
+      } else {
+        setBatchResult({ message: locale === "zh-CN" ? `已确认全部 ${result.completed} ${unit}。` : `Confirmed all ${result.completed} ${unit}.` });
+      }
+    } finally {
+      batchLock.current = false;
+      setBatchProgress(null);
+    }
+  }
+
   return (
     <div className="w-full max-w-[1300px]">
       <h1 className="min-h-9 text-[30px] font-bold leading-9 tracking-[-0.02em] text-foreground">
@@ -165,6 +218,22 @@ export function SubmissionReviewOverviewPage() {
             tone={stats.identityAnomalies > 0 ? "warning" : "neutral"}
           />
         </dl>
+
+        {taskQuery.data?.status === "submissions_ready" && students.length > 0 ? (
+          <div className="mt-4 rounded-[10px] border bg-card p-4">
+            <div className="flex flex-wrap items-center gap-2">
+              <Button type="button" variant="secondary" disabled={batchProgress !== null || !pendingIdentities.length} onClick={() => void confirmAll("identity")}>
+                <CheckCircle2 className="h-4 w-4" />{locale === "zh-CN" ? `一键确认全部身份（${pendingIdentities.length}）` : `Confirm all identities (${pendingIdentities.length})`}
+              </Button>
+              <Button type="button" disabled={batchProgress !== null || !pendingAnswers.length} onClick={() => void confirmAll("answers")}>
+                <CheckCircle2 className="h-4 w-4" />{locale === "zh-CN" ? `一键确认全部作答（${pendingAnswers.length}）` : `Confirm all answers (${pendingAnswers.length})`}
+              </Button>
+            </div>
+            <p className="mt-2 text-xs text-muted-foreground">{locale === "zh-CN" ? "按当前识别内容确认全任务的记录，不修改姓名、学号或作答；缺失的作答不会标为已复核。" : "Confirms all records in this task as recognized without changing names, IDs or answers. Missing responses are excluded."}</p>
+            {batchProgress ? <p role="status" className="mt-2 text-sm">{locale === "zh-CN" ? "正在确认" : "Confirming"} {batchProgress.completed}/{batchProgress.total}</p> : null}
+            {batchResult ? <p role="status" className="mt-2 text-sm">{batchResult.message}{batchResult.href ? <Link className="ml-2 text-primary underline" to={batchResult.href}>{locale === "zh-CN" ? "打开未完成记录" : "Open unfinished record"}</Link> : null}</p> : null}
+          </div>
+        ) : null}
 
         <TaskQueryBar className="mt-6" filter={smartFilter} taskId={taskId} locale={locale}
           label={locale === "zh-CN" ? "Ask SmarTAI：学生作答" : "Ask SmarTAI: student answers"}
@@ -559,6 +628,12 @@ function studentReviewPath(taskId: string, studentId: string, questionId: string
   return `${studentPath(taskId, studentId)}?${params.toString()}`;
 }
 
+function identityReviewPath(taskId: string, studentId: string, returnSearch: string) {
+  const params = new URLSearchParams({ identity: "edit" });
+  if (returnSearch) params.set("returnParams", returnSearch);
+  return `${studentPath(taskId, studentId)}?${params.toString()}`;
+}
+
 function firstReviewQuestion(student: StudentSubmission, questions: SubmissionQuestion[]) {
   const answers = answerMap(student);
   return questions.find((question) => !["recognized", "reviewed"].includes(getAnswerState(answers.get(question.id))))
@@ -580,11 +655,10 @@ function buildSubmissionQueueItems(
   };
 
   for (const student of students) {
-    const firstQuestion = firstReviewQuestion(student, questions) ?? questions[0];
-    if (student.identity_status === "needs_review" && firstQuestion) {
+    if (student.identity_status === "needs_review") {
       items.push({
         key: `${student.stu_id}:identity`,
-        href: studentReviewPath(taskId, student.stu_id, firstQuestion.id, returnSearch),
+        href: identityReviewPath(taskId, student.stu_id, returnSearch),
         studentId: student.stu_id,
         studentName: student.stu_name || student.stu_id,
         questionLabel: "ID",
