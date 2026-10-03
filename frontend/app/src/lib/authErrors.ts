@@ -8,6 +8,7 @@ export function localizedAuthError(
   error: unknown,
   locale: Locale,
   context: "login" | "register",
+  loginType: "username" | "email" = "username",
 ): string {
   const normalized = normalizeAPIError(error);
   const zh = locale === "zh-CN";
@@ -19,12 +20,14 @@ export function localizedAuthError(
       : "Unable to reach the service. Check your connection and try again.";
   }
   if (normalized.status === 401) {
+    if (loginType === "email") return zh ? "邮箱或密码不正确。" : "The email or password is incorrect.";
     return zh ? "用户名或密码不正确。" : "The username or password is incorrect.";
   }
   if (normalized.status === 403) {
     return zh ? "此账号暂时无法访问教师工作台。" : "This account cannot access the teacher workspace.";
   }
   if (normalized.status === 422) {
+    if (loginType === "email") return zh ? "请检查邮箱和密码后再试。" : "Check the email and password, then try again.";
     return zh ? "请检查用户名和密码后再试。" : "Check the username and password, then try again.";
   }
   return zh ? "登录失败，请稍后重试。" : "Unable to sign in. Try again shortly.";
@@ -37,8 +40,11 @@ export function localizedRegistrationRequestError(error: unknown, locale: Locale
 
   if (code === "registration_email_domain_not_allowed") {
     return zh
-      ? "请改用允许的学校邮箱；具体范围以服务端校验为准。"
-      : "Use an allowed school email. The server is authoritative for eligible domains.";
+      ? "该邮箱域名暂未开放注册，敬请期待。如需咨询，请邮件联系 smartai-univ@gmail.com。"
+      : "Registration is not yet available for this email domain. For enquiries, contact smartai-univ@gmail.com.";
+  }
+  if (code === "registration_username_taken") {
+    return zh ? "该用户名已被使用，请更换" : "This username is already in use. Choose another.";
   }
   if (code === "registration_rate_limited") {
     return retryMessage(normalized.retryAfterSeconds, locale, "注册邮件请求过于频繁", "Too many registration email requests");

@@ -2,6 +2,7 @@ import { render, screen } from "@testing-library/react";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { NewTaskStepper } from "./NewTaskStepper";
+import userEvent from "@testing-library/user-event";
 
 vi.mock("@/api/hooks/tasks", () => ({
   useTask: vi.fn(),
@@ -96,8 +97,17 @@ describe("NewTaskStepper workflow guidance", () => {
 
     renderStepper({ currentStep: 6 });
 
-    expect(screen.queryByRole("link", { name: "newTaskStepSubmissions" })).not.toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "newTaskStepSubmissions" })).toHaveAttribute("href", "/tasks/task-1/submissions/upload");
     expect(screen.queryByRole("link", { name: "newTaskStepGrading" })).not.toBeInTheDocument();
-    expect(screen.getByText("newTaskStepGrading").closest("div")).toHaveAttribute("aria-disabled", "true");
+    expect(screen.getByRole("button", { name: "newTaskStepGrading" })).toHaveAttribute("title", "Complete newTaskStepSubmissions first");
+  });
+  it("explains a future step and links to the prerequisite instead of silently ignoring it", async () => {
+    (useTask as unknown as ReturnType<typeof vi.fn>).mockReturnValue({ data: { task_id: "task-1", status: "extracting_problems" } });
+    renderStepper({ currentStep: 1 });
+    const button = screen.getByRole("button", { name: "newTaskStepReview" });
+    button.focus();
+    await userEvent.keyboard("{Enter}");
+    expect(screen.getByRole("status")).toHaveTextContent("Complete newTaskStepUpload before continuing to newTaskStepReview.");
+    expect(screen.getByRole("link", { name: "Go to current step" })).toHaveAttribute("href", "/tasks/task-1/upload/problems");
   });
 });

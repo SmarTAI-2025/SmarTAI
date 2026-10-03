@@ -5,6 +5,7 @@ const DEFAULT_RATE_LIMIT_SECONDS = 60;
 const MAX_RATE_LIMIT_SECONDS = 2 * 60 * 60;
 const KNOWN_PUBLIC_AUTH_CODES = new Set([
   "registration_email_domain_not_allowed",
+  "registration_username_taken",
   "registration_rate_limited",
   "registration_email_delivery_failed",
   "registration_unavailable",

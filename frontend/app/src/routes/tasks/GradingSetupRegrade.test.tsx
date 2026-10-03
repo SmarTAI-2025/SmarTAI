@@ -168,11 +168,16 @@ describe("GradingSetupPage regrade mode", () => {
 
     render(<RouterProvider router={router} />);
 
-    expect(await screen.findByText(
+    expect((await screen.findAllByText(
       "This OCR service does not support grading. Choose a grading model.",
-    )).toBeInTheDocument();
+    ))[0]).toBeInTheDocument();
     expect(screen.getByText("Baidu Document Parsing (Unlimited-OCR)")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Save & Review Regrade" })).toBeEnabled();
+    fireEvent.click(screen.getByRole("button", { name: "Save & Review Regrade" }));
+    expect(saveSetupMutate).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "Fix settings" }));
+    await waitFor(() => expect(document.getElementById("grading-model-selection")).toHaveFocus());
+    expect(screen.getByRole("link", { name: "Open Models & BYOK" })).toHaveAttribute("href", "/settings/byok?returnTo=%2Ftasks%2Ftask-1%2Fgrading-setup");
   });
 
   it("saves settings independently while a source blocker still prevents grading start", async () => {
@@ -249,8 +254,27 @@ describe("GradingSetupPage regrade mode", () => {
     expect(await screen.findByText(message)).toBeInTheDocument();
     expect(screen.getByRole("slider")).toBeDisabled();
     const saveButton = screen.getByRole("button", { name: "Save & Review Grading" });
-    expect(saveButton).toBeDisabled();
+    expect(saveButton).toBeEnabled();
     fireEvent.click(saveButton);
+    expect(saveSetupMutate).not.toHaveBeenCalled();
+    expect(screen.getByRole("alertdialog")).toHaveTextContent(message);
+    expect(screen.getByRole("button", { name: "View current progress" })).toBeInTheDocument();
+  });
+
+  it("guides an empty model selection back to the editable model choices", async () => {
+    const current = (useGradingSetup as unknown as () => any)();
+    current.data.grading_setup.selected_provider_ids = [];
+    current.data.grading_setup.primary_provider_id = "";
+    const router = createMemoryRouter([{ path: "/tasks/:taskId/grading-setup", element: <GradingSetupPage /> }], {
+      initialEntries: ["/tasks/task-1/grading-setup"],
+    });
+    render(<RouterProvider router={router} />);
+    const saveButton = await screen.findByRole("button", { name: "Save & Review Regrade" });
+    expect(saveButton).toBeEnabled();
+    fireEvent.click(saveButton);
+    expect(screen.getByRole("alertdialog")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Fix settings" }));
+    await waitFor(() => expect(document.getElementById("grading-model-selection")).toHaveFocus());
     expect(saveSetupMutate).not.toHaveBeenCalled();
   });
 });

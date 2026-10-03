@@ -17,7 +17,8 @@ import {
 } from "lucide-react";
 import { Link, Navigate, useLocation, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { toast } from "sonner";
-import { useTask, useUpdateProblem } from "@/api/hooks/tasks";
+import { useTask } from "@/api/hooks/tasks";
+import { useQuestionReview } from "@/hooks/useQuestionReview";
 import { TaskQueryBar } from "@/components/tasks/AskQueryBar";
 import { useTaskFilterIntent } from "@/hooks/useTaskFilterIntent";
 import { resolvePreparationQuery, selectPreparationQuestions } from "@/lib/taskPreparationFilter";
@@ -50,7 +51,7 @@ function QuestionPreparationDetailPageForm() {
   const navigate = useNavigate();
   const { locale, t } = useI18n();
   const taskQuery = useTask(taskId);
-  const updateProblem = useUpdateProblem();
+  const { updateProblem, latestRevision: latestWorkflowRevisionRef, confirming, confirm, failure } = useQuestionReview(stableTaskId, taskQuery.data?.workflow_revision);
   const sourcePreview = useSourcePreview({
     taskId,
     workflowRevision: taskQuery.data?.workflow_revision,
@@ -60,12 +61,10 @@ function QuestionPreparationDetailPageForm() {
   });
   const [activeQuestionId, setActiveQuestionId] = useState(questionId ?? "");
   const [dirtyKeys, setDirtyKeys] = useState<Set<string>>(new Set());
-  const [confirming, setConfirming] = useState(false);
+  const [showUnsavedReview, setShowUnsavedReview] = useState(false);
   const urlQuery = searchParams.get("q") ?? "";
   const query = urlQuery;
   const positionedPathRef = useRef<string | null>(null);
-  const workflowRevisionTaskRef = useRef(stableTaskId);
-  const latestWorkflowRevisionRef = useRef<number | undefined>(taskQuery.data?.workflow_revision);
 
   const problems = useMemo(
     () => sortProblems(Object.values(taskQuery.data?.problem_data ?? {}), locale),
@@ -80,21 +79,6 @@ function QuestionPreparationDetailPageForm() {
     : null;
   const readOnly = Boolean(taskQuery.data && taskQuery.data.status !== "problems_ready");
   const hasDirty = dirtyKeys.size > 0;
-
-  useEffect(() => {
-    const serverRevision = taskQuery.data?.workflow_revision;
-    if (workflowRevisionTaskRef.current !== stableTaskId) {
-      workflowRevisionTaskRef.current = stableTaskId;
-      latestWorkflowRevisionRef.current = serverRevision;
-      return;
-    }
-    if (
-      serverRevision !== undefined
-      && (latestWorkflowRevisionRef.current === undefined || serverRevision > latestWorkflowRevisionRef.current)
-    ) {
-      latestWorkflowRevisionRef.current = serverRevision;
-    }
-  }, [stableTaskId, taskQuery.data?.workflow_revision]);
 
 
   useEffect(() => {
@@ -167,12 +151,6 @@ function QuestionPreparationDetailPageForm() {
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [nextQuestion?.q_id, previousQuestion?.q_id]);
 
-  if (!taskId) {
-    return <EmptyState title={tx(locale, "缺少任务 ID", "Task ID is missing")} description={tx(locale, "请从题目风险总览重新进入。", "Reopen this page from the risk overview.")} />;
-  }
-  if (taskQuery.data?.status === "draft") return <Navigate to={`/tasks/${taskId}/upload/problems`} replace />;
-  if (taskQuery.data?.status === "extracting_problems") return <Navigate to={`/tasks/${taskId}/problems/progress`} replace />;
-
   const setFieldDirty = useCallback((key: string, dirty: boolean) => {
     setDirtyKeys((current) => {
       const next = new Set(current);
@@ -181,6 +159,12 @@ function QuestionPreparationDetailPageForm() {
       return next;
     });
   }, []);
+
+  if (!taskId) {
+    return <EmptyState title={tx(locale, "缺少任务 ID", "Task ID is missing")} description={tx(locale, "请从题目风险总览重新进入。", "Reopen this page from the risk overview.")} />;
+  }
+  if (taskQuery.data?.status === "draft") return <Navigate to={`/tasks/${taskId}/upload/problems`} replace />;
+  if (taskQuery.data?.status === "extracting_problems") return <Navigate to={`/tasks/${taskId}/problems/progress`} replace />;
 
   function scrollToQuestion(targetId: string) {
     setActiveQuestionId(targetId);
@@ -220,37 +204,16 @@ function QuestionPreparationDetailPageForm() {
     latestWorkflowRevisionRef.current = response.workflow_revision;
   }
 
-  async function confirmAll() {
+  async function confirmReview(selected: ProblemInfo[], continueToUpload = false) {
     if (hasDirty) {
-      toast.error(tx(locale, "请先保存或取消正在编辑的内容。", "Save or cancel the active edits first."));
+      setShowUnsavedReview(true);
       return;
     }
-    setConfirming(true);
-    try {
-      let expectedWorkflowRevision = latestWorkflowRevisionRef.current;
-      for (const problem of problems) {
-        const response = await updateProblem.mutateAsync({
-          taskId: stableTaskId,
-          qId: problem.q_id,
-          expectedWorkflowRevision,
-          stem: problem.stem,
-          criterion: problem.criterion,
-          reference_answer: problem.reference_answer ?? "",
-          ...(isProgrammingProblem(problem) ? {
-            solution_code: problem.solution_code ?? "",
-            test_cases: problem.test_cases ?? [],
-          } : {}),
-          review_status: "confirmed",
-        });
-        expectedWorkflowRevision = response.workflow_revision;
-        latestWorkflowRevisionRef.current = response.workflow_revision;
-      }
-      toast.success(tx(locale, "全部题目资料已确认。", "All question materials are confirmed."));
-      navigate(`/tasks/${taskId}/submissions/upload`);
-    } catch {
-      toast.error(tx(locale, "确认失败，请刷新后重试。", "Confirmation failed. Refresh and retry."));
-    } finally {
-      setConfirming(false);
+    if (await confirm(selected)) {
+      toast.success(tx(locale, "题目资料已确认复核。", "Question materials marked as reviewed."));
+      if (continueToUpload) navigate(`/tasks/${taskId}/submissions/upload`);
+    } else {
+      window.scrollTo({ top: 0, left: 0, behavior: "auto" });
     }
   }
 
@@ -300,7 +263,15 @@ function QuestionPreparationDetailPageForm() {
         label={tx(locale, "Ask SmarTAI：题目资料", "Ask SmarTAI: question materials")}
         placeholder={tx(locale, "按满分升序，或找出缺少标答的题目", "Sort by maximum score, or find missing reference answers")} />
 
-      {readOnly ? <p className="mt-4 rounded-[8px] border border-amber-200 bg-amber-50 px-4 py-3 text-xs leading-5 text-amber-800 dark:border-amber-900 dark:bg-amber-950/20 dark:text-amber-200">{tx(locale, "当前任务已进入后续阶段，本页可浏览但不能修改。", "This task has moved to a later stage. The page is read-only.")}</p> : null}
+      {readOnly ? <p className="mt-4 rounded-[8px] border border-amber-200 bg-amber-50 px-4 py-3 text-xs leading-5 text-amber-800 dark:border-amber-900 dark:bg-amber-950/20 dark:text-amber-200">{tx(locale, "当前任务已进入后续阶段，可浏览和确认复核，不能修改资料正文。", "This task has moved to a later stage. You can review and confirm materials; content editing is unavailable.")}</p> : null}
+      {failure ? <div role="alert" className="mt-4 rounded-lg border border-amber-300 p-4 text-sm">
+        <p>{tx(locale, `已确认 ${failure.completed} 道题；第 ${failure.problem.number || failure.problem.q_id} 题未能保存，可能内容已更新或任务正在处理。请重新加载并核对后重试。`, `${failure.completed} questions confirmed; question ${failure.problem.number || failure.problem.q_id} could not be saved. Content may have changed or the task may be busy. Reload and review before retrying.`)}</p>
+        <button type="button" onClick={() => void taskQuery.refetch()} className="mt-2 mr-4 font-semibold text-primary">{tx(locale, "重新加载", "Reload")}</button>
+        <button type="button" onClick={() => {
+          if (filtered.some((problem) => problem.q_id === failure.problem.q_id)) scrollToQuestion(failure.problem.q_id);
+          else navigate(`/tasks/${taskId}/questions/${encodeURIComponent(failure.problem.q_id)}/content#${questionAnchorId(failure.problem.q_id)}`);
+        }} className="mt-2 font-semibold text-primary">{tx(locale, "前往该题", "Go to question")}</button>
+      </div> : null}
 
       {taskQuery.isLoading ? (
         <div className="mt-5 flex min-h-80 items-center justify-center rounded-[10px] border bg-card"><Loader2 aria-hidden="true" className="h-6 w-6 animate-spin text-primary" /></div>
@@ -340,13 +311,14 @@ function QuestionPreparationDetailPageForm() {
                 previous={filtered[index - 1] ?? null}
                 next={filtered[index + 1] ?? null}
                 readOnly={readOnly}
-                saving={updateProblem.isPending}
+                saving={updateProblem.isPending || confirming}
                 locale={locale}
                 onDirtyChange={setFieldDirty}
                 onSaveScoring={saveScoring}
                 onSaveText={saveText}
                 onSaveTests={saveTests}
                 onNavigate={scrollToQuestion}
+                onConfirm={(item) => void confirmReview([item])}
               />
             ))}
 
@@ -354,17 +326,19 @@ function QuestionPreparationDetailPageForm() {
               <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
                 <div>
                   <h2 className="text-lg font-bold text-foreground">{tx(locale, "完成全部题目资料审核", "Finish Reviewing All Question Materials")}</h2>
-                  <p className="mt-1 text-sm leading-6 text-muted-foreground">{tx(locale, `共 ${problems.length} 道题；确认后进入学生作答上传。`, `${problems.length} ${problems.length === 1 ? "question" : "questions"}; continue to student submissions after confirmation.`)}</p>
+                  <p className="mt-1 text-sm leading-6 text-muted-foreground">{readOnly
+                    ? tx(locale, `共 ${problems.length} 道题；确认仅更新复核状态。`, `${problems.length} questions; confirmation updates review status only.`)
+                    : tx(locale, `共 ${problems.length} 道题；确认后进入学生作答上传。`, `${problems.length} ${problems.length === 1 ? "question" : "questions"}; continue to student submissions after confirmation.`)}</p>
                 </div>
                 <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
                   <Link to={overviewHref} className="inline-flex h-10 items-center justify-center gap-2 rounded-[8px] border bg-card px-4 text-sm font-semibold text-foreground outline-none hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring">
                     <ArrowLeft aria-hidden="true" className="h-4 w-4" />
                     {tx(locale, "返回题目资料总览", "Back to Question Material Overview")}
                   </Link>
-                  {!readOnly ? <button type="button" disabled={confirming || hasDirty} onClick={() => void confirmAll()} className="inline-flex h-10 items-center justify-center gap-2 rounded-[8px] bg-primary px-5 text-sm font-semibold text-primary-foreground hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50">
+                  <button type="button" disabled={confirming || updateProblem.isPending} onClick={() => void confirmReview(problems, !readOnly)} className="inline-flex h-10 items-center justify-center gap-2 rounded-[8px] bg-primary px-5 text-sm font-semibold text-primary-foreground hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50">
                     {confirming ? <Loader2 aria-hidden="true" className="h-4 w-4 animate-spin" /> : <Check aria-hidden="true" className="h-4 w-4" />}
-                    {tx(locale, "确认全部题目资料", "Confirm All Materials")}
-                  </button> : null}
+                    {tx(locale, "一键确认全部题目已复核", "Confirm All Questions Reviewed")}
+                  </button>
                 </div>
               </div>
             </section>
@@ -374,11 +348,25 @@ function QuestionPreparationDetailPageForm() {
       </div>
       </SourceComparisonWorkspace>
 
+      {showUnsavedReview ? <UnsavedChangesDialog
+        title={tx(locale, "请先保存正在修改的内容", "Save the active edits first")}
+        description={tx(locale, "复核确认将使用已保存的内容。请保存或取消修改后再确认。", "Review confirmation uses saved content. Save or cancel your edits before confirming.")}
+        stayLabel={tx(locale, "关闭", "Close")}
+        leaveLabel={tx(locale, "前往未保存的修改", "Go to unsaved edits")}
+        onStay={() => setShowUnsavedReview(false)}
+        onLeave={() => {
+          setShowUnsavedReview(false);
+          const key = [...dirtyKeys][0];
+          const id = problems.find((problem) => key?.startsWith(`${problem.q_id}:`))?.q_id;
+          if (id) scrollToQuestion(id);
+        }}
+      /> : null}
+
     </div>
   );
 }
 
-function QuestionPackageCard({ problem, index, total, previous, next, readOnly, saving, locale, onDirtyChange, onSaveScoring, onSaveText, onSaveTests, onNavigate }: {
+function QuestionPackageCard({ problem, index, total, previous, next, readOnly, saving, locale, onDirtyChange, onSaveScoring, onSaveText, onSaveTests, onNavigate, onConfirm }: {
   problem: ProblemInfo;
   index: number;
   total: number;
@@ -392,6 +380,7 @@ function QuestionPackageCard({ problem, index, total, previous, next, readOnly, 
   onSaveText: (problem: ProblemInfo, field: TextFieldKey, value: string) => Promise<void>;
   onSaveTests: (problem: ProblemInfo, cases: TestCase[]) => Promise<void>;
   onNavigate: (qId: string) => void;
+  onConfirm: (problem: ProblemInfo) => void;
 }) {
   const programming = isProgrammingProblem(problem);
   const risks = (problem.preparation_issues ?? []).filter((issue) => issue.status === "open");
@@ -408,7 +397,11 @@ function QuestionPackageCard({ problem, index, total, previous, next, readOnly, 
           </div>
           <p className="mt-1 text-xs text-muted-foreground">{tx(locale, `筛选结果中的第 ${index + 1} / ${total} 题`, `${index + 1} of ${total}`)}</p>
         </div>
-        <QuestionNavigator previous={previous} next={next} locale={locale} onNavigate={onNavigate} />
+        <div className="flex flex-wrap items-center gap-2">
+          {problem.review_status === "confirmed" ? <span className="text-xs font-semibold text-emerald-700">{tx(locale, "已复核", "Reviewed")}</span> : null}
+          <button type="button" disabled={saving} onClick={() => onConfirm(problem)} aria-label={tx(locale, `确认第 ${problem.number || problem.q_id} 题已复核`, `Confirm question ${problem.number || problem.q_id} reviewed`)} className="inline-flex h-9 items-center gap-1.5 rounded-lg bg-primary px-3 text-xs font-semibold text-primary-foreground disabled:opacity-50"><Check aria-hidden="true" className="h-4 w-4" />{tx(locale, "确认已复核", "Confirm Reviewed")}</button>
+          <QuestionNavigator previous={previous} next={next} locale={locale} onNavigate={onNavigate} />
+        </div>
       </header>
 
       {risks.length ? (

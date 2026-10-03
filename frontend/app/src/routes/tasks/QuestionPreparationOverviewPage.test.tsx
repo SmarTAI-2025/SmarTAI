@@ -5,15 +5,18 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { QuestionPreparationOverviewPage } from "./QuestionPreparationOverviewPage";
 
 const extraIssues = vi.hoisted(() => [] as Array<Record<string, string>>);
-beforeEach(() => { extraIssues.length = 0; });
+const mutateAsync = vi.hoisted(() => vi.fn());
+beforeEach(() => { extraIssues.length = 0; mutateAsync.mockReset().mockResolvedValue({ workflow_revision: 8 }); });
 
 vi.mock("@/api/hooks/tasks", () => ({
+  useUpdateProblem: () => ({ isPending: false, mutateAsync }),
   useTask: () => ({
     isLoading: false,
     isSuccess: true,
     data: {
       task_id: "task-1",
       status: "problems_ready",
+      workflow_revision: 7,
       problem_data: {
         Q1: {
           q_id: "Q1",
@@ -94,6 +97,29 @@ function renderPage(initialEntry: string) {
 }
 
 describe("QuestionPreparationOverviewPage smart search", () => {
+  it("offers response upload even when unreviewed questions are hidden by a no-match filter", () => {
+    renderPage("/tasks/task-1/questions?q=no-match");
+    expect(screen.getByRole("link", { name: "继续上传作答" })).toHaveAttribute("href", "/tasks/task-1/submissions/upload");
+    expect(mutateAsync).not.toHaveBeenCalled();
+  });
+  it("confirms a single question without opening its editor", async () => {
+    renderPage("/tasks/task-1/questions");
+    await userEvent.click(screen.getByRole("button", { name: "确认第 Q1 题已复核" }));
+    expect(mutateAsync).toHaveBeenCalledExactlyOnceWith({ taskId: "task-1", qId: "Q1", expectedWorkflowRevision: 7, review_status: "confirmed" });
+  });
+
+  it("labels and confirms only the current filtered questions", async () => {
+    renderPage("/tasks/task-1/questions?q=Q2");
+    await userEvent.click(await screen.findByRole("button", { name: "确认当前 1 道题已复核" }));
+    expect(mutateAsync).toHaveBeenCalledExactlyOnceWith({ taskId: "task-1", qId: "Q2", expectedWorkflowRevision: 7, review_status: "confirmed" });
+  });
+
+  it("chains returned revisions across all visible questions", async () => {
+    renderPage("/tasks/task-1/questions");
+    await userEvent.click(screen.getByRole("button", { name: "一键确认全部题目已复核" }));
+    expect(mutateAsync.mock.calls.map(([patch]) => [patch.qId, patch.expectedWorkflowRevision])).toEqual([["Q1", 7], ["Q2", 8]]);
+  });
+
   it.each([
     ["recognition_partial", "识别覆盖或内容尚待核对，请对照原文"],
     ["recognition_needs_review", "识别结果存在不确定内容，请对照原文"],

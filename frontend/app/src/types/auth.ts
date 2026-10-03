@@ -9,10 +9,10 @@ export interface User {
   created_at: number;
 }
 
-export interface LoginRequest {
-  username: string;
-  password: string;
-}
+export type LoginRequest = { password: string } & (
+  | { login_type?: "username"; username: string; email?: never }
+  | { login_type: "email"; email: string; username?: never }
+);
 
 export interface EmailRegistrationRequest {
   username: string;

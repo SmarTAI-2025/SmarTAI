@@ -1,4 +1,5 @@
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { StrictMode } from "react";
 import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { APIError } from "@/api/client";
@@ -7,8 +8,10 @@ import { PENDING_REGISTRATION_STORAGE_KEY } from "@/lib/registrationFlow";
 import { RegisterPage } from "@/routes/RegisterPage";
 
 vi.mock("@/api/hooks", () => ({ useRequestRegistration: vi.fn() }));
+vi.mock("@/api/auth", () => ({ checkRegistrationUsername: vi.fn() }));
 
 const { useRequestRegistration } = await import("@/api/hooks");
+const { checkRegistrationUsername } = await import("@/api/auth");
 const mutateAsync = vi.fn();
 const resetMutation = vi.fn();
 
@@ -19,14 +22,14 @@ function LocationProbe() {
 
 function renderPage() {
   return render(
-    <I18nProvider>
+    <StrictMode><I18nProvider>
       <MemoryRouter initialEntries={["/register"]}>
         <Routes>
           <Route path="/register" element={<RegisterPage />} />
           <Route path="/register/check-email" element={<LocationProbe />} />
         </Routes>
       </MemoryRouter>
-    </I18nProvider>,
+    </I18nProvider></StrictMode>,
   );
 }
 
@@ -40,6 +43,12 @@ function fillRegistration() {
 describe("RegisterPage", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.mocked(checkRegistrationUsername).mockResolvedValue(true);
+    HTMLDialogElement.prototype.showModal = function () { this.setAttribute("open", ""); };
+    HTMLDialogElement.prototype.close = function () {
+      this.removeAttribute("open");
+      queueMicrotask(() => this.dispatchEvent(new Event("close")));
+    };
     window.sessionStorage.clear();
     window.localStorage.clear();
     (useRequestRegistration as unknown as ReturnType<typeof vi.fn>).mockReturnValue({
@@ -85,7 +94,10 @@ describe("RegisterPage", () => {
     renderPage();
     fillRegistration();
     await act(async () => fireEvent.click(screen.getByRole("button", { name: "发送验证链接" })));
-    expect(screen.getByRole("alert")).toHaveTextContent("请改用允许的学校邮箱");
+    expect(screen.getByRole("dialog")).toHaveTextContent("该邮箱域名暂未开放注册，敬请期待");
+    expect(screen.getByRole("link", { name: "smartai-univ@gmail.com" })).toHaveAttribute("href", "mailto:smartai-univ@gmail.com");
+    fireEvent.click(screen.getByRole("button", { name: "返回修改" }));
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
     expect(screen.getByLabelText("设置密码")).toHaveValue("");
     expect(screen.getByLabelText("确认密码")).toHaveValue("");
     expect(resetMutation).toHaveBeenCalledTimes(1);
@@ -93,7 +105,8 @@ describe("RegisterPage", () => {
 
   it("shows the frozen requirements and blocks mismatched confirmation locally", async () => {
     renderPage();
-    expect(screen.getByText(/首期支持 ustc\.edu\.cn/)).toBeInTheDocument();
+    expect(screen.queryByText(/ustc\.edu\.cn|edu\.cn/)).not.toBeInTheDocument();
+    expect(screen.getByText(/密码需 8–128 个字符/)).toBeInTheDocument();
     fireEvent.change(screen.getByRole("textbox", { name: "用户名" }), { target: { value: "teacher" } });
     fireEvent.change(screen.getByRole("textbox", { name: "学校邮箱" }), { target: { value: "teacher@ustc.edu.cn" } });
     fireEvent.change(screen.getByLabelText("设置密码"), { target: { value: "safe-password" } });
@@ -108,6 +121,9 @@ describe("RegisterPage", () => {
     [0, "暂时无法连接注册服务"],
     [404, "注册服务暂不可用"],
     [503, "注册服务暂不可用"],
+    [422, "请检查用户名、学校邮箱和密码"],
+    [400, "验证邮件未发送"],
+    [429, "注册邮件请求过于频繁"],
   ])("keeps the user on the form for a real service failure (%s)", async (status, expected) => {
     mutateAsync.mockRejectedValue(new APIError(status, "service failure"));
     renderPage();
@@ -115,6 +131,7 @@ describe("RegisterPage", () => {
     await act(async () => fireEvent.click(screen.getByRole("button", { name: "发送验证链接" })));
 
     expect(screen.getByRole("alert")).toHaveTextContent(expected);
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
     expect(screen.queryByTestId("location")).not.toBeInTheDocument();
     expect(screen.getByLabelText("设置密码")).toHaveValue("");
   });
@@ -151,5 +168,60 @@ describe("RegisterPage", () => {
     expect(mutateAsync).toHaveBeenCalledTimes(1);
     resolveRequest({ status: "verification_required", request_id: "request-1", expires_in_seconds: 1800, resend_after_seconds: 60 });
     await waitFor(() => expect(screen.getByTestId("location")).toHaveTextContent("/register/check-email"));
+  });
+
+  it("checks only on blur, ignores late results, and checks an edited name", async () => {
+    let finishOld!: (available: boolean) => void;
+    vi.mocked(checkRegistrationUsername).mockReturnValueOnce(new Promise((resolve) => { finishOld = resolve; })).mockResolvedValueOnce(true);
+    renderPage();
+    const input = screen.getByRole("textbox", { name: "用户名" });
+    fireEvent.change(input, { target: { value: "old-name" } });
+    expect(checkRegistrationUsername).not.toHaveBeenCalled();
+    fireEvent.blur(input);
+    expect(screen.getByText("正在检查用户名…")).toBeInTheDocument();
+    fireEvent.blur(input);
+    expect(checkRegistrationUsername).toHaveBeenCalledTimes(1);
+    fireEvent.change(input, { target: { value: "new-name" } });
+    fireEvent.blur(input);
+    expect(await screen.findByText(/当前用户名可用/)).toBeInTheDocument();
+    await act(async () => finishOld(false));
+    expect(screen.queryByText("该用户名已被使用，请更换")).not.toBeInTheDocument();
+  });
+
+  it("shows occupied names while filling and recovers after an edit", async () => {
+    vi.mocked(checkRegistrationUsername).mockResolvedValueOnce(false).mockResolvedValueOnce(true);
+    renderPage();
+    const input = screen.getByRole("textbox", { name: "用户名" });
+    fireEvent.change(input, { target: { value: "teacher" } });
+    fireEvent.blur(input);
+    expect(await screen.findByText("该用户名已被使用，请更换")).toBeInTheDocument();
+    expect(input).toHaveAttribute("aria-invalid", "true");
+    fireEvent.change(input, { target: { value: "available" } });
+    fireEvent.blur(input);
+    expect(await screen.findByText(/当前用户名可用/)).toBeInTheDocument();
+    expect(input).not.toHaveAttribute("aria-invalid");
+  });
+
+  it("does not let a successful advisory check hide a submit-time collision", async () => {
+    mutateAsync.mockRejectedValue(new APIError(409, "taken", { detail: { code: "registration_username_taken" } }));
+    renderPage();
+    fillRegistration();
+    fireEvent.blur(screen.getByRole("textbox", { name: "用户名" }));
+    await screen.findByText(/当前用户名可用/);
+    await act(async () => fireEvent.click(screen.getByRole("button", { name: "发送验证链接" })));
+    expect(screen.getByRole("alert")).toHaveTextContent("该用户名已被使用，请更换");
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "发送验证链接" })).toBeEnabled();
+  });
+
+  it("allows authoritative submission after an advisory network failure", async () => {
+    vi.mocked(checkRegistrationUsername).mockRejectedValueOnce(new APIError(0, "offline"));
+    mutateAsync.mockResolvedValue({ status: "verification_required", request_id: "recovered", expires_in_seconds: 1800, resend_after_seconds: 60 });
+    renderPage();
+    fillRegistration();
+    fireEvent.blur(screen.getByRole("textbox", { name: "用户名" }));
+    await screen.findByText(/暂时无法检查用户名/);
+    await act(async () => fireEvent.click(screen.getByRole("button", { name: "发送验证链接" })));
+    expect(await screen.findByTestId("location")).toHaveTextContent("/register/check-email");
   });
 });

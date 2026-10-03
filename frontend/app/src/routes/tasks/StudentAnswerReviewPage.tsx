@@ -46,6 +46,7 @@ import type { Locale, MessageKey } from "@/i18n/messages";
 import { cn } from "@/lib/cn";
 import { questionSearchAliases } from "@/lib/questionSearch";
 import { isWorkflowRevisionConflictCode } from "@/lib/taskActionGuards";
+import { confirmSubmissionBatch } from "@/lib/submissionReviewBatch";
 import {
   answerMap,
   buildSubmissionQuestions,
@@ -104,6 +105,11 @@ function StudentAnswerReviewForm() {
   const [identityId, setIdentityId] = useState("");
   const [identityName, setIdentityName] = useState("");
   const [identityError, setIdentityError] = useState<string | null>(null);
+  const [batchProgress, setBatchProgress] = useState<number | null>(null);
+  const [batchTotal, setBatchTotal] = useState(0);
+  const [batchMessage, setBatchMessage] = useState<string | null>(null);
+  const mutationLock = useRef(false);
+  const identityRequested = searchParams.get("identity") === "edit";
   const questionFilterParam = searchParams.get("questionFilter") ?? "";
   const initializedStudentRef = useRef<string | null>(null);
   const positionedRouteRef = useRef<string | null>(null);
@@ -160,12 +166,13 @@ function StudentAnswerReviewForm() {
   }, [requestedQuestionId]);
 
   useEffect(() => {
-    setIdentityOpen(false);
+    setIdentityOpen(identityRequested && !readOnly);
     setIdentityId(student?.stu_id ?? "");
     setIdentityName(student?.stu_name ?? "");
     setIdentityError(null);
     setEditingQuestionIds(new Set());
-  }, [student?.stu_id, student?.stu_name]);
+    setBatchMessage(null);
+  }, [student?.stu_id, student?.stu_name, identityRequested, readOnly]);
 
   useEffect(() => {
     if (!student) return;
@@ -199,11 +206,14 @@ function StudentAnswerReviewForm() {
       ? [question.id]
       : [];
   })), [answers, drafts, questions]);
-  const isDirty = dirtyQuestionIds.size > 0;
+  const identityDirty = identityOpen && (identityId !== (student?.stu_id ?? "") || identityName !== (student?.stu_name ?? ""));
+  const isDirty = dirtyQuestionIds.size > 0 || identityDirty;
+  const pendingAnswers = questions.filter((question) => answers.has(question.id) && answers.get(question.id)?.review_status !== "confirmed");
+  const mutationBusy = savingQuestionId !== null || identityMutation.isPending || batchProgress !== null;
   const answerDrafts = useRef(new Map<string, DraftFieldHandle>());
   const mounted = useRef(true);
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
-  const identityDraft = useDraftProtection({ scope: `identity:${taskId}:${encodeURIComponent(studentId ?? "")}`, value: { identityId, identityName }, baseline: { identityId: student?.stu_id ?? "", identityName: student?.stu_name ?? "" }, version: JSON.stringify([student?.stu_id, student?.stu_name]), enabled: Boolean(student && !readOnly), busy: identityMutation.isPending, onRestore: (restored) => { setIdentityId(restored.identityId); setIdentityName(restored.identityName); setIdentityOpen(true); } });
+  const identityDraft = useDraftProtection({ scope: `identity:${taskId}:${encodeURIComponent(studentId ?? "")}`, value: { identityId, identityName }, baseline: { identityId: student?.stu_id ?? "", identityName: student?.stu_name ?? "" }, version: JSON.stringify([student?.stu_id, student?.stu_name]), enabled: Boolean(student && !readOnly), busy: mutationBusy, onRestore: (restored) => { setIdentityId(restored.identityId); setIdentityName(restored.identityName); setIdentityOpen(true); } });
   const leave = useDraftLeave();
 
 
@@ -341,10 +351,11 @@ function StudentAnswerReviewForm() {
   }
 
   async function saveAnswer(question: SubmissionQuestion, moveNext: boolean) {
-    if (!taskId || !student || !taskQuery.data || readOnly) return;
+    if (!taskId || !student || !taskQuery.data || readOnly || mutationLock.current) return;
     const draft = drafts[question.id];
     if (!draft) return;
     if (savingQuestionId || answerDrafts.current.get(question.id)?.conflict) return;
+    mutationLock.current = true;
     setSavingQuestionId(question.id);
     setSaveErrors((current) => {
       const next = { ...current };
@@ -358,6 +369,7 @@ function StudentAnswerReviewForm() {
         qId: question.id,
         expectedWorkflowRevision: taskQuery.data.workflow_revision,
         content: draft.content,
+        reviewStatus: "confirmed",
       });
       if (!mounted.current) return;
       if (await answerDrafts.current.get(question.id)?.clear(draft) === false) return;
@@ -375,13 +387,15 @@ function StudentAnswerReviewForm() {
     } catch (error) {
       setSaveErrors((current) => ({ ...current, [question.id]: answerErrorMessage(error, t) }));
     } finally {
+      mutationLock.current = false;
       setSavingQuestionId(null);
     }
   }
 
   async function confirmAnswer(question: SubmissionQuestion) {
-    if (!taskId || !student || !taskQuery.data || readOnly) return;
-    if (savingQuestionId || answerDrafts.current.get(question.id)?.conflict) return;
+    if (!taskId || !student || !taskQuery.data || readOnly || mutationLock.current) return;
+    if (answerDrafts.current.get(question.id)?.conflict) return;
+    mutationLock.current = true;
     setSavingQuestionId(question.id);
     setSaveErrors((current) => {
       const next = { ...current };
@@ -401,7 +415,34 @@ function StudentAnswerReviewForm() {
     } catch (error) {
       setSaveErrors((current) => ({ ...current, [question.id]: answerErrorMessage(error, t) }));
     } finally {
+      mutationLock.current = false;
       setSavingQuestionId(null);
+    }
+  }
+
+  async function confirmAllAnswers() {
+    if (!taskId || !student || !taskQuery.data || readOnly || mutationLock.current) return;
+    if (dirtyQuestionIds.size) {
+      setBatchMessage(tx(locale, "请先保存正在修改的作答，再确认全部复核。", "Save your edited answers before confirming all responses."));
+      scrollToQuestion([...dirtyQuestionIds][0]);
+      return;
+    }
+    mutationLock.current = true;
+    setBatchTotal(pendingAnswers.length);
+    setBatchProgress(0);
+    setBatchMessage(null);
+    try {
+      const result = await confirmSubmissionBatch(pendingAnswers, taskQuery.data.workflow_revision, (question, revision) =>
+        answerMutation.mutateAsync({ taskId, studentId: student.stu_id, qId: question.id, expectedWorkflowRevision: revision, reviewStatus: "confirmed" }),
+      setBatchProgress);
+      if (!mounted.current || !identityDraft.isCurrent()) return;
+      setBatchMessage(result.error
+        ? tx(locale, `已确认 ${result.completed} 题，剩余 ${result.remaining} 题未确认。`, `Confirmed ${result.completed}; ${result.remaining} remain. `) + answerErrorMessage(result.error, t)
+        : tx(locale, `已确认本学生全部 ${result.completed} 份已有作答。`, `Confirmed all ${result.completed} existing responses for this student.`));
+      if (result.error) await taskQuery.refetch();
+    } finally {
+      mutationLock.current = false;
+      setBatchProgress(null);
     }
   }
 
@@ -435,14 +476,16 @@ function StudentAnswerReviewForm() {
     });
   }
 
-  async function saveIdentity() {
-    if (!taskId || !student || !taskQuery.data || readOnly) return;
-    const nextId = identityId.trim();
-    const nextName = identityName.trim();
+  async function saveIdentity(unchanged = false) {
+    if (!taskId || !student || !taskQuery.data || readOnly || mutationLock.current) return;
+    const nextId = unchanged ? student.stu_id : identityId.trim();
+    const nextName = unchanged ? student.stu_name : identityName.trim();
     if (!nextId || !nextName) {
+      setIdentityOpen(true);
       setIdentityError(t("studentSubmissionIdentityRequired"));
       return;
     }
+    mutationLock.current = true;
     setIdentityError(null);
     try {
       const result = await identityMutation.mutateAsync({
@@ -455,15 +498,19 @@ function StudentAnswerReviewForm() {
       await identityDraft.clear();
       setIdentityOpen(false);
       toast.success(t("studentSubmissionIdentitySaved"));
+      const nextSearch = new URLSearchParams(searchParams);
+      nextSearch.delete("identity");
       if (result.student.stu_id !== student.stu_id) {
         resetScrollForStudentRef.current = result.student.stu_id;
         navigate({
           pathname: studentPath(taskId, result.student.stu_id),
-          search: searchParams.toString() ? `?${searchParams.toString()}` : "",
+          search: nextSearch.toString() ? `?${nextSearch.toString()}` : "",
         }, { replace: true });
-      }
+      } else setSearchParams(nextSearch, { replace: true });
     } catch (error) {
       setIdentityError(identityErrorMessage(error, t));
+    } finally {
+      mutationLock.current = false;
     }
   }
 
@@ -471,7 +518,7 @@ function StudentAnswerReviewForm() {
 
   return (
     <div className="w-full max-w-[1300px]">
-      {!readOnly && student ? questions.filter((question) => drafts[question.id]).map((question) => <DraftField key={question.id} id={question.id} handles={answerDrafts} scope={`answers:${taskId}:${encodeURIComponent(studentId ?? "")}:${encodeURIComponent(question.id)}`} value={drafts[question.id]} baseline={{ content: answers.get(question.id)?.content ?? "" }} version={JSON.stringify(answers.get(question.id) ?? null)} busy={savingQuestionId === question.id} onRestore={(restored) => { setDrafts((current) => ({ ...current, [question.id]: restored })); setEditingQuestionIds((current) => new Set([...current, question.id])); }} />) : null}
+      {!readOnly && student ? questions.filter((question) => drafts[question.id]).map((question) => <DraftField key={question.id} id={question.id} handles={answerDrafts} scope={`answers:${taskId}:${encodeURIComponent(studentId ?? "")}:${encodeURIComponent(question.id)}`} value={drafts[question.id]} baseline={{ content: answers.get(question.id)?.content ?? "" }} version={JSON.stringify(answers.get(question.id) ?? null)} busy={mutationBusy} onRestore={(restored) => { setDrafts((current) => ({ ...current, [question.id]: restored })); setEditingQuestionIds((current) => new Set([...current, question.id])); }} />) : null}
       <div className="flex min-h-9 items-center justify-between gap-4">
         <h1 className="min-w-0 truncate text-[28px] font-bold leading-9 tracking-[-0.02em] text-foreground sm:text-[30px]">
           {t("answerReviewTitle")}
@@ -595,6 +642,13 @@ function StudentAnswerReviewForm() {
             className="mt-3"
           >
           <div className="min-w-0">
+          {!readOnly && student.identity_status === "needs_review" && !identityOpen ? (
+            <div className="mb-3 flex flex-wrap items-center justify-between gap-3 rounded-[10px] border border-amber-200 bg-card p-4">
+              <p className="text-sm">{tx(locale, "请核对姓名与学号；无误时可直接确认。", "Check the student name and ID, then confirm if correct.")}</p>
+              <Button type="button" disabled={mutationBusy} onClick={() => void saveIdentity(true)}><Check className="h-4 w-4" />{tx(locale, "确认身份已复核", "Confirm identity reviewed")}</Button>
+              {identityError ? <p role="alert" className="w-full text-xs text-danger">{identityError}</p> : null}
+            </div>
+          ) : null}
           {identityOpen ? (
             <form
               className="rounded-[10px] border bg-card p-4"
@@ -618,15 +672,15 @@ function StudentAnswerReviewForm() {
               <div className="mt-3 grid gap-3 sm:grid-cols-[1fr_1fr_auto] sm:items-end">
                 <label className="grid gap-1.5 text-xs font-medium text-foreground">
                   {t("studentSubmissionStudentId")}
-                  <input value={identityId} maxLength={160} onChange={(event) => setIdentityId(event.target.value)} className="h-10 rounded-[7px] border bg-card px-3 text-sm outline-none focus:border-primary focus:ring-2 focus:ring-primary/15" />
+                  <input autoFocus={identityRequested} disabled={mutationBusy} value={identityId} maxLength={160} onChange={(event) => setIdentityId(event.target.value)} className="h-10 rounded-[7px] border bg-card px-3 text-sm outline-none focus:border-primary focus:ring-2 focus:ring-primary/15" />
                 </label>
                 <label className="grid gap-1.5 text-xs font-medium text-foreground">
                   {t("studentSubmissionStudentName")}
-                  <input value={identityName} maxLength={160} onChange={(event) => setIdentityName(event.target.value)} className="h-10 rounded-[7px] border bg-card px-3 text-sm outline-none focus:border-primary focus:ring-2 focus:ring-primary/15" />
+                  <input disabled={mutationBusy} value={identityName} maxLength={160} onChange={(event) => setIdentityName(event.target.value)} className="h-10 rounded-[7px] border bg-card px-3 text-sm outline-none focus:border-primary focus:ring-2 focus:ring-primary/15" />
                 </label>
-                <Button type="submit" className="h-10 px-5" disabled={identityMutation.isPending}>
+                <Button type="submit" className="h-10 px-5" disabled={mutationBusy}>
                   {identityMutation.isPending ? <LoaderCircle aria-hidden="true" className="h-4 w-4 animate-spin" /> : <Check aria-hidden="true" className="h-4 w-4" />}
-                  {t(identityMutation.isPending ? "studentSubmissionIdentitySaving" : "studentSubmissionIdentitySave")}
+                  {identityMutation.isPending ? t("studentSubmissionIdentitySaving") : identityDirty ? tx(locale, "保存并确认身份", "Save and confirm identity") : tx(locale, "确认身份已复核", "Confirm identity reviewed")}
                 </Button>
               </div>
               {identityError ? <p className="mt-2 text-xs font-medium text-danger" role="alert">{identityError}</p> : null}
@@ -705,7 +759,7 @@ function StudentAnswerReviewForm() {
                     saving={savingQuestionId === question.id}
                     saveError={saveErrors[question.id]}
                     editing={editingQuestionIds.has(question.id)}
-                    readOnly={readOnly}
+                    readOnly={readOnly || mutationBusy && savingQuestionId !== question.id}
                     onDraftChange={(patch) => updateDraft(question.id, patch)}
                     onSave={(moveNext) => void saveAnswer(question, moveNext)}
                     onEdit={() => startEditing(question)}
@@ -737,6 +791,10 @@ function StudentAnswerReviewForm() {
           )}
 
           <div className="mt-6 flex flex-col-reverse gap-2 pb-8 sm:flex-row sm:items-center sm:justify-end">
+            {!readOnly ? <Button type="button" className="h-10" disabled={mutationBusy || pendingAnswers.length === 0} onClick={() => void confirmAllAnswers()}>
+              <CheckCircle2 className="h-4 w-4" />
+              {batchProgress !== null ? tx(locale, `正在确认 ${batchProgress}/${batchTotal}`, `Confirming ${batchProgress}/${batchTotal}`) : tx(locale, "一键确认本学生全部作答", "Confirm all this student's answers")}
+            </Button> : null}
             <Link
               to={backHref}
               onClick={(event) => { if (!confirmLeave()) event.preventDefault(); }}
@@ -753,6 +811,8 @@ function StudentAnswerReviewForm() {
               <ChevronRight aria-hidden="true" className="h-4 w-4" />
             </Link>
           </div>
+          {batchMessage ? <p role="status" className="mb-4 text-sm text-muted-foreground">{batchMessage}</p> : null}
+          {!readOnly && questions.some((question) => !answers.has(question.id)) ? <p className="mb-4 text-xs text-muted-foreground">{tx(locale, "缺失的作答没有识别记录，批量复核不会将其标为已确认；可返回总览重新添加作答。", "Missing responses have no recognition record and are excluded from confirmation. Return to the overview to upload them.")}</p> : null}
           </div>
           </SourceComparisonWorkspace>
         </section>
@@ -898,7 +958,7 @@ function AnswerReviewCard({ question, answer, draft, sourceFilename, previous, n
             <h2 className="text-[20px] font-bold text-foreground">{tx(locale, `第 ${question.label} 题`, `Question ${question.label}`)}</h2>
             <span className="rounded-full bg-slate-100 px-2.5 py-1 text-[11px] font-semibold text-muted-foreground dark:bg-slate-800">{question.type || t("studentSubmissionUnknownType")}</span>
             <AnswerStateBadge state={state} answer={answer} locale={locale} t={t} />
-            {!readOnly && !editing && !["recognized", "reviewed"].includes(state) ? (
+            {!readOnly && !editing && answer && state !== "reviewed" ? (
               <Button
                 type="button"
                 variant="secondary"
@@ -962,15 +1022,15 @@ function AnswerReviewCard({ question, answer, draft, sourceFilename, previous, n
                   <X aria-hidden="true" className="h-4 w-4" />
                   {tx(locale, "取消", "Cancel")}
                 </Button>
-                <Button type="button" variant="secondary" className="h-9 px-4" disabled={saving || !dirty} onClick={() => onSave(false)}>
+                <Button type="button" variant="secondary" className="h-9 px-4" disabled={saving} onClick={() => onSave(false)}>
                   {saving ? <LoaderCircle aria-hidden="true" className="h-4 w-4 animate-spin" /> : <Save aria-hidden="true" className="h-4 w-4" />}
-                  {t(saving ? "answerReviewSaving" : "answerReviewSave")}
+                  {saving ? t("answerReviewSaving") : tx(locale, dirty ? "保存并确认复核" : "确认已复核", dirty ? "Save and confirm reviewed" : "Confirm reviewed")}
                 </Button>
-                <Button type="button" className="h-9 px-4" disabled={saving || !dirty} onClick={() => onSave(Boolean(next))}>
+                {next ? <Button type="button" className="h-9 px-4" disabled={saving} onClick={() => onSave(true)}>
                   <CheckCircle2 aria-hidden="true" className="h-4 w-4" />
                   {next ? t("answerReviewSaveNext") : t("answerReviewSave")}
                   {next ? <ArrowDown aria-hidden="true" className="h-4 w-4" /> : null}
-                </Button>
+                </Button> : null}
               </div>
             </>
           ) : (
@@ -1109,8 +1169,8 @@ function buildBackHref(taskId: string | undefined, searchParams: URLSearchParams
 function answerErrorMessage(error: unknown, t: (key: MessageKey) => string) {
   const normalized = normalizeAPIError(error);
   const code = getAPIErrorCode(normalized) ?? "";
-  if (code === "task_workflow_changed") return t("answerReviewStale");
-  if (code === "task_workflow_busy" || normalized.status === 409) return t("answerReviewUnavailable");
+  if (isWorkflowRevisionConflictCode(code)) return t("answerReviewStale");
+  if (code === "workflow_busy" || code === "task_workflow_busy" || normalized.status === 409) return t("answerReviewUnavailable");
   return t("answerReviewSaveError");
 }
 
@@ -1158,7 +1218,7 @@ function identityErrorMessage(error: unknown, t: (key: MessageKey) => string) {
   const code = getAPIErrorCode(normalized) ?? "";
   if (code === "student_identity_conflict") return t("studentSubmissionIdentityConflict");
   if (isWorkflowRevisionConflictCode(code)) return t("studentSubmissionIdentityStale");
-  if (code === "student_identity_edit_unavailable") return t("studentSubmissionIdentityUnavailable");
+  if (code === "workflow_busy" || code === "student_identity_edit_unavailable") return t("studentSubmissionIdentityUnavailable");
   if (code === "student_identity_required") return t("studentSubmissionIdentityRequired");
   return t("studentSubmissionIdentityError");
 }

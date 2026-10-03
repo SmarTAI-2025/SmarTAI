@@ -213,17 +213,8 @@ def start_run(
         if any(revision_id not in frozen_revision_ids for revision_id in expected_revisions):
             raise VersionConflict("grading_inputs_changed", code="grading_inputs_changed")
         frozen_revision_ids = expected_revisions
-    from backend.db import workflow_repository
-    from backend.domain.errors import InvalidTransition
-    flagged = []
-    for revision_id in frozen_revision_ids:
-        revision = submission_repository.get_revision(revision_id, actor_id=teacher_id)
-        flagged.extend(answer.id for answer in revision.answers
-                       if "recognition_needs_review" in (answer.flag or []))
-    reviews = workflow_repository.answer_review_statuses(flagged)
-    if any(reviews.get(answer_id) != "confirmed" for answer_id in flagged):
-        raise InvalidTransition("Review uncertain transcription before grading.",
-                                code="submission_recognition_needs_review")
+    # Recognition review is advisory. Freeze the current revision unchanged;
+    # starting grading must not confirm or clear its review flags.
     run = grading_repository.create_run_bundle(
         assignment_id=assignment_id,
         teacher_id=teacher_id,

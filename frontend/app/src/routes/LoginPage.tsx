@@ -1,6 +1,6 @@
 import { useDraftProtection } from "@/hooks/useDraftProtection";
 import { FileCheck2, Loader2 } from "lucide-react";
-import { useState, type FormEvent } from "react";
+import { useRef, useState, type FormEvent } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import { useQueryClient } from "@tanstack/react-query";
 import { clearAuthToken } from "@/api/client";
@@ -25,10 +25,13 @@ export function LoginPage() {
   const { locale } = useI18n();
   const zh = locale === "zh-CN";
   const login = useLogin();
+  const submitting = useRef(false);
+  const [loginType, setLoginType] = useState<"username" | "email">("username");
   const [username, setUsername] = useState("");
+  const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [formError, setFormError] = useState<string | null>(null);
-  const inputProtection = useDraftProtection({ scope: "credential:LoginPage", value: { username, password }, baseline: { username: "", password: "" }, secret: true, onRestore: (draft) => { setUsername(draft.username); setPassword(draft.password); } });
+  const inputProtection = useDraftProtection({ scope: "credential:LoginPage", value: { username, email, password }, baseline: { username: "", email: "", password: "" }, secret: true, onRestore: (draft) => { setUsername(draft.username); setEmail(draft.email); setPassword(draft.password); } });
   const [stateErrorDismissed, setStateErrorDismissed] = useState(false);
   const stateError = getAuthStateError(location.state);
   const visibleError =
@@ -37,21 +40,24 @@ export function LoginPage() {
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    if (submitting.current || login.isPending) return;
     setFormError(null);
     setStateErrorDismissed(true);
-    const normalizedUsername = username.trim();
-    if (!normalizedUsername || !password) {
+    const identity = (loginType === "email" ? email : username).trim();
+    if (!identity || !password) {
       setFormError(
-        zh ? "请输入用户名和密码。" : "Enter your username and password.",
+        loginType === "email"
+          ? (zh ? "请输入邮箱和密码。" : "Enter your email and password.")
+          : (zh ? "请输入用户名和密码。" : "Enter your username and password."),
       );
       return;
     }
 
+    submitting.current = true;
     try {
-      const user = await login.mutateAsync({
-        username: normalizedUsername,
-        password,
-      });
+      const user = await login.mutateAsync(loginType === "email"
+        ? { login_type: "email", email: identity, password }
+        : { username: identity, password });
 
       if (user.role !== "teacher" && user.role !== "admin") {
         clearAuthToken();
@@ -72,7 +78,9 @@ export function LoginPage() {
       navigate(safeReturnPath(location.state), { replace: true });
     } catch (error) {
       setPassword("");
-      setFormError(localizedAuthError(error, locale, "login"));
+      setFormError(localizedAuthError(error, locale, "login", loginType));
+    } finally {
+      submitting.current = false;
     }
   }
 
@@ -103,16 +111,41 @@ export function LoginPage() {
         </p>
 
         <form className="mt-7 grid gap-4" onSubmit={handleSubmit}>
-          <Field label={zh ? "用户名" : "Username"}>
+          <fieldset disabled={login.isPending} className="flex gap-1 rounded-md bg-muted p-1">
+            <legend className="sr-only">{zh ? "登录方式" : "Sign-in method"}</legend>
+            {(["username", "email"] as const).map((mode) => (
+              <label key={mode} className={`flex-1 cursor-pointer rounded px-3 py-2 text-center text-sm font-medium focus-within:ring-2 focus-within:ring-ring ${loginType === mode ? "bg-card text-primary shadow-sm" : "text-muted-foreground"}`}>
+                <input
+                  className="sr-only"
+                  type="radio"
+                  name="login-type"
+                  value={mode}
+                  checked={loginType === mode}
+                  onChange={() => {
+                    if (submitting.current) return;
+                    setLoginType(mode);
+                    setPassword("");
+                    setFormError(null);
+                  }}
+                />
+                {mode === "username" ? (zh ? "用户名登录" : "Username") : (zh ? "邮箱登录" : "Email")}
+              </label>
+            ))}
+          </fieldset>
+          <Field label={loginType === "email" ? (zh ? "邮箱" : "Email") : (zh ? "用户名" : "Username")}>
             <Input
+              key={loginType}
+              aria-label={loginType === "email" ? (zh ? "邮箱" : "Email") : (zh ? "用户名" : "Username")}
               className="h-11 w-full"
               autoComplete="username"
+              type={loginType === "email" ? "email" : "text"}
+              maxLength={loginType === "email" ? 320 : 128}
               autoFocus
               disabled={login.isPending}
-              onChange={(event) => setUsername(event.target.value)}
-              placeholder={zh ? "输入用户名" : "Enter username"}
+              onChange={(event) => loginType === "email" ? setEmail(event.target.value) : setUsername(event.target.value)}
+              placeholder={loginType === "email" ? (zh ? "输入邮箱" : "Enter email") : (zh ? "输入用户名" : "Enter username")}
               required
-              value={username}
+              value={loginType === "email" ? email : username}
             />
           </Field>
           <Field label={zh ? "密码" : "Password"}>

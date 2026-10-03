@@ -18,8 +18,7 @@ def _alembic_config(db_url: str, monkeypatch) -> Config:
     cfg.set_main_option(
         "script_location", str(REPO_ROOT / "backend/db/migrations")
     )
-    monkeypatch.setenv("SMARTAI_DATABASE_URL", db_url)
-    monkeypatch.setenv("SMARTAI_DATABASE_HEAVY", "OFF")
+    cfg.attributes.update(database_url=db_url, database_heavy=False)
     return cfg
 
 
@@ -120,15 +119,11 @@ def test_migration_allows_same_vendor_model_at_distinct_endpoints(tmp_path, monk
 
 
 def test_postgresql_relay_endpoint_ddl_is_portable(monkeypatch):
-    from backend.config import settings
-
     database_url = "postgresql+psycopg://smartai:smartai@localhost/smartai_test"
-    monkeypatch.setenv("SMARTAI_DATABASE_URL", database_url)
-    monkeypatch.setenv("SMARTAI_DATABASE_HEAVY", "ON")
-    monkeypatch.setattr(settings, "database_heavy", True)
     output = StringIO()
     cfg = Config("alembic.ini", output_buffer=output)
     cfg.set_main_option("script_location", "backend/db/migrations")
+    cfg.attributes.update(database_url=database_url, database_heavy=True)
     command.upgrade(cfg, "head", sql=True)
     sql = output.getvalue()
 
@@ -145,7 +140,7 @@ PG_URL = os.environ.get("SMARTAI_TEST_POSTGRES_URL")
 
 
 @pytest.fixture
-def relay_provider_pg_database():
+def relay_provider_pg_database(monkeypatch):
     if not PG_URL:
         pytest.skip(
             "Set SMARTAI_TEST_POSTGRES_URL to run PostgreSQL integration (GitHub Actions)."
@@ -155,16 +150,13 @@ def relay_provider_pg_database():
     from backend.db.session import configure_database
     from sqlalchemy import create_engine
 
-    old_heavy = settings.database_heavy
-    old_url = os.environ.get("SMARTAI_DATABASE_URL")
-    old_heavy_env = os.environ.get("SMARTAI_DATABASE_HEAVY")
-    settings.database_heavy = True
+    monkeypatch.setattr(settings, "database_url", PG_URL)
+    monkeypatch.setattr(settings, "database_heavy", True)
     configure_database(PG_URL)
     engine = create_engine(PG_URL)
     config = Config("alembic.ini")
     config.set_main_option("script_location", "backend/db/migrations")
-    os.environ["SMARTAI_DATABASE_URL"] = PG_URL
-    os.environ["SMARTAI_DATABASE_HEAVY"] = "ON"
+    config.attributes.update(database_url=PG_URL, database_heavy=True)
     try:
         with engine.begin() as connection:
             connection.exec_driver_sql("DROP SCHEMA public CASCADE")
@@ -176,15 +168,6 @@ def relay_provider_pg_database():
             connection.exec_driver_sql("DROP SCHEMA public CASCADE")
             connection.exec_driver_sql("CREATE SCHEMA public")
         engine.dispose()
-        settings.database_heavy = old_heavy
-        if old_url is None:
-            os.environ.pop("SMARTAI_DATABASE_URL", None)
-        else:
-            os.environ["SMARTAI_DATABASE_URL"] = old_url
-        if old_heavy_env is None:
-            os.environ.pop("SMARTAI_DATABASE_HEAVY", None)
-        else:
-            os.environ["SMARTAI_DATABASE_HEAVY"] = old_heavy_env
 
 
 def test_postgres_endpoint_identity_and_owner_isolation(relay_provider_pg_database):

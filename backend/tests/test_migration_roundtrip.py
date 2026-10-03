@@ -25,11 +25,12 @@ def _alembic_config(db_url: str, monkeypatch) -> Config:
     cfg.set_main_option(
         "script_location", str(REPO_ROOT / "backend/db/migrations")
     )
-    # env.py reads SMARTAI_DATABASE_URL; also force light mode so the SQLite URL
-    # passes validate_database_mode(). Use monkeypatch so the env is restored
-    # after the test and doesn't leak into other tests' configure_database().
-    monkeypatch.setenv("SMARTAI_DATABASE_URL", db_url)
-    monkeypatch.setenv("SMARTAI_DATABASE_HEAVY", "OFF")
+    # Explicit test targets must not depend on environment overrides after the
+    # application settings singleton has already been loaded.
+    from backend.config import settings
+    cfg.attributes.update(database_url=db_url, database_heavy=False)
+    monkeypatch.setattr(settings, "database_url", db_url)
+    monkeypatch.setattr(settings, "database_heavy", False)
     return cfg
 
 
@@ -1041,15 +1042,11 @@ def test_workflow_migration_preserves_existing_review_and_kb_link(
 
 
 def _postgresql_sql(monkeypatch, revision: str) -> str:
-    from backend.config import settings
-
     database_url = "postgresql+psycopg://smartai:smartai@localhost/smartai_test"
-    monkeypatch.setenv("SMARTAI_DATABASE_URL", database_url)
-    monkeypatch.setenv("SMARTAI_DATABASE_HEAVY", "ON")
-    monkeypatch.setattr(settings, "database_heavy", True)
     output = StringIO()
     cfg = Config("alembic.ini", output_buffer=output)
     cfg.set_main_option("script_location", "backend/db/migrations")
+    cfg.attributes.update(database_url=database_url, database_heavy=True)
     if ":" in revision:
         command.downgrade(cfg, revision, sql=True)
     else:

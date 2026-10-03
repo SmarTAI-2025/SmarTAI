@@ -33,7 +33,7 @@ export function MatrixStatusCell({
       aria-label={label}
       title={label}
       className={cn(
-        "flex h-8 w-full min-w-10 items-center justify-center rounded-[7px] outline-none transition hover:brightness-95 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1",
+        "relative flex h-8 w-full min-w-10 items-center justify-center rounded-[7px] outline-none transition hover:brightness-95 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1",
         tone === "ok" && "bg-emerald-100 text-emerald-700 dark:bg-emerald-950/70 dark:text-emerald-200",
         tone === "reviewed" && "bg-blue-100 text-primary dark:bg-blue-950/70 dark:text-blue-200",
         tone === "warning" && "bg-amber-100 text-amber-700 dark:bg-amber-950/70 dark:text-amber-200",

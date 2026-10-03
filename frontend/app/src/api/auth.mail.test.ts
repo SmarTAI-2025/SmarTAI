@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import * as client from "@/api/client";
 import {
+  checkRegistrationUsername,
   confirmPasswordReset,
   requestPasswordReset,
   requestRegistration,
@@ -26,18 +27,26 @@ describe("public mail auth API contract", () => {
       .mockResolvedValueOnce(validRegistration)
       .mockResolvedValueOnce({ status: "registered" })
       .mockResolvedValueOnce({ status: "reset_link_requested", expires_in_seconds: 1800, resend_after_seconds: 60 })
-      .mockResolvedValueOnce({ status: "password_reset" });
+      .mockResolvedValueOnce({ status: "password_reset" })
+      .mockResolvedValueOnce({ available: true });
 
     await requestRegistration({ username: "teacher", email: "teacher@ustc.edu.cn", password: "safe-password" });
     await resendRegistration("request-1");
     await verifyRegistration("verification-secret");
     await requestPasswordReset({ email: "teacher@ustc.edu.cn" });
     await confirmPasswordReset("reset-secret", "new-safe-password");
+    await expect(checkRegistrationUsername("teacher")).resolves.toBe(true);
 
-    expect(post).toHaveBeenCalledTimes(5);
+    expect(post).toHaveBeenCalledTimes(6);
     for (const call of post.mock.calls) {
       expect(call[2]).toMatchObject({ _skipAuthHeader: true, _skipAuthRefresh: true });
     }
+  });
+
+  it("rejects malformed username availability instead of claiming a name is free", async () => {
+    vi.spyOn(client, "postJSON").mockResolvedValue({ available: "false" });
+    await expect(checkRegistrationUsername("teacher"))
+      .rejects.toMatchObject({ status: 502, message: "public_auth_response_invalid" });
   });
 
   it("rejects malformed registration success instead of navigating to a fake success", async () => {

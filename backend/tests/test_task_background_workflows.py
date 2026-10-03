@@ -18,6 +18,8 @@ from backend.db.models import (
     AssignmentRecord,
     CourseRecord,
     UserRecord,
+    SubmissionRecord,
+    SubmissionRevisionRecord,
 )
 from backend.db.session import session_scope
 from backend.domain.errors import (
@@ -413,6 +415,81 @@ def test_confirming_one_answer_does_not_reset_sibling_answers():
         for answer in student_data["S001"]["stu_ans"]
     }
     assert statuses == {"q1": "confirmed", "q2": "confirmed"}
+
+
+@pytest.mark.parametrize("with_unchanged_content", [False, True])
+def test_answer_review_only_preserves_submission_grading_and_analysis(with_unchanged_content):
+    owner_id, task_id = _seed_task(with_question=True)
+    assignment = assignment_repository.get_assignment(task_id, actor_id=owner_id)
+    task_facade._commit_imported_submissions(
+        task_id=task_id, owner_id=owner_id, course_id=assignment.course_id,
+        students=[{"stu_id": "S001", "stu_name": "Student", "source_filename": "old.txt",
+                   "stu_ans": [{"q_id": "q1", "content": "original answer", "flag": ["low_confidence"]}]}],
+        expected_workflow_revision=0, submission_file_name="old.txt",
+    )
+    workflow_repository.update_workflow(
+        task_id, owner_id=owner_id, bump_revision=False,
+        presentation_status="graded", grading_job_id="existing-run",
+        analysis_status="ready", analysis_result_version=7,
+    )
+    with session_scope() as session:
+        revision_before = session.scalar(select(SubmissionRecord.current_revision_id).where(SubmissionRecord.assignment_id == task_id))
+        revisions_before = session.scalars(select(SubmissionRevisionRecord.id)).all()
+    patch = {"review_status": "confirmed"}
+    if with_unchanged_content:
+        patch["content"] = "original answer"
+    response = task_facade.update_student_answer(
+        task_id=task_id, owner_id=owner_id, display_student_id="S001", q_id="q1",
+        patch=patch, expected_revision=1,
+    )
+    assert response["answer"]["review_status"] == "confirmed"
+    assert response["answer"]["flag"] == ["low_confidence"]
+    assert response["workflow_revision"] == 2
+    with session_scope() as session:
+        assert session.scalar(select(SubmissionRecord.current_revision_id).where(SubmissionRecord.assignment_id == task_id)) == revision_before
+        assert session.scalars(select(SubmissionRevisionRecord.id)).all() == revisions_before
+    workflow = workflow_repository.get_workflow(task_id, owner_id=owner_id)
+    assert workflow.presentation_status == "graded"
+    assert workflow.grading_job_id == "existing-run"
+    assert workflow.analysis_status == "ready"
+    assert workflow.analysis_result_version == 7
+    with pytest.raises(VersionConflict):
+        task_facade.update_student_answer(
+            task_id=task_id, owner_id=owner_id, display_student_id="S001", q_id="q1",
+            patch={"review_status": "pending"}, expected_revision=1,
+        )
+
+
+def test_identity_confirmation_preserves_content_and_rejects_busy_or_stale():
+    owner_id, task_id = _seed_task(with_question=True)
+    assignment = assignment_repository.get_assignment(task_id, actor_id=owner_id)
+    task_facade._commit_imported_submissions(
+        task_id=task_id, owner_id=owner_id, course_id=assignment.course_id,
+        students=[{"stu_id": "S001", "stu_name": "Student", "source_filename": "old.txt",
+                   "identity_status": "needs_review", "stu_ans": [{"q_id": "q1", "content": "original"}]}],
+        expected_workflow_revision=0, submission_file_name="old.txt",
+    )
+    workflow_repository.update_workflow(
+        task_id, owner_id=owner_id, bump_revision=False,
+        presentation_status="graded", grading_job_id="existing-run", analysis_status="ready",
+    )
+    before = task_facade.get_task(task_id=task_id, owner_id=owner_id, full=True)["student_data"]["S001"]
+    request = dict(task_id=task_id, owner_id=owner_id, current_display_id="S001", new_display_id="S001", new_display_name="Student", expected_revision=1)
+    result = task_facade.update_student_identity(**request)
+    assert result["student"]["identity_status"] == "matched"
+    assert result["student"]["stu_ans"] == before["stu_ans"]
+    assert result["student"]["source_filename"] == before["source_filename"]
+    workflow = workflow_repository.get_workflow(task_id, owner_id=owner_id)
+    assert workflow.workflow_revision == 2
+    assert workflow.grading_job_id == "existing-run"
+    assert workflow.analysis_status == "ready"
+    with pytest.raises(VersionConflict):
+        task_facade.update_student_identity(**request)
+    workflow_repository.update_workflow(task_id, owner_id=owner_id, bump_revision=False, active_job_id="working", active_operation="parse_submissions")
+    with pytest.raises(InvalidTransition) as busy:
+        task_facade.update_student_identity(**{**request, "expected_revision": 2})
+    assert busy.value.code == "workflow_busy"
+    assert workflow_repository.get_workflow(task_id, owner_id=owner_id).workflow_revision == 2
 
 
 def test_question_replace_requires_confirmation_and_cas_is_atomic():

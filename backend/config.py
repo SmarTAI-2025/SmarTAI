@@ -259,13 +259,13 @@ class Settings(BaseSettings):
     # Persistent application data. SQLite is convenient for local development;
     # deployed environments should set this to a PostgreSQL URL.
     # ON selects the heavier PostgreSQL deployment mode; OFF selects SQLite.
-    database_heavy: bool = os.getenv("SMARTAI_DATABASE_HEAVY", "OFF").strip().upper() == "ON"
+    database_heavy: bool = False
     # SMARTAI_DATABASE_URL remains a legacy single-URL fallback. Prefer the
     # explicit light/heavy pair so changing only SMARTAI_DATABASE_HEAVY switches
     # the selected database.
-    database_url: str = os.getenv("SMARTAI_DATABASE_URL", "")
-    database_url_light: str = os.getenv("SMARTAI_DATABASE_URL_LIGHT", "")
-    database_url_heavy: str = os.getenv("SMARTAI_DATABASE_URL_HEAVY", "")
+    database_url: str = Field(default="", repr=False)
+    database_url_light: str = Field(default="", repr=False)
+    database_url_heavy: str = Field(default="", repr=False)
     database_auto_create: bool = os.getenv("SMARTAI_DATABASE_AUTO_CREATE", "true").lower() == "true"
     storage_root: str = os.getenv("SMARTAI_STORAGE_ROOT", "data/uploads")
     storage_backend: Literal["local", "object"] = os.getenv("SMARTAI_STORAGE_BACKEND", "local")  # type: ignore[assignment]
@@ -404,6 +404,9 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def resolve_database_url(self) -> "Settings":
+        # Preserve the legacy process-only override of a .env light/heavy pair.
+        # All database consumers use the resulting snapshot, never os.getenv
+        # again. Literal field defaults avoid retaining import-time URLs.
         process_legacy_url = os.getenv("SMARTAI_DATABASE_URL", "").strip()
         process_light_url = os.getenv("SMARTAI_DATABASE_URL_LIGHT", "").strip()
         process_heavy_url = os.getenv("SMARTAI_DATABASE_URL_HEAVY", "").strip()
@@ -414,8 +417,10 @@ class Settings(BaseSettings):
             light_url = process_legacy_url if process_legacy_url.startswith("sqlite") else light_url
             heavy_url = process_legacy_url if process_legacy_url.startswith(("postgresql://", "postgresql+")) else heavy_url
         if not light_url:
-            light_url = legacy_url if legacy_url.startswith("sqlite") else "sqlite:///data/smartai.db"
-        if not heavy_url and legacy_url.startswith(("postgresql://", "postgresql+")):
+            # Preserve an explicitly configured legacy value so the shared
+            # connection validator can reject a mode/type mismatch safely.
+            light_url = legacy_url or "sqlite:///data/smartai.db"
+        if not heavy_url:
             heavy_url = legacy_url
         self.database_url = heavy_url if self.database_heavy else light_url
         return self

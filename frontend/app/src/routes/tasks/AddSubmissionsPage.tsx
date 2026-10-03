@@ -49,6 +49,9 @@ function AddSubmissionsForm({ taskQuery }: { taskQuery: ReturnType<typeof useTas
   const retryRecognition = useRetrySubmissionRecognition();
   const submissionInputRef = useRef<HTMLInputElement>(null);
   const rosterInputRef = useRef<HTMLInputElement>(null);
+  const submissionChooseRef = useRef<HTMLDivElement>(null);
+  const rosterChooseRef = useRef<HTMLButtonElement>(null);
+  const byokLinkRef = useRef<HTMLAnchorElement>(null);
 
   const draft = usePageDraft(`submissions:${taskId}`, initialSubmissionDraft, submissionDraftCodec, JSON.stringify([taskQuery.data?.workflow_revision, taskQuery.data?.course_id]), undefined, parseSubmissions.isPending || retryRecognition.isPending);
   const [selectedFile, setSelectedFile] = draft.field("selectedFile");
@@ -59,6 +62,7 @@ function AddSubmissionsForm({ taskQuery }: { taskQuery: ReturnType<typeof useTas
   const [uploadPercent, setUploadPercent] = useState(0);
   const [formError, setFormError] = useState<string | null>(null);
   const [needsModel, setNeedsModel] = useState(false);
+  const [missingUpload, setMissingUpload] = useState<"submission" | "roster" | null>(null);
 
   const task = taskQuery.data;
   const enabledExperts = (expertsQuery.data ?? []).filter((expert) => expert.enabled);
@@ -125,6 +129,7 @@ function AddSubmissionsForm({ taskQuery }: { taskQuery: ReturnType<typeof useTas
     setUploadPercent(0);
     setFormError(null);
     setNeedsModel(false);
+    setMissingUpload(null);
   }
 
   function selectRoster(file: File | undefined) {
@@ -140,6 +145,7 @@ function AddSubmissionsForm({ taskQuery }: { taskQuery: ReturnType<typeof useTas
     setRosterFile(file);
     setFormError(null);
     setNeedsModel(false);
+    setMissingUpload(null);
   }
 
   function handleSubmissionInput(event: ChangeEvent<HTMLInputElement>) {
@@ -161,6 +167,7 @@ function AddSubmissionsForm({ taskQuery }: { taskQuery: ReturnType<typeof useTas
   async function handleStart() {
     setFormError(null);
     setNeedsModel(false);
+    setMissingUpload(null);
     if (!taskId) {
       setFormError(t("submissionUploadTaskUnavailable"));
       return;
@@ -171,6 +178,16 @@ function AddSubmissionsForm({ taskQuery }: { taskQuery: ReturnType<typeof useTas
     }
     if (uploadDisabledReason) {
       setFormError(uploadDisabledReason);
+      if (!recognitionProviderId) {
+        setNeedsModel(true);
+        window.requestAnimationFrame(() => focusUploadControl(byokLinkRef.current));
+      } else if (!selectedFile && !canRetryOriginal) {
+        setMissingUpload("submission");
+        focusUploadControl(submissionChooseRef.current);
+      } else if (!canRetryOriginal && identityMode === "roster" && !rosterFile) {
+        setMissingUpload("roster");
+        focusUploadControl(rosterChooseRef.current);
+      }
       return;
     }
     const replaceConfirmed = needsReplacementConfirmation && !canRetryOriginal
@@ -232,6 +249,7 @@ function AddSubmissionsForm({ taskQuery }: { taskQuery: ReturnType<typeof useTas
       <div className="mx-auto mt-[45px] w-full max-w-[900px]">
         {(!selectedFile && draft.value.selectedFileName && !canRetryOriginal) || (!rosterFile && draft.value.rosterFileName && identityMode === "roster") ? <p role="alert" className="mb-4 text-sm text-warning">{localText(locale, "未上传的作答或名单文件无法在刷新后恢复，请重新选择。其他设置已保留。", "Unuploaded submissions or roster files cannot survive a reload. Reselect them; other settings are preserved.")}</p> : null}
         <div
+          ref={submissionChooseRef}
           className={cn(
             "flex h-[230px] cursor-pointer flex-col items-center justify-center rounded-[12px] border bg-card px-6 text-center outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2",
             isDragging ? "border-primary bg-primary/[0.03]" : "border-primary",
@@ -240,6 +258,7 @@ function AddSubmissionsForm({ taskQuery }: { taskQuery: ReturnType<typeof useTas
           role="button"
           tabIndex={0}
           aria-label={t("submissionUploadChoose")}
+          aria-describedby={missingUpload === "submission" ? "submission-file-required" : undefined}
           onClick={() => submissionInputRef.current?.click()}
           onKeyDown={(event) => {
             if (event.key === "Enter" || event.key === " ") {
@@ -285,6 +304,7 @@ function AddSubmissionsForm({ taskQuery }: { taskQuery: ReturnType<typeof useTas
             </div>
           ) : null}
         </div>
+        {missingUpload === "submission" ? <p id="submission-file-required" role="alert" className="mt-2 text-sm text-danger">{t("submissionUploadFileRequired")}</p> : null}
 
         <p className="mt-3 rounded-[8px] border border-blue-200 bg-blue-50/60 px-4 py-3 text-[12px] leading-5 text-blue-900 dark:border-blue-900 dark:bg-blue-950/20 dark:text-blue-100">
           {t("submissionUploadFileContract")}
@@ -361,7 +381,9 @@ function AddSubmissionsForm({ taskQuery }: { taskQuery: ReturnType<typeof useTas
                   onChange={handleRosterInput}
                 />
                 <button
+                  ref={rosterChooseRef}
                   type="button"
+                  aria-describedby={missingUpload === "roster" ? "submission-roster-required" : undefined}
                   className="inline-flex h-7 items-center rounded-[6px] border bg-card px-2.5 text-[12px] font-semibold text-foreground hover:bg-muted"
                   onClick={() => rosterInputRef.current?.click()}
                 >
@@ -370,6 +392,7 @@ function AddSubmissionsForm({ taskQuery }: { taskQuery: ReturnType<typeof useTas
               </div>
             ) : null}
           </div>
+          {missingUpload === "roster" ? <p id="submission-roster-required" role="alert" className="mt-2 text-sm text-danger">{t("submissionUploadRosterRequired")}</p> : null}
         </section>
 
         <div className="mt-[31px] flex min-h-10 flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
@@ -379,6 +402,7 @@ function AddSubmissionsForm({ taskQuery }: { taskQuery: ReturnType<typeof useTas
                 {formError}
                 {needsModel && taskId ? (
                   <Link
+                    ref={byokLinkRef}
                     to={`/settings/byok?returnTo=${encodeURIComponent(`/tasks/${taskId}/submissions/upload`)}`}
                     className="ml-2 font-semibold text-primary underline underline-offset-2"
                   >
@@ -421,6 +445,11 @@ function AddSubmissionsForm({ taskQuery }: { taskQuery: ReturnType<typeof useTas
       </div>
     </div>
   );
+}
+
+function focusUploadControl(control: HTMLElement | null) {
+  control?.scrollIntoView?.({ behavior: "smooth", block: "center" });
+  control?.focus({ preventScroll: true });
 }
 
 function hasSuffix(filename: string, suffixes: readonly string[]) {
