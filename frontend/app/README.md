@@ -19,10 +19,15 @@ See:
 
 This app does not need the `smartai` Conda environment. Run the FastAPI backend
 from the repo root in the `smartai` environment, then run the React app with
-Node.js + npm:
+Node.js + npm. Use Node **22.16.0**, recorded in `.node-version`; the frontend
+and E2E CI jobs read this same file. It matches the current Cloudflare Pages
+production `NODE_VERSION` setting. Actions themselves use Node 24 internally,
+independently of the Node version used to build this app.
+
+Install locked dependencies and start the dev server:
 
 ```bash
-npm install
+npm ci
 npm run dev
 ```
 
