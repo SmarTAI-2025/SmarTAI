@@ -94,7 +94,11 @@ def test_auto_created_sqlite_schema_is_stamped_at_alembic_head():
         revision = connection.exec_driver_sql(
             "SELECT version_num FROM alembic_version"
         ).scalar_one()
-    assert revision == "0019_admin_usage_events"
+    from pathlib import Path
+    from alembic.script import ScriptDirectory
+    migrations = ScriptDirectory(str(Path(__file__).resolve().parents[1] / "db" / "migrations"))
+    # The stamped database must match the one real head, including merged branches.
+    assert migrations.get_heads() == [revision]
 
 
 def test_assignments_version_is_non_null():
