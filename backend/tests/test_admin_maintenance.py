@@ -18,7 +18,7 @@ def maintenance(scope, monkeypatch):
     app=FastAPI();app.state.private_admin=True;app.state.maintenance_only=True
     app.include_router(api.router,prefix="/api")
     client=TestClient(app)
-    client.headers.update({"Authorization": "Bearer "+create_token("test-owner","admin",auth_version=0),"Origin":"http://testserver"})
+    client.headers.update({"Authorization": "Bearer "+create_token("test-owner","admin",auth_version=0,session_scope="private-admin"),"Origin":"http://testserver"})
     yield client,scope
     if api._future: api._future.result(timeout=20)
     api._future=None

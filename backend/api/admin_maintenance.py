@@ -94,7 +94,7 @@ def reset_execute(body: ResetRequest, request: Request, response: Response):
                     raise HTTPException(401, detail="Administrator login required")
                 from backend.auth import get_optional_user, get_current_user
                 from backend.state import get_user_store
-                current = require_admin(get_current_user(request, get_optional_user(token, get_user_store())))
+                current = require_admin(get_current_user(request, get_optional_user(token, get_user_store(), request)))
                 from backend.services.admin_transactions import administrator_transaction
                 with administrator_transaction(current):
                     pass

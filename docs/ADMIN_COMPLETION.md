@@ -81,6 +81,7 @@ PR #117 已更新为统一管理员候选，保留原 PR 历史。独立工作�
 4. 管理员默认 API 地址 `/api`，`backend.private_main` 仅明确开关后启动；`/api/auth/*` 为允许的登录/刷新/退出/改密/重置端点，普通注册和旧邀请不挂载。`SMARTAI_ADMIN_DIST` 默认定位 `dist-admin`，有 `admin.html` 才提供 SPA；未知 `/api` 不回 HTML。公共 production app 不挂管理员路由/监控/清空预览，公共构建不包含管理页面。
 5. 自管主机绑定 **127.0.0.1**，例如 `uvicorn backend.private_main:app --host 127.0.0.1 --port 8001 --no-access-log`。只能经 VPN/认证网关到私有站点。开关不是网络隔离；不要将管理 API 代理进公共域名。`backend/private-render.yaml` 改为 **pserv** 示例，不能视为 AWS 或网关配置已就绪；Render 类型依据官方 [Blueprint 规范](https://render.com/docs/blueprint-spec)。未执行 Render 配置变更。
 6. 管理员推荐同源 HTML + `/api`，设置 `SMARTAI_ADMIN_FRONTEND_ORIGIN=https://实际私有站点`；两个后端都需要此设置，才能给管理员发送正确的忘记密码链接。`VITE_SMARTAI_ADMIN_URL` 是公共登录后的私有站点跳转，不共享 URL token；独立站点按自己的 Cookie 登录。HTTPS Cookie secure=true，同源 strict；若拆域，先核验精确 CORS、credentials、SameSite、浏览器第三方 Cookie 限制，不直接用通配。
+   公共／私有访问令牌签入各自的 `session_scope`；刷新凭证将范围前缀一并哈希持久化。两侧拒绝其他服务范围的访问、刷新及退出会话操作，不能仅凭更换 Cookie 名跨服务使用。旧普通教师会话只在公共服务兼容，旧管理员凭证要求重新登录；改密／重置及账号状态撤销仍同时使两侧会话失效，不新增迁移或密钥。
 7. 管理服务必须与公共服务共享同一个业务 DB、同一存储及必要密钥和邮件配置；仅仅加私有 API 服务而不给存储/worker 接线，会让销户持续等待。对象存储与主机挂载要单独做运维验收。访问日志应省略 query string，应用日志不记录 reset token/密码；管理 API 与邮件正文仅在隔离 sink 中测试。
 8. 迁移后，通过 `python scripts/create_admin.py <username> --email <email>` 在私有维护终端交互首建；命令要求无管理员、身份未占用，不覆盖旧账号。后续授权在管理页面完成。清空后重复首建流程，不开启公开管理员注册。
 

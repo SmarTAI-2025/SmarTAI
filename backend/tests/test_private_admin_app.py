@@ -47,9 +47,13 @@ def test_bootstrap_never_overwrites_existing_admin_or_identity(monkeypatch):
 def test_private_observations_and_preview_enforce_admin(monkeypatch, tmp_path):
     client, user, admin, teacher = accounts()
     private = private_app(monkeypatch, tmp_path)
+    from backend.auth import create_token
+    admin = private.post("/api/auth/login", json={"username": "manager", "password": "admin-test-password"}).json()["token"]
+    scoped_teacher = create_token(user.id, "teacher", session_scope="private-admin")
     for path in ("/api/admin/monitoring", "/api/admin/maintenance/preview", "/api/admin/business-config"):
         assert private.get(path).status_code == 401
-        assert private.get(path, headers=headers(teacher)).status_code == 403
+        assert private.get(path, headers=headers(teacher)).status_code == 401
+        assert private.get(path, headers=headers(scoped_teacher)).status_code == 403
         assert private.get(path, headers=headers(admin)).status_code == 200
     assert private.post("/api/admin/maintenance/execute", headers=headers(admin)).status_code == 404
 

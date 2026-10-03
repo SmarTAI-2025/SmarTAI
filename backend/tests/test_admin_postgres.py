@@ -66,8 +66,11 @@ def test_business_config_concurrency_live_quota_and_private_permissions(pg_datab
     from backend.db.knowledge_storage_repository import knowledge_storage_usage
     _, user, admin, teacher = accounts()
     client = private_app(monkeypatch, tmp_path)
+    from backend.auth import create_token
+    admin = client.post("/api/auth/login", json={"username": "manager", "password": "admin-test-password"}).json()["token"]
     path = "/api/admin/business-config"
-    assert client.get(path, headers=headers(teacher)).status_code == 403
+    assert client.get(path, headers=headers(teacher)).status_code == 401
+    assert client.get(path, headers=headers(create_token(user.id, "teacher", session_scope="private-admin"))).status_code == 403
     def save(value):
         return client.patch(path, json={"changes": {"knowledge_storage_quota_bytes": value},
             "expected_version": 0, "reason": "isolated_postgres_concurrency"}, headers=headers(admin)).status_code
