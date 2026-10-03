@@ -764,7 +764,7 @@ function ExpertMobileRow(props: ExpertRowProps) {
   const { expert, locale } = props;
   const zh = locale === "zh-CN";
   return (
-    <article className="grid gap-3 px-4 py-4">
+    <article className="grid min-w-0 grid-cols-1 gap-3 px-4 py-4">
       <div className="flex items-start justify-between gap-3">
         <div className="flex min-w-0 items-center gap-3">
           <ProviderIcon providerType={expert.provider_type} />
@@ -807,7 +807,7 @@ function ExpertActions({
     <RowAction label={zh ? "验证图片能力" : "Verify image capability"} onClick={onVerifyImage} disabled={disabled}>
       <ShieldCheck aria-hidden="true" size={14} />
     </RowAction>
-    <div data-image-provider={expert.provider_id} className="w-full text-left text-xs text-muted-foreground">
+    <div data-image-provider={expert.provider_id} className="min-w-0 w-full break-words text-left text-xs text-muted-foreground">
       <p>{zh ? "发送系统生成的测试图片，可能消耗少量额度，不上传你的题目或作业。" : "Sends a generated test image; may use a little quota. Your questions and homework are not uploaded."}</p>
       <p className="mt-1">{zh ? "图片能力：" : "Image capability: "}{imageCapabilityLabel(expert, zh)}{expert.image_checked_at ? ` · ${formatCheckedAt(expert.image_checked_at, locale)}` : ""}</p>
       {expert.image_reason ? <p>{imageReasonLabel(expert.image_reason, zh)}</p> : null}
@@ -816,14 +816,14 @@ function ExpertActions({
   </>;
   if (expert.editable === false) {
     return (
-      <div className="flex flex-wrap items-center justify-end gap-1 text-xs text-muted-foreground">
+      <div className="flex min-w-0 flex-wrap items-center justify-end gap-1 text-xs text-muted-foreground">
         <span>{zh ? "平台托管，只读" : "Platform managed, read-only"}</span>
         {imageControls}
       </div>
     );
   }
   return (
-    <div className="flex flex-wrap items-center justify-end gap-1">
+    <div className="flex min-w-0 flex-wrap items-center justify-end gap-1">
       <RowAction label={zh ? "编辑" : "Edit"} onClick={onEdit} disabled={disabled}>
         <Pencil aria-hidden="true" size={14} />
       </RowAction>
