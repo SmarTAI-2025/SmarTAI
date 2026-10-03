@@ -515,7 +515,9 @@ class User(BaseModel):
     password_hash: str = Field("", description="bcrypt hash; never returned to clients")
     created_at: float = Field(default_factory=time.time)
     is_active: bool = True
+    is_read_only: bool = False
     auth_invalid_before: float | None = Field(default=None, exclude=True)
+    auth_version: int = Field(default=0, exclude=True)
 
     def public(self) -> Dict[str, Any]:
         """Dict safe to return to clients (no password hash, no course_ids)."""
@@ -525,5 +527,6 @@ class User(BaseModel):
             "email": self.email,
             "role": self.role,
             "is_active": self.is_active,
+            "is_read_only": self.is_read_only,
             "created_at": self.created_at,
         }

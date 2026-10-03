@@ -72,6 +72,9 @@ services:
         value: "none"
       - key: SMARTAI_SEED_TEST_USERS
         value: "false"
+      # The public web service deliberately does not mount /admin. Run the
+      # private console as a separate internal service with this flag enabled,
+      # a private gateway, and a different frontend origin.
       # Email verification and password reset. Deployment-specific values and
       # credentials must be entered in the Render dashboard.
       - key: SMARTAI_SMTP_HOST

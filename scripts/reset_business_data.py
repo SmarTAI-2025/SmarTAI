@@ -1,0 +1,67 @@
+#!/usr/bin/env python
+"""Preview or execute an offline disposable-business reset. Independent maintenance password and authenticated administrator required."""
+from __future__ import annotations
+
+import argparse
+import json
+import os
+from pathlib import Path
+import sys
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--execute", action="store_true", help="Without this flag the operation is read-only.")
+    parser.add_argument("--fingerprint", default="", help="Exact fingerprint from the reviewed preview.")
+    parser.add_argument("--confirm", default="", help="Exact confirmation phrase from that preview.")
+    parser.add_argument("--services-stopped", action="store_true", help="Attest ALL public/private services, workers, schedulers and old containers are stopped.")
+    parser.add_argument("--allow-object-storage", action="store_true", help="Explicitly allow configured S3 API access; use only an approved disposable bucket.")
+    args = parser.parse_args(argv)
+    from backend.services.admin_reset import ResetError, execute_reset, preview_reset, scope_from_settings
+    from backend.config import settings
+    try:
+        # Reject before constructing any object client or reading its credentials.
+        if os.environ.get("SMARTAI_ADMIN_RESET_ENABLED", "false").lower() != "true":
+            raise ResetError("reset_disabled")
+        client = None
+        if settings.storage_backend == "object":
+            if not args.allow_object_storage:
+                raise ResetError("reset_object_storage_requires_explicit_authorization")
+            from backend.storage import build_storage
+            client = build_storage().client
+        scope = scope_from_settings(object_client=client)
+        if args.execute:
+            from backend.services.admin_reset import CONFIRMATION
+            if args.confirm != f"{CONFIRMATION} {args.fingerprint[:12]}" or not args.services_stopped:
+                raise ResetError("reset_confirmation_mismatch")
+            import getpass
+            from backend.services.maintenance_auth import authenticate_operator
+            from backend.services.admin_reset import _read_json
+            # Post-commit recovery has no users left. Only a previously
+            # HTTP-authorized exact plan can use the maintenance capability.
+            approved = _read_json(scope.maintenance_dir / f"authorization-{args.fingerprint}.json") if __import__('re').fullmatch(r"[0-9a-f]{64}-[0-9a-f]{32}", args.fingerprint) else None
+            from backend.services.admin_reset import _digest, _validate_scope, _write_json
+            if not approved or approved.get("scope_fingerprint") != _digest(_validate_scope(scope)):
+                authenticate_operator(scope, input("Administrator username: ").strip(), getpass.getpass("Administrator password: "))
+                _write_json(scope.maintenance_dir / f"authorization-{args.fingerprint}.json", {"fingerprint": args.fingerprint, "scope_fingerprint": _digest(_validate_scope(scope)), "authorized_at": __import__('time').time()})
+            result = execute_reset(scope, fingerprint=args.fingerprint, confirmation=args.confirm, services_stopped=args.services_stopped, maintenance_password=getpass.getpass("Independent maintenance password: "))
+        else:
+            result = preview_reset(scope)
+        print(json.dumps(result, indent=2, ensure_ascii=False, sort_keys=True))
+        return 0
+    except ResetError as exc:
+        print(json.dumps({"error": str(exc)}), file=sys.stderr)
+        return 2
+    except KeyboardInterrupt:
+        print(json.dumps({"error": "reset_interrupted_inspect_maintenance_marker_before_restart"}), file=sys.stderr)
+        return 130
+    except Exception:
+        # Neither SQLAlchemy nor storage exception text is safe to print here.
+        print(json.dumps({"error": "reset_failed_keep_services_stopped"}), file=sys.stderr)
+        return 2
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

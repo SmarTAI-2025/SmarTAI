@@ -1,3 +1,6 @@
+import { DraftField, type DraftFieldHandle } from "@/components/ui/DraftField";
+import { useDraftProtection } from "@/hooks/useDraftProtection";
+import { useDraftLeave } from "@/hooks/useDraftLeave";
 import {
   AlertCircle,
   ArrowDown,
@@ -82,7 +85,8 @@ const STATUS_KEYS: Record<SubmissionAnswerState, MessageKey> = {
 };
 
 /** Merged S04/S05: one selected student with all questions in one continuous review. */
-export function StudentAnswerReviewPage() {
+export function StudentAnswerReviewPage() { const { taskId, studentId } = useParams(); return <StudentAnswerReviewForm key={`${taskId}:${studentId}`} />; }
+function StudentAnswerReviewForm() {
   const { taskId, studentId } = useParams();
   const [searchParams, setSearchParams] = useSearchParams();
   const navigate = useNavigate();
@@ -97,6 +101,7 @@ export function StudentAnswerReviewPage() {
   const [saveErrors, setSaveErrors] = useState<Record<string, string>>({});
   const requestedQuestionId = searchParams.get("question") ?? "";
   const [activeQuestionId, setActiveQuestionId] = useState(requestedQuestionId);
+  const identityHydrated = useRef(false);
   const [identityOpen, setIdentityOpen] = useState(false);
   const [identityId, setIdentityId] = useState("");
   const [identityName, setIdentityName] = useState("");
@@ -162,6 +167,9 @@ export function StudentAnswerReviewPage() {
   }, [requestedQuestionId]);
 
   useEffect(() => {
+    if (!student) return;
+    if (identityHydrated.current && (identityDraft.dirty || identityDraft.savedAt || identityDraft.conflict)) return;
+    identityHydrated.current = true;
     setIdentityOpen(identityRequested && !readOnly);
     setIdentityId(student?.stu_id ?? "");
     setIdentityName(student?.stu_name ?? "");
@@ -206,6 +214,12 @@ export function StudentAnswerReviewPage() {
   const isDirty = dirtyQuestionIds.size > 0 || identityDirty;
   const pendingAnswers = questions.filter((question) => answers.has(question.id) && answers.get(question.id)?.review_status !== "confirmed");
   const mutationBusy = savingQuestionId !== null || identityMutation.isPending || batchProgress !== null;
+  const answerDrafts = useRef(new Map<string, DraftFieldHandle>());
+  const mounted = useRef(true);
+  useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
+  const identityDraft = useDraftProtection({ scope: `identity:${taskId}:${encodeURIComponent(studentId ?? "")}`, value: { identityId, identityName }, baseline: { identityId: student?.stu_id ?? "", identityName: student?.stu_name ?? "" }, version: JSON.stringify([student?.stu_id, student?.stu_name]), enabled: Boolean(student && !readOnly), busy: mutationBusy, onRestore: (restored) => { setIdentityId(restored.identityId); setIdentityName(restored.identityName); setIdentityOpen(true); } });
+  const leave = useDraftLeave();
+
 
   useEffect(() => {
     if (!filteredQuestions.length) return;
@@ -287,12 +301,6 @@ export function StudentAnswerReviewPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isDirty, questionNeighbors.next?.id, questionNeighbors.previous?.id, studentNeighbors.next?.stu_id, studentNeighbors.previous?.stu_id]);
 
-  useEffect(() => {
-    if (!isDirty) return;
-    const warnBeforeUnload = (event: BeforeUnloadEvent) => event.preventDefault();
-    window.addEventListener("beforeunload", warnBeforeUnload);
-    return () => window.removeEventListener("beforeunload", warnBeforeUnload);
-  }, [isDirty]);
 
   if (taskQuery.isSuccess && taskId && !hasTaskReachedStep(taskQuery.data, 4)) {
     return <Navigate replace to={getTaskDestination(taskQuery.data)} />;
@@ -308,9 +316,7 @@ export function StudentAnswerReviewPage() {
     }, { replace: true });
   }
 
-  function confirmLeave() {
-    return !mutationLock.current && (!isDirty || window.confirm(t("answerReviewUnsavedConfirm")));
-  }
+  function confirmLeave() { return true; }
 
   function goToStudent(target: StudentSubmission | null) {
     const selectedQuestionStillVisible = filteredQuestions.some((question) => question.id === selectedQuestionRef.current);
@@ -352,6 +358,7 @@ export function StudentAnswerReviewPage() {
     if (!taskId || !student || !taskQuery.data || readOnly || mutationLock.current) return;
     const draft = drafts[question.id];
     if (!draft) return;
+    if (savingQuestionId || answerDrafts.current.get(question.id)?.conflict) return;
     mutationLock.current = true;
     setSavingQuestionId(question.id);
     setSaveErrors((current) => {
@@ -368,6 +375,8 @@ export function StudentAnswerReviewPage() {
         content: draft.content,
         reviewStatus: "confirmed",
       });
+      if (!mounted.current) return;
+      if (await answerDrafts.current.get(question.id)?.clear(draft) === false) return;
       setEditingQuestionIds((current) => {
         const nextIds = new Set(current);
         nextIds.delete(question.id);
@@ -389,6 +398,7 @@ export function StudentAnswerReviewPage() {
 
   async function confirmAnswer(question: SubmissionQuestion) {
     if (!taskId || !student || !taskQuery.data || readOnly || mutationLock.current) return;
+    if (answerDrafts.current.get(question.id)?.conflict) return;
     mutationLock.current = true;
     setSavingQuestionId(question.id);
     setSaveErrors((current) => {
@@ -404,6 +414,7 @@ export function StudentAnswerReviewPage() {
         expectedWorkflowRevision: taskQuery.data.workflow_revision,
         reviewStatus: "confirmed",
       });
+      if (!mounted.current) return;
       toast.success(t("answerReviewConfirmed"));
     } catch (error) {
       setSaveErrors((current) => ({ ...current, [question.id]: answerErrorMessage(error, t) }));
@@ -428,6 +439,7 @@ export function StudentAnswerReviewPage() {
       const result = await confirmSubmissionBatch(pendingAnswers, taskQuery.data.workflow_revision, (question, revision) =>
         answerMutation.mutateAsync({ taskId, studentId: student.stu_id, qId: question.id, expectedWorkflowRevision: revision, reviewStatus: "confirmed" }),
       setBatchProgress);
+      if (!mounted.current || !identityDraft.isCurrent()) return;
       setBatchMessage(result.error
         ? tx(locale, `已确认 ${result.completed} 题，剩余 ${result.remaining} 题未确认。`, `Confirmed ${result.completed}; ${result.remaining} remain. `) + answerErrorMessage(result.error, t)
         : tx(locale, `已确认本学生全部 ${result.completed} 份已有作答。`, `Confirmed all ${result.completed} existing responses for this student.`));
@@ -448,7 +460,8 @@ export function StudentAnswerReviewPage() {
     setEditingQuestionIds((current) => new Set(current).add(question.id));
   }
 
-  function cancelEditing(question: SubmissionQuestion) {
+  function cancelEditing(question: SubmissionQuestion) { answerDrafts.current.get(question.id)?.requestLeave(() => finishCancelEditing(question)); }
+  function finishCancelEditing(question: SubmissionQuestion) {
     const answer = answers.get(question.id);
     setDrafts((current) => ({
       ...current,
@@ -486,6 +499,8 @@ export function StudentAnswerReviewPage() {
         studentId: nextId,
         studentName: nextName,
       });
+      if (!identityDraft.isCurrent()) return;
+      if (!await identityDraft.clear({ identityId, identityName }) || !identityDraft.isCurrent()) return;
       setIdentityOpen(false);
       toast.success(t("studentSubmissionIdentitySaved"));
       const nextSearch = new URLSearchParams(searchParams);
@@ -508,6 +523,7 @@ export function StudentAnswerReviewPage() {
 
   return (
     <div className="w-full max-w-[1300px]">
+      {!readOnly && student ? questions.filter((question) => drafts[question.id]).map((question) => <DraftField key={question.id} id={question.id} handles={answerDrafts} scope={`answers:${taskId}:${encodeURIComponent(studentId ?? "")}:${encodeURIComponent(question.id)}`} value={drafts[question.id]} baseline={{ content: answers.get(question.id)?.content ?? "" }} version={JSON.stringify(answers.get(question.id) ?? null)} busy={mutationBusy} onRestore={(restored) => { setDrafts((current) => ({ ...current, [question.id]: restored })); setEditingQuestionIds((current) => new Set([...current, question.id])); }} />) : null}
       <div className="flex min-h-9 items-center justify-between gap-4">
         <h1 className="min-w-0 truncate text-[28px] font-bold leading-9 tracking-[-0.02em] text-foreground sm:text-[30px]">
           {t("answerReviewTitle")}
@@ -581,7 +597,7 @@ export function StudentAnswerReviewPage() {
             readOnly={readOnly}
             onToggleIdentity={() => {
               if (readOnly) return;
-              setIdentityOpen((open) => !open);
+              if (identityOpen) identityDraft.requestLeave(() => setIdentityOpen(false)); else setIdentityOpen(true);
               setIdentityError(null);
             }}
             previewAction={(

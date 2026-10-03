@@ -86,6 +86,21 @@ def test_users_table_has_no_course_ids_column():
     )
 
 
+def test_auto_created_sqlite_schema_is_stamped_at_alembic_head():
+    inspector = _inspector()
+    assert "alembic_version" in inspector.get_table_names()
+    from backend.db.session import get_engine
+    with get_engine().connect() as connection:
+        revision = connection.exec_driver_sql(
+            "SELECT version_num FROM alembic_version"
+        ).scalar_one()
+    from pathlib import Path
+    from alembic.script import ScriptDirectory
+    migrations = ScriptDirectory(str(Path(__file__).resolve().parents[1] / "db" / "migrations"))
+    # The stamped database must match the one real head, including merged branches.
+    assert migrations.get_heads() == [revision]
+
+
 def test_assignments_version_is_non_null():
     columns = {col["name"]: col for col in _inspector().get_columns("assignments")}
     assert "version" in columns, "assignments must carry an optimistic-lock version column"

@@ -63,8 +63,6 @@ def create_app() -> FastAPI:
     # below is a presentation adapter over those same repositories for the Figma
     # teacher workflow; it does not restore the removed TaskStore/JobStore.
     from backend.api.auth import router as auth_router
-    from backend.api.users import router as users_router
-    from backend.api.admin import router as admin_router
     from backend.api.courses import router as courses_router
     from backend.api.assignments import router as assignments_router
     from backend.api.submissions import router as submissions_router
@@ -80,9 +78,18 @@ def create_app() -> FastAPI:
     from backend.api.analytics import router as analytics_router
 
     app.include_router(auth_router)
-    app.include_router(users_router)
-    app.include_router(admin_router)
+    if settings.runtime_environment != "production":
+        from backend.api.users import router as users_router
+        app.include_router(users_router)
     app.include_router(courses_router)
+    # The public production app deliberately has no administrator surface.
+    # Tests/local development may opt in to exercise the API contract; the
+    # deployed console uses backend.private_main instead.
+    if settings.runtime_environment != "production":
+        from backend.api.admin import router as admin_router
+        app.include_router(admin_router)
+        from backend.api.admin_accounts import router as admin_accounts_router
+        app.include_router(admin_accounts_router)
     app.include_router(assignments_router)
     app.include_router(submissions_router)
     app.include_router(knowledge_router)
@@ -98,7 +105,7 @@ def create_app() -> FastAPI:
     app.include_router(analytics_router)
 
     logger.info(
-        "V2 routers loaded: auth, users, admin, courses, assignments, submissions, "
+        "V2 routers loaded: auth, courses, assignments, submissions, "
         "knowledge, grading-runs, results, experts, ocr-providers, tasks, task-preparation, "
         "course-materials, tags, analytics"
     )
@@ -137,9 +144,9 @@ def create_app() -> FastAPI:
     @app.get("/ready")
     async def readiness_check():
         from fastapi.responses import JSONResponse
-        from backend.db.session import database_ready
+        from backend.db.session import database_ready, admin_schema_ready
         from backend.storage import get_storage
-        database_ok = database_ready()
+        database_ok = database_ready() and admin_schema_ready()
         storage_ok = get_storage().ready()
         payload = {"status": "ready" if database_ok and storage_ok else "not_ready",
                    "database": database_ok, "storage": storage_ok}
@@ -156,15 +163,17 @@ def create_app() -> FastAPI:
         limit = int(os.environ.get("SMARTAI_SANDBOX_CONCURRENCY", "8"))
         init_sandbox_semaphore(limit=limit)
 
-    # ─── Seed pre-baked test accounts (kept out of the repo) ──────────────
-    try:
-        if settings.database_auto_create:
-            from backend.db.session import create_schema
-            create_schema()
-        from backend.auth.seed import seed_test_users
-        seed_test_users()
-    except Exception as e:
-        logger.warning(f"test users seeding skipped: {e}")
+    # ─── Seed only after maintenance guard and schema gate are held ───────
+    @app.on_event("startup")
+    async def _seed_local_accounts():
+        try:
+            if settings.database_auto_create:
+                from backend.db.session import create_schema
+                create_schema()
+            from backend.auth.seed import seed_test_users
+            seed_test_users()
+        except Exception as e:
+            logger.warning(f"test users seeding skipped: {e}")
 
     # ─── Grading worker lifecycle (Task 7) ────────────────────────────────
     # One poller per process claims queued grading runs through the DB lease
@@ -322,6 +331,8 @@ def create_app() -> FastAPI:
             except asyncio.CancelledError:
                 pass
 
+    from backend.services.admin_lifecycle import install_maintenance_lifespan
+    install_maintenance_lifespan(app)
     return app
 
 

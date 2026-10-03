@@ -67,18 +67,14 @@ export function UnsavedChangesDialog({
         "button:not([disabled]), a[href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex='-1'])",
       );
       if (!focusable?.length) return;
-      const first = focusable[0];
-      const last = focusable[focusable.length - 1];
-      if (document.activeElement === dialogRef.current) {
-        event.preventDefault();
-        (event.shiftKey ? last : first).focus();
-      } else if (event.shiftKey && document.activeElement === first) {
-        event.preventDefault();
-        last.focus();
-      } else if (!event.shiftKey && document.activeElement === last) {
-        event.preventDefault();
-        first.focus();
-      }
+      // WebKit can skip buttons under the system's default keyboard preference.
+      // Keep every available choice reachable inside this modal on every engine.
+      const items = Array.from(focusable);
+      const index = items.indexOf(document.activeElement as HTMLElement);
+      event.preventDefault();
+      const next = index < 0 ? (event.shiftKey ? items.length - 1 : 0)
+        : (index + (event.shiftKey ? -1 : 1) + items.length) % items.length;
+      items[next].focus();
     }
 
     document.addEventListener("keydown", handleKeyDown);

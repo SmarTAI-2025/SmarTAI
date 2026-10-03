@@ -1,8 +1,14 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import "fake-indexeddb/auto";
+import { Blob, File } from "node:buffer";
+import { DraftActions, DraftLeaveProvider } from "@/hooks/useDraftLeave";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { createMemoryRouter, RouterProvider } from "react-router-dom";
+import { createMemoryRouter, RouterProvider, Outlet } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { APIError } from "@/api/client";
+import * as client from "@/api/client";
+import { PageDraftSession } from "@/hooks/usePageDraft";
+import { clearPageDrafts } from "@/lib/pageDraftStore";
 import { AddProblemsPage } from "./AddProblemsPage";
 
 const preflightMutateAsync = vi.hoisted(() => vi.fn());
@@ -27,16 +33,17 @@ const capabilityState = vi.hoisted(() => ({
     },
   },
 }));
+const providerState = vi.hoisted(() => ({ enabled: true }));
 
 vi.mock("@/api/hooks", () => ({
   useStageProviders: () => ({
-    data: [{
+    data: providerState.enabled ? [{
       provider_id: "mock:test",
       provider_type: "openai",
       model: "test-model",
       enabled: true,
       is_default: true,
-    }],
+    }] : [],
     isLoading: false,
     isError: false,
     refetch: expertsRefetch,
@@ -83,12 +90,13 @@ vi.mock("sonner", () => ({
   toast: { success: vi.fn(), error: vi.fn() },
 }));
 
-function renderPage() {
-  const router = createMemoryRouter([
+function renderPage(owner = "draft-teacher") {
+  const router = createMemoryRouter([{ element: <DraftLeaveProvider><Outlet /><DraftActions /></DraftLeaveProvider>, children: [
     { path: "/tasks/:taskId/upload/problems", element: <AddProblemsPage /> },
     { path: "/tasks/:taskId/problems/progress", element: <div>Preparation started</div> },
-  ], { initialEntries: ["/tasks/task-1/upload/problems"] });
-  render(<RouterProvider router={router} />);
+    { path: "/settings/byok", element: <div>BYOK configuration</div> },
+  ] }], { initialEntries: ["/tasks/task-1/upload/problems"] });
+  render(<PageDraftSession ownerId={owner}><RouterProvider router={router} /></PageDraftSession>);
   return router;
 }
 
@@ -97,9 +105,14 @@ async function uploadProblemFile(user: ReturnType<typeof userEvent.setup>) {
     type: "application/pdf",
   });
   await user.upload(screen.getByLabelText("选择文件"), file);
+  if (providerState.enabled) await waitFor(() => expect(screen.getByLabelText("题目识别模型")).toHaveValue("mock:test"));
 }
 
-beforeEach(() => {
+beforeEach(async () => {
+  vi.stubGlobal("Blob", Blob); vi.stubGlobal("File", File);
+  await clearPageDrafts();
+  providerState.enabled = true;
+  vi.spyOn(client, "getJSON").mockResolvedValue({ available: true, prepared: true, filename: "questions.pdf" });
   Object.assign(taskState, { status: "draft", last_failed_job_id: null, extract_job_id: null });
   capabilityState.available = true;
   capabilityState.data.source_roles.problem.accepted_extensions = [".pdf", ".txt", ".md", ".markdown", ".jpg", ".jpeg", ".png", ".webp"];
@@ -283,7 +296,7 @@ describe("AddProblemsPage workflow recovery", () => {
   it("links back to the retained preparation after reopening the upload page", async () => {
     Object.assign(taskState, { status: "error", last_failed_job_id: "failed-job", extract_job_id: "failed-job" });
     renderPage();
-    expect(screen.getByRole("status")).toHaveTextContent("已上传资料仍保留");
+    expect(screen.getAllByRole("status")[0]).toHaveTextContent("已上传资料仍保留");
     fireEvent.click(screen.getByRole("link", { name: "返回进度并重试" }));
     expect(await screen.findByText("Preparation started")).toBeInTheDocument();
     expect(preflightMutateAsync).not.toHaveBeenCalled();
@@ -300,7 +313,7 @@ describe("AddProblemsPage workflow recovery", () => {
     await uploadProblemFile(user);
 
     await user.click(screen.getByRole("button", { name: "识别并准备题目资料" }));
-    await user.click(await screen.findByRole("button", { name: "刷新任务状态" }));
+    await user.click(await screen.findByRole("button", { name: "刷新任务状态" }, { timeout: 3000 }));
 
     await waitFor(() => expect(taskRefetch).toHaveBeenCalledOnce());
     expect(screen.queryByRole("button", { name: "刷新任务状态" })).not.toBeInTheDocument();
@@ -317,3 +330,63 @@ it("rejects an empty file before preflight and accepts a corrected replacement",
   await user.upload(screen.getByLabelText("选择文件"), new File(["1. Calculate 2+3"], "fixed.txt", { type: "text/plain" }));
   expect(screen.queryByText(/文件为空（0 字节）/)).not.toBeInTheDocument();
 });
+
+describe("page draft navigation", () => {
+  it("keeps a local file, scope, score options and step through BYOK, back and forward without requests", async () => {
+    providerState.enabled = false;
+    const user = userEvent.setup(); const router = renderPage();
+    await uploadProblemFile(user);
+    await user.click(screen.getByRole("button", { name: "从原文提取" }));
+    fireEvent.change(screen.getByLabelText("页码（选填）"), { target: { value: "3-5" } });
+    await user.click(screen.getByRole("button", { name: "识别并准备题目资料" }));
+    await user.click(screen.getByRole("link", { name: "前往 BYOK" }));
+    await user.click(await screen.findByRole("button", { name: "暂存并离开" }));
+    expect(await screen.findByText("BYOK configuration")).toBeInTheDocument();
+    await act(async () => { await router.navigate(-1); });
+    await waitFor(() => expect(screen.getByLabelText("页码（选填）")).toHaveValue("3-5"));
+    expect(screen.getAllByText("questions.pdf").length).toBeGreaterThan(0);
+    await act(async () => { await router.navigate(1); await router.navigate(-1); });
+    await waitFor(() => expect(screen.getByLabelText("页码（选填）")).toHaveValue("3-5"));
+    expect(preflightMutateAsync).not.toHaveBeenCalled(); expect(startMutateAsync).not.toHaveBeenCalled();
+    providerState.enabled = true;
+    await act(async () => { await router.navigate("/settings/byok"); await router.navigate(-1); });
+    await saveDraft();
+    await act(async () => { await router.navigate("/settings/byok"); await router.navigate(-1); });
+    await waitFor(() => expect(screen.getByRole("button", { name: "暂存" })).toBeEnabled());
+    await user.click(screen.getByRole("button", { name: "识别并准备题目资料" }));
+    await waitFor(() => expect(preflightMutateAsync).toHaveBeenCalledTimes(1));
+    expect(preflightMutateAsync.mock.calls[0][0].file).toBeInstanceOf(File);
+  });
+
+  it("reuses a successful preflight after returning and clears on submit", async () => {
+    const user = userEvent.setup(); const router = renderPage();
+    preflightMutateAsync.mockResolvedValue({ source_token: "prepared-1", source: { stored_file_id: "file-1" } });
+    startMutateAsync.mockRejectedValueOnce(new APIError(503, "try later"));
+    await uploadProblemFile(user);
+    await user.click(screen.getByRole("button", { name: "识别并准备题目资料" }));
+    await waitFor(() => expect(startMutateAsync).toHaveBeenCalledTimes(1));
+    await act(async () => { await router.navigate("/settings/byok"); await router.navigate(-1); });
+    await waitFor(() => expect(screen.getByRole("button", { name: "识别并准备题目资料" })).toBeEnabled());
+    expect(preflightMutateAsync).toHaveBeenCalledTimes(1); expect(startMutateAsync).toHaveBeenCalledTimes(1);
+    await user.click(screen.getByRole("button", { name: "识别并准备题目资料" }));
+    expect(await screen.findByText("Preparation started")).toBeInTheDocument();
+    expect(preflightMutateAsync).toHaveBeenCalledTimes(1); expect(startMutateAsync).toHaveBeenCalledTimes(2);
+    await act(async () => { await router.navigate(-1); });
+    expect(screen.queryByText("questions.pdf")).not.toBeInTheDocument();
+  });
+
+  it("does not copy local files to another task and discards explicitly", async () => {
+    const user = userEvent.setup(); const router = renderPage(); await uploadProblemFile(user); await saveDraft();
+    await act(async () => { await router.navigate("/tasks/task-2/upload/problems"); });
+    expect(screen.queryByText("questions.pdf")).not.toBeInTheDocument();
+    await act(async () => { await router.navigate(-1); });
+    await waitFor(() => expect(screen.getAllByText("questions.pdf").length).toBeGreaterThan(0));
+    vi.spyOn(window, "confirm").mockReturnValue(true);
+    await user.click(screen.getByRole("button", { name: "删除本页草稿" }));
+    await waitFor(() => expect(screen.queryByText("questions.pdf")).not.toBeInTheDocument());
+    await act(async () => { await router.navigate("/settings/byok"); await router.navigate(-1); });
+    expect(screen.queryByText("questions.pdf")).not.toBeInTheDocument();
+  });
+});
+
+async function saveDraft() { if (providerState.enabled) await waitFor(() => expect(screen.getByLabelText("题目识别模型")).toHaveValue("mock:test")); await waitFor(() => expect(screen.getByRole("button", { name: "暂存" })).toBeEnabled()); fireEvent.click(screen.getByRole("button", { name: "暂存" })); await waitFor(() => expect(screen.getByText(/已暂存 ·/)).toBeInTheDocument()); }

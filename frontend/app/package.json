@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "vite --host 0.0.0.0",
     "build": "tsc --noEmit && vite build",
+    "build:admin": "tsc --noEmit && vite build --mode admin",
     "typecheck": "tsc --noEmit",
     "lint": "npm run audit:scope && npm run typecheck",
     "audit:scope": "node scripts/audit-visible-scope.mjs",
@@ -42,6 +43,7 @@
     "@types/react": "^19.2.7",
     "@types/react-dom": "^19.2.3",
     "@vitejs/plugin-react": "^5.1.2",
+    "fake-indexeddb": "6.2.5",
     "jsdom": "^26.1.0",
     "typescript": "^5.9.3",
     "vite": "^8.0.9",

@@ -1,9 +1,10 @@
 import axios, { AxiosError, CanceledError, type AxiosProgressEvent, type AxiosRequestConfig } from "axios";
 import { setSessionExpired } from "@/lib/sessionExpiry";
+import { clearPageDrafts } from "@/lib/pageDraftStore";
 
-export const SMARTAI_TOKEN_STORAGE_KEY = "smartai_token";
+export const SMARTAI_TOKEN_STORAGE_KEY = import.meta.env.MODE === "admin" ? "smartai_admin_token" : "smartai_token";
 
-const DEFAULT_BACKEND_URL = "http://localhost:8000";
+const DEFAULT_BACKEND_URL = import.meta.env.MODE === "admin" ? "/api" : "http://localhost:8000";
 
 export const backendUrl = (
   import.meta.env.VITE_SMARTAI_BACKEND_URL?.trim() || DEFAULT_BACKEND_URL
@@ -134,6 +135,7 @@ export function setAuthToken(token: string): void {
 }
 
 export function clearAuthToken(): void {
+  clearPageDrafts();
   sessionVersion += 1;
   localStorage.removeItem(SMARTAI_TOKEN_STORAGE_KEY);
 }

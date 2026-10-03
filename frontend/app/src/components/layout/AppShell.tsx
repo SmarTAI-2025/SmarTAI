@@ -1,3 +1,4 @@
+import { DraftActions, useDraftLeave } from "@/hooks/useDraftLeave";
 import { Menu, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { Link, Outlet, useNavigate } from "react-router-dom";
@@ -17,10 +18,11 @@ export function AppShell() {
   const mobileTriggerRef = useRef<HTMLButtonElement>(null);
   const mobileCloseRef = useRef<HTMLButtonElement>(null);
   const mobilePanelRef = useRef<HTMLElement>(null);
-  const { t } = useI18n();
+  const { t, locale } = useI18n();
   const currentUser = useCurrentUser();
   const expertsQuery = useExperts();
   const logout = useLogout();
+  const draftLeave = useDraftLeave();
   const navigate = useNavigate();
 
   useEffect(() => {
@@ -78,7 +80,9 @@ export function AppShell() {
     };
   }, [mobileOpen]);
 
-  async function handleLogout() {
+  function handleLogout() { draftLeave.request(() => { void performLogout(); }); }
+
+  async function performLogout() {
     try {
       await logout.mutateAsync();
     } finally {
@@ -198,8 +202,10 @@ export function AppShell() {
         tabIndex={-1}
         className="w-full px-5 py-[35px] outline-none sm:px-8"
       >
-        <div className="mx-auto w-full max-w-[1300px]">
+        <div className="mx-auto w-full max-w-[1300px] [&:has([role=dialog])>[data-page-draft-footer]]:hidden">
+          {currentUser.data?.is_read_only && <div role="status" className="mb-5 rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">{locale === "zh-CN" ? "账号当前为只读：可以浏览历史批改任务与结果，暂不能新建、上传、识别、批改或修改。如有疑问，请联系管理员。" : "Your account is read-only. You can browse past grading tasks and results, but cannot create, upload, recognize, grade or edit. Contact an administrator for help."}</div>}
           <Outlet />
+          <div data-page-draft-footer><DraftActions /></div>
         </div>
       </main>
     </div>

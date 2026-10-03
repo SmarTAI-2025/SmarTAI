@@ -1,3 +1,4 @@
+import { DraftActions, useDraftLeave } from "@/hooks/useDraftLeave";
 import { X } from "lucide-react";
 import { useEffect, useId, useRef, type ReactNode } from "react";
 
@@ -8,6 +9,7 @@ interface LibraryDialogProps {
   children: ReactNode;
   footer: ReactNode;
   onClose: () => void;
+  busy?: boolean;
 }
 
 export function LibraryDialog({
@@ -17,7 +19,11 @@ export function LibraryDialog({
   children,
   footer,
   onClose,
+  busy = false,
 }: LibraryDialogProps) {
+  const leave = useDraftLeave();
+  const busyRef = useRef(busy); busyRef.current = busy;
+  const guardedClose = () => { if (!busyRef.current) leave.request(onClose); };
   const dialogRef = useRef<HTMLElement>(null);
   const titleId = useId();
   const descriptionId = useId();
@@ -28,14 +34,16 @@ export function LibraryDialog({
       : null;
     const previousOverflow = document.body.style.overflow;
     document.body.style.overflow = "hidden";
-    window.requestAnimationFrame(() => {
-      dialogRef.current?.querySelector<HTMLElement>("input, select, button")?.focus();
+    const focusFrame = window.requestAnimationFrame(() => {
+      // Do not steal focus if a user already clicked a field before this frame.
+      if (dialogRef.current?.contains(document.activeElement)) return;
+      dialogRef.current?.querySelector<HTMLElement>("input, textarea, select, button")?.focus();
     });
 
     function handleKeyDown(event: KeyboardEvent) {
       if (event.key === "Escape") {
         event.preventDefault();
-        onClose();
+        guardedClose();
         return;
       }
       if (event.key !== "Tab") return;
@@ -56,6 +64,7 @@ export function LibraryDialog({
 
     document.addEventListener("keydown", handleKeyDown);
     return () => {
+      window.cancelAnimationFrame(focusFrame);
       document.body.style.overflow = previousOverflow;
       document.removeEventListener("keydown", handleKeyDown);
       if (previouslyFocused?.isConnected) previouslyFocused.focus();
@@ -67,7 +76,7 @@ export function LibraryDialog({
       className="fixed inset-0 z-[80] flex items-center justify-center bg-slate-950/35 p-4"
       role="presentation"
       onMouseDown={(event) => {
-        if (event.target === event.currentTarget) onClose();
+        if (event.target === event.currentTarget) guardedClose();
       }}
     >
       <section
@@ -86,14 +95,15 @@ export function LibraryDialog({
           <button
             type="button"
             className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-muted-foreground outline-none hover:bg-muted hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
-            onClick={onClose}
+            onClick={guardedClose}
+            disabled={busy}
             aria-label={closeLabel}
           >
             <X aria-hidden="true" className="h-4 w-4" />
           </button>
         </header>
         <div className="px-5 py-5">{children}</div>
-        <footer className="flex flex-wrap items-center justify-end gap-2 border-t px-5 py-4">{footer}</footer>
+        <footer className="flex flex-wrap items-center justify-end gap-2 border-t px-5 py-4">{footer}<DraftActions /></footer>
       </section>
     </div>
   );

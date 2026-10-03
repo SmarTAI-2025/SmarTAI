@@ -12,7 +12,8 @@ from sqlalchemy import func, select
 
 from backend.auth import create_token, verify_password
 from backend.db.models import InviteCodeRecord, RefreshSessionRecord, UserRecord
-from backend.db.session import session_scope
+from backend.db.session import session_scope as database_session
+from backend.analytics.admin_usage import record_usage_event_in_session
 from backend.models import User
 
 
@@ -65,7 +66,9 @@ def _user_from_record(record: UserRecord) -> User:
         password_hash=record.password_hash,
         created_at=record.created_at,
         is_active=record.is_active,
+        is_read_only=record.is_read_only,
         auth_invalid_before=record.auth_invalid_before,
+        auth_version=record.auth_version,
     )
 
 
@@ -75,13 +78,16 @@ def create_invite(*, invited_by: str, email: str | None, role: str, course_id: s
     normalized_email = _canonical_email(email)
     record = InviteCodeRecord(code=code, email=normalized_email or None, role=role, course_id=course_id,
                               invited_by=invited_by, created_at=now, expires_at=now + expires_in_hours * 3600)
-    with session_scope() as session:
+    with database_session() as session:
         session.add(record)
     return record
 
 
 def _ensure_unique_identity(session, *, username: str, email: str) -> None:
     normalized_email = _canonical_email(email)
+    from backend.db.models import BlockedRegistrationEmailRecord
+    if normalized_email and session.get(BlockedRegistrationEmailRecord, normalized_email) is not None:
+        raise AuthRepositoryError("Registration unavailable")
     if session.scalar(select(UserRecord).where(UserRecord.username == username)) is not None:
         raise AuthRepositoryError("Username already exists")
     if normalized_email and session.scalar(
@@ -99,6 +105,13 @@ def _persist_user(*, session, username: str, email: str, password_hash: str,
                            role=user.role, password_hash=user.password_hash,
                            is_active=True, created_at=user.created_at, updated_at=now))
     session.flush()  # materialize the row so FK references in the same txn succeed on SQLite
+    record_usage_event_in_session(
+        session,
+        event_name="account_created",
+        user_id=user.id,
+        role=user.role,
+        occurred_at=now,
+    )
     return user
 
 
@@ -109,7 +122,7 @@ def register_without_invite(*, username: str, email: str, password_hash: str,
         raise AuthRepositoryError("Invalid registration role")
     email = _canonical_email(email)
     now = time.time()
-    with session_scope() as session:
+    with database_session() as session:
         _ensure_unique_identity(session, username=username, email=email)
         return _persist_user(session=session, username=username, email=email,
                              password_hash=password_hash, role=role, now=now)
@@ -118,7 +131,7 @@ def register_without_invite(*, username: str, email: str, password_hash: str,
 def register_with_invite(*, username: str, email: str, role: str, password_hash: str, invite_code: str | None) -> User:
     email = _canonical_email(email)
     now = time.time()
-    with session_scope() as session:
+    with database_session() as session:
         _ensure_unique_identity(session, username=username, email=email)
         if not invite_code:
             raise AuthRepositoryError("Invitation code required")
@@ -164,8 +177,10 @@ def _locked_user(session, user_id: str) -> UserRecord | None:
     )
 
 
-def _add_refresh_session(session, *, user_id: str, days: int, now: float) -> str:
-    raw = secrets.token_urlsafe(48)
+def _add_refresh_session(session, *, user_id: str, days: int, now: float, session_scope: Literal["public", "private-admin"] = "public") -> str:
+    # Hash the entire namespaced credential: changing its scope cannot select
+    # the same persisted row. No migration or new secret is required.
+    raw = session_scope + "." + secrets.token_urlsafe(48)
     session.add(RefreshSessionRecord(
         id=uuid.uuid4().hex,
         user_id=user_id,
@@ -180,7 +195,7 @@ def _add_refresh_session(session, *, user_id: str, days: int, now: float) -> str
 def create_refresh_session(user_id: str, days: int) -> str:
     """Create a refresh session while serialized with password invalidation."""
     with user_auth_lock(user_id):
-        with session_scope() as session:
+        with database_session() as session:
             user = _locked_user(session, user_id)
             if user is None or not user.is_active:
                 raise AuthRepositoryError("User unavailable")
@@ -198,6 +213,7 @@ def authenticate_and_create_session(
     days: int,
     *,
     login_type: Literal["username", "email"] = "username",
+    session_scope: Literal["public", "private-admin"] = "public",
 ) -> tuple[str, User, str] | None:
     """Verify credentials and issue both tokens under the user's auth lock.
 
@@ -221,7 +237,7 @@ def authenticate_and_create_session(
         identity_filter = UserRecord.username == identity
     else:
         return None
-    with session_scope() as session:
+    with database_session() as session:
         user_ids = session.scalars(select(UserRecord.id).where(identity_filter).limit(2)).all()
     # Historical noncanonical duplicates must never select an arbitrary account.
     if len(user_ids) != 1:
@@ -229,7 +245,7 @@ def authenticate_and_create_session(
     user_id = user_ids[0]
 
     with user_auth_lock(user_id):
-        with session_scope() as session:
+        with database_session() as session:
             user_record = _locked_user(session, user_id)
             if user_record is None:
                 return None
@@ -252,17 +268,31 @@ def authenticate_and_create_session(
                 user_id=user_id,
                 days=days,
                 now=now,
+                session_scope=session_scope,
             )
             user = _user_from_record(user_record)
-            access = create_token(user.id, user.role)
+            access = create_token(user.id, user.role, auth_version=user_record.auth_version, session_scope=session_scope)
+            record_usage_event_in_session(
+                session,
+                event_name="login_success",
+                user_id=user.id,
+                role=user.role,
+                occurred_at=now,
+            )
             return refresh, user, access
 
 
-def rotate_refresh_session(raw: str, days: int) -> tuple[str, User, str] | None:
+def refresh_session_matches_scope(raw: str, session_scope: str) -> bool:
+    return raw.startswith(session_scope + ".") or (session_scope == "public" and "." not in raw)
+
+
+def rotate_refresh_session(raw: str, days: int, *, session_scope: Literal["public", "private-admin"] = "public") -> tuple[str, User, str] | None:
+    if not refresh_session_matches_scope(raw, session_scope):
+        return None
     token_hash = _hash_token(raw)
     # Resolve the lock key without retaining a transaction while waiting on the
     # process lock. The record is re-read and locked in the real transaction.
-    with session_scope() as session:
+    with database_session() as session:
         user_id = session.scalar(
             select(RefreshSessionRecord.user_id).where(
                 RefreshSessionRecord.token_hash == token_hash
@@ -272,9 +302,11 @@ def rotate_refresh_session(raw: str, days: int) -> tuple[str, User, str] | None:
         return None
 
     with user_auth_lock(user_id):
-        with session_scope() as session:
+        with database_session() as session:
             user_record = _locked_user(session, user_id)
             if user_record is None or not user_record.is_active:
+                return None
+            if "." not in raw and user_record.role != "teacher":
                 return None
             record = session.scalar(
                 select(RefreshSessionRecord)
@@ -296,9 +328,10 @@ def rotate_refresh_session(raw: str, days: int) -> tuple[str, User, str] | None:
                 user_id=user_id,
                 days=days,
                 now=now,
+                session_scope=session_scope,
             )
             user = _user_from_record(user_record)
-            access = create_token(user.id, user.role)
+            access = create_token(user.id, user.role, auth_version=user_record.auth_version, session_scope=session_scope)
             return new_raw, user, access
 
 
@@ -306,7 +339,7 @@ def revoke_refresh_session(raw: str | None) -> None:
     if not raw:
         return
     token_hash = _hash_token(raw)
-    with session_scope() as session:
+    with database_session() as session:
         user_id = session.scalar(
             select(RefreshSessionRecord.user_id).where(
                 RefreshSessionRecord.token_hash == token_hash
@@ -315,7 +348,7 @@ def revoke_refresh_session(raw: str | None) -> None:
     if user_id is None:
         return
     with user_auth_lock(user_id):
-        with session_scope() as session:
+        with database_session() as session:
             user_record = _locked_user(session, user_id)
             if user_record is None:
                 return

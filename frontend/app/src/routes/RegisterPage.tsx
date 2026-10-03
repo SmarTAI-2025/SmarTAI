@@ -1,3 +1,4 @@
+import { useDraftProtection } from "@/hooks/useDraftProtection";
 import { Loader2, MailCheck } from "lucide-react";
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { Link, useNavigate } from "react-router-dom";
@@ -29,6 +30,7 @@ export function RegisterPage() {
   const [password, setPassword] = useState("");
   const [confirmation, setConfirmation] = useState("");
   const [formError, setFormError] = useState<string | null>(null);
+  const inputProtection = useDraftProtection({ scope: "credential:RegisterPage", value: { username, email, password, confirmation }, baseline: { username: "", email: "", password: "", confirmation: "" }, secret: true, onRestore: (draft) => { setUsername(draft.username); setEmail(draft.email); setPassword(draft.password); setConfirmation(draft.confirmation); } });
   const [domainRejected, setDomainRejected] = useState(false);
   const [usernameCheck, setUsernameCheck] = useState<"idle" | "checking" | "available" | "taken" | "failed">("idle");
   const checkVersion = useRef(0);
@@ -94,6 +96,7 @@ export function RegisterPage() {
       setUsername("");
       setEmail("");
       savePendingRegistrationFlow(flow);
+      await inputProtection.clear();
       navigate("/register/check-email", { replace: true });
     } catch (error) {
       requestRegistration.reset();

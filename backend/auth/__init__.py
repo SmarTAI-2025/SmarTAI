@@ -18,11 +18,11 @@ import base64
 import hashlib
 import time
 import uuid
-from typing import Optional
+from typing import Literal, Optional
 
 import bcrypt
 import jwt
-from fastapi import Depends, HTTPException, status
+from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import OAuth2PasswordBearer
 
 from backend.config import settings
@@ -76,11 +76,13 @@ def verify_password(password: str, hashed: str) -> bool:
 
 # ─── JWT encode / decode ──────────────────────────────────────────────────────
 
-def create_token(user_id: str, role: str, expires_in_hours: Optional[int] = None, expires_in_minutes: Optional[int] = None) -> str:
+def create_token(user_id: str, role: str, expires_in_hours: Optional[int] = None, expires_in_minutes: Optional[int] = None, auth_version: int | None = None, session_scope: Literal["public", "private-admin"] = "public") -> str:
     lifetime = expires_in_minutes * 60 if expires_in_minutes is not None else ((expires_in_hours * 3600) if expires_in_hours is not None else settings.jwt_expiry_minutes * 60)
     issued_at = time.time()
     exp = int(issued_at) + lifetime
-    payload = {"sub": user_id, "role": role, "exp": exp, "iat": issued_at, "jti": str(uuid.uuid4())[:12]}
+    payload = {"sub": user_id, "role": role, "exp": exp, "iat": issued_at, "jti": str(uuid.uuid4())[:12], "session_scope": session_scope}
+    if auth_version is not None:
+        payload["auth_version"] = int(auth_version)
     return jwt.encode(payload, settings.jwt_secret, algorithm=settings.jwt_algorithm)
 
 
@@ -119,9 +121,13 @@ def _decode_demo_token(token: str) -> Optional[User]:
 
 # ─── FastAPI dependencies ─────────────────────────────────────────────────────
 
+def request_session_scope(request: Request | None) -> Literal["public", "private-admin"]:
+    return "private-admin" if request is not None and getattr(request.app.state, "private_admin", False) else "public"
+
 def get_optional_user(
     token: Optional[str] = Depends(_oauth2),
     user_store: dict = Depends(get_user_store),
+    request: Request = None,
 ) -> Optional[User]:
     """Return a User if the token is valid; else None.
 
@@ -138,7 +144,8 @@ def get_optional_user(
     # synthetic demo User carries nothing to clobber; we still merge with any
     # existing row to keep its persisted password_hash/created_at rather than
     # overwriting with the empty synthetic values.
-    demo = _decode_demo_token(token) if settings.allow_demo_tokens else None
+    expected_scope = request_session_scope(request)
+    demo = _decode_demo_token(token) if settings.allow_demo_tokens and expected_scope == "public" else None
     if demo is not None:
         try:
             existing = user_store.get(demo.id)
@@ -159,11 +166,24 @@ def get_optional_user(
         if settings.require_auth:
             raise HTTPException(status.HTTP_401_UNAUTHORIZED, detail="Invalid or expired token")
         return None
+    token_scope = payload.get("session_scope")
+    if token_scope != expected_scope and not (expected_scope == "public" and token_scope is None):
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, detail="Session belongs to a different service; sign in again")
     user_id = payload.get("sub")
     user = user_store.get(user_id) if user_id else None
+    # Only existing teacher sessions may retain the pre-scope public format.
+    if token_scope is None and user is not None and user.role != "teacher":
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, detail="Sign in again")
     if user is not None and not user.is_active:
         user = None
     issued_at = payload.get("iat")
+    token_auth_version = payload.get("auth_version")
+    if user is not None and token_auth_version is not None:
+        try:
+            if int(token_auth_version) != user.auth_version:
+                user = None
+        except (TypeError, ValueError):
+            user = None
     if user is not None and user.auth_invalid_before is not None:
         try:
             if issued_at is None or float(issued_at) <= user.auth_invalid_before:
@@ -175,10 +195,13 @@ def get_optional_user(
     return user
 
 
-def get_current_user(user: Optional[User] = Depends(get_optional_user)) -> User:
+def get_current_user(request: Request, user: Optional[User] = Depends(get_optional_user)) -> User:
     """Required-auth dependency. Used by all new (auth/users/courses/assignments) endpoints."""
     if user is None:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, detail="Authentication required")
+    if (user.is_read_only and request.method not in {"GET", "HEAD", "OPTIONS"}
+            and request.url.path not in {"/auth/logout", "/auth/password-change", "/api/auth/logout", "/api/auth/password-change"}):
+        raise HTTPException(status.HTTP_403_FORBIDDEN, detail={"code": "account_read_only", "message": "账号当前为只读，可浏览历史批改任务，暂不能进行此操作。"})
     return user
 
 
@@ -195,6 +218,6 @@ def require_student(user: User = Depends(get_current_user)) -> User:
 
 
 def require_admin(user: User = Depends(get_current_user)) -> User:
-    if user.role != "admin":
+    if user.role != "admin" or user.is_read_only or user.id.startswith("demo_"):
         raise HTTPException(status.HTTP_403_FORBIDDEN, detail="Admin access required")
     return user

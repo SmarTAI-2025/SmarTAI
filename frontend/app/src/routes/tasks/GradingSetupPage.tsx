@@ -1,3 +1,5 @@
+import { useDraftProtection } from "@/hooks/useDraftProtection";
+import { useDraftLeave } from "@/hooks/useDraftLeave";
 import {
   ArrowLeft,
   BookOpen,
@@ -13,7 +15,7 @@ import {
   Upload,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
-import { Link, useBeforeUnload, useBlocker, useNavigate, useParams, useSearchParams } from "react-router-dom";
+import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { getAPIErrorCode, normalizeAPIError } from "@/api/client";
 import {
   useCourseMaterials,
@@ -50,7 +52,8 @@ import type {
 const SAMPLE_OPTIONS = [1, 2, 3, 4, 5] as const;
 const MAX_NOTES_LENGTH = 500;
 
-export function GradingSetupPage() {
+export function GradingSetupPage() { const { taskId, jobId } = useParams(); return <GradingSetupPageForm key={`${taskId}:${jobId ?? ""}`} />; }
+function GradingSetupPageForm() {
   const { taskId } = useParams();
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
@@ -108,15 +111,8 @@ export function GradingSetupPage() {
     if (!preserveSyncNotice) setSyncNoticeKey(null);
     setSelectionNoticeKey(null);
   }, [isDirty, response, serverKey, serverSetup]);
-  const blocker = useBlocker(({ currentLocation, nextLocation }) => (
-    isDirty
-    && !allowLeaveRef.current
-    && (currentLocation.pathname !== nextLocation.pathname || currentLocation.search !== nextLocation.search)
-  ));
-  useBeforeUnload(useCallback((event) => {
-    if (!isDirty || allowLeaveRef.current) return;
-    event.preventDefault();
-  }, [isDirty]));
+
+  const localDraft = useDraftProtection({ scope: `grading:${taskId}:${response?.task_id ?? ""}`, value: { setup, advancedOpen }, baseline: { setup: serverSetup, advancedOpen: false }, version: String(response?.workflow_revision ?? ""), enabled: Boolean(response && setup), busy: saveSetup.isPending, onRestore: (draft) => { setSetup(draft.setup); setAdvancedOpen(draft.advancedOpen); } });
 
   const expertsById = useMemo(
     () => new Map((response?.available_experts ?? []).map((expert) => [expert.provider_id, expert])),
@@ -199,12 +195,16 @@ export function GradingSetupPage() {
     }
 
     setActionError(null);
+    if (localDraft.conflict) return;
     try {
       await saveSetup.mutateAsync({
         taskId,
         expectedWorkflowRevision: response.workflow_revision,
         gradingSetup: setup,
       });
+      if (!localDraft.isCurrent()) return;
+      if (!await localDraft.clear({ setup, advancedOpen })) return;
+      if (!localDraft.isCurrent()) return;
       initialSetupRef.current = serializeSetup(setup);
       allowLeaveRef.current = true;
       navigate(returnTo ?? `/tasks/${taskId}/grading/preflight`);
@@ -371,16 +371,6 @@ export function GradingSetupPage() {
               target?.focus();
             });
           }}
-        />
-      ) : null}
-      {blocker.state === "blocked" ? (
-        <UnsavedChangesDialog
-          title={gradingSetupText(locale, "leaveTitle")}
-          description={gradingSetupText(locale, "leaveDescription")}
-          stayLabel={gradingSetupText(locale, "stay")}
-          leaveLabel={gradingSetupText(locale, "leave")}
-          onStay={() => blocker.reset()}
-          onLeave={() => blocker.proceed()}
         />
       ) : null}
     </div>

@@ -1,3 +1,5 @@
+import { LocalDraftManager } from "@/components/ui/LocalDraftManager";
+import { useSearchParams } from "react-router-dom";
 import { FolderPlus, HardDrive, LoaderCircle, Search, Upload, X } from "lucide-react";
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import {
@@ -39,6 +41,8 @@ export function KnowledgeBasePage() {
   const [query, setQuery] = useState("");
   const [category, setCategory] = useState<CategoryFilter>("all");
   const [groupId, setGroupId] = useState("");
+  const [searchParams, setSearchParams] = useSearchParams();
+  const [draftOpenError, setDraftOpenError] = useState("");
   const [dialog, setDialog] = useState<DialogState>(null);
 
   useEffect(() => {
@@ -66,6 +70,23 @@ export function KnowledgeBasePage() {
   const summary = materialsQuery.data?.summary;
   const visibleGroups = showGroups ? (visibleGroupsQuery.data?.items ?? []) : [];
   const materials = materialsQuery.data?.items ?? [];
+
+  useEffect(() => {
+    const requested = searchParams.get("localDraft");
+    if (!requested) return;
+    if (requested === "library-upload") setDialog({ kind: "upload" });
+    else if (requested === "library-group:new") setDialog({ kind: "create-group" });
+    else if (requested.startsWith("library-group:")) {
+      if (!allGroupsQuery.isSuccess) return;
+      const group = groups.find((item) => item.group_id === requested.slice("library-group:".length));
+      if (group) setDialog({ kind: "edit-group", group }); else setDraftOpenError("此分组已删除或不可访问，未恢复旧草稿；可在账户设置删除它。");
+    } else if (requested.startsWith("library-material:")) {
+      if (!materialsQuery.isSuccess) return;
+      const material = materials.find((item) => item.material_id === requested.slice("library-material:".length));
+      if (material) setDialog({ kind: "edit-material", material }); else setDraftOpenError("未在当前资料列表找到此文件，请搜索并打开后恢复；文件可能已删除或不再可访问。");
+    }
+    const next = new URLSearchParams(searchParams); next.delete("localDraft"); setSearchParams(next, { replace: true });
+  }, [searchParams, allGroupsQuery.isSuccess, materialsQuery.isSuccess]);
 
   const retry = () => {
     void materialsQuery.refetch();
@@ -99,6 +120,9 @@ export function KnowledgeBasePage() {
           </Button>
         </div>
       </div>
+
+      <LocalDraftManager />
+      {draftOpenError ? <p role="alert" className="my-3 text-danger">{draftOpenError}</p> : null}
 
       <div className="relative mt-8">
         <Search aria-hidden="true" className="pointer-events-none absolute left-5 top-1/2 h-5 w-5 -translate-y-1/2 text-muted-foreground" />

@@ -15,6 +15,7 @@ from pydantic import BaseModel
 
 from backend.auth import get_current_user, require_teacher
 from backend.api.errors import domain_error_response
+from backend.analytics.admin_usage import track_usage_event
 from backend.domain.errors import DomainError
 from backend.llm.registry import ExpertRegistry, get_scoped_expert_registry
 from backend.models import User
@@ -61,6 +62,7 @@ def create_assignment(req: CreateAssignmentRequest, current: User = Depends(requ
         )
     except DomainError as exc:
         return domain_error_response(exc)
+    track_usage_event(event_name="assignment_created", user_id=current.id, role=current.role)
     return _serialize_assignment(a)
 
 

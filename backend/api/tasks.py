@@ -35,6 +35,7 @@ from fastapi import (
 from pydantic import BaseModel, Field, ValidationError as PydanticValidationError
 
 from backend.api.errors import domain_error_response
+from backend.analytics.admin_usage import track_usage_event
 from backend.auth import require_teacher
 from backend.db import (
     assignment_repository,
@@ -164,11 +165,16 @@ def create_task(
     idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
 ):
     key = idempotency_key or f"legacy-{hashlib.sha256(json.dumps(request.model_dump(), sort_keys=True).encode()).hexdigest()}"
-    return _domain(lambda: task_facade.create_task(
-        owner_id=current.id, name=request.name, semester_id=request.semester_id,
-        course_id=request.course_id, tag_ids=request.tag_ids,
-        idempotency_key=key,
-    ))
+    try:
+        result = task_facade.create_task(
+            owner_id=current.id, name=request.name, semester_id=request.semester_id,
+            course_id=request.course_id, tag_ids=request.tag_ids,
+            idempotency_key=key,
+        )
+    except DomainError as exc:
+        return domain_error_response(exc)
+    track_usage_event(event_name="task_created", user_id=current.id, role=current.role)
+    return result
 
 
 @router.get("/")
@@ -526,11 +532,16 @@ def start_grading(
     request: GradeRequest,
     current: User = Depends(require_teacher),
 ):
-    return _domain(lambda: task_facade.start_task_grading(
-        task_id=task_id,
-        owner_id=current.id,
-        expected_workflow_revision=request.expected_workflow_revision,
-    ))
+    try:
+        result = task_facade.start_task_grading(
+            task_id=task_id,
+            owner_id=current.id,
+            expected_workflow_revision=request.expected_workflow_revision,
+        )
+    except DomainError as exc:
+        return domain_error_response(exc)
+    track_usage_event(event_name="grading_run_started", user_id=current.id, role=current.role, dimensions={"surface": "task"})
+    return result
 
 
 @router.get("/{task_id}/state")
