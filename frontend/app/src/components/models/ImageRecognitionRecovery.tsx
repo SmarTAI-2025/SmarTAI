@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { useDraftLeave, type DraftController } from "@/hooks/useDraftLeave";
+import { useDraftOwner } from "@/hooks/useDraftProtection";
+import { rememberImageReturn, takeImageReturn } from "@/lib/imageRecoveryNavigation";
 import { getAPIErrorCode } from "@/api/client";
 import type { ExpertConfig } from "@/types";
 
@@ -10,12 +12,15 @@ export function needsImageRecovery(error: unknown) { return imageFailureCodes.ha
 // Restore first, then apply the latest explicit choice once. No model request.
 export function useImageRecoveryReturn(loaded: boolean, onSelect: (id: string) => void) {
   const location = useLocation();
+  const owner = useDraftOwner();
   const applied = useRef<string | null>(null);
   useEffect(() => {
     if (!loaded || applied.current === location.key) return;
     applied.current = location.key;
-    if (typeof location.state?.imageRecoveryModel === "string" && location.state.imageRecoveryModel) onSelect(location.state.imageRecoveryModel);
-  }, [loaded, location.key, location.state, onSelect]);
+    const choice = takeImageReturn(owner, location.pathname);
+    const model = choice || location.state?.imageRecoveryModel;
+    if (typeof model === "string" && model) onSelect(model);
+  }, [loaded, location.key, location.pathname, location.state, owner, onSelect]);
 }
 
 export function ImageRecognitionRecovery({ error, expert, returnTo, controller, isCurrent, locale }: {
@@ -24,6 +29,7 @@ export function ImageRecognitionRecovery({ error, expert, returnTo, controller, 
 }) {
   const navigate = useNavigate();
   const leave = useDraftLeave();
+  const owner = useDraftOwner();
   const busy = useRef(false);
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
@@ -44,6 +50,7 @@ export function ImageRecognitionRecovery({ error, expert, returnTo, controller, 
       if (!isCurrent() || current.id !== original.id || current.dirty || current.busy || current.savedAt === null) throw new Error(zh ? "内容有修改或尚未暂存成功，请再次暂存；输入仍保留。" : "Input changed or could not be saved. Your input is preserved.");
       const params = new URLSearchParams({ returnTo, imageRecovery: "1", mode });
       if (expert) params.set("providerId", expert.provider_id);
+      rememberImageReturn(owner, returnTo, expert?.provider_id ?? "");
       navigate(`/settings/byok?${params}`);
     } catch (failure) {
       setSaveError(failure instanceof Error ? failure.message : zh ? "暂存失败，输入仍保留。" : "Saving failed; input is preserved.");

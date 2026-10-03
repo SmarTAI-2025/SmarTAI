@@ -33,6 +33,8 @@ def explicitly_rejects_images(status: object, body: object) -> bool:
     if status not in (400, 422):
         return False
     text = json.dumps(body, ensure_ascii=False).lower()
+    if re.search(r"(?:invalid|unsupported|not supported).{0,30}(?:format|mime|dimension|size|resolution)|(?:format|mime|dimension|size|resolution).{0,30}(?:invalid|unsupported|not supported)", text):
+        return False
     return bool(re.search(
         r"(?:does not support|doesn't support|not supported|unsupported|not capable|only supports? text|不支持)"
         r".{0,90}(?:image(?:_url)?|vision|multimodal|图片|图像|视觉)"
@@ -64,4 +66,14 @@ def is_explicit_image_rejection(exc: BaseException) -> bool:
 
 
 def can_attempt_images(provider) -> bool:
-    return bool(getattr(provider, "can_attempt_vision", getattr(provider, "supports_vision", None) is not False))
+    allowed = getattr(provider, "can_attempt_vision", None)
+    return allowed if isinstance(allowed, bool) else getattr(provider, "supports_vision", None) is not False
+
+
+def image_quality_failure(code: str, document) -> str:
+    # Reuse actual recognition-plan/evidence selection, never the extension or
+    # a new numeric confidence threshold. Network/auth errors retain their code.
+    if code in {"question_source_incomplete", "ocr_empty_result", "recognition_response_invalid"} and document is not None:
+        if any(getattr(page, "selected_for_visual", False) or any(getattr(span, "visual", None) is not None for span in getattr(page, "spans", [])) for page in document.pages):
+            return "image_recognition_unconfirmed"
+    return code

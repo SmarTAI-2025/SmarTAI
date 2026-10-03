@@ -4,7 +4,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from backend.llm.providers import BaseProvider, LLMResponse, VisionImage
+from backend.llm.providers import BaseProvider, LLMResponse, VisionImage, ProviderRequestError
 from backend.llm.registry import ExpertRegistry
 from backend.models import ProviderConfig
 from backend.skills.ocr_ingest import LLMVisionOCRSkill, OCRImage
@@ -39,7 +39,7 @@ class TextOnlyProvider(BaseProvider):
     supports_vision = False
 
     def __init__(self):
-        super().__init__(ProviderConfig(provider_type="zhipu", api_key="test", model="glm-4.5-air"))
+        super().__init__(ProviderConfig(provider_type="zhipu", api_key="test", model="glm-4.5-air", image_capability_status="unsupported"))
 
     def _build_client_sync(self):
         raise AssertionError("not used")
@@ -65,7 +65,7 @@ async def test_base_provider_ainvoke_vision_builds_data_url_blocks():
 async def test_text_only_provider_rejects_vision():
     provider = TextOnlyProvider()
 
-    with pytest.raises(NotImplementedError):
+    with pytest.raises(ProviderRequestError, match="provider_vision_not_supported"):
         await provider.ainvoke_vision(
             "transcribe",
             [VisionImage(data=b"abc", media_type="image/png", filename="page.png")],

@@ -54,7 +54,7 @@ from backend.llm.registry import (
     provider_encryption_not_configured_error,
     resolve_owner_default_provider_id,
 )
-from backend.llm.providers import ProviderRequestError, VisionImage
+from backend.llm.providers import ProviderRequestError, VisionImage, build_provider
 from backend.llm.image_capability import make_image_challenge, IMAGE_CHALLENGE_PROMPT, is_explicit_image_rejection
 from backend.models import ProviderConfig, ProviderType, User, WireProtocol
 from backend.services.stage_provider_routing import list_stage_provider_options
@@ -609,7 +609,11 @@ async def verify_provider_image(
     _check_custom_probe_limit(current.id, "verify_image")
     # A user may explicitly recheck previously rejected input. No automatic
     # retries or alternative model/endpoint; use the existing image serializer.
-    provider.config = provider.config.model_copy(update={"image_capability_status": "unverified"})
+    # Build and compare-and-set from the SAME saved snapshot. The dependency
+    # registry may predate a concurrent configuration edit.
+    provider = build_provider(stored.config.model_copy(update={
+        "image_capability_status": "unverified", "scheduling_owner": current.id,
+    }))
     pixels, answer = make_image_challenge()
     state, reason = "inconclusive", "image_probe_answer_incorrect"
     try:

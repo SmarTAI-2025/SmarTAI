@@ -1,4 +1,6 @@
 import { useDraftProtection } from "@/hooks/useDraftProtection";
+import { useDraftOwner } from "@/hooks/useDraftProtection";
+import { rememberImageReturn } from "@/lib/imageRecoveryNavigation";
 import {
   AlertTriangle,
   ArrowLeft,
@@ -100,6 +102,12 @@ export function ExpertsPage() {
   const recovery = recoveryParams.get("imageRecovery") === "1";
   const targetId = recoveryParams.get("providerId");
   const [returnModel, setReturnModel] = useState(targetId ?? "");
+  const owner = useDraftOwner();
+  function chooseReturnModel(model: string) {
+    setReturnModel(model);
+    const path = safeExpertsReturnTo(recoveryParams.get("returnTo"));
+    if (recovery && path) rememberImageReturn(owner, path, model);
+  }
   useEffect(() => {
     if (targetId) document.getElementById(`image-capability-${targetId}`)?.scrollIntoView?.({ block: "center" });
   }, [targetId, expertsQuery.data]);
@@ -138,7 +146,8 @@ export function ExpertsPage() {
           display_name: value.displayName || null,
           rpm: value.rpm,
         };
-        await addExpert.mutateAsync(request);
+        const added = await addExpert.mutateAsync(request);
+        if (recovery && added.provider_id) chooseReturnModel(added.provider_id);
         toast.success(zh ? "模型配置已添加" : "Model configuration added", {
           description: value.displayName || value.model,
         });
@@ -205,6 +214,7 @@ export function ExpertsPage() {
     if (!expert.enabled || expert.is_default) return;
     try {
       await setDefaultExpert.mutateAsync(expert.provider_id);
+      if (recovery) chooseReturnModel(expert.provider_id);
       toast.success(zh ? "默认模型已更新" : "Default model updated", {
         description: modelDisplayName(expert),
       });
@@ -283,7 +293,7 @@ export function ExpertsPage() {
 
       {recovery && returnTo ? <div className="mb-5 rounded-lg border bg-card p-4">
         <p className="mb-3 text-sm">{zh ? "验证或选择模型后，返回上传页面并主动点击原有下一步识别。暂存的文件和填写内容会恢复。" : "After verifying or choosing a model, return and click the original recognition action. Saved files and fields will be restored."}</p>
-        <StageProviderSelect id="recovery-model" label={zh ? "继续识别所用模型" : "Model for continuing"} experts={experts.filter(e => e.enabled)} hint={zh ? "保留最新选择，返回后不自动识别。" : "Keeps your latest selection; no automatic recognition."} locale={locale} value={returnModel} onChange={setReturnModel} disabled={controlsPending} />
+        <StageProviderSelect id="recovery-model" label={zh ? "继续识别所用模型" : "Model for continuing"} experts={experts.filter(e => e.enabled)} hint={zh ? "保留最新选择，返回后不自动识别。" : "Keeps your latest selection; no automatic recognition."} locale={locale} value={returnModel} onChange={chooseReturnModel} disabled={controlsPending} />
       </div> : null}
       <section
         aria-label={zh ? "模型配置概览" : "Model configuration overview"}

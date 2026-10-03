@@ -513,7 +513,8 @@ async def test_model_without_image_support_reaches_teacher_as_vision_reason(monk
         last_failed_job_id=old_run.id,
         error_code="grading_failed",
     )
-    content = b"\x89PNG\r\n\x1a\nfake-image-payload"
+    from backend.llm.image_capability import make_image_challenge
+    content = make_image_challenge()[0]
     queued = _queue(
         owner_id,
         task_id,
@@ -524,13 +525,19 @@ async def test_model_without_image_support_reaches_teacher_as_vision_reason(monk
 
     class UnsupportedVisionSkill:
         async def recognize_images(self, _images, _purpose):
-            raise PermanentLLMError("This model does not support image input")
+            from backend.llm.providers import ProviderRequestError
+            raise ProviderRequestError("provider_vision_not_supported", status_code=400)
 
     monkeypatch.setattr(
         task_facade,
         "LLMVisionOCRSkill",
         lambda _provider: UnsupportedVisionSkill(),
     )
+    registry = _VisionRegistry()
+    from unittest.mock import AsyncMock
+    from backend.llm.providers import ProviderRequestError
+    registry.provider = type("RejectingProvider", (), {"provider_id": "test-provider", "supports_vision": True,
+        "ainvoke_vision": AsyncMock(side_effect=ProviderRequestError("provider_vision_not_supported", status_code=400))})()
     await task_facade.run_task_submission_parsing(
         task_id=task_id,
         owner_id=owner_id,
@@ -538,7 +545,7 @@ async def test_model_without_image_support_reaches_teacher_as_vision_reason(monk
         filename="scan.png",
         content=content,
         content_type="image/png",
-        registry=_VisionRegistry(),
+        registry=registry,
         job_attempt=queued["_job_attempt"],
         identity_mode="filename",
         roster_entries=None,

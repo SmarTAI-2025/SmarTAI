@@ -127,6 +127,11 @@ const REASON_COPY: Record<string, ReasonFactory> = {
     description: tx(locale, "这份文件需要读取图片或扫描页，但本阶段明确选择的模型拒绝了视觉输入。原文件已保存。", "This file requires image or scanned-page reading, but the model explicitly selected for this stage rejected visual input. The original is saved."),
     nextStep: tx(locale, "在作答上传页改选支持视觉的模型，直接复用原文件重试。", "Choose a vision-capable model on the submission upload page and retry using the preserved original."),
   }),
+  image_recognition_unconfirmed: (locale) => ({
+    title: tx(locale, "图片识别尚未得到可靠内容", "Image recognition did not yield reliable content"),
+    nextStep: tx(locale, "返回上传页换清晰文件或换模型后继续。", "Return to upload and try a clearer file or another model."),
+    description: tx(locale, "文件模糊或模型识别效果可能导致低质量；不能据此判定不支持图片。请换清晰文件或换模型；图片能力未知时可主动验证。", "Blurry input or model accuracy can cause poor results; this does not prove lack of image support. Try a clearer file or another model, or verify image capability if unknown."),
+  }),
   ocr_empty_result: (locale) => ({
     title: tx(locale, "OCR 没有读到可用文字", "OCR found no usable text"),
     description: tx(

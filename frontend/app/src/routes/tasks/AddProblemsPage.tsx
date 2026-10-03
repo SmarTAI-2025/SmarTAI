@@ -23,7 +23,7 @@ import {
   useStartQuestionPreparation,
   useTask,
 } from "@/api/hooks";
-import { ImageRecognitionRecovery, useImageRecoveryReturn } from "@/components/models/ImageRecognitionRecovery";
+import { ImageRecognitionRecovery, needsImageRecovery, useImageRecoveryReturn } from "@/components/models/ImageRecognitionRecovery";
 import { StageProviderSelect } from "@/components/models/StageProviderSelect";
 import { NewTaskStepper } from "@/components/new-task/NewTaskStepper";
 import { RecoverableActionState, type RecoveryAction } from "@/components/ui/RecoverableActionState";
@@ -427,8 +427,8 @@ function AddProblemsForm({ taskQuery }: { taskQuery: ReturnType<typeof useTask> 
           label={tx(locale, "题目识别模型", "Question recognition model")}
           hint={tx(
             locale,
-            "已自动选择默认模型；有多个模型时可在这里改选。图片或扫描版 PDF 需要支持图片/视觉输入的模型，具体能力以服务商说明为准。",
-            "Your default model is selected automatically; choose another here when needed. Images and scanned PDFs require a model that supports image input; check the provider's current documentation.",
+            "已自动选择默认模型；有多个模型时可在这里改选。图片或扫描版 PDF 需要支持图片/视觉输入的模型，未验证不影响正常尝试；图片能力可在模型配置页独立验证。",
+            "Your default model is selected automatically; choose another here when needed. Images and scanned PDFs require a model that supports image input; Unverified models can still be tried; verify image capability separately in model settings.",
           )}
           experts={enabledExperts}
           value={recognitionProviderId}
@@ -478,7 +478,7 @@ function AddProblemsForm({ taskQuery }: { taskQuery: ReturnType<typeof useTask> 
         </section>
         {formError ? <p role="alert" className="mt-3 text-sm text-danger">{formError}</p> : null}
         <ImageRecognitionRecovery error={preparationFailure?.error} expert={enabledExperts.find(e => e.provider_id === recognitionProviderId)} returnTo={taskReturnPath} controller={draft.protection.controller} isCurrent={draft.protection.isCurrent} locale={locale} />
-        {recoveryInfo ? (
+        {recoveryInfo && !needsImageRecovery(preparationFailure?.error) ? (
           <RecoverableActionState
             info={recoveryInfo}
             locale={locale}

@@ -321,7 +321,7 @@ def update_provider_config(
         session.flush()
         return StoredProviderConfig(
             id=record.id,
-            config=config.model_copy(deep=True),
+            config=config.model_copy(deep=True, update={"image_capability_status": "unverified", "image_checked_at": None, "image_reason": None}),
             verification_status=record.verification_status,
             last_checked_at=record.last_checked_at,
             verification_error_code=record.verification_error_code,

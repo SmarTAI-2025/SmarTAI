@@ -355,7 +355,10 @@ class BaseProvider(ABC):
         self.config.image_capability_status = "unsupported"
         recorder = getattr(self, "_image_rejection_recorder", None)
         if recorder is not None:
-            recorder()
+            try:
+                recorder()
+            except Exception:
+                logger.warning("Unable to persist image rejection evidence")
 
 
     def __init__(self, config: ProviderConfig):

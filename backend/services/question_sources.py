@@ -4,7 +4,7 @@ Recognition produces saved evidence, never questions or generated solutions.
 The caller retains its existing structure/score/review transaction.
 """
 from __future__ import annotations
-from backend.llm.image_capability import can_attempt_images
+from backend.llm.image_capability import can_attempt_images, image_quality_failure
 
 from dataclasses import dataclass
 import asyncio
@@ -217,8 +217,7 @@ async def read_question_source(*, owner_id, task_id, content, filename, content_
         if run.safe_error_code == "visual_capability_unavailable" and route.provider is not None:
             raise RecognitionError("provider_vision_not_supported" if not can_attempt_images(route.provider) else "image_recognition_unconfirmed")
         failure_code = run.safe_error_code or assembly.safe_error_code or "ocr_empty_result"
-        if failure_code in {"ocr_empty_result", "recognition_response_invalid"} and engine is not None:
-            failure_code = "image_recognition_unconfirmed"
+        failure_code = image_quality_failure(failure_code, document)
         raise RecognitionError(failure_code)
     summary = dict(
         schema_version=1, operation_id=run.operation_id, status=run.status,

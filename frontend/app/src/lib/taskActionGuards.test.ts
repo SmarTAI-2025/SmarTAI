@@ -432,7 +432,7 @@ describe("background task failure guidance", () => {
     const info = classifyRecoverableError("ocr_empty_result", { locale: "zh-CN" });
 
     expect(info.title).toBe("OCR 没有读到可用文字");
-    expect(info.description).toContain("返回内容为空");
+    expect(info.description).toContain("不能据此判定模型不支持图片");
     expect(info.actionKind).toBe("reupload");
   });
 

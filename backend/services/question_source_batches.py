@@ -1,5 +1,6 @@
 """Read a complete question PDF with bounded, independently durable page batches."""
 from backend.domain.errors import RecognitionError
+from backend.llm.image_capability import image_quality_failure
 from backend.recognition.models import RecognitionCoverageV1, RecognitionUsageV1
 from backend.skills.recognition_reader import PROMPT_VERSION
 
@@ -38,7 +39,7 @@ async def read_question_pdf_batches(*, service, request, content, engine, total_
         # Successful page evidence may be reused, but incomplete input must not
         # progress to question/answer generation as though the whole file read.
         if run.safe_error_code or document.coverage.failed_pages:
-            raise RecognitionError(run.safe_error_code or "question_source_incomplete")
+            raise RecognitionError(image_quality_failure(run.safe_error_code or "question_source_incomplete", document))
         for page in document.pages:
             if page.page_number in document.coverage.processed_pages:
                 pages[page.page_number] = page
@@ -50,14 +51,14 @@ async def read_question_pdf_batches(*, service, request, content, engine, total_
             # Missing coverage alone is not proof that no paid call occurred:
             # unaligned provider output also counts as unprocessed evidence.
             if len(batch) == 1 or not set(pending).issubset(deferred):
-                raise RecognitionError("question_source_incomplete")
+                raise RecognitionError(image_quality_failure("question_source_incomplete", document))
             batches[0:0] = [[number] for number in pending]
     coverage = RecognitionCoverageV1(scope=request.scope, total_pages=total_pages,
                                      requested_pages=requested, processed_pages=sorted(pages))
     text = "\n\n".join(span.final_text for number in sorted(pages)
                         for span in pages[number].spans if span.final_text)
     if not text.strip():
-        raise RecognitionError("ocr_empty_result")
+        raise RecognitionError(image_quality_failure("ocr_empty_result", documents[-1] if documents else None))
     await reporter.set_current_step("recognition_document_complete", message=f"Read all {len(requested)} requested PDF pages")
     unique = lambda values: list(dict.fromkeys(values))
     summary = dict(

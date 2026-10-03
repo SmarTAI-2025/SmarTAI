@@ -8,6 +8,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { APIError } from "@/api/client";
 import * as client from "@/api/client";
 import { PageDraftSession } from "@/hooks/usePageDraft";
+import { rememberImageReturn } from "@/lib/imageRecoveryNavigation";
+import * as draftStore from "@/lib/pageDraftStore";
 import { clearPageDrafts } from "@/lib/pageDraftStore";
 import { AddProblemsPage } from "./AddProblemsPage";
 
@@ -33,7 +35,7 @@ const capabilityState = vi.hoisted(() => ({
     },
   },
 }));
-const providerState = vi.hoisted(() => ({ enabled: true }));
+const providerState = vi.hoisted(() => ({ enabled: true, imageState: "unverified" }));
 
 vi.mock("@/api/hooks", () => ({
   useStageProviders: () => ({
@@ -43,7 +45,8 @@ vi.mock("@/api/hooks", () => ({
       model: "test-model",
       enabled: true,
       is_default: true,
-    }] : [],
+      image_capability_status: providerState.imageState,
+    }, { provider_id: "new:model", model: "new-model", provider_type: "qwen", enabled: true }] : [],
     isLoading: false,
     isError: false,
     refetch: expertsRefetch,
@@ -90,12 +93,12 @@ vi.mock("sonner", () => ({
   toast: { success: vi.fn(), error: vi.fn() },
 }));
 
-function renderPage(owner = "draft-teacher") {
+function renderPage(owner = "draft-teacher", priorModel?: string) {
   const router = createMemoryRouter([{ element: <DraftLeaveProvider><Outlet /><DraftActions /></DraftLeaveProvider>, children: [
     { path: "/tasks/:taskId/upload/problems", element: <AddProblemsPage /> },
     { path: "/tasks/:taskId/problems/progress", element: <div>Preparation started</div> },
     { path: "/settings/byok", element: <div>BYOK configuration</div> },
-  ] }], { initialEntries: ["/tasks/task-1/upload/problems"] });
+  ] }], { initialEntries: [priorModel ? { pathname: "/tasks/task-1/upload/problems", state: { imageRecoveryModel: priorModel } } : "/tasks/task-1/upload/problems"] });
   render(<PageDraftSession ownerId={owner}><RouterProvider router={router} /></PageDraftSession>);
   return router;
 }
@@ -112,6 +115,7 @@ beforeEach(async () => {
   vi.stubGlobal("Blob", Blob); vi.stubGlobal("File", File);
   await clearPageDrafts();
   providerState.enabled = true;
+  providerState.imageState = "unverified";
   vi.spyOn(client, "getJSON").mockResolvedValue({ available: true, prepared: true, filename: "questions.pdf" });
   Object.assign(taskState, { status: "draft", last_failed_job_id: null, extract_job_id: null });
   capabilityState.available = true;
@@ -349,6 +353,7 @@ describe("page draft navigation", () => {
     await waitFor(() => expect(screen.getByLabelText("页码（选填）")).toHaveValue("3-5"));
     expect(preflightMutateAsync).not.toHaveBeenCalled(); expect(startMutateAsync).not.toHaveBeenCalled();
     providerState.enabled = true;
+  providerState.imageState = "unverified";
     await act(async () => { await router.navigate("/settings/byok"); await router.navigate(-1); });
     await saveDraft();
     await act(async () => { await router.navigate("/settings/byok"); await router.navigate(-1); });
@@ -390,3 +395,70 @@ describe("page draft navigation", () => {
 });
 
 async function saveDraft() { if (providerState.enabled) await waitFor(() => expect(screen.getByLabelText("题目识别模型")).toHaveValue("mock:test")); await waitFor(() => expect(screen.getByRole("button", { name: "暂存" })).toBeEnabled()); fireEvent.click(screen.getByRole("button", { name: "暂存" })); await waitFor(() => expect(screen.getByText(/已暂存 ·/)).toBeInTheDocument()); }
+
+
+describe("image failure recovery uses explicit drafts", () => {
+  it("saves actual file and scope, restores before applying latest model, then waits for manual action", async () => {
+    const user = userEvent.setup();
+    const router = renderPage();
+    await uploadProblemFile(user);
+    await user.click(screen.getByRole("button", { name: "从原文提取" }));
+    fireEvent.change(screen.getByLabelText("页码（选填）"), { target: { value: "3-5" } });
+    fireEvent.change(screen.getByLabelText("补充说明（选填）"), { target: { value: "保留这段说明" } });
+    preflightMutateAsync.mockRejectedValueOnce(new APIError(422, "image_recognition_unconfirmed", { detail: { code: "image_recognition_unconfirmed" } }));
+    await user.click(screen.getByRole("button", { name: "识别并准备题目资料" }));
+    await user.click(await screen.findByRole("button", { name: "暂存并去验证" }));
+    await screen.findByText("BYOK configuration");
+    expect(router.state.location.search).toContain("providerId=mock%3Atest");
+    expect(preflightMutateAsync).toHaveBeenCalledTimes(1);
+    rememberImageReturn("draft-teacher", "/tasks/task-1/upload/problems", "new:model");
+    await act(async () => { await router.navigate("/tasks/task-1/upload/problems", { state: { imageRecoveryModel: "new:model" } }); });
+    await waitFor(() => expect(screen.getByLabelText("题目识别模型")).toHaveValue("new:model"));
+    expect(screen.getAllByText("questions.pdf").length).toBeGreaterThan(0);
+    expect(screen.getByLabelText("页码（选填）")).toHaveValue("3-5");
+    expect(screen.getByLabelText("补充说明（选填）")).toHaveValue("保留这段说明");
+    expect(preflightMutateAsync).toHaveBeenCalledTimes(1);
+    preflightMutateAsync.mockResolvedValueOnce({ source_token: "new-source" });
+    await user.click(screen.getByRole("button", { name: "识别并准备题目资料" }));
+    await waitFor(() => expect(preflightMutateAsync).toHaveBeenCalledTimes(2));
+    const request = preflightMutateAsync.mock.calls[1][0];
+    expect(request.recognitionProviderId).toBe("new:model");
+    expect(await request.file.text()).toBe("1. Explain dependency injection");
+  });
+  it("stays with input when saving fails", async () => {
+    const user = userEvent.setup(); renderPage(); await uploadProblemFile(user);
+    preflightMutateAsync.mockRejectedValueOnce(new APIError(422, "provider_vision_not_supported", { detail: { code: "provider_vision_not_supported" } }));
+    await user.click(screen.getByRole("button", { name: "识别并准备题目资料" }));
+    await screen.findByRole("button", { name: "暂存并更换模型" });
+    const spy = vi.spyOn(draftStore, "writePageDrafts").mockRejectedValueOnce(new Error("quota save failure"));
+    await user.click(screen.getByRole("button", { name: "暂存并更换模型" }));
+    expect((await screen.findAllByText("quota save failure")).length).toBeGreaterThan(0);
+    expect(screen.getAllByText("questions.pdf").length).toBeGreaterThan(0);
+    expect(screen.queryByText("BYOK configuration")).not.toBeInTheDocument();
+    spy.mockRestore();
+  });
+  it("passed model with poor recognition suggests clearer file without calling it unsupported", async () => {
+    providerState.imageState = "passed";
+    const user = userEvent.setup(); renderPage(); await uploadProblemFile(user);
+    preflightMutateAsync.mockRejectedValueOnce(new APIError(422, "image_recognition_unconfirmed", { detail: { code: "image_recognition_unconfirmed" } }));
+    await user.click(screen.getByRole("button", { name: "识别并准备题目资料" }));
+    expect(await screen.findByText(/所选模型已通过图片能力验证/)).toHaveTextContent("请换清晰文件或换模型");
+    expect(screen.queryByRole("button", { name: "暂存并去验证" })).not.toBeInTheDocument();
+    expect(screen.queryByText(/当前配置不支持图片输入/)).not.toBeInTheDocument();
+  });
+});
+
+
+it("browser back keeps the latest explicit choice over old history state and saved draft", async () => {
+  const user = userEvent.setup(); const router = renderPage("draft-teacher", "mock:test");
+  await uploadProblemFile(user);
+  preflightMutateAsync.mockRejectedValueOnce(new APIError(422, "image_recognition_unconfirmed", { detail: { code: "image_recognition_unconfirmed" } }));
+  await user.click(screen.getByRole("button", { name: "识别并准备题目资料" }));
+  await user.click(await screen.findByRole("button", { name: "暂存并更换模型" }));
+  await screen.findByText("BYOK configuration");
+  rememberImageReturn("draft-teacher", "/tasks/task-1/upload/problems", "new:model");
+  await act(async () => { await router.navigate(-1); });
+  await waitFor(() => expect(screen.getByLabelText("题目识别模型")).toHaveValue("new:model"));
+  expect(screen.getAllByText("questions.pdf").length).toBeGreaterThan(0);
+  expect(preflightMutateAsync).toHaveBeenCalledTimes(1);
+});
