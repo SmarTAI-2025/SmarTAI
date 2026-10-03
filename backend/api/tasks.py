@@ -89,6 +89,7 @@ class GradeRequest(BaseModel):
     language: str = "en"
     multi_sample_n: int | None = Field(default=None, ge=1, le=10)
     expected_workflow_revision: int = Field(ge=0)
+    request_id: str | None = Field(default=None, min_length=1, max_length=160, pattern=r"^[A-Za-z0-9_-]+$")
 
 
 class RetrySubmissionRecognitionRequest(BaseModel):
@@ -537,6 +538,7 @@ def start_grading(
             task_id=task_id,
             owner_id=current.id,
             expected_workflow_revision=request.expected_workflow_revision,
+            request_id=request.request_id,
         )
     except DomainError as exc:
         return domain_error_response(exc)

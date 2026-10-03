@@ -271,11 +271,12 @@ export function useStartGrading() {
   const queryClient = useQueryClient();
 
   return useMutation({
-    mutationFn: ({ taskId, multiSampleN, expectedWorkflowRevision }: {
+    mutationFn: ({ taskId, multiSampleN, expectedWorkflowRevision, requestId }: {
       taskId: string;
       multiSampleN?: number | null;
       expectedWorkflowRevision: number;
-    }) => tasksApi.startGrading(taskId, { multiSampleN, expectedWorkflowRevision }),
+      requestId?: string;
+    }) => tasksApi.startGrading(taskId, { multiSampleN, expectedWorkflowRevision, requestId }),
     onSuccess: (data, variables) => {
       if (data.status === "started" || data.status === "already_running") {
         const activeTaskPatch = {

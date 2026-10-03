@@ -4,8 +4,10 @@ import { Link, Navigate, useNavigate, useParams } from "react-router-dom";
 import { useStartGrading, useTask } from "@/api/hooks/tasks";
 import { SmarTAIMascot } from "@/components/brand/SmarTAIMascot";
 import { NewTaskStepper } from "@/components/new-task/NewTaskStepper";
+import { GradingRetryNotice } from "@/components/tasks/GradingRetryNotice";
 import { RecoverableActionState } from "@/components/ui/RecoverableActionState";
 import { useTaskProgress } from "@/hooks/useTaskProgress";
+import { useGradingIntent } from "@/hooks/useGradingIntent";
 import { useI18n } from "@/i18n/I18nProvider";
 import type { Locale } from "@/i18n/messages";
 import { cn } from "@/lib/cn";
@@ -27,6 +29,7 @@ export function GradingProgressPage() {
   const taskQuery = useTask(taskId);
   const progressQuery = useTaskProgress(taskId);
   const retryGrading = useStartGrading();
+  const intent = useGradingIntent();
   const task = taskQuery.data;
   const state = progressQuery.data;
   const status = (state?.status ?? task?.status) as TaskStatus | undefined;
@@ -70,11 +73,9 @@ export function GradingProgressPage() {
   async function handleRetry() {
     if (!taskId || !task) return;
     try {
-      const response = await retryGrading.mutateAsync({
-        taskId,
-        expectedWorkflowRevision: task.workflow_revision,
-      });
-      if (response.status === "already_done") {
+      const response = await intent.execute(task.workflow_revision, (request) => retryGrading.mutateAsync({ taskId, ...request }));
+      if (!response) return;
+      if (response.status === "already_done" || (response.status === "already_finished" && ["completed", "partial_failed"].includes(response.run_status ?? ""))) {
         navigate(`/tasks/${taskId}/review`, { replace: true });
         return;
       }
@@ -124,6 +125,7 @@ export function GradingProgressPage() {
         <PageState title={copy(locale, "reading")} busy />
       ) : (
         <div className="mx-auto mt-[25px] w-full max-w-[940px]">
+          {status === "error" ? <div className="mb-4 rounded-[10px] border bg-card p-4"><GradingRetryNotice locale={locale} /></div> : null}
           {status === "error" && recoveryInfo ? (
             <RecoverableActionState
               info={recoveryInfo}

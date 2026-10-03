@@ -1,0 +1,49 @@
+import { readFileSync } from "node:fs";
+import { test, expect } from "@playwright/test";
+
+const manifestPath = process.env.SMARTAI_RETRY_DEMO_MANIFEST;
+test.skip(!manifestPath, "Requires the disposable controlled grading_retry_demo server.");
+
+test("partial failure → explicit same-config retry → live progress → review and publish", async ({ page, request }) => {
+  test.setTimeout(60_000);
+  const fixture = JSON.parse(readFileSync(manifestPath!, "utf8"));
+  const backend = process.env.SMARTAI_E2E_BACKEND_URL!;
+  const errors: string[] = [];
+  page.on("pageerror", (error) => errors.push(error.message));
+  await page.goto("/login");
+  await page.evaluate(() => localStorage.setItem("smartai_locale", "en-US"));
+  await page.reload();
+  await page.getByRole("textbox", { name: "Username", exact: true }).fill(fixture.username);
+  await page.getByLabel("Password", { exact: true }).fill(fixture.password);
+  await page.getByRole("button", { name: "Sign in", exact: true }).click();
+  await expect(page).toHaveURL(/\/$/);
+  await page.goto(`/tasks/${fixture.task_id}/review`);
+  await expect(page.getByRole("heading", { name: "Some answers could not be graded" })).toBeVisible();
+  await page.screenshot({ path: "output/playwright/01-partial-failed.png", fullPage: true });
+  await page.getByRole("link", { name: "Retry entire batch" }).click();
+  await expect(page.getByText(/may use model quota/)).toBeVisible();
+  await page.waitForTimeout(11_000);
+  await expect(page).toHaveURL(/\/grading\/preflight$/); // retries never auto-start
+  const gradingResponse = page.waitForResponse((r) => r.url().endsWith(`/tasks/${fixture.task_id}/grade`) && r.request().method() === "POST");
+  await page.getByRole("button", { name: /Start (Regrading|Grading Anyway)/ }).dblclick();
+  const started = await (await gradingResponse).json();
+  expect(started.status).toBe("started");
+  expect(started.job_id).not.toBe(fixture.old_run_id);
+  await expect(page).toHaveURL(/\/grading\/progress$/);
+  await expect(page.getByRole("heading", { name: "Grading student submissions" })).toBeVisible();
+  await page.screenshot({ path: "output/playwright/02-new-progress.png", fullPage: true });
+  await expect(page).toHaveURL(/\/review$/, { timeout: 20_000 });
+  await expect(page.getByRole("heading", { name: "Some answers could not be graded" })).toHaveCount(0);
+  await page.screenshot({ path: "output/playwright/03-recovered-review.png", fullPage: true });
+  const token = await page.evaluate(() => localStorage.getItem("smartai_token"));
+  const headers = { Authorization: `Bearer ${token}` };
+  const finalState = await (await request.get(`${backend}/tasks/${fixture.task_id}/finalization`, { headers })).json();
+  expect(finalState.remaining_review_count).toBe(0);
+  expect(finalState.ready_for_confirmation).toBe(true);
+  await page.locator("#confirm-review-complete").click();
+  await expect(page).toHaveURL(/\/results$/, { timeout: 15_000 });
+  const calls = JSON.parse(readFileSync(fixture.model_calls_path, "utf8"));
+  expect(calls).toHaveLength(2);
+  expect(calls[1].failed_qids).toEqual([]);
+  expect(errors).toEqual([]);
+});

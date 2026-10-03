@@ -253,6 +253,13 @@ def create_run_bundle(
                 )
                 .with_for_update()
             )
+            replay = _run_for_request_in_session(
+                session, assignment_id=assignment_id, teacher_id=teacher_id,
+                request_id=(input_manifest or {}).get("grading_request_id"),
+                request_revision=workflow_expected_revision,
+            )
+            if replay is not None:
+                return _run_to_dto(replay)
         if raw_knowledge_ids:
             from backend.db.knowledge_storage_repository import (
                 fence_grading_knowledge_in_session,
@@ -290,6 +297,26 @@ def create_run_bundle(
                 )
             if workflow.active_operation is not None or workflow.active_job_id is not None:
                 raise InvalidTransition("workflow_busy", code="workflow_busy")
+            # A conditional write also fences SQLite, where SELECT FOR UPDATE
+            # is ignored. A very fast terminal run must not let a stale request
+            # create a second execution after the active-run index is freed.
+            reserved = session.execute(
+                update(AssignmentWorkflowRecord).where(
+                    AssignmentWorkflowRecord.assignment_id == assignment_id,
+                    AssignmentWorkflowRecord.owner_id == teacher_id,
+                    AssignmentWorkflowRecord.workflow_revision == workflow_expected_revision,
+                    AssignmentWorkflowRecord.active_operation.is_(None),
+                    AssignmentWorkflowRecord.active_job_id.is_(None),
+                ).values(
+                    presentation_status="grading", grading_job_id=run_id,
+                    active_operation="grading", active_job_id=run_id,
+                    last_failed_job_id=None, error_code=None,
+                    workflow_revision=AssignmentWorkflowRecord.workflow_revision + 1,
+                    updated_at=now,
+                )
+            )
+            if reserved.rowcount != 1:
+                raise VersionConflict("workflow_revision_conflict", code="workflow_revision_conflict")
 
         record = GradingRunRecord(
             id=run_id,
@@ -357,17 +384,121 @@ def create_run_bundle(
                 created_at=now,
             )
         )
-        if workflow is not None:
-            workflow.presentation_status = "grading"
-            workflow.grading_job_id = run_id
-            workflow.active_operation = "grading"
-            workflow.active_job_id = run_id
-            workflow.last_failed_job_id = None
-            workflow.error_code = None
-            workflow.workflow_revision += 1
-            workflow.updated_at = now
         session.flush()
+        if workflow is not None:
+            _record_request_in_session(
+                session, assignment_id=assignment_id, teacher_id=teacher_id,
+                request_id=(input_manifest or {}).get("grading_request_id"),
+                request_revision=workflow_expected_revision, run_id=run_id,
+            )
         return _run_to_dto(record)
+
+
+def _run_for_request_in_session(session, *, assignment_id: str, teacher_id: str,
+                                request_id: str | None, request_revision: int):
+    from backend.db.workflow_repository import GradingRequestRecord
+
+    if request_id is None:
+        return None
+    row = session.execute(
+        select(GradingRunRecord, GradingRequestRecord).join(
+            GradingRequestRecord, GradingRequestRecord.run_id == GradingRunRecord.id,
+        ).join(AssignmentRecord, AssignmentRecord.id == GradingRunRecord.assignment_id).where(
+            GradingRunRecord.assignment_id == assignment_id,
+            GradingRunRecord.teacher_id == teacher_id,
+            AssignmentRecord.teacher_id == teacher_id,
+            AssignmentRecord.deletion_requested_at.is_(None),
+            GradingRequestRecord.owner_id == teacher_id,
+            GradingRequestRecord.assignment_id == assignment_id,
+            GradingRequestRecord.request_id == request_id,
+        )
+    ).first()
+    if row is None:
+        return None
+    run, request = row
+    if request.workflow_revision != request_revision:
+        raise VersionConflict("grading_request_conflict", code="grading_request_conflict")
+    return run
+
+
+def _record_request_in_session(session, *, assignment_id, teacher_id,
+                               request_id, request_revision, run_id):
+    from backend.db.workflow_repository import GradingRequestRecord
+
+    if request_id is not None:
+        session.add(GradingRequestRecord(
+            assignment_id=assignment_id, owner_id=teacher_id,
+            request_id=request_id, workflow_revision=request_revision,
+            run_id=run_id,
+        ))
+        session.flush()
+
+
+class _BindingChanged(Exception):
+    pass
+
+
+def bind_grading_request(*, assignment_id: str, teacher_id: str, request_id: str,
+                        request_revision: int, run_id: str | None = None) -> education.GradingRunDTO | None:
+    """Atomically remember joining active/cached work, including late replays.
+
+    Lock an existing run before workflow/assignment (G -> W -> A), matching
+    terminal writes and publication. Recheck after the SQLite write fence;
+    if a different run appeared, roll back and acquire that run first.
+    """
+    from backend.db.workflow_repository import AssignmentWorkflowRecord
+
+    def candidate(session):
+        existing = _run_for_request_in_session(
+            session, assignment_id=assignment_id, teacher_id=teacher_id,
+            request_id=request_id, request_revision=request_revision,
+        )
+        active = session.scalar(select(GradingRunRecord).where(
+            GradingRunRecord.assignment_id == assignment_id,
+            GradingRunRecord.teacher_id == teacher_id,
+            GradingRunRecord.status.in_(["queued", "running"]),
+        ))
+        cached = session.get(GradingRunRecord, run_id) if run_id else None
+        return active or existing or cached, existing
+
+    for _attempt in range(5):
+        try:
+            with session_scope() as session:
+                observed, _ = candidate(session)
+                if observed is not None:
+                    session.scalar(select(GradingRunRecord).where(
+                        GradingRunRecord.id == observed.id,
+                    ).with_for_update())
+                locked = session.execute(update(AssignmentWorkflowRecord).where(
+                    AssignmentWorkflowRecord.assignment_id == assignment_id,
+                    AssignmentWorkflowRecord.owner_id == teacher_id,
+                ).values(updated_at=AssignmentWorkflowRecord.updated_at))
+                if locked.rowcount != 1:
+                    raise NotFound("task")
+                parent = session.scalar(select(AssignmentRecord).where(
+                    AssignmentRecord.id == assignment_id,
+                    AssignmentRecord.teacher_id == teacher_id,
+                    AssignmentRecord.deletion_requested_at.is_(None),
+                ).with_for_update())
+                if parent is None:
+                    raise NotFound("task")
+                session.expire_all()
+                run, existing = candidate(session)
+                if (observed.id if observed else None) != (run.id if run else None):
+                    raise _BindingChanged()
+                if run is None:
+                    return None
+                if run.assignment_id != assignment_id or run.teacher_id != teacher_id:
+                    raise NotFound("task")
+                if existing is None:
+                    _record_request_in_session(
+                        session, assignment_id=assignment_id, teacher_id=teacher_id,
+                        request_id=request_id, request_revision=request_revision, run_id=run.id,
+                    )
+                return _run_to_dto(run)
+        except _BindingChanged:
+            continue
+    raise VersionConflict("workflow_revision_conflict", code="workflow_revision_conflict")
 
 
 def clone_released_run_for_review(
@@ -560,12 +691,13 @@ def list_runs_for_assignment(assignment_id: str, *, actor_id: str) -> list[educa
         return [_run_to_dto(r) for r in records]
 
 
-def claim_lease(run_id: str, *, worker_id: str, lease_seconds: int) -> education.GradingRunDTO:
+def claim_lease(run_id: str, *, worker_id: str, lease_seconds: int,
+                allow_owned: bool = True, queued_only: bool = False) -> education.GradingRunDTO:
     """Atomically claim or reclaim a run's lease.
 
     The conditional UPDATE matches a run that is either never-leased, or whose
-    lease has expired, or already owned by this worker. rowcount 0 means the run
-    is held by another live worker → ``LeaseLost``.
+    lease has expired. Direct persistence callers may renew their own lease;
+    execution callers disable this to fence duplicate process_run calls.
     """
     now = time.time()
     new_expiry = now + lease_seconds
@@ -574,14 +706,14 @@ def claim_lease(run_id: str, *, worker_id: str, lease_seconds: int) -> education
             update(GradingRunRecord)
             .where(
                 GradingRunRecord.id == run_id,
-                GradingRunRecord.status.in_([
+                GradingRunRecord.status.in_([education.GradingRunStatus.QUEUED.value] if queued_only else [
                     education.GradingRunStatus.QUEUED.value,
                     education.GradingRunStatus.RUNNING.value,
                 ]),
-                # Free, expired, or already mine.
+                # Execution cannot renew a live lease, even with the same id.
                 (
                     (GradingRunRecord.lease_owner.is_(None))
-                    | (GradingRunRecord.lease_owner == worker_id)
+                    | ((GradingRunRecord.lease_owner == worker_id) if allow_owned else False)
                     | (GradingRunRecord.lease_expiry < now)
                 ),
             )
