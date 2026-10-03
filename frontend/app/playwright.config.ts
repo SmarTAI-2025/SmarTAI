@@ -1,16 +1,13 @@
 import { defineConfig, devices } from "@playwright/test";
 
 const frontendUrl = process.env.SMARTAI_E2E_FRONTEND_URL ?? "http://127.0.0.1:5173";
+const frontendPort = new URL(frontendUrl).port || "5173";
 
 /**
- * Playwright config for the normalized learning-workflow E2E suite.
- *
- * The backend is started by CI (see .github/workflows/ci.yml) on
- * http://127.0.0.1:8000; the dev server (vite) runs on 5173. Tests hit the
- * backend through the app UI. The suite covers the non-LLM closed loop
- * (login → course → enroll → assignment → publish → student submit →
- * unreleased-results notice) so it runs without provider API keys; the grading
- * step needs a provider and is covered by backend unit/integration tests.
+ * Exercise the public production bundle with a disposable backend. Vite's dev
+ * server resolves /admin to the source admin.html even in public mode, so it
+ * cannot verify that the deployed public build excludes the private console.
+ * CI uses a fake provider for the normalized grading/review/release loop.
  */
 export default defineConfig({
   testDir: "./e2e",
@@ -24,9 +21,10 @@ export default defineConfig({
     ignoreHTTPSErrors: true,
   },
   webServer: {
-    command: "npm run dev",
+    command: `npm run build && npm run preview -- --host 127.0.0.1 --port ${frontendPort} --strictPort`,
+    env: { VITE_SMARTAI_BACKEND_URL: process.env.SMARTAI_E2E_BACKEND_URL ?? "http://127.0.0.1:8000" },
     url: frontendUrl,
-    reuseExistingServer: true,
+    reuseExistingServer: false,
     timeout: 60_000,
   },
   projects: [

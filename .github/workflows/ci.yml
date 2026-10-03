@@ -87,7 +87,7 @@ jobs:
           SMARTAI_SEED_TEST_USERS: "false"
           SMARTAI_GRADING_ENGINE: v2
           SMARTAI_TEST_POSTGRES_URL: "postgresql+psycopg://smartai:smartai@localhost:5432/smartai_test"
-        run: python -m pytest backend/tests/test_postgres_integration.py -q
+        run: python -m pytest backend/tests/test_postgres_integration.py backend/tests/test_admin_postgres.py -q
       - name: Verify PostgreSQL migration round trip
         env:
           SMARTAI_DATABASE_HEAVY: "ON"
@@ -123,6 +123,8 @@ jobs:
         run: npm test
       - name: Production build
         run: npm run build
+      - name: Private administrator build
+        run: npm run build:admin
 
   e2e:
     name: E2E (Playwright)
