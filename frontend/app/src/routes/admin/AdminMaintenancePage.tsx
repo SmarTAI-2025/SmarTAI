@@ -10,10 +10,14 @@ type Preview = { available: boolean; execution_available: boolean; environment: 
 type Status = { fingerprint: string; status: string; phase?: string; error_code?: string; files_remaining?: number; rows_deleted?: number };
 async function maintenance<T>(path: string, body?: unknown): Promise<T> {
   const token = getAuthToken();
-  const response = await fetch(`${backendUrl}/admin/maintenance/${path}`, { method: body ? "POST" : "GET", credentials: "include", headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}), ...(body ? { "Content-Type": "application/json" } : {}) }, ...(body ? { body: JSON.stringify(body) } : {}) });
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 30000);
+  try {
+  const response = await fetch(`${backendUrl}/admin/maintenance/${path}`, { signal: controller.signal, method: body ? "POST" : "GET", credentials: "include", headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}), ...(body ? { "Content-Type": "application/json" } : {}) }, ...(body ? { body: JSON.stringify(body) } : {}) });
   const data = await response.json();
   if (!response.ok) throw new Error(data.detail?.code || `HTTP_${response.status}`);
   return data;
+  } finally { clearTimeout(timeout); }
 }
 const errors: Record<string, string> = {
   reset_maintenance_password_invalid: "维护密码错误。请核对后重试。连续 5 次失败将暂停验证 15 分钟。",

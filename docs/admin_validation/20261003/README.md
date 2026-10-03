@@ -8,7 +8,7 @@
 - SQLite 相关迁移/管理/配置/任务 Ask：122 passed / 1 skipped；新增维护/额度回归：48 passed / 1 skipped。
 - 最终核心管理/配置/迁移组合：98 passed；最终维护/私有入口/销户/额度组合：28 passed。
 - PostgreSQL 升级/业务/新模型并发：31 passed。SQLite+PostgreSQL 全范围清理（fake S3）：69 passed / 2 skipped。
-- 前端全量 101 文件 / 522 passed，lint/TypeScript、公共 dist、独立 dist-admin 构建成功。
+- 前端全量 101 文件 / 525 passed（最后追加的慢请求提交测试另有 5 passed），lint/TypeScript、公共 dist、独立 dist-admin 构建成功。
 - 实际公共生产构建 Playwright 2 passed（公共路由隔离、三角色教学流程）。
 - 上述组合有重叠，不能相加成总覆盖数；全量后端以此 PR 精确 head 的 CI 为准。
 
@@ -35,3 +35,10 @@
 保留其他 PR 的实现，最终管理员补丁不携带它们的提交。此前唯一冲突是 CI 的
 PostgreSQL 测试文件列表；管理员检查改为独立一步后保留双方覆盖并避免争用同一行。
 #132 当前远端仍是上述提交；之后“显式暂存/离开保护”修改到达远端时必须再次联合验收。
+
+
+联合树实际结果：SQLite 205 passed / 4 skipped；PostgreSQL 56 passed；
+前端 105 文件 / 565 passed，lint/TypeScript 成功。最后的维护单实例回归 7 passed，
+慢请求/超时/重复点击组件回归 5 passed，构建成功；最终精确 head 的全量 CI 结果见 PR。
+所有三个指定远端 PR 与管理员最终补丁的 merge-tree 均无文本冲突，最终分支不包含
+临时集成合并提交。#130 等其余开放 PR 没有本轮实质代码交叉，保留各自审核。

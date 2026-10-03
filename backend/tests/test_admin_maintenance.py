@@ -103,3 +103,14 @@ def test_missing_independent_hash_and_bruteforce_fail_closed(maintenance,monkeyp
         assert client.post('/api/admin/maintenance/execute',json={**body,'maintenance_password':'wrong'}).json()['detail']['code']=='reset_maintenance_password_invalid'
     assert client.post('/api/admin/maintenance/execute',json=body).json()['detail']['code']=='reset_maintenance_password_rate_limited'
     assert rows(scope)==1
+
+
+def test_only_one_maintenance_console_may_hold_the_control_scope(maintenance,monkeypatch):
+    client,scope=maintenance
+    monkeypatch.setenv("SMARTAI_ADMIN_PRIVATE_ENABLED","true")
+    from backend.private_main import create_private_app
+    with TestClient(create_private_app(maintenance_only=True)):
+        with pytest.raises(BlockingIOError):
+            with TestClient(create_private_app(maintenance_only=True)):pass
+    # A clean shutdown releases the console; next operator can resume safely.
+    with TestClient(create_private_app(maintenance_only=True)):pass

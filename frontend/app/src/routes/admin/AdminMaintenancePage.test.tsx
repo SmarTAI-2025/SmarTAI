@@ -44,3 +44,18 @@ it("can recover completed status without a surviving user account",async()=>{
  await waitFor(()=>expect(screen.getByText(/清理完成：数据库及项目存储残留检查已通过/)).toBeInTheDocument());
  expect(screen.getByText(/scripts\/create_admin.py/)).toBeInTheDocument();
 });
+
+
+it("blocks duplicate clicks and retains one operation during a slow request",async()=>{
+ let reject!: (error: Error)=>void;
+ fetcher.mockImplementation(async(url:string)=>url.endsWith("execute")?await new Promise((_resolve,no)=>{reject=no;}):{ok:true,json:async()=>preview});
+ mount();const user=await open();
+ await user.type(screen.getByLabelText("独立维护密码"),"synthetic-secret");await user.type(screen.getByRole("textbox",{name:/输入确认短语/}),phrase);await user.click(screen.getByRole("checkbox"));
+ await user.click(screen.getByRole("button",{name:"确认全清空"}));
+ const pending=screen.getByRole("button",{name:"正在验证并启动…"});expect(pending).toBeDisabled();
+ await user.click(pending);
+ expect(fetcher.mock.calls.filter(([url])=>url.endsWith("execute"))).toHaveLength(1);
+ reject(new TypeError("synthetic timeout"));
+ await screen.findByRole("alert");
+ expect(screen.getByRole("button",{name:"确认全清空"})).toBeEnabled();
+});
