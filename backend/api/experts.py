@@ -50,6 +50,7 @@ from backend.llm.provider_catalog import (
 )
 from backend.llm.registry import (
     ExpertRegistry,
+    _build_scoped_registry,
     get_scoped_expert_registry,
     provider_encryption_not_configured_error,
     resolve_owner_default_provider_id,
@@ -600,10 +601,26 @@ async def verify_provider_image(
 ):
     """One opt-in image request using the saved endpoint/protocol/model/key."""
     stored = get_provider_config(current.id, provider_id, master_key=settings.provider_encryption_key) if settings.provider_encryption_key else None
-    provider = registry.get(provider_id)
-    if stored is None or provider is None or registry.uses_shared_pool():
-        raise HTTPException(404, detail="Provider not found")
-    if is_user_defined_provider_endpoint(stored.config.provider_type, stored.config.base_url, stored.config.wire_protocol):
+    shared = registry.uses_shared_pool()
+    shared_snapshot = None
+    if shared:
+        # Rebuild from current platform settings, retaining the owner-bound
+        # quota guard. Users cannot supply/override shared endpoints or keys.
+        from backend.db.shared_image_repository import shared_image_evidence
+        registry = _build_scoped_registry(current)
+        provider = registry.get(provider_id)
+        if provider is None or not registry.uses_shared_pool():
+            raise HTTPException(404, detail="Provider not found")
+        shared_snapshot = shared_image_evidence(current.id, provider.config, create=True)
+        provider.config.image_capability_status = "unverified"
+    else:
+        if stored is None or registry.get(provider_id) is None:
+            raise HTTPException(404, detail="Provider not found")
+        # Build from the SAME stored snapshot used by the eventual CAS.
+        provider = build_provider(stored.config.model_copy(update={
+            "image_capability_status": "unverified", "scheduling_owner": current.id,
+        }))
+    if is_user_defined_provider_endpoint(provider.config.provider_type, provider.config.base_url, provider.config.wire_protocol):
         if not settings.custom_provider_endpoints_available:
             raise HTTPException(403, detail={"code": "custom_provider_endpoints_disabled"})
     _check_custom_probe_limit(current.id, "verify_image")
@@ -611,9 +628,6 @@ async def verify_provider_image(
     # retries or alternative model/endpoint; use the existing image serializer.
     # Build and compare-and-set from the SAME saved snapshot. The dependency
     # registry may predate a concurrent configuration edit.
-    provider = build_provider(stored.config.model_copy(update={
-        "image_capability_status": "unverified", "scheduling_owner": current.id,
-    }))
     pixels, answer = make_image_challenge()
     state, reason = "inconclusive", "image_probe_answer_incorrect"
     try:
@@ -629,8 +643,18 @@ async def verify_provider_image(
         else:
             reason = _verification_error_code(exc)
     checked_at = time.time()
-    if not set_image_capability(current.id, provider_id, status=state, checked_at=checked_at,
-                                reason=reason, expected_updated_at=stored.updated_at):
+    if shared:
+        from backend.db.shared_image_repository import shared_image_fingerprint, set_shared_image_evidence
+        latest_registry = _build_scoped_registry(current)
+        latest = latest_registry.get(provider_id)
+        saved = bool(shared_snapshot and latest and latest_registry.uses_shared_pool()
+            and shared_image_fingerprint(latest.config) == shared_snapshot.fingerprint
+            and set_shared_image_evidence(current.id, shared_snapshot,
+                                         status=state, checked_at=checked_at, reason=reason))
+    else:
+        saved = bool(stored and set_image_capability(current.id, provider_id, status=state, checked_at=checked_at,
+                                                    reason=reason, expected_updated_at=stored.updated_at))
+    if not saved:
         raise HTTPException(409, detail={"code": "expert_verification_stale"})
     return {"provider_id": provider_id, "image_capability_status": state,
             "image_checked_at": datetime.fromtimestamp(checked_at, tz=timezone.utc).isoformat(),

@@ -5,7 +5,7 @@ const key = (owner: string, path: string) => prefix + JSON.stringify([owner, pat
 // A navigation choice only: no files, form autosave, credentials or model call.
 // Written by explicit recovery/model-selection actions, scoped to this tab/user.
 export function rememberImageReturn(owner: string | null, path: string, model: string) {
-  if (!owner || !/^\/tasks\/[^/]+\/upload\/(problems|submissions)$/.test(path)) return;
+  if (!owner || !/^\/tasks\/[^/]+\/(?:upload\/problems|submissions\/upload)$/.test(path)) return;
   try {
     sessionStorage.setItem(key(owner, path), JSON.stringify({ model, epoch: draftGeneration(), expires: Date.now() + 30 * 60_000 }));
   } catch { /* Explicit return state still works if tab storage is unavailable. */ }

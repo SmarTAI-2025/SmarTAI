@@ -352,9 +352,11 @@ def set_provider_verification(
 
 def set_image_capability(owner_id: str, provider_id: str, *, status: str,
                          checked_at: float, reason: str | None,
-                         expected_updated_at: float) -> bool:
+                         expected_updated_at: float | None) -> bool:
     if status not in {"passed", "unsupported", "inconclusive"}:
         raise ValueError("invalid_image_capability_status")
+    if expected_updated_at is None:
+        return False
     with session_scope() as session:
         result = session.execute(update(ProviderConfigRecord).where(
             ProviderConfigRecord.id == provider_id,
@@ -404,6 +406,6 @@ def delete_provider_config(owner_id: str, provider_id: str) -> bool:
         return True
 
 
-def record_image_rejection(owner_id: str, provider_id: str, *, expected_updated_at: float) -> bool:
+def record_image_rejection(owner_id: str, provider_id: str, *, expected_updated_at: float | None) -> bool:
     return set_image_capability(owner_id, provider_id, status="unsupported", checked_at=time.time(),
                                 reason="provider_vision_not_supported", expected_updated_at=expected_updated_at)

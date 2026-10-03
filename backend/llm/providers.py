@@ -20,7 +20,7 @@ import ssl
 import time
 from abc import ABC, abstractmethod
 from collections import deque
-from typing import List, Optional, Dict, Any, Deque
+from typing import List, Optional, Dict, Any, Deque, Callable
 from dataclasses import dataclass
 
 import httpx
@@ -341,6 +341,7 @@ class BaseProvider(ABC):
     """Abstract provider with async ainvoke interface."""
 
     provider_type: str = ""
+    _image_rejection_recorder: Callable[[], object] | None = None
     @property
     def supports_vision(self) -> bool | None:
         # Capability evidence, never inferred from brand, protocol or model ID.

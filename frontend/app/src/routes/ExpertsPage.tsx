@@ -801,10 +801,22 @@ function ExpertActions({
   onDelete,
 }: ExpertRowProps) {
   const zh = locale === "zh-CN";
+  const imageControls = <>
+    <RowAction label={zh ? "验证图片能力" : "Verify image capability"} onClick={onVerifyImage} disabled={disabled}>
+      <ShieldCheck aria-hidden="true" size={14} />
+    </RowAction>
+    <div id={`image-capability-${expert.provider_id}`} className="w-full text-left text-xs text-muted-foreground">
+      <p>{zh ? "发送系统生成的测试图片，可能消耗少量额度，不上传你的题目或作业。" : "Sends a generated test image; may use a little quota. Your questions and homework are not uploaded."}</p>
+      <p className="mt-1">{zh ? "图片能力：" : "Image capability: "}{imageCapabilityLabel(expert, zh)}{expert.image_checked_at ? ` · ${formatCheckedAt(expert.image_checked_at, locale)}` : ""}</p>
+      {expert.image_reason ? <p>{imageReasonLabel(expert.image_reason, zh)}</p> : null}
+      {expert.image_capability_status === "passed" ? <p>{zh ? "通过测试不代表所有文件都能准确识别。低置信度时请换清晰文件或换模型。" : "Passing does not guarantee every file is read accurately. For low confidence, try a clearer file or another model."}</p> : null}
+    </div>
+  </>;
   if (expert.editable === false) {
     return (
-      <div className="flex justify-end text-xs text-muted-foreground">
-        {zh ? "平台托管，只读" : "Platform managed, read-only"}
+      <div className="flex flex-wrap items-center justify-end gap-1 text-xs text-muted-foreground">
+        <span>{zh ? "平台托管，只读" : "Platform managed, read-only"}</span>
+        {imageControls}
       </div>
     );
   }
@@ -816,15 +828,7 @@ function ExpertActions({
       <RowAction label={zh ? "验证（可选）" : "Verify (optional)"} onClick={onVerify} disabled={disabled}>
         <ShieldCheck aria-hidden="true" size={14} />
       </RowAction>
-      <RowAction label={zh ? "验证图片能力" : "Verify image capability"} onClick={onVerifyImage} disabled={disabled}>
-        <ShieldCheck aria-hidden="true" size={14} />
-      </RowAction>
-      <div id={`image-capability-${expert.provider_id}`} className="w-full text-left text-xs text-muted-foreground">
-        <p>{zh ? "发送系统生成的测试图片，可能消耗少量额度，不上传你的题目或作业。" : "Sends a generated test image; may use a little quota. Your questions and homework are not uploaded."}</p>
-        <p className="mt-1">{zh ? "图片能力：" : "Image capability: "}{imageCapabilityLabel(expert, zh)}{expert.image_checked_at ? ` · ${formatCheckedAt(expert.image_checked_at, locale)}` : ""}</p>
-        {expert.image_reason ? <p>{imageReasonLabel(expert.image_reason, zh)}</p> : null}
-        {expert.image_capability_status === "passed" ? <p>{zh ? "通过测试不代表所有文件都能准确识别。低置信度时请换清晰文件或换模型。" : "Passing does not guarantee every file is read accurately. For low confidence, try a clearer file or another model."}</p> : null}
-      </div>
+      {imageControls}
       {!expert.is_default && expert.enabled ? (
         <RowAction label={zh ? "设为默认" : "Set default"} onClick={onSetDefault} disabled={disabled}>
           <Star aria-hidden="true" size={14} />
@@ -1528,6 +1532,8 @@ function imageReasonLabel(reason: string, zh: boolean) {
     expert_verification_auth_failed: ["鉴权失败，请检查凭据", "Authentication failed; check credentials"],
     expert_verification_connection_failed: ["网络连接失败", "Network connection failed"],
     expert_verification_model_not_found: ["模型或端点不存在", "Model or endpoint not found"],
+    shared_pool_daily_limit_reached: ["共享模型日额度已用完，可等待重置或配置自己的模型", "Shared daily allowance exhausted; wait for reset or use BYOK"],
+    shared_pool_disabled: ["平台共享模型当前关闭", "The shared model pool is disabled"],
   };
   return labels[reason]?.[zh ? 0 : 1] ?? reason;
 }

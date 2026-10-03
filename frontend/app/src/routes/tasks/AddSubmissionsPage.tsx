@@ -446,7 +446,7 @@ function AddSubmissionsForm({ taskQuery }: { taskQuery: ReturnType<typeof useTas
                 : t("submissionUploadStart")}
           </button>
         </div>
-        <ImageRecognitionRecovery error={recognitionError ?? (canRetryOriginal ? task?.error : undefined)} expert={enabledExperts.find(e => e.provider_id === recognitionProviderId)} returnTo={`/tasks/${taskId}/upload/submissions`} controller={draft.protection.controller} isCurrent={draft.protection.isCurrent} locale={locale} />
+        <ImageRecognitionRecovery error={recognitionError ?? (canRetryOriginal ? task?.error : undefined)} expert={enabledExperts.find(e => e.provider_id === recognitionProviderId)} returnTo={`/tasks/${taskId}/submissions/upload`} controller={draft.protection.controller} isCurrent={draft.protection.isCurrent} locale={locale} />
       </div>
     </div>
   );

@@ -44,7 +44,7 @@ def explicitly_rejects_images(status: object, body: object) -> bool:
     ))
 
 
-def is_explicit_image_rejection(exc: BaseException) -> bool:
+def is_explicit_image_rejection(exc: BaseException | None) -> bool:
     seen: set[int] = set()
     while exc is not None and id(exc) not in seen:
         seen.add(id(exc))

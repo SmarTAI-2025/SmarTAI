@@ -239,7 +239,16 @@ class ExpertRegistry:
                 config.provider_type,
             )
             return
-        self.register(config)
+        provider_id = self.register(config)
+        if self._shared_owner_id and self._shared_owner_id != "anonymous":
+            from functools import partial
+            from backend.db.shared_image_repository import shared_image_evidence, record_shared_image_rejection
+            snapshot = shared_image_evidence(self._shared_owner_id, config)
+            provider = self._providers[provider_id]
+            provider.config.image_capability_status = snapshot.status
+            provider.config.image_checked_at = snapshot.checked_at
+            provider.config.image_reason = snapshot.reason
+            provider._image_rejection_recorder = partial(record_shared_image_rejection, self._shared_owner_id, snapshot)
 
     def register(
         self,

@@ -3,6 +3,7 @@ import { useLocation, useNavigate } from "react-router-dom";
 import { useDraftLeave, type DraftController } from "@/hooks/useDraftLeave";
 import { useDraftOwner } from "@/hooks/useDraftProtection";
 import { rememberImageReturn, takeImageReturn } from "@/lib/imageRecoveryNavigation";
+import { draftError } from "@/lib/pageDraftStore";
 import { getAPIErrorCode } from "@/api/client";
 import type { ExpertConfig } from "@/types";
 
@@ -53,7 +54,7 @@ export function ImageRecognitionRecovery({ error, expert, returnTo, controller, 
       rememberImageReturn(owner, returnTo, expert?.provider_id ?? "");
       navigate(`/settings/byok?${params}`);
     } catch (failure) {
-      setSaveError(failure instanceof Error ? failure.message : zh ? "暂存失败，输入仍保留。" : "Saving failed; input is preserved.");
+      setSaveError(draftError(failure));
     } finally { busy.current = false; setSaving(false); }
   }
   return <div role="alert" className="mt-4 rounded-lg border border-amber-300 bg-card p-4 text-sm">

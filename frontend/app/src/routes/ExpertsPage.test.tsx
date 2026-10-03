@@ -7,6 +7,7 @@ import { ExpertsPage } from "./ExpertsPage";
 
 const addExpert = vi.fn();
 const updateExpert = vi.fn();
+const verifyImage = vi.fn();
 const saveBaiduOCRCredentials = vi.fn();
 const verifyBaiduOCRCredentials = vi.fn();
 const deleteBaiduOCRCredentials = vi.fn();
@@ -25,7 +26,7 @@ const hookState = vi.hoisted(() => ({
 }));
 
 vi.mock("@/api/hooks", () => ({
-  useVerifyExpertImage: () => ({ isPending: false, mutateAsync: vi.fn() }),
+  useVerifyExpertImage: () => ({ isPending: false, mutateAsync: verifyImage }),
   useExperts: () => ({ data: hookState.experts, isLoading: false, isError: false, isFetching: false, refetch: vi.fn() }),
   useProviderCatalog: () => ({ data: hookState.catalog, isLoading: false, isError: false, refetch: vi.fn() }),
   useAddExpertKey: () => ({ isPending: false, mutateAsync: addExpert }),
@@ -113,9 +114,40 @@ describe("ExpertsPage editable vendor Base URL", () => {
     };
     addExpert.mockResolvedValue({ status: "success", provider_id: "pc-test" });
     updateExpert.mockResolvedValue({ status: "success", provider_id: "pc-test" });
+    verifyImage.mockResolvedValue({ image_capability_status: "passed" });
     saveBaiduOCRCredentials.mockResolvedValue({ status: "success" });
     verifyBaiduOCRCredentials.mockResolvedValue({ status: "credentials_verified" });
     deleteBaiduOCRCredentials.mockResolvedValue({ status: "success" });
+  });
+
+  it("only sends an independent image probe after an explicit click on that configuration", async () => {
+    hookState.experts = [{ provider_id: "pc-image", provider_type: "qwen", model: "arbitrary-model", enabled: true, rpm: 0, max_concurrent: 1 }];
+    const user = userEvent.setup(); renderPage();
+    expect(screen.getAllByText("图片能力：未验证").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("发送系统生成的测试图片，可能消耗少量额度，不上传你的题目或作业。").length).toBeGreaterThan(0);
+    expect(verifyImage).not.toHaveBeenCalled();
+    expect(screen.getAllByRole("button", { name: "验证（可选）" }).length).toBeGreaterThan(0);
+    await user.click(screen.getAllByRole("button", { name: "验证图片能力" })[0]!);
+    expect(verifyImage).toHaveBeenCalledTimes(1);
+    expect(verifyImage).toHaveBeenCalledWith("pc-image");
+  });
+
+  it.each([
+    ["passed", "已通过"], ["unsupported", "明确不支持"], ["inconclusive", "本次未能确认"],
+  ])("displays the evidence state %s with its time and reason", (status, label) => {
+    hookState.experts = [{ provider_id: "pc-image", provider_type: "moonshot", model: "arbitrary", enabled: true, rpm: 0, max_concurrent: 1, image_capability_status: status, image_checked_at: "2026-10-03T13:50:00Z", image_reason: "image_probe_answer_incorrect" }];
+    renderPage();
+    expect(screen.getAllByText(new RegExp(`图片能力：${label} ·`)).length).toBeGreaterThan(0);
+    expect(verifyImage).not.toHaveBeenCalled();
+  });
+
+  it("keeps shared configuration read-only while allowing opt-in image verification", async () => {
+    hookState.experts = [{ provider_id: "qwen:shared", provider_type: "qwen", model: "shared", enabled: true, editable: false, is_shared: true, rpm: 0, max_concurrent: 1 }];
+    const user = userEvent.setup(); renderPage();
+    expect(screen.queryByRole("button", { name: "编辑" })).not.toBeInTheDocument();
+    expect(verifyImage).not.toHaveBeenCalled();
+    await user.click(screen.getAllByRole("button", { name: "验证图片能力" })[0]!);
+    expect(verifyImage).toHaveBeenCalledWith("qwen:shared");
   });
 
   it("uses the official DeepSeek URL by default and saves USTC without extra gates", async () => {

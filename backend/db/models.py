@@ -294,6 +294,18 @@ class ProviderConfigRecord(Base):
     )
 
 
+class SharedProviderImageRecord(Base):
+    """Per-user evidence only. Never stores a shared API key or endpoint override."""
+    __tablename__ = "shared_provider_image_evidence"
+    owner_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), primary_key=True)
+    provider_type: Mapped[str] = mapped_column(String(32), primary_key=True)
+    fingerprint: Mapped[str] = mapped_column(String(64), nullable=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="unverified")
+    checked_at: Mapped[float | None] = mapped_column(Float, nullable=True)
+    reason: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    updated_at: Mapped[float] = mapped_column(Float, nullable=False)
+
+
 class ProviderPreferenceRecord(Base):
     """Owner-scoped model preference used by single-model product flows."""
 

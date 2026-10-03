@@ -175,7 +175,7 @@ async def test_probe_builds_from_latest_stored_snapshot_even_if_registry_is_old(
     def build(config):
         assert config.model == "new-model" and config.api_key == "new-key"
         assert config.scheduling_owner == user.id
-        return SimpleNamespace(ainvoke_vision=AsyncMock(return_value=SimpleNamespace(content=answer)))
+        return SimpleNamespace(config=config, ainvoke_vision=AsyncMock(return_value=SimpleNamespace(content=answer)))
     monkeypatch.setattr(experts, "build_provider", build)
     response = await experts.verify_provider_image(provider_id, current=user, registry=old_registry)
     assert response["image_capability_status"] == "passed"
