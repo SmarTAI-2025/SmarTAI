@@ -1,4 +1,4 @@
-import { ChevronLeft, ChevronRight, LoaderCircle, RefreshCw } from "lucide-react";
+import { ChevronLeft, ChevronRight, LoaderCircle, RefreshCw, ZoomIn, ZoomOut } from "lucide-react";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
   GlobalWorkerOptions,
@@ -9,6 +9,7 @@ import {
 } from "pdfjs-dist/legacy/build/pdf.mjs";
 import pdfWorkerUrl from "pdfjs-dist/legacy/build/pdf.worker.min.mjs?url";
 import { Button } from "@/components/ui/Button";
+import type { MessageKey } from "@/i18n/messages";
 
 GlobalWorkerOptions.workerSrc = pdfWorkerUrl;
 
@@ -28,6 +29,7 @@ interface PdfDocumentPreviewProps {
   retryLabel: string;
   openLabel: string;
   initialPage?: number;
+  t?: (key: MessageKey) => string;
 }
 
 export function PdfDocumentPreview(props: PdfDocumentPreviewProps) {
@@ -38,6 +40,7 @@ export function PdfDocumentPreview(props: PdfDocumentPreviewProps) {
 function PdfSourcePreview({
   url, title, loadingLabel, errorTitle, errorDescription, retryLabel, openLabel,
   initialPage = 1,
+  t,
 }: PdfDocumentPreviewProps) {
   const [attempt, setAttempt] = useState(0);
   const [document, setDocument] = useState<PDFDocumentProxy | null>(null);
@@ -132,6 +135,7 @@ function PdfSourcePreview({
       initialPage={initialPage}
       onCurrentPage={setPageStart}
       onRenderError={onRenderError}
+      t={t}
     />
   );
 }
@@ -149,13 +153,14 @@ function pageAt(layout: PageLayout, top: number) {
   return low;
 }
 
-function ContinuousPdfPages({ document, title, loadingLabel, initialPage, onCurrentPage, onRenderError }: {
+function ContinuousPdfPages({ document, title, loadingLabel, initialPage, onCurrentPage, onRenderError, t }: {
   document: PDFDocumentProxy;
   title: string;
   loadingLabel: string;
   initialPage: number;
   onCurrentPage: (page: number) => void;
   onRenderError: () => void;
+  t?: (key: MessageKey) => string;
 }) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const frameRef = useRef<number | null>(null);
@@ -167,7 +172,15 @@ function ContinuousPdfPages({ document, title, loadingLabel, initialPage, onCurr
   const [top, setTop] = useState(0);
   const [currentPage, setCurrentPage] = useState(() => Math.min(document.numPages, validPage(initialPage)));
   const [pageInput, setPageInput] = useState<string | null>(null);
-  const width = Math.min(960, Math.max(1, viewport.width - PAGE_PADDING * 2));
+  // Enter hands focus back to the reader; its subsequent blur must not commit again.
+  const pageInputDraft = useRef<string | null>(null);
+  const [zoom, setZoom] = useState(1);
+  const width = Math.min(960, Math.max(1, viewport.width - PAGE_PADDING * 2)) * zoom;
+
+  function updatePageInput(value: string | null) {
+    pageInputDraft.current = value;
+    setPageInput(value);
+  }
   const layout = useMemo(() => {
     const offsets: number[] = [];
     const heights: number[] = [];
@@ -227,7 +240,7 @@ function ContinuousPdfPages({ document, title, loadingLabel, initialPage, onCurr
       // initialPage is a navigation request from the existing question/citation UI.
       requestedPage.current = initialPage;
       scroll.scrollTop = layout.offsets[Math.min(document.numPages, validPage(initialPage)) - 1];
-      setPageInput(null);
+      updatePageInput(null);
     } else if (previousLayout.current && previousLayout.current !== layout) {
       // Preserve the visible page and position as mixed page sizes become known,
       // or the splitter/browser zoom changes the available width.
@@ -247,14 +260,16 @@ function ContinuousPdfPages({ document, title, loadingLabel, initialPage, onCurr
   function jumpTo(value: number) {
     const page = Math.min(document.numPages, validPage(value));
     if (scrollRef.current) scrollRef.current.scrollTop = layout.offsets[page - 1];
-    setPageInput(null);
+    updatePageInput(null);
     syncPosition();
   }
 
   function commitPageInput() {
-    const value = Number(pageInput);
-    if (pageInput?.trim() && Number.isFinite(value)) jumpTo(value);
-    else setPageInput(null);
+    const draft = pageInputDraft.current;
+    if (draft === null) return;
+    const value = Number(draft);
+    if (draft.trim() && Number.isFinite(value)) jumpTo(value);
+    else updatePageInput(null);
   }
 
   const first = Math.max(0, pageAt(layout, top) - 1);
@@ -262,16 +277,34 @@ function ContinuousPdfPages({ document, title, loadingLabel, initialPage, onCurr
   const pageCount = last - first + 1;
   return (
     <div className="flex h-full min-h-0 w-full min-w-0 flex-col overflow-hidden rounded-[7px] bg-slate-300/80 dark:bg-slate-950/45">
-      <div className="mx-auto my-2 flex h-10 shrink-0 items-center gap-2 rounded-md border bg-card px-2 text-xs">
-        <button type="button" title="Previous pages" aria-label="Previous pages" disabled={currentPage === 1} onClick={() => jumpTo(currentPage - 1)} className="h-8 w-8 disabled:opacity-40"><ChevronLeft className="mx-auto h-4 w-4" /></button>
-        <input type="number" aria-label="PDF page" min={1} max={document.numPages} step={1} value={pageInput ?? currentPage}
-          onChange={(event) => setPageInput(event.target.value)} onBlur={commitPageInput}
-          onKeyDown={(event) => {
-            if (event.key === "Enter") { event.preventDefault(); commitPageInput(); }
-            if (event.key === "Escape") { event.stopPropagation(); setPageInput(null); }
-          }} className="h-8 w-20 rounded border bg-background px-2 tabular-nums" />
-        <span className="min-w-12 tabular-nums">/ {document.numPages}</span>
-        <button type="button" title="Next pages" aria-label="Next pages" disabled={currentPage === document.numPages} onClick={() => jumpTo(currentPage + 1)} className="h-8 w-8 disabled:opacity-40"><ChevronRight className="mx-auto h-4 w-4" /></button>
+      <div className="mx-auto my-2 flex max-w-full shrink-0 flex-wrap items-center justify-center gap-x-2 gap-y-1 rounded-md border bg-card px-2 py-1 text-xs">
+        <div className="flex items-center gap-2">
+          <button type="button" title="Previous pages" aria-label="Previous pages" disabled={currentPage === 1} onClick={() => jumpTo(currentPage - 1)} className="h-8 w-8 disabled:opacity-40"><ChevronLeft className="mx-auto h-4 w-4" /></button>
+          <input type="number" aria-label="PDF page" min={1} max={document.numPages} step={1} value={pageInput ?? currentPage}
+            // Freeze the editable value before selection/typing. Scroll updates must
+            // not replace it and collapse the selection while the field has focus.
+            onFocus={(event) => updatePageInput(event.currentTarget.value)}
+            onChange={(event) => updatePageInput(event.target.value)} onBlur={commitPageInput}
+            onKeyDown={(event) => {
+              if (event.key === "Enter") {
+                event.preventDefault();
+                commitPageInput();
+                scrollRef.current?.focus({ preventScroll: true });
+              }
+              if (event.key === "Escape") {
+                event.preventDefault(); event.stopPropagation();
+                updatePageInput(null);
+                scrollRef.current?.focus({ preventScroll: true });
+              }
+            }} className="h-8 w-20 rounded border bg-background px-2 tabular-nums" />
+          <span className="min-w-12 tabular-nums">/ {document.numPages}</span>
+          <button type="button" title="Next pages" aria-label="Next pages" disabled={currentPage === document.numPages} onClick={() => jumpTo(currentPage + 1)} className="h-8 w-8 disabled:opacity-40"><ChevronRight className="mx-auto h-4 w-4" /></button>
+        </div>
+        <div className="flex items-center gap-1">
+          <button type="button" title={t?.("sourcePreviewZoomOut") ?? "Zoom out (minimum 50%)"} aria-label="Zoom out PDF" disabled={zoom <= 0.5} onClick={() => setZoom((value) => Math.max(0.5, value - 0.25))} className="h-8 w-8 disabled:opacity-40"><ZoomOut aria-hidden="true" className="mx-auto h-4 w-4" /></button>
+          <button type="button" title={t?.("sourcePreviewFitWidth") ?? "Fit width"} aria-label="Fit PDF width" onClick={() => { setZoom(1); if (scrollRef.current) scrollRef.current.scrollLeft = 0; }} className="h-8 min-w-12 rounded px-1 tabular-nums hover:bg-muted">{Math.round(zoom * 100)}%</button>
+          <button type="button" title={t?.("sourcePreviewZoomIn") ?? "Zoom in (maximum 200%)"} aria-label="Zoom in PDF" disabled={zoom >= 2} onClick={() => setZoom((value) => Math.min(2, value + 0.25))} className="h-8 w-8 disabled:opacity-40"><ZoomIn aria-hidden="true" className="mx-auto h-4 w-4" /></button>
+        </div>
       </div>
       <div ref={scrollRef} role="document" aria-label={title} tabIndex={0} data-testid="pdf-scroll-container"
         className="min-h-0 flex-1 overflow-auto outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"

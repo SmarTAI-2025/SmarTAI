@@ -241,6 +241,7 @@ function PreviewContent({ descriptor, displayName, previewKind, loadState, error
   return (
     <Suspense fallback={<PreviewLoading t={t} />}>
       <PdfDocumentPreview
+        t={t}
         initialPage={initialPage}
         url={previewUrl}
         title={`${t("sourcePreviewTitle")} · ${displayName}`}

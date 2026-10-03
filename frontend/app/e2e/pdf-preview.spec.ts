@@ -112,6 +112,79 @@ test("long PDF stays virtual, handles jumps and splitter/viewport/browser zoom",
   }
 });
 
+test("page selection survives concurrent scrolling on a slow CPU", async ({ page, context }) => {
+  const session = await context.newCDPSession(page);
+  await session.send("Emulation.setCPUThrottlingRate", { rate: 6 });
+  await choose(page, "long");
+  await jump(page, "200");
+  await ready(page, 200);
+  await input(page).focus();
+  await input(page).press("ControlOrMeta+A");
+  const start = await scroll(page).evaluate((node) => node.scrollTop);
+  await scroll(page).hover();
+  for (let index = 0; index < 8; index++) await page.mouse.wheel(0, 700);
+  await expect.poll(() => scroll(page).evaluate((node) => node.scrollTop)).toBeGreaterThan(start + 5000);
+  await expect(input(page)).toHaveValue("200");
+  await input(page).pressSequentially("15");
+  await expect(input(page)).toHaveValue("15");
+  await input(page).press("Enter");
+  await ready(page, 15);
+  await expect(input(page)).toHaveValue("15");
+  await expect(scroll(page)).toBeFocused();
+  await page.mouse.wheel(0, 700);
+  await expect.poll(async () => Number(await input(page).inputValue())).toBeGreaterThan(15);
+  expect(await page.locator("canvas").count()).toBeLessThanOrEqual(5);
+});
+
+test("PDF zoom controls preserve the page, cap canvases and fit on mobile", async ({ page }) => {
+  await choose(page, "long");
+  await jump(page, "200");
+  await ready(page, 200);
+  const initialWidth = await canvas(page, 200).evaluate((node) => parseFloat((node as HTMLCanvasElement).style.width));
+  const zoomIn = page.getByRole("button", { name: "Zoom in PDF" });
+  const zoomOut = page.getByRole("button", { name: "Zoom out PDF" });
+  const fit = page.getByRole("button", { name: "Fit PDF width" });
+  await zoomIn.focus();
+  await zoomIn.press("Enter");
+  await ready(page, 200);
+  await expect(fit).toHaveText("125%");
+  await expect.poll(() => canvas(page, 200).evaluate((node) => parseFloat((node as HTMLCanvasElement).style.width))).toBeCloseTo(initialWidth * 1.25);
+  for (let index = 0; index < 3; index++) await zoomIn.click();
+  await ready(page, 200);
+  await expect(zoomIn).toBeDisabled();
+  await expect(fit).toHaveText("200%");
+  await expect(input(page)).toHaveValue("200");
+  expect(await page.locator("canvas").count()).toBeLessThanOrEqual(5);
+  const pixels = await page.locator("canvas").evaluateAll((nodes) => nodes.reduce((total, node) => total + (node as HTMLCanvasElement).width * (node as HTMLCanvasElement).height, 0));
+  expect(pixels).toBeLessThanOrEqual(16_000_000);
+  await scroll(page).hover();
+  await page.mouse.wheel(500, 0);
+  await expect.poll(() => scroll(page).evaluate((node) => node.scrollLeft)).toBeGreaterThan(100);
+  await page.screenshot({ path: test.info().outputPath("zoom-desktop.png") });
+  await fit.click();
+  await ready(page, 200);
+  await expect(fit).toHaveText("100%");
+  await expect.poll(() => scroll(page).evaluate((node) => node.scrollLeft)).toBe(0);
+  for (let index = 0; index < 2; index++) await zoomOut.click();
+  await expect(fit).toHaveText("50%");
+  await expect(zoomOut).toBeDisabled();
+  await fit.click();
+  await page.setViewportSize({ width: 390, height: 844 });
+  await ready(page, 200);
+  await zoomIn.click();
+  await ready(page, 200);
+  await expect(input(page)).toHaveValue("200");
+  for (const button of [zoomIn, zoomOut, fit]) {
+    const bounds = await button.boundingBox();
+    expect(bounds!.x).toBeGreaterThanOrEqual(0);
+    expect(bounds!.x + bounds!.width).toBeLessThanOrEqual(390);
+  }
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+  await page.screenshot({ path: test.info().outputPath("zoom-mobile.png") });
+  await choose(page, "single");
+  await expect(fit).toHaveText("100%");
+});
+
 test("fast file switch ignores delayed source and unmount terminates the worker", async ({ page }) => {
   let release!: () => void;
   const delayed = new Promise<void>((resolve) => { release = resolve; });
