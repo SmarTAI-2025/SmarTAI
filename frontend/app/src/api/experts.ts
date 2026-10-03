@@ -12,7 +12,6 @@ import type {
 export function addExpertKey(request: AddExpertKeyRequest): Promise<ExpertMutationResponse> {
   return postJSON<ExpertMutationResponse, AddExpertKeyRequest>("/experts/keys", {
     ...request,
-    max_concurrent: request.max_concurrent ?? 5,
     rpm: request.rpm ?? 0,
   });
 }
@@ -50,7 +49,6 @@ export function updateExpert(
     `/experts/${encodeURIComponent(providerId)}`,
     {
       ...request,
-      max_concurrent: request.max_concurrent ?? 5,
       rpm: request.rpm ?? 0,
     },
   );

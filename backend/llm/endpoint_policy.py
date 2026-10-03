@@ -548,7 +548,7 @@ class _PinnedHTTPTransport(httpx.HTTPTransport):
         super().__init__(verify=True, trust_env=False, retries=0)
         self._pool = httpcore.ConnectionPool(
             ssl_context=ssl.create_default_context(),
-            max_connections=10,
+            max_connections=50,
             max_keepalive_connections=0,
             retries=0,
             network_backend=_PinnedSyncBackend(
@@ -599,7 +599,7 @@ class _PinnedAsyncHTTPTransport(httpx.AsyncHTTPTransport):
         super().__init__(verify=True, trust_env=False, retries=0)
         self._pool = httpcore.AsyncConnectionPool(
             ssl_context=ssl.create_default_context(),
-            max_connections=10,
+            max_connections=50,
             max_keepalive_connections=0,
             retries=0,
             network_backend=_PinnedAsyncBackend(

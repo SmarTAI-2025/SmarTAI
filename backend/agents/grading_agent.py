@@ -64,12 +64,12 @@ def _grading_failure_feedback(
             "en_message": "This item was not graded because all AI experts reached their API quota.",
             "zh_detail": "当前模型的每分钟调用额度已耗尽。",
             "en_detail": "The active models exhausted their per-minute request allowance.",
-            "zh_suggestion": "请稍候重试，或在模型设置中检查该专家的 RPM 与并发限制。",
-            "en_suggestion": "Retry later, or check this expert's RPM and concurrency limits in model settings.",
+            "zh_suggestion": "请稍候重试，或在模型设置中核对该专家的 RPM 是否符合服务商额度。",
+            "en_suggestion": "Retry later, or check that this expert's RPM matches the provider allowance.",
             "legacy_message": (
                 "⏳ 该题暂未批改完成 — 所有 AI 专家都遇到了 API 每分钟调用配额上限。\n"
-                "请稍候片刻后在「批改」页重试，或在 BYOK 设置里把该专家的 "
-                "RPM / max_concurrent 调高（免费档常见为 15 RPM）。"
+                "请稍候片刻后在「批改」页重试，或在 BYOK 设置里核对该专家的 "
+                "RPM 是否符合服务商额度；并发由系统自动分配。"
             ),
         },
         "transient_llm": {
