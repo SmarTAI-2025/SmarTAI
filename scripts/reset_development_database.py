@@ -9,7 +9,6 @@ storage is never touched.
 from __future__ import annotations
 
 import argparse
-import os
 import sys
 from pathlib import Path
 
@@ -57,29 +56,10 @@ def _upgrade_head(database_url: str) -> None:
     """Run the normalized baseline through Alembic's Python API."""
     from alembic import command
     from alembic.config import Config
-    from backend.config import settings
-
-    old_database_url = os.environ.get("SMARTAI_DATABASE_URL")
-    old_heavy = os.environ.get("SMARTAI_DATABASE_HEAVY")
-    old_settings_heavy = settings.database_heavy
-    try:
-        os.environ["SMARTAI_DATABASE_URL"] = database_url
-        os.environ["SMARTAI_DATABASE_HEAVY"] = "OFF"
-        # env.py validates against the process-wide settings singleton.
-        settings.database_heavy = False
-        config = Config(str(REPO_ROOT / "alembic.ini"))
-        config.set_main_option("script_location", str(REPO_ROOT / "backend/db/migrations"))
-        command.upgrade(config, "head")
-    finally:
-        settings.database_heavy = old_settings_heavy
-        if old_database_url is None:
-            os.environ.pop("SMARTAI_DATABASE_URL", None)
-        else:
-            os.environ["SMARTAI_DATABASE_URL"] = old_database_url
-        if old_heavy is None:
-            os.environ.pop("SMARTAI_DATABASE_HEAVY", None)
-        else:
-            os.environ["SMARTAI_DATABASE_HEAVY"] = old_heavy
+    config = Config(str(REPO_ROOT / "alembic.ini"))
+    config.set_main_option("script_location", str(REPO_ROOT / "backend/db/migrations"))
+    config.attributes.update(database_url=database_url, database_heavy=False)
+    command.upgrade(config, "head")
 
 
 def main(argv: list[str] | None = None) -> int:
