@@ -149,6 +149,7 @@ function ReviewDetailForm() {
       || draft.comment !== (correction.teacher_comment ?? "");
     return changed ? [correction.q_id] : [];
   }) ?? []), [drafts, student]);
+  const dirty = dirtyQuestionIds.size > 0;
   const savingReviews = savingQuestionId !== null || batchProgress !== null || updateReview.isPending;
   const savingNavigationMessage = tx(locale,
     "正在保存复核结果，请稍候再切换学生或离开。保存完成后可继续操作。",
