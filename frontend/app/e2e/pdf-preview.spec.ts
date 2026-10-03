@@ -2,6 +2,7 @@ import { expect, test, type Page } from "@playwright/test";
 import { readFileSync } from "node:fs";
 
 const fixture = "/e2e/fixtures/pdf-preview.html";
+const backend = process.env.SMARTAI_E2E_BACKEND_URL ?? "http://localhost:8000";
 const input = (page: Page) => page.getByRole("spinbutton", { name: "PDF page" });
 const scroll = (page: Page) => page.getByTestId("pdf-scroll-container");
 const canvas = (page: Page, number: number) => page.getByLabel(`PDF page ${number}`, { exact: true });
@@ -171,7 +172,7 @@ test("real question-review route retains question navigation while the original 
       max_score: 10, criterion: "论证完整 10 分", reference_answer: "由平方非负可得。", preparation_issues: [],
     }])), students: [], created_at: 0,
   };
-  await page.route("http://localhost:8000/**", async (route) => {
+  await page.route(`${backend}/**`, async (route) => {
     const path = new URL(route.request().url()).pathname;
     const cors = { "access-control-allow-origin": new URL(page.url()).origin, "access-control-allow-credentials": "true", "access-control-allow-headers": "*" };
     if (route.request().method() === "OPTIONS") return route.fulfill({ status: 204, headers: cors });
