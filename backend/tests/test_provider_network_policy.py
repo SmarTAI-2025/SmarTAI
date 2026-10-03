@@ -163,7 +163,7 @@ def test_deepseek_relay_uses_only_the_pinned_safe_clients(monkeypatch):
     )
     assert provider._safe_sync_client == "safe-sync"
     assert provider._safe_async_client == "safe-async"
-    assert provider.supports_vision is False
+    assert provider.supports_vision is None
     assert provider.can_encode_vision is True
 
 
@@ -461,10 +461,11 @@ def test_gemini_and_anthropic_see_explicit_proxy(monkeypatch):
         ("glm-4-plus", False),
     ],
 )
-def test_zhipu_vision_support_is_model_aware(model, expected):
+def test_zhipu_vision_support_requires_image_evidence(model, expected):
     provider = ZhipuProvider(_provider_config("zhipu", model))
 
-    assert provider.supports_vision is expected
+    assert provider.supports_vision is None
+    assert provider.can_attempt_vision is True
 
 
 def test_openai_api_connection_error_has_safe_connection_code():

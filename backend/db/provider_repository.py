@@ -4,7 +4,7 @@ import time
 import uuid
 from dataclasses import dataclass
 
-from sqlalchemy import select
+from sqlalchemy import select, update
 
 from backend.db.models import ProviderConfigRecord, ProviderPreferenceRecord
 from backend.db.session import session_scope
@@ -162,6 +162,9 @@ def _to_config(record: ProviderConfigRecord, master_key: str) -> ProviderConfig:
         endpoint_identity=record.endpoint_identity,
         wire_protocol=record.wire_protocol,
         enabled=record.enabled,
+        image_capability_status=record.image_capability_status,
+        image_checked_at=record.image_checked_at,
+        image_reason=record.image_reason,
         display_name=record.display_name,
         max_concurrent=max(1, record.max_concurrent),
         rpm=max(0, record.rpm),
@@ -210,6 +213,9 @@ def upsert_provider_config(
         record.enabled = config.enabled
         record.max_concurrent = max(1, config.max_concurrent)
         record.rpm = max(0, config.rpm)
+        record.image_capability_status = "unverified"
+        record.image_checked_at = None
+        record.image_reason = None
         record.verification_status = "unverified"
         record.last_checked_at = None
         record.verification_error_code = None
@@ -305,6 +311,9 @@ def update_provider_config(
         record.enabled = config.enabled
         record.max_concurrent = max(1, config.max_concurrent)
         record.rpm = max(0, config.rpm)
+        record.image_capability_status = "unverified"
+        record.image_checked_at = None
+        record.image_reason = None
         record.verification_status = "unverified"
         record.last_checked_at = None
         record.verification_error_code = None
@@ -312,7 +321,7 @@ def update_provider_config(
         session.flush()
         return StoredProviderConfig(
             id=record.id,
-            config=config.model_copy(deep=True),
+            config=config.model_copy(deep=True, update={"image_capability_status": "unverified", "image_checked_at": None, "image_reason": None}),
             verification_status=record.verification_status,
             last_checked_at=record.last_checked_at,
             verification_error_code=record.verification_error_code,
@@ -329,22 +338,33 @@ def set_provider_verification(
     error_code: str | None = None,
     expected_updated_at: float | None = None,
 ) -> bool:
+    # Atomic configuration CAS; verification itself is not a configuration edit.
     with session_scope() as session:
-        record = session.scalar(
-            select(ProviderConfigRecord).where(
-                ProviderConfigRecord.id == provider_id,
-                ProviderConfigRecord.owner_id == owner_id,
-            )
-        )
-        if record is None:
-            return False
-        if expected_updated_at is not None and record.updated_at != expected_updated_at:
-            return False
-        record.verification_status = verification_status
-        record.last_checked_at = checked_at
-        record.verification_error_code = error_code
-        record.updated_at = checked_at
-        return True
+        conditions = [ProviderConfigRecord.id == provider_id, ProviderConfigRecord.owner_id == owner_id]
+        if expected_updated_at is not None:
+            conditions.append(ProviderConfigRecord.updated_at == expected_updated_at)
+        result = session.execute(update(ProviderConfigRecord).where(*conditions).values(
+            verification_status=verification_status, last_checked_at=checked_at,
+            verification_error_code=error_code, updated_at=ProviderConfigRecord.updated_at,
+        ))
+        return result.rowcount == 1
+
+
+def set_image_capability(owner_id: str, provider_id: str, *, status: str,
+                         checked_at: float, reason: str | None,
+                         expected_updated_at: float | None) -> bool:
+    if status not in {"passed", "unsupported", "inconclusive"}:
+        raise ValueError("invalid_image_capability_status")
+    if expected_updated_at is None:
+        return False
+    with session_scope() as session:
+        result = session.execute(update(ProviderConfigRecord).where(
+            ProviderConfigRecord.id == provider_id,
+            ProviderConfigRecord.owner_id == owner_id,
+            ProviderConfigRecord.updated_at == expected_updated_at,
+        ).values(image_capability_status=status, image_checked_at=checked_at,
+                 image_reason=reason, updated_at=ProviderConfigRecord.updated_at))
+        return result.rowcount == 1
 
 
 def set_provider_enabled(owner_id: str, provider_id: str, enabled: bool) -> bool:
@@ -384,3 +404,8 @@ def delete_provider_config(owner_id: str, provider_id: str) -> bool:
         )
         session.delete(record)
         return True
+
+
+def record_image_rejection(owner_id: str, provider_id: str, *, expected_updated_at: float | None) -> bool:
+    return set_image_capability(owner_id, provider_id, status="unsupported", checked_at=time.time(),
+                                reason="provider_vision_not_supported", expected_updated_at=expected_updated_at)

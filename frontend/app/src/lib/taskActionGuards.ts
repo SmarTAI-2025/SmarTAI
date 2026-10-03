@@ -731,13 +731,13 @@ export function classifyRecoverableError(
       actionKind: "retry", tone: "warning", technicalDetails,
     };
   }
-  if (code === "ocr_empty_result") {
+  if (code === "ocr_empty_result" || code === "image_recognition_unconfirmed") {
     return {
       title: tx(locale, "OCR 没有读到可用文字", "OCR found no usable text"),
       description: tx(
         locale,
-        "模型完成了图片读取，但返回内容为空。请检查照片清晰度、方向、反光和裁切；也可以换一个视觉模型重试。",
-        "The image request completed, but OCR returned no text. Check clarity, orientation, glare, and cropping, or retry with another vision model.",
+        "图片识别未得到可靠文字，可能来自文件模糊或模型识别效果，不能据此判定模型不支持图片。请换清晰文件或换模型；图片能力未确认时也可在模型配置页主动验证。",
+        "Image recognition did not yield reliable text. Blurry input or model accuracy may cause this; it does not prove lack of image support. Try a clearer file or another model; if capability is uncertain, verify it in model settings.",
       ),
       actionLabel: tx(locale, "重新选择文件", "Choose the file again"),
       actionKind: "reupload",
@@ -1267,7 +1267,7 @@ function fileErrorDescription(
   if (code === "problem_source_decode_failed" || code === "source_decode_failed") {
     return tx(locale, "没有从文件中读取到可用正文。若是扫描 PDF，请先转换为可复制文字的 PDF、TXT 或 Markdown。", "No usable text could be read. If this is a scanned PDF, convert it to a text-based PDF, TXT, or Markdown file first.");
   }
-  if (code === "ocr_empty_result") {
+  if (code === "ocr_empty_result" || code === "image_recognition_unconfirmed") {
     return tx(locale, "视觉模型没有从图片或扫描页中识别出可用文字。请检查图片清晰度、方向和页面内容，或更换视觉模型后重试。", "The vision model found no usable text in the image or scanned page. Check clarity, orientation, and page content, or retry with another vision model.");
   }
   if (code === "submission_archive_invalid") {

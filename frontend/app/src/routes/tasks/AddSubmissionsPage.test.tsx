@@ -6,6 +6,8 @@ import { createMemoryRouter, RouterProvider, Outlet } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { PageDraftSession } from "@/hooks/usePageDraft";
 import { clearPageDrafts } from "@/lib/pageDraftStore";
+import { APIError } from "@/api/client";
+import { rememberImageReturn } from "@/lib/imageRecoveryNavigation";
 import { AddSubmissionsPage } from "./AddSubmissionsPage";
 
 const mutateAsync = vi.fn();
@@ -32,7 +34,7 @@ vi.mock("@/api/hooks", () => ({
       model: "gpt-test",
       enabled: true,
       is_default: true,
-    }] : [],
+    }, { provider_id: "provider-new", provider_type: "moonshot", model: "arbitrary-new-model", enabled: true }] : [],
     isError: false,
     isLoading: false,
   }),
@@ -88,6 +90,33 @@ describe("AddSubmissionsPage OCR uploads", () => {
       pending_submission_file_name: null,
       last_failed_job_id: null,
     };
+  });
+
+  it("saves both answer and roster bytes before recovery and keeps the new model on browser back", async () => {
+    const { container, router } = renderPage();
+    fireEvent.change(container.querySelector('input[type="file"]')!, { target: { files: [new File(["answer bytes"], "S003_Li.png", { type: "image/png" })] } });
+    fireEvent.click(screen.getByRole("radio", { name: "submissionUploadIdentityRoster" }));
+    const inputs = container.querySelectorAll('input[type="file"]');
+    fireEvent.change(inputs[1]!, { target: { files: [new File(["student_id,name\nS003,Li"], "roster.csv", { type: "text/csv" })] } });
+    await waitFor(() => expect(screen.getByLabelText("作答识别模型")).toHaveValue("provider-default"));
+    mutateAsync.mockRejectedValueOnce(new APIError(422, "image_recognition_unconfirmed", { detail: { code: "image_recognition_unconfirmed" } }));
+    fireEvent.click(screen.getByRole("button", { name: "submissionUploadStart" }));
+    fireEvent.click(await screen.findByRole("button", { name: "暂存并去验证" }));
+    await screen.findByText("BYOK");
+    expect(router.state.location.search).toContain("returnTo=%2Ftasks%2Ftask-1%2Fsubmissions%2Fupload");
+    rememberImageReturn("submission-teacher", "/tasks/task-1/submissions/upload", "provider-new");
+    await act(async () => { await router.navigate(-1); });
+    await waitFor(() => expect(screen.getByLabelText("作答识别模型")).toHaveValue("provider-new"));
+    expect(screen.getByText("S003_Li.png")).toBeInTheDocument();
+    expect(screen.getByText("roster.csv")).toBeInTheDocument();
+    expect(screen.getByRole("radio", { name: "submissionUploadIdentityRoster" })).toHaveAttribute("aria-checked", "true");
+    expect(mutateAsync).toHaveBeenCalledTimes(1);
+    fireEvent.click(screen.getByRole("button", { name: "submissionUploadStart" }));
+    await waitFor(() => expect(mutateAsync).toHaveBeenCalledTimes(2));
+    const request = mutateAsync.mock.calls[1][0];
+    expect(request.recognitionProviderId).toBe("provider-new");
+    expect(await request.file.text()).toBe("answer bytes");
+    expect(await request.rosterFile.text()).toBe("student_id,name\nS003,Li");
   });
   it("focuses the missing file control instead of leaving the teacher at an unexplained error", async () => {
     renderPage("missing-file-qa");

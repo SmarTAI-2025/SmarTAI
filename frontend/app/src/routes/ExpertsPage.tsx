@@ -1,4 +1,6 @@
 import { useDraftProtection } from "@/hooks/useDraftProtection";
+import { useDraftOwner } from "@/hooks/useDraftProtection";
+import { rememberImageReturn } from "@/lib/imageRecoveryNavigation";
 import {
   AlertTriangle,
   ArrowLeft,
@@ -14,7 +16,7 @@ import {
   Trash2,
 } from "lucide-react";
 import { ModelQuotaCard } from "@/components/ModelQuotaCard";
-import { useState, type FormEvent } from "react";
+import { useEffect, useState, type FormEvent } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { toast } from "sonner";
 import { getAPIErrorCode, normalizeAPIError } from "@/api/client";
@@ -31,8 +33,10 @@ import {
   useSaveBaiduOCRCredentials,
   useVerifyBaiduOCRCredentials,
   useVerifyExpert,
+  useVerifyExpertImage,
 } from "@/api/hooks";
 import { LibraryDialog } from "@/components/knowledge-base/LibraryDialog";
+import { StageProviderSelect } from "@/components/models/StageProviderSelect";
 import { ProviderIcon } from "@/components/models/ProviderIcon";
 import { Button } from "@/components/ui/Button";
 import { EmptyState } from "@/components/ui/EmptyState";
@@ -78,7 +82,6 @@ interface ExpertFormValue {
   baseUrl: string;
   wireProtocol: WireProtocol | null;
   displayName: string;
-  maxConcurrent: number;
   rpm: number;
 }
 
@@ -94,6 +97,22 @@ export function ExpertsPage() {
   const selectExpert = useSelectExpert();
   const setDefaultExpert = useSetDefaultExpert();
   const verifyExpert = useVerifyExpert();
+  const verifyImage = useVerifyExpertImage();
+  const recoveryParams = new URLSearchParams(location.search);
+  const recovery = recoveryParams.get("imageRecovery") === "1";
+  const targetId = recoveryParams.get("providerId");
+  const [returnModel, setReturnModel] = useState(targetId ?? "");
+  const owner = useDraftOwner();
+  function chooseReturnModel(model: string) {
+    setReturnModel(model);
+    const path = safeExpertsReturnTo(recoveryParams.get("returnTo"));
+    if (recovery && path) rememberImageReturn(owner, path, model);
+  }
+  useEffect(() => {
+    if (targetId) Array.from(document.querySelectorAll<HTMLElement>("[data-image-provider]"))
+      .find(element => element.dataset.imageProvider === targetId && element.getClientRects().length > 0)
+      ?.scrollIntoView?.({ block: "center" });
+  }, [targetId, expertsQuery.data]);
   const removeExpert = useRemoveExpert();
   const [editor, setEditor] = useState<EditorTarget | null>(null);
   const [confirmation, setConfirmation] = useState<Confirmation | null>(null);
@@ -113,6 +132,7 @@ export function ExpertsPage() {
     selectExpert.isPending ||
     setDefaultExpert.isPending ||
     verifyExpert.isPending ||
+    verifyImage.isPending ||
     removeExpert.isPending;
 
   async function handleSave(value: ExpertFormValue) {
@@ -126,10 +146,10 @@ export function ExpertsPage() {
           base_url: value.baseUrl || null,
           ...(value.wireProtocol ? { wire_protocol: value.wireProtocol } : {}),
           display_name: value.displayName || null,
-          max_concurrent: value.maxConcurrent,
           rpm: value.rpm,
         };
-        await addExpert.mutateAsync(request);
+        const added = await addExpert.mutateAsync(request);
+        if (recovery && added.provider_id) chooseReturnModel(added.provider_id);
         toast.success(zh ? "模型配置已添加" : "Model configuration added", {
           description: value.displayName || value.model,
         });
@@ -140,7 +160,6 @@ export function ExpertsPage() {
           base_url: value.baseUrl || null,
           wire_protocol: value.wireProtocol,
           display_name: value.displayName || null,
-          max_concurrent: value.maxConcurrent,
           rpm: value.rpm,
         };
         await updateExpert.mutateAsync({
@@ -197,6 +216,7 @@ export function ExpertsPage() {
     if (!expert.enabled || expert.is_default) return;
     try {
       await setDefaultExpert.mutateAsync(expert.provider_id);
+      if (recovery) chooseReturnModel(expert.provider_id);
       toast.success(zh ? "默认模型已更新" : "Default model updated", {
         description: modelDisplayName(expert),
       });
@@ -256,10 +276,10 @@ export function ExpertsPage() {
             <Button
               type="button"
               variant="secondary"
-              onClick={() => navigate(returnTo, { state: location.state })}
+              onClick={() => navigate(returnTo, { state: { ...location.state, ...(recovery ? { imageRecoveryModel: returnModel } : {}) } })}
             >
               <ArrowLeft aria-hidden="true" size={16} />
-              {zh ? "返回任务" : "Back to task"}
+              {recovery ? (zh ? "返回上传页面继续识别" : "Return to upload and continue") : zh ? "返回任务" : "Back to task"}
             </Button>
           ) : null}
           <Button
@@ -273,6 +293,10 @@ export function ExpertsPage() {
         </div>
       </header>
 
+      {recovery && returnTo ? <div className="mb-5 rounded-lg border bg-card p-4">
+        <p className="mb-3 text-sm">{zh ? "验证或选择模型后，返回上传页面并主动点击原有下一步识别。暂存的文件和填写内容会恢复。" : "After verifying or choosing a model, return and click the original recognition action. Saved files and fields will be restored."}</p>
+        <StageProviderSelect id="recovery-model" label={zh ? "继续识别所用模型" : "Model for continuing"} experts={experts.filter(e => e.enabled)} hint={zh ? "保留最新选择，返回后不自动识别。" : "Keeps your latest selection; no automatic recognition."} locale={locale} value={returnModel} onChange={chooseReturnModel} disabled={controlsPending} />
+      </div> : null}
       <section
         aria-label={zh ? "模型配置概览" : "Model configuration overview"}
         className="grid grid-cols-2 gap-3 lg:grid-cols-4"
@@ -391,6 +415,7 @@ export function ExpertsPage() {
                       onEdit={() => setEditor({ mode: "edit", expert })}
                       onToggle={() => void handleToggle(expert)}
                       onVerify={() => setConfirmation({ kind: "verify", expert })}
+                      onVerifyImage={() => void verifyImage.mutateAsync(expert.provider_id).catch(error => toast.error(normalizeAPIError(error).message))}
                       onSetDefault={() => void handleSetDefault(expert)}
                       onDelete={() => setConfirmation({ kind: "delete", expert })}
                     />
@@ -408,6 +433,7 @@ export function ExpertsPage() {
                   onEdit={() => setEditor({ mode: "edit", expert })}
                   onToggle={() => void handleToggle(expert)}
                   onVerify={() => setConfirmation({ kind: "verify", expert })}
+                      onVerifyImage={() => void verifyImage.mutateAsync(expert.provider_id).catch(error => toast.error(normalizeAPIError(error).message))}
                   onSetDefault={() => void handleSetDefault(expert)}
                   onDelete={() => setConfirmation({ kind: "delete", expert })}
                 />
@@ -667,6 +693,7 @@ function ExpertTableRow({
   onEdit,
   onToggle,
   onVerify,
+  onVerifyImage,
   onSetDefault,
   onDelete,
 }: ExpertRowProps) {
@@ -701,7 +728,7 @@ function ExpertTableRow({
       <td className="px-3 text-center align-middle text-xs text-muted-foreground">
         <span className="block">RPM {expert.rpm > 0 ? expert.rpm : "—"}</span>
         <span className="mt-1 block">
-          {zh ? "并发" : "Concurrency"} {expert.max_concurrent}
+          {zh ? "并发自动 · 上限 50" : "Auto concurrency · up to 50"}
         </span>
       </td>
       <td className="px-5 align-middle">
@@ -712,6 +739,7 @@ function ExpertTableRow({
           onEdit={onEdit}
           onToggle={onToggle}
           onVerify={onVerify}
+          onVerifyImage={onVerifyImage}
           onSetDefault={onSetDefault}
           onDelete={onDelete}
         />
@@ -727,6 +755,7 @@ interface ExpertRowProps {
   onEdit: () => void;
   onToggle: () => void;
   onVerify: () => void;
+  onVerifyImage: () => void;
   onSetDefault: () => void;
   onDelete: () => void;
 }
@@ -735,7 +764,7 @@ function ExpertMobileRow(props: ExpertRowProps) {
   const { expert, locale } = props;
   const zh = locale === "zh-CN";
   return (
-    <article className="grid gap-3 px-4 py-4">
+    <article className="grid min-w-0 grid-cols-1 gap-3 px-4 py-4">
       <div className="flex items-start justify-between gap-3">
         <div className="flex min-w-0 items-center gap-3">
           <ProviderIcon providerType={expert.provider_type} />
@@ -754,8 +783,7 @@ function ExpertMobileRow(props: ExpertRowProps) {
       <div className="flex items-center justify-between gap-3 text-xs text-muted-foreground">
         <VerificationBadge expert={expert} locale={locale} />
         <span>
-          RPM {expert.rpm > 0 ? expert.rpm : "—"} · {zh ? "并发" : "Concurrency"}{" "}
-          {expert.max_concurrent}
+          RPM {expert.rpm > 0 ? expert.rpm : "—"} · {zh ? "并发自动 · 上限 50" : "Auto concurrency · up to 50"}
         </span>
       </div>
       <ExpertActions {...props} />
@@ -770,25 +798,39 @@ function ExpertActions({
   onEdit,
   onToggle,
   onVerify,
+  onVerifyImage,
   onSetDefault,
   onDelete,
 }: ExpertRowProps) {
   const zh = locale === "zh-CN";
+  const imageControls = <>
+    <RowAction label={zh ? "验证图片能力" : "Verify image capability"} onClick={onVerifyImage} disabled={disabled}>
+      <ShieldCheck aria-hidden="true" size={14} />
+    </RowAction>
+    <div data-image-provider={expert.provider_id} className="min-w-0 w-full break-words text-left text-xs text-muted-foreground">
+      <p>{zh ? "发送系统生成的测试图片，可能消耗少量额度，不上传你的题目或作业。" : "Sends a generated test image; may use a little quota. Your questions and homework are not uploaded."}</p>
+      <p className="mt-1">{zh ? "图片能力：" : "Image capability: "}{imageCapabilityLabel(expert, zh)}{expert.image_checked_at ? ` · ${formatCheckedAt(expert.image_checked_at, locale)}` : ""}</p>
+      {expert.image_reason ? <p>{imageReasonLabel(expert.image_reason, zh)}</p> : null}
+      {expert.image_capability_status === "passed" ? <p>{zh ? "通过测试不代表所有文件都能准确识别。低置信度时请换清晰文件或换模型。" : "Passing does not guarantee every file is read accurately. For low confidence, try a clearer file or another model."}</p> : null}
+    </div>
+  </>;
   if (expert.editable === false) {
     return (
-      <div className="flex justify-end text-xs text-muted-foreground">
-        {zh ? "平台托管，只读" : "Platform managed, read-only"}
+      <div className="flex min-w-0 flex-wrap items-center justify-end gap-1 text-xs text-muted-foreground">
+        <span>{zh ? "平台托管，只读" : "Platform managed, read-only"}</span>
+        {imageControls}
       </div>
     );
   }
   return (
-    <div className="flex flex-wrap items-center justify-end gap-1">
+    <div className="flex min-w-0 flex-wrap items-center justify-end gap-1">
       <RowAction label={zh ? "编辑" : "Edit"} onClick={onEdit} disabled={disabled}>
         <Pencil aria-hidden="true" size={14} />
       </RowAction>
       <RowAction label={zh ? "验证（可选）" : "Verify (optional)"} onClick={onVerify} disabled={disabled}>
         <ShieldCheck aria-hidden="true" size={14} />
       </RowAction>
+      {imageControls}
       {!expert.is_default && expert.enabled ? (
         <RowAction label={zh ? "设为默认" : "Set default"} onClick={onSetDefault} disabled={disabled}>
           <Star aria-hidden="true" size={14} />
@@ -1032,12 +1074,11 @@ function ExpertEditorDialog({
       ? target.expert.configured_display_name?.trim() ?? ""
       : "",
   );
-  const [maxConcurrent, setMaxConcurrent] = useState(
-    String(target.mode === "edit" ? target.expert.max_concurrent : 5),
+  const [rpm, setRpm] = useState(
+    target.mode === "edit" && target.expert.rpm > 0 ? String(target.expert.rpm) : "",
   );
-  const [rpm, setRpm] = useState(String(target.mode === "edit" ? target.expert.rpm : 0));
   const [formError, setFormError] = useState<string | null>(null);
-  const credentialProtection = useDraftProtection({ scope: "credential:expert", value: { provider, apiKey, model, baseUrl, wireProtocol, displayName, maxConcurrent, rpm }, secret: true, busy: pending, onRestore: (draft) => { setProvider(draft.provider); setApiKey(draft.apiKey); setModel(draft.model); setBaseUrl(draft.baseUrl); setWireProtocol(draft.wireProtocol); setDisplayName(draft.displayName); setMaxConcurrent(draft.maxConcurrent); setRpm(draft.rpm); } });
+  const credentialProtection = useDraftProtection({ scope: "credential:expert", value: { provider, apiKey, model, baseUrl, wireProtocol, displayName, rpm }, secret: true, busy: pending, onRestore: (draft) => { setProvider(draft.provider); setApiKey(draft.apiKey); setModel(draft.model); setBaseUrl(draft.baseUrl); setWireProtocol(draft.wireProtocol); setDisplayName(draft.displayName); setRpm(draft.rpm); } });
   const providerCatalog = catalog.find((item) => item.provider_type === provider);
   const baseUrlEditable = Boolean(
     providerCatalog?.custom_base_url_supported &&
@@ -1056,16 +1097,11 @@ function ExpertEditorDialog({
     setFormError(null);
     const nextModel = model.trim();
     const nextKey = apiKey.trim();
-    const nextConcurrency = Number(maxConcurrent);
     const nextRpm = Number(rpm);
     if (!nextModel || (target.mode === "add" && !nextKey)) {
       setFormError(
         zh ? "请填写模型名称和 API key。" : "Enter a model name and API key.",
       );
-      return;
-    }
-    if (!Number.isInteger(nextConcurrency) || nextConcurrency < 1 || nextConcurrency > 10) {
-      setFormError(zh ? "并发上限需要是 1–10 的整数。" : "Concurrency must be an integer from 1 to 10.");
       return;
     }
     if (!Number.isInteger(nextRpm) || nextRpm < 0 || nextRpm > 10_000) {
@@ -1102,7 +1138,6 @@ function ExpertEditorDialog({
           : "",
         wireProtocol: wireProtocol || null,
         displayName: displayName.trim(),
-        maxConcurrent: nextConcurrency,
         rpm: nextRpm,
       });
     } catch (error) {
@@ -1276,20 +1311,9 @@ function ExpertEditorDialog({
           </details>
         ) : null}
         <div className="grid gap-4 sm:grid-cols-2">
-          <Field label={zh ? "并发上限" : "Max concurrency"} hint="1–10">
-            <Input
-              value={maxConcurrent}
-              disabled={pending}
-              type="number"
-              inputMode="numeric"
-              min={1}
-              max={10}
-              onChange={(event) => setMaxConcurrent(event.target.value)}
-            />
-          </Field>
           <Field
             label="RPM"
-            hint={zh ? "0 表示不额外限速" : "0 means no additional limit"}
+            hint={zh ? "留空或填 0 表示不额外限速" : "Leave blank or enter 0 for no additional rate limit"}
           >
             <Input
               value={rpm}
@@ -1301,6 +1325,17 @@ function ExpertEditorDialog({
               onChange={(event) => setRpm(event.target.value)}
             />
           </Field>
+          <div className="grid content-start gap-1.5 text-sm">
+            <span className="font-medium">{zh ? "并发" : "Concurrency"}</span>
+            <span className="flex h-9 items-center rounded-md border bg-muted/40 px-3">
+              {zh ? "自动 · 上限 50" : "Automatic · up to 50"}
+            </span>
+            <p className="text-xs leading-5 text-muted-foreground">
+              {zh
+                ? "根据 RPM、请求耗时和服务器资源自动调节。资源不足时排队。"
+                : "Automatically adjusts to RPM, request duration and server capacity. Requests queue when capacity is full."}
+            </p>
+          </div>
         </div>
         {formError ? <InlineError message={formError} /> : null}
       </form>
@@ -1483,4 +1518,24 @@ function expertErrorMessage(code: string | null | undefined, locale: "zh-CN" | "
   };
   if (code && messages[code]) return zh ? messages[code][0] : messages[code][1];
   return null;
+}
+
+function imageCapabilityLabel(expert: ExpertConfig, zh: boolean) {
+  const labels = { unverified: ["未验证", "Unverified"], passed: ["已通过", "Passed"], unsupported: ["明确不支持", "Explicitly unsupported"], inconclusive: ["本次未能确认", "Inconclusive"] };
+  return labels[expert.image_capability_status ?? "unverified"][zh ? 0 : 1];
+}
+function imageReasonLabel(reason: string, zh: boolean) {
+  const labels: Record<string, string[]> = {
+    image_probe_answer_correct: ["测试图片答案正确", "Test image answer was correct"],
+    image_probe_answer_incorrect: ["测试答案不正确，不能据此判定不支持图片", "Incorrect test answer; image support remains uncertain"],
+    provider_vision_not_supported: ["上游明确拒绝图片输入", "Upstream explicitly rejected image input"],
+    expert_verification_timeout: ["本次请求超时", "Request timed out"],
+    expert_verification_rate_limited: ["上游限流，请稍后再试", "Upstream rate limit"],
+    expert_verification_auth_failed: ["鉴权失败，请检查凭据", "Authentication failed; check credentials"],
+    expert_verification_connection_failed: ["网络连接失败", "Network connection failed"],
+    expert_verification_model_not_found: ["模型或端点不存在", "Model or endpoint not found"],
+    shared_pool_daily_limit_reached: ["共享模型日额度已用完，可等待重置或配置自己的模型", "Shared daily allowance exhausted; wait for reset or use BYOK"],
+    shared_pool_disabled: ["平台共享模型当前关闭", "The shared model pool is disabled"],
+  };
+  return labels[reason]?.[zh ? 0 : 1] ?? reason;
 }

@@ -6,6 +6,8 @@ import { I18nProvider } from "@/i18n/I18nProvider";
 import { ExpertsPage } from "./ExpertsPage";
 
 const addExpert = vi.fn();
+const updateExpert = vi.fn();
+const verifyImage = vi.fn();
 const saveBaiduOCRCredentials = vi.fn();
 const verifyBaiduOCRCredentials = vi.fn();
 const deleteBaiduOCRCredentials = vi.fn();
@@ -24,10 +26,11 @@ const hookState = vi.hoisted(() => ({
 }));
 
 vi.mock("@/api/hooks", () => ({
+  useVerifyExpertImage: () => ({ isPending: false, mutateAsync: verifyImage }),
   useExperts: () => ({ data: hookState.experts, isLoading: false, isError: false, isFetching: false, refetch: vi.fn() }),
   useProviderCatalog: () => ({ data: hookState.catalog, isLoading: false, isError: false, refetch: vi.fn() }),
   useAddExpertKey: () => ({ isPending: false, mutateAsync: addExpert }),
-  useUpdateExpert: () => ({ isPending: false, mutateAsync: vi.fn() }),
+  useUpdateExpert: () => ({ isPending: false, mutateAsync: updateExpert }),
   useSelectExpert: () => ({ isPending: false, mutateAsync: vi.fn() }),
   useSetDefaultExpert: () => ({ isPending: false, mutateAsync: vi.fn() }),
   useVerifyExpert: () => ({ isPending: false, mutateAsync: vi.fn() }),
@@ -110,9 +113,41 @@ describe("ExpertsPage editable vendor Base URL", () => {
       verification_error_code: null,
     };
     addExpert.mockResolvedValue({ status: "success", provider_id: "pc-test" });
+    updateExpert.mockResolvedValue({ status: "success", provider_id: "pc-test" });
+    verifyImage.mockResolvedValue({ image_capability_status: "passed" });
     saveBaiduOCRCredentials.mockResolvedValue({ status: "success" });
     verifyBaiduOCRCredentials.mockResolvedValue({ status: "credentials_verified" });
     deleteBaiduOCRCredentials.mockResolvedValue({ status: "success" });
+  });
+
+  it("only sends an independent image probe after an explicit click on that configuration", async () => {
+    hookState.experts = [{ provider_id: "pc-image", provider_type: "qwen", model: "arbitrary-model", enabled: true, rpm: 0, max_concurrent: 1 }];
+    const user = userEvent.setup(); renderPage();
+    expect(screen.getAllByText("图片能力：未验证").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("发送系统生成的测试图片，可能消耗少量额度，不上传你的题目或作业。").length).toBeGreaterThan(0);
+    expect(verifyImage).not.toHaveBeenCalled();
+    expect(screen.getAllByRole("button", { name: "验证（可选）" }).length).toBeGreaterThan(0);
+    await user.click(screen.getAllByRole("button", { name: "验证图片能力" })[0]!);
+    expect(verifyImage).toHaveBeenCalledTimes(1);
+    expect(verifyImage).toHaveBeenCalledWith("pc-image");
+  });
+
+  it.each([
+    ["passed", "已通过"], ["unsupported", "明确不支持"], ["inconclusive", "本次未能确认"],
+  ])("displays the evidence state %s with its time and reason", (status, label) => {
+    hookState.experts = [{ provider_id: "pc-image", provider_type: "moonshot", model: "arbitrary", enabled: true, rpm: 0, max_concurrent: 1, image_capability_status: status, image_checked_at: "2026-10-03T13:50:00Z", image_reason: "image_probe_answer_incorrect" }];
+    renderPage();
+    expect(screen.getAllByText(new RegExp(`图片能力：${label} ·`)).length).toBeGreaterThan(0);
+    expect(verifyImage).not.toHaveBeenCalled();
+  });
+
+  it("keeps shared configuration read-only while allowing opt-in image verification", async () => {
+    hookState.experts = [{ provider_id: "qwen:shared", provider_type: "qwen", model: "shared", enabled: true, editable: false, is_shared: true, rpm: 0, max_concurrent: 1 }];
+    const user = userEvent.setup(); renderPage();
+    expect(screen.queryByRole("button", { name: "编辑" })).not.toBeInTheDocument();
+    expect(verifyImage).not.toHaveBeenCalled();
+    await user.click(screen.getAllByRole("button", { name: "验证图片能力" })[0]!);
+    expect(verifyImage).toHaveBeenCalledWith("qwen:shared");
   });
 
   it("uses the official DeepSeek URL by default and saves USTC without extra gates", async () => {
@@ -143,6 +178,57 @@ describe("ExpertsPage editable vendor Base URL", () => {
     expect(addExpert.mock.calls[0]?.[0]).not.toHaveProperty("wire_protocol");
     expect(screen.queryByDisplayValue("sk-secret-value")).not.toBeInTheDocument();
     expect(window.localStorage.getItem("sk-secret-value")).toBeNull();
+  });
+
+  it("saves blank RPM without a manual concurrency limit", async () => {
+    const user = userEvent.setup();
+    renderPage();
+
+    await user.click(screen.getByRole("button", { name: "添加模型配置" }));
+    expect(screen.getByLabelText(/^RPM/)).toHaveValue(null);
+    expect(screen.queryByRole("spinbutton", { name: /并发/ })).not.toBeInTheDocument();
+    expect(screen.getByText("自动 · 上限 50")).toBeInTheDocument();
+
+    await user.type(screen.getByLabelText(/^API key/), "sk-test-only");
+    await user.click(screen.getByRole("button", { name: "保存配置" }));
+
+    await waitFor(() => expect(addExpert).toHaveBeenCalledTimes(1));
+    expect(addExpert.mock.calls[0]?.[0]).toMatchObject({ rpm: 0 });
+    expect(addExpert.mock.calls[0]?.[0]).not.toHaveProperty("max_concurrent");
+  });
+
+  it("lets the backend derive concurrency when saving RPM 10", async () => {
+    const user = userEvent.setup();
+    renderPage();
+
+    await user.click(screen.getByRole("button", { name: "添加模型配置" }));
+    await user.type(screen.getByLabelText(/^API key/), "sk-test-only");
+    await user.type(screen.getByLabelText(/^RPM/), "10");
+    await user.click(screen.getByRole("button", { name: "保存配置" }));
+
+    await waitFor(() => expect(addExpert).toHaveBeenCalledTimes(1));
+    expect(addExpert.mock.calls[0]?.[0]).toMatchObject({ rpm: 10 });
+    expect(addExpert.mock.calls[0]?.[0]).not.toHaveProperty("max_concurrent");
+  });
+
+  it("updates an existing configuration without resubmitting its legacy concurrency", async () => {
+    hookState.experts = [{
+      provider_id: "pc-test", provider_type: "deepseek", model: "test-model",
+      enabled: true, max_concurrent: 5, rpm: 0,
+    }];
+    const user = userEvent.setup();
+    renderPage();
+
+    expect(screen.getAllByText("并发自动 · 上限 50").length).toBeGreaterThan(0);
+    await user.click(screen.getAllByRole("button", { name: "编辑" })[0]!);
+    expect(screen.getByLabelText(/^RPM/)).toHaveValue(null);
+    await user.type(screen.getByLabelText(/^RPM/), "10");
+    await user.click(screen.getByRole("button", { name: "保存配置" }));
+
+    await waitFor(() => expect(updateExpert).toHaveBeenCalledTimes(1));
+    const saved = updateExpert.mock.calls[0]?.[0];
+    expect(saved).toMatchObject({ providerId: "pc-test", request: { rpm: 10, api_key: null } });
+    expect(saved.request).not.toHaveProperty("max_concurrent");
   });
 
   it("uses catalog defaults and keeps Base URL editable for native-protocol providers", async () => {

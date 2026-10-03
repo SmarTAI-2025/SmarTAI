@@ -285,10 +285,25 @@ class ProviderConfigRecord(Base):
     verification_error_code: Mapped[str | None] = mapped_column(
         String(128), nullable=True
     )
+    image_capability_status: Mapped[str] = mapped_column(String(32), nullable=False, default="unverified", server_default="unverified")
+    image_checked_at: Mapped[float | None] = mapped_column(Float, nullable=True)
+    image_reason: Mapped[str | None] = mapped_column(String(128), nullable=True)
     created_at: Mapped[float] = mapped_column(Float, nullable=False, default=time.time)
     updated_at: Mapped[float] = mapped_column(
         Float, nullable=False, default=time.time, onupdate=time.time
     )
+
+
+class SharedProviderImageRecord(Base):
+    """Per-user evidence only. Never stores a shared API key or endpoint override."""
+    __tablename__ = "shared_provider_image_evidence"
+    owner_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), primary_key=True)
+    provider_type: Mapped[str] = mapped_column(String(32), primary_key=True)
+    fingerprint: Mapped[str] = mapped_column(String(64), nullable=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="unverified")
+    checked_at: Mapped[float | None] = mapped_column(Float, nullable=True)
+    reason: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    updated_at: Mapped[float] = mapped_column(Float, nullable=False)
 
 
 class ProviderPreferenceRecord(Base):

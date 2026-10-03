@@ -205,6 +205,56 @@ describe("PdfDocumentPreview", () => {
     expect(document.querySelectorAll("canvas")).toHaveLength(1);
   });
 
+  it("preserves focused page input across scroll updates and returns keyboard focus to reading", async () => {
+    longDocument();
+    render(<PdfDocumentPreview {...props} />);
+    const input = await screen.findByRole("spinbutton");
+    await waitFor(() => expect(screen.getByLabelText("PDF page 1")).toHaveAttribute("data-rendered", "true"));
+    act(() => input.focus());
+    fireEvent.scroll(screen.getByTestId("pdf-scroll-container"), { target: { scrollTop: 12 + (576 * 1.4 + 12) * 4 } });
+    await waitFor(() => expect(screen.getByLabelText("PDF page 5")).toHaveAttribute("data-rendered", "true"));
+    expect(input).toHaveValue(1);
+    fireEvent.change(input, { target: { value: "12" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect(input).toHaveValue(12);
+    expect(screen.getByTestId("pdf-scroll-container")).toHaveFocus();
+    act(() => input.focus());
+    fireEvent.change(input, { target: { value: "3" } });
+    fireEvent.keyDown(input, { key: "Escape" });
+    expect(input).toHaveValue(12);
+    expect(screen.getByTestId("pdf-scroll-container")).toHaveFocus();
+    await scrollToPage(13);
+  });
+
+  it("zooms within its limits, preserves the reading anchor and resets for a new source", async () => {
+    longDocument();
+    const view = render(<PdfDocumentPreview {...props} initialPage={8} />);
+    await waitFor(() => expect(screen.getByLabelText("PDF page 8")).toHaveAttribute("data-rendered", "true"));
+    const pageWidth = () => parseFloat((screen.getByLabelText("PDF page 8") as HTMLCanvasElement).style.width);
+    const scroll = screen.getByTestId("pdf-scroll-container");
+    fireEvent.scroll(scroll, { target: { scrollTop: 12 + (576 * 1.4 + 12) * 7 + 100 } });
+    await waitFor(() => expect(screen.getByRole("spinbutton")).toHaveValue(8));
+    fireEvent.click(screen.getByRole("button", { name: "Zoom in PDF" }));
+    await waitFor(() => expect(pageWidth()).toBe(720));
+    expect(scroll.scrollTop).toBeCloseTo(12 + (720 * 1.4 + 12) * 7 + 125);
+    expect(screen.getByRole("spinbutton")).toHaveValue(8);
+    for (let index = 0; index < 6; index++) fireEvent.click(screen.getByRole("button", { name: "Zoom in PDF" }));
+    expect(screen.getByRole("button", { name: "Zoom in PDF" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Fit PDF width" })).toHaveTextContent("200%");
+    await waitFor(() => expect(pageWidth()).toBe(1152));
+    for (const canvas of document.querySelectorAll("canvas")) expect(canvas.width * canvas.height).toBeLessThanOrEqual(4_000_000);
+    for (let index = 0; index < 8; index++) fireEvent.click(screen.getByRole("button", { name: "Zoom out PDF" }));
+    expect(screen.getByRole("button", { name: "Zoom out PDF" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Fit PDF width" })).toHaveTextContent("50%");
+    fireEvent.click(screen.getByRole("button", { name: "Fit PDF width" }));
+    await waitFor(() => expect(pageWidth()).toBe(576));
+    expect(screen.getByRole("spinbutton")).toHaveValue(8);
+    fireEvent.click(screen.getByRole("button", { name: "Zoom in PDF" }));
+    view.rerender(<PdfDocumentPreview {...props} url="/other.pdf" />);
+    await waitFor(() => expect(screen.getByLabelText("PDF page 1")).toHaveAttribute("data-rendered", "true"));
+    expect(screen.getByRole("button", { name: "Fit PDF width" })).toHaveTextContent("100%");
+  });
+
   it("preserves external question/citation navigation after manual scrolling and resizing", async () => {
     longDocument(30);
     const view = render(<PdfDocumentPreview {...props} initialPage={1} />);

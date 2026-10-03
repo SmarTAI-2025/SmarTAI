@@ -36,7 +36,10 @@ export interface ExpertConfig {
   is_shared?: boolean;
   editable?: boolean;
   is_default?: boolean;
-  supports_vision?: boolean;
+  supports_vision?: boolean | null;
+  image_capability_status?: "unverified" | "passed" | "unsupported" | "inconclusive";
+  image_checked_at?: string | null;
+  image_reason?: string | null;
   provider_kind?: "llm" | "ocr";
   credential_id?: string | null;
   verification_status?: VerificationStatus;
@@ -52,7 +55,6 @@ export interface AddExpertKeyRequest {
   base_url?: string | null;
   wire_protocol?: WireProtocol | null;
   display_name?: string | null;
-  max_concurrent?: number;
   rpm?: number;
 }
 
@@ -73,7 +75,6 @@ export interface UpdateExpertRequest {
   base_url?: string | null;
   wire_protocol?: WireProtocol | null;
   display_name?: string | null;
-  max_concurrent?: number;
   rpm?: number;
 }
 

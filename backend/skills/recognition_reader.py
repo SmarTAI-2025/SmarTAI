@@ -4,6 +4,7 @@ No credential discovery, provider selection, autonomous retry, parsing or gradin
 Multi-page document output is one candidate, never invented per-page mappings.
 """
 from __future__ import annotations
+from backend.llm.image_capability import can_attempt_images
 
 import asyncio
 import hashlib
@@ -136,7 +137,7 @@ _BAIDU_IDENTITY = ("_api_key", "_secret_key", "_http_client", "_download_client"
 
 class LLMRecognitionEngine:
     def __init__(self, provider: BaseProvider, *, route_id: str, fingerprint: str, max_locator_images: int = 1):
-        if not provider.supports_vision:
+        if not can_attempt_images(provider):
             raise RecognitionError("provider_vision_not_supported")
         self.provider = provider
         self._provider_id = provider.provider_id

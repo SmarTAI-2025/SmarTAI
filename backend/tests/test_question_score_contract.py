@@ -324,7 +324,7 @@ def test_question_preparation_capabilities_keep_images_selectable_without_vision
         ("problem", "questions.png", "image/png", True, None),
         ("reference_answer", "answers.webp", "image/webp", True, None),
         ("rubric", "rubric.jpg", "image/jpeg", True, None),
-        ("problem", "questions.png", "image/png", False, "vision_provider_required"),
+        ("problem", "questions.png", "image/png", False, None),
         ("programming_tests", "cases.png", "image/png", True, None),
         ("programming_tests", "cases.json", "application/json", False, None),
         ("rubric", "rubric.json", "application/json", True, "source_type_not_allowed"),

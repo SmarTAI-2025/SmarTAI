@@ -110,7 +110,7 @@ def _registry_for(teacher_id: str):
     """
     with session_scope() as session:
         record = session.get(UserRecord, teacher_id)
-        if record is None:
+        if record is None or not record.is_active or record.role != "teacher":
             raise NotFound("grading_run_teacher")
         user = User(id=record.id, username=record.username, email=record.email or "",
                     role=record.role, password_hash=record.password_hash,
@@ -245,11 +245,40 @@ async def process_run(*, run_id: str, worker_id: str, registry=None, language: s
     Raises on a batch-level failure so the caller can mark the run failed; per-
     question failures land as explicit ``failed`` results via the adapter.
     """
+    from backend.db.workflow_repository import get_run_setup
+
+    frozen_setup = get_run_setup(run_id)
+    manual_recovery = bool(
+        frozen_setup and (frozen_setup.input_manifest or {}).get(
+            "grading_recovery_policy", "manual_retry"
+        ) == "manual_retry"
+    )
     try:
-        grading_repository.claim_lease(run_id=run_id, worker_id=worker_id, lease_seconds=settings.grading_lease_seconds)
+        grading_repository.claim_lease(
+            run_id=run_id, worker_id=worker_id, lease_seconds=settings.grading_lease_seconds,
+            allow_owned=False, queued_only=manual_recovery,
+        )
     except DomainError:
         # A failed duplicate claim does not own the existing live reporter.
-        return  # someone else owns it or it is terminal
+        if manual_recovery:
+            try:
+                # This second claim can only reclaim expired work. It never
+                # calls a provider: an interrupted paid call is not reversible.
+                grading_repository.claim_lease(
+                    run_id=run_id, worker_id=worker_id,
+                    lease_seconds=settings.grading_lease_seconds, allow_owned=False,
+                )
+                grading_repository.mark_failed(
+                    run_id=run_id, worker_id=worker_id,
+                    error_message="grading_execution_interrupted",
+                )
+                grading_repository.record_event(
+                    run_id=run_id, level="error", message="run_interrupted",
+                    payload={"code": "grading_execution_interrupted"},
+                )
+            except DomainError:
+                pass
+        return
     run = grading_repository.get_run(run_id=run_id)
     heartbeat_task: Optional[asyncio.Task] = None
     reporter = None
@@ -267,13 +296,11 @@ async def process_run(*, run_id: str, worker_id: str, registry=None, language: s
         heartbeat_task = asyncio.create_task(_heartbeat())
         run_registry = registry or _registry_for(run.teacher_id)
         grading_setup = None
-        from backend.db.workflow_repository import get_run_setup
 
         # A normalized caller that does not use the Figma façade has no setup
         # row and retains the main default behavior. Database/read failures are
         # deliberately not swallowed: silently widening the provider selection
         # would violate the teacher-approved cost and privacy boundary.
-        frozen_setup = get_run_setup(run_id)
         if frozen_setup is not None:
             try:
                 grading_setup = TaskGradingSetup.model_validate(frozen_setup.setup)

@@ -403,7 +403,8 @@ def test_list_configs_exposes_provider_id_and_display_name():
     assert len(matching) == 1
     item = matching[0]
     assert item["display_name"] == "GLM Air"
-    assert item["max_concurrent"] == 5
+    assert item["max_concurrent"] == 50
+    assert item["concurrency_mode"] == "automatic"
     assert "api_key" not in item
     assert item["model"] == "glm-4.5-air"
     assert item["last_checked_at"] == "2025-01-01T00:00:00+00:00"

@@ -417,21 +417,33 @@ class ProviderConfig(BaseModel):
         description="Effective API protocol; omitted means the provider default.",
     )
     enabled: bool = True
+    # Evidence is not part of workflow input/fingerprints or credential exports.
+    image_capability_status: Literal["unverified", "passed", "unsupported", "inconclusive"] = Field(default="unverified", exclude=True)
+    image_checked_at: Optional[float] = Field(default=None, exclude=True)
+    image_reason: Optional[str] = Field(default=None, exclude=True)
     display_name: Optional[str] = Field(
         default=None,
         description="User-supplied label shown in dropdowns. Falls back to f'{provider_type}:{model}'.",
     )
     max_concurrent: int = Field(
-        default=5,
+        default=50,
         ge=1,
-        description="Max in-flight LLM calls for this key. GLM Air ≤ 5, OpenAI/Gemini may set 10+.",
+        description="Persisted initial automatic concurrency estimate; legacy values are retained "
+                    "for snapshot compatibility. Runtime concurrency is derived from RPM and "
+                    "healthy request duration, with a maximum of 50.",
+    )
+    scheduling_owner: Optional[str] = Field(
+        default=None,
+        exclude=True,
+        repr=False,
+        description="Private runtime scheduling identity; never serialized or persisted.",
     )
     rpm: int = Field(
         default=0,
         ge=0,
-        description="Requests per minute cap for this key (sliding-window token bucket). "
-                    "0 = no rate gating (only `max_concurrent` applies). Set this to the "
-                    "provider's per-minute quota (e.g. Gemini free-tier flash-lite = 15). "
+        description="Requests per minute cap for this key. "
+                    "0 = no additional RPM gating; automatic concurrency and server resource "
+                    "limits still apply. Set this to the provider's per-minute quota. "
                     "When grading would exceed this, calls automatically queue until the "
                     "rolling 60s window has room — prevents 429 quota errors instead of "
                     "burning retries on them.",

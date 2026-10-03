@@ -12,7 +12,6 @@ import type {
 export function addExpertKey(request: AddExpertKeyRequest): Promise<ExpertMutationResponse> {
   return postJSON<ExpertMutationResponse, AddExpertKeyRequest>("/experts/keys", {
     ...request,
-    max_concurrent: request.max_concurrent ?? 5,
     rpm: request.rpm ?? 0,
   });
 }
@@ -50,7 +49,6 @@ export function updateExpert(
     `/experts/${encodeURIComponent(providerId)}`,
     {
       ...request,
-      max_concurrent: request.max_concurrent ?? 5,
       rpm: request.rpm ?? 0,
     },
   );
@@ -64,4 +62,8 @@ export function verifyExpert(providerId: string): Promise<ExpertVerificationResp
 
 export function removeExpert(providerId: string): Promise<ExpertMutationResponse> {
   return deleteJSON<ExpertMutationResponse>(`/experts/${encodeURIComponent(providerId)}`);
+}
+
+export async function verifyExpertImage(providerId: string): Promise<Pick<ExpertConfig, "image_capability_status" | "image_checked_at" | "image_reason">> {
+  return postJSON(`/experts/${encodeURIComponent(providerId)}/verify-image`, {});
 }

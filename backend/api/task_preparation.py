@@ -268,21 +268,6 @@ def _validate_source_upload(
     filename = Path(file.filename or "source").name
     extension = Path(filename.lower()).suffix
     accepted = _accepted_source_extensions(role, has_vision=has_vision)
-    if (
-        extension in _IMAGE_SOURCE_EXTENSIONS
-        and role in _VISION_SOURCE_ROLES
-        and not has_vision
-        and enforce_vision
-    ):
-        raise HTTPException(
-            status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail={
-                "code": vision_error_code,
-                "role": role,
-                "filename": filename,
-                "recovery": "configure_vision_provider",
-            },
-        )
     if extension not in accepted:
         raise HTTPException(
             status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,

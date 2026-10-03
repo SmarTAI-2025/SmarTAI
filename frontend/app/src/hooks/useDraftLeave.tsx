@@ -37,7 +37,7 @@ export function DraftLeaveProvider({ children }: { children: ReactNode }) {
     if (savingRef.current) return;
     savingRef.current = true; setSaving(true); setError(null);
     try {
-      const controllers = all().filter((item) => !item.secret && (!ids || ids.includes(item.id)) && (item.dirty || item.savedAt !== null));
+      const controllers = all().filter((item) => !item.secret && (!ids || ids.includes(item.id)) && (Boolean(ids) || item.dirty || item.savedAt !== null));
       if (controllers.some((item) => item.busy)) throw new Error("业务保存正在进行，请等完成后再暂存或离开。");
       const prepared = controllers.map((item) => item.prepare());
       await writePageDrafts(prepared.map((item) => item.write));

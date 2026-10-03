@@ -96,3 +96,10 @@ export function useRemoveExpert() {
     },
   });
 }
+
+export function useVerifyExpertImage() {
+  const queryClient = useQueryClient();
+  return useMutation({ mutationFn: expertsApi.verifyExpertImage, retry: false,
+    onSettled: () => { queryClient.invalidateQueries({ queryKey: expertKeys.all }); },
+  });
+}

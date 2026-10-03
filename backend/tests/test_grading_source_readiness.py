@@ -204,6 +204,7 @@ def _seed_legacy_structured_case(
     with_answers: bool = True,
     identity_status: str = "matched",
     recognition_needs_review: bool = False,
+    question_count: int = 1,
 ):
     from backend.db import (
         assignment_repository,
@@ -236,20 +237,19 @@ def _seed_legacy_structured_case(
         course_id=course.id,
         name="Legacy readiness",
     )
-    assignment_repository.add_question(
-        assignment_id=assignment.id,
-        teacher_id=owner_id,
-        q_id="q1",
-        order_index=0,
-        type="short",
-        stem="Question",
-        max_score=10,
-    )
+    for index in range(question_count):
+        assignment_repository.add_question(
+            assignment_id=assignment.id, teacher_id=owner_id,
+            q_id=f"q{index + 1}", order_index=index,
+            type="short", stem=f"Question {index + 1}", max_score=10,
+        )
     workflow = workflow_repository.ensure_workflow(
         assignment_id=assignment.id,
         owner_id=owner_id,
     )
     student = _student("", "S001", identity_status=identity_status)
+    for index in range(1, question_count):
+        student["stu_ans"].append({**student["stu_ans"][0], "q_id": f"q{index + 1}"})
     if recognition_needs_review:
         student["stu_ans"][0]["flag"] = ["recognition_needs_review"]
     if not with_answers:

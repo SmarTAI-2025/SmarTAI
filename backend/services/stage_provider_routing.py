@@ -142,7 +142,6 @@ def stage_provider_configuration_fingerprint(
                     "rpm",
                     "scope",
                     "is_shared",
-                    "supports_vision",
                 )
             }
     return hashlib.sha256(

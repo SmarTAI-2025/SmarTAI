@@ -20,13 +20,16 @@ import ssl
 import time
 from abc import ABC, abstractmethod
 from collections import deque
-from typing import List, Optional, Dict, Any, Deque
+from typing import List, Optional, Dict, Any, Deque, Callable
 from dataclasses import dataclass
 
 import httpx
 from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
 
 from backend.config import settings
+from backend.llm.concurrency import (
+    HARD_LIMIT, get_scheduler, initial_concurrency, quota_key, request_memory,
+)
 from backend.llm.endpoint_policy import (
     build_safe_provider_clients,
     effective_provider_base_url,
@@ -34,14 +37,12 @@ from backend.llm.endpoint_policy import (
     provider_operation_url,
 )
 from backend.llm.provider_catalog import effective_wire_protocol
+from backend.llm.image_capability import is_explicit_image_rejection, explicitly_rejects_images
 from backend.models import ProviderConfig
 
 logger = logging.getLogger(__name__)
 
 
-_ZHIPU_VISION_MODEL_PATTERN = re.compile(
-    r"^glm-\d+(?:\.\d+)?v(?:-|$)", re.IGNORECASE
-)
 
 
 def _configured_proxy_url() -> Optional[str]:
@@ -194,51 +195,6 @@ def _build_vision_messages(prompt: str, images: List[VisionImage]) -> List[BaseM
     return [HumanMessage(content=content)]
 
 
-class _RPMLimiter:
-    """Sliding-window per-minute rate limiter (token bucket flavor).
-
-    Tracks timestamps of the last `rpm` successful starts. If a new acquire
-    would exceed the cap inside the trailing 60s window, sleeps until the
-    oldest timestamp falls out of the window.
-
-    Thread-of-asyncio safety: a single asyncio.Lock serializes the window
-    bookkeeping; the sleep itself is awaited *while holding the lock* so that
-    concurrent waiters queue cleanly (each one re-checks the window after its
-    sleep). This makes the limiter strictly FIFO and prevents thundering-herd
-    on quota reset.
-
-    A small randomized jitter (50-250ms) is added on top of the computed wait
-    so multiple workers that wake at the same instant don't slam the API in a
-    synchronized burst.
-    """
-
-    def __init__(self, rpm: int, provider_id: str):
-        self.rpm = max(0, int(rpm))
-        self.provider_id = provider_id
-        self._window: Deque[float] = deque()
-        self._lock = asyncio.Lock()
-
-    async def acquire(self) -> None:
-        if self.rpm <= 0:
-            return
-        async with self._lock:
-            while True:
-                now = time.monotonic()
-                cutoff = now - 60.0
-                while self._window and self._window[0] < cutoff:
-                    self._window.popleft()
-                if len(self._window) < self.rpm:
-                    self._window.append(now)
-                    return
-                # Window full — wait until the oldest call falls out.
-                wait = self._window[0] + 60.0 - now + random.uniform(0.05, 0.25)
-                logger.info(
-                    f"RPM limiter [{self.provider_id}] full ({len(self._window)}/"
-                    f"{self.rpm} in last 60s) — sleeping {wait:.2f}s before next call"
-                )
-                await asyncio.sleep(wait)
-
-
 # ─── Per-endpoint overload guard ─────────────────────────────────────────────
 # One host (e.g. the USTC campus relay) can front several provider configs.
 # When that host starts returning 5xx, independent per-provider retries turn
@@ -251,7 +207,6 @@ class _RPMLimiter:
 # its own.
 
 _ENDPOINT_BREAKERS: Dict[str, "_EndpointBreaker"] = {}
-_ENDPOINT_SEMAPHORES: Dict[str, tuple[asyncio.Semaphore, int]] = {}
 
 
 def endpoint_key(config: ProviderConfig) -> str:
@@ -311,6 +266,7 @@ class _EndpointBreaker:
         self._max_cooldown = max_cooldown
         self._failures: Deque[float] = deque()
         self._open_until: float = 0.0
+        self._last_failure_at: float = -float("inf")
         self._consecutive_trips = 0
 
     @property
@@ -328,6 +284,7 @@ class _EndpointBreaker:
 
     def record_failure(self) -> None:
         now = time.monotonic()
+        self._last_failure_at = now
         cutoff = now - self._window
         while self._failures and self._failures[0] < cutoff:
             self._failures.popleft()
@@ -377,22 +334,39 @@ def _parse_retry_after_header(value: Optional[str]) -> Optional[float]:
         seconds = float(value.strip())
     except ValueError:
         return None
-    return seconds if seconds > 0 else None
+    return seconds if 0 < seconds < float("inf") else None
 
 
 class BaseProvider(ABC):
     """Abstract provider with async ainvoke interface."""
 
     provider_type: str = ""
-    supports_vision: bool = False
+    _image_rejection_recorder: Callable[[], object] | None = None
+    @property
+    def supports_vision(self) -> bool | None:
+        # Capability evidence, never inferred from brand, protocol or model ID.
+        state = self.config.image_capability_status
+        return True if state == "passed" else False if state == "unsupported" else None
+
+    @property
+    def can_attempt_vision(self) -> bool:
+        return self.config.image_capability_status != "unsupported"
+
+    def _record_image_rejection(self):
+        self.config.image_capability_status = "unsupported"
+        recorder = getattr(self, "_image_rejection_recorder", None)
+        if recorder is not None:
+            try:
+                recorder()
+            except Exception:
+                logger.warning("Unable to persist image rejection evidence")
+
 
     def __init__(self, config: ProviderConfig):
         self.config = config
         self.model = config.model
-        self._semaphore = None
         self._client = None
         self._client_lock = None
-        self._rpm_limiter: Optional[_RPMLimiter] = None
 
     @property
     def provider_id(self) -> str:
@@ -406,37 +380,49 @@ class BaseProvider(ABC):
             _ENDPOINT_BREAKERS[key] = breaker
         return breaker
 
-    def _endpoint_semaphore(self) -> asyncio.Semaphore:
-        """Shared concurrency cap for every provider on this endpoint.
-
-        Kept separate from the per-provider semaphore: N configs pointing at
-        one relay must not multiply its in-flight calls N-fold.
-        """
-        key = endpoint_key(self.config)
-        limit = max(1, int(settings.max_concurrent_llm_per_endpoint))
-        entry = _ENDPOINT_SEMAPHORES.get(key)
-        if entry is None or entry[1] != limit:
-            entry = (asyncio.Semaphore(limit), limit)
-            _ENDPOINT_SEMAPHORES[key] = entry
-        return entry[0]
-
     @abstractmethod
     def _build_client_sync(self) -> Any:
         """Build a LangChain client. Must be callable from any thread."""
         ...
 
     def _ensure_async_primitives(self) -> None:
-        if self._semaphore is None:
-            limit = max(1, getattr(self.config, "max_concurrent", None) or settings.max_concurrent_llm_per_provider)
-            self._semaphore = asyncio.Semaphore(limit)
-            logger.debug(f"Provider {self.provider_id} concurrency capped at {limit}")
         if self._client_lock is None:
             self._client_lock = asyncio.Lock()
-        if self._rpm_limiter is None:
-            rpm = max(0, int(getattr(self.config, "rpm", 0) or 0))
-            self._rpm_limiter = _RPMLimiter(rpm, self.provider_id)
-            if rpm > 0:
-                logger.debug(f"Provider {self.provider_id} RPM capped at {rpm}/min")
+
+    @property
+    def effective_concurrency(self) -> int:
+        rpm = max(0, int(self.config.rpm or 0))
+        try:
+            limit = get_scheduler().limit(quota_key(self.config, endpoint_key(self.config)), rpm)
+        except RuntimeError:
+            limit = initial_concurrency(rpm)
+        return min(HARD_LIMIT, limit, max(1, int(settings.max_concurrent_llm_per_provider)))
+
+    def _call_capacity(self, messages: List[BaseMessage]):
+        scheduler = get_scheduler()
+        return scheduler.lease(
+            key=quota_key(self.config, endpoint_key(self.config)),
+            rpm=max(0, int(self.config.rpm or 0)),
+            owner=self.config.scheduling_owner or "anonymous",
+            endpoint=endpoint_key(self.config),
+            endpoint_limit=min(HARD_LIMIT, max(1, int(settings.max_concurrent_llm_per_endpoint)),
+                               max(1, int(settings.max_concurrent_llm_per_provider))),
+            memory=request_memory(messages),
+            ready=lambda: not self._endpoint_breaker().is_open,
+        )
+
+    def _record_duration(self, duration_ms: float) -> None:
+        get_scheduler().record_success(
+            quota_key(self.config, endpoint_key(self.config)),
+            max(0, int(self.config.rpm or 0)), duration_ms / 1000.0,
+            allow_growth=time.monotonic() - self._endpoint_breaker()._last_failure_at >= 60.0,
+        )
+
+    def _record_concurrency_overload(self, retry_after: float | None = None) -> None:
+        get_scheduler().record_overload(
+            quota_key(self.config, endpoint_key(self.config)),
+            max(0, int(self.config.rpm or 0)), retry_after,
+        )
 
     async def _get_client(self) -> Any:
         """Get or create a shared client (for native async providers)."""
@@ -464,18 +450,18 @@ class BaseProvider(ABC):
         """Invoke the LLM. Default: native async. Gemini overrides this."""
         generation_kwargs = self._generation_kwargs(max_output_tokens)
         self._ensure_async_primitives()
-        # Breaker before RPM limiter: a call frozen by the cooldown must not
-        # burn this key's per-minute window while doing nothing.
+        client = await self._get_client()
+        # Admission combines actual-start RPM, quota concurrency and resources;
+        # queued calls do not reserve minute quota or occupy capacity slots.
         await self._endpoint_breaker().before_call()
-        await self._rpm_limiter.acquire()
-        async with self._endpoint_semaphore(), self._semaphore:
+        async with self._call_capacity(messages):
             t0 = time.perf_counter()
-            client = await self._get_client()
             try:
                 response = await client.ainvoke(messages, **generation_kwargs)
                 self._endpoint_breaker().record_success()
                 content = _response_text(response.content if hasattr(response, "content") else response)
                 duration_ms = (time.perf_counter() - t0) * 1000
+                self._record_duration(duration_ms)
                 logger.info(f"LLM call OK on {self.provider_id} in {duration_ms:.0f}ms ({len(content)} chars)")
                 return LLMResponse(content=content, provider=self.provider_id, model=self.model,
                                    duration_ms=duration_ms, **_response_metadata(response))
@@ -493,13 +479,19 @@ class BaseProvider(ABC):
 
     async def ainvoke_vision(self, prompt: str, images: List[VisionImage], *, max_output_tokens: int | None = None) -> LLMResponse:
         """Invoke a vision-capable model with text prompt plus one or more images."""
-        if not self.supports_vision:
-            raise NotImplementedError(f"{self.provider_id} does not support vision input.")
+        if not self.can_attempt_vision:
+            raise ProviderRequestError("provider_vision_not_supported", status_code=400)
         if not images:
             raise ValueError("ainvoke_vision requires at least one image.")
         _validate_output_limit(max_output_tokens)
         options = {} if max_output_tokens is None else {"max_output_tokens": max_output_tokens}
-        return await self.ainvoke(_build_vision_messages(prompt, images), **options)
+        try:
+            return await self.ainvoke(_build_vision_messages(prompt, images), **options)
+        except Exception as exc:
+            if is_explicit_image_rejection(exc):
+                self._record_image_rejection()
+                raise ProviderRequestError("provider_vision_not_supported", status_code=400) from exc
+            raise
 
 
 # ─── Gemini ───────────────────────────────────────────────────────────────────
@@ -512,7 +504,6 @@ class GeminiProvider(BaseProvider):
     Auto-detected from SmarTAI's explicit proxy settings.
     """
     provider_type = "gemini"
-    supports_vision = True
 
     def _build_client_sync(self) -> Any:
         from langchain_google_genai import ChatGoogleGenerativeAI
@@ -541,24 +532,32 @@ class GeminiProvider(BaseProvider):
             return await super().ainvoke(messages, max_output_tokens=max_output_tokens)
 
         # Local proxy mode: sync invoke in threadpool, fresh client per call
+        async with get_scheduler().proxy_slots:
+            return await self._invoke_proxy(messages, generation_kwargs)
+
+    async def _invoke_proxy(self, messages: List[BaseMessage], generation_kwargs: dict[str, Any]) -> LLMResponse:
+        from anyio import to_thread
+
+        # Prepare before RPM admission; at most 50 per-call clients can wait.
+        # Preparation uses the default pool, separate from the 50 SDK workers.
+        local_client = await to_thread.run_sync(self._build_client_sync)
         self._ensure_async_primitives()
         await self._endpoint_breaker().before_call()
-        await self._rpm_limiter.acquire()
-        async with self._endpoint_semaphore(), self._semaphore:
+        async with self._call_capacity(messages):
             t0 = time.perf_counter()
             try:
-                from fastapi.concurrency import run_in_threadpool
-
                 def _sync_call():
-                    # Each thread gets its own client → no lock contention → true parallel
-                    local_client = self._build_client_sync()
-                    return local_client.invoke(messages, **generation_kwargs)
+                    started = time.perf_counter()
+                    response = local_client.invoke(messages, **generation_kwargs)
+                    return response, (time.perf_counter() - started) * 1000
 
                 # Cancellation cannot stop a running sync SDK thread. Keep its
                 # capacity leases until it drains; never start replacement work.
-                call = asyncio.create_task(run_in_threadpool(_sync_call))
+                call = asyncio.create_task(to_thread.run_sync(
+                    _sync_call, limiter=get_scheduler().thread_limiter,
+                ))
                 try:
-                    response = await asyncio.shield(call)
+                    response, sdk_duration_ms = await asyncio.shield(call)
                 except asyncio.CancelledError:
                     while not call.done():
                         try:
@@ -572,7 +571,8 @@ class GeminiProvider(BaseProvider):
                     raise
                 self._endpoint_breaker().record_success()
                 content = _response_text(response.content if hasattr(response, "content") else response)
-                duration_ms = (time.perf_counter() - t0) * 1000
+                duration_ms = sdk_duration_ms
+                self._record_duration(duration_ms)
                 logger.info(f"LLM call OK on {self.provider_id} in {duration_ms:.0f}ms ({len(content)} chars)")
                 return LLMResponse(content=content, provider=self.provider_id, model=self.model,
                                    duration_ms=duration_ms, **_response_metadata(response))
@@ -593,7 +593,6 @@ class GeminiProvider(BaseProvider):
 
 class OpenAIProvider(BaseProvider):
     provider_type = "openai"
-    supports_vision = True
 
     def _build_client_sync(self) -> Any:
         from langchain_openai import ChatOpenAI
@@ -625,14 +624,16 @@ class ZhipuProvider(BaseProvider):
             body = getattr(exc, "body", None)
             detail = body.get("error", body) if isinstance(body, dict) else {}
             if getattr(exc, "status_code", None) == 429 and isinstance(detail, dict) and str(detail.get("code")) == "1305":
-                raise ProviderRequestError("provider_overloaded", status_code=429) from None
+                headers = getattr(getattr(exc, "response", None), "headers", {})
+                retry_after = _parse_retry_after_header(headers.get("retry-after"))
+                self._record_concurrency_overload(retry_after)
+                raise ProviderRequestError(
+                    "provider_overloaded", status_code=429, retry_after=retry_after,
+                ) from None
             raise
 
     def __init__(self, config: ProviderConfig):
         super().__init__(config)
-        self.supports_vision = bool(
-            _ZHIPU_VISION_MODEL_PATTERN.match(self.model.strip())
-        )
 
     def _build_client_sync(self) -> Any:
         from langchain_openai import ChatOpenAI
@@ -658,7 +659,6 @@ class ZhipuProvider(BaseProvider):
 
 class AnthropicProvider(BaseProvider):
     provider_type = "anthropic"
-    supports_vision = True
 
     def _build_client_sync(self) -> Any:
         from langchain_anthropic import ChatAnthropic
@@ -678,7 +678,10 @@ class AnthropicProvider(BaseProvider):
 # build a direct httpx client (proxy=None) so a SMARTAI_HTTPS_PROXY configured
 # for foreign providers (OpenAI/Gemini/Anthropic) is never applied to them.
 # That is what lets domestic and foreign models coexist when a proxy is set.
-# Text models stay supports_vision=False — never advertise a domestic text model
+# Visual capability is established by image evidence, independently of brand.
+# Transport adapters still encode images for unverified configurations.
+# Historical provider descriptions below do not determine visual capability.
+# Never silently omit image blocks
 # as OCR (launch plan 上线前 08); vision GLM is handled by ZhipuProvider above.
 
 
@@ -689,7 +692,6 @@ class _DomesticOpenAICompatibleProvider(BaseProvider):
 
     def __init__(self, config: ProviderConfig):
         super().__init__(config)
-        self.supports_vision = False
 
     def _build_client_sync(self) -> Any:
         from langchain_openai import ChatOpenAI
@@ -900,15 +902,6 @@ class SafeRelayProvider(BaseProvider):
             config.provider_type,
             config.wire_protocol,
         )
-        # Preserve today's routing behavior. PR-C will let users explicitly
-        # choose a stage model and then rely on the real provider response.
-        self.supports_vision = (
-            config.provider_type in {"openai", "gemini", "anthropic"}
-            or (
-                config.provider_type == "zhipu"
-                and bool(_ZHIPU_VISION_MODEL_PATTERN.match(config.model.strip()))
-            )
-        )
         self._safe_sync_client: httpx.Client | None = None
         self._safe_async_client: httpx.AsyncClient | None = None
         self._target_url = provider_operation_url(
@@ -1041,6 +1034,15 @@ class SafeRelayProvider(BaseProvider):
             raise ProviderRequestError(_transport_error_code(exc)) from exc
         if response.status_code >= 400:
             code = _response_error_code(response.status_code)
+            has_images = any(isinstance(m.content, list) and any(
+                isinstance(block, dict) and block.get("type") == "image_url"
+                for block in m.content) for m in messages)
+            if has_images:
+                try:
+                    if explicitly_rejects_images(response.status_code, response.json()):
+                        code = "provider_vision_not_supported"
+                except ValueError:
+                    pass
             if self.provider_type == "zhipu" and response.status_code == 429:
                 try:
                     body = response.json()
@@ -1069,28 +1071,25 @@ class SafeRelayProvider(BaseProvider):
     async def ainvoke(self, messages: List[BaseMessage], *, max_output_tokens: int | None = None) -> LLMResponse:
         _validate_output_limit(max_output_tokens)
         self._ensure_async_primitives()
+        # DNS validation/client construction must finish before minute quota
+        # admission; a delayed cold start must not accumulate a send burst.
+        await self._relay_client()
         await self._endpoint_breaker().before_call()
-        await self._rpm_limiter.acquire()
-        async with self._endpoint_semaphore(), self._semaphore:
+        async with self._call_capacity(messages):
             try:
                 options = {} if max_output_tokens is None else {"max_output_tokens": max_output_tokens}
-                return await self._relay_call(messages, **options)
+                response = await self._relay_call(messages, **options)
+                self._record_duration(response.duration_ms)
+                return response
             except Exception as e:
+                if isinstance(e, ProviderRequestError) and e.code == "provider_overloaded":
+                    self._record_concurrency_overload(e.retry_after)
                 if _is_overload_failure(e):
                     self._endpoint_breaker().record_failure()
                 raise
 
-    async def ainvoke_vision(
-        self,
-        prompt: str,
-        images: List[VisionImage],
-        *, max_output_tokens: int | None = None,
-    ) -> LLMResponse:
-        if not images:
-            raise ValueError("ainvoke_vision requires at least one image.")
-        _validate_output_limit(max_output_tokens)
-        options = {} if max_output_tokens is None else {"max_output_tokens": max_output_tokens}
-        return await self.ainvoke(_build_vision_messages(prompt, images), **options)
+    async def ainvoke_vision(self, prompt: str, images: List[VisionImage], *, max_output_tokens: int | None = None) -> LLMResponse:
+        return await super().ainvoke_vision(prompt, images, max_output_tokens=max_output_tokens)
 
 
 # ─── Factory ─────────────────────────────────────────────────────────────────

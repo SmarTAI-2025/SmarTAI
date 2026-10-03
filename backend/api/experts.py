@@ -33,6 +33,7 @@ from backend.db.provider_repository import (
     set_default_provider_id,
     set_provider_enabled,
     set_provider_verification,
+    set_image_capability,
     update_provider_config,
     upsert_provider_config,
 )
@@ -42,17 +43,20 @@ from backend.llm.endpoint_policy import (
     normalize_provider_endpoint,
     resolve_public_endpoint,
 )
+from backend.llm.concurrency import initial_concurrency
 from backend.llm.provider_catalog import (
     PROVIDER_CATALOG as PROVIDER_CATALOG_ENTRIES,
     effective_wire_protocol,
 )
 from backend.llm.registry import (
     ExpertRegistry,
+    _build_scoped_registry,
     get_scoped_expert_registry,
     provider_encryption_not_configured_error,
     resolve_owner_default_provider_id,
 )
-from backend.llm.providers import ProviderRequestError
+from backend.llm.providers import ProviderRequestError, VisionImage, build_provider
+from backend.llm.image_capability import make_image_challenge, IMAGE_CHALLENGE_PROMPT, is_explicit_image_rejection
 from backend.models import ProviderConfig, ProviderType, User, WireProtocol
 from backend.services.stage_provider_routing import list_stage_provider_options
 
@@ -79,7 +83,12 @@ class AddKeyRequest(BaseModel):
     base_url: Optional[str] = Field(default=None, max_length=512)
     wire_protocol: Optional[WireProtocol] = None
     display_name: Optional[str] = Field(default=None, max_length=120)
-    max_concurrent: int = Field(default=5, ge=1, le=10)
+    max_concurrent: Optional[int] = Field(
+        default=None,
+        ge=1,
+        le=50,
+        description="Legacy input accepted for compatibility; concurrency is calculated automatically.",
+    )
     rpm: int = Field(default=0, ge=0, le=10_000)
 
 
@@ -98,7 +107,12 @@ class UpdateKeyRequest(BaseModel):
     base_url: Optional[str] = Field(default=None, max_length=512)
     wire_protocol: Optional[WireProtocol] = None
     display_name: Optional[str] = Field(default=None, max_length=120)
-    max_concurrent: int = Field(default=5, ge=1, le=10)
+    max_concurrent: Optional[int] = Field(
+        default=None,
+        ge=1,
+        le=50,
+        description="Legacy input accepted for compatibility; concurrency is calculated automatically.",
+    )
     rpm: int = Field(default=0, ge=0, le=10_000)
 
 
@@ -204,7 +218,7 @@ def add_key(
         wire_protocol=wire_protocol,
         enabled=True,
         display_name=(request.display_name.strip() if request.display_name else None),
-        max_concurrent=request.max_concurrent,
+        max_concurrent=initial_concurrency(request.rpm),
         rpm=request.rpm,
     )
     if not settings.provider_encryption_key:
@@ -449,7 +463,7 @@ def update_provider(
             if request.display_name and request.display_name.strip()
             else None
         ),
-        max_concurrent=request.max_concurrent,
+        max_concurrent=initial_concurrency(request.rpm),
         rpm=request.rpm,
     )
     try:
@@ -577,6 +591,74 @@ async def verify_provider(
             checked_at, tz=timezone.utc
         ).isoformat(),
     }
+
+
+@router.post("/{provider_id}/verify-image")
+async def verify_provider_image(
+    provider_id: str,
+    current: User = Depends(require_teacher),
+    registry: ExpertRegistry = Depends(get_scoped_expert_registry),
+):
+    """One opt-in image request using the saved endpoint/protocol/model/key."""
+    stored = get_provider_config(current.id, provider_id, master_key=settings.provider_encryption_key) if settings.provider_encryption_key else None
+    shared = registry.uses_shared_pool()
+    shared_snapshot = None
+    if shared:
+        # Rebuild from current platform settings, retaining the owner-bound
+        # quota guard. Users cannot supply/override shared endpoints or keys.
+        from backend.db.shared_image_repository import shared_image_evidence
+        registry = _build_scoped_registry(current)
+        provider = registry.get(provider_id)
+        if provider is None or not registry.uses_shared_pool():
+            raise HTTPException(404, detail="Provider not found")
+        shared_snapshot = shared_image_evidence(current.id, provider.config, create=True)
+        provider.config.image_capability_status = "unverified"
+    else:
+        if stored is None or registry.get(provider_id) is None:
+            raise HTTPException(404, detail="Provider not found")
+        # Build from the SAME stored snapshot used by the eventual CAS.
+        provider = build_provider(stored.config.model_copy(update={
+            "image_capability_status": "unverified", "scheduling_owner": current.id,
+        }))
+    if is_user_defined_provider_endpoint(provider.config.provider_type, provider.config.base_url, provider.config.wire_protocol):
+        if not settings.custom_provider_endpoints_available:
+            raise HTTPException(403, detail={"code": "custom_provider_endpoints_disabled"})
+    _check_custom_probe_limit(current.id, "verify_image")
+    # A user may explicitly recheck previously rejected input. No automatic
+    # retries or alternative model/endpoint; use the existing image serializer.
+    # Build and compare-and-set from the SAME saved snapshot. The dependency
+    # registry may predate a concurrent configuration edit.
+    pixels, answer = make_image_challenge()
+    state, reason = "inconclusive", "image_probe_answer_incorrect"
+    try:
+        response = await asyncio.wait_for(provider.ainvoke_vision(
+            IMAGE_CHALLENGE_PROMPT, [VisionImage(data=pixels, media_type="image/png")],
+            max_output_tokens=64,
+        ), timeout=max(5, min(int(settings.llm_timeout), int(settings.custom_provider_verification_timeout_seconds))))
+        if response.content.strip() == answer:
+            state, reason = "passed", "image_probe_answer_correct"
+    except Exception as exc:
+        if is_explicit_image_rejection(exc):
+            state, reason = "unsupported", "provider_vision_not_supported"
+        else:
+            reason = _verification_error_code(exc)
+    checked_at = time.time()
+    if shared:
+        from backend.db.shared_image_repository import shared_image_fingerprint, set_shared_image_evidence
+        latest_registry = _build_scoped_registry(current)
+        latest = latest_registry.get(provider_id)
+        saved = bool(shared_snapshot and latest and latest_registry.uses_shared_pool()
+            and shared_image_fingerprint(latest.config) == shared_snapshot.fingerprint
+            and set_shared_image_evidence(current.id, shared_snapshot,
+                                         status=state, checked_at=checked_at, reason=reason))
+    else:
+        saved = bool(stored and set_image_capability(current.id, provider_id, status=state, checked_at=checked_at,
+                                                    reason=reason, expected_updated_at=stored.updated_at))
+    if not saved:
+        raise HTTPException(409, detail={"code": "expert_verification_stale"})
+    return {"provider_id": provider_id, "image_capability_status": state,
+            "image_checked_at": datetime.fromtimestamp(checked_at, tz=timezone.utc).isoformat(),
+            "image_reason": reason}
 
 
 @router.delete("/{provider_id}")

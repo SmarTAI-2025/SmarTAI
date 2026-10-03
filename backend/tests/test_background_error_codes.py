@@ -6,6 +6,7 @@ from sqlalchemy.exc import SQLAlchemyError
 
 from backend.domain.errors import ValidationError
 from backend.llm.endpoint_policy import ProviderEndpointError
+from backend.llm.providers import ProviderRequestError
 from backend.llm.registry import SharedPoolLimitError
 from backend.services.background_errors import classify_background_error
 from backend.tools.structured_llm import RateLimitError, TransientLLMError
@@ -34,7 +35,7 @@ def test_explicit_pdf_429_code_is_not_misreported_as_provider_rate_limit():
 
 
 def test_provider_rejection_of_image_input_reports_selected_model_capability():
-    error = RuntimeError("This model does not support image input")
+    error = ProviderRequestError("provider_vision_not_supported", status_code=400)
 
     assert (
         classify_background_error(error, "submission_parse_failed")
@@ -100,3 +101,7 @@ def test_wrapped_provider_server_error_retains_specific_outage_reason():
     error = RuntimeError("recognition failed")
     error.__cause__ = HTTPException(503, detail="private provider response")
     assert classify_background_error(error, "submission_parse_failed") == "provider_upstream_unavailable"
+
+
+def test_unstructured_image_claim_is_not_capability_evidence():
+    assert classify_background_error(RuntimeError("This model does not support image input"), "submission_parse_failed") == "submission_parse_failed"

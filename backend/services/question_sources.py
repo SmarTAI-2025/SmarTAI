@@ -4,6 +4,7 @@ Recognition produces saved evidence, never questions or generated solutions.
 The caller retains its existing structure/score/review transaction.
 """
 from __future__ import annotations
+from backend.llm.image_capability import can_attempt_images, image_quality_failure
 
 from dataclasses import dataclass
 import asyncio
@@ -53,7 +54,7 @@ async def recognition_engine(*, owner_id, route, registry):
         fingerprint = stage_provider_configuration_fingerprint(owner_id=owner_id, route=route, registry=registry)
         skill = build_owner_baidu_ocr_skill(owner_id, route)
         engine = BaiduRecognitionEngine(skill.client, route_id=route.route_id, fingerprint=fingerprint, max_document_pages=1)
-    elif route is not None and route.provider is not None and getattr(route.provider, "supports_vision", False):
+    elif route is not None and route.provider is not None and can_attempt_images(route.provider):
         fingerprint = stage_provider_configuration_fingerprint(owner_id=owner_id, route=route, registry=registry)
         engine = LLMRecognitionEngine(route.provider, route_id=route.route_id, fingerprint=fingerprint)
     try:
@@ -214,8 +215,10 @@ async def read_question_source(*, owner_id, task_id, content, filename, content_
         if not allow_vision and run.safe_error_code == "visual_capability_unavailable":
             raise RecognitionError("material_ocr_confirmation_required")
         if run.safe_error_code == "visual_capability_unavailable" and route.provider is not None:
-            raise RecognitionError("provider_vision_not_supported")
-        raise RecognitionError(run.safe_error_code or assembly.safe_error_code or "ocr_empty_result")
+            raise RecognitionError("provider_vision_not_supported" if not can_attempt_images(route.provider) else "image_recognition_unconfirmed")
+        failure_code = run.safe_error_code or assembly.safe_error_code or "ocr_empty_result"
+        failure_code = image_quality_failure(failure_code, document)
+        raise RecognitionError(failure_code)
     summary = dict(
         schema_version=1, operation_id=run.operation_id, status=run.status,
         artifact_ids=list(run.artifact_ids), coverage=document.coverage.model_dump(mode="json"),

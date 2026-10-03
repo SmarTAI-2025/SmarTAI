@@ -329,6 +329,7 @@ export interface TaskMutationResponse {
   status: "started" | "already_running" | "already_done" | "success" | "ok" | string;
   task_id?: string;
   job_id?: string;
+  run_status?: "queued" | "running" | "completed" | "partial_failed" | "failed";
   unchanged?: boolean;
   problem_count?: number;
   student_count?: number;
@@ -338,6 +339,9 @@ export interface TaskMutationResponse {
 export interface TaskResultResponse {
   status: "completed" | TaskStatus | "not_found";
   task_id: string;
+  grading_run_id?: string;
+  grading_run_status?: "completed" | "partial_failed";
+  retry_scope?: "full_batch" | null;
   results?: StudentResult[];
   problem_data?: Record<string, ProblemInfo>;
   student_data?: Record<string, StudentSubmission>;

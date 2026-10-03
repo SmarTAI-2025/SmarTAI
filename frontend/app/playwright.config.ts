@@ -17,7 +17,8 @@ export default defineConfig({
   reporter: "list",
   use: {
     baseURL: frontendUrl,
-    trace: "on-first-retry",
+    trace: "retain-on-failure",
+    screenshot: "only-on-failure",
     ignoreHTTPSErrors: true,
   },
   webServer: {

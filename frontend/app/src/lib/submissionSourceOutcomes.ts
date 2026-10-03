@@ -61,6 +61,16 @@ const REASON_COPY: Record<string, ReasonFactory> = {
   pdf_response_too_large: recognitionLimitCopy,
   pdf_structure_limit_exceeded: recognitionLimitCopy,
   provider_credentials_required: recognitionProviderCopy,
+  shared_pool_daily_limit_reached: (locale) => ({
+    title: tx(locale, "共享模型日额度已用完。", "Shared model daily allowance exhausted."),
+    description: tx(locale, "共享模型今日额度不足，本次识别请求未发送。", "The shared model daily allowance is insufficient. This recognition request was not sent."),
+    nextStep: tx(locale, "请等待 UTC 00:00 重置、联系管理员调整，或在模型与 BYOK 页面配置自己的模型。", "Wait for UTC midnight, contact an administrator, or use your own BYOK model."),
+  }),
+  shared_pool_disabled: (locale) => ({
+    title: tx(locale, "平台共享模型当前关闭。", "The shared model pool is disabled."),
+    description: tx(locale, "平台共享模型当前不可用，本次识别请求未发送。", "The shared model pool is currently unavailable. This recognition request was not sent."),
+    nextStep: tx(locale, "请在模型与 BYOK 页面配置自己的模型。", "Configure your own BYOK model."),
+  }),
   question_source_pages_out_of_range: (locale) => ({
     title: tx(locale, "请调整识别范围", "Adjust the recognition scope"),
     description: tx(locale, "填写的页码超出了 PDF 总页数，这份资料尚未调用识别模型。", "A selected page is outside this PDF. No recognition model was called for this source."),
@@ -126,6 +136,11 @@ const REASON_COPY: Record<string, ReasonFactory> = {
     title: tx(locale, "所选模型不支持图片输入", "The selected model does not support image input"),
     description: tx(locale, "这份文件需要读取图片或扫描页，但本阶段明确选择的模型拒绝了视觉输入。原文件已保存。", "This file requires image or scanned-page reading, but the model explicitly selected for this stage rejected visual input. The original is saved."),
     nextStep: tx(locale, "在作答上传页改选支持视觉的模型，直接复用原文件重试。", "Choose a vision-capable model on the submission upload page and retry using the preserved original."),
+  }),
+  image_recognition_unconfirmed: (locale) => ({
+    title: tx(locale, "图片识别尚未得到可靠内容", "Image recognition did not yield reliable content"),
+    nextStep: tx(locale, "返回上传页换清晰文件或换模型后继续。", "Return to upload and try a clearer file or another model."),
+    description: tx(locale, "文件模糊或模型识别效果可能导致低质量；不能据此判定不支持图片。请换清晰文件或换模型；图片能力未知时可主动验证。", "Blurry input or model accuracy can cause poor results; this does not prove lack of image support. Try a clearer file or another model, or verify image capability if unknown."),
   }),
   ocr_empty_result: (locale) => ({
     title: tx(locale, "OCR 没有读到可用文字", "OCR found no usable text"),

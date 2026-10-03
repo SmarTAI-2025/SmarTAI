@@ -89,6 +89,7 @@ class GradeRequest(BaseModel):
     language: str = "en"
     multi_sample_n: int | None = Field(default=None, ge=1, le=10)
     expected_workflow_revision: int = Field(ge=0)
+    request_id: str | None = Field(default=None, min_length=1, max_length=160, pattern=r"^[A-Za-z0-9_-]+$")
 
 
 class RetrySubmissionRecognitionRequest(BaseModel):
@@ -537,6 +538,7 @@ def start_grading(
             task_id=task_id,
             owner_id=current.id,
             expected_workflow_revision=request.expected_workflow_revision,
+            request_id=request.request_id,
         )
     except DomainError as exc:
         return domain_error_response(exc)
@@ -749,6 +751,7 @@ def _grading_setup_payload(task_id: str, owner_id: str, registry: ExpertRegistry
                 "scope", "is_shared", "editable", "max_concurrent", "rpm",
                 "verification_status", "base_url", "provider_kind",
                 "credential_id", "supports_vision",
+                "image_capability_status", "image_checked_at", "image_reason",
             )
         })
     default_id = resolve_owner_default_provider_id(owner_id, registry)

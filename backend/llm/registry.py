@@ -9,6 +9,7 @@ In-memory for now (matches current state pattern in dependencies.py).
 Swap to persistent storage (SQLite, Redis) later without changing callers.
 """
 from __future__ import annotations
+from backend.llm.image_capability import can_attempt_images
 
 import logging
 from datetime import datetime, timezone
@@ -17,14 +18,16 @@ from threading import Lock
 from urllib.parse import urlsplit
 
 from fastapi import Depends, HTTPException, status
+from langchain_core.messages import HumanMessage
 
 from backend.config import settings
+from backend.llm.concurrency import initial_concurrency
 from backend.llm.endpoint_policy import (
     ProviderEndpointError,
     is_user_defined_provider_endpoint,
 )
 from backend.models import ProviderConfig
-from backend.llm.providers import BaseProvider, build_provider
+from backend.llm.providers import BaseProvider, LLMResponse, ProviderRequestError, VisionImage, build_provider
 from backend.llm.provider_catalog import (
     PROVIDER_CATALOG_BY_TYPE,
     effective_wire_protocol,
@@ -66,16 +69,38 @@ def _iso_utc_timestamp(value: object) -> str | None:
     return datetime.fromtimestamp(float(value), tz=timezone.utc).isoformat()
 
 
-class SharedPoolLimitError(RuntimeError):
+class SharedPoolLimitError(ProviderRequestError):
     """Stable signal raised before an over-budget shared-pool invocation."""
 
     retryable = False
 
 
+# Admission units, not measured vendor tokens: keep length/4 for text and
+# reserve a fixed image allowance without serializing/counting base64 bytes.
+_SHARED_IMAGE_INPUT_ESTIMATE = 1024
+
+
+def _shared_input_estimate(messages: List[Any], *, image_count: int = 0) -> int:
+    characters = 0
+    for message in messages:
+        content = getattr(message, "content", "")
+        if not isinstance(content, list):
+            characters += len(str(content))
+            continue
+        for block in content:
+            if isinstance(block, dict) and block.get("type") in {"image_url", "image"}:
+                image_count += 1
+            elif isinstance(block, dict) and block.get("type") == "text":
+                characters += len(str(block.get("text", "")))
+            else:
+                characters += len(str(block))
+    return max(1, characters // 4) + image_count * _SHARED_IMAGE_INPUT_ESTIMATE
+
+
 class _SharedPoolUsageLimiter:
-    def consume(self, owner_id: str, messages: List[Any]) -> None:
+    def consume(self, owner_id: str, messages: List[Any], *, image_count: int = 0) -> None:
         from backend.services.model_quota import admit_model_call, ModelQuotaError
-        estimate = max(1, sum(len(str(getattr(message, "content", ""))) for message in messages) // 4)
+        estimate = _shared_input_estimate(messages, image_count=image_count)
         try:
             admit_model_call(owner_id, "shared", estimated_input_tokens=estimate)
         except ModelQuotaError as exc:
@@ -98,11 +123,22 @@ class _GuardedSharedProvider:
         self.model = provider.model
         self.config = provider.config
 
-    async def ainvoke(self, messages: List[Any]):
+    def _admit(self, messages: List[Any], *, image_count: int = 0) -> None:
         if not settings.shared_pool_enabled:
             raise SharedPoolLimitError("shared_pool_disabled")
-        _shared_pool_usage.consume(self._owner_id, messages)
-        return await self._provider.ainvoke(messages)
+        _shared_pool_usage.consume(self._owner_id, messages, image_count=image_count)
+
+    async def ainvoke(self, messages: List[Any], *, max_output_tokens: int | None = None) -> LLMResponse:
+        self._admit(messages)
+        options = {} if max_output_tokens is None else {"max_output_tokens": max_output_tokens}
+        return await self._provider.ainvoke(messages, **options)
+
+    async def ainvoke_vision(self, prompt: str, images: List[VisionImage], *, max_output_tokens: int | None = None) -> LLMResponse:
+        self._admit([HumanMessage(content=prompt)], image_count=len(images))
+        options = {} if max_output_tokens is None else {"max_output_tokens": max_output_tokens}
+        # Delegate on the underlying instance: its internal self.ainvoke and
+        # SDK retries belong to this admission, rather than charging again.
+        return await self._provider.ainvoke_vision(prompt, images, **options)
 
     def __getattr__(self, name: str):
         return getattr(self._provider, name)
@@ -203,7 +239,16 @@ class ExpertRegistry:
                 config.provider_type,
             )
             return
-        self.register(config)
+        provider_id = self.register(config)
+        if self._shared_owner_id and self._shared_owner_id != "anonymous":
+            from functools import partial
+            from backend.db.shared_image_repository import shared_image_evidence, record_shared_image_rejection
+            snapshot = shared_image_evidence(self._shared_owner_id, config)
+            provider = self._providers[provider_id]
+            provider.config.image_capability_status = snapshot.status
+            provider.config.image_checked_at = snapshot.checked_at
+            provider.config.image_reason = snapshot.reason
+            provider._image_rejection_recorder = partial(record_shared_image_rejection, self._shared_owner_id, snapshot)
 
     def register(
         self,
@@ -238,6 +283,9 @@ class ExpertRegistry:
                     "verification_error_code": verification_error_code,
                 }
             return registry_id
+        config = config.model_copy(update={
+            "scheduling_owner": self._shared_owner_id or "anonymous",
+        })
         provider = build_provider(config)
         registry_id = provider_id or provider.provider_id
         with self._lock:
@@ -431,14 +479,18 @@ class ExpertRegistry:
                     "display_name": resolved_display_name,
                     "configured_display_name": c.display_name,
                     "resolved_display_name": resolved_display_name,
-                    "max_concurrent": c.max_concurrent,
+                    # Expose the automatic starting estimate even for records
+                    # saved when concurrency was a manual field (usually 5).
+                    "max_concurrent": initial_concurrency(c.rpm),
+                    "concurrency_mode": "automatic",
                     "rpm": c.rpm,
                     "scope": "shared" if self._uses_shared_pool else "owner",
                     "is_shared": self._uses_shared_pool,
                     "editable": not self._uses_shared_pool,
-                    "supports_vision": bool(
-                        getattr(self._providers.get(pid), "supports_vision", False)
-                    ),
+                    "supports_vision": getattr(self._providers.get(pid), "supports_vision", None),
+                    "image_capability_status": c.image_capability_status,
+                    "image_checked_at": _iso_utc_timestamp(c.image_checked_at),
+                    "image_reason": c.image_reason,
                     "verification_status": (
                         "platform_managed" if self._uses_shared_pool
                         else verification.get("verification_status", "unverified")
@@ -533,7 +585,7 @@ class ExpertRegistry:
         """
         available = self.list_available()
         if preferred is not None:
-            if getattr(preferred, "supports_vision", False):
+            if can_attempt_images(preferred):
                 preferred_id = self._registry_id_for_provider(preferred)
                 if preferred_id is not None and any(
                     self._registry_id_for_provider(provider) == preferred_id
@@ -542,7 +594,7 @@ class ExpertRegistry:
                     return preferred
             return None
         for p in available:
-            if getattr(p, "supports_vision", False):
+            if can_attempt_images(p):
                 return p
         return None
 
@@ -604,7 +656,7 @@ class ExpertRegistryView:
                 continue
             available.append((provider_id, provider))
         if preferred is not None:
-            if getattr(preferred, "supports_vision", False):
+            if can_attempt_images(preferred):
                 preferred_id = self._registry._registry_id_for_provider(preferred)
                 if any(provider_id == preferred_id for provider_id, _ in available):
                     return preferred
@@ -613,7 +665,7 @@ class ExpertRegistryView:
             (
                 item
                 for _, item in available
-                if getattr(item, "supports_vision", False)
+                if can_attempt_images(item)
             ),
             None,
         )
@@ -728,6 +780,14 @@ def _build_scoped_registry(current) -> ExpertRegistry:
                 last_checked_at=stored.last_checked_at,
                 verification_error_code=stored.verification_error_code,
             )
+            provider = registry.get(stored.id)
+            if provider is not None:
+                from functools import partial
+                from backend.db.provider_repository import record_image_rejection
+                provider._image_rejection_recorder = partial(
+                    record_image_rejection, current.id, stored.id,
+                    expected_updated_at=stored.updated_at,
+                )
     except ValueError as exc:
         logger.error("Unable to load encrypted provider configurations for user %s", current.id)
         raise HTTPException(503, detail="Saved provider credentials cannot be loaded.") from exc

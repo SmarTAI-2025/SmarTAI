@@ -11,7 +11,7 @@ import { ReviewDetailPage } from "./ReviewDetailPage";
 
 const state = vi.hoisted(() => ({
   task: { task_id: "T1", name: "Review", status: "graded", workflow_revision: 5, problem_data: {}, student_data: {} },
-  result: { results: [] as unknown[] },
+  result: { results: [] as unknown[] } as { results: unknown[]; grading_run_status?: string },
   finalization: { remaining_review_count: 0, ready_for_confirmation: true, workflow_revision: 5 },
   bulk: vi.fn(), update: vi.fn(), finalize: vi.fn(), refetch: vi.fn(),
 }));
@@ -52,6 +52,7 @@ function show(detail = false, suffix = "") {
 beforeEach(async () => {
   await clearPageDrafts();
   vi.clearAllMocks();
+  state.result.grading_run_status = undefined;
   state.result.results = [{ student_id: "S1", student_name: "Sample", corrections: [correction("Q1"), correction("Q2", { score: 0, provisional_score: 0, teacher_comment: "Keep this" })] }];
   state.finalization = { remaining_review_count: 0, ready_for_confirmation: true, workflow_revision: 5 };
   state.bulk.mockResolvedValue(7);
@@ -61,6 +62,14 @@ beforeEach(async () => {
   HTMLElement.prototype.scrollIntoView = vi.fn();
 });
 describe("one-click grading review", () => {
+  it("provides a reachable partial failure retry while keeping the existing results visible", () => {
+    state.result.grading_run_status = "partial_failed";
+    state.result.results = [{ student_id: "S1", corrections: [correction("Q1"), correction("Q2", { score: null, provisional_score: null, result_status: "failed" })] }];
+    show();
+    expect(screen.getByRole("link", { name: "Retry entire batch" })).toHaveAttribute("href", "/tasks/T1/grading/preflight");
+    expect(screen.getByText(/Previous results and teacher edits are kept/)).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Some answers could not be graded" })).toBeInTheDocument();
+  });
   it("shows the total confirmed count even when no AI result required review", () => {
     state.result.results = [{ student_id: "S1", corrections: [correction("Q1", { teacher_score: 7 }), correction("Q2", { teacher_score: 0 })] }];
     show();

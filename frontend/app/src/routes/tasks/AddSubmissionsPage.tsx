@@ -10,6 +10,7 @@ import { Link, Navigate, useNavigate, useParams } from "react-router-dom";
 import { toast } from "sonner";
 import { getAPIErrorCode, normalizeAPIError } from "@/api/client";
 import { useParseSubmissions, useRetrySubmissionRecognition, useStageProviders, useTask } from "@/api/hooks";
+import { ImageRecognitionRecovery, useImageRecoveryReturn } from "@/components/models/ImageRecognitionRecovery";
 import { StageProviderSelect } from "@/components/models/StageProviderSelect";
 import { NewTaskStepper } from "@/components/new-task/NewTaskStepper";
 import { usePageDraft } from "@/hooks/usePageDraft";
@@ -58,9 +59,11 @@ function AddSubmissionsForm({ taskQuery }: { taskQuery: ReturnType<typeof useTas
   const [rosterFile, setRosterFile] = draft.field("rosterFile");
   const [identityMode, setIdentityMode] = draft.field("identityMode");
   const [recognitionProviderId, setRecognitionProviderId] = draft.field("recognitionProviderId");
+  useImageRecoveryReturn(draft.protection.loaded, setRecognitionProviderId);
   const [isDragging, setIsDragging] = useState(false);
   const [uploadPercent, setUploadPercent] = useState(0);
   const [formError, setFormError] = useState<string | null>(null);
+  const [recognitionError, setRecognitionError] = useState<unknown>(null);
   const [needsModel, setNeedsModel] = useState(false);
   const [missingUpload, setMissingUpload] = useState<"submission" | "roster" | null>(null);
 
@@ -222,6 +225,7 @@ function AddSubmissionsForm({ taskQuery }: { taskQuery: ReturnType<typeof useTas
         navigate(`/tasks/${taskId}/submissions/progress`);
       }
     } catch (error) {
+      setRecognitionError(error);
       setNeedsModel([
         "no_provider_configured",
         "recognition_provider_not_enabled",
@@ -442,6 +446,7 @@ function AddSubmissionsForm({ taskQuery }: { taskQuery: ReturnType<typeof useTas
                 : t("submissionUploadStart")}
           </button>
         </div>
+        <ImageRecognitionRecovery error={recognitionError ?? (canRetryOriginal ? task?.error : undefined)} expert={enabledExperts.find(e => e.provider_id === recognitionProviderId)} returnTo={`/tasks/${taskId}/submissions/upload`} controller={draft.protection.controller} isCurrent={draft.protection.isCurrent} locale={locale} />
       </div>
     </div>
   );

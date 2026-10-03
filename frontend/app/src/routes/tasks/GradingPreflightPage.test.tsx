@@ -25,6 +25,15 @@ const { useGradingSetup, useStartGrading, useTask } = await import("@/api/hooks"
 const mutateAsync = vi.fn();
 
 describe("GradingPreflightPage regrade mode", () => {
+  it("requires an explicit click for a regrade even after the normal countdown elapses", () => {
+    vi.useFakeTimers();
+    render(<MemoryRouter initialEntries={["/tasks/task-1/grading/preflight"]}><Routes>
+      <Route path="/tasks/:taskId/grading/preflight" element={<GradingPreflightPage />} />
+    </Routes></MemoryRouter>);
+    expect(screen.getByText(/may use model quota/)).toBeInTheDocument();
+    act(() => { vi.advanceTimersByTime(12_000); });
+    expect(mutateAsync).not.toHaveBeenCalled();
+  });
   beforeEach(() => {
     vi.clearAllMocks();
     mutateAsync.mockResolvedValue({ status: "started" });
@@ -304,7 +313,7 @@ describe("GradingPreflightPage regrade mode", () => {
     act(() => { vi.advanceTimersByTime(12_000); });
     expect(mutateAsync).not.toHaveBeenCalled();
     await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Start Grading Anyway" })); });
-    expect(mutateAsync).toHaveBeenCalledExactlyOnceWith({ taskId: "task-1", expectedWorkflowRevision: 8 });
+    expect(mutateAsync).toHaveBeenCalledExactlyOnceWith({ taskId: "task-1", expectedWorkflowRevision: 8, requestId: expect.any(String) });
     expect(screen.getByText("Grading started")).toBeInTheDocument();
     expect(task.data.student_data.student1.stu_ans[0].review_status).toBe("pending");
     expect(task.data.student_data.student1.identity_status).toBe("needs_review");
