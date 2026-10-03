@@ -483,8 +483,7 @@ def test_ocr_credential_migration_contract(tmp_path, monkeypatch):
         "script_location",
         str(repo_root / "backend/db/migrations"),
     )
-    monkeypatch.setenv("SMARTAI_DATABASE_URL", db_url)
-    monkeypatch.setenv("SMARTAI_DATABASE_HEAVY", "OFF")
+    config.attributes.update(database_url=db_url, database_heavy=False)
 
     command.upgrade(config, "head")
     inspector = inspect(create_engine(db_url))

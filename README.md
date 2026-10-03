@@ -391,6 +391,52 @@ VITE_SMARTAI_BACKEND_URL=https://your-backend.example.com
 
 生产环境应设置 `SMARTAI_DATABASE_AUTO_CREATE=false`，并统一通过 `alembic upgrade head` 管理数据库结构。部署完成后，可访问 `/ready` 检查数据库和存储是否可用。
 
+### 应用与 Alembic 的数据库目标
+
+运行时 engine/session 与 Alembic（在线迁移和离线 SQL）共用 `Settings` 已解析的
+`database_url`，并在连接前使用同一模式／URL 校验。模式默认 LIGHT（`SMARTAI_DATABASE_HEAVY=OFF`）；
+`ON` 选择 HEAVY。迁移不再额外优先读取旧变量。
+
+| 有效配置 | 选中的目标 |
+| --- | --- |
+| LIGHT，设置 `SMARTAI_DATABASE_URL_LIGHT` | 该 SQLite 地址 |
+| HEAVY，设置 `SMARTAI_DATABASE_URL_HEAVY` | 该 PostgreSQL 地址 |
+| 当前模式的专用地址缺失，只有旧 `SMARTAI_DATABASE_URL` | 使用旧地址，并校验类型与模式一致 |
+| LIGHT，所有地址缺失 | `sqlite:///data/smartai.db`，相对于当前工作目录 |
+| HEAVY，专用与旧地址均缺失 | 明确报错，不回退 SQLite |
+| 新旧地址同时存在且一致／不同 | 选择当前模式的专用地址；旧地址不另行覆盖迁移 |
+
+保留已有兼容例外：**进程环境**只提供非空旧 URL、没有任何非空 LIGHT／HEAVY URL 时，
+旧 URL 仍可覆盖 `.env` 中对应类型的地址。其他情况先按各字段的环境变量／`.env`
+来源优先级读取，再选择当前模式的地址。未选模式的专用地址不参与连接。
+地址缺失、URL 格式错误或选中地址类型不匹配会拒绝连接，错误不回显 URL／密码。
+仅旧地址且类型与模式不一致时，现在明确报错，不再静默改用默认 SQLite。
+
+通常不需要新增部署变量。建议使用对应模式的专用 URL，检查并清理已不用的旧变量；
+若仍使用旧单 URL，则保留它并设置匹配的模式。应用和迁移须从同一工作目录、同一配置
+启动；修改配置后重启应用。进程已导入的配置是快照，运行中修改环境变量不会单独改变
+迁移目标。若此前已经迁移了另一个库，本修复不会搬移数据、补合迁移链或自动 `stamp`。
+核对目标时不要输出含凭据的 URL。
+
+程序化隔离测试或本地重置可以显式注入 Alembic `Config.attributes`：
+
+```python
+cfg = Config("alembic.ini")
+cfg.attributes.update(
+    database_url="sqlite:////absolute/path/to/disposable-test.db",
+    database_heavy=False,
+)
+command.upgrade(cfg, "head")
+```
+
+这是调用方明确选择的独立目标；两项仍经同一 URL／模式校验，且不修改进程环境或全局
+`Settings`。未传模式时沿用应用模式，传入空 URL 会报错。`sqlalchemy.url` ini 项继续由
+已解析目标覆盖，不能用旧 ini 默认值或 `set_main_option` 另选生产数据库。
+对应运行时测试须显式绑定同一测试配置；不要依靠导入后修改旧环境变量来覆盖缓存。
+新增验证见 `backend/tests/test_database_target.py`：SQLite 双数据库哨兵、实际 session
+读写、错误脱敏、配置快照以及可选 PostgreSQL 隔离 schema。PostgreSQL 测试只在显式
+提供专用 `SMARTAI_TEST_POSTGRES_URL` 时执行，不得指向业务数据库。
+
 ---
 
 ## 这是什么

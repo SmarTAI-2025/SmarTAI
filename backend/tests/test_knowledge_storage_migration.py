@@ -15,8 +15,7 @@ def _config(db_url: str, monkeypatch) -> Config:
     config.set_main_option(
         "script_location", str(REPO_ROOT / "backend/db/migrations")
     )
-    monkeypatch.setenv("SMARTAI_DATABASE_URL", db_url)
-    monkeypatch.setenv("SMARTAI_DATABASE_HEAVY", "OFF")
+    config.attributes.update(database_url=db_url, database_heavy=False)
     return config
 
 

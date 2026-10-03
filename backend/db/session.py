@@ -7,6 +7,7 @@ from typing import Iterator
 
 from sqlalchemy import create_engine, event, text
 from sqlalchemy.engine import Engine, make_url
+from sqlalchemy.exc import ArgumentError
 from sqlalchemy.orm import Session, sessionmaker
 
 from backend.config import settings
@@ -43,29 +44,60 @@ def prepare_sqlite_parent(database_url: str) -> None:
     Path(url.database).parent.mkdir(parents=True, exist_ok=True)
 
 
-def validate_database_mode(database_url: str) -> None:
-    is_sqlite = database_url.startswith("sqlite")
-    is_postgres = database_url.startswith(("postgresql://", "postgresql+"))
-    if settings.database_heavy and not is_postgres:
+def validate_database_mode(
+    database_url: str, *, database_heavy: bool | None = None,
+) -> None:
+    heavy = settings.database_heavy if database_heavy is None else database_heavy
+    if not database_url:
         raise RuntimeError(
-            "SMARTAI_DATABASE_HEAVY=ON requires a PostgreSQL SMARTAI_DATABASE_URL."
+            "Database URL is missing; set SMARTAI_DATABASE_URL_HEAVY for HEAVY mode "
+            "or SMARTAI_DATABASE_URL_LIGHT for LIGHT mode (SMARTAI_DATABASE_URL "
+            "is the legacy fallback)."
         )
-    if not settings.database_heavy and not is_sqlite:
+    try:
+        parsed = make_url(database_url)
+    except (ArgumentError, TypeError, ValueError):
+        # SQLAlchemy parsing errors may include the complete credential-bearing
+        # input. Do not propagate their message or chained traceback.
+        raise RuntimeError("Invalid database URL; use a SQLAlchemy SQLite or PostgreSQL URL.") from None
+    is_sqlite = parsed.get_backend_name() == "sqlite"
+    is_postgres = parsed.get_backend_name() == "postgresql"
+    if heavy and not is_postgres:
         raise RuntimeError(
-            "SMARTAI_DATABASE_HEAVY=OFF requires a SQLite SMARTAI_DATABASE_URL."
+            "SMARTAI_DATABASE_HEAVY=ON requires a PostgreSQL database URL."
         )
+    if not heavy and not is_sqlite:
+        raise RuntimeError(
+            "SMARTAI_DATABASE_HEAVY=OFF requires a SQLite database URL."
+        )
+    if is_sqlite and any(value is not None for value in (
+        parsed.username, parsed.password, parsed.host, parsed.port,
+    )):
+        raise RuntimeError("Invalid SQLite database URL; use a file path without credentials or host.")
+
+
+def get_database_url(
+    database_url: str | None = None, *, database_heavy: bool | None = None,
+) -> str:
+    """Return the validated application target, or an explicit programmatic target.
+
+    Environment/.env precedence belongs to Settings. Never re-read a legacy
+    environment URL here: long-lived runtime and Alembic share that snapshot.
+    """
+    url = settings.database_url if database_url is None else database_url
+    validate_database_mode(url, database_heavy=database_heavy)
+    return url
 
 
 def configure_database(database_url: str | None = None) -> Engine:
     """Configure the process-wide engine, disposing any previous engine."""
     global _database_url, _engine, _session_factory
-    url = database_url or settings.database_url
+    url = get_database_url(database_url)
     with _lock:
         if _engine is not None and _database_url == url:
             return _engine
         if _engine is not None:
             _engine.dispose()
-        validate_database_mode(url)
         prepare_sqlite_parent(url)
         connect_args = {"check_same_thread": False} if url.startswith("sqlite") else {}
         _engine = create_engine(url, pool_pre_ping=True, connect_args=connect_args)

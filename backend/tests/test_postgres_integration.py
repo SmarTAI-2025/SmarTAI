@@ -33,23 +33,20 @@ pytestmark = pytest.mark.skipif(
 
 
 @pytest.fixture
-def pg_database():
+def pg_database(monkeypatch):
     from alembic import command
     from alembic.config import Config
     from backend.config import settings
     from backend.db.session import configure_database
     from sqlalchemy import create_engine
 
-    old_heavy = settings.database_heavy
-    settings.database_heavy = True
+    monkeypatch.setattr(settings, "database_url", PG_URL)
+    monkeypatch.setattr(settings, "database_heavy", True)
     configure_database(PG_URL)
     engine = create_engine(PG_URL)
     config = Config("alembic.ini")
     config.set_main_option("script_location", "backend/db/migrations")
-    old_url = os.environ.get("SMARTAI_DATABASE_URL")
-    old_heavy_env = os.environ.get("SMARTAI_DATABASE_HEAVY")
-    os.environ["SMARTAI_DATABASE_URL"] = PG_URL
-    os.environ["SMARTAI_DATABASE_HEAVY"] = "ON"
+    config.attributes.update(database_url=PG_URL, database_heavy=True)
     try:
         with engine.begin() as connection:
             connection.exec_driver_sql("DROP SCHEMA public CASCADE")
@@ -61,15 +58,6 @@ def pg_database():
             connection.exec_driver_sql("DROP SCHEMA public CASCADE")
             connection.exec_driver_sql("CREATE SCHEMA public")
         engine.dispose()
-        settings.database_heavy = old_heavy
-        if old_url is None:
-            os.environ.pop("SMARTAI_DATABASE_URL", None)
-        else:
-            os.environ["SMARTAI_DATABASE_URL"] = old_url
-        if old_heavy_env is None:
-            os.environ.pop("SMARTAI_DATABASE_HEAVY", None)
-        else:
-            os.environ["SMARTAI_DATABASE_HEAVY"] = old_heavy_env
 
 
 def _seed_user(role: str) -> str:
