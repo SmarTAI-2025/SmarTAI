@@ -3924,10 +3924,20 @@ def start_task_grading(
         request_revision=expected_workflow_revision,
     )
     if replay is not None:
-        if replay.status in {"queued", "running"}:
-            workflow_repository.bind_existing_active_grading_run(
-                task_id, owner_id=owner_id, run_id=replay.id,
-            )
+        if replay.status in {"queued", "running"} and (
+            workflow.grading_job_id != replay.id or workflow.active_job_id != replay.id
+        ):
+            try:
+                workflow_repository.bind_existing_active_grading_run(
+                    task_id, owner_id=owner_id, run_id=replay.id,
+                )
+            except NotFound:
+                # A fast worker may finish between binding the request and
+                # repairing a legacy pointer. The durable intent still wins.
+                replay = grading_repository.bind_grading_request(
+                    assignment_id=task_id, teacher_id=owner_id, request_id=request_id,
+                    request_revision=expected_workflow_revision,
+                )
         return _grading_request_response(task_id, replay)
     if workflow.grading_setup is None:
         raise InvalidTransition("grading_setup_required")

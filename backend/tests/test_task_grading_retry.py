@@ -306,3 +306,15 @@ def test_request_alias_and_publication_share_safe_lock_order(case, monkeypatch):
         assert a.result(timeout=10).id == first["job_id"]
         assert p.result(timeout=10)["status"] == "ok"
     assert start(case, "publication-alias", revision)["job_id"] == first["job_id"]
+
+
+def test_fast_terminal_legacy_run_during_pointer_repair_keeps_intent(case, monkeypatch):
+    legacy = grading_runs.create_run(assignment_id=case[0], teacher_id=case[1])
+    repair = workflows.bind_existing_active_grading_run
+    def finish_before_repair(*args, **kwargs):
+        finish(case, legacy.id, monkeypatch)
+        return repair(*args, **kwargs)
+    monkeypatch.setattr(workflows, "bind_existing_active_grading_run", finish_before_repair)
+    response = start(case, "join-fast-legacy")
+    assert response["status"] == "already_finished" and response["job_id"] == legacy.id
+    assert len(grading.list_runs_for_assignment(case[0], actor_id=case[1])) == 1
