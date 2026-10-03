@@ -4,6 +4,7 @@ import userEvent from "@testing-library/user-event";
 import { createMemoryRouter, RouterProvider, MemoryRouter } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { I18nProvider } from "@/i18n/I18nProvider";
+import { APIError } from "@/api/client";
 import { LoginPage } from "@/routes/LoginPage";
 
 vi.mock("@/api/hooks", () => ({ useLogin: vi.fn() }));
@@ -44,6 +45,16 @@ describe("LoginPage registration entry", () => {
 
     expect(screen.getByRole("link", { name: "邮箱验证注册" })).toHaveAttribute("href", "/register");
     expect(screen.queryByText(/邀请码/)).not.toBeInTheDocument();
+  });
+  it("explains private administrator denial in the administrator context", async () => {
+    (useLogin as unknown as ReturnType<typeof vi.fn>).mockReturnValue({ mutateAsync: vi.fn().mockRejectedValue(new APIError(403, "Admin access required")), isPending: false });
+    render(<QueryClientProvider client={new QueryClient()}><I18nProvider><MemoryRouter><LoginPage admin /></MemoryRouter></I18nProvider></QueryClientProvider>);
+    const user = userEvent.setup();
+    await user.type(screen.getByLabelText("用户名"), "teacher");
+    await user.type(screen.getByLabelText("密码", { exact: true }), "synthetic-password");
+    await user.click(screen.getByRole("button", { name: /^登录$/ }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("无法访问私有管理端，请使用启用的管理员账号。");
+    expect(screen.getByLabelText("密码", { exact: true })).toHaveValue("");
   });
   it.each([["/maintenance", "维护返回正确"], ["/admin/users", "管理返回正确"], ["https://evil.invalid/maintenance", "默认管理页"]])("preserves safe administrator return path %s", async (from, text) => {
     (useLogin as unknown as ReturnType<typeof vi.fn>).mockReturnValue({ mutateAsync: vi.fn().mockResolvedValue({ id: "synthetic-manager", role: "admin" }), isPending: false });

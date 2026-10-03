@@ -15,6 +15,7 @@ export default defineConfig(({ mode }) => {
     })), ...(mode === "e2e" ? [{
       src: normalizePath(path.resolve(__dirname, "e2e/fixtures/*.pdf")),
       dest: "e2e/fixtures",
+      rename: { stripBase: true },
     }] : [])],
   })],
   resolve: {

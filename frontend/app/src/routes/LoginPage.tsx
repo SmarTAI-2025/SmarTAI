@@ -3,7 +3,7 @@ import { FileCheck2, Loader2 } from "lucide-react";
 import { useRef, useState, type FormEvent } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import { useQueryClient } from "@tanstack/react-query";
-import { clearAuthToken } from "@/api/client";
+import { clearAuthToken, normalizeAPIError } from "@/api/client";
 import { useLogin } from "@/api/hooks";
 import { authKeys } from "@/api/hooks/keys";
 import {
@@ -66,7 +66,7 @@ export function LoginPage({ admin = false }: { admin?: boolean }) {
         setFormError(
           zh
             ? (admin ? "此入口仅供管理员使用，请更换账号。" : "当前工作台仅开放教师端，请使用教师账号登录。")
-            : "This workspace is currently for teachers. Sign in with a teacher account.",
+            : (admin ? "This entrance is for administrators. Sign in with an administrator account." : "This workspace is currently for teachers. Sign in with a teacher account."),
         );
         return;
       }
@@ -92,7 +92,9 @@ export function LoginPage({ admin = false }: { admin?: boolean }) {
       navigate(safeReturnPath(location.state), { replace: true });
     } catch (error) {
       setPassword("");
-      setFormError(localizedAuthError(error, locale, "login", loginType));
+      setFormError(admin && normalizeAPIError(error).status === 403
+        ? (zh ? "无法访问私有管理端，请使用启用的管理员账号。" : "Access to private administration was denied. Sign in with an active administrator account.")
+        : localizedAuthError(error, locale, "login", loginType));
     } finally {
       submitting.current = false;
     }
