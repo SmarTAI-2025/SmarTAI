@@ -178,6 +178,7 @@ beforeEach(() => {
   testState.locale = "zh-CN";
   mutateAsync.mockReset();
   taskData.workflow_revision = 7;
+  taskData.status = "problems_ready";
   taskRefetch.mockReset().mockResolvedValue({ data: taskData });
   sourcePreviewApi.getTaskSourceFiles.mockReset().mockResolvedValue({
     task_id: "task-1",
@@ -364,13 +365,83 @@ describe("QuestionPreparationDetailPage navigation", () => {
     await user.type(secondScore, "15");
     await user.click(screen.getByRole("button", { name: "保存" }));
 
-    await user.click(screen.getByRole("button", { name: "确认全部题目资料" }));
+    await user.click(screen.getByRole("button", { name: "一键确认全部题目已复核" }));
 
     expect(await screen.findByText("Submission upload destination")).toBeInTheDocument();
     expect(router.state.location.pathname).toBe("/tasks/task-1/submissions/upload");
     expect(mutateAsync.mock.calls.map(([input]) => input.expectedWorkflowRevision)).toEqual([
       7, 8, 9, 10, 11, 12,
     ]);
+  });
+
+  it("confirms unchanged content in one click without rewriting material or navigating", async () => {
+    mutateAsync.mockResolvedValue({ workflow_revision: 8 });
+    const router = renderPage();
+    await userEvent.click(screen.getByRole("button", { name: "确认第 1 题已复核" }));
+    expect(mutateAsync).toHaveBeenCalledExactlyOnceWith({
+      taskId: "task-1", qId: "Q1", expectedWorkflowRevision: 7, review_status: "confirmed",
+    });
+    expect(router.state.location.pathname).toBe("/tasks/task-1/questions/Q1/content");
+  });
+
+  it("allows review in a later stage without rewinding to submission upload", async () => {
+    taskData.status = "graded";
+    mutateAsync.mockResolvedValue({ workflow_revision: 8 });
+    const router = renderPage();
+    expect(screen.queryByRole("button", { name: "修改第 1 题满分与评分标准" })).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "一键确认全部题目已复核" }));
+    expect(mutateAsync).toHaveBeenCalledTimes(4);
+    expect(router.state.location.pathname).toBe("/tasks/task-1/questions/Q1/content");
+  });
+
+  it("stops bulk review at a stale or busy failure and preserves the page", async () => {
+    mutateAsync.mockResolvedValueOnce({ workflow_revision: 8 }).mockRejectedValueOnce(new Error("stale_workflow_revision"));
+    const router = renderPage();
+    await userEvent.click(screen.getByRole("button", { name: "一键确认全部题目已复核" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("已确认 1 道题；第 2 题未能保存");
+    expect(mutateAsync).toHaveBeenCalledTimes(2);
+    expect(mutateAsync.mock.calls[1][0]).toEqual({ taskId: "task-1", qId: "Q2", expectedWorkflowRevision: 8, review_status: "confirmed" });
+    expect(router.state.location.pathname).toBe("/tasks/task-1/questions/Q1/content");
+    await userEvent.click(screen.getByRole("button", { name: "重新加载" }));
+    expect(taskRefetch).toHaveBeenCalled();
+  });
+
+  it("keeps review buttons busy until confirmation finishes", async () => {
+    let finish!: (value: { workflow_revision: number }) => void;
+    mutateAsync.mockImplementation(() => new Promise((resolve) => { finish = resolve; }));
+    renderPage();
+    const button = screen.getByRole("button", { name: "确认第 1 题已复核" });
+    await userEvent.click(button);
+    expect(button).toBeDisabled();
+    expect(screen.getByRole("button", { name: "一键确认全部题目已复核" })).toBeDisabled();
+    await userEvent.click(button);
+    expect(mutateAsync).toHaveBeenCalledTimes(1);
+    finish({ workflow_revision: 8 });
+    await waitFor(() => expect(button).toBeEnabled());
+  });
+
+  it("opens a failed question outside the current filter directly", async () => {
+    mutateAsync.mockResolvedValueOnce({ workflow_revision: 8 }).mockRejectedValueOnce(new Error("workflow_busy"));
+    const router = renderPage("/tasks/task-1/questions/Q1/content?q=Q1");
+    await userEvent.click(screen.getByRole("button", { name: "一键确认全部题目已复核" }));
+    await userEvent.click(await screen.findByRole("button", { name: "前往该题" }));
+    expect(router.state.location.pathname).toBe("/tasks/task-1/questions/Q2/content");
+    expect(router.state.location.search).toBe("");
+    expect(router.state.location.hash).toBe("#question-Q2");
+  });
+
+  it("points to unsaved edits instead of silently disabling confirmation", async () => {
+    const user = userEvent.setup();
+    renderPage();
+    await user.click(screen.getByRole("button", { name: "修改第 1 题满分与评分标准" }));
+    await user.clear(screen.getByRole("spinbutton", { name: "第 1 题满分" }));
+    await user.type(screen.getByRole("spinbutton", { name: "第 1 题满分" }), "8");
+    await user.click(screen.getByRole("button", { name: "确认第 1 题已复核" }));
+    expect(screen.getByRole("alertdialog", { name: "请先保存正在修改的内容" })).toBeInTheDocument();
+    expect(mutateAsync).not.toHaveBeenCalled();
+    await user.click(screen.getByRole("button", { name: "前往未保存的修改" }));
+    expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+    expect(screen.getByRole("spinbutton", { name: "第 1 题满分" })).toHaveValue(8);
   });
 
   it("does not block navigation only because the default maximum score needs review", async () => {

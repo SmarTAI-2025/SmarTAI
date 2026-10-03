@@ -25,7 +25,7 @@ describe("task workflow rewinds", () => {
     expect(hasTaskReachedStep(task, 3)).toBe(false);
   });
 
-  it("disables submission and grading steps after a successful question replacement", () => {
+  it("allows submission upload after question replacement without opening stale grading", () => {
     const task = {
       task_id: "task-1",
       status: "problems_ready" as const,
@@ -43,8 +43,12 @@ describe("task workflow rewinds", () => {
       },
     };
 
-    expect(getTaskReachableStep(task)).toBe(2);
-    expect(hasTaskReachedStep(task, 3)).toBe(false);
+    expect(getTaskReachableStep(task)).toBe(3);
+    expect(hasTaskReachedStep(task, 3)).toBe(true);
     expect(hasTaskReachedStep(task, 5)).toBe(false);
+  });
+  it("keeps missing questions and active extraction before response upload", () => {
+    expect(getTaskReachableStep({ status: "problems_ready", problem_data: {} })).toBe(2);
+    expect(getTaskReachableStep({ status: "extracting_problems", problem_count: 2 })).toBe(1);
   });
 });
