@@ -78,7 +78,6 @@ interface ExpertFormValue {
   baseUrl: string;
   wireProtocol: WireProtocol | null;
   displayName: string;
-  maxConcurrent: number;
   rpm: number;
 }
 
@@ -126,7 +125,6 @@ export function ExpertsPage() {
           base_url: value.baseUrl || null,
           ...(value.wireProtocol ? { wire_protocol: value.wireProtocol } : {}),
           display_name: value.displayName || null,
-          max_concurrent: value.maxConcurrent,
           rpm: value.rpm,
         };
         await addExpert.mutateAsync(request);
@@ -140,7 +138,6 @@ export function ExpertsPage() {
           base_url: value.baseUrl || null,
           wire_protocol: value.wireProtocol,
           display_name: value.displayName || null,
-          max_concurrent: value.maxConcurrent,
           rpm: value.rpm,
         };
         await updateExpert.mutateAsync({
@@ -701,7 +698,7 @@ function ExpertTableRow({
       <td className="px-3 text-center align-middle text-xs text-muted-foreground">
         <span className="block">RPM {expert.rpm > 0 ? expert.rpm : "—"}</span>
         <span className="mt-1 block">
-          {zh ? "并发" : "Concurrency"} {expert.max_concurrent}
+          {zh ? "并发自动 · 上限 50" : "Auto concurrency · up to 50"}
         </span>
       </td>
       <td className="px-5 align-middle">
@@ -754,8 +751,7 @@ function ExpertMobileRow(props: ExpertRowProps) {
       <div className="flex items-center justify-between gap-3 text-xs text-muted-foreground">
         <VerificationBadge expert={expert} locale={locale} />
         <span>
-          RPM {expert.rpm > 0 ? expert.rpm : "—"} · {zh ? "并发" : "Concurrency"}{" "}
-          {expert.max_concurrent}
+          RPM {expert.rpm > 0 ? expert.rpm : "—"} · {zh ? "并发自动 · 上限 50" : "Auto concurrency · up to 50"}
         </span>
       </div>
       <ExpertActions {...props} />
@@ -1032,12 +1028,11 @@ function ExpertEditorDialog({
       ? target.expert.configured_display_name?.trim() ?? ""
       : "",
   );
-  const [maxConcurrent, setMaxConcurrent] = useState(
-    String(target.mode === "edit" ? target.expert.max_concurrent : 5),
+  const [rpm, setRpm] = useState(
+    target.mode === "edit" && target.expert.rpm > 0 ? String(target.expert.rpm) : "",
   );
-  const [rpm, setRpm] = useState(String(target.mode === "edit" ? target.expert.rpm : 0));
   const [formError, setFormError] = useState<string | null>(null);
-  const credentialProtection = useDraftProtection({ scope: "credential:expert", value: { provider, apiKey, model, baseUrl, wireProtocol, displayName, maxConcurrent, rpm }, secret: true, busy: pending, onRestore: (draft) => { setProvider(draft.provider); setApiKey(draft.apiKey); setModel(draft.model); setBaseUrl(draft.baseUrl); setWireProtocol(draft.wireProtocol); setDisplayName(draft.displayName); setMaxConcurrent(draft.maxConcurrent); setRpm(draft.rpm); } });
+  const credentialProtection = useDraftProtection({ scope: "credential:expert", value: { provider, apiKey, model, baseUrl, wireProtocol, displayName, rpm }, secret: true, busy: pending, onRestore: (draft) => { setProvider(draft.provider); setApiKey(draft.apiKey); setModel(draft.model); setBaseUrl(draft.baseUrl); setWireProtocol(draft.wireProtocol); setDisplayName(draft.displayName); setRpm(draft.rpm); } });
   const providerCatalog = catalog.find((item) => item.provider_type === provider);
   const baseUrlEditable = Boolean(
     providerCatalog?.custom_base_url_supported &&
@@ -1056,16 +1051,11 @@ function ExpertEditorDialog({
     setFormError(null);
     const nextModel = model.trim();
     const nextKey = apiKey.trim();
-    const nextConcurrency = Number(maxConcurrent);
     const nextRpm = Number(rpm);
     if (!nextModel || (target.mode === "add" && !nextKey)) {
       setFormError(
         zh ? "请填写模型名称和 API key。" : "Enter a model name and API key.",
       );
-      return;
-    }
-    if (!Number.isInteger(nextConcurrency) || nextConcurrency < 1 || nextConcurrency > 10) {
-      setFormError(zh ? "并发上限需要是 1–10 的整数。" : "Concurrency must be an integer from 1 to 10.");
       return;
     }
     if (!Number.isInteger(nextRpm) || nextRpm < 0 || nextRpm > 10_000) {
@@ -1102,7 +1092,6 @@ function ExpertEditorDialog({
           : "",
         wireProtocol: wireProtocol || null,
         displayName: displayName.trim(),
-        maxConcurrent: nextConcurrency,
         rpm: nextRpm,
       });
     } catch (error) {
@@ -1276,20 +1265,9 @@ function ExpertEditorDialog({
           </details>
         ) : null}
         <div className="grid gap-4 sm:grid-cols-2">
-          <Field label={zh ? "并发上限" : "Max concurrency"} hint="1–10">
-            <Input
-              value={maxConcurrent}
-              disabled={pending}
-              type="number"
-              inputMode="numeric"
-              min={1}
-              max={10}
-              onChange={(event) => setMaxConcurrent(event.target.value)}
-            />
-          </Field>
           <Field
             label="RPM"
-            hint={zh ? "0 表示不额外限速" : "0 means no additional limit"}
+            hint={zh ? "留空或填 0 表示不额外限速" : "Leave blank or enter 0 for no additional rate limit"}
           >
             <Input
               value={rpm}
@@ -1301,6 +1279,17 @@ function ExpertEditorDialog({
               onChange={(event) => setRpm(event.target.value)}
             />
           </Field>
+          <div className="grid content-start gap-1.5 text-sm">
+            <span className="font-medium">{zh ? "并发" : "Concurrency"}</span>
+            <span className="flex h-9 items-center rounded-md border bg-muted/40 px-3">
+              {zh ? "自动 · 上限 50" : "Automatic · up to 50"}
+            </span>
+            <p className="text-xs leading-5 text-muted-foreground">
+              {zh
+                ? "根据 RPM、请求耗时和服务器资源自动调节。资源不足时排队。"
+                : "Automatically adjusts to RPM, request duration and server capacity. Requests queue when capacity is full."}
+            </p>
+          </div>
         </div>
         {formError ? <InlineError message={formError} /> : null}
       </form>

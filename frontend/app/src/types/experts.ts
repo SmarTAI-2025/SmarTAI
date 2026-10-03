@@ -52,7 +52,6 @@ export interface AddExpertKeyRequest {
   base_url?: string | null;
   wire_protocol?: WireProtocol | null;
   display_name?: string | null;
-  max_concurrent?: number;
   rpm?: number;
 }
 
@@ -73,7 +72,6 @@ export interface UpdateExpertRequest {
   base_url?: string | null;
   wire_protocol?: WireProtocol | null;
   display_name?: string | null;
-  max_concurrent?: number;
   rpm?: number;
 }
 

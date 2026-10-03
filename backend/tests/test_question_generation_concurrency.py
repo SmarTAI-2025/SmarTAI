@@ -62,6 +62,7 @@ def _targets(problems: dict[str, dict]) -> list[dict[str, str]]:
 def _provider(max_concurrent: int = 5):
     return SimpleNamespace(
         provider_id="fake:model",
+        effective_concurrency=max_concurrent,
         config=SimpleNamespace(max_concurrent=max_concurrent, rpm=0),
     )
 
@@ -556,7 +557,7 @@ async def test_duplicate_target_is_rejected_before_any_provider_call(monkeypatch
     assert called is False
 
 
-def test_question_generation_concurrency_uses_byok_and_endpoint_cap(monkeypatch):
+def test_question_generation_concurrency_uses_automatic_and_endpoint_cap(monkeypatch):
     monkeypatch.setattr(
         question_preparation_agent.settings,
         "max_concurrent_llm_per_endpoint",
@@ -568,6 +569,11 @@ def test_question_generation_concurrency_uses_byok_and_endpoint_cap(monkeypatch)
     assert question_preparation_agent._major_question_generation_concurrency(
         _provider(10)
     ) == 3
+    # An old persisted manual/default value must not cap automatic generation.
+    monkeypatch.setattr(question_preparation_agent.settings, "max_concurrent_llm_per_endpoint", 50)
+    assert question_preparation_agent._major_question_generation_concurrency(
+        SimpleNamespace(config=SimpleNamespace(max_concurrent=5, rpm=10))
+    ) == 20
 
 
 @pytest.mark.asyncio

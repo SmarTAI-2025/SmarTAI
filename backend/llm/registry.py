@@ -19,6 +19,7 @@ from urllib.parse import urlsplit
 from fastapi import Depends, HTTPException, status
 
 from backend.config import settings
+from backend.llm.concurrency import initial_concurrency
 from backend.llm.endpoint_policy import (
     ProviderEndpointError,
     is_user_defined_provider_endpoint,
@@ -238,6 +239,9 @@ class ExpertRegistry:
                     "verification_error_code": verification_error_code,
                 }
             return registry_id
+        config = config.model_copy(update={
+            "scheduling_owner": self._shared_owner_id or "anonymous",
+        })
         provider = build_provider(config)
         registry_id = provider_id or provider.provider_id
         with self._lock:
@@ -431,7 +435,10 @@ class ExpertRegistry:
                     "display_name": resolved_display_name,
                     "configured_display_name": c.display_name,
                     "resolved_display_name": resolved_display_name,
-                    "max_concurrent": c.max_concurrent,
+                    # Expose the automatic starting estimate even for records
+                    # saved when concurrency was a manual field (usually 5).
+                    "max_concurrent": initial_concurrency(c.rpm),
+                    "concurrency_mode": "automatic",
                     "rpm": c.rpm,
                     "scope": "shared" if self._uses_shared_pool else "owner",
                     "is_shared": self._uses_shared_pool,

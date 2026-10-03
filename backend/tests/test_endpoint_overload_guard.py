@@ -55,10 +55,8 @@ from backend.tools.structured_llm import (
 def _clear_endpoint_state():
     """Endpoint guards are process-wide; isolate tests from each other."""
     llm_providers._ENDPOINT_BREAKERS.clear()
-    llm_providers._ENDPOINT_SEMAPHORES.clear()
     yield
     llm_providers._ENDPOINT_BREAKERS.clear()
-    llm_providers._ENDPOINT_SEMAPHORES.clear()
 
 
 # ─── B1: retry-policy classification ─────────────────────────────────────────

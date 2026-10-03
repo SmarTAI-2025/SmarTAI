@@ -65,17 +65,16 @@ class Settings(BaseSettings):
 
     # ─── Concurrency & performance ─────────────────────────────────────────────
     max_concurrent_jobs: int = 10
-    # Fallback semaphore size when a ProviderConfig has no explicit max_concurrent.
-    # GLM-4.5-Air rate limit is ~5/min; OpenAI / Gemini paid tiers commonly take
-    # 10+ — set fallback conservatively. Per-key override comes from BYOK config
-    # (ProviderConfig.max_concurrent).
-    max_concurrent_llm_per_provider: int = 5
+    # Automatic model concurrency = ceil(RPM * healthy mean seconds / 60),
+    # initially 120s, bounded by these operator caps and the host-wide hard 50.
+    # RPM 0 has no extra rate gate. Legacy saved concurrency is not a manual cap.
+    max_concurrent_llm_per_provider: int = 50
     # Shared cap on concurrent LLM calls to ONE endpoint (host), regardless of
     # how many provider configs point at it.  A shared relay fronted by several
     # BYOK entries would otherwise multiply the per-provider caps (4 entries ×
     # 5 = 20 parallel calls to one gateway).  Keep at or below
     # max_concurrent_llm_per_provider.
-    max_concurrent_llm_per_endpoint: int = 5
+    max_concurrent_llm_per_endpoint: int = 50
     llm_timeout: int = 600  # seconds
     llm_max_retries: int = 3
     # When the LLM returns a 429 / quota exceeded error AND the provider's
