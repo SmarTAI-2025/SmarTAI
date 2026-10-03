@@ -9,10 +9,7 @@ from __future__ import annotations
 
 import json
 import re
-import time
 import unicodedata
-from datetime import date
-from threading import Lock
 from typing import Any, Dict, List, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -93,11 +90,6 @@ _GENERIC_TERMS = (
     "筛选", "过滤", "查找", "找到", "显示", "列出", "一下", "并且", "以及",
     "please", "show", "find", "filter", "tasks", "task", "all", "and",
 )
-
-_last_llm_at: Dict[str, float] = {}
-_llm_daily_usage: Dict[tuple[str, str], int] = {}
-_llm_limit_lock = Lock()
-
 
 def _normalise_text(value: str) -> str:
     return unicodedata.normalize("NFKC", value).strip()
@@ -381,20 +373,13 @@ async def interpret_history_query(
                 "info",
             )
         else:
-            now = time.monotonic()
-            cooldown = max(0.0, float(settings.history_query_llm_cooldown_seconds))
-            day_key = (owner_id, date.today().isoformat())
-            daily_limit = max(0, int(settings.history_query_llm_daily_limit))
-            with _llm_limit_lock:
-                last = _last_llm_at.get(owner_id, 0.0)
-                daily_used = _llm_daily_usage.get(day_key, 0)
-                allowed = daily_limit > 0 and daily_used < daily_limit
-                if allowed and now - last >= cooldown:
-                    _llm_daily_usage[day_key] = daily_used + 1
-                    _last_llm_at[owner_id] = now
-                else:
-                    provider = None
-                    llm_rate_limited = True
+            from backend.services.model_quota import admit_model_call, ModelQuotaError
+            from sqlalchemy.exc import SQLAlchemyError
+            try:
+                admit_model_call(owner_id, "history")
+            except (ModelQuotaError, SQLAlchemyError):
+                provider = None
+                llm_rate_limited = True
             if llm_rate_limited:
                 await reporter._emit_message(
                     "HistoryQueryAgent: per-owner cooldown/daily limit; using deterministic fallback",
@@ -504,7 +489,7 @@ async def interpret_history_query(
         # conditions already parsed above remain active alongside it.
         filters.q = unresolved[:120]
         if llm_rate_limited:
-            explanation += " 模型请求额度或冷却中，剩余文本按普通关键词搜索。"
+            explanation += " 模型日额度已用完或尚在冷却中；日额度于 UTC 00:00 重置，可等待、联系管理员调整，或继续关键词搜索。"
         elif llm_disabled:
             explanation += " 模型增强当前关闭，剩余文本按普通关键词搜索。"
         else:

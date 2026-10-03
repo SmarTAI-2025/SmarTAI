@@ -14,6 +14,7 @@ from pydantic import BaseModel, Field
 from backend.auth import get_current_user, require_teacher
 from backend.domain.errors import DomainError
 from backend.api.errors import domain_error_response
+from backend.analytics.admin_usage import track_usage_event
 from backend.models import User
 from backend.services import courses as course_service
 from backend.tools.catalog_matching import (
@@ -87,6 +88,7 @@ def create_course(req: CreateCourseRequest, current: User = Depends(require_teac
         )
     except DomainError as exc:
         return domain_error_response(exc)
+    track_usage_event(event_name="course_created", user_id=current.id, role=current.role)
     return {**_serialize(course), "created": True}
 
 

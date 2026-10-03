@@ -35,6 +35,7 @@ export function LibraryDialog({
     const previousOverflow = document.body.style.overflow;
     document.body.style.overflow = "hidden";
     const focusFrame = window.requestAnimationFrame(() => {
+      // Do not steal focus if a user already clicked a field before this frame.
       if (dialogRef.current?.contains(document.activeElement)) return;
       dialogRef.current?.querySelector<HTMLElement>("input, textarea, select, button")?.focus();
     });

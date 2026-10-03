@@ -73,32 +73,13 @@ class SharedPoolLimitError(RuntimeError):
 
 
 class _SharedPoolUsageLimiter:
-    def __init__(self) -> None:
-        self._usage: Dict[tuple[str, str], tuple[int, int]] = {}
-        self._lock = Lock()
-
     def consume(self, owner_id: str, messages: List[Any]) -> None:
-        day = datetime.now(timezone.utc).date().isoformat()
-        estimated_tokens = max(
-            1,
-            sum(len(str(getattr(message, "content", ""))) for message in messages) // 4,
-        )
-        request_limit = max(0, int(settings.shared_pool_daily_request_limit))
-        token_limit = max(0, int(settings.shared_pool_daily_estimated_token_limit))
-        with self._lock:
-            for key in list(self._usage):
-                if key[1] != day:
-                    self._usage.pop(key, None)
-            key = (owner_id, day)
-            requests, tokens = self._usage.get(key, (0, 0))
-            if (
-                request_limit <= 0
-                or token_limit <= 0
-                or requests + 1 > request_limit
-                or tokens + estimated_tokens > token_limit
-            ):
-                raise SharedPoolLimitError("shared_pool_daily_limit_reached")
-            self._usage[key] = (requests + 1, tokens + estimated_tokens)
+        from backend.services.model_quota import admit_model_call, ModelQuotaError
+        estimate = max(1, sum(len(str(getattr(message, "content", ""))) for message in messages) // 4)
+        try:
+            admit_model_call(owner_id, "shared", estimated_input_tokens=estimate)
+        except ModelQuotaError as exc:
+            raise SharedPoolLimitError(str(exc)) from None
 
 
 _shared_pool_usage = _SharedPoolUsageLimiter()

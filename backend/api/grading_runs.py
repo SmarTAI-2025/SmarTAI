@@ -13,6 +13,7 @@ from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 
 from backend.api.errors import domain_error_response
+from backend.analytics.admin_usage import track_usage_event
 from backend.auth import get_current_user, require_teacher
 from backend.domain.errors import DomainError
 from backend.models import User
@@ -36,6 +37,7 @@ def start_run(req: StartRunRequest, current: User = Depends(require_teacher)):
         run = grading_runs.start_run(assignment_id=req.assignment_id, teacher_id=current.id)
     except DomainError as exc:
         return domain_error_response(exc)
+    track_usage_event(event_name="grading_run_started", user_id=current.id, role=current.role)
     return grading_runs._serialize_run(run)
 
 

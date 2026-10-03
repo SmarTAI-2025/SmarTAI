@@ -23,6 +23,7 @@ from backend.db.models import (
     UserRecord,
 )
 from backend.db.session import session_scope
+from backend.services.business_config import read_business_config
 from backend.services.email_sender import EmailSender, get_email_sender, password_reset_message
 from backend.services.email_registration import email_domain_allowed, normalize_email
 
@@ -117,11 +118,11 @@ def _rate_limit_digest(purpose: str, value: str) -> str:
     ).hexdigest()
 
 
-def _neutral_response() -> dict[str, int | str]:
+def _neutral_response(resend_seconds: int | None = None) -> dict[str, int | str]:
     return {
         "status": "reset_link_requested",
         "expires_in_seconds": settings.email_verification_expiry_seconds,
-        "resend_after_seconds": settings.email_verification_resend_seconds,
+        "resend_after_seconds": settings.email_verification_resend_seconds if resend_seconds is None else resend_seconds,
     }
 
 
@@ -210,9 +211,9 @@ def request_password_reset(
     try:
         normalized_email = normalize_email(email)
     except ValueError:
-        return _neutral_response()
-    if not email_domain_allowed(normalized_email, settings.allowed_email_domains):
-        return _neutral_response()
+        with session_scope() as session:
+            config = read_business_config(session)
+        return _neutral_response(config.values["email_verification_resend_seconds"])
 
     with _process_reset_flow_locks(normalized_email, source_ip):
         return _request_password_reset_locked(
@@ -250,6 +251,15 @@ def _request_password_reset_locked(
             normalized_email=normalized_email,
             source_ip=source_ip,
         )
+        config = read_business_config(session)
+        resend_seconds = config.values["email_verification_resend_seconds"]
+        # Once administrators manage registration rules, recovery eligibility
+        # cannot depend on either the current or any previous registration list.
+        # All valid addresses share the limiter and deferred lookup boundary.
+        if not config.registration_rules_managed and not email_domain_allowed(
+            normalized_email, settings.allowed_email_domains
+        ):
+            return _neutral_response(resend_seconds)
         session.execute(
             delete(PasswordResetRateEventRecord).where(
                 PasswordResetRateEventRecord.created_at < window_start
@@ -280,20 +290,20 @@ def _request_password_reset_locked(
         if email_latest is not None:
             cooldown_remaining = (
                 email_latest
-                + settings.email_verification_resend_seconds
+                + resend_seconds
                 - now
             )
             if cooldown_remaining > 0:
                 retry_candidates.append(max(1, math.ceil(cooldown_remaining)))
         if (
-            email_count >= settings.email_verification_hourly_email_limit
+            email_count >= config.values["email_verification_hourly_email_limit"]
             and email_oldest is not None
         ):
             retry_candidates.append(
                 max(1, math.ceil(email_oldest + 3600 - now))
             )
         if (
-            ip_count >= settings.email_verification_hourly_ip_limit
+            ip_count >= config.values["email_verification_hourly_ip_limit"]
             and ip_oldest is not None
         ):
             retry_candidates.append(
@@ -318,6 +328,7 @@ def _request_password_reset_locked(
         source_ip=source_ip,
         sender=sender,
         requested_at=now,
+        resend_seconds=resend_seconds,
     )
     if delivery_scheduler is None:
         delivery()
@@ -326,12 +337,12 @@ def _request_password_reset_locked(
         # Otherwise SMTP (or a known-account-only scheduling path) can leak
         # account existence through the anonymous HTTP response latency.
         delivery_scheduler(delivery)
-    return _neutral_response()
+    return _neutral_response(resend_seconds)
 
 
 def _deliver_password_reset(
     *, normalized_email: str, source_ip: str | None,
-    sender: EmailSender, requested_at: float,
+    sender: EmailSender, requested_at: float, resend_seconds: int | None = None,
 ) -> None:
     """Best-effort delivery after response; never a claim of durable mail.
 
@@ -368,6 +379,7 @@ def _deliver_password_reset(
                 return
             user_id = user.id
             username = user.username
+            admin_account = user.role == "admin"
 
             row = PasswordResetRequestRecord(
                 id=request_id,
@@ -375,7 +387,7 @@ def _deliver_password_reset(
                 token_digest=digest_reset_token(raw_token),
                 created_at=now,
                 expires_at=now + settings.email_verification_expiry_seconds,
-                resend_available_at=now + settings.email_verification_resend_seconds,
+                resend_available_at=now + (settings.email_verification_resend_seconds if resend_seconds is None else resend_seconds),
                 delivery_status="pending",
                 source_ip=source_ip,
             )
@@ -385,7 +397,14 @@ def _deliver_password_reset(
         assert user_id is not None and username is not None
         delivery_stage = "smtp"
         try:
-            subject, text_body, html_body = password_reset_message(username, raw_token)
+            if admin_account:
+                import os
+                origin = os.getenv("SMARTAI_ADMIN_FRONTEND_ORIGIN", "").strip()
+                if not origin:
+                    raise ValueError("Private administrator origin is required")
+                subject, text_body, html_body = password_reset_message(username, raw_token, origin=origin)
+            else:
+                subject, text_body, html_body = password_reset_message(username, raw_token)
             sender.send(normalized_email, subject, text_body, html_body)
         except Exception:
             logger.warning(
@@ -479,6 +498,7 @@ def confirm_password_reset(token: str, new_password: str) -> dict[str, str]:
                 other.superseded_at = now
             user.password_hash = hash_password(new_password)
             user.auth_invalid_before = now
+            user.auth_version += 1
             row.consumed_at = now
             revoke_all_refresh_sessions(session, user.id, now=now)
     return {"status": "password_reset"}

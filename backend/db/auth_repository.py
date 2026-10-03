@@ -13,6 +13,7 @@ from sqlalchemy import func, select
 from backend.auth import create_token, verify_password
 from backend.db.models import InviteCodeRecord, RefreshSessionRecord, UserRecord
 from backend.db.session import session_scope
+from backend.analytics.admin_usage import record_usage_event_in_session
 from backend.models import User
 
 
@@ -65,7 +66,9 @@ def _user_from_record(record: UserRecord) -> User:
         password_hash=record.password_hash,
         created_at=record.created_at,
         is_active=record.is_active,
+        is_read_only=record.is_read_only,
         auth_invalid_before=record.auth_invalid_before,
+        auth_version=record.auth_version,
     )
 
 
@@ -82,6 +85,9 @@ def create_invite(*, invited_by: str, email: str | None, role: str, course_id: s
 
 def _ensure_unique_identity(session, *, username: str, email: str) -> None:
     normalized_email = _canonical_email(email)
+    from backend.db.models import BlockedRegistrationEmailRecord
+    if normalized_email and session.get(BlockedRegistrationEmailRecord, normalized_email) is not None:
+        raise AuthRepositoryError("Registration unavailable")
     if session.scalar(select(UserRecord).where(UserRecord.username == username)) is not None:
         raise AuthRepositoryError("Username already exists")
     if normalized_email and session.scalar(
@@ -99,6 +105,13 @@ def _persist_user(*, session, username: str, email: str, password_hash: str,
                            role=user.role, password_hash=user.password_hash,
                            is_active=True, created_at=user.created_at, updated_at=now))
     session.flush()  # materialize the row so FK references in the same txn succeed on SQLite
+    record_usage_event_in_session(
+        session,
+        event_name="account_created",
+        user_id=user.id,
+        role=user.role,
+        occurred_at=now,
+    )
     return user
 
 
@@ -254,7 +267,14 @@ def authenticate_and_create_session(
                 now=now,
             )
             user = _user_from_record(user_record)
-            access = create_token(user.id, user.role)
+            access = create_token(user.id, user.role, auth_version=user_record.auth_version)
+            record_usage_event_in_session(
+                session,
+                event_name="login_success",
+                user_id=user.id,
+                role=user.role,
+                occurred_at=now,
+            )
             return refresh, user, access
 
 
@@ -298,7 +318,7 @@ def rotate_refresh_session(raw: str, days: int) -> tuple[str, User, str] | None:
                 now=now,
             )
             user = _user_from_record(user_record)
-            access = create_token(user.id, user.role)
+            access = create_token(user.id, user.role, auth_version=user_record.auth_version)
             return new_raw, user, access
 
 

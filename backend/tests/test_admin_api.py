@@ -58,7 +58,7 @@ def test_public_user_payload_has_no_course_ids():
     assert me.status_code == 200
     body = me.json()
     assert "course_ids" not in body, "public user payload must not expose course_ids"
-    assert set(body.keys()) == {"id", "username", "email", "role", "is_active", "created_at"}
+    assert set(body.keys()) == {"id", "username", "email", "role", "is_active", "is_read_only", "created_at"}
 
 
 def test_admin_can_list_users_and_filter():
@@ -97,7 +97,7 @@ def test_admin_can_activate_and_deactivate_user():
     assert client.post("/auth/login", json={"username": "stu_one", "password": "secret-pass"}).status_code == 200
 
 
-def test_admin_cannot_deactivate_teacher_who_owns_a_course():
+def test_admin_can_block_login_without_deleting_owned_course():
     client, token = _admin_client()
     # Create a teacher + a course they own
     invite = client.post("/admin/invites", headers={"Authorization": f"Bearer {token}"}, json={"role": "teacher"})
@@ -107,7 +107,12 @@ def test_admin_cannot_deactivate_teacher_who_owns_a_course():
     create_course(teacher_id=teacher_id, name="Owned")
 
     resp = client.patch(f"/admin/users/{teacher_id}/active", headers={"Authorization": f"Bearer {token}"}, json={"is_active": False})
-    assert resp.status_code == 409
+    assert resp.status_code == 200
+    from backend.db.models import CourseRecord
+    from backend.db.session import session_scope
+    from sqlalchemy import select
+    with session_scope() as session:
+        assert session.scalar(select(CourseRecord.id).where(CourseRecord.teacher_id == teacher_id)) is not None
 
 
 def test_admin_can_create_teacher_and_student_invites():

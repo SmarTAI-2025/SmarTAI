@@ -9,6 +9,7 @@ retained + education table from an empty database.
 from __future__ import annotations
 
 import json
+import pytest
 from io import StringIO
 from pathlib import Path
 
@@ -18,6 +19,22 @@ from alembic.script import ScriptDirectory
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
+
+
+@pytest.mark.parametrize("previous_head", ["0018_knowledge_ingestion", "0019_admin_usage_events", "0022_account_closures"])
+def test_admin_knowledge_merge_preserves_existing_users(previous_head, tmp_path, monkeypatch):
+    from sqlalchemy import create_engine, inspect, text
+    url = f"sqlite:///{tmp_path / 'existing.db'}"
+    cfg = _alembic_config(url, monkeypatch)
+    command.upgrade(cfg, previous_head)
+    engine = create_engine(url)
+    with engine.begin() as connection:
+        connection.execute(text("INSERT INTO users (id, username, role, password_hash, is_active, created_at, updated_at) VALUES ('existing', 'existing', 'teacher', 'legacy-hash', true, 1, 1)"))
+    command.upgrade(cfg, "head")
+    with engine.connect() as connection:
+        assert connection.execute(text("SELECT password_hash, auth_version FROM users WHERE id='existing'")).one() == ("legacy-hash", 0)
+        assert connection.execute(text("SELECT version_num FROM alembic_version")).scalars().all() == ["0024_model_daily_usage"]
+    assert {"admin_audit_logs", "admin_usage_events", "knowledge_ingestions", "business_configuration", "user_storage_configuration"} <= set(inspect(engine).get_table_names())
 
 
 def _alembic_config(db_url: str, monkeypatch) -> Config:
@@ -218,7 +235,7 @@ def test_mail_migrations_extend_provider_routing_as_one_head(tmp_path, monkeypat
     script = ScriptDirectory.from_config(cfg)
 
     assert [revision.revision for revision in script.get_revisions("heads")] == [
-        "0018_knowledge_ingestion"
+        "0024_model_daily_usage"
     ]
 
     command.upgrade(cfg, "0012_provider_routing_pref")

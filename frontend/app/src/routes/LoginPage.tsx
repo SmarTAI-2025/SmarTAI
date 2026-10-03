@@ -18,7 +18,7 @@ import { Input } from "@/components/ui/Input";
 import { useI18n } from "@/i18n/I18nProvider";
 import { localizedAuthError } from "@/lib/authErrors";
 
-export function LoginPage() {
+export function LoginPage({ admin = false }: { admin?: boolean }) {
   const navigate = useNavigate();
   const location = useLocation();
   const queryClient = useQueryClient();
@@ -59,15 +59,29 @@ export function LoginPage() {
         ? { login_type: "email", email: identity, password }
         : { username: identity, password });
 
-      if (user.role !== "teacher" && user.role !== "admin") {
+      if ((admin && user.role !== "admin") || (user.role !== "teacher" && user.role !== "admin")) {
         clearAuthToken();
         queryClient.clear();
         setPassword("");
         setFormError(
           zh
-            ? "当前工作台仅开放教师端，请使用教师账号登录。"
+            ? (admin ? "此入口仅供管理员使用，请更换账号。" : "当前工作台仅开放教师端，请使用教师账号登录。")
             : "This workspace is currently for teachers. Sign in with a teacher account.",
         );
+        return;
+      }
+
+      if (user.role === "admin") {
+        queryClient.removeQueries({ predicate: (query) => query.queryKey[0] !== authKeys.me[0] });
+        const adminUrl = import.meta.env.VITE_SMARTAI_ADMIN_URL?.trim();
+        if (!admin) {
+          clearAuthToken(); queryClient.clear(); setPassword("");
+          if (adminUrl) window.location.assign(adminUrl);
+          else setFormError("此账号具有管理权限，请通过已配置的私有管理站点登录。当前站点未配置管理端地址。");
+        } else {
+          const returned = safeReturnPath(location.state);
+          navigate(returned === "/maintenance" || returned === "/admin" || returned.startsWith("/admin/") ? returned : "/admin", { replace: true });
+        }
         return;
       }
 
@@ -93,19 +107,19 @@ export function LoginPage() {
           </span>
           <div>
             <p className="text-xs font-semibold text-primary">
-              {zh ? "教师端" : "Teacher workspace"}
+              {admin ? "管理员登录" : zh ? "教师端" : "Teacher workspace"}
             </p>
             <p className="mt-0.5 text-xs text-muted-foreground">
-              {zh ? "题目 · 作答 · 复核 · 分析" : "Questions · Submissions · Review · Insights"}
+              {admin ? "账号管理 · 运行监控 · 操作审计" : zh ? "题目 · 作答 · 复核 · 分析" : "Questions · Submissions · Review · Insights"}
             </p>
           </div>
         </div>
 
         <h1 className="mt-5 text-[27px] font-semibold tracking-[-0.025em]">
-          {zh ? "SmarTAI 智能批改工作台" : "SmarTAI Intelligent Grading Workspace"}
+          {admin ? "SmarTAI 管理端" : zh ? "SmarTAI 智能批改工作台" : "SmarTAI Intelligent Grading Workspace"}
         </h1>
         <p className="mt-2 text-sm leading-6 text-muted-foreground">
-          {zh
+          {admin ? "登录后处理必要的账号管理，查看平台运行与使用情况。" : zh
             ? "登录后继续处理批改任务、教师复核与结果分析。"
             : "Sign in to continue grading tasks, teacher review, and results analysis."}
         </p>
@@ -171,7 +185,7 @@ export function LoginPage() {
           </Button>
         </form>
 
-        <div className="mt-6 border-t pt-5 text-center text-sm text-muted-foreground">
+        {!admin && <div className="mt-6 border-t pt-5 text-center text-sm text-muted-foreground">
           {zh ? "还没有账号？" : "Need an account?"}{" "}
           <Link
             className="font-semibold text-primary outline-none hover:underline focus-visible:rounded focus-visible:ring-2 focus-visible:ring-ring"
@@ -179,7 +193,7 @@ export function LoginPage() {
           >
             {zh ? "邮箱验证注册" : "Register with email verification"}
           </Link>
-        </div>
+        </div>}
       </AuthCard>
     </AuthFrame>
   );
