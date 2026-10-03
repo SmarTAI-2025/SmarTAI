@@ -72,6 +72,7 @@ export function HistoryTagPopover({ task, tags }: { task: TaskLite; tags: TaskTa
       }
       if (!localDraft.isCurrent()) return;
       await localDraft.clear();
+      if (!localDraft.isCurrent()) return;
       setSearch("");
       setNewColor("slate");
     } catch (error) {
@@ -92,6 +93,7 @@ export function HistoryTagPopover({ task, tags }: { task: TaskLite; tags: TaskTa
       await updateTag.mutateAsync({ tagId: editingTag.id, patch: { name, color: editingColor } });
       if (!localDraft.isCurrent()) return;
       await localDraft.clear();
+      if (!localDraft.isCurrent()) return;
       setEditingTag(null);
     } catch (error) {
       toast.error(normalizeAPIError(error).message);
@@ -111,6 +113,7 @@ export function HistoryTagPopover({ task, tags }: { task: TaskLite; tags: TaskTa
       await deleteTag.mutateAsync(tag.id);
       if (!localDraft.isCurrent()) return;
       await localDraft.clear();
+      if (!localDraft.isCurrent()) return;
       setEditingTag(null);
       toast.success(t("historyTagDeleteSuccess"));
     } catch (error) {

@@ -60,7 +60,8 @@ const COLORS = {
 const CHART_PALETTE = [COLORS.rose, COLORS.amber, COLORS.teal, COLORS.primary, COLORS.violet];
 const PIE_COLORS = [COLORS.teal, COLORS.rose, COLORS.violet];
 
-export function VisualizationAnalysisPage({ locale, taskId, version, model, provisional = false }: { locale: Locale; taskId: string; version: number; model: ResultsModel; provisional?: boolean }) {
+export function VisualizationAnalysisPage(props: { locale: Locale; taskId: string; version: number; model: ResultsModel; provisional?: boolean }) { return <VisualizationDraftPage key={props.taskId} {...props} />; }
+function VisualizationDraftPage({ locale, taskId, version, model, provisional = false }: { locale: Locale; taskId: string; version: number; model: ResultsModel; provisional?: boolean }) {
   const [searchParams, setSearchParams] = useSearchParams();
   const scope: ScopeFilter = "all";
   const students = useMemo(() => model.students.filter((student) => matchesScope(student, scope)), [model.students, scope]);
@@ -81,9 +82,11 @@ export function VisualizationAnalysisPage({ locale, taskId, version, model, prov
   const [preview, setPreview] = useState<ChartAnalyticsResult | null>(null);
   const [savedCharts, setSavedCharts] = useState<SavedChart[]>([]);
   const chartQuery = useAnalyticsQuery();
-  const localDraft = useDraftProtection({ scope: `charts:${taskId}`, value: { prompt, preview, savedCharts }, version: String(version), onRestore: (draft) => { setPrompt(draft.prompt); setPreview(draft.preview); setSavedCharts(draft.savedCharts); } });
+  const localDraft = useDraftProtection({ scope: `charts:${taskId}`, value: { prompt, preview, savedCharts }, version: String(version), busy: chartQuery.isPending, onRestore: (draft) => { setPrompt(draft.prompt); setPreview(draft.preview); setSavedCharts(draft.savedCharts); } });
   const generation = useRef(0);
-  useEffect(() => { setPreview(null); setExecution(null); setSavedCharts([]); conversation.current = [];
+  useEffect(() => {
+    if (!localDraft.dirty && !localDraft.savedAt && !localDraft.conflict) { setPreview(null); setExecution(null); setSavedCharts([]); }
+    conversation.current = [];
     return () => { generation.current += 1; };
   }, [taskId, version]);
   const cancelChart = () => { generation.current += 1; chartQuery.reset(); };
@@ -101,7 +104,7 @@ export function VisualizationAnalysisPage({ locale, taskId, version, model, prov
     const ticket = ++generation.current;
     chartQuery.mutate({ taskId, question, mode: "chart", history: conversation.current }, {
       onSuccess: (result) => {
-        if (ticket !== generation.current) return;
+        if (ticket !== generation.current || !localDraft.isCurrent()) return;
         if (result.mode === "query") { setExecution(result.execution); setPreview(null);
           if (result.execution.recognized) conversation.current = [...conversation.current, question].slice(-4);
           return; }

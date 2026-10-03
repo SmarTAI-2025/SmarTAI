@@ -108,7 +108,8 @@ function QuestionMaterialImportReviewPageForm() {
         expectedWorkflowRevision: plan.workflow_revision,
       });
       if (!localDraft.isCurrent()) return;
-      await localDraft.clear();
+      if (!await localDraft.clear({ acceptedIds, overwriteIds })) return;
+      if (!localDraft.isCurrent()) return;
       allowLeaveRef.current = true;
       navigate(`/tasks/${taskId}/questions`, { replace: true });
     } catch (error) {

@@ -202,9 +202,9 @@ export function AppShell() {
         tabIndex={-1}
         className="w-full px-5 py-[35px] outline-none sm:px-8"
       >
-        <div className="mx-auto w-full max-w-[1300px]">
+        <div className="mx-auto w-full max-w-[1300px] [&:has([role=dialog])>[data-page-draft-footer]]:hidden">
           <Outlet />
-          <DraftActions />
+          <div data-page-draft-footer><DraftActions /></div>
         </div>
       </main>
     </div>

@@ -105,6 +105,7 @@ async function uploadProblemFile(user: ReturnType<typeof userEvent.setup>) {
     type: "application/pdf",
   });
   await user.upload(screen.getByLabelText("选择文件"), file);
+  if (providerState.enabled) await waitFor(() => expect(screen.getByLabelText("题目识别模型")).toHaveValue("mock:test"));
 }
 
 beforeEach(async () => {
@@ -312,7 +313,7 @@ describe("AddProblemsPage workflow recovery", () => {
     await uploadProblemFile(user);
 
     await user.click(screen.getByRole("button", { name: "识别并准备题目资料" }));
-    await user.click(await screen.findByRole("button", { name: "刷新任务状态" }));
+    await user.click(await screen.findByRole("button", { name: "刷新任务状态" }, { timeout: 3000 }));
 
     await waitFor(() => expect(taskRefetch).toHaveBeenCalledOnce());
     expect(screen.queryByRole("button", { name: "刷新任务状态" })).not.toBeInTheDocument();

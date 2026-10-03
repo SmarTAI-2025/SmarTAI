@@ -16,6 +16,8 @@ type Options<T extends object> = {
 export function useDraftProtection<T extends object>({ scope, value, onRestore, baseline, version = "", enabled = true, busy = false, secret = false, codec }: Options<T>) {
   const owner = useContext(DraftOwner);
   const leave = useDraftLeave();
+  const [formalPending, setFormalPending] = useState(false);
+  const formalActive = useRef(false);
   const [loaded, setLoaded] = useState(false);
   const [savedAt, setSavedAt] = useState<number | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -35,6 +37,11 @@ export function useDraftProtection<T extends object>({ scope, value, onRestore, 
   const codecRef = useRef(codec ?? objectDraftCodec<T>(value));
   const fingerprint = draftFingerprint(value);
   const baselineFingerprint = draftFingerprint(baseline ?? value);
+  const completedBusy = useRef(false);
+  const effectiveBusy = busy || formalPending;
+  const previousBusy = useRef(effectiveBusy);
+  if (effectiveBusy && !previousBusy.current) completedBusy.current = false;
+  previousBusy.current = effectiveBusy;
   const isDirty = () => {
     const now = draftFingerprint(latest.current.value);
     const base = latest.current.baseline ? draftFingerprint(latest.current.baseline) : initial.current;
@@ -47,7 +54,7 @@ export function useDraftProtection<T extends object>({ scope, value, onRestore, 
   state.current = { dirty, loaded, savedAt, notice, conflict };
   const id = useRef(Symbol(scope));
   const identity = useRef({ owner, scope }); identity.current = { owner, scope };
-  const isCurrent = () => !disposed.current && epoch.current === draftGeneration() && identity.current.owner === owner && identity.current.scope === scope;
+  const isCurrent = () => !disposed.current && (secret || epoch.current === draftGeneration()) && identity.current.owner === owner && identity.current.scope === scope;
 
   useEffect(() => {
     if (!enabled) return;
@@ -101,6 +108,7 @@ export function useDraftProtection<T extends object>({ scope, value, onRestore, 
   async function clear(snapshot?: T) {
     if (!isCurrent()) return false;
     incarnation.current += 1;
+    completedBusy.current = true;
     const submitted = draftFingerprint(snapshot ?? latest.current.value);
     const unchanged = submitted === draftFingerprint(latest.current.value);
     saved.current = submitted; cleared.current = submitted; setSavedAt(null); setConflict(null);
@@ -110,6 +118,16 @@ export function useDraftProtection<T extends object>({ scope, value, onRestore, 
       catch { setNotice("正式操作已完成，但浏览器草稿清理失败；旧草稿恢复前仍会核对业务版本。"); }
     }
     return unchanged;
+  }
+  async function runFormal(submit: () => Promise<unknown>, snapshot: T) {
+    if (formalActive.current || !isCurrent()) return false;
+    formalActive.current = true; completedBusy.current = false; setFormalPending(true);
+    try {
+      await submit();
+      if (!isCurrent()) return false;
+      const unchanged = await clear(snapshot);
+      return isCurrent() && unchanged;
+    } finally { formalActive.current = false; setFormalPending(false); }
   }
   function discardEdits() {
     const previous = load.current?.value ?? latest.current.baseline;
@@ -135,7 +153,7 @@ export function useDraftProtection<T extends object>({ scope, value, onRestore, 
   const controller = useRef<DraftController>(null!);
   controller.current = {
     id: id.current, scope, secret, get active() { return latest.current.enabled; },
-    get dirty() { return epoch.current === draftGeneration() && latest.current.enabled && isDirty(); }, get busy() { return epoch.current === draftGeneration() && latest.current.busy && !cleared.current; },
+    get dirty() { return (secret || epoch.current === draftGeneration()) && latest.current.enabled && isDirty(); }, get busy() { return (secret || epoch.current === draftGeneration()) && (formalActive.current || (latest.current.busy && !completedBusy.current)); },
     get loaded() { return state.current.loaded; }, get savedAt() { return state.current.savedAt; },
     get notice() { return state.current.notice; }, get hasConflict() { return Boolean(state.current.conflict); },
     discard: discardEdits, restore: restoreConflict,
@@ -165,7 +183,7 @@ export function useDraftProtection<T extends object>({ scope, value, onRestore, 
     },
   };
   useEffect(() => leave.register(() => controller.current), [leave.register]);
-  useEffect(() => { leave.changed(); }, [fingerprint, dirty, loaded, busy, savedAt, notice, conflict, leave.changed]);
-  return { dirty, loaded, savedAt, notice, conflict, isCurrent, clear, resetWorking, discardEdits, restoreConflict, requestLeave: (run: () => void) => leave.request(run, [id.current]), controller: () => controller.current };
+  useEffect(() => { leave.changed(); }, [fingerprint, dirty, loaded, busy, formalPending, savedAt, notice, conflict, leave.changed]);
+  return { dirty, loaded, savedAt, notice, conflict, isCurrent, clear, runFormal, formalPending, resetWorking, discardEdits, restoreConflict, requestLeave: (run: () => void) => leave.request(run, [id.current]), controller: () => controller.current };
 }
 export type PreparedDraft = { write: DraftWrite; commit: () => void };

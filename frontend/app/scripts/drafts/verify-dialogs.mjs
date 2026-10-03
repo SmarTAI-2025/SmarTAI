@@ -19,7 +19,7 @@ for(const [name,engine] of Object.entries({chromium,firefox,webkit})){
  else if(u.pathname==='/course-materials/groups')data={items:[group],total:1};
  else if(u.pathname==='/course-materials/')data={items:[material],total:1,page:1,page_size:100,summary:{materials:1,groups:1,referenced:0,parsed:1},storage:'local',capabilities:{durable:true,ocr:false,accepted_types:['txt']}};
  else if(u.pathname.includes('storage/usage'))data={limit_bytes:128*1024*1024,used_bytes:20,available_bytes:128*1024*1024-20,unlimited:false};
- else if(u.pathname.includes('/tasks/history'))data={items:[task],total:1,page:1,page_size:40,has_next:false};
+ else if(u.pathname === '/tasks/')data={items:[task],total:1,page:1,page_size:40,has_next:false};
  return r.fulfill({json:data});});
  try{
  await p.goto(qaApp + '/knowledge-base');await p.getByRole('button',{name:'新建分组',exact:true}).click();await p.getByLabel('分组名称',{exact:true}).fill('新分组暂存');await p.getByRole('dialog').getByRole('button',{name:'关闭',exact:true}).click();await p.getByRole('alertdialog').waitFor();await p.keyboard.press('Escape');await expect(p.getByLabel('分组名称',{exact:true})).toHaveValue('新分组暂存');

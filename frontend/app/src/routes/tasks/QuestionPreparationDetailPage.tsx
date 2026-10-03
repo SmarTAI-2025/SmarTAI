@@ -462,7 +462,7 @@ function EditableScoringField({ fieldKey, problem, readOnly, saving, locale, onD
     () => summarizeRubricPoints(criterionDraft, scoreDraft, problem.question_structure),
     [criterionDraft, problem.question_structure, scoreDraft],
   );
-  const localDraft = useDraftProtection({ scope: `question:${useParams().taskId}:${problem.q_id}:scoring`, value: { scoreDraft, criterionDraft }, baseline: { scoreDraft: originalScore, criterionDraft: originalCriterion }, version: JSON.stringify([originalScore, originalCriterion]), enabled: !readOnly, busy: saving, onRestore: (draft) => { setScoreDraft(draft.scoreDraft); setCriterionDraft(draft.criterionDraft); setEditing(true); } });
+  const localDraft = useDraftProtection({ scope: `question:${useParams().taskId}:${encodeURIComponent(problem.q_id)}:scoring`, value: { scoreDraft, criterionDraft }, baseline: { scoreDraft: originalScore, criterionDraft: originalCriterion }, version: JSON.stringify([originalScore, originalCriterion]), enabled: !readOnly, busy: saving, onRestore: (draft) => { setScoreDraft(draft.scoreDraft); setCriterionDraft(draft.criterionDraft); setEditing(true); } });
   const leave = useDraftLeave();
   const savedSummary = problem.rubric_point_summary
     ?? summarizeRubricPoints(originalCriterion, originalScore, problem.question_structure);
@@ -484,8 +484,7 @@ function EditableScoringField({ fieldKey, problem, readOnly, saving, locale, onD
     }
     setError(null);
     try {
-      await onSave(problem, Number(scoreDraft), criterionDraft);
-      if (!await localDraft.clear({ scoreDraft, criterionDraft })) return;
+      if (!await localDraft.runFormal(() => onSave(problem, Number(scoreDraft), criterionDraft), { scoreDraft, criterionDraft })) return;
       onDirtyChange(fieldKey, false);
       setEditing(false);
     } catch {
@@ -539,7 +538,7 @@ function EditableScoringField({ fieldKey, problem, readOnly, saving, locale, onD
           <RubricPointStatus summary={draftSummary} locale={locale} />
           {error ? <p role="alert" className="text-xs text-danger">{error}</p> : null}
           <div className="flex justify-end gap-2">
-            <button type="button" disabled={saving || (!dirty && !needsReview) || !scoreValid || !draftSummary.is_valid} onClick={() => void save()} className="inline-flex h-9 items-center gap-2 rounded-[7px] bg-primary px-4 text-xs font-semibold text-primary-foreground hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-45">{saving ? <Loader2 aria-hidden="true" className="h-3.5 w-3.5 animate-spin" /> : <Save aria-hidden="true" className="h-3.5 w-3.5" />}{needsReview && !dirty ? tx(locale, "确认并保存", "Confirm and Save") : tx(locale, "保存", "Save")}</button>
+            <button type="button" disabled={saving || localDraft.formalPending || (!dirty && !needsReview) || !scoreValid || !draftSummary.is_valid} onClick={() => void save()} className="inline-flex h-9 items-center gap-2 rounded-[7px] bg-primary px-4 text-xs font-semibold text-primary-foreground hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-45">{saving ? <Loader2 aria-hidden="true" className="h-3.5 w-3.5 animate-spin" /> : <Save aria-hidden="true" className="h-3.5 w-3.5" />}{needsReview && !dirty ? tx(locale, "确认并保存", "Confirm and Save") : tx(locale, "保存", "Save")}</button>
           </div>
         </div>
       ) : (
@@ -596,7 +595,7 @@ function EditableTextField({ fieldKey, label, value, problem, field, readOnly, s
   const [draft, setDraft] = useState(value);
   const [error, setError] = useState(false);
   const dirty = editing && draft !== value;
-  const localDraft = useDraftProtection({ scope: `question:${useParams().taskId}:${problem.q_id}:${field}`, value: { draft }, baseline: { draft: value }, version: value, enabled: !readOnly, busy: saving, onRestore: (restored) => { setDraft(restored.draft); setEditing(true); } });
+  const localDraft = useDraftProtection({ scope: `question:${useParams().taskId}:${encodeURIComponent(problem.q_id)}:${field}`, value: { draft }, baseline: { draft: value }, version: value, enabled: !readOnly, busy: saving, onRestore: (restored) => { setDraft(restored.draft); setEditing(true); } });
   const leave = useDraftLeave();
 
   useEffect(() => { if (!editing && !localDraft.savedAt) setDraft(value); }, [editing, value]);
@@ -606,8 +605,7 @@ function EditableTextField({ fieldKey, label, value, problem, field, readOnly, s
     if (localDraft.conflict) return;
     setError(false);
     try {
-      await onSave(problem, field, draft);
-      if (!await localDraft.clear({ draft })) return;
+      if (!await localDraft.runFormal(() => onSave(problem, field, draft), { draft })) return;
       onDirtyChange(fieldKey, false);
       setEditing(false);
     } catch {
@@ -633,7 +631,7 @@ function EditableTextField({ fieldKey, label, value, problem, field, readOnly, s
               : field === "solution_code"
                 ? tx(locale, "可直接编辑源码；保存后恢复语法高亮。", "Edit the source code directly; syntax highlighting returns after saving.")
                 : tx(locale, "编辑态保留原始 Markdown / LaTeX。", "Raw Markdown / LaTeX is preserved while editing.")}</p>
-            <button type="button" disabled={saving || !dirty} onClick={() => void save()} className="inline-flex h-9 items-center gap-2 rounded-[7px] bg-primary px-4 text-xs font-semibold text-primary-foreground hover:opacity-90 disabled:opacity-45">{saving ? <Loader2 aria-hidden="true" className="h-3.5 w-3.5 animate-spin" /> : <Save aria-hidden="true" className="h-3.5 w-3.5" />}{tx(locale, "保存", "Save")}</button>
+            <button type="button" disabled={saving || localDraft.formalPending || !dirty} onClick={() => void save()} className="inline-flex h-9 items-center gap-2 rounded-[7px] bg-primary px-4 text-xs font-semibold text-primary-foreground hover:opacity-90 disabled:opacity-45">{saving ? <Loader2 aria-hidden="true" className="h-3.5 w-3.5 animate-spin" /> : <Save aria-hidden="true" className="h-3.5 w-3.5" />}{tx(locale, "保存", "Save")}</button>
           </div>
         </div>
       ) : (
@@ -664,7 +662,7 @@ function TestCasesPanel({ fieldKey, problem, readOnly, saving, locale, onDirtyCh
   const dirty = editing && JSON.stringify(cases) !== JSON.stringify(original);
   useEffect(() => { if (!editing && !localDraft.savedAt) setCases(original); }, [editing, original]);
   useEffect(() => { onDirtyChange(fieldKey, dirty); return () => onDirtyChange(fieldKey, false); }, [dirty, fieldKey, onDirtyChange]);
-  const localDraft = useDraftProtection({ scope: `question:${useParams().taskId}:${problem.q_id}:tests`, value: { cases }, baseline: { cases: original }, version: JSON.stringify(original), enabled: !readOnly, busy: saving, onRestore: (restored) => { setCases(restored.cases); setEditing(true); } });
+  const localDraft = useDraftProtection({ scope: `question:${useParams().taskId}:${encodeURIComponent(problem.q_id)}:tests`, value: { cases }, baseline: { cases: original }, version: JSON.stringify(original), enabled: !readOnly, busy: saving, onRestore: (restored) => { setCases(restored.cases); setEditing(true); } });
   const leave = useDraftLeave();
   const exampleCount = original.filter((item) => (item.visibility ?? "example") === "example").length;
   const hiddenCount = original.length - exampleCount;
@@ -673,8 +671,7 @@ function TestCasesPanel({ fieldKey, problem, readOnly, saving, locale, onDirtyCh
     if (localDraft.conflict) return;
     setError(false);
     try {
-      await onSave(problem, cases);
-      if (!await localDraft.clear({ cases })) return;
+      if (!await localDraft.runFormal(() => onSave(problem, cases), { cases })) return;
       onDirtyChange(fieldKey, false);
       setEditing(false);
     } catch {
@@ -711,7 +708,7 @@ function TestCasesPanel({ fieldKey, problem, readOnly, saving, locale, onDirtyCh
           <button type="button" onClick={() => setCases([...cases, emptyTestCase(cases.length + 1)])} className="inline-flex h-9 items-center gap-2 rounded-[7px] border px-3 text-xs font-semibold hover:bg-muted"><Plus aria-hidden="true" className="h-3.5 w-3.5" />{tx(locale, "添加测试样例", "Add Test Case")}</button>
           <div className="flex items-center justify-between gap-3 border-t pt-3">
             <p className={cn("text-xs", error ? "text-danger" : "text-muted-foreground")}>{error ? tx(locale, "保存失败，请重试。", "Save failed. Try again.") : tx(locale, "隐藏测试只对教师可见。", "Hidden tests are visible only to teachers.")}</p>
-            <button type="button" disabled={saving || !dirty} onClick={() => void save()} className="inline-flex h-9 items-center gap-2 rounded-[7px] bg-primary px-4 text-xs font-semibold text-primary-foreground disabled:opacity-45">{saving ? <Loader2 aria-hidden="true" className="h-3.5 w-3.5 animate-spin" /> : <Save aria-hidden="true" className="h-3.5 w-3.5" />}{tx(locale, "保存测试样例", "Save Test Cases")}</button>
+            <button type="button" disabled={saving || localDraft.formalPending || !dirty} onClick={() => void save()} className="inline-flex h-9 items-center gap-2 rounded-[7px] bg-primary px-4 text-xs font-semibold text-primary-foreground disabled:opacity-45">{saving ? <Loader2 aria-hidden="true" className="h-3.5 w-3.5 animate-spin" /> : <Save aria-hidden="true" className="h-3.5 w-3.5" />}{tx(locale, "保存测试样例", "Save Test Cases")}</button>
           </div>
         </div>
       ) : original.length ? (
@@ -752,7 +749,7 @@ function CodeBlock({ label, value }: { label: string; value: string }) {
 }
 
 function CaseTextarea({ label, value, rows = 4, onChange }: { label: string; value: string; rows?: number; onChange: (value: string) => void }) {
-  return <label className="grid gap-1.5 text-xs font-semibold text-muted-foreground">{label}<textarea value={value} rows={rows} onChange={(event) => onChange(event.target.value)} className="w-full resize-y rounded-[6px] border bg-card px-3 py-2 font-mono text-xs leading-5 text-foreground outline-none focus:border-primary" /></label>;
+  return <label className="grid gap-1.5 text-xs font-semibold text-muted-foreground">{label}<textarea aria-label={label} value={value} rows={rows} onChange={(event) => onChange(event.target.value)} className="w-full resize-y rounded-[6px] border bg-card px-3 py-2 font-mono text-xs leading-5 text-foreground outline-none focus:border-primary" /></label>;
 }
 
 function QuestionNavigator({ previous, next, locale, onNavigate, compact = false }: { previous: ProblemInfo | null; next: ProblemInfo | null; locale: string; onNavigate: (qId: string) => void; compact?: boolean }) {

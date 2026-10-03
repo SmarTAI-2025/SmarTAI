@@ -45,6 +45,7 @@ function QuestionAICompletionPageForm() {
     if (!preflight) return;
     const key = `${preflight.workflow_revision}:${preflight.missing_targets.map((target) => target.target_id).join("|")}`;
     if (initializedKeyRef.current === key) return;
+    if (initializedKeyRef.current && (localDraft.dirty || localDraft.savedAt || localDraft.conflict)) return;
     initializedKeyRef.current = key;
     const requestedQuestion = searchParams.get("q_id")?.trim();
     const requestedTarget = normalizeTarget(searchParams.get("target"));
@@ -84,7 +85,7 @@ function QuestionAICompletionPageForm() {
       setActionError(aiCompletionText(locale, "selectionRequired"));
       return;
     }
-    if (!modelsReady) return;
+    if (!modelsReady || localDraft.conflict) return;
     setActionError(null);
     try {
       const result = await startCompletion.mutateAsync({
@@ -94,7 +95,8 @@ function QuestionAICompletionPageForm() {
         ...(includesTests ? { testCaseCount } : {}),
       });
       if (!localDraft.isCurrent()) return;
-      await localDraft.clear();
+      if (!await localDraft.clear({ selectedIds, testCaseCount })) return;
+      if (!localDraft.isCurrent()) return;
       allowLeaveRef.current = true;
       navigate(`/tasks/${taskId}/questions/ai-complete/progress/${encodeURIComponent(result.job_id)}`, { replace: true });
     } catch (error) {

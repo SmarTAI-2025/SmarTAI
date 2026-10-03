@@ -101,6 +101,7 @@ function StudentAnswerReviewForm() {
   const [saveErrors, setSaveErrors] = useState<Record<string, string>>({});
   const requestedQuestionId = searchParams.get("question") ?? "";
   const [activeQuestionId, setActiveQuestionId] = useState(requestedQuestionId);
+  const identityHydrated = useRef(false);
   const [identityOpen, setIdentityOpen] = useState(false);
   const [identityId, setIdentityId] = useState("");
   const [identityName, setIdentityName] = useState("");
@@ -166,6 +167,9 @@ function StudentAnswerReviewForm() {
   }, [requestedQuestionId]);
 
   useEffect(() => {
+    if (!student) return;
+    if (identityHydrated.current && (identityDraft.dirty || identityDraft.savedAt || identityDraft.conflict)) return;
+    identityHydrated.current = true;
     setIdentityOpen(identityRequested && !readOnly);
     setIdentityId(student?.stu_id ?? "");
     setIdentityName(student?.stu_name ?? "");
@@ -495,7 +499,8 @@ function StudentAnswerReviewForm() {
         studentId: nextId,
         studentName: nextName,
       });
-      await identityDraft.clear();
+      if (!identityDraft.isCurrent()) return;
+      if (!await identityDraft.clear({ identityId, identityName }) || !identityDraft.isCurrent()) return;
       setIdentityOpen(false);
       toast.success(t("studentSubmissionIdentitySaved"));
       const nextSearch = new URLSearchParams(searchParams);

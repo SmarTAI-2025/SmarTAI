@@ -71,6 +71,14 @@ describe("explicit IndexedDB draft transactions", () => {
     await writePageDrafts([await prepare()]); await mutateRecord((row) => { row.files = [{ path: ["file"], blob: "not file bytes", name: "ghost.txt" }]; });
     expect((await readPageDraft("a", "form", codec)).notice).toContain("损坏");
   });
+  it("detects corrupted file bytes even when filename and size are still valid", async () => {
+    const loaded = await readPageDraft("a", "form", codec);
+    const file = new File(["actual bytes"], "original.txt", { type: "text/plain" }) as unknown as globalThis.File;
+    await writePageDrafts([preparePageDraft("a", "form", "1", { name: "saved", file }, codec, loaded.epoch, null)]);
+    await mutateRecord(row => { const files = row.files as Array<{ bytes: ArrayBuffer }>; new Uint8Array(files[0].bytes)[0] ^= 1; });
+    const restored = await readPageDraft("a", "form", codec);
+    expect(restored.value).toBeNull(); expect(restored.notice).toContain("损坏");
+  });
   it("rejects oversized snapshots before writing anything", async () => {
     const loaded = await readPageDraft("a", "form", codec);
     expect(() => preparePageDraft("a", "form", "1", { name: "large", file: new File([new Uint8Array(MAX_DRAFT_BYTES + 1)], "large.bin") as unknown as globalThis.File }, codec, loaded.epoch, null)).toThrow("64 MiB");

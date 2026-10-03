@@ -196,6 +196,7 @@ function QuestionMaterialImportPageForm() {
       const started = await startImport.mutateAsync({ taskId, sourceToken: preflight.source_token });
       if (!localDraft.isCurrent()) return;
       await localDraft.clear();
+      if (!localDraft.isCurrent()) return;
       allowLeaveRef.current = true;
       setHasUserChanges(false);
       if (started.status === "already_done") {
@@ -219,7 +220,7 @@ function QuestionMaterialImportPageForm() {
         </h1>
       </div>
       <NewTaskStepper currentStep={2} />
-      {(references.blocked || preparedStatus === "unavailable") && <button type="button" className="mt-3 rounded border px-3 py-2 text-sm" onClick={() => { references.retry(); setReferenceAttempt(n => n + 1); }}>重试检查资料引用</button>}
+      {(references.blocked || preparedStatus === "unavailable") && <button type="button" className="mt-3 rounded border px-3 py-2 text-sm" onClick={() => { references.retry(); setReferenceAttempt(n => n + 1); }}>{locale === "zh-CN" ? "重试检查资料引用" : "Retry source validation"}</button>}
 
       <form
         className="mx-auto mt-[35px] min-h-[558px] w-full max-w-[900px] rounded-[10px] border bg-card px-6 pb-6 pt-7 sm:px-[49px] sm:pb-[28px] sm:pt-[38px]"
@@ -228,7 +229,7 @@ function QuestionMaterialImportPageForm() {
           void handlePrimaryAction();
         }}
       >
-        <fieldset disabled={isSubmitting}>
+        <fieldset disabled={isSubmitting} className="min-w-0">
           <legend className="text-[18px] font-bold leading-6 text-foreground">
             {materialImportText(locale, "targetsTitle")}
           </legend>

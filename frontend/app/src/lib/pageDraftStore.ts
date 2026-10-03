@@ -9,7 +9,7 @@ export interface DraftCodec<T> { encode(value: T): unknown; decode(value: unknow
 export type DraftRecord = {
   key: string; version: 2; owner: string; scope: string; businessVersion: string;
   revision: string; epoch: string; savedAt: number; expires: number; bytes: number; deleted?: boolean;
-  data: unknown; files: Array<{ path: string[]; blob?: Blob; bytes?: ArrayBuffer; type?: string; name: string; modified: number }>;
+  data: unknown; files: Array<{ path: string[]; blob?: Blob; bytes?: ArrayBuffer; checksum?: number; type?: string; name: string; modified: number }>;
 };
 export type DraftLoad<T> = { value: T | null; record: DraftRecord | null; epoch: string; notice: string | null };
 export type DraftWrite = { record: DraftRecord; expectedRevision: string | null; generation: number };
@@ -26,6 +26,12 @@ export function subscribeDraftChanges(listener: (event: Event) => void) {
 }
 function announce(detail: { type: string; key?: string }) {
   events.dispatchEvent(new CustomEvent("change", { detail })); channel?.postMessage(detail);
+}
+// Detect accidental byte corruption; this is integrity feedback, not encryption.
+function fileChecksum(bytes: ArrayBuffer): number {
+  let checksum = 2166136261;
+  for (const byte of new Uint8Array(bytes)) checksum = Math.imul(checksum ^ byte, 16777619);
+  return checksum >>> 0;
 }
 export function draftGeneration() { return generation; }
 export function draftKey(owner: string, scope: string) { return JSON.stringify([owner, scope]); }
@@ -83,15 +89,17 @@ export async function readPageDraft<T>(owner: string, scope: string, codec: Draf
   await done;
   if (!row || row.deleted) return { value: null, record: row, epoch, notice };
   try {
-    if (!Number.isFinite(row.savedAt) || row.expires > row.savedAt + PAGE_DRAFT_TTL || row.bytes > MAX_DRAFT_BYTES || !Array.isArray(row.files)) throw new Error();
+    if (!Number.isFinite(row.savedAt) || row.expires > row.savedAt + PAGE_DRAFT_TTL || (!Number.isFinite(row.bytes) || row.bytes < 0 || row.bytes > MAX_DRAFT_BYTES) || !Array.isArray(row.files)) throw new Error();
     const value = codec.decode(row.data);
     if (!value || typeof value !== "object") throw new Error();
     for (const file of row.files) {
-      if (Object.prototype.toString.call(file.bytes) !== "[object ArrayBuffer]" || typeof file.type !== "string" || !file.path.length || file.path.some((part) => ["__proto__", "prototype", "constructor"].includes(part))) throw new Error();
+      if (Object.prototype.toString.call(file.bytes) !== "[object ArrayBuffer]" || typeof file.type !== "string" || typeof file.name !== "string" || !Number.isFinite(file.modified) || !Array.isArray(file.path) || !file.path.length || file.path.some((part) => typeof part !== "string" || ["__proto__", "prototype", "constructor"].includes(part))) throw new Error();
+      if (file.checksum !== fileChecksum(file.bytes!)) throw new Error();
       let target = value as Record<string, unknown>;
       for (const part of file.path.slice(0, -1)) { if (!target[part] || typeof target[part] !== "object") throw new Error(); target = target[part] as Record<string, unknown>; }
       target[file.path.at(-1)!] = new File([file.bytes!], file.name, { type: file.type, lastModified: file.modified });
     }
+    if (row.files.reduce((total, file) => total + (file.bytes?.byteLength ?? 0), 0) > MAX_DRAFT_BYTES) throw new Error();
     return { value, record: row, epoch, notice: "已恢复明确暂存的草稿；未上传或调用模型。" };
   } catch {
     await removePageDraft(owner, scope);
@@ -116,7 +124,8 @@ export async function writePageDrafts(writes: DraftWrite[]) {
   // ephemeral WebKit contexts can abort IndexedDB transactions containing Blobs.
   for (const write of writes) write.record.files = await Promise.all(write.record.files.map(async ({ blob, ...file }) => {
     if (!(blob instanceof Blob)) throw new Error("所选文件无法读取，未暂存。请重新选择后重试。");
-    return { ...file, bytes: await blob.arrayBuffer(), type: blob.type };
+    const bytes = await blob.arrayBuffer();
+    return { ...file, bytes, checksum: fileChecksum(bytes), type: blob.type };
   }));
 
   const db = await database(); const tx = db.transaction(["drafts", "meta"], "readwrite"); const done = complete(tx);

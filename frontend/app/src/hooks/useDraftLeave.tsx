@@ -45,7 +45,16 @@ export function DraftLeaveProvider({ children }: { children: ReactNode }) {
     } catch (failure) { setError(draftError(failure)); throw failure; }
     finally { savingRef.current = false; setSaving(false); }
   }, [all]);
-  const controllers = all(); const dirty = controllers.some((item) => item.dirty || item.busy);
+  const controllers = all();
+  useEffect(() => {
+    const original = pending.current;
+    if (!original || savingRef.current || error) return;
+    const current = all();
+    if (original.controllers.every(item => current.some(now => now.id === item.id && !now.dirty && !now.busy))) {
+      pending.current = null; setIntent(null); original.run();
+    }
+  }, [controllers, error, all]);
+  const dirty = controllers.some((item) => item.dirty || item.busy);
   useEffect(() => {
     if (!dirty) return;
     function protect(event: BeforeUnloadEvent) { event.preventDefault(); event.returnValue = ""; }

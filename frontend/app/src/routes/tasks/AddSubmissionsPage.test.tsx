@@ -89,7 +89,7 @@ describe("AddSubmissionsPage OCR uploads", () => {
       last_failed_job_id: null,
     };
   });
-  it("focuses the missing file control instead of leaving the teacher at an unexplained error", () => {
+  it("focuses the missing file control instead of leaving the teacher at an unexplained error", async () => {
     renderPage("missing-file-qa");
     await waitFor(() => expect(screen.getByLabelText("作答识别模型")).toHaveValue("provider-default"));
     fireEvent.click(screen.getByRole("button", { name: "submissionUploadStart" }));

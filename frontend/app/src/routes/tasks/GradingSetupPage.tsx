@@ -203,7 +203,8 @@ function GradingSetupPageForm() {
         gradingSetup: setup,
       });
       if (!localDraft.isCurrent()) return;
-      await localDraft.clear();
+      if (!await localDraft.clear({ setup, advancedOpen })) return;
+      if (!localDraft.isCurrent()) return;
       initialSetupRef.current = serializeSetup(setup);
       allowLeaveRef.current = true;
       navigate(returnTo ?? `/tasks/${taskId}/grading/preflight`);

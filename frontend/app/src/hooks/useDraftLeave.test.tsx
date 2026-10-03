@@ -12,10 +12,11 @@ let version = "1";
 let busy = false;
 let secret = false;
 const closed = vi.fn();
+const formalSubmit = vi.fn(async () => {});
 function Form() {
   const [value, setValue] = useState({ name: "server", file: null as File | null });
   const draft = useDraftProtection({ scope: "test:task:field", value, baseline: { name: "server", file: null as File | null }, version, busy, secret, onRestore: setValue });
-  return <><input aria-label="name" value={value.name} onChange={e => setValue({ ...value, name: e.target.value })} /><Link to="/next">next</Link><button onClick={() => draft.requestLeave(closed)}>close editor</button><button onClick={() => void draft.clear()}>formal success</button><button onClick={() => { busy = !busy; setValue({ ...value }); }}>toggle busy</button><button onClick={() => { version = "2"; setValue({ ...value }); }}>server changes</button></>;
+  return <><input aria-label="name" value={value.name} onChange={e => setValue({ ...value, name: e.target.value })} /><Link to="/next">next</Link><button onClick={() => draft.requestLeave(closed)}>close editor</button><button onClick={() => void draft.clear()}>formal success</button><button onClick={() => void draft.runFormal(formalSubmit, value)}>run formal</button><button onClick={() => { busy = !busy; setValue({ ...value }); }}>toggle busy</button><button onClick={() => { version = "2"; setValue({ ...value }); }}>server changes</button></>;
 }
 function setup(owner = "draft-teacher") {
   const router = createMemoryRouter([{ element: <DraftLeaveProvider><Outlet /><DraftActions /></DraftLeaveProvider>, children: [{ path: "/", element: <Form /> }, { path: "/next", element: <p>destination</p> }] }], { initialEntries: ["/"] });
@@ -24,7 +25,7 @@ function setup(owner = "draft-teacher") {
 async function ready() { await waitFor(() => expect(screen.getByRole("button", { name: "暂存" })).toBeEnabled()); }
 function type(name: string) { fireEvent.change(screen.getByLabelText("name"), { target: { value: name } }); }
 async function save() { await ready(); fireEvent.click(screen.getByRole("button", { name: "暂存" })); await screen.findByText(/已暂存 ·/); }
-beforeEach(async () => { vi.restoreAllMocks(); vi.stubGlobal("Blob", Blob); vi.stubGlobal("File", File); await store.clearPageDrafts(); version = "1"; busy = false; secret = false; closed.mockReset(); });
+beforeEach(async () => { vi.restoreAllMocks(); vi.stubGlobal("Blob", Blob); vi.stubGlobal("File", File); await store.clearPageDrafts(); version = "1"; busy = false; secret = false; closed.mockReset(); formalSubmit.mockClear(); });
 
 it("keeps the original destination and previous explicit snapshot for all three choices", async () => {
   const { router } = setup(); await ready(); type("explicit"); await save(); type("unwritten");
@@ -93,4 +94,44 @@ it("restores after server hydration without mistaking initial defaults for user 
   render(<PageDraftSession ownerId="draft-teacher"><DraftLeaveProvider><Hydrated /><DraftActions /></DraftLeaveProvider></PageDraftSession>);
   await waitFor(() => expect(screen.getByLabelText("hydrated")).toHaveValue("explicit"));
   expect(screen.queryByText(/发现已暂存草稿，但/)).toBeNull();
+});
+
+
+it("a completed formal save resumes its pending intent once; a new busy operation is protected", async () => {
+  setup(); await ready(); type("business");
+  fireEvent.click(screen.getByText("toggle busy"));
+  fireEvent.click(screen.getByText("close editor"));
+  await screen.findByRole("alertdialog");
+  fireEvent.click(screen.getByText("formal success"));
+  fireEvent.click(screen.getByText("toggle busy"));
+  await waitFor(() => expect(closed).toHaveBeenCalledTimes(1));
+  expect(screen.queryByRole("alertdialog")).toBeNull();
+  fireEvent.click(screen.getByText("toggle busy"));
+  const event = new Event("beforeunload", { cancelable: true }); window.dispatchEvent(event);
+  expect(event.defaultPrevented).toBe(true);
+});
+
+it("new credential input remains protected after session draft cleanup", async () => {
+  secret = true; setup(); type("first secret");
+  await act(async () => { await store.clearPageDrafts(); });
+  type("new secret"); fireEvent.click(screen.getByText("close editor"));
+  await screen.findByRole("alertdialog");
+  expect(screen.queryByRole("button", { name: "暂存并离开" })).toBeNull();
+  expect(await store.listPageDrafts("draft-teacher")).toEqual([]);
+});
+
+
+it("formal API and asynchronous cleanup keep one lock and preserve edits made while saving", async () => {
+  setup(); await ready(); type("submitted"); await save();
+  const remove = store.removePageDraft; let release!: () => void;
+  vi.spyOn(store, "removePageDraft").mockImplementationOnce(async (...args) => { await new Promise<void>(resolve => { release = resolve; }); await remove(...args); });
+  fireEvent.click(screen.getByText("run formal"));
+  await waitFor(() => expect(release).toBeTypeOf("function"));
+  fireEvent.click(screen.getByText("run formal")); expect(formalSubmit).toHaveBeenCalledTimes(1);
+  const unloading = new Event("beforeunload", { cancelable: true }); window.dispatchEvent(unloading); expect(unloading.defaultPrevented).toBe(true);
+  type("later input"); fireEvent.click(screen.getByText("close editor")); await screen.findByRole("alertdialog");
+  await act(async () => release());
+  expect(closed).not.toHaveBeenCalled(); expect(screen.getByLabelText("name")).toHaveValue("later input");
+  fireEvent.click(screen.getByRole("button", { name: "继续编辑" }));
+  expect(await store.listPageDrafts("draft-teacher")).toEqual([]);
 });

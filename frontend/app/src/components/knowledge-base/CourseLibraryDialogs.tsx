@@ -92,7 +92,8 @@ export function GroupDialog({ group, courses, onClose, onSaved, onUseExisting, o
         ? tx(locale, "分组已更新", "Group updated")
         : tx(locale, "分组已创建", "Group created"));
       if (!localDraft.isCurrent()) return;
-      await localDraft.clear();
+      if (!await localDraft.clear({ name, courseId })) return;
+      if (!localDraft.isCurrent()) return;
       onSaved(result);
     } catch (error) {
       const normalized = normalizeAPIError(error);
@@ -124,6 +125,7 @@ export function GroupDialog({ group, courses, onClose, onSaved, onUseExisting, o
       ));
       if (!localDraft.isCurrent()) return;
       await localDraft.clear();
+      if (!localDraft.isCurrent()) return;
       (onDeleted ?? onClose)();
     } catch (error) {
       toast.error(tx(locale, "无法删除分组", "Could not delete group"), {
@@ -238,7 +240,8 @@ export function UploadDialog({ courses, groups, onClose, onUploaded }: UploadDia
         ? result.parse_status === "ready" ? tx(locale, "资料已上传并解析", "Material uploaded and parsed") : tx(locale, "资料已保存，已进入处理队列", "Material saved and queued")
         : tx(locale, "相同资料已存在，已复用原文件", "The same material already exists and was reused"));
       if (!localDraft.isCurrent()) return;
-      await localDraft.clear();
+      if (!await localDraft.clear({ file, nativeOnly, courseId, groupId, category, labels })) return;
+      if (!localDraft.isCurrent()) return;
       onUploaded(result);
     } catch (error) {
       const normalized = normalizeAPIError(error);
@@ -362,7 +365,8 @@ export function MaterialDialog({ material, courses, groups, onClose, onSaved, on
       });
       toast.success(tx(locale, "资料信息已更新", "Material updated"));
       if (!localDraft.isCurrent()) return;
-      await localDraft.clear();
+      if (!await localDraft.clear({ filename, courseId, groupId, category, labels })) return;
+      if (!localDraft.isCurrent()) return;
       onSaved(result);
     } catch (error) {
       toast.error(tx(locale, "无法更新资料", "Could not update material"), {
@@ -379,6 +383,7 @@ export function MaterialDialog({ material, courses, groups, onClose, onSaved, on
       });
       if (!localDraft.isCurrent()) return;
       await localDraft.clear();
+      if (!localDraft.isCurrent()) return;
       if (result.status === "deletion_pending") {
         toast.success(tx(locale, "资料已移除", "Material removed"), {
           description: tx(
