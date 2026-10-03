@@ -1,3 +1,4 @@
+import { LocalDraftManager } from "@/components/ui/LocalDraftManager";
 import { HardDrive, Languages, LoaderCircle, MonitorCog, ShieldCheck } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import type { ReactNode } from "react";
@@ -46,6 +47,7 @@ export function SettingsPage() {
           )}
         </p>
       </header>
+      <LocalDraftManager />
 
       <section
         aria-labelledby="account-profile-title"

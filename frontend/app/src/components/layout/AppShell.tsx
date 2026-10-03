@@ -1,3 +1,4 @@
+import { DraftActions, useDraftLeave } from "@/hooks/useDraftLeave";
 import { Menu, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { Link, Outlet, useNavigate } from "react-router-dom";
@@ -21,6 +22,7 @@ export function AppShell() {
   const currentUser = useCurrentUser();
   const expertsQuery = useExperts();
   const logout = useLogout();
+  const draftLeave = useDraftLeave();
   const navigate = useNavigate();
 
   useEffect(() => {
@@ -78,7 +80,9 @@ export function AppShell() {
     };
   }, [mobileOpen]);
 
-  async function handleLogout() {
+  function handleLogout() { draftLeave.request(() => { void performLogout(); }); }
+
+  async function performLogout() {
     try {
       await logout.mutateAsync();
     } finally {
@@ -200,6 +204,7 @@ export function AppShell() {
       >
         <div className="mx-auto w-full max-w-[1300px]">
           <Outlet />
+          <DraftActions />
         </div>
       </main>
     </div>

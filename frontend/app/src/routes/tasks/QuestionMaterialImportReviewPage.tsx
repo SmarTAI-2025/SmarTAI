@@ -1,6 +1,8 @@
+import { useDraftProtection } from "@/hooks/useDraftProtection";
+import { useDraftLeave } from "@/hooks/useDraftLeave";
 import { ArrowLeft, LoaderCircle, RefreshCw } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Link, useBeforeUnload, useBlocker, useNavigate, useParams } from "react-router-dom";
+import { Link, useNavigate, useParams } from "react-router-dom";
 import { useApplyMaterialImport, useMaterialImport, useTask } from "@/api/hooks";
 import { getAPIErrorCode, normalizeAPIError } from "@/api/client";
 import { NewTaskStepper } from "@/components/new-task/NewTaskStepper";
@@ -12,7 +14,8 @@ import { cn } from "@/lib/cn";
 import { materialImportText } from "@/lib/materialImportCopy";
 import type { MaterialImportCandidate, MaterialImportTarget, ProblemInfo } from "@/types";
 
-export function QuestionMaterialImportReviewPage() {
+export function QuestionMaterialImportReviewPage() { const { taskId, jobId } = useParams(); return <QuestionMaterialImportReviewPageForm key={`${taskId}:${jobId ?? ""}`} />; }
+function QuestionMaterialImportReviewPageForm() {
   const { taskId, jobId } = useParams();
   const { locale } = useI18n();
   const navigate = useNavigate();
@@ -59,14 +62,8 @@ export function QuestionMaterialImportReviewPage() {
   const isSelectionDirty = initializedJobRef.current === jobId
     && !invalidPlanReason
     && (!sameIdSet(acceptedIds, initialAcceptedIds) || !sameIdSet(overwriteIds, initialOverwriteIds));
-  const blocker = useBlocker(({ currentLocation, nextLocation }) => (
-    isSelectionDirty && !allowLeaveRef.current && currentLocation.pathname !== nextLocation.pathname
-  ));
-  useBeforeUnload(useCallback((event) => {
-    if (!isSelectionDirty || allowLeaveRef.current) return;
-    event.preventDefault();
-  }, [isSelectionDirty]));
 
+  const localDraft = useDraftProtection({ scope: `material-review:${taskId}:${jobId}`, value: { acceptedIds, overwriteIds }, baseline: { acceptedIds: initialAcceptedIds, overwriteIds: initialOverwriteIds }, version: String(plan?.workflow_revision ?? ""), enabled: Boolean(plan?.status === "ready" && initializedJobRef.current === jobId && !invalidPlanReason), busy: applyImport.isPending, onRestore: (draft) => { setAcceptedIds(draft.acceptedIds); setOverwriteIds(draft.overwriteIds); } });
   const selectedCount = acceptedIds.length;
   const sortedCandidates = useMemo(
     () => [...(plan?.candidates ?? [])].sort((left, right) => {
@@ -101,6 +98,7 @@ export function QuestionMaterialImportReviewPage() {
   async function handleApply() {
     if (!taskId || !jobId || !plan || plan.status !== "ready" || selectedCount === 0 || !taskQuery.isSuccess || invalidPlanReason) return;
     setApplyError(null);
+    if (localDraft.conflict) return;
     try {
       await applyImport.mutateAsync({
         taskId,
@@ -109,6 +107,8 @@ export function QuestionMaterialImportReviewPage() {
         overwriteCandidateIds: overwriteIds,
         expectedWorkflowRevision: plan.workflow_revision,
       });
+      if (!localDraft.isCurrent()) return;
+      await localDraft.clear();
       allowLeaveRef.current = true;
       navigate(`/tasks/${taskId}/questions`, { replace: true });
     } catch (error) {
@@ -246,16 +246,6 @@ export function QuestionMaterialImportReviewPage() {
         ) : null}
       </section>
 
-      {blocker.state === "blocked" ? (
-        <UnsavedChangesDialog
-          title={materialImportText(locale, "leaveTitle")}
-          description={materialImportText(locale, "leaveDescription")}
-          stayLabel={materialImportText(locale, "stay")}
-          leaveLabel={materialImportText(locale, "leave")}
-          onStay={() => blocker.reset()}
-          onLeave={() => blocker.proceed()}
-        />
-      ) : null}
     </div>
   );
 }

@@ -608,6 +608,44 @@ def check_problem_draft_reference(
         return domain_error_response(exc)
 
 
+@router.get("/{task_id}/material-imports/draft-reference")
+def check_material_draft_reference(
+    task_id: str,
+    prepared_id: str,
+    current: User = Depends(require_teacher),
+):
+    """Validate a material preflight without renewing it or dispatching work."""
+    try:
+        workflow = workflow_repository.get_live_workflow(task_id, owner_id=current.id)
+        operation = workflow_repository.get_operation(prepared_id, owner_id=current.id)
+        if operation.assignment_id != task_id or operation.operation_type != "material_source":
+            raise NotFound("draft_source")
+        payload = operation.payload or {}
+        if (operation.status != "pending"
+                or (operation.expires_at is not None and operation.expires_at <= time.time())
+                or payload.get("base_workflow_revision", 0) != workflow.workflow_revision):
+            raise HTTPException(410, detail={"code": "stale_revision"})
+        stored = file_repository.get_file(
+            file_id=str(payload.get("text_artifact_id") or ""), owner_id=current.id,
+        )
+        if (stored is None or stored.assignment_id != task_id
+                or stored.kind != "material_import_text" or stored.availability_status != "available"):
+            raise NotFound("draft_source")
+        try:
+            with get_storage().open(stored.storage_key) as stream:
+                if not stream.read(1):
+                    raise NotFound("draft_source")
+        except StorageObjectNotFound:
+            raise NotFound("draft_source") from None
+        except DomainError:
+            raise
+        except Exception:
+            raise HTTPException(503, detail={"code": "source_preview_storage_unavailable"}) from None
+        return {"available": True, "prepared": True}
+    except DomainError as exc:
+        return domain_error_response(exc)
+
+
 @router.post("/{task_id}/problem-sources/preflight")
 @router.post("/{task_id}/question-preparation/sources/preflight")
 async def preflight_problem_source(

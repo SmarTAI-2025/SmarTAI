@@ -1,5 +1,8 @@
+import "fake-indexeddb/auto";
+import { Blob, File } from "node:buffer";
+import { DraftActions, DraftLeaveProvider } from "@/hooks/useDraftLeave";
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { createMemoryRouter, RouterProvider } from "react-router-dom";
+import { createMemoryRouter, RouterProvider, Outlet } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { PageDraftSession } from "@/hooks/usePageDraft";
 import { clearPageDrafts } from "@/lib/pageDraftStore";
@@ -56,17 +59,19 @@ vi.mock("@/i18n/I18nProvider", () => ({
 }));
 
 function renderPage(taskId = "task-1", owner = "submission-teacher") {
-  const router = createMemoryRouter([
+  const router = createMemoryRouter([{ element: <DraftLeaveProvider><Outlet /><DraftActions /></DraftLeaveProvider>, children: [
     { path: "/tasks/:taskId/submissions/upload", element: <AddSubmissionsPage /> },
     { path: "/tasks/:taskId/submissions/progress", element: <div>progress page</div> },
     { path: "/settings/byok", element: <div>BYOK</div> },
-  ], { initialEntries: [`/tasks/${taskId}/submissions/upload`] });
+  ] }], { initialEntries: [`/tasks/${taskId}/submissions/upload`] });
   return { ...render(<PageDraftSession ownerId={owner}><RouterProvider router={router} /></PageDraftSession>), router };
 }
 
 describe("AddSubmissionsPage OCR uploads", () => {
-  beforeEach(() => {
-    clearPageDrafts();
+  beforeEach(async () => {
+    vi.stubGlobal("Blob", Blob); vi.stubGlobal("File", File);
+    await clearPageDrafts();
+
     mutateAsync.mockReset();
     retryMutateAsync.mockReset();
     mutateAsync.mockResolvedValue({ status: "started", task_id: "task-1" });
@@ -96,6 +101,7 @@ describe("AddSubmissionsPage OCR uploads", () => {
       type: "image/jpeg",
     });
     fireEvent.change(input, { target: { files: [image] } });
+    await waitFor(() => expect(screen.getByLabelText("作答识别模型")).toHaveValue("provider-default"));
     fireEvent.click(screen.getByRole("button", { name: "submissionUploadStart" }));
 
     await waitFor(() => {
@@ -127,11 +133,13 @@ describe("AddSubmissionsPage OCR uploads", () => {
     const input = container.querySelector('input[type="file"]') as HTMLInputElement;
     fireEvent.change(input, { target: { files: [new File([], "empty.txt")] } });
     expect(screen.getByText(/所选作答文件为空/)).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByLabelText("作答识别模型")).toHaveValue("provider-default"));
     fireEvent.click(screen.getByRole("button", { name: "submissionUploadStart" }));
     expect(mutateAsync).not.toHaveBeenCalled();
     const valid = new File(["1. answer"], "student.txt");
     fireEvent.change(input, { target: { files: [valid] } });
     expect(screen.queryByText(/所选作答文件为空/)).not.toBeInTheDocument();
+    await waitFor(() => expect(screen.getByLabelText("作答识别模型")).toHaveValue("provider-default"));
     fireEvent.click(screen.getByRole("button", { name: "submissionUploadStart" }));
     await waitFor(() => expect(mutateAsync).toHaveBeenCalledWith(expect.objectContaining({ file: valid })));
   });
@@ -149,6 +157,7 @@ describe("AddSubmissionsPage OCR uploads", () => {
 
     expect(screen.getByText("scan.pdf")).toBeInTheDocument();
     expect(screen.getByText(/原文件已安全保留/)).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByLabelText("作答识别模型")).toHaveValue("provider-default"));
     fireEvent.click(screen.getByRole("button", { name: "用所选模型重试" }));
 
     await waitFor(() => expect(retryMutateAsync).toHaveBeenCalledWith({
@@ -164,20 +173,25 @@ describe("AddSubmissionsPage OCR uploads", () => {
 
 
 it("keeps unsubmitted local files through task navigation but clears after a normal start", async () => {
-  clearPageDrafts(); mutateAsync.mockResolvedValue({ status: "started", task_id: "task-a" });
+  vi.stubGlobal("Blob", Blob); vi.stubGlobal("File", File);
+  await clearPageDrafts(); mutateAsync.mockResolvedValue({ status: "started", task_id: "task-a" });
   taskState.data = { ...taskState.data, status: "problems_ready", pending_submission_file_name: null, submission_file_name: null, last_failed_job_id: null, student_count: 0 };
   const { container, router } = renderPage("task-a");
   fireEvent.change(container.querySelector('input[type="file"]')!, { target: { files: [new File(["answer"], "local-answer.txt")] } });
+  await saveDraft();
   await act(async () => { await router.navigate("/tasks/task-b/submissions/upload"); });
   expect(screen.queryByText("local-answer.txt")).not.toBeInTheDocument();
   await act(async () => { await router.navigate(-1); });
-  expect(screen.getByText("local-answer.txt")).toBeInTheDocument();
+  await waitFor(() => expect(screen.getByText("local-answer.txt")).toBeInTheDocument());
   await act(async () => { await router.navigate("/settings/byok"); await router.navigate(-1); });
-  expect(screen.getByText("local-answer.txt")).toBeInTheDocument();
+  await waitFor(() => expect(screen.getByText("local-answer.txt")).toBeInTheDocument());
   mutateAsync.mockClear();
-  fireEvent.click(screen.getByRole("button", { name: "submissionUploadStart" }));
+  await waitFor(() => expect(screen.getByLabelText("作答识别模型")).toHaveValue("provider-default"));
+    fireEvent.click(screen.getByRole("button", { name: "submissionUploadStart" }));
   expect(await screen.findByText("progress page")).toBeInTheDocument();
   expect(mutateAsync).toHaveBeenCalledTimes(1);
   await act(async () => { await router.navigate(-1); });
   expect(screen.queryByText("local-answer.txt")).not.toBeInTheDocument();
 });
+
+async function saveDraft() { await waitFor(() => expect(screen.getByRole("button", { name: "暂存" })).toBeEnabled()); fireEvent.click(screen.getByRole("button", { name: "暂存" })); await waitFor(() => expect(screen.getByText(/已暂存 ·/)).toBeInTheDocument()); }

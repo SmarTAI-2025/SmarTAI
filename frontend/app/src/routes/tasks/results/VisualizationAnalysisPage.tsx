@@ -1,3 +1,4 @@
+import { useDraftProtection } from "@/hooks/useDraftProtection";
 import { GroundedAskAnswer } from "@/components/tasks/GroundedAskAnswer";
 import { GroundedTrace } from "@/components/tasks/GroundedChart";
 import type { GroundedAskExecution } from "@/types";
@@ -80,6 +81,7 @@ export function VisualizationAnalysisPage({ locale, taskId, version, model, prov
   const [preview, setPreview] = useState<ChartAnalyticsResult | null>(null);
   const [savedCharts, setSavedCharts] = useState<SavedChart[]>([]);
   const chartQuery = useAnalyticsQuery();
+  const localDraft = useDraftProtection({ scope: `charts:${taskId}`, value: { prompt, preview, savedCharts }, version: String(version), onRestore: (draft) => { setPrompt(draft.prompt); setPreview(draft.preview); setSavedCharts(draft.savedCharts); } });
   const generation = useRef(0);
   useEffect(() => { setPreview(null); setExecution(null); setSavedCharts([]); conversation.current = [];
     return () => { generation.current += 1; };
@@ -192,7 +194,7 @@ export function VisualizationAnalysisPage({ locale, taskId, version, model, prov
           {preview ? <GeneratedResult locale={locale} id="generated-preview" result={preview} version={version} provisional={provisional} onSave={savePreview} /> : <div className="relative mt-3 rounded-[8px] border border-dashed border-primary/20 bg-card px-4 py-5 text-center text-[11px] text-muted-foreground">{tx(locale, "尚未生成自定义图表；下方五张默认图表始终可用且不消耗模型额度。", "No custom chart has been generated; the five default charts below remain available without model usage.")}</div>}
         </section>
 
-        {savedCharts.length ? <section className="mt-4"><div className="flex items-end justify-between gap-3"><div><h3 className="text-[15px] font-bold text-foreground">{tx(locale, "本次浏览已保存", "Saved for this visit")}</h3><p className="mt-1 text-[10px] text-muted-foreground">{tx(locale, "这些图表只保留到刷新或离开本页；需要长期保存时请下载 PNG 或报告。", "These charts last until you refresh or leave this page. Download a PNG or report to keep them.")}</p></div><span className="text-[10px] text-muted-foreground">{savedCharts.length}</span></div><div className="mt-3 grid gap-4 xl:grid-cols-2">{savedCharts.map((item) => <GeneratedResult key={item.id} locale={locale} id={item.id} result={item.result} version={version} provisional={provisional} prompt={item.prompt} onDelete={() => setSavedCharts((items) => items.filter((candidate) => candidate.id !== item.id))} />)}</div></section> : null}
+        {savedCharts.length ? <section className="mt-4"><div className="flex items-end justify-between gap-3"><div><h3 className="text-[15px] font-bold text-foreground">{tx(locale, "本次浏览已保存", "Saved for this visit")}</h3><p className="mt-1 text-[10px] text-muted-foreground">{tx(locale, "可在页底暂存到当前浏览器；需要导出分享时请下载 PNG 或报告。", "Use the page-bottom draft action to keep these charts in this browser. Download a PNG or report to share them.")}</p></div><span className="text-[10px] text-muted-foreground">{savedCharts.length}</span></div><div className="mt-3 grid gap-4 xl:grid-cols-2">{savedCharts.map((item) => <GeneratedResult key={item.id} locale={locale} id={item.id} result={item.result} version={version} provisional={provisional} prompt={item.prompt} onDelete={() => setSavedCharts((items) => items.filter((candidate) => candidate.id !== item.id))} />)}</div></section> : null}
       </div>
 
       <div className="mt-4 grid gap-4 border-t p-5 xl:grid-cols-2">

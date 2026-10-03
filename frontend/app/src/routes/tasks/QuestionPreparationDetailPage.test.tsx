@@ -1,3 +1,4 @@
+import { DraftLeaveProvider } from "@/hooks/useDraftLeave";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { createMemoryRouter, RouterProvider } from "react-router-dom";
@@ -158,7 +159,7 @@ function renderPage(initialEntry = "/tasks/task-1/questions/Q1/content") {
   const router = createMemoryRouter([
     {
       path: "/tasks/:taskId/questions/:questionId/:section",
-      element: <QuestionPreparationDetailPage />,
+      element: <DraftLeaveProvider><QuestionPreparationDetailPage /></DraftLeaveProvider>,
     },
     {
       path: "/tasks/:taskId/questions",
@@ -394,9 +395,9 @@ describe("QuestionPreparationDetailPage navigation", () => {
     await user.type(input, "8");
     await user.click(screen.getByRole("link", { name: "返回题目资料总览" }));
 
-    expect(await screen.findByRole("alertdialog", { name: "离开且不保存？" })).toBeInTheDocument();
+    expect(await screen.findByRole("alertdialog", { name: "有未暂存修改" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "继续编辑" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "放弃修改" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "不暂存并离开" })).toBeInTheDocument();
   });
 
   it("uses reviewed English copy and returns to the question material overview", async () => {

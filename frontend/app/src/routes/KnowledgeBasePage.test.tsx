@@ -1,3 +1,4 @@
+import { MemoryRouter } from "react-router-dom";
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -69,7 +70,7 @@ describe("KnowledgeBasePage storage quota", () => {
   });
 
   it("shows independent usage and automatic cleanup retry without a retry action", () => {
-    render(<KnowledgeBasePage />);
+    render(<MemoryRouter><KnowledgeBasePage /></MemoryRouter>);
 
     expect(screen.getByRole("heading", { name: "知识库独立空间" })).toBeInTheDocument();
     expect(screen.getByText("12.0 MB")).toBeInTheDocument();
@@ -91,7 +92,7 @@ describe("KnowledgeBasePage storage quota", () => {
       { error: { code: "knowledge_storage_quota_exceeded" } },
     ));
     const user = userEvent.setup();
-    render(<KnowledgeBasePage />);
+    render(<MemoryRouter><KnowledgeBasePage /></MemoryRouter>);
 
     await user.click(screen.getByRole("button", { name: "上传资料" }));
     const dialog = screen.getByRole("dialog", { name: "上传资料" });

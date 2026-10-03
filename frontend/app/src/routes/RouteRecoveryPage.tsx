@@ -1,7 +1,9 @@
+import { useDraftLeave } from "@/hooks/useDraftLeave";
 import { History, RefreshCw } from "lucide-react";
 import { useI18n } from "@/i18n/I18nProvider";
 
 export function RouteRecoveryPage() {
+  const leave = useDraftLeave();
   const { locale } = useI18n();
   const zh = locale === "zh-CN";
   return (
@@ -12,7 +14,7 @@ export function RouteRecoveryPage() {
           : "Submitted task materials are not deleted. Reload this page or continue from task history. Reloading does not automatically restart recognition or grading."}
       </p>
       <div className="flex flex-wrap gap-3">
-        <button type="button" onClick={() => window.location.reload()} className="inline-flex items-center gap-2 rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground">
+        <button type="button" onClick={() => leave.request(() => window.location.reload())} className="inline-flex items-center gap-2 rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground">
           <RefreshCw className="h-4 w-4" aria-hidden="true" />{zh ? "重新加载页面" : "Reload page"}
         </button>
         <a href="/history" className="inline-flex items-center gap-2 rounded-md border px-4 py-2 text-sm font-medium">

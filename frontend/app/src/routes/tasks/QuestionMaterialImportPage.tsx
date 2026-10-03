@@ -1,7 +1,9 @@
+import { useProblemDraftReferences } from "@/hooks/useProblemDraftReferences";
+import { createSourceDraft } from "@/lib/taskPageDrafts";
+import { useDraftProtection } from "@/hooks/useDraftProtection";
+import { useDraftLeave } from "@/hooks/useDraftLeave";
 import { ArrowLeft, FileText, LoaderCircle, Search } from "lucide-react";
 import {
-  useBeforeUnload,
-  useBlocker,
   Link,
   useNavigate,
   useParams,
@@ -22,7 +24,7 @@ import {
   useStartMaterialImport,
   useTask,
 } from "@/api/hooks";
-import { getAPIErrorCode, normalizeAPIError } from "@/api/client";
+import { getJSON, getAPIErrorCode, normalizeAPIError } from "@/api/client";
 import { NewTaskStepper } from "@/components/new-task/NewTaskStepper";
 import { UnsavedChangesDialog } from "@/components/ui/UnsavedChangesDialog";
 import { useImeSafeQuery } from "@/hooks/useImeSafeQuery";
@@ -41,7 +43,8 @@ type StructureMode = "organized" | "extract_from_source";
 
 const ACCEPTED_EXTENSIONS = [".pdf", ".txt", ".md", ".markdown", ".json", ".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tif", ".tiff"] as const;
 
-export function QuestionMaterialImportPage() {
+export function QuestionMaterialImportPage() { const { taskId, jobId } = useParams(); return <QuestionMaterialImportPageForm key={`${taskId}:${jobId ?? ""}`} />; }
+function QuestionMaterialImportPageForm() {
   const { taskId } = useParams();
   const [searchParams] = useSearchParams();
   const navigate = useNavigate();
@@ -67,6 +70,28 @@ export function QuestionMaterialImportPage() {
   const [extractionHint, setExtractionHint] = useState("");
   const [formError, setFormError] = useState<string | null>(null);
   const [hasUserChanges, setHasUserChanges] = useState(false);
+  const [prepared, setPrepared] = useState<{ token: string; signature: string } | null>(null);
+  const [preparedStatus, setPreparedStatus] = useState<"checking" | "ready" | "unavailable">("ready");
+  const [preparedNotice, setPreparedNotice] = useState<string | null>(null);
+  const [referenceAttempt, setReferenceAttempt] = useState(0);
+  const sourceSignature = JSON.stringify([sourceMode, selectedMaterial?.material_id, selectedFile && [selectedFile.name, selectedFile.size, selectedFile.type, selectedFile.lastModified], targets, structureMode, extractionHint, saveToLibrary, enableMaterialOcr]);
+  useEffect(() => {
+    if (!prepared || !taskId || prepared.signature !== sourceSignature) { setPreparedStatus("ready"); return; }
+    let cancelled = false;
+    setPreparedStatus("checking");
+    getJSON(`/tasks/${taskId}/material-imports/draft-reference`, { params: { prepared_id: prepared.token } }).then(() => {
+      if (!cancelled) { setPreparedStatus("ready"); setPreparedNotice(null); }
+    }).catch(error => {
+      if (cancelled) return;
+      if ([403, 404, 410].includes(normalizeAPIError(error).status)) {
+        setPrepared(null); setPreparedStatus("ready");
+        setPreparedNotice("已上传的资料引用已过期、删除或版本变化。原本地文件仍保留；请核对后手动重新开始，恢复不会自动上传。");
+      } else {
+        setPreparedStatus("unavailable"); setPreparedNotice("暂时无法检查已上传资料，请重试；未重复上传或启动提取。");
+      }
+    });
+    return () => { cancelled = true; };
+  }, [prepared?.token, sourceSignature, taskId, referenceAttempt]);
 
   const libraryQuery = useProblemSourceLibrary(
     taskId,
@@ -79,22 +104,13 @@ export function QuestionMaterialImportPage() {
     [expertsQuery.data],
   );
 
-  useEffect(() => {
-    if (selectedMaterial || !libraryQuery.data?.items.length || librarySearch.trim()) return;
-    setSelectedMaterial(libraryQuery.data.items[0]);
-    setShowLibraryPicker(false);
-  }, [libraryQuery.data?.items, librarySearch, selectedMaterial]);
 
   const isSubmitting = preflightImport.isPending || startImport.isPending;
   const isDirty = hasUserChanges;
-  const blocker = useBlocker(({ currentLocation, nextLocation }) => (
-    isDirty && !allowLeaveRef.current && currentLocation.pathname !== nextLocation.pathname
-  ));
-  useBeforeUnload(useCallback((event) => {
-    if (!isDirty || allowLeaveRef.current) return;
-    event.preventDefault();
-  }, [isDirty]));
 
+  const localDraft = useDraftProtection({ scope: `material-import:${taskId}`, value: { targets, sourceMode, scope, librarySearch, selectedMaterial, selectedFile, saveToLibrary, enableMaterialOcr, structureMode, extractionHint, prepared }, version: JSON.stringify([taskQuery.data?.workflow_revision, taskQuery.data?.course_id]), enabled: taskQuery.isSuccess, busy: isSubmitting, onRestore: (draft) => { setTargets(draft.targets); setSourceMode(draft.sourceMode); setScope(draft.scope); setLibrarySearch(draft.librarySearch); setSelectedMaterial(draft.selectedMaterial); setSelectedFile(draft.selectedFile); setSaveToLibrary(draft.saveToLibrary); setEnableMaterialOcr(draft.enableMaterialOcr); setStructureMode(draft.structureMode); setExtractionHint(draft.extractionHint); setPrepared(draft.prepared); setHasUserChanges(true); } });
+  const references = useProblemDraftReferences(taskId, selectedMaterial ? [{ ...createSourceDraft("problem"), id: "material-import", sourceMode: "library", libraryMaterial: selectedMaterial }] : [], () => {});
+  const referenceError = references.blocked ? (references.status("material-import") === "missing" ? "已暂存的资料已删除或不可访问，请重新选择。" : "正在检查资料引用；若网络不可用，请重试，未自动上传或识别。") : null;
   const taskReady = taskQuery.data?.status === "problems_ready";
   const hasSource = sourceMode === "library" ? Boolean(selectedMaterial) : Boolean(selectedFile);
   const gateMessage = taskQuery.isError
@@ -108,9 +124,14 @@ export function QuestionMaterialImportPage() {
     || taskQuery.isLoading
     || expertsQuery.isLoading
     || Boolean(gateMessage)
+    || references.blocked
+    || preparedStatus !== "ready"
+    || Boolean(localDraft.conflict)
     || targets.length === 0
     || !hasSource;
   const actionMessage = formError
+    ?? referenceError
+    ?? preparedNotice
     ?? gateMessage
     ?? (targets.length === 0 ? materialImportText(locale, "targetRequired") : null)
     ?? (!hasSource ? materialImportText(locale, "sourceRequired") : null);
@@ -157,10 +178,10 @@ export function QuestionMaterialImportPage() {
       return;
     }
 
-    if (!taskId || gateMessage) return;
+    if (!taskId || gateMessage || references.blocked || preparedStatus !== "ready" || localDraft.conflict) return;
     setHasUserChanges(true);
     try {
-      const preflight = await preflightImport.mutateAsync({
+      const preflight = prepared?.signature === sourceSignature ? { source_token: prepared.token } : await preflightImport.mutateAsync({
         taskId,
         file: sourceMode === "upload" ? selectedFile : null,
         libraryMaterialId: sourceMode === "library" ? selectedMaterial?.material_id : null,
@@ -170,7 +191,11 @@ export function QuestionMaterialImportPage() {
         saveToLibrary: sourceMode === "upload" && saveToLibrary,
         enableMaterialOcr,
       });
+      if (!localDraft.isCurrent()) return;
+      setPrepared({ token: preflight.source_token, signature: sourceSignature });
       const started = await startImport.mutateAsync({ taskId, sourceToken: preflight.source_token });
+      if (!localDraft.isCurrent()) return;
+      await localDraft.clear();
       allowLeaveRef.current = true;
       setHasUserChanges(false);
       if (started.status === "already_done") {
@@ -181,6 +206,7 @@ export function QuestionMaterialImportPage() {
         navigate(`/tasks/${taskId}/questions/import/progress/${encodeURIComponent(started.job_id)}`, { replace: true });
       }
     } catch (error) {
+      if (!localDraft.isCurrent()) return;
       setFormError(localizeImportError(error, locale));
     }
   }
@@ -193,6 +219,7 @@ export function QuestionMaterialImportPage() {
         </h1>
       </div>
       <NewTaskStepper currentStep={2} />
+      {(references.blocked || preparedStatus === "unavailable") && <button type="button" className="mt-3 rounded border px-3 py-2 text-sm" onClick={() => { references.retry(); setReferenceAttempt(n => n + 1); }}>重试检查资料引用</button>}
 
       <form
         className="mx-auto mt-[35px] min-h-[558px] w-full max-w-[900px] rounded-[10px] border bg-card px-6 pb-6 pt-7 sm:px-[49px] sm:pb-[28px] sm:pt-[38px]"
@@ -354,16 +381,6 @@ export function QuestionMaterialImportPage() {
         </Link>
       </div>
 
-      {blocker.state === "blocked" ? (
-        <UnsavedChangesDialog
-          title={materialImportText(locale, "leaveTitle")}
-          description={materialImportText(locale, "leaveDescription")}
-          stayLabel={materialImportText(locale, "stay")}
-          leaveLabel={materialImportText(locale, "leave")}
-          onStay={() => blocker.reset()}
-          onLeave={() => blocker.proceed()}
-        />
-      ) : null}
     </div>
   );
 }

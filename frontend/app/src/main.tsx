@@ -1,6 +1,6 @@
 import React from "react";
 import ReactDOM from "react-dom/client";
-import { createBrowserRouter, Navigate, RouterProvider } from "react-router-dom";
+import { createBrowserRouter, Navigate, Outlet, RouterProvider } from "react-router-dom";
 import { RequireTeacherSession } from "@/components/auth/RequireTeacherSession";
 import { AppShell } from "@/components/layout/AppShell";
 import { useI18n } from "@/i18n/I18nProvider";
@@ -106,7 +106,9 @@ function routeElement(element: React.ReactNode) {
   return <React.Suspense fallback={<RouteFallback />}>{element}</React.Suspense>;
 }
 
-const router = createBrowserRouter([
+import { DraftLeaveProvider } from "@/hooks/useDraftLeave";
+
+const router = createBrowserRouter([{ element: <DraftLeaveProvider><Outlet /></DraftLeaveProvider>, children: [
   { path: "/login", element: routeElement(<LoginPage />) },
   { path: "/register", element: routeElement(<RegisterPage />) },
   { path: "/register/check-email", element: routeElement(<RegisterCheckEmailPage />) },
@@ -167,7 +169,7 @@ const router = createBrowserRouter([
       { path: "*", element: routeElement(<NotFoundPage />) },
     ],
   },
-]);
+]}]);
 
 ReactDOM.createRoot(document.getElementById("root")!).render(
   <React.StrictMode>

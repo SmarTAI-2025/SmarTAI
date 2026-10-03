@@ -1,3 +1,4 @@
+import { useDraftProtection } from "@/hooks/useDraftProtection";
 import {
   AlertTriangle,
   ArrowLeft,
@@ -463,6 +464,7 @@ function BaiduOCRSettings({ locale }: { locale: "zh-CN" | "en-US" }) {
     || verifyCredentials.isPending
     || deleteCredentials.isPending;
 
+  const credentialProtection = useDraftProtection({ scope: "credential:baidu", value: { apiKey, secretKey }, baseline: { apiKey: "", secretKey: "" }, secret: true, busy: pending, onRestore: (draft) => { setApiKey(draft.apiKey); setSecretKey(draft.secretKey); } });
   async function handleSave(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const request = {
@@ -478,6 +480,7 @@ function BaiduOCRSettings({ locale }: { locale: "zh-CN" | "en-US" }) {
     }
     try {
       await saveCredentials.mutateAsync(request);
+      await credentialProtection.clear();
       toast.success(
         configured
           ? zh ? "百度 OCR 凭据已替换" : "Baidu OCR credentials replaced"
@@ -1032,6 +1035,7 @@ function ExpertEditorDialog({
   );
   const [rpm, setRpm] = useState(String(target.mode === "edit" ? target.expert.rpm : 0));
   const [formError, setFormError] = useState<string | null>(null);
+  const credentialProtection = useDraftProtection({ scope: "credential:expert", value: { provider, apiKey, model, baseUrl, wireProtocol, displayName, maxConcurrent, rpm }, secret: true, busy: pending, onRestore: (draft) => { setProvider(draft.provider); setApiKey(draft.apiKey); setModel(draft.model); setBaseUrl(draft.baseUrl); setWireProtocol(draft.wireProtocol); setDisplayName(draft.displayName); setMaxConcurrent(draft.maxConcurrent); setRpm(draft.rpm); } });
   const providerCatalog = catalog.find((item) => item.provider_type === provider);
   const baseUrlEditable = Boolean(
     providerCatalog?.custom_base_url_supported &&

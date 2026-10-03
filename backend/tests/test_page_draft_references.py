@@ -95,3 +95,47 @@ def test_unrelated_file_kind_cannot_be_reused(draft_source):
     with session_scope() as session:
         session.execute(update(StoredFileRecord).where(StoredFileRecord.id == stored.id).values(kind="analysis_report"))
     assert check(owner, task, stored).status_code == 404
+
+
+@pytest.fixture
+def material_reference(draft_source, monkeypatch):
+    owner, task, _, storage = draft_source
+    artifact = file_repository.save_file(storage=storage, owner_id=owner,
+        assignment_id=task, kind="material_import_text", original_name="material.txt",
+        content=b"Rubric: explain each step", content_type="text/plain")
+    operation = SimpleNamespace(assignment_id=task, operation_type="material_source",
+        status="pending", expires_at=time.time() + 60,
+        payload={"base_workflow_revision": 0, "text_artifact_id": artifact.id})
+    def get_operation(operation_id, *, owner_id):
+        from backend.domain.errors import NotFound
+        if owner_id != owner:
+            raise NotFound("draft_source")
+        return operation
+    monkeypatch.setattr(workflow_repository, "get_operation", get_operation)
+    return owner, task, artifact, storage, operation
+
+
+def test_material_reference_is_read_only_and_scoped(material_reference):
+    owner, task, _, _, operation = material_reference
+    expires = operation.expires_at
+    assert task_preparation.check_material_draft_reference(task, "prepared", SimpleNamespace(id=owner)) == {"available": True, "prepared": True}
+    assert operation.expires_at == expires
+    other_owner, other_task = _seed_task()
+    assert task_preparation.check_material_draft_reference(task, "prepared", SimpleNamespace(id=other_owner)).status_code == 404
+    assert task_preparation.check_material_draft_reference(other_task, "prepared", SimpleNamespace(id=other_owner)).status_code == 404
+
+
+@pytest.mark.parametrize("change", ["expired", "revision", "status", "kind", "missing_object"])
+def test_material_reference_invalidated_without_work(material_reference, change):
+    owner, task, artifact, storage, operation = material_reference
+    if change == "expired": operation.expires_at = time.time() - 1
+    if change == "revision": operation.payload["base_workflow_revision"] = 99
+    if change == "status": operation.status = "error"
+    if change == "kind": operation.operation_type = "analysis"
+    if change == "missing_object": storage.delete(artifact.storage_key)
+    if change in {"expired", "revision", "status"}:
+        with pytest.raises(HTTPException) as caught:
+            task_preparation.check_material_draft_reference(task, "prepared", SimpleNamespace(id=owner))
+        assert caught.value.status_code == 410
+    else:
+        assert task_preparation.check_material_draft_reference(task, "prepared", SimpleNamespace(id=owner)).status_code == 404

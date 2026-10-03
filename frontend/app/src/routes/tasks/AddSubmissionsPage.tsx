@@ -13,7 +13,6 @@ import { useParseSubmissions, useRetrySubmissionRecognition, useStageProviders, 
 import { StageProviderSelect } from "@/components/models/StageProviderSelect";
 import { NewTaskStepper } from "@/components/new-task/NewTaskStepper";
 import { usePageDraft } from "@/hooks/usePageDraft";
-import { PageDraftNotice } from "@/components/ui/PageDraftNotice";
 import { initialSubmissionDraft, submissionDraftCodec } from "@/lib/taskPageDrafts";
 import { useI18n } from "@/i18n/I18nProvider";
 import type { MessageKey } from "@/i18n/messages";
@@ -38,7 +37,7 @@ export function AddSubmissionsPage() {
   const { taskId } = useParams();
   const taskQuery = useTask(taskId, { refetchOnMount: "always" });
   if (taskQuery.isLoading || (taskQuery.isFetching && !taskQuery.isFetchedAfterMount)) return <div role="status"><LoaderCircle className="animate-spin" /></div>;
-  return <AddSubmissionsForm key={`${taskId}:${taskQuery.data?.course_id}:${taskQuery.data?.workflow_revision}`} taskQuery={taskQuery} />;
+  return <AddSubmissionsForm key={taskId} taskQuery={taskQuery} />;
 }
 
 function AddSubmissionsForm({ taskQuery }: { taskQuery: ReturnType<typeof useTask> }) {
@@ -51,7 +50,7 @@ function AddSubmissionsForm({ taskQuery }: { taskQuery: ReturnType<typeof useTas
   const submissionInputRef = useRef<HTMLInputElement>(null);
   const rosterInputRef = useRef<HTMLInputElement>(null);
 
-  const draft = usePageDraft(`submissions:${taskId}:${taskQuery.data?.course_id}:${taskQuery.data?.workflow_revision}`, initialSubmissionDraft, submissionDraftCodec);
+  const draft = usePageDraft(`submissions:${taskId}`, initialSubmissionDraft, submissionDraftCodec, JSON.stringify([taskQuery.data?.workflow_revision, taskQuery.data?.course_id]), undefined, parseSubmissions.isPending || retryRecognition.isPending);
   const [selectedFile, setSelectedFile] = draft.field("selectedFile");
   const [rosterFile, setRosterFile] = draft.field("rosterFile");
   const [identityMode, setIdentityMode] = draft.field("identityMode");
@@ -87,19 +86,12 @@ function AddSubmissionsForm({ taskQuery }: { taskQuery: ReturnType<typeof useTas
   useEffect(() => {
     if (expertsQuery.isLoading || expertsQuery.isError) return;
     const enabled = (expertsQuery.data ?? []).filter((expert) => expert.enabled);
-    setRecognitionProviderId((current) => {
-      if (current) return current;
-      const frozenProviderId = task?.submission_recognition_provider_id;
-      if (frozenProviderId) {
-        return frozenProviderId;
-      }
-      return (
-        enabled.find((expert) => expert.is_default)?.provider_id
-        ?? enabled[0]?.provider_id
-        ?? ""
-      );
-    });
-  }, [expertsQuery.data, expertsQuery.isError, expertsQuery.isLoading, task?.submission_recognition_provider_id]);
+    const defaultProvider = task?.submission_recognition_provider_id
+      ?? enabled.find((expert) => expert.is_default)?.provider_id
+      ?? enabled[0]?.provider_id
+      ?? "";
+    draft.adoptDefault("recognitionProviderId", defaultProvider);
+  }, [draft.protection.loaded, expertsQuery.data, expertsQuery.isError, expertsQuery.isLoading, task?.submission_recognition_provider_id]);
 
   const uploadDisabledReason = isRecognitionRunning
     ? null
@@ -203,6 +195,7 @@ function AddSubmissionsForm({ taskQuery }: { taskQuery: ReturnType<typeof useTas
             replaceConfirmed,
             onProgress: setUploadPercent,
           });
+      if (!draft.protection.isCurrent()) return;
       draft.clear();
       if (response.status === "already_done") {
         toast.info(t("submissionUploadViewProgress"));
@@ -237,7 +230,6 @@ function AddSubmissionsForm({ taskQuery }: { taskQuery: ReturnType<typeof useTas
       <NewTaskStepper currentStep={3} />
 
       <div className="mx-auto mt-[45px] w-full max-w-[900px]">
-        <PageDraftNotice notice={draft.notice} disabled={isPending} onDiscard={() => { draft.reset(); setFormError(null); setNeedsModel(false); setUploadPercent(0); }} />
         {(!selectedFile && draft.value.selectedFileName && !canRetryOriginal) || (!rosterFile && draft.value.rosterFileName && identityMode === "roster") ? <p role="alert" className="mb-4 text-sm text-warning">{localText(locale, "未上传的作答或名单文件无法在刷新后恢复，请重新选择。其他设置已保留。", "Unuploaded submissions or roster files cannot survive a reload. Reselect them; other settings are preserved.")}</p> : null}
         <div
           className={cn(

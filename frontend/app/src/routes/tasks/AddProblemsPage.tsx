@@ -28,7 +28,6 @@ import { NewTaskStepper } from "@/components/new-task/NewTaskStepper";
 import { RecoverableActionState, type RecoveryAction } from "@/components/ui/RecoverableActionState";
 import { usePageDraft } from "@/hooks/usePageDraft";
 import { useProblemDraftReferences } from "@/hooks/useProblemDraftReferences";
-import { PageDraftNotice } from "@/components/ui/PageDraftNotice";
 import { createSourceDraft, initialProblemDraft, problemDraftCodec, sourceSignature, type SourceDraft, type ScorePolicyDraft } from "@/lib/taskPageDrafts";
 import { useImeSafeQuery } from "@/hooks/useImeSafeQuery";
 import { useI18n } from "@/i18n/I18nProvider";
@@ -63,7 +62,7 @@ export function AddProblemsPage() {
   const { taskId } = useParams();
   const taskQuery = useTask(taskId, { refetchOnMount: "always" });
   if (taskQuery.isLoading || (taskQuery.isFetching && !taskQuery.isFetchedAfterMount)) return <div role="status"><LoaderCircle className="animate-spin" /></div>;
-  return <AddProblemsForm key={`${taskId}:${taskQuery.data?.course_id}:${taskQuery.data?.workflow_revision}`} taskQuery={taskQuery} />;
+  return <AddProblemsForm key={taskId} taskQuery={taskQuery} />;
 }
 
 function AddProblemsForm({ taskQuery }: { taskQuery: ReturnType<typeof useTask> }) {
@@ -74,7 +73,7 @@ function AddProblemsForm({ taskQuery }: { taskQuery: ReturnType<typeof useTask> 
   const expertsQuery = useStageProviders();
   const preflight = useProblemSourcePreflight();
   const startPreparation = useStartQuestionPreparation();
-  const draft = usePageDraft(`problems:${taskId}:${taskQuery.data?.course_id}:${taskQuery.data?.workflow_revision}`, initialProblemDraft, problemDraftCodec);
+  const draft = usePageDraft(`problems:${taskId}`, initialProblemDraft, problemDraftCodec, JSON.stringify([taskQuery.data?.workflow_revision, taskQuery.data?.course_id]), undefined, preflight.isPending || startPreparation.isPending);
   const [activeRole, setActiveRole] = draft.field("activeRole");
   const [sources, setSources] = draft.field("sources");
   const [scorePolicy, setScorePolicy] = draft.field("scorePolicy");
@@ -99,19 +98,12 @@ function AddProblemsForm({ taskQuery }: { taskQuery: ReturnType<typeof useTask> 
   useEffect(() => {
     if (expertsQuery.isLoading || expertsQuery.isError) return;
     const enabled = (expertsQuery.data ?? []).filter((expert) => expert.enabled);
-    setRecognitionProviderId((current) => {
-      if (current) return current;
-      const frozenProviderId = taskQuery.data?.question_recognition_provider_id;
-      if (frozenProviderId) {
-        return frozenProviderId;
-      }
-      return (
-        enabled.find((expert) => expert.is_default)?.provider_id
-        ?? enabled[0]?.provider_id
-        ?? ""
-      );
-    });
-  }, [expertsQuery.data, expertsQuery.isError, expertsQuery.isLoading, taskQuery.data?.question_recognition_provider_id]);
+    const defaultProvider = taskQuery.data?.question_recognition_provider_id
+      ?? enabled.find((expert) => expert.is_default)?.provider_id
+      ?? enabled[0]?.provider_id
+      ?? "";
+    draft.adoptDefault("recognitionProviderId", defaultProvider);
+  }, [draft.protection.loaded, expertsQuery.data, expertsQuery.isError, expertsQuery.isLoading, taskQuery.data?.question_recognition_provider_id]);
 
   const needsByok = (!enabledExperts.some((expert) => expert.provider_id === recognitionProviderId)) && !expertsQuery.isLoading && !expertsQuery.isError;
   const needsProblemSource = !hasProblemSource;
@@ -228,6 +220,7 @@ function AddProblemsForm({ taskQuery }: { taskQuery: ReturnType<typeof useTask> 
           enableMaterialOcr: source.enableMaterialOcr ?? false,
           replaceConfirmed,
         });
+        if (!draft.protection.isCurrent()) return;
         const storedFileId = typeof result.source === "object" ? result.source?.stored_file_id ?? source.storedFileId : source.storedFileId;
         updateSource(source.id, { storedFileId, prepared: {
           operationId: result.source_token,
@@ -251,6 +244,7 @@ function AddProblemsForm({ taskQuery }: { taskQuery: ReturnType<typeof useTask> 
           ? tx(locale, "已有相同的题目准备任务。", "The same preparation job already exists.")
           : tx(locale, "题目与资料已进入统一识别。", "Question materials are being prepared."),
       );
+      if (!draft.protection.isCurrent()) return;
       draft.clear();
       navigate(`/tasks/${taskId}/problems/progress`);
     } catch (error) {
@@ -320,7 +314,6 @@ function AddProblemsForm({ taskQuery }: { taskQuery: ReturnType<typeof useTask> 
       <NewTaskStepper currentStep={1} reachableStep={hasRecognizedProblems ? 2 : 1} returnState={routeState} />
 
       <div className="mx-auto mt-6 w-full max-w-[940px]">
-        <PageDraftNotice notice={draft.notice} disabled={isBusy} onDiscard={() => { draft.reset(); setFormError(null); setPreparationFailure(null); }} />
         {taskQuery.data?.status === "error" && taskQuery.data.last_failed_job_id === taskQuery.data.extract_job_id && taskQuery.data.last_failed_job_id ? (
           <div role="status" className="mb-5 flex flex-wrap items-center justify-between gap-3 border-l-4 border-primary bg-muted px-4 py-3 text-sm">
             <p>{tx(locale, "上次题目准备未完成，已上传资料仍保留。", "The previous preparation did not finish. Your uploaded materials are preserved.")}</p>

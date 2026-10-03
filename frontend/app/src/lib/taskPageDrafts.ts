@@ -81,7 +81,7 @@ function source(value: unknown): SourceDraft {
     prepared: prepared ? { operationId: prepared[0], signature: prepared[1] } : null,
   };
 }
-// Run the explicit parser on writes too: no response bodies, credentials, or file bytes enter storage.
+// Run the explicit parser on writes too: only selected metadata enters the codec; explicit storage handles file bytes separately.
 export const problemDraftCodec = codec<ProblemDraft>(
   (value) => parseProblem({ ...value, sources: value.sources.map((item) => ({ ...item, fileName: item.file?.name ?? item.fileName })) }),
   parseProblem,

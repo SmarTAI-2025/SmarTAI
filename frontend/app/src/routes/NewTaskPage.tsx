@@ -30,7 +30,6 @@ import {
 import { NewTaskStepper } from "@/components/new-task/NewTaskStepper";
 import { SmartCatalogField } from "@/components/new-task/SmartCatalogField";
 import { usePageDraft } from "@/hooks/usePageDraft";
-import { PageDraftNotice } from "@/components/ui/PageDraftNotice";
 import { metadataDraftCodec } from "@/lib/taskPageDrafts";
 import { useI18n } from "@/i18n/I18nProvider";
 import { modelDisplayName } from "@/lib/modelPresentation";
@@ -41,7 +40,7 @@ export function NewTaskPage() {
   const { taskId } = useParams();
   const taskQuery = useTask(taskId, { refetchOnMount: "always" });
   if (taskId && (taskQuery.isLoading || (taskQuery.isFetching && !taskQuery.isFetchedAfterMount))) return <div role="status"><LoaderCircle className="animate-spin" /></div>;
-  const scope = taskId ? `metadata:${taskId}:${taskMetadataSignature(taskQuery.data ?? {})}` : "new-task";
+  const scope = taskId ? `metadata:${taskId}` : "new-task";
   return <NewTaskForm key={scope} scope={scope} taskQuery={taskQuery} />;
 }
 
@@ -61,13 +60,16 @@ function NewTaskForm({ scope, taskQuery }: { scope: string; taskQuery: ReturnTyp
       ? current
       : semesterOptions.at(-1)?.id ?? "";
   }, [semesterOptions]);
-  const draft = usePageDraft(scope, () => ({
+  const createTask = useCreateTask();
+  const updateTask = useUpdateTask();
+  const initialDraftValue = () => ({
     name: taskQuery.data?.name ?? "",
     semesterId: semesterOptions.some((option) => option.id === taskQuery.data?.semester_id)
       ? taskQuery.data!.semester_id! : initialSemester,
     courseId: taskQuery.data?.course_id ?? null, courseDraft: "",
     tagIds: taskQuery.data?.tag_ids ?? [], tagDraft: "", idempotency: null as { signature: string; key: string } | null,
-  }), metadataDraftCodec);
+  });
+  const draft = usePageDraft(scope, initialDraftValue, metadataDraftCodec, taskId ? taskMetadataSignature(taskQuery.data ?? {}) : "new", isEditing && taskQuery.data ? initialDraftValue() : undefined, createTask.isPending || updateTask.isPending);
   const [name, setName] = draft.field("name");
   const [semesterId, setSemesterId] = draft.field("semesterId");
   const [courseId, setCourseId] = draft.field("courseId");
@@ -77,6 +79,7 @@ function NewTaskForm({ scope, taskQuery }: { scope: string; taskQuery: ReturnTyp
   const [formError, setFormError] = useState<string | null>(null);
   const [editHydrated, setEditHydrated] = useState(false);
   const idempotencyRef = useRef(draft.value.idempotency);
+  useEffect(() => { if (draft.value.idempotency) idempotencyRef.current = draft.value.idempotency; }, [draft.value.idempotency]);
 
   const debouncedCourseDraft = useDebouncedValue(courseDraft, 180);
   const debouncedTagDraft = useDebouncedValue(tagDraft, 180);
@@ -86,8 +89,6 @@ function NewTaskForm({ scope, taskQuery }: { scope: string; taskQuery: ReturnTyp
   const tagSearch = useTagSearch(debouncedTagDraft);
   const createCourse = useCreateCourse();
   const createTag = useCreateTag();
-  const createTask = useCreateTask();
-  const updateTask = useUpdateTask();
   const expertsQuery = useExperts();
   const course = (coursesQuery.data ?? []).find((item) => item.id === courseId) ?? null;
   const tags = (tagsQuery.data ?? []).filter((item) => tagIds.includes(item.id));
@@ -109,6 +110,7 @@ function NewTaskForm({ scope, taskQuery }: { scope: string; taskQuery: ReturnTyp
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setFormError(null);
+    if (draft.protection.conflict) { setFormError("请先核对服务器变化，明确恢复或删除旧草稿。"); return; }
     const trimmedName = name.trim();
     if (!trimmedName) {
       setFormError(t("newTaskNameRequired"));
@@ -133,6 +135,7 @@ function NewTaskForm({ scope, taskQuery }: { scope: string; taskQuery: ReturnTyp
     if (isEditing && taskId) {
       try {
         await updateTask.mutateAsync({ taskId, patch: payload });
+        if (!draft.protection.isCurrent()) return;
         draft.clear();
         toast.success(t("newTaskUpdateSuccess"));
         navigate(returnTo, { replace: true, state: location.state });
@@ -153,6 +156,7 @@ function NewTaskForm({ scope, taskQuery }: { scope: string; taskQuery: ReturnTyp
         ...payload,
         idempotencyKey: idempotencyRef.current.key,
       });
+      if (!draft.protection.isCurrent()) return;
       draft.clear();
       toast.success(t("newTaskCreateSuccess"));
       navigate(`/tasks/${task.task_id}/upload/problems`);
@@ -200,10 +204,6 @@ function NewTaskForm({ scope, taskQuery }: { scope: string; taskQuery: ReturnTyp
       <TaskMetadataHeading editing={isEditing} />
       <NewTaskStepper currentStep={0} reachableStep={reachableStep} returnState={location.state} />
 
-      <PageDraftNotice notice={draft.notice} disabled={isSaving} onDiscard={() => {
-        draft.reset(); setFormError(null); idempotencyRef.current = null;
-        if (isEditing) setEditHydrated(false);
-      }} />
       <form id="new-task-form" onSubmit={handleSubmit} className="mt-[35px] min-h-[510px] max-w-full rounded-[8px] border bg-card p-5 sm:p-10 xl:ml-[200px] xl:w-[900px] xl:px-[49px] xl:pb-[39px] xl:pt-[39px]">
         <div className="grid gap-5 xl:block">
           <div>

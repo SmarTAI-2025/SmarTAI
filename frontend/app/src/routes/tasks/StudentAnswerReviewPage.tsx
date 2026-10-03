@@ -1,3 +1,6 @@
+import { DraftField, type DraftFieldHandle } from "@/components/ui/DraftField";
+import { useDraftProtection } from "@/hooks/useDraftProtection";
+import { useDraftLeave } from "@/hooks/useDraftLeave";
 import {
   AlertCircle,
   ArrowDown,
@@ -81,7 +84,8 @@ const STATUS_KEYS: Record<SubmissionAnswerState, MessageKey> = {
 };
 
 /** Merged S04/S05: one selected student with all questions in one continuous review. */
-export function StudentAnswerReviewPage() {
+export function StudentAnswerReviewPage() { const { taskId, studentId } = useParams(); return <StudentAnswerReviewForm key={`${taskId}:${studentId}`} />; }
+function StudentAnswerReviewForm() {
   const { taskId, studentId } = useParams();
   const [searchParams, setSearchParams] = useSearchParams();
   const navigate = useNavigate();
@@ -196,6 +200,12 @@ export function StudentAnswerReviewPage() {
       : [];
   })), [answers, drafts, questions]);
   const isDirty = dirtyQuestionIds.size > 0;
+  const answerDrafts = useRef(new Map<string, DraftFieldHandle>());
+  const mounted = useRef(true);
+  useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
+  const identityDraft = useDraftProtection({ scope: `identity:${taskId}:${encodeURIComponent(studentId ?? "")}`, value: { identityId, identityName }, baseline: { identityId: student?.stu_id ?? "", identityName: student?.stu_name ?? "" }, version: JSON.stringify([student?.stu_id, student?.stu_name]), enabled: Boolean(student && !readOnly), busy: identityMutation.isPending, onRestore: (restored) => { setIdentityId(restored.identityId); setIdentityName(restored.identityName); setIdentityOpen(true); } });
+  const leave = useDraftLeave();
+
 
   useEffect(() => {
     if (!filteredQuestions.length) return;
@@ -277,12 +287,6 @@ export function StudentAnswerReviewPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isDirty, questionNeighbors.next?.id, questionNeighbors.previous?.id, studentNeighbors.next?.stu_id, studentNeighbors.previous?.stu_id]);
 
-  useEffect(() => {
-    if (!isDirty) return;
-    const warnBeforeUnload = (event: BeforeUnloadEvent) => event.preventDefault();
-    window.addEventListener("beforeunload", warnBeforeUnload);
-    return () => window.removeEventListener("beforeunload", warnBeforeUnload);
-  }, [isDirty]);
 
   if (taskQuery.isSuccess && taskId && !hasTaskReachedStep(taskQuery.data, 4)) {
     return <Navigate replace to={getTaskDestination(taskQuery.data)} />;
@@ -298,9 +302,7 @@ export function StudentAnswerReviewPage() {
     }, { replace: true });
   }
 
-  function confirmLeave() {
-    return !isDirty || window.confirm(t("answerReviewUnsavedConfirm"));
-  }
+  function confirmLeave() { return true; }
 
   function goToStudent(target: StudentSubmission | null) {
     const selectedQuestionStillVisible = filteredQuestions.some((question) => question.id === selectedQuestionRef.current);
@@ -342,6 +344,7 @@ export function StudentAnswerReviewPage() {
     if (!taskId || !student || !taskQuery.data || readOnly) return;
     const draft = drafts[question.id];
     if (!draft) return;
+    if (savingQuestionId || answerDrafts.current.get(question.id)?.conflict) return;
     setSavingQuestionId(question.id);
     setSaveErrors((current) => {
       const next = { ...current };
@@ -356,6 +359,8 @@ export function StudentAnswerReviewPage() {
         expectedWorkflowRevision: taskQuery.data.workflow_revision,
         content: draft.content,
       });
+      if (!mounted.current) return;
+      if (await answerDrafts.current.get(question.id)?.clear(draft) === false) return;
       setEditingQuestionIds((current) => {
         const nextIds = new Set(current);
         nextIds.delete(question.id);
@@ -376,6 +381,7 @@ export function StudentAnswerReviewPage() {
 
   async function confirmAnswer(question: SubmissionQuestion) {
     if (!taskId || !student || !taskQuery.data || readOnly) return;
+    if (savingQuestionId || answerDrafts.current.get(question.id)?.conflict) return;
     setSavingQuestionId(question.id);
     setSaveErrors((current) => {
       const next = { ...current };
@@ -390,6 +396,7 @@ export function StudentAnswerReviewPage() {
         expectedWorkflowRevision: taskQuery.data.workflow_revision,
         reviewStatus: "confirmed",
       });
+      if (!mounted.current) return;
       toast.success(t("answerReviewConfirmed"));
     } catch (error) {
       setSaveErrors((current) => ({ ...current, [question.id]: answerErrorMessage(error, t) }));
@@ -408,7 +415,8 @@ export function StudentAnswerReviewPage() {
     setEditingQuestionIds((current) => new Set(current).add(question.id));
   }
 
-  function cancelEditing(question: SubmissionQuestion) {
+  function cancelEditing(question: SubmissionQuestion) { answerDrafts.current.get(question.id)?.requestLeave(() => finishCancelEditing(question)); }
+  function finishCancelEditing(question: SubmissionQuestion) {
     const answer = answers.get(question.id);
     setDrafts((current) => ({
       ...current,
@@ -444,6 +452,7 @@ export function StudentAnswerReviewPage() {
         studentId: nextId,
         studentName: nextName,
       });
+      await identityDraft.clear();
       setIdentityOpen(false);
       toast.success(t("studentSubmissionIdentitySaved"));
       if (result.student.stu_id !== student.stu_id) {
@@ -462,6 +471,7 @@ export function StudentAnswerReviewPage() {
 
   return (
     <div className="w-full max-w-[1300px]">
+      {!readOnly && student ? questions.filter((question) => drafts[question.id]).map((question) => <DraftField key={question.id} id={question.id} handles={answerDrafts} scope={`answers:${taskId}:${encodeURIComponent(studentId ?? "")}:${encodeURIComponent(question.id)}`} value={drafts[question.id]} baseline={{ content: answers.get(question.id)?.content ?? "" }} version={JSON.stringify(answers.get(question.id) ?? null)} busy={savingQuestionId === question.id} onRestore={(restored) => { setDrafts((current) => ({ ...current, [question.id]: restored })); setEditingQuestionIds((current) => new Set([...current, question.id])); }} />) : null}
       <div className="flex min-h-9 items-center justify-between gap-4">
         <h1 className="min-w-0 truncate text-[28px] font-bold leading-9 tracking-[-0.02em] text-foreground sm:text-[30px]">
           {t("answerReviewTitle")}
@@ -535,7 +545,7 @@ export function StudentAnswerReviewPage() {
             readOnly={readOnly}
             onToggleIdentity={() => {
               if (readOnly) return;
-              setIdentityOpen((open) => !open);
+              if (identityOpen) identityDraft.requestLeave(() => setIdentityOpen(false)); else setIdentityOpen(true);
               setIdentityError(null);
             }}
             previewAction={(
