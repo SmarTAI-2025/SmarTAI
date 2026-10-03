@@ -673,10 +673,10 @@ def test_refresh_race_cannot_survive_password_reset(monkeypatch):
 
     original_add = auth_repository._add_refresh_session
 
-    def blocking_add(session, *, user_id: str, days: int, now: float):
+    def blocking_add(session, *, user_id: str, days: int, now: float, session_scope: str = "public"):
         entered_issue.set()
         assert release_issue.wait(timeout=5)
-        return original_add(session, user_id=user_id, days=days, now=now)
+        return original_add(session, user_id=user_id, days=days, now=now, session_scope=session_scope)
 
     monkeypatch.setattr(auth_repository, "_add_refresh_session", blocking_add)
 
