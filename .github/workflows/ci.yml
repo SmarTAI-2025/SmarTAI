@@ -79,6 +79,15 @@ jobs:
           SMARTAI_DATABASE_URL_HEAVY: "postgresql+psycopg://smartai:smartai@localhost:5432/smartai_test"
         run: |
           alembic upgrade head
+      - name: Test administrator PostgreSQL integration
+        env:
+          SMARTAI_DATABASE_HEAVY: "ON"
+          SMARTAI_DATABASE_URL: "postgresql+psycopg://smartai:smartai@localhost:5432/smartai_test"
+          SMARTAI_DATABASE_URL_HEAVY: "postgresql+psycopg://smartai:smartai@localhost:5432/smartai_test"
+          SMARTAI_SEED_TEST_USERS: "false"
+          SMARTAI_GRADING_ENGINE: v2
+          SMARTAI_TEST_POSTGRES_URL: "postgresql+psycopg://smartai:smartai@localhost:5432/smartai_test"
+        run: python -m pytest backend/tests/test_admin_postgres.py -q
       - name: Test PostgreSQL integration
         env:
           SMARTAI_DATABASE_HEAVY: "ON"
@@ -87,7 +96,7 @@ jobs:
           SMARTAI_SEED_TEST_USERS: "false"
           SMARTAI_GRADING_ENGINE: v2
           SMARTAI_TEST_POSTGRES_URL: "postgresql+psycopg://smartai:smartai@localhost:5432/smartai_test"
-        run: python -m pytest backend/tests/test_postgres_integration.py backend/tests/test_admin_postgres.py -q
+        run: python -m pytest backend/tests/test_postgres_integration.py -q
       - name: Verify PostgreSQL migration round trip
         env:
           SMARTAI_DATABASE_HEAVY: "ON"

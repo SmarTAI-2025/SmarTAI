@@ -57,7 +57,7 @@ describe("LoginPage registration entry", () => {
     const user=userEvent.setup();
     await user.type(screen.getByLabelText("用户名"),"synthetic-manager");
     await user.type(screen.getByLabelText("密码",{exact:true}),"synthetic-password");
-    await user.click(screen.getByRole("button",{name:"登录",exact:true}));
+    await user.click(screen.getByRole("button",{name:/^登录$/}));
     expect(await screen.findByText(text)).toBeInTheDocument();
   });
 

@@ -370,6 +370,9 @@ def test_sqlite_migration_upgrade_downgrade_upgrade(client, tmp_path, monkeypatc
     monkeypatch.setenv("SMARTAI_DATABASE_URL", url)
     config = Config(str(root / "alembic.ini"))
     config.set_main_option("script_location", str(root / "backend/db/migrations"))
+    # PR #129 selects the same DB target as runtime; explicit fixture identity
+    # must not be shadowed by the suite settings singleton / light URL.
+    config.attributes.update(database_url=url, database_heavy=False)
     engine = create_engine(url)
     try:
         command.upgrade(config, "head")
