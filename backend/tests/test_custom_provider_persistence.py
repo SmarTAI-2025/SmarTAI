@@ -227,7 +227,9 @@ def test_registry_uses_unverified_relay_without_changing_vision_routing(
         ["official", "relay"], primary_provider_id="official"
     ).pick_vision(official_provider) is None
     # Unreviewed relays are not silently reused for course-material embeddings.
-    assert registry.list_enabled_configs() == [official]
+    assert [config.model_dump() for config in registry.list_enabled_configs()] == [
+        official.model_dump(),
+    ]
 
 
 def test_registry_resolves_duplicate_user_labels_with_a_stable_id_suffix(

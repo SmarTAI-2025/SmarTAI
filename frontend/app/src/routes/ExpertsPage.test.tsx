@@ -6,6 +6,7 @@ import { I18nProvider } from "@/i18n/I18nProvider";
 import { ExpertsPage } from "./ExpertsPage";
 
 const addExpert = vi.fn();
+const updateExpert = vi.fn();
 const saveBaiduOCRCredentials = vi.fn();
 const verifyBaiduOCRCredentials = vi.fn();
 const deleteBaiduOCRCredentials = vi.fn();
@@ -28,7 +29,7 @@ vi.mock("@/api/hooks", () => ({
   useExperts: () => ({ data: hookState.experts, isLoading: false, isError: false, isFetching: false, refetch: vi.fn() }),
   useProviderCatalog: () => ({ data: hookState.catalog, isLoading: false, isError: false, refetch: vi.fn() }),
   useAddExpertKey: () => ({ isPending: false, mutateAsync: addExpert }),
-  useUpdateExpert: () => ({ isPending: false, mutateAsync: vi.fn() }),
+  useUpdateExpert: () => ({ isPending: false, mutateAsync: updateExpert }),
   useSelectExpert: () => ({ isPending: false, mutateAsync: vi.fn() }),
   useSetDefaultExpert: () => ({ isPending: false, mutateAsync: vi.fn() }),
   useVerifyExpert: () => ({ isPending: false, mutateAsync: vi.fn() }),
@@ -111,6 +112,7 @@ describe("ExpertsPage editable vendor Base URL", () => {
       verification_error_code: null,
     };
     addExpert.mockResolvedValue({ status: "success", provider_id: "pc-test" });
+    updateExpert.mockResolvedValue({ status: "success", provider_id: "pc-test" });
     saveBaiduOCRCredentials.mockResolvedValue({ status: "success" });
     verifyBaiduOCRCredentials.mockResolvedValue({ status: "credentials_verified" });
     deleteBaiduOCRCredentials.mockResolvedValue({ status: "success" });
@@ -144,6 +146,57 @@ describe("ExpertsPage editable vendor Base URL", () => {
     expect(addExpert.mock.calls[0]?.[0]).not.toHaveProperty("wire_protocol");
     expect(screen.queryByDisplayValue("sk-secret-value")).not.toBeInTheDocument();
     expect(window.localStorage.getItem("sk-secret-value")).toBeNull();
+  });
+
+  it("saves blank RPM without a manual concurrency limit", async () => {
+    const user = userEvent.setup();
+    renderPage();
+
+    await user.click(screen.getByRole("button", { name: "添加模型配置" }));
+    expect(screen.getByLabelText(/^RPM/)).toHaveValue(null);
+    expect(screen.queryByRole("spinbutton", { name: /并发/ })).not.toBeInTheDocument();
+    expect(screen.getByText("自动 · 上限 50")).toBeInTheDocument();
+
+    await user.type(screen.getByLabelText(/^API key/), "sk-test-only");
+    await user.click(screen.getByRole("button", { name: "保存配置" }));
+
+    await waitFor(() => expect(addExpert).toHaveBeenCalledTimes(1));
+    expect(addExpert.mock.calls[0]?.[0]).toMatchObject({ rpm: 0 });
+    expect(addExpert.mock.calls[0]?.[0]).not.toHaveProperty("max_concurrent");
+  });
+
+  it("lets the backend derive concurrency when saving RPM 10", async () => {
+    const user = userEvent.setup();
+    renderPage();
+
+    await user.click(screen.getByRole("button", { name: "添加模型配置" }));
+    await user.type(screen.getByLabelText(/^API key/), "sk-test-only");
+    await user.type(screen.getByLabelText(/^RPM/), "10");
+    await user.click(screen.getByRole("button", { name: "保存配置" }));
+
+    await waitFor(() => expect(addExpert).toHaveBeenCalledTimes(1));
+    expect(addExpert.mock.calls[0]?.[0]).toMatchObject({ rpm: 10 });
+    expect(addExpert.mock.calls[0]?.[0]).not.toHaveProperty("max_concurrent");
+  });
+
+  it("updates an existing configuration without resubmitting its legacy concurrency", async () => {
+    hookState.experts = [{
+      provider_id: "pc-test", provider_type: "deepseek", model: "test-model",
+      enabled: true, max_concurrent: 5, rpm: 0,
+    }];
+    const user = userEvent.setup();
+    renderPage();
+
+    expect(screen.getAllByText("并发自动 · 上限 50").length).toBeGreaterThan(0);
+    await user.click(screen.getAllByRole("button", { name: "编辑" })[0]!);
+    expect(screen.getByLabelText(/^RPM/)).toHaveValue(null);
+    await user.type(screen.getByLabelText(/^RPM/), "10");
+    await user.click(screen.getByRole("button", { name: "保存配置" }));
+
+    await waitFor(() => expect(updateExpert).toHaveBeenCalledTimes(1));
+    const saved = updateExpert.mock.calls[0]?.[0];
+    expect(saved).toMatchObject({ providerId: "pc-test", request: { rpm: 10, api_key: null } });
+    expect(saved.request).not.toHaveProperty("max_concurrent");
   });
 
   it("uses catalog defaults and keeps Base URL editable for native-protocol providers", async () => {

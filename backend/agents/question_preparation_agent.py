@@ -377,26 +377,19 @@ def _major_question_generation_concurrency(provider: BaseProvider) -> int:
     """Use the same BYOK concurrency contract as grading.
 
     This outer gate bounds active major-question units for truthful progress.
-    Actual calls remain protected by ``BaseProvider``'s RPM limiter,
-    per-provider semaphore, and process-wide endpoint semaphore. There is no
+    Actual calls remain protected by automatic shared quota/resource admission
+    and the host-wide 50-call fence. There is no
     separate question-generation concurrency setting.
     """
 
     config = getattr(provider, "config", None)
-    configured = getattr(config, "max_concurrent", None)
-    if isinstance(configured, bool):
-        configured = None
-    try:
-        provider_limit = int(configured) if configured is not None else 0
-    except (TypeError, ValueError):
-        provider_limit = 0
-    if provider_limit <= 0:
-        provider_limit = max(
-            1, int(settings.max_concurrent_llm_per_provider)
-        )
+    from backend.llm.concurrency import initial_concurrency
+    provider_limit = getattr(provider, "effective_concurrency", None)
+    if not isinstance(provider_limit, int) or isinstance(provider_limit, bool):
+        provider_limit = initial_concurrency(max(0, int(getattr(config, "rpm", 0) or 0)))
 
     endpoint_limit = max(1, int(settings.max_concurrent_llm_per_endpoint))
-    return min(provider_limit, endpoint_limit)
+    return min(50, provider_limit, endpoint_limit)
 
 
 def _validate_major_question_candidates(

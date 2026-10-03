@@ -193,9 +193,10 @@ async def test_sync_gemini_cancellation_keeps_capacity_until_worker_drains(monke
         await asyncio.sleep(0.01)
         task.cancel()
         await asyncio.sleep(0.01)
-        assert not task.done() and provider._semaphore.locked()
+        from backend.llm.concurrency import get_scheduler
+        assert not task.done() and get_scheduler().active == 1
     finally:
         release.set()
         with pytest.raises(asyncio.CancelledError):
             await task
-    assert not provider._semaphore.locked()
+    assert get_scheduler().active == 0

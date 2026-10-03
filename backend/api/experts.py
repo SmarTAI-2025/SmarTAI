@@ -43,6 +43,7 @@ from backend.llm.endpoint_policy import (
     normalize_provider_endpoint,
     resolve_public_endpoint,
 )
+from backend.llm.concurrency import initial_concurrency
 from backend.llm.provider_catalog import (
     PROVIDER_CATALOG as PROVIDER_CATALOG_ENTRIES,
     effective_wire_protocol,
@@ -81,7 +82,12 @@ class AddKeyRequest(BaseModel):
     base_url: Optional[str] = Field(default=None, max_length=512)
     wire_protocol: Optional[WireProtocol] = None
     display_name: Optional[str] = Field(default=None, max_length=120)
-    max_concurrent: int = Field(default=5, ge=1, le=10)
+    max_concurrent: Optional[int] = Field(
+        default=None,
+        ge=1,
+        le=50,
+        description="Legacy input accepted for compatibility; concurrency is calculated automatically.",
+    )
     rpm: int = Field(default=0, ge=0, le=10_000)
 
 
@@ -100,7 +106,12 @@ class UpdateKeyRequest(BaseModel):
     base_url: Optional[str] = Field(default=None, max_length=512)
     wire_protocol: Optional[WireProtocol] = None
     display_name: Optional[str] = Field(default=None, max_length=120)
-    max_concurrent: int = Field(default=5, ge=1, le=10)
+    max_concurrent: Optional[int] = Field(
+        default=None,
+        ge=1,
+        le=50,
+        description="Legacy input accepted for compatibility; concurrency is calculated automatically.",
+    )
     rpm: int = Field(default=0, ge=0, le=10_000)
 
 
@@ -206,7 +217,7 @@ def add_key(
         wire_protocol=wire_protocol,
         enabled=True,
         display_name=(request.display_name.strip() if request.display_name else None),
-        max_concurrent=request.max_concurrent,
+        max_concurrent=initial_concurrency(request.rpm),
         rpm=request.rpm,
     )
     if not settings.provider_encryption_key:
@@ -451,7 +462,7 @@ def update_provider(
             if request.display_name and request.display_name.strip()
             else None
         ),
-        max_concurrent=request.max_concurrent,
+        max_concurrent=initial_concurrency(request.rpm),
         rpm=request.rpm,
     )
     try:
