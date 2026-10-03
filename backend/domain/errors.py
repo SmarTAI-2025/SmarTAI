@@ -195,6 +195,7 @@ RECOGNITION_ERROR_CODES = frozenset({
     "recognition_cache_not_success", "recognition_cache_corrupt", "recognition_cache_unavailable",
     "recognition_cache_source_unavailable",
     "provider_credentials_required", "provider_vision_not_supported", "provider_auth_failed",
+    "shared_pool_disabled", "shared_pool_daily_limit_reached",
     "provider_permission_denied", "provider_region_unsupported", "provider_quota_exceeded", "provider_rate_limited", "provider_overloaded",
     "provider_request_failed", "provider_request_rejected", "provider_response_invalid",
     "provider_result_too_large", "provider_result_unavailable", "provider_download_url_rejected",

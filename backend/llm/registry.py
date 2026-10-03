@@ -17,6 +17,7 @@ from threading import Lock
 from urllib.parse import urlsplit
 
 from fastapi import Depends, HTTPException, status
+from langchain_core.messages import HumanMessage
 
 from backend.config import settings
 from backend.llm.endpoint_policy import (
@@ -24,7 +25,7 @@ from backend.llm.endpoint_policy import (
     is_user_defined_provider_endpoint,
 )
 from backend.models import ProviderConfig
-from backend.llm.providers import BaseProvider, build_provider
+from backend.llm.providers import BaseProvider, LLMResponse, ProviderRequestError, VisionImage, build_provider
 from backend.llm.provider_catalog import (
     PROVIDER_CATALOG_BY_TYPE,
     effective_wire_protocol,
@@ -66,16 +67,38 @@ def _iso_utc_timestamp(value: object) -> str | None:
     return datetime.fromtimestamp(float(value), tz=timezone.utc).isoformat()
 
 
-class SharedPoolLimitError(RuntimeError):
+class SharedPoolLimitError(ProviderRequestError):
     """Stable signal raised before an over-budget shared-pool invocation."""
 
     retryable = False
 
 
+# Admission units, not measured vendor tokens: keep length/4 for text and
+# reserve a fixed image allowance without serializing/counting base64 bytes.
+_SHARED_IMAGE_INPUT_ESTIMATE = 1024
+
+
+def _shared_input_estimate(messages: List[Any], *, image_count: int = 0) -> int:
+    characters = 0
+    for message in messages:
+        content = getattr(message, "content", "")
+        if not isinstance(content, list):
+            characters += len(str(content))
+            continue
+        for block in content:
+            if isinstance(block, dict) and block.get("type") in {"image_url", "image"}:
+                image_count += 1
+            elif isinstance(block, dict) and block.get("type") == "text":
+                characters += len(str(block.get("text", "")))
+            else:
+                characters += len(str(block))
+    return max(1, characters // 4) + image_count * _SHARED_IMAGE_INPUT_ESTIMATE
+
+
 class _SharedPoolUsageLimiter:
-    def consume(self, owner_id: str, messages: List[Any]) -> None:
+    def consume(self, owner_id: str, messages: List[Any], *, image_count: int = 0) -> None:
         from backend.services.model_quota import admit_model_call, ModelQuotaError
-        estimate = max(1, sum(len(str(getattr(message, "content", ""))) for message in messages) // 4)
+        estimate = _shared_input_estimate(messages, image_count=image_count)
         try:
             admit_model_call(owner_id, "shared", estimated_input_tokens=estimate)
         except ModelQuotaError as exc:
@@ -98,11 +121,22 @@ class _GuardedSharedProvider:
         self.model = provider.model
         self.config = provider.config
 
-    async def ainvoke(self, messages: List[Any]):
+    def _admit(self, messages: List[Any], *, image_count: int = 0) -> None:
         if not settings.shared_pool_enabled:
             raise SharedPoolLimitError("shared_pool_disabled")
-        _shared_pool_usage.consume(self._owner_id, messages)
-        return await self._provider.ainvoke(messages)
+        _shared_pool_usage.consume(self._owner_id, messages, image_count=image_count)
+
+    async def ainvoke(self, messages: List[Any], *, max_output_tokens: int | None = None) -> LLMResponse:
+        self._admit(messages)
+        options = {} if max_output_tokens is None else {"max_output_tokens": max_output_tokens}
+        return await self._provider.ainvoke(messages, **options)
+
+    async def ainvoke_vision(self, prompt: str, images: List[VisionImage], *, max_output_tokens: int | None = None) -> LLMResponse:
+        self._admit([HumanMessage(content=prompt)], image_count=len(images))
+        options = {} if max_output_tokens is None else {"max_output_tokens": max_output_tokens}
+        # Delegate on the underlying instance: its internal self.ainvoke and
+        # SDK retries belong to this admission, rather than charging again.
+        return await self._provider.ainvoke_vision(prompt, images, **options)
 
     def __getattr__(self, name: str):
         return getattr(self._provider, name)
