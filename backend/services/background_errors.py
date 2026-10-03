@@ -255,15 +255,6 @@ def classify_background_error(
             if "too large for ocr" in normalized:
                 return "submission_source_too_large"
 
-        normalized = literal_code.lower()
-        if any(marker in normalized for marker in (
-            "does not support vision",
-            "does not support image input",
-            "doesn't support image input",
-            "image input is not supported",
-            "vision input is not supported",
-        )):
-            return "provider_vision_not_supported"
 
     if any(isinstance(item, RateLimitError) for item in chain):
         return "provider_rate_limited"

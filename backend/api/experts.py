@@ -33,6 +33,7 @@ from backend.db.provider_repository import (
     set_default_provider_id,
     set_provider_enabled,
     set_provider_verification,
+    set_image_capability,
     update_provider_config,
     upsert_provider_config,
 )
@@ -52,7 +53,8 @@ from backend.llm.registry import (
     provider_encryption_not_configured_error,
     resolve_owner_default_provider_id,
 )
-from backend.llm.providers import ProviderRequestError
+from backend.llm.providers import ProviderRequestError, VisionImage
+from backend.llm.image_capability import make_image_challenge, IMAGE_CHALLENGE_PROMPT, is_explicit_image_rejection
 from backend.models import ProviderConfig, ProviderType, User, WireProtocol
 from backend.services.stage_provider_routing import list_stage_provider_options
 
@@ -577,6 +579,47 @@ async def verify_provider(
             checked_at, tz=timezone.utc
         ).isoformat(),
     }
+
+
+@router.post("/{provider_id}/verify-image")
+async def verify_provider_image(
+    provider_id: str,
+    current: User = Depends(require_teacher),
+    registry: ExpertRegistry = Depends(get_scoped_expert_registry),
+):
+    """One opt-in image request using the saved endpoint/protocol/model/key."""
+    stored = get_provider_config(current.id, provider_id, master_key=settings.provider_encryption_key) if settings.provider_encryption_key else None
+    provider = registry.get(provider_id)
+    if stored is None or provider is None or registry.uses_shared_pool():
+        raise HTTPException(404, detail="Provider not found")
+    if is_user_defined_provider_endpoint(stored.config.provider_type, stored.config.base_url, stored.config.wire_protocol):
+        if not settings.custom_provider_endpoints_available:
+            raise HTTPException(403, detail={"code": "custom_provider_endpoints_disabled"})
+    _check_custom_probe_limit(current.id, "verify_image")
+    # A user may explicitly recheck previously rejected input. No automatic
+    # retries or alternative model/endpoint; use the existing image serializer.
+    provider.config = provider.config.model_copy(update={"image_capability_status": "unverified"})
+    pixels, answer = make_image_challenge()
+    state, reason = "inconclusive", "image_probe_answer_incorrect"
+    try:
+        response = await asyncio.wait_for(provider.ainvoke_vision(
+            IMAGE_CHALLENGE_PROMPT, [VisionImage(data=pixels, media_type="image/png")],
+            max_output_tokens=64,
+        ), timeout=max(5, min(int(settings.llm_timeout), int(settings.custom_provider_verification_timeout_seconds))))
+        if response.content.strip() == answer:
+            state, reason = "passed", "image_probe_answer_correct"
+    except Exception as exc:
+        if is_explicit_image_rejection(exc):
+            state, reason = "unsupported", "provider_vision_not_supported"
+        else:
+            reason = _verification_error_code(exc)
+    checked_at = time.time()
+    if not set_image_capability(current.id, provider_id, status=state, checked_at=checked_at,
+                                reason=reason, expected_updated_at=stored.updated_at):
+        raise HTTPException(409, detail={"code": "expert_verification_stale"})
+    return {"provider_id": provider_id, "image_capability_status": state,
+            "image_checked_at": datetime.fromtimestamp(checked_at, tz=timezone.utc).isoformat(),
+            "image_reason": reason}
 
 
 @router.delete("/{provider_id}")

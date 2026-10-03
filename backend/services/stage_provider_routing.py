@@ -143,6 +143,7 @@ def stage_provider_configuration_fingerprint(
                     "scope",
                     "is_shared",
                     "supports_vision",
+                    "image_capability_status", "image_checked_at", "image_reason",
                 )
             }
     return hashlib.sha256(

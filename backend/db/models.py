@@ -285,6 +285,9 @@ class ProviderConfigRecord(Base):
     verification_error_code: Mapped[str | None] = mapped_column(
         String(128), nullable=True
     )
+    image_capability_status: Mapped[str] = mapped_column(String(32), nullable=False, default="unverified", server_default="unverified")
+    image_checked_at: Mapped[float | None] = mapped_column(Float, nullable=True)
+    image_reason: Mapped[str | None] = mapped_column(String(128), nullable=True)
     created_at: Mapped[float] = mapped_column(Float, nullable=False, default=time.time)
     updated_at: Mapped[float] = mapped_column(
         Float, nullable=False, default=time.time, onupdate=time.time

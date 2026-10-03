@@ -219,8 +219,8 @@ def test_registry_uses_unverified_relay_without_changing_vision_routing(
     relay_provider = registry.get("relay")
     assert official_provider is not None and relay_provider is not None
     assert official_provider.provider_id == relay_provider.provider_id
-    assert official_provider.supports_vision is False
-    assert relay_provider.supports_vision is False
+    assert official_provider.supports_vision is None
+    assert relay_provider.supports_vision is None
     assert relay_provider.can_encode_vision is True
     assert registry.pick_vision(official_provider) is None
     assert registry.select(

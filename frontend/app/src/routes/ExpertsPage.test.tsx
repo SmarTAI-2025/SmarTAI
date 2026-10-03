@@ -24,6 +24,7 @@ const hookState = vi.hoisted(() => ({
 }));
 
 vi.mock("@/api/hooks", () => ({
+  useVerifyExpertImage: () => ({ isPending: false, mutateAsync: vi.fn() }),
   useExperts: () => ({ data: hookState.experts, isLoading: false, isError: false, isFetching: false, refetch: vi.fn() }),
   useProviderCatalog: () => ({ data: hookState.catalog, isLoading: false, isError: false, refetch: vi.fn() }),
   useAddExpertKey: () => ({ isPending: false, mutateAsync: addExpert }),

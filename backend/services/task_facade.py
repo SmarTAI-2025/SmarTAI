@@ -6,6 +6,7 @@ course/assignment/submission/grading repositories.  It intentionally does not
 recreate the removed TaskStore or JobStore.
 """
 from __future__ import annotations
+from backend.llm.image_capability import can_attempt_images
 
 import asyncio
 import hashlib
@@ -2644,7 +2645,7 @@ async def run_task_submission_parsing(
                     or (frozen.get("question_snapshot") is not None and
                         frozen["question_snapshot"] != [[q.id, q.version] for q in questions])):
                 raise ValidationError("Recognition inputs changed.", code="recognition_plan_changed")
-            vision = provider if getattr(provider, "supports_vision", False) else None
+            vision = provider if can_attempt_images(provider) else None
             recovered_ocr_text: dict[str, str] = {}
             ocr_artifact_ids: list[str] = []
             blocked_source_ids: set[str] = set()

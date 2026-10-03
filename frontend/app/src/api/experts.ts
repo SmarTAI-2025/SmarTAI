@@ -65,3 +65,7 @@ export function verifyExpert(providerId: string): Promise<ExpertVerificationResp
 export function removeExpert(providerId: string): Promise<ExpertMutationResponse> {
   return deleteJSON<ExpertMutationResponse>(`/experts/${encodeURIComponent(providerId)}`);
 }
+
+export async function verifyExpertImage(providerId: string): Promise<Pick<ExpertConfig, "image_capability_status" | "image_checked_at" | "image_reason">> {
+  return postJSON(`/experts/${encodeURIComponent(providerId)}/verify-image`, {});
+}

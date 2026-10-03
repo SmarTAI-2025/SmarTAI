@@ -9,6 +9,7 @@ In-memory for now (matches current state pattern in dependencies.py).
 Swap to persistent storage (SQLite, Redis) later without changing callers.
 """
 from __future__ import annotations
+from backend.llm.image_capability import can_attempt_images
 
 import logging
 from datetime import datetime, timezone
@@ -436,9 +437,10 @@ class ExpertRegistry:
                     "scope": "shared" if self._uses_shared_pool else "owner",
                     "is_shared": self._uses_shared_pool,
                     "editable": not self._uses_shared_pool,
-                    "supports_vision": bool(
-                        getattr(self._providers.get(pid), "supports_vision", False)
-                    ),
+                    "supports_vision": getattr(self._providers.get(pid), "supports_vision", None),
+                    "image_capability_status": c.image_capability_status,
+                    "image_checked_at": _iso_utc_timestamp(c.image_checked_at),
+                    "image_reason": c.image_reason,
                     "verification_status": (
                         "platform_managed" if self._uses_shared_pool
                         else verification.get("verification_status", "unverified")
@@ -533,7 +535,7 @@ class ExpertRegistry:
         """
         available = self.list_available()
         if preferred is not None:
-            if getattr(preferred, "supports_vision", False):
+            if can_attempt_images(preferred):
                 preferred_id = self._registry_id_for_provider(preferred)
                 if preferred_id is not None and any(
                     self._registry_id_for_provider(provider) == preferred_id
@@ -542,7 +544,7 @@ class ExpertRegistry:
                     return preferred
             return None
         for p in available:
-            if getattr(p, "supports_vision", False):
+            if can_attempt_images(p):
                 return p
         return None
 
@@ -604,7 +606,7 @@ class ExpertRegistryView:
                 continue
             available.append((provider_id, provider))
         if preferred is not None:
-            if getattr(preferred, "supports_vision", False):
+            if can_attempt_images(preferred):
                 preferred_id = self._registry._registry_id_for_provider(preferred)
                 if any(provider_id == preferred_id for provider_id, _ in available):
                     return preferred
@@ -613,7 +615,7 @@ class ExpertRegistryView:
             (
                 item
                 for _, item in available
-                if getattr(item, "supports_vision", False)
+                if can_attempt_images(item)
             ),
             None,
         )
@@ -728,6 +730,14 @@ def _build_scoped_registry(current) -> ExpertRegistry:
                 last_checked_at=stored.last_checked_at,
                 verification_error_code=stored.verification_error_code,
             )
+            provider = registry.get(stored.id)
+            if provider is not None:
+                from functools import partial
+                from backend.db.provider_repository import record_image_rejection
+                provider._image_rejection_recorder = partial(
+                    record_image_rejection, current.id, stored.id,
+                    expected_updated_at=stored.updated_at,
+                )
     except ValueError as exc:
         logger.error("Unable to load encrypted provider configurations for user %s", current.id)
         raise HTTPException(503, detail="Saved provider credentials cannot be loaded.") from exc

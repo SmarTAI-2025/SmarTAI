@@ -23,6 +23,7 @@ import {
   useStartQuestionPreparation,
   useTask,
 } from "@/api/hooks";
+import { ImageRecognitionRecovery, useImageRecoveryReturn } from "@/components/models/ImageRecognitionRecovery";
 import { StageProviderSelect } from "@/components/models/StageProviderSelect";
 import { NewTaskStepper } from "@/components/new-task/NewTaskStepper";
 import { RecoverableActionState, type RecoveryAction } from "@/components/ui/RecoverableActionState";
@@ -78,6 +79,7 @@ function AddProblemsForm({ taskQuery }: { taskQuery: ReturnType<typeof useTask> 
   const [sources, setSources] = draft.field("sources");
   const [scorePolicy, setScorePolicy] = draft.field("scorePolicy");
   const [recognitionProviderId, setRecognitionProviderId] = draft.field("recognitionProviderId");
+  useImageRecoveryReturn(draft.protection.loaded, setRecognitionProviderId);
   const references = useProblemDraftReferences(taskId, sources, updateSource);
   const [formError, setFormError] = draft.field("formError");
   const [preparationFailure, setPreparationFailure] = useState<PreparationFailure | null>(null);
@@ -475,6 +477,7 @@ function AddProblemsForm({ taskQuery }: { taskQuery: ReturnType<typeof useTask> 
           </button>
         </section>
         {formError ? <p role="alert" className="mt-3 text-sm text-danger">{formError}</p> : null}
+        <ImageRecognitionRecovery error={preparationFailure?.error} expert={enabledExperts.find(e => e.provider_id === recognitionProviderId)} returnTo={taskReturnPath} controller={draft.protection.controller} isCurrent={draft.protection.isCurrent} locale={locale} />
         {recoveryInfo ? (
           <RecoverableActionState
             info={recoveryInfo}

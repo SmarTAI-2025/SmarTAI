@@ -749,6 +749,7 @@ def _grading_setup_payload(task_id: str, owner_id: str, registry: ExpertRegistry
                 "scope", "is_shared", "editable", "max_concurrent", "rpm",
                 "verification_status", "base_url", "provider_kind",
                 "credential_id", "supports_vision",
+                "image_capability_status", "image_checked_at", "image_reason",
             )
         })
     default_id = resolve_owner_default_provider_id(owner_id, registry)

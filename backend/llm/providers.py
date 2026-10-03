@@ -34,14 +34,12 @@ from backend.llm.endpoint_policy import (
     provider_operation_url,
 )
 from backend.llm.provider_catalog import effective_wire_protocol
+from backend.llm.image_capability import is_explicit_image_rejection, explicitly_rejects_images
 from backend.models import ProviderConfig
 
 logger = logging.getLogger(__name__)
 
 
-_ZHIPU_VISION_MODEL_PATTERN = re.compile(
-    r"^glm-\d+(?:\.\d+)?v(?:-|$)", re.IGNORECASE
-)
 
 
 def _configured_proxy_url() -> Optional[str]:
@@ -384,7 +382,22 @@ class BaseProvider(ABC):
     """Abstract provider with async ainvoke interface."""
 
     provider_type: str = ""
-    supports_vision: bool = False
+    @property
+    def supports_vision(self) -> bool | None:
+        # Capability evidence, never inferred from brand, protocol or model ID.
+        state = self.config.image_capability_status
+        return True if state == "passed" else False if state == "unsupported" else None
+
+    @property
+    def can_attempt_vision(self) -> bool:
+        return self.config.image_capability_status != "unsupported"
+
+    def _record_image_rejection(self):
+        self.config.image_capability_status = "unsupported"
+        recorder = getattr(self, "_image_rejection_recorder", None)
+        if recorder is not None:
+            recorder()
+
 
     def __init__(self, config: ProviderConfig):
         self.config = config
@@ -493,13 +506,19 @@ class BaseProvider(ABC):
 
     async def ainvoke_vision(self, prompt: str, images: List[VisionImage], *, max_output_tokens: int | None = None) -> LLMResponse:
         """Invoke a vision-capable model with text prompt plus one or more images."""
-        if not self.supports_vision:
-            raise NotImplementedError(f"{self.provider_id} does not support vision input.")
+        if not self.can_attempt_vision:
+            raise ProviderRequestError("provider_vision_not_supported", status_code=400)
         if not images:
             raise ValueError("ainvoke_vision requires at least one image.")
         _validate_output_limit(max_output_tokens)
         options = {} if max_output_tokens is None else {"max_output_tokens": max_output_tokens}
-        return await self.ainvoke(_build_vision_messages(prompt, images), **options)
+        try:
+            return await self.ainvoke(_build_vision_messages(prompt, images), **options)
+        except Exception as exc:
+            if is_explicit_image_rejection(exc):
+                self._record_image_rejection()
+                raise ProviderRequestError("provider_vision_not_supported", status_code=400) from exc
+            raise
 
 
 # ─── Gemini ───────────────────────────────────────────────────────────────────
@@ -512,7 +531,6 @@ class GeminiProvider(BaseProvider):
     Auto-detected from SmarTAI's explicit proxy settings.
     """
     provider_type = "gemini"
-    supports_vision = True
 
     def _build_client_sync(self) -> Any:
         from langchain_google_genai import ChatGoogleGenerativeAI
@@ -593,7 +611,6 @@ class GeminiProvider(BaseProvider):
 
 class OpenAIProvider(BaseProvider):
     provider_type = "openai"
-    supports_vision = True
 
     def _build_client_sync(self) -> Any:
         from langchain_openai import ChatOpenAI
@@ -630,9 +647,6 @@ class ZhipuProvider(BaseProvider):
 
     def __init__(self, config: ProviderConfig):
         super().__init__(config)
-        self.supports_vision = bool(
-            _ZHIPU_VISION_MODEL_PATTERN.match(self.model.strip())
-        )
 
     def _build_client_sync(self) -> Any:
         from langchain_openai import ChatOpenAI
@@ -658,7 +672,6 @@ class ZhipuProvider(BaseProvider):
 
 class AnthropicProvider(BaseProvider):
     provider_type = "anthropic"
-    supports_vision = True
 
     def _build_client_sync(self) -> Any:
         from langchain_anthropic import ChatAnthropic
@@ -678,7 +691,10 @@ class AnthropicProvider(BaseProvider):
 # build a direct httpx client (proxy=None) so a SMARTAI_HTTPS_PROXY configured
 # for foreign providers (OpenAI/Gemini/Anthropic) is never applied to them.
 # That is what lets domestic and foreign models coexist when a proxy is set.
-# Text models stay supports_vision=False — never advertise a domestic text model
+# Visual capability is established by image evidence, independently of brand.
+# Transport adapters still encode images for unverified configurations.
+# Historical provider descriptions below do not determine visual capability.
+# Never silently omit image blocks
 # as OCR (launch plan 上线前 08); vision GLM is handled by ZhipuProvider above.
 
 
@@ -689,7 +705,6 @@ class _DomesticOpenAICompatibleProvider(BaseProvider):
 
     def __init__(self, config: ProviderConfig):
         super().__init__(config)
-        self.supports_vision = False
 
     def _build_client_sync(self) -> Any:
         from langchain_openai import ChatOpenAI
@@ -900,15 +915,6 @@ class SafeRelayProvider(BaseProvider):
             config.provider_type,
             config.wire_protocol,
         )
-        # Preserve today's routing behavior. PR-C will let users explicitly
-        # choose a stage model and then rely on the real provider response.
-        self.supports_vision = (
-            config.provider_type in {"openai", "gemini", "anthropic"}
-            or (
-                config.provider_type == "zhipu"
-                and bool(_ZHIPU_VISION_MODEL_PATTERN.match(config.model.strip()))
-            )
-        )
         self._safe_sync_client: httpx.Client | None = None
         self._safe_async_client: httpx.AsyncClient | None = None
         self._target_url = provider_operation_url(
@@ -1041,6 +1047,15 @@ class SafeRelayProvider(BaseProvider):
             raise ProviderRequestError(_transport_error_code(exc)) from exc
         if response.status_code >= 400:
             code = _response_error_code(response.status_code)
+            has_images = any(isinstance(m.content, list) and any(
+                isinstance(block, dict) and block.get("type") == "image_url"
+                for block in m.content) for m in messages)
+            if has_images:
+                try:
+                    if explicitly_rejects_images(response.status_code, response.json()):
+                        code = "provider_vision_not_supported"
+                except ValueError:
+                    pass
             if self.provider_type == "zhipu" and response.status_code == 429:
                 try:
                     body = response.json()
@@ -1080,17 +1095,8 @@ class SafeRelayProvider(BaseProvider):
                     self._endpoint_breaker().record_failure()
                 raise
 
-    async def ainvoke_vision(
-        self,
-        prompt: str,
-        images: List[VisionImage],
-        *, max_output_tokens: int | None = None,
-    ) -> LLMResponse:
-        if not images:
-            raise ValueError("ainvoke_vision requires at least one image.")
-        _validate_output_limit(max_output_tokens)
-        options = {} if max_output_tokens is None else {"max_output_tokens": max_output_tokens}
-        return await self.ainvoke(_build_vision_messages(prompt, images), **options)
+    async def ainvoke_vision(self, prompt: str, images: List[VisionImage], *, max_output_tokens: int | None = None) -> LLMResponse:
+        return await super().ainvoke_vision(prompt, images, max_output_tokens=max_output_tokens)
 
 
 # ─── Factory ─────────────────────────────────────────────────────────────────

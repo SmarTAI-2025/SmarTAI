@@ -417,6 +417,10 @@ class ProviderConfig(BaseModel):
         description="Effective API protocol; omitted means the provider default.",
     )
     enabled: bool = True
+    # Evidence is not part of workflow input/fingerprints or credential exports.
+    image_capability_status: Literal["unverified", "passed", "unsupported", "inconclusive"] = Field(default="unverified", exclude=True)
+    image_checked_at: Optional[float] = Field(default=None, exclude=True)
+    image_reason: Optional[str] = Field(default=None, exclude=True)
     display_name: Optional[str] = Field(
         default=None,
         description="User-supplied label shown in dropdowns. Falls back to f'{provider_type}:{model}'.",

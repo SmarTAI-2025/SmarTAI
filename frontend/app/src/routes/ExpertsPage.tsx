@@ -14,7 +14,7 @@ import {
   Trash2,
 } from "lucide-react";
 import { ModelQuotaCard } from "@/components/ModelQuotaCard";
-import { useState, type FormEvent } from "react";
+import { useEffect, useState, type FormEvent } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { toast } from "sonner";
 import { getAPIErrorCode, normalizeAPIError } from "@/api/client";
@@ -31,8 +31,10 @@ import {
   useSaveBaiduOCRCredentials,
   useVerifyBaiduOCRCredentials,
   useVerifyExpert,
+  useVerifyExpertImage,
 } from "@/api/hooks";
 import { LibraryDialog } from "@/components/knowledge-base/LibraryDialog";
+import { StageProviderSelect } from "@/components/models/StageProviderSelect";
 import { ProviderIcon } from "@/components/models/ProviderIcon";
 import { Button } from "@/components/ui/Button";
 import { EmptyState } from "@/components/ui/EmptyState";
@@ -94,6 +96,14 @@ export function ExpertsPage() {
   const selectExpert = useSelectExpert();
   const setDefaultExpert = useSetDefaultExpert();
   const verifyExpert = useVerifyExpert();
+  const verifyImage = useVerifyExpertImage();
+  const recoveryParams = new URLSearchParams(location.search);
+  const recovery = recoveryParams.get("imageRecovery") === "1";
+  const targetId = recoveryParams.get("providerId");
+  const [returnModel, setReturnModel] = useState(targetId ?? "");
+  useEffect(() => {
+    if (targetId) document.getElementById(`image-capability-${targetId}`)?.scrollIntoView?.({ block: "center" });
+  }, [targetId, expertsQuery.data]);
   const removeExpert = useRemoveExpert();
   const [editor, setEditor] = useState<EditorTarget | null>(null);
   const [confirmation, setConfirmation] = useState<Confirmation | null>(null);
@@ -113,6 +123,7 @@ export function ExpertsPage() {
     selectExpert.isPending ||
     setDefaultExpert.isPending ||
     verifyExpert.isPending ||
+    verifyImage.isPending ||
     removeExpert.isPending;
 
   async function handleSave(value: ExpertFormValue) {
@@ -256,10 +267,10 @@ export function ExpertsPage() {
             <Button
               type="button"
               variant="secondary"
-              onClick={() => navigate(returnTo, { state: location.state })}
+              onClick={() => navigate(returnTo, { state: { ...location.state, ...(recovery ? { imageRecoveryModel: returnModel } : {}) } })}
             >
               <ArrowLeft aria-hidden="true" size={16} />
-              {zh ? "返回任务" : "Back to task"}
+              {recovery ? (zh ? "返回上传页面继续识别" : "Return to upload and continue") : zh ? "返回任务" : "Back to task"}
             </Button>
           ) : null}
           <Button
@@ -273,6 +284,10 @@ export function ExpertsPage() {
         </div>
       </header>
 
+      {recovery && returnTo ? <div className="mb-5 rounded-lg border bg-card p-4">
+        <p className="mb-3 text-sm">{zh ? "验证或选择模型后，返回上传页面并主动点击原有下一步识别。暂存的文件和填写内容会恢复。" : "After verifying or choosing a model, return and click the original recognition action. Saved files and fields will be restored."}</p>
+        <StageProviderSelect id="recovery-model" label={zh ? "继续识别所用模型" : "Model for continuing"} experts={experts.filter(e => e.enabled)} hint={zh ? "保留最新选择，返回后不自动识别。" : "Keeps your latest selection; no automatic recognition."} locale={locale} value={returnModel} onChange={setReturnModel} disabled={controlsPending} />
+      </div> : null}
       <section
         aria-label={zh ? "模型配置概览" : "Model configuration overview"}
         className="grid grid-cols-2 gap-3 lg:grid-cols-4"
@@ -391,6 +406,7 @@ export function ExpertsPage() {
                       onEdit={() => setEditor({ mode: "edit", expert })}
                       onToggle={() => void handleToggle(expert)}
                       onVerify={() => setConfirmation({ kind: "verify", expert })}
+                      onVerifyImage={() => void verifyImage.mutateAsync(expert.provider_id).catch(error => toast.error(normalizeAPIError(error).message))}
                       onSetDefault={() => void handleSetDefault(expert)}
                       onDelete={() => setConfirmation({ kind: "delete", expert })}
                     />
@@ -408,6 +424,7 @@ export function ExpertsPage() {
                   onEdit={() => setEditor({ mode: "edit", expert })}
                   onToggle={() => void handleToggle(expert)}
                   onVerify={() => setConfirmation({ kind: "verify", expert })}
+                      onVerifyImage={() => void verifyImage.mutateAsync(expert.provider_id).catch(error => toast.error(normalizeAPIError(error).message))}
                   onSetDefault={() => void handleSetDefault(expert)}
                   onDelete={() => setConfirmation({ kind: "delete", expert })}
                 />
@@ -667,6 +684,7 @@ function ExpertTableRow({
   onEdit,
   onToggle,
   onVerify,
+  onVerifyImage,
   onSetDefault,
   onDelete,
 }: ExpertRowProps) {
@@ -712,6 +730,7 @@ function ExpertTableRow({
           onEdit={onEdit}
           onToggle={onToggle}
           onVerify={onVerify}
+          onVerifyImage={onVerifyImage}
           onSetDefault={onSetDefault}
           onDelete={onDelete}
         />
@@ -727,6 +746,7 @@ interface ExpertRowProps {
   onEdit: () => void;
   onToggle: () => void;
   onVerify: () => void;
+  onVerifyImage: () => void;
   onSetDefault: () => void;
   onDelete: () => void;
 }
@@ -770,6 +790,7 @@ function ExpertActions({
   onEdit,
   onToggle,
   onVerify,
+  onVerifyImage,
   onSetDefault,
   onDelete,
 }: ExpertRowProps) {
@@ -789,6 +810,15 @@ function ExpertActions({
       <RowAction label={zh ? "验证（可选）" : "Verify (optional)"} onClick={onVerify} disabled={disabled}>
         <ShieldCheck aria-hidden="true" size={14} />
       </RowAction>
+      <RowAction label={zh ? "验证图片能力" : "Verify image capability"} onClick={onVerifyImage} disabled={disabled}>
+        <ShieldCheck aria-hidden="true" size={14} />
+      </RowAction>
+      <div id={`image-capability-${expert.provider_id}`} className="w-full text-left text-xs text-muted-foreground">
+        <p>{zh ? "发送系统生成的测试图片，可能消耗少量额度，不上传你的题目或作业。" : "Sends a generated test image; may use a little quota. Your questions and homework are not uploaded."}</p>
+        <p className="mt-1">{zh ? "图片能力：" : "Image capability: "}{imageCapabilityLabel(expert, zh)}{expert.image_checked_at ? ` · ${formatCheckedAt(expert.image_checked_at, locale)}` : ""}</p>
+        {expert.image_reason ? <p>{imageReasonLabel(expert.image_reason, zh)}</p> : null}
+        {expert.image_capability_status === "passed" ? <p>{zh ? "通过测试不代表所有文件都能准确识别。低置信度时请换清晰文件或换模型。" : "Passing does not guarantee every file is read accurately. For low confidence, try a clearer file or another model."}</p> : null}
+      </div>
       {!expert.is_default && expert.enabled ? (
         <RowAction label={zh ? "设为默认" : "Set default"} onClick={onSetDefault} disabled={disabled}>
           <Star aria-hidden="true" size={14} />
@@ -1483,4 +1513,22 @@ function expertErrorMessage(code: string | null | undefined, locale: "zh-CN" | "
   };
   if (code && messages[code]) return zh ? messages[code][0] : messages[code][1];
   return null;
+}
+
+function imageCapabilityLabel(expert: ExpertConfig, zh: boolean) {
+  const labels = { unverified: ["未验证", "Unverified"], passed: ["已通过", "Passed"], unsupported: ["明确不支持", "Explicitly unsupported"], inconclusive: ["本次未能确认", "Inconclusive"] };
+  return labels[expert.image_capability_status ?? "unverified"][zh ? 0 : 1];
+}
+function imageReasonLabel(reason: string, zh: boolean) {
+  const labels: Record<string, string[]> = {
+    image_probe_answer_correct: ["测试图片答案正确", "Test image answer was correct"],
+    image_probe_answer_incorrect: ["测试答案不正确，不能据此判定不支持图片", "Incorrect test answer; image support remains uncertain"],
+    provider_vision_not_supported: ["上游明确拒绝图片输入", "Upstream explicitly rejected image input"],
+    expert_verification_timeout: ["本次请求超时", "Request timed out"],
+    expert_verification_rate_limited: ["上游限流，请稍后再试", "Upstream rate limit"],
+    expert_verification_auth_failed: ["鉴权失败，请检查凭据", "Authentication failed; check credentials"],
+    expert_verification_connection_failed: ["网络连接失败", "Network connection failed"],
+    expert_verification_model_not_found: ["模型或端点不存在", "Model or endpoint not found"],
+  };
+  return labels[reason]?.[zh ? 0 : 1] ?? reason;
 }

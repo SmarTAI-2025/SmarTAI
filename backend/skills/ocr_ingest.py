@@ -6,6 +6,7 @@ before ingest_agent and converts non-text uploads into text that the existing
 pipeline can review and grade.
 """
 from __future__ import annotations
+from backend.llm.image_capability import can_attempt_images
 
 from dataclasses import dataclass, field
 from typing import Literal, Protocol
@@ -119,7 +120,7 @@ class LLMVisionOCRSkill:
     name = "LLMVisionOCRSkill"
 
     def __init__(self, provider: BaseProvider):
-        if not getattr(provider, "supports_vision", False):
+        if not can_attempt_images(provider):
             raise ValueError(f"{provider.provider_id} does not support vision OCR.")
         self.provider = provider
 
