@@ -1,9 +1,10 @@
 import { ChevronLeft, ChevronRight, LoaderCircle, RefreshCw } from "lucide-react";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
   GlobalWorkerOptions,
   getDocument,
   type PDFDocumentProxy,
+  type PDFPageProxy,
   type RenderTask,
 } from "pdfjs-dist/legacy/build/pdf.mjs";
 import pdfWorkerUrl from "pdfjs-dist/legacy/build/pdf.worker.min.mjs?url";
@@ -11,22 +12,14 @@ import { Button } from "@/components/ui/Button";
 
 GlobalWorkerOptions.workerSrc = pdfWorkerUrl;
 
-const PAGE_WINDOW = 3;
+const PAGE_GAP = 12;
+const PAGE_PADDING = 12;
 
 function validPage(value: number) {
   return Number.isFinite(value) ? Math.max(1, Math.floor(value)) : 1;
 }
 
-export function PdfDocumentPreview({
-  url,
-  title,
-  loadingLabel,
-  errorTitle,
-  errorDescription,
-  retryLabel,
-  openLabel,
-  initialPage = 1,
-}: {
+interface PdfDocumentPreviewProps {
   url: string;
   title: string;
   loadingLabel: string;
@@ -35,7 +28,17 @@ export function PdfDocumentPreview({
   retryLabel: string;
   openLabel: string;
   initialPage?: number;
-}) {
+}
+
+export function PdfDocumentPreview(props: PdfDocumentPreviewProps) {
+  // A source change must remove the old canvases before any new async work starts.
+  return <PdfSourcePreview key={props.url} {...props} />;
+}
+
+function PdfSourcePreview({
+  url, title, loadingLabel, errorTitle, errorDescription, retryLabel, openLabel,
+  initialPage = 1,
+}: PdfDocumentPreviewProps) {
   const [attempt, setAttempt] = useState(0);
   const [document, setDocument] = useState<PDFDocumentProxy | null>(null);
   const [error, setError] = useState(false);
@@ -59,6 +62,7 @@ export function PdfDocumentPreview({
     setCanvasFailed(false);
     void loadingTask.promise.then((nextDocument) => {
       if (cancelled) return;
+      if (nextDocument.numPages < 1) throw new Error("Empty PDF");
       setDocument(nextDocument);
       setPageStart((value) => Math.min(nextDocument.numPages, Math.max(1, value)));
     }).catch(() => {
@@ -66,7 +70,7 @@ export function PdfDocumentPreview({
     });
     return () => {
       cancelled = true;
-      void loadingTask.destroy();
+      void loadingTask.destroy().catch(() => undefined);
     };
   }, [attempt, url]);
 
@@ -119,108 +123,245 @@ export function PdfDocumentPreview({
     );
   }
 
-  const start = Math.min(document.numPages, Math.max(1, pageStart));
-  const pageCount = Math.min(PAGE_WINDOW, document.numPages - start + 1);
   return (
-    <div
-      role="document"
-      aria-label={title}
-      className="h-full w-full overflow-auto rounded-[7px] bg-slate-300/80 px-2 py-3 dark:bg-slate-950/45 sm:px-3"
-    >
-      <div className="sticky top-0 z-10 mx-auto mb-3 flex h-10 w-fit items-center gap-2 rounded-md border bg-card px-2 text-xs">
-        <button type="button" title="Previous pages" aria-label="Previous pages" disabled={start === 1} onClick={() => setPageStart(Math.max(1, start - PAGE_WINDOW))} className="h-8 w-8 disabled:opacity-40"><ChevronLeft className="mx-auto h-4 w-4" /></button>
-        <input type="number" aria-label="PDF page" min={1} max={document.numPages} value={start} onChange={(event) => { const value = event.target.valueAsNumber; if (Number.isFinite(value)) setPageStart(Math.min(document.numPages, Math.max(1, Math.floor(value)))); }} className="h-8 w-20 rounded border bg-background px-2 tabular-nums" />
+    <ContinuousPdfPages
+      key={attempt}
+      document={document}
+      title={title}
+      loadingLabel={loadingLabel}
+      initialPage={initialPage}
+      onCurrentPage={setPageStart}
+      onRenderError={onRenderError}
+    />
+  );
+}
+
+type PageLayout = { offsets: number[]; heights: number[]; total: number };
+
+function pageAt(layout: PageLayout, top: number) {
+  let low = 0;
+  let high = layout.offsets.length - 1;
+  while (low < high) {
+    const middle = Math.ceil((low + high) / 2);
+    if (layout.offsets[middle] <= top) low = middle;
+    else high = middle - 1;
+  }
+  return low;
+}
+
+function ContinuousPdfPages({ document, title, loadingLabel, initialPage, onCurrentPage, onRenderError }: {
+  document: PDFDocumentProxy;
+  title: string;
+  loadingLabel: string;
+  initialPage: number;
+  onCurrentPage: (page: number) => void;
+  onRenderError: () => void;
+}) {
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const frameRef = useRef<number | null>(null);
+  const previousLayout = useRef<PageLayout | null>(null);
+  const readingAnchor = useRef({ index: 0, fraction: 0 });
+  const requestedPage = useRef<number | null>(null);
+  const [viewport, setViewport] = useState({ width: 0, height: 0, pixelRatio: 1 });
+  const [ratios, setRatios] = useState<Record<number, number>>({});
+  const [top, setTop] = useState(0);
+  const [currentPage, setCurrentPage] = useState(() => Math.min(document.numPages, validPage(initialPage)));
+  const [pageInput, setPageInput] = useState<string | null>(null);
+  const width = Math.min(960, Math.max(1, viewport.width - PAGE_PADDING * 2));
+  const layout = useMemo(() => {
+    const offsets: number[] = [];
+    const heights: number[] = [];
+    let total = PAGE_PADDING;
+    for (let index = 0; index < document.numPages; index += 1) {
+      offsets.push(total);
+      const height = Math.max(96, width * (ratios[index + 1] ?? ratios[1] ?? Math.SQRT2));
+      heights.push(height);
+      total += height + PAGE_GAP;
+    }
+    return { offsets, heights, total };
+  }, [document.numPages, ratios, width]);
+
+  const syncPosition = useCallback(() => {
+    const scroll = scrollRef.current;
+    if (!scroll) return;
+    setTop(scroll.scrollTop);
+    const index = pageAt(layout, scroll.scrollTop + 1);
+    readingAnchor.current = { index, fraction: (scroll.scrollTop - layout.offsets[index]) / layout.heights[index] };
+    // The toolbar prefers the most fully visible page (including short pages), rather
+    // than a thin trailing strip of the preceding page.
+    let visibleIndex = index;
+    let mostVisible = 0;
+    for (let candidate = index; candidate < layout.offsets.length && layout.offsets[candidate] < scroll.scrollTop + scroll.clientHeight; candidate += 1) {
+      const visible = Math.min(layout.offsets[candidate] + layout.heights[candidate], scroll.scrollTop + scroll.clientHeight) - Math.max(layout.offsets[candidate], scroll.scrollTop);
+      const visibility = visible / Math.min(layout.heights[candidate], scroll.clientHeight);
+      if (visibility > mostVisible) { mostVisible = visibility; visibleIndex = candidate; }
+    }
+    const page = visibleIndex + 1;
+    setCurrentPage(page);
+    onCurrentPage(page);
+  }, [layout, onCurrentPage]);
+
+  useLayoutEffect(() => {
+    const scroll = scrollRef.current;
+    if (!scroll) return;
+    const updateViewport = () => setViewport({
+      width: scroll.clientWidth, height: scroll.clientHeight,
+      pixelRatio: Math.min(2, window.devicePixelRatio || 1),
+    });
+    updateViewport();
+    const observer = new ResizeObserver(updateViewport);
+    observer.observe(scroll);
+    window.addEventListener("resize", updateViewport);
+    return () => {
+      observer.disconnect();
+      window.removeEventListener("resize", updateViewport);
+      if (frameRef.current !== null) cancelAnimationFrame(frameRef.current);
+    };
+  }, []);
+
+  useLayoutEffect(() => {
+    const scroll = scrollRef.current;
+    if (!scroll || !viewport.width) return;
+    if (frameRef.current !== null) { cancelAnimationFrame(frameRef.current); frameRef.current = null; }
+    if (requestedPage.current !== initialPage) {
+      // initialPage is a navigation request from the existing question/citation UI.
+      requestedPage.current = initialPage;
+      scroll.scrollTop = layout.offsets[Math.min(document.numPages, validPage(initialPage)) - 1];
+      setPageInput(null);
+    } else if (previousLayout.current && previousLayout.current !== layout) {
+      // Preserve the visible page and position as mixed page sizes become known,
+      // or the splitter/browser zoom changes the available width.
+      // Use the saved anchor: the browser may already have clamped scrollTop
+      // to a smaller document height before this layout effect runs.
+      const { index, fraction } = readingAnchor.current;
+      scroll.scrollTop = layout.offsets[index] + fraction * layout.heights[index];
+    }
+    previousLayout.current = layout;
+    syncPosition();
+  }, [document.numPages, initialPage, layout, syncPosition, viewport.width]);
+
+  const onPageSize = useCallback((page: number, ratio: number) => {
+    setRatios((previous) => previous[page] === ratio ? previous : { ...previous, [page]: ratio });
+  }, []);
+
+  function jumpTo(value: number) {
+    const page = Math.min(document.numPages, validPage(value));
+    if (scrollRef.current) scrollRef.current.scrollTop = layout.offsets[page - 1];
+    setPageInput(null);
+    syncPosition();
+  }
+
+  function commitPageInput() {
+    const value = Number(pageInput);
+    if (pageInput?.trim() && Number.isFinite(value)) jumpTo(value);
+    else setPageInput(null);
+  }
+
+  const first = Math.max(0, pageAt(layout, top) - 1);
+  const last = Math.min(document.numPages - 1, pageAt(layout, top + viewport.height) + 1);
+  const pageCount = last - first + 1;
+  return (
+    <div className="flex h-full min-h-0 w-full min-w-0 flex-col overflow-hidden rounded-[7px] bg-slate-300/80 dark:bg-slate-950/45">
+      <div className="mx-auto my-2 flex h-10 shrink-0 items-center gap-2 rounded-md border bg-card px-2 text-xs">
+        <button type="button" title="Previous pages" aria-label="Previous pages" disabled={currentPage === 1} onClick={() => jumpTo(currentPage - 1)} className="h-8 w-8 disabled:opacity-40"><ChevronLeft className="mx-auto h-4 w-4" /></button>
+        <input type="number" aria-label="PDF page" min={1} max={document.numPages} step={1} value={pageInput ?? currentPage}
+          onChange={(event) => setPageInput(event.target.value)} onBlur={commitPageInput}
+          onKeyDown={(event) => {
+            if (event.key === "Enter") { event.preventDefault(); commitPageInput(); }
+            if (event.key === "Escape") { event.stopPropagation(); setPageInput(null); }
+          }} className="h-8 w-20 rounded border bg-background px-2 tabular-nums" />
         <span className="min-w-12 tabular-nums">/ {document.numPages}</span>
-        <button type="button" title="Next pages" aria-label="Next pages" disabled={start + pageCount > document.numPages} onClick={() => setPageStart(Math.min(document.numPages, start + PAGE_WINDOW))} className="h-8 w-8 disabled:opacity-40"><ChevronRight className="mx-auto h-4 w-4" /></button>
+        <button type="button" title="Next pages" aria-label="Next pages" disabled={currentPage === document.numPages} onClick={() => jumpTo(currentPage + 1)} className="h-8 w-8 disabled:opacity-40"><ChevronRight className="mx-auto h-4 w-4" /></button>
       </div>
-      <div className="mx-auto grid w-full max-w-[960px] gap-3">
-        {Array.from({ length: pageCount }, (_, index) => (
-          <PdfCanvasPage
-            key={`${url}:${start + index}`}
-            document={document}
-            pageNumber={start + index}
-            onRenderError={onRenderError}
-          />
-        ))}
+      <div ref={scrollRef} role="document" aria-label={title} tabIndex={0} data-testid="pdf-scroll-container"
+        className="min-h-0 flex-1 overflow-auto outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
+        style={{ overflowAnchor: "none" }}
+        onScroll={(event) => {
+          const offset = event.currentTarget.scrollTop;
+          const index = pageAt(layout, offset + 1);
+          readingAnchor.current = { index, fraction: (offset - layout.offsets[index]) / layout.heights[index] };
+          if (frameRef.current !== null) cancelAnimationFrame(frameRef.current);
+          frameRef.current = requestAnimationFrame(() => { frameRef.current = null; syncPosition(); });
+        }}>
+        <div className="relative mx-auto" style={{ width, height: layout.total + Math.max(0, viewport.height - layout.heights[document.numPages - 1]) }}>
+          {viewport.width > 0 ? Array.from({ length: pageCount }, (_, index) => {
+            const pageIndex = first + index;
+            return <div key={pageIndex} data-pdf-page={pageIndex + 1} className="absolute left-0 w-full overflow-hidden bg-white shadow-[0_8px_28px_rgb(15_23_42_/_0.16)]" style={{ top: layout.offsets[pageIndex], height: layout.heights[pageIndex] }}>
+              <PdfCanvasPage document={document} pageNumber={pageIndex + 1} width={width} pixelRatio={viewport.pixelRatio}
+                pixelBudget={4_000_000}
+                loadingLabel={loadingLabel} onPageSize={onPageSize} onRenderError={onRenderError} />
+            </div>;
+          }) : null}
+        </div>
       </div>
     </div>
   );
 }
 
-function PdfCanvasPage({
-  document,
-  pageNumber,
-  onRenderError,
-}: {
+function PdfCanvasPage({ document, pageNumber, width, pixelRatio, pixelBudget, loadingLabel, onPageSize, onRenderError }: {
   document: PDFDocumentProxy;
   pageNumber: number;
+  width: number;
+  pixelRatio: number;
+  pixelBudget: number;
+  loadingLabel: string;
+  onPageSize: (page: number, ratio: number) => void;
   onRenderError: () => void;
 }) {
-  const shellRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const [width, setWidth] = useState(0);
-  const [error, setError] = useState(false);
-
+  const [renderedSize, setRenderedSize] = useState("");
+  const sizeKey = `${width}:${pixelRatio}:${pixelBudget}`;
+  const ready = renderedSize === sizeKey;
   useEffect(() => {
-    const shell = shellRef.current;
-    if (!shell) return;
-    const updateWidth = () => setWidth(Math.max(1, Math.floor(shell.clientWidth)));
-    updateWidth();
-    const observer = new ResizeObserver(updateWidth);
-    observer.observe(shell);
-    return () => observer.disconnect();
-  }, []);
-
-  useEffect(() => {
-    if (!width) return;
     let cancelled = false;
     let renderTask: RenderTask | null = null;
+    let page: PDFPageProxy | null = null;
+    // Each render owns its canvas, so a cancelled render can never paint over
+    // its replacement after resize or a quick return to the same page.
+    const canvas = canvasRef.current;
     void (async () => {
       try {
-        const page = await document.getPage(pageNumber);
-        if (cancelled) return;
+        page = await document.getPage(pageNumber);
+        if (cancelled || !canvas) return;
         const baseViewport = page.getViewport({ scale: 1 });
+        onPageSize(pageNumber, baseViewport.height / Math.max(1, baseViewport.width));
         const cssScale = width / Math.max(1, baseViewport.width);
-        const pixelRatio = Math.min(2, window.devicePixelRatio || 1);
-        const renderScale = Math.min(cssScale * pixelRatio, Math.sqrt(8_000_000 / (baseViewport.width * baseViewport.height)), 16384 / Math.max(baseViewport.width, baseViewport.height));
+        const renderScale = Math.min(cssScale * pixelRatio, Math.sqrt(pixelBudget / (baseViewport.width * baseViewport.height)), 16384 / Math.max(baseViewport.width, baseViewport.height));
         const viewport = page.getViewport({ scale: renderScale });
-        const canvas = canvasRef.current;
-        if (!canvas) return;
-        canvas.width = Math.ceil(viewport.width);
-        canvas.height = Math.ceil(viewport.height);
-        canvas.style.width = `${Math.round(baseViewport.width * cssScale)}px`;
-        canvas.style.height = `${Math.round(baseViewport.height * cssScale)}px`;
-
-        // Supplying the context explicitly avoids Safari's intermittent failure
-        // when pdf.js lazily creates a 2D context with Chromium-only hints.
+        canvas.width = Math.floor(viewport.width);
+        canvas.height = Math.floor(viewport.height);
+        canvas.style.width = `${width}px`;
+        canvas.style.height = `${baseViewport.height * cssScale}px`;
+        // Preserve Safari's explicit context and all existing PDF.js asset paths.
         const canvasContext = canvas.getContext("2d", { alpha: false });
         if (!canvasContext) throw new Error("A 2D canvas context is unavailable.");
-        renderTask = page.render({
-          canvas: null,
-          canvasContext,
-          viewport,
-          background: "rgb(255,255,255)",
-        });
+        renderTask = page.render({ canvas: null, canvasContext, viewport, background: "rgb(255,255,255)" });
         await renderTask.promise;
-        if (!cancelled) setError(false);
+        if (!cancelled) setRenderedSize(sizeKey);
       } catch (renderError: unknown) {
         if (cancelled || (renderError as { name?: string })?.name === "RenderingCancelledException") return;
-        // Do not include the source URL, document contents, or raw exception in diagnostics.
         console.error(`PDF page ${pageNumber} render failed`);
-        setError(true);
         onRenderError();
+      } finally {
+        if (cancelled) {
+          if (canvas) { canvas.width = 0; canvas.height = 0; }
+          page?.cleanup();
+        }
       }
     })();
     return () => {
       cancelled = true;
       renderTask?.cancel();
+      if (canvas) { canvas.width = 0; canvas.height = 0; }
+      // PDF.js defers cleanup if cancellation is still settling.
+      page?.cleanup();
     };
-  }, [document, onRenderError, pageNumber, width]);
+  }, [document, onPageSize, onRenderError, pageNumber, pixelBudget, pixelRatio, sizeKey, width]);
 
   return (
-    <div ref={shellRef} className="min-h-24 w-full overflow-hidden bg-white shadow-[0_8px_28px_rgb(15_23_42_/_0.16)]">
-      {error ? <div className="flex min-h-40 items-center justify-center px-4 text-center text-xs text-danger">Page {pageNumber} could not be rendered.</div> : null}
-      <canvas ref={canvasRef} aria-label={`PDF page ${pageNumber}`} className={error ? "hidden" : "block max-w-full bg-white"} />
+    <div aria-busy={!ready} className="relative h-full w-full">
+      {!ready ? <div role="status" className="absolute inset-0 flex items-center justify-center text-xs text-muted-foreground">{loadingLabel} · {pageNumber}</div> : null}
+      <canvas key={sizeKey} ref={canvasRef} aria-label={`PDF page ${pageNumber}`} data-rendered={ready} className={ready ? "block bg-white" : "invisible"} />
     </div>
   );
 }

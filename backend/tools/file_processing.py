@@ -35,7 +35,7 @@ except ImportError:
     py7zr = None
 
 try:
-    import fitz  # PyMuPDF
+    import pymupdf as fitz
 except ImportError:
     fitz = None
 
