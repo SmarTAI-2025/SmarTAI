@@ -1,12 +1,14 @@
 """Configurable registration with short access tokens and rotating sessions."""
 from __future__ import annotations
 
+from typing import Literal
+
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request, Response, status
 from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from fastapi.routing import APIRoute
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from backend.auth import get_current_user
 from backend.config import settings
@@ -21,7 +23,9 @@ from backend.services.email_registration import (
     request_registration,
     resend_registration,
     verify_registration,
+    username_available,
 )
+from backend.services.registration_username_check import check_username_rate_limit
 from backend.services.email_sender import get_email_sender
 from backend.services.password_reset import (
     PasswordResetError,
@@ -66,8 +70,30 @@ router = APIRouter(
 class LoginRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    username: str = Field(min_length=1, max_length=128)
+    login_type: Literal["username", "email"] = "username"
+    username: str | None = Field(default=None, min_length=1, max_length=128)
+    email: str | None = Field(default=None, min_length=3, max_length=320)
     password: str = Field(min_length=1, max_length=128)
+
+    @field_validator("username", "email", mode="before")
+    @classmethod
+    def _strip_username(cls, value):
+        return value.strip() if isinstance(value, str) else value
+
+    @model_validator(mode="after")
+    def _explicit_identity(self):
+        if self.login_type == "username":
+            valid = self.username is not None and self.email is None
+        else:
+            valid = self.email is not None and self.username is None
+        if not valid:
+            raise ValueError("Provide only the identity for the selected login type")
+        return self
+
+
+class UsernameCheckRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    username: str = Field(min_length=3, max_length=64)
 
     @field_validator("username", mode="before")
     @classmethod
@@ -139,6 +165,7 @@ def _registration_error(exc: RegistrationError) -> HTTPException:
 @router.post("/register/request", status_code=status.HTTP_202_ACCEPTED)
 def request_email_registration(req: EmailRegistrationRequest, request: Request):
     try:
+        check_username_rate_limit(request.client.host if request.client else None)
         return request_registration(
             username=req.username,
             email=req.email,
@@ -146,6 +173,16 @@ def request_email_registration(req: EmailRegistrationRequest, request: Request):
             source_ip=request.client.host if request.client else None,
             sender=get_email_sender(),
         )
+    except RegistrationError as exc:
+        raise _registration_error(exc) from exc
+
+
+@router.post("/register/username-check")
+def check_registration_username(req: UsernameCheckRequest, request: Request, response: Response):
+    try:
+        check_username_rate_limit(request.client.host if request.client else None)
+        response.headers["Cache-Control"] = "no-store"
+        return {"available": username_available(req.username)}
     except RegistrationError as exc:
         raise _registration_error(exc) from exc
 
@@ -203,9 +240,10 @@ def confirm_password_reset_email(req: PasswordResetConfirmRequest, response: Res
 @router.post("/login")
 def login(req: LoginRequest, response: Response):
     authenticated = authenticate_and_create_session(
-        req.username,
+        req.email if req.login_type == "email" else req.username,
         req.password,
         settings.refresh_session_days,
+        login_type=req.login_type,
     )
     if authenticated is None:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, detail="Invalid username or password")

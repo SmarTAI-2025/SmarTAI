@@ -202,6 +202,19 @@ def request_registration(*, username: str, email: str, password: str, source_ip:
         )
 
 
+def username_available(username: str) -> bool:
+    """Advisory only: account creation must still enforce unique identities."""
+    with session_scope() as session:
+        return session.scalar(
+            select(UserRecord.id).where(UserRecord.username == username.strip())
+        ) is None
+
+
+def _ensure_username_available(session, username: str) -> None:
+    if session.scalar(select(UserRecord.id).where(UserRecord.username == username)) is not None:
+        raise RegistrationError("registration_username_taken", status_code=409)
+
+
 def _request_registration_locked(
     *,
     normalized_username: str,
@@ -259,10 +272,10 @@ def _request_registration_locked(
             if cooling_down:
                 retry_after = max(1, math.ceil(max(cooling_down) - now))
                 raise RegistrationError("registration_rate_limited", retry_after=retry_after)
-            # Account existence is deliberately not checked on this anonymous
-            # endpoint. Every valid school address gets the same response and
-            # real mail; uniqueness is disclosed only after token ownership is
-            # proved by the verify transaction below.
+            # Username occupancy is intentionally public. Email occupancy is
+            # still disclosed only after proof of mailbox ownership. This is
+            # not a reservation: verify retains its locks and unique checks.
+            _ensure_username_available(session, normalized_username)
             row = EmailVerificationRequestRecord(
                 id=request_id,
                 normalized_username=normalized_username,
@@ -393,6 +406,7 @@ def _resend_registration_locked(
             or ip_count >= settings.email_verification_hourly_ip_limit
         ):
             raise RegistrationError("registration_rate_limited", retry_after=3600)
+        _ensure_username_available(session, normalized_username)
         try:
             subject, text_body, html_body = verification_message(previous.normalized_username, raw_token)
         except Exception as exc:

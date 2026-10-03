@@ -80,8 +80,8 @@ export function RegisterVerifyPage() {
         helper={alreadyVerified ? (zh ? "该流程此前已确认" : "This flow was already confirmed") : (zh ? "账号已安全创建" : "Account created securely")}
         title={zh ? "注册完成" : "Registration complete"}
         description={zh
-          ? "现在可以使用用户名和密码登录；验证流程不会自动登录。"
-          : "You can now sign in with your username and password. Verification does not sign you in automatically."}
+          ? "现在可以选择用户名或邮箱，并使用密码登录；验证流程不会自动登录。"
+          : "You can now sign in with your username or email and password. Verification does not sign you in automatically."}
         steps={steps}
         stepsLabel={zh ? "注册进度" : "Registration progress"}
         actionLabel={zh ? "前往登录" : "Continue to sign in"}

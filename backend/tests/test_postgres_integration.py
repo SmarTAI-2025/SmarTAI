@@ -69,6 +69,35 @@ def _seed_user(role: str) -> str:
     return uid
 
 
+def test_postgres_explicit_email_login_and_username_mail_guard(pg_database, monkeypatch):
+    from fastapi.testclient import TestClient
+    from backend.auth import hash_password
+    from backend.db.auth_repository import register_without_invite
+    from backend.main import app
+    from backend.config import settings
+
+    first = register_without_invite(username="collision@ustc.edu.cn", email="", password_hash=hash_password("test-password"))
+    second = register_without_invite(username="email-owner", email="collision@ustc.edu.cn", password_hash=hash_password("test-password"))
+    client = TestClient(app)
+    legacy = client.post("/auth/login", json={"username": "collision@ustc.edu.cn", "password": "test-password"})
+    email = client.post("/auth/login", json={"login_type": "email", "email": " Collision@USTC.edu.cn. ", "password": "test-password"})
+    assert legacy.status_code == email.status_code == 200
+    assert legacy.json()["user"]["id"] == first.id
+    assert email.json()["user"]["id"] == second.id
+    assert client.post("/auth/refresh").json()["user"]["id"] == second.id
+    assert client.post("/auth/register/username-check", json={"username": "email-owner"}).json() == {"available": False}
+
+    class NoMail:
+        def send(self, *_args):
+            pytest.fail("An occupied username must not trigger mail")
+
+    monkeypatch.setattr(settings, "allowed_email_domains", "ustc.edu.cn")
+    monkeypatch.setattr("backend.api.auth.get_email_sender", NoMail)
+    rejected = client.post("/auth/register/request", json={"username": "email-owner", "email": "new@ustc.edu.cn", "password": "test-password"})
+    assert rejected.status_code == 409
+    assert rejected.json() == {"detail": {"code": "registration_username_taken"}}
+
+
 def test_postgres_registration_waits_for_cross_worker_flow_lock(pg_database, monkeypatch):
     from backend.services import email_registration
     from backend.db.session import get_engine

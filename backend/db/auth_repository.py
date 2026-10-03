@@ -6,7 +6,7 @@ import time
 import uuid
 from contextlib import contextmanager
 from threading import RLock
-from typing import Iterator
+from typing import Iterator, Literal
 
 from sqlalchemy import func, select
 
@@ -196,6 +196,8 @@ def authenticate_and_create_session(
     username: str,
     password: str,
     days: int,
+    *,
+    login_type: Literal["username", "email"] = "username",
 ) -> tuple[str, User, str] | None:
     """Verify credentials and issue both tokens under the user's auth lock.
 
@@ -204,19 +206,42 @@ def authenticate_and_create_session(
     old password fails) or afterwards (and its invalidation marker revokes both
     tokens issued here).
     """
-    with session_scope() as session:
-        user_id = session.scalar(
-            select(UserRecord.id).where(UserRecord.username == username)
-        )
-    if user_id is None:
+    # Import locally because registration also uses this repository. Reuse its
+    # canonicalization, but never apply registration domain eligibility to login.
+    if login_type == "email":
+        from backend.services.email_registration import normalize_email
+
+        try:
+            identity = normalize_email(username)
+        except ValueError:
+            return None
+        identity_filter = func.lower(func.trim(UserRecord.email)).in_((identity, f"{identity}."))
+    elif login_type == "username":
+        identity = username
+        identity_filter = UserRecord.username == identity
+    else:
         return None
+    with session_scope() as session:
+        user_ids = session.scalars(select(UserRecord.id).where(identity_filter).limit(2)).all()
+    # Historical noncanonical duplicates must never select an arbitrary account.
+    if len(user_ids) != 1:
+        return None
+    user_id = user_ids[0]
 
     with user_auth_lock(user_id):
         with session_scope() as session:
             user_record = _locked_user(session, user_id)
+            if user_record is None:
+                return None
+            if login_type == "email":
+                try:
+                    current_identity = normalize_email(user_record.email or "")
+                except ValueError:
+                    return None
+            else:
+                current_identity = user_record.username
             if (
-                user_record is None
-                or user_record.username != username
+                current_identity != identity
                 or not user_record.is_active
                 or not verify_password(password, user_record.password_hash)
             ):
