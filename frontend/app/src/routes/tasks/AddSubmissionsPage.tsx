@@ -50,6 +50,9 @@ export function AddSubmissionsPage() {
   const retryRecognition = useRetrySubmissionRecognition();
   const submissionInputRef = useRef<HTMLInputElement>(null);
   const rosterInputRef = useRef<HTMLInputElement>(null);
+  const submissionChooseRef = useRef<HTMLDivElement>(null);
+  const rosterChooseRef = useRef<HTMLButtonElement>(null);
+  const byokLinkRef = useRef<HTMLAnchorElement>(null);
 
   const savedDraft = taskId ? submissionDrafts.get(taskId) : undefined;
   const [selectedFile, setSelectedFile] = useState<File | null>(savedDraft?.selectedFile ?? null);
@@ -62,6 +65,7 @@ export function AddSubmissionsPage() {
   const [uploadPercent, setUploadPercent] = useState(0);
   const [formError, setFormError] = useState<string | null>(null);
   const [needsModel, setNeedsModel] = useState(false);
+  const [missingUpload, setMissingUpload] = useState<"submission" | "roster" | null>(null);
 
   const task = taskQuery.data;
   const enabledExperts = (expertsQuery.data ?? []).filter((expert) => expert.enabled);
@@ -148,6 +152,7 @@ export function AddSubmissionsPage() {
     setUploadPercent(0);
     setFormError(null);
     setNeedsModel(false);
+    setMissingUpload(null);
   }
 
   function selectRoster(file: File | undefined) {
@@ -163,6 +168,7 @@ export function AddSubmissionsPage() {
     setRosterFile(file);
     setFormError(null);
     setNeedsModel(false);
+    setMissingUpload(null);
   }
 
   function handleSubmissionInput(event: ChangeEvent<HTMLInputElement>) {
@@ -184,6 +190,7 @@ export function AddSubmissionsPage() {
   async function handleStart() {
     setFormError(null);
     setNeedsModel(false);
+    setMissingUpload(null);
     if (!taskId) {
       setFormError(t("submissionUploadTaskUnavailable"));
       return;
@@ -194,6 +201,16 @@ export function AddSubmissionsPage() {
     }
     if (uploadDisabledReason) {
       setFormError(uploadDisabledReason);
+      if (!recognitionProviderId) {
+        setNeedsModel(true);
+        window.requestAnimationFrame(() => focusUploadControl(byokLinkRef.current));
+      } else if (!selectedFile && !canRetryOriginal) {
+        setMissingUpload("submission");
+        focusUploadControl(submissionChooseRef.current);
+      } else if (!canRetryOriginal && identityMode === "roster" && !rosterFile) {
+        setMissingUpload("roster");
+        focusUploadControl(rosterChooseRef.current);
+      }
       return;
     }
     const replaceConfirmed = needsReplacementConfirmation && !canRetryOriginal
@@ -253,6 +270,7 @@ export function AddSubmissionsPage() {
 
       <div className="mx-auto mt-[45px] w-full max-w-[900px]">
         <div
+          ref={submissionChooseRef}
           className={cn(
             "flex h-[230px] cursor-pointer flex-col items-center justify-center rounded-[12px] border bg-card px-6 text-center outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2",
             isDragging ? "border-primary bg-primary/[0.03]" : "border-primary",
@@ -261,6 +279,7 @@ export function AddSubmissionsPage() {
           role="button"
           tabIndex={0}
           aria-label={t("submissionUploadChoose")}
+          aria-describedby={missingUpload === "submission" ? "submission-file-required" : undefined}
           onClick={() => submissionInputRef.current?.click()}
           onKeyDown={(event) => {
             if (event.key === "Enter" || event.key === " ") {
@@ -306,6 +325,7 @@ export function AddSubmissionsPage() {
             </div>
           ) : null}
         </div>
+        {missingUpload === "submission" ? <p id="submission-file-required" role="alert" className="mt-2 text-sm text-danger">{t("submissionUploadFileRequired")}</p> : null}
 
         <p className="mt-3 rounded-[8px] border border-blue-200 bg-blue-50/60 px-4 py-3 text-[12px] leading-5 text-blue-900 dark:border-blue-900 dark:bg-blue-950/20 dark:text-blue-100">
           {t("submissionUploadFileContract")}
@@ -382,7 +402,9 @@ export function AddSubmissionsPage() {
                   onChange={handleRosterInput}
                 />
                 <button
+                  ref={rosterChooseRef}
                   type="button"
+                  aria-describedby={missingUpload === "roster" ? "submission-roster-required" : undefined}
                   className="inline-flex h-7 items-center rounded-[6px] border bg-card px-2.5 text-[12px] font-semibold text-foreground hover:bg-muted"
                   onClick={() => rosterInputRef.current?.click()}
                 >
@@ -391,6 +413,7 @@ export function AddSubmissionsPage() {
               </div>
             ) : null}
           </div>
+          {missingUpload === "roster" ? <p id="submission-roster-required" role="alert" className="mt-2 text-sm text-danger">{t("submissionUploadRosterRequired")}</p> : null}
         </section>
 
         <div className="mt-[31px] flex min-h-10 flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
@@ -400,6 +423,7 @@ export function AddSubmissionsPage() {
                 {formError}
                 {needsModel && taskId ? (
                   <Link
+                    ref={byokLinkRef}
                     to={`/settings/byok?returnTo=${encodeURIComponent(`/tasks/${taskId}/submissions/upload`)}`}
                     className="ml-2 font-semibold text-primary underline underline-offset-2"
                   >
@@ -442,6 +466,11 @@ export function AddSubmissionsPage() {
       </div>
     </div>
   );
+}
+
+function focusUploadControl(control: HTMLElement | null) {
+  control?.scrollIntoView?.({ behavior: "smooth", block: "center" });
+  control?.focus({ preventScroll: true });
 }
 
 function hasSuffix(filename: string, suffixes: readonly string[]) {

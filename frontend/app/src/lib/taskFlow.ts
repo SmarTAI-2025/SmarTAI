@@ -38,7 +38,9 @@ export function getTaskReachableStep(task?: TaskReachabilityInput | null): numbe
     case "extracting_problems":
       return 1;
     case "problems_ready":
-      return task.grading_setup_configured || allProblemsConfirmed(task.problem_data) ? 3 : 2;
+      // Review is advisory. Recognized questions permit uploading responses;
+      // grading still applies its own structural and provider readiness checks.
+      return task.grading_setup_configured || (task.problem_count ?? Object.keys(task.problem_data ?? {}).length) > 0 ? 3 : 2;
     case "parsing_submissions":
       return 3;
     case "submissions_ready":
@@ -65,7 +67,7 @@ export function getTaskReachableStep(task?: TaskReachabilityInput | null): numbe
       if (task.last_failed_job_id && task.last_failed_job_id === task.grading_job_id) return 5;
       if (task.grading_job_id) return 5;
       if (task.parse_job_id || task.submission_file_name || (task.student_count ?? 0) > 0) return 4;
-      if ((task.problem_count ?? 0) > 0) return allProblemsConfirmed(task.problem_data) ? 3 : 2;
+      if ((task.problem_count ?? 0) > 0) return 3;
       if (task.extract_job_id || task.problem_file_name) return 1;
       return 1;
     default:
@@ -75,11 +77,6 @@ export function getTaskReachableStep(task?: TaskReachabilityInput | null): numbe
 
 export function hasTaskReachedStep(task: TaskReachabilityInput | null | undefined, step: number): boolean {
   return getTaskReachableStep(task) >= step;
-}
-
-function allProblemsConfirmed(problemData?: Task["problem_data"]) {
-  const problems = Object.values(problemData ?? {});
-  return problems.length > 0 && problems.every((problem) => problem.review_status === "confirmed");
 }
 
 export function getTaskDestination(task: TaskDestinationInput): string {

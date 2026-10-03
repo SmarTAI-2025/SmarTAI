@@ -145,6 +145,12 @@ export function QuestionPreparationOverviewPage() {
               </Link>
               </div>
             ) : null}
+            {taskId && problems.length > 0 ? (
+              <Link to={`/tasks/${taskId}/submissions/upload`} className="inline-flex min-h-9 items-center justify-center gap-1.5 rounded-[7px] border px-4 py-2 text-sm font-semibold text-primary outline-none hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring">
+                {tx(locale, "继续上传作答", "Continue to Upload Submissions")}
+                <ChevronRight aria-hidden="true" className="h-4 w-4" />
+              </Link>
+            ) : null}
           </footer>
         </div>
       </section>

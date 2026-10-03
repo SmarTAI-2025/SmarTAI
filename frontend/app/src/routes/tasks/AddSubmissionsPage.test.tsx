@@ -5,6 +5,7 @@ import { AddSubmissionsPage } from "./AddSubmissionsPage";
 
 const mutateAsync = vi.fn();
 const retryMutateAsync = vi.fn();
+const providers = vi.hoisted(() => ({ enabled: true }));
 const taskState = vi.hoisted(() => ({
   data: {
     task_id: "task-1",
@@ -20,13 +21,13 @@ const taskState = vi.hoisted(() => ({
 
 vi.mock("@/api/hooks", () => ({
   useStageProviders: () => ({
-    data: [{
+    data: providers.enabled ? [{
       provider_id: "provider-default",
       provider_type: "openai",
       model: "gpt-test",
       enabled: true,
       is_default: true,
-    }],
+    }] : [],
     isError: false,
     isLoading: false,
   }),
@@ -66,6 +67,7 @@ function renderPage(taskId = "task-1") {
 
 describe("AddSubmissionsPage OCR uploads", () => {
   beforeEach(() => {
+    providers.enabled = true;
     mutateAsync.mockReset();
     retryMutateAsync.mockReset();
     mutateAsync.mockResolvedValue({ status: "started", task_id: "task-1" });
@@ -80,6 +82,22 @@ describe("AddSubmissionsPage OCR uploads", () => {
       pending_submission_file_name: null,
       last_failed_job_id: null,
     };
+  });
+  it("focuses the missing file control instead of leaving the teacher at an unexplained error", () => {
+    renderPage("missing-file-qa");
+    fireEvent.click(screen.getByRole("button", { name: "submissionUploadStart" }));
+    expect(screen.getByRole("button", { name: "submissionUploadChoose" })).toHaveFocus();
+    expect(screen.getAllByRole("alert").some((item) => item.textContent?.includes("submissionUploadFileRequired"))).toBe(true);
+    expect(mutateAsync).not.toHaveBeenCalled();
+  });
+  it("links a missing model directly to BYOK while retaining the task return path", async () => {
+    providers.enabled = false;
+    renderPage("missing-model-qa");
+    fireEvent.click(screen.getByRole("button", { name: "submissionUploadStart" }));
+    const link = screen.getByRole("link", { name: "submissionUploadConfigureModels" });
+    expect(link).toHaveAttribute("href", "/settings/byok?returnTo=%2Ftasks%2Fmissing-model-qa%2Fsubmissions%2Fupload");
+    await waitFor(() => expect(link).toHaveFocus());
+    expect(mutateAsync).not.toHaveBeenCalled();
   });
 
   it("accepts a student image and sends it through the submission parsing mutation", async () => {

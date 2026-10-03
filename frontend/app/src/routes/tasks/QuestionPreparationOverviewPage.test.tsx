@@ -97,6 +97,11 @@ function renderPage(initialEntry: string) {
 }
 
 describe("QuestionPreparationOverviewPage smart search", () => {
+  it("offers response upload even when unreviewed questions are hidden by a no-match filter", () => {
+    renderPage("/tasks/task-1/questions?q=no-match");
+    expect(screen.getByRole("link", { name: "继续上传作答" })).toHaveAttribute("href", "/tasks/task-1/submissions/upload");
+    expect(mutateAsync).not.toHaveBeenCalled();
+  });
   it("confirms a single question without opening its editor", async () => {
     renderPage("/tasks/task-1/questions");
     await userEvent.click(screen.getByRole("button", { name: "确认第 Q1 题已复核" }));

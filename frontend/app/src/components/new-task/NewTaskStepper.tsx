@@ -1,5 +1,5 @@
 import { Check } from "lucide-react";
-import { useLayoutEffect, useRef } from "react";
+import { useLayoutEffect, useRef, useState } from "react";
 import { Link, useLocation, useParams } from "react-router-dom";
 import { useTask } from "@/api/hooks/tasks";
 import { useI18n } from "@/i18n/I18nProvider";
@@ -62,6 +62,7 @@ export function NewTaskStepper({
   const location = useLocation();
   const navRef = useRef<HTMLElement>(null);
   const currentStepRef = useRef<HTMLLIElement>(null);
+  const [requestedStep, setRequestedStep] = useState<number | null>(null);
   // Once the server task is available it is the authority.  Keeping the URL's
   // current step reachable made stale deep links look valid after an upstream
   // replacement had deliberately rewound the workflow.
@@ -125,10 +126,12 @@ export function NewTaskStepper({
                   <span className="sr-only">{lockedStepReason}</span>
                 </button>
               ) : (
-                <div
-                  className="flex shrink-0 cursor-not-allowed items-center gap-2"
-                  aria-disabled="true"
-                  title={fullLabel}
+                <button
+                  type="button"
+                  className="flex shrink-0 items-center gap-2 rounded-md text-left outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                  aria-label={fullLabel}
+                  title={locale === "zh-CN" ? `请先完成“${t(STEP_KEYS[effectiveReachableStep])}”` : `Complete ${t(STEP_KEYS[effectiveReachableStep])} first`}
+                  onClick={() => setRequestedStep(index)}
                 >
                   <StepMarker index={index} currentStep={currentStep} />
                   <StepLabel
@@ -137,7 +140,7 @@ export function NewTaskStepper({
                     isEnglish={locale === "en-US"}
                     className="text-muted-foreground"
                   />
-                </div>
+                </button>
               )}
               {index < STEP_KEYS.length - 1 ? (
                 <span
@@ -150,6 +153,16 @@ export function NewTaskStepper({
           );
         })}
       </ol>
+      {requestedStep !== null && requestedStep > effectiveReachableStep ? (
+        <p role="status" className="mt-2 whitespace-normal text-xs text-muted-foreground">
+          {locale === "zh-CN"
+            ? `请先完成“${t(STEP_KEYS[effectiveReachableStep])}”，再继续“${t(STEP_KEYS[requestedStep])}”。`
+            : `Complete ${t(STEP_KEYS[effectiveReachableStep])} before continuing to ${t(STEP_KEYS[requestedStep])}.`}
+          {taskId ? <Link to={stepHref(taskId, effectiveReachableStep, location.pathname, location.search, taskQuery.data)} className="ml-2 font-semibold text-primary underline" onClick={() => setRequestedStep(null)}>
+            {locale === "zh-CN" ? "前往当前步骤" : "Go to current step"}
+          </Link> : null}
+        </p>
+      ) : null}
     </nav>
   );
 }
