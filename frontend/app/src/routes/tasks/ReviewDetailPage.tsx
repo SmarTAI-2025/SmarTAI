@@ -108,6 +108,12 @@ export function ReviewDetailPage() {
   const [pendingQuestionNavigationId, setPendingQuestionNavigationId] = useState<string | null>(null);
   const [dialogSaving, setDialogSaving] = useState(false);
   const [dialogSaveError, setDialogSaveError] = useState<string | undefined>();
+  const [batchProgress, setBatchProgress] = useState<{ completed: number; total: number } | null>(null);
+  const [batchError, setBatchError] = useState("");
+  const batchSavingRef = useRef(false);
+  const saveInFlightRef = useRef(false);
+  const activeStudentKeyRef = useRef("");
+  activeStudentKeyRef.current = `${taskId ?? ""}:${student?.id ?? ""}`;
   const initializedStudentRef = useRef<string | null>(null);
   const positionedRouteRef = useRef<string | null>(null);
   const resetScrollForStudentRef = useRef<string | null>(null);
@@ -115,12 +121,18 @@ export function ReviewDetailPage() {
   const bypassNavigationRef = useRef(false);
 
   useEffect(() => {
+    activeStudentKeyRef.current = `${taskId ?? ""}:${student?.id ?? ""}`;
+    return () => { activeStudentKeyRef.current = ""; };
+  }, [student?.id, taskId]);
+
+  useEffect(() => {
     searchParamsRef.current = searchParams;
   }, [searchParams]);
 
   useEffect(() => {
-    if (!student || initializedStudentRef.current === student.id) return;
-    initializedStudentRef.current = student.id;
+    const studentKey = `${taskId ?? ""}:${student?.id ?? ""}`;
+    if (!student || initializedStudentRef.current === studentKey) return;
+    initializedStudentRef.current = studentKey;
     setDrafts(Object.fromEntries(student.corrections.map((correction) => [
       correction.q_id,
       {
@@ -131,7 +143,7 @@ export function ReviewDetailPage() {
     setScoreErrors({});
     setSaveErrors({});
     setSavingQuestionId(null);
-  }, [student]);
+  }, [student, taskId]);
 
   const dirtyQuestionIds = useMemo(() => new Set(student?.corrections.flatMap((correction) => {
     const draft = drafts[correction.q_id];
@@ -141,22 +153,32 @@ export function ReviewDetailPage() {
     return changed ? [correction.q_id] : [];
   }) ?? []), [drafts, student]);
   const dirty = dirtyQuestionIds.size > 0;
+  const savingReviews = savingQuestionId !== null || batchProgress !== null || dialogSaving || updateReview.isPending;
+  const savingNavigationMessage = tx(locale,
+    "正在保存复核结果，请稍候再切换学生或离开。保存完成后可继续操作。",
+    "Saving review results. Please wait before switching students or leaving; you can continue when saving finishes.");
   const shouldBlockNavigation = useCallback<BlockerFunction>(({ currentLocation, nextLocation }) => (
-    dirty
-    && !bypassNavigationRef.current
-    && currentLocation.pathname !== nextLocation.pathname
-  ), [dirty]);
+    currentLocation.pathname !== nextLocation.pathname
+    && (saveInFlightRef.current || batchSavingRef.current || dialogSaving
+      || (dirty && !bypassNavigationRef.current))
+  ), [dialogSaving, dirty]);
   const blocker = useBlocker(shouldBlockNavigation);
 
   useEffect(() => {
+    if (blocker.state !== "blocked" || !savingReviews || dialogSaving) return;
+    toast.info(savingNavigationMessage);
+    blocker.reset();
+  }, [blocker, dialogSaving, savingNavigationMessage, savingReviews]);
+
+  useEffect(() => {
     const beforeUnload = (event: BeforeUnloadEvent) => {
-      if (!dirty) return;
+      if (!dirty && !saveInFlightRef.current && !batchSavingRef.current && !dialogSaving) return;
       event.preventDefault();
       event.returnValue = "";
     };
     window.addEventListener("beforeunload", beforeUnload);
     return () => window.removeEventListener("beforeunload", beforeUnload);
-  }, [dirty]);
+  }, [dialogSaving, dirty]);
 
   const buildHref = useCallback((nextStudentId: string, nextQuestionId: string, preserveFilters = true) => {
     const nextParams = preserveFilters ? new URLSearchParams(searchParams) : new URLSearchParams();
@@ -187,11 +209,15 @@ export function ReviewDetailPage() {
   }, [setSearchParams]);
 
   const goToStudent = useCallback((nextStudentId: string) => {
+    if (saveInFlightRef.current || batchSavingRef.current || dialogSaving) {
+      toast.info(savingNavigationMessage);
+      return;
+    }
     const anchorQuestionId = activeQuestion?.id ?? visibleQuestions[0]?.id ?? model.questions[0]?.id;
     if (!anchorQuestionId) return;
     resetScrollForStudentRef.current = nextStudentId;
     navigate(buildHref(nextStudentId, anchorQuestionId));
-  }, [activeQuestion?.id, buildHref, model.questions, navigate, visibleQuestions]);
+  }, [activeQuestion?.id, buildHref, dialogSaving, model.questions, navigate, savingNavigationMessage, visibleQuestions]);
 
   const scrollToQuestion = useCallback((targetId: string, behavior: ScrollBehavior = "smooth") => {
     setActiveQuestionId(targetId);
@@ -202,7 +228,7 @@ export function ReviewDetailPage() {
   }, []);
 
   const requestQuestionNavigation = useCallback((targetId: string) => {
-    if (targetId === activeQuestionId) {
+    if (targetId === activeQuestionId || saveInFlightRef.current || batchSavingRef.current) {
       scrollToQuestion(targetId);
       return;
     }
@@ -349,6 +375,8 @@ export function ReviewDetailPage() {
     if (!taskId || !student) {
       return { ok: false as const, message: tx(locale, "缺少任务或学生信息。", "Task or student information is missing.") };
     }
+    const savingStudentKey = `${taskId}:${student.id}`;
+    saveInFlightRef.current = true;
     setSavingQuestionId(question.id);
     setScoreErrors((current) => omitKey(current, question.id));
     setSaveErrors((current) => omitKey(current, question.id));
@@ -362,21 +390,26 @@ export function ReviewDetailPage() {
         teacher_comment: prepared.teacherComment,
         confirm: true,
       });
-      setDrafts((current) => ({
-        ...current,
-        [question.id]: {
-          score: correctionReviewDraftScore(response.correction),
-          comment: response.correction.teacher_comment ?? "",
-        },
-      }));
+      if (activeStudentKeyRef.current === savingStudentKey) {
+        setDrafts((current) => ({
+          ...current,
+          [question.id]: {
+            score: correctionReviewDraftScore(response.correction),
+            comment: response.correction.teacher_comment ?? "",
+          },
+        }));
+      }
       return { ok: true as const, workflowRevision: response.workflow_revision };
     } catch (error) {
       const normalized = normalizeAPIError(error);
-      setSaveErrors((current) => ({ ...current, [question.id]: normalized.message }));
+      if (activeStudentKeyRef.current === savingStudentKey) {
+        setSaveErrors((current) => ({ ...current, [question.id]: normalized.message }));
+      }
       if (normalized.status === 409) void Promise.all([taskQuery.refetch(), resultQuery.refetch()]);
       return { ok: false as const, message: normalized.message };
     } finally {
-      setSavingQuestionId(null);
+      saveInFlightRef.current = false;
+      if (activeStudentKeyRef.current === savingStudentKey) setSavingQuestionId(null);
     }
   }
 
@@ -401,21 +434,65 @@ export function ReviewDetailPage() {
   }
 
   async function confirmAndContinue(question: QuestionSummary) {
-    if (!taskQuery.data) return;
+    if (!taskQuery.data || saveInFlightRef.current || batchSavingRef.current || updateReview.isPending) return;
+    const savingStudentKey = activeStudentKeyRef.current;
     const correction = correctionByQuestionId.get(question.id);
     const source = correction ? correctionScoreSource(correction) : null;
-    if ((source === "teacher_confirmed_same" || source === "teacher_changed") && !dirtyQuestionIds.has(question.id)) {
+    if ((source === "teacher_confirmed_same" || source === "teacher_changed")
+      && correction?.review_status === "confirmed" && !dirtyQuestionIds.has(question.id)) {
       continueAfterQuestion(question, dirtyQuestionIds.size > 0);
       return;
     }
     const wasDirty = dirtyQuestionIds.has(question.id);
     const hasOtherDirtyChanges = Array.from(dirtyQuestionIds).some((qId) => qId !== question.id);
     const outcome = await persistConfirmedReview(question, taskQuery.data.workflow_revision);
-    if (!outcome.ok) return;
+    if (!outcome.ok || activeStudentKeyRef.current !== savingStudentKey) return;
     toast.success(wasDirty
       ? tx(locale, "修改已保存并确认，正在继续复核", "Changes saved and confirmed. Continuing review.")
       : tx(locale, "该题复核结果已确认", "This question review is confirmed"));
     continueAfterQuestion(question, hasOtherDirtyChanges);
+  }
+
+  async function confirmStudentReviews() {
+    if (!taskQuery.data || !student || saveInFlightRef.current || batchSavingRef.current || updateReview.isPending) return;
+    const pending = model.questions.filter((question) => {
+      const correction = correctionByQuestionId.get(question.id);
+      return correction && (!Number.isFinite(correction.teacher_score) || correction.review_status !== "confirmed" || dirtyQuestionIds.has(question.id));
+    });
+    // Validate every draft before writing any of them; a blank score never becomes zero.
+    for (const question of pending) {
+      const prepared = prepareConfirmedReview(question);
+      if (!prepared.ok) {
+        setBatchError(prepared.message);
+        if (visibleQuestions.some((item) => item.id === question.id)) scrollToQuestion(question.id);
+        else navigateWithoutBlocking(buildHref(student.id, question.id, false));
+        return;
+      }
+    }
+    batchSavingRef.current = true;
+    const savingStudentKey = activeStudentKeyRef.current;
+    setBatchError("");
+    setBatchProgress({ completed: 0, total: pending.length });
+    let revision = taskQuery.data.workflow_revision;
+    let completed = 0;
+    try {
+      for (const question of pending) {
+        if (activeStudentKeyRef.current !== savingStudentKey) return;
+        const outcome = await persistConfirmedReview(question, revision);
+        if (activeStudentKeyRef.current !== savingStudentKey) return;
+        if (!outcome.ok) {
+          setBatchError(tx(locale, `已确认 ${completed}/${pending.length}，其余未确认。${outcome.message}`, `Confirmed ${completed}/${pending.length}; the rest were not confirmed. ${outcome.message}`));
+          return;
+        }
+        revision = outcome.workflowRevision;
+        completed += 1;
+        setBatchProgress({ completed, total: pending.length });
+      }
+      toast.success(tx(locale, "该学生全部批改结果已确认复核。", "All grading results for this student are confirmed."));
+    } finally {
+      batchSavingRef.current = false;
+      if (activeStudentKeyRef.current === savingStudentKey) setBatchProgress(null);
+    }
   }
 
   async function saveAllDirtyReviews() {
@@ -580,6 +657,18 @@ export function ReviewDetailPage() {
             next={nextStudent}
             onSelect={goToStudent}
           />
+          {savingReviews ? <p role="status" className="mt-2 rounded-lg bg-primary/5 px-3 py-2 text-xs text-primary">{savingNavigationMessage}</p> : null}
+
+          <div className="mt-3 flex flex-wrap items-center justify-between gap-3 rounded-lg border bg-card p-3">
+            <p className="text-xs text-muted-foreground">{tx(locale, "核对无误后可一次确认该学生全部题目；已修改的分数和评语一起保存。", "Confirm all questions for this student at once, saving any edited scores and comments.")}</p>
+            <button type="button" onClick={() => void confirmStudentReviews()}
+              disabled={batchProgress !== null || updateReview.isPending}
+              className="inline-flex h-9 shrink-0 items-center gap-2 rounded-lg border border-primary px-4 text-sm font-semibold text-primary disabled:opacity-50">
+              {batchProgress ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />}
+              {batchProgress ? `${batchProgress.completed}/${batchProgress.total}` : tx(locale, "一键确认该学生全部复核", "Confirm all reviews for this student")}
+            </button>
+            {batchError ? <p role="alert" className="w-full text-sm text-destructive">{batchError}</p> : null}
+          </div>
 
           <ResultQuestionQuery className="mt-3" locale={locale} taskId={taskId} filter={questionFilter}
             questions={visibleQuestions} onSelect={(id) => scrollToQuestion(id)} />
@@ -624,7 +713,7 @@ export function ReviewDetailPage() {
                       previous={visibleQuestions[index - 1] ?? null}
                       next={visibleQuestions[index + 1] ?? null}
                       dirty={dirtyQuestionIds.has(question.id)}
-                      saving={savingQuestionId === question.id || updateReview.isPending}
+                      saving={savingReviews}
                       scoreError={scoreErrors[question.id]}
                       saveError={saveErrors[question.id]}
                       onDraftChange={(patch) => updateDraft(question.id, patch)}
@@ -647,7 +736,7 @@ export function ReviewDetailPage() {
           </div>
         </>
       )}
-      {blocker.state === "blocked" || pendingQuestionNavigationId ? (
+      {(blocker.state === "blocked" || pendingQuestionNavigationId) && (!savingReviews || dialogSaving) ? (
         <UnsavedChangesDialog
           title={tx(locale, "有批改修改尚未保存", "Unsaved grading changes")}
           description={tx(
@@ -715,7 +804,8 @@ function ReviewQuestionCard({ locale, student, question, correction, draft, requ
   const hideAutomatedScores = correction ? shouldHideAutomatedScores(correction) : false;
   const scoreSource = correction ? correctionScoreSource(correction) : null;
   const answer = student.answerByQuestion.get(question.id);
-  const alreadyConfirmed = (scoreSource === "teacher_confirmed_same" || scoreSource === "teacher_changed") && !dirty;
+  const alreadyConfirmed = (scoreSource === "teacher_confirmed_same" || scoreSource === "teacher_changed")
+    && correction?.review_status === "confirmed" && !dirty;
   const actionLabel = alreadyConfirmed
     ? hasNextReview
       ? tx(locale, "继续复核", "Continue review")
