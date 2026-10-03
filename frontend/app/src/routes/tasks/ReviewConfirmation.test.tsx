@@ -1,6 +1,10 @@
+import "fake-indexeddb/auto";
+import { DraftActions, DraftLeaveProvider } from "@/hooks/useDraftLeave";
+import { PageDraftSession } from "@/hooks/useDraftProtection";
+import { clearPageDrafts, readPageDraft, objectDraftCodec } from "@/lib/pageDraftStore";
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { createMemoryRouter, RouterProvider } from "react-router-dom";
+import { createMemoryRouter, Outlet, RouterProvider } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ReviewOverviewPage } from "./ReviewOverviewPage";
 import { ReviewDetailPage } from "./ReviewDetailPage";
@@ -38,14 +42,15 @@ function correction(qId: string, patch = {}) {
     comment: "AI note", steps: [], expert_results: [], requires_human_review: false, review_status: "confirmed", ...patch };
 }
 function show(detail = false, suffix = "") {
-  const router = createMemoryRouter([
+  const router = createMemoryRouter([{ element: <DraftLeaveProvider><Outlet /><DraftActions /></DraftLeaveProvider>, children: [
     { path: "/tasks/:taskId/review", element: <ReviewOverviewPage /> },
     { path: "/tasks/:taskId/review/:studentId/:questionId", element: <ReviewDetailPage /> },
-  ], { initialEntries: [`/tasks/T1/review${detail ? "/S1/Q1" : suffix}`] });
-  render(<RouterProvider router={router} />);
+  ] }], { initialEntries: [`/tasks/T1/review${detail ? "/S1/Q1" : suffix}`] });
+  render(<PageDraftSession ownerId="review-teacher"><RouterProvider router={router} /></PageDraftSession>);
   return router;
 }
-beforeEach(() => {
+beforeEach(async () => {
+  await clearPageDrafts();
   vi.clearAllMocks();
   state.result.results = [{ student_id: "S1", student_name: "Sample", corrections: [correction("Q1"), correction("Q2", { score: 0, provisional_score: 0, teacher_comment: "Keep this" })] }];
   state.finalization = { remaining_review_count: 0, ready_for_confirmation: true, workflow_revision: 5 };
@@ -141,7 +146,9 @@ describe("one-click grading review", () => {
     expect(router.state.location.pathname).toBe("/tasks/T1/review/S1/Q1");
     await act(async () => { await router.navigate("/tasks/T1/review/S2/Q1"); });
     expect(router.state.location.pathname).toBe("/tasks/T1/review/S1/Q1");
-    expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+    expect(screen.getByRole("alertdialog")).toHaveTextContent("业务保存正在进行");
+    expect(screen.getByRole("button", { name: "不暂存并离开" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "正在暂存…" })).toBeDisabled();
     expect(screen.getByRole("textbox", { name: "Q1 final score" })).toHaveValue("7");
     const unload = new Event("beforeunload", { cancelable: true });
     window.dispatchEvent(unload);
@@ -153,20 +160,35 @@ describe("one-click grading review", () => {
     await waitFor(() => expect(state.update).toHaveBeenCalledTimes(mode === "single" ? 1 : 2));
     expect(state.update.mock.calls.every(([input]) => input.studentId === "S1")).toBe(true);
     expect(router.state.location.pathname).toBe("/tasks/T1/review/S1/Q1");
-    expect(screen.queryByText(/Saving review results\. Please wait before switching students/)).not.toBeInTheDocument();
+    await waitFor(() => expect(screen.queryByText(/Saving review results\. Please wait before switching students/)).not.toBeInTheDocument());
     expect(screen.getByRole("textbox", { name: "Q1 final score" })).toHaveValue("7");
   });
-  it("still saves dirty reviews and continues the original navigation from the unsaved-changes dialog", async () => {
+  it("stashes without confirming and continues the original destination only once", async () => {
     const router = show(true);
     const score = screen.getByRole("textbox", { name: "Q1 final score" });
-    await userEvent.clear(score);
-    await userEvent.type(score, "9");
+    await userEvent.clear(score); await userEvent.type(score, "9");
     await userEvent.click(screen.getAllByRole("link", { name: "Back to Review Overview" })[0]);
-    await userEvent.click(screen.getByRole("button", { name: "Save, confirm & continue" }));
+    await userEvent.dblClick(screen.getByRole("button", { name: "暂存并离开" }));
     await waitFor(() => expect(router.state.location.pathname).toBe("/tasks/T1/review"));
-    expect(state.update).toHaveBeenCalledExactlyOnceWith({
-      taskId: "T1", studentId: "S1", qId: "Q1", expected_workflow_revision: 5,
-      teacher_score: 9, teacher_comment: "", confirm: true,
+    expect(state.update).not.toHaveBeenCalled(); expect(state.finalize).not.toHaveBeenCalled(); expect(state.bulk).not.toHaveBeenCalled();
+    await act(async () => { await router.navigate("/tasks/T1/review/S1/Q1"); });
+    await waitFor(() => expect(screen.getByRole("textbox", { name: "Q1 final score" })).toHaveValue("9"));
+    expect(state.update).not.toHaveBeenCalled();
+  });
+  it.each([true, false])("formal confirmation clears only its corresponding draft on success=%s", async (success) => {
+    show(true);
+    const score = screen.getByRole("textbox", { name: "Q1 final score" });
+    await userEvent.clear(score); await userEvent.type(score, "9");
+    await userEvent.click(screen.getByRole("button", { name: "暂存" }));
+    await screen.findByText(/已暂存 ·/);
+    if (!success) state.update.mockRejectedValueOnce(new Error("Retry later"));
+    await userEvent.click(screen.getByRole("button", { name: /Q1.*Save/ }));
+    await waitFor(() => expect(state.update).toHaveBeenCalledTimes(1));
+    const scope = "results-review:T1:S1:Q1";
+    await waitFor(async () => {
+      const loaded = await readPageDraft("review-teacher", scope, objectDraftCodec({ score: "", comment: "" }));
+      if (success) expect(loaded.value).toBeNull();
+      else { expect(loaded.value?.score).toBe("9"); expect(score).toHaveValue("9"); expect(screen.getAllByRole("alert").some(el=>el.textContent?.includes("Retry later"))).toBe(true); }
     });
   });
   it("loads fresh drafts when another task has the same student and question IDs", async () => {

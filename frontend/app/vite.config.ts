@@ -8,11 +8,14 @@ export default defineConfig(({ mode }) => {
   const adminBuild = mode === "admin";
   return {
   plugins: [react(), tailwindcss(), viteStaticCopy({
-    targets: ["wasm", "cmaps", "standard_fonts", "iccs"].map((directory) => ({
+    targets: [...["wasm", "cmaps", "standard_fonts", "iccs"].map((directory) => ({
       src: normalizePath(path.resolve(__dirname, `node_modules/pdfjs-dist/${directory}/*`)),
       dest: `pdfjs/${directory}`,
       rename: { stripBase: true },
-    })),
+    })), ...(mode === "e2e" ? [{
+      src: normalizePath(path.resolve(__dirname, "e2e/fixtures/*.pdf")),
+      dest: "e2e/fixtures",
+    }] : [])],
   })],
   resolve: {
     alias: {
@@ -21,7 +24,10 @@ export default defineConfig(({ mode }) => {
   },
     build: {
       rollupOptions: {
-        input: path.resolve(__dirname, adminBuild ? "admin.html" : "index.html"),
+        input: mode === "e2e" ? {
+          app: path.resolve(__dirname, "index.html"),
+          pdfPreview: path.resolve(__dirname, "e2e/fixtures/pdf-preview.html"),
+        } : path.resolve(__dirname, adminBuild ? "admin.html" : "index.html"),
       },
       outDir: adminBuild ? "dist-admin" : "dist",
     },

@@ -21,7 +21,7 @@ export default defineConfig({
     ignoreHTTPSErrors: true,
   },
   webServer: {
-    command: `npm run build && npm run preview -- --host 127.0.0.1 --port ${frontendPort} --strictPort`,
+    command: `npm run build -- --mode e2e && npm run preview -- --host 127.0.0.1 --port ${frontendPort} --strictPort`,
     env: { VITE_SMARTAI_BACKEND_URL: process.env.SMARTAI_E2E_BACKEND_URL ?? "http://127.0.0.1:8000" },
     url: frontendUrl,
     reuseExistingServer: false,
