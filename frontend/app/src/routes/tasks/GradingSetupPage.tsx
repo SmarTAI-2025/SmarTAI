@@ -130,9 +130,6 @@ export function GradingSetupPage() {
     [expertsById, setup?.selected_provider_ids],
   );
   const usesSharedPool = selectedExperts.some((expert) => expert.is_shared);
-  const usesOCRService = selectedExperts.some(
-    (expert) => expert.provider_kind === "ocr",
-  );
   const validationMessage = setup && response
     ? validateSetup(setup, response.available_experts, response.knowledge.scope_options, locale)
     : gradingSetupText(locale, "invalidForm");
@@ -277,6 +274,9 @@ export function GradingSetupPage() {
                 ) : null}
 
                 <div id="grading-model-selection" tabIndex={-1} className="mt-3">
+                  <Link to={`/settings/byok?returnTo=${encodeURIComponent(setupHref ?? `/tasks/${taskId}/grading-setup`)}`} className="mb-2 inline-flex text-sm font-semibold text-primary underline underline-offset-2">
+                    {gradingSetupText(locale, "configureModels")}
+                  </Link>
                   <ModelSection
                     locale={locale}
                     experts={response.available_experts}
@@ -315,11 +315,6 @@ export function GradingSetupPage() {
             <div className="shrink-0 space-y-1.5" aria-live="polite">
               {syncNoticeKey ? <p className="mt-2 rounded-[6px] bg-amber-50 px-3 py-1.5 text-[11px] leading-4 text-amber-800 dark:bg-amber-950/20 dark:text-amber-200">{gradingSetupText(locale, syncNoticeKey)}</p> : null}
               {selectionNoticeKey ? <p className="mt-2 rounded-[6px] bg-blue-50 px-3 py-1.5 text-[11px] leading-4 text-primary dark:bg-blue-950/20">{gradingSetupText(locale, selectionNoticeKey)}</p> : null}
-              {usesOCRService ? (
-                <p role="alert" className="mt-2 rounded-[6px] bg-amber-50 px-3 py-1.5 text-[11px] leading-4 text-amber-800 dark:bg-amber-950/20 dark:text-amber-200">
-                  {gradingSetupText(locale, "ocrGradingUnsupported")}
-                </p>
-              ) : null}
               {validationMessage ? <p role="alert" className="mt-2 text-[11px] leading-4 text-danger">{validationMessage}</p> : null}
               {startBlockingMessage && startBlockingMessage !== validationMessage ? (
                 <p role="status" className="mt-2 rounded-[6px] bg-amber-50 px-3 py-1.5 text-[11px] leading-4 text-amber-800 dark:bg-amber-950/20 dark:text-amber-200">
@@ -367,7 +362,7 @@ export function GradingSetupPage() {
               return;
             }
             const invalidModels = !selectedExperts.length
-              || selectedExperts.some((expert) => !expert.enabled)
+              || selectedExperts.some((expert) => !expert.enabled || expert.provider_kind === "ocr")
               || selectedExperts.length !== setup?.selected_provider_ids.length;
             if (!invalidModels) setAdvancedOpen(true);
             window.requestAnimationFrame(() => {
@@ -422,7 +417,7 @@ function ModelSection({
         <ul className="divide-y">
           {experts.map((expert) => {
             const selected = selectedSet.has(expert.provider_id);
-            const disabled = !expert.enabled && !selected;
+            const disabled = (!expert.enabled || expert.provider_kind === "ocr") && !selected;
             const label = modelDisplayName(expert);
             const secondaryLabel = modelSecondaryLabel(expert);
             return (
@@ -450,6 +445,7 @@ function ModelSection({
                   <span className="mt-0.5 block truncate text-[13px] leading-5 text-muted-foreground">
                     {secondaryLabel} · {gradingSetupText(locale, expert.enabled ? "enabledConfiguration" : "disabledConfiguration")}
                   </span>
+                  {expert.provider_kind === "ocr" ? <span className="block text-xs text-warning">{gradingSetupText(locale, "ocrGradingUnsupported")}</span> : null}
                 </label>
                 {hasMultiple && selected && expert.enabled ? (
                   <label className="flex shrink-0 items-center gap-1.5 text-[13px] font-medium text-muted-foreground">
@@ -1040,6 +1036,7 @@ function validateSetup(
   if (setup.selected_provider_ids.length === 0) return gradingSetupText(locale, "providerSelectionRequired");
   const selected = setup.selected_provider_ids.map((providerId) => experts.find((expert) => expert.provider_id === providerId));
   if (selected.some((expert) => !expert?.enabled)) return gradingSetupText(locale, "providerChanged");
+  if (selected.some((expert) => expert?.provider_kind === "ocr")) return gradingSetupText(locale, "ocrGradingUnsupported");
   if (!setup.selected_provider_ids.includes(setup.primary_provider_id)) return gradingSetupText(locale, "providerChanged");
   if (selected.some((expert) => expert?.is_shared) && (selected.length > 1 || setup.multi_sample_n !== 1)) return gradingSetupText(locale, "sharedPoolRestriction");
   if (selected.length === 1 && setup.aggregation_method !== "single") return gradingSetupText(locale, "invalidForm");

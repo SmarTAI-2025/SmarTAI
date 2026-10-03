@@ -168,11 +168,16 @@ describe("GradingSetupPage regrade mode", () => {
 
     render(<RouterProvider router={router} />);
 
-    expect(await screen.findByText(
+    expect((await screen.findAllByText(
       "This OCR service does not support grading. Choose a grading model.",
-    )).toBeInTheDocument();
+    ))[0]).toBeInTheDocument();
     expect(screen.getByText("Baidu Document Parsing (Unlimited-OCR)")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Save & Review Regrade" })).toBeEnabled();
+    fireEvent.click(screen.getByRole("button", { name: "Save & Review Regrade" }));
+    expect(saveSetupMutate).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "Fix settings" }));
+    await waitFor(() => expect(document.getElementById("grading-model-selection")).toHaveFocus());
+    expect(screen.getByRole("link", { name: "Open Models & BYOK" })).toHaveAttribute("href", "/settings/byok?returnTo=%2Ftasks%2Ftask-1%2Fgrading-setup");
   });
 
   it("saves settings independently while a source blocker still prevents grading start", async () => {
