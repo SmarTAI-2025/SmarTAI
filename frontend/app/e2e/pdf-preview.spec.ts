@@ -2,7 +2,7 @@ import { expect, test, type Page } from "@playwright/test";
 import { readFileSync } from "node:fs";
 
 const fixture = "/e2e/fixtures/pdf-preview.html";
-const backend = process.env.SMARTAI_E2E_BACKEND_URL ?? "http://localhost:8000";
+const backend = process.env.SMARTAI_E2E_BACKEND_URL ?? "http://127.0.0.1:8000";
 const input = (page: Page) => page.getByRole("spinbutton", { name: "PDF page" });
 const scroll = (page: Page) => page.getByTestId("pdf-scroll-container");
 const canvas = (page: Page, number: number) => page.getByLabel(`PDF page ${number}`, { exact: true });
