@@ -213,6 +213,7 @@ def admin_schema_ready() -> bool:
             connection.execute(text("SELECT id FROM admin_usage_events LIMIT 0"))
             connection.execute(text("SELECT overrides, version, registration_rules_managed FROM business_configuration LIMIT 0"))
             connection.execute(text("SELECT owner_id, overrides, version FROM user_storage_configuration LIMIT 0"))
+            connection.execute(text("SELECT owner_id, scope, day, requests, estimated_input_tokens FROM model_daily_usage LIMIT 0"))
         return len(expected) == 1 and actual == expected
     except Exception:
         return False

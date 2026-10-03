@@ -545,7 +545,8 @@ def _provider_error(exc: SharedPoolLimitError) -> HTTPException:
             "code": (
                 "analytics_quota_exceeded"
                 if limited else "analytics_provider_unavailable"
-            )
+            ),
+            "message": "共享模型日额度已用完，请等待 UTC 00:00 重置、联系管理员调整或使用 BYOK。" if limited else "共享模型暂不可用。"
         },
     )
 

@@ -294,3 +294,5 @@ describe("ExpertsPage editable vendor Base URL", () => {
     await waitFor(() => expect(deleteBaiduOCRCredentials).toHaveBeenCalledWith("ocr-record-1"));
   });
 });
+
+vi.mock("@/components/ModelQuotaCard", () => ({ ModelQuotaCard: () => null }));

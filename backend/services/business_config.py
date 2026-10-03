@@ -21,8 +21,14 @@ DEFAULTS: dict[str, str | int] = {
     "unfinished_source_quota_bytes": 536870912,
     "knowledge_storage_quota_bytes": 536870912,
 }
+MODEL_KEYS = frozenset(("shared_pool_daily_request_limit", "shared_pool_daily_estimated_token_limit", "history_query_llm_daily_limit"))
+DEFAULTS.update(shared_pool_daily_request_limit=100, shared_pool_daily_estimated_token_limit=100000, history_query_llm_daily_limit=20)
 STORAGE_KEYS = frozenset(("unfinished_source_quota_bytes", "knowledge_storage_quota_bytes"))
+USER_CONFIG_KEYS = STORAGE_KEYS | MODEL_KEYS
 BOUNDS = {
+    "shared_pool_daily_request_limit": (-1, 1000000),
+    "shared_pool_daily_estimated_token_limit": (-1, 1000000000),
+    "history_query_llm_daily_limit": (-1, 1000000),
     "email_verification_resend_seconds": (1, 3600),
     "email_verification_hourly_email_limit": (1, 100),
     "email_verification_hourly_ip_limit": (1, 1000),
@@ -32,7 +38,7 @@ BOUNDS = {
 
 
 def validate_changes(changes: dict[str, Any], *, user_scope: bool = False) -> dict[str, Any]:
-    allowed = STORAGE_KEYS if user_scope else DEFAULTS.keys()
+    allowed = USER_CONFIG_KEYS if user_scope else DEFAULTS.keys()
     if not changes or changes.keys() - allowed:
         raise ValueError("Only the listed business settings can be changed")
     result = {}
@@ -104,7 +110,7 @@ def read_business_config(session: Session, owner_id: str | None = None) -> Busin
     values, sources = {}, {}
     fields_set = getattr(settings, "model_fields_set", set())
     for key, default in DEFAULTS.items():
-        if key in user_overrides and key in STORAGE_KEYS:
+        if key in user_overrides and key in USER_CONFIG_KEYS:
             value, source = user_overrides[key], "user_override"
         elif key in global_overrides:
             value, source = global_overrides[key], "global_override"
@@ -114,6 +120,8 @@ def read_business_config(session: Session, owner_id: str | None = None) -> Busin
         # Preserve the repositories' legacy environment handling (negative = 0).
         # DB overrides have strict validation, and zero always blocks new bytes.
         values[key] = max(0, int(value)) if key in STORAGE_KEYS else value
+        if key in MODEL_KEYS:
+            values[key] = int(value) if source.endswith("override") else max(0, int(value))
         sources[key] = source
     return BusinessConfiguration(values, sources, global_overrides, user_overrides,
                                  global_row[2] if global_row else 0, user_row[2] if user_row else 0,

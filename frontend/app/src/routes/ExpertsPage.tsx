@@ -12,6 +12,7 @@ import {
   Star,
   Trash2,
 } from "lucide-react";
+import { ModelQuotaCard } from "@/components/ModelQuotaCard";
 import { useState, type FormEvent } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { toast } from "sonner";
@@ -237,6 +238,7 @@ export function ExpertsPage() {
 
   return (
     <div className="grid gap-5">
+      <ModelQuotaCard />
       <header className="flex flex-col gap-4 border-b pb-4 sm:flex-row sm:items-end sm:justify-between">
         <div>
           <h1 className="text-[26px] font-semibold tracking-tight">

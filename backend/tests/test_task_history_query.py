@@ -48,8 +48,10 @@ def history_client(monkeypatch):
         "tags": [{"id": "own-tag", "name": "Quiz"}],
     })
     monkeypatch.setattr(settings, "history_query_llm_enabled", True)
-    history_query_agent._last_llm_at.clear()
-    history_query_agent._llm_daily_usage.clear()
+    from backend.db.session import session_scope
+    from backend.db.models import UserRecord
+    with session_scope() as session:
+        session.add(UserRecord(id=owner.id, username=owner.username, role=owner.role, password_hash="test", is_active=True))
     return TestClient(app), provider
 
 

@@ -21,6 +21,7 @@ import "@/styles/globals.css";
 
 const router = createBrowserRouter([{
   path: "/login", element: <LoginPage admin />,
+}, { path: "/maintenance", element: <main className="mx-auto max-w-5xl p-4 sm:p-8"><AdminMaintenancePage standalone /></main>
 }, { path: "/", element: <Navigate to="/admin" replace />
 }, { path: "/forgot-password", element: <ForgotPasswordPage />
 }, { path: "/reset-password", element: <ResetPasswordPage />

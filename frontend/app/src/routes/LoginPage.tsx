@@ -72,7 +72,7 @@ export function LoginPage({ admin = false }: { admin?: boolean }) {
           else setFormError("此账号具有管理权限，请通过已配置的私有管理站点登录。当前站点未配置管理端地址。");
         } else {
           const returned = safeReturnPath(location.state);
-          navigate(returned === "/admin" || returned.startsWith("/admin/") ? returned : "/admin", { replace: true });
+          navigate(returned === "/maintenance" || returned === "/admin" || returned.startsWith("/admin/") ? returned : "/admin", { replace: true });
         }
         return;
       }

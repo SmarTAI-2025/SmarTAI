@@ -19,6 +19,9 @@ def test_closure_releases_expected_identity_only_after_storage_cleanup(mode, tmp
     from backend.db.models import AdminAuditLogRecord
     with session_scope() as session:
         session.add(UserStorageConfigRecord(owner_id=user.id, overrides={"knowledge_storage_quota_bytes": 0}, version=1, updated_at=1))
+    from backend.services.model_quota import admit_model_call
+    from backend.db.model_quota_models import ModelDailyUsageRecord
+    admit_model_call(user.id, "shared")
     request_headers = headers(admin, "close-once")
     body = {"mode": mode, "confirm_username": "teacher", "reason": "requested_or_abuse"}
     response = client.post(f"/admin/users/{user.id}/closure", json=body, headers=request_headers)
@@ -33,6 +36,7 @@ def test_closure_releases_expected_identity_only_after_storage_cleanup(mode, tmp
     assert status["status"] == "completed", status
     assert storage.list_keys("") == []
     with session_scope() as session:
+        assert session.scalar(select(ModelDailyUsageRecord).where(ModelDailyUsageRecord.owner_id == user.id)) is None
         assert session.get(UserRecord, user.id) is None
         assert session.get(UserStorageConfigRecord, user.id) is None
         completed = session.scalar(select(AdminAuditLogRecord).where(AdminAuditLogRecord.action == "account_closure_completed"))

@@ -8,6 +8,9 @@ import { Button } from "@/components/ui/Button";
 import { Card, SectionHeader } from "@/components/ui/Card";
 
 const labels: Record<BusinessConfigKey, string> = {
+  shared_pool_daily_request_limit: "共享模型每日请求次数",
+  shared_pool_daily_estimated_token_limit: "共享模型每日估算输入 token",
+  history_query_llm_daily_limit: "任务 Ask 每日模型调用次数",
   allowed_email_domains: "允许注册的邮箱域名",
   email_verification_resend_seconds: "重发冷却（秒）",
   email_verification_hourly_email_limit: "每邮箱每小时上限",
@@ -21,6 +24,7 @@ const groups: Array<{ title: string; hint: string; keys: BusinessConfigKey[] }> 
   { title: "注册规则", hint: "仅影响后续注册；待验证申请在完成验证时按当时规则检查。已有账号保持可用。", keys: ["allowed_email_domains"] },
   { title: "邮件发送限制", hint: "注册、重发与找回密码使用相同设置，沿用各自已有计数。修改不清空当前小时次数，也不改写已有链接的过期时间。", keys: ["email_verification_resend_seconds", "email_verification_hourly_email_limit", "email_verification_hourly_ip_limit"] },
   { title: "用户存储配额", hint: "每人分别计算两类占用。512 MiB = 536870912 字节。0 表示禁止新增占用；降低配额不删除已有数据，超过额度时仍可释放空间。", keys: storageKeys },
+  { title: "模型日额度", hint: "按每用户每天计量，UTC 00:00 重置。0 禁止调用，-1 无限制。失败及中断保留次数；SDK 内部重试计一次，重新发起模型调用计新的一次。共享池开关仍由部署管理；普通 BYOK 批改不受共享池额度限制。token 为输入估算，不是实际用量或费用。降低额度不删除数据，已超额用户须等待重置或由管理员调整。", keys: ["shared_pool_daily_request_limit", "shared_pool_daily_estimated_token_limit", "history_query_llm_daily_limit"] },
 ];
 type Draft = Partial<Record<BusinessConfigKey, { inherit: boolean; text: string }>>;
 function initialDraft(config: BusinessConfiguration): Draft {
@@ -28,6 +32,7 @@ function initialDraft(config: BusinessConfiguration): Draft {
 }
 function displayValue(key: BusinessConfigKey, value: string | number) {
   if (key === "allowed_email_domains") return value === "" ? "全部拒绝" : value === "*" ? "允许全部域名" : String(value);
+  if (value === -1) return "无限制";
   return storageKeys.includes(key) ? `${Number(value).toLocaleString()} 字节（${(Number(value) / 1048576).toLocaleString(undefined, { maximumFractionDigits: 2 })} MiB）` : String(value);
 }
 
@@ -63,7 +68,7 @@ function ConfigEditor({ initial, reload, onDirty, onSaved }: { initial: Business
       else if (key === "allowed_email_domains") changes[key] = item.text;
       else {
         const number = Number(item.text);
-        if (!/^\d+$/.test(item.text) || !Number.isSafeInteger(number) || (bounds && (number < bounds[0] || number > bounds[1]))) {
+        if (!/^-?\d+$/.test(item.text) || !Number.isSafeInteger(number) || (bounds && (number < bounds[0] || number > bounds[1]))) {
           setError(`${labels[key]}须为 ${bounds?.[0]}–${bounds?.[1]} 之间的整数；恢复继承请使用按钮。`); return;
         }
         changes[key] = number;
@@ -92,11 +97,11 @@ function ConfigEditor({ initial, reload, onDirty, onSaved }: { initial: Business
     catch { setError("重新载入失败，当前修改仍保留，请重试。"); }
     finally { active.current = false; setBusy(false); }
   }
-  const visibleGroups = userScope ? [{ ...groups[2], title: "该用户的存储覆盖" }] : groups;
+  const visibleGroups = userScope ? [{ ...groups[2], title: "该用户的存储覆盖" }, groups[3]] : groups;
   return <form onSubmit={event => void submit(event)} className="space-y-5" aria-label={userScope ? "用户配额表单" : "全局配置表单"}>
-    {visibleGroups.map(group => <Card key={group.title} id={!userScope ? ({ "注册规则": "registration-rules", "邮件发送限制": "mail-limits", "用户存储配额": "default-quotas" } as Record<string, string>)[group.title] : undefined} className="scroll-mt-6 space-y-5">
+    {visibleGroups.map(group => <Card key={group.title} id={!userScope ? ({ "注册规则": "registration-rules", "邮件发送限制": "mail-limits", "用户存储配额": "default-quotas", "模型日额度": "model-limits" } as Record<string, string>)[group.title] : undefined} className="scroll-mt-6 space-y-5">
       <div><h2 className="text-lg font-semibold">{group.title}</h2><p className="mt-2 text-sm text-muted-foreground">{group.hint}</p></div>
-      {group.keys.map(key => {
+      {group.keys.filter(key => snapshot.fields[key]).map(key => {
         const field = snapshot.fields[key]!, item = draft[key]!, usage = snapshot.usage?.[key];
         return <div key={key} className="space-y-2 border-t pt-4">
           <label className="grid gap-2 text-sm font-medium"><span>{labels[key]}</span>
@@ -111,6 +116,7 @@ function ConfigEditor({ initial, reload, onDirty, onSaved }: { initial: Business
       })}
       {group.title === "邮件发送限制" && <p className="text-xs text-muted-foreground">新邮件采用新冷却时间；已发注册邮件保留已有冷却截止时间。验证链接有效期：{snapshot.read_only?.email_verification_expiry_seconds ?? 1800} 秒（只读）。管理员协助找回密码也受上述限制。</p>}
     </Card>)}
+    {snapshot.model_usage && <Card className="text-sm space-y-2"><h2 className="font-semibold">今日模型使用 · UTC</h2><p>共享池已准入 {snapshot.model_usage.shared.requests} 次；估算输入 {snapshot.model_usage.shared.estimated_input_tokens} token。任务 Ask 已准入 {snapshot.model_usage.history.requests} 次。</p><p>下次重置：{snapshot.model_usage.resets_at}。调整上限不清零已有计数。</p></Card>}
     <Card className="space-y-3">
       <label className="grid gap-2 text-sm">修改原因<input className="h-10 rounded-md border bg-background px-3" maxLength={80} value={reason} disabled={busy} onChange={e => setReason(e.target.value)} placeholder="填写本次调整原因，记录到审计日志" /></label>
       {dirty && <p role="status" className="text-sm text-amber-700">有未保存的修改。</p>}
@@ -151,12 +157,12 @@ export function AdminBusinessConfigPage() {
   const users = useQuery({ queryKey: ["admin-business-config-users", query], queryFn: () => adminListUsers({ search: query || undefined, page: 1, page_size: 25 }), retry: false });
   const items = Array.isArray(users.data) ? users.data : users.data?.items ?? [];
   return <div className="max-w-4xl space-y-6">
-    <SectionHeader title="业务配置管理" description="调整注册、邮件与个人存储规则。优先使用用户覆盖，其次全局覆盖，最后继承部署设置或代码默认值。" />
-    <nav aria-label="配置项目" className="flex flex-wrap gap-2 text-sm">{[["registration-rules", "注册规则"], ["mail-limits", "邮件限制"], ["default-quotas", "默认配额"], ["user-quotas", "单用户配额"]].map(([id, label]) => <a key={id} href={`#${id}`} className="rounded-md border bg-card px-3 py-2 text-primary">{label}</a>)}</nav>
+    <SectionHeader title="业务配置管理" description="调整注册、邮件、存储和模型日额度规则。优先使用用户覆盖，其次全局覆盖，最后继承部署设置或代码默认值。" />
+    <nav aria-label="配置项目" className="flex flex-wrap gap-2 text-sm">{[["registration-rules", "注册规则"], ["mail-limits", "邮件限制"], ["default-quotas", "存储配额"], ["model-limits", "模型额度"], ["user-quotas", "单用户配额"]].map(([id, label]) => <a key={id} href={`#${id}`} className="rounded-md border bg-card px-3 py-2 text-primary">{label}</a>)}</nav>
     {blocker.state === "blocked" && <Card role="alert" className="space-y-3"><p>还有未保存的修改，离开会丢弃本页编辑。</p><div className="flex gap-2"><Button onClick={() => blocker.reset()}>保留编辑</Button><Button variant="secondary" onClick={() => blocker.proceed()}>放弃更改并离开</Button></div></Card>}
     {global.isPending ? <p role="status">正在载入全局配置…</p> : global.isError ? <Card role="alert">配置加载失败。<Button onClick={() => void global.refetch()}>重试</Button></Card> : <ConfigEditor initial={global.data} onDirty={setGlobalDirty} onSaved={() => { if (!userDirty) setUserEpoch(n => n + 1); }} reload={async () => { const result = await global.refetch(); if (!result.data || result.error) throw new Error("load"); return result.data; }} />}
     <section id="user-quotas" aria-label="单独用户配额" className="scroll-mt-6 space-y-4">
-      <Card className="space-y-4"><h2 className="text-lg font-semibold">为单个用户设置存储配额</h2><p className="text-sm text-muted-foreground">只覆盖此用户的两类存储上限；留在继承状态的项目会随全局配置更新。</p>
+      <Card className="space-y-4"><h2 className="text-lg font-semibold">为单个用户设置配额</h2><p className="text-sm text-muted-foreground">只覆盖此用户选中的存储或模型上限；留在继承状态的项目会随全局配置更新。</p>
         <form onSubmit={e => { e.preventDefault(); setQuery(search.trim()); }} className="flex flex-wrap items-end gap-2"><label className="grid flex-1 gap-2 text-sm">搜索用户名或邮箱<input className="h-10 rounded-md border bg-background px-3" value={search} maxLength={128} onChange={e => setSearch(e.target.value)} /></label><Button type="submit">搜索</Button></form>
         {users.isPending ? <p role="status">用户加载中…</p> : users.isError ? <p role="alert">用户加载失败。<Button onClick={() => void users.refetch()}>重试用户列表</Button></p> : <label className="grid gap-2 text-sm">选择用户<select className="h-10 w-full rounded-md border bg-background px-3" value={ownerId} disabled={userDirty} onChange={e => setOwnerId(e.target.value)}><option value="">请选择用户</option>{ownerId && !items.some(u => u.id === ownerId) && <option value={ownerId}>已选用户：{ownerId}</option>}{items.map(u => <option key={u.id} value={u.id}>{u.username} · {u.email || "无邮箱"}</option>)}</select></label>}
         {!users.isPending && !users.isError && !items.length && <p className="text-sm">没有匹配的用户。</p>}
@@ -165,6 +171,6 @@ export function AdminBusinessConfigPage() {
       </Card>
       {ownerId && (userConfig.isPending ? <p role="status">正在载入用户配额…</p> : userConfig.isError ? <Card role="alert">用户配额加载失败，账号可能已销户。<Button onClick={() => void userConfig.refetch()}>重试用户配额</Button></Card> : <ConfigEditor key={`${ownerId}:${userEpoch}`} initial={userConfig.data} onDirty={setUserDirty} reload={async () => { const result = await userConfig.refetch(); if (!result.data || result.error) throw new Error("load"); return result.data; }} />)}
     </section>
-    {global.data?.read_only && <Card className="space-y-2 text-sm text-muted-foreground"><h2 className="font-semibold text-foreground">模型额度（只读）</h2><p>共享池每日请求：{global.data.read_only.shared_pool_daily_request_limit}；估算 token：{global.data.read_only.shared_pool_daily_estimated_token_limit}；历史任务 Ask 每日调用：{global.data.read_only.history_query_llm_daily_limit}。</p><p>{global.data.read_only.model_quota_note}</p></Card>}
+    {global.data?.read_only && <Card className="space-y-2 text-sm text-muted-foreground"><h2 className="font-semibold text-foreground">模型额度计量说明</h2><p>共享池每日请求：{global.data.read_only.shared_pool_daily_request_limit}；估算 token：{global.data.read_only.shared_pool_daily_estimated_token_limit}；历史任务 Ask 每日调用：{global.data.read_only.history_query_llm_daily_limit}。</p><p>{global.data.read_only.model_quota_note}</p></Card>}
   </div>;
 }

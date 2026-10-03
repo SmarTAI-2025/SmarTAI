@@ -8,7 +8,7 @@ from backend.tests.test_postgres_integration import pg_database
 pytestmark = pytest.mark.skipif(not os.environ.get("SMARTAI_TEST_POSTGRES_URL"), reason="Requires disposable PostgreSQL")
 
 
-@pytest.mark.parametrize("previous", ["base", "0018_knowledge_ingestion", "0019_admin_usage_events", "0022_account_closures"])
+@pytest.mark.parametrize("previous", ["base", "0018_knowledge_ingestion", "0019_admin_usage_events", "0022_account_closures", "0023_business_configuration"])
 def test_existing_postgres_branches_upgrade_with_legacy_identity(pg_database, monkeypatch, previous):
     from alembic import command
     from alembic.config import Config
@@ -85,3 +85,19 @@ def test_business_config_concurrency_live_quota_and_private_permissions(pg_datab
     assert all(item["actor_name"] == "manager" for item in audit)
     assert {item["action"] for item in audit} >= {"business_configuration_changed", "user_storage_configuration_changed"}
     assert next(item for item in audit if item["action"] == "user_storage_configuration_changed")["after_state"]["overrides"] == {"knowledge_storage_quota_bytes": 0}
+
+
+def test_model_daily_admission_serializes_postgres_sessions(pg_database, monkeypatch):
+    from backend.db.session import session_scope
+    from backend.db.models import UserRecord
+    from backend.db.business_config_models import BusinessConfigRecord
+    from backend.services.model_quota import admit_model_call, ModelQuotaError, model_usage
+    import time
+    with session_scope() as session:
+        session.add(UserRecord(id="quota-owner",username="quota-owner",role="teacher",password_hash="fake",is_active=True))
+        session.add(BusinessConfigRecord(id="global",overrides={"shared_pool_daily_request_limit":7},version=1,updated_at=time.time()))
+    def call(_):
+        try:admit_model_call("quota-owner","shared");return True
+        except ModelQuotaError:return False
+    with ThreadPoolExecutor(max_workers=12) as pool:assert sum(pool.map(call,range(32)))==7
+    with session_scope() as session:assert model_usage(session,"quota-owner")["shared"]["requests"]==7

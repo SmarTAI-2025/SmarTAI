@@ -1,6 +1,7 @@
 import { HardDrive, Languages, LoaderCircle, MonitorCog, ShieldCheck } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import type { ReactNode } from "react";
+import { ModelQuotaCard } from "@/components/ModelQuotaCard";
 import { useCurrentUser } from "@/api/hooks";
 import { getSourceStorageUsage } from "@/api/tasks";
 import { useI18n } from "@/i18n/I18nProvider";
@@ -46,6 +47,7 @@ export function SettingsPage() {
           )}
         </p>
       </header>
+      {user?.role === "teacher" && <div className="mt-7"><ModelQuotaCard /></div>}
 
       <section
         aria-labelledby="account-profile-title"

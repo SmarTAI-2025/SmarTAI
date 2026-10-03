@@ -332,6 +332,8 @@ def admin_list_audit(
 def admin_overview(current: User = Depends(require_admin)):
     """Return durable counts plus the last 30 days of collected usage."""
     with session_scope() as session:
+        from backend.services.business_config import read_business_config
+        config = read_business_config(session)
         users_total = int(session.scalar(select(func.count()).select_from(UserRecord)) or 0)
         users_active = int(session.scalar(select(func.count()).select_from(UserRecord).where(UserRecord.is_active.is_(True))) or 0)
         users_with_email = int(session.scalar(select(func.count()).select_from(UserRecord).where(UserRecord.email.is_not(None))) or 0)
@@ -350,7 +352,7 @@ def admin_overview(current: User = Depends(require_admin)):
         "users": {"total": users_total, "active": users_active, "with_email": users_with_email},
         "education": {"courses": courses, "assignments": assignments, "grading_runs": grading_runs},
         "usage": usage,
-        "shared_pool": {"enabled": bool(settings.shared_pool_enabled), "daily_request_limit": int(settings.shared_pool_daily_request_limit), "daily_estimated_token_limit": int(settings.shared_pool_daily_estimated_token_limit), "source": "runtime_configuration"},
+        "shared_pool": {"enabled": bool(settings.shared_pool_enabled), "daily_request_limit": int(config.values["shared_pool_daily_request_limit"]), "daily_estimated_token_limit": int(config.values["shared_pool_daily_estimated_token_limit"]), "source": "resolved_business_configuration"},
     }
 
 

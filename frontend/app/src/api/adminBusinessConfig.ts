@@ -1,6 +1,6 @@
 import { apiClient } from "./client";
 
-export type BusinessConfigKey = "allowed_email_domains" | "email_verification_resend_seconds" | "email_verification_hourly_email_limit" | "email_verification_hourly_ip_limit" | "unfinished_source_quota_bytes" | "knowledge_storage_quota_bytes";
+export type BusinessConfigKey = "allowed_email_domains" | "email_verification_resend_seconds" | "email_verification_hourly_email_limit" | "email_verification_hourly_ip_limit" | "unfinished_source_quota_bytes" | "knowledge_storage_quota_bytes" | "shared_pool_daily_request_limit" | "shared_pool_daily_estimated_token_limit" | "history_query_llm_daily_limit";
 export interface BusinessConfigField {
   effective: string | number;
   source: "user_override" | "global_override" | "settings" | "default";
@@ -14,6 +14,7 @@ export interface BusinessConfiguration {
   global_version: number;
   fields: Partial<Record<BusinessConfigKey, BusinessConfigField>>;
   usage?: Partial<Record<BusinessConfigKey, { used_bytes: number; limit_bytes: number; available_bytes: number; reserved_bytes: number }>>;
+  model_usage?: { day: string; timezone: string; resets_at: string; shared: { requests: number; estimated_input_tokens: number }; history: { requests: number } };
   read_only?: {
     email_verification_expiry_seconds: number;
     password_recovery_independent_of_registration: boolean;

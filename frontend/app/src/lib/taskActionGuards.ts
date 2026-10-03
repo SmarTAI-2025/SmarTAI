@@ -1131,6 +1131,8 @@ function providerConfigurationErrorCopy(
       "请使用供应商支持的接入环境，或在 BYOK 中选择其他已获授权的模型。剩余页面不会自动重复请求。",
       "Use a provider-supported access environment or select another authorized BYOK model. Remaining pages are not retried automatically.",
     ],
+    shared_pool_daily_limit_reached: ["共享模型日额度已用完。", "Shared model daily allowance exhausted.", "请等待 UTC 00:00 重置、联系管理员调整，或在模型与 BYOK 页面配置自己的模型。", "Wait for UTC midnight, contact an administrator, or use your own BYOK model."],
+    shared_pool_disabled: ["平台共享模型当前关闭。", "The shared model pool is disabled.", "请在模型与 BYOK 页面配置自己的模型。", "Configure your own BYOK model."],
     provider_quota_exceeded: [
       "OCR 额度已用完",
       "The OCR quota is exhausted",

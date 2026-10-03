@@ -64,6 +64,14 @@ _custom_probe_last_at: dict[tuple[str, str], float] = {}
 router = APIRouter(prefix="/experts", tags=["experts"])
 
 
+@router.get("/quota")
+def own_model_quota(current: User = Depends(require_teacher)):
+    from backend.db.session import session_scope
+    from backend.services.model_quota import model_usage
+    with session_scope() as session:
+        return model_usage(session, current.id)
+
+
 class AddKeyRequest(BaseModel):
     provider_type: ProviderType
     api_key: str = Field(min_length=1, max_length=512)

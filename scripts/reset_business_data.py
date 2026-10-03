@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-"""Preview or execute an offline disposable-business reset. Never use in production."""
+"""Preview or execute an offline disposable-business reset. Independent maintenance password and authenticated administrator required."""
 from __future__ import annotations
 
 import argparse
@@ -23,8 +23,8 @@ def main(argv: list[str] | None = None) -> int:
     from backend.config import settings
     try:
         # Reject before constructing any object client or reading its credentials.
-        if settings.runtime_environment not in {"development", "test"} or os.environ.get("SMARTAI_ADMIN_RESET_ENABLED", "false").lower() != "true":
-            raise ResetError("reset_disabled_outside_disposable_development")
+        if os.environ.get("SMARTAI_ADMIN_RESET_ENABLED", "false").lower() != "true":
+            raise ResetError("reset_disabled")
         client = None
         if settings.storage_backend == "object":
             if not args.allow_object_storage:
@@ -33,7 +33,20 @@ def main(argv: list[str] | None = None) -> int:
             client = build_storage().client
         scope = scope_from_settings(object_client=client)
         if args.execute:
-            result = execute_reset(scope, fingerprint=args.fingerprint, confirmation=args.confirm, services_stopped=args.services_stopped)
+            from backend.services.admin_reset import CONFIRMATION
+            if args.confirm != f"{CONFIRMATION} {args.fingerprint[:12]}" or not args.services_stopped:
+                raise ResetError("reset_confirmation_mismatch")
+            import getpass
+            from backend.services.maintenance_auth import authenticate_operator
+            from backend.services.admin_reset import _read_json
+            # Post-commit recovery has no users left. Only a previously
+            # HTTP-authorized exact plan can use the maintenance capability.
+            approved = _read_json(scope.maintenance_dir / f"authorization-{args.fingerprint}.json") if __import__('re').fullmatch(r"[0-9a-f]{64}-[0-9a-f]{32}", args.fingerprint) else None
+            from backend.services.admin_reset import _digest, _validate_scope, _write_json
+            if not approved or approved.get("scope_fingerprint") != _digest(_validate_scope(scope)):
+                authenticate_operator(scope, input("Administrator username: ").strip(), getpass.getpass("Administrator password: "))
+                _write_json(scope.maintenance_dir / f"authorization-{args.fingerprint}.json", {"fingerprint": args.fingerprint, "scope_fingerprint": _digest(_validate_scope(scope)), "authorized_at": __import__('time').time()})
+            result = execute_reset(scope, fingerprint=args.fingerprint, confirmation=args.confirm, services_stopped=args.services_stopped, maintenance_password=getpass.getpass("Independent maintenance password: "))
         else:
             result = preview_reset(scope)
         print(json.dumps(result, indent=2, ensure_ascii=False, sort_keys=True))

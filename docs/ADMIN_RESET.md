@@ -2,15 +2,46 @@
 
 2026-10-02；仅实现与隔离数据验证，不代表生产、真实对象存储或部署验收。
 
-入口是 `scripts/reset_business_data.py`。管理员 HTTP/UI 只能调用
-`backend.services.admin_reset.preview_reset(scope)` 查看只读范围；不得把
-`execute_reset` 接到 HTTP、后台网页任务或自动定时任务。
+2026-10-03 更新：不再用 development/test/production 的名称决定是否允许清空。
+统一使用管理员身份、独立维护密码、精确目标确认、项目专用资源标记和离线锁。
+**实现和测试获授权；真实 AWS、SMTP、S3 操作与线上配置变更未获授权，均未执行。**
 
-当前代码默认关闭，且严格限定 `SMARTAI_RUNTIME_ENVIRONMENT=development/test`。
-生产环境会失败关闭。本次没有启用或执行任何真实环境清空；生产离线能力的新增
-开关未获本次自动审批通过，未实现。不得把真实环境改成 `test` 绕过限制。
-真实环境的任何不可恢复操作仍需独立授权，且应先满足
-`docs/active_beta_launch/20260803_leader_replan/PRE_PRODUCTION_SECURITY_RELEASE_GATE_CN.md`。
+普通管理页面的“系统维护”仅预览。先停止全部写入服务，然后在同一主机、相同数据库/
+存储/密钥配置下启动专用维护服务，访问 `/maintenance` 执行按钮。维护服务不挂教学、
+账号管理、配置修改、密码重置、邮件发送等业务接口，不启动后台 worker。仅登录授权
+会写入独立管理员会话；清理中连登录也暂停。服务不是网络隔离措施，必须绑定回环地址，
+通过 SSH 隧道或 VPN 访问；禁止用公网网关直接发布。
+
+```bash
+python scripts/hash_maintenance_password.py
+# 将新哈希以部署秘密配置为 SMARTAI_ADMIN_RESET_PASSWORD_HASH；不要写入业务库。
+# 不改变已有 JWT、BYOK 主密钥、SMTP 密码或 Parameter Store 配置。
+python -m uvicorn backend.maintenance_main:app --host 127.0.0.1 --port 8001 --workers 1
+```
+
+维护凭据是额外的一项密码，不授予普通用户管理员权限。初次执行仍验证目标数据库中的
+真实管理员身份、有效会话、auth_version、活动状态，并在管理事务中重新验证。独立
+密码以 bcrypt-SHA256 哈希保存；API 使用 SecretStr，校验错误不回显原始输入。密码
+失败 5 次后暂停 15 分钟，不写入前端草稿、URL、业务审计或维护回执。
+
+页面预览显示环境、数据库脱敏标识、本地目录、对象范围摘要、表/文件/版本/分段上传
+数量及不可逆影响。管理员输入独立维护密码和本次精确短语，勾选“全部普通服务已停止”，
+然后确认。后台重新核对目标、清单和离线锁；预览失效、密码错误、权限不足、其他进程
+仍运行均拒绝。没有单独的“生产绕过开关”。运行开关仍默认关闭，专用资源未登记时
+失败关闭；这属于项目范围保护，不是环境名限制。
+
+维护服务保留文件阶段/数据库阶段/失败代码及残留数量。操作凭据是独立 HttpOnly、
+SameSite=Strict Cookie，作用域限定 `/api/admin/maintenance`，24 小时有效，只能查看
+和恢复其已授权的精确计划；恢复仍需独立维护密码。同源校验防止跨站触发。即使所有
+用户已删除，也能展示完成状态，刷新不丢失维护记录。进程重启后用相同记录恢复，
+不会因新预览或重复点击删除重新注册的数据。多 worker/另一个维护进程会被 POSIX
+及 PostgreSQL 控制锁拒绝。SQLite 只支持同一维护主机；所有实际写入者必须遵守
+生命周期锁，部署前要核实外部 worker/调度器也已停止。
+
+CLI `scripts/reset_business_data.py` 保留预览和恢复入口。执行时隐藏提示输入管理员
+自身密码与独立维护密码；已持久化授权的精确恢复计划可以在用户已清空时恢复回执。
+未知计划不能靠维护密码跳过首轮管理员身份检查。授权文件与回执位于业务库外的专用
+维护目录，必须当前运维用户所有且不可被组/其他用户写入。
 
 ## 清空范围与保留项
 
@@ -124,7 +155,7 @@ CLI 不另造一个可与服务锁指向不同实例的数据库参数。确保�
    存储位置哈希、schema/计数/文件清单摘要和本次预览随机 ID；不只是勾选框。
    环境或清单改变会要求重新预览。行计数摘要不是所有行内容的快照，因此必须先停止
    全部写入者。每次新预览具有不同 ID；执行成功的旧命令不会再清空后来注册的数据。
-4. 只有确认是授权的可丢弃数据时才执行精确预览：
+4. 只有获得目标环境实际清空的单独授权后才执行精确预览：
 
    ```bash
    python scripts/reset_business_data.py --execute --services-stopped \
@@ -133,7 +164,7 @@ CLI 不另造一个可与服务锁指向不同实例的数据库参数。确保�
    ```
 
    不加 `--execute` 永远只是预览；取消、短语不符、漏掉离线确认、过期范围，均不删
-   数据。不能通过网页点击执行；本机维护人员还必须拥有 DB/文件系统访问权限。
+   数据。可通过上述离线维护页面执行，或使用 CLI；维护进程必须拥有目标 DB/文件系统权限。
 5. 检查 `status=completed`、`bootstrap_required=true` 和外部维护回执，复核新预览的
    全部计数为零。此时 schema/配置仍在，全部历史管理员已清空。
 6. 保持公众入口关闭，使用本机受控首管理员 CLI：
@@ -149,12 +180,12 @@ CLI 不另造一个可与服务锁指向不同实例的数据库参数。确保�
 
 ## 对象存储边界
 
-只有 CLI 加 `--allow-object-storage` 才会构造配置中的 S3 客户端并调用网络，预览也
-需要该显式授权。当前测试全部使用 fake client，未对 AWS、Cloudflare/R2 或其他真实
+CLI 必须显式加 `--allow-object-storage`；维护服务必须配置
+`SMARTAI_ADMIN_RESET_ALLOW_OBJECT_STORAGE=true` 才构造 S3 客户端，预览也会读取对象安全配置。当前测试全部使用 fake client，未对 AWS、Cloudflare/R2 或其他真实
 服务发出对象请求，真实 IAM、endpoint、API 兼容性和物理删除语义未验证。
 
 必须是该环境独占 bucket，不支持共享 bucket 的 prefix 清空。bucket 必须已有标签
-`smartai-reset-scope=disposable`。权限须能完整读取 tag/versioning/replication/object-lock
+`smartai-reset-scope=smartai-exclusive-business`（兼容既有 `disposable` 标记）。权限须能完整读取 tag/versioning/replication/object-lock
 配置、列举所有版本与对象、列举/中止 multipart、删除指定版本。存在 replication、
 Object Lock、MFA Delete，或兼容接口不能证明这些配置不存在时一律拒绝。不能把普通
 DELETE 返回成功当作历史版本已删除；删除完成后重新枚举，发现残留就保留维护状态。
@@ -208,3 +239,29 @@ PostgreSQL fixture 会重建**该专属测试库**的 public schema；禁止指�
 拒绝、危险路径、默认关闭、CLI 只读预览、S3 版本/删除标记/null 版本/分页/multipart。
 完整项目 API/UI 接线、浏览器行为、部署和真实服务验收由主线程单独记录，不能用本
 模块测试代替。
+
+
+## 部署资源登记与完成后的重新初始化
+
+- 明确启用 `SMARTAI_ADMIN_RESET_ENABLED=true`，维护目录必须在业务根之外。
+- `SMARTAI_STORAGE_ROOT`、`TMPDIR`（独立临时目录）、额外历史本地业务根
+  `SMARTAI_ADMIN_RESET_EXTRA_STORAGE_ROOTS`（JSON 数组）均须登记；禁止共享 `/tmp`、
+  symlink、hardlink、跨挂载边界和含部署配置/数据库的目录。
+- 专用本地根保留 `.smartai-disposable-storage` 兼容标记；新登记的内容为
+  `{"schema_version":1,"purpose":"smartai-exclusive-business-storage"}`。
+  名称只是历史兼容，环境名称不影响授权。挂载盘必须使用其内部的项目专用子目录，
+  不能把整块共享挂载根当作项目范围。
+- 对象存储仅支持当前配置的完整独占桶。共享桶、多历史桶、外部备份、replication、
+  Object Lock、MFA Delete 不支持自动清理；检测到不确定范围时拒绝，不能宣称清空完成。
+  工具不创建标记、改 IAM、bucket 配置、数据库实例或其他基础设施；资源登记需独立运维授权。
+- 清理动态纳入 `model_daily_usage`、业务配置、用户覆盖与黑名单。完成后全部业务表零行、
+  本地根只留登记标记、对象版本/删除标记/multipart 都为空，才生成成功回执。
+- **停止维护服务**，保持公众入口关闭；运行 `python scripts/create_admin.py USER --email EMAIL`，
+  隐藏输入新密码。只允许无管理员时初始化一个新账号，不提升既有普通账号。
+- 核对部署继承的注册域名、邮件限制和模型/存储初始值，再启动全新 public/private/worker
+  进程，测试登录与业务 API、私有站点和公共入口隔离，最后开放注册。同名/同邮箱及旧
+  黑名单邮箱不再有身份占用；注册仍遵守部署初始域名规则。
+
+回执只含 ID、时间、范围摘要、计数和结果。短期授权文件另含令牌哈希、授权时间和
+不可逆管理员 ID 摘要，用于恢复精确计划，不含原始令牌、密码、用户名或邮箱。普通
+应用审计随业务清空删除；维护文件保留在独立控制目录，不参与新的运营统计。

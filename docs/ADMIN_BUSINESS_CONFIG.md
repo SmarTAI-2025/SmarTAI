@@ -1,10 +1,10 @@
 # 管理员业务配置
 
-此实现只管理注册资格、邮件限流及两类用户存储上限，入口为独立私有管理端 `/admin/business-config`。不修改部署参数或密钥，不开放共享模型池、付费模型或新的计费能力。
+此实现管理注册资格、邮件限流、两类用户存储上限及模型日额度，入口为独立私有管理端 `/admin/business-config`。不修改部署参数或密钥，不开放共享模型池、付费模型或新的计费能力。
 
 ## 配置合同
 
-每次业务请求/存储事务直接执行数据库查询，无进程缓存、无 settings 全局修改。单条 UNION 查询同时读取全局与用户行，优先级为：单用户存储覆盖 → 全局 DB 覆盖 → settings → 代码默认。请求使用查询时的已提交快照；提交后的后续请求及其他进程立即可见。正在执行的事务不被追溯取消。
+每次业务请求/存储事务直接执行数据库查询，无进程缓存、无 settings 全局修改。单条 UNION 查询同时读取全局与用户行，优先级为：单用户业务配额覆盖 → 全局 DB 覆盖 → settings → 代码默认。请求使用查询时的已提交快照；提交后的后续请求及其他进程立即可见。正在执行的事务不被追溯取消。
 
 | 字段 | 代码默认 | 后台可保存范围 | 空/零的含义 |
 | --- | --- | --- | --- |
@@ -14,6 +14,9 @@
 | email_verification_hourly_ip_limit | 20 | 1–1000 整数 | 0、空字符串非法；null 继承 |
 | unfinished_source_quota_bytes | 536870912 | 0–1099511627776 整数字节 | 0 禁止新增占用；null 继承 |
 | knowledge_storage_quota_bytes | 536870912 | 0–1099511627776 整数字节 | 同上 |
+| shared_pool_daily_request_limit | 100 | -1–1000000 次 | -1 无限；0 禁止；null 继承 |
+| shared_pool_daily_estimated_token_limit | 100000 | -1–1000000000 | -1 无限；0 禁止；null 继承 |
+| history_query_llm_daily_limit | 20 | -1–1000000 次 | 同上 |
 
 数字字符串、浮点数、布尔值、未知字段和单用户域名/邮件覆盖均拒绝。原环境变量未设置 DB 覆盖时仍按现有 settings 运行；不把后台新校验追溯应用到旧部署配置。页面显示当前有效值、来源、范围及覆盖状态，恢复继承必须显式使用按钮；空数字输入不会当成 0 或继承。
 
@@ -36,7 +39,7 @@
 ## API 与并发
 
 - GET/PATCH `/admin/business-config`：全局配置。
-- GET/PATCH `/admin/business-config/users/{user_id}`：该用户两类存储覆盖与占用；账号不存在返回 404，销户中禁止写入。
+- GET/PATCH `/admin/business-config/users/{user_id}`：该用户存储/模型覆盖与占用；账号不存在返回 404，销户中禁止写入。
 - PATCH 必填 `expected_version`、`changes`、非空 `reason`、`Idempotency-Key`。单用户还必填 `expected_global_version`，防止在继承基线已变更后误保存。
 - 所有写入使用既有 `administrator_transaction`，在管理锁内重验管理员身份/版本；更新 SQL 还以 version 为条件。冲突返回 409，页面保留修改并要求重新载入，不自动覆盖别人的更新。
 - `_audit` 与保存同事务提交，含 actor、target、reason、before/after overrides/version、幂等 response。相同 key/相同 payload 重放原结果；相同 key 不同请求返回 409。网络结果不明时页面保留相同请求的 key 安全重试。
@@ -81,3 +84,40 @@
 - `frontend/app/src/routes/admin/AdminBusinessConfigPage.tsx`
 - `frontend/app/src/routes/admin/AdminBusinessConfigPage.test.tsx`
 - `docs/ADMIN_BUSINESS_CONFIG.md`
+
+
+## 2026-10-03 模型日额度补齐
+
+复用原 business_configuration / user_storage_configuration 的 JSON 覆盖和版本。
+后者保留历史表名，现允许三项模型键；不是第二套配置来源。优先级仍是用户覆盖 →
+全局覆盖 → 部署 settings → 代码默认；每次准入读取提交的 DB 快照，多进程无缓存。
+
+| 项目 | 默认/兼容值 | DB 覆盖范围 |
+| --- | --- | --- |
+| shared_pool_daily_request_limit | 原部署值，代码 100 | -1 到 1000000 次 |
+| shared_pool_daily_estimated_token_limit | 原部署值，代码 100000 | -1 到 1000000000 估算输入 token |
+| history_query_llm_daily_limit | 原部署值，代码 20 | -1 到 1000000 次 |
+
+DB 的 -1 明确无限制；0 禁止新调用，null 恢复继承。历史部署负数继续解释为 0，
+不把未设置 DB 配置的部署意外放宽。共享池开关、历史 Ask 开关及冷却秒数仍是部署
+参数；配额后台不能打开共享模型池。普通 BYOK 批改不计共享池额度，任务 Ask（无论
+BYOK 或共享）沿用原来的独立调用上限；共享 Ask 同时经过两项准入检查。
+
+0024_model_daily_usage 在原单一 head 0023 后新增 owner/scope/UTC day 的持久化账本，
+保留已发布迁移。SQLite BEGIN IMMEDIATE、PostgreSQL owner row FOR UPDATE 在同一
+事务内查有效上限并扣数，提交后才调用供应商。日边界统一 UTC 00:00；重启不清零，
+新 UTC 日使用新行，历史 Ask 冷却也跨进程持久化。管理员调整额度不改写已有计数。
+
+计量是“已准入逻辑调用”，失败/取消/进程中断不退款；供应商 SDK 在同一次 ainvoke
+内的内部重试只计一次，用户重新发起的实际模型调用计新一次。现有任务幂等策略继续
+阻止相同业务操作重复启动模型。没有需要事后退款的预占/结算状态，也不会因崩溃释放
+已耗额度。失败前扣除是保守的原有语义，不能将其宣传为实际成功调用统计。
+
+估算输入 token 保留 content 字符长度合计 /4（最低 1）的历史启发式，不是供应商
+真实输入/输出 token，也不估算费用。存量进程内历史计数不能补采，迁移日起开始可靠
+持久化；旧运营事件不会被改成完整模型历史。
+
+教师账户设置和“模型与 BYOK”可刷新实际用量与上限；超额提示 UTC 重置、联系管理员
+或使用 BYOK。历史 Ask 额度不足时保留确定性关键词查询。降低额度不删除已有数据或
+停止历史批改任务，只拒绝后续不满足额度的模型准入。账号销户级联删除自己的账本；
+全站清空连同全部用户覆盖、全局覆盖和计数删除，回到部署初始规则。

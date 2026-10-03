@@ -1,6 +1,6 @@
-"""Offline reset of an explicitly disposable SmarTAI environment.
+"""Offline reset of explicitly enrolled, exclusive SmarTAI business resources.
 
-No HTTP execution endpoint belongs here. Preview is read-only. The executor
+Only the private offline maintenance application may adapt this executor. Preview is read-only. The executor
 requires offline services, an exact preview confirmation, and exclusive locks.
 Only safe error codes/counts leave this module; no row or object content is read.
 """
@@ -43,6 +43,7 @@ class ResetScope:
     maintenance_dir: Path
     local_roots: tuple[Path, ...] = ()
     object_store: S3ResetStore | None = field(default=None, repr=False)
+    password_hash: str = field(default="", repr=False)
     enabled: bool = False
     object_client_required: bool = False
     temporary_root: Path | None = None
@@ -67,8 +68,8 @@ def _under(path: Path, parent: Path) -> bool:
 
 
 def _validate_scope(scope: ResetScope) -> dict[str, Any]:
-    if not scope.enabled or scope.runtime_environment not in {"development", "test"}:
-        raise ResetError("reset_disabled_outside_disposable_development")
+    if not scope.enabled:
+        raise ResetError("reset_disabled")
     if scope.object_client_required and scope.object_store is None:
         raise ResetError("reset_object_client_required")
     dialect = scope.engine.dialect.name
@@ -87,6 +88,8 @@ def _validate_scope(scope: ResetScope) -> dict[str, Any]:
         # Credentials and query parameters are deliberately excluded.
         database_identity = ["postgresql", url.host, url.port, url.database]
     control = _safe_path(scope.maintenance_dir)
+    if control.exists() and (control.stat().st_uid != os.getuid() or control.stat().st_mode & 0o022):
+        raise ResetError("reset_maintenance_directory_permissions_unsafe")
     roots = tuple(_safe_path(root) for root in scope.local_roots)
     if scope.require_temporary_root and (scope.temporary_root is None or _safe_path(scope.temporary_root) not in roots):
         raise ResetError("reset_dedicated_temporary_root_required")
@@ -107,7 +110,7 @@ def _validate_scope(scope: ResetScope) -> dict[str, Any]:
         try:
             if marker.is_symlink() or marker.stat().st_nlink != 1 or marker.stat().st_size > 256:
                 raise ResetError("reset_disposable_storage_marker_required")
-            if json.loads(marker.read_text()) != SENTINEL_CONTENT:
+            if json.loads(marker.read_text()) not in (SENTINEL_CONTENT, {"schema_version": 1, "purpose": "smartai-exclusive-business-storage"}):
                 raise ResetError("reset_disposable_storage_marker_required")
         except (OSError, ValueError):
             raise ResetError("reset_disposable_storage_marker_required") from None
@@ -174,7 +177,7 @@ class S3ResetStore:
     def validate(self) -> None:
         try:
             tags = self._call("get_bucket_tagging").get("TagSet", [])
-            if {"Key": "smartai-reset-scope", "Value": "disposable"} not in tags:
+            if not any({"Key": "smartai-reset-scope", "Value": value} in tags for value in ("disposable", "smartai-exclusive-business")):
                 raise ResetError("reset_disposable_bucket_tag_required")
             versioning = self._call("get_bucket_versioning")
             if versioning.get("MFADelete") == "Enabled":
@@ -309,7 +312,8 @@ def preview_reset(scope: ResetScope) -> dict[str, Any]:
         "tables": plan["database"]["counts"], "storage": plan["counts"],
         "environment": scope.runtime_environment,
         "scope": "all_users_including_administrators_and_all_business_data",
-        "execution": "offline_cli_only", "bootstrap_required": True,
+        "execution": "protected_offline_maintenance",
+        "target": {"database": f"{scope.engine.dialect.name}:{_digest(_validate_scope(scope)["database"])[:16]}", "local_roots": [str(root) for root in scope.local_roots], "object_scope": scope.object_store.identity[:16] if scope.object_store else None}, "bootstrap_required": True,
         "preserved": ["schema", "alembic_version", "infrastructure", "deployment_configuration", "deployment_secrets", "disposable_storage_marker"],
         "limitations": ["stop_all_public_private_worker_and_scheduler_processes", "restart_all_processes_to_drop_in_memory_caches", "external_backups_and_provider_copies_are_outside_scope", "multipart_bytes_are_not_in_byte_total", "partial_file_deletion_cannot_be_rolled_back"],
     }
@@ -451,13 +455,14 @@ def _compact_sqlite(scope: ResetScope) -> None:
             raise ResetError("reset_sqlite_checkpoint_busy")
 
 
-def execute_reset(scope: ResetScope, *, fingerprint: str, confirmation: str, services_stopped: bool) -> dict[str, Any]:
+def execute_reset(scope: ResetScope, *, fingerprint: str, confirmation: str, services_stopped: bool, maintenance_password: str = "") -> dict[str, Any]:
     """Resume the same plan on failure; repeat after success is a no-op receipt.
 
     Storage can partially disappear before an error; the DB transaction stays
-    intact and a durable marker blocks startup. Never call from a web handler.
+    intact and a durable marker blocks startup. The isolated maintenance app runs this in one background thread after authorization.
     """
     _validate_scope(scope)
+    from backend.services.maintenance_auth import verify_maintenance_password
     if not services_stopped:
         raise ResetError("reset_stop_all_services_required")
     if not re.fullmatch(r"[0-9a-f]{64}-[0-9a-f]{32}", fingerprint) or confirmation != f"{CONFIRMATION} {fingerprint[:12]}":
@@ -465,6 +470,7 @@ def execute_reset(scope: ResetScope, *, fingerprint: str, confirmation: str, ser
     control = _safe_path(scope.maintenance_dir)
     active_path = control / "active-reset.json"
     with _process_lock(scope):
+        verify_maintenance_password(scope, maintenance_password)
         receipt_path = control / f"receipt-{fingerprint}.json"
         receipt = _read_json(receipt_path)
         if receipt:
@@ -495,12 +501,18 @@ def execute_reset(scope: ResetScope, *, fingerprint: str, confirmation: str, ser
                         raise ResetError("reset_preview_stale")
                     active = {"schema_version": 1, "fingerprint": fingerprint, "operation_id": uuid.uuid4().hex, "started_at": time.time(), "plan": current, "phase": "storage"}
                     _write_json(active_path, active)
+                active["files_deleted"] = 0
+                active["files_remaining"] = len(local)
                 for path, _ in local:
                     # Recheck containment and links immediately before unlink.
                     _safe_path(path)
                     if path.lstat().st_nlink != 1:
                         raise ResetError("reset_special_or_shared_file_forbidden")
                     path.unlink()
+                    active["files_deleted"] += 1
+                    active["files_remaining"] -= 1
+                    if active["files_deleted"] % 100 == 0 or not active["files_remaining"]:
+                        _write_json(active_path, active)
                 if scope.object_store:
                     scope.object_store.purge(objects)
                 for root in scope.local_roots:
@@ -547,4 +559,4 @@ def scope_from_settings(*, object_client: Any = None) -> ResetScope:
         roots = (Path(settings.storage_root), *roots)
     elif object_client is not None:
         store = S3ResetStore(object_client, bucket=settings.storage_s3_bucket or "", endpoint_identity=settings.storage_s3_endpoint or f"aws:{settings.storage_s3_region}")
-    return ResetScope(engine=get_engine(), runtime_environment=settings.runtime_environment, maintenance_dir=Path(maintenance), local_roots=roots, object_store=store, enabled=os.environ.get("SMARTAI_ADMIN_RESET_ENABLED", "false").lower() == "true", object_client_required=settings.storage_backend == "object", temporary_root=Path(os.environ["TMPDIR"]) if os.environ.get("TMPDIR") else None, require_temporary_root=True)
+    return ResetScope(engine=get_engine(), runtime_environment=settings.runtime_environment, maintenance_dir=Path(maintenance), local_roots=roots, object_store=store, password_hash=os.environ.get("SMARTAI_ADMIN_RESET_PASSWORD_HASH", ""), enabled=os.environ.get("SMARTAI_ADMIN_RESET_ENABLED", "false").lower() == "true", object_client_required=settings.storage_backend == "object", temporary_root=Path(os.environ["TMPDIR"]) if os.environ.get("TMPDIR") else None, require_temporary_root=True)

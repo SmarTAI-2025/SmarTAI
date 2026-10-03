@@ -14,7 +14,7 @@ from backend.db.models import AccountClosureRecord, UserRecord
 from backend.db.session import session_scope
 from backend.models import User
 from backend.services.admin_transactions import administrator_transaction
-from backend.services.business_config import BOUNDS, STORAGE_KEYS, read_business_config, validate_changes
+from backend.services.business_config import BOUNDS, USER_CONFIG_KEYS, read_business_config, validate_changes
 
 router = APIRouter(prefix="/admin/business-config", tags=["admin"])
 
@@ -35,7 +35,7 @@ class ConfigUpdate(BaseModel):
 
 def _view(session, owner_id=None):
     config = read_business_config(session, owner_id)
-    keys = STORAGE_KEYS if owner_id is not None else config.values.keys()
+    keys = USER_CONFIG_KEYS if owner_id is not None else config.values.keys()
     overrides = config.user_overrides if owner_id is not None else config.global_overrides
     result = {
         "scope": "user" if owner_id is not None else "global", "owner_id": owner_id,
@@ -49,6 +49,8 @@ def _view(session, owner_id=None):
         from backend.db.knowledge_storage_repository import _usage_in_session as knowledge_usage
         result["usage"] = {"unfinished_source_quota_bytes": source_usage(session, owner_id).as_dict(),
                            "knowledge_storage_quota_bytes": knowledge_usage(session, owner_id).as_dict()}
+        from backend.services.model_quota import model_usage
+        result["model_usage"] = model_usage(session, owner_id, config=config)
         # Use exactly the config snapshot returned above for both displayed limits.
         for key, usage in result["usage"].items():
             usage["limit_bytes"] = config.values[key]
@@ -57,10 +59,10 @@ def _view(session, owner_id=None):
         result["read_only"] = {
             "email_verification_expiry_seconds": settings.email_verification_expiry_seconds,
             "password_recovery_independent_of_registration": config.registration_rules_managed,
-            "shared_pool_daily_request_limit": settings.shared_pool_daily_request_limit,
-            "shared_pool_daily_estimated_token_limit": settings.shared_pool_daily_estimated_token_limit,
-            "history_query_llm_daily_limit": settings.history_query_llm_daily_limit,
-            "model_quota_note": "现有模型日额度按进程计数，尚非可靠的全局计量；此处只读。",
+            "shared_pool_daily_request_limit": config.values["shared_pool_daily_request_limit"],
+            "shared_pool_daily_estimated_token_limit": config.values["shared_pool_daily_estimated_token_limit"],
+            "history_query_llm_daily_limit": config.values["history_query_llm_daily_limit"],
+            "model_quota_note": "UTC 00:00 重置；持久化调用准入计数，失败/中断不退回，SDK 内部重试不重复计数；估算输入 token 不代表实际 token 或费用。",
         }
     return result
 

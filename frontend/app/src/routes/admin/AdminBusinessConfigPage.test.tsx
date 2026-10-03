@@ -66,7 +66,7 @@ it("shows grouped effective values, sources and explicit empty/zero semantics", 
   expect(screen.getByText(/空字符串明确表示全部拒绝/)).toBeInTheDocument();
   expect(screen.getByText(/0 表示禁止新增占用/)).toBeInTheDocument();
   expect(screen.getByText(/@badexample.edu/)).toBeInTheDocument();
-  expect(screen.getByText("模型额度（只读）")).toBeInTheDocument();
+  expect(screen.getByText("模型额度计量说明")).toBeInTheDocument();
   expect(screen.getByRole("button", { name: "保存全局配置" })).toBeDisabled();
 });
 
@@ -155,4 +155,21 @@ it("protects unsaved edits on navigation and permits explicit discard", async ()
   await user.click(screen.getByRole("link", { name: "其他页面" }));
   await user.click(screen.getByRole("button", { name: "放弃更改并离开" }));
   expect(await screen.findByText("已离开")).toBeInTheDocument();
+});
+
+it("edits and validates persisted model quotas with unlimited and inheritance semantics", async () => {
+  const config = structuredClone(globalConfig);
+  config.fields.shared_pool_daily_request_limit = { effective: 100, override: null, source: "default", bounds: [-1, 1000000] };
+  vi.mocked(getBusinessConfig).mockResolvedValue(config);
+  vi.mocked(saveBusinessConfig).mockResolvedValue(updated(config, "shared_pool_daily_request_limit", -1));
+  mount();
+  await screen.findByLabelText("共享模型每日请求次数");
+  const user = await edit("共享模型每日请求次数", "-2");
+  await user.type(screen.getByLabelText("修改原因"), "model allowance review");
+  await user.click(screen.getByRole("button", { name: "保存全局配置" }));
+  expect(saveBusinessConfig).not.toHaveBeenCalled();
+  await edit("共享模型每日请求次数", "-1");
+  await user.click(screen.getByRole("button", { name: "保存全局配置" }));
+  await waitFor(() => expect(saveBusinessConfig).toHaveBeenCalledWith(expect.objectContaining({ changes: { shared_pool_daily_request_limit: -1 } }), expect.any(String), undefined));
+  expect(await screen.findByText(/当前生效：无限制/)).toBeInTheDocument();
 });

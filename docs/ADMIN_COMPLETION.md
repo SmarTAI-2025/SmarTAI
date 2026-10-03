@@ -89,3 +89,20 @@ PR #117 已更新为统一管理员候选，保留原 PR 历史。独立工作�
 最终本地测试计数、截图和 exact SHA 见 canonical 导航报告 `docs/project_navigation/2026-10-02-admin-completion/README.md`（位于主工作区）。相关测试含 SQLite 空库/旧 main/旧 admin 升级、PostgreSQL 升级/并发、旧账号旧 token、正常教师任务、只读、禁登、恢复、角色、改密/重置、销户清理与身份释放、幂等失败、清空/恢复及私有路由。
 
 完整前端 Vitest、项目 lint/typecheck、两种构建已运行。后端是明确列出的相关回归集合，未冒充全套 backend 测试。真实邮件、真实对象存储、部署后的网络边界、宿主指标挂载、持续采样与真实留存、生产清空均未运行。监控当前采样为管理员打开/刷新时触发；没有后台监控/通知承诺。细分管理员级别、批量处置、IP/设备封禁、学生参与者销户、全站连续健康探测留待后续。
+
+
+## 2026-10-03 本轮实际缺口收口
+
+沿用此前已完成的管理员初始化/角色/最后管理员保护、改密/邮件重置/会话撤销、
+只读/禁登录/两类销户、域名/邮件/存储配额、监控和统计；未重复实现。
+补齐独立密码和精确目标保护的离线维护按钮、清空后状态/失败恢复、持久化模型日额度
+及全球/单用户管理。操作文档见 ADMIN_RESET.md 与 ADMIN_BUSINESS_CONFIG.md。
+普通 private_main 仅挂清空预览；maintenance_main 单进程提供受保护执行/状态，
+public production 和公共 dist 均无管理员页面或清空 API。
+迁移 head 为 0024_model_daily_usage，原 main/admin 两支迁移与 0020 合流历史保留。
+执行前必须迁移，/ready 检查实际新表；/ready 成功仍不能替代登录/业务验收。
+
+测试使用现有隔离 Python/Node/PostgreSQL 和临时目录；没有真实 AWS/SMTP/S3/model
+调用。真实上线仍需满足 PRE_PRODUCTION_SECURITY_RELEASE_GATE_CN.md，独立管理员
+静态页面托管与私有网络、正确 API origin/cookie、全体 worker 生命周期锁和停止流程。
+不直接合并 main、自动合并或部署；最终准确提交/CI/联合兼容证据由 PR 和导航交付记录提供。

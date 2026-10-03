@@ -62,14 +62,14 @@ def scope(tmp_path, request):
     nested = uploads / "users" / "test-owner"
     nested.mkdir(parents=True)
     (nested / "book.pdf").write_bytes(b"fixture bytes")
-    value = reset.ResetScope(engine=engine, runtime_environment="test", maintenance_dir=tmp_path / "maintenance", local_roots=(uploads,), enabled=True)
+    value = reset.ResetScope(engine=engine, runtime_environment="test", maintenance_dir=tmp_path / "maintenance", local_roots=(uploads,), enabled=True, password_hash=__import__("backend.auth", fromlist=["hash_password"]).hash_password("isolated-maintenance-password"))
     yield value
     engine.dispose()
 
 
 def run(scope, preview=None):
     preview = preview or reset.preview_reset(scope)
-    return reset.execute_reset(scope, fingerprint=preview["fingerprint"], confirmation=preview["confirmation"], services_stopped=True)
+    return reset.execute_reset(scope, fingerprint=preview["fingerprint"], confirmation=preview["confirmation"], services_stopped=True, maintenance_password="isolated-maintenance-password")
 
 
 def rows(scope):
@@ -122,9 +122,9 @@ def test_reset_clears_every_table_orphan_and_releases_identity(scope):
 def test_confirmation_cancel_and_stale_preview_delete_nothing(scope):
     preview = reset.preview_reset(scope)
     with pytest.raises(reset.ResetError, match="confirmation_mismatch"):
-        reset.execute_reset(scope, fingerprint=preview["fingerprint"], confirmation="cancel", services_stopped=True)
+        reset.execute_reset(scope, fingerprint=preview["fingerprint"], confirmation="cancel", services_stopped=True, maintenance_password="isolated-maintenance-password")
     with pytest.raises(reset.ResetError, match="stop_all_services"):
-        reset.execute_reset(scope, fingerprint=preview["fingerprint"], confirmation=preview["confirmation"], services_stopped=False)
+        reset.execute_reset(scope, fingerprint=preview["fingerprint"], confirmation=preview["confirmation"], services_stopped=False, maintenance_password="isolated-maintenance-password")
     (scope.local_roots[0] / "new-file.txt").write_text("added after preview")
     with pytest.raises(reset.ResetError, match="preview_stale"):
         run(scope, preview)
@@ -230,7 +230,7 @@ def test_unsafe_storage_rejected_without_deletion(scope, tmp_path, mutation):
     assert (uploads / "orphan.txt").exists()
 
 
-@pytest.mark.parametrize("environment, enabled", [("production", True), ("test", False)])
+@pytest.mark.parametrize("environment, enabled", [("production", False), ("test", False)])
 def test_disabled_environment(scope, environment, enabled):
     with pytest.raises(reset.ResetError, match="disabled"):
         reset.preview_reset(replace(scope, runtime_environment=environment, enabled=enabled))
@@ -445,7 +445,7 @@ def test_cli_defaults_to_preview_and_cancel_never_executes(scope, monkeypatch, c
     monkeypatch.setattr(reset, "scope_from_settings", lambda **_: scope)
     assert main([]) == 0
     preview = json.loads(capsys.readouterr().out)
-    assert preview["execution"] == "offline_cli_only"
+    assert preview["execution"] == "protected_offline_maintenance"
     assert not scope.maintenance_dir.exists()
     assert main(["--execute", "--fingerprint", preview["fingerprint"], "--confirm", "cancel", "--services-stopped"]) == 2
     assert "confirmation_mismatch" in capsys.readouterr().err

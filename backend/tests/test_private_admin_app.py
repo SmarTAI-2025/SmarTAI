@@ -98,3 +98,31 @@ def test_ready_checks_business_configuration_tables_not_only_version(monkeypatch
     with get_engine().begin() as connection:
         connection.execute(text("DROP TABLE business_configuration"))
     assert client.get("/ready").status_code == 503
+
+
+def test_maintenance_validation_never_reflects_password(monkeypatch, tmp_path):
+    monkeypatch.setenv("SMARTAI_ADMIN_PRIVATE_ENABLED", "true")
+    from backend.private_main import create_private_app
+    app=create_private_app(maintenance_only=True)
+    client=TestClient(app)
+    secret="synthetic-credential-"*10
+    result=client.post("/api/admin/maintenance/execute",json={"fingerprint":"invalid","confirmation":"wrong","services_stopped":True,"maintenance_password":secret})
+    assert result.status_code==422 and secret not in result.text
+    assert "input" not in result.text
+    assert client.patch("/api/admin/users/any/access",json={}).status_code==404
+    assert client.post("/api/auth/password-reset/request",json={}).status_code==404
+
+
+def test_ready_requires_model_counter_schema(monkeypatch, tmp_path):
+    from sqlalchemy import text
+    from alembic.config import Config
+    from alembic.script import ScriptDirectory
+    from backend.db.session import get_engine
+    head=ScriptDirectory.from_config(Config("alembic.ini")).get_current_head()
+    with get_engine().begin() as connection:
+        connection.execute(text("CREATE TABLE alembic_version(version_num VARCHAR(32) NOT NULL)"))
+        connection.execute(text("INSERT INTO alembic_version VALUES(:head)"),{"head":head})
+    client=private_app(monkeypatch,tmp_path)
+    assert client.get("/ready").status_code==200
+    with get_engine().begin() as connection:connection.execute(text("DROP TABLE model_daily_usage"))
+    assert client.get("/ready").status_code==503
