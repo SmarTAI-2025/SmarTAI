@@ -1,5 +1,6 @@
 import axios, { AxiosError, CanceledError, type AxiosProgressEvent, type AxiosRequestConfig } from "axios";
 import { setSessionExpired } from "@/lib/sessionExpiry";
+import { clearPageDrafts } from "@/lib/pageDraftStore";
 
 export const SMARTAI_TOKEN_STORAGE_KEY = "smartai_token";
 
@@ -134,6 +135,7 @@ export function setAuthToken(token: string): void {
 }
 
 export function clearAuthToken(): void {
+  clearPageDrafts();
   sessionVersion += 1;
   localStorage.removeItem(SMARTAI_TOKEN_STORAGE_KEY);
 }

@@ -1,3 +1,5 @@
+import { useDraftProtection } from "@/hooks/useDraftProtection";
+import { useDraftLeave } from "@/hooks/useDraftLeave";
 import { FileUp, FolderPlus, LoaderCircle, Trash2 } from "lucide-react";
 import { useId, useMemo, useState, type FormEvent, type ReactNode } from "react";
 import { toast } from "sonner";
@@ -65,10 +67,12 @@ export function GroupDialog({ group, courses, onClose, onSaved, onUseExisting, o
   const deleteGroup = useDeleteCourseMaterialGroup();
   const [name, setName] = useState(group?.name ?? "");
   const [courseId, setCourseId] = useState(group?.course_id ?? "");
+  const leave = useDraftLeave();
   const [similar, setSimilar] = useState<SimilarGroupCandidate[]>([]);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const isPending = createGroup.isPending || updateGroup.isPending || deleteGroup.isPending;
 
+  const localDraft = useDraftProtection({ scope: `library-group:${group?.group_id ?? "new"}`, value: { name, courseId }, baseline: { name: group?.name ?? "", courseId: group?.course_id ?? "" }, version: JSON.stringify([group?.name, group?.course_id]), busy: isPending, onRestore: (draft) => { setName(draft.name); setCourseId(draft.courseId); } });
   async function save(event?: FormEvent, force = false) {
     event?.preventDefault();
     const normalizedName = name.trim();
@@ -87,6 +91,9 @@ export function GroupDialog({ group, courses, onClose, onSaved, onUseExisting, o
       toast.success(group
         ? tx(locale, "分组已更新", "Group updated")
         : tx(locale, "分组已创建", "Group created"));
+      if (!localDraft.isCurrent()) return;
+      if (!await localDraft.clear({ name, courseId })) return;
+      if (!localDraft.isCurrent()) return;
       onSaved(result);
     } catch (error) {
       const normalized = normalizeAPIError(error);
@@ -116,6 +123,9 @@ export function GroupDialog({ group, courses, onClose, onSaved, onUseExisting, o
         `分组已删除，${result.moved_to_ungrouped} 份资料已移到未分组`,
         `Group deleted; ${result.moved_to_ungrouped} files moved to ungrouped`,
       ));
+      if (!localDraft.isCurrent()) return;
+      await localDraft.clear();
+      if (!localDraft.isCurrent()) return;
       (onDeleted ?? onClose)();
     } catch (error) {
       toast.error(tx(locale, "无法删除分组", "Could not delete group"), {
@@ -139,7 +149,7 @@ export function GroupDialog({ group, courses, onClose, onSaved, onUseExisting, o
       ) : (
         <>
           {group ? <Button type="button" variant="ghost" className="mr-auto text-danger hover:text-danger" onClick={() => setConfirmDelete(true)} disabled={isPending}><Trash2 className="h-4 w-4" />{tx(locale, "删除分组", "Delete group")}</Button> : null}
-          <Button type="button" variant="secondary" onClick={onClose} disabled={isPending}>{tx(locale, "取消", "Cancel")}</Button>
+          <Button type="button" variant="secondary" onClick={() => leave.request(onClose)} disabled={isPending}>{tx(locale, "取消", "Cancel")}</Button>
           <Button type="submit" form="course-material-group-form" disabled={isPending || !name.trim()}>{isPending ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <FolderPlus className="h-4 w-4" />}{group ? tx(locale, "保存", "Save") : tx(locale, "创建分组", "Create group")}</Button>
         </>
       )}
@@ -161,7 +171,7 @@ export function GroupDialog({ group, courses, onClose, onSaved, onUseExisting, o
             <p className="mt-1 text-xs leading-5 text-amber-800 dark:text-amber-300">{tx(locale, "请选择已有分组，或明确仍然新建。", "Choose an existing group or explicitly create another one.")}</p>
             <div className="mt-2 grid gap-2">
               {similar.map((candidate) => (
-                <button key={candidate.group_id} type="button" className="flex items-center justify-between rounded-md border bg-card px-3 py-2 text-left text-sm hover:border-primary" onClick={() => onUseExisting(candidate.group_id)}>
+                <button key={candidate.group_id} type="button" className="flex items-center justify-between rounded-md border bg-card px-3 py-2 text-left text-sm hover:border-primary" onClick={() => leave.request(() => onUseExisting(candidate.group_id))}>
                   <span className="font-medium">{candidate.name}</span>
                   <span className="text-xs text-muted-foreground">{candidate.material_count} {tx(locale, "份资料", "files")}</span>
                 </button>
@@ -188,6 +198,7 @@ export function UploadDialog({ courses, groups, onClose, onUploaded }: UploadDia
   const inputId = useId();
   const [file, setFile] = useState<File | null>(null);
   const [nativeOnly, setNativeOnly] = useState(false);
+  const leave = useDraftLeave();
   const [uploadError, setUploadError] = useState<string | null>(null);
   const [courseId, setCourseId] = useState("");
   const [groupId, setGroupId] = useState("");
@@ -198,6 +209,7 @@ export function UploadDialog({ courses, groups, onClose, onUploaded }: UploadDia
     [courseId, groups],
   );
 
+  const localDraft = useDraftProtection({ scope: "library-upload", value: { file, nativeOnly, courseId, groupId, category, labels }, busy: upload.isPending, onRestore: (draft) => { setFile(draft.file); setNativeOnly(draft.nativeOnly); setCourseId(draft.courseId); setGroupId(draft.groupId); setCategory(draft.category); setLabels(draft.labels); } });
   function selectFile(selected: File | undefined) {
     if (!selected) return;
     const error = selected.size === 0
@@ -227,6 +239,9 @@ export function UploadDialog({ courses, groups, onClose, onUploaded }: UploadDia
       toast.success(result.created
         ? result.parse_status === "ready" ? tx(locale, "资料已上传并解析", "Material uploaded and parsed") : tx(locale, "资料已保存，已进入处理队列", "Material saved and queued")
         : tx(locale, "相同资料已存在，已复用原文件", "The same material already exists and was reused"));
+      if (!localDraft.isCurrent()) return;
+      if (!await localDraft.clear({ file, nativeOnly, courseId, groupId, category, labels })) return;
+      if (!localDraft.isCurrent()) return;
       onUploaded(result);
     } catch (error) {
       const normalized = normalizeAPIError(error);
@@ -252,7 +267,7 @@ export function UploadDialog({ courses, groups, onClose, onUploaded }: UploadDia
       description={tx(locale, "PDF / TXT / Markdown · 64 MiB", "PDF / TXT / Markdown · 64 MiB")}
       closeLabel={tx(locale, "关闭", "Close")}
       onClose={onClose}
-      footer={<><Button type="button" variant="secondary" onClick={onClose} disabled={upload.isPending}>{tx(locale, "取消", "Cancel")}</Button><Button type="submit" form="course-material-upload-form" disabled={upload.isPending || !file}>{upload.isPending ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <FileUp className="h-4 w-4" />}{upload.isPending ? tx(locale, "正在上传…", "Uploading…") : tx(locale, "上传资料", "Upload")}</Button></>}
+      footer={<><Button type="button" variant="secondary" onClick={() => leave.request(onClose)} disabled={upload.isPending}>{tx(locale, "取消", "Cancel")}</Button><Button type="submit" form="course-material-upload-form" disabled={upload.isPending || !file}>{upload.isPending ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <FileUp className="h-4 w-4" />}{upload.isPending ? tx(locale, "正在上传…", "Uploading…") : tx(locale, "上传资料", "Upload")}</Button></>}
     >
       <form id="course-material-upload-form" className="grid gap-4" onSubmit={(event) => void submit(event)}>
         <div>
@@ -321,6 +336,7 @@ export function MaterialDialog({ material, courses, groups, onClose, onSaved, on
   const { locale } = useI18n();
   const update = useUpdateCourseMaterial();
   const remove = useDeleteCourseMaterial();
+  const leave = useDraftLeave();
   const [filename, setFilename] = useState(material.filename);
   const [courseId, setCourseId] = useState(material.course_id ?? "");
   const [groupId, setGroupId] = useState(material.group_id ?? "");
@@ -333,6 +349,7 @@ export function MaterialDialog({ material, courses, groups, onClose, onSaved, on
     [courseId, groups],
   );
 
+  const localDraft = useDraftProtection({ scope: `library-material:${material.material_id}`, value: { filename, courseId, groupId, category, labels }, baseline: { filename: material.filename, courseId: material.course_id ?? "", groupId: material.group_id ?? "", category: material.category, labels: material.labels.join(", ") }, version: JSON.stringify(material), busy: update.isPending || remove.isPending, onRestore: (draft) => { setFilename(draft.filename); setCourseId(draft.courseId); setGroupId(draft.groupId); setCategory(draft.category); setLabels(draft.labels); } });
   async function save(event: FormEvent) {
     event.preventDefault();
     try {
@@ -347,6 +364,9 @@ export function MaterialDialog({ material, courses, groups, onClose, onSaved, on
         },
       });
       toast.success(tx(locale, "资料信息已更新", "Material updated"));
+      if (!localDraft.isCurrent()) return;
+      if (!await localDraft.clear({ filename, courseId, groupId, category, labels })) return;
+      if (!localDraft.isCurrent()) return;
       onSaved(result);
     } catch (error) {
       toast.error(tx(locale, "无法更新资料", "Could not update material"), {
@@ -361,6 +381,9 @@ export function MaterialDialog({ material, courses, groups, onClose, onSaved, on
         materialId: material.material_id,
         confirmReferenced: material.task_reference_count > 0,
       });
+      if (!localDraft.isCurrent()) return;
+      await localDraft.clear();
+      if (!localDraft.isCurrent()) return;
       if (result.status === "deletion_pending") {
         toast.success(tx(locale, "资料已移除", "Material removed"), {
           description: tx(
@@ -396,7 +419,7 @@ export function MaterialDialog({ material, courses, groups, onClose, onSaved, on
       ) : (
         <>
           <Button type="button" variant="ghost" className="mr-auto text-danger hover:text-danger" onClick={() => setConfirmDelete(true)} disabled={isPending}><Trash2 className="h-4 w-4" />{tx(locale, "删除资料", "Delete material")}</Button>
-          <Button type="button" variant="secondary" onClick={onClose} disabled={isPending}>{tx(locale, "取消", "Cancel")}</Button>
+          <Button type="button" variant="secondary" onClick={() => leave.request(onClose)} disabled={isPending}>{tx(locale, "取消", "Cancel")}</Button>
           <Button type="submit" form="course-material-edit-form" disabled={isPending || !filename.trim()}>{update.isPending ? <LoaderCircle className="h-4 w-4 animate-spin" /> : null}{tx(locale, "保存", "Save")}</Button>
         </>
       )}

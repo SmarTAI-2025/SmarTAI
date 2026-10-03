@@ -1,6 +1,5 @@
 import { ArrowRight, LoaderCircle, Save } from "lucide-react";
 import {
-  useCallback,
   useEffect,
   useMemo,
   useRef,
@@ -9,8 +8,6 @@ import {
 } from "react";
 import {
   Link,
-  useBeforeUnload,
-  useBlocker,
   useLocation,
   useNavigate,
   useParams,
@@ -32,12 +29,22 @@ import {
 } from "@/api/hooks";
 import { NewTaskStepper } from "@/components/new-task/NewTaskStepper";
 import { SmartCatalogField } from "@/components/new-task/SmartCatalogField";
+import { usePageDraft } from "@/hooks/usePageDraft";
+import { metadataDraftCodec } from "@/lib/taskPageDrafts";
 import { useI18n } from "@/i18n/I18nProvider";
 import { modelDisplayName } from "@/lib/modelPresentation";
 import { buildSemesterOptions, formatSemesterLabel, getCurrentSemesterId } from "@/lib/semesters";
 import type { Course, TaskMetadataPatch, TaskTag } from "@/types";
 
 export function NewTaskPage() {
+  const { taskId } = useParams();
+  const taskQuery = useTask(taskId, { refetchOnMount: "always" });
+  if (taskId && (taskQuery.isLoading || (taskQuery.isFetching && !taskQuery.isFetchedAfterMount))) return <div role="status"><LoaderCircle className="animate-spin" /></div>;
+  const scope = taskId ? `metadata:${taskId}` : "new-task";
+  return <NewTaskForm key={scope} scope={scope} taskQuery={taskQuery} />;
+}
+
+function NewTaskForm({ scope, taskQuery }: { scope: string; taskQuery: ReturnType<typeof useTask> }) {
   const { locale, t } = useI18n();
   const navigate = useNavigate();
   const location = useLocation();
@@ -53,19 +60,26 @@ export function NewTaskPage() {
       ? current
       : semesterOptions.at(-1)?.id ?? "";
   }, [semesterOptions]);
-  const [name, setName] = useState("");
-  const [semesterId, setSemesterId] = useState(initialSemester);
-  const [course, setCourse] = useState<Course | null>(null);
-  const [courseDraft, setCourseDraft] = useState("");
-  const [tags, setTags] = useState<TaskTag[]>([]);
-  const [tagDraft, setTagDraft] = useState("");
+  const createTask = useCreateTask();
+  const updateTask = useUpdateTask();
+  const initialDraftValue = () => ({
+    name: taskQuery.data?.name ?? "",
+    semesterId: semesterOptions.some((option) => option.id === taskQuery.data?.semester_id)
+      ? taskQuery.data!.semester_id! : initialSemester,
+    courseId: taskQuery.data?.course_id ?? null, courseDraft: "",
+    tagIds: taskQuery.data?.tag_ids ?? [], tagDraft: "", idempotency: null as { signature: string; key: string } | null,
+  });
+  const draft = usePageDraft(scope, initialDraftValue, metadataDraftCodec, taskId ? taskMetadataSignature(taskQuery.data ?? {}) : "new", isEditing && taskQuery.data ? initialDraftValue() : undefined, createTask.isPending || updateTask.isPending);
+  const [name, setName] = draft.field("name");
+  const [semesterId, setSemesterId] = draft.field("semesterId");
+  const [courseId, setCourseId] = draft.field("courseId");
+  const [courseDraft, setCourseDraft] = draft.field("courseDraft");
+  const [tagIds, setTagIds] = draft.field("tagIds");
+  const [tagDraft, setTagDraft] = draft.field("tagDraft");
   const [formError, setFormError] = useState<string | null>(null);
   const [editHydrated, setEditHydrated] = useState(false);
-  const [initialEditSignature, setInitialEditSignature] = useState<string | null>(null);
-  const submittedRef = useRef(false);
-  const idempotencyRef = useRef<{ signature: string; key: string } | null>(null);
-  const stayButtonRef = useRef<HTMLButtonElement>(null);
-  const leaveButtonRef = useRef<HTMLButtonElement>(null);
+  const idempotencyRef = useRef(draft.value.idempotency);
+  useEffect(() => { if (draft.value.idempotency) idempotencyRef.current = draft.value.idempotency; }, [draft.value.idempotency]);
 
   const debouncedCourseDraft = useDebouncedValue(courseDraft, 180);
   const debouncedTagDraft = useDebouncedValue(tagDraft, 180);
@@ -75,10 +89,11 @@ export function NewTaskPage() {
   const tagSearch = useTagSearch(debouncedTagDraft);
   const createCourse = useCreateCourse();
   const createTag = useCreateTag();
-  const createTask = useCreateTask();
-  const updateTask = useUpdateTask();
-  const taskQuery = useTask(taskId);
   const expertsQuery = useExperts();
+  const course = (coursesQuery.data ?? []).find((item) => item.id === courseId) ?? null;
+  const tags = (tagsQuery.data ?? []).filter((item) => tagIds.includes(item.id));
+  const setCourse = (item: Course | null) => setCourseId(item?.id ?? null);
+  const setTags = (next: TaskTag[] | ((items: TaskTag[]) => TaskTag[])) => setTagIds((typeof next === "function" ? next(tags) : next).map((item) => item.id));
   const reachableStep = isEditing
     ? Math.max(returnReachableStep, (taskQuery.data?.problem_count ?? 0) > 0 ? 2 : 0)
     : 0;
@@ -89,111 +104,13 @@ export function NewTaskPage() {
 
   useEffect(() => {
     if (!isEditing || editHydrated || !taskQuery.data || !coursesQuery.isSuccess || !tagsQuery.isSuccess) return;
-    const task = taskQuery.data;
-    const hydratedSemester = task.semester_id && semesterOptions.some((option) => option.id === task.semester_id)
-      ? task.semester_id
-      : initialSemester;
-    const hydratedCourse = (coursesQuery.data ?? []).find((item) => item.id === task.course_id) ?? null;
-    const selectedTagIds = new Set(task.tag_ids ?? []);
-    const hydratedTags = (tagsQuery.data ?? []).filter((item) => selectedTagIds.has(item.id));
-    const signature = taskMetadataSignature({
-      name: task.name,
-      semester_id: hydratedSemester,
-      course_id: hydratedCourse?.id ?? null,
-      tag_ids: hydratedTags.map((item) => item.id),
-    });
-
-    setName(task.name);
-    setSemesterId(hydratedSemester);
-    setCourse(hydratedCourse);
-    setTags(hydratedTags);
-    setInitialEditSignature(signature);
     setEditHydrated(true);
-  }, [
-    coursesQuery.data,
-    coursesQuery.isSuccess,
-    editHydrated,
-    initialSemester,
-    isEditing,
-    semesterOptions,
-    tagsQuery.data,
-    tagsQuery.isSuccess,
-    taskQuery.data,
-  ]);
-
-  const currentEditSignature = taskMetadataSignature({
-    name: name.trim(),
-    semester_id: semesterId,
-    course_id: course?.id ?? null,
-    tag_ids: tags.map((tag) => tag.id),
-  });
-  const isDirty = isEditing
-    ? Boolean(editHydrated && (
-      currentEditSignature !== initialEditSignature
-      || courseDraft.trim()
-      || tagDraft.trim()
-    ))
-    : Boolean(
-      name.trim()
-      || course
-      || courseDraft.trim()
-      || tags.length
-      || tagDraft.trim()
-      || semesterId !== initialSemester,
-    );
-  const blocker = useBlocker(({ currentLocation, nextLocation }) => (
-    !submittedRef.current && isDirty && currentLocation.pathname !== nextLocation.pathname
-  ));
-  const blockerState = blocker.state;
-  const resetBlockedNavigation = blocker.state === "blocked" ? blocker.reset : undefined;
-
-  useEffect(() => {
-    if (blockerState !== "blocked" || !resetBlockedNavigation) return;
-    const previouslyFocused = document.activeElement instanceof HTMLElement
-      ? document.activeElement
-      : null;
-    const previousOverflow = document.body.style.overflow;
-    document.body.style.overflow = "hidden";
-    const focusFrame = window.requestAnimationFrame(() => stayButtonRef.current?.focus());
-
-    function keepFocusInDialog(event: globalThis.KeyboardEvent) {
-      if (event.key === "Escape") {
-        event.preventDefault();
-        resetBlockedNavigation?.();
-        return;
-      }
-      if (event.key !== "Tab") return;
-      const focusable = [stayButtonRef.current, leaveButtonRef.current].filter(
-        (element): element is HTMLButtonElement => Boolean(element),
-      );
-      if (!focusable.length) return;
-      const currentIndex = focusable.indexOf(document.activeElement as HTMLButtonElement);
-      const nextIndex = event.shiftKey
-        ? (currentIndex <= 0 ? focusable.length - 1 : currentIndex - 1)
-        : (currentIndex < 0 || currentIndex === focusable.length - 1 ? 0 : currentIndex + 1);
-      event.preventDefault();
-      focusable[nextIndex].focus();
-    }
-
-    document.addEventListener("keydown", keepFocusInDialog);
-    return () => {
-      window.cancelAnimationFrame(focusFrame);
-      document.body.style.overflow = previousOverflow;
-      document.removeEventListener("keydown", keepFocusInDialog);
-      if (previouslyFocused && document.contains(previouslyFocused)) previouslyFocused.focus();
-    };
-  }, [blockerState, resetBlockedNavigation]);
-
-  useBeforeUnload(useCallback((event) => {
-    if (!submittedRef.current && isDirty) {
-      event.preventDefault();
-      event.returnValue = "";
-    }
-  }, [isDirty]));
+  }, [coursesQuery.isSuccess, editHydrated, isEditing, tagsQuery.isSuccess, taskQuery.data]);
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setFormError(null);
+    if (draft.protection.conflict) { setFormError("请先核对服务器变化，明确恢复或删除旧草稿。"); return; }
     const trimmedName = name.trim();
     if (!trimmedName) {
       setFormError(t("newTaskNameRequired"));
@@ -218,7 +135,8 @@ export function NewTaskPage() {
     if (isEditing && taskId) {
       try {
         await updateTask.mutateAsync({ taskId, patch: payload });
-        submittedRef.current = true;
+        if (!draft.protection.isCurrent()) return;
+        draft.clear();
         toast.success(t("newTaskUpdateSuccess"));
         navigate(returnTo, { replace: true, state: location.state });
       } catch (error) {
@@ -230,6 +148,7 @@ export function NewTaskPage() {
     const signature = JSON.stringify(payload);
     if (!idempotencyRef.current || idempotencyRef.current.signature !== signature) {
       idempotencyRef.current = { signature, key: createIdempotencyKey() };
+      draft.field("idempotency")[1](idempotencyRef.current);
     }
 
     try {
@@ -237,7 +156,8 @@ export function NewTaskPage() {
         ...payload,
         idempotencyKey: idempotencyRef.current.key,
       });
-      submittedRef.current = true;
+      if (!draft.protection.isCurrent()) return;
+      draft.clear();
       toast.success(t("newTaskCreateSuccess"));
       navigate(`/tasks/${task.task_id}/upload/problems`);
     } catch (error) {
@@ -361,7 +281,7 @@ export function NewTaskPage() {
               <p className="text-[13px] font-semibold text-foreground">{t("newTaskModelSummaryLabel")}</p>
               <p className="mt-1 truncate text-xs text-muted-foreground">{modelSummary}</p>
             </div>
-            <Link to="/settings/byok" aria-disabled={isSaving} tabIndex={isSaving ? -1 : undefined} onClick={(event) => { if (isSaving) event.preventDefault(); }} className="shrink-0 text-xs font-semibold text-primary outline-none hover:underline focus-visible:rounded focus-visible:ring-2 focus-visible:ring-ring aria-disabled:cursor-wait aria-disabled:opacity-50">{t("newTaskManageModels")}</Link>
+            <Link to={`/settings/byok?returnTo=${encodeURIComponent(location.pathname + location.search)}`} aria-disabled={isSaving} tabIndex={isSaving ? -1 : undefined} onClick={(event) => { if (isSaving) event.preventDefault(); }} className="shrink-0 text-xs font-semibold text-primary outline-none hover:underline focus-visible:rounded focus-visible:ring-2 focus-visible:ring-ring aria-disabled:cursor-wait aria-disabled:opacity-50">{t("newTaskManageModels")}</Link>
           </div>
 
           {formError ? <div role="alert" className="rounded-[6px] border border-danger/30 bg-red-50 px-3 py-2 text-xs text-danger dark:bg-red-950/30 xl:mt-[19px]">{formError}</div> : null}
@@ -380,18 +300,7 @@ export function NewTaskPage() {
         </button>
       </div>
 
-      {blocker.state === "blocked" ? (
-        <div className="fixed inset-0 z-[80] flex items-center justify-center bg-slate-950/35 p-5" role="presentation">
-          <div role="alertdialog" aria-modal="true" aria-labelledby="leave-new-task-title" aria-describedby="leave-new-task-description" className="w-full max-w-sm rounded-[10px] border bg-card p-5 shadow-xl">
-            <h2 id="leave-new-task-title" className="text-base font-semibold text-foreground">{t(isEditing ? "newTaskEditLeaveTitle" : "newTaskLeaveTitle")}</h2>
-            <p id="leave-new-task-description" className="mt-2 text-sm leading-5 text-muted-foreground">{t(isEditing ? "newTaskEditLeaveDescription" : "newTaskLeaveDescription")}</p>
-            <div className="mt-5 flex justify-end gap-2">
-              <button ref={stayButtonRef} type="button" className="h-9 rounded-md border px-4 text-sm font-medium outline-none hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2" onClick={() => blocker.reset()}>{t("newTaskStay")}</button>
-              <button ref={leaveButtonRef} type="button" className="h-9 rounded-md bg-danger px-4 text-sm font-medium text-white outline-none hover:opacity-90 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2" onClick={() => blocker.proceed()}>{t("newTaskLeave")}</button>
-            </div>
-          </div>
-        </div>
-      ) : null}
+
     </div>
   );
 }

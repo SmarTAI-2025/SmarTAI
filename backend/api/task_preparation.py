@@ -546,6 +546,106 @@ def problem_source_library(
     return {"items": items, "total": len(items), "scope": scope}
 
 
+@router.get("/{task_id}/problem-sources/draft-reference")
+def check_problem_draft_reference(
+    task_id: str,
+    stored_file_id: str | None = None,
+    library_material_id: str | None = None,
+    prepared_id: str | None = None,
+    current: User = Depends(require_teacher),
+):
+    """Read-only draft recovery; never preflight, upload, recognize, or renew a TTL."""
+    try:
+        workflow = workflow_repository.get_live_workflow(task_id, owner_id=current.id)
+        stored = None
+        filename = None
+        if stored_file_id:
+            stored = file_repository.get_file(file_id=stored_file_id, owner_id=current.id)
+            if stored is None or stored.assignment_id != task_id or stored.kind != "problem_source":
+                raise NotFound("draft_source")
+        elif library_material_id:
+            from backend.db import course_library_repository
+            material = course_library_repository.get_material(library_material_id, current.id)
+            if material is None or material.stored_file_id is None:
+                raise NotFound("draft_source")
+            stored = file_repository.get_file(file_id=material.stored_file_id, owner_id=current.id)
+            if stored is None or stored.knowledge_document_id != material.document_id:
+                raise NotFound("draft_source")
+            filename = material.filename
+        if stored is not None:
+            if stored.availability_status != "available":
+                raise NotFound("draft_source")
+            try:
+                with get_storage().open(stored.storage_key) as stream:
+                    if not stream.read(1):
+                        raise NotFound("draft_source")
+            except StorageObjectNotFound:
+                raise NotFound("draft_source") from None
+            except DomainError:
+                raise
+            except Exception:
+                raise HTTPException(503, detail={"code": "source_preview_storage_unavailable"}) from None
+            filename = filename or source_file_service.safe_display_name(stored.original_name)
+        prepared = False
+        if prepared_id:
+            try:
+                operation = workflow_repository.get_operation(prepared_id, owner_id=current.id)
+                payload = operation.payload or {}
+                ref = payload.get("source_ref") or {}
+                prepared = bool(
+                    operation.assignment_id == task_id
+                    and operation.operation_type == "problem_source"
+                    and operation.status == "ready"
+                    and (operation.expires_at is None or operation.expires_at > time.time())
+                    and payload.get("base_workflow_revision", 0) == workflow.workflow_revision
+                    and (not stored_file_id or ref.get("stored_file_id") == stored_file_id)
+                    and (not library_material_id or ref.get("library_material_id") == library_material_id)
+                )
+            except NotFound:
+                pass
+        return {"available": True, "filename": filename, "prepared": prepared}
+    except DomainError as exc:
+        return domain_error_response(exc)
+
+
+@router.get("/{task_id}/material-imports/draft-reference")
+def check_material_draft_reference(
+    task_id: str,
+    prepared_id: str,
+    current: User = Depends(require_teacher),
+):
+    """Validate a material preflight without renewing it or dispatching work."""
+    try:
+        workflow = workflow_repository.get_live_workflow(task_id, owner_id=current.id)
+        operation = workflow_repository.get_operation(prepared_id, owner_id=current.id)
+        if operation.assignment_id != task_id or operation.operation_type != "material_source":
+            raise NotFound("draft_source")
+        payload = operation.payload or {}
+        if (operation.status != "pending"
+                or (operation.expires_at is not None and operation.expires_at <= time.time())
+                or payload.get("base_workflow_revision", 0) != workflow.workflow_revision):
+            raise HTTPException(410, detail={"code": "stale_revision"})
+        stored = file_repository.get_file(
+            file_id=str(payload.get("text_artifact_id") or ""), owner_id=current.id,
+        )
+        if (stored is None or stored.assignment_id != task_id
+                or stored.kind != "material_import_text" or stored.availability_status != "available"):
+            raise NotFound("draft_source")
+        try:
+            with get_storage().open(stored.storage_key) as stream:
+                if not stream.read(1):
+                    raise NotFound("draft_source")
+        except StorageObjectNotFound:
+            raise NotFound("draft_source") from None
+        except DomainError:
+            raise
+        except Exception:
+            raise HTTPException(503, detail={"code": "source_preview_storage_unavailable"}) from None
+        return {"available": True, "prepared": True}
+    except DomainError as exc:
+        return domain_error_response(exc)
+
+
 @router.post("/{task_id}/problem-sources/preflight")
 @router.post("/{task_id}/question-preparation/sources/preflight")
 async def preflight_problem_source(

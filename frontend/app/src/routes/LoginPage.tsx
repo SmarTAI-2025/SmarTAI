@@ -1,3 +1,4 @@
+import { useDraftProtection } from "@/hooks/useDraftProtection";
 import { FileCheck2, Loader2 } from "lucide-react";
 import { useRef, useState, type FormEvent } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
@@ -30,6 +31,7 @@ export function LoginPage() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [formError, setFormError] = useState<string | null>(null);
+  const inputProtection = useDraftProtection({ scope: "credential:LoginPage", value: { username, email, password }, baseline: { username: "", email: "", password: "" }, secret: true, onRestore: (draft) => { setUsername(draft.username); setEmail(draft.email); setPassword(draft.password); } });
   const [stateErrorDismissed, setStateErrorDismissed] = useState(false);
   const stateError = getAuthStateError(location.state);
   const visibleError =
@@ -72,6 +74,7 @@ export function LoginPage() {
       queryClient.removeQueries({
         predicate: (query) => query.queryKey[0] !== authKeys.me[0],
       });
+      await inputProtection.clear();
       navigate(safeReturnPath(location.state), { replace: true });
     } catch (error) {
       setPassword("");

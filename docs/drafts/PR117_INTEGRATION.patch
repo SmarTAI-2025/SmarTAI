@@ -1,0 +1,374 @@
+diff --git a/frontend/app/src/admin-main.tsx b/frontend/app/src/admin-main.tsx
+index 00c91833..32a8eb5a 100644
+--- a/frontend/app/src/admin-main.tsx
++++ b/frontend/app/src/admin-main.tsx
+@@ -1,3 +1,5 @@
++import { DraftLeaveProvider } from "@/hooks/useDraftLeave";
++import { Outlet } from "react-router-dom";
+ import React from "react";
+ import ReactDOM from "react-dom/client";
+ import { createBrowserRouter, RouterProvider, Navigate } from "react-router-dom";
+@@ -19,7 +21,7 @@ import { AdminAuditPage } from "@/routes/admin/AdminAuditPage";
+ import { LoginPage } from "@/routes/LoginPage";
+ import "@/styles/globals.css";
+
+-const router = createBrowserRouter([{
++const router = createBrowserRouter([{ element: <DraftLeaveProvider><Outlet /></DraftLeaveProvider>, children: [{
+   path: "/login", element: <LoginPage admin />,
+ }, { path: "/maintenance", element: <main className="mx-auto max-w-5xl p-4 sm:p-8"><AdminMaintenancePage standalone /></main>
+ }, { path: "/", element: <Navigate to="/admin" replace />
+@@ -40,6 +42,6 @@ const router = createBrowserRouter([{
+     { path: "closures/:closureId", element: <AdminClosurePage /> },
+     { path: "audit", element: <AdminAuditPage /> },
+   ],
+-}]);
++}]}]);
+
+ ReactDOM.createRoot(document.getElementById("root")!).render(<React.StrictMode><Providers><RouterProvider router={router} /></Providers></React.StrictMode>);
+diff --git a/frontend/app/src/api/auth.ts b/frontend/app/src/api/auth.ts
+index 252e45a0..52057342 100644
+--- a/frontend/app/src/api/auth.ts
++++ b/frontend/app/src/api/auth.ts
+@@ -1,3 +1,4 @@
++import { clearPageDrafts } from "@/lib/pageDraftStore";
+ import {
+   APIError,
+   clearAuthToken,
+@@ -16,6 +17,7 @@ const PUBLIC_AUTH_REQUEST_CONFIG: AuthAwareRequestConfig = Object.freeze({
+
+ export async function login(request: LoginRequest): Promise<AuthResponse> {
+   const response = await postJSON<AuthResponse, LoginRequest>("/auth/login", request);
++  await clearPageDrafts();
+   setAuthToken(response.token);
+   return response;
+ }
+diff --git a/frontend/app/src/api/client.ts b/frontend/app/src/api/client.ts
+index 34a0db92..ee86d3ac 100644
+--- a/frontend/app/src/api/client.ts
++++ b/frontend/app/src/api/client.ts
+@@ -1,3 +1,4 @@
++import { clearPageDrafts } from "@/lib/pageDraftStore";
+ import axios, { AxiosError, CanceledError, type AxiosProgressEvent, type AxiosRequestConfig } from "axios";
+ import { setSessionExpired } from "@/lib/sessionExpiry";
+
+@@ -134,6 +135,7 @@ export function setAuthToken(token: string): void {
+ }
+
+ export function clearAuthToken(): void {
++  void clearPageDrafts();
+   sessionVersion += 1;
+   localStorage.removeItem(SMARTAI_TOKEN_STORAGE_KEY);
+ }
+diff --git a/frontend/app/src/components/auth/RequireAdminSession.tsx b/frontend/app/src/components/auth/RequireAdminSession.tsx
+index 36c7a7d7..e7f2a5f9 100644
+--- a/frontend/app/src/components/auth/RequireAdminSession.tsx
++++ b/frontend/app/src/components/auth/RequireAdminSession.tsx
+@@ -1,3 +1,4 @@
++import { PageDraftSession } from "@/hooks/useDraftProtection";
+ import { useI18n } from "@/i18n/I18nProvider";
+ import { useQueryClient } from "@tanstack/react-query";
+ import { useEffect, type ReactNode } from "react";
+@@ -28,7 +29,7 @@ export function RequireAdminSession({ children }: { children: ReactNode }) {
+     <Button disabled={logout.isPending} onClick={() => logout.mutate()}>{zh ? "退出当前账号" : "Sign out"}</Button>
+     <Link className="ml-4 text-primary" to="/login">{zh ? "更换账号" : "Switch account"}</Link>
+   </AuthCard></AuthFrame>;
+-  return children;
++  return <PageDraftSession ownerId={user.data.id}>{children}</PageDraftSession>;
+ }
+ function SignInAgain({ from }: { from: string }) {
+   const cache = useQueryClient();
+diff --git a/frontend/app/src/components/layout/AdminShell.tsx b/frontend/app/src/components/layout/AdminShell.tsx
+index a760e72b..9d9da105 100644
+--- a/frontend/app/src/components/layout/AdminShell.tsx
++++ b/frontend/app/src/components/layout/AdminShell.tsx
+@@ -1,3 +1,4 @@
++import { DraftActions, useDraftLeave } from "@/hooks/useDraftLeave";
+ import { useI18n } from "@/i18n/I18nProvider";
+ import { SlidersHorizontal, Activity, Wrench, TrendingUp, BarChart3, Settings, FileClock, LogOut, Shield, Users } from "lucide-react";
+ import { Link, NavLink, Outlet, useNavigate } from "react-router-dom";
+@@ -28,6 +29,7 @@ export function AdminShell() {
+   const signOutActive = useRef(false);
+   const cache = useQueryClient();
+   const navigate = useNavigate();
++  const leave = useDraftLeave();
+
+   async function signOut() {
+     if (signOutActive.current) return;
+@@ -46,7 +48,7 @@ export function AdminShell() {
+           <Link to="/admin" className="flex items-center gap-2 font-semibold"><Shield size={20} className="text-primary" />SmarTAI 管理端</Link>
+           <div className="ml-auto flex items-center gap-3 text-sm">
+             <span className="hidden text-muted-foreground sm:inline">{user.data?.username ?? "管理员"}</span>
+-            <Button variant="ghost" className="h-8" onClick={() => void signOut()} disabled={signingOut}><LogOut size={16} />{zh ? "退出" : "Sign out"}</Button>
++            <Button variant="ghost" className="h-8" onClick={() => leave.request(() => void signOut())} disabled={signingOut}><LogOut size={16} />{zh ? "退出" : "Sign out"}</Button>
+           </div>
+         </div>
+       </header>
+@@ -54,7 +56,7 @@ export function AdminShell() {
+         <nav aria-label={zh ? "管理员导航" : "Administration navigation"} className="grid grid-cols-2 gap-1 border-b bg-card p-3 sm:grid-cols-4 lg:sticky lg:top-0 lg:h-[calc(100vh-4rem)] lg:w-56 lg:shrink-0 lg:grid-cols-1 lg:content-start lg:border-b-0 lg:border-r lg:py-6">
+           {links.map(({ to, label, icon: Icon, end }) => <NavLink key={to} to={to} end={end} className={({ isActive }) => cn("flex items-center gap-2 rounded-lg px-3 py-3 text-sm text-muted-foreground hover:bg-muted", isActive && "bg-primary/[0.08] font-semibold text-primary")}><Icon size={17} className="shrink-0" />{label}</NavLink>)}
+         </nav>
+-        <main className="min-w-0 flex-1 px-5 py-7 sm:px-8"><Outlet /></main>
++        <main className="min-w-0 flex-1 px-5 py-7 sm:px-8"><Outlet /><DraftActions /></main>
+       </div>
+     </div>
+   );
+diff --git a/frontend/app/src/routes/LoginPage.tsx b/frontend/app/src/routes/LoginPage.tsx
+index 1a1779ce..3caaf855 100644
+--- a/frontend/app/src/routes/LoginPage.tsx
++++ b/frontend/app/src/routes/LoginPage.tsx
+@@ -1,3 +1,4 @@
++import { useDraftProtection } from "@/hooks/useDraftProtection";
+ import { FileCheck2, Loader2 } from "lucide-react";
+ import { useState, type FormEvent } from "react";
+ import { Link, useLocation, useNavigate } from "react-router-dom";
+@@ -28,6 +29,7 @@ export function LoginPage({ admin = false }: { admin?: boolean }) {
+   const [password, setPassword] = useState("");
+   const [formError, setFormError] = useState<string | null>(null);
+   const [stateErrorDismissed, setStateErrorDismissed] = useState(false);
++  const localDraft = useDraftProtection({ scope: "login", value: { username, password }, secret: true, busy: login.isPending, onRestore: () => { setUsername(""); setPassword(""); } });
+   const stateError = getAuthStateError(location.state);
+   const visibleError =
+     formError ??
+diff --git a/frontend/app/src/routes/admin/AdminAccountPage.tsx b/frontend/app/src/routes/admin/AdminAccountPage.tsx
+index 248a38d7..e9f56482 100644
+--- a/frontend/app/src/routes/admin/AdminAccountPage.tsx
++++ b/frontend/app/src/routes/admin/AdminAccountPage.tsx
+@@ -1,3 +1,4 @@
++import { useDraftProtection } from "@/hooks/useDraftProtection";
+ import { useRef, useState, type FormEvent } from "react";
+ import { useNavigate } from "react-router-dom";
+ import { useQueryClient } from "@tanstack/react-query";
+@@ -11,6 +12,7 @@ export function AdminAccountPage() {
+   const user = useCurrentUser(); const navigate = useNavigate(); const cache = useQueryClient();
+   const [oldPassword, setOld] = useState(""); const [newPassword, setNew] = useState(""); const [confirm, setConfirm] = useState("");
+   const [error, setError] = useState(""); const [busy, setBusy] = useState(false); const active = useRef(false);
++  const localDraft = useDraftProtection({ scope: "admin-password", value: { oldPassword, newPassword, confirm }, secret: true, busy, onRestore: () => { setOld(""); setNew(""); setConfirm(""); } });
+   async function submit(e: FormEvent) {
+     e.preventDefault(); if (active.current) return;
+     if (newPassword !== confirm) { setError("两次新密码不一致。"); return; }
+@@ -18,7 +20,7 @@ export function AdminAccountPage() {
+     active.current = true; setBusy(true); setError("");
+     try {
+       await apiClient.post("/auth/password-change", { current_password: oldPassword, new_password: newPassword });
+-      clearAuthToken(); cache.clear(); navigate("/login", { replace: true, state: { authError: "密码已更新，所有旧登录已退出。请使用新密码登录。" } });
++      await localDraft.clear(); clearAuthToken(); cache.clear(); navigate("/login", { replace: true, state: { authError: "密码已更新，所有旧登录已退出。请使用新密码登录。" } });
+     } catch (e) { setError(normalizeAPIError(e).status === 400 ? "原密码不正确，或新密码与原密码相同。" : "无法确认密码是否已更新。请重新登录核对或使用忘记密码。"); }
+     finally { setOld(""); setNew(""); setConfirm(""); active.current = false; setBusy(false); }
+   }
+diff --git a/frontend/app/src/routes/admin/AdminBusinessConfigPage.test.tsx b/frontend/app/src/routes/admin/AdminBusinessConfigPage.test.tsx
+index e74dfc00..c31db72c 100644
+--- a/frontend/app/src/routes/admin/AdminBusinessConfigPage.test.tsx
++++ b/frontend/app/src/routes/admin/AdminBusinessConfigPage.test.tsx
+@@ -1,8 +1,12 @@
++import "fake-indexeddb/auto";
++import { DraftActions, DraftLeaveProvider } from "@/hooks/useDraftLeave";
++import { PageDraftSession } from "@/hooks/useDraftProtection";
++import { clearPageDrafts } from "@/lib/pageDraftStore";
+ import { beforeEach, expect, it, vi } from "vitest";
+ import { render, screen, waitFor, within } from "@testing-library/react";
+ import userEvent from "@testing-library/user-event";
+ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+-import { createMemoryRouter, Link, RouterProvider } from "react-router-dom";
++import { createMemoryRouter, Link, Outlet, RouterProvider } from "react-router-dom";
+ import { adminListUsers } from "@/api/admin";
+ import { APIError } from "@/api/client";
+ import { getBusinessConfig, saveBusinessConfig, type BusinessConfiguration, type BusinessConfigKey } from "@/api/adminBusinessConfig";
+@@ -38,8 +42,8 @@ function updated(config: BusinessConfiguration, key: BusinessConfigKey, value: n
+ }
+ function mount(path = "/admin/business-config") {
+   const client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
+-  const router = createMemoryRouter([{ path: "/admin/business-config", element: <><Link to="/elsewhere">其他页面</Link><AdminBusinessConfigPage /></> }, { path: "/elsewhere", element: <p>已离开</p> }], { initialEntries: [path] });
+-  render(<QueryClientProvider client={client}><RouterProvider router={router} /></QueryClientProvider>);
++  const router = createMemoryRouter([{ element: <DraftLeaveProvider><Outlet /><DraftActions /></DraftLeaveProvider>, children: [{ path: "/admin/business-config", element: <><Link to="/elsewhere">其他页面</Link><AdminBusinessConfigPage /></> }, { path: "/elsewhere", element: <p>已离开</p> }] }], { initialEntries: [path] });
++  render(<QueryClientProvider client={client}><PageDraftSession ownerId="isolated-admin"><RouterProvider router={router} /></PageDraftSession></QueryClientProvider>);
+   return router;
+ }
+ async function edit(label: string, value: string, form = screen.getByRole("form", { name: "全局配置表单" })) {
+@@ -51,7 +55,8 @@ async function edit(label: string, value: string, form = screen.getByRole("form"
+   return user;
+ }
+
+-beforeEach(() => {
++beforeEach(async () => {
++  await clearPageDrafts();
+   vi.resetAllMocks();
+   vi.mocked(getBusinessConfig).mockImplementation(async owner => structuredClone(owner ? userConfig : globalConfig));
+   vi.mocked(adminListUsers).mockResolvedValue({ items: [{ id: "teacher", username: "teacher", email: "teacher@example.edu", role: "teacher", is_active: true, created_at: 0 }], page: 1, page_size: 25, total: 1, has_next: false });
+@@ -116,6 +121,7 @@ it("blocks a conflicted save until the administrator explicitly loads the latest
+   expect(screen.getByRole("button", { name: "保存全局配置" })).toBeDisabled();
+   vi.mocked(getBusinessConfig).mockResolvedValue(updated(globalConfig, "email_verification_resend_seconds", 90));
+   await user.click(screen.getByRole("button", { name: "放弃更改并载入最新" }));
++  await user.click(await screen.findByRole("button", { name: "不暂存并离开" }));
+   await waitFor(() => expect(screen.getByLabelText("重发冷却（秒）")).toHaveValue("90"));
+   expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+ });
+@@ -149,11 +155,11 @@ it("protects unsaved edits on navigation and permits explicit discard", async ()
+   mount(); await screen.findByRole("heading", { name: "注册规则" });
+   const user = await edit("允许注册的邮箱域名", "new.edu");
+   await user.click(screen.getByRole("link", { name: "其他页面" }));
+-  expect(await screen.findByRole("alert")).toHaveTextContent("还有未保存的修改");
+-  await user.click(screen.getByRole("button", { name: "保留编辑" }));
++  expect(await screen.findByRole("alertdialog")).toHaveTextContent("有未暂存修改");
++  await user.click(screen.getByRole("button", { name: "继续编辑" }));
+   expect(screen.getByLabelText("允许注册的邮箱域名")).toHaveValue("new.edu");
+   await user.click(screen.getByRole("link", { name: "其他页面" }));
+-  await user.click(screen.getByRole("button", { name: "放弃更改并离开" }));
++  await user.click(screen.getByRole("button", { name: "不暂存并离开" }));
+   expect(await screen.findByText("已离开")).toBeInTheDocument();
+ });
+
+@@ -173,3 +179,17 @@ it("edits and validates persisted model quotas with unlimited and inheritance se
+   await waitFor(() => expect(saveBusinessConfig).toHaveBeenCalledWith(expect.objectContaining({ changes: { shared_pool_daily_request_limit: -1 } }), expect.any(String), undefined));
+   expect(await screen.findByText(/当前生效：无限制/)).toBeInTheDocument();
+ });
++
++it("explicitly saves and restores admin input without a configuration mutation", async () => {
++  const router = mount(); await screen.findByRole("heading", { name: "注册规则" });
++  const user = await edit("允许注册的邮箱域名", "draft.edu");
++  await user.type(screen.getByLabelText("修改原因"), "本地核对");
++  await user.click(screen.getByRole("link", { name: "其他页面" }));
++  await user.click(await screen.findByRole("button", { name: "暂存并离开" }));
++  await screen.findByText("已离开");
++  await router.navigate(-1);
++  await waitFor(() => expect(screen.getByLabelText("允许注册的邮箱域名")).toHaveValue("draft.edu"));
++  expect(screen.getByLabelText("修改原因")).toHaveValue("本地核对");
++  expect(saveBusinessConfig).not.toHaveBeenCalled();
++
++});
+diff --git a/frontend/app/src/routes/admin/AdminBusinessConfigPage.tsx b/frontend/app/src/routes/admin/AdminBusinessConfigPage.tsx
+index 879f89b0..f5e13f01 100644
+--- a/frontend/app/src/routes/admin/AdminBusinessConfigPage.tsx
++++ b/frontend/app/src/routes/admin/AdminBusinessConfigPage.tsx
+@@ -1,6 +1,7 @@
++import { useDraftProtection } from "@/hooks/useDraftProtection";
+ import { useEffect, useRef, useState, type FormEvent } from "react";
+ import { useQuery } from "@tanstack/react-query";
+-import { useBlocker, useSearchParams } from "react-router-dom";
++import { useSearchParams } from "react-router-dom";
+ import { adminListUsers } from "@/api/admin";
+ import { getBusinessConfig, saveBusinessConfig, type BusinessConfiguration, type BusinessConfigKey, type BusinessConfigUpdate } from "@/api/adminBusinessConfig";
+ import { normalizeAPIError } from "@/api/client";
+@@ -52,13 +53,14 @@ function ConfigEditor({ initial, reload, onDirty, onSaved }: { initial: Business
+     return item.inherit ? field.override !== null : field.override === null || item.text !== String(field.override);
+   });
+   const dirty = changedKeys.length > 0;
++  const localDraft = useDraftProtection({ scope: `admin-config:${snapshot.scope}:${snapshot.owner_id ?? "global"}`, value: { draft, reason }, baseline: { draft: initialDraft(snapshot), reason: "" }, version: JSON.stringify([snapshot.version, snapshot.global_version]), busy, onRestore: restored => { setDraft(restored.draft); setReason(restored.reason); } });
+   useEffect(() => { onDirty(dirty || busy); return () => onDirty(false); }, [dirty, busy, onDirty]);
+
+   function change(key: BusinessConfigKey, value: { inherit: boolean; text: string }) {
+     setDraft(previous => ({ ...previous, [key]: value })); setMessage("");
+   }
+   async function submit(event: FormEvent) {
+-    event.preventDefault(); if (active.current || !dirty || conflict) return;
++    event.preventDefault(); if (active.current || !dirty || conflict || localDraft.conflict) return;
+     setError(""); setMessage("");
+     if (!reason.trim()) { setError("请填写修改原因。"); return; }
+     const changes: BusinessConfigUpdate["changes"] = {};
+@@ -80,6 +82,7 @@ function ConfigEditor({ initial, reload, onDirty, onSaved }: { initial: Business
+     active.current = true; setBusy(true);
+     try {
+       const result = await saveBusinessConfig(input, retry.current.key, snapshot.owner_id ?? undefined);
++      if (!localDraft.isCurrent() || !await localDraft.clear({ draft, reason }) || !localDraft.isCurrent()) return;
+       setSnapshot(result); setDraft(initialDraft(result)); setReason(""); retry.current = null;
+       setMessage("配置已保存，后续请求使用新设置。"); onSaved?.();
+     } catch (failure) {
+@@ -93,7 +96,7 @@ function ConfigEditor({ initial, reload, onDirty, onSaved }: { initial: Business
+   async function refresh() {
+     if (active.current) return;
+     active.current = true; setBusy(true); setError(""); setMessage("");
+-    try { const result = await reload(); setSnapshot(result); setDraft(initialDraft(result)); setReason(""); setConflict(false); retry.current = null; }
++    try { const result = await reload(); localDraft.resetWorking({ draft: initialDraft(result), reason: "" }); setSnapshot(result); setDraft(initialDraft(result)); setReason(""); setConflict(false); retry.current = null; }
+     catch { setError("重新载入失败，当前修改仍保留，请重试。"); }
+     finally { active.current = false; setBusy(false); }
+   }
+@@ -122,7 +125,7 @@ function ConfigEditor({ initial, reload, onDirty, onSaved }: { initial: Business
+       {dirty && <p role="status" className="text-sm text-amber-700">有未保存的修改。</p>}
+       {message && <p role="status" className="text-sm">{message}</p>}
+       {error && <p role="alert" className="text-sm text-danger">{error}</p>}
+-      <div className="flex flex-wrap gap-2"><Button type="submit" disabled={!dirty || busy || conflict || !reason.trim()}>{busy ? "处理中…" : userScope ? "保存用户配额" : "保存全局配置"}</Button><Button variant="secondary" disabled={busy} onClick={() => void refresh()}>{dirty || conflict ? "放弃更改并载入最新" : "刷新配置"}</Button></div>
++      <div className="flex flex-wrap gap-2"><Button type="submit" disabled={!dirty || busy || conflict || Boolean(localDraft.conflict) || !reason.trim()}>{busy ? "处理中…" : userScope ? "保存用户配额" : "保存全局配置"}</Button><Button variant="secondary" disabled={busy} onClick={() => localDraft.requestLeave(() => void refresh())}>{dirty || conflict ? "放弃更改并载入最新" : "刷新配置"}</Button></div>
+     </Card>
+   </form>;
+ }
+@@ -137,13 +140,6 @@ export function AdminBusinessConfigPage() {
+   const [globalDirty, setGlobalDirty] = useState(false);
+   const [userDirty, setUserDirty] = useState(false);
+   const [userEpoch, setUserEpoch] = useState(0);
+-  const dirty = globalDirty || userDirty;
+-  const blocker = useBlocker(dirty);
+-  useEffect(() => {
+-    if (!dirty) return;
+-    const protect = (event: BeforeUnloadEvent) => { event.preventDefault(); event.returnValue = ""; };
+-    window.addEventListener("beforeunload", protect); return () => window.removeEventListener("beforeunload", protect);
+-  }, [dirty]);
+   const global = useQuery({ queryKey: ["admin-business-config"], queryFn: ({ signal }) => getBusinessConfig(undefined, signal), refetchOnWindowFocus: false, gcTime: 0, retry: false });
+   const userConfig = useQuery({ queryKey: ["admin-business-config", ownerId, userEpoch], queryFn: ({ signal }) => getBusinessConfig(ownerId, signal), enabled: !!ownerId, refetchOnWindowFocus: false, gcTime: 0, retry: false });
+   useEffect(() => { setOwnerId(requestedOwner); }, [requestedOwner]);
+@@ -159,7 +155,7 @@ export function AdminBusinessConfigPage() {
+   return <div className="max-w-4xl space-y-6">
+     <SectionHeader title="业务配置管理" description="调整注册、邮件、存储和模型日额度规则。优先使用用户覆盖，其次全局覆盖，最后继承部署设置或代码默认值。" />
+     <nav aria-label="配置项目" className="flex flex-wrap gap-2 text-sm">{[["registration-rules", "注册规则"], ["mail-limits", "邮件限制"], ["default-quotas", "存储配额"], ["model-limits", "模型额度"], ["user-quotas", "单用户配额"]].map(([id, label]) => <a key={id} href={`#${id}`} className="rounded-md border bg-card px-3 py-2 text-primary">{label}</a>)}</nav>
+-    {blocker.state === "blocked" && <Card role="alert" className="space-y-3"><p>还有未保存的修改，离开会丢弃本页编辑。</p><div className="flex gap-2"><Button onClick={() => blocker.reset()}>保留编辑</Button><Button variant="secondary" onClick={() => blocker.proceed()}>放弃更改并离开</Button></div></Card>}
++
+     {global.isPending ? <p role="status">正在载入全局配置…</p> : global.isError ? <Card role="alert">配置加载失败。<Button onClick={() => void global.refetch()}>重试</Button></Card> : <ConfigEditor initial={global.data} onDirty={setGlobalDirty} onSaved={() => { if (!userDirty) setUserEpoch(n => n + 1); }} reload={async () => { const result = await global.refetch(); if (!result.data || result.error) throw new Error("load"); return result.data; }} />}
+     <section id="user-quotas" aria-label="单独用户配额" className="scroll-mt-6 space-y-4">
+       <Card className="space-y-4"><h2 className="text-lg font-semibold">为单个用户设置配额</h2><p className="text-sm text-muted-foreground">只覆盖此用户选中的存储或模型上限；留在继承状态的项目会随全局配置更新。</p>
+diff --git a/frontend/app/src/routes/admin/AdminMaintenancePage.tsx b/frontend/app/src/routes/admin/AdminMaintenancePage.tsx
+index f3646488..31beff9d 100644
+--- a/frontend/app/src/routes/admin/AdminMaintenancePage.tsx
++++ b/frontend/app/src/routes/admin/AdminMaintenancePage.tsx
+@@ -1,3 +1,4 @@
++import { useDraftProtection } from "@/hooks/useDraftProtection";
+ import { useCallback, useEffect, useRef, useState } from "react";
+ import { useQuery } from "@tanstack/react-query";
+ import { Link } from "react-router-dom";
+@@ -32,6 +33,7 @@ const errors: Record<string, string> = {
+ export function AdminMaintenancePage({ standalone = false }: { standalone?: boolean }) {
+   const [status, setStatus] = useState<Status | null>(null);
+   const [dialog, setDialog] = useState(false), [password, setPassword] = useState(""), [confirmation, setConfirmation] = useState(""), [stopped, setStopped] = useState(false), [busy, setBusy] = useState(false), [error, setError] = useState("");
++  const protection = useDraftProtection({ scope: "admin-maintenance-confirm", value: { password, confirmation, stopped }, secret: true, enabled: dialog, busy, onRestore: () => { setPassword(""); setConfirmation(""); setStopped(false); } });
+   const active = useRef(false), knownOperation = useRef(false);
+   const preview = useQuery({ queryKey: ["admin", "reset-preview"], queryFn: () => maintenance<Preview>("preview"), retry: false, enabled: !status, refetchOnWindowFocus: false });
+   const p = preview.data;
+@@ -53,6 +55,7 @@ export function AdminMaintenancePage({ standalone = false }: { standalone?: bool
+     active.current = true; setBusy(true); setError("");
+     try {
+       await maintenance("execute", { fingerprint, confirmation, services_stopped: stopped, maintenance_password: password });
++      await protection.clear();
+       knownOperation.current = true; setPassword(""); setDialog(false);
+       setStatus({ fingerprint, status: "running", phase: "validating" });
+       if (!standalone) window.location.assign("/maintenance");
+@@ -75,7 +78,7 @@ export function AdminMaintenancePage({ standalone = false }: { standalone?: bool
+     </Card>}
+     {error && !dialog && <p role="alert" className="text-danger">{error}</p>}
+     <Card><h2 className="font-semibold">安全执行条件</h2><p className="mt-3 text-sm leading-6">专用维护服务只绑定回环地址，通过 SSH 隧道或 VPN 访问，单进程运行；不要开放公网。所有写入服务与调度器必须停止，共享维护锁与数据库独占锁会再次检查。S3 仅允许已标记的本项目独占桶，清除全部版本、删除标记及未完成上传；未知范围或删除残留都会使操作失败。外部备份的处理需要单独确认。</p></Card>
+-    {dialog && <LibraryDialog title={status ? "继续受保护的全站清空" : "确认全清空业务数据"} description="这会删除包括您自己的管理员账号在内的全部业务数据，无法撤回。" closeLabel="关闭清空确认" onClose={close} footer={<><Button variant="secondary" disabled={busy} onClick={close}>取消</Button><Button variant="danger" disabled={!canConfirm} onClick={() => void execute()}>{busy ? "正在验证并启动…" : "确认全清空"}</Button></>}>
++    {dialog && <LibraryDialog title={status ? "继续受保护的全站清空" : "确认全清空业务数据"} description="这会删除包括您自己的管理员账号在内的全部业务数据，无法撤回。" closeLabel="关闭清空确认" onClose={close} footer={<><Button variant="secondary" disabled={busy} onClick={() => protection.requestLeave(close)}>取消</Button><Button variant="danger" disabled={!canConfirm} onClick={() => void execute()}>{busy ? "正在验证并启动…" : "确认全清空"}</Button></>}>
+       <div className="space-y-4"><p className="break-all text-sm">目标：{p?.target?.database || fingerprint}</p><label className="grid gap-2 text-sm">独立维护密码<input type="password" autoComplete="off" className="h-10 rounded-md border bg-background px-3" maxLength={128} value={password} disabled={busy} onChange={e => setPassword(e.target.value)} /></label><label className="grid gap-2 text-sm">输入确认短语<span className="break-all select-all text-xs">{phrase}</span><input className="h-10 rounded-md border bg-background px-3" autoComplete="off" value={confirmation} disabled={busy} onChange={e => setConfirmation(e.target.value)} /></label><label className="flex items-start gap-2 text-sm"><input type="checkbox" checked={stopped} disabled={busy} onChange={e => setStopped(e.target.checked)} />已停止全部公共、私有服务、worker、调度器和旧容器。</label><p className="text-xs text-muted-foreground">按钮需填写正确短语、维护密码并确认停止服务。密码不会写入草稿或审计。</p>{error && <p role="alert" className="text-danger">{error}</p>}</div>
+     </LibraryDialog>}
+   </div>;
+diff --git a/frontend/app/src/routes/admin/AdminUserDetailPage.tsx b/frontend/app/src/routes/admin/AdminUserDetailPage.tsx
+index 9b0ba360..c8ff365b 100644
+--- a/frontend/app/src/routes/admin/AdminUserDetailPage.tsx
++++ b/frontend/app/src/routes/admin/AdminUserDetailPage.tsx
+@@ -1,3 +1,4 @@
++import { useDraftProtection } from "@/hooks/useDraftProtection";
+ import { useCallback, useRef, useState } from "react";
+ import { useQuery, useQueryClient } from "@tanstack/react-query";
+ import { Link, useParams, useNavigate } from "react-router-dom";
+@@ -21,6 +22,7 @@ export function AdminUserDetailPage() {
+   const [confirmation, setConfirmation] = useState("");
+   const [error, setError] = useState("");
+   const [busy, setBusy] = useState(false);
++  const localDraft = useDraftProtection({ scope: `admin-action:${userId}`, value: { reason, confirmation }, secret: true, busy, enabled: Boolean(action), onRestore: () => { setReason(""); setConfirmation(""); } });
+   const busyRef = useRef(false);
+   const key = useRef("");
+   const close = useCallback(() => { if (!busyRef.current) { setAction(null); setError(""); } }, []);
+@@ -30,6 +32,7 @@ export function AdminUserDetailPage() {
+     busyRef.current = true; setBusy(true); setError("");
+     try {
+       const result = await apiClient.request({ url: `/admin/users/${userId}/${action.path}`, method: action.method, data: { ...action.body, reason: reason.trim(), ...(action.path === "closure" ? { confirm_username: confirmation } : {}) }, headers: { "Idempotency-Key": key.current } });
++      await localDraft.clear();
+       if (action.path === "closure") {
+         await cache.invalidateQueries({ queryKey: ["admin"] });
+         navigate(`/admin/closures/${result.data.closure_id}`, { replace: true });

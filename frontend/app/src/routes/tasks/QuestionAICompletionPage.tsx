@@ -1,6 +1,8 @@
+import { useDraftProtection } from "@/hooks/useDraftProtection";
+import { useDraftLeave } from "@/hooks/useDraftLeave";
 import { ArrowLeft, LoaderCircle, Sparkles } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Link, useBeforeUnload, useBlocker, useNavigate, useParams, useSearchParams } from "react-router-dom";
+import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { getAPIErrorCode, normalizeAPIError } from "@/api/client";
 import { useAICompletionPreflight, useExperts, useStartAICompletion } from "@/api/hooks";
 import { NewTaskStepper } from "@/components/new-task/NewTaskStepper";
@@ -13,7 +15,8 @@ import type { AICompletionMissingTarget, AICompletionTarget } from "@/types";
 
 const TEST_CASE_OPTIONS = [3, 4, 5, 6, 8, 10, 12] as const;
 
-export function QuestionAICompletionPage() {
+export function QuestionAICompletionPage() { const { taskId, jobId } = useParams(); return <QuestionAICompletionPageForm key={`${taskId}:${jobId ?? ""}`} />; }
+function QuestionAICompletionPageForm() {
   const { taskId } = useParams();
   const [searchParams] = useSearchParams();
   const { locale } = useI18n();
@@ -42,6 +45,7 @@ export function QuestionAICompletionPage() {
     if (!preflight) return;
     const key = `${preflight.workflow_revision}:${preflight.missing_targets.map((target) => target.target_id).join("|")}`;
     if (initializedKeyRef.current === key) return;
+    if (initializedKeyRef.current && (localDraft.dirty || localDraft.savedAt || localDraft.conflict)) return;
     initializedKeyRef.current = key;
     const requestedQuestion = searchParams.get("q_id")?.trim();
     const requestedTarget = normalizeTarget(searchParams.get("target"));
@@ -57,17 +61,8 @@ export function QuestionAICompletionPage() {
 
   const isDirty = initializedKeyRef.current !== null
     && !sameIdSet(selectedIds, initialSelectionRef.current);
-  const blocker = useBlocker(({ currentLocation, nextLocation }) => (
-    isDirty && !allowLeaveRef.current && (
-      currentLocation.pathname !== nextLocation.pathname
-      || currentLocation.search !== nextLocation.search
-    )
-  ));
-  useBeforeUnload(useCallback((event) => {
-    if (!isDirty || allowLeaveRef.current) return;
-    event.preventDefault();
-  }, [isDirty]));
 
+  const localDraft = useDraftProtection({ scope: `ai-completion:${taskId}`, value: { selectedIds, testCaseCount }, baseline: { selectedIds: initialSelectionRef.current, testCaseCount: 6 }, version: String(preflight?.workflow_revision ?? ""), enabled: Boolean(preflight && initializedKeyRef.current), busy: startCompletion.isPending, onRestore: (draft) => { setSelectedIds(draft.selectedIds); setTestCaseCount(draft.testCaseCount); } });
   const selectedSet = useMemo(() => new Set(selectedIds), [selectedIds]);
   const includesTests = sortedTargets.some((target) => (
     target.target === "test_cases" && selectedSet.has(target.target_id)
@@ -90,7 +85,7 @@ export function QuestionAICompletionPage() {
       setActionError(aiCompletionText(locale, "selectionRequired"));
       return;
     }
-    if (!modelsReady) return;
+    if (!modelsReady || localDraft.conflict) return;
     setActionError(null);
     try {
       const result = await startCompletion.mutateAsync({
@@ -99,6 +94,9 @@ export function QuestionAICompletionPage() {
         expectedWorkflowRevision: preflight.workflow_revision,
         ...(includesTests ? { testCaseCount } : {}),
       });
+      if (!localDraft.isCurrent()) return;
+      if (!await localDraft.clear({ selectedIds, testCaseCount })) return;
+      if (!localDraft.isCurrent()) return;
       allowLeaveRef.current = true;
       navigate(`/tasks/${taskId}/questions/ai-complete/progress/${encodeURIComponent(result.job_id)}`, { replace: true });
     } catch (error) {
@@ -221,16 +219,6 @@ export function QuestionAICompletionPage() {
         ) : null}
       </section>
 
-      {blocker.state === "blocked" ? (
-        <UnsavedChangesDialog
-          title={aiCompletionText(locale, "leaveTitle")}
-          description={aiCompletionText(locale, "leaveDescription")}
-          stayLabel={aiCompletionText(locale, "stay")}
-          leaveLabel={aiCompletionText(locale, "leave")}
-          onStay={() => blocker.reset()}
-          onLeave={() => blocker.proceed()}
-        />
-      ) : null}
     </div>
   );
 }

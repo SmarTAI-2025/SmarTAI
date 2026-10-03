@@ -1,3 +1,4 @@
+import { useDraftProtection } from "@/hooks/useDraftProtection";
 import { Loader2, MailQuestion } from "lucide-react";
 import { useRef, useState, type FormEvent } from "react";
 import { Link, useNavigate } from "react-router-dom";
@@ -23,6 +24,7 @@ export function ForgotPasswordPage() {
   const submitting = useRef(false);
   const [email, setEmail] = useState("");
   const [formError, setFormError] = useState<string | null>(null);
+  const inputProtection = useDraftProtection({ scope: "credential:ForgotPasswordPage", value: { email }, baseline: { email: "" }, secret: true, onRestore: (draft) => { setEmail(draft.email); } });
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -34,6 +36,7 @@ export function ForgotPasswordPage() {
       savePasswordResetRequestMarker(createPasswordResetRequestMarker(response));
       requestReset.reset();
       setEmail("");
+      await inputProtection.clear();
       navigate("/forgot-password/check-email", { replace: true });
     } catch (error) {
       requestReset.reset();

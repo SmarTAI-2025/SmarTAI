@@ -1,3 +1,4 @@
+import { useDraftProtection } from "@/hooks/useDraftProtection";
 import { CheckCircle2, Clock3, KeyRound, Link2Off, Loader2, type LucideIcon } from "lucide-react";
 import { useLayoutEffect, useRef, useState, type FormEvent } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
@@ -33,6 +34,7 @@ export function ResetPasswordPage() {
   const [password, setPassword] = useState("");
   const [confirmation, setConfirmation] = useState("");
   const [formError, setFormError] = useState<string | null>(null);
+  const inputProtection = useDraftProtection({ scope: "credential:ResetPasswordPage", value: { password, confirmation }, baseline: { password: "", confirmation: "" }, secret: true, onRestore: (draft) => { setPassword(draft.password); setConfirmation(draft.confirmation); } });
   const [state, setState] = useState<ResetState>(tokenRef.current ? "ready" : "invalid");
 
   useLayoutEffect(() => {
@@ -76,6 +78,7 @@ export function ResetPasswordPage() {
       clearPendingRegistrationFlow();
       clearPasswordResetRequestMarker();
       queryClient.clear();
+      await inputProtection.clear();
       setState("success");
     } catch (error) {
       confirmReset.reset();

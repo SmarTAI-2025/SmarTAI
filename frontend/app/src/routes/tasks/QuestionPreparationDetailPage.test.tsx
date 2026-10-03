@@ -1,3 +1,7 @@
+import "fake-indexeddb/auto";
+import { clearPageDrafts, listPageDrafts } from "@/lib/pageDraftStore";
+import { PageDraftSession } from "@/hooks/useDraftProtection";
+import { DraftActions, DraftLeaveProvider } from "@/hooks/useDraftLeave";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { createMemoryRouter, RouterProvider } from "react-router-dom";
@@ -158,7 +162,7 @@ function renderPage(initialEntry = "/tasks/task-1/questions/Q1/content") {
   const router = createMemoryRouter([
     {
       path: "/tasks/:taskId/questions/:questionId/:section",
-      element: <QuestionPreparationDetailPage />,
+      element: <PageDraftSession ownerId="question-draft-teacher"><DraftLeaveProvider><QuestionPreparationDetailPage /><DraftActions /></DraftLeaveProvider></PageDraftSession>,
     },
     {
       path: "/tasks/:taskId/questions",
@@ -359,12 +363,14 @@ describe("QuestionPreparationDetailPage navigation", () => {
     await user.type(firstScore, "5");
     await user.click(screen.getByRole("button", { name: "保存" }));
 
+    await waitFor(() => expect(screen.queryByRole("spinbutton", { name: "第 1 题满分" })).toBeNull());
     await user.click(screen.getByRole("button", { name: "修改第 2 题满分与评分标准" }));
     const secondScore = screen.getByRole("spinbutton", { name: "第 2 题满分" });
     await user.clear(secondScore);
     await user.type(secondScore, "15");
     await user.click(screen.getByRole("button", { name: "保存" }));
 
+    await waitFor(() => expect(screen.queryByRole("spinbutton", { name: "第 2 题满分" })).toBeNull());
     await user.click(screen.getByRole("button", { name: "一键确认全部题目已复核" }));
 
     expect(await screen.findByText("Submission upload destination")).toBeInTheDocument();
@@ -465,9 +471,9 @@ describe("QuestionPreparationDetailPage navigation", () => {
     await user.type(input, "8");
     await user.click(screen.getByRole("link", { name: "返回题目资料总览" }));
 
-    expect(await screen.findByRole("alertdialog", { name: "离开且不保存？" })).toBeInTheDocument();
+    expect(await screen.findByRole("alertdialog", { name: "有未暂存修改" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "继续编辑" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "放弃修改" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "不暂存并离开" })).toBeInTheDocument();
   });
 
   it("uses reviewed English copy and returns to the question material overview", async () => {
@@ -524,4 +530,30 @@ describe("QuestionPreparationDetailPage navigation", () => {
     expect(javaBadge.closest("[data-code-language]")).toHaveAttribute("data-code-language", "java");
     expect(document.querySelectorAll("[data-code-token='keyword']").length).toBeGreaterThan(0);
   });
+});
+
+
+it("formal field save clears only its explicit snapshot; failure preserves the other saved field", async () => {
+  await clearPageDrafts();
+  const user = userEvent.setup();
+  mutateAsync.mockResolvedValue({ workflow_revision: 8 });
+  renderPage();
+  await user.click(screen.getAllByRole("button", { name: "题目 · 修改" })[0]);
+  await user.click(screen.getAllByRole("button", { name: "标答 / 解题步骤 · 修改" })[0]);
+  const card = document.getElementById("question-Q1")!;
+  const fields = card.querySelectorAll("textarea");
+  fireEvent.change(fields[0], { target: { value: "explicit stem" } });
+  fireEvent.change(fields[1], { target: { value: "explicit reference answer" } });
+  await waitFor(() => expect(screen.getByRole("button", { name: "暂存" })).toBeEnabled());
+  await user.click(screen.getByRole("button", { name: "暂存" }));
+  await screen.findByText(/已暂存 ·/);
+  expect((await listPageDrafts("question-draft-teacher")).map(item => item.scope).sort()).toEqual(["question:task-1:Q1:reference_answer", "question:task-1:Q1:stem"]);
+  const firstSave = screen.getAllByRole("button", { name: "保存" })[0];
+  await user.click(firstSave);
+  await waitFor(async () => expect((await listPageDrafts("question-draft-teacher")).map(item => item.scope)).toEqual(["question:task-1:Q1:reference_answer"]));
+  await waitFor(() => expect(card.querySelectorAll("textarea")).toHaveLength(1));
+  mutateAsync.mockRejectedValueOnce(new Error("QA failed save"));
+  await user.click(screen.getAllByRole("button", { name: "保存" })[0]);
+  await waitFor(() => expect(screen.getByText(/保存失败/)).toBeInTheDocument());
+  expect((await listPageDrafts("question-draft-teacher")).map(item => item.scope)).toEqual(["question:task-1:Q1:reference_answer"]);
 });

@@ -1,3 +1,5 @@
+import { useDraftProtection } from "@/hooks/useDraftProtection";
+import { useDraftLeave } from "@/hooks/useDraftLeave";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ArrowDown,
@@ -13,7 +15,7 @@ import {
   Trash2,
   X,
 } from "lucide-react";
-import { Link, Navigate, useBeforeUnload, useBlocker, useLocation, useNavigate, useParams, useSearchParams } from "react-router-dom";
+import { Link, Navigate, useLocation, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { toast } from "sonner";
 import { useTask } from "@/api/hooks/tasks";
 import { useQuestionReview } from "@/hooks/useQuestionReview";
@@ -40,7 +42,8 @@ type TextFieldKey = "stem" | "reference_answer" | "solution_code";
 
 const EMPTY_TEST_CASES: TestCase[] = [];
 
-export function QuestionPreparationDetailPage() {
+export function QuestionPreparationDetailPage() { const { taskId, jobId } = useParams(); return <QuestionPreparationDetailPageForm key={`${taskId}:${jobId ?? ""}`} />; }
+function QuestionPreparationDetailPageForm() {
   const { taskId, questionId } = useParams();
   const stableTaskId = taskId ?? "";
   const [searchParams, setSearchParams] = useSearchParams();
@@ -76,16 +79,7 @@ export function QuestionPreparationDetailPage() {
     : null;
   const readOnly = Boolean(taskQuery.data && taskQuery.data.status !== "problems_ready");
   const hasDirty = dirtyKeys.size > 0;
-  const blocker = useBlocker(({ currentLocation, nextLocation }) => (
-    hasDirty && currentLocation.pathname !== nextLocation.pathname
-  ));
 
-  useBeforeUnload(useCallback((event) => {
-    if (hasDirty) {
-      event.preventDefault();
-      event.returnValue = "";
-    }
-  }, [hasDirty]));
 
   useEffect(() => {
     if (!filtered.length) return;
@@ -368,16 +362,6 @@ export function QuestionPreparationDetailPage() {
         }}
       /> : null}
 
-      {blocker.state === "blocked" ? (
-        <UnsavedChangesDialog
-          title={tx(locale, "离开且不保存？", "Leave without saving?")}
-          description={tx(locale, "当前页面还有未保存的题目资料修改。", "This page still has unsaved question material edits.")}
-          stayLabel={tx(locale, "继续编辑", "Keep Editing")}
-          leaveLabel={tx(locale, "放弃修改", "Discard Changes")}
-          onStay={() => blocker.reset()}
-          onLeave={() => blocker.proceed()}
-        />
-      ) : null}
     </div>
   );
 }
@@ -478,12 +462,14 @@ function EditableScoringField({ fieldKey, problem, readOnly, saving, locale, onD
     () => summarizeRubricPoints(criterionDraft, scoreDraft, problem.question_structure),
     [criterionDraft, problem.question_structure, scoreDraft],
   );
+  const localDraft = useDraftProtection({ scope: `question:${useParams().taskId}:${encodeURIComponent(problem.q_id)}:scoring`, value: { scoreDraft, criterionDraft }, baseline: { scoreDraft: originalScore, criterionDraft: originalCriterion }, version: JSON.stringify([originalScore, originalCriterion]), enabled: !readOnly, busy: saving, onRestore: (draft) => { setScoreDraft(draft.scoreDraft); setCriterionDraft(draft.criterionDraft); setEditing(true); } });
+  const leave = useDraftLeave();
   const savedSummary = problem.rubric_point_summary
     ?? summarizeRubricPoints(originalCriterion, originalScore, problem.question_structure);
   const needsReview = problem.max_score_review_status !== "confirmed";
 
   useEffect(() => {
-    if (!editing) {
+    if (!editing && !localDraft.savedAt) {
       setScoreDraft(originalScore);
       setCriterionDraft(originalCriterion);
     }
@@ -491,13 +477,14 @@ function EditableScoringField({ fieldKey, problem, readOnly, saving, locale, onD
   useEffect(() => { onDirtyChange(fieldKey, dirty); return () => onDirtyChange(fieldKey, false); }, [dirty, fieldKey, onDirtyChange]);
 
   async function save() {
+    if (localDraft.conflict) return;
     if (!scoreValid || !draftSummary.is_valid) {
       setError(scoringValidationMessage(draftSummary, scoreValid, locale));
       return;
     }
     setError(null);
     try {
-      await onSave(problem, Number(scoreDraft), criterionDraft);
+      if (!await localDraft.runFormal(() => onSave(problem, Number(scoreDraft), criterionDraft), { scoreDraft, criterionDraft })) return;
       onDirtyChange(fieldKey, false);
       setEditing(false);
     } catch {
@@ -516,7 +503,7 @@ function EditableScoringField({ fieldKey, problem, readOnly, saving, locale, onD
           </div>
           <p className="mt-1 text-xs leading-5 text-muted-foreground">{sourceLabel} · {tx(locale, "小问仍属于同一道大题；若评分标准写出分项分值，合计必须等于本题满分。", "Subparts remain inside one major question. Explicit rubric points must equal this maximum.")}</p>
         </div>
-        {!readOnly ? <button type="button" aria-label={tx(locale, `修改第 ${problem.number || problem.q_id} 题满分与评分标准`, `Edit score and rubric for question ${problem.number || problem.q_id}`)} onClick={() => { setEditing((current) => !current); setError(null); }} className="inline-flex h-8 shrink-0 items-center gap-1.5 rounded-[6px] border px-2.5 text-xs font-semibold text-foreground hover:bg-muted">
+        {!readOnly ? <button type="button" aria-label={tx(locale, `修改第 ${problem.number || problem.q_id} 题满分与评分标准`, `Edit score and rubric for question ${problem.number || problem.q_id}`)} onClick={() => { if (editing) localDraft.requestLeave(() => { localDraft.discardEdits(); setEditing(false); setError(null); }); else setEditing(true); }} className="inline-flex h-8 shrink-0 items-center gap-1.5 rounded-[6px] border px-2.5 text-xs font-semibold text-foreground hover:bg-muted">
           {editing ? <X aria-hidden="true" className="h-3.5 w-3.5" /> : <Pencil aria-hidden="true" className="h-3.5 w-3.5" />}
           {editing ? tx(locale, "取消", "Cancel") : tx(locale, "修改", "Edit")}
         </button> : null}
@@ -551,7 +538,7 @@ function EditableScoringField({ fieldKey, problem, readOnly, saving, locale, onD
           <RubricPointStatus summary={draftSummary} locale={locale} />
           {error ? <p role="alert" className="text-xs text-danger">{error}</p> : null}
           <div className="flex justify-end gap-2">
-            <button type="button" disabled={saving || (!dirty && !needsReview) || !scoreValid || !draftSummary.is_valid} onClick={() => void save()} className="inline-flex h-9 items-center gap-2 rounded-[7px] bg-primary px-4 text-xs font-semibold text-primary-foreground hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-45">{saving ? <Loader2 aria-hidden="true" className="h-3.5 w-3.5 animate-spin" /> : <Save aria-hidden="true" className="h-3.5 w-3.5" />}{needsReview && !dirty ? tx(locale, "确认并保存", "Confirm and Save") : tx(locale, "保存", "Save")}</button>
+            <button type="button" disabled={saving || localDraft.formalPending || (!dirty && !needsReview) || !scoreValid || !draftSummary.is_valid} onClick={() => void save()} className="inline-flex h-9 items-center gap-2 rounded-[7px] bg-primary px-4 text-xs font-semibold text-primary-foreground hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-45">{saving ? <Loader2 aria-hidden="true" className="h-3.5 w-3.5 animate-spin" /> : <Save aria-hidden="true" className="h-3.5 w-3.5" />}{needsReview && !dirty ? tx(locale, "确认并保存", "Confirm and Save") : tx(locale, "保存", "Save")}</button>
           </div>
         </div>
       ) : (
@@ -608,14 +595,17 @@ function EditableTextField({ fieldKey, label, value, problem, field, readOnly, s
   const [draft, setDraft] = useState(value);
   const [error, setError] = useState(false);
   const dirty = editing && draft !== value;
+  const localDraft = useDraftProtection({ scope: `question:${useParams().taskId}:${encodeURIComponent(problem.q_id)}:${field}`, value: { draft }, baseline: { draft: value }, version: value, enabled: !readOnly, busy: saving, onRestore: (restored) => { setDraft(restored.draft); setEditing(true); } });
+  const leave = useDraftLeave();
 
-  useEffect(() => { if (!editing) setDraft(value); }, [editing, value]);
+  useEffect(() => { if (!editing && !localDraft.savedAt) setDraft(value); }, [editing, value]);
   useEffect(() => { onDirtyChange(fieldKey, dirty); return () => onDirtyChange(fieldKey, false); }, [dirty, fieldKey, onDirtyChange]);
 
   async function save() {
+    if (localDraft.conflict) return;
     setError(false);
     try {
-      await onSave(problem, field, draft);
+      if (!await localDraft.runFormal(() => onSave(problem, field, draft), { draft })) return;
       onDirtyChange(fieldKey, false);
       setEditing(false);
     } catch {
@@ -627,7 +617,7 @@ function EditableTextField({ fieldKey, label, value, problem, field, readOnly, s
     <section className={cn("min-w-0 px-5 py-5 sm:px-6", compact && "px-4 py-4 sm:px-5")}>
       <div className="flex items-center justify-between gap-3">
         <h3 className="text-sm font-bold text-foreground">{label}</h3>
-        {!readOnly ? <button type="button" aria-label={`${label} · ${editing ? tx(locale, "取消修改", "Cancel edit") : tx(locale, "修改", "Edit")}`} onClick={() => { setEditing((current) => !current); setError(false); }} className="inline-flex h-8 items-center gap-1.5 rounded-[6px] border px-2.5 text-xs font-semibold text-foreground hover:bg-muted">
+        {!readOnly ? <button type="button" aria-label={`${label} · ${editing ? tx(locale, "取消修改", "Cancel edit") : tx(locale, "修改", "Edit")}`} onClick={() => { if (editing) localDraft.requestLeave(() => { localDraft.discardEdits(); setEditing(false); setError(false); }); else setEditing(true); }} className="inline-flex h-8 items-center gap-1.5 rounded-[6px] border px-2.5 text-xs font-semibold text-foreground hover:bg-muted">
           {editing ? <X aria-hidden="true" className="h-3.5 w-3.5" /> : <Pencil aria-hidden="true" className="h-3.5 w-3.5" />}
           {editing ? tx(locale, "取消", "Cancel") : tx(locale, "修改", "Edit")}
         </button> : null}
@@ -641,7 +631,7 @@ function EditableTextField({ fieldKey, label, value, problem, field, readOnly, s
               : field === "solution_code"
                 ? tx(locale, "可直接编辑源码；保存后恢复语法高亮。", "Edit the source code directly; syntax highlighting returns after saving.")
                 : tx(locale, "编辑态保留原始 Markdown / LaTeX。", "Raw Markdown / LaTeX is preserved while editing.")}</p>
-            <button type="button" disabled={saving || !dirty} onClick={() => void save()} className="inline-flex h-9 items-center gap-2 rounded-[7px] bg-primary px-4 text-xs font-semibold text-primary-foreground hover:opacity-90 disabled:opacity-45">{saving ? <Loader2 aria-hidden="true" className="h-3.5 w-3.5 animate-spin" /> : <Save aria-hidden="true" className="h-3.5 w-3.5" />}{tx(locale, "保存", "Save")}</button>
+            <button type="button" disabled={saving || localDraft.formalPending || !dirty} onClick={() => void save()} className="inline-flex h-9 items-center gap-2 rounded-[7px] bg-primary px-4 text-xs font-semibold text-primary-foreground hover:opacity-90 disabled:opacity-45">{saving ? <Loader2 aria-hidden="true" className="h-3.5 w-3.5 animate-spin" /> : <Save aria-hidden="true" className="h-3.5 w-3.5" />}{tx(locale, "保存", "Save")}</button>
           </div>
         </div>
       ) : (
@@ -670,15 +660,18 @@ function TestCasesPanel({ fieldKey, problem, readOnly, saving, locale, onDirtyCh
   const [activeIndex, setActiveIndex] = useState(0);
   const [error, setError] = useState(false);
   const dirty = editing && JSON.stringify(cases) !== JSON.stringify(original);
-  useEffect(() => { if (!editing) setCases(original); }, [editing, original]);
+  useEffect(() => { if (!editing && !localDraft.savedAt) setCases(original); }, [editing, original]);
   useEffect(() => { onDirtyChange(fieldKey, dirty); return () => onDirtyChange(fieldKey, false); }, [dirty, fieldKey, onDirtyChange]);
+  const localDraft = useDraftProtection({ scope: `question:${useParams().taskId}:${encodeURIComponent(problem.q_id)}:tests`, value: { cases }, baseline: { cases: original }, version: JSON.stringify(original), enabled: !readOnly, busy: saving, onRestore: (restored) => { setCases(restored.cases); setEditing(true); } });
+  const leave = useDraftLeave();
   const exampleCount = original.filter((item) => (item.visibility ?? "example") === "example").length;
   const hiddenCount = original.length - exampleCount;
 
   async function save() {
+    if (localDraft.conflict) return;
     setError(false);
     try {
-      await onSave(problem, cases);
+      if (!await localDraft.runFormal(() => onSave(problem, cases), { cases })) return;
       onDirtyChange(fieldKey, false);
       setEditing(false);
     } catch {
@@ -693,7 +686,7 @@ function TestCasesPanel({ fieldKey, problem, readOnly, saving, locale, onDirtyCh
           <h4 className="text-sm font-bold text-foreground">{tx(locale, "测试样例", "Test Cases")}</h4>
           <p className="mt-1 text-xs text-muted-foreground">{tx(locale, `${exampleCount} 个公开样例 · ${hiddenCount} 个隐藏测试`, `${exampleCount} examples · ${hiddenCount} hidden tests`)}</p>
         </div>
-        {!readOnly ? <button type="button" onClick={() => { setEditing((current) => !current); setError(false); }} className="inline-flex h-8 items-center gap-1.5 rounded-[6px] border px-2.5 text-xs font-semibold hover:bg-muted">{editing ? <X aria-hidden="true" className="h-3.5 w-3.5" /> : <Pencil aria-hidden="true" className="h-3.5 w-3.5" />}{editing ? tx(locale, "取消", "Cancel") : tx(locale, "修改", "Edit")}</button> : null}
+        {!readOnly ? <button type="button" onClick={() => { if (editing) localDraft.requestLeave(() => { localDraft.discardEdits(); setEditing(false); setError(false); }); else setEditing(true); }} className="inline-flex h-8 items-center gap-1.5 rounded-[6px] border px-2.5 text-xs font-semibold hover:bg-muted">{editing ? <X aria-hidden="true" className="h-3.5 w-3.5" /> : <Pencil aria-hidden="true" className="h-3.5 w-3.5" />}{editing ? tx(locale, "取消", "Cancel") : tx(locale, "修改", "Edit")}</button> : null}
       </div>
 
       {editing ? (
@@ -715,7 +708,7 @@ function TestCasesPanel({ fieldKey, problem, readOnly, saving, locale, onDirtyCh
           <button type="button" onClick={() => setCases([...cases, emptyTestCase(cases.length + 1)])} className="inline-flex h-9 items-center gap-2 rounded-[7px] border px-3 text-xs font-semibold hover:bg-muted"><Plus aria-hidden="true" className="h-3.5 w-3.5" />{tx(locale, "添加测试样例", "Add Test Case")}</button>
           <div className="flex items-center justify-between gap-3 border-t pt-3">
             <p className={cn("text-xs", error ? "text-danger" : "text-muted-foreground")}>{error ? tx(locale, "保存失败，请重试。", "Save failed. Try again.") : tx(locale, "隐藏测试只对教师可见。", "Hidden tests are visible only to teachers.")}</p>
-            <button type="button" disabled={saving || !dirty} onClick={() => void save()} className="inline-flex h-9 items-center gap-2 rounded-[7px] bg-primary px-4 text-xs font-semibold text-primary-foreground disabled:opacity-45">{saving ? <Loader2 aria-hidden="true" className="h-3.5 w-3.5 animate-spin" /> : <Save aria-hidden="true" className="h-3.5 w-3.5" />}{tx(locale, "保存测试样例", "Save Test Cases")}</button>
+            <button type="button" disabled={saving || localDraft.formalPending || !dirty} onClick={() => void save()} className="inline-flex h-9 items-center gap-2 rounded-[7px] bg-primary px-4 text-xs font-semibold text-primary-foreground disabled:opacity-45">{saving ? <Loader2 aria-hidden="true" className="h-3.5 w-3.5 animate-spin" /> : <Save aria-hidden="true" className="h-3.5 w-3.5" />}{tx(locale, "保存测试样例", "Save Test Cases")}</button>
           </div>
         </div>
       ) : original.length ? (
@@ -756,7 +749,7 @@ function CodeBlock({ label, value }: { label: string; value: string }) {
 }
 
 function CaseTextarea({ label, value, rows = 4, onChange }: { label: string; value: string; rows?: number; onChange: (value: string) => void }) {
-  return <label className="grid gap-1.5 text-xs font-semibold text-muted-foreground">{label}<textarea value={value} rows={rows} onChange={(event) => onChange(event.target.value)} className="w-full resize-y rounded-[6px] border bg-card px-3 py-2 font-mono text-xs leading-5 text-foreground outline-none focus:border-primary" /></label>;
+  return <label className="grid gap-1.5 text-xs font-semibold text-muted-foreground">{label}<textarea aria-label={label} value={value} rows={rows} onChange={(event) => onChange(event.target.value)} className="w-full resize-y rounded-[6px] border bg-card px-3 py-2 font-mono text-xs leading-5 text-foreground outline-none focus:border-primary" /></label>;
 }
 
 function QuestionNavigator({ previous, next, locale, onNavigate, compact = false }: { previous: ProblemInfo | null; next: ProblemInfo | null; locale: string; onNavigate: (qId: string) => void; compact?: boolean }) {
