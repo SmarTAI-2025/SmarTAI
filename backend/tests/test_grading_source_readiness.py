@@ -31,8 +31,9 @@ def _seed_source_case(second_status: str | None):
     )
     from backend.db.file_repository import save_file
     from backend.db.models import UserRecord
+    from backend.db.provider_repository import upsert_provider_config
     from backend.db.session import session_scope
-    from backend.models import TaskGradingSetup
+    from backend.models import ProviderConfig, TaskGradingSetup
     from backend.services import task_facade
     from backend.storage import get_storage
 
@@ -174,9 +175,14 @@ def _seed_source_case(second_status: str | None):
             expected_attempt=operation.attempt,
             status="running",
         )
+    provider = upsert_provider_config(
+        owner_id,
+        ProviderConfig(provider_type="openai", api_key="test-provider-secret", model="gpt-test", base_url="https://api.openai.com/v1"),
+        master_key="test-suite-provider-master-key-0123456789abcdef",
+    )
     setup = TaskGradingSetup(
-        selected_provider_ids=["provider"],
-        primary_provider_id="provider",
+        selected_provider_ids=[provider.id],
+        primary_provider_id=provider.id,
         knowledge_scope="none",
     )
     workflow = workflow_repository.update_workflow(
@@ -197,6 +203,7 @@ def _seed_legacy_structured_case(
     *,
     with_answers: bool = True,
     identity_status: str = "matched",
+    recognition_needs_review: bool = False,
 ):
     from backend.db import (
         assignment_repository,
@@ -243,6 +250,8 @@ def _seed_legacy_structured_case(
         owner_id=owner_id,
     )
     student = _student("", "S001", identity_status=identity_status)
+    if recognition_needs_review:
+        student["stu_ans"][0]["flag"] = ["recognition_needs_review"]
     if not with_answers:
         student["stu_ans"] = []
     task_facade._commit_imported_submissions(
@@ -289,7 +298,6 @@ def _seed_legacy_structured_case(
     [
         ("parse_failed", "submission_sources_failed"),
         ("pending", "submission_sources_pending"),
-        ("identity_conflict", "submission_identities_unresolved"),
     ],
 )
 def test_grading_source_blockers_fail_closed_without_creating_run(
@@ -306,8 +314,6 @@ def test_grading_source_blockers_fail_closed_without_creating_run(
     )
 
     assert blocker in readiness["blocking_issues"]
-    if second_status == "identity_conflict":
-        assert "submission_source_evidence_missing" not in readiness["blocking_issues"]
     with pytest.raises(InvalidTransition) as exc:
         task_facade.start_task_grading(
             task_id=seeded["assignment_id"],
@@ -319,6 +325,55 @@ def test_grading_source_blockers_fail_closed_without_creating_run(
         seeded["assignment_id"],
         actor_id=seeded["owner_id"],
     ) == []
+
+
+def test_source_backed_identity_review_is_advisory_and_not_implicitly_confirmed():
+    from backend.services import task_facade
+    from backend.db import workflow_repository
+
+    seeded = _seed_source_case("identity_conflict")
+    args = {"task_id": seeded["assignment_id"], "owner_id": seeded["owner_id"]}
+    readiness = task_facade.grading_readiness(**args)
+    before = task_facade.get_task(**args, full=True)
+    assert readiness == {"ready": True, "blocking_issues": [], "warnings": ["submission_identities_unresolved"]}
+
+    started = task_facade.start_task_grading(**args, expected_workflow_revision=seeded["workflow"].workflow_revision)
+
+    assert started["status"] == "started"
+    after = task_facade.get_task(**args, full=True)
+    assert after["student_data"] == before["student_data"]
+    assert after["submission_sources"] == before["submission_sources"]
+    frozen = workflow_repository.get_run_setup(started["job_id"])
+    assert len(frozen.input_manifest["submission_revision_ids"]) == 2
+    assert sorted(item["identity_status"] for item in frozen.input_manifest["student_presentations"]) == ["matched", "needs_review"]
+
+
+def test_grade_endpoint_accepts_uncertain_answers_and_preserves_pending_review():
+    from fastapi.testclient import TestClient
+    from backend.auth import create_token
+    from backend.main import app
+    from backend.services import task_facade
+
+    seeded = _seed_legacy_structured_case(recognition_needs_review=True)
+    args = {"task_id": seeded["assignment_id"], "owner_id": seeded["owner_id"]}
+    before = task_facade.get_task(**args, full=True)
+    readiness = task_facade.grading_readiness(**args)
+    assert readiness == {"ready": True, "blocking_issues": [], "warnings": ["submission_recognition_needs_review"]}
+
+    response = TestClient(app).post(
+        f"/tasks/{seeded['assignment_id']}/grade",
+        headers={"Authorization": f"Bearer {create_token(seeded['owner_id'], 'teacher')}"},
+        json={"expected_workflow_revision": seeded["workflow"].workflow_revision},
+    )
+    assert response.status_code == 200
+    assert response.json()["status"] == "started"
+    after = task_facade.get_task(**args, full=True)
+    assert after["student_data"] == before["student_data"]
+    assert after["problem_data"] == before["problem_data"]
+    assert after["problem_data"]["q1"]["review_status"] == "needs_review"
+    answer = next(iter(after["student_data"].values()))["stu_ans"][0]
+    assert answer["review_status"] == "pending"
+    assert answer["flag"] == ["recognition_needs_review"]
 
 
 def test_stale_preflight_revision_cannot_create_grading_run():

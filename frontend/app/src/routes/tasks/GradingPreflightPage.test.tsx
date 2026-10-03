@@ -1,4 +1,4 @@
-import { act, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { GradingPreflightPage } from "./GradingPreflightPage";
@@ -27,6 +27,7 @@ const mutateAsync = vi.fn();
 describe("GradingPreflightPage regrade mode", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mutateAsync.mockResolvedValue({ status: "started" });
     (useTask as unknown as ReturnType<typeof vi.fn>).mockReturnValue({
       data: {
         task_id: "task-1",
@@ -40,6 +41,7 @@ describe("GradingPreflightPage regrade mode", () => {
             type: "short answer",
             criterion: "Award one point for the correct answer.",
             reference_answer: "42",
+            review_status: "confirmed",
           },
         },
         student_data: {
@@ -123,6 +125,38 @@ describe("GradingPreflightPage regrade mode", () => {
     vi.useRealTimers();
   });
 
+  it("opens the identity editor when only the student's identity needs review", () => {
+    const task = (useTask as unknown as () => any)();
+    task.data.student_data.student1.identity_status = "needs_review";
+    render(<MemoryRouter initialEntries={["/tasks/task-1/grading/preflight"]}>
+      <Routes><Route path="/tasks/:taskId/grading/preflight" element={<GradingPreflightPage />} /></Routes>
+    </MemoryRouter>);
+    expect(screen.getByRole("link", { name: "Review student identity" })).toHaveAttribute("href", "/tasks/task-1/students/student1?identity=edit");
+    expect(screen.getByRole("link", { name: "Review submissions" })).toHaveAttribute("href", "/tasks/task-1/submissions");
+  });
+
+  it("opens an unconfirmed answer directly even when it has no recognition flag", () => {
+    const task = (useTask as unknown as () => any)();
+    task.data.student_data.student1.stu_id = "student / 1";
+    task.data.student_data.student1.stu_ans[0] = { q_id: "q 1/2", content: "42", review_status: "pending", flag: [] };
+    render(<MemoryRouter initialEntries={["/tasks/task-1/grading/preflight"]}>
+      <Routes><Route path="/tasks/:taskId/grading/preflight" element={<GradingPreflightPage />} /></Routes>
+    </MemoryRouter>);
+    expect(screen.getByRole("link", { name: "Review submissions" })).toHaveAttribute("href", "/tasks/task-1/students/student%20%2F%201?question=q+1%2F2");
+    expect(screen.getByRole("button", { name: "Start Grading Anyway" })).toBeEnabled();
+  });
+
+  it("keeps identity and answer review destinations separate when both need attention", () => {
+    const task = (useTask as unknown as () => any)();
+    task.data.student_data.student1.identity_status = "needs_review";
+    task.data.student_data.student1.stu_ans[0].review_status = "pending";
+    render(<MemoryRouter initialEntries={["/tasks/task-1/grading/preflight"]}>
+      <Routes><Route path="/tasks/:taskId/grading/preflight" element={<GradingPreflightPage />} /></Routes>
+    </MemoryRouter>);
+    expect(screen.getByRole("link", { name: "Review student identity" })).toHaveAttribute("href", "/tasks/task-1/students/student1?identity=edit");
+    expect(screen.getByRole("link", { name: "Review submissions" })).toHaveAttribute("href", "/tasks/task-1/students/student1?question=q1");
+  });
+
   it("treats a completed task as a startable regrade after setup is saved", () => {
     render(
       <MemoryRouter initialEntries={["/tasks/task-1/grading/preflight"]}>
@@ -137,7 +171,7 @@ describe("GradingPreflightPage regrade mode", () => {
     expect(screen.queryByText("Historical configuration")).not.toBeInTheDocument();
   });
 
-  it("disables grading and never starts the countdown when a source blocker exists", () => {
+  it("explains a source blocker in a dialog with a direct repair action instead of a disabled button", () => {
     vi.useFakeTimers();
     (useGradingSetup as unknown as ReturnType<typeof vi.fn>).mockReturnValue({
       data: {
@@ -196,11 +230,12 @@ describe("GradingPreflightPage regrade mode", () => {
       <MemoryRouter initialEntries={["/tasks/task-1/grading/preflight"]}>
         <Routes>
           <Route path="/tasks/:taskId/grading/preflight" element={<GradingPreflightPage />} />
+          <Route path="/tasks/:taskId/submissions/upload" element={<div>Fix submission uploads</div>} />
         </Routes>
       </MemoryRouter>,
     );
 
-    expect(screen.getByRole("button", { name: "Start Regrading Now" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Start Regrading Now" })).toBeEnabled();
     expect(screen.getByText("Some files failed recognition. Review the exact reasons above and resolve them before grading.")).toBeInTheDocument();
     expect(screen.queryByText(/seconds until automatic start/)).not.toBeInTheDocument();
 
@@ -208,6 +243,11 @@ describe("GradingPreflightPage regrade mode", () => {
       vi.advanceTimersByTime(12_000);
     });
     expect(mutateAsync).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "Start Regrading Now" }));
+    const dialog = screen.getByRole("alertdialog");
+    expect(dialog).toHaveTextContent("Some files failed recognition");
+    fireEvent.click(within(dialog).getByRole("button", { name: "Fix submission files" }));
+    expect(screen.getByText("Fix submission uploads")).toBeInTheDocument();
   });
 
   it("blocks Baidu OCR grading with an explicit choose-model message", () => {
@@ -232,10 +272,41 @@ describe("GradingPreflightPage regrade mode", () => {
       </MemoryRouter>,
     );
 
-    expect(screen.getByRole("button", { name: "Start Regrading Now" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Start Regrading Now" })).toBeEnabled();
     expect(screen.getByText(
       "This OCR service does not support grading. Choose a grading model.",
     )).toBeInTheDocument();
     expect(mutateAsync).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "Start Regrading Now" }));
+    expect(screen.getByRole("alertdialog")).toHaveTextContent("Choose a grading model");
+    expect(within(screen.getByRole("alertdialog")).getByRole("button", { name: "Fix grading settings" })).toBeInTheDocument();
+  });
+
+  it("pauses automatic grading for review warnings but starts with one explicit click", async () => {
+    vi.useFakeTimers();
+    const task = (useTask as unknown as () => any)();
+    task.data.problem_data.q1.review_status = "needs_review";
+    task.data.student_data.student1.identity_status = "needs_review";
+    task.data.student_data.student1.stu_ans[0].review_status = "pending";
+    task.data.student_data.student1.stu_ans[0].flag = ["recognition_needs_review"];
+    const setup = (useGradingSetup as unknown as () => any)();
+    setup.data.readiness.warnings = ["submission_identities_unresolved", "submission_recognition_needs_review"];
+    render(
+      <MemoryRouter initialEntries={["/tasks/task-1/grading/preflight"]}>
+        <Routes>
+          <Route path="/tasks/:taskId/grading/preflight" element={<GradingPreflightPage />} />
+          <Route path="/tasks/:taskId/grading/progress" element={<div>Grading started</div>} />
+        </Routes>
+      </MemoryRouter>,
+    );
+    expect(screen.getByText(/You can grade now and keep their review flags/)).toBeInTheDocument();
+    expect(screen.getByText(/1 question still needs review/)).toBeInTheDocument();
+    act(() => { vi.advanceTimersByTime(12_000); });
+    expect(mutateAsync).not.toHaveBeenCalled();
+    await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Start Grading Anyway" })); });
+    expect(mutateAsync).toHaveBeenCalledExactlyOnceWith({ taskId: "task-1", expectedWorkflowRevision: 8 });
+    expect(screen.getByText("Grading started")).toBeInTheDocument();
+    expect(task.data.student_data.student1.stu_ans[0].review_status).toBe("pending");
+    expect(task.data.student_data.student1.identity_status).toBe("needs_review");
   });
 });
