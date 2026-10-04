@@ -1,3 +1,6 @@
+import { questionIssueNeedsReview, questionReviewConfirmed } from "@/lib/reviewConfirmation";
+import { MatrixViewLink } from "@/components/tasks/MatrixViewLink";
+import { MatrixQueueWorkspace } from "@/components/tasks/MatrixQueueWorkspace";
 import { ReviewConfirmButton, ReviewBlockDialog, reviewActionClass } from "@/components/tasks/ReviewConfirmation";
 import { groundedRows, hasGroundedOrder } from "@/lib/groundedAsk";
 import { SortButton as HeaderSortButton, SortableTableHead, useColumnSort, sortColumnRows, directionFor, type ColumnSort } from "@/components/ui/SortableTableHead";
@@ -57,7 +60,7 @@ export function QuestionPreparationOverviewPage() {
   const allRisks = useMemo(() => collectRiskRows(problems), [problems]);
   const allRows = useMemo<QuestionMatrixRow[]>(() => problems.map((problem) => ({
     problem,
-    issues: (problem.preparation_issues ?? []).filter((issue) => issue.status === "open"),
+    issues: (problem.preparation_issues ?? []).filter(questionIssueNeedsReview),
   })), [problems]);
   const rows = useMemo(() => {
     const selected = new Set(selectPreparationQuestions(problems, smartFilter.intent).map((problem) => problem.q_id));
@@ -110,7 +113,7 @@ export function QuestionPreparationOverviewPage() {
           <Link to={`/tasks/${taskId}/questions/${encodeURIComponent(failure.problem.q_id)}/content#question-${encodeURIComponent(failure.problem.q_id)}`} className="mt-2 font-semibold text-primary">{tx(locale, "前往该题", "Go to question")}</Link>
         </div> : null}
 
-        <div className="mt-4 overflow-hidden rounded-[10px] border bg-card">
+        <MatrixQueueWorkspace className="mt-4" queue={<QuestionReviewQueue risks={rows.flatMap(({ problem, issues }) => issues.map(issue => ({ problem, issue })))} taskId={taskId ?? ""} locale={locale} />} matrix={<div className="overflow-hidden rounded-[10px] border bg-card">
           {taskQuery.isLoading || readingCompletion ? (
             <div className="min-h-[300px] animate-pulse bg-muted/20" aria-busy="true" />
           ) : taskQuery.isError ? (
@@ -128,17 +131,18 @@ export function QuestionPreparationOverviewPage() {
               onSort={toggleSort}
             />
           ) : <MatrixEmpty filtered={Boolean(query)} locale={locale} />}
+        </div>} />
           <footer className="flex min-h-[58px] flex-col gap-2 border-t px-4 py-2.5 sm:flex-row sm:items-center sm:justify-between xl:px-5">
             <p className="text-xs text-muted-foreground">{locale === "zh-CN"
               ? `显示 ${rows.length} / ${problems.length} 道题 · 作业总分 ${formatScore(totalMaxScore)} · ${allRisks.length} 个开放风险`
               : `Showing ${rows.length} of ${problems.length} ${problems.length === 1 ? "question" : "questions"} · ${formatScore(totalMaxScore)} total points · ${allRisks.length} open ${allRisks.length === 1 ? "risk" : "risks"}`}</p>
             {taskId && firstQuestionId ? (
               <div className="flex flex-wrap items-center gap-2">
-              <button type="button" disabled={confirming || updateProblem.isPending || rows.every(row => row.problem.review_status === "confirmed")} onClick={async () => {
+              <button type="button" disabled={confirming || updateProblem.isPending || rows.every(row => questionReviewConfirmed(row.problem))} onClick={async () => {
                 if (await confirm(rows.map((row) => row.problem))) toast.success(tx(locale, "题目资料已确认。", "Question materials confirmed."));
-              }} className={cn(reviewActionClass, rows.every(row => row.problem.review_status === "confirmed") ? "bg-emerald-100 text-emerald-800 disabled:opacity-100" : "border-amber-200 bg-amber-100 text-amber-800")}>
+              }} className={cn(reviewActionClass, rows.every(row => questionReviewConfirmed(row.problem)) ? "bg-emerald-100 text-emerald-800 disabled:opacity-100" : "border-emerald-200 bg-emerald-50 text-emerald-800")}>
                 <CheckCircle2 aria-hidden="true" className="h-4 w-4" />
-                {rows.every(row => row.problem.review_status === "confirmed") ? tx(locale, "已确认", "Confirmed") : rows.length === problems.length ? tx(locale, "全部确认", "Confirm all") : tx(locale, `确认筛选项（${rows.length}）`, `Confirm shown (${rows.length})`)}
+                {rows.every(row => questionReviewConfirmed(row.problem)) ? tx(locale, "已确认", "Confirmed") : rows.length === problems.length ? tx(locale, "全部确认", "Confirm all") : tx(locale, `确认筛选项（${rows.length}）`, `Confirm shown (${rows.length})`)}
               </button>
               <Link to={`/tasks/${taskId}/questions/${encodeURIComponent(firstQuestionId)}/content`} className={reviewActionClass}>
                 {tx(locale, "进入完整审核", "Open Full Review")}
@@ -152,10 +156,20 @@ export function QuestionPreparationOverviewPage() {
               </div>
             ) : null}
           </footer>
-        </div>
       </section>
     </div>
   );
+}
+
+function QuestionReviewQueue({ risks, taskId, locale }: { risks: OpenRiskRow[]; taskId: string; locale: string }) {
+  return <section className="h-[330px] overflow-hidden rounded-[10px] border bg-card px-4 py-5" aria-labelledby="question-review-queue-title">
+    <h2 id="question-review-queue-title" className="text-[16px] font-bold leading-6">{tx(locale, "待复核队列", "Review queue")}</h2>
+    {risks.length ? <ol className="mt-3 h-[250px] space-y-1 overflow-y-auto overscroll-contain pr-1">
+      {risks.map(({ problem, issue }) => <li key={`${problem.q_id}:${issue.issue_id}`}><Link className="flex min-h-[54px] items-center gap-2 rounded-lg px-2 py-1.5 text-xs hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring" to={`/tasks/${taskId}/questions/${encodeURIComponent(problem.q_id)}/content#question-${encodeURIComponent(problem.q_id)}`}>
+        <span className="min-w-0 flex-1"><span className="block font-semibold">{problem.number || problem.q_id}</span><span className="mt-0.5 block text-muted-foreground">{issueCodeLabel(issue.code, locale)}</span></span><ChevronRight aria-hidden="true" className="h-4 w-4 shrink-0" />
+      </Link></li>)}
+    </ol> : <div className="flex h-[248px] flex-col items-center justify-center text-center"><CheckCircle2 aria-hidden="true" className="h-7 w-7 text-teal-500" /><p className="mt-3 max-w-[220px] text-xs leading-5 text-muted-foreground">{tx(locale, "当前没有需要复核的题目。", "No questions currently need review.")}</p></div>}
+  </section>;
 }
 
 function QuestionMatrix({ rows, taskId, locale, sortKey, sortDirection, onSort }: {
@@ -167,22 +181,22 @@ function QuestionMatrix({ rows, taskId, locale, sortKey, sortDirection, onSort }
   onSort: (key: MatrixSortKey) => void;
 }) {
   return (
-    <div className="max-h-[calc(100vh-520px)] min-h-[280px] overflow-auto overscroll-contain">
-      <table className="w-full min-w-[1160px] border-collapse text-left text-[13px]">
+    <div className="h-[330px] overflow-auto overscroll-contain">
+      <table className="w-full min-w-[860px] border-collapse text-left text-[13px]">
         <thead className="sticky top-0 z-10 bg-muted/95 text-[12px] font-semibold text-muted-foreground backdrop-blur-sm">
           <tr className="border-b">
-            <SortableHeading className="w-[88px] px-5" label={tx(locale, "题号", "No.")} sortKey="number" activeKey={sortKey} direction={sortDirection} locale={locale} onSort={onSort} />
-            <th className="relative w-[140px] px-3 py-3" aria-sort={sortKey === "type" ? sortDirection === "asc" ? "ascending" : "descending" : "none"}>
+            <SortableHeading className="w-[68px] px-3" label={tx(locale, "题号", "No.")} sortKey="number" activeKey={sortKey} direction={sortDirection} locale={locale} onSort={onSort} />
+            <th className="relative w-[100px] px-3 py-3" aria-sort={sortKey === "type" ? sortDirection === "asc" ? "ascending" : "descending" : "none"}>
               <div className="flex items-center gap-1">
                 <SortButton label={tx(locale, "题型", "Type")} sortKey="type" activeKey={sortKey} direction={sortDirection} locale={locale} onSort={onSort} />
               </div>
             </th>
-            <SortableHeading className="w-[105px] px-3" label={tx(locale, "满分", "Max Score")} sortKey="max_score" activeKey={sortKey} direction={sortDirection} locale={locale} onSort={onSort} />
-            <SortableHeading className="w-[145px] px-3" label={tx(locale, "题目", "Question")} sortKey="stem" activeKey={sortKey} direction={sortDirection} locale={locale} onSort={onSort} />
-            <SortableHeading className="w-[145px] px-3" label={tx(locale, "标答", "Reference Answer")} sortKey="answer" activeKey={sortKey} direction={sortDirection} locale={locale} onSort={onSort} />
-            <SortableHeading className="w-[145px] px-3" label={tx(locale, "评分标准", "Rubric")} sortKey="rubric" activeKey={sortKey} direction={sortDirection} locale={locale} onSort={onSort} />
-            <SortableHeading className="w-[145px] px-3" label={tx(locale, "测试样例", "Tests")} sortKey="tests" activeKey={sortKey} direction={sortDirection} locale={locale} onSort={onSort} />
-            <SortableHeading className="w-[145px] px-3" label={tx(locale, "审核提示", "Attention")} sortKey="attention" activeKey={sortKey} direction={sortDirection} locale={locale} onSort={onSort} />
+            <SortableHeading className="w-[85px] px-3" label={tx(locale, "满分", "Max Score")} sortKey="max_score" activeKey={sortKey} direction={sortDirection} locale={locale} onSort={onSort} />
+            <SortableHeading className="w-[110px] px-3" label={tx(locale, "题目", "Question")} sortKey="stem" activeKey={sortKey} direction={sortDirection} locale={locale} onSort={onSort} />
+            <SortableHeading className="w-[110px] px-3" label={tx(locale, "标答", "Reference Answer")} sortKey="answer" activeKey={sortKey} direction={sortDirection} locale={locale} onSort={onSort} />
+            <SortableHeading className="w-[110px] px-3" label={tx(locale, "评分标准", "Rubric")} sortKey="rubric" activeKey={sortKey} direction={sortDirection} locale={locale} onSort={onSort} />
+            <SortableHeading className="w-[110px] px-3" label={tx(locale, "测试样例", "Tests")} sortKey="tests" activeKey={sortKey} direction={sortDirection} locale={locale} onSort={onSort} />
+            <SortableHeading className="w-[110px] px-3" label={tx(locale, "审核提示", "Attention")} sortKey="attention" activeKey={sortKey} direction={sortDirection} locale={locale} onSort={onSort} />
             <th className="w-[100px] px-5 py-3 text-right">{tx(locale, "操作", "Action")}</th>
           </tr>
         </thead>
@@ -198,7 +212,7 @@ function QuestionMatrix({ rows, taskId, locale, sortKey, sortDirection, onSort }
               <td className="px-3 py-3"><MaterialStatus problem={problem} field="tests" locale={locale} /></td>
               <td className="px-3 py-3"><AttentionStatus issues={issues} locale={locale} /></td>
               <td className="px-5 py-3 text-right"><div className="flex flex-col items-end gap-2">
-                <Link to={`/tasks/${taskId}/questions/${encodeURIComponent(problem.q_id)}/content#question-${encodeURIComponent(problem.q_id)}`} className="text-xs font-semibold text-primary underline underline-offset-4">{tx(locale, "详情 →", "Details →")}</Link>
+                <MatrixViewLink to={`/tasks/${taskId}/questions/${encodeURIComponent(problem.q_id)}/content#question-${encodeURIComponent(problem.q_id)}`} locale={locale} />
               </div></td>
             </tr>
           ))}
@@ -220,7 +234,7 @@ function RiskMetric({ label, value, tone }: { label: string; value: number; tone
   return (
     <div className="flex min-h-[112px] flex-col justify-center rounded-[10px] border bg-card px-5 py-4 sm:px-6">
       <dt className="order-2 mt-2 text-sm font-medium text-muted-foreground">{label}</dt>
-      <dd className={cn("order-1 text-[30px] font-bold leading-9 tracking-[-0.02em]", tone === "primary" && "text-primary", tone === "warning" && "text-amber-600", tone === "danger" && "text-red-600", tone === "accent" && "text-teal-600")}>{value}</dd>
+      <dd className={cn("order-1 text-[30px] font-bold leading-9 tracking-[-0.02em]", tone === "primary" && "text-primary", tone === "warning" && "text-red-600", tone === "danger" && "text-red-600", tone === "accent" && "text-teal-600")}>{value}</dd>
     </div>
   );
 }
@@ -259,8 +273,8 @@ function MaxScoreStatus({ problem, locale }: { problem: ProblemInfo; locale: str
       title={needsReview ? sourceLabel : tx(locale, "满分已确认", "Maximum score confirmed")}
       className={cn(
         "inline-flex min-w-[68px] items-center justify-center rounded-full px-2.5 py-1 text-xs font-semibold",
-        needsReview
-          ? "bg-amber-100 text-amber-700 dark:bg-amber-950/35 dark:text-amber-300"
+        (problem.preparation_issues ?? []).some(issue => issue.field === "max_score" && questionIssueNeedsReview(issue))
+          ? "bg-red-100 text-red-700"
           : "bg-emerald-100 text-emerald-700 dark:bg-emerald-950/35",
       )}
     >
@@ -273,8 +287,7 @@ function AttentionStatus({ issues, locale }: { issues: PreparationIssue[]; local
   if (!issues.length) {
     return <span className="inline-flex min-w-[88px] items-center justify-center gap-1 rounded-full bg-emerald-100 px-3 py-1 text-xs font-semibold text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-300"><CheckCircle2 aria-hidden="true" className="h-3.5 w-3.5" />{tx(locale, "状态正常", "Ready")}</span>;
   }
-  const blocking = issues.some((issue) => issue.severity === "blocking");
-  return <span tabIndex={0} title={issues.map((issue) => issueCodeLabel(issue.code, locale)).join("；")} className={cn("inline-flex min-w-[88px] items-center justify-center rounded-full px-3 py-1 text-xs font-semibold", blocking ? "bg-red-100 text-red-700" : "bg-amber-100 text-amber-700")}>{tx(locale, `${issues.length} 项待确认`, `${issues.length} to confirm`)}</span>;
+  return <span tabIndex={0} title={issues.map((issue) => issueCodeLabel(issue.code, locale)).join("；")} className={cn("inline-flex min-w-[88px] items-center justify-center rounded-full px-3 py-1 text-xs font-semibold", "bg-red-100 text-red-700")}>{tx(locale, `${issues.length} 项待复核`, `${issues.length} to review`)}</span>;
 }
 
 function MatrixEmpty({ filtered, locale }: { filtered: boolean; locale: string }) {
@@ -288,13 +301,13 @@ function MatrixEmpty({ filtered, locale }: { filtered: boolean; locale: string }
 
 function getMaterialStatus(problem: ProblemInfo, field: MaterialField, locale: string): { label: string; detail: string; tone: "success" | "warning" | "danger" | "neutral" } {
   const issueField = field === "tests" ? "programming_tests" : field;
-  const issues = (problem.preparation_issues ?? []).filter((issue) => issue.status === "open" && (issue.field === issueField || (field === "stem" && issue.field === "source")));
+  const issues = (problem.preparation_issues ?? []).filter((issue) => questionIssueNeedsReview(issue) && (issue.field === issueField || (field === "stem" && issue.field === "source")));
   if (issues.length) {
     const blocking = issues.some((issue) => issue.severity === "blocking");
     return {
-      label: blocking ? tx(locale, "需处理", "Action needed") : tx(locale, "待确认", "Pending confirmation"),
+      label: blocking ? tx(locale, "需处理", "Action needed") : tx(locale, "待复核", "Needs review"),
       detail: issues.map((issue) => issueCodeLabel(issue.code, locale)).join("；"),
-      tone: blocking ? "danger" : "warning",
+      tone: "danger",
     };
   }
 
@@ -323,7 +336,7 @@ function getMaterialStatus(problem: ProblemInfo, field: MaterialField, locale: s
 
 function collectRiskRows(problems: ProblemInfo[]): OpenRiskRow[] {
   return problems.flatMap((problem) => (problem.preparation_issues ?? [])
-    .filter((issue) => issue.status === "open")
+    .filter(questionIssueNeedsReview)
     .map((issue) => ({ problem, issue })));
 }
 

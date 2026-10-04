@@ -1,3 +1,4 @@
+import { isCorrectionReviewConfirmed } from "@/components/tasks/resultsReviewModel";
 import { ReviewConfirmButton, RetryFailedGrading } from "@/components/tasks/ReviewConfirmation";
 import { SortableTableHead, useColumnSort, sortColumnRows, directionFor, type ColumnSort } from "@/components/ui/SortableTableHead";
 import { AlertTriangle, ArrowRight, CheckCircle2, ChevronRight, LoaderCircle, Search } from "lucide-react";
@@ -12,6 +13,7 @@ import { TaskQueryBar } from "@/components/tasks/AskQueryBar";
 import { useTaskFilterIntent } from "@/hooks/useTaskFilterIntent";
 import { EMPTY_FILTER_INTENT, supportsFilterIntent } from "@/lib/taskFilterIntent";
 import { NewTaskStepper } from "@/components/new-task/NewTaskStepper";
+import { MatrixViewLink } from "@/components/tasks/MatrixViewLink";
 import { MatrixQueueWorkspace } from "@/components/tasks/MatrixQueueWorkspace";
 import { MatrixStatusCell, type MatrixStatusTone } from "@/components/tasks/MatrixStatusCell";
 import { getMatrixIdentityLayout, MATRIX_ACTION_COLUMN_WIDTH, MATRIX_QUESTION_COLUMN_WIDTH } from "@/components/tasks/matrixLayout";
@@ -44,7 +46,7 @@ export function ReviewOverviewPage() {
   const query = urlQuery.trim();
   const task = taskQuery.data;
   const model = useMemo(() => buildResultsModel(task, resultQuery.data), [resultQuery.data, task]);
-  const reviewItems = useMemo(() => collectResultReviewItems(model, model.students), [model]);
+  const reviewItems = useMemo(() => collectResultReviewItems(model, model.students).filter(item => !isCorrectionReviewConfirmed(item.correction)), [model]);
   const annotatedKeys = useMemo(() => {
     const keys = new Set(Object.entries(commentsQuery.data?.comments ?? {}).filter(([, comment]) => comment.trim()).map(([key]) => key));
     for (const student of model.students) {
@@ -105,7 +107,7 @@ export function ReviewOverviewPage() {
     ? reviewDetailHref(taskId, firstTarget.student.id, firstTarget.question.id, overviewReturnTo)
     : null;
   const disagreementCount = model.students.reduce(
-    (total, student) => total + student.corrections.filter(isExpertDisagreement).length,
+    (total, student) => total + student.corrections.filter(correction => !isCorrectionReviewConfirmed(correction) && isExpertDisagreement(correction)).length,
     0,
   );
   const remainingReviewCount = finalizationQuery.data?.remaining_review_count ?? blockingReviewItems.length;
@@ -203,7 +205,7 @@ export function ReviewOverviewPage() {
           ) : null}
           <div className="mt-5 grid grid-cols-2 gap-4 xl:grid-cols-4 xl:gap-5">
             <MetricCard value={formatMetricPercent(model.classAveragePercent)} label={copy(locale, "average")} tone="primary" />
-            <MetricCard value={String(model.lowConfidenceCount)} label={copy(locale, "lowConfidence")} tone="warning" />
+            <MetricCard value={String(pendingReviewItems.filter(item => item.correction.confidence < 0.65).length)} label={copy(locale, "lowConfidence")} tone="warning" />
             <MetricCard value={String(disagreementCount)} label={copy(locale, "disagreement")} tone="primary" />
             <MetricCard value={`${confirmedKeys.size}/${model.students.reduce((total, student) => total + student.corrections.length, 0)}`} label={copy(locale, "annotated")} tone="accent" />
           </div>
@@ -341,7 +343,7 @@ function MetricCard({ value, label, tone }: { value: string; label: string; tone
       <strong className={cn(
         "text-[28px] font-bold leading-8 tracking-[-0.02em]",
         tone === "primary" && "text-primary",
-        tone === "warning" && "text-amber-500",
+        tone === "warning" && "text-red-500",
         tone === "accent" && "text-teal-500",
       )}>{value}</strong>
       <span className="mt-2 text-[13px] font-medium text-muted-foreground">{label}</span>
@@ -473,12 +475,7 @@ function ReviewHeatmap({
                     })}
                     <td className="w-[72px] px-3 text-right">
                       {entryHref ? (
-                        <Link
-                          to={entryHref}
-                          className="text-xs font-semibold text-primary outline-none hover:underline focus-visible:rounded focus-visible:ring-2 focus-visible:ring-ring"
-                        >
-                          {copy(locale, "view")}
-                        </Link>
+                        <MatrixViewLink to={entryHref} locale={locale} />
                       ) : null}
                     </td>
                   </tr>
@@ -494,8 +491,8 @@ function ReviewHeatmap({
 
 function ReviewCell({ locale, href, correction, item, annotated, confirmed, question }: { locale: Locale; href: string; correction: Correction; item?: ReviewItem; annotated: boolean; confirmed: boolean; question?: QuestionSummary }) {
   const source = correctionScoreSource(correction);
-  const state = source === "hard_failure" ? "hard" : confirmed ? "confirmed" : "review";
-  const label = locale === "zh-CN" ? (state === "hard" ? "需处理 · 缺少有效分数" : state === "confirmed" ? "已确认" : "待确认") : (state === "hard" ? "Action required · missing valid score" : state === "confirmed" ? "Confirmed" : "Pending confirmation");
+  const state = source === "hard_failure" ? "hard" : confirmed ? "confirmed" : item ? "review" : "ready";
+  const label = locale === "zh-CN" ? (state === "hard" ? "需处理 · 缺少有效分数" : state === "confirmed" ? "已确认" : state === "review" ? "待复核" : "已批改") : (state === "hard" ? "Action required · missing valid score" : state === "confirmed" ? "Confirmed" : state === "review" ? "Needs review" : "Graded");
   const displayScore = displayableCorrectionScore(correction);
   const masked = shouldHideAutomatedScores(correction);
   const scoreDetail = displayScore !== null && correction.max_score > 0
@@ -504,7 +501,7 @@ function ReviewCell({ locale, href, correction, item, annotated, confirmed, ques
   const detail = masked
     ? `${question?.label ?? correction.q_id} · ${item ? queueReason(locale, item) : copy(locale, "reviewReason")}`
     : `${question?.label ?? correction.q_id} · ${scoreDetail}${formatConfidence(correction.confidence)}`;
-  const tone: MatrixStatusTone = state === "hard" ? "error" : state === "confirmed" ? "reviewed" : "warning";
+  const tone: MatrixStatusTone = state === "hard" ? "error" : state === "confirmed" ? "reviewed" : state === "review" ? "error" : "ok";
   return <MatrixStatusCell to={href} label={`${label} · ${detail}`} tone={tone} />;
 }
 

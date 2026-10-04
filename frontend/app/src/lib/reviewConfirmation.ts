@@ -1,4 +1,14 @@
-import type { ProblemInfo, StudentAnswerInfo, Task } from "@/types";
+import type { PreparationIssue, ProblemInfo, StudentAnswerInfo, Task } from "@/types";
+/** Optional defaults are information, not recognition defects. */
+export function questionIssueNeedsReview(issue: PreparationIssue): boolean {
+  return issue.status === "open" && (issue.severity === "blocking" ||
+    (issue.severity !== "info" && issue.code !== "default_max_score_requires_review"));
+}
+export function questionReviewConfirmed(problem: ProblemInfo): boolean {
+  return problem.review_status === "confirmed" && !questionReviewBlocked(problem) &&
+    problem.max_score_review_status === "confirmed" &&
+    !(problem.preparation_issues ?? []).some(issue => issue.status === "open");
+}
 export interface ReviewBlocker { label: string; href: string }
 export function questionReviewBlocked(problem: ProblemInfo): boolean {
   return !problem.stem?.trim() || (problem.preparation_issues ?? []).some(issue => issue.status === "open" && issue.severity === "blocking");

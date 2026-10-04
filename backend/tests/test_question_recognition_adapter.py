@@ -43,13 +43,18 @@ def test_scope_hint_is_bounded_and_does_not_treat_decimal_as_question():
 
 
 def test_partial_issues_use_existing_final_review_and_do_not_duplicate():
-    packages = {"q1": {"stem": "literal wrong condition"}}
+    packages = {"q1": {"stem": "literal wrong condition", "review_status": "confirmed"}}
     summary = dict(operation_id="op", confidence="low", coverage=dict(unprocessed_pages=[2]), artifact_ids=["a"])
     question_sources.attach_recognition_review(packages, [{"recognition": summary}])
     question_sources.attach_recognition_review(packages, [{"recognition": summary}])
     assert packages["q1"]["stem"] == "literal wrong condition"
     issues = packages["q1"]["preparation_issues"]
     assert len(issues) == 1 and issues[0]["code"] == "recognition_partial"
+    assert packages["q1"]["review_status"] == "needs_review"
+    issues[0]["status"] = "acknowledged"
+    packages["q1"]["review_status"] = "confirmed"
+    question_sources.attach_recognition_review(packages, [{"recognition": summary}])
+    assert packages["q1"]["review_status"] == "confirmed"
     assert issues[0]["details"]["coverage"]["unprocessed_pages"] == [2]
 
 

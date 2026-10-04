@@ -291,6 +291,7 @@ def attach_recognition_review(packages, sources):
             issues = problem.setdefault("preparation_issues", [])
             if any(item.get("issue_id") == issue_id for item in issues):
                 continue
+            problem["review_status"] = "needs_review"
             issues.append(dict(
                 issue_id=issue_id, q_id=q_id, field="stem", severity="warning", status="open",
                 code="recognition_partial" if partial else "recognition_needs_review",
