@@ -741,7 +741,15 @@ export function classifyRecoverableError(
     };
   }
 
-  if (["target_location_needs_hint", "target_selection_limit_exceeded", "recognition_budget_exhausted", "recognition_timeout", "question_targets_incomplete"].includes(code ?? "")) {
+  if (code === "question_targets_incomplete") {
+    return {
+      title: tx(locale, "未找齐指定题目", "Some requested questions were not found"),
+      description: tx(locale, "本次读取的内容未包含全部目标题目。请核对题号，补充所在页码，或换模型重试。若原件包含扫描文字或复杂公式，建议使用支持图片识别的模型。已上传资料仍保留。", "The recognized content did not include all requested questions. Check the numbers, add page numbers, or retry with another model. Scanned text or complex formulas may need image recognition. Your uploaded sources are preserved."),
+      actionLabel: tx(locale, "检查题号与页码", "Check question and page numbers"),
+      actionKind: "retry", tone: "warning", technicalDetails,
+    };
+  }
+  if (["target_location_needs_hint", "target_selection_limit_exceeded", "recognition_budget_exhausted", "recognition_timeout"].includes(code ?? "")) {
     return {
       title: tx(locale, "本次识别范围尚未完成", "Recognition coverage is incomplete"),
       description: tx(locale, "已保存的识别结果仍然保留。请缩小页码范围或补充目标题号；系统不会自动增加付费调用。", "Saved evidence is retained. Narrow the page range or specify question numbers; no extra paid calls are started automatically."),
