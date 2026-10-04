@@ -102,7 +102,11 @@ export function extractProblems(taskId: string, file: File, options?: UploadOpti
 
 export interface ParseSubmissionsInput extends UploadOptions {
   taskId: string;
-  file: File;
+  file: File | null;
+  storedFileId?: string | null;
+  reuseRosterFromJobId?: string | null;
+  expectedWorkflowRevision?: number;
+  acknowledgePossibleDuplicateCall?: boolean;
   identityMode?: SubmissionIdentityMode;
   rosterFile?: File | null;
   recognitionProviderId?: string | null;
@@ -116,6 +120,10 @@ export function parseSubmissions({
   rosterFile,
   recognitionProviderId,
   replaceConfirmed = false,
+  storedFileId,
+  reuseRosterFromJobId,
+  expectedWorkflowRevision,
+  acknowledgePossibleDuplicateCall,
   ...options
 }: ParseSubmissionsInput): Promise<TaskMutationResponse> {
   return postMultipart<TaskMutationResponse>(`/tasks/${taskId}/parse_submissions`, file, {
@@ -125,6 +133,10 @@ export function parseSubmissions({
       identity_mode: identityMode,
       recognition_provider_id: recognitionProviderId,
       replace_confirmed: replaceConfirmed,
+      stored_file_id: file ? undefined : storedFileId,
+      reuse_roster_from_job_id: rosterFile ? undefined : reuseRosterFromJobId,
+      expected_workflow_revision: expectedWorkflowRevision,
+      acknowledge_possible_duplicate_call: acknowledgePossibleDuplicateCall || undefined,
     },
     files: {
       ...options.files,
@@ -138,12 +150,14 @@ export function retrySubmissionRecognition(input: {
   jobId: string;
   recognitionProviderId: string;
   expectedWorkflowRevision: number;
+  acknowledgePossibleDuplicateCall?: boolean;
 }): Promise<TaskMutationResponse & { reused_original_upload?: boolean }> {
   return postJSON(
     `/tasks/${encodeURIComponent(input.taskId)}/submission-recognition/${encodeURIComponent(input.jobId)}/retry`,
     {
       recognition_provider_id: input.recognitionProviderId,
       expected_workflow_revision: input.expectedWorkflowRevision,
+      ...(input.acknowledgePossibleDuplicateCall ? { acknowledge_possible_duplicate_call: true } : {}),
     },
   );
 }
@@ -161,6 +175,7 @@ export function retryQuestionPreparation(input: {
       recognition_provider_id: input.recognitionProviderId,
       expected_workflow_revision: input.expectedWorkflowRevision,
       ...(input.acknowledgePossibleDuplicateCall ? { acknowledge_possible_duplicate_call: true } : {}),
+      use_current_configuration: true,
     },
   );
 }

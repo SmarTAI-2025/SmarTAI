@@ -7,6 +7,8 @@ import { NewTaskStepper } from "@/components/new-task/NewTaskStepper";
 import { GradingRetryNotice } from "@/components/tasks/GradingRetryNotice";
 import { SubmissionSourceOutcomePanel } from "@/components/tasks/SubmissionSourceOutcomePanel";
 import { UnsavedChangesDialog } from "@/components/ui/UnsavedChangesDialog";
+import { RecoverableActionState } from "@/components/ui/RecoverableActionState";
+import { classifyRecoverableError } from "@/lib/taskActionGuards";
 import { useI18n } from "@/i18n/I18nProvider";
 import { useGradingIntent } from "@/hooks/useGradingIntent";
 import type { Locale } from "@/i18n/messages";
@@ -168,11 +170,7 @@ export function GradingPreflightPage() {
       {isLoading ? (
         <PageState title={copy(locale, "loading")} busy />
       ) : isError ? (
-        <PageState
-          title={copy(locale, "loadError")}
-          action={copy(locale, "retry")}
-          onAction={() => { void taskQuery.refetch(); void setupQuery.refetch(); }}
-        />
+        <RecoverableActionState info={classifyRecoverableError(taskQuery.error ?? setupQuery.error, { locale, taskId })} locale={locale} workflowRecovery={{ retry: { onClick: () => { void taskQuery.refetch(); void setupQuery.refetch(); } }, configurationHref: taskId ? getTaskGradingSetupHref(taskId, `/tasks/${taskId}/grading/preflight`) : "/history" }} />
       ) : !taskId || !task ? (
         <PageState title={copy(locale, "missingTask")} href="/history" action={copy(locale, "retry")} />
       ) : (
@@ -231,7 +229,7 @@ export function GradingPreflightPage() {
                   style={{ width: countdownActive ? `${(countdown / AUTO_START_SECONDS) * 100}%` : "0%" }}
                 />
               </div>
-              {startError ? <p role="alert" className="border-t px-6 py-2 text-[11px] font-medium text-danger sm:px-8">{startError || copy(locale, "startError")}</p> : null}
+              {startError ? <RecoverableActionState info={classifyRecoverableError(startGrading.error, { locale, taskId, returnTo: `/tasks/${taskId}/grading/preflight` })} locale={locale} compact workflowRecovery={{ retry: { onClick: () => void handleStart(), busy: startGrading.isPending }, configurationHref: getTaskGradingSetupHref(taskId, `/tasks/${taskId}/grading/preflight`) }} /> : null}
               {isRegrading ? <div className="border-t px-6 py-3 sm:px-8"><GradingRetryNotice locale={locale} /></div> : null}
             </section>
           ) : null}

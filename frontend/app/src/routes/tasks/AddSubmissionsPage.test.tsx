@@ -26,6 +26,8 @@ const taskState = vi.hoisted(() => ({
   },
 }));
 
+const inputState = vi.hoisted(() => ({ input: null as unknown }));
+vi.mock("@/api/workflowInputs", () => ({ useWorkflowInput: () => ({ data: { input: inputState.input }, isError: false, isLoading: false }) }));
 vi.mock("@/api/hooks", () => ({
   useStageProviders: () => ({
     data: providers.enabled ? [{
@@ -72,6 +74,7 @@ function renderPage(taskId = "task-1", owner = "submission-teacher") {
 
 describe("AddSubmissionsPage OCR uploads", () => {
   beforeEach(async () => {
+  inputState.input = null;
     vi.stubGlobal("Blob", Blob); vi.stubGlobal("File", File);
     await clearPageDrafts();
 
@@ -206,7 +209,7 @@ describe("AddSubmissionsPage OCR uploads", () => {
     expect(screen.getByText("scan.pdf")).toBeInTheDocument();
     expect(screen.getByText(/原文件已安全保留/)).toBeInTheDocument();
     await waitFor(() => expect(screen.getByLabelText("作答识别模型")).toHaveValue("provider-default"));
-    fireEvent.click(screen.getByRole("button", { name: "用所选模型重试" }));
+    fireEvent.click(screen.getByRole("button", { name: "按当前配置重试" }));
 
     await waitFor(() => expect(retryMutateAsync).toHaveBeenCalledWith({
       taskId: "task-retry",
@@ -240,6 +243,28 @@ it("keeps unsubmitted local files through task navigation but clears after a nor
   expect(mutateAsync).toHaveBeenCalledTimes(1);
   await act(async () => { await router.navigate(-1); });
   expect(screen.queryByText("local-answer.txt")).not.toBeInTheDocument();
+
+});
+
+describe("submitted input recovery", () => {
+  beforeEach(async () => { inputState.input = null; await clearPageDrafts(); mutateAsync.mockReset(); retryMutateAsync.mockReset(); mutateAsync.mockResolvedValue({ status: "started" }); taskState.data = { ...taskState.data, status: "problems_ready", pending_submission_file_name: null, submission_file_name: null, last_failed_job_id: null, student_count: 0 }; });
+  it("restores submitted archive and roster, and applies edited identity options", async () => {
+    inputState.input = { job_id: "prior", stored_file_id: "saved-zip", filename: "saved.zip", available: true, identity_mode: "roster", roster_name: "saved-roster.csv", roster_count: 2, recognition_provider_id: "provider-default" };
+    const { router } = renderPage();
+    await screen.findByText("saved.zip");
+    expect(screen.getByText("saved-roster.csv (2)")).toBeInTheDocument();
+    expect(screen.getByRole("radio", { name: "submissionUploadIdentityRoster" })).toHaveAttribute("aria-checked", "true");
+    expect(mutateAsync).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("radio", { name: "submissionUploadIdentityManual" }));
+    fireEvent.click(screen.getByRole("button", { name: "submissionUploadStart" }));
+    await screen.findByText("progress page");
+    expect(mutateAsync).toHaveBeenCalledWith(expect.objectContaining({ file: null, storedFileId: "saved-zip", identityMode: "manual_review", reuseRosterFromJobId: null }));
+    expect(retryMutateAsync).not.toHaveBeenCalled();
+    await act(async () => { await router.navigate(-1); });
+    await screen.findByText("saved.zip");
+    expect(mutateAsync).toHaveBeenCalledTimes(1);
+  });
+
 });
 
 async function saveDraft() { await waitFor(() => expect(screen.getByRole("button", { name: "暂存" })).toBeEnabled()); fireEvent.click(screen.getByRole("button", { name: "暂存" })); await waitFor(() => expect(screen.getByText(/已暂存 ·/)).toBeInTheDocument()); }

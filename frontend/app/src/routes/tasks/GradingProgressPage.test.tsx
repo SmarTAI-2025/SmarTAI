@@ -207,7 +207,7 @@ describe("GradingProgressPage completion routing", () => {
     const view = renderProgress();
     expect(screen.getByRole("alert")).toHaveTextContent("The task state has changed");
 
-    fireEvent.click(screen.getByRole("button", { name: "Refresh task state" }));
+    fireEvent.click(screen.getByRole("button", { name: "Refresh status" }));
 
     expect(reset).toHaveBeenCalledTimes(1);
     expect(taskRefetch).toHaveBeenCalledTimes(1);

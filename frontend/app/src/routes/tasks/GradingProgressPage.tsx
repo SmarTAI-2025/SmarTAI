@@ -73,7 +73,7 @@ export function GradingProgressPage() {
   async function handleRetry() {
     if (!taskId || !task) return;
     try {
-      const response = await intent.execute(task.workflow_revision, (request) => retryGrading.mutateAsync({ taskId, ...request }));
+      const response = await intent.execute(state?.workflow_revision ?? task.workflow_revision, (request) => retryGrading.mutateAsync({ taskId, ...request }));
       if (!response) return;
       if (response.status === "already_done" || (response.status === "already_finished" && ["completed", "partial_failed"].includes(response.run_status ?? ""))) {
         navigate(`/tasks/${taskId}/review`, { replace: true });
@@ -113,14 +113,7 @@ export function GradingProgressPage() {
           href="/history"
         />
       ) : readFailed ? (
-        <PageState
-          title={copy(locale, "readError")}
-          description={copy(locale, "readErrorDescription")}
-          action={copy(locale, "refresh")}
-          onAction={refresh}
-          secondaryAction={copy(locale, "viewHistory")}
-          secondaryHref="/history"
-        />
+        <RecoverableActionState info={classifyRecoverableError(progressQuery.error ?? taskQuery.error, { locale, taskId, returnTo: `/tasks/${taskId}/grading/progress` })} locale={locale} workflowRecovery={{ retry: { onClick: refresh }, configurationHref: getTaskGradingSetupHref(taskId, `/tasks/${taskId}/grading/progress`) }} />
       ) : !status ? (
         <PageState title={copy(locale, "reading")} busy />
       ) : (
@@ -131,24 +124,8 @@ export function GradingProgressPage() {
               info={recoveryInfo}
               locale={locale}
               className="min-h-[300px]"
-              primaryAction={recoveryInfo.actionKind === "byok" ? undefined : {
-                label: recoveryInfo.actionKind === "retry" && !recoveryInfo.actionHref
-                  ? copy(locale, retryGrading.isPending ? "retrying" : "retry")
-                  : recoveryInfo.actionLabel,
-                href: recoveryInfo.actionKind === "adjust_experts"
-                  ? getTaskGradingSetupHref(taskId, `/tasks/${taskId}/grading/progress`)
-                  : recoveryInfo.actionHref,
-                onClick: recoveryInfo.actionHref || recoveryInfo.actionKind === "adjust_experts"
-                  ? undefined
-                  : recoveryInfo.actionKind === "refresh"
-                    ? refresh
-                    : () => void handleRetry(),
-                busy: retryGrading.isPending || taskQuery.isFetching || progressQuery.isFetching,
-              }}
-              secondaryAction={recoveryInfo.actionKind === "adjust_experts" ? undefined : {
-                label: copy(locale, "editExperts"),
-                href: getTaskGradingSetupHref(taskId, `/tasks/${taskId}/grading/progress`),
-              }}
+              workflowRecovery={{ retry: { onClick: () => void handleRetry(), busy: retryGrading.isPending }, configurationHref: getTaskGradingSetupHref(taskId, `/tasks/${taskId}/grading/progress`) }}
+              additionalActions={[{ label: copy(locale, "refresh"), onClick: refresh, busy: retryGrading.isPending }]}
             />
           ) : (
             <>

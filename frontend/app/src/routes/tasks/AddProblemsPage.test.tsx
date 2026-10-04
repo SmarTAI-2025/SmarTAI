@@ -37,6 +37,8 @@ const capabilityState = vi.hoisted(() => ({
 }));
 const providerState = vi.hoisted(() => ({ enabled: true, imageState: "unverified" }));
 
+const inputState = vi.hoisted(() => ({ input: null as unknown }));
+vi.mock("@/api/workflowInputs", () => ({ useWorkflowInput: () => ({ data: { input: inputState.input }, isError: false, isLoading: false }) }));
 vi.mock("@/api/hooks", () => ({
   useStageProviders: () => ({
     data: providerState.enabled ? [{
@@ -112,6 +114,7 @@ async function uploadProblemFile(user: ReturnType<typeof userEvent.setup>) {
 }
 
 beforeEach(async () => {
+  inputState.input = null;
   vi.stubGlobal("Blob", Blob); vi.stubGlobal("File", File);
   await clearPageDrafts();
   providerState.enabled = true;
@@ -461,4 +464,43 @@ it("browser back keeps the latest explicit choice over old history state and sav
   await waitFor(() => expect(screen.getByLabelText("题目识别模型")).toHaveValue("new:model"));
   expect(screen.getAllByText("questions.pdf").length).toBeGreaterThan(0);
   expect(preflightMutateAsync).toHaveBeenCalledTimes(1);
+});
+
+
+it("restores formally submitted files, scope, hints and policy without an explicit draft", async () => {
+  inputState.input = { job_id: "prior", recognition_provider_id: "mock:test", score_policy: { mode: "per_question", per_question_text: "第 1 题 15 分" }, sources: [
+    { source_token: "original-source", role: "problem", source_kind: "upload", filename: "saved.pdf", stored_file_id: "stored-1", library_material_id: null, inline_text: "", structure_mode: "extract_from_source", extraction_hint: "保留图表\n页码: 3-5\n题号: 1.1.5", recognition_options: { pages: [3, 4, 5], targets: ["1.1.5"] }, enable_material_ocr: false, save_to_library: true, available: true },
+    { source_token: "answer-source", role: "reference_answer", source_kind: "inline_text", filename: "answer.txt", stored_file_id: null, library_material_id: null, inline_text: "完整参考解答", structure_mode: "organized", extraction_hint: "", recognition_options: {}, enable_material_ocr: false, save_to_library: false, available: true },
+  ] };
+  const router = renderPage();
+  await screen.findAllByText("saved.pdf");
+  await waitFor(() => expect(screen.getByLabelText("题目识别模型")).toHaveValue("mock:test"));
+  expect(screen.getByLabelText("页码（选填）")).toHaveValue("3, 4, 5");
+  expect(screen.getByLabelText("目标题号（选填）")).toHaveValue("1.1.5");
+  expect(screen.getByLabelText("补充说明（选填）")).toHaveValue("保留图表");
+  expect(preflightMutateAsync).not.toHaveBeenCalled();
+  expect(startMutateAsync).not.toHaveBeenCalled();
+  fireEvent.click(screen.getByRole("button", { name: "识别并准备题目资料" }));
+  await screen.findByText("Preparation started");
+  expect(preflightMutateAsync.mock.calls.map(([input]) => input.role)).toEqual(["problem", "reference_answer"]);
+  expect(preflightMutateAsync.mock.calls[0][0]).toMatchObject({ storedFileId: "stored-1", file: null, recognitionOptions: { pages: [3, 4, 5], targets: ["1.1.5"] } });
+  expect(startMutateAsync.mock.calls[0][0].scorePolicy).toEqual({ mode: "per_question", perQuestionText: "第 1 题 15 分" });
+  // Returning through browser history reloads server inputs, without a model call.
+  await act(async () => { await router.navigate(-1); });
+  await screen.findAllByText("saved.pdf");
+  expect(preflightMutateAsync).toHaveBeenCalledTimes(2);
+});
+
+
+it("background prepared-reference invalidation cannot dismiss a fresh start failure", async () => {
+  vi.mocked(client.getJSON).mockResolvedValue({ available: true, prepared: false, filename: "questions.pdf" });
+  startMutateAsync.mockRejectedValue(new APIError(422, "provider_request_rejected", { detail: { code: "provider_request_rejected" } }));
+  const user = userEvent.setup();
+  renderPage();
+  await uploadProblemFile(user);
+  preflightMutateAsync.mockResolvedValue({ source_token: "prepared", source: { stored_file_id: "stored" } });
+  await user.click(screen.getByRole("button", { name: "识别并准备题目资料" }));
+  await waitFor(() => expect(startMutateAsync).toHaveBeenCalledTimes(1));
+  await waitFor(() => expect(screen.getByRole("button", { name: "按当前配置重试" })).toBeInTheDocument());
+  expect(screen.getByRole("link", { name: "返回修改配置" })).toHaveAttribute("href", "/tasks/task-1/upload/problems");
 });

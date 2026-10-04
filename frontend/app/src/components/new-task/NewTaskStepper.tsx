@@ -43,6 +43,7 @@ interface NewTaskStepperProps {
   currentStep?: number;
   reachableStep?: number;
   returnState?: unknown;
+  returnStateStep?: number;
   lockedStep?: number;
   lockedStepReason?: string;
   onLockedStepActivate?: () => void;
@@ -52,6 +53,7 @@ export function NewTaskStepper({
   currentStep = 0,
   reachableStep,
   returnState,
+  returnStateStep,
   lockedStep,
   lockedStepReason,
   onLockedStepActivate,
@@ -94,7 +96,7 @@ export function NewTaskStepper({
               {index <= effectiveReachableStep && (taskId || index === 0) ? (
                 <Link
                   to={stepHref(taskId, index, location.pathname, location.search, taskQuery.data)}
-                  state={returnState}
+                  state={returnStateStep === undefined || returnStateStep === index ? returnState : undefined}
                   aria-current={index === currentStep ? "step" : undefined}
                   aria-label={fullLabel}
                   title={fullLabel}
@@ -207,6 +209,9 @@ function stepHref(
   }
   if (index === 5 && canTaskBeRegraded(task?.status)) {
     return `/tasks/${encodeURIComponent(taskId)}/grading-setup`;
+  }
+  if (index === 5 && task?.status === "error" && task.grading_job_id) {
+    return `/tasks/${encodeURIComponent(taskId)}/grading-setup?returnTo=${encodeURIComponent(`/tasks/${taskId}/grading/progress`)}`;
   }
   if (index === 5 && pathname.endsWith("/grading/progress")) return `${pathname}${search}`;
   if (index === 5 && pathname.endsWith("/grading/preflight")) return `${pathname}${search}`;
