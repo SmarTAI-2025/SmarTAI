@@ -310,12 +310,12 @@ export function ExpertsPage() {
           tone="accent"
         />
         <SummaryMetric
-          label={zh ? "文本测试通过" : "Text checks passed"}
+          label={zh ? "文本测试通过" : "Text tests passed"}
           value={expertsQuery.isLoading ? "—" : String(verifiedCount)}
           tone="success"
         />
         <SummaryMetric
-          label={zh ? "文本测试失败" : "Text checks failed"}
+          label={zh ? "文本测试失败" : "Text tests failed"}
           value={expertsQuery.isLoading ? "—" : String(failedCheckCount)}
           tone={failedCheckCount > 0 ? "warning" : "neutral"}
         />
