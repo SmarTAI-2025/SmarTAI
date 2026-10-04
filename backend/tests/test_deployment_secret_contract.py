@@ -56,7 +56,7 @@ def test_env_example_never_commits_secret_placeholders_as_values():
 def test_ci_backend_jobs_use_explicit_independent_test_secrets():
     workflow = WORKFLOW_PATH.read_text(encoding="utf-8")
 
-    for job_id in ("backend-sqlite", "backend-postgres", "e2e"):
+    for job_id in ("backend-sqlite-tests", "backend-postgres", "e2e"):
         section = _job_section(workflow, job_id)
         assert 'SMARTAI_RUNTIME_ENVIRONMENT: "test"' in section
         provider_match = re.search(
