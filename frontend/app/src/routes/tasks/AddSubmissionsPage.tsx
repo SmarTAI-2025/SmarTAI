@@ -78,7 +78,6 @@ function AddSubmissionsForm({ taskQuery, submittedInput }: { taskQuery: ReturnTy
   const enabledExperts = (expertsQuery.data ?? []).filter((expert) => expert.enabled);
   const hasExistingSubmissions = Boolean(
     task?.submission_file_name
-      || task?.pending_submission_file_name
       || task?.student_count,
   );
   const needsReplacementConfirmation = Boolean(
