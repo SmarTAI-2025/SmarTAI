@@ -6,7 +6,7 @@ import {
   RefreshCw,
 } from "lucide-react";
 import { useRef, useState, type ReactNode } from "react";
-import { getAPIErrorCode } from "@/api/client";
+import { APIError, getAPIErrorCode } from "@/api/client";
 import { Navigate, useNavigate, useParams } from "react-router-dom";
 import { useRetryQuestionPreparation, useStageProviders, useTask } from "@/api/hooks";
 import { SmarTAIMascot } from "@/components/brand/SmarTAIMascot";
@@ -94,7 +94,11 @@ export function ProblemRecognitionProgressPage() {
   }
 
   if (status === "error") {
-    const info = classifyRecoverableError(progressFailure, {
+    const recognitionFailure = progressQuery.progress?.recognition_failure;
+    const failureWithPages = !retryFailure && recognitionFailure && typeof progressFailure === "string"
+      ? new APIError(422, progressFailure, { detail: { ...recognitionFailure, code: progressFailure } })
+      : progressFailure;
+    const info = classifyRecoverableError(failureWithPages, {
       locale,
       phase: progressQuery.progress?.current_step ?? progressQuery.progress?.phase ?? "question_preparation",
       taskId,
@@ -216,7 +220,10 @@ export function ProblemRecognitionProgressPage() {
       : candidateProgress
   );
   const steps = getRecognitionSteps(progress);
-  const activeStep = steps.find((step) => step.state === "active")
+  const nestedStep = progress?.current_step && STAGE_LABEL_KEYS[progress.current_step]
+    ? { code: progress.current_step, labelKey: STAGE_LABEL_KEYS[progress.current_step], state: "active" as const }
+    : null;
+  const activeStep = nestedStep ?? steps.find((step) => step.state === "active")
     ?? steps.find((step) => step.code === progress?.current_step)
     ?? steps.at(-1);
   const activeStageLabel = activeStep
@@ -545,6 +552,18 @@ const STAGE_LABEL_KEYS: Record<string, MessageKey> = {
   detecting_conflicts: "problemProgressStepDetectConflicts",
   committing_question_packages: "problemProgressStepCommitPackages",
   reading_sources: "problemProgressStepReadSources",
+  reading_source: "problemProgressStepReadSources",
+  recognition_inspect: "problemProgressStepReadSources",
+  recognition_document_batch: "problemProgressStepReadSources",
+  recognition_document_complete: "problemProgressStepPrepareSource",
+  recognition_locate: "problemProgressStepReadSources",
+  recognition_read: "problemProgressStepOCR",
+  recognition_recheck: "problemProgressStepNormalizeOCR",
+  recognition_assess: "problemProgressStepNormalizeOCR",
+  recognition_resume: "problemProgressStepPrepareSource",
+  recognition_restore: "problemProgressStepPrepareSource",
+  recognition_cache_lookup: "problemProgressStepPrepareSource",
+  recognition_persist: "problemProgressStepSaveResults",
   detecting_scanned_content: "problemProgressStepDetectScans",
   recognizing_with_ocr: "problemProgressStepOCR",
   normalizing_ocr_output: "problemProgressStepNormalizeOCR",
@@ -598,6 +617,13 @@ function localizeEvent(
   t: (key: MessageKey) => string,
 ): string {
   const message = event.message.toLowerCase();
+  if (message.startsWith("reading source ") || message.startsWith("reading pdf pages ")
+    || message === "inspecting source evidence" || message === "locating candidate source pages") return t("problemProgressStepReadSources");
+  if (message === "reading source evidence") return t("problemProgressStepOCR");
+  if (message === "checking recognition evidence" || message === "rechecking uncertain source evidence") return t("problemProgressStepNormalizeOCR");
+  if (message === "checking durable recognition progress" || message === "checking stored recognition evidence"
+    || message === "checking reusable recognition evidence") return t("problemProgressStepPrepareSource");
+  if (message === "saving recognition evidence" || /^read (all \d+|\d+\/\d+) requested pdf pages$/.test(message)) return t("problemProgressStepSaveResults");
   if (message === "phase: extracting") return t("problemProgressEventExtracting");
   if (message === "phase: parsing") return t("problemProgressEventQuestions");
   if (message === "phase: done") return t("problemProgressEventReady");

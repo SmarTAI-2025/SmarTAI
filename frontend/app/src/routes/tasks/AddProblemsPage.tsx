@@ -55,7 +55,7 @@ type AddProblemsRouteState = Record<string, never>;
 
 type PreparationFailure = {
   error: unknown;
-  phase: "source_preflight" | "question_preparation";
+  phase: "source_upload" | "question_preparation";
   sourceId?: string;
   sourceRole?: PreparationSourceRole;
 };
@@ -200,7 +200,7 @@ function AddProblemsForm({ taskQuery, submittedInput }: { taskQuery: ReturnType<
     if (taskQuery.data.error === "provider_submit_uncertain" && !window.confirm(tx(locale, "上次请求可能已计费。确认按当前配置重新提交？可能再次消耗额度。", "The previous request may have been billed. Submit with current settings? This may incur another charge."))) return;
     submitting.current = true;
     let activeSource: SourceDraft | undefined;
-    let phase: PreparationFailure["phase"] = "source_preflight";
+    let phase: PreparationFailure["phase"] = "source_upload";
     try {
       const tokens: string[] = [];
       for (let index = 0; index < configuredSources.length; index += 1) {
@@ -210,7 +210,7 @@ function AddProblemsForm({ taskQuery, submittedInput }: { taskQuery: ReturnType<
           tokens.push(source.prepared.operationId);
           continue;
         }
-        setBusyLabel(tx(locale, `正在检查资料 ${index + 1}/${configuredSources.length}`, `Checking source ${index + 1}/${configuredSources.length}`));
+        setBusyLabel(tx(locale, `正在上传资料 ${index + 1}/${configuredSources.length}`, `Uploading source ${index + 1}/${configuredSources.length}`));
         const result = await preflight.mutateAsync({
           taskId,
           role: source.role,

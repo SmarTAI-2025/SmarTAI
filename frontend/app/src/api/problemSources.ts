@@ -55,6 +55,7 @@ export async function preflightProblemSource(
   formData.append("recognition_provider_id", input.recognitionProviderId);
   formData.append("enable_material_ocr", String(input.enableMaterialOcr ?? false));
   formData.append("replace_confirmed", String(input.replaceConfirmed ?? false));
+  formData.append("defer_recognition", "true");
 
   try {
     const response = await apiClient.post<ProblemSourcePreflightResponse>(
