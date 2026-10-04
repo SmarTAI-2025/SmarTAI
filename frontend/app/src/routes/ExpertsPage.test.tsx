@@ -13,6 +13,8 @@ const verifyBaiduOCRCredentials = vi.fn();
 const deleteBaiduOCRCredentials = vi.fn();
 
 const hookState = vi.hoisted(() => ({
+  textPending: false,
+  imagePending: false,
   catalog: [] as Array<Record<string, unknown>>,
   experts: [] as Array<Record<string, unknown>>,
   baiduOCR: {
@@ -26,14 +28,14 @@ const hookState = vi.hoisted(() => ({
 }));
 
 vi.mock("@/api/hooks", () => ({
-  useVerifyExpertImage: () => ({ isPending: false, mutateAsync: verifyImage }),
+  useVerifyExpertImage: () => ({ isPending: hookState.imagePending, mutateAsync: verifyImage }),
   useExperts: () => ({ data: hookState.experts, isLoading: false, isError: false, isFetching: false, refetch: vi.fn() }),
   useProviderCatalog: () => ({ data: hookState.catalog, isLoading: false, isError: false, refetch: vi.fn() }),
   useAddExpertKey: () => ({ isPending: false, mutateAsync: addExpert }),
   useUpdateExpert: () => ({ isPending: false, mutateAsync: updateExpert }),
   useSelectExpert: () => ({ isPending: false, mutateAsync: vi.fn() }),
   useSetDefaultExpert: () => ({ isPending: false, mutateAsync: vi.fn() }),
-  useVerifyExpert: () => ({ isPending: false, mutateAsync: vi.fn() }),
+  useVerifyExpert: () => ({ isPending: hookState.textPending, mutateAsync: vi.fn() }),
   useRemoveExpert: () => ({ isPending: false, mutateAsync: vi.fn() }),
   useBaiduOCRConfiguration: () => ({
     data: hookState.baiduOCR,
@@ -102,6 +104,8 @@ describe("ExpertsPage editable vendor Base URL", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     window.localStorage.clear();
+    hookState.textPending = false;
+    hookState.imagePending = false;
     hookState.catalog = providerCatalog(true);
     hookState.experts = [];
     hookState.baiduOCR = {
@@ -120,14 +124,30 @@ describe("ExpertsPage editable vendor Base URL", () => {
     deleteBaiduOCRCredentials.mockResolvedValue({ status: "success" });
   });
 
+  it.each(["textPending", "imagePending"] as const)("keeps configuration actions available while %s serializes probes", async (pending) => {
+    hookState[pending] = true;
+    hookState.experts = [{ provider_id: "pc-busy", provider_type: "gemini", model: "saved-model", enabled: true, rpm: 0, max_concurrent: 1 }];
+    const user = userEvent.setup(); renderPage();
+    for (const name of ["验证（可选）", "验证视觉能力"]) {
+      for (const button of screen.getAllByRole("button", { name })) expect(button).toBeDisabled();
+    }
+    for (const name of ["编辑", "设为默认", "停用", "删除"]) {
+      for (const button of screen.getAllByRole("button", { name })) expect(button).toBeEnabled();
+    }
+    await user.click(screen.getAllByRole("button", { name: "编辑" })[0]!);
+    expect(screen.getByRole("dialog")).toBeInTheDocument();
+    expect(screen.getByLabelText("模型名称")).toHaveValue("saved-model");
+    expect(verifyImage).not.toHaveBeenCalled();
+  });
+
   it("only sends an independent image probe after an explicit click on that configuration", async () => {
     hookState.experts = [{ provider_id: "pc-image", provider_type: "qwen", model: "arbitrary-model", enabled: true, rpm: 0, max_concurrent: 1 }];
     const user = userEvent.setup(); renderPage();
-    expect(screen.getAllByText("图片测试").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("图像测试").length).toBeGreaterThan(0);
     expect(document.querySelector('[data-image-provider="pc-image"]')).toHaveTextContent("未验证");
     expect(verifyImage).not.toHaveBeenCalled();
     expect(screen.getAllByRole("button", { name: "验证（可选）" }).length).toBeGreaterThan(0);
-    await user.click(screen.getAllByRole("button", { name: "验证图片能力" })[0]!);
+    await user.click(screen.getAllByRole("button", { name: "验证视觉能力" })[0]!);
     expect(verifyImage).toHaveBeenCalledTimes(1);
     expect(verifyImage).toHaveBeenCalledWith("pc-image");
   });
@@ -147,7 +167,7 @@ describe("ExpertsPage editable vendor Base URL", () => {
     const user = userEvent.setup(); renderPage();
     expect(screen.queryByRole("button", { name: "编辑" })).not.toBeInTheDocument();
     expect(verifyImage).not.toHaveBeenCalled();
-    await user.click(screen.getAllByRole("button", { name: "验证图片能力" })[0]!);
+    await user.click(screen.getAllByRole("button", { name: "验证视觉能力" })[0]!);
     expect(verifyImage).toHaveBeenCalledWith("qwen:shared");
   });
 
