@@ -66,13 +66,6 @@ export function SettingsPage() {
             >
               {user?.username ?? tx(locale, "正在读取账号…", "Loading account…")}
             </h2>
-            <p className="mt-1 text-[12px] leading-5 text-muted-foreground">
-              {tx(
-                locale,
-                "账号资料由当前登录会话提供，不在此页面伪造可编辑能力。",
-                "Account details come from the active session; unsupported profile editing is not shown.",
-              )}
-            </p>
           </div>
           <span className="sm:ml-auto inline-flex h-7 w-fit items-center rounded-full bg-emerald-50 px-3 text-[11px] font-semibold text-emerald-700">
             {tx(locale, "已登录", "Signed in")}

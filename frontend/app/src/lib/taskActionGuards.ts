@@ -355,8 +355,8 @@ export function classifyRecoverableError(
       title: tx(locale, "该 OCR 服务不支持批改", "This OCR service does not support grading"),
       description: tx(
         locale,
-        "百度 Unlimited-OCR 只负责题目和作答转写，不会调用或伪装成批改模型。请返回批改设置并更换批改模型。",
-        "Baidu Unlimited-OCR only transcribes questions and submissions; it will not call or impersonate a grading model. Return to Grading Setup and choose a grading model.",
+        "百度 Unlimited-OCR 用于识别文字。请返回批改设置，选择批改模型。",
+        "Baidu Unlimited-OCR recognizes text. Return to Grading Setup and choose a grading model.",
       ),
       actionLabel: tx(locale, "更换批改模型", "Choose another grading model"),
       actionKind: "adjust_experts",
@@ -837,8 +837,8 @@ export function classifyRecoverableError(
       title: tx(locale, "逐文件识别结果保存未完成", "Per-file outcomes were not fully saved"),
       description: tx(
         locale,
-        "原文件已经保存，但系统无法确认每份来源的终态都已写入数据库。任务已停止，不会把缺失结果静默带入批改。请携带任务编号排查数据库后重试。",
-        "The originals were saved, but the system could not confirm every per-source terminal outcome in the database. The task stopped and will not silently grade missing results. Use the job ID to check the database, then retry.",
+        "识别结果未完整保存，任务已暂停。原文件仍保留，请重试；若再次失败，请提供任务编号联系管理员。",
+        "Some recognition results could not be saved, so the task paused. The originals are retained. Retry; if it fails again, contact an administrator with the task ID.",
       ),
       actionLabel: tx(locale, "重新尝试", "Try again"),
       actionKind: "retry",
@@ -1227,7 +1227,7 @@ function providerTransientErrorCopy(
   if (code === "provider_unavailable" || code === "provider_task_failed") {
     return {
       title: tx(locale, "OCR 服务暂时不可用", "The OCR service is temporarily unavailable"),
-      description: tx(locale, "原文件已保留，系统没有静默切换到其他服务。请稍后明确重试。", "The original is preserved and no alternate service was selected silently. Retry explicitly later."),
+      description: tx(locale, "原文件已保留，请稍后重试。", "The original is preserved. Please retry later."),
     };
   }
   if (code === "provider_endpoint_response_too_large") {

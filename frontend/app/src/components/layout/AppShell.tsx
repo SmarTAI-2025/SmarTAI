@@ -202,10 +202,10 @@ export function AppShell() {
         tabIndex={-1}
         className="w-full px-5 py-[35px] outline-none sm:px-8"
       >
-        <div className="mx-auto w-full max-w-[1300px] [&:has([role=dialog])>[data-page-draft-footer]]:hidden">
+        <div className="mx-auto w-full max-w-[1300px] [&:has([role=dialog])>[data-page-draft-footer]]:hidden [&:has([data-draft-width='940'])>[data-page-draft-footer]]:max-w-[940px] [&:has([data-draft-width='900'])>[data-page-draft-footer]]:max-w-[900px] [&:has([data-draft-width='1190'])>[data-page-draft-footer]]:max-w-[1190px]">
           {currentUser.data?.is_read_only && <div role="status" className="mb-5 rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">{locale === "zh-CN" ? "账号当前为只读：可以浏览历史批改任务与结果，暂不能新建、上传、识别、批改或修改。如有疑问，请联系管理员。" : "Your account is read-only. You can browse past grading tasks and results, but cannot create, upload, recognize, grade or edit. Contact an administrator for help."}</div>}
           <Outlet />
-          <div data-page-draft-footer><DraftActions /></div>
+          <div data-page-draft-footer className="mx-auto w-full"><DraftActions /></div>
         </div>
       </main>
     </div>

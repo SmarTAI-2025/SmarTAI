@@ -268,9 +268,9 @@ function AddSubmissionsForm({ taskQuery, submittedInput }: { taskQuery: ReturnTy
 
       <NewTaskStepper currentStep={3} />
 
-      <div className="mx-auto mt-[45px] w-full max-w-[900px]">
+      <div data-draft-width="900" className="mx-auto mt-[45px] w-full max-w-[900px]">
         {(!selectedFile && !hasStoredFile && draft.value.selectedFileName && !canRetryOriginal) || (!rosterFile && !hasSavedRoster && draft.value.rosterFileName && identityMode === "roster") ? <p role="alert" className="mb-4 text-sm text-warning">{localText(locale, "保存的文件暂时不可用，请重新选择。其他设置已保留。", "The saved file is unavailable. Reselect it; other settings are preserved.")}</p> : null}
-        {hasStoredFile ? <p role="status" className="mb-4 text-sm text-muted-foreground">{localText(locale, "已恢复上次提交的作答与设置；修改后主动点击下一步，无需重复上传。", "Your submitted file and settings are restored. Edit and click Next when ready; no upload is needed.")}</p> : null}
+        {hasStoredFile ? <p role="status" className="mb-4 text-sm text-muted-foreground">{localText(locale, "已恢复原文件与设置，可直接重试。", "Your file and settings are restored. You can retry directly.")}</p> : null}
         <div
           ref={submissionChooseRef}
           className={cn(
@@ -315,7 +315,7 @@ function AddSubmissionsForm({ taskQuery, submittedInput }: { taskQuery: ReturnTy
             {selectedFile
               ? `${formatFileSize(selectedFile.size)} · ${t("submissionUploadOcrLimit")}`
               : canRetryOriginal || hasStoredFile
-                ? localText(locale, "原文件已安全保留。请按失败原因处理：文件为空、损坏或格式不支持时需更换文件；模型问题可改选模型后重试，无需重复上传。", "The original file is preserved. Replace empty, damaged or unsupported files; for model errors, select another model and retry without uploading again.")
+                ? localText(locale, "原文件已保留，无需重新选择。", "The original file is saved. No need to select it again.")
               : t("submissionUploadFormats")}
           </p>
           <span className="mt-[17px] inline-flex h-10 min-w-[130px] items-center justify-center rounded-[8px] border bg-card px-4 text-[14px] font-semibold text-foreground">
@@ -338,8 +338,8 @@ function AddSubmissionsForm({ taskQuery, submittedInput }: { taskQuery: ReturnTy
           label={localText(locale, "作答识别模型", "Submission recognition model")}
           hint={localText(
             locale,
-            "已自动选择默认模型；有多个模型时可在这里改选。图片或扫描版 PDF 需要支持图片/视觉输入的模型，若失败会明确显示认证、模型、限流、网络或视觉能力原因。",
-            "Your default model is selected automatically; choose another here when needed. Images and scanned PDFs require visual input support; failures identify authentication, model, rate-limit, network, or vision capability errors.",
+            "可直接开始识别。图片与扫描件需要模型支持图片输入。",
+            "You can start recognition directly. Images and scans need image input support.",
           )}
           experts={enabledExperts}
           value={recognitionProviderId}

@@ -123,8 +123,8 @@ describe("ExpertsPage editable vendor Base URL", () => {
   it("only sends an independent image probe after an explicit click on that configuration", async () => {
     hookState.experts = [{ provider_id: "pc-image", provider_type: "qwen", model: "arbitrary-model", enabled: true, rpm: 0, max_concurrent: 1 }];
     const user = userEvent.setup(); renderPage();
-    expect(screen.getAllByText("图片能力：未验证").length).toBeGreaterThan(0);
-    expect(screen.getAllByText("发送系统生成的测试图片，可能消耗少量额度，不上传你的题目或作业。").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("图片测试").length).toBeGreaterThan(0);
+    expect(document.querySelector('[data-image-provider="pc-image"]')).toHaveTextContent("未验证");
     expect(verifyImage).not.toHaveBeenCalled();
     expect(screen.getAllByRole("button", { name: "验证（可选）" }).length).toBeGreaterThan(0);
     await user.click(screen.getAllByRole("button", { name: "验证图片能力" })[0]!);
@@ -137,7 +137,8 @@ describe("ExpertsPage editable vendor Base URL", () => {
   ])("displays the evidence state %s with its time and reason", (status, label) => {
     hookState.experts = [{ provider_id: "pc-image", provider_type: "moonshot", model: "arbitrary", enabled: true, rpm: 0, max_concurrent: 1, image_capability_status: status, image_checked_at: "2026-10-03T13:50:00Z", image_reason: "image_probe_answer_incorrect" }];
     renderPage();
-    expect(screen.getAllByText(new RegExp(`图片能力：${label} ·`)).length).toBeGreaterThan(0);
+    expect(document.querySelector('[data-image-provider="pc-image"]')).toHaveTextContent(label);
+    expect(document.querySelector('[data-image-provider="pc-image"]')).toHaveTextContent("10/03");
     expect(verifyImage).not.toHaveBeenCalled();
   });
 

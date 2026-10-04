@@ -16,7 +16,7 @@ import { Button } from "@/components/ui/Button";
 import { RecoverableActionState } from "@/components/ui/RecoverableActionState";
 import { useTaskProgress } from "@/hooks/useTaskProgress";
 import { useI18n } from "@/i18n/I18nProvider";
-import type { MessageKey } from "@/i18n/messages";
+import type { Locale, MessageKey } from "@/i18n/messages";
 import { cn } from "@/lib/cn";
 import { classifyRecoverableError } from "@/lib/taskActionGuards";
 import type { JobProgress, ProgressEvent, TaskStatus } from "@/types";
@@ -109,8 +109,8 @@ export function ProblemRecognitionProgressPage() {
     const submissionUncertain = taskState?.error === "provider_submit_uncertain" || getAPIErrorCode(retryFailure) === "provider_submit_uncertain";
     if (submissionUncertain) {
       info.description = locale === "zh-CN"
-        ? "上次请求可能已计费，但没有可用结果。系统不会自动重试。确认后可复用已识别资料，重新准备题目；此操作可能再次产生模型费用。"
-        : "The previous request may have been billed without a usable result. Nothing retries automatically. You may reuse recognized sources to restart preparation, which may incur additional model charges.";
+        ? "上次请求可能已计费，但没有返回可用结果。确认后将复用已识别资料，重新准备全部题目，可能再次计费。系统不会自动重试。"
+        : "The previous request may have been billed without a usable result. Confirming reuses recognized sources and prepares all questions again, which may incur additional charges. Nothing retries automatically.";
       info.actionKind = "retry";
     }
     const canRetryPreparedSources = Boolean(
@@ -146,8 +146,8 @@ export function ProblemRecognitionProgressPage() {
               id="question-retry-provider"
               label={locale === "zh-CN" ? "题目识别模型" : "Question recognition model"}
               hint={locale === "zh-CN"
-                ? "原资料和已完成步骤已保留。可以改选模型后主动重试，无需重新上传。"
-                : "Your materials and completed steps are preserved. Choose a model and retry without uploading again."}
+                ? "原资料已保留。可以改选模型后重试，无需重新上传。"
+                : "Your source materials are preserved. Choose a model and retry without uploading again."}
               experts={enabledExperts}
               value={recognitionProviderId}
               disabled={retryPreparation.isPending || expertsQuery.isLoading}
@@ -164,7 +164,7 @@ export function ProblemRecognitionProgressPage() {
               <input type="checkbox" className="mt-1" checked={acknowledgedJobId === failedJobId}
                 disabled={retryPreparation.isPending}
                 onChange={(event) => setAcknowledgedJobId(event.target.checked ? failedJobId : null)} />
-              {locale === "zh-CN" ? "我了解可能再次计费，确认重新准备题目" : "I understand possible additional charges and confirm restarting preparation"}
+              {locale === "zh-CN" ? "我了解可能再次计费，确认重新准备全部题目" : "I understand possible additional charges and confirm preparing all questions again"}
             </label>
           ) : null}
           <RecoverableActionState
@@ -342,7 +342,7 @@ export function ProblemRecognitionProgressPage() {
                     className="grid min-w-0 grid-cols-[42px_minmax(0,1fr)] gap-2 text-xs leading-5 text-muted-foreground sm:text-sm"
                   >
                     <time dateTime={toDateTime(event.ts)}>{formatEventTime(event.ts, locale)}</time>
-                    <span className="min-w-0 break-words">{localizeEvent(event, t)}</span>
+                    <span className="min-w-0 break-words">{localizeEvent(event, t, locale, progress?.question_labels ?? {})}</span>
                   </li>
                 ))}
               </ol>
@@ -615,8 +615,27 @@ function getStageLabel(
 function localizeEvent(
   event: ProgressEvent,
   t: (key: MessageKey) => string,
+  locale: Locale,
+  labels: Record<string, string>,
 ): string {
   const message = event.message.toLowerCase();
+  const generating = /^generating materials for major question (\S+)$/.exec(message);
+  if (generating) {
+    const label = labels[generating[1]] ?? generating[1];
+    return `${label} · ${locale === "zh-CN" ? "正在生成资料" : "generating materials"}`;
+  }
+  const generated = /^major question (\S+) generation (completed|failed|started)$/.exec(message);
+  if (generated) {
+    const label = labels[generated[1]] ?? generated[1];
+    const zh = locale === "zh-CN";
+    const status = generated[2] === "completed" ? (zh ? "资料已完成" : "materials ready")
+      : generated[2] === "failed" ? (zh ? "资料生成未完成" : "material generation did not finish")
+        : (zh ? "正在生成资料" : "generating materials");
+    return `${label} · ${status}`;
+  }
+  if (/^(provider|recognition|question)_[a-z_]+$/.test(message)) {
+    return classifyRecoverableError(message, { locale }).title;
+  }
   if (message.startsWith("reading source ") || message.startsWith("reading pdf pages ")
     || message === "inspecting source evidence" || message === "locating candidate source pages") return t("problemProgressStepReadSources");
   if (message === "reading source evidence") return t("problemProgressStepOCR");
