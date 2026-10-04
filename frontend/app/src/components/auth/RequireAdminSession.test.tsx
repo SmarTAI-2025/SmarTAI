@@ -1,9 +1,11 @@
+import "fake-indexeddb/auto";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { MemoryRouter, Routes, Route, useLocation } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { RequireAdminSession } from "./RequireAdminSession";
+vi.mock("@/hooks/useSessionActivity", () => ({ useSessionActivity: vi.fn() }));
 vi.mock("@/api/hooks", () => ({ useCurrentUser: vi.fn(), useLogout: () => ({ isPending: false, mutateAsync: vi.fn() }) }));
 vi.mock("@/api/client", () => ({ clearAuthToken: vi.fn(), normalizeAPIError: (error: { status: number }) => error }));
 vi.mock("@/lib/sessionExpiry", () => ({ useSessionExpired: () => false }));

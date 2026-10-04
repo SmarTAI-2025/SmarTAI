@@ -19,10 +19,12 @@ export function useUploadKBDoc() {
     mutationFn: ({ taskId, ...input }: { taskId: string } & AddKBDocInput) =>
       kbApi.addKBDoc(taskId, input),
     onSuccess: (_data, variables) => {
-      queryClient.invalidateQueries({ queryKey: kbKeys.list(variables.taskId) });
-      queryClient.invalidateQueries({ queryKey: gradingSetupKeys.detail(variables.taskId) });
-      queryClient.invalidateQueries({ queryKey: taskKeys.detail(variables.taskId) });
-      queryClient.invalidateQueries({ queryKey: taskKeys.state(variables.taskId) });
+      return Promise.all([
+        queryClient.invalidateQueries({ queryKey: kbKeys.list(variables.taskId) }),
+        queryClient.invalidateQueries({ queryKey: gradingSetupKeys.detail(variables.taskId) }),
+        queryClient.invalidateQueries({ queryKey: taskKeys.detail(variables.taskId) }),
+        queryClient.invalidateQueries({ queryKey: taskKeys.state(variables.taskId) }),
+      ]);
     },
     onSettled: () => queryClient.invalidateQueries({ queryKey: personalKnowledgeKeys.usage() }),
   });
@@ -35,10 +37,12 @@ export function useDeleteKBDoc() {
     mutationFn: ({ taskId, docId, expectedWorkflowRevision }: { taskId: string; docId: string; expectedWorkflowRevision?: number }) =>
       kbApi.deleteKBDoc(taskId, docId, expectedWorkflowRevision),
     onSuccess: (_data, variables) => {
-      queryClient.invalidateQueries({ queryKey: kbKeys.list(variables.taskId) });
-      queryClient.invalidateQueries({ queryKey: gradingSetupKeys.detail(variables.taskId) });
-      queryClient.invalidateQueries({ queryKey: taskKeys.detail(variables.taskId) });
-      queryClient.invalidateQueries({ queryKey: taskKeys.state(variables.taskId) });
+      return Promise.all([
+        queryClient.invalidateQueries({ queryKey: kbKeys.list(variables.taskId) }),
+        queryClient.invalidateQueries({ queryKey: gradingSetupKeys.detail(variables.taskId) }),
+        queryClient.invalidateQueries({ queryKey: taskKeys.detail(variables.taskId) }),
+        queryClient.invalidateQueries({ queryKey: taskKeys.state(variables.taskId) }),
+      ]);
     },
     onSettled: () => queryClient.invalidateQueries({ queryKey: personalKnowledgeKeys.usage() }),
   });

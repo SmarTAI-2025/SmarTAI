@@ -1,3 +1,4 @@
+import { gradingEditorVersion } from "@/lib/editorVersions";
 import { useDraftProtection } from "@/hooks/useDraftProtection";
 import { useDraftLeave } from "@/hooks/useDraftLeave";
 import {
@@ -82,9 +83,7 @@ function GradingSetupPageForm() {
   const setupHref = taskId ? getTaskGradingSetupHref(taskId, returnTo ?? undefined) : null;
   const backHref = taskId ? returnTo ?? `/tasks/${taskId}/submissions` : "/";
   const serverSetup = response?.grading_setup ?? response?.suggested_setup ?? null;
-  const serverKey = response
-    ? `${response.workflow_revision}:${response.grading_setup_fingerprint ?? "suggested"}:${response.available_experts.map((expert) => `${expert.provider_id}:${expert.enabled}:${expert.is_shared}`).sort().join("|")}`
-    : null;
+  const serverKey = gradingEditorVersion(response);
 
   const serializedSetup = setup ? serializeSetup(setup) : null;
   const isDirty = serializedSetup !== null
@@ -114,7 +113,7 @@ function GradingSetupPageForm() {
     setSelectionNoticeKey(null);
   }, [isDirty, response, serverKey, serverSetup]);
 
-  const localDraft = useDraftProtection({ scope: `grading:${taskId}:${response?.task_id ?? ""}`, value: { setup, advancedOpen }, baseline: { setup: serverSetup, advancedOpen: false }, version: String(response?.workflow_revision ?? ""), enabled: Boolean(response && setup), busy: saveSetup.isPending, onRestore: (draft) => { setSetup(draft.setup); setAdvancedOpen(draft.advancedOpen); } });
+  const localDraft = useDraftProtection({ scope: `grading:${taskId}:${response?.task_id ?? ""}`, value: { setup, advancedOpen }, baseline: { setup: serverSetup, advancedOpen: false }, version: serverKey ?? "", enabled: Boolean(response && setup), busy: saveSetup.isPending, onRestore: (draft) => { setSetup(draft.setup); setAdvancedOpen(draft.advancedOpen); } });
 
   const expertsById = useMemo(
     () => new Map((response?.available_experts ?? []).map((expert) => [expert.provider_id, expert])),

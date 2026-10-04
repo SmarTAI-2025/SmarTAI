@@ -89,7 +89,7 @@ export function useDraftProtection<T extends object>({ scope, value, onRestore, 
     if (cleared.current) return;
     if (load.current?.value || isDirty()) {
       setConflict(load.current?.value ?? latest.current.value);
-      setNotice("服务器业务版本已变化。当前输入与已暂存草稿保留，请核对后恢复或删除；未覆盖正式结果。");
+      setNotice("服务器业务版本已变化：此任务的已保存内容有更新。当前输入仍保留，请选择保留当前输入或恢复旧草稿，再暂存。");
     } else if (latest.current.baseline) latest.current.onRestore(latest.current.baseline);
   }, [version, enabled]);
 
@@ -143,6 +143,10 @@ export function useDraftProtection<T extends object>({ scope, value, onRestore, 
     latest.current.onRestore(conflict); saved.current = null; setConflict(null); setSavedAt(null);
     setNotice("已恢复旧草稿供核对，尚未正式保存。请检查业务内容后重新暂存或提交。");
   }
+  function keepCurrent() {
+    saved.current = null; setConflict(null); setSavedAt(null);
+    setNotice("已保留当前输入，请重新暂存。正式保存时仍会核对服务器版本。");
+  }
   function resetWorking(value: T) {
     incarnation.current += 1;
     if (load.current) load.current = { ...load.current, value: null };
@@ -156,7 +160,7 @@ export function useDraftProtection<T extends object>({ scope, value, onRestore, 
     get dirty() { return (secret || epoch.current === draftGeneration()) && latest.current.enabled && isDirty(); }, get busy() { return (secret || epoch.current === draftGeneration()) && (formalActive.current || (latest.current.busy && !completedBusy.current)); },
     get loaded() { return state.current.loaded; }, get savedAt() { return state.current.savedAt; },
     get notice() { return state.current.notice; }, get hasConflict() { return Boolean(state.current.conflict); },
-    discard: discardEdits, restore: restoreConflict,
+    discard: discardEdits, restore: restoreConflict, keepCurrent,
     remove: async () => {
       if (!owner || disposed.current || epoch.current !== draftGeneration()) return;
       await removePageDraft(owner, scope);
@@ -171,7 +175,7 @@ export function useDraftProtection<T extends object>({ scope, value, onRestore, 
       if (secret || !owner) throw new Error("认证秘密仅保留在当前表单，不能作为普通草稿暂存。请使用原有保存操作或不暂存离开。");
       if (!state.current.loaded) throw new Error("正在读取本地草稿，请稍后再暂存。");
       if (epoch.current !== draftGeneration() || disposed.current) throw new Error("此编辑页面已失效，本次未暂存。");
-      if (state.current.conflict) throw new Error("请先核对服务器变化，明确恢复或删除旧草稿后再暂存。");
+      if (state.current.conflict) throw new Error("请先核对服务器变化，选择保留当前输入或恢复旧草稿后再暂存。");
       const snapshot = latest.current.value; const snapshotFingerprint = draftFingerprint(snapshot);
       const capturedIncarnation = incarnation.current;
       const write = preparePageDraft(owner, scope, latest.current.version, snapshot, codecRef.current, load.current?.epoch ?? "initial", load.current?.record?.revision ?? null);

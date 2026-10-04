@@ -1,3 +1,4 @@
+import { materialMetadataVersion } from "@/lib/editorVersions";
 import { useDraftProtection } from "@/hooks/useDraftProtection";
 import { useDraftLeave } from "@/hooks/useDraftLeave";
 import { FileUp, FolderPlus, LoaderCircle, Trash2 } from "lucide-react";
@@ -349,7 +350,7 @@ export function MaterialDialog({ material, courses, groups, onClose, onSaved, on
     [courseId, groups],
   );
 
-  const localDraft = useDraftProtection({ scope: `library-material:${material.material_id}`, value: { filename, courseId, groupId, category, labels }, baseline: { filename: material.filename, courseId: material.course_id ?? "", groupId: material.group_id ?? "", category: material.category, labels: material.labels.join(", ") }, version: JSON.stringify(material), busy: update.isPending || remove.isPending, onRestore: (draft) => { setFilename(draft.filename); setCourseId(draft.courseId); setGroupId(draft.groupId); setCategory(draft.category); setLabels(draft.labels); } });
+  const localDraft = useDraftProtection({ scope: `library-material:${material.material_id}`, value: { filename, courseId, groupId, category, labels }, baseline: { filename: material.filename, courseId: material.course_id ?? "", groupId: material.group_id ?? "", category: material.category, labels: material.labels.join(", ") }, version: materialMetadataVersion(material), busy: update.isPending || remove.isPending, onRestore: (draft) => { setFilename(draft.filename); setCourseId(draft.courseId); setGroupId(draft.groupId); setCategory(draft.category); setLabels(draft.labels); } });
   async function save(event: FormEvent) {
     event.preventDefault();
     try {

@@ -2,13 +2,15 @@ import { AxiosError, AxiosHeaders, type InternalAxiosRequestConfig } from "axios
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
+import { createMemoryRouter, Link, MemoryRouter, Outlet, Route, RouterProvider, Routes, useLocation } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { apiClient, clearAuthToken, getAuthToken, getJSON, setAuthToken } from "@/api/client";
 import { authKeys } from "@/api/hooks/keys";
 import { setSessionExpired } from "@/lib/sessionExpiry";
 import { LoginPage } from "@/routes/LoginPage";
 import { RequireTeacherSession } from "./RequireTeacherSession";
+import { DraftActions, DraftLeaveProvider } from "@/hooks/useDraftLeave";
+import { PageDraftSession, useDraftProtection } from "@/hooks/useDraftProtection";
 
 vi.mock("@/i18n/I18nProvider", () => ({
   useI18n: () => ({ locale: "zh-CN", t: (key: string) => key }),
@@ -55,6 +57,32 @@ afterEach(() => {
 });
 
 describe("live session expiry", () => {
+  it.each([false, true])("forces login through a dirty editor and pending leave dialog (secret=%s)", async (secret) => {
+    function Editor() {
+      const [value, setValue] = useState({ name: "" });
+      useDraftProtection({ scope: "expiry:editor", value, onRestore: setValue, secret });
+      return <><input aria-label="draft input" value={value.name} onChange={event => setValue({ name: event.target.value })} /><Link to="/next">Leave editor</Link><History /><DraftActions /></>;
+    }
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } });
+    client.setQueryData(authKeys.me, teacher);
+    const router = createMemoryRouter([{ element: <DraftLeaveProvider><Outlet /></DraftLeaveProvider>, children: [
+      { path: "/editor", element: <RequireTeacherSession><PageDraftSession ownerId={teacher.id}><Editor /></PageDraftSession></RequireTeacherSession> },
+      { path: "/next", element: <p>Should not remain here</p> },
+      { path: "/login", element: <LoginPage /> },
+    ] }], { initialEntries: ["/editor"] });
+    apiClient.defaults.adapter = async config => fail(config, 401);
+    render(<QueryClientProvider client={client}><RouterProvider router={router} /></QueryClientProvider>);
+    fireEvent.change(screen.getByLabelText("draft input"), { target: { value: "unsaved input" } });
+    fireEvent.click(screen.getByText("Leave editor"));
+    await screen.findByRole("alertdialog");
+    fireEvent.click(screen.getByText("Load history"));
+    expect(await screen.findByRole("alert")).toHaveTextContent("登录状态已过期");
+    expect(router.state.location.pathname).toBe("/login");
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+    expect(screen.queryByLabelText("draft input")).toBeNull();
+    const unload = new Event("beforeunload", { cancelable: true }); window.dispatchEvent(unload);
+    expect(unload.defaultPrevented).toBe(false);
+  });
   it.each(["username", "email"])("leaves cached authenticated UI and returns to the full path after %s sign-in", async (mode) => {
     const calls: string[] = [];
     apiClient.defaults.adapter = async (config) => {
@@ -103,3 +131,5 @@ describe("live session expiry", () => {
     await waitFor(() => expect(screen.getByText(/Signed-in history/)).toBeInTheDocument());
   });
 });
+import "fake-indexeddb/auto";
+import { useState } from "react";

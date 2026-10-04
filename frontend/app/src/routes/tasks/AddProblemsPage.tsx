@@ -1,3 +1,4 @@
+import { taskInputVersion } from "@/lib/editorVersions";
 import {
   AlignLeft,
   ArrowLeft,
@@ -78,7 +79,7 @@ function AddProblemsForm({ taskQuery, submittedInput }: { taskQuery: ReturnType<
   const expertsQuery = useStageProviders();
   const preflight = useProblemSourcePreflight();
   const startPreparation = useStartQuestionPreparation();
-  const draft = usePageDraft(`problems:${taskId}`, () => problemDraftFromInput(submittedInput), problemDraftCodec, JSON.stringify([taskQuery.data?.workflow_revision, taskQuery.data?.course_id]), undefined, preflight.isPending || startPreparation.isPending);
+  const draft = usePageDraft(`problems:${taskId}`, () => problemDraftFromInput(submittedInput), problemDraftCodec, taskInputVersion(taskQuery.data, "problems"), undefined, preflight.isPending || startPreparation.isPending);
   const submitting = useRef(false);
   const [activeRole, setActiveRole] = draft.field("activeRole");
   const [sources, setSources] = draft.field("sources");

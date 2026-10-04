@@ -5,6 +5,7 @@ import {
   getJSON,
   postJSON,
   setAuthToken,
+  refreshAuthToken,
   type AuthAwareRequestConfig,
 } from "./client";
 import type { AuthResponse, EmailRegistrationRequest, EmailRegistrationResponse, EmailRegistrationVerifyResponse, LoginRequest, PasswordResetConfirmResponse, PasswordResetRequest, PasswordResetRequestResponse, RefreshResponse, StatusResponse, User } from "@/types";
@@ -83,9 +84,7 @@ export async function getCurrentUser(): Promise<User> {
 }
 
 export async function refreshToken(): Promise<RefreshResponse> {
-  const response = await postJSON<RefreshResponse>("/auth/refresh");
-  setAuthToken(response.token);
-  return response;
+  return { token: await refreshAuthToken() };
 }
 
 export async function restoreSession(): Promise<User> {

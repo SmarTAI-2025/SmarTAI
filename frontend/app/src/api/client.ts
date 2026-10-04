@@ -90,28 +90,8 @@ apiClient.interceptors.response.use(
       return apiClient.request(config);
     }
     const version = sessionVersion;
-    if (!refreshFlight || refreshFlight.version !== version) {
-      const promise = apiClient
-        .post<{ token: string }>("/auth/refresh", {}, { _skipAuthRefresh: true } as AuthAwareRequestConfig)
-        .then((response) => {
-          if (version !== sessionVersion) throw new CanceledError("Session changed during refresh");
-          // Rotation stays in the same login generation, unlike a new login.
-          localStorage.setItem(SMARTAI_TOKEN_STORAGE_KEY, response.data.token);
-          return response.data.token;
-        })
-        .catch((refreshError: unknown) => {
-          if (version === sessionVersion && axios.isAxiosError(refreshError) && refreshError.response?.status === 401) {
-            expireSession();
-          }
-          throw refreshError;
-        })
-        .finally(() => {
-          if (refreshFlight?.promise === promise) refreshFlight = null;
-        });
-      refreshFlight = { version, promise };
-    }
     try {
-      const token = await refreshFlight.promise;
+      const token = await refreshAuthToken();
       if (version !== sessionVersion) throw new CanceledError("Session changed during refresh");
       config.headers = { ...config.headers, Authorization: `Bearer ${token}` };
       return apiClient.request(config);
@@ -131,6 +111,8 @@ export function getAuthToken(): string | null {
 export function setAuthToken(token: string): void {
   sessionVersion += 1;
   localStorage.setItem(SMARTAI_TOKEN_STORAGE_KEY, token);
+  localStorage.setItem(SESSION_ACTIVITY_KEY, String(Date.now()));
+  localStorage.setItem(SESSION_RENEWED_ACTIVITY_KEY, String(Date.now()));
   setSessionExpired(false);
 }
 
@@ -138,11 +120,53 @@ export function clearAuthToken(): void {
   clearPageDrafts();
   sessionVersion += 1;
   localStorage.removeItem(SMARTAI_TOKEN_STORAGE_KEY);
+  localStorage.removeItem(SESSION_ACTIVITY_KEY);
+  localStorage.removeItem(SESSION_RENEWED_ACTIVITY_KEY);
 }
 
-function expireSession() {
-  clearAuthToken();
+export function expireSession() {
+  // Publish before clearing drafts: a router blocker must never trap this exit.
   setSessionExpired(true);
+  clearAuthToken();
+}
+
+export const SESSION_ACTIVITY_KEY = `${SMARTAI_TOKEN_STORAGE_KEY}:activity`;
+export const SESSION_RENEWED_ACTIVITY_KEY = `${SMARTAI_TOKEN_STORAGE_KEY}:renewed-activity`;
+
+export function refreshAuthToken(activity = false): Promise<string> {
+  const version = sessionVersion;
+  if (refreshFlight?.version === version) return refreshFlight.promise;
+  const startingToken = getAuthToken();
+  const execute = async () => {
+    if (version !== sessionVersion) throw new CanceledError("Session changed before refresh");
+    const current = getAuthToken();
+    // Another tab may already have rotated the shared cookie and access token.
+    if (current && current !== startingToken) return current;
+    const response = await apiClient.post<{ token: string }>(activity ? "/auth/activity" : "/auth/refresh", {}, {
+      _skipAuthRefresh: true, _sessionVersion: version,
+    } as AuthAwareRequestConfig);
+    if (version !== sessionVersion) throw new CanceledError("Session changed during refresh");
+    if (!response.data.token) throw new Error("Invalid session response");
+    localStorage.setItem(SMARTAI_TOKEN_STORAGE_KEY, response.data.token);
+    return response.data.token;
+  };
+  const run = typeof navigator !== "undefined" && navigator.locks
+    ? navigator.locks.request(`${SMARTAI_TOKEN_STORAGE_KEY}:refresh`, execute)
+    : execute();
+  const promise = (async () => await run)().catch((error: unknown) => {
+    if (version === sessionVersion && axios.isAxiosError(error) && error.response?.status === 401) expireSession();
+    throw error;
+  }).finally(() => { if (refreshFlight?.promise === promise) refreshFlight = null; });
+  refreshFlight = { version, promise };
+  return promise;
+}
+
+if (typeof window !== "undefined") {
+  window.addEventListener("storage", (event) => {
+    if (event.key !== SMARTAI_TOKEN_STORAGE_KEY) return;
+    sessionVersion += 1;
+    if (!event.newValue) expireSession();
+  });
 }
 
 export function normalizeAPIError(error: unknown): APIError {

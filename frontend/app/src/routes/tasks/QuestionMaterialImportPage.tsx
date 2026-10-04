@@ -1,3 +1,4 @@
+import { taskInputVersion } from "@/lib/editorVersions";
 import { useProblemDraftReferences } from "@/hooks/useProblemDraftReferences";
 import { createSourceDraft } from "@/lib/taskPageDrafts";
 import { useDraftProtection } from "@/hooks/useDraftProtection";
@@ -108,7 +109,7 @@ function QuestionMaterialImportPageForm() {
   const isSubmitting = preflightImport.isPending || startImport.isPending;
   const isDirty = hasUserChanges;
 
-  const localDraft = useDraftProtection({ scope: `material-import:${taskId}`, value: { targets, sourceMode, scope, librarySearch, selectedMaterial, selectedFile, saveToLibrary, enableMaterialOcr, structureMode, extractionHint, prepared }, version: JSON.stringify([taskQuery.data?.workflow_revision, taskQuery.data?.course_id]), enabled: taskQuery.isSuccess, busy: isSubmitting, onRestore: (draft) => { setTargets(draft.targets); setSourceMode(draft.sourceMode); setScope(draft.scope); setLibrarySearch(draft.librarySearch); setSelectedMaterial(draft.selectedMaterial); setSelectedFile(draft.selectedFile); setSaveToLibrary(draft.saveToLibrary); setEnableMaterialOcr(draft.enableMaterialOcr); setStructureMode(draft.structureMode); setExtractionHint(draft.extractionHint); setPrepared(draft.prepared); setHasUserChanges(true); } });
+  const localDraft = useDraftProtection({ scope: `material-import:${taskId}`, value: { targets, sourceMode, scope, librarySearch, selectedMaterial, selectedFile, saveToLibrary, enableMaterialOcr, structureMode, extractionHint, prepared }, version: taskInputVersion(taskQuery.data, "material-import"), enabled: taskQuery.isSuccess, busy: isSubmitting, onRestore: (draft) => { setTargets(draft.targets); setSourceMode(draft.sourceMode); setScope(draft.scope); setLibrarySearch(draft.librarySearch); setSelectedMaterial(draft.selectedMaterial); setSelectedFile(draft.selectedFile); setSaveToLibrary(draft.saveToLibrary); setEnableMaterialOcr(draft.enableMaterialOcr); setStructureMode(draft.structureMode); setExtractionHint(draft.extractionHint); setPrepared(draft.prepared); setHasUserChanges(true); } });
   const references = useProblemDraftReferences(taskId, selectedMaterial ? [{ ...createSourceDraft("problem"), id: "material-import", sourceMode: "library", libraryMaterial: selectedMaterial }] : [], () => {});
   const referenceError = references.blocked ? (references.status("material-import") === "missing" ? "已暂存的资料已删除或不可访问，请重新选择。" : "正在检查资料引用；若网络不可用，请重试，未自动上传或识别。") : null;
   const taskReady = taskQuery.data?.status === "problems_ready";

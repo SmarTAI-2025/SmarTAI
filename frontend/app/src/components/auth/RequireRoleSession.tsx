@@ -8,6 +8,7 @@ import { Card } from "@/components/ui/Card";
 import type { UserRole } from "@/types/auth";
 import { useSessionExpired } from "@/lib/sessionExpiry";
 import { SessionRestoreError } from "./SessionRestoreError";
+import { useSessionActivity } from "@/hooks/useSessionActivity";
 
 /**
  * Role-aware route guard. Wraps a workspace root so that a logged-in user of
@@ -27,6 +28,7 @@ export function RequireRoleSession({
 }) {
   const currentUser = useCurrentUser();
   const expired = useSessionExpired();
+  useSessionActivity(Boolean(currentUser.data) && !expired);
   const location = useLocation();
   const allowedRoles = Array.isArray(allowed) ? allowed : [allowed];
 

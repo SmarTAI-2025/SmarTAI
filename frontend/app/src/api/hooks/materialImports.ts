@@ -20,8 +20,10 @@ export function useStartMaterialImport() {
     mutationFn: ({ taskId, sourceToken }: { taskId: string; sourceToken: string }) =>
       materialImportsApi.startMaterialImport(taskId, sourceToken),
     onSuccess: (_data, variables) => {
-      queryClient.invalidateQueries({ queryKey: taskKeys.detail(variables.taskId) });
-      queryClient.invalidateQueries({ queryKey: taskKeys.state(variables.taskId) });
+      return Promise.all([
+        queryClient.invalidateQueries({ queryKey: taskKeys.detail(variables.taskId) }),
+        queryClient.invalidateQueries({ queryKey: taskKeys.state(variables.taskId) }),
+      ]);
     },
   });
 }
@@ -40,10 +42,12 @@ export function useApplyMaterialImport() {
   return useMutation({
     mutationFn: materialImportsApi.applyMaterialImport,
     onSuccess: (_data, variables) => {
-      queryClient.invalidateQueries({ queryKey: materialImportKeys.detail(variables.taskId, variables.jobId) });
-      queryClient.invalidateQueries({ queryKey: taskKeys.all });
-      queryClient.invalidateQueries({ queryKey: taskKeys.detail(variables.taskId) });
-      queryClient.invalidateQueries({ queryKey: taskKeys.state(variables.taskId) });
+      return Promise.all([
+        queryClient.invalidateQueries({ queryKey: materialImportKeys.detail(variables.taskId, variables.jobId) }),
+        queryClient.invalidateQueries({ queryKey: taskKeys.all }),
+        queryClient.invalidateQueries({ queryKey: taskKeys.detail(variables.taskId) }),
+        queryClient.invalidateQueries({ queryKey: taskKeys.state(variables.taskId) }),
+      ]);
     },
   });
 }

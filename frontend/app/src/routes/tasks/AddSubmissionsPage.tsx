@@ -1,3 +1,4 @@
+import { taskInputVersion } from "@/lib/editorVersions";
 import { FileUp, LoaderCircle } from "lucide-react";
 import { SubmissionSourceOutcomePanel } from "@/components/tasks/SubmissionSourceOutcomePanel";
 import {
@@ -61,7 +62,7 @@ function AddSubmissionsForm({ taskQuery, submittedInput }: { taskQuery: ReturnTy
   const rosterChooseRef = useRef<HTMLButtonElement>(null);
   const byokLinkRef = useRef<HTMLAnchorElement>(null);
 
-  const draft = usePageDraft(`submissions:${taskId}`, () => submissionDraftFromInput(submittedInput), submissionDraftCodec, JSON.stringify([taskQuery.data?.workflow_revision, taskQuery.data?.course_id]), undefined, parseSubmissions.isPending || retryRecognition.isPending);
+  const draft = usePageDraft(`submissions:${taskId}`, () => submissionDraftFromInput(submittedInput), submissionDraftCodec, taskInputVersion(taskQuery.data, "submissions"), undefined, parseSubmissions.isPending || retryRecognition.isPending);
   const submitting = useRef(false);
   const [selectedFile, setSelectedFile] = draft.field("selectedFile");
   const [rosterFile, setRosterFile] = draft.field("rosterFile");
