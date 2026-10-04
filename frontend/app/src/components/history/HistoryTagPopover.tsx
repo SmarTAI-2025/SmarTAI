@@ -1,5 +1,3 @@
-import { useDraftProtection } from "@/hooks/useDraftProtection";
-import { DraftActions } from "@/hooks/useDraftLeave";
 import { Check, Pencil, Plus, Tag as TagIcon, Trash2, X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { toast } from "sonner";
@@ -25,8 +23,7 @@ export function HistoryTagPopover({ task, tags }: { task: TaskLite; tags: TaskTa
   const deleteTag = useDeleteTag();
   const taskTagIds = task.tag_ids ?? [];
   const pending = updateTask.isPending || createTag.isPending || updateTag.isPending || deleteTag.isPending;
-  const localDraft = useDraftProtection({ scope: `history-tags:${task.task_id}`, value: { search, newColor, editingTag, editingName, editingColor }, baseline: { search: "", newColor: "slate" as TagColor, editingTag, editingName: editingTag?.name ?? "", editingColor: editingTag?.color ?? "slate" as TagColor }, version: JSON.stringify(tags.map((tag) => [tag.id, tag.name, tag.color])), busy: pending, onRestore: (draft) => { setSearch(draft.search); setNewColor(draft.newColor); setEditingTag(draft.editingTag); setEditingName(draft.editingName); setEditingColor(draft.editingColor); setOpen(true); } });
-  const closeEditor = () => localDraft.requestLeave(() => setOpen(false));
+  const closeEditor = () => setOpen(false);
   const normalizedSearch = search.trim().toLocaleLowerCase();
   const filteredTags = useMemo(
     () => tags.filter((tag) => !normalizedSearch || tag.name.toLocaleLowerCase().includes(normalizedSearch)),
@@ -70,9 +67,6 @@ export function HistoryTagPopover({ task, tags }: { task: TaskLite; tags: TaskTa
       if (!taskTagIds.includes(tag.id)) {
         await updateTask.mutateAsync({ taskId: task.task_id, patch: { tag_ids: [...taskTagIds, tag.id] } });
       }
-      if (!localDraft.isCurrent()) return;
-      await localDraft.clear();
-      if (!localDraft.isCurrent()) return;
       setSearch("");
       setNewColor("slate");
     } catch (error) {
@@ -91,9 +85,6 @@ export function HistoryTagPopover({ task, tags }: { task: TaskLite; tags: TaskTa
     if (!editingTag || !name) return;
     try {
       await updateTag.mutateAsync({ tagId: editingTag.id, patch: { name, color: editingColor } });
-      if (!localDraft.isCurrent()) return;
-      await localDraft.clear();
-      if (!localDraft.isCurrent()) return;
       setEditingTag(null);
     } catch (error) {
       toast.error(normalizeAPIError(error).message);
@@ -111,9 +102,6 @@ export function HistoryTagPopover({ task, tags }: { task: TaskLite; tags: TaskTa
     if (!confirmed) return;
     try {
       await deleteTag.mutateAsync(tag.id);
-      if (!localDraft.isCurrent()) return;
-      await localDraft.clear();
-      if (!localDraft.isCurrent()) return;
       setEditingTag(null);
       toast.success(t("historyTagDeleteSuccess"));
     } catch (error) {
@@ -187,7 +175,7 @@ export function HistoryTagPopover({ task, tags }: { task: TaskLite; tags: TaskTa
                   <Trash2 aria-hidden="true" className="h-3.5 w-3.5" />{t("historyTagDelete")}
                 </button>
                 <div className="flex gap-2">
-                  <button type="button" onClick={() => localDraft.requestLeave(() => setEditingTag(null))} className="text-xs text-muted-foreground">{t("historyTagCancel")}</button>
+                  <button type="button" onClick={() => setEditingTag(null)} className="text-xs text-muted-foreground">{t("historyTagCancel")}</button>
                   <button type="button" disabled={pending || !editingName.trim()} onClick={() => void saveEdit()} className="rounded-md bg-primary px-2.5 py-1.5 text-xs font-semibold text-primary-foreground disabled:opacity-50">{t("historyTagSave")}</button>
                 </div>
               </div>
@@ -202,7 +190,6 @@ export function HistoryTagPopover({ task, tags }: { task: TaskLite; tags: TaskTa
               <p className="mt-2 text-[11px] leading-4 text-muted-foreground">{t("historyTagLimitHint")}</p>
             </form>
           )}
-          <DraftActions />
         </div>
       ) : null}
     </div>
