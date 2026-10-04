@@ -607,6 +607,19 @@ export function classifyRecoverableError(
     };
   }
 
+  if (code === "provider_capacity_unavailable") {
+    return {
+      title: tx(locale, "模型调用正在排队", "Model capacity is busy"),
+      description: tx(locale,
+        "SmarTAI 未能在限定时间内取得调用名额，尚未向模型发送本次请求。任务资料已保留，请稍后重试；持续出现时请联系管理员检查服务器资源。",
+        "SmarTAI could not obtain capacity before the deadline; this request was not sent to the model. Your task data is preserved. Retry later; if this persists, ask an administrator to check server resources."),
+      actionLabel: tx(locale, "重新尝试", "Try again"),
+      actionKind: "retry",
+      tone: "warning",
+      technicalDetails,
+    };
+  }
+
   if (code === "provider_timeout") {
     return {
       title: tx(locale, "模型响应超时", "The model took too long to respond"),

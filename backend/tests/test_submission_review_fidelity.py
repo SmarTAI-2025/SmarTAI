@@ -8,10 +8,13 @@ from backend.services.submission_source_pipeline import attach_submission_recogn
 
 @pytest.mark.parametrize("summary,expected", [
     (None, []),
-    ({"confidence": "medium", "requires_review": True}, ["recognition_needs_review"]),
+    ({"confidence": "medium", "requires_review": True}, []),
     ({"confidence": "low"}, ["recognition_needs_review"]),
+    ({"confidence": "high", "error_code": "partial"}, ["recognition_needs_review"]),
+    ({"confidence": "medium", "coverage": {"missing_targets": ["Q2"]}}, ["recognition_needs_review"]),
+    ({"confidence": "medium", "coverage": {"failed_pages": [2]}}, ["recognition_needs_review", "recognition_failed_pages:2"]),
 ])
-def test_uncalibrated_visual_coverage_does_not_clear_required_answer_review(summary, expected):
+def test_only_specific_uncertainty_requires_answer_review(summary, expected):
     student = {"stu_ans": [{"q_id": "q1", "content": "0*x=0 (wrong on purpose)", "flag": []}]}
     result = SubmissionSourceParseResult("source", "file", "work.pdf", "parsed", student,
         "student", 1, (), None, None, False)

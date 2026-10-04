@@ -12,7 +12,7 @@ export function ReviewConfirmButton({ locale, confirmed = false, blocked = false
 }) {
   const zh = locale === "zh-CN";
   const label = busy ? (zh ? "确认中" : "Confirming") : confirmed ? (zh ? "已确认" : "Confirmed") : all ? (zh ? "全部确认" : "Confirm all") : (zh ? "待确认" : "Confirm review");
-  return <button type="button" onClick={onClick} disabled={disabled || busy || confirmed} title={title} aria-label={title ? `${title} · ${label}` : label} className={cn(reviewActionClass, compact && "h-7 rounded-full px-3 text-xs", confirmed ? "border-emerald-200 bg-emerald-100 text-emerald-800 disabled:opacity-100 dark:bg-emerald-950/40 dark:text-emerald-200" : blocked ? "border-red-200 bg-red-50 text-red-700" : "border-amber-200 bg-amber-100 text-amber-800 hover:bg-amber-200 dark:bg-amber-950/40 dark:text-amber-200")}>
+  return <button type="button" onClick={onClick} disabled={disabled || busy || confirmed} title={title} aria-label={title ? `${title} · ${label}` : label} className={cn(reviewActionClass, compact && "h-7 rounded-full px-3 text-xs", confirmed ? "border-emerald-200 bg-emerald-100 text-emerald-800 disabled:opacity-100 dark:bg-emerald-950/40 dark:text-emerald-200" : blocked ? "border-red-200 bg-red-50 text-red-700" : "border-emerald-200 bg-emerald-50 text-emerald-800 hover:bg-emerald-100 dark:bg-emerald-950/40 dark:text-emerald-200")}>
     {busy ? <LoaderCircle className="h-4 w-4 animate-spin" aria-hidden="true" /> : <Check className="h-4 w-4" aria-hidden="true" />}{label}
   </button>;
 }

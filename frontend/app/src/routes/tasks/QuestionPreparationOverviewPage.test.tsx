@@ -105,7 +105,7 @@ describe("QuestionPreparationOverviewPage smart search", () => {
   it("keeps only a details link in each matrix action cell", () => {
     renderPage("/tasks/task-1/questions");
     expect(screen.queryByRole("button", { name: /确认第/ })).not.toBeInTheDocument();
-    expect(screen.getAllByRole("link", { name: "详情 →" })).toHaveLength(2);
+    expect(screen.getAllByRole("link", { name: "查看" })).toHaveLength(2);
     expect(mutateAsync).not.toHaveBeenCalled();
   });
 
@@ -128,7 +128,7 @@ describe("QuestionPreparationOverviewPage smart search", () => {
   ])("renders the review matrix for %s without crashing", (code, label) => {
     extraIssues.push({ issue_id: "ocr-risk", field: "stem", code, severity: "warning", status: "open" });
     renderPage("/tasks/task-1/questions");
-    expect(screen.getByTitle(label)).toBeInTheDocument();
+    expect(screen.getAllByTitle(label).length).toBeGreaterThan(0);
     expect(screen.getByRole("row", { name: /Q1/ })).toBeInTheDocument();
   });
 
@@ -147,7 +147,8 @@ describe("QuestionPreparationOverviewPage smart search", () => {
     expect(screen.getByRole("columnheader", { name: "满分" })).toBeInTheDocument();
     expect(screen.getByTitle("系统默认，需确认")).toHaveTextContent("10 分");
     expect(screen.getByText(/作业总分 16/)).toBeInTheDocument();
-    expect(screen.getByTitle("当前使用默认 10 分，请确认题目满分")).toBeInTheDocument();
+    expect(screen.getByTitle("系统默认，需确认")).toHaveClass("bg-emerald-100");
+    expect(screen.getByRole("region", { name: "待复核队列" })).toHaveTextContent("当前没有需要复核的题目");
     expect(screen.getAllByRole("row")).toHaveLength(3);
     expect(screen.queryByRole("row", { name: /\(a\)/ })).not.toBeInTheDocument();
     expect(screen.queryByRole("row", { name: /\(b\)/ })).not.toBeInTheDocument();

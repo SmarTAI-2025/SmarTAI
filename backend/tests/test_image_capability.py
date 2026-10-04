@@ -54,6 +54,8 @@ async def test_relay_always_serializes_real_images_with_selected_protocol(protoc
     monkeypatch.setattr(settings, "runtime_environment", "development")
     provider = build_provider(ProviderConfig(provider_type="qwen", model="arbitrary", api_key="fake", base_url="https://relay.example.com/v1", wire_protocol=protocol))
     client = SimpleNamespace(post=AsyncMock(return_value=httpx.Response(200, json=payload)))
+    if protocol == "openai_chat_completions":
+        client.post.return_value = httpx.Response(200, text='data: {"choices":[{"delta":{"content":"ok"},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n')
     provider._relay_client = AsyncMock(return_value=client)
     await provider.ainvoke_vision("read", [VisionImage(data=b"pixels", media_type="image/png")])
     request = client.post.call_args.kwargs["json"]

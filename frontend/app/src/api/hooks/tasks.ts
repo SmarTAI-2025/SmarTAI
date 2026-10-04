@@ -316,7 +316,13 @@ export function useUpdateProblem() {
       ...patch,
       expected_workflow_revision: expectedWorkflowRevision,
     }),
-    onSuccess: (_data, variables) => {
+    onSuccess: (data, variables) => {
+      // Publish the server's acknowledged issues and review state together.
+      queryClient.setQueryData<Task>(taskKeys.detail(variables.taskId), current => {
+        if (!current || current.workflow_revision > data.workflow_revision) return current;
+        return { ...current, workflow_revision: data.workflow_revision,
+          problem_data: { ...current.problem_data, [variables.qId]: data.problem } };
+      });
       invalidateTask(queryClient, variables.taskId);
     },
   });

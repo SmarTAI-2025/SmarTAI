@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import json
 import logging
 import random
 import re
@@ -20,6 +21,7 @@ import ssl
 import time
 from abc import ABC, abstractmethod
 from collections import deque
+from contextlib import asynccontextmanager
 from typing import List, Optional, Dict, Any, Deque, Callable
 from dataclasses import dataclass
 
@@ -405,18 +407,40 @@ class BaseProvider(ABC):
             limit = initial_concurrency(rpm)
         return min(HARD_LIMIT, limit, max(1, int(settings.max_concurrent_llm_per_provider)))
 
-    def _call_capacity(self, messages: List[BaseMessage]):
+    @asynccontextmanager
+    async def _call_capacity(self, messages: List[BaseMessage]):
         scheduler = get_scheduler()
-        return scheduler.lease(
-            key=quota_key(self.config, endpoint_key(self.config)),
-            rpm=max(0, int(self.config.rpm or 0)),
-            owner=self.config.scheduling_owner or "anonymous",
-            endpoint=endpoint_key(self.config),
-            endpoint_limit=min(HARD_LIMIT, max(1, int(settings.max_concurrent_llm_per_endpoint)),
-                               max(1, int(settings.max_concurrent_llm_per_provider))),
-            memory=request_memory(messages),
-            ready=lambda: not self._endpoint_breaker().is_open,
-        )
+        admitted = False
+        # SDK timeouts bound individual network reads, not admission or an
+        # upstream stream that keeps sending keep-alives. Bound this whole
+        # attempt so one waiter cannot occupy a workflow worker indefinitely.
+        deadline = asyncio.timeout(float(settings.llm_timeout))
+        try:
+            async with deadline:
+                async with scheduler.lease(
+                    key=quota_key(self.config, endpoint_key(self.config)),
+                    rpm=max(0, int(self.config.rpm or 0)),
+                    owner=self.config.scheduling_owner or "anonymous",
+                    endpoint=endpoint_key(self.config),
+                    endpoint_limit=min(HARD_LIMIT, max(1, int(settings.max_concurrent_llm_per_endpoint)),
+                                       max(1, int(settings.max_concurrent_llm_per_provider))),
+                    memory=request_memory(messages),
+                    ready=lambda: not self._endpoint_breaker().is_open,
+                ):
+                    admitted = True
+                    yield
+        except TimeoutError as exc:
+            if not deadline.expired():
+                raise
+            code = "provider_timeout" if admitted else "provider_capacity_unavailable"
+            logger.warning("LLM attempt deadline reached; provider_type=%s admitted=%s code=%s",
+                           self.provider_type, admitted, code)
+            error = ProviderRequestError(code)
+            if not admitted:
+                # No upstream request was sent. Surface local capacity pressure
+                # for an explicit retry instead of silently requeueing for minutes.
+                error.retryable = False
+            raise error from exc
 
     def _record_duration(self, duration_ms: float) -> None:
         get_scheduler().record_success(
@@ -516,7 +540,8 @@ class GeminiProvider(BaseProvider):
         from langchain_google_genai import ChatGoogleGenerativeAI
         return ChatGoogleGenerativeAI(
             model=self.model,
-            temperature=0.0,
+            # Use the model's sampling default (Gemini 3 recommends 1.0).
+            temperature=None,
             timeout=settings.llm_timeout,
             max_retries=0,
             google_api_key=self.config.api_key,
@@ -601,6 +626,10 @@ class GeminiProvider(BaseProvider):
 class OpenAIProvider(BaseProvider):
     provider_type = "openai"
 
+    def _generation_kwargs(self, max_output_tokens: int | None) -> dict[str, Any]:
+        _validate_output_limit(max_output_tokens)
+        return {} if max_output_tokens is None else {"max_completion_tokens": max_output_tokens}
+
     def _build_client_sync(self) -> Any:
         from langchain_openai import ChatOpenAI
         http_client, http_async_client = _build_provider_httpx_clients(
@@ -611,7 +640,9 @@ class OpenAIProvider(BaseProvider):
 
         return ChatOpenAI(
             model=self.model,
-            temperature=0.0,
+            # Reasoning models reject temperature; retain their reasoning default.
+            temperature=None,
+            use_responses_api=False,
             timeout=settings.llm_timeout,
             max_retries=0,
             api_key=self.config.api_key,
@@ -623,6 +654,9 @@ class OpenAIProvider(BaseProvider):
 
 class ZhipuProvider(BaseProvider):
     provider_type = "zhipu"
+
+    def _generation_kwargs(self, max_output_tokens: int | None) -> dict[str, Any]:
+        return _compatible_generation_kwargs(max_output_tokens)
 
     async def ainvoke(self, messages: List[BaseMessage], *, max_output_tokens: int | None = None) -> LLMResponse:
         try:
@@ -654,7 +688,8 @@ class ZhipuProvider(BaseProvider):
 
         return ChatOpenAI(
             model=self.model,
-            temperature=0.0,
+            temperature=None,
+            use_responses_api=False,
             timeout=settings.llm_timeout,
             max_retries=0,
             api_key=self.config.api_key,
@@ -671,7 +706,8 @@ class AnthropicProvider(BaseProvider):
         from langchain_anthropic import ChatAnthropic
         return ChatAnthropic(
             model=self.model,
-            temperature=0.0,
+            # Recent Claude models reject non-default sampling parameters.
+            temperature=None,
             timeout=settings.llm_timeout,
             max_retries=0,
             api_key=self.config.api_key,
@@ -692,10 +728,20 @@ class AnthropicProvider(BaseProvider):
 # as OCR (launch plan 上线前 08); vision GLM is handled by ZhipuProvider above.
 
 
+def _compatible_generation_kwargs(max_output_tokens: int | None) -> dict[str, Any]:
+    _validate_output_limit(max_output_tokens)
+    # ChatOpenAI rewrites max_tokens to OpenAI's max_completion_tokens.
+    # These vendors document max_tokens; extra_body preserves the wire field.
+    return {} if max_output_tokens is None else {"extra_body": {"max_tokens": max_output_tokens}}
+
+
 class _DomesticOpenAICompatibleProvider(BaseProvider):
     """OpenAI-compatible domestic provider that always connects directly."""
 
     _default_base_url: str = ""
+
+    def _generation_kwargs(self, max_output_tokens: int | None) -> dict[str, Any]:
+        return _compatible_generation_kwargs(max_output_tokens)
 
     def __init__(self, config: ProviderConfig):
         super().__init__(config)
@@ -709,7 +755,13 @@ class _DomesticOpenAICompatibleProvider(BaseProvider):
         )
         return ChatOpenAI(
             model=self.model,
-            temperature=0.0,
+            # Kimi fixes sampling per model; preserve all vendors' defaults.
+            temperature=None,
+            use_responses_api=False,
+            # Qwen's thinking-only/open-weight models require streaming.
+            # LangChain assembles the stream into the usual AIMessage.
+            streaming=self.provider_type == "qwen",
+            stream_usage=self.provider_type == "qwen",
             timeout=settings.llm_timeout,
             max_retries=0,
             api_key=self.config.api_key,
@@ -803,7 +855,7 @@ def _openai_payload(messages: List[BaseMessage], model: str) -> dict[str, Any]:
                         "image_url": {"url": block["data_url"]},
                     })
         output.append({"role": _message_role(message), "content": content})
-    return {"model": model, "messages": output, "temperature": 0}
+    return {"model": model, "messages": output}
 
 
 def _anthropic_payload(messages: List[BaseMessage], model: str) -> dict[str, Any]:
@@ -834,7 +886,6 @@ def _anthropic_payload(messages: List[BaseMessage], model: str) -> dict[str, Any
         "model": model,
         "messages": output,
         "max_tokens": 4096,
-        "temperature": 0,
     }
     if system_parts:
         payload["system"] = "\n\n".join(system_parts)
@@ -866,7 +917,7 @@ def _gemini_payload(messages: List[BaseMessage], model: str) -> dict[str, Any]:
             })
     payload: dict[str, Any] = {
         "contents": contents,
-        "generationConfig": {"temperature": 0},
+        "generationConfig": {},
     }
     if system_parts:
         payload["systemInstruction"] = {"parts": system_parts}
@@ -895,6 +946,45 @@ def _transport_error_code(exc: BaseException) -> str:
             return "provider_endpoint_tls_failed"
         current = current.__cause__ or current.__context__
     return "provider_unreachable"
+
+
+def _assemble_chat_stream(body: str) -> dict[str, Any]:
+    """Assemble a bounded Qwen SSE response without exposing reasoning text.
+
+    The safe transport enforces the existing response-byte and timeout limits.
+    An interrupted stream must never be accepted as a complete recognition.
+    """
+    chunks: list[str] = []
+    usage: dict[str, Any] = {}
+    finish_reason = None
+    done = False
+    try:
+        for event in re.split(r"\r?\n\r?\n", body):
+            data = "\n".join(line[5:].lstrip() for line in event.splitlines() if line.startswith("data:"))
+            if not data:
+                continue
+            if data == "[DONE]":
+                done = True
+                break
+            chunk = json.loads(data)
+            if chunk.get("error"):
+                raise ValueError("stream error")
+            if isinstance(chunk.get("usage"), dict):
+                usage = chunk["usage"]
+            for choice in chunk.get("choices", []):
+                if choice.get("index", 0) != 0:
+                    continue
+                text = choice.get("delta", {}).get("content")
+                if text is not None:
+                    if not isinstance(text, str):
+                        raise ValueError("invalid content")
+                    chunks.append(text)
+                finish_reason = choice.get("finish_reason") or finish_reason
+        if not done or finish_reason is None:
+            raise ValueError("incomplete stream")
+    except (ValueError, TypeError, AttributeError) as exc:
+        raise ProviderRequestError("provider_response_invalid") from exc
+    return {"choices": [{"message": {"content": "".join(chunks)}, "finish_reason": finish_reason}], "usage": usage}
 
 
 class SafeRelayProvider(BaseProvider):
@@ -958,6 +1048,8 @@ class SafeRelayProvider(BaseProvider):
         if self.wire_protocol == "openai_chat_completions":
             headers["authorization"] = f"Bearer {self.config.api_key}"
             payload = _openai_payload(messages, self.model)
+            if self.provider_type == "qwen":
+                payload.update(stream=True, stream_options={"include_usage": True})
         elif self.wire_protocol == "anthropic_messages":
             headers.update({
                 "x-api-key": self.config.api_key,
@@ -970,6 +1062,8 @@ class SafeRelayProvider(BaseProvider):
         if max_output_tokens is not None:
             if self.wire_protocol == "gemini_generate_content":
                 payload["generationConfig"]["maxOutputTokens"] = max_output_tokens
+            elif self.wire_protocol == "openai_chat_completions" and self.provider_type == "openai":
+                payload["max_completion_tokens"] = max_output_tokens
             else:
                 payload["max_tokens"] = max_output_tokens
         return headers, payload
@@ -1010,7 +1104,7 @@ class SafeRelayProvider(BaseProvider):
                 content = "".join(
                     str(item.get("text", ""))
                     for item in parts
-                    if isinstance(item, dict)
+                    if isinstance(item, dict) and not item.get("thought")
                 )
                 usage = payload.get("usageMetadata", {})
                 input_tokens = usage.get("promptTokenCount")
@@ -1074,7 +1168,10 @@ class SafeRelayProvider(BaseProvider):
         # breaker, even if the body later turns out unparseable.
         self._endpoint_breaker().record_success()
         try:
-            response_payload = response.json()
+            response_payload = (
+                _assemble_chat_stream(response.text)
+                if payload.get("stream") else response.json()
+            )
         except ValueError as exc:
             raise ProviderRequestError("provider_response_invalid") from exc
         duration_ms = (time.perf_counter() - started) * 1000

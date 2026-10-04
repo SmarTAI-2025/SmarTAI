@@ -211,6 +211,7 @@ class _FakeRelayResponse:
     def __init__(self, status_code, headers=None):
         self.status_code = status_code
         self.headers = headers or {}
+        self.text = 'data: {"choices":[{"delta":{"content":"ok"},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n'
 
     def json(self):
         if self.status_code < 400:

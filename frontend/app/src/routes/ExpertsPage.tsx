@@ -47,6 +47,7 @@ import { cn } from "@/lib/cn";
 import {
   modelDisplayName,
   modelSecondaryLabel,
+  sortByProvider,
 } from "@/lib/modelPresentation";
 import type {
   AddExpertKeyRequest,
@@ -58,13 +59,13 @@ import type {
 } from "@/types";
 
 const providerOptions: Array<{ value: ProviderType; label: string; defaultModel: string }> = [
-  { value: "gemini", label: "Google Gemini", defaultModel: "gemini-3-flash-preview" },
-  { value: "openai", label: "GPT (OpenAI)", defaultModel: "gpt-4o" },
-  { value: "zhipu", label: "Zhipu (智谱)", defaultModel: "glm-4.5-air" },
-  { value: "anthropic", label: "Claude (Anthropic)", defaultModel: "claude-sonnet-4-20250514" },
-  { value: "deepseek", label: "DeepSeek", defaultModel: "deepseek-v4-flash" },
+  { value: "gemini", label: "Google Gemini", defaultModel: "gemini-3.5-flash-lite" },
+  { value: "openai", label: "GPT (OpenAI)", defaultModel: "gpt-6-luna" },
+  { value: "anthropic", label: "Anthropic Claude", defaultModel: "claude-sonnet-5-5" },
+  { value: "deepseek", label: "DeepSeek", defaultModel: "deepseek-flash" },
+  { value: "zhipu", label: "Zhipu (智谱)", defaultModel: "glm-5.3-flash" },
   { value: "moonshot", label: "Kimi (Moonshot)", defaultModel: "kimi-k3" },
-  { value: "qwen", label: "Qwen (通义千问)", defaultModel: "qwen-plus" },
+  { value: "qwen", label: "Qwen (通义千问)", defaultModel: "qwen3.8-flash" },
 ];
 
 type EditorTarget =
@@ -117,7 +118,7 @@ export function ExpertsPage() {
   const [editor, setEditor] = useState<EditorTarget | null>(null);
   const [confirmation, setConfirmation] = useState<Confirmation | null>(null);
 
-  const experts = expertsQuery.data ?? [];
+  const experts = sortByProvider(expertsQuery.data ?? []);
   const enabledCount = experts.filter((expert) => expert.enabled).length;
   const verifiedCount = experts.filter(
     (expert) => expert.verification_status === "verified",
@@ -131,9 +132,8 @@ export function ExpertsPage() {
     updateExpert.isPending ||
     selectExpert.isPending ||
     setDefaultExpert.isPending ||
-    verifyExpert.isPending ||
-    verifyImage.isPending ||
     removeExpert.isPending;
+  const verificationPending = verifyExpert.isPending || verifyImage.isPending;
 
   async function handleSave(value: ExpertFormValue) {
     if (!editor) return;
@@ -266,8 +266,8 @@ export function ExpertsPage() {
           </h1>
           <p className="mt-1 max-w-3xl text-sm leading-6 text-muted-foreground">
             {zh
-              ? "管理模型配置，测试文字与图片识别能力。"
-              : "Manage model configurations and test text and image support."}
+              ? "管理模型配置，测试文本连通性与视觉能力。"
+              : "Manage model configurations and test text connectivity and vision capability."}
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
@@ -311,12 +311,12 @@ export function ExpertsPage() {
           tone="accent"
         />
         <SummaryMetric
-          label={zh ? "文字测试通过" : "Text checks passed"}
+          label={zh ? "文本测试通过" : "Text tests passed"}
           value={expertsQuery.isLoading ? "—" : String(verifiedCount)}
           tone="success"
         />
         <SummaryMetric
-          label={zh ? "文字测试失败" : "Text checks failed"}
+          label={zh ? "文本测试失败" : "Text tests failed"}
           value={expertsQuery.isLoading ? "—" : String(failedCheckCount)}
           tone={failedCheckCount > 0 ? "warning" : "neutral"}
         />
@@ -395,10 +395,10 @@ export function ExpertsPage() {
                       {zh ? "配置状态" : "Configuration"}
                     </th>
                     <th className="px-3 text-center align-middle font-medium">
-                      {zh ? "文字测试" : "Text test"}
+                      {zh ? "文本测试" : "Text test"}
                     </th>
                     <th className="px-3 text-center align-middle font-medium">
-                      {zh ? "图片测试" : "Image test"}
+                      {zh ? "图像测试" : "Image test"}
                     </th>
                     <th className="px-3 text-center align-middle font-medium">
                       {zh ? "调用限制" : "Limits"}
@@ -415,10 +415,11 @@ export function ExpertsPage() {
                       expert={expert}
                       locale={locale}
                       disabled={controlsPending}
+                      verificationDisabled={controlsPending || verificationPending}
                       onEdit={() => setEditor({ mode: "edit", expert })}
                       onToggle={() => void handleToggle(expert)}
                       onVerify={() => setConfirmation({ kind: "verify", expert })}
-                      onVerifyImage={() => void verifyImage.mutateAsync(expert.provider_id).catch(error => toast.error(normalizeAPIError(error).message))}
+                      onVerifyImage={() => void verifyImage.mutateAsync(expert.provider_id).catch(error => toast.error(safeExpertError(error, locale)))}
                       onSetDefault={() => void handleSetDefault(expert)}
                       onDelete={() => setConfirmation({ kind: "delete", expert })}
                     />
@@ -433,10 +434,11 @@ export function ExpertsPage() {
                   expert={expert}
                   locale={locale}
                   disabled={controlsPending}
+                  verificationDisabled={controlsPending || verificationPending}
                   onEdit={() => setEditor({ mode: "edit", expert })}
                   onToggle={() => void handleToggle(expert)}
                   onVerify={() => setConfirmation({ kind: "verify", expert })}
-                      onVerifyImage={() => void verifyImage.mutateAsync(expert.provider_id).catch(error => toast.error(normalizeAPIError(error).message))}
+                      onVerifyImage={() => void verifyImage.mutateAsync(expert.provider_id).catch(error => toast.error(safeExpertError(error, locale)))}
                   onSetDefault={() => void handleSetDefault(expert)}
                   onDelete={() => setConfirmation({ kind: "delete", expert })}
                 />
@@ -471,7 +473,7 @@ export function ExpertsPage() {
         <ConfirmationDialog
           confirmation={confirmation}
           locale={locale}
-          pending={verifyExpert.isPending || removeExpert.isPending}
+          pending={confirmation.kind === "verify" ? verificationPending : removeExpert.isPending}
           onClose={() => setConfirmation(null)}
           onConfirm={() => void handleConfirm()}
         />
@@ -694,6 +696,7 @@ function ExpertTableRow({
   expert,
   locale,
   disabled,
+  verificationDisabled,
   onEdit,
   onToggle,
   onVerify,
@@ -728,10 +731,10 @@ function ExpertTableRow({
       </td>
       <td className="px-3 text-center align-middle">
         <VerificationBadge expert={expert} locale={locale} />
-        {expert.editable !== false ? <RowAction label={zh ? "验证（可选）" : "Verify (optional)"} onClick={onVerify} disabled={disabled}><ShieldCheck aria-hidden="true" size={14} /></RowAction> : null}
+        {expert.editable !== false ? <RowAction label={zh ? "验证（可选）" : "Verify (optional)"} onClick={onVerify} disabled={verificationDisabled}><ShieldCheck aria-hidden="true" size={14} /></RowAction> : null}
       </td>
       <td className="px-3 text-center align-middle">
-        <ImageVerification expert={expert} locale={locale} disabled={disabled} onVerifyImage={onVerifyImage} />
+        <ImageVerification expert={expert} locale={locale} disabled={verificationDisabled} onVerifyImage={onVerifyImage} />
       </td>
       <td className="px-3 text-center align-middle text-xs text-muted-foreground">
         <span className="block">RPM {expert.rpm > 0 ? expert.rpm : "—"}</span>
@@ -744,6 +747,7 @@ function ExpertTableRow({
           expert={expert}
           locale={locale}
           disabled={disabled}
+          verificationDisabled={verificationDisabled}
           onEdit={onEdit}
           onToggle={onToggle}
           onVerify={onVerify}
@@ -760,6 +764,7 @@ interface ExpertRowProps {
   expert: ExpertConfig;
   locale: "zh-CN" | "en-US";
   disabled: boolean;
+  verificationDisabled: boolean;
   onEdit: () => void;
   onToggle: () => void;
   onVerify: () => void;
@@ -789,10 +794,10 @@ function ExpertMobileRow(props: ExpertRowProps) {
         <EnabledBadge enabled={expert.enabled} locale={locale} />
       </div>
       <div className="grid grid-cols-2 items-start gap-3 text-center text-xs text-muted-foreground">
-        <div><p>{zh ? "文字测试" : "Text test"}</p><VerificationBadge expert={expert} locale={locale} />
-          {expert.editable !== false ? <RowAction label={zh ? "验证（可选）" : "Verify (optional)"} onClick={props.onVerify} disabled={props.disabled}><ShieldCheck aria-hidden="true" size={14} /></RowAction> : null}
+        <div><p>{zh ? "文本测试" : "Text test"}</p><VerificationBadge expert={expert} locale={locale} />
+          {expert.editable !== false ? <RowAction label={zh ? "验证（可选）" : "Verify (optional)"} onClick={props.onVerify} disabled={props.verificationDisabled}><ShieldCheck aria-hidden="true" size={14} /></RowAction> : null}
         </div>
-        <div><p>{zh ? "图片测试" : "Image test"}</p><ImageVerification expert={expert} locale={locale} disabled={props.disabled} onVerifyImage={props.onVerifyImage} /></div>
+        <div><p>{zh ? "图像测试" : "Image test"}</p><ImageVerification expert={expert} locale={locale} disabled={props.verificationDisabled} onVerifyImage={props.onVerifyImage} /></div>
       </div>
       <div className="text-xs text-muted-foreground">
         <span>
@@ -863,7 +868,7 @@ function ImageVerification({ expert, locale, disabled, onVerifyImage }: Pick<Exp
       <span className={cn("inline-flex rounded-full px-3 py-1 font-semibold", tone)} title={expert.image_reason ? imageReasonLabel(expert.image_reason, zh) : undefined}>{imageCapabilityLabel(expert, zh)}</span>
       {expert.image_checked_at ? <p className="mt-1 text-[10px] text-muted-foreground">{formatCheckedAt(expert.image_checked_at, locale)}</p> : null}
     </div>
-    <RowAction label={zh ? "验证图片能力" : "Verify image capability"} onClick={onVerifyImage} disabled={disabled}><ShieldCheck aria-hidden="true" size={14} /></RowAction>
+    <RowAction label={zh ? "验证视觉能力" : "Verify vision capability"} onClick={onVerifyImage} disabled={disabled}><ShieldCheck aria-hidden="true" size={14} /></RowAction>
     {expert.image_reason && status !== "passed" ? <p className="mt-1 break-words text-xs text-muted-foreground">{imageReasonLabel(expert.image_reason, zh)}</p> : null}
   </div>;
 }
@@ -1006,12 +1011,12 @@ function OfficialProviderLinks({
       </div>
       {catalog.length ? (
         <div className="mt-3 grid gap-2 md:grid-cols-2 xl:grid-cols-4">
-          {catalog.map((provider) => (
+          {sortByProvider(catalog).map((provider) => (
             <div
               key={provider.provider_type}
-              className="flex min-w-0 items-center justify-between gap-3 rounded-lg bg-slate-50 px-3 py-2.5 dark:bg-slate-900/45"
+              className="flex min-w-0 flex-wrap items-center justify-between gap-2 rounded-lg bg-slate-50 px-3 py-2.5 dark:bg-slate-900/45"
             >
-              <span className="truncate text-xs font-semibold">{provider.display_name}</span>
+              <span className="text-xs font-semibold">{provider.display_name}</span>
               <div className="flex shrink-0 items-center gap-2 text-[11px] font-semibold text-primary">
                 <OfficialLink href={provider.console_url!} label={zh ? "密钥" : "Keys"} />
                 <OfficialLink href={provider.usage_url!} label={zh ? "用量" : "Usage"} />
@@ -1019,6 +1024,18 @@ function OfficialProviderLinks({
               </div>
             </div>
           ))}
+          <div className="min-w-0 rounded-lg bg-slate-50 px-3 py-2.5 dark:bg-slate-900/45">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <span className="text-xs font-semibold">{zh ? "百度 Unlimited-OCR" : "Baidu Unlimited-OCR"}</span>
+              <div className="flex shrink-0 items-center gap-2 text-[11px] font-semibold text-primary">
+                <OfficialLink href="https://console.bce.baidu.com/ai-engine/ocr/overview/index" label={zh ? "控制台" : "Console"} />
+                <OfficialLink href="https://ai.baidu.com/ai-doc/OCR/fmr1p39gb" label={zh ? "文档" : "Docs"} />
+              </div>
+            </div>
+            <p className="mt-1 text-[11px] leading-4 text-muted-foreground">
+              {zh ? "文档解析与文字识别；API Key / Secret Key、用量及计费请在控制台查看。" : "Document parsing and OCR. Manage API Key / Secret Key, usage and billing in the console."}
+            </p>
+          </div>
         </div>
       ) : null}
     </section>
@@ -1071,7 +1088,7 @@ function ExpertEditorDialog({
   const [provider, setProvider] = useState<ProviderType>(initialProvider);
   const [apiKey, setApiKey] = useState("");
   const [model, setModel] = useState(
-    target.mode === "edit" ? target.expert.model : providerDefault(initialProvider),
+    target.mode === "edit" ? target.expert.model : providerDefault(initialProvider, catalog),
   );
   const [baseUrl, setBaseUrl] = useState(
     target.mode === "edit"
@@ -1099,7 +1116,7 @@ function ExpertEditorDialog({
   );
   const hasBaseUrl = Boolean(providerCatalog);
   const providerChoices = catalog.length
-    ? catalog.map((item) => ({
+    ? sortByProvider(catalog).map((item) => ({
         value: item.provider_type,
         label: item.display_name,
       }))
@@ -1203,7 +1220,7 @@ function ExpertEditorDialog({
               onChange={(event) => {
                 const next = event.target.value as ProviderType;
                 setProvider(next);
-                setModel(providerDefault(next));
+                setModel(providerDefault(next, catalog));
                 setBaseUrl(providerDefaultBaseUrl(next, catalog));
                 setWireProtocol("");
               }}
@@ -1283,6 +1300,13 @@ function ExpertEditorDialog({
               onChange={(event) => setBaseUrl(event.target.value)}
             />
           </Field>
+        ) : null}
+        {provider === "qwen" ? (
+          <p className="text-xs leading-5 text-muted-foreground">
+            {zh
+              ? "默认地址适用于百炼北京区，官网确认仍可使用。其他地域或业务空间专属域名，请从百炼控制台复制与 API Key 匹配的地址。"
+              : "The default Beijing endpoint remains supported. For another region or a workspace endpoint, copy the address matching your API key from the Bailian console."}
+          </p>
         ) : null}
         {hasBaseUrl ? (
           <details
@@ -1430,8 +1454,9 @@ function InlineError({ message }: { message: string }) {
   );
 }
 
-function providerDefault(providerType: ProviderType) {
-  return providerOptions.find((option) => option.value === providerType)?.defaultModel ?? "";
+function providerDefault(providerType: ProviderType, catalog: ProviderCatalogItem[]) {
+  return catalog.find((item) => item.provider_type === providerType)?.default_model
+    ?? providerOptions.find((option) => option.value === providerType)?.defaultModel ?? "";
 }
 
 function providerDefaultBaseUrl(
@@ -1486,6 +1511,9 @@ function safeExpertsReturnTo(value: string | null): string | null {
 function safeExpertError(error: unknown, locale: "zh-CN" | "en-US") {
   const normalized = normalizeAPIError(error);
   const code = getAPIErrorCode(normalized);
+  if (normalized.status === 0) {
+    return locale === "zh-CN" ? "请求未能完成，请检查网络后重试。" : "The request could not complete. Check your connection and try again.";
+  }
   return expertErrorMessage(code, locale) || normalized.message
     || (locale === "zh-CN" ? "请求失败，请稍后重试。" : "Request failed. Try again later.");
 }

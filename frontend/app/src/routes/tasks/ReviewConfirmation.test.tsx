@@ -222,3 +222,24 @@ describe("one-click grading review", () => {
     expect(state.update).not.toHaveBeenCalled();
   });
 });
+
+it("shows ordinary grading as green and removes confirmed uncertainty from counts and queue", () => {
+  state.result.results = [{ student_id: "S1", student_name: "Sample", corrections: [
+    correction("Q1", { review_status: "pending", confidence: 0.9 }),
+    correction("Q2", { review_status: "confirmed", teacher_score: 7, confidence: 0.3, requires_human_review: true }),
+  ] }];
+  show();
+  expect(screen.getByRole("link", { name: /^Graded · Q1/ })).toHaveClass("bg-emerald-100");
+  expect(screen.getByRole("link", { name: /^Confirmed · Q2/ })).toHaveClass("bg-emerald-100");
+  expect(screen.getByText("Low-confidence responses").closest("div")).toHaveTextContent("0");
+  expect(screen.queryByRole("link", { name: /Sample.*Q2/ })).not.toBeInTheDocument();
+});
+
+
+it("does not reopen a stale missing-score dialog after a successful batch", async () => {
+  state.finalization = { remaining_review_count: 1, ready_for_confirmation: false, workflow_revision: 5 };
+  show();
+  await userEvent.click(screen.getByRole("button", { name: "Confirm all" }));
+  await waitFor(() => expect(state.bulk).toHaveBeenCalledTimes(1));
+  expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+});

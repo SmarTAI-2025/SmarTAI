@@ -1,3 +1,4 @@
+import { questionIssueNeedsReview, questionReviewConfirmed } from "@/lib/reviewConfirmation";
 import { ReviewConfirmButton, ReviewBlockDialog, reviewActionClass } from "@/components/tasks/ReviewConfirmation";
 import { useDraftProtection } from "@/hooks/useDraftProtection";
 import { useDraftLeave } from "@/hooks/useDraftLeave";
@@ -296,7 +297,7 @@ function QuestionPreparationDetailPageForm() {
                 return (
                   <button key={problem.q_id} type="button" aria-current={active ? "true" : undefined} onClick={() => scrollToQuestion(problem.q_id)} className={cn("mb-1 flex min-h-10 w-full items-center justify-between rounded-[7px] px-2.5 text-left text-xs font-semibold transition last:mb-0", active ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted hover:text-foreground")}>
                     <span className="truncate" title={tx(locale, `第 ${number} 题`, problemLabel(problem))}>{tx(locale, `第 ${number} 题`, problemLabel(problem))}</span>
-                    {riskCount ? <span className={cn("ml-1 inline-flex h-5 min-w-5 items-center justify-center rounded-full px-1 text-[10px]", active ? "bg-white/20 text-white" : "bg-amber-100 text-amber-700")}>{riskCount}</span> : null}
+                    {riskCount ? <span className={cn("ml-1 inline-flex h-5 min-w-5 items-center justify-center rounded-full px-1 text-[10px]", active ? "bg-white/20 text-white" : "bg-red-100 text-red-700")}>{riskCount}</span> : null}
                   </button>
                 );
               })}
@@ -338,7 +339,7 @@ function QuestionPreparationDetailPageForm() {
                     <ArrowLeft aria-hidden="true" className="h-4 w-4" />
                     {tx(locale, "返回题目资料总览", "Back to Question Material Overview")}
                   </Link>
-                  <ReviewConfirmButton locale={locale} all confirmed={problems.every(problem => problem.review_status === "confirmed")} busy={confirming || updateProblem.isPending} onClick={() => void confirmReview(problems, !readOnly)} />
+                  <ReviewConfirmButton locale={locale} all confirmed={problems.every(problem => questionReviewConfirmed(problem))} busy={confirming || updateProblem.isPending} onClick={() => void confirmReview(problems, !readOnly)} />
 
                 </div>
               </div>
@@ -385,7 +386,7 @@ function QuestionPackageCard({ problem, index, total, previous, next, readOnly, 
   onConfirmField: (problem: ProblemInfo, field: import("@/types").PreparationIssue["field"]) => void;
 }) {
   const programming = isProgrammingProblem(problem);
-  const risks = (problem.preparation_issues ?? []).filter((issue) => issue.status === "open");
+  const risks = (problem.preparation_issues ?? []).filter(questionIssueNeedsReview);
   return (
     <article id={questionAnchorId(problem.q_id)} data-question-id={problem.q_id} className="scroll-mt-[86px] overflow-hidden rounded-[10px] border bg-card">
       <header className="flex flex-col gap-3 border-b px-5 py-4 sm:flex-row sm:items-center sm:justify-between sm:px-6">
@@ -393,14 +394,14 @@ function QuestionPackageCard({ problem, index, total, previous, next, readOnly, 
           <div className="flex flex-wrap items-center gap-2">
             <h2 className="text-xl font-bold text-foreground">{tx(locale, `第 ${problem.number || problem.q_id} 题`, `Question ${problem.number || problem.q_id}`)}</h2>
             <span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs text-muted-foreground dark:bg-slate-800">{problem.type || tx(locale, "未分类", "Uncategorized")}</span>
-            <span className={cn("rounded-full px-2.5 py-1 text-xs font-semibold", problem.max_score_review_status === "confirmed" ? "bg-emerald-100 text-emerald-700 dark:bg-emerald-950/35" : "bg-amber-100 text-amber-700 dark:bg-amber-950/35 dark:text-amber-300")}>{tx(locale, `满分 ${formatScore(problem.max_score ?? 10)} 分`, `${formatScore(problem.max_score ?? 10)} points max`)}</span>
+            <span className={cn("rounded-full px-2.5 py-1 text-xs font-semibold", problem.max_score_review_status === "confirmed" ? "bg-emerald-100 text-emerald-700 dark:bg-emerald-950/35" : "bg-emerald-100 text-emerald-700 dark:bg-emerald-950/35")}>{tx(locale, `满分 ${formatScore(problem.max_score ?? 10)} 分`, `${formatScore(problem.max_score ?? 10)} points max`)}</span>
             {problem.question_structure?.subparts.length ? <span className="rounded-full bg-violet-50 px-2.5 py-1 text-xs font-semibold text-violet-700 dark:bg-violet-950/30 dark:text-violet-300">{tx(locale, `含 ${problem.question_structure.subparts.length} 个小问 · ${problem.question_structure.subparts.map((part) => part.label).join(" ")}`, `${problem.question_structure.subparts.length} subparts · ${problem.question_structure.subparts.map((part) => part.label).join(" ")}`)}</span> : null}
-            {risks.length ? <span tabIndex={0} title={risks.map(issue => riskShortLabel(issue.code, locale)).join("；")} className="cursor-help rounded-full bg-amber-100 px-2.5 py-1 text-xs font-semibold text-amber-700">{tx(locale, `${risks.length} 项待确认`, `${risks.length} to confirm`)}</span> : null}
+            {risks.length ? <span tabIndex={0} title={risks.map(issue => riskShortLabel(issue.code, locale)).join("；")} className="cursor-help rounded-full bg-red-100 px-2.5 py-1 text-xs font-semibold text-red-700">{tx(locale, `${risks.length} 项待确认`, `${risks.length} to confirm`)}</span> : null}
           </div>
           <p className="mt-1 text-xs text-muted-foreground">{tx(locale, `筛选结果中的第 ${index + 1} / ${total} 题`, `${index + 1} of ${total}`)}</p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
-          <ReviewConfirmButton title={tx(locale, `第 ${problem.number || problem.q_id} 题`, `Question ${problem.number || problem.q_id}`)} locale={locale} confirmed={problem.review_status === "confirmed"} busy={saving} onClick={() => onConfirm(problem)} />
+          <ReviewConfirmButton title={tx(locale, `第 ${problem.number || problem.q_id} 题`, `Question ${problem.number || problem.q_id}`)} locale={locale} confirmed={questionReviewConfirmed(problem)} busy={saving} onClick={() => onConfirm(problem)} />
           <QuestionNavigator previous={previous} next={next} locale={locale} onNavigate={onNavigate} />
         </div>
       </header>
@@ -429,7 +430,7 @@ function QuestionPackageCard({ problem, index, total, previous, next, readOnly, 
 
       <footer className="flex items-center justify-between border-t px-5 py-3 sm:px-6">
         <span className="text-xs text-muted-foreground">{tx(locale, "浏览态会渲染 LaTeX 或代码；点击修改可编辑源码。", "LaTeX and code are rendered while browsing; click Edit to edit the source.")}</span>
-        <div className="flex items-center gap-2"><ReviewConfirmButton title={tx(locale, `第 ${problem.number || problem.q_id} 题`, `Question ${problem.number || problem.q_id}`)} locale={locale} confirmed={problem.review_status === "confirmed"} busy={saving} onClick={() => onConfirm(problem)} /><QuestionNavigator previous={previous} next={next} locale={locale} onNavigate={onNavigate} compact /></div>
+        <div className="flex items-center gap-2"><ReviewConfirmButton title={tx(locale, `第 ${problem.number || problem.q_id} 题`, `Question ${problem.number || problem.q_id}`)} locale={locale} confirmed={questionReviewConfirmed(problem)} busy={saving} onClick={() => onConfirm(problem)} /><QuestionNavigator previous={previous} next={next} locale={locale} onNavigate={onNavigate} compact /></div>
       </footer>
     </article>
   );
@@ -777,7 +778,7 @@ function sortProblems(problems: ProblemInfo[], locale: string) {
 }
 
 function openRiskCount(problem: ProblemInfo) {
-  return (problem.preparation_issues ?? []).filter((issue) => issue.status === "open").length;
+  return (problem.preparation_issues ?? []).filter(questionIssueNeedsReview).length;
 }
 
 function riskShortLabel(code: string, locale: string) {

@@ -574,7 +574,7 @@ function StudentAnswerReviewForm() {
               label={t("studentSubmissionMetricIdentity")}
               value={t(student.identity_status === "needs_review" ? "studentSubmissionIdentityReview" : "studentSubmissionIdentityMatched")}
               detail={student.identity_match_method ? t(identityMethodKey(student.identity_match_method)) : "—"}
-              tone={student.identity_status === "needs_review" ? "warning" : "accent"}
+              tone={student.identity_status === "needs_review" ? "danger" : "accent"}
             />
             <ReviewMetric
               label={t("studentSubmissionMetricCoverage")}
@@ -583,9 +583,9 @@ function StudentAnswerReviewForm() {
             />
             <ReviewMetric
               label={t("studentSubmissionMetricReview")}
-              value={String(questions.filter((question) => getAnswerState(answers.get(question.id)) !== "reviewed").length)}
+              value={String(questions.filter((question) => getAnswerState(answers.get(question.id)) === "flagged").length)}
               detail={t("studentSubmissionMetricQuestions")}
-              tone={questions.some((question) => getAnswerState(answers.get(question.id)) !== "reviewed") ? "danger" : "accent"}
+              tone={questions.some((question) => getAnswerState(answers.get(question.id)) === "flagged") ? "danger" : "accent"}
             />
             <ReviewMetric
               label={t("studentSubmissionMetricSource")}
@@ -657,7 +657,7 @@ function StudentAnswerReviewForm() {
           >
           <div className="min-w-0">
           {student.identity_status && !identityOpen ? (
-            <div className="mb-3 flex flex-wrap items-center justify-between gap-3 rounded-[10px] border border-amber-200 bg-card p-4">
+            <div className="mb-3 flex flex-wrap items-center justify-between gap-3 rounded-[10px] border border-red-200 bg-card p-4">
               <p className="text-sm">{tx(locale, "请核对姓名与学号；无误时可直接确认。", "Check the student name and ID, then confirm if correct.")}</p>
               <ReviewConfirmButton locale={locale} title={tx(locale, "确认身份", "Confirm identity")} confirmed={student.identity_status !== "needs_review"} busy={mutationBusy} onClick={() => void saveIdentity(true)} />
               {identityError ? <p role="alert" className="w-full text-xs text-danger">{identityError}</p> : null}
@@ -751,7 +751,7 @@ function StudentAnswerReviewForm() {
                         <span className="truncate" title={tx(locale, `第 ${question.label} 题`, problemLabel({ q_id: question.id, number: question.label }))}>{tx(locale, `第 ${question.label} 题`, problemLabel({ q_id: question.id, number: question.label }))}</span>
                         <span className={cn(
                           "ml-1 h-2 w-2 shrink-0 rounded-full",
-                          active ? "bg-white" : state === "recognized" ? "bg-amber-500" : state === "reviewed" ? "bg-emerald-500" : state === "flagged" ? "bg-amber-500" : "bg-red-500",
+                          active ? "bg-white" : state === "flagged" ? "bg-red-500" : "bg-emerald-500",
                         )} />
                       </button>
                     );
@@ -908,9 +908,9 @@ function SmartPicker({ label, placeholder, query, matches, currentId, filter, ta
               }}
               className={cn(
                 "flex min-h-[44px] w-full items-center justify-between gap-3 rounded-[7px] px-2.5 py-1.5 text-left outline-none hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring",
-                item.attention && "bg-amber-50/80 hover:bg-amber-100/75 dark:bg-amber-950/25 dark:hover:bg-amber-950/40",
+                item.attention && "bg-red-50/80 hover:bg-red-100/75 dark:bg-red-950/25 dark:hover:bg-red-950/40",
                 item.id === currentId && !item.attention && "bg-primary/[0.055]",
-                item.id === currentId && item.attention && "ring-1 ring-inset ring-amber-300/70 dark:ring-amber-800",
+                item.id === currentId && item.attention && "ring-1 ring-inset ring-red-300/70 dark:ring-red-800",
               )}
             >
               <span className="min-w-0">
@@ -918,7 +918,7 @@ function SmartPicker({ label, placeholder, query, matches, currentId, filter, ta
                 <span className="block truncate text-[10px] text-muted-foreground">{item.secondary}</span>
               </span>
               {item.attention ? (
-                <span className="shrink-0 rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-semibold text-amber-700 dark:bg-amber-950/70 dark:text-amber-200">
+                <span className="shrink-0 rounded-full bg-red-100 px-2 py-0.5 text-[10px] font-semibold text-red-700 dark:bg-red-950/70 dark:text-red-200">
                   {t("historyNeedsAttention")}
                 </span>
               ) : kind !== "all" ? (
@@ -1062,10 +1062,10 @@ function AnswerStateBadge({ state, answer, locale, t }: {
     <span className={cn(
       "inline-flex h-7 shrink-0 items-center justify-center rounded-full px-3 text-[11px] font-semibold",
       state === "recognized" && "bg-emerald-100 text-emerald-700 dark:bg-emerald-950/70 dark:text-emerald-200",
-      state === "reviewed" && "bg-blue-100 text-primary dark:bg-blue-950/60 dark:text-blue-200",
-      state === "flagged" && "bg-amber-100 text-amber-700 dark:bg-amber-950/70 dark:text-amber-200",
-      (state === "empty" || state === "missing") && "bg-red-100 text-red-600 dark:bg-red-950/60 dark:text-red-200",
-    )} title={(answer?.flag ?? []).map((flag) => formatSubmissionFlag(flag, locale)).join(" · ") || undefined}>
+      state === "reviewed" && "bg-emerald-100 text-emerald-700 dark:bg-emerald-950/60 dark:text-emerald-200",
+      state === "flagged" && "bg-red-100 text-red-700 dark:bg-red-950/70 dark:text-red-200",
+      (state === "empty" || state === "missing") && "bg-emerald-100 text-emerald-700 dark:bg-emerald-950/60 dark:text-emerald-200",
+    )} title={state === "reviewed" ? undefined : (answer?.flag ?? []).map((flag) => formatSubmissionFlag(flag, locale)).join(" · ") || undefined}>
       {state === "flagged" && lowConfidence ? tx(locale, "低置信", "Low confidence") : t(STATUS_KEYS[state])}
     </span>
   );
@@ -1085,7 +1085,7 @@ function ReviewMetric({ label, value, detail, tone = "primary" }: {
           "min-w-0 truncate text-[22px] font-bold leading-7 tracking-[-0.02em]",
           tone === "primary" && "text-primary",
           tone === "accent" && "text-teal-600 dark:text-teal-300",
-          tone === "warning" && "text-amber-600 dark:text-amber-300",
+          tone === "warning" && "text-amber-600 dark:text-red-300",
           tone === "danger" && "text-red-500 dark:text-red-300",
           tone === "neutral" && "text-foreground",
         )} title={value}>

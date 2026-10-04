@@ -8,6 +8,11 @@ import {
 } from "./taskActionGuards";
 
 describe("task contract compatibility", () => {
+  it.each(["zh-CN", "en-US"] as const)("identifies local capacity pressure without blaming the model (%s)", (locale) => {
+    const info = classifyRecoverableError("provider_capacity_unavailable", { locale });
+    expect(info.actionKind).toBe("retry");
+    expect(info.description).toContain(locale === "zh-CN" ? "尚未向模型发送" : "not sent to the model");
+  });
   it("offers scope correction without claiming a missing question was recognized", () => {
     const info = classifyRecoverableError("question_targets_incomplete", { locale: "zh-CN", taskId: "task" });
     expect(info.title).toBe("未找齐指定题目");

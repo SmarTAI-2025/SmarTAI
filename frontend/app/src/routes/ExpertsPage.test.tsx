@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -13,6 +13,8 @@ const verifyBaiduOCRCredentials = vi.fn();
 const deleteBaiduOCRCredentials = vi.fn();
 
 const hookState = vi.hoisted(() => ({
+  textPending: false,
+  imagePending: false,
   catalog: [] as Array<Record<string, unknown>>,
   experts: [] as Array<Record<string, unknown>>,
   baiduOCR: {
@@ -26,14 +28,14 @@ const hookState = vi.hoisted(() => ({
 }));
 
 vi.mock("@/api/hooks", () => ({
-  useVerifyExpertImage: () => ({ isPending: false, mutateAsync: verifyImage }),
+  useVerifyExpertImage: () => ({ isPending: hookState.imagePending, mutateAsync: verifyImage }),
   useExperts: () => ({ data: hookState.experts, isLoading: false, isError: false, isFetching: false, refetch: vi.fn() }),
   useProviderCatalog: () => ({ data: hookState.catalog, isLoading: false, isError: false, refetch: vi.fn() }),
   useAddExpertKey: () => ({ isPending: false, mutateAsync: addExpert }),
   useUpdateExpert: () => ({ isPending: false, mutateAsync: updateExpert }),
   useSelectExpert: () => ({ isPending: false, mutateAsync: vi.fn() }),
   useSetDefaultExpert: () => ({ isPending: false, mutateAsync: vi.fn() }),
-  useVerifyExpert: () => ({ isPending: false, mutateAsync: vi.fn() }),
+  useVerifyExpert: () => ({ isPending: hookState.textPending, mutateAsync: vi.fn() }),
   useRemoveExpert: () => ({ isPending: false, mutateAsync: vi.fn() }),
   useBaiduOCRConfiguration: () => ({
     data: hookState.baiduOCR,
@@ -102,6 +104,8 @@ describe("ExpertsPage editable vendor Base URL", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     window.localStorage.clear();
+    hookState.textPending = false;
+    hookState.imagePending = false;
     hookState.catalog = providerCatalog(true);
     hookState.experts = [];
     hookState.baiduOCR = {
@@ -120,14 +124,37 @@ describe("ExpertsPage editable vendor Base URL", () => {
     deleteBaiduOCRCredentials.mockResolvedValue({ status: "success" });
   });
 
+  it("uses the verified catalog default for new configurations and the requested provider order", async () => {
+    hookState.catalog.find((item) => item.provider_type === "openai")!.default_model = "gpt-6-luna";
+    const user = userEvent.setup(); renderPage();
+    await user.click(screen.getByRole("button", { name: "添加模型配置" }));
+    const dialog = screen.getByRole("dialog");
+    const provider = within(dialog).getByRole("combobox", { name: "服务商" });
+    expect(within(provider).getAllByRole("option").map((item) => (item as HTMLOptionElement).value))
+      .toEqual(["gemini", "openai", "anthropic", "deepseek", "zhipu", "moonshot", "qwen"]);
+    await user.selectOptions(provider, "openai");
+    expect(within(dialog).getByDisplayValue("gpt-6-luna")).toBeInTheDocument();
+    expect(within(dialog).getByDisplayValue("https://api.openai.com/v1")).toBeInTheDocument();
+    expect(addExpert).not.toHaveBeenCalled();
+  });
+
+  it("orders official links consistently and includes the Baidu OCR console and API documentation", () => {
+    renderPage();
+    const section = screen.getByRole("heading", { name: "服务商官方入口" }).closest("section")!;
+    const labels = [...section.querySelectorAll("span.font-semibold")].map((item) => item.textContent);
+    expect(labels).toEqual(["Google Gemini", "OpenAI", "Anthropic", "DeepSeek", "Zhipu AI", "Moonshot (Kimi)", "Qwen (通义千问)", "百度 Unlimited-OCR"]);
+    expect(within(section).getByRole("link", { name: "控制台" })).toHaveAttribute("href", "https://console.bce.baidu.com/ai-engine/ocr/overview/index");
+    expect([...section.querySelectorAll("a")].some((link) => link.href === "https://ai.baidu.com/ai-doc/OCR/fmr1p39gb")).toBe(true);
+  });
+
   it("only sends an independent image probe after an explicit click on that configuration", async () => {
     hookState.experts = [{ provider_id: "pc-image", provider_type: "qwen", model: "arbitrary-model", enabled: true, rpm: 0, max_concurrent: 1 }];
     const user = userEvent.setup(); renderPage();
-    expect(screen.getAllByText("图片测试").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("图像测试").length).toBeGreaterThan(0);
     expect(document.querySelector('[data-image-provider="pc-image"]')).toHaveTextContent("未验证");
     expect(verifyImage).not.toHaveBeenCalled();
     expect(screen.getAllByRole("button", { name: "验证（可选）" }).length).toBeGreaterThan(0);
-    await user.click(screen.getAllByRole("button", { name: "验证图片能力" })[0]!);
+    await user.click(screen.getAllByRole("button", { name: "验证视觉能力" })[0]!);
     expect(verifyImage).toHaveBeenCalledTimes(1);
     expect(verifyImage).toHaveBeenCalledWith("pc-image");
   });
@@ -147,7 +174,7 @@ describe("ExpertsPage editable vendor Base URL", () => {
     const user = userEvent.setup(); renderPage();
     expect(screen.queryByRole("button", { name: "编辑" })).not.toBeInTheDocument();
     expect(verifyImage).not.toHaveBeenCalled();
-    await user.click(screen.getAllByRole("button", { name: "验证图片能力" })[0]!);
+    await user.click(screen.getAllByRole("button", { name: "验证视觉能力" })[0]!);
     expect(verifyImage).toHaveBeenCalledWith("qwen:shared");
   });
 
@@ -380,6 +407,23 @@ describe("ExpertsPage editable vendor Base URL", () => {
     await user.click(screen.getByRole("button", { name: "再次点击确认删除" }));
     await waitFor(() => expect(deleteBaiduOCRCredentials).toHaveBeenCalledWith("ocr-record-1"));
   });
+  it.each(["textPending", "imagePending"] as const)("keeps configuration actions available while %s serializes probes", async (pending) => {
+    hookState[pending] = true;
+    hookState.experts = [{ provider_id: "pc-busy", provider_type: "gemini", model: "saved-model", enabled: true, rpm: 0, max_concurrent: 1 }];
+    const user = userEvent.setup(); renderPage();
+    for (const name of ["验证（可选）", "验证视觉能力"]) {
+      for (const button of screen.getAllByRole("button", { name })) expect(button).toBeDisabled();
+    }
+    for (const name of ["编辑", "设为默认", "停用", "删除"]) {
+      for (const button of screen.getAllByRole("button", { name })) expect(button).toBeEnabled();
+    }
+    await user.click(screen.getAllByRole("button", { name: "编辑" })[0]!);
+    expect(screen.getByRole("dialog")).toBeInTheDocument();
+    expect(screen.getByLabelText("模型名称")).toHaveValue("saved-model");
+    expect(verifyImage).not.toHaveBeenCalled();
+  });
+
+
 });
 
 vi.mock("@/components/ModelQuotaCard", () => ({ ModelQuotaCard: () => null }));

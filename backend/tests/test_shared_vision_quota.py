@@ -255,7 +255,7 @@ async def test_real_adapter_keeps_images_prompt_output_limit_without_double_char
         header, encoded = block["image_url"]["url"].split(",", 1)
         assert header == f"data:{image.media_type};base64"
         assert base64.b64decode(encoded) == image.data
-    assert [kwargs for _, kwargs in calls] == [{"max_tokens": 123}, {"max_tokens": 456}]
+    assert [kwargs for _, kwargs in calls] == [{"max_completion_tokens": 123}, {"max_completion_tokens": 456}]
     assert usage()["requests"] == 2
 
 

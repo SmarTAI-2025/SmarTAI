@@ -21,6 +21,7 @@ class ProviderCatalogEntry:
     docs_url: str
     console_url: str
     usage_url: str
+    default_model: str
 
     def public_dict(self) -> dict[str, str | bool]:
         return asdict(self)
@@ -36,6 +37,7 @@ PROVIDER_CATALOG: tuple[ProviderCatalogEntry, ...] = (
         "https://ai.google.dev/gemini-api/docs",
         "https://aistudio.google.com/app/apikey",
         "https://aistudio.google.com/usage",
+        "gemini-3.5-flash-lite",
     ),
     ProviderCatalogEntry(
         "openai",
@@ -43,19 +45,21 @@ PROVIDER_CATALOG: tuple[ProviderCatalogEntry, ...] = (
         "https://api.openai.com/v1",
         "openai_chat_completions",
         True,
-        "https://platform.openai.com/docs",
+        "https://developers.openai.com/api/docs",
         "https://platform.openai.com/api-keys",
         "https://platform.openai.com/usage",
+        "gpt-6-luna",
     ),
     ProviderCatalogEntry(
-        "zhipu",
-        "Zhipu AI",
-        "https://open.bigmodel.cn/api/paas/v4",
-        "openai_chat_completions",
+        "anthropic",
+        "Anthropic Claude",
+        "https://api.anthropic.com",
+        "anthropic_messages",
         True,
-        "https://docs.bigmodel.cn/",
-        "https://open.bigmodel.cn/usercenter/apikeys",
-        "https://open.bigmodel.cn/console/overview",
+        "https://platform.claude.com/docs/en/intro",
+        "https://platform.claude.com/settings/keys",
+        "https://platform.claude.com/usage",
+        "claude-sonnet-5-5",
     ),
     ProviderCatalogEntry(
         "deepseek",
@@ -66,6 +70,18 @@ PROVIDER_CATALOG: tuple[ProviderCatalogEntry, ...] = (
         "https://api-docs.deepseek.com/",
         "https://platform.deepseek.com/api_keys",
         "https://platform.deepseek.com/usage",
+        "deepseek-flash",
+    ),
+    ProviderCatalogEntry(
+        "zhipu",
+        "Zhipu AI",
+        "https://open.bigmodel.cn/api/paas/v4",
+        "openai_chat_completions",
+        True,
+        "https://docs.bigmodel.cn/",
+        "https://open.bigmodel.cn/usercenter/apikeys",
+        "https://open.bigmodel.cn/console/overview",
+        "glm-5.3-flash",
     ),
     ProviderCatalogEntry(
         "moonshot",
@@ -73,9 +89,10 @@ PROVIDER_CATALOG: tuple[ProviderCatalogEntry, ...] = (
         "https://api.moonshot.cn/v1",
         "openai_chat_completions",
         True,
-        "https://platform.moonshot.cn/docs",
-        "https://platform.moonshot.cn/console/api-keys",
-        "https://platform.moonshot.cn/console/account",
+        "https://platform.kimi.com/docs/get-api-key",
+        "https://platform.kimi.com/console/api-keys",
+        "https://platform.kimi.com/console/account",
+        "kimi-k3",
     ),
     ProviderCatalogEntry(
         "qwen",
@@ -84,18 +101,9 @@ PROVIDER_CATALOG: tuple[ProviderCatalogEntry, ...] = (
         "openai_chat_completions",
         True,
         "https://help.aliyun.com/zh/model-studio/",
+        "https://bailian.console.aliyun.com/cn-beijing/model/settings/api-key",
         "https://bailian.console.aliyun.com/",
-        "https://bailian.console.aliyun.com/",
-    ),
-    ProviderCatalogEntry(
-        "anthropic",
-        "Anthropic",
-        "https://api.anthropic.com",
-        "anthropic_messages",
-        True,
-        "https://docs.anthropic.com/en/docs",
-        "https://platform.claude.com/settings/keys",
-        "https://platform.claude.com/usage",
+        "qwen3.8-flash",
     ),
 )
 
