@@ -11,7 +11,8 @@ it.each(["provider_rate_limited", "provider_daily_quota_exceeded"])("renders tru
   render(<MemoryRouter><RecoverableActionState info={classifyRecoverableError(code)}
     workflowRecovery={{ retry: { onClick: vi.fn() }, configurationHref: "/tasks/T/submissions/upload" }} /></MemoryRouter>);
   expect(screen.getByRole("link", { name: "返回修改配置" })).toBeInTheDocument();
-  expect(screen.getByRole("link", { name: "OpenAI" })).toHaveAttribute("href", "https://platform.openai.com/usage");
+  expect(screen.queryByRole("link", { name: "OpenAI" })).not.toBeInTheDocument();
+  expect(screen.queryByRole("link", { name: "查看用量" })).not.toBeInTheDocument();
   if (code.includes("daily")) {
     expect(screen.queryByRole("button", { name: "重试失败项" })).not.toBeInTheDocument();
     expect(screen.getByText(/不会自动跨天等待/)).toBeInTheDocument();

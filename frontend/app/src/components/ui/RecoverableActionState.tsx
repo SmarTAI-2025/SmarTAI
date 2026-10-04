@@ -11,6 +11,7 @@ import { Link } from "react-router-dom";
 import type { Locale } from "@/i18n/messages";
 import type { RecoverableErrorInfo } from "@/lib/taskActionGuards";
 import { cn } from "@/lib/cn";
+import { ProviderUsageLink, type ProviderUsageContext } from "@/components/models/ProviderUsageLink";
 
 export interface RecoveryAction {
   label: string;
@@ -29,6 +30,7 @@ export function RecoverableActionState({
   primaryAction,
   secondaryAction,
   workflowRecovery,
+  usageContext,
   additionalActions = [],
   compact = false,
   locale = "zh-CN",
@@ -38,6 +40,7 @@ export function RecoverableActionState({
   primaryAction?: RecoveryAction;
   secondaryAction?: RecoveryAction;
   workflowRecovery?: { retry: Omit<RecoveryAction, "label"> & { label?: string }; configurationHref: string; configurationState?: unknown };
+  usageContext?: ProviderUsageContext;
   additionalActions?: RecoveryAction[];
   compact?: boolean;
   locale?: Locale;
@@ -90,13 +93,7 @@ export function RecoverableActionState({
             {info.description}
           </p>
 
-          {info.showUsageLinks ? <p className="mt-2 text-xs leading-5 text-muted-foreground">
-            {locale === "zh-CN" ? "官网用量：" : "Official usage: "}
-            <a className="text-primary underline" href="https://platform.openai.com/usage" target="_blank" rel="noreferrer">OpenAI</a>{" · "}
-            <a className="text-primary underline" href="https://aistudio.google.com/usage" target="_blank" rel="noreferrer">Gemini</a>{" · "}
-            <a className="text-primary underline" href="https://open.bigmodel.cn/console/overview" target="_blank" rel="noreferrer">{locale === "zh-CN" ? "智谱" : "Zhipu"}</a>
-            {locale === "zh-CN" ? "。中转模型请查看对应服务商的控制台。" : ". For relayed models, check your relay provider's console."}
-          </p> : null}
+          {info.showUsageLinks && usageContext ? <ProviderUsageLink context={usageContext} locale={locale} /> : null}
 
           {primary || secondary || extras.length ? (
             <div className={cn("flex flex-col gap-2 sm:flex-row sm:flex-wrap", compact ? "mt-4" : "mt-6")}>

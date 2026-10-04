@@ -3,6 +3,7 @@ import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { APIError } from "@/api/client";
 import { ProblemRecognitionProgressPage } from "./ProblemRecognitionProgressPage";
+vi.mock("@/api/hooks/experts", () => ({ useProviderCatalog: () => ({ data: [] }) }));
 
 const retryMutateAsync = vi.fn();
 const refetchTask = vi.fn();

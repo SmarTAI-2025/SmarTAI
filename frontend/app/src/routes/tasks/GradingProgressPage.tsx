@@ -122,6 +122,7 @@ export function GradingProgressPage() {
             <RecoverableActionState
               info={recoveryInfo}
               locale={locale}
+              usageContext={{ gradingTaskId: taskId }}
               className="min-h-[300px]"
               workflowRecovery={{ retry: { onClick: () => void handleRetry(), busy: retryGrading.isPending }, configurationHref: getTaskGradingSetupHref(taskId, `/tasks/${taskId}/grading/progress`) }}
               additionalActions={[{ label: copy(locale, "refresh"), onClick: refresh, busy: retryGrading.isPending }, { label: locale === "zh-CN" ? "人工补齐分数" : "Enter missing scores", href: `/tasks/${taskId}/review?resolveFailures=1` }]}

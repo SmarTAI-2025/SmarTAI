@@ -170,6 +170,7 @@ export function ProblemRecognitionProgressPage() {
           <RecoverableActionState
             info={info}
             locale={locale}
+            usageContext={{ providerIds: [recognitionProviderId], providers: expertsQuery.data ?? [] }}
             className="min-h-[430px]"
             workflowRecovery={{
               retry: { onClick: () => void retryPreparedSources(),
