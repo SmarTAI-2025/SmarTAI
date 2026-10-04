@@ -607,3 +607,67 @@ async def test_only_explicit_zhipu_concurrency_response_lowers_automatic_ceiling
         assert budget.blocked_until == 0.0
     assert not provider._endpoint_breaker()._failures
     assert scheduler.active == scheduler.memory_active == 0
+
+
+@pytest.mark.asyncio
+async def test_low_memory_admission_has_deadline_without_sending_or_spending_quota(clock, host, monkeypatch):
+    from backend.config import settings
+    from backend.services.background_errors import classify_background_error, is_retryable_background_error
+    from backend.tools.structured_llm import _classify_exception, PermanentLLMError
+    scheduler = ModelScheduler(clock=clock, host_capacity=host,
+                               memory_reader=lambda: (541 * 1024**2, 1906 * 1024**2))
+    monkeypatch.setattr("backend.llm.providers.get_scheduler", lambda: scheduler)
+    monkeypatch.setattr(settings, "llm_timeout", 0.03)
+    starts = []
+    provider = RecordingProvider(ProviderConfig(provider_type="openai", model="queued", api_key="fake"), clock, starts)
+    with pytest.raises(ProviderRequestError, match="provider_capacity_unavailable") as raised:
+        await provider.ainvoke([HumanMessage(content="test")])
+    await turns()
+    assert starts == []
+    assert not any(budget.starts for budget in scheduler.budgets.values())
+    assert scheduler.active == scheduler.memory_active == host.active == 0
+    assert not scheduler.pending and not scheduler.owners
+    assert not provider._endpoint_breaker()._failures
+    assert classify_background_error(raised.value, "workflow_failed") == "provider_capacity_unavailable"
+    assert is_retryable_background_error("provider_capacity_unavailable")
+    assert isinstance(_classify_exception(raised.value), PermanentLLMError)  # explicit retry, no silent loop
+    # Once memory recovers, the same scheduler can admit a new explicit request.
+    scheduler.memory_reader = lambda: (768 * 1024**2, 1906 * 1024**2)
+    clock.advance(5, scheduler)
+    assert (await provider.ainvoke([HumanMessage(content="retry")])).content == "ok"
+
+
+@pytest.mark.asyncio
+async def test_native_call_total_deadline_releases_capacity_despite_upstream_keepalives(scheduler, clock, host, monkeypatch):
+    from backend.config import settings
+    monkeypatch.setattr("backend.llm.providers.get_scheduler", lambda: scheduler)
+    monkeypatch.setattr(settings, "llm_timeout", 0.03)
+    reads = []
+    cancelled = asyncio.Event()
+    async def invoke(*args, **kwargs):
+        try:
+            while True:
+                reads.append("keepalive")
+                await asyncio.sleep(0.003)
+        finally:
+            cancelled.set()
+    provider = RecordingProvider(ProviderConfig(provider_type="openai", model="stream", api_key="fake"), clock, [])
+    provider._client = SimpleNamespace(ainvoke=invoke)
+    with pytest.raises(ProviderRequestError, match="provider_timeout"):
+        await provider.ainvoke([HumanMessage(content="test")])
+    assert len(reads) >= 2 and cancelled.is_set()
+    assert scheduler.active == scheduler.memory_active == host.active == 0
+
+
+@pytest.mark.asyncio
+async def test_external_cancellation_remains_cancellation(scheduler, clock, monkeypatch):
+    monkeypatch.setattr("backend.llm.providers.get_scheduler", lambda: scheduler)
+    scheduler.host_capacity.capacity = 0
+    provider = RecordingProvider(ProviderConfig(provider_type="openai", model="cancel", api_key="fake"), clock, [])
+    task = asyncio.create_task(provider.ainvoke([HumanMessage(content="test")]))
+    await turns()
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    await turns()
+    assert not scheduler.pending and not scheduler.owners

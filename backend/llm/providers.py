@@ -21,6 +21,7 @@ import ssl
 import time
 from abc import ABC, abstractmethod
 from collections import deque
+from contextlib import asynccontextmanager
 from typing import List, Optional, Dict, Any, Deque, Callable
 from dataclasses import dataclass
 
@@ -406,18 +407,40 @@ class BaseProvider(ABC):
             limit = initial_concurrency(rpm)
         return min(HARD_LIMIT, limit, max(1, int(settings.max_concurrent_llm_per_provider)))
 
-    def _call_capacity(self, messages: List[BaseMessage]):
+    @asynccontextmanager
+    async def _call_capacity(self, messages: List[BaseMessage]):
         scheduler = get_scheduler()
-        return scheduler.lease(
-            key=quota_key(self.config, endpoint_key(self.config)),
-            rpm=max(0, int(self.config.rpm or 0)),
-            owner=self.config.scheduling_owner or "anonymous",
-            endpoint=endpoint_key(self.config),
-            endpoint_limit=min(HARD_LIMIT, max(1, int(settings.max_concurrent_llm_per_endpoint)),
-                               max(1, int(settings.max_concurrent_llm_per_provider))),
-            memory=request_memory(messages),
-            ready=lambda: not self._endpoint_breaker().is_open,
-        )
+        admitted = False
+        # SDK timeouts bound individual network reads, not admission or an
+        # upstream stream that keeps sending keep-alives. Bound this whole
+        # attempt so one waiter cannot occupy a workflow worker indefinitely.
+        deadline = asyncio.timeout(float(settings.llm_timeout))
+        try:
+            async with deadline:
+                async with scheduler.lease(
+                    key=quota_key(self.config, endpoint_key(self.config)),
+                    rpm=max(0, int(self.config.rpm or 0)),
+                    owner=self.config.scheduling_owner or "anonymous",
+                    endpoint=endpoint_key(self.config),
+                    endpoint_limit=min(HARD_LIMIT, max(1, int(settings.max_concurrent_llm_per_endpoint)),
+                                       max(1, int(settings.max_concurrent_llm_per_provider))),
+                    memory=request_memory(messages),
+                    ready=lambda: not self._endpoint_breaker().is_open,
+                ):
+                    admitted = True
+                    yield
+        except TimeoutError as exc:
+            if not deadline.expired():
+                raise
+            code = "provider_timeout" if admitted else "provider_capacity_unavailable"
+            logger.warning("LLM attempt deadline reached; provider_type=%s admitted=%s code=%s",
+                           self.provider_type, admitted, code)
+            error = ProviderRequestError(code)
+            if not admitted:
+                # No upstream request was sent. Surface local capacity pressure
+                # for an explicit retry instead of silently requeueing for minutes.
+                error.retryable = False
+            raise error from exc
 
     def _record_duration(self, duration_ms: float) -> None:
         get_scheduler().record_success(

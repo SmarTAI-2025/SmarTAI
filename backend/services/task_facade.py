@@ -3714,17 +3714,20 @@ def task_state(*, task_id: str, owner_id: str) -> dict:
         return payload
     _source_summary, source_rows = _submission_source_projection(workflow, owner_id)
     progress: dict | None = None
+    active_operation_status: str | None = None
     if workflow.active_job_id:
         reporter = get_reporter(workflow.active_job_id)
         if reporter is not None:
             # Snapshot is async; callers should use async_task_state.
             progress = None
+            active_operation_status = "running"
         else:
             try:
                 operation = workflow_repository.get_operation(
                     workflow.active_job_id, owner_id=owner_id
                 )
                 progress = dict(operation.progress or {}) or None
+                active_operation_status = operation.status
             except NotFound:
                 progress = None
     elif workflow.extract_job_id or workflow.parse_job_id:
@@ -3739,6 +3742,7 @@ def task_state(*, task_id: str, owner_id: str) -> dict:
         "progress": progress,
         "active_job_id": workflow.active_job_id,
         "active_operation": workflow.active_operation,
+        "active_operation_status": active_operation_status,
         "submission_sources": source_rows,
     })
     return payload
