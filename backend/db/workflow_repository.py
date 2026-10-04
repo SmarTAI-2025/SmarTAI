@@ -339,9 +339,9 @@ class AssignmentStudentPresentationRecord(Base):
     assignment_id: Mapped[str] = mapped_column(
         ForeignKey("assignments.id", ondelete="CASCADE"), nullable=False, index=True
     )
-    student_id: Mapped[str] = mapped_column(
-        ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
-    )
+    # Task-local identity; legacy online submissions may still use a user ID.
+    # Ownership/lifecycle are enforced by the assignment and revision FKs.
+    student_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
     source_id: Mapped[str | None] = mapped_column(
         ForeignKey("workflow_source_items.id", ondelete="SET NULL"),
         nullable=True,

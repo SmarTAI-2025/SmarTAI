@@ -44,7 +44,6 @@ from backend.db import (
 from backend.db.models import (
     AssignmentQuestionRecord,
     AssignmentRecord,
-    CourseEnrollmentRecord,
     CourseRecord,
     GradingRunRecord,
     SubmissionAnswerRecord,
@@ -3275,11 +3274,6 @@ def complete_planning_operation_atomic(
         return expected_workflow_revision
 
 
-def _safe_student_token(value: str) -> str:
-    cleaned = re.sub(r"[^A-Za-z0-9._-]+", "_", value.strip()).strip("._-")
-    return cleaned[:48] or "student"
-
-
 def _commit_imported_submissions(
     *, task_id: str, owner_id: str, course_id: str, students: list[dict],
     replace_existing: bool = False,
@@ -3447,38 +3441,9 @@ def _commit_imported_submissions(
                 f"{owner_id}\0{task_id}\0{display_id}".encode()
             ).hexdigest()[:16]
             student_id = f"imported_{digest}"
-            user = session.get(UserRecord, student_id)
-            if user is None:
-                session.add(
-                    UserRecord(
-                        id=student_id,
-                        username=(
-                            f"imported-{digest}-{_safe_student_token(display_id)[:16]}"
-                        ),
-                        email=None,
-                        role="student",
-                        password_hash="!disabled-imported-account",
-                        is_active=False,
-                        created_at=now,
-                        updated_at=now,
-                    )
-                )
-                session.flush()
-
-            enrollment = session.scalar(
-                select(CourseEnrollmentRecord).where(
-                    CourseEnrollmentRecord.course_id == course_id,
-                    CourseEnrollmentRecord.student_id == student_id,
-                )
-            )
-            if enrollment is None:
-                session.add(
-                    CourseEnrollmentRecord(
-                        course_id=course_id,
-                        student_id=student_id,
-                        enrolled_at=now,
-                    )
-                )
+            # This is a task-local identity, not an authentication user. Keep
+            # the stable ID for retries/history; names and school IDs already
+            # live in AssignmentStudentPresentationRecord below.
 
             submission = session.scalar(
                 select(SubmissionRecord).where(

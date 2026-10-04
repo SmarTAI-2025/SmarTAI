@@ -69,6 +69,37 @@ def _seed_user(role: str) -> str:
     return uid
 
 
+def test_postgres_task_identity_migration_preserves_existing_results(pg_database, monkeypatch):
+    from sqlalchemy import select
+    from alembic import command
+    from alembic.config import Config
+    from backend.db.session import get_engine, session_scope
+    from backend.db.models import UserRecord
+    from backend.tests.test_task_student_identities import _seed_legacy_imports, _business_snapshot
+    from backend.api.analytics import _load_facts
+
+    config = Config("alembic.ini")
+    config.attributes.update(database_url=PG_URL, database_heavy=True)
+    command.downgrade(config, "0026_image_capability")
+    seeded = _seed_legacy_imports(monkeypatch)
+    engine = get_engine()
+    before = _business_snapshot(engine)
+    assert len(before["grade_results"]) == 3
+    command.upgrade(config, "head")
+    assert _business_snapshot(engine) == before
+    removable, protected, real = [student.id for student in seeded["students"]]
+    with session_scope() as session:
+        assert session.get(UserRecord, removable) is None
+        assert session.get(UserRecord, protected) is not None
+        assert session.get(UserRecord, real) is not None
+        owner = session.scalar(select(UserRecord.id).where(UserRecord.role == "teacher"))
+    assert _load_facts(seeded["task_id"], owner).student_names[removable] == seeded["students"][0].username
+    command.downgrade(config, "0026_image_capability")
+    assert _business_snapshot(engine) == before
+    command.upgrade(config, "head")
+    assert _business_snapshot(engine) == before
+
+
 def test_postgres_explicit_email_login_and_username_mail_guard(pg_database, monkeypatch):
     from fastapi.testclient import TestClient
     from backend.auth import hash_password

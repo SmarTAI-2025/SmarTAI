@@ -343,6 +343,14 @@ def _load_facts(task_id: str, owner_id: str) -> _AnalyticsFacts:
                 .distinct()
             ).all()
         )
+        # Teacher imports have a task identity, not a login user. Prefer their
+        # teacher-visible names while keeping the legacy online-user fallback.
+        student_names.update(session.execute(select(
+            AssignmentStudentPresentationRecord.student_id,
+            AssignmentStudentPresentationRecord.display_name,
+        ).where(
+            AssignmentStudentPresentationRecord.assignment_id == task_id,
+        )).all())
 
         version_parts = [run.id, str(run.completed_at or run.created_at)]
         version_parts.extend(
