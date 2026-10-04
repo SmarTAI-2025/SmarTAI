@@ -16,7 +16,7 @@ import { Button } from "@/components/ui/Button";
 import { RecoverableActionState } from "@/components/ui/RecoverableActionState";
 import { useTaskProgress } from "@/hooks/useTaskProgress";
 import { useI18n } from "@/i18n/I18nProvider";
-import type { MessageKey } from "@/i18n/messages";
+import type { Locale, MessageKey } from "@/i18n/messages";
 import { cn } from "@/lib/cn";
 import { classifyRecoverableError } from "@/lib/taskActionGuards";
 import type { JobProgress, ProgressEvent, TaskStatus } from "@/types";
@@ -342,7 +342,7 @@ export function ProblemRecognitionProgressPage() {
                     className="grid min-w-0 grid-cols-[42px_minmax(0,1fr)] gap-2 text-xs leading-5 text-muted-foreground sm:text-sm"
                   >
                     <time dateTime={toDateTime(event.ts)}>{formatEventTime(event.ts, locale)}</time>
-                    <span className="min-w-0 break-words">{localizeEvent(event, t)}</span>
+                    <span className="min-w-0 break-words">{localizeEvent(event, t, locale, progress?.question_labels ?? {})}</span>
                   </li>
                 ))}
               </ol>
@@ -615,8 +615,22 @@ function getStageLabel(
 function localizeEvent(
   event: ProgressEvent,
   t: (key: MessageKey) => string,
+  locale: Locale,
+  labels: Record<string, string>,
 ): string {
   const message = event.message.toLowerCase();
+  const generated = /^major question (\S+) generation (completed|failed|started)$/.exec(message);
+  if (generated) {
+    const label = labels[generated[1]] ?? generated[1];
+    const zh = locale === "zh-CN";
+    const status = generated[2] === "completed" ? (zh ? "资料已完成" : "materials ready")
+      : generated[2] === "failed" ? (zh ? "资料生成未完成" : "material generation did not finish")
+        : (zh ? "正在生成资料" : "generating materials");
+    return `${label} · ${status}`;
+  }
+  if (/^(provider|recognition|question)_[a-z_]+$/.test(message)) {
+    return classifyRecoverableError(message, { locale }).title;
+  }
   if (message.startsWith("reading source ") || message.startsWith("reading pdf pages ")
     || message === "inspecting source evidence" || message === "locating candidate source pages") return t("problemProgressStepReadSources");
   if (message === "reading source evidence") return t("problemProgressStepOCR");
