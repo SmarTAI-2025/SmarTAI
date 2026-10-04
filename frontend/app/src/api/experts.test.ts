@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { addExpertKey, updateExpert } from "./experts";
+import { addExpertKey, updateExpert, verifyExpert, verifyExpertImage } from "./experts";
 
 const clientMocks = vi.hoisted(() => ({
   postJSON: vi.fn(),
@@ -18,6 +18,11 @@ describe("automatic model concurrency API", () => {
     vi.clearAllMocks();
     clientMocks.postJSON.mockResolvedValue({ status: "success" });
     clientMocks.putJSON.mockResolvedValue({ status: "success" });
+  });
+
+  it.each([[verifyExpert, "verify"], [verifyExpertImage, "verify-image"]] as const)("allows the server probe deadline to return for %s", async (verify, route) => {
+    await verify("pc-test");
+    expect(clientMocks.postJSON).toHaveBeenCalledWith(`/experts/pc-test/${route}`, {}, { timeout: 45_000 });
   });
 
   it("defaults omitted RPM to zero without injecting a concurrency limit", async () => {

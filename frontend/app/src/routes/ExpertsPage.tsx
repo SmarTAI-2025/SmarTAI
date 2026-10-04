@@ -132,9 +132,8 @@ export function ExpertsPage() {
     updateExpert.isPending ||
     selectExpert.isPending ||
     setDefaultExpert.isPending ||
-    verifyExpert.isPending ||
-    verifyImage.isPending ||
     removeExpert.isPending;
+  const verificationPending = verifyExpert.isPending || verifyImage.isPending;
 
   async function handleSave(value: ExpertFormValue) {
     if (!editor) return;
@@ -267,8 +266,8 @@ export function ExpertsPage() {
           </h1>
           <p className="mt-1 max-w-3xl text-sm leading-6 text-muted-foreground">
             {zh
-              ? "管理模型配置，测试文字与图片识别能力。"
-              : "Manage model configurations and test text and image support."}
+              ? "管理模型配置，测试文本连通性与视觉能力。"
+              : "Manage model configurations and test text connectivity and vision capability."}
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
@@ -312,12 +311,12 @@ export function ExpertsPage() {
           tone="accent"
         />
         <SummaryMetric
-          label={zh ? "文字测试通过" : "Text checks passed"}
+          label={zh ? "文本测试通过" : "Text tests passed"}
           value={expertsQuery.isLoading ? "—" : String(verifiedCount)}
           tone="success"
         />
         <SummaryMetric
-          label={zh ? "文字测试失败" : "Text checks failed"}
+          label={zh ? "文本测试失败" : "Text tests failed"}
           value={expertsQuery.isLoading ? "—" : String(failedCheckCount)}
           tone={failedCheckCount > 0 ? "warning" : "neutral"}
         />
@@ -396,10 +395,10 @@ export function ExpertsPage() {
                       {zh ? "配置状态" : "Configuration"}
                     </th>
                     <th className="px-3 text-center align-middle font-medium">
-                      {zh ? "文字测试" : "Text test"}
+                      {zh ? "文本测试" : "Text test"}
                     </th>
                     <th className="px-3 text-center align-middle font-medium">
-                      {zh ? "图片测试" : "Image test"}
+                      {zh ? "图像测试" : "Image test"}
                     </th>
                     <th className="px-3 text-center align-middle font-medium">
                       {zh ? "调用限制" : "Limits"}
@@ -416,10 +415,11 @@ export function ExpertsPage() {
                       expert={expert}
                       locale={locale}
                       disabled={controlsPending}
+                      verificationDisabled={controlsPending || verificationPending}
                       onEdit={() => setEditor({ mode: "edit", expert })}
                       onToggle={() => void handleToggle(expert)}
                       onVerify={() => setConfirmation({ kind: "verify", expert })}
-                      onVerifyImage={() => void verifyImage.mutateAsync(expert.provider_id).catch(error => toast.error(normalizeAPIError(error).message))}
+                      onVerifyImage={() => void verifyImage.mutateAsync(expert.provider_id).catch(error => toast.error(safeExpertError(error, locale)))}
                       onSetDefault={() => void handleSetDefault(expert)}
                       onDelete={() => setConfirmation({ kind: "delete", expert })}
                     />
@@ -434,10 +434,11 @@ export function ExpertsPage() {
                   expert={expert}
                   locale={locale}
                   disabled={controlsPending}
+                  verificationDisabled={controlsPending || verificationPending}
                   onEdit={() => setEditor({ mode: "edit", expert })}
                   onToggle={() => void handleToggle(expert)}
                   onVerify={() => setConfirmation({ kind: "verify", expert })}
-                      onVerifyImage={() => void verifyImage.mutateAsync(expert.provider_id).catch(error => toast.error(normalizeAPIError(error).message))}
+                      onVerifyImage={() => void verifyImage.mutateAsync(expert.provider_id).catch(error => toast.error(safeExpertError(error, locale)))}
                   onSetDefault={() => void handleSetDefault(expert)}
                   onDelete={() => setConfirmation({ kind: "delete", expert })}
                 />
@@ -472,7 +473,7 @@ export function ExpertsPage() {
         <ConfirmationDialog
           confirmation={confirmation}
           locale={locale}
-          pending={verifyExpert.isPending || removeExpert.isPending}
+          pending={confirmation.kind === "verify" ? verificationPending : removeExpert.isPending}
           onClose={() => setConfirmation(null)}
           onConfirm={() => void handleConfirm()}
         />
@@ -695,6 +696,7 @@ function ExpertTableRow({
   expert,
   locale,
   disabled,
+  verificationDisabled,
   onEdit,
   onToggle,
   onVerify,
@@ -729,10 +731,10 @@ function ExpertTableRow({
       </td>
       <td className="px-3 text-center align-middle">
         <VerificationBadge expert={expert} locale={locale} />
-        {expert.editable !== false ? <RowAction label={zh ? "验证（可选）" : "Verify (optional)"} onClick={onVerify} disabled={disabled}><ShieldCheck aria-hidden="true" size={14} /></RowAction> : null}
+        {expert.editable !== false ? <RowAction label={zh ? "验证（可选）" : "Verify (optional)"} onClick={onVerify} disabled={verificationDisabled}><ShieldCheck aria-hidden="true" size={14} /></RowAction> : null}
       </td>
       <td className="px-3 text-center align-middle">
-        <ImageVerification expert={expert} locale={locale} disabled={disabled} onVerifyImage={onVerifyImage} />
+        <ImageVerification expert={expert} locale={locale} disabled={verificationDisabled} onVerifyImage={onVerifyImage} />
       </td>
       <td className="px-3 text-center align-middle text-xs text-muted-foreground">
         <span className="block">RPM {expert.rpm > 0 ? expert.rpm : "—"}</span>
@@ -745,6 +747,7 @@ function ExpertTableRow({
           expert={expert}
           locale={locale}
           disabled={disabled}
+          verificationDisabled={verificationDisabled}
           onEdit={onEdit}
           onToggle={onToggle}
           onVerify={onVerify}
@@ -761,6 +764,7 @@ interface ExpertRowProps {
   expert: ExpertConfig;
   locale: "zh-CN" | "en-US";
   disabled: boolean;
+  verificationDisabled: boolean;
   onEdit: () => void;
   onToggle: () => void;
   onVerify: () => void;
@@ -790,10 +794,10 @@ function ExpertMobileRow(props: ExpertRowProps) {
         <EnabledBadge enabled={expert.enabled} locale={locale} />
       </div>
       <div className="grid grid-cols-2 items-start gap-3 text-center text-xs text-muted-foreground">
-        <div><p>{zh ? "文字测试" : "Text test"}</p><VerificationBadge expert={expert} locale={locale} />
-          {expert.editable !== false ? <RowAction label={zh ? "验证（可选）" : "Verify (optional)"} onClick={props.onVerify} disabled={props.disabled}><ShieldCheck aria-hidden="true" size={14} /></RowAction> : null}
+        <div><p>{zh ? "文本测试" : "Text test"}</p><VerificationBadge expert={expert} locale={locale} />
+          {expert.editable !== false ? <RowAction label={zh ? "验证（可选）" : "Verify (optional)"} onClick={props.onVerify} disabled={props.verificationDisabled}><ShieldCheck aria-hidden="true" size={14} /></RowAction> : null}
         </div>
-        <div><p>{zh ? "图片测试" : "Image test"}</p><ImageVerification expert={expert} locale={locale} disabled={props.disabled} onVerifyImage={props.onVerifyImage} /></div>
+        <div><p>{zh ? "图像测试" : "Image test"}</p><ImageVerification expert={expert} locale={locale} disabled={props.verificationDisabled} onVerifyImage={props.onVerifyImage} /></div>
       </div>
       <div className="text-xs text-muted-foreground">
         <span>
@@ -864,7 +868,7 @@ function ImageVerification({ expert, locale, disabled, onVerifyImage }: Pick<Exp
       <span className={cn("inline-flex rounded-full px-3 py-1 font-semibold", tone)} title={expert.image_reason ? imageReasonLabel(expert.image_reason, zh) : undefined}>{imageCapabilityLabel(expert, zh)}</span>
       {expert.image_checked_at ? <p className="mt-1 text-[10px] text-muted-foreground">{formatCheckedAt(expert.image_checked_at, locale)}</p> : null}
     </div>
-    <RowAction label={zh ? "验证图片能力" : "Verify image capability"} onClick={onVerifyImage} disabled={disabled}><ShieldCheck aria-hidden="true" size={14} /></RowAction>
+    <RowAction label={zh ? "验证视觉能力" : "Verify vision capability"} onClick={onVerifyImage} disabled={disabled}><ShieldCheck aria-hidden="true" size={14} /></RowAction>
     {expert.image_reason && status !== "passed" ? <p className="mt-1 break-words text-xs text-muted-foreground">{imageReasonLabel(expert.image_reason, zh)}</p> : null}
   </div>;
 }
@@ -1507,6 +1511,9 @@ function safeExpertsReturnTo(value: string | null): string | null {
 function safeExpertError(error: unknown, locale: "zh-CN" | "en-US") {
   const normalized = normalizeAPIError(error);
   const code = getAPIErrorCode(normalized);
+  if (normalized.status === 0) {
+    return locale === "zh-CN" ? "请求未能完成，请检查网络后重试。" : "The request could not complete. Check your connection and try again.";
+  }
   return expertErrorMessage(code, locale) || normalized.message
     || (locale === "zh-CN" ? "请求失败，请稍后重试。" : "Request failed. Try again later.");
 }

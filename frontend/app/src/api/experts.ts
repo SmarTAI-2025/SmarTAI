@@ -57,6 +57,8 @@ export function updateExpert(
 export function verifyExpert(providerId: string): Promise<ExpertVerificationResponse> {
   return postJSON<ExpertVerificationResponse>(
     `/experts/${encodeURIComponent(providerId)}/verify`,
+    {},
+    { timeout: 45_000 },
   );
 }
 
@@ -65,5 +67,6 @@ export function removeExpert(providerId: string): Promise<ExpertMutationResponse
 }
 
 export async function verifyExpertImage(providerId: string): Promise<Pick<ExpertConfig, "image_capability_status" | "image_checked_at" | "image_reason">> {
-  return postJSON(`/experts/${encodeURIComponent(providerId)}/verify-image`, {});
+  // Allow the default 30s server probe deadline to return its persisted result.
+  return postJSON(`/experts/${encodeURIComponent(providerId)}/verify-image`, {}, { timeout: 45_000 });
 }
