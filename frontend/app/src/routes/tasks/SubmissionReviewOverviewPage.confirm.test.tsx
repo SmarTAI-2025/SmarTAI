@@ -65,7 +65,7 @@ describe("submission review confirmation", () => {
   it("confirms answer review metadata without resending recognized text", async () => {
     const user = userEvent.setup();
     renderPage();
-    await user.click(screen.getByRole("button", { name: "一键确认全部作答（3）" }));
+    await user.click(screen.getByRole("button", { name: "全部确认" }));
     await waitFor(() => expect(state.answer).toHaveBeenCalledTimes(3));
     expect(state.answer.mock.calls.map(([input]) => input.expectedWorkflowRevision)).toEqual([3, 4, 5]);
     for (const [input] of state.answer.mock.calls) {

@@ -2,6 +2,7 @@ import { LoaderCircle } from "lucide-react";
 import { useEffect, useId, useRef } from "react";
 
 interface UnsavedChangesDialogProps {
+  children?: import("react").ReactNode;
   title: string;
   description: string;
   stayLabel: string;
@@ -16,6 +17,7 @@ interface UnsavedChangesDialogProps {
 }
 
 export function UnsavedChangesDialog({
+  children,
   title,
   description,
   stayLabel,
@@ -106,6 +108,7 @@ export function UnsavedChangesDialog({
       >
         <h2 id={titleId} className="text-lg font-bold text-foreground">{title}</h2>
         <p id={descriptionId} className="mt-2 text-sm leading-6 text-muted-foreground">{description}</p>
+        {children}
         {saveError ? (
           <p role="alert" className="mt-3 rounded-[7px] border border-red-200 bg-red-50 px-3 py-2 text-xs font-medium text-red-700 dark:border-red-900/60 dark:bg-red-950/40 dark:text-red-200">
             {saveError}

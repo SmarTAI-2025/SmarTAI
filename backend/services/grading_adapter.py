@@ -227,6 +227,7 @@ async def run_grading(
     frozen_revisions: list[tuple[education.SubmissionRevisionDTO, str]],
     registry, language: str = "en", reporter=None,
     grading_setup: TaskGradingSetup | None = None,
+    reused_pairs: set[tuple[str, str]] | None = None,
 ) -> list[AdapterOutcome]:
     """Run the unchanged algorithm over normalized inputs and return per-student
     outcomes. A façade run reads only the knowledge ids frozen at run creation;
@@ -235,6 +236,9 @@ async def run_grading(
     Raises on a batch-level failure (the caller marks the run failed); per-
     question failures are mapped to ``needs_review`` results, not dropped.
     """
+    selected = {sid: {q.q_id for q in questions if (rev.id, q.q_id) not in (reused_pairs or set())}
+                for rev, sid in frozen_revisions} if reused_pairs is not None else None
+    selection_options = {"question_ids_by_student": selected} if selected is not None else {}
     problem_store = build_problem_store(questions)
     student_store = build_student_store(frozen_revisions)
     if not student_store or not problem_store:
@@ -252,6 +256,7 @@ async def run_grading(
         from backend.testing.fake_provider import FakeProvider, fake_grade_batch
 
         raw_results = await fake_grade_batch(
+            **selection_options,
             student_store=student_store,
             problem_store=problem_store,
             provider=FakeProvider(fail_qids={settings.e2e_fail_qid} if settings.e2e_fail_qid else set()),
@@ -260,6 +265,7 @@ async def run_grading(
         )
     else:
         raw_results = await grade_batch(
+            **selection_options,
             student_store=student_store, problem_store=problem_store, registry=registry,
             reporter=reporter, language=language, task_id=knowledge_task_id,
             multi_sample_n=grading_setup.multi_sample_n if grading_setup else None,
@@ -274,6 +280,8 @@ async def run_grading(
         corrections = {c.q_id: c for c in (raw or {}).get("corrections", [])}
         results = []
         for q in questions:
+            if (revision.id, q.q_id) in (reused_pairs or set()):
+                continue
             normalized = correction_to_result(
                 run_id=run_id, revision_id=revision.id, question=q,
                 student_id=student_id, correction=corrections.get(q.q_id),

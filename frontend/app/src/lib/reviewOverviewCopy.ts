@@ -5,7 +5,7 @@ const copy = {
   average: ["平均得分率", "Average score"],
   lowConfidence: ["低置信题次", "Low-confidence responses"],
   disagreement: ["专家分歧大", "High model disagreement"],
-  annotated: ["已复核", "Reviewed"],
+  annotated: ["已确认", "Confirmed"],
   startReview: ["开始优先复核", "Start priority review"],
   viewResult: ["查看任一结果", "View a result"],
   searchPlaceholder: ["例如：90 分以下的学生、专家分歧、Q2，或从高到低…", "For example: students below 90, model disagreement, Q2, or high to low…"],

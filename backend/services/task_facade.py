@@ -3915,6 +3915,7 @@ def start_task_grading(
     owner_id: str,
     expected_workflow_revision: int,
     request_id: str | None = None,
+    retry_scope: str = "full_batch",
 ) -> dict:
     workflow = workflow_repository.get_live_workflow(
         task_id, owner_id=owner_id
@@ -4071,6 +4072,27 @@ def start_task_grading(
             if cached.status in {"queued", "running"}:
                 return _grading_request_response(task_id, cached)
             return {"status": "already_done", "task_id": task_id, "job_id": latest.id}
+    if retry_scope == "failed_only":
+        previous = workflow_repository.get_run_setup(latest.id) if latest else None
+        if previous is None or latest.status not in {"partial_failed", "failed", "completed"}:
+            raise ValidationError("No failed grading run to retry.", code="grading_retry_unavailable")
+        old = previous.input_manifest or {}
+        # Review metadata can change without changing the grading inputs.
+        def content_questions(items):
+            keys = ("id", "q_id", "number", "type", "stem", "criterion", "max_score", "reference_answer", "test_cases")
+            return [{**{key: q.get(key) for key in keys},
+                     "solution_code": (q.get("source") or {}).get("presentation", {}).get("solution_code")}
+                    for q in items]
+        stable_keys = ("submission_revision_ids", "knowledge_document_ids", "knowledge_content_versions", "provider_configuration_fingerprint")
+        if (previous.setup != workflow.grading_setup
+                or any(old.get(key) != input_manifest.get(key) for key in stable_keys)
+                or content_questions(old.get("questions", [])) != content_questions(input_manifest["questions"])):
+            raise VersionConflict("Grading inputs changed; review the setup before starting a new run.", code="grading_inputs_changed")
+        reusable = [result.model_dump(mode="json") for result in grading_repository.list_results_for_run(latest.id)
+                    if result.effective_score is not None and math.isfinite(result.effective_score)]
+        if len(reusable) == len(questions) * len(frozen_revision_ids):
+            return {"status": "already_done", "task_id": task_id, "job_id": latest.id}
+        input_manifest.update(retry_from_run_id=latest.id, reused_results=reusable, retry_scope="failed_only")
     # Intent metadata is not part of the input fingerprint: completed results
     # remain reusable, while every new explicit retry can execute failed work.
     input_manifest.update(
@@ -4166,7 +4188,7 @@ def task_results(*, task_id: str, owner_id: str) -> dict:
     return {
         "status": "completed", "task_id": task_id, "results": rendered,
         "grading_run_id": run.id, "grading_run_status": run.status,
-        "retry_scope": "full_batch" if run.status == "partial_failed" else None,
+        "retry_scope": "failed_only" if run.status == "partial_failed" else None,
         "problem_data": task["problem_data"],
         "student_data": task["student_data"], "timestamp": run.completed_at,
     }
@@ -4254,23 +4276,34 @@ def update_problem(
         ):
             if key in patch:
                 presentation[key] = patch[key]
+        fixed_fields = {field for key, field in {"stem": "stem", "reference_answer": "answer", "criterion": "rubric", "test_cases": "programming_tests"}.items() if patch.get(key)}
+        if fixed_fields:
+            presentation["preparation_issues"] = [
+                {**issue, "status": "resolved"} if issue.get("status") == "open"
+                and issue.get("field") in fixed_fields
+                and issue.get("code") in {"parse_anomaly", "generation_failed", "recognition_partial", "recognition_needs_review", "low_confidence"}
+                else issue for issue in presentation.get("preparation_issues", [])
+            ]
         if patch.get("review_status") == "confirmed":
-            presentation["max_score_review_status"] = "confirmed"
-            # A teacher may accept unchanged recognition. Keep its evidence,
-            # while acknowledging review warnings rather than hiding failures.
-            reviewable_codes = {
-                "low_confidence", "source_conflict", "ai_source_conflict",
-                "ambiguous_question_match", "unmapped_source_content",
-                "rubric_step_reference_conflict", "recognition_partial",
-                "recognition_needs_review",
-            }
+            fields = set(patch.get("review_fields") or ["stem", "answer", "rubric", "programming_tests", "source", "max_score"])
+            issues = presentation.get("preparation_issues", [])
+            if not str(patch.get("stem", question.stem) or "").strip() or any(
+                issue.get("status") == "open" and issue.get("severity") == "blocking"
+                for issue in issues
+            ):
+                raise ValidationError("Fix the failed recognition or required material before confirming.", code="question_review_blocked")
+            if "max_score" in fields:
+                presentation["max_score_review_status"] = "confirmed"
             presentation["preparation_issues"] = [
                 {**issue, "status": "acknowledged"}
-                if issue.get("status") == "open"
-                and issue.get("code") in reviewable_codes else issue
-                for issue in presentation.get("preparation_issues", [])
-                if issue.get("field") != "max_score"
+                if issue.get("status") == "open" and issue.get("field") in fields else issue
+                for issue in issues
             ]
+            presentation["review_status"] = (
+                "confirmed" if presentation.get("max_score_review_status") == "confirmed"
+                and not any(issue.get("status") == "open" for issue in presentation["preparation_issues"])
+                else "needs_review"
+            )
         if "max_score" in patch:
             max_score = float(patch["max_score"])
             if not math.isfinite(max_score) or not 0 < max_score <= 10_000:
@@ -4415,8 +4448,6 @@ def update_student_answer(
         ))
         if submission is None or submission.current_revision_id is None:
             raise NotFound("submission")
-        if assignment.status != education.AssignmentStatus.PUBLISHED.value:
-            raise InvalidTransition("assignment_closed", code="assignment_closed")
         current_revision = session.get(
             SubmissionRevisionRecord, submission.current_revision_id
         )
@@ -4439,7 +4470,17 @@ def update_student_answer(
         # grading generation and analysis intact when the recognized text/flags
         # did not change (including an unchanged save from the editor).
         content_changed = patch.get("content") is not None and patch["content"] != target.content
+        failed_flags = {"recognition_failed", "parse_failed", "no_matching_answer"}
+        if content_changed and str(patch.get("content") or "").strip():
+            # A teacher's replacement text repairs recognition failures while
+            # preserving unrelated source/authorship observations.
+            patch = {**patch, "flag": [flag for flag in (patch.get("flag", target.flag) or []) if flag not in failed_flags]}
         flags_changed = patch.get("flag") is not None and list(patch["flag"]) != list(target.flag or [])
+        if patch.get("review_status") == "confirmed" and any(
+            flag in failed_flags
+            for flag in (patch.get("flag", target.flag) or [])
+        ):
+            raise ValidationError("Retry or correct the failed recognition before confirming.", code="answer_review_blocked")
         if not content_changed and not flags_changed and patch.get("review_status") is not None:
             review = session.get(
                 workflow_repository.SubmissionAnswerPresentationRecord, target.id
@@ -4462,6 +4503,8 @@ def update_student_answer(
                 "workflow_revision": workflow_row.workflow_revision,
             }
 
+        if assignment.status != education.AssignmentStatus.PUBLISHED.value:
+            raise InvalidTransition("assignment_closed", code="assignment_closed")
         next_number = (
             session.scalar(select(func.max(
                 SubmissionRevisionRecord.revision_number

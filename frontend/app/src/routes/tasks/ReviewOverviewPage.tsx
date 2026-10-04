@@ -1,3 +1,4 @@
+import { ReviewConfirmButton, RetryFailedGrading } from "@/components/tasks/ReviewConfirmation";
 import { SortableTableHead, useColumnSort, sortColumnRows, directionFor, type ColumnSort } from "@/components/ui/SortableTableHead";
 import { AlertTriangle, ArrowRight, CheckCircle2, ChevronRight, LoaderCircle, Search } from "lucide-react";
 import { useMemo, useRef, useState } from "react";
@@ -11,7 +12,6 @@ import { TaskQueryBar } from "@/components/tasks/AskQueryBar";
 import { useTaskFilterIntent } from "@/hooks/useTaskFilterIntent";
 import { EMPTY_FILTER_INTENT, supportsFilterIntent } from "@/lib/taskFilterIntent";
 import { NewTaskStepper } from "@/components/new-task/NewTaskStepper";
-import { GradingRetryNotice } from "@/components/tasks/GradingRetryNotice";
 import { MatrixQueueWorkspace } from "@/components/tasks/MatrixQueueWorkspace";
 import { MatrixStatusCell, type MatrixStatusTone } from "@/components/tasks/MatrixStatusCell";
 import { getMatrixIdentityLayout, MATRIX_ACTION_COLUMN_WIDTH, MATRIX_QUESTION_COLUMN_WIDTH } from "@/components/tasks/matrixLayout";
@@ -137,6 +137,7 @@ export function ReviewOverviewPage() {
 
   async function confirmAllReviews() {
     if (!taskId || confirmingRef.current || confirmFinalization.isPending) return;
+    if (blockingReviewItems.length) { setBlockedDialog(true); return; }
     if (!confirmableReviews.length) {
       if (remainingReviewCount > 0) setBlockedDialog(true);
       return;
@@ -197,10 +198,7 @@ export function ReviewOverviewPage() {
           {!historyView && resultQuery.data?.grading_run_status === "partial_failed" ? (
             <section className="mt-5 rounded-[10px] border border-warning/40 bg-warning/5 p-5" aria-label={locale === "zh-CN" ? "批改失败重试" : "Retry failed grading"}>
               <h2 className="mb-2 text-base font-semibold">{locale === "zh-CN" ? "部分作答未完成批改" : "Some answers could not be graded"}</h2>
-              <GradingRetryNotice locale={locale} />
-              <Link className="mt-3 inline-flex rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground" to={`/tasks/${taskId}/grading/preflight`}>
-                {locale === "zh-CN" ? "重试批改整批" : "Retry entire batch"}
-              </Link>
+              <RetryFailedGrading taskId={taskId} revision={task?.workflow_revision ?? 0} locale={locale} />
             </section>
           ) : null}
           <div className="mt-5 grid grid-cols-2 gap-4 xl:grid-cols-4 xl:gap-5">
@@ -224,15 +222,8 @@ export function ReviewOverviewPage() {
             <p className="text-xs text-muted-foreground">{locale === "en-US"
               ? "Confirm every valid score in this task, including filtered-out results. Existing teacher scores and comments are preserved."
               : "确认本任务全部有效评分（包含筛选外的题次），保留已有教师分数和评语；无有效分数的题次仍需填写。"}</p>
-            <button type="button" onClick={() => void confirmAllReviews()}
-              disabled={confirmReviews.isPending || confirmFinalization.isPending || (!confirmableReviews.length && remainingReviewCount === 0)}
-              className="inline-flex h-9 shrink-0 items-center gap-2 rounded-lg border border-primary px-4 text-sm font-semibold text-primary disabled:opacity-50">
-              {confirmReviews.isPending ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <CheckCircle2 className="h-4 w-4" />}
-              {confirmReviews.isPending ? `${confirmReviews.progress.completed}/${confirmReviews.progress.total}`
-                : !confirmableReviews.length && remainingReviewCount === 0
-                  ? locale === "en-US" ? "All reviews confirmed" : "全部已复核"
-                  : locale === "en-US" ? `Confirm all reviews (${confirmableReviews.length})` : `一键确认全部复核（${confirmableReviews.length}）`}
-            </button>
+            <ReviewConfirmButton locale={locale} all confirmed={!confirmableReviews.length && remainingReviewCount === 0} busy={confirmReviews.isPending} disabled={confirmFinalization.isPending} onClick={() => void confirmAllReviews()} />
+
             {batchError ? <p role="alert" className="w-full text-sm text-destructive">{locale === "en-US"
               ? `Confirmed ${confirmReviews.progress.completed}/${confirmReviews.progress.total}; the rest were not confirmed. ${batchError}`
               : `已确认 ${confirmReviews.progress.completed}/${confirmReviews.progress.total}，其余未确认。${batchError}`}</p> : null}
@@ -336,7 +327,10 @@ export function ReviewOverviewPage() {
         leaveLabel={locale === "en-US" ? "Go to the missing score" : "直接前往填写分数"}
         onStay={() => setBlockedDialog(false)}
         onLeave={() => { setBlockedDialog(false); if (unresolvedHref) navigate(unresolvedHref); else void finalizationQuery.refetch(); }}
-      /> : null}
+      >
+        {taskId ? <div className="mt-4"><RetryFailedGrading taskId={taskId} revision={task?.workflow_revision ?? 0} locale={locale} /></div> : null}
+        <ul className="mt-3 max-h-48 space-y-2 overflow-auto text-sm">{blockingReviewItems.map(item => <li key={reviewCellKey(item.student.id, item.question.id)}><Link className="text-primary underline" onClick={() => setBlockedDialog(false)} to={reviewDetailHref(taskId!, item.student.id, item.question.id, overviewReturnTo)}>{item.student.name} · {item.question.label} · {locale === "zh-CN" ? "缺少有效分数" : "Missing valid score"}</Link></li>)}</ul>
+      </UnsavedChangesDialog> : null}
     </div>
   );
 }
@@ -500,8 +494,8 @@ function ReviewHeatmap({
 
 function ReviewCell({ locale, href, correction, item, annotated, confirmed, question }: { locale: Locale; href: string; correction: Correction; item?: ReviewItem; annotated: boolean; confirmed: boolean; question?: QuestionSummary }) {
   const source = correctionScoreSource(correction);
-  const state = source === "hard_failure" ? "hard" : source === "teacher_changed" ? "edited" : confirmed ? "confirmed" : source === "ai_untouched" && item ? "aiDefault" : annotated ? "commented" : item?.category === "low-confidence" ? "low" : item ? "review" : "ok";
-  const label = copy(locale, state);
+  const state = source === "hard_failure" ? "hard" : confirmed ? "confirmed" : "review";
+  const label = locale === "zh-CN" ? (state === "hard" ? "需处理 · 缺少有效分数" : state === "confirmed" ? "已确认" : "待确认") : (state === "hard" ? "Action required · missing valid score" : state === "confirmed" ? "Confirmed" : "Pending confirmation");
   const displayScore = displayableCorrectionScore(correction);
   const masked = shouldHideAutomatedScores(correction);
   const scoreDetail = displayScore !== null && correction.max_score > 0
@@ -510,21 +504,7 @@ function ReviewCell({ locale, href, correction, item, annotated, confirmed, ques
   const detail = masked
     ? `${question?.label ?? correction.q_id} · ${item ? queueReason(locale, item) : copy(locale, "reviewReason")}`
     : `${question?.label ?? correction.q_id} · ${scoreDetail}${formatConfidence(correction.confidence)}`;
-  const tone: MatrixStatusTone = state === "hard"
-    ? "error"
-    : state === "confirmed"
-    ? "reviewed"
-    : state === "edited"
-      ? "warning"
-      : state === "commented"
-      ? "note"
-      : state === "aiDefault"
-        ? "warning"
-      : state === "low"
-        ? "warning"
-        : state === "review"
-          ? "error"
-          : "ok";
+  const tone: MatrixStatusTone = state === "hard" ? "error" : state === "confirmed" ? "reviewed" : "warning";
   return <MatrixStatusCell to={href} label={`${label} · ${detail}`} tone={tone} />;
 }
 
@@ -578,6 +558,7 @@ function PageState({ title, description, busy = false, action, href, onAction }:
 }
 
 function queueReason(locale: Locale, item: ReviewItem): string {
+  if (effectiveCorrectionScore(item.correction) === null) return locale === "zh-CN" ? "缺少有效分数 · 需处理" : "Missing valid score · action required";
   if (item.correction.review_status === "edited") return copy(locale, "savedPendingReason");
   if (item.category === "low-confidence") return copy(locale, "lowReason");
   if (item.category === "expert-disagreement") return copy(locale, "disagreementReason");

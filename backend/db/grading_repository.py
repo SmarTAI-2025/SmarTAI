@@ -1185,7 +1185,7 @@ def persisted_result_counters(run_id: str) -> tuple[int, int]:
 
 
 def upsert_result(run_id: str, *, worker_id: str,
-                  grade_result: education.GradeResultDTO) -> education.GradeResultDTO:
+                  grade_result: education.GradeResultDTO, inherited_review: dict | None = None) -> education.GradeResultDTO:
     """Persist one graded (run, revision, question) result. AI columns are immutable
     once written; re-grading the same triple is rejected rather than overwritten.
 
@@ -1255,12 +1255,12 @@ def upsert_result(run_id: str, *, worker_id: str,
             raise ValidationError("failed_result_must_not_have_score")
         if (
             grade_result.result_status == education.GradeResultStatus.GRADED.value
-            and grade_result.ai_score is None
+            and grade_result.ai_score is None and inherited_review is None
         ):
             raise ValidationError("graded_result_requires_score")
         if (
             grade_result.result_status == education.GradeResultStatus.NEEDS_REVIEW.value
-            and grade_result.ai_score is None
+            and grade_result.ai_score is None and inherited_review is None
         ):
             raise ValidationError("soft_review_result_requires_score")
         existing = session.scalar(
@@ -1298,6 +1298,18 @@ def upsert_result(run_id: str, *, worker_id: str,
         )
         session.add(record)
         session.flush()
+        if inherited_review is not None:
+            score = inherited_review["new_score"]
+            if not math.isfinite(score) or not 0 <= score <= record.ai_max_score:
+                raise ValidationError("review_score_out_of_range")
+            session.add(TeacherReviewRecord(
+                id=_new_review_id(), grade_result_id=record.id, teacher_id=run.teacher_id,
+                previous_score=record.ai_score, previous_comment=record.ai_comment,
+                new_score=score, new_comment=inherited_review.get("new_comment", ""),
+                comment=inherited_review.get("new_comment", ""),
+                confirmed=bool(inherited_review.get("confirmed")), review_sequence=1, created_at=now,
+            ))
+            session.flush()
         return _result_to_dto(record)
 
 

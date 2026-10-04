@@ -86,6 +86,7 @@ class InterpretTaskQueryRequest(BaseModel):
 
 
 class GradeRequest(BaseModel):
+    retry_scope: Literal["full_batch", "failed_only"] = "full_batch"
     language: str = "en"
     multi_sample_n: int | None = Field(default=None, ge=1, le=10)
     expected_workflow_revision: int = Field(ge=0)
@@ -117,6 +118,7 @@ class UpdateProblemRequest(BaseModel):
     solution_code: str | None = None
     test_cases: list[dict] | None = None
     review_status: Literal["needs_review", "edited", "confirmed"] | None = None
+    review_fields: list[Literal["stem", "answer", "rubric", "programming_tests", "source", "max_score"]] | None = None
 
 
 class UpdateStudentAnswerRequest(BaseModel):
@@ -599,6 +601,7 @@ def start_grading(
             owner_id=current.id,
             expected_workflow_revision=request.expected_workflow_revision,
             request_id=request.request_id,
+            retry_scope=request.retry_scope,
         )
     except DomainError as exc:
         return domain_error_response(exc)

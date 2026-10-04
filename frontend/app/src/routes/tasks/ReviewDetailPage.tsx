@@ -1,3 +1,5 @@
+import { ReviewConfirmButton, ReviewBlockDialog, RetryFailedGrading, reviewActionClass } from "@/components/tasks/ReviewConfirmation";
+import { type ReviewBlocker } from "@/lib/reviewConfirmation";
 import { DraftField, type DraftFieldHandle } from "@/components/ui/DraftField";
 import { ResultQuestionQuery, useResultQuestionFilter } from "@/components/tasks/ResultQuestionQuery";
 import { KnowledgeCitationPreview } from "@/components/knowledge-base/KnowledgeCitationPreview";
@@ -51,6 +53,7 @@ function ReviewDetailForm() {
   const { taskId, studentId, questionId } = useParams();
   const { locale, t } = useI18n();
   const navigate = useNavigate();
+  const [blockedReviews, setBlockedReviews] = useState<ReviewBlocker[]>([]);
   const [searchParams, setSearchParams] = useSearchParams();
   const taskQuery = useTask(taskId);
   const resultQuery = useTaskResult(taskId);
@@ -443,6 +446,7 @@ function ReviewDetailForm() {
       const prepared = prepareConfirmedReview(question);
       if (!prepared.ok) {
         setBatchError(prepared.message);
+        setBlockedReviews([{ label: `${student.name} · ${question.label} · ${prepared.message}`, href: buildHref(student.id, question.id, false) }]);
         if (visibleQuestions.some((item) => item.id === question.id)) scrollToQuestion(question.id);
         else navigate(buildHref(student.id, question.id, false));
         return;
@@ -519,6 +523,7 @@ function ReviewDetailForm() {
           </Link>
         ) : null}
       </div>
+      <ReviewBlockDialog locale={locale} issues={blockedReviews} onClose={() => setBlockedReviews([])} />
       <NewTaskStepper
         currentStep={6}
         lockedStep={7}
@@ -546,14 +551,11 @@ function ReviewDetailForm() {
           />
           {savingReviews ? <p role="status" className="mt-2 rounded-lg bg-primary/5 px-3 py-2 text-xs text-primary">{savingNavigationMessage}</p> : null}
 
+          {student.corrections.some(item => effectiveCorrectionScore(item) === null) ? <section className="mt-4 rounded-lg border border-red-200 bg-red-50/30 p-4"><RetryFailedGrading taskId={taskId} revision={taskQuery.data?.workflow_revision ?? 0} locale={locale} /></section> : null}
           <div className="mt-3 flex flex-wrap items-center justify-between gap-3 rounded-lg border bg-card p-3">
             <p className="text-xs text-muted-foreground">{tx(locale, "核对无误后可一次确认该学生全部题目；已修改的分数和评语一起保存。", "Confirm all questions for this student at once, saving any edited scores and comments.")}</p>
-            <button type="button" onClick={() => void confirmStudentReviews()}
-              disabled={batchProgress !== null || updateReview.isPending}
-              className="inline-flex h-9 shrink-0 items-center gap-2 rounded-lg border border-primary px-4 text-sm font-semibold text-primary disabled:opacity-50">
-              {batchProgress ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />}
-              {batchProgress ? `${batchProgress.completed}/${batchProgress.total}` : tx(locale, "一键确认该学生全部复核", "Confirm all reviews for this student")}
-            </button>
+            <ReviewConfirmButton locale={locale} all confirmed={dirtyQuestionIds.size === 0 && student.corrections.every(item => Number.isFinite(item.teacher_score) && item.review_status === "confirmed")} busy={batchProgress !== null || updateReview.isPending} onClick={() => void confirmStudentReviews()} />
+
             {batchError ? <p role="alert" className="w-full text-sm text-destructive">{batchError}</p> : null}
           </div>
 
@@ -674,17 +676,6 @@ function ReviewQuestionCard({ locale, student, question, correction, draft, requ
   const answer = student.answerByQuestion.get(question.id);
   const alreadyConfirmed = (scoreSource === "teacher_confirmed_same" || scoreSource === "teacher_changed")
     && correction?.review_status === "confirmed" && !dirty;
-  const actionLabel = alreadyConfirmed
-    ? hasNextReview
-      ? tx(locale, "继续复核", "Continue review")
-      : tx(locale, "返回复核总览", "Back to review overview")
-    : dirty
-      ? hasNextReview
-        ? tx(locale, "保存、确认并继续", "Save, confirm & continue")
-        : tx(locale, "保存并确认", "Save & confirm")
-      : hasNextReview
-        ? tx(locale, "确认并继续", "Confirm & continue")
-        : tx(locale, "确认复核", "Confirm review");
   return (
     <article id={questionAnchorId(question.id)} data-question-id={question.id} className="scroll-mt-[86px] overflow-hidden rounded-[10px] border bg-card">
       <header className="flex flex-col gap-3 border-b px-5 py-4 sm:flex-row sm:items-center sm:justify-between">
@@ -692,7 +683,7 @@ function ReviewQuestionCard({ locale, student, question, correction, draft, requ
           <div className="flex flex-wrap items-center gap-2">
             <h2 className="text-[20px] font-bold text-foreground">{question.label}</h2>
             <span className="rounded-full bg-slate-100 px-2.5 py-1 text-[11px] font-semibold text-muted-foreground dark:bg-slate-800">{question.type || tx(locale, "未分类", "Uncategorized")}</span>
-            <ReviewStatus correction={correction} required={required} locale={locale} />
+            <ReviewConfirmButton title={question.label} compact locale={locale} confirmed={alreadyConfirmed} blocked={scoreSource === "hard_failure"} busy={saving} disabled={!correction} onClick={onConfirm} />
           </div>
           <p className="mt-1 text-[11px] text-muted-foreground">{tx(locale, "题目、作答、SmarTAI 结果和教师最终结果在同一卡片内连续复核。", "Review the question, student response, SmarTAI result, and teacher result in one card.")}</p>
         </div>
@@ -716,7 +707,7 @@ function ReviewQuestionCard({ locale, student, question, correction, draft, requ
               <span className="shrink-0 rounded-full bg-blue-50 px-3 py-1 text-xs font-semibold text-primary dark:bg-blue-950/50">
                 {correction
                   ? displayScore === null
-                    ? tx(locale, "待教师复核", "Teacher review required")
+                    ? tx(locale, "待确认", "Pending confirmation")
                     : `${formatScore(displayScore)} / ${formatScore(correction.max_score)}`
                   : "— / —"}
               </span>
@@ -777,7 +768,7 @@ function ReviewQuestionCard({ locale, student, question, correction, draft, requ
             <div className="flex flex-wrap items-start justify-between gap-3">
               <div className="flex flex-wrap items-center gap-2">
                 <h3 id={`teacher-result-${question.id}`} className="text-[16px] font-bold text-foreground">{tx(locale, "教师最终结果", "Teacher Final Result")}</h3>
-                <ReviewStatus correction={correction} required={required} locale={locale} />
+                {scoreSource === "hard_failure" ? <span className="text-xs text-red-700">{tx(locale, "缺少有效分数 · 需处理", "Missing valid score · action required")}</span> : null}
               </div>
               <label className="flex shrink-0 items-center gap-2 text-[11px] font-medium text-muted-foreground">
                 <span>{tx(locale, "最终得分", "Final score")}</span>
@@ -811,11 +802,7 @@ function ReviewQuestionCard({ locale, student, question, correction, draft, requ
             </label>
             {saveError ? <p className="mt-3 rounded-[8px] border border-red-200 bg-red-50 px-3 py-2 text-xs font-medium text-red-700" role="alert">{saveError}</p> : null}
             <div className="mt-auto flex flex-wrap items-center justify-end gap-2 pt-4">
-              <button type="button" onClick={onConfirm} disabled={!correction || saving} aria-label={`${question.label}：${actionLabel}`} className="inline-flex h-9 items-center gap-1.5 rounded-[8px] bg-primary px-4 text-xs font-semibold text-primary-foreground hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50">
-                {saving ? <LoaderCircle aria-hidden="true" className="h-3.5 w-3.5 animate-spin" /> : <Check aria-hidden="true" className="h-3.5 w-3.5" />}
-                {actionLabel}
-                {hasNextReview ? <ArrowRight aria-hidden="true" className="h-3.5 w-3.5" /> : null}
-              </button>
+              <ReviewConfirmButton title={question.label} locale={locale} confirmed={alreadyConfirmed} blocked={scoreSource === "hard_failure" && !dirty} busy={saving} disabled={!correction} onClick={onConfirm} />
             </div>
           </section>
         </div>
@@ -862,33 +849,6 @@ function QuestionButtons({ locale, previous, next, onSelect }: { locale: Locale;
 
 function Signal({ label, value }: { label: string; value: string }) {
   return <div className="rounded-[7px] bg-muted/60 px-3 py-2"><dt className="text-muted-foreground">{label}</dt><dd className="mt-1 truncate font-semibold text-foreground" title={value}>{value}</dd></div>;
-}
-
-function ReviewStatus({ correction, required, locale }: { correction?: Correction; required: boolean; locale: Locale }) {
-  const source = correction ? correctionScoreSource(correction) : null;
-  const status = !correction
-    ? "missing"
-    : source === "hard_failure"
-      ? "hard"
-      : source === "teacher_confirmed_same"
-        ? "confirmed"
-        : source === "teacher_changed"
-          ? "edited"
-        : required
-          ? "pending"
-          : "ready";
-  const label = status === "missing"
-    ? tx(locale, "无批改结果", "Missing result")
-    : status === "hard"
-      ? tx(locale, "无有效分数 · 必须处理", "No valid score · action required")
-    : status === "confirmed"
-      ? tx(locale, "教师已处理 · 沿用 AI 分", "Teacher handled · AI score retained")
-      : status === "edited"
-        ? tx(locale, "教师已修改", "Teacher changed")
-        : status === "pending"
-          ? tx(locale, "AI 分默认采用 · 教师未操作", "AI score used by default · no teacher action")
-          : tx(locale, "AI 自动评分 · 教师未操作", "AI scored · no teacher action");
-  return <span className={cn("rounded-full px-3 py-1 text-[11px] font-semibold", status === "confirmed" && "bg-blue-100 text-primary dark:bg-blue-950/60", status === "edited" && "bg-amber-100 text-amber-700 dark:bg-amber-950/60 dark:text-amber-200", status === "pending" && "bg-amber-100 text-amber-700 dark:bg-amber-950/60 dark:text-amber-200", status === "ready" && "bg-emerald-100 text-emerald-700 dark:bg-emerald-950/60 dark:text-emerald-200", (status === "missing" || status === "hard") && "bg-red-100 text-red-600 dark:bg-red-950/60 dark:text-red-200")}>{label}</span>;
 }
 
 function EmptyText({ locale, text, en }: { locale: Locale; text: string; en: string }) {

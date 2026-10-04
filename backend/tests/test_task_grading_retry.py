@@ -59,7 +59,7 @@ def finish(case, run_id, monkeypatch, failed=("q2",)):
             max_score=10, confidence=0 if qid in failed else 1,
             synthesis_method="all_failed" if qid in failed else "single",
             comment="Transient timeout" if qid in failed else "Recovered", steps=[],
-        ) for qid in kwargs["problem_store"]]} for sid in kwargs["student_store"]]
+        ) for qid in kwargs["problem_store"] if kwargs.get("question_ids_by_student") is None or qid in kwargs["question_ids_by_student"].get(sid, set())]} for sid in kwargs["student_store"]]
 
     monkeypatch.setattr(grading_adapter, "grade_batch", fake_batch)
     asyncio.run(grading_runs.process_run(run_id=run_id, worker_id="retry-test"))
@@ -73,7 +73,7 @@ def test_same_inputs_retry_preserves_history_and_teacher_edits_and_can_publish(c
     original_input = finish(case, first["job_id"], monkeypatch, failures)
     old_rows = grading.list_results_for_run(first["job_id"])
     assert grading.get_run(first["job_id"]).status == "partial_failed"
-    assert task_facade.task_results(task_id=case[0], owner_id=case[1])["retry_scope"] == "full_batch"
+    assert task_facade.task_results(task_id=case[0], owner_id=case[1])["retry_scope"] == "failed_only"
     with pytest.raises(ResultNotReleasable):
         task_facade.confirm_finalization(task_id=case[0], owner_id=case[1], expected_revision=workflows.get_live_workflow(case[0], owner_id=case[1]).workflow_revision)
     success = next((row for row in old_rows if row.ai_score is not None), None)
@@ -318,3 +318,114 @@ def test_fast_terminal_legacy_run_during_pointer_repair_keeps_intent(case, monke
     response = start(case, "join-fast-legacy")
     assert response["status"] == "already_finished" and response["job_id"] == legacy.id
     assert len(grading.list_runs_for_assignment(case[0], actor_id=case[1])) == 1
+
+
+def test_failed_only_retry_preserves_success_and_teacher_review(case, monkeypatch):
+    first = start(case, "original")
+    finish(case, first["job_id"], monkeypatch)
+    original = grading.list_results_for_run(first["job_id"])
+    success = next(row for row in original if row.q_id == "q1")
+    grading.add_teacher_review(success.id, teacher_id=case[1], new_score=9,
+                               new_comment="Preserve teacher feedback", confirm=True)
+    retry = task_facade.start_task_grading(task_id=case[0], owner_id=case[1],
+        expected_workflow_revision=workflows.get_live_workflow(case[0], owner_id=case[1]).workflow_revision,
+        request_id="failed-only", retry_scope="failed_only")
+    called = finish(case, retry["job_id"], monkeypatch, ())
+    assert all(qids == {"q2"} for qids in called["question_ids_by_student"].values())
+    rows = grading.list_results_for_run(retry["job_id"])
+    kept = next(row for row in rows if row.q_id == "q1")
+    assert kept.ai_score == success.ai_score == 8
+    assert kept.effective_score == 9 and kept.teacher_review["confirmed"]
+    assert kept.teacher_review["new_comment"] == "Preserve teacher feedback"
+    assert grading.get_run(retry["job_id"]).status == "completed"
+    assert len(grading.list_results_for_run(first["job_id"])) == 2
+
+
+def test_failed_only_retry_does_not_repeat_manually_scored_failure(case, monkeypatch):
+    first = start(case, "original")
+    finish(case, first["job_id"], monkeypatch, ("q1", "q2"))
+    row = next(row for row in grading.list_results_for_run(first["job_id"]) if row.q_id == "q1")
+    grading.add_teacher_review(row.id, teacher_id=case[1], new_score=0, new_comment="Blank answer", confirm=True)
+    retry = task_facade.start_task_grading(task_id=case[0], owner_id=case[1],
+        expected_workflow_revision=workflows.get_live_workflow(case[0], owner_id=case[1]).workflow_revision,
+        request_id="retain-zero", retry_scope="failed_only")
+    called = finish(case, retry["job_id"], monkeypatch, ())
+    assert all(qids == {"q2"} for qids in called["question_ids_by_student"].values())
+    kept = next(row for row in grading.list_results_for_run(retry["job_id"]) if row.q_id == "q1")
+    assert kept.ai_score is None and kept.effective_score == 0
+    assert kept.teacher_review["new_comment"] == "Blank answer"
+
+
+def test_failed_only_rejects_changed_grading_content(case, monkeypatch):
+    first = start(case, "original")
+    finish(case, first["job_id"], monkeypatch)
+    with session_scope() as session:
+        from backend.db.models import AssignmentQuestionRecord
+        question = session.scalar(select(AssignmentQuestionRecord).where(AssignmentQuestionRecord.assignment_id == case[0]))
+        question.stem = "Changed grading input"
+        question.version += 1
+    with pytest.raises(VersionConflict, match="Grading inputs changed"):
+        task_facade.start_task_grading(task_id=case[0], owner_id=case[1],
+            expected_workflow_revision=workflows.get_live_workflow(case[0], owner_id=case[1]).workflow_revision,
+            request_id="changed", retry_scope="failed_only")
+    assert len(grading.list_runs_for_assignment(case[0], actor_id=case[1])) == 1
+
+
+def test_question_fields_confirm_independently_and_block_failed_content(case):
+    from backend.db.models import AssignmentQuestionRecord
+    from backend.domain.errors import ValidationError
+    with session_scope() as session:
+        row = session.scalar(select(AssignmentQuestionRecord).where(AssignmentQuestionRecord.assignment_id == case[0], AssignmentQuestionRecord.q_id == "q1"))
+        row.source = {"presentation": {"max_score_review_status": "needs_review", "review_status": "needs_review", "preparation_issues": [
+            {"issue_id": "score", "field": "max_score", "code": "default_max_score_requires_review", "status": "open", "severity": "warning"},
+            {"issue_id": "ocr", "field": "stem", "code": "recognition_partial", "status": "open", "severity": "warning"},
+        ]}}
+    def confirm(fields=None):
+        return task_facade.update_problem(task_id=case[0], owner_id=case[1], q_id="q1",
+            expected_revision=workflows.get_live_workflow(case[0], owner_id=case[1]).workflow_revision,
+            patch={"review_status": "confirmed", **({"review_fields": fields} if fields else {})})["problem"]
+    score = confirm(["max_score"])
+    assert score["max_score_review_status"] == "confirmed"
+    assert score["review_status"] == "needs_review"
+    assert [i["field"] for i in score["preparation_issues"] if i["status"] == "open"] == ["stem"]
+    assert confirm(["stem"])["review_status"] == "confirmed"
+    with session_scope() as session:
+        row = session.scalar(select(AssignmentQuestionRecord).where(AssignmentQuestionRecord.assignment_id == case[0], AssignmentQuestionRecord.q_id == "q1"))
+        row.stem = ""
+    with pytest.raises(ValidationError, match="Fix the failed recognition"):
+        confirm()
+
+
+def test_failed_answer_requires_repair_but_genuine_blank_can_be_confirmed(case):
+    from backend.db.models import SubmissionAnswerRecord
+    from backend.domain.errors import ValidationError
+    task = task_facade.get_task(task_id=case[0], owner_id=case[1])
+    student_id = next(iter(task["student_data"].values()))["stu_id"]
+    with session_scope() as session:
+        rows = session.scalars(select(SubmissionAnswerRecord)).all()
+        for row in rows:
+            row.content = ""
+            row.flag = ["recognition_failed", "external_annotation_present"] if row.q_id == "q1" else []
+    def update(qid, patch):
+        return task_facade.update_student_answer(task_id=case[0], owner_id=case[1], display_student_id=student_id, q_id=qid,
+            expected_revision=workflows.get_live_workflow(case[0], owner_id=case[1]).workflow_revision, patch=patch)
+    with pytest.raises(ValidationError, match="Retry or correct"):
+        update("q1", {"review_status": "confirmed"})
+    assert update("q2", {"review_status": "confirmed"})["answer"]["review_status"] == "confirmed"
+    repaired = update("q1", {"content": "Teacher corrected transcription", "review_status": "confirmed"})["answer"]
+    assert repaired["review_status"] == "confirmed"
+    assert repaired["flag"] == ["external_annotation_present"]
+
+
+def test_real_batch_dispatches_only_requested_failed_pairs(monkeypatch):
+    from backend.agents import grading_agent
+    calls = []
+    async def grade_student(**kwargs):
+        calls.append(kwargs)
+        return {"student_id": kwargs["student_data"]["stu_id"], "corrections": []}
+    monkeypatch.setattr(grading_agent, "grade_student", grade_student)
+    students = {sid: {"stu_id": sid, "stu_ans": [{"q_id": "q1"}, {"q_id": "q2"}]} for sid in ("a", "b")}
+    asyncio.run(grading_agent.grade_batch(student_store=students, problem_store={"q1": {}, "q2": {}}, registry=Registry(), question_ids_by_student={"a": {"q2"}, "b": set()}))
+    assert len(calls) == 1
+    assert calls[0]["student_data"]["stu_ans"] == [{"q_id": "q2"}]
+    assert calls[0]["problem_store"] == {"q2": {}}

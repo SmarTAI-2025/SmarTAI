@@ -1,3 +1,4 @@
+import { ReviewConfirmButton, ReviewBlockDialog, reviewActionClass } from "@/components/tasks/ReviewConfirmation";
 import { useDraftProtection } from "@/hooks/useDraftProtection";
 import { useDraftLeave } from "@/hooks/useDraftLeave";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -51,7 +52,7 @@ function QuestionPreparationDetailPageForm() {
   const navigate = useNavigate();
   const { locale, t } = useI18n();
   const taskQuery = useTask(taskId);
-  const { updateProblem, latestRevision: latestWorkflowRevisionRef, confirming, confirm, failure } = useQuestionReview(stableTaskId, taskQuery.data?.workflow_revision);
+  const { updateProblem, latestRevision: latestWorkflowRevisionRef, confirming, confirm, failure, blocked, clearBlocked } = useQuestionReview(stableTaskId, taskQuery.data?.workflow_revision);
   const sourcePreview = useSourcePreview({
     taskId,
     workflowRevision: taskQuery.data?.workflow_revision,
@@ -237,6 +238,7 @@ function QuestionPreparationDetailPageForm() {
           />
         </div>
       </div>
+      <ReviewBlockDialog locale={locale} issues={blocked} onClose={clearBlocked} />
       <NewTaskStepper currentStep={2} />
 
       <SourceComparisonWorkspace
@@ -319,6 +321,7 @@ function QuestionPreparationDetailPageForm() {
                 onSaveTests={saveTests}
                 onNavigate={scrollToQuestion}
                 onConfirm={(item) => void confirmReview([item])}
+                onConfirmField={(item, field) => { if (!hasDirty) void confirm([item], [field]); else setShowUnsavedReview(true); }}
               />
             ))}
 
@@ -335,10 +338,8 @@ function QuestionPreparationDetailPageForm() {
                     <ArrowLeft aria-hidden="true" className="h-4 w-4" />
                     {tx(locale, "返回题目资料总览", "Back to Question Material Overview")}
                   </Link>
-                  <button type="button" disabled={confirming || updateProblem.isPending} onClick={() => void confirmReview(problems, !readOnly)} className="inline-flex h-10 items-center justify-center gap-2 rounded-[8px] bg-primary px-5 text-sm font-semibold text-primary-foreground hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50">
-                    {confirming ? <Loader2 aria-hidden="true" className="h-4 w-4 animate-spin" /> : <Check aria-hidden="true" className="h-4 w-4" />}
-                    {tx(locale, "一键确认全部题目已复核", "Confirm All Questions Reviewed")}
-                  </button>
+                  <ReviewConfirmButton locale={locale} all confirmed={problems.every(problem => problem.review_status === "confirmed")} busy={confirming || updateProblem.isPending} onClick={() => void confirmReview(problems, !readOnly)} />
+
                 </div>
               </div>
             </section>
@@ -366,7 +367,7 @@ function QuestionPreparationDetailPageForm() {
   );
 }
 
-function QuestionPackageCard({ problem, index, total, previous, next, readOnly, saving, locale, onDirtyChange, onSaveScoring, onSaveText, onSaveTests, onNavigate, onConfirm }: {
+function QuestionPackageCard({ problem, index, total, previous, next, readOnly, saving, locale, onDirtyChange, onSaveScoring, onSaveText, onSaveTests, onNavigate, onConfirm, onConfirmField }: {
   problem: ProblemInfo;
   index: number;
   total: number;
@@ -381,6 +382,7 @@ function QuestionPackageCard({ problem, index, total, previous, next, readOnly, 
   onSaveTests: (problem: ProblemInfo, cases: TestCase[]) => Promise<void>;
   onNavigate: (qId: string) => void;
   onConfirm: (problem: ProblemInfo) => void;
+  onConfirmField: (problem: ProblemInfo, field: import("@/types").PreparationIssue["field"]) => void;
 }) {
   const programming = isProgrammingProblem(problem);
   const risks = (problem.preparation_issues ?? []).filter((issue) => issue.status === "open");
@@ -391,31 +393,26 @@ function QuestionPackageCard({ problem, index, total, previous, next, readOnly, 
           <div className="flex flex-wrap items-center gap-2">
             <h2 className="text-xl font-bold text-foreground">{tx(locale, `第 ${problem.number || problem.q_id} 题`, `Question ${problem.number || problem.q_id}`)}</h2>
             <span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs text-muted-foreground dark:bg-slate-800">{problem.type || tx(locale, "未分类", "Uncategorized")}</span>
-            <span className={cn("rounded-full px-2.5 py-1 text-xs font-semibold", problem.max_score_review_status === "confirmed" ? "bg-blue-50 text-primary dark:bg-blue-950/35" : "bg-amber-100 text-amber-700 dark:bg-amber-950/35 dark:text-amber-300")}>{tx(locale, `满分 ${formatScore(problem.max_score ?? 10)} 分`, `${formatScore(problem.max_score ?? 10)} points max`)}</span>
+            <span className={cn("rounded-full px-2.5 py-1 text-xs font-semibold", problem.max_score_review_status === "confirmed" ? "bg-emerald-100 text-emerald-700 dark:bg-emerald-950/35" : "bg-amber-100 text-amber-700 dark:bg-amber-950/35 dark:text-amber-300")}>{tx(locale, `满分 ${formatScore(problem.max_score ?? 10)} 分`, `${formatScore(problem.max_score ?? 10)} points max`)}</span>
             {problem.question_structure?.subparts.length ? <span className="rounded-full bg-violet-50 px-2.5 py-1 text-xs font-semibold text-violet-700 dark:bg-violet-950/30 dark:text-violet-300">{tx(locale, `含 ${problem.question_structure.subparts.length} 个小问 · ${problem.question_structure.subparts.map((part) => part.label).join(" ")}`, `${problem.question_structure.subparts.length} subparts · ${problem.question_structure.subparts.map((part) => part.label).join(" ")}`)}</span> : null}
-            {risks.length ? <span className="rounded-full bg-amber-100 px-2.5 py-1 text-xs font-semibold text-amber-700">{tx(locale, `${risks.length} 项需核对`, `${risks.length} ${risks.length === 1 ? "risk" : "risks"}`)}</span> : null}
+            {risks.length ? <span tabIndex={0} title={risks.map(issue => riskShortLabel(issue.code, locale)).join("；")} className="cursor-help rounded-full bg-amber-100 px-2.5 py-1 text-xs font-semibold text-amber-700">{tx(locale, `${risks.length} 项待确认`, `${risks.length} to confirm`)}</span> : null}
           </div>
           <p className="mt-1 text-xs text-muted-foreground">{tx(locale, `筛选结果中的第 ${index + 1} / ${total} 题`, `${index + 1} of ${total}`)}</p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
-          {problem.review_status === "confirmed" ? <span className="text-xs font-semibold text-emerald-700">{tx(locale, "已复核", "Reviewed")}</span> : null}
-          <button type="button" disabled={saving} onClick={() => onConfirm(problem)} aria-label={tx(locale, `确认第 ${problem.number || problem.q_id} 题已复核`, `Confirm question ${problem.number || problem.q_id} reviewed`)} className="inline-flex h-9 items-center gap-1.5 rounded-lg bg-primary px-3 text-xs font-semibold text-primary-foreground disabled:opacity-50"><Check aria-hidden="true" className="h-4 w-4" />{tx(locale, "确认已复核", "Confirm Reviewed")}</button>
+          <ReviewConfirmButton title={tx(locale, `第 ${problem.number || problem.q_id} 题`, `Question ${problem.number || problem.q_id}`)} locale={locale} confirmed={problem.review_status === "confirmed"} busy={saving} onClick={() => onConfirm(problem)} />
           <QuestionNavigator previous={previous} next={next} locale={locale} onNavigate={onNavigate} />
         </div>
       </header>
 
-      {risks.length ? (
-        <div className="border-b bg-amber-50/70 px-5 py-3 dark:bg-amber-950/15 sm:px-6">
-          <p className="text-xs font-semibold text-amber-800 dark:text-amber-200">{risks.map((issue) => riskShortLabel(issue.code, locale)).join(" · ")}</p>
-        </div>
-      ) : null}
+      {(problem.preparation_issues ?? []).filter(issue => issue.field !== "max_score").length ? <div className="flex flex-wrap gap-3 border-b px-5 py-3 sm:px-6">{(problem.preparation_issues ?? []).filter(issue => issue.field !== "max_score").map(issue => <div key={issue.issue_id} className="flex items-center gap-2 text-xs"><span>{issue.status === "open" ? riskShortLabel(issue.code, locale) : tx(locale, "该项核对完成", "Item reviewed")}</span><ReviewConfirmButton compact locale={locale} confirmed={issue.status !== "open"} blocked={issue.severity === "blocking"} busy={saving} onClick={() => onConfirmField(problem, issue.field)} /></div>)}</div> : null}
 
       <div className="space-y-0 divide-y">
         <EditableTextField fieldKey={`${problem.q_id}:stem`} label={tx(locale, "题目", "Question")} value={problem.stem} problem={problem} field="stem" readOnly={readOnly} saving={saving} locale={locale} onDirtyChange={onDirtyChange} onSave={onSaveText} />
 
         <div className="grid divide-y md:grid-cols-2 md:divide-x md:divide-y-0">
           <EditableTextField fieldKey={`${problem.q_id}:answer`} label={tx(locale, "标答 / 解题步骤", "Reference Answer / Solution Steps")} value={problem.reference_answer ?? ""} problem={problem} field="reference_answer" readOnly={readOnly} saving={saving} locale={locale} onDirtyChange={onDirtyChange} onSave={onSaveText} />
-          <EditableScoringField fieldKey={`${problem.q_id}:scoring`} problem={problem} readOnly={readOnly} saving={saving} locale={locale} onDirtyChange={onDirtyChange} onSave={onSaveScoring} />
+          <EditableScoringField fieldKey={`${problem.q_id}:scoring`} problem={problem} readOnly={readOnly} saving={saving} locale={locale} onDirtyChange={onDirtyChange} onSave={onSaveScoring} onConfirm={() => onConfirmField(problem, "max_score")} />
         </div>
 
         {programming ? (
@@ -432,13 +429,14 @@ function QuestionPackageCard({ problem, index, total, previous, next, readOnly, 
 
       <footer className="flex items-center justify-between border-t px-5 py-3 sm:px-6">
         <span className="text-xs text-muted-foreground">{tx(locale, "浏览态会渲染 LaTeX 或代码；点击修改可编辑源码。", "LaTeX and code are rendered while browsing; click Edit to edit the source.")}</span>
-        <QuestionNavigator previous={previous} next={next} locale={locale} onNavigate={onNavigate} compact />
+        <div className="flex items-center gap-2"><ReviewConfirmButton title={tx(locale, `第 ${problem.number || problem.q_id} 题`, `Question ${problem.number || problem.q_id}`)} locale={locale} confirmed={problem.review_status === "confirmed"} busy={saving} onClick={() => onConfirm(problem)} /><QuestionNavigator previous={previous} next={next} locale={locale} onNavigate={onNavigate} compact /></div>
       </footer>
     </article>
   );
 }
 
-function EditableScoringField({ fieldKey, problem, readOnly, saving, locale, onDirtyChange, onSave }: {
+function EditableScoringField({ fieldKey, problem, readOnly, saving, locale, onDirtyChange, onSave, onConfirm }: {
+  onConfirm: () => void;
   fieldKey: string;
   problem: ProblemInfo;
   readOnly: boolean;
@@ -499,7 +497,7 @@ function EditableScoringField({ fieldKey, problem, readOnly, saving, locale, onD
         <div>
           <div className="flex flex-wrap items-center gap-2">
             <h3 className="text-sm font-bold text-foreground">{tx(locale, "本题满分与评分标准", "Maximum Score and Rubric")}</h3>
-            <span className={cn("rounded-full px-2.5 py-1 text-xs font-semibold", needsReview ? "bg-amber-100 text-amber-700 dark:bg-amber-950/35 dark:text-amber-300" : "bg-emerald-100 text-emerald-700 dark:bg-emerald-950/35 dark:text-emerald-300")}>{needsReview ? tx(locale, "请确认", "Confirm") : tx(locale, "已确认", "Confirmed")}</span>
+            <ReviewConfirmButton compact locale={locale} confirmed={!needsReview} busy={saving} disabled={editing} onClick={onConfirm} />
           </div>
           <p className="mt-1 text-xs leading-5 text-muted-foreground">{sourceLabel} · {tx(locale, "小问仍属于同一道大题；若评分标准写出分项分值，合计必须等于本题满分。", "Subparts remain inside one major question. Explicit rubric points must equal this maximum.")}</p>
         </div>

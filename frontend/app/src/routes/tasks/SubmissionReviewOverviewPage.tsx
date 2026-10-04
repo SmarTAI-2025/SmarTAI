@@ -1,3 +1,5 @@
+import { ReviewConfirmButton, ReviewBlockDialog } from "@/components/tasks/ReviewConfirmation";
+import { submissionReviewBlockers, answerReviewBlocked, type ReviewBlocker } from "@/lib/reviewConfirmation";
 import { SortableTableHead, useColumnSort, sortColumnRows, directionFor, type ColumnSort } from "@/components/ui/SortableTableHead";
 import { AlertCircle, CheckCircle2, ChevronRight, RotateCcw } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -61,6 +63,7 @@ export function SubmissionReviewOverviewPage() {
   const taskQuery = useTask(taskId);
   const identityMutation = useUpdateStudentIdentity();
   const answerMutation = useUpdateStudentAnswer();
+  const [blocked, setBlocked] = useState<ReviewBlocker[]>([]);
   const batchLock = useRef(false);
   const [batchProgress, setBatchProgress] = useState<{ completed: number; total: number } | null>(null);
   const [batchResult, setBatchResult] = useState<{ message: string; href?: string } | null>(null);
@@ -136,7 +139,8 @@ export function SubmissionReviewOverviewPage() {
     : [];
 
   async function confirmAll(kind: "identity" | "answers") {
-    if (!taskId || !taskQuery.data || taskQuery.data.status !== "submissions_ready" || batchLock.current) return;
+    if (!taskId || !taskQuery.data || (kind === "identity" && taskQuery.data.status !== "submissions_ready") || batchLock.current) return;
+    if (kind === "answers") { const issues = submissionReviewBlockers(taskQuery.data, locale); if (issues.length) { setBlocked(issues); return; } }
     batchLock.current = true;
     setBatchResult(null);
     const total = kind === "identity" ? pendingIdentities.length : pendingAnswers.length;
@@ -180,6 +184,7 @@ export function SubmissionReviewOverviewPage() {
       <h1 className="min-h-9 text-[30px] font-bold leading-9 tracking-[-0.02em] text-foreground">
         {t("submissionReviewTitle")}
       </h1>
+      <ReviewBlockDialog locale={locale} issues={blocked} onClose={() => setBlocked([])} />
       <NewTaskStepper currentStep={4} />
 
       <SubmissionSourceOutcomePanel
@@ -225,16 +230,15 @@ export function SubmissionReviewOverviewPage() {
               <Button type="button" variant="secondary" disabled={batchProgress !== null || !pendingIdentities.length} onClick={() => void confirmAll("identity")}>
                 <CheckCircle2 className="h-4 w-4" />{locale === "zh-CN" ? `一键确认全部身份（${pendingIdentities.length}）` : `Confirm all identities (${pendingIdentities.length})`}
               </Button>
-              <Button type="button" disabled={batchProgress !== null || !pendingAnswers.length} onClick={() => void confirmAll("answers")}>
-                <CheckCircle2 className="h-4 w-4" />{locale === "zh-CN" ? `一键确认全部作答（${pendingAnswers.length}）` : `Confirm all answers (${pendingAnswers.length})`}
-              </Button>
+
             </div>
-            <p className="mt-2 text-xs text-muted-foreground">{locale === "zh-CN" ? "按当前识别内容确认全任务的记录，不修改姓名、学号或作答；缺失的作答不会标为已复核。" : "Confirms all records in this task as recognized without changing names, IDs or answers. Missing responses are excluded."}</p>
+            <p className="mt-2 text-xs text-muted-foreground">{locale === "zh-CN" ? "按当前识别内容确认全任务的记录，不修改姓名、学号或作答；缺失的作答不会标为已确认。" : "Confirms all records in this task as recognized without changing names, IDs or answers. Missing responses are excluded."}</p>
             {batchProgress ? <p role="status" className="mt-2 text-sm">{locale === "zh-CN" ? "正在确认" : "Confirming"} {batchProgress.completed}/{batchProgress.total}</p> : null}
             {batchResult ? <p role="status" className="mt-2 text-sm">{batchResult.message}{batchResult.href ? <Link className="ml-2 text-primary underline" to={batchResult.href}>{locale === "zh-CN" ? "打开未完成记录" : "Open unfinished record"}</Link> : null}</p> : null}
           </div>
         ) : null}
 
+        {taskQuery.data?.status !== "submissions_ready" && batchResult ? <p role="status" className="mt-3 text-sm">{batchResult.message}</p> : null}
         <TaskQueryBar className="mt-6" filter={smartFilter} taskId={taskId} locale={locale}
           label={locale === "zh-CN" ? "Ask SmarTAI：学生作答" : "Ask SmarTAI: student answers"}
           placeholder={locale === "zh-CN" ? "找出缺答的学生，或按覆盖率排序" : "Find missing answers, or sort by coverage"} />
@@ -318,6 +322,7 @@ export function SubmissionReviewOverviewPage() {
                   : <>Showing {selection.students.length} of {students.length} {students.length === 1 ? "student" : "students"} · {selection.questions.length} of {questions.length} {questions.length === 1 ? "question" : "questions"}</>}
               </p>
               <div className="flex w-full flex-col gap-2 sm:w-auto sm:flex-row">
+                <ReviewConfirmButton locale={locale} all confirmed={!pendingAnswers.length && !submissionReviewBlockers(taskQuery.data, locale).length} busy={batchProgress !== null} onClick={() => void confirmAll("answers")} />
                 {detailStudent && detailQuestion ? (
                   <Link
                     to={studentReviewPath(taskId, detailStudent.stu_id, detailQuestion.id, returnSearch)}
@@ -361,6 +366,7 @@ function SubmissionMatrix({
   onSort: (key: string) => void;
   t: (key: MessageKey) => string;
 }) {
+  const { locale } = useI18n();
   if (students.length === 0 || questions.length === 0) {
     return (
       <MatrixState
@@ -405,7 +411,7 @@ function SubmissionMatrix({
               style={{ left: identityLayout.studentIdWidth, width: identityLayout.studentNameWidth, minWidth: identityLayout.studentNameWidth, maxWidth: identityLayout.studentNameWidth }}
              direction={directionFor(columnSort, "name")} onSort={() => onSort("name")}>{studentNameLabel}</SortableTableHead>
             {questions.map((question) => (
-              <SortableTableHead direction={directionFor(columnSort, `question:${question.id}`)} onSort={() => onSort(`question:${question.id}`)} label={question.label} key={question.id} className="w-[60px] min-w-[60px] max-w-[60px] px-1 text-center" title={question.type || question.label}>
+              <SortableTableHead locale={locale} direction={directionFor(columnSort, `question:${question.id}`)} onSort={() => onSort(`question:${question.id}`)} label={question.label} key={question.id} className="w-[60px] min-w-[60px] max-w-[60px] px-1 text-center" title={question.type || question.label}>
                 {question.label}
               </SortableTableHead>
             ))}
@@ -487,15 +493,9 @@ function AnswerStatusLink({
     empty: "submissionReviewCellEmpty",
     missing: "submissionReviewCellMissing",
   };
-  const stateLabel = t(labels[state]);
+  const stateLabel = state === "reviewed" ? (locale === "zh-CN" ? "已确认" : "Confirmed") : answerReviewBlocked(answer) ? (locale === "zh-CN" ? "需处理" : "Action required") : state !== "missing" ? (locale === "zh-CN" ? "待确认" : "Pending confirmation") : t(labels[state]);
   const label = answer?.flag?.length ? `${stateLabel} · ${answer.flag.map((flag) => formatSubmissionFlag(flag, locale)).join(" · ")}` : stateLabel;
-  const tone: MatrixStatusTone = state === "recognized"
-    ? "ok"
-    : state === "reviewed"
-      ? "reviewed"
-      : state === "flagged"
-        ? "warning"
-        : "error";
+  const tone: MatrixStatusTone = state === "reviewed" ? "reviewed" : state === "missing" || answerReviewBlocked(answer) ? "error" : "warning";
 
   return <MatrixStatusCell to={to} label={label} tone={tone} />;
 }

@@ -1,4 +1,5 @@
 import { FileUp, LoaderCircle } from "lucide-react";
+import { SubmissionSourceOutcomePanel } from "@/components/tasks/SubmissionSourceOutcomePanel";
 import {
   useEffect,
   useRef,
@@ -267,6 +268,7 @@ function AddSubmissionsForm({ taskQuery, submittedInput }: { taskQuery: ReturnTy
       <h1 className="text-[30px] font-bold leading-9 tracking-[-0.02em] text-foreground">{t("submissionUploadTitle")}</h1>
 
       <NewTaskStepper currentStep={3} />
+      {task?.submission_sources?.some(source => source.status === "failed" || source.status === "processing") ? <SubmissionSourceOutcomePanel sources={task.submission_sources} locale={locale} className="mt-6" /> : null}
 
       <div data-draft-width="900" className="mx-auto mt-[45px] w-full max-w-[900px]">
         {(!selectedFile && !hasStoredFile && draft.value.selectedFileName && !canRetryOriginal) || (!rosterFile && !hasSavedRoster && draft.value.rosterFileName && identityMode === "roster") ? <p role="alert" className="mb-4 text-sm text-warning">{localText(locale, "保存的文件暂时不可用，请重新选择。其他设置已保留。", "The saved file is unavailable. Reselect it; other settings are preserved.")}</p> : null}

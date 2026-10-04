@@ -6,7 +6,8 @@ import {
   Upload,
   UserRoundSearch,
 } from "lucide-react";
-import { Link } from "react-router-dom";
+import { useEffect } from "react";
+import { Link, useLocation } from "react-router-dom";
 import type { Locale } from "@/i18n/messages";
 import { cn } from "@/lib/cn";
 import { getSubmissionSourceReasonCopy } from "@/lib/submissionSourceOutcomes";
@@ -25,6 +26,14 @@ export function SubmissionSourceOutcomePanel({
   taskId?: string;
   className?: string;
 }) {
+  const { hash } = useLocation();
+  const sourceKey = sources.map(source => source.source_id).join(",");
+  useEffect(() => {
+    if (!hash.startsWith("#source-")) return;
+    let id: string;
+    try { id = decodeURIComponent(hash.slice(1)); } catch { return; }
+    document.getElementById(id)?.scrollIntoView?.({ block: "center" });
+  }, [hash, sourceKey]);
   const counts = summary ?? summarize(sources);
   if (counts.uploaded <= 0) return null;
   const hasTerminalAttention = counts.failed > 0 || counts.identity_needs_review > 0;
@@ -117,7 +126,7 @@ function SourceOutcomeRow({ source, locale }: { source: SubmissionSourceOutcome;
         : "text-red-700 bg-red-50 dark:bg-red-950/40 dark:text-red-200";
 
   return (
-    <li className="rounded-lg border px-3 py-3">
+    <li id={`source-${source.source_id}`} className="scroll-mt-24 rounded-lg border px-3 py-3">
       <div className="flex items-start gap-3">
         <span className={cn("mt-0.5 inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full", tone)}>
           <Icon aria-hidden="true" className={cn("h-4 w-4", source.status === "processing" && "animate-spin")} />

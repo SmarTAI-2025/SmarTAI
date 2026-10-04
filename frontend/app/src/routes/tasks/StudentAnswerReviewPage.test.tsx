@@ -155,7 +155,7 @@ describe("StudentAnswerReviewPage review shortcuts", () => {
     renderPage("?identity=edit");
     expect(await screen.findByRole("textbox", { name: "学号" })).toHaveValue("S001");
     expect(screen.getByRole("textbox", { name: "姓名" })).toHaveValue("Lin");
-    await user.click(screen.getByRole("button", { name: "确认身份已复核" }));
+    await user.click(screen.getByRole("button", { name: "确认身份" }));
     expect(mutations.identity).toHaveBeenCalledWith({ taskId: "task-1", currentStudentId: "S001", studentId: "S001", studentName: "Lin", expectedWorkflowRevision: 3 });
   });
 
@@ -164,14 +164,14 @@ describe("StudentAnswerReviewPage review shortcuts", () => {
     const user = userEvent.setup();
     renderPage();
     expect(screen.queryByRole("textbox", { name: "学号" })).not.toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: "确认身份已复核" }));
+    await user.click(screen.getByRole("button", { name: "确认身份 · 待确认" }));
     expect(mutations.identity).toHaveBeenCalledTimes(1);
   });
 
   it("allows confirming recognized unflagged answers without editing their text", async () => {
     const user = userEvent.setup();
     renderPage();
-    await user.click(screen.getByRole("button", { name: "确认已复核" }));
+    await user.click(screen.getAllByRole("button", { name: /1.*待确认/ })[0]);
     expect(mutations.answer).toHaveBeenCalledWith({ taskId: "task-1", studentId: "S001", qId: "Q1", expectedWorkflowRevision: 3, reviewStatus: "confirmed" });
   });
 
@@ -181,11 +181,11 @@ describe("StudentAnswerReviewPage review shortcuts", () => {
     await user.click(screen.getByRole("button", { name: "修改" }));
     const draft = document.querySelector("textarea")!;
     await user.type(draft, " corrected");
-    await user.click(screen.getByRole("button", { name: "一键确认本学生全部作答" }));
+    await user.click(screen.getByRole("button", { name: "全部确认" }));
     expect(mutations.answer).not.toHaveBeenCalled();
     expect(draft).toHaveValue("Student answer one corrected");
     expect(screen.getByRole("status")).toHaveTextContent("请先保存正在修改的作答");
-    await user.click(screen.getByRole("button", { name: "保存并确认复核" }));
+    await user.click(screen.getByRole("button", { name: "保存并确认" }));
     expect(mutations.answer).toHaveBeenCalledWith(expect.objectContaining({ content: "Student answer one corrected", reviewStatus: "confirmed" }));
   });
 });

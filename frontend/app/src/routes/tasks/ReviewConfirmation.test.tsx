@@ -13,9 +13,10 @@ const state = vi.hoisted(() => ({
   task: { task_id: "T1", name: "Review", status: "graded", workflow_revision: 5, problem_data: {}, student_data: {} },
   result: { results: [] as unknown[] } as { results: unknown[]; grading_run_status?: string },
   finalization: { remaining_review_count: 0, ready_for_confirmation: true, workflow_revision: 5 },
-  bulk: vi.fn(), update: vi.fn(), finalize: vi.fn(), refetch: vi.fn(),
+  retry: vi.fn(), bulk: vi.fn(), update: vi.fn(), finalize: vi.fn(), refetch: vi.fn(),
 }));
 vi.mock("@/api/hooks/tasks", () => ({
+  useStartGrading: () => ({ mutate: state.retry }),
   useTask: () => ({ data: state.task, refetch: state.refetch }),
   useTaskResult: () => ({ data: state.result, refetch: state.refetch }),
   useTeacherComments: () => ({ data: { comments: {} }, refetch: state.refetch }),
@@ -62,23 +63,32 @@ beforeEach(async () => {
   HTMLElement.prototype.scrollIntoView = vi.fn();
 });
 describe("one-click grading review", () => {
-  it("provides a reachable partial failure retry while keeping the existing results visible", () => {
+  it("provides a reachable partial failure retry while keeping the existing results visible", async () => {
     state.result.grading_run_status = "partial_failed";
     state.result.results = [{ student_id: "S1", corrections: [correction("Q1"), correction("Q2", { score: null, provisional_score: null, result_status: "failed" })] }];
     show();
-    expect(screen.getByRole("link", { name: "Retry entire batch" })).toHaveAttribute("href", "/tasks/T1/grading/preflight");
-    expect(screen.getByText(/Previous results are kept/)).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Retry failed items" }));
+    expect(state.retry).toHaveBeenCalledWith(expect.objectContaining({taskId: "T1", retryScope: "failed_only", expectedWorkflowRevision: 5}), expect.anything());
+    expect(screen.getByText(/Successful results and teacher scores/)).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "Some answers could not be graded" })).toBeInTheDocument();
+  });
+  it("does not confirm a valid subset while another result is missing its score", async () => {
+    state.result.results = [{student_id:"S1", corrections:[correction("Q1"), correction("Q2", {score:null, provisional_score:null, result_status:"failed"})]}];
+    show();
+    await userEvent.click(screen.getByRole("button", {name:"Confirm all"}));
+    expect(screen.getByRole("alertdialog")).toBeInTheDocument();
+    expect(state.bulk).not.toHaveBeenCalled();
+    expect(screen.getByRole("button", {name:"Retry failed items"})).toBeEnabled();
   });
   it("shows the total confirmed count even when no AI result required review", () => {
     state.result.results = [{ student_id: "S1", corrections: [correction("Q1", { teacher_score: 7 }), correction("Q2", { teacher_score: 0 })] }];
     show();
     expect(screen.getByText("2/2")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "All reviews confirmed" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Confirmed" })).toBeDisabled();
   });
   it("explicitly confirms automatically scored results including zero, without finalizing", async () => {
     show();
-    await userEvent.click(screen.getByRole("button", { name: "Confirm all reviews (2)" }));
+    await userEvent.click(screen.getByRole("button", { name: "Confirm all" }));
     expect(state.bulk).toHaveBeenCalledWith({ taskId: "T1", revision: 5, entries: [
       { studentId: "S1", qId: "Q1", score: 7, comment: "" },
       { studentId: "S1", qId: "Q2", score: 0, comment: "Keep this" },
@@ -88,7 +98,7 @@ describe("one-click grading review", () => {
   it("keeps teacher overrides and excludes an already confirmed teacher review", async () => {
     state.result.results = [{ student_id: "S1", corrections: [correction("Q1", { teacher_score: 9, review_status: "edited", teacher_comment: "Override" }), correction("Q2", { teacher_score: 7 })] }];
     show();
-    await userEvent.click(screen.getByRole("button", { name: "Confirm all reviews (1)" }));
+    await userEvent.click(screen.getByRole("button", { name: "Confirm all" }));
     expect(state.bulk.mock.calls[0][0].entries).toEqual([{ studentId: "S1", qId: "Q1", score: 9, comment: "Override" }]);
   });
   it("takes a blocked result directly to its missing score even with a no-match filter", async () => {
@@ -103,7 +113,7 @@ describe("one-click grading review", () => {
   });
   it("confirms every student result in one action while chaining workflow revisions", async () => {
     show(true);
-    await userEvent.click(screen.getByRole("button", { name: "Confirm all reviews for this student" }));
+    await userEvent.click(screen.getByRole("button", { name: "Confirm all" }));
     await waitFor(() => expect(state.update).toHaveBeenCalledTimes(2));
     expect(state.update.mock.calls.map(([input]) => input.expected_workflow_revision)).toEqual([5, 6]);
     expect(state.update.mock.calls[1][0]).toMatchObject({ teacher_score: 0, teacher_comment: "Keep this" });
@@ -113,7 +123,7 @@ describe("one-click grading review", () => {
     const inputs = screen.getAllByRole("textbox").filter((element) => element.tagName === "INPUT");
     await userEvent.clear(inputs[1]);
     await userEvent.type(inputs[1], "99");
-    await userEvent.click(screen.getByRole("button", { name: "Confirm all reviews for this student" }));
+    await userEvent.click(screen.getByRole("button", { name: "Confirm all" }));
     expect(state.update).not.toHaveBeenCalled();
     expect(screen.getByRole("alert")).toHaveTextContent("Correct the highlighted score first");
     expect(inputs[1]).toHaveValue("99");
@@ -121,7 +131,7 @@ describe("one-click grading review", () => {
   it("stops after a failed item and reports a truthful partial confirmation", async () => {
     state.update.mockResolvedValueOnce({ workflow_revision: 6, correction: correction("Q1", { teacher_score: 7 }) }).mockRejectedValueOnce(new Error("Unavailable"));
     show(true);
-    await userEvent.click(screen.getByRole("button", { name: "Confirm all reviews for this student" }));
+    await userEvent.click(screen.getByRole("button", { name: "Confirm all" }));
     await waitFor(() => expect(screen.getAllByRole("alert").some((element) => element.textContent?.includes("Confirmed 1/2"))).toBe(true));
     expect(state.update).toHaveBeenCalledTimes(2);
   });
@@ -130,7 +140,7 @@ describe("one-click grading review", () => {
       teacher_score: 9, review_status: "edited", teacher_comment: "Keep my override",
     })] }];
     show(true);
-    await userEvent.click(screen.getByRole("button", { name: /Q1.*Confirm review/ }));
+    await userEvent.click(screen.getAllByRole("button", { name: /Q1.*Confirm review/ })[0]);
     expect(state.update).toHaveBeenCalledExactlyOnceWith({
       taskId: "T1", studentId: "S1", qId: "Q1", expected_workflow_revision: 5,
       teacher_score: 9, teacher_comment: "Keep my override", confirm: true,
@@ -146,9 +156,9 @@ describe("one-click grading review", () => {
     let completeFirst!: (value: unknown) => void;
     state.update.mockImplementationOnce(() => new Promise((resolve) => { completeFirst = resolve; }));
     const router = show(true);
-    await userEvent.click(screen.getByRole("button", {
-      name: mode === "single" ? /Q1.*Confirm/ : "Confirm all reviews for this student",
-    }));
+    await userEvent.click(screen.getAllByRole("button", {
+      name: mode === "single" ? /Q1.*Confirm/ : "Confirm all",
+    })[0]);
     expect(screen.getByText(/Saving review results\. Please wait before switching students/)).toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: "Other" }));
     fireEvent.keyDown(window, { key: "ArrowRight" });
@@ -191,7 +201,7 @@ describe("one-click grading review", () => {
     await userEvent.click(screen.getByRole("button", { name: "暂存" }));
     await screen.findByText(/已暂存 ·/);
     if (!success) state.update.mockRejectedValueOnce(new Error("Retry later"));
-    await userEvent.click(screen.getByRole("button", { name: /Q1.*Save/ }));
+    await userEvent.click(screen.getAllByRole("button", { name: /Q1.*Confirm review/ })[0]);
     await waitFor(() => expect(state.update).toHaveBeenCalledTimes(1));
     const scope = "results-review:T1:S1:Q1";
     await waitFor(async () => {

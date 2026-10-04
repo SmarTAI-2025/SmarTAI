@@ -2,6 +2,7 @@ import type { Correction } from "@/types";
 import {
   correctionReviewReasonIds,
   displayableCorrectionScore,
+  effectiveCorrectionScore,
   hasReviewSignal,
   reviewReasonLabel,
   type QuestionSummary,
@@ -51,13 +52,14 @@ function buildReviewItem(
   const percent = displayScore !== null && correction.max_score > 0
     ? (displayScore / correction.max_score) * 100
     : null;
+  const missingScore = effectiveCorrectionScore(correction) === null;
   const lowConfidence = correction.confidence < 0.65;
   const expertDisagreement =
     correctionReviewReasonIds(correction).some((reason) => reason === "high_indecisiveness" || reason === "score_spread_high") ||
     expertSpread > Math.max(1, correction.max_score * 0.25);
   const scoreAnomaly = percent !== null && (percent <= 40 || percent >= 95) && hasReviewSignal(correction);
 
-  if (!lowConfidence && !expertDisagreement && !scoreAnomaly && !correction.requires_human_review && !reasonIds.length) {
+  if (!missingScore && !lowConfidence && !expertDisagreement && !scoreAnomaly && !correction.requires_human_review && !reasonIds.length) {
     return null;
   }
 
@@ -69,6 +71,7 @@ function buildReviewItem(
         ? "score-anomaly"
         : "review";
   const priority =
+    (missingScore ? 100 : 0) +
     (lowConfidence ? 30 : 0) +
     (expertDisagreement ? 20 : 0) +
     (scoreAnomaly ? 10 : 0) +
