@@ -1,7 +1,11 @@
 import { render, screen } from "@testing-library/react";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ProblemRecognitionProgressPage } from "./ProblemRecognitionProgressPage";
+
+let failureCode = "provider_timeout";
+let failedPages: number[] = [];
+beforeEach(() => { failureCode = "provider_timeout"; failedPages = []; });
 
 vi.mock("@/api/hooks", () => ({
   useStageProviders: () => ({ data: [], isError: false, isLoading: false }),
@@ -27,7 +31,8 @@ vi.mock("@/hooks/useTaskProgress", () => ({
     isFetching: false,
     progress: {
       phase: "error",
-      error_detail: "provider_timeout",
+      error_detail: failureCode,
+      recognition_failure: { failed_pages: failedPages },
       question_labels: { q2: "1.1.7" },
       failed_question_ids: ["q2"],
       question_error_codes: { q2: "provider_timeout" },
@@ -46,6 +51,15 @@ vi.mock("@/i18n/I18nProvider", () => ({
 }));
 
 describe("ProblemRecognitionProgressPage generation failure", () => {
+  it("shows the actual failed PDF page for a worker recitation error", () => {
+    failureCode = "provider_recitation_blocked";
+    failedPages = [8];
+    render(<MemoryRouter initialEntries={["/tasks/task-1/problems/progress"]}>
+      <Routes><Route path="/tasks/:taskId/problems/progress" element={<ProblemRecognitionProgressPage />} /></Routes>
+    </MemoryRouter>);
+    expect(screen.getByText(/PDF 第 8 页/)).toHaveTextContent("RECITATION");
+    expect(screen.getByText(/PDF 第 8 页/)).toHaveTextContent("不代表模型缺少图片能力");
+  });
   it("keeps the failed major-question number visible after terminal failure", () => {
     render(
       <MemoryRouter initialEntries={["/tasks/task-1/problems/progress"]}>
