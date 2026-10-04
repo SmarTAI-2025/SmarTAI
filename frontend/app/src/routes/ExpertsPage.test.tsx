@@ -124,22 +124,6 @@ describe("ExpertsPage editable vendor Base URL", () => {
     deleteBaiduOCRCredentials.mockResolvedValue({ status: "success" });
   });
 
-  it.each(["textPending", "imagePending"] as const)("keeps configuration actions available while %s serializes probes", async (pending) => {
-    hookState[pending] = true;
-    hookState.experts = [{ provider_id: "pc-busy", provider_type: "gemini", model: "saved-model", enabled: true, rpm: 0, max_concurrent: 1 }];
-    const user = userEvent.setup(); renderPage();
-    for (const name of ["验证（可选）", "验证视觉能力"]) {
-      for (const button of screen.getAllByRole("button", { name })) expect(button).toBeDisabled();
-    }
-    for (const name of ["编辑", "设为默认", "停用", "删除"]) {
-      for (const button of screen.getAllByRole("button", { name })) expect(button).toBeEnabled();
-    }
-    await user.click(screen.getAllByRole("button", { name: "编辑" })[0]!);
-    expect(screen.getByRole("dialog")).toBeInTheDocument();
-    expect(screen.getByLabelText("模型名称")).toHaveValue("saved-model");
-    expect(verifyImage).not.toHaveBeenCalled();
-  });
-
   it("only sends an independent image probe after an explicit click on that configuration", async () => {
     hookState.experts = [{ provider_id: "pc-image", provider_type: "qwen", model: "arbitrary-model", enabled: true, rpm: 0, max_concurrent: 1 }];
     const user = userEvent.setup(); renderPage();
@@ -400,6 +384,23 @@ describe("ExpertsPage editable vendor Base URL", () => {
     await user.click(screen.getByRole("button", { name: "再次点击确认删除" }));
     await waitFor(() => expect(deleteBaiduOCRCredentials).toHaveBeenCalledWith("ocr-record-1"));
   });
+  it.each(["textPending", "imagePending"] as const)("keeps configuration actions available while %s serializes probes", async (pending) => {
+    hookState[pending] = true;
+    hookState.experts = [{ provider_id: "pc-busy", provider_type: "gemini", model: "saved-model", enabled: true, rpm: 0, max_concurrent: 1 }];
+    const user = userEvent.setup(); renderPage();
+    for (const name of ["验证（可选）", "验证视觉能力"]) {
+      for (const button of screen.getAllByRole("button", { name })) expect(button).toBeDisabled();
+    }
+    for (const name of ["编辑", "设为默认", "停用", "删除"]) {
+      for (const button of screen.getAllByRole("button", { name })) expect(button).toBeEnabled();
+    }
+    await user.click(screen.getAllByRole("button", { name: "编辑" })[0]!);
+    expect(screen.getByRole("dialog")).toBeInTheDocument();
+    expect(screen.getByLabelText("模型名称")).toHaveValue("saved-model");
+    expect(verifyImage).not.toHaveBeenCalled();
+  });
+
+
 });
 
 vi.mock("@/components/ModelQuotaCard", () => ({ ModelQuotaCard: () => null }));
