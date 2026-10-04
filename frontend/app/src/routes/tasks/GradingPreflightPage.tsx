@@ -195,7 +195,7 @@ export function GradingPreflightPage() {
                       {countdownActive
                         ? copy(locale, isRegrading ? "regradeCountdownDescription" : "countdownDescription")
                         : disabledReason ?? (hasReviewWarnings
-                          ? (locale === "zh-CN" ? "仍有内容待复核。你可以直接继续批改，待复核标记会保留；本次不会自动开始。" : "Some inputs still need review. You can grade now and keep their review flags. Automatic start is paused.")
+                          ? (locale === "zh-CN" ? "仍有内容待确认。你可以直接继续批改，待确认标记会保留；本次不会自动开始。" : "Some inputs await confirmation. You can grade now and keep their pending status. Automatic start is paused.")
                           : copy(locale, isRegrading ? "regradeReadyMessage" : "readyMessage"))}
                     </p>
                     {countdownActive ? <p className="mt-1 text-[11px] font-semibold text-primary">{countdown} {copy(locale, "countdownUnit")}</p> : null}
@@ -447,8 +447,8 @@ function buildRiskItems(summary: TaskSummary, warnings: string[], locale: Locale
   const answersMissing = summary.problemCount - summary.answersComplete;
   const testsMissing = summary.programmingCount - summary.testsComplete;
   if (summary.flaggedQuestions > 0) {
-    items.push(locale === "zh-CN" ? `${summary.flaggedQuestions}道题目待复核`
-      : summary.flaggedQuestions === 1 ? "1 question still needs review" : `${summary.flaggedQuestions} questions still need review`);
+    items.push(locale === "zh-CN" ? `${summary.flaggedQuestions}道题目待确认`
+      : summary.flaggedQuestions === 1 ? "1 question awaits confirmation" : `${summary.flaggedQuestions} questions await confirmation`);
   }
   if (criteriaMissing > 0) {
     items.push(locale === "zh-CN"
@@ -468,7 +468,7 @@ function buildRiskItems(summary: TaskSummary, warnings: string[], locale: Locale
   if (summary.flaggedAnswers > 0) {
     items.push(locale === "zh-CN"
       ? `${summary.flaggedAnswers}${copy(locale, "answersFlagged")}`
-      : summary.flaggedAnswers === 1 ? "1 response still needs review" : `${summary.flaggedAnswers} responses still need review`);
+      : summary.flaggedAnswers === 1 ? "1 response still needs review" : `${summary.flaggedAnswers} responses await confirmation`);
   }
   if (summary.flaggedIdentities > 0) {
     items.push(locale === "zh-CN"

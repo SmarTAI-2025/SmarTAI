@@ -132,7 +132,7 @@ export function QuestionPreparationOverviewPage() {
             {taskId && firstQuestionId ? (
               <div className="flex flex-wrap items-center gap-2">
               <button type="button" disabled={confirming || updateProblem.isPending || rows.every(row => row.problem.review_status === "confirmed")} onClick={async () => {
-                if (await confirm(rows.map((row) => row.problem))) toast.success(tx(locale, "题目资料已确认复核。", "Question materials marked as reviewed."));
+                if (await confirm(rows.map((row) => row.problem))) toast.success(tx(locale, "题目资料已确认。", "Question materials confirmed."));
               }} className={cn(reviewActionClass, rows.every(row => row.problem.review_status === "confirmed") ? "bg-emerald-100 text-emerald-800 disabled:opacity-100" : "border-amber-200 bg-amber-100 text-amber-800")}>
                 <CheckCircle2 aria-hidden="true" className="h-4 w-4" />
                 {rows.every(row => row.problem.review_status === "confirmed") ? tx(locale, "已确认", "Confirmed") : rows.length === problems.length ? tx(locale, "全部确认", "Confirm all") : tx(locale, `确认筛选项（${rows.length}）`, `Confirm shown (${rows.length})`)}

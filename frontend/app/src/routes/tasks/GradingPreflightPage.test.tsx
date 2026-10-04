@@ -308,8 +308,8 @@ describe("GradingPreflightPage regrade mode", () => {
         </Routes>
       </MemoryRouter>,
     );
-    expect(screen.getByText(/You can grade now and keep their review flags/)).toBeInTheDocument();
-    expect(screen.getByText(/1 question still needs review/)).toBeInTheDocument();
+    expect(screen.getByText(/You can grade now and keep their pending status/)).toBeInTheDocument();
+    expect(screen.getByText(/1 question awaits confirmation/)).toBeInTheDocument();
     act(() => { vi.advanceTimersByTime(12_000); });
     expect(mutateAsync).not.toHaveBeenCalled();
     await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Start Grading Anyway" })); });

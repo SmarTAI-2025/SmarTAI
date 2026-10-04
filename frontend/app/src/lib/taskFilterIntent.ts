@@ -66,7 +66,7 @@ export function parseLocalTaskFilter(raw: string, surface: FilterIntentSurface):
   const query = normalizeFilterText(raw);
   if (!query || /^(?:全部|显示全部|查看全部|清除筛选|show all|all records|clear filters)$/.test(query)) return { ...EMPTY_FILTER_INTENT };
   let result: FilterIntentResult | null = null;
-  const match = query.match(/^(?:请)?(?:按|sort\s+(?:by\s+)?)?\s*(满分|maximum score|max score|题号|question(?: number)?|题型|type|姓名|name|学号|student id|id|覆盖率|coverage|待复核数|复核数|review count|置信度|confidence|得分率|score)\s*(升序|降序|从低到高|从高到低|从少到多|从多到少|asc(?:ending)?|desc(?:ending)?)(?:排列|排序)?$/);
+  const match = query.match(/^(?:请)?(?:按|sort\s+(?:by\s+)?)?\s*(满分|maximum score|max score|题号|question(?: number)?|题型|type|姓名|name|学号|student id|id|覆盖率|coverage|待确认数|待复核数|复核数|review count|置信度|confidence|得分率|score)\s*(升序|降序|从低到高|从高到低|从少到多|从多到少|asc(?:ending)?|desc(?:ending)?)(?:排列|排序)?$/);
   if (match) {
     const field = /满分|max/.test(match[1]) ? "max_score" : /题号|question/.test(match[1]) ? "question"
       : /题型|type/.test(match[1]) ? "type" : /姓名|name/.test(match[1]) ? "name"
@@ -83,7 +83,7 @@ export function parseLocalTaskFilter(raw: string, surface: FilterIntentSurface):
     const states: Record<string, NonNullable<FilterIntentResult["preparation_status"]>> = {
       "低置信": "low_confidence", "低置信度": "low_confidence", "low confidence": "low_confidence", "low-confidence": "low_confidence",
       "冲突": "source_conflict", "来源冲突": "source_conflict", "conflict": "source_conflict", "解析异常": "parse_anomaly",
-      "待关注": "attention", "待复核": "attention", "已准备": "ready",
+      "待关注": "attention", "待确认": "attention", "待复核": "attention", "已准备": "ready",
     };
     const missing = query.match(/^(?:缺(?:少|失)?|missing\s+)(标答|答案|reference answer|answer|评分标准|rubric|测试样例|tests|题干|stem)$/);
     if (states[query]) result = { ...EMPTY_FILTER_INTENT, preparation_status: states[query] };
@@ -94,7 +94,7 @@ export function parseLocalTaskFilter(raw: string, surface: FilterIntentSurface):
   } else if (surface === "submission_review" || surface === "student_answer_review") {
     const states: Record<string, NonNullable<FilterIntentResult["submission_status"]>> = {
       "缺答": "missing", "缺失": "missing", "未作答": "missing", "missing": "missing",
-      "待复核": "review", "review": "review", "身份异常": "identity",
+      "待确认": "review", "待复核": "review", "review": "review", "身份异常": "identity",
       "已识别": "recognized", "recognized": "recognized", "已校对": "reviewed", "reviewed": "reviewed",
     };
     if (states[query]) result = { ...EMPTY_FILTER_INTENT, submission_status: states[query] };

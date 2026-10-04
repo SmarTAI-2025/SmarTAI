@@ -471,7 +471,7 @@ function ReviewDetailForm() {
         completed += 1;
         setBatchProgress({ completed, total: pending.length });
       }
-      toast.success(tx(locale, "该学生全部批改结果已确认复核。", "All grading results for this student are confirmed."));
+      toast.success(tx(locale, "该学生全部批改结果已确认。", "All grading results for this student are confirmed."));
     } finally {
       batchSavingRef.current = false;
       if (activeStudentKeyRef.current === savingStudentKey) setBatchProgress(null);

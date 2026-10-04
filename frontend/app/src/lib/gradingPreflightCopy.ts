@@ -36,7 +36,7 @@ const copy = {
   criteriaMissing: ["道题缺少评分标准", "questions are missing rubrics"],
   answersMissing: ["道题缺少标答", "questions are missing reference answers"],
   testsMissing: ["道编程题缺少测试样例", "programming questions are missing test cases"],
-  answersFlagged: ["个作答待复核", "responses still need review"],
+  answersFlagged: ["个作答待确认", "responses await confirmation"],
   identitiesFlagged: ["名学生身份待确认", "student identities need confirmation"],
   editQuestions: ["校对题目资料", "Review question materials"],
   editSubmissions: ["校对学生作答", "Review submissions"],

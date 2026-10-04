@@ -211,7 +211,7 @@ function QuestionPreparationDetailPageForm() {
       return;
     }
     if (await confirm(selected)) {
-      toast.success(tx(locale, "题目资料已确认复核。", "Question materials marked as reviewed."));
+      toast.success(tx(locale, "题目资料已确认。", "Question materials confirmed."));
       if (continueToUpload) navigate(`/tasks/${taskId}/submissions/upload`);
     } else {
       window.scrollTo({ top: 0, left: 0, behavior: "auto" });

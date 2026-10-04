@@ -22,7 +22,7 @@ export interface ReviewOverviewSelection {
 
 const LOW_CONFIDENCE_TOKENS = ["低置信", "置信度低", "low confidence"];
 const DISAGREEMENT_TOKENS = ["专家分歧", "分歧大", "评分差异", "disagreement", "score spread"];
-const REVIEW_TOKENS = ["待复核", "需复核", "复核项", "review", "flagged"];
+const REVIEW_TOKENS = ["待确认", "pending confirmation", "待复核", "需复核", "复核项", "review", "flagged"];
 const CONFIRMED_REVIEW_TOKENS = ["已复核", "复核完成", "已确认", "教师已处理", "reviewed", "confirmed", "teacher handled"];
 const ANNOTATED_TOKENS = ["已批注", "教师批注", "有批注", "annotated", "commented"];
 const NO_REVIEW_TOKENS = ["无复核信号", "无需复核", "no review"];
