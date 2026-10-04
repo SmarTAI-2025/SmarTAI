@@ -52,7 +52,7 @@ async def test_zhipu_relay_busy_response_is_sanitized(monkeypatch):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("cls,expected", [
-    (OpenAIProvider, {"max_tokens": 1234}),
+    (OpenAIProvider, {"max_completion_tokens": 1234}),
     (AnthropicProvider, {"max_tokens": 1234}),
     (GeminiProvider, {"generation_config": {"max_output_tokens": 1234}}),
 ])
@@ -96,7 +96,7 @@ async def test_proxy_gemini_passes_limit_to_fresh_sync_client(monkeypatch):
 
 
 @pytest.mark.parametrize("protocol,field", [
-    ("openai_chat_completions", "max_tokens"),
+    ("openai_chat_completions", "max_completion_tokens"),
     ("anthropic_messages", "max_tokens"),
     ("gemini_generate_content", "maxOutputTokens"),
 ])
