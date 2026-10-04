@@ -71,8 +71,8 @@ describe("ProblemRecognitionProgressPage generation failure", () => {
     for (const number of ["1.1.20", "1.2.3", "1.2.16"]) {
       expect(screen.getByText(`${number} · 请求未返回结果`)).toBeInTheDocument();
     }
-    expect(screen.getByRole("button", { name: "按当前配置重试" })).toBeDisabled();
-    expect(screen.getByRole("checkbox", { name: "我了解可能再次计费，确认重新准备全部题目" })).not.toBeChecked();
+    expect(screen.getByRole("button", { name: "重试失败项" })).toBeDisabled();
+    expect(screen.getByRole("checkbox", { name: "我了解可能再次计费，确认重试未完成的题目" })).not.toBeChecked();
   });
   it("shows the actual failed PDF page for a worker recitation error", () => {
     failureCode = "provider_recitation_blocked";

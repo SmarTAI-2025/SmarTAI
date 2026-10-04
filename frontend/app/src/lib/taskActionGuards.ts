@@ -200,6 +200,8 @@ export interface RecoverableErrorInfo {
   actionKind: RecoverableActionKind;
   tone: "danger" | "warning" | "primary";
   retryAfterSeconds?: number;
+  dailyQuotaExhausted?: boolean;
+  showUsageLinks?: boolean;
   technicalDetails: Array<{ label: string; value: string }>;
 }
 
@@ -970,6 +972,14 @@ export function classifyRecoverableError(
     };
   }
 
+  if (code === "provider_daily_quota_exceeded" || code === "shared_pool_daily_limit_reached") {
+    return {
+      title: tx(locale, "模型日额度已用完", "The model's daily quota is exhausted"),
+      description: tx(locale, "服务商明确返回日额度耗尽。系统已停止本轮处理，不会自动跨天等待。请查看服务商用量，额度恢复后返回配置重新启动，或更换有额度的模型。", "The provider explicitly reported a daily quota limit. This run has stopped; it will not wait overnight. Check provider usage, then change models or restart from settings after the quota resets."),
+      actionLabel: tx(locale, "查看模型配置", "Model settings"), actionHref: "/settings/models", actionKind: "byok", tone: "warning",
+      dailyQuotaExhausted: true, showUsageLinks: true, technicalDetails,
+    };
+  }
   if (
     apiError.status === 429
     || code === "provider_rate_limited"
@@ -984,13 +994,14 @@ export function classifyRecoverableError(
       title: tx(locale, "模型限额暂时不可用", "The model rate limit is temporarily unavailable"),
       description: tx(
         locale,
-        `请求已被模型服务限流；当前任务和已上传资料不会丢失。${wait}`,
-        `The model service rate-limited this request. The task and uploaded materials are preserved.${wait}`,
+        `已按所设 RPM 排队，但服务商仍返回限流。它也可能限制每分钟 token、共享账户或日额度，当前返回信息不足以确定。多次等待仍失败时，请查看官网用量。可重试失败项，也可先切换模型；成功部分保留。${wait}`,
+        `Requests are paced by configured RPM, but the provider still reported a limit. Token limits, shared account traffic or daily quota may also apply; this response does not identify which. Check official usage if waiting repeatedly fails. Retry failed items or switch models; successful work is kept.${wait}`,
       ),
       actionLabel: tx(locale, "重新尝试", "Try again"),
       actionKind: "retry",
       tone: "warning",
       retryAfterSeconds,
+      showUsageLinks: true,
       technicalDetails,
     };
   }

@@ -24,6 +24,64 @@ def _archive_bytes() -> bytes:
 
 
 @pytest.mark.asyncio
+async def test_partial_batch_stays_failed_and_explicit_retry_calls_only_failed_source(monkeypatch):
+    from types import SimpleNamespace
+    owner, task = _seed_task(with_question=True)
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as archive:
+        archive.writestr("one.txt", "first answer")
+        archive.writestr("two.txt", "second answer")
+    reads, parsed = [], []
+    round_number = 0
+
+    async def read(**kw):
+        reads.append(kw["filename"])
+        return SimpleNamespace(text=kw["content"].decode(), recognition=None)
+
+    async def parse(sources, *_args, **_kwargs):
+        result = []
+        for source in sources:
+            parsed.append(source.filename)
+            failed = source.filename == "two.txt" and round_number == 0
+            student = None if failed else {"stu_id": source.filename, "stu_name": source.filename,
+                "stu_ans": [{"q_id": "q1", "content": source.text, "flag": []}],
+                "source_id": source.source_id, "stored_file_id": source.stored_file_id,
+                "source_filename": source.filename, "identity_status": "matched"}
+            result.append(SubmissionSourceParseResult(source.source_id, source.stored_file_id,
+                source.filename, "parse_failed" if failed else "parsed", student,
+                None if failed else source.filename, 0 if failed else 1, (),
+                "provider_rate_limited" if failed else None, "recognition" if failed else None, failed))
+        return result
+
+    monkeypatch.setattr(task_facade, "read_question_source", read)
+    monkeypatch.setattr(task_facade, "parse_student_answer_sources", parse)
+    monkeypatch.setattr(task_facade, "_registry_for_owner", lambda _owner: _Registry())
+    first = task_facade.queue_task_submission_parsing(task_id=task, owner_id=owner,
+        filename="answers.zip", content=buf.getvalue(), content_type="application/zip", registry=_Registry())
+
+    async def finish(job):
+        row = workflow_repository.claim_operation(job, owner_id=owner, worker_id="test", lease_seconds=60)
+        await task_facade.run_durable_submission_recognition(LeasedOperation(row, worker_id="test", lease_seconds=60))
+
+    await finish(first["job_id"])
+    snapshot = task_facade.get_task(task_id=task, owner_id=owner)
+    assert snapshot["status"] == "error"
+    assert snapshot["student_data"] == {}
+    assert snapshot["submission_source_summary"]["parsed"] == 1
+    assert snapshot["submission_source_summary"]["failed"] == 1
+    round_number = 1
+    retried = await tasks.retry_submission_recognition_endpoint(task_id=task, job_id=first["job_id"],
+        request=tasks.RetrySubmissionRecognitionRequest(expected_workflow_revision=snapshot["workflow_revision"]),
+        background_tasks=_BackgroundTasks(), current=SimpleNamespace(id=owner), registry=_Registry())
+    await finish(retried["job_id"])
+    assert reads == parsed == ["one.txt", "two.txt", "two.txt"]
+    result = task_facade.get_task(task_id=task, owner_id=owner)
+    assert result["status"] == "submissions_ready"
+    assert len(result["student_data"]) == 2
+    assert result["submission_source_summary"]["failed"] == 0
+
+
+@pytest.mark.asyncio
 async def test_submission_queue_persists_archive_and_has_no_request_task():
     owner_id, task_id = _seed_task(with_question=True)
     background = _BackgroundTasks()
@@ -102,10 +160,11 @@ async def test_submission_retry_republishes_only_for_durable_worker():
     assert retried["reused_original_upload"] is True
     assert background.calls == []
     retry_operation = workflow_repository.get_operation(
-        operation.id, owner_id=owner_id
+        retried["job_id"], owner_id=owner_id
     )
     assert retry_operation.status == "pending"
-    assert retry_operation.attempt == operation.attempt + 1
+    assert retry_operation.payload["retry_from"] == {"operation_id": operation.id, "attempt": operation.attempt}
+    assert workflow_repository.get_operation(operation.id, owner_id=owner_id).status == "error"
     assert retry_operation.payload["recognition_provider_id"] == "test-provider"
 
 

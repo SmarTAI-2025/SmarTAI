@@ -2,7 +2,7 @@ import "fake-indexeddb/auto";
 import { clearPageDrafts, listPageDrafts } from "@/lib/pageDraftStore";
 import { PageDraftSession } from "@/hooks/useDraftProtection";
 import { DraftActions, DraftLeaveProvider } from "@/hooks/useDraftLeave";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { createMemoryRouter, RouterProvider } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -177,6 +177,15 @@ function renderPage(initialEntry = "/tasks/task-1/questions/Q1/content") {
   render(<RouterProvider router={router} />);
   return router;
 }
+
+it("keeps exactly one review-confirm button per question", () => {
+  renderPage();
+  const cards = document.querySelectorAll("article[data-question-id]");
+  expect(cards).toHaveLength(Object.keys(taskData.problem_data).length);
+  for (const card of cards) {
+    expect(within(card as HTMLElement).getAllByRole("button", { name: /待确认/ })).toHaveLength(1);
+  }
+});
 
 beforeEach(() => {
   testState.locale = "zh-CN";

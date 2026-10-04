@@ -4,7 +4,6 @@ import { Link, Navigate, useNavigate, useParams } from "react-router-dom";
 import { useStartGrading, useTask } from "@/api/hooks/tasks";
 import { SmarTAIMascot } from "@/components/brand/SmarTAIMascot";
 import { NewTaskStepper } from "@/components/new-task/NewTaskStepper";
-import { GradingRetryNotice } from "@/components/tasks/GradingRetryNotice";
 import { RecoverableActionState } from "@/components/ui/RecoverableActionState";
 import { useTaskProgress } from "@/hooks/useTaskProgress";
 import { useGradingIntent } from "@/hooks/useGradingIntent";
@@ -73,7 +72,7 @@ export function GradingProgressPage() {
   async function handleRetry() {
     if (!taskId || !task) return;
     try {
-      const response = await intent.execute(state?.workflow_revision ?? task.workflow_revision, (request) => retryGrading.mutateAsync({ taskId, ...request }));
+      const response = await intent.execute(state?.workflow_revision ?? task.workflow_revision, (request) => retryGrading.mutateAsync({ taskId, ...request, retryScope: "failed_only" }));
       if (!response) return;
       if (response.status === "already_done" || (response.status === "already_finished" && ["completed", "partial_failed"].includes(response.run_status ?? ""))) {
         navigate(`/tasks/${taskId}/review`, { replace: true });
@@ -113,19 +112,19 @@ export function GradingProgressPage() {
           href="/history"
         />
       ) : readFailed ? (
-        <RecoverableActionState info={classifyRecoverableError(progressQuery.error ?? taskQuery.error, { locale, taskId, returnTo: `/tasks/${taskId}/grading/progress` })} locale={locale} workflowRecovery={{ retry: { onClick: refresh }, configurationHref: getTaskGradingSetupHref(taskId, `/tasks/${taskId}/grading/progress`) }} />
+        <RecoverableActionState info={classifyRecoverableError(progressQuery.error ?? taskQuery.error, { locale, taskId, returnTo: `/tasks/${taskId}/grading/progress` })} locale={locale} workflowRecovery={{ retry: { label: locale === "zh-CN" ? "刷新状态" : "Refresh status", onClick: refresh }, configurationHref: getTaskGradingSetupHref(taskId, `/tasks/${taskId}/grading/progress`) }} />
       ) : !status ? (
         <PageState title={copy(locale, "reading")} busy />
       ) : (
         <div className="mx-auto mt-[25px] w-full max-w-[940px]">
-          {status === "error" ? <div className="mb-4 rounded-[10px] border bg-card p-4"><GradingRetryNotice locale={locale} /></div> : null}
+          {status === "error" ? <p className="mb-4 text-sm text-muted-foreground">{locale === "zh-CN" ? "仅重试缺少有效结果的题次，保留成功结果及教师修改。可先在模型配置中调整模型；返回批改设置再开始会重新批改整批。" : "Retry only items without a valid result; keep successful results and teacher edits. You can adjust models first. Starting from grading settings reruns the full batch."}</p> : null}
           {status === "error" && recoveryInfo ? (
             <RecoverableActionState
               info={recoveryInfo}
               locale={locale}
               className="min-h-[300px]"
               workflowRecovery={{ retry: { onClick: () => void handleRetry(), busy: retryGrading.isPending }, configurationHref: getTaskGradingSetupHref(taskId, `/tasks/${taskId}/grading/progress`) }}
-              additionalActions={[{ label: copy(locale, "refresh"), onClick: refresh, busy: retryGrading.isPending }]}
+              additionalActions={[{ label: copy(locale, "refresh"), onClick: refresh, busy: retryGrading.isPending }, { label: locale === "zh-CN" ? "人工补齐分数" : "Enter missing scores", href: `/tasks/${taskId}/review?resolveFailures=1` }]}
             />
           ) : (
             <>

@@ -140,6 +140,8 @@ def _build_document(raw: RecognitionWorkflowReadV1, prompt_version: str):
         return None, "recognition_assembly_limit"
     low = not coverage.complete or any(span.confidence == "low" for page in pages for span in page.spans)
     reasons = ["quality_uncalibrated", "coverage_not_semantic_accuracy"]
+    if any(span.confidence == "low" for page in pages for span in page.spans):
+        reasons.append("low_confidence_content")
     if not coverage.complete:
         reasons.append("coverage_incomplete")
     if request.targets:

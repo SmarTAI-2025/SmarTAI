@@ -21,7 +21,7 @@ export interface RecoveryAction {
   disabled?: boolean;
 }
 
-export const workflowRetryLabel = (locale: Locale) => locale === "zh-CN" ? "按当前配置重试" : "Retry with current settings";
+export const workflowRetryLabel = (locale: Locale) => locale === "zh-CN" ? "重试失败项" : "Retry failed items";
 export const workflowBackLabel = (locale: Locale) => locale === "zh-CN" ? "返回修改配置" : "Back to edit settings";
 
 export function RecoverableActionState({
@@ -37,13 +37,13 @@ export function RecoverableActionState({
   info: RecoverableErrorInfo;
   primaryAction?: RecoveryAction;
   secondaryAction?: RecoveryAction;
-  workflowRecovery?: { retry: Omit<RecoveryAction, "label">; configurationHref: string; configurationState?: unknown };
+  workflowRecovery?: { retry: Omit<RecoveryAction, "label"> & { label?: string }; configurationHref: string; configurationState?: unknown };
   additionalActions?: RecoveryAction[];
   compact?: boolean;
   locale?: Locale;
   className?: string;
 }) {
-  const primary = workflowRecovery ? { ...workflowRecovery.retry, label: workflowRetryLabel(locale) } : primaryAction ?? (info.actionHref
+  const primary = workflowRecovery ? (info.dailyQuotaExhausted ? undefined : { ...workflowRecovery.retry, label: workflowRecovery.retry.label ?? workflowRetryLabel(locale) }) : primaryAction ?? (info.actionHref
     ? { label: info.actionLabel, href: info.actionHref }
     : undefined);
   const secondary = workflowRecovery ? { label: workflowBackLabel(locale), href: workflowRecovery.configurationHref, state: workflowRecovery.configurationState, disabled: workflowRecovery.retry.busy } : secondaryAction;
@@ -89,6 +89,14 @@ export function RecoverableActionState({
           <p className={cn("text-muted-foreground", compact ? "mt-1 text-xs leading-5" : "mt-2 max-w-2xl text-sm leading-6")}>
             {info.description}
           </p>
+
+          {info.showUsageLinks ? <p className="mt-2 text-xs leading-5 text-muted-foreground">
+            {locale === "zh-CN" ? "官网用量：" : "Official usage: "}
+            <a className="text-primary underline" href="https://platform.openai.com/usage" target="_blank" rel="noreferrer">OpenAI</a>{" · "}
+            <a className="text-primary underline" href="https://aistudio.google.com/usage" target="_blank" rel="noreferrer">Gemini</a>{" · "}
+            <a className="text-primary underline" href="https://open.bigmodel.cn/console/overview" target="_blank" rel="noreferrer">{locale === "zh-CN" ? "智谱" : "Zhipu"}</a>
+            {locale === "zh-CN" ? "。中转模型请查看对应服务商的控制台。" : ". For relayed models, check your relay provider's console."}
+          </p> : null}
 
           {primary || secondary || extras.length ? (
             <div className={cn("flex flex-col gap-2 sm:flex-row sm:flex-wrap", compact ? "mt-4" : "mt-6")}>

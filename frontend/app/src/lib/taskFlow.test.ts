@@ -2,6 +2,11 @@ import { describe, expect, it } from "vitest";
 import { getTaskReachableStep, hasTaskReachedStep } from "./taskFlow";
 
 describe("getTaskReachableStep", () => {
+  it("keeps legacy partial submission batches out of review and grading", () => {
+    expect(getTaskReachableStep({ status: "submissions_ready", submission_source_summary: {
+      uploaded: 2, parsed: 1, failed: 1, pending: 0, identity_needs_review: 0,
+    } })).toBe(3);
+  });
   it("opens read-only analysis as soon as grading has completed", () => {
     expect(getTaskReachableStep({ status: "graded" })).toBe(7);
   });

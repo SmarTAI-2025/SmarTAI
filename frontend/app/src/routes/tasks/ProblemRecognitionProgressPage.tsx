@@ -109,8 +109,8 @@ export function ProblemRecognitionProgressPage() {
     const submissionUncertain = taskState?.error === "provider_submit_uncertain" || getAPIErrorCode(retryFailure) === "provider_submit_uncertain";
     if (submissionUncertain) {
       info.description = locale === "zh-CN"
-        ? "上次请求可能已计费，但没有返回可用结果。确认后将复用已识别资料，重新准备全部题目，可能再次计费。系统不会自动重试。"
-        : "The previous request may have been billed without a usable result. Confirming reuses recognized sources and prepares all questions again, which may incur additional charges. Nothing retries automatically.";
+        ? "上次请求可能已计费，但没有返回可用结果。确认后将复用已识别资料，重试未完成的题目，可能再次计费。系统不会自动重试。"
+        : "The previous request may have been billed without a usable result. Confirming reuses recognized sources and retries incomplete questions, which may incur additional charges. Nothing retries automatically.";
       info.actionKind = "retry";
     }
     const canRetryPreparedSources = Boolean(
@@ -164,7 +164,7 @@ export function ProblemRecognitionProgressPage() {
               <input type="checkbox" className="mt-1" checked={acknowledgedJobId === failedJobId}
                 disabled={retryPreparation.isPending}
                 onChange={(event) => setAcknowledgedJobId(event.target.checked ? failedJobId : null)} />
-              {locale === "zh-CN" ? "我了解可能再次计费，确认重新准备全部题目" : "I understand possible additional charges and confirm preparing all questions again"}
+              {locale === "zh-CN" ? "我了解可能再次计费，确认重试未完成的题目" : "I understand possible additional charges and confirm retrying incomplete questions"}
             </label>
           ) : null}
           <RecoverableActionState
@@ -172,9 +172,9 @@ export function ProblemRecognitionProgressPage() {
             locale={locale}
             className="min-h-[430px]"
             workflowRecovery={{
-              retry: { onClick: canRetryPreparedSources ? () => void retryPreparedSources() : () => void refresh(),
+              retry: { onClick: () => void retryPreparedSources(),
                 busy: isRefreshing || retryPreparation.isPending,
-                disabled: submissionUncertain && acknowledgedJobId !== failedJobId },
+                disabled: !canRetryPreparedSources || (submissionUncertain && acknowledgedJobId !== failedJobId) },
               configurationHref: `/tasks/${taskId}/upload/problems`,
               configurationState: { imageRecoveryModel: recognitionProviderId },
             }}
@@ -198,7 +198,7 @@ export function ProblemRecognitionProgressPage() {
           info={info}
           locale={locale}
           className="min-h-[430px]"
-          workflowRecovery={{ retry: { onClick: () => void refresh(), busy: isRefreshing }, configurationHref: `/tasks/${taskId}/upload/problems` }}
+          workflowRecovery={{ retry: { label: locale === "zh-CN" ? "刷新状态" : "Refresh status", onClick: () => void refresh(), busy: isRefreshing }, configurationHref: `/tasks/${taskId}/upload/problems` }}
       />
       </ProgressPageFrame>
     );

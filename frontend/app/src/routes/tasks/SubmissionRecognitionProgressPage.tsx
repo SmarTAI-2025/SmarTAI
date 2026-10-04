@@ -22,6 +22,7 @@ import type { MessageKey } from "@/i18n/messages";
 import { cn } from "@/lib/cn";
 import { classifyRecoverableError } from "@/lib/taskActionGuards";
 import { getTaskDestination } from "@/lib/taskFlow";
+import { submissionRecognitionIncomplete } from "@/lib/reviewConfirmation";
 import type { JobProgress, ProgressEvent, TaskStatus } from "@/types";
 
 type RecognitionStepState = "done" | "active" | "pending";
@@ -48,7 +49,8 @@ export function SubmissionRecognitionProgressPage() {
   const [refreshing, setRefreshing] = useState(false);
   const retrying = useRef(false);
   const taskState = progressQuery.data ?? taskQuery.data;
-  const failedJobId = taskState?.last_failed_job_id;
+  const incomplete = submissionRecognitionIncomplete(taskState) || submissionRecognitionIncomplete(taskQuery.data);
+  const failedJobId = taskState?.last_failed_job_id ?? (incomplete ? taskState?.parse_job_id : null);
   const providerId = providerChoice && providerChoice.jobId === failedJobId ? providerChoice.id : taskState?.submission_recognition_provider_id ?? "";
   const uncertain = taskState?.error === "provider_submit_uncertain" || getAPIErrorCode(retryError) === "provider_submit_uncertain";
   async function retry() {
@@ -83,7 +85,7 @@ export function SubmissionRecognitionProgressPage() {
   if (taskId && taskQuery.data && ["review_confirmed", "generating_analysis", "finalized"].includes(status ?? "")) {
     return <Navigate to={getTaskDestination(taskQuery.data)} replace />;
   }
-  if (taskId && status && FINISHED_SUBMISSION_STATUSES.has(status)) {
+  if (taskId && status && FINISHED_SUBMISSION_STATUSES.has(status) && !incomplete) {
     return <Navigate to={`/tasks/${taskId}/submissions`} replace />;
   }
 
@@ -95,6 +97,7 @@ export function SubmissionRecognitionProgressPage() {
   const progressFailure = retryError ?? progressQuery.progress?.error_detail
     ?? [...(progressQuery.progress?.messages ?? [])].reverse().find((event) => event.level === "error")?.message
     ?? taskQuery.data?.error
+    ?? taskQuery.data?.submission_sources?.find(source => source.status === "failed")?.reason_code
     ?? progressQuery.error
     ?? taskQuery.error;
 
@@ -111,7 +114,7 @@ export function SubmissionRecognitionProgressPage() {
     );
   }
 
-  if (status === "error") {
+  if (status === "error" || (status === "submissions_ready" && incomplete)) {
     const info = classifyRecoverableError(progressFailure, {
       locale,
       phase: progressQuery.progress?.current_step ?? progressQuery.progress?.phase ?? "submission_recognition",
@@ -123,7 +126,7 @@ export function SubmissionRecognitionProgressPage() {
       <ProgressPageFrame title={locale === "en-US" ? "Submission recognition did not complete" : "作答识别未完成"} returnState={{ imageRecoveryModel: providerId }}>
         <>
           <StageProviderSelect id="submission-retry-provider" label={locale === "zh-CN" ? "作答识别模型" : "Submission recognition model"}
-            hint={locale === "zh-CN" ? "原文件与设置已保留；改选模型后可主动重试。" : "Your file and settings are preserved. Choose a model and retry when ready."}
+            hint={locale === "zh-CN" ? "只重试失败文件，成功结果保留；可先切换模型。返回修改配置后再开始识别，会重新处理全部文件。" : "Retry only failed files and keep successful results. You can switch models first. Starting again from settings processes all files."}
             experts={(expertsQuery.data ?? []).filter((item) => item.enabled)} value={providerId} locale={locale}
             disabled={retryRecognition.isPending || expertsQuery.isLoading}
             onChange={(id) => { if (failedJobId) setProviderChoice({ jobId: failedJobId, id }); setRetryError(null); }} className="mb-4" />
@@ -132,7 +135,7 @@ export function SubmissionRecognitionProgressPage() {
             info={info}
             locale={locale}
             className="min-h-[300px]"
-            workflowRecovery={{ retry: { onClick: failedJobId && providerId ? () => void retry() : () => void refresh(), busy: retryRecognition.isPending || refreshing, disabled: uncertain && acknowledgedJobId !== failedJobId }, configurationHref: `/tasks/${taskId}/submissions/upload`, configurationState: { imageRecoveryModel: providerId } }}
+            workflowRecovery={{ retry: { onClick: () => void retry(), busy: retryRecognition.isPending || refreshing, disabled: !failedJobId || !providerId || (uncertain && acknowledgedJobId !== failedJobId) }, configurationHref: `/tasks/${taskId}/submissions/upload`, configurationState: { imageRecoveryModel: providerId } }}
             additionalActions={[{ label: t("submissionProgressRefresh"), onClick: () => void refresh(), busy: retryRecognition.isPending || refreshing }]}
           />
           <SubmissionSourceOutcomePanel
@@ -160,7 +163,7 @@ export function SubmissionRecognitionProgressPage() {
           info={info}
           locale={locale}
           className="min-h-[430px]"
-          workflowRecovery={{ retry: { onClick: () => void refresh(), busy: refreshing }, configurationHref: `/tasks/${taskId}/submissions/upload` }}
+          workflowRecovery={{ retry: { label: locale === "zh-CN" ? "刷新状态" : "Refresh status", onClick: () => void refresh(), busy: refreshing }, configurationHref: `/tasks/${taskId}/submissions/upload` }}
       />
       </ProgressPageFrame>
     );

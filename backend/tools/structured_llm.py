@@ -81,6 +81,13 @@ class PermanentLLMError(Exception):
     """Non-retryable error (4xx auth, bad request)."""
 
 
+class DailyQuotaError(PermanentLLMError):
+    code = "provider_daily_quota_exceeded"
+
+    def __init__(self):
+        super().__init__(self.code)
+
+
 # Patterns we use to extract the retry-after hint from the raw error message.
 # Gemini surfaces "Please retry in 23.377528861s" AND a structured
 # `retryDelay: '23s'` (Google RetryInfo proto). OpenAI / Anthropic return a
@@ -124,6 +131,9 @@ def _classify_exception(e: Exception) -> Exception:
     "provider_upstream_unavailable" would miss every branch below and fall
     into the default 3-attempt transient path.
     """
+    from backend.llm.provider_limits import is_daily_quota_error
+    if is_daily_quota_error(e):
+        return DailyQuotaError()
     if getattr(e, "retryable", True) is False:
         return PermanentLLMError("non_retryable_provider_limit")
     if isinstance(e, ProviderRequestError) and e.code in {"provider_recitation_blocked", "provider_content_blocked"}:
@@ -274,7 +284,7 @@ _DOUBLE_ESCAPED_LATEX_RE = re.compile(
     r"subseteq|supseteq|to|mapsto|circ|star|langle|rangle|dots|ldots|cdots|iota|mid|forall|exists)(?![A-Za-z]))"
 )
 _OVERESCAPED_NEWLINE_RE = re.compile(
-    r"\\{1,2}n(?=(?:\\{1,2}n|[\s\-\*#>0-9(A-Z]|[\u3400-\u9fff]|$))"
+    r"\\{1,2}n(?!(?:u|abla|eq|e|otin|i|exists|eg|ot|ewcommand|ewline|ewpage|olimits|onumber)\b)"
 )
 
 
@@ -304,8 +314,17 @@ def _normalize_overescaped_markdown(text: str) -> str:
     This pass is deliberately narrow: it only decodes separator-shaped newlines
     and a fixed allowlist of TeX commands. Code/test fields never call it.
     """
-    text = re.sub(r"\\{1,2}r\\{1,2}n", "\n", text)
-    text = _OVERESCAPED_NEWLINE_RE.sub("\n", text)
+    parts = re.split(r"(```[\s\S]*?```|~~~[\s\S]*?~~~|`[^`\n]*`|(?<![A-Za-z0-9_])[A-Za-z]:\\[^\s]*)", text)
+    return "".join(part if index % 2 else _normalize_prose_escapes(part)
+                   for index, part in enumerate(parts))
+
+
+def _normalize_prose_escapes(text: str) -> str:
+    # Inside math, n-prefixed commands are TeX (including commands outside our
+    # common-command allowlist), not prose separators.
+    parts = re.split(r"(\$\$[\s\S]*?\$\$|\$[^$\n]*\$|\\\[[\s\S]*?\\\]|\\\([\s\S]*?\\\))", text)
+    text = "".join(part if index % 2 else _OVERESCAPED_NEWLINE_RE.sub(
+        "\n", re.sub(r"\\{1,2}r\\{1,2}n", "\n", part)) for index, part in enumerate(parts))
     text = _DOUBLE_ESCAPED_LATEX_RE.sub(lambda _match: "\\", text)
     text = re.sub(r"\\\\(?=[\[\]()])", lambda _match: "\\", text)
     text = re.sub(r"(?<!\$)\${3,}(?!\$)", "$$", text)
@@ -853,6 +872,29 @@ async def _ainvoke_with_retry(provider: BaseProvider, messages: List[BaseMessage
 ainvoke_with_retry = _ainvoke_with_retry
 
 
+@retry(stop=_retry_stop, wait=_retry_wait, retry=retry_if_exception_type(RateLimitError), reraise=True)
+async def _invoke_with_rate_retry(invoke, *args, **kwargs):
+    """Retry explicit rejected 429s only; never replay an uncertain vision call."""
+    try:
+        return await invoke(*args, **kwargs)
+    except Exception as exc:
+        from backend.services.background_errors import classify_background_error
+        code = classify_background_error(exc, "provider_request_failed")
+        if code == "provider_daily_quota_exceeded":
+            raise DailyQuotaError() from exc
+        if code == "provider_rate_limited":
+            raise RateLimitError("provider_rate_limited", retry_after=getattr(exc, "retry_after", None) or _extract_retry_after(str(exc))) from exc
+        raise
+
+
+async def ainvoke_vision_with_rate_retry(provider, prompt, images, *, max_output_tokens):
+    return await _invoke_with_rate_retry(provider.ainvoke_vision, prompt, images, max_output_tokens=max_output_tokens)
+
+
+async def ainvoke_with_rate_retry(provider, messages):
+    return await _invoke_with_rate_retry(provider.ainvoke, messages)
+
+
 async def structured_llm_call(
     provider: BaseProvider,
     *,
@@ -887,5 +929,27 @@ async def structured_llm_call(
     #   2. Not all providers support it equally
     #   3. Text + parse is more portable and debuggable
     raw_response = await _ainvoke_with_retry(provider, messages)
-    parsed = extract_and_parse_json(raw_response.content, output_model)
+    parsed, raw_response = await parse_with_format_repair(provider, messages, raw_response, output_model)
     return parsed, raw_response
+
+
+async def parse_with_format_repair(provider, messages, raw_response, output_model, *, invoke=None):
+    """One schema-guided repair, shared by every provider; never invent a score."""
+    try:
+        return extract_and_parse_json(raw_response.content, output_model), raw_response
+    except StructuredOutputInvalidError:
+        # Regenerate from the original evidence. Do not replay malformed output
+        # as instructions, expose it in logs, or loop indefinitely.
+        repair = HumanMessage(content=(
+            "Your previous response could not be parsed or did not satisfy the required schema. "
+            "Return one complete JSON value matching this schema, with all required fields. "
+            "Use only the original evidence and the same grading/recognition rules. "
+            "Do not fill missing student work or invent a score to satisfy validation. "
+            "Encode each newline once. No commentary or Markdown fences.\n"
+            + json.dumps(output_model.model_json_schema(), ensure_ascii=False)))
+        corrected = await (invoke or _ainvoke_with_retry)(provider, [*messages, repair])
+        from dataclasses import replace
+        corrected = replace(corrected, duration_ms=raw_response.duration_ms + corrected.duration_ms,
+            input_tokens=None if raw_response.input_tokens is None or corrected.input_tokens is None else raw_response.input_tokens + corrected.input_tokens,
+            output_tokens=None if raw_response.output_tokens is None or corrected.output_tokens is None else raw_response.output_tokens + corrected.output_tokens)
+        return extract_and_parse_json(corrected.content, output_model), corrected

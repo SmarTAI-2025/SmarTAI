@@ -122,8 +122,8 @@ describe("QuestionPreparationOverviewPage smart search", () => {
   });
 
   it.each([
-    ["recognition_partial", "识别覆盖或内容尚待核对，请对照原文"],
-    ["recognition_needs_review", "识别结果存在不确定内容，请对照原文"],
+    ["recognition_partial", "部分转写内容可信度较低，请对照原文件检查公式、符号和条件。"],
+    ["recognition_needs_review", "部分转写内容可信度较低，请对照原文件检查公式、符号和条件。"],
     ["future_backend_issue", "资料存在待核对项，请打开详情"],
   ])("renders the review matrix for %s without crashing", (code, label) => {
     extraIssues.push({ issue_id: "ocr-risk", field: "stem", code, severity: "warning", status: "open" });
