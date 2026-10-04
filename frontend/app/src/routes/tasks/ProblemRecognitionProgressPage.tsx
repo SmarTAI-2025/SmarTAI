@@ -397,13 +397,25 @@ function QuestionGenerationFailureSummary({
   progress: JobProgress | null | undefined;
   locale: string;
 }) {
-  const failed = progress?.failed_question_ids ?? [];
+  const completed = new Set(progress?.completed_question_ids ?? []);
+  const uncertain = Object.entries(progress?.question_error_codes ?? {})
+    .filter(([, code]) => code === "provider_submit_uncertain")
+    .map(([id]) => id);
+  const failed = [...new Set([...(progress?.failed_question_ids ?? []), ...uncertain])]
+    .filter((id) => !completed.has(id));
   if (failed.length === 0) return null;
   return (
     <section className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm dark:border-red-900/50 dark:bg-red-950/20">
       <h3 className="font-semibold text-danger">
         {locale === "zh-CN" ? "以下大题未完成" : "Major questions not completed"}
       </h3>
+      {typeof progress?.total_questions === "number" && progress.total_questions > 0 ? (
+        <p className="mt-1 text-muted-foreground">
+          {locale === "zh-CN"
+            ? `已完成 ${completed.size}/${progress.total_questions} 道大题`
+            : `${completed.size}/${progress.total_questions} major questions completed`}
+        </p>
+      ) : null}
       <ul className="mt-1 grid gap-1 text-muted-foreground">
         {failed.map((qId) => {
           const label = progress?.question_labels?.[qId] ?? qId;
@@ -421,6 +433,7 @@ function QuestionGenerationFailureSummary({
 
 function questionGenerationErrorLabel(code: string, locale: string) {
   const labels: Record<string, [string, string]> = {
+    provider_submit_uncertain: ["请求未返回结果", "No result received"],
     provider_timeout: ["模型响应超时", "Model response timed out"],
     provider_rate_limited: ["模型请求受限", "Model request was rate limited"],
     provider_unreachable: ["暂时无法连接模型服务", "Model service is unreachable"],
