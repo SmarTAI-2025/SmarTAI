@@ -343,7 +343,7 @@ function MetricCard({ value, label, tone }: { value: string; label: string; tone
       <strong className={cn(
         "text-[28px] font-bold leading-8 tracking-[-0.02em]",
         tone === "primary" && "text-primary",
-        tone === "warning" && "text-red-500",
+        tone === "warning" && (value === "0" ? "text-teal-500" : "text-red-500"),
         tone === "accent" && "text-teal-500",
       )}>{value}</strong>
       <span className="mt-2 text-[13px] font-medium text-muted-foreground">{label}</span>

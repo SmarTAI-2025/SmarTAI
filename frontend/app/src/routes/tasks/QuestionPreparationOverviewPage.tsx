@@ -234,7 +234,7 @@ function RiskMetric({ label, value, tone }: { label: string; value: number; tone
   return (
     <div className="flex min-h-[112px] flex-col justify-center rounded-[10px] border bg-card px-5 py-4 sm:px-6">
       <dt className="order-2 mt-2 text-sm font-medium text-muted-foreground">{label}</dt>
-      <dd className={cn("order-1 text-[30px] font-bold leading-9 tracking-[-0.02em]", tone === "primary" && "text-primary", tone === "warning" && "text-red-600", tone === "danger" && "text-red-600", tone === "accent" && "text-teal-600")}>{value}</dd>
+      <dd className={cn("order-1 text-[30px] font-bold leading-9 tracking-[-0.02em]", tone === "primary" && "text-primary", tone === "warning" && (value > 0 ? "text-red-600" : "text-teal-600"), tone === "danger" && (value > 0 ? "text-red-600" : "text-teal-600"), tone === "accent" && "text-teal-600")}>{value}</dd>
     </div>
   );
 }
