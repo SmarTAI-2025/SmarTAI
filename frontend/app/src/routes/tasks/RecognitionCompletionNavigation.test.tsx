@@ -12,12 +12,12 @@ import { SubmissionReviewOverviewPage } from "./SubmissionReviewOverviewPage";
 vi.mock("@/components/new-task/NewTaskStepper", () => ({ NewTaskStepper: () => null }));
 afterEach(() => vi.restoreAllMocks());
 
-describe("recognition completion handoff", () => {
+describe.each([0, Infinity])("recognition completion handoff (cache freshness %s)", (staleTime) => {
   it.each([
     ["questions", "extracting_problems", "problems_ready"],
     ["submissions", "parsing_submissions", "submissions_ready"],
   ] as const)("waits for fresh %s detail instead of bouncing back to progress", async (page, active, ready) => {
-    const client = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } });
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime } } });
     const previous = { task_id: "handoff", status: active, workflow_revision: 1, problem_data: {}, student_data: {} } as Task;
     client.setQueryData(taskKeys.detail("handoff"), previous);
     let finish!: (task: Task) => void;
