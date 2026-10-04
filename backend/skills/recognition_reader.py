@@ -9,6 +9,7 @@ from backend.llm.image_capability import can_attempt_images
 import asyncio
 import hashlib
 import json
+import httpx
 
 from pydantic import ValidationError
 
@@ -194,6 +195,10 @@ class LLMRecognitionEngine:
             )
         except asyncio.CancelledError:
             raise
+        except (httpx.ConnectError, httpx.ConnectTimeout, httpx.PoolTimeout):
+            # No connection/request was established. Preserve safe retry instead
+            # of recording an uncertain paid OCR dispatch indefinitely.
+            raise RecognitionError("provider_unreachable", submission_may_exist=False) from None
         except ProviderRequestError as exc:
             raise RecognitionError(exc.code, submission_may_exist=exc.code in {
                 "provider_timeout", "provider_unreachable", "provider_upstream_unavailable",
@@ -224,6 +229,7 @@ class LLMRecognitionEngine:
                 duration_ms=response.duration_ms, input_tokens=response.input_tokens,
                 output_tokens=response.output_tokens, finish_reason=response.finish_reason,
                 warning_codes=warnings,
+                safe_error_code=(getattr(response, "refusal_code", None) or "provider_content_blocked") if "provider_refused" in warnings else None,
             )
         except (ValidationError, AttributeError, TypeError):
             raise RecognitionError("recognition_response_invalid", submission_may_exist=True) from None

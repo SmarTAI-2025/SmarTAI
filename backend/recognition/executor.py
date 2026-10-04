@@ -324,7 +324,7 @@ checks here do not replace the caller's storage ACL and operation lease.
                 break
             if candidate.finish_reason == "refused" or "provider_refused" in candidate.warning_codes:
                 failed.update(numbers)
-                stops.append("provider_request_rejected")
+                stops.append(candidate.safe_error_code or "provider_content_blocked")
                 break
     except (RecognitionError, PdfEvidenceError) as exc:
         stops.append(exc.code)
