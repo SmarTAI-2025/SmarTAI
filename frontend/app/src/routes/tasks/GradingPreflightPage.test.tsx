@@ -30,7 +30,7 @@ describe("GradingPreflightPage regrade mode", () => {
     render(<MemoryRouter initialEntries={["/tasks/task-1/grading/preflight"]}><Routes>
       <Route path="/tasks/:taskId/grading/preflight" element={<GradingPreflightPage />} />
     </Routes></MemoryRouter>);
-    expect(screen.getByText(/may use model quota/)).toBeInTheDocument();
+    expect(screen.getByText(/using model quota/)).toBeInTheDocument();
     act(() => { vi.advanceTimersByTime(12_000); });
     expect(mutateAsync).not.toHaveBeenCalled();
   });

@@ -16,8 +16,8 @@ export function ModelQuotaCard() {
       <p className="text-sm">{zh ? "共享模型请求" : "Shared model requests"}：{q.shared.requests} / {limit(q.shared.request_limit)}；{zh ? "估算输入 token" : "Estimated input tokens"}：{q.shared.estimated_input_tokens} / {limit(q.shared.estimated_token_limit)}。</p>
       <p className="text-sm">{zh ? "任务 Ask 调用" : "Task Ask calls"}：{q.history.requests} / {limit(q.history.request_limit)}。</p>
       {reached && <p role="status" className="text-sm text-amber-700">{zh ? "共享模型日额度已用完。请等待 UTC 00:00 重置、联系管理员调整，或配置自己的 BYOK 模型继续批改。" : "Shared allowance exhausted. Wait for UTC midnight, contact an administrator, or use your own BYOK model."}</p>}
-      {!q.shared_pool_enabled && <p className="text-sm text-muted-foreground">{zh ? "平台共享模型当前关闭；额度设置不会打开共享池。" : "The shared pool is disabled; an allowance does not enable it."}</p>}
-      <p className="text-xs text-muted-foreground">{zh ? "失败和中断的已准入调用仍计数；估算值不代表实际 token 或费用。普通 BYOK 批改不受共享额度限制。下次重置：" : "Admitted failed or interrupted calls count. Estimates are not actual tokens or cost. Ordinary BYOK grading is outside the shared allowance. Next reset: "}{q.resets_at}</p>
+      {!q.shared_pool_enabled && <p className="text-sm text-muted-foreground">{zh ? "平台共享模型暂未开放。" : "Shared models are currently unavailable."}</p>}
+      <details className="text-xs text-muted-foreground"><summary className="cursor-pointer">{zh ? "额度说明" : "Allowance details"}</summary><p className="mt-2 leading-5">{zh ? "失败和中断的已准入调用仍计数；估算值不代表实际 token 或费用。普通 BYOK 批改不受共享额度限制。下次重置：" : "Admitted failed or interrupted calls count. Estimates are not actual tokens or cost. Ordinary BYOK grading is outside the shared allowance. Next reset: "}{q.resets_at}</p></details>
     </>}
   </section>;
 }
