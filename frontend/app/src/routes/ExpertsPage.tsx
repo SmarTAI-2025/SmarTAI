@@ -311,12 +311,12 @@ export function ExpertsPage() {
           tone="accent"
         />
         <SummaryMetric
-          label={zh ? "验证通过" : "Verified"}
+          label={zh ? "文字测试通过" : "Text checks passed"}
           value={expertsQuery.isLoading ? "—" : String(verifiedCount)}
           tone="success"
         />
         <SummaryMetric
-          label={zh ? "连接异常" : "Check failed"}
+          label={zh ? "文字测试失败" : "Text checks failed"}
           value={expertsQuery.isLoading ? "—" : String(failedCheckCount)}
           tone={failedCheckCount > 0 ? "warning" : "neutral"}
         />
@@ -575,8 +575,8 @@ function BaiduOCRSettings({ locale }: { locale: "zh-CN" | "en-US" }) {
           </h2>
           <p className="mt-1 max-w-3xl text-xs leading-5 text-muted-foreground">
             {zh
-              ? "独立的 OCR BYOK，仅用于题目与作答转写。AK/SK 保存后不会回显，也不会进入平台共享模型池。"
-              : "Independent OCR BYOK for question and submission transcription only. AK/SK values are never displayed after saving and never enter the shared model pool."}
+              ? "使用你自己的百度 OCR 凭据识别题目与作答，仅供当前账号使用。"
+              : "Use your own Baidu OCR credentials to recognize questions and submissions. Credentials are private to your account."}
           </p>
         </div>
         <span className={cn(
@@ -657,8 +657,8 @@ function BaiduOCRSettings({ locale }: { locale: "zh-CN" | "en-US" }) {
         </div>
         <p className="text-[11px] leading-4 text-muted-foreground">
           {zh
-            ? "验证只做一次 AK/SK token 交换，不提交 OCR 文件；真实 OCR 服务权限与活动额度仍需任务调用验证。"
-            : "Verification performs only an AK/SK token exchange and submits no OCR file. A real task is still required to verify OCR access and campaign quota."}
+            ? "这里只检查凭据，图片识别会在任务中进行。"
+            : "This check verifies credentials. Image recognition takes place in your tasks."}
         </p>
         {formError ? <InlineError message={formError} /> : null}
       </form>
@@ -1412,8 +1412,8 @@ function ConfirmationDialog({
           <AlertTriangle aria-hidden="true" className="mt-1 shrink-0" size={17} />
           <p>
             {zh
-              ? "删除后这把 BYOK key 会从当前内存注册表移除，使用该配置的后续任务将无法继续调用。"
-              : "The BYOK key will be removed from the current in-memory registry, and future task calls using it will no longer work."}
+              ? "删除后，后续任务不能再使用这项模型配置。"
+              : "Future tasks will no longer be able to use this model configuration."}
           </p>
         </div>
       )}
@@ -1541,7 +1541,7 @@ function imageReasonLabel(reason: string, zh: boolean) {
   const labels: Record<string, string[]> = {
     image_probe_answer_correct: ["测试图片答案正确", "Test image answer was correct"],
     image_probe_answer_incorrect: ["测试答案不正确，不能据此判定不支持图片", "Incorrect test answer; image support remains uncertain"],
-    provider_vision_not_supported: ["上游明确拒绝图片输入", "Upstream explicitly rejected image input"],
+    provider_vision_not_supported: ["不支持图片，仍可处理文字资料", "Images unsupported; text sources can still be used"],
     expert_verification_timeout: ["本次请求超时", "Request timed out"],
     expert_verification_rate_limited: ["上游限流，请稍后再试", "Upstream rate limit"],
     expert_verification_auth_failed: ["鉴权失败，请检查凭据", "Authentication failed; check credentials"],
