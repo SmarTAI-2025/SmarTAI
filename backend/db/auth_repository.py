@@ -64,7 +64,8 @@ def access_session_is_active(session_id: str, user: User) -> bool:
 
 def _session_access(user: User, raw_hash: str, last_activity: float, session_scope: Literal["public", "private-admin"]) -> str:
     return create_token(user.id, user.role, auth_version=user.auth_version, session_scope=session_scope,
-                        session_id=raw_hash, expires_at=last_activity + settings.session_idle_minutes * 60)
+                        session_id=raw_hash, expires_in_minutes=settings.session_idle_minutes,
+                        expires_at=last_activity + settings.session_idle_minutes * 60)
 
 
 def renew_active_session(session_id: str, user: User, *, session_scope: Literal["public", "private-admin"]) -> str | None:

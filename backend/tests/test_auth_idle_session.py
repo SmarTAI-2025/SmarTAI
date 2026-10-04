@@ -106,3 +106,11 @@ def test_unexpired_legacy_token_upgrades_without_forcing_another_login(signed_in
     assert decode_token(renewed.json()["token"])["sid"]
     expired = create_token("idle-teacher", "teacher", expires_in_minutes=-1)
     assert client.post("/auth/activity", headers=headers(expired)).status_code == 401
+
+
+def test_legacy_access_lifetime_setting_cannot_shorten_the_new_idle_window(signed_in, monkeypatch):
+    client, _ = signed_in
+    monkeypatch.setattr(settings, "jwt_expiry_minutes", 1)
+    response = client.post("/auth/login", json={"username": "idle-teacher", "password": "test-password"})
+    assert response.status_code == 200
+    assert 1795 <= decode_token(response.json()["token"])["exp"] - time.time() <= 1800
