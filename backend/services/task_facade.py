@@ -397,10 +397,14 @@ def get_task(*, task_id: str, owner_id: str, full: bool = True) -> dict:
     runs = grading_repository.list_runs_for_assignment(task_id, actor_id=owner_id)
     latest_run = _current_grading_run(workflow, runs)
     grading_error_code = _workflow_grading_failure_code(workflow, latest_run)
-    status = _presentation_status(workflow, questions, submissions, latest_run)
+    status = "error" if grading_error_code else _presentation_status(workflow, questions, submissions, latest_run)
     selected_docs = _selected_knowledge(task_id, owner_id)
     tag_ids = _get_task_tags(task_id, owner_id)
     source_summary, source_rows = _submission_source_projection(workflow, owner_id)
+    incomplete_submissions = status == "submissions_ready" and bool(source_summary["failed"] or source_summary["pending"])
+    submission_error_code = next((row["reason_code"] for row in source_rows if row.get("reason_code")), "submission_parse_failed") if incomplete_submissions else None
+    if incomplete_submissions:
+        status = "error"
     attention = bool(
         workflow.error_code
         or source_summary["failed"]
@@ -428,7 +432,7 @@ def get_task(*, task_id: str, owner_id: str, full: bool = True) -> dict:
         "parse_job_id": workflow.parse_job_id,
         "grading_job_id": latest_run.id if latest_run else workflow.grading_job_id,
         "last_failed_job_id": (
-            latest_run.id if grading_error_code and latest_run else workflow.last_failed_job_id
+            latest_run.id if grading_error_code and latest_run else workflow.parse_job_id if incomplete_submissions else workflow.last_failed_job_id
         ),
         "problem_file_name": workflow.problem_file_name,
         "submission_file_name": workflow.submission_file_name,
@@ -459,7 +463,7 @@ def get_task(*, task_id: str, owner_id: str, full: bool = True) -> dict:
         "submission_source_summary": source_summary,
         "kb_docs": selected_docs,
         "kb_doc_count": len(selected_docs),
-        "error": grading_error_code or workflow.error_code,
+        "error": grading_error_code or submission_error_code or workflow.error_code,
         "created_at": assignment.created_at,
         "updated_at": max(assignment.updated_at, workflow.updated_at),
     }
@@ -467,7 +471,7 @@ def get_task(*, task_id: str, owner_id: str, full: bool = True) -> dict:
         payload["problem_data"] = {
             question.q_id: _serialize_problem(question) for question in questions
         }
-        payload["student_data"] = _serialize_student_data(
+        payload["student_data"] = {} if incomplete_submissions else _serialize_student_data(
             task_id, owner_id, submissions
         )
         payload["submission_sources"] = source_rows
@@ -685,9 +689,23 @@ def _reconcile_terminal_active_operation(*, task_id: str, owner_id: str, workflo
 
 
 def _grading_failure_code(run) -> str | None:
-    if run is None or run.status != education.GradingRunStatus.FAILED.value:
+    if run is None or run.status not in {"failed", "partial_failed"}:
         return None
-    return safe_background_error_code(run.error_message, "grading_failed")
+    if run.error_message:
+        return safe_background_error_code(run.error_message, "grading_failed")
+    missing = [result for result in grading_repository.list_results_for_run(run.id)
+               if result.effective_score is None or not math.isfinite(result.effective_score)]
+    if run.status == "partial_failed" and not missing:
+        return None
+    kinds = [expert.get("error_kind") for result in missing
+             for expert in (result.ai_expert_results or []) if isinstance(expert, dict)]
+    if kinds and all(kind == "daily_quota_exhausted" for kind in kinds):
+        return "provider_daily_quota_exceeded"
+    if "quota_exhausted" in kinds:
+        return "provider_rate_limited"
+    if "parse_failed" in kinds:
+        return "provider_response_invalid"
+    return "grading_failed"
 
 
 def _workflow_grading_failure_code(workflow, run) -> str | None:
@@ -2228,6 +2246,7 @@ def queue_task_submission_parsing(
     roster_name: str | None = None, recognition_provider_id: str | None = None,
     replace_confirmed: bool = False,
     acknowledged_restart_from: str | None = None,
+    retry_from: dict | None = None,
     expected_workflow_revision: int | None = None,
 ) -> dict:
     assignment = assignment_repository.get_assignment(task_id, actor_id=owner_id)
@@ -2269,6 +2288,7 @@ def queue_task_submission_parsing(
         "question_snapshot": question_snapshot,
         "replace_confirmed": replace_confirmed,
         **({"acknowledged_restart_from": acknowledged_restart_from} if acknowledged_restart_from else {}),
+        **({"retry_from": retry_from} if retry_from else {}),
     })
     replacement_group_id = source_storage_repository.replacement_claim_group_id(
         assignment_id=task_id,
@@ -2288,7 +2308,7 @@ def queue_task_submission_parsing(
             "job_id": replay.id,
             "workflow_revision": workflow.workflow_revision,
         }
-    if replay is not None:
+    if replay is not None or retry_from:
         # Exact-input retry reuses registered originals and per-source results.
         # Retiring those files here would invalidate OCR caches before recovery.
         replacement_file_ids = ()
@@ -2401,6 +2421,7 @@ def queue_task_submission_parsing(
                 "provider_configuration_fingerprint": route_fingerprint,
                 "question_snapshot": question_snapshot,
                 "replace_confirmed": replace_confirmed,
+                **({"retry_from": retry_from} if retry_from else {}),
             },
             workflow_changes=workflow_changes,
             replacement_file_ids=replacement_file_ids,
@@ -2441,7 +2462,7 @@ def load_submission_retry_upload(
         or operation.operation_type != "submission_recognition"
     ):
         raise NotFound("submission_recognition")
-    if operation.status != "error":
+    if operation.status not in {"error", "done"}:
         raise InvalidTransition(
             "Only a failed recognition operation can reuse its originals.",
             code="submission_retry_not_available",
@@ -2495,6 +2516,7 @@ def load_submission_retry_upload(
         "roster_entries": list(payload.get("roster_entries") or []),
         "roster_name": payload.get("roster_name"),
         "replace_confirmed": bool(payload.get("replace_confirmed")),
+        "retry_from": {"operation_id": operation.id, "attempt": operation.attempt},
     }
 
 
@@ -2556,6 +2578,33 @@ def _load_submission_results(artifact) -> list[SubmissionSourceParseResult]:
         failure_phase=item.get("failure_phase"),
         retryable=bool(item.get("retryable")),
     ) for item in payload if isinstance(item, dict)]
+
+
+def _reusable_submission_results(*, owner_id, task_id, payload, questions):
+    """Reuse only complete sources on an explicit failed-item retry.
+
+    Match the immutable original bytes, not a student name or model choice.
+    A fresh upload has no retry_from and runs every source again.
+    """
+    origin = payload.get("retry_from")
+    if not origin:
+        return {}
+    previous = workflow_repository.get_operation(origin["operation_id"], owner_id=owner_id)
+    if (previous.assignment_id != task_id or previous.operation_type != "submission_recognition"
+            or (previous.payload or {}).get("question_snapshot") != [[q.id, q.version] for q in questions]):
+        raise ValidationError("Recognition inputs changed.", code="recognition_plan_changed")
+    artifact = _submission_result_artifact(owner_id=owner_id, task_id=task_id,
+        job_id=previous.id, job_attempt=int(origin["attempt"]))
+    if artifact is None:
+        return {}
+    reusable = {}
+    for result in _load_submission_results(artifact):
+        if result.status not in {"parsed", "identity_conflict"} or result.student is None:
+            continue
+        stored = file_repository.get_file(file_id=result.stored_file_id, owner_id=owner_id)
+        if stored is not None and stored.assignment_id == task_id:
+            reusable[(result.filename, stored.sha256)] = result
+    return reusable
 
 
 def _submission_ocr_artifact_name(
@@ -2674,6 +2723,18 @@ async def run_task_submission_parsing(
                     route=route, registry=registry, purpose="submissions", reporter=reporter,
                 )
 
+            reusable = _reusable_submission_results(
+                owner_id=owner_id, task_id=task_id, payload=frozen, questions=questions)
+            reused = {}
+
+            def reuse_source(raw, source_id, stored_file_id):
+                result = reusable.get((raw.filename, hashlib.sha256(raw.content).hexdigest()))
+                if result is None:
+                    return False
+                reused[source_id] = replace(result, source_id=source_id, stored_file_id=stored_file_id,
+                    student={**result.student, "source_id": source_id, "stored_file_id": stored_file_id})
+                return True
+
             sources = await prepare_submission_sources(
                 content=content,
                 filename=filename,
@@ -2689,6 +2750,7 @@ async def run_task_submission_parsing(
                 ),
                 ocr_skill=None,
                 recognition_reader=read_submission_source,
+                reuse_source=reuse_source,
                 recovered_ocr_text_by_source=recovered_ocr_text,
                 blocked_ocr_source_ids=blocked_source_ids,
                 vision_unavailable_code=(
@@ -2699,6 +2761,8 @@ async def run_task_submission_parsing(
                 reporter=reporter,
             )
             current_failure_phase = "recognition"
+            all_sources = sources
+            sources = [source for source in sources if source.source_id not in reused]
             problem_data = {q.q_id: _serialize_problem(q) for q in questions}
             if route.is_baidu_ocr:
                 results = await parse_student_answer_sources_from_ocr_markdown(
@@ -2721,7 +2785,8 @@ async def run_task_submission_parsing(
                         await run_in_threadpool(source_outcome_repository.assert_source_write_fence,
                             owner_id=owner_id, assignment_id=task_id, operation_id=job_id,
                             expected_attempt=job_attempt, expected_lease_token=leased_operation.lease_token)
-                        key = _hash_json(dict(version=1, file_id=source.stored_file_id, filename=source.filename,
+                        key = _hash_json(dict(version=2, operation_id=job_id, attempt=job_attempt,
+                            file_id=source.stored_file_id, filename=source.filename,
                             text_sha256=hashlib.sha256(source.text.encode()).hexdigest(), questions=problem_data,
                             route=route_fingerprint, identity_mode=identity_mode, roster=roster_entries or []))
                         child, _ = await run_in_threadpool(workflow_repository.create_operation,
@@ -2783,6 +2848,8 @@ async def run_task_submission_parsing(
                     source_runner=durable_source_parse,
                 )
             results = attach_submission_recognition(results, sources)
+            by_source = {**reused, **{result.source_id: result for result in results}}
+            results = [by_source[source.source_id] for source in all_sources]
             if leased_operation is not None:
                 current_failure_phase = "outcome_persistence"
                 parsed_artifact = file_repository.save_file(
@@ -2843,7 +2910,7 @@ async def run_task_submission_parsing(
             if result.student is not None
             and result.status in {"parsed", "identity_conflict"}
         ]
-        if not students:
+        if not students or summary.failed_count or summary.pending_count:
             code = next(
                 (
                     result.stable_error_code
@@ -4052,7 +4119,7 @@ def start_task_grading(
             return [{**{key: q.get(key) for key in keys},
                      "solution_code": (q.get("source") or {}).get("presentation", {}).get("solution_code")}
                     for q in items]
-        stable_keys = ("submission_revision_ids", "knowledge_document_ids", "knowledge_content_versions", "provider_configuration_fingerprint")
+        stable_keys = ("submission_revision_ids", "knowledge_document_ids", "knowledge_content_versions")
         if (previous.setup != workflow.grading_setup
                 or any(old.get(key) != input_manifest.get(key) for key in stable_keys)
                 or content_questions(old.get("questions", [])) != content_questions(input_manifest["questions"])):

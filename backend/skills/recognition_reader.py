@@ -49,6 +49,7 @@ def faithful_reader_prompt(purpose: Purpose) -> str:
         "and relationships, marking unknown details rather than guessing. Do not invent "
         "a diagram from surrounding prose. Preserve visible continuation fragments; "
         "do not complete a sentence or formula from memory.\n"
+        "Use actual line breaks, never the literal characters backslash-n outside code. "
         "Return only the transcription as Markdown. Do not return JSON, commentary, "
         "corrected answers, confidence percentages or newly assigned question identities."
     )
@@ -190,8 +191,9 @@ class LLMRecognitionEngine:
         if _private_identity(self.provider, _LLM_IDENTITY) != self._identity:
             raise RecognitionError("recognition_route_changed")
         try:
-            response = await self.provider.ainvoke_vision(
-                prompt, images, max_output_tokens=max_output_tokens,
+            from backend.tools.structured_llm import ainvoke_vision_with_rate_retry
+            response = await ainvoke_vision_with_rate_retry(
+                self.provider, prompt, images, max_output_tokens=max_output_tokens,
             )
         except asyncio.CancelledError:
             raise
@@ -207,7 +209,7 @@ class LLMRecognitionEngine:
             code = classify_background_error(exc, "provider_request_failed")
             raise RecognitionError(code, submission_may_exist=code not in {
                 "provider_auth_failed", "provider_permission_denied", "provider_region_unsupported", "provider_quota_exceeded",
-                "provider_rate_limited", "provider_model_not_found", "provider_request_rejected",
+                "provider_rate_limited", "provider_daily_quota_exceeded", "provider_model_not_found", "provider_request_rejected",
                 "provider_vision_not_supported",
             }) from None
         if _private_identity(self.provider, _LLM_IDENTITY) != self._identity:

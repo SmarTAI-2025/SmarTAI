@@ -491,6 +491,7 @@ function AddProblemsForm({ taskQuery, submittedInput }: { taskQuery: ReturnType<
           <RecoverableActionState
             info={recoveryInfo}
             locale={locale}
+            usageContext={{ providerIds: [recognitionProviderId], providers: expertsQuery.data ?? [] }}
             compact
             className="mt-4"
             workflowRecovery={{ retry: { onClick: () => void handleStart(), busy: isBusy }, configurationHref: taskReturnPath }}

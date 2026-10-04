@@ -59,17 +59,25 @@ def _grading_failure_feedback(
     """Return a stable, C-01-aware message for a deterministic failure path."""
 
     messages = {
+        "daily_quota_exhausted": {
+            "zh_message": "该题未完成批改，模型服务商明确报告日额度已用完。",
+            "en_message": "This item remains ungraded: the provider explicitly reported an exhausted daily quota.",
+            "zh_detail": "系统不会自动跨天等待。",
+            "en_detail": "The system will not queue an automatic retry for the next day.",
+            "zh_suggestion": "请到服务商官网查看用量，或返回修改模型配置。",
+            "en_suggestion": "Check usage in the provider console, or return to change the model configuration.",
+            "legacy_message": "模型服务商明确报告日额度已用完；系统不会自动跨天等待。请到官网查看用量，或返回修改模型配置。",
+        },
         "quota_exhausted": {
             "zh_message": "该题因所有 AI 专家达到 API 调用配额而暂未批改。",
             "en_message": "This item was not graded because all AI experts reached their API quota.",
-            "zh_detail": "当前模型的每分钟调用额度已耗尽。",
-            "en_detail": "The active models exhausted their per-minute request allowance.",
+            "zh_detail": "服务商未说明限制周期，无法确定是请求频率、Token 用量还是日额度。",
+            "en_detail": "The provider did not identify the limit window; it may concern request frequency, tokens, or a daily quota.",
             "zh_suggestion": "请稍候重试，或在模型设置中核对该专家的 RPM 是否符合服务商额度。",
             "en_suggestion": "Retry later, or check that this expert's RPM matches the provider allowance.",
             "legacy_message": (
-                "⏳ 该题暂未批改完成 — 所有 AI 专家都遇到了 API 每分钟调用配额上限。\n"
-                "请稍候片刻后在「批改」页重试，或在 BYOK 设置里核对该专家的 "
-                "RPM 是否符合服务商额度；并发由系统自动分配。"
+                "该题暂未批改完成 — 模型服务商触发限流，未说明限制周期。\n"
+                "可重试失败项；若反复超限，请到服务商官网查看请求频率、Token 用量和日额度。"
             ),
         },
         "transient_llm": {

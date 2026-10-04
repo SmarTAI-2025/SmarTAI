@@ -85,7 +85,8 @@ export function ReviewOverviewPage() {
     }),
   }), [naturalSelection, headerSort.current?.key, headerSort.current?.direction, confirmedKeys, reviewItems]);
 
-  if (taskId && task && !hasTaskReachedStep(task, 6)) {
+  const resolvingFailures = task?.status === "error" && task.last_failed_job_id === task.grading_job_id && searchParams.get("resolveFailures") === "1";
+  if (taskId && task && !hasTaskReachedStep(task, 6) && !resolvingFailures) {
     if (task.status === "grading") return <Navigate replace to={`/tasks/${taskId}/grading/progress`} />;
     return <Navigate replace to={getTaskDestination(task)} />;
   }
@@ -94,7 +95,7 @@ export function ReviewOverviewPage() {
   const isError = taskQuery.isError || resultQuery.isError || finalizationQuery.isError;
   const pendingReviewItems = reviewItems.filter((item) => !confirmedKeys.has(reviewCellKey(item.student.id, item.question.id)));
   const blockingReviewItems = reviewItems.filter((item) => effectiveCorrectionScore(item.correction) === null);
-  const historyView = Boolean(task && task.status !== "graded");
+  const historyView = Boolean(task && task.status !== "graded" && !resolvingFailures);
   const overviewReturnTo = taskId
     ? `/tasks/${encodeURIComponent(taskId)}/review${searchParams.toString() ? `?${searchParams.toString()}` : ""}`
     : "";

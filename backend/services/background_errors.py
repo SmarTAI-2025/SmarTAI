@@ -227,6 +227,9 @@ def classify_background_error(
 ) -> str:
     """Classify an exception and its causes into a stable public code."""
     chain = _exception_chain(exc)
+    from backend.llm.provider_limits import is_daily_quota_error
+    if any(is_daily_quota_error(item) for item in chain):
+        return "provider_daily_quota_exceeded"
 
     for item in chain:
         if isinstance(item, StructuredOutputInvalidError):

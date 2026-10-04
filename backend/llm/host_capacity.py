@@ -16,11 +16,13 @@ from __future__ import annotations
 import errno
 import getpass
 import hashlib
+import json
 import os
 from pathlib import Path
 import stat
 import tempfile
 import threading
+import time
 
 
 MAX_HOST_CONCURRENCY = 50
@@ -164,7 +166,9 @@ class HostCapacity:
             raise RuntimeError(_FENCE_ERROR) from None
 
     def _open_slot(self, slot: int) -> int:
-        name = f"slot-{slot:02d}.lock"
+        return self._open_name(f"slot-{slot:02d}.lock")
+
+    def _open_name(self, name: str) -> int:
         flags = os.O_CREAT | os.O_RDWR | getattr(os, "O_CLOEXEC", 0)
         fd: int | None = None
         try:
@@ -197,6 +201,47 @@ class HostCapacity:
             if fd is not None:
                 os.close(fd)
             raise RuntimeError(_FENCE_ERROR) from None
+
+    def try_start(self, key: str, rpm: int) -> bool:
+        """Atomically pace actual requests across web and workflow processes.
+
+        Store only a quota-key digest and monotonic timestamps. A rejected
+        admission consumes no quota; cancellation before admission is free.
+        """
+        if rpm <= 0:
+            return True
+        name = "rpm-" + hashlib.sha256(key.encode()).hexdigest() + ".lock"
+        fd = self._open_name(name)
+        with _lease_lock:
+            locked = False
+            try:
+                locked = _try_lock(fd)
+                if not locked:
+                    return False
+                _lease_fds.add(fd)
+                now = time.monotonic()
+                os.lseek(fd, 0, os.SEEK_SET)
+                raw = os.read(fd, 300_001)
+                if len(raw) > 300_000:
+                    raise ValueError("invalid quota window")
+                starts = json.loads(raw) if raw and raw != b"\0" else []
+                if not isinstance(starts, list) or any(type(t) not in (int, float) for t in starts):
+                    raise ValueError("invalid quota window")
+                starts = [t for t in starts if now - 60 < t <= now]
+                if len(starts) >= rpm or (starts and now - starts[-1] < 60.0 / rpm):
+                    return False
+                starts.append(now)
+                body = json.dumps(starts[-10_000:], separators=(",", ":")).encode()
+                os.lseek(fd, 0, os.SEEK_SET)
+                if os.write(fd, body) != len(body):
+                    raise OSError("incomplete quota window write")
+                os.ftruncate(fd, len(body))
+                return True
+            except (OSError, ValueError, TypeError):
+                raise RuntimeError(_FENCE_ERROR) from None
+            finally:
+                _lease_fds.discard(fd)
+                os.close(fd)
 
     def try_acquire(self, limit: int = MAX_HOST_CONCURRENCY) -> HostLease | None:
         if not isinstance(limit, int) or isinstance(limit, bool):

@@ -428,6 +428,9 @@ class BaseProvider(ABC):
                     ready=lambda: not self._endpoint_breaker().is_open,
                 ):
                     admitted = True
+                    # Time spent waiting for RPM/capacity is not provider
+                    # response time. Give the admitted request its full budget.
+                    deadline.reschedule(asyncio.get_running_loop().time() + float(settings.llm_timeout))
                     yield
         except TimeoutError as exc:
             if not deadline.expired():
@@ -1140,6 +1143,9 @@ class SafeRelayProvider(BaseProvider):
             raise ProviderRequestError(_transport_error_code(exc)) from exc
         if response.status_code >= 400:
             code = _response_error_code(response.status_code)
+            from backend.llm.provider_limits import is_daily_quota_error
+            if response.status_code == 429 and is_daily_quota_error(response.text):
+                code = "provider_daily_quota_exceeded"
             has_images = any(isinstance(m.content, list) and any(
                 isinstance(block, dict) and block.get("type") == "image_url"
                 for block in m.content) for m in messages)

@@ -1,4 +1,5 @@
 import type { Task, TaskLite } from "@/types";
+import { submissionRecognitionIncomplete } from "@/lib/reviewConfirmation";
 
 const PROCESSING_STATUSES = new Set(["extracting_problems", "parsing_submissions", "grading", "generating_analysis"]);
 const COMPLETED_GRADING_STATUSES = new Set(["graded", "review_confirmed", "generating_analysis", "finalized"]);
@@ -26,6 +27,7 @@ type TaskDestinationInput = Pick<TaskLite, "task_id" | "status" | "grading_setup
   | "submission_file_name"
   | "problem_count"
   | "student_count"
+  | "submission_source_summary"
 >>;
 
 type TaskReachabilityInput = Partial<TaskDestinationInput> & Partial<Pick<Task, "problem_data">>;
@@ -44,6 +46,7 @@ export function getTaskReachableStep(task?: TaskReachabilityInput | null): numbe
     case "parsing_submissions":
       return 3;
     case "submissions_ready":
+      if (submissionRecognitionIncomplete(task)) return 3;
       // Once recognition is complete, both the review surface (step 5) and
       // grading setup (step 6) are valid.  Teachers can move forward after
       // review without an otherwise-disabled stepper target.
@@ -81,6 +84,7 @@ export function hasTaskReachedStep(task: TaskReachabilityInput | null | undefine
 
 export function getTaskDestination(task: TaskDestinationInput): string {
   const taskRoot = `/tasks/${task.task_id}`;
+  if (task.status === "submissions_ready" && submissionRecognitionIncomplete(task)) return `${taskRoot}/submissions/progress`;
 
   switch (task.status) {
     case "extracting_problems":

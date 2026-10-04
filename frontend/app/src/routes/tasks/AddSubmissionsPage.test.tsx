@@ -210,7 +210,7 @@ describe("AddSubmissionsPage OCR uploads", () => {
     expect(screen.getByText(/原文件已保留/)).toBeInTheDocument();
     expect(screen.queryByText("submissionUploadExisting")).not.toBeInTheDocument();
     await waitFor(() => expect(screen.getByLabelText("作答识别模型")).toHaveValue("provider-default"));
-    fireEvent.click(screen.getByRole("button", { name: "按当前配置重试" }));
+    fireEvent.click(screen.getByRole("button", { name: "重试失败项" }));
 
     await waitFor(() => expect(retryMutateAsync).toHaveBeenCalledWith({
       taskId: "task-retry",

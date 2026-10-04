@@ -318,6 +318,17 @@ class ModelScheduler:
                     return made_progress
                 else:
                     budget = self.budgets[candidate.key]
+                    try:
+                        try_start = getattr(self.host_capacity, "try_start", None)
+                        allowed = try_start is None or try_start(candidate.key, budget.rpm)
+                    except Exception:
+                        host.release()
+                        raise
+                    if not allowed:
+                        host.release()
+                        queue.appendleft(candidate)
+                        self.owners.append(owner)
+                        continue
                     budget.active += 1
                     budget.starts.append(now)
                     if budget.rpm > 0:

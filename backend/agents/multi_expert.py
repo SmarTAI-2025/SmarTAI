@@ -88,15 +88,15 @@ class SynthesisOutput(BaseModel):
     steps: List[dict] = Field(default_factory=list)
 
 
-# Priority: quota > transient > parse > general. Higher index = wins.
-_ERROR_KIND_PRIORITY = ("general", "parse_failed", "transient_llm", "quota_exhausted")
+# Explicit daily exhaustion must stop retries even alongside transient failures.
+_ERROR_KIND_PRIORITY = ("general", "parse_failed", "transient_llm", "quota_exhausted", "daily_quota_exhausted")
 
 
 def dominant_error_kind(failures: List[ExpertResult]) -> str:
     """Most "actionable" error kind across a set of failed expert results.
 
-    `quota_exhausted` is surfaced preferentially because it's the only kind a
-    teacher can fix immediately (wait & retry, or raise the RPM cap).
+    Preserve explicit daily exhaustion so the caller cannot mistake it for
+    a short-lived limit and automatically replay the whole item.
     """
     best_rank = -1
     best = "general"
@@ -116,7 +116,7 @@ def dominant_error_kind(failures: List[ExpertResult]) -> str:
 # quota (quota_exhausted) error means that expert never graded the item, so its
 # confidence — 0, or a spurious partial value — must not enter any confidence
 # math (2026-08-28 fine-tune).
-_NON_VOTING_ERROR_KINDS = frozenset({"transient_llm", "quota_exhausted"})
+_NON_VOTING_ERROR_KINDS = frozenset({"transient_llm", "quota_exhausted", "daily_quota_exhausted"})
 
 
 def _casts_confidence_vote(result: ExpertResult) -> bool:

@@ -114,6 +114,19 @@ def test_again_failed_is_truthful_and_next_explicit_intent_can_retry(case, monke
     assert grading.get_run(third["job_id"]).status == "completed"
 
 
+def test_incomplete_grading_blocks_review_until_teacher_supplies_missing_scores(case, monkeypatch):
+    first = start(case, "teacher-repair")
+    finish(case, first["job_id"], monkeypatch, ("q2",))
+    snapshot = task_facade.get_task(task_id=case[0], owner_id=case[1])
+    assert snapshot["status"] == "error"
+    assert snapshot["last_failed_job_id"] == first["job_id"]
+    for row in grading.list_results_for_run(first["job_id"]):
+        if row.effective_score is None:
+            grading.add_teacher_review(row.id, teacher_id=case[1], new_score=7,
+                                       new_comment="Teacher checked the original work", confirm=True)
+    assert task_facade.get_task(task_id=case[0], owner_id=case[1])["status"] == "graded"
+
+
 def test_active_alias_replay_after_terminal_does_not_execute_again(case, monkeypatch):
     first = start(case, "first")
     revision = workflows.get_live_workflow(case[0], owner_id=case[1]).workflow_revision
@@ -320,13 +333,17 @@ def test_fast_terminal_legacy_run_during_pointer_repair_keeps_intent(case, monke
     assert len(grading.list_runs_for_assignment(case[0], actor_id=case[1])) == 1
 
 
-def test_failed_only_retry_preserves_success_and_teacher_review(case, monkeypatch):
+@pytest.mark.parametrize("switch_model", [False, True])
+def test_failed_only_retry_preserves_success_and_teacher_review(case, monkeypatch, switch_model):
     first = start(case, "original")
     finish(case, first["job_id"], monkeypatch)
     original = grading.list_results_for_run(first["job_id"])
     success = next(row for row in original if row.q_id == "q1")
     grading.add_teacher_review(success.id, teacher_id=case[1], new_score=9,
                                new_comment="Preserve teacher feedback", confirm=True)
+    if switch_model:
+        monkeypatch.setattr("backend.services.grading_input_security.provider_configuration_fingerprint",
+                            lambda **kwargs: "changed-model")
     retry = task_facade.start_task_grading(task_id=case[0], owner_id=case[1],
         expected_workflow_revision=workflows.get_live_workflow(case[0], owner_id=case[1]).workflow_revision,
         request_id="failed-only", retry_scope="failed_only")

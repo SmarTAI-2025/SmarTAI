@@ -501,6 +501,6 @@ it("background prepared-reference invalidation cannot dismiss a fresh start fail
   preflightMutateAsync.mockResolvedValue({ source_token: "prepared", source: { stored_file_id: "stored" } });
   await user.click(screen.getByRole("button", { name: "识别并准备题目资料" }));
   await waitFor(() => expect(startMutateAsync).toHaveBeenCalledTimes(1));
-  await waitFor(() => expect(screen.getByRole("button", { name: "按当前配置重试" })).toBeInTheDocument());
+  await waitFor(() => expect(screen.getByRole("button", { name: "重试失败项" })).toBeInTheDocument());
   expect(screen.getByRole("link", { name: "返回修改配置" })).toHaveAttribute("href", "/tasks/task-1/upload/problems");
 });

@@ -383,6 +383,9 @@ def classify_skill_error(e: Exception) -> tuple[str, str]:
     no status digits, so they need their own keywords.
     """
     s = str(e).lower()
+    from backend.llm.provider_limits import is_daily_quota_error
+    if is_daily_quota_error(e):
+        return ("daily_quota_exhausted", "该题未完成：服务商明确返回日额度耗尽。本轮已停止，不会自动跨天等待；请查看服务商用量或更换模型。")
     if s == "host_code_execution_disabled":
         return (
             "general",
@@ -399,8 +402,8 @@ def classify_skill_error(e: Exception) -> tuple[str, str]:
     ):
         return (
             "quota_exhausted",
-            "⏳ 该题暂未批改完成 — AI 服务的每分钟调用配额已用尽。"
-            "请稍后重试，或在 BYOK 设置里调高该专家的 RPM/并发上限。",
+            "该题暂未批改完成：服务商仍返回限流，无法确定是分钟限制还是日额度。"
+            "请重试失败项或切换模型；多次等待仍失败时，请查看官网用量。",
         )
     if (
         "timeout" in s

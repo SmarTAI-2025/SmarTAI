@@ -469,7 +469,7 @@ function AddSubmissionsForm({ taskQuery, submittedInput }: { taskQuery: ReturnTy
           </button>
         </div>
         <ImageRecognitionRecovery error={recognitionError ?? (canRetryOriginal ? task?.error : undefined)} expert={enabledExperts.find(e => e.provider_id === recognitionProviderId)} returnTo={`/tasks/${taskId}/submissions/upload`} controller={draft.protection.controller} isCurrent={draft.protection.isCurrent} locale={locale} />
-        {recognitionError ? <RecoverableActionState info={classifyRecoverableError(recognitionError, { locale, taskId, returnTo: `/tasks/${taskId}/submissions/upload` })} locale={locale} compact className="mt-4" workflowRecovery={{ retry: { onClick: () => void handleStart(), busy: isPending }, configurationHref: `/tasks/${taskId}/submissions/upload` }} /> : null}
+        {recognitionError ? <RecoverableActionState usageContext={{ providerIds: [recognitionProviderId], providers: expertsQuery.data ?? [] }} info={classifyRecoverableError(recognitionError, { locale, taskId, returnTo: `/tasks/${taskId}/submissions/upload` })} locale={locale} compact className="mt-4" workflowRecovery={{ retry: { onClick: () => void handleStart(), busy: isPending }, configurationHref: `/tasks/${taskId}/submissions/upload` }} /> : null}
       </div>
     </div>
   );

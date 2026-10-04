@@ -1,7 +1,7 @@
 import { useDraftLeave } from "@/hooks/useDraftLeave";
 import { ArrowLeft, History, RefreshCw } from "lucide-react";
 import { useLocation } from "react-router-dom";
-import { workflowBackLabel, workflowRetryLabel } from "@/components/ui/RecoverableActionState";
+import { workflowBackLabel } from "@/components/ui/RecoverableActionState";
 import { useI18n } from "@/i18n/I18nProvider";
 
 export function RouteRecoveryPage() {
@@ -26,7 +26,7 @@ export function RouteRecoveryPage() {
       </p>
       <div className="flex flex-wrap gap-3">
         <button type="button" onClick={() => leave.request(() => window.location.reload())} className="inline-flex items-center gap-2 rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground">
-          <RefreshCw className="h-4 w-4" aria-hidden="true" />{configurationHref ? workflowRetryLabel(locale) : zh ? "重新加载页面" : "Reload page"}
+          <RefreshCw className="h-4 w-4" aria-hidden="true" />{zh ? "重新加载页面" : "Reload page"}
         </button>
         {configurationHref ? <a href={configurationHref} className="inline-flex items-center gap-2 rounded-md border px-4 py-2 text-sm font-medium">
           <ArrowLeft className="h-4 w-4" aria-hidden="true" />{workflowBackLabel(locale)}

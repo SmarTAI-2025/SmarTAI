@@ -11,6 +11,7 @@ import { Link } from "react-router-dom";
 import type { Locale } from "@/i18n/messages";
 import type { RecoverableErrorInfo } from "@/lib/taskActionGuards";
 import { cn } from "@/lib/cn";
+import { ProviderUsageLink, type ProviderUsageContext } from "@/components/models/ProviderUsageLink";
 
 export interface RecoveryAction {
   label: string;
@@ -21,7 +22,7 @@ export interface RecoveryAction {
   disabled?: boolean;
 }
 
-export const workflowRetryLabel = (locale: Locale) => locale === "zh-CN" ? "按当前配置重试" : "Retry with current settings";
+export const workflowRetryLabel = (locale: Locale) => locale === "zh-CN" ? "重试失败项" : "Retry failed items";
 export const workflowBackLabel = (locale: Locale) => locale === "zh-CN" ? "返回修改配置" : "Back to edit settings";
 
 export function RecoverableActionState({
@@ -29,6 +30,7 @@ export function RecoverableActionState({
   primaryAction,
   secondaryAction,
   workflowRecovery,
+  usageContext,
   additionalActions = [],
   compact = false,
   locale = "zh-CN",
@@ -37,13 +39,14 @@ export function RecoverableActionState({
   info: RecoverableErrorInfo;
   primaryAction?: RecoveryAction;
   secondaryAction?: RecoveryAction;
-  workflowRecovery?: { retry: Omit<RecoveryAction, "label">; configurationHref: string; configurationState?: unknown };
+  workflowRecovery?: { retry: Omit<RecoveryAction, "label"> & { label?: string }; configurationHref: string; configurationState?: unknown };
+  usageContext?: ProviderUsageContext;
   additionalActions?: RecoveryAction[];
   compact?: boolean;
   locale?: Locale;
   className?: string;
 }) {
-  const primary = workflowRecovery ? { ...workflowRecovery.retry, label: workflowRetryLabel(locale) } : primaryAction ?? (info.actionHref
+  const primary = workflowRecovery ? (info.dailyQuotaExhausted ? undefined : { ...workflowRecovery.retry, label: workflowRecovery.retry.label ?? workflowRetryLabel(locale) }) : primaryAction ?? (info.actionHref
     ? { label: info.actionLabel, href: info.actionHref }
     : undefined);
   const secondary = workflowRecovery ? { label: workflowBackLabel(locale), href: workflowRecovery.configurationHref, state: workflowRecovery.configurationState, disabled: workflowRecovery.retry.busy } : secondaryAction;
@@ -89,6 +92,8 @@ export function RecoverableActionState({
           <p className={cn("text-muted-foreground", compact ? "mt-1 text-xs leading-5" : "mt-2 max-w-2xl text-sm leading-6")}>
             {info.description}
           </p>
+
+          {info.showUsageLinks && usageContext ? <ProviderUsageLink context={usageContext} locale={locale} /> : null}
 
           {primary || secondary || extras.length ? (
             <div className={cn("flex flex-col gap-2 sm:flex-row sm:flex-wrap", compact ? "mt-4" : "mt-6")}>

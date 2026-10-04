@@ -519,6 +519,7 @@ async def prepare_submission_sources(
     vision_unavailable_code: str | None = None,
     reporter=None,
     recognition_reader=None,
+    reuse_source=None,
 ) -> list[PreparedSubmissionSource]:
     """Persist originals, then OCR/read each source without batch-wide collapse."""
     container_file: StoredFile | None = None
@@ -642,6 +643,12 @@ async def prepare_submission_sources(
             continue
         if raw.content is None:
             raise RuntimeError("submission_source_persistence_failed")
+        if reuse_source is not None and reuse_source(raw, source_id, stored_file_id):
+            prepared.append(PreparedSubmissionSource(
+                source_id=source_id, stored_file_id=stored_file_id,
+                filename=raw.filename, content_type=raw.content_type, text=None,
+            ))
+            continue
         document_ocr_checkpointed = False
         recognition = None
         try:
