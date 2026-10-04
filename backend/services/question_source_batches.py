@@ -39,7 +39,9 @@ async def read_question_pdf_batches(*, service, request, content, engine, total_
         # Successful page evidence may be reused, but incomplete input must not
         # progress to question/answer generation as though the whole file read.
         if run.safe_error_code or document.coverage.failed_pages:
-            raise RecognitionError(image_quality_failure(run.safe_error_code or "question_source_incomplete", document))
+            raise RecognitionError(image_quality_failure(run.safe_error_code or "question_source_incomplete", document),
+                                   failed_pages=document.coverage.failed_pages,
+                                   processed_pages=sorted(set(pages) | set(document.coverage.processed_pages)))
         for page in document.pages:
             if page.page_number in document.coverage.processed_pages:
                 pages[page.page_number] = page

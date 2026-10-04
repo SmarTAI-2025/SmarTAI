@@ -27,7 +27,7 @@ from tenacity import (
 )
 
 from backend.config import settings
-from backend.llm.providers import BaseProvider, LLMResponse
+from backend.llm.providers import BaseProvider, LLMResponse, ProviderRequestError
 from backend.llm.endpoint_policy import ProviderEndpointError
 
 logger = logging.getLogger(__name__)
@@ -46,6 +46,12 @@ MATH_MARKDOWN_SYSTEM_INSTRUCTION = (
 
 class StructuredOutputBoundsError(ValueError):
     """The provider returned valid JSON whose fields exceed safe bounds."""
+
+
+class StructuredOutputInvalidError(ValueError):
+    """Malformed model output, with no source content in the error message."""
+
+    code = "provider_response_invalid"
 
 
 # ─── Exceptions ──────────────────────────────────────────────────────────────
@@ -120,6 +126,8 @@ def _classify_exception(e: Exception) -> Exception:
     """
     if getattr(e, "retryable", True) is False:
         return PermanentLLMError("non_retryable_provider_limit")
+    if isinstance(e, ProviderRequestError) and e.code in {"provider_recitation_blocked", "provider_content_blocked"}:
+        return PermanentLLMError(e.code)
 
     # Endpoint safety-policy rejections (non-public address, host not allowed,
     # DNS/config policy) are deterministic configuration/environment errors:
@@ -188,7 +196,7 @@ def _classify_exception(e: Exception) -> Exception:
         return RateLimitError(msg, retry_after=_extract_retry_after(msg))
 
     # Generic transient (timeout / 5xx / connection) — retryable.
-    if any(k in lower for k in ["timeout", "connection", "5xx", "internal", "upstream_unavailable"]):
+    if any(k in lower for k in ["timeout", "timed out", "connection", "5xx", "internal", "upstream_unavailable"]):
         return TransientLLMError(msg)
 
     # Default: treat as transient (safer for flaky APIs).
@@ -796,7 +804,10 @@ def _retry_stop(retry_state) -> bool:
 async def _ainvoke_with_retry(provider: BaseProvider, messages: List[BaseMessage]) -> LLMResponse:
     """Inner retry wrapper — honors retry-after hints, async-native."""
     try:
-        return await provider.ainvoke(messages)
+        response = await provider.ainvoke(messages)
+        if getattr(response, "finish_reason", None) == "refused":
+            raise ProviderRequestError(getattr(response, "refusal_code", None) or "provider_content_blocked", status_code=422)
+        return response
     except Exception as e:
         raise _classify_exception(e) from e
 

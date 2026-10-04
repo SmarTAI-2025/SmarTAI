@@ -99,6 +99,7 @@ class LLMResponse:
     input_tokens: Optional[int] = None
     output_tokens: Optional[int] = None
     finish_reason: Optional[str] = None
+    refusal_code: Optional[str] = None
 
 
 @dataclass
@@ -156,9 +157,15 @@ def _response_metadata(response: Any) -> dict[str, Any]:
     }
     additional = getattr(response, "additional_kwargs", None)
     refused = isinstance(additional, dict) and bool(additional.get("refusal"))
-    return {**tokens, "finish_reason": "refused" if refused else _safe_finish_reason(
-        metadata.get("finish_reason", metadata.get("stop_reason"))
-    )}
+    raw_reason = metadata.get("finish_reason", metadata.get("stop_reason"))
+    reason = "refused" if refused else _safe_finish_reason(raw_reason)
+    return {**tokens, "finish_reason": reason,
+            **({"refusal_code": _refusal_code(raw_reason)} if reason == "refused" else {})}
+
+
+def _refusal_code(reason: Any) -> str:
+    # Only fixed codes cross the API boundary, never arbitrary upstream text.
+    return "provider_recitation_blocked" if str(reason).lower() == "recitation" else "provider_content_blocked"
 
 
 def _response_text(content: Any) -> str:
@@ -974,6 +981,8 @@ class SafeRelayProvider(BaseProvider):
                 if payload["choices"][0]["message"].get("refusal"):
                     finish_reason = "refusal"
                 content = payload["choices"][0]["message"]["content"]
+                if content is None and _safe_finish_reason(finish_reason) == "refused":
+                    content = ""
                 if isinstance(content, list):
                     content = "".join(
                         str(item.get("text", ""))
@@ -995,7 +1004,9 @@ class SafeRelayProvider(BaseProvider):
                 output_tokens = usage.get("output_tokens")
             else:
                 finish_reason = payload["candidates"][0].get("finishReason")
-                parts = payload["candidates"][0]["content"]["parts"]
+                candidate = payload["candidates"][0]
+                # A blocked Gemini response legitimately omits content/parts.
+                parts = (candidate.get("content") or {}).get("parts", []) if _safe_finish_reason(finish_reason) == "refused" else candidate["content"]["parts"]
                 content = "".join(
                     str(item.get("text", ""))
                     for item in parts
@@ -1016,6 +1027,7 @@ class SafeRelayProvider(BaseProvider):
             input_tokens=input_tokens if type(input_tokens) is int and input_tokens >= 0 else None,
             output_tokens=output_tokens if type(output_tokens) is int and output_tokens >= 0 else None,
             finish_reason=_safe_finish_reason(finish_reason),
+            refusal_code=_refusal_code(finish_reason) if _safe_finish_reason(finish_reason) == "refused" else None,
         )
 
     async def _relay_call(self, messages: List[BaseMessage], *, max_output_tokens: int | None = None) -> LLMResponse:

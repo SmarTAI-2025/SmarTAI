@@ -14,6 +14,7 @@ from collections import defaultdict
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from copy import deepcopy
 from typing import Any, Dict, Iterable, List, Tuple
+import httpx
 
 from backend.agents.ingest_agent import (
     AICompletionCandidateOutput,
@@ -102,6 +103,10 @@ def _provider_submission_may_exist(exc: Exception) -> bool:
     if isinstance(explicit, bool):
         return explicit
     if isinstance(exc, ProviderEndpointError):
+        return False
+    # DNS/TCP/TLS establishment and pool admission fail before an HTTP request
+    # can reach the model. Read/write timeouts remain uncertain.
+    if isinstance(exc, (httpx.ConnectError, httpx.ConnectTimeout, httpx.PoolTimeout)):
         return False
     status_code = getattr(exc, "status_code", None)
     if status_code is None:
