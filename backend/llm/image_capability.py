@@ -33,6 +33,10 @@ def explicitly_rejects_images(status: object, body: object) -> bool:
     if status not in (400, 422):
         return False
     text = json.dumps(body, ensure_ascii=False).lower()
+    # Zhipu's official API rejects image blocks with an explicit text-only
+    # content-type allowlist (error 1210), rather than saying "no vision".
+    if re.search(r"messages\.content\.type.{0,60}取值范围\s*\[\s*['\"]text['\"]\s*\]", text):
+        return True
     if re.search(r"(?:invalid|unsupported|not supported).{0,30}(?:format|mime|dimension|size|resolution)|(?:format|mime|dimension|size|resolution).{0,30}(?:invalid|unsupported|not supported)", text):
         return False
     return bool(re.search(
