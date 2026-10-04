@@ -8,6 +8,12 @@ import {
 } from "./taskActionGuards";
 
 describe("task contract compatibility", () => {
+  it("offers scope correction without claiming a missing question was recognized", () => {
+    const info = classifyRecoverableError("question_targets_incomplete", { locale: "zh-CN", taskId: "task" });
+    expect(info.title).toBe("未找齐指定题目");
+    expect(info.description).toContain("题号");
+    expect(info.description).toContain("已上传资料仍保留");
+  });
   it("explains recitation with the failed page instead of blaming image support", () => {
     const info = classifyRecoverableError(new APIError(422, "provider_recitation_blocked", {
       detail: { code: "provider_recitation_blocked", failed_pages: [8], processed_pages: [1, 2, 3] },
@@ -25,7 +31,7 @@ describe("task contract compatibility", () => {
     expect(result.actionHref).toContain("submissions?filter=review");
     expect(result.description).toContain("student");
   });
-  it.each(["target_location_needs_hint", "target_selection_limit_exceeded", "recognition_budget_exhausted", "recognition_timeout", "question_targets_incomplete"])(
+  it.each(["target_location_needs_hint", "target_selection_limit_exceeded", "recognition_budget_exhausted", "recognition_timeout"])(
     "offers range adjustment for %s without claiming a fresh submit", (code) => {
       const result = classifyRecoverableError(new APIError(422, code, { detail: { code } }), { locale: "en-US" });
       expect(result.title).toBe("Recognition coverage is incomplete");

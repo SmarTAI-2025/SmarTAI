@@ -96,6 +96,12 @@ def question_recognition_options(value=None, *, extraction_hint=""):
                    else QuestionRecognitionOptionsV1.model_validate(value or {}))
     except (ValidationError, ValueError, TypeError):
         raise RecognitionError("recognition_request_invalid") from None
+    # Earlier upload forms only offered a free-text hint. A hint consisting
+    # entirely of hierarchical IDs is an explicit target list too; otherwise
+    # we would OCR unrelated pages before applying the teacher's selection.
+    if not options.targets and re.fullmatch(r"\s*\d+(?:\.\d+){2,}(?:\s*[,，;；、\s]\s*\d+(?:\.\d+){2,})*\s*", extraction_hint):
+        targets = list(dict.fromkeys(re.findall(r"\d+(?:\.\d+){2,}", extraction_hint)))
+        options = _update_options(options, targets=targets)
     # Only explicit hierarchical question IDs are inferred; ordinary prose,
     # decimal quantities and arbitrary integers must not choose source pages.
     explicit = re.search(r"(?:题号|question\s+numbers?|exercises?)\s*[:：]?\s*([0-9.,，\s\-–]+)", extraction_hint, re.I)
@@ -116,7 +122,7 @@ def question_recognition_options(value=None, *, extraction_hint=""):
                 raise RecognitionError("recognition_request_invalid")
         options = _update_options(options, targets=list(dict.fromkeys(targets)))
     if not options.targets and re.search(r"题|exercise|question", extraction_hint, re.I):
-        targets = list(dict.fromkeys(re.findall(r"(?<![\w.])\d+(?:\.\d+){2,}(?![\w.])", extraction_hint)))
+        targets = list(dict.fromkeys(re.findall(r"(?<![\d.])\d+(?:\.\d+){2,}(?![\d.])", extraction_hint)))
         options = _update_options(options, targets=targets)
     if not options.pages:
         match = re.search(r"(?:页码|pages?)\s*[:：]?\s*([0-9 ,，\-]+)", extraction_hint, re.I)
