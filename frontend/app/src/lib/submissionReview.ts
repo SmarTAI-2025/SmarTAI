@@ -29,7 +29,7 @@ export interface SubmissionReviewSelection {
   confidenceAlias: boolean;
 }
 
-const REVIEW_TOKENS = ["待复核", "需复核", "异常", "有问题", "review", "flagged", "flag"];
+const REVIEW_TOKENS = ["待确认", "pending", "待复核", "需复核", "异常", "有问题", "review", "flagged", "flag"];
 const CONFIDENCE_TOKENS = ["低置信", "置信度低", "low confidence"];
 const MISSING_TOKENS = ["缺失", "空白", "未作答", "没作答", "missing", "blank", "empty"];
 const RECOGNIZED_TOKENS = ["已识别", "正常", "完整", "recognized", "ready"];
@@ -97,7 +97,7 @@ export function getSubmissionReviewStats(
       const answer = answers.get(question.id);
       const state = getAnswerState(answer);
       if (answer?.content?.trim()) answeredCells += 1;
-      if (!["recognized", "reviewed"].includes(state)) reviewCells += 1;
+      if (state !== "reviewed") reviewCells += 1;
     }
   }
 
@@ -152,7 +152,7 @@ export function selectSubmissionReview(
 
     const answers = new Map((student.stu_ans ?? []).map((answer) => [answer.q_id, answer]));
     const states = scopedQuestions.map((question) => getAnswerState(answers.get(question.id)));
-    if ((filter === "review" || wantsReview) && !states.some((state) => !["recognized", "reviewed"].includes(state))) return false;
+    if ((filter === "review" || wantsReview) && !states.some((state) => state !== "reviewed")) return false;
     if ((filter === "missing" || wantsMissing) && !states.some((state) => state === "missing" || state === "empty")) return false;
     if (wantsRecognized && !states.some((state) => state === "recognized")) return false;
 
@@ -185,7 +185,7 @@ export function answerMap(student: StudentSubmission): Map<string, StudentAnswer
 export function studentNeedsAttention(student: StudentSubmission, questions: SubmissionQuestion[]): boolean {
   if (student.identity_status === "needs_review") return true;
   const answers = answerMap(student);
-  return questions.some((question) => !["recognized", "reviewed"].includes(getAnswerState(answers.get(question.id))));
+  return questions.some((question) => getAnswerState(answers.get(question.id)) !== "reviewed");
 }
 
 function compareStudents(

@@ -435,6 +435,8 @@ class RecognitionAgent:
                         halted = True
                         break
                 if result.parse_status != "ok":
+                    if outcome.candidate.safe_error_code:
+                        stops.append(outcome.candidate.safe_error_code)
                     stops.extend(result.reason_codes)
                     halted = True
                     break

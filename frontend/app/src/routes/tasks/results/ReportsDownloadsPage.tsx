@@ -116,7 +116,7 @@ export function ReportsDownloadsPage({
     <section className="rounded-[10px] border bg-card">
       <div className="p-5">
         <div className="flex flex-wrap items-start justify-between gap-3">
-          <div><h2 className="text-[20px] font-bold tracking-[-0.01em] text-foreground">{tx(locale, "报告与下载", "Reports & Downloads")}</h2><p className="mt-1 text-[13px] text-muted-foreground">{tx(locale, "所有文件绑定明确的正式结果版本；本页不会自动下载旧版。", "Every file is tied to a specific final-results version. Historical files are never downloaded automatically.")}</p></div>
+          <div><h2 className="text-[20px] font-bold tracking-[-0.01em] text-foreground">{tx(locale, "报告与下载", "Reports & Downloads")}</h2><p className="mt-1 text-[13px] text-muted-foreground">{tx(locale, "下载前请核对结果版本。", "Check the results version before downloading.")}</p></div>
           {ready ? <button type="button" disabled={downloading !== null} onClick={() => void download(current.version, "bundle", bundleName(taskId, current.version))} className="inline-flex h-9 items-center gap-1.5 rounded-[8px] bg-primary px-3.5 text-[11px] font-semibold text-primary-foreground disabled:opacity-50">{downloading === `${current.version}:bundle` ? <LoaderCircle aria-hidden="true" className="h-4 w-4 animate-spin" /> : <Archive aria-hidden="true" className="h-4 w-4" />}{tx(locale, "下载全部 ZIP", "Download all ZIP")}</button> : null}
         </div>
 

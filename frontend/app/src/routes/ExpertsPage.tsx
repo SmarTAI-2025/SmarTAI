@@ -259,7 +259,6 @@ export function ExpertsPage() {
 
   return (
     <div className="grid gap-5">
-      <ModelQuotaCard />
       <header className="flex flex-col gap-4 border-b pb-4 sm:flex-row sm:items-end sm:justify-between">
         <div>
           <h1 className="text-[26px] font-semibold tracking-tight">
@@ -267,8 +266,8 @@ export function ExpertsPage() {
           </h1>
           <p className="mt-1 max-w-3xl text-sm leading-6 text-muted-foreground">
             {zh
-              ? "管理你自己的模型密钥、启用状态与连通性。密钥只用于模型请求，保存后不会在页面回显。"
-              : "Manage your model keys, enabled state, and connectivity. Keys are used only for model requests and are never displayed again."}
+              ? "管理模型配置，测试文字与图片识别能力。"
+              : "Manage model configurations and test text and image support."}
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
@@ -312,12 +311,12 @@ export function ExpertsPage() {
           tone="accent"
         />
         <SummaryMetric
-          label={zh ? "验证通过" : "Verified"}
+          label={zh ? "文字测试通过" : "Text checks passed"}
           value={expertsQuery.isLoading ? "—" : String(verifiedCount)}
           tone="success"
         />
         <SummaryMetric
-          label={zh ? "连接异常" : "Check failed"}
+          label={zh ? "文字测试失败" : "Text checks failed"}
           value={expertsQuery.isLoading ? "—" : String(failedCheckCount)}
           tone={failedCheckCount > 0 ? "warning" : "neutral"}
         />
@@ -380,11 +379,12 @@ export function ExpertsPage() {
             <div className="hidden overflow-x-auto sm:block">
               <table className="w-full min-w-[980px] table-fixed border-collapse text-left text-sm">
                 <colgroup>
-                  <col className="w-[33%]" />
-                  <col className="w-[12%]" />
-                  <col className="w-[14%]" />
-                  <col className="w-[13%]" />
                   <col className="w-[28%]" />
+                  <col className="w-[9%]" />
+                  <col className="w-[16%]" />
+                  <col className="w-[16%]" />
+                  <col className="w-[13%]" />
+                  <col className="w-[18%]" />
                 </colgroup>
                 <thead className="h-10 bg-slate-50 text-xs text-slate-500 dark:bg-slate-900/45 dark:text-slate-400">
                   <tr>
@@ -395,7 +395,10 @@ export function ExpertsPage() {
                       {zh ? "配置状态" : "Configuration"}
                     </th>
                     <th className="px-3 text-center align-middle font-medium">
-                      {zh ? "连通性" : "Connectivity"}
+                      {zh ? "文字测试" : "Text test"}
+                    </th>
+                    <th className="px-3 text-center align-middle font-medium">
+                      {zh ? "图片测试" : "Image test"}
                     </th>
                     <th className="px-3 text-center align-middle font-medium">
                       {zh ? "调用限制" : "Limits"}
@@ -443,6 +446,7 @@ export function ExpertsPage() {
         ) : null}
       </section>
 
+      <ModelQuotaCard />
       <OfficialProviderLinks
         catalog={catalogQuery.data ?? []}
         loading={catalogQuery.isLoading}
@@ -571,8 +575,8 @@ function BaiduOCRSettings({ locale }: { locale: "zh-CN" | "en-US" }) {
           </h2>
           <p className="mt-1 max-w-3xl text-xs leading-5 text-muted-foreground">
             {zh
-              ? "独立的 OCR BYOK，仅用于题目与作答转写。AK/SK 保存后不会回显，也不会进入平台共享模型池。"
-              : "Independent OCR BYOK for question and submission transcription only. AK/SK values are never displayed after saving and never enter the shared model pool."}
+              ? "使用你自己的百度 OCR 凭据识别题目与作答，仅供当前账号使用。"
+              : "Use your own Baidu OCR credentials to recognize questions and submissions. Credentials are private to your account."}
           </p>
         </div>
         <span className={cn(
@@ -653,8 +657,8 @@ function BaiduOCRSettings({ locale }: { locale: "zh-CN" | "en-US" }) {
         </div>
         <p className="text-[11px] leading-4 text-muted-foreground">
           {zh
-            ? "验证只做一次 AK/SK token 交换，不提交 OCR 文件；真实 OCR 服务权限与活动额度仍需任务调用验证。"
-            : "Verification performs only an AK/SK token exchange and submits no OCR file. A real task is still required to verify OCR access and campaign quota."}
+            ? "这里只检查凭据，图片识别会在任务中进行。"
+            : "This check verifies credentials. Image recognition takes place in your tasks."}
         </p>
         {formError ? <InlineError message={formError} /> : null}
       </form>
@@ -724,6 +728,10 @@ function ExpertTableRow({
       </td>
       <td className="px-3 text-center align-middle">
         <VerificationBadge expert={expert} locale={locale} />
+        {expert.editable !== false ? <RowAction label={zh ? "验证（可选）" : "Verify (optional)"} onClick={onVerify} disabled={disabled}><ShieldCheck aria-hidden="true" size={14} /></RowAction> : null}
+      </td>
+      <td className="px-3 text-center align-middle">
+        <ImageVerification expert={expert} locale={locale} disabled={disabled} onVerifyImage={onVerifyImage} />
       </td>
       <td className="px-3 text-center align-middle text-xs text-muted-foreground">
         <span className="block">RPM {expert.rpm > 0 ? expert.rpm : "—"}</span>
@@ -780,8 +788,13 @@ function ExpertMobileRow(props: ExpertRowProps) {
         </div>
         <EnabledBadge enabled={expert.enabled} locale={locale} />
       </div>
-      <div className="flex items-center justify-between gap-3 text-xs text-muted-foreground">
-        <VerificationBadge expert={expert} locale={locale} />
+      <div className="grid grid-cols-2 items-start gap-3 text-center text-xs text-muted-foreground">
+        <div><p>{zh ? "文字测试" : "Text test"}</p><VerificationBadge expert={expert} locale={locale} />
+          {expert.editable !== false ? <RowAction label={zh ? "验证（可选）" : "Verify (optional)"} onClick={props.onVerify} disabled={props.disabled}><ShieldCheck aria-hidden="true" size={14} /></RowAction> : null}
+        </div>
+        <div><p>{zh ? "图片测试" : "Image test"}</p><ImageVerification expert={expert} locale={locale} disabled={props.disabled} onVerifyImage={props.onVerifyImage} /></div>
+      </div>
+      <div className="text-xs text-muted-foreground">
         <span>
           RPM {expert.rpm > 0 ? expert.rpm : "—"} · {zh ? "并发自动 · 上限 50" : "Auto concurrency · up to 50"}
         </span>
@@ -803,22 +816,10 @@ function ExpertActions({
   onDelete,
 }: ExpertRowProps) {
   const zh = locale === "zh-CN";
-  const imageControls = <>
-    <RowAction label={zh ? "验证图片能力" : "Verify image capability"} onClick={onVerifyImage} disabled={disabled}>
-      <ShieldCheck aria-hidden="true" size={14} />
-    </RowAction>
-    <div data-image-provider={expert.provider_id} className="min-w-0 w-full break-words text-left text-xs text-muted-foreground">
-      <p>{zh ? "发送系统生成的测试图片，可能消耗少量额度，不上传你的题目或作业。" : "Sends a generated test image; may use a little quota. Your questions and homework are not uploaded."}</p>
-      <p className="mt-1">{zh ? "图片能力：" : "Image capability: "}{imageCapabilityLabel(expert, zh)}{expert.image_checked_at ? ` · ${formatCheckedAt(expert.image_checked_at, locale)}` : ""}</p>
-      {expert.image_reason ? <p>{imageReasonLabel(expert.image_reason, zh)}</p> : null}
-      {expert.image_capability_status === "passed" ? <p>{zh ? "通过测试不代表所有文件都能准确识别。低置信度时请换清晰文件或换模型。" : "Passing does not guarantee every file is read accurately. For low confidence, try a clearer file or another model."}</p> : null}
-    </div>
-  </>;
   if (expert.editable === false) {
     return (
       <div className="flex min-w-0 flex-wrap items-center justify-end gap-1 text-xs text-muted-foreground">
         <span>{zh ? "平台托管，只读" : "Platform managed, read-only"}</span>
-        {imageControls}
       </div>
     );
   }
@@ -827,10 +828,6 @@ function ExpertActions({
       <RowAction label={zh ? "编辑" : "Edit"} onClick={onEdit} disabled={disabled}>
         <Pencil aria-hidden="true" size={14} />
       </RowAction>
-      <RowAction label={zh ? "验证（可选）" : "Verify (optional)"} onClick={onVerify} disabled={disabled}>
-        <ShieldCheck aria-hidden="true" size={14} />
-      </RowAction>
-      {imageControls}
       {!expert.is_default && expert.enabled ? (
         <RowAction label={zh ? "设为默认" : "Set default"} onClick={onSetDefault} disabled={disabled}>
           <Star aria-hidden="true" size={14} />
@@ -853,6 +850,22 @@ function ExpertActions({
       </RowAction>
     </div>
   );
+}
+
+function ImageVerification({ expert, locale, disabled, onVerifyImage }: Pick<ExpertRowProps, "expert" | "locale" | "disabled" | "onVerifyImage">) {
+  const zh = locale === "zh-CN";
+  const status = expert.image_capability_status ?? "unverified";
+  const tone = status === "passed" ? "bg-emerald-50 text-emerald-700 dark:bg-emerald-950/50 dark:text-emerald-200"
+    : status === "unsupported" ? "bg-rose-50 text-rose-700 dark:bg-rose-950/50 dark:text-rose-200"
+      : "bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-200";
+  return <div data-image-provider={expert.provider_id} className="min-w-0 text-xs">
+    <div className="flex min-h-[45px] flex-col items-center justify-center">
+      <span className={cn("inline-flex rounded-full px-3 py-1 font-semibold", tone)} title={expert.image_reason ? imageReasonLabel(expert.image_reason, zh) : undefined}>{imageCapabilityLabel(expert, zh)}</span>
+      {expert.image_checked_at ? <p className="mt-1 text-[10px] text-muted-foreground">{formatCheckedAt(expert.image_checked_at, locale)}</p> : null}
+    </div>
+    <RowAction label={zh ? "验证图片能力" : "Verify image capability"} onClick={onVerifyImage} disabled={disabled}><ShieldCheck aria-hidden="true" size={14} /></RowAction>
+    {expert.image_reason && status !== "passed" ? <p className="mt-1 break-words text-xs text-muted-foreground">{imageReasonLabel(expert.image_reason, zh)}</p> : null}
+  </div>;
 }
 
 function DefaultBadge({ locale }: { locale: "zh-CN" | "en-US" }) {
@@ -932,7 +945,7 @@ function VerificationBadge({
       className: "bg-blue-50 text-blue-700 dark:bg-blue-950/50 dark:text-blue-200",
     },
     unverified: {
-      label: zh ? "未检查，可直接使用" : "Unchecked, ready to use",
+      label: zh ? "未验证" : "Unchecked",
       className: "bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-200",
     },
   };
@@ -1399,8 +1412,8 @@ function ConfirmationDialog({
           <AlertTriangle aria-hidden="true" className="mt-1 shrink-0" size={17} />
           <p>
             {zh
-              ? "删除后这把 BYOK key 会从当前内存注册表移除，使用该配置的后续任务将无法继续调用。"
-              : "The BYOK key will be removed from the current in-memory registry, and future task calls using it will no longer work."}
+              ? "删除后，后续任务不能再使用这项模型配置。"
+              : "Future tasks will no longer be able to use this model configuration."}
           </p>
         </div>
       )}
@@ -1528,7 +1541,7 @@ function imageReasonLabel(reason: string, zh: boolean) {
   const labels: Record<string, string[]> = {
     image_probe_answer_correct: ["测试图片答案正确", "Test image answer was correct"],
     image_probe_answer_incorrect: ["测试答案不正确，不能据此判定不支持图片", "Incorrect test answer; image support remains uncertain"],
-    provider_vision_not_supported: ["上游明确拒绝图片输入", "Upstream explicitly rejected image input"],
+    provider_vision_not_supported: ["不支持图片，仍可处理文字资料", "Images unsupported; text sources can still be used"],
     expert_verification_timeout: ["本次请求超时", "Request timed out"],
     expert_verification_rate_limited: ["上游限流，请稍后再试", "Upstream rate limit"],
     expert_verification_auth_failed: ["鉴权失败，请检查凭据", "Authentication failed; check credentials"],

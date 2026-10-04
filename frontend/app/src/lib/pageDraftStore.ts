@@ -100,7 +100,7 @@ export async function readPageDraft<T>(owner: string, scope: string, codec: Draf
       target[file.path.at(-1)!] = new File([file.bytes!], file.name, { type: file.type, lastModified: file.modified });
     }
     if (row.files.reduce((total, file) => total + (file.bytes?.byteLength ?? 0), 0) > MAX_DRAFT_BYTES) throw new Error();
-    return { value, record: row, epoch, notice: "已恢复明确暂存的草稿；未上传或调用模型。" };
+    return { value, record: row, epoch, notice: "草稿已恢复。" };
   } catch {
     await removePageDraft(owner, scope);
     return { ...await readPageDraft(owner, scope, codec), notice: "草稿或文件已损坏，未恢复；请重新选择文件并暂存。" };

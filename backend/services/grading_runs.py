@@ -376,8 +376,18 @@ async def process_run(*, run_id: str, worker_id: str, registry=None, language: s
             )
 
         reporter.set_event_sink(_persist_progress)
+        reused_pairs = set()
+        for snapshot in (frozen_setup.input_manifest if frozen_setup else {}).get("reused_results", []):
+            preserved = education.GradeResultDTO.model_validate(snapshot)
+            preserved.grading_run_id = run_id
+            grading_repository.upsert_result(run_id=run_id, worker_id=worker_id,
+                grade_result=preserved, inherited_review=preserved.teacher_review)
+            reused_pairs.add((preserved.submission_revision_id, preserved.q_id))
+            await reporter.increment_completed()
+        retry_options = {"reused_pairs": reused_pairs} if frozen_setup and frozen_setup.input_manifest.get("retry_scope") == "failed_only" else {}
         grading_task = asyncio.create_task(
             grading_adapter.run_grading(
+                **retry_options,
                 run_id=run_id,
                 assignment_id=run.assignment_id,
                 teacher_id=run.teacher_id,

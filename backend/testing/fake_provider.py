@@ -62,6 +62,9 @@ async def fake_grade_batch(*, student_store: dict, problem_store: dict,
     for sid, sd in student_store.items():
         corrections: list[Correction] = []
         for q_id, problem in problem_store.items():
+            selected = _kwargs.get("question_ids_by_student")
+            if selected is not None and q_id not in selected.get(sid, set()):
+                continue
             answer_text = ""
             for a in sd.get("answers", sd.get("stu_ans", [])):
                 if a.get("q_id") == q_id:

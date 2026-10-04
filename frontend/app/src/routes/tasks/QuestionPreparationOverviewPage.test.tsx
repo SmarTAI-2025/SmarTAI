@@ -102,21 +102,22 @@ describe("QuestionPreparationOverviewPage smart search", () => {
     expect(screen.getByRole("link", { name: "继续上传作答" })).toHaveAttribute("href", "/tasks/task-1/submissions/upload");
     expect(mutateAsync).not.toHaveBeenCalled();
   });
-  it("confirms a single question without opening its editor", async () => {
+  it("keeps only a details link in each matrix action cell", () => {
     renderPage("/tasks/task-1/questions");
-    await userEvent.click(screen.getByRole("button", { name: "确认第 Q1 题已复核" }));
-    expect(mutateAsync).toHaveBeenCalledExactlyOnceWith({ taskId: "task-1", qId: "Q1", expectedWorkflowRevision: 7, review_status: "confirmed" });
+    expect(screen.queryByRole("button", { name: /确认第/ })).not.toBeInTheDocument();
+    expect(screen.getAllByRole("link", { name: "详情 →" })).toHaveLength(2);
+    expect(mutateAsync).not.toHaveBeenCalled();
   });
 
   it("labels and confirms only the current filtered questions", async () => {
     renderPage("/tasks/task-1/questions?q=Q2");
-    await userEvent.click(await screen.findByRole("button", { name: "确认当前 1 道题已复核" }));
+    await userEvent.click(await screen.findByRole("button", { name: "确认筛选项（1）" }));
     expect(mutateAsync).toHaveBeenCalledExactlyOnceWith({ taskId: "task-1", qId: "Q2", expectedWorkflowRevision: 7, review_status: "confirmed" });
   });
 
   it("chains returned revisions across all visible questions", async () => {
     renderPage("/tasks/task-1/questions");
-    await userEvent.click(screen.getByRole("button", { name: "一键确认全部题目已复核" }));
+    await userEvent.click(screen.getByRole("button", { name: "全部确认" }));
     expect(mutateAsync.mock.calls.map(([patch]) => [patch.qId, patch.expectedWorkflowRevision])).toEqual([["Q1", 7], ["Q2", 8]]);
   });
 
@@ -129,6 +130,15 @@ describe("QuestionPreparationOverviewPage smart search", () => {
     renderPage("/tasks/task-1/questions");
     expect(screen.getByTitle(label)).toBeInTheDocument();
     expect(screen.getByRole("row", { name: /Q1/ })).toBeInTheDocument();
+  });
+
+  it("blocks the entire batch and links the failed question before writing", async () => {
+    extraIssues.push({ issue_id: "failed", field: "stem", code: "parse_anomaly", severity: "blocking", status: "open" });
+    renderPage("/tasks/task-1/questions");
+    await userEvent.click(screen.getByRole("button", { name: "全部确认" }));
+    expect(screen.getByRole("alertdialog")).toBeInTheDocument();
+    expect(mutateAsync).not.toHaveBeenCalled();
+    expect(screen.getByRole("button", {name: "前往问题位置"})).toBeEnabled();
   });
 
   it("shows each maximum score and the total while flagging defaults", () => {

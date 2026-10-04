@@ -83,6 +83,65 @@ async def test_text_bypasses_vision_even_when_route_is_ocr_only():
 
 
 @pytest.mark.asyncio
+async def test_text_only_pdf_keeps_all_native_pages_for_compound_question_targets(tmp_path, monkeypatch):
+    _agent, request, _data, results = setup(tmp_path)
+    provider, _engine = llm()
+    provider.supports_vision = False
+    monkeypatch.setattr(question_sources, "get_storage", lambda: results.store.storage)
+    data = pdf(["Chapter 1. Section 1. Exercise 5. First target. " * 8,
+                "Exercise 31. Later target on another page. " * 8])
+    result = await question_sources.read_question_source(
+        owner_id=request.source.owner_id, task_id=request.source.business_id,
+        content=data, filename="native.pdf", options={"targets": ["1.1.5", "1.1.31"]},
+        route=StageProviderRoute(route_id=provider.provider_id, kind="llm", provider=provider), registry=None,
+    )
+    assert "First target" in result.text and "Later target" in result.text
+    assert result.recognition["coverage"]["processed_pages"] == [1, 2]
+    assert result.recognition["usage"]["initial_calls"] == 0
+    provider.ainvoke_vision.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_text_only_mixed_pdf_keeps_native_text_and_marks_missing_scan(tmp_path, monkeypatch):
+    _agent, request, _data, results = setup(tmp_path)
+    provider, _engine = llm()
+    provider.supports_vision = False
+    monkeypatch.setattr(question_sources, "get_storage", lambda: results.store.storage)
+    args = dict(owner_id=request.source.owner_id, task_id=request.source.business_id,
+                filename="mixed.pdf", route=StageProviderRoute(route_id=provider.provider_id, kind="llm", provider=provider),
+                registry=None)
+    result = await question_sources.read_question_source(
+        **args, content=pdf(["Exercise 1. Explain the stated property in words.", None]),
+    )
+    assert "Exercise 1" in result.text
+    assert result.recognition["coverage"]["failed_pages"] == [2]
+    assert question_sources.recognition_needs_review(result.recognition)
+    with pytest.raises(RecognitionError, match="provider_vision_not_supported"):
+        await question_sources.read_question_source(**args, content=pdf([None]))
+    provider.ainvoke_vision.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_rejected_visual_locator_falls_back_to_all_native_math_pages(tmp_path, monkeypatch):
+    from backend.llm.providers import ProviderRequestError
+    _agent, request, _data, results = setup(tmp_path)
+    provider, _engine = llm()
+    provider.ainvoke_vision.side_effect = ProviderRequestError("provider_vision_not_supported", status_code=400)
+    registry = SimpleNamespace(list_configs=lambda: [dict(provider_id=provider.provider_id, enabled=True, model="fixture")])
+    monkeypatch.setattr(question_sources, "get_storage", lambda: results.store.storage)
+    data = pdf(["First target: x = y + z; a < b; c > d; f(x) = x * x / 2.",
+                "Later target: x = y + z; a < b; c > d; f(x) = x * x / 3."])
+    result = await question_sources.read_question_source(
+        owner_id=request.source.owner_id, task_id=request.source.business_id,
+        content=data, filename="math.pdf", options={"targets": ["1.1.5", "1.1.31"]},
+        route=StageProviderRoute(route_id=provider.provider_id, kind="llm", provider=provider), registry=registry,
+    )
+    assert "First target" in result.text and "Later target" in result.text
+    assert result.recognition["coverage"]["processed_pages"] == [1, 2]
+    provider.ainvoke_vision.assert_awaited_once()
+
+
+@pytest.mark.asyncio
 async def test_unauthorized_visual_source_rejected_before_model(tmp_path, monkeypatch):
     _agent, request, data, results = setup(tmp_path)
     provider, _ = llm(text="should not run")

@@ -271,12 +271,13 @@ export function useStartGrading() {
   const queryClient = useQueryClient();
 
   return useMutation({
-    mutationFn: ({ taskId, multiSampleN, expectedWorkflowRevision, requestId }: {
+    mutationFn: ({ taskId, multiSampleN, expectedWorkflowRevision, requestId, retryScope }: {
       taskId: string;
       multiSampleN?: number | null;
       expectedWorkflowRevision: number;
       requestId?: string;
-    }) => tasksApi.startGrading(taskId, { multiSampleN, expectedWorkflowRevision, requestId }),
+      retryScope?: "full_batch" | "failed_only";
+    }) => tasksApi.startGrading(taskId, { multiSampleN, expectedWorkflowRevision, requestId, retryScope }),
     onSuccess: (data, variables) => {
       if (data.status === "started" || data.status === "already_running") {
         const activeTaskPatch = {
@@ -306,6 +307,7 @@ export function useUpdateProblem() {
       criterion?: string;
       max_score?: number;
       review_status?: "needs_review" | "edited" | "confirmed";
+      review_fields?: import("@/types").PreparationIssue["field"][];
       reference_answer?: string | null;
       solution_code?: string | null;
       test_cases?: import("@/types").TestCase[] | null;

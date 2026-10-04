@@ -55,7 +55,7 @@ type AddProblemsRouteState = Record<string, never>;
 
 type PreparationFailure = {
   error: unknown;
-  phase: "source_preflight" | "question_preparation";
+  phase: "source_upload" | "question_preparation";
   sourceId?: string;
   sourceRole?: PreparationSourceRole;
 };
@@ -200,7 +200,7 @@ function AddProblemsForm({ taskQuery, submittedInput }: { taskQuery: ReturnType<
     if (taskQuery.data.error === "provider_submit_uncertain" && !window.confirm(tx(locale, "上次请求可能已计费。确认按当前配置重新提交？可能再次消耗额度。", "The previous request may have been billed. Submit with current settings? This may incur another charge."))) return;
     submitting.current = true;
     let activeSource: SourceDraft | undefined;
-    let phase: PreparationFailure["phase"] = "source_preflight";
+    let phase: PreparationFailure["phase"] = "source_upload";
     try {
       const tokens: string[] = [];
       for (let index = 0; index < configuredSources.length; index += 1) {
@@ -210,7 +210,7 @@ function AddProblemsForm({ taskQuery, submittedInput }: { taskQuery: ReturnType<
           tokens.push(source.prepared.operationId);
           continue;
         }
-        setBusyLabel(tx(locale, `正在检查资料 ${index + 1}/${configuredSources.length}`, `Checking source ${index + 1}/${configuredSources.length}`));
+        setBusyLabel(tx(locale, `正在上传资料 ${index + 1}/${configuredSources.length}`, `Uploading source ${index + 1}/${configuredSources.length}`));
         const result = await preflight.mutateAsync({
           taskId,
           role: source.role,
@@ -326,7 +326,7 @@ function AddProblemsForm({ taskQuery, submittedInput }: { taskQuery: ReturnType<
       </h1>
       <NewTaskStepper currentStep={1} reachableStep={hasRecognizedProblems ? 2 : 1} returnState={routeState} />
 
-      <div className="mx-auto mt-6 w-full max-w-[940px]">
+      <div data-draft-width="940" className="mx-auto mt-6 w-full max-w-[940px]">
         {taskQuery.data?.status === "error" && taskQuery.data.last_failed_job_id === taskQuery.data.extract_job_id && taskQuery.data.last_failed_job_id ? (
           <div role="status" className="mb-5 flex flex-wrap items-center justify-between gap-3 border-l-4 border-primary bg-muted px-4 py-3 text-sm">
             <p>{tx(locale, "上次题目准备未完成，已上传资料仍保留。", "The previous preparation did not finish. Your uploaded materials are preserved.")}</p>
@@ -438,8 +438,8 @@ function AddProblemsForm({ taskQuery, submittedInput }: { taskQuery: ReturnType<
           label={tx(locale, "题目识别模型", "Question recognition model")}
           hint={tx(
             locale,
-            "已自动选择默认模型；有多个模型时可在这里改选。图片或扫描版 PDF 需要支持图片/视觉输入的模型，未验证不影响正常尝试；图片能力可在模型配置页独立验证。",
-            "Your default model is selected automatically; choose another here when needed. Images and scanned PDFs require a model that supports image input; Unverified models can still be tried; verify image capability separately in model settings.",
+            "可直接开始识别，无需先做图片测试。图片与扫描件需要模型支持图片输入。",
+            "Start recognition without an image test. Images and scans need image input support.",
           )}
           experts={enabledExperts}
           value={recognitionProviderId}
@@ -466,9 +466,6 @@ function AddProblemsForm({ taskQuery, submittedInput }: { taskQuery: ReturnType<
                     : `${enabledExperts.length} models are enabled. Missing reference answers and rubrics will be generated.`,
                 )
                 : tx(locale, "尚未启用模型；点击主按钮可查看原因并前往 BYOK。", "No model is enabled. Use the main button to open BYOK guidance.")}
-            </p>
-            <p className="mt-1 text-[11px] leading-4 text-muted-foreground">
-              {tx(locale, "PDF、TXT 与 Markdown 可直接读取；图片和扫描版 PDF 需要所选模型支持视觉输入，若不支持会明确提示并保留原文件供改选后重试。", "PDF, TXT, and Markdown are read directly. Images and scanned PDFs require visual input support; if the selected model rejects them, the original file is kept so you can switch models and retry.")}
             </p>
           </div>
           <button
@@ -718,8 +715,8 @@ function SourceEditor({
               <input placeholder={tx(locale, "如 1.1.5, 1.2.3", "e.g. 1.1.5, 1.2.3")} value={source.recognitionTargets ?? ""} disabled={disabled} maxLength={600} onChange={(event) => onUpdate({ recognitionTargets: event.target.value })} className="h-9 min-w-0 rounded-[7px] border bg-card px-3 text-sm font-normal text-foreground" />
             </label>
             <p className="col-span-2 text-xs leading-5 text-muted-foreground">{tx(locale,
-              "三项均可留空：默认提取整份文件中的所有习题，长文件自动分批处理。只填题号则在文件中定位指定题目，页码用于帮助定位；只填页码则提取这些页中的全部习题。补充说明不必重复题号。目录、讲解、例题解答不会作为独立题目。",
-              "All three fields are optional: blank means all exercises, with long files processed in batches. Question IDs select specific exercises; pages help locate them. Pages alone select all exercises on those pages. Additional instructions need not repeat IDs. Contents, explanations and worked solutions are not separate questions.")}</p>
+              "留空提取全部习题；填写页码或题号可缩小范围。补充说明中的题号也会用于定位。",
+              "Leave blank for all exercises, or enter pages or question IDs to narrow the scope. IDs in additional instructions also guide selection.")}</p>
           </div>
         ) : null}
         {source.sourceMode === "upload" ? (

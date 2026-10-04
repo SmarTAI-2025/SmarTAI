@@ -1,3 +1,5 @@
+import { ReviewConfirmButton, ReviewBlockDialog } from "@/components/tasks/ReviewConfirmation";
+import { submissionReviewBlockers, answerReviewBlocked, type ReviewBlocker } from "@/lib/reviewConfirmation";
 import { DraftField, type DraftFieldHandle } from "@/components/ui/DraftField";
 import { useDraftProtection } from "@/hooks/useDraftProtection";
 import { useDraftLeave } from "@/hooks/useDraftLeave";
@@ -87,6 +89,7 @@ const STATUS_KEYS: Record<SubmissionAnswerState, MessageKey> = {
 /** Merged S04/S05: one selected student with all questions in one continuous review. */
 export function StudentAnswerReviewPage() { const { taskId, studentId } = useParams(); return <StudentAnswerReviewForm key={`${taskId}:${studentId}`} />; }
 function StudentAnswerReviewForm() {
+  const [blocked, setBlocked] = useState<ReviewBlocker[]>([]);
   const { taskId, studentId } = useParams();
   const [searchParams, setSearchParams] = useSearchParams();
   const navigate = useNavigate();
@@ -397,7 +400,10 @@ function StudentAnswerReviewForm() {
   }
 
   async function confirmAnswer(question: SubmissionQuestion) {
-    if (!taskId || !student || !taskQuery.data || readOnly || mutationLock.current) return;
+    const issues = submissionReviewBlockers(taskQuery.data, locale, student?.stu_id);
+    if (issues.length) { setBlocked(issues); return; }
+    if (dirtyQuestionIds.has(question.id)) { setBatchMessage(tx(locale, "请先保存修改。", "Save your changes first.")); return; }
+    if (!taskId || !student || !taskQuery.data || mutationLock.current) return;
     if (answerDrafts.current.get(question.id)?.conflict) return;
     mutationLock.current = true;
     setSavingQuestionId(question.id);
@@ -425,7 +431,9 @@ function StudentAnswerReviewForm() {
   }
 
   async function confirmAllAnswers() {
-    if (!taskId || !student || !taskQuery.data || readOnly || mutationLock.current) return;
+    const issues = submissionReviewBlockers(taskQuery.data, locale, student?.stu_id);
+    if (issues.length) { setBlocked(issues); return; }
+    if (!taskId || !student || !taskQuery.data || mutationLock.current) return;
     if (dirtyQuestionIds.size) {
       setBatchMessage(tx(locale, "请先保存正在修改的作答，再确认全部复核。", "Save your edited answers before confirming all responses."));
       scrollToQuestion([...dirtyQuestionIds][0]);
@@ -481,7 +489,7 @@ function StudentAnswerReviewForm() {
   }
 
   async function saveIdentity(unchanged = false) {
-    if (!taskId || !student || !taskQuery.data || readOnly || mutationLock.current) return;
+    if (!taskId || !student || !taskQuery.data || (readOnly && !unchanged) || mutationLock.current) return;
     const nextId = unchanged ? student.stu_id : identityId.trim();
     const nextName = unchanged ? student.stu_name : identityName.trim();
     if (!nextId || !nextName) {
@@ -537,11 +545,12 @@ function StudentAnswerReviewForm() {
           {t("answerReviewBackMatrix")}
         </Link>
       </div>
+      <ReviewBlockDialog locale={locale} issues={blocked} onClose={() => setBlocked([])} />
       <NewTaskStepper currentStep={4} />
 
       {readOnly ? (
         <div className="mt-4 rounded-[9px] border bg-card px-4 py-3 text-[12px] leading-5 text-muted-foreground">
-          {tx(locale, "当前为已进入后续阶段的历史回看；学生身份与识别作答保持只读。", "This task has moved to a later stage. Student identity and recognized responses are read-only here.")}
+          {tx(locale, "当前为历史回看；身份与作答内容只读，仍可确认核对结果。", "Historical view: identity and response content are read-only; you can still confirm your review.")}
         </div>
       ) : null}
 
@@ -574,9 +583,9 @@ function StudentAnswerReviewForm() {
             />
             <ReviewMetric
               label={t("studentSubmissionMetricReview")}
-              value={String(questions.filter((question) => !["recognized", "reviewed"].includes(getAnswerState(answers.get(question.id)))).length)}
+              value={String(questions.filter((question) => getAnswerState(answers.get(question.id)) !== "reviewed").length)}
               detail={t("studentSubmissionMetricQuestions")}
-              tone={questions.some((question) => !["recognized", "reviewed"].includes(getAnswerState(answers.get(question.id)))) ? "danger" : "accent"}
+              tone={questions.some((question) => getAnswerState(answers.get(question.id)) !== "reviewed") ? "danger" : "accent"}
             />
             <ReviewMetric
               label={t("studentSubmissionMetricSource")}
@@ -647,10 +656,10 @@ function StudentAnswerReviewForm() {
             className="mt-3"
           >
           <div className="min-w-0">
-          {!readOnly && student.identity_status === "needs_review" && !identityOpen ? (
+          {student.identity_status && !identityOpen ? (
             <div className="mb-3 flex flex-wrap items-center justify-between gap-3 rounded-[10px] border border-amber-200 bg-card p-4">
               <p className="text-sm">{tx(locale, "请核对姓名与学号；无误时可直接确认。", "Check the student name and ID, then confirm if correct.")}</p>
-              <Button type="button" disabled={mutationBusy} onClick={() => void saveIdentity(true)}><Check className="h-4 w-4" />{tx(locale, "确认身份已复核", "Confirm identity reviewed")}</Button>
+              <ReviewConfirmButton locale={locale} title={tx(locale, "确认身份", "Confirm identity")} confirmed={student.identity_status !== "needs_review"} busy={mutationBusy} onClick={() => void saveIdentity(true)} />
               {identityError ? <p role="alert" className="w-full text-xs text-danger">{identityError}</p> : null}
             </div>
           ) : null}
@@ -685,7 +694,7 @@ function StudentAnswerReviewForm() {
                 </label>
                 <Button type="submit" className="h-10 px-5" disabled={mutationBusy}>
                   {identityMutation.isPending ? <LoaderCircle aria-hidden="true" className="h-4 w-4 animate-spin" /> : <Check aria-hidden="true" className="h-4 w-4" />}
-                  {identityMutation.isPending ? t("studentSubmissionIdentitySaving") : identityDirty ? tx(locale, "保存并确认身份", "Save and confirm identity") : tx(locale, "确认身份已复核", "Confirm identity reviewed")}
+                  {identityMutation.isPending ? t("studentSubmissionIdentitySaving") : identityDirty ? tx(locale, "保存并确认身份", "Save and confirm identity") : tx(locale, "确认身份", "Confirm identity")}
                 </Button>
               </div>
               {identityError ? <p className="mt-2 text-xs font-medium text-danger" role="alert">{identityError}</p> : null}
@@ -696,7 +705,7 @@ function StudentAnswerReviewForm() {
             <div>
               <SmartPicker
                 label={tx(locale, "Ask SmarTAI：当前学生的作答", "Ask SmarTAI: this student’s answers")}
-                placeholder={tx(locale, "找出缺答或待复核题目，或按题号降序", "Find missing answers, or reverse the question order")}
+                placeholder={tx(locale, "找出缺答或待确认题目，或按题号降序", "Find missing answers, or reverse the question order")}
                 query={questionFilterParam}
                 matches={questionMatches}
                 currentId={activeQuestion?.id ?? ""}
@@ -742,7 +751,7 @@ function StudentAnswerReviewForm() {
                         <span className="truncate" title={tx(locale, `第 ${question.label} 题`, problemLabel({ q_id: question.id, number: question.label }))}>{tx(locale, `第 ${question.label} 题`, problemLabel({ q_id: question.id, number: question.label }))}</span>
                         <span className={cn(
                           "ml-1 h-2 w-2 shrink-0 rounded-full",
-                          active ? "bg-white" : state === "recognized" ? "bg-emerald-500" : state === "reviewed" ? "bg-blue-500" : state === "flagged" ? "bg-amber-500" : "bg-red-500",
+                          active ? "bg-white" : state === "recognized" ? "bg-amber-500" : state === "reviewed" ? "bg-emerald-500" : state === "flagged" ? "bg-amber-500" : "bg-red-500",
                         )} />
                       </button>
                     );
@@ -796,10 +805,7 @@ function StudentAnswerReviewForm() {
           )}
 
           <div className="mt-6 flex flex-col-reverse gap-2 pb-8 sm:flex-row sm:items-center sm:justify-end">
-            {!readOnly ? <Button type="button" className="h-10" disabled={mutationBusy || pendingAnswers.length === 0} onClick={() => void confirmAllAnswers()}>
-              <CheckCircle2 className="h-4 w-4" />
-              {batchProgress !== null ? tx(locale, `正在确认 ${batchProgress}/${batchTotal}`, `Confirming ${batchProgress}/${batchTotal}`) : tx(locale, "一键确认本学生全部作答", "Confirm all this student's answers")}
-            </Button> : null}
+            <ReviewConfirmButton locale={locale} all confirmed={pendingAnswers.length === 0} busy={mutationBusy} onClick={() => void confirmAllAnswers()} />
             <Link
               to={backHref}
               onClick={(event) => { if (!confirmLeave()) event.preventDefault(); }}
@@ -962,19 +968,7 @@ function AnswerReviewCard({ question, answer, draft, sourceFilename, previous, n
           <div className="flex flex-wrap items-center gap-2">
             <h2 className="text-[20px] font-bold text-foreground">{tx(locale, `第 ${question.label} 题`, `Question ${question.label}`)}</h2>
             <span className="rounded-full bg-slate-100 px-2.5 py-1 text-[11px] font-semibold text-muted-foreground dark:bg-slate-800">{question.type || t("studentSubmissionUnknownType")}</span>
-            <AnswerStateBadge state={state} answer={answer} locale={locale} t={t} />
-            {!readOnly && !editing && answer && state !== "reviewed" ? (
-              <Button
-                type="button"
-                variant="secondary"
-                className="h-7 border-amber-200 bg-amber-50 px-3 text-[11px] font-semibold text-amber-700 hover:bg-amber-100 dark:border-amber-900 dark:bg-amber-950/30 dark:text-amber-200"
-                disabled={saving}
-                onClick={onConfirm}
-              >
-                {saving ? <LoaderCircle aria-hidden="true" className="h-3.5 w-3.5 animate-spin" /> : <Check aria-hidden="true" className="h-3.5 w-3.5" />}
-                {t(saving ? "answerReviewConfirming" : "answerReviewConfirm")}
-              </Button>
-            ) : null}
+            {answer ? <ReviewConfirmButton title={question.label} compact locale={locale} confirmed={state === "reviewed"} blocked={answerReviewBlocked(answer)} busy={saving} disabled={editing} onClick={onConfirm} /> : <AnswerStateBadge state={state} answer={answer} locale={locale} t={t} />}
           </div>
           <p className="mt-1 text-[11px] text-muted-foreground">{tx(locale, "题目与学生作答在同一卡片内连续校对；题目只读。", "Review the read-only question and student response together in this card.")}</p>
         </div>
@@ -1029,7 +1023,7 @@ function AnswerReviewCard({ question, answer, draft, sourceFilename, previous, n
                 </Button>
                 <Button type="button" variant="secondary" className="h-9 px-4" disabled={saving} onClick={() => onSave(false)}>
                   {saving ? <LoaderCircle aria-hidden="true" className="h-4 w-4 animate-spin" /> : <Save aria-hidden="true" className="h-4 w-4" />}
-                  {saving ? t("answerReviewSaving") : tx(locale, dirty ? "保存并确认复核" : "确认已复核", dirty ? "Save and confirm reviewed" : "Confirm reviewed")}
+                  {saving ? t("answerReviewSaving") : tx(locale, dirty ? "保存并确认" : "待确认", dirty ? "Save and confirm" : "Confirm review")}
                 </Button>
                 {next ? <Button type="button" className="h-9 px-4" disabled={saving} onClick={() => onSave(true)}>
                   <CheckCircle2 aria-hidden="true" className="h-4 w-4" />
@@ -1051,6 +1045,7 @@ function AnswerReviewCard({ question, answer, draft, sourceFilename, previous, n
 
         {saveError ? <p className="mt-3 rounded-[8px] border border-red-200 bg-red-50 px-4 py-2.5 text-xs font-medium text-red-700" role="alert">{saveError}</p> : null}
       </div>
+      {answer ? <footer className="flex justify-end border-t p-4"><ReviewConfirmButton title={question.label} locale={locale} confirmed={state === "reviewed"} blocked={answerReviewBlocked(answer)} busy={saving} disabled={editing} onClick={onConfirm} /></footer> : null}
     </article>
   );
 }

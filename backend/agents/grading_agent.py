@@ -384,6 +384,7 @@ async def _grade_single_answer(
 
 
 async def grade_batch(
+    question_ids_by_student: dict[str, set[str]] | None = None,
     *,
     student_store: Dict[str, Dict[str, Any]],
     problem_store: Dict[str, Dict[str, Any]],
@@ -416,8 +417,12 @@ async def grade_batch(
 
     tasks = [
         grade_student(
-            student_data=sd,
-            problem_store=problem_store,
+            student_data=sd if question_ids_by_student is None else {
+                **sd, "stu_ans": [answer for answer in sd.get("stu_ans", [])
+                                  if answer.get("q_id") in question_ids_by_student.get(sd["stu_id"], set())],
+            },
+            problem_store={qid: problem for qid, problem in problem_store.items()
+                           if question_ids_by_student is None or qid in question_ids_by_student.get(sd["stu_id"], set())},
             registry=registry,
             reporter=reporter,
             language=language,
@@ -427,7 +432,7 @@ async def grade_batch(
             grading_setup=grading_setup,
         )
         for sd in student_store.values()
-        if sd.get("stu_id")
+        if sd.get("stu_id") and (question_ids_by_student is None or question_ids_by_student.get(sd["stu_id"]))
     ]
 
     results = await asyncio.gather(*tasks, return_exceptions=True)

@@ -21,7 +21,7 @@ from backend.agents.recognition_agent import RecognitionReadRequestV1
 from backend.domain.errors import RecognitionError
 from backend.progress.tracker import ProgressReporter
 from backend.recognition.local_cache import RecognitionByteCache
-from backend.recognition.models import EvidenceModel, RecognitionSourceRefV1
+from backend.recognition.models import EvidenceModel, RecognitionSourceRefV1, RecognitionPolicyV1
 from backend.recognition.runtime import RecognitionCapacity
 from backend.services.recognition_artifacts import RecognitionArtifactStore
 from backend.services.recognition_runs import RecognitionRunService
@@ -96,6 +96,12 @@ def question_recognition_options(value=None, *, extraction_hint=""):
                    else QuestionRecognitionOptionsV1.model_validate(value or {}))
     except (ValidationError, ValueError, TypeError):
         raise RecognitionError("recognition_request_invalid") from None
+    # Earlier upload forms only offered a free-text hint. A hint consisting
+    # entirely of hierarchical IDs is an explicit target list too; otherwise
+    # we would OCR unrelated pages before applying the teacher's selection.
+    if not options.targets and re.fullmatch(r"\s*\d+(?:\.\d+){2,}(?:\s*[,，;；、\s]\s*\d+(?:\.\d+){2,})*\s*", extraction_hint):
+        targets = list(dict.fromkeys(re.findall(r"\d+(?:\.\d+){2,}", extraction_hint)))
+        options = _update_options(options, targets=targets)
     # Only explicit hierarchical question IDs are inferred; ordinary prose,
     # decimal quantities and arbitrary integers must not choose source pages.
     explicit = re.search(r"(?:题号|question\s+numbers?|exercises?)\s*[:：]?\s*([0-9.,，\s\-–]+)", extraction_hint, re.I)
@@ -116,7 +122,7 @@ def question_recognition_options(value=None, *, extraction_hint=""):
                 raise RecognitionError("recognition_request_invalid")
         options = _update_options(options, targets=list(dict.fromkeys(targets)))
     if not options.targets and re.search(r"题|exercise|question", extraction_hint, re.I):
-        targets = list(dict.fromkeys(re.findall(r"(?<![\w.])\d+(?:\.\d+){2,}(?![\w.])", extraction_hint)))
+        targets = list(dict.fromkeys(re.findall(r"(?<![\d.])\d+(?:\.\d+){2,}(?![\d.])", extraction_hint)))
         options = _update_options(options, targets=targets)
     if not options.pages:
         match = re.search(r"(?:页码|pages?)\s*[:：]?\s*([0-9 ,，\-]+)", extraction_hint, re.I)
@@ -189,21 +195,52 @@ async def read_question_source(*, owner_id, task_id, content, filename, content_
         targets=scope.targets if locate_targets else [], pages=[] if locate_targets else scope.pages,
         page_hints={target: scope.pages for target in scope.targets} if locate_targets and scope.pages else {},
         search_start_page=scope.search_start_page, search_window_pages=scope.search_window_pages,
+        policy=RecognitionPolicyV1(allow_native_fallback=allow_vision),
     )
     async with recognition_engine(owner_id=owner_id, route=route if allow_vision else None, registry=registry) as engine:
         if media_type.startswith("image/") and engine is None:
             raise RecognitionError("provider_vision_not_supported" if route.provider is not None else "visual_capability_unavailable")
         service = RecognitionRunService(store=RecognitionArtifactStore(get_storage()), capacity=recognition_capacity(),
                                         cache=_CACHE, progress=reporter)
-        if total_pages is not None and not locate_targets:
+        async def read_native_question_pdf():
+            # A visual locator cannot establish that a target is absent when
+            # images are unsupported. Read the bounded native page range and
+            # let the normal structure extractor apply the teacher's targets.
+            native_request = request.model_copy(update={
+                "scope": "pages" if scope.pages else "document", "pages": scope.pages,
+                "targets": [], "page_hints": {},
+            })
             text, summary = await read_question_pdf_batches(
-                service=service, request=request, content=content, engine=engine,
-                total_pages=total_pages, reporter=reporter, binding=binding,
+                service=service, request=native_request, content=content, engine=None,
+                total_pages=total_pages, reporter=reporter, binding=binding, allow_native_partial=True,
             )
+            return QuestionSourceRead(text, summary, stored_file_id)
+
+        if total_pages is not None and engine is None and allow_vision and route.provider is not None:
+            return await read_native_question_pdf()
+        if total_pages is not None and not locate_targets:
+            try:
+                text, summary = await read_question_pdf_batches(
+                    service=service, request=request, content=content, engine=engine,
+                    total_pages=total_pages, reporter=reporter, binding=binding,
+                )
+            except RecognitionError as exc:
+                if exc.code != "provider_vision_not_supported" or not allow_vision or engine is None:
+                    raise
+                # An actual image rejection says nothing about native PDF text.
+                # Replan without vision; no second provider request is made.
+                return await read_native_question_pdf()
             return QuestionSourceRead(text, summary, stored_file_id)
         run = await service.run(
             request, content, engine=engine, prompt_version=PROMPT_VERSION, authorized_owner_id=owner_id, binding=binding,
         )
+        if media_type == "application/pdf" and allow_vision and engine is not None and run.safe_error_code == "provider_vision_not_supported":
+            if total_pages is not None:
+                return await read_native_question_pdf()
+            run = await service.run(
+                request, content, engine=None, prompt_version=PROMPT_VERSION,
+                authorized_owner_id=owner_id, binding=binding,
+            )
     if run.status == "already_running":
         raise RecognitionError("recognition_already_running")
     assembly = run.assembly

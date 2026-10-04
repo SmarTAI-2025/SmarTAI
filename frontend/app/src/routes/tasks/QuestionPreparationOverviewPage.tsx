@@ -1,3 +1,4 @@
+import { ReviewConfirmButton, ReviewBlockDialog, reviewActionClass } from "@/components/tasks/ReviewConfirmation";
 import { groundedRows, hasGroundedOrder } from "@/lib/groundedAsk";
 import { SortButton as HeaderSortButton, SortableTableHead, useColumnSort, sortColumnRows, directionFor, type ColumnSort } from "@/components/ui/SortableTableHead";
 import { CheckCircle2, ChevronRight, Filter, X } from "lucide-react";
@@ -35,7 +36,7 @@ export function QuestionPreparationOverviewPage() {
   const [searchParams, setSearchParams] = useSearchParams();
   const { locale } = useI18n();
   const taskQuery = useTask(taskId);
-  const { confirm, confirming, updateProblem, failure } = useQuestionReview(taskId ?? "", taskQuery.data?.workflow_revision);
+  const { confirm, confirming, updateProblem, failure, blocked, clearBlocked } = useQuestionReview(taskId ?? "", taskQuery.data?.workflow_revision);
   const urlQuery = searchParams.get("q") ?? "";
   const query = urlQuery;
   const problems = useMemo(
@@ -84,6 +85,7 @@ export function QuestionPreparationOverviewPage() {
       <h1 className="text-[30px] font-bold leading-9 tracking-[-0.02em] text-foreground">
         {tx(locale, "题目资料总览", "Question Material Overview")}
       </h1>
+      <ReviewBlockDialog locale={locale} issues={blocked} onClose={clearBlocked} />
       <NewTaskStepper currentStep={2} />
 
       <section className="mt-[22px]" aria-labelledby="risk-matrix-title">
@@ -121,10 +123,6 @@ export function QuestionPreparationOverviewPage() {
               sortKey={preserveGroundedOrder ? undefined : sortKey}
               sortDirection={sortDirection}
               onSort={toggleSort}
-              confirming={confirming || updateProblem.isPending}
-              onConfirm={async (selected) => {
-                if (await confirm(selected)) toast.success(tx(locale, "题目资料已确认复核。", "Question materials marked as reviewed."));
-              }}
             />
           ) : <MatrixEmpty filtered={Boolean(query)} locale={locale} />}
           <footer className="flex min-h-[58px] flex-col gap-2 border-t px-4 py-2.5 sm:flex-row sm:items-center sm:justify-between xl:px-5">
@@ -133,23 +131,22 @@ export function QuestionPreparationOverviewPage() {
               : `Showing ${rows.length} of ${problems.length} ${problems.length === 1 ? "question" : "questions"} · ${formatScore(totalMaxScore)} total points · ${allRisks.length} open ${allRisks.length === 1 ? "risk" : "risks"}`}</p>
             {taskId && firstQuestionId ? (
               <div className="flex flex-wrap items-center gap-2">
-              <button type="button" disabled={confirming || updateProblem.isPending} onClick={async () => {
-                if (await confirm(rows.map((row) => row.problem))) toast.success(tx(locale, "题目资料已确认复核。", "Question materials marked as reviewed."));
-              }} className="inline-flex min-h-9 items-center justify-center gap-1.5 rounded-[7px] border px-4 py-2 text-sm font-semibold text-primary disabled:opacity-50">
+              <button type="button" disabled={confirming || updateProblem.isPending || rows.every(row => row.problem.review_status === "confirmed")} onClick={async () => {
+                if (await confirm(rows.map((row) => row.problem))) toast.success(tx(locale, "题目资料已确认。", "Question materials confirmed."));
+              }} className={cn(reviewActionClass, rows.every(row => row.problem.review_status === "confirmed") ? "bg-emerald-100 text-emerald-800 disabled:opacity-100" : "border-amber-200 bg-amber-100 text-amber-800")}>
                 <CheckCircle2 aria-hidden="true" className="h-4 w-4" />
-                {rows.length === problems.length ? tx(locale, "一键确认全部题目已复核", "Confirm All Questions Reviewed") : tx(locale, `确认当前 ${rows.length} 道题已复核`, `Confirm ${rows.length} Shown Questions Reviewed`)}
+                {rows.every(row => row.problem.review_status === "confirmed") ? tx(locale, "已确认", "Confirmed") : rows.length === problems.length ? tx(locale, "全部确认", "Confirm all") : tx(locale, `确认筛选项（${rows.length}）`, `Confirm shown (${rows.length})`)}
               </button>
-              <Link to={`/tasks/${taskId}/questions/${encodeURIComponent(firstQuestionId)}/content`} className="inline-flex h-9 items-center justify-center gap-1.5 rounded-[7px] bg-primary px-4 text-sm font-semibold text-primary-foreground outline-none hover:opacity-90 focus-visible:ring-2 focus-visible:ring-ring">
+              <Link to={`/tasks/${taskId}/questions/${encodeURIComponent(firstQuestionId)}/content`} className={reviewActionClass}>
                 {tx(locale, "进入完整审核", "Open Full Review")}
                 <ChevronRight aria-hidden="true" className="h-4 w-4" />
               </Link>
-              </div>
-            ) : null}
-            {taskId && problems.length > 0 ? (
-              <Link to={`/tasks/${taskId}/submissions/upload`} className="inline-flex min-h-9 items-center justify-center gap-1.5 rounded-[7px] border px-4 py-2 text-sm font-semibold text-primary outline-none hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring">
+
+              <Link to={`/tasks/${taskId}/submissions/upload`} className={reviewActionClass}>
                 {tx(locale, "继续上传作答", "Continue to Upload Submissions")}
                 <ChevronRight aria-hidden="true" className="h-4 w-4" />
               </Link>
+              </div>
             ) : null}
           </footer>
         </div>
@@ -158,15 +155,13 @@ export function QuestionPreparationOverviewPage() {
   );
 }
 
-function QuestionMatrix({ rows, taskId, locale, sortKey, sortDirection, onSort, confirming, onConfirm }: {
+function QuestionMatrix({ rows, taskId, locale, sortKey, sortDirection, onSort }: {
   rows: QuestionMatrixRow[];
   taskId: string;
   locale: string;
   sortKey: MatrixSortKey | undefined;
   sortDirection: MatrixSortDirection;
   onSort: (key: MatrixSortKey) => void;
-  confirming: boolean;
-  onConfirm: (problems: ProblemInfo[]) => Promise<void>;
 }) {
   return (
     <div className="max-h-[calc(100vh-520px)] min-h-[280px] overflow-auto overscroll-contain">
@@ -200,9 +195,7 @@ function QuestionMatrix({ rows, taskId, locale, sortKey, sortDirection, onSort, 
               <td className="px-3 py-3"><MaterialStatus problem={problem} field="tests" locale={locale} /></td>
               <td className="px-3 py-3"><AttentionStatus issues={issues} locale={locale} /></td>
               <td className="px-5 py-3 text-right"><div className="flex flex-col items-end gap-2">
-                {problem.review_status === "confirmed" ? <span className="text-xs text-emerald-700">{tx(locale, "已复核", "Reviewed")}</span> : null}
-                <button type="button" disabled={confirming} onClick={() => void onConfirm([problem])} aria-label={tx(locale, `确认第 ${problem.number || problem.q_id} 题已复核`, `Confirm question ${problem.number || problem.q_id} reviewed`)} className="whitespace-nowrap text-xs font-semibold text-primary hover:underline disabled:opacity-50">{tx(locale, "确认已复核", "Confirm Reviewed")}</button>
-                <Link to={`/tasks/${taskId}/questions/${encodeURIComponent(problem.q_id)}/content#question-${encodeURIComponent(problem.q_id)}`} className="text-xs font-semibold text-primary hover:underline">{tx(locale, "审核", "Review")}</Link>
+                <Link to={`/tasks/${taskId}/questions/${encodeURIComponent(problem.q_id)}/content#question-${encodeURIComponent(problem.q_id)}`} className="text-xs font-semibold text-primary underline underline-offset-4">{tx(locale, "详情 →", "Details →")}</Link>
               </div></td>
             </tr>
           ))}
@@ -260,12 +253,12 @@ function MaxScoreStatus({ problem, locale }: { problem: ProblemInfo; locale: str
   }[source];
   return (
     <span
-      title={sourceLabel}
+      title={needsReview ? sourceLabel : tx(locale, "满分已确认", "Maximum score confirmed")}
       className={cn(
         "inline-flex min-w-[68px] items-center justify-center rounded-full px-2.5 py-1 text-xs font-semibold",
         needsReview
           ? "bg-amber-100 text-amber-700 dark:bg-amber-950/35 dark:text-amber-300"
-          : "bg-blue-50 text-primary dark:bg-blue-950/35",
+          : "bg-emerald-100 text-emerald-700 dark:bg-emerald-950/35",
       )}
     >
       {formatScore(problem.max_score ?? 10)} {tx(locale, "分", "pts")}
@@ -278,7 +271,7 @@ function AttentionStatus({ issues, locale }: { issues: PreparationIssue[]; local
     return <span className="inline-flex min-w-[88px] items-center justify-center gap-1 rounded-full bg-emerald-100 px-3 py-1 text-xs font-semibold text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-300"><CheckCircle2 aria-hidden="true" className="h-3.5 w-3.5" />{tx(locale, "状态正常", "Ready")}</span>;
   }
   const blocking = issues.some((issue) => issue.severity === "blocking");
-  return <span title={issues.map((issue) => issueCodeLabel(issue.code, locale)).join("；")} className={cn("inline-flex min-w-[88px] items-center justify-center rounded-full px-3 py-1 text-xs font-semibold", blocking ? "bg-red-100 text-red-700" : "bg-amber-100 text-amber-700")}>{tx(locale, `${issues.length} 项需核对`, `${issues.length} to review`)}</span>;
+  return <span tabIndex={0} title={issues.map((issue) => issueCodeLabel(issue.code, locale)).join("；")} className={cn("inline-flex min-w-[88px] items-center justify-center rounded-full px-3 py-1 text-xs font-semibold", blocking ? "bg-red-100 text-red-700" : "bg-amber-100 text-amber-700")}>{tx(locale, `${issues.length} 项待确认`, `${issues.length} to confirm`)}</span>;
 }
 
 function MatrixEmpty({ filtered, locale }: { filtered: boolean; locale: string }) {
@@ -296,7 +289,7 @@ function getMaterialStatus(problem: ProblemInfo, field: MaterialField, locale: s
   if (issues.length) {
     const blocking = issues.some((issue) => issue.severity === "blocking");
     return {
-      label: blocking ? tx(locale, "需处理", "Action needed") : tx(locale, "需核对", "Review"),
+      label: blocking ? tx(locale, "需处理", "Action needed") : tx(locale, "待确认", "Pending confirmation"),
       detail: issues.map((issue) => issueCodeLabel(issue.code, locale)).join("；"),
       tone: blocking ? "danger" : "warning",
     };

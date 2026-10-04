@@ -43,11 +43,11 @@ describe("interface translations", () => {
   });
 
   it("states the one-file-per-student boundary in both upload languages", () => {
-    expect(messages["zh-CN"].submissionUploadFileContract).toContain("一位学生一个文件");
-    expect(messages["zh-CN"].submissionUploadFileContract).toContain("同一 ZIP");
-    expect(messages["zh-CN"].submissionUploadFileContract).toContain("不支持从一个合并 PDF 自动拆分");
+    expect(messages["zh-CN"].submissionUploadFileContract).toContain("每位学生一份文件");
+    expect(messages["zh-CN"].submissionUploadFileContract).toContain("打包为 ZIP");
+    expect(messages["zh-CN"].submissionUploadFileContract).toContain("合并 PDF 请先按学生拆分");
     expect(messages["en-US"].submissionUploadFileContract).toContain("one file per student");
-    expect(messages["en-US"].submissionUploadFileContract).toContain("one ZIP");
-    expect(messages["en-US"].submissionUploadFileContract).toContain("does not split a combined multi-student PDF automatically");
+    expect(messages["en-US"].submissionUploadFileContract).toContain("ZIP multiple files");
+    expect(messages["en-US"].submissionUploadFileContract).toContain("Split combined PDFs by student first");
   });
 });

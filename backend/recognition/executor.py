@@ -252,7 +252,10 @@ checks here do not replace the caller's storage ACL and operation lease.
             economy_math = (plan.purpose == "knowledge" and plan.policy.version == "knowledge-economy-v1"
                             and observed.risks == ["math"] and not plan.policy.force_visual
                             and "knowledge_native_math_unverified" in decision.reason_codes)
-            if decision.action == "native" and (observed.native_quality != "clean"
+            native_fallback = (plan.policy.allow_native_fallback and engine is None
+                               and observed.native_char_count > 0
+                               and "visual_evidence_missing" in decision.reason_codes)
+            if decision.action == "native" and not native_fallback and (observed.native_quality != "clean"
                                                  or (observed.risks and not economy_math)
                                                  or plan.purpose == "submissions"):
                 raise RecognitionError("recognition_plan_changed")
@@ -324,7 +327,7 @@ checks here do not replace the caller's storage ACL and operation lease.
                 break
             if candidate.finish_reason == "refused" or "provider_refused" in candidate.warning_codes:
                 failed.update(numbers)
-                stops.append("provider_request_rejected")
+                stops.append(candidate.safe_error_code or "provider_content_blocked")
                 break
     except (RecognitionError, PdfEvidenceError) as exc:
         stops.append(exc.code)

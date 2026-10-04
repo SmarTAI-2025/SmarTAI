@@ -27,7 +27,7 @@ from tenacity import (
 )
 
 from backend.config import settings
-from backend.llm.providers import BaseProvider, LLMResponse
+from backend.llm.providers import BaseProvider, LLMResponse, ProviderRequestError
 from backend.llm.endpoint_policy import ProviderEndpointError
 
 logger = logging.getLogger(__name__)
@@ -46,6 +46,12 @@ MATH_MARKDOWN_SYSTEM_INSTRUCTION = (
 
 class StructuredOutputBoundsError(ValueError):
     """The provider returned valid JSON whose fields exceed safe bounds."""
+
+
+class StructuredOutputInvalidError(ValueError):
+    """Malformed model output, with no source content in the error message."""
+
+    code = "provider_response_invalid"
 
 
 # ─── Exceptions ──────────────────────────────────────────────────────────────
@@ -120,6 +126,8 @@ def _classify_exception(e: Exception) -> Exception:
     """
     if getattr(e, "retryable", True) is False:
         return PermanentLLMError("non_retryable_provider_limit")
+    if isinstance(e, ProviderRequestError) and e.code in {"provider_recitation_blocked", "provider_content_blocked"}:
+        return PermanentLLMError(e.code)
 
     # Endpoint safety-policy rejections (non-public address, host not allowed,
     # DNS/config policy) are deterministic configuration/environment errors:
@@ -188,7 +196,7 @@ def _classify_exception(e: Exception) -> Exception:
         return RateLimitError(msg, retry_after=_extract_retry_after(msg))
 
     # Generic transient (timeout / 5xx / connection) — retryable.
-    if any(k in lower for k in ["timeout", "connection", "5xx", "internal", "upstream_unavailable"]):
+    if any(k in lower for k in ["timeout", "timed out", "connection", "5xx", "internal", "upstream_unavailable"]):
         return TransientLLMError(msg)
 
     # Default: treat as transient (safer for flaky APIs).
@@ -673,6 +681,43 @@ def _extract_balanced_json(s: str) -> Optional[str]:
     return None
 
 
+def _normalize_markdown_json_keys(source: str) -> str:
+    """Remove presentation-only bullets/backticks from object keys.
+
+    Some models wrap JSON property names as Markdown list items. Touch only
+    keys immediately following an object opener or comma, outside string
+    values. Never alter bullets, backticks, math or code inside user content.
+    """
+    key = re.compile(r"(?:[-*][ \t]+)?(?:`([A-Za-z_][A-Za-z0-9_]*)`|([A-Za-z_][A-Za-z0-9_]*))[ \t]*:")
+    result: list[str] = []
+    in_string = escaped = False
+    previous = ""
+    index = 0
+    while index < len(source):
+        char = source[index]
+        if not in_string and previous in {"{", ","}:
+            match = key.match(source, index)
+            if match:
+                result.append(json.dumps(match.group(1) or match.group(2)) + ":")
+                index = match.end()
+                previous = ":"
+                continue
+        result.append(char)
+        if in_string:
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == '"':
+                in_string = False
+        elif char == '"':
+            in_string = True
+        if not char.isspace():
+            previous = char
+        index += 1
+    return "".join(result)
+
+
 def extract_and_parse_json(raw: str, model: Type[T]) -> T:
     """
     Robustly extract JSON from LLM text output and validate against a Pydantic model.
@@ -688,8 +733,8 @@ def extract_and_parse_json(raw: str, model: Type[T]) -> T:
     # trailing stray ``}`` the LLM appended after the real object close.
     json_str = _extract_balanced_json(cleaned)
     if json_str is None:
-        raise ValueError(f"No JSON found in LLM output. First 200 chars: {raw[:200]}")
-    json_str = _protect_json_math_escapes(json_str)
+        raise StructuredOutputInvalidError("The model returned no structured JSON result.")
+    json_str = _protect_json_math_escapes(_normalize_markdown_json_keys(json_str))
 
     # 3. Try repair attempts in escalating order. Attempt list intentionally
     # composes transforms — `latex+newlines` is the realistic LLM math case
@@ -730,9 +775,7 @@ def extract_and_parse_json(raw: str, model: Type[T]) -> T:
         raise StructuredOutputBoundsError(
             f"Structured output for {model.__name__} exceeds safe field bounds."
         ) from bounds_error
-    raise ValueError(
-        f"Could not parse LLM output as {model.__name__}. Raw output first 500 chars: {raw[:500]}"
-    )
+    raise StructuredOutputInvalidError(f"The model result does not match {model.__name__}.")
 
 
 # ─── The unified call ────────────────────────────────────────────────────────
@@ -796,7 +839,10 @@ def _retry_stop(retry_state) -> bool:
 async def _ainvoke_with_retry(provider: BaseProvider, messages: List[BaseMessage]) -> LLMResponse:
     """Inner retry wrapper — honors retry-after hints, async-native."""
     try:
-        return await provider.ainvoke(messages)
+        response = await provider.ainvoke(messages)
+        if getattr(response, "finish_reason", None) == "refused":
+            raise ProviderRequestError(getattr(response, "refusal_code", None) or "provider_content_blocked", status_code=422)
+        return response
     except Exception as e:
         raise _classify_exception(e) from e
 

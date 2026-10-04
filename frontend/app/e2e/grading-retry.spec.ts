@@ -20,13 +20,12 @@ test("partial failure → explicit same-config retry → live progress → revie
   await page.goto(`/tasks/${fixture.task_id}/review`);
   await expect(page.getByRole("heading", { name: "Some answers could not be graded" })).toBeVisible();
   await page.screenshot({ path: "output/playwright/01-partial-failed.png", fullPage: true });
-  await page.getByRole("link", { name: "Retry entire batch" }).click();
-  await expect(page.getByText(/may use model quota/)).toBeVisible();
-  await page.waitForTimeout(11_000);
-  await expect(page).toHaveURL(/\/grading\/preflight$/); // retries never auto-start
+  await expect(page.getByText(/Uses model quota only for results without valid scores/)).toBeVisible();
   const gradingResponse = page.waitForResponse((r) => r.url().endsWith(`/tasks/${fixture.task_id}/grade`) && r.request().method() === "POST");
-  await page.getByRole("button", { name: /Start (Regrading|Grading Anyway)/ }).dblclick();
-  const started = await (await gradingResponse).json();
+  await page.getByRole("button", { name: "Retry failed items", exact: true }).click();
+  const response = await gradingResponse;
+  expect(response.request().postDataJSON().retry_scope).toBe("failed_only");
+  const started = await response.json();
   expect(started.status).toBe("started");
   expect(started.job_id).not.toBe(fixture.old_run_id);
   await expect(page).toHaveURL(/\/grading\/progress$/);

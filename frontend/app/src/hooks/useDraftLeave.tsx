@@ -107,12 +107,15 @@ export function DraftActions() {
   if (!editable.length) return null;
   const dirty = editable.some((item) => item.dirty); const busy = saving || editable.some((item) => item.busy || !item.loaded);
   const savedAt = Math.max(...editable.map((item) => item.savedAt ?? 0));
-  return <section aria-label="本地草稿" className="my-5 w-full rounded-lg border bg-card p-4 text-sm">
+  return <section aria-label="本地草稿" className="my-5 w-full rounded-[10px] border bg-card px-4 py-3 text-sm">
     <div className="flex flex-wrap items-center justify-between gap-3">
       <p role="status">{dirty ? "有未暂存修改" : savedAt ? `已暂存 · ${new Date(savedAt).toLocaleString()}` : "尚未暂存"}</p>
       <div className="flex flex-wrap gap-2"><button type="button" disabled={busy} onClick={() => void save().catch(() => {})} className="rounded-md bg-primary px-4 py-2 font-semibold text-primary-foreground disabled:opacity-50">{saving ? "正在暂存…" : "暂存"}</button><button type="button" disabled={busy} onClick={() => { if (window.confirm("删除本页已暂存草稿并重置输入？正式业务结果不受影响。")) { setDeleteError(null); void Promise.all(editable.map((item) => item.remove())).catch((failure) => setDeleteError(draftError(failure))); } }} className="rounded-md border px-3 py-2">删除本页草稿</button></div>
     </div>
-    <p className="mt-2 text-xs text-muted-foreground">当前浏览器/设备本地保存 7 天，每页最多 64 MiB，总计 128 MiB / 30 份；退出、切换账号或会话失效会清理。浏览器清理数据也会丢失。</p>
+    <div className="mt-2 flex flex-wrap items-start gap-x-3 gap-y-1 text-xs text-muted-foreground">
+      <p>仅保存在此浏览器，7 天内可恢复。</p>
+      <details><summary className="cursor-pointer">保存说明</summary><p className="mt-1 max-w-lg">退出登录或清理浏览器数据会清除草稿。每页最多 64 MiB，总计 128 MiB、30 份。</p></details>
+    </div>
     {editable.map((item) => <div key={item.scope}>{item.notice ? <p role="status" className="mt-2 text-xs">{item.notice}</p> : null}{item.hasConflict ? <button type="button" onClick={item.restore} className="mt-2 rounded border px-3 py-2 text-sm">核对后恢复旧草稿</button> : null}</div>)}
     {error ? <p role="alert" className="mt-2 text-danger">{error}</p> : null}
     {deleteError ? <p role="alert" className="mt-2 text-danger">{deleteError}</p> : null}

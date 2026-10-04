@@ -404,6 +404,7 @@ def classify_skill_error(e: Exception) -> tuple[str, str]:
         )
     if (
         "timeout" in s
+        or "timed out" in s
         or "connection" in s
         or "unreachable" in s  # provider_unreachable: DNS/TCP/TLS to relay failed
         or "certificate" in s

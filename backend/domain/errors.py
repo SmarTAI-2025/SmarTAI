@@ -198,6 +198,7 @@ RECOGNITION_ERROR_CODES = frozenset({
     "shared_pool_disabled", "shared_pool_daily_limit_reached",
     "provider_permission_denied", "provider_region_unsupported", "provider_quota_exceeded", "provider_rate_limited", "provider_overloaded",
     "provider_request_failed", "provider_request_rejected", "provider_response_invalid",
+    "provider_recitation_blocked", "provider_content_blocked",
     "provider_result_too_large", "provider_result_unavailable", "provider_download_url_rejected",
     "provider_submit_uncertain", "provider_task_failed", "provider_timeout", "provider_unavailable",
     "provider_unreachable", "provider_endpoint_tls_failed", "provider_upstream_unavailable",
@@ -212,7 +213,10 @@ RECOGNITION_ERROR_CODES = frozenset({
 class RecognitionError(DomainError):
     """A safe failure; ambiguous submissions are never eligible for auto-reread."""
 
-    def __init__(self, code: str, *, submission_may_exist: bool = False):
+    def __init__(self, code: str, *, submission_may_exist: bool = False,
+                 failed_pages: list[int] | None = None, processed_pages: list[int] | None = None):
         safe_code = code if code in RECOGNITION_ERROR_CODES else "recognition_response_invalid"
         self.submission_may_exist = submission_may_exist
-        super().__init__(safe_code, code=safe_code, status_code=422)
+        page_details = {key: sorted({n for n in values if type(n) is int and 1 <= n <= 10000})[:10000]
+                        for key, values in (("failed_pages", failed_pages), ("processed_pages", processed_pages)) if values is not None}
+        super().__init__(safe_code, code=safe_code, status_code=422, details=page_details or None)

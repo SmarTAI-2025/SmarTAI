@@ -223,7 +223,7 @@ function QuestionMaterialImportPageForm() {
       {(references.blocked || preparedStatus === "unavailable") && <button type="button" className="mt-3 rounded border px-3 py-2 text-sm" onClick={() => { references.retry(); setReferenceAttempt(n => n + 1); }}>{locale === "zh-CN" ? "重试检查资料引用" : "Retry source validation"}</button>}
 
       <form
-        className="mx-auto mt-[35px] min-h-[558px] w-full max-w-[900px] rounded-[10px] border bg-card px-6 pb-6 pt-7 sm:px-[49px] sm:pb-[28px] sm:pt-[38px]"
+        data-draft-width="900" className="mx-auto mt-[35px] min-h-[558px] w-full max-w-[900px] rounded-[10px] border bg-card px-6 pb-6 pt-7 sm:px-[49px] sm:pb-[28px] sm:pt-[38px]"
         onSubmit={(event) => {
           event.preventDefault();
           void handlePrimaryAction();

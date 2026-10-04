@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useUpdateProblem } from "@/api/hooks/tasks";
-import type { ProblemInfo } from "@/types";
+import { questionReviewBlocked, type ReviewBlocker } from "@/lib/reviewConfirmation";
+import type { PreparationIssue, ProblemInfo } from "@/types";
 
 /** Share the revision between edits and sequential review confirmations. */
 export function useQuestionReview(taskId: string, workflowRevision?: number) {
@@ -8,6 +9,7 @@ export function useQuestionReview(taskId: string, workflowRevision?: number) {
   const latestRevision = useRef(workflowRevision);
   const taskRef = useRef(taskId);
   const inFlight = useRef(false);
+  const [blocked, setBlocked] = useState<ReviewBlocker[]>([]);
   const [confirming, setConfirming] = useState(false);
   const [failure, setFailure] = useState<{ problem: ProblemInfo; completed: number } | null>(null);
 
@@ -21,8 +23,13 @@ export function useQuestionReview(taskId: string, workflowRevision?: number) {
     }
   }, [taskId, workflowRevision]);
 
-  async function confirm(problems: ProblemInfo[]) {
+  async function confirm(problems: ProblemInfo[], fields?: PreparationIssue["field"][]) {
     if (inFlight.current || updateProblem.isPending) return false;
+    const blockers = problems.filter(questionReviewBlocked);
+    if (blockers.length) {
+      setBlocked(blockers.map(problem => ({ label: `${problem.number || problem.q_id} · ${problem.stem?.slice(0, 80) || "—"}`, href: `/tasks/${taskId}/questions/${encodeURIComponent(problem.q_id)}/content#question-${encodeURIComponent(problem.q_id)}` })));
+      return false;
+    }
     inFlight.current = true;
     setConfirming(true);
     setFailure(null);
@@ -35,6 +42,7 @@ export function useQuestionReview(taskId: string, workflowRevision?: number) {
             taskId, qId: problem.q_id,
             expectedWorkflowRevision,
             review_status: "confirmed",
+            ...(fields ? { review_fields: fields } : {}),
           });
           latestRevision.current = response.workflow_revision;
           expectedWorkflowRevision = response.workflow_revision;
@@ -51,5 +59,5 @@ export function useQuestionReview(taskId: string, workflowRevision?: number) {
     }
   }
 
-  return { updateProblem, latestRevision, confirming, confirm, failure };
+  return { updateProblem, latestRevision, confirming, confirm, failure, blocked, clearBlocked: () => setBlocked([]) };
 }

@@ -355,8 +355,8 @@ export function classifyRecoverableError(
       title: tx(locale, "该 OCR 服务不支持批改", "This OCR service does not support grading"),
       description: tx(
         locale,
-        "百度 Unlimited-OCR 只负责题目和作答转写，不会调用或伪装成批改模型。请返回批改设置并更换批改模型。",
-        "Baidu Unlimited-OCR only transcribes questions and submissions; it will not call or impersonate a grading model. Return to Grading Setup and choose a grading model.",
+        "百度 Unlimited-OCR 用于识别文字。请返回批改设置，选择批改模型。",
+        "Baidu Unlimited-OCR recognizes text. Return to Grading Setup and choose a grading model.",
       ),
       actionLabel: tx(locale, "更换批改模型", "Choose another grading model"),
       actionKind: "adjust_experts",
@@ -668,6 +668,24 @@ export function classifyRecoverableError(
     };
   }
 
+  if (code === "provider_recitation_blocked" || code === "provider_content_blocked") {
+    const pages = Array.isArray(detail?.failed_pages)
+      ? detail.failed_pages.filter((page): page is number => Number.isInteger(page) && page > 0 && page <= 10000).slice(0, 30)
+      : [];
+    const pageHint = pages.length ? tx(locale, `失败位置：PDF 第 ${pages.join("、")} 页。`, `Affected PDF pages: ${pages.join(", ")}. `) : "";
+    return {
+      title: code === "provider_recitation_blocked"
+        ? tx(locale, "模型停止了原文转写", "The model stopped transcribing this content")
+        : tx(locale, "模型限制了这次内容输出", "The model blocked this content output"),
+      description: pageHint + (code === "provider_recitation_blocked"
+        ? tx(locale, "服务商将输出判定为可能复述受版权保护的原文（RECITATION），因此没有返回识别结果。这不代表模型缺少图片能力。请确认题号或页码只包含所需内容，或更换识别模型后重试；原文件和填写内容仍保留。", "The provider flagged the output as possible recitation of copyrighted text (RECITATION) and returned no transcription. This does not mean the model lacks image support. Check that the target questions or pages match what you need, or change the recognition model. Your file and input are preserved.")
+        : tx(locale, "服务商已接收请求，但因内容策略停止输出。这不代表图片测试失败。请调整所需识别范围或更换模型；原文件和填写内容仍保留。", "The provider received the request but stopped output under its content policy. This is not an image-test failure. Adjust the requested scope or change models; your file and input are preserved.")),
+      actionLabel: tx(locale, "更换模型", "Change model"),
+      actionHref: `/settings/byok${returnTo ? `?returnTo=${encodeURIComponent(returnTo)}` : ""}`,
+      actionKind: "byok", tone: "warning", technicalDetails,
+    };
+  }
+
   const providerConfigurationCopy = providerConfigurationErrorCopy(code, locale);
   if (providerConfigurationCopy) {
     return {
@@ -723,7 +741,15 @@ export function classifyRecoverableError(
     };
   }
 
-  if (["target_location_needs_hint", "target_selection_limit_exceeded", "recognition_budget_exhausted", "recognition_timeout", "question_targets_incomplete"].includes(code ?? "")) {
+  if (code === "question_targets_incomplete") {
+    return {
+      title: tx(locale, "未找齐指定题目", "Some requested questions were not found"),
+      description: tx(locale, "本次读取的内容未包含全部目标题目。请核对题号，补充所在页码，或换模型重试。若原件包含扫描文字或复杂公式，建议使用支持图片识别的模型。已上传资料仍保留。", "The recognized content did not include all requested questions. Check the numbers, add page numbers, or retry with another model. Scanned text or complex formulas may need image recognition. Your uploaded sources are preserved."),
+      actionLabel: tx(locale, "检查题号与页码", "Check question and page numbers"),
+      actionKind: "retry", tone: "warning", technicalDetails,
+    };
+  }
+  if (["target_location_needs_hint", "target_selection_limit_exceeded", "recognition_budget_exhausted", "recognition_timeout"].includes(code ?? "")) {
     return {
       title: tx(locale, "本次识别范围尚未完成", "Recognition coverage is incomplete"),
       description: tx(locale, "已保存的识别结果仍然保留。请缩小页码范围或补充目标题号；系统不会自动增加付费调用。", "Saved evidence is retained. Narrow the page range or specify question numbers; no extra paid calls are started automatically."),
@@ -811,8 +837,8 @@ export function classifyRecoverableError(
       title: tx(locale, "逐文件识别结果保存未完成", "Per-file outcomes were not fully saved"),
       description: tx(
         locale,
-        "原文件已经保存，但系统无法确认每份来源的终态都已写入数据库。任务已停止，不会把缺失结果静默带入批改。请携带任务编号排查数据库后重试。",
-        "The originals were saved, but the system could not confirm every per-source terminal outcome in the database. The task stopped and will not silently grade missing results. Use the job ID to check the database, then retry.",
+        "识别结果未完整保存，任务已暂停。原文件仍保留，请重试；若再次失败，请提供任务编号联系管理员。",
+        "Some recognition results could not be saved, so the task paused. The originals are retained. Retry; if it fails again, contact an administrator with the task ID.",
       ),
       actionLabel: tx(locale, "重新尝试", "Try again"),
       actionKind: "retry",
@@ -1102,16 +1128,16 @@ function providerConfigurationErrorCopy(
       "Check the model name and base URL. Enter the relay service root, not a full operation endpoint.",
     ],
     provider_request_rejected: [
-      "模型服务拒绝了请求",
-      "The model service rejected the request",
-      "请核对模型能力与高级 API 协议；若当前步骤需要 OCR，请确认所选模型支持图片输入。",
-      "Check model capabilities and the Advanced API protocol. For OCR, confirm that the selected model accepts images.",
+      "模型接口未接受本次请求",
+      "The model API did not accept this request",
+      "服务商认为本次请求的参数或格式不符合接口要求，当前信息不足以确定具体参数。这不能证明模型不支持图片。请核对模型名称、接口地址和 API 协议，或换模型重试；原文件和填写内容仍保留。",
+      "The provider rejected the request parameters or format; the exact parameter is not known. This does not establish a lack of image support. Check the model name, endpoint and API protocol, or try another model. Your file and input are preserved.",
     ],
     provider_response_invalid: [
       "模型服务返回了无法识别的响应",
       "The model service returned an invalid response",
-      "请核对中转站文档与高级 API 协议；系统没有把异常响应当作任务结果。",
-      "Check the relay documentation and Advanced API protocol. The invalid response was not accepted as a task result.",
+      "模型返回的结果格式不符合本步骤要求，系统未将它当作成功结果。原文件和已完成步骤仍保留。请重试未完成步骤，或更换模型后继续。",
+      "The model returned a format this step could not process. It was not accepted as a successful result. Your files and completed steps are preserved. Retry the unfinished step or change models.",
     ],
     ocr_credential_not_found: [
       "所选 OCR 凭据已不存在",
@@ -1201,7 +1227,7 @@ function providerTransientErrorCopy(
   if (code === "provider_unavailable" || code === "provider_task_failed") {
     return {
       title: tx(locale, "OCR 服务暂时不可用", "The OCR service is temporarily unavailable"),
-      description: tx(locale, "原文件已保留，系统没有静默切换到其他服务。请稍后明确重试。", "The original is preserved and no alternate service was selected silently. Retry explicitly later."),
+      description: tx(locale, "原文件已保留，请稍后重试。", "The original is preserved. Please retry later."),
     };
   }
   if (code === "provider_endpoint_response_too_large") {

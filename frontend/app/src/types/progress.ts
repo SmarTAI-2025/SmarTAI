@@ -35,6 +35,7 @@ export interface JobProgress {
   active: ActiveUnit[];
   messages: ProgressEvent[];
   error_detail?: string | null;
+  recognition_failure?: { failed_pages?: number[]; processed_pages?: number[] };
   started_at?: number | null;
   workflow?: string | null;
   stage_sequence?: string[];

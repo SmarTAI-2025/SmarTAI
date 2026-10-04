@@ -288,6 +288,13 @@ def plan_recognition(
             used_pages += 1
             continue
         if mode is None:
+            if policy.allow_native_fallback and page.native_char_count > 0:
+                decisions.append(PageDecisionV1(
+                    page_number=number, action="native",
+                    reason_codes=reasons + ["visual_evidence_missing"],
+                ))
+                used_pages += 1
+                continue
             decisions.append(PageDecisionV1(
                 page_number=number, action="blocked", reason_codes=reasons + ["visual_capability_unavailable"],
             ))

@@ -289,6 +289,9 @@ class RecognitionPolicyV1(EvidenceModel):
     max_output_tokens: int = Field(default=32768, ge=1, le=32768)
     enable_repair: bool = True
     force_visual: bool = False
+    # Keep pre-existing schema-1 artifacts and cache identities byte-stable.
+    # Opting in must still produce a distinct policy/cache identity.
+    allow_native_fallback: bool = Field(default=False, exclude_if=lambda value: not value)
 
 
 class RecognitionUnalignedUnitV1(EvidenceModel):

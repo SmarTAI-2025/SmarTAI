@@ -341,7 +341,7 @@ export interface TaskResultResponse {
   task_id: string;
   grading_run_id?: string;
   grading_run_status?: "completed" | "partial_failed";
-  retry_scope?: "full_batch" | null;
+  retry_scope?: "full_batch" | "failed_only" | null;
   results?: StudentResult[];
   problem_data?: Record<string, ProblemInfo>;
   student_data?: Record<string, StudentSubmission>;

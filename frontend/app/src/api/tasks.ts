@@ -31,8 +31,8 @@ import type { SourceStorageUsage } from "@/types/sourcePreview";
 // frontend API compatibility point that should change.
 const BACKEND_COMPAT_GRADING_LANGUAGE = "en";
 
-export function buildGradePayload(options: { multiSampleN?: number | null; expectedWorkflowRevision?: number; requestId?: string } = {}) {
-  const payload: { language: string; multi_sample_n?: number; expected_workflow_revision?: number; request_id?: string } = {
+export function buildGradePayload(options: { multiSampleN?: number | null; expectedWorkflowRevision?: number; requestId?: string; retryScope?: "full_batch" | "failed_only" } = {}) {
+  const payload: { language: string; multi_sample_n?: number; expected_workflow_revision?: number; request_id?: string; retry_scope?: "full_batch" | "failed_only" } = {
     language: BACKEND_COMPAT_GRADING_LANGUAGE,
   };
 
@@ -43,6 +43,7 @@ export function buildGradePayload(options: { multiSampleN?: number | null; expec
     payload.expected_workflow_revision = options.expectedWorkflowRevision;
   }
   if (options.requestId) payload.request_id = options.requestId;
+  if (options.retryScope) payload.retry_scope = options.retryScope;
 
   return payload;
 }
@@ -190,7 +191,7 @@ export function uploadTestCases(taskId: string, file: File, options?: UploadOpti
 
 export function startGrading(
   taskId: string,
-  options: { multiSampleN?: number | null; expectedWorkflowRevision: number; requestId?: string },
+  options: { multiSampleN?: number | null; expectedWorkflowRevision: number; requestId?: string; retryScope?: "full_batch" | "failed_only" },
 ): Promise<TaskMutationResponse> {
   return postJSON<TaskMutationResponse>(`/tasks/${taskId}/grade`, buildGradePayload(options));
 }
@@ -246,7 +247,7 @@ export function getTaskResultArtifactBlob(
 export function updateProblem(
   taskId: string,
   qId: string,
-  patch: Pick<Partial<ProblemInfo>, "stem" | "criterion" | "max_score" | "review_status" | "reference_answer" | "solution_code" | "test_cases"> & { expected_workflow_revision?: number },
+  patch: Pick<Partial<ProblemInfo>, "stem" | "criterion" | "max_score" | "review_status" | "reference_answer" | "solution_code" | "test_cases"> & { expected_workflow_revision?: number; review_fields?: import("@/types").PreparationIssue["field"][] },
 ): Promise<{ status: "ok"; q_id: string; problem: ProblemInfo; workflow_revision: number }> {
   return putJSON(`/tasks/${taskId}/problems/${qId}`, patch);
 }
