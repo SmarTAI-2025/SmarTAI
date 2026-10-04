@@ -2228,6 +2228,8 @@ def queue_task_submission_parsing(
     roster_entries: list[dict[str, str]] | None = None,
     roster_name: str | None = None, recognition_provider_id: str | None = None,
     replace_confirmed: bool = False,
+    acknowledged_restart_from: str | None = None,
+    expected_workflow_revision: int | None = None,
 ) -> dict:
     assignment = assignment_repository.get_assignment(task_id, actor_id=owner_id)
     questions = assignment_repository.list_questions(task_id, teacher_id=owner_id)
@@ -2247,6 +2249,8 @@ def queue_task_submission_parsing(
     workflow = workflow_repository.get_live_workflow(
         task_id, owner_id=owner_id
     )
+    if expected_workflow_revision is not None and workflow.workflow_revision != expected_workflow_revision:
+        _raise_stale_revision()
     replacement_file_ids = (
         source_storage_repository.replacement_source_file_ids(
             assignment_id=task_id,
@@ -2265,6 +2269,7 @@ def queue_task_submission_parsing(
         "provider_configuration_fingerprint": route_fingerprint,
         "question_snapshot": question_snapshot,
         "replace_confirmed": replace_confirmed,
+        **({"acknowledged_restart_from": acknowledged_restart_from} if acknowledged_restart_from else {}),
     })
     replacement_group_id = source_storage_repository.replacement_claim_group_id(
         assignment_id=task_id,

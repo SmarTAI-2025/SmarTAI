@@ -43,7 +43,7 @@ from backend.db import (
     source_storage_repository,
     workflow_repository,
 )
-from backend.domain.errors import DomainError, InvalidTransition, NotFound, ValidationError
+from backend.domain.errors import DomainError, InvalidTransition, NotFound, ValidationError, VersionConflict
 from backend.knowledge.service import ingest_document
 from backend.llm.registry import (
     resolve_owner_default_provider,
@@ -95,6 +95,7 @@ class GradeRequest(BaseModel):
 class RetrySubmissionRecognitionRequest(BaseModel):
     recognition_provider_id: str | None = Field(default=None, max_length=240)
     expected_workflow_revision: int = Field(ge=0)
+    acknowledge_possible_duplicate_call: bool = Field(default=False, strict=True)
 
 
 class UpdateGradingSetupRequest(BaseModel):
@@ -429,15 +430,53 @@ async def extract_problems_endpoint(
 async def parse_submissions_endpoint(
     task_id: str,
     background_tasks: BackgroundTasks,
-    file: UploadFile = File(...),
+    file: UploadFile | None = File(default=None),
     identity_mode: str = Form(default="filename"),
     roster_file: UploadFile | None = File(default=None),
     recognition_provider_id: str | None = Form(default=None),
     replace_confirmed: bool = Form(default=False),
+    stored_file_id: str | None = Form(default=None),
+    reuse_roster_from_job_id: str | None = Form(default=None),
+    expected_workflow_revision: int | None = Form(default=None),
+    acknowledge_possible_duplicate_call: bool = Form(default=False),
     current: User = Depends(require_teacher),
     registry: ExpertRegistry = Depends(get_scoped_expert_registry),
 ):
-    body = await file.read(SUBMISSION_UPLOAD_MAX_BYTES + 1)
+    # Form defaults are Param objects in direct Python calls used by workers/tests.
+    stored_file_id = stored_file_id if isinstance(stored_file_id, str) else None
+    reuse_roster_from_job_id = reuse_roster_from_job_id if isinstance(reuse_roster_from_job_id, str) else None
+    expected_workflow_revision = expected_workflow_revision if isinstance(expected_workflow_revision, int) else None
+    acknowledge_possible_duplicate_call = acknowledge_possible_duplicate_call is True
+    restart_origin = None
+    from backend.services.workflow_inputs import load_submission_input, load_saved_roster
+    # Bound a new upload before looking up or publishing any workflow state.
+    if file is not None and stored_file_id is None:
+        body = await file.read(SUBMISSION_UPLOAD_MAX_BYTES + 1)
+        if len(body) > SUBMISSION_UPLOAD_MAX_BYTES:
+            raise HTTPException(
+                status.HTTP_413_CONTENT_TOO_LARGE,
+                detail={"code": "submission_source_too_large"},
+            )
+        filename, content_type = file.filename or "submissions", file.content_type
+    try:
+        workflow = workflow_repository.get_live_workflow(task_id, owner_id=current.id)
+        if expected_workflow_revision is not None and workflow.workflow_revision != expected_workflow_revision:
+            raise VersionConflict("The task changed before submission.", code="stale_revision")
+        if (file is None) == (stored_file_id is None):
+            raise ValidationError("Choose exactly one submission source.", code="exactly_one_source_required")
+        if stored_file_id:
+            if expected_workflow_revision is None:
+                raise ValidationError("Confirm the current task revision.", code="stale_revision")
+            stored, body = load_submission_input(task_id=task_id, owner_id=current.id, stored_file_id=stored_file_id)
+            filename, content_type = stored.original_name, stored.content_type
+        if workflow.last_failed_job_id == workflow.parse_job_id and workflow.parse_job_id:
+            failed = workflow_repository.get_operation(workflow.parse_job_id, owner_id=current.id)
+            if failed.error_code == "provider_submit_uncertain" or (failed.checkpoint or {}).get("ocr_inflight_source_id"):
+                if not acknowledge_possible_duplicate_call:
+                    raise InvalidTransition("A repeated model call may be billed.", code="provider_submit_uncertain")
+                restart_origin = f"{failed.id}:{failed.attempt}"
+    except DomainError as exc:
+        return domain_error_response(exc)
     if len(body) > SUBMISSION_UPLOAD_MAX_BYTES:
         raise HTTPException(
             status.HTTP_413_CONTENT_TOO_LARGE,
@@ -449,16 +488,29 @@ async def parse_submissions_endpoint(
         roster_name = roster_file.filename or "roster.csv"
         roster_entries = _parse_roster(await roster_file.read())
     try:
+        if roster_file is None and reuse_roster_from_job_id and identity_mode == "roster":
+            roster_entries, roster_name = load_saved_roster(task_id=task_id, owner_id=current.id, job_id=reuse_roster_from_job_id)
         queued = task_facade.queue_task_submission_parsing(
             task_id=task_id, owner_id=current.id,
-            filename=file.filename or "submissions", content=body,
-            content_type=file.content_type, registry=registry,
+            filename=filename, content=body,
+            content_type=content_type, registry=registry,
             identity_mode=identity_mode, roster_entries=roster_entries,
             roster_name=roster_name,
             recognition_provider_id=recognition_provider_id,
             replace_confirmed=replace_confirmed,
+            expected_workflow_revision=expected_workflow_revision,
+            acknowledged_restart_from=restart_origin,
         )
         return queued
+    except DomainError as exc:
+        return domain_error_response(exc)
+
+
+@router.get("/{task_id}/submission-recognition/input")
+def get_submission_recognition_input(task_id: str, current: User = Depends(require_teacher)):
+    from backend.services.workflow_inputs import submission_inputs
+    try:
+        return submission_inputs(task_id=task_id, owner_id=current.id)
     except DomainError as exc:
         return domain_error_response(exc)
 
@@ -482,6 +534,12 @@ async def retry_submission_recognition_endpoint(
                 "The task changed before recognition retry.",
                 code="stale_revision",
             )
+        if workflow.last_failed_job_id != job_id:
+            raise InvalidTransition("Only the latest failed input can be retried.", code="submission_retry_not_available")
+        failed = workflow_repository.get_operation(job_id, owner_id=current.id)
+        uncertain = failed.error_code == "provider_submit_uncertain" or bool((failed.checkpoint or {}).get("ocr_inflight_source_id"))
+        if uncertain and not request.acknowledge_possible_duplicate_call:
+            raise InvalidTransition("A repeated model call may be billed.", code="provider_submit_uncertain")
         retry = task_facade.load_submission_retry_upload(
             task_id=task_id,
             owner_id=current.id,
@@ -499,6 +557,8 @@ async def retry_submission_recognition_endpoint(
             roster_name=retry["roster_name"],
             recognition_provider_id=request.recognition_provider_id,
             replace_confirmed=retry["replace_confirmed"],
+            acknowledged_restart_from=f"{failed.id}:{failed.attempt}" if uncertain else None,
+            expected_workflow_revision=request.expected_workflow_revision,
         )
         # Submission recognition is owned exclusively by the durable workflow
         # worker.  A retry only republishes the persisted operation; running it
