@@ -3,7 +3,7 @@ import { act, fireEvent, render, screen, waitFor } from "@testing-library/react"
 import { beforeEach, expect, it } from "vitest";
 import { PageDraftSession, usePageDraft } from "./usePageDraft";
 import { DraftActions, DraftLeaveProvider } from "./useDraftLeave";
-import { clearPageDrafts, type DraftCodec } from "@/lib/pageDraftStore";
+import { clearPageDrafts, readPageDraft, type DraftCodec } from "@/lib/pageDraftStore";
 const codec: DraftCodec<{ name: string }> = { encode: ({ name }) => ({ name }), decode: (value) => value && typeof value === "object" && "name" in value && typeof value.name === "string" ? { name: value.name } : null };
 let lateWrite: () => void;
 function Form({ scope }: { scope: string }) {
@@ -28,7 +28,7 @@ it("formal success removes the snapshot and seals late callbacks", async () => {
 });
 it("reset clears persisted work and allows a new explicit snapshot", async () => {
   let view = render(<App />); fireEvent.change(screen.getByLabelText("name"), { target: { value: "old" } }); await save(); fireEvent.click(screen.getByText("reset")); expect(screen.getByLabelText("name")).toHaveValue("");
-  await new Promise((resolve) => setTimeout(resolve, 10)); fireEvent.change(screen.getByLabelText("name"), { target: { value: "fresh" } }); await save(); view.unmount(); view = render(<App />); await waitFor(() => expect(screen.getByLabelText("name")).toHaveValue("fresh"));
+  await waitFor(async () => expect((await readPageDraft("a", "new", codec)).record?.deleted).toBe(true)); fireEvent.change(screen.getByLabelText("name"), { target: { value: "fresh" } }); await save(); view.unmount(); view = render(<App />); await waitFor(() => expect(screen.getByLabelText("name")).toHaveValue("fresh"));
 });
 it("logout fences the old owner callbacks", async () => {
   const view = render(<App />); const oldWrite = lateWrite; await act(clearPageDrafts); view.unmount(); act(() => oldWrite()); render(<App />); expect(screen.getByLabelText("name")).toHaveValue("");

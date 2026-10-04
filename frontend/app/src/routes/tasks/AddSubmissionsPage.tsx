@@ -9,12 +9,15 @@ import {
 import { Link, Navigate, useNavigate, useParams } from "react-router-dom";
 import { toast } from "sonner";
 import { getAPIErrorCode, normalizeAPIError } from "@/api/client";
+import { useWorkflowInput, type SubmissionInput } from "@/api/workflowInputs";
 import { useParseSubmissions, useRetrySubmissionRecognition, useStageProviders, useTask } from "@/api/hooks";
 import { ImageRecognitionRecovery, useImageRecoveryReturn } from "@/components/models/ImageRecognitionRecovery";
 import { StageProviderSelect } from "@/components/models/StageProviderSelect";
 import { NewTaskStepper } from "@/components/new-task/NewTaskStepper";
+import { RecoverableActionState, workflowRetryLabel } from "@/components/ui/RecoverableActionState";
 import { usePageDraft } from "@/hooks/usePageDraft";
-import { initialSubmissionDraft, submissionDraftCodec } from "@/lib/taskPageDrafts";
+import { submissionDraftFromInput, submissionDraftCodec } from "@/lib/taskPageDrafts";
+import { classifyRecoverableError } from "@/lib/taskActionGuards";
 import { useI18n } from "@/i18n/I18nProvider";
 import type { MessageKey } from "@/i18n/messages";
 import { cn } from "@/lib/cn";
@@ -36,12 +39,15 @@ const IDENTITY_OPTIONS: Array<{ mode: SubmissionIdentityMode; label: MessageKey 
 
 export function AddSubmissionsPage() {
   const { taskId } = useParams();
+  const { locale } = useI18n();
   const taskQuery = useTask(taskId, { refetchOnMount: "always" });
-  if (taskQuery.isLoading || (taskQuery.isFetching && !taskQuery.isFetchedAfterMount)) return <div role="status"><LoaderCircle className="animate-spin" /></div>;
-  return <AddSubmissionsForm key={taskId} taskQuery={taskQuery} />;
+  const inputQuery = useWorkflowInput(taskId, "submissions", Boolean(taskQuery.data?.parse_job_id));
+  if (taskQuery.isLoading || (taskQuery.isFetching && !taskQuery.isFetchedAfterMount) || inputQuery.isLoading || (inputQuery.isFetching && !inputQuery.isFetchedAfterMount)) return <div role="status"><LoaderCircle className="animate-spin" /></div>;
+  if (inputQuery.isError) return <RecoverableActionState locale={locale} info={classifyRecoverableError(inputQuery.error, { locale })} workflowRecovery={{ retry: { onClick: () => void inputQuery.refetch() }, configurationHref: `/tasks/${taskId}/edit` }} />;
+  return <AddSubmissionsForm key={taskId} taskQuery={taskQuery} submittedInput={inputQuery.data?.input} />;
 }
 
-function AddSubmissionsForm({ taskQuery }: { taskQuery: ReturnType<typeof useTask> }) {
+function AddSubmissionsForm({ taskQuery, submittedInput }: { taskQuery: ReturnType<typeof useTask>; submittedInput?: SubmissionInput | null }) {
   const { taskId } = useParams();
   const navigate = useNavigate();
   const { t, locale } = useI18n();
@@ -54,7 +60,8 @@ function AddSubmissionsForm({ taskQuery }: { taskQuery: ReturnType<typeof useTas
   const rosterChooseRef = useRef<HTMLButtonElement>(null);
   const byokLinkRef = useRef<HTMLAnchorElement>(null);
 
-  const draft = usePageDraft(`submissions:${taskId}`, initialSubmissionDraft, submissionDraftCodec, JSON.stringify([taskQuery.data?.workflow_revision, taskQuery.data?.course_id]), undefined, parseSubmissions.isPending || retryRecognition.isPending);
+  const draft = usePageDraft(`submissions:${taskId}`, () => submissionDraftFromInput(submittedInput), submissionDraftCodec, JSON.stringify([taskQuery.data?.workflow_revision, taskQuery.data?.course_id]), undefined, parseSubmissions.isPending || retryRecognition.isPending);
+  const submitting = useRef(false);
   const [selectedFile, setSelectedFile] = draft.field("selectedFile");
   const [rosterFile, setRosterFile] = draft.field("rosterFile");
   const [identityMode, setIdentityMode] = draft.field("identityMode");
@@ -78,7 +85,9 @@ function AddSubmissionsForm({ taskQuery }: { taskQuery: ReturnType<typeof useTas
     task?.submission_file_name || task?.student_count,
   );
   const isRecognitionRunning = task?.status === "parsing_submissions";
-  const isWorkflowBusy = task?.status === "extracting_problems";
+  const isWorkflowBusy = task?.status === "extracting_problems" || task?.status === "grading";
+  const hasStoredFile = Boolean(draft.value.storedFileId);
+  const hasSavedRoster = Boolean(draft.value.savedRosterJobId && draft.value.savedRosterCount);
   const canRetryOriginal = Boolean(
     task?.status === "error"
       && task.last_failed_job_id
@@ -87,7 +96,7 @@ function AddSubmissionsForm({ taskQuery }: { taskQuery: ReturnType<typeof useTas
   );
   const isPending = parseSubmissions.isPending || retryRecognition.isPending;
   const visibleFileName = selectedFile?.name ?? (
-    canRetryOriginal ? task?.pending_submission_file_name ?? null : null
+    hasStoredFile ? draft.value.selectedFileName : canRetryOriginal ? task?.pending_submission_file_name ?? null : null
   );
 
   useEffect(() => {
@@ -112,9 +121,9 @@ function AddSubmissionsForm({ taskQuery }: { taskQuery: ReturnType<typeof useTas
             : t("submissionUploadBusy")
           : !enabledExperts.some((expert) => expert.provider_id === recognitionProviderId)
             ? localText(locale, "需要先添加或选择一个已启用模型。", "Add or select an enabled model first.")
-          : !selectedFile && !canRetryOriginal
+          : !selectedFile && !hasStoredFile && !canRetryOriginal
             ? t("submissionUploadFileRequired")
-            : !canRetryOriginal && identityMode === "roster" && !rosterFile
+            : !canRetryOriginal && identityMode === "roster" && !rosterFile && !hasSavedRoster
               ? t("submissionUploadRosterRequired")
               : null;
 
@@ -168,6 +177,7 @@ function AddSubmissionsForm({ taskQuery }: { taskQuery: ReturnType<typeof useTas
   }
 
   async function handleStart() {
+    if (submitting.current || isPending) return;
     setFormError(null);
     setNeedsModel(false);
     setMissingUpload(null);
@@ -184,10 +194,10 @@ function AddSubmissionsForm({ taskQuery }: { taskQuery: ReturnType<typeof useTas
       if (!recognitionProviderId) {
         setNeedsModel(true);
         window.requestAnimationFrame(() => focusUploadControl(byokLinkRef.current));
-      } else if (!selectedFile && !canRetryOriginal) {
+      } else if (!selectedFile && !hasStoredFile && !canRetryOriginal) {
         setMissingUpload("submission");
         focusUploadControl(submissionChooseRef.current);
-      } else if (!canRetryOriginal && identityMode === "roster" && !rosterFile) {
+      } else if (!canRetryOriginal && identityMode === "roster" && !rosterFile && !hasSavedRoster) {
         setMissingUpload("roster");
         focusUploadControl(rosterChooseRef.current);
       }
@@ -197,22 +207,29 @@ function AddSubmissionsForm({ taskQuery }: { taskQuery: ReturnType<typeof useTas
       ? window.confirm(t("submissionUploadReplaceConfirm"))
       : false;
     if (needsReplacementConfirmation && !canRetryOriginal && !replaceConfirmed) return;
-
+    const submissionUncertain = task?.error === "provider_submit_uncertain" || getAPIErrorCode(recognitionError) === "provider_submit_uncertain";
+    if (submissionUncertain && !window.confirm(localText(locale, "上次请求可能已计费。确认按当前配置重新提交？可能再次消耗额度。", "The previous request may have been billed. Submit with current settings? This may incur another charge."))) return;
+    submitting.current = true;
     try {
-      const response = canRetryOriginal && task?.last_failed_job_id
+      const response = canRetryOriginal && !hasStoredFile && task?.last_failed_job_id
         ? await retryRecognition.mutateAsync({
             taskId,
             jobId: task.last_failed_job_id,
             recognitionProviderId,
             expectedWorkflowRevision: task.workflow_revision,
+            ...(submissionUncertain ? { acknowledgePossibleDuplicateCall: true } : {}),
           })
         : await parseSubmissions.mutateAsync({
             taskId,
-            file: selectedFile as File,
+            file: selectedFile,
+            storedFileId: draft.value.storedFileId,
+            reuseRosterFromJobId: identityMode === "roster" ? draft.value.savedRosterJobId : null,
+            expectedWorkflowRevision: task?.workflow_revision,
+            ...(submissionUncertain ? { acknowledgePossibleDuplicateCall: true } : {}),
             identityMode,
             rosterFile: identityMode === "roster" ? rosterFile : null,
             recognitionProviderId,
-            replaceConfirmed,
+            replaceConfirmed: replaceConfirmed || (canRetryOriginal && Boolean(task?.student_count)),
             onProgress: setUploadPercent,
           });
       if (!draft.protection.isCurrent()) return;
@@ -231,6 +248,8 @@ function AddSubmissionsForm({ taskQuery }: { taskQuery: ReturnType<typeof useTas
         "recognition_provider_not_enabled",
       ].includes(submissionErrorCode(error)));
       setFormError(localizeSubmissionError(error, t, locale));
+    } finally {
+      submitting.current = false;
     }
   }
 
@@ -251,7 +270,8 @@ function AddSubmissionsForm({ taskQuery }: { taskQuery: ReturnType<typeof useTas
       <NewTaskStepper currentStep={3} />
 
       <div className="mx-auto mt-[45px] w-full max-w-[900px]">
-        {(!selectedFile && draft.value.selectedFileName && !canRetryOriginal) || (!rosterFile && draft.value.rosterFileName && identityMode === "roster") ? <p role="alert" className="mb-4 text-sm text-warning">{localText(locale, "未上传的作答或名单文件无法在刷新后恢复，请重新选择。其他设置已保留。", "Unuploaded submissions or roster files cannot survive a reload. Reselect them; other settings are preserved.")}</p> : null}
+        {(!selectedFile && !hasStoredFile && draft.value.selectedFileName && !canRetryOriginal) || (!rosterFile && !hasSavedRoster && draft.value.rosterFileName && identityMode === "roster") ? <p role="alert" className="mb-4 text-sm text-warning">{localText(locale, "保存的文件暂时不可用，请重新选择。其他设置已保留。", "The saved file is unavailable. Reselect it; other settings are preserved.")}</p> : null}
+        {hasStoredFile ? <p role="status" className="mb-4 text-sm text-muted-foreground">{localText(locale, "已恢复上次提交的作答与设置；修改后主动点击下一步，无需重复上传。", "Your submitted file and settings are restored. Edit and click Next when ready; no upload is needed.")}</p> : null}
         <div
           ref={submissionChooseRef}
           className={cn(
@@ -295,7 +315,7 @@ function AddSubmissionsForm({ taskQuery }: { taskQuery: ReturnType<typeof useTas
           <p className="mt-2 text-[13px] leading-5 text-muted-foreground">
             {selectedFile
               ? `${formatFileSize(selectedFile.size)} · ${t("submissionUploadOcrLimit")}`
-              : canRetryOriginal
+              : canRetryOriginal || hasStoredFile
                 ? localText(locale, "原文件已安全保留。请按失败原因处理：文件为空、损坏或格式不支持时需更换文件；模型问题可改选模型后重试，无需重复上传。", "The original file is preserved. Replace empty, damaged or unsupported files; for model errors, select another model and retry without uploading again.")
               : t("submissionUploadFormats")}
           </p>
@@ -374,7 +394,7 @@ function AddSubmissionsForm({ taskQuery }: { taskQuery: ReturnType<typeof useTas
             {identityMode === "roster" ? (
               <div className="flex shrink-0 items-center gap-2">
                 <span className="max-w-[180px] truncate text-[12px]" title={rosterFile?.name}>
-                  {rosterFile?.name ?? t("submissionUploadRosterFormats")}
+                  {rosterFile?.name ?? (hasSavedRoster ? `${draft.value.rosterFileName} (${draft.value.savedRosterCount})` : t("submissionUploadRosterFormats"))}
                 </span>
                 <input
                   ref={rosterInputRef}
@@ -440,13 +460,14 @@ function AddSubmissionsForm({ taskQuery }: { taskQuery: ReturnType<typeof useTas
             ) : isRecognitionRunning && !selectedFile
               ? t("submissionUploadViewProgress")
               : canRetryOriginal
-                ? localText(locale, "用所选模型重试", "Retry with selected model")
+                ? workflowRetryLabel(locale)
               : hasExistingSubmissions
                 ? t("submissionUploadOverwriteStart")
                 : t("submissionUploadStart")}
           </button>
         </div>
         <ImageRecognitionRecovery error={recognitionError ?? (canRetryOriginal ? task?.error : undefined)} expert={enabledExperts.find(e => e.provider_id === recognitionProviderId)} returnTo={`/tasks/${taskId}/submissions/upload`} controller={draft.protection.controller} isCurrent={draft.protection.isCurrent} locale={locale} />
+        {recognitionError ? <RecoverableActionState info={classifyRecoverableError(recognitionError, { locale, taskId, returnTo: `/tasks/${taskId}/submissions/upload` })} locale={locale} compact className="mt-4" workflowRecovery={{ retry: { onClick: () => void handleStart(), busy: isPending }, configurationHref: `/tasks/${taskId}/submissions/upload` }} /> : null}
       </div>
     </div>
   );

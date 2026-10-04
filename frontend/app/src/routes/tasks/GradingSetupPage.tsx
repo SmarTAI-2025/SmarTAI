@@ -28,6 +28,7 @@ import {
 import { NewTaskStepper } from "@/components/new-task/NewTaskStepper";
 import { ProviderIcon } from "@/components/models/ProviderIcon";
 import { UnsavedChangesDialog } from "@/components/ui/UnsavedChangesDialog";
+import { RecoverableActionState } from "@/components/ui/RecoverableActionState";
 import { useI18n } from "@/i18n/I18nProvider";
 import type { Locale } from "@/i18n/messages";
 import { cn } from "@/lib/cn";
@@ -37,7 +38,7 @@ import {
   knowledgeStorageQuotaCopy,
 } from "@/lib/knowledgeStorage";
 import { modelDisplayName, modelSecondaryLabel } from "@/lib/modelPresentation";
-import { isWorkflowRevisionConflictCode } from "@/lib/taskActionGuards";
+import { classifyRecoverableError, isWorkflowRevisionConflictCode } from "@/lib/taskActionGuards";
 import { canTaskBeRegraded, getSafeTaskReturnTo, getTaskGradingSetupHref } from "@/lib/taskFlow";
 import type {
   GradingAggregationMethod,
@@ -68,6 +69,7 @@ function GradingSetupPageForm() {
   const [setup, setSetup] = useState<GradingSetup | null>(null);
   const [advancedOpen, setAdvancedOpen] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
+  const [saveFailure, setSaveFailure] = useState<unknown>(null);
   const [showActionHelp, setShowActionHelp] = useState(false);
   const [syncNoticeKey, setSyncNoticeKey] = useState<GradingSetupCopyKey | null>(null);
   const [selectionNoticeKey, setSelectionNoticeKey] = useState<GradingSetupCopyKey | null>(null);
@@ -188,6 +190,8 @@ function GradingSetupPageForm() {
   }
 
   async function handleSubmit() {
+    if (saveSetup.isPending) return;
+    setSaveFailure(null);
     if (!taskId || !response || !setup || validationMessage || saveBlockingIssue) {
       setActionError(validationMessage ?? startBlockingMessage ?? gradingSetupText(locale, "invalidForm"));
       setShowActionHelp(true);
@@ -209,6 +213,7 @@ function GradingSetupPageForm() {
       allowLeaveRef.current = true;
       navigate(returnTo ?? `/tasks/${taskId}/grading/preflight`);
     } catch (error) {
+      setSaveFailure(error);
       const normalized = normalizeAPIError(error);
       const code = getAPIErrorCode(normalized) ?? "";
       if (isWorkflowRevisionConflictCode(code)) {
@@ -245,11 +250,7 @@ function GradingSetupPageForm() {
             <LoaderCircle aria-hidden="true" className="h-7 w-7 animate-spin text-primary" />
           </div>
         ) : setupQuery.isError ? (
-          <CenteredState
-            title={gradingSetupText(locale, "loadErrorTitle")}
-            description={gradingSetupText(locale, "loadErrorDescription")}
-            action={<button type="button" onClick={() => void setupQuery.refetch()} className="h-9 rounded-[7px] border bg-card px-4 text-sm font-semibold hover:bg-muted">{gradingSetupText(locale, "retry")}</button>}
-          />
+          <RecoverableActionState info={classifyRecoverableError(setupQuery.error, { locale, taskId })} locale={locale} workflowRecovery={{ retry: { onClick: () => void setupQuery.refetch() }, configurationHref: backHref }} />
         ) : response && !setup ? (
           <ModelRequiredState
             locale={locale}
@@ -322,6 +323,7 @@ function GradingSetupPageForm() {
                 </p>
               ) : null}
               {actionError && actionError !== validationMessage ? <p role="alert" className="mt-2 text-[11px] leading-4 text-danger">{actionError}</p> : null}
+              {saveFailure ? <RecoverableActionState info={classifyRecoverableError(saveFailure, { locale, taskId, returnTo: setupHref ?? undefined })} locale={locale} compact workflowRecovery={{ retry: { onClick: () => void handleSubmit(), busy: saveSetup.isPending }, configurationHref: setupHref ?? backHref }} /> : null}
             </div>
 
             <footer className="mt-4 grid shrink-0 gap-3 border-t pt-4 sm:-mx-5 sm:px-2 lg:grid-cols-[auto_minmax(0,1fr)_270px] lg:items-center">

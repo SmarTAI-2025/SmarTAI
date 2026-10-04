@@ -1,4 +1,6 @@
 import type { DraftCodec } from "./pageDraftStore";
+import type { ProblemInput, SubmissionInput } from "@/api/workflowInputs";
+import { parseQuestionRecognitionScope } from "./questionRecognitionScope";
 import type { PreparationSourceRole, ProblemLibraryMaterial, ProblemSourceMode, ProblemSourceScope, ProblemStructureMode, QuestionScorePolicyInput, SubmissionIdentityMode } from "@/types";
 
 export type SourceDraft = {
@@ -15,6 +17,7 @@ export type ProblemDraft = { activeRole: PreparationSourceRole; sources: SourceD
 export type SubmissionDraft = {
   selectedFile: File | null; rosterFile: File | null; selectedFileName: string; rosterFileName: string;
   identityMode: SubmissionIdentityMode; recognitionProviderId: string;
+  storedFileId: string | null; savedRosterJobId: string | null; savedRosterCount: number;
 };
 export type MetadataDraft = {
   name: string; semesterId: string; courseId: string | null; courseDraft: string; tagIds: string[]; tagDraft: string;
@@ -60,7 +63,43 @@ export function initialProblemDraft(): ProblemDraft {
   return { activeRole: "problem", sources: [createSourceDraft("problem")], scorePolicy: { mode: "default_10", uniformMaxScore: "10", perQuestionText: "" }, recognitionProviderId: "", formError: null };
 }
 export function initialSubmissionDraft(): SubmissionDraft {
-  return { selectedFile: null, rosterFile: null, selectedFileName: "", rosterFileName: "", identityMode: "filename", recognitionProviderId: "" };
+  return { selectedFile: null, rosterFile: null, selectedFileName: "", rosterFileName: "", identityMode: "filename", recognitionProviderId: "", storedFileId: null, savedRosterJobId: null, savedRosterCount: 0 };
+}
+
+export function problemDraftFromInput(input?: ProblemInput | null): ProblemDraft {
+  if (!input) return initialProblemDraft();
+  const policy = input.score_policy;
+  return { ...initialProblemDraft(), recognitionProviderId: input.recognition_provider_id,
+    scorePolicy: { mode: policy.mode, uniformMaxScore: String(policy.uniform_max_score ?? 10),
+      perQuestionText: policy.per_question_text ?? "" },
+    sources: input.sources.map((item) => {
+      // Earlier submissions appended scope to the hint. Restore the fields
+      // separately so the next manual submit does not duplicate those suffixes.
+      const lines = item.extraction_hint.split("\n");
+      const removed = new Set<string>();
+      for (let index = 0; index < 2; index += 1) {
+        const match = /^(题号|页码):\s*(.*)$/.exec(lines.at(-1) ?? "");
+        if (!match || removed.has(match[1])) break;
+        const pages = match[1] === "页码";
+        const expected = (pages ? item.recognition_options.pages : item.recognition_options.targets) ?? [];
+        const parsed = parseQuestionRecognitionScope(pages ? match[2] : "", pages ? "" : match[2]);
+        const actual = pages ? parsed.options?.pages : parsed.options?.targets;
+        if (!expected.length || parsed.error || JSON.stringify(actual) !== JSON.stringify(expected)) break;
+        removed.add(match[1]); lines.pop();
+      }
+      const hint = lines.join("\n");
+      return { ...createSourceDraft(item.role), id: item.source_token, sourceMode: item.source_kind,
+        fileName: item.filename, storedFileId: item.stored_file_id,
+        libraryMaterial: item.library_material_id ? { material_id: item.library_material_id, filename: item.filename } : null,
+        inlineText: item.inline_text, structureMode: item.structure_mode, extractionHint: hint,
+        recognitionPages: (item.recognition_options.pages ?? []).join(", "), recognitionTargets: (item.recognition_options.targets ?? []).join(", "),
+        enableMaterialOcr: item.enable_material_ocr, saveToLibrary: item.save_to_library, prepared: null };
+    }) };
+}
+export function submissionDraftFromInput(input?: SubmissionInput | null): SubmissionDraft {
+  return input ? { ...initialSubmissionDraft(), storedFileId: input.stored_file_id, selectedFileName: input.filename ?? "",
+    identityMode: input.identity_mode, recognitionProviderId: input.recognition_provider_id,
+    rosterFileName: input.roster_name ?? "", savedRosterJobId: input.roster_count > 0 ? input.job_id : null, savedRosterCount: input.roster_count } : initialSubmissionDraft();
 }
 
 function material(value: unknown): ProblemLibraryMaterial | null {
@@ -98,7 +137,10 @@ export const submissionDraftCodec = codec<SubmissionDraft>(
 function parseSubmission(value: unknown): SubmissionDraft {
   const data = record(value);
   return { selectedFile: null, rosterFile: null, selectedFileName: string(data.selectedFileName, 512), rosterFileName: string(data.rosterFileName, 512),
-    identityMode: choice(data.identityMode, ["filename", "roster", "manual_review"]), recognitionProviderId: string(data.recognitionProviderId, 240) };
+    identityMode: choice(data.identityMode, ["filename", "roster", "manual_review"]), recognitionProviderId: string(data.recognitionProviderId, 240),
+    storedFileId: data.storedFileId === undefined ? null : nullableString(data.storedFileId),
+    savedRosterJobId: data.savedRosterJobId === undefined ? null : nullableString(data.savedRosterJobId),
+    savedRosterCount: Number.isSafeInteger(data.savedRosterCount) && Number(data.savedRosterCount) >= 0 ? Number(data.savedRosterCount) : 0 };
 }
 export const metadataDraftCodec = codec<MetadataDraft>((value) => parseMetadata(value), parseMetadata);
 function parseMetadata(value: unknown): MetadataDraft {
