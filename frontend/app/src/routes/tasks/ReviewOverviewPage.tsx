@@ -151,7 +151,6 @@ export function ReviewOverviewPage() {
         taskId, revision: task?.workflow_revision ?? 0, entries: confirmableReviews,
       });
       toast.success(locale === "en-US" ? `${confirmableReviews.length} reviews confirmed.` : `已确认 ${confirmableReviews.length} 个题次的复核。`);
-      if (remainingReviewCount > 0) setBlockedDialog(true);
     } catch (error) {
       setBatchError(normalizeAPIError(error).message);
     } finally {

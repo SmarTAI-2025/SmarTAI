@@ -234,3 +234,12 @@ it("shows ordinary grading as green and removes confirmed uncertainty from count
   expect(screen.getByText("Low-confidence responses").closest("div")).toHaveTextContent("0");
   expect(screen.queryByRole("link", { name: /Sample.*Q2/ })).not.toBeInTheDocument();
 });
+
+
+it("does not reopen a stale missing-score dialog after a successful batch", async () => {
+  state.finalization = { remaining_review_count: 1, ready_for_confirmation: false, workflow_revision: 5 };
+  show();
+  await userEvent.click(screen.getByRole("button", { name: "Confirm all" }));
+  await waitFor(() => expect(state.bulk).toHaveBeenCalledTimes(1));
+  expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+});
