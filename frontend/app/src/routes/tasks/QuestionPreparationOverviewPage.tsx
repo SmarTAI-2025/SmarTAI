@@ -35,7 +35,10 @@ export function QuestionPreparationOverviewPage() {
   const { taskId } = useParams();
   const [searchParams, setSearchParams] = useSearchParams();
   const { locale } = useI18n();
-  const taskQuery = useTask(taskId);
+  // Progress polls /state independently. Revalidate detail before its cached
+  // running status can send the completed task straight back to progress.
+  const taskQuery = useTask(taskId, { refetchOnMount: "always" });
+  const readingCompletion = taskQuery.isFetching && ["draft", "extracting_problems"].includes(taskQuery.data?.status ?? "");
   const { confirm, confirming, updateProblem, failure, blocked, clearBlocked } = useQuestionReview(taskId ?? "", taskQuery.data?.workflow_revision);
   const urlQuery = searchParams.get("q") ?? "";
   const query = urlQuery;
@@ -69,10 +72,10 @@ export function QuestionPreparationOverviewPage() {
     anomalies: allRisks.filter((row) => ["parse_anomaly", "generation_failed", "invalid_test_case", "reference_solution_failed_case"].includes(row.issue.code)).length,
   }), [allRisks]);
 
-  if (taskQuery.isSuccess && taskQuery.data.status === "draft") {
+  if (taskQuery.isSuccess && !taskQuery.isFetching && taskQuery.data.status === "draft") {
     return <Navigate replace to={`/tasks/${taskId}/upload/problems`} />;
   }
-  if (taskQuery.isSuccess && taskQuery.data.status === "extracting_problems") {
+  if (taskQuery.isSuccess && !taskQuery.isFetching && taskQuery.data.status === "extracting_problems") {
     return <Navigate replace to={`/tasks/${taskId}/problems/progress`} />;
   }
 
@@ -108,7 +111,7 @@ export function QuestionPreparationOverviewPage() {
         </div> : null}
 
         <div className="mt-4 overflow-hidden rounded-[10px] border bg-card">
-          {taskQuery.isLoading ? (
+          {taskQuery.isLoading || readingCompletion ? (
             <div className="min-h-[300px] animate-pulse bg-muted/20" aria-busy="true" />
           ) : taskQuery.isError ? (
             <div className="flex min-h-[300px] flex-col items-center justify-center px-5 text-center">

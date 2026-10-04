@@ -60,7 +60,9 @@ export function SubmissionReviewOverviewPage() {
   const { taskId } = useParams();
   const [searchParams, setSearchParams] = useSearchParams();
   const { locale, t } = useI18n();
-  const taskQuery = useTask(taskId);
+  // A completed /state poll may arrive before the cached task detail changes.
+  const taskQuery = useTask(taskId, { refetchOnMount: "always" });
+  const readingCompletion = taskQuery.isFetching && !hasTaskReachedStep(taskQuery.data, 4);
   const identityMutation = useUpdateStudentIdentity();
   const answerMutation = useUpdateStudentAnswer();
   const [blocked, setBlocked] = useState<ReviewBlocker[]>([]);
@@ -113,7 +115,7 @@ export function SubmissionReviewOverviewPage() {
 
   useEffect(() => { latestSearchParamsRef.current = new URLSearchParams(searchParams); }, [searchParams]);
 
-  if (taskQuery.isSuccess && taskId) {
+  if (taskQuery.isSuccess && !taskQuery.isFetching && taskId) {
     if (!hasTaskReachedStep(taskQuery.data, 4)) {
       return <Navigate replace to={getTaskDestination(taskQuery.data)} />;
     }
@@ -264,7 +266,7 @@ export function SubmissionReviewOverviewPage() {
         </div>
 
         <div className="mt-4 min-w-0">
-          {taskQuery.isLoading ? (
+          {taskQuery.isLoading || readingCompletion ? (
             <section className="overflow-hidden rounded-[10px] border bg-card">
               <MatrixState title={t("submissionReviewLoading")} busy />
             </section>
