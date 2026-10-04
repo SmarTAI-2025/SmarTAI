@@ -541,9 +541,9 @@ class SubmissionRecord(Base):
     assignment_id: Mapped[str] = mapped_column(
         ForeignKey("assignments.id", ondelete="CASCADE"), nullable=False, index=True
     )
-    student_id: Mapped[str] = mapped_column(
-        ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
-    )
+    # Task-local identity; legacy online submissions may still use a user ID.
+    # Ownership/lifecycle are enforced by the assignment and revision FKs.
+    student_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
     current_revision_id: Mapped[str | None] = mapped_column(
         ForeignKey("submission_revisions.id", ondelete="SET NULL"),
         nullable=True, index=True,
@@ -692,9 +692,9 @@ class GradingRunSubmissionRecord(Base):
         ForeignKey("submission_revisions.id", ondelete="CASCADE"),
         nullable=False, index=True,
     )
-    student_id: Mapped[str] = mapped_column(
-        ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
-    )
+    # Task-local identity; legacy online submissions may still use a user ID.
+    # Ownership/lifecycle are enforced by the assignment and revision FKs.
+    student_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
     created_at: Mapped[float] = mapped_column(Float, nullable=False, default=time.time)
 
 
@@ -744,9 +744,9 @@ class GradeResultRecord(Base):
         ForeignKey("assignment_questions.id", ondelete="CASCADE"),
         nullable=False, index=True,
     )
-    student_id: Mapped[str] = mapped_column(
-        ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
-    )
+    # Task-local identity; legacy online submissions may still use a user ID.
+    # Ownership/lifecycle are enforced by the assignment and revision FKs.
+    student_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
     q_id: Mapped[str] = mapped_column(String(64), nullable=False)
     # ai_* are the immutable original LLM outputs.
     ai_score: Mapped[float | None] = mapped_column(Float, nullable=True)

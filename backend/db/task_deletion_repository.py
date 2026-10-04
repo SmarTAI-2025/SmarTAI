@@ -18,7 +18,9 @@ from sqlalchemy.orm import Session
 from backend.db.models import (
     AssignmentRecord,
     CourseEnrollmentRecord,
+    GradeResultRecord,
     GradingRunRecord,
+    GradingRunSubmissionRecord,
     SourceStorageReservationRecord,
     StoredFileRecord,
     SubmissionRecord,
@@ -140,6 +142,15 @@ def _delete_unreferenced_task_import_users(
             CourseEnrollmentRecord.course_id != course_id,
         )
     ))
+    # These task identities no longer reference the login table. Legacy
+    # placeholders must still survive when another task/result uses their ID.
+    for record in (
+        SubmissionRecord, GradingRunSubmissionRecord, GradeResultRecord,
+        workflow_repository.AssignmentStudentPresentationRecord,
+    ):
+        protected_ids.update(str(value) for value in session.scalars(
+            select(record.student_id).where(record.student_id.in_(eligible_ids))
+        ))
     for table in sorted(UserRecord.metadata.tables.values(), key=lambda item: item.name):
         if table.name in {"users", "course_enrollments"}:
             continue
