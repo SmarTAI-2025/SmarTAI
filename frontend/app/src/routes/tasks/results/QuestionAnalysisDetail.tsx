@@ -427,6 +427,8 @@ function reviewReasonLabel(reason: string, locale: Locale): string {
     parse_failed: ["解析失败", "Parsing failed"],
     degraded_to_single: ["仅单专家成功（低置信度）", "Only one expert succeeded (low confidence)"],
     quota_exhausted: ["模型额度失败", "Model quota failure"],
+    llm_failed: ["模型未完成批改", "Model grading failed"],
+    transient_llm: ["模型网络或超时错误", "Model network error or timeout"],
   };
   const label = labels[reason];
   return label ? label[locale === "en-US" ? 1 : 0] : reason.replaceAll("_", " ");

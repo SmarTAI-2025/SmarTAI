@@ -284,7 +284,8 @@ export function reviewReasonLabel(reason: string) {
     score_spread_high: "评分差异较大",
     parse_failed: "解析失败",
     degraded_to_single: "仅单专家成功（低置信度）",
-    transient_llm: "模型临时错误",
+    transient_llm: "模型网络或超时错误",
+    llm_failed: "模型未完成批改",
     quota_exhausted: "额度不足",
     general: "需要人工确认",
   };

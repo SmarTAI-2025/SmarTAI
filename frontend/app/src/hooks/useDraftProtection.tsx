@@ -178,7 +178,7 @@ export function useDraftProtection<T extends object>({ scope, value, onRestore, 
       return { write, commit: () => {
         if (disposed.current || capturedIncarnation !== incarnation.current || epoch.current !== draftGeneration()) return;
         load.current = { value: snapshot, record: write.record, epoch: write.record.epoch, notice: null };
-        saved.current = snapshotFingerprint; setSavedAt(write.record.savedAt); setNotice("已暂存到当前浏览器/设备；不等于正式提交。");
+        saved.current = snapshotFingerprint; setSavedAt(write.record.savedAt); setNotice("草稿已保存。");
       } };
     },
   };

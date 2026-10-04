@@ -120,7 +120,7 @@ function QuestionAICompletionPageForm() {
       </h1>
       <NewTaskStepper currentStep={2} />
 
-      <section className="mx-auto mt-[35px] w-full max-w-[900px] rounded-[10px] border bg-card px-5 pb-6 pt-7 sm:flex sm:h-[558px] sm:min-h-0 sm:flex-col sm:overflow-hidden sm:px-[49px] sm:pb-[28px] sm:pt-[32px]">
+      <section data-draft-width="900" className="mx-auto mt-[35px] w-full max-w-[900px] rounded-[10px] border bg-card px-5 pb-6 pt-7 sm:flex sm:h-[558px] sm:min-h-0 sm:flex-col sm:overflow-hidden sm:px-[49px] sm:pb-[28px] sm:pt-[32px]">
         <header>
           <h2 className="text-[18px] font-bold leading-6 text-foreground">
             {aiCompletionText(locale, "cardTitle")}

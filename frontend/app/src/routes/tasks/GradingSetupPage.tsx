@@ -238,7 +238,7 @@ function GradingSetupPageForm() {
       </h1>
       <NewTaskStepper currentStep={5} />
 
-      <section className="mx-auto mt-[35px] w-full max-w-[1190px] rounded-[12px] border bg-card px-5 pb-5 pt-5 sm:min-h-[620px] sm:px-10 sm:pb-6 sm:pt-6">
+      <section data-draft-width="1190" className="mx-auto mt-[35px] w-full max-w-[1190px] rounded-[12px] border bg-card px-5 pb-5 pt-5 sm:min-h-[620px] sm:px-10 sm:pb-6 sm:pt-6">
         {!taskId ? (
           <CenteredState
             title={gradingSetupText(locale, "taskMissingTitle")}

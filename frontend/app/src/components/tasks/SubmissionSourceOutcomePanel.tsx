@@ -52,10 +52,10 @@ export function SubmissionSourceOutcomePanel({
           <p className="mt-1 text-xs leading-5 text-muted-foreground">
             {equation(counts, locale)}
             {hasTerminalAttention
-              ? tx(locale, "。失败文件不会被静默丢弃，待确认身份也不会覆盖其他学生。", ". Failed files are not silently dropped, and unresolved identities do not overwrite other students.")
+              ? tx(locale, "。请查看下方原因并处理。", ". Review the details below to continue.")
               : hasQuestionWarnings
                 ? tx(locale, "。部分成功文件还包含未匹配题号，请展开核对。", ". Some recognized files also contain unmatched question IDs; expand the list to review them.")
-              : tx(locale, "。每一份原文件都有明确结果。", ". Every original file has an explicit result.")}
+              : tx(locale, "。", ".")}
           </p>
         </div>
         {taskId && hasAttention ? (
