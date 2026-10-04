@@ -639,12 +639,17 @@ def test_confirming_question_also_confirms_default_max_score():
     assert response["problem"]["max_score_review_status"] == "confirmed"
 
 
-def test_question_review_acknowledges_recognition_without_changing_content_or_submissions():
+@pytest.mark.parametrize(
+    "blocking_issue", [False, True], ids=["warning-can-confirm", "blocking-cannot-confirm"],
+)
+def test_question_review_acknowledges_recognition_without_changing_content_or_submissions(blocking_issue):
     from sqlalchemy import select
     from backend.db import assignment_repository
     from backend.db.models import AssignmentQuestionRecord
     from backend.db.session import session_scope
     from backend.services import task_facade
+
+    from backend.domain.errors import ValidationError
 
     owner_id, task_id = "question-review-owner", "question-review-task"
     _seed_question_task(owner_id, task_id)
@@ -663,10 +668,26 @@ def test_question_review_acknowledges_recognition_without_changing_content_or_su
         presentation = dict(source["presentation"])
         presentation["preparation_issues"] = [
             {"issue_id": "ocr", "field": "stem", "code": "recognition_needs_review", "status": "open", "severity": "warning"},
-            {"issue_id": "broken", "field": "programming_tests", "code": "invalid_test_case", "status": "open", "severity": "blocking"},
         ]
+        if blocking_issue:
+            presentation["preparation_issues"].append({
+                "issue_id": "broken", "field": "programming_tests",
+                "code": "invalid_test_case", "status": "open", "severity": "blocking",
+            })
         question.source = {**source, "presentation": presentation}
     before = task_facade.get_task(task_id=task_id, owner_id=owner_id, full=True)
+    if blocking_issue:
+        with pytest.raises(ValidationError) as rejected:
+            task_facade.update_problem(
+                task_id=task_id, owner_id=owner_id, q_id="q1",
+                patch={"review_status": "confirmed"},
+                expected_revision=before["workflow_revision"],
+            )
+        assert rejected.value.code == "question_review_blocked"
+        after = task_facade.get_task(task_id=task_id, owner_id=owner_id, full=True)
+        for field in ("problem_data", "student_data", "status", "workflow_revision"):
+            assert after[field] == before[field]
+        return
     response = task_facade.update_problem(
         task_id=task_id, owner_id=owner_id, q_id="q1",
         patch={"review_status": "confirmed"}, expected_revision=before["workflow_revision"],
@@ -677,7 +698,7 @@ def test_question_review_acknowledges_recognition_without_changing_content_or_su
     assert response["problem"]["stem"] == before["problem_data"]["q1"]["stem"]
     assert response["problem"]["review_status"] == "confirmed"
     assert {issue["issue_id"]: issue["status"] for issue in response["problem"]["preparation_issues"]} == {
-        "ocr": "acknowledged", "broken": "open",
+        "ocr": "acknowledged",
     }
 
 
