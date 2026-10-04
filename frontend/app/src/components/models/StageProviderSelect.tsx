@@ -1,6 +1,6 @@
 import { ProviderIcon } from "@/components/models/ProviderIcon";
 import { cn } from "@/lib/cn";
-import { modelDisplayName, modelSecondaryLabel } from "@/lib/modelPresentation";
+import { modelDisplayName, modelSecondaryLabel, sortByProvider } from "@/lib/modelPresentation";
 import type { ExpertConfig } from "@/types";
 
 export function StageProviderSelect({
@@ -50,7 +50,7 @@ export function StageProviderSelect({
             {experts.length === 0 ? (
               <option value="">{zh ? "暂无已启用模型" : "No enabled model"}</option>
             ) : null}
-            {experts.map((expert) => (
+            {sortByProvider(experts).map((expert) => (
               <option key={expert.provider_id} value={expert.provider_id}>
                 {safeModelDisplayName(expert)} · {safeModelSecondaryLabel(expert)}
                 {expert.provider_kind === "ocr" ? " · OCR" : ""}

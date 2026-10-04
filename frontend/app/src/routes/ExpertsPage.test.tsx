@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -118,6 +118,29 @@ describe("ExpertsPage editable vendor Base URL", () => {
     saveBaiduOCRCredentials.mockResolvedValue({ status: "success" });
     verifyBaiduOCRCredentials.mockResolvedValue({ status: "credentials_verified" });
     deleteBaiduOCRCredentials.mockResolvedValue({ status: "success" });
+  });
+
+  it("uses the verified catalog default for new configurations and the requested provider order", async () => {
+    hookState.catalog.find((item) => item.provider_type === "openai")!.default_model = "gpt-6-luna";
+    const user = userEvent.setup(); renderPage();
+    await user.click(screen.getByRole("button", { name: "添加模型配置" }));
+    const dialog = screen.getByRole("dialog");
+    const provider = within(dialog).getByRole("combobox", { name: "服务商" });
+    expect(within(provider).getAllByRole("option").map((item) => (item as HTMLOptionElement).value))
+      .toEqual(["gemini", "openai", "anthropic", "deepseek", "zhipu", "moonshot", "qwen"]);
+    await user.selectOptions(provider, "openai");
+    expect(within(dialog).getByDisplayValue("gpt-6-luna")).toBeInTheDocument();
+    expect(within(dialog).getByDisplayValue("https://api.openai.com/v1")).toBeInTheDocument();
+    expect(addExpert).not.toHaveBeenCalled();
+  });
+
+  it("orders official links consistently and includes the Baidu OCR console and API documentation", () => {
+    renderPage();
+    const section = screen.getByRole("heading", { name: "服务商官方入口" }).closest("section")!;
+    const labels = [...section.querySelectorAll("span.font-semibold")].map((item) => item.textContent);
+    expect(labels).toEqual(["Google Gemini", "OpenAI", "Anthropic", "DeepSeek", "Zhipu AI", "Moonshot (Kimi)", "Qwen (通义千问)", "百度 Unlimited-OCR"]);
+    expect(within(section).getByRole("link", { name: "控制台" })).toHaveAttribute("href", "https://console.bce.baidu.com/ai-engine/ocr/overview/index");
+    expect([...section.querySelectorAll("a")].some((link) => link.href === "https://ai.baidu.com/ai-doc/OCR/fmr1p39gb")).toBe(true);
   });
 
   it("only sends an independent image probe after an explicit click on that configuration", async () => {

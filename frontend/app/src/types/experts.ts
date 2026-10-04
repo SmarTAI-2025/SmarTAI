@@ -93,6 +93,7 @@ export interface SetDefaultExpertResponse {
 }
 
 export interface ProviderCatalogItem {
+  default_model?: string;
   provider_type: ProviderType;
   display_name: string;
   docs_url?: string;

@@ -4,7 +4,7 @@ import { HeaderPopover } from "@/components/layout/HeaderPopover";
 import { ProviderIcon } from "@/components/models/ProviderIcon";
 import { useI18n } from "@/i18n/I18nProvider";
 import { cn } from "@/lib/cn";
-import { modelDisplayName, modelSecondaryLabel } from "@/lib/modelPresentation";
+import { modelDisplayName, modelSecondaryLabel, sortByProvider } from "@/lib/modelPresentation";
 import type { ExpertConfig } from "@/types";
 
 interface ModelStatusMenuProps {
@@ -26,7 +26,7 @@ export function ModelStatusMenu({
   onRetry,
 }: ModelStatusMenuProps) {
   const { locale, t } = useI18n();
-  const visibleExperts = experts.slice(0, 3);
+  const visibleExperts = sortByProvider(experts).slice(0, 3);
   const countLabel = isLoading || isError ? "—" : `${enabledCount}/${experts.length}`;
 
   return (

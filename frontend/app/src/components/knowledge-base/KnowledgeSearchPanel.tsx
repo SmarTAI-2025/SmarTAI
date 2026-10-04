@@ -7,7 +7,7 @@ import { KnowledgeCitationPreview } from "./KnowledgeCitationPreview";
 import type { KnowledgeMatch } from "@/types/knowledgeCitation";
 import type { ExpertConfig } from "@/types";
 import { listExperts } from "@/api/experts";
-import { modelDisplayName } from "@/lib/modelPresentation";
+import { modelDisplayName, sortByProvider } from "@/lib/modelPresentation";
 
 interface QueryUsage { status: string; cached?: boolean; provider_calls?: number; input_tokens?: number | null; output_tokens?: number | null }
 
@@ -54,7 +54,7 @@ export function KnowledgeSearchPanel({ documentIds }: { documentIds: string[] })
     <select value={providerId} onChange={(event) => setProviderId(event.target.value)} disabled={pending}
       aria-label={zh ? "检索方式" : "Search mode"} className="mb-2 h-9 w-full min-w-0 rounded-md border bg-background px-2 text-sm">
       <option value="">{zh ? "本地检索" : "Local search"}</option>
-      {experts.map((expert) => <option key={expert.provider_id} value={expert.provider_id}>
+      {sortByProvider(experts).map((expert) => <option key={expert.provider_id} value={expert.provider_id}>
         {zh ? "模型辅助：" : "Model assisted: "}{modelDisplayName(expert)}
       </option>)}
     </select>
