@@ -657,6 +657,7 @@ async def preflight_problem_source(
     replace_confirmed: bool = Form(default=False),
     recognition_options: str | None = Form(default=None),
     enable_material_ocr: bool = Form(default=False),
+    defer_recognition: bool = Form(default=False),
     current: User = Depends(require_teacher),
     registry: ExpertRegistry = Depends(get_scoped_expert_registry),
 ):
@@ -667,6 +668,7 @@ async def preflight_problem_source(
             replace_confirmed if isinstance(replace_confirmed, bool) else False
         )
         enable_material_ocr = enable_material_ocr is True
+        defer_recognition = defer_recognition is True
         stored_file_id = (
             stored_file_id.strip()
             if isinstance(stored_file_id, str) and stored_file_id.strip()
@@ -749,6 +751,10 @@ async def preflight_problem_source(
                 owner_id=current.id, route=route, registry=registry,
             ),
         }
+        # Preserve identities of older prepared sources. Only new upload-only
+        # requests opt into recognition by the existing durable progress job.
+        if defer_recognition:
+            provisional_payload["defer_recognition"] = True
         input_hash = _source_fingerprint(provisional_payload)
         replay = task_facade.find_task_operation(
             task_id=task_id,
@@ -757,14 +763,14 @@ async def preflight_problem_source(
             input_hash=input_hash,
         )
         if replay is not None and not task_facade._operation_is_retryable(replay):
-            if replay.status == "ready" and replay.payload.get("text"):
+            if replay.status == "ready" and (replay.payload.get("text") or replay.payload.get("recognition_pending")):
                 return _problem_source_preflight_response(
                     operation=replay,
                     workflow_revision=workflow.workflow_revision,
                 )
             if replay.status == "error":
                 code = str(replay.error_code or "problem_source_parse_failed")
-                detail: dict[str, Any] = {"code": code}
+                detail: dict[str, Any] = {"code": code, **dict((replay.payload or {}).get("recognition_failure") or {})}
                 replay_ref = dict((replay.payload or {}).get("source_ref") or {})
                 if not replay_ref:
                     checkpoint_refs = list(
@@ -892,6 +898,15 @@ async def preflight_problem_source(
                 expected_attempt=operation.attempt,
                 payload={**provisional_payload, "source_ref": source_ref},
             )
+            if defer_recognition and stored is not None:
+                operation = workflow_repository.update_operation(
+                    operation.id, owner_id=current.id, expected_attempt=operation.attempt,
+                    status="ready", payload={**provisional_payload, "source_ref": source_ref,
+                                             "text": "", "recognition_pending": True},
+                )
+                return _problem_source_preflight_response(
+                    operation=operation, workflow_revision=workflow.workflow_revision,
+                )
             if (descriptor.get("content_type") in {"application/pdf", "image/png", "image/jpeg", "image/webp", "image/bmp", "image/tiff"}
                     and (descriptor["kind"] == "upload" or descriptor.get("_recognition_original"))):
                 try:
@@ -906,7 +921,7 @@ async def preflight_problem_source(
                     )
                 except RecognitionError as exc:
                     detail = {"code": exc.code, "role": role, "filename": descriptor["filename"],
-                              "stored_file_id": stored.id if stored else None}
+                              "stored_file_id": stored.id if stored else None, **(exc.details or {})}
                     if exc.code == "provider_vision_not_supported":
                         detail["recovery"] = "choose_another_provider"
                     raise HTTPException(_provider_http_status_for_code(exc.code), detail=detail) from None
@@ -936,6 +951,7 @@ async def preflight_problem_source(
                 operation=operation,
                 owner_id=current.id,
                 error_code=str(detail.get("code") or "problem_source_parse_failed"),
+                recognition_failure={key: detail[key] for key in ("failed_pages", "processed_pages") if key in detail},
             )
             if detail != exc.detail:
                 raise HTTPException(exc.status_code, detail=detail) from exc
@@ -1036,7 +1052,7 @@ async def preflight_problem_source(
         return domain_error_response(exc)
 
 
-def _mark_problem_source_failed(*, operation, owner_id: str, error_code: str) -> None:
+def _mark_problem_source_failed(*, operation, owner_id: str, error_code: str, recognition_failure: dict | None = None) -> None:
     try:
         workflow_repository.update_operation(
             operation.id,
@@ -1045,6 +1061,7 @@ def _mark_problem_source_failed(*, operation, owner_id: str, error_code: str) ->
             status="error",
             error_code=error_code[:128],
             completed_at=time.time(),
+            **({"payload": {**operation.payload, "recognition_failure": recognition_failure}} if recognition_failure else {}),
         )
     except Exception:
         return
@@ -1388,6 +1405,8 @@ def _source_fingerprint(payload: dict) -> str:
             "recognition_configuration_fingerprint",
         )
     }
+    if payload.get("defer_recognition") is True:
+        selected["defer_recognition"] = True
     # For an upload/inline source, this ID is an output of optional library
     # retention, assigned after input_hash was frozen. Only a library-selected
     # source uses the material ID as input identity. This also preserves retry
@@ -2128,7 +2147,7 @@ def _rehydrate_question_preparation_inputs(operation):
                 code="question_preparation_source_unavailable",
             )
         text = source_payload.get("text")
-        if not isinstance(text, str) or not text.strip():
+        if not isinstance(text, str) or (not text.strip() and not source_payload.get("recognition_pending")):
             raise _question_preparation_recovery_error(
                 "A frozen question source has no recoverable text.",
                 code="question_preparation_source_unavailable",
@@ -2234,12 +2253,67 @@ def _rehydrate_question_preparation_inputs(operation):
 
     return {
         "sources": sources,
+        "registry": registry,
         "route": route,
         "recognition_provider_id": recognition_provider_id,
         "claimed_workflow_revision": claimed_revision,
         "replace_confirmed": replace_confirmed,
         "score_policy": score_policy,
     }
+
+
+async def _recognize_saved_question_sources(sources, *, operation, route, registry, reporter):
+    """Read owner-bound originals inside the existing progress worker.
+
+    Frozen source inputs stay immutable, including their prepared-text hash.
+    Recognition artifacts provide the existing durable cache on safe retries.
+    """
+    resolved = []
+    for index, (draft, text, payload) in enumerate(sources):
+        if not payload.get("recognition_pending"):
+            resolved.append((draft, text, payload))
+            continue
+        await reporter.set_current_step(
+            "reading_source", message=f"Reading source {index + 1}/{len(sources)}: {draft.filename}",
+        )
+        await operation.update_progress((await reporter.snapshot()).model_dump(mode="json"))
+        file_id = (payload.get("source_ref") or {}).get("stored_file_id")
+        stored = file_repository.get_file(file_id=file_id, owner_id=operation.owner_id)
+        if (stored is None or stored.assignment_id != operation.assignment_id
+                or stored.kind != "problem_source" or stored.sha256 != draft.content_sha256):
+            raise RecognitionError("recognition_source_unavailable")
+        def read_original():
+            with get_storage().open(stored.storage_key) as stream:
+                return stream.read(stored.size_bytes + 1)
+        body = await run_in_threadpool(read_original)
+        if len(body) != stored.size_bytes or hashlib.sha256(body).hexdigest() != draft.content_sha256:
+            raise RecognitionError("recognition_source_mismatch")
+        result = await read_question_source(
+            owner_id=operation.owner_id, task_id=operation.assignment_id,
+            content=body, filename=draft.filename, content_type=draft.content_type,
+            route=route, registry=registry, stored_file_id=stored.id,
+            extraction_hint=draft.extraction_hint, options=payload.get("recognition_options"),
+            purpose=_source_role_ocr_purpose(draft.role), reporter=reporter,
+            allow_vision=draft.role not in {"rubric", "programming_tests"} or payload.get("enable_material_ocr") is True,
+        )
+        if not result.text.strip():
+            raise RecognitionError("ocr_empty_result")
+        if len(result.text) > MAX_SOURCE_CHARACTERS:
+            raise ValidationError("The extracted source is too large.", code="source_text_too_large")
+        saved = await _save_source_to_library(
+            save=payload.get("save_to_library") is True,
+            descriptor={"_body": body, "filename": draft.filename, "content_type": draft.content_type},
+            owner_id=operation.owner_id, task_id=operation.assignment_id,
+            role=draft.role, existing_material_id=draft.library_material_id,
+        )
+        updated = {**payload, "recognition": result.recognition, "saved_material": saved}
+        resolved.append((draft.model_copy(update={
+            "recognition": result.recognition,
+            "recognition_requires_review": recognition_needs_review(result.recognition),
+            "resident_bytes": len(result.text.encode("utf-8")),
+            "candidates": _detect_candidates(result.text),
+        }), result.text, updated))
+    return resolved
 
 
 async def run_durable_question_preparation(operation) -> None:
@@ -2259,6 +2333,10 @@ async def run_durable_question_preparation(operation) -> None:
         await reporter.set_phase("parsing")
         await operation.update_progress(
             (await reporter.snapshot()).model_dump(mode="json")
+        )
+
+        sources = await _recognize_saved_question_sources(
+            sources, operation=operation, route=route, registry=inputs["registry"], reporter=reporter,
         )
 
         payload = dict(operation.payload or {})
@@ -2944,6 +3022,8 @@ async def run_durable_question_preparation(operation) -> None:
         )
         await reporter.set_error(error_code)
         snapshot = (await reporter.snapshot()).model_dump(mode="json")
+        if isinstance(exc, RecognitionError) and exc.details:
+            snapshot["recognition_failure"] = exc.details
         snapshot = _merge_question_preparation_checkpoint_progress(
             snapshot,
             operation.checkpoint_data,
