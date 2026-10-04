@@ -219,14 +219,19 @@ export function ProblemRecognitionProgressPage() {
       ? null
       : candidateProgress
   );
-  const steps = getRecognitionSteps(progress);
+  const queued = progressQuery.data?.active_operation_status === "pending";
+  const queuedLabel = locale === "zh-CN" ? "等待后台处理" : "Waiting for a worker";
+  const queuedDescription = locale === "zh-CN"
+    ? "任务已保存，正在等待后台处理名额。识别尚未开始，无需重复提交。"
+    : "Your task is saved and waiting for an available worker. Recognition has not started; no need to submit it again.";
+  const steps = getRecognitionSteps(progress).map((step) => queued ? { ...step, state: "pending" as const } : step);
   const nestedStep = progress?.current_step && STAGE_LABEL_KEYS[progress.current_step]
     ? { code: progress.current_step, labelKey: STAGE_LABEL_KEYS[progress.current_step], state: "active" as const }
     : null;
   const activeStep = nestedStep ?? steps.find((step) => step.state === "active")
     ?? steps.find((step) => step.code === progress?.current_step)
     ?? steps.at(-1);
-  const activeStageLabel = activeStep
+  const activeStageLabel = queued ? queuedLabel : activeStep
     ? getStageLabel(activeStep, locale, t)
     : t("problemProgressRecognizingStructure");
   const recentEvents = [...(progress?.messages ?? [])].slice(-3).reverse();
@@ -236,7 +241,7 @@ export function ProblemRecognitionProgressPage() {
       progress.total_steps > 0 &&
       typeof progress.completed_steps === "number",
   );
-  const percent = hasDeterminateProgress ? progressQuery.percent : null;
+  const percent = queued ? null : hasDeterminateProgress ? progressQuery.percent : null;
   const generationMetrics = progress?.stage_metrics ?? {};
   const generationTotal = generationMetrics.solution_total_questions ?? 0;
   const generationCompleted = Math.min(
@@ -267,7 +272,7 @@ export function ProblemRecognitionProgressPage() {
             {activeStageLabel}
           </h2>
           <p className="mt-2 text-sm leading-6 text-muted-foreground">
-            {t("problemProgressBackgroundDescription")}
+            {queued ? queuedDescription : t("problemProgressBackgroundDescription")}
           </p>
           </div>
           <SmarTAIMascot variant="thinking" size="md" className="hidden sm:inline-flex" />
@@ -281,7 +286,7 @@ export function ProblemRecognitionProgressPage() {
             aria-valuemin={0}
             aria-valuemax={100}
             aria-valuenow={percent ?? undefined}
-            aria-valuetext={percent === null ? t("problemProgressProcessing") : undefined}
+            aria-valuetext={percent === null ? queued ? queuedLabel : t("problemProgressProcessing") : undefined}
           >
             {percent === null ? (
               <span className="absolute inset-y-0 left-0 w-1/3 animate-pulse rounded-full bg-primary" />
@@ -293,7 +298,7 @@ export function ProblemRecognitionProgressPage() {
             )}
           </div>
           <span className="w-14 shrink-0 text-right text-sm font-semibold text-primary sm:text-lg">
-            {percent === null ? t("problemProgressProcessing") : `${percent}%`}
+            {percent === null ? queued ? (locale === "zh-CN" ? "排队中" : "Queued") : t("problemProgressProcessing") : `${percent}%`}
           </span>
         </div>
 
@@ -349,7 +354,7 @@ export function ProblemRecognitionProgressPage() {
             ) : (
               <div className="mt-4 flex items-center gap-2 text-sm text-muted-foreground">
                 <Loader2 aria-hidden="true" className="h-4 w-4 animate-spin text-primary" />
-                <span>{t("problemProgressWaitingForEvents")}</span>
+                <span>{queued ? queuedDescription : t("problemProgressWaitingForEvents")}</span>
               </div>
             )}
           </div>

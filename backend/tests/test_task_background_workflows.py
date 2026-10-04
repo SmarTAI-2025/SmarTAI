@@ -996,6 +996,8 @@ async def test_extract_endpoint_queues_durable_work_and_returns_started():
         response["job_id"], owner_id=owner_id
     )
     assert operation.status == "pending"
+    snapshot = task_facade.task_state(task_id=task_id, owner_id=owner_id)
+    assert snapshot["active_operation_status"] == "pending"
     assert isinstance(operation.payload.get("source_id"), str)
     assert assignment_repository.list_questions(task_id, teacher_id=owner_id) == []
 
@@ -1029,7 +1031,8 @@ async def test_submission_upload_is_bounded_before_any_operation_is_created(monk
 
 
 @pytest.mark.asyncio
-async def test_question_preparation_timeout_persists_provider_timeout(monkeypatch):
+@pytest.mark.parametrize("error_code", ["provider_timeout", "provider_capacity_unavailable"])
+async def test_question_preparation_timeout_persists_provider_timeout(monkeypatch, error_code):
     owner_id, task_id = _seed_task()
     job, _ = workflow_repository.create_operation(
         assignment_id=task_id,
@@ -1052,8 +1055,13 @@ async def test_question_preparation_timeout_persists_provider_timeout(monkeypatc
         },
     )
 
+    assert task_facade.task_state(task_id=task_id, owner_id=owner_id)["active_operation_status"] == "running"
+
     async def _timeout(*args, **kwargs):
         del args, kwargs
+        if error_code == "provider_capacity_unavailable":
+            from backend.llm.providers import ProviderRequestError
+            raise ProviderRequestError(error_code)
         try:
             raise TimeoutError("provider request timed out")
         except TimeoutError as exc:
@@ -1077,12 +1085,12 @@ async def test_question_preparation_timeout_persists_provider_timeout(monkeypatc
     failed = workflow_repository.get_operation(job.id, owner_id=owner_id)
     workflow = workflow_repository.get_workflow(task_id, owner_id=owner_id)
     assert failed.status == "error"
-    assert failed.error_code == "provider_timeout"
+    assert failed.error_code == error_code
     assert failed.progress["phase"] == "error"
-    assert failed.progress["error_detail"] == "provider_timeout"
+    assert failed.progress["error_detail"] == error_code
     assert workflow.presentation_status == "error"
     assert workflow.active_job_id is None
-    assert workflow.error_code == "provider_timeout"
+    assert workflow.error_code == error_code
     task_preparation.remove_reporter(job.id)
 
 

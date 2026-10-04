@@ -37,6 +37,7 @@ SAFE_BACKGROUND_ERROR_CODES = frozenset({
     "question_preparation_artifact_conflict",
     "question_preparation_provider_configuration_changed",
     "provider_timeout",
+    "provider_capacity_unavailable",
     "provider_unreachable",
     "provider_rate_limited",
     "provider_auth_failed",
@@ -124,6 +125,7 @@ SAFE_BACKGROUND_ERROR_CODES = frozenset({
 }) | SAFE_SOURCE_REASON_CODES | RECOGNITION_ERROR_CODES
 
 RETRYABLE_BACKGROUND_ERROR_CODES = frozenset({
+    "provider_capacity_unavailable",
     "provider_overloaded",
     "provider_timeout",
     "provider_unreachable",

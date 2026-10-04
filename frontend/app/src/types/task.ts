@@ -306,6 +306,7 @@ export interface TaskStateSnapshot extends TaskLite {
   submission_sources?: SubmissionSourceOutcome[];
   progress?: JobProgress | null;
   active_job_id?: string | null;
+  active_operation_status?: string | null;
   active_operation?:
     | "question_preparation"
     | "problem_extraction"
