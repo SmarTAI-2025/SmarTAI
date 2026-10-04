@@ -43,4 +43,3 @@ def test_unquoted_extra_metadata_does_not_destroy_valid_generated_materials():
     parsed = extract_and_parse_json('{"candidates":[{tspans:[],"q_id":"q1",'
         '"target_id":"q1:reference_answer","target":"reference_answer","text_value":"x = 2"}]}', AICompletionOutput)
     assert parsed.candidates[0].text_value == "x = 2"
-

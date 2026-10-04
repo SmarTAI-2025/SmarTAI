@@ -74,4 +74,3 @@ async def test_ocr_connection_failure_is_retryable_but_response_timeout_is_uncer
         with pytest.raises(RecognitionError) as caught:
             await engine.recognize(request())
         assert caught.value.submission_may_exist is uncertain
-

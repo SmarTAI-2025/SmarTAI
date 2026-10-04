@@ -29,4 +29,3 @@ def test_legacy_teacher_hint_selects_targets_before_any_ocr(hint):
 def test_explicit_target_field_wins_over_older_hint():
     assert question_recognition_options({"targets": ["2.1.1"]}, extraction_hint="1.1.5, 1.2.3").targets == ["2.1.1"]
     assert question_recognition_options(extraction_hint="version 1.2.3; pi is 3.14").targets == []
-

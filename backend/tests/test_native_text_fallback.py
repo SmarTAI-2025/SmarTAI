@@ -46,4 +46,3 @@ def test_unavailable_vision_preserves_native_pdf_text_but_not_empty_scan(purpose
     assert "visual_evidence_missing" in plan.decisions[0].reason_codes
     assert plan.decisions[1].action == "blocked"
     assert plan.initial_calls == 0
-
