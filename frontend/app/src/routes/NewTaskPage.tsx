@@ -204,7 +204,7 @@ function NewTaskForm({ scope, taskQuery }: { scope: string; taskQuery: ReturnTyp
       <TaskMetadataHeading editing={isEditing} />
       <NewTaskStepper currentStep={0} reachableStep={reachableStep} returnState={location.state} />
 
-      <form id="new-task-form" onSubmit={handleSubmit} className="mt-[35px] min-h-[510px] max-w-full rounded-[8px] border bg-card p-5 sm:p-10 xl:ml-[200px] xl:w-[900px] xl:px-[49px] xl:pb-[39px] xl:pt-[39px]">
+      <form data-draft-width="900" id="new-task-form" onSubmit={handleSubmit} className="mx-auto mt-[35px] min-h-[510px] w-full max-w-[900px] rounded-[8px] border bg-card p-5 sm:p-10 xl:px-[49px] xl:pb-[39px] xl:pt-[39px]">
         <div className="grid gap-5 xl:block">
           <div>
             <label htmlFor="new-task-name" className="block text-[14px] font-semibold leading-5 text-foreground">{t("newTaskNameLabel")}</label>
@@ -288,7 +288,7 @@ function NewTaskForm({ scope, taskQuery }: { scope: string; taskQuery: ReturnTyp
         </div>
       </form>
 
-      <div className="mt-[30px] flex max-w-full justify-end xl:ml-[200px] xl:w-[900px] xl:pr-[10px]">
+      <div className="mx-auto mt-[30px] flex w-full max-w-[900px] justify-end xl:pr-[10px]">
         <button form="new-task-form" type="submit" disabled={isSaving} className="inline-flex h-10 w-full items-center justify-center gap-2 rounded-[8px] bg-primary px-5 text-[14px] font-semibold text-primary-foreground outline-none transition hover:bg-primary/90 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50 sm:w-[180px]">
           {isSaving ? <LoaderCircle aria-hidden="true" className="h-4 w-4 animate-spin" /> : null}
           {isSaving
