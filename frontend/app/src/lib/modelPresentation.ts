@@ -52,3 +52,14 @@ export function modelSecondaryLabel(expert: ModelPresentationSource): string {
     : provider;
   return endpoint ? `${identity} · ${endpoint}` : identity;
 }
+
+// Stable within each provider; sorting must not change the selected/default model.
+export const PROVIDER_ORDER = ["gemini", "openai", "anthropic", "deepseek", "zhipu", "moonshot", "qwen", "baidu_unlimited_ocr"] as const;
+
+export function sortByProvider<T extends { provider_type?: string | null }>(items: readonly T[]): T[] {
+  const rank = (item: T) => {
+    const index = PROVIDER_ORDER.findIndex((provider) => provider === item.provider_type);
+    return index < 0 ? PROVIDER_ORDER.length : index;
+  };
+  return [...items].sort((a, b) => rank(a) - rank(b));
+}

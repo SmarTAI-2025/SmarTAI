@@ -10,6 +10,8 @@ from typing import Optional, Literal
 from pydantic import AliasChoices, Field, model_validator
 from pydantic_settings import BaseSettings
 
+from backend.llm.provider_catalog import catalog_entry
+
 
 class Settings(BaseSettings):
     """Application settings, loaded from env vars."""
@@ -28,34 +30,34 @@ class Settings(BaseSettings):
     # ExpertRegistry.pick_default() returns None, which surfaces as a 503 to the
     # user with a clear "Add an API key first" message.
     gemini_api_key: Optional[str] = os.getenv("GEMINI_API_KEY", "")
-    gemini_model: str = os.getenv("GEMINI_MODEL", "gemini-3-flash-preview")
+    gemini_model: str = os.getenv("GEMINI_MODEL", catalog_entry("gemini").default_model)
 
     # OpenAI-compatible (Zhipu, OpenAI, etc.)
     openai_api_key: Optional[str] = os.getenv("OPENAI_API_KEY", "")
     openai_api_base: str = os.getenv("OPENAI_API_BASE", "https://api.openai.com/v1")
-    openai_model: str = os.getenv("OPENAI_MODEL", "gpt-4o")
+    openai_model: str = os.getenv("OPENAI_MODEL", catalog_entry("openai").default_model)
 
     # Zhipu
     zhipu_api_key: Optional[str] = os.getenv("ZHIPU_API_KEY", "")
     zhipu_api_base: str = "https://open.bigmodel.cn/api/paas/v4"
-    zhipu_model: str = "glm-4.5-air"
+    zhipu_model: str = catalog_entry("zhipu").default_model
 
     # Anthropic
     anthropic_api_key: Optional[str] = os.getenv("ANTHROPIC_API_KEY", "")
-    anthropic_model: str = "claude-sonnet-4-20250514"
+    anthropic_model: str = catalog_entry("anthropic").default_model
 
     # ─── Domestic OpenAI-compatible providers (DeepSeek, Moonshot, Qwen) ─────
     deepseek_api_key: Optional[str] = os.getenv("DEEPSEEK_API_KEY", "")
     deepseek_api_base: str = "https://api.deepseek.com/v1"
-    deepseek_model: str = "deepseek-v4-flash"
+    deepseek_model: str = catalog_entry("deepseek").default_model
 
     moonshot_api_key: Optional[str] = os.getenv("MOONSHOT_API_KEY", "")
     moonshot_api_base: str = "https://api.moonshot.cn/v1"
-    moonshot_model: str = "kimi-k3"
+    moonshot_model: str = catalog_entry("moonshot").default_model
 
     qwen_api_key: Optional[str] = os.getenv("QWEN_API_KEY", "")
     qwen_api_base: str = "https://dashscope.aliyuncs.com/compatible-mode/v1"
-    qwen_model: str = "qwen-plus"
+    qwen_model: str = catalog_entry("qwen").default_model
 
     # ─── Optional outbound proxy for overseas model providers ──────────
     # Only SMARTAI_HTTP_PROXY / SMARTAI_HTTPS_PROXY opt in to proxying. Do not
