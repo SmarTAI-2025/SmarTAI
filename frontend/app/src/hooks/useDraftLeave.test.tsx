@@ -64,6 +64,14 @@ it("server changes preserve current input, demand explicit conflict resolution, 
   expect(screen.getByLabelText("name")).toHaveValue("new input"); await screen.findByText(/服务器业务版本已变化/); fireEvent.click(screen.getByRole("button", { name: "暂存" })); await screen.findByText(/请先核对服务器变化/);
   fireEvent.click(screen.getByText("核对后恢复旧草稿")); expect(screen.getByLabelText("name")).toHaveValue("old local"); await save();
 });
+it("can explicitly keep current input after a server update and save without submitting", async () => {
+  setup(); await ready(); type("old local"); await save(); type("new input");
+  fireEvent.click(screen.getByText("server changes"));
+  fireEvent.click(await screen.findByRole("button", { name: "保留当前输入" }));
+  expect(screen.getByLabelText("name")).toHaveValue("new input"); await save();
+  expect((await store.readPageDraft("draft-teacher", "test:task:field", store.objectDraftCodec())).value).toMatchObject({ name: "new input" });
+  expect(formalSubmit).not.toHaveBeenCalled();
+});
 it("formal success clears the snapshot and fences a delayed prepared save", async () => {
   const { router } = setup(); await ready(); type("saved"); await save(); type("pending"); const original = store.writePageDrafts; let release!: () => void;
   vi.spyOn(store, "writePageDrafts").mockImplementationOnce(async writes => { await new Promise<void>(resolve => { release = resolve; }); await original(writes); });

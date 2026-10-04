@@ -15,8 +15,10 @@ export function useStartAICompletion() {
   return useMutation({
     mutationFn: aiCompletionsApi.startAICompletion,
     onSuccess: (_data, variables) => {
-      queryClient.invalidateQueries({ queryKey: taskKeys.detail(variables.taskId) });
-      queryClient.invalidateQueries({ queryKey: taskKeys.state(variables.taskId) });
+      return Promise.all([
+        queryClient.invalidateQueries({ queryKey: taskKeys.detail(variables.taskId) }),
+        queryClient.invalidateQueries({ queryKey: taskKeys.state(variables.taskId) }),
+      ]);
     },
   });
 }

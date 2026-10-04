@@ -3,10 +3,11 @@ import { UNSAFE_DataRouterContext, useBlocker } from "react-router-dom";
 import { UnsavedChangesDialog } from "@/components/ui/UnsavedChangesDialog";
 import { draftError, subscribeDraftChanges, writePageDrafts } from "@/lib/pageDraftStore";
 import type { PreparedDraft } from "@/hooks/useDraftProtection";
+import { isSessionExpired, useSessionExpired } from "@/lib/sessionExpiry";
 export interface DraftController {
   id: symbol; scope: string; secret: boolean; active: boolean; dirty: boolean; busy: boolean; loaded: boolean;
   savedAt: number | null; notice: string | null; hasConflict: boolean;
-  prepare: () => PreparedDraft; discard: () => void; remove: () => Promise<void>; restore: () => void;
+  prepare: () => PreparedDraft; discard: () => void; remove: () => Promise<void>; restore: () => void; keepCurrent: () => void;
 }
 type Getter = () => DraftController;
 type Intent = { run: () => void; cancel: () => void; controllers: DraftController[] };
@@ -14,6 +15,7 @@ const noop = () => {};
 const LeaveContext = createContext({ register: (_getter: Getter): (() => void) => noop, changed: noop, request: (run: () => void, _ids?: symbol[]) => run(), controllers: [] as DraftController[], save: async (_ids?: symbol[]) => {}, saving: false, error: null as string | null });
 export function useDraftLeave() { return useContext(LeaveContext); }
 export function DraftLeaveProvider({ children }: { children: ReactNode }) {
+  const expired = useSessionExpired();
   const registry = useRef(new Map<symbol, Getter>());
   const [, render] = useState(0);
   const [intent, setIntent] = useState<Intent | null>(null);
@@ -28,6 +30,7 @@ export function DraftLeaveProvider({ children }: { children: ReactNode }) {
     return () => { registry.current.delete(id); changed(); };
   }, [changed]);
   const ask = useCallback((run: () => void, ids?: symbol[], cancel = noop) => {
+    if (isSessionExpired()) { run(); return; }
     if (pending.current || savingRef.current) return;
     const controllers = all().filter((controller) => (!ids || ids.includes(controller.id)) && (controller.dirty || controller.busy));
     if (!controllers.length) { run(); return; }
@@ -56,11 +59,11 @@ export function DraftLeaveProvider({ children }: { children: ReactNode }) {
   }, [controllers, error, all]);
   const dirty = controllers.some((item) => item.dirty || item.busy);
   useEffect(() => {
-    if (!dirty) return;
+    if (!dirty || expired) return;
     function protect(event: BeforeUnloadEvent) { event.preventDefault(); event.returnValue = ""; }
     window.addEventListener("beforeunload", protect);
     return () => window.removeEventListener("beforeunload", protect);
-  }, [dirty]);
+  }, [dirty, expired]);
   function finish(leave: boolean) {
     const original = pending.current; if (!original || savingRef.current) return;
     pending.current = null; setIntent(null); setError(null);
@@ -88,9 +91,9 @@ export function DraftLeaveProvider({ children }: { children: ReactNode }) {
   const routeAsk = useCallback((run: () => void, cancel?: () => void) => ask(run, undefined, cancel), [ask]);
   const dataRouter = useContext(UNSAFE_DataRouterContext);
   return <LeaveContext.Provider value={{ register, changed, request: ask, controllers, save, saving, error }}>
-    {dataRouter ? <RouterLeaveGuard shouldBlock={() => all().some((item) => item.dirty || item.busy)} ask={routeAsk} /> : null}
+    {dataRouter ? <RouterLeaveGuard shouldBlock={() => !isSessionExpired() && all().some((item) => item.dirty || item.busy)} ask={routeAsk} /> : null}
     {children}
-    {intent ? <UnsavedChangesDialog title="有未暂存修改" description={controllers.some((item) => item.busy) ? "业务保存正在进行，请等待完成；当前输入仍保留。" : intent.controllers.some((item) => item.secret) ? "认证秘密不会写入本地草稿。请继续编辑并使用原有保存操作，或放弃本次输入离开。" : "暂存仅保存在当前浏览器，不会上传、识别、批改或确认复核。"} stayLabel="继续编辑" leaveLabel="不暂存并离开" saveLabel={intent.controllers.some((item) => item.secret) ? undefined : "暂存并离开"} savingLabel="正在暂存…" saving={saving || controllers.some((item) => item.busy)} saveError={error ?? undefined} onStay={() => finish(false)} onLeave={() => finish(true)} onSave={() => void saveAndLeave()} /> : null}
+    {intent && !expired ? <UnsavedChangesDialog title="有未暂存修改" description={controllers.some((item) => item.busy) ? "业务保存正在进行，请等待完成；当前输入仍保留。" : intent.controllers.some((item) => item.secret) ? "认证秘密不会写入本地草稿。请继续编辑并使用原有保存操作，或放弃本次输入离开。" : "暂存仅保存在当前浏览器，不会上传、识别、批改或确认复核。"} stayLabel="继续编辑" leaveLabel="不暂存并离开" saveLabel={intent.controllers.some((item) => item.secret) ? undefined : "暂存并离开"} savingLabel="正在暂存…" saving={saving || controllers.some((item) => item.busy)} saveError={error ?? undefined} onStay={() => finish(false)} onLeave={() => finish(true)} onSave={() => void saveAndLeave()} /> : null}
   </LeaveContext.Provider>;
 }
 function RouterLeaveGuard({ shouldBlock, ask }: { shouldBlock: () => boolean; ask: (run: () => void, cancel?: () => void) => void }) {
@@ -116,7 +119,7 @@ export function DraftActions() {
       <p>仅保存在此浏览器，7 天内可恢复。</p>
       <details><summary className="cursor-pointer">保存说明</summary><p className="mt-1 max-w-lg">退出登录或清理浏览器数据会清除草稿。每页最多 64 MiB，总计 128 MiB、30 份。</p></details>
     </div>
-    {editable.map((item) => <div key={item.scope}>{item.notice ? <p role="status" className="mt-2 text-xs">{item.notice}</p> : null}{item.hasConflict ? <button type="button" onClick={item.restore} className="mt-2 rounded border px-3 py-2 text-sm">核对后恢复旧草稿</button> : null}</div>)}
+    {editable.map((item) => <div key={item.scope}>{item.notice ? <p role="status" className="mt-2 text-xs">{item.notice}</p> : null}{item.hasConflict ? <div className="mt-2 flex flex-wrap gap-2"><button type="button" onClick={item.keepCurrent} className="rounded border px-3 py-2 text-sm">保留当前输入</button><button type="button" onClick={item.restore} className="rounded border px-3 py-2 text-sm">核对后恢复旧草稿</button></div> : null}</div>)}
     {error ? <p role="alert" className="mt-2 text-danger">{error}</p> : null}
     {deleteError ? <p role="alert" className="mt-2 text-danger">{deleteError}</p> : null}
   </section>;

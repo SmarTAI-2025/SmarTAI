@@ -15,6 +15,7 @@ from backend.db.models import InviteCodeRecord, RefreshSessionRecord, UserRecord
 from backend.db.session import session_scope as database_session
 from backend.analytics.admin_usage import record_usage_event_in_session
 from backend.models import User
+from backend.config import settings
 
 
 class AuthRepositoryError(ValueError):
@@ -44,6 +45,70 @@ def user_auth_lock(user_id: str) -> Iterator[None]:
 
 def _hash_token(token: str) -> str:
     return hashlib.sha256(token.encode("utf-8")).hexdigest()
+
+
+def _session_is_active(record: RefreshSessionRecord | None, user: User | UserRecord, now: float) -> bool:
+    return bool(
+        record is not None and record.user_id == user.id and user.is_active
+        and record.revoked_at is None and record.expires_at > now
+        and record.last_used_at + settings.session_idle_minutes * 60 > now
+        and (user.auth_invalid_before is None or record.created_at > user.auth_invalid_before)
+    )
+
+
+def access_session_is_active(session_id: str, user: User) -> bool:
+    with database_session() as session:
+        record = session.scalar(select(RefreshSessionRecord).where(RefreshSessionRecord.token_hash == session_id))
+        return _session_is_active(record, user, time.time())
+
+
+def _session_access(user: User, raw_hash: str, last_activity: float, session_scope: Literal["public", "private-admin"]) -> str:
+    return create_token(user.id, user.role, auth_version=user.auth_version, session_scope=session_scope,
+                        session_id=raw_hash, expires_at=last_activity + settings.session_idle_minutes * 60)
+
+
+def renew_active_session(session_id: str, user: User, *, session_scope: Literal["public", "private-admin"]) -> str | None:
+    """Explicit browser activity renews a live, revocable session without cookies.
+
+    Polling and cookie restoration never touch last_used_at. Recheck the user
+    under the same lock used by password reset and administrative revocation.
+    """
+    with user_auth_lock(user.id):
+        with database_session() as session:
+            current = _locked_user(session, user.id)
+            if current is None or current.auth_version != user.auth_version:
+                return None
+            record = session.scalar(select(RefreshSessionRecord).where(
+                RefreshSessionRecord.token_hash == session_id).with_for_update())
+            now = time.time()
+            if not _session_is_active(record, current, now):
+                return None
+            record.last_used_at = now
+            return _session_access(_user_from_record(current), session_id, now, session_scope)
+
+
+def revoke_access_session(session_id: str, user_id: str) -> None:
+    with user_auth_lock(user_id):
+        with database_session() as session:
+            _locked_user(session, user_id)
+            record = session.scalar(select(RefreshSessionRecord).where(
+                RefreshSessionRecord.token_hash == session_id,
+                RefreshSessionRecord.user_id == user_id).with_for_update())
+            if record is not None and record.revoked_at is None:
+                record.revoked_at = time.time()
+
+
+def adopt_legacy_session(user: User, *, days: int, session_scope: Literal["public", "private-admin"]) -> tuple[str, str] | None:
+    """Upgrade an unexpired, already authenticated pre-idle JWT on real input."""
+    with user_auth_lock(user.id):
+        with database_session() as session:
+            current = _locked_user(session, user.id)
+            if (current is None or not current.is_active or current.auth_version != user.auth_version
+                    or current.auth_invalid_before != user.auth_invalid_before):
+                return None
+            now = time.time()
+            raw = _add_refresh_session(session, user_id=user.id, days=days, now=now, session_scope=session_scope)
+            return raw, _session_access(_user_from_record(current), _hash_token(raw), now, session_scope)
 
 
 def _canonical_email(email: str | None) -> str:
@@ -271,7 +336,7 @@ def authenticate_and_create_session(
                 session_scope=session_scope,
             )
             user = _user_from_record(user_record)
-            access = create_token(user.id, user.role, auth_version=user_record.auth_version, session_scope=session_scope)
+            access = _session_access(user, _hash_token(refresh), now, session_scope)
             record_usage_event_in_session(
                 session,
                 event_name="login_success",
@@ -314,13 +379,7 @@ def rotate_refresh_session(raw: str, days: int, *, session_scope: Literal["publi
                 .with_for_update()
             )
             now = time.time()
-            if record is None or record.revoked_at is not None or record.expires_at <= now:
-                return None
-            if (
-                user_record.auth_invalid_before is not None
-                and record.created_at <= user_record.auth_invalid_before
-            ):
-                record.revoked_at = now
+            if not _session_is_active(record, user_record, now):
                 return None
             record.revoked_at = now
             new_raw = _add_refresh_session(
@@ -330,8 +389,12 @@ def rotate_refresh_session(raw: str, days: int, *, session_scope: Literal["publi
                 now=now,
                 session_scope=session_scope,
             )
+            # Restoring a tab or reacting to a polling 401 is not user activity.
+            new_record = session.scalar(select(RefreshSessionRecord).where(
+                RefreshSessionRecord.token_hash == _hash_token(new_raw)))
+            new_record.last_used_at = record.last_used_at
             user = _user_from_record(user_record)
-            access = create_token(user.id, user.role, auth_version=user_record.auth_version, session_scope=session_scope)
+            access = _session_access(user, _hash_token(new_raw), record.last_used_at, session_scope)
             return new_raw, user, access
 
 

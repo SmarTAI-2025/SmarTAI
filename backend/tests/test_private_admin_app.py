@@ -16,9 +16,10 @@ def test_private_api_spa_auth_boundary_and_independent_cookie(monkeypatch, tmp_p
     login = client.post("/api/auth/login", json={"username": "manager", "password": "admin-test-password"})
     assert login.status_code == 200
     assert "smartai_admin_refresh=" in login.headers["set-cookie"]
-    assert client.post("/api/auth/refresh").status_code == 200
+    refreshed = client.post("/api/auth/refresh")
+    assert refreshed.status_code == 200
     assert "synthetic administrator SPA" in client.get("/admin/users").text
-    assert client.get("/api/admin/users", headers=headers(login.json()["token"])).status_code == 200
+    assert client.get("/api/admin/users", headers=headers(refreshed.json()["token"])).status_code == 200
     assert client.post("/api/auth/register/request", json={}).status_code == 404
     assert client.post("/api/admin/invites", json={}).status_code == 404
     assert client.get("/api/missing").status_code == 404

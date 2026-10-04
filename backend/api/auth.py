@@ -8,15 +8,19 @@ from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from fastapi.routing import APIRoute
+from fastapi.security.utils import get_authorization_scheme_param
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from backend.auth import get_current_user, hash_password, verify_password, request_session_scope
+from backend.auth import get_current_user, hash_password, verify_password, request_session_scope, decode_token
 from backend.config import settings
 from backend.db.auth_repository import (
     authenticate_and_create_session,
     revoke_refresh_session,
     rotate_refresh_session,
     refresh_session_matches_scope,
+    renew_active_session,
+    revoke_access_session,
+    adopt_legacy_session,
 )
 from backend.models import User
 from backend.db.auth_repository import user_auth_lock, revoke_all_refresh_sessions
@@ -144,6 +148,12 @@ class PasswordResetConfirmRequest(BaseModel):
 
 def _cookie_name(request: Request) -> str:
     return "smartai_admin_refresh" if getattr(request.app.state, "private_admin", False) else settings.refresh_cookie_name
+
+
+def _session_id(request: Request) -> str | None:
+    scheme, token = get_authorization_scheme_param(request.headers.get("authorization"))
+    payload = decode_token(token) if scheme.lower() == "bearer" else None
+    return (payload or {}).get("sid")
 
 
 def _set_refresh_cookie(response: Response, raw: str, request: Request) -> None:
@@ -285,11 +295,29 @@ def refresh(request: Request, response: Response):
 
 @router.post("/logout")
 def logout(request: Request, response: Response, current: User = Depends(get_current_user)):
+    session_id = _session_id(request)
+    if session_id:
+        revoke_access_session(session_id, current.id)
     raw = request.cookies.get(_cookie_name(request))
     if raw and refresh_session_matches_scope(raw, request_session_scope(request)):
         revoke_refresh_session(raw)
     _delete_refresh_cookie(response, request)
     return {"status": "success"}
+
+
+@router.post("/activity")
+def activity(request: Request, response: Response, current: User = Depends(get_current_user)):
+    session_id = _session_id(request)
+    access = renew_active_session(session_id, current, session_scope=request_session_scope(request)) if session_id else None
+    if not session_id:
+        upgraded = adopt_legacy_session(current, days=settings.refresh_session_days, session_scope=request_session_scope(request))
+        if upgraded:
+            raw, access = upgraded
+            _set_refresh_cookie(response, raw, request)
+    if access is None:
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, detail="Session expired or revoked; sign in again")
+    response.headers["Cache-Control"] = "no-store"
+    return {"token": access}
 
 
 @router.get("/me")

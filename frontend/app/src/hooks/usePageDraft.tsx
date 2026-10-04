@@ -26,6 +26,12 @@ export function usePageDraft<T extends object>(scope: string, initial: () => T, 
     update((old) => ({ ...old, [name]: next }));
   }
   function clear() { sealed.current = true; void protection.clear(current.current).catch(() => {}); }
-  function reset() { clear(); const empty = initial(); current.current = empty; setValue(empty); sealed.current = false; }
+  function reset() {
+    const snapshot = current.current;
+    const empty = initial(); current.current = empty; setValue(empty); sealed.current = false;
+    // Keep the draft write lock until IndexedDB deletion and its new revision
+    // are both known. New typing is retained while cleanup finishes.
+    void protection.runFormal(async () => {}, snapshot).catch(() => {});
+  }
   return { value, field, update, adoptDefault, clear, reset, notice: protection.notice, protection };
 }
