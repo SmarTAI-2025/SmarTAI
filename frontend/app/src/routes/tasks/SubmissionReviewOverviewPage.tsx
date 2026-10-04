@@ -14,6 +14,7 @@ import { useTaskFilterIntent } from "@/hooks/useTaskFilterIntent";
 import { EMPTY_FILTER_INTENT, supportsFilterIntent } from "@/lib/taskFilterIntent";
 import { resolveSubmissionQuery, selectSubmissionQuestions } from "@/lib/taskPreparationFilter";
 import { NewTaskStepper } from "@/components/new-task/NewTaskStepper";
+import { MatrixViewLink } from "@/components/tasks/MatrixViewLink";
 import { MatrixQueueWorkspace } from "@/components/tasks/MatrixQueueWorkspace";
 import { MatrixStatusCell, type MatrixStatusTone } from "@/components/tasks/MatrixStatusCell";
 import { SubmissionSourceOutcomePanel } from "@/components/tasks/SubmissionSourceOutcomePanel";
@@ -203,7 +204,7 @@ export function SubmissionReviewOverviewPage() {
             label={t("submissionReviewMetricIdentity")}
             value={formatPercent(stats.identityMatched, stats.students)}
             detail={`${stats.identityMatched}/${stats.students}`}
-            tone={stats.identityAnomalies > 0 ? "warning" : "accent"}
+            tone={stats.identityAnomalies > 0 ? "danger" : "accent"}
           />
           <ReviewMetric
             label={t("submissionReviewMetricCoverage")}
@@ -220,7 +221,7 @@ export function SubmissionReviewOverviewPage() {
             label={t("submissionReviewMetricIdentityIssues")}
             value={String(stats.identityAnomalies)}
             detail={locale === "zh-CN" ? t("submissionReviewMetricStudents") : stats.identityAnomalies === 1 ? "student" : "students"}
-            tone={stats.identityAnomalies > 0 ? "warning" : "neutral"}
+            tone={stats.identityAnomalies > 0 ? "danger" : "neutral"}
           />
         </dl>
 
@@ -437,7 +438,7 @@ function SubmissionMatrix({
                     title={student.stu_id}
                   >
                     {student.identity_status === "needs_review" ? (
-                      <span className="h-2 w-2 shrink-0 rounded-full bg-amber-500" aria-label={t("submissionReviewIdentityNeedsReview")} />
+                      <span className="h-2 w-2 shrink-0 rounded-full bg-red-500" aria-label={t("submissionReviewIdentityNeedsReview")} />
                     ) : null}
                     <span>{student.stu_id}</span>
                   </Link>
@@ -459,12 +460,7 @@ function SubmissionMatrix({
                   </td>
                 ))}
                 <td className="w-[72px] px-3 text-right">
-                  <Link
-                    to={entryHref}
-                    className="text-xs font-semibold text-primary outline-none hover:underline focus-visible:rounded focus-visible:ring-2 focus-visible:ring-ring"
-                  >
-                    {t("submissionReviewOpen")}
-                  </Link>
+                  <MatrixViewLink to={entryHref} locale={locale} />
                 </td>
               </tr>
             );
@@ -493,9 +489,9 @@ function AnswerStatusLink({
     empty: "submissionReviewCellEmpty",
     missing: "submissionReviewCellMissing",
   };
-  const stateLabel = state === "reviewed" ? (locale === "zh-CN" ? "已确认" : "Confirmed") : answerReviewBlocked(answer) ? (locale === "zh-CN" ? "需处理" : "Action required") : state !== "missing" ? (locale === "zh-CN" ? "待确认" : "Pending confirmation") : t(labels[state]);
-  const label = answer?.flag?.length ? `${stateLabel} · ${answer.flag.map((flag) => formatSubmissionFlag(flag, locale)).join(" · ")}` : stateLabel;
-  const tone: MatrixStatusTone = state === "reviewed" ? "reviewed" : state === "missing" || answerReviewBlocked(answer) ? "error" : "warning";
+  const stateLabel = state === "reviewed" ? (locale === "zh-CN" ? "已确认" : "Confirmed") : answerReviewBlocked(answer) ? (locale === "zh-CN" ? "需处理" : "Action required") : t(labels[state]);
+  const label = state !== "reviewed" && answer?.flag?.length ? `${stateLabel} · ${answer.flag.map((flag) => formatSubmissionFlag(flag, locale)).join(" · ")}` : stateLabel;
+  const tone: MatrixStatusTone = state === "reviewed" ? "reviewed" : state === "flagged" ? "error" : "ok";
 
   return <MatrixStatusCell to={to} label={label} tone={tone} />;
 }
@@ -636,7 +632,7 @@ function identityReviewPath(taskId: string, studentId: string, returnSearch: str
 
 function firstReviewQuestion(student: StudentSubmission, questions: SubmissionQuestion[]) {
   const answers = answerMap(student);
-  return questions.find((question) => !["recognized", "reviewed"].includes(getAnswerState(answers.get(question.id))))
+  return questions.find((question) => getAnswerState(answers.get(question.id)) === "flagged")
     ?? questions[0]
     ?? null;
 }
@@ -669,7 +665,7 @@ function buildSubmissionQueueItems(
     const answers = answerMap(student);
     for (const question of questions) {
       const state = getAnswerState(answers.get(question.id));
-      if (state === "recognized" || state === "reviewed") continue;
+      if (state !== "flagged") continue;
       items.push({
         key: `${student.stu_id}:${question.id}`,
         href: studentReviewPath(taskId, student.stu_id, question.id, returnSearch),

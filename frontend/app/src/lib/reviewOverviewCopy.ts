@@ -18,7 +18,7 @@ const copy = {
   dismiss: ["关闭提示", "Dismiss"],
   modelSettings: ["查看模型配置", "View model settings"],
   heatmap: ["学生 × 题目复核热力图", "Student × question review heatmap"],
-  queue: ["复核队列", "Review queue"],
+  queue: ["待复核队列", "Review queue"],
   review: ["复核", "Review"],
   low: ["低", "Low"],
   ok: ["OK", "OK"],

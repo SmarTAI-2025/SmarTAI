@@ -1,4 +1,5 @@
 import type { ProblemInfo, StudentAnswerInfo, StudentSubmission } from "@/types";
+import { answerReviewBlocked } from "./reviewConfirmation";
 import type { Locale } from "@/i18n/messages";
 
 export type SubmissionAnswerState = "recognized" | "reviewed" | "flagged" | "empty" | "missing";
@@ -76,9 +77,10 @@ export function buildSubmissionQuestions(
 
 export function getAnswerState(answer?: StudentAnswerInfo): SubmissionAnswerState {
   if (!answer) return "missing";
+  if (answerReviewBlocked(answer)) return "flagged";
   if (answer.review_status === "confirmed") return "reviewed";
+  if (answer.flag?.some(flag => flag !== "external_annotation_present")) return "flagged";
   if (!answer.content?.trim()) return "empty";
-  if (answer.flag?.length) return "flagged";
   return "recognized";
 }
 
@@ -97,7 +99,7 @@ export function getSubmissionReviewStats(
       const answer = answers.get(question.id);
       const state = getAnswerState(answer);
       if (answer?.content?.trim()) answeredCells += 1;
-      if (state !== "reviewed") reviewCells += 1;
+      if (state === "flagged") reviewCells += 1;
     }
   }
 
@@ -152,7 +154,7 @@ export function selectSubmissionReview(
 
     const answers = new Map((student.stu_ans ?? []).map((answer) => [answer.q_id, answer]));
     const states = scopedQuestions.map((question) => getAnswerState(answers.get(question.id)));
-    if ((filter === "review" || wantsReview) && !states.some((state) => state !== "reviewed")) return false;
+    if ((filter === "review" || wantsReview) && !identityNeedsReview && !states.some((state) => state === "flagged")) return false;
     if ((filter === "missing" || wantsMissing) && !states.some((state) => state === "missing" || state === "empty")) return false;
     if (wantsRecognized && !states.some((state) => state === "recognized")) return false;
 
@@ -185,7 +187,7 @@ export function answerMap(student: StudentSubmission): Map<string, StudentAnswer
 export function studentNeedsAttention(student: StudentSubmission, questions: SubmissionQuestion[]): boolean {
   if (student.identity_status === "needs_review") return true;
   const answers = answerMap(student);
-  return questions.some((question) => getAnswerState(answers.get(question.id)) !== "reviewed");
+  return questions.some((question) => getAnswerState(answers.get(question.id)) === "flagged");
 }
 
 function compareStudents(

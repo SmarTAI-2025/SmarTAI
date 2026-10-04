@@ -141,8 +141,7 @@ async def recognize_submission_upload(*, assignment_id, student_id, actor_id, so
                         reporter=reporter, binding=binding)
                     texts.append(f"[Source file: {item.filename}]\n{result.text}")
                     needs_review = needs_review or bool(
-                        (result.recognition or {}).get("requires_review") is True
-                        or recognition_needs_review(result.recognition)
+                        recognition_needs_review(result.recognition)
                     )
                     if sum(map(len, texts)) > MAX_TRANSCRIPT_CHARS:
                         raise ValidationError("Submission text exceeds the parse budget; it was not truncated.",

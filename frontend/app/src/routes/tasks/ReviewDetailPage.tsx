@@ -1,3 +1,4 @@
+import { isCorrectionReviewConfirmed } from "@/components/tasks/resultsReviewModel";
 import { ReviewConfirmButton, ReviewBlockDialog, RetryFailedGrading, reviewActionClass } from "@/components/tasks/ReviewConfirmation";
 import { type ReviewBlocker } from "@/lib/reviewConfirmation";
 import { DraftField, type DraftFieldHandle } from "@/components/ui/DraftField";
@@ -72,7 +73,7 @@ function ReviewDetailForm() {
     () => new Map(student?.corrections.map((item) => [item.q_id, item]) ?? []),
     [student?.corrections],
   );
-  const reviewItems = useMemo(() => collectResultReviewItems(model, model.students), [model]);
+  const reviewItems = useMemo(() => collectResultReviewItems(model, model.students).filter(item => !isCorrectionReviewConfirmed(item.correction)), [model]);
   const pendingReviewItems = useMemo(
     () => reviewItems.filter((item) => {
       const source = correctionScoreSource(item.correction);

@@ -19,6 +19,10 @@ export interface ReviewItem {
   category: "low-confidence" | "expert-disagreement" | "score-anomaly" | "review";
 }
 
+export function isCorrectionReviewConfirmed(correction: Correction): boolean {
+  return Number.isFinite(correction.teacher_score) && correction.review_status === "confirmed" && effectiveCorrectionScore(correction) !== null;
+}
+
 export function collectResultReviewItems(model: ResultsModel, students: StudentSummary[]): ReviewItem[] {
   return students
     .flatMap((student) =>

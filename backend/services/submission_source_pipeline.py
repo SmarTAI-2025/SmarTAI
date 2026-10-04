@@ -60,8 +60,8 @@ def attach_submission_recognition(results, sources):
             output.append(result)
             continue
         student = {**result.student, "recognition": summary}
-        # A medium label means no lexical defect found, not verified handwriting.
-        if summary.get("requires_review") is True or recognition_needs_review(summary):
+        # Queue specific uncertainty, not the generic recommendation to review OCR.
+        if recognition_needs_review(summary):
             flags = ["recognition_needs_review"]
             for key in ("failed_pages", "unprocessed_pages"):
                 pages = (summary.get("coverage") or {}).get(key) or []

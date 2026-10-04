@@ -1,3 +1,4 @@
+import { questionIssueNeedsReview } from "./reviewConfirmation";
 import { groundedRows } from "./groundedAsk";
 import type { FilterIntentResult, ProblemInfo, StudentSubmission } from "@/types";
 import { isProgrammingProblem } from "@/lib/questionPreparation";
@@ -36,12 +37,12 @@ export function selectPreparationQuestions(problems: ProblemInfo[], intent: Filt
   if (intent?.execution) return groundedRows(problems, intent, "questions", p => p.q_id);
   if (!intent?.recognized) return problems;
   const selected = problems.filter((problem) => {
-    const issues = (problem.preparation_issues ?? []).filter((issue) => issue.status === "open");
+    const issues = (problem.preparation_issues ?? []).filter(questionIssueNeedsReview);
     if (intent.question_tokens.length && !intent.question_tokens.some((token) => matchesQuestionToken(problem.q_id, problem.number || problem.q_id, token))) return false;
     if (intent.question_types?.length && !intent.question_types.some((type) => normalizeFilterType(type) === normalizeFilterType(problem.type || ""))) return false;
     if (intent.min_max_score != null && (problem.max_score == null || problem.max_score < intent.min_max_score)) return false;
     if (intent.max_max_score != null && (problem.max_score == null || problem.max_score > intent.max_max_score)) return false;
-    if ((intent.low_confidence || intent.preparation_status === "low_confidence") && !issues.some((issue) => issue.code === "low_confidence")) return false;
+    if ((intent.low_confidence || intent.preparation_status === "low_confidence") && !issues.some((issue) => ["low_confidence", "recognition_partial", "recognition_needs_review"].includes(issue.code))) return false;
     if (intent.preparation_status === "attention" && !issues.length) return false;
     if (intent.preparation_status === "ready" && issues.length) return false;
     if (intent.preparation_status === "source_conflict" && !issues.some((issue) => issue.code.includes("conflict"))) return false;
@@ -56,7 +57,7 @@ export function selectPreparationQuestions(problems: ProblemInfo[], intent: Filt
   const sort = intent.sort;
   const value = (problem: ProblemInfo) => sort.startsWith("max_score") ? problem.max_score
     : sort.startsWith("type") ? normalizeFilterType(problem.type || "")
-      : sort.startsWith("review") ? (problem.preparation_issues ?? []).filter((issue) => issue.status === "open").length
+      : sort.startsWith("review") ? (problem.preparation_issues ?? []).filter(questionIssueNeedsReview).length
         : problem.number || problem.q_id;
   return selected.sort((a, b) => compareValues(value(a), value(b), sort.endsWith("_desc") ? "desc" : "asc"));
 }
@@ -78,7 +79,7 @@ function questionMatches(question: SubmissionQuestion, intent: FilterIntentResul
 }
 function answerMatches(state: ReturnType<typeof getAnswerState>, status: FilterIntentResult["submission_status"]) {
   if (status === "missing") return state === "missing" || state === "empty";
-  if (status === "review") return !["recognized", "reviewed"].includes(state);
+  if (status === "review") return state === "flagged";
   return status !== "recognized" && status !== "reviewed" || state === status;
 }
 
@@ -108,6 +109,7 @@ export function selectSubmissionQuestions(students: StudentSubmission[], questio
     if (!plan.text_terms.every((term) => includesText(`${student.stu_id} ${student.stu_name}`, term))) return false;
     return [plan.submission_status, filter === "all" ? null : filter].every((status) => {
       if (status === "identity") return student.identity_status === "needs_review";
+      if (status === "review" && student.identity_status === "needs_review") return true;
       if (status === "reviewed") return states.length > 0 && states.every((state) => state === "reviewed");
       return !status || states.some((state) => answerMatches(state, status));
     });
