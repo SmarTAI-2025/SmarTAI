@@ -681,6 +681,43 @@ def _extract_balanced_json(s: str) -> Optional[str]:
     return None
 
 
+def _normalize_markdown_json_keys(source: str) -> str:
+    """Remove presentation-only bullets/backticks from object keys.
+
+    Some models wrap JSON property names as Markdown list items. Touch only
+    keys immediately following an object opener or comma, outside string
+    values. Never alter bullets, backticks, math or code inside user content.
+    """
+    key = re.compile(r"(?:[-*][ \t]+)?(?:`([A-Za-z_][A-Za-z0-9_]*)`|([A-Za-z_][A-Za-z0-9_]*))[ \t]*:")
+    result: list[str] = []
+    in_string = escaped = False
+    previous = ""
+    index = 0
+    while index < len(source):
+        char = source[index]
+        if not in_string and previous in {"{", ","}:
+            match = key.match(source, index)
+            if match:
+                result.append(json.dumps(match.group(1) or match.group(2)) + ":")
+                index = match.end()
+                previous = ":"
+                continue
+        result.append(char)
+        if in_string:
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == '"':
+                in_string = False
+        elif char == '"':
+            in_string = True
+        if not char.isspace():
+            previous = char
+        index += 1
+    return "".join(result)
+
+
 def extract_and_parse_json(raw: str, model: Type[T]) -> T:
     """
     Robustly extract JSON from LLM text output and validate against a Pydantic model.
@@ -696,8 +733,8 @@ def extract_and_parse_json(raw: str, model: Type[T]) -> T:
     # trailing stray ``}`` the LLM appended after the real object close.
     json_str = _extract_balanced_json(cleaned)
     if json_str is None:
-        raise ValueError(f"No JSON found in LLM output. First 200 chars: {raw[:200]}")
-    json_str = _protect_json_math_escapes(json_str)
+        raise StructuredOutputInvalidError("The model returned no structured JSON result.")
+    json_str = _protect_json_math_escapes(_normalize_markdown_json_keys(json_str))
 
     # 3. Try repair attempts in escalating order. Attempt list intentionally
     # composes transforms — `latex+newlines` is the realistic LLM math case
@@ -738,9 +775,7 @@ def extract_and_parse_json(raw: str, model: Type[T]) -> T:
         raise StructuredOutputBoundsError(
             f"Structured output for {model.__name__} exceeds safe field bounds."
         ) from bounds_error
-    raise ValueError(
-        f"Could not parse LLM output as {model.__name__}. Raw output first 500 chars: {raw[:500]}"
-    )
+    raise StructuredOutputInvalidError(f"The model result does not match {model.__name__}.")
 
 
 # ─── The unified call ────────────────────────────────────────────────────────
