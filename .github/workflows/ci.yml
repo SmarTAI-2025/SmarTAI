@@ -7,10 +7,20 @@ on:
     branches: [main]
   workflow_dispatch:
 
+# Superseded PR commits need no more work. Main/manual runs retain distinct
+# groups so their complete CI and existing deployment prerequisites are kept.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
-  backend-sqlite:
-    name: Backend (SQLite)
+  backend-sqlite-tests:
+    name: Backend (SQLite shard ${{ matrix.shard }}/4)
     runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
     env:
       SMARTAI_RUNTIME_ENVIRONMENT: "test"
       SMARTAI_PROVIDER_ENCRYPTION_KEY: "ci-provider-master-key-0123456789abcdef"
@@ -38,7 +48,29 @@ jobs:
           SMARTAI_DATABASE_AUTO_CREATE: "true"
           SMARTAI_SEED_TEST_USERS: "false"
           SMARTAI_GRADING_ENGINE: v2
-        run: python -m pytest backend/tests -q
+        run: >-
+          python -m pytest backend/tests -q --test-shard=${{ matrix.shard }}/4
+          --durations=30 --junitxml=test-results/sqlite-${{ matrix.shard }}.xml
+      - name: Preserve SQLite test timings
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: sqlite-test-results-${{ matrix.shard }}
+          path: test-results/sqlite-${{ matrix.shard }}.xml
+          retention-days: 7
+
+  # Preserve the existing required check name. Failure, cancellation or a
+  # skipped shard must never turn the aggregate check green.
+  backend-sqlite:
+    name: Backend (SQLite)
+    needs: backend-sqlite-tests
+    if: always()
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Require every SQLite shard to pass
+        env:
+          SHARD_RESULT: ${{ needs.backend-sqlite-tests.result }}
+        run: test "$SHARD_RESULT" = success
 
   backend-postgres:
     name: Backend (PostgreSQL)

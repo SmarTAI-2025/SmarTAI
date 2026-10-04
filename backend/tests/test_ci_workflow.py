@@ -9,14 +9,18 @@ these tests pin down so they cannot silently regress:
   an HTTP ``HEAD`` for plain HTTP URL resources, while FastAPI's ``/ready``
   route is GET-only, so the readiness wait timed out with 405s.
 
-These tests read the workflow YAML as text and assert the fixes stay in place.
-They do not execute the workflow; they are static guards against regression.
+These tests inspect the workflow and execute the aggregate check's shell gate
+against success, failure, cancellation and skipped results. GitHub runner and
+matrix behavior still require an actual CI run.
 """
 from __future__ import annotations
 
 from pathlib import Path
+import os
+import subprocess
 
 import pytest
+import yaml
 from packaging.requirements import Requirement
 from packaging.utils import canonicalize_name
 
@@ -38,7 +42,7 @@ def test_sqlite_backend_job_installs_pytest(workflow_text: str) -> None:
     """
     assert "name: Backend (SQLite)" in workflow_text, "SQLite backend job must exist"
 
-    sqlite_section = _job_section(workflow_text, "backend-sqlite")
+    sqlite_section = _job_section(workflow_text, "backend-sqlite-tests")
     assert "python -m pytest" in sqlite_section, (
         "SQLite backend job must still run pytest"
     )
@@ -93,7 +97,7 @@ def test_sqlite_backend_job_installs_pytest_asyncio(workflow_text: str) -> None:
     """
     assert "name: Backend (SQLite)" in workflow_text, "SQLite backend job must exist"
 
-    sqlite_section = _job_section(workflow_text, "backend-sqlite")
+    sqlite_section = _job_section(workflow_text, "backend-sqlite-tests")
     _assert_locked_test_dependency(sqlite_section, "pytest-asyncio")
 
 
@@ -114,6 +118,39 @@ def test_postgres_backend_job_installs_pytest_asyncio(workflow_text: str) -> Non
 
     postgres_section = _job_section(workflow_text, "backend-postgres")
     _assert_locked_test_dependency(postgres_section, "pytest-asyncio")
+
+
+@pytest.mark.parametrize("result", ["success", "failure", "cancelled", "skipped", ""])
+def test_sqlite_required_check_rejects_incomplete_shards(workflow_text, result):
+    jobs = yaml.safe_load(workflow_text)["jobs"]
+    gate = jobs["backend-sqlite"]
+    assert gate["name"] == "Backend (SQLite)"
+    assert gate["needs"] == "backend-sqlite-tests"
+    assert gate["if"] == "always()"
+    step, = gate["steps"]
+    assert step["env"]["SHARD_RESULT"] == "${{ needs.backend-sqlite-tests.result }}"
+    completed = subprocess.run(
+        ["bash", "-e", "-c", step["run"]],
+        env={**os.environ, "SHARD_RESULT": result}, check=False,
+    )
+    assert (completed.returncode == 0) is (result == "success")
+
+
+def test_sqlite_matrix_covers_every_shard_and_retains_diagnostics(workflow_text):
+    workflow = yaml.safe_load(workflow_text)
+    job = workflow["jobs"]["backend-sqlite-tests"]
+    assert job["strategy"] == {"fail-fast": False, "matrix": {"shard": [1, 2, 3, 4]}}
+    assert not job.get("continue-on-error", False)
+    test = next(step for step in job["steps"] if step.get("name") == "Test (SQLite)")
+    assert "backend/tests" in test["run"]
+    assert "--test-shard=${{ matrix.shard }}/4" in test["run"]
+    assert "--durations=" in test["run"] and "--junitxml=" in test["run"]
+    assert not test.get("continue-on-error", False)
+    artifact = next(step for step in job["steps"] if step.get("name") == "Preserve SQLite test timings")
+    assert artifact["if"] == "always()"
+    assert "${{ matrix.shard }}" in artifact["with"]["name"]
+    assert workflow["concurrency"]["cancel-in-progress"] == "${{ github.event_name == 'pull_request' }}"
+    assert "github.run_id" in workflow["concurrency"]["group"]
 
 
 def _assert_locked_test_dependency(job_text: str, package: str) -> None:
