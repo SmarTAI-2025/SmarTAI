@@ -37,7 +37,7 @@ import {
   isKnowledgeStorageQuotaExceeded,
   knowledgeStorageQuotaCopy,
 } from "@/lib/knowledgeStorage";
-import { modelDisplayName, modelSecondaryLabel } from "@/lib/modelPresentation";
+import { modelDisplayName, modelSecondaryLabel, sortByProvider } from "@/lib/modelPresentation";
 import { classifyRecoverableError, isWorkflowRevisionConflictCode } from "@/lib/taskActionGuards";
 import { canTaskBeRegraded, getSafeTaskReturnTo, getTaskGradingSetupHref } from "@/lib/taskFlow";
 import type {
@@ -407,7 +407,7 @@ function ModelSection({
       <p className="sr-only">{gradingSetupText(locale, "modelsDescription")}</p>
       <div className="mt-2 max-h-[156px] overflow-y-auto overscroll-contain rounded-[8px] border">
         <ul className="divide-y">
-          {experts.map((expert) => {
+          {sortByProvider(experts).map((expert) => {
             const selected = selectedSet.has(expert.provider_id);
             const disabled = (!expert.enabled || expert.provider_kind === "ocr") && !selected;
             const label = modelDisplayName(expert);
