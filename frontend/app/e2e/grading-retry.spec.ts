@@ -18,9 +18,10 @@ test("partial failure → explicit same-config retry → live progress → revie
   await page.getByRole("button", { name: "Sign in", exact: true }).click();
   await expect(page).toHaveURL(/\/$/);
   await page.goto(`/tasks/${fixture.task_id}/review`);
-  await expect(page.getByRole("heading", { name: "Some answers could not be graded" })).toBeVisible();
+  await expect(page).toHaveURL(/\/grading\/progress$/);
+  await expect(page.getByRole("heading", { name: "This grading run did not finish" })).toBeVisible();
   await page.screenshot({ path: "output/playwright/01-partial-failed.png", fullPage: true });
-  await expect(page.getByText(/Uses model quota only for results without valid scores/)).toBeVisible();
+  await expect(page.getByText(/keep successful results and teacher edits/)).toBeVisible();
   const gradingResponse = page.waitForResponse((r) => r.url().endsWith(`/tasks/${fixture.task_id}/grade`) && r.request().method() === "POST");
   await page.getByRole("button", { name: "Retry failed items", exact: true }).click();
   const response = await gradingResponse;
@@ -32,7 +33,7 @@ test("partial failure → explicit same-config retry → live progress → revie
   await expect(page.getByRole("heading", { name: "Grading student submissions" })).toBeVisible();
   await page.screenshot({ path: "output/playwright/02-new-progress.png", fullPage: true });
   await expect(page).toHaveURL(/\/review$/, { timeout: 20_000 });
-  await expect(page.getByRole("heading", { name: "Some answers could not be graded" })).toHaveCount(0);
+  await expect(page.getByRole("heading", { name: "This grading run did not finish" })).toHaveCount(0);
   await page.screenshot({ path: "output/playwright/03-recovered-review.png", fullPage: true });
   const token = await page.evaluate(() => localStorage.getItem("smartai_token"));
   const headers = { Authorization: `Bearer ${token}` };

@@ -494,7 +494,7 @@ function AddProblemsForm({ taskQuery, submittedInput }: { taskQuery: ReturnType<
             usageContext={{ providerIds: [recognitionProviderId], providers: expertsQuery.data ?? [] }}
             compact
             className="mt-4"
-            workflowRecovery={{ retry: { onClick: () => void handleStart(), busy: isBusy }, configurationHref: taskReturnPath }}
+            workflowRecovery={{ retry: { label: tx(locale, "重新识别全部资料", "Prepare All Materials Again"), onClick: () => void handleStart(), busy: isBusy }, configurationHref: taskReturnPath }}
             additionalActions={[...(recoveryPrimary?.onClick && recoveryInfo.actionKind !== "retry" ? [recoveryPrimary] : []), { label: tx(locale, "关闭提示", "Dismiss"), onClick: () => setPreparationFailure(null) }]}
           />
         ) : null}

@@ -2589,16 +2589,38 @@ def _reusable_submission_results(*, owner_id, task_id, payload, questions):
     origin = payload.get("retry_from")
     if not origin:
         return {}
-    previous = workflow_repository.get_operation(origin["operation_id"], owner_id=owner_id)
-    if (previous.assignment_id != task_id or previous.operation_type != "submission_recognition"
-            or (previous.payload or {}).get("question_snapshot") != [[q.id, q.version] for q in questions]):
-        raise ValidationError("Recognition inputs changed.", code="recognition_plan_changed")
-    artifact = _submission_result_artifact(owner_id=owner_id, task_id=task_id,
-        job_id=previous.id, job_attempt=int(origin["attempt"]))
-    if artifact is None:
-        return {}
+    results = []
+    source_files = {}
+    visited = set()
+    while origin:
+        identity = (origin["operation_id"], int(origin["attempt"]))
+        if identity in visited:
+            raise ValidationError("Recognition retry cycle.", code="recognition_plan_changed")
+        visited.add(identity)
+        previous = workflow_repository.get_operation(identity[0], owner_id=owner_id)
+        if (previous.assignment_id != task_id or previous.operation_type != "submission_recognition"
+                or (previous.payload or {}).get("question_snapshot") != [[q.id, q.version] for q in questions]):
+            raise ValidationError("Recognition inputs changed.", code="recognition_plan_changed")
+        artifact = _submission_result_artifact(owner_id=owner_id, task_id=task_id,
+            job_id=previous.id, job_attempt=identity[1])
+        if artifact is not None:
+            results.extend(_load_submission_results(artifact))
+            break
+        # A batch write can fail after each paid parse was durably saved.
+        # Follow only the explicit retry lineage; unrelated runs must not be reused.
+        source_files.update({source.id: source.stored_file_id for source in
+            source_outcome_repository.list_sources(operation_id=previous.id,
+                owner_id=owner_id, attempt=identity[1])})
+        origin = (previous.payload or {}).get("retry_from")
+    if source_files:
+        for artifact in file_repository.list_files(owner_id=owner_id, assignment_id=task_id):
+            if artifact.kind != "submission_source_parse_v1":
+                continue
+            for result in _load_submission_results(artifact):
+                if source_files.get(result.source_id) == result.stored_file_id:
+                    results.append(result)
     reusable = {}
-    for result in _load_submission_results(artifact):
+    for result in results:
         if result.status not in {"parsed", "identity_conflict"} or result.student is None:
             continue
         stored = file_repository.get_file(file_id=result.stored_file_id, owner_id=owner_id)
@@ -2764,7 +2786,9 @@ async def run_task_submission_parsing(
             all_sources = sources
             sources = [source for source in sources if source.source_id not in reused]
             problem_data = {q.q_id: _serialize_problem(q) for q in questions}
-            if route.is_baidu_ocr:
+            if not sources:
+                results = []
+            elif route.is_baidu_ocr:
                 results = await parse_student_answer_sources_from_ocr_markdown(
                     sources,
                     problem_data,

@@ -249,7 +249,8 @@ it("keeps unsubmitted local files through task navigation but clears after a nor
 
 describe("submitted input recovery", () => {
   beforeEach(async () => { inputState.input = null; await clearPageDrafts(); mutateAsync.mockReset(); retryMutateAsync.mockReset(); mutateAsync.mockResolvedValue({ status: "started" }); taskState.data = { ...taskState.data, status: "problems_ready", pending_submission_file_name: null, submission_file_name: null, last_failed_job_id: null, student_count: 0 }; });
-  it("restores submitted archive and roster, and applies edited identity options", async () => {
+  it("labels restored failed-job inputs as a full restart and applies edited identity options", async () => {
+    taskState.data = { ...taskState.data, status: "error", pending_submission_file_name: "saved.zip", last_failed_job_id: "prior" };
     inputState.input = { job_id: "prior", stored_file_id: "saved-zip", filename: "saved.zip", available: true, identity_mode: "roster", roster_name: "saved-roster.csv", roster_count: 2, recognition_provider_id: "provider-default" };
     const { router } = renderPage();
     await screen.findByText("saved.zip");
@@ -257,7 +258,7 @@ describe("submitted input recovery", () => {
     expect(screen.getByRole("radio", { name: "submissionUploadIdentityRoster" })).toHaveAttribute("aria-checked", "true");
     expect(mutateAsync).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole("radio", { name: "submissionUploadIdentityManual" }));
-    fireEvent.click(screen.getByRole("button", { name: "submissionUploadStart" }));
+    fireEvent.click(screen.getByRole("button", { name: "重新识别全部作答" }));
     await screen.findByText("progress page");
     expect(mutateAsync).toHaveBeenCalledWith(expect.objectContaining({ file: null, storedFileId: "saved-zip", identityMode: "manual_review", reuseRosterFromJobId: null }));
     expect(retryMutateAsync).not.toHaveBeenCalled();

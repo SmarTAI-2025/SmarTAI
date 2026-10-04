@@ -1273,7 +1273,7 @@ async def test_archive_member_persistence_failure_is_terminal_and_does_not_skip_
         attempt=operation.attempt,
     )
     assert injected is True
-    assert operation.status == "done"
+    assert operation.status == "error"
     assert len(rows) == 3
     assert [row.source.original_name for row in rows] == [
         "first.txt",

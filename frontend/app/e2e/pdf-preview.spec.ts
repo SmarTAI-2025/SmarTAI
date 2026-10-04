@@ -249,6 +249,9 @@ test("real question-review route retains question navigation while the original 
     const path = new URL(route.request().url()).pathname;
     const cors = { "access-control-allow-origin": new URL(page.url()).origin, "access-control-allow-credentials": "true", "access-control-allow-headers": "*" };
     if (route.request().method() === "OPTIONS") return route.fulfill({ status: 204, headers: cors });
+    if (path === "/auth/activity" && route.request().method() === "POST") {
+      return route.fulfill({ json: { token: "synthetic-local-pdf-only" }, headers: cors });
+    }
     if (route.request().method() !== "GET") { unexpected.push(path); return route.abort(); }
     if (path.endsWith("/content")) return route.fulfill({ body: pdf, contentType: "application/pdf", headers: cors });
     const value = path === "/auth/me" ? { id: "synthetic", username: "PDF local test", email: "local@example.invalid", role: "teacher", is_active: true, created_at: 0 }

@@ -375,8 +375,9 @@ async def test_partial_batch_keeps_success_and_exact_per_file_failure(monkeypatc
     )
 
     task = task_facade.get_task(task_id=task_id, owner_id=owner_id)
-    assert task["status"] == "submissions_ready"
-    assert task["student_count"] == 1
+    # Keep successful source evidence, but never publish an incomplete roster.
+    assert task["status"] == "error"
+    assert task["student_count"] == 0
     assert task["submission_source_summary"] == {
         "uploaded": 2,
         "parsed": 1,

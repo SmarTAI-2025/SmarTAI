@@ -142,7 +142,8 @@ async def test_revision_artifact_late_put_cannot_publish_after_task_deletion(tmp
 
 
 @pytest.mark.asyncio
-async def test_batch_retry_reuses_each_saved_parse_even_after_aggregate_failure(monkeypatch):
+@pytest.mark.parametrize("failed_only", [True, False])
+async def test_batch_retry_reuses_saved_parse_but_full_restart_reprocesses(monkeypatch, failed_only):
     import io
     import zipfile
     from backend.services import task_facade
@@ -164,23 +165,35 @@ async def test_batch_retry_reuses_each_saved_parse_even_after_aggregate_failure(
         archive.writestr("second.txt", "second answer -2")
     content = buffer.getvalue()
     original = file_repository.save_file
-    failed = False
+    failures = 2 if failed_only else 1
+    attempts = failures + 1
     def fail_aggregate_once(**kwargs):
-        nonlocal failed
-        if kwargs["kind"] == "submission_recognition_result" and not failed:
-            failed = True
+        nonlocal failures
+        if kwargs["kind"] == "submission_recognition_result" and failures:
+            failures -= 1
             raise RuntimeError("submission_persistence_failed")
         return original(**kwargs)
     monkeypatch.setattr(file_repository, "save_file", fail_aggregate_once)
-    for attempt in range(2):
-        queued = task_facade.queue_task_submission_parsing(task_id=task, owner_id=owner,
-            filename="answers.zip", content=content, content_type="application/zip", registry=registry)
+    for attempt in range(attempts):
+        if attempt and failed_only:
+            from fastapi import BackgroundTasks
+            from backend.api import tasks
+            workflow = workflow_repository.get_workflow(task, owner_id=owner)
+            queued = await tasks.retry_submission_recognition_endpoint(
+                task_id=task, job_id=queued["job_id"],
+                request=tasks.RetrySubmissionRecognitionRequest(
+                    expected_workflow_revision=workflow.workflow_revision),
+                background_tasks=BackgroundTasks(), current=SimpleNamespace(id=owner), registry=registry,
+            )
+        else:
+            queued = task_facade.queue_task_submission_parsing(task_id=task, owner_id=owner,
+                filename="answers.zip", content=content, content_type="application/zip", registry=registry)
         worker = f"batch-worker-{attempt}"
         row = workflow_repository.claim_operation(queued["job_id"], owner_id=owner, worker_id=worker, lease_seconds=60)
         await task_facade.run_durable_submission_recognition(LeasedOperation(row, worker_id=worker, lease_seconds=60))
         result = workflow_repository.get_operation(row.id, owner_id=owner)
-        assert result.status == ("error" if attempt == 0 else "done")
-    assert provider.ainvoke.await_count == 2
+        assert result.status == ("done" if attempt == attempts - 1 else "error")
+    assert provider.ainvoke.await_count == (2 if failed_only else 4)
 
 
 def test_teacher_can_preview_current_student_original_but_not_replaced_revision():
