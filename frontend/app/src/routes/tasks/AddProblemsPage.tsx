@@ -15,6 +15,7 @@ import { useEffect, useRef, useState, type ChangeEvent, type DragEvent, type Rea
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { toast } from "sonner";
 import { getAPIErrorCode, getAPIErrorDetail } from "@/api/client";
+import { useWorkflowInput, type ProblemInput } from "@/api/workflowInputs";
 import {
   useStageProviders,
   useProblemSourceLibrary,
@@ -23,13 +24,13 @@ import {
   useStartQuestionPreparation,
   useTask,
 } from "@/api/hooks";
-import { ImageRecognitionRecovery, needsImageRecovery, useImageRecoveryReturn } from "@/components/models/ImageRecognitionRecovery";
+import { ImageRecognitionRecovery, useImageRecoveryReturn } from "@/components/models/ImageRecognitionRecovery";
 import { StageProviderSelect } from "@/components/models/StageProviderSelect";
 import { NewTaskStepper } from "@/components/new-task/NewTaskStepper";
 import { RecoverableActionState, type RecoveryAction } from "@/components/ui/RecoverableActionState";
 import { usePageDraft } from "@/hooks/usePageDraft";
 import { useProblemDraftReferences } from "@/hooks/useProblemDraftReferences";
-import { createSourceDraft, initialProblemDraft, problemDraftCodec, sourceSignature, type SourceDraft, type ScorePolicyDraft } from "@/lib/taskPageDrafts";
+import { createSourceDraft, problemDraftFromInput, problemDraftCodec, sourceSignature, type SourceDraft, type ScorePolicyDraft } from "@/lib/taskPageDrafts";
 import { useImeSafeQuery } from "@/hooks/useImeSafeQuery";
 import { useI18n } from "@/i18n/I18nProvider";
 import { cn } from "@/lib/cn";
@@ -61,12 +62,15 @@ type PreparationFailure = {
 
 export function AddProblemsPage() {
   const { taskId } = useParams();
+  const { locale } = useI18n();
   const taskQuery = useTask(taskId, { refetchOnMount: "always" });
-  if (taskQuery.isLoading || (taskQuery.isFetching && !taskQuery.isFetchedAfterMount)) return <div role="status"><LoaderCircle className="animate-spin" /></div>;
-  return <AddProblemsForm key={taskId} taskQuery={taskQuery} />;
+  const inputQuery = useWorkflowInput(taskId, "problems", Boolean(taskQuery.data?.extract_job_id));
+  if (taskQuery.isLoading || (taskQuery.isFetching && !taskQuery.isFetchedAfterMount) || inputQuery.isLoading || (inputQuery.isFetching && !inputQuery.isFetchedAfterMount)) return <div role="status"><LoaderCircle className="animate-spin" /></div>;
+  if (inputQuery.isError) return <RecoverableActionState locale={locale} info={classifyRecoverableError(inputQuery.error, { locale })} workflowRecovery={{ retry: { onClick: () => void inputQuery.refetch() }, configurationHref: `/tasks/${taskId}/edit` }} />;
+  return <AddProblemsForm key={taskId} taskQuery={taskQuery} submittedInput={inputQuery.data?.input} />;
 }
 
-function AddProblemsForm({ taskQuery }: { taskQuery: ReturnType<typeof useTask> }) {
+function AddProblemsForm({ taskQuery, submittedInput }: { taskQuery: ReturnType<typeof useTask>; submittedInput?: ProblemInput | null }) {
   const { taskId } = useParams();
   const navigate = useNavigate();
   const { locale, t } = useI18n();
@@ -74,13 +78,14 @@ function AddProblemsForm({ taskQuery }: { taskQuery: ReturnType<typeof useTask> 
   const expertsQuery = useStageProviders();
   const preflight = useProblemSourcePreflight();
   const startPreparation = useStartQuestionPreparation();
-  const draft = usePageDraft(`problems:${taskId}`, initialProblemDraft, problemDraftCodec, JSON.stringify([taskQuery.data?.workflow_revision, taskQuery.data?.course_id]), undefined, preflight.isPending || startPreparation.isPending);
+  const draft = usePageDraft(`problems:${taskId}`, () => problemDraftFromInput(submittedInput), problemDraftCodec, JSON.stringify([taskQuery.data?.workflow_revision, taskQuery.data?.course_id]), undefined, preflight.isPending || startPreparation.isPending);
+  const submitting = useRef(false);
   const [activeRole, setActiveRole] = draft.field("activeRole");
   const [sources, setSources] = draft.field("sources");
   const [scorePolicy, setScorePolicy] = draft.field("scorePolicy");
   const [recognitionProviderId, setRecognitionProviderId] = draft.field("recognitionProviderId");
   useImageRecoveryReturn(draft.protection.loaded, setRecognitionProviderId);
-  const references = useProblemDraftReferences(taskId, sources, updateSource);
+  const references = useProblemDraftReferences(taskId, sources, (id, patch) => updateSource(id, patch, false));
   const [formError, setFormError] = draft.field("formError");
   const [preparationFailure, setPreparationFailure] = useState<PreparationFailure | null>(null);
   const [busyLabel, setBusyLabel] = useState<string | null>(null);
@@ -128,10 +133,12 @@ function AddProblemsForm({ taskQuery }: { taskQuery: ReturnType<typeof useTask> 
           ? tx(locale, "至少添加一份题目来源。", "Add at least one question source.")
           : null;
 
-  function updateSource(id: string, patch: Partial<SourceDraft>) {
+  function updateSource(id: string, patch: Partial<SourceDraft>, clearFailure = true) {
     setSources((current) => current.map((source) => source.id === id ? { ...source, ...patch } : source));
-    setFormError(null);
-    setPreparationFailure(null);
+    if (clearFailure) {
+      setFormError(null);
+      setPreparationFailure(null);
+    }
   }
 
   function addSource(role: PreparationSourceRole) {
@@ -153,6 +160,7 @@ function AddProblemsForm({ taskQuery }: { taskQuery: ReturnType<typeof useTask> 
   }
 
   async function handleStart() {
+    if (submitting.current || isBusy) return;
     setFormError(null);
     setPreparationFailure(null);
     if (!taskId || !taskQuery.data) {
@@ -189,6 +197,8 @@ function AddProblemsForm({ taskQuery }: { taskQuery: ReturnType<typeof useTask> 
       ? window.confirm(t("addProblemsOverwriteWarning"))
       : false;
     if (hasExistingProblems && !replaceConfirmed) return;
+    if (taskQuery.data.error === "provider_submit_uncertain" && !window.confirm(tx(locale, "上次请求可能已计费。确认按当前配置重新提交？可能再次消耗额度。", "The previous request may have been billed. Submit with current settings? This may incur another charge."))) return;
+    submitting.current = true;
     let activeSource: SourceDraft | undefined;
     let phase: PreparationFailure["phase"] = "source_preflight";
     try {
@@ -261,6 +271,7 @@ function AddProblemsForm({ taskQuery }: { taskQuery: ReturnType<typeof useTask> 
         sourceRole: activeSource?.role,
       });
     } finally {
+      submitting.current = false;
       setBusyLabel(null);
     }
   }
@@ -478,17 +489,14 @@ function AddProblemsForm({ taskQuery }: { taskQuery: ReturnType<typeof useTask> 
         </section>
         {formError ? <p role="alert" className="mt-3 text-sm text-danger">{formError}</p> : null}
         <ImageRecognitionRecovery error={preparationFailure?.error} expert={enabledExperts.find(e => e.provider_id === recognitionProviderId)} returnTo={taskReturnPath} controller={draft.protection.controller} isCurrent={draft.protection.isCurrent} locale={locale} />
-        {recoveryInfo && !needsImageRecovery(preparationFailure?.error) ? (
+        {recoveryInfo ? (
           <RecoverableActionState
             info={recoveryInfo}
             locale={locale}
             compact
             className="mt-4"
-            primaryAction={recoveryPrimary}
-            secondaryAction={{
-              label: tx(locale, "关闭提示", "Dismiss"),
-              onClick: () => setPreparationFailure(null),
-            }}
+            workflowRecovery={{ retry: { onClick: () => void handleStart(), busy: isBusy }, configurationHref: taskReturnPath }}
+            additionalActions={[...(recoveryPrimary?.onClick && recoveryInfo.actionKind !== "retry" ? [recoveryPrimary] : []), { label: tx(locale, "关闭提示", "Dismiss"), onClick: () => setPreparationFailure(null) }]}
           />
         ) : null}
       </div>

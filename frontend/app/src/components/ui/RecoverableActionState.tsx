@@ -21,10 +21,15 @@ export interface RecoveryAction {
   disabled?: boolean;
 }
 
+export const workflowRetryLabel = (locale: Locale) => locale === "zh-CN" ? "按当前配置重试" : "Retry with current settings";
+export const workflowBackLabel = (locale: Locale) => locale === "zh-CN" ? "返回修改配置" : "Back to edit settings";
+
 export function RecoverableActionState({
   info,
   primaryAction,
   secondaryAction,
+  workflowRecovery,
+  additionalActions = [],
   compact = false,
   locale = "zh-CN",
   className,
@@ -32,13 +37,17 @@ export function RecoverableActionState({
   info: RecoverableErrorInfo;
   primaryAction?: RecoveryAction;
   secondaryAction?: RecoveryAction;
+  workflowRecovery?: { retry: Omit<RecoveryAction, "label">; configurationHref: string; configurationState?: unknown };
+  additionalActions?: RecoveryAction[];
   compact?: boolean;
   locale?: Locale;
   className?: string;
 }) {
-  const primary = primaryAction ?? (info.actionHref
+  const primary = workflowRecovery ? { ...workflowRecovery.retry, label: workflowRetryLabel(locale) } : primaryAction ?? (info.actionHref
     ? { label: info.actionLabel, href: info.actionHref }
     : undefined);
+  const secondary = workflowRecovery ? { label: workflowBackLabel(locale), href: workflowRecovery.configurationHref, state: workflowRecovery.configurationState, disabled: workflowRecovery.retry.busy } : secondaryAction;
+  const extras = [...(workflowRecovery && info.actionHref && info.actionHref !== workflowRecovery.configurationHref ? [{ label: info.actionLabel, href: info.actionHref }] : []), ...additionalActions];
   const Icon = info.actionKind === "byok"
     ? KeyRound
     : info.actionKind === "reupload" || info.actionKind === "reselect"
@@ -81,10 +90,11 @@ export function RecoverableActionState({
             {info.description}
           </p>
 
-          {primary || secondaryAction ? (
+          {primary || secondary || extras.length ? (
             <div className={cn("flex flex-col gap-2 sm:flex-row sm:flex-wrap", compact ? "mt-4" : "mt-6")}>
               {primary ? <ActionControl action={primary} primary /> : null}
-              {secondaryAction ? <ActionControl action={secondaryAction} /> : null}
+              {secondary ? <ActionControl action={secondary} /> : null}
+              {extras.map((action, index) => <ActionControl key={`${action.label}:${index}`} action={action} />)}
             </div>
           ) : null}
 
@@ -122,6 +132,7 @@ function ActionControl({ action, primary = false }: { action: RecoveryAction; pr
     (action.disabled || action.busy) && "pointer-events-none opacity-50",
   );
   if (action.href) {
+    if (action.disabled || action.busy) return <button type="button" disabled className={className}>{content}</button>;
     return <Link to={action.href} state={action.state} aria-disabled={action.disabled || action.busy || undefined} className={className}>{content}</Link>;
   }
   return <button type="button" disabled={action.disabled || action.busy} onClick={action.onClick} className={className}>{content}</button>;

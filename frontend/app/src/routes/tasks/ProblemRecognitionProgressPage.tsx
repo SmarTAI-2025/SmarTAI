@@ -5,7 +5,8 @@ import {
   Loader2,
   RefreshCw,
 } from "lucide-react";
-import { useState, type ReactNode } from "react";
+import { useRef, useState, type ReactNode } from "react";
+import { getAPIErrorCode } from "@/api/client";
 import { Navigate, useNavigate, useParams } from "react-router-dom";
 import { useRetryQuestionPreparation, useStageProviders, useTask } from "@/api/hooks";
 import { SmarTAIMascot } from "@/components/brand/SmarTAIMascot";
@@ -48,10 +49,12 @@ export function ProblemRecognitionProgressPage() {
   const [retryFailure, setRetryFailure] = useState<unknown>(null);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [acknowledgedJobId, setAcknowledgedJobId] = useState<string | null>(null);
+  const [providerChoice, setProviderChoice] = useState<{ jobId: string; id: string } | null>(null);
+  const retrying = useRef(false);
   // The polled snapshot also owns recovery metadata; detail can predate the failure.
   const taskState = progressQuery.data ?? taskQuery.data;
   const status = taskState?.status as TaskStatus | undefined;
-  const recognitionProviderId = taskState?.question_recognition_provider_id ?? "";
+  const recognitionProviderId = providerChoice && providerChoice.jobId === taskState?.last_failed_job_id ? providerChoice.id : taskState?.question_recognition_provider_id ?? "";
   const enabledExperts = (expertsQuery.data ?? []).filter((expert) => expert.enabled);
 
   if (taskId && status === "draft" && !taskQuery.isFetching && !progressQuery.isFetching) {
@@ -94,11 +97,12 @@ export function ProblemRecognitionProgressPage() {
     const info = classifyRecoverableError(progressFailure, {
       locale,
       phase: progressQuery.progress?.current_step ?? progressQuery.progress?.phase ?? "question_preparation",
+      taskId,
       jobId: taskState?.last_failed_job_id,
       returnTo: `/tasks/${taskId}/problems/progress`,
     });
     const failedJobId = taskState?.last_failed_job_id;
-    const submissionUncertain = taskState?.error === "provider_submit_uncertain";
+    const submissionUncertain = taskState?.error === "provider_submit_uncertain" || getAPIErrorCode(retryFailure) === "provider_submit_uncertain";
     if (submissionUncertain) {
       info.description = locale === "zh-CN"
         ? "上次请求可能已计费，但没有可用结果。系统不会自动重试。确认后可复用已识别资料，重新准备题目；此操作可能再次产生模型费用。"
@@ -109,9 +113,11 @@ export function ProblemRecognitionProgressPage() {
       failedJobId && recognitionProviderId && taskState,
     );
     const retryPreparedSources = async () => {
+      if (retrying.current || retryPreparation.isPending) return;
       if (!taskId || !failedJobId || !recognitionProviderId || !taskState) return;
       if (submissionUncertain && acknowledgedJobId !== failedJobId) return;
       setRetryFailure(null);
+      retrying.current = true;
       try {
         await retryPreparation.mutateAsync({
           taskId,
@@ -124,23 +130,25 @@ export function ProblemRecognitionProgressPage() {
         await refresh();
       } catch (error) {
         setRetryFailure(error);
+      } finally {
+        retrying.current = false;
       }
     };
     return (
-      <ProgressPageFrame title={t("problemProgressTitle")}>
+      <ProgressPageFrame title={t("problemProgressTitle")} returnState={{ imageRecoveryModel: recognitionProviderId }}>
         <div className="grid gap-4">
           {failedJobId ? (
             <StageProviderSelect
               id="question-retry-provider"
               label={locale === "zh-CN" ? "题目识别模型" : "Question recognition model"}
               hint={locale === "zh-CN"
-                ? "原资料和已完成步骤已保留。继续使用本次模型重试，无需重新上传。"
-                : "Your materials and completed steps are preserved. Retry with the original model without uploading again."}
+                ? "原资料和已完成步骤已保留。可以改选模型后主动重试，无需重新上传。"
+                : "Your materials and completed steps are preserved. Choose a model and retry without uploading again."}
               experts={enabledExperts}
               value={recognitionProviderId}
-              disabled
+              disabled={retryPreparation.isPending || expertsQuery.isLoading}
               locale={locale}
-              onChange={() => undefined}
+              onChange={(id) => { setProviderChoice({ jobId: failedJobId, id }); setRetryFailure(null); }}
             />
           ) : null}
           <QuestionGenerationFailureSummary
@@ -159,27 +167,14 @@ export function ProblemRecognitionProgressPage() {
             info={info}
             locale={locale}
             className="min-h-[430px]"
-            primaryAction={info.actionKind === "byok" ? undefined : {
-              label: info.actionKind === "refresh"
-                ? info.actionLabel
-                : canRetryPreparedSources
-                  ? (submissionUncertain
-                    ? (locale === "zh-CN" ? "确认重新准备题目" : "Confirm restart")
-                    : (locale === "zh-CN" ? "重试未完成步骤" : "Retry unfinished steps"))
-                  : t("problemProgressChooseAgain"),
-              onClick: info.actionKind === "refresh"
-                ? refresh
-                : canRetryPreparedSources
-                  ? () => void retryPreparedSources()
-                  : () => navigate(`/tasks/${taskId}/upload/problems`),
-              busy: isRefreshing || retryPreparation.isPending,
-              disabled: submissionUncertain && acknowledgedJobId !== failedJobId,
+            workflowRecovery={{
+              retry: { onClick: canRetryPreparedSources ? () => void retryPreparedSources() : () => void refresh(),
+                busy: isRefreshing || retryPreparation.isPending,
+                disabled: submissionUncertain && acknowledgedJobId !== failedJobId },
+              configurationHref: `/tasks/${taskId}/upload/problems`,
+              configurationState: { imageRecoveryModel: recognitionProviderId },
             }}
-            secondaryAction={{
-              label: t("problemProgressRefresh"),
-              onClick: refresh,
-              busy: isRefreshing || retryPreparation.isPending,
-            }}
+            additionalActions={[{ label: t("problemProgressRefresh"), onClick: () => void refresh(), busy: isRefreshing || retryPreparation.isPending }]}
           />
         </div>
       </ProgressPageFrame>
@@ -199,13 +194,8 @@ export function ProblemRecognitionProgressPage() {
           info={info}
           locale={locale}
           className="min-h-[430px]"
-          primaryAction={info.actionKind === "byok" ? undefined : {
-            label: t("problemProgressRefresh"),
-            onClick: refresh,
-            busy: taskQuery.isFetching || progressQuery.isFetching,
-          }}
-          secondaryAction={{ label: t("problemProgressViewTasks"), href: "/history" }}
-        />
+          workflowRecovery={{ retry: { onClick: () => void refresh(), busy: isRefreshing }, configurationHref: `/tasks/${taskId}/upload/problems` }}
+      />
       </ProgressPageFrame>
     );
   }
@@ -381,13 +371,13 @@ export function ProblemRecognitionProgressPage() {
   );
 }
 
-function ProgressPageFrame({ title, children }: { title: string; children: ReactNode }) {
+function ProgressPageFrame({ title, children, returnState }: { title: string; children: ReactNode; returnState?: unknown }) {
   return (
     <div className="w-full max-w-[1300px]">
       <h1 className="text-[30px] font-bold leading-9 tracking-[-0.02em] text-foreground">
         {title}
       </h1>
-      <NewTaskStepper currentStep={1} />
+      <NewTaskStepper currentStep={1} returnState={returnState} returnStateStep={1} />
       <div className="mx-auto mt-[45px] w-full max-w-[800px]">{children}</div>
     </div>
   );

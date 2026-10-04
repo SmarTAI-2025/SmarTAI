@@ -355,6 +355,7 @@ class RetryQuestionPreparationRequest(BaseModel):
     recognition_provider_id: str | None = Field(default=None, max_length=240)
     expected_workflow_revision: int = Field(ge=0)
     acknowledge_possible_duplicate_call: bool = Field(default=False, strict=True)
+    use_current_configuration: bool = Field(default=False, strict=True)
 
 
 def _question_preparation_input_hash(
@@ -589,6 +590,15 @@ def check_problem_draft_reference(
             except NotFound:
                 pass
         return {"available": True, "filename": filename, "prepared": prepared}
+    except DomainError as exc:
+        return domain_error_response(exc)
+
+
+@router.get("/{task_id}/question-preparation/input")
+def get_question_preparation_input(task_id: str, current: User = Depends(require_teacher)):
+    from backend.services.workflow_inputs import question_inputs
+    try:
+        return question_inputs(task_id=task_id, owner_id=current.id)
     except DomainError as exc:
         return domain_error_response(exc)
 
@@ -1502,6 +1512,7 @@ async def _start_question_preparation(
     input_workflow_revision: int | None = None,
     retry_source_contract: Mapping[str, Any] | None = None,
     acknowledged_restart_from: str | None = None,
+    use_current_configuration: bool = False,
 ):
     # Kept in the endpoint signature for API compatibility. Question
     # preparation is published only to the durable workflow worker below.
@@ -1634,7 +1645,7 @@ async def _start_question_preparation(
                     "Prepared question sources changed before retry.",
                     code="question_preparation_retry_source_unavailable",
                 )
-            if (
+            if not use_current_configuration and (
                 frozen.get("recognition_provider_id")
                 != recognition_provider_id
                 or frozen.get("provider_configuration_fingerprint")
@@ -1869,6 +1880,8 @@ async def retry_question_preparation(
                 code="question_preparation_retry_source_unavailable",
             )
         if (
+            not request.use_current_configuration
+            and
             request.recognition_provider_id is not None
             and request.recognition_provider_id != frozen_provider_id
         ):
@@ -1905,7 +1918,7 @@ async def retry_question_preparation(
             score_policy=QuestionScorePolicy.model_validate(
                 payload.get("score_policy") or {}
             ),
-            recognition_provider_id=frozen_provider_id,
+            recognition_provider_id=(request.recognition_provider_id or frozen_provider_id),
         )
         original_input_revision = payload.get("requested_workflow_revision")
         if (
@@ -1926,6 +1939,7 @@ async def retry_question_preparation(
             allow_prepared_source_reuse=True,
             input_workflow_revision=original_input_revision,
             retry_source_contract=payload,
+            use_current_configuration=request.use_current_configuration,
             # Acknowledged uncertainty starts a distinct operation, preserving the
             # original evidence and never weakening automatic replay protection.
             acknowledged_restart_from=(f"{failed.id}:{failed.attempt}" if submission_uncertain else None),
