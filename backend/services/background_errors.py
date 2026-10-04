@@ -14,7 +14,7 @@ from sqlalchemy.exc import SQLAlchemyError
 
 from backend.domain.errors import DomainError, RECOGNITION_ERROR_CODES
 from backend.domain.source_outcomes import SAFE_SOURCE_REASON_CODES
-from backend.tools.structured_llm import PermanentLLMError, RateLimitError
+from backend.tools.structured_llm import PermanentLLMError, RateLimitError, StructuredOutputInvalidError
 
 
 SAFE_BACKGROUND_ERROR_CODES = frozenset({
@@ -227,6 +227,8 @@ def classify_background_error(
     chain = _exception_chain(exc)
 
     for item in chain:
+        if isinstance(item, StructuredOutputInvalidError):
+            return "provider_response_invalid"
         literal_code = f"{item}".strip()
         if literal_code in SAFE_BACKGROUND_ERROR_CODES:
             return literal_code

@@ -8,6 +8,16 @@ import {
 } from "./taskActionGuards";
 
 describe("task contract compatibility", () => {
+  it("explains recitation with the failed page instead of blaming image support", () => {
+    const info = classifyRecoverableError(new APIError(422, "provider_recitation_blocked", {
+      detail: { code: "provider_recitation_blocked", failed_pages: [8], processed_pages: [1, 2, 3] },
+    }), { locale: "zh-CN", returnTo: "/tasks/test/upload/problems" });
+    expect(info.description).toContain("PDF 第 8 页");
+    expect(info.description).toContain("RECITATION");
+    expect(info.description).toContain("不代表模型缺少图片能力");
+    expect(info.actionLabel).toBe("更换模型");
+    expect(info.actionHref).toContain("returnTo=");
+  });
   it("routes uncertain transcription to the existing answer review", () => {
     const result = classifyRecoverableError(new APIError(409, "submission_recognition_needs_review", {
       detail: { code: "submission_recognition_needs_review" },
