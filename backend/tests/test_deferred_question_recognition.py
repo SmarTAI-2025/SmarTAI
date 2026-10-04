@@ -52,4 +52,3 @@ async def test_upload_saves_original_before_recognition_and_worker_reports_failu
     assert job.error_code == "provider_recitation_blocked"
     assert job.progress["recognition_failure"]["failed_pages"] == [1]
     assert job.payload["source_refs"][0]["stored_file_id"] == source["source"]["stored_file_id"]
-
