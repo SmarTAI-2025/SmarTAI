@@ -1,7 +1,7 @@
 import "fake-indexeddb/auto";
 import { Blob, File } from "node:buffer";
 import { useEffect, useState } from "react";
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, renderHook, screen, waitFor } from "@testing-library/react";
 import { createMemoryRouter, Link, Outlet, RouterProvider } from "react-router-dom";
 import { beforeEach, expect, it, vi } from "vitest";
 import { DraftActions, DraftLeaveProvider } from "./useDraftLeave";
@@ -142,4 +142,21 @@ it("formal API and asynchronous cleanup keep one lock and preserve edits made wh
   expect(closed).not.toHaveBeenCalled(); expect(screen.getByLabelText("name")).toHaveValue("later input");
   fireEvent.click(screen.getByRole("button", { name: "继续编辑" }));
   expect(await store.listPageDrafts("draft-teacher")).toEqual([]);
+});
+
+
+it("publishes a durable save to navigation guards before React rerenders", async () => {
+  const value = { name: "saved input" };
+  const { result } = renderHook(() => useDraftProtection({
+    scope: "save-navigation", value, version: "1", onRestore: () => {},
+  }), { wrapper: ({ children }) => <PageDraftSession ownerId="draft-teacher"><DraftLeaveProvider>{children}</DraftLeaveProvider></PageDraftSession> });
+  await waitFor(() => expect(result.current.controller().loaded).toBe(true));
+  const prepared = result.current.controller().prepare();
+  await act(async () => {
+    await store.writePageDrafts([prepared.write]);
+    prepared.commit();
+    // The caller continues synchronously, before React flushes setSavedAt.
+    expect(result.current.controller().savedAt).toBe(prepared.write.record.savedAt);
+    expect(result.current.controller().dirty).toBe(false);
+  });
 });

@@ -46,7 +46,6 @@ export function ImageRecognitionRecovery({ error, expert, returnTo, controller, 
     try {
       const original = controller();
       await leave.save([original.id]);
-      await new Promise<void>(resolve => window.setTimeout(resolve, 0));
       const current = controller();
       if (!isCurrent() || current.id !== original.id || current.dirty || current.busy || current.savedAt === null) throw new Error(zh ? "内容有修改或尚未暂存成功，请再次暂存；输入仍保留。" : "Input changed or could not be saved. Your input is preserved.");
       const params = new URLSearchParams({ returnTo, imageRecovery: "1", mode });
