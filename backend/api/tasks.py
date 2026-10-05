@@ -40,6 +40,7 @@ from backend.auth import require_teacher
 from backend.db import (
     assignment_repository,
     grading_repository,
+    source_outcome_repository,
     source_storage_repository,
     workflow_repository,
 )
@@ -536,9 +537,11 @@ async def retry_submission_recognition_endpoint(
                 "The task changed before recognition retry.",
                 code="stale_revision",
             )
-        if workflow.last_failed_job_id != job_id:
-            raise InvalidTransition("Only the latest failed input can be retried.", code="submission_retry_not_available")
         failed = workflow_repository.get_operation(job_id, owner_id=current.id)
+        summary = source_outcome_repository.summarize_sources(operation_id=job_id, owner_id=current.id, attempt=failed.attempt)
+        legacy_partial = workflow.parse_job_id == job_id and bool(summary.failed_count)
+        if workflow.last_failed_job_id != job_id and not legacy_partial:
+            raise InvalidTransition("Only the latest failed input can be retried.", code="submission_retry_not_available")
         uncertain = failed.error_code == "provider_submit_uncertain" or bool((failed.checkpoint or {}).get("ocr_inflight_source_id"))
         if uncertain and not request.acknowledge_possible_duplicate_call:
             raise InvalidTransition("A repeated model call may be billed.", code="provider_submit_uncertain")
@@ -558,7 +561,8 @@ async def retry_submission_recognition_endpoint(
             roster_entries=retry["roster_entries"],
             roster_name=retry["roster_name"],
             recognition_provider_id=request.recognition_provider_id,
-            replace_confirmed=retry["replace_confirmed"],
+            replace_confirmed=retry["replace_confirmed"] or legacy_partial,
+            retry_from=retry["retry_from"],
             acknowledged_restart_from=f"{failed.id}:{failed.attempt}" if uncertain else None,
             expected_workflow_revision=request.expected_workflow_revision,
         )

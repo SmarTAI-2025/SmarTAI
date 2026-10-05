@@ -9,12 +9,14 @@ import { AuthCard, AuthFrame } from "./AuthFrame";
 import { SessionRestoreError } from "./SessionRestoreError";
 import { useSessionExpired } from "@/lib/sessionExpiry";
 import { Button } from "@/components/ui/Button";
+import { useSessionActivity } from "@/hooks/useSessionActivity";
 
 export function RequireAdminSession({ children }: { children: ReactNode }) {
   const { locale } = useI18n();
   const zh = locale === "zh-CN";
   const user = useCurrentUser();
   const expired = useSessionExpired();
+  useSessionActivity(Boolean(user.data) && !expired);
   const location = useLocation();
   const logout = useLogout();
   const from = `${location.pathname}${location.search}${location.hash}`;

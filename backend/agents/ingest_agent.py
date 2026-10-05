@@ -604,7 +604,8 @@ async def parse_student_answer_sources(
                 HumanMessage(content=user_message),
             ]
             try:
-                response = (await provider.ainvoke(messages) if single_attempt
+                from backend.tools.structured_llm import ainvoke_with_rate_retry
+                response = (await ainvoke_with_rate_retry(provider, messages) if single_attempt
                             else await ainvoke_with_retry(provider, messages))
             except Exception as exc:
                 code = classify_background_error(exc, "submission_parse_failed")
@@ -627,7 +628,9 @@ async def parse_student_answer_sources(
                     retryable=is_retryable_background_error(code),
                 )
             try:
-                parsed = extract_and_parse_json(response.content, StudentSubmission)
+                from backend.tools.structured_llm import parse_with_format_repair
+                parsed, response = await parse_with_format_repair(provider, messages, response, StudentSubmission,
+                    invoke=ainvoke_with_rate_retry if single_attempt else None)
             except StructuredOutputBoundsError as exc:
                 logger.warning(
                     "Submission recognition exceeded safe field bounds; exception_type=%s",

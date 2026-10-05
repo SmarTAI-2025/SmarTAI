@@ -15,6 +15,12 @@ class _MathPayload(BaseModel):
     solution_code: str
 
 
+def test_prose_linebreaks_preserve_code_and_tex_escapes():
+    assert format_math_and_quotes(r"first\nsecond\n$x \neq y$") == "first\nsecond\n$x \\neq y$"
+    code = '```python\nprint("\\n")\n```\n`\\n` and $\\nu+\\nabla f$'
+    assert format_math_and_quotes(code) == code
+
+
 def test_wraps_formula_only_bare_latex_as_one_expression():
     value = "Evaluate\n\\int_{0}^{1} x e^{x^2} dx.\nShow the substitution."
 
@@ -106,6 +112,8 @@ def test_does_not_decode_real_latex_nu_or_nabla_as_newlines():
     value = r"Use \nu and \nabla f in the proof."
 
     assert format_math_and_quotes(value) == r"Use $\nu$ and $\nabla$ f in the proof."
+    uncommon = r"$x \nrightarrow y$, $x \neqslant y$"
+    assert format_math_and_quotes(uncommon) == uncommon
 
 
 def test_repairs_overescaped_group_notation_without_inserting_new_math_spans():

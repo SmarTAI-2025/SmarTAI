@@ -48,6 +48,31 @@ class _RecoveryRegistry(_Registry):
         }]
 
 
+@pytest.mark.asyncio
+async def test_changed_model_retry_keeps_verified_question_units(monkeypatch):
+    owner, task = _seed_task()
+    _, response, _ = await _queue_question_preparation(owner, task, source_text="1. First.\n2. Second.")
+    calls = []
+    monkeypatch.setattr(task_facade, "_registry_for_owner", lambda _owner: _RecoveryRegistry())
+    monkeypatch.setattr(task_preparation, "prepare_question_packages", _fake_preparer(calls,
+        question_count=2, known_failure_question="q2", record_base_provider_calls=True))
+    await task_preparation.run_durable_question_preparation(_claim(owner, response["job_id"], "first"))
+    workflow = workflow_repository.get_workflow(task, owner_id=owner)
+    changed = _RecoveryRegistry("different-model")
+    retry = await task_preparation.retry_question_preparation(task_id=task, job_id=response["job_id"],
+        request=task_preparation.RetryQuestionPreparationRequest(expected_workflow_revision=workflow.workflow_revision,
+            use_current_configuration=True), background_tasks=_BackgroundTasks(), current=SimpleNamespace(id=owner), registry=changed)
+    assert retry["job_id"] != response["job_id"]
+    monkeypatch.setattr(task_facade, "_registry_for_owner", lambda _owner: changed)
+    monkeypatch.setattr(task_preparation, "prepare_question_packages", _fake_preparer(calls,
+        question_count=2, record_base_provider_calls=True))
+    await task_preparation.run_durable_question_preparation(_claim(owner, retry["job_id"], "changed-model"))
+    final = workflow_repository.get_operation(retry["job_id"], owner_id=owner)
+    assert final.status == "done", final.error_code
+    assert calls == ["questions_extracted", "uploaded_materials_aligned", "q1", "q2", "q2"]
+    assert final.checkpoint["retry_origin_copied"] == response["job_id"]
+
+
 def _questions(count: int = 2) -> dict[str, dict]:
     rows: dict[str, dict] = {}
     for index in range(1, count + 1):

@@ -229,7 +229,7 @@ export function GradingPreflightPage() {
                   style={{ width: countdownActive ? `${(countdown / AUTO_START_SECONDS) * 100}%` : "0%" }}
                 />
               </div>
-              {startError ? <RecoverableActionState info={classifyRecoverableError(startGrading.error, { locale, taskId, returnTo: `/tasks/${taskId}/grading/preflight` })} locale={locale} compact workflowRecovery={{ retry: { onClick: () => void handleStart(), busy: startGrading.isPending }, configurationHref: getTaskGradingSetupHref(taskId, `/tasks/${taskId}/grading/preflight`) }} /> : null}
+              {startError ? <RecoverableActionState usageContext={{ providerIds: setup?.selected_provider_ids ?? [], providers: setupResponse?.available_experts ?? [] }} info={classifyRecoverableError(startGrading.error, { locale, taskId, returnTo: `/tasks/${taskId}/grading/preflight` })} locale={locale} compact workflowRecovery={{ retry: { onClick: () => void handleStart(), busy: startGrading.isPending }, configurationHref: getTaskGradingSetupHref(taskId, `/tasks/${taskId}/grading/preflight`) }} /> : null}
               {isRegrading ? <div className="border-t px-6 py-3 sm:px-8"><GradingRetryNotice locale={locale} /></div> : null}
             </section>
           ) : null}

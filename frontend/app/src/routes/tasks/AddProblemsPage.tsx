@@ -1,3 +1,4 @@
+import { taskInputVersion } from "@/lib/editorVersions";
 import {
   AlignLeft,
   ArrowLeft,
@@ -78,7 +79,7 @@ function AddProblemsForm({ taskQuery, submittedInput }: { taskQuery: ReturnType<
   const expertsQuery = useStageProviders();
   const preflight = useProblemSourcePreflight();
   const startPreparation = useStartQuestionPreparation();
-  const draft = usePageDraft(`problems:${taskId}`, () => problemDraftFromInput(submittedInput), problemDraftCodec, JSON.stringify([taskQuery.data?.workflow_revision, taskQuery.data?.course_id]), undefined, preflight.isPending || startPreparation.isPending);
+  const draft = usePageDraft(`problems:${taskId}`, () => problemDraftFromInput(submittedInput), problemDraftCodec, taskInputVersion(taskQuery.data, "problems"), undefined, preflight.isPending || startPreparation.isPending);
   const submitting = useRef(false);
   const [activeRole, setActiveRole] = draft.field("activeRole");
   const [sources, setSources] = draft.field("sources");
@@ -490,9 +491,10 @@ function AddProblemsForm({ taskQuery, submittedInput }: { taskQuery: ReturnType<
           <RecoverableActionState
             info={recoveryInfo}
             locale={locale}
+            usageContext={{ providerIds: [recognitionProviderId], providers: expertsQuery.data ?? [] }}
             compact
             className="mt-4"
-            workflowRecovery={{ retry: { onClick: () => void handleStart(), busy: isBusy }, configurationHref: taskReturnPath }}
+            workflowRecovery={{ retry: { label: tx(locale, "重新识别全部资料", "Prepare All Materials Again"), onClick: () => void handleStart(), busy: isBusy }, configurationHref: taskReturnPath }}
             additionalActions={[...(recoveryPrimary?.onClick && recoveryInfo.actionKind !== "retry" ? [recoveryPrimary] : []), { label: tx(locale, "关闭提示", "Dismiss"), onClick: () => setPreparationFailure(null) }]}
           />
         ) : null}

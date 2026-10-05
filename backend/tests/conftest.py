@@ -18,13 +18,51 @@ os.environ["SMARTAI_PROVIDER_ENCRYPTION_KEY"] = (
 os.environ["SMARTAI_JWT_SECRET"] = "test-suite-jwt-secret-0123456789abcdef"
 
 import pytest  # noqa: E402
+from sqlalchemy import create_engine  # noqa: E402
 
 from backend.db.base import Base  # noqa: E402
 from backend.db.session import configure_database  # noqa: E402
+from backend.tests.ci_support import assign_modules, restore_sqlite_database  # noqa: E402
+
+
+def pytest_addoption(parser):
+    parser.addoption("--test-shard", help="Run module-preserving CI shard INDEX/COUNT (1-based)")
+
+
+def pytest_collection_modifyitems(config, items):
+    option = config.getoption("--test-shard")
+    if option is None:
+        return
+    try:
+        index, count = map(int, option.split("/"))
+        if not 1 <= index <= count:
+            raise ValueError
+    except ValueError:
+        raise pytest.UsageError("--test-shard must be INDEX/COUNT with 1 <= INDEX <= COUNT") from None
+    assignments = assign_modules([item.nodeid for item in items], count)
+    selected, deselected = [], []
+    for item in items:
+        group = selected if assignments[item.nodeid.split("::", 1)[0]] == index else deselected
+        group.append(item)
+    items[:] = selected
+    config.hook.pytest_deselected(items=deselected)
+
+
+@pytest.fixture(scope="session")
+def sqlite_schema_template(tmp_path_factory):
+    # Collection has imported the ORM models before this fixture runs. Build
+    # the empty schema once; each test still gets a fresh, file-backed copy.
+    template = tmp_path_factory.mktemp("sqlite-schema") / "empty.db"
+    engine = create_engine(f"sqlite:///{template.as_posix()}")
+    try:
+        Base.metadata.create_all(engine)
+    finally:
+        engine.dispose()
+    return template
 
 
 @pytest.fixture(autouse=True)
-def isolated_database():
+def isolated_database(request):
     database_url = os.environ["SMARTAI_DATABASE_URL"]
     postgres_url = os.environ.get("SMARTAI_TEST_POSTGRES_URL")
     if postgres_url and database_url == postgres_url:
@@ -35,16 +73,13 @@ def isolated_database():
         return
 
     engine = configure_database(database_url)
-    # ``create_all`` alone retains rows from the previous test, which makes
-    # fixed-id security regressions order-dependent. This suite always uses the
-    # disposable SQLite file declared above; recreating that file avoids the
-    # normalized schema's intentional cyclic foreign keys during ``drop_all``.
-    engine.dispose()
     prefix = "sqlite:///"
     if not database_url.startswith(prefix) or database_url.endswith(":memory:"):
         raise RuntimeError("backend tests require their disposable SQLite database")
-    Path(database_url[len(prefix):]).unlink(missing_ok=True)
-    Base.metadata.create_all(engine)
+    restore_sqlite_database(
+        engine, request.getfixturevalue("sqlite_schema_template"),
+        Path(database_url[len(prefix):]),
+    )
     yield
 
 

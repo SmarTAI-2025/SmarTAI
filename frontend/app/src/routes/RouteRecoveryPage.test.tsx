@@ -27,7 +27,7 @@ it.each([
 ])("retains workflow recovery when rendering fails at %s", (path, configurationHref) => {
   const router = createMemoryRouter([{ path: "*", element: <RouteRecoveryPage /> }], { initialEntries: [path] });
   render(<RouterProvider router={router} />);
-  expect(screen.getByRole("button", { name: "按当前配置重试" })).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "重新加载页面" })).toBeInTheDocument();
   expect(screen.getByRole("link", { name: "返回修改配置" })).toHaveAttribute("href", configurationHref);
   expect(screen.getByRole("alert")).toHaveTextContent("不会自动重新识别或批改");
 });

@@ -360,6 +360,7 @@ class Settings(BaseSettings):
     jwt_secret: str = "smartai-dev-secret-change-in-prod"
     jwt_algorithm: str = "HS256"
     jwt_expiry_minutes: int = 30
+    session_idle_minutes: int = Field(default=30, ge=1)
     refresh_session_days: int = 30
     refresh_cookie_name: str = "smartai_refresh"
     refresh_cookie_secure: bool = os.getenv("SMARTAI_REFRESH_COOKIE_SECURE", "false").lower() == "true"

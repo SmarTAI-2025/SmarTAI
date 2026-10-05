@@ -17,7 +17,7 @@ export function useSaveGradingSetup() {
     mutationFn: gradingSetupApi.saveGradingSetup,
     onSuccess: (response, variables) => {
       queryClient.setQueryData(gradingSetupKeys.detail(variables.taskId), response);
-      queryClient.invalidateQueries({ queryKey: taskKeys.all });
+      return queryClient.invalidateQueries({ queryKey: taskKeys.all });
     },
   });
 }

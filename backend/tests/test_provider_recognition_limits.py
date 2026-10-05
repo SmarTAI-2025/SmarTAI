@@ -1,6 +1,7 @@
 import asyncio
 import threading
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 from langchain_core.messages import HumanMessage
 import pytest
@@ -21,6 +22,11 @@ async def test_zhipu_busy_is_distinct_from_unspecified_quota(monkeypatch, code, 
     from backend.skills.recognition_reader import LLMRecognitionEngine
     from backend.recognition.engine import EngineReadInputV1
     from backend.domain.errors import RecognitionError
+    from backend.tools import structured_llm
+
+    # Exercise every rejected attempt without waiting real quota windows.
+    sleep = AsyncMock()
+    monkeypatch.setattr(structured_llm._invoke_with_rate_retry.retry, "sleep", sleep)
 
     async def reject(*args, **kwargs):
         raise RateLimitError("PRIVATE_BODY", response=httpx.Response(429, request=httpx.Request("POST", "https://open.bigmodel.cn")), body={"error": {"code": code, "message": "PRIVATE_BODY"}})
@@ -33,6 +39,8 @@ async def test_zhipu_busy_is_distinct_from_unspecified_quota(monkeypatch, code, 
     assert classify_background_error(caught.value, "workflow_failed") == expected
     assert not caught.value.submission_may_exist
     assert "PRIVATE_BODY" not in str(caught.value)
+    retries = max(1, structured_llm.settings.llm_max_retries + structured_llm.settings.llm_rate_limit_max_retries) - 1
+    assert sleep.await_count == (retries if expected == "provider_rate_limited" else 0)
 
 
 @pytest.mark.asyncio

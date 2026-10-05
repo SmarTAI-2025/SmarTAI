@@ -21,6 +21,8 @@ async function fixture(page: Page, stage: "problems" | "submissions" | "grading"
     const method = req.method();
     const json = (body: unknown, status = 200) => route.fulfill({ status, contentType: "application/json", body: JSON.stringify(body) });
     if (method === "OPTIONS") return route.fulfill({ status: 204, headers: { "Access-Control-Allow-Origin": "*", "Access-Control-Allow-Headers": "*", "Access-Control-Allow-Methods": "*" } });
+    // Session renewal is expected on human input, but is not a task/model mutation.
+    if (path === "/auth/activity" && method === "POST") return json({ token: "synthetic-recovery-token" });
     if (method === "POST" || method === "PUT") {
       calls.push({ path, body: req.postData() ?? "" });
       if (path.endsWith("/question-preparation/sources/preflight")) return json({ source_token: "new-source", source: { stored_file_id: "stored-pdf" } });
@@ -53,7 +55,7 @@ test("mobile recovery actions stay visible and do not overflow", async ({ page }
   await page.setViewportSize({ width: 390, height: 844 });
   const { calls, errors } = await fixture(page, "submissions", "provider_request_rejected");
   await page.goto("/tasks/recovery-task/submissions/progress");
-  await expect(page.getByRole("button", { name: "按当前配置重试", exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "重试失败项", exact: true })).toBeVisible();
   await expect(page.getByRole("link", { name: "返回修改配置" })).toBeVisible();
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
   await page.screenshot({ path: "output/playwright/workflow-mobile-error.png", fullPage: true });
@@ -69,7 +71,7 @@ test("restored question inputs can start a new job only after manual continuatio
   await page.getByRole("button", { name: "重新识别全部资料" }).click();
   await expect(page).toHaveURL(/\/problems\/progress$/);
   await expect(page.getByRole("heading", { name: "题目资料准备进度" })).toBeVisible();
-  await expect(page.getByRole("button", { name: "按当前配置重试", exact: true })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "重试失败项", exact: true })).toHaveCount(0);
   expect(calls).toHaveLength(2);
   expect(calls[0].body).toContain("stored-pdf");
   expect(calls[0].body).not.toContain('filename="saved.pdf"');
@@ -79,7 +81,7 @@ test("restored question inputs can start a new job only after manual continuatio
 test("question failure → model change → restored original form → manual continue", async ({ page }) => {
   const { calls, errors } = await fixture(page, "problems");
   await page.goto("/tasks/recovery-task/problems/progress");
-  await expect(page.getByRole("button", { name: "按当前配置重试", exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "重试失败项", exact: true })).toBeVisible();
   await expect(page.getByRole("link", { name: "检查 BYOK 配置" })).toBeVisible();
   await page.getByRole("combobox", { name: "题目识别模型" }).selectOption("new");
   await page.screenshot({ path: "output/playwright/workflow-question-error.png", fullPage: true });
@@ -91,7 +93,8 @@ test("question failure → model change → restored original form → manual co
   expect(calls).toHaveLength(0);
   await page.screenshot({ path: "output/playwright/workflow-question-restored.png", fullPage: true });
   await page.getByRole("button", { name: "重新识别全部资料" }).click();
-  await expect(page.getByRole("button", { name: "按当前配置重试", exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "重新识别全部资料", exact: true })).toHaveCount(2);
+  await expect(page.getByRole("button", { name: "重试失败项", exact: true })).toHaveCount(0);
   await expect.poll(() => calls.length).toBe(2);
   expect(calls[0].body).toContain("stored-pdf");
   expect(calls[0].body).not.toContain('filename="saved.pdf"');
@@ -102,7 +105,7 @@ test("question failure → model change → restored original form → manual co
 test("manual previous-step navigation restores submission archive, roster and options", async ({ page }) => {
   const { calls, errors } = await fixture(page, "submissions", "provider_auth_failed");
   await page.goto("/tasks/recovery-task/submissions/progress");
-  await expect(page.getByRole("button", { name: "按当前配置重试", exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "重试失败项", exact: true })).toBeVisible();
   await page.getByRole("combobox", { name: "作答识别模型" }).selectOption("new");
   await page.getByRole("link", { name: "上传作答", exact: true }).click();
   await expect(page.getByLabel("作答识别模型")).toHaveValue("new");
@@ -111,7 +114,7 @@ test("manual previous-step navigation restores submission archive, roster and op
   await expect(page.getByRole("radio", { name: "导入名单" })).toHaveAttribute("aria-checked", "true");
   expect(calls).toHaveLength(0);
   await page.screenshot({ path: "output/playwright/workflow-submissions-restored.png", fullPage: true });
-  await page.getByRole("button", { name: "按当前配置重试", exact: true }).click();
+  await page.getByRole("button", { name: "重新识别全部作答", exact: true }).click();
   await expect(page.getByRole("heading", { name: "模型密钥或授权无效" })).toBeVisible();
   expect(calls).toHaveLength(1);
   expect(calls[0].body).toContain("stored-zip");
@@ -122,7 +125,7 @@ test("manual previous-step navigation restores submission archive, roster and op
 test("grading error keeps retry and configuration recovery with saved model and notes", async ({ page }) => {
   const { calls, errors } = await fixture(page, "grading", "provider_upstream_unavailable");
   await page.goto("/tasks/recovery-task/grading/progress");
-  await expect(page.getByRole("button", { name: "按当前配置重试", exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "重试失败项", exact: true })).toBeVisible();
   await page.getByRole("link", { name: "返回修改配置" }).click();
   await expect(page.getByText("synthetic-old", { exact: false }).first()).toBeVisible();
   await expect(page.getByRole("slider").first()).toHaveValue("75");
@@ -138,7 +141,7 @@ for (const code of ["provider_rate_limited", "provider_timeout", "source_empty",
     const { calls, errors } = await fixture(page, "problems", code);
     await page.goto("/tasks/recovery-task/problems/progress");
     await expect(page.getByRole("link", { name: "返回修改配置" })).toBeVisible();
-    await page.getByRole("button", { name: "按当前配置重试", exact: true }).dblclick();
+    await page.getByRole("button", { name: "重试失败项", exact: true }).dblclick();
     await expect.poll(() => calls.length).toBeGreaterThan(0);
     expect(calls[0].body).toContain('"use_current_configuration":true');
     expect(errors).toEqual([]);

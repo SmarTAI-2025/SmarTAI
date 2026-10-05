@@ -14,6 +14,28 @@ from backend.llm import host_capacity
 from backend.llm.host_capacity import HostCapacity, MAX_HOST_CONCURRENCY
 
 
+def test_rpm_is_paced_before_dispatch_across_processes(tmp_path):
+    directory = tmp_path / "quota"
+    first = HostCapacity(directory)
+    assert first.try_start("same-model-and-key", 2)
+    script = "from backend.llm.host_capacity import HostCapacity; import sys; c=HostCapacity(sys.argv[1]); assert not c.try_start('same-model-and-key',2); assert c.try_start('different-model',2)"
+    child = subprocess.run([sys.executable, "-c", script, str(directory)], capture_output=True, timeout=10)
+    assert child.returncode == 0, child.stderr.decode()
+
+
+def test_rpm_recovers_at_interval_and_does_not_spend_on_denied_start(tmp_path, monkeypatch):
+    now = [100.0]
+    monkeypatch.setattr(host_capacity.time, "monotonic", lambda: now[0])
+    first, second = HostCapacity(tmp_path / "quota"), HostCapacity(tmp_path / "quota")
+    assert first.try_start("key", 2)
+    for _ in range(10):
+        assert not second.try_start("key", 2)
+    now[0] += 30.1
+    assert second.try_start("key", 2)
+    now[0] += 30.1
+    assert first.try_start("key", 2)
+
+
 def test_separate_instances_share_slots_and_release_is_idempotent(tmp_path):
     directory = tmp_path / "permits"
     first, second = HostCapacity(directory), HostCapacity(directory)

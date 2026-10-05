@@ -37,6 +37,10 @@ def test_access_tokens_reject_cross_service_use_without_changing_role_checks(mon
     for token in (public_admin, teacher):
         assert private.get("/api/auth/me", headers=headers(token)).status_code == 401
         assert private.get("/api/admin/users", headers=headers(token)).status_code == 401
+        assert private.post("/api/auth/activity", headers=headers(token)).status_code == 401
+    assert public.post("/auth/activity", headers=headers(private_admin)).status_code == 401
+    private.cookies.clear()
+    assert private.post("/api/auth/activity", headers=headers(private_admin)).status_code == 200
     assert private.post("/api/auth/login", json={"username": "teacher", "password": "teacher-test-password"}).status_code == 403
 
 
@@ -51,7 +55,15 @@ def test_wrong_scope_refresh_cannot_rotate_or_revoke_the_other_session(monkeypat
     put_cookie(private, "smartai_admin_refresh", public_raw)
     assert private.post("/api/auth/refresh").status_code == 401
     assert private.post("/api/auth/logout", headers=headers(private_admin)).status_code == 200
-    assert public.post("/auth/refresh").status_code == 200
+    refreshed_public = public.post("/auth/refresh")
+    assert refreshed_public.status_code == 200
+    public_admin = refreshed_public.json()["token"]
+    # Logout revokes its own bearer session even when its cookie is missing or
+    # replaced by a different service's cookie. The public session survived.
+    put_cookie(private, "smartai_admin_refresh", private_raw)
+    assert private.post("/api/auth/refresh").status_code == 401
+    private_admin = admin_login(private)
+    private_raw = private.cookies.get("smartai_admin_refresh")
     put_cookie(public, settings.refresh_cookie_name, private_raw)
     assert public.post("/auth/refresh").status_code == 401
     assert public.post("/auth/logout", headers=headers(public_admin)).status_code == 200

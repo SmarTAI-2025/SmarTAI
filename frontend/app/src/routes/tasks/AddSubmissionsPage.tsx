@@ -1,3 +1,4 @@
+import { taskInputVersion } from "@/lib/editorVersions";
 import { FileUp, LoaderCircle } from "lucide-react";
 import { SubmissionSourceOutcomePanel } from "@/components/tasks/SubmissionSourceOutcomePanel";
 import {
@@ -61,7 +62,7 @@ function AddSubmissionsForm({ taskQuery, submittedInput }: { taskQuery: ReturnTy
   const rosterChooseRef = useRef<HTMLButtonElement>(null);
   const byokLinkRef = useRef<HTMLAnchorElement>(null);
 
-  const draft = usePageDraft(`submissions:${taskId}`, () => submissionDraftFromInput(submittedInput), submissionDraftCodec, JSON.stringify([taskQuery.data?.workflow_revision, taskQuery.data?.course_id]), undefined, parseSubmissions.isPending || retryRecognition.isPending);
+  const draft = usePageDraft(`submissions:${taskId}`, () => submissionDraftFromInput(submittedInput), submissionDraftCodec, taskInputVersion(taskQuery.data, "submissions"), undefined, parseSubmissions.isPending || retryRecognition.isPending);
   const submitting = useRef(false);
   const [selectedFile, setSelectedFile] = draft.field("selectedFile");
   const [rosterFile, setRosterFile] = draft.field("rosterFile");
@@ -94,6 +95,9 @@ function AddSubmissionsForm({ taskQuery, submittedInput }: { taskQuery: ReturnTy
       && task.pending_submission_file_name
       && !selectedFile,
   );
+  const retryLabel = canRetryOriginal && !hasStoredFile
+    ? workflowRetryLabel(locale)
+    : localText(locale, "重新识别全部作答", "Recognize All Submissions Again");
   const isPending = parseSubmissions.isPending || retryRecognition.isPending;
   const visibleFileName = selectedFile?.name ?? (
     hasStoredFile ? draft.value.selectedFileName : canRetryOriginal ? task?.pending_submission_file_name ?? null : null
@@ -461,14 +465,14 @@ function AddSubmissionsForm({ taskQuery, submittedInput }: { taskQuery: ReturnTy
             ) : isRecognitionRunning && !selectedFile
               ? t("submissionUploadViewProgress")
               : canRetryOriginal
-                ? workflowRetryLabel(locale)
+                ? retryLabel
               : hasExistingSubmissions
                 ? t("submissionUploadOverwriteStart")
                 : t("submissionUploadStart")}
           </button>
         </div>
         <ImageRecognitionRecovery error={recognitionError ?? (canRetryOriginal ? task?.error : undefined)} expert={enabledExperts.find(e => e.provider_id === recognitionProviderId)} returnTo={`/tasks/${taskId}/submissions/upload`} controller={draft.protection.controller} isCurrent={draft.protection.isCurrent} locale={locale} />
-        {recognitionError ? <RecoverableActionState info={classifyRecoverableError(recognitionError, { locale, taskId, returnTo: `/tasks/${taskId}/submissions/upload` })} locale={locale} compact className="mt-4" workflowRecovery={{ retry: { onClick: () => void handleStart(), busy: isPending }, configurationHref: `/tasks/${taskId}/submissions/upload` }} /> : null}
+        {recognitionError ? <RecoverableActionState usageContext={{ providerIds: [recognitionProviderId], providers: expertsQuery.data ?? [] }} info={classifyRecoverableError(recognitionError, { locale, taskId, returnTo: `/tasks/${taskId}/submissions/upload` })} locale={locale} compact className="mt-4" workflowRecovery={{ retry: { label: retryLabel, onClick: () => void handleStart(), busy: isPending }, configurationHref: `/tasks/${taskId}/submissions/upload` }} /> : null}
       </div>
     </div>
   );

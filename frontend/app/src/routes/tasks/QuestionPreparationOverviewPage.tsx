@@ -1,4 +1,4 @@
-import { questionIssueNeedsReview, questionReviewConfirmed } from "@/lib/reviewConfirmation";
+import { questionIssueNeedsReview, questionReviewConfirmed, recognitionIssueLabel } from "@/lib/reviewConfirmation";
 import { MatrixViewLink } from "@/components/tasks/MatrixViewLink";
 import { MatrixQueueWorkspace } from "@/components/tasks/MatrixQueueWorkspace";
 import { ReviewConfirmButton, ReviewBlockDialog, reviewActionClass } from "@/components/tasks/ReviewConfirmation";
@@ -166,7 +166,7 @@ function QuestionReviewQueue({ risks, taskId, locale }: { risks: OpenRiskRow[]; 
     <h2 id="question-review-queue-title" className="text-[16px] font-bold leading-6">{tx(locale, "待复核队列", "Review queue")}</h2>
     {risks.length ? <ol className="mt-3 h-[250px] space-y-1 overflow-y-auto overscroll-contain pr-1">
       {risks.map(({ problem, issue }) => <li key={`${problem.q_id}:${issue.issue_id}`}><Link className="flex min-h-[54px] items-center gap-2 rounded-lg px-2 py-1.5 text-xs hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring" to={`/tasks/${taskId}/questions/${encodeURIComponent(problem.q_id)}/content#question-${encodeURIComponent(problem.q_id)}`}>
-        <span className="min-w-0 flex-1"><span className="block font-semibold">{problem.number || problem.q_id}</span><span className="mt-0.5 block text-muted-foreground">{issueCodeLabel(issue.code, locale)}</span></span><ChevronRight aria-hidden="true" className="h-4 w-4 shrink-0" />
+        <span className="min-w-0 flex-1"><span className="block font-semibold">{problem.number || problem.q_id}</span><span className="mt-0.5 block text-muted-foreground">{(recognitionIssueLabel(issue, locale) ?? issueCodeLabel(issue.code, locale))}</span></span><ChevronRight aria-hidden="true" className="h-4 w-4 shrink-0" />
       </Link></li>)}
     </ol> : <div className="flex h-[248px] flex-col items-center justify-center text-center"><CheckCircle2 aria-hidden="true" className="h-7 w-7 text-teal-500" /><p className="mt-3 max-w-[220px] text-xs leading-5 text-muted-foreground">{tx(locale, "当前没有需要复核的题目。", "No questions currently need review.")}</p></div>}
   </section>;
@@ -248,7 +248,7 @@ function MaterialStatus({ problem, field, locale }: { problem: ProblemInfo; fiel
         "inline-flex min-w-[82px] items-center justify-center gap-1 rounded-full px-3 py-1 text-xs font-semibold",
         status.tone === "success" && "bg-emerald-100 text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-300",
         status.tone === "warning" && "bg-amber-100 text-amber-700 dark:bg-amber-950/35 dark:text-amber-300",
-        status.tone === "danger" && "bg-red-100 text-red-700 dark:bg-red-950/35 dark:text-red-300",
+        status.tone === "danger" && "bg-amber-100 text-amber-800 dark:bg-red-950/35 dark:text-red-300",
         status.tone === "neutral" && "bg-slate-100 text-slate-500 dark:bg-slate-800 dark:text-slate-300",
       )}
     >
@@ -274,7 +274,7 @@ function MaxScoreStatus({ problem, locale }: { problem: ProblemInfo; locale: str
       className={cn(
         "inline-flex min-w-[68px] items-center justify-center rounded-full px-2.5 py-1 text-xs font-semibold",
         (problem.preparation_issues ?? []).some(issue => issue.field === "max_score" && questionIssueNeedsReview(issue))
-          ? "bg-red-100 text-red-700"
+          ? "bg-amber-100 text-amber-800"
           : "bg-emerald-100 text-emerald-700 dark:bg-emerald-950/35",
       )}
     >
@@ -287,7 +287,7 @@ function AttentionStatus({ issues, locale }: { issues: PreparationIssue[]; local
   if (!issues.length) {
     return <span className="inline-flex min-w-[88px] items-center justify-center gap-1 rounded-full bg-emerald-100 px-3 py-1 text-xs font-semibold text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-300"><CheckCircle2 aria-hidden="true" className="h-3.5 w-3.5" />{tx(locale, "状态正常", "Ready")}</span>;
   }
-  return <span tabIndex={0} title={issues.map((issue) => issueCodeLabel(issue.code, locale)).join("；")} className={cn("inline-flex min-w-[88px] items-center justify-center rounded-full px-3 py-1 text-xs font-semibold", "bg-red-100 text-red-700")}>{tx(locale, `${issues.length} 项待复核`, `${issues.length} to review`)}</span>;
+  return <span tabIndex={0} title={issues.map((issue) => (recognitionIssueLabel(issue, locale) ?? issueCodeLabel(issue.code, locale))).join("；")} className={cn("inline-flex min-w-[88px] items-center justify-center rounded-full px-3 py-1 text-xs font-semibold", issues.some(issue => issue.severity === "blocking") ? "bg-red-100 text-red-700" : "bg-amber-100 text-amber-800")}>{tx(locale, `${issues.length} 项待复核`, `${issues.length} to review`)}</span>;
 }
 
 function MatrixEmpty({ filtered, locale }: { filtered: boolean; locale: string }) {
@@ -306,7 +306,7 @@ function getMaterialStatus(problem: ProblemInfo, field: MaterialField, locale: s
     const blocking = issues.some((issue) => issue.severity === "blocking");
     return {
       label: blocking ? tx(locale, "需处理", "Action needed") : tx(locale, "待复核", "Needs review"),
-      detail: issues.map((issue) => issueCodeLabel(issue.code, locale)).join("；"),
+      detail: issues.map((issue) => (recognitionIssueLabel(issue, locale) ?? issueCodeLabel(issue.code, locale))).join("；"),
       tone: "danger",
     };
   }

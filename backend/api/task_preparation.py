@@ -1531,6 +1531,7 @@ async def _start_question_preparation(
     input_workflow_revision: int | None = None,
     retry_source_contract: Mapping[str, Any] | None = None,
     acknowledged_restart_from: str | None = None,
+    retry_origin_id: str | None = None,
     use_current_configuration: bool = False,
 ):
     # Kept in the endpoint signature for API compatibility. Question
@@ -1745,6 +1746,7 @@ async def _start_question_preparation(
                 "workflow_revision": workflow.workflow_revision,
             }
         operation_payload = {
+            **({"retry_origin_id": retry_origin_id} if retry_origin_id and replay is None else {}),
             **({"acknowledged_restart_from": restart_origin} if restart_origin else {}),
             "contract_version": 1,
             "owner_id": current.id,
@@ -1958,6 +1960,7 @@ async def retry_question_preparation(
             allow_prepared_source_reuse=True,
             input_workflow_revision=original_input_revision,
             retry_source_contract=payload,
+            retry_origin_id=failed.id,
             use_current_configuration=request.use_current_configuration,
             # Acknowledged uncertainty starts a distinct operation, preserving the
             # original evidence and never weakening automatic replay protection.
@@ -2348,6 +2351,51 @@ async def run_durable_question_preparation(operation) -> None:
             "input_hash": operation.input_hash,
             "provider_record_id": recognition_provider_id,
         }
+        # Explicit retries may select another model. Carry only verified
+        # completed units; preserve their original operation as audit evidence.
+        if payload.get("retry_origin_id") and not operation.checkpoint_data.get("retry_origin_copied"):
+            origin = workflow_repository.get_operation(payload["retry_origin_id"], owner_id=operation.owner_id)
+            old_payload, old_checkpoint = origin.payload or {}, origin.checkpoint or {}
+            if (origin.assignment_id != operation.assignment_id or origin.operation_type != "question_preparation"
+                    or origin.status != "error" or any(old_payload.get(key) != payload.get(key)
+                        for key in ("source_content_hashes", "source_text_hashes", "source_refs", "score_policy", "generation_policy"))):
+                raise _question_preparation_recovery_error("Retry sources changed.")
+            copied = {}
+            refs = []
+            old_attempts = old_checkpoint.get("artifact_attempts") or {}
+
+            def previous_context(artifact_id):
+                if artifact_id not in origin.artifact_refs:
+                    raise _question_preparation_recovery_error("Retry artifact is not owned by the original operation.")
+                return dict(owner_id=origin.owner_id, task_id=origin.assignment_id, operation_id=origin.id,
+                    attempt=old_attempts.get(artifact_id, origin.attempt), input_hash=origin.input_hash,
+                    provider_record_id=old_payload["recognition_provider_id"])
+
+            for stage, field in ((QUESTIONS_EXTRACTED_STAGE, "questions_extracted_artifact_id"),
+                                 (UPLOADED_MATERIALS_ALIGNED_STAGE, "aligned_base_artifact_id")):
+                artifact_id = old_checkpoint.get(field)
+                if artifact_id:
+                    envelope = read_base_preparation_artifact(artifact_id, stage=stage, **previous_context(artifact_id))
+                    if envelope is None:
+                        raise _question_preparation_recovery_error("Retry base artifact is unavailable.")
+                    stored = save_base_preparation_artifact(**artifact_context, stage=stage,
+                        problem_data=envelope.payload.problem_data, issues=envelope.payload.issues,
+                        operation_lease_token=operation.lease_token)
+                    copied[field] = stored.id
+                    refs.append(stored.id)
+            question_artifacts = {}
+            for q_id, artifact_id in (old_checkpoint.get("question_artifact_ids") or {}).items():
+                order = list(old_checkpoint.get("question_ids") or []).index(q_id)
+                envelope = read_question_candidate_artifact(artifact_id, q_id=q_id, question_order=order, **previous_context(artifact_id))
+                if envelope is None:
+                    raise _question_preparation_recovery_error("Retry question artifact is unavailable.")
+                stored = save_question_candidate_artifact(**artifact_context, q_id=q_id, question_order=order,
+                    candidates=envelope.payload.candidates, operation_lease_token=operation.lease_token)
+                question_artifacts[q_id] = stored.id
+                refs.append(stored.id)
+            await operation.checkpoint(stage="sources_validated", checkpoint={**operation.checkpoint_data, **copied,
+                "question_artifact_ids": question_artifacts, "completed_question_ids": list(question_artifacts),
+                "retry_origin_copied": origin.id}, artifact_refs=list(dict.fromkeys([*operation.artifact_refs, *refs])))
         retry_contract = operation.checkpoint_data.get("retry_frozen_contract")
         raw_artifact_attempts = operation.checkpoint_data.get(
             "artifact_attempts"

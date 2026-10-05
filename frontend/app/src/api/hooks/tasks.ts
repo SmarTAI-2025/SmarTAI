@@ -104,7 +104,7 @@ export function useGenerateTaskResultArtifacts() {
       tasksApi.generateTaskResultArtifacts(taskId, expectedWorkflowRevision),
     onSuccess: (data, variables) => {
       queryClient.setQueryData(taskKeys.artifacts(variables.taskId), data.artifacts);
-      invalidateTask(queryClient, variables.taskId);
+      return invalidateTask(queryClient, variables.taskId);
     },
   });
 }
@@ -127,7 +127,7 @@ export function useConfirmTaskFinalization() {
           ? { ...current, status: data.task_status, workflow_revision: data.workflow_revision }
           : current
       ));
-      invalidateTask(queryClient, variables.taskId);
+      return invalidateTask(queryClient, variables.taskId);
     },
   });
 }
@@ -207,7 +207,7 @@ export function useParseSubmissions() {
           current ? { ...current, ...activeTaskPatch } : current
         ));
       }
-      invalidateTask(queryClient, variables.taskId);
+      return invalidateTask(queryClient, variables.taskId);
     },
   });
 }
@@ -230,7 +230,7 @@ export function useRetrySubmissionRecognition() {
           current ? { ...current, ...activeTaskPatch } : current
         ));
       }
-      invalidateTask(queryClient, variables.taskId);
+      return invalidateTask(queryClient, variables.taskId);
     },
   });
 }
@@ -254,7 +254,7 @@ export function useRetryQuestionPreparation() {
           current ? { ...current, ...activeTaskPatch } : current
         ));
       }
-      invalidateTask(queryClient, variables.taskId);
+      return invalidateTask(queryClient, variables.taskId);
     },
   });
 }
@@ -291,7 +291,7 @@ export function useStartGrading() {
           current ? { ...current, ...activeTaskPatch } : current
         ));
       }
-      invalidateTask(queryClient, variables.taskId);
+      return invalidateTask(queryClient, variables.taskId);
     },
   });
 }
@@ -323,7 +323,9 @@ export function useUpdateProblem() {
         return { ...current, workflow_revision: data.workflow_revision,
           problem_data: { ...current.problem_data, [variables.qId]: data.problem } };
       });
-      invalidateTask(queryClient, variables.taskId);
+      // The mutation already publishes its new fields and revision atomically.
+      // Slow background reads must not block sequential review confirmations.
+      void invalidateTask(queryClient, variables.taskId);
     },
   });
 }
@@ -371,7 +373,9 @@ export function useUpdateStudentAnswer() {
           },
         };
       });
-      invalidateTask(queryClient, variables.taskId);
+      // The mutation already publishes its new fields and revision atomically.
+      // Slow background reads must not block sequential review confirmations.
+      void invalidateTask(queryClient, variables.taskId);
     },
   });
 }
@@ -409,7 +413,9 @@ export function useUpdateStudentIdentity() {
           workflow_revision: data.workflow_revision,
         };
       });
-      invalidateTask(queryClient, variables.taskId);
+      // The mutation already publishes its new fields and revision atomically.
+      // Slow background reads must not block sequential review confirmations.
+      void invalidateTask(queryClient, variables.taskId);
     },
   });
 }
@@ -512,18 +518,21 @@ function useTaskUploadMutation(
     mutationFn: ({ taskId, file, onProgress }: { taskId: string; file: File; onProgress?: UploadOptions["onProgress"] }) =>
       uploadFn(taskId, file, { onProgress }),
     onSuccess: (_data, variables) => {
-      invalidateTask(queryClient, variables.taskId);
+      return invalidateTask(queryClient, variables.taskId);
     },
   });
 }
 
 function invalidateTask(queryClient: ReturnType<typeof useQueryClient>, taskId: string) {
-  queryClient.invalidateQueries({ queryKey: taskKeys.all });
-  queryClient.invalidateQueries({ queryKey: taskKeys.detail(taskId) });
-  queryClient.invalidateQueries({ queryKey: taskKeys.state(taskId) });
-  queryClient.invalidateQueries({ queryKey: taskKeys.result(taskId) });
-  queryClient.invalidateQueries({ queryKey: taskKeys.finalization(taskId) });
-  queryClient.invalidateQueries({ queryKey: taskKeys.artifacts(taskId) });
+  // Do not resolve a mutation while the next editor still sees its old revision.
+  return Promise.all([
+    queryClient.invalidateQueries({ queryKey: taskKeys.all }),
+    queryClient.invalidateQueries({ queryKey: taskKeys.detail(taskId) }),
+    queryClient.invalidateQueries({ queryKey: taskKeys.state(taskId) }),
+    queryClient.invalidateQueries({ queryKey: taskKeys.result(taskId) }),
+    queryClient.invalidateQueries({ queryKey: taskKeys.finalization(taskId) }),
+    queryClient.invalidateQueries({ queryKey: taskKeys.artifacts(taskId) }),
+  ]);
 }
 
 function historyQueryKey(query: TaskHistoryQuery): string {

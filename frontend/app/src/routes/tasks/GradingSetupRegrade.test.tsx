@@ -2,6 +2,9 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { createMemoryRouter, RouterProvider } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { GradingSetupPage } from "./GradingSetupPage";
+import { DraftActions, DraftLeaveProvider } from "@/hooks/useDraftLeave";
+import { PageDraftSession } from "@/hooks/useDraftProtection";
+import { clearPageDrafts } from "@/lib/pageDraftStore";
 
 vi.mock("@/api/hooks", () => ({
   useCourseMaterials: vi.fn(),
@@ -110,6 +113,28 @@ describe("GradingSetupPage regrade mode", () => {
       isPending: false,
       mutateAsync: vi.fn(),
     });
+  });
+
+  it("lets knowledge-only revisions be drafted while protecting actual grading-setting changes", async () => {
+    await clearPageDrafts();
+    const current = (useGradingSetup as unknown as () => any)();
+    const router = createMemoryRouter([{ path: "/tasks/:taskId/grading-setup", element:
+      <PageDraftSession ownerId="revision-test"><DraftLeaveProvider><GradingSetupPage /><DraftActions /></DraftLeaveProvider></PageDraftSession>,
+    }], { initialEntries: ["/tasks/task-1/grading-setup"] });
+    render(<RouterProvider router={router} />);
+    const slider = await screen.findByRole("slider");
+    await waitFor(() => expect(screen.getByRole("button", { name: "暂存" })).toBeEnabled());
+    fireEvent.change(slider, { target: { value: "60" } });
+    current.data = { ...current.data, workflow_revision: 8, knowledge: { ...current.data.knowledge, task_doc_count: 1 } };
+    fireEvent.change(slider, { target: { value: "70" } });
+    expect(screen.queryByText(/服务器业务版本已变化/)).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "暂存" }));
+    await screen.findByText(/已暂存 ·/);
+    expect(slider).toHaveValue("70"); expect(saveSetupMutate).not.toHaveBeenCalled();
+    current.data = { ...current.data, workflow_revision: 9, grading_setup_fingerprint: "setup-2", grading_setup: { ...current.data.grading_setup, strictness: 20 } };
+    fireEvent.change(slider, { target: { value: "80" } });
+    await screen.findByText(/服务器业务版本已变化/);
+    expect(slider).toHaveValue("80");
   });
 
   it("keeps completed-task settings editable and offers the regrade summary action", async () => {
@@ -278,3 +303,4 @@ describe("GradingSetupPage regrade mode", () => {
     expect(saveSetupMutate).not.toHaveBeenCalled();
   });
 });
+import "fake-indexeddb/auto";

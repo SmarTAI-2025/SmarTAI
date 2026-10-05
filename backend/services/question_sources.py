@@ -284,6 +284,10 @@ def attach_recognition_review(packages, sources):
             continue
         coverage = summary.get("coverage") or {}
         partial = any(coverage.get(key) for key in ("failed_pages", "unprocessed_pages", "missing_targets", "unverified_targets"))
+        informational = (bool(coverage.get("unverified_targets"))
+            and not any(coverage.get(key) for key in ("failed_pages", "unprocessed_pages", "missing_targets"))
+            and not summary.get("error_code")
+            and "low_confidence_content" not in summary.get("confidence_reasons", []))
         if not partial and summary.get("confidence") != "low" and not summary.get("error_code"):
             continue
         for q_id, problem in packages.items():
@@ -293,8 +297,9 @@ def attach_recognition_review(packages, sources):
                 continue
             problem["review_status"] = "needs_review"
             issues.append(dict(
-                issue_id=issue_id, q_id=q_id, field="stem", severity="warning", status="open",
+                issue_id=issue_id, q_id=q_id, field="stem", severity="info" if informational else "warning", status="open",
                 code="recognition_partial" if partial else "recognition_needs_review",
                 source_ids=[summary["operation_id"]], details=dict(coverage=coverage,
-                    artifact_ids=summary.get("artifact_ids", []), error_code=summary.get("error_code")),
+                    artifact_ids=summary.get("artifact_ids", []), error_code=summary.get("error_code"),
+                    confidence_reasons=summary.get("confidence_reasons", [])),
             ))

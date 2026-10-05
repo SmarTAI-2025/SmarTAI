@@ -671,3 +671,22 @@ async def test_external_cancellation_remains_cancellation(scheduler, clock, monk
         await task
     await turns()
     assert not scheduler.pending and not scheduler.owners
+
+
+@pytest.mark.asyncio
+async def test_admission_wait_does_not_consume_network_timeout(scheduler, clock, host, monkeypatch):
+    from backend.config import settings
+    monkeypatch.setattr("backend.llm.providers.get_scheduler", lambda: scheduler)
+    monkeypatch.setattr(settings, "llm_timeout", 0.12)
+    host.capacity = 0
+    async def invoke(*args, **kwargs):
+        await asyncio.sleep(0.075)
+        return SimpleNamespace(content="ok")
+    provider = RecordingProvider(ProviderConfig(provider_type="openai", model="paced", api_key="fake"), clock, [])
+    provider._client = SimpleNamespace(ainvoke=invoke)
+    task = asyncio.create_task(provider.ainvoke([HumanMessage(content="test")]))
+    await asyncio.sleep(0.075)
+    host.capacity = 1
+    scheduler.wake.set()
+    assert (await task).content == "ok"
+    assert host.active == 0

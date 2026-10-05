@@ -1,3 +1,4 @@
+import { materialSelectionVersion } from "@/lib/editorVersions";
 import { useDraftProtection } from "@/hooks/useDraftProtection";
 import { useDraftLeave } from "@/hooks/useDraftLeave";
 import { ArrowLeft, LoaderCircle, RefreshCw } from "lucide-react";
@@ -63,7 +64,7 @@ function QuestionMaterialImportReviewPageForm() {
     && !invalidPlanReason
     && (!sameIdSet(acceptedIds, initialAcceptedIds) || !sameIdSet(overwriteIds, initialOverwriteIds));
 
-  const localDraft = useDraftProtection({ scope: `material-review:${taskId}:${jobId}`, value: { acceptedIds, overwriteIds }, baseline: { acceptedIds: initialAcceptedIds, overwriteIds: initialOverwriteIds }, version: String(plan?.workflow_revision ?? ""), enabled: Boolean(plan?.status === "ready" && initializedJobRef.current === jobId && !invalidPlanReason), busy: applyImport.isPending, onRestore: (draft) => { setAcceptedIds(draft.acceptedIds); setOverwriteIds(draft.overwriteIds); } });
+  const localDraft = useDraftProtection({ scope: `material-review:${taskId}:${jobId}`, value: { acceptedIds, overwriteIds }, baseline: { acceptedIds: initialAcceptedIds, overwriteIds: initialOverwriteIds }, version: materialSelectionVersion(plan, taskQuery.data), enabled: Boolean(taskQuery.isSuccess && plan?.status === "ready" && initializedJobRef.current === jobId && !invalidPlanReason), busy: applyImport.isPending, onRestore: (draft) => { setAcceptedIds(draft.acceptedIds); setOverwriteIds(draft.overwriteIds); } });
   const selectedCount = acceptedIds.length;
   const sortedCandidates = useMemo(
     () => [...(plan?.candidates ?? [])].sort((left, right) => {

@@ -1,3 +1,4 @@
+import "fake-indexeddb/auto";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render, screen } from "@testing-library/react";
 import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
@@ -5,6 +6,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { User } from "@/types/auth";
 import { RequireTeacherSession } from "./RequireTeacherSession";
 
+vi.mock("@/hooks/useSessionActivity", () => ({ useSessionActivity: vi.fn() }));
 vi.mock("@/api/hooks", () => ({
   useCurrentUser: vi.fn(),
 }));

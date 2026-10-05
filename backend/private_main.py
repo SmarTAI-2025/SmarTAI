@@ -38,7 +38,7 @@ def create_private_app(*, maintenance_only: bool = False) -> FastAPI:
             worker["task"].cancel()
             with suppress(asyncio.CancelledError):
                 await worker["task"]
-    allowed_auth = {"/auth/login", "/auth/logout", "/auth/refresh", "/auth/me",
+    allowed_auth = {"/auth/login", "/auth/logout", "/auth/refresh", "/auth/activity", "/auth/me",
                     "/auth/password-reset/request", "/auth/password-reset/confirm", "/auth/password-change"}
     # Do not mount public registration or dormant role-invitation routes here.
     from fastapi import APIRouter

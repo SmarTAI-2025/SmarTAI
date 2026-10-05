@@ -11,10 +11,12 @@ import { useI18n } from "@/i18n/I18nProvider";
 import { useSessionExpired } from "@/lib/sessionExpiry";
 import { SessionRestoreError } from "./SessionRestoreError";
 import { PageDraftSession } from "@/hooks/usePageDraft";
+import { useSessionActivity } from "@/hooks/useSessionActivity";
 
 export function RequireTeacherSession({ children }: { children: ReactNode }) {
   const currentUser = useCurrentUser();
   const expired = useSessionExpired();
+  useSessionActivity(Boolean(currentUser.data) && !expired);
   const location = useLocation();
   const { locale } = useI18n();
   const hadSession = useRef(Boolean(currentUser.data || getAuthToken()));

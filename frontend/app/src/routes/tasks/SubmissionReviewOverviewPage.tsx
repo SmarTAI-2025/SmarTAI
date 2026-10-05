@@ -1,5 +1,5 @@
 import { ReviewConfirmButton, ReviewBlockDialog } from "@/components/tasks/ReviewConfirmation";
-import { submissionReviewBlockers, answerReviewBlocked, type ReviewBlocker } from "@/lib/reviewConfirmation";
+import { submissionReviewBlockers, submissionRecognitionIncomplete, answerReviewBlocked, type ReviewBlocker } from "@/lib/reviewConfirmation";
 import { SortableTableHead, useColumnSort, sortColumnRows, directionFor, type ColumnSort } from "@/components/ui/SortableTableHead";
 import { AlertCircle, CheckCircle2, ChevronRight, RotateCcw } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -117,7 +117,7 @@ export function SubmissionReviewOverviewPage() {
   useEffect(() => { latestSearchParamsRef.current = new URLSearchParams(searchParams); }, [searchParams]);
 
   if (taskQuery.isSuccess && !taskQuery.isFetching && taskId) {
-    if (!hasTaskReachedStep(taskQuery.data, 4)) {
+    if (!hasTaskReachedStep(taskQuery.data, 4) || submissionRecognitionIncomplete(taskQuery.data)) {
       return <Navigate replace to={getTaskDestination(taskQuery.data)} />;
     }
   }
