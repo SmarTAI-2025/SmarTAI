@@ -67,6 +67,9 @@ class Settings(BaseSettings):
 
     # ─── Concurrency & performance ─────────────────────────────────────────────
     max_concurrent_jobs: int = 10
+    # Shared durable admission across recognition/preparation and grading.
+    # Raise only after measuring file-processing memory under concurrent load.
+    workload_max_in_flight: int = Field(default=2, ge=1)
     # Automatic model concurrency = ceil(RPM * healthy mean seconds / 60),
     # initially 120s, bounded by these operator caps and the host-wide hard 50.
     # RPM 0 has no extra rate gate. Legacy saved concurrency is not a manual cap.
@@ -79,18 +82,12 @@ class Settings(BaseSettings):
     max_concurrent_llm_per_endpoint: int = 50
     llm_timeout: int = 600  # seconds
     llm_max_retries: int = 3
-    # When the LLM returns a 429 / quota exceeded error AND the provider's
-    # response carries a retry-after hint (Gemini's `retryDelay: '23s'` or the
-    # standard `Retry-After` header), we honor the server's wait suggestion and
-    # retry up to this many additional attempts on top of `llm_max_retries`.
-    # Generic transient errors (timeout/5xx) still use exponential backoff with
-    # `llm_max_retries`. Set to 0 to disable the dedicated rate-limit retry
-    # path. Default 6 covers a sustained quota burst over ~2-3 minutes.
-    llm_rate_limit_max_retries: int = 6
-    # Hard cap on a single retry sleep (seconds). Gemini occasionally suggests
-    # 30-40s; OpenAI rarely exceeds 60s. We trust the server hint but never
-    # block longer than this.
-    llm_rate_limit_max_wait: int = 60
+    # Retained for old environment files. It no longer adds retry attempts.
+    llm_rate_limit_max_retries: int = 0  # legacy compatibility; total attempts are capped at 3
+    # Stop when Retry-After exceeds this bound; never retry before the hint.
+    llm_rate_limit_max_wait: int = 90
+    llm_rate_limit_retry_seconds: float = 65.0
+    llm_retry_wait_budget_seconds: float = 180.0
     context_window_threshold_chars: int = 200_000
 
     # ─── History natural-language filter shared-pool safety ──────────────

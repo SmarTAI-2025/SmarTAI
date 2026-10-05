@@ -409,6 +409,10 @@ class BaseProvider(ABC):
 
     @asynccontextmanager
     async def _call_capacity(self, messages: List[BaseMessage]):
+        from backend.services.execution_control import current_execution
+        control = current_execution()
+        if control is not None:
+            await control.check(self)
         scheduler = get_scheduler()
         admitted = False
         # SDK timeouts bound individual network reads, not admission or an
@@ -428,10 +432,22 @@ class BaseProvider(ABC):
                     ready=lambda: not self._endpoint_breaker().is_open,
                 ):
                     admitted = True
+                    if control is not None:
+                        await control.check(self)
                     # Time spent waiting for RPM/capacity is not provider
                     # response time. Give the admitted request its full budget.
                     deadline.reschedule(asyncio.get_running_loop().time() + float(settings.llm_timeout))
-                    yield
+                    try:
+                        yield
+                    except Exception as exc:
+                        from backend.llm.provider_limits import exhausted_quota_code
+                        code = exhausted_quota_code(exc)
+                        if control is not None and code:
+                            control.block(self, code)
+                        raise
+                    else:
+                        if control is not None:
+                            await control.succeeded(self)
         except TimeoutError as exc:
             if not deadline.expired():
                 raise
@@ -1143,9 +1159,9 @@ class SafeRelayProvider(BaseProvider):
             raise ProviderRequestError(_transport_error_code(exc)) from exc
         if response.status_code >= 400:
             code = _response_error_code(response.status_code)
-            from backend.llm.provider_limits import is_daily_quota_error
-            if response.status_code == 429 and is_daily_quota_error(response.text):
-                code = "provider_daily_quota_exceeded"
+            from backend.llm.provider_limits import exhausted_quota_code
+            if response.status_code == 429:
+                code = exhausted_quota_code(response.text) or code
             has_images = any(isinstance(m.content, list) and any(
                 isinstance(block, dict) and block.get("type") == "image_url"
                 for block in m.content) for m in messages)

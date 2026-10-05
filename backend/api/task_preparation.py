@@ -4270,11 +4270,21 @@ def _auxiliary_result_name(operation, stage: str) -> str:
 
 def _find_auxiliary_result_artifact(*, operation, kind: str, stage: str):
     expected_name = _auxiliary_result_name(operation, stage)
+    def matching_name(name):
+        if name == expected_name:
+            return True
+        prefix, suffix = f"{operation.operation_id}-attempt-", f"-{stage}.json"
+        if not ((operation.payload or {}).get("resume_saved_results") and name.startswith(prefix) and name.endswith(suffix)):
+            return False
+        try:
+            return 0 < int(name[len(prefix):-len(suffix)]) < operation.attempt
+        except ValueError:
+            return False
     matches = [
         item for item in file_repository.list_files(
             owner_id=operation.owner_id, assignment_id=operation.assignment_id
         )
-        if item.kind == kind and item.original_name == expected_name
+        if item.kind == kind and matching_name(item.original_name)
     ]
     return max(matches, key=lambda item: item.created_at) if matches else None
 

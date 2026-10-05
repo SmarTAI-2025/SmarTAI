@@ -289,6 +289,11 @@ async def _grade_single_answer(
     per-LLM-call tenacity retry already runs inside each attempt.
     """
     max_attempts = 1 + max(0, int(getattr(_settings, "grading_item_max_retries", 0) or 0))
+    from backend.services.execution_control import current_execution
+    if current_execution() is not None:
+        # Durable jobs use the provider's bounded retry budget. Do not multiply
+        # it by replaying whole questions after that budget has been spent.
+        max_attempts = 1
     for attempt in range(1, max_attempts + 1):
         try:
             t0 = time.perf_counter()

@@ -35,6 +35,7 @@ export interface JobProgress {
   active: ActiveUnit[];
   messages: ProgressEvent[];
   error_detail?: string | null;
+  model_waits?: Array<{ model: string; reason: "provider_rate_limited"; attempt: number; max_attempts: number; retry_at: number }>;
   recognition_failure?: { failed_pages?: number[]; processed_pages?: number[] };
   started_at?: number | null;
   workflow?: string | null;

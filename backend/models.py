@@ -350,6 +350,14 @@ class ProgressEvent(BaseModel):
     unit: Optional[ActiveUnit] = None
 
 
+class ModelWait(BaseModel):
+    model: str
+    reason: Literal["provider_rate_limited"] = "provider_rate_limited"
+    attempt: int
+    max_attempts: int
+    retry_at: float
+
+
 class JobProgress(BaseModel):
     """Fine-grained progress for a grading job, polled by frontend."""
     contract_version: int = 1
@@ -385,6 +393,7 @@ class JobProgress(BaseModel):
     active: List[ActiveUnit] = Field(default_factory=list, description="Currently running units")
     messages: List[ProgressEvent] = Field(default_factory=list, description="Ring buffer of last N events")
     error_detail: Optional[str] = None
+    model_waits: List[ModelWait] = Field(default_factory=list)
 
 
 # ─── LLM provider config ─────────────────────────────────────────────────────

@@ -3,6 +3,8 @@ import { useEffect } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { useMaterialImport } from "@/api/hooks";
 import { NewTaskStepper } from "@/components/new-task/NewTaskStepper";
+import { TaskExecutionStatus } from "@/components/tasks/TaskExecutionStatus";
+import { executionProgressCopy } from "@/lib/executionProgressCopy";
 import { useI18n } from "@/i18n/I18nProvider";
 import { materialImportText } from "@/lib/materialImportCopy";
 
@@ -37,6 +39,7 @@ export function QuestionMaterialImportProgressPage() {
         {materialImportText(locale, "progressTitle")}
       </h1>
       <NewTaskStepper currentStep={2} />
+      <TaskExecutionStatus taskId={taskId} jobId={jobId} onChanged={() => importQuery.refetch()} />
 
       <section className="mx-auto mt-[45px] w-full max-w-[800px] rounded-[10px] border bg-card px-6 py-7 sm:min-h-[390px] sm:px-10 sm:py-9">
         <div className="text-center">
@@ -119,6 +122,8 @@ export function QuestionMaterialImportProgressPage() {
 }
 
 function localizeProgressMessage(message: string, locale: "zh-CN" | "en-US") {
+  const executionMessage = executionProgressCopy(message, locale);
+  if (executionMessage) return executionMessage;
   if (locale === "en-US") return message;
   if (message === "Material source prepared") return "资料来源已准备";
   if (message === "Matching source material to known questions") return "正在匹配资料与已有题目";

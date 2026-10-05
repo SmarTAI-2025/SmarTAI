@@ -14,6 +14,8 @@ import { getAPIErrorCode } from "@/api/client";
 import { SmarTAIMascot } from "@/components/brand/SmarTAIMascot";
 import { NewTaskStepper } from "@/components/new-task/NewTaskStepper";
 import { SubmissionSourceOutcomePanel } from "@/components/tasks/SubmissionSourceOutcomePanel";
+import { TaskExecutionControls } from "@/components/tasks/TaskExecutionControls";
+import { executionProgressCopy } from "@/lib/executionProgressCopy";
 import { Button } from "@/components/ui/Button";
 import { RecoverableActionState } from "@/components/ui/RecoverableActionState";
 import { useTaskProgress } from "@/hooks/useTaskProgress";
@@ -59,7 +61,7 @@ export function SubmissionRecognitionProgressPage() {
     retrying.current = true; setRetryError(null);
     try {
       await retryRecognition.mutateAsync({ taskId, jobId: failedJobId, recognitionProviderId: providerId,
-        expectedWorkflowRevision: taskState.workflow_revision, acknowledgePossibleDuplicateCall: uncertain });
+        expectedWorkflowRevision: taskState.workflow_revision, acknowledgePossibleDuplicateCall: uncertain || taskState.error === "operation_cancelled" });
       setAcknowledgedJobId(null);
       await Promise.all([taskQuery.refetch(), progressQuery.refetch()]);
     } catch (error) { setRetryError(error); }
@@ -179,18 +181,24 @@ export function SubmissionRecognitionProgressPage() {
   }
 
   const progress = progressQuery.progress;
+  const queued = progressQuery.data?.active_operation_status === "pending";
+  const rateLimited = Boolean(progress?.model_waits?.length);
+  const waitingLabel = queued ? (locale === "zh-CN" ? "排队中" : "Queued")
+    : rateLimited ? (locale === "zh-CN" ? "等待重试" : "Retry pending") : t("submissionProgressProcessing");
   const metrics = progress?.stage_metrics ?? {};
   const totalFiles = metric(metrics, "files_total", progress?.total_students ?? 0);
   const processedFiles = metric(metrics, "files_processed", progress?.completed_units ?? 0);
   const matchedIdentities = metric(metrics, "identities_matched");
   const reviewIdentities = metric(metrics, "identities_needing_review");
   const answersSplit = metric(metrics, "answers_split");
-  const hasDeterminateProgress = totalFiles > 0;
+  const hasDeterminateProgress = totalFiles > 0 && progressQuery.data?.active_operation_status !== "pending" && !progress?.model_waits?.length;
   const percent = hasDeterminateProgress ? progressQuery.percent : null;
   const recentEvents = (progress?.messages ?? []).slice(-3);
 
   return (
     <ProgressPageFrame title={t("submissionProgressTitle")}>
+      <TaskExecutionControls taskId={taskId} state={progressQuery.data} progress={progress}
+        onChanged={() => Promise.all([taskQuery.refetch(), progressQuery.refetch()])} />
       <section
         className="flex min-h-[430px] w-full flex-col rounded-[10px] border bg-card px-5 py-7 sm:px-10 sm:py-10"
         aria-live="polite"
@@ -199,7 +207,8 @@ export function SubmissionRecognitionProgressPage() {
         <div className="flex items-start justify-between gap-4">
           <div>
           <h2 className="text-[22px] font-bold leading-8 tracking-[-0.01em] text-foreground sm:text-2xl">
-            {t("submissionProgressRecognizing")}
+            {queued ? (locale === "zh-CN" ? "作答识别已排队" : "Submission recognition is queued")
+              : rateLimited ? (locale === "zh-CN" ? "等待服务商解除限流" : "Waiting for the provider rate limit") : t("submissionProgressRecognizing")}
           </h2>
           <p className="mt-2 text-sm leading-6 text-muted-foreground">
             {hasDeterminateProgress
@@ -218,10 +227,10 @@ export function SubmissionRecognitionProgressPage() {
             aria-valuemin={0}
             aria-valuemax={100}
             aria-valuenow={percent ?? undefined}
-            aria-valuetext={percent === null ? t("submissionProgressProcessing") : undefined}
+            aria-valuetext={percent === null ? waitingLabel : undefined}
           >
             {percent === null ? (
-              <span className="absolute inset-y-0 left-0 w-1/3 animate-pulse rounded-full bg-primary" />
+              queued || rateLimited ? null : <span className="absolute inset-y-0 left-0 w-1/3 animate-pulse rounded-full bg-primary" />
             ) : (
               <span
                 className="block h-full rounded-full bg-primary transition-[width] duration-300"
@@ -230,7 +239,7 @@ export function SubmissionRecognitionProgressPage() {
             )}
           </div>
           <span className="w-14 shrink-0 text-right text-sm font-semibold text-primary sm:text-lg">
-            {percent === null ? t("submissionProgressProcessing") : `${percent}%`}
+            {percent === null ? waitingLabel : `${percent}%`}
           </span>
         </div>
 
@@ -258,7 +267,7 @@ export function SubmissionRecognitionProgressPage() {
                     className="grid min-w-0 grid-cols-[42px_minmax(0,1fr)] gap-2 text-xs leading-5 text-muted-foreground"
                   >
                     <time dateTime={toDateTime(event.ts)}>{formatEventTime(event.ts, locale)}</time>
-                    <span className="min-w-0 break-words">{localizeEvent(event, t)}</span>
+                    <span className="min-w-0 break-words">{executionProgressCopy(event.message, locale) ?? localizeEvent(event, t)}</span>
                   </li>
                 ))}
               </ol>
@@ -405,7 +414,7 @@ function getRecognitionSteps(progress: JobProgress | null): RecognitionStep[] {
   const finished = progress?.phase === "done" || currentStep === "completed";
   const consolidating = currentStep === "consolidating_submission_results";
   const recognizing = currentStep === "recognizing_submissions" || (progress?.completed_units ?? 0) > 0;
-  const preparing = currentStep === "preparing_submission_files" || !currentStep;
+  const preparing = ["preparing_submission_files", "recognition_read", "pdf_index"].includes(currentStep ?? "") || !currentStep;
 
   return [
     { key: "submissionProgressStepFilesReceived", state: "done" },
@@ -430,6 +439,7 @@ function getRecognitionSteps(progress: JobProgress | null): RecognitionStep[] {
 
 function localizeEvent(event: ProgressEvent, t: (key: MessageKey) => string): string {
   const message = event.message.toLowerCase();
+  if (message === "reading pdf page evidence" || message === "reading source evidence") return t("submissionProgressEventReadingFile");
   if (message === "phase: parsing") return t("submissionProgressEventParsing");
   if (message === "phase: done") return t("submissionProgressEventDone");
   if (message.startsWith("reading ") && message.endsWith("...")) {
