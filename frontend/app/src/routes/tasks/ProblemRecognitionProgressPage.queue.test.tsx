@@ -6,6 +6,7 @@ const state = vi.hoisted(() => ({ locale: "zh-CN", operation: "pending" }));
 vi.mock("@/api/hooks", () => ({
   useStageProviders: () => ({ data: [] }),
   useRetryQuestionPreparation: () => ({ isPending: false, mutateAsync: vi.fn() }),
+  useManuallyCompleteQuestionPreparation: () => ({ isPending: false, mutateAsync: vi.fn() }),
   useTask: () => ({ data: { task_id: "queued", status: "extracting_problems" }, refetch: vi.fn() }),
 }));
 vi.mock("@/hooks/useTaskProgress", () => ({

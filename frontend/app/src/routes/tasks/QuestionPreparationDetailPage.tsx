@@ -44,6 +44,14 @@ type TextFieldKey = "stem" | "reference_answer" | "solution_code";
 
 const EMPTY_TEST_CASES: TestCase[] = [];
 
+function useManualEditor(problem: ProblemInfo, fields: string[]) {
+  const { questionId } = useParams();
+  const [params] = useSearchParams();
+  return params.get("manual") === "1" && questionId === problem.q_id &&
+    (problem.preparation_issues ?? []).some(issue => issue.code === "manual_completion_required" &&
+      issue.status === "open" && (issue.details?.required_fields as string[] | undefined)?.some(field => fields.includes(field)));
+}
+
 export function QuestionPreparationDetailPage() { const { taskId, jobId } = useParams(); return <QuestionPreparationDetailPageForm key={`${taskId}:${jobId ?? ""}`} />; }
 function QuestionPreparationDetailPageForm() {
   const { taskId, questionId } = useParams();
@@ -445,7 +453,8 @@ function EditableScoringField({ fieldKey, problem, readOnly, saving, locale, onD
 }) {
   const originalScore = String(problem.max_score ?? 10);
   const originalCriterion = problem.criterion ?? "";
-  const [editing, setEditing] = useState(false);
+  const manualEditing = useManualEditor(problem, ["criterion"]);
+  const [editing, setEditing] = useState(manualEditing && !readOnly);
   const [scoreDraft, setScoreDraft] = useState(originalScore);
   const [criterionDraft, setCriterionDraft] = useState(originalCriterion);
   const [error, setError] = useState<string | null>(null);
@@ -587,6 +596,8 @@ function EditableTextField({ fieldKey, label, value, problem, field, readOnly, s
   onSave: (problem: ProblemInfo, field: TextFieldKey, value: string) => Promise<void>;
 }) {
   const [editing, setEditing] = useState(false);
+  const manualEditing = useManualEditor(problem, [field]);
+  useEffect(() => { if (manualEditing && !readOnly) setEditing(true); }, [manualEditing, readOnly]);
   const [draft, setDraft] = useState(value);
   const [error, setError] = useState(false);
   const dirty = editing && draft !== value;
@@ -650,7 +661,8 @@ function TestCasesPanel({ fieldKey, problem, readOnly, saving, locale, onDirtyCh
   onSave: (problem: ProblemInfo, cases: TestCase[]) => Promise<void>;
 }) {
   const original = problem.test_cases ?? EMPTY_TEST_CASES;
-  const [editing, setEditing] = useState(false);
+  const manualEditing = useManualEditor(problem, ["test_cases"]);
+  const [editing, setEditing] = useState(manualEditing && !readOnly);
   const [cases, setCases] = useState<TestCase[]>(original);
   const [activeIndex, setActiveIndex] = useState(0);
   const [error, setError] = useState(false);

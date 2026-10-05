@@ -282,9 +282,8 @@ function AddSubmissionsForm({ taskQuery, submittedInput }: { taskQuery: ReturnTy
       <h1 className="text-[30px] font-bold leading-9 tracking-[-0.02em] text-foreground">{t("submissionUploadTitle")}</h1>
 
       <NewTaskStepper currentStep={3} />
-      {task?.submission_sources?.some(source => source.status === "failed" || source.status === "processing") ? <SubmissionSourceOutcomePanel sources={task.submission_sources} locale={locale} className="mt-6" /> : null}
-
       <div data-draft-width="900" className="mx-auto mt-[45px] w-full max-w-[900px]">
+        {task?.submission_sources?.some(source => source.status === "failed" || source.status === "processing") ? <SubmissionSourceOutcomePanel sources={task.submission_sources} locale={locale} className="mb-6" /> : null}
         {(!selectedFile && !hasStoredFile && draft.value.selectedFileName && !canRetryOriginal) || (!rosterFile && !hasSavedRoster && draft.value.rosterFileName && identityMode === "roster") ? <p role="alert" className="mb-4 text-sm text-warning">{localText(locale, "保存的文件暂时不可用，请重新选择。其他设置已保留。", "The saved file is unavailable. Reselect it; other settings are preserved.")}</p> : null}
         {hasStoredFile ? <p role="status" className="mb-4 text-sm text-muted-foreground">{localText(locale, "已恢复原文件与设置，可直接重试。", "Your file and settings are restored. You can retry directly.")}</p> : null}
         <div

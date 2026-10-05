@@ -14,6 +14,9 @@ function onlyUnverifiedTargets(issue: PreparationIssue): boolean {
 }
 
 export function recognitionIssueLabel(issue: PreparationIssue, locale: string): string | null {
+  if (issue.code === "manual_completion_required") return locale === "zh-CN"
+    ? "请补齐缺失资料并确认本题；完成前不能批改。"
+    : "Complete the missing materials and confirm this question before grading.";
   if (!["recognition_partial", "recognition_needs_review"].includes(issue.code)) return null;
   const zh = locale === "zh-CN";
   const coverage = issue.details?.coverage as Record<string, unknown[]> | undefined;
@@ -40,6 +43,9 @@ export function questionReviewConfirmed(problem: ProblemInfo): boolean {
 }
 export interface ReviewBlocker { label: string; href: string }
 export function questionReviewBlocked(problem: ProblemInfo): boolean {
+  const required = (problem.preparation_issues ?? []).filter(issue => issue.code === "manual_completion_required")
+    .flatMap(issue => (issue.details?.required_fields as (keyof ProblemInfo)[] | undefined) ?? []);
+  if (required.some(field => { const value = problem[field]; return !value || (typeof value === "string" && !value.trim()) || (Array.isArray(value) && !value.length); })) return true;
   return !problem.stem?.trim() || (problem.preparation_issues ?? []).some(issue => issue.status === "open" && issue.severity === "blocking");
 }
 export function answerReviewBlocked(answer?: StudentAnswerInfo): boolean {

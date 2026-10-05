@@ -40,8 +40,11 @@ from backend.services.question_structure import annotate_major_question_structur
 from backend.tools.problem_dedup import dedupe_extracted_problems
 from backend.tools.structured_llm import (
     StructuredOutputBoundsError,
+    StructuredOutputInvalidError,
     ainvoke_with_retry,
     extract_and_parse_json,
+    llm_attempt_budget,
+    parse_with_format_repair,
 )
 
 if TYPE_CHECKING:
@@ -1750,6 +1753,7 @@ async def generate_missing_question_materials(
     reporter: Optional["ProgressReporter"] = None,
     *,
     manage_progress_lifecycle: bool = True,
+    validate_candidates: Callable[[List[AICompletionCandidateOutput]], None] | None = None,
 ) -> List[AICompletionCandidateOutput]:
     """Generate Q-09 values in one structured call; this function never stores them."""
 
@@ -1814,8 +1818,35 @@ async def generate_missing_question_materials(
             f"{json.dumps(request_context, ensure_ascii=False)}"
         )),
     ]
-    response = await ainvoke_with_retry(provider, messages)
-    parsed = extract_and_parse_json(response.content or "", AICompletionOutput)
+    expected_targets = {row["target_id"]: row for row in target_rows}
+
+    def validate_targets(parsed: AICompletionOutput) -> None:
+        seen = set()
+        for candidate in parsed.candidates:
+            expected = expected_targets.get(candidate.target_id)
+            usable = (bool(candidate.test_cases) if candidate.target == "test_cases"
+                      else bool((candidate.text_value or "").strip()))
+            if (not expected or candidate.target_id in seen or not usable
+                    or candidate.q_id != expected["q_id"]
+                    or candidate.target != expected["target"]):
+                raise StructuredOutputInvalidError("Generated material targets were missing, duplicated or invalid.")
+            seen.add(candidate.target_id)
+        if seen != set(expected_targets):
+            raise StructuredOutputInvalidError("The generated materials omitted requested targets.")
+        if validate_candidates is not None:
+            validate_candidates(parsed.candidates)
+
+    async def repair_invoke(provider, messages):
+        if reporter:
+            await reporter._emit_message("Repairing generated material format once; completed questions are kept.")
+        return await ainvoke_with_retry(provider, messages)
+
+    with llm_attempt_budget():
+        response = await ainvoke_with_retry(provider, messages)
+        parsed, _ = await parse_with_format_repair(
+            provider, messages, response, AICompletionOutput,
+            invoke=repair_invoke, validate_output=validate_targets,
+        )
 
     if reporter and manage_progress_lifecycle:
         await reporter.set_stage_progress(

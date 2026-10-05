@@ -195,6 +195,13 @@ export function retryQuestionPreparation(input: {
   );
 }
 
+export function manuallyCompleteQuestionPreparation(input: {
+  taskId: string; jobId: string; expectedWorkflowRevision: number;
+}): Promise<{ task_id: string; workflow_revision: number; first_question_id: string }> {
+  return postJSON(`/tasks/${encodeURIComponent(input.taskId)}/question-preparation/${encodeURIComponent(input.jobId)}/manual-review`,
+    { expected_workflow_revision: input.expectedWorkflowRevision });
+}
+
 export function uploadReference(taskId: string, file: File, options?: UploadOptions): Promise<TaskMutationResponse> {
   return postMultipart<TaskMutationResponse>(`/tasks/${taskId}/upload_reference`, file, options);
 }

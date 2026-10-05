@@ -248,6 +248,15 @@ describe("question source recovery guidance", () => {
 });
 
 describe("background task failure guidance", () => {
+  it.each([
+    ["question_manual_completion_required", "/tasks/task-1/questions"],
+    ["question_preparation_manual_unavailable", "/tasks/task-1/upload/problems"],
+  ])("provides teacher guidance for %s without asking for an automatic model retry", (code, href) => {
+    const info = classifyRecoverableError(new APIError(409, code, { detail: { code } }), { locale: "zh-CN", taskId: "task-1" });
+    expect(info.actionKind).toBe("reselect");
+    expect(info.actionHref).toBe(href);
+    expect(info.description).not.toContain("未预期的错误");
+  });
   it("explains a provider timeout without collapsing it into a generic failure", () => {
     const info = classifyRecoverableError("provider_timeout", {
       locale: "zh-CN",

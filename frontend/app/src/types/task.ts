@@ -91,7 +91,7 @@ export interface PreparationIssue {
   issue_id: string;
   q_id?: string | null;
   field: "stem" | "answer" | "rubric" | "programming_tests" | "source" | "max_score";
-  code: "low_confidence" | "source_conflict" | "ai_source_conflict" | "ambiguous_question_match" | "unmapped_source_content" | "parse_anomaly" | "generation_failed" | "rubric_step_reference_conflict" | "invalid_test_case" | "reference_solution_failed_case" | "default_max_score_requires_review" | "max_score_not_found" | "recognition_partial" | "recognition_needs_review";
+  code: "low_confidence" | "source_conflict" | "ai_source_conflict" | "ambiguous_question_match" | "unmapped_source_content" | "parse_anomaly" | "generation_failed" | "rubric_step_reference_conflict" | "invalid_test_case" | "reference_solution_failed_case" | "default_max_score_requires_review" | "max_score_not_found" | "recognition_partial" | "recognition_needs_review" | "manual_completion_required";
   severity: "info" | "warning" | "blocking";
   source_ids?: string[];
   details?: Record<string, unknown>;

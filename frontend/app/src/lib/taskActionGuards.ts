@@ -492,6 +492,22 @@ export function classifyRecoverableError(
     };
   }
 
+  if (code === "question_manual_completion_required") {
+    return {
+      title: tx(locale, "请先补全并确认题目", "Complete and confirm questions first"),
+      description: tx(locale, "手动补全的题目仍有必填内容或尚未确认，批改没有启动。", "Some manually completed questions have missing materials or await confirmation. Grading has not started."),
+      actionLabel: tx(locale, "补全题目资料", "Complete question materials"),
+      actionHref: taskHref("/questions"), actionKind: "reselect", tone: "warning", technicalDetails,
+    };
+  }
+  if (code === "question_preparation_manual_unavailable") {
+    return {
+      title: tx(locale, "当前资料无法转入手动补全", "Manual completion is unavailable"),
+      description: tx(locale, "尚未保存可核对的题目草稿，或任务状态已改变。请刷新状态；仍未识别出题目时可重试识别或返回修改资料。", "No verified question draft is available, or the task has changed. Refresh its status, retry recognition, or update the source materials."),
+      actionLabel: tx(locale, "返回题目资料", "Return to question materials"),
+      actionHref: taskHref("/upload/problems"), actionKind: "reselect", tone: "warning", technicalDetails,
+    };
+  }
   if (code === "submission_sources_failed") {
     return {
       title: tx(locale, "部分学生作答识别失败", "Some submissions failed recognition"),

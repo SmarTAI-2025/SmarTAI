@@ -7,6 +7,7 @@ import userEvent from "@testing-library/user-event";
 import { createMemoryRouter, RouterProvider } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { SourceFileDescriptor } from "@/types/sourcePreview";
+import type { PreparationIssue } from "@/types";
 import { QuestionPreparationDetailPage } from "./QuestionPreparationDetailPage";
 
 const testState = vi.hoisted(() => ({ locale: "zh-CN" }));
@@ -75,7 +76,7 @@ const taskData = vi.hoisted(() => ({
       max_score: 10,
       criterion: "Rubric two",
       reference_answer: "Answer two",
-      preparation_issues: [],
+      preparation_issues: [] as PreparationIssue[],
     },
     Q3: {
       q_id: "Q3",
@@ -192,6 +193,9 @@ beforeEach(() => {
   mutateAsync.mockReset();
   taskData.workflow_revision = 7;
   taskData.status = "problems_ready";
+  taskData.problem_data.Q2.reference_answer = "Answer two";
+  taskData.problem_data.Q2.criterion = "Rubric two";
+  taskData.problem_data.Q2.preparation_issues = [];
   taskRefetch.mockReset().mockResolvedValue({ data: taskData });
   sourcePreviewApi.getTaskSourceFiles.mockReset().mockResolvedValue({
     task_id: "task-1",
@@ -227,6 +231,19 @@ beforeEach(() => {
 });
 
 describe("QuestionPreparationDetailPage navigation", () => {
+  it("opens only the failed question fields for manual completion and blocks early confirmation", async () => {
+    taskData.problem_data.Q2.reference_answer = "";
+    taskData.problem_data.Q2.criterion = "";
+    taskData.problem_data.Q2.preparation_issues = [{ issue_id: "manual-q2", code: "manual_completion_required",
+      field: "source", severity: "warning", status: "open", details: { required_fields: ["reference_answer", "criterion"] } }];
+    renderPage("/tasks/task-1/questions/Q2/content?manual=1#question-Q2");
+    const q2 = document.querySelector('[data-question-id="Q2"]') as HTMLElement;
+    await waitFor(() => expect(q2.querySelectorAll("textarea")).toHaveLength(2));
+    expect(document.querySelector('[data-question-id="Q1"] textarea')).toBeNull();
+    expect([...q2.querySelectorAll("textarea")].every(element => element.value === "")).toBe(true);
+    fireEvent.click(within(q2).getByRole("button", { name: /待确认/ }));
+    expect(mutateAsync).not.toHaveBeenCalled();
+  });
   it("opens the 50/50 workspace with the formal problem_source descriptor", async () => {
     const user = userEvent.setup();
     renderPage();
