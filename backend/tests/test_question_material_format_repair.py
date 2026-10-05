@@ -14,6 +14,8 @@ def valid():
 
 
 class Provider:
+    provider_id = "synthetic:repair"
+    model = "synthetic"
     def __init__(self, responses):
         self.responses = iter(responses)
         self.calls = []
@@ -48,6 +50,23 @@ async def test_deterministically_repairable_json_uses_no_extra_model_call():
     provider = Provider(["```json\n" + valid() + "}\n```"])
     assert (await generate(provider))[0].q_id == "q1"
     assert len(provider.calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_missing_subpart_is_repaired_within_the_same_question():
+    from backend.agents.question_preparation_agent import generate_major_question_materials, requested_major_question_materials
+    from backend.progress.tracker import ProgressReporter
+    from backend.tests.test_question_preparation_recovery import _questions, _candidates
+    problems = _questions(1)
+    correct = [item.model_dump(mode="json") for item in _candidates("q1")]
+    incomplete = [dict(item) for item in correct]
+    next(item for item in incomplete if item["target"] == "reference_answer")["text_value"] = "(a) Only the first subpart."
+    provider = Provider([json.dumps({"candidates": incomplete}), json.dumps({"candidates": correct})])
+    result = await generate_major_question_materials(problems_data=problems,
+        requested_targets=requested_major_question_materials(problems), test_case_count=6,
+        provider=provider, reporter=ProgressReporter("format-test"))
+    assert len(provider.calls) == 2
+    assert "(b)" in next(item.text_value for item in result if item.target == "reference_answer")
 
 
 @pytest.mark.asyncio

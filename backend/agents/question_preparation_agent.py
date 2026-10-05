@@ -35,6 +35,7 @@ from backend.models import (
     is_programming_question_type,
 )
 from backend.progress.tracker import ProgressReporter
+from backend.tools.structured_llm import StructuredOutputInvalidError
 from backend.services.background_errors import classify_background_error
 from backend.services.question_structure import (
     MajorQuestionStructureV1,
@@ -314,6 +315,14 @@ async def generate_major_question_materials(
                 started = True
                 if on_question_started is not None:
                     await on_question_started(q_id)
+                def validate_generated(candidates):
+                    try:
+                        _validate_major_question_candidates(q_id, targets_by_question[q_id],
+                                                            candidates, problems_data[q_id])
+                    except ValidationError as exc:
+                        raise StructuredOutputInvalidError(
+                            "Generated material omitted required content or violated scoring constraints."
+                        ) from exc
                 candidates = await generate_missing_question_materials(
                     problems_data={q_id: problems_data[q_id]},
                     requested_targets=targets_by_question[q_id],
@@ -321,6 +330,7 @@ async def generate_major_question_materials(
                     provider=provider,
                     reporter=reporter,
                     manage_progress_lifecycle=False,
+                    validate_candidates=validate_generated,
                 )
                 validated = _validate_major_question_candidates(
                     q_id,

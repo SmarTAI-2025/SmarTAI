@@ -927,14 +927,15 @@ async def _before_retry_sleep(retry_state) -> None:
     if not isinstance(exc, RateLimitError):
         return
     seconds = float(retry_state.next_action.sleep)
+    next_attempt = (budget.used if budget is not None else retry_state.attempt_number) + 1
     logger.info("Rate-limit retry: waiting %.1fs; attempt=%s/%s", seconds,
-                retry_state.attempt_number + 1, _retry_limit())
+                next_attempt, _retry_limit())
     from backend.services.execution_control import current_execution
     control = current_execution()
     if control is not None:
         from backend.services.execution_control import provider_key
         provider = _retry_provider(retry_state)
-        await control.waiting(provider, control.rate_failures.get(provider_key(provider), retry_state.attempt_number) + 1,
+        await control.waiting(provider, max(next_attempt, control.rate_failures.get(provider_key(provider), 0) + 1),
                               _retry_limit(), seconds)
 
 

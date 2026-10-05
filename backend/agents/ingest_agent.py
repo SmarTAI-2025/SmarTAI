@@ -1753,6 +1753,7 @@ async def generate_missing_question_materials(
     reporter: Optional["ProgressReporter"] = None,
     *,
     manage_progress_lifecycle: bool = True,
+    validate_candidates: Callable[[List[AICompletionCandidateOutput]], None] | None = None,
 ) -> List[AICompletionCandidateOutput]:
     """Generate Q-09 values in one structured call; this function never stores them."""
 
@@ -1832,6 +1833,8 @@ async def generate_missing_question_materials(
             seen.add(candidate.target_id)
         if seen != set(expected_targets):
             raise StructuredOutputInvalidError("The generated materials omitted requested targets.")
+        if validate_candidates is not None:
+            validate_candidates(parsed.candidates)
 
     async def repair_invoke(provider, messages):
         if reporter:
