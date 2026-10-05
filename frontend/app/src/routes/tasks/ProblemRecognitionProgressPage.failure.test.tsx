@@ -12,6 +12,7 @@ beforeEach(() => { failureCode = "provider_timeout"; failedPages = []; generatio
 vi.mock("@/api/hooks", () => ({
   useStageProviders: () => ({ data: [], isError: false, isLoading: false }),
   useRetryQuestionPreparation: () => ({ isPending: false, mutateAsync: vi.fn() }),
+  useManuallyCompleteQuestionPreparation: () => ({ isPending: false, mutateAsync: vi.fn() }),
   useTask: () => ({
     data: {
       task_id: "task-1",

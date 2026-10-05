@@ -371,6 +371,7 @@ function issueCodeLabel(code: PreparationIssue["code"], locale: string) {
     unmapped_source_content: ["原文件中有内容尚未匹配", "Some source content is unmatched"],
     parse_anomaly: ["文件解析结果异常", "File parsing anomaly"],
     generation_failed: ["所需内容生成失败", "Required content generation failed"],
+    manual_completion_required: ["补齐缺失资料并确认后才能批改", "Complete and confirm the missing materials before grading"],
     rubric_step_reference_conflict: ["评分步骤与标答步骤未正确对应", "Rubric steps do not align with reference-answer steps"],
     invalid_test_case: ["测试样例结构无效", "Invalid test case structure"],
     reference_solution_failed_case: ["参考解未通过测试样例", "Reference solution failed a test"],
