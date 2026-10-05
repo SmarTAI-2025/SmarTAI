@@ -1471,6 +1471,12 @@ def claim_operation(
         )
     now = time.time()
     with session_scope() as session:
+        from backend.db.execution_admission import WORKLOAD_TYPES, admit_owner
+        operation_type = session.scalar(select(WorkflowOperationRecord.operation_type).where(
+            WorkflowOperationRecord.id == operation_id, WorkflowOperationRecord.owner_id == owner_id,
+        ))
+        if operation_type in WORKLOAD_TYPES:
+            admit_owner(session, owner_id, exclude_id=operation_id)
         result = session.execute(
             update(WorkflowOperationRecord)
             .where(
@@ -1762,10 +1768,13 @@ def list_claimable_operations(
         )
     now = time.time()
     with session_scope() as session:
+        from backend.db.execution_admission import WORKLOAD_TYPES, owner_running_predicate
         rows = session.scalars(
             select(WorkflowOperationRecord)
             .where(
                 WorkflowOperationRecord.operation_type.in_(types),
+                or_(WorkflowOperationRecord.operation_type.not_in(WORKLOAD_TYPES),
+                    ~owner_running_predicate(WorkflowOperationRecord.owner_id)),
                 WorkflowOperationRecord.status.in_(("pending", "running")),
                 or_(
                     WorkflowOperationRecord.operation_type.not_in(

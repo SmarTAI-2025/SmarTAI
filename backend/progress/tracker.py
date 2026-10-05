@@ -314,6 +314,12 @@ class ProgressReporter:
             message=f"Major question {normalized} generation cancelled",
         ))
 
+    async def set_model_waits(self, waits: list[dict]) -> None:
+        from backend.models import ModelWait
+        async with self._lock:
+            self._progress.model_waits = [ModelWait.model_validate(wait) for wait in waits]
+        await self._emit(ProgressEvent(message="provider_rate_limited_wait" if waits else "provider_retry_resumed"))
+
     async def set_error(self, detail: str) -> None:
         async with self._lock:
             self._progress.phase = "error"
@@ -403,6 +409,7 @@ class ProgressReporter:
                     "active_question_ids": list(self._progress.active_question_ids),
                     "failed_question_ids": list(self._progress.failed_question_ids),
                     "last_activity_at": self._progress.last_activity_at,
+                    "model_waits": [wait.model_dump() for wait in self._progress.model_waits],
                 }
             try:
                 self._event_sink(event, durable_payload)
@@ -543,6 +550,9 @@ def remove_reporter(
     A stale worker must not delete a replacement worker's live progress. Task
     deletion still intentionally calls this without an expected instance.
     """
+    from backend.services.execution_control import owns_current_execution
+    if not owns_current_execution(job_id):
+        return
     with _reporters_lock:
         if expected is not None and _reporters.get(job_id) is not expected:
             return

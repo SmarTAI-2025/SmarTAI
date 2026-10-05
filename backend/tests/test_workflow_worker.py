@@ -532,6 +532,7 @@ async def test_in_flight_is_bounded():
         max_seen = max(max_seen, current)
         await asyncio.sleep(0.1)
         current -= 1
+        await ctx.complete(status="done", summary={})
 
     worker = _make_worker(
         {"problem_extraction": handler},

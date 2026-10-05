@@ -2,8 +2,8 @@
 
 Covers the three mitigations for the campus-relay 503 storm:
 
-  * B1 — relay 502/503/504 (and 429) are classified onto the long-wait
-    rate-limit retry policy in ``structured_llm._classify_exception``, and the
+  * B1 — relay 502/503/504 remain transient outages, distinct from 429 rate
+    limits, while both honor bounded Retry-After hints. The
     stable error-code strings map to question-level-retryable kinds in
     ``skills.base.classify_skill_error`` (previously a relay 503 surfaced as
     "provider_upstream_unavailable" — matching no keyword — and landed in the
@@ -48,6 +48,8 @@ from backend.tools.structured_llm import (
     RateLimitError,
     TransientLLMError,
     _classify_exception,
+    _retry_stop,
+    _retry_wait,
 )
 
 
@@ -63,24 +65,30 @@ def _clear_endpoint_state():
 
 
 class TestGatewayErrorClassification:
-    def test_relay_503_uses_long_wait_rate_limit_policy(self):
-        exc = ProviderRequestError("provider_upstream_unavailable", status_code=503)
-        assert isinstance(_classify_exception(exc), RateLimitError)
-
-    @pytest.mark.parametrize("status_code", [429, 502, 504])
-    def test_relay_429_502_504_use_rate_limit_policy(self, status_code):
+    @pytest.mark.parametrize("status_code", [502, 503, 504])
+    def test_gateway_outages_are_transient_not_rate_limits(self, status_code):
         exc = ProviderRequestError(
             "provider_upstream_unavailable", status_code=status_code
         )
+        assert type(_classify_exception(exc)) is TransientLLMError
+
+    def test_relay_429_uses_rate_limit_policy(self):
+        exc = ProviderRequestError("provider_rate_limited", status_code=429)
         assert isinstance(_classify_exception(exc), RateLimitError)
 
-    def test_relay_503_retry_after_hint_is_carried(self):
+    @pytest.mark.parametrize("hint,stopped", [(45, False), (120, True)])
+    def test_relay_503_retry_after_is_honored_within_wait_budget(self, hint, stopped):
         exc = ProviderRequestError(
-            "provider_upstream_unavailable", status_code=503, retry_after=45
+            "provider_upstream_unavailable", status_code=503, retry_after=hint
         )
         classified = _classify_exception(exc)
-        assert isinstance(classified, RateLimitError)
-        assert classified.retry_after == 45
+        assert type(classified) is TransientLLMError
+        assert classified.retry_after == hint
+        state = SimpleNamespace(outcome=SimpleNamespace(failed=True, exception=lambda: classified),
+                                attempt_number=1, idle_for=0)
+        state.upcoming_sleep = _retry_wait(state)
+        assert state.upcoming_sleep == hint
+        assert _retry_stop(state) is stopped
 
     def test_plain_500_stays_generic_transient(self):
         # 500 may be a durable app bug — keep the short 3-attempt policy.
@@ -92,10 +100,10 @@ class TestGatewayErrorClassification:
         exc = ProviderRequestError("provider_auth_failed", status_code=status_code)
         assert isinstance(_classify_exception(exc), PermanentLLMError)
 
-    def test_textual_503_message_uses_rate_limit_policy(self):
+    def test_textual_503_message_is_transient(self):
         # httpx-style message without a structured status_code attribute.
         exc = RuntimeError("Server error '503 Service Unavailable' for url ...")
-        assert isinstance(_classify_exception(exc), RateLimitError)
+        assert type(_classify_exception(exc)) is TransientLLMError
 
     def test_stable_code_string_without_status_is_transient(self):
         # The code string alone (no digits) is a network flake, not an

@@ -4,6 +4,7 @@ import { Link, Navigate, useNavigate, useParams } from "react-router-dom";
 import { useStartGrading, useTask } from "@/api/hooks/tasks";
 import { SmarTAIMascot } from "@/components/brand/SmarTAIMascot";
 import { NewTaskStepper } from "@/components/new-task/NewTaskStepper";
+import { TaskExecutionControls } from "@/components/tasks/TaskExecutionControls";
 import { RecoverableActionState } from "@/components/ui/RecoverableActionState";
 import { useTaskProgress } from "@/hooks/useTaskProgress";
 import { useGradingIntent } from "@/hooks/useGradingIntent";
@@ -87,7 +88,9 @@ export function GradingProgressPage() {
   const hasReadableState = Boolean(status || task || state);
   const readFailed = !hasReadableState && (taskQuery.isError || progressQuery.isError);
   const isFinalizing = status === "grading" && progress?.phase === "done";
-  const percent = completedView ? 100 : progress ? progressQuery.percent : null;
+  const waitingLabel = state?.active_operation_status === "pending" ? (locale === "zh-CN" ? "排队中" : "Queued")
+    : progress?.model_waits?.length ? (locale === "zh-CN" ? "等待重试" : "Retry pending") : null;
+  const percent = completedView ? 100 : state?.active_operation_status === "pending" || progress?.model_waits?.length ? null : progress ? progressQuery.percent : null;
   const recoveryInfo = status === "error"
     ? classifyRecoverableError(retryGrading.error ?? latestError, {
       locale,
@@ -104,6 +107,8 @@ export function GradingProgressPage() {
         {copy(locale, "title")}
       </h1>
       <NewTaskStepper currentStep={5} />
+      <TaskExecutionControls taskId={taskId} state={state} progress={progress}
+        onChanged={() => Promise.all([taskQuery.refetch(), progressQuery.refetch()])} />
 
       {!taskId ? (
         <PageState
@@ -134,14 +139,14 @@ export function GradingProgressPage() {
                 <h2 className="text-[22px] font-bold leading-8 tracking-[-0.01em] text-foreground sm:pr-32 sm:text-[24px]">
                   {completedView
                     ? (locale === "en-US" ? "Grading Completed" : "批改已完成")
-                    : copy(locale, isFinalizing ? "finalizing" : "gradingAnswers")}
+                    : waitingLabel ?? copy(locale, isFinalizing ? "finalizing" : "gradingAnswers")}
                 </h2>
                 <p className="mt-1 text-[13px] leading-5 text-muted-foreground sm:pr-32 sm:text-[14px]">
                   {copy(locale, "completedPrefix")} {queue.completed} / {queue.total} {copy(locale, "unitSuffix")}
                   <span aria-hidden="true"> · </span>
                   {completedView
                     ? (locale === "en-US" ? "Historical progress snapshot" : "历史进度快照")
-                    : `${copy(locale, "etaPrefix")} ${isFinalizing ? copy(locale, "almostDone") : eta}`}
+                    : waitingLabel ?? `${copy(locale, "etaPrefix")} ${isFinalizing ? copy(locale, "almostDone") : eta}`}
                 </p>
 
                 <div className="mt-4 flex items-center gap-3">
@@ -155,7 +160,7 @@ export function GradingProgressPage() {
                     aria-valuetext={percent === null ? copy(locale, "syncing") : undefined}
                   >
                     {percent === null ? (
-                      <span className="absolute inset-y-0 left-0 w-1/3 animate-pulse rounded-full bg-primary" />
+                      waitingLabel ? null : <span className="absolute inset-y-0 left-0 w-1/3 animate-pulse rounded-full bg-primary" />
                     ) : (
                       <span className="block h-full rounded-full bg-primary transition-[width] duration-300" style={{ width: `${percent}%` }} />
                     )}

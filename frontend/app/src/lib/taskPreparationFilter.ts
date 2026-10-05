@@ -79,7 +79,7 @@ function questionMatches(question: SubmissionQuestion, intent: FilterIntentResul
 }
 function answerMatches(state: ReturnType<typeof getAnswerState>, status: FilterIntentResult["submission_status"]) {
   if (status === "missing") return state === "missing" || state === "empty";
-  if (status === "review") return state === "flagged";
+  if (status === "review") return state === "flagged" || state === "recognized" || state === "empty";
   return status !== "recognized" && status !== "reviewed" || state === status;
 }
 

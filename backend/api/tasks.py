@@ -509,6 +509,39 @@ async def parse_submissions_endpoint(
         return domain_error_response(exc)
 
 
+class StopTaskRunRequest(BaseModel):
+    job_id: str = Field(min_length=1, max_length=128)
+    expected_workflow_revision: int = Field(ge=0)
+
+
+@router.post("/{task_id}/continue")
+async def continue_stopped_auxiliary_task(task_id: str, request: StopTaskRunRequest, current: User = Depends(require_teacher)):
+    from backend.services.task_execution import continue_auxiliary_run
+    from backend.progress.tracker import remove_reporter
+    try:
+        result = await asyncio.to_thread(continue_auxiliary_run, task_id=task_id, owner_id=current.id,
+                                        job_id=request.job_id, expected_revision=request.expected_workflow_revision)
+        if result["status"] == "started":
+            remove_reporter(request.job_id)
+        return result
+    except DomainError as exc:
+        return domain_error_response(exc)
+
+
+@router.post("/{task_id}/stop")
+async def stop_task_run(task_id: str, request: StopTaskRunRequest, current: User = Depends(require_teacher)):
+    from backend.services.task_execution import stop_task_run as stop
+    from backend.services.execution_control import cancel_local
+    try:
+        result = await asyncio.to_thread(stop, task_id=task_id, owner_id=current.id,
+            job_id=request.job_id, expected_revision=request.expected_workflow_revision)
+    except DomainError as exc:
+        return domain_error_response(exc)
+    if result["status"] == "stopped":
+        cancel_local(request.job_id)
+    return result
+
+
 @router.get("/{task_id}/submission-recognition/input")
 def get_submission_recognition_input(task_id: str, current: User = Depends(require_teacher)):
     from backend.services.workflow_inputs import submission_inputs

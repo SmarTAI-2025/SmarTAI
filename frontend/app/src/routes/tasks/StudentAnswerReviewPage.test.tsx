@@ -171,7 +171,8 @@ describe("StudentAnswerReviewPage review shortcuts", () => {
   it("allows confirming recognized unflagged answers without editing their text", async () => {
     const user = userEvent.setup();
     renderPage();
-    await user.click(screen.getAllByRole("button", { name: /1.*待确认/ })[0]);
+    expect(screen.getAllByRole("button", { name: /1.*待确认/ })).toHaveLength(1);
+    await user.click(screen.getByRole("button", { name: /1.*待确认/ }));
     expect(mutations.answer).toHaveBeenCalledWith({ taskId: "task-1", studentId: "S001", qId: "Q1", expectedWorkflowRevision: 3, reviewStatus: "confirmed" });
   });
 

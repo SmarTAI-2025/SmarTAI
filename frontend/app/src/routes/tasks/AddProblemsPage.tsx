@@ -63,11 +63,22 @@ type PreparationFailure = {
 
 export function AddProblemsPage() {
   const { taskId } = useParams();
+  return <AddProblemsLoader key={taskId} />;
+}
+
+function AddProblemsLoader() {
+  const { taskId } = useParams();
   const { locale } = useI18n();
+  const hydrated = useRef(false);
   const taskQuery = useTask(taskId, { refetchOnMount: "always" });
   const inputQuery = useWorkflowInput(taskId, "problems", Boolean(taskQuery.data?.extract_job_id));
-  if (taskQuery.isLoading || (taskQuery.isFetching && !taskQuery.isFetchedAfterMount) || inputQuery.isLoading || (inputQuery.isFetching && !inputQuery.isFetchedAfterMount)) return <div role="status"><LoaderCircle className="animate-spin" /></div>;
-  if (inputQuery.isError) return <RecoverableActionState locale={locale} info={classifyRecoverableError(inputQuery.error, { locale })} workflowRecovery={{ retry: { onClick: () => void inputQuery.refetch() }, configurationHref: `/tasks/${taskId}/edit` }} />;
+  // A successful start enables the saved-input query for the first time. Keep
+  // the submitting editor mounted so its success handler can clear and navigate.
+  if (!hydrated.current) {
+    if (taskQuery.isLoading || (taskQuery.isFetching && !taskQuery.isFetchedAfterMount) || inputQuery.isLoading || (inputQuery.isFetching && !inputQuery.isFetchedAfterMount)) return <div role="status"><LoaderCircle className="animate-spin" /></div>;
+    if (inputQuery.isError) return <RecoverableActionState locale={locale} info={classifyRecoverableError(inputQuery.error, { locale })} workflowRecovery={{ retry: { onClick: () => void inputQuery.refetch() }, configurationHref: `/tasks/${taskId}/edit` }} />;
+    hydrated.current = true;
+  }
   return <AddProblemsForm key={taskId} taskQuery={taskQuery} submittedInput={inputQuery.data?.input} />;
 }
 

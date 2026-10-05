@@ -83,8 +83,8 @@ export function FinalResultsWorkspacePage() {
   if (taskQuery.isLoading || waitingForFreshTaskStatus) {
     return <WorkspaceState locale={locale} loading />;
   }
-  if (task?.status === "grading") return <Navigate replace to={`/tasks/${taskId}/grading/progress`} />;
-  if (taskId && task && !RESULT_WORKSPACE_STATUSES.has(task.status)) {
+  if (!taskQuery.isError && task?.status === "grading") return <Navigate replace to={`/tasks/${taskId}/grading/progress`} />;
+  if (taskId && task && !taskQuery.isError && !RESULT_WORKSPACE_STATUSES.has(task.status)) {
     return <Navigate replace to={getTaskDestination(task)} />;
   }
   if (taskId && provisional && section === "reports") {

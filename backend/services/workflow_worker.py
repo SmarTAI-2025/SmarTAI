@@ -347,7 +347,7 @@ class WorkflowWorker:
             else settings.workflow_claim_batch_size
         )
         self._max_in_flight = (
-            max_in_flight if max_in_flight is not None else settings.workflow_max_in_flight
+            max_in_flight if max_in_flight is not None else settings.workload_max_in_flight
         )
         self._shutdown_seconds = (
             shutdown_seconds
@@ -477,7 +477,17 @@ class WorkflowWorker:
         heartbeat_task.add_done_callback(self._heartbeats.discard)
         try:
             try:
-                await self._handlers[operation.operation_type](ctx)
+                from backend.services.execution_control import run_controlled
+
+                def is_cancelled():
+                    try:
+                        row = workflow_repository.get_operation(operation.id, owner_id=operation.owner_id)
+                    except NotFound:
+                        return True
+                    return row.error_code in {"operation_cancelled", "superseded"} or row.attempt != operation.attempt
+
+                await run_controlled(operation.id, is_cancelled, self._handlers[operation.operation_type](ctx),
+                                     persist_progress=ctx.update_progress)
             except asyncio.CancelledError:
                 raise
             except LeaseLost:

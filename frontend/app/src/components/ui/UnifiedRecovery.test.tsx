@@ -18,7 +18,7 @@ it.each(["provider_rate_limited", "provider_daily_quota_exceeded"])("renders tru
     expect(screen.getByText(/不会自动跨天等待/)).toBeInTheDocument();
   } else {
     expect(screen.getByRole("button", { name: "重试失败项" })).toBeEnabled();
-    expect(screen.getByText(/当前返回信息不足以确定/)).toBeInTheDocument();
+    expect(screen.getByText(/当前信息不足以确定是分钟限制还是日额度/)).toBeInTheDocument();
   }
 });
 

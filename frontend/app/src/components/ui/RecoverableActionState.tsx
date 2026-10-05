@@ -46,7 +46,8 @@ export function RecoverableActionState({
   locale?: Locale;
   className?: string;
 }) {
-  const primary = workflowRecovery ? (info.dailyQuotaExhausted ? undefined : { ...workflowRecovery.retry, label: workflowRecovery.retry.label ?? workflowRetryLabel(locale) }) : primaryAction ?? (info.actionHref
+  const stopped = info.technicalDetails.some((item) => item.value === "operation_cancelled");
+  const primary = workflowRecovery ? (info.dailyQuotaExhausted ? undefined : { ...workflowRecovery.retry, label: workflowRecovery.retry.label ?? (stopped ? info.actionLabel : workflowRetryLabel(locale)) }) : primaryAction ?? (info.actionHref
     ? { label: info.actionLabel, href: info.actionHref }
     : undefined);
   const secondary = workflowRecovery ? { label: workflowBackLabel(locale), href: workflowRecovery.configurationHref, state: workflowRecovery.configurationState, disabled: workflowRecovery.retry.busy } : secondaryAction;

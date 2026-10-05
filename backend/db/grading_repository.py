@@ -702,6 +702,10 @@ def claim_lease(run_id: str, *, worker_id: str, lease_seconds: int,
     now = time.time()
     new_expiry = now + lease_seconds
     with session_scope() as session:
+        from backend.db.execution_admission import admit_owner
+        teacher_id = session.scalar(select(GradingRunRecord.teacher_id).where(GradingRunRecord.id == run_id))
+        if teacher_id is not None:
+            admit_owner(session, teacher_id, exclude_id=run_id)
         result = session.execute(
             update(GradingRunRecord)
             .where(

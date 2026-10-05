@@ -18,6 +18,7 @@ from backend.tools.structured_llm import PermanentLLMError, RateLimitError, Stru
 
 
 SAFE_BACKGROUND_ERROR_CODES = frozenset({
+    "operation_cancelled",
     "workflow_failed",
     "no_provider_configured",
     "provider_not_enabled",
@@ -227,21 +228,28 @@ def classify_background_error(
 ) -> str:
     """Classify an exception and its causes into a stable public code."""
     chain = _exception_chain(exc)
+    rate_limited = False
     for item in chain:
         if isinstance(item, StructuredOutputInvalidError):
             return "provider_response_invalid"
         literal_code = f"{item}".strip()
         if literal_code in SAFE_BACKGROUND_ERROR_CODES:
-            return literal_code
+            if literal_code != "provider_rate_limited":
+                return literal_code
+            rate_limited = True
         if isinstance(item, DomainError):
             for candidate in (item.code, item.message):
                 code = candidate.strip() if isinstance(candidate, str) else ""
                 if code in SAFE_BACKGROUND_ERROR_CODES:
-                    return code
+                    if code != "provider_rate_limited":
+                        return code
+                    rate_limited = True
         if isinstance(item, HTTPException):
             code, text = _http_detail(item)
             if code in SAFE_BACKGROUND_ERROR_CODES:
-                return code
+                if code != "provider_rate_limited":
+                    return code
+                rate_limited = True
             normalized = text.lower()
             if "requires ocr" in normalized:
                 return "vision_provider_required"
@@ -261,11 +269,12 @@ def classify_background_error(
 
     # Explicit application codes (including local shared-pool caps) take
     # precedence over heuristic classification of provider messages.
-    from backend.llm.provider_limits import is_daily_quota_error
-    if any(is_daily_quota_error(item) for item in chain):
-        return "provider_daily_quota_exceeded"
+    from backend.llm.provider_limits import exhausted_quota_code
+    for item in chain:
+        if code := exhausted_quota_code(item):
+            return code
 
-    if any(isinstance(item, RateLimitError) for item in chain):
+    if rate_limited or any(isinstance(item, RateLimitError) for item in chain):
         return "provider_rate_limited"
 
     if persistence_code and any(isinstance(item, SQLAlchemyError) for item in chain):

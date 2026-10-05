@@ -689,7 +689,7 @@ def _reconcile_terminal_active_operation(*, task_id: str, owner_id: str, workflo
 
 
 def _grading_failure_code(run) -> str | None:
-    if run is None or run.status not in {"failed", "partial_failed"}:
+    if run is None or run.status not in {"failed", "partial_failed", "cancelled"}:
         return None
     if run.error_message:
         return safe_background_error_code(run.error_message, "grading_failed")
@@ -3772,11 +3772,9 @@ def task_state(*, task_id: str, owner_id: str) -> dict:
     progress: dict | None = None
     active_operation_status: str | None = None
     if workflow.active_job_id:
-        reporter = get_reporter(workflow.active_job_id)
-        if reporter is not None:
-            # Snapshot is async; callers should use async_task_state.
-            progress = None
-            active_operation_status = "running"
+        if workflow.active_operation == "grading":
+            run = grading_repository.get_run(workflow.active_job_id, actor_id=owner_id)
+            active_operation_status = "pending" if run.status == "queued" else run.status
         else:
             try:
                 operation = workflow_repository.get_operation(
@@ -3801,6 +3799,13 @@ def task_state(*, task_id: str, owner_id: str) -> dict:
         "active_operation_status": active_operation_status,
         "submission_sources": source_rows,
     })
+    payload["queue_reason"] = None
+    if active_operation_status == "pending":
+        from backend.db.execution_admission import owner_is_running
+        with session_scope() as session:
+            payload["queue_reason"] = "user_busy" if owner_is_running(
+                session, owner_id, exclude_id=workflow.active_job_id,
+            ) else "server_busy"
     return payload
 
 
@@ -3858,6 +3863,8 @@ async def async_task_state(*, task_id: str, owner_id: str) -> dict:
 def _grading_progress(run_id: str, owner_id: str) -> dict:
     run = grading_repository.get_run(run_id, actor_id=owner_id)
     events = grading_repository.list_events(run_id, actor_id=owner_id)
+    model_waits = next((item.get("payload", {}).get("model_waits", [])
+                        for item in reversed(events) if "model_waits" in item.get("payload", {})), [])
     question_count = len(assignment_repository.get_questions_by_assignment(run.assignment_id))
     completed_units = run.completed_submissions * question_count
     for item in events:
@@ -3875,12 +3882,13 @@ def _grading_progress(run_id: str, owner_id: str) -> dict:
     return {
         "contract_version": 1, "job_id": run_id,
         "phase": "done" if run.status in {"completed", "partial_failed"} else (
-            "error" if run.status == "failed" else "grading"
+            "error" if run.status in {"failed", "cancelled"} else "grading"
         ),
         "total_students": run.total_submissions,
         "total_questions": question_count,
         "completed_units": completed_units,
         "active": [], "messages": messages,
+        "model_waits": model_waits if run.status == "running" else [],
         "error_detail": _grading_failure_code(run),
         "started_at": run.started_at or run.created_at,
         "workflow": "grading", "stage_sequence": [],
@@ -4134,7 +4142,7 @@ def start_task_grading(
             return {"status": "already_done", "task_id": task_id, "job_id": latest.id}
     if retry_scope == "failed_only":
         previous = workflow_repository.get_run_setup(latest.id) if latest else None
-        if previous is None or latest.status not in {"partial_failed", "failed", "completed"}:
+        if previous is None or latest.status not in {"partial_failed", "failed", "completed", "cancelled"}:
             raise ValidationError("No failed grading run to retry.", code="grading_retry_unavailable")
         old = previous.input_manifest or {}
         # Review metadata can change without changing the grading inputs.

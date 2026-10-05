@@ -125,6 +125,7 @@ def poll_queued_runs() -> list[str]:
     after a process crash; the claim predicate remains the concurrency gate.
     """
     with session_scope() as session:
+        from backend.db.execution_admission import owner_running_predicate
         rows = session.scalars(
             select(GradingRunRecord.id)
             .join(
@@ -134,6 +135,7 @@ def poll_queued_runs() -> list[str]:
             )
             .where(
                 AssignmentRecord.deletion_requested_at.is_(None),
+                ~owner_running_predicate(GradingRunRecord.teacher_id),
                 (GradingRunRecord.status == education.GradingRunStatus.QUEUED.value)
                 | (
                     (GradingRunRecord.status == education.GradingRunStatus.RUNNING.value)
@@ -151,17 +153,35 @@ async def worker_loop(*, worker_id: str, poll_seconds: int | None = None,
     lease predicates keep multiple processes safe. Shutdown cancels the loop,
     which stops claiming new work and releases no unexpired lease."""
     interval = poll_seconds if poll_seconds is not None else settings.grading_poll_seconds
-    while True:
+    running: dict[str, asyncio.Task] = {}
+    limit = settings.workload_max_in_flight
+
+    async def dispatch(run_id):
         try:
-            for run_id in poll_queued_runs():
-                # The injected registry is test-only. Production builds a fresh
-                # owner-scoped registry inside process_run for every run.
-                await process_run(run_id=run_id, worker_id=worker_id, registry=registry)
+            await process_run(run_id=run_id, worker_id=worker_id, registry=registry)
+        except LeaseLost:
+            pass  # Another worker, a busy owner, or server capacity won admission.
         except asyncio.CancelledError:
             raise
         except Exception:
-            logger.exception("grading worker tick failed")
-        await asyncio.sleep(interval)
+            logger.exception("grading run failed; run_id=%s", run_id)
+
+    try:
+        while True:
+            running = {key: task for key, task in running.items() if not task.done()}
+            try:
+                for run_id in poll_queued_runs():
+                    if len(running) >= limit:
+                        break
+                    if run_id not in running:
+                        running[run_id] = asyncio.create_task(dispatch(run_id))
+            except Exception:
+                logger.exception("grading worker tick failed")
+            await asyncio.sleep(interval)
+    finally:
+        for task in running.values():
+            task.cancel()
+        await asyncio.gather(*running.values(), return_exceptions=True)
 
 
 def start_run(
@@ -385,8 +405,16 @@ async def process_run(*, run_id: str, worker_id: str, registry=None, language: s
             reused_pairs.add((preserved.submission_revision_id, preserved.q_id))
             await reporter.increment_completed()
         retry_options = {"reused_pairs": reused_pairs} if frozen_setup and frozen_setup.input_manifest.get("retry_scope") == "failed_only" else {}
+        from backend.services.execution_control import run_controlled
+
+        def is_cancelled():
+            try:
+                return grading_repository.get_run(run_id=run_id).status == "cancelled"
+            except NotFound:
+                return True
+
         grading_task = asyncio.create_task(
-            grading_adapter.run_grading(
+            run_controlled(run_id, is_cancelled, grading_adapter.run_grading(
                 **retry_options,
                 run_id=run_id,
                 assignment_id=run.assignment_id,
@@ -397,7 +425,7 @@ async def process_run(*, run_id: str, worker_id: str, registry=None, language: s
                 language=language,
                 reporter=reporter,
                 grading_setup=grading_setup,
-            )
+            ))
         )
         done, _pending = await asyncio.wait(
             (grading_task, heartbeat_task),
@@ -416,6 +444,10 @@ async def process_run(*, run_id: str, worker_id: str, registry=None, language: s
             if heartbeat_error is not None:
                 raise heartbeat_error
             raise LeaseLost("grading_heartbeat_stopped")
+        if grading_task.cancelled():
+            if is_cancelled():
+                return  # A teacher stop must not terminate the shared poller.
+            raise asyncio.CancelledError()
         outcomes = grading_task.result()
         for outcome in outcomes:
             for res in outcome.results:
