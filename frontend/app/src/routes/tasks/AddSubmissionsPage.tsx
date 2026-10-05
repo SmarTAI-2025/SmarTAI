@@ -41,11 +41,21 @@ const IDENTITY_OPTIONS: Array<{ mode: SubmissionIdentityMode; label: MessageKey 
 
 export function AddSubmissionsPage() {
   const { taskId } = useParams();
+  return <AddSubmissionsLoader key={taskId} />;
+}
+
+function AddSubmissionsLoader() {
+  const { taskId } = useParams();
   const { locale } = useI18n();
+  const hydrated = useRef(false);
   const taskQuery = useTask(taskId, { refetchOnMount: "always" });
   const inputQuery = useWorkflowInput(taskId, "submissions", Boolean(taskQuery.data?.parse_job_id));
-  if (taskQuery.isLoading || (taskQuery.isFetching && !taskQuery.isFetchedAfterMount) || inputQuery.isLoading || (inputQuery.isFetching && !inputQuery.isFetchedAfterMount)) return <div role="status"><LoaderCircle className="animate-spin" /></div>;
-  if (inputQuery.isError) return <RecoverableActionState locale={locale} info={classifyRecoverableError(inputQuery.error, { locale })} workflowRecovery={{ retry: { onClick: () => void inputQuery.refetch() }, configurationHref: `/tasks/${taskId}/edit` }} />;
+  // Loading the newly submitted input must not unmount the active start handler.
+  if (!hydrated.current) {
+    if (taskQuery.isLoading || (taskQuery.isFetching && !taskQuery.isFetchedAfterMount) || inputQuery.isLoading || (inputQuery.isFetching && !inputQuery.isFetchedAfterMount)) return <div role="status"><LoaderCircle className="animate-spin" /></div>;
+    if (inputQuery.isError) return <RecoverableActionState locale={locale} info={classifyRecoverableError(inputQuery.error, { locale })} workflowRecovery={{ retry: { onClick: () => void inputQuery.refetch() }, configurationHref: `/tasks/${taskId}/edit` }} />;
+    hydrated.current = true;
+  }
   return <AddSubmissionsForm key={taskId} taskQuery={taskQuery} submittedInput={inputQuery.data?.input} />;
 }
 
