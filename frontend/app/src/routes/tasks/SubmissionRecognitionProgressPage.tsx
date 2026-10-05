@@ -51,7 +51,9 @@ export function SubmissionRecognitionProgressPage() {
   const [refreshing, setRefreshing] = useState(false);
   const retrying = useRef(false);
   const taskState = progressQuery.data ?? taskQuery.data;
-  const incomplete = submissionRecognitionIncomplete(taskState) || submissionRecognitionIncomplete(taskQuery.data);
+  // Status and file outcomes must come from the same snapshot. The detail cache
+  // can still contain processing/failed files after the polled job has finished.
+  const incomplete = submissionRecognitionIncomplete(taskState);
   const failedJobId = taskState?.last_failed_job_id ?? (incomplete ? taskState?.parse_job_id : null);
   const providerId = providerChoice && providerChoice.jobId === failedJobId ? providerChoice.id : taskState?.submission_recognition_provider_id ?? "";
   const uncertain = taskState?.error === "provider_submit_uncertain" || getAPIErrorCode(retryError) === "provider_submit_uncertain";
@@ -98,8 +100,8 @@ export function SubmissionRecognitionProgressPage() {
   };
   const progressFailure = retryError ?? progressQuery.progress?.error_detail
     ?? [...(progressQuery.progress?.messages ?? [])].reverse().find((event) => event.level === "error")?.message
-    ?? taskQuery.data?.error
-    ?? taskQuery.data?.submission_sources?.find(source => source.status === "failed")?.reason_code
+    ?? taskState?.error
+    ?? taskState?.submission_sources?.find(source => source.status === "failed")?.reason_code
     ?? progressQuery.error
     ?? taskQuery.error;
 
