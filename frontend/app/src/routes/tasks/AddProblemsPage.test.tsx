@@ -368,6 +368,8 @@ describe("page draft navigation", () => {
 
   it("reuses a successful preflight after returning and clears on submit", async () => {
     const user = userEvent.setup(); const router = renderPage();
+    const routeErrors: unknown[] = [];
+    const unsubscribe = router.subscribe(state => { if (state.errors) routeErrors.push(state.errors); });
     preflightMutateAsync.mockResolvedValue({ source_token: "prepared-1", source: { stored_file_id: "file-1" } });
     startMutateAsync.mockRejectedValueOnce(new APIError(503, "try later"));
     await uploadProblemFile(user);
@@ -381,6 +383,8 @@ describe("page draft navigation", () => {
     expect(preflightMutateAsync).toHaveBeenCalledTimes(1); expect(startMutateAsync).toHaveBeenCalledTimes(2);
     await act(async () => { await router.navigate(-1); });
     expect(screen.queryByText("questions.pdf")).not.toBeInTheDocument();
+    unsubscribe();
+    expect(routeErrors).toEqual([]);
   });
 
   it("does not copy local files to another task and discards explicitly", async () => {
