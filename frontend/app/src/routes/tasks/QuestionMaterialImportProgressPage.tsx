@@ -39,9 +39,10 @@ export function QuestionMaterialImportProgressPage() {
         {materialImportText(locale, "progressTitle")}
       </h1>
       <NewTaskStepper currentStep={2} />
+      <div className="mx-auto mt-[45px] w-full max-w-[800px]">
       <TaskExecutionStatus taskId={taskId} jobId={jobId} onChanged={() => importQuery.refetch()} />
 
-      <section className="mx-auto mt-[45px] w-full max-w-[800px] rounded-[10px] border bg-card px-6 py-7 sm:min-h-[390px] sm:px-10 sm:py-9">
+      <section className="w-full rounded-[10px] border bg-card px-6 py-7 sm:min-h-[390px] sm:px-10 sm:py-9">
         <div className="text-center">
           {hasError ? (
             <Circle aria-hidden="true" className="mx-auto h-8 w-8 text-danger" />
@@ -117,6 +118,7 @@ export function QuestionMaterialImportProgressPage() {
         </div>
       </section>
       <span className="sr-only">{taskId}</span>
+      </div>
     </div>
   );
 }
