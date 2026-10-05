@@ -182,7 +182,11 @@ export function useDraftProtection<T extends object>({ scope, value, onRestore, 
       return { write, commit: () => {
         if (disposed.current || capturedIncarnation !== incarnation.current || epoch.current !== draftGeneration()) return;
         load.current = { value: snapshot, record: write.record, epoch: write.record.epoch, notice: null };
-        saved.current = snapshotFingerprint; setSavedAt(write.record.savedAt); setNotice("草稿已保存。");
+        saved.current = snapshotFingerprint;
+        // Navigation continues after the durable write, before React may render.
+        // Publish the same saved snapshot to imperative guards immediately.
+        state.current.savedAt = write.record.savedAt;
+        setSavedAt(write.record.savedAt); setNotice("草稿已保存。");
       } };
     },
   };
