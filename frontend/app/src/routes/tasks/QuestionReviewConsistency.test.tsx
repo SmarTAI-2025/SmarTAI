@@ -40,7 +40,7 @@ it.each(["zh-CN", "en-US"])("synchronizes cells, counts and queue after confirmi
   client.clear();
 });
 
-it("keeps ordinary responses green and clears confirmed response risk from the queue and count", async () => {
+it("counts ordinary and flagged pending responses consistently, then clears both after confirmation", async () => {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } });
   const flagged = { q_id: "Q1", number: "1", type: "short", content: "literal student answer", flag: ["recognition_needs_review"], review_status: "pending" as const };
   client.setQueryData(taskKeys.detail("T"), { task_id: "T", status: "submissions_ready", workflow_revision: 1,
@@ -54,8 +54,9 @@ it("keeps ordinary responses green and clears confirmed response risk from the q
     q_id: "Q1", workflow_revision: student === "S1" ? 2 : 3, answer: { ...flagged, review_status: "confirmed" } }));
   render(<QueryClientProvider client={client}><I18nProvider><MemoryRouter initialEntries={["/tasks/T/submissions"]}><Routes><Route path="/tasks/:taskId/submissions" element={<SubmissionReviewOverviewPage />} /></Routes></MemoryRouter></I18nProvider></QueryClientProvider>);
   const queue = screen.getByRole("region", { name: "待复核队列" });
-  expect(within(queue).getAllByRole("link")).toHaveLength(1);
-  expect(screen.getByRole("link", { name: /^已识别/ })).toHaveClass("bg-emerald-100");
+  expect(within(queue).getAllByRole("link")).toHaveLength(2);
+  expect(screen.getByText("待复核题次").parentElement).toHaveTextContent("2");
+  expect(screen.getByRole("link", { name: /^待确认/ })).toHaveClass("bg-emerald-100");
   expect(screen.getByRole("link", { name: /^待复核/ })).toHaveClass("bg-red-100");
   await userEvent.click(screen.getByRole("button", { name: "全部确认" }));
   await waitFor(() => expect(screen.getByRole("button", { name: "已确认" })).toBeDisabled());

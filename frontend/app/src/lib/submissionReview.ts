@@ -84,6 +84,10 @@ export function getAnswerState(answer?: StudentAnswerInfo): SubmissionAnswerStat
   return "recognized";
 }
 
+export function answerNeedsConfirmation(answer?: StudentAnswerInfo): boolean {
+  return Boolean(answer && (answer.review_status !== "confirmed" || answerReviewBlocked(answer)));
+}
+
 export function getSubmissionReviewStats(
   students: StudentSubmission[],
   questions: SubmissionQuestion[],
@@ -97,9 +101,8 @@ export function getSubmissionReviewStats(
     const answers = new Map((student.stu_ans ?? []).map((answer) => [answer.q_id, answer]));
     for (const question of questions) {
       const answer = answers.get(question.id);
-      const state = getAnswerState(answer);
       if (answer?.content?.trim()) answeredCells += 1;
-      if (state === "flagged") reviewCells += 1;
+      if (answerNeedsConfirmation(answer)) reviewCells += 1;
     }
   }
 
@@ -154,7 +157,7 @@ export function selectSubmissionReview(
 
     const answers = new Map((student.stu_ans ?? []).map((answer) => [answer.q_id, answer]));
     const states = scopedQuestions.map((question) => getAnswerState(answers.get(question.id)));
-    if ((filter === "review" || wantsReview) && !identityNeedsReview && !states.some((state) => state === "flagged")) return false;
+    if ((filter === "review" || wantsReview) && !identityNeedsReview && !scopedQuestions.some(question => answerNeedsConfirmation(answers.get(question.id)))) return false;
     if ((filter === "missing" || wantsMissing) && !states.some((state) => state === "missing" || state === "empty")) return false;
     if (wantsRecognized && !states.some((state) => state === "recognized")) return false;
 
@@ -187,7 +190,7 @@ export function answerMap(student: StudentSubmission): Map<string, StudentAnswer
 export function studentNeedsAttention(student: StudentSubmission, questions: SubmissionQuestion[]): boolean {
   if (student.identity_status === "needs_review") return true;
   const answers = answerMap(student);
-  return questions.some((question) => getAnswerState(answers.get(question.id)) === "flagged");
+  return questions.some((question) => answerNeedsConfirmation(answers.get(question.id)));
 }
 
 function compareStudents(

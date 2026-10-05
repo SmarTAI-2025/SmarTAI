@@ -2,14 +2,14 @@ import { describe, expect, it } from "vitest";
 import { formatSubmissionFlag, getAnswerState, getSubmissionReviewStats, selectSubmissionReview } from "./submissionReview";
 
 describe("OCR review labels", () => {
-  it("counts and filters actual uncertainty while keeping optional checks out of the queue", () => {
+  it("counts every unconfirmed answer, including optional checks and genuine blanks", () => {
     const questions = ["q1", "q2", "q3", "q4"].map(id => ({ id, label: id, type: "", stem: "" }));
     const students = [{ stu_id: "s1", stu_name: "Sample", identity_status: "matched" as const, stu_ans: [
       { q_id: "q1", number: "q1", type: "short", content: "normal", flag: ["external_annotation_present"] },
       { q_id: "q2", number: "q2", type: "short", content: "", flag: [] },
       { q_id: "q3", number: "q3", type: "short", content: "uncertain", flag: ["recognition_needs_review"] },
     ] }];
-    expect(getSubmissionReviewStats(students, questions).reviewCells).toBe(1);
+    expect(getSubmissionReviewStats(students, questions).reviewCells).toBe(3);
     expect(getAnswerState(students[0].stu_ans[0])).toBe("recognized");
     expect(selectSubmissionReview(students, questions, "", "review", "student_id").students).toHaveLength(1);
     const confirmed = [{ ...students[0], stu_ans: students[0].stu_ans.map(a => ({ ...a, review_status: "confirmed" as const })) }];
