@@ -358,6 +358,10 @@ class RetryQuestionPreparationRequest(BaseModel):
     use_current_configuration: bool = Field(default=False, strict=True)
 
 
+class ManualQuestionPreparationRequest(BaseModel):
+    expected_workflow_revision: int = Field(ge=0)
+
+
 def _question_preparation_input_hash(
     *,
     ordered_source_inputs: Sequence[Mapping[str, Any]],
@@ -1844,6 +1848,42 @@ async def _start_question_preparation(
             "recognition_provider_id": recognition_provider_id,
             "workflow_revision": claimed_revision,
         }
+    except DomainError as exc:
+        return domain_error_response(exc)
+
+
+@router.post("/{task_id}/question-preparation/{job_id}/manual-review")
+async def manually_complete_question_preparation(
+    task_id: str, job_id: str, request: ManualQuestionPreparationRequest,
+    current: User = Depends(require_teacher),
+):
+    from backend.services.question_preparation_manual import recover_manual_question_packages
+    try:
+        workflow = workflow_repository.get_live_workflow(task_id, owner_id=current.id)
+        failed = workflow_repository.get_operation(job_id, owner_id=current.id)
+        if failed.assignment_id != task_id or failed.operation_type != "question_preparation":
+            raise NotFound("question_preparation")
+        if (failed.status != "error" or workflow.last_failed_job_id != failed.id
+                or workflow.active_job_id):
+            raise InvalidTransition("Only the latest failed preparation can be completed manually.",
+                                    code="question_preparation_manual_unavailable")
+        if (workflow.workflow_revision != request.expected_workflow_revision
+                or workflow.workflow_revision != (failed.payload or {}).get("base_workflow_revision", -2) + 1):
+            raise VersionConflict("The task changed after question preparation.", code="stale_revision")
+        packages, missing = await run_in_threadpool(recover_manual_question_packages, failed)
+        revision = task_facade._replace_draft_questions(
+            task_id, current.id, packages, workflow.problem_file_name or "",
+            expected_workflow_revision=request.expected_workflow_revision,
+            replace_confirmed=bool((failed.payload or {}).get("replace_confirmed")),
+            operation_id=failed.id, expected_operation_attempt=failed.attempt,
+            expected_checkpoint_revision=failed.checkpoint_revision,
+            operation_checkpoint={**(failed.checkpoint or {}), "manual_completion_question_ids": missing},
+            operation_artifact_refs=failed.artifact_refs,
+            recognition_provider_id=(failed.payload or {}).get("recognition_provider_id"),
+            manual_recovery=True,
+        )
+        return {"status": "ready_for_review", "task_id": task_id,
+                "workflow_revision": revision, "first_question_id": missing[0]}
     except DomainError as exc:
         return domain_error_response(exc)
 

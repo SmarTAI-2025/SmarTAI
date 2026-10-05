@@ -6,6 +6,8 @@ import { ProblemRecognitionProgressPage } from "./ProblemRecognitionProgressPage
 vi.mock("@/api/hooks/experts", () => ({ useProviderCatalog: () => ({ data: [] }) }));
 
 const retryMutateAsync = vi.fn();
+const manualMutateAsync = vi.fn();
+let failedQuestions: string[] = [];
 const refetchTask = vi.fn();
 const refetchProgress = vi.fn();
 const failedTask = {
@@ -21,6 +23,7 @@ let snapshot = { ...failedTask };
 let isPolling = false;
 
 vi.mock("@/api/hooks", () => ({
+  useManuallyCompleteQuestionPreparation: () => ({ isPending: false, mutateAsync: manualMutateAsync }),
   useStageProviders: () => ({
     data: [
       {
@@ -59,6 +62,7 @@ vi.mock("@/hooks/useTaskProgress", () => ({
     error: null,
     isFetching: isPolling,
     progress: {
+      failed_question_ids: failedQuestions,
       error_detail: new APIError(422, "vision rejected", {
         detail: { code: snapshot.error },
       }),
@@ -81,6 +85,8 @@ describe("ProblemRecognitionProgressPage recovery", () => {
     task = { ...failedTask };
     snapshot = { ...failedTask };
     isPolling = false;
+    failedQuestions = [];
+    manualMutateAsync.mockReset().mockResolvedValue({ first_question_id: "q2", workflow_revision: 9 });
     retryMutateAsync.mockReset();
     refetchTask.mockReset();
     refetchProgress.mockReset();
@@ -88,6 +94,7 @@ describe("ProblemRecognitionProgressPage recovery", () => {
   });
 
   it("keeps retry idle during background status polls and only retries on click", async () => {
+    expect(manualMutateAsync).not.toHaveBeenCalled();
     const page = <MemoryRouter initialEntries={["/tasks/question-task/problems/progress"]}><Routes>
       <Route path="/tasks/:taskId/problems/progress" element={<ProblemRecognitionProgressPage />} />
     </Routes></MemoryRouter>;
@@ -103,6 +110,20 @@ describe("ProblemRecognitionProgressPage recovery", () => {
     expect(retryMutateAsync).not.toHaveBeenCalled();
     fireEvent.click(retry);
     await waitFor(() => expect(retryMutateAsync).toHaveBeenCalledTimes(1));
+  });
+
+  it("offers explicit manual completion beside retry and opens the failed question editor", async () => {
+    failedQuestions = ["q2"];
+    render(<MemoryRouter initialEntries={["/tasks/question-task/problems/progress"]}><Routes>
+      <Route path="/tasks/:taskId/problems/progress" element={<ProblemRecognitionProgressPage />} />
+      <Route path="/tasks/:taskId/questions/q2/content" element={<div>Failed question editor</div>} />
+    </Routes></MemoryRouter>);
+    expect(screen.getByRole("button", { name: "重试失败项" })).toBeEnabled();
+    expect(manualMutateAsync).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "手动补全失败题目" }));
+    expect(await screen.findByText("Failed question editor")).toBeInTheDocument();
+    expect(manualMutateAsync).toHaveBeenCalledWith({ taskId: "question-task", jobId: "failed-question-job", expectedWorkflowRevision: 8 });
+    expect(retryMutateAsync).not.toHaveBeenCalled();
   });
 
   it.each([false, true])("retries preserved sources with a frozen provider (stale detail: %s)", async (staleDetail) => {

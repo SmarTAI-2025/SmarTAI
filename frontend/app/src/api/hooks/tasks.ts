@@ -259,6 +259,12 @@ export function useRetryQuestionPreparation() {
   });
 }
 
+export function useManuallyCompleteQuestionPreparation() {
+  const queryClient = useQueryClient();
+  return useMutation({ mutationFn: tasksApi.manuallyCompleteQuestionPreparation,
+    onSuccess: (_data, variables) => invalidateTask(queryClient, variables.taskId) });
+}
+
 export function useUploadReference() {
   return useTaskUploadMutation((taskId, file, options) => tasksApi.uploadReference(taskId, file, options));
 }

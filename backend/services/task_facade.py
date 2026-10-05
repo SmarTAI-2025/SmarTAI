@@ -2045,6 +2045,7 @@ def _replace_draft_questions(
     operation_artifact_refs: list[str] | None = None,
     operation_checkpoint_stage: str = "completed",
     recognition_provider_id: str | None = None,
+    manual_recovery: bool = False,
 ) -> int:
     """Atomically CAS the workflow and replace the complete draft question set."""
     now = time.time()
@@ -2075,7 +2076,7 @@ def _replace_draft_questions(
                 session, task_id=task_id, owner_id=owner_id,
                 operation_id=operation_id,
                 expected_operation_attempt=expected_operation_attempt,
-                expected_statuses=("running",),
+                expected_statuses=("error",) if manual_recovery else ("running",),
                 expected_lease_token=expected_lease_token,
                 expected_checkpoint_revision=expected_checkpoint_revision,
             )
@@ -2124,6 +2125,9 @@ def _replace_draft_questions(
             workflow.active_operation != expected_active_operation
             or workflow.active_job_id != operation_id
         ):
+            _raise_stale_revision()
+        if manual_recovery and (operation is None or workflow.active_job_id
+                or workflow.last_failed_job_id != operation_id):
             _raise_stale_revision()
         workflow.workflow_revision += 1
         workflow.presentation_status = "problems_ready"
@@ -2218,6 +2222,13 @@ def _replace_draft_questions(
         assignment.published_at = None
         assignment.version += 1
         assignment.updated_at = now
+        if operation is not None and manual_recovery:
+            # Preserve the failed attempt and its diagnostic evidence. Only the
+            # teacher's workflow moves forward; this is not model success.
+            operation.checkpoint = validated_checkpoint
+            operation.checkpoint_revision += 1
+            operation.updated_at = now
+            return expected + 1
         if operation is not None:
             payload = dict(operation.payload or {})
             payload.update({"filename": filename, "problem_count": len(problem_data)})
@@ -3915,6 +3926,13 @@ def grading_readiness(
     warnings: list[str] = []
     if not questions:
         issues.append("questions_required")
+    for question in questions:
+        presentation = (question.source or {}).get("presentation") or {}
+        manual = [issue for issue in presentation.get("preparation_issues", [])
+                  if issue.get("code") == "manual_completion_required"]
+        if manual and (presentation.get("review_status") != "confirmed"
+                or _manual_question_fields_missing(question, presentation)):
+            issues.append("question_manual_completion_required")
     if not submissions:
         issues.append("submissions_required")
     if workflow.active_operation and workflow.active_operation != "grading":
@@ -3975,6 +3993,18 @@ def grading_readiness(
         "blocking_issues": ordered_issues,
         "warnings": list(dict.fromkeys(warnings)),
     }
+
+
+def _manual_question_fields_missing(question, presentation, patch=None):
+    patch = patch or {}
+    fields = {field for issue in presentation.get("preparation_issues", [])
+              if issue.get("code") == "manual_completion_required"
+              for field in (issue.get("details") or {}).get("required_fields", [])}
+    for field in fields:
+        value = patch.get(field, presentation.get(field) if field == "solution_code" else getattr(question, field, None))
+        if not value or (isinstance(value, str) and not value.strip()):
+            return True
+    return False
 
 
 def start_task_grading(
@@ -4338,24 +4368,36 @@ def update_problem(
             raise NotFound("question")
         source = dict(question.source or {})
         presentation = dict(source.get("presentation") or {})
+        manual_markers = [issue for issue in presentation.get("preparation_issues", [])
+                          if issue.get("code") == "manual_completion_required"]
         for key in (
             "review_status", "solution_code", "material_provenance",
             "ai_completion_provenance", "preparation_issues",
         ):
             if key in patch:
                 presentation[key] = patch[key]
-        fixed_fields = {field for key, field in {"stem": "stem", "reference_answer": "answer", "criterion": "rubric", "test_cases": "programming_tests"}.items() if patch.get(key)}
+        if manual_markers:
+            presentation["preparation_issues"] = [issue for issue in presentation.get("preparation_issues", [])
+                if issue.get("code") != "manual_completion_required"] + manual_markers
+            if substantive and patch.get("review_status") != "confirmed":
+                presentation["review_status"] = "needs_review"
+                presentation["preparation_issues"] = [
+                    {**issue, "status": "open"} if issue.get("code") == "manual_completion_required" else issue
+                    for issue in presentation["preparation_issues"]]
+        fixed_fields = {field for key, field in {"stem": "stem", "reference_answer": "answer", "criterion": "rubric", "test_cases": "programming_tests", "solution_code": "programming_tests"}.items() if patch.get(key)}
         if fixed_fields:
             presentation["preparation_issues"] = [
                 {**issue, "status": "resolved"} if issue.get("status") == "open"
                 and issue.get("field") in fixed_fields
+                and (not (issue.get("details") or {}).get("target")
+                     or patch.get(issue["details"]["target"]))
                 and issue.get("code") in {"parse_anomaly", "generation_failed", "recognition_partial", "recognition_needs_review", "low_confidence"}
                 else issue for issue in presentation.get("preparation_issues", [])
             ]
         if patch.get("review_status") == "confirmed":
             fields = set(patch.get("review_fields") or ["stem", "answer", "rubric", "programming_tests", "source", "max_score"])
             issues = presentation.get("preparation_issues", [])
-            if not str(patch.get("stem", question.stem) or "").strip() or any(
+            if _manual_question_fields_missing(question, presentation, patch) or not str(patch.get("stem", question.stem) or "").strip() or any(
                 issue.get("status") == "open" and issue.get("severity") == "blocking"
                 for issue in issues
             ):

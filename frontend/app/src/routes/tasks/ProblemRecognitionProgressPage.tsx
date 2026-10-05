@@ -8,7 +8,7 @@ import {
 import { useRef, useState, type ReactNode } from "react";
 import { APIError, getAPIErrorCode } from "@/api/client";
 import { Navigate, useNavigate, useParams } from "react-router-dom";
-import { useRetryQuestionPreparation, useStageProviders, useTask } from "@/api/hooks";
+import { useManuallyCompleteQuestionPreparation, useRetryQuestionPreparation, useStageProviders, useTask } from "@/api/hooks";
 import { SmarTAIMascot } from "@/components/brand/SmarTAIMascot";
 import { StageProviderSelect } from "@/components/models/StageProviderSelect";
 import { NewTaskStepper } from "@/components/new-task/NewTaskStepper";
@@ -47,6 +47,8 @@ export function ProblemRecognitionProgressPage() {
   const taskQuery = useTask(taskId);
   const expertsQuery = useStageProviders();
   const retryPreparation = useRetryQuestionPreparation();
+  const manualPreparation = useManuallyCompleteQuestionPreparation();
+  const [openingManual, setOpeningManual] = useState(false);
   const progressQuery = useTaskProgress(taskId);
   const [retryFailure, setRetryFailure] = useState<unknown>(null);
   const [isRefreshing, setIsRefreshing] = useState(false);
@@ -63,7 +65,7 @@ export function ProblemRecognitionProgressPage() {
     return <Navigate to={`/tasks/${taskId}/upload/problems`} replace />;
   }
 
-  if (taskId && status && QUESTION_WORKSPACE_STATUSES.has(status)) {
+  if (taskId && status && QUESTION_WORKSPACE_STATUSES.has(status) && !openingManual) {
     return <Navigate to={`/tasks/${taskId}/questions`} replace />;
   }
 
@@ -181,7 +183,24 @@ export function ProblemRecognitionProgressPage() {
               configurationHref: `/tasks/${taskId}/upload/problems`,
               configurationState: { imageRecoveryModel: recognitionProviderId },
             }}
-            additionalActions={[{ label: t("problemProgressRefresh"), onClick: () => void refresh(), busy: isRefreshing || retryPreparation.isPending }]}
+            additionalActions={[
+              ...((progressQuery.progress?.failed_question_ids?.length || Object.values(progressQuery.progress?.question_error_codes ?? {}).includes("provider_submit_uncertain")) && failedJobId ? [{
+                label: locale === "zh-CN" ? "手动补全失败题目" : "Complete failed questions manually",
+                busy: manualPreparation.isPending,
+                disabled: retryPreparation.isPending || openingManual,
+                onClick: async () => {
+                  if (openingManual || manualPreparation.isPending || taskState?.workflow_revision === undefined) return;
+                  setOpeningManual(true);
+                  setRetryFailure(null);
+                  try {
+                    const result = await manualPreparation.mutateAsync({ taskId, jobId: failedJobId,
+                      expectedWorkflowRevision: taskState.workflow_revision });
+                    navigate(`/tasks/${taskId}/questions/${encodeURIComponent(result.first_question_id)}/content?manual=1#question-${encodeURIComponent(result.first_question_id)}`, { replace: true });
+                  } catch (error) { setRetryFailure(error); setOpeningManual(false); }
+                },
+              }] : []),
+              { label: t("problemProgressRefresh"), onClick: () => void refresh(), busy: isRefreshing || retryPreparation.isPending },
+            ]}
           />
         </div>
       </ProgressPageFrame>
