@@ -972,6 +972,17 @@ export function classifyRecoverableError(
     };
   }
 
+  if (code === "operation_cancelled") {
+    return { title: tx(locale, "本次运行已停止", "This run has stopped"),
+      description: tx(locale, "按原配置继续未完成部分，保留已保存结果，并按新的提交时间重新排队。未完成的模型请求可能再次计费。", "Continue unfinished work with saved settings and results, rejoining the queue with a new submission time. Unfinished model requests may be billed again."),
+      actionLabel: tx(locale, "继续处理", "Continue processing"), actionKind: "retry", tone: "warning", technicalDetails };
+  }
+  if (code === "provider_quota_exceeded") {
+    return { title: tx(locale, "模型余额或可用额度已耗尽", "Model credits or quota exhausted"),
+      description: tx(locale, "本轮已停止，不会自动重试。请检查服务商余额与额度，恢复后主动重试，或切换模型。", "This run has stopped without automatic retries. Check provider credits and limits, then retry or switch models."),
+      actionLabel: tx(locale, "查看模型配置", "Model settings"), actionHref: "/settings/models", actionKind: "byok",
+      tone: "warning", showUsageLinks: true, technicalDetails };
+  }
   if (code === "provider_daily_quota_exceeded" || code === "shared_pool_daily_limit_reached") {
     return {
       title: tx(locale, "模型日额度已用完", "The model's daily quota is exhausted"),
@@ -994,8 +1005,8 @@ export function classifyRecoverableError(
       title: tx(locale, "模型限额暂时不可用", "The model rate limit is temporarily unavailable"),
       description: tx(
         locale,
-        `已按所设 RPM 排队，但服务商仍返回限流。它也可能限制每分钟 token、共享账户或日额度，当前返回信息不足以确定。多次等待仍失败时，请查看官网用量。可重试失败项，也可先切换模型；成功部分保留。${wait}`,
-        `Requests are paced by configured RPM, but the provider still reported a limit. Token limits, shared account traffic or daily quota may also apply; this response does not identify which. Check official usage if waiting repeatedly fails. Retry failed items or switch models; successful work is kept.${wait}`,
+        `服务商仍返回限流，本轮已停止，自动尝试最多 3 次。当前信息不足以确定是分钟限制还是日额度。可查看官网用量、切换模型，或按原配置重新排队；成功部分保留。${wait}`,
+        `The provider still reports a limit. This run has stopped after at most 3 automatic attempts. The response does not identify a minute or daily limit. Check usage, switch models, or rejoin the queue with the same settings; saved results are kept.${wait}`,
       ),
       actionLabel: tx(locale, "重新尝试", "Try again"),
       actionKind: "retry",

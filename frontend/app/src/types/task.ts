@@ -307,6 +307,7 @@ export interface TaskStateSnapshot extends TaskLite {
   progress?: JobProgress | null;
   active_job_id?: string | null;
   active_operation_status?: string | null;
+  queue_reason?: "user_busy" | "server_busy" | null;
   active_operation?:
     | "question_preparation"
     | "problem_extraction"

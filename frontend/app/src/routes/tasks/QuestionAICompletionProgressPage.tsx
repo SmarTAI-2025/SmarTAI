@@ -6,6 +6,8 @@ import { getAPIErrorCode, normalizeAPIError } from "@/api/client";
 import { useAICompletionJob } from "@/api/hooks";
 import { taskKeys } from "@/api/hooks/keys";
 import { NewTaskStepper } from "@/components/new-task/NewTaskStepper";
+import { TaskExecutionStatus } from "@/components/tasks/TaskExecutionStatus";
+import { executionProgressCopy } from "@/lib/executionProgressCopy";
 import { useI18n } from "@/i18n/I18nProvider";
 import type { Locale } from "@/i18n/messages";
 import { aiCompletionText } from "@/lib/aiCompletionCopy";
@@ -50,6 +52,7 @@ export function QuestionAICompletionProgressPage() {
   if (failed || completionQuery.isError) {
     return (
       <ProgressFrame locale={locale}>
+        <TaskExecutionStatus taskId={taskId} jobId={jobId} onChanged={() => completionQuery.refetch()} />
         <RecoveryState
           locale={locale}
           title={aiCompletionText(locale, failed ? "progressFailedTitle" : "progressReadFailedTitle")}
@@ -90,6 +93,7 @@ export function QuestionAICompletionProgressPage() {
 
   return (
     <ProgressFrame locale={locale}>
+      <TaskExecutionStatus taskId={taskId} jobId={jobId} onChanged={() => completionQuery.refetch()} />
       <section className="flex min-h-[430px] w-full min-w-0 flex-col rounded-[10px] border bg-card px-5 py-7 sm:px-10 sm:py-10" aria-live="polite" aria-busy="true">
         <header>
           <h2 className="text-[22px] font-bold leading-8 tracking-[-0.01em] text-foreground sm:text-2xl">{aiCompletionText(locale, "progressHeading")}</h2>
@@ -182,6 +186,8 @@ function completionStepState(index: number, completedSteps: number): "done" | "a
 }
 
 function localizeEvent(event: ProgressEvent, locale: Locale) {
+  const executionMessage = executionProgressCopy(event.message, locale);
+  if (executionMessage) return executionMessage;
   if (locale === "en-US") return event.message;
   const known: Record<string, string> = {
     "AI completion started": "SmarTAI 补全已开始",

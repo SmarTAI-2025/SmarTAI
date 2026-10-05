@@ -31,6 +31,20 @@ import type { SourceStorageUsage } from "@/types/sourcePreview";
 // frontend API compatibility point that should change.
 const BACKEND_COMPAT_GRADING_LANGUAGE = "en";
 
+export function stopTaskRun(taskId: string, jobId: string, revision: number) {
+  return postJSON<{ status: "stopped" | "already_finished"; job_id: string }>(
+    `/tasks/${encodeURIComponent(taskId)}/stop`,
+    { job_id: jobId, expected_workflow_revision: revision },
+  );
+}
+
+export function continueTaskRun(taskId: string, jobId: string, revision: number) {
+  return postJSON<{ status: "started" | "already_running"; job_id: string }>(
+    `/tasks/${encodeURIComponent(taskId)}/continue`,
+    { job_id: jobId, expected_workflow_revision: revision },
+  );
+}
+
 export function buildGradePayload(options: { multiSampleN?: number | null; expectedWorkflowRevision?: number; requestId?: string; retryScope?: "full_batch" | "failed_only" } = {}) {
   const payload: { language: string; multi_sample_n?: number; expected_workflow_revision?: number; request_id?: string; retry_scope?: "full_batch" | "failed_only" } = {
     language: BACKEND_COMPAT_GRADING_LANGUAGE,

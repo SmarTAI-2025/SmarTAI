@@ -12,6 +12,8 @@ import { useRetryQuestionPreparation, useStageProviders, useTask } from "@/api/h
 import { SmarTAIMascot } from "@/components/brand/SmarTAIMascot";
 import { StageProviderSelect } from "@/components/models/StageProviderSelect";
 import { NewTaskStepper } from "@/components/new-task/NewTaskStepper";
+import { TaskExecutionControls } from "@/components/tasks/TaskExecutionControls";
+import { executionProgressCopy } from "@/lib/executionProgressCopy";
 import { Button } from "@/components/ui/Button";
 import { RecoverableActionState } from "@/components/ui/RecoverableActionState";
 import { useTaskProgress } from "@/hooks/useTaskProgress";
@@ -128,7 +130,7 @@ export function ProblemRecognitionProgressPage() {
           jobId: failedJobId,
           recognitionProviderId,
           expectedWorkflowRevision: taskState.workflow_revision,
-          ...(submissionUncertain ? { acknowledgePossibleDuplicateCall: true } : {}),
+          ...(submissionUncertain || taskState.error === "operation_cancelled" ? { acknowledgePossibleDuplicateCall: true } : {}),
         });
         setAcknowledgedJobId(null);
         await refresh();
@@ -242,7 +244,7 @@ export function ProblemRecognitionProgressPage() {
       progress.total_steps > 0 &&
       typeof progress.completed_steps === "number",
   );
-  const percent = queued ? null : hasDeterminateProgress ? progressQuery.percent : null;
+  const percent = queued || progress?.model_waits?.length ? null : hasDeterminateProgress ? progressQuery.percent : null;
   const generationMetrics = progress?.stage_metrics ?? {};
   const generationTotal = generationMetrics.solution_total_questions ?? 0;
   const generationCompleted = Math.min(
@@ -261,6 +263,8 @@ export function ProblemRecognitionProgressPage() {
 
   return (
     <ProgressPageFrame title={t("problemProgressTitle")}>
+      <TaskExecutionControls taskId={taskId} state={progressQuery.data} progress={progress}
+        onChanged={() => Promise.all([taskQuery.refetch(), progressQuery.refetch()])} />
       <section
         className="flex min-h-[430px] w-full flex-col rounded-[10px] border bg-card px-5 py-7 sm:px-10 sm:py-10"
         aria-live="polite"
@@ -638,6 +642,8 @@ function localizeEvent(
   labels: Record<string, string>,
 ): string {
   const message = event.message.toLowerCase();
+  const executionMessage = executionProgressCopy(message, locale);
+  if (executionMessage) return executionMessage;
   const generating = /^generating materials for major question (\S+)$/.exec(message);
   if (generating) {
     const label = labels[generating[1]] ?? generating[1];
