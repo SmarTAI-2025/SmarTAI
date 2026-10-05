@@ -1,8 +1,15 @@
 import { test, expect, type Page } from "@playwright/test";
+import type { SubmissionSourceOutcome, SubmissionSourceSummary } from "../src/types";
 
 type Stage = "problems" | "submissions" | "grading";
 const paths = { problems: "upload/problems", submissions: "submissions/upload", grading: "grading/preflight" };
 const next = { problems: "questions", submissions: "submissions", grading: "review" };
+const submissionSource = (status: SubmissionSourceOutcome["status"]): SubmissionSourceOutcome => ({
+  source_id: "source-1", file_id: "file-1", file_name: "synthetic.txt", content_type: "text/plain", size_bytes: 20,
+  status, internal_status: status === "processing" ? "pending" : "parsed", retryable: false,
+  matched_answer_count: status === "processing" ? 0 : 1, unknown_question_ids: [], job_id: "new-job", attempt: 1, created_at: 1,
+  reason_code: status === "identity_needs_review" ? "identity_needs_review" : null,
+});
 
 // Real production router/query/draft lifecycles, synthetic API only: no model calls.
 async function fixture(page: Page, stage: Stage) {
@@ -15,7 +22,7 @@ async function fixture(page: Page, stage: Stage) {
   const problem = { q_id: "q1", number: "1", type: "short_answer", content: "What is 6 × 7?", max_score: 1,
     reference_answer: "42", criterion: "One point for 42.", review_status: "confirmed", flag: [] };
   const student = { stu_id: "s1", stu_name: "Synthetic student", identity_status: "matched", identity_review_status: "confirmed",
-    stu_ans: [{ q_id: "q1", content: "42", review_status: "confirmed", flag: [] }] };
+    stu_ans: [{ q_id: "q1", content: "42", review_status: "confirmed", flag: [] as string[] }] };
   const task = { task_id: "navigation-task", name: "自动跳转验证", status: stage === "problems" ? "draft" : stage === "submissions" ? "problems_ready" : "submissions_ready",
     workflow_revision: 1, extract_job_id: stage === "problems" ? null : "old-extract", parse_job_id: stage === "grading" ? "old-parse" : null,
     grading_job_id: null as string | null, active_job_id: null as string | null, active_operation_status: "pending",
@@ -23,7 +30,7 @@ async function fixture(page: Page, stage: Stage) {
     grading_setup_configured: stage === "grading", error: null, last_failed_job_id: null,
     problem_count: stage === "problems" ? 0 : 1, student_count: stage === "grading" ? 1 : 0,
     problem_data: stage === "problems" ? {} : { q1: problem }, student_data: stage === "grading" ? { s1: student } : {},
-    submission_sources: [], submission_source_summary: null, created_at: 1, updated_at: 1, kb_docs: {}, kb_doc_count: 0 };
+    submission_sources: [] as SubmissionSourceOutcome[], submission_source_summary: null as SubmissionSourceSummary | null, created_at: 1, updated_at: 1, kb_docs: {}, kb_doc_count: 0 };
   const setup = { schema_version: 1, selected_provider_ids: [provider.provider_id], primary_provider_id: provider.provider_id,
     aggregation_method: "single", multi_sample_n: 1, knowledge_scope: "none", strictness: 75, allow_partial_credit: true,
     feedback_tone: "neutral", feedback_length: "medium", feedback_language: "zh", suggest_corrections: true,
@@ -68,7 +75,11 @@ async function fixture(page: Page, stage: Stage) {
       task.status = stage === "problems" ? "extracting_problems" : stage === "submissions" ? "parsing_submissions" : "grading";
       task.active_job_id = "new-job"; task.workflow_revision += 1;
       if (stage === "problems") task.extract_job_id = "new-job";
-      if (stage === "submissions") task.parse_job_id = "new-job";
+      if (stage === "submissions") {
+        task.parse_job_id = "new-job";
+        task.submission_sources = [submissionSource("processing")];
+        task.submission_source_summary = { uploaded: 1, parsed: 0, failed: 0, identity_needs_review: 0, pending: 1 };
+      }
       if (stage === "grading") task.grading_job_id = "new-job";
       return json({ status: "started", task_id: task.task_id, job_id: "new-job", workflow_revision: task.workflow_revision });
     }
@@ -100,6 +111,13 @@ async function fixture(page: Page, stage: Stage) {
     task.status = stage === "problems" ? "problems_ready" : stage === "submissions" ? "submissions_ready" : "graded";
     task.active_job_id = null; task.problem_count = 1; task.problem_data = { q1: problem };
     if (stage !== "problems") { task.student_count = 1; task.student_data = { s1: student }; }
+    if (stage === "submissions") {
+      student.identity_status = "needs_review";
+      student.stu_ans[0].review_status = "pending";
+      student.stu_ans[0].flag = ["recognition_needs_review"];
+      task.submission_sources = [submissionSource("identity_needs_review")];
+      task.submission_source_summary = { uploaded: 1, parsed: 0, failed: 0, identity_needs_review: 1, pending: 0 };
+    }
     task.workflow_revision += 1;
   } };
 }
@@ -165,6 +183,11 @@ for (const stage of ["problems", "submissions", "grading"] as const) {
     run.complete();
     await expect(page).toHaveURL(new RegExp(`/${next[stage]}$`), { timeout: 10_000 });
     await expect(page.locator("main h1")).toBeVisible();
+    if (stage === "submissions") {
+      await expect(page.getByText("待确认：1 位学生身份、1 个作答题次")).toBeVisible();
+      await expect(page.getByRole("button", { name: "重试失败项", exact: true })).toHaveCount(0);
+      await page.screenshot({ path: `output/playwright/navigation-submissions-completed-needs-review.png`, fullPage: true });
+    }
     expect(await page.evaluate(() => (window as unknown as { navigationPaths: string[] }).navigationPaths.length)).toBeLessThan(8);
     await page.getByRole("link", { name: "历史任务", exact: true }).first().click();
     await page.getByRole("link", { name: "自动跳转验证", exact: true }).click();
