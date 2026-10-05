@@ -17,8 +17,11 @@ import random
 import re
 import math
 import time
+from contextlib import contextmanager
+from contextvars import ContextVar
+from dataclasses import dataclass
 from email.utils import parsedate_to_datetime
-from typing import Type, TypeVar, Optional, List, Dict, Any
+from typing import Type, TypeVar, Optional, List, Dict, Any, Callable
 
 from pydantic import BaseModel, ValidationError
 from langchain_core.messages import BaseMessage, SystemMessage, HumanMessage
@@ -55,6 +58,28 @@ class StructuredOutputInvalidError(ValueError):
     """Malformed model output, with no source content in the error message."""
 
     code = "provider_response_invalid"
+
+
+@dataclass
+class _AttemptBudget:
+    used: int = 0
+    waited: float = 0
+
+
+_attempt_budget: ContextVar[_AttemptBudget | None] = ContextVar("llm_attempt_budget", default=None)
+
+
+@contextmanager
+def llm_attempt_budget():
+    """Share the three-attempt ceiling across initial output and format repair."""
+    if _attempt_budget.get() is not None:
+        yield
+        return
+    token = _attempt_budget.set(_AttemptBudget())
+    try:
+        yield
+    finally:
+        _attempt_budget.reset(token)
 
 
 # ─── Exceptions ──────────────────────────────────────────────────────────────
@@ -861,9 +886,11 @@ def _retry_stop(retry_state) -> bool:
     outcome = retry_state.outcome
     exc = outcome.exception() if (outcome and outcome.failed) else None
     delay = float(getattr(retry_state, "upcoming_sleep", 0))
+    budget = _attempt_budget.get()
     stop = (
         retry_state.attempt_number >= _retry_limit()
-        or retry_state.idle_for + delay > float(settings.llm_retry_wait_budget_seconds)
+        or (budget is not None and budget.used >= _retry_limit())
+        or (budget.waited if budget is not None else retry_state.idle_for) + delay > float(settings.llm_retry_wait_budget_seconds)
         or ((isinstance(exc, RateLimitError) or getattr(exc, "retry_after", None) is not None)
             and delay > float(settings.llm_rate_limit_max_wait))
     )
@@ -885,9 +912,17 @@ async def _before_retry_attempt(retry_state) -> None:
     control = current_execution()
     if control is not None:
         await control.check(_retry_provider(retry_state))
+    budget = _attempt_budget.get()
+    if budget is not None:
+        if budget.used >= _retry_limit():
+            raise StructuredOutputInvalidError("The structured response attempt limit was reached.")
+        budget.used += 1
 
 
 async def _before_retry_sleep(retry_state) -> None:
+    budget = _attempt_budget.get()
+    if budget is not None:
+        budget.waited += float(retry_state.next_action.sleep)
     exc = retry_state.outcome.exception()
     if not isinstance(exc, RateLimitError):
         return
@@ -988,16 +1023,23 @@ async def structured_llm_call(
     #   1. Gemini's ainvoke uses gRPC which ignores HTTP_PROXY
     #   2. Not all providers support it equally
     #   3. Text + parse is more portable and debuggable
-    raw_response = await _ainvoke_with_retry(provider, messages)
-    parsed, raw_response = await parse_with_format_repair(provider, messages, raw_response, output_model)
+    with llm_attempt_budget():
+        raw_response = await _ainvoke_with_retry(provider, messages)
+        parsed, raw_response = await parse_with_format_repair(provider, messages, raw_response, output_model)
     return parsed, raw_response
 
 
-async def parse_with_format_repair(provider, messages, raw_response, output_model, *, invoke=None):
+async def parse_with_format_repair(provider, messages, raw_response, output_model, *, invoke=None, validate_output: Callable[[T], None] | None = None):
     """One schema-guided repair, shared by every provider; never invent a score."""
     try:
-        return extract_and_parse_json(raw_response.content, output_model), raw_response
+        parsed = extract_and_parse_json(raw_response.content, output_model)
+        if validate_output is not None:
+            validate_output(parsed)
+        return parsed, raw_response
     except StructuredOutputInvalidError:
+        budget = _attempt_budget.get()
+        if budget is not None and budget.used >= _retry_limit():
+            raise
         # Regenerate from the original evidence. Do not replay malformed output
         # as instructions, expose it in logs, or loop indefinitely.
         repair = HumanMessage(content=(
@@ -1012,4 +1054,7 @@ async def parse_with_format_repair(provider, messages, raw_response, output_mode
         corrected = replace(corrected, duration_ms=raw_response.duration_ms + corrected.duration_ms,
             input_tokens=None if raw_response.input_tokens is None or corrected.input_tokens is None else raw_response.input_tokens + corrected.input_tokens,
             output_tokens=None if raw_response.output_tokens is None or corrected.output_tokens is None else raw_response.output_tokens + corrected.output_tokens)
-        return extract_and_parse_json(corrected.content, output_model), corrected
+        parsed = extract_and_parse_json(corrected.content, output_model)
+        if validate_output is not None:
+            validate_output(parsed)
+        return parsed, corrected

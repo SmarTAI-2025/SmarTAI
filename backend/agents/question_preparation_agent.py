@@ -319,7 +319,7 @@ async def generate_major_question_materials(
                     requested_targets=targets_by_question[q_id],
                     test_case_count=test_case_count,
                     provider=provider,
-                    reporter=None,
+                    reporter=reporter,
                     manage_progress_lifecycle=False,
                 )
                 validated = _validate_major_question_candidates(
