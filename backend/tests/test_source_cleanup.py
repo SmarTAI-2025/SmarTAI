@@ -1151,44 +1151,47 @@ async def test_task_delete_cancels_nonterminal_workflow_operation(
         )
 
 
-def test_task_delete_tombstone_fences_producer_and_grading_heartbeats():
+@pytest.mark.parametrize("workload", ["recognition", "grading"])
+def test_task_delete_tombstone_fences_producer_and_grading_heartbeats(workload):
     seeded = _prepared_task()
-    operation, _ = workflow_repository.create_operation(
-        assignment_id=seeded["task_id"],
-        owner_id=seeded["owner_id"],
-        operation_type="submission_recognition",
-        input_hash=hashlib.sha256(b"heartbeat-delete-fence").hexdigest(),
-    )
-    running = workflow_repository.claim_operation(
-        operation.id,
-        owner_id=seeded["owner_id"],
-        worker_id="producer-before-delete",
-        lease_seconds=60,
-    )
-    # The prepared grading run is terminal; create a fresh queued run solely to
-    # exercise the grading lease gate.
-    grading = grading_repository.create_run(
-        seeded["task_id"], teacher_id=seeded["owner_id"], total_submissions=0
-    )
-    grading_repository.claim_lease(
-        grading.id, worker_id="grading-before-delete", lease_seconds=60
-    )
+    # Exercise each active lease separately: a user cannot run both at once.
+    if workload == "recognition":
+        operation, _ = workflow_repository.create_operation(
+            assignment_id=seeded["task_id"],
+            owner_id=seeded["owner_id"],
+            operation_type="submission_recognition",
+            input_hash=hashlib.sha256(b"heartbeat-delete-fence").hexdigest(),
+        )
+        running = workflow_repository.claim_operation(
+            operation.id,
+            owner_id=seeded["owner_id"],
+            worker_id="producer-before-delete",
+            lease_seconds=60,
+        )
+    else:
+        grading = grading_repository.create_run(
+            seeded["task_id"], teacher_id=seeded["owner_id"], total_submissions=0
+        )
+        grading_repository.claim_lease(
+            grading.id, worker_id="grading-before-delete", lease_seconds=60
+        )
 
     task_facade.delete_task(
         task_id=seeded["task_id"], owner_id=seeded["owner_id"]
     )
     with pytest.raises(LeaseLost):
-        workflow_repository.heartbeat_operation(
-            running.id,
-            owner_id=seeded["owner_id"],
-            worker_id="producer-before-delete",
-            lease_token=running.lease_token,
-            lease_seconds=60,
-        )
-    with pytest.raises(LeaseLost):
-        grading_repository.heartbeat(
-            grading.id, worker_id="grading-before-delete", lease_seconds=60
-        )
+        if workload == "recognition":
+            workflow_repository.heartbeat_operation(
+                running.id,
+                owner_id=seeded["owner_id"],
+                worker_id="producer-before-delete",
+                lease_token=running.lease_token,
+                lease_seconds=60,
+            )
+        else:
+            grading_repository.heartbeat(
+                grading.id, worker_id="grading-before-delete", lease_seconds=60
+            )
 
 
 def test_task_delete_tombstone_hides_and_closes_student_submission_access():

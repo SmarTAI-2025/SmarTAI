@@ -62,6 +62,10 @@ class StructuredOutputInvalidError(ValueError):
 class TransientLLMError(Exception):
     """Retryable error (timeout, 5xx, generic transient)."""
 
+    def __init__(self, message: str, retry_after: Optional[float] = None):
+        super().__init__(message)
+        self.retry_after = retry_after
+
 
 class RateLimitError(TransientLLMError):
     """Retryable rate-limit / quota error.
@@ -74,11 +78,6 @@ class RateLimitError(TransientLLMError):
     If no hint was returned, `retry_after` stays None and we fall back to a
     conservative 65-second cooldown plus jitter.
     """
-
-    def __init__(self, message: str, retry_after: Optional[float] = None):
-        super().__init__(message)
-        self.retry_after = retry_after
-
 
 class PermanentLLMError(Exception):
     """Non-retryable error (4xx auth, bad request)."""
@@ -205,7 +204,7 @@ def _classify_exception(e: Exception) -> Exception:
             # the same refusal.
             return PermanentLLMError(msg)
         if status_code in {500, 502, 503, 504}:
-            return TransientLLMError(msg)
+            return TransientLLMError(msg, retry_after=_provider_retry_after(e))
         if status_code == 429:
             retry_after = _provider_retry_after(e)
             return RateLimitError(
@@ -216,7 +215,7 @@ def _classify_exception(e: Exception) -> Exception:
     if any(k in lower for k in ["401", "403", "authentication", "unauthorized", "invalid api key"]):
         return PermanentLLMError(msg)
 
-    # Quota / rate limit / gateway overload — retryable with long waits.
+    # Quota / rate limit — retryable with long waits.
     if (
         "429" in lower
         or "rate limit" in lower
@@ -229,10 +228,10 @@ def _classify_exception(e: Exception) -> Exception:
 
     # Generic transient (timeout / 5xx / connection) — retryable.
     if any(k in lower for k in ["timeout", "timed out", "connection", "5xx", "internal", "upstream_unavailable"]):
-        return TransientLLMError(msg)
+        return TransientLLMError(msg, retry_after=_provider_retry_after(e))
 
     # Default: treat as transient (safer for flaky APIs).
-    return TransientLLMError(msg)
+    return TransientLLMError(msg, retry_after=_provider_retry_after(e))
 
 
 # ─── JSON repair (preserves behavior of backend/dependencies.py) ─────────────
@@ -827,7 +826,8 @@ def _retry_wait(retry_state) -> float:
 
     - On a rate limit: wait at least 65 seconds and at least Retry-After,
       plus 0.5-2s jitter. The stop predicate enforces the wait budget.
-    - On any other transient: exponential backoff (1, 2, 4 … capped at 30s).
+    - On any other transient: exponential backoff (1, 2, 4 … capped at 30s),
+      or a longer Retry-After hint. A 5xx hint does not make it a rate limit.
     """
     outcome = retry_state.outcome
     exc = outcome.exception() if (outcome and outcome.failed) else None
@@ -844,7 +844,7 @@ def _retry_wait(retry_state) -> float:
 
     # Generic transient: exponential 1, 2, 4, 8, ... cap 30s
     n = max(1, retry_state.attempt_number)
-    return float(min(30, 2 ** (n - 1)))
+    return max(float(min(30, 2 ** (n - 1))), float(getattr(exc, "retry_after", None) or 0))
 
 
 def _retry_provider(retry_state):
@@ -864,7 +864,8 @@ def _retry_stop(retry_state) -> bool:
     stop = (
         retry_state.attempt_number >= _retry_limit()
         or retry_state.idle_for + delay > float(settings.llm_retry_wait_budget_seconds)
-        or (isinstance(exc, RateLimitError) and delay > float(settings.llm_rate_limit_max_wait))
+        or ((isinstance(exc, RateLimitError) or getattr(exc, "retry_after", None) is not None)
+            and delay > float(settings.llm_rate_limit_max_wait))
     )
     if isinstance(exc, RateLimitError):
         from backend.services.execution_control import current_execution, provider_key
