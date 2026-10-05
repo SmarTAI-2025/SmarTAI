@@ -6,6 +6,7 @@ import { ProblemRecognitionProgressPage } from "./ProblemRecognitionProgressPage
 vi.mock("@/api/hooks", () => ({
   useStageProviders: () => ({ data: [], isError: false, isLoading: false }),
   useRetryQuestionPreparation: () => ({ isPending: false, mutateAsync: vi.fn() }),
+  useManuallyCompleteQuestionPreparation: () => ({ isPending: false, mutateAsync: vi.fn() }),
   useTask: () => ({
     data: { task_id: "task-1", status: "extracting_problems" },
     error: null,
