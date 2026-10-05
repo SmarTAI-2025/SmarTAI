@@ -6,8 +6,8 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, Navigate, useParams, useSearchParams } from "react-router-dom";
 import { useTask, useUpdateStudentAnswer, useUpdateStudentIdentity } from "@/api/hooks/tasks";
 import { getAPIErrorCode } from "@/api/client";
-import { Button } from "@/components/ui/Button";
 import { confirmSubmissionBatch } from "@/lib/submissionReviewBatch";
+import { answerNeedsConfirmation } from "@/lib/submissionReview";
 import { isWorkflowRevisionConflictCode } from "@/lib/taskActionGuards";
 import { TaskQueryBar } from "@/components/tasks/AskQueryBar";
 import { useTaskFilterIntent } from "@/hooks/useTaskFilterIntent";
@@ -86,8 +86,11 @@ export function SubmissionReviewOverviewPage() {
   const stats = useMemo(() => getSubmissionReviewStats(students, questions), [questions, students]);
   const pendingIdentities = students.filter((student) => student.identity_status === "needs_review");
   const pendingAnswers = students.flatMap((student) => (student.stu_ans ?? [])
-    .filter((answer) => answer.review_status !== "confirmed")
+    .filter(answerNeedsConfirmation)
     .map((answer) => ({ student, answer })));
+  const pendingReviews: Array<{ student: StudentSubmission; answer?: StudentAnswerInfo }> = [
+    ...pendingIdentities.map(student => ({ student })), ...pendingAnswers,
+  ];
   const smartFilter = useTaskFilterIntent({
     taskId, surface: "submission_review",
     resolveLocal: (value) => resolveSubmissionQuery(students, questions, value),
@@ -141,24 +144,21 @@ export function SubmissionReviewOverviewPage() {
     ? buildSubmissionQueueItems(selection.students, selection.questions, taskId, returnSearch)
     : [];
 
-  async function confirmAll(kind: "identity" | "answers") {
-    if (!taskId || !taskQuery.data || (kind === "identity" && taskQuery.data.status !== "submissions_ready") || batchLock.current) return;
-    if (kind === "answers") { const issues = submissionReviewBlockers(taskQuery.data, locale); if (issues.length) { setBlocked(issues); return; } }
+  async function confirmAll() {
+    if (!taskId || !taskQuery.data || batchLock.current) return;
+    const issues = submissionReviewBlockers(taskQuery.data, locale);
+    if (issues.length) { setBlocked(issues); return; }
     batchLock.current = true;
     setBatchResult(null);
-    const total = kind === "identity" ? pendingIdentities.length : pendingAnswers.length;
+    const total = pendingReviews.length;
     setBatchProgress({ completed: 0, total });
     try {
       const progress = (completed: number) => setBatchProgress({ completed, total });
       const revision = taskQuery.data.workflow_revision;
-      const result = kind === "identity"
-        ? await confirmSubmissionBatch(pendingIdentities, revision, (student, expectedWorkflowRevision) => identityMutation.mutateAsync({
-          taskId, currentStudentId: student.stu_id, studentId: student.stu_id, studentName: student.stu_name, expectedWorkflowRevision,
-        }), progress)
-        : await confirmSubmissionBatch(pendingAnswers, revision, ({ student, answer }, expectedWorkflowRevision) => answerMutation.mutateAsync({
-          taskId, studentId: student.stu_id, qId: answer.q_id, reviewStatus: "confirmed", expectedWorkflowRevision,
-        }), progress);
-      const unit = kind === "identity" ? (locale === "zh-CN" ? "位学生身份" : "student identities") : (locale === "zh-CN" ? "份作答" : "responses");
+      const result = await confirmSubmissionBatch(pendingReviews, revision, ({ student, answer }, expectedWorkflowRevision) => answer
+        ? answerMutation.mutateAsync({ taskId, studentId: student.stu_id, qId: answer.q_id, reviewStatus: "confirmed", expectedWorkflowRevision })
+        : identityMutation.mutateAsync({ taskId, currentStudentId: student.stu_id, studentId: student.stu_id, studentName: student.stu_name, expectedWorkflowRevision }), progress);
+      const unit = locale === "zh-CN" ? "项" : "items";
       if (result.error) {
         const code = getAPIErrorCode(result.error);
         const reason = isWorkflowRevisionConflictCode(code)
@@ -167,10 +167,10 @@ export function SubmissionReviewOverviewPage() {
             ? (locale === "zh-CN" ? "任务正在处理，请完成后再试。" : "The task is busy. Retry after it finishes.")
             : (locale === "zh-CN" ? "确认失败，请打开未完成的记录检查后重试。" : "Confirmation failed. Open the unfinished record and retry.");
         const failed = result.failedItem;
-        const target = failed && "student" in failed ? failed.student : failed;
+        const target = failed?.student;
         setBatchResult({
           message: locale === "zh-CN" ? `已确认 ${result.completed} ${unit}，剩余 ${result.remaining} 项未确认。${reason}` : `Confirmed ${result.completed} ${unit}; ${result.remaining} remain. ${reason}`,
-          href: target ? (kind === "identity" ? identityReviewPath(taskId, target.stu_id, returnSearch) : studentReviewPath(taskId, target.stu_id, failed && "answer" in failed ? failed.answer.q_id : "", returnSearch)) : undefined,
+          href: target ? (failed?.answer ? studentReviewPath(taskId, target.stu_id, failed.answer.q_id, returnSearch) : identityReviewPath(taskId, target.stu_id, returnSearch)) : undefined,
         });
         await taskQuery.refetch();
       } else {
@@ -230,9 +230,7 @@ export function SubmissionReviewOverviewPage() {
         {taskQuery.data?.status === "submissions_ready" && students.length > 0 ? (
           <div className="mt-4 rounded-[10px] border bg-card p-4">
             <div className="flex flex-wrap items-center gap-2">
-              <Button type="button" variant="secondary" disabled={batchProgress !== null || !pendingIdentities.length} onClick={() => void confirmAll("identity")}>
-                <CheckCircle2 className="h-4 w-4" />{locale === "zh-CN" ? `一键确认全部身份（${pendingIdentities.length}）` : `Confirm all identities (${pendingIdentities.length})`}
-              </Button>
+              <p role="status" className="text-sm">{locale === "zh-CN" ? `待确认：${pendingIdentities.length} 位学生身份、${pendingAnswers.length} 个作答题次` : `Awaiting confirmation: ${pendingIdentities.length} identities, ${pendingAnswers.length} responses`}</p>
 
             </div>
             <p className="mt-2 text-xs text-muted-foreground">{locale === "zh-CN" ? "按当前识别内容确认全任务的记录，不修改姓名、学号或作答；缺失的作答不会标为已确认。" : "Confirms all records in this task as recognized without changing names, IDs or answers. Missing responses are excluded."}</p>
@@ -325,7 +323,7 @@ export function SubmissionReviewOverviewPage() {
                   : <>Showing {selection.students.length} of {students.length} {students.length === 1 ? "student" : "students"} · {selection.questions.length} of {questions.length} {questions.length === 1 ? "question" : "questions"}</>}
               </p>
               <div className="flex w-full flex-col gap-2 sm:w-auto sm:flex-row">
-                <ReviewConfirmButton locale={locale} all confirmed={!pendingAnswers.length && !submissionReviewBlockers(taskQuery.data, locale).length} busy={batchProgress !== null} onClick={() => void confirmAll("answers")} />
+                <ReviewConfirmButton locale={locale} all confirmed={!pendingReviews.length && !submissionReviewBlockers(taskQuery.data, locale).length} busy={batchProgress !== null} onClick={() => void confirmAll()} />
                 {detailStudent && detailQuestion ? (
                   <Link
                     to={studentReviewPath(taskId, detailStudent.stu_id, detailQuestion.id, returnSearch)}
@@ -667,14 +665,14 @@ function buildSubmissionQueueItems(
     const answers = answerMap(student);
     for (const question of questions) {
       const state = getAnswerState(answers.get(question.id));
-      if (state !== "flagged") continue;
+      if (!answerNeedsConfirmation(answers.get(question.id))) continue;
       items.push({
         key: `${student.stu_id}:${question.id}`,
         href: studentReviewPath(taskId, student.stu_id, question.id, returnSearch),
         studentId: student.stu_id,
         studentName: student.stu_name || student.stu_id,
         questionLabel: question.label,
-        reasonKey: reasonKeys[state],
+        reasonKey: state === "flagged" ? reasonKeys.flagged : "submissionReviewCellRecognized",
       });
     }
   }

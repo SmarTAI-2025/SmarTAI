@@ -44,21 +44,23 @@ describe("submission review confirmation", () => {
   it("confirms all identities with unchanged values and successive revisions, including filtered-out students", async () => {
     const user = userEvent.setup();
     renderPage();
-    await user.click(screen.getByRole("button", { name: "一键确认全部身份（3）" }));
+    await user.click(screen.getByRole("button", { name: "全部确认" }));
     await waitFor(() => expect(state.identity).toHaveBeenCalledTimes(3));
     expect(state.identity.mock.calls.map(([input]) => [input.currentStudentId, input.studentId, input.studentName, input.expectedWorkflowRevision]))
       .toEqual([["S001", "S001", "Student S001", 3], ["S002", "S002", "Student S002", 4], ["S003", "S003", "Student S003", 5]]);
-    expect(screen.getByText("已确认全部 3 位学生身份。")).toBeInTheDocument();
+    await waitFor(() => expect(state.answer).toHaveBeenCalledTimes(3));
+    expect(screen.getByText("已确认全部 6 项。")).toBeInTheDocument();
   });
 
   it("reports partial failure and links to the unfinished identity instead of claiming all confirmed", async () => {
     state.identity.mockResolvedValueOnce({ workflow_revision: 4 }).mockRejectedValueOnce(new Error("failed"));
     const user = userEvent.setup();
     renderPage();
-    await user.click(screen.getByRole("button", { name: "一键确认全部身份（3）" }));
+    await user.click(screen.getByRole("button", { name: "全部确认" }));
     await waitFor(() => expect(state.refetch).toHaveBeenCalledTimes(1));
     expect(state.identity).toHaveBeenCalledTimes(2);
-    expect(screen.getByText(/已确认 1 位学生身份，剩余 2 项未确认/)).toBeInTheDocument();
+    expect(screen.getByText(/已确认 1 项，剩余 5 项未确认/)).toBeInTheDocument();
+    expect(state.answer).not.toHaveBeenCalled();
     expect(screen.getByRole("link", { name: "打开未完成记录" })).toHaveAttribute("href", "/tasks/task-1/students/S002?identity=edit&returnParams=q%3DS001");
   });
 
@@ -67,7 +69,7 @@ describe("submission review confirmation", () => {
     renderPage();
     await user.click(screen.getByRole("button", { name: "全部确认" }));
     await waitFor(() => expect(state.answer).toHaveBeenCalledTimes(3));
-    expect(state.answer.mock.calls.map(([input]) => input.expectedWorkflowRevision)).toEqual([3, 4, 5]);
+    expect(state.answer.mock.calls.map(([input]) => input.expectedWorkflowRevision)).toEqual([6, 7, 8]);
     for (const [input] of state.answer.mock.calls) {
       expect(input.reviewStatus).toBe("confirmed");
       expect(input).not.toHaveProperty("content");
