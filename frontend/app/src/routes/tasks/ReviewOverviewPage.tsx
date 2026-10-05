@@ -33,7 +33,7 @@ export function ReviewOverviewPage() {
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
   const { locale } = useI18n();
-  const taskQuery = useTask(taskId);
+  const taskQuery = useTask(taskId, { refetchOnMount: "always" });
   const resultQuery = useTaskResult(taskId);
   const commentsQuery = useTeacherComments(taskId);
   const finalizationQuery = useTaskFinalization(taskId);
@@ -45,6 +45,9 @@ export function ReviewOverviewPage() {
   const urlQuery = searchParams.get("q") ?? "";
   const query = urlQuery.trim();
   const task = taskQuery.data;
+  // Progress polling can finish before the detail cache is refreshed. Wait for
+  // that read before redirecting back, just as the two recognition overviews do.
+  const readingCompletion = taskQuery.isFetching && task && !hasTaskReachedStep(task, 6);
   const model = useMemo(() => buildResultsModel(task, resultQuery.data), [resultQuery.data, task]);
   const reviewItems = useMemo(() => collectResultReviewItems(model, model.students).filter(item => !isCorrectionReviewConfirmed(item.correction)), [model]);
   const annotatedKeys = useMemo(() => {
@@ -86,12 +89,12 @@ export function ReviewOverviewPage() {
   }), [naturalSelection, headerSort.current?.key, headerSort.current?.direction, confirmedKeys, reviewItems]);
 
   const resolvingFailures = task?.status === "error" && task.last_failed_job_id === task.grading_job_id && searchParams.get("resolveFailures") === "1";
-  if (taskId && task && !hasTaskReachedStep(task, 6) && !resolvingFailures) {
+  if (taskId && task && !taskQuery.isFetching && !taskQuery.isError && !hasTaskReachedStep(task, 6) && !resolvingFailures) {
     if (task.status === "grading") return <Navigate replace to={`/tasks/${taskId}/grading/progress`} />;
     return <Navigate replace to={getTaskDestination(task)} />;
   }
 
-  const isLoading = taskQuery.isLoading || resultQuery.isLoading || finalizationQuery.isLoading;
+  const isLoading = taskQuery.isLoading || readingCompletion || resultQuery.isLoading || finalizationQuery.isLoading;
   const isError = taskQuery.isError || resultQuery.isError || finalizationQuery.isError;
   const pendingReviewItems = reviewItems.filter((item) => !confirmedKeys.has(reviewCellKey(item.student.id, item.question.id)));
   const blockingReviewItems = reviewItems.filter((item) => effectiveCorrectionScore(item.correction) === null);
