@@ -160,3 +160,52 @@ it("publishes a durable save to navigation guards before React rerenders", async
     expect(result.current.controller().dirty).toBe(false);
   });
 });
+
+
+it("beforeunload reads the committed draft before React flushes the save render", async () => {
+  const value = { name: "unsaved input" };
+  const { result } = renderHook(() => useDraftProtection({
+    scope: "unload-save-boundary", value, baseline: { name: "server" }, version: "1", onRestore: () => {},
+  }), { wrapper: ({ children }) => <PageDraftSession ownerId="draft-teacher"><DraftLeaveProvider>{children}</DraftLeaveProvider></PageDraftSession> });
+  await waitFor(() => expect(result.current.controller().loaded).toBe(true));
+  const before = new Event("beforeunload", { cancelable: true });
+  window.dispatchEvent(before);
+  expect(before.defaultPrevented).toBe(true);
+  const prepared = result.current.controller().prepare();
+  await act(async () => {
+    await store.writePageDrafts([prepared.write]);
+    prepared.commit();
+    const after = new Event("beforeunload", { cancelable: true });
+    window.dispatchEvent(after);
+    expect(after.defaultPrevented).toBe(false);
+  });
+});
+
+it("a canceled router blocker is not resumed by later formal-save completion", async () => {
+  const { router } = setup(); await ready(); type("business");
+  fireEvent.click(screen.getByText("next"));
+  await screen.findByRole("alertdialog");
+  const blocked = [...router.state.blockers.values()].find(item => item.state === "blocked");
+  expect(blocked?.state).toBe("blocked");
+  await act(async () => {
+    // Router cancellation and the business completion arrive before effects flush.
+    if (blocked?.state === "blocked") blocked.reset();
+    fireEvent.click(screen.getByText("run formal"));
+  });
+  await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+  expect(router.state.errors).toBeNull();
+  expect(router.state.location.pathname).toBe("/");
+  expect(screen.getByLabelText("name")).toHaveValue("business");
+  expect(screen.queryByRole("alertdialog")).toBeNull();
+});
+
+it("repeated blocked route clicks keep the first destination and resume only once", async () => {
+  const { router } = setup(); await ready(); type("business");
+  fireEvent.click(screen.getByText("next"));
+  await screen.findByRole("alertdialog");
+  await act(async () => { await router.navigate("/next?later=1"); });
+  fireEvent.click(screen.getByRole("button", { name: "暂存并离开" }));
+  await screen.findByText("destination");
+  expect(router.state.errors).toBeNull();
+  expect(router.state.location.search).toBe("");
+});

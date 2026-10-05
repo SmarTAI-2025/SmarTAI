@@ -60,10 +60,14 @@ export function DraftLeaveProvider({ children }: { children: ReactNode }) {
   const dirty = controllers.some((item) => item.dirty || item.busy);
   useEffect(() => {
     if (!dirty || expired) return;
-    function protect(event: BeforeUnloadEvent) { event.preventDefault(); event.returnValue = ""; }
+    function protect(event: BeforeUnloadEvent) {
+      // A durable write can finish before React removes this listener.
+      if (isSessionExpired() || !all().some((item) => item.dirty || item.busy)) return;
+      event.preventDefault(); event.returnValue = "";
+    }
     window.addEventListener("beforeunload", protect);
     return () => window.removeEventListener("beforeunload", protect);
-  }, [dirty, expired]);
+  }, [dirty, expired, all]);
   function finish(leave: boolean) {
     const original = pending.current; if (!original || savingRef.current) return;
     pending.current = null; setIntent(null); setError(null);
@@ -98,9 +102,21 @@ export function DraftLeaveProvider({ children }: { children: ReactNode }) {
 }
 function RouterLeaveGuard({ shouldBlock, ask }: { shouldBlock: () => boolean; ask: (run: () => void, cancel?: () => void) => void }) {
   const blocker = useBlocker(() => shouldBlock());
+  const dataRouter = useContext(UNSAFE_DataRouterContext);
   useEffect(() => {
-    if (blocker.state === "blocked") ask(() => blocker.proceed(), () => blocker.reset());
-  }, [blocker.state, blocker.location?.key, ask]);
+    if (blocker.state !== "blocked" || !dataRouter) return;
+    const router = dataRouter.router;
+    const entry = [...router.state.blockers.entries()].find(([, current]) => current === blocker);
+    // Router state updates synchronously; a render/effect may still hold the
+    // previous blocked object after another navigation has already cleared it.
+    if (!entry) return;
+    const [key] = entry;
+    const stillBlocked = () => router.state.blockers.get(key)?.state === "blocked";
+    ask(
+      () => { if (stillBlocked()) blocker.proceed(); },
+      () => { if (stillBlocked()) blocker.reset(); },
+    );
+  }, [blocker, dataRouter, ask]);
   return null;
 }
 export function DraftActions() {
