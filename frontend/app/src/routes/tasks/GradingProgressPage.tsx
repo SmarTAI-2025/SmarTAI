@@ -107,6 +107,7 @@ export function GradingProgressPage() {
         {copy(locale, "title")}
       </h1>
       <NewTaskStepper currentStep={5} />
+      <div className="mx-auto mt-[25px] w-full max-w-[940px]">
       <TaskExecutionControls taskId={taskId} state={state} progress={progress}
         onChanged={() => Promise.all([taskQuery.refetch(), progressQuery.refetch()])} />
 
@@ -121,7 +122,7 @@ export function GradingProgressPage() {
       ) : !status ? (
         <PageState title={copy(locale, "reading")} busy />
       ) : (
-        <div className="mx-auto mt-[25px] w-full max-w-[940px]">
+        <div>
           {status === "error" ? <p className="mb-4 text-sm text-muted-foreground">{locale === "zh-CN" ? "仅重试缺少有效结果的题次，保留成功结果及教师修改。可先在模型配置中调整模型；返回批改设置再开始会重新批改整批。" : "Retry only items without a valid result; keep successful results and teacher edits. You can adjust models first. Starting from grading settings reruns the full batch."}</p> : null}
           {status === "error" && recoveryInfo ? (
             <RecoverableActionState
@@ -196,6 +197,7 @@ export function GradingProgressPage() {
           )}
         </div>
       )}
+      </div>
     </div>
   );
 }
