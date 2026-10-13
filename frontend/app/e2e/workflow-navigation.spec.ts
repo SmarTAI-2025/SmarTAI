@@ -1,5 +1,5 @@
 import { test, expect, type Page } from "@playwright/test";
-import type { SubmissionSourceOutcome, SubmissionSourceSummary } from "../src/types";
+import type { ProblemInfo, SubmissionSourceOutcome, SubmissionSourceSummary } from "../src/types";
 
 type Stage = "problems" | "submissions" | "grading";
 const paths = { problems: "upload/problems", submissions: "submissions/upload", grading: "grading/preflight" };
@@ -19,8 +19,8 @@ async function fixture(page: Page, stage: Stage) {
   page.on("console", message => { if (message.type() === "error") errors.push(message.text()); });
   const provider = { provider_id: "test-provider", provider_type: "openai", model: "synthetic", enabled: true,
     is_default: true, is_shared: false, scope: "owner", editable: true, max_concurrent: 1, rpm: 10 };
-  const problem = { q_id: "q1", number: "1", type: "short_answer", stem: "What is 6 × 7?", max_score: 1,
-    reference_answer: "42", criterion: "One point for 42.", review_status: "confirmed", flag: [] };
+  const problem: ProblemInfo = { q_id: "q1", number: "1", type: "short_answer", stem: "What is 6 × 7?", max_score: 1,
+    reference_answer: "42", criterion: "One point for 42.", review_status: "confirmed" };
   const student = { stu_id: "s1", stu_name: "Synthetic student", identity_status: "matched", identity_review_status: "confirmed",
     stu_ans: [{ q_id: "q1", content: "42", review_status: "confirmed", flag: [] as string[] }] };
   const task = { task_id: "navigation-task", name: "自动跳转验证", status: stage === "problems" ? "draft" : stage === "submissions" ? "problems_ready" : "submissions_ready",
@@ -121,6 +121,18 @@ async function fixture(page: Page, stage: Stage) {
     task.workflow_revision += 1;
   } };
 }
+
+test("empty question text blocks both countdown and manual grading without a mutation", async ({ page }) => {
+  const run = await fixture(page, "grading");
+  run.task.problem_data.q1!.stem = "";
+  await page.goto("/tasks/navigation-task/grading/preflight");
+  await expect(page.getByText("题目存在关键缺项或冲突。请修正并确认后再开始批改。", { exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "立即开始批改", exact: true }).click();
+  await expect(page.getByRole("alertdialog")).toBeVisible();
+  await expect(page).toHaveURL(/\/grading\/preflight$/);
+  expect(run.calls).toEqual([]);
+  expect(run.errors).toEqual([]);
+});
 
 for (const mode of ["manual", "all"] as const) test(`${mode} identity and answer confirmations update the matrix and all-confirmed state immediately`, async ({ page }) => {
   const run = await fixture(page, "grading");

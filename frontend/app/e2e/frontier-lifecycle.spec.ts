@@ -1,4 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
+import type { ProblemInfo } from "../src/types";
 
 const backend = process.env.SMARTAI_E2E_BACKEND_URL ?? "http://127.0.0.1:8000";
 const task = {
@@ -11,7 +12,7 @@ const task = {
     review_status: "needs_review",
     solution_code: n === 4 ? "def answer(): return 42" : null,
     test_cases: n === 4 ? [{ input: "[]", expected_output: "42", description: "Synthetic test", source: "llm_generated", sandbox_feasible: true }] : null,
-  }])),
+  } satisfies ProblemInfo])),
   student_data: {},
 };
 
