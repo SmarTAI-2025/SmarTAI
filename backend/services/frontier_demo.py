@@ -45,24 +45,37 @@ def create_token(user: User, *, deadline: int | None = None) -> str:
     }, settings.jwt_secret, algorithm=settings.jwt_algorithm)
 
 
-def renew_token(token: str) -> tuple[User, str]:
-    """Expired access can renew its original owner within an absolute deadline."""
+def _session_owner(token: str, *, cleanup_only: bool = False) -> tuple[User, int]:
+    """Cleanup may outlive admission, but never signature or identity revocation."""
     from backend.state import get_user_store
     try:
         payload = jwt.decode(token, settings.jwt_secret, algorithms=[settings.jwt_algorithm],
                              options={"verify_exp": False, "require": ["sub", "iat", "exp", "session_exp"]})
         deadline = int(payload["session_exp"])
         user = get_user_store().get(payload["sub"])
-        if (not settings.frontier_demo_enabled or payload.get("scope") != "frontier_demo"
+        if (payload.get("scope") != "frontier_demo"
                 or payload.get("session_scope") != "public" or payload.get("role") != "teacher"
-                or deadline <= time.time() or not is_frontier_user(user)
+                or not is_frontier_user(user)
                 or not user.is_active or user.role != "teacher"
                 or payload.get("auth_version") != user.auth_version
-                or (user.auth_invalid_before is not None and float(payload["iat"]) <= user.auth_invalid_before)):
+                or (user.auth_invalid_before is not None and float(payload["iat"]) <= user.auth_invalid_before)
+                or (not cleanup_only and (not settings.frontier_demo_enabled or deadline <= time.time()))):
             raise _expired()
     except (jwt.InvalidTokenError, TypeError, ValueError, OverflowError):
         raise _expired() from None
-    return user.model_copy(update={"auth_scope": "frontier_demo"}), create_token(user, deadline=deadline)
+    return user.model_copy(update={"auth_scope": "frontier_demo"}), deadline
+
+
+def renew_token(token: str) -> tuple[User, str]:
+    """Expired access can renew its original owner within an absolute deadline."""
+    user, deadline = _session_owner(token)
+    return user, create_token(user, deadline=deadline)
+
+
+def cleanup_user(token: str) -> User:
+    """Resolve only the original owner for destruction; never issue credentials."""
+    user, _ = _session_owner(token, cleanup_only=True)
+    return user
 
 
 def _daily_row(session, now):

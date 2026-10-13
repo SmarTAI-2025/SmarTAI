@@ -108,6 +108,8 @@ configure the existing AWS service environment using the root `.env.example`:
 - Demo admission has its own durable global daily session, request and estimated
   input-token limits. Defaults are 20 sessions, 500 logical model calls and
   500,000 estimated input tokens, with a 5-second session issuance cooldown.
+  Daily limits reset at UTC midnight. Access tokens last 20 minutes by default
+  and can renew within the same guest session, up to its fixed two-hour limit.
   These are application admission limits, not provider billing totals.
 - Keep `SMARTAI_SHARED_POOL_ENABLED=false` for the normal BYOK teacher product.
   Enabling the demo does not enable teacher shared-model fallback. Setting

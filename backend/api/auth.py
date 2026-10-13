@@ -11,7 +11,7 @@ from fastapi.routing import APIRoute
 from fastapi.security.utils import get_authorization_scheme_param
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from backend.auth import get_current_user, get_task_user, hash_password, verify_password, request_session_scope, decode_token
+from backend.auth import get_current_user, get_task_user, get_frontier_cleanup_user, hash_password, verify_password, request_session_scope, decode_token
 from backend.config import settings
 from backend.db.auth_repository import (
     authenticate_and_create_session,
@@ -361,10 +361,8 @@ def create_frontier_demo_session(request: Request, response: Response):
 
 
 @router.post("/frontier-demo-session/end")
-def end_frontier_demo_session(response: Response, current: User = Depends(get_task_user)):
+def end_frontier_demo_session(response: Response, current: User = Depends(get_frontier_cleanup_user)):
     """Discard only this guest's tasks through the normal durable cleanup path."""
-    if current.auth_scope != "frontier_demo":
-        raise HTTPException(403, detail="Demo session required")
     from backend.services import task_facade
     tasks = task_facade.list_tasks(owner_id=current.id)
     for task_id in tasks:

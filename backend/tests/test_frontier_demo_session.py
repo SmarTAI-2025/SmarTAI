@@ -161,9 +161,11 @@ def test_expiry_disabled_readonly_and_private_admin_remain_enforced(enabled, mon
     assert private.post("/api/auth/frontier-demo-session").status_code == 404
     assert private.get("/api/auth/me", headers=headers(demo["token"])).status_code == 401
     assert private.post("/api/auth/refresh", headers=headers(demo["token"])).status_code == 404
+    assert private.post("/api/auth/frontier-demo-session/end", headers=headers(demo["token"])).status_code == 404
     owner = get_user_store()[demo["user"]["id"]]
     register_user(owner.model_copy(update={"is_read_only": True}))
     assert enabled.post("/tasks/", headers=headers(demo["token"]), json={"name": "denied"}).status_code == 403
+    assert enabled.post("/auth/frontier-demo-session/end", headers=headers(demo["token"])).status_code == 403
     register_user(owner.model_copy(update={"is_active": False}))
     assert enabled.get("/auth/me", headers=headers(demo["token"])).status_code == 401
     assert enabled.post("/auth/frontier-demo-session", headers=headers(demo["token"])).status_code == 401
@@ -193,7 +195,8 @@ def test_leaving_demo_deletes_only_guest_tasks_and_preserves_teacher_cookie(enab
     first, second = issue(enabled), issue(enabled)
     guest_task = task(enabled, first)
     other_guest_task = task(enabled, second)
-    assert enabled.post("/auth/frontier-demo-session/end", headers=headers(signed_in["token"])).status_code == 403
+    assert enabled.post("/auth/frontier-demo-session/end", headers=headers(signed_in["token"])).status_code == 401
+    assert enabled.post("/auth/frontier-demo-session/end").status_code == 401
     ended = enabled.post("/auth/frontier-demo-session/end", headers=headers(first["token"]))
     assert ended.status_code == 200, ended.text
     assert ended.json() == {"status": "ended", "cleanup": "queued", "tasks_removed": 1}
@@ -207,6 +210,66 @@ def test_leaving_demo_deletes_only_guest_tasks_and_preserves_teacher_cookie(enab
     assert enabled.get(f"/tasks/{other_guest_task['task_id']}", headers=headers(second["token"])).status_code == 200
     assert enabled.get("/auth/me", headers=headers(first["token"])).status_code == 401
     assert enabled.post("/auth/frontier-demo-session", headers=headers(first["token"])).status_code == 401
+
+
+@pytest.mark.parametrize("expiry", ["access", "absolute", "disabled"])
+def test_expired_demo_can_only_end_its_original_tasks(enabled, monkeypatch, expiry):
+    from backend.db.models import AssignmentRecord
+    demo = issue(enabled)
+    created = task(enabled, demo)
+    provider = registries._build_scoped_registry(get_user_store()[demo["user"]["id"]]).pick_default()
+    payload = decode_token(demo["token"])
+    payload.update(iat=time.time() - 8000, exp=time.time() - 100)
+    if expiry == "absolute":
+        payload["session_exp"] = time.time() - 1
+    if expiry == "disabled":
+        monkeypatch.setattr(settings, "frontier_demo_enabled", False)
+    expired = jwt.encode(payload, settings.jwt_secret, algorithm=settings.jwt_algorithm)
+    assert enabled.get(f"/tasks/{created['task_id']}", headers=headers(expired)).status_code == 401
+
+    def no_credentials(*args, **kwargs):
+        pytest.fail("Demo cleanup must not create or renew credentials")
+
+    monkeypatch.setattr(frontier_demo, "create_token", no_credentials)
+    ended = enabled.post("/auth/frontier-demo-session/end", headers=headers(expired))
+    assert ended.status_code == 200, ended.text
+    assert ended.json() == {"status": "ended", "cleanup": "queued", "tasks_removed": 1}
+    assert "set-cookie" not in ended.headers
+    with session_scope() as db:
+        assert db.get(AssignmentRecord, created["task_id"]).deletion_requested_at is not None
+        assert db.get(UserRecord, demo["user"]["id"]).is_active is False
+        usage = db.scalar(select(FrontierDemoDailyUsageRecord))
+        assert (usage.sessions, usage.requests, usage.estimated_input_tokens) == (1, 0, 0)
+    # Even after re-enabling execution, the ended owner's in-flight registry
+    # cannot charge another model call or reach the model boundary.
+    monkeypatch.setattr(settings, "frontier_demo_enabled", True)
+    with pytest.raises(registries.SharedPoolLimitError, match="shared_pool_disabled"):
+        asyncio.run(provider.ainvoke([HumanMessage(content="synthetic")]))
+    assert provider._provider.calls == 0
+    assert enabled.post("/auth/frontier-demo-session", headers=headers(expired)).status_code == 401
+
+
+@pytest.mark.parametrize("invalid", ["signature", "scope", "session_scope", "role", "auth_version", "auth_invalid_before", "inactive"])
+def test_expired_demo_cleanup_keeps_identity_revocation_checks(enabled, invalid):
+    from backend.db.models import AssignmentRecord
+    demo = issue(enabled)
+    created = task(enabled, demo)
+    owner = get_user_store()[demo["user"]["id"]]
+    payload = decode_token(demo["token"])
+    payload.update(iat=time.time() - 8000, exp=time.time() - 100, session_exp=time.time() - 1)
+    if invalid in {"scope", "session_scope", "role"}:
+        payload[invalid] = "invalid"
+    elif invalid == "auth_version":
+        register_user(owner.model_copy(update={"auth_version": owner.auth_version + 1}))
+    elif invalid == "auth_invalid_before":
+        register_user(owner.model_copy(update={"auth_invalid_before": time.time()}))
+    elif invalid == "inactive":
+        register_user(owner.model_copy(update={"is_active": False}))
+    token = jwt.encode(payload, "invalid-signing-key-used-only-for-demo-test" if invalid == "signature" else settings.jwt_secret,
+                       algorithm=settings.jwt_algorithm)
+    assert enabled.post("/auth/frontier-demo-session/end", headers=headers(token)).status_code == 401
+    with session_scope() as db:
+        assert db.get(AssignmentRecord, created["task_id"]).deletion_requested_at is None
 
 
 def test_session_admission_is_durable_and_concurrent(enabled, monkeypatch):

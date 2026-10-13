@@ -5,7 +5,7 @@ import { useCurrentUser } from "@/api/hooks";
 import { normalizeAPIError } from "@/api/client";
 import { PageDraftSession } from "@/hooks/usePageDraft";
 import { FrontierContext } from "@/lib/frontierContext";
-import { getFrontierGeneration, getFrontierToken, isFrontierWorkspacePath, subscribeFrontierSession } from "@/lib/frontierSession";
+import { getFrontierGeneration, getFrontierToken, isFrontierExitPending, isFrontierWorkspacePath, subscribeFrontierSession } from "@/lib/frontierSession";
 import { RequireTeacherSession } from "./RequireTeacherSession";
 import { SessionRestoreError } from "./SessionRestoreError";
 
@@ -21,10 +21,11 @@ export function WorkspaceSession({ children }: { children: ReactNode }) {
 
 function RequireFrontierSession({ children }: { children: ReactNode }) {
   const token = useSyncExternalStore(subscribeFrontierSession, getFrontierToken);
+  const exiting = useSyncExternalStore(subscribeFrontierSession, isFrontierExitPending);
   const user = useCurrentUser();
-  if (!token || (user.isError && normalizeAPIError(user.error).status === 401)) return <Navigate to="/frontier/enter" replace />;
+  if (!exiting && (!token || (user.isError && normalizeAPIError(user.error).status === 401))) return <Navigate to="/frontier/enter" replace />;
   if (user.isLoading) return <div role="status" className="p-8 text-center">Loading Demo…</div>;
-  if (user.isError) return <SessionRestoreError retry={() => void user.refetch()} busy={user.isFetching} />;
+  if (!exiting && user.isError) return <SessionRestoreError retry={() => void user.refetch()} busy={user.isFetching} />;
   if (!user.data) return null;
   return <PageDraftSession ownerId={user.data.id}>{children}</PageDraftSession>;
 }

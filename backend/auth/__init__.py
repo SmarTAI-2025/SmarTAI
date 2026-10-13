@@ -242,6 +242,16 @@ def get_task_user(request: Request, user: Optional[User] = Depends(get_optional_
     return _check_request_user(request, user)
 
 
+def get_frontier_cleanup_user(request: Request, token: Optional[str] = Depends(_oauth2)) -> User:
+    """Only demo destruction can accept an expired access/session deadline."""
+    from backend.services.frontier_demo import cleanup_user
+    if request_session_scope(request) != "public":
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Not found")
+    if not token:
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, detail="Missing demo token")
+    return _check_request_user(request, cleanup_user(token))
+
+
 def require_task_teacher(user: User = Depends(get_task_user)) -> User:
     if user.role != "teacher":
         raise HTTPException(status.HTTP_403_FORBIDDEN, detail="Teacher task access required")

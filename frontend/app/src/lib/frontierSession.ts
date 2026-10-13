@@ -5,6 +5,14 @@ const SESSION_EVENT = "smartai-frontier-session";
 const GENERATION_KEY = "smartai_frontier_generation";
 const OWNER_KEY = "smartai_frontier_owner";
 const retiredTasks = new Map<string, number>();
+let exitPending = false;
+
+export function isFrontierExitPending(): boolean { return exitPending; }
+
+export function setFrontierExitPending(pending: boolean): void {
+  exitPending = pending;
+  window.dispatchEvent(new Event(SESSION_EVENT));
+}
 
 export function getFrontierGeneration(): number {
   return typeof sessionStorage === "undefined" ? 0 : Number(sessionStorage.getItem(GENERATION_KEY) ?? 0);

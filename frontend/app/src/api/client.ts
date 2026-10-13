@@ -1,7 +1,7 @@
 import axios, { AxiosError, CanceledError, type AxiosProgressEvent, type AxiosRequestConfig } from "axios";
 import { setSessionExpired } from "@/lib/sessionExpiry";
 import { clearPageDrafts } from "@/lib/pageDraftStore";
-import { clearFrontierToken, frontierTaskRequestGeneration, getFrontierGeneration, getFrontierToken, setFrontierToken } from "@/lib/frontierSession";
+import { clearFrontierToken, frontierTaskRequestGeneration, getFrontierGeneration, getFrontierToken, isFrontierExitPending, setFrontierToken } from "@/lib/frontierSession";
 
 export const SMARTAI_TOKEN_STORAGE_KEY = import.meta.env.MODE === "admin" ? "smartai_admin_token" : "smartai_token";
 
@@ -67,6 +67,7 @@ apiClient.interceptors.request.use((config) => {
   const frontierTaskGeneration = frontierTaskRequestGeneration(config.url ?? "");
   authConfig._authScope ??= frontierTaskGeneration !== null ? "frontier" : "teacher";
   if (authConfig._authScope === "frontier") {
+    if (isFrontierExitPending() && config.url !== "/auth/frontier-demo-session/end") throw new CanceledError("Demo is ending");
     authConfig._frontierGeneration ??= frontierTaskGeneration ?? getFrontierGeneration();
     if (authConfig._frontierGeneration !== getFrontierGeneration()) throw new CanceledError("Demo session changed before request replay");
     authConfig._frontierToken ??= getFrontierToken();
@@ -93,6 +94,7 @@ apiClient.interceptors.response.use(
     const config = error.config as AuthAwareRequestConfig | undefined;
     const path = config?.url ?? "";
     if (error.response?.status === 401 && config?._authScope === "frontier") {
+      if (isFrontierExitPending()) return Promise.reject(error);
       if (config._retry && config._frontierGeneration === getFrontierGeneration() && config._frontierToken === getFrontierToken()) clearFrontierToken();
       if (config._skipAuthRefresh || config._retry || !config._frontierToken) return Promise.reject(error);
       config._retry = true;
@@ -132,19 +134,19 @@ apiClient.interceptors.response.use(
 let frontierRefreshFlight: { token: string; generation: number; promise: Promise<string> } | null = null;
 
 export function renewFrontierToken(startingToken: string, generation = getFrontierGeneration()): Promise<string> {
-  if (generation !== getFrontierGeneration()) return Promise.reject(new CanceledError("Demo session changed during request"));
+  if (isFrontierExitPending() || generation !== getFrontierGeneration()) return Promise.reject(new CanceledError("Demo session changed during request"));
   if (frontierRefreshFlight?.token === startingToken && frontierRefreshFlight.generation === generation) return frontierRefreshFlight.promise;
   const current = getFrontierToken();
   if (current && current !== startingToken) return Promise.resolve(current);
   const promise = apiClient.post<{ token: string }>("/auth/frontier-demo-session", {}, {
     _authScope: "frontier", _frontierToken: startingToken, _frontierGeneration: generation, _skipAuthRefresh: true,
   } as AuthAwareRequestConfig).then(({ data }) => {
-    if (getFrontierGeneration() !== generation || getFrontierToken() !== startingToken) throw new CanceledError("Demo session changed during refresh");
+    if (isFrontierExitPending() || getFrontierGeneration() !== generation || getFrontierToken() !== startingToken) throw new CanceledError("Demo session changed during refresh");
     if (!data.token) throw new Error("Invalid demo session response");
     setFrontierToken(data.token);
     return data.token;
   }).catch((error: unknown) => {
-    if (getFrontierGeneration() === generation && getFrontierToken() === startingToken && axios.isAxiosError(error) && error.response?.status === 401) clearFrontierToken();
+    if (!isFrontierExitPending() && getFrontierGeneration() === generation && getFrontierToken() === startingToken && axios.isAxiosError(error) && error.response?.status === 401) clearFrontierToken();
     throw error;
   }).finally(() => { if (frontierRefreshFlight?.promise === promise) frontierRefreshFlight = null; });
   frontierRefreshFlight = { token: startingToken, generation, promise };

@@ -60,7 +60,7 @@ it("ends the guest before leaving and bypasses the already-confirmed draft promp
   expect(router.state.location.pathname).toBe("/frontier/live");
   await act(async () => finish());
   expect(await screen.findByText("登录页")).toBeInTheDocument();
-  expect(end).toHaveBeenCalledWith("/auth/frontier-demo-session/end", {}, { _authScope: "frontier" });
+  expect(end).toHaveBeenCalledWith("/auth/frontier-demo-session/end", {}, { _authScope: "frontier", _skipAuthRefresh: true });
   expect(getFrontierToken()).toBeNull();
   expect(isFrontierTaskPath("/tasks/guest-task")).toBe(false);
   expect(client.getAuthToken()).toBe("teacher-session");
