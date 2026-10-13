@@ -1,4 +1,4 @@
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import userEvent from "@testing-library/user-event";
 import { StrictMode, useState, type ReactNode } from "react";
@@ -8,8 +8,11 @@ import { getGradingSetup, saveGradingSetup } from "@/api/gradingSetup";
 import { preflightProblemSource, startQuestionPreparation } from "@/api/problemSources";
 import { createTask, getTask, getTaskResult, getTaskState, parseSubmissions, startGrading, updateProblem, updateStudentAnswer, updateStudentIdentity } from "@/api/tasks";
 import { demoQuestions } from "@/data/frontierDemo";
-import { I18nProvider as LocaleProvider } from "@/i18n/I18nProvider";
-import { rememberFrontierTask } from "@/lib/frontierSession";
+import { I18nProvider as LocaleProvider, useI18n } from "@/i18n/I18nProvider";
+import { beginFrontierSession, getFrontierToken, isFrontierTaskPath, rememberFrontierTask, setFrontierExitPending } from "@/lib/frontierSession";
+import * as client from "@/api/client";
+import { FrontierExitLink } from "@/components/auth/FrontierExitLink";
+import { FrontierContext } from "@/lib/frontierContext";
 import type { Correction, GradingSetupResponse, Task, TaskResultResponse, TaskStateSnapshot } from "@/types";
 import { alignDemoProblems, FrontierLiveDemoPage } from "./FrontierLiveDemoPage";
 
@@ -45,11 +48,153 @@ vi.mock("@/components/tasks/PdfDocumentPreview", () => ({
 }));
 
 describe("FrontierLiveDemoPage", () => {
-  beforeEach(() => { window.localStorage.setItem("smartai_locale", "en-US"); rememberFrontierTask("asg_demo123"); });
+  beforeEach(() => {
+    vi.resetAllMocks();
+    sessionStorage.clear();
+    setFrontierExitPending(false);
+    window.localStorage.setItem("smartai_locale", "en-US");
+    beginFrontierSession("guest-access", "guest-owner");
+    rememberFrontierTask("asg_demo123");
+  });
 
   afterEach(() => {
-    vi.clearAllMocks();
+    vi.restoreAllMocks();
     vi.unstubAllGlobals();
+  });
+
+  it.each([false, true])("ignores late creation during confirmed exit (cleanup complete: %s)", async (cleanupComplete) => {
+    const creation = deferred<TaskStateSnapshot>();
+    const ending = deferred<{ status: string }>();
+    vi.mocked(createTask).mockReturnValue(creation.promise);
+    vi.spyOn(client, "postJSON").mockReturnValue(ending.promise);
+    vi.spyOn(window, "confirm").mockReturnValue(true);
+    const user = userEvent.setup();
+    renderLive();
+    await user.click(screen.getByRole("button", { name: /start real OCR \+ grading/i }));
+    await user.click(screen.getByRole("link", { name: "Exit to login" }));
+    if (cleanupComplete) {
+      await act(async () => ending.resolve({ status: "ended" }));
+      expect(screen.getByText("Public login")).toBeInTheDocument();
+    }
+    await act(async () => creation.resolve({ ...taskState("draft"), task_id: "asg_late" }));
+    expect(isFrontierTaskPath("/tasks/asg_late")).toBe(false);
+    expect(getGradingSetup).not.toHaveBeenCalled();
+    if (!cleanupComplete) await act(async () => ending.resolve({ status: "ended" }));
+    expect(screen.getByText("Public login")).toBeInTheDocument();
+    expect(getFrontierToken()).toBeNull();
+  });
+
+  it("ignores a successful creation from a replaced guest session", async () => {
+    const creation = deferred<TaskStateSnapshot>();
+    vi.mocked(createTask).mockReturnValue(creation.promise);
+    const user = userEvent.setup();
+    renderLive();
+    await user.click(screen.getByRole("button", { name: /start real OCR \+ grading/i }));
+    act(() => beginFrontierSession("replacement-access", "replacement-owner"));
+    await act(async () => creation.resolve({ ...taskState("draft"), task_id: "asg_oldowner" }));
+    expect(isFrontierTaskPath("/tasks/asg_oldowner")).toBe(false);
+    expect(getGradingSetup).not.toHaveBeenCalled();
+    expect(screen.getByRole("button", { name: /start real OCR \+ grading/i })).toBeEnabled();
+  });
+
+  it("unlocks a restored run after changing language while recognition is pending", async () => {
+    const recognition = deferred<TaskStateSnapshot>();
+    vi.mocked(getTaskState)
+      .mockResolvedValueOnce({ ...taskState("extracting_problems"), problem_count: 0 })
+      .mockReturnValueOnce(recognition.promise)
+      .mockResolvedValue(taskState("problems_ready"));
+    vi.mocked(getTask).mockResolvedValue(taskWithQuestions());
+    const user = userEvent.setup();
+    renderLive("asg_demo123");
+    await waitFor(() => expect(getTaskState).toHaveBeenCalledTimes(2));
+    await user.click(screen.getByRole("button", { name: "Change language" }));
+    expect(getTaskState).toHaveBeenCalledTimes(2);
+    await act(async () => recognition.resolve(taskState("problems_ready")));
+    expect(screen.getByRole("button", { name: "确认题目资料并继续" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "重新开始" })).toBeEnabled();
+    expect(getTask).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([false, true])("keeps the replacement task locked when an old request settles (reject: %s)", async (reject) => {
+    const oldRecognition = deferred<TaskStateSnapshot>();
+    const nextRecognition = deferred<TaskStateSnapshot>();
+    rememberFrontierTask("asg_next");
+    vi.mocked(getTaskState).mockImplementation(async (id) => {
+      if (id === "asg_next") return nextRecognition.promise;
+      return oldRecognition.promise;
+    });
+    vi.mocked(getTask).mockResolvedValue({ ...taskWithQuestions(), task_id: "asg_next" });
+    const user = userEvent.setup();
+    renderLive("asg_demo123");
+    await waitFor(() => expect(getTaskState).toHaveBeenCalledWith("asg_demo123"));
+    await user.click(screen.getByRole("link", { name: "Switch task" }));
+    await waitFor(() => expect(getTaskState).toHaveBeenCalledWith("asg_next"));
+    await act(async () => {
+      if (reject) oldRecognition.reject(new Error("late task failure"));
+      else oldRecognition.resolve(taskState("problems_ready"));
+    });
+    expect(screen.getByRole("button", { name: "Running…" })).toBeDisabled();
+    expect(screen.queryByText("late task failure")).not.toBeInTheDocument();
+    expect(getTask).not.toHaveBeenCalled();
+    await act(async () => nextRecognition.resolve({ ...taskState("problems_ready"), task_id: "asg_next" }));
+    expect(screen.getByRole("button", { name: /confirm question materials/i })).toBeEnabled();
+    expect(screen.getByRole("link", { name: /^open task/i })).toHaveAttribute("href", "/tasks/asg_next");
+  });
+
+  it("stops polling after leaving for task details and restores on return", async () => {
+    const recognition = deferred<TaskStateSnapshot>();
+    vi.mocked(getTaskState)
+      .mockResolvedValueOnce({ ...taskState("extracting_problems"), problem_count: 0 })
+      .mockReturnValueOnce(recognition.promise)
+      .mockResolvedValue(taskState("problems_ready"));
+    vi.mocked(getTask).mockResolvedValue(taskWithQuestions());
+    const user = userEvent.setup();
+    renderLive("asg_demo123");
+    await waitFor(() => expect(getTaskState).toHaveBeenCalledTimes(2));
+    await user.click(screen.getByRole("link", { name: /^open task/i }));
+    await act(async () => recognition.resolve(taskState("problems_ready")));
+    expect(screen.getByText("Task details")).toBeInTheDocument();
+    expect(getTask).not.toHaveBeenCalled();
+    await user.click(screen.getByRole("link", { name: "Return to Demo" }));
+    expect(await screen.findByRole("button", { name: /confirm question materials/i })).toBeEnabled();
+    expect(getTask).toHaveBeenCalledTimes(1);
+  });
+
+  it("stops the question confirmation loop when leaving for task details", async () => {
+    const confirmation = deferred<Awaited<ReturnType<typeof updateProblem>>>();
+    vi.mocked(getTaskState).mockResolvedValue(taskState("problems_ready"));
+    vi.mocked(getTask).mockResolvedValue(taskWithQuestions());
+    vi.mocked(updateProblem).mockReturnValue(confirmation.promise);
+    const user = userEvent.setup();
+    renderLive("asg_demo123");
+    await user.click(await screen.findByRole("button", { name: /confirm question materials/i }));
+    await waitFor(() => expect(updateProblem).toHaveBeenCalledTimes(1));
+    await user.click(screen.getByRole("link", { name: /^open task/i }));
+    await act(async () => confirmation.resolve({ status: "ok", q_id: "q1", problem: taskWithQuestions().problem_data.q1, workflow_revision: 2 }));
+    expect(screen.getByText("Task details")).toBeInTheDocument();
+    expect(updateProblem).toHaveBeenCalledTimes(1);
+    expect(parseSubmissions).not.toHaveBeenCalled();
+  });
+
+  it("does not start grading when its settings finish saving after leaving", async () => {
+    const saving = deferred<Awaited<ReturnType<typeof saveGradingSetup>>>();
+    const task = { ...taskWithQuestions(), student_data: recognizedStudents() };
+    for (const problem of Object.values(task.problem_data)) problem.review_status = "confirmed";
+    for (const student of Object.values(task.student_data)) {
+      for (const answer of student.stu_ans) answer.review_status = "confirmed";
+    }
+    vi.mocked(getTaskState).mockResolvedValue(taskState("submissions_ready"));
+    vi.mocked(getTask).mockResolvedValue(task);
+    vi.mocked(getGradingSetup).mockResolvedValue(gradingSetup());
+    vi.mocked(saveGradingSetup).mockReturnValue(saving.promise);
+    const user = userEvent.setup();
+    renderLive("asg_demo123");
+    await user.click(await screen.findByRole("button", { name: /confirm submissions and continue grading/i }));
+    await waitFor(() => expect(saveGradingSetup).toHaveBeenCalledTimes(1));
+    await user.click(screen.getByRole("link", { name: /^open task/i }));
+    await act(async () => saving.resolve({ ...gradingSetup(), configured: true, status: "saved" }));
+    expect(screen.getByText("Task details")).toBeInTheDocument();
+    expect(startGrading).not.toHaveBeenCalled();
   });
 
   it("states the honest boundary between synthetic inputs and live processing", () => {
@@ -333,6 +478,36 @@ describe("FrontierLiveDemoPage", () => {
     await waitFor(() => expect(screen.getByText(/provider Demo Vision/)).toBeInTheDocument());
   });
 });
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (reason: Error) => void;
+  const promise = new Promise<T>((yes, no) => { resolve = yes; reject = no; });
+  return { promise, resolve, reject };
+}
+
+function ChangeLocale() {
+  const { setLocale } = useI18n();
+  return <button onClick={() => setLocale("zh-CN")}>Change language</button>;
+}
+
+function renderLive(taskId?: string) {
+  return render(<I18nProvider><FrontierContext.Provider value={true}>
+    <MemoryRouter initialEntries={[taskId ? `/frontier/live?taskId=${taskId}` : "/frontier/live"]}>
+      <Routes>
+        <Route path="/frontier/live" element={<>
+          <FrontierExitLink to="/login">Exit to login</FrontierExitLink>
+          <Link to="/frontier/live?taskId=asg_next">Switch task</Link>
+          <ChangeLocale /><FrontierLiveDemoPage />
+        </>} />
+        <Route path="/login" element={<p>Public login</p>} />
+        <Route path="/tasks/:taskId" element={<>
+          <p>Task details</p><Link to="/frontier/live?taskId=asg_demo123">Return to Demo</Link>
+        </>} />
+      </Routes>
+    </MemoryRouter>
+  </FrontierContext.Provider></I18nProvider>);
+}
 
 function taskState(status: TaskStateSnapshot["status"]): TaskStateSnapshot {
   return {

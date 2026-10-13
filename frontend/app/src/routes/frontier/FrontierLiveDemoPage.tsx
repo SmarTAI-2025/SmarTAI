@@ -43,7 +43,7 @@ import { buildResultsModel, formatPercent, formatScore, problemLabel } from "@/c
 import { useI18n } from "@/i18n/I18nProvider";
 import type { Locale } from "@/i18n/messages";
 import { cn } from "@/lib/cn";
-import { isFrontierTaskPath, rememberFrontierTask } from "@/lib/frontierSession";
+import { getFrontierGeneration, isFrontierExitPending, isFrontierTaskPath, rememberFrontierTask } from "@/lib/frontierSession";
 import { submissionReviewBlockers } from "@/lib/reviewConfirmation";
 import "./frontier.css";
 import type { GradingSetup, ProblemInfo, Task, TaskResultResponse, TaskStateSnapshot, TaskStatus } from "@/types";
@@ -59,6 +59,12 @@ const DEMO_SCORE_POLICY = "Q1: 5 points; Q2: 8 points; Q3: 7 points; Q4: 10 poin
 
 type RunStepId = "task" | "questions" | "submissions" | "grading";
 type RunStepState = "waiting" | "active" | "complete" | "error";
+
+interface DemoRun {
+  taskId: string | null;
+  isCurrent: () => boolean;
+  step: <T>(operation: () => Promise<T>) => Promise<T>;
+}
 
 interface RunStep {
   id: RunStepId;
@@ -94,16 +100,63 @@ export function FrontierLiveDemoPage() {
   const [demoResult, setDemoResult] = useState<TaskResultResponse | null>(null);
   const [materialsConfirmed, setMaterialsConfirmed] = useState(false);
   const activeStepRef = useRef<RunStepId | null>(null);
-  const runLockRef = useRef(false);
+  const runRef = useRef<DemoRun | null>(null);
+  const localeRef = useRef(locale);
+  localeRef.current = locale;
+
+  useEffect(() => () => { runRef.current = null; }, []);
+
+  function beginRun(currentTaskId: string | null): DemoRun | null {
+    if (runRef.current || isFrontierExitPending()) return null;
+    const generation = getFrontierGeneration();
+    const run: DemoRun = {
+      taskId: currentTaskId,
+      isCurrent: () => runRef.current === run && generation === getFrontierGeneration() && !isFrontierExitPending(),
+      async step(operation) {
+        // Check both sides of every async boundary: a successful response can
+        // arrive after unmount, a task switch, or confirmed session exit.
+        if (!run.isCurrent()) throw new Error("Demo run is no longer active.");
+        const result = await operation();
+        if (!run.isCurrent()) throw new Error("Demo run is no longer active.");
+        return result;
+      },
+    };
+    runRef.current = run;
+    setBusy(true);
+    return run;
+  }
+
+  function finishRun(run: DemoRun) {
+    // A late finally from an old task must never unlock its replacement.
+    if (runRef.current !== run) return;
+    runRef.current = null;
+    setBusy(false);
+  }
 
   useEffect(() => {
-    if (!taskIdFromUrl || busy || runLockRef.current) return;
+    // A newly created task adopts its URL without starting a second workflow.
+    if (runRef.current && runRef.current.taskId === taskIdFromUrl) return;
+    runRef.current = null;
+    setBusy(false);
+    setTaskId(taskIdFromUrl);
+    setSnapshot(null);
+    setTeacherReviewTask(null);
+    setSubmissionReviewTask(null);
+    setDemoResult(null);
+    setMaterialsConfirmed(false);
+    setProviderLabel(null);
+    setError(null);
+    setStartedAt(null);
+    activeStepRef.current = null;
+    const locale = localeRef.current;
+    setSteps(initialSteps(locale));
+    if (!taskIdFromUrl) return;
     const restoredTaskId = taskIdFromUrl;
-    let cancelled = false;
-    async function restoreCurrentTask() {
+    const run = beginRun(restoredTaskId);
+    if (!run) return;
+    async function restoreCurrentTask(run: DemoRun) {
       try {
-        const state = await getTaskState(restoredTaskId);
-        if (cancelled) return;
+        const state = await run.step(() => getTaskState(restoredTaskId));
         setTaskId(restoredTaskId);
         setSnapshot(state);
         setSteps((current) => current.some((step) => step.state === "error") ? current : stepsFromSnapshot(state, locale));
@@ -113,8 +166,7 @@ export function FrontierLiveDemoPage() {
           return;
         }
         if (state.problem_count > 0) {
-          const task = await getTask(restoredTaskId);
-          if (cancelled) return;
+          const task = await run.step(() => getTask(restoredTaskId));
           const prepared = alignDemoProblems(Object.values(task.problem_data));
           if (!preparedMaterialsComplete(prepared)) {
             throw new Error(tx(locale, "此任务的题目准备资料不完整；请打开任务检查真实结果。", "This task's prepared question materials are incomplete. Open the task to inspect the real result."));
@@ -131,31 +183,26 @@ export function FrontierLiveDemoPage() {
           }
         }
         if (["graded", "review_confirmed", "finalized"].includes(state.status)) {
-          setDemoResult(await getTaskResult(restoredTaskId));
+          setDemoResult(await run.step(() => getTaskResult(restoredTaskId)));
           return;
         }
         if (["draft", "extracting_problems", "problems_ready", "parsing_submissions", "submissions_ready", "grading"].includes(state.status)) {
-          runLockRef.current = true;
-          setBusy(true);
           setError(null);
           setStartedAt(Date.now());
-          await continueWorkflow(restoredTaskId, state.status);
+          await continueWorkflow(run, restoredTaskId, state.status);
         }
       } catch (caught) {
-        if (!cancelled) {
+        if (run.isCurrent()) {
           failActiveStep();
           setError(errorMessage(caught));
         }
       } finally {
-        if (!cancelled) {
-          runLockRef.current = false;
-          setBusy(false);
-        }
+        finishRun(run);
       }
     }
-    void restoreCurrentTask();
-    return () => { cancelled = true; };
-  }, [locale, taskIdFromUrl]);
+    void restoreCurrentTask(run);
+    // Display-language changes do not cancel or restart backend work.
+  }, [taskIdFromUrl]);
 
   useEffect(() => {
     if (busy) return;
@@ -164,9 +211,8 @@ export function FrontierLiveDemoPage() {
 
   const elapsed = startedAt ? Math.max(0, Math.round((Date.now() - startedAt) / 1_000)) : null;
   async function startFreshRun() {
-    if (runLockRef.current) return;
-    runLockRef.current = true;
-    setBusy(true);
+    const run = beginRun(null);
+    if (!run) return;
     setError(null);
     setSnapshot(null);
     setProviderLabel(null);
@@ -179,89 +225,93 @@ export function FrontierLiveDemoPage() {
     activeStepRef.current = null;
     try {
       markStep("task", "active", tx(locale, "正在创建真实教师任务…", "Creating a real teacher-owned task…"));
-      const task = await createTask({
+      const task = await run.step(() => createTask({
         authScope: "frontier",
         name: `SmarTAI Live Demo · ${new Date().toISOString().slice(0, 16).replace("T", " ")} UTC`,
         idempotencyKey: createIdempotencyKey(),
-      });
+      }));
       rememberFrontierTask(task.task_id);
+      run.taskId = task.task_id;
       setTaskId(task.task_id);
       markStep("task", "complete", tx(locale, `任务 ${shortId(task.task_id)} 已创建`, `Task ${shortId(task.task_id)} created`));
       navigate(`/frontier/live?taskId=${encodeURIComponent(task.task_id)}`, { replace: true });
-      await continueWorkflow(task.task_id, task.status);
+      await continueWorkflow(run, task.task_id, task.status);
     } catch (caught) {
-      failActiveStep();
-      setError(errorMessage(caught));
+      if (run.isCurrent()) {
+        failActiveStep();
+        setError(errorMessage(caught));
+      }
     } finally {
-      runLockRef.current = false;
-      setBusy(false);
+      finishRun(run);
     }
   }
 
   async function confirmTeacherMaterials() {
-    if (!taskId || !teacherReviewTask || runLockRef.current) return;
-    runLockRef.current = true;
-    setBusy(true);
+    if (!taskId || !teacherReviewTask) return;
+    const run = beginRun(taskId);
+    if (!run) return;
     setError(null);
     try {
       markStep("questions", "active", tx(locale, "正在确认本次真实生成的题目资料…", "Confirming the materials generated in this live run…"));
-      await confirmPreparedQuestions(taskId, teacherReviewTask);
+      await confirmPreparedQuestions(run, taskId, teacherReviewTask);
       setMaterialsConfirmed(true);
-      await continueWorkflow(taskId, "problems_ready", true);
+      await continueWorkflow(run, taskId, "problems_ready", true);
     } catch (caught) {
-      failActiveStep();
-      setError(errorMessage(caught));
+      if (run.isCurrent()) {
+        failActiveStep();
+        setError(errorMessage(caught));
+      }
     } finally {
-      runLockRef.current = false;
-      setBusy(false);
+      finishRun(run);
     }
   }
 
   async function confirmSubmissionReview() {
-    if (!taskId || !submissionReviewTask || runLockRef.current) return;
-    runLockRef.current = true;
-    setBusy(true);
+    if (!taskId || !submissionReviewTask) return;
+    const run = beginRun(taskId);
+    if (!run) return;
     setError(null);
     try {
-      const current = await getTask(taskId);
+      const current = await run.step(() => getTask(taskId));
       const blockers = submissionReviewBlockers(current, locale);
       if (blockers.length) throw new Error(blockers.map((item) => item.label).join("; "));
       let revision = current.workflow_revision;
       for (const student of Object.values(current.student_data)) {
         if (student.identity_status === "needs_review") {
-          const response = await updateStudentIdentity(taskId, student.stu_id, {
+          const response = await run.step(() => updateStudentIdentity(taskId, student.stu_id, {
             expected_workflow_revision: revision,
             student_id: student.stu_id,
             student_name: student.stu_name,
-          });
+          }));
           revision = response.workflow_revision;
         }
         for (const answer of student.stu_ans) {
           if (answer.review_status === "confirmed") continue;
-          const response = await updateStudentAnswer(taskId, student.stu_id, answer.q_id, {
+          const response = await run.step(() => updateStudentAnswer(taskId, student.stu_id, answer.q_id, {
             review_status: "confirmed", expected_workflow_revision: revision,
-          });
+          }));
           revision = response.workflow_revision;
         }
       }
-      await continueWorkflow(taskId, "submissions_ready", true, true);
+      await continueWorkflow(run, taskId, "submissions_ready", true, true);
     } catch (caught) {
-      failActiveStep();
-      setError(errorMessage(caught));
+      if (run.isCurrent()) {
+        failActiveStep();
+        setError(errorMessage(caught));
+      }
     } finally {
-      runLockRef.current = false;
-      setBusy(false);
+      finishRun(run);
     }
   }
 
-  async function continueWorkflow(currentTaskId: string, startingStatus: TaskStatus, teacherMaterialsConfirmed = false, teacherSubmissionsReviewed = false) {
+  async function continueWorkflow(run: DemoRun, currentTaskId: string, startingStatus: TaskStatus, teacherMaterialsConfirmed = false, teacherSubmissionsReviewed = false) {
     let status = startingStatus;
 
     if (status === "draft") {
-      const recognitionProviderId = await demoRecognitionProvider(currentTaskId);
+      const recognitionProviderId = await run.step(() => demoRecognitionProvider(currentTaskId));
       markStep("questions", "active", tx(locale, "正在上传原始题目并运行完整题目准备…", "Uploading the raw source and running full question preparation…"));
-      const questionSource = await fixtureFile(QUESTION_FIXTURE, "question_source.pdf", "application/pdf");
-      const preflight = await preflightProblemSource({
+      const questionSource = await run.step(() => fixtureFile(QUESTION_FIXTURE, "question_source.pdf", "application/pdf"));
+      const preflight = await run.step(() => preflightProblemSource({
         taskId: currentTaskId,
         mode: "upload",
         role: "problem",
@@ -270,28 +320,28 @@ export function FrontierLiveDemoPage() {
         extractionHint: tx(locale, "按 Q1–Q4 保留题号与数学符号。", "Preserve the Q1–Q4 numbering and mathematical notation."),
         saveToLibrary: false,
         recognitionProviderId,
-      });
+      }));
       const expectedWorkflowRevision = preflight.workflow_revision ?? preflight.base_workflow_revision;
       if (expectedWorkflowRevision === undefined) {
         throw new Error(tx(locale, "题目准备预检未返回工作流版本。", "Question-preparation preflight did not return a workflow revision."));
       }
-      const response = await startQuestionPreparation({
+      const response = await run.step(() => startQuestionPreparation({
         taskId: currentTaskId,
         sourceTokens: [preflight.source_token],
         expectedWorkflowRevision,
         scorePolicy: { mode: "per_question", perQuestionText: DEMO_SCORE_POLICY },
         recognitionProviderId,
-      });
+      }));
       markStep("questions", "active", tx(locale, "正在识别题目并生成标答、评分依据与代码题材料…", "Recognizing questions and generating answers, rubrics, and programming materials…"), response.job_id);
-      const state = await waitForStatus(currentTaskId, ["problems_ready"]);
+      const state = await waitForStatus(run, currentTaskId, ["problems_ready"]);
       status = state.status;
     } else if (status === "extracting_problems") {
       markStep("questions", "active", tx(locale, "正在等待已有题目识别任务…", "Waiting for the existing question-recognition job…"));
-      status = (await waitForStatus(currentTaskId, ["problems_ready"])).status;
+      status = (await waitForStatus(run, currentTaskId, ["problems_ready"])).status;
     }
 
     if (status === "problems_ready") {
-      const recognizedTask = await getTask(currentTaskId);
+      const recognizedTask = await run.step(() => getTask(currentTaskId));
       const aligned = alignDemoProblems(Object.values(recognizedTask.problem_data));
       if (!preparedMaterialsComplete(aligned)) {
         throw new Error(tx(locale, "本次题目准备未生成完整的标答、评分依据或代码题材料；请打开任务检查真实结果。", "This preparation run did not generate a complete answer, rubric, or programming package. Open the task to inspect the real result."));
@@ -300,35 +350,36 @@ export function FrontierLiveDemoPage() {
       const alreadyConfirmed = generatedMaterialsConfirmed(aligned);
       setMaterialsConfirmed(teacherMaterialsConfirmed || alreadyConfirmed);
       if (!teacherMaterialsConfirmed && !alreadyConfirmed) {
-        const recognizedState = await getTaskState(currentTaskId);
+        const recognizedState = await run.step(() => getTaskState(currentTaskId));
         setSnapshot(recognizedState);
         markStep("questions", "active", tx(locale, "题目、标答与评分资料已真实生成；等待教师确认。", "Questions, answers, and rubrics were generated live and await teacher confirmation."), recognizedState.extract_job_id);
         return;
       }
-      const afterQuestions = await getTaskState(currentTaskId);
+      const afterQuestions = await run.step(() => getTaskState(currentTaskId));
       setSnapshot(afterQuestions);
       markStep("questions", "complete", tx(locale, `已识别 ${afterQuestions.problem_count} 题并确认教师评分标准`, `${afterQuestions.problem_count} questions recognized and teacher rubric confirmed`), afterQuestions.extract_job_id);
 
       markStep("submissions", "active", tx(locale, "正在上传原始排版、混排与手写作答…", "Uploading raw typeset, mixed, and handwritten submissions…"));
-      const archive = await fixtureFile(SUBMISSION_FIXTURE, "submissions_raw.zip", "application/zip");
-      const response = await parseSubmissions({ taskId: currentTaskId, file: archive, identityMode: "filename", recognitionProviderId: await demoRecognitionProvider(currentTaskId), expectedWorkflowRevision: afterQuestions.workflow_revision });
+      const archive = await run.step(() => fixtureFile(SUBMISSION_FIXTURE, "submissions_raw.zip", "application/zip"));
+      const recognitionProviderId = await run.step(() => demoRecognitionProvider(currentTaskId));
+      const response = await run.step(() => parseSubmissions({ taskId: currentTaskId, file: archive, identityMode: "filename", recognitionProviderId, expectedWorkflowRevision: afterQuestions.workflow_revision }));
       markStep("submissions", "active", tx(locale, "作答识别与 OCR 正在运行…", "Submission recognition and OCR are running…"), response.job_id);
-      status = (await waitForStatus(currentTaskId, ["submissions_ready"])).status;
+      status = (await waitForStatus(run, currentTaskId, ["submissions_ready"])).status;
     } else if (status === "parsing_submissions") {
       markStep("questions", "complete", tx(locale, "题目已准备", "Questions already prepared"));
       markStep("submissions", "active", tx(locale, "正在等待已有作答识别任务…", "Waiting for the existing submission-recognition job…"));
-      status = (await waitForStatus(currentTaskId, ["submissions_ready"])).status;
+      status = (await waitForStatus(run, currentTaskId, ["submissions_ready"])).status;
     }
 
     if (status === "submissions_ready") {
-      const recognized = await getTaskState(currentTaskId);
-      const recognizedTask = await getTask(currentTaskId);
+      const recognized = await run.step(() => getTaskState(currentTaskId));
+      const recognizedTask = await run.step(() => getTask(currentTaskId));
       setSnapshot(recognized);
       setSubmissionReviewTask(recognizedTask);
       markStep("submissions", "complete", tx(locale, `已识别 ${recognized.student_count} 份合成作答`, `${recognized.student_count} synthetic submissions recognized`), recognized.parse_job_id);
       if (!teacherSubmissionsReviewed) return;
       markStep("grading", "active", tx(locale, "正在选择一个已启用模型并保存批改设置…", "Selecting one enabled provider and saving the grading setup…"));
-      const setupResponse = await getGradingSetup(currentTaskId);
+      const setupResponse = await run.step(() => getGradingSetup(currentTaskId));
       const enabled = setupResponse.available_experts.filter((item) => item.enabled);
       const preferredId = setupResponse.grading_setup?.primary_provider_id ?? setupResponse.suggested_setup?.primary_provider_id;
       const selected = enabled.find((item) => item.provider_id === preferredId) ?? enabled[0];
@@ -345,40 +396,40 @@ export function FrontierLiveDemoPage() {
         knowledge_scope: "none",
         feedback_language: locale === "zh-CN" ? "zh" : "en",
       };
-      const savedSetup = await saveGradingSetup({
+      const savedSetup = await run.step(() => saveGradingSetup({
         taskId: currentTaskId,
         expectedWorkflowRevision: setupResponse.workflow_revision,
         gradingSetup: singleSetup,
-      });
-      const response = await startGrading(currentTaskId, { multiSampleN: 1, expectedWorkflowRevision: savedSetup.workflow_revision, requestId: createIdempotencyKey() });
+      }));
+      const response = await run.step(() => startGrading(currentTaskId, { multiSampleN: 1, expectedWorkflowRevision: savedSetup.workflow_revision, requestId: createIdempotencyKey() }));
       markStep("grading", "active", tx(locale, "真实批改任务正在运行…", "The real grading run is in progress…"), response.job_id);
-      status = (await waitForStatus(currentTaskId, ["graded", "review_confirmed", "finalized"])).status;
+      status = (await waitForStatus(run, currentTaskId, ["graded", "review_confirmed", "finalized"])).status;
     } else if (status === "grading") {
       markStep("questions", "complete", tx(locale, "题目已准备", "Questions already prepared"));
       markStep("submissions", "complete", tx(locale, "作答已识别", "Submissions already recognized"));
       markStep("grading", "active", tx(locale, "正在等待已有批改任务…", "Waiting for the existing grading job…"));
-      status = (await waitForStatus(currentTaskId, ["graded", "review_confirmed", "finalized"])).status;
+      status = (await waitForStatus(run, currentTaskId, ["graded", "review_confirmed", "finalized"])).status;
     }
 
     if (["graded", "review_confirmed", "finalized"].includes(status)) {
-      const completed = await getTaskState(currentTaskId);
+      const completed = await run.step(() => getTaskState(currentTaskId));
       setSnapshot(completed);
-      setDemoResult(await getTaskResult(currentTaskId));
+      setDemoResult(await run.step(() => getTaskResult(currentTaskId)));
       markStep("grading", "complete", tx(locale, `已处理 ${completed.student_count * completed.problem_count} 个作答单元`, `${completed.student_count * completed.problem_count} answer units processed`), completed.grading_job_id);
     }
   }
 
-  async function waitForStatus(currentTaskId: string, targets: TaskStatus[]) {
+  async function waitForStatus(run: DemoRun, currentTaskId: string, targets: TaskStatus[]) {
     const deadline = Date.now() + WORKFLOW_TIMEOUT_MS;
     while (Date.now() < deadline) {
-      const state = await getTaskState(currentTaskId);
+      const state = await run.step(() => getTaskState(currentTaskId));
       setSnapshot(state);
       if (targets.includes(state.status)) return state;
       if (state.status === "error") {
         const detail = state.progress?.error_detail || state.error || "workflow_error";
         throw new Error(liveDemoWorkflowFailureMessage(locale, detail));
       }
-      await delay(POLL_INTERVAL_MS);
+      await run.step(() => delay(POLL_INTERVAL_MS));
     }
     throw new Error(tx(locale, "真实流程已超过八分钟；任务已保留，可继续检查或恢复。", "The live run exceeded eight minutes. The task is preserved so you can inspect or resume it."));
   }
@@ -974,15 +1025,14 @@ function TaskLinks({ taskId, status, locale }: { taskId: string; status?: TaskSt
   );
 }
 
-async function confirmPreparedQuestions(taskId: string, task?: Task) {
-  const currentTask = task ?? await getTask(taskId);
+async function confirmPreparedQuestions(run: DemoRun, taskId: string, currentTask: Task) {
   const aligned = alignDemoProblems(Object.values(currentTask.problem_data));
   if (!preparedMaterialsComplete(aligned)) {
     throw new Error("The live question-preparation result is incomplete; no generated material was replaced with a fixture fallback.");
   }
   let revision = currentTask.workflow_revision;
   for (const problem of aligned) {
-    const response = await updateProblem(taskId, problem.q_id, {
+    const response = await run.step(() => updateProblem(taskId, problem.q_id, {
       expected_workflow_revision: revision,
       // Persist only the materials returned by the real preparation run. The
       // Demo never substitutes fixture answers, rubrics, code, or tests.
@@ -993,7 +1043,7 @@ async function confirmPreparedQuestions(taskId: string, task?: Task) {
       solution_code: problem.solution_code ?? null,
       review_status: "confirmed",
       test_cases: problem.test_cases ?? null,
-    });
+    }));
     revision = response.workflow_revision;
   }
 }
