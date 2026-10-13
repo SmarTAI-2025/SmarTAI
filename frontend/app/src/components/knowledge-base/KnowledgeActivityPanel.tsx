@@ -38,12 +38,13 @@ export function KnowledgeActivityPanel({ compact = false }: { compact?: boolean 
   return <section aria-label={zh ? "教材识别" : "Textbook recognition"} className="min-w-0">
     <div className="flex flex-wrap items-center justify-between gap-3">
       <h2 className="flex items-center gap-2 text-base font-semibold"><BookOpen className="h-4 w-4" />{zh ? "教材识别" : "Textbook recognition"}</h2>
-      <div className="flex items-center gap-3 text-sm">
+      <div className="flex flex-wrap items-center gap-3 text-sm">
         {data ? <span className="text-muted-foreground">{zh ? `进行中 ${data.active_count}` : `${data.active_count} in progress`}</span> : null}
         <button type="button" onClick={() => void activity.refetch()} disabled={activity.isFetching}
           aria-label={zh ? "刷新教材进度" : "Refresh textbook progress"} title={zh ? "刷新教材进度" : "Refresh textbook progress"}
           className="inline-flex h-8 w-8 items-center justify-center rounded border hover:bg-muted disabled:opacity-50"><RefreshCw className="h-4 w-4" /></button>
         {compact ? <Link className="text-primary hover:underline" to="/history?view=knowledge">{zh ? "全部记录" : "All records"}</Link> : null}
+        {compact ? <Link className="text-primary hover:underline" to="/knowledge-base">{zh ? "课程资料库" : "Course library"}</Link> : null}
       </div>
     </div>
     {!compact ? <div className="mt-4 flex flex-wrap items-center gap-3">

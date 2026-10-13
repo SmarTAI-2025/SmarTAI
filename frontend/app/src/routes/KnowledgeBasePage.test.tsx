@@ -54,6 +54,7 @@ vi.mock("@/api/hooks", () => ({
 vi.mock("@/components/knowledge-base/CourseLibraryTable", () => ({
   CourseLibraryTable: () => <div data-testid="course-library-table" />,
 }));
+vi.mock("@/components/knowledge-base/KnowledgeSearchPanel", () => ({ KnowledgeSearchPanel: () => null }));
 
 vi.mock("@/i18n/I18nProvider", () => ({
   useI18n: () => ({ locale: "zh-CN", t: (key: string) => key }),
@@ -83,6 +84,13 @@ describe("KnowledgeBasePage storage quota", () => {
     expect(screen.getByText("刚删除失败，系统正在后台自动重试；完成前仍计入占用，无需手动操作。")).toBeInTheDocument();
     expect(screen.getByText(/保存到个人或课程资料库的内容会长期保留，不会随批改任务删除/)).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /清理|重试/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole("region", { name: /暂存草稿/ })).not.toBeInTheDocument();
+  });
+
+  it("still opens a library upload draft through its existing destination", async () => {
+    render(<MemoryRouter initialEntries={["/knowledge-base?localDraft=library-upload"]}><KnowledgeBasePage /></MemoryRouter>);
+    expect(await screen.findByRole("dialog", { name: "上传资料" })).toBeInTheDocument();
+    expect(screen.queryByRole("region", { name: /暂存草稿/ })).not.toBeInTheDocument();
   });
 
   it("maps the stable 413 quota code to a friendly upload message", async () => {

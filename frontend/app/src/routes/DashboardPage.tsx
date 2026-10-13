@@ -4,6 +4,7 @@ import { normalizeAPIError } from "@/api/client";
 import { useExperts, useTasks } from "@/api/hooks";
 import { useTaskProgress } from "@/hooks/useTaskProgress";
 import { KnowledgeActivityPanel } from "@/components/knowledge-base/KnowledgeActivityPanel";
+import { LocalDraftManager } from "@/components/ui/LocalDraftManager";
 import { useI18n } from "@/i18n/I18nProvider";
 import type { Locale, MessageKey } from "@/i18n/messages";
 import { cn } from "@/lib/cn";
@@ -182,6 +183,12 @@ export function DashboardPage() {
       </section>
 
       <section aria-label={t("dashboardAttentionTasks")} className="mt-10">
+        <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
+          <h2 className="text-base font-semibold">{t("dashboardAttentionTasks")}</h2>
+          <Link className="text-sm font-medium text-primary hover:underline" to="/history">
+            {t("dashboardViewAllTasks")}
+          </Link>
+        </div>
         <DashboardTaskTable
           tasks={visibleTasks}
           isLoading={tasksQuery.isLoading}
@@ -189,6 +196,8 @@ export function DashboardPage() {
           onRetry={() => void tasksQuery.refetch()}
         />
       </section>
+
+      <div className="mt-8"><LocalDraftManager maxItems={5} showViewAll /></div>
 
       <div className="mt-8"><KnowledgeActivityPanel compact /></div>
 
@@ -286,7 +295,7 @@ function DashboardTaskTable({
           <div role="columnheader" className="px-3">{t("dashboardColumnAttention")}</div>
           <div role="columnheader" className="px-3">{t("dashboardColumnNext")}</div>
         </div>
-        <div role="rowgroup" className="h-44 overflow-hidden rounded-b-[8px] border-x border-b bg-card">
+        <div role="rowgroup" className="min-h-55 overflow-hidden rounded-b-[8px] border-x border-b bg-card">
           {isLoading ? <DesktopLoadingRows label={t("loading")} /> : null}
           {!isLoading && errorMessage ? (
             <CompactTableMessage
@@ -308,7 +317,7 @@ function DashboardTaskTable({
             ? tasks.map((task) => <DesktopTaskRow key={task.task_id} task={task} />)
             : null}
           {!isLoading && !errorMessage && tasks.length > 0
-            ? Array.from({ length: Math.max(0, 4 - tasks.length) }, (_, index) => (
+            ? Array.from({ length: Math.max(0, 5 - tasks.length) }, (_, index) => (
                 <div key={`empty-row-${index}`} role="presentation" className="h-11 border-t bg-card" />
               ))
             : null}
@@ -319,12 +328,6 @@ function DashboardTaskTable({
 
   return (
     <div className="grid gap-2">
-      <div className="flex items-center justify-between gap-4">
-        <h2 className="text-[15px] font-semibold">{t("dashboardAttentionTasks")}</h2>
-        <Link className="text-[13px] font-medium text-primary" to="/history">
-          {t("history")}
-        </Link>
-      </div>
       {isLoading ? <MobileLoadingCards /> : null}
       {!isLoading && errorMessage ? (
         <div className="rounded-[10px] border bg-card p-5">
@@ -351,7 +354,7 @@ function DashboardTaskTable({
         </div>
       ) : null}
       {!isLoading && !errorMessage
-        ? tasks.slice(0, 3).map((task) => <MobileTaskCard key={task.task_id} task={task} />)
+        ? tasks.map((task) => <MobileTaskCard key={task.task_id} task={task} />)
         : null}
     </div>
   );
@@ -665,7 +668,7 @@ function selectVisibleTasks(tasks: TaskLite[]): TaskLite[] {
       if (updated !== 0) return updated;
       return a.task_id.localeCompare(b.task_id);
     })
-    .slice(0, 4);
+    .slice(0, 5);
 }
 
 function compareExperts(a: ExpertConfig, b: ExpertConfig): number {

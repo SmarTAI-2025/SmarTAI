@@ -1,4 +1,3 @@
-import { LocalDraftManager } from "@/components/ui/LocalDraftManager";
 import { useSearchParams } from "react-router-dom";
 import { FolderPlus, HardDrive, LoaderCircle, Search, Upload, X } from "lucide-react";
 import { useEffect, useMemo, useState, type ReactNode } from "react";
@@ -121,7 +120,6 @@ export function KnowledgeBasePage() {
         </div>
       </div>
 
-      <LocalDraftManager />
       {draftOpenError ? <p role="alert" className="my-3 text-danger">{draftOpenError}</p> : null}
 
       <div className="relative mt-8">
