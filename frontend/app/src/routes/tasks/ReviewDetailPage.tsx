@@ -39,6 +39,7 @@ import { useI18n } from "@/i18n/I18nProvider";
 import type { Locale } from "@/i18n/messages";
 import { cn } from "@/lib/cn";
 import { reviewCellKey } from "@/lib/reviewOverview";
+import { questionTypeLabel } from "@/lib/reviewLabels";
 import { getSafeTaskReturnTo, getTaskDestination } from "@/lib/taskFlow";
 import { ResultQuestionSidebar, type ResultQuestionState } from "@/routes/tasks/results/ResultQuestionSidebar";
 import type { Correction } from "@/types";
@@ -693,7 +694,7 @@ function ReviewQuestionCard({ locale, student, question, correction, draft, requ
         <div className="min-w-0">
           <div className="flex flex-wrap items-center gap-2">
             <h2 className="text-[20px] font-bold text-foreground">{question.label}</h2>
-            <span className="rounded-full bg-slate-100 px-2.5 py-1 text-[11px] font-semibold text-muted-foreground dark:bg-slate-800">{question.type || tx(locale, "未分类", "Uncategorized")}</span>
+            <span className="rounded-full bg-slate-100 px-2.5 py-1 text-[11px] font-semibold text-muted-foreground dark:bg-slate-800">{questionTypeLabel(question.type, locale)}</span>
           </div>
           <p className="mt-1 text-[11px] text-muted-foreground">{tx(locale, "题目、作答、SmarTAI 结果和教师最终结果在同一卡片内连续复核。", "Review the question, student response, SmarTAI result, and teacher result in one card.")}</p>
         </div>

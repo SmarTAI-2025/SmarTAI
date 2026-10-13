@@ -2,12 +2,12 @@ import { useRef, useState, type Dispatch, type SetStateAction } from "react";
 import { draftGeneration, type DraftCodec } from "@/lib/pageDraftStore";
 import { useDraftProtection } from "@/hooks/useDraftProtection";
 export { PageDraftSession } from "@/hooks/useDraftProtection";
-export function usePageDraft<T extends object>(scope: string, initial: () => T, codec: DraftCodec<T>, version = "", businessBaseline?: T, busy = false) {
+export function usePageDraft<T extends object>(scope: string, initial: () => T, codec: DraftCodec<T>, version = "", businessBaseline?: T, busy = false, enabled = true) {
   const [baseline, setBaseline] = useState(initial);
   const [value, setValue] = useState(baseline);
   const current = useRef(value); const epoch = useRef(draftGeneration()); const sealed = useRef(false);
   current.current = value;
-  const protection = useDraftProtection({ scope, value, baseline: businessBaseline ?? baseline, codec, version, busy, onRestore: (restored) => { current.current = restored; setValue(restored); } });
+  const protection = useDraftProtection({ scope, value, baseline: businessBaseline ?? baseline, codec, version, busy, enabled, onRestore: (restored) => { current.current = restored; setValue(restored); } });
   function update(next: SetStateAction<T>) {
     if (sealed.current || epoch.current !== draftGeneration()) return;
     const resolved = typeof next === "function" ? (next as (value: T) => T)(current.current) : next;

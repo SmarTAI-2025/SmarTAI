@@ -125,23 +125,24 @@ function RouterLeaveGuard({ shouldBlock, ask }: { shouldBlock: () => boolean; as
   }, [blocker, dataRouter, ask]);
   return null;
 }
-export function DraftActions() {
+export function DraftActions({ locale = "zh-CN" }: { locale?: string }) {
+  const tx = (zh: string, en: string) => locale === "zh-CN" ? zh : en;
   const { controllers, save, saving, error } = useDraftLeave();
   const [deleteError, setDeleteError] = useState<string | null>(null);
   const editable = controllers.filter((item) => !item.secret);
   if (!editable.length) return null;
   const dirty = editable.some((item) => item.dirty); const busy = saving || editable.some((item) => item.busy || !item.loaded);
   const savedAt = Math.max(...editable.map((item) => item.savedAt ?? 0));
-  return <section aria-label="本地草稿" className="my-5 w-full rounded-[10px] border bg-card px-4 py-3 text-sm">
+  return <section aria-label={tx("本地草稿", "Local draft")} className="my-5 w-full rounded-[10px] border bg-card px-4 py-3 text-sm">
     <div className="flex flex-wrap items-center justify-between gap-3">
-      <p role="status">{dirty ? "有未暂存修改" : savedAt ? `已暂存 · ${new Date(savedAt).toLocaleString()}` : "尚未暂存"}</p>
-      <div className="flex flex-wrap gap-2"><button type="button" disabled={busy} onClick={() => void save().catch(() => {})} className="rounded-md bg-primary px-4 py-2 font-semibold text-primary-foreground disabled:opacity-50">{saving ? "正在暂存…" : "暂存"}</button><button type="button" disabled={busy} onClick={() => { if (window.confirm("删除本页已暂存草稿并重置输入？正式业务结果不受影响。")) { setDeleteError(null); void Promise.all(editable.map((item) => item.remove())).catch((failure) => setDeleteError(draftError(failure))); } }} className="rounded-md border px-3 py-2">删除本页草稿</button></div>
+      <p role="status">{dirty ? tx("有未暂存修改", "Unsaved changes") : savedAt ? `${tx("已暂存", "Draft saved")} · ${new Date(savedAt).toLocaleString(locale)}` : tx("尚未暂存", "No saved draft")}</p>
+      <div className="flex flex-wrap gap-2"><button type="button" disabled={busy} onClick={() => void save().catch(() => {})} className="rounded-md bg-primary px-4 py-2 font-semibold text-primary-foreground disabled:opacity-50">{saving ? tx("正在暂存…", "Saving draft…") : tx("暂存", "Save draft")}</button><button type="button" disabled={busy} onClick={() => { if (window.confirm(tx("删除本页已暂存草稿并重置输入？正式业务结果不受影响。", "Delete this page’s saved draft and reset the input? Saved task results will not change."))) { setDeleteError(null); void Promise.all(editable.map((item) => item.remove())).catch((failure) => setDeleteError(draftError(failure))); } }} className="rounded-md border px-3 py-2">{tx("删除本页草稿", "Delete page draft")}</button></div>
     </div>
     <div className="mt-2 flex flex-wrap items-start gap-x-3 gap-y-1 text-xs text-muted-foreground">
-      <p>仅保存在此浏览器，7 天内可恢复。</p>
-      <details><summary className="cursor-pointer">保存说明</summary><p className="mt-1 max-w-lg">退出登录或清理浏览器数据会清除草稿。每页最多 64 MiB，总计 128 MiB、30 份。</p></details>
+      <p>{tx("仅保存在此浏览器，7 天内可恢复。", "Stored only in this browser and recoverable for 7 days.")}</p>
+      <details><summary className="cursor-pointer">{tx("保存说明", "Storage details")}</summary><p className="mt-1 max-w-lg">{tx("退出登录或清理浏览器数据会清除草稿。每页最多 64 MiB，总计 128 MiB、30 份。", "Signing out or clearing browser data removes drafts. Limits: 64 MiB per page, 128 MiB total, and 30 drafts.")}</p></details>
     </div>
-    {editable.map((item) => <div key={item.scope}>{item.notice ? <p role="status" className="mt-2 text-xs">{item.notice}</p> : null}{item.hasConflict ? <div className="mt-2 flex flex-wrap gap-2"><button type="button" onClick={item.keepCurrent} className="rounded border px-3 py-2 text-sm">保留当前输入</button><button type="button" onClick={item.restore} className="rounded border px-3 py-2 text-sm">核对后恢复旧草稿</button></div> : null}</div>)}
+    {editable.map((item) => <div key={item.scope}>{item.notice ? <p role="status" className="mt-2 text-xs">{item.notice}</p> : null}{item.hasConflict ? <div className="mt-2 flex flex-wrap gap-2"><button type="button" onClick={item.keepCurrent} className="rounded border px-3 py-2 text-sm">{tx("保留当前输入", "Keep current input")}</button><button type="button" onClick={item.restore} className="rounded border px-3 py-2 text-sm">{tx("核对后恢复旧草稿", "Review and restore saved draft")}</button></div> : null}</div>)}
     {error ? <p role="alert" className="mt-2 text-danger">{error}</p> : null}
     {deleteError ? <p role="alert" className="mt-2 text-danger">{deleteError}</p> : null}
   </section>;

@@ -446,6 +446,27 @@ def _format_metadata_zh(
     return ""
 
 
+def _format_metadata(cases_source, skipped_reason, exec_report, cases_run, *, language):
+    if language != "en":
+        return _format_metadata_zh(cases_source, skipped_reason, exec_report, cases_run)
+    labels = {"teacher": "teacher-provided tests", "llm_generated": "AI-generated tests",
+              "llm_function_call": "function-call tests"}
+    if cases_source in labels and exec_report is not None:
+        warning = (" None passed; AI-generated tests may be inaccurate. Please review them."
+                   if cases_source == "llm_generated" and exec_report.total_count >= 3
+                   and exec_report.passed_count == 0 else "")
+        return (f"\n\n(Sandbox: {cases_run} {labels[cases_source]}; "
+                f"passed {exec_report.passed_count}/{exec_report.total_count}.{warning})")
+    reasons = {
+        "function_only_no_io": "Only a function definition was submitted and no function-call tests were generated",
+        "llm_call_failed": "Test generation failed due to a model or connection error; retry grading this question later",
+        "skipped_complex": "The program requires capabilities outside the sandbox",
+        "skipped_lang": "Only Python execution is supported; the submitted code was not identified as Python",
+    }
+    reason = reasons.get(cases_source)
+    return f"\n\n(Sandbox skipped: {reason}. This score is based on AI code review.)" if reason else ""
+
+
 # ─── Skill ───────────────────────────────────────────────────────────────────
 
 @register_skill("编程题")
@@ -675,8 +696,8 @@ class ProgrammingSkill(GradingSkill):
                         score=float(s.get("score", 0.0)),
                     ))
 
-            metadata_footer = _format_metadata_zh(
-                cases_source, skipped_reason, exec_report, len(test_cases)
+            metadata_footer = _format_metadata(
+                cases_source, skipped_reason, exec_report, len(test_cases), language=self.language
             )
             final_comment = (result.comment or "") + metadata_footer
 

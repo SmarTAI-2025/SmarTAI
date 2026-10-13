@@ -2311,6 +2311,8 @@ async def _recognize_saved_question_sources(sources, *, operation, route, regist
     Frozen source inputs stay immutable, including their prepared-text hash.
     Recognition artifacts provide the existing durable cache on safe retries.
     """
+    retry_key = (f"{operation.operation_id}:{operation.attempt}"
+                 if (operation.payload or {}).get("retry_origin_id") or operation.attempt > 1 else None)
     resolved = []
     for index, (draft, text, payload) in enumerate(sources):
         if not payload.get("recognition_pending"):
@@ -2338,6 +2340,7 @@ async def _recognize_saved_question_sources(sources, *, operation, route, regist
             extraction_hint=draft.extraction_hint, options=payload.get("recognition_options"),
             purpose=_source_role_ocr_purpose(draft.role), reporter=reporter,
             allow_vision=draft.role not in {"rubric", "programming_tests"} or payload.get("enable_material_ocr") is True,
+            retry_key=retry_key,
         )
         if not result.text.strip():
             raise RecognitionError("ocr_empty_result")

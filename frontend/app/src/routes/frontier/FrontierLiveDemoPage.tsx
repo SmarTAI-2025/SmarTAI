@@ -75,7 +75,7 @@ interface RunStep {
 function initialSteps(locale: Locale): RunStep[] {
   return [
     { id: "task", label: tx(locale, "创建专属 Demo 任务", "Create a dedicated demo task"), detail: tx(locale, "真实 POST /tasks 请求", "Real POST /tasks request"), state: "waiting" },
-    { id: "questions", label: tx(locale, "准备并确认题目", "Prepare and confirm questions"), detail: tx(locale, "真实识别 + 标答与评分资料生成", "Real extraction + answer and rubric generation"), state: "waiting" },
+    { id: "questions", label: tx(locale, "准备并审核题目", "Prepare and review questions"), detail: tx(locale, "真实识别 + 标答与评分资料生成", "Real extraction + answer and rubric generation"), state: "waiting" },
     { id: "submissions", label: tx(locale, "识别混合作答", "Recognize mixed submissions"), detail: tx(locale, "真实 PDF / 图片 OCR 流程", "Real PDF/image OCR pipeline"), state: "waiting" },
     { id: "grading", label: tx(locale, "运行 AI 批改", "Run AI grading"), detail: tx(locale, "真实单模型批改任务", "Real single-provider grading run"), state: "waiting" },
   ];
@@ -552,7 +552,7 @@ export function FrontierLiveDemoPage() {
             <p className="border-t px-4 py-3 text-xs leading-5 text-muted-foreground">{tx(locale, "这就是实际上传至 API 的浏览器端合成样例副本；它不代表当前后端已持久化原始文件字节。", "This is the same browser-side synthetic fixture uploaded to the API. It is not a claim that the current backend persists original bytes.")}</p>
           </section>
           <InlineNotice tone="warning" title={tx(locale, "仍由教师控制的部分", "What remains human-controlled")}>
-            {tx(locale, "题目准备流程真实生成标答与评分依据，教师确认后才进入批改。批改完成后，教师仍需在复核工作台检查证据并作出最终发布决定。", "The live preparation flow generates the reference answers and rubrics, and grading starts only after teacher confirmation. The educator still reviews evidence and makes the final release decision.")}
+            {tx(locale, "题目准备流程真实生成标答与评分依据，教师可随时审核和确认。普通待确认不阻止继续，严重问题需先处理。批改完成后，教师仍需检查证据并决定最终发布。", "The live preparation flow generates reference answers and rubrics for teacher review. Ordinary pending confirmations do not prevent continuation; blocking issues must be resolved first. Teachers still review the grading evidence and decide what to release.")}
           </InlineNotice>
         </aside>
       </div>
@@ -887,7 +887,7 @@ function TeacherMaterialConfirmation({
           <p className="text-xs font-semibold uppercase tracking-[0.12em] text-primary">{confirmed ? tx(locale, "真实生成 · 已确认", "Live generation · confirmed") : tx(locale, "真实生成 · 教师确认", "Live generation · teacher confirmation")}</p>
           <h3 id="demo-teacher-material-title" className="mt-1 text-lg font-bold">{tx(locale, "复核本次生成的题目资料", "Review this run's generated materials")}</h3>
           <p className="mt-1 max-w-2xl text-xs leading-5 text-muted-foreground">
-            {tx(locale, "题干、标答、评分依据与代码题材料均来自本次真实题目准备流程；这里只做教师确认，不注入预置答案或评分标准。各题总分来自合成 Demo 中明确的教师设置。", "The stems, reference answers, rubrics, and programming materials all come from this live preparation run. This step only records teacher confirmation; it injects no pre-authored answers or rubrics. Question totals come from the synthetic Demo's explicit teacher score settings.")}
+            {tx(locale, "题干、标答、评分依据与代码题材料均来自本次真实题目准备流程，可进入审核页查看并确认。继续下一阶段会保留待确认状态。各题总分来自合成 Demo 中明确的教师设置。", "The stems, reference answers, rubrics, and programming materials come from this live preparation run. Open question review to inspect and confirm them. Continuing keeps pending confirmations unchanged. Question totals follow the synthetic Demo's teacher-defined settings.")}
           </p>
         </div>
         <Link className="shrink-0 text-xs font-semibold text-primary hover:underline" to={`/tasks/${task.task_id}/questions`}>
@@ -1105,13 +1105,10 @@ function stepsFromSnapshot(snapshot: TaskStateSnapshot, locale: Locale): RunStep
         : index === completedRank && ["extracting_problems", "parsing_submissions", "grading"].includes(snapshot.status)
           ? "active"
           : "waiting";
-    const questionsConfirmed = snapshot.status !== "problems_ready";
     const completeDetail = step.id === "task"
       ? tx(locale, `任务 ${shortId(snapshot.task_id)} 已创建`, `Task ${shortId(snapshot.task_id)} created`)
       : step.id === "questions"
-        ? questionsConfirmed
-          ? tx(locale, `已识别 ${snapshot.problem_count} 题并确认教师评分标准`, `${snapshot.problem_count} questions recognized and teacher rubric confirmed`)
-          : tx(locale, `已识别 ${snapshot.problem_count} 题；继续前将校验评分标准确认状态`, `${snapshot.problem_count} questions recognized; rubric confirmation will be verified before continuing`)
+        ? tx(locale, `已识别 ${snapshot.problem_count} 题；人工确认状态请查看审核页面`, `${snapshot.problem_count} questions recognized; see question review for confirmation status`)
         : step.id === "submissions"
           ? tx(locale, `已识别 ${snapshot.student_count} 份合成作答`, `${snapshot.student_count} synthetic submissions recognized`)
           : tx(locale, `已处理 ${snapshot.student_count * snapshot.problem_count} 个作答单元`, `${snapshot.student_count * snapshot.problem_count} answer units processed`);

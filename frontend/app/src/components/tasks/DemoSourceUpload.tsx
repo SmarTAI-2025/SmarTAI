@@ -2,9 +2,11 @@ import { useEffect, useRef, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { FileCheck2, LoaderCircle } from "lucide-react";
 import { useTask } from "@/api/hooks";
+import { useParseSubmissions } from "@/api/hooks/tasks";
+import { useStartQuestionPreparation } from "@/api/hooks/problemSources";
 import { getGradingSetup } from "@/api/gradingSetup";
-import { preflightProblemSource, startQuestionPreparation } from "@/api/problemSources";
-import { getTask, parseSubmissions } from "@/api/tasks";
+import { preflightProblemSource } from "@/api/problemSources";
+import { getTask } from "@/api/tasks";
 import { NewTaskStepper } from "@/components/new-task/NewTaskStepper";
 import { RecoverableActionState } from "@/components/ui/RecoverableActionState";
 import { useI18n } from "@/i18n/I18nProvider";
@@ -18,6 +20,8 @@ export function DemoSourceUpload({ stage }: { stage: "questions" | "submissions"
   const { locale } = useI18n();
   const navigate = useNavigate();
   const query = useTask(taskId, { refetchOnMount: "always" });
+  const prepareQuestions = useStartQuestionPreparation();
+  const recognizeSubmissions = useParseSubmissions();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<unknown>(null);
   const alive = useRef(true);
@@ -64,10 +68,10 @@ export function DemoSourceUpload({ stage }: { stage: "questions" | "submissions"
           saveToLibrary: false, recognitionProviderId: provider.provider_id }));
         const revision = preflight.workflow_revision ?? preflight.base_workflow_revision;
         if (revision === undefined) throw new Error("task_workflow_changed");
-        await step(() => startQuestionPreparation({ taskId, sourceTokens: [preflight.source_token], expectedWorkflowRevision: revision,
+        await step(() => prepareQuestions.mutateAsync({ taskId, sourceTokens: [preflight.source_token], expectedWorkflowRevision: revision,
           scorePolicy: { mode: "per_question", perQuestionText: DEMO_SCORE_POLICY }, recognitionProviderId: provider.provider_id }));
       } else {
-        await step(() => parseSubmissions({ taskId, file, identityMode: "filename", recognitionProviderId: provider.provider_id, expectedWorkflowRevision: latest.workflow_revision }));
+        await step(() => recognizeSubmissions.mutateAsync({ taskId, file, identityMode: "filename", recognitionProviderId: provider.provider_id, expectedWorkflowRevision: latest.workflow_revision }));
       }
       navigate(progress);
     } catch (caught) { if (current()) setError(caught); }

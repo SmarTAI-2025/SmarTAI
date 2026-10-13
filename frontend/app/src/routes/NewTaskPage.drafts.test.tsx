@@ -7,10 +7,12 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { PageDraftSession } from "@/hooks/usePageDraft";
 import { clearPageDrafts } from "@/lib/pageDraftStore";
 import { NewTaskPage } from "./NewTaskPage";
+import { FrontierContext } from "@/lib/frontierContext";
 
 const state = vi.hoisted(() => ({
   task: { task_id: "t1", name: "Saved task", semester_id: "2026-fall", course_id: "c1", tag_ids: ["tag1"] },
   create: vi.fn(), update: vi.fn(),
+  locale: "zh-CN",
 }));
 vi.mock("@/api/hooks", () => ({
   useTask: (id?: string) => ({ data: id ? state.task : undefined, isLoading: false, isSuccess: true }),
@@ -24,17 +26,17 @@ vi.mock("@/api/hooks", () => ({
   useExperts: () => ({ data: [] }),
 }));
 vi.mock("@/components/new-task/NewTaskStepper", () => ({ NewTaskStepper: () => null }));
-vi.mock("@/i18n/I18nProvider", () => ({ useI18n: () => ({ locale: "zh-CN", t: (key: string) => key }) }));
+vi.mock("@/i18n/I18nProvider", () => ({ useI18n: () => ({ locale: state.locale, t: (key: string) => key }) }));
 vi.mock("sonner", () => ({ toast: { success: vi.fn() } }));
 
-function mount(path = "/tasks/new") {
+function mount(path = "/tasks/new", frontier = false) {
   const router = createMemoryRouter([{ element: <DraftLeaveProvider><Outlet /><DraftActions /></DraftLeaveProvider>, children: [
     { path: "/tasks/new", element: <NewTaskPage /> },
     { path: "/tasks/:taskId/edit", element: <NewTaskPage /> },
     { path: "/tasks/:taskId/upload/problems", element: <div>Upload problems</div> },
     { path: "/settings/byok", element: <div>BYOK</div> },
   ] }], { initialEntries: [path] });
-  return { ...render(<PageDraftSession ownerId="metadata-teacher"><RouterProvider router={router} /></PageDraftSession>), router };
+  return { ...render(<FrontierContext.Provider value={frontier}><PageDraftSession ownerId="metadata-teacher"><RouterProvider router={router} /></PageDraftSession></FrontierContext.Provider>), router };
 }
 afterEach(() => vi.restoreAllMocks());
 const name = () => screen.getByLabelText("newTaskNameLabel");
@@ -42,6 +44,7 @@ beforeEach(async () => {
   vi.stubGlobal("Blob", Blob); vi.stubGlobal("File", File);
   await clearPageDrafts();
   state.task.name = "Saved task";
+  state.locale = "zh-CN";
   state.create.mockReset().mockResolvedValue({ task_id: "created" });
   state.update.mockReset().mockResolvedValue({});
 });
@@ -106,3 +109,19 @@ it("reuses the create idempotency key after an uncertain response and navigation
 });
 
 async function saveDraft() { await waitFor(() => expect(screen.getByRole("button", { name: "暂存" })).toBeEnabled()); fireEvent.click(screen.getByRole("button", { name: "暂存" })); await waitFor(() => expect(screen.getByText(/已暂存 ·/)).toBeInTheDocument()); }
+
+it.each(["zh-CN", "en-US"])("keeps Demo presets immutable without restoring a local metadata draft (%s)", async (locale) => {
+  const original = mount("/tasks/t1/edit");
+  fireEvent.change(name(), { target: { value: "Old browser draft" } });
+  await saveDraft();
+  original.unmount();
+  state.locale = locale;
+  mount("/tasks/t1/edit", true);
+  await waitFor(() => expect(name()).toHaveValue("Saved task"));
+  expect(name()).toBeDisabled();
+  expect(screen.queryByRole("region", { name: "本地草稿" })).not.toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: locale === "zh-CN" ? "进入上传题目" : "Continue to Questions" }));
+  await screen.findByText("Upload problems");
+  expect(state.update).not.toHaveBeenCalled();
+  expect(state.create).not.toHaveBeenCalled();
+});

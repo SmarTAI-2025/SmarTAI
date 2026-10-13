@@ -133,6 +133,37 @@ async def test_failed_operation_is_not_reset(tmp_path):
     assert not created and same.attempt == row.attempt and same.checkpoint == row.checkpoint
 
 
+@pytest.mark.asyncio
+async def test_explicit_retry_reuses_successful_pages_without_replaying_on_refresh(tmp_path):
+    service, request, data, engine = runner(tmp_path, pdf=True, pages=2, initial=[
+        "literal 1 + 1 = 3", RecognitionError("provider_upstream_unavailable", submission_may_exist=True),
+    ])
+    first = await run(service, request, data, engine)
+    assert first.status == "needs_review"
+    assert first.safe_error_code == "provider_submit_uncertain"
+    original = workflow_repository.get_operation(first.operation_id, owner_id=request.source.owner_id)
+    original_checkpoint = original.checkpoint
+    assert [call.page_number for call in engine.reads] == [1, 2]
+    engine.initial[1] = "literal 1 + 1 = 3"
+    assert (await run(service, request, data, engine)).status == "needs_review"
+    assert len(engine.reads) == 2  # A refresh never authorizes another paid call.
+
+    args = dict(engine=engine, prompt_version="faithful-reader-v1",
+                authorized_owner_id=request.source.owner_id, retry_key="parent-retry:1")
+    retried = await service.run(request, data, **args)
+    assert retried.status == "completed", retried.safe_error_code
+    assert retried.operation_id != first.operation_id
+    assert [call.page_number for call in engine.reads] == [1, 2, 2]
+    assert retried.assembly.raw.read_batch.provenance[0].origin == "cache_hit"
+    assert (await service.run(request, data, **args)).status == "already_done"
+    assert len(engine.reads) == 3
+    preserved = workflow_repository.get_operation(first.operation_id, owner_id=request.source.owner_id)
+    assert preserved.checkpoint == original_checkpoint and preserved.attempt == original.attempt
+    with pytest.raises(RecognitionError):
+        await service.run(request, data, **{**args, "authorized_owner_id": "other"})
+    assert len(engine.reads) == 3
+
+
 def test_durable_budget_pending_unknown_duplicate_and_limits():
     from backend.tests.test_recognition_recheck import Engine
     caps = Engine().capabilities

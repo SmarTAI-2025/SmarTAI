@@ -155,7 +155,7 @@ class QuestionSourceRead:
 async def read_question_source(*, owner_id, task_id, content, filename, content_type=None,
                                route: StageProviderRoute, registry, stored_file_id=None,
                                extraction_hint="", options=None, purpose="problems", reporter=None, text_reader=None,
-                               allow_vision=None, binding=None):
+                               allow_vision=None, binding=None, retry_key=None):
     from backend.services.source_files import persist_problem_source
 
     scope = question_recognition_options(options, extraction_hint=extraction_hint)
@@ -213,6 +213,7 @@ async def read_question_source(*, owner_id, task_id, content, filename, content_
             text, summary = await read_question_pdf_batches(
                 service=service, request=native_request, content=content, engine=None,
                 total_pages=total_pages, reporter=reporter, binding=binding, allow_native_partial=True,
+                retry_key=retry_key,
             )
             return QuestionSourceRead(text, summary, stored_file_id)
 
@@ -222,7 +223,7 @@ async def read_question_source(*, owner_id, task_id, content, filename, content_
             try:
                 text, summary = await read_question_pdf_batches(
                     service=service, request=request, content=content, engine=engine,
-                    total_pages=total_pages, reporter=reporter, binding=binding,
+                    total_pages=total_pages, reporter=reporter, binding=binding, retry_key=retry_key,
                 )
             except RecognitionError as exc:
                 if exc.code != "provider_vision_not_supported" or not allow_vision or engine is None:
@@ -233,13 +234,14 @@ async def read_question_source(*, owner_id, task_id, content, filename, content_
             return QuestionSourceRead(text, summary, stored_file_id)
         run = await service.run(
             request, content, engine=engine, prompt_version=PROMPT_VERSION, authorized_owner_id=owner_id, binding=binding,
+            retry_key=retry_key,
         )
         if media_type == "application/pdf" and allow_vision and engine is not None and run.safe_error_code == "provider_vision_not_supported":
             if total_pages is not None:
                 return await read_native_question_pdf()
             run = await service.run(
                 request, content, engine=None, prompt_version=PROMPT_VERSION,
-                authorized_owner_id=owner_id, binding=binding,
+                authorized_owner_id=owner_id, binding=binding, retry_key=retry_key,
             )
     if run.status == "already_running":
         raise RecognitionError("recognition_already_running")

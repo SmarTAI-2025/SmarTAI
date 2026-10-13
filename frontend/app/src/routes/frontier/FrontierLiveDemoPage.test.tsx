@@ -244,13 +244,13 @@ describe("FrontierLiveDemoPage", () => {
     );
 
     expect(await screen.findByText(/Cannot reach the model service/)).toBeInTheDocument();
-    expect(screen.getByText("Prepare and confirm questions").closest("li")).toHaveClass("border-danger/30");
+    expect(screen.getByText("Prepare and review questions").closest("li")).toHaveClass("border-danger/30");
     expect(screen.getByText("Create a dedicated demo task").closest("li")).toHaveClass("border-accent/25");
     expect(screen.getByText("Recognize mixed submissions").closest("li")).not.toHaveClass("border-danger/30");
   });
 
   it.each([
-    ["extract-job", "Prepare and confirm questions"],
+    ["extract-job", "Prepare and review questions"],
     ["parse-job", "Recognize mixed submissions"],
     ["grading-job", "Run AI grading"],
   ])("restores the failed %s without moving the error to task creation", async (failedJobId, failedStep) => {
@@ -316,6 +316,14 @@ describe("FrontierLiveDemoPage", () => {
     expect(screen.queryByText(/teacher rubric confirmed/i)).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: /continue to submissions/i })).toHaveClass("h-12", "bg-primary");
     expect(screen.getByRole("button", { name: /start over/i })).toHaveClass("h-9", "bg-card");
+  });
+
+  it("does not infer teacher confirmation from a completed grading stage", async () => {
+    vi.mocked(getTaskState).mockResolvedValue(taskState("graded"));
+    vi.mocked(getTask).mockResolvedValue(taskWithQuestions());
+    render(<I18nProvider><MemoryRouter initialEntries={["/frontier/live?taskId=asg_demo123"]}><FrontierLiveDemoPage /></MemoryRouter></I18nProvider>);
+    expect(await screen.findByText(/see question review for confirmation status/i)).toBeInTheDocument();
+    expect(screen.queryByText(/teacher rubric confirmed/i)).not.toBeInTheDocument();
   });
 
   it("keeps generated materials visible after returning under React StrictMode", async () => {
