@@ -43,7 +43,7 @@ jobs:
         run: python tools/runner_spike/harness.py probe --runtime docker --json
       - name: Install pinned backend test dependencies
         run: |
-          python -m pip install --require-hashes --only-binary=:all: -r backend/requirements.txt
+          python -m pip install --require-hashes --only-binary=:all: -r requirements-dev.txt
       - name: Test the application adapter against the real OCI runtime
         env:
           SMARTAI_OCI_REAL_TEST: "1"
