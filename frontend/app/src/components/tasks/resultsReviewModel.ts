@@ -1,9 +1,8 @@
 import type { Correction } from "@/types";
+import { VERY_LOW_REVIEW_CONFIDENCE, type ReviewAttention } from "@/lib/reviewConfirmation";
 import {
   correctionReviewReasonIds,
-  displayableCorrectionScore,
   effectiveCorrectionScore,
-  hasReviewSignal,
   reviewReasonLabel,
   type QuestionSummary,
   type ResultsModel,
@@ -17,10 +16,31 @@ export interface ReviewItem {
   priority: number;
   reasons: string[];
   category: "low-confidence" | "expert-disagreement" | "score-anomaly" | "review";
+  severity: "blocking" | "advisory";
 }
 
 export function isCorrectionReviewConfirmed(correction: Correction): boolean {
-  return Number.isFinite(correction.teacher_score) && correction.review_status === "confirmed" && effectiveCorrectionScore(correction) !== null;
+  return Number.isFinite(correction.teacher_score) && correction.review_status === "confirmed" && !correctionReviewBlocked(correction);
+}
+
+function validScore(value: number | null | undefined, maxScore: number): boolean {
+  return typeof value === "number" && Number.isFinite(value) && Number.isFinite(maxScore) && maxScore > 0 && value >= 0 && value <= maxScore;
+}
+
+/** Display/navigation guard only; effective AI and teacher score calculation is unchanged. */
+export function correctionReviewBlocked(correction: Correction): boolean {
+  if (!validScore(effectiveCorrectionScore(correction), correction.max_score)) return true;
+  const originalScore = correction.provisional_score === undefined ? correction.score : correction.provisional_score;
+  return !validScore(originalScore, correction.max_score) && correction.review_status !== "confirmed";
+}
+
+export function correctionReviewAttention(correction: Correction): ReviewAttention {
+  if (correctionReviewBlocked(correction)) return "blocking";
+  if (isCorrectionReviewConfirmed(correction)) return "none";
+  const veryLowConfidence = Number.isFinite(correction.confidence) && correction.confidence >= 0 && correction.confidence <= VERY_LOW_REVIEW_CONFIDENCE;
+  const expertDisagreement = correctionReviewReasonIds(correction).some(reason => reason === "high_indecisiveness" || reason === "score_spread_high")
+    || getExpertScoreSpread(correction) > Math.max(1, correction.max_score * 0.25);
+  return veryLowConfidence || expertDisagreement ? "advisory" : "none";
 }
 
 export function collectResultReviewItems(model: ResultsModel, students: StudentSummary[]): ReviewItem[] {
@@ -49,38 +69,25 @@ function buildReviewItem(
   questions: QuestionSummary[],
 ): ReviewItem | null {
   const question = questions.find((item) => item.id === correction.q_id) ?? fallbackQuestion(correction.q_id);
+  const attention = correctionReviewAttention(correction);
+  if (attention === "none") return null;
   const reasons = collectReasonLabels(correction);
-  const reasonIds = correctionReviewReasonIds(correction);
   const expertSpread = getExpertScoreSpread(correction);
-  const displayScore = displayableCorrectionScore(correction);
-  const percent = displayScore !== null && correction.max_score > 0
-    ? (displayScore / correction.max_score) * 100
-    : null;
-  const missingScore = effectiveCorrectionScore(correction) === null;
-  const lowConfidence = correction.confidence < 0.65;
+  const missingScore = attention === "blocking";
+  const lowConfidence = Number.isFinite(correction.confidence) && correction.confidence >= 0 && correction.confidence <= VERY_LOW_REVIEW_CONFIDENCE;
   const expertDisagreement =
     correctionReviewReasonIds(correction).some((reason) => reason === "high_indecisiveness" || reason === "score_spread_high") ||
     expertSpread > Math.max(1, correction.max_score * 0.25);
-  const scoreAnomaly = percent !== null && (percent <= 40 || percent >= 95) && hasReviewSignal(correction);
-
-  if (!missingScore && !lowConfidence && !expertDisagreement && !scoreAnomaly && !correction.requires_human_review && !reasonIds.length) {
-    return null;
-  }
-
-  const category = lowConfidence
+  const category = missingScore ? "review" : lowConfidence
     ? "low-confidence"
     : expertDisagreement
       ? "expert-disagreement"
-      : scoreAnomaly
-        ? "score-anomaly"
-        : "review";
+      : "review";
   const priority =
     (missingScore ? 100 : 0) +
     (lowConfidence ? 30 : 0) +
     (expertDisagreement ? 20 : 0) +
-    (scoreAnomaly ? 10 : 0) +
-    (correction.requires_human_review ? 5 : 0) +
-    (1 - Math.min(1, Math.max(0, correction.confidence)));
+    (1 - Math.min(1, Math.max(0, Number.isFinite(correction.confidence) ? correction.confidence : 1)));
 
   return {
     student,
@@ -89,13 +96,17 @@ function buildReviewItem(
     priority,
     reasons,
     category,
+    severity: attention,
   };
 }
 
 function collectReasonLabels(correction: Correction) {
   const labels = new Set<string>();
-  if (correction.confidence < 0.65) {
-    labels.add("置信度偏低");
+  if (correctionReviewBlocked(correction)) {
+    labels.add(validScore(effectiveCorrectionScore(correction), correction.max_score) ? "缺失分数已补齐，请确认" : "缺少有效分数，请填写并确认");
+  }
+  if (Number.isFinite(correction.confidence) && correction.confidence >= 0 && correction.confidence <= VERY_LOW_REVIEW_CONFIDENCE) {
+    labels.add("置信度很低，建议核对");
   }
   for (const reason of correctionReviewReasonIds(correction)) {
     labels.add(reviewReasonLabel(reason));

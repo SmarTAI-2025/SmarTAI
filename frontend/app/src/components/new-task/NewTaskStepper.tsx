@@ -45,6 +45,8 @@ interface NewTaskStepperProps {
   returnState?: unknown;
   returnStateStep?: number;
   lockedStep?: number;
+  /** A current hard review issue also blocks previously reachable later stages. */
+  blockedFromStep?: number;
   lockedStepReason?: string;
   onLockedStepActivate?: () => void;
 }
@@ -55,6 +57,7 @@ export function NewTaskStepper({
   returnState,
   returnStateStep,
   lockedStep,
+  blockedFromStep,
   lockedStepReason,
   onLockedStepActivate,
 }: NewTaskStepperProps) {
@@ -93,7 +96,14 @@ export function NewTaskStepper({
               key={key}
               className={`flex min-w-max items-center ${index < STEP_KEYS.length - 1 ? "flex-1" : "shrink-0"}`}
             >
-              {index <= effectiveReachableStep && (taskId || index === 0) ? (
+              {blockedFromStep !== undefined && index >= blockedFromStep ? (
+                <button type="button" title={lockedStepReason} aria-label={fullLabel}
+                  onClick={onLockedStepActivate}
+                  className="group flex shrink-0 items-center gap-2 rounded-md text-left outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2">
+                  <StepMarker index={index} currentStep={currentStep} />
+                  <StepLabel compactLabel={compactLabel} fullLabel={fullLabel} isEnglish={locale === "en-US"} className="text-muted-foreground" />
+                </button>
+              ) : index <= effectiveReachableStep && (taskId || index === 0) ? (
                 <Link
                   to={stepHref(taskId, index, location.pathname, location.search, taskQuery.data)}
                   state={returnStateStep === undefined || returnStateStep === index ? returnState : undefined}

@@ -8,6 +8,12 @@ import {
 } from "./taskActionGuards";
 
 describe("task contract compatibility", () => {
+  it.each(["zh-CN", "en-US"] as const)("routes required transcription repairs to review (%s)", (locale) => {
+    const result = classifyRecoverableError("submission_recognition_blocked", { locale, taskId: "task" });
+    expect(result.actionHref).toBe("/tasks/task/submissions");
+    expect(result.tone).toBe("danger");
+    expect(result.description).toContain(locale === "zh-CN" ? "确认已修正" : "confirm the corrected");
+  });
   it.each(["zh-CN", "en-US"] as const)("identifies local capacity pressure without blaming the model (%s)", (locale) => {
     const info = classifyRecoverableError("provider_capacity_unavailable", { locale });
     expect(info.actionKind).toBe("retry");

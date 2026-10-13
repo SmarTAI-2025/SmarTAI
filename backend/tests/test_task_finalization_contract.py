@@ -3,6 +3,8 @@ from __future__ import annotations
 import csv
 from io import StringIO
 
+import pytest
+
 
 def _prepared_task():
     from backend.db import (
@@ -154,6 +156,42 @@ def test_required_review_audit_counts_only_originally_required_results():
         after["confirmed_required_count"],
         after["remaining_review_count"],
     ) == (1, 1, 0)
+
+
+def test_missing_ai_score_repair_still_requires_explicit_confirmation():
+    from backend.db import grading_repository
+    from backend.db.models import GradeResultRecord
+    from backend.db.session import session_scope
+    from backend.domain.errors import ResultNotReleasable
+    from backend.services import task_facade
+
+    seeded = _prepared_task()
+    args = {"task_id": seeded["task_id"], "owner_id": seeded["owner_id"]}
+    with session_scope() as session:
+        row = session.get(GradeResultRecord, seeded["required_result_id"])
+        row.ai_score = None
+        row.result_status = "failed"
+        row.initial_review_reasons = ["llm_failed"]
+        row.review_reasons = ["llm_failed"]
+    grading_repository.add_teacher_review(
+        seeded["required_result_id"], teacher_id=seeded["owner_id"],
+        new_score=7, new_comment="Repaired score", confirm=False,
+    )
+    pending = task_facade.finalization(**args)
+    assert pending["ready_for_confirmation"] is False
+    assert pending["remaining_review_count"] == 1
+    with pytest.raises(ResultNotReleasable):
+        task_facade.confirm_finalization(**args, expected_revision=pending["workflow_revision"])
+    assert grading_repository.get_run(seeded["run_id"], actor_id=seeded["owner_id"]).released_at is None
+    grading_repository.add_teacher_review(
+        seeded["required_result_id"], teacher_id=seeded["owner_id"],
+        new_score=7, new_comment="Repaired score", confirm=True,
+    )
+    confirmed = task_facade.finalization(**args)
+    assert confirmed["ready_for_confirmation"] is True
+    assert confirmed["remaining_review_count"] == 0
+    task_facade.confirm_finalization(**args, expected_revision=confirmed["workflow_revision"])
+    assert grading_repository.get_run(seeded["run_id"], actor_id=seeded["owner_id"]).released_at is not None
 
 
 def test_soft_review_ai_score_is_publishable_and_exported_by_default():

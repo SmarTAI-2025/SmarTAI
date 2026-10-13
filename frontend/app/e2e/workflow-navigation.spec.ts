@@ -128,7 +128,7 @@ for (const mode of ["manual", "all"] as const) test(`${mode} identity and answer
   run.student.stu_ans[0].review_status = "pending";
   await page.goto("/tasks/navigation-task/submissions");
   await expect(page.getByText("待确认：1 位学生身份、1 个作答题次")).toBeVisible();
-  await page.getByRole("link", { name: "查看首个待处理学生", exact: true }).click();
+  await page.getByRole("link", { name: "查看", exact: true }).click();
   await expect(page.locator('[data-question-id="q1"]').getByRole("button", { name: /待确认/ })).toHaveCount(1);
   if (mode === "manual") {
     await page.getByRole("button", { name: "确认身份 · 待确认", exact: true }).click();
@@ -143,7 +143,7 @@ for (const mode of ["manual", "all"] as const) test(`${mode} identity and answer
   await expect(page.getByText("待确认：0 位学生身份、0 个作答题次")).toBeVisible();
   await expect(page.getByRole("button", { name: "已确认", exact: true })).toBeDisabled();
   await expect(page.getByRole("button", { name: "全部确认", exact: true })).toHaveCount(0);
-  await expect(page.getByText("当前身份与作答均已确认。")).toBeVisible();
+  await expect(page.locator('[data-review-stage-actions]')).toContainText("进入批改设置");
   await page.screenshot({ path: `output/playwright/navigation-review-${mode}-confirmed.png`, fullPage: true });
   expect(run.calls).toHaveLength(2);
   expect(run.errors).toEqual([]);

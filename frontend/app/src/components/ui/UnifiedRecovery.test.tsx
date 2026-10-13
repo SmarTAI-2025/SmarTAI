@@ -22,14 +22,15 @@ it.each(["provider_rate_limited", "provider_daily_quota_exceeded"])("renders tru
   }
 });
 
-it("distinguishes routine confirmation from concrete missing pages", () => {
+it("retains source coverage evidence without applying it as a risk to every question", () => {
   const issue: PreparationIssue = { issue_id: "i", field: "stem", code: "recognition_partial", severity: "warning", status: "open",
     details: { coverage: { unverified_targets: ["1.1.5"] } } };
   expect(questionIssueNeedsReview(issue)).toBe(false);
   expect(recognitionIssueLabel(issue, "zh-CN")).toContain("尚未发现具体缺失");
   issue.details = { coverage: { failed_pages: [2, 3], missing_targets: ["1.1.7"] } };
-  expect(questionIssueNeedsReview(issue)).toBe(true);
+  expect(questionIssueNeedsReview(issue)).toBe(false);
   expect(recognitionIssueLabel(issue, "zh-CN")).toBe("识别失败的页码：2, 3；未找到的题号：1.1.7");
+  expect(questionIssueNeedsReview({ ...issue, severity: "blocking" })).toBe(true);
 });
 
 it("renders prose newlines before lowercase and math, preserving code escapes and TeX", () => {

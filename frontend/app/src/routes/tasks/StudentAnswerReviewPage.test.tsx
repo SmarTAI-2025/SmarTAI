@@ -58,7 +58,7 @@ const taskData = vi.hoisted(() => ({
         number: "1",
         type: "Calculation",
         content: "Student answer one",
-        flag: [],
+        flag: [] as string[],
         review_status: "pending",
       }],
     },
@@ -109,6 +109,7 @@ function renderPage(search = "?question=Q1") {
 }
 
 beforeEach(() => {
+  taskData.student_data.S001.stu_ans.splice(1);
   taskData.student_data.S001.identity_status = "matched";
   taskData.student_data.S001.stu_ans[0].review_status = "pending";
   mutations.answer.mockReset().mockResolvedValue({ workflow_revision: 4 });
@@ -149,6 +150,15 @@ beforeEach(() => {
 });
 
 describe("StudentAnswerReviewPage review shortcuts", () => {
+  it("confirms a healthy question independently while another question still blocks the next stage", async () => {
+    taskData.student_data.S001.stu_ans.push({ ...taskData.student_data.S001.stu_ans[0], q_id: "Q2", number: "2", content: "", flag: ["recognition_failed"] });
+    const user = userEvent.setup();
+    renderPage();
+    await user.click(within(document.querySelector('[data-question-id="Q1"]') as HTMLElement).getByRole("button", { name: /待确认/ }));
+    expect(mutations.answer).toHaveBeenCalledWith(expect.objectContaining({ qId: "Q1", reviewStatus: "confirmed" }));
+    await user.click(screen.getByRole("button", { name: "进入批改设置" }));
+    expect(await screen.findByRole("alertdialog")).toHaveTextContent("识别失败");
+  });
   it("opens the editable identity form from the queue and confirms unchanged values", async () => {
     taskData.student_data.S001.identity_status = "needs_review";
     const user = userEvent.setup();
@@ -186,7 +196,10 @@ describe("StudentAnswerReviewPage review shortcuts", () => {
     expect(mutations.answer).not.toHaveBeenCalled();
     expect(draft).toHaveValue("Student answer one corrected");
     expect(screen.getByRole("status")).toHaveTextContent("请先保存正在修改的作答");
-    await user.click(screen.getByRole("button", { name: "保存并确认" }));
+    const saveConfirmation = screen.getByRole("button", { name: /第 1 题 · 保存并确认/ });
+    expect(screen.queryByRole("button", { name: /answerReviewSaveNext/ })).not.toBeInTheDocument();
+    expect(document.querySelector('[data-question-id="Q1"]')?.querySelectorAll('button[aria-label*="确认"]')).toHaveLength(1);
+    await user.click(saveConfirmation);
     expect(mutations.answer).toHaveBeenCalledWith(expect.objectContaining({ content: "Student answer one corrected", reviewStatus: "confirmed" }));
   });
 });

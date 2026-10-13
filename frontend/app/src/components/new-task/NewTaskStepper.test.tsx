@@ -49,6 +49,16 @@ describe("NewTaskStepper workflow guidance", () => {
     expect(onLockedStepActivate).not.toHaveBeenCalled();
   });
 
+  it("blocks previously reachable later stages when the current review has a hard issue", async () => {
+    const onLockedStepActivate = vi.fn();
+    renderStepper({ currentStep: 2, blockedFromStep: 3, lockedStepReason: "Correct the missing question", onLockedStepActivate });
+    expect(screen.queryByRole("link", { name: "newTaskStepSubmissions" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "newTaskStepComplete" })).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "newTaskStepComplete" }));
+    expect(onLockedStepActivate).toHaveBeenCalledOnce();
+    expect(screen.getByRole("link", { name: "newTaskStepQuestionReview" })).toHaveAttribute("href", "/tasks/task-1/questions");
+  });
+
   it("keeps each connector in normal flow after its step label", () => {
     renderStepper({ currentStep: 1, reachableStep: 1 });
 

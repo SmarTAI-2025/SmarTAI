@@ -1,13 +1,13 @@
-import { ReviewConfirmButton, ReviewBlockDialog } from "@/components/tasks/ReviewConfirmation";
-import { submissionReviewBlockers, submissionRecognitionIncomplete, answerReviewBlocked, type ReviewBlocker } from "@/lib/reviewConfirmation";
+import { ReviewConfirmButton, ReviewBlockDialog, ReviewStageActions } from "@/components/tasks/ReviewConfirmation";
+import { submissionReviewBlockers, submissionConfirmationBlockers, submissionRecognitionIncomplete, answerReviewBlocked, studentIdentityReviewBlocked, type ReviewBlocker } from "@/lib/reviewConfirmation";
 import { SortableTableHead, useColumnSort, sortColumnRows, directionFor, type ColumnSort } from "@/components/ui/SortableTableHead";
 import { AlertCircle, CheckCircle2, ChevronRight, RotateCcw } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Link, Navigate, useParams, useSearchParams } from "react-router-dom";
+import { Link, Navigate, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { useTask, useUpdateStudentAnswer, useUpdateStudentIdentity } from "@/api/hooks/tasks";
 import { getAPIErrorCode } from "@/api/client";
 import { confirmSubmissionBatch } from "@/lib/submissionReviewBatch";
-import { answerNeedsConfirmation } from "@/lib/submissionReview";
+import { answerNeedsConfirmation, answerReviewAttention } from "@/lib/submissionReview";
 import { isWorkflowRevisionConflictCode } from "@/lib/taskActionGuards";
 import { TaskQueryBar } from "@/components/tasks/AskQueryBar";
 import { useTaskFilterIntent } from "@/hooks/useTaskFilterIntent";
@@ -36,7 +36,7 @@ import {
   type SubmissionReviewSort,
 } from "@/lib/submissionReview";
 import { getTaskDestination, hasTaskReachedStep } from "@/lib/taskFlow";
-import type { FilterIntentResult, StudentAnswerInfo, StudentSubmission } from "@/types";
+import type { FilterIntentResult, StudentAnswerInfo, StudentSubmission, SubmissionSourceOutcome } from "@/types";
 
 const EXPLANATION_KEYS: Record<SubmissionReviewSelection["explanation"], MessageKey> = {
   all: "submissionReviewFilterAllHint",
@@ -55,10 +55,13 @@ interface SubmissionQueueItem {
   studentName: string;
   questionLabel: string;
   reasonKey: MessageKey;
+  severity: "blocking" | "advisory";
+  reason?: string;
 }
 
 export function SubmissionReviewOverviewPage() {
   const { taskId } = useParams();
+  const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
   const { locale, t } = useI18n();
   // A completed /state poll may arrive before the cached task detail changes.
@@ -84,7 +87,7 @@ export function SubmissionReviewOverviewPage() {
     [students, taskQuery.data?.problem_data],
   );
   const stats = useMemo(() => getSubmissionReviewStats(students, questions), [questions, students]);
-  const pendingIdentities = students.filter((student) => student.identity_status === "needs_review");
+  const pendingIdentities = students.filter((student) => student.identity_status === "needs_review" || studentIdentityReviewBlocked(student, taskQuery.data?.submission_sources));
   const pendingAnswers = students.flatMap((student) => (student.stu_ans ?? [])
     .filter(answerNeedsConfirmation)
     .map((answer) => ({ student, answer })));
@@ -141,12 +144,12 @@ export function SubmissionReviewOverviewPage() {
     : null;
   const returnSearch = searchParams.toString();
   const queueItems = taskId
-    ? buildSubmissionQueueItems(selection.students, selection.questions, taskId, returnSearch)
+    ? buildSubmissionQueueItems(selection.students, selection.questions, taskId, returnSearch, locale, taskQuery.data?.submission_sources)
     : [];
 
   async function confirmAll() {
     if (!taskId || !taskQuery.data || batchLock.current) return;
-    const issues = submissionReviewBlockers(taskQuery.data, locale);
+    const issues = submissionConfirmationBlockers(taskQuery.data, locale);
     if (issues.length) { setBlocked(issues); return; }
     batchLock.current = true;
     setBatchResult(null);
@@ -188,7 +191,7 @@ export function SubmissionReviewOverviewPage() {
         {t("submissionReviewTitle")}
       </h1>
       <ReviewBlockDialog locale={locale} issues={blocked} onClose={() => setBlocked([])} />
-      <NewTaskStepper currentStep={4} />
+      <NewTaskStepper currentStep={4} blockedFromStep={submissionReviewBlockers(taskQuery.data, locale).length ? 5 : undefined} lockedStepReason={locale === "zh-CN" ? "请先处理并确认关键问题" : "Resolve and confirm required items first"} onLockedStepActivate={() => setBlocked(submissionReviewBlockers(taskQuery.data, locale))} />
 
       <SubmissionSourceOutcomePanel
         summary={taskQuery.data?.submission_source_summary}
@@ -299,6 +302,7 @@ export function SubmissionReviewOverviewPage() {
                       students={selection.students}
                       questions={selection.questions}
                       taskId={taskId}
+                      sources={taskQuery.data?.submission_sources}
                       returnSearch={returnSearch}
                       columnSort={headerSort.current}
                       onSort={headerSort.toggle}
@@ -311,36 +315,16 @@ export function SubmissionReviewOverviewPage() {
                 )}
               />
 
-              <footer className="mt-4 flex min-h-[58px] flex-col gap-2 rounded-[10px] border bg-card px-4 py-2.5 sm:flex-row sm:items-center sm:justify-between xl:px-5">
-              <p className="text-xs text-muted-foreground">
-                {locale === "zh-CN"
-                  ? <>
-                    {t("submissionReviewShowingPrefix")}{selection.students.length}
-                    {t("submissionReviewShowingMiddle")}{students.length}
-                    {t("submissionReviewShowingStudentsSuffix")} · {selection.questions.length}/{questions.length}
-                    {t("submissionReviewShowingQuestionsSuffix")}
-                  </>
-                  : <>Showing {selection.students.length} of {students.length} {students.length === 1 ? "student" : "students"} · {selection.questions.length} of {questions.length} {questions.length === 1 ? "question" : "questions"}</>}
-              </p>
-              <div className="flex w-full flex-col gap-2 sm:w-auto sm:flex-row">
-                <ReviewConfirmButton locale={locale} all confirmed={!pendingReviews.length && !submissionReviewBlockers(taskQuery.data, locale).length} busy={batchProgress !== null} onClick={() => void confirmAll()} />
-                {detailStudent && detailQuestion ? (
-                  <Link
-                    to={studentReviewPath(taskId, detailStudent.stu_id, detailQuestion.id, returnSearch)}
-                    className="inline-flex h-9 w-full items-center justify-center gap-1.5 rounded-[7px] border bg-card px-4 text-sm font-semibold text-foreground outline-none transition hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring sm:w-auto"
-                  >
-                    {t(attentionStudent ? "submissionReviewOpenStudent" : "submissionReviewOpenDetails")}
-                  </Link>
-                ) : null}
-                <Link
-                  to={`/tasks/${taskId}/grading-setup`}
-                  className="inline-flex h-9 w-full items-center justify-center gap-1.5 rounded-[7px] bg-primary px-4 text-sm font-semibold text-primary-foreground outline-none transition hover:opacity-90 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 sm:w-auto"
-                >
-                  {t("submissionReviewEnterGradingSetup")}
-                  <ChevronRight aria-hidden="true" className="h-4 w-4" />
-                </Link>
-              </div>
-              </footer>
+              <ReviewStageActions
+                note={locale === "zh-CN" ? `显示 ${selection.students.length}/${students.length} 位学生 · ${selection.questions.length}/${questions.length} 道题` : `Showing ${selection.students.length}/${students.length} students · ${selection.questions.length}/${questions.length} questions`}
+                confirmation={<ReviewConfirmButton locale={locale} all confirmed={!pendingReviews.length && !submissionReviewBlockers(taskQuery.data, locale).length} busy={batchProgress !== null} onClick={() => void confirmAll()} />}
+                back={{ href: `/tasks/${taskId}/submissions/upload`, label: locale === "zh-CN" ? "返回上传作答" : "Back to Upload Submissions" }}
+                next={{ label: t("submissionReviewEnterGradingSetup"), disabled: batchProgress !== null, onClick: () => {
+                  const issues = submissionReviewBlockers(taskQuery.data, locale);
+                  if (issues.length) setBlocked(issues);
+                  else navigate(`/tasks/${taskId}/grading-setup`);
+                } }}
+              />
             </>
           )}
         </div>
@@ -352,6 +336,7 @@ export function SubmissionReviewOverviewPage() {
 
 function SubmissionMatrix({
   students,
+  sources = [],
   questions,
   taskId,
   returnSearch,
@@ -360,6 +345,7 @@ function SubmissionMatrix({
   t,
 }: {
   students: StudentSubmission[];
+  sources?: SubmissionSourceOutcome[];
   questions: SubmissionQuestion[];
   taskId: string;
   returnSearch: string;
@@ -385,7 +371,7 @@ function SubmissionMatrix({
     studentNames: students.map((student) => student.stu_name || student.stu_id),
     studentIdLabel,
     studentNameLabel,
-    reserveIdStatusIcon: students.some((student) => student.identity_status === "needs_review"),
+    reserveIdStatusIcon: students.some((student) => studentIdentityReviewBlocked(student, sources)),
   });
   const tableMinWidth = Math.max(
     740,
@@ -437,7 +423,7 @@ function SubmissionMatrix({
                     className="inline-flex items-center gap-2 whitespace-nowrap outline-none hover:text-primary focus-visible:rounded focus-visible:ring-2 focus-visible:ring-ring"
                     title={student.stu_id}
                   >
-                    {student.identity_status === "needs_review" ? (
+                    {studentIdentityReviewBlocked(student, sources) ? (
                       <span className="h-2 w-2 shrink-0 rounded-full bg-red-500" aria-label={t("submissionReviewIdentityNeedsReview")} />
                     ) : null}
                     <span>{student.stu_id}</span>
@@ -491,7 +477,8 @@ function AnswerStatusLink({
   };
   const stateLabel = state === "reviewed" ? (locale === "zh-CN" ? "已确认" : "Confirmed") : answerReviewBlocked(answer) ? (locale === "zh-CN" ? "需处理" : "Action required") : t(labels[state]);
   const label = state !== "reviewed" && answer?.flag?.length ? `${stateLabel} · ${answer.flag.map((flag) => formatSubmissionFlag(flag, locale)).join(" · ")}` : stateLabel;
-  const tone: MatrixStatusTone = state === "reviewed" ? "reviewed" : state === "flagged" ? "error" : "ok";
+  const attention = answerReviewAttention(answer);
+  const tone: MatrixStatusTone = state === "reviewed" ? "reviewed" : attention === "blocking" ? "error" : attention === "advisory" ? "warning" : "ok";
 
   return <MatrixStatusCell to={to} label={label} tone={tone} />;
 }
@@ -527,7 +514,7 @@ function SubmissionReviewQueue({
                   <span className="block truncate font-semibold text-foreground" title={`${item.studentId} ${item.studentName}`}>
                     {item.studentName} · {item.questionLabel}
                   </span>
-                  <span className="mt-0.5 block truncate text-muted-foreground">{t(item.reasonKey)}</span>
+                  <span className={cn("mt-0.5 block truncate", item.severity === "blocking" ? "text-red-700" : "text-amber-700")}>{item.reason || t(item.reasonKey)}</span>
                 </span>
                 <ChevronRight aria-hidden="true" className="h-4 w-4 shrink-0 text-muted-foreground" />
               </Link>
@@ -642,6 +629,8 @@ function buildSubmissionQueueItems(
   questions: SubmissionQuestion[],
   taskId: string,
   returnSearch: string,
+  locale: "zh-CN" | "en-US",
+  sources: SubmissionSourceOutcome[] = [],
 ): SubmissionQueueItem[] {
   const items: SubmissionQueueItem[] = [];
   const reasonKeys: Record<Exclude<SubmissionAnswerState, "recognized" | "reviewed">, MessageKey> = {
@@ -651,7 +640,7 @@ function buildSubmissionQueueItems(
   };
 
   for (const student of students) {
-    if (student.identity_status === "needs_review") {
+    if (studentIdentityReviewBlocked(student, sources)) {
       items.push({
         key: `${student.stu_id}:identity`,
         href: identityReviewPath(taskId, student.stu_id, returnSearch),
@@ -659,23 +648,27 @@ function buildSubmissionQueueItems(
         studentName: student.stu_name || student.stu_id,
         questionLabel: "ID",
         reasonKey: "submissionReviewQueueIdentity",
+        severity: "blocking",
       });
     }
 
     const answers = answerMap(student);
     for (const question of questions) {
-      const state = getAnswerState(answers.get(question.id));
-      if (!answerNeedsConfirmation(answers.get(question.id))) continue;
+      const answer = answers.get(question.id);
+      const attention = answerReviewAttention(answer);
+      if (attention === "none") continue;
       items.push({
         key: `${student.stu_id}:${question.id}`,
         href: studentReviewPath(taskId, student.stu_id, question.id, returnSearch),
         studentId: student.stu_id,
         studentName: student.stu_name || student.stu_id,
         questionLabel: question.label,
-        reasonKey: state === "flagged" ? reasonKeys.flagged : "submissionReviewCellRecognized",
+        reasonKey: reasonKeys.flagged,
+        severity: attention,
+        reason: answer?.flag?.filter(flag => !["recognition_needs_review", "ocr_only_structure_requires_teacher_review"].includes(flag)).map(flag => formatSubmissionFlag(flag, locale)).join(" · "),
       });
     }
   }
 
-  return items;
+  return items.sort((a, b) => Number(b.severity === "blocking") - Number(a.severity === "blocking"));
 }

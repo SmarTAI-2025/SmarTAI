@@ -1,9 +1,16 @@
-import type { PreparationIssue, ProblemInfo, StudentAnswerInfo, Task } from "@/types";
-/** Optional defaults are information, not recognition defects. */
+import type { PreparationIssue, ProblemInfo, StudentAnswerInfo, StudentSubmission, SubmissionSourceOutcome, Task } from "@/types";
+
+export type ReviewAttention = "none" | "advisory" | "blocking";
+export const VERY_LOW_REVIEW_CONFIDENCE = 0.35;
+
+/** A source-wide OCR warning is evidence to retain, not an error in every question. */
 export function questionIssueNeedsReview(issue: PreparationIssue): boolean {
-  if (issue.code === "recognition_partial" && onlyUnverifiedTargets(issue)) return false;
-  return issue.status === "open" && (issue.severity === "blocking" ||
-    (issue.severity !== "info" && issue.code !== "default_max_score_requires_review"));
+  if (issue.status !== "open") return false;
+  if (issue.severity === "blocking") return true;
+  return issue.code === "low_confidence" && Boolean(issue.q_id)
+    && typeof issue.details?.confidence === "number"
+    && Number.isFinite(issue.details.confidence)
+    && issue.details.confidence >= 0 && issue.details.confidence <= VERY_LOW_REVIEW_CONFIDENCE;
 }
 
 function onlyUnverifiedTargets(issue: PreparationIssue): boolean {
@@ -14,6 +21,13 @@ function onlyUnverifiedTargets(issue: PreparationIssue): boolean {
 }
 
 export function recognitionIssueLabel(issue: PreparationIssue, locale: string): string | null {
+  if (issue.details?.review_display_reason === "empty_stem") return locale === "zh-CN"
+    ? "题干为空，请对照原件补齐并确认。" : "Question text is empty. Complete it against the source and confirm.";
+  if (issue.details?.review_display_reason === "rubric_conflict") return locale === "zh-CN"
+    ? "小问分值缺失、重复或合计与大题满分冲突，请修正并确认。"
+    : "Subpart points are missing, duplicated, or inconsistent with the question maximum. Correct and confirm them.";
+  if (issue.details?.review_display_reason === "confirmation_required" || issue.code === "required_review_confirmation") return locale === "zh-CN"
+    ? "严重问题已修正，请确认本题后继续。" : "The blocking issue was corrected. Confirm this question to continue.";
   if (issue.code === "manual_completion_required") return locale === "zh-CN"
     ? "请补齐缺失资料并确认本题；完成前不能批改。"
     : "Complete the missing materials and confirm this question before grading.";
@@ -29,7 +43,7 @@ export function recognitionIssueLabel(issue: PreparationIssue, locale: string): 
   if (onlyUnverifiedTargets(issue)) return zh
     ? "已定位题号；请对照原文件确认题干完整。这是常规确认，尚未发现具体缺失。"
     : "Question numbers were located. Confirm the complete wording against the source; no specific omission was detected.";
-  return zh ? "部分转写内容可信度较低，请对照原文件检查公式、符号和条件。" : "Some transcription has low confidence. Check formulas, symbols and conditions against the source.";
+  return zh ? "来源提示可对照原文件核对；尚无本题严重识别错误的证据。" : "The source recommends checking the original; this does not identify a blocking error in this question.";
 }
 
 export function submissionRecognitionIncomplete(task?: Pick<Task, "submission_source_summary" | "submission_sources">): boolean {
@@ -46,17 +60,84 @@ export function questionReviewBlocked(problem: ProblemInfo): boolean {
   const required = (problem.preparation_issues ?? []).filter(issue => issue.code === "manual_completion_required")
     .flatMap(issue => (issue.details?.required_fields as (keyof ProblemInfo)[] | undefined) ?? []);
   if (required.some(field => { const value = problem[field]; return !value || (typeof value === "string" && !value.trim()) || (Array.isArray(value) && !value.length); })) return true;
-  return !problem.stem?.trim() || (problem.preparation_issues ?? []).some(issue => issue.status === "open" && issue.severity === "blocking");
+  return !problem.stem?.trim() || problem.rubric_point_summary?.is_valid === false
+    || (problem.preparation_issues ?? []).some(issue => issue.status === "open" && issue.severity === "blocking");
+}
+
+/** Corrected hard failures still require one explicit confirmation before navigation. */
+export function questionReviewNextBlocked(problem: ProblemInfo): boolean {
+  return questionReviewBlocked(problem) || (problem.review_status !== "confirmed"
+    && (problem.preparation_issues ?? []).some(issue => issue.severity === "blocking" || issue.code === "manual_completion_required"));
+}
+
+export function questionReviewIssues(problem: ProblemInfo): PreparationIssue[] {
+  const issues = (problem.preparation_issues ?? []).filter(issue => {
+    if (questionIssueNeedsReview(issue)) return true;
+    if (issue.status !== "open" || issue.code !== "low_confidence") return false;
+    const field = issue.field === "answer" ? "reference_answer" : issue.field === "rubric" ? "criterion" : issue.field === "programming_tests" ? "test_cases" : null;
+    const confidence = field ? problem.material_provenance?.[field]?.confidence : undefined;
+    return typeof confidence === "number" && Number.isFinite(confidence) && confidence >= 0 && confidence <= VERY_LOW_REVIEW_CONFIDENCE;
+  });
+  function add(field: PreparationIssue["field"], code: PreparationIssue["code"], reason: string) {
+    issues.push({ issue_id: `review:${problem.q_id}:${reason}`, q_id: problem.q_id, field, code,
+      severity: "blocking", status: "open", details: { review_display_reason: reason } });
+  }
+  if (!problem.stem?.trim() && !issues.some(issue => issue.field === "stem" && issue.severity === "blocking")) add("stem", "parse_anomaly", "empty_stem");
+  if (problem.rubric_point_summary?.is_valid === false && !issues.some(issue => issue.field === "rubric" && issue.severity === "blocking")) add("rubric", "rubric_step_reference_conflict", "rubric_conflict");
+  if (questionReviewNextBlocked(problem) && !issues.some(issue => issue.severity === "blocking")) add("source", "manual_completion_required", questionReviewBlocked(problem) ? "missing_material" : "confirmation_required");
+  return issues.sort((a, b) => Number(b.severity === "blocking") - Number(a.severity === "blocking"));
+}
+
+export function questionReviewBlockers(problems: ProblemInfo[], taskId: string, locale: string): ReviewBlocker[] {
+  return problems.filter(questionReviewNextBlocked).map(problem => ({
+    label: `${problem.number || problem.q_id} · ${questionReviewIssues(problem).filter(issue => issue.severity === "blocking").map(issue => recognitionIssueLabel(issue, locale)).filter(Boolean).join("；") || (locale === "zh-CN" ? "请修正严重问题并确认本题" : "Correct the blocking issue and confirm this question")}`,
+    href: `/tasks/${taskId}/questions/${encodeURIComponent(problem.q_id)}/content#question-${encodeURIComponent(problem.q_id)}`,
+  }));
 }
 export function answerReviewBlocked(answer?: StudentAnswerInfo): boolean {
   return Boolean(answer?.flag?.some(flag => ["recognition_failed", "parse_failed", "no_matching_answer"].includes(flag)));
 }
+export function answerReviewNextBlocked(answer?: StudentAnswerInfo): boolean {
+  return answerReviewBlocked(answer) || Boolean(answer?.review_status !== "confirmed"
+    && answer?.flag?.includes("recognition_repaired_needs_confirmation"));
+}
+
+export function studentIdentityInvalid(student: StudentSubmission): boolean {
+  return [student.stu_id, student.stu_name].some(value => !value?.trim()
+    || /^(?:\[?unknown student\]?|未知学生)$/i.test(value.trim()));
+}
+
+export function studentIdentityReviewBlocked(student: StudentSubmission, sources: SubmissionSourceOutcome[] = []): boolean {
+  if (studentIdentityInvalid(student)) return true;
+  const matching = sources.filter(source => source.source_id === student.source_id || source.student_candidate === student.stu_id);
+  return Boolean(student.source_id && student.identity_status !== "matched") || matching.some(source => source.resolution_status !== "identity_resolved"
+    && (source.status === "identity_needs_review" || source.internal_status === "identity_conflict"));
+}
 export function submissionReviewBlockers(task: Task | undefined, locale: string, studentId?: string): ReviewBlocker[] {
+  return collectSubmissionBlockers(task, locale, studentId, false);
+}
+
+export function submissionConfirmationBlockers(task: Task | undefined, locale: string, studentId?: string): ReviewBlocker[] {
+  return collectSubmissionBlockers(task, locale, studentId, true);
+}
+
+function collectSubmissionBlockers(task: Task | undefined, locale: string, studentId: string | undefined, confirming: boolean): ReviewBlocker[] {
   if (!task) return [];
   const zh = locale === "zh-CN";
-  const student = Object.values(task.student_data ?? {}).find(item => item.stu_id === studentId);
-  const sources = (task.submission_sources ?? []).filter(source => (!studentId || source.source_id === student?.source_id || source.student_candidate === studentId) && (source.status === "failed" || source.status === "processing"));
+  const allStudents = Object.values(task.student_data ?? {});
+  const student = allStudents.find(item => item.stu_id === studentId);
+  const sources = (task.submission_sources ?? []).filter(source => {
+    if (studentId && source.source_id !== student?.source_id && source.student_candidate !== studentId) return false;
+    if (source.status === "failed" || source.status === "processing") return true;
+    const unresolvedIdentity = source.resolution_status !== "identity_resolved" && (source.status === "identity_needs_review" || source.internal_status === "identity_conflict");
+    return unresolvedIdentity && !allStudents.some(item => item.source_id === source.source_id || item.stu_id === source.student_candidate);
+  });
   const sourceIssues = sources.map(source => ({ label: `${source.file_name} · ${zh ? "识别未完成，请重试或修正原文件" : "Recognition incomplete; retry or correct the source"}`, href: `/tasks/${task.task_id}/submissions/upload#source-${encodeURIComponent(source.source_id)}` }));
-  const answers = Object.values(task.student_data ?? {}).filter(item => !studentId || item.stu_id === studentId).flatMap(item => item.stu_ans.filter(answerReviewBlocked).map(answer => ({ label: `${item.stu_name || item.stu_id} · ${answer.number || answer.q_id} · ${zh ? "识别失败" : "Recognition failed"}`, href: `/tasks/${task.task_id}/students/${encodeURIComponent(item.stu_id)}?question=${encodeURIComponent(answer.q_id)}` })));
-  return [...sourceIssues, ...answers];
+  const students = allStudents.filter(item => !studentId || item.stu_id === studentId);
+  const identities = students.filter(item => confirming ? studentIdentityInvalid(item) : studentIdentityReviewBlocked(item, task.submission_sources)).map(item => ({
+    label: `${item.stu_name || item.stu_id} · ${zh ? "请修正并确认学生姓名、学号" : "Correct and confirm the student name and ID"}`,
+    href: `/tasks/${task.task_id}/students/${encodeURIComponent(item.stu_id)}?identity=edit`,
+  }));
+  const answers = students.flatMap(item => item.stu_ans.filter(confirming ? answerReviewBlocked : answerReviewNextBlocked).map(answer => ({ label: `${item.stu_name || item.stu_id} · ${answer.number || answer.q_id} · ${answerReviewBlocked(answer) ? (zh ? "识别失败，请修正并确认" : "Recognition failed; correct and confirm") : (zh ? "已修正，请确认作答" : "Corrected; confirm the answer")}`, href: `/tasks/${task.task_id}/students/${encodeURIComponent(item.stu_id)}?question=${encodeURIComponent(answer.q_id)}` })));
+  return [...sourceIssues, ...identities, ...answers];
 }

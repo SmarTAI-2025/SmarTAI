@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { formatSubmissionFlag, getAnswerState, getSubmissionReviewStats, selectSubmissionReview } from "./submissionReview";
+import { answerNeedsConfirmation, answerReviewAttention, formatSubmissionFlag, getAnswerState, getSubmissionReviewStats, selectSubmissionReview, studentNeedsAttention } from "./submissionReview";
 
 describe("OCR review labels", () => {
   it("counts every unconfirmed answer, including optional checks and genuine blanks", () => {
@@ -27,8 +27,23 @@ describe("OCR review labels", () => {
 
   it("retains source flags after review without keeping the cell pending", () => {
     const answer = { q_id: "q1", number: "1", type: "proof", content: "0*x=0", flag: ["recognition_needs_review"] };
-    expect(getAnswerState(answer)).toBe("flagged");
+    expect(getAnswerState(answer)).toBe("recognized");
     expect(getAnswerState({ ...answer, review_status: "confirmed" })).toBe("reviewed");
     expect(answer.flag).toEqual(["recognition_needs_review"]);
+  });
+
+  it("does not turn document-wide warnings or ordinary pending answers into risks", () => {
+    const answers = Array.from({ length: 12 }, (_, index) => ({ q_id: `q${index}`, number: `${index}`, type: "proof", content: "Readable answer", flag: ["recognition_needs_review", "recognition_failed_pages:9", "authorship_uncertain"] }));
+    expect(answers.every(answer => answerReviewAttention(answer) === "none")).toBe(true);
+    expect(answers.every(answer => getAnswerState(answer) === "recognized" && answerNeedsConfirmation(answer))).toBe(true);
+    expect(studentNeedsAttention({ stu_id: "s1", stu_name: "Sample", stu_ans: answers }, answers.map(answer => ({ id: answer.q_id, label: answer.number, type: answer.type, stem: "" })))).toBe(false);
+  });
+
+  it("separates a very-low-confidence advisory from failed or repaired-but-unconfirmed recognition", () => {
+    const answer = { q_id: "q1", number: "1", type: "proof", content: "Readable answer", flag: ["very_low_confidence"] };
+    expect(answerReviewAttention(answer)).toBe("advisory");
+    expect(answerReviewAttention({ ...answer, flag: ["recognition_failed"] })).toBe("blocking");
+    expect(answerReviewAttention({ ...answer, flag: ["recognition_repaired_needs_confirmation"] })).toBe("blocking");
+    expect(answerReviewAttention({ ...answer, review_status: "confirmed" })).toBe("none");
   });
 });

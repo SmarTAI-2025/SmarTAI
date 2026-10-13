@@ -1,5 +1,5 @@
-import { isCorrectionReviewConfirmed } from "@/components/tasks/resultsReviewModel";
-import { ReviewConfirmButton, RetryFailedGrading } from "@/components/tasks/ReviewConfirmation";
+import { isCorrectionReviewConfirmed, correctionReviewBlocked } from "@/components/tasks/resultsReviewModel";
+import { ReviewConfirmButton, ReviewStageActions, RetryFailedGrading } from "@/components/tasks/ReviewConfirmation";
 import { SortableTableHead, useColumnSort, sortColumnRows, directionFor, type ColumnSort } from "@/components/ui/SortableTableHead";
 import { AlertTriangle, ArrowRight, CheckCircle2, ChevronRight, LoaderCircle, Search } from "lucide-react";
 import { useMemo, useRef, useState } from "react";
@@ -97,7 +97,7 @@ export function ReviewOverviewPage() {
   const isLoading = taskQuery.isLoading || readingCompletion || resultQuery.isLoading || finalizationQuery.isLoading;
   const isError = taskQuery.isError || resultQuery.isError || finalizationQuery.isError;
   const pendingReviewItems = reviewItems.filter((item) => !confirmedKeys.has(reviewCellKey(item.student.id, item.question.id)));
-  const blockingReviewItems = reviewItems.filter((item) => effectiveCorrectionScore(item.correction) === null);
+  const blockingReviewItems = reviewItems.filter((item) => correctionReviewBlocked(item.correction));
   const historyView = Boolean(task && task.status !== "graded" && !resolvingFailures);
   const overviewReturnTo = taskId
     ? `/tasks/${encodeURIComponent(taskId)}/review${searchParams.toString() ? `?${searchParams.toString()}` : ""}`
@@ -129,8 +129,8 @@ export function ReviewOverviewPage() {
     ? reviewDetailHref(taskId, unresolvedReview.student.id, unresolvedReview.question.id, overviewReturnTo)
     : null;
   const lockedResultsReason = remainingReviewCount > 0
-    ? copy(locale, "lockedResultsRemaining").replace("{count}", String(remainingReviewCount))
-    : copy(locale, "lockedResultsReady");
+    ? (locale === "zh-CN" ? `还有 ${remainingReviewCount} 个关键问题需要处理并确认，暂不能查看结果分析。` : `${remainingReviewCount} required items need correction and confirmation before Results & Analysis.`)
+    : copy(locale, "readyHint");
   function confirmReviewComplete() {
     if (!taskId || !readyForConfirmation || confirmFinalization.isPending) return;
     confirmFinalization.mutate({
@@ -143,7 +143,7 @@ export function ReviewOverviewPage() {
 
   async function confirmAllReviews() {
     if (!taskId || confirmingRef.current || confirmFinalization.isPending) return;
-    if (blockingReviewItems.length) { setBlockedDialog(true); return; }
+    if (blockingReviewItems.some(({ correction }) => { const score = effectiveCorrectionScore(correction); return score === null || score < 0 || score > correction.max_score; })) { setBlockedDialog(true); return; }
     if (!confirmableReviews.length) {
       if (remainingReviewCount > 0) setBlockedDialog(true);
       return;
@@ -180,6 +180,7 @@ export function ReviewOverviewPage() {
       </h1>
       <NewTaskStepper
         currentStep={6}
+        blockedFromStep={remainingReviewCount > 0 ? 7 : undefined}
         lockedStep={7}
         lockedStepReason={lockedResultsReason}
         onLockedStepActivate={activateLockedResults}
@@ -208,12 +209,12 @@ export function ReviewOverviewPage() {
           ) : null}
           <div className="mt-5 grid grid-cols-2 gap-4 xl:grid-cols-4 xl:gap-5">
             <MetricCard value={formatMetricPercent(model.classAveragePercent)} label={copy(locale, "average")} tone="primary" />
-            <MetricCard value={String(pendingReviewItems.filter(item => item.correction.confidence < 0.65).length)} label={copy(locale, "lowConfidence")} tone="warning" />
+            <MetricCard value={String(pendingReviewItems.filter(item => item.category === "low-confidence").length)} label={copy(locale, "lowConfidence")} tone="warning" />
             <MetricCard value={String(disagreementCount)} label={copy(locale, "disagreement")} tone="primary" />
             <MetricCard value={`${confirmedKeys.size}/${model.students.reduce((total, student) => total + student.corrections.length, 0)}`} label={copy(locale, "annotated")} tone="accent" />
           </div>
 
-          {!historyView && confirmFinalization.isError ? (
+          {confirmFinalization.isError ? (
             <p role="alert" className="mt-3 text-sm font-medium text-destructive">
               {locale === "en-US" ? "The task changed. Refresh the review state and try again." : "任务状态已变化，请刷新复核状态后重试。"}
             </p>
@@ -223,16 +224,7 @@ export function ReviewOverviewPage() {
             label={locale === "zh-CN" ? "Ask SmarTAI：复核批改" : "Ask SmarTAI: grading review"}
             placeholder={copy(locale, "searchPlaceholder")} />
 
-          {!historyView ? <div className="mt-3 flex flex-wrap items-center justify-between gap-3 rounded-[10px] border bg-card p-3">
-            <p className="text-xs text-muted-foreground">{locale === "en-US"
-              ? "Confirm every valid score in this task, including filtered-out results. Existing teacher scores and comments are preserved."
-              : "确认本任务全部有效评分（包含筛选外的题次），保留已有教师分数和评语；无有效分数的题次仍需填写。"}</p>
-            <ReviewConfirmButton locale={locale} all confirmed={!confirmableReviews.length && remainingReviewCount === 0} busy={confirmReviews.isPending} disabled={confirmFinalization.isPending} onClick={() => void confirmAllReviews()} />
 
-            {batchError ? <p role="alert" className="w-full text-sm text-destructive">{locale === "en-US"
-              ? `Confirmed ${confirmReviews.progress.completed}/${confirmReviews.progress.total}; the rest were not confirmed. ${batchError}`
-              : `已确认 ${confirmReviews.progress.completed}/${confirmReviews.progress.total}，其余未确认。${batchError}`}</p> : null}
-          </div> : null}
 
           {query ? (
             <p className="mt-2 text-[12px] text-muted-foreground" aria-live="polite">
@@ -273,68 +265,30 @@ export function ReviewOverviewPage() {
             )}
           />
 
-          <footer className="mt-4 flex min-h-[58px] flex-col gap-3 rounded-[10px] border bg-card px-4 py-2.5 sm:flex-row sm:items-center sm:justify-between xl:px-5">
-            <p className="text-xs leading-5 text-muted-foreground">
-              {historyView
-                ? copy(locale, "historyHint")
-                : remainingReviewCount > 0
-                  ? copy(locale, "remainingHint").replace("{count}", String(remainingReviewCount))
-                  : copy(locale, "readyHint")}
-            </p>
-            <div className="flex w-full flex-col gap-2 sm:w-auto sm:flex-row">
-              {targetHref && (historyView || readyForConfirmation) ? (
-                <Link
-                  to={targetHref}
-                  className="inline-flex h-9 w-full items-center justify-center gap-1.5 rounded-[7px] border bg-card px-4 text-sm font-semibold text-foreground outline-none transition hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring sm:w-auto"
-                >
-                  {copy(locale, "viewDetails")}
-                </Link>
-              ) : null}
-              {historyView ? (
-                <Link
-                  to={`/tasks/${taskId}/results`}
-                  className="inline-flex h-9 w-full items-center justify-center gap-1.5 rounded-[7px] bg-primary px-4 text-sm font-semibold text-primary-foreground outline-none transition hover:opacity-90 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 sm:w-auto"
-                >
-                  {copy(locale, "viewFinalResults")}
-                  <ArrowRight aria-hidden="true" className="h-4 w-4" />
-                </Link>
-              ) : remainingReviewCount > 0 && targetHref ? (
-                <Link
-                  to={targetHref}
-                  className="inline-flex h-9 w-full items-center justify-center gap-1.5 rounded-[7px] bg-primary px-4 text-sm font-semibold text-primary-foreground outline-none transition hover:opacity-90 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 sm:w-auto"
-                >
-                  {copy(locale, "continueReview").replace("{count}", String(remainingReviewCount))}
-                  <ArrowRight aria-hidden="true" className="h-4 w-4" />
-                </Link>
-              ) : (
-                <button
-                  id="confirm-review-complete"
-                  type="button"
-                  disabled={confirmFinalization.isPending || confirmReviews.isPending}
-                  title={!readyForConfirmation ? copy(locale, "confirmDisabled") : undefined}
-                  onClick={() => readyForConfirmation ? confirmReviewComplete() : setBlockedDialog(true)}
-                  className="inline-flex h-9 w-full items-center justify-center gap-1.5 rounded-[7px] bg-primary px-4 text-sm font-semibold text-primary-foreground outline-none transition hover:opacity-90 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50 sm:w-auto"
-                >
-                  {confirmFinalization.isPending ? copy(locale, "confirming") : copy(locale, "confirmReview")}
-                  {confirmFinalization.isPending
-                    ? <LoaderCircle aria-hidden="true" className="h-4 w-4 animate-spin" />
-                    : <CheckCircle2 aria-hidden="true" className="h-4 w-4" />}
-                </button>
-              )}
-            </div>
-          </footer>
+          <ReviewStageActions
+            note={remainingReviewCount > 0
+              ? (locale === "zh-CN" ? `还有 ${remainingReviewCount} 个关键问题需要处理并确认。` : `${remainingReviewCount} required items need correction and confirmation.`)
+              : copy(locale, "readyHint")}
+            confirmation={<ReviewConfirmButton locale={locale} all confirmed={!confirmableReviews.length && remainingReviewCount === 0} busy={confirmReviews.isPending} disabled={confirmFinalization.isPending} onClick={() => void confirmAllReviews()} />}
+            back={{ href: `/tasks/${taskId}/grading-setup`, label: locale === "zh-CN" ? "返回批改设置" : "Back to Grading Setup" }}
+            next={{ id: "confirm-review-complete", label: locale === "zh-CN" ? "查看结果分析" : "View Results & Analysis", busy: confirmFinalization.isPending, disabled: confirmReviews.isPending, onClick: () => readyForConfirmation ? confirmReviewComplete() : setBlockedDialog(true) }}
+          >
+            {batchError ? <p role="alert" className="mt-3 text-sm text-destructive">{locale === "en-US"
+              ? `Confirmed ${confirmReviews.progress.completed}/${confirmReviews.progress.total}; the rest were not confirmed. ${batchError}`
+              : `已确认 ${confirmReviews.progress.completed}/${confirmReviews.progress.total}，其余未确认。${batchError}`}</p> : null}
+          </ReviewStageActions>
         </>
       )}
       {blockedDialog ? <UnsavedChangesDialog
-        title={locale === "en-US" ? "Some results need a score" : "还有结果需要填写分数"}
+        title={locale === "en-US" ? "Some results need correction and confirmation" : "还有结果需要处理并确认"}
         description={lockedResultsReason}
         stayLabel={locale === "en-US" ? "Stay here" : "留在此页"}
         leaveLabel={locale === "en-US" ? "Go to the missing score" : "直接前往填写分数"}
         onStay={() => setBlockedDialog(false)}
         onLeave={() => { setBlockedDialog(false); if (unresolvedHref) navigate(unresolvedHref); else void finalizationQuery.refetch(); }}
       >
-        {taskId ? <div className="mt-4"><RetryFailedGrading taskId={taskId} revision={task?.workflow_revision ?? 0} locale={locale} /></div> : null}
-        <ul className="mt-3 max-h-48 space-y-2 overflow-auto text-sm">{blockingReviewItems.map(item => <li key={reviewCellKey(item.student.id, item.question.id)}><Link className="text-primary underline" onClick={() => setBlockedDialog(false)} to={reviewDetailHref(taskId!, item.student.id, item.question.id, overviewReturnTo)}>{item.student.name} · {item.question.label} · {locale === "zh-CN" ? "缺少有效分数" : "Missing valid score"}</Link></li>)}</ul>
+        {taskId && blockingReviewItems.some(item => effectiveCorrectionScore(item.correction) === null) ? <div className="mt-4"><RetryFailedGrading taskId={taskId} revision={task?.workflow_revision ?? 0} locale={locale} /></div> : null}
+        <ul className="mt-3 max-h-48 space-y-2 overflow-auto text-sm">{blockingReviewItems.map(item => <li key={reviewCellKey(item.student.id, item.question.id)}><Link className="text-primary underline" onClick={() => setBlockedDialog(false)} to={reviewDetailHref(taskId!, item.student.id, item.question.id, overviewReturnTo)}>{item.student.name} · {item.question.label} · {locale === "zh-CN" ? "请处理并确认" : "Correct and confirm"}</Link></li>)}</ul>
       </UnsavedChangesDialog> : null}
     </div>
   );
@@ -494,8 +448,8 @@ function ReviewHeatmap({
 
 function ReviewCell({ locale, href, correction, item, annotated, confirmed, question }: { locale: Locale; href: string; correction: Correction; item?: ReviewItem; annotated: boolean; confirmed: boolean; question?: QuestionSummary }) {
   const source = correctionScoreSource(correction);
-  const state = source === "hard_failure" ? "hard" : confirmed ? "confirmed" : item ? "review" : "ready";
-  const label = locale === "zh-CN" ? (state === "hard" ? "需处理 · 缺少有效分数" : state === "confirmed" ? "已确认" : state === "review" ? "待复核" : "已批改") : (state === "hard" ? "Action required · missing valid score" : state === "confirmed" ? "Confirmed" : state === "review" ? "Needs review" : "Graded");
+  const state = correctionReviewBlocked(correction) ? "hard" : confirmed ? "confirmed" : item ? "review" : "ready";
+  const label = locale === "zh-CN" ? (state === "hard" ? "需处理并确认" : state === "confirmed" ? "已确认" : state === "review" ? "待复核" : "已批改") : (state === "hard" ? "Correction and confirmation required" : state === "confirmed" ? "Confirmed" : state === "review" ? "Needs review" : "Graded");
   const displayScore = displayableCorrectionScore(correction);
   const masked = shouldHideAutomatedScores(correction);
   const scoreDetail = displayScore !== null && correction.max_score > 0
@@ -504,7 +458,7 @@ function ReviewCell({ locale, href, correction, item, annotated, confirmed, ques
   const detail = masked
     ? `${question?.label ?? correction.q_id} · ${item ? queueReason(locale, item) : copy(locale, "reviewReason")}`
     : `${question?.label ?? correction.q_id} · ${scoreDetail}${formatConfidence(correction.confidence)}`;
-  const tone: MatrixStatusTone = state === "hard" ? "error" : state === "confirmed" ? "reviewed" : state === "review" ? "error" : "ok";
+  const tone: MatrixStatusTone = state === "hard" ? "error" : state === "confirmed" ? "reviewed" : state === "review" ? "warning" : "ok";
   return <MatrixStatusCell to={href} label={`${label} · ${detail}`} tone={tone} />;
 }
 
@@ -529,7 +483,7 @@ function ReviewQueue({ locale, taskId, items, returnTo }: { locale: Locale; task
                   <span className="block truncate font-semibold text-foreground" title={`${item.student.id} ${item.student.name}`}>
                     {item.student.name} · {item.question.label}
                   </span>
-                  <span className="mt-0.5 block truncate text-muted-foreground">{queueReason(locale, item)}</span>
+                  <span className={cn("mt-0.5 block truncate", item.severity === "blocking" ? "text-red-700" : "text-amber-700")}>{queueReason(locale, item)}</span>
                 </span>
                 <ChevronRight aria-hidden="true" className="h-4 w-4 shrink-0 text-muted-foreground" />
               </Link>
@@ -559,6 +513,7 @@ function PageState({ title, description, busy = false, action, href, onAction }:
 
 function queueReason(locale: Locale, item: ReviewItem): string {
   if (effectiveCorrectionScore(item.correction) === null) return locale === "zh-CN" ? "缺少有效分数 · 需处理" : "Missing valid score · action required";
+  if (item.severity === "blocking") return locale === "zh-CN" ? "请核对修正分数并确认" : "Check the corrected score and confirm";
   if (item.correction.review_status === "edited") return copy(locale, "savedPendingReason");
   if (item.category === "low-confidence") return copy(locale, "lowReason");
   if (item.category === "expert-disagreement") return copy(locale, "disagreementReason");
