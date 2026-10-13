@@ -1,3 +1,4 @@
+import { taskWorkspacePath } from "@/lib/frontierSession";
 import { Check, Circle, LoaderCircle, RefreshCw } from "lucide-react";
 import { useEffect } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
@@ -106,7 +107,7 @@ export function QuestionMaterialImportProgressPage() {
                 {materialImportText(locale, "chooseAgain")}
               </Link>
             ) : (
-              <Link to="/" className="inline-flex h-9 items-center rounded-[7px] border bg-card px-4 text-sm font-semibold text-foreground hover:bg-muted">
+              <Link to={taskWorkspacePath(taskId)} className="inline-flex h-9 items-center rounded-[7px] border bg-card px-4 text-sm font-semibold text-foreground hover:bg-muted">
                 {materialImportText(locale, "backWorkspace")}
               </Link>
             )}

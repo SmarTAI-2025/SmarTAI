@@ -15,7 +15,6 @@ from backend.agents.ingest_agent import (
     parse_student_answer_sources,
 )
 from backend.api import tasks as tasks_api
-from backend.auth import require_teacher
 from backend.db import (
     assignment_repository,
     grading_repository,
@@ -399,7 +398,7 @@ async def test_partial_batch_keeps_success_and_exact_per_file_failure(monkeypatc
 
     api = FastAPI()
     api.include_router(tasks_api.router)
-    api.dependency_overrides[require_teacher] = lambda: User(
+    api.dependency_overrides[tasks_api.require_teacher] = lambda: User(
         id=owner_id,
         username=owner_id,
         role="teacher",

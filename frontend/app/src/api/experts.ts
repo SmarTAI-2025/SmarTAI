@@ -1,4 +1,4 @@
-import { deleteJSON, getJSON, postJSON, putJSON } from "./client";
+import { deleteJSON, getJSON, postJSON, putJSON, type AuthAwareRequestConfig } from "./client";
 import type {
   AddExpertKeyRequest,
   ExpertConfig,
@@ -16,8 +16,8 @@ export function addExpertKey(request: AddExpertKeyRequest): Promise<ExpertMutati
   });
 }
 
-export function listExperts(): Promise<ExpertConfig[]> {
-  return getJSON<ExpertConfig[]>("/experts/available");
+export function listExperts(frontier = false): Promise<ExpertConfig[]> {
+  return getJSON<ExpertConfig[]>("/experts/available", { _authScope: frontier ? "frontier" : "teacher" } as AuthAwareRequestConfig);
 }
 
 export function listStageProviders(): Promise<ExpertConfig[]> {

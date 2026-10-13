@@ -1,3 +1,5 @@
+import { taskWorkspacePath } from "@/lib/frontierSession";
+import { useFrontierWorkspace } from "@/lib/frontierContext";
 import { gradingEditorVersion } from "@/lib/editorVersions";
 import { useDraftProtection } from "@/hooks/useDraftProtection";
 import { useDraftLeave } from "@/hooks/useDraftLeave";
@@ -242,7 +244,7 @@ function GradingSetupPageForm() {
           <CenteredState
             title={gradingSetupText(locale, "taskMissingTitle")}
             description={gradingSetupText(locale, "taskMissingDescription")}
-            action={<Link className="font-semibold text-primary hover:underline" to="/">{gradingSetupText(locale, "backToQuestions")}</Link>}
+            action={<Link className="font-semibold text-primary hover:underline" to={taskWorkspacePath(taskId)}>{gradingSetupText(locale, "backToQuestions")}</Link>}
           />
         ) : setupQuery.isLoading ? (
           <div className="flex min-h-[450px] items-center justify-center" aria-busy="true" aria-label={gradingSetupText(locale, "loading")}>
@@ -505,6 +507,7 @@ export function KnowledgeSection({ locale, taskId, value, onChange }: {
   value: GradingKnowledgeScope;
   onChange: (scope: GradingKnowledgeScope) => void;
 }) {
+  const frontier = useFrontierWorkspace();
   const docsQuery = useKBDocs(taskId);
   const uploadDocument = useUploadKBDoc();
   const deleteDocument = useDeleteKBDoc();
@@ -577,7 +580,7 @@ export function KnowledgeSection({ locale, taskId, value, onChange }: {
     setKnowledgeError(null);
     setKnowledgeNotice(null);
     try {
-      await uploadDocument.mutateAsync({ taskId, file, saveToLibrary });
+      await uploadDocument.mutateAsync({ taskId, file, saveToLibrary: !frontier && saveToLibrary });
       onChange("all_task_docs");
       setKnowledgeNotice(
         locale === "zh-CN"
@@ -615,17 +618,17 @@ export function KnowledgeSection({ locale, taskId, value, onChange }: {
               : "Optionally add textbooks, lecture notes, or other context. These do not replace reviewed questions, reference answers, or rubrics."}
           </p>
         </div>
-        <Link
+        {!frontier && <Link
           to="/knowledge-base"
           className="inline-flex shrink-0 items-center gap-1 self-start text-[13px] font-semibold text-primary outline-none hover:underline focus-visible:rounded focus-visible:ring-2 focus-visible:ring-ring"
         >
           {locale === "zh-CN" ? "前往课程资料库" : "Open course library"}
           <ExternalLink aria-hidden="true" className="h-4 w-4" />
-        </Link>
+        </Link>}
       </div>
 
       <div className="mt-3 grid gap-3 sm:grid-cols-[minmax(0,1fr)_auto]">
-        <div ref={libraryPickerRef} className="relative min-w-0">
+        {!frontier && <div ref={libraryPickerRef} className="relative min-w-0">
           <label className="relative block min-w-0">
             <Search aria-hidden="true" className="pointer-events-none absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
             <input
@@ -689,7 +692,7 @@ export function KnowledgeSection({ locale, taskId, value, onChange }: {
               )}
             </div>
           ) : null}
-        </div>
+        </div>}
         <button
           type="button"
           disabled={atLimit || isBusy}
@@ -713,10 +716,10 @@ export function KnowledgeSection({ locale, taskId, value, onChange }: {
       </div>
 
       <div className="mt-3 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-        <label className="inline-flex cursor-pointer items-center gap-2 text-[13px] font-medium text-foreground">
+        {!frontier && <label className="inline-flex cursor-pointer items-center gap-2 text-[13px] font-medium text-foreground">
           <input type="checkbox" checked={saveToLibrary} onChange={(event) => setSaveToLibrary(event.target.checked)} className="h-4 w-4 rounded border-border accent-primary" />
           {locale === "zh-CN" ? "上传时同时加入课程资料库" : "Also add uploads to course library"}
-        </label>
+        </label>}
         <span className="text-[13px] text-muted-foreground">
           {locale === "zh-CN" ? `已选择 ${docs.length}/20 份` : `${docs.length}/20 selected`}
         </span>

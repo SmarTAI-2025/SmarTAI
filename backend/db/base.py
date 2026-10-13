@@ -11,3 +11,4 @@ from backend.db import workflow_repository as _workflow_repository  # noqa: E402
 from backend.db import source_outcome_repository as _source_outcome_repository  # noqa: E402,F401
 from backend.db import model_quota_models as _model_quota_models  # noqa: E402,F401
 from backend.db import business_config_models as _business_config_models  # noqa: E402,F401
+from backend.db import frontier_demo_models as _frontier_demo_models  # noqa: E402,F401

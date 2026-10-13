@@ -21,7 +21,7 @@ from langchain_core.messages import HumanMessage
 from pydantic import BaseModel, Field
 from sqlalchemy.exc import IntegrityError
 
-from backend.auth import require_teacher
+from backend.auth import require_teacher, require_task_teacher
 from backend.config import settings
 from backend.db.provider_repository import (
     DefaultProviderNotEnabled,
@@ -289,7 +289,7 @@ def add_key(
 
 @router.get("/available")
 def list_available(
-    current: User = Depends(require_teacher),
+    current: User = Depends(require_task_teacher),
     registry: ExpertRegistry = Depends(get_scoped_expert_registry),
 ):
     """List all configured providers with redacted API keys.

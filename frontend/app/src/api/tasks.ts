@@ -1,5 +1,5 @@
 import { runGroundedAsk } from "./analytics";
-import { deleteJSON, getBlob, getJSON, postJSON, postMultipart, putJSON, type UploadOptions } from "./client";
+import { deleteJSON, getBlob, getJSON, postJSON, postMultipart, putJSON, type UploadOptions, type AuthAwareRequestConfig } from "./client";
 import type {
   CorrectionReviewResponse,
   GenerateResultArtifactsResponse,
@@ -65,12 +65,14 @@ export function buildGradePayload(options: { multiSampleN?: number | null; expec
 export interface CreateTaskInput extends Omit<TaskMetadataPatch, "name"> {
   name: string;
   idempotencyKey: string;
+  authScope?: "frontier";
 }
 
-export function createTask({ idempotencyKey, ...body }: CreateTaskInput): Promise<TaskLite> {
+export function createTask({ idempotencyKey, authScope, ...body }: CreateTaskInput): Promise<TaskLite> {
   return postJSON<TaskLite, TaskMetadataPatch>("/tasks/", body, {
     headers: { "Idempotency-Key": idempotencyKey },
-  });
+    _authScope: authScope ?? "teacher",
+  } as AuthAwareRequestConfig);
 }
 
 export function listTasks(): Promise<TaskListResponse> {

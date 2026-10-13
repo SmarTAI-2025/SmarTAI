@@ -2,20 +2,24 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import * as tagsApi from "@/api/tags";
 import type { TagColor } from "@/types";
 import { tagKeys, taskKeys } from "./keys";
+import { useFrontierWorkspace } from "@/lib/frontierContext";
 
 export function useTags() {
+  const frontier = useFrontierWorkspace();
   return useQuery({
     queryKey: tagKeys.list(),
     queryFn: tagsApi.listTags,
+    enabled: !frontier,
   });
 }
 
 export function useTagSearch(query: string) {
+  const frontier = useFrontierWorkspace();
   const normalized = query.trim();
   return useQuery({
     queryKey: tagKeys.search(normalized),
     queryFn: () => tagsApi.searchTags(normalized),
-    enabled: normalized.length > 0,
+    enabled: !frontier && normalized.length > 0,
   });
 }
 

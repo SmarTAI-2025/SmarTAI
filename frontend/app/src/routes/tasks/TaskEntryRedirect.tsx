@@ -1,3 +1,4 @@
+import { taskWorkspacePath } from "@/lib/frontierSession";
 import { AlertCircle, LoaderCircle } from "lucide-react";
 import { Link, Navigate, useParams } from "react-router-dom";
 import { useTask } from "@/api/hooks";
@@ -64,6 +65,7 @@ function TaskEntryState({
   retrying = false,
   onRetry,
 }: TaskEntryStateProps) {
+  const { taskId } = useParams();
   return (
     <div className="flex min-h-[420px] w-full items-center justify-center px-5">
       <section className="w-full max-w-[560px] rounded-[10px] border bg-card px-6 py-8 text-center sm:px-10">
@@ -83,7 +85,7 @@ function TaskEntryState({
             </button>
           ) : null}
           <Link
-            to="/history"
+            to={taskWorkspacePath(taskId, "/history")}
             className="inline-flex h-9 items-center justify-center rounded-[7px] border bg-card px-4 text-sm font-semibold text-foreground outline-none hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring"
           >
             {backLabel}

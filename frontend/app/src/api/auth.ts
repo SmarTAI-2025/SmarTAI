@@ -7,14 +7,37 @@ import {
   setAuthToken,
   refreshAuthToken,
   type AuthAwareRequestConfig,
+  normalizeAPIError,
 } from "./client";
 import type { AuthResponse, EmailRegistrationRequest, EmailRegistrationResponse, EmailRegistrationVerifyResponse, LoginRequest, PasswordResetConfirmResponse, PasswordResetRequest, PasswordResetRequestResponse, RefreshResponse, StatusResponse, User } from "@/types";
 import { clearPageDrafts } from "@/lib/pageDraftStore";
+import { beginFrontierSession, clearFrontierToken, getFrontierGeneration, getFrontierToken } from "@/lib/frontierSession";
 
 const PUBLIC_AUTH_REQUEST_CONFIG: AuthAwareRequestConfig = Object.freeze({
   _skipAuthHeader: true,
   _skipAuthRefresh: true,
 });
+
+let frontierSessionFlight: Promise<AuthResponse> | null = null;
+
+export function createFrontierDemoSession(): Promise<AuthResponse> {
+  const generation = getFrontierGeneration();
+  frontierSessionFlight ??= postJSON<AuthResponse>("/auth/frontier-demo-session", {}, {
+    _authScope: "frontier", _frontierToken: getFrontierToken(), _skipAuthRefresh: true,
+  } as AuthAwareRequestConfig).then((response) => {
+    if (getFrontierGeneration() !== generation) throw new Error("Demo session changed while opening the demo");
+    beginFrontierSession(response.token, response.user.id);
+    return response;
+  }).catch((error: unknown) => {
+    if (getFrontierGeneration() === generation && normalizeAPIError(error).status === 401) clearFrontierToken();
+    throw error;
+  }).finally(() => { frontierSessionFlight = null; });
+  return frontierSessionFlight;
+}
+
+export function getFrontierUser(): Promise<User> {
+  return getJSON<User>("/auth/me", { _authScope: "frontier" } as AuthAwareRequestConfig);
+}
 
 export async function login(request: LoginRequest): Promise<AuthResponse> {
   const response = await postJSON<AuthResponse, LoginRequest>("/auth/login", request);

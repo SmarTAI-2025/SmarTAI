@@ -12,6 +12,8 @@ import { LanguageToggle } from "@/components/layout/LanguageToggle";
 import { ModelStatusMenu } from "@/components/layout/ModelStatusMenu";
 import { PrimaryNavigation } from "@/components/layout/PrimaryNavigation";
 import { useI18n } from "@/i18n/I18nProvider";
+import { useFrontierWorkspace } from "@/lib/frontierContext";
+import { FrontierExitLink } from "@/components/auth/FrontierExitLink";
 
 export function AppShell() {
   const [mobileOpen, setMobileOpen] = useState(false);
@@ -20,7 +22,9 @@ export function AppShell() {
   const mobilePanelRef = useRef<HTMLElement>(null);
   const { t, locale } = useI18n();
   const currentUser = useCurrentUser();
-  const expertsQuery = useExperts();
+  const frontier = useFrontierWorkspace();
+  const HomeLink = frontier ? FrontierExitLink : Link;
+  const expertsQuery = useExperts(!frontier);
   const logout = useLogout();
   const draftLeave = useDraftLeave();
   const navigate = useNavigate();
@@ -123,27 +127,28 @@ export function AppShell() {
             <Menu aria-hidden="true" size={20} />
           </button>
 
-          <Link
-            to="/"
+          <HomeLink
+            to={frontier ? "/" : "/dashboard"}
             aria-label={t("appName")}
             className="shrink-0 outline-none focus-visible:rounded focus-visible:ring-2 focus-visible:ring-ring"
           >
             <SmarTAINavigationBrand />
-          </Link>
+          </HomeLink>
 
           <PrimaryNavigation className="ml-7 hidden lg:flex" />
 
           <div className="ml-auto flex min-w-0 items-center gap-1 sm:gap-2">
             <LanguageToggle />
-            <ModelStatusMenu
+            {!frontier && <ModelStatusMenu
               experts={experts}
               enabledCount={enabledCount}
               isLoading={expertsQuery.isLoading}
               isError={expertsQuery.isError}
               isFetching={expertsQuery.isFetching}
               onRetry={() => void expertsQuery.refetch()}
-            />
-            {currentUser.data ? (
+            />}
+            {frontier ? <FrontierExitLink to="/login" className="rounded-lg px-3 py-2 text-sm font-semibold text-primary">{locale === "zh-CN" ? "注册/登录" : "Register / Sign in"}</FrontierExitLink> : null}
+            {!frontier && currentUser.data ? (
               <AccountMenu
                 user={currentUser.data}
                 isSigningOut={logout.isPending}
@@ -170,14 +175,14 @@ export function AppShell() {
             className="relative flex h-full w-[min(86vw,320px)] flex-col border-r bg-card shadow-2xl"
           >
             <div className="flex h-[70px] items-center justify-between border-b px-5">
-              <Link
-                to="/"
+              <HomeLink
+                to={frontier ? "/" : "/dashboard"}
                 aria-label={t("appName")}
                 className="outline-none focus-visible:rounded focus-visible:ring-2 focus-visible:ring-ring"
                 onClick={() => setMobileOpen(false)}
               >
                 <SmarTAIWordmark alt="" className="w-[138px]" />
-              </Link>
+              </HomeLink>
               <button
                 ref={mobileCloseRef}
                 type="button"

@@ -100,6 +100,6 @@ describe("login modes", () => {
     fireEvent.change(screen.getByRole("textbox", { name: "用户名" }), { target: { value: "teacher" } });
     fireEvent.change(screen.getByPlaceholderText("输入密码"), { target: { value: "test-password" } });
     await act(async () => fireEvent.click(screen.getByRole("button", { name: "登录" })));
-    expect(screen.getByText("/")).toBeInTheDocument();
+    expect(screen.getByText("/dashboard")).toBeInTheDocument();
   });
 });

@@ -539,6 +539,8 @@ class User(BaseModel):
     is_read_only: bool = False
     auth_invalid_before: float | None = Field(default=None, exclude=True)
     auth_version: int = Field(default=0, exclude=True)
+    # Request-local capability, never persisted as a user role or returned by public().
+    auth_scope: Literal["user", "frontier_demo"] = Field(default="user", exclude=True)
 
     def public(self) -> Dict[str, Any]:
         """Dict safe to return to clients (no password hash, no course_ids)."""

@@ -2,6 +2,8 @@ import { NavLink, useLocation } from "react-router-dom";
 import { PRIMARY_NAVIGATION } from "@/components/layout/navigation";
 import { useI18n } from "@/i18n/I18nProvider";
 import { cn } from "@/lib/cn";
+import { useFrontierWorkspace } from "@/lib/frontierContext";
+import { taskWorkspacePath } from "@/lib/frontierSession";
 
 interface PrimaryNavigationProps {
   className?: string;
@@ -17,6 +19,8 @@ export function PrimaryNavigation({
 }: PrimaryNavigationProps) {
   const { t } = useI18n();
   const location = useLocation();
+  const frontier = useFrontierWorkspace();
+  if (frontier) return <nav aria-label={t("primaryNavigation")} className={className}><NavLink to={location.pathname === "/frontier/live" ? `${location.pathname}${location.search}` : taskWorkspacePath(location.pathname.split("/")[2])} onClick={onNavigate} className={cn("rounded-lg px-4 font-semibold text-primary", mobile ? "py-3" : "py-2.5")}>Demo</NavLink></nav>;
 
   return (
     <nav aria-label={t("primaryNavigation")} className={className}>
@@ -24,7 +28,7 @@ export function PrimaryNavigation({
         <NavLink
           key={item.to}
           to={item.to}
-          end={item.to === "/"}
+          end={item.to === "/dashboard"}
           onClick={onNavigate}
           aria-current={item.to === "/tasks/new" && location.pathname.startsWith("/tasks/") ? "page" : undefined}
           className={({ isActive }) =>

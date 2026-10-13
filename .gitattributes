@@ -1,0 +1,2 @@
+# Keep imported PDF fixtures byte-for-byte; PDF whitespace is file data.
+frontend/app/public/frontier-demo/**/*.pdf binary

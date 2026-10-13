@@ -27,7 +27,7 @@ from backend.analytics.ask_workspace import AskDataError, load_snapshot
 from backend.services.task_history_progress import enrich_history_progress
 from backend.domain.errors import DomainError, NotFound
 from backend.api.errors import domain_error_response
-from backend.auth import require_teacher
+from backend.auth import require_task_teacher as require_teacher
 from backend.db.models import (
     AssignmentQuestionRecord,
     AssignmentRecord,

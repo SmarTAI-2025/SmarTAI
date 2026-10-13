@@ -14,7 +14,6 @@ from fastapi.testclient import TestClient
 from starlette.datastructures import Headers
 
 from backend.api import task_preparation, tasks as tasks_api
-from backend.auth import require_teacher
 from backend.db import (
     course_library_repository,
     file_repository,
@@ -303,7 +302,7 @@ def _create_submission_selection(
 def _client(monkeypatch, *, owner_id: str, storage: StorageBackend) -> TestClient:
     api = FastAPI()
     api.include_router(tasks_api.router)
-    api.dependency_overrides[require_teacher] = lambda: User(
+    api.dependency_overrides[tasks_api.require_teacher] = lambda: User(
         id=owner_id, username=owner_id, role="teacher"
     )
     monkeypatch.setattr(tasks_api, "get_storage", lambda: storage)

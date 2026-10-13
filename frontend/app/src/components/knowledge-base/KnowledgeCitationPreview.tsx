@@ -1,6 +1,7 @@
 import { FileSearch } from "lucide-react";
 import { useEffect, useState } from "react";
-import { getBlob, getJSON } from "@/api/client";
+import { getBlob, getJSON, type AuthAwareRequestConfig } from "@/api/client";
+import { useFrontierWorkspace } from "@/lib/frontierContext";
 import { useI18n } from "@/i18n/I18nProvider";
 import { inferSourcePreviewKind } from "@/lib/sourcePreview";
 import { OriginalFilePreviewPanel } from "@/components/tasks/OriginalFilePreviewPanel";
@@ -8,6 +9,7 @@ import { MarkdownMath } from "@/components/ui/MarkdownMath";
 import type { KnowledgeCitation } from "@/types/knowledgeCitation";
 
 export function KnowledgeCitationPreview({ citation }: { citation: KnowledgeCitation }) {
+  const frontier = useFrontierWorkspace();
   const { locale, t } = useI18n();
   const [open, setOpen] = useState(false);
   const [attempt, setAttempt] = useState(0);
@@ -24,18 +26,18 @@ export function KnowledgeCitationPreview({ citation }: { citation: KnowledgeCita
     setUrl(null); setText(null); setFailed(false);
     void (async () => {
       const evidence = await getJSON<{ content: string; content_version: string; source_sha256: string }>(
-        `/knowledge/documents/${encodeURIComponent(citation.document_id)}/citations/${encodeURIComponent(citation.chunk_id)}`, { signal: controller.signal });
+        `/knowledge/documents/${encodeURIComponent(citation.document_id)}/citations/${encodeURIComponent(citation.chunk_id)}`, { signal: controller.signal, _authScope: frontier ? "frontier" : "teacher" } as AuthAwareRequestConfig);
       if (evidence.content_version !== citation.content_version || evidence.source_sha256 !== citation.source_sha256) throw new Error("Citation version unavailable");
       if (controller.signal.aborted) return;
       setText(evidence.content);
       if (kind !== "unsupported") {
-        const blob = await getBlob(`/knowledge/documents/${encodeURIComponent(citation.document_id)}/citations/${encodeURIComponent(citation.chunk_id)}/download`, { signal: controller.signal });
+        const blob = await getBlob(`/knowledge/documents/${encodeURIComponent(citation.document_id)}/citations/${encodeURIComponent(citation.chunk_id)}/download`, { signal: controller.signal, _authScope: frontier ? "frontier" : "teacher" } as AuthAwareRequestConfig);
         if (controller.signal.aborted) return;
         resource = URL.createObjectURL(blob); setUrl(resource);
       }
     })().catch(() => { if (!controller.signal.aborted) setFailed(true); });
     return () => { controller.abort(); if (resource) URL.revokeObjectURL(resource); };
-  }, [open, attempt, citation.document_id, citation.chunk_id, citation.content_version, citation.source_sha256, kind]);
+  }, [frontier, open, attempt, citation.document_id, citation.chunk_id, citation.content_version, citation.source_sha256, kind]);
   return <div className="min-w-0">
     <button type="button" aria-expanded={open} className="inline-flex max-w-full items-center gap-1 py-1 text-left text-xs text-primary" onClick={() => setOpen(!open)}>
       <FileSearch aria-hidden="true" className="h-4 w-4 shrink-0" /><span className="min-w-0 [overflow-wrap:anywhere]">{citation.original_name}{citation.page_number ? ` · ${citation.unit === "page" ? (locale === "zh-CN" ? "页" : "p.") : citation.unit} ${citation.page_number}` : ""}</span>
