@@ -135,3 +135,15 @@ def test_runtime_process_does_not_inherit_application_secrets(configured, monkey
     assert not any(key in runner.launcher_environment() for key in ["SMARTAI_SECRET", "DATABASE_URL", "HTTPS_PROXY"])
     monkeypatch.setenv("DOCKER_HOST", "tcp://remote:2375")
     with pytest.raises(runner.IsolatedRunnerUnavailable): runner.launcher_environment()
+
+
+@pytest.mark.asyncio
+async def test_production_podman_requires_delegated_resource_controllers(configured, monkeypatch):
+    monkeypatch.setattr(runner.settings, "runtime_environment", "production")
+    host = {"security": {"rootless": True, "seccompEnabled": True}, "cgroupVersion": "v2", "cgroupManager": "systemd", "cgroupControllers": ["cpu", "memory", "pids"]}
+    async def info(*args, **kwargs): return json.dumps({"host": host}).encode()
+    monkeypatch.setattr(runner, "_command", info)
+    await runner._check_runtime("/usr/bin/podman", {})
+    host["cgroupControllers"] = ["cpu", "pids"]
+    with pytest.raises(runner.IsolatedRunnerUnavailable):
+        await runner._check_runtime("/usr/bin/podman", {})

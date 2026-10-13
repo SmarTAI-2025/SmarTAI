@@ -13,6 +13,7 @@ try:
 except ImportError:  # OCI execution is supported on Linux hosts only.
     fcntl = None
 import json
+import logging
 import os
 from pathlib import Path
 import re
@@ -22,6 +23,9 @@ import uuid
 
 from backend.config import settings
 from tools.runner_spike.harness import build_container_command
+
+
+logger = logging.getLogger(__name__)
 
 
 class IsolatedRunnerUnavailable(RuntimeError):
@@ -61,6 +65,7 @@ async def _command(args, *, timeout, env):
         stdout, _stderr = await asyncio.wait_for(reads, timeout)
         await asyncio.wait_for(process.wait(), timeout)
         if process.returncode:
+            logger.warning("OCI command failed: operation=%s exit=%s", args[1], process.returncode)
             raise IsolatedRunnerUnavailable()
         return stdout
     finally:
@@ -82,7 +87,10 @@ async def _check_runtime(runtime, env):
     info = json.loads(await _command([runtime, "info", "--format", "{{json .}}"], timeout=10, env=env))
     if Path(runtime).name == "podman":
         security = info.get("host", {}).get("security", {})
-        safe = security.get("rootless") is True and security.get("seccompEnabled") is True and info.get("host", {}).get("cgroupVersion") == "v2"
+        host = info.get("host", {})
+        safe = (security.get("rootless") is True and security.get("seccompEnabled") is True
+                and host.get("cgroupVersion") == "v2" and host.get("cgroupManager") == "systemd"
+                and {"cpu", "memory", "pids"}.issubset(host.get("cgroupControllers", [])))
     else:
         options = info.get("SecurityOptions", [])
         safe = any("name=rootless" in str(option) for option in options) and any("name=seccomp" in str(option) for option in options)
@@ -152,8 +160,10 @@ async def run_python_oci(code, test_input="", *, timeout=10.0, memory_mb=256, ma
         raise IsolatedRunnerUnavailable()
     try:
         env = launcher_environment()
-        await _check_runtime(runtime, env)
         async with _host_slot():
+            # Capability checks launch a CLI too; keep them under the same
+            # host-wide cap so large assignments cannot spawn an info storm.
+            await _check_runtime(runtime, env)
             with tempfile.TemporaryDirectory(prefix="smartai-oci-") as tmp:
                 request = Path(tmp) / "request.json"
                 request.write_bytes(encoded)
