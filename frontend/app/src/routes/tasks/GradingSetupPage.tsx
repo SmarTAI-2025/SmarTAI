@@ -1,3 +1,4 @@
+import { demoLockedText } from "@/lib/frontierFixtures";
 import { taskWorkspacePath } from "@/lib/frontierSession";
 import { useFrontierWorkspace } from "@/lib/frontierContext";
 import { gradingEditorVersion } from "@/lib/editorVersions";
@@ -403,7 +404,7 @@ function ModelSection({
   const hasMultiple = setup.selected_provider_ids.length > 1;
 
   return (
-    <fieldset>
+    <fieldset className="min-w-0">
       <legend className="text-[14px] font-semibold leading-5 text-foreground">{gradingSetupText(locale, "modelsTitle")}</legend>
       <p className="sr-only">{gradingSetupText(locale, "modelsDescription")}</p>
       <div className="mt-2 max-h-[156px] overflow-y-auto overscroll-contain rounded-[8px] border">
@@ -577,6 +578,7 @@ export function KnowledgeSection({ locale, taskId, value, onChange }: {
   }
 
   async function uploadLocalMaterial(file: File) {
+    if (frontier) return;
     setKnowledgeError(null);
     setKnowledgeNotice(null);
     try {
@@ -695,16 +697,17 @@ export function KnowledgeSection({ locale, taskId, value, onChange }: {
         </div>}
         <button
           type="button"
-          disabled={atLimit || isBusy}
+          disabled={frontier || atLimit || isBusy}
           onClick={() => fileInputRef.current?.click()}
           className="inline-flex h-11 items-center justify-center gap-2 rounded-[8px] border bg-card px-4 text-[14px] font-semibold text-foreground outline-none hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50"
-          title={atLimit ? (locale === "zh-CN" ? "本任务最多选择 20 份资料" : "Up to 20 task documents") : undefined}
+          title={frontier ? demoLockedText(locale) : atLimit ? (locale === "zh-CN" ? "本任务最多选择 20 份资料" : "Up to 20 task documents") : undefined}
         >
           <Upload aria-hidden="true" className="h-4 w-4" />
           {locale === "zh-CN" ? "上传资料" : "Upload"}
         </button>
         <input
           ref={fileInputRef}
+          disabled={frontier}
           type="file"
           accept=".pdf,.txt,.md,.markdown"
           className="hidden"

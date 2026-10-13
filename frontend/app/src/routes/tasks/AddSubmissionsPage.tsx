@@ -1,3 +1,5 @@
+import { DemoSourceUpload } from "@/components/tasks/DemoSourceUpload";
+import { useFrontierWorkspace } from "@/lib/frontierContext";
 import { taskInputVersion } from "@/lib/editorVersions";
 import { FileUp, LoaderCircle } from "lucide-react";
 import { SubmissionSourceOutcomePanel } from "@/components/tasks/SubmissionSourceOutcomePanel";
@@ -40,8 +42,9 @@ const IDENTITY_OPTIONS: Array<{ mode: SubmissionIdentityMode; label: MessageKey 
 ];
 
 export function AddSubmissionsPage() {
+  const frontier = useFrontierWorkspace();
   const { taskId } = useParams();
-  return <AddSubmissionsLoader key={taskId} />;
+  return frontier ? <DemoSourceUpload key={taskId} stage="submissions" /> : <AddSubmissionsLoader key={taskId} />;
 }
 
 function AddSubmissionsLoader() {

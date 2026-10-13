@@ -48,6 +48,8 @@ describe("GradingPreflightPage regrade mode", () => {
             q_id: "q1",
             number: "1",
             type: "short answer",
+            stem: "What is six times seven?",
+            max_score: 1,
             criterion: "Award one point for the correct answer.",
             reference_answer: "42",
             review_status: "confirmed",
@@ -141,7 +143,8 @@ describe("GradingPreflightPage regrade mode", () => {
       <Routes><Route path="/tasks/:taskId/grading/preflight" element={<GradingPreflightPage />} /></Routes>
     </MemoryRouter>);
     expect(screen.getByRole("link", { name: "Review student identity" })).toHaveAttribute("href", "/tasks/task-1/students/student1?identity=edit");
-    expect(screen.getByRole("link", { name: "Review submissions" })).toHaveAttribute("href", "/tasks/task-1/submissions");
+    expect(screen.queryByRole("link", { name: "Review submissions" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "Review question materials" })).not.toBeInTheDocument();
   });
 
   it("opens an unconfirmed answer directly even when it has no recognition flag", () => {
@@ -152,7 +155,7 @@ describe("GradingPreflightPage regrade mode", () => {
       <Routes><Route path="/tasks/:taskId/grading/preflight" element={<GradingPreflightPage />} /></Routes>
     </MemoryRouter>);
     expect(screen.getByRole("link", { name: "Review submissions" })).toHaveAttribute("href", "/tasks/task-1/students/student%20%2F%201?question=q+1%2F2");
-    expect(screen.getByRole("button", { name: "Start Grading Anyway" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Start Regrading Now" })).toBeEnabled();
   });
 
   it("keeps identity and answer review destinations separate when both need attention", () => {
@@ -291,31 +294,36 @@ describe("GradingPreflightPage regrade mode", () => {
     expect(within(screen.getByRole("alertdialog")).getByRole("button", { name: "Fix grading settings" })).toBeInTheDocument();
   });
 
-  it("pauses automatic grading for review warnings but starts with one explicit click", async () => {
+  it("keeps the countdown for ordinary pending confirmations and never confirms them implicitly", async () => {
     vi.useFakeTimers();
     const task = (useTask as unknown as () => any)();
+    task.data.status = "submissions_ready";
     task.data.problem_data.q1.review_status = "needs_review";
-    task.data.student_data.student1.identity_status = "needs_review";
     task.data.student_data.student1.stu_ans[0].review_status = "pending";
     task.data.student_data.student1.stu_ans[0].flag = ["recognition_needs_review"];
-    const setup = (useGradingSetup as unknown as () => any)();
-    setup.data.readiness.warnings = ["submission_identities_unresolved", "submission_recognition_needs_review"];
-    render(
-      <MemoryRouter initialEntries={["/tasks/task-1/grading/preflight"]}>
-        <Routes>
-          <Route path="/tasks/:taskId/grading/preflight" element={<GradingPreflightPage />} />
-          <Route path="/tasks/:taskId/grading/progress" element={<div>Grading started</div>} />
-        </Routes>
-      </MemoryRouter>,
-    );
-    expect(screen.getByText(/You can grade now and keep their pending status/)).toBeInTheDocument();
+    render(<MemoryRouter initialEntries={["/tasks/task-1/grading/preflight"]}><Routes>
+      <Route path="/tasks/:taskId/grading/preflight" element={<GradingPreflightPage />} />
+      <Route path="/tasks/:taskId/grading/progress" element={<div>Grading started</div>} />
+    </Routes></MemoryRouter>);
+    expect(screen.getByText(/Pending confirmation does not block/)).toBeInTheDocument();
     expect(screen.getByText(/1 question awaits confirmation/)).toBeInTheDocument();
-    act(() => { vi.advanceTimersByTime(12_000); });
-    expect(mutateAsync).not.toHaveBeenCalled();
-    await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Start Grading Anyway" })); });
+    await act(async () => { vi.advanceTimersByTime(10_000); });
     expect(mutateAsync).toHaveBeenCalledExactlyOnceWith({ taskId: "task-1", expectedWorkflowRevision: 8, requestId: expect.any(String) });
-    expect(screen.getByText("Grading started")).toBeInTheDocument();
     expect(task.data.student_data.student1.stu_ans[0].review_status).toBe("pending");
-    expect(task.data.student_data.student1.identity_status).toBe("needs_review");
+    expect(task.data.problem_data.q1.review_status).toBe("needs_review");
+  });
+
+  it("does not auto-start or manually bypass a failed recognition", async () => {
+    vi.useFakeTimers();
+    const task = (useTask as unknown as () => any)();
+    task.data.status = "submissions_ready";
+    task.data.student_data.student1.stu_ans[0].flag = ["recognition_failed"];
+    render(<MemoryRouter initialEntries={["/tasks/task-1/grading/preflight"]}><Routes>
+      <Route path="/tasks/:taskId/grading/preflight" element={<GradingPreflightPage />} />
+    </Routes></MemoryRouter>);
+    await act(async () => { vi.advanceTimersByTime(12_000); });
+    fireEvent.click(screen.getByRole("button", { name: "Start Grading Now" }));
+    expect(mutateAsync).not.toHaveBeenCalled();
+    expect(screen.getByRole("alertdialog")).toBeInTheDocument();
   });
 });

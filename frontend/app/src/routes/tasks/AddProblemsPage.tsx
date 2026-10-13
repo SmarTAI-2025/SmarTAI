@@ -1,3 +1,5 @@
+import { DemoSourceUpload } from "@/components/tasks/DemoSourceUpload";
+import { useFrontierWorkspace } from "@/lib/frontierContext";
 import { taskInputVersion } from "@/lib/editorVersions";
 import {
   AlignLeft,
@@ -62,8 +64,9 @@ type PreparationFailure = {
 };
 
 export function AddProblemsPage() {
+  const frontier = useFrontierWorkspace();
   const { taskId } = useParams();
-  return <AddProblemsLoader key={taskId} />;
+  return frontier ? <DemoSourceUpload key={taskId} stage="questions" /> : <AddProblemsLoader key={taskId} />;
 }
 
 function AddProblemsLoader() {

@@ -256,7 +256,7 @@ export function ReviewOverviewPage() {
               />
             )}
             queue={(
-              <ReviewQueue
+              <ReviewQueue confirmation={<ReviewConfirmButton locale={locale} all confirmed={!confirmableReviews.length && remainingReviewCount === 0} busy={confirmReviews.isPending} disabled={confirmFinalization.isPending} onClick={() => void confirmAllReviews()} />}
                 locale={locale}
                 taskId={taskId}
                 items={pendingReviewItems.filter((item) => selection.matchedCellKeys.has(reviewCellKey(item.student.id, item.question.id)))}
@@ -269,8 +269,8 @@ export function ReviewOverviewPage() {
             note={remainingReviewCount > 0
               ? (locale === "zh-CN" ? `还有 ${remainingReviewCount} 个关键问题需要处理并确认。` : `${remainingReviewCount} required items need correction and confirmation.`)
               : copy(locale, "readyHint")}
-            confirmation={<ReviewConfirmButton locale={locale} all confirmed={!confirmableReviews.length && remainingReviewCount === 0} busy={confirmReviews.isPending} disabled={confirmFinalization.isPending} onClick={() => void confirmAllReviews()} />}
-            back={{ href: `/tasks/${taskId}/grading-setup`, label: locale === "zh-CN" ? "返回批改设置" : "Back to Grading Setup" }}
+
+            back={{ href: targetHref ?? `/tasks/${taskId}/review`, label: locale === "zh-CN" ? "查看批改详情" : "View Grading Details" }}
             next={{ id: "confirm-review-complete", label: locale === "zh-CN" ? "查看结果分析" : "View Results & Analysis", busy: confirmFinalization.isPending, disabled: confirmReviews.isPending, onClick: () => readyForConfirmation ? confirmReviewComplete() : setBlockedDialog(true) }}
           >
             {batchError ? <p role="alert" className="mt-3 text-sm text-destructive">{locale === "en-US"
@@ -462,17 +462,17 @@ function ReviewCell({ locale, href, correction, item, annotated, confirmed, ques
   return <MatrixStatusCell to={href} label={`${label} · ${detail}`} tone={tone} />;
 }
 
-function ReviewQueue({ locale, taskId, items, returnTo }: { locale: Locale; taskId: string; items: ReviewItem[]; returnTo: string }) {
+function ReviewQueue({ locale, taskId, items, returnTo, confirmation }: { confirmation: React.ReactNode; locale: Locale; taskId: string; items: ReviewItem[]; returnTo: string }) {
   return (
-    <section className="h-[330px] overflow-hidden rounded-[10px] border bg-card px-4 py-5" aria-labelledby="review-queue-title">
+    <section className="flex h-[330px] flex-col overflow-hidden rounded-[10px] border bg-card px-4 py-5" aria-labelledby="review-queue-title">
       <h2 id="review-queue-title" className="text-[16px] font-bold leading-6 text-foreground">{copy(locale, "queue")}</h2>
       {!items.length ? (
-        <div className="flex h-[248px] flex-col items-center justify-center text-center">
+        <div className="flex min-h-0 flex-1 flex-col items-center justify-center text-center">
           <CheckCircle2 aria-hidden="true" className="h-7 w-7 text-teal-500" />
           <p className="mt-3 max-w-[220px] text-[12px] leading-5 text-muted-foreground">{copy(locale, "noQueue")}</p>
         </div>
       ) : (
-        <ol className="mt-3 h-[250px] space-y-1 overflow-y-auto overscroll-contain pr-1">
+        <ol className="mt-3 min-h-0 flex-1 space-y-1 overflow-y-auto overscroll-contain pr-1">
           {items.map((item) => (
             <li key={reviewCellKey(item.student.id, item.question.id)}>
               <Link
@@ -491,6 +491,7 @@ function ReviewQueue({ locale, taskId, items, returnTo }: { locale: Locale; task
           ))}
         </ol>
       )}
+      <div className="mt-auto flex justify-end border-t pt-3">{confirmation}</div>
     </section>
   );
 }

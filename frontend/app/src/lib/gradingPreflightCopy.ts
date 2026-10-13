@@ -29,7 +29,7 @@ const copy = {
   short: ["简短", "Short"],
   medium: ["中等长度", "Medium"],
   long: ["详细", "Detailed"],
-  riskLabel: ["风险提醒", "Risk reminder"],
+  riskLabel: ["核对提醒", "Review reminders"],
   readyMessage: ["已完成必要检查，可以开始批改。", "Required checks are complete. Grading can start."],
   regradeReadyMessage: ["已完成必要检查，可以使用当前设置重新批改。", "Required checks are complete. Regrading can start with the current settings."],
   knowledgeEmpty: ["评分设置选择了任务资料，但当前任务尚无资料文件。", "Task materials are enabled in the setup, but this task has no material files."],

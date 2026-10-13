@@ -115,7 +115,9 @@ export function QuestionPreparationOverviewPage() {
           <Link to={`/tasks/${taskId}/questions/${encodeURIComponent(failure.problem.q_id)}/content#question-${encodeURIComponent(failure.problem.q_id)}`} className="mt-2 font-semibold text-primary">{tx(locale, "前往该题", "Go to question")}</Link>
         </div> : null}
 
-        <MatrixQueueWorkspace className="mt-4" queue={<QuestionReviewQueue risks={allRisks.filter(row => rows.some(item => item.problem.q_id === row.problem.q_id))} taskId={taskId ?? ""} locale={locale} />} matrix={<div className="overflow-hidden rounded-[10px] border bg-card">
+        <MatrixQueueWorkspace className="mt-4" queue={<QuestionReviewQueue confirmation={<ReviewConfirmButton locale={locale} all confirmed={problems.every(questionReviewConfirmed)} busy={confirming || updateProblem.isPending} onClick={async () => {
+              if (await confirm(problems)) toast.success(tx(locale, "题目资料已确认。", "Question materials confirmed."));
+            }} />} risks={allRisks.filter(row => rows.some(item => item.problem.q_id === row.problem.q_id))} taskId={taskId ?? ""} locale={locale} />} matrix={<div className="overflow-hidden rounded-[10px] border bg-card">
           {taskQuery.isLoading || readingCompletion ? (
             <div className="min-h-[300px] animate-pulse bg-muted/20" aria-busy="true" />
           ) : taskQuery.isError ? (
@@ -138,10 +140,8 @@ export function QuestionPreparationOverviewPage() {
             note={locale === "zh-CN"
               ? `显示 ${rows.length} / ${problems.length} 道题 · 作业总分 ${formatScore(totalMaxScore)} · ${allRisks.length} 个复核项`
               : `Showing ${rows.length} of ${problems.length} questions · ${formatScore(totalMaxScore)} total points · ${allRisks.length} review items`}
-            confirmation={<ReviewConfirmButton locale={locale} all confirmed={problems.every(questionReviewConfirmed)} busy={confirming || updateProblem.isPending} onClick={async () => {
-              if (await confirm(problems)) toast.success(tx(locale, "题目资料已确认。", "Question materials confirmed."));
-            }} />}
-            back={{ href: `/tasks/${taskId}/upload/problems`, label: tx(locale, "返回上传题目", "Back to Upload Questions") }}
+
+            back={{ href: `/tasks/${taskId}/questions/${encodeURIComponent(firstQuestionId)}/content`, label: tx(locale, "查看题目详情", "View Question Details") }}
             next={{ label: tx(locale, "进入上传作答", "Continue to Upload Submissions"), disabled: confirming || updateProblem.isPending, onClick: () => {
               const issues = questionReviewBlockers(problems, taskId, locale);
               if (issues.length) setNextBlockers(issues);
@@ -153,14 +153,15 @@ export function QuestionPreparationOverviewPage() {
   );
 }
 
-function QuestionReviewQueue({ risks, taskId, locale }: { risks: OpenRiskRow[]; taskId: string; locale: string }) {
-  return <section className="h-[330px] overflow-hidden rounded-[10px] border bg-card px-4 py-5" aria-labelledby="question-review-queue-title">
+function QuestionReviewQueue({ risks, taskId, locale, confirmation }: { confirmation: React.ReactNode; risks: OpenRiskRow[]; taskId: string; locale: string }) {
+  return <section className="flex h-[330px] flex-col overflow-hidden rounded-[10px] border bg-card px-4 py-5" aria-labelledby="question-review-queue-title">
     <h2 id="question-review-queue-title" className="text-[16px] font-bold leading-6">{tx(locale, "待复核队列", "Review queue")}</h2>
-    {risks.length ? <ol className="mt-3 h-[250px] space-y-1 overflow-y-auto overscroll-contain pr-1">
+    {risks.length ? <ol className="mt-3 min-h-0 flex-1 space-y-1 overflow-y-auto overscroll-contain pr-1">
       {risks.map(({ problem, issue }) => <li key={`${problem.q_id}:${issue.issue_id}`}><Link className="flex min-h-[54px] items-center gap-2 rounded-lg px-2 py-1.5 text-xs hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring" to={`/tasks/${taskId}/questions/${encodeURIComponent(problem.q_id)}/content#question-${encodeURIComponent(problem.q_id)}`}>
         <span className="min-w-0 flex-1"><span className="block font-semibold">{problem.number || problem.q_id}</span><span className={cn("mt-0.5 block", issue.severity === "blocking" ? "text-red-700" : "text-amber-700")}>{(recognitionIssueLabel(issue, locale) ?? issueCodeLabel(issue.code, locale))}</span></span><ChevronRight aria-hidden="true" className="h-4 w-4 shrink-0" />
       </Link></li>)}
-    </ol> : <div className="flex h-[248px] flex-col items-center justify-center text-center"><CheckCircle2 aria-hidden="true" className="h-7 w-7 text-teal-500" /><p className="mt-3 max-w-[220px] text-xs leading-5 text-muted-foreground">{tx(locale, "当前没有需要复核的题目。", "No questions currently need review.")}</p></div>}
+    </ol> : <div className="flex min-h-0 flex-1 flex-col items-center justify-center text-center"><CheckCircle2 aria-hidden="true" className="h-7 w-7 text-teal-500" /><p className="mt-3 max-w-[220px] text-xs leading-5 text-muted-foreground">{tx(locale, "当前没有需要复核的题目。", "No questions currently need review.")}</p></div>}
+    <div className="mt-auto flex justify-end border-t pt-3">{confirmation}</div>
   </section>;
 }
 

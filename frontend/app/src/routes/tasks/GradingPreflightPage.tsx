@@ -1,3 +1,5 @@
+import { answerReviewAttention } from "@/lib/submissionReview";
+import { questionReviewIssues, questionReviewBlockers, submissionReviewBlockers } from "@/lib/reviewConfirmation";
 import { AlertTriangle, ArrowLeft, CheckCircle2, ChevronRight, LoaderCircle, Timer } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Link, Navigate, useNavigate, useParams } from "react-router-dom";
@@ -71,7 +73,13 @@ export function GradingPreflightPage() {
   const historyView = Boolean(task && task.status !== "submissions_ready" && !isRegrading);
 
   const blockingIssues = setupResponse?.readiness.blocking_issues ?? [];
-  const effectiveBlockingIssues = blockingIssues;
+  const localQuestionBlockers = questionReviewBlockers(problems, taskId ?? "", locale);
+  const localSubmissionBlockers = submissionReviewBlockers(task, locale);
+  const effectiveBlockingIssues = [...blockingIssues,
+    ...(localQuestionBlockers.length ? ["question_review_blocked"] : []),
+    ...(localSubmissionBlockers.length ? ["submission_recognition_blocked"] : [])];
+  const hasAttentionWarnings = problems.some(problem => questionReviewIssues(problem).length > 0)
+    || students.some(student => student.stu_ans.some(answer => answerReviewAttention(answer) === "advisory"));
   const hasSourceWarnings = (setupResponse?.readiness.warnings ?? []).some(
     (warning) => warning.startsWith("submission_"),
   );
@@ -90,7 +98,7 @@ export function GradingPreflightPage() {
     && summary.problemCount > 0
     && summary.studentCount > 0,
   );
-  const countdownActive = canStart && !isRegrading && autoStartEnabled && !hasReviewWarnings && !startGrading.isPending;
+  const countdownActive = canStart && !isRegrading && autoStartEnabled && !hasAttentionWarnings && !startGrading.isPending;
 
   async function handleStart() {
     if (!taskId || !task || startTriggeredRef.current) return;
@@ -117,7 +125,7 @@ export function GradingPreflightPage() {
   startHandlerRef.current = () => { void handleStart(); };
 
   useEffect(() => {
-    if (!canStart || isRegrading || historyView || !autoStartEnabled || hasReviewWarnings) {
+    if (!canStart || isRegrading || historyView || !autoStartEnabled || hasAttentionWarnings) {
       setCountdown(AUTO_START_SECONDS);
       return;
     }
@@ -127,7 +135,7 @@ export function GradingPreflightPage() {
       setCountdown((current) => Math.max(0, current - 1));
     }, 1000);
     return () => window.clearInterval(intervalId);
-  }, [autoStartEnabled, canStart, hasReviewWarnings, historyView, isRegrading, taskId]);
+  }, [autoStartEnabled, canStart, hasAttentionWarnings, historyView, isRegrading, taskId]);
 
   useEffect(() => {
     if (countdownActive && countdown === 0) startHandlerRef.current();
@@ -194,8 +202,8 @@ export function GradingPreflightPage() {
                     <p className="mt-1.5 text-[12px] leading-5 text-muted-foreground">
                       {countdownActive
                         ? copy(locale, isRegrading ? "regradeCountdownDescription" : "countdownDescription")
-                        : disabledReason ?? (hasReviewWarnings
-                          ? (locale === "zh-CN" ? "仍有内容待确认。你可以直接继续批改，待确认标记会保留；本次不会自动开始。" : "Some inputs await confirmation. You can grade now and keep their pending status. Automatic start is paused.")
+                        : disabledReason ?? (hasAttentionWarnings
+                          ? (locale === "zh-CN" ? "部分内容需要重点核对，自动开始已暂停；你可以先核对，也可自行决定开始批改。" : "Some inputs need a closer look. Automatic start is paused; review them or start grading when you are ready.")
                           : copy(locale, isRegrading ? "regradeReadyMessage" : "readyMessage"))}
                     </p>
                     {countdownActive ? <p className="mt-1 text-[11px] font-semibold text-primary">{countdown} {copy(locale, "countdownUnit")}</p> : null}
@@ -216,7 +224,7 @@ export function GradingPreflightPage() {
                     className="inline-flex h-10 items-center justify-center gap-1.5 rounded-[8px] bg-primary px-5 text-[13px] font-semibold text-primary-foreground outline-none hover:opacity-90 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
                   >
                     {startGrading.isPending ? <LoaderCircle aria-hidden="true" className="h-4 w-4 animate-spin" /> : null}
-                    {hasReviewWarnings && canStart && !startGrading.isPending
+                    {hasAttentionWarnings && canStart && !startGrading.isPending
                       ? (locale === "zh-CN" ? "仍然开始批改" : "Start Grading Anyway")
                       : copy(locale, startGrading.isPending ? "starting" : isRegrading ? "regradeNow" : "startNow")}
                     {!startGrading.isPending ? <ChevronRight aria-hidden="true" className="h-4 w-4" /> : null}
@@ -233,6 +241,35 @@ export function GradingPreflightPage() {
               {isRegrading ? <div className="border-t px-6 py-3 sm:px-8"><GradingRetryNotice locale={locale} /></div> : null}
             </section>
           ) : null}
+
+          <section className={cn(
+            "mt-[30px] flex min-h-[62px] flex-col gap-3 rounded-[10px] border px-5 py-4 sm:flex-row sm:items-center sm:justify-between sm:px-8",
+            effectiveBlockingIssues.length > 0
+              ? "border-red-400 bg-red-50 text-red-950 dark:bg-red-950/20 dark:text-red-100"
+              : "border-primary/20 bg-primary/5 text-foreground",
+          )} aria-live="polite">
+            <p className="flex min-w-0 items-start gap-2 text-[13px] font-semibold leading-5">
+              {riskItems.length > 0
+                ? <AlertTriangle aria-hidden="true" className="mt-0.5 h-4 w-4 shrink-0 text-amber-600" />
+                : <CheckCircle2 aria-hidden="true" className="mt-0.5 h-4 w-4 shrink-0 text-teal-600" />}
+              <span>
+                <span>{copy(locale, "riskLabel")}：</span>
+                {riskItems.length > 0
+                  ? riskItems.join(locale === "en-US" ? "; " : "；")
+                  : copy(locale, isRegrading ? "regradeReadyMessage" : "readyMessage")}
+              </span>
+            </p>
+            {riskItems.length > 0 ? (
+              <div className="flex shrink-0 flex-wrap gap-4 text-[12px] font-semibold">
+                {summary.flaggedQuestions > 0 ? <Link to={summary.flaggedQuestions
+                  ? `/tasks/${taskId}/questions/${encodeURIComponent(problems.find((problem) => problem.review_status !== "confirmed")!.q_id)}/content`
+                  : `/tasks/${taskId}/questions`} className="hover:underline">{copy(locale, "editQuestions")}</Link> : null}
+                {pendingIdentityStudent ? <Link to={`/tasks/${encodeURIComponent(taskId ?? "")}/students/${encodeURIComponent(pendingIdentityStudent.stu_id)}?identity=edit`} className="hover:underline">{locale === "zh-CN" ? "核对姓名学号" : "Review student identity"}</Link> : null}
+                {summary.flaggedAnswers > 0 || hasSourceWarnings ? <Link to={submissionReviewHref} className="hover:underline">{copy(locale, "editSubmissions")}</Link> : null}
+              </div>
+            ) : null}
+            {countdownActive && hasReviewWarnings ? <p className="text-xs">{locale === "zh-CN" ? "待确认本身不阻止批改；可在倒计时结束前返回核对。" : "Pending confirmation does not block grading. You can return to review before the countdown ends."}</p> : null}
+          </section>
 
           <section className={cn("min-h-[130px] rounded-[10px] border bg-card px-6 py-5 sm:px-8", historyView ? "" : "mt-[30px]")} aria-labelledby="preflight-task-summary">
             <h2 id="preflight-task-summary" className="text-[18px] font-bold leading-6 text-foreground">
@@ -342,33 +379,7 @@ export function GradingPreflightPage() {
             )}
           </section>
 
-          <section className={cn(
-            "mt-[30px] flex min-h-[62px] flex-col gap-3 rounded-[10px] border px-5 py-4 sm:flex-row sm:items-center sm:justify-between sm:px-8",
-            riskItems.length > 0
-              ? "border-amber-400 bg-amber-50 text-amber-950 dark:bg-amber-950/20 dark:text-amber-100"
-              : "border-teal-200 bg-teal-50 text-teal-950 dark:border-teal-900 dark:bg-teal-950/20 dark:text-teal-100",
-          )} aria-live="polite">
-            <p className="flex min-w-0 items-start gap-2 text-[13px] font-semibold leading-5">
-              {riskItems.length > 0
-                ? <AlertTriangle aria-hidden="true" className="mt-0.5 h-4 w-4 shrink-0 text-amber-600" />
-                : <CheckCircle2 aria-hidden="true" className="mt-0.5 h-4 w-4 shrink-0 text-teal-600" />}
-              <span>
-                <span>{copy(locale, "riskLabel")}：</span>
-                {riskItems.length > 0
-                  ? riskItems.join(locale === "en-US" ? "; " : "；")
-                  : copy(locale, isRegrading ? "regradeReadyMessage" : "readyMessage")}
-              </span>
-            </p>
-            {riskItems.length > 0 ? (
-              <div className="flex shrink-0 flex-wrap gap-4 text-[12px] font-semibold">
-                <Link to={summary.flaggedQuestions
-                  ? `/tasks/${taskId}/questions/${encodeURIComponent(problems.find((problem) => problem.review_status !== "confirmed")!.q_id)}/content`
-                  : `/tasks/${taskId}/questions`} className="hover:underline">{copy(locale, "editQuestions")}</Link>
-                {pendingIdentityStudent ? <Link to={`/tasks/${encodeURIComponent(taskId ?? "")}/students/${encodeURIComponent(pendingIdentityStudent.stu_id)}?identity=edit`} className="hover:underline">{locale === "zh-CN" ? "核对姓名学号" : "Review student identity"}</Link> : null}
-                <Link to={submissionReviewHref} className="hover:underline">{copy(locale, "editSubmissions")}</Link>
-              </div>
-            ) : null}
-          </section>
+
 
           <div className="mt-[22px] flex flex-col items-stretch gap-2 pb-8 sm:items-end">
             {historyView ? (
@@ -506,6 +517,8 @@ function getDisabledReason({
 
 function gradingBlockerMessage(code: string | null, locale: Locale): string | null {
   const messages: Record<string, [string, string]> = {
+    question_review_blocked: ["题目存在关键缺项或冲突。请修正并确认后再开始批改。", "Questions have required missing information or conflicts. Resolve and confirm them before grading."],
+    submission_recognition_blocked: ["学生身份或作答识别存在关键问题。请修正并确认后再开始批改。", "Student identities or recognized responses have blocking issues. Resolve and confirm them before grading."],
     submission_sources_failed: ["仍有文件识别失败。请在上方查看具体原因并重新处理后再开始批改。", "Some files failed recognition. Review the exact reasons above and resolve them before grading."],
     submission_sources_pending: ["仍有文件正在处理。全部来源得到终态后才能开始批改。", "Some files are still processing. Grading can start only after every source has a terminal result."],
     submission_source_evidence_missing: ["作答来源状态需要重新确认。请刷新；若结构化题目和作答仍在，可直接重试批改。", "The submission source state needs confirmation. Refresh; if the structured questions and answers remain, retry grading directly."],
@@ -522,6 +535,8 @@ function gradingBlockerMessage(code: string | null, locale: Locale): string | nu
 
 function gradingRecovery(taskId: string, code: string | undefined, locale: Locale) {
   const root = `/tasks/${taskId}`;
+  if (code === "question_review_blocked") return { href: `${root}/questions`, label: locale === "zh-CN" ? "审核题目" : "Review questions" };
+  if (code === "submission_recognition_blocked") return { href: `${root}/submissions`, label: locale === "zh-CN" ? "校对作答" : "Review submissions" };
   if (code === "questions_required") return { href: `${root}/upload/problems`, label: locale === "zh-CN" ? "添加题目" : "Add questions" };
   if (code === "submissions_required" || code === "submission_sources_failed") return { href: `${root}/submissions/upload`, label: locale === "zh-CN" ? "处理作答文件" : "Fix submission files" };
   if (code === "answers_required" || code === "submission_source_evidence_missing") return { href: `${root}/submissions`, label: locale === "zh-CN" ? "查看作答" : "Review submissions" };

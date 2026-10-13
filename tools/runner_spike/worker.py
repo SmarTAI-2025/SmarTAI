@@ -96,6 +96,9 @@ def _validate_request(payload: Any) -> dict[str, Any]:
     if not isinstance(code, str) or not code or len(code) > MAX_CODE_CHARS:
         raise InvalidRequest("code is empty or too large")
 
+    test_input = payload.get("test_input", "")
+    if not isinstance(test_input, str) or len(test_input.encode("utf-8")) > 65536:
+        raise InvalidRequest("test_input is invalid or too large")
     limits = payload.get("limits")
     if not isinstance(limits, dict):
         raise InvalidRequest("limits must be a JSON object")
@@ -120,6 +123,7 @@ def _validate_request(payload: Any) -> dict[str, Any]:
     return {
         "execution_id": execution_id,
         "code": code,
+        "test_input": test_input,
         "timeout_seconds": timeout_seconds,
         "memory_mb": memory_mb,
         "max_output_chars": max_output_chars,
@@ -219,6 +223,7 @@ def execute_request(payload: Any, *, workdir: Path = DEFAULT_WORKDIR) -> dict[st
 
     workdir.mkdir(mode=0o700, parents=True, exist_ok=True)
     script_path = workdir / "main.py"
+    stdin_path = workdir / ".stdin"
     stdout_path = workdir / ".stdout"
     stderr_path = workdir / ".stderr"
     max_output = request["max_output_chars"]
@@ -231,11 +236,12 @@ def execute_request(payload: Any, *, workdir: Path = DEFAULT_WORKDIR) -> dict[st
 
     try:
         script_path.write_text(request["code"], encoding="utf-8", newline="\n")
-        with stdout_path.open("wb") as stdout_file, stderr_path.open("wb") as stderr_file:
+        stdin_path.write_text(request["test_input"], encoding="utf-8")
+        with stdin_path.open("rb") as stdin_file, stdout_path.open("wb") as stdout_file, stderr_path.open("wb") as stderr_file:
             process = subprocess.Popen(
                 [sys.executable, "-I", "-B", str(script_path)],
                 cwd=workdir,
-                stdin=subprocess.DEVNULL,
+                stdin=stdin_file,
                 stdout=stdout_file,
                 stderr=stderr_file,
                 env=dict(_SAFE_CHILD_ENV),
@@ -320,7 +326,7 @@ def execute_request(payload: Any, *, workdir: Path = DEFAULT_WORKDIR) -> dict[st
             resource_status="not_executed",
         )
     finally:
-        for path in (script_path, stdout_path, stderr_path):
+        for path in (script_path, stdin_path, stdout_path, stderr_path):
             try:
                 path.unlink()
             except OSError:
