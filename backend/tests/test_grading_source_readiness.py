@@ -327,25 +327,175 @@ def test_grading_source_blockers_fail_closed_without_creating_run(
     ) == []
 
 
-def test_source_backed_identity_review_is_advisory_and_not_implicitly_confirmed():
+def test_source_backed_identity_conflict_blocks_until_explicitly_resolved():
     from backend.services import task_facade
     from backend.db import workflow_repository
+    from backend.domain.errors import InvalidTransition
 
     seeded = _seed_source_case("identity_conflict")
     args = {"task_id": seeded["assignment_id"], "owner_id": seeded["owner_id"]}
     readiness = task_facade.grading_readiness(**args)
     before = task_facade.get_task(**args, full=True)
-    assert readiness == {"ready": True, "blocking_issues": [], "warnings": ["submission_identities_unresolved"]}
+    assert readiness == {"ready": False, "blocking_issues": ["submission_identities_unresolved"], "warnings": []}
+    with pytest.raises(InvalidTransition) as exc:
+        task_facade.start_task_grading(**args, expected_workflow_revision=seeded["workflow"].workflow_revision)
+    assert exc.value.code == "submission_identities_unresolved"
+    assert task_facade.get_task(**args, full=True)["student_data"] == before["student_data"]
 
-    started = task_facade.start_task_grading(**args, expected_workflow_revision=seeded["workflow"].workflow_revision)
+    resolved = task_facade.update_student_identity(
+        **args, current_display_id="S002", new_display_id="S002", new_display_name="Student S002",
+        expected_revision=before["workflow_revision"],
+    )
+    assert task_facade.grading_readiness(**args)["blocking_issues"] == []
+    started = task_facade.start_task_grading(**args, expected_workflow_revision=resolved["workflow_revision"])
 
     assert started["status"] == "started"
     after = task_facade.get_task(**args, full=True)
-    assert after["student_data"] == before["student_data"]
-    assert after["submission_sources"] == before["submission_sources"]
+    assert after["student_data"]["S002"]["identity_status"] == "matched"
+    assert after["submission_sources"][1]["status"] == "parsed"
     frozen = workflow_repository.get_run_setup(started["job_id"])
     assert len(frozen.input_manifest["submission_revision_ids"]) == 2
-    assert sorted(item["identity_status"] for item in frozen.input_manifest["student_presentations"]) == ["matched", "needs_review"]
+    assert sorted(item["identity_status"] for item in frozen.input_manifest["student_presentations"]) == ["matched", "matched"]
+
+
+def test_identity_placeholder_cannot_be_bulk_confirmed():
+    from backend.domain.errors import ValidationError
+    from backend.services import task_facade
+
+    seeded = _seed_source_case("identity_conflict")
+    args = {"task_id": seeded["assignment_id"], "owner_id": seeded["owner_id"]}
+    before = task_facade.get_task(**args, full=True)
+    with pytest.raises(ValidationError) as exc:
+        task_facade.update_student_identity(
+            **args, current_display_id="S002", new_display_id="S002", new_display_name="[Unknown Student]",
+            expected_revision=before["workflow_revision"],
+        )
+    assert exc.value.code == "student_identity_required"
+    assert task_facade.get_task(**args, full=True) == before
+
+
+@pytest.mark.parametrize("failure_flag", ["recognition_failed", "parse_failed", "no_matching_answer"])
+def test_answer_recognition_failure_requires_repair_and_confirmation(failure_flag):
+    from sqlalchemy import select
+    from backend.db.models import SubmissionAnswerRecord
+    from backend.db.session import session_scope
+    from backend.domain.errors import ValidationError
+    from backend.services import task_facade
+
+    seeded = _seed_legacy_structured_case()
+    args = {"task_id": seeded["assignment_id"], "owner_id": seeded["owner_id"]}
+    with session_scope() as session:
+        answer = session.scalar(select(SubmissionAnswerRecord))
+        answer.content = ""
+        answer.flag = [failure_flag]
+    before = task_facade.get_task(**args, full=True)
+    assert "submission_recognition_blocked" in task_facade.grading_readiness(**args)["blocking_issues"]
+    with pytest.raises(ValidationError) as exc:
+        task_facade.update_student_answer(
+            **args, display_student_id="S001", q_id="q1",
+            patch={"review_status": "confirmed", "flag": []}, expected_revision=before["workflow_revision"],
+        )
+    assert exc.value.code == "answer_review_blocked"
+    assert task_facade.get_task(**args, full=True)["workflow_revision"] == before["workflow_revision"]
+    repaired = task_facade.update_student_answer(
+        **args, display_student_id="S001", q_id="q1",
+        patch={"content": "Verified from the original", "review_status": "edited"},
+        expected_revision=before["workflow_revision"],
+    )
+    assert failure_flag not in repaired["answer"]["flag"]
+    assert "recognition_repaired_needs_confirmation" in repaired["answer"]["flag"]
+    assert "submission_recognition_blocked" in task_facade.grading_readiness(**args)["blocking_issues"]
+    still_pending = task_facade.update_student_answer(
+        **args, display_student_id="S001", q_id="q1", patch={"flag": []},
+        expected_revision=repaired["workflow_revision"],
+    )
+    assert "recognition_repaired_needs_confirmation" in still_pending["answer"]["flag"]
+    assert "submission_recognition_blocked" in task_facade.grading_readiness(**args)["blocking_issues"]
+    task_facade.update_student_answer(
+        **args, display_student_id="S001", q_id="q1", patch={"review_status": "confirmed"},
+        expected_revision=still_pending["workflow_revision"],
+    )
+    assert task_facade.grading_readiness(**args)["blocking_issues"] == []
+
+
+def test_true_blank_answer_without_failure_evidence_is_not_recognition_failure():
+    from sqlalchemy import select
+    from backend.db.models import SubmissionAnswerRecord
+    from backend.db.session import session_scope
+    from backend.services import task_facade
+
+    seeded = _seed_legacy_structured_case()
+    with session_scope() as session:
+        session.scalar(select(SubmissionAnswerRecord)).content = ""
+    assert task_facade.grading_readiness(
+        task_id=seeded["assignment_id"], owner_id=seeded["owner_id"],
+    )["blocking_issues"] == []
+
+
+@pytest.mark.parametrize("condition", ["empty_stem", "blocking_issue", "rubric_mismatch"])
+def test_unusable_question_inputs_cannot_start_grading(condition):
+    from sqlalchemy import select
+    from backend.db.models import AssignmentQuestionRecord
+    from backend.db.session import session_scope
+    from backend.domain.errors import InvalidTransition
+    from backend.services import task_facade
+    from backend.services.question_structure import build_major_question_structure
+
+    seeded = _seed_legacy_structured_case()
+    args = {"task_id": seeded["assignment_id"], "owner_id": seeded["owner_id"]}
+    with session_scope() as session:
+        question = session.scalar(select(AssignmentQuestionRecord))
+        if condition == "empty_stem":
+            question.stem = " "
+        elif condition == "blocking_issue":
+            question.source = {"presentation": {"preparation_issues": [{
+                "issue_id": "failed", "field": "stem", "severity": "blocking",
+                "status": "open", "code": "generation_failed",
+            }]}}
+        else:
+            question.stem = "Question 1. (a) First subpart. (b) Second subpart."
+            question.criterion = "(a) 2 分\n(b) 3 分"
+            question.source = {"presentation": {"question_structure": build_major_question_structure(
+                {"number": "1", "stem": question.stem}, major_order=0,
+            ).model_dump()}}
+    assert "question_review_blocked" in task_facade.grading_readiness(**args)["blocking_issues"]
+    with pytest.raises(InvalidTransition) as exc:
+        task_facade.start_task_grading(**args, expected_workflow_revision=seeded["workflow"].workflow_revision)
+    assert exc.value.code == "question_review_blocked"
+    with pytest.raises(InvalidTransition) as upload_exc:
+        task_facade.queue_task_submission_parsing(
+            **args, filename="answer.txt", content=b"answer", content_type="text/plain", registry=None,
+            expected_workflow_revision=seeded["workflow"].workflow_revision,
+        )
+    assert upload_exc.value.code == "question_review_blocked"
+
+
+def test_missing_question_repair_requires_confirmation_after_save():
+    from sqlalchemy import select
+    from backend.db.models import AssignmentQuestionRecord
+    from backend.db.session import session_scope
+    from backend.services import task_facade
+
+    seeded = _seed_legacy_structured_case()
+    args = {"task_id": seeded["assignment_id"], "owner_id": seeded["owner_id"]}
+    with session_scope() as session:
+        session.scalar(select(AssignmentQuestionRecord)).stem = ""
+    repaired = task_facade.update_problem(
+        **args, q_id="q1", patch={"stem": "Verified question text"},
+        expected_revision=seeded["workflow"].workflow_revision,
+    )
+    assert repaired["problem"]["review_status"] == "needs_review"
+    assert "question_review_blocked" in task_facade.grading_readiness(**args)["blocking_issues"]
+    still_pending = task_facade.update_problem(
+        **args, q_id="q1", patch={"preparation_issues": []},
+        expected_revision=repaired["workflow_revision"],
+    )
+    assert "question_review_blocked" in task_facade.grading_readiness(**args)["blocking_issues"]
+    task_facade.update_problem(
+        **args, q_id="q1", patch={"review_status": "confirmed"},
+        expected_revision=still_pending["workflow_revision"],
+    )
+    assert "question_review_blocked" not in task_facade.grading_readiness(**args)["blocking_issues"]
 
 
 def test_grade_endpoint_accepts_uncertain_answers_and_preserves_pending_review():

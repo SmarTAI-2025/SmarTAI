@@ -1,4 +1,4 @@
-import { questionIssueNeedsReview } from "./reviewConfirmation";
+import { questionReviewIssues } from "./reviewConfirmation";
 import { groundedRows } from "./groundedAsk";
 import type { FilterIntentResult, ProblemInfo, StudentSubmission } from "@/types";
 import { isProgrammingProblem } from "@/lib/questionPreparation";
@@ -37,14 +37,17 @@ export function selectPreparationQuestions(problems: ProblemInfo[], intent: Filt
   if (intent?.execution) return groundedRows(problems, intent, "questions", p => p.q_id);
   if (!intent?.recognized) return problems;
   const selected = problems.filter((problem) => {
-    const issues = (problem.preparation_issues ?? []).filter(questionIssueNeedsReview);
+    const attentionIssues = questionReviewIssues(problem);
+    // Explicit searches can inspect all retained warnings without promoting them
+    // into the default risk queue or blocking ordinary navigation.
+    const issues = [...(problem.preparation_issues ?? []).filter(issue => issue.status === "open"), ...attentionIssues];
     if (intent.question_tokens.length && !intent.question_tokens.some((token) => matchesQuestionToken(problem.q_id, problem.number || problem.q_id, token))) return false;
     if (intent.question_types?.length && !intent.question_types.some((type) => normalizeFilterType(type) === normalizeFilterType(problem.type || ""))) return false;
     if (intent.min_max_score != null && (problem.max_score == null || problem.max_score < intent.min_max_score)) return false;
     if (intent.max_max_score != null && (problem.max_score == null || problem.max_score > intent.max_max_score)) return false;
     if ((intent.low_confidence || intent.preparation_status === "low_confidence") && !issues.some((issue) => ["low_confidence", "recognition_partial", "recognition_needs_review"].includes(issue.code))) return false;
-    if (intent.preparation_status === "attention" && !issues.length) return false;
-    if (intent.preparation_status === "ready" && issues.length) return false;
+    if (intent.preparation_status === "attention" && !attentionIssues.length) return false;
+    if (intent.preparation_status === "ready" && attentionIssues.length) return false;
     if (intent.preparation_status === "source_conflict" && !issues.some((issue) => issue.code.includes("conflict"))) return false;
     if (intent.preparation_status === "parse_anomaly" && !issues.some((issue) => ["parse_anomaly", "generation_failed", "invalid_test_case", "reference_solution_failed_case"].includes(issue.code))) return false;
     if (intent.material_field && intent.material_status) {
@@ -57,7 +60,7 @@ export function selectPreparationQuestions(problems: ProblemInfo[], intent: Filt
   const sort = intent.sort;
   const value = (problem: ProblemInfo) => sort.startsWith("max_score") ? problem.max_score
     : sort.startsWith("type") ? normalizeFilterType(problem.type || "")
-      : sort.startsWith("review") ? (problem.preparation_issues ?? []).filter(questionIssueNeedsReview).length
+      : sort.startsWith("review") ? questionReviewIssues(problem).length
         : problem.number || problem.q_id;
   return selected.sort((a, b) => compareValues(value(a), value(b), sort.endsWith("_desc") ? "desc" : "asc"));
 }

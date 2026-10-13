@@ -1,6 +1,6 @@
-import { ReviewConfirmButton, ReviewBlockDialog } from "@/components/tasks/ReviewConfirmation";
-import { answerNeedsConfirmation } from "@/lib/submissionReview";
-import { submissionReviewBlockers, answerReviewBlocked, type ReviewBlocker } from "@/lib/reviewConfirmation";
+import { ReviewConfirmButton, ReviewBlockDialog, ReviewStageActions } from "@/components/tasks/ReviewConfirmation";
+import { answerNeedsConfirmation, answerReviewAttention } from "@/lib/submissionReview";
+import { submissionReviewBlockers, submissionConfirmationBlockers, answerReviewBlocked, studentIdentityInvalid, studentIdentityReviewBlocked, type ReviewBlocker } from "@/lib/reviewConfirmation";
 import { DraftField, type DraftFieldHandle } from "@/components/ui/DraftField";
 import { useDraftProtection } from "@/hooks/useDraftProtection";
 import { useDraftLeave } from "@/hooks/useDraftLeave";
@@ -217,7 +217,7 @@ function StudentAnswerReviewForm() {
   const identityDirty = identityOpen && (identityId !== (student?.stu_id ?? "") || identityName !== (student?.stu_name ?? ""));
   const isDirty = dirtyQuestionIds.size > 0 || identityDirty;
   const pendingAnswers = questions.filter((question) => answerNeedsConfirmation(answers.get(question.id)));
-  const pendingIdentity = student?.identity_status === "needs_review";
+  const pendingIdentity = student?.identity_status === "needs_review" || Boolean(student && studentIdentityReviewBlocked(student, taskQuery.data?.submission_sources));
   const mutationBusy = savingQuestionId !== null || identityMutation.isPending || batchProgress !== null;
   const answerDrafts = useRef(new Map<string, DraftFieldHandle>());
   const mounted = useRef(true);
@@ -402,8 +402,10 @@ function StudentAnswerReviewForm() {
   }
 
   async function confirmAnswer(question: SubmissionQuestion) {
-    const issues = submissionReviewBlockers(taskQuery.data, locale, student?.stu_id);
-    if (issues.length) { setBlocked(issues); return; }
+    if (answerReviewBlocked(answers.get(question.id))) {
+      setBlocked([{ label: tx(locale, "请先修正本题识别结果，再确认。", "Correct this transcription before confirming."), href: `${studentPath(taskId ?? "", student?.stu_id ?? "")}?question=${encodeURIComponent(question.id)}` }]);
+      return;
+    }
     if (dirtyQuestionIds.has(question.id)) { setBatchMessage(tx(locale, "请先保存修改。", "Save your changes first.")); return; }
     if (!taskId || !student || !taskQuery.data || mutationLock.current) return;
     if (answerDrafts.current.get(question.id)?.conflict) return;
@@ -433,7 +435,7 @@ function StudentAnswerReviewForm() {
   }
 
   async function confirmAllAnswers() {
-    const issues = submissionReviewBlockers(taskQuery.data, locale, student?.stu_id);
+    const issues = submissionConfirmationBlockers(taskQuery.data, locale, student?.stu_id);
     if (issues.length) { setBlocked(issues); return; }
     if (!taskId || !student || !taskQuery.data || mutationLock.current) return;
     if (identityDirty) {
@@ -501,7 +503,7 @@ function StudentAnswerReviewForm() {
     if (!taskId || !student || !taskQuery.data || (readOnly && !unchanged) || mutationLock.current) return;
     const nextId = unchanged ? student.stu_id : identityId.trim();
     const nextName = unchanged ? student.stu_name : identityName.trim();
-    if (!nextId || !nextName) {
+    if (studentIdentityInvalid({ ...student, stu_id: nextId, stu_name: nextName })) {
       setIdentityOpen(true);
       setIdentityError(t("studentSubmissionIdentityRequired"));
       return;
@@ -540,7 +542,7 @@ function StudentAnswerReviewForm() {
 
   return (
     <div className="w-full max-w-[1300px]">
-      {!readOnly && student ? questions.filter((question) => drafts[question.id]).map((question) => <DraftField key={question.id} id={question.id} handles={answerDrafts} scope={`answers:${taskId}:${encodeURIComponent(studentId ?? "")}:${encodeURIComponent(question.id)}`} value={drafts[question.id]} baseline={{ content: answers.get(question.id)?.content ?? "" }} version={JSON.stringify(answers.get(question.id) ?? null)} busy={mutationBusy} onRestore={(restored) => { setDrafts((current) => ({ ...current, [question.id]: restored })); setEditingQuestionIds((current) => new Set([...current, question.id])); }} />) : null}
+      {!readOnly && student ? questions.filter((question) => drafts[question.id]).map((question) => <DraftField key={question.id} id={question.id} handles={answerDrafts} scope={`answers:${taskId}:${encodeURIComponent(studentId ?? "")}:${encodeURIComponent(question.id)}`} value={drafts[question.id]} baseline={{ content: answers.get(question.id)?.content ?? "" }} version={JSON.stringify({ content: answers.get(question.id)?.content ?? "" })} busy={mutationBusy} onRestore={(restored) => { setDrafts((current) => ({ ...current, [question.id]: restored })); setEditingQuestionIds((current) => new Set([...current, question.id])); }} />) : null}
       <div className="flex min-h-9 items-center justify-between gap-4">
         <h1 className="min-w-0 truncate text-[28px] font-bold leading-9 tracking-[-0.02em] text-foreground sm:text-[30px]">
           {t("answerReviewTitle")}
@@ -555,7 +557,7 @@ function StudentAnswerReviewForm() {
         </Link>
       </div>
       <ReviewBlockDialog locale={locale} issues={blocked} onClose={() => setBlocked([])} />
-      <NewTaskStepper currentStep={4} />
+      <NewTaskStepper currentStep={4} blockedFromStep={submissionReviewBlockers(taskQuery.data, locale).length ? 5 : undefined} lockedStepReason={locale === "zh-CN" ? "请先处理并确认关键问题" : "Resolve and confirm required items first"} onLockedStepActivate={() => setBlocked(submissionReviewBlockers(taskQuery.data, locale))} />
 
       {readOnly ? (
         <div className="mt-4 rounded-[9px] border bg-card px-4 py-3 text-[12px] leading-5 text-muted-foreground">
@@ -581,9 +583,9 @@ function StudentAnswerReviewForm() {
           <dl className="grid grid-cols-2 gap-3 lg:grid-cols-4 lg:gap-5">
             <ReviewMetric
               label={t("studentSubmissionMetricIdentity")}
-              value={t(student.identity_status === "needs_review" ? "studentSubmissionIdentityReview" : "studentSubmissionIdentityMatched")}
+              value={t(pendingIdentity ? "studentSubmissionIdentityReview" : "studentSubmissionIdentityMatched")}
               detail={student.identity_match_method ? t(identityMethodKey(student.identity_match_method)) : "—"}
-              tone={student.identity_status === "needs_review" ? "danger" : "accent"}
+              tone={studentIdentityReviewBlocked(student, taskQuery.data?.submission_sources) ? "danger" : pendingIdentity ? "neutral" : "accent"}
             />
             <ReviewMetric
               label={t("studentSubmissionMetricCoverage")}
@@ -594,7 +596,7 @@ function StudentAnswerReviewForm() {
               label={t("studentSubmissionMetricReview")}
               value={String(pendingAnswers.length)}
               detail={t("studentSubmissionMetricQuestions")}
-              tone={pendingAnswers.length ? "danger" : "accent"}
+              tone={questions.some(question => answerReviewAttention(answers.get(question.id)) === "blocking") ? "danger" : pendingAnswers.length ? "neutral" : "accent"}
             />
             <ReviewMetric
               label={t("studentSubmissionMetricSource")}
@@ -666,9 +668,9 @@ function StudentAnswerReviewForm() {
           >
           <div className="min-w-0">
           {student.identity_status && !identityOpen ? (
-            <div className="mb-3 flex flex-wrap items-center justify-between gap-3 rounded-[10px] border border-red-200 bg-card p-4">
+            <div className={cn("mb-3 flex flex-wrap items-center justify-between gap-3 rounded-[10px] border bg-card p-4", studentIdentityReviewBlocked(student, taskQuery.data?.submission_sources) && "border-red-200 text-red-700")}>
               <p className="text-sm">{tx(locale, "请核对姓名与学号；无误时可直接确认。", "Check the student name and ID, then confirm if correct.")}</p>
-              <ReviewConfirmButton locale={locale} title={tx(locale, "确认身份", "Confirm identity")} confirmed={student.identity_status !== "needs_review"} busy={mutationBusy} onClick={() => void saveIdentity(true)} />
+              <ReviewConfirmButton locale={locale} title={tx(locale, "确认身份", "Confirm identity")} confirmed={student.identity_status !== "needs_review" && !studentIdentityReviewBlocked(student, taskQuery.data?.submission_sources)} blocked={studentIdentityReviewBlocked(student, taskQuery.data?.submission_sources)} busy={mutationBusy} onClick={() => void saveIdentity(true)} />
               {identityError ? <p role="alert" className="w-full text-xs text-danger">{identityError}</p> : null}
             </div>
           ) : null}
@@ -760,7 +762,7 @@ function StudentAnswerReviewForm() {
                         <span className="truncate" title={tx(locale, `第 ${question.label} 题`, problemLabel({ q_id: question.id, number: question.label }))}>{tx(locale, `第 ${question.label} 题`, problemLabel({ q_id: question.id, number: question.label }))}</span>
                         <span className={cn(
                           "ml-1 h-2 w-2 shrink-0 rounded-full",
-                          active ? "bg-white" : state === "flagged" ? "bg-red-500" : "bg-emerald-500",
+                          active ? "bg-white" : answerReviewAttention(answer) === "blocking" ? "bg-red-500" : answerReviewAttention(answer) === "advisory" ? "bg-amber-500" : "bg-emerald-500",
                         )} />
                       </button>
                     );
@@ -813,24 +815,15 @@ function StudentAnswerReviewForm() {
             </div>
           )}
 
-          <div className="mt-6 flex flex-col-reverse gap-2 pb-8 sm:flex-row sm:items-center sm:justify-end">
-            <ReviewConfirmButton locale={locale} all confirmed={!pendingIdentity && pendingAnswers.length === 0 && !submissionReviewBlockers(taskQuery.data, locale, student.stu_id).length} busy={mutationBusy} onClick={() => void confirmAllAnswers()} />
-            <Link
-              to={backHref}
-              onClick={(event) => { if (!confirmLeave()) event.preventDefault(); }}
-              className="inline-flex h-10 items-center justify-center rounded-[8px] border bg-card px-5 text-sm font-semibold text-foreground outline-none hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring"
-            >
-              {t("answerReviewBackOverview")}
-            </Link>
-            <Link
-              to={`/tasks/${encodeURIComponent(taskId)}/grading-setup`}
-              onClick={(event) => { if (!confirmLeave()) event.preventDefault(); }}
-              className="inline-flex h-10 items-center justify-center gap-1.5 rounded-[8px] bg-primary px-5 text-sm font-semibold text-primary-foreground outline-none hover:opacity-90 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
-            >
-              {t("submissionReviewEnterGradingSetup")}
-              <ChevronRight aria-hidden="true" className="h-4 w-4" />
-            </Link>
-          </div>
+          <ReviewStageActions className="mb-8 mt-6"
+            confirmation={<ReviewConfirmButton locale={locale} all confirmed={!pendingIdentity && pendingAnswers.length === 0 && !submissionReviewBlockers(taskQuery.data, locale, student.stu_id).length} busy={mutationBusy} onClick={() => void confirmAllAnswers()} />}
+            back={{ href: backHref, label: t("answerReviewBackOverview") }}
+            next={{ label: t("submissionReviewEnterGradingSetup"), disabled: mutationBusy, onClick: () => {
+              const issues = submissionReviewBlockers(taskQuery.data, locale);
+              if (issues.length) setBlocked(issues);
+              else navigate(`/tasks/${encodeURIComponent(taskId)}/grading-setup`);
+            } }}
+          />
           {batchMessage ? <p role="status" className="mb-4 text-sm text-muted-foreground">{batchMessage}</p> : null}
           {!readOnly && questions.some((question) => !answers.has(question.id)) ? <p className="mb-4 text-xs text-muted-foreground">{tx(locale, "缺失的作答没有识别记录，批量复核不会将其标为已确认；可返回总览重新添加作答。", "Missing responses have no recognition record and are excluded from confirmation. Return to the overview to upload them.")}</p> : null}
           </div>
@@ -982,7 +975,7 @@ function AnswerReviewCard({ question, answer, draft, sourceFilename, previous, n
           <p className="mt-1 text-[11px] text-muted-foreground">{tx(locale, "题目与学生作答在同一卡片内连续校对；题目只读。", "Review the read-only question and student response together in this card.")}</p>
         </div>
         <div className="flex shrink-0 gap-2">
-          {answer ? <ReviewConfirmButton title={tx(locale, `第 ${question.label} 题`, `Question ${question.label}`)} locale={locale} confirmed={state === "reviewed"} blocked={answerReviewBlocked(answer)} busy={saving} disabled={editing} onClick={onConfirm} /> : null}
+          {answer ? <ReviewConfirmButton title={tx(locale, `第 ${question.label} 题`, `Question ${question.label}`)} locale={locale} confirmed={state === "reviewed" && !editing} blocked={answerReviewAttention(answer) === "blocking"} busy={saving} save={editing} onClick={editing ? () => onSave(false) : onConfirm} /> : null}
           <Button type="button" variant="secondary" className="h-9 px-3" disabled={!previous} onClick={() => previous && onNavigate(previous.id)}>
             <ArrowUp aria-hidden="true" className="h-4 w-4" />{t("answerReviewPreviousQuestion")}
           </Button>
@@ -1031,15 +1024,6 @@ function AnswerReviewCard({ question, answer, draft, sourceFilename, previous, n
                   <X aria-hidden="true" className="h-4 w-4" />
                   {tx(locale, "取消", "Cancel")}
                 </Button>
-                <Button type="button" variant="secondary" className="h-9 px-4" disabled={saving} onClick={() => onSave(false)}>
-                  {saving ? <LoaderCircle aria-hidden="true" className="h-4 w-4 animate-spin" /> : <Save aria-hidden="true" className="h-4 w-4" />}
-                  {saving ? t("answerReviewSaving") : tx(locale, dirty ? "保存并确认" : "待确认", dirty ? "Save and confirm" : "Confirm review")}
-                </Button>
-                {next ? <Button type="button" className="h-9 px-4" disabled={saving} onClick={() => onSave(true)}>
-                  <CheckCircle2 aria-hidden="true" className="h-4 w-4" />
-                  {next ? t("answerReviewSaveNext") : t("answerReviewSave")}
-                  {next ? <ArrowDown aria-hidden="true" className="h-4 w-4" /> : null}
-                </Button> : null}
               </div>
             </>
           ) : (

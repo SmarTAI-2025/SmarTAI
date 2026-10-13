@@ -2,7 +2,7 @@ import "fake-indexeddb/auto";
 import { DraftActions, DraftLeaveProvider } from "@/hooks/useDraftLeave";
 import { PageDraftSession } from "@/hooks/useDraftProtection";
 import { clearPageDrafts, readPageDraft, objectDraftCodec } from "@/lib/pageDraftStore";
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { createMemoryRouter, Outlet, RouterProvider } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -52,6 +52,7 @@ function show(detail = false, suffix = "") {
 }
 beforeEach(async () => {
   await clearPageDrafts();
+  state.task.status = "graded";
   vi.clearAllMocks();
   state.result.grading_run_status = undefined;
   state.result.results = [{ student_id: "S1", student_name: "Sample", corrections: [correction("Q1"), correction("Q2", { score: 0, provisional_score: 0, teacher_comment: "Keep this" })] }];
@@ -86,6 +87,25 @@ describe("one-click grading review", () => {
     expect(screen.getByText("2/2")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Confirmed" })).toBeDisabled();
   });
+  it("requires confirmation of a repaired missing score without suggesting another model retry", async () => {
+    state.result.results = [{ student_id: "S1", corrections: [correction("Q1", { score: 6, provisional_score: null, teacher_score: 6, review_status: "edited", confidence: 0.6 })] }];
+    state.finalization = { remaining_review_count: 1, ready_for_confirmation: false, workflow_revision: 5 };
+    show();
+    expect(screen.getByText("Check the corrected score and confirm")).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Locked results" }));
+    expect(screen.getByRole("alertdialog")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Retry failed items" })).not.toBeInTheDocument();
+    expect(state.retry).not.toHaveBeenCalled();
+  });
+  it("keeps confirmation separate from the next stage when reopening completed results", async () => {
+    state.task.status = "finalized";
+    show();
+    const actions = document.querySelector('[data-review-stage-actions]') as HTMLElement;
+    expect(actions.querySelectorAll('button,a')).toHaveLength(3);
+    await userEvent.click(within(actions).getByRole("button", { name: "Confirm all" }));
+    expect(state.bulk).toHaveBeenCalledTimes(1);
+    expect(state.finalize).not.toHaveBeenCalled();
+  });
   it("explicitly confirms automatically scored results including zero, without finalizing", async () => {
     show();
     await userEvent.click(screen.getByRole("button", { name: "Confirm all" }));
@@ -111,6 +131,35 @@ describe("one-click grading review", () => {
     await waitFor(() => expect(router.state.location.pathname).toBe("/tasks/T1/review/S1/Q1"));
     expect(state.bulk).not.toHaveBeenCalled();
   });
+  it.each([false, true])("keeps confirmation and results navigation separate in detail=%s", async detail => {
+    show(detail);
+    const actions = document.querySelector("[data-review-stage-actions]") as HTMLElement;
+    expect(actions.children).toHaveLength(3);
+    expect(actions.children[0]).toHaveTextContent("Confirm all");
+    expect(actions.children[1]).toHaveTextContent(detail ? "Back to Review Overview" : "Back to Grading Setup");
+    expect(actions.children[2]).toHaveTextContent("View Results & Analysis");
+    Array.from(actions.children).forEach(button => expect(button).toHaveClass("h-10", "rounded-lg"));
+    if (detail) {
+      expect(within(document.querySelector('[data-question-id="Q1"]') as HTMLElement).getAllByRole("button", { name: /Q1.*Confirm review/ })).toHaveLength(1);
+    }
+    await userEvent.click(within(actions).getByRole("button", { name: "View Results & Analysis" }));
+    expect(state.finalize).toHaveBeenCalledWith({ taskId: "T1", expectedWorkflowRevision: 5 }, expect.anything());
+    expect(state.bulk).not.toHaveBeenCalled();
+    expect(state.update).not.toHaveBeenCalled();
+  });
+
+  it("keeps a corrected failed score blocked until explicit review confirmation", async () => {
+    state.result.results = [{ student_id: "S1", corrections: [correction("Q1", { score: null, provisional_score: null, teacher_score: 7, review_status: "edited" })] }];
+    state.finalization = { remaining_review_count: 1, ready_for_confirmation: false, workflow_revision: 5 };
+    show();
+    await userEvent.click(screen.getByRole("button", { name: "View Results & Analysis" }));
+    expect(state.finalize).not.toHaveBeenCalled();
+    expect(screen.getByRole("alertdialog")).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Stay here" }));
+    await userEvent.click(screen.getByRole("button", { name: "Confirm all" }));
+    expect(state.bulk).toHaveBeenCalledWith(expect.objectContaining({ entries: [{ studentId: "S1", qId: "Q1", score: 7, comment: "" }] }));
+  });
+
   it("confirms every student result in one action while chaining workflow revisions", async () => {
     show(true);
     await userEvent.click(screen.getByRole("button", { name: "Confirm all" }));

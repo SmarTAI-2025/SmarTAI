@@ -399,6 +399,8 @@ describe("QuestionPreparationDetailPage navigation", () => {
     await waitFor(() => expect(screen.queryByRole("spinbutton", { name: "第 2 题满分" })).toBeNull());
     await user.click(screen.getByRole("button", { name: "全部确认" }));
 
+    expect(router.state.location.pathname).toBe("/tasks/task-1/questions/Q1/content");
+    await user.click(screen.getByRole("button", { name: "进入上传作答" }));
     expect(await screen.findByText("Submission upload destination")).toBeInTheDocument();
     expect(router.state.location.pathname).toBe("/tasks/task-1/submissions/upload");
     expect(mutateAsync.mock.calls.map(([input]) => input.expectedWorkflowRevision)).toEqual([

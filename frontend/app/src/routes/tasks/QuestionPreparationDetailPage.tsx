@@ -1,5 +1,5 @@
-import { questionIssueNeedsReview, questionReviewConfirmed, recognitionIssueLabel } from "@/lib/reviewConfirmation";
-import { ReviewConfirmButton, ReviewBlockDialog, reviewActionClass } from "@/components/tasks/ReviewConfirmation";
+import { questionIssueNeedsReview, questionReviewConfirmed, questionReviewIssues, questionReviewBlocked, questionReviewNextBlocked, questionReviewBlockers, recognitionIssueLabel, type ReviewBlocker } from "@/lib/reviewConfirmation";
+import { ReviewConfirmButton, ReviewBlockDialog, ReviewStageActions } from "@/components/tasks/ReviewConfirmation";
 import { useDraftProtection } from "@/hooks/useDraftProtection";
 import { useDraftLeave } from "@/hooks/useDraftLeave";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -72,6 +72,7 @@ function QuestionPreparationDetailPageForm() {
   const [activeQuestionId, setActiveQuestionId] = useState(questionId ?? "");
   const [dirtyKeys, setDirtyKeys] = useState<Set<string>>(new Set());
   const [showUnsavedReview, setShowUnsavedReview] = useState(false);
+  const [nextBlockers, setNextBlockers] = useState<ReviewBlocker[]>([]);
   const urlQuery = searchParams.get("q") ?? "";
   const query = urlQuery;
   const positionedPathRef = useRef<string | null>(null);
@@ -214,14 +215,13 @@ function QuestionPreparationDetailPageForm() {
     latestWorkflowRevisionRef.current = response.workflow_revision;
   }
 
-  async function confirmReview(selected: ProblemInfo[], continueToUpload = false) {
+  async function confirmReview(selected: ProblemInfo[]) {
     if (hasDirty) {
       setShowUnsavedReview(true);
       return;
     }
     if (await confirm(selected)) {
       toast.success(tx(locale, "题目资料已确认。", "Question materials confirmed."));
-      if (continueToUpload) navigate(`/tasks/${taskId}/submissions/upload`);
     } else {
       window.scrollTo({ top: 0, left: 0, behavior: "auto" });
     }
@@ -247,8 +247,8 @@ function QuestionPreparationDetailPageForm() {
           />
         </div>
       </div>
-      <ReviewBlockDialog locale={locale} issues={blocked} onClose={clearBlocked} />
-      <NewTaskStepper currentStep={2} />
+      <ReviewBlockDialog locale={locale} issues={nextBlockers.length ? nextBlockers : blocked} onClose={() => { clearBlocked(); setNextBlockers([]); }} />
+      <NewTaskStepper currentStep={2} blockedFromStep={questionReviewBlockers(problems, taskId ?? "", locale).length ? 3 : undefined} lockedStepReason={tx(locale, "请先处理并确认关键问题", "Resolve and confirm required items first")} onLockedStepActivate={() => setNextBlockers(questionReviewBlockers(problems, taskId ?? "", locale))} />
 
       <SourceComparisonWorkspace
         open={sourcePreview.isOpen}
@@ -333,24 +333,17 @@ function QuestionPreparationDetailPageForm() {
               />
             ))}
 
-            <section className="rounded-[10px] border bg-card p-5 sm:p-6">
-              <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-                <div>
-                  <h2 className="text-lg font-bold text-foreground">{tx(locale, "完成全部题目资料审核", "Finish Reviewing All Question Materials")}</h2>
-                  <p className="mt-1 text-sm leading-6 text-muted-foreground">{readOnly
-                    ? tx(locale, `共 ${problems.length} 道题；确认仅更新复核状态。`, `${problems.length} questions; confirmation updates review status only.`)
-                    : tx(locale, `共 ${problems.length} 道题；确认后进入学生作答上传。`, `${problems.length} ${problems.length === 1 ? "question" : "questions"}; continue to student submissions after confirmation.`)}</p>
-                </div>
-                <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
-                  <Link to={overviewHref} className="inline-flex h-10 items-center justify-center gap-2 rounded-[8px] border bg-card px-4 text-sm font-semibold text-foreground outline-none hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring">
-                    <ArrowLeft aria-hidden="true" className="h-4 w-4" />
-                    {tx(locale, "返回题目资料总览", "Back to Question Material Overview")}
-                  </Link>
-                  <ReviewConfirmButton locale={locale} all confirmed={problems.every(problem => questionReviewConfirmed(problem))} busy={confirming || updateProblem.isPending} onClick={() => void confirmReview(problems, !readOnly)} />
-
-                </div>
-              </div>
-            </section>
+            <ReviewStageActions
+              note={tx(locale, `共 ${problems.length} 道题；复核确认与进入下一阶段分别操作。`, `${problems.length} questions; confirm reviews and continue as separate actions.`)}
+              confirmation={<ReviewConfirmButton locale={locale} all confirmed={problems.every(questionReviewConfirmed)} busy={confirming || updateProblem.isPending} onClick={() => void confirmReview(problems)} />}
+              back={{ href: overviewHref, label: tx(locale, "返回题目资料总览", "Back to Question Material Overview") }}
+              next={{ label: tx(locale, "进入上传作答", "Continue to Upload Submissions"), disabled: confirming || updateProblem.isPending, onClick: () => {
+                if (hasDirty) { setShowUnsavedReview(true); return; }
+                const issues = questionReviewBlockers(problems, taskId, locale);
+                if (issues.length) setNextBlockers(issues);
+                else navigate(`/tasks/${taskId}/submissions/upload`);
+              } }}
+            />
           </main>
         </div>
       )}
@@ -392,7 +385,7 @@ function QuestionPackageCard({ problem, index, total, previous, next, readOnly, 
   onConfirm: (problem: ProblemInfo) => void;
 }) {
   const programming = isProgrammingProblem(problem);
-  const risks = (problem.preparation_issues ?? []).filter(questionIssueNeedsReview);
+  const risks = questionReviewIssues(problem);
   return (
     <article id={questionAnchorId(problem.q_id)} data-question-id={problem.q_id} className="scroll-mt-[86px] overflow-hidden rounded-[10px] border bg-card">
       <header className="flex flex-col gap-3 border-b px-5 py-4 sm:flex-row sm:items-center sm:justify-between sm:px-6">
@@ -407,7 +400,7 @@ function QuestionPackageCard({ problem, index, total, previous, next, readOnly, 
           <p className="mt-1 text-xs text-muted-foreground">{tx(locale, `筛选结果中的第 ${index + 1} / ${total} 题`, `${index + 1} of ${total}`)}</p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
-          <ReviewConfirmButton title={tx(locale, `第 ${problem.number || problem.q_id} 题`, `Question ${problem.number || problem.q_id}`)} locale={locale} confirmed={questionReviewConfirmed(problem)} busy={saving} onClick={() => onConfirm(problem)} />
+          <ReviewConfirmButton title={tx(locale, `第 ${problem.number || problem.q_id} 题`, `Question ${problem.number || problem.q_id}`)} locale={locale} confirmed={questionReviewConfirmed(problem)} blocked={questionReviewNextBlocked(problem)} busy={saving} onClick={() => onConfirm(problem)} />
           <QuestionNavigator previous={previous} next={next} locale={locale} onNavigate={onNavigate} />
         </div>
       </header>
@@ -542,7 +535,7 @@ function EditableScoringField({ fieldKey, problem, readOnly, saving, locale, onD
           <RubricPointStatus summary={draftSummary} locale={locale} />
           {error ? <p role="alert" className="text-xs text-danger">{error}</p> : null}
           <div className="flex justify-end gap-2">
-            <button type="button" disabled={saving || localDraft.formalPending || (!dirty && !needsReview) || !scoreValid || !draftSummary.is_valid} onClick={() => void save()} className="inline-flex h-9 items-center gap-2 rounded-[7px] bg-primary px-4 text-xs font-semibold text-primary-foreground hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-45">{saving ? <Loader2 aria-hidden="true" className="h-3.5 w-3.5 animate-spin" /> : <Save aria-hidden="true" className="h-3.5 w-3.5" />}{needsReview && !dirty ? tx(locale, "确认并保存", "Confirm and Save") : tx(locale, "保存", "Save")}</button>
+            <button type="button" disabled={saving || localDraft.formalPending || (!dirty && !needsReview) || !scoreValid || !draftSummary.is_valid} onClick={() => void save()} className="inline-flex h-9 items-center gap-2 rounded-[7px] bg-primary px-4 text-xs font-semibold text-primary-foreground hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-45">{saving ? <Loader2 aria-hidden="true" className="h-3.5 w-3.5 animate-spin" /> : <Save aria-hidden="true" className="h-3.5 w-3.5" />}{tx(locale, "保存", "Save")}</button>
           </div>
         </div>
       ) : (

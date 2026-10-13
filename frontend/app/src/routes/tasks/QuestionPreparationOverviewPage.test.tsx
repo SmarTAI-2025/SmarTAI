@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -81,6 +81,7 @@ function renderPage(initialEntry: string) {
   render(
     <MemoryRouter initialEntries={[initialEntry]}>
       <Routes>
+        <Route path="/tasks/:taskId/submissions/upload" element={<p>Upload submissions</p>} />
         <Route
           path="/tasks/:taskId/questions"
           element={(
@@ -97,9 +98,10 @@ function renderPage(initialEntry: string) {
 }
 
 describe("QuestionPreparationOverviewPage smart search", () => {
-  it("offers response upload even when unreviewed questions are hidden by a no-match filter", () => {
+  it("offers response upload even when ordinary unconfirmed questions are hidden by a no-match filter", async () => {
     renderPage("/tasks/task-1/questions?q=no-match");
-    expect(screen.getByRole("link", { name: "继续上传作答" })).toHaveAttribute("href", "/tasks/task-1/submissions/upload");
+    await userEvent.click(screen.getByRole("button", { name: "进入上传作答" }));
+    expect(screen.getByText("Upload submissions")).toBeInTheDocument();
     expect(mutateAsync).not.toHaveBeenCalled();
   });
   it("keeps only a details link in each matrix action cell", () => {
@@ -109,10 +111,10 @@ describe("QuestionPreparationOverviewPage smart search", () => {
     expect(mutateAsync).not.toHaveBeenCalled();
   });
 
-  it("labels and confirms only the current filtered questions", async () => {
+  it("confirms every question, including those hidden by the current filter", async () => {
     renderPage("/tasks/task-1/questions?q=Q2");
-    await userEvent.click(await screen.findByRole("button", { name: "确认筛选项（1）" }));
-    expect(mutateAsync).toHaveBeenCalledExactlyOnceWith({ taskId: "task-1", qId: "Q2", expectedWorkflowRevision: 7, review_status: "confirmed" });
+    await userEvent.click(await screen.findByRole("button", { name: "全部确认" }));
+    expect(mutateAsync.mock.calls.map(([input]) => input.qId)).toEqual(["Q1", "Q2"]);
   });
 
   it("chains returned revisions across all visible questions", async () => {
@@ -128,7 +130,7 @@ describe("QuestionPreparationOverviewPage smart search", () => {
   ])("renders the review matrix for %s without crashing", (code, label) => {
     extraIssues.push({ issue_id: "ocr-risk", field: "stem", code, severity: "warning", status: "open" });
     renderPage("/tasks/task-1/questions");
-    expect(screen.getAllByTitle(label).length).toBeGreaterThan(0);
+    expect(within(screen.getByRole("region", { name: "待复核队列" })).queryByRole("link")).not.toBeInTheDocument();
     expect(screen.getByRole("row", { name: /Q1/ })).toBeInTheDocument();
   });
 
@@ -139,6 +141,15 @@ describe("QuestionPreparationOverviewPage smart search", () => {
     expect(screen.getByRole("alertdialog")).toBeInTheDocument();
     expect(mutateAsync).not.toHaveBeenCalled();
     expect(screen.getByRole("button", {name: "前往问题位置"})).toBeEnabled();
+  });
+
+  it("blocks the next stage for a serious question hidden by a no-match filter", async () => {
+    extraIssues.push({ issue_id: "failed", field: "stem", code: "parse_anomaly", severity: "blocking", status: "open" });
+    renderPage("/tasks/task-1/questions?q=no-match");
+    await userEvent.click(screen.getByRole("button", { name: "进入上传作答" }));
+    expect(screen.getByRole("alertdialog")).toBeInTheDocument();
+    expect(mutateAsync).not.toHaveBeenCalled();
+    expect(screen.queryByText("Upload submissions")).not.toBeInTheDocument();
   });
 
   it("shows each maximum score and the total while flagging defaults", () => {

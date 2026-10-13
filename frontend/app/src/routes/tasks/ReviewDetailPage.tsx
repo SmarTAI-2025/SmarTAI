@@ -1,5 +1,5 @@
-import { isCorrectionReviewConfirmed } from "@/components/tasks/resultsReviewModel";
-import { ReviewConfirmButton, ReviewBlockDialog, RetryFailedGrading, reviewActionClass } from "@/components/tasks/ReviewConfirmation";
+import { isCorrectionReviewConfirmed, correctionReviewBlocked } from "@/components/tasks/resultsReviewModel";
+import { ReviewConfirmButton, ReviewBlockDialog, RetryFailedGrading, ReviewStageActions } from "@/components/tasks/ReviewConfirmation";
 import { type ReviewBlocker } from "@/lib/reviewConfirmation";
 import { DraftField, type DraftFieldHandle } from "@/components/ui/DraftField";
 import { ResultQuestionQuery, useResultQuestionFilter } from "@/components/tasks/ResultQuestionQuery";
@@ -18,7 +18,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } fro
 import { Link, Navigate, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { toast } from "sonner";
 import { normalizeAPIError } from "@/api/client";
-import { useTask, useTaskResult, useUpdateCorrectionReview } from "@/api/hooks/tasks";
+import { useTask, useTaskResult, useTaskFinalization, useConfirmTaskFinalization, useUpdateCorrectionReview } from "@/api/hooks/tasks";
 import { NewTaskStepper } from "@/components/new-task/NewTaskStepper";
 import {
   buildResultsModel,
@@ -59,6 +59,8 @@ function ReviewDetailForm() {
   const taskQuery = useTask(taskId);
   const resultQuery = useTaskResult(taskId);
   const updateReview = useUpdateCorrectionReview();
+  const finalizationQuery = useTaskFinalization(taskId);
+  const confirmFinalization = useConfirmTaskFinalization();
   const model = useMemo(() => buildResultsModel(taskQuery.data, resultQuery.data), [resultQuery.data, taskQuery.data]);
   const student = model.students.find((item) => item.id === studentId) ?? null;
   const requestedQuestionId = questionId === "all" ? "" : questionId ?? "";
@@ -82,7 +84,7 @@ function ReviewDetailForm() {
     [reviewItems],
   );
   const blockingReviewItems = useMemo(
-    () => reviewItems.filter((item) => effectiveCorrectionScore(item.correction) === null),
+    () => reviewItems.filter((item) => correctionReviewBlocked(item.correction)),
     [reviewItems],
   );
   const requiredReviewKeys = useMemo(
@@ -154,7 +156,7 @@ function ReviewDetailForm() {
     return changed ? [correction.q_id] : [];
   }) ?? []), [drafts, student]);
   const dirty = dirtyQuestionIds.size > 0;
-  const savingReviews = savingQuestionId !== null || batchProgress !== null || updateReview.isPending;
+  const savingReviews = savingQuestionId !== null || batchProgress !== null || updateReview.isPending || confirmFinalization.isPending;
   const savingNavigationMessage = tx(locale,
     "正在保存复核结果，请稍候再切换学生或离开。保存完成后可继续操作。",
     "Saving review results. Please wait before switching students or leaving; you can continue when saving finishes.");
@@ -482,13 +484,13 @@ function ReviewDetailForm() {
   const lockedResultsReason = blockingReviewItems.length
     ? tx(
         locale,
-        `结果分析尚未解锁：还有 ${blockingReviewItems.length} 个题次没有有效分数，必须先处理。`,
-        `Results & Analysis is locked: ${blockingReviewItems.length} response${blockingReviewItems.length === 1 ? " has" : "s have"} no valid score and must be resolved.`,
+        `结果分析尚未解锁：还有 ${blockingReviewItems.length} 个关键问题，必须先处理并确认。`,
+        `Results & Analysis is locked: ${blockingReviewItems.length} response${blockingReviewItems.length === 1 ? " has" : "s have"} a required issue and must be corrected and confirmed.`,
       )
     : tx(
         locale,
-        "没有阻断项；未人工处理的有效 AI 分会默认沿用。请在复核总览确认正式结果。",
-        "No blocking items remain. Valid untouched AI scores will be used by default; confirm the final result in the review overview.",
+        "没有阻断项；未人工处理的有效 AI 分会默认沿用。可直接查看结果分析。",
+        "No blocking items remain. Valid untouched AI scores will be used by default; continue directly to Results & Analysis.",
       );
 
   function activateLockedResults() {
@@ -527,6 +529,7 @@ function ReviewDetailForm() {
       <ReviewBlockDialog locale={locale} issues={blockedReviews} onClose={() => setBlockedReviews([])} />
       <NewTaskStepper
         currentStep={6}
+        blockedFromStep={blockingReviewItems.length || (finalizationQuery.data?.remaining_review_count ?? 0) > 0 ? 7 : undefined}
         lockedStep={7}
         lockedStepReason={lockedResultsReason}
         onLockedStepActivate={activateLockedResults}
@@ -553,12 +556,7 @@ function ReviewDetailForm() {
           {savingReviews ? <p role="status" className="mt-2 rounded-lg bg-primary/5 px-3 py-2 text-xs text-primary">{savingNavigationMessage}</p> : null}
 
           {student.corrections.some(item => effectiveCorrectionScore(item) === null) ? <section className="mt-4 rounded-lg border border-red-200 bg-red-50/30 p-4"><RetryFailedGrading taskId={taskId} revision={taskQuery.data?.workflow_revision ?? 0} locale={locale} /></section> : null}
-          <div className="mt-3 flex flex-wrap items-center justify-between gap-3 rounded-lg border bg-card p-3">
-            <p className="text-xs text-muted-foreground">{tx(locale, "核对无误后可一次确认该学生全部题目；已修改的分数和评语一起保存。", "Confirm all questions for this student at once, saving any edited scores and comments.")}</p>
-            <ReviewConfirmButton locale={locale} all confirmed={dirtyQuestionIds.size === 0 && student.corrections.every(item => Number.isFinite(item.teacher_score) && item.review_status === "confirmed")} busy={batchProgress !== null || updateReview.isPending} onClick={() => void confirmStudentReviews()} />
 
-            {batchError ? <p role="alert" className="w-full text-sm text-destructive">{batchError}</p> : null}
-          </div>
 
           <ResultQuestionQuery className="mt-3" locale={locale} taskId={taskId} filter={questionFilter}
             questions={visibleQuestions} onSelect={(id) => scrollToQuestion(id)} />
@@ -619,11 +617,23 @@ function ReviewDetailForm() {
             <PageState title={tx(locale, "当前筛选没有题目", "No questions match this filter")} action={tx(locale, "清空题目筛选", "Clear question filter")} onAction={() => setFilter("question", "")} />
           )}
 
-          <div className="mt-6 flex justify-end">
-            <Link to={overviewHref} className="inline-flex h-10 items-center justify-center rounded-[8px] border bg-card px-5 text-sm font-semibold text-foreground hover:bg-muted">
-              {tx(locale, "返回复核总览", "Back to Review Overview")}
-            </Link>
-          </div>
+          <ReviewStageActions className="mt-6"
+            note={tx(locale, "核对无误后可一次确认该学生全部题目；已修改的分数和评语一起保存。", "Confirm all questions for this student at once, saving any edited scores and comments.")}
+            confirmation={<ReviewConfirmButton locale={locale} all confirmed={dirtyQuestionIds.size === 0 && student.corrections.every(isCorrectionReviewConfirmed)} busy={batchProgress !== null || updateReview.isPending} disabled={confirmFinalization.isPending} onClick={() => void confirmStudentReviews()} />}
+            back={{ href: overviewHref, label: tx(locale, "返回复核总览", "Back to Review Overview") }}
+            next={{ label: tx(locale, "查看结果分析", "View Results & Analysis"), busy: confirmFinalization.isPending, disabled: savingReviews, onClick: () => {
+              if (dirty) { toast.info(tx(locale, "请先确认正在修改的分数和评语。", "Confirm your edited scores and comments first.")); return; }
+              if (blockingReviewItems.length || !finalizationQuery.data?.ready_for_confirmation) {
+                if (blockingReviewItems.length) setBlockedReviews(blockingReviewItems.map(item => ({ label: `${item.student.name} · ${item.question.label}`, href: buildHref(item.student.id, item.question.id, false) })));
+                else { toast.info(lockedResultsReason); void finalizationQuery.refetch(); }
+                return;
+              }
+              confirmFinalization.mutate({ taskId, expectedWorkflowRevision: finalizationQuery.data.workflow_revision }, { onSuccess: () => navigate(`/tasks/${taskId}/results`) });
+            } }}
+          >
+            {batchError ? <p role="alert" className="mt-3 text-sm text-destructive">{batchError}</p> : null}
+            {confirmFinalization.isError ? <p role="alert" className="mt-3 text-sm text-destructive">{tx(locale, "任务状态已变化，请刷新复核状态后重试。", "The task changed. Refresh the review state and try again.")}</p> : null}
+          </ReviewStageActions>
         </>
       )}
     </div>
@@ -684,11 +694,13 @@ function ReviewQuestionCard({ locale, student, question, correction, draft, requ
           <div className="flex flex-wrap items-center gap-2">
             <h2 className="text-[20px] font-bold text-foreground">{question.label}</h2>
             <span className="rounded-full bg-slate-100 px-2.5 py-1 text-[11px] font-semibold text-muted-foreground dark:bg-slate-800">{question.type || tx(locale, "未分类", "Uncategorized")}</span>
-            <ReviewConfirmButton title={question.label} compact locale={locale} confirmed={alreadyConfirmed} blocked={scoreSource === "hard_failure"} busy={saving} disabled={!correction} onClick={onConfirm} />
           </div>
           <p className="mt-1 text-[11px] text-muted-foreground">{tx(locale, "题目、作答、SmarTAI 结果和教师最终结果在同一卡片内连续复核。", "Review the question, student response, SmarTAI result, and teacher result in one card.")}</p>
         </div>
-        <QuestionButtons locale={locale} previous={previous} next={next} onSelect={onNavigate} />
+        <div className="flex flex-wrap items-center gap-2">
+          <ReviewConfirmButton title={question.label} locale={locale} confirmed={alreadyConfirmed} blocked={Boolean(correction && correctionReviewBlocked(correction))} busy={saving} disabled={!correction} onClick={onConfirm} />
+          <QuestionButtons locale={locale} previous={previous} next={next} onSelect={onNavigate} />
+        </div>
       </header>
 
       <div className="p-5">
@@ -802,9 +814,6 @@ function ReviewQuestionCard({ locale, student, question, correction, draft, requ
               />
             </label>
             {saveError ? <p className="mt-3 rounded-[8px] border border-red-200 bg-red-50 px-3 py-2 text-xs font-medium text-red-700" role="alert">{saveError}</p> : null}
-            <div className="mt-auto flex flex-wrap items-center justify-end gap-2 pt-4">
-              <ReviewConfirmButton title={question.label} locale={locale} confirmed={alreadyConfirmed} blocked={scoreSource === "hard_failure" && !dirty} busy={saving} disabled={!correction} onClick={onConfirm} />
-            </div>
           </section>
         </div>
 
@@ -863,7 +872,7 @@ function PageState({ title, busy = false, action, href, onAction }: { title: str
 
 function reviewQuestionState(correction: Correction | undefined, required: boolean): ResultQuestionState {
   if (!correction) return "danger";
-  if (effectiveCorrectionScore(correction) === null) return "danger";
+  if (correctionReviewBlocked(correction)) return "danger";
   const source = correctionScoreSource(correction);
   if (source === "teacher_confirmed_same" || source === "teacher_changed") return "confirmed";
   if (required) return "warning";

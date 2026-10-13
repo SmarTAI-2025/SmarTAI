@@ -3,12 +3,11 @@ import { EMPTY_FILTER_INTENT, matchesQuestionToken, parseLocalTaskFilter, suppor
 import { compareValues } from "@/lib/sortValues";
 import type { Correction, FilterIntentResult } from "@/types";
 import {
-  correctionScoreSource,
   type QuestionSummary,
   type ResultsModel,
   type StudentSummary,
 } from "@/components/tasks/resultsModel";
-import { getExpertScoreSpread, type ReviewItem } from "@/components/tasks/resultsReviewModel";
+import { getExpertScoreSpread, isCorrectionReviewConfirmed, type ReviewItem } from "@/components/tasks/resultsReviewModel";
 
 export const reviewCellKey = (studentId: string, questionId: string) => `${studentId}::${questionId}`;
 
@@ -89,8 +88,8 @@ export function selectReviewOverview(
       if (wantsLowConfidence && correction.confidence >= 0.65) continue;
       if (wantsDisagreement && !isExpertDisagreement(correction)) continue;
       const confirmedReview = isConfirmedReview(correction);
-      if (wantsReview && (!reviewKeys.has(key) || confirmedReview)) continue;
-      if (wantsConfirmedReview && (!reviewKeys.has(key) || !confirmedReview)) continue;
+      if (wantsReview && confirmedReview) continue;
+      if (wantsConfirmedReview && !confirmedReview) continue;
       if (wantsNoReview && reviewKeys.has(key)) continue;
       if (wantsAnnotated && !annotatedKeys.has(key)) continue;
       if (wantsUnscored && student.percent !== null) continue;
@@ -146,8 +145,8 @@ export function selectReviewOverviewFromIntent(
       if (intent.low_confidence && (confidence == null || confidence >= 0.65)) continue;
       if (intent.disagreement && !isExpertDisagreement(correction)) continue;
       if (intent.annotated && !annotatedKeys.has(key)) continue;
-      if (intent.review_status === "pending" && (!reviewKeys.has(key) || isConfirmedReview(correction))) continue;
-      if (intent.review_status === "confirmed" && (!reviewKeys.has(key) || !isConfirmedReview(correction))) continue;
+      if (intent.review_status === "pending" && isConfirmedReview(correction)) continue;
+      if (intent.review_status === "confirmed" && !isConfirmedReview(correction)) continue;
       if (intent.review_status === "none" && reviewKeys.has(key)) continue;
       if (intent.question_tokens.length && !intent.question_tokens.some((token) => matchesQuestionToken(correction.q_id, question?.label ?? correction.q_id, token))) continue;
       if (!intent.text_terms.every((term) => cellDescriptor(student, question, correction).includes(normalize(term)))) continue;
@@ -268,8 +267,7 @@ function compareReviewStudents(left: StudentSummary, right: StudentSummary, sort
 }
 
 function isConfirmedReview(correction: Correction): boolean {
-  const source = correctionScoreSource(correction);
-  return source === "teacher_confirmed_same" || source === "teacher_changed";
+  return isCorrectionReviewConfirmed(correction);
 }
 
 function nullable(value: number | null | undefined, fallback: number): number {

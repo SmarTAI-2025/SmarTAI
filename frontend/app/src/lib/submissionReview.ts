@@ -1,5 +1,5 @@
 import type { ProblemInfo, StudentAnswerInfo, StudentSubmission } from "@/types";
-import { answerReviewBlocked } from "./reviewConfirmation";
+import { answerReviewBlocked, answerReviewNextBlocked, studentIdentityReviewBlocked, type ReviewAttention } from "./reviewConfirmation";
 import type { Locale } from "@/i18n/messages";
 
 export type SubmissionAnswerState = "recognized" | "reviewed" | "flagged" | "empty" | "missing";
@@ -42,6 +42,11 @@ export function formatSubmissionFlag(flag: string, locale: Locale): string {
     external_annotation_present: ["原件含外部批注，不属于学生作答", "External annotations are not student answers"],
     authorship_uncertain: ["部分笔迹归属不明，需核对", "Some writing has uncertain authorship"],
     ocr_only_structure_requires_teacher_review: ["题号匹配需教师核对", "Question matching needs teacher review"],
+    recognition_failed: ["识别失败，请修正并确认", "Recognition failed; correct and confirm"],
+    parse_failed: ["作答解析失败，请修正并确认", "Answer parsing failed; correct and confirm"],
+    no_matching_answer: ["未识别到对应作答，请对照原件修正并确认", "No matching answer recognized; correct against the source and confirm"],
+    recognition_repaired_needs_confirmation: ["识别问题已修正，请确认作答", "Recognition issue corrected; confirm the answer"],
+    very_low_confidence: ["本题识别置信度很低，建议核对", "Very low confidence in this answer; checking is recommended"],
   };
   const label = labels[flag];
   return label ? label[locale === "zh-CN" ? 0 : 1] : flag;
@@ -77,11 +82,17 @@ export function buildSubmissionQuestions(
 
 export function getAnswerState(answer?: StudentAnswerInfo): SubmissionAnswerState {
   if (!answer) return "missing";
-  if (answerReviewBlocked(answer)) return "flagged";
+  if (answerReviewAttention(answer) !== "none") return "flagged";
   if (answer.review_status === "confirmed") return "reviewed";
-  if (answer.flag?.some(flag => flag !== "external_annotation_present")) return "flagged";
   if (!answer.content?.trim()) return "empty";
   return "recognized";
+}
+
+/** Keep source-level warnings and ordinary pending confirmation out of risk queues. */
+export function answerReviewAttention(answer?: StudentAnswerInfo): ReviewAttention {
+  if (answerReviewNextBlocked(answer)) return "blocking";
+  if (answer?.review_status !== "confirmed" && answer?.flag?.includes("very_low_confidence")) return "advisory";
+  return "none";
 }
 
 export function answerNeedsConfirmation(answer?: StudentAnswerInfo): boolean {
@@ -188,9 +199,9 @@ export function answerMap(student: StudentSubmission): Map<string, StudentAnswer
 }
 
 export function studentNeedsAttention(student: StudentSubmission, questions: SubmissionQuestion[]): boolean {
-  if (student.identity_status === "needs_review") return true;
+  if (studentIdentityReviewBlocked(student)) return true;
   const answers = answerMap(student);
-  return questions.some((question) => answerNeedsConfirmation(answers.get(question.id)));
+  return questions.some((question) => answerReviewAttention(answers.get(question.id)) !== "none");
 }
 
 function compareStudents(

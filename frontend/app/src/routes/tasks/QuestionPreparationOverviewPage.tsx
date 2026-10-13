@@ -1,12 +1,12 @@
-import { questionIssueNeedsReview, questionReviewConfirmed, recognitionIssueLabel } from "@/lib/reviewConfirmation";
+import { questionIssueNeedsReview, questionReviewConfirmed, questionReviewIssues, questionReviewBlockers, recognitionIssueLabel, type ReviewBlocker } from "@/lib/reviewConfirmation";
 import { MatrixViewLink } from "@/components/tasks/MatrixViewLink";
 import { MatrixQueueWorkspace } from "@/components/tasks/MatrixQueueWorkspace";
-import { ReviewConfirmButton, ReviewBlockDialog, reviewActionClass } from "@/components/tasks/ReviewConfirmation";
+import { ReviewConfirmButton, ReviewBlockDialog, ReviewStageActions } from "@/components/tasks/ReviewConfirmation";
 import { groundedRows, hasGroundedOrder } from "@/lib/groundedAsk";
 import { SortButton as HeaderSortButton, SortableTableHead, useColumnSort, sortColumnRows, directionFor, type ColumnSort } from "@/components/ui/SortableTableHead";
 import { CheckCircle2, ChevronRight, Filter, X } from "lucide-react";
 import { useMemo, useState } from "react";
-import { Link, Navigate, useParams, useSearchParams } from "react-router-dom";
+import { Link, Navigate, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { useTask } from "@/api/hooks/tasks";
 import { useQuestionReview } from "@/hooks/useQuestionReview";
 import { toast } from "sonner";
@@ -36,6 +36,8 @@ type MaterialField = "stem" | "answer" | "rubric" | "tests";
 
 export function QuestionPreparationOverviewPage() {
   const { taskId } = useParams();
+  const navigate = useNavigate();
+  const [nextBlockers, setNextBlockers] = useState<ReviewBlocker[]>([]);
   const [searchParams, setSearchParams] = useSearchParams();
   const { locale } = useI18n();
   // Progress polls /state independently. Revalidate detail before its cached
@@ -60,7 +62,7 @@ export function QuestionPreparationOverviewPage() {
   const allRisks = useMemo(() => collectRiskRows(problems), [problems]);
   const allRows = useMemo<QuestionMatrixRow[]>(() => problems.map((problem) => ({
     problem,
-    issues: (problem.preparation_issues ?? []).filter(questionIssueNeedsReview),
+    issues: questionReviewIssues(problem),
   })), [problems]);
   const rows = useMemo(() => {
     const selected = new Set(selectPreparationQuestions(problems, smartFilter.intent).map((problem) => problem.q_id));
@@ -84,15 +86,15 @@ export function QuestionPreparationOverviewPage() {
 
   function toggleSort(key: MatrixSortKey) { headerSort.toggle(key); }
 
-  const firstQuestionId = rows[0]?.problem.q_id;
+  const firstQuestionId = rows[0]?.problem.q_id ?? problems[0]?.q_id;
   const totalMaxScore = problems.reduce((total, problem) => total + (problem.max_score ?? 10), 0);
   return (
     <div className="w-full max-w-[1300px]">
       <h1 className="text-[30px] font-bold leading-9 tracking-[-0.02em] text-foreground">
         {tx(locale, "题目资料总览", "Question Material Overview")}
       </h1>
-      <ReviewBlockDialog locale={locale} issues={blocked} onClose={clearBlocked} />
-      <NewTaskStepper currentStep={2} />
+      <ReviewBlockDialog locale={locale} issues={nextBlockers.length ? nextBlockers : blocked} onClose={() => { clearBlocked(); setNextBlockers([]); }} />
+      <NewTaskStepper currentStep={2} blockedFromStep={questionReviewBlockers(problems, taskId ?? "", locale).length ? 3 : undefined} lockedStepReason={tx(locale, "请先处理并确认关键问题", "Resolve and confirm required items first")} onLockedStepActivate={() => setNextBlockers(questionReviewBlockers(problems, taskId ?? "", locale))} />
 
       <section className="mt-[22px]" aria-labelledby="risk-matrix-title">
         <h2 id="risk-matrix-title" className="sr-only">{tx(locale, "全部题目资料状态矩阵", "All question material status matrix")}</h2>
@@ -113,7 +115,7 @@ export function QuestionPreparationOverviewPage() {
           <Link to={`/tasks/${taskId}/questions/${encodeURIComponent(failure.problem.q_id)}/content#question-${encodeURIComponent(failure.problem.q_id)}`} className="mt-2 font-semibold text-primary">{tx(locale, "前往该题", "Go to question")}</Link>
         </div> : null}
 
-        <MatrixQueueWorkspace className="mt-4" queue={<QuestionReviewQueue risks={rows.flatMap(({ problem, issues }) => issues.map(issue => ({ problem, issue })))} taskId={taskId ?? ""} locale={locale} />} matrix={<div className="overflow-hidden rounded-[10px] border bg-card">
+        <MatrixQueueWorkspace className="mt-4" queue={<QuestionReviewQueue risks={allRisks.filter(row => rows.some(item => item.problem.q_id === row.problem.q_id))} taskId={taskId ?? ""} locale={locale} />} matrix={<div className="overflow-hidden rounded-[10px] border bg-card">
           {taskQuery.isLoading || readingCompletion ? (
             <div className="min-h-[300px] animate-pulse bg-muted/20" aria-busy="true" />
           ) : taskQuery.isError ? (
@@ -132,30 +134,20 @@ export function QuestionPreparationOverviewPage() {
             />
           ) : <MatrixEmpty filtered={Boolean(query)} locale={locale} />}
         </div>} />
-          <footer className="flex min-h-[58px] flex-col gap-2 border-t px-4 py-2.5 sm:flex-row sm:items-center sm:justify-between xl:px-5">
-            <p className="text-xs text-muted-foreground">{locale === "zh-CN"
-              ? `显示 ${rows.length} / ${problems.length} 道题 · 作业总分 ${formatScore(totalMaxScore)} · ${allRisks.length} 个开放风险`
-              : `Showing ${rows.length} of ${problems.length} ${problems.length === 1 ? "question" : "questions"} · ${formatScore(totalMaxScore)} total points · ${allRisks.length} open ${allRisks.length === 1 ? "risk" : "risks"}`}</p>
-            {taskId && firstQuestionId ? (
-              <div className="flex flex-wrap items-center gap-2">
-              <button type="button" disabled={confirming || updateProblem.isPending || rows.every(row => questionReviewConfirmed(row.problem))} onClick={async () => {
-                if (await confirm(rows.map((row) => row.problem))) toast.success(tx(locale, "题目资料已确认。", "Question materials confirmed."));
-              }} className={cn(reviewActionClass, rows.every(row => questionReviewConfirmed(row.problem)) ? "bg-emerald-100 text-emerald-800 disabled:opacity-100" : "border-emerald-200 bg-emerald-50 text-emerald-800")}>
-                <CheckCircle2 aria-hidden="true" className="h-4 w-4" />
-                {rows.every(row => questionReviewConfirmed(row.problem)) ? tx(locale, "已确认", "Confirmed") : rows.length === problems.length ? tx(locale, "全部确认", "Confirm all") : tx(locale, `确认筛选项（${rows.length}）`, `Confirm shown (${rows.length})`)}
-              </button>
-              <Link to={`/tasks/${taskId}/questions/${encodeURIComponent(firstQuestionId)}/content`} className={reviewActionClass}>
-                {tx(locale, "进入完整审核", "Open Full Review")}
-                <ChevronRight aria-hidden="true" className="h-4 w-4" />
-              </Link>
-
-              <Link to={`/tasks/${taskId}/submissions/upload`} className={reviewActionClass}>
-                {tx(locale, "继续上传作答", "Continue to Upload Submissions")}
-                <ChevronRight aria-hidden="true" className="h-4 w-4" />
-              </Link>
-              </div>
-            ) : null}
-          </footer>
+          {taskId && firstQuestionId ? <ReviewStageActions
+            note={locale === "zh-CN"
+              ? `显示 ${rows.length} / ${problems.length} 道题 · 作业总分 ${formatScore(totalMaxScore)} · ${allRisks.length} 个复核项`
+              : `Showing ${rows.length} of ${problems.length} questions · ${formatScore(totalMaxScore)} total points · ${allRisks.length} review items`}
+            confirmation={<ReviewConfirmButton locale={locale} all confirmed={problems.every(questionReviewConfirmed)} busy={confirming || updateProblem.isPending} onClick={async () => {
+              if (await confirm(problems)) toast.success(tx(locale, "题目资料已确认。", "Question materials confirmed."));
+            }} />}
+            back={{ href: `/tasks/${taskId}/upload/problems`, label: tx(locale, "返回上传题目", "Back to Upload Questions") }}
+            next={{ label: tx(locale, "进入上传作答", "Continue to Upload Submissions"), disabled: confirming || updateProblem.isPending, onClick: () => {
+              const issues = questionReviewBlockers(problems, taskId, locale);
+              if (issues.length) setNextBlockers(issues);
+              else navigate(`/tasks/${taskId}/submissions/upload`);
+            } }}
+          /> : null}
       </section>
     </div>
   );
@@ -166,7 +158,7 @@ function QuestionReviewQueue({ risks, taskId, locale }: { risks: OpenRiskRow[]; 
     <h2 id="question-review-queue-title" className="text-[16px] font-bold leading-6">{tx(locale, "待复核队列", "Review queue")}</h2>
     {risks.length ? <ol className="mt-3 h-[250px] space-y-1 overflow-y-auto overscroll-contain pr-1">
       {risks.map(({ problem, issue }) => <li key={`${problem.q_id}:${issue.issue_id}`}><Link className="flex min-h-[54px] items-center gap-2 rounded-lg px-2 py-1.5 text-xs hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring" to={`/tasks/${taskId}/questions/${encodeURIComponent(problem.q_id)}/content#question-${encodeURIComponent(problem.q_id)}`}>
-        <span className="min-w-0 flex-1"><span className="block font-semibold">{problem.number || problem.q_id}</span><span className="mt-0.5 block text-muted-foreground">{(recognitionIssueLabel(issue, locale) ?? issueCodeLabel(issue.code, locale))}</span></span><ChevronRight aria-hidden="true" className="h-4 w-4 shrink-0" />
+        <span className="min-w-0 flex-1"><span className="block font-semibold">{problem.number || problem.q_id}</span><span className={cn("mt-0.5 block", issue.severity === "blocking" ? "text-red-700" : "text-amber-700")}>{(recognitionIssueLabel(issue, locale) ?? issueCodeLabel(issue.code, locale))}</span></span><ChevronRight aria-hidden="true" className="h-4 w-4 shrink-0" />
       </Link></li>)}
     </ol> : <div className="flex h-[248px] flex-col items-center justify-center text-center"><CheckCircle2 aria-hidden="true" className="h-7 w-7 text-teal-500" /><p className="mt-3 max-w-[220px] text-xs leading-5 text-muted-foreground">{tx(locale, "当前没有需要复核的题目。", "No questions currently need review.")}</p></div>}
   </section>;
@@ -234,7 +226,7 @@ function RiskMetric({ label, value, tone }: { label: string; value: number; tone
   return (
     <div className="flex min-h-[112px] flex-col justify-center rounded-[10px] border bg-card px-5 py-4 sm:px-6">
       <dt className="order-2 mt-2 text-sm font-medium text-muted-foreground">{label}</dt>
-      <dd className={cn("order-1 text-[30px] font-bold leading-9 tracking-[-0.02em]", tone === "primary" && "text-primary", tone === "warning" && (value > 0 ? "text-red-600" : "text-teal-600"), tone === "danger" && (value > 0 ? "text-red-600" : "text-teal-600"), tone === "accent" && "text-teal-600")}>{value}</dd>
+      <dd className={cn("order-1 text-[30px] font-bold leading-9 tracking-[-0.02em]", tone === "primary" && "text-primary", tone === "warning" && (value > 0 ? "text-amber-600" : "text-teal-600"), tone === "danger" && (value > 0 ? "text-red-600" : "text-teal-600"), tone === "accent" && "text-teal-600")}>{value}</dd>
     </div>
   );
 }
@@ -248,7 +240,7 @@ function MaterialStatus({ problem, field, locale }: { problem: ProblemInfo; fiel
         "inline-flex min-w-[82px] items-center justify-center gap-1 rounded-full px-3 py-1 text-xs font-semibold",
         status.tone === "success" && "bg-emerald-100 text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-300",
         status.tone === "warning" && "bg-amber-100 text-amber-700 dark:bg-amber-950/35 dark:text-amber-300",
-        status.tone === "danger" && "bg-amber-100 text-amber-800 dark:bg-red-950/35 dark:text-red-300",
+        status.tone === "danger" && "bg-red-100 text-red-700 dark:bg-red-950/35 dark:text-red-300",
         status.tone === "neutral" && "bg-slate-100 text-slate-500 dark:bg-slate-800 dark:text-slate-300",
       )}
     >
@@ -273,8 +265,9 @@ function MaxScoreStatus({ problem, locale }: { problem: ProblemInfo; locale: str
       title={needsReview ? sourceLabel : tx(locale, "满分已确认", "Maximum score confirmed")}
       className={cn(
         "inline-flex min-w-[68px] items-center justify-center rounded-full px-2.5 py-1 text-xs font-semibold",
-        (problem.preparation_issues ?? []).some(issue => issue.field === "max_score" && questionIssueNeedsReview(issue))
-          ? "bg-amber-100 text-amber-800"
+        problem.rubric_point_summary?.is_valid === false || (problem.preparation_issues ?? []).some(issue => issue.field === "max_score" && issue.severity === "blocking" && questionIssueNeedsReview(issue))
+          ? "bg-red-100 text-red-700"
+          : (problem.preparation_issues ?? []).some(issue => issue.field === "max_score" && questionIssueNeedsReview(issue)) ? "bg-amber-100 text-amber-800"
           : "bg-emerald-100 text-emerald-700 dark:bg-emerald-950/35",
       )}
     >
@@ -301,13 +294,13 @@ function MatrixEmpty({ filtered, locale }: { filtered: boolean; locale: string }
 
 function getMaterialStatus(problem: ProblemInfo, field: MaterialField, locale: string): { label: string; detail: string; tone: "success" | "warning" | "danger" | "neutral" } {
   const issueField = field === "tests" ? "programming_tests" : field;
-  const issues = (problem.preparation_issues ?? []).filter((issue) => questionIssueNeedsReview(issue) && (issue.field === issueField || (field === "stem" && issue.field === "source")));
+  const issues = questionReviewIssues(problem).filter(issue => issue.field === issueField || (field === "stem" && issue.field === "source"));
   if (issues.length) {
     const blocking = issues.some((issue) => issue.severity === "blocking");
     return {
       label: blocking ? tx(locale, "需处理", "Action needed") : tx(locale, "待复核", "Needs review"),
       detail: issues.map((issue) => (recognitionIssueLabel(issue, locale) ?? issueCodeLabel(issue.code, locale))).join("；"),
-      tone: "danger",
+      tone: blocking ? "danger" : "warning",
     };
   }
 
@@ -335,9 +328,8 @@ function getMaterialStatus(problem: ProblemInfo, field: MaterialField, locale: s
 }
 
 function collectRiskRows(problems: ProblemInfo[]): OpenRiskRow[] {
-  return problems.flatMap((problem) => (problem.preparation_issues ?? [])
-    .filter(questionIssueNeedsReview)
-    .map((issue) => ({ problem, issue })));
+  return problems.flatMap(problem => questionReviewIssues(problem).map(issue => ({ problem, issue })))
+    .sort((a, b) => Number(b.issue.severity === "blocking") - Number(a.issue.severity === "blocking"));
 }
 
 function sortMatrixRows(rows: QuestionMatrixRow[], key: MatrixSortKey, direction: MatrixSortDirection, locale: string) {
@@ -372,6 +364,7 @@ function issueCodeLabel(code: PreparationIssue["code"], locale: string) {
     parse_anomaly: ["文件解析结果异常", "File parsing anomaly"],
     generation_failed: ["所需内容生成失败", "Required content generation failed"],
     manual_completion_required: ["补齐缺失资料并确认后才能批改", "Complete and confirm the missing materials before grading"],
+    required_review_confirmation: ["严重问题已修正，请确认本题后继续", "The blocking issue was corrected; confirm this question to continue"],
     rubric_step_reference_conflict: ["评分步骤与标答步骤未正确对应", "Rubric steps do not align with reference-answer steps"],
     invalid_test_case: ["测试样例结构无效", "Invalid test case structure"],
     reference_solution_failed_case: ["参考解未通过测试样例", "Reference solution failed a test"],
