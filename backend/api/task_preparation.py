@@ -46,7 +46,7 @@ from backend.agents.question_preparation_agent import (
     requested_major_question_materials,
 )
 from backend.api.errors import domain_error_response
-from backend.auth import require_teacher
+from backend.auth import require_task_teacher as require_teacher
 from backend.db import (
     assignment_repository,
     file_repository,

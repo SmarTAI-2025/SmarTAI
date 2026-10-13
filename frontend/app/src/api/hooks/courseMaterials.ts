@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import * as courseMaterialsApi from "@/api/courseMaterials";
 import type { CourseMaterialListParams } from "@/types";
 import { courseMaterialKeys, personalKnowledgeKeys, problemSourceKeys } from "./keys";
+import { useFrontierWorkspace } from "@/lib/frontierContext";
 
 function paramsKey(params: CourseMaterialListParams) {
   return JSON.stringify({
@@ -24,9 +25,11 @@ function invalidateStorageUsage(queryClient: ReturnType<typeof useQueryClient>) 
 }
 
 export function useCourseMaterials(params: CourseMaterialListParams) {
+  const frontier = useFrontierWorkspace();
   return useQuery({
     queryKey: courseMaterialKeys.list(paramsKey(params)),
     queryFn: () => courseMaterialsApi.listCourseMaterials(params),
+    enabled: !frontier,
     refetchInterval: (query) => query.state.data?.items.some((item) => ["queued", "processing"].includes(item.ingestion?.status ?? "")) ? 5_000 : false,
   });
 }

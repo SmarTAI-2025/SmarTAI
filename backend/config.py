@@ -106,6 +106,15 @@ class Settings(BaseSettings):
     shared_pool_daily_request_limit: int = 100
     shared_pool_daily_estimated_token_limit: int = 100_000
 
+    # Anonymous Frontier uses its own switch and durable global
+    # budget. Enabling it never enables shared fallback for registered teachers.
+    frontier_demo_enabled: bool = False
+    frontier_demo_session_minutes: int = Field(default=20, ge=1, le=60)
+    frontier_demo_daily_session_limit: int = Field(default=20, ge=1)
+    frontier_demo_session_cooldown_seconds: float = Field(default=5.0, ge=0)
+    frontier_demo_daily_request_limit: int = Field(default=500, ge=1)
+    frontier_demo_daily_estimated_token_limit: int = Field(default=500_000, ge=1)
+
     # User-defined public HTTPS provider endpoints are available in
     # development/test for every implemented wire protocol so collaborators
     # can exercise real relay services. In production the explicit kill switch

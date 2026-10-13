@@ -1,3 +1,4 @@
+import { taskWorkspacePath } from "@/lib/frontierSession";
 import { CheckCircle2, Clock3, Loader2, RefreshCw } from "lucide-react";
 import { useEffect, useRef, type ReactNode } from "react";
 import { useQueryClient } from "@tanstack/react-query";
@@ -137,8 +138,8 @@ export function QuestionAICompletionProgressPage() {
       </section>
 
       <div className="mt-[30px] flex flex-col justify-end gap-3 sm:flex-row">
-        <Link to="/" className="inline-flex h-10 w-full items-center justify-center rounded-[8px] border bg-card px-6 text-sm font-semibold text-foreground hover:bg-muted sm:w-auto sm:min-w-[130px]">{aiCompletionText(locale, "runInBackground")}</Link>
-        <Link to="/history" className="inline-flex h-10 w-full items-center justify-center rounded-[8px] border bg-card px-6 text-sm font-semibold text-foreground hover:bg-muted sm:w-auto sm:min-w-[150px]">{aiCompletionText(locale, "viewTasks")}</Link>
+        <Link to={taskWorkspacePath(taskId)} className="inline-flex h-10 w-full items-center justify-center rounded-[8px] border bg-card px-6 text-sm font-semibold text-foreground hover:bg-muted sm:w-auto sm:min-w-[130px]">{aiCompletionText(locale, "runInBackground")}</Link>
+        <Link to={taskWorkspacePath(taskId, "/history")} className="inline-flex h-10 w-full items-center justify-center rounded-[8px] border bg-card px-6 text-sm font-semibold text-foreground hover:bg-muted sm:w-auto sm:min-w-[150px]">{aiCompletionText(locale, "viewTasks")}</Link>
       </div>
     </ProgressFrame>
   );

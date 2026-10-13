@@ -1,20 +1,24 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import * as coursesApi from "@/api/courses";
 import { courseKeys, taskKeys } from "./keys";
+import { useFrontierWorkspace } from "@/lib/frontierContext";
 
 export function useCourses() {
+  const frontier = useFrontierWorkspace();
   return useQuery({
     queryKey: courseKeys.list(),
     queryFn: coursesApi.listCourses,
+    enabled: !frontier,
   });
 }
 
 export function useCourseSearch(query: string) {
+  const frontier = useFrontierWorkspace();
   const normalized = query.trim();
   return useQuery({
     queryKey: courseKeys.search(normalized),
     queryFn: () => coursesApi.searchCourses(normalized),
-    enabled: normalized.length > 0,
+    enabled: !frontier && normalized.length > 0,
   });
 }
 

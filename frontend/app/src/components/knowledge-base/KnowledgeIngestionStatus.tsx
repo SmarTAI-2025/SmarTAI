@@ -3,6 +3,7 @@ import { ChevronRight, Pause, Play, RefreshCw, RotateCcw } from "lucide-react";
 import { getJSON, postJSON, postMultipart } from "@/api/client";
 import type { KnowledgeIngestionSummary } from "@/types/personalKnowledge";
 import { backgroundErrorTitle } from "@/lib/taskActionGuards";
+import { useFrontierWorkspace } from "@/lib/frontierContext";
 
 interface Coverage {
   summary: KnowledgeIngestionSummary;
@@ -23,6 +24,7 @@ export function KnowledgeIngestionStatus({ documentId, status = "ready", ingesti
   documentId?: string; status?: string; ingestion?: KnowledgeIngestionSummary; zh: boolean;
   poll?: boolean; onChange?: () => void; detailsLabel?: string;
 }) {
+  const frontier = useFrontierWorkspace();
   const [coverage, setCoverage] = useState<Coverage | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(false);
@@ -35,7 +37,7 @@ export function KnowledgeIngestionStatus({ documentId, status = "ready", ingesti
   const active = ["queued", "processing"].includes(summary?.status ?? "");
   const paused = ["paused", "cancelled"].includes(summary?.status ?? "");
   useEffect(() => {
-    if (!poll || !active || !documentId) return;
+    if (frontier || !poll || !active || !documentId) return;
     let cancelled = false;
     let pending = false;
     const timer = window.setInterval(async () => {
@@ -48,7 +50,7 @@ export function KnowledgeIngestionStatus({ documentId, status = "ready", ingesti
       finally { pending = false; }
     }, 5000);
     return () => { cancelled = true; window.clearInterval(timer); };
-  }, [active, documentId, summary?.id, poll]);
+  }, [frontier, active, documentId, summary?.id, poll]);
   const effectiveStatus = summary?.status ?? status;
   const label = paused ? (zh ? "已暂停" : "Paused") : active ? (zh ? "后台处理中" : "Processing")
     : effectiveStatus === "partial" ? (zh ? "部分可检索" : "Partial coverage")
@@ -78,7 +80,7 @@ export function KnowledgeIngestionStatus({ documentId, status = "ready", ingesti
     catch { setError(true); }
     finally { setBusy(false); }
   }
-  if (!documentId || !summary?.id) return <span className="text-xs text-muted-foreground">{label}</span>;
+  if (frontier || !documentId || !summary?.id) return <span className="text-xs text-muted-foreground">{label}</span>;
   return <details className="min-w-0 text-xs" onToggle={(event) => { if (event.currentTarget.open && !coverage && !busy) void load(); }}>
     <summary className="cursor-pointer break-words text-muted-foreground">{detailsLabel ?? label}
       {!detailsLabel && summary.total_pages ? ` · ${summary.processed_pages ?? 0}/${summary.total_pages}` : ""}

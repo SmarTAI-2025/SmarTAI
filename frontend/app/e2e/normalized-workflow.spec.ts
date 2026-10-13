@@ -6,7 +6,7 @@ async function loginAs(
   page: Page,
   role: "teacher" | "student" | "admin",
   name: string,
-  target = "/",
+  target = "/dashboard",
 ) {
   const token = `demo-${role}-${name}`;
   await page.goto("/login");
@@ -36,7 +36,7 @@ async function api(
 
 test("production router keeps the Figma teacher surface and normalized workspaces dormant", async ({ page }) => {
   await loginAs(page, "teacher", "e2e-teacher");
-  await expect(page).toHaveURL(/\/$/);
+  await expect(page).toHaveURL(/\/dashboard$/);
   await expect(page.getByRole("heading", { name: "Workspace" })).toBeVisible({ timeout: 15000 });
 
   await loginAs(page, "student", "e2e-student", "/student");

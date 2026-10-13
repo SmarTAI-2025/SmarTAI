@@ -24,6 +24,9 @@ def provider_configuration_fingerprint(
     and refuses to run if anything changed after teacher confirmation.
     """
     selected = list(dict.fromkeys(selected_provider_ids))
+    from backend.services.frontier_demo import is_frontier_user
+    from backend.state import get_user_store
+    demo_owner = is_frontier_user(get_user_store().get(owner_id))
     with session_scope() as session:
         records = session.scalars(
             select(ProviderConfigRecord).where(
@@ -55,7 +58,7 @@ def provider_configuration_fingerprint(
             })
             continue
 
-        shared = _shared_provider_row(provider_id)
+        shared = _shared_provider_row(provider_id, frontier_demo=demo_owner)
         if shared is None:
             raise ValidationError(
                 "Selected provider configuration is unavailable.",
@@ -67,18 +70,12 @@ def provider_configuration_fingerprint(
     ).hexdigest()
 
 
-def _shared_provider_row(provider_id: str) -> dict | None:
-    if not settings.shared_pool_enabled:
+def _shared_provider_row(provider_id: str, *, frontier_demo: bool = False) -> dict | None:
+    if not (settings.frontier_demo_enabled if frontier_demo else settings.shared_pool_enabled):
         return None
-    candidates = (
-        ("gemini", settings.gemini_model, settings.gemini_api_key, None),
-        ("openai", settings.openai_model, settings.openai_api_key, settings.openai_api_base),
-        ("zhipu", settings.zhipu_model, settings.zhipu_api_key, settings.zhipu_api_base),
-        ("anthropic", settings.anthropic_model, settings.anthropic_api_key, None),
-    )
-    for provider_type, model, api_key, base_url in candidates:
-        if not api_key:
-            continue
+    from backend.llm.registry import shared_provider_configs
+    for config in shared_provider_configs():
+        provider_type, model = config.provider_type, config.model
         # Provider implementations use this descriptive id for environment
         # configs. Keep matching deliberately narrow; unknown ids fail closed.
         expected_ids = {f"{provider_type}:{model}", f"{provider_type}/{model}"}
@@ -88,10 +85,10 @@ def _shared_provider_row(provider_id: str) -> dict | None:
             "provider_id": provider_id,
             "provider_type": provider_type,
             "model": model,
-            "base_url": base_url,
+            "base_url": config.base_url,
             "endpoint_identity": catalog_entry(provider_type).default_base_url,
             "wire_protocol": catalog_entry(provider_type).wire_protocol,
-            "secret_digest": hashlib.sha256(api_key.encode("utf-8")).hexdigest(),
+            "secret_digest": hashlib.sha256(config.api_key.encode("utf-8")).hexdigest(),
             "scope": "shared",
         }
     return None

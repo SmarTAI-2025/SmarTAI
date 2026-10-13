@@ -12,7 +12,7 @@ export interface DraftController {
 type Getter = () => DraftController;
 type Intent = { run: () => void; cancel: () => void; controllers: DraftController[] };
 const noop = () => {};
-const LeaveContext = createContext({ register: (_getter: Getter): (() => void) => noop, changed: noop, request: (run: () => void, _ids?: symbol[]) => run(), controllers: [] as DraftController[], save: async (_ids?: symbol[]) => {}, saving: false, error: null as string | null });
+const LeaveContext = createContext({ register: (_getter: Getter): (() => void) => noop, changed: noop, request: (run: () => void, _ids?: symbol[]) => run(), discardAndLeave: (run: () => void) => run(), controllers: [] as DraftController[], save: async (_ids?: symbol[]) => {}, saving: false, error: null as string | null });
 export function useDraftLeave() { return useContext(LeaveContext); }
 export function DraftLeaveProvider({ children }: { children: ReactNode }) {
   const expired = useSessionExpired();
@@ -21,6 +21,7 @@ export function DraftLeaveProvider({ children }: { children: ReactNode }) {
   const [intent, setIntent] = useState<Intent | null>(null);
   const pending = useRef<Intent | null>(null);
   const savingRef = useRef(false);
+  const confirmedLeave = useRef(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const changed = useCallback(() => render((value) => value + 1), []);
@@ -93,9 +94,14 @@ export function DraftLeaveProvider({ children }: { children: ReactNode }) {
     const original = pending.current; pending.current = null; setIntent(null); original?.cancel();
   }), []);
   const routeAsk = useCallback((run: () => void, cancel?: () => void) => ask(run, undefined, cancel), [ask]);
+  function discardAndLeave(run: () => void) {
+    all().forEach((controller) => controller.discard());
+    confirmedLeave.current = true;
+    try { run(); } finally { confirmedLeave.current = false; }
+  }
   const dataRouter = useContext(UNSAFE_DataRouterContext);
-  return <LeaveContext.Provider value={{ register, changed, request: ask, controllers, save, saving, error }}>
-    {dataRouter ? <RouterLeaveGuard shouldBlock={() => !isSessionExpired() && all().some((item) => item.dirty || item.busy)} ask={routeAsk} /> : null}
+  return <LeaveContext.Provider value={{ register, changed, request: ask, discardAndLeave, controllers, save, saving, error }}>
+    {dataRouter ? <RouterLeaveGuard shouldBlock={() => !confirmedLeave.current && !isSessionExpired() && all().some((item) => item.dirty || item.busy)} ask={routeAsk} /> : null}
     {children}
     {intent && !expired ? <UnsavedChangesDialog title="有未暂存修改" description={controllers.some((item) => item.busy) ? "业务保存正在进行，请等待完成；当前输入仍保留。" : intent.controllers.some((item) => item.secret) ? "认证秘密不会写入本地草稿。请继续编辑并使用原有保存操作，或放弃本次输入离开。" : "暂存仅保存在当前浏览器，不会上传、识别、批改或确认复核。"} stayLabel="继续编辑" leaveLabel="不暂存并离开" saveLabel={intent.controllers.some((item) => item.secret) ? undefined : "暂存并离开"} savingLabel="正在暂存…" saving={saving || controllers.some((item) => item.busy)} saveError={error ?? undefined} onStay={() => finish(false)} onLeave={() => finish(true)} onSave={() => void saveAndLeave()} /> : null}
   </LeaveContext.Provider>;

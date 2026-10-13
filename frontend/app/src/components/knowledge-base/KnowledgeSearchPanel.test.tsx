@@ -29,7 +29,7 @@ it("searches selected materials only on submission and reports an honest empty r
   await userEvent.type(screen.getByRole("textbox"), "group homomorphism");
   await userEvent.click(screen.getByRole("button", { name: "Search" }));
   expect(await screen.findByRole("status")).toHaveTextContent("No matching passages");
-  expect(api.postJSON).toHaveBeenCalledWith("/knowledge/search", { query: "group homomorphism", document_ids: ["book"], limit: 5 });
+  expect(api.postJSON).toHaveBeenCalledWith("/knowledge/search", { query: "group homomorphism", document_ids: ["book"], limit: 5 }, { _authScope: "teacher" });
 });
 
 it("discards a response after the material selection changes", async () => {
@@ -53,5 +53,5 @@ it("only requests the explicitly selected model and keeps fallback visible", asy
   await userEvent.click(screen.getByRole("button", { name: "Search" }));
   expect(await screen.findByRole("alert")).toHaveTextContent("showing local search results");
   expect(screen.getByText(/Model calls this search: 0/)).toHaveTextContent("Reused query");
-  expect(api.postJSON).toHaveBeenCalledWith("/knowledge/search", { query:"中文查询", document_ids:["book"], limit:5, query_provider_id:"owner-model" });
+  expect(api.postJSON).toHaveBeenCalledWith("/knowledge/search", { query:"中文查询", document_ids:["book"], limit:5, query_provider_id:"owner-model" }, { _authScope: "teacher" });
 });

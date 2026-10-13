@@ -16,7 +16,7 @@ from pydantic import BaseModel, Field
 from starlette.concurrency import run_in_threadpool
 
 from backend.api.errors import domain_error_response
-from backend.auth import get_current_user, require_teacher
+from backend.auth import get_current_user, get_task_user, require_teacher
 from backend.db.knowledge_repository import (
     get_document,
     list_visible_documents,
@@ -59,7 +59,7 @@ def knowledge_activity(q: str = Query(default="", max_length=128),
 
 
 @router.post("/search")
-async def search_knowledge(request: KnowledgeSearchRequest, current: User = Depends(get_current_user)):
+async def search_knowledge(request: KnowledgeSearchRequest, current: User = Depends(get_task_user)):
     from dataclasses import asdict
     from backend.knowledge.retriever import PersistentKnowledgeRetriever, _reference
     from backend.db.knowledge_ingestion_repository import live_document
@@ -98,7 +98,7 @@ async def search_knowledge(request: KnowledgeSearchRequest, current: User = Depe
 
 
 @router.get("/documents/{document_id}/citations/{chunk_id}")
-def get_citation(document_id: str, chunk_id: str, current: User = Depends(get_current_user)):
+def get_citation(document_id: str, chunk_id: str, current: User = Depends(get_task_user)):
     from backend.db.knowledge_ingestion_repository import live_document
     from backend.db.models import KnowledgeChunkRecord
     from backend.db.session import session_scope
@@ -243,7 +243,7 @@ def download_document(document_id: str, current: User = Depends(get_current_user
 
 
 @router.get("/documents/{document_id}/citations/{chunk_id}/download")
-def download_citation_original(document_id: str, chunk_id: str, current: User = Depends(get_current_user)):
+def download_citation_original(document_id: str, chunk_id: str, current: User = Depends(get_task_user)):
     return _download_original(document_id, current, chunk_id=chunk_id)
 
 

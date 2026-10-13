@@ -1,3 +1,4 @@
+import { taskWorkspacePath } from "@/lib/frontierSession";
 import { AlertTriangle, CheckCircle2, LoaderCircle } from "lucide-react";
 import { useMemo, type ReactNode } from "react";
 import { Link, Navigate, useNavigate, useParams } from "react-router-dom";
@@ -175,7 +176,7 @@ export function GradingProgressPage() {
                   <span className="inline-flex min-h-7 w-fit items-center rounded-full bg-teal-100 px-3 text-[11px] font-semibold text-teal-700 dark:bg-teal-950/60 dark:text-teal-300 sm:text-[12px]">
                     {completedView ? (locale === "en-US" ? "Completed" : "已完成") : copy(locale, "backgroundChip")}
                   </span>
-                  <Link to={completedView ? `/tasks/${taskId}/review` : "/"} className="inline-flex h-10 w-full items-center justify-center rounded-[8px] border bg-card px-5 text-[13px] font-semibold text-foreground outline-none hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring sm:w-[150px] sm:text-[14px]">
+                  <Link to={completedView ? `/tasks/${taskId}/review` : taskWorkspacePath(taskId)} className="inline-flex h-10 w-full items-center justify-center rounded-[8px] border bg-card px-5 text-[13px] font-semibold text-foreground outline-none hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring sm:w-[150px] sm:text-[14px]">
                     {completedView ? (locale === "en-US" ? "View Grading Review" : "查看复核批改") : copy(locale, "backWorkspace")}
                   </Link>
                 </div>

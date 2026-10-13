@@ -1,6 +1,7 @@
 import { LoaderCircle, Search } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
-import { postJSON } from "@/api/client";
+import { postJSON, type AuthAwareRequestConfig } from "@/api/client";
+import { useFrontierWorkspace } from "@/lib/frontierContext";
 import { useI18n } from "@/i18n/I18nProvider";
 import { MarkdownMath } from "@/components/ui/MarkdownMath";
 import { KnowledgeCitationPreview } from "./KnowledgeCitationPreview";
@@ -12,6 +13,7 @@ import { modelDisplayName, sortByProvider } from "@/lib/modelPresentation";
 interface QueryUsage { status: string; cached?: boolean; provider_calls?: number; input_tokens?: number | null; output_tokens?: number | null }
 
 export function KnowledgeSearchPanel({ documentIds }: { documentIds: string[] }) {
+  const frontier = useFrontierWorkspace();
   const { locale } = useI18n();
   const zh = locale === "zh-CN";
   const [query, setQuery] = useState("");
@@ -27,12 +29,13 @@ export function KnowledgeSearchPanel({ documentIds }: { documentIds: string[] })
   useEffect(() => { generation.current += 1; setMatches(null); setPending(false); setFailed(false); setRewriteFailed(false); setQueryUsage(null); }, [scope, providerId]);
   useEffect(() => () => { generation.current += 1; }, []);
   useEffect(() => {
+    if (frontier) return;
     let active = true;
     void listExperts().then((items) => {
       if (active) setExperts(items.filter((item) => item.enabled && item.scope === "owner" && !item.is_shared && item.provider_kind !== "ocr"));
     }).catch(() => { if (active) setExperts([]); });
     return () => { active = false; };
-  }, []);
+  }, [frontier]);
   const ids = JSON.parse(scope) as string[];
   function search() {
     if (!query.trim() || pending || ids.length > 20) return;
@@ -40,7 +43,7 @@ export function KnowledgeSearchPanel({ documentIds }: { documentIds: string[] })
     setPending(true); setFailed(false); setRewriteFailed(false); setMatches(null); setQueryUsage(null);
     void postJSON<{ matches: KnowledgeMatch[]; query_plan?: QueryUsage }>("/knowledge/search", {
       query: query.trim(), document_ids: ids, limit: 5, ...(providerId ? { query_provider_id: providerId } : {}),
-    })
+    }, { _authScope: frontier ? "frontier" : "teacher" } as AuthAwareRequestConfig)
       .then((result) => { if (current === generation.current) {
         setMatches(result.matches);
         setQueryUsage(result.query_plan ?? null);

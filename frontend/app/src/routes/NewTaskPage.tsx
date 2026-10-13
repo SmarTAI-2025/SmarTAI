@@ -83,6 +83,7 @@ function NewTaskForm({ scope, taskQuery }: { scope: string; taskQuery: ReturnTyp
 
   const debouncedCourseDraft = useDebouncedValue(courseDraft, 180);
   const debouncedTagDraft = useDebouncedValue(tagDraft, 180);
+  const frontier = useFrontierWorkspace();
   const coursesQuery = useCourses();
   const courseSearch = useCourseSearch(debouncedCourseDraft);
   const tagsQuery = useTags();
@@ -103,9 +104,9 @@ function NewTaskForm({ scope, taskQuery }: { scope: string; taskQuery: ReturnTyp
   const isSaving = createTask.isPending || updateTask.isPending;
 
   useEffect(() => {
-    if (!isEditing || editHydrated || !taskQuery.data || !coursesQuery.isSuccess || !tagsQuery.isSuccess) return;
+    if (!isEditing || editHydrated || !taskQuery.data || (!frontier && (!coursesQuery.isSuccess || !tagsQuery.isSuccess))) return;
     setEditHydrated(true);
-  }, [coursesQuery.isSuccess, editHydrated, isEditing, tagsQuery.isSuccess, taskQuery.data]);
+  }, [frontier, coursesQuery.isSuccess, editHydrated, isEditing, tagsQuery.isSuccess, taskQuery.data]);
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -228,7 +229,7 @@ function NewTaskForm({ scope, taskQuery }: { scope: string; taskQuery: ReturnTyp
                 {semesterOptions.map((semester) => <option key={semester.id} value={semester.id}>{formatSemesterLabel(semester.id, t)}</option>)}
               </select>
             </div>
-            <SmartCatalogField<Course>
+            {!frontier && <SmartCatalogField<Course>
               label={t("newTaskCourseLabel")}
               hint={t("newTaskCourseHint")}
               placeholder={t("newTaskCoursePlaceholder")}
@@ -246,10 +247,10 @@ function NewTaskForm({ scope, taskQuery }: { scope: string; taskQuery: ReturnTyp
               onSelect={setCourse}
               onRemove={() => setCourse(null)}
               onCreate={async (value, force) => createCourse.mutateAsync({ name: value, force_create: force })}
-            />
+            />}
           </div>
 
-          <div className="xl:mt-[22px]">
+          {!frontier && <div className="xl:mt-[22px]">
             <SmartCatalogField<TaskTag>
               label={t("newTaskTagsLabel")}
               hint={t("newTaskTagsHint")}
@@ -274,14 +275,14 @@ function NewTaskForm({ scope, taskQuery }: { scope: string; taskQuery: ReturnTyp
               onRemove={(item) => setTags((current) => current.filter((tag) => tag.id !== item.id))}
               onCreate={async (value, force) => createTag.mutateAsync({ name: value, color: "slate", force_create: force })}
             />
-          </div>
+          </div>}
 
           <div className="flex h-14 items-center justify-between gap-4 rounded-[8px] border bg-slate-50 px-4 dark:bg-slate-800/50 xl:mt-[27px]">
             <div className="min-w-0">
               <p className="text-[13px] font-semibold text-foreground">{t("newTaskModelSummaryLabel")}</p>
               <p className="mt-1 truncate text-xs text-muted-foreground">{modelSummary}</p>
             </div>
-            <Link to={`/settings/byok?returnTo=${encodeURIComponent(location.pathname + location.search)}`} aria-disabled={isSaving} tabIndex={isSaving ? -1 : undefined} onClick={(event) => { if (isSaving) event.preventDefault(); }} className="shrink-0 text-xs font-semibold text-primary outline-none hover:underline focus-visible:rounded focus-visible:ring-2 focus-visible:ring-ring aria-disabled:cursor-wait aria-disabled:opacity-50">{t("newTaskManageModels")}</Link>
+            {!frontier && <Link to={`/settings/byok?returnTo=${encodeURIComponent(location.pathname + location.search)}`} aria-disabled={isSaving} tabIndex={isSaving ? -1 : undefined} onClick={(event) => { if (isSaving) event.preventDefault(); }} className="shrink-0 text-xs font-semibold text-primary outline-none hover:underline focus-visible:rounded focus-visible:ring-2 focus-visible:ring-ring aria-disabled:cursor-wait aria-disabled:opacity-50">{t("newTaskManageModels")}</Link>}
           </div>
 
           {formError ? <div role="alert" className="rounded-[6px] border border-danger/30 bg-red-50 px-3 py-2 text-xs text-danger dark:bg-red-950/30 xl:mt-[19px]">{formError}</div> : null}
@@ -368,3 +369,4 @@ function useDebouncedValue(value: string, delay: number): string {
 function createIdempotencyKey(): string {
   return globalThis.crypto?.randomUUID?.() ?? `task-${Date.now()}-${Math.random().toString(16).slice(2)}`;
 }
+import { useFrontierWorkspace } from "@/lib/frontierContext";

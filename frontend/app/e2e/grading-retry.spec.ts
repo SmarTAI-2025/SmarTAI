@@ -16,7 +16,7 @@ test("partial failure → explicit same-config retry → live progress → revie
   await page.getByRole("textbox", { name: "Username", exact: true }).fill(fixture.username);
   await page.getByLabel("Password", { exact: true }).fill(fixture.password);
   await page.getByRole("button", { name: "Sign in", exact: true }).click();
-  await expect(page).toHaveURL(/\/$/);
+  await expect(page).toHaveURL(/\/dashboard$/);
   await page.goto(`/tasks/${fixture.task_id}/review`);
   await expect(page).toHaveURL(/\/grading\/progress$/);
   await expect(page.getByRole("heading", { name: "This grading run did not finish" })).toBeVisible();

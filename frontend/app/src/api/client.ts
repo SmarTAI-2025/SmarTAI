@@ -1,6 +1,7 @@
 import axios, { AxiosError, CanceledError, type AxiosProgressEvent, type AxiosRequestConfig } from "axios";
 import { setSessionExpired } from "@/lib/sessionExpiry";
 import { clearPageDrafts } from "@/lib/pageDraftStore";
+import { clearFrontierToken, frontierTaskRequestGeneration, getFrontierGeneration, getFrontierToken, isFrontierExitPending, setFrontierToken } from "@/lib/frontierSession";
 
 export const SMARTAI_TOKEN_STORAGE_KEY = import.meta.env.MODE === "admin" ? "smartai_admin_token" : "smartai_token";
 
@@ -51,6 +52,9 @@ export interface AuthAwareRequestConfig extends AxiosRequestConfig {
   _skipAuthRefresh?: boolean;
   _skipAuthHeader?: boolean;
   _sessionVersion?: number;
+  _authScope?: "teacher" | "frontier";
+  _frontierToken?: string | null;
+  _frontierGeneration?: number;
 }
 
 let sessionVersion = 0;
@@ -58,6 +62,21 @@ let refreshFlight: { version: number; promise: Promise<string> } | null = null;
 
 apiClient.interceptors.request.use((config) => {
   const authConfig = config as AuthAwareRequestConfig;
+  // Capture the scope once. A navigation or a concurrent teacher refresh must
+  // never cause a guest request/retry to acquire the teacher's credentials.
+  const frontierTaskGeneration = frontierTaskRequestGeneration(config.url ?? "");
+  authConfig._authScope ??= frontierTaskGeneration !== null ? "frontier" : "teacher";
+  if (authConfig._authScope === "frontier") {
+    if (isFrontierExitPending() && config.url !== "/auth/frontier-demo-session/end") throw new CanceledError("Demo is ending");
+    authConfig._frontierGeneration ??= frontierTaskGeneration ?? getFrontierGeneration();
+    if (authConfig._frontierGeneration !== getFrontierGeneration()) throw new CanceledError("Demo session changed before request replay");
+    authConfig._frontierToken ??= getFrontierToken();
+    config.withCredentials = false;
+    if (authConfig._frontierToken && !authConfig._skipAuthHeader) {
+      config.headers.Authorization = `Bearer ${authConfig._frontierToken}`;
+    }
+    return config;
+  }
   if (authConfig._sessionVersion !== undefined && authConfig._sessionVersion !== sessionVersion) {
     throw new CanceledError("Session changed before request replay");
   }
@@ -74,6 +93,17 @@ apiClient.interceptors.response.use(
   async (error: AxiosError) => {
     const config = error.config as AuthAwareRequestConfig | undefined;
     const path = config?.url ?? "";
+    if (error.response?.status === 401 && config?._authScope === "frontier") {
+      if (isFrontierExitPending()) return Promise.reject(error);
+      if (config._retry && config._frontierGeneration === getFrontierGeneration() && config._frontierToken === getFrontierToken()) clearFrontierToken();
+      if (config._skipAuthRefresh || config._retry || !config._frontierToken) return Promise.reject(error);
+      config._retry = true;
+      try {
+        const token = await renewFrontierToken(config._frontierToken, config._frontierGeneration);
+        config._frontierToken = token;
+        return apiClient.request(config);
+      } catch (refreshError) { return Promise.reject(refreshError); }
+    }
     if (error.response?.status !== 401 || !config || config._skipAuthRefresh || path.includes("/auth/login") || path.includes("/auth/refresh")) {
       return Promise.reject(error);
     }
@@ -100,6 +130,28 @@ apiClient.interceptors.response.use(
     }
   },
 );
+
+let frontierRefreshFlight: { token: string; generation: number; promise: Promise<string> } | null = null;
+
+export function renewFrontierToken(startingToken: string, generation = getFrontierGeneration()): Promise<string> {
+  if (isFrontierExitPending() || generation !== getFrontierGeneration()) return Promise.reject(new CanceledError("Demo session changed during request"));
+  if (frontierRefreshFlight?.token === startingToken && frontierRefreshFlight.generation === generation) return frontierRefreshFlight.promise;
+  const current = getFrontierToken();
+  if (current && current !== startingToken) return Promise.resolve(current);
+  const promise = apiClient.post<{ token: string }>("/auth/frontier-demo-session", {}, {
+    _authScope: "frontier", _frontierToken: startingToken, _frontierGeneration: generation, _skipAuthRefresh: true,
+  } as AuthAwareRequestConfig).then(({ data }) => {
+    if (isFrontierExitPending() || getFrontierGeneration() !== generation || getFrontierToken() !== startingToken) throw new CanceledError("Demo session changed during refresh");
+    if (!data.token) throw new Error("Invalid demo session response");
+    setFrontierToken(data.token);
+    return data.token;
+  }).catch((error: unknown) => {
+    if (!isFrontierExitPending() && getFrontierGeneration() === generation && getFrontierToken() === startingToken && axios.isAxiosError(error) && error.response?.status === 401) clearFrontierToken();
+    throw error;
+  }).finally(() => { if (frontierRefreshFlight?.promise === promise) frontierRefreshFlight = null; });
+  frontierRefreshFlight = { token: startingToken, generation, promise };
+  return promise;
+}
 
 export function getAuthToken(): string | null {
   if (typeof localStorage === "undefined") {

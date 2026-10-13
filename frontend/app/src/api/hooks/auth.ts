@@ -4,14 +4,16 @@ import * as authApi from "@/api/auth";
 import { clearAuthToken } from "@/api/client";
 import { authKeys } from "./keys";
 import { useSessionExpired } from "@/lib/sessionExpiry";
+import { useFrontierWorkspace } from "@/lib/frontierContext";
 
 export function useCurrentUser() {
   const expired = useSessionExpired();
+  const frontier = useFrontierWorkspace();
   return useQuery({
-    queryKey: authKeys.me,
-    queryFn: authApi.restoreSession,
+    queryKey: frontier ? ["frontier", ...authKeys.me] : authKeys.me,
+    queryFn: frontier ? authApi.getFrontierUser : authApi.restoreSession,
     retry: false,
-    enabled: !expired,
+    enabled: frontier || !expired,
   });
 }
 

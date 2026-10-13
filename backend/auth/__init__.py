@@ -175,6 +175,22 @@ def get_optional_user(
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, detail="Session belongs to a different service; sign in again")
     user_id = payload.get("sub")
     user = user_store.get(user_id) if user_id else None
+    from backend.services.frontier_demo import is_frontier_user
+    auth_scope = payload.get("scope", "user")
+    if auth_scope not in {"user", "frontier_demo"}:
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, detail="Invalid token scope")
+    if auth_scope == "frontier_demo":
+        try:
+            valid_demo = (settings.frontier_demo_enabled and expected_scope == "public"
+                          and token_scope == "public" and payload.get("role") == "teacher"
+                          and is_frontier_user(user) and user.role == "teacher"
+                          and float(payload.get("session_exp", 0)) > time.time())
+        except (TypeError, ValueError, OverflowError):
+            valid_demo = False
+        if not valid_demo:
+            raise HTTPException(status.HTTP_401_UNAUTHORIZED, detail={"code": "frontier_demo_session_expired"})
+    elif is_frontier_user(user):
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, detail="Invalid token scope")
     # Only existing teacher sessions may retain the pre-scope public format.
     if token_scope is None and user is not None and user.role != "teacher":
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, detail="Sign in again")
@@ -200,16 +216,45 @@ def get_optional_user(
         from backend.db.auth_repository import access_session_is_active
         if not access_session_is_active(payload["sid"], user):
             raise HTTPException(status.HTTP_401_UNAUTHORIZED, detail="Session expired or revoked")
-    return user
+    return user.model_copy(update={"auth_scope": auth_scope}) if user is not None else None
 
 
 def get_current_user(request: Request, user: Optional[User] = Depends(get_optional_user)) -> User:
     """Required-auth dependency. Used by all new (auth/users/courses/assignments) endpoints."""
     if user is None:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, detail="Authentication required")
+    if user.auth_scope != "user":
+        raise HTTPException(status.HTTP_403_FORBIDDEN, detail="User session required")
+    return _check_request_user(request, user)
+
+
+def _check_request_user(request: Request, user: User) -> User:
     if (user.is_read_only and request.method not in {"GET", "HEAD", "OPTIONS"}
             and request.url.path not in {"/auth/logout", "/auth/activity", "/auth/password-change", "/api/auth/logout", "/api/auth/activity", "/api/auth/password-change"}):
         raise HTTPException(status.HTTP_403_FORBIDDEN, detail={"code": "account_read_only", "message": "账号当前为只读，可浏览历史批改任务，暂不能进行此操作。"})
+    return user
+
+
+def get_task_user(request: Request, user: Optional[User] = Depends(get_optional_user)) -> User:
+    """The narrow task capability preserves normal account write restrictions."""
+    if user is None:
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, detail="Authentication required")
+    return _check_request_user(request, user)
+
+
+def get_frontier_cleanup_user(request: Request, token: Optional[str] = Depends(_oauth2)) -> User:
+    """Only demo destruction can accept an expired access/session deadline."""
+    from backend.services.frontier_demo import cleanup_user
+    if request_session_scope(request) != "public":
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Not found")
+    if not token:
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, detail="Missing demo token")
+    return _check_request_user(request, cleanup_user(token))
+
+
+def require_task_teacher(user: User = Depends(get_task_user)) -> User:
+    if user.role != "teacher":
+        raise HTTPException(status.HTTP_403_FORBIDDEN, detail="Teacher task access required")
     return user
 
 

@@ -215,19 +215,20 @@ function localizedSessionError(value: string, locale: "zh-CN" | "en-US") {
 }
 
 function safeReturnPath(state: unknown): string {
-  if (!state || typeof state !== "object" || !("from" in state)) return "/";
+  if (!state || typeof state !== "object" || !("from" in state)) return "/dashboard";
   const from = String(state.from);
   try {
     const parsed = new URL(from, window.location.origin);
     if (
       parsed.origin !== window.location.origin ||
       parsed.pathname === "/login" ||
-      parsed.pathname === "/register"
+      parsed.pathname === "/register" ||
+      parsed.pathname === "/"
     ) {
-      return "/";
+      return "/dashboard";
     }
     return `${parsed.pathname}${parsed.search}${parsed.hash}`;
   } catch {
-    return "/";
+    return "/dashboard";
   }
 }

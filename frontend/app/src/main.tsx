@@ -1,7 +1,7 @@
 import React from "react";
 import ReactDOM from "react-dom/client";
 import { createBrowserRouter, Navigate, Outlet, RouterProvider } from "react-router-dom";
-import { RequireTeacherSession } from "@/components/auth/RequireTeacherSession";
+import { WorkspaceSession } from "@/components/auth/WorkspaceSession";
 import { AppShell } from "@/components/layout/AppShell";
 import { useI18n } from "@/i18n/I18nProvider";
 import { Providers } from "@/providers/Providers";
@@ -18,6 +18,9 @@ const KnowledgeBasePage = React.lazy(() =>
   import("@/routes/KnowledgeBasePage").then((module) => ({ default: module.KnowledgeBasePage })),
 );
 const LoginPage = React.lazy(() => import("@/routes/LoginPage").then((module) => ({ default: module.LoginPage })));
+const FrontierLandingPage = React.lazy(() => import("@/routes/frontier/FrontierLandingPage").then((module) => ({ default: module.FrontierLandingPage })));
+const FrontierDemoEntryPage = React.lazy(() => import("@/routes/frontier/FrontierDemoEntryPage").then((module) => ({ default: module.FrontierDemoEntryPage })));
+const FrontierLiveDemoPage = React.lazy(() => import("@/routes/frontier/FrontierLiveDemoPage").then((module) => ({ default: module.FrontierLiveDemoPage })));
 const NewTaskPage = React.lazy(() => import("@/routes/NewTaskPage").then((module) => ({ default: module.NewTaskPage })));
 const NotFoundPage = React.lazy(() =>
   import("@/routes/NotFoundPage").then((module) => ({ default: module.NotFoundPage })),
@@ -109,6 +112,9 @@ function routeElement(element: React.ReactNode) {
 import { DraftLeaveProvider } from "@/hooks/useDraftLeave";
 
 const router = createBrowserRouter([{ element: <DraftLeaveProvider><Outlet /></DraftLeaveProvider>, children: [
+  { path: "/", element: routeElement(<FrontierLandingPage />), errorElement: <RouteRecoveryPage /> },
+  { path: "/frontier", element: <Navigate to="/" replace /> },
+  { path: "/frontier/enter", element: routeElement(<FrontierDemoEntryPage />), errorElement: <RouteRecoveryPage /> },
   { path: "/login", element: routeElement(<LoginPage />) },
   { path: "/register", element: routeElement(<RegisterPage />) },
   { path: "/register/check-email", element: routeElement(<RegisterCheckEmailPage />) },
@@ -118,16 +124,15 @@ const router = createBrowserRouter([{ element: <DraftLeaveProvider><Outlet /></D
   { path: "/reset-password", element: routeElement(<ResetPasswordPage />) },
   { path: "/student", element: <StudentUnavailablePage /> },
   {
-    path: "/",
     errorElement: <RouteRecoveryPage />,
     element: (
-      <RequireTeacherSession>
+      <WorkspaceSession>
         <AppShell />
-      </RequireTeacherSession>
+      </WorkspaceSession>
     ),
     children: [
-      { index: true, element: routeElement(<DashboardPage />) },
-      { path: "dashboard", element: <Navigate to="/" replace /> },
+      { path: "dashboard", element: routeElement(<DashboardPage />) },
+      { path: "frontier/live", element: routeElement(<FrontierLiveDemoPage />) },
       { path: "history", element: routeElement(<HistoryPage />) },
       { path: "knowledge-base", element: routeElement(<KnowledgeBasePage />) },
       { path: "tasks/new", element: routeElement(<NewTaskPage />) },

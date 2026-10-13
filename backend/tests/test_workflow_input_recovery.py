@@ -8,7 +8,6 @@ from fastapi import BackgroundTasks, FastAPI, UploadFile
 from fastapi.testclient import TestClient
 
 from backend.api import task_preparation, tasks
-from backend.auth import require_teacher
 from backend.db import workflow_repository
 from backend.domain.errors import NotFound
 from backend.services import task_facade, workflow_inputs
@@ -144,11 +143,11 @@ async def test_mounted_read_routes_and_saved_inputs_isolate_users_tasks_and_revi
     app = FastAPI()
     app.include_router(tasks.router)
     app.include_router(task_preparation.router)
-    app.dependency_overrides[require_teacher] = lambda: SimpleNamespace(id=owner)
+    app.dependency_overrides[tasks.require_teacher] = lambda: SimpleNamespace(id=owner)
     client = TestClient(app)
     assert client.get(f"/tasks/{task}/submission-recognition/input").json()["input"] == snapshot
     assert client.get(f"/tasks/{task}/question-preparation/input").json()["input"] is None
-    app.dependency_overrides[require_teacher] = lambda: SimpleNamespace(id=other)
+    app.dependency_overrides[tasks.require_teacher] = lambda: SimpleNamespace(id=other)
     assert client.get(f"/tasks/{task}/submission-recognition/input").status_code == 404
     with pytest.raises(NotFound):
         workflow_inputs.load_submission_input(task_id=other_task, owner_id=owner, stored_file_id=snapshot["stored_file_id"])

@@ -1,3 +1,4 @@
+import { taskWorkspacePath } from "@/lib/frontierSession";
 import {
   AlertCircle,
   CheckCircle2,
@@ -112,7 +113,7 @@ export function SubmissionRecognitionProgressPage() {
           title={t("submissionProgressTaskMissing")}
           description={t("submissionProgressTaskMissingDescription")}
           primaryLabel={t("submissionProgressViewTasks")}
-          onPrimary={() => navigate("/history")}
+          onPrimary={() => navigate(taskWorkspacePath(taskId, "/history"))}
         />
       </ProgressPageFrame>
     );
@@ -296,7 +297,7 @@ export function SubmissionRecognitionProgressPage() {
           type="button"
           variant="secondary"
           className="h-10 w-full px-6 sm:w-auto sm:min-w-[130px]"
-          onClick={() => navigate("/")}
+          onClick={() => navigate(taskWorkspacePath(taskId))}
         >
           {t("submissionProgressRunInBackground")}
         </Button>
@@ -304,7 +305,7 @@ export function SubmissionRecognitionProgressPage() {
           type="button"
           variant="secondary"
           className="h-10 w-full px-6 sm:w-auto sm:min-w-[150px]"
-          onClick={() => navigate("/history")}
+          onClick={() => navigate(taskWorkspacePath(taskId, "/history"))}
         >
           {t("submissionProgressViewTasks")}
         </Button>

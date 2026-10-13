@@ -11,7 +11,7 @@ from fastapi.routing import APIRoute
 from fastapi.security.utils import get_authorization_scheme_param
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from backend.auth import get_current_user, hash_password, verify_password, request_session_scope, decode_token
+from backend.auth import get_current_user, get_task_user, get_frontier_cleanup_user, hash_password, verify_password, request_session_scope, decode_token
 from backend.config import settings
 from backend.db.auth_repository import (
     authenticate_and_create_session,
@@ -279,6 +279,16 @@ def login(req: LoginRequest, response: Response, request: Request):
 
 @router.post("/refresh")
 def refresh(request: Request, response: Response):
+    # A demo bearer can never fall back to the teacher's refresh cookie.
+    scheme, bearer = get_authorization_scheme_param(request.headers.get("authorization"))
+    if scheme.lower() == "bearer" and bearer:
+        import jwt
+        try:
+            payload = jwt.decode(bearer, settings.jwt_secret, algorithms=[settings.jwt_algorithm], options={"verify_exp": False})
+        except jwt.InvalidTokenError:
+            payload = {}
+        if payload.get("scope") == "frontier_demo":
+            return create_frontier_demo_session(request, response)
     raw = request.cookies.get(_cookie_name(request))
     if not raw:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, detail="Refresh session missing")
@@ -321,8 +331,51 @@ def activity(request: Request, response: Response, current: User = Depends(get_c
 
 
 @router.get("/me")
-def me(current: User = Depends(get_current_user)):
+def me(current: User = Depends(get_task_user)):
     return current.public()
+
+
+@router.post("/frontier-demo-session")
+def create_frontier_demo_session(request: Request, response: Response):
+    from backend.services import frontier_demo
+    from backend.llm.registry import build_frontier_demo_registry
+    if request_session_scope(request) != "public":
+        raise HTTPException(404, detail="Not found")
+    if not settings.frontier_demo_enabled:
+        raise HTTPException(503, detail={"code": "frontier_demo_disabled"})
+    response.headers["Cache-Control"] = "no-store"
+    scheme, bearer = get_authorization_scheme_param(request.headers.get("authorization"))
+    if bearer:
+        if scheme.lower() != "bearer":
+            raise HTTPException(401, detail={"code": "frontier_demo_session_expired"})
+        user, access = frontier_demo.renew_token(bearer)
+    else:
+        # Construction never calls the provider or consumes its model budget.
+        if build_frontier_demo_registry("frontier-demo-admission").pick_default() is None:
+            raise HTTPException(503, detail={"code": "frontier_demo_provider_unavailable"})
+        user = frontier_demo.issue_user()
+        access = frontier_demo.create_token(user)
+    return {"token": access, "token_type": "bearer",
+            "expires_in": max(0, int(decode_token(access)["exp"] - time.time())),
+            "user": user.public(), "synthetic_data_only": True}
+
+
+@router.post("/frontier-demo-session/end")
+def end_frontier_demo_session(response: Response, current: User = Depends(get_frontier_cleanup_user)):
+    """Discard only this guest's tasks through the normal durable cleanup path."""
+    from backend.services import task_facade
+    tasks = task_facade.list_tasks(owner_id=current.id)
+    for task_id in tasks:
+        task_facade.delete_task(task_id=task_id, owner_id=current.id)
+    with session_scope() as session:
+        row = session.scalar(select(UserRecord).where(UserRecord.id == current.id).with_for_update())
+        if row is not None:
+            row.is_active = False
+            row.auth_version += 1
+            row.auth_invalid_before = time.time()
+            row.updated_at = row.auth_invalid_before
+    response.headers["Cache-Control"] = "no-store"
+    return {"status": "ended", "cleanup": "queued", "tasks_removed": len(tasks)}
 
 
 class PasswordChangeRequest(BaseModel):

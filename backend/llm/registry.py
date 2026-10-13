@@ -110,20 +110,40 @@ class _SharedPoolUsageLimiter:
 _shared_pool_usage = _SharedPoolUsageLimiter()
 
 
+def shared_provider_configs() -> list[ProviderConfig]:
+    """One source for environment credentials, registry seeding and fingerprints."""
+    configs = []
+    for provider_type in ("gemini", "openai", "zhipu", "anthropic", "deepseek", "moonshot", "qwen"):
+        api_key = getattr(settings, provider_type + "_api_key")
+        if not api_key or (provider_type == "openai" and api_key == "YOUR_API_KEY_HERE"):
+            continue
+        configs.append(ProviderConfig(
+            provider_type=provider_type, api_key=api_key,
+            model=getattr(settings, provider_type + "_model"),
+            base_url=getattr(settings, provider_type + "_api_base", None),
+        ))
+    return configs
+
+
 class _GuardedSharedProvider:
     """Owner-bound provider proxy that charges every shared invocation."""
 
     is_shared_pool = True
 
-    def __init__(self, provider: BaseProvider, owner_id: str) -> None:
+    def __init__(self, provider: BaseProvider, owner_id: str, *, frontier_demo: bool = False) -> None:
         self._provider = provider
         self._owner_id = owner_id
+        self._frontier_demo = frontier_demo
         self.provider_id = provider.provider_id
         self.provider_type = provider.provider_type
         self.model = provider.model
         self.config = provider.config
 
     def _admit(self, messages: List[Any], *, image_count: int = 0) -> None:
+        if self._frontier_demo:
+            from backend.services.frontier_demo import admit_model_call
+            admit_model_call(self._owner_id, _shared_input_estimate(messages, image_count=image_count))
+            return
         if not settings.shared_pool_enabled:
             raise SharedPoolLimitError("shared_pool_disabled")
         _shared_pool_usage.consume(self._owner_id, messages, image_count=image_count)
@@ -155,68 +175,25 @@ class ExpertRegistry:
         *,
         seed_from_settings: bool = True,
         shared_owner_id: Optional[str] = None,
+        frontier_demo: bool = False,
     ) -> None:
         self._providers: Dict[str, BaseProvider] = {}  # keyed by provider_id
         self._configs: Dict[str, ProviderConfig] = {}  # keyed by provider_id
         self._verification: Dict[str, Dict[str, object]] = {}
         self._lock = Lock()
         self._shared_owner_id = shared_owner_id
+        self._frontier_demo = bool(frontier_demo and settings.frontier_demo_enabled)
         self._uses_shared_pool = bool(
-            seed_from_settings and settings.shared_pool_enabled
+            seed_from_settings and (settings.shared_pool_enabled or self._frontier_demo)
         )
-        if seed_from_settings and settings.shared_pool_enabled:
+        if self._uses_shared_pool:
             self._seed_from_settings()
             self._uses_shared_pool = bool(self._providers)
 
     def _seed_from_settings(self) -> None:
         """Populate from env vars at startup. User can override via API."""
-        if settings.gemini_api_key:
-            self._register_shared_setting(ProviderConfig(
-                provider_type="gemini",
-                api_key=settings.gemini_api_key,
-                model=settings.gemini_model,
-            ))
-        if settings.openai_api_key and settings.openai_api_key != "YOUR_API_KEY_HERE":
-            self._register_shared_setting(ProviderConfig(
-                provider_type="openai",
-                api_key=settings.openai_api_key,
-                model=settings.openai_model,
-                base_url=settings.openai_api_base,
-            ))
-        if settings.zhipu_api_key:
-            self._register_shared_setting(ProviderConfig(
-                provider_type="zhipu",
-                api_key=settings.zhipu_api_key,
-                model=settings.zhipu_model,
-                base_url=settings.zhipu_api_base,
-            ))
-        if settings.anthropic_api_key:
-            self._register_shared_setting(ProviderConfig(
-                provider_type="anthropic",
-                api_key=settings.anthropic_api_key,
-                model=settings.anthropic_model,
-            ))
-        if settings.deepseek_api_key:
-            self._register_shared_setting(ProviderConfig(
-                provider_type="deepseek",
-                api_key=settings.deepseek_api_key,
-                model=settings.deepseek_model,
-                base_url=settings.deepseek_api_base,
-            ))
-        if settings.moonshot_api_key:
-            self._register_shared_setting(ProviderConfig(
-                provider_type="moonshot",
-                api_key=settings.moonshot_api_key,
-                model=settings.moonshot_model,
-                base_url=settings.moonshot_api_base,
-            ))
-        if settings.qwen_api_key:
-            self._register_shared_setting(ProviderConfig(
-                provider_type="qwen",
-                api_key=settings.qwen_api_key,
-                model=settings.qwen_model,
-                base_url=settings.qwen_api_base,
-            ))
+        for config in shared_provider_configs():
+            self._register_shared_setting(config)
 
     def _register_shared_setting(self, config: ProviderConfig) -> None:
         try:
@@ -359,7 +336,7 @@ class ExpertRegistry:
     def _guard_shared(self, provider: Optional[BaseProvider]):
         if provider is None or not self._uses_shared_pool:
             return provider
-        return _GuardedSharedProvider(provider, self._shared_owner_id or "anonymous")
+        return _GuardedSharedProvider(provider, self._shared_owner_id or "anonymous", frontier_demo=self._frontier_demo)
 
     def _registry_id_for_provider(self, provider: BaseProvider) -> str | None:
         target = (
@@ -746,7 +723,16 @@ def get_expert_registry() -> ExpertRegistry:
     return _registry
 
 
+def build_frontier_demo_registry(owner_id: str) -> ExpertRegistry:
+    """Main's shared providers, with an independent anonymous admission switch."""
+    return ExpertRegistry(seed_from_settings=settings.frontier_demo_enabled,
+                          shared_owner_id=owner_id, frontier_demo=True)
+
+
 def _build_scoped_registry(current) -> ExpertRegistry:
+    from backend.services.frontier_demo import is_frontier_user
+    if is_frontier_user(current):
+        return build_frontier_demo_registry(current.id)
     owner_id = getattr(current, "id", None) or "anonymous"
     if current is None:
         return ExpertRegistry(shared_owner_id=owner_id)

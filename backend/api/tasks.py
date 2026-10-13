@@ -36,7 +36,7 @@ from pydantic import BaseModel, Field, ValidationError as PydanticValidationErro
 
 from backend.api.errors import domain_error_response
 from backend.analytics.admin_usage import track_usage_event
-from backend.auth import require_teacher
+from backend.auth import require_task_teacher as require_teacher
 from backend.db import (
     assignment_repository,
     grading_repository,

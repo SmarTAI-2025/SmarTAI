@@ -10,7 +10,7 @@ export interface PrimaryNavigationItem {
  * Settings and model configuration intentionally live in the account area.
  */
 export const PRIMARY_NAVIGATION = [
-  { to: "/", labelKey: "workspace" },
+  { to: "/dashboard", labelKey: "workspace" },
   { to: "/tasks/new", labelKey: "newTask" },
   { to: "/history", labelKey: "history" },
   { to: "/knowledge-base", labelKey: "courseLibrary" },
