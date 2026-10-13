@@ -52,6 +52,23 @@ describe("Current task Ask SmarTAI", () => {
     expect(screen.getByText("教材进度测试面板")).toBeInTheDocument();
   });
 
+  it("opens saved drafts directly and navigates all three tabs by keyboard without losing grading filters", () => {
+    mount("/history?view=drafts&sort=name_asc");
+    const drafts = screen.getByRole("tab", { name: "暂存草稿" });
+    expect(drafts).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByRole("region", { name: "暂存草稿" })).toBeInTheDocument();
+    expect(mocks.history).not.toHaveBeenCalled();
+    fireEvent.keyDown(drafts, { key: "ArrowLeft" });
+    expect(screen.getByRole("tab", { name: "教材识别" })).toHaveFocus();
+    expect(screen.getByText("教材进度测试面板")).toBeInTheDocument();
+    fireEvent.keyDown(screen.getByRole("tab", { name: "教材识别" }), { key: "Home" });
+    expect(screen.getByRole("tab", { name: "作业批改" })).toHaveFocus();
+    expect(mocks.history).toHaveBeenLastCalledWith(expect.objectContaining({ sort: "name_asc" }));
+    fireEvent.keyDown(screen.getByRole("tab", { name: "作业批改" }), { key: "End" });
+    expect(screen.getByRole("tab", { name: "暂存草稿" })).toHaveFocus();
+    expect(screen.getByRole("tabpanel")).toHaveAttribute("aria-labelledby", "drafts-history-tab");
+  });
+
   it("applies the semantic interpretation and shows its explanation", async () => {
     mocks.interpret.mockResolvedValue(interpretation);
     mount();

@@ -33,6 +33,7 @@ it("shows the book and processed count on the dashboard with a history link, wit
   expect(screen.getByText("已处理 24/100 页")).toBeInTheDocument();
   expect(screen.getByRole("progressbar")).toHaveAttribute("aria-valuenow", "24");
   expect(screen.getByRole("link", { name: "全部记录" })).toHaveAttribute("href", "/history?view=knowledge");
+  expect(screen.getByRole("link", { name: "课程资料库" })).toHaveAttribute("href", "/knowledge-base");
   expect(api.getJSON).toHaveBeenCalledTimes(1);
   expect(api.postJSON).not.toHaveBeenCalled();
 });
