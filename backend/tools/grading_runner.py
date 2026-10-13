@@ -331,4 +331,5 @@ async def run_grading_request(request: RunnerRequest) -> RunnerResult:
         stderr_truncated=stderr_truncated or raw.stderr_truncated,
         duration_ms=raw.duration_ms,
         resource_status=resource_status,
+        isolation_mode=raw.isolation_mode,
     )

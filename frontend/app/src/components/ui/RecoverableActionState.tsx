@@ -51,7 +51,7 @@ export function RecoverableActionState({
     ? { label: info.actionLabel, href: info.actionHref }
     : undefined);
   const secondary = workflowRecovery ? { label: workflowBackLabel(locale), href: workflowRecovery.configurationHref, state: workflowRecovery.configurationState, disabled: workflowRecovery.retry.busy } : secondaryAction;
-  const extras = [...(workflowRecovery && info.actionHref && info.actionHref !== workflowRecovery.configurationHref ? [{ label: info.actionLabel, href: info.actionHref }] : []), ...additionalActions];
+  const extras = [...(workflowRecovery && info.actionHref && info.actionHref !== workflowRecovery.configurationHref ? [{ label: info.actionLabel, href: info.actionHref }] : []), ...additionalActions].filter((action, index, items) => !action.href || items.findIndex(item => item.href === action.href) === index);
   const Icon = info.actionKind === "byok"
     ? KeyRound
     : info.actionKind === "reupload" || info.actionKind === "reselect"

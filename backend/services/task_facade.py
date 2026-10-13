@@ -702,6 +702,14 @@ def _grading_failure_code(run) -> str | None:
              for expert in (result.ai_expert_results or []) if isinstance(expert, dict)]
     if kinds and all(kind == "daily_quota_exhausted" for kind in kinds):
         return "provider_daily_quota_exceeded"
+    # Compatibility for already persisted runs from before this stable code.
+    legacy_execution_unavailable = any(
+        expert.get("error_kind") == "general" and expert.get("comment") ==
+        "该题未执行：生产环境禁止宿主代码执行。隔离执行尚未接通，请人工复核。"
+        for result in missing for expert in (result.ai_expert_results or []) if isinstance(expert, dict)
+    )
+    if "programming_execution_unavailable" in kinds or legacy_execution_unavailable:
+        return "programming_execution_unavailable"
     if "quota_exhausted" in kinds:
         return "provider_rate_limited"
     if "parse_failed" in kinds:
@@ -3866,7 +3874,7 @@ async def async_task_state(*, task_id: str, owner_id: str) -> dict:
         # A reporter can reach ``done`` before result persistence finishes.
         # Prefer the durable failed-run projection so clients never render a
         # stale success phase after the database marks the run failed.
-        if payload.get("status") == "grading" or grading_progress.get("phase") == "error":
+        if payload.get("status") == "grading" or grading_owns_failure:
             payload["progress"] = grading_progress
             payload["error"] = payload.get("error") or grading_progress.get("error_detail")
             if payload.get("status") == "grading":

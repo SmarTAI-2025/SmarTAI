@@ -386,10 +386,10 @@ def classify_skill_error(e: Exception) -> tuple[str, str]:
     from backend.llm.provider_limits import is_daily_quota_error
     if is_daily_quota_error(e):
         return ("daily_quota_exhausted", "该题未完成：服务商明确返回日额度耗尽。本轮已停止，不会自动跨天等待；请查看服务商用量或更换模型。")
-    if s == "host_code_execution_disabled":
+    if s in {"host_code_execution_disabled", "programming_execution_unavailable"}:
         return (
-            "general",
-            "该题未执行：生产环境禁止宿主代码执行。隔离执行尚未接通，请人工复核。",
+            "programming_execution_unavailable",
+            "该题未执行：隔离执行服务不可用，已保留其他成功结果。请联系管理员恢复执行服务后仅重试失败项，或人工复核。",
         )
     if (
         "quota" in s

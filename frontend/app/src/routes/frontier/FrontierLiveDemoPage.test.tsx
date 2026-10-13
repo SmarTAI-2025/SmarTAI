@@ -110,7 +110,7 @@ describe("FrontierLiveDemoPage", () => {
     await user.click(screen.getByRole("button", { name: "Change language" }));
     expect(getTaskState).toHaveBeenCalledTimes(2);
     await act(async () => recognition.resolve(taskState("problems_ready")));
-    expect(screen.getByRole("button", { name: "确认题目资料并继续" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "继续识别作答（保留待确认）" })).toBeEnabled();
     expect(screen.getByRole("button", { name: "重新开始" })).toBeEnabled();
     expect(getTask).toHaveBeenCalledTimes(1);
   });
@@ -137,7 +137,7 @@ describe("FrontierLiveDemoPage", () => {
     expect(screen.queryByText("late task failure")).not.toBeInTheDocument();
     expect(getTask).not.toHaveBeenCalled();
     await act(async () => nextRecognition.resolve({ ...taskState("problems_ready"), task_id: "asg_next" }));
-    expect(screen.getByRole("button", { name: /confirm question materials/i })).toBeEnabled();
+    expect(screen.getByRole("button", { name: /continue to submissions/i })).toBeEnabled();
     expect(screen.getByRole("link", { name: /^open task/i })).toHaveAttribute("href", "/tasks/asg_next");
   });
 
@@ -156,45 +156,37 @@ describe("FrontierLiveDemoPage", () => {
     expect(screen.getByText("Task details")).toBeInTheDocument();
     expect(getTask).not.toHaveBeenCalled();
     await user.click(screen.getByRole("link", { name: "Return to Demo" }));
-    expect(await screen.findByRole("button", { name: /confirm question materials/i })).toBeEnabled();
+    expect(await screen.findByRole("button", { name: /continue to submissions/i })).toBeEnabled();
     expect(getTask).toHaveBeenCalledTimes(1);
   });
 
-  it("stops the question confirmation loop when leaving for task details", async () => {
-    const confirmation = deferred<Awaited<ReturnType<typeof updateProblem>>>();
-    vi.mocked(getTaskState).mockResolvedValue(taskState("problems_ready"));
-    vi.mocked(getTask).mockResolvedValue(taskWithQuestions());
-    vi.mocked(updateProblem).mockReturnValue(confirmation.promise);
-    const user = userEvent.setup();
-    renderLive("asg_demo123");
-    await user.click(await screen.findByRole("button", { name: /confirm question materials/i }));
-    await waitFor(() => expect(updateProblem).toHaveBeenCalledTimes(1));
-    await user.click(screen.getByRole("link", { name: /^open task/i }));
-    await act(async () => confirmation.resolve({ status: "ok", q_id: "q1", problem: taskWithQuestions().problem_data.q1, workflow_revision: 2 }));
-    expect(screen.getByText("Task details")).toBeInTheDocument();
-    expect(updateProblem).toHaveBeenCalledTimes(1);
-    expect(parseSubmissions).not.toHaveBeenCalled();
-  });
-
-  it("does not start grading when its settings finish saving after leaving", async () => {
-    const saving = deferred<Awaited<ReturnType<typeof saveGradingSetup>>>();
+  it("navigates to settings without confirming answers or starting grading", async () => {
     const task = { ...taskWithQuestions(), student_data: recognizedStudents() };
-    for (const problem of Object.values(task.problem_data)) problem.review_status = "confirmed";
-    for (const student of Object.values(task.student_data)) {
-      for (const answer of student.stu_ans) answer.review_status = "confirmed";
-    }
     vi.mocked(getTaskState).mockResolvedValue(taskState("submissions_ready"));
     vi.mocked(getTask).mockResolvedValue(task);
-    vi.mocked(getGradingSetup).mockResolvedValue(gradingSetup());
-    vi.mocked(saveGradingSetup).mockReturnValue(saving.promise);
     const user = userEvent.setup();
     renderLive("asg_demo123");
-    await user.click(await screen.findByRole("button", { name: /confirm submissions and continue grading/i }));
-    await waitFor(() => expect(saveGradingSetup).toHaveBeenCalledTimes(1));
-    await user.click(screen.getByRole("link", { name: /^open task/i }));
-    await act(async () => saving.resolve({ ...gradingSetup(), configured: true, status: "saved" }));
-    expect(screen.getByText("Task details")).toBeInTheDocument();
+    await user.click((await screen.findAllByRole("button", { name: /open grading settings/i }))[0]);
+    expect(updateProblem).not.toHaveBeenCalled();
+    expect(updateStudentAnswer).not.toHaveBeenCalled();
+    expect(updateStudentIdentity).not.toHaveBeenCalled();
+    expect(saveGradingSetup).not.toHaveBeenCalled();
     expect(startGrading).not.toHaveBeenCalled();
+  });
+
+  it("retries a failed grading run in the same task without recognition or confirmation writes", async () => {
+    const failed = { ...taskState("error"), grading_job_id: "grading-job", last_failed_job_id: "grading-job", error: "provider_upstream_unavailable" };
+    vi.mocked(getTaskState).mockResolvedValue(failed);
+    vi.mocked(startGrading).mockResolvedValue({ status: "running", task_id: "asg_demo123", job_id: "retry-job" });
+    const user = userEvent.setup();
+    renderLive("asg_demo123");
+    await user.click(await screen.findByRole("button", { name: "Retry failed items" }));
+    await waitFor(() => expect(startGrading).toHaveBeenCalledExactlyOnceWith("asg_demo123", expect.objectContaining({ retryScope: "failed_only", expectedWorkflowRevision: failed.workflow_revision, requestId: expect.any(String) })));
+    expect(createTask).not.toHaveBeenCalled();
+    expect(startQuestionPreparation).not.toHaveBeenCalled();
+    expect(parseSubmissions).not.toHaveBeenCalled();
+    expect(updateProblem).not.toHaveBeenCalled();
+    expect(updateStudentAnswer).not.toHaveBeenCalled();
   });
 
   it("states the honest boundary between synthetic inputs and live processing", () => {
@@ -232,7 +224,7 @@ describe("FrontierLiveDemoPage", () => {
       </I18nProvider>,
     );
 
-    expect(await screen.findByText(/已超出每日体验限额/)).toBeInTheDocument();
+    expect(await screen.findByText(/额度/)).toBeInTheDocument();
     expect(screen.queryByText(/submission_parse_failed/i)).not.toBeInTheDocument();
     expect(screen.getByText("识别混合作答").closest("li")).toHaveClass("border-danger/30");
     expect(screen.getByText("创建专属 Demo 任务").closest("li")).toHaveClass("border-accent/25");
@@ -251,7 +243,7 @@ describe("FrontierLiveDemoPage", () => {
       </I18nProvider>,
     );
 
-    expect(await screen.findByText(/The model service is temporarily unavailable/)).toBeInTheDocument();
+    expect(await screen.findByText(/Cannot reach the model service/)).toBeInTheDocument();
     expect(screen.getByText("Prepare and confirm questions").closest("li")).toHaveClass("border-danger/30");
     expect(screen.getByText("Create a dedicated demo task").closest("li")).toHaveClass("border-accent/25");
     expect(screen.getByText("Recognize mixed submissions").closest("li")).not.toHaveClass("border-danger/30");
@@ -280,7 +272,7 @@ describe("FrontierLiveDemoPage", () => {
       </I18nProvider>,
     );
 
-    expect(await screen.findByText(/The model service is temporarily unavailable/)).toBeInTheDocument();
+    expect(await screen.findByText(/Cannot reach the model service/)).toBeInTheDocument();
     expect(screen.getByText(failedStep).closest("li")).toHaveClass("border-danger/30");
     expect(screen.getByText("Create a dedicated demo task").closest("li")).toHaveClass("border-accent/25");
     expect(getTask).not.toHaveBeenCalled();
@@ -322,7 +314,7 @@ describe("FrontierLiveDemoPage", () => {
     expect(await screen.findByRole("heading", { name: /review this run's generated materials/i })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /resume this task/i })).not.toBeInTheDocument();
     expect(screen.queryByText(/teacher rubric confirmed/i)).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /confirm question materials and continue/i })).toHaveClass("h-12", "bg-primary");
+    expect(screen.getByRole("button", { name: /continue to submissions/i })).toHaveClass("h-12", "bg-primary");
     expect(screen.getByRole("button", { name: /start over/i })).toHaveClass("h-9", "bg-card");
   });
 
@@ -417,11 +409,11 @@ describe("FrontierLiveDemoPage", () => {
     await user.click(screen.getByRole("button", { name: /start real OCR \+ grading/i }));
 
     await waitFor(() => expect(startQuestionPreparation).toHaveBeenCalledTimes(1));
-    const confirmTeacherMaterials = await screen.findByRole("button", { name: /confirm generated materials and continue live OCR/i });
+    const confirmTeacherMaterials = await screen.findByRole("button", { name: /continue to submissions/i });
     expect(parseSubmissions).not.toHaveBeenCalled();
     expect(screen.getByText(/come from this live preparation run/i)).toBeInTheDocument();
     await user.click(confirmTeacherMaterials);
-    await waitFor(() => expect(updateProblem).toHaveBeenCalledTimes(4));
+    expect(updateProblem).not.toHaveBeenCalled();
     await waitFor(() => expect(parseSubmissions).toHaveBeenCalledTimes(1));
     expect(saveGradingSetup).not.toHaveBeenCalled();
     expect(await screen.findByRole("heading", { name: /inspect this run's recognized submissions/i })).toBeInTheDocument();
@@ -437,45 +429,16 @@ describe("FrontierLiveDemoPage", () => {
     expect(alexCard).not.toBeNull();
     expect(within(alexCard!).getAllByText(/^Q[1-4]$/u).map((label) => label.textContent))
       .toEqual(["Q1", "Q2", "Q3", "Q4"]);
-    await user.click(screen.getByRole("button", { name: /continue to live grading/i }));
-    await waitFor(() => expect(saveGradingSetup).toHaveBeenCalledTimes(1));
-    await waitFor(() => expect(startGrading).toHaveBeenCalledTimes(1));
-    await screen.findByText("16 answer units processed");
-    expect(await screen.findByRole("heading", { name: /see class performance from live scores/i })).toBeInTheDocument();
-    expect(screen.getByLabelText(/live result chart carousel/i)).toBeInTheDocument();
-    expect(screen.getByRole("heading", { name: /compare total score rates/i })).toBeInTheDocument();
-    await user.click(screen.getByRole("tab", { name: "02" }));
-    expect(screen.getByRole("heading", { name: /where the class scores fall/i })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /pause autoplay/i })).toBeInTheDocument();
+    await user.click(screen.getAllByRole("button", { name: /open grading settings/i })[0]);
     expect(createTask).toHaveBeenCalledTimes(1);
     expect(preflightProblemSource).toHaveBeenCalledTimes(1);
     expect(startQuestionPreparation).toHaveBeenCalledTimes(1);
-    expect(updateProblem).toHaveBeenCalledTimes(4);
     expect(parseSubmissions).toHaveBeenCalledTimes(1);
-    expect(saveGradingSetup).toHaveBeenCalledTimes(1);
-    expect(startGrading).toHaveBeenCalledTimes(1);
-    expect(saveGradingSetup).toHaveBeenCalledWith(expect.objectContaining({
-      gradingSetup: expect.objectContaining({ feedback_language: "en" }),
-    }));
-    expect(updateProblem).toHaveBeenCalledWith(
-      "asg_demo123",
-      "q2",
-      expect.objectContaining({ stem: "Recognized Q2 wording from the live extraction." }),
-    );
-    expect(updateProblem).toHaveBeenCalledWith(
-      "asg_demo123",
-      "q4",
-      expect.objectContaining({
-        solution_code: expect.stringContaining("def stable_softmax"),
-        criterion: "Generated rubric for q4",
-        reference_answer: "Generated answer for q4",
-      }),
-    );
-    expect(startQuestionPreparation).toHaveBeenCalledWith(expect.objectContaining({
-      scorePolicy: expect.objectContaining({ mode: "per_question" }),
-    }));
-    expect(screen.queryByText(/static score has been substituted/i)).not.toBeInTheDocument();
-    await waitFor(() => expect(screen.getByText(/provider Demo Vision/)).toBeInTheDocument());
+    expect(updateProblem).not.toHaveBeenCalled();
+    expect(updateStudentAnswer).not.toHaveBeenCalled();
+    expect(saveGradingSetup).not.toHaveBeenCalled();
+    expect(startGrading).not.toHaveBeenCalled();
+
   });
 });
 

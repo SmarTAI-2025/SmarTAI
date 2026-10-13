@@ -122,7 +122,10 @@ def build_container_command(
         "--workdir=/work",
         (
             "--tmpfs=/work:rw,nosuid,nodev,noexec,"
-            f"size={DEFAULT_TMPFS_MB}m,mode=0700,uid=65534,gid=65534"
+            f"size={DEFAULT_TMPFS_MB}m,"
+            # Podman 4.9 rejects uid/gid tmpfs options. The work mount is
+            # private to this one non-root container; sticky mode is sufficient.
+            + ("mode=1777" if runtime_name == "podman" else "mode=0700,uid=65534,gid=65534")
         ),
         mount_option,
         "--env=HOME=/work",

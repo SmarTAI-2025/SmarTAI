@@ -1,4 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
+import type { ProblemInfo } from "../src/types";
 
 const backend = process.env.SMARTAI_E2E_BACKEND_URL ?? "http://127.0.0.1:8000";
 const task = {
@@ -11,7 +12,7 @@ const task = {
     review_status: "needs_review",
     solution_code: n === 4 ? "def answer(): return 42" : null,
     test_cases: n === 4 ? [{ input: "[]", expected_output: "42", description: "Synthetic test", source: "llm_generated", sandbox_feasible: true }] : null,
-  }])),
+  } satisfies ProblemInfo])),
   student_data: {},
 };
 
@@ -90,8 +91,38 @@ test("switching language while restoring recognition releases the workflow contr
   await received.promise;
   await page.getByRole("button", { name: "Switch to Chinese", exact: true }).click();
   recognition.resolve();
-  await expect(page.getByRole("button", { name: "确认题目资料并继续", exact: true })).toBeEnabled();
+  await expect(page.getByRole("button", { name: "继续识别作答（保留待确认）", exact: true })).toBeEnabled();
   await expect(page.getByRole("button", { name: "重新开始", exact: true })).toBeEnabled();
   expect(polls).toBe(3);
+  expect(errors).toEqual([]);
+});
+
+test('Full Workflow opens fixed metadata and preloaded source pages without implicit recognition', async ({ page }) => {
+  const errors = await guest(page);
+  const writes: string[] = [];
+  const draft = { ...task, name: 'Preset Demo', status: 'draft', problem_count: 0, student_count: 0, problem_data: {}, semester_id: '2026-fall' };
+  await page.route(`${backend}/**`, async route => {
+    const request = route.request(), path = new URL(request.url()).pathname;
+    if (request.method() === 'POST' || request.method() === 'PUT') writes.push(path);
+    if (path === '/auth/me') return route.fulfill({ json: { id: 'guest-owner', username: 'Guest', role: 'teacher', is_active: true } });
+    if (path === '/tasks/' || path === `/tasks/${task.task_id}` || path === `/tasks/${task.task_id}/state`) return route.fulfill({ json: draft });
+    return route.fulfill({ json: [] });
+  });
+  await page.goto('/frontier/live');
+  await page.getByRole('link', { name: 'Full Workflow', exact: true }).click();
+  await expect(page).toHaveURL(new RegExp(`/tasks/${task.task_id}/edit$`));
+  await expect(page.locator('#new-task-name')).toHaveValue('Preset Demo');
+  await expect(page.locator('#new-task-name')).toBeDisabled();
+  await expect(page.locator('form')).toHaveAttribute('title', /preset details and files are fixed/);
+  await page.goto(`/tasks/${task.task_id}/upload/problems`);
+  await expect(page.getByText('question_source.pdf', { exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Demo files cannot be replaced' })).toBeDisabled();
+  await expect(page.locator('input[type=file]')).toHaveCount(0);
+  await page.goto(`/tasks/${task.task_id}/submissions/upload`);
+  await expect(page.getByText('submissions_raw.zip', { exact: true })).toBeVisible();
+  await page.getByRole('button', { name: 'Switch to Chinese', exact: true }).click();
+  await expect(page.getByRole('button', { name: '演示文件不可替换' })).toBeDisabled();
+  await expect(page.getByRole('link', { name: '详细流程', exact: true })).toBeVisible();
+  expect(writes).toEqual(['/tasks/']);
   expect(errors).toEqual([]);
 });

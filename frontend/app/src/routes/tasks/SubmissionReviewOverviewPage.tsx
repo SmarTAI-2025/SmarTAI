@@ -220,7 +220,7 @@ export function SubmissionReviewOverviewPage() {
             label={t("submissionReviewMetricReview")}
             value={String(stats.reviewCells)}
             detail={locale === "zh-CN" ? t("submissionReviewMetricCells") : stats.reviewCells === 1 ? "response" : "responses"}
-            tone={stats.reviewCells > 0 ? "danger" : "accent"}
+            tone={queueItems.some(item => item.severity === "blocking") ? "danger" : "primary"}
           />
           <ReviewMetric
             label={t("submissionReviewMetricIdentityIssues")}
@@ -311,14 +311,14 @@ export function SubmissionReviewOverviewPage() {
                   </section>
                 )}
                 queue={(
-                  <SubmissionReviewQueue items={queueItems} t={t} />
+                  <SubmissionReviewQueue confirmation={<ReviewConfirmButton locale={locale} all confirmed={!pendingReviews.length && !submissionReviewBlockers(taskQuery.data, locale).length} busy={batchProgress !== null} onClick={() => void confirmAll()} />} items={queueItems} t={t} />
                 )}
               />
 
               <ReviewStageActions
                 note={locale === "zh-CN" ? `显示 ${selection.students.length}/${students.length} 位学生 · ${selection.questions.length}/${questions.length} 道题` : `Showing ${selection.students.length}/${students.length} students · ${selection.questions.length}/${questions.length} questions`}
-                confirmation={<ReviewConfirmButton locale={locale} all confirmed={!pendingReviews.length && !submissionReviewBlockers(taskQuery.data, locale).length} busy={batchProgress !== null} onClick={() => void confirmAll()} />}
-                back={{ href: `/tasks/${taskId}/submissions/upload`, label: locale === "zh-CN" ? "返回上传作答" : "Back to Upload Submissions" }}
+
+                back={{ href: `/tasks/${taskId}/students/${encodeURIComponent(Object.values(taskQuery.data?.student_data ?? {})[0]?.stu_id ?? "")}`, label: locale === "zh-CN" ? "查看作答详情" : "View Submission Details" }}
                 next={{ label: t("submissionReviewEnterGradingSetup"), disabled: batchProgress !== null, onClick: () => {
                   const issues = submissionReviewBlockers(taskQuery.data, locale);
                   if (issues.length) setBlocked(issues);
@@ -486,24 +486,26 @@ function AnswerStatusLink({
 function SubmissionReviewQueue({
   items,
   t,
+  confirmation,
 }: {
+  confirmation: React.ReactNode;
   items: SubmissionQueueItem[];
   t: (key: MessageKey) => string;
 }) {
   return (
-    <section className="h-[330px] overflow-hidden rounded-[10px] border bg-card px-4 py-5" aria-labelledby="submission-review-queue-title">
+    <section className="flex h-[330px] flex-col overflow-hidden rounded-[10px] border bg-card px-4 py-5" aria-labelledby="submission-review-queue-title">
       <h2 id="submission-review-queue-title" className="text-[16px] font-bold leading-6 text-foreground">
         {t("submissionReviewQueueTitle")}
       </h2>
       {!items.length ? (
-        <div className="flex h-[248px] flex-col items-center justify-center text-center">
+        <div className="flex min-h-0 flex-1 flex-col items-center justify-center text-center">
           <CheckCircle2 aria-hidden="true" className="h-7 w-7 text-teal-500" />
           <p className="mt-3 max-w-[220px] text-[12px] leading-5 text-muted-foreground">
             {t("submissionReviewQueueEmpty")}
           </p>
         </div>
       ) : (
-        <ol className="mt-3 h-[250px] space-y-1 overflow-y-auto overscroll-contain pr-1">
+        <ol className="mt-3 min-h-0 flex-1 space-y-1 overflow-y-auto overscroll-contain pr-1">
           {items.map((item) => (
             <li key={item.key}>
               <Link
@@ -522,6 +524,7 @@ function SubmissionReviewQueue({
           ))}
         </ol>
       )}
+      <div className="mt-auto flex justify-end border-t pt-3">{confirmation}</div>
     </section>
   );
 }

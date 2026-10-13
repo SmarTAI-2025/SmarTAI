@@ -55,14 +55,14 @@ it("counts ordinary and flagged pending responses consistently, then clears both
   render(<QueryClientProvider client={client}><I18nProvider><MemoryRouter initialEntries={["/tasks/T/submissions"]}><Routes><Route path="/tasks/:taskId/submissions" element={<SubmissionReviewOverviewPage />} /></Routes></MemoryRouter></I18nProvider></QueryClientProvider>);
   const queue = screen.getByRole("region", { name: "待复核队列" });
   expect(within(queue).queryByRole("link")).not.toBeInTheDocument();
-  expect(screen.getByText("待复核题次").parentElement).toHaveTextContent("2");
+  expect(screen.getByText("待确认题次").parentElement).toHaveTextContent("2");
   expect(screen.getAllByRole("link", { name: /^待确认/ })).toHaveLength(2);
   expect(screen.getAllByRole("link", { name: /^待确认/ }).every(link => link.classList.contains("bg-emerald-100"))).toBe(true);
   await userEvent.click(screen.getByRole("button", { name: "全部确认" }));
   await waitFor(() => expect(screen.getByRole("button", { name: "已确认" })).toBeDisabled());
   expect(within(queue).queryByRole("link")).not.toBeInTheDocument();
   expect(screen.getAllByRole("link", { name: "已确认" })).toHaveLength(2);
-  expect(screen.getByText("待复核题次").parentElement).toHaveTextContent("0");
+  expect(screen.getByText("待确认题次").parentElement).toHaveTextContent("0");
   expect(vi.mocked(api.updateStudentAnswer).mock.calls.map(call => call[3].expected_workflow_revision)).toEqual([1, 2]);
   client.clear();
 });

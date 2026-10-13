@@ -1,9 +1,8 @@
 """
 Sandboxed code interpreter tool for grading programming questions.
 
-Per docs §4.2.1, should use Docker or subprocess sandbox to run student code
-against test cases. This initial implementation uses subprocess with strict
-resource limits. Docker support can be added later via the same interface.
+Run student code against test cases. Configured production uses the rootless
+OCI transport; development/test can retain the historical subprocess path.
 
 SAFETY: Host execution is disabled when runtime_environment=production.
 Development/test subprocesses are not isolation against hostile code. Formal
@@ -72,6 +71,7 @@ class TestResult:
     exit_reason: str = ""
     stdout_truncated: bool = False
     stderr_truncated: bool = False
+    isolation_mode: str = "host_subprocess"
 
 
 @dataclass
@@ -111,9 +111,12 @@ async def run_python_subprocess(
     are alive at once. Without this guard the grading pipeline can spawn
     hundreds of processes (students × questions × test cases) and OOM the host.
     """
-    # Resource limits are not filesystem/network isolation. Until the formal
-    # OCI adapter is connected, production must fail closed, not run code on
-    # the application host or turn infrastructure unavailability into 0/N.
+    # Resource limits alone are not filesystem/network isolation. Production
+    # uses OCI or reports an infrastructure error, never a host fallback or 0/N.
+    if settings.program_runner_mode == "oci":
+        from backend.tools.oci_grading_runner import run_python_oci
+        return await run_python_oci(code, test_input, timeout=timeout,
+                                    memory_mb=memory_mb, max_output_chars=max_output_chars or 8192)
     if settings.runtime_environment == "production":
         raise HostCodeExecutionDisabled()
     sem = get_sandbox_semaphore()

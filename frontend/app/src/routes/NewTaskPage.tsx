@@ -1,3 +1,5 @@
+import { useFrontierWorkspace } from "@/lib/frontierContext";
+import { demoLockedText } from "@/lib/frontierFixtures";
 import { ArrowRight, LoaderCircle, Save } from "lucide-react";
 import {
   useEffect,
@@ -111,6 +113,7 @@ function NewTaskForm({ scope, taskQuery }: { scope: string; taskQuery: ReturnTyp
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setFormError(null);
+    if (frontier && taskId) { navigate(`/tasks/${taskId}/upload/problems`); return; }
     if (draft.protection.conflict) { setFormError("请先核对服务器变化，明确恢复或删除旧草稿。"); return; }
     const trimmedName = name.trim();
     if (!trimmedName) {
@@ -205,8 +208,9 @@ function NewTaskForm({ scope, taskQuery }: { scope: string; taskQuery: ReturnTyp
       <TaskMetadataHeading editing={isEditing} />
       <NewTaskStepper currentStep={0} reachableStep={reachableStep} returnState={location.state} />
 
-      <form data-draft-width="900" id="new-task-form" onSubmit={handleSubmit} className="mx-auto mt-[35px] min-h-[510px] w-full max-w-[900px] rounded-[8px] border bg-card p-5 sm:p-10 xl:px-[49px] xl:pb-[39px] xl:pt-[39px]">
-        <div className="grid gap-5 xl:block">
+      <form title={frontier ? demoLockedText(locale) : undefined} data-draft-width="900" id="new-task-form" onSubmit={handleSubmit} className="mx-auto mt-[35px] min-h-[510px] w-full max-w-[900px] rounded-[8px] border bg-card p-5 sm:p-10 xl:px-[49px] xl:pb-[39px] xl:pt-[39px]">
+        {frontier ? <p className="mb-5 text-sm text-muted-foreground">{demoLockedText(locale)}</p> : null}
+        <fieldset disabled={frontier} className="grid gap-5 xl:block">
           <div>
             <label htmlFor="new-task-name" className="block text-[14px] font-semibold leading-5 text-foreground">{t("newTaskNameLabel")}</label>
             <input
@@ -286,7 +290,7 @@ function NewTaskForm({ scope, taskQuery }: { scope: string; taskQuery: ReturnTyp
           </div>
 
           {formError ? <div role="alert" className="rounded-[6px] border border-danger/30 bg-red-50 px-3 py-2 text-xs text-danger dark:bg-red-950/30 xl:mt-[19px]">{formError}</div> : null}
-        </div>
+        </fieldset>
       </form>
 
       <div className="mx-auto mt-[30px] flex w-full max-w-[900px] justify-end xl:pr-[10px]">
@@ -294,7 +298,7 @@ function NewTaskForm({ scope, taskQuery }: { scope: string; taskQuery: ReturnTyp
           {isSaving ? <LoaderCircle aria-hidden="true" className="h-4 w-4 animate-spin" /> : null}
           {isSaving
             ? t(isEditing ? "newTaskSavingTask" : "newTaskCreatingTask")
-            : t(isEditing ? "newTaskSaveAndReturn" : "newTaskCreateAndAdd")}
+            : frontier ? (locale === "zh-CN" ? "进入上传题目" : "Continue to Questions") : t(isEditing ? "newTaskSaveAndReturn" : "newTaskCreateAndAdd")}
           {!isSaving ? (isEditing
             ? <Save aria-hidden="true" className="h-4 w-4" />
             : <ArrowRight aria-hidden="true" className="h-4 w-4" />) : null}
@@ -369,4 +373,3 @@ function useDebouncedValue(value: string, delay: number): string {
 function createIdempotencyKey(): string {
   return globalThis.crypto?.randomUUID?.() ?? `task-${Date.now()}-${Math.random().toString(16).slice(2)}`;
 }
-import { useFrontierWorkspace } from "@/lib/frontierContext";

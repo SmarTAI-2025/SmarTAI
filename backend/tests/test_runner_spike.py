@@ -75,6 +75,7 @@ def test_podman_command_disables_implicit_writable_tmpfs_and_proxy_env(
         memory_mb=256,
     )
 
+    assert any("mode=1777" in item and "uid=" not in item for item in command if item.startswith("--tmpfs="))
     assert "--read-only-tmpfs=false" in command
     assert "--http-proxy=false" in command
     assert "--security-opt=no-new-privileges" in command

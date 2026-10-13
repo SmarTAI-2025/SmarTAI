@@ -18,7 +18,7 @@ async def test_production_host_execution_is_rejected_before_any_process_or_file(
         await code_interpreter.run_python_subprocess("print(1)")
     launch.assert_not_called()
     kind, message = classify_skill_error(code_interpreter.HostCodeExecutionDisabled())
-    assert kind == "general" and "未执行" in message
+    assert kind == "programming_execution_unavailable" and "未执行" in message
 
 
 @pytest.mark.asyncio
@@ -28,7 +28,7 @@ async def test_programming_unavailable_is_a_failed_expert_not_student_test_failu
     provider = _fake_provider()
     result = await ProgrammingSkill(provider).grade(problem, _make_answer("print(sum(map(int, input().split())))"))
     assert result.confidence == 0
-    assert result.error_kind == "general"
+    assert result.error_kind == "programming_execution_unavailable"
     assert "未执行" in result.comment
     assert "0/" not in result.comment
     provider.ainvoke.assert_not_called()

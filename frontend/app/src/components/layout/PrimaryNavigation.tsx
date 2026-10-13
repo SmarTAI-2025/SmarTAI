@@ -3,7 +3,7 @@ import { PRIMARY_NAVIGATION } from "@/components/layout/navigation";
 import { useI18n } from "@/i18n/I18nProvider";
 import { cn } from "@/lib/cn";
 import { useFrontierWorkspace } from "@/lib/frontierContext";
-import { taskWorkspacePath } from "@/lib/frontierSession";
+import { isFrontierTaskPath, taskWorkspacePath } from "@/lib/frontierSession";
 
 interface PrimaryNavigationProps {
   className?: string;
@@ -17,10 +17,19 @@ export function PrimaryNavigation({
   mobile = false,
   onNavigate,
 }: PrimaryNavigationProps) {
-  const { t } = useI18n();
+  const { t, locale } = useI18n();
   const location = useLocation();
   const frontier = useFrontierWorkspace();
-  if (frontier) return <nav aria-label={t("primaryNavigation")} className={className}><NavLink to={location.pathname === "/frontier/live" ? `${location.pathname}${location.search}` : taskWorkspacePath(location.pathname.split("/")[2])} onClick={onNavigate} className={cn("rounded-lg px-4 font-semibold text-primary", mobile ? "py-3" : "py-2.5")}>Demo</NavLink></nav>;
+  if (frontier) {
+    const requestedId = location.pathname === "/frontier/live"
+      ? new URLSearchParams(location.search).get("taskId") : location.pathname.split("/")[2];
+    const taskId = requestedId && isFrontierTaskPath(`/tasks/${requestedId}`) ? requestedId : null;
+    const brief = taskId ? taskWorkspacePath(taskId) : "/frontier/live";
+    const detailed = taskId ? `/tasks/${encodeURIComponent(taskId)}/edit` : "/frontier/live?workflow=full";
+    return <nav aria-label={t("primaryNavigation")} className={className}>
+      {[{ href: brief, label: locale === "zh-CN" ? "简明演示" : "Quick Demo" }, { href: detailed, label: locale === "zh-CN" ? "详细流程" : "Full Workflow" }].map(item => <NavLink key={item.href} to={item.href} onClick={onNavigate} className={cn("rounded-lg px-4 text-[13px] font-semibold text-primary", mobile ? "py-3" : "py-2.5")}>{item.label}</NavLink>)}
+    </nav>;
+  }
 
   return (
     <nav aria-label={t("primaryNavigation")} className={className}>

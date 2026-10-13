@@ -88,6 +88,7 @@ SAFE_BACKGROUND_ERROR_CODES = frozenset({
     "no_answer_content_detected",
     "no_matching_answer",
     "grading_failed",
+    "programming_execution_unavailable",
     "grading_inputs_changed",
     "grading_persistence_failed",
     "grading_provider_configuration_changed",

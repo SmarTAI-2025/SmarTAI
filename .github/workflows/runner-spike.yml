@@ -5,6 +5,9 @@ on:
     paths:
       - "tools/runner_spike/**"
       - "backend/tools/grading_runner.py"
+      - "backend/tools/oci_grading_runner.py"
+      - "backend/tools/code_interpreter.py"
+      - "backend/tests/test_oci*.py"
       - "backend/tests/test_runner_spike.py"
       - ".github/workflows/runner-spike.yml"
       - ".python-version"
@@ -13,6 +16,9 @@ on:
     paths:
       - "tools/runner_spike/**"
       - "backend/tools/grading_runner.py"
+      - "backend/tools/oci_grading_runner.py"
+      - "backend/tools/code_interpreter.py"
+      - "backend/tests/test_oci*.py"
       - "backend/tests/test_runner_spike.py"
       - ".github/workflows/runner-spike.yml"
       - ".python-version"
@@ -35,3 +41,15 @@ jobs:
         run: python tools/runner_spike/harness.py build --runtime docker
       - name: Probe env, network, directory and process isolation
         run: python tools/runner_spike/harness.py probe --runtime docker --json
+      - name: Install pinned backend test dependencies
+        run: |
+          python -m pip install --require-hashes --only-binary=:all: -r requirements-dev.txt
+      - name: Test the application adapter against the real OCI runtime
+        env:
+          SMARTAI_OCI_REAL_TEST: "1"
+          SMARTAI_RUNTIME_ENVIRONMENT: test
+          SMARTAI_PROGRAM_RUNNER_IMAGE: smartai-runner-spike:week1
+        run: python -m pytest backend/tests/test_oci_real_runtime.py -q
+      - name: Check container cleanup
+        if: always()
+        run: test -z "$(docker ps -aq --filter label=smartai.isolated-runner=true)"

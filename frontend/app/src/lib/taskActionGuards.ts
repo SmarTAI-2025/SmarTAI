@@ -620,6 +620,20 @@ export function classifyRecoverableError(
     };
   }
 
+  if (code === "programming_execution_unavailable") {
+    return {
+      title: tx(locale, "编程题未执行：隔离执行服务不可用", "Programming item not executed: isolated runner unavailable"),
+      description: tx(locale,
+        "已有成功结果已保留。编程题没有运行测试，不能把未执行当作学生答错。请联系管理员恢复隔离执行服务后仅重试失败项，或查看结果并人工补齐分数。",
+        "Successful results are preserved. Tests were not run, so this is not a failed student test. Ask an administrator to restore the isolated runner, then retry only failed items, or review the results and enter the missing score."),
+      actionLabel: tx(locale, "查看结果并补分", "Review results and enter scores"),
+      actionKind: "refresh",
+      actionHref: taskId ? `/tasks/${taskId}/review?resolveFailures=1` : undefined,
+      tone: "danger",
+      technicalDetails,
+    };
+  }
+
   if (code === "grading_failed") {
     return {
       title: tx(locale, "本次批改没有完成", "This grading run did not finish"),

@@ -101,8 +101,8 @@ describe("one-click grading review", () => {
     state.task.status = "finalized";
     show();
     const actions = document.querySelector('[data-review-stage-actions]') as HTMLElement;
-    expect(actions.querySelectorAll('button,a')).toHaveLength(3);
-    await userEvent.click(within(actions).getByRole("button", { name: "Confirm all" }));
+    expect(actions.querySelectorAll('button,a')).toHaveLength(2);
+    await userEvent.click(within(screen.getByRole("region", { name: "Review queue" })).getByRole("button", { name: "Confirm all" }));
     expect(state.bulk).toHaveBeenCalledTimes(1);
     expect(state.finalize).not.toHaveBeenCalled();
   });
@@ -134,10 +134,11 @@ describe("one-click grading review", () => {
   it.each([false, true])("keeps confirmation and results navigation separate in detail=%s", async detail => {
     show(detail);
     const actions = document.querySelector("[data-review-stage-actions]") as HTMLElement;
-    expect(actions.children).toHaveLength(3);
-    expect(actions.children[0]).toHaveTextContent("Confirm all");
-    expect(actions.children[1]).toHaveTextContent(detail ? "Back to Review Overview" : "Back to Grading Setup");
-    expect(actions.children[2]).toHaveTextContent("View Results & Analysis");
+    expect(actions.children).toHaveLength(detail ? 3 : 2);
+    if (detail) expect(actions.children[0]).toHaveTextContent("Confirm all");
+    else expect(within(screen.getByRole("region", { name: "Review queue" })).getByRole("button", { name: "Confirm all" })).toBeVisible();
+    expect(actions.children[detail ? 1 : 0]).toHaveTextContent(detail ? "Back to Review Overview" : "View Grading Details");
+    expect(actions.children[detail ? 2 : 1]).toHaveTextContent("View Results & Analysis");
     Array.from(actions.children).forEach(button => expect(button).toHaveClass("h-10", "rounded-lg"));
     if (detail) {
       expect(within(document.querySelector('[data-question-id="Q1"]') as HTMLElement).getAllByRole("button", { name: /Q1.*Confirm review/ })).toHaveLength(1);

@@ -1,3 +1,8 @@
+import { QUESTION_FIXTURE, SUBMISSION_FIXTURE, DEMO_SCORE_POLICY, fixtureFile } from "@/lib/frontierFixtures";
+import { RecoverableActionState } from "@/components/ui/RecoverableActionState";
+import { classifyRecoverableError } from "@/lib/taskActionGuards";
+import { useGradingIntent } from "@/hooks/useGradingIntent";
+import { getCurrentSemesterId } from "@/lib/semesters";
 import {
   Activity,
   ArrowRight,
@@ -19,7 +24,7 @@ import {
 import { useEffect, useRef, useState } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { getAPIErrorCode, normalizeAPIError } from "@/api/client";
-import { getGradingSetup, saveGradingSetup } from "@/api/gradingSetup";
+import { getGradingSetup } from "@/api/gradingSetup";
 import { preflightProblemSource, startQuestionPreparation } from "@/api/problemSources";
 import {
   createTask,
@@ -28,9 +33,6 @@ import {
   getTaskState,
   parseSubmissions,
   startGrading,
-  updateProblem,
-  updateStudentAnswer,
-  updateStudentIdentity,
 } from "@/api/tasks";
 import { SmarTAIAppMark, SmarTAIWordmark } from "@/components/brand/SmarTAIBrand";
 import { Button } from "@/components/ui/Button";
@@ -44,18 +46,14 @@ import { useI18n } from "@/i18n/I18nProvider";
 import type { Locale } from "@/i18n/messages";
 import { cn } from "@/lib/cn";
 import { getFrontierGeneration, isFrontierExitPending, isFrontierTaskPath, rememberFrontierTask } from "@/lib/frontierSession";
-import { submissionReviewBlockers } from "@/lib/reviewConfirmation";
+import { submissionReviewBlockers, questionReviewBlockers } from "@/lib/reviewConfirmation";
 import "./frontier.css";
-import type { GradingSetup, ProblemInfo, Task, TaskResultResponse, TaskStateSnapshot, TaskStatus } from "@/types";
+import type { ProblemInfo, Task, TaskResultResponse, TaskStateSnapshot, TaskStatus } from "@/types";
 
-const QUESTION_FIXTURE = "/frontier-demo/live/question_source.pdf";
-const SUBMISSION_FIXTURE = "/frontier-demo/live/submissions_raw.zip";
 const HANDWRITTEN_FIXTURE = "/frontier-demo/live/DEMO-002_handwritten_raw.png";
-const FIXTURE_MANIFEST = "/frontier-demo/manifest.json";
 const POLL_INTERVAL_MS = 1_500;
 const WORKFLOW_TIMEOUT_MS = 8 * 60 * 1_000;
 const EXPECTED_DEMO_QUESTION_COUNT = 4;
-const DEMO_SCORE_POLICY = "Q1: 5 points; Q2: 8 points; Q3: 7 points; Q4: 10 points.";
 
 type RunStepId = "task" | "questions" | "submissions" | "grading";
 type RunStepState = "waiting" | "active" | "complete" | "error";
@@ -86,6 +84,7 @@ function initialSteps(locale: Locale): RunStep[] {
 export function FrontierLiveDemoPage() {
   const { locale } = useI18n();
   const navigate = useNavigate();
+  const retryIntent = useGradingIntent();
   const [searchParams] = useSearchParams();
   const taskIdFromUrl = safeTaskId(searchParams.get("taskId"));
   const [taskId, setTaskId] = useState<string | null>(taskIdFromUrl);
@@ -186,7 +185,7 @@ export function FrontierLiveDemoPage() {
           setDemoResult(await run.step(() => getTaskResult(restoredTaskId)));
           return;
         }
-        if (["draft", "extracting_problems", "problems_ready", "parsing_submissions", "submissions_ready", "grading"].includes(state.status)) {
+        if (["extracting_problems", "parsing_submissions", "grading"].includes(state.status)) {
           setError(null);
           setStartedAt(Date.now());
           await continueWorkflow(run, restoredTaskId, state.status);
@@ -210,7 +209,27 @@ export function FrontierLiveDemoPage() {
   }, [busy, locale, snapshot]);
 
   const elapsed = startedAt ? Math.max(0, Math.round((Date.now() - startedAt) / 1_000)) : null;
-  async function startFreshRun() {
+  useEffect(() => {
+    if (!taskIdFromUrl && searchParams.get("workflow") === "full") void startFreshRun(true);
+  }, [taskIdFromUrl, searchParams.get("workflow")]);
+
+  async function retryFailedGrading() {
+    if (!taskId) return;
+    const run = beginRun(taskId);
+    if (!run) return;
+    setError(null);
+    try {
+      const current = await run.step(() => getTaskState(taskId));
+      const response = await run.step(() => retryIntent.execute(current.workflow_revision, request => startGrading(taskId, { ...request, retryScope: "failed_only" })));
+      if (!response) return;
+      // Reuse the normal progress/recovery page. No recognition or metadata writes.
+      navigate(`/tasks/${taskId}/grading/progress`);
+    } catch (caught) {
+      if (run.isCurrent()) setError(errorMessage(caught));
+    } finally { finishRun(run); }
+  }
+
+  async function startFreshRun(fullWorkflow = false) {
     const run = beginRun(null);
     if (!run) return;
     setError(null);
@@ -227,6 +246,7 @@ export function FrontierLiveDemoPage() {
       markStep("task", "active", tx(locale, "正在创建真实教师任务…", "Creating a real teacher-owned task…"));
       const task = await run.step(() => createTask({
         authScope: "frontier",
+        semester_id: getCurrentSemesterId(),
         name: `SmarTAI Live Demo · ${new Date().toISOString().slice(0, 16).replace("T", " ")} UTC`,
         idempotencyKey: createIdempotencyKey(),
       }));
@@ -234,6 +254,10 @@ export function FrontierLiveDemoPage() {
       run.taskId = task.task_id;
       setTaskId(task.task_id);
       markStep("task", "complete", tx(locale, `任务 ${shortId(task.task_id)} 已创建`, `Task ${shortId(task.task_id)} created`));
+      if (fullWorkflow) {
+        navigate(`/tasks/${encodeURIComponent(task.task_id)}/edit`, { replace: true });
+        return;
+      }
       navigate(`/frontier/live?taskId=${encodeURIComponent(task.task_id)}`, { replace: true });
       await continueWorkflow(run, task.task_id, task.status);
     } catch (caught) {
@@ -252,9 +276,9 @@ export function FrontierLiveDemoPage() {
     if (!run) return;
     setError(null);
     try {
-      markStep("questions", "active", tx(locale, "正在确认本次真实生成的题目资料…", "Confirming the materials generated in this live run…"));
-      await confirmPreparedQuestions(run, taskId, teacherReviewTask);
-      setMaterialsConfirmed(true);
+      markStep("questions", "active", tx(locale, "正在检查题目是否可以进入下一阶段…", "Checking that questions are ready for the next stage…"));
+      const blockers = questionReviewBlockers(Object.values(teacherReviewTask.problem_data), taskId, locale);
+      if (blockers.length) throw new Error(blockers.map(item => item.label).join("; "));
       await continueWorkflow(run, taskId, "problems_ready", true);
     } catch (caught) {
       if (run.isCurrent()) {
@@ -275,25 +299,7 @@ export function FrontierLiveDemoPage() {
       const current = await run.step(() => getTask(taskId));
       const blockers = submissionReviewBlockers(current, locale);
       if (blockers.length) throw new Error(blockers.map((item) => item.label).join("; "));
-      let revision = current.workflow_revision;
-      for (const student of Object.values(current.student_data)) {
-        if (student.identity_status === "needs_review") {
-          const response = await run.step(() => updateStudentIdentity(taskId, student.stu_id, {
-            expected_workflow_revision: revision,
-            student_id: student.stu_id,
-            student_name: student.stu_name,
-          }));
-          revision = response.workflow_revision;
-        }
-        for (const answer of student.stu_ans) {
-          if (answer.review_status === "confirmed") continue;
-          const response = await run.step(() => updateStudentAnswer(taskId, student.stu_id, answer.q_id, {
-            review_status: "confirmed", expected_workflow_revision: revision,
-          }));
-          revision = response.workflow_revision;
-        }
-      }
-      await continueWorkflow(run, taskId, "submissions_ready", true, true);
+      navigate(`/tasks/${taskId}/grading-setup`);
     } catch (caught) {
       if (run.isCurrent()) {
         failActiveStep();
@@ -304,7 +310,7 @@ export function FrontierLiveDemoPage() {
     }
   }
 
-  async function continueWorkflow(run: DemoRun, currentTaskId: string, startingStatus: TaskStatus, teacherMaterialsConfirmed = false, teacherSubmissionsReviewed = false) {
+  async function continueWorkflow(run: DemoRun, currentTaskId: string, startingStatus: TaskStatus, continueToSubmissions = false) {
     let status = startingStatus;
 
     if (status === "draft") {
@@ -348,8 +354,8 @@ export function FrontierLiveDemoPage() {
       }
       setTeacherReviewTask(recognizedTask);
       const alreadyConfirmed = generatedMaterialsConfirmed(aligned);
-      setMaterialsConfirmed(teacherMaterialsConfirmed || alreadyConfirmed);
-      if (!teacherMaterialsConfirmed && !alreadyConfirmed) {
+      setMaterialsConfirmed(alreadyConfirmed);
+      if (!continueToSubmissions && !alreadyConfirmed) {
         const recognizedState = await run.step(() => getTaskState(currentTaskId));
         setSnapshot(recognizedState);
         markStep("questions", "active", tx(locale, "题目、标答与评分资料已真实生成；等待教师确认。", "Questions, answers, and rubrics were generated live and await teacher confirmation."), recognizedState.extract_job_id);
@@ -357,7 +363,7 @@ export function FrontierLiveDemoPage() {
       }
       const afterQuestions = await run.step(() => getTaskState(currentTaskId));
       setSnapshot(afterQuestions);
-      markStep("questions", "complete", tx(locale, `已识别 ${afterQuestions.problem_count} 题并确认教师评分标准`, `${afterQuestions.problem_count} questions recognized and teacher rubric confirmed`), afterQuestions.extract_job_id);
+      markStep("questions", "complete", tx(locale, `已识别 ${afterQuestions.problem_count} 题，继续识别作答`, `${afterQuestions.problem_count} questions recognized; continuing to submissions`), afterQuestions.extract_job_id);
 
       markStep("submissions", "active", tx(locale, "正在上传原始排版、混排与手写作答…", "Uploading raw typeset, mixed, and handwritten submissions…"));
       const archive = await run.step(() => fixtureFile(SUBMISSION_FIXTURE, "submissions_raw.zip", "application/zip"));
@@ -377,33 +383,7 @@ export function FrontierLiveDemoPage() {
       setSnapshot(recognized);
       setSubmissionReviewTask(recognizedTask);
       markStep("submissions", "complete", tx(locale, `已识别 ${recognized.student_count} 份合成作答`, `${recognized.student_count} synthetic submissions recognized`), recognized.parse_job_id);
-      if (!teacherSubmissionsReviewed) return;
-      markStep("grading", "active", tx(locale, "正在选择一个已启用模型并保存批改设置…", "Selecting one enabled provider and saving the grading setup…"));
-      const setupResponse = await run.step(() => getGradingSetup(currentTaskId));
-      const enabled = setupResponse.available_experts.filter((item) => item.enabled);
-      const preferredId = setupResponse.grading_setup?.primary_provider_id ?? setupResponse.suggested_setup?.primary_provider_id;
-      const selected = enabled.find((item) => item.provider_id === preferredId) ?? enabled[0];
-      if (!selected) throw new Error(tx(locale, "当前 Demo 会话没有可用的批改模型。", "No enabled grading provider is available for this demo session."));
-      setProviderLabel(selected.display_name || `${selected.provider_type} · ${selected.model}`);
-      const base = setupResponse.grading_setup ?? setupResponse.suggested_setup;
-      if (!base) throw new Error(tx(locale, "后端未返回有效的批改设置。", "The backend did not return a valid grading setup."));
-      const singleSetup: GradingSetup = {
-        ...base,
-        selected_provider_ids: [selected.provider_id],
-        primary_provider_id: selected.provider_id,
-        aggregation_method: "single",
-        multi_sample_n: 1,
-        knowledge_scope: "none",
-        feedback_language: locale === "zh-CN" ? "zh" : "en",
-      };
-      const savedSetup = await run.step(() => saveGradingSetup({
-        taskId: currentTaskId,
-        expectedWorkflowRevision: setupResponse.workflow_revision,
-        gradingSetup: singleSetup,
-      }));
-      const response = await run.step(() => startGrading(currentTaskId, { multiSampleN: 1, expectedWorkflowRevision: savedSetup.workflow_revision, requestId: createIdempotencyKey() }));
-      markStep("grading", "active", tx(locale, "真实批改任务正在运行…", "The real grading run is in progress…"), response.job_id);
-      status = (await waitForStatus(run, currentTaskId, ["graded", "review_confirmed", "finalized"])).status;
+      return;
     } else if (status === "grading") {
       markStep("questions", "complete", tx(locale, "题目已准备", "Questions already prepared"));
       markStep("submissions", "complete", tx(locale, "作答已识别", "Submissions already recognized"));
@@ -488,37 +468,35 @@ export function FrontierLiveDemoPage() {
           </ol>
 
           {error ? (
-            <InlineNotice
-              tone="danger"
-              title={tx(locale, "真实后端返回错误", "The live backend returned an error")}
-              className="mt-5"
-              action={<FrontierExitLink className="text-xs font-semibold underline" to="/#walkthrough">{tx(locale, "查看预计算导览", "View precomputed walkthrough")}</FrontierExitLink>}
-            >
-              {error.code ? <span className="mr-2 rounded bg-danger/10 px-1.5 py-0.5 font-mono text-xs">{error.code}</span> : null}
-              {error.message} {tx(locale, "未用静态分数替换真实结果。", "No static score has been substituted.")}
-            </InlineNotice>
+            <RecoverableActionState locale={locale} className="mt-5"
+              info={classifyRecoverableError(error.code ?? snapshot?.error ?? error.message, { locale, taskId: taskId ?? undefined, jobId: snapshot?.grading_job_id ?? undefined, phase: snapshot?.progress?.current_step ?? undefined })}
+              workflowRecovery={taskId && snapshot?.grading_job_id && snapshot.last_failed_job_id === snapshot.grading_job_id ? {
+                retry: { onClick: () => void retryFailedGrading(), busy }, configurationHref: `/tasks/${taskId}/grading-setup`,
+              } : undefined}
+              additionalActions={taskId ? [{ label: tx(locale, "查看进度与恢复", "View progress and recovery"), href: snapshot?.grading_job_id ? `/tasks/${taskId}/grading/progress` : `/tasks/${taskId}/${snapshot?.parse_job_id ? "submissions" : "problems"}/progress` }, ...(snapshot?.grading_job_id ? [{ label: tx(locale, "查看已有结果与补分", "Review saved results and missing scores"), href: `/tasks/${taskId}/review?resolveFailures=1` }] : [])] : []}
+            />
           ) : null}
 
           <div className="mt-6 flex flex-wrap items-center gap-3">
-            {teacherReviewTask && !materialsConfirmed ? (
+            {!error && teacherReviewTask && !submissionReviewTask && snapshot?.status === "problems_ready" ? (
               <Button className="h-12 px-6 text-sm shadow-sm" onClick={() => void confirmTeacherMaterials()} disabled={busy}>
                 {busy ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />}
-                {tx(locale, "确认题目资料并继续", "Confirm question materials and continue")}
+                {tx(locale, "继续识别作答（保留待确认）", "Continue to submissions (keep pending)")}
               </Button>
-            ) : submissionReviewTask ? (
+            ) : !error && submissionReviewTask && snapshot?.status === "submissions_ready" ? (
               <Button className="h-12 px-6 text-sm shadow-sm" onClick={() => void confirmSubmissionReview()} disabled={busy}>
                 {busy ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
-                {tx(locale, "确认作答并继续批改", "Confirm submissions and continue grading")}
+                {tx(locale, "进入批改设置", "Open Grading Settings")}
               </Button>
-            ) : !taskId ? (
-              <Button className="h-12 px-6 text-sm shadow-sm" onClick={startFreshRun} disabled={busy}>
+            ) : !taskId || snapshot?.status === "draft" ? (
+              <Button className="h-12 px-6 text-sm shadow-sm" onClick={() => { if (taskId && snapshot?.status === "draft") { const run = beginRun(taskId); if (run) void continueWorkflow(run, taskId, "draft").catch(e => { if (run.isCurrent()) setError(errorMessage(e)); }).finally(() => finishRun(run)); } else void startFreshRun(); }} disabled={busy}>
                 {busy ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />}
                 {busy ? tx(locale, "正在运行真实流程…", "Running real workflow…") : tx(locale, "开始真实 OCR + 批改", "Start real OCR + grading")}
               </Button>
             ) : null}
             {taskId ? <TaskLinks taskId={taskId} status={snapshot?.status} locale={locale} /> : null}
             {taskId ? (
-              <Button variant="secondary" className="h-9 px-3 text-xs" onClick={startFreshRun} disabled={busy}>
+              <Button variant="secondary" className="h-9 px-3 text-xs" onClick={() => void startFreshRun()} disabled={busy}>
                 {busy ? <LoaderCircle className="h-3.5 w-3.5 animate-spin" /> : <RotateCcw className="h-3.5 w-3.5" />}
                 {busy ? tx(locale, "正在运行…", "Running…") : tx(locale, "重新开始", "Start over")}
               </Button>
@@ -581,7 +559,7 @@ export function FrontierLiveDemoPage() {
 
       {demoResult ? (
         <DemoResultInsights result={demoResult} taskId={taskId ?? demoResult.task_id} locale={locale} />
-      ) : submissionReviewTask ? (
+      ) : !error && submissionReviewTask && snapshot?.status === "submissions_ready" ? (
         <SubmissionRecognitionReview
           task={submissionReviewTask}
           locale={locale}
@@ -594,7 +572,7 @@ export function FrontierLiveDemoPage() {
           locale={locale}
           busy={busy}
           confirmed={materialsConfirmed}
-          onConfirm={() => void confirmTeacherMaterials()}
+          onConfirm={() => navigate(`/tasks/${taskId}/questions`)}
         />
       ) : null}
     </div>
@@ -648,7 +626,7 @@ function SubmissionRecognitionReview({ task, locale, busy, onContinue }: { task:
       <div className="mt-4 flex flex-wrap items-center gap-3">
         <Button onClick={onContinue} disabled={busy} className="h-10 px-4">
           {busy ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
-          {tx(locale, "继续运行真实批改", "Continue to live grading")}
+          {tx(locale, "进入批改设置", "Open Grading Settings")}
         </Button>
         <span className="text-xs text-muted-foreground">{tx(locale, "Demo 不会修改识别文本；如有问题可先进入作答校对页。", "The Demo does not rewrite recognized text. Open submission review first if anything needs checking.")}</span>
       </div>
@@ -949,7 +927,7 @@ function TeacherMaterialConfirmation({
         ) : (
           <Button onClick={onConfirm} disabled={busy} className="h-10 px-4">
             {busy ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />}
-            {tx(locale, "确认生成资料并继续真实 OCR", "Confirm generated materials and continue live OCR")}
+            {tx(locale, "查看并确认题目资料", "Review and confirm question materials")}
           </Button>
         )}
         <span className="text-xs text-muted-foreground">{tx(locale, "资料会随当前任务持续保留；仍可在题目审核页查看，最终评分继续由教师复核。", "These materials remain attached to the current task and stay available in question review; final scores remain subject to teacher review.")}</span>
@@ -1025,29 +1003,6 @@ function TaskLinks({ taskId, status, locale }: { taskId: string; status?: TaskSt
   );
 }
 
-async function confirmPreparedQuestions(run: DemoRun, taskId: string, currentTask: Task) {
-  const aligned = alignDemoProblems(Object.values(currentTask.problem_data));
-  if (!preparedMaterialsComplete(aligned)) {
-    throw new Error("The live question-preparation result is incomplete; no generated material was replaced with a fixture fallback.");
-  }
-  let revision = currentTask.workflow_revision;
-  for (const problem of aligned) {
-    const response = await run.step(() => updateProblem(taskId, problem.q_id, {
-      expected_workflow_revision: revision,
-      // Persist only the materials returned by the real preparation run. The
-      // Demo never substitutes fixture answers, rubrics, code, or tests.
-      stem: problem.stem,
-      criterion: problem.criterion,
-      max_score: problem.max_score,
-      reference_answer: problem.reference_answer ?? null,
-      solution_code: problem.solution_code ?? null,
-      review_status: "confirmed",
-      test_cases: problem.test_cases ?? null,
-    }));
-    revision = response.workflow_revision;
-  }
-}
-
 async function demoRecognitionProvider(taskId: string) {
   const setup = await getGradingSetup(taskId);
   const enabled = setup.available_experts.filter((provider) => provider.enabled);
@@ -1107,47 +1062,6 @@ function compareStudentAnswers(
   const leftNumber = problemNumber(left.number) ?? problemNumber(left.q_id) ?? Number.MAX_SAFE_INTEGER;
   const rightNumber = problemNumber(right.number) ?? problemNumber(right.q_id) ?? Number.MAX_SAFE_INTEGER;
   return leftNumber - rightNumber || left.q_id.localeCompare(right.q_id);
-}
-
-async function fixtureFile(url: string, filename: string, type: string) {
-  const [response, manifest] = await Promise.all([
-    fetch(url, { cache: "no-store" }),
-    fixtureManifest(),
-  ]);
-  if (!response.ok) throw new Error(`Could not load the synthetic fixture ${filename} (${response.status}).`);
-  const blob = await response.blob();
-  const relativePath = url.replace(/^\/frontier-demo\//, "");
-  const entry = manifest.assets.find((asset) => asset.path === relativePath);
-  if (!entry) throw new Error(`The fixture manifest does not contain ${filename}.`);
-  const digest = await sha256Hex(await blob.arrayBuffer());
-  if (digest !== entry.sha256) throw new Error(`Fixture integrity check failed for ${filename}.`);
-  return new File([blob], filename, { type, lastModified: 0 });
-}
-
-let manifestPromise: Promise<FixtureManifest> | null = null;
-
-function fixtureManifest() {
-  manifestPromise ??= fetch(FIXTURE_MANIFEST, { cache: "no-store" })
-    .then(async (response) => {
-      if (!response.ok) throw new Error(`Could not load the fixture manifest (${response.status}).`);
-      const body = await response.json() as Partial<FixtureManifest>;
-      if (!Array.isArray(body.assets)) throw new Error("The fixture manifest is invalid.");
-      return { assets: body.assets };
-    })
-    .catch((error) => {
-      manifestPromise = null;
-      throw error;
-    });
-  return manifestPromise;
-}
-
-async function sha256Hex(value: ArrayBuffer) {
-  const digest = await crypto.subtle.digest("SHA-256", value);
-  return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
-}
-
-interface FixtureManifest {
-  assets: Array<{ path: string; bytes: number; sha256: string }>;
 }
 
 function progressPercent(snapshot: TaskStateSnapshot) {

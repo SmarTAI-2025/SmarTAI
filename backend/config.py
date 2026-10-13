@@ -18,6 +18,12 @@ class Settings(BaseSettings):
 
     runtime_environment: Literal["development", "test", "production"] = "development"
 
+    # Explicit opt-in; production never falls back to host execution.
+    program_runner_mode: Literal["disabled", "oci"] = "disabled"
+    program_runner_runtime: Literal["docker", "podman"] = "docker"
+    program_runner_image: str = ""
+    program_runner_max_concurrent: int = Field(default=2, ge=1, le=4)
+
     # ─── Engine toggle (v1 = old routers, v2 = new agents/skills/tools) ────────
     grading_engine: Literal["v1", "v2"] = "v2"
 
