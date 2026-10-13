@@ -204,8 +204,15 @@ export function FrontierLiveDemoPage() {
   }, [taskIdFromUrl]);
 
   useEffect(() => {
-    if (busy) return;
-    setSteps((current) => current.some((step) => step.state === "error") ? current : snapshot ? stepsFromSnapshot(snapshot, locale) : initialSteps(locale));
+    setSteps((current) => {
+      const translated = snapshot ? stepsFromSnapshot(snapshot, locale) : initialSteps(locale);
+      if (!busy && !current.some((step) => step.state === "error")) return translated;
+      // Keep the active/failed step without freezing its previous language.
+      return translated.map((step) => {
+        const previous = current.find((item) => item.id === step.id);
+        return { ...step, state: previous?.state ?? step.state, jobId: previous?.jobId ?? step.jobId };
+      });
+    });
   }, [busy, locale, snapshot]);
 
   const elapsed = startedAt ? Math.max(0, Math.round((Date.now() - startedAt) / 1_000)) : null;

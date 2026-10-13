@@ -44,6 +44,7 @@ from backend.skills.base import (
 )
 from backend.models import ExpertResult, ProblemInfo, StudentAnswerInfo, StepScore, TaskGradingSetup, TestCase
 from backend.llm.providers import BaseProvider
+from backend.services.programming_test_contract import required_function_name
 from backend.tools.structured_llm import structured_llm_call
 from backend.tools import knowledge as kb_tool
 from backend.tools.code_interpreter import run_sandbox, ExecutionReport
@@ -420,7 +421,7 @@ def _format_metadata_zh(
         )
     if cases_source == "llm_function_call" and exec_report is not None:
         return (
-            f"\n\n（沙箱测评：✓ LeetCode 风格函数调用测试 {cases_run} 个，"
+            f"\n\n（沙箱测评：✓ AI 生成函数调用测试 {cases_run} 个，"
             f"通过 {exec_report.passed_count}/{exec_report.total_count}）"
         )
     if cases_source == "function_only_no_io":
@@ -450,7 +451,7 @@ def _format_metadata(cases_source, skipped_reason, exec_report, cases_run, *, la
     if language != "en":
         return _format_metadata_zh(cases_source, skipped_reason, exec_report, cases_run)
     labels = {"teacher": "teacher-provided tests", "llm_generated": "AI-generated tests",
-              "llm_function_call": "function-call tests"}
+              "llm_function_call": "AI-generated function-call tests"}
     if cases_source in labels and exec_report is not None:
         warning = (" None passed; AI-generated tests may be inaccurate. Please review them."
                    if cases_source == "llm_generated" and exec_report.total_count >= 3
@@ -541,6 +542,15 @@ class ProgrammingSkill(GradingSkill):
 
             # ─── Step 2: Decide cases source ────────────────────────────────
             test_cases: List[TestCase] = _coerce_test_cases(problem.test_cases)
+            # Older generated preparation material could contain stdin cases
+            # for a required function. Such cases never call the submission;
+            # generate function-call cases through the existing path instead
+            # of sending a false 0/N execution result to the grading model.
+            if (function_only and required_function_name(problem.stem) == function_only
+                    and test_cases and all(tc.source == "llm_generated" for tc in test_cases)
+                    and any(tc.sandbox_feasible and (not tc.function_name
+                        or tc.function_args is None or tc.expected_return is None) for tc in test_cases)):
+                test_cases = []
             cases_source: str
             #   "teacher" | "llm_generated" | "llm_function_call"
             # | "skipped_complex" | "skipped_lang" | "function_only_no_io"
@@ -555,7 +565,10 @@ class ProgrammingSkill(GradingSkill):
                 feasible = [tc for tc in test_cases if tc.sandbox_feasible]
                 if feasible:
                     test_cases = feasible
-                    cases_source = "teacher"
+                    if all(tc.source == "llm_generated" for tc in feasible):
+                        cases_source = "llm_function_call" if all(tc.function_name for tc in feasible) else "llm_generated"
+                    else:
+                        cases_source = "teacher"
                 else:
                     cases_source = "skipped_complex"
                     skipped_reason = "teacher cases all marked infeasible"

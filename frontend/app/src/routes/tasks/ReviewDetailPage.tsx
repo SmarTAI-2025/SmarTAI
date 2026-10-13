@@ -302,7 +302,9 @@ function ReviewDetailForm() {
   }, [goToStudent, nextQuestion, nextStudent, previousQuestion, previousStudent, requestQuestionNavigation]);
 
   if (taskId && taskQuery.data?.status === "grading") return <Navigate replace to={`/tasks/${taskId}/grading/progress`} />;
-  if (taskId && taskQuery.data && ![
+  const resolvingFailures = taskQuery.data?.status === "error" && Boolean(taskQuery.data.grading_job_id)
+    && taskQuery.data.last_failed_job_id === taskQuery.data.grading_job_id;
+  if (taskId && taskQuery.data && !resolvingFailures && ![
     "graded", "review_confirmed", "generating_analysis", "finalized",
   ].includes(taskQuery.data.status)) return <Navigate replace to={getTaskDestination(taskQuery.data)} />;
 

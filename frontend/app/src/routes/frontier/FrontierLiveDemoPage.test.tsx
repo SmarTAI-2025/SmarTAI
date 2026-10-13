@@ -201,6 +201,22 @@ describe("FrontierLiveDemoPage", () => {
     expect(screen.getByText(/no exposed model key/i)).toBeInTheDocument();
   });
 
+  it("translates stopped-run steps without restarting or clearing the failure", async () => {
+    vi.mocked(getTaskState).mockResolvedValue({ ...taskState("error"), error: "operation_cancelled",
+      grading_job_id: "stopped-run", last_failed_job_id: "stopped-run", problem_count: 4, student_count: 4 });
+    const user = userEvent.setup();
+    renderLive("asg_demo123");
+    await screen.findByRole("button", { name: "Continue processing" });
+    await user.click(screen.getByRole("button", { name: "Change language" }));
+    expect(screen.getByText("运行 AI 批改").closest("li")).toHaveClass("border-danger/30");
+    expect(screen.getByText("创建专属 Demo 任务")).toBeInTheDocument();
+    expect(screen.queryByText("Create a dedicated demo task")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "继续处理" })).toBeEnabled();
+    expect(getTaskState).toHaveBeenCalledTimes(1);
+    expect(startGrading).not.toHaveBeenCalled();
+    expect(createTask).not.toHaveBeenCalled();
+  });
+
   it("offers an explicit real-run action", () => {
     render(<I18nProvider><MemoryRouter><FrontierLiveDemoPage /></MemoryRouter></I18nProvider>);
     expect(screen.getByRole("button", { name: /start real OCR \+ grading/i })).toBeEnabled();

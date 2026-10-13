@@ -182,7 +182,7 @@ export function GradingProgressPage() {
                 </div>
               </section>
 
-              <QueueTable locale={locale} queue={queue} />
+              <QueueTable locale={locale} queue={queue} completed={completedView} />
 
               <section className="mt-4 flex min-h-[74px] items-center rounded-[10px] border bg-transparent px-5 py-4 text-[13px] leading-5 text-muted-foreground sm:px-[30px] sm:text-[14px]">
                 {latestError ? (
@@ -250,9 +250,9 @@ function normalizeTimestamp(value?: number | null): number | null {
   return value > 1_000_000_000_000 ? value : value * 1000;
 }
 
-function QueueTable({ locale, queue }: { locale: Locale; queue: QueueSummary }) {
+function QueueTable({ locale, queue, completed }: { locale: Locale; queue: QueueSummary; completed: boolean }) {
   const rows = [
-    { label: "completed" as const, count: queue.completed, state: "ok" as const, detail: "draftWritten" as const, tone: "success" as const },
+    { label: "completed" as const, count: queue.completed, state: "ok" as const, detail: completed ? "draftWritten" as const : "processingFinished" as const, tone: "success" as const },
     { label: "running" as const, count: queue.running, state: "grading" as const, detail: "expertsWorking" as const, tone: "primary" as const },
     { label: "queued" as const, count: queue.queued, state: "queuedState" as const, detail: "taskQueue" as const, tone: "neutral" as const },
     { label: "errorSignals" as const, count: queue.errorSignals, state: queue.errorSignals > 0 ? "errorSignals" as const : "none" as const, detail: queue.errorSignals > 0 ? "recentErrors" as const : "noErrors" as const, tone: queue.errorSignals > 0 ? "danger" as const : "success" as const },

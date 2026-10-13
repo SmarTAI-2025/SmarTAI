@@ -1293,6 +1293,12 @@ function providerTransientErrorCopy(
       description: tx(locale, "供应商暂时无法接收请求，并非已确认的每日额度耗尽。资料已保留，请稍后重试或选择另一个已启用模型。", "The provider is temporarily overloaded; this does not confirm a daily quota limit. Your files are preserved. Retry later or select another enabled model."),
     };
   }
+  if (code === "grading_provider_transient") {
+    return {
+      title: tx(locale, "部分作答遇到模型服务临时故障", "Some responses could not be graded due to a temporary model-service failure"),
+      description: tx(locale, "模型服务暂时不可用、连接失败或请求超时。已保存的成功结果会保留，请仅重试失败项；若反复失败，可在批改设置中检查模型。", "The model service was unavailable, the connection failed, or the request timed out. Saved successful results are retained. Retry only the failed items; if failures persist, check the model in grading setup."),
+    };
+  }
   if (code === "provider_upstream_unavailable") {
     return {
       title: tx(locale, "模型服务暂时不可用", "The model service is temporarily unavailable"),
