@@ -19,7 +19,7 @@ async function fixture(page: Page, stage: Stage) {
   page.on("console", message => { if (message.type() === "error") errors.push(message.text()); });
   const provider = { provider_id: "test-provider", provider_type: "openai", model: "synthetic", enabled: true,
     is_default: true, is_shared: false, scope: "owner", editable: true, max_concurrent: 1, rpm: 10 };
-  const problem = { q_id: "q1", number: "1", type: "short_answer", content: "What is 6 × 7?", max_score: 1,
+  const problem = { q_id: "q1", number: "1", type: "short_answer", stem: "What is 6 × 7?", max_score: 1,
     reference_answer: "42", criterion: "One point for 42.", review_status: "confirmed", flag: [] };
   const student = { stu_id: "s1", stu_name: "Synthetic student", identity_status: "matched", identity_review_status: "confirmed",
     stu_ans: [{ q_id: "q1", content: "42", review_status: "confirmed", flag: [] as string[] }] };
