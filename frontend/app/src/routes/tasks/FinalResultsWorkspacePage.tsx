@@ -1,5 +1,4 @@
 import {
-  AlertTriangle,
   ArrowRight,
   BarChart3,
   CheckCircle2,
@@ -189,7 +188,6 @@ function WorkspaceNavigation({ locale, root, section }: { locale: Locale; root: 
 }
 
 function ResultStateBanner({ locale, taskId, finalization, provisional }: { locale: Locale; taskId: string; finalization: TaskFinalizationResponse; provisional: boolean }) {
-  const stale = finalization.final_result_dirty || finalization.analysis_status === "stale";
   if (provisional) {
     return (
       <section className="mt-5 flex min-h-16 flex-wrap items-center gap-4 rounded-[10px] border border-blue-100 bg-blue-50/80 px-5 py-3">
@@ -215,21 +213,16 @@ function ResultStateBanner({ locale, taskId, finalization, provisional }: { loca
     );
   }
   return (
-    <section className={cn(
-      "mt-5 flex min-h-16 flex-wrap items-center gap-4 rounded-[10px] border px-5 py-3",
-      stale ? "border-amber-200 bg-amber-50" : "border-blue-100 bg-blue-50/80",
-    )}>
-      <span className={cn("inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-full", stale ? "bg-amber-100 text-amber-700" : "bg-blue-100 text-primary")}>
-        {stale ? <AlertTriangle aria-hidden="true" className="h-[18px] w-[18px]" /> : <CheckCircle2 aria-hidden="true" className="h-[18px] w-[18px]" />}
+    <section className="mt-5 flex min-h-16 flex-wrap items-center gap-4 rounded-[10px] border border-blue-100 bg-blue-50/80 px-5 py-3">
+      <span className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-blue-100 text-primary">
+        <CheckCircle2 aria-hidden="true" className="h-[18px] w-[18px]" />
       </span>
       <div className="min-w-0 flex-1">
         <p className="text-[14px] font-bold text-foreground">
-          {stale
-            ? tx(locale, "统计已更新，报告文件需重新生成", "Statistics updated; regenerate report files")
-            : tx(locale, "当前结果", "Current results")}
+          {tx(locale, "当前结果", "Current results")}
         </p>
         <p className="mt-0.5 text-[12px] text-muted-foreground">
-          {tx(locale, "统计和图表使用最新保存的分数。报告文件", "Statistics and charts use the latest saved scores. Report files")} v{finalization.final_result_version} · {analysisStatusLabel(locale, finalization.analysis_status)}
+          {tx(locale, "统计和图表使用最新保存的分数。", "Statistics and charts use the latest saved scores.")}
         </p>
         {sourceCleanupCopy(locale, finalization) ? (
           <p className={cn(
@@ -242,10 +235,7 @@ function ResultStateBanner({ locale, taskId, finalization, provisional }: { loca
       </div>
       <Link
         to={`/tasks/${encodeURIComponent(taskId)}/results/reports`}
-        className={cn(
-          "inline-flex h-9 shrink-0 items-center gap-1.5 rounded-[8px] px-4 text-[12px] font-semibold outline-none focus-visible:ring-2 focus-visible:ring-ring",
-          stale ? "border border-amber-300 bg-card text-amber-800 hover:bg-amber-100" : "bg-primary text-primary-foreground hover:opacity-90",
-        )}
+        className="inline-flex h-9 shrink-0 items-center gap-1.5 rounded-[8px] bg-primary px-4 text-[12px] font-semibold text-primary-foreground outline-none hover:opacity-90 focus-visible:ring-2 focus-visible:ring-ring"
       >
         {tx(locale, "报告与下载", "Reports & downloads")}
         <ArrowRight aria-hidden="true" className="h-3.5 w-3.5" />
@@ -451,11 +441,11 @@ function ResultsOverview({
             <StatusLine
               label={tx(locale, "分析状态", "Analysis status")}
               value={tx(locale, "已更新", "Up to date")}
-              tone={finalization.analysis_status === "stale" ? "warning" : "neutral"}
+              tone="neutral"
             />
             <StatusLine
               label={tx(locale, "报告下载", "Report downloads")}
-              value={provisional ? tx(locale, "尚未生成", "Not generated") : finalization.analysis_status === "ready" && finalization.analysis_result_version === finalization.final_result_version ? tx(locale, `v${finalization.final_result_version} 可下载`, `v${finalization.final_result_version} ready`) : tx(locale, "尚未生成，进入报告页查看", "Not generated; see report page")}
+              value={tx(locale, "进入报告页查看", "See report page")}
               tone={finalization.analysis_status === "ready" ? "primary" : "neutral"}
             />
           </div>
@@ -605,16 +595,6 @@ function sectionFromPath(pathname: string): WorkspaceSection {
   if (pathname.endsWith("/visualizations")) return "visualizations";
   if (pathname.endsWith("/reports")) return "reports";
   return "overview";
-}
-
-function analysisStatusLabel(locale: Locale, status: TaskFinalizationResponse["analysis_status"]): string {
-  const labels = {
-    not_generated: ["分析尚未生成", "Analysis not generated"],
-    generating: ["分析生成中", "Analysis generating"],
-    ready: ["分析已生成", "Analysis ready"],
-    stale: ["分析已过期", "Analysis stale"],
-  } as const;
-  return labels[status][locale === "en-US" ? 1 : 0];
 }
 
 function tx(locale: Locale, zh: string, en: string): string {

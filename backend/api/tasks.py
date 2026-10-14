@@ -961,6 +961,16 @@ def download_artifact(
     )
 
 
+@router.delete("/{task_id}/artifacts/{version_number}")
+def delete_artifact(
+    task_id: str, version_number: int,
+    current: User = Depends(require_teacher),
+):
+    return _domain(lambda: task_facade.delete_historical_artifact(
+        task_id=task_id, owner_id=current.id, version=version_number,
+    ))
+
+
 # ─── Assignment-scoped personal knowledge compatibility ─────────────────────
 
 

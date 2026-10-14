@@ -8,6 +8,8 @@ for (const mode of ["individual", "overview-all", "detail-all"]) for (const loca
     const errors: string[] = [];
     const writes: string[] = [];
     let reportGenerationRequested = false, reportsGenerated = false;
+    let reportDirty = false;
+    let reportVersions: number[] = [];
     page.on("pageerror", error => errors.push(error.message));
     page.on("console", message => { if (message.type() === "error") errors.push(message.text()); });
     await page.setViewportSize(zh ? { width: 1440, height: 1000 } : { width: 390, height: 844 });
@@ -26,11 +28,12 @@ for (const mode of ["individual", "overview-all", "detail-all"]) for (const loca
     const task = { task_id: taskId, owner_id: "teacher", name: "Review consistency", status: "graded", workflow_revision: 1,
       final_result_version: 0, problem_data, student_data, problem_count: 4, student_count: 1, created_at: 1, updated_at: 1, kb_docs: {} };
     const finalization = () => ({ task_id: taskId, task_status: task.status, workflow_revision: task.workflow_revision, final_result_version: task.final_result_version,
-      final_result_dirty: false, analysis_status: reportsGenerated ? "ready" : "not_generated", remaining_review_count: 0, required_review_count: 0,
+      final_result_dirty: reportDirty, analysis_status: reportDirty ? "stale" : reportsGenerated ? "ready" : "not_generated", remaining_review_count: 0, required_review_count: 0,
       confirmed_required_count: 0, remaining_reviews: [], ready_for_confirmation: true });
     const artifacts = () => ({ task_id: taskId, current_result_version: task.final_result_version, analysis_status: reportsGenerated ? "ready" : "not_generated",
-      versions: task.final_result_version ? [{ version: task.final_result_version, current: true, status: reportsGenerated ? "ready" : "not_generated",
-        files: reportsGenerated ? [{ artifact_id: "grades_csv", title: "成绩 CSV", title_en: "Grades CSV", filename: "grades.csv", size_bytes: 12 }] : [] }] : [] });
+      versions: reportVersions.map(version => ({ version, current: version === task.final_result_version,
+        status: version !== task.final_result_version ? "historical" : reportDirty ? "stale" : "ready", generated_at: 1_700_000_000 + version,
+        files: [{ artifact_id: "grades_csv", title: "成绩 CSV", title_en: "Grades CSV", filename: "grades.csv", size_bytes: 12 }] })) });
     await page.route(`${backend}/**`, async route => {
       const request = route.request(), path = new URL(request.url()).pathname;
       const json = (value: unknown) => route.fulfill({ json: value });
@@ -42,14 +45,20 @@ for (const mode of ["individual", "overview-all", "detail-all"]) for (const loca
         if (path.endsWith("/finalization/confirm")) {
           expect(reportGenerationRequested).toBe(true);
           expect(request.postDataJSON().expected_workflow_revision).toBe(task.workflow_revision);
-          task.workflow_revision += 1; task.final_result_version = 1; task.status = "review_confirmed";
+          task.workflow_revision += 1; task.final_result_version += 1; task.status = "review_confirmed";
+          reportDirty = false; reportsGenerated = false;
           return json(finalization());
         }
         if (path.endsWith("/artifacts/generate")) {
           expect(reportGenerationRequested).toBe(true);
           expect(request.postDataJSON().expected_workflow_revision).toBe(task.workflow_revision);
           reportsGenerated = true;
+          reportVersions.unshift(task.final_result_version);
           return json({ ...finalization(), status: "ok", unchanged: false, artifacts: artifacts() });
+        }
+        if (request.method() === "DELETE" && path.endsWith("/artifacts/1")) {
+          reportVersions = reportVersions.filter(version => version !== 1);
+          return json(artifacts());
         }
         expect(path).toMatch(/\/reviews\/S1\/q[1-4]$/);
         const input = request.postDataJSON();
@@ -68,6 +77,7 @@ for (const mode of ["individual", "overview-all", "detail-all"]) for (const loca
       if (path.endsWith("/teacher_comments")) return json({ comments: {} });
       if (path.endsWith("/finalization")) return json(finalization());
       if (path.endsWith("/artifacts")) return json(artifacts());
+      if (path.endsWith("/artifacts/1/bundle")) return route.fulfill({ body: "saved report v1", contentType: "application/zip" });
       throw new Error(`Unexpected request ${request.method()} ${path}`);
     });
     const root = `/tasks/${taskId}`;
@@ -116,6 +126,29 @@ for (const mode of ["individual", "overview-all", "detail-all"]) for (const loca
     await expect(page.getByRole("button", { name: zh ? "下载全部 ZIP" : "Download all ZIP" })).toBeVisible();
     expect(writes).toHaveLength(reviewWrites + 3);
     if (mode === "individual") expect(corrections[1].teacher_score).toBeNull();
+    if (mode === "individual") {
+      // A separately saved edit moves the generated report into history.
+      reportDirty = true; task.workflow_revision += 1;
+      const dialogs: string[] = [];
+      page.on("dialog", dialog => { dialogs.push(dialog.message()); void dialog.accept(); });
+      await page.reload();
+      await expect(page.getByText(zh ? "最新报告尚未生成，请先生成再下载。" : "No latest report yet. Generate it before downloading.")).toBeVisible();
+      await expect(page.getByRole("button", { name: zh ? "下载全部 ZIP" : "Download all ZIP" })).toHaveCount(0);
+      const downloaded = page.waitForEvent("download");
+      await page.getByRole("button", { name: zh ? "下载 ZIP" : "Download ZIP", exact: true }).click();
+      expect((await downloaded).suggestedFilename()).toContain("v1");
+      expect(dialogs).toEqual([]);
+      await page.getByRole("button", { name: zh ? "生成本版文件" : "Generate files" }).click();
+      await expect(page.getByRole("button", { name: zh ? "下载全部 ZIP" : "Download all ZIP" })).toBeVisible();
+      await expect(page.getByRole("button", { name: zh ? "下载 ZIP" : "Download ZIP", exact: true })).toBeVisible();
+      await expect(page.locator("main").last()).not.toContainText(/过期|out of date|stale|regenerate report files/i);
+      expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1)).toBe(true);
+      await page.screenshot({ path: testInfo.outputPath("latest-and-history.png"), fullPage: true });
+      await page.getByRole("button", { name: zh ? "删除" : "Delete", exact: true }).click();
+      await expect(page.getByText(zh ? "暂无历史报告。" : "No historical reports.")).toBeVisible();
+      await expect(page.getByRole("button", { name: zh ? "下载全部 ZIP" : "Download all ZIP" })).toBeVisible();
+      expect(dialogs).toHaveLength(1);
+    }
     expect(errors).toEqual([]);
   });
 }

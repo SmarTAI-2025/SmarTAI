@@ -135,6 +135,16 @@ describe("FinalResultsWorkspacePage task-status refresh", () => {
     expect(screen.getByTestId("location-pathname")).toHaveTextContent("/tasks/task-1/submissions");
   });
 
+  it("does not show expired report warnings after saved scores change", async () => {
+    useTaskMock.mockReturnValue({ data: finalizedTask, isLoading: false, isFetching: false, isError: false });
+    useTaskFinalizationMock.mockReturnValue({ data: { ...finalization, task_status: "finalized", final_result_version: 1,
+      final_result_dirty: true, analysis_status: "stale" }, isLoading: false, isError: false });
+    render(<TestTree />);
+    expect(await screen.findByText("Current results")).toBeVisible();
+    expect(screen.queryByText(/stale|expired|regenerate report files/i)).not.toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Reports & downloads" })).toBeVisible();
+  });
+
   it("reports automatic cleanup retry without exposing a manual retry action", async () => {
     useTaskMock.mockReturnValue({
       data: finalizedTask,
