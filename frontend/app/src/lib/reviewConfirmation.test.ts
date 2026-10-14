@@ -77,7 +77,10 @@ describe("review hard failures", () => {
     expect(studentIdentityReviewBlocked({ ...student, source_id: "source-1" })).toBe(true);
     expect(studentIdentityReviewBlocked({ ...student, source_id: "source-1", identity_status: "matched" })).toBe(false);
     expect(studentIdentityReviewBlocked({ ...student, stu_name: "[Unknown Student]", identity_status: "matched" })).toBe(true);
-    expect(studentIdentityReviewBlocked({ ...student, stu_id: "Unknown Student", identity_status: "matched" })).toBe(true);
+    expect(studentIdentityReviewBlocked({ ...student, stu_id: "[Unknown Student]", identity_status: "matched" })).toBe(true);
+    for (const value of ["Unknown Student", "unknown student", "[unknown student]", "未知学生"]) {
+      expect(studentIdentityReviewBlocked({ ...student, stu_id: value, stu_name: value, identity_status: "matched" })).toBe(false);
+    }
     const task = { task_id: "T1", student_data: { s1: { ...student, stu_name: "[Unknown Student]" } } } as unknown as Task;
     expect(submissionConfirmationBlockers(task, "en-US")).toHaveLength(1);
   });

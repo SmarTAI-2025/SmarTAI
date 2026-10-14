@@ -4037,8 +4037,9 @@ def _question_review_blockers(questions) -> list[str]:
 
 
 def _student_identity_invalid(student_id: str, student_name: str) -> bool:
-    unknown_identity = {"[unknown student]", "unknown student", "未知学生"}
-    return any(not str(value or "").strip() or str(value).strip().casefold() in unknown_identity
+    # Only the ingestion default is reserved. A teacher's edited, nonempty
+    # value (including "Unknown Student") must not be guessed to be a placeholder.
+    return any(not str(value or "").strip() or str(value).strip() == "[Unknown Student]"
                for value in (student_id, student_name))
 
 
@@ -4812,9 +4813,14 @@ def update_student_identity(
     )
     normalized_display_id = new_display_id.strip()
     normalized_display_name = new_display_name.strip()
-    if _student_identity_invalid(normalized_display_id, normalized_display_name):
+    if not normalized_display_id or not normalized_display_name:
         raise ValidationError(
             "Student ID and name are required.", code="student_identity_required",
+        )
+    if _student_identity_invalid(normalized_display_id, normalized_display_name):
+        raise ValidationError(
+            'Replace the default placeholder "[Unknown Student]" before confirming the identity.',
+            code="student_identity_placeholder",
         )
     # Serialize identity confirmation/editing with other workflow mutations.
     # A failed or busy item must not consume a revision during bulk review.

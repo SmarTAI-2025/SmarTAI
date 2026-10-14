@@ -370,7 +370,46 @@ def test_identity_placeholder_cannot_be_bulk_confirmed():
             **args, current_display_id="S002", new_display_id="S002", new_display_name="[Unknown Student]",
             expected_revision=before["workflow_revision"],
         )
-    assert exc.value.code == "student_identity_required"
+    assert exc.value.code == "student_identity_placeholder"
+    assert "[Unknown Student]" in str(exc.value)
+    assert task_facade.get_task(**args, full=True) == before
+
+
+@pytest.mark.parametrize("name", ["Unknown Student", "unknown student", "[unknown student]", "未知学生"])
+def test_teacher_edited_identity_is_not_fuzzy_matched_to_placeholder(name):
+    from backend.services import task_facade
+
+    seeded = _seed_source_case("identity_conflict")
+    args = {"task_id": seeded["assignment_id"], "owner_id": seeded["owner_id"]}
+    before = task_facade.get_task(**args, full=True)
+    result = task_facade.update_student_identity(
+        **args, current_display_id="S002", new_display_id="renamed",
+        new_display_name=name, expected_revision=before["workflow_revision"],
+    )
+    after = task_facade.get_task(**args, full=True)
+    assert result["previous_student_id"] == "S002"
+    assert result["student"]["stu_name"] == name
+    assert "S002" not in after["student_data"]
+    assert after["student_data"]["renamed"]["stu_ans"] == before["student_data"]["S002"]["stu_ans"]
+    assert after["student_data"]["renamed"]["identity_status"] == "matched"
+    assert after["workflow_revision"] == before["workflow_revision"] + 1
+    assert task_facade.grading_readiness(**args)["blocking_issues"] == []
+
+
+@pytest.mark.parametrize("student_id,name", [("   ", "Teacher input"), ("S002", "   "), ("[Unknown Student]", "Teacher input")])
+def test_identity_rejects_only_empty_fields_or_the_exact_default(student_id, name):
+    from backend.domain.errors import ValidationError
+    from backend.services import task_facade
+
+    seeded = _seed_source_case("identity_conflict")
+    args = {"task_id": seeded["assignment_id"], "owner_id": seeded["owner_id"]}
+    before = task_facade.get_task(**args, full=True)
+    with pytest.raises(ValidationError) as exc:
+        task_facade.update_student_identity(
+            **args, current_display_id="S002", new_display_id=student_id,
+            new_display_name=name, expected_revision=before["workflow_revision"],
+        )
+    assert exc.value.code == ("student_identity_placeholder" if student_id == "[Unknown Student]" else "student_identity_required")
     assert task_facade.get_task(**args, full=True) == before
 
 

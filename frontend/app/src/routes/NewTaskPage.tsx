@@ -3,6 +3,7 @@ import { demoLockedText } from "@/lib/frontierFixtures";
 import { ArrowRight, LoaderCircle, Save } from "lucide-react";
 import {
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -82,7 +83,9 @@ function NewTaskForm({ scope, taskQuery }: { scope: string; taskQuery: ReturnTyp
   const [formError, setFormError] = useState<string | null>(null);
   const [editHydrated, setEditHydrated] = useState(false);
   const idempotencyRef = useRef(draft.value.idempotency);
-  useEffect(() => { if (draft.value.idempotency) idempotencyRef.current = draft.value.idempotency; }, [draft.value.idempotency]);
+  // Publish a restored key before the form becomes interactive. A passive effect
+  // can lag behind an immediate retry; clearing a draft must clear the key too.
+  useLayoutEffect(() => { idempotencyRef.current = draft.value.idempotency; }, [draft.value.idempotency]);
 
   const debouncedCourseDraft = useDebouncedValue(courseDraft, 180);
   const debouncedTagDraft = useDebouncedValue(tagDraft, 180);
