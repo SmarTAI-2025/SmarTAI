@@ -9,7 +9,14 @@ from backend.api import assignments, courses, grading_runs, results, submissions
 
 def create_legacy_contract_app():
     app = create_app()
-    app.router.routes = [route for route in app.routes if not getattr(route, "path", "").startswith("/courses")]
+    # Newer FastAPI keeps included routers lazy; older versions flatten routes.
+    # Remove the public label router in either representation before mounting
+    # the legacy contract, so response-model filtering cannot mask old fields.
+    app.router.routes = [
+        route for route in app.routes
+        if getattr(route, "original_router", None) is not courses.public_router
+        and not getattr(route, "path", "").startswith("/courses")
+    ]
     for router in (courses.router, assignments.router, submissions.router, grading_runs.router, results.router):
         app.include_router(router)
     return app

@@ -106,6 +106,21 @@ describe("one-click grading review", () => {
     expect(screen.getByText(/failed-model/)).toHaveTextContent("No valid score · excluded from synthesis");
   });
 
+  it("preserves a precise maximum in the default, fallback hint, and validation", () => {
+    state.result.results = [{ student_id: "S1", corrections: [correction("Q1", {
+      score: 2.55, provisional_score: 2.55, max_score: 2.55,
+    })] }];
+    show(true);
+    const input = screen.getByRole("textbox", { name: "Q1 final score" });
+    expect(input).toHaveValue("2.55");
+    fireEvent.change(input, { target: { value: "" } });
+    expect(screen.getByText(/Leaving this blank/)).toHaveTextContent("AI score of 2.55.");
+    fireEvent.change(input, { target: { value: "2.6" } });
+    fireEvent.click(screen.getByRole("button", { name: "Q1 · Confirm review" }));
+    expect(screen.getByText("Enter a score from 0 to 2.55.")).toBeInTheDocument();
+    expect(state.update).not.toHaveBeenCalled();
+  });
+
   it("opens failed-result details from recovery and keeps missing scores blocked", async () => {
     Object.assign(state.task, { status: "error", grading_job_id: "failed-run", last_failed_job_id: "failed-run" });
     state.result.grading_run_status = "partial_failed";

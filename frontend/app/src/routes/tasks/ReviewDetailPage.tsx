@@ -343,7 +343,7 @@ function ReviewDetailForm() {
     if (numericScore === null || !Number.isFinite(numericScore) || numericScore < 0 || numericScore > correction.max_score) {
       setScoreErrors((current) => ({
         ...current,
-        [question.id]: tx(locale, `请输入 0–${formatScore(correction.max_score)} 之间的分数。`, `Enter a score from 0 to ${formatScore(correction.max_score)}.`),
+        [question.id]: tx(locale, `请输入 0–${String(correction.max_score)} 之间的分数。`, `Enter a score from 0 to ${String(correction.max_score)}.`),
       }));
       return { ok: false as const, message: tx(locale, "请先修正标红的分数。", "Correct the highlighted score first.") };
     }
@@ -742,7 +742,7 @@ function ReviewQuestionCard({ locale, student, question, correction, draft, requ
                     <ul className="mt-2 space-y-2">
                       {correction.expert_results.map((expert, index) => (
                         <li key={`${expert.provider}-${index}`} className="rounded-md bg-muted/60 px-3 py-2">
-                          <p className="font-semibold text-foreground">{expert.provider} · {expert.error_kind ? tx(locale, "未给出有效分数 · 不参与合成", "No valid score · excluded from synthesis") : `${formatScore(expert.score)}/${formatScore(expert.max_score)} · ${formatConfidence(expert.confidence)}`}</p>
+                          <p className="font-semibold text-foreground">{expert.provider} · {expert.error_kind ? tx(locale, "未给出有效分数 · 不参与合成", "No valid score · excluded from synthesis") : `${formatScore(expert.score, expert.max_score)}/${String(expert.max_score)} · ${formatConfidence(expert.confidence)}`}</p>
                           {expert.comment ? <MarkdownMath className="mt-1 text-[11px] leading-5">{expert.comment}</MarkdownMath> : null}
                           {!expert.error_kind ? <ScoringSteps locale={locale} steps={expert.steps} /> : null}
                           {expert.knowledge_citations?.length ? <div className="mt-2 border-t pt-2">
@@ -781,7 +781,7 @@ function ReviewQuestionCard({ locale, student, question, correction, draft, requ
               </label>
             </div>
             {scoreError ? <p className="mt-1 text-right text-xs font-medium text-red-500">{scoreError}</p> : null}
-            {!draft.score.trim() && correction && reviewConfirmationScore(correction, "") !== null ? <p className="mt-1 text-right text-xs text-muted-foreground">{tx(locale, `留空将采用 AI 分数 ${formatScore(reviewConfirmationScore(correction, "")!)} 分；如需给零分，请输入 0。`, `Leaving this blank uses the AI score of ${formatScore(reviewConfirmationScore(correction, "")!)}. Enter 0 to award zero points.`)}</p> : null}
+            {!draft.score.trim() && correction && reviewConfirmationScore(correction, "") !== null ? <p className="mt-1 text-right text-xs text-muted-foreground">{tx(locale, `留空将采用 AI 分数 ${formatScore(reviewConfirmationScore(correction, "")!, correction.max_score)} 分；如需给零分，请输入 0。`, `Leaving this blank uses the AI score of ${formatScore(reviewConfirmationScore(correction, "")!, correction.max_score)}. Enter 0 to award zero points.`)}</p> : null}
             <label className="mt-4 grid gap-1.5 text-xs font-medium text-muted-foreground">
               {tx(locale, "补充评语（可选）", "Additional comment (optional)")}
               <textarea

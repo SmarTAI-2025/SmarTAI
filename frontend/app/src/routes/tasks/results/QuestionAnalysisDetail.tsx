@@ -153,9 +153,9 @@ export function QuestionAnalysisDetail({
         <div className="min-w-0">
       <div className="grid grid-cols-2 gap-3 xl:grid-cols-6">
         <DetailMetric label={tx(locale, "作答人数", "Responses")} value={String(question.count)} tone="primary" />
-        <DetailMetric label={tx(locale, "平均分", "Mean")} value={`${formatScore(question.avgScore)} / ${formatScore(question.maxScore)}`} tone="accent" />
+        <DetailMetric label={tx(locale, "平均分", "Mean")} value={`${formatScore(question.avgScore, question.maxScore)} / ${String(question.maxScore)}`} tone="accent" />
         <DetailMetric label={tx(locale, "中位数", "Median")} value={formatScore(metrics.median)} tone="primary" />
-        <DetailMetric label={tx(locale, "最低 / 最高", "Min / max")} value={`${formatScore(question.minScore)} / ${formatScore(question.maxObservedScore)}`} tone="warning" />
+        <DetailMetric label={tx(locale, "最低 / 最高", "Min / max")} value={`${formatScore(question.minScore, question.maxScore)} / ${formatScore(question.maxObservedScore, question.maxScore)}`} tone="warning" />
         <DetailMetric label={tx(locale, "平均置信度", "Mean confidence")} value={formatConfidence(metrics.avgConfidence)} tone="accent" />
         <DetailMetric label={tx(locale, "复核信号 / 分歧题次", "Review signals / disagreement")} value={`${metrics.requiredReviewCount} / ${metrics.disagreementCount}`} tone="danger" />
       </div>
@@ -296,7 +296,7 @@ function StudentPreview({ locale, taskId, question, entry }: { locale: Locale; t
         <strong className="block truncate text-[12px] text-foreground">{entry.student.name} · {entry.student.id}</strong>
         <span className="mt-0.5 block truncate text-[10px] text-muted-foreground">{entry.correction.teacher_comment || entry.correction.comment || tx(locale, "暂无评语", "No feedback")}</span>
       </div>
-      <span className="text-[11px] font-semibold text-primary">{formatScore(score)} / {formatScore(entry.correction.max_score)} · {formatPercent(percent)}</span>
+      <span className="text-[11px] font-semibold text-primary">{formatScore(score, entry.correction.max_score)} / {String(entry.correction.max_score)} · {formatPercent(percent)}</span>
       <span className="text-[11px] text-muted-foreground">{formatConfidence(entry.correction.confidence)}</span>
       <span className="w-fit rounded-full bg-slate-100 px-2.5 py-1 text-[10px] font-semibold text-slate-600">{formatCorrectionScoreSource(entry.correction, locale)}</span>
       <Link to={href} className="inline-flex h-8 w-fit items-center gap-1.5 rounded-[7px] border bg-card px-3 text-[10px] font-semibold text-foreground hover:bg-muted">

@@ -212,7 +212,7 @@ function QuestionDesktopTable({ locale, taskId, rows, returnQuery, columnSort, o
               </td>
               <td className="px-3 py-3 text-[12px] font-semibold text-foreground">{row.question.count}</td>
               <td className="px-3 py-3">
-                <strong className="block text-[12px] text-foreground">{formatScore(row.question.avgScore)} / {formatScore(row.question.maxScore)}</strong>
+                <strong className="block text-[12px] text-foreground">{formatScore(row.question.avgScore, row.question.maxScore)} / {String(row.question.maxScore)}</strong>
                 <span className="mt-0.5 block text-[11px] font-semibold text-primary">{formatPercent(row.question.avgPercent)}</span>
               </td>
               <td className="px-3 py-3">
