@@ -1,7 +1,7 @@
 import { questionTypeLabel } from "@/lib/reviewLabels";
 import { ReviewConfirmButton, ReviewBlockDialog, ReviewStageActions } from "@/components/tasks/ReviewConfirmation";
 import { answerNeedsConfirmation, answerReviewAttention } from "@/lib/submissionReview";
-import { submissionReviewBlockers, submissionConfirmationBlockers, answerReviewBlocked, studentIdentityInvalid, studentIdentityReviewBlocked, type ReviewBlocker } from "@/lib/reviewConfirmation";
+import { submissionReviewBlockers, submissionConfirmationBlockers, answerReviewBlocked, studentIdentityIssue, studentIdentityReviewBlocked, type ReviewBlocker } from "@/lib/reviewConfirmation";
 import { DraftField, type DraftFieldHandle } from "@/components/ui/DraftField";
 import { useDraftProtection } from "@/hooks/useDraftProtection";
 import { useDraftLeave } from "@/hooks/useDraftLeave";
@@ -111,6 +111,7 @@ function StudentAnswerReviewForm() {
   const [identityId, setIdentityId] = useState("");
   const [identityName, setIdentityName] = useState("");
   const [identityError, setIdentityError] = useState<string | null>(null);
+  const [identitySavingStudent, setIdentitySavingStudent] = useState<StudentSubmission | null>(null);
   const [batchProgress, setBatchProgress] = useState<number | null>(null);
   const [batchTotal, setBatchTotal] = useState(0);
   const [batchMessage, setBatchMessage] = useState<string | null>(null);
@@ -131,8 +132,10 @@ function StudentAnswerReviewForm() {
     [students, taskQuery.data?.problem_data],
   );
   const student = useMemo(
-    () => students.find((candidate) => candidate.stu_id === studentId),
-    [studentId, students],
+    // The mutation rekeys the cache before draft cleanup and URL replacement finish.
+    // Keep this editor's original identity alive until that handoff completes.
+    () => identitySavingStudent ?? students.find((candidate) => candidate.stu_id === studentId),
+    [identitySavingStudent, studentId, students],
   );
   const answers = useMemo(() => student ? answerMap(student) : new Map(), [student]);
   const smartFilter = useTaskFilterIntent({
@@ -172,7 +175,7 @@ function StudentAnswerReviewForm() {
   }, [requestedQuestionId]);
 
   useEffect(() => {
-    if (!student) return;
+    if (!student || identitySavingStudent) return;
     if (identityHydrated.current && (identityDraft.dirty || identityDraft.savedAt || identityDraft.conflict)) return;
     identityHydrated.current = true;
     setIdentityOpen(identityRequested && !readOnly);
@@ -504,13 +507,21 @@ function StudentAnswerReviewForm() {
     if (!taskId || !student || !taskQuery.data || (readOnly && !unchanged) || mutationLock.current) return;
     const nextId = unchanged ? student.stu_id : identityId.trim();
     const nextName = unchanged ? student.stu_name : identityName.trim();
-    if (studentIdentityInvalid({ ...student, stu_id: nextId, stu_name: nextName })) {
+    const validationError = identityValidationError(nextId, nextName, t);
+    if (validationError) {
       setIdentityOpen(true);
-      setIdentityError(t("studentSubmissionIdentityRequired"));
+      setIdentityError(validationError);
+      return;
+    }
+    if (dirtyQuestionIds.size > 0) {
+      setIdentityOpen(true);
+      setIdentityError(t("studentSubmissionIdentityAnswerUnsaved"));
       return;
     }
     mutationLock.current = true;
+    setIdentitySavingStudent(nextId !== student.stu_id ? student : null);
     setIdentityError(null);
+    let replacingStudentRoute = false;
     try {
       const result = await identityMutation.mutateAsync({
         taskId,
@@ -526,6 +537,7 @@ function StudentAnswerReviewForm() {
       const nextSearch = new URLSearchParams(searchParams);
       nextSearch.delete("identity");
       if (result.student.stu_id !== student.stu_id) {
+        replacingStudentRoute = true;
         resetScrollForStudentRef.current = result.student.stu_id;
         navigate({
           pathname: studentPath(taskId, result.student.stu_id),
@@ -533,9 +545,15 @@ function StudentAnswerReviewForm() {
         }, { replace: true });
       } else setSearchParams(nextSearch, { replace: true });
     } catch (error) {
-      setIdentityError(identityErrorMessage(error, t));
+      if (identityDraft.isCurrent()) {
+        setIdentityOpen(true);
+        setIdentityError(identityErrorMessage(error, t));
+      }
     } finally {
       mutationLock.current = false;
+      // Router transitions can commit after this promise finishes. Retain the
+      // original student until the keyed form unmounts, avoiding a not-found flash.
+      if (mounted.current && !replacingStudentRoute) setIdentitySavingStudent(null);
     }
   }
 
@@ -698,18 +716,18 @@ function StudentAnswerReviewForm() {
               <div className="mt-3 grid gap-3 sm:grid-cols-[1fr_1fr_auto] sm:items-end">
                 <label className="grid gap-1.5 text-xs font-medium text-foreground">
                   {t("studentSubmissionStudentId")}
-                  <input autoFocus={identityRequested} disabled={mutationBusy} value={identityId} maxLength={160} onChange={(event) => setIdentityId(event.target.value)} className="h-10 rounded-[7px] border bg-card px-3 text-sm outline-none focus:border-primary focus:ring-2 focus:ring-primary/15" />
+                  <input autoFocus={identityRequested} disabled={mutationBusy || Boolean(identitySavingStudent)} value={identityId} maxLength={160} aria-invalid={Boolean(identityError && studentIdentityIssue(identityId))} aria-describedby={identityError ? "identity-save-error" : undefined} onChange={(event) => { setIdentityId(event.target.value); setIdentityError(null); }} className="h-10 rounded-[7px] border bg-card px-3 text-sm outline-none focus:border-primary focus:ring-2 focus:ring-primary/15" />
                 </label>
                 <label className="grid gap-1.5 text-xs font-medium text-foreground">
                   {t("studentSubmissionStudentName")}
-                  <input disabled={mutationBusy} value={identityName} maxLength={160} onChange={(event) => setIdentityName(event.target.value)} className="h-10 rounded-[7px] border bg-card px-3 text-sm outline-none focus:border-primary focus:ring-2 focus:ring-primary/15" />
+                  <input disabled={mutationBusy || Boolean(identitySavingStudent)} value={identityName} maxLength={160} aria-invalid={Boolean(identityError && studentIdentityIssue(identityName))} aria-describedby={identityError ? "identity-save-error" : undefined} onChange={(event) => { setIdentityName(event.target.value); setIdentityError(null); }} className="h-10 rounded-[7px] border bg-card px-3 text-sm outline-none focus:border-primary focus:ring-2 focus:ring-primary/15" />
                 </label>
-                <Button type="submit" className="h-10 px-5" disabled={mutationBusy}>
-                  {identityMutation.isPending ? <LoaderCircle aria-hidden="true" className="h-4 w-4 animate-spin" /> : <Check aria-hidden="true" className="h-4 w-4" />}
-                  {identityMutation.isPending ? t("studentSubmissionIdentitySaving") : identityDirty ? tx(locale, "保存并确认身份", "Save and confirm identity") : tx(locale, "确认身份", "Confirm identity")}
+                <Button type="submit" className="h-10 px-5" disabled={mutationBusy || Boolean(identitySavingStudent)}>
+                  {identityMutation.isPending || identitySavingStudent ? <LoaderCircle aria-hidden="true" className="h-4 w-4 animate-spin" /> : <Check aria-hidden="true" className="h-4 w-4" />}
+                  {identityMutation.isPending || identitySavingStudent ? t("studentSubmissionIdentitySaving") : identityDirty ? tx(locale, "保存并确认身份", "Save and confirm identity") : tx(locale, "确认身份", "Confirm identity")}
                 </Button>
               </div>
-              {identityError ? <p className="mt-2 text-xs font-medium text-danger" role="alert">{identityError}</p> : null}
+              {identityError ? <p id="identity-save-error" className="mt-2 text-xs font-medium text-danger" role="alert">{identityError}</p> : null}
             </form>
           ) : null}
 
@@ -1207,13 +1225,29 @@ function identityMethodKey(method: NonNullable<StudentSubmission["identity_match
   return "studentSubmissionIdentityMethodFilename";
 }
 
+function identityValidationError(id: string, name: string, t: (key: MessageKey) => string) {
+  const idIssue = studentIdentityIssue(id);
+  const nameIssue = studentIdentityIssue(name);
+  if (idIssue === "required" && nameIssue === "required") return t("studentSubmissionIdentityRequired");
+  if (idIssue === "required") return t("studentSubmissionIdentityIdRequired");
+  if (nameIssue === "required") return t("studentSubmissionIdentityNameRequired");
+  if (idIssue === "placeholder") return t("studentSubmissionIdentityIdPlaceholder");
+  if (nameIssue === "placeholder") return t("studentSubmissionIdentityNamePlaceholder");
+  return null;
+}
+
 function identityErrorMessage(error: unknown, t: (key: MessageKey) => string) {
   const normalized = normalizeAPIError(error);
   const code = getAPIErrorCode(normalized) ?? "";
   if (code === "student_identity_conflict") return t("studentSubmissionIdentityConflict");
   if (isWorkflowRevisionConflictCode(code)) return t("studentSubmissionIdentityStale");
-  if (code === "workflow_busy" || code === "student_identity_edit_unavailable") return t("studentSubmissionIdentityUnavailable");
-  if (code === "student_identity_required") return t("studentSubmissionIdentityRequired");
+  if (code === "workflow_busy" || code === "task_workflow_busy") return t("studentSubmissionIdentityBusy");
+  if (code === "student_identity_edit_unavailable") return t("studentSubmissionIdentityUnavailable");
+  if (code === "student_identity_required") return t("studentSubmissionIdentityInvalid");
+  if (code === "student_identity_placeholder") return t("studentSubmissionIdentityPlaceholder");
+  if (normalized.status === 404) return t("studentSubmissionIdentityNotFound");
+  if (normalized.status === 403) return t("studentSubmissionIdentityForbidden");
+  if (normalized.status === 0 || normalized.status >= 500) return t("studentSubmissionIdentityUncertain");
   return t("studentSubmissionIdentityError");
 }
 

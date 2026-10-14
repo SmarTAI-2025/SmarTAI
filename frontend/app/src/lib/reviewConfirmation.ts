@@ -102,9 +102,14 @@ export function answerReviewNextBlocked(answer?: StudentAnswerInfo): boolean {
     && answer?.flag?.includes("recognition_repaired_needs_confirmation"));
 }
 
+export function studentIdentityIssue(value: string): "required" | "placeholder" | null {
+  if (!value?.trim()) return "required";
+  // Match the ingestion default exactly; do not reject a teacher's edited name.
+  return value.trim() === "[Unknown Student]" ? "placeholder" : null;
+}
+
 export function studentIdentityInvalid(student: StudentSubmission): boolean {
-  return [student.stu_id, student.stu_name].some(value => !value?.trim()
-    || /^(?:\[?unknown student\]?|未知学生)$/i.test(value.trim()));
+  return [student.stu_id, student.stu_name].some(value => studentIdentityIssue(value) !== null);
 }
 
 export function studentIdentityReviewBlocked(student: StudentSubmission, sources: SubmissionSourceOutcome[] = []): boolean {
