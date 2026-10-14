@@ -60,7 +60,8 @@ export function useTaskFilterIntent({ taskId, surface, resolveLocal, queryParam 
 
   function writeQuery(value: string, sort?: FilterIntentResult["sort"], ordered = false) {
     const next = new URLSearchParams(paramsRef.current);
-    if (value) next.set(queryParam, value); else next.delete(queryParam);
+    if (value.trim()) next.set(queryParam, value);
+    else { next.delete(queryParam); next.delete("sort"); next.delete("column_sort"); }
     next.delete("page");
     next.delete("ask_order");
     if (ordered) { next.set("ask_order", "1"); next.delete("sort"); next.delete("column_sort"); }
@@ -83,6 +84,7 @@ export function useTaskFilterIntent({ taskId, surface, resolveLocal, queryParam 
   async function apply(value = query) {
     cancel();
     const text = value.trim();
+    if (!text) { setQuery(""); return; }
     const requestKey = keyFor(text);
     const ticket = generation.current;
     const local = resolve(text);

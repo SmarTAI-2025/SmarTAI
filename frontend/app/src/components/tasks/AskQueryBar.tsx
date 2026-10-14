@@ -74,18 +74,11 @@ export function TaskQueryBar({ filter, taskId, ...props }: Omit<AskQueryBarProps
     locale, phase: "analytics_filter_intent", returnTo: taskId ? `/tasks/${encodeURIComponent(taskId)}` : "/history",
   }) : null;
   const message = filter.execution ? "" : filter.pending ? (zh ? "正在理解筛选与排序…" : "Interpreting the filter and sort…")
-    : filter.unrecognized ? ((zh ? "暂时无法完整理解此条件，未应用部分筛选。" : "The full instruction could not be understood; no partial filter was applied.") + (filter.explanation ? ` ${filter.explanation}` : ""))
+    : filter.unrecognized ? (zh ? "暂时无法完整理解此条件，未应用部分筛选。请换一种表达重试。" : "The full instruction could not be understood; no partial filter was applied. Please rephrase and try again.")
       : filter.needsApply ? (zh ? "查询尚未应用，请点击 Ask SmarTAI。" : "Query not applied yet. Click Ask SmarTAI.")
-      : filter.source === "local" ? (zh ? "已本地匹配，未调用模型。" : "Matched locally; no model call.")
-        : filter.explanation;
+      : "";
   return <AskQueryBar {...props} value={filter.query} onChange={filter.setQuery} onApply={(value) => void filter.apply(value)} onCancel={filter.cancel} pending={filter.pending} feedback={<>
-    <GroundedAskAnswer execution={filter.execution} locale={props.locale} onClarify={(text) => {
-      const mention = filter.execution?.candidates?.[0]?.text;
-      const next = mention && filter.query.toLocaleLowerCase().includes(mention.toLocaleLowerCase())
-        ? filter.query.replace(new RegExp(mention.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i"), text)
-        : `${filter.query}；明确对象：${text}`;
-      void filter.apply(next);
-    }} />
+    <GroundedAskAnswer execution={filter.execution} locale={props.locale} />
     {info ? <RecoverableActionState compact locale={locale} info={info}
       primaryAction={info.actionKind === "byok" ? undefined : { label: info.actionLabel, onClick: () => void filter.apply() }} />
       : message ? <p role="status" className={cn("mt-2 text-xs leading-5", filter.unrecognized ? "text-amber-700" : "text-muted-foreground")}>{message}</p> : null}</>

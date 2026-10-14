@@ -209,9 +209,100 @@ def test_person_chart_without_identity_is_rejected(snapshot):
 
 
 def test_inspection_then_final_query_never_uses_sample_as_population(snapshot):
-    p = Provider({}, {"action":"inspect","sql":"SELECT * FROM students LIMIT 1"}, {"result_kind":"table","sql":"SELECT count(*) AS n FROM students"})
+    p = Provider({"output":"chart"}, {"action":"inspect","sql":"SELECT * FROM students LIMIT 1"},
+        {"result_kind":"chart","sql":"SELECT 'Students' AS label, count(*) AS n FROM students", "chart":{"type":"bar","x":"label","y":["n"]}})
     result=asyncio.run(ask(task_id="task",owner_id="t",question="有多少学生？",surface="student_analysis",provider=p,snapshot=snapshot))
-    assert result["data"]["rows"] == [[4]] and len(p.calls)==3
+    assert result["data"]["rows"] == [["Students", 4]] and len(p.calls)==3
+
+
+@pytest.mark.parametrize("surface,field,expected", [
+    ("student_analysis", "student_id", "students"), ("submission_review", "student_id", "students"),
+    ("review_overview", "student_id", "students"), ("question_analysis", "q_id", "questions"),
+    ("question_preparation", "q_id", "questions"), ("student_answer_review", "q_id", "questions"),
+])
+@pytest.mark.parametrize("planner_kind", ["table", "chart", "students"])
+def test_resolved_output_controls_all_table_surfaces(snapshot, surface, field, expected, planner_kind):
+    result = run(snapshot, "显示Alex的成绩", {"references": [{"kind": "student", "text": "Alex"}], "output": "selection"},
+        {"result_kind": planner_kind, "sql": f"SELECT {field} FROM grades ORDER BY q_id DESC"}, surface=surface)
+    assert result["recognized"] and result["chart"] is None
+    assert result["selection"] == {"kind": expected, "ids": ["DEMO-001"] if field == "student_id" else ["Q4", "Q3", "Q2", "Q1"]}
+
+
+def test_chart_surface_repairs_a_plan_missing_bindings_instead_of_returning_raw_table(snapshot):
+    result = run(snapshot, "比较各题得分率与低置信题次", {},
+        {"sql": "SELECT number,avg_percent,low_confidence_count FROM questions ORDER BY order_index"},
+        {"sql": "SELECT number,avg_percent,low_confidence_count FROM questions ORDER BY order_index",
+         "chart": {"type": "bar", "x": "number", "y": ["avg_percent", "low_confidence_count"]}}, surface="chart")
+    assert result["recognized"] and result["kind"] == "chart"
+    assert result["chart"]["traces"][1]["x"] == ["1", "2", "3", "4"]
+    assert result["chart"]["traces"][1]["y"] == [0, 0, 0, 0]
+
+
+def test_question_low_confidence_counts_match_student_counts_including_unknowns():
+    task, result = payload()
+    for row, value in zip(result["results"], [.64, .65, None, .1]):
+        row["corrections"][0]["confidence"] = value
+    snapshot = Snapshot.from_payloads([(task, result)], "task")
+    assert [q["low_confidence_count"] for q in snapshot.tables["questions"]] == [2, 0, 0, 0]
+    assert sum(s["low_confidence_count"] for s in snapshot.tables["students"]) == 2
+
+
+@pytest.mark.parametrize("metric", ["avg_percent", "low_confidence_count"])
+def test_chart_repairs_numeric_metric_used_as_series(snapshot, metric):
+    sql = "SELECT number,avg_percent,low_confidence_count FROM questions ORDER BY order_index"
+    result = run(snapshot, "Compare question score percentages and low-confidence counts", {},
+        {"sql": sql, "chart": {"x": "number", "y": ["avg_percent"], "series": metric}},
+        {"sql": sql, "chart": {"x": "number", "y": ["avg_percent", "low_confidence_count"]}}, surface="chart")
+    assert result["recognized"]
+    assert [trace["name"] for trace in result["chart"]["traces"]] == ["avg_percent", "low_confidence_count"]
+    assert result["chart"]["traces"][1]["y"] == [0, 0, 0, 0]
+
+
+def test_chart_does_not_publish_partial_metrics_when_binding_repair_fails(snapshot):
+    bad = {"sql": "SELECT number,avg_percent,low_confidence_count FROM questions",
+           "chart": {"x": "number", "y": ["avg_percent"], "series": "low_confidence_count"}}
+    result = run(snapshot, "Compare question metrics", {}, bad, bad, bad, surface="chart")
+    assert not result["recognized"] and result["chart"] is None
+
+
+def test_missing_selection_keys_are_repaired_without_silently_accepting_a_chart(snapshot):
+    result = run(snapshot, "显示Alex的成绩", {"references": [{"kind": "student", "text": "Alex"}]},
+        {"result_kind": "table", "sql": "SELECT total_score FROM students"},
+        {"result_kind": "chart", "sql": "SELECT student_id,q_id,score FROM grades"})
+    assert result["selection"] == {"kind": "students", "ids": ["DEMO-001"]}
+    assert result["chart"] is None
+
+
+@pytest.mark.parametrize("question", ["显示及格与未及格人数", "Show pass and fail counts"])
+def test_standard_pass_fail_counts_students_with_unknown_separate(question):
+    task, result = payload()
+    for row, rate in zip(result["results"], [.9, .6, .5, None]):
+        for correction in row["corrections"]:
+            correction["score"] = correction["provisional_score"] = None if rate is None else rate * correction["max_score"]
+    provider = Provider({"statistic": "student_pass_fail_counts"})
+    response = asyncio.run(ask(task_id="task", owner_id="teacher", question=question, surface="chart", provider=provider,
+        snapshot=Snapshot.from_payloads([(task,result)], "task")))
+    assert response["data"]["rows"] == [["Passed", 2], ["Failed", 1], ["Unscored", 1]]
+    assert len(provider.calls) == 1  # SQL planner cannot reinterpret this metric or count grades.
+
+
+def test_pass_fail_counts_respect_resolved_target_set(snapshot):
+    result = run(snapshot, "Alex的及格人数", {"statistic": "student_pass_fail_counts", "references": [{"kind": "student", "text": "Alex"}]}, surface="chart")
+    assert result["data"]["rows"] == [["Passed", 1], ["Failed", 0], ["Unscored", 0]]
+
+
+@pytest.mark.parametrize("query,ids", [("Alex", ["DEMO-001", "OTHER"]), ("ale", ["DEMO-001", "OTHER"]), ("Alex Wu", ["OTHER"]), ("Ale Chen", [])])
+def test_bare_name_uses_matching_contract_not_model_chart_or_exact_guess(snapshot, query, ids):
+    snapshot.tables["students"].append({**snapshot.tables["students"][0], "student_id": "OTHER", "student_name": "Alex Wu"})
+    provider = Provider({"references": [{"kind": "student", "text": query, "field": "student_name", "operator": "exact"}], "output": "chart"})
+    response = asyncio.run(ask(task_id="task", owner_id="teacher", question=query, surface="student_analysis", provider=provider, snapshot=snapshot))
+    assert response["selection"] == {"kind": "students", "ids": ids}
+    assert response["chart"] is None and len(provider.calls) == 1
+
+
+def test_explicit_exact_name_is_not_relaxed(snapshot):
+    result = run(snapshot, "姓名必须恰好等于Alex", {"references": [{"kind": "student", "text": "Alex", "field": "student_name", "operator": "exact"}]}, {"sql": "SELECT student_id FROM students"})
+    assert result["selection"]["ids"] == []
 
 
 def test_follow_up_receives_history_but_new_name_wins(snapshot):
