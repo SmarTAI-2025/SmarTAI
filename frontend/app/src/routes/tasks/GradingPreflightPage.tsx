@@ -1,7 +1,7 @@
 import { answerReviewAttention } from "@/lib/submissionReview";
 import { questionReviewIssues, questionReviewBlockers, submissionReviewBlockers } from "@/lib/reviewConfirmation";
 import { AlertTriangle, ArrowLeft, CheckCircle2, ChevronRight, LoaderCircle, Timer } from "lucide-react";
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Link, Navigate, useNavigate, useParams } from "react-router-dom";
 import { getAPIErrorCode, normalizeAPIError } from "@/api/client";
 import { useGradingSetup, useStartGrading, useTask } from "@/api/hooks";
@@ -41,6 +41,10 @@ export function GradingPreflightPage() {
   const [showBlocker, setShowBlocker] = useState(false);
   const startTriggeredRef = useRef(false);
   const startHandlerRef = useRef<() => void>(() => undefined);
+
+  useLayoutEffect(() => {
+    window.scrollTo({ top: 0, left: 0, behavior: "instant" });
+  }, [taskId]);
 
   const task = taskQuery.data;
   const setupResponse = setupQuery.data;

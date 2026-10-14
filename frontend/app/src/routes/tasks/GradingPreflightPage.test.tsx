@@ -36,6 +36,7 @@ describe("GradingPreflightPage regrade mode", () => {
   });
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.spyOn(window, "scrollTo").mockImplementation(() => undefined);
     mutateAsync.mockResolvedValue({ status: "started" });
     (useTask as unknown as ReturnType<typeof vi.fn>).mockReturnValue({
       data: {
@@ -134,6 +135,7 @@ describe("GradingPreflightPage regrade mode", () => {
 
   afterEach(() => {
     vi.useRealTimers();
+    vi.restoreAllMocks();
   });
 
   it("opens the identity editor when only the student's identity needs review", () => {
