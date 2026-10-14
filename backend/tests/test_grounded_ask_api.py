@@ -107,3 +107,21 @@ def test_oversized_history_is_rejected_before_model():
     provider=Provider()
     response=_client(owner,_Registry(provider)).post(f"/analytics/{seeded['task_id']}/ask",json={"question":"查询","history":["x"*2001]})
     assert response.status_code==422 and provider.calls==[]
+
+
+@pytest.mark.parametrize("auth_scope", ["user", "frontier_demo"])
+def test_demo_and_teacher_use_same_ask_selection_and_chart_contract(auth_scope):
+    owner = _user("teacher", "shared-ask")
+    owner.auth_scope = auth_scope
+    seeded = _seed_graded_assignment(owner)
+    sid = seeded["students"][0].id
+    provider = Provider({"references": [{"kind": "student", "text": sid, "field": "student_id", "operator": "exact"}]},
+        {"result_kind": "table", "sql": "SELECT student_id,q_id,score FROM grades"})
+    response = _client(owner, _Registry(provider)).post(f"/analytics/{seeded['task_id']}/ask", json={"question": sid, "surface": "student_analysis"})
+    assert response.status_code == 200
+    assert response.json()["selection"] == {"kind": "students", "ids": [sid]}
+    provider = Provider({}, {"result_kind": "table", "sql": "SELECT number,avg_percent,low_confidence_count FROM questions", "chart": {"type": "bar", "x": "number", "y": ["low_confidence_count"]}})
+    response = _client(owner, _Registry(provider)).post(f"/analytics/{seeded['task_id']}/query", json={"question": "Compare questions", "mode": "chart"})
+    assert response.status_code == 200
+    assert response.json()["mode"] == "chart"
+    assert response.json()["traces"][0]["y"] == [1]

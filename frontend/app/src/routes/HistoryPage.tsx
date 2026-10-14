@@ -81,7 +81,6 @@ function GradingHistoryPanel() {
   const interpretQuery = useInterpretTaskHistoryQuery(() => conversation.current);
   const [manualSort, setManualSort] = useState<TaskHistoryQuery["sort"] | null>(null);
   const [interpretation, setInterpretation] = useState<HistoryInterpretation | null>(null);
-  const [preSmartQuery, setPreSmartQuery] = useState<TaskHistoryQuery | null>(null);
   const [smartError, setSmartError] = useState(false);
   const interpretationRequest = useRef(0);
   useEffect(() => () => { interpretationRequest.current += 1; }, []);
@@ -135,7 +134,7 @@ function GradingHistoryPanel() {
   function handleChange(patch: Partial<TaskHistoryQuery>, keepPage = false) {
     interpretationRequest.current += 1;
     if (!interpretation?.execution || !(patch.sort || patch.page || patch.page_size)) {
-      setInterpretation(null); setPreSmartQuery(null);
+      setInterpretation(null);
     }
     if (patch.sort) setManualSort(patch.sort);
     setSmartError(false);
@@ -146,7 +145,6 @@ function GradingHistoryPanel() {
     conversation.current = []; setManualSort(null);
     interpretationRequest.current += 1;
     setInterpretation(null);
-    setPreSmartQuery(null);
     setSmartError(false);
     interpretQuery.reset();
     writeQuery({ ...DEFAULT_HISTORY_QUERY, page_size: query.page_size });
@@ -169,7 +167,6 @@ function GradingHistoryPanel() {
         setInterpretation({ ...result, conditions: [] });
         return;
       }
-      setPreSmartQuery(query);
       setInterpretation(result); setManualSort(null);
       if (result.execution) {
         if (result.execution.recognized) conversation.current = [...conversation.current, value].slice(-4);
@@ -188,8 +185,7 @@ function GradingHistoryPanel() {
     setInterpretation(null);
     setSmartError(false);
     interpretQuery.reset();
-    if (preSmartQuery) writeQuery(preSmartQuery);
-    setPreSmartQuery(null);
+    writeQuery({ ...DEFAULT_HISTORY_QUERY, page_size: query.page_size });
   }
 
   function handleRemoveCondition(field: string) {

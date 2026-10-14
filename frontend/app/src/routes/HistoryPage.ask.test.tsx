@@ -69,11 +69,12 @@ describe("Current task Ask SmarTAI", () => {
     expect(screen.getByRole("tabpanel")).toHaveAttribute("aria-labelledby", "drafts-history-tab");
   });
 
-  it("applies the semantic interpretation and shows its explanation", async () => {
+  it("applies the semantic interpretation without showing internal explanation", async () => {
     mocks.interpret.mockResolvedValue(interpretation);
     mount();
     ask();
-    expect(await screen.findByText(interpretation.explanation)).toBeInTheDocument();
+    await waitFor(() => expect(mocks.history).toHaveBeenLastCalledWith(expect.objectContaining({ unfinished: true })));
+    expect(screen.queryByText(interpretation.explanation)).not.toBeInTheDocument();
     expect(mocks.interpret).toHaveBeenCalledExactlyOnceWith("还有什么没有批完");
     await waitFor(() => expect(mocks.history).toHaveBeenLastCalledWith(expect.objectContaining({ unfinished: true })));
   });
@@ -96,6 +97,17 @@ describe("Current task Ask SmarTAI", () => {
     await act(async () => finish(interpretation));
     expect(screen.queryByText(interpretation.explanation)).not.toBeInTheDocument();
     expect(mocks.history).toHaveBeenLastCalledWith(expect.not.objectContaining({ unfinished: true }));
+  });
+
+  it("clearing Ask restores default sorting instead of earlier manual filters", async () => {
+    mocks.interpret.mockResolvedValue(interpretation);
+    mount("/history?sort=name_desc&page=2&status=grading");
+    ask();
+    await waitFor(() => expect(mocks.history).toHaveBeenLastCalledWith(expect.objectContaining({ unfinished: true })));
+    fireEvent.change(screen.getByRole("textbox", { name: "SmarTAI 智能筛选任务" }), { target: { value: "" } });
+    await waitFor(() => expect(mocks.history).toHaveBeenLastCalledWith(expect.objectContaining({ sort: "updated_desc", page: 1 })));
+    expect(mocks.history).toHaveBeenLastCalledWith(expect.not.objectContaining({ unfinished: true }));
+    expect(mocks.history).toHaveBeenLastCalledWith(expect.not.objectContaining({ status: "grading" }));
   });
 
   it.each([["进度", "progress"], ["预计剩余", "eta"]])("sorts %s on the server, reverses and resets pagination", async (label, key) => {
@@ -121,7 +133,7 @@ describe("Current task Ask SmarTAI", () => {
       selection: { kind: "tasks", ids: tasks.map(task => task.task_id) }, tasks, chart: null,
     } });
     mount(); ask();
-    await screen.findByText("任务查询完成");
+    await screen.findByRole("link", { name: "Task 1" });
     const names = () => within(screen.getByRole("table")).getAllByRole("row").slice(1)
       .map(row => within(row).getAllByRole("link")[0].textContent);
     fireEvent.click(screen.getByRole("button", { name: /^进度，/ }));

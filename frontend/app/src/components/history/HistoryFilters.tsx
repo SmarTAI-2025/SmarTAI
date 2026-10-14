@@ -93,11 +93,7 @@ export function HistoryFilters({
         </button>
       </div>
 
-      <GroundedAskAnswer execution={interpretation?.execution} locale={locale} onClarify={(text) => {
-        const original = interpretation?.execution?.candidates?.[0]?.text;
-        const next = original ? smartDraft.replace(new RegExp(original.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i"), text) : `${smartDraft}；明确对象：${text}`;
-        setSmartDraft(next); onInterpret(next);
-      }} />
+      <GroundedAskAnswer execution={interpretation?.execution} locale={locale} />
       {interpretation && !interpretation.execution ? (
         <div className="mt-3 border-t pt-3" aria-live="polite">
           <div className="flex flex-wrap items-center gap-2">
@@ -128,7 +124,6 @@ export function HistoryFilters({
                 : `Applied ${interpretation.conditions.length} editable ${interpretation.conditions.length === 1 ? "condition" : "conditions"}.`
               : t("historySmartNoCondition")}
           </p>
-          {interpretation.explanation ? <p role="status" className="mt-2 text-xs leading-5 text-muted-foreground">{interpretation.explanation}</p> : null}
           {interpretation.ambiguities.length ? (
             <div className="mt-2 rounded-md bg-amber-50 px-3 py-2 text-xs leading-5 text-amber-800 dark:bg-amber-950/40 dark:text-amber-200">
               <strong>{t("historySmartAmbiguity")}</strong>

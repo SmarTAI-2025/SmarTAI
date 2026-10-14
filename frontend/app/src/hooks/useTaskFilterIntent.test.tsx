@@ -21,6 +21,17 @@ function useHarness(context = "S1") {
 
 describe("Ask request ownership and ordering", () => {
   beforeEach(() => vi.clearAllMocks());
+  it.each(["", "   "])("clearing to %j restores default sort and cancels the current selection", async (empty) => {
+    const { result } = renderHook(() => useHarness(), { wrapper });
+    await act(async () => { await result.current.apply("按满分升序"); });
+    act(() => result.current.header());
+    act(() => result.current.setQuery(empty));
+    expect(result.current.params.has("sort")).toBe(false);
+    expect(result.current.params.has("column_sort")).toBe(false);
+    expect(result.current.params.has("q")).toBe(false);
+    expect(result.current.intent).toEqual(EMPTY_FILTER_INTENT);
+    expect(result.current.execution).toBeUndefined();
+  });
   it("does not call a model for a just-submitted local instruction before URL rerender", async () => {
     const { result } = renderHook(() => useHarness(), { wrapper });
     await act(async () => { await result.current.apply("按满分升序"); });
