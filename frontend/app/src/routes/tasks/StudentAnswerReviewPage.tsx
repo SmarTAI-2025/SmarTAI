@@ -474,7 +474,7 @@ function StudentAnswerReviewForm() {
   }
 
   function startEditing(question: SubmissionQuestion) {
-    if (readOnly) return;
+    if (readOnly || mutationLock.current) return;
     const answer = answers.get(question.id);
     setDrafts((current) => ({
       ...current,
@@ -803,7 +803,7 @@ function StudentAnswerReviewForm() {
                     saving={savingQuestionId === question.id}
                     saveError={saveErrors[question.id]}
                     editing={editingQuestionIds.has(question.id)}
-                    readOnly={readOnly || mutationBusy && savingQuestionId !== question.id}
+                    readOnly={readOnly || Boolean(identitySavingStudent) || mutationBusy && savingQuestionId !== question.id}
                     onDraftChange={(patch) => updateDraft(question.id, patch)}
                     onSave={(moveNext) => void saveAnswer(question, moveNext)}
                     onEdit={() => startEditing(question)}
@@ -1033,6 +1033,7 @@ function AnswerReviewCard({ question, answer, draft, sourceFilename, previous, n
           {editing ? (
             <>
               <textarea
+                disabled={readOnly}
                 value={draft.content}
                 onChange={(event) => onDraftChange({ content: event.target.value })}
                 placeholder={t("answerReviewContentPlaceholder")}

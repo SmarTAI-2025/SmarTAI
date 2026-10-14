@@ -9,6 +9,7 @@ import { taskKeys } from "@/api/hooks/keys";
 import { DraftLeaveProvider } from "@/hooks/useDraftLeave";
 import { PageDraftSession } from "@/hooks/useDraftProtection";
 import { clearPageDrafts, readPageDraft, objectDraftCodec } from "@/lib/pageDraftStore";
+import * as pageDraftStore from "@/lib/pageDraftStore";
 import type { Task } from "@/types";
 import { StudentAnswerReviewPage } from "./StudentAnswerReviewPage";
 
@@ -120,6 +121,34 @@ describe("identity confirmation with the real query cache and draft session", ()
     await user.click(screen.getByRole("button", { name: "保存并确认身份" }));
     expect(screen.getByRole("alert")).toHaveTextContent(`请填写${field}后再确认`);
     expect(api.identity).not.toHaveBeenCalled();
+  });
+
+  it.each([false, true])("keeps response editing locked until identity draft cleanup and navigation finish (editor open: %s)", async (editing) => {
+    task.student_data.OLD.stu_name = "Lin";
+    const removeDraft = pageDraftStore.removePageDraft;
+    let finishCleanup!: () => void;
+    const cleanupPending = new Promise<void>(resolve => { finishCleanup = resolve; });
+    const removal = vi.spyOn(pageDraftStore, "removePageDraft").mockImplementationOnce(async (...args) => {
+      await cleanupPending;
+      return removeDraft(...args);
+    });
+    const { user, router } = openPage();
+    await user.clear(await screen.findByRole("textbox", { name: "学号" }));
+    await user.type(screen.getByRole("textbox", { name: "学号" }), "NEW");
+    if (editing) await user.click(screen.getByRole("button", { name: "修改" }));
+    await user.click(screen.getByRole("button", { name: "保存并确认身份" }));
+    try {
+      await waitFor(() => expect(removal).toHaveBeenCalled());
+      expect(router.state.location.pathname).toContain("/OLD");
+      expect(screen.getByRole("textbox", { name: "学号" })).toBeDisabled();
+      expect(screen.queryByRole("button", { name: "修改" })).not.toBeInTheDocument();
+      if (editing) {
+        expect(document.querySelector("textarea")).toBeDisabled();
+        expect(document.querySelector("textarea")).toHaveValue("Original answer");
+      } else expect(screen.getByText("Original answer")).toBeInTheDocument();
+    } finally { await act(async () => finishCleanup()); }
+    await waitFor(() => expect(router.state.location.pathname).toContain("/NEW"));
+    expect(await screen.findByRole("button", { name: "修改" })).toBeEnabled();
   });
 
   it("does not lose an unsaved response when changing the identity would remount the detail", async () => {

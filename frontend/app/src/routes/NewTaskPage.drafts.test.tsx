@@ -105,7 +105,53 @@ it("reuses the create idempotency key after an uncertain response and navigation
   await waitFor(() => expect(name()).toHaveValue("Retry assignment"));
   fireEvent.submit(document.querySelector("form")!);
   await screen.findByText("Upload problems");
-  expect(state.create.mock.calls[0][0].idempotencyKey).toBe(state.create.mock.calls[1][0].idempotencyKey);
+  expect(state.create.mock.calls[1][0]).toEqual(state.create.mock.calls[0][0]);
+});
+
+it("reuses the request key when retried as soon as the saved form becomes visible", async () => {
+  state.create.mockRejectedValueOnce(new Error("connection lost"));
+  const { router } = mount();
+  fireEvent.change(name(), { target: { value: "Immediate retry" } });
+  fireEvent.submit(document.querySelector("form")!);
+  await screen.findByRole("alert");
+  await saveDraft();
+  await act(() => router.navigate("/settings/byok"));
+  // Retry in the DOM-observer microtask: the restored form is visible, but
+  // React's passive effects may not yet have synchronized the submission key.
+  const observer = new MutationObserver(() => {
+    const input = document.querySelector<HTMLInputElement>("#new-task-name");
+    if (input?.value !== "Immediate retry") return;
+    observer.disconnect();
+    input.form!.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+  });
+  observer.observe(document.body, { childList: true, subtree: true, attributes: true });
+  try {
+    await act(() => router.navigate(-1));
+    await screen.findByText("Upload problems");
+    expect(state.create).toHaveBeenCalledTimes(2);
+    expect(state.create.mock.calls[1][0]).toEqual(state.create.mock.calls[0][0]);
+  } finally { observer.disconnect(); }
+});
+
+it.each(["changed input", "deleted draft"])("uses a new request key after %s", async (change) => {
+  state.create.mockRejectedValueOnce(new Error("connection lost"));
+  mount();
+  fireEvent.change(name(), { target: { value: "First attempt" } });
+  fireEvent.submit(document.querySelector("form")!);
+  await screen.findByRole("alert");
+  if (change === "deleted draft") {
+    await saveDraft();
+    vi.spyOn(window, "confirm").mockReturnValue(true);
+    fireEvent.click(screen.getByRole("button", { name: "删除本页草稿" }));
+    await waitFor(() => expect(name()).toHaveValue(""));
+    fireEvent.change(name(), { target: { value: "First attempt" } });
+  } else {
+    fireEvent.change(name(), { target: { value: "Different assignment" } });
+  }
+  fireEvent.submit(document.querySelector("form")!);
+  await screen.findByText("Upload problems");
+  expect(state.create).toHaveBeenCalledTimes(2);
+  expect(state.create.mock.calls[1][0].idempotencyKey).not.toBe(state.create.mock.calls[0][0].idempotencyKey);
 });
 
 async function saveDraft() { await waitFor(() => expect(screen.getByRole("button", { name: "暂存" })).toBeEnabled()); fireEvent.click(screen.getByRole("button", { name: "暂存" })); await waitFor(() => expect(screen.getByText(/已暂存 ·/)).toBeInTheDocument()); }
