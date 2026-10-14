@@ -1,5 +1,6 @@
 import type { Correction, ProblemInfo, StudentAnswerInfo, StudentResult, StudentSubmission, Task, TaskResultResponse } from "@/types";
 import type { Locale } from "@/i18n/messages";
+import { VERY_LOW_REVIEW_CONFIDENCE, type ReviewAttention } from "@/lib/reviewConfirmation";
 
 export const LOW_CONFIDENCE_THRESHOLD = 0.65;
 
@@ -192,13 +193,14 @@ export function correctionScoreSource(correction: Correction): CorrectionScoreSo
 }
 
 export function formatCorrectionScoreSource(correction: Correction, locale: Locale): string {
-  const labels: Record<CorrectionScoreSource, [string, string]> = {
-    ai_untouched: ["采用 AI 分数 · 教师未操作", "AI score used · no teacher action"],
-    teacher_confirmed_same: ["教师已处理 · 沿用 AI 分数", "Teacher handled · AI score retained"],
-    teacher_changed: ["教师已修改分数", "Teacher changed the score"],
-    hard_failure: ["无法给出分数 · 需要处理", "No valid score · action required"],
-  };
-  return labels[correctionScoreSource(correction)][locale === "en-US" ? 1 : 0];
+  if (hasReviewSignal(correction)) {
+    if (effectiveCorrectionScore(correction) === null) return locale === "en-US" ? "No valid score · action required" : "无法给出分数 · 需要处理";
+    return locale === "en-US" ? "Review pending" : "待复核";
+  }
+  if (!isCorrectionReviewConfirmed(correction)) return locale === "en-US" ? "Current score" : "当前采用分数";
+  return correctionScoreSource(correction) === "teacher_changed"
+    ? locale === "en-US" ? "Teacher changed the score" : "教师已修改分数"
+    : locale === "en-US" ? "Teacher confirmed" : "教师已确认";
 }
 
 export function summarizeReviewScoreSources(corrections: Correction[]): ReviewScoreSourceSummary {
@@ -210,9 +212,11 @@ export function summarizeReviewScoreSources(corrections: Correction[]): ReviewSc
     total: 0,
   };
   for (const correction of corrections) {
-    if (!hasReviewSignal(correction)) continue;
+    if (!hasReviewSignal(correction) && !isCorrectionReviewConfirmed(correction)) continue;
     summary.total += 1;
-    const source = correctionScoreSource(correction);
+    const source = hasReviewSignal(correction)
+      ? effectiveCorrectionScore(correction) === null ? "hard_failure" : "ai_untouched"
+      : correctionScoreSource(correction);
     if (source === "ai_untouched") summary.aiUntouched += 1;
     else if (source === "teacher_confirmed_same") summary.teacherConfirmedSame += 1;
     else if (source === "teacher_changed") summary.teacherChanged += 1;
@@ -260,14 +264,46 @@ export function formatConfidence(value: number | null | undefined) {
 }
 
 export function isLowConfidence(correction: Correction) {
-  return safeNumber(correction.confidence) < LOW_CONFIDENCE_THRESHOLD;
+  return hasReviewSignal(correction) && Number.isFinite(correction.confidence)
+    && correction.confidence >= 0 && correction.confidence <= VERY_LOW_REVIEW_CONFIDENCE;
 }
 
 export function hasReviewSignal(correction: Correction) {
-  return correction.requires_human_review
-    || isLowConfidence(correction)
-    || correctionReviewReasonIds(correction).length > 0
-    || HARD_FAILURE_METHODS.has(correction.synthesis_method ?? "");
+  return correctionReviewAttention(correction) !== "none";
+}
+
+export function isCorrectionReviewConfirmed(correction: Correction): boolean {
+  return Number.isFinite(correction.teacher_score) && correction.review_status === "confirmed" && !correctionReviewBlocked(correction);
+}
+
+function validReviewScore(value: number | null | undefined, maxScore: number): boolean {
+  return typeof value === "number" && Number.isFinite(value) && Number.isFinite(maxScore) && maxScore > 0 && value >= 0 && value <= maxScore;
+}
+
+export function correctionReviewBlocked(correction: Correction): boolean {
+  if (!validReviewScore(effectiveCorrectionScore(correction), correction.max_score)) return true;
+  const originalScore = correction.provisional_score === undefined ? correction.score : correction.provisional_score;
+  return !validReviewScore(originalScore, correction.max_score) && correction.review_status !== "confirmed";
+}
+
+/** One pending-review rule for the review queue, analysis, filters and charts. */
+export function correctionReviewAttention(correction: Correction): ReviewAttention {
+  if (correctionReviewBlocked(correction)) return "blocking";
+  if (isCorrectionReviewConfirmed(correction)) return "none";
+  const veryLowConfidence = Number.isFinite(correction.confidence) && correction.confidence >= 0 && correction.confidence <= VERY_LOW_REVIEW_CONFIDENCE;
+  return veryLowConfidence || hasExpertDisagreement(correction) ? "advisory" : "none";
+}
+
+export function getExpertScoreSpread(correction: Correction): number {
+  const scores = correction.expert_results?.filter(expert => !expert.error_kind)
+    .map(expert => expert.score)
+    .filter((score): score is number => typeof score === "number" && Number.isFinite(score)) ?? [];
+  return scores.length ? Math.max(...scores) - Math.min(...scores) : 0;
+}
+
+export function hasExpertDisagreement(correction: Correction): boolean {
+  return correctionReviewReasonIds(correction).some(reason => reason === "high_indecisiveness" || reason === "score_spread_high")
+    || getExpertScoreSpread(correction) > Math.max(1, correction.max_score * 0.25);
 }
 
 export function reviewReasonLabel(reason: string, locale: Locale = "zh-CN") {
@@ -315,7 +351,7 @@ function buildStudentSummary(
   const totalMax = sum(resolvedScores.map((item) => item.maxScore));
   const confidenceValues = corrections.map((correction) => safeNumber(correction.confidence));
   const lowConfidenceCount = corrections.filter(isLowConfidence).length;
-  const reviewCount = corrections.filter((correction) => correction.requires_human_review).length;
+  const reviewCount = corrections.filter(hasReviewSignal).length;
 
   return {
     id: result.student_id,
@@ -360,7 +396,7 @@ function buildQuestionSummary(qId: string, problem: ProblemInfo | undefined, ent
     minScore: scores.length ? Math.min(...scores) : null,
     maxObservedScore: scores.length ? Math.max(...scores) : null,
     lowConfidenceCount: entries.filter((entry) => isLowConfidence(entry.correction)).length,
-    reviewCount: entries.filter((entry) => entry.correction.requires_human_review).length,
+    reviewCount: entries.filter((entry) => hasReviewSignal(entry.correction)).length,
   };
 }
 

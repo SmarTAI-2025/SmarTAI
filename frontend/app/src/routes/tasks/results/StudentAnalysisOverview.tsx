@@ -8,6 +8,9 @@ import { ArrowRight, X } from "lucide-react";
 import { useMemo, type ReactNode } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import {
+  hasReviewSignal as correctionNeedsFormalReview,
+  hasExpertDisagreement,
+  isCorrectionReviewConfirmed,
   correctionScoreSource,
   effectiveCorrectionScore,
   formatConfidence,
@@ -232,14 +235,14 @@ function PassBadge({ locale, percent }: { locale: Locale; percent: number | null
 }
 
 function ReviewBadge({ locale, row, compact = false }: { locale: Locale; row: StudentAnalysisRow; compact?: boolean }) {
-  const untouchedAiCount = Math.max(0, row.requiredReviewCount - row.confirmedReviewCount - row.hardFailureCount);
+  const untouchedAiCount = Math.max(0, row.requiredReviewCount - row.hardFailureCount);
   const label = row.reviewState === "none"
     ? tx(locale, "无复核信号", "No review signal")
     : row.hardFailureCount
-      ? tx(locale, `${row.hardFailureCount} 项无有效分数${untouchedAiCount ? ` · ${untouchedAiCount} 项 AI 分未人工处理` : ""}`, `${row.hardFailureCount} unscored${untouchedAiCount ? ` · ${untouchedAiCount} AI scores not reviewed` : ""}`)
+      ? tx(locale, `${row.hardFailureCount} 项无有效分数${untouchedAiCount ? ` · ${untouchedAiCount} 项待复核` : ""}`, `${row.hardFailureCount} unscored${untouchedAiCount ? ` · ${untouchedAiCount} awaiting review` : ""}`)
       : row.reviewState === "confirmed"
-        ? tx(locale, `${row.confirmedReviewCount}/${row.requiredReviewCount} 教师已处理`, `${row.confirmedReviewCount}/${row.requiredReviewCount} teacher handled`)
-        : tx(locale, `${untouchedAiCount} 项 AI 分未人工处理`, `${untouchedAiCount} AI scores not reviewed`);
+        ? tx(locale, `${row.confirmedReviewCount} 项教师已确认`, `${row.confirmedReviewCount} teacher confirmed`)
+        : tx(locale, `${untouchedAiCount} 项待复核`, `${untouchedAiCount} awaiting review`);
   return <span className={cn("inline-flex rounded-full font-semibold", compact ? "mt-1 px-1.5 py-0.5 text-[8px]" : "px-2 py-1 text-[9px]", row.reviewState === "none" && "bg-slate-100 text-slate-600", row.reviewState === "confirmed" && "bg-emerald-100 text-emerald-700", row.reviewState === "pending" && "bg-rose-100 text-rose-700")}>{label}</span>;
 }
 
@@ -249,7 +252,7 @@ function EmptyResult({ locale }: { locale: Locale }) {
 
 function buildStudentRow(student: StudentSummary): StudentAnalysisRow {
   const required = student.corrections.filter(correctionNeedsFormalReview);
-  const confirmed = required.filter((correction) => correctionScoreSource(correction) !== "ai_untouched" && correctionScoreSource(correction) !== "hard_failure").length;
+  const confirmed = student.corrections.filter(isCorrectionReviewConfirmed).length;
   const hardFailureCount = required.filter((correction) => correctionScoreSource(correction) === "hard_failure").length;
   return {
     student,
@@ -258,7 +261,7 @@ function buildStudentRow(student: StudentSummary): StudentAnalysisRow {
     confirmedReviewCount: confirmed,
     hardFailureCount,
     disagreementCount: student.corrections.filter(correctionHasDisagreement).length,
-    reviewState: !required.length ? "none" : confirmed === required.length ? "confirmed" : "pending",
+    reviewState: required.length ? "pending" : confirmed ? "confirmed" : "none",
   };
 }
 
@@ -286,7 +289,7 @@ export function parseSemanticStudentQuery(raw: string, locale: Locale): Semantic
   if (!pass) consume(/(?:^|\s)及格(?:\s|$)|pass(?:ed)?/i, "pass", () => tx(locale, "及格", "Passed"), () => { pass = "pass"; });
   consume(/低置信(?:度)?|low[\s-]*confidence/i, "confidence", () => tx(locale, "含低置信题次", "Has low-confidence items"), () => { lowConfidence = true; });
   consume(/专家分歧|模型分歧|评分差异|disagreement|score[\s-]*spread/i, "disagreement", () => tx(locale, "含专家分歧", "Has model disagreement"), () => { disagreement = true; });
-  consume(/待复核|待确认|未复核|未人工处理|pending[\s-]*review|not[\s-]*reviewed/i, "pending", () => tx(locale, "有未人工处理信号", "Has unreviewed signals"), () => { reviewState = "pending"; });
+  consume(/待复核|待确认|未复核|未人工处理|pending[\s-]*review|not[\s-]*reviewed/i, "pending", () => tx(locale, "待复核队列", "Pending review queue"), () => { reviewState = "pending"; });
   if (!reviewState) consume(/已复核|已确认|教师已处理|reviewed|confirmed|teacher[\s-]*handled/i, "confirmed", () => tx(locale, "信号已由教师处理", "Signals handled by teacher"), () => { reviewState = "confirmed"; });
   if (!reviewState) consume(/无复核|无需复核|no[\s-]*review/i, "none", () => tx(locale, "无复核信号", "No review signals"), () => { reviewState = "none"; });
   consume(/低分优先|得分(?:率)?从低到高|(?:^|\s)从低到高(?:\s|$)|score\s*(?:asc|low)/i, "sort-low", () => tx(locale, "低分优先", "Low score first"), () => { sort = "score_asc"; });
@@ -320,7 +323,7 @@ function intentToStudentPlan(intent: FilterIntentResult, locale: Locale): Semant
   if (intent.pass_status) add("intent-pass", intent.pass_status === "pass" ? tx(locale, "及格", "Passed") : intent.pass_status === "fail" ? tx(locale, "未及格", "Failed") : tx(locale, "无可比总分", "Unscored"));
   if (intent.max_average_confidence != null) add("intent-mean-confidence", tx(locale, `平均置信度 < ${intent.max_average_confidence * 100}%`, `Mean confidence < ${intent.max_average_confidence * 100}%`));
   if (intent.low_confidence) add("intent-confidence", tx(locale, "含低置信题次", "Has low-confidence items"));
-  if (intent.review_status) add("intent-review", intent.review_status === "pending" ? tx(locale, "有未人工处理信号", "Has unreviewed signals") : intent.review_status === "confirmed" ? tx(locale, "信号已由教师处理", "Signals handled") : tx(locale, "无复核信号", "No review signals"));
+  if (intent.review_status) add("intent-review", intent.review_status === "pending" ? tx(locale, "待复核队列", "Pending review queue") : intent.review_status === "confirmed" ? tx(locale, "信号已由教师处理", "Signals handled") : tx(locale, "无复核信号", "No review signals"));
   if (intent.disagreement) add("intent-disagreement", tx(locale, "含专家分歧", "Has model disagreement"));
   if (intent.sort) add("intent-sort", formatIntentSort(intent.sort, locale));
   for (const term of intent.text_terms) add(`intent-term-${conditions.length}`, tx(locale, `匹配：${term}`, `Match: ${term}`));
@@ -415,15 +418,9 @@ function compareRows(left: StudentAnalysisRow, right: StudentAnalysisRow, sort: 
   return compareValues(value(left), value(right), direction) || compareStudents(left.student, right.student);
 }
 
-function correctionNeedsFormalReview(correction: Correction): boolean {
-  const confidence = normalizeConfidence(correction.confidence);
-  return (confidence !== null && confidence < 0.65) || correction.requires_human_review || correction.review_reasons?.some((reason) => reason === "high_indecisiveness" || reason === "score_spread_high") || correction.synthesis_method === "all_failed" || correction.synthesis_method === "quota_exhausted" || correctionHasDisagreement(correction);
-}
 
 function correctionHasDisagreement(correction: Correction): boolean {
-  if (correction.review_reasons?.some((reason) => reason === "high_indecisiveness" || reason === "score_spread_high")) return true;
-  const scores = correction.expert_results?.map((result) => Number(result.score)).filter(Number.isFinite) ?? [];
-  return scores.length > 1 && correction.max_score > 0 && Math.max(...scores) - Math.min(...scores) > Math.max(1, correction.max_score * 0.25);
+  return correctionNeedsFormalReview(correction) && hasExpertDisagreement(correction);
 }
 
 function studentDetailHref(taskId: string, studentId: string, questionId: string | null, returnQuery: string): string {

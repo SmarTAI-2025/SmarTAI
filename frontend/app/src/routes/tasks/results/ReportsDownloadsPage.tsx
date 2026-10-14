@@ -13,7 +13,7 @@ import {
 import { useState } from "react";
 import { Link } from "react-router-dom";
 import { getTaskResultArtifactBlob } from "@/api/tasks";
-import { useGenerateTaskResultArtifacts, useTaskResultArtifacts } from "@/api/hooks/tasks";
+import { useConfirmTaskFinalization, useGenerateTaskResultArtifacts, useTaskResultArtifacts } from "@/api/hooks/tasks";
 import { normalizeAPIError } from "@/api/client";
 import { RecoverableActionState } from "@/components/ui/RecoverableActionState";
 import type { Locale } from "@/i18n/messages";
@@ -43,11 +43,14 @@ export function ReportsDownloadsPage({
   finalization: TaskFinalizationResponse;
 }) {
   const artifactsQuery = useTaskResultArtifacts(taskId);
+  const prepareSnapshot = useConfirmTaskFinalization();
   const generateMutation = useGenerateTaskResultArtifacts();
   const [downloading, setDownloading] = useState<string | null>(null);
   const [generateFailure, setGenerateFailure] = useState<unknown>(null);
   const index = artifactsQuery.data;
-  const current = index?.versions.find((version) => version.current);
+  const current: ResultArtifactVersion | undefined = index?.versions.find((version) => version.current)
+    ?? (index && finalization.final_result_version === 0
+      ? { version: 1, current: true, status: "not_generated", files: [] } : undefined);
   const historical = index?.versions.filter((version) => !version.current) ?? [];
   const ready = isCurrentResultArtifactReady({
     finalResultDirty: finalization.final_result_dirty,
@@ -55,16 +58,20 @@ export function ReportsDownloadsPage({
     fileCount: current?.files.length ?? 0,
   });
   const stale = finalization.final_result_dirty || current?.status === "stale";
+  const generating = prepareSnapshot.isPending || generateMutation.isPending;
 
-  const generate = () => {
+  const generate = async () => {
     setGenerateFailure(null);
-    generateMutation.mutate({ taskId, expectedWorkflowRevision: finalization.workflow_revision }, {
-      onSuccess: (result) => {
-        setGenerateFailure(null);
-        toast.success(result.unchanged ? tx(locale, "当前版本已是最新", "Current version is already up to date") : tx(locale, "本版报告已生成", "Reports generated for this version"));
-      },
-      onError: (error) => setGenerateFailure(error),
-    });
+    try {
+      // Snapshot only for an explicit file-generation request, never for navigation.
+      const prepared = finalization.final_result_version === 0 || stale
+        ? await prepareSnapshot.mutateAsync({ taskId, expectedWorkflowRevision: finalization.workflow_revision })
+        : finalization;
+      const result = await generateMutation.mutateAsync({ taskId, expectedWorkflowRevision: prepared.workflow_revision });
+      toast.success(result.unchanged ? tx(locale, "当前版本已是最新", "Current version is already up to date") : tx(locale, "本版报告已生成", "Reports generated for this version"));
+    } catch (error) {
+      setGenerateFailure(error);
+    }
   };
 
   const download = async (version: number, artifactId: string, filename: string, historicalDownload = false) => {
@@ -121,7 +128,7 @@ export function ReportsDownloadsPage({
         </div>
 
         <div className="mt-4 grid grid-cols-2 gap-3 xl:grid-cols-4">
-          <Metric label={tx(locale, "当前正式版本", "Current Final Version")} value={`v${current.version}`} tone="primary" />
+          <Metric label={tx(locale, "当前报告版本", "Current Report Version")} value={finalization.final_result_version ? `v${current.version}` : tx(locale, "尚未生成", "Not generated")} tone="primary" />
           <Metric label={tx(locale, "文件状态", "File status")} value={statusLabel(locale, current.status)} tone={ready ? "accent" : stale ? "warning" : "neutral"} />
           <Metric label={tx(locale, "可下载文件", "Downloadable files")} value={String(current.files.length)} tone="primary" />
           <Metric label={tx(locale, "生成时间", "Generated at")} value={current.generated_at ? formatTaskTime(current.generated_at, true, locale) : "—"} tone="neutral" compact />
@@ -131,7 +138,7 @@ export function ReportsDownloadsPage({
           <div className={cn("mt-4 flex flex-wrap items-center gap-3 rounded-[9px] border px-4 py-4", stale ? "border-amber-200 bg-amber-50" : "border-blue-100 bg-blue-50/60")}>
             <span className={cn("inline-flex h-9 w-9 items-center justify-center rounded-full", stale ? "bg-amber-100 text-amber-700" : "bg-blue-100 text-primary")}><PackageCheck aria-hidden="true" className="h-[18px] w-[18px]" /></span>
             <div className="min-w-0 flex-1"><p className="text-[13px] font-bold text-foreground">{stale ? tx(locale, "当前结果已修改，旧文件不能作为最新版", "Results have changed, so the existing files are out of date.") : tx(locale, "为本版生成可审计下载", "Generate auditable downloads for this version")}</p><p className="mt-0.5 text-[11px] leading-4 text-muted-foreground">{tx(locale, "生成 CSV、事实学情报告、Markdown/LaTeX 标答和正式结果 JSON；不调用模型。", "Creates CSV, a factual performance report, Markdown/LaTeX reference answers, and final-results JSON without calling a model.")}</p></div>
-            {stale ? <Link to={`/tasks/${encodeURIComponent(taskId)}/review`} className="text-[11px] font-semibold text-primary hover:underline">{tx(locale, "返回复核并确认", "Return to review")}</Link> : <button type="button" onClick={generate} disabled={generateMutation.isPending} className="inline-flex h-9 items-center gap-1.5 rounded-[8px] bg-primary px-3.5 text-[11px] font-semibold text-primary-foreground disabled:opacity-50">{generateMutation.isPending ? <LoaderCircle aria-hidden="true" className="h-4 w-4 animate-spin" /> : <RefreshCw aria-hidden="true" className="h-4 w-4" />}{generateMutation.isPending ? tx(locale, "生成中…", "Generating…") : tx(locale, "生成本版文件", "Generate files")}</button>}
+            {!finalization.ready_for_confirmation ? <Link to={`/tasks/${encodeURIComponent(taskId)}/review`} className="text-[11px] font-semibold text-primary hover:underline">{tx(locale, "返回复核并确认", "Return to review")}</Link> : <button type="button" onClick={generate} disabled={generating} className="inline-flex h-9 items-center gap-1.5 rounded-[8px] bg-primary px-3.5 text-[11px] font-semibold text-primary-foreground disabled:opacity-50">{generating ? <LoaderCircle aria-hidden="true" className="h-4 w-4 animate-spin" /> : <RefreshCw aria-hidden="true" className="h-4 w-4" />}{generating ? tx(locale, "生成中…", "Generating…") : tx(locale, "生成本版文件", "Generate files")}</button>}
           </div>
         ) : (
           <div className="mt-4 flex items-center gap-2 rounded-[9px] bg-emerald-50 px-4 py-3 text-[11px] text-emerald-800"><CheckCircle2 aria-hidden="true" className="h-4 w-4" /><span className="font-semibold">{tx(locale, `${taskName} · v${current.version} 的文件已锁定`, `${taskName} · v${current.version} files are locked`)}</span><span className="text-emerald-700">{tx(locale, "重复生成会幂等返回，不制造相同副本。", "Generating again will not create duplicate files.")}</span></div>
@@ -145,7 +152,7 @@ export function ReportsDownloadsPage({
             primaryAction={generateRecovery.actionKind === "byok" ? undefined : {
               label: tx(locale, "重新生成", "Generate again"),
               onClick: generate,
-              busy: generateMutation.isPending,
+              busy: generating,
             }}
             secondaryAction={{ label: tx(locale, "关闭提示", "Dismiss"), onClick: () => setGenerateFailure(null) }}
           />
@@ -185,7 +192,7 @@ function Metric({ label, value, tone, compact = false }: { label: string; value:
 
 function statusLabel(locale: Locale, status: ResultArtifactVersion["status"]): string {
   if (status === "ready") return tx(locale, "本版可下载", "Ready");
-  if (status === "stale") return tx(locale, "需要重确认", "Reconfirmation needed");
+  if (status === "stale") return tx(locale, "需要重新生成", "Regeneration needed");
   if (status === "historical") return tx(locale, "旧版本", "Historical");
   return tx(locale, "尚未生成", "Not generated");
 }

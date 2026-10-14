@@ -239,6 +239,23 @@ def test_soft_review_ai_score_is_publishable_and_exported_by_default():
     assert rows[0]["q-optional_score"] == "9"
 
 
+def test_same_score_individual_confirmation_survives_result_reload():
+    from backend.services import task_facade
+
+    seeded = _prepared_task()
+    args = {"task_id": seeded["task_id"], "owner_id": seeded["owner_id"]}
+    saved = task_facade.update_correction_review(
+        **args, display_student_id=seeded["student_id"], q_id="q-required",
+        teacher_score=6, teacher_comment="", confirm=True, expected_revision=0,
+    )
+    assert saved["unchanged"] is True
+    rows = {item["q_id"]: item for item in task_facade.task_results(**args)["results"][0]["corrections"]}
+    assert rows["q-required"]["teacher_score"] == 6
+    assert rows["q-required"]["review_status"] == "confirmed"
+    assert rows["q-required"]["reviewed_at"] is not None
+    assert rows["q-optional"]["teacher_score"] is None
+
+
 def test_finalization_artifacts_and_dirty_state_are_idempotent():
     from backend.db import grading_repository
     from backend.services import task_facade

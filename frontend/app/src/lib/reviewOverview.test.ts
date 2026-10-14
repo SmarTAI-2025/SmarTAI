@@ -142,7 +142,7 @@ describe("review overview smart filter", () => {
   it("keeps confirmed reviews, pending reviews, and annotations distinct", () => {
     const statusStudent = student("student-status", "Status", 80, [
       correction("Q1", { requires_human_review: true, provisional_score: 8, teacher_score: 8, review_status: "confirmed" }),
-      correction("Q2", { requires_human_review: true }),
+      correction("Q2", { requires_human_review: true, review_reasons: ["score_spread_high"] }),
     ]);
     const statusModel = {
       ...model,
@@ -176,12 +176,12 @@ describe("review overview smart filter", () => {
     expect(selection.students.map((item) => item.id)).toEqual(["student-two", "student-one", "student-none"]);
   });
 
-  it("keeps edited but unconfirmed scores in pending filters even when there is no risk", () => {
+  it("keeps ordinary unconfirmed edits out of pending filters when the queue is empty", () => {
     const edited = student("student-edited", "Edited", 80, [correction("Q1", { teacher_score: 7, provisional_score: 8, review_status: "edited" })]);
     const editedModel = { ...model, students: [edited] };
     const items = collectResultReviewItems(editedModel, editedModel.students);
     expect(items).toHaveLength(0);
-    expect(selectReviewOverviewFromIntent(editedModel, items, new Set(), intent({ review_status: "pending" })).students).toEqual([edited]);
+    expect(selectReviewOverviewFromIntent(editedModel, items, new Set(), intent({ review_status: "pending" })).students).toHaveLength(0);
     expect(selectReviewOverviewFromIntent(editedModel, items, new Set(), intent({ review_status: "confirmed" })).students).toHaveLength(0);
   });
 });

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Correction } from "@/types";
-import { buildResultsModel } from "./resultsModel";
+import { buildResultsModel, hasReviewSignal, summarizeReviewScoreSources } from "./resultsModel";
 import { collectResultReviewItems, correctionReviewAttention, correctionReviewBlocked, isCorrectionReviewConfirmed } from "./resultsReviewModel";
 
 const correction = (overrides: Partial<Correction> = {}): Correction => ({
@@ -51,5 +51,24 @@ describe("grading review attention", () => {
     expect(model.students[0].totalScore).toBe(16);
     expect(model.students[0].totalMax).toBe(20);
     expect(JSON.stringify(corrections)).toBe(before);
+  });
+
+  it("keeps analysis counts equal to the pending queue before and after confirmation", () => {
+    const corrections = [
+      correction({ q_id: "normal", confidence: .6, requires_human_review: true, review_reasons: ["low_confidence"] }),
+      correction({ q_id: "disputed", review_reasons: ["high_indecisiveness"] }),
+      correction({ q_id: "edited", teacher_score: 9, review_status: "edited", review_reasons: ["score_spread_high"] }),
+      correction({ q_id: "zero", teacher_score: 0, review_status: "confirmed", confidence: .2 }),
+      correction({ q_id: "same", teacher_score: 8, review_status: "confirmed", initial_review_reasons: ["score_spread_high"] }),
+    ];
+    const result = { task_id: "T1", status: "graded", timestamp: 0, results: [{ student_id: "S1", corrections }] };
+    const model = buildResultsModel(undefined, result as Parameters<typeof buildResultsModel>[1]);
+    expect(collectResultReviewItems(model, model.students).map(item => item.correction.q_id).sort()).toEqual(["disputed", "edited"]);
+    expect(corrections.filter(hasReviewSignal).map(item => item.q_id).sort()).toEqual(["disputed", "edited"]);
+    expect(model.reviewCount).toBe(2);
+    expect(model.students[0].reviewCount).toBe(2);
+    expect(model.questions.reduce((sum, question) => sum + question.reviewCount, 0)).toBe(2);
+    expect(model.lowConfidenceCount).toBe(0);
+    expect(summarizeReviewScoreSources(corrections).aiUntouched).toBe(2);
   });
 });

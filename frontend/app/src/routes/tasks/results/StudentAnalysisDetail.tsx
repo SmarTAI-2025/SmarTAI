@@ -3,6 +3,7 @@ import { ArrowDown, ArrowLeft, ArrowRight, ArrowUp } from "lucide-react";
 import { useCallback, useEffect, useState, type ReactNode } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import {
+  hasReviewSignal as correctionNeedsFormalReview,
   aiCorrectionScore,
   correctionScoreSource,
   effectiveCorrectionScore,
@@ -128,11 +129,7 @@ export function StudentAnalysisDetail({ locale, taskId, studentId, model }: { lo
   if (!student) {
     return <DetailState locale={locale} title={tx(locale, `当前正式结果中没有学生 ${studentId}。`, `Student ${studentId} is not included in these final results.`)} href={listHref} />;
   }
-  const pendingReviewCount = student.corrections.filter((correction) => {
-    if (!correctionNeedsFormalReview(correction)) return false;
-    const source = correctionScoreSource(correction);
-    return source === "ai_untouched" || source === "hard_failure";
-  }).length;
+  const pendingReviewCount = student.corrections.filter(correctionNeedsFormalReview).length;
   const validCorrectionCount = student.corrections.filter((correction) => (
     correction.max_score > 0 && effectiveCorrectionScore(correction) !== null
   )).length;
@@ -163,7 +160,7 @@ export function StudentAnalysisDetail({ locale, taskId, studentId, model }: { lo
         <DetailMetric label={tx(locale, "平均置信度", "Mean confidence")} value={formatConfidence(student.avgConfidence)} tone="primary" />
         <DetailMetric label={tx(locale, "及格状态", "Pass status")} value={student.percent === null ? "—" : student.percent >= 60 ? tx(locale, "及格", "Passed") : tx(locale, "未及格", "Failed")} tone={student.percent !== null && student.percent < 60 ? "danger" : "accent"} />
         <DetailMetric label={tx(locale, "低置信题次", "Low-confidence items")} value={String(student.lowConfidenceCount)} tone="warning" />
-        <DetailMetric label={tx(locale, "未人工处理提醒", "Unreviewed flags")} value={String(pendingReviewCount)} tone="warning" />
+        <DetailMetric label={tx(locale, "复核状态", "Review status")} value={pendingReviewCount ? tx(locale, `${pendingReviewCount} 项待处理`, `${pendingReviewCount} pending`) : tx(locale, "无待处理项", "All clear")} tone={pendingReviewCount ? "warning" : "accent"} />
       </div>
 
       <div className="mt-5 grid items-start gap-4 lg:grid-cols-[clamp(180px,16vw,240px)_minmax(0,1fr)]">
@@ -241,16 +238,11 @@ function QuestionStepButtons({ locale, previous, next, onSelect }: { locale: Loc
 function ReviewStatus({ locale, correction }: { locale: Locale; correction: Correction }) {
   const source = correctionScoreSource(correction);
   const required = correctionNeedsFormalReview(correction);
-  const label = source === "teacher_confirmed_same"
-    ? tx(locale, "教师已处理 · 沿用 AI 分", "Teacher handled · AI score retained")
-    : source === "teacher_changed"
-      ? tx(locale, "教师改分", "Teacher changed")
-      : source === "hard_failure"
-        ? tx(locale, "无有效分数", "No valid score")
-        : required
-          ? tx(locale, "AI 分 · 未人工处理", "AI score · not reviewed")
-          : tx(locale, "AI 自动评分", "AI scored");
-  return <span className={cn("rounded-full px-2 py-0.5 text-[9px] font-semibold", source === "teacher_confirmed_same" && "bg-emerald-100 text-emerald-700", source === "teacher_changed" && "bg-blue-50 text-primary", source === "hard_failure" && "bg-rose-100 text-rose-700", source === "ai_untouched" && required && "bg-amber-100 text-amber-700", source === "ai_untouched" && !required && "bg-slate-100 text-slate-600")}>{label}</span>;
+  const label = formatCorrectionScoreSource(correction, locale);
+  return <span className={cn("rounded-full px-2 py-0.5 text-[9px] font-semibold",
+    source === "hard_failure" ? "bg-rose-100 text-rose-700" : required ? "bg-amber-100 text-amber-700"
+      : source === "teacher_confirmed_same" ? "bg-emerald-100 text-emerald-700"
+        : source === "teacher_changed" ? "bg-blue-50 text-primary" : "bg-slate-100 text-slate-600")}>{label}</span>;
 }
 
 function DetailState({ locale, title, href }: { locale: Locale; title: string; href: string }) {
@@ -267,24 +259,12 @@ function questionDetailHref(taskId: string, studentId: string, questionId: strin
   return `/tasks/${encodeURIComponent(taskId)}/results/questions/${encodeURIComponent(questionId)}?${params.toString()}`;
 }
 
-function correctionNeedsFormalReview(correction: Correction): boolean {
-  const confidence = normalizeConfidence(correction.confidence);
-  return (confidence !== null && confidence < 0.65) || correction.requires_human_review || correction.review_reasons?.some((reason) => reason === "high_indecisiveness" || reason === "score_spread_high") || correction.synthesis_method === "all_failed" || correction.synthesis_method === "quota_exhausted" || correctionHasDisagreement(correction);
-}
-
 function questionStateForStudent(student: StudentSummary, questionId: string): ResultQuestionState {
   const correction = student.corrections.find((item) => item.q_id === questionId);
   if (!correction) return "muted";
   const source = correctionScoreSource(correction);
-  if (source === "teacher_confirmed_same" || source === "teacher_changed") return "ready";
   if (source === "hard_failure") return "danger";
   return correctionNeedsFormalReview(correction) ? "warning" : "ready";
-}
-
-function correctionHasDisagreement(correction: Correction): boolean {
-  if (correction.review_reasons?.some((reason) => reason === "high_indecisiveness" || reason === "score_spread_high")) return true;
-  const scores = correction.expert_results?.map((result) => Number(result.score)).filter(Number.isFinite) ?? [];
-  return scores.length > 1 && correction.max_score > 0 && Math.max(...scores) - Math.min(...scores) > Math.max(1, correction.max_score * 0.25);
 }
 
 function formatSynthesis(value: string | null | undefined, locale: Locale): string {
@@ -293,6 +273,5 @@ function formatSynthesis(value: string | null | undefined, locale: Locale): stri
   return pair ? pair[locale === "en-US" ? 1 : 0] : value || "—";
 }
 
-function normalizeConfidence(value: number | null | undefined): number | null { if (typeof value !== "number" || !Number.isFinite(value)) return null; return value > 1 ? value / 100 : value; }
 function isEditableTarget(target: EventTarget | null): boolean { return target instanceof HTMLElement && (target.isContentEditable || ["INPUT", "TEXTAREA", "SELECT"].includes(target.tagName)); }
 function tx(locale: Locale, zh: string, en: string): string { return locale === "en-US" ? en : zh; }
