@@ -37,6 +37,7 @@ from backend.services.background_errors import (
     is_retryable_background_error,
 )
 from backend.services.question_structure import annotate_major_question_structures
+from backend.services.programming_test_contract import required_function_name
 from backend.tools.problem_dedup import dedupe_extracted_problems
 from backend.tools.structured_llm import (
     StructuredOutputBoundsError,
@@ -1721,6 +1722,12 @@ Rules:
   scoring criterion demand an unsupported conclusion or one particular valid proof method.
 - solution_code: only for programming questions; return reference implementation text, never run it.
 - test_cases: only for programming questions; return structured cases, at most the requested count.
+- Match the question's required interface. For a function implementation, use io_mode="function",
+  function_name (the exact required name), function_args (a JSON array of positional arguments),
+  and expected_return (Python repr of the return value). Leave input/expected_output empty.
+  Example for stable_softmax(xs): {"io_mode":"function","function_name":"stable_softmax",
+  "function_args":[[0,0]],"expected_return":"[0.5, 0.5]","source":"llm_generated"}.
+  Use stdin input/expected_output only when the question asks for a complete stdin/stdout program.
 - For tests requiring GUI, network, files, special packages, or large resources, set sandbox_feasible=false.
 - In criterion and reference_answer prose, wrap inline LaTeX in `$...$` and display LaTeX in `$$...$$`; never add math delimiters inside solution_code or test data.
 - Keep each mathematical expression intact on one logical Markdown line. Never split a fraction, radical, exponent, integral, bound, or equality chain across lines.
@@ -1831,6 +1838,19 @@ async def generate_missing_question_materials(
                     or candidate.target != expected["target"]):
                 raise StructuredOutputInvalidError("Generated material targets were missing, duplicated or invalid.")
             seen.add(candidate.target_id)
+            if candidate.target == "test_cases":
+                entry_point = required_function_name(str(problems_data[candidate.q_id].get("stem") or ""))
+                for case in candidate.test_cases or []:
+                    case.source = "llm_generated"
+                    if entry_point and case.sandbox_feasible and (
+                        case.function_name != entry_point
+                        or case.function_args is None or case.expected_return is None
+                    ):
+                        raise StructuredOutputInvalidError(
+                            "Function tests must match the required signature and include function_args and expected_return."
+                        )
+                    if case.function_name:
+                        case.io_mode = "function"
         if seen != set(expected_targets):
             raise StructuredOutputInvalidError("The generated materials omitted requested targets.")
         if validate_candidates is not None:

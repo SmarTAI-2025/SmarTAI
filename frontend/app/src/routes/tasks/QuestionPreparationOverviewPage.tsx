@@ -18,6 +18,7 @@ import { useI18n } from "@/i18n/I18nProvider";
 import { cn } from "@/lib/cn";
 import { compareValues } from "@/lib/sortValues";
 import { isProgrammingProblem } from "@/lib/questionPreparation";
+import { questionTypeLabel } from "@/lib/reviewLabels";
 import type { PreparationIssue, ProblemInfo } from "@/types";
 
 type QuestionMatrixRow = {
@@ -197,7 +198,7 @@ function QuestionMatrix({ rows, taskId, locale, sortKey, sortDirection, onSort }
           {rows.map(({ problem, issues }) => (
             <tr key={problem.q_id} className="h-[64px] hover:bg-muted/30">
               <td className="px-5 py-3 font-semibold text-foreground">{problem.number || problem.q_id}</td>
-              <td className="px-3 py-3 text-muted-foreground">{problem.type || tx(locale, "未分类", "Uncategorized")}</td>
+              <td className="px-3 py-3 text-muted-foreground">{questionTypeLabel(problem.type, locale)}</td>
               <td className="px-3 py-3"><MaxScoreStatus problem={problem} locale={locale} /></td>
               <td className="px-3 py-3"><MaterialStatus problem={problem} field="stem" locale={locale} /></td>
               <td className="px-3 py-3"><MaterialStatus problem={problem} field="answer" locale={locale} /></td>

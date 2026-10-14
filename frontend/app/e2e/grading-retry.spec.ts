@@ -22,6 +22,15 @@ test("partial failure → explicit same-config retry → live progress → revie
   await expect(page.getByRole("heading", { name: "This grading run did not finish" })).toBeVisible();
   await page.screenshot({ path: "output/playwright/01-partial-failed.png", fullPage: true });
   await expect(page.getByText(/keep successful results and teacher edits/)).toBeVisible();
+  await page.getByRole("link", { name: "Enter missing scores", exact: true }).click();
+  await page.getByRole("link", { name: "View Grading Details", exact: true }).click();
+  await expect(page.getByRole("textbox", { name: /final score/ }).first()).toBeVisible();
+  await expect(page).toHaveURL(/\/review\/[^/]+\/[^/?]+/);
+  // Opening a failed result must not send the teacher back to the progress page.
+  await page.getByRole("button", { name: "View Results & Analysis", exact: true }).click();
+  await expect(page.getByRole("alertdialog")).toBeVisible();
+  await page.getByRole("alertdialog").getByRole("button", { name: "Back", exact: true }).click();
+  await page.goto(`/tasks/${fixture.task_id}/grading/progress`);
   const gradingResponse = page.waitForResponse((r) => r.url().endsWith(`/tasks/${fixture.task_id}/grade`) && r.request().method() === "POST");
   await page.getByRole("button", { name: "Retry failed items", exact: true }).click();
   const response = await gradingResponse;
@@ -40,6 +49,10 @@ test("partial failure → explicit same-config retry → live progress → revie
   const finalState = await (await request.get(`${backend}/tasks/${fixture.task_id}/finalization`, { headers })).json();
   expect(finalState.remaining_review_count).toBe(0);
   expect(finalState.ready_for_confirmation).toBe(true);
+  const recovered = await (await request.get(`${backend}/tasks/${fixture.task_id}/result`, { headers })).json();
+  const preserved = recovered.results.flatMap((row: { corrections: Array<{ q_id: string; teacher_score?: number; teacher_comment?: string }> }) => row.corrections).find((row: { q_id: string }) => row.q_id === "q1");
+  expect(preserved.teacher_score).toBe(9);
+  expect(preserved.teacher_comment).toBe("Historical teacher edit");
   await page.locator("#confirm-review-complete").click();
   await expect(page).toHaveURL(/\/results$/, { timeout: 15_000 });
   const calls = JSON.parse(readFileSync(fixture.model_calls_path, "utf8"));

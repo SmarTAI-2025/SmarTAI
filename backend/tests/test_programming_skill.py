@@ -149,8 +149,8 @@ async def test_prog_with_teacher_test_cases(monkeypatch):
     skill = ProgrammingSkill(provider=_fake_provider())
     result = await skill.grade(problem, answer, student_id="s1")
     assert isinstance(result, ExpertResult)
-    assert "教师测试用例" in result.comment
-    assert "通过 2/2" in result.comment
+    assert "teacher-provided tests" in result.comment
+    assert "passed 2/2" in result.comment
 
 
 # ─── grade() — LLM-generated cases ───────────────────────────────────────────
@@ -199,7 +199,7 @@ async def test_prog_no_cases_generates_via_llm(monkeypatch):
 
     skill = ProgrammingSkill(provider=_fake_provider())
     result = await skill.grade(problem, answer, student_id="s1")
-    assert "AI 生成测试用例" in result.comment
+    assert "AI-generated tests" in result.comment
 
 
 # ─── grade() — keyword skips sandbox ─────────────────────────────────────────
@@ -233,8 +233,8 @@ async def test_prog_complexity_keyword_skips_sandbox(monkeypatch):
     skill = ProgrammingSkill(provider=_fake_provider())
     result = await skill.grade(problem, answer, student_id="s1")
     assert sandbox_called == []
-    assert "复杂度超出" in result.comment
-    assert "tkinter" in result.comment or "GUI" in result.comment
+    assert "outside the sandbox" in result.comment
+    assert "Sandbox skipped" in result.comment
 
 
 # ─── grade() — non-Python ────────────────────────────────────────────────────
@@ -265,7 +265,7 @@ async def test_prog_non_python_skipped(monkeypatch):
     skill = ProgrammingSkill(provider=_fake_provider())
     result = await skill.grade(problem, answer, student_id="s1")
     assert "Python" in result.comment
-    assert "代码审查" in result.comment
+    assert "AI code review" in result.comment
 
 
 # ─── grade() — LLM marks every generated case infeasible ────────────────────
@@ -303,7 +303,7 @@ async def test_prog_llm_marks_all_infeasible(monkeypatch):
 
     skill = ProgrammingSkill(provider=_fake_provider())
     result = await skill.grade(problem, answer, student_id="s1")
-    assert "复杂度超出" in result.comment
+    assert "outside the sandbox" in result.comment
 
 
 # ─── grade() — LLM returns >8 cases ──────────────────────────────────────────
@@ -367,3 +367,11 @@ async def test_prog_no_code():
     assert result.score == 0.0
     assert result.max_score == 5.0
     assert "未提交" in result.comment or "No code" in result.comment
+
+
+@pytest.mark.parametrize("language,expected", [("zh", "沙箱测评"), ("en", "Sandbox skipped")])
+def test_programming_metadata_respects_feedback_language(language, expected):
+    from backend.skills.programming import _format_metadata
+    result = _format_metadata("skipped_lang", "unknown", None, 0, language=language)
+    assert expected in result
+    assert ("沙箱测评" in result) == (language == "zh")

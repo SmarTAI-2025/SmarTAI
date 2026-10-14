@@ -97,3 +97,35 @@ async def test_third_attempt_invalid_output_does_not_get_a_fresh_repair_budget(m
     with pytest.raises(StructuredOutputInvalidError):
         await generate(provider)
     assert len(provider.calls) == 3
+
+
+@pytest.mark.asyncio
+async def test_function_question_repairs_stdin_cases_before_persistence():
+    def response(case):
+        return json.dumps({"candidates": [{"target_id": "q1:test_cases", "q_id": "q1",
+            "target": "test_cases", "test_cases": [case]}]})
+    provider = Provider([
+        response({"input": "[0,0]", "expected_output": "[0.5,0.5]"}),
+        response({"function_name": "stable_softmax", "function_args": [[0, 0]],
+                  "expected_return": "[0.5, 0.5]"}),
+    ])
+    result = await generate_missing_question_materials(
+        {"q1": {"stem": "Implement the function.\n```python\ndef stable_softmax(xs):\n    ...\n```", "max_score": 10}},
+        [{"target_id": "q1:test_cases", "q_id": "q1", "target": "test_cases"}], 6, provider)
+    assert len(provider.calls) == 2
+    case = result[0].test_cases[0]
+    assert case.function_args == [[0, 0]]
+    assert case.io_mode == "function"
+    assert case.source == "llm_generated"
+
+
+@pytest.mark.asyncio
+async def test_stdin_program_keeps_stdin_cases_without_extra_generation():
+    provider = Provider([json.dumps({"candidates": [{"target_id": "q1:test_cases", "q_id": "q1",
+        "target": "test_cases", "test_cases": [{"input": "2\n3", "expected_output": "5"}]}]})])
+    result = await generate_missing_question_materials(
+        {"q1": {"stem": "Read two integers from stdin and print their sum.", "max_score": 10}},
+        [{"target_id": "q1:test_cases", "q_id": "q1", "target": "test_cases"}], 6, provider)
+    assert len(provider.calls) == 1
+    assert result[0].test_cases[0].input == "2\n3"
+    assert result[0].test_cases[0].function_name is None

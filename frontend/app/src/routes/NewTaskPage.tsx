@@ -48,6 +48,7 @@ export function NewTaskPage() {
 
 function NewTaskForm({ scope, taskQuery }: { scope: string; taskQuery: ReturnType<typeof useTask> }) {
   const { locale, t } = useI18n();
+  const frontier = useFrontierWorkspace();
   const navigate = useNavigate();
   const location = useLocation();
   const { taskId } = useParams();
@@ -71,7 +72,7 @@ function NewTaskForm({ scope, taskQuery }: { scope: string; taskQuery: ReturnTyp
     courseId: taskQuery.data?.course_id ?? null, courseDraft: "",
     tagIds: taskQuery.data?.tag_ids ?? [], tagDraft: "", idempotency: null as { signature: string; key: string } | null,
   });
-  const draft = usePageDraft(scope, initialDraftValue, metadataDraftCodec, taskId ? taskMetadataSignature(taskQuery.data ?? {}) : "new", isEditing && taskQuery.data ? initialDraftValue() : undefined, createTask.isPending || updateTask.isPending);
+  const draft = usePageDraft(scope, initialDraftValue, metadataDraftCodec, taskId ? taskMetadataSignature(taskQuery.data ?? {}) : "new", isEditing && taskQuery.data ? initialDraftValue() : undefined, createTask.isPending || updateTask.isPending, !frontier);
   const [name, setName] = draft.field("name");
   const [semesterId, setSemesterId] = draft.field("semesterId");
   const [courseId, setCourseId] = draft.field("courseId");
@@ -85,7 +86,6 @@ function NewTaskForm({ scope, taskQuery }: { scope: string; taskQuery: ReturnTyp
 
   const debouncedCourseDraft = useDebouncedValue(courseDraft, 180);
   const debouncedTagDraft = useDebouncedValue(tagDraft, 180);
-  const frontier = useFrontierWorkspace();
   const coursesQuery = useCourses();
   const courseSearch = useCourseSearch(debouncedCourseDraft);
   const tagsQuery = useTags();
@@ -294,12 +294,12 @@ function NewTaskForm({ scope, taskQuery }: { scope: string; taskQuery: ReturnTyp
       </form>
 
       <div className="mx-auto mt-[30px] flex w-full max-w-[900px] justify-end xl:pr-[10px]">
-        <button form="new-task-form" type="submit" disabled={isSaving} className="inline-flex h-10 w-full items-center justify-center gap-2 rounded-[8px] bg-primary px-5 text-[14px] font-semibold text-primary-foreground outline-none transition hover:bg-primary/90 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50 sm:w-[180px]">
+        <button form="new-task-form" type="submit" disabled={isSaving} className="inline-flex min-h-10 w-full items-center justify-center gap-2 whitespace-nowrap rounded-[8px] bg-primary px-5 py-2 text-[14px] font-semibold text-primary-foreground outline-none transition hover:bg-primary/90 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50 sm:w-auto sm:min-w-[180px]">
           {isSaving ? <LoaderCircle aria-hidden="true" className="h-4 w-4 animate-spin" /> : null}
           {isSaving
             ? t(isEditing ? "newTaskSavingTask" : "newTaskCreatingTask")
             : frontier ? (locale === "zh-CN" ? "进入上传题目" : "Continue to Questions") : t(isEditing ? "newTaskSaveAndReturn" : "newTaskCreateAndAdd")}
-          {!isSaving ? (isEditing
+          {!isSaving ? (isEditing && !frontier
             ? <Save aria-hidden="true" className="h-4 w-4" />
             : <ArrowRight aria-hidden="true" className="h-4 w-4" />) : null}
         </button>

@@ -10,7 +10,7 @@ import { ReviewOverviewPage } from "./ReviewOverviewPage";
 import { ReviewDetailPage } from "./ReviewDetailPage";
 
 const state = vi.hoisted(() => ({
-  task: { task_id: "T1", name: "Review", status: "graded", workflow_revision: 5, problem_data: {}, student_data: {} },
+  task: { task_id: "T1", name: "Review", status: "graded", workflow_revision: 5, problem_data: {}, student_data: {}, grading_job_id: null as string | null, last_failed_job_id: null as string | null },
   result: { results: [] as unknown[] } as { results: unknown[]; grading_run_status?: string },
   finalization: { remaining_review_count: 0, ready_for_confirmation: true, workflow_revision: 5 },
   retry: vi.fn(), bulk: vi.fn(), update: vi.fn(), finalize: vi.fn(), refetch: vi.fn(),
@@ -46,6 +46,7 @@ function show(detail = false, suffix = "") {
   const router = createMemoryRouter([{ element: <DraftLeaveProvider><Outlet /><DraftActions /></DraftLeaveProvider>, children: [
     { path: "/tasks/:taskId/review", element: <ReviewOverviewPage /> },
     { path: "/tasks/:taskId/review/:studentId/:questionId", element: <ReviewDetailPage /> },
+    { path: "/tasks/:taskId/grading/progress", element: <div>Grading recovery progress</div> },
   ] }], { initialEntries: [`/tasks/T1/review${detail ? "/S1/Q1" : suffix}`] });
   render(<PageDraftSession ownerId="review-teacher"><RouterProvider router={router} /></PageDraftSession>);
   return router;
@@ -53,6 +54,8 @@ function show(detail = false, suffix = "") {
 beforeEach(async () => {
   await clearPageDrafts();
   state.task.status = "graded";
+  state.task.grading_job_id = null;
+  state.task.last_failed_job_id = null;
   vi.clearAllMocks();
   state.result.grading_run_status = undefined;
   state.result.results = [{ student_id: "S1", student_name: "Sample", corrections: [correction("Q1"), correction("Q2", { score: 0, provisional_score: 0, teacher_comment: "Keep this" })] }];
@@ -64,6 +67,20 @@ beforeEach(async () => {
   HTMLElement.prototype.scrollIntoView = vi.fn();
 });
 describe("one-click grading review", () => {
+  it("opens failed-result details from recovery and keeps missing scores blocked", async () => {
+    Object.assign(state.task, { status: "error", grading_job_id: "failed-run", last_failed_job_id: "failed-run" });
+    state.result.grading_run_status = "partial_failed";
+    state.result.results = [{ student_id: "S1", corrections: [correction("Q1"), correction("Q2", {
+      score: null, provisional_score: null, result_status: "failed", review_status: "pending",
+    })] }];
+    show(false, "?resolveFailures=1");
+    await userEvent.click(screen.getByRole("link", { name: "View Grading Details" }));
+    expect(screen.getByRole("textbox", { name: "Q2 final score" })).toBeInTheDocument();
+    expect(screen.queryByText("Grading recovery progress")).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "View Results & Analysis" }));
+    expect(state.finalize).not.toHaveBeenCalled();
+    expect(screen.getByRole("alertdialog")).toBeInTheDocument();
+  });
   it("provides a reachable partial failure retry while keeping the existing results visible", async () => {
     state.result.grading_run_status = "partial_failed";
     state.result.results = [{ student_id: "S1", corrections: [correction("Q1"), correction("Q2", { score: null, provisional_score: null, result_status: "failed" })] }];

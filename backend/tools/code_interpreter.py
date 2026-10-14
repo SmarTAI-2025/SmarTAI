@@ -311,9 +311,24 @@ def _values_match(actual_repr: str, expected_repr: str) -> bool:
     # Structural equality via literal_eval (lists, tuples, strings with
     # different quotes, etc).
     try:
-        return ast.literal_eval(a) == ast.literal_eval(b)
+        return _literal_values_match(ast.literal_eval(a), ast.literal_eval(b))
     except (ValueError, SyntaxError):
         return False
+
+
+def _literal_values_match(actual: object, expected: object) -> bool:
+    """Apply the scalar tolerance to returned containers as well."""
+    if isinstance(actual, (list, tuple)) and type(actual) is type(expected):
+        return len(actual) == len(expected) and all(
+            _literal_values_match(a, b) for a, b in zip(actual, expected)
+        )
+    if isinstance(actual, dict) and isinstance(expected, dict):
+        return actual.keys() == expected.keys() and all(
+            _literal_values_match(actual[key], expected[key]) for key in actual
+        )
+    if type(actual) in (int, float) and type(expected) in (int, float):
+        return actual == expected or abs(actual - expected) < 1e-9
+    return actual == expected
 
 
 async def _run_function_call(

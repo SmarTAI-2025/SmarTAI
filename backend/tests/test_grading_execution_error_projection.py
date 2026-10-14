@@ -14,6 +14,17 @@ def test_new_and_persisted_execution_errors_retain_specific_reason(monkeypatch, 
     assert task_facade._grading_failure_code(run) == "programming_execution_unavailable"
 
 
+def test_persisted_transient_model_failure_is_not_an_unknown_grading_error(monkeypatch):
+    run = Obj(id="run", status="partial_failed", error_message=None)
+    monkeypatch.setattr(task_facade.grading_repository, "list_results_for_run", lambda _: [
+        Obj(effective_score=8, ai_expert_results=[]),
+        Obj(effective_score=None, ai_expert_results=[{"error_kind": "transient_llm"}]),
+    ])
+    assert task_facade._grading_failure_code(run) == "grading_provider_transient"
+    from backend.services.background_errors import safe_background_error_code
+    assert safe_background_error_code("grading_provider_transient", "grading_failed") == "grading_provider_transient"
+
+
 @pytest.mark.asyncio
 async def test_partial_grading_failure_replaces_stale_submission_progress(monkeypatch):
     monkeypatch.setattr(task_facade, "task_state", lambda **_: {"status":"error", "grading_job_id":"run", "last_failed_job_id":"run", "progress":{"phase":"consolidating_submission_results"}})

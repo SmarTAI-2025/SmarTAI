@@ -1,5 +1,7 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { taskKeys } from '@/api/hooks/keys';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { DemoSourceUpload } from './DemoSourceUpload';
 import { useTask } from '@/api/hooks';
@@ -17,11 +19,15 @@ vi.mock('@/lib/frontierFixtures', async original => ({ ...await original<object>
 vi.mock('@/i18n/I18nProvider', () => ({ useI18n: () => ({ locale: state.locale }) }));
 vi.mock('@/components/new-task/NewTaskStepper', () => ({ NewTaskStepper: () => null }));
 function mount(stage: 'questions' | 'submissions') {
-  return render(<MemoryRouter initialEntries={['/tasks/demo/upload']}><Routes>
+  const queries = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  for (const key of [taskKeys.detail('demo'), taskKeys.state('demo')]) {
+    queries.setQueryData(key, { status: stage === 'questions' ? 'draft' : 'problems_ready' });
+  }
+  return { queries, ...render(<QueryClientProvider client={queries}><MemoryRouter initialEntries={['/tasks/demo/upload']}><Routes>
     <Route path='/tasks/:taskId/upload' element={<DemoSourceUpload stage={stage} />} />
     <Route path='/tasks/:taskId/:stage/progress' element={<p>Recognition progress</p>} />
     <Route path='/tasks/:taskId/submissions' element={<p>Submission review</p>} />
-  </Routes></MemoryRouter>);
+  </Routes></MemoryRouter></QueryClientProvider>) };
 }
 describe('fixed Demo uploads', () => {
   beforeEach(() => {
@@ -36,19 +42,21 @@ describe('fixed Demo uploads', () => {
     vi.mocked(startQuestionPreparation).mockResolvedValue({ status: 'started' } as any);
   });
   it.each(['en-US', 'zh-CN'])('preloads fixed submissions, then uses the normal recognition API (%s)', async locale => {
-    state.locale = locale; const { container } = mount('submissions');
+    state.locale = locale; const { container, queries } = mount('submissions');
     expect(screen.getByText('submissions_raw.zip')).toBeVisible();
     expect(container.querySelector('input[type=file]')).toBeNull();
     expect(screen.getByRole('button', { name: /cannot be replaced|不可替换/ })).toBeDisabled();
     fireEvent.click(screen.getByRole('button', { name: /Recognize Submissions|开始识别作答/ }));
     await screen.findByText('Recognition progress');
-    expect(parseSubmissions).toHaveBeenCalledWith(expect.objectContaining({ taskId: 'demo', identityMode: 'filename', recognitionProviderId: 'shared', expectedWorkflowRevision: 7 }));
+    expect(queries.getQueryData(taskKeys.detail('demo'))).toMatchObject({ status: 'parsing_submissions' });
+    expect(queries.getQueryData(taskKeys.state('demo'))).toMatchObject({ status: 'parsing_submissions' });
+    expect(vi.mocked(parseSubmissions).mock.calls[0][0]).toEqual(expect.objectContaining({ taskId: 'demo', identityMode: 'filename', recognitionProviderId: 'shared', expectedWorkflowRevision: 7 }));
   });
   it('preflights the fixed question file with an explicit score policy', async () => {
     vi.mocked(useTask).mockReturnValue({ data: { status: 'draft', problem_count: 0 } } as any);
     mount('questions'); fireEvent.click(screen.getByRole('button', { name: 'Recognize Questions' }));
     await screen.findByText('Recognition progress');
-    expect(startQuestionPreparation).toHaveBeenCalledWith(expect.objectContaining({ sourceTokens: ['source'], expectedWorkflowRevision: 8, scorePolicy: { mode: 'per_question', perQuestionText: expect.stringContaining('Q4: 10') } }));
+    expect(vi.mocked(startQuestionPreparation).mock.calls[0][0]).toEqual(expect.objectContaining({ sourceTokens: ['source'], expectedWorkflowRevision: 8, scorePolicy: { mode: 'per_question', perQuestionText: expect.stringContaining('Q4: 10') } }));
   });
   it('keeps already recognized answers and never uploads them again', async () => {
     vi.mocked(useTask).mockReturnValue({ data: { status: 'submissions_ready', problem_count: 4, student_count: 4 } } as any);

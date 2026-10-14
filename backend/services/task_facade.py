@@ -714,6 +714,8 @@ def _grading_failure_code(run) -> str | None:
         return "provider_rate_limited"
     if "parse_failed" in kinds:
         return "provider_response_invalid"
+    if "transient_llm" in kinds:
+        return "grading_provider_transient"
     return "grading_failed"
 
 

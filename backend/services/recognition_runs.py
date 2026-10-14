@@ -30,7 +30,7 @@ from backend.recognition.models import RecognitionUsageV1
 from backend.recognition.planner import EngineCapabilitiesV1
 from backend.recognition.workflow_v2 import RecognitionAssemblyV2
 from backend.services.recognition_artifacts import RecognitionArtifactBindingV1, RecognitionArtifactFenceV1, artifact_assignment_id
-from backend.services.recognition_calls import RecognitionCallService, _leaf
+from backend.services.recognition_calls import RecognitionCallLookup, RecognitionCallService, _leaf
 from backend.services.recognition_local_evidence import RecognitionLocalEvidenceReader
 from backend.services.recognition_results import RecognitionResultService
 from backend.tools.pdf_evidence import MAX_IMAGE_INPUT_BYTES, MAX_INPUT_BYTES
@@ -94,6 +94,14 @@ class _GuardedCalls(RecognitionCallService):
         self.context = context
         super().__init__(store=context.store, binding=context.binding, authorized_owner_id=context.row.owner_id,
                          fence=context.fence)
+
+    async def lookup(self, *args, **kwargs):
+        found = await super().lookup(*args, **kwargs)
+        if found.status == "not_success" and (self.context.row.payload or {}).get("retry_origin_id"):
+            # An explicit retry may replace a failed model response. Corrupt or
+            # unavailable evidence remains an error; successful leaves stay hits.
+            return RecognitionCallLookup("miss")
+        return found
 
     async def before_dispatch(self, source, request, *, region_keys, **options):
         ctx = self.context
@@ -165,7 +173,12 @@ class RecognitionRunService:
                                           RecognitionUsageV1(input_tokens=None, output_tokens=None, usage_complete=False),
                                           safe_error_code="recognition_artifact_invalid")
 
-    async def run(self, request, source_bytes, *, engine, prompt_version, authorized_owner_id, binding=None):
+    async def run(self, request, source_bytes, *, engine, prompt_version, authorized_owner_id, binding=None,
+                  retry_key=None):
+        # Only the business worker supplies this key after its explicit retry
+        # endpoint has checked authorization and any duplicate-call acknowledgement.
+        if retry_key is not None and (not isinstance(retry_key, str) or not 1 <= len(retry_key) <= 160):
+            raise RecognitionError("recognition_request_invalid")
         try:
             request = RecognitionReadRequestV1.model_validate(request.model_dump(warnings=False))
             caps = None if engine is None else EngineCapabilitiesV1.model_validate(engine.capabilities.model_dump(warnings=False))
@@ -187,6 +200,16 @@ class RecognitionRunService:
             operation_type=OPERATION_TYPE, input_hash=identity.key, retry_existing=False,
             payload=dict(identity_key=identity.key, binding=binding.model_dump()),
         )
+        if retry_key is not None and row.status not in {"pending", "running", "completed"}:
+            # Preserve the failed checkpoint and its uncertain-call evidence.
+            # A stable parent attempt gives one retry child; successful leaf
+            # artifacts keep their original identity and can still be reused.
+            retry_hash = hashlib.sha256(f"{identity.key}:explicit-retry:{retry_key}".encode()).hexdigest()
+            row, _ = await run_in_threadpool(
+                self.repository.create_operation, assignment_id=assignment_id, owner_id=authorized_owner_id,
+                operation_type=OPERATION_TYPE, input_hash=retry_hash, retry_existing=False,
+                payload=dict(identity_key=identity.key, binding=binding.model_dump(), retry_origin_id=row.id),
+            )
         if row.terminal_summary is not None:
             return await self._restored(row, request, identity,
                                         status="already_done" if row.status == "completed" else "needs_review")

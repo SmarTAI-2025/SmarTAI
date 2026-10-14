@@ -170,14 +170,15 @@ async def test_generate_test_cases_distinguishes_empty_response():
 
 
 @pytest.mark.asyncio
-async def test_programming_skill_function_only_when_llm_fails():
+@pytest.mark.parametrize("language,footer", [("zh", "调用失败"), ("en", "Test generation failed")])
+async def test_programming_skill_function_only_when_llm_fails(language, footer):
     """Student submits bare `def`, LLM call to generate function-call cases
     fails transiently → cases_source 'llm_call_failed', no sandbox, comment
     has the network/quota footer."""
     provider = MagicMock()
     provider.provider_id = "mock:test"
 
-    skill = ProgrammingSkill(provider)
+    skill = ProgrammingSkill(provider, language=language)
     problem = ProblemInfo(
         q_id="q1", number="1", type="编程题",
         stem="实现 fib(n)", criterion="正确性",
@@ -215,7 +216,7 @@ async def test_programming_skill_function_only_when_llm_fails():
 
     assert isinstance(result, ExpertResult)
     assert result.confidence == pytest.approx(0.7)
-    assert "调用失败" in result.comment  # the llm_call_failed footer
+    assert footer in result.comment  # the llm_call_failed footer follows the selected language
     assert "fib" in result.comment.lower() or "Function looks correct" in result.comment
 
 

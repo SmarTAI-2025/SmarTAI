@@ -381,6 +381,13 @@ describe("background task failure guidance", () => {
     expect(info.description).toContain("任务资料已保留");
   });
 
+  it.each(["zh-CN", "en-US"] as const)("explains a persisted grading provider failure in %s", (locale) => {
+    const info = classifyRecoverableError("grading_provider_transient", { locale });
+    expect(info.title).toContain(locale === "zh-CN" ? "模型服务临时故障" : "temporary model-service failure");
+    expect(info.description).toContain(locale === "zh-CN" ? "仅重试失败项" : "Retry only the failed items");
+    expect(info.actionKind).toBe("retry");
+  });
+
   it("routes an unsafe image payload back to file selection", () => {
     const info = classifyRecoverableError("provider_image_payload_invalid", { locale: "zh-CN" });
 

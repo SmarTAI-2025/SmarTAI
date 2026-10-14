@@ -88,7 +88,7 @@ export function ReviewOverviewPage() {
     }),
   }), [naturalSelection, headerSort.current?.key, headerSort.current?.direction, confirmedKeys, reviewItems]);
 
-  const resolvingFailures = task?.status === "error" && task.last_failed_job_id === task.grading_job_id && searchParams.get("resolveFailures") === "1";
+  const resolvingFailures = task?.status === "error" && Boolean(task.grading_job_id) && task.last_failed_job_id === task.grading_job_id && searchParams.get("resolveFailures") === "1";
   if (taskId && task && !taskQuery.isFetching && !taskQuery.isError && !hasTaskReachedStep(task, 6) && !resolvingFailures) {
     if (task.status === "grading") return <Navigate replace to={`/tasks/${taskId}/grading/progress`} />;
     return <Navigate replace to={getTaskDestination(task)} />;
