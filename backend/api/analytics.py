@@ -25,6 +25,7 @@ from sqlalchemy import and_, select
 from backend.agents import analytics_agent, grounded_ask
 from backend.analytics.ask_workspace import AskDataError, load_snapshot
 from backend.services.task_history_progress import enrich_history_progress
+from backend.services.grading_scores import round_ai_score
 from backend.domain.errors import DomainError, NotFound
 from backend.api.errors import domain_error_response
 from backend.auth import require_task_teacher as require_teacher
@@ -281,7 +282,7 @@ def _load_facts(task_id: str, owner_id: str) -> _AnalyticsFacts:
                 score=(
                     float(review.new_score)
                     if review is not None
-                    else (float(record.ai_score) if record.ai_score is not None else None)
+                    else round_ai_score(record.ai_score, record.ai_max_score)
                 ),
                 max_score=float(record.ai_max_score),
                 comment=(

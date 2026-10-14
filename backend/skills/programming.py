@@ -42,7 +42,7 @@ from backend.skills.base import (
     normalize_expert_result,
     register_skill,
 )
-from backend.models import ExpertResult, ProblemInfo, StudentAnswerInfo, StepScore, TaskGradingSetup, TestCase
+from backend.models import GradingConfidence, ExpertResult, ProblemInfo, StudentAnswerInfo, StepScore, TaskGradingSetup, TestCase
 from backend.llm.providers import BaseProvider
 from backend.services.programming_test_contract import required_function_name
 from backend.tools.structured_llm import structured_llm_call
@@ -60,7 +60,7 @@ logger = logging.getLogger(__name__)
 class ProgrammingGradingOutput(BaseModel):
     score: float = Field(ge=0, allow_inf_nan=False)
     max_score: float = Field(default=10.0, gt=0, allow_inf_nan=False)
-    confidence: float = Field(ge=0, le=1, allow_inf_nan=False)
+    confidence: GradingConfidence = Field(default=0.0, ge=0, le=1, allow_inf_nan=False)
     comment: str
     steps: List[dict] = Field(default_factory=list)
     # LLMs commonly emit `"logs": null` (the prompt asks for a `logs` field but

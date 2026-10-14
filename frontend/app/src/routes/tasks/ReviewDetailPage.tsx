@@ -22,14 +22,13 @@ import { useTask, useTaskResult, useTaskFinalization, useConfirmTaskFinalization
 import { NewTaskStepper } from "@/components/new-task/NewTaskStepper";
 import {
   buildResultsModel,
+  aiCorrectionScore,
   correctionScoreSource,
   correctionReviewDraftScore,
-  displayableCorrectionScore,
   effectiveCorrectionScore,
   formatConfidence,
   formatScore,
   reviewConfirmationScore,
-  shouldHideAutomatedScores,
   type QuestionSummary,
   type StudentSummary,
 } from "@/components/tasks/resultsModel";
@@ -42,7 +41,7 @@ import { reviewCellKey } from "@/lib/reviewOverview";
 import { questionTypeLabel } from "@/lib/reviewLabels";
 import { getSafeTaskReturnTo, getTaskDestination } from "@/lib/taskFlow";
 import { ResultQuestionSidebar, type ResultQuestionState } from "@/routes/tasks/results/ResultQuestionSidebar";
-import type { Correction } from "@/types";
+import type { Correction, StepScore } from "@/types";
 
 type ReviewDraft = {
   score: string;
@@ -76,7 +75,7 @@ function ReviewDetailForm() {
     () => new Map(student?.corrections.map((item) => [item.q_id, item]) ?? []),
     [student?.corrections],
   );
-  const reviewItems = useMemo(() => collectResultReviewItems(model, model.students).filter(item => !isCorrectionReviewConfirmed(item.correction)), [model]);
+  const reviewItems = useMemo(() => collectResultReviewItems(model, model.students, locale).filter(item => !isCorrectionReviewConfirmed(item.correction)), [model, locale]);
   const pendingReviewItems = useMemo(
     () => reviewItems.filter((item) => {
       const source = correctionScoreSource(item.correction);
@@ -344,7 +343,7 @@ function ReviewDetailForm() {
     if (numericScore === null || !Number.isFinite(numericScore) || numericScore < 0 || numericScore > correction.max_score) {
       setScoreErrors((current) => ({
         ...current,
-        [question.id]: tx(locale, `请输入 0–${formatScore(correction.max_score)} 之间的分数。`, `Enter a score from 0 to ${formatScore(correction.max_score)}.`),
+        [question.id]: tx(locale, `请输入 0–${String(correction.max_score)} 之间的分数。`, `Enter a score from 0 to ${String(correction.max_score)}.`),
       }));
       return { ok: false as const, message: tx(locale, "请先修正标红的分数。", "Correct the highlighted score first.") };
     }
@@ -684,8 +683,7 @@ function ReviewQuestionCard({ locale, student, question, correction, draft, requ
   onConfirm: () => void;
   onNavigate: (id: string) => void;
 }) {
-  const displayScore = correction ? displayableCorrectionScore(correction) : null;
-  const hideAutomatedScores = correction ? shouldHideAutomatedScores(correction) : false;
+  const displayScore = correction ? aiCorrectionScore(correction) : null;
   const scoreSource = correction ? correctionScoreSource(correction) : null;
   const answer = student.answerByQuestion.get(question.id);
   const alreadyConfirmed = (scoreSource === "teacher_confirmed_same" || scoreSource === "teacher_changed")
@@ -723,50 +721,30 @@ function ReviewQuestionCard({ locale, student, question, correction, draft, requ
               <span className="shrink-0 rounded-full bg-blue-50 px-3 py-1 text-xs font-semibold text-primary dark:bg-blue-950/50">
                 {correction
                   ? displayScore === null
-                    ? tx(locale, "待确认", "Pending confirmation")
-                    : `${formatScore(displayScore)} / ${formatScore(correction.max_score)}`
+                    ? tx(locale, "无有效分数", "No valid score")
+                    : `${formatScore(displayScore, correction.max_score)} / ${correction.max_score}`
                   : "— / —"}
               </span>
             </div>
             {correction ? (
               <>
-                {hideAutomatedScores ? (
-                  <p className="mt-3 rounded-[8px] bg-amber-50 px-3 py-2.5 text-[12px] leading-5 text-amber-800 dark:bg-amber-950/35 dark:text-amber-100">
-                    {tx(locale, "为避免把低置信或存在分歧的 AI 判断误当成正式分数，AI 暂定分、评语和评分细节已隐藏。请结合题目、作答、评分标准和下方复核原因判断。", "The provisional score, AI rationale, and score details are hidden so a low-confidence or disputed AI judgment is not mistaken for a formal grade. Review the question, response, rubric, and reasons below.")}
-                  </p>
-                ) : (
-                  <MarkdownMath className="mt-3 text-[13px] leading-6 text-foreground">{correction.comment || tx(locale, "SmarTAI 未返回文字说明。", "SmarTAI returned no written rationale.")}</MarkdownMath>
-                )}
+                <MarkdownMath className="mt-3 text-[13px] leading-6 text-foreground">{correction.comment || tx(locale, "SmarTAI 未返回文字说明。", "SmarTAI returned no written rationale.")}</MarkdownMath>
                 {reviewReasons.length ? <div className="mt-3 flex flex-wrap gap-1.5">{reviewReasons.map((reason) => <span key={reason} className="rounded-full bg-amber-50 px-2.5 py-1 text-[10px] font-semibold text-amber-700 dark:bg-amber-950/40 dark:text-amber-200">{reason}</span>)}</div> : null}
-                {!hideAutomatedScores && correction.steps?.length ? (
-                  <div className="mt-4 border-t pt-3">
-                    <p className="text-[11px] font-semibold text-muted-foreground">{tx(locale, "评分步骤", "Scoring steps")}</p>
-                    <ol className="mt-2 space-y-2">
-                      {correction.steps.map((step) => (
-                        <li key={`${question.id}-${step.step_no}`} className="grid grid-cols-[24px_minmax(0,1fr)_auto] gap-2 rounded-[7px] bg-muted/55 px-3 py-2 text-[11px] leading-5">
-                          <span className="font-semibold text-muted-foreground">{step.step_no}</span>
-                          <span className="text-foreground">{step.desc}</span>
-                          <span className={cn("font-semibold", step.is_correct ? "text-emerald-600" : "text-amber-600")}>{formatScore(step.score)} {tx(locale, "分", "pts")}</span>
-                        </li>
-                      ))}
-                    </ol>
-                  </div>
-                ) : null}
-                {!hideAutomatedScores ? (
+                <ScoringSteps locale={locale} steps={correction.steps} />
                   <dl className="mt-4 grid grid-cols-2 gap-2 text-xs sm:grid-cols-3">
                     <Signal label={tx(locale, "置信度", "Confidence")} value={formatConfidence(correction.confidence)} />
                     <Signal label={tx(locale, "专家数", "Models")} value={String(Math.max(1, correction.expert_results?.length ?? 0))} />
                     <Signal label={tx(locale, "合成方式", "Synthesis")} value={formatSynthesis(correction.synthesis_method, locale)} />
                   </dl>
-                ) : null}
-                {!hideAutomatedScores && correction.expert_results?.length ? (
+                {correction.expert_results?.length ? (
                   <details className="mt-3 text-xs text-muted-foreground">
                     <summary className="cursor-pointer font-semibold text-foreground">{tx(locale, "查看各专家原始结果", "View Original Model Results")}</summary>
                     <ul className="mt-2 space-y-2">
                       {correction.expert_results.map((expert, index) => (
                         <li key={`${expert.provider}-${index}`} className="rounded-md bg-muted/60 px-3 py-2">
-                          <p className="font-semibold text-foreground">{expert.provider} · {formatScore(expert.score)}/{formatScore(expert.max_score)} · {formatConfidence(expert.confidence)}</p>
+                          <p className="font-semibold text-foreground">{expert.provider} · {expert.error_kind ? tx(locale, "未给出有效分数 · 不参与合成", "No valid score · excluded from synthesis") : `${formatScore(expert.score, expert.max_score)}/${String(expert.max_score)} · ${formatConfidence(expert.confidence)}`}</p>
                           {expert.comment ? <MarkdownMath className="mt-1 text-[11px] leading-5">{expert.comment}</MarkdownMath> : null}
+                          {!expert.error_kind ? <ScoringSteps locale={locale} steps={expert.steps} /> : null}
                           {expert.knowledge_citations?.length ? <div className="mt-2 border-t pt-2">
                             <p>{tx(locale, "检索参考（不等于结论已核实）", "Retrieved references (not verified support)")}</p>
                             {expert.knowledge_citations.map((citation) => <KnowledgeCitationPreview key={citation.citation_id} citation={citation} />)}
@@ -798,12 +776,12 @@ function ReviewQuestionCard({ locale, student, question, correction, draft, requ
                     className="w-[58px] bg-transparent px-2 text-right text-sm font-semibold text-foreground outline-none disabled:opacity-50"
                     aria-label={tx(locale, `${question.label} 最终得分`, `${question.label} final score`)}
                   />
-                  <span className="border-l px-2 text-xs font-semibold text-foreground">/ {correction ? formatScore(correction.max_score) : "—"}</span>
+                  <span className="border-l px-2 text-xs font-semibold text-foreground">/ {correction ? correction.max_score : "—"}</span>
                 </span>
               </label>
             </div>
             {scoreError ? <p className="mt-1 text-right text-xs font-medium text-red-500">{scoreError}</p> : null}
-            {!draft.score.trim() && correction && reviewConfirmationScore(correction, "") !== null ? <p className="mt-1 text-right text-xs text-muted-foreground">{tx(locale, `留空将采用 AI 分数 ${formatScore(reviewConfirmationScore(correction, "")!)} 分；如需给零分，请输入 0。`, `Leaving this blank uses the AI score of ${formatScore(reviewConfirmationScore(correction, "")!)}. Enter 0 to award zero points.`)}</p> : null}
+            {!draft.score.trim() && correction && reviewConfirmationScore(correction, "") !== null ? <p className="mt-1 text-right text-xs text-muted-foreground">{tx(locale, `留空将采用 AI 分数 ${formatScore(reviewConfirmationScore(correction, "")!, correction.max_score)} 分；如需给零分，请输入 0。`, `Leaving this blank uses the AI score of ${formatScore(reviewConfirmationScore(correction, "")!, correction.max_score)}. Enter 0 to award zero points.`)}</p> : null}
             <label className="mt-4 grid gap-1.5 text-xs font-medium text-muted-foreground">
               {tx(locale, "补充评语（可选）", "Additional comment (optional)")}
               <textarea
@@ -827,6 +805,20 @@ function ReviewQuestionCard({ locale, student, question, correction, draft, requ
       </div>
     </article>
   );
+}
+
+function ScoringSteps({ locale, steps }: { locale: Locale; steps?: StepScore[] }) {
+  if (!steps?.length) return null;
+  return <div className="mt-4 border-t pt-3">
+    <p className="text-[11px] font-semibold text-muted-foreground">{tx(locale, "评分步骤", "Scoring steps")}</p>
+    <ol className="mt-2 space-y-2">{steps.map((step, index) => (
+      <li key={`${step.step_no}-${index}`} className="grid grid-cols-[24px_minmax(0,1fr)_auto] gap-2 rounded-[7px] bg-muted/55 px-3 py-2 text-[11px] leading-5">
+        <span className="font-semibold text-muted-foreground">{step.step_no}</span>
+        <MarkdownMath className="min-w-0 text-foreground">{step.desc}</MarkdownMath>
+        <span className={cn("font-semibold", step.is_correct ? "text-emerald-600" : "text-amber-600")}>{formatScore(step.score)} {tx(locale, "分", "pts")}</span>
+      </li>
+    ))}</ol>
+  </div>;
 }
 
 function ContentBlock({ title, meta, children }: { title: string; meta?: string; children: ReactNode }) {

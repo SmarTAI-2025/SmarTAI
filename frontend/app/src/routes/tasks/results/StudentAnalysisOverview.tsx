@@ -189,7 +189,7 @@ function StudentMatrixRow({ locale, taskId, questions, row, returnQuery }: { loc
   return (
     <tr className="hover:bg-slate-50/60">
       <td className="sticky left-0 z-[5] bg-card px-4 py-3 group-hover:bg-slate-50"><strong className="block truncate text-[12px] text-foreground">{row.student.name}</strong><span className="mt-0.5 block truncate text-[10px] text-muted-foreground">{row.student.id}</span></td>
-      <td className="px-3 py-3 text-[11px] font-semibold text-foreground">{formatScore(row.student.totalScore)} / {formatScore(row.student.totalMax)}</td>
+      <td className="px-3 py-3 text-[11px] font-semibold text-foreground">{formatScore(row.student.totalScore, row.student.totalMax)} / {String(row.student.totalMax)}</td>
       <td className="px-3 py-3 text-[12px] font-bold text-primary">{formatPercent(row.student.percent)}</td>
       <td className="px-3 py-3"><PassBadge locale={locale} percent={row.student.percent} /></td>
       <td className="px-3 py-3"><span className="block text-[11px] font-semibold text-foreground">{formatConfidence(row.student.avgConfidence)}</span><ReviewBadge locale={locale} row={row} compact /></td>
@@ -205,14 +205,14 @@ function QuestionScoreLink({ locale, taskId, studentId, question, correction, re
   const percent = score !== null && correction.max_score > 0
     ? (score / correction.max_score) * 100
     : null;
-  return <Link to={studentDetailHref(taskId, studentId, question.id, returnQuery)} title={tx(locale, `在学生详情查看 ${question.label}`, `Open ${question.label} in student detail`)} className={cn("inline-flex min-w-[66px] flex-col rounded-[7px] px-2 py-1.5 hover:ring-1 hover:ring-primary/30", percent !== null && percent < 60 ? "bg-rose-50 text-rose-700" : "bg-muted/60 text-foreground")}><strong className="text-[10px]">{formatScore(score)} / {formatScore(correction.max_score)}</strong><span className="mt-0.5 text-[9px] opacity-75">{formatPercent(percent)}</span></Link>;
+  return <Link to={studentDetailHref(taskId, studentId, question.id, returnQuery)} title={tx(locale, `在学生详情查看 ${question.label}`, `Open ${question.label} in student detail`)} className={cn("inline-flex min-w-[66px] flex-col rounded-[7px] px-2 py-1.5 hover:ring-1 hover:ring-primary/30", percent !== null && percent < 60 ? "bg-rose-50 text-rose-700" : "bg-muted/60 text-foreground")}><strong className="text-[10px]">{formatScore(score, correction.max_score)} / {String(correction.max_score)}</strong><span className="mt-0.5 text-[9px] opacity-75">{formatPercent(percent)}</span></Link>;
 }
 
 function StudentMobileCards({ locale, taskId, questions, rows, returnQuery }: { locale: Locale; taskId: string; questions: QuestionSummary[]; rows: StudentAnalysisRow[]; returnQuery: string }) {
   return <div className="grid gap-3 border-t p-4 lg:hidden">{rows.map((row) => (
     <article key={row.student.id} className="min-w-0 rounded-[9px] border p-3.5">
       <div className="flex items-start justify-between gap-3"><div className="min-w-0"><strong className="block truncate text-[14px] text-foreground">{row.student.name}</strong><span className="text-[11px] text-muted-foreground">{row.student.id}</span></div><Link to={studentDetailHref(taskId, row.student.id, null, returnQuery)} className="inline-flex shrink-0 items-center gap-1 text-[11px] font-semibold text-primary">{tx(locale, "详情", "Details")}<ArrowRight aria-hidden="true" className="h-3 w-3" /></Link></div>
-      <div className="mt-3 grid grid-cols-3 gap-2"><SmallFact label={tx(locale, "总分", "Total")} value={`${formatScore(row.student.totalScore)} / ${formatScore(row.student.totalMax)}`} /><SmallFact label={tx(locale, "得分率", "Rate")} value={formatPercent(row.student.percent)} /><SmallFact label={tx(locale, "平均置信度", "Confidence")} value={formatConfidence(row.student.avgConfidence)} /></div>
+      <div className="mt-3 grid grid-cols-3 gap-2"><SmallFact label={tx(locale, "总分", "Total")} value={`${formatScore(row.student.totalScore, row.student.totalMax)} / ${String(row.student.totalMax)}`} /><SmallFact label={tx(locale, "得分率", "Rate")} value={formatPercent(row.student.percent)} /><SmallFact label={tx(locale, "平均置信度", "Confidence")} value={formatConfidence(row.student.avgConfidence)} /></div>
       <div className="mt-3 flex flex-wrap items-center gap-2"><PassBadge locale={locale} percent={row.student.percent} /><ReviewBadge locale={locale} row={row} /></div>
       <div className="mt-3 w-full min-w-0 overflow-x-auto pb-1" tabIndex={0} aria-label={tx(locale, `${row.student.name} 的逐题得分，可横向滚动`, `${row.student.name}'s per-question scores, horizontally scrollable`)}>
         <div className="grid gap-2" style={{ gridTemplateColumns: `repeat(${Math.max(1, questions.length)}, minmax(74px, 1fr))`, minWidth: `${Math.max(1, questions.length) * 82}px` }}>{questions.map((question) => <div key={question.id} className="rounded-[7px] bg-muted/40 px-2 py-2"><span className="mb-1 block text-[10px] font-semibold text-muted-foreground">{question.label}</span><QuestionScoreLink locale={locale} taskId={taskId} studentId={row.student.id} question={question} correction={row.correctionByQuestion.get(question.id)} returnQuery={returnQuery} /></div>)}</div>

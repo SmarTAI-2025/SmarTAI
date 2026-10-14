@@ -35,6 +35,13 @@ describe("grading review attention", () => {
     expect(correctionReviewAttention(correction({ confidence: 0.2, teacher_score: 8, review_status: "confirmed" }))).toBe("none");
   });
 
+  it("does not mistake a failed expert placeholder for disagreement, but retains real zero scores", () => {
+    const successful = { provider: "a", score: 9, max_score: 10, confidence: .9, comment: "", steps: [] };
+    const zero = { ...successful, provider: "b", score: 0, confidence: 0 };
+    expect(correctionReviewAttention(correction({ expert_results: [successful, { ...zero, error_kind: "parse_failed" }] }))).toBe("none");
+    expect(correctionReviewAttention(correction({ expert_results: [successful, zero] }))).toBe("advisory");
+  });
+
   it("orders blocking scores before optional checks without changing result calculations", () => {
     const corrections = [correction({ q_id: "normal", confidence: 0.6 }), correction({ q_id: "optional", confidence: 0.2 }), correction({ q_id: "missing", score: null, provisional_score: null })];
     const model = buildResultsModel(undefined, { task_id: "T1", status: "graded", timestamp: 0, results: [{ student_id: "s1", student_name: "Sample", corrections }] } as Parameters<typeof buildResultsModel>[1]);

@@ -29,6 +29,7 @@ from backend.domain import education
 from backend.domain.errors import DomainError
 from backend.models import Correction, TaskGradingSetup
 from backend.config import settings
+from backend.services.grading_scores import round_ai_score
 from backend.skills.base import (
     InvalidScoreScale,
     normalize_expert_result,
@@ -127,7 +128,8 @@ def correction_to_result(
         )
 
     method = correction.synthesis_method
-    hard_failure = correction.confidence == 0 or method in _HARD_FAILURE_METHODS
+    has_valid_expert = any(not expert.error_kind for expert in correction.expert_results)
+    hard_failure = (correction.confidence == 0 and not has_valid_expert) or method in _HARD_FAILURE_METHODS
     invalid_scale = False
     try:
         normalized_score, normalized_steps = normalize_score_scale(
@@ -178,7 +180,7 @@ def correction_to_result(
     return education.GradeResultDTO(
         id="", grading_run_id=run_id, submission_revision_id=revision_id,
         question_id=question.id, student_id=student_id, q_id=q_id,
-        ai_score=None if hard_failure else normalized_score,
+        ai_score=None if hard_failure else round_ai_score(normalized_score, question.max_score),
         ai_max_score=question.max_score,
         ai_comment=correction.comment or "",
         ai_steps=[s.model_dump() for s in normalized_steps],

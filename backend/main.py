@@ -59,16 +59,12 @@ def create_app() -> FastAPI:
     set_retriever(CombinedKnowledgeRetriever())
 
     # ── V2: new agents/skills/tools architecture ──────────────────────
-    # Resource-oriented normalized routers remain canonical.  The /tasks façade
-    # below is a presentation adapter over those same repositories for the Figma
-    # teacher workflow; it does not restore the removed TaskStore/JobStore.
+    # The /tasks façade uses the normalized repositories/services directly.
+    # Retained course-enrollment/student/assignment HTTP workflows are never
+    # mounted here. Their contract tests use a separate, test-only app.
     from backend.api.auth import router as auth_router
-    from backend.api.courses import router as courses_router
-    from backend.api.assignments import router as assignments_router
-    from backend.api.submissions import router as submissions_router
+    from backend.api.courses import public_router as courses_router
     from backend.api.knowledge import router as knowledge_router, assignment_router as assignment_knowledge_router
-    from backend.api.grading_runs import router as grading_runs_router
-    from backend.api.results import router as results_router
     from backend.api.experts import router as experts_router
     from backend.api.ocr_providers import router as ocr_providers_router
     from backend.api.tasks import router as tasks_router
@@ -90,12 +86,8 @@ def create_app() -> FastAPI:
         app.include_router(admin_router)
         from backend.api.admin_accounts import router as admin_accounts_router
         app.include_router(admin_accounts_router)
-    app.include_router(assignments_router)
-    app.include_router(submissions_router)
     app.include_router(knowledge_router)
     app.include_router(assignment_knowledge_router)
-    app.include_router(grading_runs_router)
-    app.include_router(results_router)
     app.include_router(experts_router)
     app.include_router(ocr_providers_router)
     app.include_router(tasks_router)
@@ -105,8 +97,8 @@ def create_app() -> FastAPI:
     app.include_router(analytics_router)
 
     logger.info(
-        "V2 routers loaded: auth, courses, assignments, submissions, "
-        "knowledge, grading-runs, results, experts, ocr-providers, tasks, task-preparation, "
+        "V2 routers loaded: auth, course-labels, "
+        "knowledge, experts, ocr-providers, tasks, task-preparation, "
         "course-materials, tags, analytics"
     )
 

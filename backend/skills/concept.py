@@ -25,7 +25,7 @@ from backend.skills.base import (
     normalize_expert_result,
     register_skill,
 )
-from backend.models import ExpertResult, ProblemInfo, StudentAnswerInfo, StepScore, TaskGradingSetup
+from backend.models import GradingConfidence, ExpertResult, ProblemInfo, StudentAnswerInfo, StepScore, TaskGradingSetup
 from backend.llm.providers import BaseProvider
 from backend.tools.structured_llm import structured_llm_call
 from backend.tools import knowledge as kb_tool
@@ -42,7 +42,7 @@ class ConceptGradingOutput(BaseModel):
     """Expected JSON output from the LLM when grading a concept question."""
     score: float = Field(ge=0, allow_inf_nan=False, description="Score awarded, 0 to max_score")
     max_score: float = Field(default=10.0, gt=0, allow_inf_nan=False, description="Maximum possible score")
-    confidence: float = Field(ge=0, le=1, allow_inf_nan=False, description="Grading confidence")
+    confidence: GradingConfidence = Field(default=0.0, ge=0, le=1, allow_inf_nan=False, description="Grading confidence")
     comment: str = Field(description="Overall feedback to the student")
     steps: List[dict] = Field(default_factory=list, description="Step-by-step scoring breakdown")
     hits: List[str] = Field(default_factory=list, description="Knowledge points matched")

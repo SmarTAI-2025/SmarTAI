@@ -1,4 +1,4 @@
-import { test, expect, type APIRequestContext, type Page } from "@playwright/test";
+import { test, expect, type Page } from "@playwright/test";
 
 const backend = process.env.SMARTAI_E2E_BACKEND_URL ?? "http://127.0.0.1:8000";
 
@@ -15,23 +15,6 @@ async function loginAs(
     window.localStorage.setItem("smartai_locale", "en-US");
   }, token);
   await page.goto(target);
-}
-
-async function api(
-  request: APIRequestContext,
-  token: string,
-  path: string,
-  method = "GET",
-  data?: unknown,
-) {
-  const response = await request.fetch(`${backend}${path}`, {
-    method,
-    headers: { Authorization: `Bearer ${token}`, Accept: "application/json" },
-    data,
-  });
-  const body = await response.text();
-  expect(response.ok(), `${method} ${path}: ${body}`).toBeTruthy();
-  return body ? JSON.parse(body) : null;
 }
 
 test("production router keeps the Figma teacher surface and normalized workspaces dormant", async ({ page }) => {
@@ -55,59 +38,37 @@ test("production router keeps the Figma teacher surface and normalized workspace
   await expect(page.getByText("Page not found")).toBeVisible({ timeout: 15000 });
 });
 
-test("three-role normalized workflow persists released result", async ({ page, request }) => {
-  const teacherToken = "demo-teacher-e2e-flow-teacher";
-  const studentToken = "demo-student-e2e-flow-student";
-  const studentId = "demo_e2e-flow-student";
-
-  // Touch the student identity before enrollment so the FK-backed user exists.
-  await api(request, studentToken, "/courses");
-  const course = await api(request, teacherToken, "/courses", "POST", { name: "E2E Algebra", code: "E2E" });
-  await api(request, teacherToken, `/courses/${course.id}/enroll`, "POST", { student_ids: [studentId] });
-  const assignment = await api(request, teacherToken, "/assignments", "POST", {
-    course_id: course.id,
-    name: "E2E Homework",
-  });
-  await api(request, teacherToken, `/assignments/${assignment.id}/questions`, "POST", {
-    q_id: "q1",
-    number: "1",
-    type: "short",
-    stem: "1 + 1 = ?",
-    reference_answer: "2",
-    max_score: 10,
-  });
-  await api(request, teacherToken, `/assignments/${assignment.id}/publish`, "POST", { expected_version: 1 });
-  await api(request, studentToken, "/submissions/submit", "POST", {
-    assignment_id: assignment.id,
-    answers: [{ q_id: "q1", content: "2" }],
-  });
-
-  const run = await api(request, teacherToken, "/grading-runs", "POST", { assignment_id: assignment.id });
-  let terminal = run;
-  for (let attempt = 0; attempt < 30; attempt += 1) {
-    await new Promise((resolve) => setTimeout(resolve, 250));
-    const snapshot = await api(request, teacherToken, `/grading-runs/${run.id}`);
-    terminal = snapshot.run;
-    if (["completed", "partial_failed", "failed"].includes(terminal.status)) break;
+test("retired HTTP workflows cannot be reached through direct URLs", async ({ request }) => {
+  const paths = [
+    ["GET", "/courses/old/students"], ["POST", "/courses/old/enroll"],
+    ["POST", "/assignments/old/publish"], ["POST", "/submissions/submit"],
+    ["POST", "/grading-runs"], ["GET", "/results/assignment/old/me"],
+    ["POST", "/prob_preview/"], ["POST", "/hw_preview/"], ["POST", "/ai_grading/"],
+  ];
+  for (const [method, path] of paths) {
+    const response = await request.fetch(`${backend}${path}`, {
+      method, headers: { Authorization: "Bearer demo-teacher-e2e-retired" }, data: {},
+    });
+    expect(response.status(), `${method} ${path}`).toBe(404);
   }
-  expect(["completed", "partial_failed"]).toContain(terminal.status);
+});
 
-  const queue = await api(request, teacherToken, `/results/assignment/${assignment.id}/review-queue`);
-  expect(queue).toHaveLength(1);
-  await api(request, teacherToken, `/grading-runs/results/${queue[0].id}/review`, "POST", {
-    new_score: 7,
-    new_comment: "教师复核",
-  });
-  await api(request, teacherToken, `/grading-runs/${run.id}/release`, "POST");
-
-  const result = await api(request, studentToken, `/results/assignment/${assignment.id}/me`);
-  expect(result).toEqual([expect.objectContaining({ q_id: "q1", score: 7, comment: "教师复核" })]);
-  // A second read proves the released state is durable and not held only in UI state.
-  const reread = await api(request, studentToken, `/results/assignment/${assignment.id}/me`);
-  expect(reread).toEqual(result);
-  await loginAs(page, "student", "e2e-flow-student", "/student");
-  await expect(page).toHaveURL(/\/student/);
-  await expect(
-    page.getByRole("heading", { name: "Student workspace is not available yet" }),
-  ).toBeVisible();
+test("retired walkthrough files are absent from the served production bundle", async ({ page, request }) => {
+  await loginAs(page, "teacher", "e2e-retired-assets");
+  for (const name of ["DEMO-001_typeset.pdf", "DEMO-002_handwritten.pdf", "DEMO-002_handwritten.png", "DEMO-003_mixed.pdf", "assignment_mixed_stem.pdf", "scan_004.pdf", "scan_004.png"]) {
+    const path = `/frontier-demo/${name}`;
+    const response = await request.get(path);
+    expect(response.headers()["content-type"] ?? "").not.toMatch(/application\/pdf|image\//);
+    // A static SPA host can return the shell for a missing asset; the router
+    // must still reject the path instead of rendering a retired walkthrough.
+    if (response.ok()) {
+      await page.goto(path);
+      await expect(page.getByText("Page not found")).toBeVisible();
+    } else {
+      expect([404, 410]).toContain(response.status());
+    }
+  }
+  const active = await request.get("/frontier-demo/live/question_source.pdf");
+  expect(active.ok()).toBeTruthy();
+  expect(active.headers()["content-type"]).toContain("application/pdf");
 });

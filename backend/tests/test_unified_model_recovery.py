@@ -62,7 +62,7 @@ def test_undifferentiated_limit_does_not_invent_a_daily_or_minute_reason():
 
 def test_daily_exhaustion_prevents_whole_item_retry_even_with_transient_failures():
     from backend.agents.grading_agent import _grading_failure_feedback, _is_retryable_full_failure
-    from backend.agents.multi_expert import _casts_confidence_vote, dominant_error_kind
+    from backend.agents.multi_expert import _is_successful_expert, dominant_error_kind
     from backend.models import Correction, ExpertResult
 
     failures = [ExpertResult(provider=kind, score=0, confidence=0, comment="", error_kind=kind)
@@ -71,6 +71,6 @@ def test_daily_exhaustion_prevents_whole_item_retry_even_with_transient_failures
     correction = Correction(q_id="q1", type="proof", score=0, max_score=10, confidence=0,
                             comment="", steps=[], expert_results=failures)
     assert not _is_retryable_full_failure(correction)
-    assert not _casts_confidence_vote(failures[-1].model_copy(update={"confidence": 0.9}))
+    assert not _is_successful_expert(failures[-1].model_copy(update={"confidence": 0.9}))
     assert "不会自动跨天等待" in _grading_failure_feedback("daily_quota_exhausted", None)
     assert "未说明限制周期" in _grading_failure_feedback("quota_exhausted", None)

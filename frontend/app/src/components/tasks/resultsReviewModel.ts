@@ -1,4 +1,5 @@
 import type { Correction } from "@/types";
+import type { Locale } from "@/i18n/messages";
 import { VERY_LOW_REVIEW_CONFIDENCE, type ReviewAttention } from "@/lib/reviewConfirmation";
 import {
   correctionReviewReasonIds,
@@ -43,11 +44,11 @@ export function correctionReviewAttention(correction: Correction): ReviewAttenti
   return veryLowConfidence || expertDisagreement ? "advisory" : "none";
 }
 
-export function collectResultReviewItems(model: ResultsModel, students: StudentSummary[]): ReviewItem[] {
+export function collectResultReviewItems(model: ResultsModel, students: StudentSummary[], locale: Locale = "zh-CN"): ReviewItem[] {
   return students
     .flatMap((student) =>
       student.corrections
-        .map((correction) => buildReviewItem(student, correction, model.questions))
+        .map((correction) => buildReviewItem(student, correction, model.questions, locale))
         .filter((item): item is ReviewItem => Boolean(item)),
     )
     .sort((a, b) => b.priority - a.priority);
@@ -55,6 +56,7 @@ export function collectResultReviewItems(model: ResultsModel, students: StudentS
 
 export function getExpertScoreSpread(correction: Correction) {
   const scores = correction.expert_results
+    ?.filter((expert) => !expert.error_kind)
     ?.map((expert) => expert.score)
     .filter((score): score is number => typeof score === "number" && Number.isFinite(score));
   if (!scores?.length) {
@@ -67,11 +69,12 @@ function buildReviewItem(
   student: StudentSummary,
   correction: Correction,
   questions: QuestionSummary[],
+  locale: Locale,
 ): ReviewItem | null {
   const question = questions.find((item) => item.id === correction.q_id) ?? fallbackQuestion(correction.q_id);
   const attention = correctionReviewAttention(correction);
   if (attention === "none") return null;
-  const reasons = collectReasonLabels(correction);
+  const reasons = collectReasonLabels(correction, locale);
   const expertSpread = getExpertScoreSpread(correction);
   const missingScore = attention === "blocking";
   const lowConfidence = Number.isFinite(correction.confidence) && correction.confidence >= 0 && correction.confidence <= VERY_LOW_REVIEW_CONFIDENCE;
@@ -100,22 +103,23 @@ function buildReviewItem(
   };
 }
 
-function collectReasonLabels(correction: Correction) {
+function collectReasonLabels(correction: Correction, locale: Locale) {
+  const text = (zh: string, en: string) => locale === "en-US" ? en : zh;
   const labels = new Set<string>();
   if (correctionReviewBlocked(correction)) {
-    labels.add(validScore(effectiveCorrectionScore(correction), correction.max_score) ? "缺失分数已补齐，请确认" : "缺少有效分数，请填写并确认");
+    labels.add(validScore(effectiveCorrectionScore(correction), correction.max_score) ? text("缺失分数已补齐，请确认", "Corrected score needs confirmation") : text("缺少有效分数，请填写并确认", "Enter and confirm a valid score"));
   }
   if (Number.isFinite(correction.confidence) && correction.confidence >= 0 && correction.confidence <= VERY_LOW_REVIEW_CONFIDENCE) {
-    labels.add("置信度很低，建议核对");
+    labels.add(text("置信度很低，建议核对", "Very low confidence; check the result"));
   }
   for (const reason of correctionReviewReasonIds(correction)) {
-    labels.add(reviewReasonLabel(reason));
+    labels.add(reviewReasonLabel(reason, locale));
   }
   if (getExpertScoreSpread(correction) > Math.max(1, correction.max_score * 0.25)) {
-    labels.add("专家分数差异较大");
+    labels.add(text("专家分数差异较大", "Large difference between expert scores"));
   }
   if (!labels.size && correction.requires_human_review) {
-    labels.add("后端标记需复核");
+    labels.add(text("后端标记需复核", "Flagged for review"));
   }
   return Array.from(labels);
 }

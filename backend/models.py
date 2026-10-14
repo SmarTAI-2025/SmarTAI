@@ -5,8 +5,9 @@ Extends the original Correction/StepScore with multi-expert support and progress
 from __future__ import annotations
 
 import time
+import math
 from typing import Annotated, List, Optional, Literal, Dict, Any
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import BaseModel, BeforeValidator, ConfigDict, Field, field_validator, model_validator
 
 from backend.services.question_structure import (
     MajorQuestionStructureV1,
@@ -15,6 +16,16 @@ from backend.services.question_structure import (
 
 
 # ─── Grading result models ────────────────────────────────────────────────────
+
+def _optional_confidence(value: Any) -> float:
+    try:
+        confidence = float(value)
+    except (TypeError, ValueError):
+        return 0.0
+    return confidence if math.isfinite(confidence) and 0 <= confidence <= 1 else 0.0
+
+
+GradingConfidence = Annotated[float, BeforeValidator(_optional_confidence)]
 
 class StepScore(BaseModel):
     step_no: int
@@ -26,9 +37,10 @@ class StepScore(BaseModel):
 class ExpertResult(BaseModel):
     """Result from a single expert (provider) grading a question."""
     provider: str = Field(description="Provider identifier, e.g. 'openai:gpt-4o', 'gemini:gemini-2.5-pro'")
+    provider_id: Optional[str] = Field(default=None, description="Stable selected configuration ID; distinct from the model display name")
     score: float = Field(ge=0, allow_inf_nan=False)
     max_score: float = Field(default=10.0, gt=0, allow_inf_nan=False)
-    confidence: float = Field(ge=0, le=1, allow_inf_nan=False)
+    confidence: GradingConfidence = Field(default=0.0, ge=0, le=1, allow_inf_nan=False)
     comment: str
     steps: List[StepScore] = []
     hits: Optional[List[str]] = None
@@ -476,6 +488,7 @@ class TaskGradingSetup(BaseModel):
     selected_provider_ids: List[str] = Field(min_length=1, max_length=8)
     primary_provider_id: str = Field(min_length=1, max_length=240)
     aggregation_method: GradingAggregationMethod = "single"
+    expert_weights: Dict[str, Annotated[float, Field(gt=0, allow_inf_nan=False)]] = Field(default_factory=dict)
     multi_sample_n: int = Field(default=1, ge=1, le=5)
     knowledge_scope: GradingKnowledgeScope = "all_task_docs"
     strictness: int = Field(default=50, ge=0, le=100)
@@ -486,6 +499,12 @@ class TaskGradingSetup(BaseModel):
     suggest_corrections: bool = True
     low_confidence_threshold: float = Field(default=0.60, ge=0.30, le=0.80)
     teacher_notes: str = Field(default="", max_length=500)
+
+    @model_validator(mode="after")
+    def _validate_expert_weights(self):
+        if self.expert_weights and set(self.expert_weights) != set(self.selected_provider_ids):
+            raise ValueError("Custom weights must cover exactly the selected providers")
+        return self
 
     @field_validator("selected_provider_ids", mode="before")
     @classmethod

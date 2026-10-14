@@ -17,12 +17,12 @@ between samples of the same model). This gives us a variance signal
 (Indecisiveness Score) even in single-provider deployments.
 
 Robustness:
-  - A skill returning a `_blank_result` (confidence == 0) is treated as a
+  - A skill returning a `_blank_result` (explicit error_kind) is treated as a
     failed expert. We split results into successes / failures and synthesize
     only on successes:
       * len(successes) == 0 → raise AllExpertsFailed (caller renders error)
       * len(successes) == 1 → degraded_to_single (no judge call, clean comment)
-      * len(successes) >= 2 → configured judge/weighted synthesis
+      * len(successes) >= 2 → deterministic weighted score, optional judge explanation
   - Infrastructure failures are non-voting (2026-08-28): a network/timeout
     (transient_llm) or quota (quota_exhausted) error means the expert never
     graded the item, so its confidence — 0, or a spurious partial value —
@@ -54,6 +54,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+from decimal import Decimal, ROUND_HALF_UP
 from typing import List, Optional, Tuple, TYPE_CHECKING
 
 from pydantic import BaseModel, Field
@@ -71,6 +72,7 @@ from backend.skills.base import (
     normalize_score_scale,
 )
 from backend.tools.structured_llm import structured_llm_call
+from backend.services.grading_scores import round_ai_score
 
 if TYPE_CHECKING:
     from backend.progress.tracker import ProgressReporter
@@ -112,21 +114,13 @@ def dominant_error_kind(failures: List[ExpertResult]) -> str:
     return best
 
 
-# Infrastructure failures are not votes: a network/timeout (transient_llm) or
-# quota (quota_exhausted) error means that expert never graded the item, so its
-# confidence — 0, or a spurious partial value — must not enter any confidence
-# math (2026-08-28 fine-tune).
-_NON_VOTING_ERROR_KINDS = frozenset({"transient_llm", "quota_exhausted", "daily_quota_exhausted"})
-
-
-def _casts_confidence_vote(result: ExpertResult) -> bool:
+def _is_successful_expert(result: ExpertResult) -> bool:
     """True when the expert result counts as a real grading vote.
 
-    A zero-confidence blank result and any infrastructure failure
-    (network/timeout, quota) are both non-voting — the expert cast no
-    judgment on the item.
+    Explicit failures never vote, even with spurious confidence. A valid
+    score with no usable confidence can still take part in an equal average.
     """
-    return result.confidence > 0 and result.error_kind not in _NON_VOTING_ERROR_KINDS
+    return not result.error_kind
 
 
 class AllExpertsFailed(Exception):
@@ -196,6 +190,13 @@ async def run_multi_expert(
     configured (variance comes from the experts themselves).
     """
     providers = registry.list_available()
+    provider_ids = {}
+    if grading_setup is not None and callable(getattr(registry, "get", None)):
+        selected = [(key, registry.get(key)) for key in grading_setup.selected_provider_ids]
+        if any(provider is None for _, provider in selected):
+            raise ValueError("A selected grading provider is unavailable")
+        providers = [provider for _, provider in selected]
+        provider_ids = {id(provider): key for key, provider in selected}
 
     if not providers:
         raise ValueError(
@@ -238,6 +239,9 @@ async def run_multi_expert(
             await skill.grade(problem, answer, student_id=student_id),
             problem.max_score,
         )
+        if not _is_successful_expert(expert_result):
+            raise AllExpertsFailed([expert_result])
+        expert_result.provider_id = provider_ids.get(id(provider), provider.provider_id)
         # is_score is None (one sample → no variance signal); review flag stays
         # off here. Confidence-based review (`confidence < settings.confidence_threshold`)
         # is the caller's job in this branch.
@@ -264,6 +268,7 @@ async def run_multi_expert(
             await skill.grade(problem, answer, student_id=student_id),
             problem.max_score,
         )
+        result.provider_id = provider_ids.get(id(provider), provider.provider_id)
         # Tag duplicate provider IDs in multi-sample mode so the UI / logs can
         # tell them apart. We do this AFTER the skill returns so any internal
         # logging in the skill still reports the real provider_id.
@@ -280,12 +285,12 @@ async def run_multi_expert(
     logger.info(f"{mode} fan-out completed in {fan_out_ms:.0f}ms, {len(results)} results")
 
     # ── Split successes / failures ────────────────────────────────────────
-    # Infrastructure failures (network/timeout, quota) are non-voting even if
+    # All explicit failures are non-voting even if
     # a spurious non-zero confidence leaked through — see
-    # _casts_confidence_vote. Their results stay in `failures` so the
+    # _is_successful_expert. Their results stay in `failures` so the
     # frontend can still show why that expert did not grade the item.
-    successes = [er for er in results if _casts_confidence_vote(er)]
-    failures = [er for er in results if not _casts_confidence_vote(er)]
+    successes = [er for er in results if _is_successful_expert(er)]
+    failures = [er for er in results if not _is_successful_expert(er)]
 
     if not successes:
         # Every expert/sample failed — let caller produce an explicit
@@ -327,10 +332,10 @@ async def run_multi_expert(
         # Same provider sampled N times — the LLM judge cannot meaningfully
         # arbitrate between its own outputs. Weighted-average is cheaper and
         # gives the IS signal a clean number to anchor on.
-        correction = _weighted_average_fallback(problem, successes)
+        correction = _weighted_average_fallback(problem, successes, grading_setup=grading_setup)
         correction.synthesis_method = "multi_sample"
     elif aggregation_method == "weighted_average":
-        correction = _weighted_average_fallback(problem, successes)
+        correction = _weighted_average_fallback(problem, successes, grading_setup=grading_setup)
     else:
         primary_provider = None
         pick_default = getattr(registry, "pick_default", None)
@@ -454,9 +459,10 @@ async def _synthesize(
     """
     Combine multiple expert results into a final Correction.
 
-    Uses a "judge" LLM call to weigh potentially conflicting opinions.
-    Falls back to weighted average if the LLM call fails.
+    The score is deterministic; the judge only synthesizes the explanation.
+    Falls back to the original expert explanations if the LLM call fails.
     """
+    aggregate = _weighted_average_fallback(problem, expert_results, grading_setup=grading_setup)
     # Build summary of expert opinions for the judge
     expert_summary_parts = []
     for i, er in enumerate(expert_results, 1):
@@ -482,8 +488,8 @@ async def _synthesize(
         f"Expert opinions:\n{expert_summary}\n\n"
         f"Rubric: {problem.criterion}\n\n"
         f"Authoritative maximum score: {problem.max_score:g}\n\n"
-        "Synthesize these expert opinions into a single final grade. "
-        "Weight higher-confidence experts more. If experts disagree, explain why in the comment. "
+        f"The final score is fixed at {aggregate.score:g}/{problem.max_score:g} by the configured expert weights. "
+        "Explain these expert opinions without changing that score. If experts disagree, explain why in the comment. "
         "Return JSON with: score, max_score, confidence, comment, steps."
     )
 
@@ -515,12 +521,12 @@ async def _synthesize(
         return Correction(
             q_id=problem.q_id,
             type=problem.type,
-            score=normalized_score,
+            score=aggregate.score,
             max_score=problem.max_score,
             confidence=max(0.0, min(result.confidence, 1.0)),
             comment=result.comment,
-            steps=normalized_steps,
-            expert_results=expert_results,
+            steps=normalized_steps if normalized_score == aggregate.score else [],
+            expert_results=aggregate.expert_results,
             synthesis_method="judge_agent",
         )
 
@@ -531,34 +537,30 @@ async def _synthesize(
             problem.q_id,
             type(e).__name__,
         )
-        return _weighted_average_fallback(problem, expert_results)
+        return _weighted_average_fallback(problem, expert_results, grading_setup=grading_setup)
 
 
 def _weighted_average_fallback(
     problem: ProblemInfo,
     expert_results: List[ExpertResult],
+    *,
+    grading_setup: Optional[TaskGradingSetup] = None,
 ) -> Correction:
-    """Simple weighted average synthesis when LLM is unavailable.
+    """Custom weights > confidence weights > equal weights, using valid votes.
 
-    Only successes (confidence > 0) reach this function — `run_multi_expert`
-    is responsible for filtering. The synthesized comment lists each
-    contributing expert's verdict (no failed experts pollute the text).
+    Failed experts remain available as evidence but never affect the average.
+    Round once after aggregation; original expert scores remain unchanged.
     """
+    failures = [er for er in expert_results if not _is_successful_expert(er)]
+    expert_results = [er for er in expert_results if _is_successful_expert(er)]
     if not expert_results:
-        # Defensive: should never happen because run_multi_expert raises
-        # AllExpertsFailed before getting here.
-        return Correction(
-            q_id=problem.q_id,
-            type=problem.type,
-            score=0.0,
-            max_score=problem.max_score,
-            confidence=0.0,
-            comment="No expert produced a result.",
-            steps=[],
-            synthesis_method="all_failed",
-        )
-    total_weight = sum(er.confidence for er in expert_results) or 1.0
-    weighted_score = sum(er.score * er.confidence for er in expert_results) / total_weight
+        raise AllExpertsFailed(failures)
+    custom = grading_setup.expert_weights if grading_setup else {}
+    weights = [custom.get(er.provider_id or er.provider.split("#sample", 1)[0], er.confidence) for er in expert_results]
+    if not any(weights):
+        weights = [1.0] * len(expert_results)
+    weights = [Decimal(str(weight)) for weight in weights]
+    weighted_score = sum(Decimal(str(er.score)) * weight for er, weight in zip(expert_results, weights)) / sum(weights)
     max_score = problem.max_score
     # 2026-08-28 policy: the merged result is as confident as the BEST
     # contributing expert. Averaging confidences let a weak model's low
@@ -578,12 +580,12 @@ def _weighted_average_fallback(
     return Correction(
         q_id=problem.q_id,
         type=problem.type,
-        score=min(max(round(weighted_score, 2), 0.0), problem.max_score),
+        score=min(max(float(weighted_score.quantize(Decimal("0.1"), rounding=ROUND_HALF_UP)), 0.0), problem.max_score),
         max_score=max_score,
         confidence=round(best_confidence, 2),
         comment=comment,
         steps=[],
-        expert_results=expert_results,
+        expert_results=expert_results + failures,
         synthesis_method="weighted_average",
     )
 
@@ -605,7 +607,7 @@ def _expert_to_correction(
     return Correction(
         q_id=q_id,
         type=q_type,
-        score=expert.score,
+        score=round_ai_score(expert.score, expert.max_score),
         max_score=expert.max_score,
         confidence=expert.confidence,
         comment=expert.comment,

@@ -9,8 +9,15 @@ Current status: merged into `main` under `frontend/app`.
 - Visible now: Frontier landing page at `/`, live demo at `/frontier/live`,
   teacher auth at `/login`, and the teacher workspace at `/dashboard` (task
   grading workflow, task-scoped KB, BYOK experts, settings).
-- Hidden now: student app, courses, assignments, LMS/LTI/SSO.
+- Unavailable: student portal, course enrollment, assignment publishing and
+  LMS/LTI/SSO. Their retired HTTP workflow is not mounted in the standard app;
+  teacher-owned course labels remain available for tasks and the course library.
 - Backend remains FastAPI. This app calls the existing REST APIs directly.
+
+The public build rejects imports of dormant teacher/student/admin workspaces
+and test fixtures. Retired precomputed demo documents are preserved outside
+`public/` in `test-fixtures/retired-frontier-demo/`; the live demo only serves
+the raw assets declared by `public/frontier-demo/manifest.json`.
 
 See:
 

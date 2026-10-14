@@ -7,7 +7,7 @@ from fastapi.testclient import TestClient
 from backend.auth import create_token
 from backend.domain.errors import RecognitionError
 from backend.llm.registry import get_scoped_expert_registry
-from backend.main import app
+from backend.tests.legacy_contract_app import app
 from backend.tests.test_task_background_workflows import _seed_task
 from backend.tests.test_question_preparation_recovery import _RecoveryRegistry
 

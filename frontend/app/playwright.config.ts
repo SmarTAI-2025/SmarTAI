@@ -7,7 +7,8 @@ const frontendPort = new URL(frontendUrl).port || "5173";
  * Exercise the public production bundle with a disposable backend. Vite's dev
  * server resolves /admin to the source admin.html even in public mode, so it
  * cannot verify that the deployed public build excludes the private console.
- * CI uses a fake provider for the normalized grading/review/release loop.
+ * CI uses a fake provider for the current teacher task workflow. Retired
+ * normalized HTTP routes are exercised only by isolated backend contract tests.
  */
 export default defineConfig({
   testDir: "./e2e",

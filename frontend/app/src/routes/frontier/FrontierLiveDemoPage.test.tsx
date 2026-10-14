@@ -7,7 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { getGradingSetup, saveGradingSetup } from "@/api/gradingSetup";
 import { preflightProblemSource, startQuestionPreparation } from "@/api/problemSources";
 import { createTask, getTask, getTaskResult, getTaskState, parseSubmissions, startGrading, updateProblem, updateStudentAnswer, updateStudentIdentity } from "@/api/tasks";
-import { demoQuestions } from "@/data/frontierDemo";
+import { demoQuestions } from "@/test/fixtures/frontierQuestions";
 import { I18nProvider as LocaleProvider, useI18n } from "@/i18n/I18nProvider";
 import { beginFrontierSession, getFrontierToken, isFrontierTaskPath, rememberFrontierTask, setFrontierExitPending } from "@/lib/frontierSession";
 import * as client from "@/api/client";

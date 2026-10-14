@@ -11,6 +11,7 @@ export interface GradingSetup {
   selected_provider_ids: string[];
   primary_provider_id: string;
   aggregation_method: GradingAggregationMethod;
+  expert_weights?: Record<string, number>;
   multi_sample_n: number;
   knowledge_scope: GradingKnowledgeScope;
   strictness: number;

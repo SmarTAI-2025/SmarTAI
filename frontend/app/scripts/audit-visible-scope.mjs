@@ -2,6 +2,7 @@
 
 import { readdir, readFile, stat } from "node:fs/promises";
 import path from "node:path";
+import { createHash } from "node:crypto";
 
 const projectRoot = process.cwd();
 const srcRoot = path.join(projectRoot, "src");
@@ -431,8 +432,44 @@ function printFindings(findings) {
   }
 }
 
+async function auditPublicDemoAssets() {
+  const findings = [];
+  const fixtureRoot = path.join(projectRoot, "public/frontier-demo");
+  const manifestPath = path.join(fixtureRoot, "manifest.json");
+  const manifest = JSON.parse(await readFile(manifestPath, "utf8"));
+  const fail = (file, message) => findings.push({ type: "public-asset", file, line: 1, rule: "retired-demo-surface", message, excerpt: file });
+  for (const entry of await readdir(fixtureRoot)) {
+    if (!["live", "manifest.json", "SHA256SUMS"].includes(entry)) {
+      fail(`public/frontier-demo/${entry}`, "Only current raw demo fixtures may be served; retired walkthrough assets belong outside public/.");
+    }
+  }
+  if (manifest.walkthrough || manifest.visitorCodeExecution !== undefined) {
+    fail("public/frontier-demo/manifest.json", "Do not advertise retired precomputed walkthrough or stale execution capability metadata.");
+  }
+  const declared = new Set();
+  for (const asset of manifest.assets ?? []) {
+    if (asset.path !== "SHA256SUMS" && !/^live\/[^/]+$/.test(asset.path)) {
+      fail("public/frontier-demo/manifest.json", `Retired or invalid public fixture: ${asset.path}`);
+      continue;
+    }
+    declared.add(asset.path);
+    const bytes = await readFile(path.join(fixtureRoot, asset.path));
+    if (bytes.length !== asset.bytes || createHash("sha256").update(bytes).digest("hex") !== asset.sha256) {
+      fail(`public/frontier-demo/${asset.path}`, "The served fixture must match its manifest size and SHA-256.");
+    }
+  }
+  for (const entry of await readdir(path.join(fixtureRoot, "live"))) {
+    if (!declared.has(`live/${entry}`)) fail(`public/frontier-demo/live/${entry}`, "Every served live fixture must be declared in the manifest.");
+  }
+  if (await pathExists(path.join(srcRoot, "data/frontierDemo.ts"))) {
+    fail("src/data/frontierDemo.ts", "The retired precomputed result implementation must not return to application source.");
+  }
+  return findings;
+}
+
 const { files, missingRequired } = await collectVisibleFiles();
 const findings = [];
+findings.push(...await auditPublicDemoAssets());
 
 for (const relativePath of missingRequired) {
   findings.push({
@@ -469,5 +506,6 @@ if (findings.length > 0) {
   console.log("PASS visible scope audit");
   console.log(`Scanned ${files.length} user-visible source files.`);
   console.log("Checked Router paths for hidden LMS/course/assignment integrations.");
+  console.log("Checked retired demo asset exclusion and current fixture integrity.");
   console.log("No visible LMS, unsupported course management, assignment publishing, or unsupported KB claims found.");
 }

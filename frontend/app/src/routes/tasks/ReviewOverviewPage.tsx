@@ -17,7 +17,7 @@ import { MatrixViewLink } from "@/components/tasks/MatrixViewLink";
 import { MatrixQueueWorkspace } from "@/components/tasks/MatrixQueueWorkspace";
 import { MatrixStatusCell, type MatrixStatusTone } from "@/components/tasks/MatrixStatusCell";
 import { getMatrixIdentityLayout, MATRIX_ACTION_COLUMN_WIDTH, MATRIX_QUESTION_COLUMN_WIDTH } from "@/components/tasks/matrixLayout";
-import { buildResultsModel, correctionScoreSource, displayableCorrectionScore, effectiveCorrectionScore, formatConfidence, formatPercent, shouldHideAutomatedScores, type QuestionSummary, type ResultsModel, type StudentSummary } from "@/components/tasks/resultsModel";
+import { buildResultsModel, effectiveCorrectionScore, formatConfidence, formatPercent, type QuestionSummary, type ResultsModel, type StudentSummary } from "@/components/tasks/resultsModel";
 import { collectResultReviewItems, type ReviewItem } from "@/components/tasks/resultsReviewModel";
 import { useI18n } from "@/i18n/I18nProvider";
 import type { Locale } from "@/i18n/messages";
@@ -49,7 +49,7 @@ export function ReviewOverviewPage() {
   // that read before redirecting back, just as the two recognition overviews do.
   const readingCompletion = taskQuery.isFetching && task && !hasTaskReachedStep(task, 6);
   const model = useMemo(() => buildResultsModel(task, resultQuery.data), [resultQuery.data, task]);
-  const reviewItems = useMemo(() => collectResultReviewItems(model, model.students).filter(item => !isCorrectionReviewConfirmed(item.correction)), [model]);
+  const reviewItems = useMemo(() => collectResultReviewItems(model, model.students, locale).filter(item => !isCorrectionReviewConfirmed(item.correction)), [model, locale]);
   const annotatedKeys = useMemo(() => {
     const keys = new Set(Object.entries(commentsQuery.data?.comments ?? {}).filter(([, comment]) => comment.trim()).map(([key]) => key));
     for (const student of model.students) {
@@ -447,17 +447,13 @@ function ReviewHeatmap({
 }
 
 function ReviewCell({ locale, href, correction, item, annotated, confirmed, question }: { locale: Locale; href: string; correction: Correction; item?: ReviewItem; annotated: boolean; confirmed: boolean; question?: QuestionSummary }) {
-  const source = correctionScoreSource(correction);
   const state = correctionReviewBlocked(correction) ? "hard" : confirmed ? "confirmed" : item ? "review" : "ready";
   const label = locale === "zh-CN" ? (state === "hard" ? "需处理并确认" : state === "confirmed" ? "已确认" : state === "review" ? "待复核" : "已批改") : (state === "hard" ? "Correction and confirmation required" : state === "confirmed" ? "Confirmed" : state === "review" ? "Needs review" : "Graded");
-  const displayScore = displayableCorrectionScore(correction);
-  const masked = shouldHideAutomatedScores(correction);
+  const displayScore = effectiveCorrectionScore(correction);
   const scoreDetail = displayScore !== null && correction.max_score > 0
     ? `${formatPercent((displayScore / correction.max_score) * 100)} · `
     : "";
-  const detail = masked
-    ? `${question?.label ?? correction.q_id} · ${item ? queueReason(locale, item) : copy(locale, "reviewReason")}`
-    : `${question?.label ?? correction.q_id} · ${scoreDetail}${formatConfidence(correction.confidence)}`;
+  const detail = `${question?.label ?? correction.q_id} · ${scoreDetail}${formatConfidence(correction.confidence)}${item ? ` · ${queueReason(locale, item)}` : ""}`;
   const tone: MatrixStatusTone = state === "hard" ? "error" : state === "confirmed" ? "reviewed" : state === "review" ? "warning" : "ok";
   return <MatrixStatusCell to={href} label={`${label} · ${detail}`} tone={tone} />;
 }
