@@ -6,10 +6,8 @@ import {
   correctionScoreSource,
   correctionReviewDraftScore,
   correctionReviewReasonIds,
-  displayableCorrectionScore,
   effectiveCorrectionScore,
   reviewConfirmationScore,
-  shouldHideAutomatedScores,
   summarizeReviewScoreSources,
 } from "./resultsModel";
 
@@ -32,16 +30,18 @@ function correction(patch: Partial<Correction> = {}): Correction {
 }
 
 describe("review score presentation", () => {
-  it("hides a soft-review AI score in review while retaining its effective value", () => {
+  it("shows a soft-review AI score and uses the same one-decimal teacher default", () => {
     const pending = correction();
 
-    expect(displayableCorrectionScore(pending)).toBeNull();
-    expect(correctionReviewDraftScore(pending)).toBe("");
+    expect(correctionReviewDraftScore(pending)).toBe("7");
     expect(aiCorrectionScore(pending)).toBe(7);
     expect(effectiveCorrectionScore(pending)).toBe(7);
     expect(reviewConfirmationScore(pending, "")).toBe(7);
     expect(correctionScoreSource(pending)).toBe("ai_untouched");
-    expect(shouldHideAutomatedScores(pending)).toBe(true);
+    expect(correctionReviewDraftScore(correction({ provisional_score: 8.53 }))).toBe("8.5");
+    expect(reviewConfirmationScore(correction({ provisional_score: 8.53 }), "")).toBe(8.5);
+    expect(aiCorrectionScore(correction({ provisional_score: 2.55 }))).toBe(2.6);
+    expect(correctionReviewDraftScore(correction({ provisional_score: 2.55, max_score: 2.55 }))).toBe("2.55");
   });
 
   it("does not mistake an auto-confirmed payload for teacher review", () => {
@@ -52,8 +52,7 @@ describe("review score presentation", () => {
     });
 
     expect(correctionScoreSource(autoConfirmed)).toBe("ai_untouched");
-    expect(displayableCorrectionScore(autoConfirmed)).toBeNull();
-    expect(shouldHideAutomatedScores(autoConfirmed)).toBe(true);
+    expect(correctionReviewDraftScore(autoConfirmed)).toBe("7");
   });
 
   it("distinguishes a same-score confirmation from a teacher override", () => {
@@ -64,6 +63,7 @@ describe("review score presentation", () => {
     expect(correctionScoreSource(confirmed)).toBe("teacher_confirmed_same");
     expect(effectiveCorrectionScore(changed)).toBe(8);
     expect(correctionScoreSource(changed)).toBe("teacher_changed");
+    expect(aiCorrectionScore(changed)).toBe(6);
   });
 
   it("keeps a soft-review zero but rejects a legacy hard-failure zero", () => {
@@ -80,6 +80,10 @@ describe("review score presentation", () => {
     expect(effectiveCorrectionScore(hardFailure)).toBeNull();
     expect(reviewConfirmationScore(hardFailure, "")).toBeNull();
     expect(correctionScoreSource(hardFailure)).toBe("hard_failure");
+    const repaired = { ...hardFailure, teacher_score: 0, review_status: "confirmed" as const };
+    expect(aiCorrectionScore(repaired)).toBeNull();
+    expect(effectiveCorrectionScore(repaired)).toBe(0);
+    expect(correctionScoreSource(repaired)).toBe("teacher_changed");
   });
 
   it("normalizes comma-joined backend review reasons", () => {

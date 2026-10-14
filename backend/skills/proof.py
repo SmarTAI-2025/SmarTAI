@@ -23,7 +23,7 @@ from backend.skills.base import (
     normalize_expert_result,
     register_skill,
 )
-from backend.models import ExpertResult, ProblemInfo, StudentAnswerInfo, StepScore, TaskGradingSetup
+from backend.models import GradingConfidence, ExpertResult, ProblemInfo, StudentAnswerInfo, StepScore, TaskGradingSetup
 from backend.llm.providers import BaseProvider
 from backend.tools.structured_llm import structured_llm_call
 from backend.tools import knowledge as kb_tool
@@ -37,7 +37,7 @@ logger = logging.getLogger(__name__)
 class ProofGradingOutput(BaseModel):
     score: float = Field(ge=0, allow_inf_nan=False)
     max_score: float = Field(default=10.0, gt=0, allow_inf_nan=False)
-    confidence: float = Field(ge=0, le=1, allow_inf_nan=False)
+    confidence: GradingConfidence = Field(default=0.0, ge=0, le=1, allow_inf_nan=False)
     comment: str
     steps: List[dict] = Field(default_factory=list)
 

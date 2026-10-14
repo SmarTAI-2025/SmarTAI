@@ -56,6 +56,7 @@ def _answer(content: str = "4") -> StudentAnswerInfo:
 def _expert_result(provider: str, score: float, conf: float, comment: str) -> ExpertResult:
     return ExpertResult(
         provider=provider, score=score, max_score=10.0, confidence=conf, comment=comment,
+        error_kind="general" if conf == 0 and score == 0 else None,
     )
 
 
@@ -248,7 +249,7 @@ def test_weighted_average_confidence_uses_best_expert():
     # self-doubt must not drag it below the review threshold.
     assert correction.confidence == pytest.approx(0.95)
     # The score is still confidence-weighted (strong expert dominates).
-    assert correction.score == pytest.approx((8.0 * 0.3 + 7.0 * 0.95) / 1.25, abs=1e-9)
+    assert correction.score == 7.2
 
 
 def _transient_result(provider: str, score: float = 0.0, conf: float = 0.0) -> ExpertResult:

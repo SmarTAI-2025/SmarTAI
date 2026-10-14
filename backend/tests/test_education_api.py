@@ -11,7 +11,7 @@ from __future__ import annotations
 from fastapi.testclient import TestClient
 
 from backend.auth import hash_password
-from backend.main import app
+from backend.tests.legacy_contract_app import app
 from backend.models import User
 from backend.state import get_user_store
 

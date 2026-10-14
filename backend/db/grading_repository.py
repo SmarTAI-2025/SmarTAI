@@ -1386,6 +1386,9 @@ def _latest_reviews_by_result(session, result_ids: list[str]) -> dict[str, Teach
 
 def _result_to_dto(record: GradeResultRecord,
                    review: TeacherReviewRecord | None = None) -> education.GradeResultDTO:
+    from backend.services.grading_scores import round_ai_score
+
+    ai_score = round_ai_score(record.ai_score, record.ai_max_score)
     review_dto = _review_to_dto(review) if review is not None else None
     return education.GradeResultDTO(
         id=record.id,
@@ -1394,7 +1397,7 @@ def _result_to_dto(record: GradeResultRecord,
         question_id=record.question_id,
         student_id=record.student_id,
         q_id=record.q_id,
-        ai_score=record.ai_score,
+        ai_score=ai_score,
         ai_max_score=record.ai_max_score,
         ai_comment=record.ai_comment or "",
         ai_steps=list(record.ai_steps or []),
@@ -1406,7 +1409,7 @@ def _result_to_dto(record: GradeResultRecord,
         initial_requires_review=record.initial_requires_review,
         initial_review_reasons=list(record.initial_review_reasons or []),
         result_status=record.result_status,
-        effective_score=review.new_score if review is not None else record.ai_score,
+        effective_score=review.new_score if review is not None else ai_score,
         effective_comment=review.new_comment if review is not None else (record.ai_comment or ""),
         teacher_review=review_dto.model_dump() if review_dto is not None else None,
         created_at=record.created_at,

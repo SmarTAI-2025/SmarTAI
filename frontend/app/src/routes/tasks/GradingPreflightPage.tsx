@@ -338,11 +338,12 @@ export function GradingPreflightPage() {
                 {selectedExperts.map((expert) => (
                   <span key={expert.provider_id} className="inline-flex min-h-8 items-center rounded-full bg-blue-100 px-4 text-[13px] font-semibold text-primary dark:bg-blue-950/45">
                     {modelDisplayName(expert)}
+                    {setup?.expert_weights?.[expert.provider_id] !== undefined ? ` · ${locale === "zh-CN" ? "权重" : "weight"} ${setup.expert_weights[expert.provider_id]}` : ""}
                   </span>
                 ))}
                 {setup ? (
                   <span className="inline-flex min-h-8 items-center rounded-full bg-teal-100 px-4 text-[13px] font-semibold text-teal-700 dark:bg-teal-950/45 dark:text-teal-300">
-                    {copy(locale, "aggregation")}: {aggregationLabel(setup.aggregation_method, locale)}
+                    {copy(locale, "aggregation")}: {aggregationLabel(setup.aggregation_method, locale)}{setup.selected_provider_ids.length > 1 ? ` · ${Object.keys(setup.expert_weights ?? {}).length ? (locale === "zh-CN" ? "自定义权重" : "Custom weights") : (locale === "zh-CN" ? "置信度权重" : "Confidence weights")}` : ""}
                   </span>
                 ) : null}
               </div>
@@ -561,7 +562,7 @@ function questionOverviewHref(taskId: string, query: string): string {
 function aggregationLabel(method: GradingSetup["aggregation_method"], locale: Locale): string {
   const labels: Record<GradingSetup["aggregation_method"], [string, string]> = {
     single: ["单专家", "Single model"],
-    weighted_average: ["置信度加权", "Confidence weighted"],
+    weighted_average: ["加权平均", "Weighted average"],
     judge_agent: ["裁决专家", "Judge agent"],
   };
   return labels[method][locale === "en-US" ? 1 : 0];

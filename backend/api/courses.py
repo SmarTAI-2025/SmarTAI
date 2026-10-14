@@ -24,6 +24,9 @@ from backend.tools.catalog_matching import (
 )
 
 router = APIRouter(prefix="/courses", tags=["courses"])
+# Public courses are owner-scoped teacher labels, not enrollment resources.
+# Explicit paths keep future normalized-workspace handlers out of the public app.
+public_router = APIRouter(prefix="/courses", tags=["courses"], dependencies=[Depends(require_teacher)])
 
 
 class CreateCourseRequest(BaseModel):
@@ -37,6 +40,35 @@ class EnrollRequest(BaseModel):
     student_ids: List[str] = []
 
 
+class CourseLabelResponse(BaseModel):
+    id: str
+    name: str
+    code: str
+    description: str
+    teacher_id: str
+    created_at: float
+    updated_at: float
+
+
+class CreatedCourseLabelResponse(CourseLabelResponse):
+    created: bool
+
+
+class CourseLabelMatch(BaseModel):
+    item: CourseLabelResponse
+    match_kind: str
+    score: float
+    reason: str
+
+
+class CourseLabelSearchResponse(BaseModel):
+    items: list[CourseLabelMatch]
+    total: int
+    page: int
+    page_size: int
+
+
+@public_router.post("", response_model=CreatedCourseLabelResponse)
 @router.post("")
 def create_course(req: CreateCourseRequest, current: User = Depends(require_teacher)):
     name, normalized_name = normalize_catalog_text(req.name)
@@ -92,6 +124,7 @@ def create_course(req: CreateCourseRequest, current: User = Depends(require_teac
     return {**_serialize(course), "created": True}
 
 
+@public_router.get("", response_model=list[CourseLabelResponse])
 @router.get("")
 def list_courses(current: User = Depends(get_current_user)):
     try:
@@ -101,6 +134,7 @@ def list_courses(current: User = Depends(get_current_user)):
     return [_serialize(c) for c in items]
 
 
+@public_router.get("/search", response_model=CourseLabelSearchResponse)
 @router.get("/search")
 def search_courses(
     q: str = Query(min_length=1, max_length=120),
@@ -128,6 +162,7 @@ def search_courses(
     }
 
 
+@public_router.get("/{course_id}", response_model=CourseLabelResponse)
 @router.get("/{course_id}")
 def get_course(course_id: str, current: User = Depends(get_current_user)):
     try:
@@ -157,6 +192,7 @@ def enroll_students(course_id: str, req: EnrollRequest, current: User = Depends(
     return {"status": "success", "student_ids": course.student_ids, "student_count": len(course.student_ids)}
 
 
+@public_router.delete("/{course_id}")
 @router.delete("/{course_id}")
 def delete_course(course_id: str, current: User = Depends(require_teacher)):
     try:
@@ -186,7 +222,9 @@ def _course_fields(course: Any) -> dict[str, str]:
 
 def _serialize_match(match: CatalogMatch[Any]) -> dict:
     return {
-        "item": _serialize(match.item),
+        # Conflict candidates bypass FastAPI's success response model, so keep
+        # these teacher-label suggestions free of dormant enrollment fields too.
+        "item": CourseLabelResponse.model_validate(_serialize(match.item)).model_dump(),
         "match_kind": match.match_kind,
         "score": match.score,
         "reason": match.reason,

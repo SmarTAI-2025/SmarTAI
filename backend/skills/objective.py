@@ -28,7 +28,7 @@ from backend.skills.base import (
     normalize_expert_result,
     register_skill,
 )
-from backend.models import ExpertResult, ProblemInfo, StudentAnswerInfo, TaskGradingSetup
+from backend.models import GradingConfidence, ExpertResult, ProblemInfo, StudentAnswerInfo, TaskGradingSetup
 from backend.llm.providers import BaseProvider
 from backend.tools.structured_llm import structured_llm_call
 from backend.tools import knowledge as kb_tool
@@ -75,7 +75,7 @@ class ObjectiveGradingOutput(BaseModel):
         description="Multiple choice only: True only when the rubric explicitly states a partial-credit rule (e.g. 部分选对的得部分分) AND the student's selection is a wrong-but-clean subset (nothing wrong selected).",
     )
     score: float = Field(ge=0, allow_inf_nan=False, description="Score per the grading contract (multi-choice partial credit only when partial_credit_applicable is true)")
-    confidence: float = Field(ge=0, le=1, allow_inf_nan=False, description="Grading confidence")
+    confidence: GradingConfidence = Field(default=0.0, ge=0, le=1, allow_inf_nan=False, description="Grading confidence")
     comment: str = Field(description="Brief feedback to the student")
 
 

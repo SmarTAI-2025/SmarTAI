@@ -10,6 +10,7 @@ import { ReviewOverviewPage } from "./ReviewOverviewPage";
 import { ReviewDetailPage } from "./ReviewDetailPage";
 
 const state = vi.hoisted(() => ({
+  locale: "en-US",
   task: { task_id: "T1", name: "Review", status: "graded", workflow_revision: 5, problem_data: {}, student_data: {}, grading_job_id: null as string | null, last_failed_job_id: null as string | null },
   result: { results: [] as unknown[] } as { results: unknown[]; grading_run_status?: string },
   finalization: { remaining_review_count: 0, ready_for_confirmation: true, workflow_revision: 5 },
@@ -37,7 +38,7 @@ vi.mock("@/components/tasks/ResultQuestionQuery", () => ({
   useResultQuestionFilter: ({ questions }: { questions: unknown[] }) => ({ filter: {}, visibleQuestions: questions }),
 }));
 vi.mock("@/components/knowledge-base/KnowledgeCitationPreview", () => ({ KnowledgeCitationPreview: () => null }));
-vi.mock("@/i18n/I18nProvider", () => ({ useI18n: () => ({ locale: "en-US", t: (key: string) => key }) }));
+vi.mock("@/i18n/I18nProvider", () => ({ useI18n: () => ({ locale: state.locale, t: (key: string) => key }) }));
 function correction(qId: string, patch = {}) {
   return { q_id: qId, type: "calculation", score: 7, provisional_score: 7, max_score: 10, confidence: 0.8,
     comment: "AI note", steps: [], expert_results: [], requires_human_review: false, review_status: "confirmed", ...patch };
@@ -52,6 +53,7 @@ function show(detail = false, suffix = "") {
   return router;
 }
 beforeEach(async () => {
+  state.locale = "en-US";
   await clearPageDrafts();
   state.task.status = "graded";
   state.task.grading_job_id = null;
@@ -67,6 +69,43 @@ beforeEach(async () => {
   HTMLElement.prototype.scrollIntoView = vi.fn();
 });
 describe("one-click grading review", () => {
+  it.each(["zh-CN", "en-US"])("keeps disputed AI evidence and matching teacher defaults visible in %s", async locale => {
+    state.locale = locale;
+    const experts = [7, 10].map((score, index) => ({ provider: `expert-${index}`, score, max_score: 10, confidence: index ? 0.99 : 0.95,
+      comment: `Expert rationale ${index}`, steps: [{ step_no: 1, desc: `Expert reasoning ${index}`, score, is_correct: true }] }));
+    state.result.results = [{ student_id: "S1", corrections: [
+      correction("Q1", { score: 8.53, provisional_score: 8.53, expert_results: experts, comment: "Spread-only rationale" }),
+      correction("Q2", { score: null, provisional_score: 8.53, expert_results: experts, comment: "Flagged rationale", requires_human_review: true,
+        review_reasons: ["high_indecisiveness", "low_confidence"], review_status: "pending", confidence: 0.4,
+        steps: [{ step_no: 1, desc: "Combined reasoning", score: 8.53, is_correct: true }] }),
+    ] }];
+    show(true);
+    for (const id of ["Q1", "Q2"]) {
+      const card = within(document.querySelector(`[data-question-id="${id}"]`) as HTMLElement);
+      const result = card.getByRole("region", { name: locale === "zh-CN" ? "SmarTAI 批改结果" : "SmarTAI Grading Result" });
+      expect(result).toHaveTextContent("8.5 / 10");
+      expect(card.getByRole("textbox", { name: `${id} ${locale === "zh-CN" ? "最终得分" : "final score"}` })).toHaveValue("8.5");
+      expect(result).toHaveTextContent(id === "Q1" ? "Spread-only rationale" : "Flagged rationale");
+      await userEvent.click(card.getByText(locale === "zh-CN" ? "查看各专家原始结果" : "View Original Model Results"));
+      expect(card.getByText("Expert rationale 0")).toBeVisible();
+      expect(card.getByText("Expert reasoning 1")).toBeVisible();
+    }
+    expect(screen.getByText("Combined reasoning")).toBeVisible();
+    expect(screen.queryByText(/已隐藏|details are hidden/)).not.toBeInTheDocument();
+    expect(state.update).not.toHaveBeenCalled();
+  });
+
+  it("keeps original AI score after a teacher override and labels failed experts without a zero grade", () => {
+    state.result.results = [{ student_id: "S1", corrections: [correction("Q1", {
+      score: 9, provisional_score: 8.53, teacher_score: 9,
+      expert_results: [{ provider: "failed-model", score: 0, max_score: 10, confidence: 0, error_kind: "parse_failed", comment: "No parseable score", steps: [] }],
+    })] }];
+    show(true);
+    expect(screen.getByRole("region", { name: "SmarTAI Grading Result" })).toHaveTextContent("8.5 / 10");
+    expect(screen.getByRole("textbox", { name: "Q1 final score" })).toHaveValue("9");
+    expect(screen.getByText(/failed-model/)).toHaveTextContent("No valid score · excluded from synthesis");
+  });
+
   it("opens failed-result details from recovery and keeps missing scores blocked", async () => {
     Object.assign(state.task, { status: "error", grading_job_id: "failed-run", last_failed_job_id: "failed-run" });
     state.result.grading_run_status = "partial_failed";
@@ -235,7 +274,7 @@ describe("one-click grading review", () => {
     expect(screen.getByRole("alertdialog")).toHaveTextContent("业务保存正在进行");
     expect(screen.getByRole("button", { name: "不暂存并离开" })).toBeDisabled();
     expect(screen.getByRole("button", { name: "正在暂存…" })).toBeDisabled();
-    expect(screen.getByRole("textbox", { name: "Q1 final score" })).toHaveValue("7");
+    await waitFor(() => expect(screen.getByRole("textbox", { name: "Q1 final score" })).toHaveValue("7"));
     const unload = new Event("beforeunload", { cancelable: true });
     window.dispatchEvent(unload);
     expect(unload.defaultPrevented).toBe(true);
@@ -247,7 +286,7 @@ describe("one-click grading review", () => {
     expect(state.update.mock.calls.every(([input]) => input.studentId === "S1")).toBe(true);
     expect(router.state.location.pathname).toBe("/tasks/T1/review/S1/Q1");
     await waitFor(() => expect(screen.queryByText(/Saving review results\. Please wait before switching students/)).not.toBeInTheDocument());
-    expect(screen.getByRole("textbox", { name: "Q1 final score" })).toHaveValue("7");
+    await waitFor(() => expect(screen.getByRole("textbox", { name: "Q1 final score" })).toHaveValue("7"));
   });
   it("stashes without confirming and continues the original destination only once", async () => {
     const router = show(true);

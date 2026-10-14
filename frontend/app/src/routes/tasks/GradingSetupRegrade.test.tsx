@@ -137,6 +137,27 @@ describe("GradingSetupPage regrade mode", () => {
     expect(slider).toHaveValue("80");
   });
 
+  it("defaults to confidence weights and saves custom ratios for the selected models", async () => {
+    await clearPageDrafts();
+    const current = (useGradingSetup as unknown as () => any)();
+    current.data.task_status = "submissions_ready";
+    current.data.grading_setup = { ...current.data.grading_setup, selected_provider_ids: ["provider-1", "provider-2"], aggregation_method: "weighted_average" };
+    current.data.available_experts.push({ ...current.data.available_experts[0], provider_id: "provider-2", display_name: "Second grader" });
+    const router = createMemoryRouter([
+      { path: "/tasks/:taskId/grading-setup", element: <GradingSetupPage /> },
+      { path: "/tasks/:taskId/grading/preflight", element: <div>Saved weight summary</div> },
+    ], { initialEntries: ["/tasks/task-1/grading-setup"] });
+    render(<RouterProvider router={router} />);
+    expect(await screen.findByText("Default: confidence weights")).toBeVisible();
+    expect(screen.getByRole("checkbox", { name: "Custom model weights" })).not.toBeChecked();
+    fireEvent.click(screen.getByRole("checkbox", { name: "Custom model weights" }));
+    fireEvent.change(screen.getByRole("spinbutton", { name: "Calculus grader Weight" }), { target: { value: "1" } });
+    fireEvent.change(screen.getByRole("spinbutton", { name: "Second grader Weight" }), { target: { value: "3" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save & Review Grading" }));
+    await waitFor(() => expect(saveSetupMutate).toHaveBeenCalledWith(expect.objectContaining({ gradingSetup: expect.objectContaining({ expert_weights: { "provider-1": 1, "provider-2": 3 } }) })));
+    expect(await screen.findByText("Saved weight summary")).toBeVisible();
+  });
+
   it("keeps completed-task settings editable and offers the regrade summary action", async () => {
     const router = createMemoryRouter([
       {

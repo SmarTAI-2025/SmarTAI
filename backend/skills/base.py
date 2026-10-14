@@ -363,7 +363,7 @@ class GradingSkill(ABC):
             confidence=0.0,
             comment=reason,
             steps=[],
-            error_kind=error_kind,
+            error_kind=error_kind or "general",
         )
 
 

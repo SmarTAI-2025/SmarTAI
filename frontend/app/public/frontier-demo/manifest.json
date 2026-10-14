@@ -2,46 +2,11 @@
   "schemaVersion": 1,
   "title": "STEM Reasoning Lab - Mixed Assessment",
   "synthetic": true,
-  "visitorCodeExecution": false,
-  "walkthrough": {
-    "precomputed": true,
-    "liveModelCalls": false
-  },
   "liveDemo": {
     "inputMode": "synthetic_raw_fixtures",
     "processingMode": "real_api_ocr_and_grading_required"
   },
   "assets": [
-    {
-      "path": "DEMO-001_typeset.pdf",
-      "bytes": 203815,
-      "sha256": "6da7d14b023d010c02a9366fe7891aaf5041a224d992bc899b8c90745c37624f"
-    },
-    {
-      "path": "DEMO-002_handwritten.pdf",
-      "bytes": 450158,
-      "sha256": "e30ec297a2c78aaa6359c756061c3396f85d91e4749c67ff34a071cdbba526a9"
-    },
-    {
-      "path": "DEMO-002_handwritten.png",
-      "bytes": 480283,
-      "sha256": "951e021503b5b88fbfb4f0f7fd008eb60ab943f00d2a4d2360d23e703cbf4d7e"
-    },
-    {
-      "path": "DEMO-003_mixed.pdf",
-      "bytes": 64263,
-      "sha256": "02d9008d503b6609ed37e1ab7ae668c7b5d0f22940a27180610aea8a17b30fb0"
-    },
-    {
-      "path": "SHA256SUMS",
-      "bytes": 1452,
-      "sha256": "1817f262e8b2d2b2e9eedd2c39986a0a5372a1c0b08f6322db2230058202b55c"
-    },
-    {
-      "path": "assignment_mixed_stem.pdf",
-      "bytes": 67828,
-      "sha256": "86eaf00f526ced45468f56f695efee389a6f088141a405d63f065708acda0a5e"
-    },
     {
       "path": "live/DEMO-001_typeset_raw.pdf",
       "bytes": 196314,
@@ -88,14 +53,9 @@
       "sha256": "e2cb9abbdeb3dba3e4d0dd657ee2ece3f1c5d428e680f9dd959a6959b353d51b"
     },
     {
-      "path": "scan_004.pdf",
-      "bytes": 311026,
-      "sha256": "84489e304220f1aa263a1ce49704883ae0b9b5bb7123b993dea98967fba13905"
-    },
-    {
-      "path": "scan_004.png",
-      "bytes": 359751,
-      "sha256": "b632c97d7408ecad241fc57b1e17f39368f67488cd26fda410bd30182d7c1e0e"
+      "path": "SHA256SUMS",
+      "bytes": 848,
+      "sha256": "9a9cc74f52342a3e8f5ade951640b4ebd82a5eaa62d6cac0c289e0a3db367a79"
     }
   ]
 }

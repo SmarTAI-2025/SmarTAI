@@ -149,33 +149,41 @@ export function problemLabel(problem?: Pick<ProblemInfo, "q_id" | "number"> | nu
   return String(problem?.q_id ?? fallbackId ?? "题目");
 }
 
-export function formatScore(value: number | null | undefined) {
+function roundAIScore(value: number, maxScore: number): number {
+  const [coefficient, exponent = "0"] = String(value).split("e");
+  const shifted = Number(`${coefficient}e${Number(exponent) + 1}`);
+  const rounded = Number.isFinite(shifted) ? Math.round(shifted) / 10 : value;
+  return value <= maxScore ? Math.min(rounded, maxScore) : rounded;
+}
+
+export function formatScore(value: number | null | undefined, maxScore?: number) {
   if (typeof value !== "number" || !Number.isFinite(value)) {
     return "--";
   }
   if (Number.isInteger(value)) {
     return String(value);
   }
-  return value.toFixed(1);
+  if (value === maxScore) return String(value);
+  return roundAIScore(value, Number.POSITIVE_INFINITY).toFixed(1);
 }
 
 export function aiCorrectionScore(correction: Correction): number | null {
   if (hasHardFailureSignal(correction)) return null;
-  if (isFiniteScore(correction.provisional_score)) return correction.provisional_score;
-  if (!isFiniteScore(correction.teacher_score) && isFiniteScore(correction.score)) return correction.score;
+  if (isFiniteScore(correction.provisional_score)) return roundAIScore(correction.provisional_score, correction.max_score);
+  if (!isFiniteScore(correction.teacher_score) && isFiniteScore(correction.score)) return roundAIScore(correction.score, correction.max_score);
   return null;
 }
 
 export function effectiveCorrectionScore(correction: Correction): number | null {
   if (isFiniteScore(correction.teacher_score)) return correction.teacher_score;
   if (hasHardFailureSignal(correction)) return null;
-  if (isFiniteScore(correction.score)) return correction.score;
-  return isFiniteScore(correction.provisional_score) ? correction.provisional_score : null;
+  if (isFiniteScore(correction.score)) return roundAIScore(correction.score, correction.max_score);
+  return aiCorrectionScore(correction);
 }
 
 export function correctionScoreSource(correction: Correction): CorrectionScoreSource {
   if (isFiniteScore(correction.teacher_score)) {
-    const aiScore = isFiniteScore(correction.provisional_score) ? correction.provisional_score : null;
+    const aiScore = aiCorrectionScore(correction);
     return aiScore !== null && Math.abs(correction.teacher_score - aiScore) < 1e-9
       ? "teacher_confirmed_same"
       : "teacher_changed";
@@ -213,23 +221,8 @@ export function summarizeReviewScoreSources(corrections: Correction[]): ReviewSc
   return summary;
 }
 
-export function shouldHideAutomatedScores(correction: Correction): boolean {
-  return hasReviewSignal(correction) && correctionScoreSource(correction) === "ai_untouched";
-}
-
-/** Review surfaces hide an untouched AI score while formal result math still uses it. */
-export function displayableCorrectionScore(correction: Correction): number | null {
-  if (isFiniteScore(correction.teacher_score)) {
-    return correction.teacher_score;
-  }
-  if (shouldHideAutomatedScores(correction)) {
-    return null;
-  }
-  return effectiveCorrectionScore(correction);
-}
-
 export function correctionReviewDraftScore(correction: Correction): string {
-  const score = displayableCorrectionScore(correction);
+  const score = effectiveCorrectionScore(correction);
   return score === null ? "" : String(score);
 }
 
@@ -277,7 +270,13 @@ export function hasReviewSignal(correction: Correction) {
     || HARD_FAILURE_METHODS.has(correction.synthesis_method ?? "");
 }
 
-export function reviewReasonLabel(reason: string) {
+export function reviewReasonLabel(reason: string, locale: Locale = "zh-CN") {
+  const english: Record<string, string> = {
+    high_indecisiveness: "Experts disagree", low_confidence: "Low confidence", score_spread_high: "Large score difference",
+    minority_veto: "Outlying expert score", parse_failed: "Could not parse result", degraded_to_single: "Only one expert succeeded (low confidence)",
+    transient_llm: "Model network error or timeout", llm_failed: "Model could not grade", quota_exhausted: "Quota exhausted", general: "Teacher review required",
+  };
+  if (locale === "en-US") return english[reason] ?? reason.replaceAll("_", " ");
   const labels: Record<string, string> = {
     high_indecisiveness: "专家分歧较大",
     low_confidence: "置信度偏低",
@@ -410,7 +409,6 @@ function isFiniteScore(value: number | null | undefined): value is number {
 }
 
 function hasHardFailureSignal(correction: Correction): boolean {
-  if (isFiniteScore(correction.teacher_score)) return false;
   if (HARD_FAILURE_METHODS.has(correction.synthesis_method ?? "")) return true;
   return correctionReviewReasonIds(correction).some((reason) => HARD_FAILURE_REASONS.has(reason));
 }

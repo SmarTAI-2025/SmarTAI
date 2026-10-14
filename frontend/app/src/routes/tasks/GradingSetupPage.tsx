@@ -288,6 +288,7 @@ function GradingSetupPageForm() {
                     onRemoveMissingProvider={removeMissingProvider}
                     onPrimaryChange={(providerId) => updateSetup((current) => ({ ...current, primary_provider_id: providerId }))}
                     onAggregationChange={(aggregationMethod) => updateSetup((current) => ({ ...current, aggregation_method: aggregationMethod, multi_sample_n: 1 }))}
+                    onWeightsChange={(expertWeights) => updateSetup((current) => ({ ...current, expert_weights: expertWeights }))}
                   />
                 </div>
 
@@ -389,6 +390,7 @@ function ModelSection({
   onRemoveMissingProvider,
   onPrimaryChange,
   onAggregationChange,
+  onWeightsChange,
 }: {
   locale: Locale;
   experts: GradingSetupExpert[];
@@ -397,6 +399,7 @@ function ModelSection({
   onRemoveMissingProvider: (providerId: string) => void;
   onPrimaryChange: (providerId: string) => void;
   onAggregationChange: (method: GradingAggregationMethod) => void;
+  onWeightsChange: (weights: Record<string, number>) => void;
 }) {
   const selectedSet = new Set(setup.selected_provider_ids);
   const knownProviderIds = new Set(experts.map((expert) => expert.provider_id));
@@ -495,6 +498,30 @@ function ModelSection({
               badgeTone="warning"
               onClick={() => onAggregationChange("judge_agent")}
             />
+          </div>
+          <div className="mt-3 rounded-[8px] border bg-background px-4 py-3">
+            <p className="text-[13px] font-semibold text-foreground">{gradingSetupText(locale, "weightsDefault")}</p>
+            <p className="mt-1 text-[12px] leading-5 text-muted-foreground">{gradingSetupText(locale, "weightsHint")}</p>
+            <label className="mt-3 flex items-center gap-2 text-[13px] font-medium text-foreground">
+              <input type="checkbox" className="h-4 w-4 accent-primary"
+                checked={Object.keys(setup.expert_weights ?? {}).length > 0}
+                onChange={(event) => onWeightsChange(event.target.checked ? Object.fromEntries(setup.selected_provider_ids.map(id => [id, 1])) : {})} />
+              {gradingSetupText(locale, "customWeights")}
+            </label>
+            {Object.keys(setup.expert_weights ?? {}).length > 0 ? <div className="mt-2 space-y-2">
+              <p className="text-[12px] leading-5 text-muted-foreground">{gradingSetupText(locale, "customWeightsHint")}</p>
+              {setup.selected_provider_ids.map(id => {
+                const expert = experts.find(item => item.provider_id === id);
+                return <label key={id} className="flex min-w-0 items-center justify-between gap-3 text-[13px]">
+                  <span className="min-w-0 truncate text-foreground">{expert ? modelDisplayName(expert) : id}</span>
+                  <input type="number" min="0" step="any" inputMode="decimal"
+                    aria-label={`${expert ? modelDisplayName(expert) : id} ${gradingSetupText(locale, "modelWeight")}`}
+                    value={setup.expert_weights?.[id] || ""}
+                    onChange={(event) => onWeightsChange({ ...setup.expert_weights, [id]: Number(event.target.value) })}
+                    className="h-9 w-24 shrink-0 rounded-[8px] border bg-card px-3 text-right text-[13px] outline-none focus:border-primary focus:ring-2 focus:ring-primary/15" />
+                </label>;
+              })}
+            </div> : null}
           </div>
         </div>
       ) : null}
@@ -992,7 +1019,7 @@ function CenteredState({ title, description, action }: { title: string; descript
 }
 
 function cloneSetup(setup: GradingSetup): GradingSetup {
-  return { ...setup, selected_provider_ids: [...setup.selected_provider_ids] };
+  return { ...setup, selected_provider_ids: [...setup.selected_provider_ids], ...(setup.expert_weights ? { expert_weights: { ...setup.expert_weights } } : {}) };
 }
 
 function serializeSetup(setup: GradingSetup): string {
@@ -1020,6 +1047,8 @@ function applyProviderSelection(
     selected_provider_ids: nextIds,
     primary_provider_id: primaryProviderId,
     aggregation_method: aggregationMethod,
+    expert_weights: nextIds.length > 1 && Object.keys(current.expert_weights ?? {}).length > 0
+      ? Object.fromEntries(nextIds.map(id => [id, current.expert_weights?.[id] ?? 1])) : {},
     multi_sample_n: nextIds.length === 1 && !usesSharedPool ? current.multi_sample_n : 1,
   };
 }
@@ -1031,6 +1060,10 @@ function validateSetup(
   locale: Locale,
 ): string | null {
   if (setup.selected_provider_ids.length === 0) return gradingSetupText(locale, "providerSelectionRequired");
+  if (Object.keys(setup.expert_weights ?? {}).length && (
+    Object.keys(setup.expert_weights!).length !== setup.selected_provider_ids.length
+    || setup.selected_provider_ids.some(id => !Number.isFinite(setup.expert_weights?.[id]) || setup.expert_weights![id] <= 0)
+  )) return gradingSetupText(locale, "invalidWeights");
   const selected = setup.selected_provider_ids.map((providerId) => experts.find((expert) => expert.provider_id === providerId));
   if (selected.some((expert) => !expert?.enabled)) return gradingSetupText(locale, "providerChanged");
   if (selected.some((expert) => expert?.provider_kind === "ocr")) return gradingSetupText(locale, "ocrGradingUnsupported");
