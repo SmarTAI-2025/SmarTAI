@@ -325,6 +325,81 @@ def test_finalization_artifacts_and_dirty_state_are_idempotent():
     assert stale_index["versions"][0]["status"] == "stale"
 
 
+@pytest.mark.parametrize("legacy_json", [False, True])
+def test_paused_json_exports_keep_new_and_legacy_reports_downloadable(monkeypatch, legacy_json):
+    import hashlib
+    from io import BytesIO
+    from zipfile import ZipFile
+
+    from backend.domain.errors import NotFound
+    from backend.services import result_artifacts, task_facade
+
+    seeded = _prepared_task()
+    args = {"task_id": seeded["task_id"], "owner_id": seeded["owner_id"]}
+    task_facade.confirm_finalization(**args, expected_revision=0)
+    monkeypatch.setattr(result_artifacts, "JSON_EXPORT_ENABLED", legacy_json)
+    generated = task_facade.generate_artifacts(**args, expected_revision=1)
+    original_files = generated["artifacts"]["versions"][0]["files"]
+    assert len(original_files) == (5 if legacy_json else 4)
+    monkeypatch.setattr(result_artifacts, "JSON_EXPORT_ENABLED", False)
+
+    original_dumps = result_artifacts.json.dumps
+
+    def reject_json_export(value, *args, **kwargs):
+        assert not (isinstance(value, dict) and "result" in value and "task_id" in value)
+        return original_dumps(value, *args, **kwargs)
+
+    monkeypatch.setattr(result_artifacts.json, "dumps", reject_json_export)
+    replay = task_facade.generate_artifacts(**args, expected_revision=2)
+    assert replay["status"] == "already_done"
+    files = replay["artifacts"]["versions"][0]["files"]
+    assert {item["artifact_id"] for item in files} == {
+        "grades_csv", "learning_report_md", "published_answers_md", "published_answers_tex",
+    }
+    with pytest.raises(NotFound):
+        task_facade.artifact_bytes(**args, version=1, artifact_id="formal_result_json")
+    bundle = task_facade.artifact_bytes(**args, version=1, artifact_id="bundle")[0]
+    with ZipFile(BytesIO(bundle)) as archive:
+        assert set(archive.namelist()) == {item["filename"] for item in files}
+        assert not any(name.endswith(".json") for name in archive.namelist())
+        for item in files:
+            content = task_facade.artifact_bytes(**args, version=1, artifact_id=item["artifact_id"])[0]
+            assert archive.read(item["filename"]) == content
+            assert hashlib.sha256(content).hexdigest() == item["sha256"]
+
+
+@pytest.mark.parametrize("field,error_code", [
+    ("sha256", "artifact_renderer_changed"),
+    ("title", "artifact_renderer_changed"),
+    ("artifact_fingerprint", "artifact_manifest_changed"),
+])
+def test_paused_json_exports_preserve_download_integrity_checks(field, error_code):
+    from copy import deepcopy
+    from sqlalchemy import select
+
+    from backend.db.session import session_scope
+    from backend.db.workflow_repository import ResultArtifactManifestRecord
+    from backend.domain.errors import VersionConflict
+    from backend.services import task_facade
+
+    seeded = _prepared_task()
+    args = {"task_id": seeded["task_id"], "owner_id": seeded["owner_id"]}
+    task_facade.confirm_finalization(**args, expected_revision=0)
+    task_facade.generate_artifacts(**args, expected_revision=1)
+    with session_scope() as session:
+        record = session.scalar(select(ResultArtifactManifestRecord).where(
+            ResultArtifactManifestRecord.assignment_id == seeded["task_id"],
+        ))
+        manifest = deepcopy(record.manifest)
+        if field == "artifact_fingerprint":
+            manifest[field] = "changed"
+        else:
+            manifest["files"][0][field] = "changed"
+        record.manifest = manifest
+    with pytest.raises(VersionConflict, match=error_code):
+        task_facade.artifact_bytes(**args, version=1, artifact_id="bundle")
+
+
 def test_upstream_answer_edit_marks_detached_formal_result_and_artifacts_stale():
     from backend.services import task_facade
 

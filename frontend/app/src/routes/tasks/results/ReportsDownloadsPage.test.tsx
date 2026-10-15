@@ -76,6 +76,21 @@ it("deletes only the selected historical version and refreshes its list", async 
   expect(screen.getByRole("button", { name: "Download all ZIP" })).toBeVisible();
 });
 
+it.each(["zh-CN", "en-US"] as const)("hides paused JSON downloads and excludes them from current and historical counts (%s)", async (locale) => {
+  const json = { artifact_id: "formal_result_json" as const, title: "正式结果数据", title_en: "Formal result data",
+    filename: "result.json", media_type: "application/json", size_bytes: 100, sha256: "json" };
+  vi.mocked(api.getTaskResultArtifacts).mockResolvedValue({ task_id: "T1", current_result_version: 2, analysis_status: "ready",
+    versions: [{ ...report, version: 2, files: [...report.files, json] },
+      { ...report, current: false, status: "historical", files: [...report.files, json] }] });
+  show({ ...finalization, final_result_version: 2 }, locale);
+  const zh = locale === "zh-CN";
+  expect(await screen.findByRole("button", { name: zh ? "下载全部 ZIP" : "Download all ZIP" })).toBeVisible();
+  expect(screen.queryByText(/JSON|正式结果数据|Formal result data/)).not.toBeInTheDocument();
+  expect(screen.getAllByRole("button", { name: zh ? "下载" : "Download" })).toHaveLength(1);
+  expect(screen.getByText(zh ? "可下载文件" : "Downloadable files").parentElement).toHaveTextContent("1");
+  expect(screen.getByText(zh ? "1 个文件可下载" : "1 files available")).toBeVisible();
+});
+
 it("only saves a report snapshot on explicit generation and chains the returned revision", async () => {
   show();
   const button = await screen.findByRole("button", { name: "Generate files" });

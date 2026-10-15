@@ -49,7 +49,14 @@ export function ReportsDownloadsPage({
   const deleteMutation = useDeleteTaskResultArtifact();
   const [downloading, setDownloading] = useState<string | null>(null);
   const [generateFailure, setGenerateFailure] = useState<unknown>(null);
-  const index = artifactsQuery.data;
+  // JSON exports are paused, including entries from cached legacy manifests.
+  const index = artifactsQuery.data ? {
+    ...artifactsQuery.data,
+    versions: artifactsQuery.data.versions.map((version) => ({
+      ...version,
+      files: version.files.filter((file) => file.artifact_id !== "formal_result_json"),
+    })),
+  } : undefined;
   const storedCurrent = index?.versions.find((version) => version.current);
   const stale = finalization.final_result_dirty || storedCurrent?.status === "stale";
   const current: ResultArtifactVersion | undefined = (stale ? undefined : storedCurrent)

@@ -18,6 +18,12 @@ from typing import Any, Dict, Iterable, List, Mapping
 
 
 ARTIFACT_SCHEMA_VERSION = 1
+# Temporarily paused; keep the renderer available without generating JSON exports.
+JSON_EXPORT_ENABLED = False
+
+
+def is_artifact_enabled(artifact_id: str) -> bool:
+    return JSON_EXPORT_ENABLED or artifact_id != "formal_result_json"
 
 
 @dataclass(frozen=True)
@@ -43,7 +49,7 @@ class ResultArtifactFile:
 
 def artifact_fingerprint(
     *, task_id: str, task_name: str, snapshot: Mapping[str, Any],
-    generated_at: float, files: Iterable[ResultArtifactFile],
+    generated_at: float, files: Iterable[Mapping[str, Any]],
 ) -> str:
     """Fingerprint every identity/content input used by the artifact set."""
     source = {
@@ -54,7 +60,7 @@ def artifact_fingerprint(
         "result_fingerprint": str(snapshot.get("fingerprint") or ""),
         "confirmed_at": snapshot.get("created_at"),
         "generated_at": generated_at,
-        "files": [item.metadata() for item in files],
+        "files": list(files),
     }
     return hashlib.sha256(
         json.dumps(
@@ -86,7 +92,7 @@ def build_artifact_manifest(
         "result_fingerprint": str(snapshot.get("fingerprint") or ""),
         "artifact_fingerprint": artifact_fingerprint(
             task_id=task_id, task_name=task_name, snapshot=snapshot,
-            generated_at=generated_at, files=files,
+            generated_at=generated_at, files=file_metadata,
         ),
         "confirmed_at": snapshot.get("created_at"),
         "generated_at": generated_at,
@@ -107,17 +113,7 @@ def build_artifact_files(
     report = _learning_report(task_name, version, snapshot, payload, generated_at)
     answers = _published_answers(task_name, version, payload)
     latex = _published_answers_latex(task_name, version, payload)
-    formal_json = {
-        "schema_version": ARTIFACT_SCHEMA_VERSION,
-        "task_id": task_id,
-        "task_name": task_name,
-        "result_version": version,
-        "confirmed_at": snapshot.get("created_at"),
-        "generated_at": generated_at,
-        "fingerprint": snapshot.get("fingerprint"),
-        "result": payload,
-    }
-    return [
+    files = [
         ResultArtifactFile(
             "grades_csv", "成绩表", "Grade sheet", f"{prefix}_grades.csv", "text/csv; charset=utf-8",
             _grades_csv(payload),
@@ -134,27 +130,42 @@ def build_artifact_files(
             "published_answers_tex", "发布版标答（LaTeX）", "Published answers (LaTeX)", f"{prefix}_answers.tex", "application/x-tex; charset=utf-8",
             latex.encode("utf-8"),
         ),
-        ResultArtifactFile(
+    ]
+    if JSON_EXPORT_ENABLED:
+        formal_json = {
+            "schema_version": ARTIFACT_SCHEMA_VERSION,
+            "task_id": task_id,
+            "task_name": task_name,
+            "result_version": version,
+            "confirmed_at": snapshot.get("created_at"),
+            "generated_at": generated_at,
+            "fingerprint": snapshot.get("fingerprint"),
+            "result": payload,
+        }
+        files.append(ResultArtifactFile(
             "formal_result_json", "正式结果数据", "Formal result data", f"{prefix}_formal_result.json", "application/json; charset=utf-8",
             json.dumps(formal_json, ensure_ascii=False, indent=2, default=str).encode("utf-8"),
-        ),
-    ]
+        ))
+    return files
 
 
 def build_artifact_bundle(files: Iterable[ResultArtifactFile], manifest: Mapping[str, Any]) -> bytes:
     buffer = io.BytesIO()
     with zipfile.ZipFile(buffer, mode="w", compression=zipfile.ZIP_DEFLATED) as archive:
         for artifact in files:
+            if not is_artifact_enabled(artifact.artifact_id):
+                continue
             _write_deterministic_zip_member(
                 archive, artifact.filename, artifact.content,
             )
-        _write_deterministic_zip_member(
-            archive,
-            "manifest.json",
-            json.dumps(
-                manifest, ensure_ascii=False, indent=2, default=str
-            ).encode("utf-8"),
-        )
+        if JSON_EXPORT_ENABLED:
+            _write_deterministic_zip_member(
+                archive,
+                "manifest.json",
+                json.dumps(
+                    manifest, ensure_ascii=False, indent=2, default=str
+                ).encode("utf-8"),
+            )
     return buffer.getvalue()
 
 

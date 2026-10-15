@@ -86,9 +86,11 @@ from backend.services.background_errors import (
 )
 from backend.services.result_artifacts import (
     ARTIFACT_SCHEMA_VERSION,
+    artifact_fingerprint,
     build_artifact_bundle,
     build_artifact_files,
     build_artifact_manifest,
+    is_artifact_enabled,
 )
 from backend.services.question_structure import (
     MajorQuestionStructureV1,
@@ -5247,7 +5249,10 @@ def artifact_index(*, task_id: str, owner_id: str) -> dict:
             ),
             "confirmed_at": record.manifest.get("confirmed_at"),
             "generated_at": record.generated_at,
-            "files": record.manifest.get("files", []),
+            "files": [
+                item for item in record.manifest.get("files", [])
+                if is_artifact_enabled(item.get("artifact_id", ""))
+            ],
         }
         for record in records
     ]
@@ -5290,6 +5295,8 @@ def artifact_bytes(
     record = workflow_repository.get_artifact_manifest(
         task_id, version, owner_id=owner_id
     )
+    if not is_artifact_enabled(artifact_id):
+        raise NotFound("artifact")
     snapshot = result_snapshot(
         task_id=task_id, owner_id=owner_id, result_version=version,
         grading_run_id=record.grading_run_id,
@@ -5315,23 +5322,25 @@ def artifact_bytes(
         for item in record.manifest.get("files", [])
         if isinstance(item, dict) and item.get("artifact_id")
     }
+    if {item.artifact_id for item in files} != {
+        key for key in expected_files if is_artifact_enabled(key)
+    }:
+        raise VersionConflict("artifact_renderer_changed")
     for item in files:
         expected = expected_files.get(item.artifact_id)
-        if (
-            expected is None
-            or expected.get("sha256")
-            != hashlib.sha256(item.content).hexdigest()
-            or expected.get("size_bytes") != len(item.content)
-        ):
+        if expected != item.metadata():
             raise VersionConflict("artifact_renderer_changed")
-    rebuilt_manifest = build_artifact_manifest(
+    # Verify the original manifest, including paused exports' metadata, without
+    # rendering their bytes. Every downloadable file is verified above.
+    rebuilt_fingerprint = artifact_fingerprint(
         task_id=task_id,
         task_name=task_name,
         snapshot=snapshot,
         generated_at=record.generated_at,
+        files=record.manifest.get("files", []),
     )
     if (
-        rebuilt_manifest.get("artifact_fingerprint")
+        rebuilt_fingerprint
         != record.manifest.get("artifact_fingerprint")
     ):
         raise VersionConflict("artifact_manifest_changed")
