@@ -17,7 +17,8 @@ import {
   useSearchParams,
 } from "react-router-dom";
 import { toast } from "sonner";
-import { normalizeAPIError } from "@/api/client";
+import { getAPIErrorCode, normalizeAPIError } from "@/api/client";
+import { taskMetadataSnapshot } from "@/api/tasks";
 import {
   useCourses,
   useCourseSearch,
@@ -106,7 +107,7 @@ function NewTaskForm({ scope, taskQuery }: { scope: string; taskQuery: ReturnTyp
   const enabledExperts = (expertsQuery.data ?? []).filter((expert) => expert.enabled);
   const courseQueryIsCurrent = debouncedCourseDraft.trim() === courseDraft.trim();
   const tagQueryIsCurrent = debouncedTagDraft.trim() === tagDraft.trim();
-  const isSaving = createTask.isPending || updateTask.isPending;
+  const isSaving = createTask.isPending || updateTask.isPending || draft.protection.formalPending;
 
   useEffect(() => {
     if (!isEditing || editHydrated || !taskQuery.data || (!frontier && (!coursesQuery.isSuccess || !tagsQuery.isSuccess))) return;
@@ -115,6 +116,7 @@ function NewTaskForm({ scope, taskQuery }: { scope: string; taskQuery: ReturnTyp
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    if (isSaving) return;
     setFormError(null);
     if (frontier && taskId) { navigate(`/tasks/${taskId}/upload/problems`); return; }
     if (draft.protection.conflict) { setFormError("请先核对服务器变化，明确恢复或删除旧草稿。"); return; }
@@ -141,12 +143,18 @@ function NewTaskForm({ scope, taskQuery }: { scope: string; taskQuery: ReturnTyp
 
     if (isEditing && taskId) {
       try {
-        await updateTask.mutateAsync({ taskId, patch: payload });
+        await updateTask.mutateAsync({ taskId, patch: { ...payload, expected_metadata: taskMetadataSnapshot(taskQuery.data!) } });
         if (!draft.protection.isCurrent()) return;
-        draft.clear();
+        await draft.clear();
+        if (!draft.protection.isCurrent()) return;
         toast.success(t("newTaskUpdateSuccess"));
         navigate(returnTo, { replace: true, state: location.state });
       } catch (error) {
+        if (getAPIErrorCode(error) === "task_metadata_conflict") {
+          await taskQuery.refetch();
+          setFormError(locale === "zh-CN" ? "任务信息已在其他页面修改，当前输入已保留，请核对后再保存。" : "Task details changed in another page. Your input is preserved; review before saving again.");
+          return;
+        }
         setFormError(normalizeAPIError(error).message);
       }
       return;
@@ -164,7 +172,8 @@ function NewTaskForm({ scope, taskQuery }: { scope: string; taskQuery: ReturnTyp
         idempotencyKey: idempotencyRef.current.key,
       });
       if (!draft.protection.isCurrent()) return;
-      draft.clear();
+      await draft.clear();
+      if (!draft.protection.isCurrent()) return;
       toast.success(t("newTaskCreateSuccess"));
       navigate(`/tasks/${task.task_id}/upload/problems`);
     } catch (error) {

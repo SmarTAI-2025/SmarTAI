@@ -1,7 +1,7 @@
 import { demoLockedText } from "@/lib/frontierFixtures";
 import { taskWorkspacePath } from "@/lib/frontierSession";
 import { useFrontierWorkspace } from "@/lib/frontierContext";
-import { gradingEditorVersion } from "@/lib/editorVersions";
+import { gradingDraftVersionsMatch, gradingEditorVersion } from "@/lib/editorVersions";
 import { useDraftProtection } from "@/hooks/useDraftProtection";
 import { useDraftLeave } from "@/hooks/useDraftLeave";
 import {
@@ -77,6 +77,8 @@ function GradingSetupPageForm() {
   const [showActionHelp, setShowActionHelp] = useState(false);
   const [syncNoticeKey, setSyncNoticeKey] = useState<GradingSetupCopyKey | null>(null);
   const [selectionNoticeKey, setSelectionNoticeKey] = useState<GradingSetupCopyKey | null>(null);
+  const [savingServerKey, setSavingServerKey] = useState<string | null>(null);
+  const isSaving = saveSetup.isPending || savingServerKey !== null;
 
   const response = setupQuery.data;
   const isRegrading = canTaskBeRegraded(response?.task_status);
@@ -94,7 +96,10 @@ function GradingSetupPageForm() {
     && serializedSetup !== initialSetupRef.current;
 
   useEffect(() => {
-    if (!response || !serverKey || appliedServerKeyRef.current === serverKey) return;
+    // The mutation publishes its response before draft cleanup completes.
+    // Acknowledge that save before checking for external editor changes.
+    if (savingServerKey !== null) return;
+    if (!response || !serverKey || (appliedServerKeyRef.current === serverKey && (setup || !serverSetup))) return;
 
     if (appliedServerKeyRef.current !== null && isDirty) {
       if (conflictServerKeyRef.current !== serverKey) {
@@ -114,9 +119,9 @@ function GradingSetupPageForm() {
     setActionError(null);
     if (!preserveSyncNotice) setSyncNoticeKey(null);
     setSelectionNoticeKey(null);
-  }, [isDirty, response, serverKey, serverSetup]);
+  }, [isDirty, response, serverKey, serverSetup, savingServerKey, setup]);
 
-  const localDraft = useDraftProtection({ scope: `grading:${taskId}:${response?.task_id ?? ""}`, value: { setup, advancedOpen }, baseline: { setup: serverSetup, advancedOpen: false }, version: serverKey ?? "", enabled: Boolean(response && setup), busy: saveSetup.isPending, onRestore: (draft) => { setSetup(draft.setup); setAdvancedOpen(draft.advancedOpen); } });
+  const localDraft = useDraftProtection({ scope: `grading:${taskId}:${response?.task_id ?? ""}`, value: { setup, advancedOpen }, baseline: { setup: serverSetup, advancedOpen: false }, version: savingServerKey ?? serverKey, versionsMatch: gradingDraftVersionsMatch, enabled: Boolean(response && setup), busy: isSaving, onRestore: (draft) => { setSetup(draft.setup); setAdvancedOpen(draft.advancedOpen); } });
 
   const expertsById = useMemo(
     () => new Map((response?.available_experts ?? []).map((expert) => [expert.provider_id, expert])),
@@ -145,7 +150,7 @@ function GradingSetupPageForm() {
     : null;
   const actionDisabled = !taskId
     || !setup
-    || saveSetup.isPending;
+    || isSaving;
 
   function updateSetup(updater: (current: GradingSetup) => GradingSetup) {
     setActionError(null);
@@ -192,7 +197,7 @@ function GradingSetupPageForm() {
   }
 
   async function handleSubmit() {
-    if (saveSetup.isPending) return;
+    if (isSaving) return;
     setSaveFailure(null);
     if (!taskId || !response || !setup || validationMessage || saveBlockingIssue) {
       setActionError(validationMessage ?? startBlockingMessage ?? gradingSetupText(locale, "invalidForm"));
@@ -202,16 +207,20 @@ function GradingSetupPageForm() {
 
     setActionError(null);
     if (localDraft.conflict) return;
+    setSavingServerKey(serverKey);
     try {
-      await saveSetup.mutateAsync({
+      const savedResponse = await saveSetup.mutateAsync({
         taskId,
         expectedWorkflowRevision: response.workflow_revision,
         gradingSetup: setup,
       });
       if (!localDraft.isCurrent()) return;
+      appliedServerKeyRef.current = gradingEditorVersion(savedResponse);
+      initialSetupRef.current = serializeSetup(savedResponse.grading_setup ?? setup);
+      conflictServerKeyRef.current = null;
+      setSyncNoticeKey(null);
       if (!await localDraft.clear({ setup, advancedOpen })) return;
       if (!localDraft.isCurrent()) return;
-      initialSetupRef.current = serializeSetup(setup);
       allowLeaveRef.current = true;
       navigate(returnTo ?? `/tasks/${taskId}/grading/preflight`);
     } catch (error) {
@@ -230,6 +239,8 @@ function GradingSetupPageForm() {
         await setupQuery.refetch();
       }
       setActionError(localizeSaveError(normalized, locale));
+    } finally {
+      setSavingServerKey(null);
     }
   }
 
@@ -263,7 +274,7 @@ function GradingSetupPageForm() {
         ) : response && setup ? (
           <form className="flex h-full min-h-0 flex-col" onSubmit={(event) => { event.preventDefault(); void handleSubmit(); }}>
             <fieldset
-              disabled={Boolean(saveBlockingIssue) || saveSetup.isPending}
+              disabled={Boolean(saveBlockingIssue) || isSaving}
               className={cn("min-h-0 min-w-0 flex-1 border-0 p-0", saveBlockingIssue && "opacity-70")}
             >
               <div className="min-h-0">
@@ -326,7 +337,7 @@ function GradingSetupPageForm() {
                 </p>
               ) : null}
               {actionError && actionError !== validationMessage ? <p role="alert" className="mt-2 text-[11px] leading-4 text-danger">{actionError}</p> : null}
-              {saveFailure ? <RecoverableActionState info={classifyRecoverableError(saveFailure, { locale, taskId, returnTo: setupHref ?? undefined })} locale={locale} compact workflowRecovery={{ retry: { onClick: () => void handleSubmit(), busy: saveSetup.isPending }, configurationHref: setupHref ?? backHref }} /> : null}
+              {saveFailure ? <RecoverableActionState info={classifyRecoverableError(saveFailure, { locale, taskId, returnTo: setupHref ?? undefined })} locale={locale} compact workflowRecovery={{ retry: { onClick: () => void handleSubmit(), busy: isSaving }, configurationHref: setupHref ?? backHref }} /> : null}
             </div>
 
             <footer className="mt-4 grid shrink-0 gap-3 border-t pt-4 sm:-mx-5 sm:px-2 lg:grid-cols-[auto_minmax(0,1fr)_270px] lg:items-center">
@@ -340,11 +351,11 @@ function GradingSetupPageForm() {
                   : (locale === "zh-CN" ? "设置会在进入批改摘要前保存" : "Settings are saved before the grading summary")}
               </p>
               <button type="submit" disabled={actionDisabled} className="inline-flex h-11 w-full items-center justify-center gap-1.5 rounded-[8px] bg-primary px-5 text-sm font-semibold text-primary-foreground outline-none hover:opacity-90 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50">
-                {saveSetup.isPending ? <LoaderCircle aria-hidden="true" className="h-4 w-4 animate-spin" /> : null}
-                {saveSetup.isPending
+                {isSaving ? <LoaderCircle aria-hidden="true" className="h-4 w-4 animate-spin" /> : null}
+                {isSaving
                   ? gradingSetupText(locale, "saving")
                   : gradingSetupText(locale, isRegrading ? "saveRegradeAndContinue" : "saveAndContinue")}
-                {!saveSetup.isPending ? <ChevronRight aria-hidden="true" className="h-4 w-4" /> : null}
+                {!isSaving ? <ChevronRight aria-hidden="true" className="h-4 w-4" /> : null}
               </button>
             </footer>
           </form>

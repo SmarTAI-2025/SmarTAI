@@ -326,6 +326,7 @@ export interface TaskMetadataPatch {
   semester_id?: string | null;
   course_id?: string | null;
   tag_ids?: string[];
+  expected_metadata?: { name: string; semester_id: string | null; course_id: string | null; tag_ids: string[] };
 }
 
 export interface TaskMutationResponse {
@@ -419,6 +420,7 @@ export interface ResultArtifactVersion {
   status: ResultArtifactStatus;
   confirmed_at?: number | null;
   generated_at?: number | null;
+  bundle_filename?: string;
   files: ResultArtifactFile[];
 }
 

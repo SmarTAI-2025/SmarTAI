@@ -4,7 +4,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { I18nProvider } from "@/i18n/I18nProvider";
 import { LocalDraftManager } from "./LocalDraftManager";
 
-const mocks = vi.hoisted(() => ({ list: vi.fn(), remove: vi.fn(), owner: "teacher-a", listeners: new Set<(event?: Event) => void>() }));
+const mocks = vi.hoisted(() => ({ list: vi.fn(), tasks: vi.fn(), remove: vi.fn(), owner: "teacher-a", listeners: new Set<(event?: Event) => void>() }));
+vi.mock("@/api/tasks", () => ({ listTasks: mocks.tasks }));
 vi.mock("@/hooks/useDraftProtection", () => ({ useDraftOwner: () => mocks.owner }));
 vi.mock("@/lib/pageDraftStore", () => ({
   listPageDrafts: mocks.list,
@@ -15,7 +16,7 @@ vi.mock("@/lib/pageDraftStore", () => ({
 
 const DAY = 24 * 60 * 60 * 1000;
 function draft(id: string, expiresIn: number) {
-  return { scope: `metadata:${id}`, expires: Date.now() + expiresIn, savedAt: Date.now() + expiresIn - 7 * DAY, bytes: 1024 };
+  return { scope: `metadata:${id}`, title: `Task ${id}`, expires: Date.now() + expiresIn, savedAt: Date.now() + expiresIn - 7 * DAY, bytes: 1024 };
 }
 function view(props: Parameters<typeof LocalDraftManager>[0] = {}) {
   return <I18nProvider><MemoryRouter><LocalDraftManager {...props} /></MemoryRouter></I18nProvider>;
@@ -25,6 +26,7 @@ describe("saved draft list", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.owner = "teacher-a";
+    mocks.tasks.mockResolvedValue({});
     mocks.listeners.clear();
     window.localStorage.removeItem("smartai_locale");
   });
@@ -38,14 +40,33 @@ describe("saved draft list", () => {
     render(view({ maxItems: 5, showViewAll: true }));
     const rows = await screen.findAllByRole("listitem");
     expect(rows.map(row => within(row).getByRole("link").textContent)).toEqual([
-      "打开草稿 · 任务信息 · first", "打开草稿 · 任务信息 · soon", "打开草稿 · 任务信息 · recent",
-      "打开草稿 · 任务信息 · later", "打开草稿 · 任务信息 · next",
+      "打开草稿 · Task first · 任务信息", "打开草稿 · Task soon · 任务信息", "打开草稿 · Task recent · 任务信息",
+      "打开草稿 · Task later · 任务信息", "打开草稿 · Task next · 任务信息",
     ]);
     expect(within(rows[0]).getByText(/即将清理/)).toBeInTheDocument();
     expect(within(rows[2]).queryByText(/即将清理/)).not.toBeInTheDocument();
     expect(screen.getByRole("link", { name: "查看全部草稿" })).toHaveAttribute("href", "/history?view=drafts");
     expect(within(rows[0]).getByRole("link")).toHaveAttribute("href", "/tasks/first/edit");
     expect(mocks.list).toHaveBeenCalledExactlyOnceWith("teacher-a");
+  });
+
+  it("never exposes opaque task or object identifiers when names are unavailable", async () => {
+    const row = { ...draft("389876bff62b", DAY), scope: "question:389876bff62b:opaque-question-id:scoring", title: undefined };
+    mocks.list.mockResolvedValue([row]);
+    mocks.tasks.mockReturnValue(new Promise(() => {}));
+    render(view());
+    const link = await screen.findByRole("link", { name: /任务名称暂不可用 · 题目资料编辑/ });
+    expect(link).toHaveAttribute("href", "/tasks/389876bff62b/questions/opaque-question-id/content");
+    expect(screen.queryByText(/389876bff62b|opaque-question-id/)).not.toBeInTheDocument();
+    expect(screen.getByText(/暂存于/)).toBeInTheDocument();
+  });
+  it("shows the current task name, page and saved time without internal identifiers", async () => {
+    mocks.list.mockResolvedValue([{ ...draft("389876bff62b", DAY), scope: "grading:389876bff62b:389876bff62b", title: undefined }]);
+    mocks.tasks.mockResolvedValue({ task: { task_id: "389876bff62b", name: "微积分周测" } });
+    render(view());
+    expect(await screen.findByRole("link", { name: "打开草稿 · 微积分周测 · 批改设置" })).toBeInTheDocument();
+    expect(screen.getByText(/暂存于/)).toBeInTheDocument();
+    expect(screen.queryByText(/389876bff62b/)).not.toBeInTheDocument();
   });
 
   it("shows the complete list without a limit and refreshes it after confirmed deletion", async () => {

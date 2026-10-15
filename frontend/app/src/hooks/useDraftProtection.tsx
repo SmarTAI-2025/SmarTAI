@@ -1,6 +1,7 @@
 import { createContext, useContext, useEffect, useRef, useState, type ReactNode } from "react";
 import { draftError, draftFingerprint, draftGeneration, draftKey, objectDraftCodec, preparePageDraft, readPageDraft, removePageDraft, subscribeDraftChanges, type DraftCodec, type DraftLoad, type DraftWrite } from "@/lib/pageDraftStore";
 import { useDraftLeave, type DraftController } from "@/hooks/useDraftLeave";
+import { toast } from "sonner";
 
 export function useDraftOwner() { return useContext(DraftOwner); }
 const DraftOwner = createContext<string | null>(null);
@@ -11,9 +12,10 @@ export function PageDraftSession({ ownerId, children }: { ownerId: string; child
 type Options<T extends object> = {
   scope: string; value: T; onRestore: (value: T) => void; baseline?: T; version?: string;
   enabled?: boolean; busy?: boolean; secret?: boolean; codec?: DraftCodec<T>;
+  versionsMatch?: (stored: string, current: string) => boolean;
 };
 /** Adapts existing business editors without changing their submit/confirmation contract. */
-export function useDraftProtection<T extends object>({ scope, value, onRestore, baseline, version = "", enabled = true, busy = false, secret = false, codec }: Options<T>) {
+export function useDraftProtection<T extends object>({ scope, value, onRestore, baseline, version = "", enabled = true, busy = false, secret = false, codec, versionsMatch }: Options<T>) {
   const owner = useContext(DraftOwner);
   const leave = useDraftLeave();
   const [formalPending, setFormalPending] = useState(false);
@@ -23,8 +25,8 @@ export function useDraftProtection<T extends object>({ scope, value, onRestore, 
   const [notice, setNotice] = useState<string | null>(null);
   const [conflict, setConflict] = useState<T | null>(null);
   const [, render] = useState(0);
-  const latest = useRef({ value, onRestore, baseline, version, busy, enabled });
-  latest.current = { value, onRestore, baseline, version, busy, enabled };
+  const latest = useRef({ value, onRestore, baseline, version, busy, enabled, versionsMatch });
+  latest.current = { value, onRestore, baseline, version, busy, enabled, versionsMatch };
   const saved = useRef<string | null>(null);
   const initialValue = useRef(baseline ?? value);
   const initial = useRef(draftFingerprint(initialValue.current));
@@ -69,7 +71,8 @@ export function useDraftProtection<T extends object>({ scope, value, onRestore, 
       if (!result.value || !result.record) return;
       const currentFingerprint = draftFingerprint(latest.current.value);
       const hydratedBaseline = latest.current.baseline && draftFingerprint(latest.current.baseline);
-      if (result.record.businessVersion !== latest.current.version || (currentFingerprint !== startValue && currentFingerprint !== hydratedBaseline)) {
+      const compatible = latest.current.versionsMatch?.(result.record.businessVersion, latest.current.version) ?? result.record.businessVersion === latest.current.version;
+      if (!compatible || (currentFingerprint !== startValue && currentFingerprint !== hydratedBaseline)) {
         setConflict(result.value); setNotice("发现已暂存草稿，但服务器内容或当前输入已变化。请核对后明确恢复，未自动覆盖。"); return;
       }
       saved.current = draftFingerprint(result.value); setSavedAt(result.record.savedAt);
@@ -107,17 +110,27 @@ export function useDraftProtection<T extends object>({ scope, value, onRestore, 
 
   async function clear(snapshot?: T) {
     if (!isCurrent()) return false;
-    incarnation.current += 1;
-    completedBusy.current = true;
-    const submitted = draftFingerprint(snapshot ?? latest.current.value);
-    const unchanged = submitted === draftFingerprint(latest.current.value);
-    saved.current = submitted; cleared.current = submitted; setSavedAt(null); setConflict(null);
-    if (load.current) load.current = { ...load.current, value: null };
-    if (owner) {
-      try { await removePageDraft(owner, scope); load.current = await readPageDraft(owner, scope, codecRef.current); }
-      catch { setNotice("正式操作已完成，但浏览器草稿清理失败；旧草稿恢复前仍会核对业务版本。"); }
+    const ownsLock = !formalActive.current;
+    if (ownsLock) { formalActive.current = true; setFormalPending(true); }
+    try {
+      incarnation.current += 1;
+      completedBusy.current = true;
+      const submitted = draftFingerprint(snapshot ?? latest.current.value);
+      saved.current = submitted; cleared.current = submitted; setSavedAt(null); setConflict(null);
+      if (load.current) load.current = { ...load.current, value: null };
+      if (owner) {
+        try { await removePageDraft(owner, scope, load.current?.record?.revision ?? null); load.current = await readPageDraft(owner, scope, codecRef.current); }
+        catch {
+          const message = "正式内容已保存，但本地草稿清理失败。无需重复提交；旧草稿恢复前仍会核对业务版本。";
+          setNotice(message);
+          // The form may navigate immediately; keep this outcome visible there.
+          toast.warning(message);
+        }
+      }
+      return submitted === draftFingerprint(latest.current.value);
+    } finally {
+      if (ownsLock) { formalActive.current = false; setFormalPending(false); }
     }
-    return unchanged;
   }
   async function runFormal(submit: () => Promise<unknown>, snapshot: T) {
     if (formalActive.current || !isCurrent()) return false;

@@ -69,6 +69,15 @@ def _seed_user(role: str) -> str:
     return uid
 
 
+def test_postgres_task_metadata_compare_and_update_is_atomic(pg_database):
+    from backend.tests.test_task_metadata_conflicts import (
+        test_simultaneous_metadata_updates_have_exactly_one_winner,
+        test_invalid_tags_roll_back_name_and_semester_and_enforce_owner,
+    )
+    test_simultaneous_metadata_updates_have_exactly_one_winner()
+    test_invalid_tags_roll_back_name_and_semester_and_enforce_owner()
+
+
 def test_postgres_task_identity_migration_preserves_existing_results(pg_database, monkeypatch):
     from sqlalchemy import select
     from alembic import command
@@ -239,7 +248,7 @@ def test_postgres_finalization_locks_grading_before_workflow(pg_database):
 
     def finalize() -> str:
         try:
-            task_facade.confirm_finalization(
+            task_facade.generate_artifacts(
                 task_id=seeded["task_id"],
                 owner_id=seeded["owner_id"],
                 expected_revision=workflow.workflow_revision,
@@ -274,6 +283,19 @@ def test_postgres_finalization_locks_grading_before_workflow(pg_database):
                 "ResultNotReleasable",
                 "completed",
             }
+
+
+@pytest.mark.parametrize("failure_stage", ["render", "persist"])
+def test_postgres_report_failure_rolls_back_snapshot(pg_database, monkeypatch, failure_stage):
+    from backend.tests.test_atomic_report_generation import test_generation_failure_rolls_back_snapshot_version_and_manifest
+
+    test_generation_failure_rolls_back_snapshot_version_and_manifest(monkeypatch, failure_stage)
+
+
+def test_postgres_concurrent_report_generation_is_idempotent(pg_database, monkeypatch):
+    from backend.tests.test_atomic_report_generation import test_concurrent_generation_and_replay_only_create_one_report
+
+    test_concurrent_generation_and_replay_only_create_one_report(monkeypatch)
 
 
 def test_postgres_task_delete_finalizer_locks_children_before_workflow(pg_database):

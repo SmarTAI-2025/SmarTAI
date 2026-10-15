@@ -104,6 +104,12 @@ export function useGenerateTaskResultArtifacts() {
       tasksApi.generateTaskResultArtifacts(taskId, expectedWorkflowRevision),
     onSuccess: (data, variables) => {
       queryClient.setQueryData(taskKeys.artifacts(variables.taskId), data.artifacts);
+      queryClient.setQueryData(taskKeys.finalization(variables.taskId), data);
+      queryClient.setQueryData<Task>(taskKeys.detail(variables.taskId), (current) => (
+        current
+          ? { ...current, status: data.task_status, workflow_revision: data.workflow_revision }
+          : current
+      ));
       return invalidateTask(queryClient, variables.taskId);
     },
   });
@@ -116,29 +122,6 @@ export function useDeleteTaskResultArtifact() {
       tasksApi.deleteTaskResultArtifact(taskId, version),
     onSuccess: (data, { taskId }) => {
       queryClient.setQueryData(taskKeys.artifacts(taskId), data);
-    },
-  });
-}
-
-export function useConfirmTaskFinalization() {
-  const queryClient = useQueryClient();
-
-  return useMutation({
-    mutationFn: ({
-      taskId,
-      expectedWorkflowRevision,
-    }: {
-      taskId: string;
-      expectedWorkflowRevision: number;
-    }) => tasksApi.confirmTaskFinalization(taskId, expectedWorkflowRevision),
-    onSuccess: (data, variables) => {
-      queryClient.setQueryData(taskKeys.finalization(variables.taskId), data);
-      queryClient.setQueryData<Task>(taskKeys.detail(variables.taskId), (current) => (
-        current
-          ? { ...current, status: data.task_status, workflow_revision: data.workflow_revision }
-          : current
-      ));
-      return invalidateTask(queryClient, variables.taskId);
     },
   });
 }
@@ -168,6 +151,10 @@ export function useUpdateTask() {
   return useMutation({
     mutationFn: ({ taskId, patch, name }: { taskId: string; patch?: TaskMetadataPatch; name?: string | null }) =>
       tasksApi.updateTask(taskId, patch ?? { name }),
+    onError: (_error, { taskId }) => {
+      queryClient.invalidateQueries({ queryKey: taskKeys.all });
+      queryClient.invalidateQueries({ queryKey: taskKeys.detail(taskId) });
+    },
     onSuccess: (task) => {
       queryClient.invalidateQueries({ queryKey: taskKeys.all });
       queryClient.invalidateQueries({ queryKey: tagKeys.all });

@@ -24,7 +24,7 @@ import {
 import { useEffect, useRef, useState } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { getAPIErrorCode, normalizeAPIError } from "@/api/client";
-import { getGradingSetup } from "@/api/gradingSetup";
+import { getGradingSetup, saveGradingSetup } from "@/api/gradingSetup";
 import { preflightProblemSource, startQuestionPreparation } from "@/api/problemSources";
 import {
   createTask,
@@ -84,7 +84,7 @@ function initialSteps(locale: Locale): RunStep[] {
 export function FrontierLiveDemoPage() {
   const { locale } = useI18n();
   const navigate = useNavigate();
-  const retryIntent = useGradingIntent();
+  const gradingIntent = useGradingIntent();
   const [searchParams] = useSearchParams();
   const taskIdFromUrl = safeTaskId(searchParams.get("taskId"));
   const [taskId, setTaskId] = useState<string | null>(taskIdFromUrl);
@@ -227,12 +227,14 @@ export function FrontierLiveDemoPage() {
     setError(null);
     try {
       const current = await run.step(() => getTaskState(taskId));
-      const response = await run.step(() => retryIntent.execute(current.workflow_revision, request => startGrading(taskId, { ...request, retryScope: "failed_only" })));
+      const response = await run.step(() => gradingIntent.execute(current.workflow_revision, request => startGrading(taskId, { ...request, retryScope: "failed_only" })));
       if (!response) return;
-      // Reuse the normal progress/recovery page. No recognition or metadata writes.
-      navigate(`/tasks/${taskId}/grading/progress`);
+      await continueWorkflow(run, taskId, "grading");
     } catch (caught) {
-      if (run.isCurrent()) setError(errorMessage(caught));
+      if (run.isCurrent()) {
+        failActiveStep();
+        setError(errorMessage(caught));
+      }
     } finally { finishRun(run); }
   }
 
@@ -303,10 +305,21 @@ export function FrontierLiveDemoPage() {
     if (!run) return;
     setError(null);
     try {
+      markStep("grading", "active", tx(locale, "正在启动批改…", "Starting grading…"));
       const current = await run.step(() => getTask(taskId));
-      const blockers = submissionReviewBlockers(current, locale);
+      const blockers = [...questionReviewBlockers(Object.values(current.problem_data), taskId, locale), ...submissionReviewBlockers(current, locale)];
       if (blockers.length) throw new Error(blockers.map((item) => item.label).join("; "));
-      navigate(`/tasks/${taskId}/grading-setup`);
+      let setup = await run.step(() => getGradingSetup(taskId));
+      if (!setup.grading_setup) {
+        const defaults = setup.suggested_setup;
+        if (!defaults) throw new Error(tx(locale, "当前 Demo 会话没有可用的批改模型。", "No enabled grading provider is available for this demo session."));
+        setup = await run.step(() => saveGradingSetup({
+          taskId, expectedWorkflowRevision: setup.workflow_revision, gradingSetup: defaults,
+        }));
+      }
+      const response = await run.step(() => gradingIntent.execute(setup.workflow_revision, request => startGrading(taskId, request)));
+      if (!response) return;
+      await continueWorkflow(run, taskId, "grading");
     } catch (caught) {
       if (run.isCurrent()) {
         failActiveStep();
@@ -479,6 +492,8 @@ export function FrontierLiveDemoPage() {
               info={classifyRecoverableError(error.code ?? snapshot?.error ?? error.message, { locale, taskId: taskId ?? undefined, jobId: snapshot?.grading_job_id ?? undefined, phase: snapshot?.progress?.current_step ?? undefined })}
               workflowRecovery={taskId && snapshot?.grading_job_id && snapshot.last_failed_job_id === snapshot.grading_job_id ? {
                 retry: { onClick: () => void retryFailedGrading(), busy }, configurationHref: `/tasks/${taskId}/grading-setup`,
+              } : taskId && submissionReviewTask && snapshot?.status === "submissions_ready" ? {
+                retry: { onClick: () => void confirmSubmissionReview(), busy, label: tx(locale, "重试批改", "Retry grading") }, configurationHref: `/tasks/${taskId}/grading-setup`,
               } : undefined}
               additionalActions={taskId ? [{ label: tx(locale, "查看进度与恢复", "View progress and recovery"), href: snapshot?.grading_job_id ? `/tasks/${taskId}/grading/progress` : `/tasks/${taskId}/${snapshot?.parse_job_id ? "submissions" : "problems"}/progress` }, ...(snapshot?.grading_job_id ? [{ label: tx(locale, "查看已有结果与补分", "Review saved results and missing scores"), href: `/tasks/${taskId}/review?resolveFailures=1` }] : [])] : []}
             />
@@ -493,7 +508,7 @@ export function FrontierLiveDemoPage() {
             ) : !error && submissionReviewTask && snapshot?.status === "submissions_ready" ? (
               <Button className="h-12 px-6 text-sm shadow-sm" onClick={() => void confirmSubmissionReview()} disabled={busy}>
                 {busy ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
-                {tx(locale, "进入批改设置", "Open Grading Settings")}
+                {tx(locale, "开始批改", "Start grading")}
               </Button>
             ) : !taskId || snapshot?.status === "draft" ? (
               <Button className="h-12 px-6 text-sm shadow-sm" onClick={() => { if (taskId && snapshot?.status === "draft") { const run = beginRun(taskId); if (run) void continueWorkflow(run, taskId, "draft").catch(e => { if (run.isCurrent()) setError(errorMessage(e)); }).finally(() => finishRun(run)); } else void startFreshRun(); }} disabled={busy}>
@@ -633,7 +648,7 @@ function SubmissionRecognitionReview({ task, locale, busy, onContinue }: { task:
       <div className="mt-4 flex flex-wrap items-center gap-3">
         <Button onClick={onContinue} disabled={busy} className="h-10 px-4">
           {busy ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
-          {tx(locale, "进入批改设置", "Open Grading Settings")}
+          {tx(locale, "开始批改", "Start grading")}
         </Button>
         <span className="text-xs text-muted-foreground">{tx(locale, "Demo 不会修改识别文本；如有问题可先进入作答校对页。", "The Demo does not rewrite recognized text. Open submission review first if anything needs checking.")}</span>
       </div>

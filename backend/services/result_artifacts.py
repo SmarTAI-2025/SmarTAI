@@ -1,7 +1,7 @@
-"""Deterministic, version-bound exports for one immutable formal result.
+"""Deterministic, version-bound exports for one immutable report snapshot.
 
 The service intentionally performs no LLM work. It rebuilds file bytes from a
-teacher-confirmed snapshot so downloads remain auditable without storing a
+report snapshot so downloads remain auditable without storing a
 second mutable copy of student results.
 """
 from __future__ import annotations
@@ -16,8 +16,38 @@ import zipfile
 from dataclasses import dataclass
 from typing import Any, Dict, Iterable, List, Mapping
 
+from backend.domain.grading_review import review_state
 
-ARTIFACT_SCHEMA_VERSION = 1
+
+ARTIFACT_SCHEMA_VERSION = 2
+# Temporarily paused; keep the renderer available without generating JSON exports.
+JSON_EXPORT_ENABLED = False
+
+
+def is_artifact_enabled(artifact_id: str) -> bool:
+    return JSON_EXPORT_ENABLED or artifact_id != "formal_result_json"
+
+
+def is_current_artifact_manifest(manifest: Mapping[str, Any]) -> bool:
+    return manifest.get("schema_version") == ARTIFACT_SCHEMA_VERSION
+
+
+def artifact_download_filename(manifest: Mapping[str, Any], artifact_id: str) -> str:
+    """Name downloads without changing the frozen manifest or its checksums."""
+    from datetime import datetime, timezone
+
+    name = re.sub(r"[^\w .()-]+", "_", str(manifest.get("task_name") or ""))
+    name = name.encode("utf-8")[:120].decode("utf-8", errors="ignore").strip(" ._") or "SmarTAI"
+    generated_date = datetime.fromtimestamp(manifest["generated_at"], tz=timezone.utc).strftime("%Y-%m-%d")
+    suffix = {
+        "bundle": "reports.zip",
+        "grades_csv": "grades.csv",
+        "learning_report_md": "learning_report.md",
+        "published_answers_md": "answers.md",
+        "published_answers_tex": "answers.tex",
+        "formal_result_json": "formal_result.json",
+    }[artifact_id]
+    return f"{name}_{generated_date}_v{int(manifest['result_version'])}_{suffix}"
 
 
 @dataclass(frozen=True)
@@ -43,7 +73,7 @@ class ResultArtifactFile:
 
 def artifact_fingerprint(
     *, task_id: str, task_name: str, snapshot: Mapping[str, Any],
-    generated_at: float, files: Iterable[ResultArtifactFile],
+    generated_at: float, files: Iterable[Mapping[str, Any]],
 ) -> str:
     """Fingerprint every identity/content input used by the artifact set."""
     source = {
@@ -54,7 +84,7 @@ def artifact_fingerprint(
         "result_fingerprint": str(snapshot.get("fingerprint") or ""),
         "confirmed_at": snapshot.get("created_at"),
         "generated_at": generated_at,
-        "files": [item.metadata() for item in files],
+        "files": list(files),
     }
     return hashlib.sha256(
         json.dumps(
@@ -86,7 +116,7 @@ def build_artifact_manifest(
         "result_fingerprint": str(snapshot.get("fingerprint") or ""),
         "artifact_fingerprint": artifact_fingerprint(
             task_id=task_id, task_name=task_name, snapshot=snapshot,
-            generated_at=generated_at, files=files,
+            generated_at=generated_at, files=file_metadata,
         ),
         "confirmed_at": snapshot.get("created_at"),
         "generated_at": generated_at,
@@ -103,58 +133,63 @@ def build_artifact_files(
 ) -> List[ResultArtifactFile]:
     version = int(snapshot.get("version") or 0)
     payload = _mapping(snapshot.get("payload"))
-    prefix = f"smartai_{_safe_name(task_id)}_v{version}"
+    naming = {"task_name": task_name, "generated_at": generated_at, "result_version": version}
     report = _learning_report(task_name, version, snapshot, payload, generated_at)
     answers = _published_answers(task_name, version, payload)
     latex = _published_answers_latex(task_name, version, payload)
-    formal_json = {
-        "schema_version": ARTIFACT_SCHEMA_VERSION,
-        "task_id": task_id,
-        "task_name": task_name,
-        "result_version": version,
-        "confirmed_at": snapshot.get("created_at"),
-        "generated_at": generated_at,
-        "fingerprint": snapshot.get("fingerprint"),
-        "result": payload,
-    }
-    return [
+    files = [
         ResultArtifactFile(
-            "grades_csv", "成绩表", "Grade sheet", f"{prefix}_grades.csv", "text/csv; charset=utf-8",
+            "grades_csv", "成绩表", "Grade sheet", artifact_download_filename(naming, "grades_csv"), "text/csv; charset=utf-8",
             _grades_csv(payload),
         ),
         ResultArtifactFile(
-            "learning_report_md", "学情报告", "Learning report", f"{prefix}_learning_report.md", "text/markdown; charset=utf-8",
+            "learning_report_md", "学情报告", "Learning report", artifact_download_filename(naming, "learning_report_md"), "text/markdown; charset=utf-8",
             report.encode("utf-8"),
         ),
         ResultArtifactFile(
-            "published_answers_md", "发布版标答（Markdown）", "Published answers (Markdown)", f"{prefix}_answers.md", "text/markdown; charset=utf-8",
+            "published_answers_md", "发布版标答（Markdown）", "Published answers (Markdown)", artifact_download_filename(naming, "published_answers_md"), "text/markdown; charset=utf-8",
             answers.encode("utf-8"),
         ),
         ResultArtifactFile(
-            "published_answers_tex", "发布版标答（LaTeX）", "Published answers (LaTeX)", f"{prefix}_answers.tex", "application/x-tex; charset=utf-8",
+            "published_answers_tex", "发布版标答（LaTeX）", "Published answers (LaTeX)", artifact_download_filename(naming, "published_answers_tex"), "application/x-tex; charset=utf-8",
             latex.encode("utf-8"),
         ),
-        ResultArtifactFile(
-            "formal_result_json", "正式结果数据", "Formal result data", f"{prefix}_formal_result.json", "application/json; charset=utf-8",
-            json.dumps(formal_json, ensure_ascii=False, indent=2, default=str).encode("utf-8"),
-        ),
     ]
+    if JSON_EXPORT_ENABLED:
+        formal_json = {
+            "schema_version": ARTIFACT_SCHEMA_VERSION,
+            "task_id": task_id,
+            "task_name": task_name,
+            "result_version": version,
+            "confirmed_at": snapshot.get("created_at"),
+            "generated_at": generated_at,
+            "fingerprint": snapshot.get("fingerprint"),
+            "result": payload,
+        }
+        files.append(ResultArtifactFile(
+            "formal_result_json", "正式结果数据", "Formal result data", artifact_download_filename(naming, "formal_result_json"), "application/json; charset=utf-8",
+            json.dumps(formal_json, ensure_ascii=False, indent=2, default=str).encode("utf-8"),
+        ))
+    return files
 
 
 def build_artifact_bundle(files: Iterable[ResultArtifactFile], manifest: Mapping[str, Any]) -> bytes:
     buffer = io.BytesIO()
     with zipfile.ZipFile(buffer, mode="w", compression=zipfile.ZIP_DEFLATED) as archive:
         for artifact in files:
+            if not is_artifact_enabled(artifact.artifact_id):
+                continue
             _write_deterministic_zip_member(
                 archive, artifact.filename, artifact.content,
             )
-        _write_deterministic_zip_member(
-            archive,
-            "manifest.json",
-            json.dumps(
-                manifest, ensure_ascii=False, indent=2, default=str
-            ).encode("utf-8"),
-        )
+        if JSON_EXPORT_ENABLED:
+            _write_deterministic_zip_member(
+                archive,
+                "manifest.json",
+                json.dumps(
+                    manifest, ensure_ascii=False, indent=2, default=str
+                ).encode("utf-8"),
+            )
     return buffer.getvalue()
 
 
@@ -225,10 +260,10 @@ def _learning_report(
     lines = [
         f"# {task_name} — 学情报告 / Learning Report",
         "",
-        f"- 正式结果版本 / Formal result: v{version}",
-        f"- 确认时间 / Confirmed at: {_timestamp(snapshot.get('created_at'))}",
+        f"- 报告版本 / Report version: v{version}",
+        f"- 快照时间 / Snapshot at: {_timestamp(snapshot.get('created_at'))}",
         f"- 报告生成时间 / Generated at: {_timestamp(generated_at)}",
-        "- 说明：本报告由正式结果确定性汇总，不包含 AI 自动推断的教学结论。",
+        "- 说明：本报告按生成时已保存的数据汇总，不包含 AI 自动推断的教学结论。",
         "",
         "## 班级概况 / Class Summary",
         "",
@@ -240,7 +275,7 @@ def _learning_report(
         "",
         "## 逐题表现 / Question Performance",
         "",
-        "| 题目 | 题型 | 作答数 | 平均得分率 | 必审题次 |",
+        "| 题目 | 题型 | 作答数 | 平均得分率 | 待复核题次 |",
         "|---|---|---:|---:|---:|",
     ]
     for problem in problems:
@@ -256,7 +291,7 @@ def _learning_report(
 
 
 def _published_answers(task_name: str, version: int, payload: Mapping[str, Any]) -> str:
-    lines = [f"# {task_name} — 发布版标答 / Published Answers", "", f"> Formal result v{version}", ""]
+    lines = [f"# {task_name} — 发布版标答 / Published Answers", "", f"> Report v{version}", ""]
     for problem in _problems(payload):
         lines.extend([
             f"## {_problem_label(problem)} · {_string(problem.get('type')) or '—'}",
@@ -284,7 +319,7 @@ def _published_answers_latex(task_name: str, version: int, payload: Mapping[str,
         r"\begin{document}",
         f"\\title{{{_latex_escape(task_name)} -- 发布版标答}}",
         r"\author{SmarTAI}",
-        f"\\date{{Formal result v{version}}}",
+        f"\\date{{Report v{version}}}",
         r"\maketitle",
     ]
     for problem in _problems(payload):
@@ -325,14 +360,7 @@ def _effective_score(correction: Mapping[str, Any]) -> float:
 
 
 def _needs_review(correction: Mapping[str, Any]) -> bool:
-    confidence = _number(correction.get("confidence"))
-    if confidence > 1:
-        confidence /= 100
-    return bool(
-        correction.get("requires_human_review")
-        or (confidence > 0 and confidence < 0.65)
-        or correction.get("review_reasons")
-    )
+    return review_state(dict(correction))[0]
 
 
 def _mapping(value: Any) -> Dict[str, Any]:
@@ -393,11 +421,6 @@ def _csv_safe(value: str) -> str:
     if value and value.lstrip().startswith(("=", "+", "-", "@")):
         return "'" + value
     return value
-
-
-def _safe_name(value: str) -> str:
-    cleaned = re.sub(r"[^A-Za-z0-9._-]+", "_", value).strip("._")
-    return cleaned[:80] or "task"
 
 
 def _escape_markdown(value: str) -> str:

@@ -1,12 +1,19 @@
 import { describe, expect, it } from "vitest";
 import type { AICompletionPreflightResponse, CourseMaterial, GradingSetupResponse, MaterialImportPlanResponse, Task } from "@/types";
-import { completionSelectionVersion, gradingEditorVersion, materialMetadataVersion, materialSelectionVersion, taskInputVersion } from "./editorVersions";
+import { completionSelectionVersion, gradingDraftVersionsMatch, gradingEditorVersion, materialMetadataVersion, materialSelectionVersion, taskInputVersion } from "./editorVersions";
 
 const task = { course_id: "course-1", workflow_revision: 1, problem_data: {
   q1: { q_id: "q1", number: "1", type: "计算题", stem: "2+2", criterion: "4", max_score: 10 },
 }, student_data: {}, extract_job_id: "source-1", parse_job_id: "answers-1" } as unknown as Task;
 
 describe("editor conflict boundaries", () => {
+  it("accepts legacy grading drafts only when their actual setup baseline still matches", () => {
+    const legacy = JSON.stringify({ setup: { strictness: 50 }, experts: [{ id: "unselected", model: "old" }] });
+    expect(gradingDraftVersionsMatch(legacy, JSON.stringify({ setup: { strictness: 50 } }))).toBe(true);
+    expect(gradingDraftVersionsMatch(legacy, JSON.stringify({ setup: { strictness: 70 } }))).toBe(false);
+    expect(gradingDraftVersionsMatch(legacy, JSON.stringify({ setup: null }))).toBe(true);
+    expect(gradingDraftVersionsMatch("invalid", JSON.stringify({ setup: { strictness: 50 } }))).toBe(false);
+  });
   it.each(["problems", "submissions", "material-import"] as const)("%s ignores knowledge, status, timestamps and unrelated revision increments", stage => {
     const updated = { ...task, workflow_revision: 40, updated_at: 456, status: "graded", kb_doc_count: 2, kb_docs: { file: { doc_id: "file", filename: "new notes", chunk_count: 1 } }, progress_percent: 100 } as Task;
     expect(taskInputVersion(updated, stage)).toBe(taskInputVersion(task, stage));
@@ -19,7 +26,23 @@ describe("editor conflict boundaries", () => {
     const response = { grading_setup: setup, available_experts: [{ provider_id: "p", enabled: true, model: "m", is_shared: false }] } as unknown as GradingSetupResponse;
     expect(gradingEditorVersion({ ...response, workflow_revision: 10, knowledge: { task_doc_count: 3 } } as GradingSetupResponse)).toBe(gradingEditorVersion(response));
     expect(gradingEditorVersion({ ...response, grading_setup: { ...response.grading_setup!, strictness: 70 } })).not.toBe(gradingEditorVersion(response));
-    expect(gradingEditorVersion({ ...response, available_experts: [{ ...response.available_experts[0], enabled: false }] })).not.toBe(gradingEditorVersion(response));
+    expect(gradingEditorVersion({ ...response, available_experts: [{ ...response.available_experts[0], enabled: false }] })).toBe(gradingEditorVersion(response));
+  });
+  it("ignores suggestions before grading settings are saved", () => {
+    const response = {
+      grading_setup: null, suggested_setup: { strictness: 50, knowledge_scope: "none" },
+      available_experts: [{ provider_id: "p", enabled: true, model: "m", is_shared: false }],
+    } as unknown as GradingSetupResponse;
+    const attached = { ...response, workflow_revision: 10,
+      suggested_setup: { ...response.suggested_setup!, knowledge_scope: "all_task_docs" as const } };
+    expect(gradingEditorVersion(attached)).toBe(gradingEditorVersion(response));
+    expect(gradingEditorVersion({ ...attached, suggested_setup: { ...attached.suggested_setup, strictness: 70, selected_provider_ids: ["new-default"] } })).toBe(gradingEditorVersion(response));
+    expect(gradingEditorVersion({ ...attached, suggested_setup: null })).toBe(gradingEditorVersion(response));
+    expect(gradingEditorVersion({ ...attached, available_experts: [{ ...attached.available_experts[0], model: "new-model" }] })).toBe(gradingEditorVersion(response));
+    // A change to the persisted scope remains a genuine business change.
+    expect(gradingEditorVersion({ ...attached, grading_setup: attached.suggested_setup })).not.toBe(
+      gradingEditorVersion({ ...response, grading_setup: response.suggested_setup }),
+    );
   });
   it("submission input ignores review flags while detecting edited answer content", () => {
     const submission = { ...task, student_data: { s: { stu_id: "s", stu_name: "S", stu_ans: [{ q_id: "q1", number: "1", type: "math", content: "4", flag: [] }] } } };

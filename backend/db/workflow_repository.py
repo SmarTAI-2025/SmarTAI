@@ -16,7 +16,7 @@ from __future__ import annotations
 import json
 import time
 import uuid
-from typing import Any, Iterable
+from typing import Any, Callable, Iterable
 
 from sqlalchemy import (
     Boolean,
@@ -208,6 +208,8 @@ class AssignmentWorkflowRecord(Base):
     analysis_status: Mapped[str] = mapped_column(
         String(32), nullable=False, default="not_generated"
     )
+    # Last generated report version; retain across edits/deletion so numbers
+    # are never reused after a report has actually been generated.
     analysis_result_version: Mapped[int | None] = mapped_column(Integer, nullable=True)
     analysis_generated_at: Mapped[float | None] = mapped_column(Float, nullable=True)
     analysis_error_code: Mapped[str | None] = mapped_column(String(128), nullable=True)
@@ -856,25 +858,36 @@ def supersede_workflow_operation(
         return _detach_workflow(row)
 
 
-def confirm_final_result_atomic(
+def generate_result_artifacts_atomic(
     *,
     assignment_id: str,
     owner_id: str,
     grading_run_id: str,
     expected_revision: int,
-) -> tuple[AssignmentWorkflowRecord, float, bool]:
-    """Release a grading run and advance its formal-result version atomically.
+    render_manifest: Callable[[int, float, str], dict],
+    artifact_schema_version: int,
+) -> tuple[AssignmentWorkflowRecord, ResultArtifactManifestRecord, bool]:
+    """Render and commit a report and its frozen run in one transaction.
 
     The workflow row is the optimistic concurrency gate and the grading-run
     row serializes this operation against teacher review.  Returning ``False``
     is an idempotent replay: a lost HTTP response can be retried with the old
-    workflow revision without publishing or incrementing the version twice.
+    workflow revision without rendering or incrementing the version twice.
+    Rendering is local and deterministic; it runs under the same locks as
+    teacher review, before any snapshot or report metadata is persisted.
     """
     now = time.time()
     terminal_statuses = {"completed", "partial_failed"}
     unresolved_statuses = {"failed"}
     with session_scope() as session:
         # Canonical grading lock order: G -> W -> A.
+        if session.bind.dialect.name == "sqlite":
+            # SQLite ignores FOR UPDATE; acquire its writer gate before reads.
+            session.execute(update(GradingRunRecord).where(
+                GradingRunRecord.id == grading_run_id,
+                GradingRunRecord.assignment_id == assignment_id,
+                GradingRunRecord.teacher_id == owner_id,
+            ).values(created_at=GradingRunRecord.created_at))
         run = session.scalar(
             select(GradingRunRecord)
             .where(
@@ -896,7 +909,7 @@ def confirm_final_result_atomic(
         )
         if workflow is None:
             raise NotFound("workflow")
-        _lock_live_assignment(
+        assignment = _lock_live_assignment(
             session, assignment_id=assignment_id, owner_id=owner_id
         )
         if workflow.grading_job_id not in {None, grading_run_id}:
@@ -907,20 +920,25 @@ def confirm_final_result_atomic(
 
         # The complete state is checked before the client revision so a retry
         # after a lost response remains genuinely idempotent.
-        already_recorded = (
-            run.released_at is not None
-            and workflow.presentation_status == "finalized"
-            and workflow.final_result_version > 0
-            and workflow.final_result_updated_at is not None
-            and workflow.final_result_updated_at == run.released_at
-        )
-        if already_recorded:
+        existing = session.scalar(select(ResultArtifactManifestRecord).where(
+            ResultArtifactManifestRecord.assignment_id == assignment_id,
+            ResultArtifactManifestRecord.owner_id == owner_id,
+            ResultArtifactManifestRecord.grading_run_id == grading_run_id,
+            ResultArtifactManifestRecord.result_version == workflow.final_result_version,
+        ))
+        if (existing is not None and run.released_at is not None
+                and existing.manifest.get("schema_version") == artifact_schema_version):
             # Compatibility callers created before atomic run/workflow binding
             # can still have a null pointer.  Bind only this exact released run
             # while both rows are locked; never overwrite another generation.
             if workflow.grading_job_id is None:
                 workflow.grading_job_id = grading_run_id
                 workflow.updated_at = now
+            if workflow.analysis_status != "ready":
+                workflow.analysis_status = "ready"
+                workflow.analysis_result_version = existing.result_version
+                workflow.analysis_generated_at = existing.generated_at
+                workflow.analysis_error_code = None
             # F-B was added after some formal results already existed. An exact
             # replay repairs the missing cleanup enqueue inside this same row
             # lock without publishing a new result version.
@@ -940,7 +958,7 @@ def confirm_final_result_atomic(
                     session, grading_run_id
                 ),
             )
-            return _detach_workflow(workflow), float(run.released_at), False
+            return _detach_workflow(workflow), _detach_artifact(existing), False
 
         if workflow.workflow_revision != expected_revision:
             raise VersionConflict("workflow_revision_conflict")
@@ -979,19 +997,38 @@ def confirm_final_result_atomic(
                 code="incomplete_result_matrix",
             )
 
-        # A legacy interrupted release may have stamped the run but not the
-        # workflow. Repair that state in-place; otherwise this is a new formal
-        # version and receives one release timestamp/version increment.
+        # Old, unexported snapshots do not consume a report number. Retain an
+        # existing release timestamp, but only persist new snapshots with files.
         released_at = float(run.released_at) if run.released_at is not None else now
-        if run.released_at is None:
-            run.released_at = released_at
+        last_report_version = session.scalar(
+            select(ResultArtifactManifestRecord.result_version).where(
+                ResultArtifactManifestRecord.assignment_id == assignment_id,
+                ResultArtifactManifestRecord.owner_id == owner_id,
+            ).order_by(ResultArtifactManifestRecord.result_version.desc()).limit(1)
+        ) or 0
+        version = max(
+            last_report_version, workflow.analysis_result_version or 0,
+        ) + 1
+        manifest = render_manifest(version, released_at, assignment.name)
+        if (not manifest.get("files") or manifest.get("result_version") != version
+                or manifest.get("schema_version") != artifact_schema_version):
+            raise ValidationError("A report must contain generated files.")
+        artifact = ResultArtifactManifestRecord(
+            id=_new_id("artifact"), assignment_id=assignment_id,
+            grading_run_id=grading_run_id, owner_id=owner_id,
+            result_version=version,
+            result_fingerprint=manifest["result_fingerprint"],
+            manifest=manifest, generated_at=manifest["generated_at"],
+        )
+        session.add(artifact)
+        run.released_at = released_at
         workflow.presentation_status = "finalized"
         workflow.grading_job_id = grading_run_id
-        workflow.final_result_version = max(1, workflow.final_result_version + 1)
+        workflow.final_result_version = version
         workflow.final_result_updated_at = released_at
-        workflow.analysis_status = "not_generated"
-        workflow.analysis_result_version = None
-        workflow.analysis_generated_at = None
+        workflow.analysis_status = "ready"
+        workflow.analysis_result_version = version
+        workflow.analysis_generated_at = artifact.generated_at
         workflow.analysis_error_code = None
         workflow.active_operation = None
         workflow.active_job_id = None
@@ -999,8 +1036,8 @@ def confirm_final_result_atomic(
         workflow.workflow_revision += 1
         workflow.updated_at = now
         # Grading completion normally enqueues the run's immutable source
-        # manifest as soon as the visual result becomes available. Formal
-        # confirmation repeats that exact manifest transactionally as an
+        # manifest as soon as the visual result becomes available. Report
+        # generation repeats that exact manifest transactionally as an
         # idempotent repair. Legacy runs without a manifest retain the broader
         # compatibility snapshot below. Optional CSV/Markdown/LaTeX/ZIP
         # generation is never a prerequisite.
@@ -1029,7 +1066,7 @@ def confirm_final_result_atomic(
             source_file_ids=frozen_source_file_ids,
         )
         session.flush()
-        return _detach_workflow(workflow), released_at, True
+        return _detach_workflow(workflow), _detach_artifact(artifact), True
 
 
 def delete_workflow(assignment_id: str, *, owner_id: str) -> None:
@@ -1907,147 +1944,6 @@ def get_run_setup(grading_run_id: str) -> GradingRunSetupRecord | None:
     with session_scope() as session:
         row = session.get(GradingRunSetupRecord, grading_run_id)
         return _detach_run_setup(row) if row is not None else None
-
-
-def save_artifact_manifest(
-    *, assignment_id: str, grading_run_id: str, owner_id: str,
-    result_version: int, result_fingerprint: str, manifest: dict,
-) -> tuple[ResultArtifactManifestRecord, bool]:
-    declared_generated_at = manifest.get("generated_at")
-    now = (
-        float(declared_generated_at)
-        if isinstance(declared_generated_at, (int, float))
-        and not isinstance(declared_generated_at, bool)
-        else time.time()
-    )
-    with session_scope() as session:
-        _lock_live_assignment(
-            session, assignment_id=assignment_id, owner_id=owner_id
-        )
-        row = session.scalar(
-            select(ResultArtifactManifestRecord).where(
-                ResultArtifactManifestRecord.assignment_id == assignment_id,
-                ResultArtifactManifestRecord.result_version == result_version,
-            )
-        )
-        created = row is None
-        if row is None:
-            row = ResultArtifactManifestRecord(
-                id=_new_id("artifact"), assignment_id=assignment_id,
-                grading_run_id=grading_run_id, owner_id=owner_id,
-                result_version=result_version,
-                result_fingerprint=result_fingerprint,
-                manifest=manifest, generated_at=now,
-            )
-            session.add(row)
-        else:
-            if row.owner_id != owner_id:
-                raise NotFound("artifact_manifest")
-            # A formal result version is append-only.  Repeating generation
-            # for the exact same frozen run is idempotent; trying to bind the
-            # version number to different source facts is a version conflict,
-            # never an in-place rewrite of published history.
-            if (
-                row.grading_run_id != grading_run_id
-                or row.result_fingerprint != result_fingerprint
-            ):
-                raise VersionConflict("artifact_result_version_conflict")
-        session.flush()
-        return _detach_artifact(row), created
-
-
-def save_artifact_manifest_atomic(
-    *,
-    assignment_id: str,
-    grading_run_id: str,
-    owner_id: str,
-    result_version: int,
-    result_fingerprint: str,
-    manifest: dict,
-    expected_revision: int,
-) -> tuple[ResultArtifactManifestRecord, bool, AssignmentWorkflowRecord]:
-    """Persist one artifact set and its ready-state in one transaction.
-
-    Exact replays are returned before checking the stale client revision, so a
-    caller that lost the original HTTP response gets ``already_done`` rather
-    than a false conflict. A version can never be rebound to another run or
-    result fingerprint.
-    """
-    declared_generated_at = manifest.get("generated_at")
-    generated_at = (
-        float(declared_generated_at)
-        if isinstance(declared_generated_at, (int, float))
-        and not isinstance(declared_generated_at, bool)
-        else time.time()
-    )
-    now = time.time()
-    with session_scope() as session:
-        workflow = session.scalar(
-            select(AssignmentWorkflowRecord)
-            .where(
-                AssignmentWorkflowRecord.assignment_id == assignment_id,
-                AssignmentWorkflowRecord.owner_id == owner_id,
-            )
-            .with_for_update()
-        )
-        if workflow is None:
-            raise NotFound("workflow")
-        _lock_live_assignment(
-            session, assignment_id=assignment_id, owner_id=owner_id
-        )
-        if workflow.final_result_version != result_version:
-            raise VersionConflict("artifact_result_version_conflict")
-        row = session.scalar(
-            select(ResultArtifactManifestRecord).where(
-                ResultArtifactManifestRecord.assignment_id == assignment_id,
-                ResultArtifactManifestRecord.result_version == result_version,
-            )
-        )
-        if row is not None:
-            if row.owner_id != owner_id:
-                raise NotFound("artifact_manifest")
-            if (
-                row.grading_run_id != grading_run_id
-                or row.result_fingerprint != result_fingerprint
-            ):
-                raise VersionConflict("artifact_result_version_conflict")
-            # Repair metadata left by the old multi-transaction path, but do
-            # not increment the revision for a fully committed replay.
-            if not (
-                workflow.analysis_status == "ready"
-                and workflow.analysis_result_version == result_version
-                and workflow.analysis_generated_at == row.generated_at
-            ):
-                workflow.analysis_status = "ready"
-                workflow.analysis_result_version = result_version
-                workflow.analysis_generated_at = row.generated_at
-                workflow.analysis_error_code = None
-                workflow.workflow_revision += 1
-                workflow.updated_at = now
-                session.flush()
-            return _detach_artifact(row), False, _detach_workflow(workflow)
-
-        if workflow.workflow_revision != expected_revision:
-            raise VersionConflict("workflow_revision_conflict")
-        row = ResultArtifactManifestRecord(
-            id=_new_id("artifact"),
-            assignment_id=assignment_id,
-            grading_run_id=grading_run_id,
-            owner_id=owner_id,
-            result_version=result_version,
-            result_fingerprint=result_fingerprint,
-            manifest=manifest,
-            generated_at=generated_at,
-        )
-        session.add(row)
-        workflow.analysis_status = "ready"
-        workflow.analysis_result_version = result_version
-        workflow.analysis_generated_at = generated_at
-        workflow.analysis_error_code = None
-        workflow.workflow_revision += 1
-        workflow.updated_at = now
-        session.flush()
-        return _detach_artifact(row), True, _detach_workflow(workflow)
 
 
 def delete_artifact_manifest_atomic(

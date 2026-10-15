@@ -33,7 +33,8 @@ for (const mode of ["individual", "overview-all", "detail-all"]) for (const loca
     const artifacts = () => ({ task_id: taskId, current_result_version: task.final_result_version, analysis_status: reportsGenerated ? "ready" : "not_generated",
       versions: reportVersions.map(version => ({ version, current: version === task.final_result_version,
         status: version !== task.final_result_version ? "historical" : reportDirty ? "stale" : "ready", generated_at: 1_700_000_000 + version,
-        files: [{ artifact_id: "grades_csv", title: "成绩 CSV", title_en: "Grades CSV", filename: "grades.csv", size_bytes: 12 }] })) });
+        bundle_filename: `${task.name}_2023-11-14_v${version}_reports.zip`,
+        files: [{ artifact_id: "grades_csv", title: "成绩 CSV", title_en: "Grades CSV", filename: `${task.name}_2023-11-14_v${version}_grades.csv`, size_bytes: 12 }] })) });
     await page.route(`${backend}/**`, async route => {
       const request = route.request(), path = new URL(request.url()).pathname;
       const json = (value: unknown) => route.fulfill({ json: value });
@@ -42,17 +43,11 @@ for (const mode of ["individual", "overview-all", "detail-all"]) for (const loca
       if (path === "/auth/activity") return json({ token: "synthetic-teacher-token" });
       if (request.method() !== "GET") {
         writes.push(path);
-        if (path.endsWith("/finalization/confirm")) {
-          expect(reportGenerationRequested).toBe(true);
-          expect(request.postDataJSON().expected_workflow_revision).toBe(task.workflow_revision);
-          task.workflow_revision += 1; task.final_result_version += 1; task.status = "review_confirmed";
-          reportDirty = false; reportsGenerated = false;
-          return json(finalization());
-        }
         if (path.endsWith("/artifacts/generate")) {
           expect(reportGenerationRequested).toBe(true);
           expect(request.postDataJSON().expected_workflow_revision).toBe(task.workflow_revision);
-          reportsGenerated = true;
+          task.workflow_revision += 1; task.final_result_version += 1; task.status = "review_confirmed";
+          reportDirty = false; reportsGenerated = true;
           reportVersions.unshift(task.final_result_version);
           return json({ ...finalization(), status: "ok", unchanged: false, artifacts: artifacts() });
         }
@@ -124,7 +119,7 @@ for (const mode of ["individual", "overview-all", "detail-all"]) for (const loca
     reportGenerationRequested = true;
     await page.getByRole("button", { name: zh ? "生成本版文件" : "Generate files" }).click();
     await expect(page.getByRole("button", { name: zh ? "下载全部 ZIP" : "Download all ZIP" })).toBeVisible();
-    expect(writes).toHaveLength(reviewWrites + 3);
+    expect(writes).toHaveLength(reviewWrites + 2);
     if (mode === "individual") expect(corrections[1].teacher_score).toBeNull();
     if (mode === "individual") {
       // A separately saved edit moves the generated report into history.
@@ -136,7 +131,7 @@ for (const mode of ["individual", "overview-all", "detail-all"]) for (const loca
       await expect(page.getByRole("button", { name: zh ? "下载全部 ZIP" : "Download all ZIP" })).toHaveCount(0);
       const downloaded = page.waitForEvent("download");
       await page.getByRole("button", { name: zh ? "下载 ZIP" : "Download ZIP", exact: true }).click();
-      expect((await downloaded).suggestedFilename()).toContain("v1");
+      expect((await downloaded).suggestedFilename()).toBe("Review consistency_2023-11-14_v1_reports.zip");
       expect(dialogs).toEqual([]);
       await page.getByRole("button", { name: zh ? "生成本版文件" : "Generate files" }).click();
       await expect(page.getByRole("button", { name: zh ? "下载全部 ZIP" : "Download all ZIP" })).toBeVisible();

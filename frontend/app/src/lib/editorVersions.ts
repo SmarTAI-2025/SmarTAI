@@ -27,9 +27,23 @@ export function taskInputVersion(task: Task | undefined, stage: "problems" | "su
 
 export function gradingEditorVersion(response: GradingSetupResponse | undefined) {
   if (!response) return "";
-  return draftFingerprint({ setup: response.grading_setup ?? response.suggested_setup,
-    experts: response.available_experts.map(expert => ({ id: expert.provider_id, model: expert.model, type: expert.provider_type, enabled: expert.enabled, shared: expert.is_shared })).sort((a, b) => a.id.localeCompare(b.id)),
-  });
+  // Suggestions depend on attachments and the default model. Before the first
+  // save there are no persisted task settings for an edit to overwrite.
+  const setup = response.grading_setup;
+  // Provider availability is validated against the live registry by the form
+  // and API. Changing a model does not overwrite persisted task settings.
+  return draftFingerprint({ setup });
+}
+
+export function gradingDraftVersionsMatch(stored: string, current: string) {
+  // Existing seven-day drafts included the model list; ignore only that field.
+  try {
+    const previous = JSON.parse(stored), next = JSON.parse(current);
+    if (!previous || !next || !("setup" in previous) || !("setup" in next)) return false;
+    // Legacy drafts also included suggestions. An unconfigured task has no
+    // saved settings to conflict with; selected models are still validated live.
+    return next.setup === null || draftFingerprint(previous.setup) === draftFingerprint(next.setup);
+  } catch { return stored === current; }
 }
 
 export function completionSelectionVersion(preflight: AICompletionPreflightResponse | undefined) {

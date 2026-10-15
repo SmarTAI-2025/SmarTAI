@@ -75,7 +75,15 @@ class CreateTaskRequest(BaseModel):
     tag_ids: list[str] = Field(default_factory=list, max_length=30)
 
 
+class TaskMetadataSnapshot(BaseModel):
+    name: str = Field(max_length=200)
+    semester_id: str | None = Field(max_length=64)
+    course_id: str | None = Field(max_length=64)
+    tag_ids: list[str] = Field(max_length=30)
+
+
 class UpdateTaskRequest(BaseModel):
+    expected_metadata: TaskMetadataSnapshot
     name: str | None = Field(default=None, max_length=200)
     semester_id: str | None = Field(default=None, max_length=64)
     course_id: str | None = Field(default=None, max_length=64)
@@ -146,10 +154,6 @@ class UpdateTeacherCommentRequest(BaseModel):
     student_id: str
     q_id: str
     comment: str = Field(default="", max_length=4000)
-
-
-class ConfirmFinalResultRequest(BaseModel):
-    expected_workflow_revision: int = Field(ge=0)
 
 
 class GenerateResultArtifactsRequest(BaseModel):
@@ -376,6 +380,7 @@ def update_task(task_id: str, request: UpdateTaskRequest, current: User = Depend
         semester_id=body["semester_id"] if "semester_id" in body else ...,
         course_id=body["course_id"] if "course_id" in body else ...,
         tag_ids=body.get("tag_ids") if "tag_ids" in body else None,
+        expected_metadata=body["expected_metadata"],
     ))
 
 
@@ -914,17 +919,6 @@ def _grading_setup_payload(task_id: str, owner_id: str, registry: ExpertRegistry
 @router.get("/{task_id}/finalization")
 def get_finalization(task_id: str, current: User = Depends(require_teacher)):
     return _domain(lambda: task_facade.finalization(task_id=task_id, owner_id=current.id))
-
-
-@router.post("/{task_id}/finalization/confirm")
-def confirm_finalization(
-    task_id: str, request: ConfirmFinalResultRequest,
-    current: User = Depends(require_teacher),
-):
-    return _domain(lambda: task_facade.confirm_finalization(
-        task_id=task_id, owner_id=current.id,
-        expected_revision=request.expected_workflow_revision,
-    ))
 
 
 @router.get("/{task_id}/artifacts")

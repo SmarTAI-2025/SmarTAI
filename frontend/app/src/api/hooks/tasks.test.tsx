@@ -6,44 +6,56 @@ import type {
   CorrectionReviewResponse,
   Task,
   TaskFinalizationResponse,
+  GenerateResultArtifactsResponse,
   TaskStateSnapshot,
 } from "@/types";
 import { taskKeys } from "./keys";
 import {
-  useConfirmTaskFinalization,
+  useGenerateTaskResultArtifacts,
   useStartGrading,
   useUpdateCorrectionReview,
 } from "./tasks";
 
 vi.mock("@/api/tasks", () => ({
-  confirmTaskFinalization: vi.fn(),
+  generateTaskResultArtifacts: vi.fn(),
   startGrading: vi.fn(),
   updateCorrectionReview: vi.fn(),
 }));
 
 const tasksApi = await import("@/api/tasks");
 
-describe("task finalization cache", () => {
+describe("task report and review cache", () => {
   beforeEach(() => vi.clearAllMocks());
 
-  it("updates task status before the results-page navigation can read stale data", async () => {
+  it("updates the report, task, and revision together after generation", async () => {
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     client.setQueryData<Task>(taskKeys.detail("task-1"), {
       task_id: "task-1",
       status: "graded",
       workflow_revision: 7,
     } as Task);
-    const response = {
+    const response: GenerateResultArtifactsResponse = {
+      status: "ok",
+      unchanged: false,
       task_id: "task-1",
       task_status: "review_confirmed",
       workflow_revision: 8,
       ready_for_confirmation: true,
-    } as TaskFinalizationResponse;
-    vi.mocked(tasksApi.confirmTaskFinalization).mockResolvedValue(response);
+      required_review_count: 0,
+      confirmed_required_count: 0,
+      remaining_review_count: 0,
+      remaining_reviews: [],
+      final_result_version: 1,
+      final_result_dirty: false,
+      analysis_status: "ready",
+      available_result_versions: 1,
+      artifacts: { task_id: "task-1", current_result_version: 1, analysis_status: "ready", versions: [] },
+    };
+    vi.mocked(tasksApi.generateTaskResultArtifacts).mockResolvedValue(response);
     const wrapper = ({ children }: { children: ReactNode }) => (
       <QueryClientProvider client={client}>{children}</QueryClientProvider>
     );
-    const { result } = renderHook(() => useConfirmTaskFinalization(), { wrapper });
+    const { result } = renderHook(() => useGenerateTaskResultArtifacts(), { wrapper });
 
     await act(async () => {
       await result.current.mutateAsync({ taskId: "task-1", expectedWorkflowRevision: 7 });
@@ -53,6 +65,8 @@ describe("task finalization cache", () => {
       status: "review_confirmed",
       workflow_revision: 8,
     });
+    expect(client.getQueryData(taskKeys.finalization("task-1"))).toMatchObject({ workflow_revision: 8 });
+    expect(client.getQueryData(taskKeys.artifacts("task-1"))).toEqual(response.artifacts);
   });
 
   it("removes a confirmed response from the cached finalization queue", async () => {
