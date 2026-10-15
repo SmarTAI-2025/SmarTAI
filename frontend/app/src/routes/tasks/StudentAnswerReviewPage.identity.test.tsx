@@ -96,6 +96,8 @@ describe("identity confirmation with the real query cache and draft session", ()
     await waitFor(() => expect(router.state.location.pathname).toBe("/tasks/identity-task/students/NEW"));
     expect(router.state.historyAction).toBe("REPLACE");
     expect(router.state.location.search).toBe("?question=Q1&from=matrix");
+    // The router URL can update before React commits the newly keyed form.
+    await screen.findByRole("region", { name: "NEW · 全部题目作答" });
     await waitFor(() => expect(screen.getByText("Original answer")).toBeInTheDocument());
     expect(screen.queryByText("当前链接找不到对应的学生记录")).not.toBeInTheDocument();
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
