@@ -8,6 +8,9 @@ import { useTaskFilterIntent } from "@/hooks/useTaskFilterIntent";
 import { EMPTY_FILTER_INTENT, matchesQuestionToken, normalizeFilterType, parseLocalTaskFilter, supportsFilterIntent } from "@/lib/taskFilterIntent";
 import { compareValues } from "@/lib/sortValues";
 import {
+  hasReviewSignal as correctionNeedsFormalReview,
+  hasExpertDisagreement,
+  isCorrectionReviewConfirmed,
   clampPercent,
   correctionScoreSource,
   formatConfidence,
@@ -268,14 +271,14 @@ function QuestionMobileCards({ locale, taskId, rows, returnQuery }: { locale: Lo
 }
 
 function ReviewBadge({ locale, row }: { locale: Locale; row: QuestionAnalysisRow }) {
-  const untouchedAiCount = Math.max(0, row.requiredReviewCount - row.confirmedReviewCount - row.hardFailureCount);
+  const untouchedAiCount = Math.max(0, row.requiredReviewCount - row.hardFailureCount);
   const label = row.reviewState === "none"
     ? tx(locale, "无复核信号", "No review signal")
     : row.hardFailureCount
-      ? tx(locale, `${row.hardFailureCount} 项无有效分数${untouchedAiCount ? ` · ${untouchedAiCount} 项 AI 分未人工处理` : ""}`, `${row.hardFailureCount} unscored${untouchedAiCount ? ` · ${untouchedAiCount} AI scores not reviewed` : ""}`)
+      ? tx(locale, `${row.hardFailureCount} 项无有效分数${untouchedAiCount ? ` · ${untouchedAiCount} 项待复核` : ""}`, `${row.hardFailureCount} unscored${untouchedAiCount ? ` · ${untouchedAiCount} awaiting review` : ""}`)
       : row.reviewState === "confirmed"
-        ? tx(locale, `${row.confirmedReviewCount}/${row.requiredReviewCount} 教师已处理`, `${row.confirmedReviewCount}/${row.requiredReviewCount} teacher handled`)
-        : tx(locale, `${untouchedAiCount} 项 AI 分未人工处理`, `${untouchedAiCount} AI scores not reviewed`);
+        ? tx(locale, `${row.confirmedReviewCount} 项教师已确认`, `${row.confirmedReviewCount} teacher confirmed`)
+        : tx(locale, `${untouchedAiCount} 项待复核`, `${untouchedAiCount} awaiting review`);
   return (
     <span className={cn(
       "inline-flex rounded-full px-2.5 py-1 text-[10px] font-semibold",
@@ -300,20 +303,10 @@ function buildQuestionRow(question: QuestionSummary, locale: Locale): QuestionAn
     .map((entry) => normalizeConfidence(entry.correction.confidence))
     .filter((value): value is number => value !== null);
   const requiredEntries = question.entries.filter((entry) => correctionNeedsFormalReview(entry.correction));
-  const confirmedReviewCount = requiredEntries.filter((entry) => {
-    const source = correctionScoreSource(entry.correction);
-    return source === "teacher_confirmed_same" || source === "teacher_changed";
-  }).length;
+  const confirmedReviewCount = question.entries.filter(entry => isCorrectionReviewConfirmed(entry.correction)).length;
   const hardFailureCount = requiredEntries.filter((entry) => correctionScoreSource(entry.correction) === "hard_failure").length;
-  const reviewState: ReviewState = !requiredEntries.length
-    ? "none"
-    : confirmedReviewCount === requiredEntries.length
-      ? "confirmed"
-      : "pending";
-  const lowConfidenceCount = question.entries.filter((entry) => {
-    const confidence = normalizeConfidence(entry.correction.confidence);
-    return confidence !== null && confidence < LOW_CONFIDENCE_THRESHOLD;
-  }).length;
+  const reviewState: ReviewState = requiredEntries.length ? "pending" : confirmedReviewCount ? "confirmed" : "none";
+  const lowConfidenceCount = question.lowConfidenceCount;
 
   return {
     question,
@@ -340,8 +333,7 @@ function buildRiskSummary(question: QuestionSummary, lowConfidenceCount: number,
     parts.push(tx(locale, `${lowConfidenceCount} 个低置信题次`, `${lowConfidenceCount} low-confidence items`));
   }
   const disagreementCount = question.entries.filter((entry) => (
-    entry.correction.review_reasons?.some((reason) => reason === "high_indecisiveness" || reason === "score_spread_high")
-    || hasExpertScoreSpread(entry.correction)
+    hasExpertScoreSpread(entry.correction)
   )).length;
   if (disagreementCount) {
     parts.push(tx(locale, `${disagreementCount} 个专家分歧信号`, `${disagreementCount} expert-disagreement signals`));
@@ -351,22 +343,9 @@ function buildRiskSummary(question: QuestionSummary, lowConfidenceCount: number,
     : tx(locale, "暂无由现有结果支持的明显风险信号", "No notable risk signal supported by current results");
 }
 
-function correctionNeedsFormalReview(correction: Correction): boolean {
-  const confidence = normalizeConfidence(correction.confidence);
-  if (confidence !== null && confidence < LOW_CONFIDENCE_THRESHOLD) return true;
-  if (correction.requires_human_review) return true;
-  if (correction.review_reasons?.some((reason) => reason === "high_indecisiveness" || reason === "score_spread_high")) return true;
-  if (correction.synthesis_method === "all_failed" || correction.synthesis_method === "quota_exhausted") return true;
-  return hasExpertScoreSpread(correction);
-}
 
 function hasExpertScoreSpread(correction: Correction): boolean {
-  const scores = correction.expert_results
-    ?.map((result) => Number(result.score))
-    .filter((value) => Number.isFinite(value)) ?? [];
-  return scores.length > 1
-    && correction.max_score > 0
-    && Math.max(...scores) - Math.min(...scores) > Math.max(1, correction.max_score * 0.25);
+  return correctionNeedsFormalReview(correction) && hasExpertDisagreement(correction);
 }
 
 function getKnowledgePoints(problem?: ProblemInfo): string[] {
@@ -451,7 +430,7 @@ export function parseSemanticQuestionQuery(rawQuery: string, locale: Locale): Se
   const noReviewMatch = query.match(/无必审|无需复核|没有复核项|无复核信号/);
   if (reviewMatch) {
     plan.reviewState = "pending";
-    addCondition(tx(locale, "复核：有未人工处理信号", "Review: unreviewed signals"), reviewMatch[0]);
+    addCondition(tx(locale, "复核：待复核队列", "Review: pending queue"), reviewMatch[0]);
   } else if (confirmedMatch) {
     plan.reviewState = "confirmed";
     addCondition(tx(locale, "复核：信号已由教师处理", "Review: teacher handled"), confirmedMatch[0]);
@@ -523,7 +502,7 @@ function intentToQuestionPlan(intent: FilterIntentResult, locale: Locale): Seman
   if (plan.maxPercent !== null) add(tx(locale, `平均得分率 < ${plan.maxPercent}%`, `Mean score < ${plan.maxPercent}%`));
   if (plan.lowConfidence) add(tx(locale, "含低置信题次", "Has low-confidence items"));
   if (plan.avgConfidenceBelow !== null) add(tx(locale, `平均置信度 < ${plan.avgConfidenceBelow * 100}%`, `Mean confidence < ${plan.avgConfidenceBelow * 100}%`));
-  if (plan.reviewState) add(plan.reviewState === "pending" ? tx(locale, "有未人工处理信号", "Has unreviewed signals") : plan.reviewState === "confirmed" ? tx(locale, "信号已由教师处理", "Signals handled by teacher") : tx(locale, "无复核信号", "No review signals"));
+  if (plan.reviewState) add(plan.reviewState === "pending" ? tx(locale, "待复核队列", "Pending review queue") : plan.reviewState === "confirmed" ? tx(locale, "信号已由教师处理", "Signals handled by teacher") : tx(locale, "无复核信号", "No review signals"));
   if (plan.missingKnowledge) add(tx(locale, "知识点未标注", "Unlabeled knowledge points"));
   const sortLabels: Record<SortMode, string> = {
     question: tx(locale, "按题号", "Question order"), score_asc: tx(locale, "得分率从低到高", "Score low to high"),

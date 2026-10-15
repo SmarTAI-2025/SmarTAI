@@ -8,7 +8,7 @@ import { toast } from "sonner";
 import { normalizeAPIError } from "@/api/client";
 import { useConfirmResultReviews } from "@/hooks/useConfirmResultReviews";
 import { UnsavedChangesDialog } from "@/components/ui/UnsavedChangesDialog";
-import { useConfirmTaskFinalization, useTask, useTaskFinalization, useTaskResult, useTeacherComments } from "@/api/hooks/tasks";
+import { useTask, useTaskFinalization, useTaskResult, useTeacherComments } from "@/api/hooks/tasks";
 import { TaskQueryBar } from "@/components/tasks/AskQueryBar";
 import { useTaskFilterIntent } from "@/hooks/useTaskFilterIntent";
 import { EMPTY_FILTER_INTENT, supportsFilterIntent } from "@/lib/taskFilterIntent";
@@ -37,7 +37,6 @@ export function ReviewOverviewPage() {
   const resultQuery = useTaskResult(taskId);
   const commentsQuery = useTeacherComments(taskId);
   const finalizationQuery = useTaskFinalization(taskId);
-  const confirmFinalization = useConfirmTaskFinalization();
   const confirmReviews = useConfirmResultReviews();
   const confirmingRef = useRef(false);
   const [blockedDialog, setBlockedDialog] = useState(false);
@@ -61,7 +60,7 @@ export function ReviewOverviewPage() {
   }, [commentsQuery.data?.comments, model.students]);
   const confirmedKeys = useMemo(() => new Set(
     model.students.flatMap((student) => student.corrections
-      .filter((correction) => Number.isFinite(correction.teacher_score) && correction.review_status === "confirmed")
+      .filter(isCorrectionReviewConfirmed)
       .map((correction) => reviewCellKey(student.id, correction.q_id))),
   ), [model.students]);
   const smartFilter = useTaskFilterIntent({ taskId, surface: "review_overview", resolveLocal: (value) => resolveReviewFilter(model, reviewItems, annotatedKeys, value) });
@@ -131,18 +130,12 @@ export function ReviewOverviewPage() {
   const lockedResultsReason = remainingReviewCount > 0
     ? (locale === "zh-CN" ? `还有 ${remainingReviewCount} 个关键问题需要处理并确认，暂不能查看结果分析。` : `${remainingReviewCount} required items need correction and confirmation before Results & Analysis.`)
     : copy(locale, "readyHint");
-  function confirmReviewComplete() {
-    if (!taskId || !readyForConfirmation || confirmFinalization.isPending) return;
-    confirmFinalization.mutate({
-      taskId,
-      expectedWorkflowRevision: finalizationQuery.data?.workflow_revision ?? task?.workflow_revision ?? 0,
-    }, {
-      onSuccess: () => navigate(`/tasks/${taskId}/results`),
-    });
+  function viewResults() {
+    if (taskId && readyForConfirmation) navigate(`/tasks/${taskId}/results`);
   }
 
   async function confirmAllReviews() {
-    if (!taskId || confirmingRef.current || confirmFinalization.isPending) return;
+    if (!taskId || confirmingRef.current) return;
     if (blockingReviewItems.some(({ correction }) => { const score = effectiveCorrectionScore(correction); return score === null || score < 0 || score > correction.max_score; })) { setBlockedDialog(true); return; }
     if (!confirmableReviews.length) {
       if (remainingReviewCount > 0) setBlockedDialog(true);
@@ -214,12 +207,6 @@ export function ReviewOverviewPage() {
             <MetricCard value={`${confirmedKeys.size}/${model.students.reduce((total, student) => total + student.corrections.length, 0)}`} label={copy(locale, "annotated")} tone="accent" />
           </div>
 
-          {confirmFinalization.isError ? (
-            <p role="alert" className="mt-3 text-sm font-medium text-destructive">
-              {locale === "en-US" ? "The task changed. Refresh the review state and try again." : "任务状态已变化，请刷新复核状态后重试。"}
-            </p>
-          ) : null}
-
           <TaskQueryBar className="mt-6" filter={smartFilter} taskId={taskId} locale={locale}
             label={locale === "zh-CN" ? "Ask SmarTAI：复核批改" : "Ask SmarTAI: grading review"}
             placeholder={copy(locale, "searchPlaceholder")} />
@@ -256,7 +243,7 @@ export function ReviewOverviewPage() {
               />
             )}
             queue={(
-              <ReviewQueue confirmation={<ReviewConfirmButton locale={locale} all confirmed={!confirmableReviews.length && remainingReviewCount === 0} busy={confirmReviews.isPending} disabled={confirmFinalization.isPending} onClick={() => void confirmAllReviews()} />}
+              <ReviewQueue confirmation={<ReviewConfirmButton locale={locale} all confirmed={!confirmableReviews.length && remainingReviewCount === 0} busy={confirmReviews.isPending} onClick={() => void confirmAllReviews()} />}
                 locale={locale}
                 taskId={taskId}
                 items={pendingReviewItems.filter((item) => selection.matchedCellKeys.has(reviewCellKey(item.student.id, item.question.id)))}
@@ -271,7 +258,7 @@ export function ReviewOverviewPage() {
               : copy(locale, "readyHint")}
 
             back={{ href: targetHref ?? `/tasks/${taskId}/review`, label: locale === "zh-CN" ? "查看批改详情" : "View Grading Details" }}
-            next={{ id: "confirm-review-complete", label: locale === "zh-CN" ? "查看结果分析" : "View Results & Analysis", busy: confirmFinalization.isPending, disabled: confirmReviews.isPending, onClick: () => readyForConfirmation ? confirmReviewComplete() : setBlockedDialog(true) }}
+            next={{ id: "confirm-review-complete", label: locale === "zh-CN" ? "查看结果分析" : "View Results & Analysis", disabled: confirmReviews.isPending, onClick: () => readyForConfirmation ? viewResults() : setBlockedDialog(true) }}
           >
             {batchError ? <p role="alert" className="mt-3 text-sm text-destructive">{locale === "en-US"
               ? `Confirmed ${confirmReviews.progress.completed}/${confirmReviews.progress.total}; the rest were not confirmed. ${batchError}`

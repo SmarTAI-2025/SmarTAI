@@ -1,8 +1,12 @@
 import type { Correction } from "@/types";
 import type { Locale } from "@/i18n/messages";
-import { VERY_LOW_REVIEW_CONFIDENCE, type ReviewAttention } from "@/lib/reviewConfirmation";
+import { VERY_LOW_REVIEW_CONFIDENCE } from "@/lib/reviewConfirmation";
 import {
+  correctionReviewAttention,
+  correctionReviewBlocked,
   correctionReviewReasonIds,
+  getExpertScoreSpread,
+  hasExpertDisagreement,
   effectiveCorrectionScore,
   reviewReasonLabel,
   type QuestionSummary,
@@ -20,29 +24,7 @@ export interface ReviewItem {
   severity: "blocking" | "advisory";
 }
 
-export function isCorrectionReviewConfirmed(correction: Correction): boolean {
-  return Number.isFinite(correction.teacher_score) && correction.review_status === "confirmed" && !correctionReviewBlocked(correction);
-}
-
-function validScore(value: number | null | undefined, maxScore: number): boolean {
-  return typeof value === "number" && Number.isFinite(value) && Number.isFinite(maxScore) && maxScore > 0 && value >= 0 && value <= maxScore;
-}
-
-/** Display/navigation guard only; effective AI and teacher score calculation is unchanged. */
-export function correctionReviewBlocked(correction: Correction): boolean {
-  if (!validScore(effectiveCorrectionScore(correction), correction.max_score)) return true;
-  const originalScore = correction.provisional_score === undefined ? correction.score : correction.provisional_score;
-  return !validScore(originalScore, correction.max_score) && correction.review_status !== "confirmed";
-}
-
-export function correctionReviewAttention(correction: Correction): ReviewAttention {
-  if (correctionReviewBlocked(correction)) return "blocking";
-  if (isCorrectionReviewConfirmed(correction)) return "none";
-  const veryLowConfidence = Number.isFinite(correction.confidence) && correction.confidence >= 0 && correction.confidence <= VERY_LOW_REVIEW_CONFIDENCE;
-  const expertDisagreement = correctionReviewReasonIds(correction).some(reason => reason === "high_indecisiveness" || reason === "score_spread_high")
-    || getExpertScoreSpread(correction) > Math.max(1, correction.max_score * 0.25);
-  return veryLowConfidence || expertDisagreement ? "advisory" : "none";
-}
+export { isCorrectionReviewConfirmed, correctionReviewBlocked, correctionReviewAttention, getExpertScoreSpread } from "./resultsModel";
 
 export function collectResultReviewItems(model: ResultsModel, students: StudentSummary[], locale: Locale = "zh-CN"): ReviewItem[] {
   return students
@@ -54,17 +36,6 @@ export function collectResultReviewItems(model: ResultsModel, students: StudentS
     .sort((a, b) => b.priority - a.priority);
 }
 
-export function getExpertScoreSpread(correction: Correction) {
-  const scores = correction.expert_results
-    ?.filter((expert) => !expert.error_kind)
-    ?.map((expert) => expert.score)
-    .filter((score): score is number => typeof score === "number" && Number.isFinite(score));
-  if (!scores?.length) {
-    return 0;
-  }
-  return Math.max(...scores) - Math.min(...scores);
-}
-
 function buildReviewItem(
   student: StudentSummary,
   correction: Correction,
@@ -74,13 +45,10 @@ function buildReviewItem(
   const question = questions.find((item) => item.id === correction.q_id) ?? fallbackQuestion(correction.q_id);
   const attention = correctionReviewAttention(correction);
   if (attention === "none") return null;
-  const reasons = collectReasonLabels(correction, locale);
-  const expertSpread = getExpertScoreSpread(correction);
+  const reasons = correctionReviewLabels(correction, locale);
   const missingScore = attention === "blocking";
   const lowConfidence = Number.isFinite(correction.confidence) && correction.confidence >= 0 && correction.confidence <= VERY_LOW_REVIEW_CONFIDENCE;
-  const expertDisagreement =
-    correctionReviewReasonIds(correction).some((reason) => reason === "high_indecisiveness" || reason === "score_spread_high") ||
-    expertSpread > Math.max(1, correction.max_score * 0.25);
+  const expertDisagreement = hasExpertDisagreement(correction);
   const category = missingScore ? "review" : lowConfidence
     ? "low-confidence"
     : expertDisagreement
@@ -103,11 +71,13 @@ function buildReviewItem(
   };
 }
 
-function collectReasonLabels(correction: Correction, locale: Locale) {
+export function correctionReviewLabels(correction: Correction, locale: Locale) {
   const text = (zh: string, en: string) => locale === "en-US" ? en : zh;
   const labels = new Set<string>();
   if (correctionReviewBlocked(correction)) {
-    labels.add(validScore(effectiveCorrectionScore(correction), correction.max_score) ? text("缺失分数已补齐，请确认", "Corrected score needs confirmation") : text("缺少有效分数，请填写并确认", "Enter and confirm a valid score"));
+    const score = effectiveCorrectionScore(correction);
+    const valid = score !== null && Number.isFinite(correction.max_score) && correction.max_score > 0 && score >= 0 && score <= correction.max_score;
+    labels.add(valid ? text("缺失分数已补齐，请确认", "Corrected score needs confirmation") : text("缺少有效分数，请填写并确认", "Enter and confirm a valid score"));
   }
   if (Number.isFinite(correction.confidence) && correction.confidence >= 0 && correction.confidence <= VERY_LOW_REVIEW_CONFIDENCE) {
     labels.add(text("置信度很低，建议核对", "Very low confidence; check the result"));

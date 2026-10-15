@@ -239,6 +239,23 @@ def test_soft_review_ai_score_is_publishable_and_exported_by_default():
     assert rows[0]["q-optional_score"] == "9"
 
 
+def test_same_score_individual_confirmation_survives_result_reload():
+    from backend.services import task_facade
+
+    seeded = _prepared_task()
+    args = {"task_id": seeded["task_id"], "owner_id": seeded["owner_id"]}
+    saved = task_facade.update_correction_review(
+        **args, display_student_id=seeded["student_id"], q_id="q-required",
+        teacher_score=6, teacher_comment="", confirm=True, expected_revision=0,
+    )
+    assert saved["unchanged"] is True
+    rows = {item["q_id"]: item for item in task_facade.task_results(**args)["results"][0]["corrections"]}
+    assert rows["q-required"]["teacher_score"] == 6
+    assert rows["q-required"]["review_status"] == "confirmed"
+    assert rows["q-required"]["reviewed_at"] is not None
+    assert rows["q-optional"]["teacher_score"] is None
+
+
 def test_finalization_artifacts_and_dirty_state_are_idempotent():
     from backend.db import grading_repository
     from backend.services import task_facade
@@ -347,3 +364,73 @@ def test_upstream_answer_edit_marks_detached_formal_result_and_artifacts_stale()
     assert task["final_result_dirty"] is True
     assert finalization["final_result_dirty"] is True
     assert artifacts["versions"][0]["status"] == "stale"
+
+
+@pytest.mark.parametrize("generate_latest", [False, True])
+def test_history_download_and_delete_preserve_scores_and_latest_report(generate_latest):
+    from fastapi.testclient import TestClient
+    from backend.auth import create_token
+    from backend.db import workflow_repository
+    from backend.domain.errors import VersionConflict
+    from backend.main import app
+    from backend.services import task_facade
+
+    seeded = _prepared_task()
+    args = {"task_id": seeded["task_id"], "owner_id": seeded["owner_id"]}
+    task_facade.confirm_finalization(**args, expected_revision=0)
+    task_facade.generate_artifacts(**args, expected_revision=1)
+    client = TestClient(app)
+    base = f"/tasks/{seeded['task_id']}/artifacts"
+    headers = {"Authorization": "Bearer " + create_token(seeded["owner_id"], "teacher")}
+    original = client.get(base + "/1/bundle", headers=headers).content
+    assert original.startswith(b"PK")
+    # The latest unchanged report is protected; deletion requires ownership.
+    assert client.delete(base + "/1").status_code == 401
+    assert client.delete(base + "/1", headers=headers).status_code == 409
+    other = {"Authorization": "Bearer " + create_token(seeded["student_id"], "student")}
+    assert client.delete(base + "/1", headers=other).status_code == 403
+
+    edited = task_facade.update_correction_review(
+        **args, display_student_id=seeded["student_id"], q_id="q-optional",
+        teacher_score=8.5, teacher_comment="keep this review", confirm=True, expected_revision=2,
+    )
+    # A stale deletion decision must not race a workflow change.
+    with pytest.raises(VersionConflict):
+        workflow_repository.delete_artifact_manifest_atomic(
+            assignment_id=seeded["task_id"], owner_id=seeded["owner_id"],
+            result_version=1, expected_revision=2,
+        )
+    latest = None
+    if generate_latest:
+        prepared = task_facade.confirm_finalization(**args, expected_revision=edited["workflow_revision"])
+        task_facade.generate_artifacts(**args, expected_revision=prepared["workflow_revision"])
+        latest = client.get(base + "/2/bundle", headers=headers).content
+        assert latest.startswith(b"PK") and latest != original
+    # Both before and after new report generation, historical bytes stay frozen.
+    assert client.get(base + "/1/bundle", headers=headers).content == original
+    before = client.get(f"/tasks/{seeded['task_id']}/result", headers=headers).json()
+    removed = client.delete(base + "/1", headers=headers)
+    assert removed.status_code == 200, removed.text
+    assert not any(row["version"] == 1 and row["files"] for row in removed.json()["versions"])
+    assert client.get(base + "/1/bundle", headers=headers).status_code == 404
+    assert client.get(f"/tasks/{seeded['task_id']}/result", headers=headers).json() == before
+    if generate_latest:
+        assert client.get(base + "/2/bundle", headers=headers).content == latest
+    else:
+        # Deleting the last historical report does not block new generation.
+        prepared = task_facade.confirm_finalization(**args, expected_revision=edited["workflow_revision"])
+        generated = task_facade.generate_artifacts(**args, expected_revision=prepared["workflow_revision"])
+        assert generated["artifacts"]["versions"][0]["version"] == 2
+
+
+def test_history_deletion_is_owner_scoped():
+    from backend.domain.errors import NotFound
+    from backend.services import task_facade
+
+    seeded = _prepared_task()
+    args = {"task_id": seeded["task_id"], "owner_id": seeded["owner_id"]}
+    task_facade.confirm_finalization(**args, expected_revision=0)
+    task_facade.generate_artifacts(**args, expected_revision=1)
+    with pytest.raises(NotFound):
+        task_facade.delete_historical_artifact(task_id=seeded["task_id"], owner_id="another-teacher", version=1)
+    assert task_facade.artifact_bytes(**args, version=1, artifact_id="bundle")[0].startswith(b"PK")

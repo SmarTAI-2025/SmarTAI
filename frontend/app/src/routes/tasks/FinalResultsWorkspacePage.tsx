@@ -1,5 +1,4 @@
 import {
-  AlertTriangle,
   ArrowRight,
   BarChart3,
   CheckCircle2,
@@ -26,7 +25,7 @@ import {
 import { useI18n } from "@/i18n/I18nProvider";
 import type { Locale } from "@/i18n/messages";
 import { cn } from "@/lib/cn";
-import { formatTaskTime, getTaskDestination } from "@/lib/taskFlow";
+import { getTaskDestination } from "@/lib/taskFlow";
 import { classifyRecoverableError } from "@/lib/taskActionGuards";
 import { QuestionAnalysisDetail } from "@/routes/tasks/results/QuestionAnalysisDetail";
 import { QuestionAnalysisOverview } from "@/routes/tasks/results/QuestionAnalysisOverview";
@@ -87,9 +86,6 @@ export function FinalResultsWorkspacePage() {
   if (taskId && task && !taskQuery.isError && !RESULT_WORKSPACE_STATUSES.has(task.status)) {
     return <Navigate replace to={getTaskDestination(task)} />;
   }
-  if (taskId && provisional && section === "reports") {
-    return <Navigate replace to={`/tasks/${taskId}/results`} />;
-  }
 
   if (taskQuery.isLoading || resultQuery.isLoading || finalizationQuery.isLoading) {
     return <WorkspaceState locale={locale} loading />;
@@ -117,9 +113,7 @@ export function FinalResultsWorkspacePage() {
             {tx(locale, "学情分析与导出", "Performance Analysis & Exports")}
           </h1>
           <p className="mt-1 text-[13px] text-muted-foreground">
-            {task.name} · {provisional
-              ? tx(locale, `未确认结果 · 工作流 r${finalization.workflow_revision}`, `Unconfirmed results · workflow r${finalization.workflow_revision}`)
-              : tx(locale, `正式结果 v${finalization.final_result_version}`, `Final Results v${finalization.final_result_version}`)}
+            {task.name} · {tx(locale, "当前结果", "Current results")}
           </p>
         </div>
         <Link to={`/tasks/${encodeURIComponent(taskId)}/review`} className="text-[13px] font-semibold text-primary hover:underline">
@@ -131,7 +125,7 @@ export function FinalResultsWorkspacePage() {
 
       <ResultStateBanner locale={locale} taskId={taskId} finalization={finalization} provisional={provisional} />
 
-      <WorkspaceNavigation locale={locale} root={root} section={section} provisional={provisional} />
+      <WorkspaceNavigation locale={locale} root={root} section={section} />
 
       <main className="mt-5 min-w-0">
         <WorkspaceContent
@@ -150,13 +144,13 @@ export function FinalResultsWorkspacePage() {
   );
 }
 
-function WorkspaceNavigation({ locale, root, section, provisional }: { locale: Locale; root: string; section: WorkspaceSection; provisional: boolean }) {
-  const items = provisional ? WORKSPACE_NAV.filter((item) => item.key !== "reports") : WORKSPACE_NAV;
+function WorkspaceNavigation({ locale, root, section }: { locale: Locale; root: string; section: WorkspaceSection }) {
+  const items = WORKSPACE_NAV;
   return (
     <nav
       className={cn(
         "mt-5 flex snap-x gap-2 overflow-x-auto rounded-[10px] border bg-card p-2 overscroll-x-contain lg:grid lg:overflow-visible",
-        provisional ? "lg:grid-cols-4" : "lg:grid-cols-5",
+        "lg:grid-cols-5",
       )}
       aria-label={tx(locale, "结果工作区", "Results workspace")}
     >
@@ -194,24 +188,23 @@ function WorkspaceNavigation({ locale, root, section, provisional }: { locale: L
 }
 
 function ResultStateBanner({ locale, taskId, finalization, provisional }: { locale: Locale; taskId: string; finalization: TaskFinalizationResponse; provisional: boolean }) {
-  const stale = finalization.final_result_dirty || finalization.analysis_status === "stale";
   if (provisional) {
     return (
-      <section className="mt-5 flex min-h-16 flex-wrap items-center gap-4 rounded-[10px] border border-amber-200 bg-amber-50 px-5 py-3">
-        <span className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-amber-100 text-amber-700">
-          <AlertTriangle aria-hidden="true" className="h-[18px] w-[18px]" />
+      <section className="mt-5 flex min-h-16 flex-wrap items-center gap-4 rounded-[10px] border border-blue-100 bg-blue-50/80 px-5 py-3">
+        <span className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-blue-100 text-primary">
+          <CheckCircle2 aria-hidden="true" className="h-[18px] w-[18px]" />
         </span>
         <div className="min-w-0 flex-1">
           <p className="text-[14px] font-bold text-foreground">
-            {tx(locale, "批改已完成，可预览当前统计", "Grading is complete; current analysis is available")}
+            {tx(locale, "批改已完成，统计已更新", "Grading is complete; statistics are up to date")}
           </p>
           <p className="mt-0.5 text-[12px] text-muted-foreground">
-            {tx(locale, "这些是尚未确认的批改结果；报告、下载与正式发布仍需教师完成复核。", "These grading results are unconfirmed. Reports, downloads, and release remain locked until teacher review is complete.")}
+            {tx(locale, "统计和图表使用最新保存的分数；修改复核结果后同步更新。", "Statistics and charts use the latest saved scores and update after review changes.")}
           </p>
         </div>
         <Link
           to={`/tasks/${encodeURIComponent(taskId)}/review`}
-          className="inline-flex h-9 shrink-0 items-center gap-1.5 rounded-[8px] border border-amber-300 bg-card px-4 text-[12px] font-semibold text-amber-800 outline-none hover:bg-amber-100 focus-visible:ring-2 focus-visible:ring-ring"
+          className="inline-flex h-9 shrink-0 items-center gap-1.5 rounded-[8px] border bg-card px-4 text-[12px] font-semibold text-primary outline-none hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring"
         >
           {tx(locale, "返回复核", "Return to review")}
           <ArrowRight aria-hidden="true" className="h-3.5 w-3.5" />
@@ -220,21 +213,16 @@ function ResultStateBanner({ locale, taskId, finalization, provisional }: { loca
     );
   }
   return (
-    <section className={cn(
-      "mt-5 flex min-h-16 flex-wrap items-center gap-4 rounded-[10px] border px-5 py-3",
-      stale ? "border-amber-200 bg-amber-50" : "border-blue-100 bg-blue-50/80",
-    )}>
-      <span className={cn("inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-full", stale ? "bg-amber-100 text-amber-700" : "bg-blue-100 text-primary")}>
-        {stale ? <AlertTriangle aria-hidden="true" className="h-[18px] w-[18px]" /> : <CheckCircle2 aria-hidden="true" className="h-[18px] w-[18px]" />}
+    <section className="mt-5 flex min-h-16 flex-wrap items-center gap-4 rounded-[10px] border border-blue-100 bg-blue-50/80 px-5 py-3">
+      <span className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-blue-100 text-primary">
+        <CheckCircle2 aria-hidden="true" className="h-[18px] w-[18px]" />
       </span>
       <div className="min-w-0 flex-1">
         <p className="text-[14px] font-bold text-foreground">
-          {stale
-            ? tx(locale, "结果已修改，需要重新确认正式版本", "Results changed; confirm the final version again")
-            : tx(locale, `正式结果 v${finalization.final_result_version} 已保存`, `Final Results v${finalization.final_result_version} saved`)}
+          {tx(locale, "当前结果", "Current results")}
         </p>
         <p className="mt-0.5 text-[12px] text-muted-foreground">
-          {tx(locale, "确认时间", "Confirmed")}：{formatTaskTime(finalization.final_result_updated_at ?? undefined, true, locale)} · {analysisStatusLabel(locale, finalization.analysis_status)}
+          {tx(locale, "统计和图表使用最新保存的分数。", "Statistics and charts use the latest saved scores.")}
         </p>
         {sourceCleanupCopy(locale, finalization) ? (
           <p className={cn(
@@ -246,13 +234,10 @@ function ResultStateBanner({ locale, taskId, finalization, provisional }: { loca
         ) : null}
       </div>
       <Link
-        to={stale ? `/tasks/${encodeURIComponent(taskId)}/review` : `/tasks/${encodeURIComponent(taskId)}/results/reports`}
-        className={cn(
-          "inline-flex h-9 shrink-0 items-center gap-1.5 rounded-[8px] px-4 text-[12px] font-semibold outline-none focus-visible:ring-2 focus-visible:ring-ring",
-          stale ? "border border-amber-300 bg-card text-amber-800 hover:bg-amber-100" : "bg-primary text-primary-foreground hover:opacity-90",
-        )}
+        to={`/tasks/${encodeURIComponent(taskId)}/results/reports`}
+        className="inline-flex h-9 shrink-0 items-center gap-1.5 rounded-[8px] bg-primary px-4 text-[12px] font-semibold text-primary-foreground outline-none hover:opacity-90 focus-visible:ring-2 focus-visible:ring-ring"
       >
-        {stale ? tx(locale, "返回复核并重新确认", "Review and reconfirm") : tx(locale, "报告与下载", "Reports & downloads")}
+        {tx(locale, "报告与下载", "Reports & downloads")}
         <ArrowRight aria-hidden="true" className="h-3.5 w-3.5" />
       </Link>
     </section>
@@ -323,7 +308,7 @@ function WorkspaceContent({
   }
 
   if (section === "visualizations") {
-    return <Suspense fallback={<section className="flex min-h-64 items-center justify-center rounded-[10px] border bg-card"><LoaderCircle aria-hidden="true" className="h-7 w-7 animate-spin text-primary" /></section>}><VisualizationAnalysisPage locale={locale} taskId={taskId} version={finalization.final_result_version} model={model} provisional={provisional} /></Suspense>;
+    return <Suspense fallback={<section className="flex min-h-64 items-center justify-center rounded-[10px] border bg-card"><LoaderCircle aria-hidden="true" className="h-7 w-7 animate-spin text-primary" /></section>}><VisualizationAnalysisPage locale={locale} taskId={taskId} version={finalization.final_result_version} dataRevision={finalization.workflow_revision} model={model} provisional={provisional} /></Suspense>;
   }
   return <Suspense fallback={<section className="flex min-h-64 items-center justify-center rounded-[10px] border bg-card"><LoaderCircle aria-hidden="true" className="h-7 w-7 animate-spin text-primary" /></section>}><ReportsDownloadsPage locale={locale} taskId={taskId} taskName={taskName} finalization={finalization} /></Suspense>;
 }
@@ -360,8 +345,8 @@ function ResultsOverview({
   const reviewConclusion = reviewSources.total
     ? tx(
         locale,
-        `${reviewSources.teacherConfirmedSame + reviewSources.teacherChanged} 项教师已处理 · ${reviewSources.aiUntouched} 项沿用有效 AI 分${reviewSources.hardFailure ? ` · ${reviewSources.hardFailure} 项无有效分数` : ""}`,
-        `${reviewSources.teacherConfirmedSame + reviewSources.teacherChanged} teacher-handled · ${reviewSources.aiUntouched} using valid AI scores${reviewSources.hardFailure ? ` · ${reviewSources.hardFailure} unscored` : ""}`,
+        `${reviewSources.teacherConfirmedSame + reviewSources.teacherChanged} 项教师已处理${reviewSources.aiUntouched ? ` · ${reviewSources.aiUntouched} 项待确认` : ""}${reviewSources.hardFailure ? ` · ${reviewSources.hardFailure} 项无有效分数` : ""}`,
+        `${reviewSources.teacherConfirmedSame + reviewSources.teacherChanged} teacher-handled${reviewSources.aiUntouched ? ` · ${reviewSources.aiUntouched} awaiting confirmation` : ""}${reviewSources.hardFailure ? ` · ${reviewSources.hardFailure} unscored` : ""}`,
       )
     : tx(locale, "无复核信号", "No review signals");
 
@@ -372,8 +357,8 @@ function ResultsOverview({
           title={tx(locale, "结果总览", "Results overview")}
           description={tx(
             locale,
-            provisional ? "当前批改结果的班级摘要；教师确认前仅供分析与复核。" : "正式结果的简洁班级摘要；详细信息分别进入独立分析页面。",
-            provisional ? "A class summary of the current grading results, for analysis and review before teacher confirmation." : "A concise class summary of the final results, with dedicated pages for details.",
+            "基于最新保存分数的班级摘要；详细信息分别进入独立分析页面。",
+            "A class summary using the latest saved scores, with dedicated pages for details.",
           )}
         />
 
@@ -444,23 +429,23 @@ function ResultsOverview({
         <OverviewPanel
           title={tx(locale, "复核与产物", "Review & Downloads")}
           subtitle={reviewConclusion}
-          href={provisional ? `/tasks/${encodeURIComponent(taskId)}/review` : `${root}/reports`}
-          linkLabel={provisional ? tx(locale, "完成教师复核", "Complete teacher review") : tx(locale, "查看报告状态", "View report status")}
+          href={`${root}/reports`}
+          linkLabel={tx(locale, "查看报告状态", "View report status")}
         >
           <div className="mt-3 grid gap-2 text-[12px]">
             <StatusLine
-              label={tx(locale, "正式结果", "Final Results")}
-              value={provisional ? tx(locale, "尚未确认", "Unconfirmed") : `v${finalization.final_result_version}`}
+              label={tx(locale, "统计数据", "Statistics data")}
+              value={tx(locale, "当前结果", "Current results")}
               tone="primary"
             />
             <StatusLine
               label={tx(locale, "分析状态", "Analysis status")}
-              value={provisional ? tx(locale, "即时预览可用", "Live preview available") : analysisStatusLabel(locale, finalization.analysis_status)}
-              tone={finalization.analysis_status === "stale" ? "warning" : "neutral"}
+              value={tx(locale, "已更新", "Up to date")}
+              tone="neutral"
             />
             <StatusLine
               label={tx(locale, "报告下载", "Report downloads")}
-              value={provisional ? tx(locale, "复核确认后开放", "Available after confirmation") : finalization.analysis_status === "ready" && finalization.analysis_result_version === finalization.final_result_version ? tx(locale, `v${finalization.final_result_version} 可下载`, `v${finalization.final_result_version} ready`) : tx(locale, "尚未生成，进入报告页查看", "Not generated; see report page")}
+              value={tx(locale, "进入报告页查看", "See report page")}
               tone={finalization.analysis_status === "ready" ? "primary" : "neutral"}
             />
           </div>
@@ -610,16 +595,6 @@ function sectionFromPath(pathname: string): WorkspaceSection {
   if (pathname.endsWith("/visualizations")) return "visualizations";
   if (pathname.endsWith("/reports")) return "reports";
   return "overview";
-}
-
-function analysisStatusLabel(locale: Locale, status: TaskFinalizationResponse["analysis_status"]): string {
-  const labels = {
-    not_generated: ["分析尚未生成", "Analysis not generated"],
-    generating: ["分析生成中", "Analysis generating"],
-    ready: ["分析已生成", "Analysis ready"],
-    stale: ["分析已过期", "Analysis stale"],
-  } as const;
-  return labels[status][locale === "en-US" ? 1 : 0];
 }
 
 function tx(locale: Locale, zh: string, en: string): string {

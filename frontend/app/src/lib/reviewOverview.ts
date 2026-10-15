@@ -3,11 +3,12 @@ import { EMPTY_FILTER_INTENT, matchesQuestionToken, parseLocalTaskFilter, suppor
 import { compareValues } from "@/lib/sortValues";
 import type { Correction, FilterIntentResult } from "@/types";
 import {
+  hasExpertDisagreement,
   type QuestionSummary,
   type ResultsModel,
   type StudentSummary,
 } from "@/components/tasks/resultsModel";
-import { getExpertScoreSpread, isCorrectionReviewConfirmed, type ReviewItem } from "@/components/tasks/resultsReviewModel";
+import { isCorrectionReviewConfirmed, type ReviewItem } from "@/components/tasks/resultsReviewModel";
 
 export const reviewCellKey = (studentId: string, questionId: string) => `${studentId}::${questionId}`;
 
@@ -28,10 +29,7 @@ const NO_REVIEW_TOKENS = ["无复核信号", "无需复核", "no review"];
 const UNSCORED_TOKENS = ["无可比总分", "无分", "unscored"];
 
 export function isExpertDisagreement(correction: Correction): boolean {
-  return Boolean(
-    correction.review_reasons?.some((reason) => reason === "high_indecisiveness" || reason === "score_spread_high")
-      || getExpertScoreSpread(correction) > Math.max(1, correction.max_score * 0.25),
-  );
+  return hasExpertDisagreement(correction);
 }
 
 export function selectReviewOverview(
@@ -88,7 +86,7 @@ export function selectReviewOverview(
       if (wantsLowConfidence && correction.confidence >= 0.65) continue;
       if (wantsDisagreement && !isExpertDisagreement(correction)) continue;
       const confirmedReview = isConfirmedReview(correction);
-      if (wantsReview && confirmedReview) continue;
+      if (wantsReview && !reviewKeys.has(key)) continue;
       if (wantsConfirmedReview && !confirmedReview) continue;
       if (wantsNoReview && reviewKeys.has(key)) continue;
       if (wantsAnnotated && !annotatedKeys.has(key)) continue;
@@ -145,7 +143,7 @@ export function selectReviewOverviewFromIntent(
       if (intent.low_confidence && (confidence == null || confidence >= 0.65)) continue;
       if (intent.disagreement && !isExpertDisagreement(correction)) continue;
       if (intent.annotated && !annotatedKeys.has(key)) continue;
-      if (intent.review_status === "pending" && isConfirmedReview(correction)) continue;
+      if (intent.review_status === "pending" && !reviewKeys.has(key)) continue;
       if (intent.review_status === "confirmed" && !isConfirmedReview(correction)) continue;
       if (intent.review_status === "none" && reviewKeys.has(key)) continue;
       if (intent.question_tokens.length && !intent.question_tokens.some((token) => matchesQuestionToken(correction.q_id, question?.label ?? correction.q_id, token))) continue;

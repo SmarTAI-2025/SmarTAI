@@ -55,8 +55,8 @@ const copy = {
   viewFinalResults: ["查看最终结果", "View final results"],
   remainingHint: ["还有 {count} 个题次无有效分数，补全后才能生成正式结果。", "{count} responses have no valid score; add scores before finalizing."],
   lockedResultsRemaining: ["还有 {count} 个题次无有效分数，暂不能查看结果分析。", "{count} responses have no valid score; Results & Analysis remains locked."],
-  lockedResultsReady: ["有效 AI 分会直接用于正式结果；请先确认。", "Valid AI scores go directly to final results; confirm first."],
-  readyHint: ["有效 AI 分会直接用于正式结果；可按需复核。", "Valid AI scores go directly to final results; review as needed."],
+  lockedResultsReady: ["已保存的分数会用于结果分析。", "Results & Analysis uses the saved scores."],
+  readyHint: ["结果分析使用已保存的分数；可按需复核。", "Results & Analysis uses the saved scores; review as needed."],
   historyHint: ["当前为已完成任务的只读复核记录，可查看批改详情或进入最终结果。", "This is a read-only review record. Open grading details or final results."],
 } as const;
 

@@ -27,6 +27,7 @@ import { useAnalyticsQuery } from "@/api/hooks/analytics";
 import { AskQueryBar } from "@/components/tasks/AskQueryBar";
 import { RecoverableActionState } from "@/components/ui/RecoverableActionState";
 import {
+  hasReviewSignal as correctionNeedsFormalReview,
   effectiveCorrectionScore,
   formatPercent,
   formatScore,
@@ -60,8 +61,8 @@ const COLORS = {
 const CHART_PALETTE = [COLORS.rose, COLORS.amber, COLORS.teal, COLORS.primary, COLORS.violet];
 const PIE_COLORS = [COLORS.teal, COLORS.rose, COLORS.violet];
 
-export function VisualizationAnalysisPage(props: { locale: Locale; taskId: string; version: number; model: ResultsModel; provisional?: boolean }) { return <VisualizationDraftPage key={props.taskId} {...props} />; }
-function VisualizationDraftPage({ locale, taskId, version, model, provisional = false }: { locale: Locale; taskId: string; version: number; model: ResultsModel; provisional?: boolean }) {
+export function VisualizationAnalysisPage(props: { locale: Locale; taskId: string; version: number; dataRevision?: number; model: ResultsModel; provisional?: boolean }) { return <VisualizationDraftPage key={`${props.taskId}:${props.dataRevision ?? props.version}`} {...props} />; }
+function VisualizationDraftPage({ locale, taskId, version, dataRevision = version, model, provisional = false }: { locale: Locale; taskId: string; version: number; dataRevision?: number; model: ResultsModel; provisional?: boolean }) {
   const [searchParams, setSearchParams] = useSearchParams();
   const scope: ScopeFilter = "all";
   const students = useMemo(() => model.students.filter((student) => matchesScope(student, scope)), [model.students, scope]);
@@ -82,13 +83,13 @@ function VisualizationDraftPage({ locale, taskId, version, model, provisional = 
   const [preview, setPreview] = useState<ChartAnalyticsResult | null>(null);
   const [savedCharts, setSavedCharts] = useState<SavedChart[]>([]);
   const chartQuery = useAnalyticsQuery();
-  const localDraft = useDraftProtection({ scope: `charts:${taskId}`, value: { prompt, preview, savedCharts }, version: String(version), busy: chartQuery.isPending, onRestore: (draft) => { setPrompt(draft.prompt); setPreview(draft.preview); setSavedCharts(draft.savedCharts); } });
+  const localDraft = useDraftProtection({ scope: `charts:${taskId}`, value: { prompt, preview, savedCharts }, version: String(dataRevision), busy: chartQuery.isPending, onRestore: (draft) => { setPrompt(draft.prompt); setPreview(draft.preview); setSavedCharts(draft.savedCharts); } });
   const generation = useRef(0);
   useEffect(() => {
     if (!localDraft.dirty && !localDraft.savedAt && !localDraft.conflict) { setPreview(null); setExecution(null); setSavedCharts([]); }
     conversation.current = [];
     return () => { generation.current += 1; };
-  }, [taskId, version]);
+  }, [taskId, dataRevision]);
   const cancelChart = () => { generation.current += 1; chartQuery.reset(); };
   const root = `/tasks/${encodeURIComponent(taskId)}/results`;
 
@@ -228,7 +229,7 @@ function ChartCard({ locale, id, title, description, metadata, detailHref, wide 
 
 function GeneratedResult({ locale, id, result, version, provisional, prompt, onSave, onDelete }: { locale: Locale; id: string; result: ChartAnalyticsResult; version: number; provisional: boolean; prompt?: string; onSave?: () => void; onDelete?: () => void }) {
   const traces = result.traces.filter(isAllowedTrace);
-  return <article className="mt-3 rounded-[9px] border px-4 py-4"><div className="flex flex-wrap items-start justify-between gap-3"><div><h4 className="text-[13px] font-bold text-foreground">{result.title === "查询结果 / Query result" ? tx(locale, "自定义图表", "Custom chart") : result.title || tx(locale, "自定义图表", "Custom chart")}</h4></div><div className="flex items-center gap-2"><button type="button" onClick={() => void exportChartPng(id, result.title, locale)} className="inline-flex h-8 items-center gap-1 rounded-[7px] border px-2 text-[10px] font-semibold"><Download aria-hidden="true" className="h-3.5 w-3.5" />{traces.length > 1 ? tx(locale, "首图 PNG", "Download First Chart") : "PNG"}</button>{onSave ? <button type="button" onClick={onSave} className="inline-flex h-8 items-center gap-1 rounded-[7px] bg-primary px-2.5 text-[10px] font-semibold text-primary-foreground"><Save aria-hidden="true" className="h-3.5 w-3.5" />{tx(locale, "保存本次", "Save")}</button> : null}{onDelete ? <button type="button" onClick={onDelete} aria-label={tx(locale, "删除本次保存图表", "Delete saved chart")} className="inline-flex h-8 w-8 items-center justify-center rounded-[7px] border text-rose-600 hover:bg-rose-50"><Trash2 aria-hidden="true" className="h-3.5 w-3.5" /></button> : null}</div></div><div className="mt-2 flex flex-wrap gap-1.5"><span className="rounded-full bg-slate-100 px-2 py-0.5 text-[9px] text-muted-foreground">{provisional ? tx(locale, "未确认结果", "Unconfirmed results") : `v${version}`}</span><span className="rounded-full bg-slate-100 px-2 py-0.5 text-[9px] text-muted-foreground">{tx(locale, `${traces.length} 组数据`, `${traces.length} series`)}</span></div><div data-chart-export={id} className="mt-3 grid gap-3 xl:grid-cols-2">{traces.length ? traces.map((trace, index) => <GroundedTrace key={`${trace.type}-${index}`} trace={trace} locale={locale} />) : <p className="col-span-full py-6 text-center text-[11px] text-muted-foreground">{tx(locale, "没有匹配数据，请调整查询条件。", "No matching data. Try adjusting your query.")}</p>}</div></article>;
+  return <article className="mt-3 rounded-[9px] border px-4 py-4"><div className="flex flex-wrap items-start justify-between gap-3"><div><h4 className="text-[13px] font-bold text-foreground">{result.title === "查询结果 / Query result" ? tx(locale, "自定义图表", "Custom chart") : result.title || tx(locale, "自定义图表", "Custom chart")}</h4></div><div className="flex items-center gap-2"><button type="button" onClick={() => void exportChartPng(id, result.title, locale)} className="inline-flex h-8 items-center gap-1 rounded-[7px] border px-2 text-[10px] font-semibold"><Download aria-hidden="true" className="h-3.5 w-3.5" />{traces.length > 1 ? tx(locale, "首图 PNG", "Download First Chart") : "PNG"}</button>{onSave ? <button type="button" onClick={onSave} className="inline-flex h-8 items-center gap-1 rounded-[7px] bg-primary px-2.5 text-[10px] font-semibold text-primary-foreground"><Save aria-hidden="true" className="h-3.5 w-3.5" />{tx(locale, "保存本次", "Save")}</button> : null}{onDelete ? <button type="button" onClick={onDelete} aria-label={tx(locale, "删除本次保存图表", "Delete saved chart")} className="inline-flex h-8 w-8 items-center justify-center rounded-[7px] border text-rose-600 hover:bg-rose-50"><Trash2 aria-hidden="true" className="h-3.5 w-3.5" /></button> : null}</div></div><div className="mt-2 flex flex-wrap gap-1.5"><span className="rounded-full bg-slate-100 px-2 py-0.5 text-[9px] text-muted-foreground">{provisional ? tx(locale, "当前结果", "Current results") : `v${version}`}</span><span className="rounded-full bg-slate-100 px-2 py-0.5 text-[9px] text-muted-foreground">{tx(locale, `${traces.length} 组数据`, `${traces.length} series`)}</span></div><div data-chart-export={id} className="mt-3 grid gap-3 xl:grid-cols-2">{traces.length ? traces.map((trace, index) => <GroundedTrace key={`${trace.type}-${index}`} trace={trace} locale={locale} />) : <p className="col-span-full py-6 text-center text-[11px] text-muted-foreground">{tx(locale, "没有匹配数据，请调整查询条件。", "No matching data. Try adjusting your query.")}</p>}</div></article>;
 }
 
 function GeneratedTrace({ locale, trace, index }: { locale: Locale; trace: ChartTrace; index: number }) {
@@ -274,9 +275,9 @@ function buildQuestionPerformance(questions: QuestionSummary[], studentIds: Set<
 function formalCorrectionPercent(correction: Correction): number | null { const score = effectiveCorrectionScore(correction); return score !== null && correction.max_score > 0 ? (score / correction.max_score) * 100 : null; }
 function matchesScope(student: StudentSummary, scope: ScopeFilter): boolean { if (scope === "all") return true; if (scope === "review") return studentNeedsReview(student); if (student.percent === null) return false; return scope === "pass" ? student.percent >= 60 : student.percent < 60; }
 function studentNeedsReview(student: StudentSummary): boolean { return student.corrections.some(correctionNeedsFormalReview); }
-function correctionNeedsFormalReview(correction: Correction): boolean { const confidence = normalizeConfidence(correction.confidence); return (confidence !== null && confidence < 0.65) || correction.requires_human_review || correction.review_reasons?.some((reason) => reason === "high_indecisiveness" || reason === "score_spread_high") || correction.synthesis_method === "all_failed" || correction.synthesis_method === "quota_exhausted" || correctionHasDisagreement(correction); }
-function correctionHasDisagreement(correction: Correction): boolean { if (correction.review_reasons?.some((reason) => reason === "high_indecisiveness" || reason === "score_spread_high")) return true; const scores = correction.expert_results?.map((result) => Number(result.score)).filter(Number.isFinite) ?? []; return scores.length > 1 && correction.max_score > 0 && Math.max(...scores) - Math.min(...scores) > Math.max(1, correction.max_score * 0.25); }
-function chartMetadata(locale: Locale, sample: number, version: number, scope: ScopeFilter, extra = "", provisional = false): string[] { return [tx(locale, `样本 ${sample}`, `Sample ${sample}`), provisional ? tx(locale, "未确认结果", "Unconfirmed results") : tx(locale, `正式结果 v${version}`, `Final Results v${version}`), scopeLabel(locale, scope), extra].filter(Boolean); }
+
+
+function chartMetadata(locale: Locale, sample: number, version: number, scope: ScopeFilter, extra = "", provisional = false): string[] { return [tx(locale, `样本 ${sample}`, `Sample ${sample}`), provisional ? tx(locale, "当前结果", "Current results") : tx(locale, `正式结果 v${version}`, `Final Results v${version}`), scopeLabel(locale, scope), extra].filter(Boolean); }
 function scopeLabel(locale: Locale, scope: ScopeFilter): string { return scope === "pass" ? tx(locale, "仅及格", "Passed only") : scope === "fail" ? tx(locale, "仅未及格", "Failed only") : scope === "review" ? tx(locale, "含复核信号", "With review signals") : tx(locale, "全部学生", "All students"); }
 function normalizeScope(value: string | null): ScopeFilter { return value === "pass" || value === "fail" || value === "review" ? value : "all"; }
 function normalizeConfidence(value: number | null | undefined): number | null { if (typeof value !== "number" || !Number.isFinite(value)) return null; return value > 1 ? value / 100 : value; }

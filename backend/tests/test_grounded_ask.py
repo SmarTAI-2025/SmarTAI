@@ -127,6 +127,29 @@ def test_teacher_score_overrides_ai_and_failed_score_stays_unknown():
         db.close()
 
 
+@pytest.mark.parametrize("patch,pending,reviewed", [
+    ({"confidence": .5, "requires_human_review": True, "review_reasons": ["low_confidence"]}, 0, 0),
+    ({"expert_results": [{"score": 5}, {"score": 0, "error_kind": "general"}, {"score": None}]}, 0, 0),
+    ({"expert_results": [{"score": 5}, {"score": 0}]}, 1, 0),
+    ({"confidence": .35}, 1, 0),
+    ({"initial_review_reasons": ["high_indecisiveness,minority_veto"]}, 1, 0),
+    ({"confidence": .2, "teacher_score": 5, "review_status": "confirmed"}, 0, 1),
+    ({"confidence": .2, "teacher_score": 0, "review_status": "confirmed"}, 0, 1),
+    ({"confidence": .2, "teacher_score": 4, "review_status": "edited"}, 1, 0),
+    ({"score": None, "provisional_score": None, "teacher_score": 4, "review_status": "edited"}, 1, 0),
+    ({"score": None, "provisional_score": None, "teacher_score": 4, "review_status": "confirmed"}, 0, 1),
+    ({"synthesis_method": "all_failed"}, 1, 0),
+])
+def test_ask_review_counts_match_the_review_queue(patch, pending, reviewed):
+    task, result = payload()
+    result["results"][0]["corrections"][0].update(patch)
+    snapshot = Snapshot.from_payloads([(task, result)], "task")
+    grade = snapshot.tables["grades"][0]
+    assert (grade["requires_review"], grade["reviewed"]) == (pending, reviewed)
+    assert snapshot.tables["students"][0]["pending_review_count"] == pending
+    assert snapshot.tables["questions"][0]["review_count"] == pending
+
+
 def test_answer_review_state_keeps_confirmed_blanks_distinct_from_pending_and_missing():
     task, result = payload()
     answers = task["student_data"]["DEMO-001"]["stu_ans"]
@@ -238,13 +261,13 @@ def test_chart_surface_repairs_a_plan_missing_bindings_instead_of_returning_raw_
     assert result["chart"]["traces"][1]["y"] == [0, 0, 0, 0]
 
 
-def test_question_low_confidence_counts_match_student_counts_including_unknowns():
+def test_question_low_confidence_counts_only_pending_queue_items():
     task, result = payload()
     for row, value in zip(result["results"], [.64, .65, None, .1]):
         row["corrections"][0]["confidence"] = value
     snapshot = Snapshot.from_payloads([(task, result)], "task")
-    assert [q["low_confidence_count"] for q in snapshot.tables["questions"]] == [2, 0, 0, 0]
-    assert sum(s["low_confidence_count"] for s in snapshot.tables["students"]) == 2
+    assert [q["low_confidence_count"] for q in snapshot.tables["questions"]] == [1, 0, 0, 0]
+    assert sum(s["low_confidence_count"] for s in snapshot.tables["students"]) == 1
 
 
 @pytest.mark.parametrize("metric", ["avg_percent", "low_confidence_count"])

@@ -57,6 +57,31 @@ def score(correction: dict) -> float | None:
     return current if current is not None else number(correction.get("provisional_score"))
 
 
+def review_state(correction: dict) -> tuple[bool, bool]:
+    """Match the grading review queue (resultsModel.correctionReviewAttention)."""
+    maximum = number(correction.get("max_score"))
+
+    def valid(value):
+        value = number(value)
+        return value is not None and maximum is not None and maximum > 0 and 0 <= value <= maximum
+
+    confirmed = correction.get("review_status") == "confirmed"
+    original = correction.get("provisional_score", correction.get("score"))
+    blocked = not valid(score(correction)) or (not valid(original) and not confirmed)
+    reviewed = number(correction.get("teacher_score")) is not None and confirmed and not blocked
+    expert_scores = [v for expert in correction.get("expert_results") or []
+                     if not expert.get("error_kind") and (v := number(expert.get("score"))) is not None]
+    reasons = {part.strip() for reason in [*(correction.get("review_reasons") or []),
+                                          *(correction.get("initial_review_reasons") or [])]
+               for part in reason.split(",")}
+    disagreement = bool(reasons.intersection({"high_indecisiveness", "score_spread_high"})
+                        or (len(expert_scores) > 1 and maximum is not None
+                            and max(expert_scores) - min(expert_scores) > max(1, maximum * .25)))
+    conf = number(correction.get("confidence"))
+    pending = blocked or (not reviewed and (disagreement or (conf is not None and 0 <= conf <= .35)))
+    return pending, reviewed
+
+
 def dumps(value: Any) -> str:
     return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False)
 
@@ -125,16 +150,14 @@ def project_task(task: dict, result: dict) -> dict[str, list[dict]]:
             value, maximum, conf = score(c), number(c.get("max_score")), confidence(c.get("confidence"))
             teacher = number(c.get("teacher_score"))
             experts = c.get("expert_results") or []
-            expert_scores = [v for e in experts if (v := number(e.get("score"))) is not None]
-            disagreement = bool(len(expert_scores) > 1 and maximum is not None and max(expert_scores) - min(expert_scores) > max(1, maximum * .25))
-            review = bool(c.get("requires_human_review") or value is None or (conf is not None and conf < .65) or disagreement or set(c.get("review_reasons") or []).intersection({"high_indecisiveness", "score_spread_high"}))
+            review, reviewed = review_state(c)
             grade = {"task_id": tid, "student_id": sid, "q_id": qid, "score": value, "max_score": maximum,
                      "score_percent": value / maximum * 100 if value is not None and maximum and maximum > 0 else None,
                      "points_lost": maximum - value if value is not None and maximum is not None else None,
                      "is_incorrect": int(value < maximum - 1e-9) if value is not None and maximum is not None else None,
                      "is_scored": int(value is not None), "ai_score": number(c.get("provisional_score")), "teacher_score": teacher,
                      "confidence": conf, "comment": c.get("comment"), "teacher_comment": c.get("teacher_comment"),
-                     "requires_review": int(review), "reviewed": int(teacher is not None), "review_status": c.get("review_status"),
+                     "requires_review": int(review), "reviewed": int(reviewed), "review_status": c.get("review_status"),
                      "review_reasons": dumps(c.get("review_reasons") or []), "synthesis_method": c.get("synthesis_method"),
                      "metadata": dumps({k: c.get(k) for k in ("hits", "logs", "is_score", "initial_review_reasons", "reviewed_at")})}
             tables["grades"].append(grade); student_grades.append(grade)
@@ -150,7 +173,7 @@ def project_task(task: dict, result: dict) -> dict[str, list[dict]]:
             "total_score": total if valid else None, "total_max": maximum if valid else None,
             "score_percent": total / maximum * 100 if maximum > 0 else None,
             "avg_confidence": _mean([g["confidence"] for g in student_grades]), "graded_count": len(valid), "unscored_count": len(student_grades) - len(valid),
-            "low_confidence_count": sum(g["confidence"] is not None and g["confidence"] < .65 for g in student_grades),
+            "low_confidence_count": sum(g["requires_review"] and g["confidence"] is not None and g["confidence"] <= .35 for g in student_grades),
             "review_count": sum(g["requires_review"] for g in student_grades),
             "pending_review_count": sum(g["requires_review"] and not g["reviewed"] for g in student_grades),
             "metadata": dumps({"identity_match_method": student.get("identity_match_method")})})
@@ -165,7 +188,7 @@ def project_task(task: dict, result: dict) -> dict[str, list[dict]]:
         tables["questions"].append({**{k: q.get(k) for k in SCHEMA["questions"]}, "task_id": tid, "q_id": qid, "order_index": index,
             "avg_score": _mean([g["score"] for g in grades]), "avg_percent": _mean([g["score_percent"] for g in grades]),
             "avg_confidence": _mean([g["confidence"] for g in grades]), "response_count": len(grades), "review_count": sum(g["requires_review"] for g in grades),
-            "low_confidence_count": sum(g["confidence"] is not None and g["confidence"] < .65 for g in grades),
+            "low_confidence_count": sum(g["requires_review"] and g["confidence"] is not None and g["confidence"] <= .35 for g in grades),
             "metadata": dumps({k: q.get(k) for k in ("max_score_source", "max_score_review_status", "material_provenance", "ai_completion_provenance", "knowledge_points")})})
         for issue in q.get("preparation_issues") or []:
             tables["preparation_issues"].append({"task_id": tid, "q_id": qid, **{k: issue.get(k) for k in ("code", "field", "severity", "status", "message")}})

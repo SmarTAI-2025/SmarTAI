@@ -7,6 +7,7 @@ import {
   correctionReviewDraftScore,
   correctionReviewReasonIds,
   effectiveCorrectionScore,
+  formatCorrectionScoreSource,
   reviewConfirmationScore,
   summarizeReviewScoreSources,
 } from "./resultsModel";
@@ -66,6 +67,10 @@ describe("review score presentation", () => {
     expect(aiCorrectionScore(changed)).toBe(6);
   });
 
+  it.each(["zh-CN", "en-US"] as const)("removes AI/unhandled labels after same-score confirmation (%s)", (locale) => {
+    expect(formatCorrectionScoreSource(correction({ teacher_score: 7, review_status: "confirmed" }), locale)).toBe(locale === "zh-CN" ? "教师已确认" : "Teacher confirmed");
+  });
+
   it("keeps a soft-review zero but rejects a legacy hard-failure zero", () => {
     const realZero = correction({ score: 0, provisional_score: 0 });
     const hardFailure = correction({
@@ -99,9 +104,9 @@ describe("review score presentation", () => {
     ]);
 
     expect(summary).toEqual({
-      aiUntouched: 1,
+      aiUntouched: 2,
       teacherConfirmedSame: 1,
-      teacherChanged: 1,
+      teacherChanged: 0,
       hardFailure: 1,
       total: 4,
     });

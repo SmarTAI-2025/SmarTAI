@@ -48,6 +48,7 @@ function show(detail = false, suffix = "") {
     { path: "/tasks/:taskId/review", element: <ReviewOverviewPage /> },
     { path: "/tasks/:taskId/review/:studentId/:questionId", element: <ReviewDetailPage /> },
     { path: "/tasks/:taskId/grading/progress", element: <div>Grading recovery progress</div> },
+    { path: "/tasks/:taskId/results", element: <div>Current results page</div> },
   ] }], { initialEntries: [`/tasks/T1/review${detail ? "/S1/Q1" : suffix}`] });
   render(<PageDraftSession ownerId="review-teacher"><RouterProvider router={router} /></PageDraftSession>);
   return router;
@@ -215,7 +216,8 @@ describe("one-click grading review", () => {
       expect(within(document.querySelector('[data-question-id="Q1"]') as HTMLElement).getAllByRole("button", { name: /Q1.*Confirm review/ })).toHaveLength(1);
     }
     await userEvent.click(within(actions).getByRole("button", { name: "View Results & Analysis" }));
-    expect(state.finalize).toHaveBeenCalledWith({ taskId: "T1", expectedWorkflowRevision: 5 }, expect.anything());
+    expect(await screen.findByText("Current results page")).toBeInTheDocument();
+    expect(state.finalize).not.toHaveBeenCalled();
     expect(state.bulk).not.toHaveBeenCalled();
     expect(state.update).not.toHaveBeenCalled();
   });

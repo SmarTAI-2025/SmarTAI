@@ -109,6 +109,17 @@ export function useGenerateTaskResultArtifacts() {
   });
 }
 
+export function useDeleteTaskResultArtifact() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ taskId, version }: { taskId: string; version: number }) =>
+      tasksApi.deleteTaskResultArtifact(taskId, version),
+    onSuccess: (data, { taskId }) => {
+      queryClient.setQueryData(taskKeys.artifacts(taskId), data);
+    },
+  });
+}
+
 export function useConfirmTaskFinalization() {
   const queryClient = useQueryClient();
 

@@ -1,8 +1,11 @@
+import { correctionReviewLabels } from "@/components/tasks/resultsReviewModel";
 import { ResultQuestionQuery, useResultQuestionFilter } from "@/components/tasks/ResultQuestionQuery";
 import { ArrowDown, ArrowLeft, ArrowRight, ArrowUp, UserRound } from "lucide-react";
 import { useEffect, type ReactNode } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import {
+  hasReviewSignal as correctionNeedsFormalReview,
+  hasExpertDisagreement,
   effectiveCorrectionScore,
   formatCorrectionScoreSource,
   formatConfidence,
@@ -148,7 +151,7 @@ export function QuestionAnalysisDetail({
           questions={visibleQuestions}
           activeId={question.id}
           onSelect={goToQuestion}
-          stateForQuestion={(item) => item.reviewCount > 0 ? "warning" : "ready"}
+          stateForQuestion={(item) => item.entries.some(({ correction }) => correctionNeedsFormalReview(correction)) ? "warning" : "ready"}
         />
         <div className="min-w-0">
       <div className="grid grid-cols-2 gap-3 xl:grid-cols-6">
@@ -392,46 +395,14 @@ function buildReviewSignals(question: QuestionSummary, locale: Locale): CountedS
   const counts = new Map<string, number>();
   const add = (label: string) => counts.set(label, (counts.get(label) ?? 0) + 1);
   for (const entry of question.entries) {
-    const confidence = normalizeConfidence(entry.correction.confidence);
-    if (confidence !== null && confidence < 0.65) add(tx(locale, "低置信度", "Low confidence"));
-    if (entry.correction.requires_human_review) add(tx(locale, "系统标记需人工复核", "System requested human review"));
-    for (const reason of entry.correction.review_reasons ?? []) {
-      if (reason !== "high_indecisiveness" && reason !== "score_spread_high") add(reviewReasonLabel(reason, locale));
-    }
-    if (correctionHasDisagreement(entry.correction)) add(tx(locale, "专家分歧 / 分差较大", "Model disagreement / score spread"));
+    if (!correctionNeedsFormalReview(entry.correction)) continue;
+    for (const label of correctionReviewLabels(entry.correction, locale)) add(label);
   }
   return Array.from(counts, ([label, count]) => ({ label, count })).sort((left, right) => right.count - left.count || left.label.localeCompare(right.label));
 }
 
-function correctionNeedsFormalReview(correction: Correction): boolean {
-  const confidence = normalizeConfidence(correction.confidence);
-  return (confidence !== null && confidence < 0.65)
-    || correction.requires_human_review
-    || correction.review_reasons?.some((reason) => reason === "high_indecisiveness" || reason === "score_spread_high")
-    || correction.synthesis_method === "all_failed"
-    || correction.synthesis_method === "quota_exhausted"
-    || correctionHasDisagreement(correction);
-}
-
 function correctionHasDisagreement(correction: Correction): boolean {
-  if (correction.review_reasons?.some((reason) => reason === "high_indecisiveness" || reason === "score_spread_high")) return true;
-  const scores = correction.expert_results?.map((result) => Number(result.score)).filter((value) => Number.isFinite(value)) ?? [];
-  return scores.length > 1 && correction.max_score > 0 && Math.max(...scores) - Math.min(...scores) > Math.max(1, correction.max_score * 0.25);
-}
-
-function reviewReasonLabel(reason: string, locale: Locale): string {
-  const labels: Record<string, [string, string]> = {
-    low_confidence: ["低置信度", "Low confidence"],
-    high_indecisiveness: ["专家意见分歧", "Model disagreement"],
-    score_spread_high: ["专家分差较大", "Large score spread across models"],
-    parse_failed: ["解析失败", "Parsing failed"],
-    degraded_to_single: ["仅单专家成功（低置信度）", "Only one expert succeeded (low confidence)"],
-    quota_exhausted: ["模型额度失败", "Model quota failure"],
-    llm_failed: ["模型未完成批改", "Model grading failed"],
-    transient_llm: ["模型网络或超时错误", "Model network error or timeout"],
-  };
-  const label = labels[reason];
-  return label ? label[locale === "en-US" ? 1 : 0] : reason.replaceAll("_", " ");
+  return correctionNeedsFormalReview(correction) && hasExpertDisagreement(correction);
 }
 
 function fieldSource(problem: ProblemInfo | undefined, field: "stem" | "criterion" | "reference_answer" | "test_cases", locale: Locale): string {

@@ -249,6 +249,10 @@ export function getTaskResultArtifacts(taskId: string): Promise<ResultArtifactIn
   return getJSON<ResultArtifactIndex>(`/tasks/${encodeURIComponent(taskId)}/artifacts`);
 }
 
+export function deleteTaskResultArtifact(taskId: string, version: number): Promise<ResultArtifactIndex> {
+  return deleteJSON<ResultArtifactIndex>(`/tasks/${encodeURIComponent(taskId)}/artifacts/${version}`);
+}
+
 export function generateTaskResultArtifacts(
   taskId: string,
   expectedWorkflowRevision: number,

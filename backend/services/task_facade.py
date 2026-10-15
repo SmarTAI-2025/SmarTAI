@@ -5272,6 +5272,21 @@ def artifact_index(*, task_id: str, owner_id: str) -> dict:
     }
 
 
+def delete_historical_artifact(*, task_id: str, owner_id: str, version: int) -> dict:
+    workflow = workflow_repository.get_live_workflow(task_id, owner_id=owner_id)
+    index = artifact_index(task_id=task_id, owner_id=owner_id)
+    report = next((item for item in index["versions"] if item["version"] == version), None)
+    if report is None or not report["files"]:
+        raise NotFound("artifact_manifest")
+    if report["current"] and report["status"] != "stale":
+        raise InvalidTransition("Only historical reports can be deleted.")
+    workflow_repository.delete_artifact_manifest_atomic(
+        assignment_id=task_id, owner_id=owner_id, result_version=version,
+        expected_revision=workflow.workflow_revision,
+    )
+    return artifact_index(task_id=task_id, owner_id=owner_id)
+
+
 def artifact_bytes(
     *, task_id: str, owner_id: str, version: int, artifact_id: str
 ) -> tuple[bytes, str, str]:

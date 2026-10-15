@@ -2050,6 +2050,34 @@ def save_artifact_manifest_atomic(
         return _detach_artifact(row), True, _detach_workflow(workflow)
 
 
+def delete_artifact_manifest_atomic(
+    *, assignment_id: str, owner_id: str, result_version: int, expected_revision: int,
+) -> None:
+    """Remove report download metadata, preserving grading runs and reviews."""
+    with session_scope() as session:
+        workflow = session.scalar(
+            select(AssignmentWorkflowRecord).where(
+                AssignmentWorkflowRecord.assignment_id == assignment_id,
+                AssignmentWorkflowRecord.owner_id == owner_id,
+            ).with_for_update()
+        )
+        if workflow is None:
+            raise NotFound("workflow")
+        _lock_live_assignment(session, assignment_id=assignment_id, owner_id=owner_id)
+        # Fence the facade's historical-status check against concurrent edits
+        # or generation, which use this same workflow lock and revision.
+        if workflow.workflow_revision != expected_revision:
+            raise VersionConflict("workflow_revision_conflict")
+        row = session.scalar(select(ResultArtifactManifestRecord).where(
+            ResultArtifactManifestRecord.assignment_id == assignment_id,
+            ResultArtifactManifestRecord.owner_id == owner_id,
+            ResultArtifactManifestRecord.result_version == result_version,
+        ))
+        if row is None:
+            raise NotFound("artifact_manifest")
+        session.delete(row)
+
+
 def list_artifact_manifests(
     assignment_id: str, *, owner_id: str
 ) -> list[ResultArtifactManifestRecord]:
