@@ -1,6 +1,6 @@
 import { expect, it } from "vitest";
 import type { Correction } from "@/types";
-import contract from "../../../../../backend/tests/fixtures/report_review_contract.json";
+import contract from "@/test/fixtures/report_review_contract.json";
 import { correctionReviewAttention } from "./resultsModel";
 
 it.each(contract.cases)("report and review queue agree: $name", ({ patch, pending }) => {
