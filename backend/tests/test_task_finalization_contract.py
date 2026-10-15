@@ -423,6 +423,36 @@ def test_history_download_and_delete_preserve_scores_and_latest_report(generate_
         assert generated["artifacts"]["versions"][0]["version"] == 2
 
 
+@pytest.mark.parametrize("generated_first", [False, True])
+def test_unexported_snapshots_do_not_consume_report_versions(generated_first):
+    from backend.services import task_facade
+
+    seeded = _prepared_task()
+    args = {"task_id": seeded["task_id"], "owner_id": seeded["owner_id"]}
+    state = task_facade.confirm_finalization(**args, expected_revision=0)
+    if generated_first:
+        state = task_facade.generate_artifacts(**args, expected_revision=state["workflow_revision"])
+    expected_version = 2 if generated_first else 1
+    # Covers an old navigation-created snapshot and retries after a snapshot
+    # was saved but file generation never completed.
+    for score in (8, 7):
+        state = task_facade.update_correction_review(
+            **args, display_student_id=seeded["student_id"], q_id="q-optional",
+            teacher_score=score, teacher_comment="", confirm=True,
+            expected_revision=state["workflow_revision"],
+        )
+        state = task_facade.confirm_finalization(**args, expected_revision=state["workflow_revision"])
+        assert state["final_result_version"] == expected_version
+    generated = task_facade.generate_artifacts(**args, expected_revision=state["workflow_revision"])
+    current = next(item for item in generated["artifacts"]["versions"] if item["current"])
+    assert current["version"] == expected_version
+    _, _, filename = task_facade.artifact_bytes(**args, version=expected_version, artifact_id="bundle")
+    assert f"_v{expected_version}_" in filename
+    replay = task_facade.generate_artifacts(**args, expected_revision=state["workflow_revision"])
+    assert replay["unchanged"] is True
+    assert replay["final_result_version"] == expected_version
+
+
 def test_history_deletion_is_owner_scoped():
     from backend.domain.errors import NotFound
     from backend.services import task_facade

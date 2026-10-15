@@ -208,6 +208,8 @@ class AssignmentWorkflowRecord(Base):
     analysis_status: Mapped[str] = mapped_column(
         String(32), nullable=False, default="not_generated"
     )
+    # Last generated report version; retain across edits/deletion so numbers
+    # are never reused after a report has actually been generated.
     analysis_result_version: Mapped[int | None] = mapped_column(Integer, nullable=True)
     analysis_generated_at: Mapped[float | None] = mapped_column(Float, nullable=True)
     analysis_error_code: Mapped[str | None] = mapped_column(String(128), nullable=True)
@@ -863,7 +865,7 @@ def confirm_final_result_atomic(
     grading_run_id: str,
     expected_revision: int,
 ) -> tuple[AssignmentWorkflowRecord, float, bool]:
-    """Release a grading run and advance its formal-result version atomically.
+    """Release a grading run and reserve its report version atomically.
 
     The workflow row is the optimistic concurrency gate and the grading-run
     row serializes this operation against teacher review.  Returning ``False``
@@ -980,17 +982,26 @@ def confirm_final_result_atomic(
             )
 
         # A legacy interrupted release may have stamped the run but not the
-        # workflow. Repair that state in-place; otherwise this is a new formal
-        # version and receives one release timestamp/version increment.
+        # workflow. Repair that state in-place; otherwise stamp the new snapshot
+        # and reuse any report number that has not yet produced files.
         released_at = float(run.released_at) if run.released_at is not None else now
         if run.released_at is None:
             run.released_at = released_at
         workflow.presentation_status = "finalized"
         workflow.grading_job_id = grading_run_id
-        workflow.final_result_version = max(1, workflow.final_result_version + 1)
+        # Snapshot preparation alone must not consume a report number. Include
+        # manifests for older workflows that cleared analysis_result_version.
+        last_report_version = session.scalar(
+            select(ResultArtifactManifestRecord.result_version).where(
+                ResultArtifactManifestRecord.assignment_id == assignment_id,
+                ResultArtifactManifestRecord.owner_id == owner_id,
+            ).order_by(ResultArtifactManifestRecord.result_version.desc()).limit(1)
+        ) or 0
+        workflow.final_result_version = max(
+            last_report_version, workflow.analysis_result_version or 0,
+        ) + 1
         workflow.final_result_updated_at = released_at
         workflow.analysis_status = "not_generated"
-        workflow.analysis_result_version = None
         workflow.analysis_generated_at = None
         workflow.analysis_error_code = None
         workflow.active_operation = None

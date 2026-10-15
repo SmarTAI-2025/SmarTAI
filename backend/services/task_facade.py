@@ -2156,7 +2156,6 @@ def _replace_draft_questions(
         workflow.reference_file_name = None
         workflow.test_cases_file_name = None
         workflow.analysis_status = "not_generated"
-        workflow.analysis_result_version = None
         workflow.analysis_generated_at = None
         workflow.analysis_error_code = None
         workflow.error_code = None
@@ -3505,7 +3504,6 @@ def _commit_imported_submissions(
             workflow.grading_job_id = None
             workflow.last_failed_job_id = None
             workflow.analysis_status = "not_generated"
-            workflow.analysis_result_version = None
             workflow.analysis_generated_at = None
             workflow.analysis_error_code = None
             workflow.error_code = None
@@ -4550,7 +4548,6 @@ def update_problem(
             workflow_row.submission_roster_name = None
             workflow_row.submission_recognition_provider_id = None
             workflow_row.analysis_status = "not_generated"
-            workflow_row.analysis_result_version = None
             workflow_row.analysis_generated_at = None
             workflow_row.analysis_error_code = None
             workflow_row.error_code = None
@@ -4787,7 +4784,6 @@ def update_student_answer(
         workflow_row.grading_job_id = None
         workflow_row.last_failed_job_id = None
         workflow_row.analysis_status = "not_generated"
-        workflow_row.analysis_result_version = None
         workflow_row.analysis_generated_at = None
         workflow_row.analysis_error_code = None
         workflow_row.error_code = None
@@ -4900,7 +4896,7 @@ def update_correction_review(
         workflow_repository.update_workflow(
             task_id, owner_id=owner_id, bump_revision=False,
             presentation_status="graded", grading_job_id=target_run.id,
-            analysis_status="not_generated", analysis_result_version=None,
+            analysis_status="not_generated",
             analysis_generated_at=None, analysis_error_code=None,
         )
     rows = grading_repository.list_results_for_run(target_run.id)
