@@ -96,6 +96,8 @@ describe("identity confirmation with the real query cache and draft session", ()
     await waitFor(() => expect(router.state.location.pathname).toBe("/tasks/identity-task/students/NEW"));
     expect(router.state.historyAction).toBe("REPLACE");
     expect(router.state.location.search).toBe("?question=Q1&from=matrix");
+    // Router state can advance before the replacement student form commits.
+    await screen.findByTitle("NEW · Lin");
     await waitFor(() => expect(screen.getByText("Original answer")).toBeInTheDocument());
     expect(screen.queryByText("当前链接找不到对应的学生记录")).not.toBeInTheDocument();
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
