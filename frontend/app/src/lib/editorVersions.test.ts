@@ -21,6 +21,21 @@ describe("editor conflict boundaries", () => {
     expect(gradingEditorVersion({ ...response, grading_setup: { ...response.grading_setup!, strictness: 70 } })).not.toBe(gradingEditorVersion(response));
     expect(gradingEditorVersion({ ...response, available_experts: [{ ...response.available_experts[0], enabled: false }] })).not.toBe(gradingEditorVersion(response));
   });
+  it("ignores only the attachment-derived suggestion before grading settings are saved", () => {
+    const response = {
+      grading_setup: null, suggested_setup: { strictness: 50, knowledge_scope: "none" },
+      available_experts: [{ provider_id: "p", enabled: true, model: "m", is_shared: false }],
+    } as unknown as GradingSetupResponse;
+    const attached = { ...response, workflow_revision: 10,
+      suggested_setup: { ...response.suggested_setup!, knowledge_scope: "all_task_docs" as const } };
+    expect(gradingEditorVersion(attached)).toBe(gradingEditorVersion(response));
+    expect(gradingEditorVersion({ ...attached, suggested_setup: { ...attached.suggested_setup, strictness: 70 } })).not.toBe(gradingEditorVersion(response));
+    expect(gradingEditorVersion({ ...attached, available_experts: [{ ...attached.available_experts[0], model: "new-model" }] })).not.toBe(gradingEditorVersion(response));
+    // A change to the persisted scope remains a genuine business change.
+    expect(gradingEditorVersion({ ...attached, grading_setup: attached.suggested_setup })).not.toBe(
+      gradingEditorVersion({ ...response, grading_setup: response.suggested_setup }),
+    );
+  });
   it("submission input ignores review flags while detecting edited answer content", () => {
     const submission = { ...task, student_data: { s: { stu_id: "s", stu_name: "S", stu_ans: [{ q_id: "q1", number: "1", type: "math", content: "4", flag: [] }] } } };
     const reviewed = structuredClone(submission);

@@ -27,7 +27,10 @@ export function taskInputVersion(task: Task | undefined, stage: "problems" | "su
 
 export function gradingEditorVersion(response: GradingSetupResponse | undefined) {
   if (!response) return "";
-  return draftFingerprint({ setup: response.grading_setup ?? response.suggested_setup,
+  // Before the first save, the backend derives this suggestion from attachments.
+  // Attaching/removing a document does not edit the persisted grading settings.
+  const setup = response.grading_setup ?? { ...response.suggested_setup, knowledge_scope: "none" };
+  return draftFingerprint({ setup,
     experts: response.available_experts.map(expert => ({ id: expert.provider_id, model: expert.model, type: expert.provider_type, enabled: expert.enabled, shared: expert.is_shared })).sort((a, b) => a.id.localeCompare(b.id)),
   });
 }
