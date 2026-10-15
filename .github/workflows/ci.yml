@@ -164,8 +164,16 @@ jobs:
         run: npm test
       - name: Production build
         run: npm run build
-      - name: Private administrator build
-        run: npm run build:admin
+      - name: Private administrator build (isolated deployment directory)
+        run: |
+          # AWS builds this directory alone; sibling backend files are unavailable.
+          build_dir="$(mktemp -d)"
+          trap 'rm -rf -- "$build_dir"' EXIT
+          git -C ../.. archive HEAD:frontend/app | tar -x -C "$build_dir"
+          ln -s "$PWD/node_modules" "$build_dir/node_modules"
+          cd "$build_dir"
+          VITE_SMARTAI_BACKEND_URL=/api npm run build:admin
+          test -f dist-admin/admin.html
 
   e2e:
     name: E2E (Playwright)

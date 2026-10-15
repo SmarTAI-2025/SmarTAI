@@ -7,7 +7,7 @@ import pytest
 from backend.domain.grading_review import review_state
 from backend.services.result_artifacts import build_artifact_files
 
-CONTRACT = json.loads((Path(__file__).parent / "fixtures/report_review_contract.json").read_text())
+CONTRACT = json.loads((Path(__file__).resolve().parents[2] / "frontend/app/src/test/fixtures/report_review_contract.json").read_text())
 
 
 @pytest.mark.parametrize("case", CONTRACT["cases"], ids=lambda case: case["name"])
