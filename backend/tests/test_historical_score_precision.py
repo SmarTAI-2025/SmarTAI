@@ -66,7 +66,7 @@ def test_historical_ai_scores_share_precision_across_results_statistics_and_expo
     } == expected
 
     state = task_facade.finalization(**task_args)
-    task_facade.confirm_finalization(
+    task_facade.generate_artifacts(
         **task_args, expected_revision=state["workflow_revision"],
     )
     snapshot = task_facade.result_snapshot(**task_args, result_version=1)

@@ -181,7 +181,7 @@ def test_missing_ai_score_repair_still_requires_explicit_confirmation():
     assert pending["ready_for_confirmation"] is False
     assert pending["remaining_review_count"] == 1
     with pytest.raises(ResultNotReleasable):
-        task_facade.confirm_finalization(**args, expected_revision=pending["workflow_revision"])
+        task_facade.generate_artifacts(**args, expected_revision=pending["workflow_revision"])
     assert grading_repository.get_run(seeded["run_id"], actor_id=seeded["owner_id"]).released_at is None
     grading_repository.add_teacher_review(
         seeded["required_result_id"], teacher_id=seeded["owner_id"],
@@ -190,7 +190,7 @@ def test_missing_ai_score_repair_still_requires_explicit_confirmation():
     confirmed = task_facade.finalization(**args)
     assert confirmed["ready_for_confirmation"] is True
     assert confirmed["remaining_review_count"] == 0
-    task_facade.confirm_finalization(**args, expected_revision=confirmed["workflow_revision"])
+    task_facade.generate_artifacts(**args, expected_revision=confirmed["workflow_revision"])
     assert grading_repository.get_run(seeded["run_id"], actor_id=seeded["owner_id"]).released_at is not None
 
 
@@ -198,7 +198,7 @@ def test_soft_review_ai_score_is_publishable_and_exported_by_default():
     from backend.services import task_facade
 
     seeded = _prepared_task()
-    final = task_facade.confirm_finalization(
+    final = task_facade.generate_artifacts(
         task_id=seeded["task_id"],
         owner_id=seeded["owner_id"],
         expected_revision=0,
@@ -219,12 +219,6 @@ def test_soft_review_ai_score_is_publishable_and_exported_by_default():
     assert by_question["q-required"]["teacher_score"] is None
     assert by_question["q-required"]["review_status"] == "pending"
 
-    generated = task_facade.generate_artifacts(
-        task_id=seeded["task_id"],
-        owner_id=seeded["owner_id"],
-        expected_revision=1,
-    )
-    assert generated["status"] == "ok"
     body, media_type, _filename = task_facade.artifact_bytes(
         task_id=seeded["task_id"],
         owner_id=seeded["owner_id"],
@@ -268,12 +262,12 @@ def test_finalization_artifacts_and_dirty_state_are_idempotent():
         new_comment="confirmed",
         confirm=True,
     )
-    first = task_facade.confirm_finalization(
+    first = task_facade.generate_artifacts(
         task_id=seeded["task_id"],
         owner_id=seeded["owner_id"],
         expected_revision=0,
     )
-    replay = task_facade.confirm_finalization(
+    replay = task_facade.generate_artifacts(
         task_id=seeded["task_id"],
         owner_id=seeded["owner_id"],
         expected_revision=0,
@@ -283,20 +277,7 @@ def test_finalization_artifacts_and_dirty_state_are_idempotent():
     assert replay["status"] == "already_done"
     assert replay["workflow_revision"] == first["workflow_revision"] == 1
 
-    generated = task_facade.generate_artifacts(
-        task_id=seeded["task_id"],
-        owner_id=seeded["owner_id"],
-        expected_revision=1,
-    )
-    generated_replay = task_facade.generate_artifacts(
-        task_id=seeded["task_id"],
-        owner_id=seeded["owner_id"],
-        expected_revision=1,
-    )
-    assert generated["status"] == "ok"
-    assert generated["artifacts"]["versions"][0]["status"] == "ready"
-    assert generated_replay["status"] == "already_done"
-    assert generated_replay["workflow_revision"] == generated["workflow_revision"] == 2
+    assert first["artifacts"]["versions"][0]["status"] == "ready"
 
     bundle, media_type, filename = task_facade.artifact_bytes(
         task_id=seeded["task_id"],
@@ -316,9 +297,9 @@ def test_finalization_artifacts_and_dirty_state_are_idempotent():
         teacher_score=8.5,
         teacher_comment="new draft",
         confirm=False,
-        expected_revision=2,
+        expected_revision=first["workflow_revision"],
     )
-    assert edited["workflow_revision"] == 3
+    assert edited["workflow_revision"] == 2
     stale_index = task_facade.artifact_index(
         task_id=seeded["task_id"], owner_id=seeded["owner_id"],
     )
@@ -336,9 +317,13 @@ def test_paused_json_exports_keep_new_and_legacy_reports_downloadable(monkeypatc
 
     seeded = _prepared_task()
     args = {"task_id": seeded["task_id"], "owner_id": seeded["owner_id"]}
-    task_facade.confirm_finalization(**args, expected_revision=0)
     monkeypatch.setattr(result_artifacts, "JSON_EXPORT_ENABLED", legacy_json)
-    generated = task_facade.generate_artifacts(**args, expected_revision=1)
+    with monkeypatch.context() as renderer:
+        if legacy_json:
+            renderer.setattr(task_facade, "ARTIFACT_SCHEMA_VERSION", 1)
+            renderer.setattr(task_facade, "build_artifact_manifest", lambda **kwargs:
+                result_artifacts.build_artifact_manifest(**kwargs, schema_version=1))
+        generated = task_facade.generate_artifacts(**args, expected_revision=0)
     original_files = generated["artifacts"]["versions"][0]["files"]
     assert len(original_files) == (5 if legacy_json else 4)
     monkeypatch.setattr(result_artifacts, "JSON_EXPORT_ENABLED", False)
@@ -350,9 +335,9 @@ def test_paused_json_exports_keep_new_and_legacy_reports_downloadable(monkeypatc
         return original_dumps(value, *args, **kwargs)
 
     monkeypatch.setattr(result_artifacts.json, "dumps", reject_json_export)
-    replay = task_facade.generate_artifacts(**args, expected_revision=2)
-    assert replay["status"] == "already_done"
-    files = replay["artifacts"]["versions"][0]["files"]
+    index = task_facade.artifact_index(**args)
+    assert index["versions"][0]["status"] == ("stale" if legacy_json else "ready")
+    files = index["versions"][0]["files"]
     assert {item["artifact_id"] for item in files} == {
         "grades_csv", "learning_report_md", "published_answers_md", "published_answers_tex",
     }
@@ -366,6 +351,14 @@ def test_paused_json_exports_keep_new_and_legacy_reports_downloadable(monkeypatc
             content = task_facade.artifact_bytes(**args, version=1, artifact_id=item["artifact_id"])[0]
             assert archive.read(item["filename"]) == content
             assert hashlib.sha256(content).hexdigest() == item["sha256"]
+
+    # An old template stays downloadable in history, but cannot be reused as
+    # the latest report. A repeated request for the current template is a replay.
+    regenerated = task_facade.generate_artifacts(**args, expected_revision=1)
+    assert regenerated["status"] == ("ok" if legacy_json else "already_done")
+    assert regenerated["final_result_version"] == (2 if legacy_json else 1)
+    assert task_facade.generate_artifacts(**args, expected_revision=1)["status"] == "already_done"
+    assert task_facade.artifact_bytes(**args, version=1, artifact_id="bundle")[0] == bundle
 
 
 @pytest.mark.parametrize("field,error_code", [
@@ -384,7 +377,7 @@ def test_paused_json_exports_preserve_download_integrity_checks(field, error_cod
 
     seeded = _prepared_task()
     args = {"task_id": seeded["task_id"], "owner_id": seeded["owner_id"]}
-    task_facade.confirm_finalization(**args, expected_revision=0)
+    task_facade.generate_artifacts(**args, expected_revision=0)
     task_facade.generate_artifacts(**args, expected_revision=1)
     with session_scope() as session:
         record = session.scalar(select(ResultArtifactManifestRecord).where(
@@ -404,7 +397,7 @@ def test_upstream_answer_edit_marks_detached_formal_result_and_artifacts_stale()
     from backend.services import task_facade
 
     seeded = _prepared_task()
-    task_facade.confirm_finalization(
+    task_facade.generate_artifacts(
         task_id=seeded["task_id"],
         owner_id=seeded["owner_id"],
         expected_revision=0,
@@ -452,8 +445,7 @@ def test_history_download_and_delete_preserve_scores_and_latest_report(generate_
 
     seeded = _prepared_task()
     args = {"task_id": seeded["task_id"], "owner_id": seeded["owner_id"]}
-    task_facade.confirm_finalization(**args, expected_revision=0)
-    task_facade.generate_artifacts(**args, expected_revision=1)
+    task_facade.generate_artifacts(**args, expected_revision=0)
     client = TestClient(app)
     base = f"/tasks/{seeded['task_id']}/artifacts"
     headers = {"Authorization": "Bearer " + create_token(seeded["owner_id"], "teacher")}
@@ -467,17 +459,17 @@ def test_history_download_and_delete_preserve_scores_and_latest_report(generate_
 
     edited = task_facade.update_correction_review(
         **args, display_student_id=seeded["student_id"], q_id="q-optional",
-        teacher_score=8.5, teacher_comment="keep this review", confirm=True, expected_revision=2,
+        teacher_score=8.5, teacher_comment="keep this review", confirm=True, expected_revision=1,
     )
     # A stale deletion decision must not race a workflow change.
     with pytest.raises(VersionConflict):
         workflow_repository.delete_artifact_manifest_atomic(
             assignment_id=seeded["task_id"], owner_id=seeded["owner_id"],
-            result_version=1, expected_revision=2,
+            result_version=1, expected_revision=1,
         )
     latest = None
     if generate_latest:
-        prepared = task_facade.confirm_finalization(**args, expected_revision=edited["workflow_revision"])
+        prepared = task_facade.generate_artifacts(**args, expected_revision=edited["workflow_revision"])
         task_facade.generate_artifacts(**args, expected_revision=prepared["workflow_revision"])
         latest = client.get(base + "/2/bundle", headers=headers).content
         assert latest.startswith(b"PK") and latest != original
@@ -493,31 +485,37 @@ def test_history_download_and_delete_preserve_scores_and_latest_report(generate_
         assert client.get(base + "/2/bundle", headers=headers).content == latest
     else:
         # Deleting the last historical report does not block new generation.
-        prepared = task_facade.confirm_finalization(**args, expected_revision=edited["workflow_revision"])
+        prepared = task_facade.generate_artifacts(**args, expected_revision=edited["workflow_revision"])
         generated = task_facade.generate_artifacts(**args, expected_revision=prepared["workflow_revision"])
         assert generated["artifacts"]["versions"][0]["version"] == 2
 
 
 @pytest.mark.parametrize("generated_first", [False, True])
-def test_unexported_snapshots_do_not_consume_report_versions(generated_first):
+def test_legacy_unexported_snapshots_do_not_consume_report_versions(generated_first):
+    from backend.db import workflow_repository
+    from backend.db.models import GradingRunRecord
+    from backend.db.session import session_scope
     from backend.services import task_facade
 
     seeded = _prepared_task()
     args = {"task_id": seeded["task_id"], "owner_id": seeded["owner_id"]}
-    state = task_facade.confirm_finalization(**args, expected_revision=0)
     if generated_first:
-        state = task_facade.generate_artifacts(**args, expected_revision=state["workflow_revision"])
-    expected_version = 2 if generated_first else 1
-    # Covers an old navigation-created snapshot and retries after a snapshot
-    # was saved but file generation never completed.
-    for score in (8, 7):
-        state = task_facade.update_correction_review(
+        state = task_facade.generate_artifacts(**args, expected_revision=0)
+        task_facade.update_correction_review(
             **args, display_student_id=seeded["student_id"], q_id="q-optional",
-            teacher_score=score, teacher_comment="", confirm=True,
+            teacher_score=8, teacher_comment="", confirm=True,
             expected_revision=state["workflow_revision"],
         )
-        state = task_facade.confirm_finalization(**args, expected_revision=state["workflow_revision"])
-        assert state["final_result_version"] == expected_version
+    # Reproduce an old snapshot directly; the retired API can no longer create it.
+    with session_scope() as session:
+        workflow = session.get(workflow_repository.AssignmentWorkflowRecord, seeded["task_id"])
+        run = session.get(GradingRunRecord, workflow.grading_job_id or seeded["run_id"])
+        run.released_at = 1234.5
+        workflow.final_result_version = 8
+        workflow.final_result_updated_at = run.released_at
+        workflow.presentation_status = "finalized"
+    state = task_facade.finalization(**args)
+    expected_version = 2 if generated_first else 1
     generated = task_facade.generate_artifacts(**args, expected_revision=state["workflow_revision"])
     current = next(item for item in generated["artifacts"]["versions"] if item["current"])
     assert current["version"] == expected_version
@@ -534,7 +532,7 @@ def test_history_deletion_is_owner_scoped():
 
     seeded = _prepared_task()
     args = {"task_id": seeded["task_id"], "owner_id": seeded["owner_id"]}
-    task_facade.confirm_finalization(**args, expected_revision=0)
+    task_facade.generate_artifacts(**args, expected_revision=0)
     task_facade.generate_artifacts(**args, expected_revision=1)
     with pytest.raises(NotFound):
         task_facade.delete_historical_artifact(task_id=seeded["task_id"], owner_id="another-teacher", version=1)

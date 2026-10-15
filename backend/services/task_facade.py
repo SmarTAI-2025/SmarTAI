@@ -86,6 +86,7 @@ from backend.services.background_errors import (
 )
 from backend.services.result_artifacts import (
     ARTIFACT_SCHEMA_VERSION,
+    SUPPORTED_ARTIFACT_SCHEMA_VERSIONS,
     artifact_fingerprint,
     build_artifact_bundle,
     build_artifact_files,
@@ -4996,34 +4997,6 @@ def finalization(*, task_id: str, owner_id: str) -> dict:
     }
 
 
-def confirm_finalization(
-    *, task_id: str, owner_id: str, expected_revision: int
-) -> dict:
-    workflow = workflow_repository.get_live_workflow(
-        task_id, owner_id=owner_id
-    )
-    runs = grading_repository.list_runs_for_assignment(task_id, actor_id=owner_id)
-    run = _current_grading_run(workflow, runs)
-    if run is None:
-        raise NotFound("grading_run")
-    if any(_correction_review_blocks_finalization(result)
-           for result in grading_repository.list_results_for_run(run.id)):
-        raise ResultNotReleasable("unresolved_failures")
-    _workflow, _released_at, changed = (
-        workflow_repository.confirm_final_result_atomic(
-            assignment_id=task_id,
-            owner_id=owner_id,
-            grading_run_id=run.id,
-            expected_revision=expected_revision,
-        )
-    )
-    return {
-        "status": "ok" if changed else "already_done",
-        "unchanged": not changed,
-        **finalization(task_id=task_id, owner_id=owner_id),
-    }
-
-
 def _run_snapshot_payload(*, task_id: str, owner_id: str, run_id: str) -> dict:
     run = grading_repository.get_run(run_id, actor_id=owner_id)
     if run.assignment_id != task_id:
@@ -5173,48 +5146,32 @@ def result_snapshot(
 def generate_artifacts(
     *, task_id: str, owner_id: str, expected_revision: int
 ) -> dict:
-    workflow = workflow_repository.get_live_workflow(
-        task_id, owner_id=owner_id
-    )
+    workflow = workflow_repository.get_live_workflow(task_id, owner_id=owner_id)
     runs = grading_repository.list_runs_for_assignment(task_id, actor_id=owner_id)
     run = _current_grading_run(workflow, runs)
-    if run is None or run.released_at is None:
-        raise InvalidTransition("result_not_finalized")
-    if workflow.workflow_revision != expected_revision:
-        # An exact replay is accepted by the atomic persistence operation; a
-        # stale request with no existing artifact still fails there.
-        existing = workflow_repository.list_artifact_manifests(
-            task_id, owner_id=owner_id
-        )
-        if not any(
-            item.result_version == workflow.final_result_version
-            and item.grading_run_id == run.id
-            for item in existing
-        ):
-            raise VersionConflict("workflow_revision_conflict")
-    version = workflow.final_result_version
-    if version <= 0:
-        raise InvalidTransition("result_not_finalized")
-    snapshot = result_snapshot(
-        task_id=task_id, owner_id=owner_id, result_version=version,
-        grading_run_id=run.id,
-    )
-    task = get_task(task_id=task_id, owner_id=owner_id, full=False)
-    generated_at = time.time()
-    manifest = build_artifact_manifest(
-        task_id=task_id, task_name=task["name"], snapshot=snapshot,
-        generated_at=generated_at,
-    )
-    record, created, _updated_workflow = (
-        workflow_repository.save_artifact_manifest_atomic(
-            assignment_id=task_id,
+    if run is None:
+        raise NotFound("grading_run")
+
+    def render_manifest(version: int, released_at: float, task_name: str) -> dict:
+        # Called under the run/workflow locks before either snapshot or report
+        # metadata is written. No provider calls, storage writes or mutations.
+        if any(_correction_review_blocks_finalization(result)
+               for result in grading_repository.list_results_for_run(run.id)):
+            raise ResultNotReleasable("unresolved_failures")
+        snapshot = result_snapshot(
+            task_id=task_id, owner_id=owner_id, result_version=version,
             grading_run_id=run.id,
-            owner_id=owner_id,
-            result_version=version,
-            result_fingerprint=snapshot["fingerprint"],
-            manifest=manifest,
-            expected_revision=expected_revision,
         )
+        snapshot["created_at"] = released_at
+        return build_artifact_manifest(
+            task_id=task_id, task_name=task_name, snapshot=snapshot,
+            generated_at=time.time(),
+        )
+
+    _workflow, _record, created = workflow_repository.generate_result_artifacts_atomic(
+        assignment_id=task_id, grading_run_id=run.id, owner_id=owner_id,
+        expected_revision=expected_revision, render_manifest=render_manifest,
+        artifact_schema_version=ARTIFACT_SCHEMA_VERSION,
     )
     return {
         "status": "ok" if created else "already_done",
@@ -5240,7 +5197,8 @@ def artifact_index(*, task_id: str, owner_id: str) -> dict:
             "status": (
                 "stale"
                 if record.result_version == current
-                and (workflow.analysis_status == "stale" or final_result_dirty)
+                and (workflow.analysis_status == "stale" or final_result_dirty
+                     or record.manifest.get("schema_version") != ARTIFACT_SCHEMA_VERSION)
                 else (
                     "ready"
                     if record.result_version == current
@@ -5267,7 +5225,10 @@ def artifact_index(*, task_id: str, owner_id: str) -> dict:
         })
     return {
         "task_id": task_id, "current_result_version": current,
-        "analysis_status": workflow.analysis_status,
+        "analysis_status": (
+            "stale" if any(item["current"] and item["status"] == "stale" for item in versions)
+            else workflow.analysis_status
+        ),
         "analysis_result_version": workflow.analysis_result_version,
         "versions": versions,
     }
@@ -5303,7 +5264,8 @@ def artifact_bytes(
     )
     if snapshot["fingerprint"] != record.result_fingerprint:
         raise VersionConflict("artifact_source_changed")
-    if record.manifest.get("schema_version") != ARTIFACT_SCHEMA_VERSION:
+    schema_version = record.manifest.get("schema_version")
+    if schema_version not in SUPPORTED_ARTIFACT_SCHEMA_VERSIONS:
         raise InvalidTransition(
             "Artifact renderer version is unsupported.",
             code="artifact_schema_unsupported",
@@ -5315,7 +5277,7 @@ def artifact_bytes(
         )["name"]
     files = build_artifact_files(
         task_id=task_id, task_name=task_name, snapshot=snapshot,
-        generated_at=record.generated_at,
+        generated_at=record.generated_at, schema_version=schema_version,
     )
     expected_files = {
         str(item.get("artifact_id")): item
@@ -5336,7 +5298,7 @@ def artifact_bytes(
         task_id=task_id,
         task_name=task_name,
         snapshot=snapshot,
-        generated_at=record.generated_at,
+        generated_at=record.generated_at, schema_version=schema_version,
         files=record.manifest.get("files", []),
     )
     if (

@@ -14,7 +14,7 @@ import {
 import { useState } from "react";
 import { Link } from "react-router-dom";
 import { getTaskResultArtifactBlob } from "@/api/tasks";
-import { useConfirmTaskFinalization, useDeleteTaskResultArtifact, useGenerateTaskResultArtifacts, useTaskResultArtifacts } from "@/api/hooks/tasks";
+import { useDeleteTaskResultArtifact, useGenerateTaskResultArtifacts, useTaskResultArtifacts } from "@/api/hooks/tasks";
 import { normalizeAPIError } from "@/api/client";
 import { RecoverableActionState } from "@/components/ui/RecoverableActionState";
 import type { Locale } from "@/i18n/messages";
@@ -44,7 +44,6 @@ export function ReportsDownloadsPage({
   finalization: TaskFinalizationResponse;
 }) {
   const artifactsQuery = useTaskResultArtifacts(taskId);
-  const prepareSnapshot = useConfirmTaskFinalization();
   const generateMutation = useGenerateTaskResultArtifacts();
   const deleteMutation = useDeleteTaskResultArtifact();
   const [downloading, setDownloading] = useState<string | null>(null);
@@ -68,16 +67,12 @@ export function ReportsDownloadsPage({
     status: current?.status,
     fileCount: current?.files.length ?? 0,
   });
-  const generating = prepareSnapshot.isPending || generateMutation.isPending;
+  const generating = generateMutation.isPending;
 
   const generate = async () => {
     setGenerateFailure(null);
     try {
-      // Snapshot only for an explicit file-generation request, never for navigation.
-      const prepared = finalization.final_result_version === 0 || stale
-        ? await prepareSnapshot.mutateAsync({ taskId, expectedWorkflowRevision: finalization.workflow_revision })
-        : finalization;
-      const result = await generateMutation.mutateAsync({ taskId, expectedWorkflowRevision: prepared.workflow_revision });
+      const result = await generateMutation.mutateAsync({ taskId, expectedWorkflowRevision: finalization.workflow_revision });
       toast.success(result.unchanged ? tx(locale, "当前版本已是最新", "Current version is already up to date") : tx(locale, "本版报告已生成", "Reports generated for this version"));
     } catch (error) {
       setGenerateFailure(error);
