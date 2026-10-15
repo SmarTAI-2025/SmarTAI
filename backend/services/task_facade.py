@@ -44,12 +44,14 @@ from backend.db import (
 from backend.db.models import (
     AssignmentQuestionRecord,
     AssignmentRecord,
+    AssignmentTagRecord,
     CourseRecord,
     GradingRunRecord,
     SubmissionAnswerRecord,
     SubmissionRecord,
     SubmissionRevisionRecord,
     UserRecord,
+    TagRecord,
 )
 from backend.db.file_repository import get_file
 from backend.db.session import session_scope
@@ -223,8 +225,9 @@ def update_task(
     *, task_id: str, owner_id: str, name: str | None = None,
     semester_id: str | None | object = ..., course_id: str | None | object = ...,
     tag_ids: list[str] | None = None,
+    expected_metadata: dict | None = None,
 ) -> dict:
-    assignment = assignment_repository.get_assignment(task_id, actor_id=owner_id)
+    assignment_repository.get_assignment(task_id, actor_id=owner_id)
     changes: dict[str, Any] = {}
     if name is not None:
         normalized_name = name.strip()
@@ -235,30 +238,57 @@ def update_task(
         resolved_course = course_id or _ensure_system_course(owner_id)
         course_repository.get_course(resolved_course, actor_id=owner_id)
         changes["course_id"] = resolved_course
-    if changes:
-        with session_scope() as session:
-            row = session.scalar(select(AssignmentRecord).where(
-                AssignmentRecord.id == task_id,
-                AssignmentRecord.teacher_id == owner_id,
-                AssignmentRecord.deletion_requested_at.is_(None),
-            ).with_for_update())
-            if row is None:
-                raise NotFound("assignment")
-            for key, value in changes.items():
-                setattr(row, key, value)
-            row.version += 1
-            row.updated_at = time.time()
-    workflow_changes: dict[str, Any] = {}
-    if semester_id is not ...:
-        workflow_changes["semester_id"] = semester_id
-    # Assignment metadata is independent from the grading workflow.  In
-    # particular, renaming a task must not make an in-flight OCR job stale.
-    if workflow_changes:
-        workflow_repository.update_workflow(
-            task_id, owner_id=owner_id, **workflow_changes
-        )
-    if tag_ids is not None:
-        _set_task_tags(task_id, owner_id, tag_ids)
+    with session_scope() as session:
+        # SQLite has no SELECT FOR UPDATE. Serialize this small metadata write
+        # before reading the baseline, as the row lock does on PostgreSQL.
+        if session.get_bind().dialect.name == "sqlite":
+            session.connection().exec_driver_sql("BEGIN IMMEDIATE")
+        row = session.scalar(select(AssignmentRecord).where(
+            AssignmentRecord.id == task_id,
+            AssignmentRecord.teacher_id == owner_id,
+            AssignmentRecord.deletion_requested_at.is_(None),
+        ).with_for_update())
+        if row is None:
+            raise NotFound("assignment")
+        workflow = session.scalar(select(workflow_repository.AssignmentWorkflowRecord).where(
+            workflow_repository.AssignmentWorkflowRecord.assignment_id == task_id,
+            workflow_repository.AssignmentWorkflowRecord.owner_id == owner_id,
+        ).with_for_update())
+        if workflow is None:
+            raise NotFound("workflow")
+        current_tags = sorted(session.scalars(select(AssignmentTagRecord.tag_id).where(
+            AssignmentTagRecord.assignment_id == task_id,
+        )))
+        course = session.get(CourseRecord, row.course_id)
+        current = dict(name=row.name, semester_id=workflow.semester_id,
+                       course_id=None if course.code == SYSTEM_COURSE_CODE else row.course_id,
+                       tag_ids=current_tags)
+        touched = set(changes)
+        if semester_id is not ...:
+            touched.add("semester_id")
+        if tag_ids is not None:
+            touched.add("tag_ids")
+        if expected_metadata is not None:
+            expected = {**expected_metadata, "tag_ids": sorted(set(expected_metadata["tag_ids"]))}
+            if any(expected.get(key) != current[key] for key in touched):
+                raise VersionConflict("Task details changed. Review the latest values before saving.", code="task_metadata_conflict")
+        if tag_ids is not None:
+            unique_tags = sorted(set(tag_ids))
+            valid = set(session.scalars(select(TagRecord.id).where(
+                TagRecord.owner_id == owner_id, TagRecord.id.in_(unique_tags),
+            )))
+            if valid != set(unique_tags):
+                raise ValidationError("tags_unavailable")
+            session.execute(delete(AssignmentTagRecord).where(AssignmentTagRecord.assignment_id == task_id))
+            session.add_all([AssignmentTagRecord(assignment_id=task_id, tag_id=tag_id, assigned_at=time.time()) for tag_id in unique_tags])
+        for key, value in changes.items():
+            setattr(row, key, value)
+        if semester_id is not ...:
+            workflow.semester_id = semester_id
+            workflow.updated_at = time.time()
+        # Metadata must not invalidate running recognition or grading work.
+        row.version += 1
+        row.updated_at = time.time()
     return get_task(task_id=task_id, owner_id=owner_id, full=False)
 
 

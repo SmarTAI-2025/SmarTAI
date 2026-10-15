@@ -66,10 +66,15 @@ export async function clearPageDrafts() {
     tx.objectStore("drafts").clear(); tx.objectStore("meta").put(crypto.randomUUID(), "epoch"); await done;
   } catch { /* Unavailable persistence cannot prevent logout; ownership still prevents disclosure. */ }
 }
-export async function removePageDraft(owner: string, scope: string) {
+export async function removePageDraft(owner: string, scope: string, expectedRevision?: string | null) {
   const db = await database(); const tx = db.transaction(["drafts", "meta"], "readwrite"); const done = complete(tx);
   const epoch = await request(tx.objectStore("meta").get("epoch")) ?? "initial";
   const key = draftKey(owner, scope);
+  if (expectedRevision !== undefined) {
+    const existing = await request<DraftRecord | undefined>(tx.objectStore("drafts").get(key));
+    // A different tab may have saved newer, unsubmitted work during submission.
+    if ((existing?.revision ?? null) !== expectedRevision) { await done; return; }
+  }
   // Tombstones invalidate writers already running in any tab.
   tx.objectStore("drafts").put({ key, version: 2, owner, scope, epoch, revision: crypto.randomUUID(), deleted: true, savedAt: Date.now(), expires: Date.now() + PAGE_DRAFT_TTL, bytes: 0, files: [], data: null, businessVersion: "" } satisfies DraftRecord);
   await done; announce({ type: "write", key });
@@ -165,9 +170,14 @@ export function objectDraftCodec<T extends object>(shape?: T): DraftCodec<T> {
   return { encode: (value) => JSON.parse(JSON.stringify(value, (_key, item: unknown) => item instanceof Blob ? null : item)), decode: (value) => value && typeof value === "object" && !Array.isArray(value) && (!shape || valid(value, shape)) ? value as T : null };
 }
 
-export async function listPageDrafts(owner: string): Promise<Array<Pick<DraftRecord, "scope" | "savedAt" | "expires" | "bytes">>> {
+export async function listPageDrafts(owner: string): Promise<Array<Pick<DraftRecord, "scope" | "savedAt" | "expires" | "bytes"> & { title?: string }>> {
   const db = await database(); const tx = db.transaction(["drafts", "meta"], "readonly"); const done = complete(tx);
   const rows = await request<DraftRecord[]>(tx.objectStore("drafts").getAll());
   const epoch = await request(tx.objectStore("meta").get("epoch")) ?? "initial"; await done;
-  return rows.filter((row) => row.owner === owner && row.epoch === epoch && row.version === 2 && !row.deleted && row.expires > Date.now()).map(({ scope, savedAt, expires, bytes }) => ({ scope, savedAt, expires, bytes }));
+  return rows.filter((row) => row.owner === owner && row.epoch === epoch && row.version === 2 && !row.deleted && row.expires > Date.now()).map(({ scope, savedAt, expires, bytes, data }) => {
+    const kind = scope.split(":")[0];
+    const fields = data && typeof data === "object" ? data as Record<string, unknown> : {};
+    const label = ["new-task", "metadata", "library-group"].includes(kind) ? fields.name : kind === "library-material" ? fields.filename : undefined;
+    return { scope, savedAt, expires, bytes, ...(typeof label === "string" && label.trim() ? { title: label.trim().slice(0, 512) } : {}) };
+  });
 }

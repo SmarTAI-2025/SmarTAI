@@ -20,7 +20,10 @@ for (const width of [1440, 390]) {
       grading_setup: saved, suggested_setup: { ...defaults, knowledge_scope: docs.length ? "all_task_docs" : "none" },
       grading_setup_fingerprint: saved ? JSON.stringify(saved) : null,
       available_experts: [{ provider_id: "provider-1", provider_type: "openai", model: "example-model", display_name: "Grader", enabled: true,
-        scope: "owner", is_shared: false, editable: true, max_concurrent: 1, rpm: 10 }],
+        scope: "owner", is_shared: false, editable: true, max_concurrent: 1, rpm: 10 },
+        // Every refresh changes this unselected model; it cannot invalidate edits.
+        { provider_id: "unused", provider_type: "openai", model: `unused-${revision}`, display_name: "Other model", enabled: true,
+          scope: "owner", is_shared: false, editable: true, max_concurrent: 1, rpm: 10 }],
       knowledge: { scope_options: ["none", "all_task_docs"], task_doc_count: docs.length, task_docs: docs },
       readiness: { ready: true, blocking_issues: [], warnings: [] },
     });
@@ -38,6 +41,7 @@ for (const width of [1440, 390]) {
       if (path === "/auth/me") return json({ id: "config-teacher", username: "Synthetic teacher", role: "teacher", is_active: true, auth_scope: "user" });
       if (path === "/auth/activity") return json({ token: "synthetic-teacher-token" });
       if (path.startsWith("/experts") || path === "/tags/") return json([]);
+      if (path === "/tasks/") return json({ "config-task": { task_id: "config-task", name: "微积分周测", status: "submissions_ready" } });
       if (path === "/tasks/config-task/grading-setup") {
         if (req.method() === "PUT") {
           const body = req.postDataJSON(); expect(body.expected_workflow_revision).toBe(revision);
@@ -82,6 +86,16 @@ for (const width of [1440, 390]) {
     await expect(slider).toHaveValue("70");
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1)).toBe(true);
     await page.screenshot({ path: testInfo.outputPath("materials-removed-drafted.png"), fullPage: true });
+    await page.goto("/history?view=drafts");
+    const openDraft = page.getByRole("link", { name: "打开草稿 · 微积分周测 · 批改设置" });
+    await expect(openDraft).toBeVisible();
+    await expect(page.getByText(/暂存于/)).toBeVisible();
+    await expect(page.getByText(/config-task/)).toHaveCount(0);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1)).toBe(true);
+    await page.screenshot({ path: testInfo.outputPath("readable-draft-list.png"), fullPage: true });
+    await openDraft.click();
+    await expect(slider).toHaveValue("70");
+    await expect(conflicts).toHaveCount(0);
     let release!: () => void;
     taskRefresh = new Promise(resolve => { release = resolve; });
     try {

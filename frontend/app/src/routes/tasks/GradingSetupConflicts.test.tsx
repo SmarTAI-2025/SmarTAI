@@ -30,6 +30,8 @@ let docs: typeof document[];
 let saved: GradingSetup | null;
 let revision: number;
 let model: string;
+let enabled: boolean;
+let otherModel: string | null;
 let refreshGate: Promise<void> | undefined;
 const setupUrl = "/tasks/task-1/grading-setup";
 const response = (): GradingSetupResponse => ({
@@ -38,7 +40,7 @@ const response = (): GradingSetupResponse => ({
   // Match the backend: suggestions change with attachments before the first save.
   suggested_setup: { ...defaults, knowledge_scope: docs.length ? "all_task_docs" : "none" },
   grading_setup_fingerprint: saved ? JSON.stringify(saved) : null, grading_setup_updated_at: saved ? 1 : null,
-  available_experts: [{ provider_id: "provider-1", provider_type: "gemini", model, display_name: "Grader", enabled: true, scope: "owner", is_shared: false, editable: true, max_concurrent: 1, rpm: 10 }],
+  available_experts: [{ provider_id: "provider-1", provider_type: "gemini", model, display_name: "Grader", enabled, scope: "owner", is_shared: false, editable: true, max_concurrent: 1, rpm: 10 }, ...(otherModel ? [{ provider_id: "provider-2", provider_type: "gemini" as const, model: otherModel, display_name: "Other model", enabled: true, scope: "owner" as const, is_shared: false, editable: true, max_concurrent: 1, rpm: 10 }] : [])],
   knowledge: { scope_options: ["none", "all_task_docs"], task_doc_count: docs.length, task_docs: docs },
   readiness: { ready: true, blocking_issues: [], warnings: [] },
 });
@@ -46,7 +48,7 @@ const response = (): GradingSetupResponse => ({
 beforeEach(async () => {
   vi.clearAllMocks();
   await clearPageDrafts();
-  docs = []; saved = null; revision = 7; model = "example-model"; refreshGate = undefined;
+  docs = []; saved = null; revision = 7; model = "example-model"; enabled = true; otherModel = null; refreshGate = undefined;
   vi.mocked(getJSON).mockImplementation(async (url) => {
     if (url === setupUrl) return structuredClone(response()) as never;
     if (url === "/tasks/task-1/kb") return { docs: structuredClone(docs) } as never;
@@ -136,14 +138,13 @@ it.each([false, true])("does not report its own save as a conflict (configured=%
   expect(putJSON).toHaveBeenCalledTimes(2);
 });
 
-it.each(["setting", "model"])("still protects a concurrent %s change until the teacher resolves it", async (change) => {
+it("still protects a concurrent task setting change until the teacher resolves it", async () => {
   saved = { ...defaults };
   const { user, client } = openEditor();
   const slider = await screen.findByRole("slider");
   await waitFor(() => expect(screen.getByRole("button", { name: "暂存" })).toBeEnabled());
   fireEvent.change(slider, { target: { value: "70" } });
-  if (change === "setting") saved = { ...defaults, strictness: 20 };
-  else model = "changed-model";
+  saved = { ...defaults, strictness: 20 };
   revision++;
   await act(async () => { await client.invalidateQueries({ queryKey: gradingSetupKeys.detail("task-1") }); });
   await screen.findByText(/服务器业务版本已变化/);
@@ -156,6 +157,41 @@ it.each(["setting", "model"])("still protects a concurrent %s change until the t
   await user.click(screen.getByRole("button", { name: "保存并查看批改摘要" }));
   await screen.findByText("Grading summary");
   expect(saved?.strictness).toBe(70);
+});
+
+it.each(["add", "change", "remove"])("ignores an unselected model %s while preserving drafts and submission", async action => {
+  saved = { ...defaults };
+  if (action !== "add") otherModel = "unused";
+  const { user, client } = openEditor();
+  const slider = await screen.findByRole("slider");
+  await waitFor(() => expect(screen.getByRole("button", { name: "暂存" })).toBeEnabled());
+  fireEvent.change(slider, { target: { value: "70" } });
+  otherModel = action === "remove" ? null : "unused-changed";
+  await act(async () => { await client.invalidateQueries({ queryKey: gradingSetupKeys.detail("task-1") }); });
+  expect(screen.queryAllByText(/任务或模型配置已更新|服务器业务版本已变化/)).toHaveLength(0);
+  expect(slider).toHaveValue("70");
+  await user.click(screen.getByRole("button", { name: "暂存" }));
+  await screen.findByText(/已暂存 ·/);
+  await user.click(screen.getByRole("button", { name: "保存并查看批改摘要" }));
+  await screen.findByText("Grading summary");
+  expect(saved?.selected_provider_ids).toEqual(["provider-1"]);
+});
+
+it("blocks an unavailable selected model with validation, without a false draft conflict", async () => {
+  saved = { ...defaults };
+  const { user, client } = openEditor();
+  const slider = await screen.findByRole("slider");
+  await waitFor(() => expect(screen.getByRole("button", { name: "暂存" })).toBeEnabled());
+  fireEvent.change(slider, { target: { value: "70" } });
+  enabled = false;
+  await act(async () => { await client.invalidateQueries({ queryKey: gradingSetupKeys.detail("task-1") }); });
+  expect(screen.queryAllByText(/服务器业务版本已变化/)).toHaveLength(0);
+  await user.click(screen.getByRole("button", { name: "暂存" }));
+  await screen.findByText(/已暂存 ·/);
+  await user.click(screen.getByRole("button", { name: "保存并查看批改摘要" }));
+  expect(putJSON).not.toHaveBeenCalled();
+  expect(slider).toHaveValue("70");
+  expect(screen.queryByText("Grading summary")).not.toBeInTheDocument();
 });
 
 it("releases the save guard after a rejected stale write and still requires conflict resolution", async () => {

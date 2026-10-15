@@ -168,6 +168,10 @@ export function useUpdateTask() {
   return useMutation({
     mutationFn: ({ taskId, patch, name }: { taskId: string; patch?: TaskMetadataPatch; name?: string | null }) =>
       tasksApi.updateTask(taskId, patch ?? { name }),
+    onError: (_error, { taskId }) => {
+      queryClient.invalidateQueries({ queryKey: taskKeys.all });
+      queryClient.invalidateQueries({ queryKey: taskKeys.detail(taskId) });
+    },
     onSuccess: (task) => {
       queryClient.invalidateQueries({ queryKey: taskKeys.all });
       queryClient.invalidateQueries({ queryKey: tagKeys.all });

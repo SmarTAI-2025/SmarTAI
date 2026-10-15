@@ -1,6 +1,7 @@
 import { useI18n } from "@/i18n/I18nProvider";
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
+import { listTasks } from "@/api/tasks";
 import { useDraftOwner } from "@/hooks/useDraftProtection";
 import { draftError, listPageDrafts, removePageDraft, subscribeDraftChanges } from "@/lib/pageDraftStore";
 export function draftDestination(scope: string) {
@@ -17,14 +18,15 @@ export function draftDestination(scope: string) {
   const routes: Record<string, string> = { metadata: `${task}/edit`, problems: `${task}/upload/problems`, submissions: `${task}/submissions/upload`, grading: `${task}/grading-setup`, "ai-completion": `${task}/questions/ai-complete`, "material-import": `${task}/questions/import`, "material-review": `${task}/questions/import/review/${encodeURIComponent(objectId ?? "")}`, question: `${task}/questions/${encodeURIComponent(objectId ?? "")}/content`, answers: `${task}/students/${encodeURIComponent(parts.slice(2).join(":"))}`, identity: `${task}/students/${encodeURIComponent(parts.slice(2).join(":"))}?identity=edit`, "results-review": `${task}/review/${encodeURIComponent(parts.slice(2).join(":"))}/all`, charts: `${task}/results/visualizations`, "history-tags": "/history" };
   return routes[kind] ?? null;
 }
-function draftLabel(scope: string, zh: boolean) {
-  const [kind, taskId, objectId, questionId] = scope.split(":").map(part => { try { return decodeURIComponent(part); } catch { return part; } });
+function draftLabel(row: DraftSummary, taskNames: Record<string, string>, zh: boolean) {
+  const [kind, taskId] = row.scope.split(":").map(part => { try { return decodeURIComponent(part); } catch { return part; } });
   const names: Record<string, [string, string]> = {
     "new-task": ["新建任务", "New task"], metadata: ["任务信息", "Task details"], problems: ["题目文件", "Question sources"], submissions: ["学生作答上传", "Submission upload"], grading: ["批改设置", "Grading setup"], question: ["题目资料编辑", "Question materials"], answers: ["学生作答编辑", "Student answer"], identity: ["学生身份", "Student identity"], "results-review": ["教师改分与评语", "Teacher review"], "material-import": ["资料导入", "Material import"], "material-review": ["资料导入核对", "Import review"], "ai-completion": ["AI 补全选项", "AI completion options"], charts: ["图表分析", "Chart analysis"], "history-tags": ["任务标签", "Task tags"], "library-upload": ["资料库上传", "Library upload"], "library-group": ["资料分组", "Library group"], "library-material": ["资料信息", "Material details"], "admin-config": ["管理业务设置", "Administrative settings"],
   };
   const title = names[kind]?.[zh ? 0 : 1] ?? (zh ? "业务草稿" : "Business draft");
-  if (!taskId || taskId === "new") return title;
-  return [title, taskId.slice(-12), objectId, ["answers", "results-review"].includes(kind) ? questionId : null].filter(Boolean).join(" · ");
+  if (!taskId || kind.startsWith("library-") || kind === "admin-config") return [row.title, title].filter(Boolean).join(" · ");
+  const taskName = taskNames[taskId] || row.title || (zh ? "任务名称暂不可用" : "Task name unavailable");
+  return `${taskName} · ${title}`;
 }
 const EXPIRING_SOON_MS = 2 * 24 * 60 * 60 * 1000;
 type DraftSummary = Awaited<ReturnType<typeof listPageDrafts>>[number];
@@ -38,26 +40,31 @@ export function LocalDraftManager({ libraryOnly = false, maxItems, showViewAll =
   const { locale, t } = useI18n();
   const zh = locale === "zh-CN";
   const owner = useDraftOwner();
-  const [snapshot, setSnapshot] = useState<{ owner: string | null; rows: DraftSummary[]; error: string; loading: boolean }>({ owner: null, rows: [], error: "", loading: true });
+  const [snapshot, setSnapshot] = useState<{ owner: string | null; rows: DraftSummary[]; taskNames: Record<string, string>; error: string; loading: boolean }>({ owner: null, rows: [], taskNames: {}, error: "", loading: true });
   const [now, setNow] = useState(Date.now);
   useEffect(() => {
     let disposed = false;
     let request = 0;
-    setSnapshot({ owner, rows: [], error: "", loading: Boolean(owner) });
+    setSnapshot({ owner, rows: [], taskNames: {}, error: "", loading: Boolean(owner) });
     function refresh() {
       if (!owner) return;
       const current = ++request;
       void listPageDrafts(owner).then((rows) => {
-        if (!disposed && current === request) setSnapshot({ owner, rows, error: "", loading: false });
+        if (!disposed && current === request) setSnapshot(previous => ({ ...previous, owner, rows, error: "", loading: false }));
       }).catch((failure) => {
-        if (!disposed && current === request) setSnapshot({ owner, rows: [], error: draftError(failure), loading: false });
+        if (!disposed && current === request) setSnapshot({ owner, rows: [], taskNames: {}, error: draftError(failure), loading: false });
       });
+      // Local drafts remain usable offline; name lookup must not delay them.
+      void listTasks().then(tasks => {
+        const taskNames = Object.fromEntries(Object.values(tasks).map(task => [task.task_id, task.name]));
+        if (!disposed && current === request) setSnapshot(previous => ({ ...previous, taskNames }));
+      }).catch(() => {});
     }
     refresh();
     const unsubscribe = subscribeDraftChanges(event => {
       if ((event as CustomEvent<{ type: string }>)?.detail?.type === "clear") {
         request += 1;
-        setSnapshot({ owner, rows: [], error: "", loading: false });
+        setSnapshot({ owner, rows: [], taskNames: {}, error: "", loading: false });
       } else refresh();
     });
     window.addEventListener("focus", refresh);
@@ -97,7 +104,7 @@ export function LocalDraftManager({ libraryOnly = false, maxItems, showViewAll =
       const expiringSoon = row.expires - currentTime <= EXPIRING_SOON_MS;
       return <li key={row.scope} className="flex flex-wrap items-center justify-between gap-3 border-t py-2 text-sm">
         <div className="min-w-0 flex-1 break-words">
-          {destination ? <Link className="text-primary hover:underline" to={destination}>{zh ? "打开草稿" : "Open draft"} · {draftLabel(row.scope, zh)}</Link> : draftLabel(row.scope, zh)}
+          {destination ? <Link className="text-primary hover:underline" to={destination}>{zh ? "打开草稿" : "Open draft"} · {draftLabel(row, snapshot.taskNames, zh)}</Link> : draftLabel(row, snapshot.taskNames, zh)}
           <p className="mt-1 text-xs text-muted-foreground">{zh ? "暂存于 " : "Saved "}{new Date(row.savedAt).toLocaleString(locale)} · {(row.bytes / 1048576).toFixed(2)} MiB</p>
           <p className={`mt-1 text-xs ${expiringSoon ? "font-medium text-amber-700 dark:text-amber-300" : "text-muted-foreground"}`}>
             {expiringSoon ? (zh ? "即将清理 · " : "Expiring soon · ") : null}{zh ? "清理时间：" : "Expires: "}{new Date(row.expires).toLocaleString(locale)}

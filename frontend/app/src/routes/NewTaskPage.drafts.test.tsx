@@ -6,6 +6,8 @@ import { createMemoryRouter, RouterProvider, Outlet } from "react-router-dom";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { PageDraftSession } from "@/hooks/usePageDraft";
 import { clearPageDrafts } from "@/lib/pageDraftStore";
+import * as store from "@/lib/pageDraftStore";
+import { toast } from "sonner";
 import { NewTaskPage } from "./NewTaskPage";
 import { FrontierContext } from "@/lib/frontierContext";
 
@@ -27,7 +29,7 @@ vi.mock("@/api/hooks", () => ({
 }));
 vi.mock("@/components/new-task/NewTaskStepper", () => ({ NewTaskStepper: () => null }));
 vi.mock("@/i18n/I18nProvider", () => ({ useI18n: () => ({ locale: state.locale, t: (key: string) => key }) }));
-vi.mock("sonner", () => ({ toast: { success: vi.fn() } }));
+vi.mock("sonner", () => ({ toast: { success: vi.fn(), warning: vi.fn() } }));
 
 function mount(path = "/tasks/new", frontier = false) {
   const router = createMemoryRouter([{ element: <DraftLeaveProvider><Outlet /><DraftActions /></DraftLeaveProvider>, children: [
@@ -67,6 +69,37 @@ it("restores metadata through BYOK/back/forward and clears it after successful c
   await act(() => router.navigate("/tasks/new"));
   expect(name()).toHaveValue("");
   expect(state.create).toHaveBeenCalledTimes(1);
+});
+
+it("waits for draft cleanup before navigating and cannot resubmit during cleanup", async () => {
+  mount();
+  fireEvent.change(name(), { target: { value: "Complete once" } });
+  await saveDraft();
+  const remove = store.removePageDraft;
+  let release!: () => void;
+  vi.spyOn(store, "removePageDraft").mockImplementationOnce(async (...args) => {
+    await new Promise<void>(resolve => { release = resolve; });
+    await remove(...args);
+  });
+  fireEvent.submit(document.querySelector("form")!);
+  await waitFor(() => expect(release).toBeTypeOf("function"));
+  expect(screen.queryByText("Upload problems")).not.toBeInTheDocument();
+  fireEvent.submit(document.querySelector("form")!);
+  expect(state.create).toHaveBeenCalledTimes(1);
+  await act(async () => release());
+  await screen.findByText("Upload problems");
+  expect(await store.listPageDrafts("metadata-teacher")).toEqual([]);
+});
+
+it("keeps formal success and a visible warning when local cleanup fails", async () => {
+  mount();
+  fireEvent.change(name(), { target: { value: "Already created" } });
+  await saveDraft();
+  vi.spyOn(store, "removePageDraft").mockRejectedValueOnce(new Error("storage unavailable"));
+  fireEvent.submit(document.querySelector("form")!);
+  await screen.findByText("Upload problems");
+  expect(state.create).toHaveBeenCalledTimes(1);
+  expect(toast.warning).toHaveBeenCalledWith(expect.stringContaining("无需重复提交"));
 });
 
 it("stays with inputs on explicit storage failure and restores server state on reset", async () => {
