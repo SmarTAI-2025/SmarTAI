@@ -27,9 +27,9 @@ export function taskInputVersion(task: Task | undefined, stage: "problems" | "su
 
 export function gradingEditorVersion(response: GradingSetupResponse | undefined) {
   if (!response) return "";
-  // Before the first save, the backend derives this suggestion from attachments.
-  // Attaching/removing a document does not edit the persisted grading settings.
-  const setup = response.grading_setup ?? { ...response.suggested_setup, knowledge_scope: "none" };
+  // Suggestions depend on attachments and the default model. Before the first
+  // save there are no persisted task settings for an edit to overwrite.
+  const setup = response.grading_setup;
   // Provider availability is validated against the live registry by the form
   // and API. Changing a model does not overwrite persisted task settings.
   return draftFingerprint({ setup });
@@ -39,7 +39,10 @@ export function gradingDraftVersionsMatch(stored: string, current: string) {
   // Existing seven-day drafts included the model list; ignore only that field.
   try {
     const previous = JSON.parse(stored), next = JSON.parse(current);
-    return Boolean(previous?.setup && next?.setup) && draftFingerprint(previous.setup) === draftFingerprint(next.setup);
+    if (!previous || !next || !("setup" in previous) || !("setup" in next)) return false;
+    // Legacy drafts also included suggestions. An unconfigured task has no
+    // saved settings to conflict with; selected models are still validated live.
+    return next.setup === null || draftFingerprint(previous.setup) === draftFingerprint(next.setup);
   } catch { return stored === current; }
 }
 

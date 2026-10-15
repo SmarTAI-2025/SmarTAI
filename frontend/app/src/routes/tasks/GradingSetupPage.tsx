@@ -99,7 +99,7 @@ function GradingSetupPageForm() {
     // The mutation publishes its response before draft cleanup completes.
     // Acknowledge that save before checking for external editor changes.
     if (savingServerKey !== null) return;
-    if (!response || !serverKey || appliedServerKeyRef.current === serverKey) return;
+    if (!response || !serverKey || (appliedServerKeyRef.current === serverKey && (setup || !serverSetup))) return;
 
     if (appliedServerKeyRef.current !== null && isDirty) {
       if (conflictServerKeyRef.current !== serverKey) {
@@ -119,7 +119,7 @@ function GradingSetupPageForm() {
     setActionError(null);
     if (!preserveSyncNotice) setSyncNoticeKey(null);
     setSelectionNoticeKey(null);
-  }, [isDirty, response, serverKey, serverSetup, savingServerKey]);
+  }, [isDirty, response, serverKey, serverSetup, savingServerKey, setup]);
 
   const localDraft = useDraftProtection({ scope: `grading:${taskId}:${response?.task_id ?? ""}`, value: { setup, advancedOpen }, baseline: { setup: serverSetup, advancedOpen: false }, version: savingServerKey ?? serverKey, versionsMatch: gradingDraftVersionsMatch, enabled: Boolean(response && setup), busy: isSaving, onRestore: (draft) => { setSetup(draft.setup); setAdvancedOpen(draft.advancedOpen); } });
 
