@@ -35,49 +35,6 @@ def _seed_assignment_and_run(*, owner_id: str, assignment_id: str):
     )
 
 
-def test_formal_artifact_version_is_append_only_and_idempotent():
-    from backend.db import workflow_repository
-    from backend.domain.errors import VersionConflict
-
-    owner_id = "artifact-owner"
-    assignment_id = "artifact-assignment"
-    run = _seed_assignment_and_run(
-        owner_id=owner_id, assignment_id=assignment_id,
-    )
-    original, created = workflow_repository.save_artifact_manifest(
-        assignment_id=assignment_id,
-        grading_run_id=run.id,
-        owner_id=owner_id,
-        result_version=1,
-        result_fingerprint="fingerprint-v1",
-        manifest={"task_name": "Original", "files": []},
-    )
-    repeated, repeated_created = workflow_repository.save_artifact_manifest(
-        assignment_id=assignment_id,
-        grading_run_id=run.id,
-        owner_id=owner_id,
-        result_version=1,
-        result_fingerprint="fingerprint-v1",
-        manifest={"task_name": "Mutated", "files": [{"artifact_id": "changed"}]},
-    )
-
-    assert created is True
-    assert repeated_created is False
-    assert repeated.id == original.id
-    assert repeated.generated_at == original.generated_at
-    assert repeated.manifest == {"task_name": "Original", "files": []}
-
-    with pytest.raises(VersionConflict):
-        workflow_repository.save_artifact_manifest(
-            assignment_id=assignment_id,
-            grading_run_id=run.id,
-            owner_id=owner_id,
-            result_version=1,
-            result_fingerprint="different-source",
-            manifest={"task_name": "Other", "files": []},
-        )
-
-
 def test_final_result_release_and_version_are_atomic_and_idempotent():
     from backend.db import grading_repository, workflow_repository
 
@@ -96,20 +53,32 @@ def test_final_result_release_and_version_are_atomic_and_idempotent():
         run_id=run.id, worker_id="atomic-worker", completed=0, failed=0,
     )
 
-    workflow, released_at, changed = workflow_repository.confirm_final_result_atomic(
+    from backend.services.result_artifacts import ARTIFACT_SCHEMA_VERSION, build_artifact_manifest
+
+    workflow, artifact, changed = workflow_repository.generate_result_artifacts_atomic(
+        artifact_schema_version=ARTIFACT_SCHEMA_VERSION,
         assignment_id=assignment_id,
         owner_id=owner_id,
         grading_run_id=run.id,
         expected_revision=0,
+        render_manifest=lambda version, timestamp, name: build_artifact_manifest(
+            task_id=assignment_id, task_name=name, generated_at=timestamp,
+            snapshot={"version": version, "created_at": timestamp, "fingerprint": "test", "payload": {}},
+        ),
     )
-    replay, replay_released_at, replay_changed = (
-        workflow_repository.confirm_final_result_atomic(
+    replay, replay_artifact, replay_changed = (
+        workflow_repository.generate_result_artifacts_atomic(
+            artifact_schema_version=ARTIFACT_SCHEMA_VERSION,
             assignment_id=assignment_id,
             owner_id=owner_id,
             grading_run_id=run.id,
             # Simulate retrying the exact request after its HTTP response was
             # lost: the client still has the old revision.
             expected_revision=0,
+            render_manifest=lambda version, timestamp, name: build_artifact_manifest(
+                task_id=assignment_id, task_name=name, generated_at=timestamp,
+                snapshot={"version": version, "created_at": timestamp, "fingerprint": "test", "payload": {}},
+            ),
         )
     )
 
@@ -120,7 +89,8 @@ def test_final_result_release_and_version_are_atomic_and_idempotent():
     assert replay_changed is False
     assert replay.final_result_version == 1
     assert replay.workflow_revision == 1
-    assert replay_released_at == released_at
+    assert replay_artifact.id == artifact.id
+    assert replay_artifact.manifest == artifact.manifest
 
 
 def test_grading_uses_full_frozen_question_snapshot_after_later_edit():

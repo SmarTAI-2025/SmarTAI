@@ -14,7 +14,7 @@ const state = vi.hoisted(() => ({
   task: { task_id: "T1", name: "Review", status: "graded", workflow_revision: 5, problem_data: {}, student_data: {}, grading_job_id: null as string | null, last_failed_job_id: null as string | null },
   result: { results: [] as unknown[] } as { results: unknown[]; grading_run_status?: string },
   finalization: { remaining_review_count: 0, ready_for_confirmation: true, workflow_revision: 5 },
-  retry: vi.fn(), bulk: vi.fn(), update: vi.fn(), finalize: vi.fn(), refetch: vi.fn(),
+  retry: vi.fn(), bulk: vi.fn(), update: vi.fn(), generate: vi.fn(), refetch: vi.fn(),
 }));
 vi.mock("@/api/hooks/tasks", () => ({
   useStartGrading: () => ({ mutate: state.retry }),
@@ -22,7 +22,7 @@ vi.mock("@/api/hooks/tasks", () => ({
   useTaskResult: () => ({ data: state.result, refetch: state.refetch }),
   useTeacherComments: () => ({ data: { comments: {} }, refetch: state.refetch }),
   useTaskFinalization: () => ({ data: state.finalization, refetch: state.refetch }),
-  useConfirmTaskFinalization: () => ({ mutate: state.finalize }),
+  useGenerateTaskResultArtifacts: () => ({ mutate: state.generate }),
   useUpdateCorrectionReview: () => ({ mutateAsync: state.update }),
 }));
 vi.mock("@/hooks/useConfirmResultReviews", () => ({
@@ -133,7 +133,7 @@ describe("one-click grading review", () => {
     expect(screen.getByRole("textbox", { name: "Q2 final score" })).toBeInTheDocument();
     expect(screen.queryByText("Grading recovery progress")).not.toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: "View Results & Analysis" }));
-    expect(state.finalize).not.toHaveBeenCalled();
+    expect(state.generate).not.toHaveBeenCalled();
     expect(screen.getByRole("alertdialog")).toBeInTheDocument();
   });
   it("provides a reachable partial failure retry while keeping the existing results visible", async () => {
@@ -176,7 +176,7 @@ describe("one-click grading review", () => {
     expect(actions.querySelectorAll('button,a')).toHaveLength(2);
     await userEvent.click(within(screen.getByRole("region", { name: "Review queue" })).getByRole("button", { name: "Confirm all" }));
     expect(state.bulk).toHaveBeenCalledTimes(1);
-    expect(state.finalize).not.toHaveBeenCalled();
+    expect(state.generate).not.toHaveBeenCalled();
   });
   it("explicitly confirms automatically scored results including zero, without finalizing", async () => {
     show();
@@ -185,7 +185,7 @@ describe("one-click grading review", () => {
       { studentId: "S1", qId: "Q1", score: 7, comment: "" },
       { studentId: "S1", qId: "Q2", score: 0, comment: "Keep this" },
     ] });
-    expect(state.finalize).not.toHaveBeenCalled();
+    expect(state.generate).not.toHaveBeenCalled();
   });
   it("keeps teacher overrides and excludes an already confirmed teacher review", async () => {
     state.result.results = [{ student_id: "S1", corrections: [correction("Q1", { teacher_score: 9, review_status: "edited", teacher_comment: "Override" }), correction("Q2", { teacher_score: 7 })] }];
@@ -217,7 +217,7 @@ describe("one-click grading review", () => {
     }
     await userEvent.click(within(actions).getByRole("button", { name: "View Results & Analysis" }));
     expect(await screen.findByText("Current results page")).toBeInTheDocument();
-    expect(state.finalize).not.toHaveBeenCalled();
+    expect(state.generate).not.toHaveBeenCalled();
     expect(state.bulk).not.toHaveBeenCalled();
     expect(state.update).not.toHaveBeenCalled();
   });
@@ -227,7 +227,7 @@ describe("one-click grading review", () => {
     state.finalization = { remaining_review_count: 1, ready_for_confirmation: false, workflow_revision: 5 };
     show();
     await userEvent.click(screen.getByRole("button", { name: "View Results & Analysis" }));
-    expect(state.finalize).not.toHaveBeenCalled();
+    expect(state.generate).not.toHaveBeenCalled();
     expect(screen.getByRole("alertdialog")).toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: "Stay here" }));
     await userEvent.click(screen.getByRole("button", { name: "Confirm all" }));
@@ -312,7 +312,7 @@ describe("one-click grading review", () => {
     await userEvent.click(screen.getAllByRole("link", { name: "Back to Review Overview" })[0]);
     await userEvent.dblClick(screen.getByRole("button", { name: "暂存并离开" }));
     await waitFor(() => expect(router.state.location.pathname).toBe("/tasks/T1/review"));
-    expect(state.update).not.toHaveBeenCalled(); expect(state.finalize).not.toHaveBeenCalled(); expect(state.bulk).not.toHaveBeenCalled();
+    expect(state.update).not.toHaveBeenCalled(); expect(state.generate).not.toHaveBeenCalled(); expect(state.bulk).not.toHaveBeenCalled();
     await act(async () => { await router.navigate("/tasks/T1/review/S1/Q1"); });
     await waitFor(() => expect(screen.getByRole("textbox", { name: "Q1 final score" })).toHaveValue("9"));
     expect(state.update).not.toHaveBeenCalled();

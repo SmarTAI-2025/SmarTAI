@@ -42,17 +42,11 @@ for (const mode of ["individual", "overview-all", "detail-all"]) for (const loca
       if (path === "/auth/activity") return json({ token: "synthetic-teacher-token" });
       if (request.method() !== "GET") {
         writes.push(path);
-        if (path.endsWith("/finalization/confirm")) {
-          expect(reportGenerationRequested).toBe(true);
-          expect(request.postDataJSON().expected_workflow_revision).toBe(task.workflow_revision);
-          task.workflow_revision += 1; task.final_result_version += 1; task.status = "review_confirmed";
-          reportDirty = false; reportsGenerated = false;
-          return json(finalization());
-        }
         if (path.endsWith("/artifacts/generate")) {
           expect(reportGenerationRequested).toBe(true);
           expect(request.postDataJSON().expected_workflow_revision).toBe(task.workflow_revision);
-          reportsGenerated = true;
+          task.workflow_revision += 1; task.final_result_version += 1; task.status = "review_confirmed";
+          reportDirty = false; reportsGenerated = true;
           reportVersions.unshift(task.final_result_version);
           return json({ ...finalization(), status: "ok", unchanged: false, artifacts: artifacts() });
         }
@@ -124,7 +118,7 @@ for (const mode of ["individual", "overview-all", "detail-all"]) for (const loca
     reportGenerationRequested = true;
     await page.getByRole("button", { name: zh ? "生成本版文件" : "Generate files" }).click();
     await expect(page.getByRole("button", { name: zh ? "下载全部 ZIP" : "Download all ZIP" })).toBeVisible();
-    expect(writes).toHaveLength(reviewWrites + 3);
+    expect(writes).toHaveLength(reviewWrites + 2);
     if (mode === "individual") expect(corrections[1].teacher_score).toBeNull();
     if (mode === "individual") {
       // A separately saved edit moves the generated report into history.

@@ -235,16 +235,6 @@ export function getTaskFinalization(taskId: string): Promise<TaskFinalizationRes
   return getJSON<TaskFinalizationResponse>(`/tasks/${encodeURIComponent(taskId)}/finalization`);
 }
 
-export function confirmTaskFinalization(
-  taskId: string,
-  expectedWorkflowRevision: number,
-): Promise<TaskFinalizationResponse> {
-  return postJSON<TaskFinalizationResponse>(
-    `/tasks/${encodeURIComponent(taskId)}/finalization/confirm`,
-    { expected_workflow_revision: expectedWorkflowRevision },
-  );
-}
-
 export function getTaskResultArtifacts(taskId: string): Promise<ResultArtifactIndex> {
   return getJSON<ResultArtifactIndex>(`/tasks/${encodeURIComponent(taskId)}/artifacts`);
 }

@@ -11,10 +11,11 @@ def test_finalize_generate_download_and_refresh_never_recognize_again():
     client = TestClient(app)
     base = "/tasks/" + seeded["task_id"]
     headers = {"Authorization":"Bearer " + create_token(seeded["owner_id"], "teacher")}
-    confirmed = client.post(base + "/finalization/confirm", headers=headers, json={"expected_workflow_revision":0})
-    assert confirmed.status_code == 200, confirmed.text
+    retired = client.post(base + "/finalization/confirm", headers=headers, json={"expected_workflow_revision": 0})
+    assert retired.status_code == 404
+    assert client.get(base + "/finalization", headers=headers).json()["final_result_version"] == 0
     generated = client.post(base + "/artifacts/generate", headers=headers,
-        json={"expected_workflow_revision":confirmed.json()["workflow_revision"]})
+        json={"expected_workflow_revision": 0})
     assert generated.status_code == 200, generated.text
     for _ in range(2):
         assert client.get(base + "/artifacts", headers=headers).status_code == 200

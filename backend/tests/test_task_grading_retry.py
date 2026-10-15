@@ -75,7 +75,7 @@ def test_same_inputs_retry_preserves_history_and_teacher_edits_and_can_publish(c
     assert grading.get_run(first["job_id"]).status == "partial_failed"
     assert task_facade.task_results(task_id=case[0], owner_id=case[1])["retry_scope"] == "failed_only"
     with pytest.raises(ResultNotReleasable):
-        task_facade.confirm_finalization(task_id=case[0], owner_id=case[1], expected_revision=workflows.get_live_workflow(case[0], owner_id=case[1]).workflow_revision)
+        task_facade.generate_artifacts(task_id=case[0], owner_id=case[1], expected_revision=workflows.get_live_workflow(case[0], owner_id=case[1]).workflow_revision)
     success = next((row for row in old_rows if row.ai_score is not None), None)
     if success:
         grading.add_teacher_review(success.id, teacher_id=case[1], new_score=9,
@@ -99,7 +99,7 @@ def test_same_inputs_retry_preserves_history_and_teacher_edits_and_can_publish(c
         assert kept.teacher_review["new_comment"] == "Keep this teacher edit"
     assert task_facade.finalization(task_id=case[0], owner_id=case[1])["remaining_review_count"] == 0
     assert start(case, "completed-cache")["status"] == "already_done"
-    final = task_facade.confirm_finalization(task_id=case[0], owner_id=case[1], expected_revision=workflows.get_live_workflow(case[0], owner_id=case[1]).workflow_revision)
+    final = task_facade.generate_artifacts(task_id=case[0], owner_id=case[1], expected_revision=workflows.get_live_workflow(case[0], owner_id=case[1]).workflow_revision)
     assert final["status"] == "ok"
 
 
@@ -312,7 +312,7 @@ def test_request_alias_and_publication_share_safe_lock_order(case, monkeypatch):
 
     def publish():
         gate.wait(timeout=5)
-        return task_facade.confirm_finalization(task_id=case[0], owner_id=case[1], expected_revision=revision)
+        return task_facade.generate_artifacts(task_id=case[0], owner_id=case[1], expected_revision=revision)
 
     with ThreadPoolExecutor(max_workers=2) as pool:
         a, p = pool.submit(alias), pool.submit(publish)

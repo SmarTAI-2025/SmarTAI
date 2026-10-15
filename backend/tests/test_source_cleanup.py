@@ -401,7 +401,7 @@ async def test_exact_formal_confirmation_does_not_fence_inflight_new_source(
         seeded["task_id"], owner_id=seeded["owner_id"]
     ).source_lifecycle_epoch
 
-    response = task_facade.confirm_finalization(
+    response = task_facade.generate_artifacts(
         task_id=seeded["task_id"],
         owner_id=seeded["owner_id"],
         expected_revision=0,
@@ -435,7 +435,7 @@ async def test_exact_formal_confirmation_does_not_fence_inflight_new_source(
 
 
 @pytest.mark.asyncio
-async def test_formal_result_enqueues_cleanup_without_waiting_for_report_export(
+async def test_report_generation_repairs_cleanup_in_the_same_transaction(
     tmp_path, monkeypatch,
 ):
     seeded = _prepared_task()
@@ -477,7 +477,7 @@ async def test_formal_result_enqueues_cleanup_without_waiting_for_report_export(
         content_type="application/pdf",
     )
 
-    response = task_facade.confirm_finalization(
+    response = task_facade.generate_artifacts(
         task_id=seeded["task_id"],
         owner_id=seeded["owner_id"],
         expected_revision=0,
@@ -487,10 +487,9 @@ async def test_formal_result_enqueues_cleanup_without_waiting_for_report_export(
     assert response["source_cleanup"]["status"] == "pending"
     assert response["source_cleanup"]["pending_count"] == 2
     assert response["source_cleanup"]["total_count"] == 2
-    # Optional CSV/Markdown/TeX/ZIP generation has not run and is not a gate.
-    assert workflow_repository.list_artifact_manifests(
+    assert len(workflow_repository.list_artifact_manifests(
         seeded["task_id"], owner_id=seeded["owner_id"]
-    ) == []
+    )) == 1
     assert file_repository.get_file(
         file_id=problem.id, owner_id=seeded["owner_id"]
     ).availability_status == "cleanup_pending"
@@ -632,7 +631,7 @@ async def test_s3_compatible_backend_matches_finalization_cleanup_contract(
     )
     assert storage.exists(original.storage_key)
 
-    task_facade.confirm_finalization(
+    task_facade.generate_artifacts(
         task_id=seeded["task_id"],
         owner_id=seeded["owner_id"],
         expected_revision=0,
@@ -1020,7 +1019,7 @@ async def test_task_delete_succeeds_after_original_is_tombstoned(
         content_type="application/pdf",
         assignment_id=seeded["task_id"],
     )
-    task_facade.confirm_finalization(
+    task_facade.generate_artifacts(
         task_id=seeded["task_id"],
         owner_id=seeded["owner_id"],
         expected_revision=0,
@@ -1059,7 +1058,7 @@ def test_task_delete_accepts_while_running_cleanup_drains(tmp_path):
         content_type="application/pdf",
         assignment_id=seeded["task_id"],
     )
-    task_facade.confirm_finalization(
+    task_facade.generate_artifacts(
         task_id=seeded["task_id"],
         owner_id=seeded["owner_id"],
         expected_revision=0,
@@ -1585,7 +1584,7 @@ def test_cleanup_claim_rechecks_lease_after_acquiring_operation_lock(
         content_type="application/pdf",
         assignment_id=seeded["task_id"],
     )
-    task_facade.confirm_finalization(
+    task_facade.generate_artifacts(
         task_id=seeded["task_id"],
         owner_id=seeded["owner_id"],
         expected_revision=0,
@@ -1806,7 +1805,7 @@ async def test_replacement_physical_delete_survives_lease_fence_and_review_race(
             deleted=True,
         )
 
-    task_facade.confirm_finalization(
+    task_facade.generate_artifacts(
         task_id=seeded["task_id"],
         owner_id=seeded["owner_id"],
         expected_revision=0,
@@ -1903,7 +1902,7 @@ def test_finalization_does_not_steal_replacement_cleanup_generation(
         row.cleanup_requested_at = time.time()
         row.lifecycle_revision += 1
 
-    task_facade.confirm_finalization(
+    task_facade.generate_artifacts(
         task_id=seeded["task_id"],
         owner_id=seeded["owner_id"],
         expected_revision=0,
@@ -1944,7 +1943,7 @@ async def test_delete_failure_remains_charged_and_retries_without_user_action(
         content_type="application/pdf",
         assignment_id=seeded["task_id"],
     )
-    task_facade.confirm_finalization(
+    task_facade.generate_artifacts(
         task_id=seeded["task_id"],
         owner_id=seeded["owner_id"],
         expected_revision=0,
@@ -2019,7 +2018,7 @@ async def test_superseded_before_claim_restores_untouched_source_and_charge(
         content_type="application/pdf",
         assignment_id=seeded["task_id"],
     )
-    task_facade.confirm_finalization(
+    task_facade.generate_artifacts(
         task_id=seeded["task_id"],
         owner_id=seeded["owner_id"],
         expected_revision=0,
@@ -2083,7 +2082,7 @@ async def test_stale_generation_reconciles_a_claim_left_by_an_expired_worker(
         content_type="application/pdf",
         assignment_id=seeded["task_id"],
     )
-    task_facade.confirm_finalization(
+    task_facade.generate_artifacts(
         task_id=seeded["task_id"],
         owner_id=seeded["owner_id"],
         expected_revision=0,
@@ -2161,7 +2160,7 @@ async def test_stale_generation_keeps_retrying_an_ambiguous_attempt(
         content_type="application/pdf",
         assignment_id=seeded["task_id"],
     )
-    task_facade.confirm_finalization(
+    task_facade.generate_artifacts(
         task_id=seeded["task_id"],
         owner_id=seeded["owner_id"],
         expected_revision=0,
@@ -2233,7 +2232,7 @@ async def test_stale_mixed_manifest_retries_attempted_and_restores_untouched(
         content_type="application/pdf",
         assignment_id=seeded["task_id"],
     )
-    task_facade.confirm_finalization(
+    task_facade.generate_artifacts(
         task_id=seeded["task_id"],
         owner_id=seeded["owner_id"],
         expected_revision=0,
@@ -2391,7 +2390,7 @@ async def test_storage_delete_phase_does_not_hold_the_operation_db_lock(
         content_type="application/pdf",
         assignment_id=seeded["task_id"],
     )
-    task_facade.confirm_finalization(
+    task_facade.generate_artifacts(
         task_id=seeded["task_id"],
         owner_id=seeded["owner_id"],
         expected_revision=0,
@@ -2456,7 +2455,7 @@ def test_expired_worker_cannot_tombstone_after_physical_delete(tmp_path):
         content_type="application/pdf",
         assignment_id=seeded["task_id"],
     )
-    task_facade.confirm_finalization(
+    task_facade.generate_artifacts(
         task_id=seeded["task_id"],
         owner_id=seeded["owner_id"],
         expected_revision=0,
@@ -2580,7 +2579,7 @@ def test_claimed_delete_records_physical_truth_if_workflow_changes(tmp_path):
         content_type="application/pdf",
         assignment_id=seeded["task_id"],
     )
-    task_facade.confirm_finalization(
+    task_facade.generate_artifacts(
         task_id=seeded["task_id"],
         owner_id=seeded["owner_id"],
         expected_revision=0,
@@ -2698,7 +2697,7 @@ async def test_storage_object_not_found_is_a_successful_idempotent_delete(
         content_type="application/pdf",
         assignment_id=seeded["task_id"],
     )
-    task_facade.confirm_finalization(
+    task_facade.generate_artifacts(
         task_id=seeded["task_id"],
         owner_id=seeded["owner_id"],
         expected_revision=0,
@@ -2752,7 +2751,7 @@ async def test_finalization_epoch_fences_an_inflight_source_reservation(
     assert reservation.source_lifecycle_epoch == 0
     storage.save(storage_key, content)
 
-    task_facade.confirm_finalization(
+    task_facade.generate_artifacts(
         task_id=seeded["task_id"],
         owner_id=seeded["owner_id"],
         expected_revision=0,

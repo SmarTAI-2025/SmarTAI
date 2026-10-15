@@ -148,10 +148,6 @@ class UpdateTeacherCommentRequest(BaseModel):
     comment: str = Field(default="", max_length=4000)
 
 
-class ConfirmFinalResultRequest(BaseModel):
-    expected_workflow_revision: int = Field(ge=0)
-
-
 class GenerateResultArtifactsRequest(BaseModel):
     expected_workflow_revision: int = Field(ge=0)
 
@@ -914,17 +910,6 @@ def _grading_setup_payload(task_id: str, owner_id: str, registry: ExpertRegistry
 @router.get("/{task_id}/finalization")
 def get_finalization(task_id: str, current: User = Depends(require_teacher)):
     return _domain(lambda: task_facade.finalization(task_id=task_id, owner_id=current.id))
-
-
-@router.post("/{task_id}/finalization/confirm")
-def confirm_finalization(
-    task_id: str, request: ConfirmFinalResultRequest,
-    current: User = Depends(require_teacher),
-):
-    return _domain(lambda: task_facade.confirm_finalization(
-        task_id=task_id, owner_id=current.id,
-        expected_revision=request.expected_workflow_revision,
-    ))
 
 
 @router.get("/{task_id}/artifacts")
