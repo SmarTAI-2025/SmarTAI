@@ -11,6 +11,7 @@ describe("editor conflict boundaries", () => {
     const legacy = JSON.stringify({ setup: { strictness: 50 }, experts: [{ id: "unselected", model: "old" }] });
     expect(gradingDraftVersionsMatch(legacy, JSON.stringify({ setup: { strictness: 50 } }))).toBe(true);
     expect(gradingDraftVersionsMatch(legacy, JSON.stringify({ setup: { strictness: 70 } }))).toBe(false);
+    expect(gradingDraftVersionsMatch(legacy, JSON.stringify({ setup: null }))).toBe(true);
     expect(gradingDraftVersionsMatch("invalid", JSON.stringify({ setup: { strictness: 50 } }))).toBe(false);
   });
   it.each(["problems", "submissions", "material-import"] as const)("%s ignores knowledge, status, timestamps and unrelated revision increments", stage => {
@@ -27,7 +28,7 @@ describe("editor conflict boundaries", () => {
     expect(gradingEditorVersion({ ...response, grading_setup: { ...response.grading_setup!, strictness: 70 } })).not.toBe(gradingEditorVersion(response));
     expect(gradingEditorVersion({ ...response, available_experts: [{ ...response.available_experts[0], enabled: false }] })).toBe(gradingEditorVersion(response));
   });
-  it("ignores only the attachment-derived suggestion before grading settings are saved", () => {
+  it("ignores suggestions before grading settings are saved", () => {
     const response = {
       grading_setup: null, suggested_setup: { strictness: 50, knowledge_scope: "none" },
       available_experts: [{ provider_id: "p", enabled: true, model: "m", is_shared: false }],
@@ -35,7 +36,8 @@ describe("editor conflict boundaries", () => {
     const attached = { ...response, workflow_revision: 10,
       suggested_setup: { ...response.suggested_setup!, knowledge_scope: "all_task_docs" as const } };
     expect(gradingEditorVersion(attached)).toBe(gradingEditorVersion(response));
-    expect(gradingEditorVersion({ ...attached, suggested_setup: { ...attached.suggested_setup, strictness: 70 } })).not.toBe(gradingEditorVersion(response));
+    expect(gradingEditorVersion({ ...attached, suggested_setup: { ...attached.suggested_setup, strictness: 70, selected_provider_ids: ["new-default"] } })).toBe(gradingEditorVersion(response));
+    expect(gradingEditorVersion({ ...attached, suggested_setup: null })).toBe(gradingEditorVersion(response));
     expect(gradingEditorVersion({ ...attached, available_experts: [{ ...attached.available_experts[0], model: "new-model" }] })).toBe(gradingEditorVersion(response));
     // A change to the persisted scope remains a genuine business change.
     expect(gradingEditorVersion({ ...attached, grading_setup: attached.suggested_setup })).not.toBe(

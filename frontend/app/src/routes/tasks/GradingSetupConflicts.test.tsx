@@ -32,13 +32,14 @@ let revision: number;
 let model: string;
 let enabled: boolean;
 let otherModel: string | null;
+let defaultProvider: string;
 let refreshGate: Promise<void> | undefined;
 const setupUrl = "/tasks/task-1/grading-setup";
 const response = (): GradingSetupResponse => ({
   task_id: "task-1", task_status: "submissions_ready", workflow_revision: revision,
   configured: saved !== null, grading_setup: saved,
   // Match the backend: suggestions change with attachments before the first save.
-  suggested_setup: { ...defaults, knowledge_scope: docs.length ? "all_task_docs" : "none" },
+  suggested_setup: { ...defaults, selected_provider_ids: [defaultProvider], primary_provider_id: defaultProvider, knowledge_scope: docs.length ? "all_task_docs" : "none" },
   grading_setup_fingerprint: saved ? JSON.stringify(saved) : null, grading_setup_updated_at: saved ? 1 : null,
   available_experts: [{ provider_id: "provider-1", provider_type: "gemini", model, display_name: "Grader", enabled, scope: "owner", is_shared: false, editable: true, max_concurrent: 1, rpm: 10 }, ...(otherModel ? [{ provider_id: "provider-2", provider_type: "gemini" as const, model: otherModel, display_name: "Other model", enabled: true, scope: "owner" as const, is_shared: false, editable: true, max_concurrent: 1, rpm: 10 }] : [])],
   knowledge: { scope_options: ["none", "all_task_docs"], task_doc_count: docs.length, task_docs: docs },
@@ -49,6 +50,7 @@ beforeEach(async () => {
   vi.clearAllMocks();
   await clearPageDrafts();
   docs = []; saved = null; revision = 7; model = "example-model"; enabled = true; otherModel = null; refreshGate = undefined;
+  defaultProvider = "provider-1";
   vi.mocked(getJSON).mockImplementation(async (url) => {
     if (url === setupUrl) return structuredClone(response()) as never;
     if (url === "/tasks/task-1/kb") return { docs: structuredClone(docs) } as never;
@@ -192,6 +194,21 @@ it("blocks an unavailable selected model with validation, without a false draft 
   expect(putJSON).not.toHaveBeenCalled();
   expect(slider).toHaveValue("70");
   expect(screen.queryByText("Grading summary")).not.toBeInTheDocument();
+});
+
+it("preserves the first unsaved configuration when another model becomes the default", async () => {
+  const { user, client } = openEditor();
+  const slider = await screen.findByRole("slider");
+  await waitFor(() => expect(screen.getByRole("button", { name: "暂存" })).toBeEnabled());
+  fireEvent.change(slider, { target: { value: "70" } });
+  otherModel = "new-default"; defaultProvider = "provider-2";
+  await act(async () => { await client.invalidateQueries({ queryKey: gradingSetupKeys.detail("task-1") }); });
+  expect(screen.queryAllByText(/任务或模型配置已更新|服务器业务版本已变化/)).toHaveLength(0);
+  await user.click(screen.getByRole("button", { name: "暂存" }));
+  await screen.findByText(/已暂存 ·/);
+  await user.click(screen.getByRole("button", { name: "保存并查看批改摘要" }));
+  await screen.findByText("Grading summary");
+  expect(saved).toMatchObject({ strictness: 70, selected_provider_ids: ["provider-1"] });
 });
 
 it("releases the save guard after a rejected stale write and still requires conflict resolution", async () => {
