@@ -243,6 +243,13 @@ def update_task(
         # before reading the baseline, as the row lock does on PostgreSQL.
         if session.get_bind().dialect.name == "sqlite":
             session.connection().exec_driver_sql("BEGIN IMMEDIATE")
+        # Match deletion/report generation's workflow -> assignment lock order.
+        workflow = session.scalar(select(workflow_repository.AssignmentWorkflowRecord).where(
+            workflow_repository.AssignmentWorkflowRecord.assignment_id == task_id,
+            workflow_repository.AssignmentWorkflowRecord.owner_id == owner_id,
+        ).with_for_update())
+        if workflow is None:
+            raise NotFound("workflow")
         row = session.scalar(select(AssignmentRecord).where(
             AssignmentRecord.id == task_id,
             AssignmentRecord.teacher_id == owner_id,
@@ -250,12 +257,6 @@ def update_task(
         ).with_for_update())
         if row is None:
             raise NotFound("assignment")
-        workflow = session.scalar(select(workflow_repository.AssignmentWorkflowRecord).where(
-            workflow_repository.AssignmentWorkflowRecord.assignment_id == task_id,
-            workflow_repository.AssignmentWorkflowRecord.owner_id == owner_id,
-        ).with_for_update())
-        if workflow is None:
-            raise NotFound("workflow")
         current_tags = sorted(session.scalars(select(AssignmentTagRecord.tag_id).where(
             AssignmentTagRecord.assignment_id == task_id,
         )))
