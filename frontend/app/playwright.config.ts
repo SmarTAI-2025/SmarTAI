@@ -18,7 +18,10 @@ export default defineConfig({
   reporter: "list",
   use: {
     baseURL: frontendUrl,
-    trace: "retain-on-failure",
+    // DOM snapshot hooks can stall after an assertion has already succeeded
+    // (Playwright #42903). Keep action/screenshots traces; opt in to full DOM
+    // and network snapshots when debugging locally.
+    trace: { mode: "retain-on-failure", snapshots: process.env.SMARTAI_E2E_TRACE_SNAPSHOTS === "1" },
     screenshot: "only-on-failure",
     ignoreHTTPSErrors: true,
   },
