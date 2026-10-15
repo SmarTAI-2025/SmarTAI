@@ -306,8 +306,8 @@ def test_finalization_artifacts_and_dirty_state_are_idempotent():
     assert stale_index["versions"][0]["status"] == "stale"
 
 
-@pytest.mark.parametrize("legacy_json", [False, True])
-def test_paused_json_exports_keep_new_and_legacy_reports_downloadable(monkeypatch, legacy_json):
+@pytest.mark.parametrize("with_json_metadata", [False, True])
+def test_paused_json_exports_keep_current_format_reports_downloadable(monkeypatch, with_json_metadata):
     import hashlib
     from io import BytesIO
     from zipfile import ZipFile
@@ -317,15 +317,10 @@ def test_paused_json_exports_keep_new_and_legacy_reports_downloadable(monkeypatc
 
     seeded = _prepared_task()
     args = {"task_id": seeded["task_id"], "owner_id": seeded["owner_id"]}
-    monkeypatch.setattr(result_artifacts, "JSON_EXPORT_ENABLED", legacy_json)
-    with monkeypatch.context() as renderer:
-        if legacy_json:
-            renderer.setattr(task_facade, "ARTIFACT_SCHEMA_VERSION", 1)
-            renderer.setattr(task_facade, "build_artifact_manifest", lambda **kwargs:
-                result_artifacts.build_artifact_manifest(**kwargs, schema_version=1))
-        generated = task_facade.generate_artifacts(**args, expected_revision=0)
+    monkeypatch.setattr(result_artifacts, "JSON_EXPORT_ENABLED", with_json_metadata)
+    generated = task_facade.generate_artifacts(**args, expected_revision=0)
     original_files = generated["artifacts"]["versions"][0]["files"]
-    assert len(original_files) == (5 if legacy_json else 4)
+    assert len(original_files) == (5 if with_json_metadata else 4)
     monkeypatch.setattr(result_artifacts, "JSON_EXPORT_ENABLED", False)
 
     original_dumps = result_artifacts.json.dumps
@@ -336,7 +331,7 @@ def test_paused_json_exports_keep_new_and_legacy_reports_downloadable(monkeypatc
 
     monkeypatch.setattr(result_artifacts.json, "dumps", reject_json_export)
     index = task_facade.artifact_index(**args)
-    assert index["versions"][0]["status"] == ("stale" if legacy_json else "ready")
+    assert index["versions"][0]["status"] == "ready"
     files = index["versions"][0]["files"]
     assert {item["artifact_id"] for item in files} == {
         "grades_csv", "learning_report_md", "published_answers_md", "published_answers_tex",
@@ -352,13 +347,66 @@ def test_paused_json_exports_keep_new_and_legacy_reports_downloadable(monkeypatc
             assert archive.read(item["filename"]) == content
             assert hashlib.sha256(content).hexdigest() == item["sha256"]
 
-    # An old template stays downloadable in history, but cannot be reused as
-    # the latest report. A repeated request for the current template is a replay.
+    # Pausing JSON does not invalidate the current report's other files.
     regenerated = task_facade.generate_artifacts(**args, expected_revision=1)
-    assert regenerated["status"] == ("ok" if legacy_json else "already_done")
-    assert regenerated["final_result_version"] == (2 if legacy_json else 1)
+    assert regenerated["status"] == "already_done"
+    assert regenerated["final_result_version"] == 1
     assert task_facade.generate_artifacts(**args, expected_revision=1)["status"] == "already_done"
     assert task_facade.artifact_bytes(**args, version=1, artifact_id="bundle")[0] == bundle
+
+
+@pytest.mark.parametrize("schema_version", [None, 1, 999])
+def test_retired_report_formats_are_hidden_blocked_and_never_reused(monkeypatch, schema_version):
+    from fastapi.testclient import TestClient
+    from backend.auth import create_token
+    from backend.db import workflow_repository
+    from backend.db.session import session_scope
+    from backend.main import app
+    from backend.services import result_artifacts, task_facade
+
+    seeded = _prepared_task()
+    args = {"task_id": seeded["task_id"], "owner_id": seeded["owner_id"]}
+    generated = task_facade.generate_artifacts(**args, expected_revision=0)
+    record = workflow_repository.list_artifact_manifests(seeded["task_id"], owner_id=seeded["owner_id"])[0]
+    # Represent a pre-upgrade/unsupported report without keeping its renderer.
+    with session_scope() as session:
+        stored = session.get(workflow_repository.ResultArtifactManifestRecord, record.id)
+        stored.manifest = {**stored.manifest, "schema_version": schema_version}
+
+    client = TestClient(app)
+    base = f"/tasks/{seeded['task_id']}"
+    headers = {"Authorization": "Bearer " + create_token(seeded["owner_id"], "teacher")}
+    result_before = client.get(base + "/result", headers=headers).json()
+    index = client.get(base + "/artifacts", headers=headers).json()
+    assert not any(item["files"] for item in index["versions"])
+    assert index["analysis_status"] == "not_generated"
+    state = client.get(base + "/finalization", headers=headers).json()
+    assert state["available_result_versions"] == 0
+    assert state["analysis_status"] == "not_generated"
+
+    def unexpected_render(*args, **kwargs):
+        raise AssertionError("Retired reports must be rejected before rendering")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(task_facade, "build_artifact_files", unexpected_render)
+        patch.setattr(task_facade, "result_snapshot", unexpected_render)
+        for artifact_id in [item["artifact_id"] for item in record.manifest["files"]] + ["bundle", "formal_result_json"]:
+            assert client.get(base + f"/artifacts/1/{artifact_id}", headers=headers).status_code == 404
+        assert client.delete(base + "/artifacts/1", headers=headers).status_code == 404
+
+    refreshed = client.post(base + "/artifacts/generate", headers=headers,
+                            json={"expected_workflow_revision": generated["workflow_revision"], "schema_version": schema_version})
+    assert refreshed.status_code == 200, refreshed.text
+    state = refreshed.json()
+    assert state["status"] == "ok"
+    assert state["available_result_versions"] == 1
+    assert [item["version"] for item in state["artifacts"]["versions"]] == [2]
+    records = workflow_repository.list_artifact_manifests(seeded["task_id"], owner_id=seeded["owner_id"])
+    assert records[0].manifest["schema_version"] == result_artifacts.ARTIFACT_SCHEMA_VERSION
+    assert client.get(base + "/artifacts/1/bundle", headers=headers).status_code == 404
+    assert client.get(base + "/artifacts/2/bundle", headers=headers).status_code == 200
+    assert task_facade.generate_artifacts(**args, expected_revision=state["workflow_revision"])["status"] == "already_done"
+    assert client.get(base + "/result", headers=headers).json() == result_before
 
 
 @pytest.mark.parametrize("field,error_code", [

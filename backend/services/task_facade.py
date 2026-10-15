@@ -86,12 +86,12 @@ from backend.services.background_errors import (
 )
 from backend.services.result_artifacts import (
     ARTIFACT_SCHEMA_VERSION,
-    SUPPORTED_ARTIFACT_SCHEMA_VERSIONS,
     artifact_fingerprint,
     build_artifact_bundle,
     build_artifact_files,
     build_artifact_manifest,
     is_artifact_enabled,
+    is_current_artifact_manifest,
 )
 from backend.services.question_structure import (
     MajorQuestionStructureV1,
@@ -4941,6 +4941,14 @@ def _correction_review_blocks_finalization(result) -> bool:
     )
 
 
+def _available_artifact_manifests(*, task_id: str, owner_id: str) -> list:
+    # Retired formats must not reappear in either current or historical reports.
+    return [
+        record for record in workflow_repository.list_artifact_manifests(task_id, owner_id=owner_id)
+        if is_current_artifact_manifest(record.manifest)
+    ]
+
+
 def finalization(*, task_id: str, owner_id: str) -> dict:
     workflow = workflow_repository.get_live_workflow(
         task_id, owner_id=owner_id
@@ -4976,6 +4984,8 @@ def finalization(*, task_id: str, owner_id: str) -> dict:
         submission_repository.list_submissions(task_id, actor_id=owner_id),
         run,
     )
+    reports = _available_artifact_manifests(task_id=task_id, owner_id=owner_id)
+    has_analysis = any(record.result_version == workflow.analysis_result_version for record in reports)
     return {
         "task_id": task_id, "task_status": status,
         "workflow_revision": workflow.workflow_revision,
@@ -4986,11 +4996,11 @@ def finalization(*, task_id: str, owner_id: str) -> dict:
         "final_result_version": max(workflow.final_result_version, 1 if released else 0),
         "final_result_updated_at": workflow.final_result_updated_at or (run.released_at if run else None),
         "final_result_dirty": _final_result_is_dirty(runs, run),
-        "analysis_status": workflow.analysis_status,
-        "analysis_result_version": workflow.analysis_result_version,
-        "analysis_generated_at": workflow.analysis_generated_at,
-        "analysis_error": workflow.analysis_error_code,
-        "available_result_versions": len(workflow_repository.list_artifact_manifests(task_id, owner_id=owner_id)),
+        "analysis_status": workflow.analysis_status if has_analysis else "not_generated",
+        "analysis_result_version": workflow.analysis_result_version if has_analysis else None,
+        "analysis_generated_at": workflow.analysis_generated_at if has_analysis else None,
+        "analysis_error": workflow.analysis_error_code if has_analysis else None,
+        "available_result_versions": len(reports),
         "source_cleanup": source_storage_repository.cleanup_summary(
             assignment_id=task_id, owner_id=owner_id
         ),
@@ -5185,7 +5195,7 @@ def artifact_index(*, task_id: str, owner_id: str) -> dict:
     workflow = workflow_repository.get_live_workflow(
         task_id, owner_id=owner_id
     )
-    records = workflow_repository.list_artifact_manifests(task_id, owner_id=owner_id)
+    records = _available_artifact_manifests(task_id=task_id, owner_id=owner_id)
     runs = grading_repository.list_runs_for_assignment(task_id, actor_id=owner_id)
     current_run = _current_grading_run(workflow, runs)
     final_result_dirty = _final_result_is_dirty(runs, current_run)
@@ -5197,8 +5207,7 @@ def artifact_index(*, task_id: str, owner_id: str) -> dict:
             "status": (
                 "stale"
                 if record.result_version == current
-                and (workflow.analysis_status == "stale" or final_result_dirty
-                     or record.manifest.get("schema_version") != ARTIFACT_SCHEMA_VERSION)
+                and (workflow.analysis_status == "stale" or final_result_dirty)
                 else (
                     "ready"
                     if record.result_version == current
@@ -5214,7 +5223,8 @@ def artifact_index(*, task_id: str, owner_id: str) -> dict:
         }
         for record in records
     ]
-    if current > 0 and not any(item["version"] == current for item in versions):
+    has_current = any(item["current"] for item in versions)
+    if current > 0 and not has_current:
         versions.insert(0, {
             "version": current,
             "current": True,
@@ -5227,9 +5237,9 @@ def artifact_index(*, task_id: str, owner_id: str) -> dict:
         "task_id": task_id, "current_result_version": current,
         "analysis_status": (
             "stale" if any(item["current"] and item["status"] == "stale" for item in versions)
-            else workflow.analysis_status
+            else workflow.analysis_status if has_current else "not_generated"
         ),
-        "analysis_result_version": workflow.analysis_result_version,
+        "analysis_result_version": workflow.analysis_result_version if has_current else None,
         "versions": versions,
     }
 
@@ -5256,7 +5266,7 @@ def artifact_bytes(
     record = workflow_repository.get_artifact_manifest(
         task_id, version, owner_id=owner_id
     )
-    if not is_artifact_enabled(artifact_id):
+    if not is_current_artifact_manifest(record.manifest) or not is_artifact_enabled(artifact_id):
         raise NotFound("artifact")
     snapshot = result_snapshot(
         task_id=task_id, owner_id=owner_id, result_version=version,
@@ -5264,12 +5274,6 @@ def artifact_bytes(
     )
     if snapshot["fingerprint"] != record.result_fingerprint:
         raise VersionConflict("artifact_source_changed")
-    schema_version = record.manifest.get("schema_version")
-    if schema_version not in SUPPORTED_ARTIFACT_SCHEMA_VERSIONS:
-        raise InvalidTransition(
-            "Artifact renderer version is unsupported.",
-            code="artifact_schema_unsupported",
-        )
     task_name = str(record.manifest.get("task_name") or "")
     if not task_name:
         task_name = get_task(
@@ -5277,7 +5281,7 @@ def artifact_bytes(
         )["name"]
     files = build_artifact_files(
         task_id=task_id, task_name=task_name, snapshot=snapshot,
-        generated_at=record.generated_at, schema_version=schema_version,
+        generated_at=record.generated_at,
     )
     expected_files = {
         str(item.get("artifact_id")): item
@@ -5298,7 +5302,7 @@ def artifact_bytes(
         task_id=task_id,
         task_name=task_name,
         snapshot=snapshot,
-        generated_at=record.generated_at, schema_version=schema_version,
+        generated_at=record.generated_at,
         files=record.manifest.get("files", []),
     )
     if (

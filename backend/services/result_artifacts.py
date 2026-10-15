@@ -20,13 +20,16 @@ from backend.domain.grading_review import review_state
 
 
 ARTIFACT_SCHEMA_VERSION = 2
-SUPPORTED_ARTIFACT_SCHEMA_VERSIONS = {1, ARTIFACT_SCHEMA_VERSION}
 # Temporarily paused; keep the renderer available without generating JSON exports.
 JSON_EXPORT_ENABLED = False
 
 
 def is_artifact_enabled(artifact_id: str) -> bool:
     return JSON_EXPORT_ENABLED or artifact_id != "formal_result_json"
+
+
+def is_current_artifact_manifest(manifest: Mapping[str, Any]) -> bool:
+    return manifest.get("schema_version") == ARTIFACT_SCHEMA_VERSION
 
 
 @dataclass(frozen=True)
@@ -53,11 +56,10 @@ class ResultArtifactFile:
 def artifact_fingerprint(
     *, task_id: str, task_name: str, snapshot: Mapping[str, Any],
     generated_at: float, files: Iterable[Mapping[str, Any]],
-    schema_version: int = ARTIFACT_SCHEMA_VERSION,
 ) -> str:
     """Fingerprint every identity/content input used by the artifact set."""
     source = {
-        "schema_version": schema_version,
+        "schema_version": ARTIFACT_SCHEMA_VERSION,
         "task_id": task_id,
         "task_name": task_name.strip(),
         "result_version": int(snapshot.get("version") or 0),
@@ -80,24 +82,23 @@ def build_artifact_manifest(
     task_name: str,
     snapshot: Mapping[str, Any],
     generated_at: float,
-    schema_version: int = ARTIFACT_SCHEMA_VERSION,
 ) -> Dict[str, Any]:
     files = build_artifact_files(
         task_id=task_id,
         task_name=task_name,
         snapshot=snapshot,
-        generated_at=generated_at, schema_version=schema_version,
+        generated_at=generated_at,
     )
     file_metadata = [artifact.metadata() for artifact in files]
     return {
-        "schema_version": schema_version,
+        "schema_version": ARTIFACT_SCHEMA_VERSION,
         "task_id": task_id,
         "task_name": task_name,
         "result_version": int(snapshot.get("version") or 0),
         "result_fingerprint": str(snapshot.get("fingerprint") or ""),
         "artifact_fingerprint": artifact_fingerprint(
             task_id=task_id, task_name=task_name, snapshot=snapshot,
-            generated_at=generated_at, files=file_metadata, schema_version=schema_version,
+            generated_at=generated_at, files=file_metadata,
         ),
         "confirmed_at": snapshot.get("created_at"),
         "generated_at": generated_at,
@@ -111,14 +112,13 @@ def build_artifact_files(
     task_name: str,
     snapshot: Mapping[str, Any],
     generated_at: float,
-    schema_version: int = ARTIFACT_SCHEMA_VERSION,
 ) -> List[ResultArtifactFile]:
     version = int(snapshot.get("version") or 0)
     payload = _mapping(snapshot.get("payload"))
     prefix = f"smartai_{_safe_name(task_id)}_v{version}"
-    report = _learning_report(task_name, version, snapshot, payload, generated_at, schema_version=schema_version)
-    answers = _published_answers(task_name, version, payload, schema_version=schema_version)
-    latex = _published_answers_latex(task_name, version, payload, schema_version=schema_version)
+    report = _learning_report(task_name, version, snapshot, payload, generated_at)
+    answers = _published_answers(task_name, version, payload)
+    latex = _published_answers_latex(task_name, version, payload)
     files = [
         ResultArtifactFile(
             "grades_csv", "成绩表", "Grade sheet", f"{prefix}_grades.csv", "text/csv; charset=utf-8",
@@ -139,7 +139,7 @@ def build_artifact_files(
     ]
     if JSON_EXPORT_ENABLED:
         formal_json = {
-            "schema_version": schema_version,
+            "schema_version": ARTIFACT_SCHEMA_VERSION,
             "task_id": task_id,
             "task_name": task_name,
             "result_version": version,
@@ -223,7 +223,6 @@ def _learning_report(
     snapshot: Mapping[str, Any],
     payload: Mapping[str, Any],
     generated_at: float,
-    *, schema_version: int = ARTIFACT_SCHEMA_VERSION,
 ) -> str:
     students = _results(payload)
     problems = _problems(payload)
@@ -243,10 +242,10 @@ def _learning_report(
     lines = [
         f"# {task_name} — 学情报告 / Learning Report",
         "",
-        f"- 正式结果版本 / Formal result: v{version}" if schema_version == 1 else f"- 报告版本 / Report version: v{version}",
-        f"- 确认时间 / Confirmed at: {_timestamp(snapshot.get('created_at'))}" if schema_version == 1 else f"- 快照时间 / Snapshot at: {_timestamp(snapshot.get('created_at'))}",
+        f"- 报告版本 / Report version: v{version}",
+        f"- 快照时间 / Snapshot at: {_timestamp(snapshot.get('created_at'))}",
         f"- 报告生成时间 / Generated at: {_timestamp(generated_at)}",
-        "- 说明：本报告由正式结果确定性汇总，不包含 AI 自动推断的教学结论。" if schema_version == 1 else "- 说明：本报告按生成时已保存的数据汇总，不包含 AI 自动推断的教学结论。",
+        "- 说明：本报告按生成时已保存的数据汇总，不包含 AI 自动推断的教学结论。",
         "",
         "## 班级概况 / Class Summary",
         "",
@@ -258,14 +257,14 @@ def _learning_report(
         "",
         "## 逐题表现 / Question Performance",
         "",
-        "| 题目 | 题型 | 作答数 | 平均得分率 | 必审题次 |" if schema_version == 1 else "| 题目 | 题型 | 作答数 | 平均得分率 | 待复核题次 |",
+        "| 题目 | 题型 | 作答数 | 平均得分率 | 待复核题次 |",
         "|---|---|---:|---:|---:|",
     ]
     for problem in problems:
         q_id = _string(problem.get("q_id"))
         entries = [item for student in students for item in _corrections(student) if _string(item.get("q_id")) == q_id]
         rates = [(_effective_score(item) / _number(item.get("max_score")) * 100) for item in entries if _number(item.get("max_score")) > 0]
-        review_count = sum((_legacy_needs_review if schema_version == 1 else _needs_review)(item) for item in entries)
+        review_count = sum(_needs_review(item) for item in entries)
         lines.append(f"| {_problem_label(problem)} | {_string(problem.get('type')) or '—'} | {len(entries)} | {_percent_text(sum(rates) / len(rates) if rates else None)} | {review_count} |")
     lines.extend(["", "## 学生成绩 / Student Scores", "", "| 学号 | 姓名 | 得分 | 得分率 |", "|---|---|---:|---:|"])
     for student, score, maximum, rate in student_rows:
@@ -273,8 +272,8 @@ def _learning_report(
     return "\n".join(lines) + "\n"
 
 
-def _published_answers(task_name: str, version: int, payload: Mapping[str, Any], *, schema_version: int = ARTIFACT_SCHEMA_VERSION) -> str:
-    lines = [f"# {task_name} — 发布版标答 / Published Answers", "", f"> Formal result v{version}" if schema_version == 1 else f"> Report v{version}", ""]
+def _published_answers(task_name: str, version: int, payload: Mapping[str, Any]) -> str:
+    lines = [f"# {task_name} — 发布版标答 / Published Answers", "", f"> Report v{version}", ""]
     for problem in _problems(payload):
         lines.extend([
             f"## {_problem_label(problem)} · {_string(problem.get('type')) or '—'}",
@@ -295,14 +294,14 @@ def _published_answers(task_name: str, version: int, payload: Mapping[str, Any],
     return "\n".join(lines)
 
 
-def _published_answers_latex(task_name: str, version: int, payload: Mapping[str, Any], *, schema_version: int = ARTIFACT_SCHEMA_VERSION) -> str:
+def _published_answers_latex(task_name: str, version: int, payload: Mapping[str, Any]) -> str:
     lines = [
         r"\documentclass[UTF8]{ctexart}",
         r"\usepackage[margin=2.2cm]{geometry}",
         r"\begin{document}",
         f"\\title{{{_latex_escape(task_name)} -- 发布版标答}}",
         r"\author{SmarTAI}",
-        f"\\date{{Formal result v{version}}}" if schema_version == 1 else f"\\date{{Report v{version}}}",
+        f"\\date{{Report v{version}}}",
         r"\maketitle",
     ]
     for problem in _problems(payload):
@@ -344,18 +343,6 @@ def _effective_score(correction: Mapping[str, Any]) -> float:
 
 def _needs_review(correction: Mapping[str, Any]) -> bool:
     return review_state(dict(correction))[0]
-
-
-def _legacy_needs_review(correction: Mapping[str, Any]) -> bool:
-    """Read-only schema-1 renderer: preserve historical checksums, never new reports."""
-    confidence = _number(correction.get("confidence"))
-    if confidence > 1:
-        confidence /= 100
-    return bool(
-        correction.get("requires_human_review")
-        or (confidence > 0 and confidence < 0.65)
-        or correction.get("review_reasons")
-    )
 
 
 def _mapping(value: Any) -> Dict[str, Any]:

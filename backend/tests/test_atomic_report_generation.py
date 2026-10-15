@@ -51,7 +51,7 @@ def test_concurrent_generation_and_replay_only_create_one_report(monkeypatch):
     assert replay["available_result_versions"] == 1
 
 
-def test_retired_snapshot_routes_and_read_only_pages_cannot_create_versions(monkeypatch):
+def test_retired_snapshot_routes_and_read_only_pages_cannot_create_versions():
     from fastapi.testclient import TestClient
     from backend.auth import create_token
     from backend.main import app
@@ -71,10 +71,6 @@ def test_retired_snapshot_routes_and_read_only_pages_cannot_create_versions(monk
     assert state["final_result_version"] == state["workflow_revision"] == 0
     assert state["available_result_versions"] == 0
 
-    def retired_rule(*args):
-        raise AssertionError("New reports must never use historical review rules")
-
-    monkeypatch.setattr(result_artifacts, "_legacy_needs_review", retired_rule)
     generated = client.post(base + "/artifacts/generate", headers=headers,
                             json={"expected_workflow_revision": 0, "schema_version": 1})
     assert generated.status_code == 200, generated.text

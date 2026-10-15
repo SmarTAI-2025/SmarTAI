@@ -31,7 +31,7 @@ const report: ResultArtifactVersion = { version: 1, current: true, status: "read
   files: [{ artifact_id: "grades_csv", title: "成绩表", title_en: "Grades", filename: "grades.csv", media_type: "text/csv", size_bytes: 12, sha256: "example" }] };
 
 it.each((["zh-CN", "en-US"] as const).flatMap(locale => [true, false].map(dirty => ({ locale, dirty }))))(
-"keeps a report from changed data or an old template downloadable in history ($locale, dirty=$dirty)", async ({ locale, dirty }) => {
+"keeps a current-format report downloadable when the server marks its data stale ($locale, dirty=$dirty)", async ({ locale, dirty }) => {
   const zh = locale === "zh-CN";
   vi.mocked(api.getTaskResultArtifacts).mockResolvedValue({ task_id: "T1", current_result_version: 1, analysis_status: "stale",
     versions: [{ ...report, status: "stale" }] });
@@ -99,12 +99,14 @@ it("only sends one atomic generation request after an explicit click", async () 
   await waitFor(() => expect(api.generateTaskResultArtifacts).toHaveBeenCalledWith("T1", 7));
 });
 
-it("reuses an existing current snapshot without confirming it again", async () => {
+it("offers generation with no downloads when retired reports are excluded", async () => {
   vi.mocked(api.getTaskResultArtifacts).mockResolvedValue({ task_id: "T1", current_result_version: 1, analysis_status: "not_generated",
     versions: [{ version: 1, current: true, status: "not_generated", files: [] }] });
   show({ ...finalization, final_result_version: 1 });
   await userEvent.click(await screen.findByRole("button", { name: "Generate files" }));
   await waitFor(() => expect(api.generateTaskResultArtifacts).toHaveBeenCalledWith("T1", 7));
+  expect(screen.getByText("No historical reports.")).toBeVisible();
+  expect(screen.queryByRole("button", { name: /Download/ })).not.toBeInTheDocument();
 });
 
 it("shows a recoverable error when atomic report generation conflicts", async () => {
