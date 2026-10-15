@@ -28,7 +28,8 @@ beforeEach(() => {
 afterEach(() => vi.restoreAllMocks());
 
 const report: ResultArtifactVersion = { version: 1, current: true, status: "ready", generated_at: 1_700_000_000,
-  files: [{ artifact_id: "grades_csv", title: "成绩表", title_en: "Grades", filename: "grades.csv", media_type: "text/csv", size_bytes: 12, sha256: "example" }] };
+  bundle_filename: "代数作业_2026-10-15_v1_reports.zip",
+  files: [{ artifact_id: "grades_csv", title: "成绩表", title_en: "Grades", filename: "代数作业_2026-10-15_v1_grades.csv", media_type: "text/csv", size_bytes: 12, sha256: "example" }] };
 
 it.each((["zh-CN", "en-US"] as const).flatMap(locale => [true, false].map(dirty => ({ locale, dirty }))))(
 "keeps a current-format report downloadable when the server marks its data stale ($locale, dirty=$dirty)", async ({ locale, dirty }) => {
@@ -39,7 +40,8 @@ it.each((["zh-CN", "en-US"] as const).flatMap(locale => [true, false].map(dirty 
   const confirm = vi.spyOn(window, "confirm");
   Object.defineProperty(URL, "createObjectURL", { configurable: true, value: vi.fn(() => "blob:report") });
   Object.defineProperty(URL, "revokeObjectURL", { configurable: true, value: vi.fn() });
-  vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => {});
+  const filenames: string[] = [];
+  vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(function (this: HTMLAnchorElement) { filenames.push(this.download); });
   show({ ...finalization, final_result_version: 1, final_result_dirty: dirty }, locale);
   expect(await screen.findByRole("heading", { name: zh ? "最新报告" : "Latest report" })).toBeVisible();
   expect(screen.getByRole("heading", { name: zh ? /^历史报告/ : /^Historical reports/ })).toBeVisible();
@@ -48,6 +50,7 @@ it.each((["zh-CN", "en-US"] as const).flatMap(locale => [true, false].map(dirty 
   expect(screen.queryByText(/过期|out of date|stale|regeneration needed/i)).not.toBeInTheDocument();
   await userEvent.click(screen.getByRole("button", { name: zh ? "下载 ZIP" : "Download ZIP" }));
   await waitFor(() => expect(api.getTaskResultArtifactBlob).toHaveBeenCalledWith("T1", 1, "bundle"));
+  expect(filenames).toEqual([report.bundle_filename]);
   expect(confirm).not.toHaveBeenCalled();
 });
 
@@ -58,6 +61,20 @@ it("shows a generated latest report with time and an empty history", async () =>
   expect(screen.getByText("Generated at")).toBeVisible();
   expect(screen.getByText("No historical reports.")).toBeVisible();
   expect(screen.queryByRole("button", { name: "Delete" })).not.toBeInTheDocument();
+});
+
+it("uses the server's readable names for the latest ZIP and single-file downloads", async () => {
+  vi.mocked(api.getTaskResultArtifacts).mockResolvedValue({ task_id: "T1", current_result_version: 1, analysis_status: "ready", versions: [report] });
+  vi.mocked(api.getTaskResultArtifactBlob).mockResolvedValue(new Blob(["report"]));
+  Object.defineProperty(URL, "createObjectURL", { configurable: true, value: vi.fn(() => "blob:report") });
+  Object.defineProperty(URL, "revokeObjectURL", { configurable: true, value: vi.fn() });
+  const filenames: string[] = [];
+  vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(function (this: HTMLAnchorElement) { filenames.push(this.download); });
+  show({ ...finalization, final_result_version: 1 });
+  await userEvent.click(await screen.findByRole("button", { name: "Download all ZIP" }));
+  await waitFor(() => expect(filenames).toEqual([report.bundle_filename]));
+  await userEvent.click(screen.getByRole("button", { name: "Download" }));
+  await waitFor(() => expect(filenames).toEqual([report.bundle_filename, report.files[0].filename]));
 });
 
 it("deletes only the selected historical version and refreshes its list", async () => {

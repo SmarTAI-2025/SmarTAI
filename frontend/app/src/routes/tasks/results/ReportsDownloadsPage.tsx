@@ -137,7 +137,7 @@ export function ReportsDownloadsPage({
       <div className="p-5">
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div><h2 className="text-[20px] font-bold tracking-[-0.01em] text-foreground">{tx(locale, "最新报告", "Latest report")}</h2><p className="mt-1 text-[13px] text-muted-foreground">{tx(locale, "根据当前已保存的数据生成报告。", "Generate a report from the currently saved data.")}</p></div>
-          {ready ? <button type="button" disabled={downloading !== null} onClick={() => void download(current.version, "bundle", bundleName(taskId, current.version))} className="inline-flex h-9 items-center gap-1.5 rounded-[8px] bg-primary px-3.5 text-[11px] font-semibold text-primary-foreground disabled:opacity-50">{downloading === `${current.version}:bundle` ? <LoaderCircle aria-hidden="true" className="h-4 w-4 animate-spin" /> : <Archive aria-hidden="true" className="h-4 w-4" />}{tx(locale, "下载全部 ZIP", "Download all ZIP")}</button> : null}
+          {ready ? <button type="button" disabled={downloading !== null} onClick={() => void download(current.version, "bundle", current.bundle_filename ?? "reports.zip")} className="inline-flex h-9 items-center gap-1.5 rounded-[8px] bg-primary px-3.5 text-[11px] font-semibold text-primary-foreground disabled:opacity-50">{downloading === `${current.version}:bundle` ? <LoaderCircle aria-hidden="true" className="h-4 w-4 animate-spin" /> : <Archive aria-hidden="true" className="h-4 w-4" />}{tx(locale, "下载全部 ZIP", "Download all ZIP")}</button> : null}
         </div>
 
         {ready ? <div className="mt-4 grid grid-cols-2 gap-3 xl:grid-cols-4">
@@ -179,7 +179,7 @@ export function ReportsDownloadsPage({
 
       <div className="border-t px-5 py-4">
         <h2 className="flex items-center justify-between gap-3 text-[16px] font-bold text-foreground"><span className="inline-flex items-center gap-2"><History aria-hidden="true" className="h-4 w-4 text-muted-foreground" />{tx(locale, "历史报告", "Historical reports")}</span><span className="rounded-full bg-slate-100 px-2.5 py-1 text-[10px] font-semibold text-muted-foreground">{historical.length}</span></h2>
-        <div className="mt-3 grid gap-2">{historical.length ? historical.map((version) => <HistoricalVersion key={version.version} locale={locale} version={version} downloading={downloading === `${version.version}:bundle`} deleting={deleteMutation.isPending} onDownload={() => void download(version.version, "bundle", bundleName(taskId, version.version))} onDelete={() => void remove(version.version)} />) : <p className="rounded-[8px] bg-muted/50 px-3 py-4 text-center text-[11px] text-muted-foreground">{tx(locale, "暂无历史报告。", "No historical reports.")}</p>}</div>
+        <div className="mt-3 grid gap-2">{historical.length ? historical.map((version) => <HistoricalVersion key={version.version} locale={locale} version={version} downloading={downloading === `${version.version}:bundle`} deleting={deleteMutation.isPending} onDownload={() => void download(version.version, "bundle", version.bundle_filename ?? "reports.zip")} onDelete={() => void remove(version.version)} />) : <p className="rounded-[8px] bg-muted/50 px-3 py-4 text-center text-[11px] text-muted-foreground">{tx(locale, "暂无历史报告。", "No historical reports.")}</p>}</div>
       </div>
     </section>
   );
@@ -200,6 +200,5 @@ function Metric({ label, value, tone, compact = false }: { label: string; value:
 }
 
 function formatBytes(value: number): string { return value < 1024 ? `${value} B` : value < 1024 * 1024 ? `${(value / 1024).toFixed(1)} KB` : `${(value / 1024 / 1024).toFixed(1)} MB`; }
-function bundleName(taskId: string, version: number): string { return `smartai_${taskId}_v${version}_reports.zip`; }
 function triggerDownload(blob: Blob, filename: string) { const url = URL.createObjectURL(blob); const anchor = document.createElement("a"); anchor.href = url; anchor.download = filename; anchor.click(); window.setTimeout(() => URL.revokeObjectURL(url), 1000); }
 function tx(locale: Locale, zh: string, en: string): string { return locale === "en-US" ? en : zh; }

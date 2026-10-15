@@ -32,6 +32,24 @@ def is_current_artifact_manifest(manifest: Mapping[str, Any]) -> bool:
     return manifest.get("schema_version") == ARTIFACT_SCHEMA_VERSION
 
 
+def artifact_download_filename(manifest: Mapping[str, Any], artifact_id: str) -> str:
+    """Name downloads without changing the frozen manifest or its checksums."""
+    from datetime import datetime, timezone
+
+    name = re.sub(r"[^\w .()-]+", "_", str(manifest.get("task_name") or ""))
+    name = name.encode("utf-8")[:120].decode("utf-8", errors="ignore").strip(" ._") or "SmarTAI"
+    generated_date = datetime.fromtimestamp(manifest["generated_at"], tz=timezone.utc).strftime("%Y-%m-%d")
+    suffix = {
+        "bundle": "reports.zip",
+        "grades_csv": "grades.csv",
+        "learning_report_md": "learning_report.md",
+        "published_answers_md": "answers.md",
+        "published_answers_tex": "answers.tex",
+        "formal_result_json": "formal_result.json",
+    }[artifact_id]
+    return f"{name}_{generated_date}_v{int(manifest['result_version'])}_{suffix}"
+
+
 @dataclass(frozen=True)
 class ResultArtifactFile:
     artifact_id: str
@@ -115,25 +133,25 @@ def build_artifact_files(
 ) -> List[ResultArtifactFile]:
     version = int(snapshot.get("version") or 0)
     payload = _mapping(snapshot.get("payload"))
-    prefix = f"smartai_{_safe_name(task_id)}_v{version}"
+    naming = {"task_name": task_name, "generated_at": generated_at, "result_version": version}
     report = _learning_report(task_name, version, snapshot, payload, generated_at)
     answers = _published_answers(task_name, version, payload)
     latex = _published_answers_latex(task_name, version, payload)
     files = [
         ResultArtifactFile(
-            "grades_csv", "成绩表", "Grade sheet", f"{prefix}_grades.csv", "text/csv; charset=utf-8",
+            "grades_csv", "成绩表", "Grade sheet", artifact_download_filename(naming, "grades_csv"), "text/csv; charset=utf-8",
             _grades_csv(payload),
         ),
         ResultArtifactFile(
-            "learning_report_md", "学情报告", "Learning report", f"{prefix}_learning_report.md", "text/markdown; charset=utf-8",
+            "learning_report_md", "学情报告", "Learning report", artifact_download_filename(naming, "learning_report_md"), "text/markdown; charset=utf-8",
             report.encode("utf-8"),
         ),
         ResultArtifactFile(
-            "published_answers_md", "发布版标答（Markdown）", "Published answers (Markdown)", f"{prefix}_answers.md", "text/markdown; charset=utf-8",
+            "published_answers_md", "发布版标答（Markdown）", "Published answers (Markdown)", artifact_download_filename(naming, "published_answers_md"), "text/markdown; charset=utf-8",
             answers.encode("utf-8"),
         ),
         ResultArtifactFile(
-            "published_answers_tex", "发布版标答（LaTeX）", "Published answers (LaTeX)", f"{prefix}_answers.tex", "application/x-tex; charset=utf-8",
+            "published_answers_tex", "发布版标答（LaTeX）", "Published answers (LaTeX)", artifact_download_filename(naming, "published_answers_tex"), "application/x-tex; charset=utf-8",
             latex.encode("utf-8"),
         ),
     ]
@@ -149,7 +167,7 @@ def build_artifact_files(
             "result": payload,
         }
         files.append(ResultArtifactFile(
-            "formal_result_json", "正式结果数据", "Formal result data", f"{prefix}_formal_result.json", "application/json; charset=utf-8",
+            "formal_result_json", "正式结果数据", "Formal result data", artifact_download_filename(naming, "formal_result_json"), "application/json; charset=utf-8",
             json.dumps(formal_json, ensure_ascii=False, indent=2, default=str).encode("utf-8"),
         ))
     return files
@@ -403,11 +421,6 @@ def _csv_safe(value: str) -> str:
     if value and value.lstrip().startswith(("=", "+", "-", "@")):
         return "'" + value
     return value
-
-
-def _safe_name(value: str) -> str:
-    cleaned = re.sub(r"[^A-Za-z0-9._-]+", "_", value).strip("._")
-    return cleaned[:80] or "task"
 
 
 def _escape_markdown(value: str) -> str:

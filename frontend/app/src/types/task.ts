@@ -420,6 +420,7 @@ export interface ResultArtifactVersion {
   status: ResultArtifactStatus;
   confirmed_at?: number | null;
   generated_at?: number | null;
+  bundle_filename?: string;
   files: ResultArtifactFile[];
 }
 

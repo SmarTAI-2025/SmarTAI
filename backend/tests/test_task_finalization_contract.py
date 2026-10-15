@@ -412,6 +412,7 @@ def test_retired_report_formats_are_hidden_blocked_and_never_reused(monkeypatch,
 @pytest.mark.parametrize("field,error_code", [
     ("sha256", "artifact_renderer_changed"),
     ("title", "artifact_renderer_changed"),
+    ("filename", "artifact_manifest_changed"),
     ("artifact_fingerprint", "artifact_manifest_changed"),
 ])
 def test_paused_json_exports_preserve_download_integrity_checks(field, error_code):
@@ -439,6 +440,78 @@ def test_paused_json_exports_preserve_download_integrity_checks(field, error_cod
         record.manifest = manifest
     with pytest.raises(VersionConflict, match=error_code):
         task_facade.artifact_bytes(**args, version=1, artifact_id="bundle")
+
+
+@pytest.mark.parametrize("stored_opaque_names", [False, True])
+def test_readable_names_are_shared_by_indexes_downloads_and_zip_members(stored_opaque_names):
+    from copy import deepcopy
+    from io import BytesIO
+    from urllib.parse import unquote
+    from zipfile import ZipFile
+    from fastapi.testclient import TestClient
+    from backend.auth import create_token
+    from backend.db import workflow_repository
+    from backend.db.models import AssignmentRecord
+    from backend.db.session import session_scope
+    from backend.main import app
+    from backend.services import result_artifacts, task_facade
+
+    seeded = _prepared_task()
+    args = {"task_id": seeded["task_id"], "owner_id": seeded["owner_id"]}
+    with session_scope() as session:
+        session.get(AssignmentRecord, seeded["task_id"]).name = "代数作业 / 第三次"
+    task_facade.generate_artifacts(**args, expected_revision=0)
+    record = workflow_repository.list_artifact_manifests(seeded["task_id"], owner_id=seeded["owner_id"])[0]
+    if stored_opaque_names:
+        manifest = deepcopy(record.manifest)
+        for item in manifest["files"]:
+            item["filename"] = f"smartai_{seeded['task_id']}_v1_{item['artifact_id']}"
+        snapshot = task_facade.result_snapshot(**args, result_version=1, grading_run_id=record.grading_run_id)
+        manifest["artifact_fingerprint"] = result_artifacts.artifact_fingerprint(
+            task_id=seeded["task_id"], task_name=manifest["task_name"], snapshot=snapshot,
+            generated_at=record.generated_at, files=manifest["files"],
+        )
+        with session_scope() as session:
+            session.get(workflow_repository.ResultArtifactManifestRecord, record.id).manifest = manifest
+    stored_before = workflow_repository.get_artifact_manifest(seeded["task_id"], 1, owner_id=seeded["owner_id"]).manifest
+    client = TestClient(app)
+    base = f"/tasks/{seeded['task_id']}"
+    headers = {"Authorization": "Bearer " + create_token(seeded["owner_id"], "teacher")}
+    report = client.get(base + "/artifacts", headers=headers).json()["versions"][0]
+    bundle = client.get(base + "/artifacts/1/bundle", headers=headers)
+    assert bundle.status_code == 200
+    assert unquote(bundle.headers["Content-Disposition"]).endswith(report["bundle_filename"])
+    assert report["bundle_filename"].startswith("代数作业 _ 第三次_")
+    assert report["bundle_filename"].endswith("_v1_reports.zip")
+    with ZipFile(BytesIO(bundle.content)) as archive:
+        assert set(archive.namelist()) == {item["filename"] for item in report["files"]}
+        for item in report["files"]:
+            assert seeded["task_id"] not in item["filename"]
+            response = client.get(base + f"/artifacts/1/{item['artifact_id']}", headers=headers)
+            assert response.status_code == 200
+            assert unquote(response.headers["Content-Disposition"]).endswith(item["filename"])
+            assert response.content == archive.read(item["filename"])
+    # Neither repeat downloads nor a later task rename may rename history or
+    # mutate its snapshot/manifest. The current format does not need regeneration.
+    with session_scope() as session:
+        session.get(AssignmentRecord, seeded["task_id"]).name = "Renamed task"
+    assert task_facade.generate_artifacts(**args, expected_revision=0)["status"] == "already_done"
+    assert client.get(base + "/artifacts/1/bundle", headers=headers).content == bundle.content
+    assert client.get(base + "/artifacts", headers=headers).json()["versions"][0] == report
+    assert workflow_repository.get_artifact_manifest(seeded["task_id"], 1, owner_id=seeded["owner_id"]).manifest == stored_before
+
+
+@pytest.mark.parametrize("task_name,prefix", [
+    ("中文 Homework", "中文 Homework"),
+    ("../\\\r\n<>:*?\"|", "SmarTAI"),
+    ("中" * 100, "中" * 40),
+])
+def test_report_names_are_unicode_safe_bounded_and_use_generation_time(task_name, prefix):
+    from backend.services.result_artifacts import artifact_download_filename
+
+    filename = artifact_download_filename({"task_name": task_name, "generated_at": 0, "result_version": 3}, "bundle")
+    assert filename == f"{prefix}_1970-01-01_v3_reports.zip"
+    assert len(filename.encode("utf-8")) < 255
 
 
 def test_upstream_answer_edit_marks_detached_formal_result_and_artifacts_stale():
