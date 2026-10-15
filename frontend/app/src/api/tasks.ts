@@ -104,6 +104,10 @@ export function updateTask(taskId: string, patch: TaskMetadataPatch): Promise<Ta
   return putJSON<TaskLite, TaskMetadataPatch>(`/tasks/${taskId}`, patch);
 }
 
+export function taskMetadataSnapshot(task: TaskLite): NonNullable<TaskMetadataPatch["expected_metadata"]> {
+  return { name: task.name, semester_id: task.semester_id ?? null, course_id: task.course_id ?? null, tag_ids: [...(task.tag_ids ?? [])].sort() };
+}
+
 export async function interpretTaskHistoryQuery(query: string, history?: string[]): Promise<HistoryInterpretation> {
   const execution = await runGroundedAsk(undefined, query, "history", undefined, { history });
   return { filters: {}, conditions: [], ambiguities: [], explanation: execution.explanation, source: "grounded", execution };

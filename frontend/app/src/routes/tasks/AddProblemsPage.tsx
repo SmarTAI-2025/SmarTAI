@@ -272,7 +272,8 @@ function AddProblemsForm({ taskQuery, submittedInput }: { taskQuery: ReturnType<
           : tx(locale, "题目与资料已进入统一识别。", "Question materials are being prepared."),
       );
       if (!draft.protection.isCurrent()) return;
-      draft.clear();
+      await draft.clear();
+      if (!draft.protection.isCurrent()) return;
       navigate(`/tasks/${taskId}/problems/progress`);
     } catch (error) {
       const storedFileId = getAPIErrorDetail(error)?.stored_file_id;

@@ -96,6 +96,10 @@ describe("GradingSetupPage regrade mode", () => {
       isPending: false,
       mutateAsync: saveSetupMutate,
     });
+    saveSetupMutate.mockImplementation(async ({ gradingSetup }) => ({
+      ...(useGradingSetup as unknown as () => any)().data,
+      grading_setup: gradingSetup,
+    }));
     (useKBDocs as unknown as ReturnType<typeof vi.fn>).mockReturnValue({
       data: { docs: [] },
       isLoading: false,

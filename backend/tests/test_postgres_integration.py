@@ -69,6 +69,15 @@ def _seed_user(role: str) -> str:
     return uid
 
 
+def test_postgres_task_metadata_compare_and_update_is_atomic(pg_database):
+    from backend.tests.test_task_metadata_conflicts import (
+        test_simultaneous_metadata_updates_have_exactly_one_winner,
+        test_invalid_tags_roll_back_name_and_semester_and_enforce_owner,
+    )
+    test_simultaneous_metadata_updates_have_exactly_one_winner()
+    test_invalid_tags_roll_back_name_and_semester_and_enforce_owner()
+
+
 def test_postgres_task_identity_migration_preserves_existing_results(pg_database, monkeypatch):
     from sqlalchemy import select
     from alembic import command

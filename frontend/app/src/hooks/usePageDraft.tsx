@@ -25,7 +25,7 @@ export function usePageDraft<T extends object>(scope: string, initial: () => T, 
     setBaseline((old) => ({ ...old, [name]: next }));
     update((old) => ({ ...old, [name]: next }));
   }
-  function clear() { sealed.current = true; void protection.clear(current.current).catch(() => {}); }
+  async function clear() { sealed.current = true; return protection.clear(current.current); }
   function reset() {
     const snapshot = current.current;
     const empty = initial(); current.current = empty; setValue(empty); sealed.current = false;

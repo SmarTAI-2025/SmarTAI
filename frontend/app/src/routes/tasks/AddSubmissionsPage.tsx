@@ -250,7 +250,8 @@ function AddSubmissionsForm({ taskQuery, submittedInput }: { taskQuery: ReturnTy
             onProgress: setUploadPercent,
           });
       if (!draft.protection.isCurrent()) return;
-      draft.clear();
+      await draft.clear();
+      if (!draft.protection.isCurrent()) return;
       if (response.status === "already_done") {
         toast.info(t("submissionUploadViewProgress"));
         navigate(`/tasks/${taskId}/submissions`);

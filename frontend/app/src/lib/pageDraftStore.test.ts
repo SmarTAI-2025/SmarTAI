@@ -54,6 +54,13 @@ describe("explicit IndexedDB draft transactions", () => {
     await removePageDraft("a", "form"); await expect(writePageDrafts([late])).rejects.toThrow("其他标签页");
     expect((await readPageDraft("a", "form", codec)).value).toBeNull();
   });
+  it("submission cleanup preserves a newer draft saved by another tab", async () => {
+    const original = await prepare("submitted");
+    await writePageDrafts([original]);
+    await writePageDrafts([await prepare("newer unsubmitted edit")]);
+    await removePageDraft("a", "form", original.record.revision);
+    expect((await readPageDraft("a", "form", codec)).value?.name).toBe("newer unsubmitted edit");
+  });
   it("logout fences prepared writes and purges drafts", async () => {
     await writePageDrafts([await prepare()]); const late = await prepare("late");
     await clearPageDrafts(); await expect(writePageDrafts([late])).rejects.toThrow("登录状态");

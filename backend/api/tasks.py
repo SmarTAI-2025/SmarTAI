@@ -75,7 +75,15 @@ class CreateTaskRequest(BaseModel):
     tag_ids: list[str] = Field(default_factory=list, max_length=30)
 
 
+class TaskMetadataSnapshot(BaseModel):
+    name: str = Field(max_length=200)
+    semester_id: str | None = Field(max_length=64)
+    course_id: str | None = Field(max_length=64)
+    tag_ids: list[str] = Field(max_length=30)
+
+
 class UpdateTaskRequest(BaseModel):
+    expected_metadata: TaskMetadataSnapshot
     name: str | None = Field(default=None, max_length=200)
     semester_id: str | None = Field(default=None, max_length=64)
     course_id: str | None = Field(default=None, max_length=64)
@@ -372,6 +380,7 @@ def update_task(task_id: str, request: UpdateTaskRequest, current: User = Depend
         semester_id=body["semester_id"] if "semester_id" in body else ...,
         course_id=body["course_id"] if "course_id" in body else ...,
         tag_ids=body.get("tag_ids") if "tag_ids" in body else None,
+        expected_metadata=body["expected_metadata"],
     ))
 
 
