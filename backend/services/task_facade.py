@@ -86,6 +86,7 @@ from backend.services.background_errors import (
 )
 from backend.services.result_artifacts import (
     ARTIFACT_SCHEMA_VERSION,
+    artifact_download_filename,
     artifact_fingerprint,
     build_artifact_bundle,
     build_artifact_files,
@@ -5216,8 +5217,10 @@ def artifact_index(*, task_id: str, owner_id: str) -> dict:
             ),
             "confirmed_at": record.manifest.get("confirmed_at"),
             "generated_at": record.generated_at,
+            "bundle_filename": artifact_download_filename(record.manifest, "bundle"),
             "files": [
-                item for item in record.manifest.get("files", [])
+                {**item, "filename": artifact_download_filename(record.manifest, item["artifact_id"])}
+                for item in record.manifest.get("files", [])
                 if is_artifact_enabled(item.get("artifact_id", ""))
             ],
         }
@@ -5294,7 +5297,9 @@ def artifact_bytes(
         raise VersionConflict("artifact_renderer_changed")
     for item in files:
         expected = expected_files.get(item.artifact_id)
-        if expected != item.metadata():
+        # Download names are presentation; verify content/other metadata here,
+        # and authenticate the original stored filename in the manifest below.
+        if expected != {**item.metadata(), "filename": expected.get("filename")}:
             raise VersionConflict("artifact_renderer_changed")
     # Verify the original manifest, including paused exports' metadata, without
     # rendering their bytes. Every downloadable file is verified above.
@@ -5314,7 +5319,7 @@ def artifact_bytes(
         return (
             build_artifact_bundle(files, record.manifest),
             "application/zip",
-            f"smartai_{task_id}_v{version}_reports.zip",
+            artifact_download_filename(record.manifest, "bundle"),
         )
     artifact = next((item for item in files if item.artifact_id == artifact_id), None)
     if artifact is None:
