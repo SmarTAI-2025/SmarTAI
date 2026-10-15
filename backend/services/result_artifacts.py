@@ -38,7 +38,7 @@ def artifact_download_filename(manifest: Mapping[str, Any], artifact_id: str) ->
 
     name = re.sub(r"[^\w .()-]+", "_", str(manifest.get("task_name") or ""))
     name = name.encode("utf-8")[:120].decode("utf-8", errors="ignore").strip(" ._") or "SmarTAI"
-    timestamp = datetime.fromtimestamp(manifest["generated_at"], tz=timezone.utc).strftime("%Y-%m-%d_%H-%M-%SUTC")
+    generated_date = datetime.fromtimestamp(manifest["generated_at"], tz=timezone.utc).strftime("%Y-%m-%d")
     suffix = {
         "bundle": "reports.zip",
         "grades_csv": "grades.csv",
@@ -47,7 +47,7 @@ def artifact_download_filename(manifest: Mapping[str, Any], artifact_id: str) ->
         "published_answers_tex": "answers.tex",
         "formal_result_json": "formal_result.json",
     }[artifact_id]
-    return f"{name}_{timestamp}_v{int(manifest['result_version'])}_{suffix}"
+    return f"{name}_{generated_date}_v{int(manifest['result_version'])}_{suffix}"
 
 
 @dataclass(frozen=True)

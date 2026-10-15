@@ -482,7 +482,7 @@ def test_readable_names_are_shared_by_indexes_downloads_and_zip_members(stored_o
     assert bundle.status_code == 200
     assert unquote(bundle.headers["Content-Disposition"]).endswith(report["bundle_filename"])
     assert report["bundle_filename"].startswith("代数作业 _ 第三次_")
-    assert "UTC_v1_reports.zip" in report["bundle_filename"]
+    assert report["bundle_filename"].endswith("_v1_reports.zip")
     with ZipFile(BytesIO(bundle.content)) as archive:
         assert set(archive.namelist()) == {item["filename"] for item in report["files"]}
         for item in report["files"]:
@@ -510,7 +510,7 @@ def test_report_names_are_unicode_safe_bounded_and_use_generation_time(task_name
     from backend.services.result_artifacts import artifact_download_filename
 
     filename = artifact_download_filename({"task_name": task_name, "generated_at": 0, "result_version": 3}, "bundle")
-    assert filename == f"{prefix}_1970-01-01_00-00-00UTC_v3_reports.zip"
+    assert filename == f"{prefix}_1970-01-01_v3_reports.zip"
     assert len(filename.encode("utf-8")) < 255
 
 

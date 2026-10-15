@@ -28,8 +28,8 @@ beforeEach(() => {
 afterEach(() => vi.restoreAllMocks());
 
 const report: ResultArtifactVersion = { version: 1, current: true, status: "ready", generated_at: 1_700_000_000,
-  bundle_filename: "代数作业_2026-10-15_12-00-00UTC_v1_reports.zip",
-  files: [{ artifact_id: "grades_csv", title: "成绩表", title_en: "Grades", filename: "代数作业_2026-10-15_12-00-00UTC_v1_grades.csv", media_type: "text/csv", size_bytes: 12, sha256: "example" }] };
+  bundle_filename: "代数作业_2026-10-15_v1_reports.zip",
+  files: [{ artifact_id: "grades_csv", title: "成绩表", title_en: "Grades", filename: "代数作业_2026-10-15_v1_grades.csv", media_type: "text/csv", size_bytes: 12, sha256: "example" }] };
 
 it.each((["zh-CN", "en-US"] as const).flatMap(locale => [true, false].map(dirty => ({ locale, dirty }))))(
 "keeps a current-format report downloadable when the server marks its data stale ($locale, dirty=$dirty)", async ({ locale, dirty }) => {
