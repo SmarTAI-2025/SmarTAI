@@ -160,33 +160,104 @@ describe("FrontierLiveDemoPage", () => {
     expect(getTask).toHaveBeenCalledTimes(1);
   });
 
-  it("navigates to settings without confirming answers or starting grading", async () => {
+  it.each([false, true])("grades inline using the default or saved setup (configured: %s)", async (configured) => {
     const task = { ...taskWithQuestions(), student_data: recognizedStudents() };
-    vi.mocked(getTaskState).mockResolvedValue(taskState("submissions_ready"));
+    const setup = { ...gradingSetup(), configured, grading_setup: configured ? { ...gradingSetup().suggested_setup!, teacher_notes: "Keep my saved settings" } : null };
+    const grading = deferred<TaskStateSnapshot>();
+    vi.mocked(getTaskState).mockResolvedValueOnce(taskState("submissions_ready"))
+      .mockReturnValueOnce(grading.promise).mockResolvedValue(taskState("graded"));
     vi.mocked(getTask).mockResolvedValue(task);
+    vi.mocked(getGradingSetup).mockResolvedValue(setup);
+    vi.mocked(saveGradingSetup).mockResolvedValue({ ...setup, configured: true, grading_setup: setup.suggested_setup, workflow_revision: 3 });
+    vi.mocked(startGrading).mockResolvedValue({ status: "started", job_id: "grading-job" });
+    vi.mocked(getTaskResult).mockResolvedValue(gradedResult(task));
     const user = userEvent.setup();
     renderLive("asg_demo123");
-    await user.click((await screen.findAllByRole("button", { name: /open grading settings/i }))[0]);
+    const buttons = await screen.findAllByRole("button", { name: "Start grading" });
+    await user.dblClick(buttons[configured ? 1 : 0]);
+    await waitFor(() => expect(startGrading).toHaveBeenCalledExactlyOnceWith("asg_demo123", {
+      expectedWorkflowRevision: configured ? setup.workflow_revision : 3,
+      requestId: expect.any(String),
+    }));
+    if (configured) expect(saveGradingSetup).not.toHaveBeenCalled();
+    else expect(saveGradingSetup).toHaveBeenCalledExactlyOnceWith({
+      taskId: "asg_demo123", expectedWorkflowRevision: setup.workflow_revision, gradingSetup: setup.suggested_setup,
+    });
+    expect(screen.getByRole("heading", { name: "Live grading run" })).toBeVisible();
+    expect(screen.getByRole("button", { name: "Running…" })).toBeDisabled();
+    await act(async () => grading.resolve(taskState("graded")));
+    expect(await screen.findByRole("heading", { name: "See class performance from live scores" })).toBeVisible();
     expect(updateProblem).not.toHaveBeenCalled();
     expect(updateStudentAnswer).not.toHaveBeenCalled();
     expect(updateStudentIdentity).not.toHaveBeenCalled();
-    expect(saveGradingSetup).not.toHaveBeenCalled();
-    expect(startGrading).not.toHaveBeenCalled();
   });
 
   it("retries a failed grading run in the same task without recognition or confirmation writes", async () => {
     const failed = { ...taskState("error"), grading_job_id: "grading-job", last_failed_job_id: "grading-job", error: "provider_upstream_unavailable" };
-    vi.mocked(getTaskState).mockResolvedValue(failed);
+    vi.mocked(getTaskState).mockResolvedValueOnce(failed).mockResolvedValueOnce(failed).mockResolvedValue(taskState("graded"));
     vi.mocked(startGrading).mockResolvedValue({ status: "running", task_id: "asg_demo123", job_id: "retry-job" });
+    vi.mocked(getTaskResult).mockResolvedValue(gradedResult({ ...taskWithQuestions(), student_data: recognizedStudents() }));
     const user = userEvent.setup();
     renderLive("asg_demo123");
     await user.click(await screen.findByRole("button", { name: "Retry failed items" }));
     await waitFor(() => expect(startGrading).toHaveBeenCalledExactlyOnceWith("asg_demo123", expect.objectContaining({ retryScope: "failed_only", expectedWorkflowRevision: failed.workflow_revision, requestId: expect.any(String) })));
+    expect(await screen.findByRole("heading", { name: "See class performance from live scores" })).toBeVisible();
     expect(createTask).not.toHaveBeenCalled();
     expect(startQuestionPreparation).not.toHaveBeenCalled();
     expect(parseSubmissions).not.toHaveBeenCalled();
     expect(updateProblem).not.toHaveBeenCalled();
     expect(updateStudentAnswer).not.toHaveBeenCalled();
+  });
+
+  it("keeps a failed setup save on the Demo and starts only after an explicit successful retry", async () => {
+    const task = { ...taskWithQuestions(), student_data: recognizedStudents() };
+    vi.mocked(getTaskState).mockResolvedValueOnce(taskState("submissions_ready")).mockResolvedValue(taskState("graded"));
+    vi.mocked(getTask).mockResolvedValue(task);
+    vi.mocked(getGradingSetup).mockResolvedValue(gradingSetup());
+    vi.mocked(saveGradingSetup).mockRejectedValueOnce(new client.APIError(409, "Conflict", { detail: { code: "workflow_revision_conflict" } }))
+      .mockResolvedValue({ ...gradingSetup(), configured: true, grading_setup: gradingSetup().suggested_setup, workflow_revision: 4 });
+    vi.mocked(startGrading).mockResolvedValue({ status: "started", job_id: "grading-job" });
+    vi.mocked(getTaskResult).mockResolvedValue(gradedResult(task));
+    const user = userEvent.setup();
+    renderLive("asg_demo123");
+    await user.click((await screen.findAllByRole("button", { name: "Start grading" }))[0]);
+    const retry = await screen.findByRole("button", { name: "Retry grading" });
+    expect(screen.getByRole("heading", { name: "Live grading run" })).toBeVisible();
+    expect(startGrading).not.toHaveBeenCalled();
+    await user.click(retry);
+    expect(await screen.findByRole("heading", { name: "See class performance from live scores" })).toBeVisible();
+    expect(startGrading).toHaveBeenCalledExactlyOnceWith("asg_demo123", { expectedWorkflowRevision: 4, requestId: expect.any(String) });
+  });
+
+  it("does not submit grading after leaving while the default setup is being saved", async () => {
+    const saving = deferred<GradingSetupResponse>();
+    vi.mocked(getTaskState).mockResolvedValue(taskState("submissions_ready"));
+    vi.mocked(getTask).mockResolvedValue({ ...taskWithQuestions(), student_data: recognizedStudents() });
+    vi.mocked(getGradingSetup).mockResolvedValue(gradingSetup());
+    vi.mocked(saveGradingSetup).mockReturnValue(saving.promise);
+    const user = userEvent.setup();
+    renderLive("asg_demo123");
+    await user.click((await screen.findAllByRole("button", { name: "Start grading" }))[0]);
+    await waitFor(() => expect(saveGradingSetup).toHaveBeenCalledTimes(1));
+    await user.click(screen.getByRole("link", { name: /^open task/i }));
+    await act(async () => saving.resolve({ ...gradingSetup(), configured: true, workflow_revision: 3 }));
+    expect(screen.getByText("Task details")).toBeInTheDocument();
+    expect(startGrading).not.toHaveBeenCalled();
+  });
+
+  it("checks current blocking issues before saving defaults or grading", async () => {
+    const task = { ...taskWithQuestions(), student_data: recognizedStudents() };
+    vi.mocked(getTaskState).mockResolvedValue(taskState("submissions_ready"));
+    vi.mocked(getTask).mockResolvedValueOnce(task).mockResolvedValue({
+      ...task, problem_data: { ...task.problem_data, q1: { ...task.problem_data.q1, stem: "" } },
+    });
+    const user = userEvent.setup();
+    renderLive("asg_demo123");
+    await user.click((await screen.findAllByRole("button", { name: "Start grading" }))[0]);
+    expect(await screen.findByRole("alert")).toBeVisible();
+    expect(screen.getByRole("heading", { name: "Live grading run" })).toBeVisible();
+    expect(saveGradingSetup).not.toHaveBeenCalled();
+    expect(startGrading).not.toHaveBeenCalled();
   });
 
   it("states the honest boundary between synthetic inputs and live processing", () => {
@@ -453,15 +524,16 @@ describe("FrontierLiveDemoPage", () => {
     expect(alexCard).not.toBeNull();
     expect(within(alexCard!).getAllByText(/^Q[1-4]$/u).map((label) => label.textContent))
       .toEqual(["Q1", "Q2", "Q3", "Q4"]);
-    await user.click(screen.getAllByRole("button", { name: /open grading settings/i })[0]);
+    await user.click(screen.getAllByRole("button", { name: "Start grading" })[0]);
+    expect(await screen.findByRole("heading", { name: "See class performance from live scores" })).toBeVisible();
     expect(createTask).toHaveBeenCalledTimes(1);
     expect(preflightProblemSource).toHaveBeenCalledTimes(1);
     expect(startQuestionPreparation).toHaveBeenCalledTimes(1);
     expect(parseSubmissions).toHaveBeenCalledTimes(1);
     expect(updateProblem).not.toHaveBeenCalled();
     expect(updateStudentAnswer).not.toHaveBeenCalled();
-    expect(saveGradingSetup).not.toHaveBeenCalled();
-    expect(startGrading).not.toHaveBeenCalled();
+    expect(saveGradingSetup).toHaveBeenCalledTimes(1);
+    expect(startGrading).toHaveBeenCalledTimes(1);
 
   });
 });
@@ -614,7 +686,7 @@ function gradingSetup(): GradingSetupResponse {
       aggregation_method: "single",
       multi_sample_n: 1,
       knowledge_scope: "none",
-      strictness: 0.5,
+      strictness: 50,
       allow_partial_credit: true,
       feedback_tone: "neutral",
       feedback_length: "medium",
