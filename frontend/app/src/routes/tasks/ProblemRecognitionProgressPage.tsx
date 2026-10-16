@@ -363,7 +363,7 @@ export function ProblemRecognitionProgressPage() {
             ))}
           </ol>
 
-          <div className="min-w-0 self-start"><RecognitionActivity progress={progress} locale={locale} /></div>
+          <div className="relative min-h-64 min-w-0 md:min-h-0"><RecognitionActivity progress={progress} locale={locale} fill /></div>
         </div>
       </section>
 

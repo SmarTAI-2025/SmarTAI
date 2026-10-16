@@ -38,19 +38,41 @@ beforeEach(() => {
   };
 });
 
+it("follows new entries only while at the bottom and resets following for a new run", () => {
+  const page = render(<RecognitionActivity progress={state.progress} locale="zh-CN" />);
+  const history = screen.getByRole("region", { name: "识别动态历史" });
+  Object.defineProperties(history, { scrollHeight: { configurable: true, value: 800 }, clientHeight: { value: 180 } });
+  const append = () => {
+    state.progress = { ...state.progress!, messages: [...state.progress!.messages, { ts: 101, level: "info", message: "activity_reading" }] };
+    page.rerender(<RecognitionActivity progress={state.progress} locale="zh-CN" />);
+  };
+  append();
+  expect(history.scrollTop).toBe(800);
+  history.scrollTop = 40;
+  fireEvent.scroll(history);
+  append();
+  expect(history.scrollTop).toBe(40);
+  history.scrollTop = 620;
+  fireEvent.scroll(history);
+  append();
+  expect(history.scrollTop).toBe(800);
+  history.scrollTop = 40;
+  fireEvent.scroll(history);
+  state.progress = { ...state.progress!, job_id: "new-run" };
+  append();
+  expect(history.scrollTop).toBe(800);
+});
+
 it.each(["operation_cancelled", "provider_timeout"])("does not present the last wait as ongoing after %s", (code) => {
   state.progress!.error_detail = code;
   state.progress!.messages = [{ ts: 100, level: "info", message: "activity_responding" }];
   render(<RecognitionActivity progress={state.progress} locale="zh-CN" incomplete />);
-  const button = screen.getByRole("button", { name: /最近动态/ });
-  expect(button).toHaveTextContent(code === "operation_cancelled" ? "本次识别已停止" : "本次识别未完成");
-  expect(button).not.toHaveTextContent("等待模型响应");
-  fireEvent.click(button);
+  expect(screen.getByText(code === "operation_cancelled" ? "本次识别已停止" : "本次识别未完成")).toBeVisible();
   expect(within(screen.getByRole("region")).getByText("请求已发出，等待模型响应")).toBeVisible();
 });
 
 describe.each(["questions", "submissions"])("%s recognition activity", (kind) => {
-  it.each(["zh-CN", "en-US"])("keeps progress visible during waits; expands history and resets for a new run (%s)", (locale) => {
+  it.each(["zh-CN", "en-US"])("keeps progress and history visible during waits and resets for a new run (%s)", (locale) => {
     state.locale = locale;
     state.status = kind === "questions" ? "extracting_problems" : "parsing_submissions";
     const page = render(<Page kind={kind} />);
@@ -58,23 +80,20 @@ describe.each(["questions", "submissions"])("%s recognition activity", (kind) =>
     expect(screen.getByText(kind === "questions" ? (locale === "zh-CN" ? "已完成 3/7 道大题" : "3/7 major questions completed") : /submissionProgressProcessed 3 \/ 10/)).toBeVisible();
     expect(screen.getByText(new RegExp(locale === "zh-CN" ? "1 个请求等待模型响应" : "1 requests awaiting model response"))).toBeVisible();
     expect(screen.getByText(new RegExp(locale === "zh-CN" ? "响应超时.*2/3" : "Response timed out.*2/3"))).toBeVisible();
-    const toggle = screen.getByRole("button", { name: new RegExp(locale === "zh-CN" ? "最近动态" : "Recent activity") });
-    expect(toggle).toHaveAttribute("aria-expanded", "false");
-    fireEvent.click(toggle);
+    expect(screen.getByRole("heading", { name: locale === "zh-CN" ? "最近动态" : "Recent activity" })).toBeVisible();
+    expect(screen.queryByRole("button", { name: /最近动态|Recent activity/ })).not.toBeInTheDocument();
     const history = screen.getByRole("region", { name: locale === "zh-CN" ? "识别动态历史" : "Recognition activity history" });
-    expect(history).toHaveClass("h-56", "overflow-y-auto");
+    expect(history).toHaveClass("overflow-y-auto");
     expect(within(history).getAllByRole("listitem")).toHaveLength(1);
     state.progress = { ...state.progress!, messages: [...state.progress!.messages, { ts: 101, level: "info", message: "activity_response_received" }] };
     page.rerender(<Page kind={kind} />);
     expect(within(history).getAllByRole("listitem")).toHaveLength(2);
-    expect(toggle).toHaveTextContent(locale === "zh-CN" ? "模型已返回" : "Model response received");
-    fireEvent.click(toggle);
-    expect(screen.queryByRole("region", { name: /activity history|识别动态历史/ })).not.toBeInTheDocument();
+    expect(history).toHaveTextContent(locale === "zh-CN" ? "模型已返回" : "Model response received");
     expect(screen.getByRole("progressbar")).toHaveAttribute("aria-valuenow", "30");
-    fireEvent.click(toggle);
     state.progress = { ...state.progress!, job_id: "new-job", messages: [] };
     page.rerender(<Page kind={kind} />);
-    expect(toggle).toHaveAttribute("aria-expanded", "false");
+    expect(history).toBeVisible();
+    expect(within(history).queryAllByRole("listitem")).toHaveLength(0);
   });
 
   it("does not expose unknown raw text and does not pretend stale retry data is live", () => {
@@ -82,7 +101,6 @@ describe.each(["questions", "submissions"])("%s recognition activity", (kind) =>
     state.progress!.messages.push({ ts: 110, level: "info", message: "PRIVATE_PROMPT sk-secret internal-agent" });
     state.stale = true;
     render(<Page kind={kind} />);
-    fireEvent.click(screen.getByRole("button", { name: /最近动态/ }));
     expect(document.body).not.toHaveTextContent("PRIVATE_PROMPT");
     expect(screen.getByText("暂时无法更新状态，保留上次进度")).toBeVisible();
     expect(screen.getByRole("progressbar")).toHaveAttribute("aria-valuenow", "30");

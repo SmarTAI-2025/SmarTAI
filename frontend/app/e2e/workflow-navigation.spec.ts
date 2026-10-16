@@ -201,18 +201,25 @@ for (const stage of ["problems", "submissions", "grading"] as const) {
     await expect(page.getByRole("alertdialog")).toHaveCount(0);
     // All three first-start paths must expose activity before stopping, resuming or reloading.
     const activityToggle = page.getByRole("button", { name: /最近动态/ });
-    await expect(activityToggle).toBeVisible();
-    await expect(activityToggle).toHaveAttribute("aria-expanded", "false");
-    await expect(activityToggle).toContainText("请求已发出，等待模型响应");
-    if (stage === "grading") await expect(page.getByLabel("各模型进度")).toContainText("synthetic：已处理 0 / 1，有效结果 0 · 等待模型响应 1");
-    else await expect(page.getByText("1 个请求等待模型响应", { exact: true })).toBeVisible();
-    await activityToggle.click();
+    if (stage === "grading") {
+      await expect(activityToggle).toBeVisible();
+      await expect(activityToggle).toHaveAttribute("aria-expanded", "false");
+      await expect(activityToggle).toContainText("请求已发出，等待模型响应");
+      await expect(page.getByLabel("各模型进度")).toContainText("synthetic：已处理 0 / 1，有效结果 0 · 等待模型响应 1");
+      await activityToggle.click();
+    } else {
+      await expect(page.getByRole("heading", { name: "最近动态" })).toBeVisible();
+      await expect(activityToggle).toHaveCount(0);
+      await expect(page.getByText("1 个请求等待模型响应", { exact: true })).toBeVisible();
+    }
     const activityHistory = page.getByRole("region", { name: stage === "grading" ? "批改动态历史" : "识别动态历史" });
     await expect(activityHistory).toBeVisible();
     await expect(activityHistory.getByRole("listitem")).toHaveCount(1);
     await expect(activityHistory).toContainText("请求已发出，等待模型响应");
-    await activityToggle.click();
-    await expect(activityHistory).toHaveCount(0);
+    if (stage === "grading") {
+      await activityToggle.click();
+      await expect(activityHistory).toHaveCount(0);
+    }
     await page.screenshot({ path: `output/playwright/navigation-${stage}-progress.png`, fullPage: true });
     run.complete();
     await expect(page).toHaveURL(new RegExp(`/${next[stage]}$`), { timeout: 10_000 });

@@ -254,13 +254,12 @@ export function SubmissionRecognitionProgressPage() {
             ))}
           </ol>
 
-          <div className="min-w-0 self-start">
-            <p className="text-xs leading-5 text-muted-foreground">
+          <div className="relative min-h-64 min-w-0 md:min-h-0">
+            <RecognitionActivity progress={progress} locale={locale} fill summary={<>
               {t("submissionProgressMatched")} {matchedIdentities}
               {" · "}{t("submissionProgressNeedsReview")} {reviewIdentities}
               {" · "}{t("submissionProgressAnswersSplit")} {answersSplit}
-            </p>
-            <RecognitionActivity progress={progress} locale={locale} />
+            </>} />
           </div>
         </div>
       </section>

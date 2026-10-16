@@ -51,7 +51,7 @@ for (const reason of ["user_busy", "server_busy", "rate_limited"] as const) {
     const { calls, errors } = await fixture(page, reason);
     await page.goto("/tasks/execution-task/submissions/progress");
     await expect(page.getByText(reason === "user_busy" ? /你已有任务正在处理/ : reason === "server_busy" ? /服务器繁忙/ : /1 个请求等待重试 · 请求受限 · 第 2\/3 次尝试/)).toBeVisible();
-    await expect(page.getByRole("button", { name: /最近动态/ })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "最近动态" })).toBeVisible();
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
     await page.screenshot({ path: `output/playwright/execution-${reason}.png`, fullPage: true });
     await page.getByRole("button", { name: "停止运行", exact: true }).click();

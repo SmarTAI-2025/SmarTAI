@@ -1,5 +1,4 @@
-import { useEffect, useId, useRef, useState } from "react";
-import { ChevronDown } from "lucide-react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import type { JobProgress, ProgressEvent, RecognitionRequestState } from "@/types/progress";
 import type { Locale } from "@/i18n/messages";
 
@@ -70,29 +69,24 @@ export function RecognitionRequestStatus({ progress, locale, stale = false }: { 
 }
 
 /** Uses the existing bounded, durable progress messages; no new polling API. */
-export function RecognitionActivity({ progress, locale, incomplete = false }: { progress: JobProgress | null; locale: Locale; incomplete?: boolean }) {
-  const [expanded, setExpanded] = useState(false);
+export function RecognitionActivity({ progress, locale, incomplete = false, fill = false, summary }: { progress: JobProgress | null; locale: Locale; incomplete?: boolean; fill?: boolean; summary?: ReactNode }) {
   const list = useRef<HTMLDivElement>(null);
   const stickToBottom = useRef(true);
-  const id = useId();
   const zh = locale === "zh-CN";
   const events = progress?.messages ?? [];
   const latest = events.at(-1);
   const latestText = incomplete ? (progress?.error_detail === "operation_cancelled"
     ? (zh ? "本次识别已停止" : "Recognition stopped")
     : (zh ? "本次识别未完成" : "Recognition did not complete")) : eventText(latest, zh);
+  useEffect(() => { stickToBottom.current = true; }, [progress?.job_id]);
   useEffect(() => {
-    if (expanded && stickToBottom.current && list.current) list.current.scrollTop = list.current.scrollHeight;
-  }, [expanded, events]);
-  useEffect(() => { setExpanded(false); stickToBottom.current = true; }, [progress?.job_id]);
-  return <section className="mt-3 overflow-hidden rounded-lg border bg-card text-xs text-muted-foreground">
-    <button type="button" className="flex h-10 w-full min-w-0 items-center gap-2 px-4 text-left hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
-      aria-expanded={expanded} aria-controls={id} onClick={() => { stickToBottom.current = true; setExpanded(!expanded); }}>
-      <span className="shrink-0 font-medium">{zh ? "最近动态" : "Recent activity"}</span>
-      <span className="truncate" aria-live="polite">{latestText}</span>
-      <ChevronDown aria-hidden="true" className={`ml-auto h-3.5 w-3.5 shrink-0 ${expanded ? "rotate-180" : ""}`} />
-    </button>
-    {expanded && <div id={id} ref={list} className="h-56 overflow-y-auto border-t px-4 py-2" role="region" aria-label={zh ? "识别动态历史" : "Recognition activity history"} tabIndex={0}
+    if (stickToBottom.current && list.current) list.current.scrollTop = list.current.scrollHeight;
+  }, [events, progress?.job_id]);
+  return <section className={`${fill ? "absolute inset-0" : "mt-3 h-64"} flex min-h-0 flex-col overflow-hidden rounded-lg border bg-muted/30 p-5 text-xs text-muted-foreground`}>
+    <h3 className="mb-2 shrink-0 font-semibold text-foreground">{zh ? "最近动态" : "Recent activity"}</h3>
+    {summary && <div className="mb-2 shrink-0 leading-5">{summary}</div>}
+    <p className={incomplete ? "mb-2 shrink-0" : "sr-only"} aria-live="polite">{latestText}</p>
+    <div ref={list} className="min-h-0 flex-1 overflow-y-auto overscroll-contain focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" role="region" aria-label={zh ? "识别动态历史" : "Recognition activity history"} tabIndex={0}
       onScroll={() => { if (list.current) stickToBottom.current = list.current.scrollHeight - list.current.scrollTop - list.current.clientHeight < 32; }}>
       <p className="mb-2">{zh ? "显示当前保存的最近动态，最多 200 条" : "Showing the saved recent activity, up to 200 entries"}</p>
       <ol className="space-y-2">{events.map((event, index) => <li key={`${event.ts}:${index}`} className="flex gap-3 leading-5">
@@ -100,6 +94,6 @@ export function RecognitionActivity({ progress, locale, incomplete = false }: { 
         <span className="min-w-0 break-words">{eventText(event, zh)}</span>
       </li>)}</ol>
       {!events.length && <p>{zh ? "暂无动态记录" : "No activity recorded yet"}</p>}
-    </div>}
+    </div>
   </section>;
 }
