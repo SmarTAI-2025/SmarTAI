@@ -187,7 +187,7 @@ async def _dispatch(
                 raise RecognitionError("recognition_response_invalid", submission_may_exist=True)
             if candidate.safe_error_code == "provider_submit_uncertain":
                 uncertain = True
-    except TimeoutError:
+    except TimeoutError as exc:
         if ticket is None:
             raise RecognitionError("recognition_timeout") from None
         from backend.services.execution_control import current_execution, provider_key
@@ -202,6 +202,8 @@ async def _dispatch(
         uncertain = not rejected_wait
         if rejected_wait:
             control.block(provider, "provider_rate_limited")
+        elif progress:
+            await progress.record_provider_failure(exc)
         candidate = RecognitionCandidateV1(
             kind=capabilities.candidate_kind, status="error", provider_route_id=capabilities.route_id,
             safe_error_code="provider_rate_limited" if rejected_wait else "provider_submit_uncertain",
@@ -209,6 +211,8 @@ async def _dispatch(
     except RecognitionError as exc:
         if ticket is None:
             raise
+        if progress:
+            await progress.record_provider_failure(exc)
         uncertain = exc.submission_may_exist or exc.code == "provider_submit_uncertain"
         candidate = RecognitionCandidateV1(
             kind=capabilities.candidate_kind, status="error", provider_route_id=capabilities.route_id,

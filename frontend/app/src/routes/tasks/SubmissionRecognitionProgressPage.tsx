@@ -122,6 +122,7 @@ export function SubmissionRecognitionProgressPage() {
   if (status === "error" || (status === "submissions_ready" && incomplete)) {
     const info = classifyRecoverableError(progressFailure, {
       locale,
+      providerFailures: progressQuery.progress?.provider_failures,
       phase: progressQuery.progress?.current_step ?? progressQuery.progress?.phase ?? "submission_recognition",
       jobId: failedJobId,
       taskId,

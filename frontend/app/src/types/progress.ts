@@ -25,6 +25,11 @@ export interface ProgressEvent {
   unit?: ActiveUnit | null;
 }
 
+export interface ProviderFailure {
+  code: "provider_upstream_unavailable" | "provider_timeout" | "provider_unreachable" | "provider_rate_limited" | "provider_response_invalid";
+  http_status?: number | null;
+}
+
 export interface JobProgress {
   model_progress?: GradingModelProgress[];
   model_eta_seconds?: number | null;
@@ -40,6 +45,7 @@ export interface JobProgress {
   active: ActiveUnit[];
   messages: ProgressEvent[];
   error_detail?: string | null;
+  provider_failures?: ProviderFailure[];
   model_waits?: Array<{ model: string; reason: "provider_rate_limited"; attempt: number; max_attempts: number; retry_at: number }>;
   recognition_failure?: { failed_pages?: number[]; processed_pages?: number[] };
   started_at?: number | null;

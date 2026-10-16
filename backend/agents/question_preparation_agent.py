@@ -158,8 +158,9 @@ def provider_submission_is_uncertain(exc: BaseException) -> bool:
 class _SubmissionSafeProvider:
     """Disable in-worker replay when a provider may have received the call."""
 
-    def __init__(self, provider: BaseProvider) -> None:
+    def __init__(self, provider: BaseProvider, *, reporter: ProgressReporter | None = None) -> None:
         self._provider = provider
+        self._reporter = reporter
 
     def __getattr__(self, name: str):
         return getattr(self._provider, name)
@@ -168,6 +169,8 @@ class _SubmissionSafeProvider:
         try:
             return await self._provider.ainvoke(messages)
         except Exception as exc:
+            if self._reporter is not None:
+                await self._reporter.record_provider_failure(exc)
             if _provider_submission_may_exist(exc):
                 raise _ProviderSubmissionUncertainError(
                     "provider_submit_uncertain"
@@ -560,7 +563,7 @@ async def prepare_question_packages(
 
     source_rows = list(sources)
     if provider_submission_safe:
-        provider = _SubmissionSafeProvider(provider)
+        provider = _SubmissionSafeProvider(provider, reporter=reporter)
     problem_sources = [row for row in source_rows if row[0].role == "problem"]
     if not problem_sources:
         raise ValueError("At least one problem source is required.")

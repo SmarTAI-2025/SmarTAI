@@ -105,6 +105,7 @@ export function ProblemRecognitionProgressPage() {
       : progressFailure;
     const info = classifyRecoverableError(failureWithPages, {
       locale,
+      providerFailures: progressQuery.progress?.provider_failures,
       phase: progressQuery.progress?.current_step ?? progressQuery.progress?.phase ?? "question_preparation",
       taskId,
       jobId: taskState?.last_failed_job_id,
@@ -113,9 +114,9 @@ export function ProblemRecognitionProgressPage() {
     const failedJobId = taskState?.last_failed_job_id;
     const submissionUncertain = taskState?.error === "provider_submit_uncertain" || getAPIErrorCode(retryFailure) === "provider_submit_uncertain";
     if (submissionUncertain) {
-      info.description = locale === "zh-CN"
-        ? "上次请求可能已计费，但没有返回可用结果。确认后将复用已识别资料，重试未完成的题目，可能再次计费。系统不会自动重试。"
-        : "The previous request may have been billed without a usable result. Confirming reuses recognized sources and retries incomplete questions, which may incur additional charges. Nothing retries automatically.";
+      info.description += locale === "zh-CN"
+        ? " 重试时会复用已识别资料，并继续未完成的题目。"
+        : " Retrying reuses recognized sources and continues incomplete questions.";
       info.actionKind = "retry";
     }
     const canRetryPreparedSources = Boolean(
@@ -145,7 +146,7 @@ export function ProblemRecognitionProgressPage() {
     };
     return (
       <ProgressPageFrame title={t("problemProgressTitle")} returnState={{ imageRecoveryModel: recognitionProviderId }}>
-        <div className="grid gap-4">
+        <div className="grid grid-cols-1 gap-4">
           {failedJobId ? (
             <StageProviderSelect
               id="question-retry-provider"

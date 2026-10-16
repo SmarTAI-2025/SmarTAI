@@ -2,18 +2,19 @@ import { render, screen } from "@testing-library/react";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { I18nProvider } from "@/i18n/I18nProvider";
-import type { Task, TaskStateSnapshot, SubmissionSourceOutcome } from "@/types";
+import type { Task, TaskStateSnapshot, SubmissionSourceOutcome, JobProgress } from "@/types";
 import { SubmissionRecognitionProgressPage } from "./SubmissionRecognitionProgressPage";
 
 let detail: Partial<Task>;
 let snapshot: Partial<TaskStateSnapshot> | undefined;
+let progress: Partial<JobProgress> | null;
 vi.mock("@/api/hooks/tasks", () => ({
   useTask: () => ({ data: detail, refetch: vi.fn() }),
   useRetrySubmissionRecognition: () => ({ isPending: false, mutateAsync: vi.fn() }),
 }));
 vi.mock("@/api/hooks", () => ({ useStageProviders: () => ({ data: [] }) }));
 vi.mock("@/hooks/useTaskProgress", () => ({
-  useTaskProgress: () => ({ data: snapshot, progress: null, refetch: vi.fn() }),
+  useTaskProgress: () => ({ data: snapshot, progress, refetch: vi.fn() }),
 }));
 vi.mock("@/components/new-task/NewTaskStepper", () => ({ NewTaskStepper: () => null }));
 
@@ -30,6 +31,7 @@ function show() {
   </Routes></MemoryRouter></I18nProvider>);
 }
 beforeEach(() => {
+  progress = null;
   detail = { task_id: "T", status: "parsing_submissions", parse_job_id: "new-job", workflow_revision: 1,
     submission_sources: [source("processing")],
     submission_source_summary: { uploaded: 1, parsed: 0, failed: 0, pending: 1, identity_needs_review: 0 } };
@@ -39,6 +41,18 @@ beforeEach(() => {
 });
 
 describe("submission recognition completion", () => {
+  it("shows a recorded provider 503 while keeping retry confirmation", () => {
+    snapshot!.status = "error";
+    snapshot!.error = "provider_submit_uncertain";
+    snapshot!.last_failed_job_id = "new-job";
+    progress = { provider_failures: [{ code: "provider_upstream_unavailable", http_status: 503 }] };
+    show();
+    expect(screen.getByRole("heading", { name: "模型服务暂时不可用" })).toBeInTheDocument();
+    expect(screen.getByText(/HTTP 503/)).toHaveTextContent("计费尚无法确认");
+    expect(screen.getByRole("checkbox")).not.toBeChecked();
+    expect(screen.getByRole("button", { name: "重试失败项" })).toBeDisabled();
+  });
+
   it.each(["processing", "failed"] as const)("opens identity review despite stale %s detail", async (status) => {
     detail.submission_sources = [source(status)];
     show();
