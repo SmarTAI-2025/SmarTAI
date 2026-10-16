@@ -78,7 +78,7 @@ const COPY = {
   saveAndContinue: ["保存并查看批改摘要", "Save & Review Grading"],
   saveRegradeAndContinue: ["保存并查看重批摘要", "Save & Review Regrade"],
   regradeNotice: ["你正在准备重新批改。可修改模型、资料和评分方式；保存后会先进入重批摘要。", "You are preparing a regrade. Update the models, materials, or grading approach, then review the run summary before starting."],
-  regradeFooterHint: ["保存后会进入重批摘要，再由你确认启动", "After saving, review the regrade summary before starting"],
+  regradeFooterHint: ["保存后进入重批摘要，检查通过后倒计时自动开始", "After saving, the regrade summary starts a countdown once checks pass"],
   saving: ["正在保存…", "Saving…"],
   loading: ["正在读取批改设置…", "Loading grading setup…"],
   loadErrorTitle: ["无法读取批改设置", "Grading setup could not be loaded"],

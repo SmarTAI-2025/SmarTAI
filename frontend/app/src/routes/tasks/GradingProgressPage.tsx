@@ -46,7 +46,7 @@ export function GradingProgressPage() {
     },
     [completedView, progress, state?.problem_count, state?.student_count, task?.problem_count, task?.student_count],
   );
-  const eta = useMemo(() => estimateRemaining(progress, queue.total, queue.completed, locale), [locale, progress, queue.completed, queue.total]);
+  const eta = useMemo(() => estimateRemaining(progress, queue.total, queue.completed, locale), [locale, progress, progressQuery.dataUpdatedAt, queue.completed, queue.total]);
   const latestError = progress?.error_detail
     ?? [...(progress?.messages ?? [])].reverse().find((event) => event.level === "error")?.message
     ?? state?.error
@@ -230,6 +230,12 @@ function estimateRemaining(progress: JobProgress | null, total: number, complete
   if (!progress || total <= 0) return copy(locale, "estimating");
   if (completed <= 0) return copy(locale, "waitingFirst");
   if (completed >= total) return copy(locale, "almostDone");
+  // One fast result is not a representative rate for a parallel batch. A
+  // stalled batch also cannot support an increasingly large time promise.
+  if (completed < Math.min(3, total)) return copy(locale, "estimating");
+  const lastCompletion = [...progress.messages].reverse().find((event) => event.message === "Completed one grading unit.");
+  const lastCompletedAt = normalizeTimestamp(lastCompletion?.ts);
+  if (!lastCompletedAt || Date.now() - lastCompletedAt > 60_000) return copy(locale, "estimating");
   const startedAt = normalizeTimestamp(progress.started_at ?? progress.messages[0]?.ts);
   if (!startedAt) return copy(locale, "estimating");
   const elapsedSeconds = Math.max(1, (Date.now() - startedAt) / 1000);

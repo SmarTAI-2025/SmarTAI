@@ -222,7 +222,7 @@ function GradingSetupPageForm() {
       if (!await localDraft.clear({ setup, advancedOpen })) return;
       if (!localDraft.isCurrent()) return;
       allowLeaveRef.current = true;
-      navigate(returnTo ?? `/tasks/${taskId}/grading/preflight`);
+      navigate(`/tasks/${taskId}/grading/preflight`);
     } catch (error) {
       setSaveFailure(error);
       const normalized = normalizeAPIError(error);

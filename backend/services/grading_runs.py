@@ -425,7 +425,7 @@ async def process_run(*, run_id: str, worker_id: str, registry=None, language: s
                 language=language,
                 reporter=reporter,
                 grading_setup=grading_setup,
-            ))
+            ), response_timeout_seconds=settings.grading_custom_provider_timeout_seconds)
         )
         done, _pending = await asyncio.wait(
             (grading_task, heartbeat_task),

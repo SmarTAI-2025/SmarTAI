@@ -38,6 +38,22 @@ const {
 const saveSetupMutate = vi.fn();
 
 describe("GradingSetupPage regrade mode", () => {
+  it.each(["error", "graded", "finalized"])("saves %s settings into a new summary even with a historical return address", async (status) => {
+    await clearPageDrafts();
+    const current = (useGradingSetup as unknown as () => any)();
+    current.data.task_status = status;
+    current.data.readiness = { ready: true, blocking_issues: [], warnings: [] };
+    const router = createMemoryRouter([
+      { path: "/tasks/:taskId/grading-setup", element: <GradingSetupPage /> },
+      { path: "/tasks/:taskId/grading/preflight", element: <div>New summary</div> },
+      { path: "/tasks/:taskId/grading/progress", element: <div>Old stopped run</div> },
+    ], { initialEntries: ["/tasks/task-1/grading-setup?returnTo=%2Ftasks%2Ftask-1%2Fgrading%2Fprogress"] });
+    render(<RouterProvider router={router} />);
+    fireEvent.click(await screen.findByRole("button", { name: /Save & Review/ }));
+    expect(await screen.findByText("New summary")).toBeVisible();
+    expect(saveSetupMutate).toHaveBeenCalledTimes(1);
+    expect(router.state.errors).toBeNull();
+  });
   beforeEach(() => {
     vi.clearAllMocks();
     (useGradingSetup as unknown as ReturnType<typeof vi.fn>).mockReturnValue({

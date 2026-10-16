@@ -4104,6 +4104,7 @@ def start_task_grading(
     )
     # Legacy callers retain revision-based deduplication. New clients give one
     # click a stable id, independent of the reusable input/configuration hash.
+    explicit_request = request_id is not None
     request_id = request_id or f"workflow-{expected_workflow_revision}"
     replay = grading_repository.bind_grading_request(
         assignment_id=task_id, teacher_id=owner_id, request_id=request_id,
@@ -4241,7 +4242,7 @@ def start_task_grading(
         "input_manifest": input_manifest,
     })
     latest = runs[-1] if runs else None
-    if latest and latest.status == "completed":
+    if latest and latest.status == "completed" and not (explicit_request and retry_scope == "full_batch"):
         frozen = workflow_repository.get_run_setup(latest.id)
         if frozen is not None and frozen.fingerprint == run_fingerprint:
             cached = grading_repository.bind_grading_request(
@@ -4272,8 +4273,9 @@ def start_task_grading(
         if len(reusable) == len(questions) * len(frozen_revision_ids):
             return {"status": "already_done", "task_id": task_id, "job_id": latest.id}
         input_manifest.update(retry_from_run_id=latest.id, reused_results=reusable, retry_scope="failed_only")
-    # Intent metadata is not part of the input fingerprint: completed results
-    # remain reusable, while every new explicit retry can execute failed work.
+    # A new explicit full-batch intent reruns even identical inputs. HTTP
+    # replays still bind to the original run above; failed-only retries reuse
+    # valid scores, and legacy callers retain fingerprint-based reuse.
     input_manifest.update(
         grading_request_id=request_id,
         grading_request_revision=expected_workflow_revision,

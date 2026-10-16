@@ -37,6 +37,53 @@ function renderProgress() {
 }
 
 describe("GradingProgressPage completion routing", () => {
+  it.each([1, 3])("does not extrapolate hours from %s completed responses without a recent representative rate", (completed) => {
+    (useTaskProgress as unknown as ReturnType<typeof vi.fn>).mockReturnValue({
+      data: { status: "grading", problem_count: 7, student_count: 2 },
+      progress: { total_students: 2, total_questions: 7, completed_units: completed,
+        started_at: Date.now() / 1000 - 600,
+        messages: [{ message: "Completed one grading unit.", ts: Date.now() / 1000 - 120, level: "info" }], active: [] },
+      percent: 7, refetch: vi.fn(),
+    });
+    renderProgress();
+    expect(screen.getByText(/Estimated remaining Estimating/)).toBeInTheDocument();
+    expect(screen.queryByText(/about .* hr/)).not.toBeInTheDocument();
+  });
+  it("still estimates a batch with several recently completed responses", () => {
+    (useTaskProgress as unknown as ReturnType<typeof vi.fn>).mockReturnValue({
+      data: { status: "grading", problem_count: 7, student_count: 2 },
+      progress: { total_students: 2, total_questions: 7, completed_units: 3,
+        started_at: Date.now() / 1000 - 60,
+        messages: [{ message: "Completed one grading unit.", ts: Date.now() / 1000, level: "info" }], active: [] },
+      percent: 21, refetch: vi.fn(),
+    });
+    renderProgress();
+    expect(screen.getByText(/Estimated remaining about 4 min/)).toBeInTheDocument();
+  });
+  it("withdraws an estimate when unchanged polling data becomes stale", () => {
+    const now = Date.now();
+    const clock = vi.spyOn(Date, "now").mockReturnValue(now);
+    const progress = { total_students: 2, total_questions: 7, completed_units: 3,
+      started_at: now / 1000 - 60,
+      messages: [{ message: "Completed one grading unit.", ts: now / 1000, level: "info" }], active: [] };
+    let updatedAt = now;
+    (useTaskProgress as unknown as ReturnType<typeof vi.fn>).mockImplementation(() => ({
+      data: { status: "grading", problem_count: 7, student_count: 2 },
+      progress, percent: 21, dataUpdatedAt: updatedAt, refetch: vi.fn(),
+    }));
+    try {
+      const view = renderProgress();
+      expect(screen.getByText(/Estimated remaining about 4 min/)).toBeInTheDocument();
+      clock.mockReturnValue(now + 61_000);
+      updatedAt = now + 61_000;
+      view.rerender(<MemoryRouter initialEntries={["/tasks/task-1/grading/progress"]}>
+        <Routes><Route path="/tasks/:taskId/grading/progress" element={<GradingProgressPage />} /></Routes>
+      </MemoryRouter>);
+      expect(screen.getByText(/Estimated remaining Estimating/)).toBeInTheDocument();
+    } finally {
+      clock.mockRestore();
+    }
+  });
   beforeEach(() => {
     vi.clearAllMocks();
     taskStatus = "grading";

@@ -140,6 +140,9 @@ class Settings(BaseSettings):
     custom_provider_timeout_seconds: int = int(
         os.getenv("SMARTAI_CUSTOM_PROVIDER_TIMEOUT_SECONDS", "120")
     )
+    # Grading only: bound a complete admitted custom-provider response, including a
+    # relay that keeps sending partial data. Queue time has its own budget.
+    grading_custom_provider_timeout_seconds: float = Field(default=300.0, gt=0)
     # Question-level grading retry.  The per-LLM-call tenacity retry
     # (`llm_max_retries`) already covers most flakes, but when EVERY expert of
     # a question fails with a transient error (e.g. the USTC campus relay

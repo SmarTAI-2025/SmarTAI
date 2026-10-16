@@ -73,7 +73,9 @@ export function GradingPreflightPage() {
     () => buildRiskItems(summary, setupResponse?.readiness.warnings ?? [], locale),
     [locale, setupResponse?.readiness.warnings, summary],
   );
-  const isRegrading = canTaskBeRegraded(task?.status);
+  const failedGrading = task?.status === "error" && Boolean(task.grading_job_id)
+    && (!task.last_failed_job_id || task.last_failed_job_id === task.grading_job_id);
+  const isRegrading = canTaskBeRegraded(task?.status) || failedGrading;
   const historyView = Boolean(task && task.status !== "submissions_ready" && !isRegrading);
 
   const blockingIssues = setupResponse?.readiness.blocking_issues ?? [];
@@ -102,7 +104,7 @@ export function GradingPreflightPage() {
     && summary.problemCount > 0
     && summary.studentCount > 0,
   );
-  const countdownActive = canStart && !isRegrading && autoStartEnabled && !hasAttentionWarnings && !startGrading.isPending;
+  const countdownActive = canStart && autoStartEnabled && !hasAttentionWarnings && !startGrading.isPending;
 
   async function handleStart() {
     if (!taskId || !task || startTriggeredRef.current) return;
@@ -129,7 +131,7 @@ export function GradingPreflightPage() {
   startHandlerRef.current = () => { void handleStart(); };
 
   useEffect(() => {
-    if (!canStart || isRegrading || historyView || !autoStartEnabled || hasAttentionWarnings) {
+    if (!canStart || historyView || !autoStartEnabled || hasAttentionWarnings) {
       setCountdown(AUTO_START_SECONDS);
       return;
     }
@@ -139,7 +141,7 @@ export function GradingPreflightPage() {
       setCountdown((current) => Math.max(0, current - 1));
     }, 1000);
     return () => window.clearInterval(intervalId);
-  }, [autoStartEnabled, canStart, hasAttentionWarnings, historyView, isRegrading, taskId]);
+  }, [autoStartEnabled, canStart, hasAttentionWarnings, historyView, taskId]);
 
   useEffect(() => {
     if (countdownActive && countdown === 0) startHandlerRef.current();
@@ -166,7 +168,7 @@ export function GradingPreflightPage() {
   const recovery = taskId ? gradingRecovery(taskId, recoveryCode, locale) : null;
 
   if (taskQuery.isSuccess && taskId && task) {
-    if (task.status === "grading" || (task.status === "error" && task.grading_job_id)) {
+    if (task.status === "grading") {
       return <Navigate replace to={`/tasks/${taskId}/grading/progress`} />;
     }
     if (!hasTaskReachedStep(task, 5)) return <Navigate replace to={getTaskDestination(task)} />;

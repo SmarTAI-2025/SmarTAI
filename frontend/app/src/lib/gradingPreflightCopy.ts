@@ -5,7 +5,7 @@ const copy = {
   countdownTitle: ["即将开始 SmarTAI 批改", "SmarTAI grading is about to start"],
   countdownDescription: ["请快速核对本次任务摘要；倒计时结束后会自动进入执行批改。", "Review this run summary. Grading starts automatically when the countdown ends."],
   regradeCountdownTitle: ["即将开始重新批改", "Regrading is about to start"],
-  regradeCountdownDescription: ["请核对本次重批摘要；倒计时结束后会使用新设置重新批改。", "Review this regrade summary. Regrading starts automatically with the updated settings when the countdown ends."],
+  regradeCountdownDescription: ["请核对本次重批摘要；倒计时结束后会使用当前设置重新批改。", "Review this regrade summary. Regrading starts automatically with the current settings when the countdown ends."],
   countdownUnit: ["秒后自动开始", "seconds until automatic start"],
   backToSetup: ["返回修改批改设置", "Back to Grading Setup"],
   startNow: ["立即开始批改", "Start Grading Now"],
