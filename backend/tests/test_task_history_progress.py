@@ -169,7 +169,7 @@ def test_grading_state_merges_live_counts_and_preserves_durable_phase_off_loop(m
         threads["state"] = threading.get_ident()
         with pytest.raises(RuntimeError):
             asyncio.get_running_loop()
-        return {"status": status, "grading_job_id": "run", "active_job_id": None,
+        return {"status": status, "grading_job_id": "run", "active_job_id": "run" if status == "grading" else None,
                 "last_failed_job_id": "run" if status == "error" else None, "error": None}
 
     def database_progress(run_id, owner_id):
@@ -177,7 +177,9 @@ def test_grading_state_merges_live_counts_and_preserves_durable_phase_off_loop(m
         threads["grading"] = threading.get_ident()
         with pytest.raises(RuntimeError):
             asyncio.get_running_loop()
-        return _grading(phase=durable_phase, completed_units=1, active=[],
+        return _grading(job_id="run", phase=durable_phase, completed_units=1, active=[],
+                        model_progress=[{"id": "model-1", "label": "Synthetic", "responding": 1}],
+                        activity_latest={"sequence": 1, "ts": 100, "code": "responding", "model_id": "model-1"},
                         error_detail="grading_failed" if status == "error" else None)
 
     async def snapshot():
@@ -201,6 +203,11 @@ def test_grading_state_merges_live_counts_and_preserves_durable_phase_off_loop(m
     assert body["progress"].get("running_units", 0) == (1 if status == "grading" else 0)
     assert "ConceptSkill" not in response.text
     assert body["progress"]["phase"] == durable_phase
+    # The first active-run poll must keep public activity even when a live
+    # reporter snapshot (which has no model summary) is available.
+    assert body["progress"]["job_id"] == "run"
+    assert body["progress"]["model_progress"][0]["label"] == "Synthetic"
+    assert body["progress"]["activity_latest"]["code"] == "responding"
     assert body["error"] == ("grading_failed" if status == "error" else None)
     assert body["progress_percent"] == (10 if status == "grading" else None)
     assert threads["state"] != threads["reporter"]

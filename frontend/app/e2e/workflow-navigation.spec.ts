@@ -19,6 +19,7 @@ async function fixture(page: Page, stage: Stage) {
   page.on("console", message => { if (message.type() === "error") errors.push(message.text()); });
   const provider = { provider_id: "test-provider", provider_type: "openai", model: "synthetic", enabled: true,
     is_default: true, is_shared: false, scope: "owner", editable: true, max_concurrent: 1, rpm: 10 };
+  const activity = { sequence: 1, ts: Date.now() / 1000, code: "responding", model_id: "model-1" };
   const problem: ProblemInfo = { q_id: "q1", number: "1", type: "short_answer", stem: "What is 6 × 7?", max_score: 1,
     reference_answer: "42", criterion: "One point for 42.", review_status: "confirmed" };
   const student = { stu_id: "s1", stu_name: "Synthetic student", identity_status: "matched", identity_review_status: "confirmed",
@@ -73,6 +74,7 @@ async function fixture(page: Page, stage: Stage) {
       calls.push(path);
       if (path.endsWith("/sources/preflight")) return json({ source_token: "prepared-source", source: { stored_file_id: "stored" } });
       task.status = stage === "problems" ? "extracting_problems" : stage === "submissions" ? "parsing_submissions" : "grading";
+      task.active_operation_status = "running";
       task.active_job_id = "new-job"; task.workflow_revision += 1;
       if (stage === "problems") task.extract_job_id = "new-job";
       if (stage === "submissions") {
@@ -95,9 +97,15 @@ async function fixture(page: Page, stage: Stage) {
       configured: true, grading_setup: setup, available_experts: [provider], knowledge: { scope_options: ["none"], task_doc_count: 0, task_docs: [] },
       readiness: { ready: true, blocking_issues: [], warnings: [] } });
     if (path.endsWith("/source-files")) return json({ task_id: task.task_id, workflow_revision: task.workflow_revision, problem_source: null, submission_sources: {} });
+    if (path.endsWith("/grading/activity")) return json({ run_id: task.grading_job_id, events: [activity], cursor: activity.sequence, has_more: false });
     if (path.endsWith("/state")) return json({ ...task, progress: { job_id: task.active_job_id, phase: task.active_job_id ? "processing" : "done",
       current_step: "preparing_files", total_steps: 4, completed_steps: task.active_job_id ? 0 : 4, total_students: task.student_count,
-      total_questions: task.problem_count, completed_units: 0, active: [], messages: [] } });
+      total_questions: task.problem_count, completed_units: 0, active: [],
+      messages: [{ ts: activity.ts, level: "info", message: "activity_responding" }],
+      ...(stage === "grading" ? { activity_latest: activity, activity_cursor: 1,
+        model_progress: [{ id: "model-1", label: "synthetic", total: 1, succeeded: 0, failed: 0,
+          cancelled: 0, processing: 0, queued: 0, responding: 1, retrying: 0, completion_times: [] }] }
+        : { recognition_requests: [{ state: "responding", count: 1 }] }) } });
     if (path === `/tasks/${task.task_id}`) {
       if (detailDelay) await new Promise(resolve => setTimeout(resolve, detailDelay));
       return json(task);
@@ -191,6 +199,20 @@ for (const stage of ["problems", "submissions", "grading"] as const) {
     await expect(page).toHaveURL(new RegExp(`/${stage}/progress$`));
     await expect(page.locator("main h1")).toBeVisible();
     await expect(page.getByRole("alertdialog")).toHaveCount(0);
+    // All three first-start paths must expose activity before stopping, resuming or reloading.
+    const activityToggle = page.getByRole("button", { name: /最近动态/ });
+    await expect(activityToggle).toBeVisible();
+    await expect(activityToggle).toHaveAttribute("aria-expanded", "false");
+    await expect(activityToggle).toContainText("请求已发出，等待模型响应");
+    if (stage === "grading") await expect(page.getByLabel("各模型进度")).toContainText("synthetic：已处理 0 / 1，有效结果 0 · 等待模型响应 1");
+    else await expect(page.getByText("1 个请求等待模型响应", { exact: true })).toBeVisible();
+    await activityToggle.click();
+    const activityHistory = page.getByRole("region", { name: stage === "grading" ? "批改动态历史" : "识别动态历史" });
+    await expect(activityHistory).toBeVisible();
+    await expect(activityHistory.getByRole("listitem")).toHaveCount(1);
+    await expect(activityHistory).toContainText("请求已发出，等待模型响应");
+    await activityToggle.click();
+    await expect(activityHistory).toHaveCount(0);
     await page.screenshot({ path: `output/playwright/navigation-${stage}-progress.png`, fullPage: true });
     run.complete();
     await expect(page).toHaveURL(new RegExp(`/${next[stage]}$`), { timeout: 10_000 });
