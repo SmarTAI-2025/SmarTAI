@@ -5,9 +5,10 @@ import { UnsavedChangesDialog } from "@/components/ui/UnsavedChangesDialog";
 import { useI18n } from "@/i18n/I18nProvider";
 import type { JobProgress, TaskStateSnapshot } from "@/types";
 
-export function TaskExecutionControls({ taskId, state, progress, onChanged }: {
+export function TaskExecutionControls({ taskId, state, progress, onChanged, showModelWaits = true }: {
   taskId?: string; state?: TaskStateSnapshot; progress?: JobProgress | null;
   onChanged: () => Promise<unknown>;
+  showModelWaits?: boolean;
 }) {
   const { locale } = useI18n();
   const zh = locale === "zh-CN";
@@ -16,7 +17,7 @@ export function TaskExecutionControls({ taskId, state, progress, onChanged }: {
   const [error, setError] = useState(false);
   const [now, setNow] = useState(() => Date.now() / 1000);
   const busy = useRef(false);
-  const waits = progress?.model_waits ?? [];
+  const waits = showModelWaits ? progress?.model_waits ?? [] : [];
   const jobId = state?.active_job_id;
   useEffect(() => {
     if (!waits.length) return;

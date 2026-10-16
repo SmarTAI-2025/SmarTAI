@@ -486,8 +486,10 @@ class WorkflowWorker:
                         return True
                     return row.error_code in {"operation_cancelled", "superseded"} or row.attempt != operation.attempt
 
-                await run_controlled(operation.id, is_cancelled, self._handlers[operation.operation_type](ctx),
-                                     persist_progress=ctx.update_progress)
+                from backend.progress.recognition_activity import observe_recognition
+                async with observe_recognition(ctx):
+                    await run_controlled(operation.id, is_cancelled, self._handlers[operation.operation_type](ctx),
+                                         persist_progress=ctx.update_progress)
             except asyncio.CancelledError:
                 raise
             except LeaseLost:

@@ -142,7 +142,7 @@ def test_task_state_keeps_reporter_on_event_loop_and_database_off_loop(monkeypat
     async def snapshot():
         threads["reporter"] = threading.get_ident()
         asyncio.get_running_loop()
-        return SimpleNamespace(model_dump=lambda **_: {"total_steps": 4, "completed_steps": 1})
+        return SimpleNamespace(model_dump=lambda **_: {"total_steps": 4, "completed_steps": 1, "internal_trace": "PRIVATE"})
 
     monkeypatch.setattr(task_facade, "task_state", database_state)
     monkeypatch.setattr(task_facade, "get_reporter", lambda _: SimpleNamespace(snapshot=snapshot))
@@ -151,7 +151,9 @@ def test_task_state_keeps_reporter_on_event_loop_and_database_off_loop(monkeypat
     app.dependency_overrides[tasks.require_teacher] = lambda: SimpleNamespace(id="owner")
     response = TestClient(app).get("/tasks/owned-task/state")
     assert response.status_code == 200, response.text
-    assert response.json()["progress"] == {"total_steps": 4, "completed_steps": 1}
+    assert response.json()["progress"]["total_steps"] == 4
+    assert response.json()["progress"]["completed_steps"] == 1
+    assert "internal_trace" not in response.json()["progress"]
     assert response.json()["progress_percent"] == 25
     assert response.json()["eta_seconds"] is None
     assert threads["database"] != threads["reporter"]
