@@ -524,13 +524,15 @@ class TaskGradingSetup(BaseModel):
 TaskStatus = Literal[
     "draft",
     "extracting_problems",
+    "problems_paused",
     "problems_ready",
     "parsing_submissions",
+    "submissions_paused",
     "submissions_ready",
+    "grading_setup",
     "grading",
+    "grading_paused",
     "graded",
-    "review_confirmed",
-    "generating_analysis",
     "finalized",
     "error",
 ]

@@ -6,6 +6,7 @@ import { useStartGrading, useTask } from "@/api/hooks/tasks";
 import { SmarTAIMascot } from "@/components/brand/SmarTAIMascot";
 import { NewTaskStepper } from "@/components/new-task/NewTaskStepper";
 import { TaskExecutionControls } from "@/components/tasks/TaskExecutionControls";
+import { TaskPausedState } from "@/components/tasks/TaskPausedState";
 import { GradingActivity, ModelProgressRows } from "@/components/tasks/GradingActivity";
 import { RecoverableActionState } from "@/components/ui/RecoverableActionState";
 import { useTaskProgress } from "@/hooks/useTaskProgress";
@@ -17,6 +18,7 @@ import { gradingProgressText as copy } from "@/lib/gradingProgressCopy";
 import { backgroundErrorTitle, classifyRecoverableError } from "@/lib/taskActionGuards";
 import {
   getTaskDestination,
+  isTaskAwaitingGrading,
   getTaskGradingSetupHref,
   hasTaskCompletedGrading,
   hasTaskReachedStep,
@@ -54,7 +56,7 @@ export function GradingProgressPage() {
     ?? task?.error
     ?? null;
 
-  if (taskId && status === "submissions_ready") {
+  if (taskId && isTaskAwaitingGrading(status)) {
     return <Navigate replace to={`/tasks/${taskId}/grading/preflight`} />;
   }
   if (taskId && completedView) {
@@ -92,7 +94,7 @@ export function GradingProgressPage() {
   const isFinalizing = status === "grading" && progress?.phase === "done";
   const waitingLabel = state?.active_operation_status === "pending" ? (locale === "zh-CN" ? "排队中" : "Queued") : null;
   const percent = completedView ? 100 : state?.active_operation_status === "pending" ? null : progress ? progressQuery.percent : null;
-  const recoveryInfo = status === "error"
+  const recoveryInfo = status === "error" || (status === "grading_paused" && retryGrading.error)
     ? classifyRecoverableError(retryGrading.error ?? latestError, {
       locale,
       phase: progress?.current_step ?? progress?.phase ?? "grading",
@@ -105,7 +107,7 @@ export function GradingProgressPage() {
   return (
     <div className="w-full max-w-[1300px]">
       <h1 className="min-h-9 text-[30px] font-bold leading-9 tracking-[-0.02em] text-foreground">
-        {copy(locale, "title")}
+        {status === "grading_paused" ? (locale === "zh-CN" ? "批改进度" : "Grading progress") : copy(locale, "title")}
       </h1>
       <NewTaskStepper currentStep={5} />
       <div className="mx-auto mt-[25px] w-full max-w-[940px]">
@@ -125,7 +127,11 @@ export function GradingProgressPage() {
       ) : (
         <div>
           {status === "error" ? <p className="mb-4 text-sm text-muted-foreground">{locale === "zh-CN" ? "仅重试缺少有效结果的题次，保留成功结果及教师修改。可先在模型配置中调整模型；返回批改设置再开始会重新批改整批。" : "Retry only items without a valid result; keep successful results and teacher edits. You can adjust models first. Starting from grading settings reruns the full batch."}</p> : null}
-          {status === "error" && recoveryInfo ? (
+          {status === "grading_paused" && !retryGrading.error ? (
+            <TaskPausedState status="grading_paused" onContinue={() => void handleRetry()} busy={retryGrading.isPending}>
+              <p className="text-sm text-muted-foreground">{copy(locale, "completedPrefix")} {queue.completed} / {queue.total} {copy(locale, "unitSuffix")}</p>
+            </TaskPausedState>
+          ) : recoveryInfo ? (
             <RecoverableActionState
               info={recoveryInfo}
               locale={locale}

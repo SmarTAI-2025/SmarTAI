@@ -46,7 +46,7 @@ for (const mode of ["individual", "overview-all", "detail-all"]) for (const loca
         if (path.endsWith("/artifacts/generate")) {
           expect(reportGenerationRequested).toBe(true);
           expect(request.postDataJSON().expected_workflow_revision).toBe(task.workflow_revision);
-          task.workflow_revision += 1; task.final_result_version += 1; task.status = "review_confirmed";
+          task.workflow_revision += 1; task.final_result_version += 1; task.status = "finalized";
           reportDirty = false; reportsGenerated = true;
           reportVersions.unshift(task.final_result_version);
           return json({ ...finalization(), status: "ok", unchanged: false, artifacts: artifacts() });

@@ -1953,10 +1953,13 @@ async def retry_question_preparation(
                 ),
             )
         previous_base_revision = payload.get("base_workflow_revision")
+        # Starting claims one revision; an explicit stop claims one more.
+        # Later input changes must still invalidate this saved-source retry.
+        revision_delta = 2 if failed.error_code == "operation_cancelled" else 1
         if (
             isinstance(previous_base_revision, bool)
             or not isinstance(previous_base_revision, int)
-            or workflow.workflow_revision != previous_base_revision + 1
+            or workflow.workflow_revision != previous_base_revision + revision_delta
         ):
             raise VersionConflict(
                 "The task changed after the failed question preparation.",

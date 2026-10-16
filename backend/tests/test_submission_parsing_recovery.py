@@ -121,7 +121,8 @@ async def test_submission_queue_persists_archive_and_has_no_request_task():
 
 
 @pytest.mark.asyncio
-async def test_submission_retry_republishes_only_for_durable_worker():
+@pytest.mark.parametrize("stopped", [False, True])
+async def test_submission_retry_republishes_only_for_durable_worker(stopped):
     owner_id, task_id = _seed_task(with_question=True)
     queued = task_facade.queue_task_submission_parsing(
         task_id=task_id,
@@ -134,13 +135,16 @@ async def test_submission_retry_republishes_only_for_durable_worker():
     operation = workflow_repository.get_operation(
         queued["job_id"], owner_id=owner_id
     )
-    assert task_facade._fail_operation(
-        task_id,
-        owner_id,
-        operation.id,
-        operation.attempt,
-        "provider_timeout",
-    ) is True
+    if stopped:
+        from backend.services.task_execution import stop_task_run
+        workflow = workflow_repository.get_workflow(task_id, owner_id=owner_id)
+        stop_task_run(task_id=task_id, owner_id=owner_id, job_id=operation.id,
+                      expected_revision=workflow.workflow_revision)
+        assert task_facade.get_task(task_id=task_id, owner_id=owner_id)["status"] == "submissions_paused"
+    else:
+        assert task_facade._fail_operation(
+            task_id, owner_id, operation.id, operation.attempt, "provider_timeout",
+        ) is True
     workflow = workflow_repository.get_workflow(task_id, owner_id=owner_id)
     background = _BackgroundTasks()
 

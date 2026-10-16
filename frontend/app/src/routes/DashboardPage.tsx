@@ -10,77 +10,55 @@ import type { Locale, MessageKey } from "@/i18n/messages";
 import { cn } from "@/lib/cn";
 import { modelDisplayName } from "@/lib/modelPresentation";
 import { formatTaskTime, getTaskDestination, isTaskProcessing } from "@/lib/taskFlow";
+import { TASK_STAGE_KEYS as STAGE_KEYS, TASK_ACTION_KEYS as ACTION_KEYS, taskStatusTone } from "@/lib/taskPresentation";
 import type { ExpertConfig, JobProgress, TaskLite, TaskStatus } from "@/types";
 
 const PROCESSING_STATUSES = new Set<TaskStatus>([
   "extracting_problems",
   "parsing_submissions",
   "grading",
-  "generating_analysis",
 ]);
 
 const ACTION_STATUSES = new Set<TaskStatus>([
+  "problems_paused", "submissions_paused", "grading_paused",
   "draft",
   "problems_ready",
   "submissions_ready",
+  "grading_setup",
   "graded",
   "error",
 ]);
 
 const STATUS_PRIORITY: Record<TaskStatus, number> = {
+  problems_paused: 1,
+  submissions_paused: 1,
+  grading_paused: 1,
   error: 0,
   problems_ready: 1,
   submissions_ready: 1,
+  grading_setup: 1,
   draft: 1,
   extracting_problems: 2,
   parsing_submissions: 2,
   grading: 2,
   graded: 3,
-  review_confirmed: 4,
-  generating_analysis: 2,
   finalized: 5,
 };
 
-const STAGE_KEYS: Record<TaskStatus, MessageKey> = {
-  draft: "dashboardStageDraft",
-  extracting_problems: "dashboardStageExtracting",
-  problems_ready: "dashboardStageProblemsReady",
-  parsing_submissions: "dashboardStageParsing",
-  submissions_ready: "dashboardStageSubmissionsReady",
-  grading: "dashboardStageGrading",
-  graded: "dashboardStageGraded",
-  review_confirmed: "dashboardStageReviewConfirmed",
-  generating_analysis: "dashboardStageGeneratingAnalysis",
-  finalized: "dashboardStageFinalized",
-  error: "dashboardStageError",
-};
-
 const ATTENTION_KEYS: Record<TaskStatus, MessageKey> = {
+  problems_paused: "taskActionContinueRecognition",
+  submissions_paused: "taskActionContinueRecognition",
+  grading_paused: "taskActionContinueGrading",
   draft: "dashboardAttentionAddProblems",
   extracting_problems: "dashboardAttentionRecognizing",
   problems_ready: "dashboardAttentionReviewProblems",
   parsing_submissions: "dashboardAttentionRecognizing",
   submissions_ready: "dashboardAttentionReviewSubmissions",
+  grading_setup: "dashboardStageGradingSetup",
   grading: "dashboardAttentionGrading",
   graded: "dashboardAttentionReviewResults",
-  review_confirmed: "dashboardAttentionResultReady",
-  generating_analysis: "dashboardAttentionAnalysisGenerating",
   finalized: "dashboardAttentionFinalized",
   error: "dashboardAttentionResolveError",
-};
-
-const ACTION_KEYS: Record<TaskStatus, MessageKey> = {
-  draft: "dashboardActionContinue",
-  extracting_problems: "dashboardActionViewProgress",
-  problems_ready: "dashboardActionReviewProblems",
-  parsing_submissions: "dashboardActionViewProgress",
-  submissions_ready: "dashboardActionReviewSubmissions",
-  grading: "dashboardActionViewProgress",
-  graded: "dashboardActionViewResults",
-  review_confirmed: "dashboardActionOpenResults",
-  generating_analysis: "dashboardActionOpenResults",
-  finalized: "dashboardActionOpenResults",
-  error: "dashboardActionResolveError",
 };
 
 type MetricTone = "primary" | "warning" | "accent" | "neutral";
@@ -387,7 +365,9 @@ function DesktopTaskRow({ task }: { task: TaskLite }) {
         {t("dashboardCourseUnset")}
       </div>
       <div role="cell" className="px-3">
-        <StatusPill status={task.status}>{t(STAGE_KEYS[task.status])}</StatusPill>
+        <Link to={getTaskDestination(task)} className="rounded-full outline-none focus-visible:ring-2 focus-visible:ring-ring">
+          <StatusPill status={task.status}>{t(STAGE_KEYS[task.status])}</StatusPill>
+        </Link>
       </div>
       <div role="cell" className="px-3 tabular-nums text-muted-foreground">
         {progressValue}
@@ -447,13 +427,10 @@ function StatusPill({
 }) {
   return (
     <span
+      title={typeof children === "string" ? children : undefined}
       className={cn(
         "inline-flex h-7 min-w-[112px] max-w-[116px] items-center overflow-hidden text-ellipsis whitespace-nowrap rounded-full px-3 text-[12px] font-semibold xl:text-[13px]",
-        PROCESSING_STATUSES.has(status) && "bg-blue-100 text-blue-700 dark:bg-blue-950 dark:text-blue-200",
-        (status === "draft" || status === "problems_ready" || status === "submissions_ready") &&
-          "bg-amber-100 text-amber-700 dark:bg-amber-950 dark:text-amber-200",
-        ["graded", "review_confirmed", "finalized"].includes(status) && "bg-emerald-100 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-200",
-        status === "error" && "bg-red-100 text-red-700 dark:bg-red-950 dark:text-red-200",
+        taskStatusTone(status),
       )}
     >
       {children}
@@ -473,8 +450,8 @@ function AttentionPill({
       className={cn(
         "inline-flex h-7 min-w-[112px] max-w-[116px] items-center overflow-hidden text-ellipsis whitespace-nowrap rounded-full px-3 text-[12px] font-semibold xl:text-[13px]",
         status === "error" && "bg-red-100 text-red-700 dark:bg-red-950 dark:text-red-200",
-        status !== "error" && !["graded", "review_confirmed", "finalized"].includes(status) && "bg-amber-100 text-amber-700 dark:bg-amber-950 dark:text-amber-200",
-        ["graded", "review_confirmed", "finalized"].includes(status) && "bg-slate-100 text-slate-600 dark:bg-slate-700 dark:text-slate-200",
+        status !== "error" && !["graded", "finalized"].includes(status) && "bg-amber-100 text-amber-700 dark:bg-amber-950 dark:text-amber-200",
+        ["graded", "finalized"].includes(status) && "bg-slate-100 text-slate-600 dark:bg-slate-700 dark:text-slate-200",
       )}
     >
       {children}
@@ -651,7 +628,7 @@ function summarizeTasks(tasks: TaskLite[]): DashboardCounts {
     (counts, task) => {
       if (PROCESSING_STATUSES.has(task.status)) counts.processing += 1;
       if (ACTION_STATUSES.has(task.status)) counts.action += 1;
-      if (["graded", "review_confirmed", "generating_analysis", "finalized"].includes(task.status)) counts.results += 1;
+      if (["graded", "finalized"].includes(task.status)) counts.results += 1;
       counts.total += 1;
       return counts;
     },
@@ -679,7 +656,7 @@ function compareExperts(a: ExpertConfig, b: ExpertConfig): number {
 }
 
 function getProgressValue(task: TaskLite, progress: JobProgress | null, percent: number): string {
-  if (["graded", "review_confirmed", "finalized"].includes(task.status)) return "100%";
+  if (["graded", "finalized"].includes(task.status)) return "100%";
   if (!isTaskProcessing(task.status) || !progress) return "—";
   return `${percent}%`;
 }
