@@ -130,7 +130,7 @@ export function SubmissionRecognitionProgressPage() {
     return (
       <ProgressPageFrame title={locale === "en-US" ? "Submission recognition did not complete" : "作答识别未完成"} returnState={{ imageRecoveryModel: providerId }}>
         <>
-          <RecognitionActivity progress={progressQuery.progress} locale={locale} />
+          <RecognitionActivity progress={progressQuery.progress} locale={locale} incomplete />
           <StageProviderSelect id="submission-retry-provider" label={locale === "zh-CN" ? "作答识别模型" : "Submission recognition model"}
             hint={locale === "zh-CN" ? "只重试失败文件，成功结果保留；可先切换模型。返回修改配置后再开始识别，会重新处理全部文件。" : "Retry only failed files and keep successful results. You can switch models first. Starting again from settings processes all files."}
             experts={(expertsQuery.data ?? []).filter((item) => item.enabled)} value={providerId} locale={locale}

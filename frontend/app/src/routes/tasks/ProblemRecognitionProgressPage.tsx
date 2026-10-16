@@ -160,7 +160,7 @@ export function ProblemRecognitionProgressPage() {
               onChange={(id) => { setProviderChoice({ jobId: failedJobId, id }); setRetryFailure(null); }}
             />
           ) : null}
-          <RecognitionActivity progress={progressQuery.progress} locale={locale} />
+          <RecognitionActivity progress={progressQuery.progress} locale={locale} incomplete />
           <QuestionGenerationFailureSummary
             progress={progressQuery.progress}
             locale={locale}

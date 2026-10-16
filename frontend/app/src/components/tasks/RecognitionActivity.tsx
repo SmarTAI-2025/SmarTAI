@@ -70,7 +70,7 @@ export function RecognitionRequestStatus({ progress, locale, stale = false }: { 
 }
 
 /** Uses the existing bounded, durable progress messages; no new polling API. */
-export function RecognitionActivity({ progress, locale }: { progress: JobProgress | null; locale: Locale }) {
+export function RecognitionActivity({ progress, locale, incomplete = false }: { progress: JobProgress | null; locale: Locale; incomplete?: boolean }) {
   const [expanded, setExpanded] = useState(false);
   const list = useRef<HTMLDivElement>(null);
   const stickToBottom = useRef(true);
@@ -78,6 +78,9 @@ export function RecognitionActivity({ progress, locale }: { progress: JobProgres
   const zh = locale === "zh-CN";
   const events = progress?.messages ?? [];
   const latest = events.at(-1);
+  const latestText = incomplete ? (progress?.error_detail === "operation_cancelled"
+    ? (zh ? "本次识别已停止" : "Recognition stopped")
+    : (zh ? "本次识别未完成" : "Recognition did not complete")) : eventText(latest, zh);
   useEffect(() => {
     if (expanded && stickToBottom.current && list.current) list.current.scrollTop = list.current.scrollHeight;
   }, [expanded, events]);
@@ -86,7 +89,7 @@ export function RecognitionActivity({ progress, locale }: { progress: JobProgres
     <button type="button" className="flex h-10 w-full min-w-0 items-center gap-2 px-4 text-left hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
       aria-expanded={expanded} aria-controls={id} onClick={() => { stickToBottom.current = true; setExpanded(!expanded); }}>
       <span className="shrink-0 font-medium">{zh ? "最近动态" : "Recent activity"}</span>
-      <span className="truncate" aria-live="polite">{eventText(latest, zh)}</span>
+      <span className="truncate" aria-live="polite">{latestText}</span>
       <ChevronDown aria-hidden="true" className={`ml-auto h-3.5 w-3.5 shrink-0 ${expanded ? "rotate-180" : ""}`} />
     </button>
     {expanded && <div id={id} ref={list} className="h-56 overflow-y-auto border-t px-4 py-2" role="region" aria-label={zh ? "识别动态历史" : "Recognition activity history"} tabIndex={0}

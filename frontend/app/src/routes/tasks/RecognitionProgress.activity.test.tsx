@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ProblemRecognitionProgressPage } from "./ProblemRecognitionProgressPage";
 import { SubmissionRecognitionProgressPage } from "./SubmissionRecognitionProgressPage";
 import type { JobProgress } from "@/types/progress";
+import { RecognitionActivity } from "@/components/tasks/RecognitionActivity";
 
 const state = vi.hoisted(() => ({ status: "extracting_problems", operation: "running", locale: "zh-CN", stale: false, progress: null as JobProgress | null }));
 const task = () => ({ task_id: "T", status: state.status, active_job_id: "job", active_operation_status: state.operation, workflow_revision: 1 });
@@ -35,6 +36,17 @@ beforeEach(() => {
     model_waits: [{ model: "test-model", reason: "provider_rate_limited", attempt: 2, max_attempts: 3, retry_at: Date.now() / 1000 + 30 }],
     recognition_requests: [{ state: "responding", since: 100 }, { state: "retrying", reason: "timeout", attempt: 2, max_attempts: 3, retry_at: Date.now() / 1000 + 20 }],
   };
+});
+
+it.each(["operation_cancelled", "provider_timeout"])("does not present the last wait as ongoing after %s", (code) => {
+  state.progress!.error_detail = code;
+  state.progress!.messages = [{ ts: 100, level: "info", message: "activity_responding" }];
+  render(<RecognitionActivity progress={state.progress} locale="zh-CN" incomplete />);
+  const button = screen.getByRole("button", { name: /最近动态/ });
+  expect(button).toHaveTextContent(code === "operation_cancelled" ? "本次识别已停止" : "本次识别未完成");
+  expect(button).not.toHaveTextContent("等待模型响应");
+  fireEvent.click(button);
+  expect(within(screen.getByRole("region")).getByText("请求已发出，等待模型响应")).toBeVisible();
 });
 
 describe.each(["questions", "submissions"])("%s recognition activity", (kind) => {
