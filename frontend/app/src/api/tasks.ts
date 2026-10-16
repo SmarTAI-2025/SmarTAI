@@ -23,6 +23,13 @@ import type {
   TeacherCommentsResponse,
 } from "@/types";
 import type { SourceStorageUsage } from "@/types/sourcePreview";
+import type { GradingActivityEvent } from "@/types/progress";
+
+export function getGradingActivity(taskId: string, runId: string, after: number, signal?: AbortSignal) {
+  return getJSON<{ run_id: string; events: GradingActivityEvent[]; cursor: number; has_more: boolean }>(
+    `/tasks/${encodeURIComponent(taskId)}/grading/activity`, { params: { run_id: runId, after }, signal },
+  );
+}
 
 // The React UI intentionally does not expose a grading-language control.
 // Current backend compatibility: GradeRequest.language still accepts "en" /

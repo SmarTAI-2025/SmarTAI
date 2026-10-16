@@ -665,6 +665,14 @@ def task_result(task_id: str, current: User = Depends(require_teacher)):
     return _domain(lambda: task_facade.task_results(task_id=task_id, owner_id=current.id))
 
 
+@router.get("/{task_id}/grading/activity")
+def grading_activity(task_id: str, run_id: str, after: int = Query(0, ge=0),
+                     limit: int = Query(200, ge=1, le=200), current: User = Depends(require_teacher)):
+    return _domain(lambda: task_facade.grading_activity_history(
+        task_id=task_id, owner_id=current.id, run_id=run_id, after=after, limit=limit,
+    ))
+
+
 @router.put("/{task_id}/problems/{q_id}")
 def update_problem(task_id: str, q_id: str, request: UpdateProblemRequest,
                    current: User = Depends(require_teacher)):

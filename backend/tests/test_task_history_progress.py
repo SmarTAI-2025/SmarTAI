@@ -195,7 +195,9 @@ def test_grading_state_merges_live_counts_and_preserves_durable_phase_off_loop(m
     assert response.status_code == 200, response.text
     body = response.json()
     assert body["progress"]["completed_units"] == 2
-    assert body["progress"]["active"] == active
+    assert body["progress"]["active"] == []
+    assert body["progress"].get("running_units", 0) == (1 if status == "grading" else 0)
+    assert "ConceptSkill" not in response.text
     assert body["progress"]["phase"] == durable_phase
     assert body["error"] == ("grading_failed" if status == "error" else None)
     assert body["progress_percent"] == (10 if status == "grading" else None)

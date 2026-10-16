@@ -4,7 +4,7 @@ const copy = {
   title: ["批改中", "Grading in Progress"],
   gradingAnswers: ["正在批改学生作答", "Grading student submissions"],
   finalizing: ["正在完成结果分析", "Finalizing result analysis"],
-  completedPrefix: ["已完成", "Completed"],
+  completedPrefix: ["已处理", "Processed"],
   unitSuffix: ["题次", "responses"],
   etaPrefix: ["预计剩余", "Estimated remaining"],
   estimating: ["估算中", "Estimating"],

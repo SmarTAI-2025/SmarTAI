@@ -26,6 +26,11 @@ export interface ProgressEvent {
 }
 
 export interface JobProgress {
+  model_progress?: GradingModelProgress[];
+  model_eta_seconds?: number | null;
+  running_units?: number;
+  activity_latest?: GradingActivityEvent | null;
+  activity_cursor?: number;
   contract_version?: number;
   job_id?: string | null;
   phase: ProgressPhase;
@@ -50,4 +55,29 @@ export interface JobProgress {
   active_question_ids?: string[];
   failed_question_ids?: string[];
   last_activity_at?: number | null;
+}
+
+export interface GradingModelProgress {
+  id: string;
+  label: string;
+  total: number;
+  succeeded: number;
+  failed: number;
+  cancelled: number;
+  processing: number;
+  queued: number;
+  responding: number;
+  retrying: number;
+  completion_times: number[];
+}
+
+export interface GradingActivityEvent {
+  sequence: number;
+  ts: number;
+  code: "processing" | "queued" | "responding" | "retrying" | "succeeded" | "failed" | "cancelled" | "started" | "completed" | "stopped";
+  model_id?: string;
+  attempt?: number;
+  max_attempts?: number;
+  retry_at?: number;
+  reason?: "rate_limit" | "timeout" | "unavailable";
 }

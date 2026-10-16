@@ -1089,17 +1089,22 @@ def record_event(run_id: str, *, level: str, message: str, payload: dict | None 
         )
 
 
-def list_events(run_id: str, *, actor_id: str | None = None) -> list[dict]:
+def list_events(run_id: str, *, actor_id: str | None = None,
+                after_sequence: int = 0, limit: int | None = None) -> list[dict]:
     with session_scope() as session:
         if _active_assignment_for_run(
             session, run_id, actor_id=actor_id
         ) is None:
             raise NotFound("grading_run")
-        rows = session.scalars(
+        query = (
             select(GradingRunEventRecord)
-            .where(GradingRunEventRecord.grading_run_id == run_id)
+            .where(GradingRunEventRecord.grading_run_id == run_id,
+                   GradingRunEventRecord.sequence > after_sequence)
             .order_by(GradingRunEventRecord.sequence)
-        ).all()
+        )
+        if limit is not None:
+            query = query.limit(limit)
+        rows = session.scalars(query).all()
         return [
             {"sequence": r.sequence, "level": r.level, "message": r.message,
              "payload": dict(r.payload or {}), "created_at": r.created_at}

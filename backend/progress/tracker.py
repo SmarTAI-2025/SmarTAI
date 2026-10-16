@@ -50,6 +50,7 @@ class ProgressReporter:
         self._subscribers: list[asyncio.Queue[ProgressEvent]] = []
         self._event_sink: Optional[Callable[[ProgressEvent, dict[str, Any]], None]] = None
         self._question_generation_ids: tuple[str, ...] = ()
+        self.grading_activity = None
 
     def set_event_sink(
         self,
@@ -381,7 +382,10 @@ class ProgressReporter:
             unit=unit,
         ))
 
-    async def _emit(self, event: ProgressEvent) -> None:
+    async def publish_grading_activity(self, payload: dict) -> None:
+        await self._emit(ProgressEvent(message="grading_activity"), activity_payload=payload)
+
+    async def _emit(self, event: ProgressEvent, *, activity_payload: dict | None = None) -> None:
         """Add event to ring buffer and push to SSE subscribers."""
         _mark_reporter_active(self.job_id)
         self._events.append(event)
@@ -412,6 +416,8 @@ class ProgressReporter:
                     "model_waits": [wait.model_dump() for wait in self._progress.model_waits],
                 }
             try:
+                if activity_payload is not None:
+                    durable_payload.update(activity_payload)
                 self._event_sink(event, durable_payload)
             except Exception:
                 logger.exception("Progress event sink failed for job %s", self.job_id)

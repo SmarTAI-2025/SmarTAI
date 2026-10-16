@@ -6,6 +6,7 @@ import { useStartGrading, useTask } from "@/api/hooks/tasks";
 import { SmarTAIMascot } from "@/components/brand/SmarTAIMascot";
 import { NewTaskStepper } from "@/components/new-task/NewTaskStepper";
 import { TaskExecutionControls } from "@/components/tasks/TaskExecutionControls";
+import { GradingActivity, ModelProgressRows } from "@/components/tasks/GradingActivity";
 import { RecoverableActionState } from "@/components/ui/RecoverableActionState";
 import { useTaskProgress } from "@/hooks/useTaskProgress";
 import { useGradingIntent } from "@/hooks/useGradingIntent";
@@ -46,7 +47,7 @@ export function GradingProgressPage() {
     },
     [completedView, progress, state?.problem_count, state?.student_count, task?.problem_count, task?.student_count],
   );
-  const eta = useMemo(() => estimateRemaining(progress, queue.total, queue.completed, locale), [locale, progress, progressQuery.dataUpdatedAt, queue.completed, queue.total]);
+  const eta = useMemo(() => progressQuery.isError ? copy(locale, "estimating") : estimateRemaining(progress, queue.total, queue.completed, locale), [locale, progress, progressQuery.isError, progressQuery.dataUpdatedAt, queue.completed, queue.total]);
   const latestError = progress?.error_detail
     ?? [...(progress?.messages ?? [])].reverse().find((event) => event.level === "error")?.message
     ?? state?.error
@@ -89,9 +90,8 @@ export function GradingProgressPage() {
   const hasReadableState = Boolean(status || task || state);
   const readFailed = !hasReadableState && (taskQuery.isError || progressQuery.isError);
   const isFinalizing = status === "grading" && progress?.phase === "done";
-  const waitingLabel = state?.active_operation_status === "pending" ? (locale === "zh-CN" ? "排队中" : "Queued")
-    : progress?.model_waits?.length ? (locale === "zh-CN" ? "等待重试" : "Retry pending") : null;
-  const percent = completedView ? 100 : state?.active_operation_status === "pending" || progress?.model_waits?.length ? null : progress ? progressQuery.percent : null;
+  const waitingLabel = state?.active_operation_status === "pending" ? (locale === "zh-CN" ? "排队中" : "Queued") : null;
+  const percent = completedView ? 100 : state?.active_operation_status === "pending" ? null : progress ? progressQuery.percent : null;
   const recoveryInfo = status === "error"
     ? classifyRecoverableError(retryGrading.error ?? latestError, {
       locale,
@@ -136,7 +136,7 @@ export function GradingProgressPage() {
             />
           ) : (
             <>
-              <section className="relative flex min-h-[220px] flex-col overflow-hidden rounded-[10px] border bg-card px-5 pb-5 pt-7 sm:h-[220px] sm:px-10 sm:pb-5 sm:pt-8" aria-live="polite" aria-busy={completedView ? undefined : true}>
+              <section className="relative flex min-h-[220px] flex-col overflow-hidden rounded-[10px] border bg-card px-5 pb-5 pt-7 sm:px-10 sm:pb-5 sm:pt-8" aria-live="polite" aria-busy={completedView ? undefined : true}>
                 <SmarTAIMascot variant="grading" size="md" className="absolute right-7 top-4 hidden sm:inline-flex" />
                 <h2 className="text-[22px] font-bold leading-8 tracking-[-0.01em] text-foreground sm:pr-32 sm:text-[24px]">
                   {completedView
@@ -150,6 +150,7 @@ export function GradingProgressPage() {
                     ? (locale === "en-US" ? "Historical progress snapshot" : "历史进度快照")
                     : waitingLabel ?? `${copy(locale, "etaPrefix")} ${isFinalizing ? copy(locale, "almostDone") : eta}`}
                 </p>
+                <ModelProgressRows models={progress?.model_progress ?? []} locale={locale} />
 
                 <div className="mt-4 flex items-center gap-3">
                   <div
@@ -172,7 +173,7 @@ export function GradingProgressPage() {
                   </span>
                 </div>
 
-                <div className="mt-auto flex flex-col gap-3 pt-5 sm:flex-row sm:items-center sm:justify-between sm:pt-0">
+                <div className="mt-auto flex flex-col gap-3 pt-5 sm:flex-row sm:items-center sm:justify-between">
                   <span className="inline-flex min-h-7 w-fit items-center rounded-full bg-teal-100 px-3 text-[11px] font-semibold text-teal-700 dark:bg-teal-950/60 dark:text-teal-300 sm:text-[12px]">
                     {completedView ? (locale === "en-US" ? "Completed" : "已完成") : copy(locale, "backgroundChip")}
                   </span>
@@ -181,6 +182,8 @@ export function GradingProgressPage() {
                   </Link>
                 </div>
               </section>
+
+              {progress?.job_id && <GradingActivity key={progress.job_id} taskId={taskId} progress={progress} locale={locale} />}
 
               <QueueTable locale={locale} queue={queue} completed={completedView} />
 
@@ -196,6 +199,10 @@ export function GradingProgressPage() {
               </section>
             </>
           )}
+          {status === "error" && progress?.job_id && <>
+            <ModelProgressRows models={progress.model_progress ?? []} locale={locale} stopped />
+            <GradingActivity key={progress.job_id} taskId={taskId} progress={progress} locale={locale} stopped />
+          </>}
         </div>
       )}
       </div>
@@ -219,7 +226,7 @@ function deriveQueue(progress: JobProgress | null, problemCount: number, student
   const activePairs = new Set(
     (progress?.active ?? []).map((unit) => `${unit.student_id}\u0000${unit.q_id}`),
   );
-  const running = Math.min(Math.max(0, total - completed), activePairs.size);
+  const running = Math.min(Math.max(0, total - completed), progress?.running_units ?? activePairs.size);
   const queued = Math.max(0, total - completed - running);
   const eventErrors = (progress?.messages ?? []).filter((event) => event.level === "error").length;
   const errorSignals = eventErrors + (progress?.error_detail && eventErrors === 0 ? 1 : 0);
@@ -228,6 +235,13 @@ function deriveQueue(progress: JobProgress | null, problemCount: number, student
 
 function estimateRemaining(progress: JobProgress | null, total: number, completed: number, locale: Locale): string {
   if (!progress || total <= 0) return copy(locale, "estimating");
+  if (progress.model_progress?.length) {
+    if (completed >= total) return copy(locale, "almostDone");
+    const remaining = progress.model_progress.filter((model) => model.succeeded + model.failed < model.total);
+    if (!remaining.length) return copy(locale, "almostDone");
+    if (remaining.some((model) => model.retrying)) return locale === "zh-CN" ? "等待模型重试" : "Waiting for model retry";
+    return progress.model_eta_seconds != null ? formatRemaining(progress.model_eta_seconds, locale) : copy(locale, "estimating");
+  }
   if (completed <= 0) return copy(locale, "waitingFirst");
   if (completed >= total) return copy(locale, "almostDone");
   // One fast result is not a representative rate for a parallel batch. A
@@ -242,6 +256,10 @@ function estimateRemaining(progress: JobProgress | null, total: number, complete
   const rate = completed / elapsedSeconds;
   if (!Number.isFinite(rate) || rate <= 0) return copy(locale, "estimating");
   const remainingSeconds = Math.max(1, Math.round((total - completed) / rate));
+  return formatRemaining(remainingSeconds, locale);
+}
+
+function formatRemaining(remainingSeconds: number, locale: Locale) {
   if (remainingSeconds < 60) {
     return copy(locale, "aboutSeconds").replace("{value}", String(Math.max(5, Math.ceil(remainingSeconds / 5) * 5)));
   }

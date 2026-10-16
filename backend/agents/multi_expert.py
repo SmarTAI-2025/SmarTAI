@@ -235,10 +235,14 @@ async def run_multi_expert(
             provider, reporter=reporter, language=language, task_id=task_id,
             grading_setup=grading_setup,
         )
-        expert_result = normalize_expert_result(
-            await skill.grade(problem, answer, student_id=student_id),
-            problem.max_score,
-        )
+        from backend.progress.grading_activity import observe_expert
+        async with observe_expert(reporter, provider, samples) as activity:
+            expert_result = normalize_expert_result(
+                await skill.grade(problem, answer, student_id=student_id),
+                problem.max_score,
+            )
+            if activity is not None:
+                activity["successful"] = _is_successful_expert(expert_result)
         if not _is_successful_expert(expert_result):
             raise AllExpertsFailed([expert_result])
         expert_result.provider_id = provider_ids.get(id(provider), provider.provider_id)
@@ -264,10 +268,14 @@ async def run_multi_expert(
             provider, reporter=reporter, language=language, task_id=task_id,
             grading_setup=grading_setup,
         )
-        result = normalize_expert_result(
-            await skill.grade(problem, answer, student_id=student_id),
-            problem.max_score,
-        )
+        from backend.progress.grading_activity import observe_expert
+        async with observe_expert(reporter, provider, samples) as activity:
+            result = normalize_expert_result(
+                await skill.grade(problem, answer, student_id=student_id),
+                problem.max_score,
+            )
+            if activity is not None:
+                activity["successful"] = _is_successful_expert(result)
         result.provider_id = provider_ids.get(id(provider), provider.provider_id)
         # Tag duplicate provider IDs in multi-sample mode so the UI / logs can
         # tell them apart. We do this AFTER the skill returns so any internal

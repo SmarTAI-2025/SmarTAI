@@ -410,6 +410,8 @@ class BaseProvider(ABC):
     @asynccontextmanager
     async def _call_capacity(self, messages: List[BaseMessage], *, response_timeout: float | None = None):
         from backend.services.execution_control import current_execution
+        from backend.progress.grading_activity import report_provider_state
+        await report_provider_state(self, "queued")
         control = current_execution()
         if control is not None:
             await control.check(self)
@@ -436,6 +438,7 @@ class BaseProvider(ABC):
                         await control.check(self)
                     # Time spent waiting for RPM/capacity is not provider
                     # response time. Give the admitted request its full budget.
+                    await report_provider_state(self, "responding")
                     deadline.reschedule(asyncio.get_running_loop().time() + (
                         float(settings.llm_timeout) if response_timeout is None else response_timeout
                     ))
@@ -450,6 +453,7 @@ class BaseProvider(ABC):
                     else:
                         if control is not None:
                             await control.succeeded(self)
+            await report_provider_state(self, "processing")
         except TimeoutError as exc:
             if not deadline.expired():
                 raise
