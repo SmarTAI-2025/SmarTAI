@@ -82,7 +82,7 @@ export function RecognitionActivity({ progress, locale, incomplete = false, fill
   useEffect(() => {
     if (stickToBottom.current && list.current) list.current.scrollTop = list.current.scrollHeight;
   }, [events, progress?.job_id]);
-  return <section className={`${fill ? "absolute inset-0" : "mt-3 h-64"} flex min-h-0 flex-col overflow-hidden rounded-lg border bg-muted/30 p-5 text-xs text-muted-foreground`}>
+  return <section className={`${fill ? "absolute inset-0" : "mt-3 h-64"} flex min-h-0 flex-col overflow-hidden rounded-lg border bg-slate-50 px-5 py-4 text-xs text-muted-foreground dark:bg-slate-900/30`}>
     <h3 className="mb-2 shrink-0 font-semibold text-foreground">{zh ? "最近动态" : "Recent activity"}</h3>
     {summary && <div className="mb-2 shrink-0 leading-5">{summary}</div>}
     <p className={incomplete ? "mb-2 shrink-0" : "sr-only"} aria-live="polite">{latestText}</p>
