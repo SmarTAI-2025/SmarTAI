@@ -1852,6 +1852,17 @@ async def _start_question_preparation(
         return domain_error_response(exc)
 
 
+def _question_preparation_recovery_revision(
+    operation: workflow_repository.WorkflowOperationRecord,
+) -> int | None:
+    base = (operation.payload or {}).get("base_workflow_revision")
+    if isinstance(base, bool) or not isinstance(base, int):
+        return None
+    # Publishing advances once; an explicit stop advances once more. Neither
+    # change is a teacher edit. Any additional revision must still be rejected.
+    return base + 1 + int(operation.error_code == "operation_cancelled")
+
+
 @router.post("/{task_id}/question-preparation/{job_id}/manual-review")
 async def manually_complete_question_preparation(
     task_id: str, job_id: str, request: ManualQuestionPreparationRequest,
@@ -1868,7 +1879,7 @@ async def manually_complete_question_preparation(
             raise InvalidTransition("Only the latest failed preparation can be completed manually.",
                                     code="question_preparation_manual_unavailable")
         if (workflow.workflow_revision != request.expected_workflow_revision
-                or workflow.workflow_revision != (failed.payload or {}).get("base_workflow_revision", -2) + 1):
+                or workflow.workflow_revision != _question_preparation_recovery_revision(failed)):
             raise VersionConflict("The task changed after question preparation.", code="stale_revision")
         packages, missing = await run_in_threadpool(recover_manual_question_packages, failed)
         revision = task_facade._replace_draft_questions(
@@ -1952,12 +1963,7 @@ async def retry_question_preparation(
                     "question_preparation_provider_configuration_changed"
                 ),
             )
-        previous_base_revision = payload.get("base_workflow_revision")
-        if (
-            isinstance(previous_base_revision, bool)
-            or not isinstance(previous_base_revision, int)
-            or workflow.workflow_revision != previous_base_revision + 1
-        ):
+        if workflow.workflow_revision != _question_preparation_recovery_revision(failed):
             raise VersionConflict(
                 "The task changed after the failed question preparation.",
                 code="stale_revision",
