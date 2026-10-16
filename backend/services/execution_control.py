@@ -30,6 +30,7 @@ class ExecutionControl:
     is_cancelled: Callable[[], bool]
     task: asyncio.Task
     persist_progress: Callable[[dict], Awaitable[None]] | None = None
+    response_timeout_seconds: float | None = None
     blocked: dict[str, str] = field(default_factory=dict)
     rate_failures: dict[str, int] = field(default_factory=dict)
     waits: dict[str, dict] = field(default_factory=dict)
@@ -92,8 +93,14 @@ def cancel_local(job_id: str) -> None:
         control.stop()
 
 
-async def run_controlled(job_id: str, is_cancelled: Callable[[], bool], awaitable, *, persist_progress=None):
-    control = ExecutionControl(job_id, is_cancelled, asyncio.current_task(), persist_progress)
+async def run_controlled(
+    job_id: str, is_cancelled: Callable[[], bool], awaitable, *,
+    persist_progress=None, response_timeout_seconds: float | None = None,
+):
+    control = ExecutionControl(
+        job_id, is_cancelled, asyncio.current_task(), persist_progress,
+        response_timeout_seconds=response_timeout_seconds,
+    )
     token = _current.set(control)
     _running[job_id] = control
 

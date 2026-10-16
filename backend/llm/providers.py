@@ -408,7 +408,7 @@ class BaseProvider(ABC):
         return min(HARD_LIMIT, limit, max(1, int(settings.max_concurrent_llm_per_provider)))
 
     @asynccontextmanager
-    async def _call_capacity(self, messages: List[BaseMessage]):
+    async def _call_capacity(self, messages: List[BaseMessage], *, response_timeout: float | None = None):
         from backend.services.execution_control import current_execution
         control = current_execution()
         if control is not None:
@@ -436,7 +436,9 @@ class BaseProvider(ABC):
                         await control.check(self)
                     # Time spent waiting for RPM/capacity is not provider
                     # response time. Give the admitted request its full budget.
-                    deadline.reschedule(asyncio.get_running_loop().time() + float(settings.llm_timeout))
+                    deadline.reschedule(asyncio.get_running_loop().time() + (
+                        float(settings.llm_timeout) if response_timeout is None else response_timeout
+                    ))
                     try:
                         yield
                     except Exception as exc:
@@ -1011,6 +1013,12 @@ class SafeRelayProvider(BaseProvider):
 
     can_encode_vision = True
 
+    @staticmethod
+    def _response_timeout_override() -> float | None:
+        from backend.services.execution_control import current_execution
+        control = current_execution()
+        return control.response_timeout_seconds if control is not None else None
+
     def __init__(self, config: ProviderConfig):
         super().__init__(config)
         self.provider_type = config.provider_type
@@ -1147,11 +1155,19 @@ class SafeRelayProvider(BaseProvider):
         started = time.perf_counter()
         client = await self._relay_client()
         headers, payload = self._request_parts(messages, max_output_tokens=max_output_tokens)
+        request_options = {}
+        seconds = self._response_timeout_override()
+        if seconds is not None:
+            # Override only this grading request, not the cached client: other
+            # workflows keep their existing relay timeout. The outer deadline
+            # still caps total time even if chunks continue arriving.
+            request_options["timeout"] = httpx.Timeout(seconds, connect=min(seconds, 15.0))
         try:
             response = await client.post(
                 self._target_url,
                 headers=headers,
                 json=payload,
+                **request_options,
             )
         except httpx.TimeoutException as exc:
             raise ProviderRequestError("provider_timeout") from exc
@@ -1206,7 +1222,7 @@ class SafeRelayProvider(BaseProvider):
         # admission; a delayed cold start must not accumulate a send burst.
         await self._relay_client()
         await self._endpoint_breaker().before_call()
-        async with self._call_capacity(messages):
+        async with self._call_capacity(messages, response_timeout=self._response_timeout_override()):
             try:
                 options = {} if max_output_tokens is None else {"max_output_tokens": max_output_tokens}
                 response = await self._relay_call(messages, **options)

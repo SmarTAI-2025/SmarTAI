@@ -53,6 +53,8 @@ def finish(case, run_id, monkeypatch, failed=("q2",)):
     calls = []
 
     async def fake_batch(**kwargs):
+        from backend.services.execution_control import current_execution
+        assert current_execution().response_timeout_seconds == grading_runs.settings.grading_custom_provider_timeout_seconds
         calls.append(kwargs)
         return [{"student_id": sid, "corrections": [Correction(
             q_id=qid, type="short", score=0 if qid in failed else 8,
@@ -98,9 +100,32 @@ def test_same_inputs_retry_preserves_history_and_teacher_edits_and_can_publish(c
         assert kept.ai_score == 8 and kept.effective_score == 9
         assert kept.teacher_review["new_comment"] == "Keep this teacher edit"
     assert task_facade.finalization(task_id=case[0], owner_id=case[1])["remaining_review_count"] == 0
-    assert start(case, "completed-cache")["status"] == "already_done"
+    assert task_facade.start_task_grading(task_id=case[0], owner_id=case[1],
+        expected_workflow_revision=workflows.get_live_workflow(case[0], owner_id=case[1]).workflow_revision)["status"] == "already_done"
     final = task_facade.generate_artifacts(task_id=case[0], owner_id=case[1], expected_revision=workflows.get_live_workflow(case[0], owner_id=case[1]).workflow_revision)
     assert final["status"] == "ok"
+    # Even after report generation, an unchanged setup can explicitly rerun.
+    fresh = start(case, "after-report")
+    assert fresh["status"] == "started" and fresh["job_id"] != retry["job_id"]
+    finish(case, fresh["job_id"], monkeypatch, ())
+    assert len(grading.list_results_for_run(retry["job_id"])) == len(new_rows)
+
+
+@pytest.mark.parametrize("change_setup", [False, True])
+def test_cancelled_run_can_restart_with_same_or_changed_setup(case, change_setup):
+    from backend.services.task_execution import stop_task_run
+    first = start(case, "first")
+    workflow = workflows.get_live_workflow(case[0], owner_id=case[1])
+    stop_task_run(task_id=case[0], owner_id=case[1], job_id=first["job_id"], expected_revision=workflow.workflow_revision)
+    if change_setup:
+        workflow = workflows.get_live_workflow(case[0], owner_id=case[1])
+        workflows.update_workflow(case[0], owner_id=case[1], grading_setup={**workflow.grading_setup, "strictness": 70})
+        with pytest.raises(VersionConflict, match="Grading inputs changed"):
+            task_facade.start_task_grading(task_id=case[0], owner_id=case[1], request_id="continue-old",
+                expected_workflow_revision=workflows.get_live_workflow(case[0], owner_id=case[1]).workflow_revision, retry_scope="failed_only")
+    fresh = start(case, "new-summary")
+    assert fresh["status"] == "started" and fresh["job_id"] != first["job_id"]
+    assert grading.get_run(first["job_id"]).status == "cancelled"
 
 
 def test_again_failed_is_truthful_and_next_explicit_intent_can_retry(case, monkeypatch):

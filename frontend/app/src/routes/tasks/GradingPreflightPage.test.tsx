@@ -25,14 +25,25 @@ const { useGradingSetup, useStartGrading, useTask } = await import("@/api/hooks"
 const mutateAsync = vi.fn();
 
 describe("GradingPreflightPage regrade mode", () => {
-  it("requires an explicit click for a regrade even after the normal countdown elapses", () => {
+  it.each(["graded", "review_confirmed", "finalized", "error"])("starts a fresh countdown after %s and resets it on re-entry", async (status) => {
     vi.useFakeTimers();
-    render(<MemoryRouter initialEntries={["/tasks/task-1/grading/preflight"]}><Routes>
+    const task = (useTask as unknown as () => any)();
+    Object.assign(task.data, { status, grading_job_id: "old-run", last_failed_job_id: status === "error" ? "old-run" : null });
+    const page = <MemoryRouter initialEntries={["/tasks/task-1/grading/preflight"]}><Routes>
       <Route path="/tasks/:taskId/grading/preflight" element={<GradingPreflightPage />} />
-    </Routes></MemoryRouter>);
-    expect(screen.getByText(/using model quota/)).toBeInTheDocument();
-    act(() => { vi.advanceTimersByTime(12_000); });
+      <Route path="/tasks/:taskId/grading/progress" element={<div>New run progress</div>} />
+    </Routes></MemoryRouter>;
+    const first = render(page);
+    act(() => { vi.advanceTimersByTime(9_000); });
     expect(mutateAsync).not.toHaveBeenCalled();
+    first.unmount();
+    render(page);
+    act(() => { vi.advanceTimersByTime(9_000); });
+    expect(mutateAsync).not.toHaveBeenCalled();
+    await act(async () => { vi.advanceTimersByTime(1_000); });
+    expect(mutateAsync).toHaveBeenCalledTimes(1);
+    expect(mutateAsync).toHaveBeenCalledWith(expect.objectContaining({ requestId: expect.any(String), expectedWorkflowRevision: 8 }));
+    expect(screen.getByText("New run progress")).toBeInTheDocument();
   });
   beforeEach(() => {
     vi.clearAllMocks();

@@ -674,19 +674,137 @@ async def test_external_cancellation_remains_cancellation(scheduler, clock, monk
 
 
 @pytest.mark.asyncio
-async def test_admission_wait_does_not_consume_network_timeout(scheduler, clock, host, monkeypatch):
+@pytest.mark.parametrize("grading", [False, True])
+async def test_admission_wait_does_not_consume_network_timeout(scheduler, clock, host, monkeypatch, grading):
+    import httpx
     from backend.config import settings
+    from backend.services.execution_control import run_controlled
     monkeypatch.setattr("backend.llm.providers.get_scheduler", lambda: scheduler)
-    monkeypatch.setattr(settings, "llm_timeout", 0.12)
+    monkeypatch.setattr(settings, "llm_timeout", 0.4 if grading else 0.12)
     host.capacity = 0
     async def invoke(*args, **kwargs):
         await asyncio.sleep(0.075)
         return SimpleNamespace(content="ok")
-    provider = RecordingProvider(ProviderConfig(provider_type="openai", model="paced", api_key="fake"), clock, [])
-    provider._client = SimpleNamespace(ainvoke=invoke)
-    task = asyncio.create_task(provider.ainvoke([HumanMessage(content="test")]))
+    if grading:
+        provider = SafeRelayProvider(ProviderConfig(provider_type="openai", model="paced", api_key="fake",
+                                                    base_url="https://relay.example.com/v1"))
+        async def post(*args, **kwargs):
+            await invoke()
+            return httpx.Response(200, json={
+                "choices": [{"message": {"content": "ok"}, "finish_reason": "stop"}],
+            })
+        async def client():
+            return SimpleNamespace(post=post)
+        monkeypatch.setattr(provider, "_relay_client", client)
+    else:
+        provider = RecordingProvider(ProviderConfig(provider_type="openai", model="paced", api_key="fake"), clock, [])
+        provider._client = SimpleNamespace(ainvoke=invoke)
+    request = provider.ainvoke([HumanMessage(content="test")])
+    if grading:
+        request = run_controlled("grading-queue", lambda: False, request, response_timeout_seconds=0.12)
+    task = asyncio.create_task(request)
     await asyncio.sleep(0.075)
     host.capacity = 1
     scheduler.wake.set()
     assert (await task).content == "ok"
     assert host.active == 0
+
+
+def test_grading_response_timeout_defaults_to_300_and_is_configurable(monkeypatch):
+    from backend.config import Settings
+    monkeypatch.delenv("SMARTAI_GRADING_CUSTOM_PROVIDER_TIMEOUT_SECONDS", raising=False)
+    assert Settings(_env_file=None).grading_custom_provider_timeout_seconds == 300
+    monkeypatch.setenv("SMARTAI_GRADING_CUSTOM_PROVIDER_TIMEOUT_SECONDS", "240")
+    assert Settings(_env_file=None).grading_custom_provider_timeout_seconds == 240
+    monkeypatch.setenv("SMARTAI_GRADING_CUSTOM_PROVIDER_TIMEOUT_SECONDS", "0")
+    with pytest.raises(ValueError):
+        Settings(_env_file=None)
+
+
+@pytest.mark.asyncio
+async def test_slow_grading_relay_uses_its_own_budget_without_changing_other_workflows(scheduler, monkeypatch):
+    import httpx
+    from backend.config import settings
+    from backend.services.execution_control import current_execution, run_controlled
+    monkeypatch.setattr("backend.llm.providers.get_scheduler", lambda: scheduler)
+    monkeypatch.setattr(settings, "llm_timeout", 1)
+    monkeypatch.setattr(settings, "custom_provider_timeout_seconds", 0.12)
+    provider = SafeRelayProvider(ProviderConfig(
+        provider_type="zhipu", model="slow", api_key="fake",
+        base_url="https://relay.example.com/v1",
+    ))
+    options = {}
+
+    async def post(*args, **kwargs):
+        content = kwargs["json"]["messages"][0]["content"]
+        options[content] = kwargs.get("timeout")
+        if content == "grading":
+            # Scaled 150-second first response: exceeds the old 120-second
+            # read budget but is allowed by the grading-specific budget.
+            assert kwargs["timeout"].read == 0.3
+            await asyncio.sleep(0.15)
+        return httpx.Response(200, json={
+            "choices": [{"message": {"content": "ok"}, "finish_reason": "stop"}],
+        })
+
+    async def client():
+        return SimpleNamespace(post=post)
+
+    monkeypatch.setattr(provider, "_relay_client", client)
+    grading, other = await asyncio.gather(
+        run_controlled("slow-grading", lambda: False,
+            provider.ainvoke([HumanMessage(content="grading")]), response_timeout_seconds=0.3),
+        run_controlled("other-workflow", lambda: False,
+            provider.ainvoke([HumanMessage(content="other")])),
+    )
+    assert grading.content == other.content == "ok"
+    assert options["other"] is None  # Cached non-grading client keeps its original timeout.
+    assert current_execution() is None
+    assert scheduler.active == 0
+
+
+@pytest.mark.asyncio
+async def test_grading_relay_complete_response_deadline_stops_keepalives(scheduler, host, monkeypatch):
+    from backend.config import settings
+    from backend.services.execution_control import run_controlled
+    monkeypatch.setattr("backend.llm.providers.get_scheduler", lambda: scheduler)
+    monkeypatch.setattr(settings, "llm_timeout", 1)
+    config = ProviderConfig(provider_type="openai", model="stream", api_key="fake",
+                            base_url="https://relay.example.com/v1")
+    reads = []
+    closed = asyncio.Event()
+
+    async def invoke(*args, **kwargs):
+        try:
+            while True:
+                reads.append("keepalive")
+                await asyncio.sleep(0.003)
+        finally:
+            closed.set()
+
+    provider = SafeRelayProvider(config)
+    async def client():
+        return SimpleNamespace(post=invoke)
+    monkeypatch.setattr(provider, "_relay_client", client)
+    with pytest.raises(ProviderRequestError, match="provider_timeout"):
+        await asyncio.wait_for(run_controlled("deadline", lambda: False,
+            provider.ainvoke([HumanMessage(content="test")]), response_timeout_seconds=0.05), timeout=0.5)
+    assert len(reads) >= 2 and closed.is_set()
+    assert scheduler.active == scheduler.memory_active == host.active == 0
+
+
+@pytest.mark.asyncio
+async def test_official_provider_keeps_existing_timeout_during_grading(scheduler, clock, monkeypatch):
+    from backend.config import settings
+    from backend.services.execution_control import run_controlled
+    monkeypatch.setattr("backend.llm.providers.get_scheduler", lambda: scheduler)
+    monkeypatch.setattr(settings, "llm_timeout", 0.3)
+    provider = RecordingProvider(ProviderConfig(provider_type="openai", model="official", api_key="fake"), clock, [])
+    async def invoke(*args, **kwargs):
+        await asyncio.sleep(0.06)
+        return SimpleNamespace(content="ok")
+    provider._client = SimpleNamespace(ainvoke=invoke)
+    result = await run_controlled("official-grading", lambda: False,
+        provider.ainvoke([HumanMessage(content="test")]), response_timeout_seconds=0.03)
+    assert result.content == "ok"
+    assert scheduler.active == 0
