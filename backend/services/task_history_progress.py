@@ -45,6 +45,8 @@ def progress_fields(status: str, progress: dict | None, *, now: float) -> dict:
             started /= 1000
         if started is not None and 0 < started < now:
             eta = max(0, math.floor((total - min(total, completed)) * (now - started) / completed + .5))
+    if status == "grading" and progress.get("model_progress"):
+        eta = progress.get("model_eta_seconds")
     return {"progress_percent": percent, "eta_seconds": eta}
 
 

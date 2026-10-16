@@ -3890,15 +3890,15 @@ async def async_task_state(*, task_id: str, owner_id: str) -> dict:
         and (payload.get("status") == "grading" or grading_owns_failure)
     ):
         grading_progress = await asyncio.to_thread(_grading_progress, grading_job_id, owner_id)
-        # The durable projection cannot reconstruct the volatile in-flight
-        # units; borrow them from the live reporter when it still exists.
-        # Without this merge the progress page's "running" count is always 0
-        # (2026-08-28 fix). ``phase`` intentionally stays durable: the
-        # reporter can reach ``done`` before result persistence finishes.
+        # Borrow only a deduplicated running count from live units. Student,
+        # skill and internal step identifiers must stay server-side. Phase
+        # stays durable because the reporter finishes before persistence.
         if (reporter := get_reporter(grading_job_id)) is not None:
             live = (await reporter.snapshot()).model_dump(mode="json")
-            if live.get("active"):
-                grading_progress["active"] = live["active"]
+            if grading_progress.get("phase") == "grading":
+                grading_progress["running_units"] = len({
+                    (unit["student_id"], unit["q_id"]) for unit in live.get("active", [])
+                })
             live_completed = live.get("completed_units")
             if (
                 isinstance(live_completed, int)
@@ -3919,6 +3919,7 @@ async def async_task_state(*, task_id: str, owner_id: str) -> dict:
 
 
 def _grading_progress(run_id: str, owner_id: str) -> dict:
+    from backend.progress.grading_activity import public_models, public_event, public_waits, model_eta_seconds
     run = grading_repository.get_run(run_id, actor_id=owner_id)
     events = grading_repository.list_events(run_id, actor_id=owner_id)
     model_waits = next((item.get("payload", {}).get("model_waits", [])
@@ -3936,7 +3937,15 @@ def _grading_progress(run_id: str, owner_id: str) -> dict:
             "message": item["message"],
         }
         for item in events[-100:]
+        if item["message"] in {"grading_started", "grading_progress", "run_completed", "run_failed"}
     ]
+    models = next((item["payload"]["model_progress"] for item in reversed(events)
+                   if "model_progress" in item.get("payload", {})), [])
+    latest = next((event for item in reversed(events) if (event := public_event(item))), None)
+    # Older run payloads are also projected through a field allowlist. Internal
+    # active-unit names and free-form messages never cross the grading boundary.
+    safe_waits = public_waits(model_waits)
+    models = public_models(models, terminal=run.status in {"completed", "partial_failed", "failed", "cancelled"})
     return {
         "contract_version": 1, "job_id": run_id,
         "phase": "done" if run.status in {"completed", "partial_failed"} else (
@@ -3946,13 +3955,32 @@ def _grading_progress(run_id: str, owner_id: str) -> dict:
         "total_questions": question_count,
         "completed_units": completed_units,
         "active": [], "messages": messages,
-        "model_waits": model_waits if run.status == "running" else [],
+        "model_waits": safe_waits if run.status == "running" else [],
+        "model_progress": models,
+        "model_eta_seconds": model_eta_seconds(models, now=time.time()) if run.status == "running" else None,
+        "activity_latest": latest,
+        "activity_cursor": events[-1]["sequence"] if events else 0,
+        "running_units": 0,
         "error_detail": _grading_failure_code(run),
         "started_at": run.started_at or run.created_at,
         "workflow": "grading", "stage_sequence": [],
         "current_step": "completed" if run.status in {"completed", "partial_failed"} else "grading",
         "total_steps": None, "completed_steps": None, "stage_metrics": {},
     }
+
+
+def grading_activity_history(*, task_id: str, owner_id: str, run_id: str, after: int, limit: int) -> dict:
+    from backend.progress.grading_activity import public_event
+    workflow_repository.get_live_workflow(task_id, owner_id=owner_id)
+    run = grading_repository.get_run(run_id, actor_id=owner_id)
+    if run.assignment_id != task_id:
+        raise NotFound("grading_run")
+    rows = grading_repository.list_events(run_id, actor_id=owner_id, after_sequence=after, limit=limit + 1)
+    page = rows[:limit]
+    return {"run_id": run_id,
+            "events": [event for row in page if (event := public_event(row))],
+            "cursor": page[-1]["sequence"] if page else after,
+            "has_more": len(rows) > limit}
 
 
 def grading_readiness(

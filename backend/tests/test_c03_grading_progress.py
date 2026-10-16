@@ -69,10 +69,8 @@ def test_failed_grading_state_overrides_stale_done_reporter(monkeypatch):
     assert snapshot["error"] == "grading_failed"
 
 
-def test_grading_state_exposes_live_active_units(monkeypatch):
-    """The durable projection hardcodes ``active: []``; the live reporter's
-    in-flight units must be merged in so the progress page's "running" count
-    is not stuck at 0 (2026-08-28 fix)."""
+def test_grading_state_exposes_count_without_internal_active_units(monkeypatch):
+    """Keep the factual running count without exposing identities/skill names."""
     from backend.progress import tracker
     from backend.services import task_facade
 
@@ -121,6 +119,6 @@ def test_grading_state_exposes_live_active_units(monkeypatch):
     # Durable fields stay durable; live fields are borrowed from the reporter.
     assert progress["phase"] == "grading"
     assert progress["completed_units"] == 1
-    assert len(progress["active"]) == 1
-    assert progress["active"][0]["student_id"] == "anonymous-1"
-    assert progress["active"][0]["q_id"] == "q2"
+    assert progress["running_units"] == 1
+    assert progress["active"] == []
+    assert "ConceptSkill" not in str(progress)

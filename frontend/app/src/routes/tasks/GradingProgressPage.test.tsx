@@ -37,6 +37,32 @@ function renderProgress() {
 }
 
 describe("GradingProgressPage completion routing", () => {
+  it("withdraws a cached model estimate when polling fails", () => {
+    (useTaskProgress as unknown as ReturnType<typeof vi.fn>).mockReturnValue({
+      data: { status: "grading", problem_count: 7, student_count: 2 },
+      progress: { total_students: 2, total_questions: 7, completed_units: 3, messages: [], active: [],
+        model_progress: [{ id: "model-1", total: 14, succeeded: 3, failed: 0, retrying: 0 }], model_eta_seconds: 220 },
+      percent: 21, isError: true, refetch: vi.fn(),
+    });
+    renderProgress();
+    expect(screen.getByText(/Estimated remaining Estimating/)).toBeVisible();
+  });
+  it("keeps the factual percent and model rows during a slow model retry", () => {
+    const models = ["Gemini", "Tsinghua"].map((label, i) => ({ id: `model-${i + 1}`, label, total: 14,
+      succeeded: i ? 1 : 14, failed: 0, cancelled: 0, responding: i ? 12 : 0, processing: 0, queued: 0, retrying: i ? 1 : 0, completion_times: [] }));
+    (useTaskProgress as unknown as ReturnType<typeof vi.fn>).mockReturnValue({
+      data: { status: "grading", problem_count: 7, student_count: 2 },
+      progress: { phase: "grading", total_students: 2, total_questions: 7, completed_units: 1,
+        messages: [], active: [], model_progress: models, model_eta_seconds: null,
+        model_waits: [{ model: "Tsinghua", reason: "provider_rate_limited", attempt: 2, max_attempts: 3, retry_at: 1 }] },
+      percent: 7, refetch: vi.fn(),
+    });
+    renderProgress();
+    expect(screen.getByText(/processed 14 \/ 14/)).toBeVisible();
+    expect(screen.getByText(/processed 1 \/ 14/)).toBeVisible();
+    expect(screen.getByRole("progressbar")).toHaveAttribute("aria-valuenow", "7");
+    expect(screen.getByText(/Estimated remaining Waiting for model retry/)).toBeVisible();
+  });
   it.each([1, 3])("does not extrapolate hours from %s completed responses without a recent representative rate", (completed) => {
     (useTaskProgress as unknown as ReturnType<typeof vi.fn>).mockReturnValue({
       data: { status: "grading", problem_count: 7, student_count: 2 },

@@ -422,6 +422,13 @@ async def grade_batch(
     "use the global setting". Ignored when ≥ 2 providers are configured.
     """
     if reporter:
+        from backend.progress.grading_activity import GradingActivity
+        reporter.grading_activity = GradingActivity(reporter, sum(
+            1 for sd in student_store.values() if sd.get("stu_id")
+            for answer in sd.get("stu_ans", [])
+            if answer.get("q_id") in problem_store and (question_ids_by_student is None
+                or answer.get("q_id") in question_ids_by_student.get(sd["stu_id"], set()))
+        ))
         await reporter.set_phase("grading")
         await reporter.set_totals(
             students=len(student_store),
