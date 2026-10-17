@@ -159,7 +159,7 @@ describe("StudentAnswerReviewPage review shortcuts", () => {
     renderPage();
     await user.click(screen.getByRole("button", { name: "全部确认" }));
     expect(mutations.answer).not.toHaveBeenCalled();
-    await user.click(screen.getByRole("button", { name: "返回", exact: true }));
+    await user.click(screen.getByRole("button", { name: "返回" }));
     await user.click(screen.getByRole("button", { name: "修改" }));
     await user.click(screen.getByRole("button", { name: "确认本题未作答" }));
     expect(mutations.answer).toHaveBeenCalledWith(expect.objectContaining({ content: "", reviewStatus: "confirmed",
