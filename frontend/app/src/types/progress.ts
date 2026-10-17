@@ -23,6 +23,17 @@ export interface ProgressEvent {
   level: "info" | "warn" | "error";
   message: string;
   unit?: ActiveUnit | null;
+  recognition?: RecognitionRequestState | null;
+}
+
+export interface RecognitionRequestState {
+  count?: number;
+  state: "queued" | "responding" | "retrying";
+  since?: number;
+  attempt?: number;
+  max_attempts?: number;
+  retry_at?: number;
+  reason?: "rate_limit" | "timeout" | "unavailable";
 }
 
 export interface ProviderFailure {
@@ -31,6 +42,7 @@ export interface ProviderFailure {
 }
 
 export interface JobProgress {
+  recognition_requests?: RecognitionRequestState[];
   model_progress?: GradingModelProgress[];
   model_eta_seconds?: number | null;
   running_units?: number;

@@ -924,7 +924,7 @@ async def _before_retry_sleep(retry_state) -> None:
     if budget is not None:
         budget.waited += float(retry_state.next_action.sleep)
     exc = retry_state.outcome.exception()
-    from backend.progress.grading_activity import report_provider_state
+    from backend.progress.recognition_activity import report_provider_state
     await report_provider_state(
         _retry_provider(retry_state), "retrying",
         attempt=(budget.used if budget is not None else retry_state.attempt_number) + 1,
@@ -1060,7 +1060,7 @@ async def parse_with_format_repair(provider, messages, raw_response, output_mode
             "Do not fill missing student work or invent a score to satisfy validation. "
             "Encode each newline once. No commentary or Markdown fences.\n"
             + json.dumps(output_model.model_json_schema(), ensure_ascii=False)))
-        from backend.progress.grading_activity import report_provider_state
+        from backend.progress.recognition_activity import report_provider_state
         await report_provider_state(provider, "retrying", reason="unavailable")
         corrected = await (invoke or _ainvoke_with_retry)(provider, [*messages, repair])
         from dataclasses import replace

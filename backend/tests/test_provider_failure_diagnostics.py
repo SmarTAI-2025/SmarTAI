@@ -143,6 +143,29 @@ async def test_diagnostic_sink_is_bounded_and_uses_upstream_not_application_stat
     assert events[-1]["provider_failures"] == failures
 
 
+def test_public_recognition_diagnostics_validate_legacy_snapshots():
+    from backend.progress.recognition_activity import public_progress
+
+    snapshot = {"phase": "error", "provider_failures": [
+        {"code": "provider_upstream_unavailable", "http_status": 503, "detail": "PRIVATE_BODY"},
+        {"code": "provider_timeout", "http_status": None},
+        {"code": "PRIVATE_EXCEPTION", "http_status": 503},
+        {"code": "provider_timeout", "http_status": True},
+        {"code": "provider_timeout", "http_status": "503"},
+        {"code": "provider_timeout", "http_status": 200},
+        "PRIVATE_ROW",
+    ]}
+    result = public_progress(snapshot, terminal=True)
+    assert result["provider_failures"] == [
+        {"code": "provider_upstream_unavailable", "http_status": 503},
+        {"code": "provider_timeout", "http_status": None},
+    ]
+    assert "PRIVATE" not in str(result)
+    assert public_progress(result, terminal=True) == result
+    snapshot["provider_failures"] = [{"code": "provider_timeout"}] * 100
+    assert len(public_progress(snapshot)["provider_failures"]) == 8
+
+
 @pytest.mark.asyncio
 async def test_submission_failure_diagnostics_survive_reporter_eviction(monkeypatch):
     from backend.db import workflow_repository

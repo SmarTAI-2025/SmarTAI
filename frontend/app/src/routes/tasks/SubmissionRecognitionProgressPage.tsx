@@ -16,7 +16,7 @@ import { SmarTAIMascot } from "@/components/brand/SmarTAIMascot";
 import { NewTaskStepper } from "@/components/new-task/NewTaskStepper";
 import { SubmissionSourceOutcomePanel } from "@/components/tasks/SubmissionSourceOutcomePanel";
 import { TaskExecutionControls } from "@/components/tasks/TaskExecutionControls";
-import { executionProgressCopy } from "@/lib/executionProgressCopy";
+import { RecognitionActivity, RecognitionRequestStatus } from "@/components/tasks/RecognitionActivity";
 import { Button } from "@/components/ui/Button";
 import { RecoverableActionState } from "@/components/ui/RecoverableActionState";
 import { useTaskProgress } from "@/hooks/useTaskProgress";
@@ -26,7 +26,7 @@ import { cn } from "@/lib/cn";
 import { classifyRecoverableError } from "@/lib/taskActionGuards";
 import { getTaskDestination } from "@/lib/taskFlow";
 import { submissionRecognitionIncomplete } from "@/lib/reviewConfirmation";
-import type { JobProgress, ProgressEvent, TaskStatus } from "@/types";
+import type { JobProgress, TaskStatus } from "@/types";
 
 type RecognitionStepState = "done" | "active" | "pending";
 
@@ -131,6 +131,7 @@ export function SubmissionRecognitionProgressPage() {
     return (
       <ProgressPageFrame title={locale === "en-US" ? "Submission recognition did not complete" : "作答识别未完成"} returnState={{ imageRecoveryModel: providerId }}>
         <>
+          <RecognitionActivity progress={progressQuery.progress} locale={locale} incomplete />
           <StageProviderSelect id="submission-retry-provider" label={locale === "zh-CN" ? "作答识别模型" : "Submission recognition model"}
             hint={locale === "zh-CN" ? "只重试失败文件，成功结果保留；可先切换模型。返回修改配置后再开始识别，会重新处理全部文件。" : "Retry only failed files and keep successful results. You can switch models first. Starting again from settings processes all files."}
             experts={(expertsQuery.data ?? []).filter((item) => item.enabled)} value={providerId} locale={locale}
@@ -186,22 +187,20 @@ export function SubmissionRecognitionProgressPage() {
 
   const progress = progressQuery.progress;
   const queued = progressQuery.data?.active_operation_status === "pending";
-  const rateLimited = Boolean(progress?.model_waits?.length);
   const waitingLabel = queued ? (locale === "zh-CN" ? "排队中" : "Queued")
-    : rateLimited ? (locale === "zh-CN" ? "等待重试" : "Retry pending") : t("submissionProgressProcessing");
+    : t("submissionProgressProcessing");
   const metrics = progress?.stage_metrics ?? {};
   const totalFiles = metric(metrics, "files_total", progress?.total_students ?? 0);
   const processedFiles = metric(metrics, "files_processed", progress?.completed_units ?? 0);
   const matchedIdentities = metric(metrics, "identities_matched");
   const reviewIdentities = metric(metrics, "identities_needing_review");
   const answersSplit = metric(metrics, "answers_split");
-  const hasDeterminateProgress = totalFiles > 0 && progressQuery.data?.active_operation_status !== "pending" && !progress?.model_waits?.length;
+  const hasDeterminateProgress = totalFiles > 0 && (!queued || processedFiles > 0);
   const percent = hasDeterminateProgress ? progressQuery.percent : null;
-  const recentEvents = (progress?.messages ?? []).slice(-3);
 
   return (
     <ProgressPageFrame title={t("submissionProgressTitle")}>
-      <TaskExecutionControls taskId={taskId} state={progressQuery.data} progress={progress}
+      <TaskExecutionControls showModelWaits={false} taskId={taskId} state={progressQuery.data} progress={progress}
         onChanged={() => Promise.all([taskQuery.refetch(), progressQuery.refetch()])} />
       <section
         className="flex min-h-[430px] w-full flex-col rounded-[10px] border bg-card px-5 py-7 sm:px-10 sm:py-10"
@@ -212,7 +211,7 @@ export function SubmissionRecognitionProgressPage() {
           <div>
           <h2 className="text-[22px] font-bold leading-8 tracking-[-0.01em] text-foreground sm:text-2xl">
             {queued ? (locale === "zh-CN" ? "作答识别已排队" : "Submission recognition is queued")
-              : rateLimited ? (locale === "zh-CN" ? "等待服务商解除限流" : "Waiting for the provider rate limit") : t("submissionProgressRecognizing")}
+              : t("submissionProgressRecognizing")}
           </h2>
           <p className="mt-2 text-sm leading-6 text-muted-foreground">
             {hasDeterminateProgress
@@ -234,7 +233,7 @@ export function SubmissionRecognitionProgressPage() {
             aria-valuetext={percent === null ? waitingLabel : undefined}
           >
             {percent === null ? (
-              queued || rateLimited ? null : <span className="absolute inset-y-0 left-0 w-1/3 animate-pulse rounded-full bg-primary" />
+              queued ? null : <span className="absolute inset-y-0 left-0 w-1/3 animate-pulse rounded-full bg-primary" />
             ) : (
               <span
                 className="block h-full rounded-full bg-primary transition-[width] duration-300"
@@ -247,6 +246,8 @@ export function SubmissionRecognitionProgressPage() {
           </span>
         </div>
 
+        {!queued && <RecognitionRequestStatus progress={progress} locale={locale} stale={progressQuery.isError} />}
+
         <div className="mt-8 grid min-h-0 flex-1 gap-6 md:grid-cols-[210px_minmax(0,1fr)] md:gap-16">
           <ol className="grid content-start gap-3" aria-label={t("submissionProgressStepsLabel")}>
             {getRecognitionSteps(progress).map((step) => (
@@ -254,33 +255,12 @@ export function SubmissionRecognitionProgressPage() {
             ))}
           </ol>
 
-          <div className="min-w-0 rounded-lg border bg-slate-50 px-5 py-4 dark:bg-slate-900/30">
-            <h3 className="text-sm font-semibold text-foreground">
-              {t("submissionProgressLatestEvents")}
-            </h3>
-            <p className="mt-2 text-xs leading-5 text-muted-foreground">
+          <div className="relative min-h-64 min-w-0 md:min-h-0">
+            <RecognitionActivity progress={progress} locale={locale} fill summary={<>
               {t("submissionProgressMatched")} {matchedIdentities}
               {" · "}{t("submissionProgressNeedsReview")} {reviewIdentities}
               {" · "}{t("submissionProgressAnswersSplit")} {answersSplit}
-            </p>
-            {recentEvents.length > 0 ? (
-              <ol className="mt-2 grid gap-1">
-                {recentEvents.map((event, index) => (
-                  <li
-                    key={`${event.ts}:${event.message}:${index}`}
-                    className="grid min-w-0 grid-cols-[42px_minmax(0,1fr)] gap-2 text-xs leading-5 text-muted-foreground"
-                  >
-                    <time dateTime={toDateTime(event.ts)}>{formatEventTime(event.ts, locale)}</time>
-                    <span className="min-w-0 break-words">{executionProgressCopy(event.message, locale) ?? localizeEvent(event, t)}</span>
-                  </li>
-                ))}
-              </ol>
-            ) : (
-              <div className="mt-3 flex items-center gap-2 text-sm text-muted-foreground">
-                <Loader2 aria-hidden="true" className="h-4 w-4 animate-spin text-primary" />
-                <span>{t("submissionProgressWaitingForEvents")}</span>
-              </div>
-            )}
+            </>} />
           </div>
         </div>
       </section>
@@ -418,7 +398,7 @@ function getRecognitionSteps(progress: JobProgress | null): RecognitionStep[] {
   const finished = progress?.phase === "done" || currentStep === "completed";
   const consolidating = currentStep === "consolidating_submission_results";
   const recognizing = currentStep === "recognizing_submissions" || (progress?.completed_units ?? 0) > 0;
-  const preparing = ["preparing_submission_files", "recognition_read", "pdf_index"].includes(currentStep ?? "") || !currentStep;
+  const preparing = ["preparing_submission_files", "recognition_read", "pdf_index", "reading_source", "recognizing_with_ocr", "source_prepared"].includes(currentStep ?? "") || !currentStep;
 
   return [
     { key: "submissionProgressStepFilesReceived", state: "done" },
@@ -441,54 +421,10 @@ function getRecognitionSteps(progress: JobProgress | null): RecognitionStep[] {
   ];
 }
 
-function localizeEvent(event: ProgressEvent, t: (key: MessageKey) => string): string {
-  const message = event.message.toLowerCase();
-  if (message === "reading pdf page evidence" || message === "reading source evidence") return t("submissionProgressEventReadingFile");
-  if (message === "phase: parsing") return t("submissionProgressEventParsing");
-  if (message === "phase: done") return t("submissionProgressEventDone");
-  if (message.startsWith("reading ") && message.endsWith("...")) {
-    return t("submissionProgressEventReadingFile");
-  }
-  if (message.startsWith("detected scanned pdf:") && message.includes("rendering pages for ocr")) {
-    return t("submissionProgressEventScannedPdf");
-  }
-  if (message.startsWith("ocr recognizing ")) {
-    return t("submissionProgressEventOcrRecognizing");
-  }
-  if (message.startsWith("ocr warning for ")) {
-    return t("submissionProgressEventOcrWarning");
-  }
-  if (message === "submission files prepared.") return t("submissionProgressEventFilesPrepared");
-  if (message === "submission recognition started.") return t("submissionProgressEventStarted");
-  if (message === "submission recognized.") return t("submissionProgressEventRecognized");
-  if (message === "consolidating recognized submissions.") return t("submissionProgressEventConsolidating");
-  if (message === "submission recognition completed.") return t("submissionProgressEventDone");
-  if (event.level === "warn") return t("submissionProgressFailedDescription");
-  return event.message;
-}
 
 function metric(metrics: Record<string, number>, key: string, fallback = 0) {
   const value = metrics[key];
   return typeof value === "number" && Number.isFinite(value) && value >= 0
     ? value
     : fallback;
-}
-
-function formatEventTime(timestamp: number, locale: string): string {
-  const date = normalizeTimestamp(timestamp);
-  if (!date) return "—";
-  return new Intl.DateTimeFormat(locale, {
-    hour: "2-digit",
-    minute: "2-digit",
-    hour12: false,
-  }).format(date);
-}
-
-function toDateTime(timestamp: number): string | undefined {
-  return normalizeTimestamp(timestamp)?.toISOString();
-}
-
-function normalizeTimestamp(timestamp: number): Date | null {
-  if (!Number.isFinite(timestamp) || timestamp <= 0) return null;
-  return new Date(timestamp > 1_000_000_000_000 ? timestamp : timestamp * 1_000);
 }

@@ -51,6 +51,7 @@ class ProgressReporter:
         self._event_sink: Optional[Callable[[ProgressEvent, dict[str, Any]], None]] = None
         self._question_generation_ids: tuple[str, ...] = ()
         self.grading_activity = None
+        self.recognition_activity = None
 
     def set_event_sink(
         self,
@@ -347,6 +348,19 @@ class ProgressReporter:
             # Shallow copy is sufficient since the lists are replaced, not mutated
             snap = self._progress.model_copy(deep=True)
             snap.messages = list(self._events)
+            if self.recognition_activity is not None:
+                from backend.progress.recognition_activity import public_message
+                messages, size = [], 0
+                for event in reversed(snap.messages):
+                    if not (safe := public_message(event.model_dump(mode="json"))):
+                        continue
+                    public = ProgressEvent(**safe)
+                    size += len(public.model_dump_json().encode("utf-8")) + 1
+                    if size > 16 * 1024:
+                        break
+                    messages.append(public)
+                snap.messages = list(reversed(messages))
+                snap.recognition_requests = self.recognition_activity.states()
             return snap
 
     @asynccontextmanager
@@ -403,6 +417,8 @@ class ProgressReporter:
         """Add event to ring buffer and push to SSE subscribers."""
         _mark_reporter_active(self.job_id)
         self._events.append(event)
+        from backend.progress.recognition_activity import capture
+        await capture(self, event)
         logger.info(f"[progress:{self.job_id}] {event.message}")
         if self._event_sink is not None:
             async with self._lock:
