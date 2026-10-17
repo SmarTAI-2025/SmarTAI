@@ -7,7 +7,7 @@ from backend.api.experts import verify_provider
 from backend.auth import create_token
 from backend.config import settings
 from backend.db.models import UserRecord
-from backend.db.provider_repository import get_provider_config, upsert_provider_config
+from backend.db.provider_repository import get_provider_config, list_provider_configs, upsert_provider_config
 from backend.db.session import session_scope
 from backend.llm.endpoint_policy import ResolvedEndpoint
 from backend.llm.providers import LLMResponse
@@ -59,6 +59,193 @@ def _payload(base_url: str = "https://api.llm.ustc.edu.cn/v1") -> dict:
 
 def _public_resolution(base_url: str, **_kwargs) -> ResolvedEndpoint:
     return ResolvedEndpoint(base_url, base_url.split("/")[2], ("93.184.216.34",))
+
+
+@pytest.mark.parametrize("editing", [False, True])
+@pytest.mark.parametrize("invalid_key", [
+    "secret-中文", "secret，fullwidth", "secret\u200binvisible",
+    "secret\r\nheader", "secret\x00null", "secret\ttab", "secret\x7fdel",
+])
+def test_byok_save_rejects_header_unsafe_keys_without_mutating_config(
+    monkeypatch, caplog, editing, invalid_key,
+):
+    owner_id = "key-validation-owner"
+    headers = _teacher(owner_id)
+    monkeypatch.setattr("backend.api.experts.resolve_public_endpoint", _public_resolution)
+    client = TestClient(app)
+    body = _payload()
+    if editing:
+        created = client.post("/experts/keys", headers=headers, json=body)
+        assert created.status_code == 200
+        provider_id = created.json()["provider_id"]
+        before = get_provider_config(owner_id, provider_id, master_key=settings.provider_encryption_key)
+    body["api_key"] = invalid_key
+    response = (client.put(f"/experts/{provider_id}", headers=headers, json=body)
+                if editing else client.post("/experts/keys", headers=headers, json=body))
+
+    assert response.status_code == 422
+    assert response.json()["detail"] == {"code": "provider_api_key_invalid"}
+    assert invalid_key not in response.text + caplog.text
+    stored = list_provider_configs(owner_id, master_key=settings.provider_encryption_key)
+    if editing:
+        assert len(stored) == 1
+        assert stored[0].config.api_key == "sk-private-relay-key"
+        assert stored[0].updated_at == before.updated_at
+    else:
+        assert stored == []
+
+
+def test_existing_byok_valid_key_replacement_and_blank_preservation(monkeypatch):
+    owner_id = "key-replacement-owner"
+    headers = _teacher(owner_id)
+    monkeypatch.setattr("backend.api.experts.resolve_public_endpoint", _public_resolution)
+    client = TestClient(app)
+    body = _payload()
+    created = client.post("/experts/keys", headers=headers, json=body)
+    provider_id = created.json()["provider_id"]
+    replacement = "synthetic_Aa09+/=._-"
+    for key in (f"  {replacement}\n", None, ""):
+        response = client.put(f"/experts/{provider_id}", headers=headers, json={**body, "api_key": key})
+        assert response.status_code == 200
+        assert get_provider_config(owner_id, provider_id, master_key=settings.provider_encryption_key).config.api_key == replacement
+
+
+@pytest.mark.parametrize("operation", ["verify", "verify-image"])
+def test_legacy_invalid_byok_key_reports_local_error_without_provider_call(monkeypatch, operation):
+    from unittest.mock import AsyncMock
+    from backend.llm.providers import SafeRelayProvider
+
+    owner_id = "legacy-invalid-key-owner"
+    headers = _teacher(owner_id)
+    stored = upsert_provider_config(owner_id, ProviderConfig(**{
+        **_payload(), "api_key": "secret-中文",
+    }), master_key=settings.provider_encryption_key)
+    invoke = AsyncMock(side_effect=AssertionError("invalid key must not invoke provider"))
+    monkeypatch.setattr(SafeRelayProvider, "ainvoke", invoke)
+    monkeypatch.setattr(SafeRelayProvider, "ainvoke_vision", invoke)
+    response = TestClient(app).post(f"/experts/{stored.id}/{operation}", headers=headers)
+    if operation == "verify":
+        assert response.status_code == 502
+        assert response.json()["detail"]["code"] == "provider_api_key_invalid"
+        after = get_provider_config(owner_id, stored.id, master_key=settings.provider_encryption_key)
+        assert after.verification_error_code == "provider_api_key_invalid"
+    else:
+        assert response.status_code == 200
+        assert response.json()["image_reason"] == "provider_api_key_invalid"
+    invoke.assert_not_called()
+
+
+def test_verification_preserves_team_model_denial_without_raw_upstream_text(monkeypatch, caplog):
+    import httpx
+    from backend.llm.providers import SafeRelayProvider
+
+    owner_id = "model-denied-owner"
+    headers = _teacher(owner_id)
+    stored = upsert_provider_config(owner_id, ProviderConfig(**_payload()), master_key=settings.provider_encryption_key)
+    calls = []
+    class Client:
+        async def post(self, url, **kwargs):
+            calls.append(url)
+            return httpx.Response(403, json={"error": {
+                "type": "team_model_access_denied", "param": "model",
+                "message": "private-upstream-secret sk-private-relay-key",
+            }})
+    async def client(self):
+        return Client()
+    monkeypatch.setattr(SafeRelayProvider, "_relay_client", client)
+    response = TestClient(app).post(f"/experts/{stored.id}/verify", headers=headers)
+
+    assert response.status_code == 502
+    assert response.json()["detail"]["code"] == "provider_model_access_denied"
+    assert len(calls) == 1
+    after = get_provider_config(owner_id, stored.id, master_key=settings.provider_encryption_key)
+    assert after.verification_error_code == "provider_model_access_denied"
+    assert "private-upstream-secret" not in response.text + caplog.text
+    assert "sk-private-relay-key" not in response.text + caplog.text
+
+
+def test_local_encoding_error_is_not_reported_as_provider_rejection():
+    from backend.api.experts import _verification_error_code
+
+    error = UnicodeEncodeError("ascii", "secret-中文", 7, 9, "ordinal not in range")
+    wrapped = RuntimeError("wrapper")
+    wrapped.__cause__ = error
+    assert _verification_error_code(wrapped) == "expert_verification_encoding_error"
+
+
+@pytest.mark.asyncio
+async def test_tls_read_wait_timeout_is_not_a_certificate_failure():
+    import asyncio
+    import ssl
+    from anyio.abc import ByteStream
+    from anyio.streams.tls import TLSStream
+    from backend.api.experts import _verification_error_code
+
+    class WaitingStream(ByteStream):
+        async def send(self, item):
+            pass
+
+        async def receive(self, max_bytes=65536):
+            await asyncio.Event().wait()
+
+        async def send_eof(self):
+            pass
+
+        async def aclose(self):
+            pass
+
+    # Exercise the real AnyIO SSL/cancellation chain without a socket or model call.
+    with pytest.raises(TimeoutError) as raised:
+        await asyncio.wait_for(TLSStream.wrap(WaitingStream(), hostname="relay.example"), 0.02)
+    assert isinstance(raised.value.__cause__.__context__, ssl.SSLWantReadError)
+    assert _verification_error_code(raised.value) == "expert_verification_timeout"
+
+
+@pytest.mark.parametrize("operation", ["verify", "verify-image"])
+def test_verification_persists_timeout_even_with_ssl_read_context(monkeypatch, operation):
+    import asyncio
+    import ssl
+    from unittest.mock import AsyncMock
+    from backend.llm.providers import SafeRelayProvider
+
+    owner_id = "tls-timeout-owner"
+    headers = _teacher(owner_id)
+    stored = upsert_provider_config(owner_id, ProviderConfig(**_payload()), master_key=settings.provider_encryption_key)
+    cancelled = asyncio.CancelledError()
+    cancelled.__context__ = ssl.SSLWantReadError("read pending")
+    timeout = TimeoutError()
+    timeout.__cause__ = cancelled
+    call = AsyncMock(side_effect=timeout)
+    monkeypatch.setattr(SafeRelayProvider, "ainvoke", call)
+    monkeypatch.setattr(SafeRelayProvider, "ainvoke_vision", call)
+    wait_for = asyncio.wait_for
+    deadlines = []
+    async def observe_deadline(awaitable, timeout):
+        deadlines.append(timeout)
+        return await wait_for(awaitable, timeout)
+    monkeypatch.setattr(asyncio, "wait_for", observe_deadline)
+    response = TestClient(app).post(f"/experts/{stored.id}/{operation}", headers=headers)
+    after = get_provider_config(owner_id, stored.id, master_key=settings.provider_encryption_key)
+    if operation == "verify":
+        assert response.status_code == 503
+        assert response.json()["detail"]["code"] == "expert_verification_timeout"
+        assert after.verification_error_code == "expert_verification_timeout"
+    else:
+        assert response.status_code == 200
+        assert response.json()["image_capability_status"] == "inconclusive"
+        assert after.config.image_reason == "expert_verification_timeout"
+    call.assert_awaited_once()
+    assert deadlines == [60]
+
+
+def test_genuine_tls_failure_retains_its_safe_code():
+    import ssl
+    from backend.api.experts import _verification_error_code
+
+    for cause in (ssl.SSLCertVerificationError("private certificate details"), ssl.SSLError("handshake failed")):
+        wrapped = RuntimeError("transport wrapper")
+        wrapped.__cause__ = cause
+        assert _verification_error_code(wrapped) == "provider_endpoint_tls_failed"
 
 
 def test_development_catalog_exposes_editable_vendor_base_url(monkeypatch):

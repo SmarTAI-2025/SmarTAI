@@ -127,7 +127,7 @@ class Settings(BaseSettings):
     # defaults to OFF until release gates have matching app + egress evidence.
     custom_provider_endpoints_enabled: bool = False
     custom_provider_max_per_owner: int = 10
-    custom_provider_verification_timeout_seconds: int = 30
+    custom_provider_verification_timeout_seconds: int = 60
     custom_provider_verification_cooldown_seconds: int = 5
     custom_provider_max_response_bytes: int = 4 * 1024 * 1024
     # Timeout for individual custom-provider (SafeRelay) LLM calls.  Some free

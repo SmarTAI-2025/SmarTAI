@@ -302,6 +302,7 @@ async def test_cross_protocol_override_uses_only_the_selected_wire_protocol(monk
     ("status_code", "expected_code"),
     [
         (401, "provider_auth_failed"),
+        (403, "provider_auth_failed"),
         (404, "provider_model_or_endpoint_not_found"),
         (429, "provider_rate_limited"),
         (500, "provider_upstream_unavailable"),
@@ -332,6 +333,55 @@ async def test_relay_http_failures_expose_only_stable_codes(
     assert exc_info.value.code == expected_code
     assert str(exc_info.value) == expected_code
     assert "secret-must-not-leak" not in str(exc_info.value)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("status_code", "error_type", "expected_code"), [
+    (403, "team_model_access_denied", "provider_model_access_denied"),
+    (401, "team_model_access_denied", "provider_auth_failed"),
+    (403, "other_error", "provider_auth_failed"),
+    (403, ["team_model_access_denied"], "provider_auth_failed"),
+])
+async def test_relay_model_access_denial_requires_explicit_upstream_evidence(
+    monkeypatch, status_code, error_type, expected_code,
+):
+    monkeypatch.setattr(settings, "runtime_environment", "development")
+    provider = build_provider(ProviderConfig(
+        provider_type="deepseek", api_key="secret-must-not-leak", model="relay-model",
+        base_url="https://relay.example.com/v1",
+    ))
+    fake = _FakeRelayClient({"error": {
+        "type": error_type, "param": "model", "message": "secret-must-not-leak",
+    }}, status_code=status_code)
+    provider._safe_async_client = fake
+
+    with pytest.raises(ProviderRequestError) as caught:
+        await provider.ainvoke([HumanMessage(content="hello")])
+
+    assert len(fake.calls) == 1
+    assert caught.value.code == expected_code
+    assert caught.value.status_code == status_code
+    assert str(caught.value) == expected_code
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("protocol", [
+    "openai_chat_completions", "anthropic_messages", "gemini_generate_content",
+])
+async def test_relay_invalid_key_is_rejected_before_client_or_network(monkeypatch, protocol):
+    from unittest.mock import AsyncMock
+
+    monkeypatch.setattr(settings, "runtime_environment", "development")
+    provider = build_provider(ProviderConfig(
+        provider_type="deepseek", api_key="secret-中文", model="relay-model",
+        base_url="https://relay.example.com/v1", wire_protocol=protocol,
+    ))
+    client = AsyncMock(side_effect=AssertionError("must not build a network client"))
+    monkeypatch.setattr(provider, "_relay_client", client)
+
+    with pytest.raises(ProviderRequestError, match="^provider_api_key_invalid$"):
+        await provider._relay_call([HumanMessage(content="hello")])
+    client.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -466,6 +516,14 @@ def test_zhipu_vision_support_requires_image_evidence(model, expected):
 
     assert provider.supports_vision is None
     assert provider.can_attempt_vision is True
+
+
+@pytest.mark.parametrize("signal", [ssl.SSLWantReadError, ssl.SSLWantWriteError])
+def test_ssl_io_wait_context_is_not_a_tls_failure(signal):
+    error = httpx.ReadError("connection interrupted")
+    error.__context__ = signal("I/O pending")
+    assert provider_module._transport_error_code(error) == "provider_unreachable"
+    assert _verification_error_code(error) == "expert_verification_connection_failed"
 
 
 def test_openai_api_connection_error_has_safe_connection_code():

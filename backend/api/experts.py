@@ -55,7 +55,7 @@ from backend.llm.registry import (
     provider_encryption_not_configured_error,
     resolve_owner_default_provider_id,
 )
-from backend.llm.providers import ProviderRequestError, VisionImage, build_provider
+from backend.llm.providers import ProviderRequestError, VisionImage, build_provider, validate_provider_api_key
 from backend.llm.image_capability import make_image_challenge, IMAGE_CHALLENGE_PROMPT, is_explicit_image_rejection
 from backend.models import ProviderConfig, ProviderType, User, WireProtocol
 from backend.services.stage_provider_routing import list_stage_provider_options
@@ -190,6 +190,17 @@ def _check_custom_probe_limit(owner_id: str, operation: str) -> None:
         _custom_probe_last_at[key] = now
 
 
+def _validated_api_key(api_key: str) -> str:
+    api_key = api_key.strip()
+    # An empty replacement retains the current key; new entries reject it below.
+    if api_key:
+        try:
+            validate_provider_api_key(api_key)
+        except ProviderRequestError as exc:
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, detail={"code": exc.code}) from None
+    return api_key
+
+
 @router.post("/keys")
 def add_key(
     request: AddKeyRequest,
@@ -197,7 +208,7 @@ def add_key(
     registry: ExpertRegistry = Depends(get_scoped_expert_registry),
 ):
     """Register or update a provider's API key."""
-    api_key = request.api_key.strip()
+    api_key = _validated_api_key(request.api_key)
     model = request.model.strip()
     if not api_key or not model:
         raise HTTPException(
@@ -434,7 +445,7 @@ def update_provider(
     if existing is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Provider not found")
     model = request.model.strip()
-    provided_key = request.api_key.strip() if request.api_key else ""
+    provided_key = _validated_api_key(request.api_key or "")
     if not model:
         raise HTTPException(
             status.HTTP_422_UNPROCESSABLE_ENTITY,
@@ -531,6 +542,7 @@ async def verify_provider(
             )
         _check_custom_probe_limit(current.id, "verify_text")
     try:
+        validate_provider_api_key(stored.config.api_key)
         timeout_seconds = max(
             5,
             min(
@@ -631,6 +643,7 @@ async def verify_provider_image(
     pixels, answer = make_image_challenge()
     state, reason = "inconclusive", "image_probe_answer_incorrect"
     try:
+        validate_provider_api_key(provider.config.api_key)
         response = await asyncio.wait_for(provider.ainvoke_vision(
             IMAGE_CHALLENGE_PROMPT, [VisionImage(data=pixels, media_type="image/png")],
             max_output_tokens=64,
@@ -693,6 +706,8 @@ def _verification_error_code(exc: Exception) -> str:
         current = current.__cause__ or current.__context__
 
     for item in exception_chain:
+        if isinstance(item, UnicodeEncodeError):
+            return "expert_verification_encoding_error"
         # Google's SDK uses `code` and a structured error body, not status_code.
         # Classify known reasons without returning the provider's raw message.
         body = getattr(item, "details", None)
@@ -718,8 +733,6 @@ def _verification_error_code(exc: Exception) -> str:
                 "provider_timeout": "expert_verification_timeout",
                 "provider_unreachable": "expert_verification_connection_failed",
             }.get(item.code, item.code)
-        if isinstance(item, ssl.SSLError):
-            return "provider_endpoint_tls_failed"
 
     timeout_types: tuple[type[BaseException], ...] = (
         asyncio.TimeoutError,
@@ -751,6 +764,10 @@ def _verification_error_code(exc: Exception) -> str:
 
     if any(isinstance(item, timeout_types) for item in exception_chain):
         return "expert_verification_timeout"
+    # AnyIO can retain SSLWantReadError while a timed-out read is cancelled.
+    # Classify the actual timeout before interpreting its SSL I/O context.
+    if any(isinstance(item, ssl.SSLError) and not isinstance(item, (ssl.SSLWantReadError, ssl.SSLWantWriteError)) for item in exception_chain):
+        return "provider_endpoint_tls_failed"
     status_code = next(
         (
             getattr(item, "status_code", None)

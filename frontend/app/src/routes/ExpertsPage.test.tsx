@@ -4,6 +4,7 @@ import { MemoryRouter } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { I18nProvider } from "@/i18n/I18nProvider";
 import { ExpertsPage } from "./ExpertsPage";
+import { APIError } from "@/api/client";
 
 const addExpert = vi.fn();
 const updateExpert = vi.fn();
@@ -393,7 +394,90 @@ describe("ExpertsPage editable vendor Base URL", () => {
     }];
     renderPage();
     expect(screen.queryByText("private-upstream-body")).not.toBeInTheDocument();
-    expect(screen.getAllByText("服务商拒绝了验证请求。").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("验证未能完成，请检查配置或稍后重试。").length).toBeGreaterThan(0);
+  });
+
+  it.each([
+    ["provider_api_key_invalid", "zh-CN", /API key 含有无法用于请求的字符/, "密钥格式无效"],
+    ["expert_verification_encoding_error", "zh-CN", /验证请求包含无法编码的字符/, "请求字符编码异常"],
+    ["provider_model_access_denied", "zh-CN", /服务商或中转站以团队模型权限为由拒绝了本次请求。若该模型在其他调用中可用/, "本次模型访问被拒"],
+    ["provider_api_key_invalid", "en-US", /API key contains characters that cannot be sent/, "Key format error"],
+    ["expert_verification_encoding_error", "en-US", /verification request contains characters that cannot be encoded/, "Encoding error"],
+    ["provider_model_access_denied", "en-US", /provider or relay rejected this request due to team\/model access. If the model works in other calls/, "Model denied"],
+    ["provider_endpoint_tls_failed", "zh-CN", /HTTPS 安全连接失败/, "安全连接失败"],
+    ["provider_endpoint_tls_failed", "en-US", /HTTPS secure connection failed/, "TLS failed"],
+  ])("keeps %s compact in %s text and image results with accessible details", async (code, locale, message, summary) => {
+    window.localStorage.setItem("smartai_locale", locale);
+    hookState.experts = [{
+      provider_id: "deepseek-test", provider_type: "deepseek", model: "test-model",
+      enabled: true, verification_status: "failed", max_concurrent: 1, rpm: 0,
+      verification_error_code: code, image_capability_status: "inconclusive", image_reason: code,
+    }];
+    const user = userEvent.setup();
+    renderPage();
+    const summaries = screen.getAllByText(summary);
+    expect(summaries).toHaveLength(4); // Text/image in both desktop and mobile rows.
+    expect(String(summary).replace(/[^\x00-\x7F]/g, "xx").length).toBeLessThanOrEqual("provider_endpoint_tls_failed".length);
+    for (const element of summaries) {
+      expect(element).toHaveAttribute("title", expect.stringMatching(message));
+      const details = element.closest("details")!;
+      expect(details).not.toHaveAttribute("open");
+      expect(within(details).getByText(message)).not.toBeVisible();
+      await user.click(element);
+      expect(details).toHaveAttribute("open");
+      expect(within(details).getByText(message)).toBeVisible();
+    }
+    expect(verifyImage).not.toHaveBeenCalled();
+    expect(screen.queryByText(code)).not.toBeInTheDocument();
+    expect(screen.queryByText(/证书校验失败|certificate validation failed/)).not.toBeInTheDocument();
+  });
+
+  it.each([
+    ["expert_verification_timeout", "zh-CN", "图像测试请求超时，本次未能确认是否支持图片。请稍后重试。"],
+    ["expert_verification_timeout", "en-US", "The image test timed out. Image support remains unconfirmed. Try again later."],
+    ["private-unknown-error", "zh-CN", "图像测试未能完成，本次未能确认是否支持图片。请稍后重试。"],
+    ["private-unknown-error", "en-US", "The image test could not complete. Image support remains unconfirmed. Try again later."],
+  ])("explains inconclusive image reason %s in %s without exposing codes", (reason, locale, message) => {
+    window.localStorage.setItem("smartai_locale", locale);
+    hookState.experts = [{
+      provider_id: "image-test", provider_type: "deepseek", model: "test-model",
+      enabled: true, max_concurrent: 1, rpm: 0,
+      image_capability_status: "inconclusive", image_reason: reason,
+    }];
+    renderPage();
+    expect(screen.getAllByText(message).length).toBeGreaterThan(0);
+    expect(screen.queryByText(reason)).not.toBeInTheDocument();
+    expect(screen.queryByText(/明确不支持|Explicitly unsupported/)).not.toBeInTheDocument();
+  });
+
+  it.each(["zh-CN", "en-US"])("explains the Base URL prefix and excluded operation path in %s", async (locale) => {
+    window.localStorage.setItem("smartai_locale", locale);
+    const user = userEvent.setup();
+    renderPage();
+    await user.click(screen.getByRole("button", { name: locale === "zh-CN" ? "添加模型配置" : "Add configuration" }));
+    const dialog = screen.getByRole("dialog");
+    expect(within(dialog).getByText(/\/v1.*\/chat\/completions/)).toBeInTheDocument();
+  });
+
+  it.each([
+    ["provider_api_key_invalid", /API key 含有无法用于请求的字符/],
+    ["provider_unknown_failure", /请求未能完成，请检查配置或稍后重试/],
+  ])("shows a safe %s error when saving an existing configuration fails", async (code, message) => {
+    hookState.experts = [{
+      provider_id: "existing-deepseek", provider_type: "deepseek", model: "test-model",
+      enabled: true, max_concurrent: 1, rpm: 0,
+    }];
+    updateExpert.mockRejectedValue(new APIError(422, "private-upstream-body", {
+      detail: { code },
+    }));
+    const user = userEvent.setup();
+    renderPage();
+    await user.click(screen.getAllByRole("button", { name: "编辑" })[0]!);
+    await user.type(screen.getByLabelText(/^替换 API key/), "fixture-key");
+    await user.click(screen.getByRole("button", { name: "保存配置" }));
+    expect(await screen.findByText(message)).toBeInTheDocument();
+    expect(screen.getByLabelText(/^替换 API key/)).toHaveValue("");
+    expect(screen.queryByText("private-upstream-body")).not.toBeInTheDocument();
   });
 
   it("shows only Baidu OCR metadata and supports verify and confirmed delete", async () => {
