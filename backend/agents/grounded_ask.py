@@ -32,6 +32,8 @@ class Reference(StrictModel):
     text: str = Field(min_length=1, max_length=160)
     field: Literal["student_name", "student_id", "q_id", "number", "task_id", "name"] | None = None
     operator: Literal["exact", "contains", "prefix", "suffix", "pattern"] | None = None
+    exact_match_text: str | None = Field(default=None, min_length=1, max_length=200,
+        description="Verbatim wording explicitly requiring an exact full name, otherwise null. Only/show/filter is not exact matching.")
     value: str | None = Field(default=None, max_length=160)
     role: Literal["target", "comparison", "exclude"] = "target"
     applies_to: Literal["both", "chart", "selection"] = "both"
@@ -346,6 +348,16 @@ async def ask(*, task_id: str | None, owner_id: str, question: str, surface: str
             return _clarify("查询计划使用了原文中不存在的对象名称，已拒绝执行。 / The plan invented a reference literal; not executed.")
         if ref.kind == "student" and ref.operator != "pattern" and ref.value is not None and normalized(ref.value) != normalized(ref.text):
             return _clarify("查询计划修改了姓名或学号原文，已拒绝执行。 / The plan altered an identity literal; not executed.")
+        if ref.kind == "student" and ref.field in {None, "student_name"} and ref.operator in {None, "exact"}:
+            # Apply the existing name contract inside sentences too. An exact
+            # single-fragment match needs explicit wording, not a model's default.
+            if ref.exact_match_text is not None:
+                evidence = normalized(ref.exact_match_text)
+                if not evidence or not any(evidence in text for text in original_texts):
+                    return _clarify("精确姓名条件缺少原文依据，请重试。 / Exact-name condition is not grounded in the request; retry.")
+                ref.operator = "exact"
+            else:
+                ref.operator = "contains" if len(normalized(ref.text).split()) == 1 else "exact"
         if (len(intent.references) == 1 and ref.kind == "student"
                 and ref.field in {None, "student_name"} and ref.operator != "pattern"
                 and normalized(question) == normalized(ref.text)):
