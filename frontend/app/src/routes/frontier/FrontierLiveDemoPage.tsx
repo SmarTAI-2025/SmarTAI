@@ -52,6 +52,7 @@ import { cn } from "@/lib/cn";
 import { getFrontierGeneration, isFrontierExitPending, isFrontierTaskPath, rememberFrontierTask } from "@/lib/frontierSession";
 import { submissionReviewBlockers, questionReviewBlockers, type ReviewBlocker } from "@/lib/reviewConfirmation";
 import { formatSubmissionFlag } from "@/lib/submissionReview";
+import { gradingProgressText } from "@/lib/gradingProgressCopy";
 import "./frontier.css";
 import type { ProblemInfo, Task, TaskResultResponse, TaskStateSnapshot, TaskStatus } from "@/types";
 
@@ -1114,7 +1115,9 @@ function progressPercent(snapshot: TaskStateSnapshot) {
 
 function latestProgressMessage(snapshot: TaskStateSnapshot, locale: Locale) {
   const progress = snapshot.progress;
-  if (progress?.activity_latest || ["grading", "grading_paused", "graded", "finalized"].includes(snapshot.status)) {
+  if (isTaskPaused(snapshot.status)) return tx(locale, "本次处理已停止", "This run has stopped");
+  if (snapshot.status === "graded" || snapshot.status === "finalized") return gradingProgressText(locale, "completed");
+  if (progress?.activity_latest || snapshot.status === "grading") {
     return gradingActivityText(progress?.activity_latest, progress?.model_progress ?? [], locale === "zh-CN");
   }
   return recognitionEventText(progress?.messages?.at(-1), locale === "zh-CN");
