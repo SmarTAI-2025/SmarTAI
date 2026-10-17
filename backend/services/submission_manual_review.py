@@ -56,6 +56,8 @@ async def continue_manually(*, task_id: str, owner_id: str, job_id: str, expecte
         originals = {source.id: source for source in source_outcome_repository.list_sources(
             operation_id=row.id, owner_id=owner_id, attempt=row.attempt)}
         students, used_ids = [], set()
+        # Unrecognized filename candidates must not displace saved identities.
+        saved_ids = {result.student["stu_id"] for result in reusable.values()}
         for source in sources:
             saved = reusable.get((source.filename, originals[source.source_id].sha256))
             if saved is not None:
@@ -69,7 +71,7 @@ async def continue_manually(*, task_id: str, owner_id: str, job_id: str, expecte
                 reason, phase = safe_source_diagnostic("parse_failed", origin.error_code, "recognition")
                 outcome = dict(status="parse_failed", stable_error_code=reason,
                     failure_phase=phase, matched_answer_count=0)
-            if student["stu_id"] in used_ids:
+            if student["stu_id"] in used_ids or (saved is None and student["stu_id"] in saved_ids):
                 student["stu_id"] = f"{student['stu_id']}-{source.source_id[-8:]}"
                 student["identity_status"] = "needs_review"
             used_ids.add(student["stu_id"])

@@ -52,6 +52,10 @@ export function getSubmissionPageErrorLabel(source: SubmissionSourceOutcome, err
 }
 
 const REASON_COPY: Record<string, ReasonFactory> = {
+  operation_cancelled: (locale) => ({
+    title: tx(locale, "已手动暂停，尚未完成识别", "Manually paused before recognition completed"),
+    description: tx(locale, "原文件和已完成识别已保留。可以继续识别未完成部分，也可以人工继续处理。", "Originals and completed recognition are preserved. Resume the unfinished work or continue manually."),
+  }),
   image_format_mismatch: recognitionFileCopy,
   image_input_too_large: recognitionLimitCopy,
   image_invalid: recognitionFileCopy,

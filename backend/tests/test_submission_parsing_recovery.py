@@ -24,8 +24,8 @@ def _archive_bytes() -> bytes:
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("started", [False, True])
-async def test_manual_handoff_preserves_saved_answers_and_queues_every_unfinished_source(monkeypatch, started):
+@pytest.mark.parametrize("saved_filename", [None, "S1.txt", "S2.txt"])
+async def test_manual_handoff_preserves_saved_answers_and_queues_every_unfinished_source(monkeypatch, saved_filename):
     import asyncio
     import json
     from types import SimpleNamespace
@@ -37,9 +37,20 @@ async def test_manual_handoff_preserves_saved_answers_and_queues_every_unfinishe
     owner, task = _seed_task(with_question=True)
     registry = _Registry()
     calls = []
+    started = saved_filename is not None
+    saved_parse = asyncio.Event()
+    loop = asyncio.get_running_loop()
+    save_checkpoint = workflow_repository.save_operation_checkpoint
+    def checkpoint_saved(*args, **kwargs):
+        result = save_checkpoint(*args, **kwargs)
+        if kwargs.get("stage") == "parser_saved":
+            loop.call_soon_threadsafe(saved_parse.set)
+        return result
+    monkeypatch.setattr(workflow_repository, "save_operation_checkpoint", checkpoint_saved)
     async def invoke(messages):
         calls.append(messages[-1].content)
-        if len(calls) > 1:
+        if f"**[Filename]**: {saved_filename}" not in messages[-1].content:
+            await asyncio.wait_for(saved_parse.wait(), timeout=5)
             raise asyncio.CancelledError()
         return SimpleNamespace(content=json.dumps({"stu_id": "S1", "stu_name": "Synthetic one",
             "stu_ans": [{"q_id": "q1", "number": "1", "type": "short", "content": "saved wrong answer -2", "flag": []}]}))
@@ -81,11 +92,14 @@ async def test_manual_handoff_preserves_saved_answers_and_queues_every_unfinishe
     assert len(students) == 2 and len(after["submission_sources"]) == 2
     answers = [student["stu_ans"][0] for student in students]
     assert sum(answer["content"] == "saved wrong answer -2" for answer in answers) == int(started)
+    if started:
+        saved_student = next(student for student in students if student["source_filename"] == saved_filename)
+        assert saved_student["stu_id"] == "S1" and saved_student["identity_status"] == "matched"
     pending = [student for student in students if "recognition_manual_pending" in student["stu_ans"][0]["flag"]]
     assert len(pending) == 2 - int(started)
     assert all("recognition_paused" in student["stu_ans"][0]["flag"] for student in pending)
     assert all(student["identity_status"] == "needs_review" and student["stu_name"] == "[Unknown Student]" for student in pending)
-    assert all(source["recognition_reason_code"] == "operation_cancelled" for source in after["submission_sources"] if source["status"] == "manual_review")
+    assert all(source["recognition_reason_code"] == "operation_cancelled" for source in after["submission_sources"] if source["status"] == "manual_review"), after["submission_sources"]
     assert "submission_recognition_blocked" in task_facade.grading_readiness(task_id=task, owner_id=owner)["blocking_issues"]
     target = pending[0]
     with pytest.raises(DomainError) as blocked:
