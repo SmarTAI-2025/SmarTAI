@@ -112,7 +112,7 @@ export function answerReviewNextBlocked(answer?: StudentAnswerInfo): boolean {
 }
 
 function answerHasLowConfidence(answer?: StudentAnswerInfo): boolean {
-  return Boolean(answer?.flag?.some(flag => ["very_low_confidence", "recognition_low_confidence"].includes(flag)));
+  return Boolean(answer?.flag?.some(flag => ["very_low_confidence", "recognition_low_confidence", "low_confidence"].includes(flag)));
 }
 
 export function studentIdentityIssue(value: string): "required" | "placeholder" | null {

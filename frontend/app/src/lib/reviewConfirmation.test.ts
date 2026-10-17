@@ -104,7 +104,7 @@ describe("review hard failures", () => {
     expect(answerReviewNextBlocked({ ...repaired, review_status: "confirmed" })).toBe(false);
   });
 
-  it.each(["very_low_confidence", "recognition_low_confidence"])("requires confirmation of %s while allowing the confirmation action", (flag) => {
+  it.each(["very_low_confidence", "recognition_low_confidence", "low_confidence"])("requires confirmation of %s while allowing the confirmation action", (flag) => {
     const answer = { q_id: "q1", number: "1", type: "short", content: "original text", flag: [flag] };
     const task = { task_id: "T1", student_data: { s1: { stu_id: "s1", stu_name: "Sample", stu_ans: [answer] } } } as unknown as Task;
     expect(answerReviewBlocked(answer)).toBe(false);

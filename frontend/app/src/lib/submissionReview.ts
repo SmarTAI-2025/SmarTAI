@@ -48,6 +48,7 @@ export function formatSubmissionFlag(flag: string, locale: Locale): string {
     recognition_repaired_needs_confirmation: ["识别问题已修正，请确认作答", "Recognition issue corrected; confirm the answer"],
     very_low_confidence: ["本题识别置信度很低，请对照原件核对并确认", "Very low recognition confidence; check the original and confirm"],
     recognition_low_confidence: ["本题识别置信度较低，请对照原件核对并确认", "Low recognition confidence; check the original and confirm"],
+    low_confidence: ["本题识别置信度较低，请对照原件核对并确认", "Low recognition confidence; check the original and confirm"],
   };
   const label = labels[flag];
   return label ? label[locale === "zh-CN" ? 0 : 1] : flag;

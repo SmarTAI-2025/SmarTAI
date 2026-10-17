@@ -88,7 +88,7 @@ def test_blank_or_uncalibrated_review_is_not_a_recognition_failure(content, flag
     assert task_facade.grading_readiness(**args)["ready"] is True
 
 
-@pytest.mark.parametrize("low_flag", ["very_low_confidence", "recognition_low_confidence"])
+@pytest.mark.parametrize("low_flag", ["very_low_confidence", "recognition_low_confidence", "low_confidence"])
 def test_specific_low_confidence_requires_confirmation_but_not_rewriting(low_flag):
     _seeded, args = _case(flags=[low_flag])
     before = task_facade.get_task(**args, full=True)

@@ -4116,7 +4116,7 @@ def grading_readiness(
 
 _FAILED_ANSWER_REVIEW_FLAGS = frozenset({"recognition_failed", "parse_failed", "no_matching_answer"})
 _REQUIRED_ANSWER_CONFIRMATION_FLAGS = frozenset({
-    "recognition_repaired_needs_confirmation", "very_low_confidence", "recognition_low_confidence",
+    "recognition_repaired_needs_confirmation", "very_low_confidence", "recognition_low_confidence", "low_confidence",
 })
 
 
