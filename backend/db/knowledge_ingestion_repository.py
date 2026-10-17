@@ -58,15 +58,68 @@ def _job(session, job_id, owner_id, token=None):
     return row
 
 
-def queue_document(document_id, owner_id, configuration, *, new_version=False, resubmit_uncertain=False):
+def queue_document(document_id, owner_id, configuration, *, new_version=False, resubmit_uncertain=False,
+                   retry_failed_only=False):
     with session_scope() as session:
         doc = live_document(session, document_id, owner_id, lock=True)
         existing = session.scalar(select(KnowledgeIngestionRecord).where(
             KnowledgeIngestionRecord.document_id == document_id).order_by(KnowledgeIngestionRecord.created_at.desc()))
         if existing and (not new_version or existing.status in {"queued", "processing"}):
             return existing.id
-        return create_ingestion_in_session(session, doc, dict(configuration,
-            resubmit_uncertain=bool(new_version and resubmit_uncertain)))
+        job_id = create_ingestion_in_session(session, doc, dict(configuration,
+            resubmit_uncertain=bool(new_version and resubmit_uncertain),
+            retry_failed_only=retry_failed_only))
+        if retry_failed_only and existing and existing.total_pages:
+            _seed_gap_retry(session, session.get(KnowledgeIngestionRecord, job_id), existing)
+        return job_id
+
+
+def _seed_gap_retry(session, row, previous):
+    """Carry completed pages into a gap retry before publishing its queued state.
+
+    The new route applies only to gaps. Keep original evidence/provenance and
+    zero current usage for retained pages, including uncertain requests that
+    the user has not explicitly authorized resubmitting.
+    """
+    if previous.configuration.get("source_sha256") != row.configuration["source_sha256"]:
+        raise RecognitionError("recognition_source_mismatch")
+    row.total_pages = previous.total_pages
+    row.configuration = dict(row.configuration, unit=previous.configuration.get("unit", "page"),
+        warning_codes=previous.configuration.get("warning_codes", []))
+    chunks = {chunk.chunk_index: chunk for chunk in session.scalars(select(KnowledgeChunkRecord).where(
+        KnowledgeChunkRecord.document_id == row.document_id, KnowledgeChunkRecord.content_version == previous.id))}
+    total_chars = session.scalar(select(func.coalesce(func.sum(func.length(KnowledgeChunkRecord.content)), 0))
+        .where(KnowledgeChunkRecord.document_id == row.document_id))
+    for old in session.scalars(select(KnowledgePageRecord).where(KnowledgePageRecord.ingestion_id == previous.id)
+                              .order_by(KnowledgePageRecord.page_number)):
+        page = KnowledgePageRecord(id=_id("kp_"), ingestion_id=row.id, page_number=old.page_number)
+        session.add(page)
+        uncertain = old.evidence.get("error_code") == "provider_submit_uncertain" or any(
+            call.get("state") == "pending" for call in (old.operation.get("checkpoint") or {}).get("calls", []))
+        if uncertain and row.configuration.get("resubmit_uncertain"):
+            continue
+        if old.state not in GOOD_PAGES and not uncertain:
+            continue
+        page.state = "failed" if uncertain else old.state
+        page.evidence = dict(old.evidence, reused_page_id=old.id, chunk_start=row.next_chunk_index,
+            current_usage=dict(initial_calls=0, input_tokens=0, output_tokens=0, usage_complete=True))
+        if uncertain:
+            page.evidence["error_code"] = "provider_submit_uncertain"
+        start, count = old.evidence.get("chunk_start", 0), old.evidence.get("chunk_count", 0)
+        for index in range(start, start + count):
+            chunk = chunks.get(index)
+            if chunk is None:
+                raise RecognitionError("recognition_artifact_invalid")
+            total_chars += len(chunk.content)
+            if total_chars > MAX_TEXT_CHARS:
+                raise RecognitionError("recognition_artifact_limit")
+            session.add(KnowledgeChunkRecord(id=_id("chunk_"), document_id=row.document_id,
+                content_version=row.id, chunk_index=row.next_chunk_index, content=chunk.content,
+                chunk_metadata=dict(chunk.chunk_metadata, content_version=row.id, page_id=page.id,
+                                    page_state=page.state), token_count=chunk.token_count))
+            row.next_chunk_index += 1
+    session.flush()
+    _publish(session, row)
 
 
 def create_ingestion_in_session(session, doc, configuration):
@@ -160,6 +213,10 @@ def reusable_page(job, page):
     """Reuse known pages; uncertain submits require a new, explicitly authorized job."""
     with session_scope() as session:
         row = _job(session, job.id, job.owner_id, job.lease_token)
+        if row.configuration.get("retry_failed_only"):
+            # Retained pages and unapproved uncertain requests were copied
+            # atomically at queue time. Remaining pages are explicit gaps.
+            return None
         if page.state != "unprocessed":
             return None
         candidates = session.execute(select(KnowledgePageRecord, KnowledgeIngestionRecord)
@@ -292,12 +349,15 @@ def release(job, *, status=None, error=None):
         row.updated_at = time.time()
 
 
-def manifest(document_id, owner_id, *, offset=0, limit=100):
+def manifest(document_id, owner_id, *, offset=0, limit=100, issues_only=False):
     with session_scope() as session:
         doc = live_document(session, document_id, owner_id)
         job_id = (doc.ingestion_summary or {}).get("id")
-        pages = list(session.scalars(select(KnowledgePageRecord).where(KnowledgePageRecord.ingestion_id == job_id)
-            .order_by(KnowledgePageRecord.page_number).offset(max(0, offset)).limit(min(100, max(1, limit)))))
+        query = select(KnowledgePageRecord).where(KnowledgePageRecord.ingestion_id == job_id)
+        if issues_only:
+            query = query.where(KnowledgePageRecord.state.not_in(GOOD_PAGES))
+        pages = list(session.scalars(query.order_by(KnowledgePageRecord.page_number)
+            .offset(max(0, offset)).limit(min(100, max(1, limit)))))
         return dict(summary=doc.ingestion_summary or {}, content_version=doc.active_version or "legacy",
             pages=[dict(page_number=p.page_number, state=p.state, **p.evidence) for p in pages],
             offset=offset, next_offset=offset + len(pages) if len(pages) == limit else None)

@@ -189,10 +189,11 @@ def get_document_detail(document_id: str, current: User = Depends(get_current_us
 
 @router.get("/documents/{document_id}/coverage")
 def document_coverage(document_id: str, offset: int = Query(default=0, ge=0),
-                      limit: int = Query(default=100, ge=1, le=100), current: User = Depends(get_current_user)):
+                      limit: int = Query(default=100, ge=1, le=100), issues_only: bool = False,
+                      current: User = Depends(get_current_user)):
     from backend.db.knowledge_ingestion_repository import manifest
     try:
-        return manifest(document_id, current.id, offset=offset, limit=limit)
+        return manifest(document_id, current.id, offset=offset, limit=limit, issues_only=issues_only)
     except DomainError as exc:
         return domain_error_response(exc)
 
@@ -231,7 +232,8 @@ async def retry_document(document_id: str, recognition_route_id: str | None = Fo
         registry = await run_in_threadpool(_registry_for_owner, current.id)
         configuration = frozen_configuration(current.id, registry, recognition_route_id)
         job_id = await run_in_threadpool(queue_document, document_id, current.id, configuration,
-                                        new_version=True, resubmit_uncertain=accept_uncertain_resubmission)
+                                        new_version=True, resubmit_uncertain=accept_uncertain_resubmission,
+                                        retry_failed_only=True)
         return {"status": "queued", "id": job_id}
     except DomainError as exc:
         return domain_error_response(exc)
