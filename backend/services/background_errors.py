@@ -222,6 +222,42 @@ def _http_detail(item: HTTPException) -> tuple[str | None, str]:
     return None, detail if isinstance(detail, str) else ""
 
 
+def provider_failure_diagnostic(exc: Exception):
+    """Keep the observed failure even when the public recovery code is uncertain.
+
+    Application 422/503 wrappers are not the provider's HTTP response. Only a
+    matching upstream status is exposed, and provider bodies/URLs never leave
+    this boundary. This evidence does not authorize another paid call.
+    """
+    from backend.models import ProviderFailure
+    from pydantic import ValidationError
+
+    chain = _exception_chain(exc)
+    for item in chain:
+        if isinstance(item, DomainError):
+            code = item.code
+        elif isinstance(item, HTTPException):
+            code, _ = _http_detail(item)
+        else:
+            code = classify_background_error(item, "provider_request_failed")
+        try:
+            diagnostic = ProviderFailure(code=code)
+        except ValidationError:
+            continue
+        for cause in reversed(chain):
+            if isinstance(cause, (DomainError, HTTPException)):
+                continue
+            status = _http_status(cause)
+            if type(status) is int and (
+                (code == "provider_upstream_unavailable" and 500 <= status <= 599)
+                or (code == "provider_rate_limited" and status == 429)
+            ):
+                diagnostic.http_status = status
+                break
+        return diagnostic
+    return None
+
+
 def classify_background_error(
     exc: Exception,
     fallback: str,

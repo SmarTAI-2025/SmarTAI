@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { APIError } from "@/api/client";
+import type { ProviderFailure } from "@/types";
 import {
   backgroundErrorTitle,
   classifyRecoverableError,
@@ -319,10 +320,50 @@ describe("background task failure guidance", () => {
       jobId: "op-question-generation",
     });
 
-    expect(info.title).toBe("模型请求状态无法确认");
-    expect(info.description).toContain("服务商");
+    expect(info.title).toBe("模型调用未完成，重试需确认");
+    expect(info.description).toContain("无法确定具体原因");
     expect(info.description).not.toContain("百度");
     expect(info.actionKind).toBe("refresh");
+  });
+
+  it.each(["zh-CN", "en-US"] as const)("keeps the provider's 503 visible alongside the retry safeguard (%s)", (locale) => {
+    const info = classifyRecoverableError("provider_submit_uncertain", {
+      locale, providerFailures: [{ code: "provider_upstream_unavailable", http_status: 503 }],
+    });
+    expect(info.title).toBe(locale === "zh-CN" ? "模型服务暂时不可用" : "The model service is temporarily unavailable");
+    expect(info.description).toContain("HTTP 503");
+    expect(info.description).toContain(locale === "zh-CN" ? "系统不会自动重试" : "will not retry automatically");
+    expect(info.description).toContain(locale === "zh-CN" ? "计费尚无法确认" : "Billing for the previous call is unconfirmed");
+    expect(info.technicalDetails.map((item) => item.value)).toContain("503");
+    expect(info.actionKind).toBe("refresh");
+  });
+
+  it("distinguishes a timeout from a provider HTTP failure", () => {
+    const info = classifyRecoverableError("provider_submit_uncertain", {
+      providerFailures: [{ code: "provider_timeout", http_status: null }],
+    });
+    expect(info.title).toBe("模型响应超时");
+    expect(info.description).not.toContain("HTTP");
+    expect(info.description).toContain("计费尚无法确认");
+  });
+
+  it.each([{}, [null], [{ code: "__proto__" }], [{ code: "constructor" }], [{ code: "PRIVATE_PROVIDER_BODY" }]].map((providerFailures) => ({ providerFailures })))(
+    "ignores malformed or unknown diagnostic fields: $providerFailures", ({ providerFailures }) => {
+      const info = classifyRecoverableError("provider_submit_uncertain", {
+        providerFailures: providerFailures as ProviderFailure[],
+      });
+      expect(info.title).toBe("模型调用未完成，重试需确认");
+      expect(info.description).toContain("无法确定具体原因");
+      expect(JSON.stringify(info)).not.toContain("PRIVATE_PROVIDER_BODY");
+    },
+  );
+
+  it.each([true, "503", 422, 600, 503.1])("does not present an invalid upstream HTTP status: %s", (status) => {
+    const info = classifyRecoverableError("provider_submit_uncertain", {
+      providerFailures: [{ code: "provider_upstream_unavailable", http_status: status }] as ProviderFailure[],
+    });
+    expect(info.description).not.toContain("HTTP");
+    expect(info.technicalDetails.some((item) => item.label === "供应商 HTTP 状态")).toBe(false);
   });
 
   it("routes an auth failure to BYOK with an access/quota explanation", () => {

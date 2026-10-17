@@ -120,6 +120,19 @@ def public_progress(progress, *, terminal=False):
     result["question_error_codes"] = {k: safe_background_error_code(v, "question_preparation_failed") for k, v in errors.items() if k in ids}
     result["error_detail"] = safe_background_error_code(progress["error_detail"], "workflow_failed") if progress.get("error_detail") else None
     result["messages"] = [safe for event in rows(progress.get("messages")) if isinstance(event, dict) and (safe := public_message(event))][-200:]
+    # Persisted snapshots can predate the typed contract. Validate diagnostics
+    # independently and never expose raw exception fields from legacy rows.
+    from backend.models import ProviderFailure
+    from pydantic import ValidationError
+    result["provider_failures"] = []
+    for failure in rows(progress.get("provider_failures"))[-8:]:
+        if not isinstance(failure, dict):
+            continue
+        try:
+            safe_failure = ProviderFailure.model_validate(failure)
+        except ValidationError:
+            continue
+        result["provider_failures"].append(safe_failure.model_dump(mode="json"))
     result["recognition_requests"] = [] if terminal or result["phase"] in {"done", "error"} else [safe for row in rows(progress.get("recognition_requests")) if (safe := public_request(row))]
     # Keep existing rate-limit recovery controls compatible with old snapshots.
     from backend.progress.grading_activity import public_waits

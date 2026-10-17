@@ -371,6 +371,15 @@ class ModelWait(BaseModel):
     retry_at: float
 
 
+class ProviderFailure(BaseModel):
+    """Bounded diagnostics, separate from retry/billing uncertainty. No raw errors."""
+    code: Literal[
+        "provider_upstream_unavailable", "provider_timeout", "provider_unreachable",
+        "provider_rate_limited", "provider_response_invalid",
+    ]
+    http_status: int | None = Field(default=None, strict=True, ge=400, le=599)
+
+
 class JobProgress(BaseModel):
     """Fine-grained progress for a grading job, polled by frontend."""
     contract_version: int = 1
@@ -407,6 +416,7 @@ class JobProgress(BaseModel):
     messages: List[ProgressEvent] = Field(default_factory=list, description="Ring buffer of last N events")
     error_detail: Optional[str] = None
     model_waits: List[ModelWait] = Field(default_factory=list)
+    provider_failures: List[ProviderFailure] = Field(default_factory=list, max_length=8)
     recognition_requests: List[dict] = Field(default_factory=list)
 
 

@@ -32,7 +32,7 @@ it("does not label a partial book as fully parsed, and loads coverage only on de
   expect(api.getJSON).not.toHaveBeenCalled();
   expect(screen.queryByText("已解析")).not.toBeInTheDocument();
   await userEvent.click(screen.getByText("部分可检索 · 25/25"));
-  await screen.findByText("25: 内容不完整 · 模型请求状态无法确认");
+  await screen.findByText("25: 内容不完整 · 模型调用未完成，重试需确认");
   expect(api.getJSON).toHaveBeenCalledWith("/knowledge/documents/book/coverage?offset=0&limit=20");
 });
 

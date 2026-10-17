@@ -55,6 +55,17 @@ vi.mock("@/i18n/I18nProvider", () => ({
 }));
 
 describe("ProblemRecognitionProgressPage generation failure", () => {
+  it("shows an observed 503 without overwriting it with generic billing copy", () => {
+    failureCode = "provider_submit_uncertain";
+    generationProgress = { provider_failures: [{ code: "provider_upstream_unavailable", http_status: 503 }] };
+    render(<MemoryRouter initialEntries={["/tasks/task-1/problems/progress"]}>
+      <Routes><Route path="/tasks/:taskId/problems/progress" element={<ProblemRecognitionProgressPage />} /></Routes>
+    </MemoryRouter>);
+    expect(screen.getByRole("heading", { name: "模型服务暂时不可用" })).toBeInTheDocument();
+    expect(screen.getByText(/HTTP 503/)).toHaveTextContent("重试时会复用已识别资料");
+    expect(screen.getByRole("button", { name: "重试失败项" })).toBeDisabled();
+  });
+
   it("keeps uncertain request numbers and completed counts visible after a real-style timeout", () => {
     failureCode = "provider_submit_uncertain";
     generationProgress = {
