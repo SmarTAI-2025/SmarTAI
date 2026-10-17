@@ -1,4 +1,5 @@
-import { questionIssueNeedsReview, questionReviewConfirmed, questionReviewIssues, questionReviewBlocked, questionReviewNextBlocked, questionReviewBlockers, recognitionIssueLabel, type ReviewBlocker } from "@/lib/reviewConfirmation";
+import { questionConfidence, questionIssueNeedsReview, questionReviewConfirmed, questionReviewIssues, questionReviewBlocked, questionReviewNextBlocked, questionReviewBlockers, recognitionIssueLabel, type ReviewBlocker } from "@/lib/reviewConfirmation";
+import { confidenceNeedsAttention, confidenceRequiresReview } from "@/lib/confidencePolicy";
 import { ReviewConfirmButton, ReviewBlockDialog, ReviewStageActions } from "@/components/tasks/ReviewConfirmation";
 import { useDraftProtection } from "@/hooks/useDraftProtection";
 import { questionTypeLabel, testCaseLabel } from "@/lib/reviewLabels";
@@ -387,6 +388,10 @@ function QuestionPackageCard({ problem, index, total, previous, next, readOnly, 
 }) {
   const programming = isProgrammingProblem(problem);
   const risks = questionReviewIssues(problem);
+  const confidenceAdvice = !questionReviewConfirmed(problem) && (problem.preparation_issues ?? []).some(issue => {
+    const confidence = questionConfidence(issue, problem);
+    return confidenceNeedsAttention(confidence) && !confidenceRequiresReview(confidence);
+  });
   return (
     <article id={questionAnchorId(problem.q_id)} data-question-id={problem.q_id} className="scroll-mt-[86px] overflow-hidden rounded-[10px] border bg-card">
       <header className="flex flex-col gap-3 border-b px-5 py-4 sm:flex-row sm:items-center sm:justify-between sm:px-6">
@@ -402,11 +407,12 @@ function QuestionPackageCard({ problem, index, total, previous, next, readOnly, 
         </div>
         <div className="flex flex-wrap items-center gap-2">
           <ReviewConfirmButton title={tx(locale, `第 ${problem.number || problem.q_id} 题`, `Question ${problem.number || problem.q_id}`)} locale={locale} confirmed={questionReviewConfirmed(problem)} blocked={questionReviewNextBlocked(problem)} busy={saving} onClick={() => onConfirm(problem)} />
+          {confidenceAdvice ? <span className="text-[11px] text-muted-foreground">{tx(locale, "置信度低于 0.60，可继续", "Confidence below 0.60; you can continue")}</span> : null}
           <QuestionNavigator previous={previous} next={next} locale={locale} onNavigate={onNavigate} />
         </div>
       </header>
 
-      {(problem.preparation_issues ?? []).some(issue => issue.status === "open") ? <ul className="space-y-1 border-b px-5 py-3 text-xs leading-5 sm:px-6">{(problem.preparation_issues ?? []).filter(issue => issue.status === "open").map(issue => <li key={issue.issue_id} className={issue.severity === "blocking" ? "text-danger" : questionIssueNeedsReview(issue) ? "text-amber-700" : "text-muted-foreground"}>{recognitionIssueLabel(issue, locale) ?? riskShortLabel(issue.code, locale)}</li>)}</ul> : null}
+      {risks.length ? <ul className="space-y-1 border-b px-5 py-3 text-xs leading-5 sm:px-6">{risks.map(issue => <li key={issue.issue_id} className="text-danger">{recognitionIssueLabel(issue, locale) ?? riskShortLabel(issue.code, locale)}</li>)}</ul> : null}
 
       <div className="space-y-0 divide-y">
         <EditableTextField fieldKey={`${problem.q_id}:stem`} label={tx(locale, "题目", "Question")} value={problem.stem} problem={problem} field="stem" readOnly={readOnly} saving={saving} locale={locale} onDirtyChange={onDirtyChange} onSave={onSaveText} />

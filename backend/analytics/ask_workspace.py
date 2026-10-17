@@ -16,6 +16,8 @@ import unicodedata
 from dataclasses import dataclass
 from typing import Any
 
+from backend.domain.confidence_policy import confidence_needs_attention, confidence_value
+
 from backend.domain.errors import NotFound
 from backend.domain.grading_review import number, review_state, score
 from backend.services import task_facade
@@ -35,8 +37,7 @@ def normalized(value: Any) -> str:
 
 
 def confidence(value: Any) -> float | None:
-    n = number(value)
-    return None if n is None or not 0 <= n <= 100 else n / 100 if n > 1 else n
+    return confidence_value(value)
 
 
 def dumps(value: Any) -> str:
@@ -130,7 +131,7 @@ def project_task(task: dict, result: dict) -> dict[str, list[dict]]:
             "total_score": total if valid else None, "total_max": maximum if valid else None,
             "score_percent": total / maximum * 100 if maximum > 0 else None,
             "avg_confidence": _mean([g["confidence"] for g in student_grades]), "graded_count": len(valid), "unscored_count": len(student_grades) - len(valid),
-            "low_confidence_count": sum(g["requires_review"] and g["confidence"] is not None and g["confidence"] <= .35 for g in student_grades),
+            "low_confidence_count": sum(not g["reviewed"] and confidence_needs_attention(g["confidence"]) for g in student_grades),
             "review_count": sum(g["requires_review"] for g in student_grades),
             "pending_review_count": sum(g["requires_review"] and not g["reviewed"] for g in student_grades),
             "metadata": dumps({"identity_match_method": student.get("identity_match_method")})})
@@ -145,7 +146,7 @@ def project_task(task: dict, result: dict) -> dict[str, list[dict]]:
         tables["questions"].append({**{k: q.get(k) for k in SCHEMA["questions"]}, "task_id": tid, "q_id": qid, "order_index": index,
             "avg_score": _mean([g["score"] for g in grades]), "avg_percent": _mean([g["score_percent"] for g in grades]),
             "avg_confidence": _mean([g["confidence"] for g in grades]), "response_count": len(grades), "review_count": sum(g["requires_review"] for g in grades),
-            "low_confidence_count": sum(g["requires_review"] and g["confidence"] is not None and g["confidence"] <= .35 for g in grades),
+            "low_confidence_count": sum(not g["reviewed"] and confidence_needs_attention(g["confidence"]) for g in grades),
             "metadata": dumps({k: q.get(k) for k in ("max_score_source", "max_score_review_status", "material_provenance", "ai_completion_provenance", "knowledge_points")})})
         for issue in q.get("preparation_issues") or []:
             tables["preparation_issues"].append({"task_id": tid, "q_id": qid, **{k: issue.get(k) for k in ("code", "field", "severity", "status", "message")}})

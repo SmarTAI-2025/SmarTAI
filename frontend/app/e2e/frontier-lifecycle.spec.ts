@@ -91,7 +91,7 @@ test("switching language while restoring recognition releases the workflow contr
   await received.promise;
   await page.getByRole("button", { name: "Switch to Chinese", exact: true }).click();
   recognition.resolve();
-  await expect(page.getByRole("button", { name: "继续识别作答（保留待确认）", exact: true })).toBeEnabled();
+  await expect(page.getByRole("button", { name: "继续识别作答", exact: true })).toBeEnabled();
   await expect(page.getByRole("button", { name: "重新开始", exact: true })).toBeEnabled();
   expect(polls).toBe(3);
   expect(errors).toEqual([]);
@@ -126,3 +126,57 @@ test('Full Workflow opens fixed metadata and preloaded source pages without impl
   expect(writes).toEqual(['/tasks/']);
   expect(errors).toEqual([]);
 });
+
+for (const locale of ["zh-CN", "en-US"]) {
+  test(`simple Demo continues through ordinary confidence with live progress (${locale})`, async ({ page }, testInfo) => {
+    const errors = await guest(page), zh = locale === "zh-CN";
+    await page.setViewportSize(zh ? { width: 1440, height: 1000 } : { width: 390, height: 844 });
+    await page.addInitScript(value => localStorage.setItem("smartai_locale", value), locale);
+    const writes: string[] = [];
+    let status = "problems_ready", gradingPolls = 0;
+    const problems = Object.fromEntries(Object.entries(task.problem_data).map(([id, problem]) => [id, {
+      ...problem, preparation_issues: [{ issue_id: id, q_id: id, field: "stem", code: "low_confidence", severity: "warning", status: "open", details: { confidence: .5 } }],
+    }]));
+    const students = { S1: { stu_id: "S1", stu_name: "Example", identity_status: "matched", stu_ans: Object.values(problems).map((problem, index) => ({
+      q_id: problem.q_id, number: problem.number, type: problem.type, content: index === 1 ? "" : "A recognized answer", flag: ["recognition_low_confidence"],
+    })) } };
+    const setup = { schema_version: 1, selected_provider_ids: ["demo:vision"], primary_provider_id: "demo:vision", aggregation_method: "single", multi_sample_n: 1,
+      knowledge_scope: "none", strictness: 50, allow_partial_credit: true, feedback_tone: "neutral", feedback_length: "medium", feedback_language: "en", suggest_corrections: true, low_confidence_threshold: .6, teacher_notes: "" };
+    const current = () => ({ ...task, status, problem_data: problems, student_data: status === "problems_ready" ? {} : students, student_count: status === "problems_ready" ? 0 : 1 });
+    await page.route(`${backend}/**`, async route => {
+      const path = new URL(route.request().url()).pathname, json = (value: unknown) => route.fulfill({ json: value });
+      if (path === "/auth/me") return json({ id: "guest-owner", username: "Guest", role: "teacher", is_active: true });
+      if (path.endsWith("/grading-setup")) return json({ task_id: task.task_id, workflow_revision: 1, configured: true, grading_setup: setup, suggested_setup: setup, available_experts: [{ provider_id: "demo:vision", enabled: true }], readiness: { ready: true, blocking_issues: [], warnings: [] } });
+      if (route.request().method() !== "GET") {
+        writes.push(path);
+        if (path.endsWith("/parse_submissions")) { status = "submissions_ready"; return json({ status: "started", job_id: "parse" }); }
+        if (path.endsWith("/grade")) { status = "grading"; return json({ status: "started", job_id: "grade" }); }
+        throw new Error(`Unexpected mutation ${path}`);
+      }
+      if (path.endsWith("/state")) {
+        if (status === "grading" && ++gradingPolls >= 3) status = "graded";
+        return json({ ...current(), progress: { phase: status === "graded" ? "done" : "grading", total_students: 1, total_questions: 4, completed_units: status === "graded" ? 4 : 1,
+          total_steps: 4, completed_steps: 1, active: [], messages: [], activity_latest: { sequence: gradingPolls, ts: 1, code: gradingPolls === 1 ? "responding" : "succeeded" } } });
+      }
+      if (path.endsWith("/result")) return json({ task_id: task.task_id, problem_data: problems, student_data: students, results: [{ student_id: "S1", student_name: "Example", corrections: Object.values(problems).map(problem => ({
+        q_id: problem.q_id, score: 1, provisional_score: 1, max_score: 1, confidence: .5, comment: "Model feedback", steps: [], expert_results: [], requires_human_review: false, review_reasons: ["low_confidence"],
+      })) }], timestamp: 1 });
+      if (path === `/tasks/${task.task_id}`) return json(current());
+      return json([]);
+    });
+    await page.goto(`/frontier/live?taskId=${task.task_id}`);
+    await page.getByRole("button", { name: zh ? "继续识别作答" : "Continue to submissions", exact: true }).click();
+    await expect(page.getByRole("heading", { name: zh ? "本次识别的学生作答" : "Recognized submissions", exact: true })).toBeVisible();
+    await expect(page.getByText(/recognition_low_confidence|置信度|Low confidence/)).toHaveCount(0);
+    await page.getByRole("button", { name: zh ? "开始批改" : "Start grading", exact: true }).first().click();
+    await expect(page.getByRole("status").filter({ hasText: zh ? "请求已发出，等待模型响应" : "Request sent; awaiting model response" })).toBeVisible();
+    await expect(page.getByRole("status").filter({ hasText: zh ? "已获得一份有效结果" : "Received a valid result" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: zh ? "从真实分数看到班级表现" : "See class performance from live scores", exact: true })).toBeVisible();
+    await expect(page.getByRole("progressbar")).toHaveAttribute("aria-valuenow", "100");
+    await expect.poll(() => page.getByRole("progressbar").evaluate(el => Math.abs(el.getBoundingClientRect().width - el.firstElementChild!.getBoundingClientRect().width))).toBeLessThan(1);
+    await expect(page).toHaveURL(new RegExp(`/frontier/live\\?taskId=${task.task_id}`));
+    expect(writes).toEqual([`/tasks/${task.task_id}/parse_submissions`, `/tasks/${task.task_id}/grade`]);
+    expect(errors).toEqual([]);
+    await page.screenshot({ path: testInfo.outputPath(`demo-completed-${locale}.png`), fullPage: true });
+  });
+}

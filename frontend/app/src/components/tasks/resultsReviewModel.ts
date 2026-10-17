@@ -1,6 +1,6 @@
 import type { Correction } from "@/types";
 import type { Locale } from "@/i18n/messages";
-import { VERY_LOW_REVIEW_CONFIDENCE } from "@/lib/reviewConfirmation";
+import { confidenceRequiresReview, confidenceValue } from "@/lib/confidencePolicy";
 import {
   correctionReviewAttention,
   correctionReviewBlocked,
@@ -24,7 +24,7 @@ export interface ReviewItem {
   severity: "blocking" | "advisory";
 }
 
-export { isCorrectionReviewConfirmed, correctionReviewBlocked, correctionReviewAttention, getExpertScoreSpread } from "./resultsModel";
+export { isCorrectionReviewConfirmed, correctionReviewBlocked, correctionReviewNextBlocked, correctionReviewAttention, getExpertScoreSpread } from "./resultsModel";
 
 export function collectResultReviewItems(model: ResultsModel, students: StudentSummary[], locale: Locale = "zh-CN"): ReviewItem[] {
   return students
@@ -46,9 +46,10 @@ function buildReviewItem(
   const attention = correctionReviewAttention(correction);
   if (attention === "none") return null;
   const reasons = correctionReviewLabels(correction, locale);
-  const missingScore = attention === "blocking";
-  const lowConfidence = Number.isFinite(correction.confidence) && correction.confidence >= 0 && correction.confidence <= VERY_LOW_REVIEW_CONFIDENCE;
+  const missingScore = correctionReviewBlocked(correction);
+  const lowConfidence = confidenceRequiresReview(correction.confidence);
   const expertDisagreement = hasExpertDisagreement(correction);
+  const confidence = confidenceValue(correction.confidence);
   const category = missingScore ? "review" : lowConfidence
     ? "low-confidence"
     : expertDisagreement
@@ -56,9 +57,9 @@ function buildReviewItem(
       : "review";
   const priority =
     (missingScore ? 100 : 0) +
-    (lowConfidence ? 30 : 0) +
+    (lowConfidence ? 40 : 0) +
     (expertDisagreement ? 20 : 0) +
-    (1 - Math.min(1, Math.max(0, Number.isFinite(correction.confidence) ? correction.confidence : 1)));
+    (confidence === null ? 0 : 1 - confidence);
 
   return {
     student,
@@ -79,10 +80,11 @@ export function correctionReviewLabels(correction: Correction, locale: Locale) {
     const valid = score !== null && Number.isFinite(correction.max_score) && correction.max_score > 0 && score >= 0 && score <= correction.max_score;
     labels.add(valid ? text("缺失分数已补齐，请确认", "Corrected score needs confirmation") : text("缺少有效分数，请填写并确认", "Enter and confirm a valid score"));
   }
-  if (Number.isFinite(correction.confidence) && correction.confidence >= 0 && correction.confidence <= VERY_LOW_REVIEW_CONFIDENCE) {
-    labels.add(text("置信度很低，建议核对", "Very low confidence; check the result"));
+  if (confidenceRequiresReview(correction.confidence)) {
+    labels.add(text("置信度很低，请核对并确认", "Very low confidence; check and confirm the result"));
   }
   for (const reason of correctionReviewReasonIds(correction)) {
+    if (["low_confidence", "degraded_to_single"].includes(reason)) continue;
     labels.add(reviewReasonLabel(reason, locale));
   }
   if (getExpertScoreSpread(correction) > Math.max(1, correction.max_score * 0.25)) {

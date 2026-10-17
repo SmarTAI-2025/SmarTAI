@@ -103,7 +103,8 @@ from backend.services.question_preparation_artifacts import (
     save_final_question_packages_artifact,
     save_question_candidate_artifact,
 )
-from backend.services.question_sources import read_question_source, question_recognition_options, attach_recognition_review, recognition_needs_review
+from backend.services.question_sources import read_question_source, question_recognition_options, attach_recognition_review, recognition_requires_confirmation
+from backend.domain.confidence_policy import confidence_needs_attention, confidence_requires_review
 from backend.tools.file_processing import (
     IMAGE_MEDIA_TYPES,
     extract_text_from_upload,
@@ -1604,7 +1605,7 @@ async def _start_question_preparation(
                 content_sha256=payload.get("sha256", operation.input_hash),
                 library_material_id=payload.get("library_material_id"),
                 recognition=payload.get("recognition"),
-                recognition_requires_review=recognition_needs_review(payload.get("recognition")),
+                recognition_requires_review=recognition_requires_confirmation(payload.get("recognition")),
                 base_workflow_revision=int(payload.get("base_workflow_revision") or 0),
                 resident_bytes=len(str(payload.get("text") or "").encode("utf-8")),
                 candidates=list(payload.get("candidates") or []),
@@ -2220,7 +2221,7 @@ def _rehydrate_question_preparation_inputs(operation):
             content_sha256=frozen_sha,
             library_material_id=source_payload.get("library_material_id"),
             recognition=source_payload.get("recognition"),
-            recognition_requires_review=recognition_needs_review(source_payload.get("recognition")),
+            recognition_requires_review=recognition_requires_confirmation(source_payload.get("recognition")),
             base_workflow_revision=int(
                 source_payload.get("base_workflow_revision") or 0
             ),
@@ -2361,7 +2362,7 @@ async def _recognize_saved_question_sources(sources, *, operation, route, regist
         updated = {**payload, "recognition": result.recognition, "saved_material": saved}
         resolved.append((draft.model_copy(update={
             "recognition": result.recognition,
-            "recognition_requires_review": recognition_needs_review(result.recognition),
+            "recognition_requires_review": recognition_requires_confirmation(result.recognition),
             "resident_bytes": len(result.text.encode("utf-8")),
             "candidates": _detect_candidates(result.text),
         }), result.text, updated))
@@ -3701,7 +3702,7 @@ async def _run_material_import(
                 "reason": candidate.reason[:300],
                 "would_overwrite": bool(existing),
                 "recognition": source_payload.get("recognition"),
-                "recognition_requires_review": recognition_needs_review(source_payload.get("recognition")),
+                "recognition_requires_review": recognition_requires_confirmation(source_payload.get("recognition")),
             })
         snapshot = (await reporter.snapshot()).model_dump(mode="json")
         completed_at = time.time()
@@ -3838,7 +3839,7 @@ def _material_summary(candidates: list[dict], applied: list[str]) -> dict:
     return {
         "candidate_count": len(candidates),
         "conflict_count": sum(bool(item.get("would_overwrite")) for item in candidates),
-        "low_confidence_count": sum(float(item.get("confidence") or 0) < 0.72 for item in candidates),
+        "low_confidence_count": sum(confidence_needs_attention(item.get("confidence")) for item in candidates),
         "exact_match_count": sum(item.get("match_status") == "exact" for item in candidates),
         "possible_match_count": sum(item.get("match_status") == "possible" for item in candidates),
         "by_target": {
@@ -3941,8 +3942,8 @@ def apply_material_import(
             if target == "test_cases" and not is_programming_question_type(problem.get("type")):
                 raise ValidationError("Test cases require a programming question.")
             if target == "test_cases" and (candidate.get("match_status") != "exact"
-                    or float(candidate.get("confidence") or 0) < 0.72
-                    or recognition_needs_review(payload.get("recognition"))):
+                    or confidence_requires_review(candidate.get("confidence"))
+                    or recognition_requires_confirmation(payload.get("recognition"))):
                 raise RecognitionError("material_recognition_review_required")
             provenance = {
                 "import_job_id": job_id, "candidate_id": candidate_id,

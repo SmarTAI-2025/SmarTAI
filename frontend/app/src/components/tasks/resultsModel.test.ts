@@ -8,6 +8,7 @@ import {
   correctionReviewReasonIds,
   effectiveCorrectionScore,
   formatCorrectionScoreSource,
+  formatConfidence,
   reviewConfirmationScore,
   summarizeReviewScoreSources,
 } from "./resultsModel";
@@ -31,6 +32,18 @@ function correction(patch: Partial<Correction> = {}): Correction {
 }
 
 describe("review score presentation", () => {
+  it("preserves unknown confidence in display and excludes it from averages", () => {
+    const result = { task_id: "T", status: "graded", timestamp: 0, results: [{ student_id: "S", corrections: [
+      correction({ q_id: "unknown", confidence: null, score: 7, review_reasons: [] }),
+      correction({ q_id: "known", confidence: 0.6, score: 7, review_reasons: [] }),
+    ] }] };
+    const model = buildResultsModel(undefined, result as Parameters<typeof buildResultsModel>[1]);
+    expect(model.students[0].avgConfidence).toBe(0.6);
+    expect(model.reviewCount).toBe(0);
+    expect(formatConfidence(null)).toBe("--");
+    expect(formatConfidence(60)).toBe("--");
+  });
+
   it("shows a soft-review AI score and uses the same one-decimal teacher default", () => {
     const pending = correction();
 
@@ -104,11 +117,11 @@ describe("review score presentation", () => {
     ]);
 
     expect(summary).toEqual({
-      aiUntouched: 2,
+      aiUntouched: 0,
       teacherConfirmedSame: 1,
       teacherChanged: 0,
       hardFailure: 1,
-      total: 4,
+      total: 2,
     });
   });
 });

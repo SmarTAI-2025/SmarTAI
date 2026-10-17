@@ -154,12 +154,11 @@ export function StudentAnalysisDetail({ locale, taskId, studentId, model }: { lo
       <ResultQuestionQuery className="mt-4" locale={locale} taskId={taskId} filter={questionFilter}
         questions={visibleQuestions} onSelect={scrollToQuestion} />
 
-      <div className="mt-4 grid grid-cols-2 gap-3 xl:grid-cols-6">
+      <div className="mt-4 grid grid-cols-2 gap-3 xl:grid-cols-5">
         <DetailMetric label={tx(locale, "总分", "Total score")} value={`${formatScore(student.totalScore, student.totalMax)} / ${String(student.totalMax)}`} tone="primary" />
         <DetailMetric label={tx(locale, "得分率", "Score Percentage")} value={formatPercent(student.percent)} tone="accent" />
         <DetailMetric label={tx(locale, "平均置信度", "Mean confidence")} value={formatConfidence(student.avgConfidence)} tone="primary" />
         <DetailMetric label={tx(locale, "及格状态", "Pass status")} value={student.percent === null ? "—" : student.percent >= 60 ? tx(locale, "及格", "Passed") : tx(locale, "未及格", "Failed")} tone={student.percent !== null && student.percent < 60 ? "danger" : "accent"} />
-        <DetailMetric label={tx(locale, "低置信题次", "Low-confidence items")} value={String(student.lowConfidenceCount)} tone="warning" />
         <DetailMetric label={tx(locale, "复核状态", "Review status")} value={pendingReviewCount ? tx(locale, `${pendingReviewCount} 项待处理`, `${pendingReviewCount} pending`) : tx(locale, "无待处理项", "All clear")} tone={pendingReviewCount ? "warning" : "accent"} />
       </div>
 

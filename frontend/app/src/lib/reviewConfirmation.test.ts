@@ -33,36 +33,39 @@ describe("review hard failures", () => {
     expect(problems[0].preparation_issues).toEqual([warnings[0]]);
   });
 
-  it.each([0.2, 0.6, undefined])("requires confirmation of explicit low confidence (%s) without requiring a rewrite", (confidence) => {
+  it.each([0, 0.2499, 0.25, 0.5999, 0.60, 1, undefined, NaN, -1])("only puts numeric confidence below .25 into the required queue (%s)", (confidence) => {
     const warning = issue({ code: "low_confidence", details: { confidence } });
     const problem = question({ preparation_issues: [warning] });
-    expect(questionReviewIssues(problem)).toEqual([warning]);
+    const required = typeof confidence === "number" && confidence >= 0 && confidence < 0.25;
     expect(questionReviewBlocked(problem)).toBe(false);
-    expect(questionReviewNextBlocked(problem)).toBe(true);
-    expect(questionReviewBlockers([problem], "T1", "zh-CN")[0].label).toContain("置信度较低");
-    expect(questionReviewBlockers([problem], "T1", "zh-CN")[0].label).not.toContain("已修正");
+    expect(questionReviewNextBlocked(problem)).toBe(required);
+    expect(questionReviewIssues(problem)).toHaveLength(required ? 1 : 0);
+    expect(questionReviewBlockers([problem], "T1", "zh-CN")).toHaveLength(required ? 1 : 0);
     expect(questionReviewNextBlocked({ ...problem, review_status: "confirmed" })).toBe(false);
-    const imported = question({ preparation_issues: [{ ...warning, field: "rubric", details: undefined }], material_provenance: { criterion: { confidence: 0.2 } as NonNullable<ProblemInfo["material_provenance"]>["criterion"] } });
-    expect(questionReviewIssues(imported)).toHaveLength(1);
-    expect(questionReviewNextBlocked(imported)).toBe(true);
+    if (required) expect(questionReviewBlockers([problem], "T1", "zh-CN")[0].label).toContain("0.25");
   });
 
-  it("recognizes content-specific low confidence without treating generic source uncertainty as failure", () => {
+  it("uses actual material confidence and keeps the confirm action possible", () => {
+    const imported = question({ preparation_issues: [issue({ code: "low_confidence", field: "rubric" })], material_provenance: { criterion: { confidence: 0.2 } as NonNullable<ProblemInfo["material_provenance"]>["criterion"] } });
+    expect(questionReviewBlocked(imported)).toBe(false);
+    expect(questionReviewNextBlocked(imported)).toBe(true);
+    expect(questionReviewIssues(imported)[0].details?.confidence).toBe(0.2);
+  });
+
+  it("does not convert categorical file-level low into a numeric mandatory gate", () => {
     const warning = issue({ details: { confidence_reasons: ["quality_uncalibrated", "low_confidence_content"] } });
     const problem = question({ preparation_issues: [warning] });
-    expect(questionIssueNeedsReview(warning)).toBe(true);
-    expect(questionReviewBlocked(problem)).toBe(false);
-    expect(questionReviewNextBlocked(problem)).toBe(true);
-    expect(questionReviewNextBlocked({ ...problem, review_status: "confirmed" })).toBe(false);
+    expect(questionIssueNeedsReview(warning)).toBe(false);
+    expect(questionReviewIssues(problem)).toEqual([]);
+    expect(questionReviewNextBlocked(problem)).toBe(false);
   });
 
-  it.each(["low_confidence", "recognition_needs_review"] as const)("still requires confirmation after editing low confidence content: %s", (code) => {
-    const warning = issue({ code, status: "resolved", details: { confidence_reasons: ["low_confidence_content"] } });
+  it("keeps truly low numeric confidence required after editing until confirmation", () => {
+    const warning = issue({ code: "low_confidence", status: "resolved", details: { confidence: 0.2 } });
     const edited = question({ review_status: "edited", preparation_issues: [warning] });
     expect(questionReviewBlocked(edited)).toBe(false);
     expect(questionReviewNextBlocked(edited)).toBe(true);
     expect(questionReviewIssues(edited)).toEqual([warning]);
-    expect(questionReviewBlockers([edited], "T1", "zh-CN")[0].label).toContain("置信度较低");
     expect(questionReviewNextBlocked({ ...edited, review_status: "confirmed" })).toBe(false);
     expect(questionReviewIssues({ ...edited, review_status: "confirmed" })).toEqual([]);
   });
@@ -104,15 +107,20 @@ describe("review hard failures", () => {
     expect(answerReviewNextBlocked({ ...repaired, review_status: "confirmed" })).toBe(false);
   });
 
-  it.each(["very_low_confidence", "recognition_low_confidence", "low_confidence"])("requires confirmation of %s while allowing the confirmation action", (flag) => {
+  it("requires confirmation only for the server's numeric below-.25 marker", () => {
+    const answer = { q_id: "q1", number: "1", type: "short", content: "Visible work", flag: ["recognition_very_low_confidence"] };
+    expect(answerReviewBlocked(answer)).toBe(false);
+    expect(answerReviewNextBlocked(answer)).toBe(true);
+    expect(answerReviewNextBlocked({ ...answer, review_status: "confirmed" })).toBe(false);
+  });
+
+  it.each(["very_low_confidence", "recognition_low_confidence", "low_confidence"])("does not turn uncalibrated %s into a mandatory review", (flag) => {
     const answer = { q_id: "q1", number: "1", type: "short", content: "original text", flag: [flag] };
     const task = { task_id: "T1", student_data: { s1: { stu_id: "s1", stu_name: "Sample", stu_ans: [answer] } } } as unknown as Task;
     expect(answerReviewBlocked(answer)).toBe(false);
-    expect(answerReviewNextBlocked(answer)).toBe(true);
+    expect(answerReviewNextBlocked(answer)).toBe(false);
     expect(submissionConfirmationBlockers(task, "en-US")).toEqual([]);
-    expect(submissionReviewBlockers(task, "en-US")[0].label).toContain("Low recognition confidence");
-    expect(submissionReviewBlockers(task, "en-US")[0].label).not.toContain("Corrected");
-    expect(answerReviewNextBlocked({ ...answer, review_status: "confirmed" })).toBe(false);
+    expect(submissionReviewBlockers(task, "en-US")).toEqual([]);
   });
 
   it("blocks source-backed identity problems and placeholders, but not legacy optional confirmation", () => {

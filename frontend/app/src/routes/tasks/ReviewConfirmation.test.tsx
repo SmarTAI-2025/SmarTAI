@@ -70,6 +70,45 @@ beforeEach(async () => {
   HTMLElement.prototype.scrollIntoView = vi.fn();
 });
 describe("one-click grading review", () => {
+  it.each([false, true])("requires very low confidence confirmation while leaving its valid score confirmable (detail=%s)", async detail => {
+    state.result.results = [{ student_id: "S1", corrections: [correction("Q1", { confidence: 0.2499, review_status: "pending" })] }];
+    show(detail);
+    await userEvent.click(screen.getByRole("button", { name: "View Results & Analysis" }));
+    expect(screen.getByRole("alertdialog")).toBeInTheDocument();
+    expect(screen.queryByText("Current results page")).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: detail ? "Back" : "Stay here" }));
+    if (detail) {
+      const confirm = screen.getByRole("button", { name: /Q1.*Confirm review/ });
+      expect(confirm).toBeEnabled();
+      await userEvent.click(confirm);
+      expect(state.update).toHaveBeenCalledWith(expect.objectContaining({ teacher_score: 7, confirm: true }));
+    } else {
+      await userEvent.click(screen.getByRole("button", { name: "Confirm all" }));
+      expect(state.bulk).toHaveBeenCalledWith(expect.objectContaining({ entries: [{ studentId: "S1", qId: "Q1", score: 7, comment: "" }] }));
+    }
+  });
+
+  it.each([0.25, 0.5999, 0.60])("allows results navigation at confidence %s without forced confirmation", async confidence => {
+    state.result.results = [{ student_id: "S1", corrections: [correction("Q1", { confidence, review_status: "pending" })] }];
+    show();
+    expect(screen.getByText("Low-confidence responses").closest("section")).toHaveTextContent("0");
+    expect(within(screen.getByRole("region", { name: "Review queue" })).queryByRole("link")).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "View Results & Analysis" }));
+    expect(await screen.findByText("Current results page")).toBeVisible();
+    expect(state.bulk).not.toHaveBeenCalled();
+    expect(state.update).not.toHaveBeenCalled();
+  });
+
+  it.each([0.25, 0.5999, 0.60])("shows optional confidence text only beside detail confirmation at %s", confidence => {
+    state.result.results = [{ student_id: "S1", corrections: [correction("Q1", { confidence, review_status: "pending" })] }];
+    show(true);
+    const hint = screen.queryByText("Low confidence; optional check");
+    if (confidence < 0.60) {
+      expect(hint).toHaveClass("text-[11px]");
+      expect(hint?.parentElement).toContainElement(screen.getByRole("button", { name: /Q1.*Confirm review/ }));
+    } else expect(hint).not.toBeInTheDocument();
+  });
+
   it.each(["zh-CN", "en-US"])("keeps disputed AI evidence and matching teacher defaults visible in %s", async locale => {
     state.locale = locale;
     const experts = [7, 10].map((score, index) => ({ provider: `expert-${index}`, score, max_score: 10, confidence: index ? 0.99 : 0.95,

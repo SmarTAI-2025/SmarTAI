@@ -218,12 +218,13 @@ async def test_partial_failure_high_confidence_survivor_is_not_flagged(monkeypat
 
 
 @pytest.mark.asyncio
-async def test_partial_failure_low_confidence_survivor_is_flagged(monkeypatch):
+@pytest.mark.parametrize("confidence, required", [(0.2499, True), (0.25, False), (0.35, False), (0.60, False)])
+async def test_partial_failure_low_confidence_survivor_is_flagged(monkeypatch, confidence, required):
     p1 = _FakeProvider("zhipu:glm-4.5-air")
     p2 = _FakeProvider("gemini:gemini-3-flash-preview")
     _patch_skill_returning(monkeypatch, {
         p1.provider_id: _expert_result(p1.provider_id, 0.0, 0.0, "cannot grade this item"),
-        p2.provider_id: _expert_result(p2.provider_id, 4.0, 0.35, "unsure"),
+        p2.provider_id: _expert_result(p2.provider_id, 4.0, confidence, "unsure"),
     })
     import backend.agents.multi_expert as me
     monkeypatch.setattr(me._settings, "confidence_threshold", 0.6, raising=False)
@@ -235,8 +236,8 @@ async def test_partial_failure_low_confidence_survivor_is_flagged(monkeypatch):
         registry=_FakeRegistry([p1, p2]),
     )
     assert correction.synthesis_method == "degraded_to_single"
-    assert correction.requires_human_review is True
-    assert "degraded_to_single" in correction.review_reasons
+    assert correction.requires_human_review is required
+    assert ("degraded_to_single" in correction.review_reasons) is required
 
 
 def test_weighted_average_confidence_uses_best_expert():

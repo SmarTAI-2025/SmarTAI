@@ -89,10 +89,10 @@ def test_blank_or_uncalibrated_review_is_not_a_recognition_failure(content, flag
 
 
 @pytest.mark.parametrize("low_flag", ["very_low_confidence", "recognition_low_confidence", "low_confidence"])
-def test_specific_low_confidence_requires_confirmation_but_not_rewriting(low_flag):
+def test_uncalibrated_low_labels_do_not_require_confirmation(low_flag):
     _seeded, args = _case(flags=[low_flag])
     before = task_facade.get_task(**args, full=True)
-    assert "submission_recognition_blocked" in task_facade.grading_readiness(**args)["blocking_issues"]
+    assert task_facade.grading_readiness(**args)["ready"] is True
     confirmed = task_facade.update_student_answer(
         **args, display_student_id="S001", q_id="q1", patch={"review_status": "confirmed"},
         expected_revision=before["workflow_revision"],
@@ -100,6 +100,15 @@ def test_specific_low_confidence_requires_confirmation_but_not_rewriting(low_fla
     assert confirmed["answer"]["content"] == "Visible student work"
     assert low_flag in confirmed["answer"]["flag"]
     assert task_facade.grading_readiness(**args)["blocking_issues"] == []
+
+
+def test_numeric_very_low_answer_can_be_confirmed_without_rewriting():
+    _seeded, args = _case(flags=["recognition_very_low_confidence"])
+    before = task_facade.get_task(**args, full=True)
+    assert "submission_recognition_blocked" in task_facade.grading_readiness(**args)["blocking_issues"]
+    task_facade.update_student_answer(**args, display_student_id="S001", q_id="q1",
+        patch={"review_status": "confirmed"}, expected_revision=before["workflow_revision"])
+    assert task_facade.grading_readiness(**args)["ready"]
 
 
 @pytest.mark.parametrize("coverage", [
@@ -153,7 +162,7 @@ def test_question_low_confidence_edit_still_requires_confirmation():
         question = session.scalar(select(AssignmentQuestionRecord))
         question.source = {"presentation": {"preparation_issues": [{
             "issue_id": "low-source", "q_id": "q1", "field": "stem", "code": "recognition_needs_review",
-            "status": "open", "severity": "warning", "details": {"confidence_reasons": ["low_confidence_content"]},
+            "status": "open", "severity": "warning", "details": {"confidence": 0.2},
         }]}}
     before = task_facade.get_task(**args, full=True)
     task_facade.update_problem(**args, q_id="q1", patch={"stem": "Corrected question text", "review_status": "edited"},
@@ -167,3 +176,26 @@ def test_question_low_confidence_edit_still_requires_confirmation():
     task_facade.update_problem(**args, q_id="q1", patch={"review_status": "confirmed"},
                                expected_revision=current["workflow_revision"])
     assert "question_review_blocked" not in task_facade.grading_readiness(**args)["blocking_issues"]
+
+
+@pytest.mark.parametrize("confidence,required", [(None, False), ("low", False), (.2499, True), (.25, False), (.5999, False), (.6, False)])
+def test_source_confidence_reaches_persisted_question_gate(confidence, required):
+    from backend.services.question_sources import attach_recognition_review
+    _seeded, args = _case(flags=[])
+    packages = {"q1": {}}
+    attach_recognition_review(packages, [{"recognition": {"operation_id": "source", "confidence": confidence, "coverage": {}}}])
+    with session_scope() as session:
+        question = session.scalar(select(AssignmentQuestionRecord))
+        question.source = {"presentation": packages["q1"]}
+    assert ("question_review_blocked" in task_facade.grading_readiness(**args)["blocking_issues"]) is required
+
+
+def test_source_failure_is_required_even_with_high_confidence():
+    from backend.services.question_sources import attach_recognition_review
+    _seeded, args = _case(flags=[])
+    packages = {"q1": {}}
+    attach_recognition_review(packages, [{"recognition": {"operation_id": "source", "confidence": .99, "error_code": "provider_unreachable", "coverage": {}}}])
+    with session_scope() as session:
+        question = session.scalar(select(AssignmentQuestionRecord))
+        question.source = {"presentation": packages["q1"]}
+    assert "question_review_blocked" in task_facade.grading_readiness(**args)["blocking_issues"]

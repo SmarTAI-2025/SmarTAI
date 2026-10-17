@@ -1,4 +1,5 @@
-import { isCorrectionReviewConfirmed, correctionReviewBlocked } from "@/components/tasks/resultsReviewModel";
+import { confidenceNeedsAttention, confidenceRequiresReview } from "@/lib/confidencePolicy";
+import { isCorrectionReviewConfirmed, correctionReviewBlocked, correctionReviewNextBlocked } from "@/components/tasks/resultsReviewModel";
 import { ReviewConfirmButton, ReviewBlockDialog, RetryFailedGrading, ReviewStageActions } from "@/components/tasks/ReviewConfirmation";
 import { type ReviewBlocker } from "@/lib/reviewConfirmation";
 import { DraftField, type DraftFieldHandle } from "@/components/ui/DraftField";
@@ -77,7 +78,7 @@ function ReviewDetailForm() {
   const reviewItems = useMemo(() => collectResultReviewItems(model, model.students, locale).filter(item => !isCorrectionReviewConfirmed(item.correction)), [model, locale]);
   const pendingReviewItems = reviewItems;
   const blockingReviewItems = useMemo(
-    () => reviewItems.filter((item) => correctionReviewBlocked(item.correction)),
+    () => reviewItems.filter((item) => correctionReviewNextBlocked(item.correction)),
     [reviewItems],
   );
   const requiredReviewKeys = useMemo(
@@ -692,6 +693,9 @@ function ReviewQuestionCard({ locale, student, question, correction, draft, requ
         </div>
         <div className="flex flex-wrap items-center gap-2">
           <ReviewConfirmButton title={question.label} locale={locale} confirmed={alreadyConfirmed} blocked={Boolean(correction && correctionReviewBlocked(correction))} busy={saving} disabled={!correction} onClick={onConfirm} />
+          {!alreadyConfirmed && correction && confidenceNeedsAttention(correction.confidence) && !confidenceRequiresReview(correction.confidence) ? (
+            <span className="text-[11px] text-muted-foreground">{tx(locale, "置信度偏低，可选核对", "Low confidence; optional check")}</span>
+          ) : null}
           <QuestionButtons locale={locale} previous={previous} next={next} onSelect={onNavigate} />
         </div>
       </header>
@@ -859,7 +863,7 @@ function PageState({ title, busy = false, action, href, onAction }: { title: str
 
 function reviewQuestionState(correction: Correction | undefined, required: boolean): ResultQuestionState {
   if (!correction) return "danger";
-  if (correctionReviewBlocked(correction)) return "danger";
+  if (correctionReviewNextBlocked(correction)) return "danger";
   const source = correctionScoreSource(correction);
   if (source === "teacher_confirmed_same" || source === "teacher_changed") return "confirmed";
   if (required) return "warning";

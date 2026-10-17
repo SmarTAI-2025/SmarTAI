@@ -1,6 +1,6 @@
 import { questionTypeLabel } from "@/lib/reviewLabels";
 import { ReviewConfirmButton, ReviewBlockDialog, ReviewStageActions } from "@/components/tasks/ReviewConfirmation";
-import { answerNeedsConfirmation, answerReviewAttention } from "@/lib/submissionReview";
+import { answerHasOptionalAdvice, answerNeedsConfirmation, answerReviewAttention } from "@/lib/submissionReview";
 import { submissionReviewBlockers, submissionConfirmationBlockers, answerReviewBlocked, studentIdentityIssue, studentIdentityReviewBlocked, type ReviewBlocker } from "@/lib/reviewConfirmation";
 import { DraftField, type DraftFieldHandle } from "@/components/ui/DraftField";
 import { useDraftProtection } from "@/hooks/useDraftProtection";
@@ -993,8 +993,9 @@ function AnswerReviewCard({ question, answer, draft, sourceFilename, previous, n
           </div>
           <p className="mt-1 text-[11px] text-muted-foreground">{tx(locale, "题目与学生作答在同一卡片内连续校对；题目只读。", "Review the read-only question and student response together in this card.")}</p>
         </div>
-        <div className="flex shrink-0 gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           {answer ? <ReviewConfirmButton title={tx(locale, `第 ${question.label} 题`, `Question ${question.label}`)} locale={locale} confirmed={state === "reviewed" && !editing} blocked={answerReviewAttention(answer) === "blocking"} busy={saving} save={editing} onClick={editing ? () => onSave(false) : onConfirm} /> : null}
+          {answerHasOptionalAdvice(answer) ? <span className="text-[11px] text-muted-foreground">{tx(locale, "识别结果可选核对，可继续", "Optional transcription check; you can continue")}</span> : null}
           <Button type="button" variant="secondary" className="h-9 px-3" disabled={!previous} onClick={() => previous && onNavigate(previous.id)}>
             <ArrowUp aria-hidden="true" className="h-4 w-4" />{t("answerReviewPreviousQuestion")}
           </Button>
@@ -1078,7 +1079,7 @@ function AnswerStateBadge({ state, answer, locale, t }: {
       state === "reviewed" && "bg-emerald-100 text-emerald-700 dark:bg-emerald-950/60 dark:text-emerald-200",
       state === "flagged" && "bg-red-100 text-red-700 dark:bg-red-950/70 dark:text-red-200",
       (state === "empty" || state === "missing") && "bg-emerald-100 text-emerald-700 dark:bg-emerald-950/60 dark:text-emerald-200",
-    )} title={state === "reviewed" ? undefined : (answer?.flag ?? []).map((flag) => formatSubmissionFlag(flag, locale)).join(" · ") || undefined}>
+    )} title={answerReviewAttention(answer) === "blocking" ? (answer?.flag ?? []).map((flag) => formatSubmissionFlag(flag, locale)).join(" · ") || undefined : undefined}>
       {state === "flagged" && lowConfidence ? tx(locale, "低置信", "Low confidence") : t(STATUS_KEYS[state])}
     </span>
   );

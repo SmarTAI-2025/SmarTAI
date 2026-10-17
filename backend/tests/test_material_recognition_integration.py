@@ -88,8 +88,8 @@ async def test_compatibility_auxiliary_upload_only_starts_review_plan(monkeypatc
 
 
 @pytest.mark.parametrize("confidence,match,recognition", [
-    (0.4, "exact", None), (0.9, "possible", None),
-    (0.9, "exact", {"confidence": "low", "coverage": {}}),
+    (0.2499, "exact", None), (0.9, "possible", None),
+    (0.9, "exact", {"confidence": "high", "coverage": {"failed_pages": [2]}}),
 ])
 def test_unsafe_test_candidates_never_mutate_or_consume_plan(monkeypatch, confidence, match, recognition):
     candidate = dict(candidate_id="c", q_id="q1", target="test_cases", test_cases=[dict(input="1", expected_output="2")],

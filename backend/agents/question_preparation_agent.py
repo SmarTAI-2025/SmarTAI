@@ -15,6 +15,7 @@ from collections.abc import Awaitable, Callable, Mapping, Sequence
 from copy import deepcopy
 from typing import Any, Dict, Iterable, List, Tuple
 import httpx
+from backend.domain.confidence_policy import confidence_needs_attention, confidence_requires_review
 
 from backend.agents.ingest_agent import (
     AICompletionCandidateOutput,
@@ -770,7 +771,7 @@ async def prepare_question_packages(
             if not value:
                 continue
             if target == "test_cases" and (draft.recognition_requires_review
-                    or candidate.confidence < 0.72 or candidate.match_status != "exact"):
+                    or confidence_requires_review(candidate.confidence) or candidate.match_status != "exact"):
                 issues[q_id].append(_issue(q_id, "programming_tests", "material_recognition_review_required",
                                           "error", [draft.source_token]))
                 continue
@@ -796,14 +797,14 @@ async def prepare_question_packages(
             problem_data[q_id]["material_provenance"] = provenance
 
             if (
-                float(candidate.confidence) < 0.72
+                confidence_needs_attention(candidate.confidence)
                 or candidate.match_status == "possible"
             ):
                 issues[q_id].append(
                     _issue(
                         q_id,
                         _issue_field(target),
-                        "low_confidence",
+                        "ambiguous_question_match" if candidate.match_status == "possible" else "low_confidence",
                         "warning",
                         [draft.filename],
                     )

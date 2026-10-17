@@ -242,7 +242,7 @@ export interface Correction {
   score: number | null;
   provisional_score?: number | null;
   max_score: number;
-  confidence: number;
+  confidence: number | null;
   comment: string;
   steps: StepScore[];
   hits?: string[] | null;

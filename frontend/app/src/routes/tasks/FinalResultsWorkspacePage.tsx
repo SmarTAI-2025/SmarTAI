@@ -505,11 +505,9 @@ function QuestionPreviewRow({ locale, question }: { locale: Locale; question: Qu
 
 function StudentPreviewRow({ locale, student }: { locale: Locale; student: StudentSummary }) {
   return (
-    <div className="grid grid-cols-[minmax(0,1fr)_auto_auto] items-center gap-3 py-2 first:pt-1 last:pb-0">
+    <div className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-3 py-2 first:pt-1 last:pb-0">
       <span className="truncate text-[12px] font-semibold text-foreground">{student.name} · {student.id}</span>
-      <span className="text-[11px] text-muted-foreground">
-        {student.lowConfidenceCount ? tx(locale, `${student.lowConfidenceCount} 个低置信题次`, `${student.lowConfidenceCount} low-confidence`) : tx(locale, "无低置信题次", "No low-confidence items")}
-      </span>
+
       <span className="min-w-10 text-right text-[12px] font-bold text-primary">{formatPercent(student.percent)}</span>
     </div>
   );

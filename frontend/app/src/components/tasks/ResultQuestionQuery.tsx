@@ -1,3 +1,4 @@
+import { hasReviewSignal, isLowConfidence } from "@/components/tasks/resultsModel";
 import { useMemo, useState } from "react";
 import { TaskQueryBar } from "@/components/tasks/AskQueryBar";
 import { effectiveCorrectionScore, type QuestionSummary } from "@/components/tasks/resultsModel";
@@ -14,11 +15,10 @@ export function scopeResultQuestions(questions: QuestionSummary[], studentId?: s
     const correction = entries[0]?.correction;
     const score = correction ? effectiveCorrectionScore(correction) : null;
     const maximum = correction?.max_score ?? question.maxScore;
-    const confidence = correction && Number.isFinite(correction.confidence) ? (correction.confidence > 1 ? correction.confidence / 100 : correction.confidence) : null;
     return { ...question, entries, count: entries.length, avgScore: score, minScore: score, maxObservedScore: score,
       maxScore: maximum, avgPercent: score !== null && maximum > 0 ? score / maximum * 100 : null,
-      lowConfidenceCount: confidence !== null && confidence < 0.65 ? 1 : 0,
-      reviewCount: correction?.requires_human_review ? 1 : 0 };
+      lowConfidenceCount: correction && isLowConfidence(correction) ? 1 : 0,
+      reviewCount: correction && hasReviewSignal(correction) ? 1 : 0 };
   });
 }
 

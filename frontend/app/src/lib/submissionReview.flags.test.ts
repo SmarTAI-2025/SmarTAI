@@ -39,10 +39,10 @@ describe("OCR review labels", () => {
     expect(studentNeedsAttention({ stu_id: "s1", stu_name: "Sample", stu_ans: answers }, answers.map(answer => ({ id: answer.q_id, label: answer.number, type: answer.type, stem: "" })))).toBe(false);
   });
 
-  it.each(["very_low_confidence", "recognition_low_confidence", "low_confidence"])("keeps %s pending until explicit confirmation", (flag) => {
+  it.each(["very_low_confidence", "recognition_low_confidence", "low_confidence"])("keeps uncalibrated %s out of the required queue", (flag) => {
     const answer = { q_id: "q1", number: "1", type: "proof", content: "Readable answer", flag: [flag] };
-    expect(answerReviewAttention(answer)).toBe("blocking");
-    expect(formatSubmissionFlag(flag, "zh-CN")).toContain("核对并确认");
+    expect(answerReviewAttention(answer)).toBe("none");
+    expect(formatSubmissionFlag(flag, "zh-CN")).toContain("可继续");
     expect(answerReviewAttention({ ...answer, flag: ["recognition_failed"] })).toBe("blocking");
     expect(answerReviewAttention({ ...answer, flag: ["recognition_repaired_needs_confirmation"] })).toBe("blocking");
     expect(answerReviewAttention({ ...answer, review_status: "confirmed" })).toBe("none");

@@ -476,8 +476,8 @@ function AnswerStatusLink({
     missing: "submissionReviewCellMissing",
   };
   const stateLabel = state === "reviewed" ? (locale === "zh-CN" ? "已确认" : "Confirmed") : answerReviewBlocked(answer) ? (locale === "zh-CN" ? "需处理" : "Action required") : t(labels[state]);
-  const label = state !== "reviewed" && answer?.flag?.length ? `${stateLabel} · ${answer.flag.map((flag) => formatSubmissionFlag(flag, locale)).join(" · ")}` : stateLabel;
   const attention = answerReviewAttention(answer);
+  const label = attention === "blocking" && answer?.flag?.length ? `${stateLabel} · ${answer.flag.map((flag) => formatSubmissionFlag(flag, locale)).join(" · ")}` : stateLabel;
   const tone: MatrixStatusTone = state === "reviewed" ? "reviewed" : attention === "blocking" ? "error" : attention === "advisory" ? "warning" : "ok";
 
   return <MatrixStatusCell to={to} label={label} tone={tone} />;

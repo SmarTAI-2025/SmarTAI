@@ -1,3 +1,4 @@
+import { confidenceValue } from "@/lib/confidencePolicy";
 import { correctionReviewLabels } from "@/components/tasks/resultsReviewModel";
 import { ResultQuestionQuery, useResultQuestionFilter } from "@/components/tasks/ResultQuestionQuery";
 import { ArrowDown, ArrowLeft, ArrowRight, ArrowUp, UserRound } from "lucide-react";
@@ -434,8 +435,7 @@ function entryPercent(entry: QuestionEntry): number {
 }
 
 function normalizeConfidence(value: number | null | undefined): number | null {
-  if (typeof value !== "number" || !Number.isFinite(value)) return null;
-  return value > 1 ? value / 100 : value;
+  return confidenceValue(value);
 }
 
 function median(values: number[]): number | null {

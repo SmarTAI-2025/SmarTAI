@@ -1,3 +1,4 @@
+import { confidenceValue, confidenceNeedsAttention, confidenceRequiresReview } from "@/lib/confidencePolicy";
 import { materialSelectionVersion } from "@/lib/editorVersions";
 import { useDraftProtection } from "@/hooks/useDraftProtection";
 import { useDraftLeave } from "@/hooks/useDraftLeave";
@@ -52,7 +53,7 @@ function QuestionMaterialImportReviewPageForm() {
     initializedJobRef.current = jobId;
     const defaultAccepted = plan.candidates
       .filter((candidate) => !candidate.would_overwrite && candidate.match_status === "exact"
-        && candidate.confidence >= 0.72 && !candidate.recognition_requires_review)
+        && confidenceValue(candidate.confidence) !== null && !confidenceNeedsAttention(candidate.confidence) && !candidate.recognition_requires_review)
       .map((candidate) => candidate.candidate_id);
     setAcceptedIds(defaultAccepted);
     setOverwriteIds([]);
@@ -283,7 +284,7 @@ function CandidateMatrix({ candidates, problems, acceptedIds, overwriteIds, disa
             const accepted = acceptedIds.includes(candidate.candidate_id);
             const overwrite = overwriteIds.includes(candidate.candidate_id);
             const testBlocked = candidate.target === "test_cases" && (candidate.recognition_requires_review
-              || candidate.match_status !== "exact" || candidate.confidence < 0.72);
+              || candidate.match_status !== "exact" || confidenceRequiresReview(candidate.confidence));
             return (
               <tr key={candidate.candidate_id} className="align-top hover:bg-muted/20">
                 <td className="px-5 py-3 font-semibold text-foreground">{problem?.number || candidate.q_id}</td>
@@ -293,7 +294,7 @@ function CandidateMatrix({ candidates, problems, acceptedIds, overwriteIds, disa
                     <span className="h-1.5 w-1.5 rounded-full bg-current" />
                     {materialImportText(locale, conflict ? "conflict" : possible ? "possible" : "exact")}
                   </span>
-                  <span className="mt-1 block text-[11px] text-muted-foreground">{Math.round(candidate.confidence * 100)}%</span>
+                  <span className="mt-1 block text-[11px] text-muted-foreground">{confidenceValue(candidate.confidence) === null ? "—" : `${Math.round(candidate.confidence * 100)}%`}</span>
                   {candidate.recognition_requires_review ? <span className="mt-1 block text-[11px] text-warning">{locale === "zh-CN" ? "原件识别待核对" : "Source recognition needs review"}</span> : null}
                 </td>
                 <td className="px-3 py-3">
