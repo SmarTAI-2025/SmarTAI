@@ -400,10 +400,10 @@ describe("ExpertsPage editable vendor Base URL", () => {
   it.each([
     ["provider_api_key_invalid", "zh-CN", /API key 含有无法用于请求的字符/],
     ["expert_verification_encoding_error", "zh-CN", /验证请求包含无法编码的字符/],
-    ["provider_model_access_denied", "zh-CN", /当前 Key 所属团队未获准使用此模型/],
+    ["provider_model_access_denied", "zh-CN", /服务商或中转站以团队模型权限为由拒绝了本次请求。若该模型在其他调用中可用/],
     ["provider_api_key_invalid", "en-US", /API key contains characters that cannot be sent/],
     ["expert_verification_encoding_error", "en-US", /verification request contains characters that cannot be encoded/],
-    ["provider_model_access_denied", "en-US", /team associated with this key is not allowed to use this model/],
+    ["provider_model_access_denied", "en-US", /provider or relay rejected this request due to team\/model access. If the model works in other calls/],
   ])("shows a specific safe reason for %s in %s text and image results", (code, locale, message) => {
     window.localStorage.setItem("smartai_locale", locale);
     hookState.experts = [{

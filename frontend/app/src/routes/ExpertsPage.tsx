@@ -1541,7 +1541,7 @@ function expertErrorMessage(code: string | null | undefined, locale: "zh-CN" | "
   const messages: Record<string, [string, string]> = {
     provider_api_key_invalid: ["API key 含有无法用于请求的字符（如中文、全角符号、换行或隐藏字符），请重新复制完整密钥后保存。", "The API key contains characters that cannot be sent in a request, such as non-ASCII or hidden characters. Copy the full key again and save."],
     expert_verification_encoding_error: ["验证请求包含无法编码的字符，请检查 API key 和配置内容。", "The verification request contains characters that cannot be encoded. Check the API key and configuration."],
-    provider_model_access_denied: ["当前 Key 所属团队未获准使用此模型。请联系服务商或中转站管理员开通权限，或选择已授权的模型。", "The team associated with this key is not allowed to use this model. Ask the provider or relay administrator to grant access, or choose an authorized model."],
+    provider_model_access_denied: ["服务商或中转站以团队模型权限为由拒绝了本次请求。若该模型在其他调用中可用，请联系管理员核查本次请求。", "The provider or relay rejected this request due to team/model access. If the model works in other calls, ask the administrator to investigate this request."],
     expert_verification_auth_failed: ["密钥无效或没有调用权限。", "The key is invalid or lacks permission."],
     expert_verification_region_unsupported: ["服务商不支持当前网络出口所在地区。请确认网络和服务可用地区；更换密钥未必能解决。", "The provider does not support the current network region. Check network and regional availability; replacing the key may not help."],
     expert_verification_model_not_found: ["模型名称不存在或当前账户无权使用。", "The model was not found or is unavailable to this account."],

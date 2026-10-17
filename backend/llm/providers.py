@@ -1191,7 +1191,7 @@ class SafeRelayProvider(BaseProvider):
         if response.status_code >= 400:
             code = _response_error_code(response.status_code)
             if response.status_code == 403:
-                # Only this explicit reason proves a team/model entitlement failure.
+                # Classify only the upstream's explicit team/model access rejection.
                 # Neither the raw message nor arbitrary upstream codes leave this layer.
                 try:
                     body = response.json()
