@@ -4,6 +4,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock
 import hashlib
 import time
+import asyncio
 
 import pytest
 
@@ -19,11 +20,20 @@ from backend.tests.test_recognition_v2_artifacts import setup
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("retry_attempt,new_parent", [(2, False), (1, True)])
-async def test_saved_pdf_explicit_retry_reaches_failed_leaf(tmp_path, monkeypatch, retry_attempt, new_parent):
+@pytest.mark.parametrize("stopped", [False, True])
+async def test_saved_pdf_explicit_retry_reaches_failed_leaf(tmp_path, monkeypatch, retry_attempt, new_parent, stopped):
     agent, request, data, results = setup(tmp_path, pdf=True, pages=2, initial=[
         "Q1. x = -2", RecognitionError("provider_upstream_unavailable", submission_may_exist=True),
     ])
     agent.engine.decision = "keep_visual"
+    if stopped:
+        original = agent.engine.recognize
+        async def stop_second_page(request):
+            if request.page_number == 2:
+                agent.engine.reads.append(request)
+                raise asyncio.CancelledError()
+            return await original(request)
+        monkeypatch.setattr(agent.engine, "recognize", stop_second_page)
     storage = results.store.storage
     source = file_repository.save_file(
         storage=storage, owner_id=request.source.owner_id, assignment_id=request.source.business_id,
@@ -52,14 +62,19 @@ async def test_saved_pdf_explicit_retry_reaches_failed_leaf(tmp_path, monkeypatc
         return await task_preparation._recognize_saved_question_sources(
             sources, operation=operation, route=route, registry=None, reporter=ProgressReporter("synthetic-retry"))
 
-    with pytest.raises(RecognitionError) as first:
+    with pytest.raises(asyncio.CancelledError if stopped else RecognitionError) as first:
         await read()
-    assert first.value.code == "provider_submit_uncertain"
+    if not stopped:
+        assert first.value.code == "provider_submit_uncertain"
     before = len(agent.engine.reads)
     assert before > 0
-    with pytest.raises(RecognitionError):
-        await read()
-    assert len(agent.engine.reads) == before
+    if not stopped:
+        with pytest.raises(RecognitionError):
+            await read()
+        assert len(agent.engine.reads) == before
+    else:
+        monkeypatch.setattr(agent.engine, "recognize", original)
+        operation.payload = {"acknowledged_restart_from": "parent:1"}
     agent.engine.initial[1] = "Q2. x = -2"
     operation.attempt = retry_attempt
     if new_parent:

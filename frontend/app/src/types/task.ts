@@ -156,6 +156,7 @@ export interface StudentIdentityUpdateResponse {
 export type SubmissionIdentityMode = "filename" | "roster" | "manual_review";
 
 export type SubmissionSourceStatus =
+  | "manual_review"
   | "processing"
   | "parsed"
   | "failed"
@@ -169,6 +170,7 @@ export type SubmissionSourceInternalStatus =
   | "no_matching_answer";
 
 export interface SubmissionSourceSummary {
+  manual_review?: number;
   uploaded: number;
   parsed: number;
   failed: number;
@@ -201,7 +203,7 @@ export interface SubmissionSourceOutcome {
   reason_code?: string | null;
   recognition_reason_code?: string | null;
   page_diagnostics?: SubmissionPageDiagnostics | null;
-  resolution_status?: "identity_resolved" | null;
+  resolution_status?: "identity_resolved" | "manual_review" | "manual_resolved" | null;
   failure_phase?: string | null;
   retryable: boolean;
   student_candidate?: string | null;

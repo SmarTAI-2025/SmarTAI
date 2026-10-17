@@ -19,7 +19,8 @@ def latest_input_operation(*, task_id: str, owner_id: str, stage: str):
         return workflow, None
     operation = workflow_repository.get_operation(job_id, owner_id=owner_id)
     expected = "question_preparation" if stage == "problems" else "submission_recognition"
-    if operation.assignment_id != task_id or operation.operation_type != expected:
+    expected_types = {expected, "submission_manual_review"} if stage == "submissions" else {expected}
+    if operation.assignment_id != task_id or operation.operation_type not in expected_types:
         return workflow, None
     return workflow, operation
 

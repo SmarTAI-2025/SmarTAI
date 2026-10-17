@@ -36,13 +36,13 @@ export function SubmissionSourceOutcomePanel({
   }, [hash, sourceKey]);
   const counts = summary ?? summarize(sources);
   if (counts.uploaded <= 0) return null;
-  const hasTerminalAttention = counts.failed > 0 || counts.identity_needs_review > 0;
+  const hasTerminalAttention = counts.failed > 0 || counts.identity_needs_review > 0 || Boolean(counts.manual_review);
   const hasQuestionWarnings = sources.some((source) => source.unknown_question_ids.length > 0);
   const hasAttention = hasTerminalAttention || hasQuestionWarnings;
   const ordered = [...sources].sort((left, right) => {
     const priority = (item: SubmissionSourceOutcome) => (
       item.status === "failed" ? 0
-        : item.status === "identity_needs_review" ? 1
+        : item.status === "identity_needs_review" || item.status === "manual_review" ? 1
           : item.status === "processing" ? 2 : 3
     );
     return priority(left) - priority(right) || left.file_name.localeCompare(right.file_name);
@@ -67,7 +67,7 @@ export function SubmissionSourceOutcomePanel({
               : tx(locale, "。", ".")}
           </p>
         </div>
-        {taskId && hasAttention ? (
+        {taskId && hasAttention && !counts.manual_review ? (
           <Link
             to={`/tasks/${taskId}/submissions/upload`}
             className="inline-flex h-9 shrink-0 items-center justify-center gap-2 rounded-md border bg-card px-3 text-xs font-semibold text-foreground outline-none hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring"
@@ -82,6 +82,7 @@ export function SubmissionSourceOutcomePanel({
         <CountBadge tone="success" label={tx(locale, "成功", "Parsed")} value={counts.parsed} />
         <CountBadge tone="danger" label={tx(locale, "失败", "Failed")} value={counts.failed} />
         <CountBadge tone="warning" label={tx(locale, "身份待确认", "Identity review")} value={counts.identity_needs_review} />
+        {counts.manual_review ? <CountBadge tone="warning" label={tx(locale, "待人工处理", "Manual review")} value={counts.manual_review} /> : null}
         {counts.pending > 0 ? (
           <CountBadge tone="neutral" label={tx(locale, "处理中", "Processing")} value={counts.pending} />
         ) : null}
@@ -112,14 +113,14 @@ function SourceOutcomeRow({ source, locale }: { source: SubmissionSourceOutcome;
   const copy = getSubmissionSourceReasonCopy(source, locale);
   const Icon = source.status === "parsed"
     ? CheckCircle2
-    : source.status === "identity_needs_review"
+    : source.status === "identity_needs_review" || source.status === "manual_review"
       ? UserRoundSearch
       : source.status === "processing"
         ? Loader2
         : AlertTriangle;
   const tone = source.status === "parsed"
     ? "text-emerald-700 bg-emerald-50 dark:bg-emerald-950/40 dark:text-emerald-200"
-    : source.status === "identity_needs_review"
+    : source.status === "identity_needs_review" || source.status === "manual_review"
       ? "text-amber-700 bg-amber-50 dark:bg-amber-950/40 dark:text-amber-200"
       : source.status === "processing"
         ? "text-muted-foreground bg-slate-100 dark:bg-slate-800"
@@ -160,7 +161,7 @@ function SourceOutcomeRow({ source, locale }: { source: SubmissionSourceOutcome;
               <dl className="mt-1.5 grid gap-x-4 gap-y-1 rounded-md bg-slate-50 px-2.5 py-2 text-[10px] dark:bg-slate-950/40 sm:grid-cols-2">
                 <TechnicalRow label={tx(locale, "错误代码", "Error code")} value={source.reason_code} />
                 <TechnicalRow label={tx(locale, "原识别代码", "Recognition code")} value={source.recognition_reason_code && source.recognition_reason_code !== source.reason_code ? source.recognition_reason_code : null} />
-                <TechnicalRow label={tx(locale, "处理结果", "Resolution")} value={source.resolution_status === "identity_resolved" ? tx(locale, "教师已确认身份", "Identity confirmed by teacher") : null} />
+                <TechnicalRow label={tx(locale, "处理结果", "Resolution")} value={source.resolution_status === "identity_resolved" ? tx(locale, "教师已确认身份", "Identity confirmed by teacher") : source.resolution_status === "manual_review" ? tx(locale, "等待人工处理", "Awaiting manual review") : source.resolution_status === "manual_resolved" ? tx(locale, "教师已补齐确认", "Completed by teacher") : null} />
                 <TechnicalRow label={tx(locale, "失败阶段", "Failure phase")} value={source.failure_phase} />
                 <TechnicalRow label={tx(locale, "任务编号", "Job ID")} value={source.job_id} />
                 <TechnicalRow label={tx(locale, "来源编号", "Source ID")} value={source.source_id} />
@@ -231,14 +232,16 @@ function summarize(sources: SubmissionSourceOutcome[]): SubmissionSourceSummary 
     parsed: sources.filter((item) => item.status === "parsed").length,
     failed: sources.filter((item) => item.status === "failed").length,
     identity_needs_review: sources.filter((item) => item.status === "identity_needs_review").length,
+    manual_review: sources.filter((item) => item.status === "manual_review").length,
     pending: sources.filter((item) => item.status === "processing").length,
   };
 }
 
 function equation(summary: SubmissionSourceSummary, locale: Locale): string {
-  const base = locale === "en-US"
+  let base = locale === "en-US"
     ? `${summary.uploaded} uploaded = ${summary.parsed} parsed + ${summary.failed} failed + ${summary.identity_needs_review} identity review`
     : `${summary.uploaded} 份上传 = ${summary.parsed} 份成功 + ${summary.failed} 份失败 + ${summary.identity_needs_review} 份身份待确认`;
+  if (summary.manual_review) base += locale === "en-US" ? ` + ${summary.manual_review} manual review` : ` + ${summary.manual_review} 份待人工处理`;
   if (!summary.pending) return base;
   return locale === "en-US" ? `${base} + ${summary.pending} processing` : `${base} + ${summary.pending} 份处理中`;
 }

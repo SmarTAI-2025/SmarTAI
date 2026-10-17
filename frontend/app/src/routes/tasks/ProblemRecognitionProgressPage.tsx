@@ -117,6 +117,18 @@ export function ProblemRecognitionProgressPage() {
       returnTo: `/tasks/${taskId}/problems/progress`,
     });
     const failedJobId = taskState?.last_failed_job_id;
+    const openManualReview = async () => {
+      if (!failedJobId || openingManual || manualPreparation.isPending || taskState?.workflow_revision === undefined) return;
+      setOpeningManual(true);
+      setRetryFailure(null);
+      try {
+        const result = await manualPreparation.mutateAsync({ taskId, jobId: failedJobId,
+          expectedWorkflowRevision: taskState.workflow_revision });
+        navigate(result.first_question_id
+          ? `/tasks/${taskId}/questions/${encodeURIComponent(result.first_question_id)}/content?manual=1#question-${encodeURIComponent(result.first_question_id)}`
+          : `/tasks/${taskId}/questions?manualJob=${encodeURIComponent(failedJobId)}`, { replace: true });
+      } catch (error) { setRetryFailure(error); setOpeningManual(false); }
+    };
     const submissionUncertain = taskState?.error === "provider_submit_uncertain" || getAPIErrorCode(retryFailure) === "provider_submit_uncertain";
     if (submissionUncertain) {
       info.description += locale === "zh-CN"
@@ -180,7 +192,8 @@ export function ProblemRecognitionProgressPage() {
             </label>
           ) : null}
           {paused && !retryFailure ? <TaskPausedState status="problems_paused"
-            onContinue={() => void retryPreparedSources()} busy={isRefreshing || retryPreparation.isPending}
+            onContinue={() => void retryPreparedSources()} onManual={failedJobId ? () => void openManualReview() : undefined}
+            busy={isRefreshing || retryPreparation.isPending || manualPreparation.isPending || openingManual}
             disabled={!canRetryPreparedSources} /> : <RecoverableActionState
             info={info}
             locale={locale}
@@ -198,16 +211,7 @@ export function ProblemRecognitionProgressPage() {
                 label: locale === "zh-CN" ? "手动补全失败题目" : "Complete failed questions manually",
                 busy: manualPreparation.isPending,
                 disabled: retryPreparation.isPending || openingManual,
-                onClick: async () => {
-                  if (openingManual || manualPreparation.isPending || taskState?.workflow_revision === undefined) return;
-                  setOpeningManual(true);
-                  setRetryFailure(null);
-                  try {
-                    const result = await manualPreparation.mutateAsync({ taskId, jobId: failedJobId,
-                      expectedWorkflowRevision: taskState.workflow_revision });
-                    navigate(`/tasks/${taskId}/questions/${encodeURIComponent(result.first_question_id)}/content?manual=1#question-${encodeURIComponent(result.first_question_id)}`, { replace: true });
-                  } catch (error) { setRetryFailure(error); setOpeningManual(false); }
-                },
+                onClick: openManualReview,
               }] : []),
               { label: t("problemProgressRefresh"), onClick: () => void refresh(), busy: isRefreshing || retryPreparation.isPending },
             ]}

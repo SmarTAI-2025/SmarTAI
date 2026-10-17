@@ -119,7 +119,7 @@ export function questionReviewBlockers(problems: ProblemInfo[], taskId: string, 
   }));
 }
 export function answerReviewBlocked(answer?: StudentAnswerInfo): boolean {
-  return Boolean(answer?.flag?.some(flag => ["recognition_failed", "parse_failed", "no_matching_answer"].includes(flag)));
+  return Boolean(answer?.flag?.some(flag => ["recognition_failed", "parse_failed", "no_matching_answer", "recognition_manual_pending"].includes(flag)));
 }
 export function answerReviewNextBlocked(answer?: StudentAnswerInfo): boolean {
   return answerReviewBlocked(answer) || Boolean(answer?.review_status !== "confirmed"

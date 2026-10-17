@@ -620,6 +620,19 @@ async def retry_submission_recognition_endpoint(
         return domain_error_response(exc)
 
 
+@router.post("/{task_id}/submission-recognition/{job_id}/manual-review")
+async def manually_complete_submission_recognition(
+    task_id: str, job_id: str, request: RetrySubmissionRecognitionRequest,
+    current: User = Depends(require_teacher),
+):
+    from backend.services.submission_manual_review import continue_manually
+    try:
+        return await continue_manually(task_id=task_id, owner_id=current.id, job_id=job_id,
+                                       expected_revision=request.expected_workflow_revision)
+    except DomainError as exc:
+        return domain_error_response(exc)
+
+
 def _parse_roster(body: bytes) -> list[dict[str, str]]:
     try:
         text = body.decode("utf-8-sig")

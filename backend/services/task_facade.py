@@ -544,6 +544,16 @@ def _submission_source_projection(workflow, owner_id: str) -> tuple[dict[str, in
         for presentation in presentations.values()
         if presentation.source_id and presentation.identity_status == "matched"
     }
+    manual_review = operation.operation_type == "submission_manual_review"
+    manually_resolved_sources = set()
+    if manual_review:
+        for student in _serialize_student_data(workflow.assignment_id, owner_id, _active_submissions(workflow.assignment_id, owner_id)).values():
+            if student.get("identity_status") == "matched" and not any(
+                _answer_recognition_failures(answer.get("flag"))
+                or (_REQUIRED_ANSWER_CONFIRMATION_FLAGS.intersection(answer.get("flag") or []) and answer.get("review_status") != "confirmed")
+                for answer in student["stu_ans"]
+            ):
+                manually_resolved_sources.add(student.get("source_id"))
     rows: list[dict] = []
     summary = dict(empty)
     for result in results:
@@ -568,7 +578,15 @@ def _submission_source_projection(workflow, owner_id: str) -> tuple[dict[str, in
             if terminal_without_outcome
             else (None, None)
         )
-        if terminal_without_outcome:
+        if manual_review and outcome is not None and result.source.id not in manually_resolved_sources:
+            internal_status = outcome.status
+            external_status = "manual_review"
+            summary["manual_review"] = summary.get("manual_review", 0) + 1
+        elif manual_review and outcome is not None:
+            external_status = "parsed"
+            internal_status = outcome.status
+            summary["parsed"] += 1
+        elif terminal_without_outcome:
             external_status = "failed"
             internal_status = "parse_failed"
             summary["failed"] += 1
@@ -618,6 +636,7 @@ def _submission_source_projection(workflow, owner_id: str) -> tuple[dict[str, in
                 if outcome
                 and outcome.status == "identity_conflict"
                 and result.source.id in resolved_identity_sources
+                else ("manual_resolved" if result.source.id in manually_resolved_sources else "manual_review") if manual_review
                 else None
             ),
             "failure_phase": safe_phase,
@@ -3499,6 +3518,7 @@ def _commit_imported_submissions(
     source_id: str | None = None,
     source_artifact_file_id: str | None = None,
     source_summary: dict[str, int] | None = None,
+    manual_recovery: bool = False,
 ) -> int:
     """Publish and persist a parsed teacher batch in one transaction.
 
@@ -3530,6 +3550,12 @@ def _commit_imported_submissions(
         )
         if workflow is None:
             raise NotFound("workflow")
+        if manual_recovery and (
+            operation is None or operation.operation_type != "submission_manual_review"
+            or workflow.active_job_id
+            or workflow.last_failed_job_id != (operation.payload or {}).get("manual_origin_id")
+        ):
+            raise InvalidTransition("Manual recognition recovery is no longer current.", code="workflow_busy")
         if (
             expected_workflow_revision is not None
             and workflow.workflow_revision != expected_workflow_revision
@@ -3599,6 +3625,8 @@ def _commit_imported_submissions(
             workflow.active_job_id = None
             workflow.submission_file_name = submission_file_name
             workflow.pending_submission_file_name = None
+            if manual_recovery:
+                workflow.parse_job_id = operation.id
             workflow.grading_job_id = None
             workflow.last_failed_job_id = None
             workflow.analysis_status = "not_generated"
@@ -3638,7 +3666,8 @@ def _commit_imported_submissions(
                         source_outcome_repository.WorkflowSourceItemRecord.attempt
                         == expected_operation_attempt,
                         source_outcome_repository.WorkflowSourceOutcomeRecord.status.in_(
-                            ("parsed", "identity_conflict")
+                            ("parsed", "identity_conflict", "parse_failed", "no_matching_answer")
+                            if manual_recovery else ("parsed", "identity_conflict")
                         ),
                     )
                 )
@@ -4104,6 +4133,8 @@ def grading_readiness(
             issues.append("submission_sources_pending")
         if source_summary["failed"]:
             issues.append("submission_sources_failed")
+        if source_summary.get("manual_review"):
+            issues.append("submission_recognition_blocked")
         if source_summary["identity_needs_review"]:
             issues.append("submission_identities_unresolved")
 
@@ -4159,7 +4190,7 @@ def grading_readiness(
     }
 
 
-_FAILED_ANSWER_REVIEW_FLAGS = frozenset({"recognition_failed", "parse_failed", "no_matching_answer"})
+_FAILED_ANSWER_REVIEW_FLAGS = frozenset({"recognition_failed", "parse_failed", "no_matching_answer", "recognition_manual_pending"})
 _REQUIRED_ANSWER_CONFIRMATION_FLAGS = frozenset({
     "recognition_repaired_needs_confirmation", "recognition_very_low_confidence",
 })
@@ -4834,11 +4865,15 @@ def update_student_answer(
         content_changed = patch.get("content") is not None and patch["content"] != target.content
         failed_flags = _FAILED_ANSWER_REVIEW_FLAGS | _answer_recognition_failures(target.flag)
         original_failures = _answer_recognition_failures(target.flag)
-        if (content_changed and str(patch.get("content") or "").strip()
+        manual_blank = ("recognition_manual_pending" in (target.flag or [])
+                        and "manual_blank_confirmed" in (patch.get("flag") or [])
+                        and patch.get("content") == "" and patch.get("review_status") == "confirmed")
+        if manual_blank or (content_changed and str(patch.get("content") or "").strip()
                 and str(patch["content"]).strip() != str(target.content or "").strip()):
             # A teacher's replacement text repairs recognition failures while
             # preserving unrelated source/authorship observations.
-            patch = {**patch, "flag": [flag for flag in (patch.get("flag", target.flag) or []) if flag not in failed_flags]}
+            repaired_flags = failed_flags | {"recognition_manual_pending", "recognition_paused", "recognition_incomplete"}
+            patch = {**patch, "flag": [flag for flag in (patch.get("flag", target.flag) or []) if flag not in repaired_flags]}
             if original_failures and patch.get("review_status") != "confirmed":
                 patch["flag"] = list(dict.fromkeys([
                     *patch["flag"], "recognition_repaired_needs_confirmation",
