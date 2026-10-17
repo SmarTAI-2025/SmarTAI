@@ -103,13 +103,13 @@ function AddSubmissionsForm({ taskQuery, submittedInput }: { taskQuery: ReturnTy
   const hasStoredFile = Boolean(draft.value.storedFileId);
   const hasSavedRoster = Boolean(draft.value.savedRosterJobId && draft.value.savedRosterCount);
   const canRetryOriginal = Boolean(
-    task?.status === "error"
+    (task?.status === "error" || task?.status === "submissions_paused")
       && task.last_failed_job_id
       && task.pending_submission_file_name
       && !selectedFile,
   );
   const retryLabel = canRetryOriginal && !hasStoredFile
-    ? workflowRetryLabel(locale)
+    ? task?.status === "submissions_paused" ? localText(locale, "继续识别", "Continue Recognition") : workflowRetryLabel(locale)
     : localText(locale, "重新识别全部作答", "Recognize All Submissions Again");
   const isPending = parseSubmissions.isPending || retryRecognition.isPending;
   const visibleFileName = selectedFile?.name ?? (

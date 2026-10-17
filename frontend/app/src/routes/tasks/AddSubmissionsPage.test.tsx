@@ -233,7 +233,7 @@ describe("AddSubmissionsPage OCR uploads", () => {
       available: true, identity_mode: "filename", recognition_provider_id: "provider-default" };
     renderPage();
     await waitFor(() => expect(screen.getByLabelText("作答识别模型")).toHaveValue("provider-default"));
-    fireEvent.click(screen.getByRole("button", { name: restored ? "重新识别全部作答" : "重试失败项" }));
+    fireEvent.click(screen.getByRole("button", { name: restored ? "重新识别全部作答" : legacy ? "重试失败项" : "继续识别" }));
     await screen.findByText("progress page");
     expect(restored ? mutateAsync : retryMutateAsync).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
       expectedWorkflowRevision: 2, acknowledgePossibleDuplicateCall: true,
