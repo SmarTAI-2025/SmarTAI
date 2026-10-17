@@ -71,6 +71,55 @@ async def test_pending_before_provider_cancel_never_replays(tmp_path):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("acknowledge,retry_cancelled", [(False, False), (True, False), (True, True)])
+async def test_pending_restart_requires_ack_and_never_replays_active_or_uncertain_retry(tmp_path, acknowledge, retry_cancelled):
+    service, request, data, engine = runner(tmp_path)
+    original_read = engine.recognize
+    entered = asyncio.Event()
+    calls = 0
+    should_block = True
+
+    async def controlled(unit):
+        nonlocal calls
+        calls += 1
+        entered.set()
+        if should_block:
+            await asyncio.Event().wait()
+        return await original_read(unit)
+
+    engine.recognize = controlled
+    initial = asyncio.create_task(run(service, request, data, engine))
+    await asyncio.wait_for(entered.wait(), timeout=15)
+    args = dict(engine=engine, prompt_version="faithful-reader-v1",
+                authorized_owner_id=request.source.owner_id, retry_key="acknowledged-parent:1",
+                acknowledge_pending_retry=acknowledge)
+    assert (await service.run(request, data, **args)).status == "already_running"
+    assert calls == 1  # Even acknowledgement cannot bypass an active lease.
+    initial.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await initial
+
+    should_block = retry_cancelled
+    entered.clear()
+    if retry_cancelled:
+        retry = asyncio.create_task(service.run(request, data, **args))
+        await asyncio.wait_for(entered.wait(), timeout=15)
+        retry.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await retry
+    result = await service.run(request, data, **args)
+    assert result.status == ("completed" if acknowledge and not retry_cancelled else "needs_review")
+    assert calls == (2 if acknowledge else 1)
+    # Repeating the same acknowledged action never creates a third paid call.
+    if not acknowledge:
+        assert result.safe_error_code == "provider_submit_uncertain"
+    else:
+        again = await service.run(request, data, **args)
+        assert again.status == ("needs_review" if retry_cancelled else "already_done")
+        assert calls == 2
+
+
+@pytest.mark.asyncio
 async def test_confirmed_first_page_reused_after_local_interruption(tmp_path, monkeypatch):
     service, request, data, engine = runner(tmp_path, pdf=True, pages=2, initial=["literal 1 + 1 = 3"])
     from backend.services.recognition_runs import _GuardedCalls

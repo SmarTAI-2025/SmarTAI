@@ -155,7 +155,7 @@ class QuestionSourceRead:
 async def read_question_source(*, owner_id, task_id, content, filename, content_type=None,
                                route: StageProviderRoute, registry, stored_file_id=None,
                                extraction_hint="", options=None, purpose="problems", reporter=None, text_reader=None,
-                               allow_vision=None, binding=None, retry_key=None):
+                               allow_vision=None, binding=None, retry_key=None, acknowledge_pending_retry=False):
     from backend.services.source_files import persist_problem_source
 
     scope = question_recognition_options(options, extraction_hint=extraction_hint)
@@ -234,7 +234,7 @@ async def read_question_source(*, owner_id, task_id, content, filename, content_
             return QuestionSourceRead(text, summary, stored_file_id)
         run = await service.run(
             request, content, engine=engine, prompt_version=PROMPT_VERSION, authorized_owner_id=owner_id, binding=binding,
-            retry_key=retry_key,
+            retry_key=retry_key, acknowledge_pending_retry=acknowledge_pending_retry,
         )
         if media_type == "application/pdf" and allow_vision and engine is not None and run.safe_error_code == "provider_vision_not_supported":
             if total_pages is not None:
@@ -242,6 +242,7 @@ async def read_question_source(*, owner_id, task_id, content, filename, content_
             run = await service.run(
                 request, content, engine=None, prompt_version=PROMPT_VERSION,
                 authorized_owner_id=owner_id, binding=binding, retry_key=retry_key,
+                acknowledge_pending_retry=acknowledge_pending_retry,
             )
     if run.status == "already_running":
         raise RecognitionError("recognition_already_running")
