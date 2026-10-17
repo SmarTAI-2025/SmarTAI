@@ -56,6 +56,7 @@ from backend.db.models import (
 from backend.db.file_repository import get_file
 from backend.db.session import session_scope
 from backend.domain import education
+from backend.domain.confidence_policy import confidence_requires_review, question_issue_requires_confirmation
 from backend.domain.errors import (
     DomainError,
     DuplicateActiveRun,
@@ -4160,7 +4161,7 @@ def grading_readiness(
 
 _FAILED_ANSWER_REVIEW_FLAGS = frozenset({"recognition_failed", "parse_failed", "no_matching_answer"})
 _REQUIRED_ANSWER_CONFIRMATION_FLAGS = frozenset({
-    "recognition_repaired_needs_confirmation", "very_low_confidence", "recognition_low_confidence", "low_confidence",
+    "recognition_repaired_needs_confirmation", "recognition_very_low_confidence",
 })
 
 
@@ -4183,8 +4184,9 @@ def _effective_question_issues(presentation):
     issues = []
     for issue in presentation.get("preparation_issues", []):
         coverage = (issue.get("details") or {}).get("coverage") or {}
-        if (issue.get("code") == "recognition_partial" and issue.get("status") != "resolved"
-                and any(coverage.get(key) for key in ("failed_pages", "unprocessed_pages", "missing_targets"))):
+        if (issue.get("code") in {"recognition_partial", "recognition_needs_review"} and issue.get("status") != "resolved"
+                and ((issue.get("details") or {}).get("error_code")
+                     or any(coverage.get(key) for key in ("failed_pages", "unprocessed_pages", "missing_targets")))):
             issue = {**issue, "severity": "blocking", "status": "open"}
         issues.append(issue)
     return issues
@@ -4196,10 +4198,7 @@ def _question_review_blockers(questions) -> list[str]:
         presentation = (question.source or {}).get("presentation") or {}
         review_issues = _effective_question_issues(presentation)
         if presentation.get("review_status") != "confirmed" and any(
-            (
-                issue.get("code") == "low_confidence"
-                or "low_confidence_content" in (issue.get("details") or {}).get("confidence_reasons", [])
-            ) for issue in review_issues
+            question_issue_requires_confirmation(issue, presentation) for issue in review_issues
         ):
             issues.append("question_review_blocked")
         if (any(issue.get("code") == "manual_completion_required" for issue in review_issues)
@@ -4538,7 +4537,7 @@ def _serialize_correction(result) -> dict:
         "score": score,
         "provisional_score": result.ai_score,
         "max_score": result.ai_max_score,
-        "confidence": result.ai_confidence or 0,
+        "confidence": result.ai_confidence,
         "comment": result.ai_comment,
         "steps": result.ai_steps,
         "hits": None, "logs": None,
@@ -4608,8 +4607,7 @@ def update_problem(
         manual_markers = [issue for issue in presentation.get("preparation_issues", [])
                           if issue.get("code") == "manual_completion_required"]
         protected_markers = [issue for issue in presentation.get("preparation_issues", [])
-                            if issue.get("severity") == "blocking" or issue.get("code") == "low_confidence"
-                            or "low_confidence_content" in (issue.get("details") or {}).get("confidence_reasons", [])]
+                            if question_issue_requires_confirmation(issue, presentation)]
         for key in (
             "review_status", "solution_code", "material_provenance",
             "ai_completion_provenance", "preparation_issues",
@@ -5123,6 +5121,8 @@ def _correction_review_blocks_finalization(result) -> bool:
     return (
         result.result_status in education.NON_SCOREABLE_RESULT_STATUSES
         or not valid_score(result.effective_score)
+        or (confidence_requires_review(result.ai_confidence)
+            and (result.teacher_review or {}).get("confirmed") is not True)
         or (not valid_score(result.ai_score)
             and (result.teacher_review or {}).get("confirmed") is not True)
     )
@@ -5147,7 +5147,9 @@ def finalization(*, task_id: str, owner_id: str) -> dict:
     confirmed_required_count = 0
     if run is not None:
         for result in grading_repository.list_results_for_run(run.id):
-            if result.initial_requires_review:
+            if (_correction_review_blocks_finalization(result)
+                    or confidence_requires_review(result.ai_confidence)
+                    or result.ai_score is None):
                 required_review_count += 1
                 review = result.teacher_review or {}
                 if (

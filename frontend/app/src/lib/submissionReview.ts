@@ -46,9 +46,10 @@ export function formatSubmissionFlag(flag: string, locale: Locale): string {
     parse_failed: ["作答解析失败，请修正并确认", "Answer parsing failed; correct and confirm"],
     no_matching_answer: ["未识别到对应作答，请对照原件修正并确认", "No matching answer recognized; correct against the source and confirm"],
     recognition_repaired_needs_confirmation: ["识别问题已修正，请确认作答", "Recognition issue corrected; confirm the answer"],
-    very_low_confidence: ["本题识别置信度很低，请对照原件核对并确认", "Very low recognition confidence; check the original and confirm"],
-    recognition_low_confidence: ["本题识别置信度较低，请对照原件核对并确认", "Low recognition confidence; check the original and confirm"],
-    low_confidence: ["本题识别置信度较低，请对照原件核对并确认", "Low recognition confidence; check the original and confirm"],
+    recognition_very_low_confidence: ["识别置信度低于 0.25，请核对并确认", "Recognition confidence below 0.25; check and confirm"],
+    very_low_confidence: ["识别结果建议核对，可继续", "Checking the transcription is optional; you can continue"],
+    recognition_low_confidence: ["来源识别存在不确定性，可继续", "Source transcription is uncertain; you can continue"],
+    low_confidence: ["识别结果建议核对，可继续", "Checking the transcription is optional; you can continue"],
   };
   const label = labels[flag];
   return label ? label[locale === "zh-CN" ? 0 : 1] : flag;
@@ -94,6 +95,12 @@ export function getAnswerState(answer?: StudentAnswerInfo): SubmissionAnswerStat
 export function answerReviewAttention(answer?: StudentAnswerInfo): ReviewAttention {
   if (answerReviewNextBlocked(answer)) return "blocking";
   return "none";
+}
+
+/** Optional source advice belongs beside confirmation in the detail page only. */
+export function answerHasOptionalAdvice(answer?: StudentAnswerInfo): boolean {
+  return Boolean(answer && answer.review_status !== "confirmed" && !answerReviewNextBlocked(answer)
+    && answer.flag?.some(flag => ["recognition_needs_review", "very_low_confidence", "recognition_low_confidence", "low_confidence"].includes(flag)));
 }
 
 export function answerNeedsConfirmation(answer?: StudentAnswerInfo): boolean {

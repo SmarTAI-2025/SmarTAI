@@ -52,6 +52,7 @@ class PreparedSubmissionSource:
 
 def attach_submission_recognition(results, sources):
     """Keep reading uncertainty separate from student identity and correctness."""
+    from backend.domain.confidence_policy import confidence_requires_review
     by_source = {source.source_id: source.recognition for source in sources if source.recognition}
     output = []
     for result in results:
@@ -65,6 +66,10 @@ def attach_submission_recognition(results, sources):
             flags = ["recognition_needs_review"]
             if summary.get("confidence") == "low":
                 flags.append("recognition_low_confidence")
+            if confidence_requires_review(summary.get("confidence")):
+                flags.append("recognition_very_low_confidence")
+            if summary.get("error_code") or (summary.get("coverage") or {}).get("missing_targets"):
+                flags.append("recognition_failed")
             for key in ("failed_pages", "unprocessed_pages"):
                 pages = (summary.get("coverage") or {}).get(key) or []
                 if pages:

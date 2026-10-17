@@ -50,7 +50,7 @@ import { useI18n } from "@/i18n/I18nProvider";
 import type { Locale } from "@/i18n/messages";
 import { cn } from "@/lib/cn";
 import { getFrontierGeneration, isFrontierExitPending, isFrontierTaskPath, rememberFrontierTask } from "@/lib/frontierSession";
-import { submissionReviewBlockers, questionReviewBlockers, type ReviewBlocker } from "@/lib/reviewConfirmation";
+import { answerReviewNextBlocked, submissionReviewBlockers, questionReviewBlockers, type ReviewBlocker } from "@/lib/reviewConfirmation";
 import { formatSubmissionFlag } from "@/lib/submissionReview";
 import { gradingProgressText } from "@/lib/gradingProgressCopy";
 import "./frontier.css";
@@ -294,7 +294,11 @@ export function FrontierLiveDemoPage() {
     try {
       markStep("questions", "active", tx(locale, "正在检查题目是否可以进入下一阶段…", "Checking that questions are ready for the next stage…"));
       const blockers = questionReviewBlockers(Object.values(teacherReviewTask.problem_data), taskId, locale);
-      if (blockers.length) throw new Error(blockers.map(item => item.label).join("; "));
+      if (blockers.length) {
+        failActiveStep();
+        setError({ message: blockers.map(item => item.label).join("; "), reviewBlockers: blockers });
+        return;
+      }
       await continueWorkflow(run, taskId, "problems_ready", true);
     } catch (caught) {
       if (run.isCurrent()) {
@@ -390,7 +394,7 @@ export function FrontierLiveDemoPage() {
       if (!continueToSubmissions && !alreadyConfirmed) {
         const recognizedState = await run.step(() => getTaskState(currentTaskId));
         setSnapshot(recognizedState);
-        markStep("questions", "active", tx(locale, "题目、标答与评分资料已真实生成；等待教师确认。", "Questions, answers, and rubrics were generated live and await teacher confirmation."), recognizedState.extract_job_id);
+        markStep("questions", "complete", tx(locale, "题目、标答与评分资料已生成，可继续识别作答。", "Questions, answers, and rubrics are ready. Continue to submissions."), recognizedState.extract_job_id);
         return;
       }
       const afterQuestions = await run.step(() => getTaskState(currentTaskId));
@@ -531,7 +535,7 @@ export function FrontierLiveDemoPage() {
             ) : !error && teacherReviewTask && !submissionReviewTask && snapshot?.status === "problems_ready" ? (
               <Button className="h-12 px-6 text-sm shadow-sm" onClick={() => void confirmTeacherMaterials()} disabled={busy}>
                 {busy ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />}
-                {tx(locale, "继续识别作答（保留待确认）", "Continue to submissions (keep pending)")}
+                {tx(locale, "继续识别作答", "Continue to submissions")}
               </Button>
             ) : !error && submissionReviewTask && isTaskAwaitingGrading(snapshot?.status) ? (
               <Button className="h-12 px-6 text-sm shadow-sm" onClick={() => void confirmSubmissionReview()} disabled={busy}>
@@ -565,10 +569,10 @@ export function FrontierLiveDemoPage() {
                 <span className="inline-flex items-center gap-2 text-foreground"><Activity className="h-4 w-4 text-primary" />{tx(locale, "后端进度", "Backend progress")}</span>
                 <span className="text-muted-foreground">{t(TASK_STAGE_KEYS[snapshot.status])}</span>
               </div>
-              <div className="mt-3 h-2 overflow-hidden rounded-full bg-muted">
+              <div role="progressbar" aria-label={tx(locale, "当前处理进度", "Current processing progress")} aria-valuemin={0} aria-valuemax={100} aria-valuenow={progressPercent(snapshot)} className="mt-3 h-2 overflow-hidden rounded-full bg-muted">
                 <span className="block h-full rounded-full bg-primary transition-[width] duration-500" style={{ width: `${progressPercent(snapshot)}%` }} />
               </div>
-              <p className="mt-2 text-xs leading-5 text-muted-foreground">{latestProgressMessage(snapshot, locale)}</p>
+              <p role="status" aria-live="polite" className="mt-2 text-xs leading-5 text-muted-foreground">{latestProgressMessage(snapshot, locale)}</p>
             </div>
           ) : null}
         </section>
@@ -621,9 +625,7 @@ export function FrontierLiveDemoPage() {
         <TeacherMaterialConfirmation
           task={teacherReviewTask}
           locale={locale}
-          busy={busy}
           confirmed={materialsConfirmed}
-          onConfirm={() => navigate(`/tasks/${taskId}/questions`)}
         />
       ) : null}
     </div>
@@ -636,8 +638,8 @@ function SubmissionRecognitionReview({ task, locale, busy, blocked, onContinue }
     <section className="mt-5 rounded-[10px] border border-primary/25 bg-primary/[0.035] p-4 sm:p-5" aria-labelledby="demo-submission-review-title">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
         <div>
-          <p className="text-xs font-semibold uppercase tracking-[0.12em] text-primary">{tx(locale, "真实 OCR · 教师检查", "Live OCR · teacher check")}</p>
-          <h3 id="demo-submission-review-title" className="mt-1 text-lg font-bold">{tx(locale, "检查本次识别的学生作答", "Inspect this run's recognized submissions")}</h3>
+          <p className="text-xs font-semibold uppercase tracking-[0.12em] text-primary">{tx(locale, "真实 OCR", "Live OCR")}</p>
+          <h3 id="demo-submission-review-title" className="mt-1 text-lg font-bold">{tx(locale, "本次识别的学生作答", "Recognized submissions")}</h3>
           <p className="mt-1 max-w-3xl text-xs leading-5 text-muted-foreground">
             {tx(locale, "以下学生、文件名和逐题作答均来自本次真实作答识别流程；继续后才会启动模型批改。", "The students, filenames, and per-question answers below come from this live recognition run. Model grading starts only after you continue.")}
           </p>
@@ -664,7 +666,7 @@ function SubmissionRecognitionReview({ task, locale, busy, blocked, onContinue }
                 <div key={answer.q_id} className="rounded-md bg-muted/45 px-3 py-2">
                   <div className="flex items-center justify-between gap-2">
                     <span className="text-[11px] font-bold text-primary">{studentAnswerLabel(answer)}</span>
-                    {answer.flag?.length ? <span className="text-[10px] font-medium text-warning">{answer.flag.map(flag => formatSubmissionFlag(flag, locale)).join(" · ")}</span> : null}
+                    {answerReviewNextBlocked(answer) ? <span className="text-[10px] font-medium text-warning">{answer.flag.map(flag => formatSubmissionFlag(flag, locale)).join(" · ")}</span> : null}
                   </div>
                   <MarkdownMath className="mt-1 max-h-28 overflow-auto text-[11px] leading-5 text-foreground">{answer.content}</MarkdownMath>
                 </div>
@@ -920,25 +922,21 @@ function shortStudentName(name: string) {
 function TeacherMaterialConfirmation({
   task,
   locale,
-  busy,
   confirmed,
-  onConfirm,
 }: {
   task: Task;
   locale: Locale;
-  busy: boolean;
   confirmed: boolean;
-  onConfirm: () => void;
 }) {
   const aligned = alignDemoProblems(Object.values(task.problem_data));
   return (
     <section className="mt-5 rounded-[10px] border border-primary/25 bg-primary/[0.035] p-4 sm:p-5" aria-labelledby="demo-teacher-material-title">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
         <div>
-          <p className="text-xs font-semibold uppercase tracking-[0.12em] text-primary">{confirmed ? tx(locale, "真实生成 · 已确认", "Live generation · confirmed") : tx(locale, "真实生成 · 教师确认", "Live generation · teacher confirmation")}</p>
-          <h3 id="demo-teacher-material-title" className="mt-1 text-lg font-bold">{tx(locale, "复核本次生成的题目资料", "Review this run's generated materials")}</h3>
+          <p className="text-xs font-semibold uppercase tracking-[0.12em] text-primary">{tx(locale, "真实生成", "Live generation")}</p>
+          <h3 id="demo-teacher-material-title" className="mt-1 text-lg font-bold">{tx(locale, "本次生成的题目资料", "Generated question materials")}</h3>
           <p className="mt-1 max-w-2xl text-xs leading-5 text-muted-foreground">
-            {tx(locale, "题干、标答、评分依据与代码题材料均来自本次真实题目准备流程，可进入审核页查看并确认。继续下一阶段会保留待确认状态。各题总分来自合成 Demo 中明确的教师设置。", "The stems, reference answers, rubrics, and programming materials come from this live preparation run. Open question review to inspect and confirm them. Continuing keeps pending confirmations unchanged. Question totals follow the synthetic Demo's teacher-defined settings.")}
+            {tx(locale, "题干、标答与评分依据已实时生成，可以继续识别作答。", "Questions, reference answers, and rubrics were generated live. You can continue to submissions.")}
           </p>
         </div>
         <Link className="shrink-0 text-xs font-semibold text-primary hover:underline" to={`/tasks/${task.task_id}/questions`}>
@@ -975,12 +973,7 @@ function TeacherMaterialConfirmation({
             <Check className="h-4 w-4" />
             {tx(locale, "本次生成资料已由教师确认", "This run's generated materials were teacher-confirmed")}
           </span>
-        ) : (
-          <Button onClick={onConfirm} disabled={busy} className="h-10 px-4">
-            {busy ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />}
-            {tx(locale, "查看并确认题目资料", "Review and confirm question materials")}
-          </Button>
-        )}
+        ) : null}
         <span className="text-xs text-muted-foreground">{tx(locale, "资料会随当前任务持续保留；仍可在题目审核页查看，最终评分继续由教师复核。", "These materials remain attached to the current task and stay available in question review; final scores remain subject to teacher review.")}</span>
       </div>
     </section>
@@ -1104,6 +1097,7 @@ function compareStudentAnswers(
 }
 
 function progressPercent(snapshot: TaskStateSnapshot) {
+  if (snapshot.status === "graded" || snapshot.status === "finalized") return 100;
   const progress = snapshot.progress;
   if (!progress) return 0;
   if (progress.total_steps && progress.completed_steps !== null && progress.completed_steps !== undefined) {

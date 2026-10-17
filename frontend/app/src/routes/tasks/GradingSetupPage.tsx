@@ -1,3 +1,4 @@
+import { LOW_CONFIDENCE_THRESHOLD } from "@/lib/confidencePolicy";
 import { demoLockedText } from "@/lib/frontierFixtures";
 import { taskWorkspacePath } from "@/lib/frontierSession";
 import { useFrontierWorkspace } from "@/lib/frontierContext";
@@ -121,7 +122,7 @@ function GradingSetupPageForm() {
     setSelectionNoticeKey(null);
   }, [isDirty, response, serverKey, serverSetup, savingServerKey, setup]);
 
-  const localDraft = useDraftProtection({ scope: `grading:${taskId}:${response?.task_id ?? ""}`, value: { setup, advancedOpen }, baseline: { setup: serverSetup, advancedOpen: false }, version: savingServerKey ?? serverKey, versionsMatch: gradingDraftVersionsMatch, enabled: Boolean(response && setup), busy: isSaving, onRestore: (draft) => { setSetup(draft.setup); setAdvancedOpen(draft.advancedOpen); } });
+  const localDraft = useDraftProtection({ scope: `grading:${taskId}:${response?.task_id ?? ""}`, value: { setup, advancedOpen }, baseline: { setup: serverSetup ? cloneSetup(serverSetup) : null, advancedOpen: false }, version: savingServerKey ?? serverKey, versionsMatch: gradingDraftVersionsMatch, enabled: Boolean(response && setup), busy: isSaving, onRestore: (draft) => { setSetup(draft.setup ? cloneSetup(draft.setup) : null); setAdvancedOpen(draft.advancedOpen); } });
 
   const expertsById = useMemo(
     () => new Map((response?.available_experts ?? []).map((expert) => [expert.provider_id, expert])),
@@ -212,7 +213,7 @@ function GradingSetupPageForm() {
       const savedResponse = await saveSetup.mutateAsync({
         taskId,
         expectedWorkflowRevision: response.workflow_revision,
-        gradingSetup: setup,
+        gradingSetup: cloneSetup(setup),
       });
       if (!localDraft.isCurrent()) return;
       appliedServerKeyRef.current = gradingEditorVersion(savedResponse);
@@ -845,8 +846,8 @@ function StrategySection({
       : "lengthMedium";
   const languageKey = setup.feedback_language === "en" ? "languageEnglish" : "languageChinese";
   const advancedSummary = locale === "zh-CN"
-    ? `${gradingSetupText(locale, toneKey)}评语 · ${gradingSetupText(locale, lengthKey)}长度 · ${gradingSetupText(locale, languageKey)} · ${setup.multi_sample_n === 1 ? "单次采样" : `${setup.multi_sample_n} 次采样`} · 复核阈值 ${setup.low_confidence_threshold.toFixed(2)}`
-    : `${gradingSetupText(locale, toneKey)} feedback · ${gradingSetupText(locale, lengthKey)} length · ${gradingSetupText(locale, languageKey)} · ${setup.multi_sample_n} sample${setup.multi_sample_n === 1 ? "" : "s"} · review threshold ${setup.low_confidence_threshold.toFixed(2)}`;
+    ? `${gradingSetupText(locale, toneKey)}评语 · ${gradingSetupText(locale, lengthKey)}长度 · ${gradingSetupText(locale, languageKey)} · ${setup.multi_sample_n === 1 ? "单次采样" : `${setup.multi_sample_n} 次采样`} · 低于 0.60 提示 · 低于 0.25 必须确认`
+    : `${gradingSetupText(locale, toneKey)} feedback · ${gradingSetupText(locale, lengthKey)} length · ${gradingSetupText(locale, languageKey)} · ${setup.multi_sample_n} sample${setup.multi_sample_n === 1 ? "" : "s"} · below 0.60 advisory · below 0.25 confirmation required`;
 
   return (
     <section aria-labelledby="grading-strategy-title">
@@ -934,11 +935,10 @@ function StrategySection({
             >
               {SAMPLE_OPTIONS.map((count) => <option key={count} value={count}>{count}{gradingSetupText(locale, "multiSampleSuffix")}</option>)}
             </SelectField>
-            <label className="border-t pt-3 sm:col-span-2">
-              <span className="flex items-center justify-between gap-4 text-[13px] font-semibold leading-5 text-foreground"><span>{gradingSetupText(locale, "lowConfidenceThreshold")}</span><span className="shrink-0 text-[12px] tabular-nums text-primary">{setup.low_confidence_threshold.toFixed(2)}</span></span>
-              <input type="range" min={0.3} max={0.8} step={0.05} value={setup.low_confidence_threshold} onChange={(event) => onChange((current) => ({ ...current, low_confidence_threshold: Number(event.target.value) }))} className="grading-range mt-2.5 w-full" style={{ "--range-progress": `${((setup.low_confidence_threshold - 0.3) / 0.5) * 100}%` } as CSSProperties} />
-              <span className="mt-1 block text-[12px] leading-[18px] text-muted-foreground">{gradingSetupText(locale, "lowConfidenceDescription")}</span>
-            </label>
+            <div className="rounded-lg border bg-muted/30 px-3 py-3">
+              <p className="text-[13px] font-semibold">{gradingSetupText(locale, "lowConfidenceThreshold")}</p>
+              <p className="mt-1 text-[12px] leading-[18px] text-muted-foreground">{gradingSetupText(locale, "lowConfidenceDescription")}</p>
+            </div>
             <label className="flex min-h-10 cursor-pointer items-center gap-2.5 rounded-[8px] border bg-card px-3 py-2 text-[13px] font-medium leading-5 text-foreground sm:col-span-2">
               <input type="checkbox" checked={setup.suggest_corrections} onChange={(event) => onChange((current) => ({ ...current, suggest_corrections: event.target.checked }))} className="h-4 w-4 shrink-0 rounded border-border accent-primary" />
               {gradingSetupText(locale, "suggestCorrections")}
@@ -1030,11 +1030,11 @@ function CenteredState({ title, description, action }: { title: string; descript
 }
 
 function cloneSetup(setup: GradingSetup): GradingSetup {
-  return { ...setup, selected_provider_ids: [...setup.selected_provider_ids], ...(setup.expert_weights ? { expert_weights: { ...setup.expert_weights } } : {}) };
+  return { ...setup, low_confidence_threshold: LOW_CONFIDENCE_THRESHOLD, selected_provider_ids: [...setup.selected_provider_ids], ...(setup.expert_weights ? { expert_weights: { ...setup.expert_weights } } : {}) };
 }
 
 function serializeSetup(setup: GradingSetup): string {
-  return JSON.stringify(setup);
+  return JSON.stringify(cloneSetup(setup));
 }
 
 function applyProviderSelection(
@@ -1085,7 +1085,6 @@ function validateSetup(
   if (selected.length > 1 && setup.multi_sample_n !== 1) return gradingSetupText(locale, "invalidForm");
   if (!scopeOptions.includes(setup.knowledge_scope)) return gradingSetupText(locale, "invalidForm");
   if (setup.strictness < 0 || setup.strictness > 100) return gradingSetupText(locale, "invalidForm");
-  if (setup.low_confidence_threshold < 0.3 || setup.low_confidence_threshold > 0.8) return gradingSetupText(locale, "invalidForm");
   if (setup.multi_sample_n < 1 || setup.multi_sample_n > 5) return gradingSetupText(locale, "invalidForm");
   if (setup.teacher_notes.length > MAX_NOTES_LENGTH) return gradingSetupText(locale, "invalidForm");
   return null;

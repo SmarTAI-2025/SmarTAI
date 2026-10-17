@@ -112,6 +112,7 @@ beforeEach(() => {
   taskData.student_data.S001.stu_ans.splice(1);
   taskData.student_data.S001.identity_status = "matched";
   taskData.student_data.S001.stu_ans[0].review_status = "pending";
+  taskData.student_data.S001.stu_ans[0].flag = [];
   mutations.answer.mockReset().mockResolvedValue({ workflow_revision: 4 });
   mutations.identity.mockReset().mockResolvedValue({ workflow_revision: 4, student: taskData.student_data.S001 });
   taskData.student_data.S001.source_choices = [];
@@ -150,6 +151,14 @@ beforeEach(() => {
 });
 
 describe("StudentAnswerReviewPage review shortcuts", () => {
+  it("keeps ordinary recognition advice beside confirmation without blocking continuation", async () => {
+    taskData.student_data.S001.stu_ans[0].flag = ["recognition_needs_review", "recognition_low_confidence"];
+    renderPage();
+    const advice = await screen.findByText("识别结果可选核对，可继续");
+    expect(within(advice.closest("header")!).getByRole("button", { name: /待确认/ })).toBeEnabled();
+    expect(screen.queryByTitle(/置信度偏低，可选核对，可继续/)).not.toBeInTheDocument();
+  });
+
   it("confirms a healthy question independently while another question still blocks the next stage", async () => {
     taskData.student_data.S001.stu_ans.push({ ...taskData.student_data.S001.stu_ans[0], q_id: "Q2", number: "2", content: "", flag: ["recognition_failed"] });
     const user = userEvent.setup();

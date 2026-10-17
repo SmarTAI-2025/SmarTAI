@@ -1,3 +1,5 @@
+import { confidenceValue } from "@/lib/confidencePolicy";
+import { isLowConfidence } from "@/components/tasks/resultsModel";
 import { groundedRows } from "./groundedAsk";
 import { EMPTY_FILTER_INTENT, matchesQuestionToken, parseLocalTaskFilter, supportsFilterIntent } from "@/lib/taskFilterIntent";
 import { compareValues } from "@/lib/sortValues";
@@ -83,7 +85,7 @@ export function selectReviewOverview(
     for (const correction of student.corrections) {
       const question = model.questions.find((item) => item.id === correction.q_id);
       const key = reviewCellKey(student.id, correction.q_id);
-      if (wantsLowConfidence && correction.confidence >= 0.65) continue;
+      if (wantsLowConfidence && !isLowConfidence(correction)) continue;
       if (wantsDisagreement && !isExpertDisagreement(correction)) continue;
       const confirmedReview = isConfirmedReview(correction);
       if (wantsReview && !reviewKeys.has(key)) continue;
@@ -129,7 +131,7 @@ export function selectReviewOverviewFromIntent(
   const reviewKeys = new Set(reviewItems.map((item) => reviewCellKey(item.student.id, item.question.id)));
   const matchedCellKeys = new Set<string>();
   for (const student of model.students) {
-    const confidence = student.avgConfidence == null ? null : student.avgConfidence > 1 ? student.avgConfidence / 100 : student.avgConfidence;
+    const confidence = confidenceValue(student.avgConfidence);
     if (intent.max_average_confidence != null && (confidence == null || confidence >= intent.max_average_confidence)) continue;
     if (intent.min_score_percent != null && (student.percent == null || student.percent < intent.min_score_percent)) continue;
     if (intent.max_score_percent != null && (student.percent == null || student.percent >= intent.max_score_percent)) continue;
@@ -139,8 +141,7 @@ export function selectReviewOverviewFromIntent(
     for (const correction of student.corrections) {
       const question = model.questions.find((item) => item.id === correction.q_id);
       const key = reviewCellKey(student.id, correction.q_id);
-      const confidence = Number.isFinite(correction.confidence) ? (correction.confidence > 1 ? correction.confidence / 100 : correction.confidence) : null;
-      if (intent.low_confidence && (confidence == null || confidence >= 0.65)) continue;
+      if (intent.low_confidence && !isLowConfidence(correction)) continue;
       if (intent.disagreement && !isExpertDisagreement(correction)) continue;
       if (intent.annotated && !annotatedKeys.has(key)) continue;
       if (intent.review_status === "pending" && !reviewKeys.has(key)) continue;

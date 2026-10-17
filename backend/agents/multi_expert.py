@@ -247,8 +247,7 @@ async def run_multi_expert(
             raise AllExpertsFailed([expert_result])
         expert_result.provider_id = provider_ids.get(id(provider), provider.provider_id)
         # is_score is None (one sample → no variance signal); review flag stays
-        # off here. Confidence-based review (`confidence < settings.confidence_threshold`)
-        # is the caller's job in this branch.
+        # off here. The caller applies the shared numeric confidence policy.
         return _expert_to_correction(
             problem.q_id,
             problem.type,
@@ -319,18 +318,10 @@ async def run_multi_expert(
             synthesis_method="degraded_to_single",
             extra_experts=failures,
         )
-        # 2026-08-28 policy: model capabilities are uneven (e.g. Qwen cannot
-        # grade some free-response items while DeepSeek only grades big
-        # questions), so a surviving CONFIDENT sample is still a
-        # high-confidence result — "any high confidence wins". Only a
-        # low-confidence survivor forces human review; the teacher threshold
-        # (_apply_low_confidence_policy) re-checks this after the call.
-        threshold = (
-            grading_setup.low_confidence_threshold
-            if grading_setup is not None
-            else _settings.confidence_threshold
-        )
-        if successes[0].confidence < threshold:
+        # Failed siblings stay visible, but a usable survivor is not a failed
+        # grade. Only confidence below .25 requires confirmation.
+        from backend.domain.confidence_policy import confidence_requires_review
+        if confidence_requires_review(successes[0].confidence):
             correction.requires_human_review = True
             correction.review_reasons = ["degraded_to_single"]
         return correction

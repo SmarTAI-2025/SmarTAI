@@ -1,3 +1,4 @@
+import { confidenceValue, confidenceRequiresReview } from "@/lib/confidencePolicy";
 import { groundedRows, hasGroundedOrder } from "@/lib/groundedAsk";
 import { SortableTableHead, useColumnSort, directionFor, type ColumnSort } from "@/components/ui/SortableTableHead";
 import { ArrowRight, X } from "lucide-react";
@@ -10,6 +11,7 @@ import { compareValues } from "@/lib/sortValues";
 import {
   hasReviewSignal as correctionNeedsFormalReview,
   hasExpertDisagreement,
+  isLowConfidence,
   isCorrectionReviewConfirmed,
   clampPercent,
   correctionScoreSource,
@@ -38,7 +40,7 @@ interface QuestionAnalysisRow {
   stem: string;
   knowledgePoints: string[];
   avgConfidence: number | null;
-  lowConfidenceCount: number;
+  requiredLowConfidenceCount: number;
   requiredReviewCount: number;
   confirmedReviewCount: number;
   hardFailureCount: number;
@@ -220,7 +222,7 @@ function QuestionDesktopTable({ locale, taskId, rows, returnQuery, columnSort, o
               </td>
               <td className="px-3 py-3">
                 <span className="block text-[12px] font-semibold text-foreground">{formatConfidence(row.avgConfidence)}</span>
-                <span className="mt-0.5 block text-[10px] text-muted-foreground">{tx(locale, `${row.lowConfidenceCount} 个低置信`, `${row.lowConfidenceCount} low-confidence`)}</span>
+                {row.requiredLowConfidenceCount > 0 ? <span className="mt-0.5 block text-[10px] text-muted-foreground">{tx(locale, `${row.requiredLowConfidenceCount} 个必须确认`, `${row.requiredLowConfidenceCount} requiring confirmation`)}</span> : null}
               </td>
               <td className="px-3 py-3"><ReviewBadge locale={locale} row={row} /></td>
               <td className="px-3 py-3 text-[11px] leading-4 text-muted-foreground">{row.riskSummary}</td>
@@ -306,7 +308,7 @@ function buildQuestionRow(question: QuestionSummary, locale: Locale): QuestionAn
   const confirmedReviewCount = question.entries.filter(entry => isCorrectionReviewConfirmed(entry.correction)).length;
   const hardFailureCount = requiredEntries.filter((entry) => correctionScoreSource(entry.correction) === "hard_failure").length;
   const reviewState: ReviewState = requiredEntries.length ? "pending" : confirmedReviewCount ? "confirmed" : "none";
-  const lowConfidenceCount = question.lowConfidenceCount;
+  const requiredLowConfidenceCount = requiredEntries.filter(({ correction }) => confidenceRequiresReview(correction.confidence)).length;
 
   return {
     question,
@@ -315,12 +317,12 @@ function buildQuestionRow(question: QuestionSummary, locale: Locale): QuestionAn
     stem: String(question.stem || question.problem?.stem || ""),
     knowledgePoints: getKnowledgePoints(question.problem),
     avgConfidence: averageOrNull(confidenceValues),
-    lowConfidenceCount,
+    requiredLowConfidenceCount,
     requiredReviewCount: requiredEntries.length,
     confirmedReviewCount,
     hardFailureCount,
     reviewState,
-    riskSummary: buildRiskSummary(question, lowConfidenceCount, locale),
+    riskSummary: buildRiskSummary(question, requiredLowConfidenceCount, locale),
   };
 }
 
@@ -476,7 +478,7 @@ function matchesSemanticPlan(row: QuestionAnalysisRow, plan: SemanticQuestionPla
   if (plan.types.length && !plan.types.some((type) => normalizeFilterType(row.type) === normalizeFilterType(type))) return false;
   if (plan.maxPercent !== null && (row.question.avgPercent === null || row.question.avgPercent >= plan.maxPercent)) return false;
   if (plan.minPercent !== null && (row.question.avgPercent === null || row.question.avgPercent < plan.minPercent)) return false;
-  if (plan.lowConfidence && row.lowConfidenceCount === 0) return false;
+  if (plan.lowConfidence && !row.question.entries.some(({ correction }) => isLowConfidence(correction))) return false;
   if (plan.avgConfidenceBelow !== null && (row.avgConfidence === null || row.avgConfidence >= plan.avgConfidenceBelow)) return false;
   if (plan.reviewState && row.reviewState !== plan.reviewState) return false;
   if (plan.missingKnowledge && row.knowledgePoints.length > 0) return false;
@@ -547,7 +549,7 @@ function matchesScoreFilter(row: QuestionAnalysisRow, filter: ScoreFilter): bool
 
 function matchesConfidenceFilter(row: QuestionAnalysisRow, filter: ConfidenceFilter): boolean {
   if (filter === "all") return true;
-  if (filter === "low_items") return row.lowConfidenceCount > 0;
+  if (filter === "low_items") return row.question.entries.some(({ correction }) => isLowConfidence(correction));
   return row.avgConfidence !== null && row.avgConfidence < LOW_CONFIDENCE_THRESHOLD;
 }
 
@@ -611,8 +613,7 @@ function normalizeSortMode(value: string | null): SortMode {
 }
 
 function normalizeConfidence(value: number | null | undefined): number | null {
-  if (typeof value !== "number" || !Number.isFinite(value)) return null;
-  return value > 1 ? value / 100 : value;
+  return confidenceValue(value);
 }
 
 function averageOrNull(values: Array<number | null>): number | null {

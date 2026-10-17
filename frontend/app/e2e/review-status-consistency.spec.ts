@@ -20,7 +20,7 @@ for (const mode of ["individual", "overview-all", "detail-all"]) for (const loca
     const problem_data = Object.fromEntries([1, 2, 3, 4].map(n => [`q${n}`, { q_id: `q${n}`, number: String(n), stem: `Synthetic question ${n}.`, criterion: "Reasoning rubric.", max_score: 10 }]));
     const student_data = { S1: { stu_id: "S1", stu_name: "Example", identity_status: "matched", stu_ans: [1, 2, 3, 4].map(n => ({ q_id: `q${n}`, content: "Synthetic answer.", review_status: "confirmed", flag: [] })) } };
     const corrections = [6, 8, 4, 10].map((score, i) => ({ q_id: `q${i + 1}`, score, provisional_score: score, max_score: 10,
-      confidence: i === 1 ? .5 : .95, comment: "Original explanation.", steps: [], requires_human_review: i === 0 || i === 2,
+      confidence: i === 0 || i === 2 ? .2 : i === 1 ? .5 : .95, comment: "Original explanation.", steps: [], requires_human_review: i === 0 || i === 2,
       review_reasons: i === 0 || i === 2 ? ["high_indecisiveness"] : [], initial_review_reasons: [] as string[],
       review_status: "pending", teacher_score: null as number | null, teacher_comment: "",
       expert_results: (i === 0 ? [3, 9] : i === 2 ? [0, 8] : [score, score]).map((value, index) => ({ provider: `expert-${index}`, score: i === 1 && index === 1 ? 0 : value,
@@ -76,6 +76,12 @@ for (const mode of ["individual", "overview-all", "detail-all"]) for (const loca
       throw new Error(`Unexpected request ${request.method()} ${path}`);
     });
     const root = `/tasks/${taskId}`;
+    // Ordinary .5 uncertainty is available for optional detail inspection, never a queue item.
+    await page.goto(`${root}/review`);
+    const queue = page.getByRole("region", { name: zh ? "待复核队列" : "Review queue" });
+    await expect(queue.getByRole("link")).toHaveCount(2);
+    await expect(queue.getByRole("link", { name: /Q2/ })).toHaveCount(0);
+    await expect(queue.getByRole("link", { name: /Q4/ })).toHaveCount(0);
     await page.goto(`${root}/review${mode === "overview-all" ? "" : "/S1/q1"}`);
     if (mode === "individual") {
       for (const id of ["q1", "q3"]) {

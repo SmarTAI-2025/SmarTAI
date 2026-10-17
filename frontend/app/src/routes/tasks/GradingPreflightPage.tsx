@@ -376,7 +376,7 @@ export function GradingPreflightPage() {
                   {copy(locale, setup.allow_partial_credit ? "partialAllowed" : "partialDisabled")}
                 </StrategyChip>
                 <StrategyChip tone="warning">
-                  {copy(locale, "confidence")} {setup.low_confidence_threshold.toFixed(2)}
+                  {locale === "zh-CN" ? "置信度 < 0.60 提示 · < 0.25 必须确认" : "Confidence < 0.60: optional · < 0.25: required"}
                 </StrategyChip>
                 <StrategyChip tone="neutral">
                   {copy(locale, "feedback")}: {copy(locale, feedbackKey(setup.feedback_length))}

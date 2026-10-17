@@ -110,7 +110,7 @@ describe("FrontierLiveDemoPage", () => {
     await user.click(screen.getByRole("button", { name: "Change language" }));
     expect(getTaskState).toHaveBeenCalledTimes(2);
     await act(async () => recognition.resolve(taskState("problems_ready")));
-    expect(screen.getByRole("button", { name: "继续识别作答（保留待确认）" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "继续识别作答" })).toBeEnabled();
     expect(screen.getByRole("button", { name: "重新开始" })).toBeEnabled();
     expect(getTask).toHaveBeenCalledTimes(1);
   });
@@ -137,7 +137,7 @@ describe("FrontierLiveDemoPage", () => {
     }
   });
 
-  it.each(["zh-CN", "en-US"])("localizes recognized answer flags (%s)", async (locale) => {
+  it.each(["zh-CN", "en-US"])("hides ordinary confidence flags in the simple Demo (%s)", async (locale) => {
     window.localStorage.setItem("smartai_locale", locale);
     const students = recognizedStudents();
     students["demo-1"].stu_ans[0].flag = ["recognition_needs_review", "recognition_low_confidence"];
@@ -147,7 +147,8 @@ describe("FrontierLiveDemoPage", () => {
     const expected = locale === "zh-CN"
       ? "识别结果需对照原件核对 · 本题识别置信度较低，请对照原件核对并确认"
       : "Check transcription against the original · Low recognition confidence; check the original and confirm";
-    expect(await screen.findByText(expected)).toBeVisible();
+    expect(await screen.findByRole("heading", { name: locale === "zh-CN" ? "本次识别的学生作答" : "Recognized submissions" })).toBeVisible();
+    expect(screen.queryByText(expected)).not.toBeInTheDocument();
     expect(screen.queryByText(/recognition_needs_review|recognition_low_confidence/)).not.toBeInTheDocument();
   });
 
@@ -157,6 +158,7 @@ describe("FrontierLiveDemoPage", () => {
       window.localStorage.setItem("smartai_locale", locale);
       vi.mocked(getTaskState).mockResolvedValue({ ...taskState(status), problem_count: 0, progress: {
         phase: stopped ? "paused" : "done", total_students: 4, total_questions: 4, completed_units: stopped ? 2 : 16,
+        total_steps: 4, completed_steps: 1,
         active: [], messages: [], activity_latest: null,
       } });
       vi.mocked(getTaskResult).mockResolvedValue(gradedResult({ ...taskWithQuestions(), student_data: recognizedStudents() }));
@@ -166,24 +168,25 @@ describe("FrontierLiveDemoPage", () => {
         ? (locale === "zh-CN" ? "本次处理已停止" : "This run has stopped")
         : (locale === "zh-CN" ? "已完成" : "Completed"))).toBeVisible();
       expect(panel).not.toHaveTextContent(/等待进度更新|Waiting for a progress update/);
+      expect(within(panel).getByRole("progressbar")).toHaveAttribute("aria-valuenow", stopped ? "25" : "100");
       expect(startGrading).not.toHaveBeenCalled();
       view.unmount();
     }
   });
 
-  it.each(["zh-CN", "en-US"])("keeps the submission review and precise recovery link after a low-confidence grading block (%s)", async (locale) => {
+  it.each(["zh-CN", "en-US"])("keeps the submission review and precise recovery link after a real recognition failure (%s)", async (locale) => {
     window.localStorage.setItem("smartai_locale", locale);
     const zh = locale === "zh-CN";
     const initial = { ...taskWithQuestions(), student_data: recognizedStudents() };
     const current = { ...taskWithQuestions(), student_data: recognizedStudents() };
-    current.student_data["demo-1"].stu_ans[0].flag = ["recognition_needs_review", "recognition_low_confidence"];
+    current.student_data["demo-1"].stu_ans[0].flag = ["recognition_failed"];
     vi.mocked(getTaskState).mockResolvedValue(taskState("submissions_ready"));
     vi.mocked(getTask).mockResolvedValueOnce(initial).mockResolvedValue(current);
     const user = userEvent.setup();
     renderLive("asg_demo123");
     await user.click((await screen.findAllByRole("button", { name: zh ? "开始批改" : "Start grading" }))[0]);
     const alert = await screen.findByRole("alert");
-    expect(screen.queryByRole("heading", { name: zh ? "检查本次识别的学生作答" : "Inspect this run's recognized submissions" })).toBeVisible();
+    expect(screen.queryByRole("heading", { name: zh ? "本次识别的学生作答" : "Recognized submissions" })).toBeVisible();
     expect(screen.getByRole("link", { name: zh ? "在作答校对页查看" : "Open submission review" })).toHaveAttribute("href", "/tasks/asg_demo123/submissions");
     expect(within(alert).getByRole("link", { name: /Alex Chen/ })).toHaveAttribute("href", `/tasks/asg_demo123/students/demo-1?question=${current.student_data["demo-1"].stu_ans[0].q_id}`);
     expect(screen.queryByRole("link", { name: zh ? "返回修改配置" : "Back to edit settings" })).not.toBeInTheDocument();
@@ -478,7 +481,7 @@ describe("FrontierLiveDemoPage", () => {
       </I18nProvider>,
     );
 
-    expect(await screen.findByRole("heading", { name: /review this run's generated materials/i })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: /generated question materials/i })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /resume this task/i })).not.toBeInTheDocument();
     expect(screen.queryByText(/teacher rubric confirmed/i)).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: /continue to submissions/i })).toHaveClass("h-12", "bg-primary");
@@ -517,19 +520,22 @@ describe("FrontierLiveDemoPage", () => {
     );
 
     await user.click(screen.getByRole("link", { name: "Live Demo" }));
-    expect(await screen.findByRole("heading", { name: /review this run's generated materials/i })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: /generated question materials/i })).toBeInTheDocument();
     expect(screen.getByText(/generated materials were teacher-confirmed/i)).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /confirm generated materials/i })).not.toBeInTheDocument();
     expect(getTask).toHaveBeenCalledWith("asg_demo123");
 
     await user.click(screen.getByRole("button", { name: /start over/i }));
-    expect(screen.queryByRole("heading", { name: /review this run's generated materials/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: /generated question materials/i })).not.toBeInTheDocument();
   });
 
-  it("runs the real API workflow in order without injecting fallback scores", async () => {
+  it("runs the same API workflow through ordinary low confidence without injecting fallback scores", async () => {
     const user = userEvent.setup();
     const recognizedTask = taskWithQuestions();
     recognizedTask.student_data = recognizedStudents();
+    recognizedTask.problem_data.q1.preparation_issues = [{ issue_id: "source-low", q_id: "q1", field: "stem", code: "low_confidence", severity: "warning", status: "open", details: { confidence: 0.5 } }];
+    for (const student of Object.values(recognizedTask.student_data)) for (const answer of student.stu_ans) answer.flag = ["recognition_low_confidence"];
+
     recognizedTask.problem_data.q2.stem = "Recognized Q2 wording from the live extraction.";
     vi.mocked(createTask).mockResolvedValue(taskState("draft"));
     vi.mocked(preflightProblemSource).mockResolvedValue({
@@ -586,12 +592,12 @@ describe("FrontierLiveDemoPage", () => {
     await waitFor(() => expect(startQuestionPreparation).toHaveBeenCalledTimes(1));
     const confirmTeacherMaterials = await screen.findByRole("button", { name: /continue to submissions/i });
     expect(parseSubmissions).not.toHaveBeenCalled();
-    expect(screen.getByText(/come from this live preparation run/i)).toBeInTheDocument();
+    expect(screen.getByText(/were generated live/i)).toBeInTheDocument();
     await user.click(confirmTeacherMaterials);
     expect(updateProblem).not.toHaveBeenCalled();
     await waitFor(() => expect(parseSubmissions).toHaveBeenCalledTimes(1));
     expect(saveGradingSetup).not.toHaveBeenCalled();
-    expect(await screen.findByRole("heading", { name: /inspect this run's recognized submissions/i })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: /recognized submissions/i })).toBeInTheDocument();
     expect(screen.getByText("Alex Chen")).toBeVisible();
     expect(screen.getByText("Maya Lin")).toBeVisible();
     expect(screen.getByText("Jordan Rivera")).toBeVisible();

@@ -7,6 +7,8 @@ from __future__ import annotations
 import math
 from typing import Any
 
+from backend.domain.confidence_policy import confidence_requires_review
+
 
 def number(value: Any) -> float | None:
     if isinstance(value, bool) or not isinstance(value, (int, float)):
@@ -41,15 +43,7 @@ def review_state(correction: dict) -> tuple[bool, bool]:
     original = correction.get("provisional_score", correction.get("score"))
     blocked = not valid(score(correction)) or (not valid(original) and not confirmed)
     reviewed = number(correction.get("teacher_score")) is not None and confirmed and not blocked
-    expert_scores = [v for expert in correction.get("expert_results") or []
-                     if not expert.get("error_kind") and (v := number(expert.get("score"))) is not None]
-    reasons = {part.strip() for reason in [*(correction.get("review_reasons") or []),
-                                          *(correction.get("initial_review_reasons") or [])]
-               for part in reason.split(",")}
-    disagreement = bool(reasons.intersection({"high_indecisiveness", "score_spread_high"})
-                        or (len(expert_scores) > 1 and maximum is not None
-                            and max(expert_scores) - min(expert_scores) > max(1, maximum * .25)))
     conf = number(correction.get("confidence"))
-    pending = blocked or (not reviewed and (disagreement or (conf is not None and 0 <= conf <= .35)))
+    pending = blocked or (not reviewed and confidence_requires_review(conf))
     return pending, reviewed
 

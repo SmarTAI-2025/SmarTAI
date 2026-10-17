@@ -38,6 +38,24 @@ const {
 const saveSetupMutate = vi.fn();
 
 describe("GradingSetupPage regrade mode", () => {
+  it.each([0.3, 0.8])("normalizes historical threshold %s to the fixed policy without a confidence slider", async threshold => {
+    await clearPageDrafts();
+    const current = (useGradingSetup as unknown as () => any)();
+    current.data.grading_setup.low_confidence_threshold = threshold;
+    const router = createMemoryRouter([
+      { path: "/tasks/:taskId/grading-setup", element: <GradingSetupPage /> },
+      { path: "/tasks/:taskId/grading/preflight", element: <div>New summary</div> },
+    ], { initialEntries: ["/tasks/task-1/grading-setup"] });
+    render(<RouterProvider router={router} />);
+    fireEvent.click(await screen.findByRole("button", { name: "Show advanced settings" }));
+    expect(screen.getAllByRole("slider")).toHaveLength(1);
+    expect(screen.getByText(/Below 0.60: a note beside confirmation in the detail view/)).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: /Save & Review/ }));
+    await waitFor(() => expect(saveSetupMutate).toHaveBeenCalledWith(expect.objectContaining({
+      gradingSetup: expect.objectContaining({ low_confidence_threshold: 0.6 }),
+    })));
+  });
+
   it.each(["error", "graded", "finalized"])("saves %s settings into a new summary even with a historical return address", async (status) => {
     await clearPageDrafts();
     const current = (useGradingSetup as unknown as () => any)();

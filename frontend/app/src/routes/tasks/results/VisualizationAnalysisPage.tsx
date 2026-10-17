@@ -1,3 +1,4 @@
+import { confidenceValue } from "@/lib/confidencePolicy";
 import { useDraftProtection } from "@/hooks/useDraftProtection";
 import { GroundedAskAnswer } from "@/components/tasks/GroundedAskAnswer";
 import { GroundedTrace } from "@/components/tasks/GroundedChart";
@@ -280,7 +281,7 @@ function studentNeedsReview(student: StudentSummary): boolean { return student.c
 function chartMetadata(locale: Locale, sample: number, version: number, scope: ScopeFilter, extra = "", provisional = false): string[] { return [tx(locale, `样本 ${sample}`, `Sample ${sample}`), provisional ? tx(locale, "当前结果", "Current results") : tx(locale, `正式结果 v${version}`, `Final Results v${version}`), scopeLabel(locale, scope), extra].filter(Boolean); }
 function scopeLabel(locale: Locale, scope: ScopeFilter): string { return scope === "pass" ? tx(locale, "仅及格", "Passed only") : scope === "fail" ? tx(locale, "仅未及格", "Failed only") : scope === "review" ? tx(locale, "含复核信号", "With review signals") : tx(locale, "全部学生", "All students"); }
 function normalizeScope(value: string | null): ScopeFilter { return value === "pass" || value === "fail" || value === "review" ? value : "all"; }
-function normalizeConfidence(value: number | null | undefined): number | null { if (typeof value !== "number" || !Number.isFinite(value)) return null; return value > 1 ? value / 100 : value; }
+function normalizeConfidence(value: number | null | undefined): number | null { return confidenceValue(value); }
 function averageOrNull(values: number[]): number | null { return values.length ? values.reduce((sum, value) => sum + value, 0) / values.length : null; }
 function medianOrNull(values: number[]): number | null { if (!values.length) return null; const sorted = [...values].sort((a, b) => a - b); const middle = Math.floor(sorted.length / 2); return sorted.length % 2 ? sorted[middle] : (sorted[middle - 1] + sorted[middle]) / 2; }
 function quantile(sorted: number[], fraction: number): number { const index = (sorted.length - 1) * fraction; const lower = Math.floor(index); const upper = Math.ceil(index); return sorted[lower] + (sorted[upper] - sorted[lower]) * (index - lower); }

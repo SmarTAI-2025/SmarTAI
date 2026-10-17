@@ -512,6 +512,12 @@ class TaskGradingSetup(BaseModel):
     low_confidence_threshold: float = Field(default=0.60, ge=0.30, le=0.80)
     teacher_notes: str = Field(default="", max_length=500)
 
+    @field_validator("low_confidence_threshold")
+    @classmethod
+    def _fixed_confidence_threshold(cls, value):
+        # Accept legacy setup payloads; current policy is shared by all flows.
+        return 0.60
+
     @model_validator(mode="after")
     def _validate_expert_weights(self):
         if self.expert_weights and set(self.expert_weights) != set(self.selected_provider_ids):

@@ -300,11 +300,28 @@ def recognition_page_diagnostics(assembly):
                 page_errors=errors)
 
 
-def recognition_needs_review(summary):
+def recognition_has_failure(summary):
+    """Concrete missing source evidence cannot be accepted as complete material."""
     if not summary:
         return False
     coverage = summary.get("coverage") or {}
-    return bool(summary.get("confidence") == "low" or summary.get("error_code") or any(
+    return bool(summary.get("error_code") or any(
+        coverage.get(key) for key in ("failed_pages", "unprocessed_pages", "missing_targets")
+    ))
+
+
+def recognition_requires_confirmation(summary):
+    """Actual failure evidence and numeric confidence, never an uncalibrated label."""
+    from backend.domain.confidence_policy import confidence_requires_review
+    return recognition_has_failure(summary) or confidence_requires_review((summary or {}).get("confidence"))
+
+
+def recognition_needs_review(summary):
+    from backend.domain.confidence_policy import confidence_needs_attention
+    if not summary:
+        return False
+    coverage = summary.get("coverage") or {}
+    return bool(confidence_needs_attention(summary.get("confidence")) or summary.get("confidence") == "low" or summary.get("error_code") or any(
         coverage.get(key) for key in ("failed_pages", "unprocessed_pages", "missing_targets", "unverified_targets")
     ))
 
@@ -322,7 +339,7 @@ def attach_recognition_review(packages, sources):
             and not summary.get("error_code")
             and "low_confidence_content" not in summary.get("confidence_reasons", []))
         incomplete = any(coverage.get(key) for key in ("failed_pages", "unprocessed_pages", "missing_targets"))
-        if not partial and summary.get("confidence") != "low" and not summary.get("error_code"):
+        if not recognition_needs_review(summary):
             continue
         for q_id, problem in packages.items():
             issue_id = "recognition_" + hashlib.sha256(f"{summary.get('operation_id')}:{q_id}".encode()).hexdigest()[:24]
@@ -331,9 +348,10 @@ def attach_recognition_review(packages, sources):
                 continue
             problem["review_status"] = "needs_review"
             issues.append(dict(
-                issue_id=issue_id, q_id=q_id, field="stem", severity="blocking" if incomplete else "info" if informational else "warning", status="open",
+                issue_id=issue_id, q_id=q_id, field="stem", severity="blocking" if incomplete or summary.get("error_code") else "info" if informational else "warning", status="open",
                 code="recognition_partial" if partial else "recognition_needs_review",
                 source_ids=[summary["operation_id"]], details=dict(coverage=coverage,
                     artifact_ids=summary.get("artifact_ids", []), error_code=summary.get("error_code"),
+                    confidence=summary.get("confidence"),
                     confidence_reasons=summary.get("confidence_reasons", [])),
             ))

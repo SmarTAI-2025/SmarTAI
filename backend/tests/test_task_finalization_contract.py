@@ -120,7 +120,7 @@ def _prepared_task():
     }
 
 
-def test_required_review_audit_counts_only_originally_required_results():
+def test_soft_legacy_review_flags_do_not_count_as_required():
     from backend.db import grading_repository
     from backend.services import task_facade
 
@@ -132,7 +132,7 @@ def test_required_review_audit_counts_only_originally_required_results():
         before["required_review_count"],
         before["confirmed_required_count"],
         before["remaining_review_count"],
-    ) == (1, 0, 0)
+    ) == (0, 0, 0)
 
     grading_repository.add_teacher_review(
         seeded["required_result_id"],
@@ -155,7 +155,7 @@ def test_required_review_audit_counts_only_originally_required_results():
         after["required_review_count"],
         after["confirmed_required_count"],
         after["remaining_review_count"],
-    ) == (1, 1, 0)
+    ) == (0, 0, 0)
 
 
 def test_missing_ai_score_repair_still_requires_explicit_confirmation():
@@ -204,7 +204,7 @@ def test_soft_review_ai_score_is_publishable_and_exported_by_default():
         expected_revision=0,
     )
     assert final["status"] == "ok"
-    assert final["required_review_count"] == 1
+    assert final["required_review_count"] == 0
     assert final["confirmed_required_count"] == 0
     assert final["remaining_review_count"] == 0
 

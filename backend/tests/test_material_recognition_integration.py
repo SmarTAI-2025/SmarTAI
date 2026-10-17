@@ -88,8 +88,8 @@ async def test_compatibility_auxiliary_upload_only_starts_review_plan(monkeypatc
 
 
 @pytest.mark.parametrize("confidence,match,recognition", [
-    (0.4, "exact", None), (0.9, "possible", None),
-    (0.9, "exact", {"confidence": "low", "coverage": {}}),
+    (0.2499, "exact", None), (0.9, "possible", None),
+    (0.9, "exact", {"confidence": "high", "coverage": {"failed_pages": [2]}}),
 ])
 def test_unsafe_test_candidates_never_mutate_or_consume_plan(monkeypatch, confidence, match, recognition):
     candidate = dict(candidate_id="c", q_id="q1", target="test_cases", test_cases=[dict(input="1", expected_output="2")],
@@ -114,6 +114,36 @@ def test_mixed_materials_use_strictest_role_and_opt_in_is_hashed():
     assert api._material_import_source_role(["criterion", "reference_answer"]) == "rubric"
     assert api._material_import_source_role(["criterion", "test_cases"]) == "programming_tests"
     assert api._source_fingerprint({"enable_material_ocr": True}) != api._source_fingerprint({"enable_material_ocr": False})
+
+
+@pytest.mark.parametrize("target", ["criterion", "reference_answer", "test_cases"])
+@pytest.mark.parametrize("evidence", [
+    {"error_code": "provider_upstream_unavailable"},
+    {"coverage": {"failed_pages": [2]}},
+    {"coverage": {"unprocessed_pages": [2]}},
+    {"coverage": {"missing_targets": ["Q2"]}},
+    {},
+])
+def test_all_material_targets_preserve_source_failures_without_blocking_advice(monkeypatch, target, evidence):
+    candidate = dict(candidate_id="c", q_id="q1", target=target, text_value="Usable material",
+                     test_cases=[dict(input="1", expected_output="2")], confidence=.5, match_status="exact")
+    job = SimpleNamespace(id="job", assignment_id="task", operation_type="material_import", status="ready", attempt=1,
+                          expires_at=None, progress={}, payload=dict(candidates=[candidate], recognition={"confidence": .5, **evidence}))
+    monkeypatch.setattr(api.workflow_repository, "get_operation", lambda *a, **k: job)
+    monkeypatch.setattr(api.task_facade, "get_task", lambda **k: dict(problem_data={"q1": {"type": "programming"}}))
+    mutate = Mock(return_value=1)
+    fail = Mock(side_effect=AssertionError("review rejection must retain the plan"))
+    monkeypatch.setattr(api.task_facade, "apply_question_patches_atomic", mutate)
+    monkeypatch.setattr(api.task_facade, "_fail_operation", fail)
+    response = api.apply_material_import("task", "job", api.ApplyMaterialImportRequest(
+        accepted_candidate_ids=["c"], expected_workflow_revision=0), current=SimpleNamespace(id="owner"))
+    if evidence:
+        assert json.loads(response.body)["error"]["code"] == "material_recognition_review_required"
+        mutate.assert_not_called()
+    else:
+        assert response["status"] == "applied"
+        assert mutate.call_args.kwargs["patches"][0]["fields"][target]
+    fail.assert_not_called()
 
 
 @pytest.mark.parametrize("state", ["unconfirmed", "parser_failed"])

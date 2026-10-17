@@ -142,7 +142,7 @@ describe("review overview smart filter", () => {
   it("keeps confirmed reviews, pending reviews, and annotations distinct", () => {
     const statusStudent = student("student-status", "Status", 80, [
       correction("Q1", { requires_human_review: true, provisional_score: 8, teacher_score: 8, review_status: "confirmed" }),
-      correction("Q2", { requires_human_review: true, review_reasons: ["score_spread_high"] }),
+      correction("Q2", { confidence: .2, requires_human_review: true, review_reasons: ["score_spread_high"] }),
     ]);
     const statusModel = {
       ...model,
@@ -162,7 +162,7 @@ describe("review overview smart filter", () => {
       correction("Q1", { confidence: 0.2 }),
       correction("Q2", { confidence: 0.2 }),
     ]);
-    const oneBackendFlag = student("student-one", "One", 80, [correction("Q1", { requires_human_review: true, review_reasons: ["score_spread_high"] })]);
+    const oneBackendFlag = student("student-one", "One", 80, [correction("Q1", { score: null, provisional_score: null, requires_human_review: true, review_reasons: ["llm_failed"] })]);
     const noSignals = student("student-none", "None", 80);
     const sortModel = {
       ...model,

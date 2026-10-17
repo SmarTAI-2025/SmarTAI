@@ -1,8 +1,8 @@
 import type { Correction, ProblemInfo, StudentAnswerInfo, StudentResult, StudentSubmission, Task, TaskResultResponse } from "@/types";
 import type { Locale } from "@/i18n/messages";
-import { VERY_LOW_REVIEW_CONFIDENCE, type ReviewAttention } from "@/lib/reviewConfirmation";
-
-export const LOW_CONFIDENCE_THRESHOLD = 0.65;
+import type { ReviewAttention } from "@/lib/reviewConfirmation";
+import { confidenceNeedsAttention, confidenceRequiresReview, confidenceValue } from "@/lib/confidencePolicy";
+export { LOW_CONFIDENCE_THRESHOLD } from "@/lib/confidencePolicy";
 
 export type CorrectionScoreSource =
   | "ai_untouched"
@@ -256,16 +256,12 @@ export function formatPercent(value: number | null | undefined) {
 }
 
 export function formatConfidence(value: number | null | undefined) {
-  if (typeof value !== "number" || !Number.isFinite(value)) {
-    return "--";
-  }
-  const percent = value <= 1 ? value * 100 : value;
-  return `${Math.round(percent)}%`;
+  const confidence = confidenceValue(value);
+  return confidence === null ? "--" : `${Math.round(confidence * 100)}%`;
 }
 
 export function isLowConfidence(correction: Correction) {
-  return hasReviewSignal(correction) && Number.isFinite(correction.confidence)
-    && correction.confidence >= 0 && correction.confidence <= VERY_LOW_REVIEW_CONFIDENCE;
+  return !isCorrectionReviewConfirmed(correction) && confidenceNeedsAttention(correction.confidence);
 }
 
 export function hasReviewSignal(correction: Correction) {
@@ -288,10 +284,13 @@ export function correctionReviewBlocked(correction: Correction): boolean {
 
 /** One pending-review rule for the review queue, analysis, filters and charts. */
 export function correctionReviewAttention(correction: Correction): ReviewAttention {
-  if (correctionReviewBlocked(correction)) return "blocking";
-  if (isCorrectionReviewConfirmed(correction)) return "none";
-  const veryLowConfidence = Number.isFinite(correction.confidence) && correction.confidence >= 0 && correction.confidence <= VERY_LOW_REVIEW_CONFIDENCE;
-  return veryLowConfidence || hasExpertDisagreement(correction) ? "advisory" : "none";
+  return correctionReviewNextBlocked(correction) ? "blocking" : "none";
+}
+
+/** A valid score can be confirmed even when continuing requires that confirmation. */
+export function correctionReviewNextBlocked(correction: Correction): boolean {
+  return correctionReviewBlocked(correction) || (!isCorrectionReviewConfirmed(correction)
+    && confidenceRequiresReview(correction.confidence));
 }
 
 export function getExpertScoreSpread(correction: Correction): number {
@@ -349,7 +348,7 @@ function buildStudentSummary(
   });
   const totalScore = sum(resolvedScores.map((item) => item.score));
   const totalMax = sum(resolvedScores.map((item) => item.maxScore));
-  const confidenceValues = corrections.map((correction) => safeNumber(correction.confidence));
+  const confidenceValues = corrections.map((correction) => confidenceValue(correction.confidence)).filter((value): value is number => value !== null);
   const lowConfidenceCount = corrections.filter(isLowConfidence).length;
   const reviewCount = corrections.filter(hasReviewSignal).length;
 
@@ -395,7 +394,7 @@ function buildQuestionSummary(qId: string, problem: ProblemInfo | undefined, ent
     avgPercent: percents.length ? average(percents) : null,
     minScore: scores.length ? Math.min(...scores) : null,
     maxObservedScore: scores.length ? Math.max(...scores) : null,
-    lowConfidenceCount: entries.filter((entry) => isLowConfidence(entry.correction)).length,
+    lowConfidenceCount: entries.filter(({ correction }) => isLowConfidence(correction)).length,
     reviewCount: entries.filter((entry) => hasReviewSignal(entry.correction)).length,
   };
 }

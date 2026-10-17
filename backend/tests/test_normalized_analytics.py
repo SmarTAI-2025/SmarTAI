@@ -607,7 +607,7 @@ def test_chart_prompt_contains_real_confidence_and_review_metrics_with_unknowns(
     execution=response.json()["execution"]
     rows={r[0]:r for r in execution["data"]["rows"]}
     assert rows[seeded["students"][0].id][1:3] == [85,0.8]
-    assert rows[seeded["students"][1].id][2:] == [0.7,1,1]
+    assert rows[seeded["students"][1].id][2:] == [None,0,0]
     assert rows[seeded["students"][2].id][1] is None
     prompt=json.loads(provider.calls[-1][1].content)
     assert prompt["schema"]["grades"]["confidence"] == "REAL"

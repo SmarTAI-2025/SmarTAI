@@ -1,4 +1,4 @@
-import { isCorrectionReviewConfirmed, correctionReviewBlocked } from "@/components/tasks/resultsReviewModel";
+import { isCorrectionReviewConfirmed, correctionReviewBlocked, correctionReviewNextBlocked } from "@/components/tasks/resultsReviewModel";
 import { ReviewConfirmButton, ReviewStageActions, RetryFailedGrading } from "@/components/tasks/ReviewConfirmation";
 import { SortableTableHead, useColumnSort, sortColumnRows, directionFor, type ColumnSort } from "@/components/ui/SortableTableHead";
 import { AlertTriangle, ArrowRight, CheckCircle2, ChevronRight, LoaderCircle, Search } from "lucide-react";
@@ -96,7 +96,7 @@ export function ReviewOverviewPage() {
   const isLoading = taskQuery.isLoading || readingCompletion || resultQuery.isLoading || finalizationQuery.isLoading;
   const isError = taskQuery.isError || resultQuery.isError || finalizationQuery.isError;
   const pendingReviewItems = reviewItems.filter((item) => !confirmedKeys.has(reviewCellKey(item.student.id, item.question.id)));
-  const blockingReviewItems = reviewItems.filter((item) => correctionReviewBlocked(item.correction));
+  const blockingReviewItems = pendingReviewItems.filter((item) => correctionReviewNextBlocked(item.correction));
   const historyView = Boolean(task && task.status !== "graded" && !resolvingFailures);
   const overviewReturnTo = taskId
     ? `/tasks/${encodeURIComponent(taskId)}/review${searchParams.toString() ? `?${searchParams.toString()}` : ""}`
@@ -113,8 +113,8 @@ export function ReviewOverviewPage() {
     (total, student) => total + student.corrections.filter(correction => !isCorrectionReviewConfirmed(correction) && isExpertDisagreement(correction)).length,
     0,
   );
-  const remainingReviewCount = finalizationQuery.data?.remaining_review_count ?? blockingReviewItems.length;
-  const readyForConfirmation = finalizationQuery.data?.ready_for_confirmation === true;
+  const remainingReviewCount = Math.max(finalizationQuery.data?.remaining_review_count ?? 0, blockingReviewItems.length);
+  const readyForConfirmation = finalizationQuery.data?.ready_for_confirmation === true && blockingReviewItems.length === 0;
   const confirmableReviews = model.students.flatMap((student) => student.corrections.flatMap((correction) => {
     const score = effectiveCorrectionScore(correction);
     const teacherConfirmed = Number.isFinite(correction.teacher_score) && correction.review_status === "confirmed";
@@ -434,7 +434,7 @@ function ReviewHeatmap({
 }
 
 function ReviewCell({ locale, href, correction, item, annotated, confirmed, question }: { locale: Locale; href: string; correction: Correction; item?: ReviewItem; annotated: boolean; confirmed: boolean; question?: QuestionSummary }) {
-  const state = correctionReviewBlocked(correction) ? "hard" : confirmed ? "confirmed" : item ? "review" : "ready";
+  const state = correctionReviewNextBlocked(correction) ? "hard" : confirmed ? "confirmed" : item ? "review" : "ready";
   const label = locale === "zh-CN" ? (state === "hard" ? "需处理并确认" : state === "confirmed" ? "已确认" : state === "review" ? "待复核" : "已批改") : (state === "hard" ? "Correction and confirmation required" : state === "confirmed" ? "Confirmed" : state === "review" ? "Needs review" : "Graded");
   const displayScore = effectiveCorrectionScore(correction);
   const scoreDetail = displayScore !== null && correction.max_score > 0
@@ -497,7 +497,8 @@ function PageState({ title, description, busy = false, action, href, onAction }:
 
 function queueReason(locale: Locale, item: ReviewItem): string {
   if (effectiveCorrectionScore(item.correction) === null) return locale === "zh-CN" ? "缺少有效分数 · 需处理" : "Missing valid score · action required";
-  if (item.severity === "blocking") return locale === "zh-CN" ? "请核对修正分数并确认" : "Check the corrected score and confirm";
+  if (correctionReviewBlocked(item.correction)) return locale === "zh-CN" ? "请核对补齐后的分数并确认" : "Check the corrected score and confirm";
+  if (item.severity === "blocking") return locale === "zh-CN" ? "请核对并确认" : "Check and confirm the result";
   if (item.correction.review_status === "edited") return copy(locale, "savedPendingReason");
   if (item.category === "low-confidence") return copy(locale, "lowReason");
   if (item.category === "expert-disagreement") return copy(locale, "disagreementReason");

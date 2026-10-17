@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { Correction } from "@/types";
 import { buildResultsModel, hasReviewSignal, summarizeReviewScoreSources } from "./resultsModel";
-import { collectResultReviewItems, correctionReviewAttention, correctionReviewBlocked, isCorrectionReviewConfirmed } from "./resultsReviewModel";
+import { collectResultReviewItems, correctionReviewAttention, correctionReviewBlocked, correctionReviewNextBlocked, isCorrectionReviewConfirmed } from "./resultsReviewModel";
 
 const correction = (overrides: Partial<Correction> = {}): Correction => ({
   q_id: "q1", type: "short", score: 8, max_score: 10, confidence: 0.9,
@@ -28,10 +28,13 @@ describe("grading review attention", () => {
     expect(correctionReviewAttention(correction({ score: Number.NaN }))).toBe("blocking");
   });
 
-  it("treats very low confidence and real expert disagreement as optional review", () => {
-    expect(correctionReviewAttention(correction({ confidence: 0.2 }))).toBe("advisory");
+  it("requires very low confidence confirmation while keeping ordinary disagreement out of the queue", () => {
+    expect(correctionReviewAttention(correction({ confidence: 0.2 }))).toBe("blocking");
     expect(correctionReviewBlocked(correction({ confidence: 0.2 }))).toBe(false);
-    expect(correctionReviewAttention(correction({ review_reasons: ["score_spread_high"] }))).toBe("advisory");
+    expect(correctionReviewNextBlocked(correction({ confidence: 0.2 }))).toBe(true);
+    expect(correctionReviewAttention(correction({ confidence: 0.25 }))).toBe("none");
+    expect(correctionReviewNextBlocked(correction({ confidence: 0.25 }))).toBe(false);
+    expect(correctionReviewAttention(correction({ review_reasons: ["score_spread_high"] }))).toBe("none");
     expect(correctionReviewAttention(correction({ confidence: 0.2, teacher_score: 8, review_status: "confirmed" }))).toBe("none");
   });
 
@@ -39,15 +42,17 @@ describe("grading review attention", () => {
     const successful = { provider: "a", score: 9, max_score: 10, confidence: .9, comment: "", steps: [] };
     const zero = { ...successful, provider: "b", score: 0, confidence: 0 };
     expect(correctionReviewAttention(correction({ expert_results: [successful, { ...zero, error_kind: "parse_failed" }] }))).toBe("none");
-    expect(correctionReviewAttention(correction({ expert_results: [successful, zero] }))).toBe("advisory");
+    expect(correctionReviewAttention(correction({ expert_results: [successful, zero] }))).toBe("none");
   });
 
-  it("orders blocking scores before optional checks without changing result calculations", () => {
-    const corrections = [correction({ q_id: "normal", confidence: 0.6 }), correction({ q_id: "optional", confidence: 0.2 }), correction({ q_id: "missing", score: null, provisional_score: null })];
+  it("excludes optional confidence checks from required counts while retaining explicit confidence-query data", () => {
+    const corrections = [correction({ q_id: "normal", confidence: 0.6 }), correction({ q_id: "optional", confidence: 0.4 }), correction({ q_id: "missing", score: null, provisional_score: null })];
     const model = buildResultsModel(undefined, { task_id: "T1", status: "graded", timestamp: 0, results: [{ student_id: "s1", student_name: "Sample", corrections }] } as Parameters<typeof buildResultsModel>[1]);
     const before = JSON.stringify(corrections);
     const items = collectResultReviewItems(model, model.students);
-    expect(items.map(item => [item.correction.q_id, item.severity])).toEqual([["missing", "blocking"], ["optional", "advisory"]]);
+    expect(items.map(item => [item.correction.q_id, item.severity])).toEqual([["missing", "blocking"]]);
+    expect(model.lowConfidenceCount).toBe(1);
+    expect(model.reviewCount).toBe(1);
     expect(model.students[0].totalScore).toBe(16);
     expect(model.students[0].totalMax).toBe(20);
     expect(JSON.stringify(corrections)).toBe(before);
@@ -56,8 +61,8 @@ describe("grading review attention", () => {
   it("keeps analysis counts equal to the pending queue before and after confirmation", () => {
     const corrections = [
       correction({ q_id: "normal", confidence: .6, requires_human_review: true, review_reasons: ["low_confidence"] }),
-      correction({ q_id: "disputed", review_reasons: ["high_indecisiveness"] }),
-      correction({ q_id: "edited", teacher_score: 9, review_status: "edited", review_reasons: ["score_spread_high"] }),
+      correction({ q_id: "disputed", confidence: .2, review_reasons: ["high_indecisiveness"] }),
+      correction({ q_id: "edited", confidence: .2, teacher_score: 9, review_status: "edited", review_reasons: ["score_spread_high"] }),
       correction({ q_id: "zero", teacher_score: 0, review_status: "confirmed", confidence: .2 }),
       correction({ q_id: "same", teacher_score: 8, review_status: "confirmed", initial_review_reasons: ["score_spread_high"] }),
     ];
@@ -68,7 +73,7 @@ describe("grading review attention", () => {
     expect(model.reviewCount).toBe(2);
     expect(model.students[0].reviewCount).toBe(2);
     expect(model.questions.reduce((sum, question) => sum + question.reviewCount, 0)).toBe(2);
-    expect(model.lowConfidenceCount).toBe(0);
+    expect(model.lowConfidenceCount).toBe(2);
     expect(summarizeReviewScoreSources(corrections).aiUntouched).toBe(2);
   });
 });

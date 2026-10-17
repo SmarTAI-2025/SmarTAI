@@ -1,24 +1,32 @@
 import type { PreparationIssue, ProblemInfo, StudentAnswerInfo, StudentSubmission, SubmissionSourceOutcome, Task } from "@/types";
+import { confidenceValue, confidenceNeedsAttention, confidenceRequiresReview } from "./confidencePolicy";
 
 export type ReviewAttention = "none" | "advisory" | "blocking";
-export const VERY_LOW_REVIEW_CONFIDENCE = 0.35;
-
-function questionHasLowConfidence(issue: PreparationIssue): boolean {
-  return issue.code === "low_confidence"
-    || (Array.isArray(issue.details?.confidence_reasons) && issue.details.confidence_reasons.includes("low_confidence_content"));
+export function questionConfidence(issue: PreparationIssue, problem?: ProblemInfo): number | null {
+  const explicit = confidenceValue(issue.details?.confidence);
+  if (explicit !== null) return explicit;
+  const field = issue.field === "answer" ? "reference_answer" : issue.field === "rubric" ? "criterion" : issue.field === "programming_tests" ? "test_cases" : null;
+  return confidenceValue(field ? problem?.material_provenance?.[field]?.confidence : undefined);
+}
+function questionHasLowConfidence(issue: PreparationIssue, problem?: ProblemInfo): boolean {
+  return confidenceNeedsAttention(questionConfidence(issue, problem));
+}
+function issueRequiresConfirmation(issue: PreparationIssue, problem?: ProblemInfo): boolean {
+  return issue.severity === "blocking" || ["manual_completion_required", "source_conflict", "ambiguous_question_match"].includes(issue.code)
+    || confidenceRequiresReview(questionConfidence(issue, problem));
 }
 
 function questionHasMissingEvidence(issue: PreparationIssue): boolean {
   const coverage = issue.details?.coverage as Record<string, unknown[]> | undefined;
-  return issue.code === "recognition_partial" && issue.status !== "resolved"
-    && ["failed_pages", "unprocessed_pages", "missing_targets"].some(key => Boolean(coverage?.[key]?.length));
+  return ["recognition_partial", "recognition_needs_review"].includes(issue.code) && issue.status !== "resolved"
+    && (Boolean(issue.details?.error_code) || ["failed_pages", "unprocessed_pages", "missing_targets"].some(key => Boolean(coverage?.[key]?.length)));
 }
 
-/** Generic source uncertainty is optional; concrete failures and low confidence need review. */
+/** Qualitative OCR labels are not numeric probabilities or failures. */
 export function questionIssueNeedsReview(issue: PreparationIssue): boolean {
   if (questionHasMissingEvidence(issue)) return true;
   if (issue.status !== "open") return false;
-  return issue.severity === "blocking" || questionHasLowConfidence(issue);
+  return issueRequiresConfirmation(issue);
 }
 
 function onlyUnverifiedTargets(issue: PreparationIssue): boolean {
@@ -48,9 +56,15 @@ export function recognitionIssueLabel(issue: PreparationIssue, locale: string): 
     ["missing_targets", "未找到的题号", "Question numbers not found"],
   ].flatMap(([key, cn, en]) => coverage?.[key]?.length ? [`${zh ? cn : en}：${coverage[key].join(", ")}`] : []);
   if (reasons.length) return reasons.join("；");
+  if (issue.details?.error_code) return zh
+    ? "来源读取失败，请重试或修正原件后继续。"
+    : "Source reading failed. Retry or correct the source before continuing.";
+  if (confidenceRequiresReview(questionConfidence(issue))) return zh
+    ? "识别置信度低于 0.25，请核对并确认后继续。"
+    : "Recognition confidence is below 0.25. Check and confirm before continuing.";
   if (questionHasLowConfidence(issue)) return zh
-    ? "识别置信度较低，请对照原件核对并确认后继续。"
-    : "Recognition confidence is low. Check against the original and confirm before continuing.";
+    ? "识别置信度低于 0.60，建议核对；可以继续。"
+    : "Recognition confidence is below 0.60. Checking is optional; you can continue.";
   if (onlyUnverifiedTargets(issue)) return zh
     ? "已定位题号；请对照原文件确认题干完整。这是常规确认，尚未发现具体缺失。"
     : "Question numbers were located. Confirm the complete wording against the source; no specific omission was detected.";
@@ -79,14 +93,15 @@ export function questionReviewBlocked(problem: ProblemInfo): boolean {
 /** Corrected hard failures still require one explicit confirmation before navigation. */
 export function questionReviewNextBlocked(problem: ProblemInfo): boolean {
   return questionReviewBlocked(problem) || (problem.review_status !== "confirmed"
-    && (problem.preparation_issues ?? []).some(issue => issue.severity === "blocking" || issue.code === "manual_completion_required"
-      || questionHasLowConfidence(issue)));
+    && (problem.preparation_issues ?? []).some(issue => issueRequiresConfirmation(issue, problem)));
 }
 
 export function questionReviewIssues(problem: ProblemInfo): PreparationIssue[] {
+  if (!questionReviewNextBlocked(problem)) return [];
   const issues = (problem.preparation_issues ?? []).filter(issue => questionIssueNeedsReview(issue)
-    || (problem.review_status !== "confirmed" && questionHasLowConfidence(issue)))
-    .map(issue => questionHasMissingEvidence(issue) ? { ...issue, severity: "blocking" as const } : issue);
+    || (problem.review_status !== "confirmed" && confidenceRequiresReview(questionConfidence(issue, problem))))
+    .map(issue => questionHasMissingEvidence(issue) ? { ...issue, severity: "blocking" as const }
+      : questionConfidence(issue, problem) !== null ? { ...issue, details: { ...issue.details, confidence: questionConfidence(issue, problem) } } : issue);
   function add(field: PreparationIssue["field"], code: PreparationIssue["code"], reason: string) {
     issues.push({ issue_id: `review:${problem.q_id}:${reason}`, q_id: problem.q_id, field, code,
       severity: "blocking", status: "open", details: { review_display_reason: reason } });
@@ -108,11 +123,11 @@ export function answerReviewBlocked(answer?: StudentAnswerInfo): boolean {
 }
 export function answerReviewNextBlocked(answer?: StudentAnswerInfo): boolean {
   return answerReviewBlocked(answer) || Boolean(answer?.review_status !== "confirmed"
-    && (answer?.flag?.includes("recognition_repaired_needs_confirmation") || answerHasLowConfidence(answer)));
+    && answer?.flag?.some(flag => ["recognition_repaired_needs_confirmation", "recognition_very_low_confidence"].includes(flag)));
 }
 
 function answerHasLowConfidence(answer?: StudentAnswerInfo): boolean {
-  return Boolean(answer?.flag?.some(flag => ["very_low_confidence", "recognition_low_confidence", "low_confidence"].includes(flag)));
+  return Boolean(answer?.flag?.includes("recognition_very_low_confidence"));
 }
 
 export function studentIdentityIssue(value: string): "required" | "placeholder" | null {

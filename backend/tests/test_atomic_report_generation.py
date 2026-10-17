@@ -80,7 +80,7 @@ def test_retired_snapshot_routes_and_read_only_pages_cannot_create_versions():
     assert record.manifest["schema_version"] == result_artifacts.ARTIFACT_SCHEMA_VERSION == 2
 
 
-def test_confirmation_changes_new_report_count_without_rewriting_history():
+def test_optional_disagreement_does_not_enter_queue_or_rewrite_report_history():
     from backend.db.models import GradeResultRecord
     from backend.db.session import session_scope
     from backend.services import task_facade
@@ -97,7 +97,7 @@ def test_confirmation_changes_new_report_count_without_rewriting_history():
         row.ai_expert_results = [{"score": 10}, {"score": 7}]
     first = task_facade.generate_artifacts(**args, expected_revision=0)
     original = task_facade.artifact_bytes(**args, version=1, artifact_id="learning_report_md")[0]
-    assert next(line for line in original.decode().splitlines() if line.startswith("| q-optional |")).endswith("| 1 |")
+    assert next(line for line in original.decode().splitlines() if line.startswith("| q-optional |")).endswith("| 0 |")
     edited = task_facade.update_correction_review(
         **args, display_student_id=seeded["student_id"], q_id="q-optional",
         teacher_score=9, teacher_comment="", confirm=True,

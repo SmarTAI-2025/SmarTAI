@@ -1,3 +1,4 @@
+import { confidenceValue, LOW_CONFIDENCE_THRESHOLD } from "@/lib/confidencePolicy";
 import { groundedRows, hasGroundedOrder } from "@/lib/groundedAsk";
 import { SortableTableHead, useColumnSort, directionFor, type ColumnSort } from "@/components/ui/SortableTableHead";
 import { TaskQueryBar } from "@/components/tasks/AskQueryBar";
@@ -10,6 +11,7 @@ import { Link, useSearchParams } from "react-router-dom";
 import {
   hasReviewSignal as correctionNeedsFormalReview,
   hasExpertDisagreement,
+  isLowConfidence,
   isCorrectionReviewConfirmed,
   correctionScoreSource,
   effectiveCorrectionScore,
@@ -306,7 +308,7 @@ function matchesSemanticPlan(row: StudentAnalysisRow, plan: SemanticStudentPlan)
   if (plan.minPercent !== null && (percent === null || percent < plan.minPercent)) return false;
   if (plan.maxPercent !== null && (percent === null || percent >= plan.maxPercent)) return false;
   if (plan.pass && !matchesPassFilter(percent, plan.pass)) return false;
-  if (plan.lowConfidence && row.student.lowConfidenceCount === 0) return false;
+  if (plan.lowConfidence && !row.student.corrections.some(isLowConfidence)) return false;
   const confidence = normalizeConfidence(row.student.avgConfidence);
   if (plan.avgConfidenceBelow !== null && (confidence === null || confidence >= plan.avgConfidenceBelow)) return false;
   if (plan.reviewState && row.reviewState !== plan.reviewState) return false;
@@ -391,9 +393,9 @@ function matchesPassFilter(percent: number | null, filter: PassFilter): boolean 
 
 function matchesConfidenceFilter(student: StudentSummary, filter: ConfidenceFilter): boolean {
   if (filter === "all") return true;
-  if (filter === "low_items") return student.lowConfidenceCount > 0;
+  if (filter === "low_items") return student.corrections.some(isLowConfidence);
   const confidence = normalizeConfidence(student.avgConfidence);
-  return confidence !== null && confidence < 0.65;
+  return confidence !== null && confidence < LOW_CONFIDENCE_THRESHOLD;
 }
 
 function compareStudentHeader(left: StudentAnalysisRow, right: StudentAnalysisRow, sort: ColumnSort): number {
@@ -440,7 +442,7 @@ function normalizeSortMode(value: string | null): SortMode {
   return value && supportsFilterIntent({ ...EMPTY_FILTER_INTENT, sort: value as FilterIntentResult["sort"] }, "student_analysis")
     ? value as SortMode : "student";
 }
-function normalizeConfidence(value: number | null | undefined): number | null { if (typeof value !== "number" || !Number.isFinite(value)) return null; return value > 1 ? value / 100 : value; }
+function normalizeConfidence(value: number | null | undefined): number | null { return confidenceValue(value); }
 function averageOrNull(values: number[]): number | null { return values.length ? values.reduce((sum, value) => sum + value, 0) / values.length : null; }
 function medianOrNull(values: number[]): number | null { if (!values.length) return null; const sorted = [...values].sort((a, b) => a - b); const middle = Math.floor(sorted.length / 2); return sorted.length % 2 ? sorted[middle] : (sorted[middle - 1] + sorted[middle]) / 2; }
 function compareStudents(left: StudentSummary, right: StudentSummary): number { return left.name.localeCompare(right.name, undefined, { numeric: true, sensitivity: "base" }) || left.id.localeCompare(right.id, undefined, { numeric: true, sensitivity: "base" }); }
