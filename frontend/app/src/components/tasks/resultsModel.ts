@@ -290,7 +290,8 @@ export function correctionReviewAttention(correction: Correction): ReviewAttenti
 /** A valid score can be confirmed even when continuing requires that confirmation. */
 export function correctionReviewNextBlocked(correction: Correction): boolean {
   return correctionReviewBlocked(correction) || (!isCorrectionReviewConfirmed(correction)
-    && confidenceRequiresReview(correction.confidence));
+    && (confidenceRequiresReview(correction.confidence)
+      || correctionReviewReasonIds(correction).includes("grading_paused")));
 }
 
 export function getExpertScoreSpread(correction: Correction): number {
@@ -307,12 +308,14 @@ export function hasExpertDisagreement(correction: Correction): boolean {
 
 export function reviewReasonLabel(reason: string, locale: Locale = "zh-CN") {
   const english: Record<string, string> = {
+    grading_paused: "Paused before grading finished; check and confirm",
     high_indecisiveness: "Experts disagree", low_confidence: "Low confidence", score_spread_high: "Large score difference",
     minority_veto: "Outlying expert score", parse_failed: "Could not parse result", degraded_to_single: "Only one expert succeeded (low confidence)",
     transient_llm: "Model network error or timeout", llm_failed: "Model could not grade", quota_exhausted: "Quota exhausted", general: "Teacher review required",
   };
   if (locale === "en-US") return english[reason] ?? reason.replaceAll("_", " ");
   const labels: Record<string, string> = {
+    grading_paused: "已暂停，批改未完成，请核对并确认",
     high_indecisiveness: "专家分歧较大",
     low_confidence: "置信度偏低",
     score_spread_high: "评分差异较大",

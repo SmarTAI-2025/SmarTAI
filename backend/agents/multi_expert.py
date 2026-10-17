@@ -231,18 +231,26 @@ async def run_multi_expert(
     # ── Single-shot fast path (legacy: 1 provider, effective_n == 1) ──────
     if mode == "single":
         provider = providers[0]
+        from backend.services.grading_checkpoints import current_checkpoints
+        checkpoints = current_checkpoints()
+        provider_id = provider_ids.get(id(provider), provider.provider_id)
         skill = skill_cls(
             provider, reporter=reporter, language=language, task_id=task_id,
             grading_setup=grading_setup,
         )
         from backend.progress.grading_activity import observe_expert
-        async with observe_expert(reporter, provider, samples) as activity:
-            expert_result = normalize_expert_result(
-                await skill.grade(problem, answer, student_id=student_id),
-                problem.max_score,
-            )
-            if activity is not None:
-                activity["successful"] = _is_successful_expert(expert_result)
+        expert_result = checkpoints.get(student_id, problem.q_id, provider_id, 0) if checkpoints else None
+        if expert_result is None:
+            async with observe_expert(reporter, provider, samples) as activity:
+                expert_result = normalize_expert_result(
+                    await skill.grade(problem, answer, student_id=student_id),
+                    problem.max_score,
+                )
+                expert_result.provider_id = provider_id
+                if checkpoints:
+                    checkpoints.save_expert(student_id, problem.q_id, provider_id, 0, expert_result)
+                if activity is not None:
+                    activity["successful"] = _is_successful_expert(expert_result)
         if not _is_successful_expert(expert_result):
             raise AllExpertsFailed([expert_result])
         expert_result.provider_id = provider_ids.get(id(provider), provider.provider_id)
@@ -263,18 +271,26 @@ async def run_multi_expert(
     )
 
     async def _run_one(provider: BaseProvider, sample_idx: int) -> ExpertResult:
+        from backend.services.grading_checkpoints import current_checkpoints
+        checkpoints = current_checkpoints()
+        provider_id = provider_ids.get(id(provider), provider.provider_id)
         skill = skill_cls(
             provider, reporter=reporter, language=language, task_id=task_id,
             grading_setup=grading_setup,
         )
         from backend.progress.grading_activity import observe_expert
-        async with observe_expert(reporter, provider, samples) as activity:
-            result = normalize_expert_result(
-                await skill.grade(problem, answer, student_id=student_id),
-                problem.max_score,
-            )
-            if activity is not None:
-                activity["successful"] = _is_successful_expert(result)
+        result = checkpoints.get(student_id, problem.q_id, provider_id, sample_idx) if checkpoints else None
+        if result is None:
+            async with observe_expert(reporter, provider, samples) as activity:
+                result = normalize_expert_result(
+                    await skill.grade(problem, answer, student_id=student_id), problem.max_score)
+                result.provider_id = provider_id
+                if sample_idx > 0 and result.provider and "#sample" not in result.provider:
+                    result.provider = f"{result.provider}#sample{sample_idx}"
+                if checkpoints:
+                    checkpoints.save_expert(student_id, problem.q_id, provider_id, sample_idx, result)
+                if activity is not None:
+                    activity["successful"] = _is_successful_expert(result)
         result.provider_id = provider_ids.get(id(provider), provider.provider_id)
         # Tag duplicate provider IDs in multi-sample mode so the UI / logs can
         # tell them apart. We do this AFTER the skill returns so any internal

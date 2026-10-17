@@ -4011,6 +4011,16 @@ def _grading_progress(run_id: str, owner_id: str) -> dict:
                         for item in reversed(events) if "model_waits" in item.get("payload", {})), [])
     question_count = len(assignment_repository.get_questions_by_assignment(run.assignment_id))
     completed_units = run.completed_submissions * question_count
+    saved_pairs = set()
+    from backend.services.grading_checkpoints import saved_experts
+    from backend.models import ExpertResult
+    from backend.agents.multi_expert import _is_successful_expert
+    for item in saved_experts(run_id):
+        if _is_successful_expert(ExpertResult.model_validate(item["result"])):
+            saved_pairs.add((item["student_id"], item["q_id"]))
+    for result in grading_repository.list_results_for_run(run_id):
+        if result.effective_score is not None:
+            saved_pairs.add((result.student_id, result.q_id))
     for item in events:
         value = item.get("payload", {}).get("completed_units")
         if isinstance(value, int) and not isinstance(value, bool):
@@ -4039,6 +4049,7 @@ def _grading_progress(run_id: str, owner_id: str) -> dict:
         "total_students": run.total_submissions,
         "total_questions": question_count,
         "completed_units": completed_units,
+        "saved_units": len(saved_pairs),
         "active": [], "messages": messages,
         "model_waits": safe_waits if run.status == "running" else [],
         "model_progress": models,
@@ -4416,10 +4427,16 @@ def start_task_grading(
                 or content_questions(old.get("questions", [])) != content_questions(input_manifest["questions"])):
             raise VersionConflict("Grading inputs changed; review the setup before starting a new run.", code="grading_inputs_changed")
         reusable = [result.model_dump(mode="json") for result in grading_repository.list_results_for_run(latest.id)
-                    if result.effective_score is not None and math.isfinite(result.effective_score)]
+                    if result.effective_score is not None and math.isfinite(result.effective_score)
+                    and ("grading_paused" not in result.initial_review_reasons or result.teacher_review)]
         if len(reusable) == len(questions) * len(frozen_revision_ids):
             return {"status": "already_done", "task_id": task_id, "job_id": latest.id}
         input_manifest.update(retry_from_run_id=latest.id, reused_results=reusable, retry_scope="failed_only")
+        from backend.services.grading_checkpoints import saved_experts
+        # Changing a provider still permits the established failed-item retry,
+        # but partial expert votes from its previous configuration cannot mix in.
+        input_manifest["reused_experts"] = (saved_experts(latest.id)
+            if old.get("provider_configuration_fingerprint") == input_manifest.get("provider_configuration_fingerprint") else [])
     # A new explicit full-batch intent reruns even identical inputs. HTTP
     # replays still bind to the original run above; failed-only retries reuse
     # valid scores, and legacy callers retain fingerprint-based reuse.
@@ -4491,7 +4508,7 @@ def task_results(*, task_id: str, owner_id: str) -> dict:
     run = _current_grading_run(workflow, runs)
     if run is None:
         return {"status": task["status"], "task_id": task_id}
-    if run.status not in {"completed", "partial_failed"}:
+    if run.status not in {"completed", "partial_failed", "cancelled"}:
         return {
             "status": "not_found" if run.status == "failed" else task["status"],
             "task_id": task_id,
@@ -5125,6 +5142,8 @@ def _correction_review_blocks_finalization(result) -> bool:
             and (result.teacher_review or {}).get("confirmed") is not True)
         or (not valid_score(result.ai_score)
             and (result.teacher_review or {}).get("confirmed") is not True)
+        or ("grading_paused" in (getattr(result, "initial_review_reasons", None) or [])
+            and (result.teacher_review or {}).get("confirmed") is not True)
     )
 
 
@@ -5149,7 +5168,8 @@ def finalization(*, task_id: str, owner_id: str) -> dict:
         for result in grading_repository.list_results_for_run(run.id):
             if (_correction_review_blocks_finalization(result)
                     or confidence_requires_review(result.ai_confidence)
-                    or result.ai_score is None):
+                    or result.ai_score is None
+                    or "grading_paused" in result.initial_review_reasons):
                 required_review_count += 1
                 review = result.teacher_review or {}
                 if (

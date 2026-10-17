@@ -9,6 +9,12 @@ const correction = (overrides: Partial<Correction> = {}): Correction => ({
 });
 
 describe("grading review attention", () => {
+  it("requires confirmation for saved partial grades even at high confidence", () => {
+    const paused = correction({ review_reasons: ["grading_paused"], requires_human_review: true });
+    expect(correctionReviewAttention(paused)).toBe("blocking");
+    expect(correctionReviewBlocked(paused)).toBe(false);
+    expect(correctionReviewAttention({ ...paused, teacher_score: 8, review_status: "confirmed" })).toBe("none");
+  });
   it("keeps ordinary unconfirmed and moderately uncertain scores out of the risk queue", () => {
     for (const value of [correction(), correction({ confidence: 0.6, requires_human_review: true, review_reasons: ["low_confidence"] }), correction({ score: 1, requires_human_review: true })]) {
       expect(correctionReviewAttention(value)).toBe("none");

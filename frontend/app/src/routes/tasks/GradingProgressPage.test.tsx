@@ -5,6 +5,8 @@ import { APIError } from "@/api/client";
 import { GradingProgressPage } from "./GradingProgressPage";
 
 let taskStatus = "grading";
+vi.mock("@/api/tasks", async importOriginal => ({ ...await importOriginal<typeof import("@/api/tasks")>(), continueTaskRun: vi.fn() }));
+const { continueTaskRun } = await import("@/api/tasks");
 
 vi.mock("@/api/hooks/tasks", () => ({
   useStartGrading: vi.fn(),
@@ -164,6 +166,22 @@ describe("GradingProgressPage completion routing", () => {
     );
 
     expect(await screen.findByText("Review overview")).toBeInTheDocument();
+  });
+
+  it("shows saved grades separately from aggregation and hands a paused run to review", async () => {
+    taskStatus = "grading_paused";
+    vi.mocked(continueTaskRun).mockResolvedValue({ status: "manual_review", job_id: "run-1" });
+    vi.mocked(useTaskProgress).mockReturnValue({
+      data: { status: "grading_paused", workflow_revision: 5, problem_count: 14, student_count: 1 },
+      progress: { phase: "paused", total_students: 1, total_questions: 14, completed_units: 0,
+        saved_units: 5, messages: [], active: [] },
+      percent: 0, refetch: vi.fn(),
+    } as unknown as ReturnType<typeof useTaskProgress>);
+    renderProgress();
+    expect(screen.getByText(/Saved AI grades 5 \/ 14 responses · Aggregated 0 \/ 14/)).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "Continue manually" }));
+    expect(await screen.findByText("Review overview")).toBeVisible();
+    expect(continueTaskRun).toHaveBeenCalledWith("task-1", "run-1", 5, true);
   });
 
   it("shows the persisted grading failure code instead of a stale done state", () => {
