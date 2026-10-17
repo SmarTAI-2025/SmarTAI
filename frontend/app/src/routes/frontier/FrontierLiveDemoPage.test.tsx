@@ -152,6 +152,39 @@ describe("FrontierLiveDemoPage", () => {
     expect(screen.queryByText(/recognition_needs_review|recognition_low_confidence/)).not.toBeInTheDocument();
   });
 
+  it.each(["problems_ready", "submissions_ready", "grading_setup"] as const)("fills completed recognition despite intermediate counters (%s)", async (status) => {
+    for (const locale of ["zh-CN", "en-US"]) {
+      window.localStorage.setItem("smartai_locale", locale);
+      for (const steps of [status === "problems_ready" ? { total_steps: 8, completed_steps: 7 } : { total_steps: 4, completed_steps: 1 }, {}]) {
+        vi.mocked(getTaskState).mockResolvedValue({ ...taskState(status), progress: {
+          phase: "done", total_students: 4, total_questions: 4, completed_units: 0,
+          ...steps, active: [], messages: [{ ts: 1, level: "info", message: "activity_completed" }],
+        } });
+        vi.mocked(getTask).mockResolvedValue({ ...taskWithQuestions(), student_data: recognizedStudents() });
+        const view = renderLive("asg_demo123");
+        const bar = await screen.findByRole("progressbar");
+        expect(bar).toHaveAttribute("aria-valuenow", "100");
+        expect(bar.firstElementChild).toHaveStyle({ width: "100%" });
+        expect(screen.getByRole("status")).toHaveTextContent(locale === "zh-CN" ? "本次识别已完成" : "Recognition completed");
+        expect(startQuestionPreparation).not.toHaveBeenCalled();
+        expect(parseSubmissions).not.toHaveBeenCalled();
+        expect(startGrading).not.toHaveBeenCalled();
+        view.unmount();
+      }
+    }
+  });
+
+  it.each(["extracting_problems", "parsing_submissions", "grading", "error"] as const)("does not promote unfinished work when the reporter finishes early (%s)", async (status) => {
+    vi.mocked(getTaskState).mockResolvedValueOnce({ ...taskState(status), problem_count: 0, progress: {
+      phase: "done", total_students: 4, total_questions: 4, completed_units: 0,
+      total_steps: 4, completed_steps: 1, active: [], messages: [],
+    } }).mockReturnValue(new Promise(() => {}));
+    renderLive("asg_demo123");
+    const bar = await screen.findByRole("progressbar");
+    expect(bar).toHaveAttribute("aria-valuenow", "25");
+    expect(bar.firstElementChild).toHaveStyle({ width: "25%" });
+  });
+
   it.each(["graded", "finalized", "problems_paused", "submissions_paused", "grading_paused"] as const)("uses the terminal status when activity has been cleared (%s)", async (status) => {
     const stopped = status.endsWith("_paused");
     for (const locale of ["zh-CN", "en-US"]) {

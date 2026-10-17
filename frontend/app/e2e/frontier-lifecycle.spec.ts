@@ -155,8 +155,9 @@ for (const locale of ["zh-CN", "en-US"]) {
       }
       if (path.endsWith("/state")) {
         if (status === "grading" && ++gradingPolls >= 3) status = "graded";
-        return json({ ...current(), progress: { phase: status === "graded" ? "done" : "grading", total_students: 1, total_questions: 4, completed_units: status === "graded" ? 4 : 1,
-          total_steps: 4, completed_steps: 1, active: [], messages: [], activity_latest: { sequence: gradingPolls, ts: 1, code: gradingPolls === 1 ? "responding" : "succeeded" } } });
+        return json({ ...current(), progress: { phase: status === "grading" ? "grading" : "done", total_students: 1, total_questions: 4, completed_units: status === "graded" ? 4 : 1,
+          total_steps: 4, completed_steps: 1, active: [], messages: status === "grading" || status === "graded" ? [] : [{ ts: 1, level: "info", message: "activity_completed" }],
+          activity_latest: status === "grading" ? { sequence: gradingPolls, ts: 1, code: gradingPolls === 1 ? "responding" : "succeeded" } : null } });
       }
       if (path.endsWith("/result")) return json({ task_id: task.task_id, problem_data: problems, student_data: students, results: [{ student_id: "S1", student_name: "Example", corrections: Object.values(problems).map(problem => ({
         q_id: problem.q_id, score: 1, provisional_score: 1, max_score: 1, confidence: .5, comment: "Model feedback", steps: [], expert_results: [], requires_human_review: false, review_reasons: ["low_confidence"],
@@ -165,8 +166,18 @@ for (const locale of ["zh-CN", "en-US"]) {
       return json([]);
     });
     await page.goto(`/frontier/live?taskId=${task.task_id}`);
+    await expect(page.getByRole("button", { name: zh ? "继续识别作答" : "Continue to submissions", exact: true })).toBeEnabled();
+    await expect(page.getByRole("progressbar")).toHaveAttribute("aria-valuenow", "100");
+    await expect.poll(() => page.getByRole("progressbar").evaluate(el => Math.abs(el.getBoundingClientRect().width - el.firstElementChild!.getBoundingClientRect().width))).toBeLessThan(1);
     await page.getByRole("button", { name: zh ? "继续识别作答" : "Continue to submissions", exact: true }).click();
     await expect(page.getByRole("heading", { name: zh ? "本次识别的学生作答" : "Recognized submissions", exact: true })).toBeVisible();
+    await expect(page.getByRole("progressbar")).toHaveAttribute("aria-valuenow", "100");
+    await expect.poll(() => page.getByRole("progressbar").evaluate(el => Math.abs(el.getBoundingClientRect().width - el.firstElementChild!.getBoundingClientRect().width))).toBeLessThan(1);
+    await expect(page.getByRole("status")).toHaveText(zh ? "本次识别已完成" : "Recognition completed");
+    await page.getByRole("progressbar").locator("..").screenshot({ path: testInfo.outputPath(`demo-recognition-completed-${locale}.png`) });
+    await page.reload();
+    await expect(page.getByRole("heading", { name: zh ? "本次识别的学生作答" : "Recognized submissions", exact: true })).toBeVisible();
+    await expect(page.getByRole("progressbar")).toHaveAttribute("aria-valuenow", "100");
     await expect(page.getByText(/recognition_low_confidence|置信度|Low confidence/)).toHaveCount(0);
     await page.getByRole("button", { name: zh ? "开始批改" : "Start grading", exact: true }).first().click();
     await expect(page.getByRole("status").filter({ hasText: zh ? "请求已发出，等待模型响应" : "Request sent; awaiting model response" })).toBeVisible();
