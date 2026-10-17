@@ -83,6 +83,19 @@ for (const locale of ["zh-CN", "en-US"]) for (const width of [1440, 390]) {
         const color = await pill.evaluate(element => getComputedStyle(element).backgroundColor);
         if (surface === "dashboard") colors.set(item.id, color);
         else expect(color).toBe(colors.get(item.id));
+        if (surface === "history" && width < 768) {
+          expect(await pill.evaluate(element => {
+            const cell = element.closest('[role="cell"]')!;
+            const bounds = cell.getBoundingClientRect();
+            const style = getComputedStyle(cell);
+            const badge = element.getBoundingClientRect();
+            const label = element.querySelector("span")!;
+            return badge.left >= bounds.left + parseFloat(style.paddingLeft) - 1
+              && badge.right <= bounds.right - parseFloat(style.paddingRight) + 1
+              && label.scrollWidth <= label.clientWidth + 1
+              && label.scrollHeight <= label.clientHeight + 1;
+          }), `${item.label} stays fully readable inside its history column`).toBe(true);
+        }
       }
       expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1)).toBe(true);
       await page.screenshot({ path: testInfo.outputPath(`${surface}.png`), fullPage: true });
