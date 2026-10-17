@@ -314,6 +314,143 @@ def test_pass_fail_counts_respect_resolved_target_set(snapshot):
     assert result["data"]["rows"] == [["Passed", 1], ["Failed", 0], ["Unscored", 0]]
 
 
+def _pass_fail_snapshot():
+    task, result = payload()
+    for row, rate in zip(result["results"], [.9, .6, .5, None]):
+        for correction in row["corrections"]:
+            correction["score"] = correction["provisional_score"] = None if rate is None else rate * correction["max_score"]
+    return Snapshot.from_payloads([(task, result)], "task")
+
+
+@pytest.mark.parametrize("question", [
+    "统计及格与不及格人数，同时只显示及格学生并按总分降序",
+    "Show pass and fail counts, and filter the table to passing students sorted by total score descending",
+])
+def test_combined_pass_counts_and_ordered_selection_use_student_totals(question):
+    provider = Provider({"output": "combined", "statistic": "student_pass_fail_counts"}, {
+        # The model cannot redefine the standard statistic as question counts.
+        "sql": "SELECT 'Wrong' AS status, COUNT(*) AS student_count FROM grades",
+        "selection": {"sql": "SELECT student_id FROM students WHERE score_percent >= :threshold ORDER BY total_score DESC,student_id", "parameters": {"threshold": 60}},
+    })
+    response = asyncio.run(ask(task_id="task", owner_id="teacher", question=question, surface="student_analysis",
+        provider=provider, snapshot=_pass_fail_snapshot()))
+    assert response["recognized"] and response["kind"] == "chart"
+    assert response["data"]["rows"] == [["Passed", 2], ["Failed", 1], ["Unscored", 1]]
+    assert response["chart"]["traces"][0]["y"] == [2, 1, 1]
+    assert response["selection"] == {"kind": "students", "ids": ["DEMO-001", "DEMO-002"]}
+    assert len(provider.calls) == 2
+    context = json.loads(provider.calls[1][-1].content)
+    assert context["required_output"]["selection"]["required_column"] == "student_id"
+
+
+def test_combined_general_chart_and_filter_are_independent_queries(snapshot):
+    response = run(snapshot, "Plot average score and show students above 75 percent, highest first", {"output": "combined"}, {
+        "sql": "SELECT 'Average' AS metric, AVG(total_score) AS mean_points FROM students",
+        "chart": {"x": "metric", "y": ["mean_points"]},
+        "selection": {"sql": "SELECT student_id FROM students WHERE score_percent > 75 ORDER BY total_score DESC"},
+    })
+    assert response["recognized"]
+    assert response["chart"]["traces"][0]["y"] == [22.5]
+    assert response["selection"]["ids"] == ["DEMO-001", "DEMO-004"]
+
+
+def test_combined_named_count_and_selection_keep_resolved_scope(snapshot):
+    response = run(snapshot, "Count Alex's pass status and show Alex", {
+        "output": "combined", "statistic": "student_pass_fail_counts",
+        "references": [{"kind": "student", "text": "Alex"}],
+    }, {"selection": {"sql": "SELECT student_id FROM students"}})
+    assert response["data"]["rows"] == [["Passed", 1], ["Failed", 0], ["Unscored", 0]]
+    assert response["selection"]["ids"] == ["DEMO-001"]
+
+
+@pytest.mark.parametrize("statistic", [None, "student_pass_fail_counts"])
+@pytest.mark.parametrize("class_context", [False, True])
+def test_combined_class_statistic_is_not_narrowed_by_a_selection_only_name(snapshot, statistic, class_context):
+    response = run(snapshot, "Show class statistics and filter the table to Alex", {
+        "output": "combined", "statistic": statistic, "include_class_context": class_context,
+        "references": [{"kind": "student", "text": "Alex", "applies_to": "selection"}],
+    }, {"sql": "SELECT 'Average' AS metric,AVG(total_score) AS mean_points FROM students",
+        "chart": {"x": "metric", "y": ["mean_points"]},
+        "selection": {"sql": "SELECT student_id FROM students"}})
+    assert response["recognized"]
+    assert response["selection"]["ids"] == ["DEMO-001"]
+    assert response["chart"]["traces"][0]["y"] == ([4, 0, 0] if statistic else [22.5])
+
+
+def test_combined_selection_can_explicitly_use_a_class_baseline(snapshot):
+    response = run(snapshot, "Count Alex's pass status and show Alex if above the class average", {
+        "output": "combined", "statistic": "student_pass_fail_counts", "selection_include_class_context": True,
+        "references": [{"kind": "student", "text": "Alex"}],
+    }, {"selection": {"sql": "SELECT student_id FROM students WHERE student_id IN (SELECT entity_id FROM resolved_entities WHERE kind='student') AND total_score > (SELECT AVG(total_score) FROM students)"}})
+    assert response["data"]["rows"] == [["Passed", 1], ["Failed", 0], ["Unscored", 0]]
+    assert response["selection"]["ids"] == ["DEMO-001"]
+
+
+def test_combined_chart_only_name_does_not_narrow_main_table(snapshot):
+    response = run(snapshot, "Chart Alex's grades and list all students, highest first", {
+        "output": "combined", "references": [{"kind": "student", "text": "Alex", "applies_to": "chart"}],
+    }, {"sql": "SELECT student_id,q_id,score FROM grades ORDER BY q_id", "chart": {"x": "q_id", "y": ["score"]},
+        "selection": {"sql": "SELECT student_id FROM students ORDER BY total_score DESC,student_id"}})
+    assert response["chart"]["traces"][0]["y"] == [5, 8, 7, 4]
+    assert response["selection"]["ids"] == ["DEMO-001", "DEMO-004", "DEMO-002", "DEMO-003"]
+
+
+def test_combined_personal_chart_still_requires_student_identity(snapshot):
+    plan = {"sql": "SELECT q_id,score FROM grades", "chart": {"x": "q_id", "y": ["score"]},
+        "selection": {"sql": "SELECT student_id FROM students"}}
+    response = run(snapshot, "Chart Alex and show the class", {
+        "output": "combined", "references": [{"kind": "student", "text": "Alex", "applies_to": "chart"}],
+    }, plan, plan, plan)
+    assert not response["recognized"] and response["chart"] is None and response["selection"] is None
+
+
+@pytest.mark.parametrize("selection", [
+    None,
+    {"sql": "DELETE FROM students"},
+    {"sql": "SELECT 'unknown' AS student_id FROM students"},
+    {"sql": "SELECT student_name FROM students"},
+    {"sql": "SELECT student_id,999 AS total_score FROM students"},
+])
+def test_combined_invalid_selection_never_publishes_partial_chart(snapshot, selection):
+    plan = {"selection": selection}
+    response = run(snapshot, "Count passes and filter the table", {"output": "combined", "statistic": "student_pass_fail_counts"}, plan, plan, plan)
+    assert not response["recognized"]
+    assert response["selection"] is None and response["chart"] is None
+
+
+def test_combined_invalid_chart_never_applies_valid_filter(snapshot):
+    plan = {"sql": "SELECT student_id,total_score FROM students", "chart": {"x": "student_id", "y": ["missing_metric"]},
+        "selection": {"sql": "SELECT student_id FROM students WHERE total_score > 23"}}
+    response = run(snapshot, "Chart scores and filter high scores", {"output": "combined"}, plan, plan, plan)
+    assert not response["recognized"]
+    assert response["selection"] is None and response["chart"] is None
+
+
+def test_combined_empty_selection_is_a_valid_empty_main_table(snapshot):
+    response = run(snapshot, "Count pass status and show scores above 100 percent", {"output": "combined", "statistic": "student_pass_fail_counts"},
+        {"selection": {"sql": "SELECT student_id FROM students WHERE score_percent > 100"}})
+    assert response["recognized"] and response["chart"]
+    assert response["selection"] == {"kind": "students", "ids": []}
+
+
+def test_combined_query_repairs_both_outputs_after_inspection(snapshot):
+    response = run(snapshot, "Chart and filter scores", {"output": "combined"},
+        {"action": "inspect", "sql": "SELECT student_id,total_score FROM students LIMIT 2"},
+        {"sql": "SELECT student_id,total_score FROM students", "chart": {"x": "student_id", "y": ["total_score"]}},
+        {"sql": "SELECT student_id,total_score FROM students", "chart": {"x": "student_id", "y": ["total_score"]},
+         "selection": {"sql": "SELECT student_id FROM students WHERE total_score > 23"}})
+    assert response["recognized"] and len(response["chart"]["traces"][0]["y"]) == 4
+    assert response["selection"]["ids"] == ["DEMO-001"]
+
+
+def test_combined_cross_task_scope_cannot_filter_current_task_rows(snapshot, monkeypatch):
+    monkeypatch.setattr("backend.agents.grounded_ask.load_snapshot", lambda *args, **kwargs: snapshot)
+    plan = {"selection": {"sql": "SELECT student_id FROM students"}}
+    response = run(snapshot, "Across tasks count pass status and filter this table",
+        {"output": "combined", "statistic": "student_pass_fail_counts", "scope": "teacher_tasks"}, plan, plan, plan)
+    assert not response["recognized"] and response["selection"] is None and response["chart"] is None
+
+
 @pytest.mark.parametrize("query,ids", [("Alex", ["DEMO-001", "OTHER"]), ("ale", ["DEMO-001", "OTHER"]), ("Alex Wu", ["OTHER"]), ("Ale Chen", [])])
 def test_bare_name_uses_matching_contract_not_model_chart_or_exact_guess(snapshot, query, ids):
     snapshot.tables["students"].append({**snapshot.tables["students"][0], "student_id": "OTHER", "student_name": "Alex Wu"})
