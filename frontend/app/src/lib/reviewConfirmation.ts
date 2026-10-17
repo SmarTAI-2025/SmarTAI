@@ -3,14 +3,22 @@ import type { PreparationIssue, ProblemInfo, StudentAnswerInfo, StudentSubmissio
 export type ReviewAttention = "none" | "advisory" | "blocking";
 export const VERY_LOW_REVIEW_CONFIDENCE = 0.35;
 
-/** A source-wide OCR warning is evidence to retain, not an error in every question. */
+function questionHasLowConfidence(issue: PreparationIssue): boolean {
+  return issue.code === "low_confidence"
+    || (Array.isArray(issue.details?.confidence_reasons) && issue.details.confidence_reasons.includes("low_confidence_content"));
+}
+
+function questionHasMissingEvidence(issue: PreparationIssue): boolean {
+  const coverage = issue.details?.coverage as Record<string, unknown[]> | undefined;
+  return issue.code === "recognition_partial" && issue.status !== "resolved"
+    && ["failed_pages", "unprocessed_pages", "missing_targets"].some(key => Boolean(coverage?.[key]?.length));
+}
+
+/** Generic source uncertainty is optional; concrete failures and low confidence need review. */
 export function questionIssueNeedsReview(issue: PreparationIssue): boolean {
+  if (questionHasMissingEvidence(issue)) return true;
   if (issue.status !== "open") return false;
-  if (issue.severity === "blocking") return true;
-  return issue.code === "low_confidence" && Boolean(issue.q_id)
-    && typeof issue.details?.confidence === "number"
-    && Number.isFinite(issue.details.confidence)
-    && issue.details.confidence >= 0 && issue.details.confidence <= VERY_LOW_REVIEW_CONFIDENCE;
+  return issue.severity === "blocking" || questionHasLowConfidence(issue);
 }
 
 function onlyUnverifiedTargets(issue: PreparationIssue): boolean {
@@ -31,7 +39,7 @@ export function recognitionIssueLabel(issue: PreparationIssue, locale: string): 
   if (issue.code === "manual_completion_required") return locale === "zh-CN"
     ? "请补齐缺失资料并确认本题；完成前不能批改。"
     : "Complete the missing materials and confirm this question before grading.";
-  if (!["recognition_partial", "recognition_needs_review"].includes(issue.code)) return null;
+  if (!["recognition_partial", "recognition_needs_review", "low_confidence"].includes(issue.code) && !questionHasLowConfidence(issue)) return null;
   const zh = locale === "zh-CN";
   const coverage = issue.details?.coverage as Record<string, unknown[]> | undefined;
   const reasons = [
@@ -40,6 +48,9 @@ export function recognitionIssueLabel(issue: PreparationIssue, locale: string): 
     ["missing_targets", "未找到的题号", "Question numbers not found"],
   ].flatMap(([key, cn, en]) => coverage?.[key]?.length ? [`${zh ? cn : en}：${coverage[key].join(", ")}`] : []);
   if (reasons.length) return reasons.join("；");
+  if (questionHasLowConfidence(issue)) return zh
+    ? "识别置信度较低，请对照原件核对并确认后继续。"
+    : "Recognition confidence is low. Check against the original and confirm before continuing.";
   if (onlyUnverifiedTargets(issue)) return zh
     ? "已定位题号；请对照原文件确认题干完整。这是常规确认，尚未发现具体缺失。"
     : "Question numbers were located. Confirm the complete wording against the source; no specific omission was detected.";
@@ -61,36 +72,34 @@ export function questionReviewBlocked(problem: ProblemInfo): boolean {
     .flatMap(issue => (issue.details?.required_fields as (keyof ProblemInfo)[] | undefined) ?? []);
   if (required.some(field => { const value = problem[field]; return !value || (typeof value === "string" && !value.trim()) || (Array.isArray(value) && !value.length); })) return true;
   return !problem.stem?.trim() || problem.rubric_point_summary?.is_valid === false
-    || (problem.preparation_issues ?? []).some(issue => issue.status === "open" && issue.severity === "blocking");
+    || (problem.preparation_issues ?? []).some(issue => questionHasMissingEvidence(issue)
+      || (issue.status === "open" && issue.severity === "blocking"));
 }
 
 /** Corrected hard failures still require one explicit confirmation before navigation. */
 export function questionReviewNextBlocked(problem: ProblemInfo): boolean {
   return questionReviewBlocked(problem) || (problem.review_status !== "confirmed"
-    && (problem.preparation_issues ?? []).some(issue => issue.severity === "blocking" || issue.code === "manual_completion_required"));
+    && (problem.preparation_issues ?? []).some(issue => issue.severity === "blocking" || issue.code === "manual_completion_required"
+      || questionHasLowConfidence(issue)));
 }
 
 export function questionReviewIssues(problem: ProblemInfo): PreparationIssue[] {
-  const issues = (problem.preparation_issues ?? []).filter(issue => {
-    if (questionIssueNeedsReview(issue)) return true;
-    if (issue.status !== "open" || issue.code !== "low_confidence") return false;
-    const field = issue.field === "answer" ? "reference_answer" : issue.field === "rubric" ? "criterion" : issue.field === "programming_tests" ? "test_cases" : null;
-    const confidence = field ? problem.material_provenance?.[field]?.confidence : undefined;
-    return typeof confidence === "number" && Number.isFinite(confidence) && confidence >= 0 && confidence <= VERY_LOW_REVIEW_CONFIDENCE;
-  });
+  const issues = (problem.preparation_issues ?? []).filter(issue => questionIssueNeedsReview(issue)
+    || (problem.review_status !== "confirmed" && questionHasLowConfidence(issue)))
+    .map(issue => questionHasMissingEvidence(issue) ? { ...issue, severity: "blocking" as const } : issue);
   function add(field: PreparationIssue["field"], code: PreparationIssue["code"], reason: string) {
     issues.push({ issue_id: `review:${problem.q_id}:${reason}`, q_id: problem.q_id, field, code,
       severity: "blocking", status: "open", details: { review_display_reason: reason } });
   }
   if (!problem.stem?.trim() && !issues.some(issue => issue.field === "stem" && issue.severity === "blocking")) add("stem", "parse_anomaly", "empty_stem");
   if (problem.rubric_point_summary?.is_valid === false && !issues.some(issue => issue.field === "rubric" && issue.severity === "blocking")) add("rubric", "rubric_step_reference_conflict", "rubric_conflict");
-  if (questionReviewNextBlocked(problem) && !issues.some(issue => issue.severity === "blocking")) add("source", "manual_completion_required", questionReviewBlocked(problem) ? "missing_material" : "confirmation_required");
+  if (questionReviewNextBlocked(problem) && !issues.some(issue => issue.severity === "blocking" || questionHasLowConfidence(issue))) add("source", "manual_completion_required", questionReviewBlocked(problem) ? "missing_material" : "confirmation_required");
   return issues.sort((a, b) => Number(b.severity === "blocking") - Number(a.severity === "blocking"));
 }
 
 export function questionReviewBlockers(problems: ProblemInfo[], taskId: string, locale: string): ReviewBlocker[] {
   return problems.filter(questionReviewNextBlocked).map(problem => ({
-    label: `${problem.number || problem.q_id} · ${questionReviewIssues(problem).filter(issue => issue.severity === "blocking").map(issue => recognitionIssueLabel(issue, locale)).filter(Boolean).join("；") || (locale === "zh-CN" ? "请修正严重问题并确认本题" : "Correct the blocking issue and confirm this question")}`,
+    label: `${problem.number || problem.q_id} · ${questionReviewIssues(problem).map(issue => recognitionIssueLabel(issue, locale)).filter(Boolean).join("；") || (locale === "zh-CN" ? "请修正严重问题并确认本题" : "Correct the blocking issue and confirm this question")}`,
     href: `/tasks/${taskId}/questions/${encodeURIComponent(problem.q_id)}/content#question-${encodeURIComponent(problem.q_id)}`,
   }));
 }
@@ -99,7 +108,11 @@ export function answerReviewBlocked(answer?: StudentAnswerInfo): boolean {
 }
 export function answerReviewNextBlocked(answer?: StudentAnswerInfo): boolean {
   return answerReviewBlocked(answer) || Boolean(answer?.review_status !== "confirmed"
-    && answer?.flag?.includes("recognition_repaired_needs_confirmation"));
+    && (answer?.flag?.includes("recognition_repaired_needs_confirmation") || answerHasLowConfidence(answer)));
+}
+
+function answerHasLowConfidence(answer?: StudentAnswerInfo): boolean {
+  return Boolean(answer?.flag?.some(flag => ["very_low_confidence", "recognition_low_confidence"].includes(flag)));
 }
 
 export function studentIdentityIssue(value: string): "required" | "placeholder" | null {
@@ -143,6 +156,6 @@ function collectSubmissionBlockers(task: Task | undefined, locale: string, stude
     label: `${item.stu_name || item.stu_id} · ${zh ? "请修正并确认学生姓名、学号" : "Correct and confirm the student name and ID"}`,
     href: `/tasks/${task.task_id}/students/${encodeURIComponent(item.stu_id)}?identity=edit`,
   }));
-  const answers = students.flatMap(item => item.stu_ans.filter(confirming ? answerReviewBlocked : answerReviewNextBlocked).map(answer => ({ label: `${item.stu_name || item.stu_id} · ${answer.number || answer.q_id} · ${answerReviewBlocked(answer) ? (zh ? "识别失败，请修正并确认" : "Recognition failed; correct and confirm") : (zh ? "已修正，请确认作答" : "Corrected; confirm the answer")}`, href: `/tasks/${task.task_id}/students/${encodeURIComponent(item.stu_id)}?question=${encodeURIComponent(answer.q_id)}` })));
+  const answers = students.flatMap(item => item.stu_ans.filter(confirming ? answerReviewBlocked : answerReviewNextBlocked).map(answer => ({ label: `${item.stu_name || item.stu_id} · ${answer.number || answer.q_id} · ${answerReviewBlocked(answer) ? (zh ? "识别失败，请修正并确认" : "Recognition failed; correct and confirm") : answerHasLowConfidence(answer) ? (zh ? "识别置信度较低，请对照原件核对并确认" : "Low recognition confidence; check the original and confirm") : (zh ? "已修正，请确认作答" : "Corrected; confirm the answer")}`, href: `/tasks/${task.task_id}/students/${encodeURIComponent(item.stu_id)}?question=${encodeURIComponent(answer.q_id)}` })));
   return [...sourceIssues, ...identities, ...answers];
 }

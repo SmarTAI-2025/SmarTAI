@@ -59,6 +59,34 @@ const sources: SubmissionSourceOutcome[] = [
 ];
 
 describe("SubmissionSourceOutcomePanel", () => {
+  it.each(["zh-CN", "en-US"] as const)("shows retained, failed and unread pages with the actual provider cause in %s", (locale) => {
+    render(<MemoryRouter><SubmissionSourceOutcomePanel locale={locale} sources={[{
+      ...sources[1], content_type: "application/pdf", file_name: "student.pdf",
+      reason_code: "provider_submit_uncertain", failure_phase: "recognition",
+      page_diagnostics: { total_pages: 3, processed_pages: [1], failed_pages: [2], unprocessed_pages: [3],
+        page_errors: [{ page: 2, error_code: "provider_upstream_unavailable", status_code: 503 }] },
+    }]} /></MemoryRouter>);
+    const zh = locale === "zh-CN";
+    expect(screen.getByText(zh ? "读取成功页码：" : "Successfully read pages:").parentElement).toHaveTextContent(zh ? "读取成功页码：1" : "Successfully read pages: 1");
+    expect(screen.getByText(zh ? "读取失败页码：" : "Failed pages:").parentElement).toHaveTextContent(zh ? "读取失败页码：2" : "Failed pages: 2");
+    expect(screen.getByText(zh ? "尚未读取页码：" : "Unread pages:").parentElement).toHaveTextContent(zh ? "尚未读取页码：3" : "Unread pages: 3");
+    expect(screen.getByText(zh ? "第 2 页：模型服务暂时不可用 (HTTP 503)" : "Page 2: The model service is temporarily unavailable (HTTP 503)")).toBeInTheDocument();
+    expect(screen.getByText(zh ? "成功页结果已保留；文件与模型设置未变时，重试会复用可用结果，补读其余页面。" : "Successful page results are retained. If the file and model settings are unchanged, retry reuses eligible results and reads the remaining pages.")).toBeInTheDocument();
+    expect(screen.getByText(zh ? /上次调用是否计费尚无法确认/ : /billing is unconfirmed/)).toBeInTheDocument();
+    expect(screen.queryByText(/学生未作答|内容为空|student left.*blank/i)).not.toBeInTheDocument();
+  });
+
+  it("does not invent an HTTP status for older page diagnostics", () => {
+    render(<MemoryRouter><SubmissionSourceOutcomePanel locale="zh-CN" sources={[{
+      ...sources[1], reason_code: "question_source_incomplete", failure_phase: "recognition",
+      page_diagnostics: { total_pages: 2, processed_pages: [1], failed_pages: [2], unprocessed_pages: [],
+        page_errors: [{ page: 2, error_code: "provider_upstream_unavailable" }] },
+    }]} /></MemoryRouter>);
+    expect(screen.getByText("第 2 页：模型服务暂时不可用")).toBeInTheDocument();
+    expect(screen.queryByText(/HTTP/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/题目生成/)).not.toBeInTheDocument();
+  });
+
   it("shows the accounting equation, exact reason, and diagnostic identifiers", () => {
     render(
       <MemoryRouter>

@@ -204,7 +204,7 @@ class LLMRecognitionEngine:
         except ProviderRequestError as exc:
             raise RecognitionError(exc.code, submission_may_exist=exc.code in {
                 "provider_timeout", "provider_unreachable", "provider_upstream_unavailable",
-            }) from None
+            }, upstream_status_code=exc.status_code) from None
         except Exception as exc:
             code = classify_background_error(exc, "provider_request_failed")
             raise RecognitionError(code, submission_may_exist=code not in {

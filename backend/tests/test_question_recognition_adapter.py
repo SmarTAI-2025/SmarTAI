@@ -6,11 +6,85 @@ import pytest
 from PIL import Image
 
 from backend.domain.errors import RecognitionError
+from backend.llm.providers import ProviderRequestError
 from backend.services import question_sources
 from backend.services.stage_provider_routing import StageProviderRoute
 from backend.tests.test_recognition_reader import llm
 from backend.tests.test_recognition_v2_artifacts import setup
 from backend.tests.test_recognition_agent import pdf
+
+
+@pytest.mark.asyncio
+async def test_submission_second_page_failure_cannot_return_first_page_as_complete(tmp_path, monkeypatch):
+    _agent, request, data, results = setup(tmp_path, pdf=True, pages=2)
+    # Match the incident: two scanned pages with no native text layer.
+    import fitz
+    import hashlib
+    from backend.db import file_repository
+    with fitz.open(stream=data, filetype="pdf") as original, fitz.open() as scanned:
+        for page in original:
+            copied = scanned.new_page(width=page.rect.width, height=page.rect.height)
+            copied.insert_image(copied.rect, stream=page.get_pixmap().tobytes("png"))
+        data = scanned.tobytes()
+    stored = file_repository.save_file(storage=results.store.storage, owner_id=request.source.owner_id,
+        assignment_id=request.source.business_id, kind="uploaded_test_fixture", original_name="scanned.pdf",
+        content=data, content_type="application/pdf")
+    request.source = request.source.model_copy(update=dict(stored_file_id=stored.id, input_sha256=hashlib.sha256(data).hexdigest()))
+    provider, _engine = llm(text="1. Visible answer from page one.")
+    provider.ainvoke_vision.side_effect = [
+        provider.ainvoke_vision.return_value,
+        ProviderRequestError("provider_upstream_unavailable", status_code=503),
+        provider.ainvoke_vision.return_value,
+    ]
+    registry = SimpleNamespace(list_configs=lambda: [dict(provider_id=provider.provider_id, enabled=True, model="fixture")])
+    monkeypatch.setattr(question_sources, "get_storage", lambda: results.store.storage)
+    with pytest.raises(RecognitionError) as caught:
+        await question_sources.read_question_source(
+            owner_id=request.source.owner_id, task_id=request.source.business_id,
+            content=data, filename="two-pages.pdf", content_type="application/pdf", purpose="submissions",
+            route=StageProviderRoute(route_id=provider.provider_id, kind="llm", provider=provider),
+            registry=registry, stored_file_id=request.source.stored_file_id,
+        )
+    assert caught.value.code == "provider_submit_uncertain"
+    assert caught.value.details == {"failed_pages": [2], "processed_pages": [1], "page_diagnostics": {
+        "total_pages": 2, "failed_pages": [2], "processed_pages": [1], "unprocessed_pages": [],
+        "page_errors": [{"page": 2, "error_code": "provider_upstream_unavailable", "status_code": 503}],
+    }}
+    assert provider.ainvoke_vision.await_count == 2  # no implicit replay of the uncertain call
+
+    # Both the usable first page and the failed second page remain auditable.
+    from backend.db import file_repository
+    from backend.recognition.artifact_codec import decode_artifact
+    artifacts = file_repository.list_files(owner_id=request.source.owner_id, assignment_id=request.source.business_id)
+    assemblies = []
+    for artifact in artifacts:
+        if artifact.kind != "recognition_artifact_v1":
+            continue
+        with results.store.storage.open(artifact.storage_key) as stream:
+            envelope = decode_artifact(stream.read())
+        if envelope.payload_kind == "assembly_v2":
+            assemblies.append(envelope.payload)
+    assert len(assemblies) == 1
+    assert "Visible answer" in assemblies[0].document.final_markdown
+    assert assemblies[0].document.coverage.failed_pages == [2]
+
+    args = dict(owner_id=request.source.owner_id, task_id=request.source.business_id,
+                content=data, filename="two-pages.pdf", content_type="application/pdf", purpose="submissions",
+                route=StageProviderRoute(route_id=provider.provider_id, kind="llm", provider=provider),
+                registry=registry, stored_file_id=request.source.stored_file_id)
+    # A new adapter instance reopens durable artifacts; ordinary reentry cannot
+    # silently redispatch a request whose billing outcome is uncertain.
+    with pytest.raises(RecognitionError):
+        await question_sources.read_question_source(**args)
+    assert provider.ainvoke_vision.await_count == 2
+    retried = await question_sources.read_question_source(**args, retry_key="explicit-parent-attempt-2")
+    assert retried.recognition["coverage"]["processed_pages"] == [1, 2]
+    assert retried.recognition["coverage"]["failed_pages"] == []
+    assert provider.ainvoke_vision.await_count == 3
+    calls = provider.ainvoke_vision.await_args_list
+    assert calls[2].args[1][0].data == calls[1].args[1][0].data  # only page 2 redispatched
+    await question_sources.read_question_source(**args, retry_key="explicit-parent-attempt-2")
+    assert provider.ainvoke_vision.await_count == 3  # retry action remains idempotent
 
 
 @pytest.mark.asyncio

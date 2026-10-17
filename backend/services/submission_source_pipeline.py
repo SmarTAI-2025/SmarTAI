@@ -63,6 +63,8 @@ def attach_submission_recognition(results, sources):
         # Queue specific uncertainty, not the generic recommendation to review OCR.
         if recognition_needs_review(summary):
             flags = ["recognition_needs_review"]
+            if summary.get("confidence") == "low":
+                flags.append("recognition_low_confidence")
             for key in ("failed_pages", "unprocessed_pages"):
                 pages = (summary.get("coverage") or {}).get(key) or []
                 if pages:
