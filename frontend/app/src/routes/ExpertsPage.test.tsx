@@ -147,14 +147,22 @@ describe("ExpertsPage editable vendor Base URL", () => {
     expect([...section.querySelectorAll("a")].some((link) => link.href === "https://ai.baidu.com/ai-doc/OCR/fmr1p39gb")).toBe(true);
   });
 
-  it("only sends an independent image probe after an explicit click on that configuration", async () => {
+  it.each([0, 1])("only sends an image probe after confirmation from row %i", async (row) => {
     hookState.experts = [{ provider_id: "pc-image", provider_type: "qwen", model: "arbitrary-model", enabled: true, rpm: 0, max_concurrent: 1 }];
     const user = userEvent.setup(); renderPage();
     expect(screen.getAllByText("图像测试").length).toBeGreaterThan(0);
     expect(document.querySelector('[data-image-provider="pc-image"]')).toHaveTextContent("未验证");
     expect(verifyImage).not.toHaveBeenCalled();
     expect(screen.getAllByRole("button", { name: "验证（可选）" }).length).toBeGreaterThan(0);
-    await user.click(screen.getAllByRole("button", { name: "验证视觉能力" })[0]!);
+    await user.click(screen.getAllByRole("button", { name: "验证视觉能力" })[row]!);
+    const dialog = screen.getByRole("dialog", { name: "验证模型视觉能力" });
+    expect(dialog).toHaveTextContent("会消耗模型额度并可能产生费用");
+    expect(verifyImage).not.toHaveBeenCalled();
+    await user.click(within(dialog).getByRole("button", { name: "取消" }));
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(verifyImage).not.toHaveBeenCalled();
+    await user.click(screen.getAllByRole("button", { name: "验证视觉能力" })[row]!);
+    await user.click(within(screen.getByRole("dialog")).getByRole("button", { name: "发起图像测试" }));
     expect(verifyImage).toHaveBeenCalledTimes(1);
     expect(verifyImage).toHaveBeenCalledWith("pc-image");
   });
@@ -170,11 +178,16 @@ describe("ExpertsPage editable vendor Base URL", () => {
   });
 
   it("keeps shared configuration read-only while allowing opt-in image verification", async () => {
+    window.localStorage.setItem("smartai_locale", "en-US");
     hookState.experts = [{ provider_id: "qwen:shared", provider_type: "qwen", model: "shared", enabled: true, editable: false, is_shared: true, rpm: 0, max_concurrent: 1 }];
     const user = userEvent.setup(); renderPage();
-    expect(screen.queryByRole("button", { name: "编辑" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Edit" })).not.toBeInTheDocument();
     expect(verifyImage).not.toHaveBeenCalled();
-    await user.click(screen.getAllByRole("button", { name: "验证视觉能力" })[0]!);
+    await user.click(screen.getAllByRole("button", { name: "Verify vision capability" })[0]!);
+    const dialog = screen.getByRole("dialog", { name: "Verify model vision capability" });
+    expect(dialog).toHaveTextContent("uses model quota and may incur charges");
+    expect(verifyImage).not.toHaveBeenCalled();
+    await user.click(within(dialog).getByRole("button", { name: "Run image test" }));
     expect(verifyImage).toHaveBeenCalledWith("qwen:shared");
   });
 

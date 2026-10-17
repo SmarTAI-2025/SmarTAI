@@ -73,7 +73,7 @@ type EditorTarget =
   | { mode: "edit"; expert: ExpertConfig };
 
 type Confirmation =
-  | { kind: "verify"; expert: ExpertConfig }
+  | { kind: "verify" | "verifyImage"; expert: ExpertConfig }
   | { kind: "delete"; expert: ExpertConfig };
 
 interface ExpertFormValue {
@@ -241,6 +241,15 @@ export function ExpertsPage() {
         toast.error(zh ? "删除失败" : "Unable to delete configuration", {
           description: safeExpertError(error, locale),
         });
+      }
+      return;
+    }
+
+    if (target.kind === "verifyImage") {
+      try {
+        await verifyImage.mutateAsync(target.expert.provider_id);
+      } catch (error) {
+        toast.error(safeExpertError(error, locale));
       }
       return;
     }
@@ -419,7 +428,7 @@ export function ExpertsPage() {
                       onEdit={() => setEditor({ mode: "edit", expert })}
                       onToggle={() => void handleToggle(expert)}
                       onVerify={() => setConfirmation({ kind: "verify", expert })}
-                      onVerifyImage={() => void verifyImage.mutateAsync(expert.provider_id).catch(error => toast.error(safeExpertError(error, locale)))}
+                      onVerifyImage={() => setConfirmation({ kind: "verifyImage", expert })}
                       onSetDefault={() => void handleSetDefault(expert)}
                       onDelete={() => setConfirmation({ kind: "delete", expert })}
                     />
@@ -438,7 +447,7 @@ export function ExpertsPage() {
                   onEdit={() => setEditor({ mode: "edit", expert })}
                   onToggle={() => void handleToggle(expert)}
                   onVerify={() => setConfirmation({ kind: "verify", expert })}
-                      onVerifyImage={() => void verifyImage.mutateAsync(expert.provider_id).catch(error => toast.error(safeExpertError(error, locale)))}
+                  onVerifyImage={() => setConfirmation({ kind: "verifyImage", expert })}
                   onSetDefault={() => void handleSetDefault(expert)}
                   onDelete={() => setConfirmation({ kind: "delete", expert })}
                 />
@@ -473,7 +482,7 @@ export function ExpertsPage() {
         <ConfirmationDialog
           confirmation={confirmation}
           locale={locale}
-          pending={confirmation.kind === "verify" ? verificationPending : removeExpert.isPending}
+          pending={confirmation.kind === "delete" ? removeExpert.isPending : verificationPending}
           onClose={() => setConfirmation(null)}
           onConfirm={() => void handleConfirm()}
         />
@@ -1394,11 +1403,14 @@ function ConfirmationDialog({
   onConfirm: () => void;
 }) {
   const zh = locale === "zh-CN";
-  const verify = confirmation.kind === "verify";
+  const verify = confirmation.kind !== "delete";
+  const image = confirmation.kind === "verifyImage";
   return (
     <LibraryDialog
       title={
-        verify
+        image
+            ? zh ? "验证模型视觉能力" : "Verify model vision capability"
+            : verify
             ? zh ? "验证模型文本连通性" : "Verify model text connectivity"
             : zh ? "删除模型配置" : "Delete model configuration"
       }
@@ -1416,7 +1428,9 @@ function ConfirmationDialog({
               ? zh
                 ? "处理中…"
                 : "Working…"
-              : verify
+              : image
+                ? zh ? "发起图像测试" : "Run image test"
+                : verify
                 ? zh ? "发起连通性验证" : "Run connectivity check"
                 : zh
                   ? "确认删除"
@@ -1427,7 +1441,11 @@ function ConfirmationDialog({
     >
       {verify ? (
         <div className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm leading-6 text-amber-900 dark:border-amber-900 dark:bg-amber-950/35 dark:text-amber-100">
-          {zh
+          {image
+            ? zh
+              ? "系统将发送一次合成小图请求，会消耗模型额度并可能产生费用。"
+              : "SmarTAI will send one small synthetic image request. This uses model quota and may incur charges."
+            : zh
             ? "系统将发送一次可选的最小文本请求。这不是启用配置的前置条件，实际任务也可以直接测试。"
             : "SmarTAI will send one optional minimal text request. This is not required before using the configuration in a real task."}
         </div>
