@@ -115,6 +115,64 @@ describe("FrontierLiveDemoPage", () => {
     expect(getTask).toHaveBeenCalledTimes(1);
   });
 
+  it.each(["zh-CN", "en-US"])("shows safe localized progress for recognition, grading, and unknown events (%s)", async (locale) => {
+    window.localStorage.setItem("smartai_locale", locale);
+    const zh = locale === "zh-CN";
+    for (const [status, message, expected, activity] of [
+      ["extracting_problems", "activity_responding", zh ? "请求已发出，等待模型响应" : "Request sent; awaiting model response", undefined],
+      ["extracting_problems", "private provider diagnostic", zh ? "等待进度更新" : "Waiting for a progress update", undefined],
+      ["grading", "private provider diagnostic", zh ? "请求已发出，等待模型响应" : "Request sent; awaiting model response", { sequence: 1, ts: 1, code: "responding" }],
+    ] as const) {
+      vi.mocked(getTaskState).mockResolvedValueOnce({ ...taskState(status), problem_count: 0, progress: {
+        phase: status === "grading" ? "grading" : "extracting", current_step: "normalizing_ocr_output",
+        total_students: 0, total_questions: 0, completed_units: 0, active: [],
+        messages: [{ ts: 1, level: "info", message }], activity_latest: activity,
+      } }).mockReturnValue(new Promise(() => {}));
+      const view = renderLive("asg_demo123");
+      const panel = (await screen.findByText(zh ? "后端进度" : "Backend progress")).parentElement!.parentElement!;
+      expect(within(panel).getByText(expected)).toBeVisible();
+      expect(within(panel).getByText(status === "grading" ? (zh ? "批改中" : "Grading") : (zh ? "题目识别" : "Processing questions"))).toBeVisible();
+      expect(panel).not.toHaveTextContent(/normalizing_ocr_output|activity_responding|private provider diagnostic/);
+      view.unmount();
+    }
+  });
+
+  it.each(["zh-CN", "en-US"])("localizes recognized answer flags (%s)", async (locale) => {
+    window.localStorage.setItem("smartai_locale", locale);
+    const students = recognizedStudents();
+    students["demo-1"].stu_ans[0].flag = ["recognition_needs_review", "recognition_low_confidence"];
+    vi.mocked(getTaskState).mockResolvedValue(taskState("submissions_ready"));
+    vi.mocked(getTask).mockResolvedValue({ ...taskWithQuestions(), student_data: students });
+    renderLive("asg_demo123");
+    const expected = locale === "zh-CN"
+      ? "识别结果需对照原件核对 · 本题识别置信度较低，请对照原件核对并确认"
+      : "Check transcription against the original · Low recognition confidence; check the original and confirm";
+    expect(await screen.findByText(expected)).toBeVisible();
+    expect(screen.queryByText(/recognition_needs_review|recognition_low_confidence/)).not.toBeInTheDocument();
+  });
+
+  it.each(["zh-CN", "en-US"])("keeps the submission review and precise recovery link after a low-confidence grading block (%s)", async (locale) => {
+    window.localStorage.setItem("smartai_locale", locale);
+    const zh = locale === "zh-CN";
+    const initial = { ...taskWithQuestions(), student_data: recognizedStudents() };
+    const current = { ...taskWithQuestions(), student_data: recognizedStudents() };
+    current.student_data["demo-1"].stu_ans[0].flag = ["recognition_needs_review", "recognition_low_confidence"];
+    vi.mocked(getTaskState).mockResolvedValue(taskState("submissions_ready"));
+    vi.mocked(getTask).mockResolvedValueOnce(initial).mockResolvedValue(current);
+    const user = userEvent.setup();
+    renderLive("asg_demo123");
+    await user.click((await screen.findAllByRole("button", { name: zh ? "开始批改" : "Start grading" }))[0]);
+    const alert = await screen.findByRole("alert");
+    expect(screen.queryByRole("heading", { name: zh ? "检查本次识别的学生作答" : "Inspect this run's recognized submissions" })).toBeVisible();
+    expect(screen.getByRole("link", { name: zh ? "在作答校对页查看" : "Open submission review" })).toHaveAttribute("href", "/tasks/asg_demo123/submissions");
+    expect(within(alert).getByRole("link", { name: /Alex Chen/ })).toHaveAttribute("href", `/tasks/asg_demo123/students/demo-1?question=${current.student_data["demo-1"].stu_ans[0].q_id}`);
+    expect(screen.queryByRole("link", { name: zh ? "返回修改配置" : "Back to edit settings" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: zh ? "开始批改" : "Start grading" })).toBeDisabled();
+    expect(saveGradingSetup).not.toHaveBeenCalled();
+    expect(startGrading).not.toHaveBeenCalled();
+    expect(updateStudentAnswer).not.toHaveBeenCalled();
+  });
+
   it.each([false, true])("keeps the replacement task locked when an old request settles (reject: %s)", async (reject) => {
     const oldRecognition = deferred<TaskStateSnapshot>();
     const nextRecognition = deferred<TaskStateSnapshot>();

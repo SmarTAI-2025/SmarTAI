@@ -30,7 +30,7 @@ export function ModelProgressRows({ models, locale, stopped = false }: {
   </div>;
 }
 
-function activityText(event: GradingActivityEvent | null | undefined, models: GradingModelProgress[], zh: boolean) {
+export function gradingActivityText(event: GradingActivityEvent | null | undefined, models: GradingModelProgress[], zh: boolean) {
   if (!event) return zh ? "等待进度更新" : "Waiting for a progress update";
   const label = models.find((model) => model.id === event.model_id)?.label;
   const labels = {
@@ -107,7 +107,7 @@ export function GradingActivity({ taskId, progress, locale, stopped = false }: {
     if (expanded && stickToBottom.current && list.current) list.current.scrollTop = list.current.scrollHeight;
   }, [expanded, events]);
 
-  const latestText = stopped ? (zh ? "本次处理已停止" : "This run has stopped") : activityText(progress.activity_latest, models, zh);
+  const latestText = stopped ? (zh ? "本次处理已停止" : "This run has stopped") : gradingActivityText(progress.activity_latest, models, zh);
   return <section className="mt-3 overflow-hidden rounded-lg border bg-card text-xs text-muted-foreground">
     <button type="button" className="flex h-10 w-full min-w-0 items-center gap-2 px-4 text-left hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
       aria-expanded={expanded} aria-controls={id} onClick={() => { stickToBottom.current = true; setExpanded(!expanded); }}>
@@ -120,7 +120,7 @@ export function GradingActivity({ taskId, progress, locale, stopped = false }: {
       <ol className="space-y-2">
         {events.map((event) => <li key={event.sequence} className="flex gap-3 leading-5">
           <time className="shrink-0 tabular-nums" dateTime={new Date(event.ts * 1000).toISOString()}>{new Date(event.ts * 1000).toLocaleTimeString(locale)}</time>
-          <span className="min-w-0 break-words">{activityText(event, models, zh)}</span>
+          <span className="min-w-0 break-words">{gradingActivityText(event, models, zh)}</span>
         </li>)}
       </ol>
       {loading && <p className="py-2">{zh ? "读取动态…" : "Loading activity…"}</p>}

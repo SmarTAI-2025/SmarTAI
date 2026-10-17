@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 import type { JobProgress, ProgressEvent, RecognitionRequestState } from "@/types/progress";
 import type { Locale } from "@/i18n/messages";
 
-function eventText(event: ProgressEvent | undefined, zh: boolean): string {
+export function recognitionEventText(event: ProgressEvent | undefined, zh: boolean): string {
   const labels: Record<string, string> = {
     activity_preparing: zh ? "正在准备文件" : "Preparing files",
     activity_reading: zh ? "正在读取文件内容" : "Reading file content",
@@ -78,7 +78,7 @@ export function RecognitionActivity({ progress, locale, incomplete = false, fill
   const latest = events.at(-1);
   const latestText = incomplete ? (progress?.error_detail === "operation_cancelled"
     ? (zh ? "本次识别已停止" : "Recognition stopped")
-    : (zh ? "本次识别未完成" : "Recognition did not complete")) : eventText(latest, zh);
+    : (zh ? "本次识别未完成" : "Recognition did not complete")) : recognitionEventText(latest, zh);
   useEffect(() => { stickToBottom.current = true; }, [progress?.job_id]);
   useEffect(() => {
     if (stickToBottom.current && list.current) list.current.scrollTop = list.current.scrollHeight;
@@ -92,7 +92,7 @@ export function RecognitionActivity({ progress, locale, incomplete = false, fill
       <p className="mb-2">{zh ? "显示当前保存的最近动态，最多 200 条" : "Showing the saved recent activity, up to 200 entries"}</p>
       <ol className="space-y-2">{events.map((event, index) => <li key={`${event.ts}:${index}`} className="flex gap-3 leading-5">
         <time className="shrink-0 tabular-nums">{Number.isFinite(event.ts) && event.ts > 0 ? new Date(event.ts * (event.ts > 1e12 ? 1 : 1000)).toLocaleTimeString(locale) : "—"}</time>
-        <span className="min-w-0 break-words">{eventText(event, zh)}</span>
+        <span className="min-w-0 break-words">{recognitionEventText(event, zh)}</span>
       </li>)}</ol>
       {!events.length && <p>{zh ? "暂无动态记录" : "No activity recorded yet"}</p>}
     </div>
