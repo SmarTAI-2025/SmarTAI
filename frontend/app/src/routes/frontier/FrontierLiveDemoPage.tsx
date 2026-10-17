@@ -1097,7 +1097,9 @@ function compareStudentAnswers(
 }
 
 function progressPercent(snapshot: TaskStateSnapshot) {
-  if (snapshot.status === "graded" || snapshot.status === "finalized") return 100;
+  // Persisted completion wins over the reporter's last intermediate counters.
+  if (snapshot.status === "problems_ready" || isTaskAwaitingGrading(snapshot.status)
+    || snapshot.status === "graded" || snapshot.status === "finalized") return 100;
   const progress = snapshot.progress;
   if (!progress) return 0;
   if (progress.total_steps && progress.completed_steps !== null && progress.completed_steps !== undefined) {
