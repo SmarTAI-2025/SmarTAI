@@ -31,6 +31,60 @@ async def manual(owner, task, job, revision):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("stopped_after", [None, "q1", "q2"])
+async def test_paused_question_handoff_keeps_completed_questions_and_sources(monkeypatch, stopped_after):
+    import asyncio
+    from backend.services.task_execution import stop_task_run
+    owner, task = _seed_task()
+    source, queued, _ = await _queue_question_preparation(owner, task, source_text="1. First.\n2. Second.")
+    calls = []
+    if stopped_after:
+        monkeypatch.setattr(task_facade, "_registry_for_owner", lambda _: _RecoveryRegistry())
+        monkeypatch.setattr(task_preparation, "prepare_question_packages", _fake_preparer(calls,
+            question_count=2, cancel_after_question=stopped_after, record_base_provider_calls=True))
+        with pytest.raises(asyncio.CancelledError):
+            await task_preparation.run_durable_question_preparation(_claim(owner, queued["job_id"], "stopped-manual"))
+    workflow = workflow_repository.get_workflow(task, owner_id=owner)
+    stop_task_run(task_id=task, owner_id=owner, job_id=queued["job_id"], expected_revision=workflow.workflow_revision)
+    paused = task_facade.get_task(task_id=task, owner_id=owner)
+    before_calls = list(calls)
+    result = await manual(owner, task, queued["job_id"], paused["workflow_revision"])
+    assert isinstance(result, dict), getattr(result, "body", result)
+    assert calls == before_calls
+    if not stopped_after:
+        assert result["status"] == "sources_pending" and result["first_question_id"] is None
+        assert task_facade.get_task(task_id=task, owner_id=owner)["status"] == "problems_paused"
+        assert "questions_required" in task_facade.grading_readiness(task_id=task, owner_id=owner)["blocking_issues"]
+        original_source = task_preparation.manual_question_source_content(task, queued["job_id"], source["source_token"], current=SimpleNamespace(id=owner))
+        assert original_source.body.decode() == "1. First.\n2. Second."
+        stranger, _ = _seed_task()
+        assert task_preparation.manual_question_source_content(task, queued["job_id"], source["source_token"], current=SimpleNamespace(id=stranger)).status_code == 404
+        question = task_preparation.ManualQuestionDraft(q_id="teacher-q", stem="Teacher-authored question",
+            reference_answer="Teacher solution", criterion="Award 10 points for the solution.")
+        arguments = dict(manual_questions=[question], expected_workflow_revision=paused["workflow_revision"])
+        refused = await task_preparation.manually_complete_question_preparation(task, queued["job_id"],
+            task_preparation.ManualQuestionPreparationRequest(**arguments), current=SimpleNamespace(id=owner))
+        assert refused.status_code == 422 and not assignment_repository.list_questions(task, teacher_id=owner)
+        for invalid in ([question, question], [question.model_copy(update={"stem": "(a) Explain A.\n(b) Explain B.", "criterion": "(a) 4 分\n(b) 4 分"})]):
+            response = await task_preparation.manually_complete_question_preparation(task, queued["job_id"],
+                task_preparation.ManualQuestionPreparationRequest(expected_workflow_revision=paused["workflow_revision"],
+                    manual_questions=invalid, completed_source_tokens=[source["source_token"]]), current=SimpleNamespace(id=owner))
+            assert response.status_code == 422
+        result = await task_preparation.manually_complete_question_preparation(task, queued["job_id"],
+            task_preparation.ManualQuestionPreparationRequest(**arguments, completed_source_tokens=[source["source_token"]]),
+            current=SimpleNamespace(id=owner))
+        assert result["first_question_id"] == "teacher-q"
+        assert "question_manual_completion_required" in task_facade.grading_readiness(task_id=task, owner_id=owner)["blocking_issues"]
+        assert assignment_repository.list_questions(task, teacher_id=owner)[0].stem == question.stem
+    else:
+        questions = assignment_repository.list_questions(task, teacher_id=owner)
+        assert questions[0].reference_answer
+        assert bool(questions[1].reference_answer) == (stopped_after == "q2")
+    original = workflow_repository.get_operation(queued["job_id"], owner_id=owner)
+    assert original.status == "error" and original.error_code == "operation_cancelled"
+
+
+@pytest.mark.asyncio
 async def test_manual_completion_preserves_success_and_requires_filling_then_confirmation(monkeypatch):
     owner, task, job, revision, calls = await failed_preparation(monkeypatch)
     before_calls = list(calls)
@@ -95,7 +149,7 @@ async def test_manual_completion_rejects_stale_foreign_or_unverified_results(mon
         operation = workflow_repository.get_operation(job, owner_id=owner)
         with session_scope() as session:
             record = session.get(workflow_repository.WorkflowOperationRecord, job)
-            record.checkpoint = {**operation.checkpoint, "aligned_base_artifact_id": None}
+            record.checkpoint = {**operation.checkpoint, "aligned_base_artifact_id": "unverified-artifact"}
     else:
         workflow_repository.update_workflow(task, owner_id=owner, last_failed_job_id=None)
     response = await manual(actor, task, job, revision)

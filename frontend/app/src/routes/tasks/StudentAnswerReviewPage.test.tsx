@@ -113,6 +113,7 @@ beforeEach(() => {
   taskData.student_data.S001.identity_status = "matched";
   taskData.student_data.S001.stu_ans[0].review_status = "pending";
   taskData.student_data.S001.stu_ans[0].flag = [];
+  taskData.student_data.S001.stu_ans[0].content = "Student answer one";
   mutations.answer.mockReset().mockResolvedValue({ workflow_revision: 4 });
   mutations.identity.mockReset().mockResolvedValue({ workflow_revision: 4, student: taskData.student_data.S001 });
   taskData.student_data.S001.source_choices = [];
@@ -151,6 +152,19 @@ beforeEach(() => {
 });
 
 describe("StudentAnswerReviewPage review shortcuts", () => {
+  it("requires an explicit no-answer action for a manually pending blank", async () => {
+    const user = userEvent.setup();
+    taskData.student_data.S001.stu_ans[0].content = "";
+    taskData.student_data.S001.stu_ans[0].flag = ["recognition_manual_pending", "recognition_paused"];
+    renderPage();
+    await user.click(screen.getByRole("button", { name: "全部确认" }));
+    expect(mutations.answer).not.toHaveBeenCalled();
+    await user.click(screen.getByRole("button", { name: "返回", exact: true }));
+    await user.click(screen.getByRole("button", { name: "修改" }));
+    await user.click(screen.getByRole("button", { name: "确认本题未作答" }));
+    expect(mutations.answer).toHaveBeenCalledWith(expect.objectContaining({ content: "", reviewStatus: "confirmed",
+      flag: ["recognition_manual_pending", "recognition_paused", "manual_blank_confirmed"] }));
+  });
   it("keeps ordinary recognition advice beside confirmation without blocking continuation", async () => {
     taskData.student_data.S001.stu_ans[0].flag = ["recognition_needs_review", "recognition_low_confidence"];
     renderPage();

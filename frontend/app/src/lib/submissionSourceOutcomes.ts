@@ -11,6 +11,14 @@ export function getSubmissionSourceReasonCopy(
   source: SubmissionSourceOutcome,
   locale: Locale,
 ): SubmissionSourceReasonCopy {
+  if (source.resolution_status === "manual_resolved") return {
+    title: tx(locale, "教师已补齐并确认", "Completed and confirmed by the teacher"),
+    description: tx(locale, "原识别记录和诊断信息仍保留。", "Original recognition records and diagnostics are preserved."),
+  };
+  if (source.status === "manual_review") return {
+    title: tx(locale, "识别未完成，等待人工处理", "Recognition incomplete; awaiting manual review"),
+    description: tx(locale, "原文件和已完成识别已保留。请逐题补齐作答或确认未作答，处理完成前不能批改。", "Originals and completed recognition are preserved. Complete each answer or confirm it is blank before grading."),
+  };
   const copy = REASON_COPY[source.reason_code ?? source.internal_status];
   if (copy) return copy(locale, source);
 

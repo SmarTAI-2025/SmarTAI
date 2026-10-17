@@ -209,6 +209,12 @@ export function useParseSubmissions() {
   });
 }
 
+export function useManuallyCompleteSubmissionRecognition() {
+  const queryClient = useQueryClient();
+  return useMutation({ mutationFn: tasksApi.manuallyCompleteSubmissionRecognition,
+    onSuccess: (_data, variables) => invalidateTask(queryClient, variables.taskId) });
+}
+
 export function useRetrySubmissionRecognition() {
   const queryClient = useQueryClient();
 

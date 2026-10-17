@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { I18nProvider } from "@/i18n/I18nProvider";
@@ -8,9 +8,11 @@ import { SubmissionRecognitionProgressPage } from "./SubmissionRecognitionProgre
 let detail: Partial<Task>;
 let snapshot: Partial<TaskStateSnapshot> | undefined;
 let progress: Partial<JobProgress> | null;
+const manuallyComplete = vi.fn();
 vi.mock("@/api/hooks/tasks", () => ({
   useTask: () => ({ data: detail, refetch: vi.fn() }),
   useRetrySubmissionRecognition: () => ({ isPending: false, mutateAsync: vi.fn() }),
+  useManuallyCompleteSubmissionRecognition: () => ({ isPending: false, mutateAsync: manuallyComplete }),
 }));
 vi.mock("@/api/hooks", () => ({ useStageProviders: () => ({ data: [] }) }));
 vi.mock("@/hooks/useTaskProgress", () => ({
@@ -31,6 +33,7 @@ function show() {
   </Routes></MemoryRouter></I18nProvider>);
 }
 beforeEach(() => {
+  manuallyComplete.mockReset().mockResolvedValue({ status: "ready_for_review" });
   progress = null;
   detail = { task_id: "T", status: "parsing_submissions", parse_job_id: "new-job", workflow_revision: 1,
     submission_sources: [source("processing")],
@@ -41,6 +44,14 @@ beforeEach(() => {
 });
 
 describe("submission recognition completion", () => {
+  it("opens manual review from a paused task without a model selection", async () => {
+    snapshot = { ...detail, status: "submissions_paused", last_failed_job_id: "new-job", error: "operation_cancelled" };
+    show();
+    expect(manuallyComplete).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "人工继续处理" }));
+    expect(await screen.findByRole("heading", { name: "作答校对页面" })).toBeInTheDocument();
+    expect(manuallyComplete).toHaveBeenCalledWith({ taskId: "T", jobId: "new-job", expectedWorkflowRevision: 1 });
+  });
   it("shows a recorded provider 503 while keeping retry confirmation", () => {
     snapshot!.status = "error";
     snapshot!.error = "provider_submit_uncertain";

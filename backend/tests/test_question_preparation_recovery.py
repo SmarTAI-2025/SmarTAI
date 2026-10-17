@@ -73,6 +73,8 @@ async def test_manually_paused_question_preparation_can_continue_with_saved_sour
         return
     assert isinstance(retry, dict), getattr(retry, "body", retry)
     assert retry["status"] == "started"
+    resumed = workflow_repository.get_operation(retry["job_id"], owner_id=owner)
+    assert resumed.payload["acknowledged_restart_from"]
     calls = []
     monkeypatch.setattr(task_facade, "_registry_for_owner", lambda _owner: _RecoveryRegistry())
     monkeypatch.setattr(task_preparation, "prepare_question_packages", _fake_preparer(calls,
