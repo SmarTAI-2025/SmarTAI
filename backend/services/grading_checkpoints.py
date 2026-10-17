@@ -55,13 +55,21 @@ class GradingCheckpoints:
         sample_count = setup.multi_sample_n if len(providers) == 1 else 1
         observer.configure([(provider, index) for provider in providers.values()
                             for index in range(sample_count)])
+        completed_pairs = set()
         for result in repository.list_results_for_run(self.run_id):
+            completed_pairs.add((result.student_id, result.q_id))
             for expert in result.ai_expert_results:
                 provider = providers.get(expert.get("provider_id"))
                 if provider is not None:
                     model = observer.models[provider_key(provider)]
                     kind = expert.get("error_kind")
                     model["cancelled" if kind == "operation_cancelled" else "failed" if kind else "succeeded"] += 1
+        from backend.agents.multi_expert import _is_successful_expert
+        for item in self.saved.values():
+            provider = providers.get(item["provider_id"])
+            if (provider is not None and (item["student_id"], item["q_id"]) not in completed_pairs
+                    and _is_successful_expert(ExpertResult.model_validate(item["result"]))):
+                observer.models[provider_key(provider)]["succeeded"] += 1
         await observer.reporter.publish_grading_activity({
             "model_progress": public_models(list(observer.models.values()))})
 

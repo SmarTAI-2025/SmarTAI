@@ -77,13 +77,22 @@ def test_stop_preserves_each_sample_and_resume_only_calls_missing_samples(case, 
     from backend.agents import multi_expert, grading_agent
     monkeypatch.setattr(multi_expert, "get_skill_for_type", lambda _type: Skill)
     question = questions[0]
+    from backend.progress.tracker import ProgressReporter
+    from backend.progress.grading_activity import GradingActivity
+    from backend.services.execution_control import provider_key
+    reporter = ProgressReporter(third, 1, 2)
+    reporter.grading_activity = GradingActivity(reporter, 2)
+    asyncio.run(third_checkpoints.seed_activity(reporter.grading_activity, registry, TaskGradingSetup.model_validate(config)))
+    model = reporter.grading_activity.models[provider_key(provider)]
+    assert model["succeeded"] == 1 and model["completion_times"] == []
     result = asyncio.run(third_checkpoints.run(grading_agent._grade_and_save_answer(
         problem=ProblemInfo(q_id="q1", number="1", type=question.type, stem=question.stem,
                             criterion=question.criterion, max_score=10),
         answer=StudentAnswerInfo(q_id="q1", number="1", type=question.type, content="answer"),
-        student_id=student_id, registry=registry, multi_sample_n=3,
+        student_id=student_id, registry=registry, multi_sample_n=3, reporter=reporter,
         aggregation_method="weighted_average", grading_setup=TaskGradingSetup.model_validate(config))))
     assert calls == ["q1", "q1"]  # Successful sample 1 is never sent again.
+    assert model["succeeded"] == 3 and len(model["completion_times"]) == 2
     assert result.synthesis_method == "multi_sample"
     assert len(grades.list_results_for_run(third)) == 1  # Saved before batch completion.
     stop(case, third)
