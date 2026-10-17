@@ -1059,7 +1059,8 @@ class FrozenSubmission:
     revision_number: int
 
 
-def record_event(run_id: str, *, level: str, message: str, payload: dict | None = None) -> None:
+def record_event(run_id: str, *, level: str, message: str, payload: dict | None = None,
+                 worker_id: str | None = None) -> None:
     now = time.time()
     with session_scope() as session:
         run = session.scalar(
@@ -1071,6 +1072,11 @@ def record_event(run_id: str, *, level: str, message: str, payload: dict | None 
             session, run_id, actor_id=run.teacher_id, lock=True
         ) is None:
             raise NotFound("grading_run")
+        if worker_id is not None and (
+            run.status != "running" or run.lease_owner != worker_id
+            or (run.lease_expiry or 0) <= now or run.released_at is not None
+        ):
+            raise LeaseLost("checkpoint_write_lease_lost")
         next_seq = (session.scalar(
             select(func.max(GradingRunEventRecord.sequence)).where(
                 GradingRunEventRecord.grading_run_id == run_id
@@ -1600,6 +1606,14 @@ def release(run_id: str, *, teacher_id: str) -> education.GradingRunDTO:
         )
         if session.scalar(select(unresolved)):
             raise ResultNotReleasable("unresolved_failures")
+        # A stop-time partial score is provisional even if its surviving model
+        # was confident. Keep this gate in the repository for direct releases.
+        for row in session.scalars(select(GradeResultRecord).where(
+            GradeResultRecord.grading_run_id == run_id,
+            GradeResultRecord.requires_review.is_(True),
+        )):
+            if "grading_paused" in (row.initial_review_reasons or []):
+                raise ResultNotReleasable("paused_grading_requires_confirmation")
         revision_ids, question_ids = _result_matrix_axes(session, run)
         actual_pairs = {
             (revision_id, question_id)

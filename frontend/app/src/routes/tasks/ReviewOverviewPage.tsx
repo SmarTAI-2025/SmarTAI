@@ -96,6 +96,7 @@ export function ReviewOverviewPage() {
   const isLoading = taskQuery.isLoading || readingCompletion || resultQuery.isLoading || finalizationQuery.isLoading;
   const isError = taskQuery.isError || resultQuery.isError || finalizationQuery.isError;
   const pendingReviewItems = reviewItems.filter((item) => !confirmedKeys.has(reviewCellKey(item.student.id, item.question.id)));
+  const pausedGrading = pendingReviewItems.some(item => item.correction.initial_review_reasons?.includes("grading_paused") || item.correction.review_reasons?.includes("grading_paused"));
   const blockingReviewItems = pendingReviewItems.filter((item) => correctionReviewNextBlocked(item.correction));
   const historyView = Boolean(task && task.status !== "graded" && !resolvingFailures);
   const overviewReturnTo = taskId
@@ -195,9 +196,9 @@ export function ReviewOverviewPage() {
       ) : (
         <>
           {!historyView && resultQuery.data?.grading_run_status === "partial_failed" ? (
-            <section className="mt-5 rounded-[10px] border border-warning/40 bg-warning/5 p-5" aria-label={locale === "zh-CN" ? "批改失败重试" : "Retry failed grading"}>
+            <section className="mt-5 rounded-[10px] border border-warning/40 bg-warning/5 p-5" aria-label={pausedGrading ? (locale === "zh-CN" ? "继续未完成批改" : "Resume incomplete grading") : (locale === "zh-CN" ? "批改失败重试" : "Retry failed grading")}>
               <h2 className="mb-2 text-base font-semibold">{locale === "zh-CN" ? "部分作答未完成批改" : "Some answers could not be graded"}</h2>
-              <RetryFailedGrading taskId={taskId} revision={task?.workflow_revision ?? 0} locale={locale} />
+              <RetryFailedGrading taskId={taskId} revision={task?.workflow_revision ?? 0} locale={locale} paused={pausedGrading} />
             </section>
           ) : null}
           <div className="mt-5 grid grid-cols-2 gap-4 xl:grid-cols-4 xl:gap-5">
@@ -274,7 +275,7 @@ export function ReviewOverviewPage() {
         onStay={() => setBlockedDialog(false)}
         onLeave={() => { setBlockedDialog(false); if (unresolvedHref) navigate(unresolvedHref); else void finalizationQuery.refetch(); }}
       >
-        {taskId && blockingReviewItems.some(item => effectiveCorrectionScore(item.correction) === null) ? <div className="mt-4"><RetryFailedGrading taskId={taskId} revision={task?.workflow_revision ?? 0} locale={locale} /></div> : null}
+        {taskId && blockingReviewItems.some(item => effectiveCorrectionScore(item.correction) === null) ? <div className="mt-4"><RetryFailedGrading taskId={taskId} revision={task?.workflow_revision ?? 0} locale={locale} paused={pausedGrading} /></div> : null}
         <ul className="mt-3 max-h-48 space-y-2 overflow-auto text-sm">{blockingReviewItems.map(item => <li key={reviewCellKey(item.student.id, item.question.id)}><Link className="text-primary underline" onClick={() => setBlockedDialog(false)} to={reviewDetailHref(taskId!, item.student.id, item.question.id, overviewReturnTo)}>{item.student.name} · {item.question.label} · {locale === "zh-CN" ? "请处理并确认" : "Correct and confirm"}</Link></li>)}</ul>
       </UnsavedChangesDialog> : null}
     </div>
@@ -496,6 +497,11 @@ function PageState({ title, description, busy = false, action, href, onAction }:
 }
 
 function queueReason(locale: Locale, item: ReviewItem): string {
+  if (item.correction.initial_review_reasons?.includes("grading_paused") || item.correction.review_reasons?.includes("grading_paused")) {
+    return effectiveCorrectionScore(item.correction) === null
+      ? (locale === "zh-CN" ? "已暂停尚未批改 · 请人工补齐" : "Paused, ungraded · complete manually")
+      : (locale === "zh-CN" ? "已暂停 · 已保存部分评分，请确认" : "Paused · partial grades saved; confirm");
+  }
   if (effectiveCorrectionScore(item.correction) === null) return locale === "zh-CN" ? "缺少有效分数 · 需处理" : "Missing valid score · action required";
   if (correctionReviewBlocked(item.correction)) return locale === "zh-CN" ? "请核对补齐后的分数并确认" : "Check the corrected score and confirm";
   if (item.severity === "blocking") return locale === "zh-CN" ? "请核对并确认" : "Check and confirm the result";

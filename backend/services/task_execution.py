@@ -6,7 +6,36 @@ from sqlalchemy import select
 from backend.db import workflow_repository as workflows
 from backend.db.grading_repository import GradingRunRecord
 from backend.db.session import session_scope
-from backend.domain.errors import NotFound, VersionConflict
+from backend.domain.errors import NotFound, VersionConflict, ValidationError
+
+
+def continue_manual_grading(*, task_id: str, owner_id: str, job_id: str, expected_revision: int) -> dict:
+    """Transfer a stopped grading matrix to the existing teacher review flow."""
+    with session_scope() as session:
+        run = session.scalar(select(GradingRunRecord).where(
+            GradingRunRecord.id == job_id, GradingRunRecord.assignment_id == task_id,
+            GradingRunRecord.teacher_id == owner_id).with_for_update())
+        workflow = session.scalar(select(workflows.AssignmentWorkflowRecord).where(
+            workflows.AssignmentWorkflowRecord.assignment_id == task_id,
+            workflows.AssignmentWorkflowRecord.owner_id == owner_id).with_for_update())
+        workflows._lock_live_assignment(session, assignment_id=task_id, owner_id=owner_id)
+        if run is None or workflow is None:
+            raise NotFound("task_run")
+        if (workflow.active_job_id or workflow.workflow_revision != expected_revision
+                or workflow.grading_job_id != job_id or run.status != "cancelled"
+                or run.error_message != "operation_cancelled"):
+            raise VersionConflict("The stopped run changed.", code="workflow_revision_conflict")
+        from backend.db.grading_repository import _result_matrix_axes, GradeResultRecord
+        revisions, questions = _result_matrix_axes(session, run)
+        actual = {(row.submission_revision_id, row.question_id) for row in session.scalars(
+            select(GradeResultRecord).where(GradeResultRecord.grading_run_id == job_id))}
+        if not questions or not revisions or actual != {(revision, question) for revision in revisions for question in questions}:
+            raise ValidationError("Stopped results are incomplete.", code="grading_manual_review_unavailable")
+        run.status, run.error_message = "partial_failed", None
+        workflow.presentation_status, workflow.error_code, workflow.last_failed_job_id = "graded", None, None
+        workflow.workflow_revision += 1
+        workflow.updated_at = time.time()
+        return {"status": "manual_review", "job_id": job_id}
 
 
 def continue_auxiliary_run(*, task_id: str, owner_id: str, job_id: str, expected_revision: int) -> dict:
@@ -75,6 +104,8 @@ def stop_task_run(*, task_id: str, owner_id: str, job_id: str, expected_revision
         if workflow.active_job_id != job_id or workflow.workflow_revision != expected_revision:
             raise VersionConflict("The active run changed.", code="workflow_revision_conflict")
         if run is not None:
+            from backend.services.grading_checkpoints import persist_paused_results
+            persist_paused_results(session, run)
             run.status = "cancelled"
             run.error_message = "operation_cancelled"
             run.lease_owner = None

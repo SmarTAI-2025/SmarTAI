@@ -45,10 +45,10 @@ export function stopTaskRun(taskId: string, jobId: string, revision: number) {
   );
 }
 
-export function continueTaskRun(taskId: string, jobId: string, revision: number) {
-  return postJSON<{ status: "started" | "already_running"; job_id: string }>(
+export function continueTaskRun(taskId: string, jobId: string, revision: number, manual = false) {
+  return postJSON<{ status: "started" | "already_running" | "manual_review"; job_id: string }>(
     `/tasks/${encodeURIComponent(taskId)}/continue`,
-    { job_id: jobId, expected_workflow_revision: revision },
+    { job_id: jobId, expected_workflow_revision: revision, ...(manual ? { manual: true } : {}) },
   );
 }
 

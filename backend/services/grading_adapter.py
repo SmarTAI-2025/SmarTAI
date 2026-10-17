@@ -152,7 +152,7 @@ def correction_to_result(
         primary_reasons = ["invalid_score_scale"]
     elif hard_failure:
         primary_reasons = [
-            "quota_exhausted" if method == "quota_exhausted" else "llm_failed"
+            "grading_paused" if method == "paused" else "quota_exhausted" if method == "quota_exhausted" else "llm_failed"
         ]
     else:
         primary_reasons = []
@@ -184,7 +184,7 @@ def correction_to_result(
         ai_max_score=question.max_score,
         ai_comment=correction.comment or "",
         ai_steps=[s.model_dump() for s in normalized_steps],
-        ai_confidence=correction.confidence,
+        ai_confidence=None if method == "paused" else correction.confidence,
         ai_expert_results=[e.model_dump() for e in normalized_experts],
         ai_synthesis_method=method,
         requires_review=needs_review,
