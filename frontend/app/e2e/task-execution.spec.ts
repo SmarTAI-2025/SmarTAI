@@ -68,8 +68,9 @@ for (const stage of ["problems", "submissions", "grading"] as const) for (const 
     const { calls, errors } = await fixture(page, reason, stage);
     const progressHref = `/tasks/execution-task/${stage}/progress`;
     await page.goto(progressHref);
-    await expect(page.getByText(reason === "user_busy" ? /你已有任务正在处理/ : reason === "server_busy" ? /服务器繁忙/ : "服务商限流，等待重试", { exact: reason === "rate_limited" })).toBeVisible();
-    if (reason === "rate_limited") await expect(page.getByText(/已尝试 1\/3 次/)).toBeVisible();
+    await expect(page.getByText(reason === "user_busy" ? /你已有任务正在处理/ : reason === "server_busy" ? /服务器繁忙/ : stage === "grading" ? "服务商限流，等待重试" : /1 个请求等待重试 · 请求受限 · 第 2\/3 次尝试/, { exact: reason === "rate_limited" && stage === "grading" })).toBeVisible();
+    if (reason === "rate_limited" && stage === "grading") await expect(page.getByText(/已尝试 1\/3 次/)).toBeVisible();
+    if (stage !== "grading") await expect(page.getByRole("heading", { name: "最近动态" })).toBeVisible();
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
     await page.screenshot({ path: testInfo.outputPath("running.png"), fullPage: true });
     await page.getByRole("button", { name: "停止运行", exact: true }).click();

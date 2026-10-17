@@ -5,7 +5,7 @@ import {
   isKnowledgeStorageQuotaExceeded,
   knowledgeStorageQuotaCopy,
 } from "@/lib/knowledgeStorage";
-import type { ExpertConfig, ResultArtifactStatus, Task, TaskLite, TaskStatus } from "@/types";
+import type { ExpertConfig, ProviderFailure, ResultArtifactStatus, Task, TaskLite, TaskStatus } from "@/types";
 
 const WORKFLOW_REVISION_CONFLICT_CODES = new Set([
   "stale_revision",
@@ -218,6 +218,7 @@ export interface RecoverableErrorContext {
   jobId?: string | null;
   taskId?: string;
   returnTo?: string;
+  providerFailures?: ProviderFailure[];
 }
 
 const BYOK_CODES = new Set([
@@ -367,12 +368,23 @@ export function classifyRecoverableError(
   }
 
   if (code === "provider_submit_uncertain") {
+    const observed = Array.isArray(context.providerFailures) ? context.providerFailures.at(-1) : undefined;
+    const cause = observed ? uncertainProviderCauseCopy(observed, locale) : null;
+    if (cause && observed) {
+      technicalDetails.push({ label: tx(locale, "最近模型故障", "Latest model failure"), value: observed.code });
+      if (cause.httpStatus) {
+        technicalDetails.push({ label: tx(locale, "供应商 HTTP 状态", "Provider HTTP status"), value: String(cause.httpStatus) });
+      }
+    }
     return {
-      title: tx(locale, "模型请求状态无法确认", "The provider request state is uncertain"),
-      description: tx(
+      title: cause?.title ?? tx(locale, "模型调用未完成，重试需确认", "The model call did not complete; confirm before retrying"),
+      description: (cause ? `${cause.description} ` : tx(locale,
+        "本次未取得可用结果，现有记录无法确定具体原因。",
+        "No usable result was received, and the available records do not identify the cause. ",
+      )) + tx(
         locale,
-        "请求可能已经到达服务商。为避免重复提交或重复计费，系统不会自动重试这一步；请保留任务编号并让管理员先核对服务商状态。",
-        "The request may have reached the provider. To avoid duplicate submission or billing, SmarTAI will not retry this step automatically. Keep the job ID and ask an administrator to verify the provider state first.",
+        "上次调用是否计费尚无法确认，系统不会自动重试。原文件和已保存结果保留；可稍后确认重试失败项，或先切换模型。重试可能再次消耗额度；反复失败时请提供任务编号排查。",
+        "Billing for the previous call is unconfirmed, so SmarTAI will not retry automatically. Originals and saved results are preserved. Confirm a retry of failed items later, or switch models first. Retrying may incur another charge; share the job ID if failures persist.",
       ),
       actionLabel: tx(locale, "刷新任务状态", "Refresh task state"),
       actionKind: "refresh",
@@ -1280,6 +1292,28 @@ function providerConfigurationErrorCopy(
   return copy
     ? { title: tx(locale, copy[0], copy[1]), description: tx(locale, copy[2], copy[3]) }
     : null;
+}
+
+function uncertainProviderCauseCopy(failure: ProviderFailure, locale: Locale) {
+  const copies: Record<string, [string, string, string, string]> = {
+    provider_upstream_unavailable: ["模型服务暂时不可用", "The model service is temporarily unavailable", "本次运行最近记录到服务商返回临时故障", "The latest recorded model failure in this run was a temporary provider error"],
+    provider_timeout: ["模型响应超时", "The model response timed out", "本次运行最近记录到模型响应超时，未能在等待时间内取得结果", "The latest recorded model failure in this run was a response timeout"],
+    provider_unreachable: ["模型连接失败或中断", "The model connection failed or was interrupted", "本次运行最近记录到模型连接失败或中断，未能取得完整结果", "The latest recorded model failure in this run was a failed or interrupted connection"],
+    provider_rate_limited: ["模型请求受到限流", "The model request was rate limited", "本次运行最近记录到服务商限流", "The latest recorded model failure in this run was provider rate limiting"],
+    provider_response_invalid: ["模型返回结果无法使用", "The model response could not be used", "本次运行最近记录到模型返回结果未通过格式校验", "The latest recorded model failure in this run was an invalid response format"],
+  };
+  if (typeof failure.code !== "string" || !Object.hasOwn(copies, failure.code)) return null;
+  const copy = copies[failure.code];
+  const status = failure.http_status;
+  const httpStatus = typeof status === "number" && Number.isInteger(status) && (
+    (failure.code === "provider_upstream_unavailable" && status >= 500 && status <= 599)
+    || (failure.code === "provider_rate_limited" && status === 429)
+  ) ? status : null;
+  return {
+    title: tx(locale, copy[0], copy[1]),
+    description: tx(locale, copy[2], copy[3]) + (httpStatus ? ` (HTTP ${httpStatus})` : "") + tx(locale, "。", "."),
+    httpStatus,
+  };
 }
 
 function providerTransientErrorCopy(
