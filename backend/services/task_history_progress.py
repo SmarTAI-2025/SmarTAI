@@ -10,7 +10,7 @@ from backend.services import task_facade
 
 logger = logging.getLogger(__name__)
 ACTIVE_STATUSES = {"extracting_problems", "parsing_submissions", "grading"}
-COMPLETE_STATUSES = {"graded", "review_confirmed", "finalized"}
+COMPLETE_STATUSES = {"graded", "finalized"}
 
 
 def _number(value) -> float | None:

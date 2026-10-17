@@ -155,7 +155,7 @@ class QuestionSourceRead:
 async def read_question_source(*, owner_id, task_id, content, filename, content_type=None,
                                route: StageProviderRoute, registry, stored_file_id=None,
                                extraction_hint="", options=None, purpose="problems", reporter=None, text_reader=None,
-                               allow_vision=None, binding=None, retry_key=None):
+                               allow_vision=None, binding=None, retry_key=None, acknowledge_pending_retry=False):
     from backend.services.source_files import persist_problem_source
 
     scope = question_recognition_options(options, extraction_hint=extraction_hint)
@@ -234,7 +234,7 @@ async def read_question_source(*, owner_id, task_id, content, filename, content_
             return QuestionSourceRead(text, summary, stored_file_id)
         run = await service.run(
             request, content, engine=engine, prompt_version=PROMPT_VERSION, authorized_owner_id=owner_id, binding=binding,
-            retry_key=retry_key,
+            retry_key=retry_key, acknowledge_pending_retry=acknowledge_pending_retry,
         )
         if media_type == "application/pdf" and allow_vision and engine is not None and run.safe_error_code == "provider_vision_not_supported":
             if total_pages is not None:
@@ -242,6 +242,7 @@ async def read_question_source(*, owner_id, task_id, content, filename, content_
             run = await service.run(
                 request, content, engine=None, prompt_version=PROMPT_VERSION,
                 authorized_owner_id=owner_id, binding=binding, retry_key=retry_key,
+                acknowledge_pending_retry=acknowledge_pending_retry,
             )
     if run.status == "already_running":
         raise RecognitionError("recognition_already_running")
@@ -250,6 +251,17 @@ async def read_question_source(*, owner_id, task_id, content, filename, content_
         raise RecognitionError(run.safe_error_code or "recognition_artifact_unavailable")
     document = assembly.document
     text = document.final_markdown
+    # A nonempty first page is not a successful document read. Keep the durable
+    # page artifacts for recovery, but never let missing source evidence become
+    # an apparently unanswered question in the structure parser.
+    coverage = document.coverage
+    if coverage.failed_pages or coverage.unprocessed_pages or coverage.missing_targets:
+        raise RecognitionError(
+            run.safe_error_code or assembly.safe_error_code or "question_source_incomplete",
+            failed_pages=sorted(set(coverage.failed_pages) | set(coverage.unprocessed_pages)),
+            processed_pages=coverage.processed_pages,
+            page_diagnostics=recognition_page_diagnostics(assembly),
+        )
     if not text.strip():
         if not allow_vision and run.safe_error_code == "visual_capability_unavailable":
             raise RecognitionError("material_ocr_confirmation_required")
@@ -263,10 +275,29 @@ async def read_question_source(*, owner_id, task_id, content, filename, content_
         artifact_ids=list(run.artifact_ids), coverage=document.coverage.model_dump(mode="json"),
         confidence=document.confidence, warning_codes=document.warning_codes,
         confidence_reasons=document.confidence_reasons, error_code=run.safe_error_code,
+        page_diagnostics=recognition_page_diagnostics(assembly),
         usage=run.current_usage.model_dump(mode="json"), operation_usage=run.operation_usage.model_dump(mode="json"),
         requires_review=True,
     )
     return QuestionSourceRead(text, summary, stored_file_id)
+
+
+def recognition_page_diagnostics(assembly):
+    """Public-safe page facts only; never provider response text or credentials."""
+    coverage = assembly.document.coverage
+    errors = []
+    batch = assembly.raw.read_batch
+    for unit in batch.units if batch else []:
+        candidate = unit.candidate
+        if candidate.status != "error":
+            continue
+        for page in unit.page_numbers:
+            if page in coverage.failed_pages:
+                errors.append(dict(page=page, error_code=candidate.safe_error_code or "recognition_response_invalid",
+                                   status_code=candidate.upstream_status_code))
+    return dict(total_pages=coverage.total_pages, processed_pages=coverage.processed_pages,
+                failed_pages=coverage.failed_pages, unprocessed_pages=coverage.unprocessed_pages,
+                page_errors=errors)
 
 
 def recognition_needs_review(summary):
@@ -290,6 +321,7 @@ def attach_recognition_review(packages, sources):
             and not any(coverage.get(key) for key in ("failed_pages", "unprocessed_pages", "missing_targets"))
             and not summary.get("error_code")
             and "low_confidence_content" not in summary.get("confidence_reasons", []))
+        incomplete = any(coverage.get(key) for key in ("failed_pages", "unprocessed_pages", "missing_targets"))
         if not partial and summary.get("confidence") != "low" and not summary.get("error_code"):
             continue
         for q_id, problem in packages.items():
@@ -299,7 +331,7 @@ def attach_recognition_review(packages, sources):
                 continue
             problem["review_status"] = "needs_review"
             issues.append(dict(
-                issue_id=issue_id, q_id=q_id, field="stem", severity="info" if informational else "warning", status="open",
+                issue_id=issue_id, q_id=q_id, field="stem", severity="blocking" if incomplete else "info" if informational else "warning", status="open",
                 code="recognition_partial" if partial else "recognition_needs_review",
                 source_ids=[summary["operation_id"]], details=dict(coverage=coverage,
                     artifact_ids=summary.get("artifact_ids", []), error_code=summary.get("error_code"),

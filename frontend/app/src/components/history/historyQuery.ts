@@ -28,15 +28,15 @@ const SORT_VALUES = new Set<HistorySort>([
   "eta_desc",
 ]);
 const STATUS_VALUES = new Set<TaskStatus>([
+  "problems_paused", "submissions_paused", "grading_paused",
   "draft",
   "extracting_problems",
   "problems_ready",
   "parsing_submissions",
   "submissions_ready",
+  "grading_setup",
   "grading",
   "graded",
-  "review_confirmed",
-  "generating_analysis",
   "finalized",
   "error",
 ]);

@@ -27,9 +27,10 @@ HistorySort = Literal[
 ]
 
 _STATUSES = {
+    "problems_paused", "submissions_paused", "grading_paused",
     "draft", "extracting_problems", "problems_ready", "parsing_submissions",
-    "submissions_ready", "grading", "graded", "review_confirmed",
-    "generating_analysis", "finalized", "error",
+    "submissions_ready", "grading_setup", "grading", "graded",
+    "finalized", "error",
 }
 _SORTS = {
     "updated_desc", "updated_asc", "created_desc", "created_asc",
@@ -44,7 +45,7 @@ class HistoryQueryFilters(BaseModel):
     semester_id: Optional[str] = Field(default=None, max_length=40)
     course_id: Optional[str] = Field(default=None, max_length=80)
     tag_ids: List[str] = Field(default_factory=list, max_length=30)
-    statuses: List[TaskStatus] = Field(default_factory=list, max_length=11)
+    statuses: List[TaskStatus] = Field(default_factory=list, max_length=13)
     unfinished: Optional[bool] = None
     needs_attention: Optional[bool] = None
 
@@ -71,15 +72,17 @@ class HistoryLLMOutput(BaseModel):
 
 
 _STATUS_TERMS: Dict[str, tuple[str, ...]] = {
+    "problems_paused": ("题目识别暂停", "question recognition paused"),
+    "submissions_paused": ("作答识别暂停", "submission recognition paused"),
+    "grading_paused": ("批改暂停", "grading paused"),
     "draft": ("草稿", "draft"),
     "extracting_problems": ("题目识别中", "提取题目中", "extracting problems"),
-    "problems_ready": ("题目已就绪", "problems ready"),
+    "problems_ready": ("校对题目", "题目已就绪", "review questions", "problems ready"),
     "parsing_submissions": ("作答解析中", "解析作答中", "parsing submissions"),
-    "submissions_ready": ("待批改", "作答已就绪", "ready to grade"),
+    "submissions_ready": ("校对作答", "作答已就绪", "review submissions"),
+    "grading_setup": ("批改配置", "待批改", "grading setup", "ready to grade"),
     "grading": ("批改中", "grading"),
     "graded": ("已批改", "批改完成", "结果待复核", "结果已生成", "graded"),
-    "review_confirmed": ("复核已确认", "已确认复核", "review confirmed"),
-    "generating_analysis": ("分析生成中", "生成分析中", "generating analysis"),
     "finalized": ("正式完成", "已完成", "finalized", "finalised", "completed"),
     "error": ("出错", "错误", "失败", "error", "failed"),
 }
@@ -262,10 +265,13 @@ def deterministic_history_query(
         matched.append("需要关注")
 
     statuses: List[TaskStatus] = []
+    status_text = lower
     for status_name, terms in _STATUS_TERMS.items():
         for term in terms:
-            if _contains_term(lower, term):
+            if _contains_term(status_text, term):
                 statuses.append(status_name)  # type: ignore[arg-type]
+                # A phrase such as "grading setup" must not also select "grading".
+                status_text = _consume(status_text, term)
                 remaining = _consume(remaining, term)
                 break
     if statuses:
@@ -321,8 +327,8 @@ _HISTORY_QUERY_SYSTEM = """You interpret a teacher's History-page filter.
 Return only JSON matching the supplied schema. You may use only IDs present in
 the candidate JSON. Never invent a course, tag, semester, status, or field.
 Allowed statuses: draft, extracting_problems, problems_ready,
-parsing_submissions, submissions_ready, grading, graded, review_confirmed,
-generating_analysis, finalized, error.
+parsing_submissions, submissions_ready, grading_setup, grading, graded, finalized, error,
+problems_paused, submissions_paused, grading_paused.
 Allowed sort values: updated_desc, updated_asc, created_desc, created_asc,
 name_asc, name_desc, attention_first, stage_asc, stage_desc.
 Use q only for a task-name/free-text term. If meaning is uncertain, leave that

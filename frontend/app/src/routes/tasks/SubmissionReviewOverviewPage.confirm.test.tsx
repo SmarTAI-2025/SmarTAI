@@ -29,6 +29,7 @@ function renderPage() {
   </MemoryRouter>);
 }
 beforeEach(() => {
+  state.data.status = "submissions_ready";
   state.identity.mockReset().mockImplementation(async ({ expectedWorkflowRevision }) => ({ workflow_revision: expectedWorkflowRevision + 1 }));
   state.answer.mockReset().mockImplementation(async ({ expectedWorkflowRevision }) => ({ workflow_revision: expectedWorkflowRevision + 1 }));
   state.refetch.mockReset().mockResolvedValue({ data: state.data });
@@ -41,7 +42,8 @@ describe("submission review confirmation", () => {
     expect(identityLink).toHaveAttribute("href", "/tasks/task-1/students/S001?identity=edit&returnParams=q%3DS001");
   });
 
-  it("confirms all identities with unchanged values and successive revisions, including filtered-out students", async () => {
+  it.each(["submissions_ready", "grading_setup"])("confirms all identities from %s, including filtered-out students", async (status) => {
+    state.data.status = status;
     const user = userEvent.setup();
     renderPage();
     await user.click(screen.getByRole("button", { name: "全部确认" }));

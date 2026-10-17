@@ -51,6 +51,7 @@ class ProgressReporter:
         self._event_sink: Optional[Callable[[ProgressEvent, dict[str, Any]], None]] = None
         self._question_generation_ids: tuple[str, ...] = ()
         self.grading_activity = None
+        self.recognition_activity = None
 
     def set_event_sink(
         self,
@@ -327,12 +328,39 @@ class ProgressReporter:
             self._progress.error_detail = detail
         await self._emit(ProgressEvent(level="error", message=detail))
 
+    async def record_provider_failure(self, exc: Exception) -> None:
+        """Best-effort evidence must never replace the original recovery guard."""
+        try:
+            from backend.services.background_errors import provider_failure_diagnostic
+            failure = provider_failure_diagnostic(exc)
+            if failure is None:
+                return
+            async with self._lock:
+                previous = [item for item in self._progress.provider_failures if item != failure]
+                self._progress.provider_failures = [*previous, failure][-8:]
+            await self._emit(ProgressEvent(level="warn", message=failure.code))
+        except Exception:
+            logger.warning("Provider failure diagnostics could not be recorded", exc_info=False)
+
     async def snapshot(self) -> JobProgress:
         """Return a copy of current progress (for polling endpoint)."""
         async with self._lock:
             # Shallow copy is sufficient since the lists are replaced, not mutated
             snap = self._progress.model_copy(deep=True)
             snap.messages = list(self._events)
+            if self.recognition_activity is not None:
+                from backend.progress.recognition_activity import public_message
+                messages, size = [], 0
+                for event in reversed(snap.messages):
+                    if not (safe := public_message(event.model_dump(mode="json"))):
+                        continue
+                    public = ProgressEvent(**safe)
+                    size += len(public.model_dump_json().encode("utf-8")) + 1
+                    if size > 16 * 1024:
+                        break
+                    messages.append(public)
+                snap.messages = list(reversed(messages))
+                snap.recognition_requests = self.recognition_activity.states()
             return snap
 
     @asynccontextmanager
@@ -389,6 +417,8 @@ class ProgressReporter:
         """Add event to ring buffer and push to SSE subscribers."""
         _mark_reporter_active(self.job_id)
         self._events.append(event)
+        from backend.progress.recognition_activity import capture
+        await capture(self, event)
         logger.info(f"[progress:{self.job_id}] {event.message}")
         if self._event_sink is not None:
             async with self._lock:
@@ -414,6 +444,7 @@ class ProgressReporter:
                     "failed_question_ids": list(self._progress.failed_question_ids),
                     "last_activity_at": self._progress.last_activity_at,
                     "model_waits": [wait.model_dump() for wait in self._progress.model_waits],
+                    "provider_failures": [failure.model_dump() for failure in self._progress.provider_failures],
                 }
             try:
                 if activity_payload is not None:

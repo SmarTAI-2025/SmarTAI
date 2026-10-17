@@ -4,7 +4,7 @@ from __future__ import annotations
 from typing import Annotated, Literal
 import unicodedata
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_serializer, model_validator
 
 Purpose = Literal["problems", "reference", "submissions", "rubric", "test_cases", "knowledge"]
 Confidence = Literal["high", "medium", "low"]
@@ -65,6 +65,16 @@ class RecognitionCandidateV1(EvidenceModel):
     finish_reason: Literal["stop", "length", "refused", "unknown"] | None = None
     warning_codes: list[Code] = Field(default_factory=list, max_length=32)
     safe_error_code: Code | None = None
+    upstream_status_code: int | None = Field(default=None, strict=True, ge=400, le=599)
+
+    @model_serializer(mode="wrap")
+    def preserve_legacy_payload(self, handler):
+        data = handler(self)
+        # Existing durable artifacts hash the exact serialized candidate. Do
+        # not add a null field to old successful pages during cache validation.
+        if self.upstream_status_code is None:
+            data.pop("upstream_status_code", None)
+        return data
 
     @model_validator(mode="after")
     def error_is_not_content(self):

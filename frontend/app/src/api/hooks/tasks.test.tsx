@@ -38,7 +38,7 @@ describe("task report and review cache", () => {
       status: "ok",
       unchanged: false,
       task_id: "task-1",
-      task_status: "review_confirmed",
+      task_status: "graded",
       workflow_revision: 8,
       ready_for_confirmation: true,
       required_review_count: 0,
@@ -62,7 +62,7 @@ describe("task report and review cache", () => {
     });
 
     expect(client.getQueryData<Task>(taskKeys.detail("task-1"))).toMatchObject({
-      status: "review_confirmed",
+      status: "graded",
       workflow_revision: 8,
     });
     expect(client.getQueryData(taskKeys.finalization("task-1"))).toMatchObject({ workflow_revision: 8 });

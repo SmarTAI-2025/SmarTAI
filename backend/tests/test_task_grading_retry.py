@@ -128,6 +128,20 @@ def test_cancelled_run_can_restart_with_same_or_changed_setup(case, change_setup
     assert grading.get_run(first["job_id"]).status == "cancelled"
 
 
+def test_manually_paused_grading_continues_through_failed_only_route(case, monkeypatch):
+    from backend.services.task_execution import stop_task_run
+    first = start(case, "before-stop")
+    workflow = workflows.get_live_workflow(case[0], owner_id=case[1])
+    stop_task_run(task_id=case[0], owner_id=case[1], job_id=first["job_id"], expected_revision=workflow.workflow_revision)
+    paused = task_facade.get_task(task_id=case[0], owner_id=case[1])
+    assert paused["status"] == "grading_paused" and paused["error"] is None
+    retry = task_facade.start_task_grading(task_id=case[0], owner_id=case[1],
+        expected_workflow_revision=paused["workflow_revision"], request_id="continue", retry_scope="failed_only")
+    assert task_facade.get_task(task_id=case[0], owner_id=case[1])["status"] == "grading"
+    finish(case, retry["job_id"], monkeypatch, ())
+    assert task_facade.get_task(task_id=case[0], owner_id=case[1])["status"] == "graded"
+
+
 def test_again_failed_is_truthful_and_next_explicit_intent_can_retry(case, monkeypatch):
     for key in ("first", "second"):
         run = start(case, key)

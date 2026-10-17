@@ -49,6 +49,40 @@ class _RecoveryRegistry(_Registry):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("running", [False, True])
+@pytest.mark.parametrize("edited_after_stop", [False, True])
+async def test_manually_paused_question_preparation_can_continue_with_saved_sources(monkeypatch, running, edited_after_stop):
+    from backend.services.task_execution import stop_task_run
+    owner, task = _seed_task()
+    _, queued, _ = await _queue_question_preparation(owner, task, source_text="1. First.\n2. Second.")
+    if running:
+        _claim(owner, queued["job_id"], "before-stop")
+    workflow = workflow_repository.get_workflow(task, owner_id=owner)
+    stop_task_run(task_id=task, owner_id=owner, job_id=queued["job_id"], expected_revision=workflow.workflow_revision)
+    if edited_after_stop:
+        workflow_repository.update_workflow(task, owner_id=owner, question_recognition_provider_id="changed-provider")
+    paused = task_facade.get_task(task_id=task, owner_id=owner)
+    assert paused["status"] == "problems_paused"
+    retry = await task_preparation.retry_question_preparation(task_id=task, job_id=queued["job_id"],
+        request=task_preparation.RetryQuestionPreparationRequest(expected_workflow_revision=paused["workflow_revision"],
+            use_current_configuration=True, acknowledge_possible_duplicate_call=True),
+        background_tasks=_BackgroundTasks(), current=SimpleNamespace(id=owner), registry=_RecoveryRegistry())
+    if edited_after_stop:
+        assert retry.status_code == 409
+        assert json.loads(retry.body)["error"]["code"] == "stale_revision"
+        return
+    assert isinstance(retry, dict), getattr(retry, "body", retry)
+    assert retry["status"] == "started"
+    calls = []
+    monkeypatch.setattr(task_facade, "_registry_for_owner", lambda _owner: _RecoveryRegistry())
+    monkeypatch.setattr(task_preparation, "prepare_question_packages", _fake_preparer(calls,
+        question_count=2, record_base_provider_calls=True))
+    await task_preparation.run_durable_question_preparation(_claim(owner, retry["job_id"], "continued"))
+    assert task_facade.get_task(task_id=task, owner_id=owner)["status"] == "problems_ready"
+    assert calls == ["questions_extracted", "uploaded_materials_aligned", "q1", "q2"]
+
+
+@pytest.mark.asyncio
 async def test_changed_model_retry_keeps_verified_question_units(monkeypatch):
     owner, task = _seed_task()
     _, response, _ = await _queue_question_preparation(owner, task, source_text="1. First.\n2. Second.")

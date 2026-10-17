@@ -360,6 +360,7 @@ class ProgressEvent(BaseModel):
     level: Literal["info", "warn", "error"] = "info"
     message: str = Field(description="Human-readable message for frontend display")
     unit: Optional[ActiveUnit] = None
+    recognition: Optional[dict] = None
 
 
 class ModelWait(BaseModel):
@@ -368,6 +369,15 @@ class ModelWait(BaseModel):
     attempt: int
     max_attempts: int
     retry_at: float
+
+
+class ProviderFailure(BaseModel):
+    """Bounded diagnostics, separate from retry/billing uncertainty. No raw errors."""
+    code: Literal[
+        "provider_upstream_unavailable", "provider_timeout", "provider_unreachable",
+        "provider_rate_limited", "provider_response_invalid",
+    ]
+    http_status: int | None = Field(default=None, strict=True, ge=400, le=599)
 
 
 class JobProgress(BaseModel):
@@ -406,6 +416,8 @@ class JobProgress(BaseModel):
     messages: List[ProgressEvent] = Field(default_factory=list, description="Ring buffer of last N events")
     error_detail: Optional[str] = None
     model_waits: List[ModelWait] = Field(default_factory=list)
+    provider_failures: List[ProviderFailure] = Field(default_factory=list, max_length=8)
+    recognition_requests: List[dict] = Field(default_factory=list)
 
 
 # ─── LLM provider config ─────────────────────────────────────────────────────
@@ -524,13 +536,15 @@ class TaskGradingSetup(BaseModel):
 TaskStatus = Literal[
     "draft",
     "extracting_problems",
+    "problems_paused",
     "problems_ready",
     "parsing_submissions",
+    "submissions_paused",
     "submissions_ready",
+    "grading_setup",
     "grading",
+    "grading_paused",
     "graded",
-    "review_confirmed",
-    "generating_analysis",
     "finalized",
     "error",
 ]

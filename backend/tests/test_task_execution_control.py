@@ -152,7 +152,9 @@ def test_cancelled_grading_is_terminal_and_releases_owner():
         claim(owner, op)
     stop_task_run(task_id=task, owner_id=owner, job_id=run_id, expected_revision=workflow.workflow_revision)
     assert grades.get_run(run_id).status == "cancelled"
-    assert task_state(task_id=task, owner_id=owner)["error"] == "operation_cancelled"
+    state = task_state(task_id=task, owner_id=owner)
+    assert state["status"] == "grading_paused"
+    assert state["error"] is None
     claim(owner, op)
 
 

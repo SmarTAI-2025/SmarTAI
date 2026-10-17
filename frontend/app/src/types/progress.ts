@@ -1,4 +1,5 @@
 export type ProgressPhase =
+  | "paused"
   | "pending"
   | "ingesting"
   | "extracting"
@@ -23,9 +24,26 @@ export interface ProgressEvent {
   level: "info" | "warn" | "error";
   message: string;
   unit?: ActiveUnit | null;
+  recognition?: RecognitionRequestState | null;
+}
+
+export interface RecognitionRequestState {
+  count?: number;
+  state: "queued" | "responding" | "retrying";
+  since?: number;
+  attempt?: number;
+  max_attempts?: number;
+  retry_at?: number;
+  reason?: "rate_limit" | "timeout" | "unavailable";
+}
+
+export interface ProviderFailure {
+  code: "provider_upstream_unavailable" | "provider_timeout" | "provider_unreachable" | "provider_rate_limited" | "provider_response_invalid";
+  http_status?: number | null;
 }
 
 export interface JobProgress {
+  recognition_requests?: RecognitionRequestState[];
   model_progress?: GradingModelProgress[];
   model_eta_seconds?: number | null;
   running_units?: number;
@@ -40,6 +58,7 @@ export interface JobProgress {
   active: ActiveUnit[];
   messages: ProgressEvent[];
   error_detail?: string | null;
+  provider_failures?: ProviderFailure[];
   model_waits?: Array<{ model: string; reason: "provider_rate_limited"; attempt: number; max_attempts: number; retry_at: number }>;
   recognition_failure?: { failed_pages?: number[]; processed_pages?: number[] };
   started_at?: number | null;

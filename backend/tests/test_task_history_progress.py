@@ -20,7 +20,7 @@ def _grading(**changes):
 @pytest.mark.parametrize("status,progress,expected", [
     ("draft", None, (0, None)),
     ("graded", None, (100, 0)),
-    ("review_confirmed", None, (100, 0)),
+    ("grading_setup", None, (None, None)),
     ("finalized", None, (100, 0)),
     ("problems_ready", None, (None, None)),
     ("submissions_ready", None, (None, None)),
@@ -142,7 +142,7 @@ def test_task_state_keeps_reporter_on_event_loop_and_database_off_loop(monkeypat
     async def snapshot():
         threads["reporter"] = threading.get_ident()
         asyncio.get_running_loop()
-        return SimpleNamespace(model_dump=lambda **_: {"total_steps": 4, "completed_steps": 1})
+        return SimpleNamespace(model_dump=lambda **_: {"total_steps": 4, "completed_steps": 1, "internal_trace": "PRIVATE"})
 
     monkeypatch.setattr(task_facade, "task_state", database_state)
     monkeypatch.setattr(task_facade, "get_reporter", lambda _: SimpleNamespace(snapshot=snapshot))
@@ -151,7 +151,9 @@ def test_task_state_keeps_reporter_on_event_loop_and_database_off_loop(monkeypat
     app.dependency_overrides[tasks.require_teacher] = lambda: SimpleNamespace(id="owner")
     response = TestClient(app).get("/tasks/owned-task/state")
     assert response.status_code == 200, response.text
-    assert response.json()["progress"] == {"total_steps": 4, "completed_steps": 1}
+    assert response.json()["progress"]["total_steps"] == 4
+    assert response.json()["progress"]["completed_steps"] == 1
+    assert "internal_trace" not in response.json()["progress"]
     assert response.json()["progress_percent"] == 25
     assert response.json()["eta_seconds"] is None
     assert threads["database"] != threads["reporter"]
@@ -167,7 +169,7 @@ def test_grading_state_merges_live_counts_and_preserves_durable_phase_off_loop(m
         threads["state"] = threading.get_ident()
         with pytest.raises(RuntimeError):
             asyncio.get_running_loop()
-        return {"status": status, "grading_job_id": "run", "active_job_id": None,
+        return {"status": status, "grading_job_id": "run", "active_job_id": "run" if status == "grading" else None,
                 "last_failed_job_id": "run" if status == "error" else None, "error": None}
 
     def database_progress(run_id, owner_id):
@@ -175,7 +177,9 @@ def test_grading_state_merges_live_counts_and_preserves_durable_phase_off_loop(m
         threads["grading"] = threading.get_ident()
         with pytest.raises(RuntimeError):
             asyncio.get_running_loop()
-        return _grading(phase=durable_phase, completed_units=1, active=[],
+        return _grading(job_id="run", phase=durable_phase, completed_units=1, active=[],
+                        model_progress=[{"id": "model-1", "label": "Synthetic", "responding": 1}],
+                        activity_latest={"sequence": 1, "ts": 100, "code": "responding", "model_id": "model-1"},
                         error_detail="grading_failed" if status == "error" else None)
 
     async def snapshot():
@@ -199,6 +203,11 @@ def test_grading_state_merges_live_counts_and_preserves_durable_phase_off_loop(m
     assert body["progress"].get("running_units", 0) == (1 if status == "grading" else 0)
     assert "ConceptSkill" not in response.text
     assert body["progress"]["phase"] == durable_phase
+    # The first active-run poll must keep public activity even when a live
+    # reporter snapshot (which has no model summary) is available.
+    assert body["progress"]["job_id"] == "run"
+    assert body["progress"]["model_progress"][0]["label"] == "Synthetic"
+    assert body["progress"]["activity_latest"]["code"] == "responding"
     assert body["error"] == ("grading_failed" if status == "error" else None)
     assert body["progress_percent"] == (10 if status == "grading" else None)
     assert threads["state"] != threads["reporter"]

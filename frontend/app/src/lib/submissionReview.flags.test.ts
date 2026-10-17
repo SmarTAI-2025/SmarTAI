@@ -33,17 +33,24 @@ describe("OCR review labels", () => {
   });
 
   it("does not turn document-wide warnings or ordinary pending answers into risks", () => {
-    const answers = Array.from({ length: 12 }, (_, index) => ({ q_id: `q${index}`, number: `${index}`, type: "proof", content: "Readable answer", flag: ["recognition_needs_review", "recognition_failed_pages:9", "authorship_uncertain"] }));
+    const answers = Array.from({ length: 12 }, (_, index) => ({ q_id: `q${index}`, number: `${index}`, type: "proof", content: "Readable answer", flag: ["recognition_needs_review", "authorship_uncertain"] }));
     expect(answers.every(answer => answerReviewAttention(answer) === "none")).toBe(true);
     expect(answers.every(answer => getAnswerState(answer) === "recognized" && answerNeedsConfirmation(answer))).toBe(true);
     expect(studentNeedsAttention({ stu_id: "s1", stu_name: "Sample", stu_ans: answers }, answers.map(answer => ({ id: answer.q_id, label: answer.number, type: answer.type, stem: "" })))).toBe(false);
   });
 
-  it("separates a very-low-confidence advisory from failed or repaired-but-unconfirmed recognition", () => {
-    const answer = { q_id: "q1", number: "1", type: "proof", content: "Readable answer", flag: ["very_low_confidence"] };
-    expect(answerReviewAttention(answer)).toBe("advisory");
+  it.each(["very_low_confidence", "recognition_low_confidence", "low_confidence"])("keeps %s pending until explicit confirmation", (flag) => {
+    const answer = { q_id: "q1", number: "1", type: "proof", content: "Readable answer", flag: [flag] };
+    expect(answerReviewAttention(answer)).toBe("blocking");
+    expect(formatSubmissionFlag(flag, "zh-CN")).toContain("核对并确认");
     expect(answerReviewAttention({ ...answer, flag: ["recognition_failed"] })).toBe("blocking");
     expect(answerReviewAttention({ ...answer, flag: ["recognition_repaired_needs_confirmation"] })).toBe("blocking");
     expect(answerReviewAttention({ ...answer, review_status: "confirmed" })).toBe("none");
+  });
+
+  it.each(["recognition_failed_pages:2", "recognition_unprocessed_pages:2"])("keeps server-projected page failure %s blocked after confirmation", (flag) => {
+    const answer = { q_id: "q1", number: "1", type: "proof", content: "", flag: ["recognition_needs_review", flag, "recognition_failed"], review_status: "confirmed" as const };
+    expect(answerReviewAttention(answer)).toBe("blocking");
+    expect(getAnswerState(answer)).toBe("flagged");
   });
 });

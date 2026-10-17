@@ -84,6 +84,27 @@ describe("Ask request ownership and ordering", () => {
     rerender();
     expect(result.current.intent).toBe(intent);
   });
+  it.each([false, true])("clears both combined outputs, including a late response: %s", async (late) => {
+    const pending = deferred(); vi.mocked(interpretFilterIntent).mockReturnValue(pending.promise);
+    const combined: FilterIntentResult = { ...EMPTY_FILTER_INTENT, execution: {
+      recognized: true, kind: "chart", explanation: "Verified task data",
+      data: { columns: ["label", "count"], rows: [["Questions", 1]] },
+      selection: { kind: "questions", ids: ["Q1"] },
+      chart: { mode: "chart", title: "Questions", rationale: "", layout: {}, traces: [{ type: "bar", x: ["Questions"], y: [1] }] },
+    } };
+    const { result } = renderHook(() => useHarness(), { wrapper });
+    act(() => { void result.current.apply("count questions and filter the table"); });
+    if (late) act(() => result.current.setQuery(""));
+    await act(async () => pending.resolve(combined));
+    if (!late) {
+      expect(result.current.execution?.selection?.ids).toEqual(["Q1"]);
+      expect(result.current.execution?.chart).toEqual(combined.execution?.chart);
+      act(() => result.current.setQuery(""));
+    }
+    expect(result.current.execution).toBeUndefined();
+    expect(result.current.params.has("ask_order")).toBe(false);
+    expect(result.current.params.has("q")).toBe(false);
+  });
   it("rejects a valid-looking model response intended for another screen", async () => {
     vi.mocked(interpretFilterIntent).mockResolvedValue({ ...EMPTY_FILTER_INTENT, sort: "name_asc" });
     const { result } = renderHook(() => useHarness(), { wrapper });

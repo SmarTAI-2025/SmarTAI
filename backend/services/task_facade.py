@@ -432,16 +432,17 @@ def get_task(*, task_id: str, owner_id: str, full: bool = True) -> dict:
     submissions = _active_submissions(task_id, owner_id)
     runs = grading_repository.list_runs_for_assignment(task_id, actor_id=owner_id)
     latest_run = _current_grading_run(workflow, runs)
+    paused_status = _manual_pause_status(workflow)
     grading_error_code = _workflow_grading_failure_code(workflow, latest_run)
-    status = "error" if grading_error_code else _presentation_status(workflow, questions, submissions, latest_run)
+    status = paused_status or ("error" if grading_error_code else _presentation_status(workflow, questions, submissions, latest_run))
     selected_docs = _selected_knowledge(task_id, owner_id)
     tag_ids = _get_task_tags(task_id, owner_id)
     source_summary, source_rows = _submission_source_projection(workflow, owner_id)
-    incomplete_submissions = status == "submissions_ready" and bool(source_summary["failed"] or source_summary["pending"])
+    incomplete_submissions = status in {"submissions_ready", "grading_setup"} and bool(source_summary["failed"] or source_summary["pending"])
     submission_error_code = next((row["reason_code"] for row in source_rows if row.get("reason_code")), "submission_parse_failed") if incomplete_submissions else None
     if incomplete_submissions:
         status = "error"
-    attention = bool(
+    attention = not paused_status and bool(
         workflow.error_code
         or source_summary["failed"]
         or source_summary["identity_needs_review"]
@@ -499,7 +500,7 @@ def get_task(*, task_id: str, owner_id: str, full: bool = True) -> dict:
         "submission_source_summary": source_summary,
         "kb_docs": selected_docs,
         "kb_doc_count": len(selected_docs),
-        "error": grading_error_code or submission_error_code or workflow.error_code,
+        "error": None if paused_status else grading_error_code or submission_error_code or workflow.error_code,
         "created_at": assignment.created_at,
         "updated_at": max(assignment.updated_at, workflow.updated_at),
     }
@@ -610,6 +611,7 @@ def _submission_source_projection(workflow, owner_id: str) -> tuple[dict[str, in
                 else safe_reason
             ),
             "recognition_reason_code": safe_reason,
+            "page_diagnostics": (operation.checkpoint or {}).get("source_page_diagnostics", {}).get(result.source.stored_file_id),
             "resolution_status": (
                 "identity_resolved"
                 if outcome
@@ -634,9 +636,25 @@ def _submission_source_projection(workflow, owner_id: str) -> tuple[dict[str, in
     return summary, rows
 
 
+def _manual_pause_status(workflow) -> str | None:
+    """Keep durable cancellation/retry records, but present a manual stop as paused."""
+    if workflow.active_job_id or workflow.error_code != "operation_cancelled":
+        return None
+    job_id = workflow.last_failed_job_id
+    if not job_id:
+        return None
+    if job_id == workflow.extract_job_id:
+        return "problems_paused"
+    if job_id == workflow.parse_job_id:
+        return "submissions_paused"
+    if job_id == workflow.grading_job_id:
+        return "grading_paused"
+    return None
+
+
 def _presentation_status(workflow, questions, submissions, latest_run) -> str:
     if workflow.presentation_status in {
-        "extracting_problems", "parsing_submissions", "generating_analysis", "error"
+        "extracting_problems", "parsing_submissions", "error"
     }:
         return workflow.presentation_status
     if latest_run is not None:
@@ -649,7 +667,7 @@ def _presentation_status(workflow, questions, submissions, latest_run) -> str:
         if latest_run.status in {"completed", "partial_failed"}:
             return "graded"
     if submissions:
-        return "submissions_ready"
+        return "grading_setup" if workflow.grading_setup is not None else "submissions_ready"
     if questions:
         return "problems_ready"
     return "draft"
@@ -666,7 +684,9 @@ def _current_grading_run(workflow, runs):
     # explicitly describe a result allow a one-time legacy fallback.  A rewind
     # sets an earlier status and a null pointer, so historical runs stay hidden.
     if workflow.presentation_status in {
-        "draft", "grading", "graded", "review_confirmed", "finalized"
+        "draft", "grading", "graded", "finalized",
+        # Read historical rows through the current run; never emit old stages.
+        "review_confirmed", "generating_analysis",
     }:
         return runs[-1] if runs else None
     return None
@@ -811,7 +831,7 @@ def _serialize_problem(question) -> dict:
         "test_cases": question.test_cases,
         "material_provenance": presentation.get("material_provenance", {}),
         "ai_completion_provenance": presentation.get("ai_completion_provenance", {}),
-        "preparation_issues": presentation.get("preparation_issues", []),
+        "preparation_issues": _effective_question_issues(presentation),
     }
 
 
@@ -843,7 +863,7 @@ def _serialize_student_data(task_id: str, owner_id: str, submissions) -> dict[st
                     "number": answer.number,
                     "type": answer.type,
                     "content": answer.content,
-                    "flag": list(answer.flag or []),
+                    "flag": _public_answer_flags(answer.flag),
                     "review_status": review_statuses.get(answer.id, "pending"),
                 }
                 for answer in revision.answers
@@ -2480,6 +2500,7 @@ def queue_task_submission_parsing(
                 "provider_configuration_fingerprint": route_fingerprint,
                 "question_snapshot": question_snapshot,
                 "replace_confirmed": replace_confirmed,
+                **({"acknowledged_restart_from": acknowledged_restart_from} if acknowledged_restart_from else {}),
                 **({"retry_from": retry_from} if retry_from else {}),
             },
             workflow_changes=workflow_changes,
@@ -2682,10 +2703,23 @@ def _reusable_submission_results(*, owner_id, task_id, payload, questions):
     for result in results:
         if result.status not in {"parsed", "identity_conflict"} or result.student is None:
             continue
+        if _submission_result_incomplete(result):
+            # Older parsers marked a partial document parsed when its known
+            # question IDs matched. It is not complete evidence to reuse.
+            continue
         stored = file_repository.get_file(file_id=result.stored_file_id, owner_id=owner_id)
         if stored is not None and stored.assignment_id == task_id:
             reusable[(result.filename, stored.sha256)] = result
     return reusable
+
+
+def _submission_result_incomplete(result):
+    student = result.student or {}
+    recognition = student.get("recognition") or {}
+    coverage = recognition.get("coverage") or {}
+    return bool(any(coverage.get(key) for key in ("failed_pages", "unprocessed_pages", "missing_targets"))
+                or recognition.get("error_code")
+                or any(_answer_recognition_failures(answer.get("flag")) for answer in student.get("stu_ans", [])))
 
 
 def _submission_ocr_artifact_name(
@@ -2766,6 +2800,12 @@ async def run_task_submission_parsing(
             )
             if parsed_artifact is not None:
                 results = _load_submission_results(parsed_artifact)
+                # Recovery must not publish an old partial parse or dispatch
+                # another paid read. Leave it failed for the explicit retry.
+                results = [replace(result, status="parse_failed", student=None, matched_answer_count=0,
+                    stable_error_code=(result.student.get("recognition") or {}).get("error_code") or "provider_submit_uncertain",
+                    failure_phase="recognition", retryable=False)
+                    if _submission_result_incomplete(result) else result for result in results]
         if results is None:
             route = resolve_stage_provider_route(
                 owner_id=owner_id,
@@ -2798,11 +2838,29 @@ async def run_task_submission_parsing(
                     blocked_source_ids.add(inflight)
 
             async def read_submission_source(raw, stored_file_id):
-                return await read_question_source(
-                    owner_id=owner_id, task_id=task_id, content=raw.content, filename=raw.filename,
-                    content_type=raw.content_type, stored_file_id=stored_file_id,
-                    route=route, registry=registry, purpose="submissions", reporter=reporter,
-                )
+                async def save_pages(diagnostics):
+                    if diagnostics is not None and leased_operation is not None:
+                        checkpoint = dict(leased_operation.checkpoint_data)
+                        checkpoint["source_page_diagnostics"] = {
+                            **checkpoint.get("source_page_diagnostics", {}), stored_file_id: diagnostics,
+                        }
+                        await leased_operation.checkpoint(stage="reading_sources", checkpoint=checkpoint,
+                                                          artifact_refs=leased_operation.artifact_refs)
+
+                try:
+                    read = await read_question_source(
+                        owner_id=owner_id, task_id=task_id, content=raw.content, filename=raw.filename,
+                        content_type=raw.content_type, stored_file_id=stored_file_id,
+                        route=route, registry=registry, purpose="submissions", reporter=reporter,
+                        retry_key=(f"{job_id}:{job_attempt}" if
+                                   frozen.get("retry_from") or frozen.get("acknowledged_restart_from") else None),
+                        acknowledge_pending_retry=bool(frozen.get("acknowledged_restart_from")),
+                    )
+                except DomainError as exc:
+                    await save_pages((exc.details or {}).get("page_diagnostics"))
+                    raise
+                await save_pages((read.recognition or {}).get("page_diagnostics"))
+                return read
 
             reusable = _reusable_submission_results(
                 owner_id=owner_id, task_id=task_id, payload=frozen, questions=questions)
@@ -2951,7 +3009,7 @@ async def run_task_submission_parsing(
                 )
                 await leased_operation.checkpoint(
                     stage="submissions_parsed",
-                    checkpoint={"parsed_artifact_id": parsed_artifact.id},
+                    checkpoint={**leased_operation.checkpoint_data, "parsed_artifact_id": parsed_artifact.id},
                     artifact_refs=list(dict.fromkeys([
                         *leased_operation.artifact_refs,
                         parsed_artifact.id,
@@ -2994,7 +3052,11 @@ async def run_task_submission_parsing(
             and result.status in {"parsed", "identity_conflict"}
         ]
         if not students or summary.failed_count or summary.pending_count:
-            code = next(
+            # A different file's earlier error must not hide an uncertain paid
+            # request from the explicit-retry acknowledgement boundary.
+            code = "provider_submit_uncertain" if any(
+                result.stable_error_code == "provider_submit_uncertain" for result in results
+            ) else next(
                 (
                     result.stable_error_code
                     for result in results
@@ -3839,17 +3901,25 @@ def task_state(*, task_id: str, owner_id: str) -> dict:
                     workflow.active_job_id, owner_id=owner_id
                 )
                 progress = dict(operation.progress or {}) or None
+                if progress is not None:
+                    progress.setdefault("job_id", operation.id)
                 active_operation_status = operation.status
             except NotFound:
                 progress = None
     elif workflow.extract_job_id or workflow.parse_job_id:
-        job_id = workflow.parse_job_id or workflow.extract_job_id
+        job_id = (workflow.last_failed_job_id if payload["status"] in {
+            "problems_paused", "submissions_paused",
+        } else workflow.parse_job_id or workflow.extract_job_id)
         if job_id:
             try:
                 operation = workflow_repository.get_operation(job_id, owner_id=owner_id)
                 progress = dict(operation.progress or {}) or None
+                if progress is not None:
+                    progress.setdefault("job_id", operation.id)
             except NotFound:
                 pass
+    if progress and payload["status"] in {"problems_paused", "submissions_paused"}:
+        progress.update(phase="paused", error_detail=None, model_waits=[], active=[])
     payload.update({
         "progress": progress,
         "active_job_id": workflow.active_job_id,
@@ -3864,7 +3934,19 @@ def task_state(*, task_id: str, owner_id: str) -> dict:
             payload["queue_reason"] = "user_busy" if owner_is_running(
                 session, owner_id, exclude_id=workflow.active_job_id,
             ) else "server_busy"
+    _project_recognition_progress(payload)
     return payload
+
+
+def _project_recognition_progress(payload):
+    progress = payload.get("progress")
+    if progress is not None and (payload.get("status") in {"extracting_problems", "parsing_submissions"}
+            or payload.get("active_operation") in {"question_preparation", "problem_extraction", "submission_recognition"}
+            or (isinstance(progress, dict) and isinstance(progress.get("job_id"), str) and progress["job_id"] in {
+                payload.get("extract_job_id"), payload.get("parse_job_id")
+            } - {None})):
+        from backend.progress.recognition_activity import public_progress
+        payload["progress"] = public_progress(progress, terminal=payload.get("status") == "error" or payload.get("active_operation_status") == "pending")
 
 
 async def async_task_state(*, task_id: str, owner_id: str) -> dict:
@@ -3887,7 +3969,7 @@ async def async_task_state(*, task_id: str, owner_id: str) -> dict:
     )
     if (
         grading_job_id
-        and (payload.get("status") == "grading" or grading_owns_failure)
+        and (payload.get("status") in {"grading", "grading_paused"} or grading_owns_failure)
     ):
         grading_progress = await asyncio.to_thread(_grading_progress, grading_job_id, owner_id)
         # Borrow only a deduplicated running count from live units. Student,
@@ -3909,18 +3991,20 @@ async def async_task_state(*, task_id: str, owner_id: str) -> dict:
         # A reporter can reach ``done`` before result persistence finishes.
         # Prefer the durable failed-run projection so clients never render a
         # stale success phase after the database marks the run failed.
-        if payload.get("status") == "grading" or grading_owns_failure:
+        if payload.get("status") in {"grading", "grading_paused"} or grading_owns_failure:
             payload["progress"] = grading_progress
             payload["error"] = payload.get("error") or grading_progress.get("error_detail")
             if payload.get("status") == "grading":
                 payload["active_job_id"] = grading_job_id
                 payload["active_operation"] = "grading"
+    _project_recognition_progress(payload)
     return payload
 
 
 def _grading_progress(run_id: str, owner_id: str) -> dict:
     from backend.progress.grading_activity import public_models, public_event, public_waits, model_eta_seconds
     run = grading_repository.get_run(run_id, actor_id=owner_id)
+    paused = run.status == "cancelled" and run.error_message == "operation_cancelled"
     events = grading_repository.list_events(run_id, actor_id=owner_id)
     model_waits = next((item.get("payload", {}).get("model_waits", [])
                         for item in reversed(events) if "model_waits" in item.get("payload", {})), [])
@@ -3948,7 +4032,7 @@ def _grading_progress(run_id: str, owner_id: str) -> dict:
     models = public_models(models, terminal=run.status in {"completed", "partial_failed", "failed", "cancelled"})
     return {
         "contract_version": 1, "job_id": run_id,
-        "phase": "done" if run.status in {"completed", "partial_failed"} else (
+        "phase": "paused" if paused else "done" if run.status in {"completed", "partial_failed"} else (
             "error" if run.status in {"failed", "cancelled"} else "grading"
         ),
         "total_students": run.total_submissions,
@@ -3961,7 +4045,7 @@ def _grading_progress(run_id: str, owner_id: str) -> dict:
         "activity_latest": latest,
         "activity_cursor": events[-1]["sequence"] if events else 0,
         "running_units": 0,
-        "error_detail": _grading_failure_code(run),
+        "error_detail": None if paused else _grading_failure_code(run),
         "started_at": run.started_at or run.created_at,
         "workflow": "grading", "stage_sequence": [],
         "current_step": "completed" if run.status in {"completed", "partial_failed"} else "grading",
@@ -4038,9 +4122,9 @@ def grading_readiness(
                 recognition_review_ids.extend(answer.id for answer in revision.answers
                                               if "recognition_needs_review" in (answer.flag or []))
                 for answer in revision.answers:
-                    if _FAILED_ANSWER_REVIEW_FLAGS.intersection(answer.flag or []):
+                    if _answer_recognition_failures(answer.flag):
                         issues.append("submission_recognition_blocked")
-                    if "recognition_repaired_needs_confirmation" in (answer.flag or []):
+                    if _REQUIRED_ANSWER_CONFIRMATION_FLAGS.intersection(answer.flag or []):
                         repaired_answer_ids.append(answer.id)
 
             presentation = presentations.get(submission.student_id)
@@ -4075,13 +4159,49 @@ def grading_readiness(
 
 
 _FAILED_ANSWER_REVIEW_FLAGS = frozenset({"recognition_failed", "parse_failed", "no_matching_answer"})
+_REQUIRED_ANSWER_CONFIRMATION_FLAGS = frozenset({
+    "recognition_repaired_needs_confirmation", "very_low_confidence", "recognition_low_confidence", "low_confidence",
+})
+
+
+def _answer_recognition_failures(flags):
+    """Recognize persisted page failures as well as the original fixed flags."""
+    return {flag for flag in (flags or []) if flag in _FAILED_ANSWER_REVIEW_FLAGS
+            or flag.startswith(("recognition_failed_pages:", "recognition_unprocessed_pages:"))}
+
+
+def _public_answer_flags(flags):
+    # Existing clients understand recognition_failed. Preserve the precise
+    # source evidence too; projecting it must not mutate the stored answer.
+    result = list(flags or [])
+    if _answer_recognition_failures(result) and "recognition_failed" not in result:
+        result.append("recognition_failed")
+    return result
+
+
+def _effective_question_issues(presentation):
+    issues = []
+    for issue in presentation.get("preparation_issues", []):
+        coverage = (issue.get("details") or {}).get("coverage") or {}
+        if (issue.get("code") == "recognition_partial" and issue.get("status") != "resolved"
+                and any(coverage.get(key) for key in ("failed_pages", "unprocessed_pages", "missing_targets"))):
+            issue = {**issue, "severity": "blocking", "status": "open"}
+        issues.append(issue)
+    return issues
 
 
 def _question_review_blockers(questions) -> list[str]:
     issues = []
     for question in questions:
         presentation = (question.source or {}).get("presentation") or {}
-        review_issues = presentation.get("preparation_issues", [])
+        review_issues = _effective_question_issues(presentation)
+        if presentation.get("review_status") != "confirmed" and any(
+            (
+                issue.get("code") == "low_confidence"
+                or "low_confidence_content" in (issue.get("details") or {}).get("confidence_reasons", [])
+            ) for issue in review_issues
+        ):
+            issues.append("question_review_blocked")
         if (any(issue.get("code") == "manual_completion_required" for issue in review_issues)
                 and (presentation.get("review_status") != "confirmed"
                      or _manual_question_fields_missing(question, presentation))):
@@ -4479,6 +4599,7 @@ def update_problem(
             raise NotFound("question")
         source = dict(question.source or {})
         presentation = dict(source.get("presentation") or {})
+        presentation["preparation_issues"] = _effective_question_issues(presentation)
         original_problem = _serialize_problem(question)
         repaired_required_content = (
             not str(question.stem or "").strip()
@@ -4486,20 +4607,21 @@ def update_problem(
         )
         manual_markers = [issue for issue in presentation.get("preparation_issues", [])
                           if issue.get("code") == "manual_completion_required"]
-        blocking_markers = [issue for issue in presentation.get("preparation_issues", [])
-                            if issue.get("severity") == "blocking"]
+        protected_markers = [issue for issue in presentation.get("preparation_issues", [])
+                            if issue.get("severity") == "blocking" or issue.get("code") == "low_confidence"
+                            or "low_confidence_content" in (issue.get("details") or {}).get("confidence_reasons", [])]
         for key in (
             "review_status", "solution_code", "material_provenance",
             "ai_completion_provenance", "preparation_issues",
         ):
             if key in patch:
                 presentation[key] = patch[key]
-        if "preparation_issues" in patch and blocking_markers:
-            protected_ids = {issue.get("issue_id") for issue in blocking_markers}
+        if "preparation_issues" in patch and protected_markers:
+            protected_ids = {issue.get("issue_id") for issue in protected_markers}
             presentation["preparation_issues"] = [
                 issue for issue in presentation["preparation_issues"]
                 if issue.get("issue_id") not in protected_ids
-            ] + blocking_markers
+            ] + protected_markers
         if manual_markers:
             presentation["preparation_issues"] = [issue for issue in presentation.get("preparation_issues", [])
                 if issue.get("code") != "manual_completion_required"] + manual_markers
@@ -4508,7 +4630,9 @@ def update_problem(
                 presentation["preparation_issues"] = [
                     {**issue, "status": "open"} if issue.get("code") == "manual_completion_required" else issue
                     for issue in presentation["preparation_issues"]]
-        fixed_fields = {field for key, field in {"stem": "stem", "reference_answer": "answer", "criterion": "rubric", "test_cases": "programming_tests", "solution_code": "programming_tests"}.items() if patch.get(key)}
+        fixed_fields = {field for key, field in {"stem": "stem", "reference_answer": "answer", "criterion": "rubric", "test_cases": "programming_tests", "solution_code": "programming_tests"}.items()
+                        if patch.get(key) and (patch[key].strip() if isinstance(patch[key], str) else patch[key])
+                        != (original_problem[key].strip() if isinstance(original_problem.get(key), str) else original_problem.get(key))}
         if fixed_fields:
             presentation["preparation_issues"] = [
                 {**issue, "status": "resolved"} if issue.get("status") == "open"
@@ -4710,9 +4834,10 @@ def update_student_answer(
         # grading generation and analysis intact when the recognized text/flags
         # did not change (including an unchanged save from the editor).
         content_changed = patch.get("content") is not None and patch["content"] != target.content
-        failed_flags = _FAILED_ANSWER_REVIEW_FLAGS
-        original_failures = failed_flags.intersection(target.flag or [])
-        if content_changed and str(patch.get("content") or "").strip():
+        failed_flags = _FAILED_ANSWER_REVIEW_FLAGS | _answer_recognition_failures(target.flag)
+        original_failures = _answer_recognition_failures(target.flag)
+        if (content_changed and str(patch.get("content") or "").strip()
+                and str(patch["content"]).strip() != str(target.content or "").strip()):
             # A teacher's replacement text repairs recognition failures while
             # preserving unrelated source/authorship observations.
             patch = {**patch, "flag": [flag for flag in (patch.get("flag", target.flag) or []) if flag not in failed_flags]}
@@ -4725,10 +4850,10 @@ def update_student_answer(
             patch = {**patch, "flag": list(dict.fromkeys([
                 *patch["flag"], *sorted(original_failures),
             ]))}
-        if ("recognition_repaired_needs_confirmation" in (target.flag or [])
+        if (_REQUIRED_ANSWER_CONFIRMATION_FLAGS.intersection(target.flag or [])
                 and patch.get("review_status") != "confirmed" and patch.get("flag") is not None):
             patch["flag"] = list(dict.fromkeys([
-                *patch["flag"], "recognition_repaired_needs_confirmation",
+                *patch["flag"], *sorted(_REQUIRED_ANSWER_CONFIRMATION_FLAGS.intersection(target.flag or [])),
             ]))
         flags_changed = patch.get("flag") is not None and list(patch["flag"]) != list(target.flag or [])
         if patch.get("review_status") == "confirmed" and any(

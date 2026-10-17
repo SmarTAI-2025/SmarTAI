@@ -174,7 +174,7 @@ class RecognitionRunService:
                                           safe_error_code="recognition_artifact_invalid")
 
     async def run(self, request, source_bytes, *, engine, prompt_version, authorized_owner_id, binding=None,
-                  retry_key=None):
+                  retry_key=None, acknowledge_pending_retry=False):
         # Only the business worker supplies this key after its explicit retry
         # endpoint has checked authorization and any duplicate-call acknowledgement.
         if retry_key is not None and (not isinstance(retry_key, str) or not 1 <= len(retry_key) <= 160):
@@ -249,6 +249,14 @@ class RecognitionRunService:
             context.checkpoint = checkpoint
             if any(call.state == "pending" for call in checkpoint.calls):
                 await context.write(checkpoint, status="needs_review", error="provider_submit_uncertain")
+                if (retry_key is not None and acknowledge_pending_retry
+                        and not (row.payload or {}).get("retry_origin_id")):
+                    # The old run was safely claimed and is now terminal. An
+                    # acknowledged restart can enter its unique retry child
+                    # immediately; never replay an uncertain retry child itself.
+                    return await self.run(request, source_bytes, engine=engine,
+                        prompt_version=prompt_version, authorized_owner_id=authorized_owner_id,
+                        binding=binding, retry_key=retry_key, acknowledge_pending_retry=True)
                 return await self._restored(context.row, request, identity, status="needs_review")
             if checkpoint.final_artifact_id:
                 await context.write(checkpoint, status="completed")

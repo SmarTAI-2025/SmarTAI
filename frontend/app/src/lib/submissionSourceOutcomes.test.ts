@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { SubmissionSourceOutcome } from "@/types";
-import { getSubmissionSourceReasonCopy } from "./submissionSourceOutcomes";
+import { getSubmissionPageErrorLabel, getSubmissionSourceReasonCopy } from "./submissionSourceOutcomes";
 
 function source(overrides: Partial<SubmissionSourceOutcome>): SubmissionSourceOutcome {
   return {
@@ -24,6 +24,30 @@ function source(overrides: Partial<SubmissionSourceOutcome>): SubmissionSourceOu
 }
 
 describe("submission source reason copy", () => {
+  it("describes incomplete pages in the submission workflow", () => {
+    const item = source({ reason_code: "question_source_incomplete" });
+    const zh = getSubmissionSourceReasonCopy(item, "zh-CN");
+    const en = getSubmissionSourceReasonCopy(item, "en-US");
+    expect(zh.description).toContain("作答识别尚未完成");
+    expect(zh.description).not.toContain("题目生成");
+    expect(en.description).toContain("submission recognition is incomplete");
+    expect(en.description).not.toContain("question generation");
+    expect(zh.nextStep).toContain("文件与模型设置未变时");
+    expect(en.nextStep).toContain("if the file and model settings are unchanged");
+  });
+
+  it("shows the actual page error without deriving an HTTP code from it", () => {
+    const item = source({ reason_code: "provider_submit_uncertain" });
+    const error = { page: 2, error_code: "provider_upstream_unavailable" };
+    expect(getSubmissionPageErrorLabel(item, error, "zh-CN")).toBe("第 2 页：模型服务暂时不可用");
+    expect(getSubmissionPageErrorLabel(item, { ...error, status_code: 503 }, "en-US")).toBe("Page 2: The model service is temporarily unavailable (HTTP 503)");
+    expect(getSubmissionSourceReasonCopy(item, "zh-CN").nextStep).toContain("是否计费尚无法确认");
+    for (const status_code of [null, 0, 999, Number.NaN]) {
+      expect(getSubmissionPageErrorLabel(item, { ...error, status_code }, "en-US")).not.toContain("HTTP");
+    }
+    expect(getSubmissionPageErrorLabel(item, { page: 3, error_code: "unrecognized_code" }, "zh-CN")).toContain("该页尚未成功识别");
+  });
+
   it.each([
     ["shared_pool_daily_limit_reached", "recognition", "共享模型日额度已用完。", "Shared model daily allowance exhausted."],
     ["shared_pool_disabled", "recognition", "平台共享模型当前关闭。", "The shared model pool is disabled."],

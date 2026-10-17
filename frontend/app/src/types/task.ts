@@ -6,13 +6,15 @@ import type { SourceCleanupSummary } from "./sourcePreview";
 export type TaskStatus =
   | "draft"
   | "extracting_problems"
+  | "problems_paused"
   | "problems_ready"
   | "parsing_submissions"
+  | "submissions_paused"
   | "submissions_ready"
+  | "grading_setup"
   | "grading"
+  | "grading_paused"
   | "graded"
-  | "review_confirmed"
-  | "generating_analysis"
   | "finalized"
   | "error";
 
@@ -174,6 +176,20 @@ export interface SubmissionSourceSummary {
   pending: number;
 }
 
+export interface SubmissionPageError {
+  page: number;
+  error_code: string;
+  status_code?: number | null;
+}
+
+export interface SubmissionPageDiagnostics {
+  total_pages: number;
+  processed_pages: number[];
+  failed_pages: number[];
+  unprocessed_pages: number[];
+  page_errors: SubmissionPageError[];
+}
+
 export interface SubmissionSourceOutcome {
   source_id: string;
   file_id: string;
@@ -184,6 +200,7 @@ export interface SubmissionSourceOutcome {
   internal_status: SubmissionSourceInternalStatus;
   reason_code?: string | null;
   recognition_reason_code?: string | null;
+  page_diagnostics?: SubmissionPageDiagnostics | null;
   resolution_status?: "identity_resolved" | null;
   failure_phase?: string | null;
   retryable: boolean;
