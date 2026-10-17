@@ -398,23 +398,36 @@ describe("ExpertsPage editable vendor Base URL", () => {
   });
 
   it.each([
-    ["provider_api_key_invalid", "zh-CN", /API key 含有无法用于请求的字符/],
-    ["expert_verification_encoding_error", "zh-CN", /验证请求包含无法编码的字符/],
-    ["provider_model_access_denied", "zh-CN", /服务商或中转站以团队模型权限为由拒绝了本次请求。若该模型在其他调用中可用/],
-    ["provider_api_key_invalid", "en-US", /API key contains characters that cannot be sent/],
-    ["expert_verification_encoding_error", "en-US", /verification request contains characters that cannot be encoded/],
-    ["provider_model_access_denied", "en-US", /provider or relay rejected this request due to team\/model access. If the model works in other calls/],
-    ["provider_endpoint_tls_failed", "zh-CN", /HTTPS 安全连接失败/],
-    ["provider_endpoint_tls_failed", "en-US", /HTTPS secure connection failed/],
-  ])("shows a specific safe reason for %s in %s text and image results", (code, locale, message) => {
+    ["provider_api_key_invalid", "zh-CN", /API key 含有无法用于请求的字符/, "密钥格式无效"],
+    ["expert_verification_encoding_error", "zh-CN", /验证请求包含无法编码的字符/, "请求字符编码异常"],
+    ["provider_model_access_denied", "zh-CN", /服务商或中转站以团队模型权限为由拒绝了本次请求。若该模型在其他调用中可用/, "本次模型访问被拒"],
+    ["provider_api_key_invalid", "en-US", /API key contains characters that cannot be sent/, "Key format error"],
+    ["expert_verification_encoding_error", "en-US", /verification request contains characters that cannot be encoded/, "Encoding error"],
+    ["provider_model_access_denied", "en-US", /provider or relay rejected this request due to team\/model access. If the model works in other calls/, "Model denied"],
+    ["provider_endpoint_tls_failed", "zh-CN", /HTTPS 安全连接失败/, "安全连接失败"],
+    ["provider_endpoint_tls_failed", "en-US", /HTTPS secure connection failed/, "TLS failed"],
+  ])("keeps %s compact in %s text and image results with accessible details", async (code, locale, message, summary) => {
     window.localStorage.setItem("smartai_locale", locale);
     hookState.experts = [{
       provider_id: "deepseek-test", provider_type: "deepseek", model: "test-model",
       enabled: true, verification_status: "failed", max_concurrent: 1, rpm: 0,
       verification_error_code: code, image_capability_status: "inconclusive", image_reason: code,
     }];
+    const user = userEvent.setup();
     renderPage();
-    expect(screen.getAllByText(message).length).toBeGreaterThan(1);
+    const summaries = screen.getAllByText(summary);
+    expect(summaries).toHaveLength(4); // Text/image in both desktop and mobile rows.
+    expect(String(summary).replace(/[^\x00-\x7F]/g, "xx").length).toBeLessThanOrEqual("provider_endpoint_tls_failed".length);
+    for (const element of summaries) {
+      expect(element).toHaveAttribute("title", expect.stringMatching(message));
+      const details = element.closest("details")!;
+      expect(details).not.toHaveAttribute("open");
+      expect(within(details).getByText(message)).not.toBeVisible();
+      await user.click(element);
+      expect(details).toHaveAttribute("open");
+      expect(within(details).getByText(message)).toBeVisible();
+    }
+    expect(verifyImage).not.toHaveBeenCalled();
     expect(screen.queryByText(code)).not.toBeInTheDocument();
     expect(screen.queryByText(/证书校验失败|certificate validation failed/)).not.toBeInTheDocument();
   });

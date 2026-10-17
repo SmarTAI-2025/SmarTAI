@@ -878,8 +878,19 @@ function ImageVerification({ expert, locale, disabled, onVerifyImage }: Pick<Exp
       {expert.image_checked_at ? <p className="mt-1 text-[10px] text-muted-foreground">{formatCheckedAt(expert.image_checked_at, locale)}</p> : null}
     </div>
     <RowAction label={zh ? "验证视觉能力" : "Verify vision capability"} onClick={onVerifyImage} disabled={disabled}><ShieldCheck aria-hidden="true" size={14} /></RowAction>
-    {expert.image_reason && status !== "passed" ? <p className="mt-1 break-words text-xs text-muted-foreground">{imageReasonLabel(expert.image_reason, zh)}</p> : null}
+    {expert.image_reason && status !== "passed" ? <VerificationReason reason={expert.image_reason} zh={zh} detail={imageReasonLabel(expert.image_reason, zh)} className="text-muted-foreground" /> : null}
   </div>;
+}
+
+function VerificationReason({ reason, zh, detail, className }: { reason: string; zh: boolean; detail: string; className: string }) {
+  return (
+    <details className={cn("mt-1 w-full min-w-0 text-xs", className)}>
+      <summary className="cursor-pointer truncate rounded-sm underline decoration-dotted underline-offset-2 outline-none focus-visible:ring-2 focus-visible:ring-ring" title={detail}>
+        {verificationReasonSummary(reason, zh)}
+      </summary>
+      <p className="mt-1 whitespace-normal break-words text-left leading-5">{detail}</p>
+    </details>
+  );
 }
 
 function DefaultBadge({ locale }: { locale: "zh-CN" | "en-US" }) {
@@ -975,10 +986,13 @@ function VerificationBadge({
         </p>
       ) : null}
       {status === "failed" && expert.verification_error_code ? (
-        <p className="mt-1 max-w-[240px] whitespace-normal break-words text-xs text-danger">
-          {expertErrorMessage(expert.verification_error_code, locale)
-            ?? expertErrorMessage("expert_verification_provider_error", locale)}
-        </p>
+        <VerificationReason
+          reason={expert.verification_error_code}
+          zh={zh}
+          detail={expertErrorMessage(expert.verification_error_code, locale)
+            ?? expertErrorMessage("expert_verification_provider_error", locale)!}
+          className="text-danger"
+        />
       ) : null}
     </div>
   );
@@ -1591,6 +1605,50 @@ function imageCapabilityLabel(expert: ExpertConfig, zh: boolean) {
   const labels = { unverified: ["未验证", "Unverified"], passed: ["已通过", "Passed"], unsupported: ["明确不支持", "Explicitly unsupported"], inconclusive: ["本次未能确认", "Inconclusive"] };
   return labels[expert.image_capability_status ?? "unverified"][zh ? 0 : 1];
 }
+
+function verificationReasonSummary(reason: string, zh: boolean) {
+  const labels: Record<string, [string, string]> = {
+    provider_api_key_invalid: ["密钥格式无效", "Key format error"],
+    expert_verification_encoding_error: ["请求字符编码异常", "Encoding error"],
+    provider_model_access_denied: ["本次模型访问被拒", "Model denied"],
+    expert_verification_auth_failed: ["密钥或权限异常", "Key/access error"],
+    expert_verification_region_unsupported: ["当前地区不受支持", "Region blocked"],
+    expert_verification_model_not_found: ["模型或接口未找到", "Model/API missing"],
+    expert_verification_rate_limited: ["请求被限流", "Rate limited"],
+    expert_verification_timeout: ["请求超时", "Request timed out"],
+    expert_verification_connection_failed: ["网络连接失败", "Connection failed"],
+    expert_verification_provider_error: ["验证未能完成", "Test incomplete"],
+    expert_verification_stale: ["配置已变更", "Config changed"],
+    provider_endpoint_invalid: ["接口地址格式无效", "Invalid Base URL"],
+    provider_endpoint_https_required: ["地址须使用 HTTPS", "HTTPS required"],
+    provider_endpoint_host_not_allowed: ["域名不允许使用", "Host blocked"],
+    provider_endpoint_port_not_allowed: ["端口不允许使用", "Port blocked"],
+    provider_endpoint_dns_failed: ["域名解析失败", "DNS lookup failed"],
+    provider_endpoint_non_public_address: ["非公网地址被拦截", "Non-public URL"],
+    provider_endpoint_redirect_blocked: ["接口重定向被拦截", "Redirect blocked"],
+    provider_endpoint_tls_failed: ["安全连接失败", "TLS failed"],
+    provider_endpoint_protocol_mismatch: ["响应或协议异常", "Response error"],
+    provider_endpoint_response_too_large: ["响应内容过大", "Response too big"],
+    provider_endpoint_probe_rate_limited: ["验证过于频繁", "Too many checks"],
+    provider_wire_protocol_not_supported: ["接口协议不受支持", "Unsupported API"],
+    provider_request_rejected: ["请求被拒绝", "Request rejected"],
+    provider_upstream_unavailable: ["模型服务暂不可用", "Unavailable"],
+    provider_response_invalid: ["响应格式异常", "Invalid response"],
+    image_probe_answer_incorrect: ["测试答案不符", "Answer mismatch"],
+    provider_vision_not_supported: ["不支持图片", "No image support"],
+    shared_pool_daily_limit_reached: ["今日共享额度用完", "Daily quota used"],
+    shared_pool_disabled: ["共享模型已关闭", "Shared pool off"],
+  };
+  const aliases: Record<string, string> = {
+    provider_auth_failed: "expert_verification_auth_failed",
+    provider_model_or_endpoint_not_found: "expert_verification_model_not_found",
+    provider_rate_limited: "expert_verification_rate_limited",
+    provider_timeout: "expert_verification_timeout",
+    provider_unreachable: "expert_verification_connection_failed",
+  };
+  return labels[aliases[reason] ?? reason]?.[zh ? 0 : 1] ?? (zh ? "验证未能完成" : "Test incomplete");
+}
+
 function imageReasonLabel(reason: string, zh: boolean) {
   const labels: Record<string, string[]> = {
     image_probe_answer_correct: ["测试图片答案正确", "Test image answer was correct"],
