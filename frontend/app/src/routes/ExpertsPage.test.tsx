@@ -4,6 +4,7 @@ import { MemoryRouter } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { I18nProvider } from "@/i18n/I18nProvider";
 import { ExpertsPage } from "./ExpertsPage";
+import { APIError } from "@/api/client";
 
 const addExpert = vi.fn();
 const updateExpert = vi.fn();
@@ -393,7 +394,44 @@ describe("ExpertsPage editable vendor Base URL", () => {
     }];
     renderPage();
     expect(screen.queryByText("private-upstream-body")).not.toBeInTheDocument();
-    expect(screen.getAllByText("服务商拒绝了验证请求。").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("验证未能完成，请检查配置或稍后重试。").length).toBeGreaterThan(0);
+  });
+
+  it.each([
+    ["provider_api_key_invalid", "zh-CN", /API key 含有无法用于请求的字符/],
+    ["expert_verification_encoding_error", "zh-CN", /验证请求包含无法编码的字符/],
+    ["provider_model_access_denied", "zh-CN", /当前 Key 所属团队未获准使用此模型/],
+    ["provider_api_key_invalid", "en-US", /API key contains characters that cannot be sent/],
+    ["expert_verification_encoding_error", "en-US", /verification request contains characters that cannot be encoded/],
+    ["provider_model_access_denied", "en-US", /team associated with this key is not allowed to use this model/],
+  ])("shows a specific safe reason for %s in %s text and image results", (code, locale, message) => {
+    window.localStorage.setItem("smartai_locale", locale);
+    hookState.experts = [{
+      provider_id: "deepseek-test", provider_type: "deepseek", model: "test-model",
+      enabled: true, verification_status: "failed", max_concurrent: 1, rpm: 0,
+      verification_error_code: code, image_capability_status: "inconclusive", image_reason: code,
+    }];
+    renderPage();
+    expect(screen.getAllByText(message).length).toBeGreaterThan(1);
+    expect(screen.queryByText(code)).not.toBeInTheDocument();
+  });
+
+  it("shows a safe key-format error when saving an existing configuration fails", async () => {
+    hookState.experts = [{
+      provider_id: "existing-deepseek", provider_type: "deepseek", model: "test-model",
+      enabled: true, max_concurrent: 1, rpm: 0,
+    }];
+    updateExpert.mockRejectedValue(new APIError(422, "private-upstream-body", {
+      detail: { code: "provider_api_key_invalid" },
+    }));
+    const user = userEvent.setup();
+    renderPage();
+    await user.click(screen.getAllByRole("button", { name: "编辑" })[0]!);
+    await user.type(screen.getByLabelText(/^替换 API key/), "fixture-key");
+    await user.click(screen.getByRole("button", { name: "保存配置" }));
+    expect(await screen.findByText(/API key 含有无法用于请求的字符/)).toBeInTheDocument();
+    expect(screen.getByLabelText(/^替换 API key/)).toHaveValue("");
+    expect(screen.queryByText("private-upstream-body")).not.toBeInTheDocument();
   });
 
   it("shows only Baidu OCR metadata and supports verify and confirmed delete", async () => {

@@ -977,7 +977,7 @@ function VerificationBadge({
       {status === "failed" && expert.verification_error_code ? (
         <p className="mt-1 max-w-[240px] whitespace-normal break-words text-xs text-danger">
           {expertErrorMessage(expert.verification_error_code, locale)
-            ?? (zh ? "服务商拒绝了验证请求。" : "The provider rejected the verification request.")}
+            ?? expertErrorMessage("expert_verification_provider_error", locale)}
         </p>
       ) : null}
     </div>
@@ -1539,13 +1539,16 @@ function safeExpertError(error: unknown, locale: "zh-CN" | "en-US") {
 function expertErrorMessage(code: string | null | undefined, locale: "zh-CN" | "en-US") {
   const zh = locale === "zh-CN";
   const messages: Record<string, [string, string]> = {
+    provider_api_key_invalid: ["API key 含有无法用于请求的字符（如中文、全角符号、换行或隐藏字符），请重新复制完整密钥后保存。", "The API key contains characters that cannot be sent in a request, such as non-ASCII or hidden characters. Copy the full key again and save."],
+    expert_verification_encoding_error: ["验证请求包含无法编码的字符，请检查 API key 和配置内容。", "The verification request contains characters that cannot be encoded. Check the API key and configuration."],
+    provider_model_access_denied: ["当前 Key 所属团队未获准使用此模型。请联系服务商或中转站管理员开通权限，或选择已授权的模型。", "The team associated with this key is not allowed to use this model. Ask the provider or relay administrator to grant access, or choose an authorized model."],
     expert_verification_auth_failed: ["密钥无效或没有调用权限。", "The key is invalid or lacks permission."],
     expert_verification_region_unsupported: ["服务商不支持当前网络出口所在地区。请确认网络和服务可用地区；更换密钥未必能解决。", "The provider does not support the current network region. Check network and regional availability; replacing the key may not help."],
     expert_verification_model_not_found: ["模型名称不存在或当前账户无权使用。", "The model was not found or is unavailable to this account."],
     expert_verification_rate_limited: ["服务商限制了本次请求，请稍后再试。", "The provider rate-limited this request. Try again later."],
     expert_verification_timeout: ["服务商响应超时，配置仍然保留。", "The provider timed out. Your configuration is unchanged."],
     expert_verification_connection_failed: ["无法连接服务商，请检查网络后重试。", "Unable to reach the provider. Check the network and retry."],
-    expert_verification_provider_error: ["服务商拒绝了验证请求。", "The provider rejected the verification request."],
+    expert_verification_provider_error: ["验证未能完成，请检查配置或稍后重试。", "Verification could not complete. Check the configuration or try again later."],
     expert_verification_stale: ["配置已在验证期间改变，请重新验证。", "The configuration changed during verification. Verify again."],
     provider_base_url_not_allowed: ["该 Base URL 不符合当前服务商配置。", "The base URL is not valid for this provider configuration."],
     expert_provider_conflict: ["相同厂商、模型、URL 和协议的配置已经存在。", "A configuration with this provider, model, URL, and protocol already exists."],
@@ -1596,5 +1599,5 @@ function imageReasonLabel(reason: string, zh: boolean) {
     shared_pool_daily_limit_reached: ["共享模型日额度已用完，可等待重置或配置自己的模型", "Shared daily allowance exhausted; wait for reset or use BYOK"],
     shared_pool_disabled: ["平台共享模型当前关闭", "The shared model pool is disabled"],
   };
-  return labels[reason]?.[zh ? 0 : 1] ?? reason;
+  return labels[reason]?.[zh ? 0 : 1] ?? expertErrorMessage(reason, zh ? "zh-CN" : "en-US") ?? reason;
 }

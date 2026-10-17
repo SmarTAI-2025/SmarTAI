@@ -127,6 +127,12 @@ class ProviderRequestError(RuntimeError):
         self.retry_after = retry_after
 
 
+def validate_provider_api_key(api_key: str) -> None:
+    """Reject values HTTP authentication headers cannot safely carry, without echoing them."""
+    if not api_key or any(not " " <= character <= "~" for character in api_key):
+        raise ProviderRequestError("provider_api_key_invalid")
+
+
 def _validate_output_limit(value: int | None) -> None:
     if value is not None and (type(value) is not int or not 1 <= value <= 32768):
         raise ProviderRequestError("provider_output_limit_invalid")
@@ -1079,6 +1085,7 @@ class SafeRelayProvider(BaseProvider):
         *, max_output_tokens: int | None = None,
     ) -> tuple[dict[str, str], dict[str, Any]]:
         _validate_output_limit(max_output_tokens)
+        validate_provider_api_key(self.config.api_key)
         headers = {"content-type": "application/json"}
         if self.wire_protocol == "openai_chat_completions":
             headers["authorization"] = f"Bearer {self.config.api_key}"
@@ -1161,8 +1168,8 @@ class SafeRelayProvider(BaseProvider):
 
     async def _relay_call(self, messages: List[BaseMessage], *, max_output_tokens: int | None = None) -> LLMResponse:
         started = time.perf_counter()
-        client = await self._relay_client()
         headers, payload = self._request_parts(messages, max_output_tokens=max_output_tokens)
+        client = await self._relay_client()
         request_options = {}
         seconds = self._response_timeout_override()
         if seconds is not None:
@@ -1183,6 +1190,16 @@ class SafeRelayProvider(BaseProvider):
             raise ProviderRequestError(_transport_error_code(exc)) from exc
         if response.status_code >= 400:
             code = _response_error_code(response.status_code)
+            if response.status_code == 403:
+                # Only this explicit reason proves a team/model entitlement failure.
+                # Neither the raw message nor arbitrary upstream codes leave this layer.
+                try:
+                    body = response.json()
+                    error = body.get("error") if isinstance(body, dict) else None
+                    if isinstance(error, dict) and error.get("type") == "team_model_access_denied":
+                        code = "provider_model_access_denied"
+                except ValueError:
+                    pass
             from backend.llm.provider_limits import exhausted_quota_code
             if response.status_code == 429:
                 code = exhausted_quota_code(response.text) or code
