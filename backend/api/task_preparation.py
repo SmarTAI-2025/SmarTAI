@@ -103,7 +103,7 @@ from backend.services.question_preparation_artifacts import (
     save_final_question_packages_artifact,
     save_question_candidate_artifact,
 )
-from backend.services.question_sources import read_question_source, question_recognition_options, attach_recognition_review, recognition_requires_confirmation
+from backend.services.question_sources import read_question_source, question_recognition_options, attach_recognition_review, recognition_has_failure, recognition_requires_confirmation
 from backend.domain.confidence_policy import confidence_needs_attention, confidence_requires_review
 from backend.tools.file_processing import (
     IMAGE_MEDIA_TYPES,
@@ -3941,6 +3941,8 @@ def apply_material_import(
                 raise VersionConflict("Question no longer exists.", code="stale_revision")
             if target == "test_cases" and not is_programming_question_type(problem.get("type")):
                 raise ValidationError("Test cases require a programming question.")
+            if recognition_has_failure(payload.get("recognition")):
+                raise RecognitionError("material_recognition_review_required")
             if target == "test_cases" and (candidate.get("match_status") != "exact"
                     or confidence_requires_review(candidate.get("confidence"))
                     or recognition_requires_confirmation(payload.get("recognition"))):

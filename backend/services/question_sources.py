@@ -300,15 +300,20 @@ def recognition_page_diagnostics(assembly):
                 page_errors=errors)
 
 
-def recognition_requires_confirmation(summary):
-    """Actual failure evidence and numeric confidence, never an uncalibrated label."""
-    from backend.domain.confidence_policy import confidence_requires_review
+def recognition_has_failure(summary):
+    """Concrete missing source evidence cannot be accepted as complete material."""
     if not summary:
         return False
     coverage = summary.get("coverage") or {}
-    return bool(confidence_requires_review(summary.get("confidence")) or summary.get("error_code") or any(
+    return bool(summary.get("error_code") or any(
         coverage.get(key) for key in ("failed_pages", "unprocessed_pages", "missing_targets")
     ))
+
+
+def recognition_requires_confirmation(summary):
+    """Actual failure evidence and numeric confidence, never an uncalibrated label."""
+    from backend.domain.confidence_policy import confidence_requires_review
+    return recognition_has_failure(summary) or confidence_requires_review((summary or {}).get("confidence"))
 
 
 def recognition_needs_review(summary):
