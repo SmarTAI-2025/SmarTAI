@@ -179,8 +179,8 @@ function HistoryTaskRow({
       </div>
 
       <div role="cell" className="min-w-0 px-2 py-2 md:px-[14px]">
-        <Link to={destination} title={t(HISTORY_STAGE_KEYS[task.status])} className={cn("inline-flex h-7 max-w-[185px] items-center rounded-full px-3 text-[13px] font-semibold outline-none focus-visible:ring-2 focus-visible:ring-ring", historyStatusTone(task.status))}>
-          <span className="truncate">{t(HISTORY_STAGE_KEYS[task.status])}</span>
+        <Link to={destination} title={t(HISTORY_STAGE_KEYS[task.status])} className={cn("inline-flex min-h-7 max-w-full items-center rounded-full px-3 py-1 text-[13px] font-semibold outline-none focus-visible:ring-2 focus-visible:ring-ring md:h-7 md:max-w-[185px] md:py-0", historyStatusTone(task.status))}>
+          <span className="min-w-0 break-words md:truncate">{t(HISTORY_STAGE_KEYS[task.status])}</span>
         </Link>
         <div className="mt-1 flex min-w-0 items-center gap-1 md:hidden">
           <Link to={destination} className="min-w-0 flex-1 truncate text-[11px] font-medium text-muted-foreground outline-none hover:text-primary focus-visible:rounded focus-visible:ring-2 focus-visible:ring-ring">
