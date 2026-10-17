@@ -5142,7 +5142,7 @@ def _correction_review_blocks_finalization(result) -> bool:
             and (result.teacher_review or {}).get("confirmed") is not True)
         or (not valid_score(result.ai_score)
             and (result.teacher_review or {}).get("confirmed") is not True)
-        or ("grading_paused" in result.initial_review_reasons
+        or ("grading_paused" in (getattr(result, "initial_review_reasons", None) or [])
             and (result.teacher_review or {}).get("confirmed") is not True)
     )
 
