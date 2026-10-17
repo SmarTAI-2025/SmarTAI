@@ -733,8 +733,6 @@ def _verification_error_code(exc: Exception) -> str:
                 "provider_timeout": "expert_verification_timeout",
                 "provider_unreachable": "expert_verification_connection_failed",
             }.get(item.code, item.code)
-        if isinstance(item, ssl.SSLError):
-            return "provider_endpoint_tls_failed"
 
     timeout_types: tuple[type[BaseException], ...] = (
         asyncio.TimeoutError,
@@ -766,6 +764,10 @@ def _verification_error_code(exc: Exception) -> str:
 
     if any(isinstance(item, timeout_types) for item in exception_chain):
         return "expert_verification_timeout"
+    # AnyIO can retain SSLWantReadError while a timed-out read is cancelled.
+    # Classify the actual timeout before interpreting its SSL I/O context.
+    if any(isinstance(item, ssl.SSLError) and not isinstance(item, (ssl.SSLWantReadError, ssl.SSLWantWriteError)) for item in exception_chain):
+        return "provider_endpoint_tls_failed"
     status_code = next(
         (
             getattr(item, "status_code", None)

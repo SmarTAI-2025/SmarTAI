@@ -972,12 +972,12 @@ def _response_error_code(status_code: int) -> str:
 
 
 def _transport_error_code(exc: BaseException) -> str:
-    """Preserve a certificate failure without exposing its raw diagnostics."""
+    """Preserve a TLS failure without exposing its raw diagnostics."""
     current: BaseException | None = exc
     seen: set[int] = set()
     while current is not None and id(current) not in seen:
         seen.add(id(current))
-        if isinstance(current, ssl.SSLError):
+        if isinstance(current, ssl.SSLError) and not isinstance(current, (ssl.SSLWantReadError, ssl.SSLWantWriteError)):
             return "provider_endpoint_tls_failed"
         current = current.__cause__ or current.__context__
     return "provider_unreachable"

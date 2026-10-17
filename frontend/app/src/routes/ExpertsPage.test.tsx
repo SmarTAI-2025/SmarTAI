@@ -404,6 +404,8 @@ describe("ExpertsPage editable vendor Base URL", () => {
     ["provider_api_key_invalid", "en-US", /API key contains characters that cannot be sent/],
     ["expert_verification_encoding_error", "en-US", /verification request contains characters that cannot be encoded/],
     ["provider_model_access_denied", "en-US", /provider or relay rejected this request due to team\/model access. If the model works in other calls/],
+    ["provider_endpoint_tls_failed", "zh-CN", /HTTPS 安全连接失败/],
+    ["provider_endpoint_tls_failed", "en-US", /HTTPS secure connection failed/],
   ])("shows a specific safe reason for %s in %s text and image results", (code, locale, message) => {
     window.localStorage.setItem("smartai_locale", locale);
     hookState.experts = [{
@@ -414,22 +416,53 @@ describe("ExpertsPage editable vendor Base URL", () => {
     renderPage();
     expect(screen.getAllByText(message).length).toBeGreaterThan(1);
     expect(screen.queryByText(code)).not.toBeInTheDocument();
+    expect(screen.queryByText(/证书校验失败|certificate validation failed/)).not.toBeInTheDocument();
   });
 
-  it("shows a safe key-format error when saving an existing configuration fails", async () => {
+  it.each([
+    ["expert_verification_timeout", "zh-CN", "图像测试请求超时，本次未能确认是否支持图片。请稍后重试。"],
+    ["expert_verification_timeout", "en-US", "The image test timed out. Image support remains unconfirmed. Try again later."],
+    ["private-unknown-error", "zh-CN", "图像测试未能完成，本次未能确认是否支持图片。请稍后重试。"],
+    ["private-unknown-error", "en-US", "The image test could not complete. Image support remains unconfirmed. Try again later."],
+  ])("explains inconclusive image reason %s in %s without exposing codes", (reason, locale, message) => {
+    window.localStorage.setItem("smartai_locale", locale);
+    hookState.experts = [{
+      provider_id: "image-test", provider_type: "deepseek", model: "test-model",
+      enabled: true, max_concurrent: 1, rpm: 0,
+      image_capability_status: "inconclusive", image_reason: reason,
+    }];
+    renderPage();
+    expect(screen.getAllByText(message).length).toBeGreaterThan(0);
+    expect(screen.queryByText(reason)).not.toBeInTheDocument();
+    expect(screen.queryByText(/明确不支持|Explicitly unsupported/)).not.toBeInTheDocument();
+  });
+
+  it.each(["zh-CN", "en-US"])("explains the Base URL prefix and excluded operation path in %s", async (locale) => {
+    window.localStorage.setItem("smartai_locale", locale);
+    const user = userEvent.setup();
+    renderPage();
+    await user.click(screen.getByRole("button", { name: locale === "zh-CN" ? "添加模型配置" : "Add configuration" }));
+    const dialog = screen.getByRole("dialog");
+    expect(within(dialog).getByText(/\/v1.*\/chat\/completions/)).toBeInTheDocument();
+  });
+
+  it.each([
+    ["provider_api_key_invalid", /API key 含有无法用于请求的字符/],
+    ["provider_unknown_failure", /请求未能完成，请检查配置或稍后重试/],
+  ])("shows a safe %s error when saving an existing configuration fails", async (code, message) => {
     hookState.experts = [{
       provider_id: "existing-deepseek", provider_type: "deepseek", model: "test-model",
       enabled: true, max_concurrent: 1, rpm: 0,
     }];
     updateExpert.mockRejectedValue(new APIError(422, "private-upstream-body", {
-      detail: { code: "provider_api_key_invalid" },
+      detail: { code },
     }));
     const user = userEvent.setup();
     renderPage();
     await user.click(screen.getAllByRole("button", { name: "编辑" })[0]!);
     await user.type(screen.getByLabelText(/^替换 API key/), "fixture-key");
     await user.click(screen.getByRole("button", { name: "保存配置" }));
-    expect(await screen.findByText(/API key 含有无法用于请求的字符/)).toBeInTheDocument();
+    expect(await screen.findByText(message)).toBeInTheDocument();
     expect(screen.getByLabelText(/^替换 API key/)).toHaveValue("");
     expect(screen.queryByText("private-upstream-body")).not.toBeInTheDocument();
   });

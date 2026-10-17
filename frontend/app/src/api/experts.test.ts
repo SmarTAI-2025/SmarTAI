@@ -22,7 +22,7 @@ describe("automatic model concurrency API", () => {
 
   it.each([[verifyExpert, "verify"], [verifyExpertImage, "verify-image"]] as const)("allows the server probe deadline to return for %s", async (verify, route) => {
     await verify("pc-test");
-    expect(clientMocks.postJSON).toHaveBeenCalledWith(`/experts/pc-test/${route}`, {}, { timeout: 45_000 });
+    expect(clientMocks.postJSON).toHaveBeenCalledWith(`/experts/pc-test/${route}`, {}, { timeout: 75_000 });
   });
 
   it("defaults omitted RPM to zero without injecting a concurrency limit", async () => {

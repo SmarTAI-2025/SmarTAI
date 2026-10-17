@@ -173,6 +173,81 @@ def test_local_encoding_error_is_not_reported_as_provider_rejection():
     assert _verification_error_code(wrapped) == "expert_verification_encoding_error"
 
 
+@pytest.mark.asyncio
+async def test_tls_read_wait_timeout_is_not_a_certificate_failure():
+    import asyncio
+    import ssl
+    from anyio.abc import ByteStream
+    from anyio.streams.tls import TLSStream
+    from backend.api.experts import _verification_error_code
+
+    class WaitingStream(ByteStream):
+        async def send(self, item):
+            pass
+
+        async def receive(self, max_bytes=65536):
+            await asyncio.Event().wait()
+
+        async def send_eof(self):
+            pass
+
+        async def aclose(self):
+            pass
+
+    # Exercise the real AnyIO SSL/cancellation chain without a socket or model call.
+    with pytest.raises(TimeoutError) as raised:
+        await asyncio.wait_for(TLSStream.wrap(WaitingStream(), hostname="relay.example"), 0.02)
+    assert isinstance(raised.value.__cause__.__context__, ssl.SSLWantReadError)
+    assert _verification_error_code(raised.value) == "expert_verification_timeout"
+
+
+@pytest.mark.parametrize("operation", ["verify", "verify-image"])
+def test_verification_persists_timeout_even_with_ssl_read_context(monkeypatch, operation):
+    import asyncio
+    import ssl
+    from unittest.mock import AsyncMock
+    from backend.llm.providers import SafeRelayProvider
+
+    owner_id = "tls-timeout-owner"
+    headers = _teacher(owner_id)
+    stored = upsert_provider_config(owner_id, ProviderConfig(**_payload()), master_key=settings.provider_encryption_key)
+    cancelled = asyncio.CancelledError()
+    cancelled.__context__ = ssl.SSLWantReadError("read pending")
+    timeout = TimeoutError()
+    timeout.__cause__ = cancelled
+    call = AsyncMock(side_effect=timeout)
+    monkeypatch.setattr(SafeRelayProvider, "ainvoke", call)
+    monkeypatch.setattr(SafeRelayProvider, "ainvoke_vision", call)
+    wait_for = asyncio.wait_for
+    deadlines = []
+    async def observe_deadline(awaitable, timeout):
+        deadlines.append(timeout)
+        return await wait_for(awaitable, timeout)
+    monkeypatch.setattr(asyncio, "wait_for", observe_deadline)
+    response = TestClient(app).post(f"/experts/{stored.id}/{operation}", headers=headers)
+    after = get_provider_config(owner_id, stored.id, master_key=settings.provider_encryption_key)
+    if operation == "verify":
+        assert response.status_code == 503
+        assert response.json()["detail"]["code"] == "expert_verification_timeout"
+        assert after.verification_error_code == "expert_verification_timeout"
+    else:
+        assert response.status_code == 200
+        assert response.json()["image_capability_status"] == "inconclusive"
+        assert after.config.image_reason == "expert_verification_timeout"
+    call.assert_awaited_once()
+    assert deadlines == [60]
+
+
+def test_genuine_tls_failure_retains_its_safe_code():
+    import ssl
+    from backend.api.experts import _verification_error_code
+
+    for cause in (ssl.SSLCertVerificationError("private certificate details"), ssl.SSLError("handshake failed")):
+        wrapped = RuntimeError("transport wrapper")
+        wrapped.__cause__ = cause
+        assert _verification_error_code(wrapped) == "provider_endpoint_tls_failed"
+
+
 def test_development_catalog_exposes_editable_vendor_base_url(monkeypatch):
     headers = _teacher("relay-api-catalog-dev")
     monkeypatch.setattr(settings, "runtime_environment", "development")

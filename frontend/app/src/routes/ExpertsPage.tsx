@@ -1294,8 +1294,8 @@ function ExpertEditorDialog({
             hint={
               baseUrlEditable
                 ? zh
-                  ? "默认是厂商官网；也可直接改成任意公网 HTTPS 中转地址。"
-                  : "Defaults to the official API; you may replace it with any public HTTPS relay."
+                  ? "默认使用厂商地址，可填写公网 HTTPS 中转地址；保留 /v1 等前缀，不要加 /chat/completions。"
+                  : "Use the official API or a public HTTPS relay. Keep prefixes such as /v1; omit /chat/completions."
                 : zh
                   ? "当前环境仅允许厂商官网地址。"
                   : "This environment currently allows only the official endpoint."
@@ -1532,7 +1532,12 @@ function safeExpertError(error: unknown, locale: "zh-CN" | "en-US") {
   if (normalized.status === 0) {
     return locale === "zh-CN" ? "请求未能完成，请检查网络后重试。" : "The request could not complete. Check your connection and try again.";
   }
-  return expertErrorMessage(code, locale) || normalized.message
+  const message = expertErrorMessage(code, locale);
+  if (message) return message;
+  if (code?.startsWith("provider_") || code?.startsWith("expert_verification_")) {
+    return locale === "zh-CN" ? "请求未能完成，请检查配置或稍后重试。" : "The request could not complete. Check the configuration or try again later.";
+  }
+  return normalized.message
     || (locale === "zh-CN" ? "请求失败，请稍后重试。" : "Request failed. Try again later.");
 }
 
@@ -1544,9 +1549,9 @@ function expertErrorMessage(code: string | null | undefined, locale: "zh-CN" | "
     provider_model_access_denied: ["服务商或中转站以团队模型权限为由拒绝了本次请求。若该模型在其他调用中可用，请联系管理员核查本次请求。", "The provider or relay rejected this request due to team/model access. If the model works in other calls, ask the administrator to investigate this request."],
     expert_verification_auth_failed: ["密钥无效或没有调用权限。", "The key is invalid or lacks permission."],
     expert_verification_region_unsupported: ["服务商不支持当前网络出口所在地区。请确认网络和服务可用地区；更换密钥未必能解决。", "The provider does not support the current network region. Check network and regional availability; replacing the key may not help."],
-    expert_verification_model_not_found: ["模型名称不存在或当前账户无权使用。", "The model was not found or is unavailable to this account."],
+    expert_verification_model_not_found: ["模型或接口地址未找到，请核对模型 ID 和 Base URL。", "The model or endpoint was not found. Check the model ID and Base URL."],
     expert_verification_rate_limited: ["服务商限制了本次请求，请稍后再试。", "The provider rate-limited this request. Try again later."],
-    expert_verification_timeout: ["服务商响应超时，配置仍然保留。", "The provider timed out. Your configuration is unchanged."],
+    expert_verification_timeout: ["验证请求超时，配置已保留。请稍后重试。", "The verification request timed out. Your configuration is unchanged. Try again later."],
     expert_verification_connection_failed: ["无法连接服务商，请检查网络后重试。", "Unable to reach the provider. Check the network and retry."],
     expert_verification_provider_error: ["验证未能完成，请检查配置或稍后重试。", "Verification could not complete. Check the configuration or try again later."],
     expert_verification_stale: ["配置已在验证期间改变，请重新验证。", "The configuration changed during verification. Verify again."],
@@ -1554,15 +1559,15 @@ function expertErrorMessage(code: string | null | undefined, locale: "zh-CN" | "
     expert_provider_conflict: ["相同厂商、模型、URL 和协议的配置已经存在。", "A configuration with this provider, model, URL, and protocol already exists."],
     custom_provider_endpoints_disabled: ["自定义中转站功能目前未开放。", "Custom relay endpoints are currently disabled."],
     custom_provider_limit_reached: ["自定义服务配置已达到数量上限。", "The custom service configuration limit has been reached."],
-    provider_endpoint_invalid: ["Base URL 格式无效，请填写服务根路径且不要包含查询参数。", "The base URL is invalid. Use a service root path without query parameters."],
+    provider_endpoint_invalid: ["Base URL 无效；保留 /v1 等前缀，不要包含 /chat/completions 等接口路径、查询参数或片段。", "Invalid Base URL. Keep prefixes such as /v1; omit operation paths such as /chat/completions, query parameters and fragments."],
     provider_endpoint_https_required: ["自定义服务必须使用 HTTPS。", "Custom services must use HTTPS."],
     provider_endpoint_host_not_allowed: ["该域名不允许作为公网模型服务地址。", "This hostname is not allowed as a public model endpoint."],
     provider_endpoint_port_not_allowed: ["自定义服务只允许 HTTPS 443 端口。", "Custom services may use HTTPS port 443 only."],
     provider_endpoint_dns_failed: ["无法解析该服务域名，请稍后重试。", "The service hostname could not be resolved. Try again later."],
     provider_endpoint_non_public_address: ["该域名解析到内网或特殊地址，已拒绝连接。", "The hostname resolves to a private or special address and was blocked."],
     provider_endpoint_redirect_blocked: ["服务返回了重定向；为安全起见未继续请求。", "The service returned a redirect, which was not followed for safety."],
-    provider_endpoint_tls_failed: ["HTTPS 证书校验失败。", "HTTPS certificate validation failed."],
-    provider_endpoint_protocol_mismatch: ["中转站响应与所选 API 协议不一致，请检查高级设置。", "The relay response does not match the selected API protocol. Check Advanced settings."],
+    provider_endpoint_tls_failed: ["HTTPS 安全连接失败，请稍后重试；若持续失败，请联系服务商或中转站管理员。", "The HTTPS secure connection failed. Try again later; if it persists, contact the provider or relay administrator."],
+    provider_endpoint_protocol_mismatch: ["服务响应格式或通信协议异常，请核对接口配置或联系服务商。", "The response format or communication protocol was invalid. Check the endpoint configuration or contact the provider."],
     provider_endpoint_response_too_large: ["服务响应超过安全大小限制。", "The service response exceeded the safe size limit."],
     provider_endpoint_probe_rate_limited: ["操作过于频繁，请稍后重试。", "Too many endpoint checks. Try again shortly."],
     provider_wire_protocol_not_supported: ["所选 API 协议暂不支持。", "The selected API protocol is not supported."],
@@ -1591,13 +1596,14 @@ function imageReasonLabel(reason: string, zh: boolean) {
     image_probe_answer_correct: ["测试图片答案正确", "Test image answer was correct"],
     image_probe_answer_incorrect: ["测试答案不正确，不能据此判定不支持图片", "Incorrect test answer; image support remains uncertain"],
     provider_vision_not_supported: ["不支持图片，仍可处理文字资料", "Images unsupported; text sources can still be used"],
-    expert_verification_timeout: ["本次请求超时", "Request timed out"],
+    expert_verification_timeout: ["图像测试请求超时，本次未能确认是否支持图片。请稍后重试。", "The image test timed out. Image support remains unconfirmed. Try again later."],
     expert_verification_rate_limited: ["上游限流，请稍后再试", "Upstream rate limit"],
-    expert_verification_auth_failed: ["鉴权失败，请检查凭据", "Authentication failed; check credentials"],
+    expert_verification_auth_failed: ["请求被拒绝，请检查密钥或该模型的调用权限。", "The request was denied. Check the key or access to this model."],
     expert_verification_connection_failed: ["网络连接失败", "Network connection failed"],
     expert_verification_model_not_found: ["模型或端点不存在", "Model or endpoint not found"],
     shared_pool_daily_limit_reached: ["共享模型日额度已用完，可等待重置或配置自己的模型", "Shared daily allowance exhausted; wait for reset or use BYOK"],
     shared_pool_disabled: ["平台共享模型当前关闭", "The shared model pool is disabled"],
   };
-  return labels[reason]?.[zh ? 0 : 1] ?? expertErrorMessage(reason, zh ? "zh-CN" : "en-US") ?? reason;
+  return labels[reason]?.[zh ? 0 : 1] ?? expertErrorMessage(reason, zh ? "zh-CN" : "en-US")
+    ?? (zh ? "图像测试未能完成，本次未能确认是否支持图片。请稍后重试。" : "The image test could not complete. Image support remains unconfirmed. Try again later.");
 }

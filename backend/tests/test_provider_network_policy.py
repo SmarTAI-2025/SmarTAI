@@ -518,6 +518,14 @@ def test_zhipu_vision_support_requires_image_evidence(model, expected):
     assert provider.can_attempt_vision is True
 
 
+@pytest.mark.parametrize("signal", [ssl.SSLWantReadError, ssl.SSLWantWriteError])
+def test_ssl_io_wait_context_is_not_a_tls_failure(signal):
+    error = httpx.ReadError("connection interrupted")
+    error.__context__ = signal("I/O pending")
+    assert provider_module._transport_error_code(error) == "provider_unreachable"
+    assert _verification_error_code(error) == "expert_verification_connection_failed"
+
+
 def test_openai_api_connection_error_has_safe_connection_code():
     from openai import APIConnectionError
 
