@@ -24,6 +24,135 @@ def _archive_bytes() -> bytes:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("failure_mode,edited_after_restart,from_retry", [
+    ("503", False, False), ("503", True, False), ("stopped", False, False), ("stopped", False, True),
+])
+async def test_acknowledged_restart_retries_only_failed_page_with_durable_worker(monkeypatch, failure_mode, edited_after_restart, from_retry):
+    import asyncio
+    import json
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+
+    import fitz
+    from PIL import Image
+
+    from backend.db import assignment_repository
+    from backend.llm.providers import ProviderRequestError
+    from backend.tests.test_recognition_agent import pdf
+    from backend.tests.test_recognition_reader import llm
+
+    owner, task = _seed_task(with_question=True)
+    with fitz.open(stream=pdf(["First page answer", "Second page answer"]), filetype="pdf") as original, fitz.open() as scanned:
+        for page in original:
+            copied = scanned.new_page(width=page.rect.width + 50 * page.number, height=page.rect.height)
+            copied.insert_image(copied.rect, stream=page.get_pixmap().tobytes("png"))
+        content = scanned.tobytes()
+    provider, _engine = llm(text="1. Literal answer, including a mistake.", provider="test-provider")
+    provider.provider_id = "test-provider"
+    failed_page_images = []
+
+    async def recognize(_prompt, images, **_kwargs):
+        # Select page 2 by its distinct aspect ratio rather than call order.
+        with Image.open(io.BytesIO(images[0].data)) as image:
+            second_page = image.width / image.height > 0.8
+        if second_page:
+            failed_page_images.append(images[0].data)
+            if len(failed_page_images) == 1:
+                if failure_mode == "stopped":
+                    raise asyncio.CancelledError()
+                raise ProviderRequestError("provider_upstream_unavailable", status_code=503)
+        return provider.ainvoke_vision.return_value
+
+    provider.ainvoke_vision.side_effect = recognize
+    provider.ainvoke = AsyncMock(return_value=SimpleNamespace(content=json.dumps({
+        "stu_id": "S1", "stu_name": "Synthetic learner",
+        "stu_ans": [{"q_id": "q1", "number": "1", "type": "short",
+                     "content": "Literal answer, including a mistake.", "flag": []}],
+    })))
+    registry = _Registry()
+    registry.provider = provider
+    monkeypatch.setattr(task_facade, "_registry_for_owner", lambda _owner: registry)
+
+    async def finish(job):
+        row = workflow_repository.claim_operation(job, owner_id=owner, worker_id="test", lease_seconds=60)
+        await task_facade.run_durable_submission_recognition(LeasedOperation(row, worker_id="test", lease_seconds=60))
+
+    first = task_facade.queue_task_submission_parsing(task_id=task, owner_id=owner,
+        filename="student.pdf", content=content, content_type="application/pdf", registry=registry)
+    if failure_mode == "stopped":
+        from backend.services.task_execution import stop_task_run
+        with pytest.raises(asyncio.CancelledError):
+            await finish(first["job_id"])
+        workflow = workflow_repository.get_live_workflow(task, owner_id=owner)
+        stop_task_run(task_id=task, owner_id=owner, job_id=first["job_id"],
+                      expected_revision=workflow.workflow_revision)
+    else:
+        await finish(first["job_id"])
+    failed = workflow_repository.get_operation(first["job_id"], owner_id=owner)
+    assert failed.error_code == ("operation_cancelled" if failure_mode == "stopped" else "provider_submit_uncertain")
+    before = task_facade.get_task(task_id=task, owner_id=owner)
+    assert before["status"] == ("submissions_paused" if failure_mode == "stopped" else "error")
+    assert before["student_data"] == {}
+    if failure_mode != "stopped":
+        assert before["submission_sources"][0]["page_diagnostics"]["failed_pages"] == [2]
+    assert provider.ainvoke_vision.await_count == 2
+    provider.ainvoke.assert_not_awaited()
+
+    async def restart(acknowledge):
+        if from_retry:
+            return await tasks.retry_submission_recognition_endpoint(task_id=task, job_id=failed.id,
+                request=tasks.RetrySubmissionRecognitionRequest(expected_workflow_revision=before["workflow_revision"],
+                    acknowledge_possible_duplicate_call=acknowledge), background_tasks=_BackgroundTasks(),
+                current=SimpleNamespace(id=owner), registry=registry)
+        return await tasks.parse_submissions_endpoint(task_id=task, file=None,
+            stored_file_id=failed.payload["input_file_id"], identity_mode="filename", roster_file=None,
+            recognition_provider_id="test-provider", replace_confirmed=False,
+            expected_workflow_revision=before["workflow_revision"],
+            acknowledge_possible_duplicate_call=acknowledge, background_tasks=_BackgroundTasks(),
+            current=SimpleNamespace(id=owner), registry=registry)
+
+    if failure_mode != "stopped":
+        refused = await restart(False)
+        assert refused.status_code == 409 and "provider_submit_uncertain" in refused.body.decode()
+    restarted = await restart(True)
+    assert isinstance(restarted, dict), getattr(restarted, "body", restarted)
+    assert restarted["status"] == "started"
+    if failure_mode != "stopped":
+        assert restarted["job_id"] != failed.id
+    # Replaying the same HTTP form cannot dispatch another paid operation.
+    duplicate = await restart(True)
+    assert duplicate.status_code == (422 if from_retry else 409)
+    assert "stale_revision" in duplicate.body.decode()
+    assert provider.ainvoke_vision.await_count == 2
+
+    if edited_after_restart:
+        question = assignment_repository.list_questions(task, teacher_id=owner)[0]
+        assignment_repository.update_question(task, teacher_id=owner, q_id="q1",
+            expected_version=question.version, stem="Teacher's concurrent correction")
+    await finish(restarted["job_id"])
+    operation = workflow_repository.get_operation(restarted["job_id"], owner_id=owner)
+    after = task_facade.get_task(task_id=task, owner_id=owner)
+    if edited_after_restart:
+        assert operation.error_code == "recognition_plan_changed"
+        assert provider.ainvoke_vision.await_count == 2
+        provider.ainvoke.assert_not_awaited()
+        assert assignment_repository.list_questions(task, teacher_id=owner)[0].stem == "Teacher's concurrent correction"
+        assert after["student_data"] == {}
+    else:
+        assert after["status"] == "submissions_ready"
+        assert after["submission_source_summary"]["failed"] == 0
+        assert provider.ainvoke_vision.await_count == 3
+        assert provider.ainvoke.await_count == 1
+        assert len(failed_page_images) == 2 and failed_page_images[0] == failed_page_images[1]
+        assert provider.ainvoke_vision.await_args_list[2].args[1][0].data == failed_page_images[0]
+    # Restarting never rewrites the old failure or its page evidence.
+    if restarted["job_id"] != failed.id:
+        original = workflow_repository.get_operation(failed.id, owner_id=owner)
+        assert original.status == "error" and original.error_code == failed.error_code
+        assert original.checkpoint == failed.checkpoint
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("earlier_failure", [False, True])
 async def test_page_failure_details_survive_worker_restart_and_retry_is_explicit(monkeypatch, earlier_failure):
     from types import SimpleNamespace

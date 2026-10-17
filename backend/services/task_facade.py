@@ -2500,6 +2500,7 @@ def queue_task_submission_parsing(
                 "provider_configuration_fingerprint": route_fingerprint,
                 "question_snapshot": question_snapshot,
                 "replace_confirmed": replace_confirmed,
+                **({"acknowledged_restart_from": acknowledged_restart_from} if acknowledged_restart_from else {}),
                 **({"retry_from": retry_from} if retry_from else {}),
             },
             workflow_changes=workflow_changes,
@@ -2851,7 +2852,9 @@ async def run_task_submission_parsing(
                         owner_id=owner_id, task_id=task_id, content=raw.content, filename=raw.filename,
                         content_type=raw.content_type, stored_file_id=stored_file_id,
                         route=route, registry=registry, purpose="submissions", reporter=reporter,
-                        retry_key=f"{job_id}:{job_attempt}" if frozen.get("retry_from") else None,
+                        retry_key=(f"{job_id}:{job_attempt}" if
+                                   frozen.get("retry_from") or frozen.get("acknowledged_restart_from") else None),
+                        acknowledge_pending_retry=bool(frozen.get("acknowledged_restart_from")),
                     )
                 except DomainError as exc:
                     await save_pages((exc.details or {}).get("page_diagnostics"))

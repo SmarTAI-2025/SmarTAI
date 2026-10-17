@@ -483,6 +483,10 @@ async def parse_submissions_endpoint(
                 if not acknowledge_possible_duplicate_call:
                     raise InvalidTransition("A repeated model call may be billed.", code="provider_submit_uncertain")
                 restart_origin = f"{failed.id}:{failed.attempt}"
+            elif failed.error_code == "operation_cancelled" and acknowledge_possible_duplicate_call:
+                # A stopped vision call keeps its pending marker in the child
+                # recognition run, rather than the legacy parent OCR checkpoint.
+                restart_origin = f"{failed.id}:{failed.attempt}"
     except DomainError as exc:
         return domain_error_response(exc)
     if len(body) > SUBMISSION_UPLOAD_MAX_BYTES:
@@ -601,7 +605,8 @@ async def retry_submission_recognition_endpoint(
             recognition_provider_id=request.recognition_provider_id,
             replace_confirmed=retry["replace_confirmed"] or legacy_partial,
             retry_from=retry["retry_from"],
-            acknowledged_restart_from=f"{failed.id}:{failed.attempt}" if uncertain else None,
+            acknowledged_restart_from=(f"{failed.id}:{failed.attempt}" if uncertain or
+                (failed.error_code == "operation_cancelled" and request.acknowledge_possible_duplicate_call) else None),
             expected_workflow_revision=request.expected_workflow_revision,
         )
         # Submission recognition is owned exclusively by the durable workflow
