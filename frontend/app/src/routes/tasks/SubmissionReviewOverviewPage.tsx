@@ -35,7 +35,7 @@ import {
   type SubmissionReviewSelection,
   type SubmissionReviewSort,
 } from "@/lib/submissionReview";
-import { getTaskDestination, hasTaskReachedStep } from "@/lib/taskFlow";
+import { isTaskAwaitingGrading, getTaskDestination, hasTaskReachedStep } from "@/lib/taskFlow";
 import type { FilterIntentResult, StudentAnswerInfo, StudentSubmission, SubmissionSourceOutcome } from "@/types";
 
 const EXPLANATION_KEYS: Record<SubmissionReviewSelection["explanation"], MessageKey> = {
@@ -230,7 +230,7 @@ export function SubmissionReviewOverviewPage() {
           />
         </dl>
 
-        {taskQuery.data?.status === "submissions_ready" && students.length > 0 ? (
+        {isTaskAwaitingGrading(taskQuery.data?.status) && students.length > 0 ? (
           <div className="mt-4 rounded-[10px] border bg-card p-4">
             <div className="flex flex-wrap items-center gap-2">
               <p role="status" className="text-sm">{locale === "zh-CN" ? `待确认：${pendingIdentities.length} 位学生身份、${pendingAnswers.length} 个作答题次` : `Awaiting confirmation: ${pendingIdentities.length} identities, ${pendingAnswers.length} responses`}</p>
@@ -242,7 +242,7 @@ export function SubmissionReviewOverviewPage() {
           </div>
         ) : null}
 
-        {taskQuery.data?.status !== "submissions_ready" && batchResult ? <p role="status" className="mt-3 text-sm">{batchResult.message}</p> : null}
+        {!isTaskAwaitingGrading(taskQuery.data?.status) && batchResult ? <p role="status" className="mt-3 text-sm">{batchResult.message}</p> : null}
         <TaskQueryBar className="mt-6" filter={smartFilter} taskId={taskId} locale={locale}
           label={locale === "zh-CN" ? "Ask SmarTAI：学生作答" : "Ask SmarTAI: student answers"}
           placeholder={locale === "zh-CN" ? "找出缺答的学生，或按覆盖率排序" : "Find missing answers, or sort by coverage"} />

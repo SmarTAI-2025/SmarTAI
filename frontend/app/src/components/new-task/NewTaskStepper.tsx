@@ -225,11 +225,8 @@ function stepHref(
   }
   if (index === 5 && pathname.endsWith("/grading/progress")) return `${pathname}${search}`;
   if (index === 5 && pathname.endsWith("/grading/preflight")) return `${pathname}${search}`;
-  if (index === 5 && (task?.status === "grading" || (task?.status === "error" && task.grading_job_id))) {
+  if (index === 5 && (task?.status === "grading" || task?.status === "grading_paused" || (task?.status === "error" && task.grading_job_id))) {
     return `/tasks/${encodeURIComponent(taskId)}/grading/progress`;
-  }
-  if (index === 5 && task?.status === "generating_analysis") {
-    return `/tasks/${encodeURIComponent(taskId)}/grading/preflight`;
   }
   return `/tasks/${encodeURIComponent(taskId)}/${STEP_PATHS[index]}`;
 }

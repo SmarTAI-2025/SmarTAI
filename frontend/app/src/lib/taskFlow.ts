@@ -1,9 +1,17 @@
 import type { Task, TaskLite } from "@/types";
 import { submissionRecognitionIncomplete } from "@/lib/reviewConfirmation";
 
-const PROCESSING_STATUSES = new Set(["extracting_problems", "parsing_submissions", "grading", "generating_analysis"]);
-const COMPLETED_GRADING_STATUSES = new Set(["graded", "review_confirmed", "generating_analysis", "finalized"]);
-const REGRADABLE_STATUSES = new Set(["graded", "review_confirmed", "finalized"]);
+const PROCESSING_STATUSES = new Set(["extracting_problems", "parsing_submissions", "grading"]);
+const COMPLETED_GRADING_STATUSES = new Set(["graded", "finalized"]);
+const REGRADABLE_STATUSES = new Set(["graded", "finalized"]);
+
+export function isTaskAwaitingGrading(status?: string | null): boolean {
+  return status === "submissions_ready" || status === "grading_setup";
+}
+
+export function isTaskPaused(status?: string | null): boolean {
+  return status === "problems_paused" || status === "submissions_paused" || status === "grading_paused";
+}
 
 export function isTaskProcessing(status?: string | null): boolean {
   return Boolean(status && PROCESSING_STATUSES.has(status));
@@ -38,28 +46,30 @@ export function getTaskReachableStep(task?: TaskReachabilityInput | null): numbe
     case "draft":
       return (task.problem_count ?? 0) > 0 ? 2 : 1;
     case "extracting_problems":
+    case "problems_paused":
       return 1;
     case "problems_ready":
       // Review is advisory. Recognized questions permit uploading responses;
       // grading still applies its own structural and provider readiness checks.
       return task.grading_setup_configured || (task.problem_count ?? Object.keys(task.problem_data ?? {}).length) > 0 ? 3 : 2;
     case "parsing_submissions":
+    case "submissions_paused":
       return 3;
     case "submissions_ready":
+    case "grading_setup":
       if (submissionRecognitionIncomplete(task)) return 3;
       // Once recognition is complete, both the review surface (step 5) and
       // grading setup (step 6) are valid.  Teachers can move forward after
       // review without an otherwise-disabled stepper target.
       return 5;
     case "grading":
+    case "grading_paused":
       return 5;
     case "graded":
       // Grading results are already persisted and safe to analyse before the
       // teacher confirms the release. Publication and artifact generation
       // remain gated by finalization; only the read-only analysis step opens.
       return 7;
-    case "review_confirmed":
-    case "generating_analysis":
     case "finalized":
       return 7;
     case "error":
@@ -84,25 +94,26 @@ export function hasTaskReachedStep(task: TaskReachabilityInput | null | undefine
 
 export function getTaskDestination(task: TaskDestinationInput): string {
   const taskRoot = `/tasks/${task.task_id}`;
-  if (task.status === "submissions_ready" && submissionRecognitionIncomplete(task)) return `${taskRoot}/submissions/progress`;
+  if (isTaskAwaitingGrading(task.status) && submissionRecognitionIncomplete(task)) return `${taskRoot}/submissions/progress`;
 
   switch (task.status) {
     case "extracting_problems":
+    case "problems_paused":
       return `${taskRoot}/problems/progress`;
     case "problems_ready":
-      return task.grading_setup_configured
-        ? `${taskRoot}/submissions/upload`
-        : `${taskRoot}/questions`;
+      return `${taskRoot}/questions`;
     case "parsing_submissions":
+    case "submissions_paused":
       return `${taskRoot}/submissions/progress`;
     case "submissions_ready":
       return `${taskRoot}/submissions`;
+    case "grading_setup":
+      return getTaskGradingSetupHref(task.task_id);
     case "grading":
+    case "grading_paused":
       return `${taskRoot}/grading/progress`;
     case "graded":
       return `${taskRoot}/review`;
-    case "review_confirmed":
-    case "generating_analysis":
     case "finalized":
       return `${taskRoot}/results`;
     case "draft":

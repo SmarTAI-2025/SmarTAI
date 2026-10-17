@@ -25,7 +25,7 @@ const { useGradingSetup, useStartGrading, useTask } = await import("@/api/hooks"
 const mutateAsync = vi.fn();
 
 describe("GradingPreflightPage regrade mode", () => {
-  it.each(["graded", "review_confirmed", "finalized", "error"])("starts a fresh countdown after %s and resets it on re-entry", async (status) => {
+  it.each(["grading_setup", "graded", "finalized", "error"])("starts a fresh countdown after %s and resets it on re-entry", async (status) => {
     vi.useFakeTimers();
     const task = (useTask as unknown as () => any)();
     Object.assign(task.data, { status, grading_job_id: "old-run", last_failed_job_id: status === "error" ? "old-run" : null });

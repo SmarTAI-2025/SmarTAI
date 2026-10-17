@@ -1,3 +1,4 @@
+import { isTaskAwaitingGrading } from "@/lib/taskFlow";
 import { getAPIErrorCode, getAPIErrorDetail, normalizeAPIError } from "@/api/client";
 import type { Locale } from "@/i18n/messages";
 import {
@@ -61,7 +62,7 @@ export function getModelReadiness({
 export type UploadKind = "problems" | "submissions";
 
 const RESULT_STATUSES = new Set<TaskStatus>([
-  "graded", "review_confirmed", "generating_analysis", "finalized",
+  "graded", "finalized",
 ]);
 
 export interface UploadGuard {
@@ -123,12 +124,10 @@ export function getUploadGuard({
 
   if (kind === "submissions" && (task.submission_file_name || task.student_count > 0)) {
     return {
-      disabled: task.status === "grading" || task.status === "generating_analysis",
+      disabled: task.status === "grading",
       reason: task.status === "grading"
         ? "批改正在进行中，不能替换学生作答。"
-        : task.status === "generating_analysis"
-          ? "分析正在生成中，不能替换学生作答。"
-          : null,
+        : null,
       confirmTitle: "确认替换学生作答？",
       confirmMessage:
         RESULT_STATUSES.has(task.status)
@@ -180,7 +179,7 @@ export function getGradingGuard({
   if (studentCount <= 0) {
     return { disabled: true, reason: "请先上传并校对学生作答。" };
   }
-  if (status !== "submissions_ready") {
+  if (!isTaskAwaitingGrading(status)) {
     if (status === "grading") {
       return { disabled: true, reason: "批改已经在进行中。" };
     }

@@ -432,16 +432,17 @@ def get_task(*, task_id: str, owner_id: str, full: bool = True) -> dict:
     submissions = _active_submissions(task_id, owner_id)
     runs = grading_repository.list_runs_for_assignment(task_id, actor_id=owner_id)
     latest_run = _current_grading_run(workflow, runs)
+    paused_status = _manual_pause_status(workflow)
     grading_error_code = _workflow_grading_failure_code(workflow, latest_run)
-    status = "error" if grading_error_code else _presentation_status(workflow, questions, submissions, latest_run)
+    status = paused_status or ("error" if grading_error_code else _presentation_status(workflow, questions, submissions, latest_run))
     selected_docs = _selected_knowledge(task_id, owner_id)
     tag_ids = _get_task_tags(task_id, owner_id)
     source_summary, source_rows = _submission_source_projection(workflow, owner_id)
-    incomplete_submissions = status == "submissions_ready" and bool(source_summary["failed"] or source_summary["pending"])
+    incomplete_submissions = status in {"submissions_ready", "grading_setup"} and bool(source_summary["failed"] or source_summary["pending"])
     submission_error_code = next((row["reason_code"] for row in source_rows if row.get("reason_code")), "submission_parse_failed") if incomplete_submissions else None
     if incomplete_submissions:
         status = "error"
-    attention = bool(
+    attention = not paused_status and bool(
         workflow.error_code
         or source_summary["failed"]
         or source_summary["identity_needs_review"]
@@ -499,7 +500,7 @@ def get_task(*, task_id: str, owner_id: str, full: bool = True) -> dict:
         "submission_source_summary": source_summary,
         "kb_docs": selected_docs,
         "kb_doc_count": len(selected_docs),
-        "error": grading_error_code or submission_error_code or workflow.error_code,
+        "error": None if paused_status else grading_error_code or submission_error_code or workflow.error_code,
         "created_at": assignment.created_at,
         "updated_at": max(assignment.updated_at, workflow.updated_at),
     }
@@ -634,9 +635,25 @@ def _submission_source_projection(workflow, owner_id: str) -> tuple[dict[str, in
     return summary, rows
 
 
+def _manual_pause_status(workflow) -> str | None:
+    """Keep durable cancellation/retry records, but present a manual stop as paused."""
+    if workflow.active_job_id or workflow.error_code != "operation_cancelled":
+        return None
+    job_id = workflow.last_failed_job_id
+    if not job_id:
+        return None
+    if job_id == workflow.extract_job_id:
+        return "problems_paused"
+    if job_id == workflow.parse_job_id:
+        return "submissions_paused"
+    if job_id == workflow.grading_job_id:
+        return "grading_paused"
+    return None
+
+
 def _presentation_status(workflow, questions, submissions, latest_run) -> str:
     if workflow.presentation_status in {
-        "extracting_problems", "parsing_submissions", "generating_analysis", "error"
+        "extracting_problems", "parsing_submissions", "error"
     }:
         return workflow.presentation_status
     if latest_run is not None:
@@ -649,7 +666,7 @@ def _presentation_status(workflow, questions, submissions, latest_run) -> str:
         if latest_run.status in {"completed", "partial_failed"}:
             return "graded"
     if submissions:
-        return "submissions_ready"
+        return "grading_setup" if workflow.grading_setup is not None else "submissions_ready"
     if questions:
         return "problems_ready"
     return "draft"
@@ -666,7 +683,9 @@ def _current_grading_run(workflow, runs):
     # explicitly describe a result allow a one-time legacy fallback.  A rewind
     # sets an earlier status and a null pointer, so historical runs stay hidden.
     if workflow.presentation_status in {
-        "draft", "grading", "graded", "review_confirmed", "finalized"
+        "draft", "grading", "graded", "finalized",
+        # Read historical rows through the current run; never emit old stages.
+        "review_confirmed", "generating_analysis",
     }:
         return runs[-1] if runs else None
     return None
@@ -3843,13 +3862,17 @@ def task_state(*, task_id: str, owner_id: str) -> dict:
             except NotFound:
                 progress = None
     elif workflow.extract_job_id or workflow.parse_job_id:
-        job_id = workflow.parse_job_id or workflow.extract_job_id
+        job_id = (workflow.last_failed_job_id if payload["status"] in {
+            "problems_paused", "submissions_paused",
+        } else workflow.parse_job_id or workflow.extract_job_id)
         if job_id:
             try:
                 operation = workflow_repository.get_operation(job_id, owner_id=owner_id)
                 progress = dict(operation.progress or {}) or None
             except NotFound:
                 pass
+    if progress and payload["status"] in {"problems_paused", "submissions_paused"}:
+        progress.update(phase="paused", error_detail=None, model_waits=[], active=[])
     payload.update({
         "progress": progress,
         "active_job_id": workflow.active_job_id,
@@ -3887,7 +3910,7 @@ async def async_task_state(*, task_id: str, owner_id: str) -> dict:
     )
     if (
         grading_job_id
-        and (payload.get("status") == "grading" or grading_owns_failure)
+        and (payload.get("status") in {"grading", "grading_paused"} or grading_owns_failure)
     ):
         grading_progress = await asyncio.to_thread(_grading_progress, grading_job_id, owner_id)
         # Borrow only a deduplicated running count from live units. Student,
@@ -3909,7 +3932,7 @@ async def async_task_state(*, task_id: str, owner_id: str) -> dict:
         # A reporter can reach ``done`` before result persistence finishes.
         # Prefer the durable failed-run projection so clients never render a
         # stale success phase after the database marks the run failed.
-        if payload.get("status") == "grading" or grading_owns_failure:
+        if payload.get("status") in {"grading", "grading_paused"} or grading_owns_failure:
             payload["progress"] = grading_progress
             payload["error"] = payload.get("error") or grading_progress.get("error_detail")
             if payload.get("status") == "grading":
@@ -3921,6 +3944,7 @@ async def async_task_state(*, task_id: str, owner_id: str) -> dict:
 def _grading_progress(run_id: str, owner_id: str) -> dict:
     from backend.progress.grading_activity import public_models, public_event, public_waits, model_eta_seconds
     run = grading_repository.get_run(run_id, actor_id=owner_id)
+    paused = run.status == "cancelled" and run.error_message == "operation_cancelled"
     events = grading_repository.list_events(run_id, actor_id=owner_id)
     model_waits = next((item.get("payload", {}).get("model_waits", [])
                         for item in reversed(events) if "model_waits" in item.get("payload", {})), [])
@@ -3948,7 +3972,7 @@ def _grading_progress(run_id: str, owner_id: str) -> dict:
     models = public_models(models, terminal=run.status in {"completed", "partial_failed", "failed", "cancelled"})
     return {
         "contract_version": 1, "job_id": run_id,
-        "phase": "done" if run.status in {"completed", "partial_failed"} else (
+        "phase": "paused" if paused else "done" if run.status in {"completed", "partial_failed"} else (
             "error" if run.status in {"failed", "cancelled"} else "grading"
         ),
         "total_students": run.total_submissions,
@@ -3961,7 +3985,7 @@ def _grading_progress(run_id: str, owner_id: str) -> dict:
         "activity_latest": latest,
         "activity_cursor": events[-1]["sequence"] if events else 0,
         "running_units": 0,
-        "error_detail": _grading_failure_code(run),
+        "error_detail": None if paused else _grading_failure_code(run),
         "started_at": run.started_at or run.created_at,
         "workflow": "grading", "stage_sequence": [],
         "current_step": "completed" if run.status in {"completed", "partial_failed"} else "grading",

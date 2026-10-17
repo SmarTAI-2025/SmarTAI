@@ -254,8 +254,8 @@ def _sort_tasks(items: list[dict], sort: str) -> list[dict]:
         key = lambda item: (bool(item.get("needs_attention")), item.get("updated_at") or 0)
     elif sort.startswith("stage"):
         order = {name: index for index, name in enumerate([
-            "draft", "extracting_problems", "problems_ready", "parsing_submissions",
-            "submissions_ready", "grading", "graded", "review_confirmed", "finalized", "error",
+            "draft", "extracting_problems", "problems_paused", "problems_ready", "parsing_submissions",
+            "submissions_paused", "submissions_ready", "grading_setup", "grading", "grading_paused", "graded", "finalized", "error",
         ])}
         key = lambda item: order.get(item.get("status"), 99)
     else:
@@ -882,7 +882,7 @@ def _grading_setup_payload(task_id: str, owner_id: str, registry: ExpertRegistry
     if workflow.active_operation == "grading":
         blocking.append("grading_setup_locked")
     if task["status"] not in {
-        "submissions_ready", "graded", "review_confirmed", "finalized", "error",
+        "submissions_ready", "grading_setup", "grading_paused", "graded", "finalized", "error",
     }:
         blocking.append("invalid_state")
     source_readiness = task_facade.grading_readiness(
