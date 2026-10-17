@@ -1,4 +1,5 @@
 export type ProgressPhase =
+  | "paused"
   | "pending"
   | "ingesting"
   | "extracting"

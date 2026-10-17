@@ -55,7 +55,7 @@ const WORKSPACE_NAV: WorkspaceNavItem[] = [
   { key: "reports", label: "报告与下载", labelEn: "Reports & downloads", icon: FileDown, suffix: "/reports" },
 ];
 
-const RESULT_WORKSPACE_STATUSES = new Set(["graded", "review_confirmed", "generating_analysis", "finalized"]);
+const RESULT_WORKSPACE_STATUSES = new Set(["graded", "finalized"]);
 const OVERVIEW_CHART_PALETTE = ["#f08f9b", "#f3b780", "#5ec7ae", "#7c8cf8", "#a995e8"];
 
 /** A-00: Figma-16 visual language, expanded into the confirmed five-route workspace. */

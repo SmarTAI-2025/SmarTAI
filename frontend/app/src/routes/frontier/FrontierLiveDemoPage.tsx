@@ -1,3 +1,5 @@
+import { getTaskDestination, isTaskAwaitingGrading, isTaskPaused } from "@/lib/taskFlow";
+import { TASK_ACTION_KEYS, TASK_STAGE_KEYS } from "@/lib/taskPresentation";
 import { QUESTION_FIXTURE, SUBMISSION_FIXTURE, DEMO_SCORE_POLICY, fixtureFile } from "@/lib/frontierFixtures";
 import { RecoverableActionState } from "@/components/ui/RecoverableActionState";
 import { classifyRecoverableError } from "@/lib/taskActionGuards";
@@ -82,7 +84,7 @@ function initialSteps(locale: Locale): RunStep[] {
 }
 
 export function FrontierLiveDemoPage() {
-  const { locale } = useI18n();
+  const { locale, t } = useI18n();
   const navigate = useNavigate();
   const gradingIntent = useGradingIntent();
   const [searchParams] = useSearchParams();
@@ -159,6 +161,7 @@ export function FrontierLiveDemoPage() {
         setTaskId(restoredTaskId);
         setSnapshot(state);
         setSteps((current) => current.some((step) => step.state === "error") ? current : stepsFromSnapshot(state, locale));
+        if (isTaskPaused(state.status)) return;
         if (state.status === "error") {
           const detail = state.progress?.error_detail || state.error || "workflow_error";
           setError({ message: liveDemoWorkflowFailureMessage(locale, detail), code: detail });
@@ -176,12 +179,12 @@ export function FrontierLiveDemoPage() {
           if (state.status === "problems_ready" && !confirmed) {
             return;
           }
-          if (state.status === "submissions_ready") {
+          if (isTaskAwaitingGrading(state.status)) {
             setSubmissionReviewTask(task);
             return;
           }
         }
-        if (["graded", "review_confirmed", "finalized"].includes(state.status)) {
+        if (["graded", "finalized"].includes(state.status)) {
           setDemoResult(await run.step(() => getTaskResult(restoredTaskId)));
           return;
         }
@@ -390,14 +393,14 @@ export function FrontierLiveDemoPage() {
       const recognitionProviderId = await run.step(() => demoRecognitionProvider(currentTaskId));
       const response = await run.step(() => parseSubmissions({ taskId: currentTaskId, file: archive, identityMode: "filename", recognitionProviderId, expectedWorkflowRevision: afterQuestions.workflow_revision }));
       markStep("submissions", "active", tx(locale, "作答识别与 OCR 正在运行…", "Submission recognition and OCR are running…"), response.job_id);
-      status = (await waitForStatus(run, currentTaskId, ["submissions_ready"])).status;
+      status = (await waitForStatus(run, currentTaskId, ["submissions_ready", "grading_setup"])).status;
     } else if (status === "parsing_submissions") {
       markStep("questions", "complete", tx(locale, "题目已准备", "Questions already prepared"));
       markStep("submissions", "active", tx(locale, "正在等待已有作答识别任务…", "Waiting for the existing submission-recognition job…"));
-      status = (await waitForStatus(run, currentTaskId, ["submissions_ready"])).status;
+      status = (await waitForStatus(run, currentTaskId, ["submissions_ready", "grading_setup"])).status;
     }
 
-    if (status === "submissions_ready") {
+    if (isTaskAwaitingGrading(status)) {
       const recognized = await run.step(() => getTaskState(currentTaskId));
       const recognizedTask = await run.step(() => getTask(currentTaskId));
       setSnapshot(recognized);
@@ -408,10 +411,10 @@ export function FrontierLiveDemoPage() {
       markStep("questions", "complete", tx(locale, "题目已准备", "Questions already prepared"));
       markStep("submissions", "complete", tx(locale, "作答已识别", "Submissions already recognized"));
       markStep("grading", "active", tx(locale, "正在等待已有批改任务…", "Waiting for the existing grading job…"));
-      status = (await waitForStatus(run, currentTaskId, ["graded", "review_confirmed", "finalized"])).status;
+      status = (await waitForStatus(run, currentTaskId, ["graded", "finalized"])).status;
     }
 
-    if (["graded", "review_confirmed", "finalized"].includes(status)) {
+    if (["graded", "finalized"].includes(status)) {
       const completed = await run.step(() => getTaskState(currentTaskId));
       setSnapshot(completed);
       setDemoResult(await run.step(() => getTaskResult(currentTaskId)));
@@ -424,6 +427,10 @@ export function FrontierLiveDemoPage() {
     while (Date.now() < deadline) {
       const state = await run.step(() => getTaskState(currentTaskId));
       setSnapshot(state);
+      if (isTaskPaused(state.status)) {
+        setSteps(stepsFromSnapshot(state, locale));
+        return state;
+      }
       if (targets.includes(state.status)) return state;
       if (state.status === "error") {
         const detail = state.progress?.error_detail || state.error || "workflow_error";
@@ -480,7 +487,7 @@ export function FrontierLiveDemoPage() {
               <h2 className="mt-2 text-2xl font-bold tracking-[-0.025em]">{tx(locale, "运行完整样例任务", "Run the complete sample task")}</h2>
               <p className="mt-2 max-w-xl text-sm leading-6 text-muted-foreground">{tx(locale, "每次运行都会使用模型额度、创建独立任务并保留真实 job ID，所有中间结果均可进入产品页面检查。", "Each run uses model quota, creates its own task, preserves the real job IDs, and leaves every intermediate result open for inspection.")}</p>
             </div>
-            {snapshot ? <StatusPill status={snapshot.status} locale={locale} /> : null}
+            {snapshot ? <StatusPill status={snapshot.status} /> : null}
           </div>
 
           <ol className="mt-7 grid flex-1 grid-rows-4 gap-3">
@@ -492,7 +499,7 @@ export function FrontierLiveDemoPage() {
               info={classifyRecoverableError(error.code ?? snapshot?.error ?? error.message, { locale, taskId: taskId ?? undefined, jobId: snapshot?.grading_job_id ?? undefined, phase: snapshot?.progress?.current_step ?? undefined })}
               workflowRecovery={taskId && snapshot?.grading_job_id && snapshot.last_failed_job_id === snapshot.grading_job_id ? {
                 retry: { onClick: () => void retryFailedGrading(), busy }, configurationHref: `/tasks/${taskId}/grading-setup`,
-              } : taskId && submissionReviewTask && snapshot?.status === "submissions_ready" ? {
+              } : taskId && submissionReviewTask && isTaskAwaitingGrading(snapshot?.status) ? {
                 retry: { onClick: () => void confirmSubmissionReview(), busy, label: tx(locale, "重试批改", "Retry grading") }, configurationHref: `/tasks/${taskId}/grading-setup`,
               } : undefined}
               additionalActions={taskId ? [{ label: tx(locale, "查看进度与恢复", "View progress and recovery"), href: snapshot?.grading_job_id ? `/tasks/${taskId}/grading/progress` : `/tasks/${taskId}/${snapshot?.parse_job_id ? "submissions" : "problems"}/progress` }, ...(snapshot?.grading_job_id ? [{ label: tx(locale, "查看已有结果与补分", "Review saved results and missing scores"), href: `/tasks/${taskId}/review?resolveFailures=1` }] : [])] : []}
@@ -500,12 +507,16 @@ export function FrontierLiveDemoPage() {
           ) : null}
 
           <div className="mt-6 flex flex-wrap items-center gap-3">
-            {!error && teacherReviewTask && !submissionReviewTask && snapshot?.status === "problems_ready" ? (
+            {!error && snapshot && isTaskPaused(snapshot.status) ? (
+              <Link to={getTaskDestination(snapshot)} className="rounded-lg bg-primary px-6 py-3 text-sm font-semibold text-primary-foreground">
+                {t(TASK_ACTION_KEYS[snapshot.status])}
+              </Link>
+            ) : !error && teacherReviewTask && !submissionReviewTask && snapshot?.status === "problems_ready" ? (
               <Button className="h-12 px-6 text-sm shadow-sm" onClick={() => void confirmTeacherMaterials()} disabled={busy}>
                 {busy ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />}
                 {tx(locale, "继续识别作答（保留待确认）", "Continue to submissions (keep pending)")}
               </Button>
-            ) : !error && submissionReviewTask && snapshot?.status === "submissions_ready" ? (
+            ) : !error && submissionReviewTask && isTaskAwaitingGrading(snapshot?.status) ? (
               <Button className="h-12 px-6 text-sm shadow-sm" onClick={() => void confirmSubmissionReview()} disabled={busy}>
                 {busy ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
                 {tx(locale, "开始批改", "Start grading")}
@@ -581,7 +592,7 @@ export function FrontierLiveDemoPage() {
 
       {demoResult ? (
         <DemoResultInsights result={demoResult} taskId={taskId ?? demoResult.task_id} locale={locale} />
-      ) : !error && submissionReviewTask && snapshot?.status === "submissions_ready" ? (
+      ) : !error && submissionReviewTask && isTaskAwaitingGrading(snapshot?.status) ? (
         <SubmissionRecognitionReview
           task={submissionReviewTask}
           locale={locale}
@@ -995,27 +1006,15 @@ function BoundaryBadge({ icon, label, tone = "neutral", inverse = false }: { ico
   )}>{icon}{label}</span>;
 }
 
-function StatusPill({ status, locale }: { status: TaskStatus; locale: Locale }) {
-  const done = ["graded", "review_confirmed", "finalized"].includes(status);
-  const zhStatus: Partial<Record<TaskStatus, string>> = {
-    draft: "草稿",
-    extracting_problems: "识别题目中",
-    problems_ready: "题目已准备",
-    parsing_submissions: "识别作答中",
-    submissions_ready: "作答已准备",
-    grading: "批改中",
-    graded: "批改完成",
-    review_confirmed: "复核完成",
-    generating_analysis: "生成分析中",
-    finalized: "已完成",
-    error: "错误",
-  };
-  const label = locale === "zh-CN" ? zhStatus[status] ?? status : status.replaceAll("_", " ");
+function StatusPill({ status }: { status: TaskStatus }) {
+  const { t } = useI18n();
+  const done = ["graded", "finalized"].includes(status);
+  const label = t(TASK_STAGE_KEYS[status]);
   return <span className={cn("inline-flex min-w-max shrink-0 items-center gap-1.5 whitespace-nowrap rounded-full px-4 py-1.5 text-xs font-bold", done ? "bg-accent/10 text-accent" : status === "error" ? "bg-danger/10 text-danger" : "bg-primary/10 text-primary")}><span className="h-1.5 w-1.5 shrink-0 rounded-full bg-current" />{label}</span>;
 }
 
 function TaskLinks({ taskId, status, locale }: { taskId: string; status?: TaskStatus; locale: Locale }) {
-  const finished = status && ["graded", "review_confirmed", "finalized"].includes(status);
+  const finished = status && ["graded", "finalized"].includes(status);
   return (
     <div className="flex flex-wrap items-center gap-3 text-xs font-semibold text-primary">
       <Link className="inline-flex items-center gap-1 hover:underline" to={`/tasks/${taskId}`}>{tx(locale, "打开任务", "Open task")} <ArrowRight className="h-3.5 w-3.5" /></Link>
@@ -1106,15 +1105,17 @@ function stepsFromSnapshot(snapshot: TaskStateSnapshot, locale: Locale): RunStep
     ? [snapshot.extract_job_id, snapshot.parse_job_id, snapshot.grading_job_id].indexOf(failedJobId) + 1
     : 0;
   const rank: Record<TaskStatus, number> = {
+    problems_paused: 1,
+    submissions_paused: 2,
+    grading_paused: 3,
     draft: 0,
     extracting_problems: 1,
     problems_ready: 2,
     parsing_submissions: 2,
     submissions_ready: 3,
+    grading_setup: 3,
     grading: 3,
     graded: 4,
-    review_confirmed: 4,
-    generating_analysis: 4,
     finalized: 4,
     error: failedJobRank || (snapshot.student_count > 0 ? 3 : snapshot.problem_count > 0 ? 2 : 1),
   };

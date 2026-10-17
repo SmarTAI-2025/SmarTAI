@@ -214,7 +214,9 @@ def _all_results_for_assignment(
             workflow.grading_job_id, actor_id=teacher_id
         )
     elif workflow.presentation_status in {
-        "draft", "grading", "graded", "review_confirmed", "finalized",
+        "draft", "grading", "graded", "finalized",
+        # Historical rows are read through actual results, never exposed as stages.
+        "review_confirmed", "generating_analysis",
     }:
         # Compatibility for early façade rows that predate grading_job_id.
         # Rewound generations use problems_ready/submissions_ready and never

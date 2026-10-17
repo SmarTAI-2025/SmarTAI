@@ -1,5 +1,49 @@
 import { describe, expect, it } from "vitest";
-import { getTaskReachableStep, hasTaskReachedStep } from "./taskFlow";
+import { getTaskDestination, getTaskReachableStep, hasTaskReachedStep, isTaskPaused, isTaskProcessing } from "./taskFlow";
+import { HISTORY_STAGE_KEYS, HISTORY_ACTION_KEYS, historyStatusTone } from "@/components/history/historyPresentation";
+import { TASK_STAGE_KEYS, TASK_ACTION_KEYS, taskStatusTone } from "./taskPresentation";
+import { parseHistorySearchParams } from "@/components/history/historyQuery";
+
+describe("shared task stages", () => {
+  it.each([false, true])("opens question overview regardless of saved configuration (%s)", (configured) => {
+    expect(getTaskDestination({ task_id: "T", status: "problems_ready", grading_setup_configured: configured }))
+      .toBe("/tasks/T/questions");
+  });
+  it.each([
+    ["submissions_ready", "/tasks/T/submissions"],
+    ["grading_setup", "/tasks/T/grading-setup"],
+  ] as const)("opens the correct workspace for %s", (status, destination) => {
+    expect(getTaskDestination({ task_id: "T", status })).toBe(destination);
+    expect(getTaskReachableStep({ status })).toBe(5);
+  });
+  it("keeps incomplete recognition recoverable even with saved configuration", () => {
+    const task = { task_id: "T", status: "grading_setup" as const, submission_source_summary: {
+      uploaded: 2, parsed: 1, failed: 1, pending: 0, identity_needs_review: 0,
+    } };
+    expect(getTaskDestination(task)).toBe("/tasks/T/submissions/progress");
+    expect(getTaskReachableStep(task)).toBe(3);
+  });
+  it("shares all stage labels, actions and colors, and excludes obsolete filters", () => {
+    expect(HISTORY_STAGE_KEYS).toBe(TASK_STAGE_KEYS);
+    expect(HISTORY_ACTION_KEYS).toBe(TASK_ACTION_KEYS);
+    expect(historyStatusTone).toBe(taskStatusTone);
+    expect(Object.keys(TASK_STAGE_KEYS)).toHaveLength(13);
+    expect(parseHistorySearchParams(new URLSearchParams("status=review_confirmed,generating_analysis,grading_setup")).statuses)
+      .toEqual(["grading_setup"]);
+  });
+  it.each([
+    ["problems_paused", "problems", 1],
+    ["submissions_paused", "submissions", 3],
+    ["grading_paused", "grading", 5],
+  ] as const)("routes %s to its resumable progress without treating it as active or failed", (status, stage, step) => {
+    expect(isTaskPaused(status)).toBe(true);
+    expect(isTaskProcessing(status)).toBe(false);
+    expect(getTaskDestination({ task_id: "T", status })).toBe(`/tasks/T/${stage}/progress`);
+    expect(getTaskReachableStep({ status })).toBe(step);
+    expect(taskStatusTone(status)).not.toContain("red");
+    expect(parseHistorySearchParams(new URLSearchParams(`status=${status}`)).statuses).toEqual([status]);
+  });
+});
 
 describe("getTaskReachableStep", () => {
   it("keeps legacy partial submission batches out of review and grading", () => {

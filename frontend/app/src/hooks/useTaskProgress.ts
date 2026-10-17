@@ -82,11 +82,11 @@ export function getProgressTotalUnits(
   progress: JobProgress,
   status?: TaskStatus | string,
 ): number {
-  if (status === "parsing_submissions" || progress.phase === "parsing") {
+  if (status === "parsing_submissions" || status === "submissions_paused" || progress.phase === "parsing") {
     return progress.total_students;
   }
 
-  if (status === "grading" || progress.phase === "grading") {
+  if (status === "grading" || status === "grading_paused" || progress.phase === "grading") {
     if (progress.total_students > 0 && progress.total_questions > 0) {
       return progress.total_students * progress.total_questions;
     }

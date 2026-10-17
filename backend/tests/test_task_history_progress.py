@@ -20,7 +20,7 @@ def _grading(**changes):
 @pytest.mark.parametrize("status,progress,expected", [
     ("draft", None, (0, None)),
     ("graded", None, (100, 0)),
-    ("review_confirmed", None, (100, 0)),
+    ("grading_setup", None, (None, None)),
     ("finalized", None, (100, 0)),
     ("problems_ready", None, (None, None)),
     ("submissions_ready", None, (None, None)),
