@@ -215,7 +215,8 @@ function MetricCard({
     <>
       <strong
         className={cn(
-          "text-[28px] font-bold leading-[34px] tabular-nums",
+          "min-w-0 font-bold tabular-nums",
+          to ? "break-words text-base leading-6 sm:text-[28px] sm:leading-[34px]" : "text-[28px] leading-[34px]",
           tone === "primary" && "text-primary",
           tone === "warning" && "text-amber-600 dark:text-amber-400",
           tone === "accent" && "text-teal-600 dark:text-teal-300",

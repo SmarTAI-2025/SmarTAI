@@ -70,6 +70,11 @@ for (const locale of ["zh-CN", "en-US"]) for (const width of [1440, 390]) {
       await page.goto(`/${surface}`);
       await expect(page).toHaveTitle("SmarTAI");
       await expect(page.getByRole("heading", { level: 1 })).toHaveText(surface === "dashboard" ? (zh ? "工作台" : "Workspace") : (zh ? "历史任务" : "History"));
+      if (surface === "dashboard") {
+        const modelCard = page.getByRole("link", { name: /Models \/ BYOK|模型 \/ BYOK/ });
+        await expect(modelCard).toBeVisible();
+        expect(await modelCard.locator("strong").evaluate(element => element.scrollWidth <= element.clientWidth)).toBe(true);
+      }
       await expect(page.getByText(/题目待校对|作答待校对|结果已保存|分析生成中|Results saved|Generating analysis/)).toHaveCount(0);
       for (const item of cases) {
         const pill = page.locator('span.rounded-full[class*="bg-"]:visible, a.rounded-full[class*="bg-"]:visible')
