@@ -27,6 +27,7 @@ from backend.agents.grading_agent import _grade_single_answer
 from backend.agents.multi_expert import (
     AllExpertsFailed,
     SynthesisOutput,
+    _compute_review_signal,
     _weighted_average_fallback,
     run_multi_expert,
 )
@@ -41,6 +42,24 @@ from backend.tools.structured_llm import extract_and_parse_json
 
 
 # ─── Helpers ─────────────────────────────────────────────────────────────────
+
+
+@pytest.mark.parametrize("scores,maximum,expected_is,flagged", [
+    ([10, 6], 10, .2, True),
+    ([10, 7], 10, .15, False),
+    ([10, 6.99], 10, .1505, True),
+    ([3.8, 2.6], 4, .15, False),
+    ([10, 7.4], 10, .13, False),
+    ([10] * 9 + [6], 10, .12, False),
+    ([100, 97.99], 100, .01005, False),
+    ([3, 1], 3, 1 / 3, True),
+])
+def test_only_population_deviation_over_15_percent_signals_disagreement(scores, maximum, expected_is, flagged):
+    experts = [ExpertResult(provider="expert", score=value, max_score=maximum, confidence=.95, comment="") for value in scores]
+    is_score, review, reasons = _compute_review_signal(experts)
+    assert is_score == pytest.approx(expected_is)
+    assert review is flagged
+    assert reasons == (["high_indecisiveness"] if flagged else [])
 
 
 def _problem(qid: str = "q1") -> ProblemInfo:

@@ -9,6 +9,18 @@ from typing import Any
 
 from backend.domain.confidence_policy import confidence_requires_review
 
+EXPERT_DISAGREEMENT_THRESHOLD = 0.15
+
+
+def expert_disagreement_signal(scores: list[float], maximum: float) -> tuple[float | None, bool]:
+    """Population standard deviation / full marks; the only disagreement rule."""
+    if len(scores) < 2 or not math.isfinite(maximum) or maximum <= 0:
+        return None, False
+    mean = sum(scores) / len(scores)
+    normalized_std = (sum((value - mean) ** 2 for value in scores) / len(scores)) ** .5 / maximum
+    # Avoid flagging an exact 15% boundary due to floating-point noise.
+    return normalized_std, normalized_std > EXPERT_DISAGREEMENT_THRESHOLD + math.ulp(1.0)
+
 
 def number(value: Any) -> float | None:
     if isinstance(value, bool) or not isinstance(value, (int, float)):
@@ -44,6 +56,12 @@ def review_state(correction: dict) -> tuple[bool, bool]:
     blocked = not valid(score(correction)) or (not valid(original) and not confirmed)
     reviewed = number(correction.get("teacher_score")) is not None and confirmed and not blocked
     conf = number(correction.get("confidence"))
-    pending = blocked or (not reviewed and confidence_requires_review(conf))
+    expert_scores = [
+        number(expert.get("score"))
+        for expert in correction.get("expert_results") or []
+        if not expert.get("error_kind") and valid(expert.get("score"))
+    ]
+    _, disagreement = expert_disagreement_signal(expert_scores, maximum or 0)
+    pending = blocked or (not reviewed and (confidence_requires_review(conf) or disagreement))
     return pending, reviewed
 

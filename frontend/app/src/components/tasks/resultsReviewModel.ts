@@ -5,7 +5,6 @@ import {
   correctionReviewAttention,
   correctionReviewBlocked,
   correctionReviewReasonIds,
-  getExpertScoreSpread,
   hasExpertDisagreement,
   effectiveCorrectionScore,
   reviewReasonLabel,
@@ -84,11 +83,11 @@ export function correctionReviewLabels(correction: Correction, locale: Locale) {
     labels.add(text("置信度很低，请核对并确认", "Very low confidence; check and confirm the result"));
   }
   for (const reason of correctionReviewReasonIds(correction)) {
-    if (["low_confidence", "degraded_to_single"].includes(reason)) continue;
+    if (["low_confidence", "degraded_to_single", "high_indecisiveness", "score_spread_high", "minority_veto"].includes(reason)) continue;
     labels.add(reviewReasonLabel(reason, locale));
   }
-  if (getExpertScoreSpread(correction) > Math.max(1, correction.max_score * 0.25)) {
-    labels.add(text("专家分数差异较大", "Large difference between expert scores"));
+  if (hasExpertDisagreement(correction)) {
+    labels.add(text("专家分歧较大（标准差 ÷ 满分 > 15%），可按需复核", "High expert disagreement (standard deviation / max score > 15%); optional review"));
   }
   if (!labels.size && correction.requires_human_review) {
     labels.add(text("后端标记需复核", "Flagged for review"));

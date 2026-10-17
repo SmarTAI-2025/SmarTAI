@@ -38,7 +38,7 @@ const copy = {
   empty: ["当前任务没有可显示的批改结果。", "This task has no grading results to display."],
   viewHistory: ["查看历史任务", "View History"],
   lowReason: ["作答低置信", "Low-confidence response"],
-  disagreementReason: ["专家分歧", "Model disagreement"],
+  disagreementReason: ["专家分歧 · 可选复核", "Model disagreement · optional"],
   anomalyReason: ["分数异常", "Score anomaly"],
   reviewReason: ["建议复核", "Review suggested"],
   savedPendingReason: ["修改已保存", "Changes saved"],
