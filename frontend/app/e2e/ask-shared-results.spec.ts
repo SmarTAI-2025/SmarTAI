@@ -46,6 +46,10 @@ for (const demo of [true, false]) for (const locale of ["zh-CN", "en-US"]) {
       }
       if (path === `/analytics/${taskId}/ask`) {
         const body = request.postDataJSON(); asks.push(body);
+        if (/同时只显示及格学生|and filter the table to passing students/.test(body.question)) {
+          const chart = { mode: "chart", title: "查询结果 / Query result", traces: [{ type: "bar", name: "student_count", x: ["Passed", "Failed", "Unscored"], y: [2, 1, 1] }] };
+          return json({ ...evidence, recognized: true, kind: "chart", data: { columns: ["status", "student_count"], rows: [["Passed", 2], ["Failed", 1], ["Unscored", 1]] }, selection: { kind: "students", ids: ["S0", "S1"] }, chart });
+        }
         const ids = body.question.includes("Zed Absent") ? [] : body.question === "Alex" ? ["S0"] : ["S0", "S1", "S2", "S3"];
         return json({ ...evidence, recognized: true, kind: "students", data: { columns: ["student_id"], rows: ids.map(id => [id]) }, selection: { kind: "students", ids }, chart: null });
       }
@@ -88,6 +92,26 @@ for (const demo of [true, false]) for (const locale of ["zh-CN", "en-US"]) {
     await expect(table.getByText("Alex Example", { exact: true })).toHaveCount(0, { timeout: liveBridge ? 180_000 : 5000 });
     expect(asks.at(-1)?.history ?? []).toEqual([]);
     await clear(); await expect(rows()).toHaveCount(4);
+    await input.fill(zh
+      ? "统计及格与未及格人数，同时只显示及格学生，按总分降序排列"
+      : "Show pass and fail counts, and filter the table to passing students sorted by total score descending");
+    const combinedResponse = page.waitForResponse(r => r.url().endsWith(`/analytics/${taskId}/ask`), { timeout: liveBridge ? 180_000 : 5000 });
+    await submit();
+    const combined = await (await combinedResponse).json();
+    expect(combined.selection).toEqual({ kind: "students", ids: ["S0", "S1"] });
+    expect(combined.chart.traces[0].y).toEqual([2, 1, 1]);
+    await expect(rows()).toHaveCount(2);
+    await expect(rows().nth(0)).toContainText("Alex Example");
+    await expect(rows().nth(1)).toContainText("Maya Example");
+    await expect(page.getByRole("table")).toHaveCount(1);
+    await expect(page.locator('[data-grounded-chart] .recharts-wrapper > svg')).toHaveCount(1);
+    await expect(page.getByText(/Internal|private_evidence|internal-snapshot/)).toHaveCount(0);
+    await page.screenshot({ path: testInfo.outputPath("combined-count-and-selection.png"), fullPage: true });
+    await clear();
+    await expect(page.locator('[data-grounded-chart]')).toHaveCount(0);
+    await expect(rows()).toHaveCount(4);
+    await expect(rows().nth(0)).toContainText("Alex Example");
+    await expect(rows().nth(1)).toContainText("Jordan Example");
     await page.goto(`/tasks/${taskId}/results/visualizations`);
     await page.getByRole("button", { name: zh ? "比较各题得分率与低置信题次" : "Compare question score percentages and low-confidence counts", exact: true }).click();
     await submit();
