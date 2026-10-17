@@ -10,7 +10,7 @@ import { useEffect } from "react";
 import { Link, useLocation } from "react-router-dom";
 import type { Locale } from "@/i18n/messages";
 import { cn } from "@/lib/cn";
-import { getSubmissionSourceReasonCopy } from "@/lib/submissionSourceOutcomes";
+import { getSubmissionPageErrorLabel, getSubmissionSourceReasonCopy } from "@/lib/submissionSourceOutcomes";
 import type { SubmissionSourceOutcome, SubmissionSourceSummary } from "@/types";
 
 export function SubmissionSourceOutcomePanel({
@@ -145,6 +145,7 @@ function SourceOutcomeRow({ source, locale }: { source: SubmissionSourceOutcome;
               {tx(locale, "建议：", "Next: ")}{copy.nextStep}
             </p>
           ) : null}
+          {source.page_diagnostics ? <PageDiagnostics source={source} locale={locale} /> : null}
           {source.unknown_question_ids.length > 0 && source.reason_code !== "no_matching_answer" ? (
             <p className="mt-1 rounded-md bg-amber-50 px-2 py-1.5 text-[11px] font-medium leading-5 text-amber-800 dark:bg-amber-950/35 dark:text-amber-200">
               {tx(locale, "同时发现未匹配题号：", "Also found unmatched question IDs: ")}
@@ -172,6 +173,24 @@ function SourceOutcomeRow({ source, locale }: { source: SubmissionSourceOutcome;
       </div>
     </li>
   );
+}
+
+function PageDiagnostics({ source, locale }: { source: SubmissionSourceOutcome; locale: Locale }) {
+  const pages = source.page_diagnostics!;
+  const format = (numbers: number[]) => numbers.length ? numbers.join(locale === "zh-CN" ? "、" : ", ") : tx(locale, "无", "None");
+  const incomplete = pages.failed_pages.length > 0 || pages.unprocessed_pages.length > 0;
+  return <div className="mt-2 rounded-md border bg-slate-50 px-3 py-2 text-[11px] leading-5 dark:bg-slate-950/40">
+    <p className="font-semibold text-foreground">{tx(locale, `页面读取情况（共 ${pages.total_pages} 页）`, `Page reading status (${pages.total_pages} total)`)}</p>
+    <dl className="mt-1 text-muted-foreground">
+      <div><dt className="inline">{tx(locale, "读取成功页码：", "Successfully read pages: ")}</dt><dd className="inline">{format(pages.processed_pages)}</dd></div>
+      <div><dt className="inline">{tx(locale, "读取失败页码：", "Failed pages: ")}</dt><dd className="inline">{format(pages.failed_pages)}</dd></div>
+      <div><dt className="inline">{tx(locale, "尚未读取页码：", "Unread pages: ")}</dt><dd className="inline">{format(pages.unprocessed_pages)}</dd></div>
+    </dl>
+    {pages.page_errors.length > 0 ? <ul className="mt-1 text-red-700 dark:text-red-200">{pages.page_errors.map((error, index) => <li key={`${error.page}-${index}`}>{getSubmissionPageErrorLabel(source, error, locale)}</li>)}</ul> : null}
+    {incomplete ? <p className="mt-1 font-medium text-foreground">{pages.processed_pages.length > 0
+      ? tx(locale, "成功页结果已保留；文件与模型设置未变时，重试会复用可用结果，补读其余页面。", "Successful page results are retained. If the file and model settings are unchanged, retry reuses eligible results and reads the remaining pages.")
+      : tx(locale, "文件与模型设置未变时，重试会补读未成功页。", "If the file and model settings are unchanged, retry reads the unsuccessful pages.")}</p> : null}
+  </div>;
 }
 
 function TechnicalRow({ label, value }: { label: string; value?: string | null }) {

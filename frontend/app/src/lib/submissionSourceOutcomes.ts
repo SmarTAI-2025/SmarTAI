@@ -1,5 +1,5 @@
 import type { Locale } from "@/i18n/messages";
-import type { SubmissionSourceOutcome } from "@/types";
+import type { SubmissionPageError, SubmissionSourceOutcome } from "@/types";
 
 export interface SubmissionSourceReasonCopy {
   title: string;
@@ -34,6 +34,14 @@ export function getSubmissionSourceReasonCopy(
 }
 
 type ReasonFactory = (locale: Locale, source: SubmissionSourceOutcome) => SubmissionSourceReasonCopy;
+
+export function getSubmissionPageErrorLabel(source: SubmissionSourceOutcome, error: SubmissionPageError, locale: Locale): string {
+  const reason = REASON_COPY[error.error_code]?.(locale, source).title
+    ?? tx(locale, "该页尚未成功识别，请重试或查看诊断信息", "This page was not recognized; retry or inspect the diagnostic details");
+  const status = typeof error.status_code === "number" && Number.isInteger(error.status_code)
+    && error.status_code >= 100 && error.status_code <= 599 ? ` (HTTP ${error.status_code})` : "";
+  return tx(locale, `第 ${error.page} 页：${reason}${status}`, `Page ${error.page}: ${reason}${status}`);
+}
 
 const REASON_COPY: Record<string, ReasonFactory> = {
   image_format_mismatch: recognitionFileCopy,
@@ -78,8 +86,8 @@ const REASON_COPY: Record<string, ReasonFactory> = {
   }),
   question_source_incomplete: (locale) => ({
     title: tx(locale, "资料尚未完整读取", "Source reading is incomplete"),
-    description: tx(locale, "仍有页面未成功读取，已暂停题目生成。已完成的页面证据已保存；不会把部分内容当作整份文件完成。", "Some pages could not be read, so question generation is paused. Completed page evidence is saved; partial input is not treated as a complete document."),
-    nextStep: tx(locale, "检查资料识别状态后继续；已完成页面会复用，结果未知的模型请求需要确认后才能重新提交。", "Check the source recognition status before continuing. Completed pages are reused; model requests with unknown outcomes need confirmation before resubmission."),
+    description: tx(locale, "仍有页面未成功读取，作答识别尚未完成。已完成的页面证据已保存；不会把部分内容当作整份作答完成。", "Some pages could not be read, so submission recognition is incomplete. Completed page evidence is saved; partial input is not treated as a complete submission."),
+    nextStep: tx(locale, "检查资料识别状态后继续；文件与模型设置未变时会复用可用结果，结果未知的模型请求需要确认后才能重新提交。", "Check the source recognition status before continuing. Eligible results are reused if the file and model settings are unchanged; model requests with unknown outcomes need confirmation before resubmission."),
   }),
   recognition_already_running: recognitionStateCopy,
   recognition_artifact_invalid: recognitionStorageCopy,
@@ -162,7 +170,7 @@ const REASON_COPY: Record<string, ReasonFactory> = {
   provider_permission_denied: (locale, source) => providerCopy(locale, source, "OCR 账号没有服务权限", "The OCR account lacks service permission", "在百度控制台确认已开通文档解析权限，或更换有权限的 AK/SK。", "Confirm Document Parsing access in the Baidu console or replace the AK/SK with an authorized pair."),
   provider_quota_exceeded: (locale, source) => providerCopy(locale, source, "服务商余额或额度已用完", "Provider credits or quota exhausted", "在对应服务商控制台检查余额与额度；恢复后重试，或切换模型。", "Check credits and quota in the provider console, then retry after recovery or switch models."),
   provider_unavailable: (locale, source) => providerCopy(locale, source, "OCR 服务暂时不可用", "The OCR service is temporarily unavailable", "稍后重试；系统不会静默换用其他服务。", "Retry later. SmarTAI will not silently switch to another service."),
-  provider_submit_uncertain: (locale, source) => providerCopy(locale, source, "识别未完成，重试需确认", "Recognition did not complete; confirm before retrying", "这份文件未取得可用结果，上次调用是否计费尚无法确认。系统不会自动重提；可稍后确认重试失败项，或先切换模型。反复失败时请提供任务编号排查。", "No usable result was received for this file and billing is unconfirmed. SmarTAI will not resubmit automatically. Confirm a retry of failed items later or switch models first; share the job ID if failures persist."),
+  provider_submit_uncertain: (locale, source) => providerCopy(locale, source, "识别未完成，重试需确认", "Recognition did not complete; confirm before retrying", "未完成的识别调用没有取得可用结果，上次调用是否计费尚无法确认。系统不会自动重提；可确认重试失败项，可能再次消耗额度。反复失败时请提供任务编号排查。", "The incomplete recognition call produced no usable result and billing is unconfirmed. SmarTAI will not resubmit automatically. You can confirm a retry of failed items, which may incur additional charges. Share the job ID if failures persist."),
   provider_task_failed: (locale, source) => providerCopy(locale, source, "OCR 服务端任务失败", "The provider-side OCR task failed", "检查文件格式和百度服务状态后，再由教师明确重试。", "Check the file format and Baidu service status, then retry explicitly."),
   provider_request_failed: (locale, source) => providerCopy(locale, source, "OCR 请求失败", "The OCR request failed", "检查 BYOK、网络与服务状态后重试；系统没有改用其他模型。", "Check BYOK, network, and provider status, then retry. No alternate model was used."),
   provider_download_url_rejected: (locale, source) => providerCopy(locale, source, "OCR 结果下载地址未通过安全校验", "The OCR result URL failed security validation", "请保留任务编号联系管理员核对服务商返回域名；不要重复提交原文件。", "Keep the job ID and ask an administrator to verify the provider result host. Do not resubmit the original."),

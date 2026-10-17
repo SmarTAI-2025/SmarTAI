@@ -46,7 +46,9 @@ export function formatSubmissionFlag(flag: string, locale: Locale): string {
     parse_failed: ["作答解析失败，请修正并确认", "Answer parsing failed; correct and confirm"],
     no_matching_answer: ["未识别到对应作答，请对照原件修正并确认", "No matching answer recognized; correct against the source and confirm"],
     recognition_repaired_needs_confirmation: ["识别问题已修正，请确认作答", "Recognition issue corrected; confirm the answer"],
-    very_low_confidence: ["本题识别置信度很低，建议核对", "Very low confidence in this answer; checking is recommended"],
+    very_low_confidence: ["本题识别置信度很低，请对照原件核对并确认", "Very low recognition confidence; check the original and confirm"],
+    recognition_low_confidence: ["本题识别置信度较低，请对照原件核对并确认", "Low recognition confidence; check the original and confirm"],
+    low_confidence: ["本题识别置信度较低，请对照原件核对并确认", "Low recognition confidence; check the original and confirm"],
   };
   const label = labels[flag];
   return label ? label[locale === "zh-CN" ? 0 : 1] : flag;
@@ -91,7 +93,6 @@ export function getAnswerState(answer?: StudentAnswerInfo): SubmissionAnswerStat
 /** Keep source-level warnings and ordinary pending confirmation out of risk queues. */
 export function answerReviewAttention(answer?: StudentAnswerInfo): ReviewAttention {
   if (answerReviewNextBlocked(answer)) return "blocking";
-  if (answer?.review_status !== "confirmed" && answer?.flag?.includes("very_low_confidence")) return "advisory";
   return "none";
 }
 

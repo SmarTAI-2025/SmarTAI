@@ -24,7 +24,75 @@ def _archive_bytes() -> bytes:
 
 
 @pytest.mark.asyncio
-async def test_partial_batch_stays_failed_and_explicit_retry_calls_only_failed_source(monkeypatch):
+@pytest.mark.parametrize("earlier_failure", [False, True])
+async def test_page_failure_details_survive_worker_restart_and_retry_is_explicit(monkeypatch, earlier_failure):
+    from types import SimpleNamespace
+    from backend.domain.errors import RecognitionError
+    import json
+
+    owner, task = _seed_task(with_question=True)
+    diagnostics = dict(total_pages=2, processed_pages=[1], failed_pages=[2], unprocessed_pages=[],
+        page_errors=[dict(page=2, error_code="provider_upstream_unavailable", status_code=503)])
+    reads = []
+
+    async def read(**kw):
+        if kw["filename"] == "earlier.txt":
+            raise RecognitionError("provider_rate_limited")
+        reads.append(kw["retry_key"])
+        raise RecognitionError("provider_submit_uncertain", failed_pages=[2], processed_pages=[1],
+                               page_diagnostics=diagnostics)
+
+    monkeypatch.setattr(task_facade, "read_question_source", read)
+    monkeypatch.setattr(task_facade, "_registry_for_owner", lambda _owner: _Registry())
+    content, filename, content_type = b"original", "student.txt", "text/plain"
+    if earlier_failure:
+        buffer = io.BytesIO()
+        with zipfile.ZipFile(buffer, "w") as archive:
+            archive.writestr("earlier.txt", "another file")
+            archive.writestr("student.txt", "original")
+        content, filename, content_type = buffer.getvalue(), "answers.zip", "application/zip"
+    queued = task_facade.queue_task_submission_parsing(task_id=task, owner_id=owner,
+        filename=filename, content=content, content_type=content_type, registry=_Registry())
+
+    async def finish(job):
+        row = workflow_repository.claim_operation(job, owner_id=owner, worker_id="test", lease_seconds=60)
+        await task_facade.run_durable_submission_recognition(LeasedOperation(row, worker_id="test", lease_seconds=60))
+
+    # Real source preparation and structure parser must stop before any LLM
+    # structure dispatch; this registry deliberately has no ainvoke method.
+    await finish(queued["job_id"])
+    before = task_facade.get_task(task_id=task, owner_id=owner)
+    assert before["status"] == "error" and before["student_data"] == {}
+    assert before["submission_source_summary"]["failed"] == (2 if earlier_failure else 1)
+    row = next(row for row in before["submission_sources"] if row["file_name"] == "student.txt")
+    assert row["status"] == "failed" and row["matched_answer_count"] == 0
+    assert row["page_diagnostics"] == diagnostics
+    assert row["reason_code"] == "provider_submit_uncertain"
+    persisted = workflow_repository.get_operation(queued["job_id"], owner_id=owner)
+    assert persisted.error_code == "provider_submit_uncertain"
+    assert persisted.checkpoint["source_page_diagnostics"][row["file_id"]] == diagnostics
+
+    args = dict(task_id=task, job_id=queued["job_id"], background_tasks=_BackgroundTasks(),
+                current=SimpleNamespace(id=owner), registry=_Registry())
+    denied = await tasks.retry_submission_recognition_endpoint(**args,
+        request=tasks.RetrySubmissionRecognitionRequest(expected_workflow_revision=before["workflow_revision"]))
+    assert denied.status_code == 409
+    assert json.loads(denied.body)["error"]["code"] == "provider_submit_uncertain"
+    assert reads == [None]
+    retried = await tasks.retry_submission_recognition_endpoint(**args,
+        request=tasks.RetrySubmissionRecognitionRequest(expected_workflow_revision=before["workflow_revision"],
+                                                       acknowledge_possible_duplicate_call=True))
+    assert isinstance(retried, dict), json.loads(retried.body)
+    await finish(retried["job_id"])
+    assert reads == [None, f"{retried['job_id']}:1"]
+    after = task_facade.get_task(task_id=task, owner_id=owner)
+    assert after["status"] == "error"  # another failure still cannot escape into review
+    assert next(row for row in after["submission_sources"] if row["file_name"] == "student.txt")["page_diagnostics"] == diagnostics
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("legacy_partial", [False, True])
+async def test_partial_batch_stays_failed_and_explicit_retry_calls_only_failed_source(monkeypatch, legacy_partial):
     from types import SimpleNamespace
     owner, task = _seed_task(with_question=True)
     buf = io.BytesIO()
@@ -36,7 +104,9 @@ async def test_partial_batch_stays_failed_and_explicit_retry_calls_only_failed_s
 
     async def read(**kw):
         reads.append(kw["filename"])
-        return SimpleNamespace(text=kw["content"].decode(), recognition=None)
+        recognition = ({"confidence": "low", "coverage": {"processed_pages": [1], "failed_pages": [2]}}
+                       if legacy_partial and round_number == 0 and kw["filename"] == "one.txt" else None)
+        return SimpleNamespace(text=kw["content"].decode(), recognition=recognition)
 
     async def parse(sources, *_args, **_kwargs):
         result = []
@@ -74,7 +144,8 @@ async def test_partial_batch_stays_failed_and_explicit_retry_calls_only_failed_s
         request=tasks.RetrySubmissionRecognitionRequest(expected_workflow_revision=snapshot["workflow_revision"]),
         background_tasks=_BackgroundTasks(), current=SimpleNamespace(id=owner), registry=_Registry())
     await finish(retried["job_id"])
-    assert reads == parsed == ["one.txt", "two.txt", "two.txt"]
+    expected = ["one.txt", "two.txt", "one.txt", "two.txt"] if legacy_partial else ["one.txt", "two.txt", "two.txt"]
+    assert reads == parsed == expected
     result = task_facade.get_task(task_id=task, owner_id=owner)
     assert result["status"] == "submissions_ready"
     assert len(result["student_data"]) == 2
@@ -225,7 +296,8 @@ async def test_fresh_submission_worker_recovers_archive_and_commits_once(monkeyp
 
 
 @pytest.mark.asyncio
-async def test_submission_worker_reuses_result_artifact_without_provider_call(monkeypatch):
+@pytest.mark.parametrize("legacy_partial", [False, True])
+async def test_submission_worker_reuses_result_artifact_without_provider_call(monkeypatch, legacy_partial):
     owner_id, task_id = _seed_task(with_question=True)
     queued = task_facade.queue_task_submission_parsing(
         task_id=task_id, owner_id=owner_id, filename="student.txt",
@@ -258,6 +330,10 @@ async def test_submission_worker_reuses_result_artifact_without_provider_call(mo
         failure_phase=None,
         retryable=False,
     )
+    if legacy_partial:
+        result.student["recognition"] = {"coverage": {"processed_pages": [1], "failed_pages": [2]}}
+        result.student["stu_ans"][0]["content"] = ""
+        result.student["stu_ans"][0]["flag"] = ["recognition_needs_review", "recognition_failed_pages:2"]
     artifact = file_repository.save_file(
         storage=get_storage(), owner_id=owner_id,
         kind="submission_recognition_result",
@@ -289,10 +365,14 @@ async def test_submission_worker_reuses_result_artifact_without_provider_call(mo
 
     completed = workflow_repository.get_operation(operation.id, owner_id=owner_id)
     outcome = source_outcome_repository.get_outcome(source.id, owner_id=owner_id)
-    assert completed.status == "done"
+    assert completed.status == ("error" if legacy_partial else "done")
     assert completed.checkpoint["parsed_artifact_id"] == artifact.id
     assert outcome is not None
     assert outcome.artifact_file_id == artifact.id
+    if legacy_partial:
+        task = task_facade.get_task(task_id=task_id, owner_id=owner_id)
+        assert task["submission_source_summary"]["failed"] == 1
+        assert task["status"] == "error"
 
 
 def test_stale_submission_lease_cannot_commit_or_fail_current_attempt():

@@ -9,7 +9,7 @@ from backend.services.submission_source_pipeline import attach_submission_recogn
 @pytest.mark.parametrize("summary,expected", [
     (None, []),
     ({"confidence": "medium", "requires_review": True}, []),
-    ({"confidence": "low"}, ["recognition_needs_review"]),
+    ({"confidence": "low"}, ["recognition_needs_review", "recognition_low_confidence"]),
     ({"confidence": "high", "error_code": "partial"}, ["recognition_needs_review"]),
     ({"confidence": "medium", "coverage": {"missing_targets": ["Q2"]}}, ["recognition_needs_review"]),
     ({"confidence": "medium", "coverage": {"failed_pages": [2]}}, ["recognition_needs_review", "recognition_failed_pages:2"]),

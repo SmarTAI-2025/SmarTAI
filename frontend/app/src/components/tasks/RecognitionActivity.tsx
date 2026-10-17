@@ -12,6 +12,7 @@ function eventText(event: ProgressEvent | undefined, zh: boolean): string {
     activity_completed: zh ? "本次识别已完成" : "Recognition completed",
     activity_failed: zh ? "一项内容未完成，请查看失败提示" : "An item did not finish; see the failure details",
     activity_stopped: zh ? "本次识别已停止" : "Recognition stopped",
+    operation_cancelled: zh ? "本次识别已停止" : "Recognition stopped",
     activity_queued: zh ? "等待请求名额" : "Waiting for request capacity",
     activity_responding: zh ? "请求已发出，等待模型响应" : "Request sent; awaiting model response",
     activity_retrying: zh ? "正在等待重试" : "Awaiting retry",
@@ -33,7 +34,7 @@ function retryText(request: RecognitionRequestState, zh: boolean) {
 export function RecognitionRequestStatus({ progress, locale, stale = false }: { progress: JobProgress | null; locale: Locale; stale?: boolean }) {
   const [now, setNow] = useState(() => Date.now() / 1000);
   const zh = locale === "zh-CN";
-  const terminal = progress?.phase === "done" || progress?.phase === "error";
+  const terminal = progress?.phase === "paused" || progress?.phase === "done" || progress?.phase === "error";
   const requests = terminal ? [] : progress?.recognition_requests ?? [];
   // Older snapshots still carry factual rate-limit waits.
   const retries = requests.filter((r) => r.state === "retrying");

@@ -100,7 +100,7 @@ def public_progress(progress, *, terminal=False):
     for key in ("job_id",):
         if isinstance(progress.get(key), str):
             result[key] = progress[key][:120]
-    result["phase"] = progress.get("phase") if progress.get("phase") in ("pending", "ingesting", "extracting", "parsing", "done", "error") else "parsing"
+    result["phase"] = progress.get("phase") if progress.get("phase") in ("pending", "ingesting", "extracting", "parsing", "paused", "done", "error") else "parsing"
     for key in ("total_students", "total_questions", "completed_units", "started_at", "last_activity_at", "total_steps", "completed_steps"):
         result[key] = progress.get(key) if number(progress.get(key)) else (None if key.endswith("_at") or key.endswith("steps") else 0)
     workflow = progress.get("workflow")
@@ -133,10 +133,10 @@ def public_progress(progress, *, terminal=False):
         except ValidationError:
             continue
         result["provider_failures"].append(safe_failure.model_dump(mode="json"))
-    result["recognition_requests"] = [] if terminal or result["phase"] in {"done", "error"} else [safe for row in rows(progress.get("recognition_requests")) if (safe := public_request(row))]
+    result["recognition_requests"] = [] if terminal or result["phase"] in {"paused", "done", "error"} else [safe for row in rows(progress.get("recognition_requests")) if (safe := public_request(row))]
     # Keep existing rate-limit recovery controls compatible with old snapshots.
     from backend.progress.grading_activity import public_waits
-    if not terminal and result["phase"] not in {"done", "error"}:
+    if not terminal and result["phase"] not in {"paused", "done", "error"}:
         result["model_waits"] = public_waits(progress.get("model_waits"))
         if "recognition_requests" not in progress:
             result["recognition_requests"] = [{"state": "retrying", "reason": "rate_limit",

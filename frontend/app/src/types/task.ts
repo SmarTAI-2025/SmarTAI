@@ -176,6 +176,20 @@ export interface SubmissionSourceSummary {
   pending: number;
 }
 
+export interface SubmissionPageError {
+  page: number;
+  error_code: string;
+  status_code?: number | null;
+}
+
+export interface SubmissionPageDiagnostics {
+  total_pages: number;
+  processed_pages: number[];
+  failed_pages: number[];
+  unprocessed_pages: number[];
+  page_errors: SubmissionPageError[];
+}
+
 export interface SubmissionSourceOutcome {
   source_id: string;
   file_id: string;
@@ -186,6 +200,7 @@ export interface SubmissionSourceOutcome {
   internal_status: SubmissionSourceInternalStatus;
   reason_code?: string | null;
   recognition_reason_code?: string | null;
+  page_diagnostics?: SubmissionPageDiagnostics | null;
   resolution_status?: "identity_resolved" | null;
   failure_phase?: string | null;
   retryable: boolean;

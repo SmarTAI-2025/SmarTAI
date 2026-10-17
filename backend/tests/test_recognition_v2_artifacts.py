@@ -88,6 +88,33 @@ async def test_all_hits_have_no_fresh_calls_or_tokens_and_preserve_original_toke
 
 
 @pytest.mark.asyncio
+async def test_pre_http_diagnostic_artifacts_keep_their_exact_payload_hash(tmp_path):
+    import gzip
+    import json
+
+    agent, request, data, _ = setup(tmp_path, initial=["literal 1 + 1 = 3"])
+    assembly = await recognize(agent, request, data)
+    identity = final_cache_identity(request, capabilities=agent.engine.capabilities,
+                                   prompt_version=assembly.prompt_version, workflow_version=2)
+    artifact = build_artifact(identity=identity, source=request.source, payload_kind="assembly_v2", payload=assembly)
+    legacy = artifact.model_dump(mode="json")
+
+    def strip_new_field(value):
+        if isinstance(value, dict):
+            return {key: strip_new_field(item) for key, item in value.items() if key != "upstream_status_code"}
+        if isinstance(value, list):
+            return [strip_new_field(item) for item in value]
+        return value
+
+    legacy = strip_new_field(legacy)
+    legacy["payload_sha256"] = hashlib.sha256(json.dumps(legacy["payload"], sort_keys=True,
+        separators=(",", ":"), ensure_ascii=True, allow_nan=False).encode()).hexdigest()
+    restored = decode_artifact(gzip.compress(json.dumps(legacy).encode()))
+    assert restored.payload_sha256 == artifact.payload_sha256
+    assert restored.payload.document.final_markdown == assembly.document.final_markdown
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("path,value", [
     (("raw", "logical_budget", "cache_hits"), 1),
     (("raw", "budget", "initial_calls"), 0),

@@ -214,9 +214,14 @@ class RecognitionError(DomainError):
     """A safe failure; ambiguous submissions are never eligible for auto-reread."""
 
     def __init__(self, code: str, *, submission_may_exist: bool = False,
-                 failed_pages: list[int] | None = None, processed_pages: list[int] | None = None):
+                 failed_pages: list[int] | None = None, processed_pages: list[int] | None = None,
+                 page_diagnostics: dict | None = None, upstream_status_code: int | None = None):
         safe_code = code if code in RECOGNITION_ERROR_CODES else "recognition_response_invalid"
         self.submission_may_exist = submission_may_exist
+        self.upstream_status_code = (upstream_status_code if type(upstream_status_code) is int
+                                     and 400 <= upstream_status_code <= 599 else None)
         page_details = {key: sorted({n for n in values if type(n) is int and 1 <= n <= 10000})[:10000]
                         for key, values in (("failed_pages", failed_pages), ("processed_pages", processed_pages)) if values is not None}
+        if page_diagnostics is not None:
+            page_details["page_diagnostics"] = page_diagnostics
         super().__init__(safe_code, code=safe_code, status_code=422, details=page_details or None)

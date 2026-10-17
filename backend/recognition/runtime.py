@@ -217,6 +217,7 @@ async def _dispatch(
         candidate = RecognitionCandidateV1(
             kind=capabilities.candidate_kind, status="error", provider_route_id=capabilities.route_id,
             safe_error_code=exc.code,
+            upstream_status_code=exc.upstream_status_code,
         )
     except Exception:
         if ticket is None:
