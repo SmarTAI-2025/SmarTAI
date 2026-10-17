@@ -19,6 +19,7 @@ import { gradingPreflightText as copy } from "@/lib/gradingPreflightCopy";
 import { modelDisplayName } from "@/lib/modelPresentation";
 import {
   canTaskBeRegraded,
+  isTaskAwaitingGrading,
   getTaskDestination,
   getTaskGradingSetupHref,
   hasTaskReachedStep,
@@ -73,10 +74,10 @@ export function GradingPreflightPage() {
     () => buildRiskItems(summary, setupResponse?.readiness.warnings ?? [], locale),
     [locale, setupResponse?.readiness.warnings, summary],
   );
-  const failedGrading = task?.status === "error" && Boolean(task.grading_job_id)
+  const failedGrading = (task?.status === "error" || task?.status === "grading_paused") && Boolean(task.grading_job_id)
     && (!task.last_failed_job_id || task.last_failed_job_id === task.grading_job_id);
   const isRegrading = canTaskBeRegraded(task?.status) || failedGrading;
-  const historyView = Boolean(task && task.status !== "submissions_ready" && !isRegrading);
+  const historyView = Boolean(task && !isTaskAwaitingGrading(task.status) && !isRegrading);
 
   const blockingIssues = setupResponse?.readiness.blocking_issues ?? [];
   const localQuestionBlockers = questionReviewBlockers(problems, taskId ?? "", locale);
@@ -96,7 +97,7 @@ export function GradingPreflightPage() {
     && selectedExperts.every((expert) => expert.enabled);
   const canStart = Boolean(
     taskId
-    && (task?.status === "submissions_ready" || isRegrading)
+    && (isTaskAwaitingGrading(task?.status) || isRegrading)
     && setupResponse?.configured
     && setup
     && effectiveBlockingIssues.length === 0

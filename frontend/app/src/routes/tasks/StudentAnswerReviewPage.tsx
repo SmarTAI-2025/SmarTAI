@@ -59,7 +59,7 @@ import {
   type SubmissionAnswerState,
   type SubmissionQuestion,
 } from "@/lib/submissionReview";
-import { getTaskDestination, hasTaskReachedStep } from "@/lib/taskFlow";
+import { isTaskAwaitingGrading, getTaskDestination, hasTaskReachedStep } from "@/lib/taskFlow";
 import type { StudentAnswerInfo, StudentSubmission } from "@/types";
 
 type PickerItem = {
@@ -97,7 +97,7 @@ function StudentAnswerReviewForm() {
   const navigate = useNavigate();
   const { locale, t } = useI18n();
   const taskQuery = useTask(taskId);
-  const readOnly = Boolean(taskQuery.data && taskQuery.data.status !== "submissions_ready");
+  const readOnly = Boolean(taskQuery.data && !isTaskAwaitingGrading(taskQuery.data.status));
   const answerMutation = useUpdateStudentAnswer();
   const identityMutation = useUpdateStudentIdentity();
   const [drafts, setDrafts] = useState<Record<string, AnswerDraft>>({});

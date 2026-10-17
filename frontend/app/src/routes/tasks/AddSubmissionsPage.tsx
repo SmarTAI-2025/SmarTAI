@@ -226,6 +226,9 @@ function AddSubmissionsForm({ taskQuery, submittedInput }: { taskQuery: ReturnTy
     if (needsReplacementConfirmation && !canRetryOriginal && !replaceConfirmed) return;
     const submissionUncertain = task?.error === "provider_submit_uncertain" || getAPIErrorCode(recognitionError) === "provider_submit_uncertain";
     if (submissionUncertain && !window.confirm(localText(locale, "上次请求可能已计费。确认按当前配置重新提交？可能再次消耗额度。", "The previous request may have been billed. Submit with current settings? This may incur another charge."))) return;
+    // Match the progress page: restarting an explicitly stopped run acknowledges
+    // that its unfinished request may be submitted again.
+    const acknowledgeRestart = submissionUncertain || task?.error === "operation_cancelled";
     submitting.current = true;
     try {
       const response = canRetryOriginal && !hasStoredFile && task?.last_failed_job_id
@@ -234,7 +237,7 @@ function AddSubmissionsForm({ taskQuery, submittedInput }: { taskQuery: ReturnTy
             jobId: task.last_failed_job_id,
             recognitionProviderId,
             expectedWorkflowRevision: task.workflow_revision,
-            ...(submissionUncertain ? { acknowledgePossibleDuplicateCall: true } : {}),
+            ...(acknowledgeRestart ? { acknowledgePossibleDuplicateCall: true } : {}),
           })
         : await parseSubmissions.mutateAsync({
             taskId,
@@ -242,7 +245,7 @@ function AddSubmissionsForm({ taskQuery, submittedInput }: { taskQuery: ReturnTy
             storedFileId: draft.value.storedFileId,
             reuseRosterFromJobId: identityMode === "roster" ? draft.value.savedRosterJobId : null,
             expectedWorkflowRevision: task?.workflow_revision,
-            ...(submissionUncertain ? { acknowledgePossibleDuplicateCall: true } : {}),
+            ...(acknowledgeRestart ? { acknowledgePossibleDuplicateCall: true } : {}),
             identityMode,
             rosterFile: identityMode === "roster" ? rosterFile : null,
             recognitionProviderId,

@@ -16,7 +16,6 @@ const ACTIVE_TASK_STATUSES = new Set<TaskStatus>([
   "extracting_problems",
   "parsing_submissions",
   "grading",
-  "generating_analysis",
 ]);
 
 export function useTasks() {

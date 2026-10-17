@@ -164,7 +164,7 @@ describe("FrontierLiveDemoPage", () => {
     const task = { ...taskWithQuestions(), student_data: recognizedStudents() };
     const setup = { ...gradingSetup(), configured, grading_setup: configured ? { ...gradingSetup().suggested_setup!, teacher_notes: "Keep my saved settings" } : null };
     const grading = deferred<TaskStateSnapshot>();
-    vi.mocked(getTaskState).mockResolvedValueOnce(taskState("submissions_ready"))
+    vi.mocked(getTaskState).mockResolvedValueOnce(taskState(configured ? "grading_setup" : "submissions_ready"))
       .mockReturnValueOnce(grading.promise).mockResolvedValue(taskState("graded"));
     vi.mocked(getTask).mockResolvedValue(task);
     vi.mocked(getGradingSetup).mockResolvedValue(setup);
@@ -272,17 +272,19 @@ describe("FrontierLiveDemoPage", () => {
     expect(screen.getByText(/no exposed model key/i)).toBeInTheDocument();
   });
 
-  it("translates stopped-run steps without restarting or clearing the failure", async () => {
-    vi.mocked(getTaskState).mockResolvedValue({ ...taskState("error"), error: "operation_cancelled",
+  it("translates paused-run steps without restarting or presenting an error", async () => {
+    vi.mocked(getTaskState).mockResolvedValue({ ...taskState("grading_paused"), error: null,
       grading_job_id: "stopped-run", last_failed_job_id: "stopped-run", problem_count: 4, student_count: 4 });
     const user = userEvent.setup();
     renderLive("asg_demo123");
-    await screen.findByRole("button", { name: "Continue processing" });
+    expect(await screen.findByRole("link", { name: "Continue grading" })).toHaveAttribute("href", "/tasks/asg_demo123/grading/progress");
     await user.click(screen.getByRole("button", { name: "Change language" }));
-    expect(screen.getByText("运行 AI 批改").closest("li")).toHaveClass("border-danger/30");
+    expect(screen.getByText("运行 AI 批改").closest("li")).not.toHaveClass("border-danger/30");
     expect(screen.getByText("创建专属 Demo 任务")).toBeInTheDocument();
     expect(screen.queryByText("Create a dedicated demo task")).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "继续处理" })).toBeEnabled();
+    expect(screen.getByRole("link", { name: "继续批改" })).toBeInTheDocument();
+    expect(screen.getByText("批改暂停", { exact: true })).toBeInTheDocument();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
     expect(getTaskState).toHaveBeenCalledTimes(1);
     expect(startGrading).not.toHaveBeenCalled();
     expect(createTask).not.toHaveBeenCalled();
