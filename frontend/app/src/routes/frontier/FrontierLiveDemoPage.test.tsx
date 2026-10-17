@@ -151,6 +151,26 @@ describe("FrontierLiveDemoPage", () => {
     expect(screen.queryByText(/recognition_needs_review|recognition_low_confidence/)).not.toBeInTheDocument();
   });
 
+  it.each(["graded", "finalized", "problems_paused", "submissions_paused", "grading_paused"] as const)("uses the terminal status when activity has been cleared (%s)", async (status) => {
+    const stopped = status.endsWith("_paused");
+    for (const locale of ["zh-CN", "en-US"]) {
+      window.localStorage.setItem("smartai_locale", locale);
+      vi.mocked(getTaskState).mockResolvedValue({ ...taskState(status), problem_count: 0, progress: {
+        phase: stopped ? "paused" : "done", total_students: 4, total_questions: 4, completed_units: stopped ? 2 : 16,
+        active: [], messages: [], activity_latest: null,
+      } });
+      vi.mocked(getTaskResult).mockResolvedValue(gradedResult({ ...taskWithQuestions(), student_data: recognizedStudents() }));
+      const view = renderLive("asg_demo123");
+      const panel = (await screen.findByText(locale === "zh-CN" ? "后端进度" : "Backend progress")).parentElement!.parentElement!;
+      expect(within(panel).queryByText(stopped
+        ? (locale === "zh-CN" ? "本次处理已停止" : "This run has stopped")
+        : (locale === "zh-CN" ? "已完成" : "Completed"))).toBeVisible();
+      expect(panel).not.toHaveTextContent(/等待进度更新|Waiting for a progress update/);
+      expect(startGrading).not.toHaveBeenCalled();
+      view.unmount();
+    }
+  });
+
   it.each(["zh-CN", "en-US"])("keeps the submission review and precise recovery link after a low-confidence grading block (%s)", async (locale) => {
     window.localStorage.setItem("smartai_locale", locale);
     const zh = locale === "zh-CN";
