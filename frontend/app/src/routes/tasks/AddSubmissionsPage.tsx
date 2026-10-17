@@ -228,7 +228,7 @@ function AddSubmissionsForm({ taskQuery, submittedInput }: { taskQuery: ReturnTy
     if (submissionUncertain && !window.confirm(localText(locale, "上次请求可能已计费。确认按当前配置重新提交？可能再次消耗额度。", "The previous request may have been billed. Submit with current settings? This may incur another charge."))) return;
     // Match the progress page: restarting an explicitly stopped run acknowledges
     // that its unfinished request may be submitted again.
-    const acknowledgeRestart = submissionUncertain || task?.error === "operation_cancelled";
+    const acknowledgeRestart = submissionUncertain || task?.status === "submissions_paused" || task?.error === "operation_cancelled";
     submitting.current = true;
     try {
       const response = canRetryOriginal && !hasStoredFile && task?.last_failed_job_id

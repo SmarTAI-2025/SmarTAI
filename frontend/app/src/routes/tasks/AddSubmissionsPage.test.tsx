@@ -224,8 +224,10 @@ describe("AddSubmissionsPage OCR uploads", () => {
     expect(await screen.findByText("progress page")).toBeInTheDocument();
   });
 
-  it.each([false, true])("restarts a stopped run on the first click (restored input: %s)", async (restored) => {
-    taskState.data = { ...taskState.data, status: "error", error: "operation_cancelled",
+  it.each([
+    [false, false], [true, false], [false, true], [true, true],
+  ])("restarts a stopped run on the first click (restored input: %s, legacy: %s)", async (restored, legacy) => {
+    taskState.data = { ...taskState.data, status: legacy ? "error" : "submissions_paused", error: legacy ? "operation_cancelled" : null,
       workflow_revision: 2, last_failed_job_id: "stopped-job", pending_submission_file_name: "scan.pdf" };
     if (restored) inputState.input = { job_id: "stopped-job", stored_file_id: "saved-file", filename: "scan.pdf",
       available: true, identity_mode: "filename", recognition_provider_id: "provider-default" };
