@@ -3839,6 +3839,8 @@ def task_state(*, task_id: str, owner_id: str) -> dict:
                     workflow.active_job_id, owner_id=owner_id
                 )
                 progress = dict(operation.progress or {}) or None
+                if progress is not None:
+                    progress.setdefault("job_id", operation.id)
                 active_operation_status = operation.status
             except NotFound:
                 progress = None
@@ -3848,6 +3850,8 @@ def task_state(*, task_id: str, owner_id: str) -> dict:
             try:
                 operation = workflow_repository.get_operation(job_id, owner_id=owner_id)
                 progress = dict(operation.progress or {}) or None
+                if progress is not None:
+                    progress.setdefault("job_id", operation.id)
             except NotFound:
                 pass
     payload.update({
@@ -3864,7 +3868,19 @@ def task_state(*, task_id: str, owner_id: str) -> dict:
             payload["queue_reason"] = "user_busy" if owner_is_running(
                 session, owner_id, exclude_id=workflow.active_job_id,
             ) else "server_busy"
+    _project_recognition_progress(payload)
     return payload
+
+
+def _project_recognition_progress(payload):
+    progress = payload.get("progress")
+    if progress is not None and (payload.get("status") in {"extracting_problems", "parsing_submissions"}
+            or payload.get("active_operation") in {"question_preparation", "problem_extraction", "submission_recognition"}
+            or (isinstance(progress, dict) and isinstance(progress.get("job_id"), str) and progress["job_id"] in {
+                payload.get("extract_job_id"), payload.get("parse_job_id")
+            } - {None})):
+        from backend.progress.recognition_activity import public_progress
+        payload["progress"] = public_progress(progress, terminal=payload.get("status") == "error" or payload.get("active_operation_status") == "pending")
 
 
 async def async_task_state(*, task_id: str, owner_id: str) -> dict:
@@ -3915,6 +3931,7 @@ async def async_task_state(*, task_id: str, owner_id: str) -> dict:
             if payload.get("status") == "grading":
                 payload["active_job_id"] = grading_job_id
                 payload["active_operation"] = "grading"
+    _project_recognition_progress(payload)
     return payload
 
 

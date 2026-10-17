@@ -360,6 +360,7 @@ class ProgressEvent(BaseModel):
     level: Literal["info", "warn", "error"] = "info"
     message: str = Field(description="Human-readable message for frontend display")
     unit: Optional[ActiveUnit] = None
+    recognition: Optional[dict] = None
 
 
 class ModelWait(BaseModel):
@@ -406,6 +407,7 @@ class JobProgress(BaseModel):
     messages: List[ProgressEvent] = Field(default_factory=list, description="Ring buffer of last N events")
     error_detail: Optional[str] = None
     model_waits: List[ModelWait] = Field(default_factory=list)
+    recognition_requests: List[dict] = Field(default_factory=list)
 
 
 # ─── LLM provider config ─────────────────────────────────────────────────────

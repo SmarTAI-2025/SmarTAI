@@ -14,7 +14,7 @@ import { SmarTAIMascot } from "@/components/brand/SmarTAIMascot";
 import { StageProviderSelect } from "@/components/models/StageProviderSelect";
 import { NewTaskStepper } from "@/components/new-task/NewTaskStepper";
 import { TaskExecutionControls } from "@/components/tasks/TaskExecutionControls";
-import { executionProgressCopy } from "@/lib/executionProgressCopy";
+import { RecognitionActivity, RecognitionRequestStatus } from "@/components/tasks/RecognitionActivity";
 import { Button } from "@/components/ui/Button";
 import { RecoverableActionState } from "@/components/ui/RecoverableActionState";
 import { useTaskProgress } from "@/hooks/useTaskProgress";
@@ -22,7 +22,7 @@ import { useI18n } from "@/i18n/I18nProvider";
 import type { Locale, MessageKey } from "@/i18n/messages";
 import { cn } from "@/lib/cn";
 import { classifyRecoverableError } from "@/lib/taskActionGuards";
-import type { JobProgress, ProgressEvent, TaskStatus } from "@/types";
+import type { JobProgress, TaskStatus } from "@/types";
 
 const QUESTION_WORKSPACE_STATUSES = new Set<TaskStatus>([
   "problems_ready",
@@ -160,6 +160,7 @@ export function ProblemRecognitionProgressPage() {
               onChange={(id) => { setProviderChoice({ jobId: failedJobId, id }); setRetryFailure(null); }}
             />
           ) : null}
+          <RecognitionActivity progress={progressQuery.progress} locale={locale} incomplete />
           <QuestionGenerationFailureSummary
             progress={progressQuery.progress}
             locale={locale}
@@ -243,11 +244,12 @@ export function ProblemRecognitionProgressPage() {
       : candidateProgress
   );
   const queued = progressQuery.data?.active_operation_status === "pending";
+  const hasSavedProgress = (progress?.completed_steps ?? 0) > 0 || (progress?.completed_units ?? 0) > 0;
   const queuedLabel = locale === "zh-CN" ? "等待后台处理" : "Waiting for a worker";
-  const queuedDescription = locale === "zh-CN"
+  const queuedDescription = hasSavedProgress ? (locale === "zh-CN" ? "已完成进度已保留，正在等待后台继续处理。" : "Completed progress is saved; waiting for a worker to continue.") : locale === "zh-CN"
     ? "任务已保存，正在等待后台处理名额。识别尚未开始，无需重复提交。"
     : "Your task is saved and waiting for an available worker. Recognition has not started; no need to submit it again.";
-  const steps = getRecognitionSteps(progress).map((step) => queued ? { ...step, state: "pending" as const } : step);
+  const steps = getRecognitionSteps(progress).map((step) => queued && step.state !== "done" ? { ...step, state: "pending" as const } : step);
   const nestedStep = progress?.current_step && STAGE_LABEL_KEYS[progress.current_step]
     ? { code: progress.current_step, labelKey: STAGE_LABEL_KEYS[progress.current_step], state: "active" as const }
     : null;
@@ -257,14 +259,13 @@ export function ProblemRecognitionProgressPage() {
   const activeStageLabel = queued ? queuedLabel : activeStep
     ? getStageLabel(activeStep, locale, t)
     : t("problemProgressRecognizingStructure");
-  const recentEvents = [...(progress?.messages ?? [])].slice(-3).reverse();
   const hasDeterminateProgress = Boolean(
     progress &&
       typeof progress.total_steps === "number" &&
       progress.total_steps > 0 &&
       typeof progress.completed_steps === "number",
   );
-  const percent = queued || progress?.model_waits?.length ? null : hasDeterminateProgress ? progressQuery.percent : null;
+  const percent = queued && !hasSavedProgress ? null : hasDeterminateProgress ? progressQuery.percent : null;
   const generationMetrics = progress?.stage_metrics ?? {};
   const generationTotal = generationMetrics.solution_total_questions ?? 0;
   const generationCompleted = Math.min(
@@ -283,7 +284,7 @@ export function ProblemRecognitionProgressPage() {
 
   return (
     <ProgressPageFrame title={t("problemProgressTitle")}>
-      <TaskExecutionControls taskId={taskId} state={progressQuery.data} progress={progress}
+      <TaskExecutionControls showModelWaits={false} taskId={taskId} state={progressQuery.data} progress={progress}
         onChanged={() => Promise.all([taskQuery.refetch(), progressQuery.refetch()])} />
       <section
         className="flex min-h-[430px] w-full flex-col rounded-[10px] border bg-card px-5 py-7 sm:px-10 sm:py-10"
@@ -334,7 +335,7 @@ export function ProblemRecognitionProgressPage() {
                 ? `已完成 ${generationCompleted}/${generationTotal} 道大题`
                 : `${generationCompleted}/${generationTotal} major questions completed`}
             </p>
-            {activeQuestionLabels.length > 0 ? (
+            {!queued && activeQuestionLabels.length > 0 ? (
               <p className="mt-1 text-muted-foreground">
                 {locale === "zh-CN" ? "正在处理：" : "In progress: "}
                 {activeQuestionLabels.join(locale === "zh-CN" ? "、" : ", ")}
@@ -349,6 +350,8 @@ export function ProblemRecognitionProgressPage() {
           </div>
         ) : null}
 
+        {!queued && <RecognitionRequestStatus progress={progress} locale={locale} stale={progressQuery.isError} />}
+
         <div className="mt-8 grid min-h-0 flex-1 gap-6 md:grid-cols-[210px_minmax(0,1fr)] md:gap-16">
           <ol className="grid content-start gap-3" aria-label={t("problemProgressStepsLabel")}>
             {steps.map((step) => (
@@ -360,29 +363,7 @@ export function ProblemRecognitionProgressPage() {
             ))}
           </ol>
 
-          <div className="min-w-0 rounded-lg border bg-slate-50 px-5 py-4 dark:bg-slate-900/30">
-            <h3 className="text-sm font-semibold text-foreground">
-              {t("problemProgressLatestEvents")}
-            </h3>
-            {recentEvents.length > 0 ? (
-              <ol className="mt-3 grid gap-1.5">
-                {recentEvents.map((event, index) => (
-                  <li
-                    key={`${event.ts}:${event.message}:${index}`}
-                    className="grid min-w-0 grid-cols-[42px_minmax(0,1fr)] gap-2 text-xs leading-5 text-muted-foreground sm:text-sm"
-                  >
-                    <time dateTime={toDateTime(event.ts)}>{formatEventTime(event.ts, locale)}</time>
-                    <span className="min-w-0 break-words">{localizeEvent(event, t, locale, progress?.question_labels ?? {})}</span>
-                  </li>
-                ))}
-              </ol>
-            ) : (
-              <div className="mt-4 flex items-center gap-2 text-sm text-muted-foreground">
-                <Loader2 aria-hidden="true" className="h-4 w-4 animate-spin text-primary" />
-                <span>{queued ? queuedDescription : t("problemProgressWaitingForEvents")}</span>
-              </div>
-            )}
-          </div>
+          <div className="relative min-h-64 min-w-0 md:min-h-0"><RecognitionActivity progress={progress} locale={locale} fill /></div>
         </div>
       </section>
 
@@ -596,6 +577,8 @@ const STAGE_LABEL_KEYS: Record<string, MessageKey> = {
   committing_question_packages: "problemProgressStepCommitPackages",
   reading_sources: "problemProgressStepReadSources",
   reading_source: "problemProgressStepReadSources",
+  recognizing_structure: "problemProgressStepModelRecognition",
+  validating_questions: "problemProgressStepParseStructure",
   recognition_inspect: "problemProgressStepReadSources",
   recognition_document_batch: "problemProgressStepReadSources",
   recognition_document_complete: "problemProgressStepPrepareSource",
@@ -648,83 +631,5 @@ function getStageLabel(
   t: (key: MessageKey) => string,
 ) {
   if (step.labelKey) return t(step.labelKey);
-  const readableCode = step.code
-    .replaceAll("_", " ")
-    .replace(/\bocr\b/gi, "OCR")
-    .replace(/^\w/, (value) => value.toUpperCase());
-  return locale === "zh-CN" ? `SmarTAI 后台：${readableCode}` : readableCode;
-}
-
-function localizeEvent(
-  event: ProgressEvent,
-  t: (key: MessageKey) => string,
-  locale: Locale,
-  labels: Record<string, string>,
-): string {
-  const message = event.message.toLowerCase();
-  const executionMessage = executionProgressCopy(message, locale);
-  if (executionMessage) return executionMessage;
-  const generating = /^generating materials for major question (\S+)$/.exec(message);
-  if (generating) {
-    const label = labels[generating[1]] ?? generating[1];
-    return `${label} · ${locale === "zh-CN" ? "正在生成资料" : "generating materials"}`;
-  }
-  const generated = /^major question (\S+) generation (completed|failed|started)$/.exec(message);
-  if (generated) {
-    const label = labels[generated[1]] ?? generated[1];
-    const zh = locale === "zh-CN";
-    const status = generated[2] === "completed" ? (zh ? "资料已完成" : "materials ready")
-      : generated[2] === "failed" ? (zh ? "资料生成未完成" : "material generation did not finish")
-        : (zh ? "正在生成资料" : "generating materials");
-    return `${label} · ${status}`;
-  }
-  if (/^(provider|recognition|question)_[a-z_]+$/.test(message)) {
-    return classifyRecoverableError(message, { locale }).title;
-  }
-  if (message.startsWith("reading source ") || message.startsWith("reading pdf pages ")
-    || message === "inspecting source evidence" || message === "locating candidate source pages") return t("problemProgressStepReadSources");
-  if (message === "reading source evidence") return t("problemProgressStepOCR");
-  if (message === "checking recognition evidence" || message === "rechecking uncertain source evidence") return t("problemProgressStepNormalizeOCR");
-  if (message === "checking durable recognition progress" || message === "checking stored recognition evidence"
-    || message === "checking reusable recognition evidence") return t("problemProgressStepPrepareSource");
-  if (message === "saving recognition evidence" || /^read (all \d+|\d+\/\d+) requested pdf pages$/.test(message)) return t("problemProgressStepSaveResults");
-  if (message === "phase: extracting") return t("problemProgressEventExtracting");
-  if (message === "phase: parsing") return t("problemProgressEventQuestions");
-  if (message === "phase: done") return t("problemProgressEventReady");
-  if (message === "problem source prepared.") return t("problemProgressEventSourcePrepared");
-  if (message === "problem recognition started.") return t("problemProgressEventModelStarted");
-  if (message === "organizing recognized problem structure.") return t("problemProgressEventParsing");
-  if (message === "problem recognition completed.") return t("problemProgressEventDone");
-  if (message.includes("applying source mode")) return t("problemProgressEventSourcePrepared");
-  if (message.startsWith("calling ")) return t("problemProgressEventModelStarted");
-  if (message.includes("parsing json")) return t("problemProgressEventParsing");
-  if (message === "validated question and optional material sources") return t("problemProgressEventSourcesValidated");
-  if (message === "recognizing question structure") return t("problemProgressEventQuestions");
-  if (message === "matching uploaded answers, rubrics and programming tests") return t("problemProgressEventMaterials");
-  if (message === "generating complete answers for material not supplied by the teacher") return t("problemProgressEventSolutions");
-  if (message === "aligning answers and grading rubrics for review") return t("problemProgressEventRubrics");
-  if (message === "normalizing programming examples and hidden tests") return t("problemProgressEventTests");
-  if (message === "detecting only risks that need teacher attention") return t("problemProgressEventConflicts");
-  if (message === "committing prepared question packages") return t("problemProgressEventCommitting");
-  if (message === "question materials are ready for teacher review.") return t("problemProgressEventReady");
-  return event.message;
-}
-
-function formatEventTime(timestamp: number, locale: string): string {
-  const date = normalizeTimestamp(timestamp);
-  if (!date) return "—";
-  return new Intl.DateTimeFormat(locale, {
-    hour: "2-digit",
-    minute: "2-digit",
-    hour12: false,
-  }).format(date);
-}
-
-function toDateTime(timestamp: number): string | undefined {
-  return normalizeTimestamp(timestamp)?.toISOString();
-}
-
-function normalizeTimestamp(timestamp: number): Date | null {
-  if (!Number.isFinite(timestamp) || timestamp <= 0) return null;
-  return new Date(timestamp > 1_000_000_000_000 ? timestamp : timestamp * 1_000);
+  return locale === "zh-CN" ? "正在处理" : "Processing";
 }

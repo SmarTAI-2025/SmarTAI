@@ -410,18 +410,18 @@ class BaseProvider(ABC):
     @asynccontextmanager
     async def _call_capacity(self, messages: List[BaseMessage], *, response_timeout: float | None = None):
         from backend.services.execution_control import current_execution
-        from backend.progress.grading_activity import report_provider_state
+        from backend.progress.recognition_activity import report_provider_state
         await report_provider_state(self, "queued")
         control = current_execution()
-        if control is not None:
-            await control.check(self)
-        scheduler = get_scheduler()
         admitted = False
         # SDK timeouts bound individual network reads, not admission or an
         # upstream stream that keeps sending keep-alives. Bound this whole
         # attempt so one waiter cannot occupy a workflow worker indefinitely.
         deadline = asyncio.timeout(float(settings.llm_timeout))
         try:
+            if control is not None:
+                await control.check(self)
+            scheduler = get_scheduler()
             async with deadline:
                 async with scheduler.lease(
                     key=quota_key(self.config, endpoint_key(self.config)),
@@ -466,6 +466,10 @@ class BaseProvider(ABC):
                 # for an explicit retry instead of silently requeueing for minutes.
                 error.retryable = False
             raise error from exc
+
+        finally:
+            from backend.progress.recognition_activity import finish_provider_request
+            await finish_provider_request()
 
     def _record_duration(self, duration_ms: float) -> None:
         get_scheduler().record_success(
