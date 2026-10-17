@@ -194,10 +194,18 @@ def test_missing_ai_score_repair_still_requires_explicit_confirmation():
     assert grading_repository.get_run(seeded["run_id"], actor_id=seeded["owner_id"]).released_at is not None
 
 
-def test_soft_review_ai_score_is_publishable_and_exported_by_default():
+def test_expert_disagreement_is_exported_without_requiring_confirmation():
+    from backend.db.models import GradeResultRecord
+    from backend.db.session import session_scope
+    from backend.domain.grading_review import review_state
     from backend.services import task_facade
 
     seeded = _prepared_task()
+    with session_scope() as session:
+        row = session.get(GradeResultRecord, seeded["required_result_id"])
+        row.ai_confidence = .95
+        row.ai_expert_results = [{"score": 10}, {"score": 6}]
+        row.review_reasons = ["high_indecisiveness"]
     final = task_facade.generate_artifacts(
         task_id=seeded["task_id"],
         owner_id=seeded["owner_id"],
@@ -218,6 +226,7 @@ def test_soft_review_ai_score_is_publishable_and_exported_by_default():
     assert by_question["q-required"]["score"] == 6
     assert by_question["q-required"]["teacher_score"] is None
     assert by_question["q-required"]["review_status"] == "pending"
+    assert review_state(by_question["q-required"]) == (True, False)
 
     body, media_type, _filename = task_facade.artifact_bytes(
         task_id=seeded["task_id"],

@@ -284,7 +284,8 @@ export function correctionReviewBlocked(correction: Correction): boolean {
 
 /** One pending-review rule for the review queue, analysis, filters and charts. */
 export function correctionReviewAttention(correction: Correction): ReviewAttention {
-  return correctionReviewNextBlocked(correction) ? "blocking" : "none";
+  if (correctionReviewNextBlocked(correction)) return "blocking";
+  return !isCorrectionReviewConfirmed(correction) && hasExpertDisagreement(correction) ? "advisory" : "none";
 }
 
 /** A valid score can be confirmed even when continuing requires that confirmation. */
@@ -293,16 +294,24 @@ export function correctionReviewNextBlocked(correction: Correction): boolean {
     && confidenceRequiresReview(correction.confidence));
 }
 
-export function getExpertScoreSpread(correction: Correction): number {
-  const scores = correction.expert_results?.filter(expert => !expert.error_kind)
+function validExpertScores(correction: Correction): number[] {
+  return correction.expert_results?.filter(expert => !expert.error_kind)
     .map(expert => expert.score)
-    .filter((score): score is number => typeof score === "number" && Number.isFinite(score)) ?? [];
+    .filter((score): score is number => validReviewScore(score, correction.max_score)) ?? [];
+}
+
+export function getExpertScoreSpread(correction: Correction): number {
+  const scores = validExpertScores(correction);
   return scores.length ? Math.max(...scores) - Math.min(...scores) : 0;
 }
 
 export function hasExpertDisagreement(correction: Correction): boolean {
-  return correctionReviewReasonIds(correction).some(reason => reason === "high_indecisiveness" || reason === "score_spread_high")
-    || getExpertScoreSpread(correction) > Math.max(1, correction.max_score * 0.25);
+  const scores = validExpertScores(correction);
+  if (scores.length < 2) return false;
+  const mean = scores.reduce((sum, score) => sum + score, 0) / scores.length;
+  const variance = scores.reduce((sum, score) => sum + (score - mean) ** 2, 0) / scores.length;
+  // Match backend.domain.grading_review, including the exact 15% boundary.
+  return Math.sqrt(variance) / correction.max_score > 0.15 + Number.EPSILON;
 }
 
 export function reviewReasonLabel(reason: string, locale: Locale = "zh-CN") {

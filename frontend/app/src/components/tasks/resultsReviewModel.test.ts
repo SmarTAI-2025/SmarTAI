@@ -28,7 +28,7 @@ describe("grading review attention", () => {
     expect(correctionReviewAttention(correction({ score: Number.NaN }))).toBe("blocking");
   });
 
-  it("requires very low confidence confirmation while keeping ordinary disagreement out of the queue", () => {
+  it("requires very low confidence confirmation without treating legacy flags alone as disagreement", () => {
     expect(correctionReviewAttention(correction({ confidence: 0.2 }))).toBe("blocking");
     expect(correctionReviewBlocked(correction({ confidence: 0.2 }))).toBe(false);
     expect(correctionReviewNextBlocked(correction({ confidence: 0.2 }))).toBe(true);
@@ -42,7 +42,14 @@ describe("grading review attention", () => {
     const successful = { provider: "a", score: 9, max_score: 10, confidence: .9, comment: "", steps: [] };
     const zero = { ...successful, provider: "b", score: 0, confidence: 0 };
     expect(correctionReviewAttention(correction({ expert_results: [successful, { ...zero, error_kind: "parse_failed" }] }))).toBe("none");
-    expect(correctionReviewAttention(correction({ expert_results: [successful, zero] }))).toBe("none");
+    expect(correctionReviewAttention(correction({ expert_results: [successful, zero] }))).toBe("advisory");
+  });
+
+  it.each([2, 2.6, 3, 3.01, 4])("uses population standard deviation over 15% without blocking results (spread=%s)", spread => {
+    const value = correction({ expert_results: [10, 10 - spread].map(score => ({ provider: "expert", score, max_score: 10, confidence: .95, comment: "", steps: [] })) });
+    expect(correctionReviewAttention(value)).toBe(spread > 3 ? "advisory" : "none");
+    expect(correctionReviewNextBlocked(value)).toBe(false);
+    expect(correctionReviewAttention({ ...value, teacher_score: 8, review_status: "confirmed" })).toBe("none");
   });
 
   it("excludes optional confidence checks from required counts while retaining explicit confidence-query data", () => {

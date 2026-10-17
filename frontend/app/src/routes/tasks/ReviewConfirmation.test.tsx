@@ -70,6 +70,18 @@ beforeEach(async () => {
   HTMLElement.prototype.scrollIntoView = vi.fn();
 });
 describe("one-click grading review", () => {
+  it.each([false, true])("shows a 10-versus-6 review signal without requiring confirmation (detail=%s)", async detail => {
+    state.result.results = [{ student_id: "S1", corrections: [correction("Q1", {
+      review_status: "pending", expert_results: [10, 6].map(score => ({ provider: "expert", score, max_score: 10, confidence: .95, comment: "", steps: [] })),
+    })] }];
+    show(detail);
+    if (!detail) expect(within(screen.getByRole("region", { name: "Review queue" })).getByRole("link")).toHaveTextContent(/disagreement/i);
+    await userEvent.click(screen.getByRole("button", { name: "View Results & Analysis" }));
+    expect(screen.getByText("Current results page")).toBeInTheDocument();
+    expect(state.update).not.toHaveBeenCalled();
+    expect(state.bulk).not.toHaveBeenCalled();
+  });
+
   it.each([false, true])("requires very low confidence confirmation while leaving its valid score confirmable (detail=%s)", async detail => {
     state.result.results = [{ student_id: "S1", corrections: [correction("Q1", { confidence: 0.2499, review_status: "pending" })] }];
     show(detail);
