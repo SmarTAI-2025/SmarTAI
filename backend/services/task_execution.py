@@ -25,6 +25,11 @@ def continue_manual_grading(*, task_id: str, owner_id: str, job_id: str, expecte
                 or workflow.grading_job_id != job_id or run.status != "cancelled"
                 or run.error_message != "operation_cancelled"):
             raise VersionConflict("The stopped run changed.", code="workflow_revision_conflict")
+        # Older stopped runs have no stop-time matrix. Build only from their
+        # verified frozen inputs; unavailable old model outputs remain ungraded.
+        from backend.services.grading_checkpoints import persist_paused_results
+        persist_paused_results(session, run)
+        session.flush()
         from backend.db.grading_repository import _result_matrix_axes, GradeResultRecord
         revisions, questions = _result_matrix_axes(session, run)
         actual = {(row.submission_revision_id, row.question_id) for row in session.scalars(

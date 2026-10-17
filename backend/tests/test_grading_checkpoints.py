@@ -138,6 +138,22 @@ def test_changed_model_config_does_not_mix_old_partial_votes(case, monkeypatch):
     assert workflows.get_run_setup(resumed).input_manifest["reused_experts"] == []
 
 
+def test_old_stopped_run_without_saved_matrix_can_continue_manually(case):
+    from sqlalchemy import delete
+    from backend.db.models import GradeResultRecord
+    from backend.db.session import session_scope
+    run_id = start(case, "legacy-pause")["job_id"]
+    stop(case, run_id)
+    # Simulate the pre-checkpoint version: paused metadata, no persisted grades.
+    with session_scope() as session:
+        session.execute(delete(GradeResultRecord).where(GradeResultRecord.grading_run_id == run_id))
+    continue_manual_grading(task_id=case[0], owner_id=case[1], job_id=run_id,
+        expected_revision=workflows.get_live_workflow(case[0], owner_id=case[1]).workflow_revision)
+    rows = grades.list_results_for_run(run_id)
+    assert len(rows) == 2 and all(row.ai_score is None for row in rows)
+    assert task_facade.finalization(task_id=case[0], owner_id=case[1])["remaining_review_count"] == 2
+
+
 def test_live_stop_after_one_sample_survives_before_whole_question_completes(case, monkeypatch):
     flow = workflows.get_live_workflow(case[0], owner_id=case[1])
     config = {**flow.grading_setup, "multi_sample_n": 3, "aggregation_method": "weighted_average"}
