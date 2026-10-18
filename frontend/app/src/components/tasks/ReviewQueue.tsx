@@ -41,7 +41,7 @@ export function ReviewQueue({ items, locale, confirmation }: { items: ReviewQueu
 
 export function ReviewIssueNotes({ issues }: { issues: Array<{ label: string; severity: "blocking" | "advisory" }> }) {
   if (!issues.length) return null;
-  return <ul className="w-full space-y-1 text-[11px] leading-5" data-review-issue-notes>{issues.map(({ label, severity }, index) => {
+  return <ul className="flex flex-wrap gap-x-3 gap-y-1 text-[11px] leading-5" data-review-issue-notes>{issues.map(({ label, severity }, index) => {
     const Icon = severity === "blocking" ? AlertCircle : AlertTriangle;
     return <li key={`${index}:${label}`} className={cn("flex items-start gap-1.5", severity === "blocking" ? "text-red-700" : "text-amber-700")}><Icon aria-hidden="true" className="mt-1 h-3.5 w-3.5 shrink-0" /><span>{label}</span></li>;
   })}</ul>;
