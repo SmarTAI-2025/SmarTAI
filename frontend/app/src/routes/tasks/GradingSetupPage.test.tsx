@@ -27,6 +27,7 @@ const {
 describe("GradingSetupPage task-material picker", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.spyOn(window, "alert").mockImplementation(() => {});
     attachMaterial.mockResolvedValue({
       status: "already_done",
       task_id: "task-1",
@@ -59,6 +60,16 @@ describe("GradingSetupPage task-material picker", () => {
       isPending: false,
       mutateAsync: vi.fn(),
     });
+  });
+
+  it("explains the document limit without opening an upload or duplicating existing files", async () => {
+    (useKBDocs as unknown as ReturnType<typeof vi.fn>).mockReturnValue({ data: { docs: Array.from({ length: 20 }, (_, index) => ({ doc_id: `doc-${index}`, filename: `file-${index}.txt`, chunk_count: 1 })) }, isLoading: false, isSuccess: true });
+    const user = userEvent.setup();
+    render(<MemoryRouter><KnowledgeSection locale="zh-CN" taskId="task-1" value="all_task_docs" onChange={vi.fn()} /></MemoryRouter>);
+    await user.click(screen.getByRole("button", { name: "上传资料" }));
+    expect(window.alert).toHaveBeenCalledWith(expect.stringContaining("本任务最多选择 20 份资料"));
+    expect(screen.getByText(/以下资料已加入本任务，无需重复上传/)).toBeInTheDocument();
+    expect(attachMaterial).not.toHaveBeenCalled();
   });
 
   it("keeps the picker interactive and confirms a library selection", async () => {

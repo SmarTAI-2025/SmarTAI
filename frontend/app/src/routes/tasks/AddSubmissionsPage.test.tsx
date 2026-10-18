@@ -28,6 +28,7 @@ const taskState = vi.hoisted(() => ({
 }));
 
 const inputState = vi.hoisted(() => ({ input: null as unknown }));
+beforeEach(() => { vi.spyOn(window, "alert").mockImplementation(() => {}); });
 vi.mock("@/api/workflowInputs", () => ({ useWorkflowInput: () => ({ data: { input: inputState.input }, isError: false, isLoading: false }) }));
 vi.mock("@/api/hooks", () => ({
   useStageProviders: () => ({
@@ -128,7 +129,8 @@ describe("AddSubmissionsPage OCR uploads", () => {
     await waitFor(() => expect(screen.getByLabelText("作答识别模型")).toHaveValue("provider-default"));
     fireEvent.click(screen.getByRole("button", { name: "submissionUploadStart" }));
     expect(screen.getByRole("button", { name: "submissionUploadChoose" })).toHaveFocus();
-    expect(screen.getAllByRole("alert").some((item) => item.textContent?.includes("submissionUploadFileRequired"))).toBe(true);
+    expect(screen.getAllByRole("alert").some((item) => item.textContent?.includes("尚未选择作答文件"))).toBe(true);
+    expect(window.alert).toHaveBeenCalledWith(expect.stringContaining("尚未选择作答文件"));
     expect(mutateAsync).not.toHaveBeenCalled();
   });
   it("links a missing model directly to BYOK while retaining the task return path", async () => {
@@ -267,12 +269,29 @@ it("keeps unsubmitted local files through task navigation but clears after a nor
 
 describe("submitted input recovery", () => {
   beforeEach(async () => { inputState.input = null; await clearPageDrafts(); mutateAsync.mockReset(); retryMutateAsync.mockReset(); mutateAsync.mockResolvedValue({ status: "started" }); taskState.data = { ...taskState.data, status: "problems_ready", pending_submission_file_name: null, submission_file_name: null, last_failed_job_id: null, student_count: 0 }; });
+  it("requires reselection when the server says the failed job's original is unavailable", async () => {
+    taskState.data = { ...taskState.data, status: "error", pending_submission_file_name: "saved.zip", last_failed_job_id: "prior" };
+    inputState.input = { job_id: "prior", stored_file_id: null, filename: "saved.zip", available: false, identity_mode: "filename", roster_count: 0, recognition_provider_id: "provider-default" };
+    const { container } = renderPage();
+    await screen.findAllByText(/saved.zip.*请重新选择作答文件/);
+    expect(screen.queryByText(/原文件已保留/)).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "submissionUploadStart" }));
+    expect(window.alert).toHaveBeenCalledWith(expect.stringContaining("请重新选择作答文件"));
+    expect(mutateAsync).not.toHaveBeenCalled();
+    expect(retryMutateAsync).not.toHaveBeenCalled();
+    fireEvent.change(container.querySelector('input[type="file"]')!, { target: { files: [new File(["answer"], "saved.zip")] } });
+    fireEvent.click(screen.getByRole("button", { name: "submissionUploadStart" }));
+    await screen.findByText("progress page");
+    expect(mutateAsync).toHaveBeenCalledTimes(1);
+  });
   it("labels restored failed-job inputs as a full restart and applies edited identity options", async () => {
     taskState.data = { ...taskState.data, status: "error", pending_submission_file_name: "saved.zip", last_failed_job_id: "prior" };
     inputState.input = { job_id: "prior", stored_file_id: "saved-zip", filename: "saved.zip", available: true, identity_mode: "roster", roster_name: "saved-roster.csv", roster_count: 2, recognition_provider_id: "provider-default" };
     const { router } = renderPage();
     await screen.findByText("saved.zip");
     expect(screen.getByText("saved-roster.csv (2)")).toBeInTheDocument();
+    expect(screen.getByText(/可直接重试，无需重新上传/)).toBeInTheDocument();
+    expect(screen.getByText("名单已就绪，无需重新选择。")).toBeInTheDocument();
     expect(screen.getByRole("radio", { name: "submissionUploadIdentityRoster" })).toHaveAttribute("aria-checked", "true");
     expect(mutateAsync).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole("radio", { name: "submissionUploadIdentityManual" }));

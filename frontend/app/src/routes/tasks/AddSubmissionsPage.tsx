@@ -101,18 +101,28 @@ function AddSubmissionsForm({ taskQuery, submittedInput }: { taskQuery: ReturnTy
   );
   const isRecognitionRunning = task?.status === "parsing_submissions";
   const isWorkflowBusy = task?.status === "extracting_problems" || task?.status === "grading";
-  const hasStoredFile = Boolean(draft.value.storedFileId);
+  const originalUnavailable = submissionErrorCode(recognitionError) === "submission_retry_source_unavailable"
+    || task?.error === "submission_retry_source_unavailable";
+  const hasStoredFile = Boolean(draft.value.storedFileId) && !originalUnavailable;
   const hasSavedRoster = Boolean(draft.value.savedRosterJobId && draft.value.savedRosterCount);
   const canRetryOriginal = Boolean(
     (task?.status === "error" || task?.status === "submissions_paused")
       && task.last_failed_job_id
       && task.pending_submission_file_name
+      && !originalUnavailable
+      && submittedInput?.available !== false
       && !selectedFile,
   );
   const retryLabel = canRetryOriginal && !hasStoredFile
     ? task?.status === "submissions_paused" ? localText(locale, "继续识别", "Continue Recognition") : workflowRetryLabel(locale)
     : localText(locale, "重新识别全部作答", "Recognize All Submissions Again");
   const isPending = parseSubmissions.isPending || retryRecognition.isPending;
+  const missingSubmissionMessage = localText(locale,
+    draft.value.selectedFileName ? `“${draft.value.selectedFileName}” 当前没有可用文件，请重新选择作答文件。其他设置已保留。` : "尚未选择作答文件，请先选择文件。",
+    draft.value.selectedFileName ? `“${draft.value.selectedFileName}” is unavailable. Reselect the submission file; other settings are preserved.` : "No submission file is selected. Choose a file first.");
+  const missingRosterMessage = localText(locale,
+    draft.value.rosterFileName ? `“${draft.value.rosterFileName}” 当前没有可用名单，请重新选择名单文件。` : "尚未选择学生名单，请先选择名单文件。",
+    draft.value.rosterFileName ? `“${draft.value.rosterFileName}” is unavailable. Reselect the roster file.` : "No roster is selected. Choose a roster file first.");
   const visibleFileName = selectedFile?.name ?? (
     hasStoredFile ? draft.value.selectedFileName : canRetryOriginal ? task?.pending_submission_file_name ?? null : null
   );
@@ -140,9 +150,9 @@ function AddSubmissionsForm({ taskQuery, submittedInput }: { taskQuery: ReturnTy
           : !enabledExperts.some((expert) => expert.provider_id === recognitionProviderId)
             ? localText(locale, "需要先添加或选择一个已启用模型。", "Add or select an enabled model first.")
           : !selectedFile && !hasStoredFile && !canRetryOriginal
-            ? t("submissionUploadFileRequired")
+            ? missingSubmissionMessage
             : !canRetryOriginal && identityMode === "roster" && !rosterFile && !hasSavedRoster
-              ? t("submissionUploadRosterRequired")
+              ? missingRosterMessage
               : null;
 
   function selectSubmission(file: File | undefined) {
@@ -209,6 +219,7 @@ function AddSubmissionsForm({ taskQuery, submittedInput }: { taskQuery: ReturnTy
     }
     if (uploadDisabledReason) {
       setFormError(uploadDisabledReason);
+      window.alert(uploadDisabledReason);
       if (!recognitionProviderId) {
         setNeedsModel(true);
         window.requestAnimationFrame(() => focusUploadControl(byokLinkRef.current));
@@ -292,8 +303,8 @@ function AddSubmissionsForm({ taskQuery, submittedInput }: { taskQuery: ReturnTy
       <NewTaskStepper currentStep={3} />
       <div data-draft-width="900" className="mx-auto mt-[45px] w-full max-w-[900px]">
         {task?.submission_sources?.some(source => source.status === "failed" || source.status === "processing") ? <SubmissionSourceOutcomePanel sources={task.submission_sources} locale={locale} className="mb-6" /> : null}
-        {(!selectedFile && !hasStoredFile && draft.value.selectedFileName && !canRetryOriginal) || (!rosterFile && !hasSavedRoster && draft.value.rosterFileName && identityMode === "roster") ? <p role="alert" className="mb-4 text-sm text-warning">{localText(locale, "保存的文件暂时不可用，请重新选择。其他设置已保留。", "The saved file is unavailable. Reselect it; other settings are preserved.")}</p> : null}
-        {hasStoredFile ? <p role="status" className="mb-4 text-sm text-muted-foreground">{localText(locale, "已恢复原文件与设置，可直接重试。", "Your file and settings are restored. You can retry directly.")}</p> : null}
+        {!selectedFile && !hasStoredFile && draft.value.selectedFileName && !canRetryOriginal ? <p role="alert" className="mb-4 text-sm text-warning">{missingSubmissionMessage}</p> : null}
+        {hasStoredFile && !selectedFile ? <p role="status" className="mb-4 text-sm text-muted-foreground">{localText(locale, "已恢复原文件与设置，可直接重试，无需重新上传。", "Your file and settings are restored. Retry directly without uploading again.")}</p> : null}
         <div
           ref={submissionChooseRef}
           className={cn(
@@ -336,7 +347,7 @@ function AddSubmissionsForm({ taskQuery, submittedInput }: { taskQuery: ReturnTy
           </p>
           <p className="mt-2 text-[13px] leading-5 text-muted-foreground">
             {selectedFile
-              ? `${formatFileSize(selectedFile.size)} · ${t("submissionUploadOcrLimit")}`
+              ? `${formatFileSize(selectedFile.size)} · ${localText(locale, "文件已就绪，无需重新选择", "File ready; no need to reselect")} · ${t("submissionUploadOcrLimit")}`
               : canRetryOriginal || hasStoredFile
                 ? localText(locale, "原文件已保留，无需重新选择。", "The original file is saved. No need to select it again.")
               : t("submissionUploadFormats")}
@@ -350,7 +361,7 @@ function AddSubmissionsForm({ taskQuery, submittedInput }: { taskQuery: ReturnTy
             </div>
           ) : null}
         </div>
-        {missingUpload === "submission" ? <p id="submission-file-required" role="alert" className="mt-2 text-sm text-danger">{t("submissionUploadFileRequired")}</p> : null}
+        {missingUpload === "submission" ? <p id="submission-file-required" role="alert" className="mt-2 text-sm text-danger">{missingSubmissionMessage}</p> : null}
 
         <p className="mt-3 rounded-[8px] border border-blue-200 bg-blue-50/60 px-4 py-3 text-[12px] leading-5 text-blue-900 dark:border-blue-900 dark:bg-blue-950/20 dark:text-blue-100">
           {t("submissionUploadFileContract")}
@@ -433,12 +444,13 @@ function AddSubmissionsForm({ taskQuery, submittedInput }: { taskQuery: ReturnTy
                   className="inline-flex h-7 items-center rounded-[6px] border bg-card px-2.5 text-[12px] font-semibold text-foreground hover:bg-muted"
                   onClick={() => rosterInputRef.current?.click()}
                 >
-                  {rosterFile ? t("submissionUploadRosterReplace") : t("submissionUploadRosterChoose")}
+                  {rosterFile || hasSavedRoster ? t("submissionUploadRosterReplace") : t("submissionUploadRosterChoose")}
                 </button>
               </div>
             ) : null}
           </div>
-          {missingUpload === "roster" ? <p id="submission-roster-required" role="alert" className="mt-2 text-sm text-danger">{t("submissionUploadRosterRequired")}</p> : null}
+          {identityMode === "roster" && (rosterFile || hasSavedRoster) ? <p role="status" className="mt-2 text-xs text-muted-foreground">{localText(locale, "名单已就绪，无需重新选择。", "The roster is ready. No need to select it again.")}</p> : null}
+          {missingUpload === "roster" || (identityMode === "roster" && !rosterFile && !hasSavedRoster && draft.value.rosterFileName) ? <p id="submission-roster-required" role="alert" className="mt-2 text-sm text-danger">{missingRosterMessage}</p> : null}
         </section>
 
         <div className="mt-[31px] flex min-h-10 flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
@@ -456,6 +468,8 @@ function AddSubmissionsForm({ taskQuery, submittedInput }: { taskQuery: ReturnTy
                   </Link>
                 ) : null}
               </p>
+            ) : uploadDisabledReason ? (
+              <p id="submission-upload-action-message" className="text-muted-foreground">{uploadDisabledReason}</p>
             ) : hasExistingSubmissions ? (
               <p id="submission-upload-action-message" className="text-muted-foreground">
                 {t("submissionUploadExisting")} {" "}
@@ -463,16 +477,12 @@ function AddSubmissionsForm({ taskQuery, submittedInput }: { taskQuery: ReturnTy
                   {t("submissionUploadCreateSeparateTask")}
                 </Link>
               </p>
-            ) : uploadDisabledReason && uploadDisabledReason !== t("submissionUploadFileRequired") ? (
-              <p id="submission-upload-action-message" className="text-muted-foreground">
-                {uploadDisabledReason}
-              </p>
             ) : null}
           </div>
           <button
             type="button"
             className="inline-flex h-10 w-full shrink-0 items-center justify-center rounded-[8px] bg-primary px-4 text-[14px] font-semibold leading-[18px] text-primary-foreground outline-none transition hover:opacity-90 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50 sm:w-[180px]"
-            disabled={isPending || isWorkflowBusy}
+            disabled={isPending}
             title={uploadDisabledReason ?? undefined}
             aria-describedby={formError || hasExistingSubmissions || uploadDisabledReason ? "submission-upload-action-message" : undefined}
             onClick={() => void handleStart()}

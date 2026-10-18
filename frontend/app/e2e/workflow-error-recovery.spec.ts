@@ -62,6 +62,50 @@ test("mobile recovery actions stay visible and do not overflow", async ({ page }
   expect(calls).toHaveLength(0); expect(errors).toEqual([]);
 });
 
+for (const width of [1280, 390]) {
+  test(`upload guidance explains filename-only questions and accepts reselection (${width}px)`, async ({ page }) => {
+    await page.setViewportSize({ width, height: 844 });
+    const { calls, errors } = await fixture(page, "problems", "provider_request_rejected", true);
+    await page.route("**/question-preparation/input", route => route.fulfill({ json: { input: {
+      job_id: "problems-job", recognition_provider_id: "old", score_policy: { mode: "default_10" }, sources: [
+        { source_token: "old-source", role: "problem", source_kind: "library", filename: "saved.pdf", stored_file_id: null, library_material_id: "material-1", inline_text: "", structure_mode: "organized", extraction_hint: "", recognition_options: {}, enable_material_ocr: false, save_to_library: false, available: true },
+      ],
+    } } }));
+    await page.goto("/tasks/recovery-task/upload/problems");
+    await expect(page.getByText("资料库文件可直接使用，无需重新上传。")).toBeVisible();
+    await page.getByRole("button", { name: "上传新文件", exact: true }).click();
+    await expect(page.getByText("待重新选择：saved.pdf")).toBeVisible();
+    const start = page.getByRole("button", { name: "重新识别全部资料", exact: true });
+    await expect(start).toBeEnabled();
+    const dialog = page.waitForEvent("dialog");
+    await start.focus();
+    await page.keyboard.press("Enter");
+    expect((await dialog).message()).toContain("仅保留了文件名");
+    expect(calls).toHaveLength(0);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+    await page.screenshot({ path: `output/playwright/upload-guidance-${width}.png`, fullPage: true });
+    await page.getByLabel("选择文件", { exact: true }).setInputFiles({ name: "saved.pdf", mimeType: "application/pdf", buffer: Buffer.from("synthetic question") });
+    await expect(page.getByText("待重新选择：saved.pdf")).toHaveCount(0);
+    await start.click();
+    await expect.poll(() => calls.length).toBe(2);
+    expect(calls[0].body).toContain('filename="saved.pdf"');
+    expect(errors).toEqual([]);
+  });
+}
+
+test("upload guidance explains a missing supplemental material without starting work", async ({ page }) => {
+  const { calls, errors } = await fixture(page, "problems");
+  await page.route("**/tasks/recovery-task", route => route.fulfill({ json: { task_id: "recovery-task", name: "Synthetic import", status: "problems_ready", problem_count: 1, workflow_revision: 7 } }));
+  await page.goto("/tasks/recovery-task/questions/import");
+  const start = page.getByRole("button", { name: "开始导入并匹配到题目" });
+  await expect(start).toBeEnabled();
+  const dialog = page.waitForEvent("dialog");
+  await start.click();
+  expect((await dialog).message()).toBe("请选择课程资料或上传新文件。");
+  expect(calls).toHaveLength(0);
+  expect(errors).toEqual([]);
+});
+
 test("restored question inputs can start a new job only after manual continuation", async ({ page }) => {
   const { calls, errors } = await fixture(page, "problems", "provider_timeout", true);
   await page.goto("/tasks/recovery-task/problems/progress");
