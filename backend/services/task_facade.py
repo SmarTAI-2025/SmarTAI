@@ -803,6 +803,14 @@ def _workflow_grading_failure_code(workflow, run) -> str | None:
     """
     if run is None:
         return None
+    # Failed execution remains in the run for audit, but an explicit handoff
+    # makes its missing scores review work. Never infer this from "graded":
+    # ordinary partial failures also have that status and a null failure marker.
+    if (workflow.presentation_status == "grading_manual_review"
+            and workflow.grading_job_id == run.id and run.status == "partial_failed"
+            and not workflow.active_job_id and not workflow.last_failed_job_id
+            and not workflow.error_code):
+        return None
     # Normalized/legacy callers can create a grading run without a façade
     # pointer, so a null failure marker still allows the selected run's error.
     # A non-null marker naming another job is authoritative and must win.
@@ -2765,9 +2773,18 @@ def _merge_submission_retry_answers(result, saved, target_ids, questions):
             answer = old_answers[q_id]
         elif q_id in incoming:
             answer = incoming[q_id]
-            if (_answer_recognition_failures(answer.get("flag")) and not str(answer.get("content") or "").strip()
-                    and old_answers.get(q_id, {}).get("content")):
-                answer = {**answer, "content": old_answers[q_id]["content"]}
+            if _answer_recognition_failures(answer.get("flag")):
+                old_text = str(old_answers.get(q_id, {}).get("content") or "")
+                new_text = str(answer.get("content") or "")
+                # Failed attempts are evidence for manual review, not replacements.
+                # Keep distinct fragments in attempt order without inferring gaps;
+                # merging the same checkpoint again must not duplicate its text.
+                if old_text.strip():
+                    if not new_text.strip() or new_text in old_text:
+                        new_text = old_text
+                    elif old_text not in new_text:
+                        new_text = old_text + "\n\n" + new_text
+                    answer = {**answer, "content": new_text}
         else:
             # A second failure must retain partially recognized text as evidence.
             answer = dict(old_answers.get(q_id) or {"q_id": q_id, "content": ""})
@@ -4044,9 +4061,12 @@ def task_state(*, task_id: str, owner_id: str) -> dict:
         if job_id:
             try:
                 operation = workflow_repository.get_operation(job_id, owner_id=owner_id)
-                progress = dict(operation.progress or {}) or None
-                if progress is not None:
-                    progress.setdefault("job_id", operation.id)
+                # Manual recovery retains failed recognition for audit, not as
+                # the current task's progress after its failure marker is cleared.
+                if operation.status != "error" or workflow.last_failed_job_id == job_id:
+                    progress = dict(operation.progress or {}) or None
+                    if progress is not None:
+                        progress.setdefault("job_id", operation.id)
             except NotFound:
                 pass
     if progress and payload["status"] in {"problems_paused", "submissions_paused"}:

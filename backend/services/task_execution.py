@@ -36,7 +36,9 @@ def continue_manual_grading(*, task_id: str, owner_id: str, job_id: str, expecte
         if not questions or not revisions or actual != {(revision, question) for revision in revisions for question in questions}:
             raise ValidationError("Stopped results are incomplete.", code="grading_manual_review_unavailable")
         run.status, run.error_message = "partial_failed", None
-        workflow.presentation_status, workflow.error_code, workflow.last_failed_job_id = "graded", None, None
+        # Keep the explicit handoff distinct from an unhandled partial failure.
+        # The public task projection still exposes the existing graded stage.
+        workflow.presentation_status, workflow.error_code, workflow.last_failed_job_id = "grading_manual_review", None, None
         workflow.workflow_revision += 1
         workflow.updated_at = time.time()
         return {"status": "manual_review", "job_id": job_id}

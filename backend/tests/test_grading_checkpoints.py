@@ -221,19 +221,61 @@ def test_paused_valid_scores_release_without_teacher_confirmation(case, value, s
     assert grades.release(run_id, teacher_id=case[1]).released_at is not None
 
 
-@pytest.mark.parametrize("status", ["failed", "partial_failed"])
-def test_failed_grading_can_explicitly_continue_manually_without_model(case, status):
+@pytest.mark.parametrize("status", ["cancelled", "failed", "partial_failed"])
+def test_failed_grading_manual_handoff_survives_task_reads_and_teacher_edit(case, status):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from backend.api import tasks
     from backend.db.models import GradingRunRecord
     from backend.db.session import session_scope
+    app = FastAPI()
+    app.include_router(tasks.router)
+    app.dependency_overrides[tasks.require_teacher] = lambda: SimpleNamespace(id=case[1])
+    client = TestClient(app)
     run_id = start(case, "failed-manual")["job_id"]
+    if status == "partial_failed":
+        checkpoints, _, revisions, setup = prepare(case, run_id)
+        provider = setup.setup["selected_provider_ids"][0]
+        checkpoints.save_expert(revisions[0][1], "q1", provider, 0,
+            ExpertResult(provider=provider, provider_id=provider, score=8, confidence=.9, comment="Saved"))
     stop(case, run_id)
-    with session_scope() as session:
-        row = session.get(GradingRunRecord, run_id)
-        row.status, row.error_message = status, "provider_unavailable"
-    continue_manual_grading(task_id=case[0], owner_id=case[1], job_id=run_id,
-        expected_revision=workflows.get_live_workflow(case[0], owner_id=case[1]).workflow_revision)
-    assert task_facade.finalization(task_id=case[0], owner_id=case[1])["remaining_review_count"] == 2
-
+    if status != "cancelled":
+        with session_scope() as session:
+            row = session.get(GradingRunRecord, run_id)
+            row.status, row.error_message = status, "provider_unavailable"
+            flow = session.get(workflows.AssignmentWorkflowRecord, case[0])
+            # Match terminal worker projection, including partial_failed's null marker.
+            flow.presentation_status = "error" if status == "failed" else "graded"
+            flow.last_failed_job_id = run_id if status == "failed" else None
+            flow.error_code = None
+    url = f"/tasks/{case[0]}"
+    before = client.get(url).json()
+    assert before["status"] == ("grading_paused" if status == "cancelled" else "error")
+    response = client.post(url + "/continue", json={"job_id": run_id, "manual": True,
+        "expected_workflow_revision": before["workflow_revision"]})
+    assert response.status_code == 200 and response.json()["status"] == "manual_review"
+    remaining = 1 if status == "partial_failed" else 2
+    for _ in range(2):  # Fresh requests / polling must not resurrect the old failure.
+        for data in (client.get(url).json(), client.get(url + "/state").json(),
+                     client.get("/tasks/").json()[case[0]]):
+            assert data["status"] == "graded", data
+            assert data["error"] is None and data["last_failed_job_id"] is None
+        assert client.get(url + "/finalization").json()["remaining_review_count"] == remaining
+    results = client.get(url + "/result").json()["results"]
+    assert len(results[0]["corrections"]) == 2
+    student = results[0]["student_id"]
+    for q_id in (["q2"] if status == "partial_failed" else ["q1", "q2"]):
+        current = client.get(url).json()
+        edited = client.put(url + f"/reviews/{student}/{q_id}", json={
+            "teacher_score": 0, "teacher_comment": "Manually checked", "confirm": True,
+            "expected_workflow_revision": current["workflow_revision"]})
+        assert edited.status_code == 200, edited.text
+        assert client.get(url).json()["status"] == "graded"
+    assert client.get(url + "/finalization").json()["remaining_review_count"] == 0
+    # A new run must not inherit the earlier manual handoff and hide its failure.
+    next_run = start(case, "new-failure-after-manual")["job_id"]
+    stop(case, next_run)
+    assert client.get(url).json()["status"] == "grading_paused"
 
 @pytest.mark.parametrize("replacement", [None, 0, 7])
 def test_old_release_api_cannot_bypass_missing_score_confirmation(replacement):
