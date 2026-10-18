@@ -42,7 +42,9 @@ for (const stage of ["questions", "submissions", "grading"] as const) {
     await page.goto(initial);
     const target = page.locator('[data-question-id="q2"]');
     for (const [iteration, control] of (["back", "escape", "link", "button", "button", "link"] as const).entries()) {
-      const confirm = stage === "questions" && iteration === 0
+      const confirm = stage === "submissions"
+        ? page.getByRole("button", { name: "进入批改设置", exact: true })
+        : stage === "questions" && iteration === 0
         ? target.getByRole("button", { name: /待确认/ })
         : page.getByRole("button", { name: "全部确认", exact: true });
       await confirm.scrollIntoViewIfNeeded();
