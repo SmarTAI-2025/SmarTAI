@@ -316,6 +316,52 @@ async def _model(provider, messages, schema):
     return schema.model_validate_json(raw)
 
 
+def _current_exact_name_evidence(ref: Reference, question: str) -> bool:
+    """Accept a bounded, affirmative equality predicate for this name only.
+
+    This validates proof for an exact override, not general natural-language intent.
+    Unsupported/negated wording and repeated-name conditions require clarification;
+    history may ground a name literal but cannot authorize a new exact override.
+    """
+    name, evidence, current = normalized(ref.text), normalized(ref.exact_match_text), normalized(question)
+    if not name or not evidence or current.count(evidence) != 1:
+        return False
+    literal = re.escape(name)
+    # ASCII word boundaries avoid counting e.g. "Li" inside "list", while allowing
+    # a Latin/digit name directly after a Chinese predicate such as 姓名等于123.
+    mention = (r"(?<![a-z0-9_])" if name[0].isascii() and name[0].isalnum() else "") + literal
+    mention += r"(?![a-z0-9_])" if name[-1].isascii() and name[-1].isalnum() else ""
+    if len(re.findall(mention, current)) != 1:
+        return False  # Cannot bind an override across two conditions on the same name.
+    value = "(?:" + "|".join([literal, *(re.escape(left) + literal + re.escape(right)
+        for left, right in [('"', '"'), ("'", "'"), ('“', '”'), ('‘', '’'), ('「', '」')])]) + ")"
+    predicate = (r"(?:(?:full\s+)?name\s*(?:(?:(?:is|must\s+be)\s+exactly|(?:exactly\s+)?equals?)\s+|={1,2}\s*)"
+        r"|(?:姓名|名字|全名)\s*(?:必须\s*)?(?:(?:恰好|完全|精确)\s*(?:等于|是|为)|等于|={1,2})\s*)" + value)
+    match = re.search(predicate, evidence)
+    if match is None:
+        return False
+    start = current.index(evidence) + match.start()
+    end = current.index(evidence) + match.end()
+    boundary = r"[;,，；。!?！？]|\.(?=\s|$)|\b(?:and|or)\b|同时|并且"
+    leading, trailing = re.split(boundary, current[:start]), re.split(boundary, current[end:])
+    before, after = leading[-1].strip(), trailing[0].strip()
+    action = r"(?:(?:please\s+)?(?:show|list|find|select|include|exclude|except|chart|plot)\b|(?:请)?(?:显示|列出|筛选|查找|查询|排除|表格|图表))"
+    # Do not discard surrounding cancellation/history clauses at a conjunction.
+    # Independent commands are supported; unresolved compound instructions clarify.
+    if any(part.strip() and not re.match(action, part.strip()) for part in [*leading[:-1], *trailing[1:]]):
+        return False
+    if len(leading) > 1 and not re.match(action, before):
+        return False
+    # Validate the surrounding clause too: a quoted, cancelled or negated predicate,
+    # a surname predicate, or a truncated full name is not affirmative evidence.
+    commands = (r"(?:(?:please|show|list|find|select|include|exclude|except|only|the|students?|whose|with|"
+        r"chart|plot|scores?|grades?|for|of)\b\s*|(?:请|只|仅|显示|列出|筛选|查找|查询|表格|图表|排除|学生|同学)\s*)*")
+    if not re.fullmatch(commands, before) or not re.fullmatch(r"(?:的(?:学生|同学|成绩(?:图)?|得分|图表))?", after):
+        return False
+    excluded = re.search(r"\b(?:exclude|except)\b|排除", before) is not None
+    return excluded == (ref.role == "exclude")
+
+
 async def ask(*, task_id: str | None, owner_id: str, question: str, surface: str,
               provider, context_student_id: str | None = None, history: list[str] | None = None,
               snapshot: Snapshot | None = None) -> dict:
@@ -352,9 +398,8 @@ async def ask(*, task_id: str | None, owner_id: str, question: str, surface: str
             # Apply the existing name contract inside sentences too. An exact
             # single-fragment match needs explicit wording, not a model's default.
             if ref.exact_match_text is not None:
-                evidence = normalized(ref.exact_match_text)
-                if not evidence or not any(evidence in text for text in original_texts):
-                    return _clarify("精确姓名条件缺少原文依据，请重试。 / Exact-name condition is not grounded in the request; retry.")
+                if not _current_exact_name_evidence(ref, question):
+                    return _clarify("无法确认当前姓名的精确匹配条件，请明确姓名是否必须完全相等。 / Cannot verify this name's exact-match condition in the current request; clarify whether the full name must be equal.")
                 ref.operator = "exact"
             else:
                 ref.operator = "contains" if len(normalized(ref.text).split()) == 1 else "exact"

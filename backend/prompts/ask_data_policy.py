@@ -23,7 +23,10 @@ Reference fields and operators:
   For an explicitly exact full-name predicate (e.g. '姓名必须恰好等于Alex' or
   'name is exactly Alex'), copy that wording into exact_match_text; otherwise leave
   exact_match_text=null. Do not invent exactness from 'only', quotation marks, or a
-  name alone. Preserve explicit contains/prefix/suffix/pattern and student-ID operators.
+  name alone. Evidence must be an affirmative equality predicate for THIS name in
+  the CURRENT request, not another name/condition or a previous question. Ambiguous
+  exact evidence requires clarification before querying. Preserve explicit
+  contains/prefix/suffix/pattern and student-ID operators.
   The query planner must use the resolved reference sets/operators; do not add a
   second exact-name SQL predicate for a reference resolved with contains.
   IDs are strings; preserve leading zeroes. A complete ID uses exact; an explicitly partial ID can use contains/prefix/suffix.
