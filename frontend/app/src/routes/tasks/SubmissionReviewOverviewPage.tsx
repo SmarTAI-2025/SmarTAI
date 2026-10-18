@@ -378,11 +378,11 @@ function SubmissionMatrix({
         <thead className="sticky top-0 z-20 bg-slate-100/95 text-[12px] font-semibold text-muted-foreground backdrop-blur-sm dark:bg-slate-800/95">
           <tr className="h-[42px] border-b">
             <SortableTableHead
-              className="sticky left-0 z-30 whitespace-nowrap bg-slate-100/95 px-3 dark:bg-slate-800/95"
+              className="sm:sticky left-0 z-30 whitespace-nowrap bg-slate-100/95 px-3 dark:bg-slate-800/95"
               style={{ width: identityLayout.studentIdWidth, minWidth: identityLayout.studentIdWidth, maxWidth: identityLayout.studentIdWidth }}
              direction={directionFor(columnSort, "id")} onSort={() => onSort("id")}>{studentIdLabel}</SortableTableHead>
             <SortableTableHead
-              className="sticky z-30 whitespace-nowrap bg-slate-100/95 px-3 dark:bg-slate-800/95"
+              className="sm:sticky z-30 whitespace-nowrap bg-slate-100/95 px-3 dark:bg-slate-800/95"
               style={{ left: identityLayout.studentIdWidth, width: identityLayout.studentNameWidth, minWidth: identityLayout.studentNameWidth, maxWidth: identityLayout.studentNameWidth }}
              direction={directionFor(columnSort, "name")} onSort={() => onSort("name")}>{studentNameLabel}</SortableTableHead>
             {questions.map((question) => (
@@ -403,7 +403,7 @@ function SubmissionMatrix({
             return (
               <tr key={student.stu_id} className="h-[52px] bg-card transition-colors hover:bg-muted/25">
                 <td
-                  className="sticky left-0 z-10 whitespace-nowrap bg-card px-3 font-semibold text-foreground"
+                  className="sm:sticky left-0 z-10 whitespace-nowrap bg-card px-3 font-semibold text-foreground"
                   style={{ width: identityLayout.studentIdWidth, minWidth: identityLayout.studentIdWidth, maxWidth: identityLayout.studentIdWidth }}
                 >
                   <Link
@@ -418,7 +418,7 @@ function SubmissionMatrix({
                   </Link>
                 </td>
                 <td
-                  className="sticky z-10 whitespace-nowrap bg-card px-3 text-muted-foreground"
+                  className="sm:sticky z-10 whitespace-nowrap bg-card px-3 text-muted-foreground"
                   style={{ left: identityLayout.studentIdWidth, width: identityLayout.studentNameWidth, minWidth: identityLayout.studentNameWidth, maxWidth: identityLayout.studentNameWidth }}
                   title={student.stu_name || student.stu_id}
                 >
