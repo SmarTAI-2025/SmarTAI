@@ -50,7 +50,8 @@ export function UnsavedChangesDialog({
       : null;
     const previousOverflow = document.body.style.overflow;
     document.body.style.overflow = "hidden";
-    const frame = window.requestAnimationFrame(() => stayButtonRef.current?.focus());
+    // Moving focus into or out of the modal must not scroll the background page.
+    const frame = window.requestAnimationFrame(() => stayButtonRef.current?.focus({ preventScroll: true }));
 
     function handleKeyDown(event: KeyboardEvent) {
       if (event.key === "Escape") {
@@ -84,7 +85,7 @@ export function UnsavedChangesDialog({
       window.cancelAnimationFrame(frame);
       document.body.style.overflow = previousOverflow;
       document.removeEventListener("keydown", handleKeyDown);
-      if (previouslyFocused?.isConnected) previouslyFocused.focus();
+      if (previouslyFocused?.isConnected) previouslyFocused.focus({ preventScroll: true });
     };
   }, []);
 

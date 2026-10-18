@@ -99,7 +99,8 @@ function QuestionPreparationDetailPageForm() {
     if (!filtered.length) return;
     const target = filtered.find((problem) => problem.q_id === questionId) ?? filtered[0];
     setActiveQuestionId(target.q_id);
-    const pathKey = `${location.pathname}${location.hash}`;
+    // Repeat issue navigation must reposition even when its URL is unchanged.
+    const pathKey = `${location.key}:${location.pathname}${location.hash}`;
     if (positionedPathRef.current === pathKey) return;
     let secondFrame = 0;
     const firstFrame = window.requestAnimationFrame(() => {
@@ -114,7 +115,7 @@ function QuestionPreparationDetailPageForm() {
       window.cancelAnimationFrame(firstFrame);
       if (secondFrame) window.cancelAnimationFrame(secondFrame);
     };
-  }, [filtered, location.hash, location.pathname, questionId]);
+  }, [filtered, location.key, location.hash, location.pathname, questionId]);
 
   useEffect(() => {
     if (!filtered.length) return;
@@ -229,8 +230,6 @@ function QuestionPreparationDetailPageForm() {
     }
     if (await confirm(selected)) {
       toast.success(tx(locale, "题目资料已确认。", "Question materials confirmed."));
-    } else {
-      window.scrollTo({ top: 0, left: 0, behavior: "auto" });
     }
   }
 
