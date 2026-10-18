@@ -43,8 +43,8 @@ function ManualReviewAction({ taskId, task, jobId, failedStage }: { taskId: stri
     try {
       let href: string;
       if (failedStage === "questions") {
-        const result = await manuallyCompleteQuestionPreparation({ taskId, jobId, expectedWorkflowRevision: task.workflow_revision });
-        href = result.first_question_id ? `/tasks/${taskId}/questions` : `/tasks/${taskId}/questions?manualJob=${encodeURIComponent(jobId)}`;
+        await manuallyCompleteQuestionPreparation({ taskId, jobId, expectedWorkflowRevision: task.workflow_revision });
+        href = `/tasks/${taskId}/questions`;
       } else if (failedStage === "submissions") {
         await manuallyCompleteSubmissionRecognition({ taskId, jobId, expectedWorkflowRevision: task.workflow_revision });
         href = `/tasks/${taskId}/submissions`;

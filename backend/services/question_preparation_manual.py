@@ -6,7 +6,7 @@ from backend.agents.question_preparation_agent import (
     _issue, _issue_field, _validate_major_question_candidates,
     requested_major_question_materials,
 )
-from backend.domain.errors import InvalidTransition, ValidationError
+from backend.domain.errors import InvalidTransition
 from backend.models import QuestionScorePolicy
 from backend.services.question_preparation_artifacts import (
     QUESTIONS_EXTRACTED_STAGE, UPLOADED_MATERIALS_ALIGNED_STAGE, read_base_preparation_artifact,
@@ -93,28 +93,14 @@ def unavailable():
                             code="question_preparation_manual_unavailable")
 
 
-def validate_manual_source_questions(operation, questions, completed_sources):
-    """Only teacher-authored questions may replace a source with no verified list."""
-    from backend.services.question_structure import build_major_question_structure, validate_rubric_points, QuestionRubricValidationError
-    from backend.services.workflow_inputs import question_inputs
-    saved = question_inputs(task_id=operation.assignment_id, owner_id=operation.owner_id)["input"]
-    sources = saved["sources"] if saved and saved["job_id"] == operation.id else []
-    if not sources or set(completed_sources) != {source["source_token"] for source in sources}:
-        raise ValidationError("Review every source before continuing.", code="question_sources_pending")
+def blank_manual_question_packages(operation, count):
+    """Create editable matrix rows only; no invented recognized content."""
     packages = {}
-    for index, question in enumerate(questions):
-        raw = question.model_dump()
-        q_id = raw["q_id"].strip()
-        if not q_id or q_id in packages or any(not raw[field].strip() for field in ("stem", "criterion")):
-            raise ValidationError("Each question needs a unique ID, stem and rubric.", code="question_review_blocked")
-        raw.update(q_id=q_id, review_status="needs_review", max_score_source="teacher_edited")
-        structure = build_major_question_structure(raw, major_order=index, structure_source="deterministic", review_status="needs_review")
-        try:
-            validate_rubric_points(raw["criterion"], raw["max_score"], structure)
-        except QuestionRubricValidationError:
-            raise ValidationError("Rubric points must match the maximum score.", code="question_review_blocked") from None
+    for index in range(count):
+        q_id = f"manual-{index + 1}"
         marker = _issue(q_id, "source", "manual_completion_required", "warning", [])
         marker["details"] = {"required_fields": ["stem", "criterion"], "reason": operation.error_code}
-        raw["preparation_issues"] = [marker]
-        packages[q_id] = raw
+        packages[q_id] = dict(q_id=q_id, number=str(index + 1), type="short", stem="",
+            criterion="", reference_answer="", max_score=10, review_status="needs_review",
+            preparation_issues=[marker])
     return packages

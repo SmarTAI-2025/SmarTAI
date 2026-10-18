@@ -122,11 +122,9 @@ export function ProblemRecognitionProgressPage() {
       setOpeningManual(true);
       setRetryFailure(null);
       try {
-        const result = await manualPreparation.mutateAsync({ taskId, jobId: failedJobId,
+        await manualPreparation.mutateAsync({ taskId, jobId: failedJobId,
           expectedWorkflowRevision: taskState.workflow_revision });
-        navigate(result.first_question_id
-          ? `/tasks/${taskId}/questions`
-          : `/tasks/${taskId}/questions?manualJob=${encodeURIComponent(failedJobId)}`, { replace: true });
+        navigate(`/tasks/${taskId}/questions`, { replace: true });
       } catch (error) { setRetryFailure(error); setOpeningManual(false); }
     };
     const submissionUncertain = taskState?.error === "provider_submit_uncertain" || getAPIErrorCode(retryFailure) === "provider_submit_uncertain";

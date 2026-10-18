@@ -5,7 +5,7 @@ import { SortableTableHead, useColumnSort, sortColumnRows, directionFor, type Co
 import { AlertCircle, CheckCircle2, ChevronRight, RotateCcw } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, Navigate, useNavigate, useParams, useSearchParams } from "react-router-dom";
-import { useTask, useUpdateStudentAnswer } from "@/api/hooks/tasks";
+import { useTask, useUpdateStudentAnswer, useManuallyCompleteSubmissionRecognition } from "@/api/hooks/tasks";
 import { getAPIErrorCode } from "@/api/client";
 import { confirmSubmissionBatch } from "@/lib/submissionReviewBatch";
 import { answerNeedsConfirmation, answerReviewAttention, answerReviewLabels } from "@/lib/submissionReview";
@@ -68,6 +68,9 @@ export function SubmissionReviewOverviewPage() {
   const taskQuery = useTask(taskId, { refetchOnMount: "always" });
   const readingCompletion = taskQuery.isFetching && !hasTaskReachedStep(taskQuery.data, 4);
   const answerMutation = useUpdateStudentAnswer();
+  const manualMutation = useManuallyCompleteSubmissionRecognition();
+  const [studentCount, setStudentCount] = useState("");
+  const [countError, setCountError] = useState<string | null>(null);
   const [blocked, setBlocked] = useState<ReviewBlocker[]>([]);
   const batchLock = useRef(false);
   const [batchProgress, setBatchProgress] = useState<{ completed: number; total: number } | null>(null);
@@ -145,6 +148,20 @@ export function SubmissionReviewOverviewPage() {
     ? buildSubmissionQueueItems(selection.students, selection.questions, taskId, returnSearch, locale, taskQuery.data?.submission_sources)
     : [];
   const pendingReviews = advisoryCandidates.filter(({ student, answer }) => queueItems.some(item => item.key === `${student.stu_id}:${answer.q_id}` && item.severity === "advisory"));
+
+  async function createStudentRows() {
+    if (!taskId || !taskQuery.data?.parse_job_id || manualMutation.isPending) return;
+    const count = Number(studentCount);
+    if (!Number.isInteger(count) || count < 1 || count > 500) return;
+    setCountError(null);
+    try {
+      await manualMutation.mutateAsync({ taskId, jobId: taskQuery.data.parse_job_id,
+        expectedWorkflowRevision: taskQuery.data.workflow_revision, studentCount: count });
+      await taskQuery.refetch();
+    } catch {
+      setCountError(locale === "zh-CN" ? "建立学生行失败，请刷新核对任务后重试。" : "Could not create student rows. Refresh the task and retry.");
+    }
+  }
 
   async function confirmAll() {
     if (!taskId || !taskQuery.data || batchLock.current) return;
@@ -272,6 +289,17 @@ export function SubmissionReviewOverviewPage() {
             <section className="overflow-hidden rounded-[10px] border bg-card">
               <MatrixState title={t("submissionReviewTaskMissing")} />
             </section>
+          ) : students.length === 0 && taskQuery.data?.manual_student_count_required ? (
+            <form className="rounded-[10px] border bg-card p-5" onSubmit={(event) => { event.preventDefault(); void createStudentRows(); }}>
+              <p className="text-sm text-muted-foreground">{locale === "zh-CN" ? "尚未确定学生数量。填写人数后，将在此矩阵建立空白行；点击学生进入原作答详情填写姓名、学号和作答。" : "The student count is unknown. Enter it to create rows in this matrix, then open each student's details to enter their name, ID and answers."}</p>
+              <div className="mt-4 flex flex-wrap items-end gap-3">
+                <label className="grid gap-2 text-sm">{locale === "zh-CN" ? "学生人数" : "Number of students"}
+                  <input id="student-count" type="number" min={1} max={500} step={1} required value={studentCount} onChange={(event) => setStudentCount(event.target.value)} disabled={manualMutation.isPending} className="h-10 w-36 rounded-md border bg-background px-3" />
+                </label>
+                <button type="submit" disabled={manualMutation.isPending || !Number.isInteger(Number(studentCount)) || Number(studentCount) < 1 || Number(studentCount) > 500} className="h-10 rounded-md bg-primary px-4 text-sm font-semibold text-primary-foreground disabled:opacity-50">{manualMutation.isPending ? (locale === "zh-CN" ? "正在建立…" : "Creating…") : (locale === "zh-CN" ? "建立学生行" : "Create student rows")}</button>
+              </div>
+              {countError ? <p role="alert" className="mt-3 text-sm text-danger">{countError}</p> : null}
+            </form>
           ) : students.length === 0 || questions.length === 0 ? (
             <section className="overflow-hidden rounded-[10px] border bg-card">
               <MatrixState

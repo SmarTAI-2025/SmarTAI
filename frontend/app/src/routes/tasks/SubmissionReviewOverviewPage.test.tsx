@@ -7,6 +7,7 @@ import { SubmissionReviewOverviewPage } from "./SubmissionReviewOverviewPage";
 vi.mock("@/api/hooks/tasks", () => ({
   useTask: () => ({ isLoading: true, isSuccess: false }),
   useUpdateStudentIdentity: () => ({ mutateAsync: vi.fn() }),
+  useManuallyCompleteSubmissionRecognition: () => ({ mutateAsync: vi.fn(), isPending: false }),
   useUpdateStudentAnswer: () => ({ mutateAsync: vi.fn() }),
 }));
 

@@ -626,8 +626,12 @@ def _resolve_submission_sources(
             or source.attempt != operation.attempt
         ):
             raise SourcePreviewNotFound("Source preview not found.")
+        file_id = source.stored_file_id
+        if (operation.operation_type == "submission_manual_review"
+                and (operation.checkpoint or {}).get("manual_student_container_source_id") == source.id):
+            file_id = (operation.payload or {}).get("input_file_id") or file_id
         stored = _owned_assignment_file(
-            file_id=source.stored_file_id, owner_id=owner_id, task_id=task_id
+            file_id=file_id, owner_id=owner_id, task_id=task_id
         )
         if stored.kind in {
             "submission_source_reference",
@@ -643,6 +647,7 @@ def _resolve_submission_sources(
             ))
             continue
         if stored.kind not in {
+            "submission_container",
             "submission_source",
             "submission_archive_member",
         }:

@@ -6,9 +6,12 @@ import { QuestionPreparationOverviewPage } from "./QuestionPreparationOverviewPa
 
 const extraIssues = vi.hoisted(() => [] as Array<Record<string, string>>);
 const mutateAsync = vi.hoisted(() => vi.fn());
-beforeEach(() => { extraIssues.length = 0; mutateAsync.mockReset().mockResolvedValue({ workflow_revision: 8 }); });
+const manualTask = vi.hoisted(() => ({} as Record<string, unknown>));
+const createRows = vi.hoisted(() => vi.fn());
+beforeEach(() => { Object.keys(manualTask).forEach(key => delete manualTask[key]); createRows.mockReset().mockResolvedValue({ workflow_revision: 8 }); extraIssues.length = 0; mutateAsync.mockReset().mockResolvedValue({ workflow_revision: 8 }); });
 
 vi.mock("@/api/hooks/tasks", () => ({
+  useManuallyCompleteQuestionPreparation: () => ({ isPending: false, mutateAsync: createRows }),
   useUpdateProblem: () => ({ isPending: false, mutateAsync }),
   useTask: () => ({
     isLoading: false,
@@ -60,6 +63,7 @@ vi.mock("@/api/hooks/tasks", () => ({
           preparation_issues: [],
         },
       },
+      ...manualTask,
     },
   }),
 }));
@@ -213,4 +217,15 @@ describe("QuestionPreparationOverviewPage smart search", () => {
       expect(input).toHaveFocus();
     }
   });
+});
+
+it("keeps early manual recovery inside the existing matrix and creates only the requested blank rows", async () => {
+  Object.assign(manualTask, { problem_data: {}, extract_job_id: "early", manual_question_count_required: true });
+  renderPage("/tasks/task-1/questions?manualJob=early");
+  expect(screen.getByRole("heading", { name: "题目资料总览" })).toBeVisible();
+  expect(screen.queryByRole("heading", { name: "人工补齐题目" })).not.toBeInTheDocument();
+  expect(screen.getByRole("region", { name: "待复核队列" })).toBeVisible();
+  fireEvent.change(screen.getByRole("spinbutton", { name: "题数" }), { target: { value: "2" } });
+  fireEvent.click(screen.getByRole("button", { name: "建立题目行" }));
+  await waitFor(() => expect(createRows).toHaveBeenCalledWith({ taskId: "task-1", jobId: "early", expectedWorkflowRevision: 7, questionCount: 2 }));
 });

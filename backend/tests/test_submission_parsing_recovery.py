@@ -857,3 +857,92 @@ async def test_explicit_retry_only_parses_unfinished_questions_and_keeps_saved_i
         assert by_id["q2"]["content"] == "Completed q2 answer" and by_id["q2"]["flag"] == []
     assert after["submission_sources"][0]["unknown_question_ids"] == []
     assert task_facade._load_submission_results(artifact)[0].student == student
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("paused_run", [False, True])
+async def test_unknown_archive_count_hands_off_empty_matrix_then_creates_editable_student_rows(monkeypatch, paused_run):
+    from backend.domain.errors import DomainError
+    from backend.services.submission_manual_review import continue_manually
+    from backend.services.task_execution import stop_task_run
+    from backend.services import submission_source_pipeline
+
+    owner, task = _seed_task(with_question=True)
+    queued = task_facade.queue_task_submission_parsing(task_id=task, owner_id=owner,
+        filename="answers.zip", content=_archive_bytes(), content_type="application/zip", registry=_Registry())
+    origin = workflow_repository.get_operation(queued["job_id"], owner_id=owner)
+    if paused_run:
+        stop_task_run(task_id=task, owner_id=owner, job_id=origin.id,
+            expected_revision=workflow_repository.get_workflow(task, owner_id=owner).workflow_revision)
+    else:
+        task_facade._fail_operation(task, owner, origin.id, origin.attempt, "submission_archive_invalid")
+    # Exercise failed archive enumeration without changing or deleting the stored original.
+    def unavailable_members(*_args, **_kwargs):
+        raise ValueError("synthetic archive enumeration failure")
+    monkeypatch.setattr(submission_source_pipeline, "extract_raw_files_from_archive", unavailable_members)
+    def no_model(*_args, **_kwargs):
+        raise AssertionError("manual count handoff must not call a model")
+    monkeypatch.setattr(task_facade, "_registry_for_owner", no_model)
+    before = task_facade.get_task(task_id=task, owner_id=owner)
+    with pytest.raises(DomainError):
+        await continue_manually(task_id=task, owner_id=owner, job_id=origin.id,
+            expected_revision=before["workflow_revision"], student_count=2)
+    await continue_manually(task_id=task, owner_id=owner, job_id=origin.id,
+        expected_revision=before["workflow_revision"])
+    empty = task_facade.get_task(task_id=task, owner_id=owner)
+    assert empty["student_data"] == {} and empty["manual_student_count_required"]
+    for _ in range(2):
+        for data in (task_facade.get_task(task_id=task, owner_id=owner),
+                     await task_facade.async_task_state(task_id=task, owner_id=owner),
+                     task_facade.list_tasks(owner_id=owner)[task]):
+            assert data["status"] == "submissions_ready" and data["manual_student_count_required"]
+            assert not data["error"] and not data["last_failed_job_id"]
+    assert "submissions_required" in task_facade.grading_readiness(task_id=task, owner_id=owner)["blocking_issues"]
+    for count in (None, 0, 501, True, 1.5):
+        with pytest.raises(DomainError):
+            await continue_manually(task_id=task, owner_id=owner, job_id=empty["parse_job_id"],
+                expected_revision=empty["workflow_revision"], student_count=count)
+    with pytest.raises(DomainError):
+        await continue_manually(task_id=task, owner_id=owner, job_id=empty["parse_job_id"],
+            expected_revision=empty["workflow_revision"] - 1, student_count=2)
+    other_owner, _other_task = _seed_task(with_question=True)
+    with pytest.raises(DomainError):
+        await continue_manually(task_id=task, owner_id=other_owner, job_id=empty["parse_job_id"],
+            expected_revision=empty["workflow_revision"], student_count=2)
+    monkeypatch.setattr(submission_source_pipeline, "extract_raw_files_from_archive", no_model)
+    monkeypatch.setattr(task_facade, "load_submission_retry_upload", no_model)
+    await continue_manually(task_id=task, owner_id=owner, job_id=empty["parse_job_id"],
+        expected_revision=empty["workflow_revision"], student_count=2)
+    after = task_facade.get_task(task_id=task, owner_id=owner)
+    assert not after["manual_student_count_required"] and after["status"] == "submissions_ready"
+    students = list(after["student_data"].values())
+    assert len(students) == 2
+    assert all(s["stu_name"] == "[Unknown Student]" and s["identity_status"] == "needs_review" for s in students)
+    assert all(s["stu_ans"][0]["content"] == "" and "recognition_manual_pending" in s["stu_ans"][0]["flag"] for s in students)
+    assert all(s["source_filename"] == "answers.zip" and s["source_id"] for s in students), students
+    from backend.services.source_files import describe_source_files
+    manifest = describe_source_files(task_id=task, owner_id=owner, storage=get_storage())
+    assert all(s["source_id"] in manifest["submission_sources"] for s in students)
+    assert manifest["submission_sources"][students[0]["source_id"]]["unavailable_reason"] == "unsupported_type"
+    assert manifest["submission_sources"][students[0]["source_id"]]["file_id"] == origin.payload["input_file_id"]
+    for index, student in enumerate(students):
+        current = task_facade.get_task(task_id=task, owner_id=owner)
+        with pytest.raises(DomainError):
+            task_facade.update_student_answer(task_id=task, owner_id=owner, display_student_id=student["stu_id"],
+                q_id="q1", patch={"review_status": "confirmed"}, expected_revision=current["workflow_revision"])
+        task_facade.update_student_answer(task_id=task, owner_id=owner, display_student_id=student["stu_id"],
+            q_id="q1", patch={"content": f"Teacher transcribed answer {index}", "review_status": "confirmed"},
+            expected_revision=current["workflow_revision"])
+        current = task_facade.get_task(task_id=task, owner_id=owner)
+        task_facade.update_student_identity(task_id=task, owner_id=owner, current_display_id=student["stu_id"],
+            new_display_id=f"S{index + 1}", new_display_name=f"Synthetic learner {index}", expected_revision=current["workflow_revision"])
+        if index == 0:
+            assert "submission_recognition_blocked" in task_facade.grading_readiness(task_id=task, owner_id=owner)["blocking_issues"]
+    done = task_facade.get_task(task_id=task, owner_id=owner)
+    assert not done["submission_source_summary"].get("manual_review")
+    assert not {"submission_recognition_blocked", "submission_identities_unresolved"}.intersection(
+        task_facade.grading_readiness(task_id=task, owner_id=owner)["blocking_issues"])
+    with pytest.raises(DomainError):
+        await continue_manually(task_id=task, owner_id=owner, job_id=empty["parse_job_id"],
+            expected_revision=done["workflow_revision"], student_count=3)
+    assert task_facade.get_task(task_id=task, owner_id=owner)["student_data"] == done["student_data"]

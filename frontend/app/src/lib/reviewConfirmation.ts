@@ -143,6 +143,7 @@ export function questionReviewIssues(problem: ProblemInfo): PreparationIssue[] {
 }
 
 export function questionReviewBlockers(problems: ProblemInfo[], taskId: string, locale: string): ReviewBlocker[] {
+  if (!problems.length) return [{ label: locale === "zh-CN" ? "请先建立题目行并填写内容" : "Create question rows and enter their content first", href: `/tasks/${taskId}/questions#question-count` }];
   return problems.filter(questionReviewNextBlocked).map(problem => ({
     label: `${problem.number || problem.q_id} · ${questionReviewIssues(problem).map(issue => recognitionIssueLabel(issue, locale)).filter(Boolean).join("；") || (locale === "zh-CN" ? "请修正严重问题并确认本题" : "Correct the blocking issue and confirm this question")}`,
     href: `/tasks/${taskId}/questions/${encodeURIComponent(problem.q_id)}/content#question-${encodeURIComponent(problem.q_id)}`,
@@ -188,6 +189,7 @@ function collectSubmissionBlockers(task: Task | undefined, locale: string, stude
   if (!task) return [];
   const zh = locale === "zh-CN";
   const allStudents = Object.values(task.student_data ?? {});
+  if (!allStudents.length && task.manual_student_count_required) return [{ label: zh ? "请先填写学生人数并建立学生行" : "Enter the student count and create student rows first", href: `/tasks/${task.task_id}/submissions#student-count` }];
   const student = allStudents.find(item => item.stu_id === studentId);
   const sources = (task.submission_sources ?? []).filter(source => {
     if (studentId && source.source_id !== student?.source_id && source.student_candidate !== studentId) return false;

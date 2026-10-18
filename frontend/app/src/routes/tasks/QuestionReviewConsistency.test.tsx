@@ -9,7 +9,7 @@ import { taskKeys } from "@/api/hooks/keys";
 import type { ProblemInfo, Task } from "@/types";
 import { SubmissionReviewOverviewPage } from "./SubmissionReviewOverviewPage";
 import { QuestionPreparationOverviewPage } from "./QuestionPreparationOverviewPage";
-vi.mock("@/api/tasks", () => ({ getTask: vi.fn(), updateProblem: vi.fn(), updateStudentAnswer: vi.fn() }));
+vi.mock("@/api/tasks", () => ({ getTask: vi.fn(), manuallyCompleteQuestionPreparation: vi.fn(), manuallyCompleteSubmissionRecognition: vi.fn(), updateProblem: vi.fn(), updateStudentAnswer: vi.fn() }));
 vi.mock("@/components/new-task/NewTaskStepper", () => ({ NewTaskStepper: () => null }));
 const api = await import("@/api/tasks");
 beforeEach(() => { vi.clearAllMocks(); localStorage.setItem("smartai_locale", "zh-CN"); });

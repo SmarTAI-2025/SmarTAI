@@ -7,17 +7,19 @@ import { SubmissionReviewOverviewPage } from "./SubmissionReviewOverviewPage";
 const state = vi.hoisted(() => ({
   data: {
     task_id: "task-1", status: "submissions_ready", workflow_revision: 3,
+    parse_job_id: "manual-job-1", manual_student_count_required: false,
     problem_data: { Q1: { q_id: "Q1", number: "1", type: "short", stem: "Question" } },
     student_data: Object.fromEntries(["S001", "S002", "S003"].map((id) => [id, {
       stu_id: id, stu_name: `Student ${id}`, source_id: `source-${id}`, identity_status: "needs_review",
       stu_ans: [{ q_id: "Q1", content: "Original answer", flag: [] as string[], review_status: "pending" }],
     }])),
   },
-  identity: vi.fn(), answer: vi.fn(), refetch: vi.fn(),
+  identity: vi.fn(), answer: vi.fn(), manual: vi.fn(), refetch: vi.fn(),
 }));
 vi.mock("@/api/hooks/tasks", () => ({
   useTask: () => ({ data: state.data, isLoading: false, isSuccess: true, refetch: state.refetch }),
   useUpdateStudentIdentity: () => ({ mutateAsync: state.identity }),
+  useManuallyCompleteSubmissionRecognition: () => ({ mutateAsync: state.manual, isPending: false }),
   useUpdateStudentAnswer: () => ({ mutateAsync: state.answer }),
 }));
 vi.mock("@/components/new-task/NewTaskStepper", () => ({ NewTaskStepper: () => null }));
@@ -30,6 +32,8 @@ function renderPage(query = "") {
 }
 beforeEach(() => {
   state.data.status = "submissions_ready";
+  state.data.manual_student_count_required = false;
+  state.manual.mockReset().mockResolvedValue({ status: "ready_for_review" });
   for (const student of Object.values(state.data.student_data)) {
     student.identity_status = "needs_review";
     student.stu_ans[0].flag = [];
@@ -97,4 +101,45 @@ describe("submission review confirmation", () => {
     expect(state.answer.mock.calls.map(([input]) => [input.studentId, input.expectedWorkflowRevision])).toEqual([["S001", 3], ["S003", 4]]);
     for (const [input] of state.answer.mock.calls) expect(input).not.toHaveProperty("content");
   });
+});
+
+
+it("creates unknown student rows inside the original review matrix with the current job and revision", async () => {
+  const originalStudents = state.data.student_data;
+  state.data.student_data = {};
+  state.data.manual_student_count_required = true;
+  try {
+    const user = userEvent.setup();
+    renderPage();
+    expect(screen.getByRole("heading", { name: "submissionReviewTitle", level: 1 })).toBeInTheDocument();
+    const count = screen.getByRole("spinbutton", { name: "学生人数" });
+    const create = screen.getByRole("button", { name: "建立学生行" });
+    expect(create).toBeDisabled();
+    await user.type(count, "501");
+    expect(create).toBeDisabled();
+    await user.clear(count);
+    await user.type(count, "2");
+    await user.click(create);
+    await waitFor(() => expect(state.manual).toHaveBeenCalledWith({ taskId: "task-1", jobId: "manual-job-1", expectedWorkflowRevision: 3, studentCount: 2 }));
+    expect(screen.queryByText("submissionReviewUploadAgain")).not.toBeInTheDocument();
+  } finally {
+    state.data.student_data = originalStudents;
+  }
+});
+
+it("keeps a rejected student-count save on the original matrix without hiding the error", async () => {
+  const originalStudents = state.data.student_data;
+  state.data.student_data = {};
+  state.data.manual_student_count_required = true;
+  state.manual.mockRejectedValueOnce(new Error("stale revision"));
+  try {
+    const user = userEvent.setup();
+    renderPage();
+    await user.type(screen.getByRole("spinbutton", { name: "学生人数" }), "2");
+    await user.click(screen.getByRole("button", { name: "建立学生行" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("建立学生行失败");
+    expect(screen.getByRole("spinbutton", { name: "学生人数" })).toHaveValue(2);
+  } finally {
+    state.data.student_data = originalStudents;
+  }
 });
