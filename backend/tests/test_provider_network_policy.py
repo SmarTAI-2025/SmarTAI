@@ -446,6 +446,9 @@ def test_zhipu_always_builds_a_direct_client(monkeypatch):
         ("deepseek", "deepseek-v4-flash", "https://api.deepseek.com/v1"),
         ("moonshot", "kimi-k3", "https://api.moonshot.cn/v1"),
         ("qwen", "qwen-plus", "https://dashscope.aliyuncs.com/compatible-mode/v1"),
+        ("tencent", "hy3", "https://tokenhub.tencentmaas.com/v1"),
+        ("doubao", "doubao-seed-2-1-lite-260915", "https://ark.cn-beijing.volces.com/api/v3"),
+        ("minimax", "MiniMax-M3", "https://api.minimax.cn/v1"),
     ],
 )
 def test_domestic_providers_always_build_a_direct_client(
