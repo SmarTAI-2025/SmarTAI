@@ -115,8 +115,9 @@ async function uploadProblemFile(user: ReturnType<typeof userEvent.setup>) {
   if (providerState.enabled) await waitFor(() => expect(screen.getByLabelText("题目识别模型")).toHaveValue("mock:test"));
 }
 
+beforeEach(() => { vi.spyOn(window, "alert").mockImplementation(() => {}); });
+
 beforeEach(async () => {
-  vi.spyOn(window, "alert").mockImplementation(() => {});
   inputState.input = null;
   vi.stubGlobal("Blob", Blob); vi.stubGlobal("File", File);
   await clearPageDrafts();

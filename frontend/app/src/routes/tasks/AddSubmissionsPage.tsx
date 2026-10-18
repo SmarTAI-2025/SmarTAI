@@ -113,6 +113,7 @@ function AddSubmissionsForm({ taskQuery, submittedInput }: { taskQuery: ReturnTy
       && submittedInput?.available !== false
       && !selectedFile,
   );
+  const needsRosterUpload = (!canRetryOriginal || hasStoredFile) && identityMode === "roster" && !rosterFile && !hasSavedRoster;
   const retryLabel = canRetryOriginal && !hasStoredFile
     ? task?.status === "submissions_paused" ? localText(locale, "继续识别", "Continue Recognition") : workflowRetryLabel(locale)
     : localText(locale, "重新识别全部作答", "Recognize All Submissions Again");
@@ -151,7 +152,7 @@ function AddSubmissionsForm({ taskQuery, submittedInput }: { taskQuery: ReturnTy
             ? localText(locale, "需要先添加或选择一个已启用模型。", "Add or select an enabled model first.")
           : !selectedFile && !hasStoredFile && !canRetryOriginal
             ? missingSubmissionMessage
-            : !canRetryOriginal && identityMode === "roster" && !rosterFile && !hasSavedRoster
+            : needsRosterUpload
               ? missingRosterMessage
               : null;
 
@@ -226,7 +227,7 @@ function AddSubmissionsForm({ taskQuery, submittedInput }: { taskQuery: ReturnTy
       } else if (!selectedFile && !hasStoredFile && !canRetryOriginal) {
         setMissingUpload("submission");
         focusUploadControl(submissionChooseRef.current);
-      } else if (!canRetryOriginal && identityMode === "roster" && !rosterFile && !hasSavedRoster) {
+      } else if (needsRosterUpload) {
         setMissingUpload("roster");
         focusUploadControl(rosterChooseRef.current);
       }

@@ -54,6 +54,7 @@ const material: CourseMaterial = {
 describe("course material deletion", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.spyOn(window, "alert").mockImplementation(() => {});
     mocks.deleteMaterial.mockResolvedValue({
       status: "deletion_pending",
       material_id: material.material_id,
@@ -88,11 +89,15 @@ describe("course material deletion", () => {
     if (name === "large.pdf") Object.defineProperty(file, "size", { value: 64 * 1024 * 1024 + 1 });
     fireEvent.change(input, { target: { files: [file] } });
     expect(screen.getByRole("alert")).toHaveTextContent(message);
-    expect(screen.getByRole("button", { name: "上传资料" })).toBeDisabled();
+    await user.click(screen.getByRole("button", { name: "上传资料" }));
+    expect(window.alert).toHaveBeenCalledWith(expect.stringContaining(message));
     expect(mocks.upload).not.toHaveBeenCalled();
-    fireEvent.change(input, { target: { files: [new File(["notes"], "valid.txt", { type: "text/plain" })] } });
+    const replacement = new File(["notes"], "valid.txt", { type: "text/plain" });
+    fireEvent.change(input, { target: { files: [replacement] } });
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "上传资料" })).toBeEnabled();
+    mocks.upload.mockResolvedValueOnce({ ...material, created: true, parse_status: "processing" });
+    await user.click(screen.getByRole("button", { name: "上传资料" }));
+    await waitFor(() => expect(mocks.upload).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ file: replacement })));
   });
 
   it("keeps server upload failures visible in the dialog", async () => {
