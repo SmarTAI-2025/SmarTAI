@@ -2,7 +2,7 @@ import "fake-indexeddb/auto";
 import { clearPageDrafts, listPageDrafts } from "@/lib/pageDraftStore";
 import { PageDraftSession } from "@/hooks/useDraftProtection";
 import { DraftActions, DraftLeaveProvider } from "@/hooks/useDraftLeave";
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { createMemoryRouter, RouterProvider } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -383,6 +383,8 @@ describe("QuestionPreparationDetailPage navigation", () => {
     const user = userEvent.setup();
     const router = renderPage();
 
+    // Initial reads must finish before timing the formal save's draft cleanup.
+    await act(async () => { await listPageDrafts("question-draft-teacher"); });
     await user.click(await screen.findByRole("button", { name: "修改第 1 题满分与评分标准" }));
     const firstScore = screen.getByRole("spinbutton", { name: "第 1 题满分" });
     await user.clear(firstScore);
@@ -567,22 +569,27 @@ it("formal field save clears only its explicit snapshot; failure preserves the o
   const user = userEvent.setup();
   mutateAsync.mockResolvedValue({ workflow_revision: 8 });
   renderPage();
-  await user.click(screen.getAllByRole("button", { name: "题目 · 修改" })[0]);
-  await user.click(screen.getAllByRole("button", { name: "标答 / 解题步骤 · 修改" })[0]);
+  // This read queues behind the editors' initial IndexedDB transactions. Flush
+  // their React updates before exercising saves, rather than polling hydration.
+  await act(async () => { await listPageDrafts("question-draft-teacher"); });
   const card = document.getElementById("question-Q1")!;
+  const question = within(card);
+  await user.click(question.getByRole("button", { name: "题目 · 修改" }));
+  await user.click(question.getByRole("button", { name: "标答 / 解题步骤 · 修改" }));
   const fields = card.querySelectorAll("textarea");
   fireEvent.change(fields[0], { target: { value: "explicit stem" } });
   fireEvent.change(fields[1], { target: { value: "explicit reference answer" } });
-  await waitFor(() => expect(screen.getByRole("button", { name: "暂存" })).toBeEnabled());
-  await user.click(screen.getByRole("button", { name: "暂存" }));
+  const saveDraft = screen.getByRole("button", { name: "暂存" });
+  await waitFor(() => expect(saveDraft).toBeEnabled());
+  await user.click(saveDraft);
   await screen.findByText(/已暂存 ·/);
   expect((await listPageDrafts("question-draft-teacher")).map(item => item.scope).sort()).toEqual(["question:task-1:Q1:reference_answer", "question:task-1:Q1:stem"]);
-  const firstSave = screen.getAllByRole("button", { name: "保存" })[0];
+  const firstSave = question.getAllByRole("button", { name: "保存" })[0];
   await user.click(firstSave);
   await waitFor(async () => expect((await listPageDrafts("question-draft-teacher")).map(item => item.scope)).toEqual(["question:task-1:Q1:reference_answer"]));
   await waitFor(() => expect(card.querySelectorAll("textarea")).toHaveLength(1));
   mutateAsync.mockRejectedValueOnce(new Error("QA failed save"));
-  await user.click(screen.getAllByRole("button", { name: "保存" })[0]);
-  await waitFor(() => expect(screen.getByText(/保存失败/)).toBeInTheDocument());
+  await user.click(question.getByRole("button", { name: "保存" }));
+  await waitFor(() => expect(question.getByText(/保存失败/)).toBeInTheDocument());
   expect((await listPageDrafts("question-draft-teacher")).map(item => item.scope)).toEqual(["question:task-1:Q1:reference_answer"]);
 });
