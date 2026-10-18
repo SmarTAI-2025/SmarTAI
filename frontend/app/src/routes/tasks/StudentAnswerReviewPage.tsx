@@ -994,16 +994,18 @@ function AnswerReviewCard({ question, answer, draft, sourceFilename, previous, n
             <span className="rounded-full bg-slate-100 px-2.5 py-1 text-[11px] font-semibold text-muted-foreground dark:bg-slate-800">{questionTypeLabel(question.type, locale)}</span>
             {!answer ? <AnswerStateBadge state={state} answer={answer} locale={locale} t={t} /> : null}
           </div>
-          <p className="mt-1 text-[11px] text-muted-foreground">{tx(locale, "题目与学生作答在同一卡片内连续校对；题目只读。", "Review the read-only question and student response together in this card.")}</p>
+          <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1">
+            <p className="text-[11px] text-muted-foreground">{tx(locale, "题目与学生作答在同一卡片内连续校对；题目只读。", "Review the read-only question and student response together in this card.")}</p>
+            <ReviewIssueNotes issues={answerReviewNotes(answer, locale)} />
+          </div>
         </div>
-        <div className="flex flex-wrap items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2 max-sm:[&_button]:px-2 max-sm:[&_button]:text-xs! sm:shrink-0">
           {answer ? <ReviewConfirmButton title={tx(locale, `第 ${question.label} 题`, `Question ${question.label}`)} locale={locale} confirmed={state === "reviewed" && !editing} blocked={answerReviewAttention(answer) === "blocking"} busy={saving} save={editing} onClick={editing ? () => onSave(false) : onConfirm} /> : null}
-          <ReviewIssueNotes issues={answerReviewNotes(answer, locale)} />
-          <Button type="button" variant="secondary" className="h-9 px-3" disabled={!previous} onClick={() => previous && onNavigate(previous.id)}>
-            <ArrowUp aria-hidden="true" className="h-4 w-4" />{t("answerReviewPreviousQuestion")}
+          <Button type="button" variant="secondary" className="h-9 px-3" aria-label={t("answerReviewPreviousQuestion")} disabled={!previous} onClick={() => previous && onNavigate(previous.id)}>
+            <ArrowUp aria-hidden="true" className="h-4 w-4" />{tx(locale, "上一题", "Previous")}
           </Button>
-          <Button type="button" variant="secondary" className="h-9 px-3" disabled={!next} onClick={() => next && onNavigate(next.id)}>
-            {t("answerReviewNextQuestion")}<ArrowDown aria-hidden="true" className="h-4 w-4" />
+          <Button type="button" variant="secondary" className="h-9 px-3" aria-label={t("answerReviewNextQuestion")} disabled={!next} onClick={() => next && onNavigate(next.id)}>
+            {tx(locale, "下一题", "Next")}<ArrowDown aria-hidden="true" className="h-4 w-4" />
           </Button>
         </div>
       </header>
