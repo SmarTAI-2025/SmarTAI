@@ -309,30 +309,50 @@ describe("GradingPreflightPage regrade mode", () => {
     expect(within(screen.getByRole("alertdialog")).getByRole("button", { name: "Fix grading settings" })).toBeInTheDocument();
   });
 
-  it("keeps the countdown for ordinary pending confirmations and never confirms them implicitly", async () => {
+  it.each([
+    { name: "ordinary pending confirmations", problem: {}, answer: {} },
+    ...[0.24, 0.59, 0.6].flatMap(confidence => [
+      { name: `question confidence ${confidence}`, problem: { preparation_issues: [{
+        issue_id: "confidence-q1", q_id: "q1", field: "stem", code: "low_confidence",
+        severity: "warning", status: "open", details: { confidence },
+      }] }, answer: {} },
+      { name: `answer confidence ${confidence}`, problem: {}, answer: { recognition_confidence: confidence } },
+    ]),
+    { name: "missing optional reference answer", problem: { reference_answer: "" }, answer: {} },
+    { name: "external annotations", problem: {}, answer: { flag: ["external_annotation_present"] } },
+  ])("keeps the countdown for $name and never confirms inputs implicitly", async ({ problem, answer }) => {
     vi.useFakeTimers();
     const task = (useTask as unknown as () => any)();
     task.data.status = "submissions_ready";
     task.data.problem_data.q1.review_status = "needs_review";
     task.data.student_data.student1.stu_ans[0].review_status = "pending";
     task.data.student_data.student1.stu_ans[0].flag = ["recognition_needs_review"];
+    Object.assign(task.data.problem_data.q1, problem);
+    Object.assign(task.data.student_data.student1.stu_ans[0], answer);
     render(<MemoryRouter initialEntries={["/tasks/task-1/grading/preflight"]}><Routes>
       <Route path="/tasks/:taskId/grading/preflight" element={<GradingPreflightPage />} />
       <Route path="/tasks/:taskId/grading/progress" element={<div>Grading started</div>} />
     </Routes></MemoryRouter>);
     expect(screen.getByText(/Pending confirmation does not block/)).toBeInTheDocument();
     expect(screen.getByText(/1 question awaits confirmation/)).toBeInTheDocument();
-    await act(async () => { vi.advanceTimersByTime(10_000); });
+    act(() => { vi.advanceTimersByTime(9_000); });
+    expect(mutateAsync).not.toHaveBeenCalled();
+    await act(async () => { vi.advanceTimersByTime(1_000); });
     expect(mutateAsync).toHaveBeenCalledExactlyOnceWith({ taskId: "task-1", expectedWorkflowRevision: 8, requestId: expect.any(String) });
     expect(task.data.student_data.student1.stu_ans[0].review_status).toBe("pending");
     expect(task.data.problem_data.q1.review_status).toBe("needs_review");
   });
 
-  it("does not auto-start or manually bypass a failed recognition", async () => {
+  it.each(["failed recognition", "missing stem", "missing rubric", "unconfirmed repair"])("does not auto-start or manually bypass %s", async (blocker) => {
     vi.useFakeTimers();
     const task = (useTask as unknown as () => any)();
     task.data.status = "submissions_ready";
-    task.data.student_data.student1.stu_ans[0].flag = ["recognition_failed"];
+    if (blocker === "failed recognition") task.data.student_data.student1.stu_ans[0].flag = ["recognition_failed"];
+    if (blocker === "missing stem") task.data.problem_data.q1.stem = "";
+    if (blocker === "missing rubric") task.data.problem_data.q1.criterion = "";
+    if (blocker === "unconfirmed repair") Object.assign(task.data.student_data.student1.stu_ans[0], {
+      flag: ["recognition_repaired_needs_confirmation"], review_status: "pending",
+    });
     render(<MemoryRouter initialEntries={["/tasks/task-1/grading/preflight"]}><Routes>
       <Route path="/tasks/:taskId/grading/preflight" element={<GradingPreflightPage />} />
     </Routes></MemoryRouter>);
@@ -340,6 +360,28 @@ describe("GradingPreflightPage regrade mode", () => {
     fireEvent.click(screen.getByRole("button", { name: "Start Grading Now" }));
     expect(mutateAsync).not.toHaveBeenCalled();
     expect(screen.getByRole("alertdialog")).toBeInTheDocument();
+  });
+
+  it("keeps counting when advice arrives, but cancels when a blocker arrives", async () => {
+    vi.useFakeTimers();
+    const task = (useTask as unknown as () => any)();
+    task.data.status = "submissions_ready";
+    const client = new QueryClient();
+    const page = () => <QueryClientProvider client={client}><MemoryRouter initialEntries={["/tasks/task-1/grading/preflight"]}><Routes>
+      <Route path="/tasks/:taskId/grading/preflight" element={<GradingPreflightPage />} />
+      <Route path="/tasks/:taskId/grading/progress" element={<div>Grading started</div>} />
+    </Routes></MemoryRouter></QueryClientProvider>;
+    const view = rtlRender(page());
+    act(() => { vi.advanceTimersByTime(4_000); });
+    Object.assign(task.data.student_data.student1.stu_ans[0], { review_status: "pending", recognition_confidence: 0.24 });
+    // Rerender the same mounted page, as a task query refresh would.
+    view.rerender(page());
+    expect(screen.getByText(/6 seconds until automatic start/)).toBeInTheDocument();
+    task.data.student_data.student1.stu_ans[0].flag = ["recognition_failed"];
+    view.rerender(page());
+    expect(screen.queryByText(/seconds until automatic start/)).not.toBeInTheDocument();
+    await act(async () => { vi.advanceTimersByTime(10_000); });
+    expect(mutateAsync).not.toHaveBeenCalled();
   });
 });
 
