@@ -141,6 +141,115 @@ describe("AddSubmissionsPage OCR uploads", () => {
     expect(mutateAsync).not.toHaveBeenCalled();
   });
 
+  it.each([
+    ["submissionUploadIdentityManual", "S1_Alex.pdf"],
+    ["submissionUploadIdentityFilename", "answers.zip"],
+  ])("clears only the stale roster requirement when switching to %s", async (mode, filename) => {
+    const { container } = renderPage();
+    const file = new File(["local selection fixture; no OCR"], filename);
+    fireEvent.change(container.querySelector('input[type="file"]')!, { target: { files: [file] } });
+    await waitFor(() => expect(screen.getByLabelText("作答识别模型")).toHaveValue("provider-default"));
+    const roster = screen.getByRole("radio", { name: "submissionUploadIdentityRoster" });
+    const start = screen.getByRole("button", { name: "submissionUploadStart" });
+    fireEvent.click(roster);
+    fireEvent.click(start);
+    expect(container.querySelector("#submission-roster-required")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "submissionUploadRosterChoose" })).toHaveAttribute("aria-describedby", "submission-roster-required");
+    expect(mutateAsync).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole("radio", { name: mode }));
+    expect(screen.getByRole("radio", { name: mode })).toHaveAttribute("aria-checked", "true");
+    expect(container.querySelector("#submission-roster-required")).not.toBeInTheDocument();
+    expect(screen.getByText(filename)).toBeInTheDocument();
+    expect(screen.getByLabelText("作答识别模型")).toHaveValue("provider-default");
+
+    // Clearing the validation state must not merely hide it in other modes.
+    fireEvent.click(roster);
+    expect(container.querySelector("#submission-roster-required")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "submissionUploadRosterChoose" })).not.toHaveAttribute("aria-describedby");
+    fireEvent.click(start);
+    expect(container.querySelector("#submission-roster-required")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "submissionUploadRosterChoose" })).toHaveFocus();
+    expect(mutateAsync).not.toHaveBeenCalled();
+  });
+
+  it("retains the missing submission error and its accessible association across identity modes", async () => {
+    const { container } = renderPage();
+    await waitFor(() => expect(screen.getByLabelText("作答识别模型")).toHaveValue("provider-default"));
+    fireEvent.click(screen.getByRole("radio", { name: "submissionUploadIdentityRoster" }));
+    fireEvent.click(screen.getByRole("button", { name: "submissionUploadStart" }));
+    for (const mode of ["submissionUploadIdentityManual", "submissionUploadIdentityFilename"]) {
+      fireEvent.click(screen.getByRole("radio", { name: mode }));
+      expect(container.querySelector("#submission-file-required")).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "submissionUploadChoose" })).toHaveAttribute("aria-describedby", "submission-file-required");
+      fireEvent.click(screen.getByRole("button", { name: "submissionUploadStart" }));
+      expect(mutateAsync).not.toHaveBeenCalled();
+    }
+  });
+
+  it("still requires an enabled model after identity mode changes", async () => {
+    providers.enabled = false;
+    const { container } = renderPage();
+    fireEvent.change(container.querySelector('input[type="file"]')!, { target: { files: [new File(["answer"], "S1_Alex.pdf")] } });
+    for (const mode of ["submissionUploadIdentityRoster", "submissionUploadIdentityManual", "submissionUploadIdentityFilename"]) {
+      fireEvent.click(screen.getByRole("radio", { name: mode }));
+      fireEvent.click(screen.getByRole("button", { name: "submissionUploadStart" }));
+      expect(screen.getByRole("link", { name: "submissionUploadConfigureModels" })).toBeInTheDocument();
+      expect(mutateAsync).not.toHaveBeenCalled();
+    }
+  });
+
+  it("retains image capability recovery after identity mode changes", async () => {
+    const { container } = renderPage();
+    fireEvent.change(container.querySelector('input[type="file"]')!, { target: { files: [new File(["scan"], "S1_Alex.pdf")] } });
+    await waitFor(() => expect(screen.getByLabelText("作答识别模型")).toHaveValue("provider-default"));
+    mutateAsync.mockRejectedValue(new APIError(422, "image_recognition_unconfirmed", { detail: { code: "image_recognition_unconfirmed" } }));
+    fireEvent.click(screen.getByRole("button", { name: "submissionUploadStart" }));
+    await screen.findByRole("button", { name: "暂存并去验证" });
+    fireEvent.click(screen.getByRole("radio", { name: "submissionUploadIdentityRoster" }));
+    fireEvent.click(screen.getByRole("button", { name: "submissionUploadStart" }));
+    expect(container.querySelector("#submission-roster-required")).toBeInTheDocument();
+    for (const mode of ["submissionUploadIdentityManual", "submissionUploadIdentityFilename"]) {
+      fireEvent.click(screen.getByRole("radio", { name: mode }));
+      expect(screen.getByRole("button", { name: "暂存并去验证" })).toBeInTheDocument();
+      expect(screen.getByText("S1_Alex.pdf")).toBeInTheDocument();
+    }
+    fireEvent.click(screen.getByRole("button", { name: "submissionUploadStart" }));
+    await waitFor(() => expect(mutateAsync).toHaveBeenCalledTimes(2));
+    expect(screen.queryByText("progress page")).not.toBeInTheDocument();
+    expect(await screen.findByRole("button", { name: "暂存并去验证" })).toBeInTheDocument();
+  });
+
+  it.each([
+    ["submissionUploadIdentityRoster", "roster"],
+    ["submissionUploadIdentityManual", "manual_review"],
+    ["submissionUploadIdentityFilename", "filename"],
+  ])("preserves selected files and submits once with only the roster appropriate to %s", async (label, identityMode) => {
+    const { container } = renderPage();
+    const file = new File(["answer selection fixture"], "answers.zip");
+    const rosterFile = new File(["student_id,name\nS1,Alex"], "roster.csv");
+    fireEvent.change(container.querySelector('input[type="file"]')!, { target: { files: [file] } });
+    fireEvent.click(screen.getByRole("radio", { name: "submissionUploadIdentityRoster" }));
+    fireEvent.change(container.querySelectorAll('input[type="file"]')[1]!, { target: { files: [rosterFile] } });
+    fireEvent.click(screen.getByRole("radio", { name: "submissionUploadIdentityManual" }));
+    fireEvent.click(screen.getByRole("radio", { name: "submissionUploadIdentityRoster" }));
+    expect(screen.getByText("roster.csv")).toBeInTheDocument();
+    expect(screen.getByText("answers.zip")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("radio", { name: label }));
+    await waitFor(() => expect(screen.getByLabelText("作答识别模型")).toHaveValue("provider-default"));
+    let finish!: (result: unknown) => void;
+    mutateAsync.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+    const start = screen.getByRole("button", { name: "submissionUploadStart" });
+    fireEvent.click(start);
+    fireEvent.click(start);
+    expect(mutateAsync).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
+      file, identityMode, rosterFile: identityMode === "roster" ? rosterFile : null,
+      reuseRosterFromJobId: null, recognitionProviderId: "provider-default", expectedWorkflowRevision: 0,
+    }));
+    await act(async () => { finish({ status: "started" }); });
+    expect(await screen.findByText("progress page")).toBeInTheDocument();
+  });
+
   it("accepts a student image and sends it through the submission parsing mutation", async () => {
     const { container } = renderPage();
     const input = container.querySelector('input[type="file"]') as HTMLInputElement;

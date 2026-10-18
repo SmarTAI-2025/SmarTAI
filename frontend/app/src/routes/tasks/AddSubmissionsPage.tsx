@@ -389,6 +389,9 @@ function AddSubmissionsForm({ taskQuery, submittedInput }: { taskQuery: ReturnTy
                 disabled={isPending}
                 onClick={() => {
                   setIdentityMode(option.mode);
+                  if (option.mode !== "roster") {
+                    setMissingUpload((current) => current === "roster" ? null : current);
+                  }
                   setFormError(null);
                   setNeedsModel(false);
                 }}
