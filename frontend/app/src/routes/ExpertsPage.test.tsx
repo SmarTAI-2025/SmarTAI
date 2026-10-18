@@ -379,20 +379,20 @@ describe("ExpertsPage editable vendor Base URL", () => {
     expect(screen.getByLabelText(/API Base URL/)).toHaveValue("https://api.deepseek.com/v1");
   });
 
-  it("saves Baidu OCR AK/SK without echoing or persisting either secret", async () => {
+  it("saves Baidu OCR API Key / Secret Key without echoing or persisting either secret", async () => {
     const user = userEvent.setup();
     renderPage();
 
-    await user.type(screen.getByLabelText("AK"), "fake-baidu-ak");
-    await user.type(screen.getByLabelText("SK"), "fake-baidu-sk");
+    await user.type(screen.getByLabelText("API Key"), "fake-baidu-ak");
+    await user.type(screen.getByLabelText("Secret Key"), "fake-baidu-sk");
     await user.click(screen.getByRole("button", { name: "保存凭据" }));
 
     await waitFor(() => expect(saveBaiduOCRCredentials).toHaveBeenCalledWith({
       api_key: "fake-baidu-ak",
       secret_key: "fake-baidu-sk",
     }));
-    expect(screen.getByLabelText("AK")).toHaveValue("");
-    expect(screen.getByLabelText("SK")).toHaveValue("");
+    expect(screen.getByLabelText("API Key")).toHaveValue("");
+    expect(screen.getByLabelText("Secret Key")).toHaveValue("");
     expect(screen.queryByDisplayValue("fake-baidu-ak")).not.toBeInTheDocument();
     expect(screen.queryByDisplayValue("fake-baidu-sk")).not.toBeInTheDocument();
     expect(window.localStorage.getItem("fake-baidu-ak")).toBeNull();
@@ -517,11 +517,11 @@ describe("ExpertsPage editable vendor Base URL", () => {
     renderPage();
 
     expect(screen.getByText("ocr-record-1")).toBeInTheDocument();
-    expect(screen.getByText("AK/SK 已验证")).toBeInTheDocument();
-    expect(screen.getByLabelText("替换 AK")).toHaveValue("");
-    expect(screen.getByLabelText("替换 SK")).toHaveValue("");
+    expect(screen.getByText("API Key / Secret Key 已验证")).toBeInTheDocument();
+    expect(screen.getByLabelText("替换 API Key")).toHaveValue("");
+    expect(screen.getByLabelText("替换 Secret Key")).toHaveValue("");
 
-    await user.click(screen.getByRole("button", { name: "验证 AK/SK" }));
+    await user.click(screen.getByRole("button", { name: "验证 API Key / Secret Key" }));
     await waitFor(() => expect(verifyBaiduOCRCredentials).toHaveBeenCalledWith("ocr-record-1"));
 
     await user.click(screen.getByRole("button", { name: "删除凭据" }));
