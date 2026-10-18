@@ -354,6 +354,29 @@ def test_combined_general_chart_and_filter_are_independent_queries(snapshot):
     assert response["selection"]["ids"] == ["DEMO-001", "DEMO-004"]
 
 
+@pytest.mark.parametrize("question", [
+    "显示全班平均得分率的图表，同时表格只显示 Alex",
+    "Show the class average score percentage chart, but only show Alex in the table",
+])
+@pytest.mark.parametrize("operator", ["exact", None])
+def test_combined_natural_name_uses_fragment_matching_without_narrowing_chart(snapshot, question, operator):
+    provider = Provider({"output": "combined", "references": [{
+        "kind": "student", "text": "Alex", "field": "student_name",
+        "operator": operator, "applies_to": "selection",
+    }]}, {
+        "sql": "SELECT number,avg_percent FROM questions ORDER BY order_index",
+        "chart": {"x": "number", "y": ["avg_percent"]},
+        "selection": {"sql": "SELECT student_id FROM students ORDER BY total_score DESC"},
+    })
+    response = asyncio.run(ask(task_id="task", owner_id="teacher", question=question,
+        surface="student_analysis", provider=provider, snapshot=snapshot))
+    assert response["recognized"]
+    assert response["selection"] == {"kind": "students", "ids": ["DEMO-001"]}
+    assert response["chart"]["traces"][0]["y"] == pytest.approx([90, 100, 200 / 7, 80])
+    assert response["bindings"][0]["operator"] == "contains"
+    assert len(provider.calls) == 2
+
+
 def test_combined_named_count_and_selection_keep_resolved_scope(snapshot):
     response = run(snapshot, "Count Alex's pass status and show Alex", {
         "output": "combined", "statistic": "student_pass_fail_counts",
@@ -460,9 +483,177 @@ def test_bare_name_uses_matching_contract_not_model_chart_or_exact_guess(snapsho
     assert response["chart"] is None and len(provider.calls) == 1
 
 
-def test_explicit_exact_name_is_not_relaxed(snapshot):
-    result = run(snapshot, "姓名必须恰好等于Alex", {"references": [{"kind": "student", "text": "Alex", "field": "student_name", "operator": "exact"}]}, {"sql": "SELECT student_id FROM students"})
-    assert result["selection"]["ids"] == []
+@pytest.mark.parametrize("question,name,operator,evidence,ids", [
+    ("只显示 Alex", "Alex", "exact", None, ["DEMO-001", "OTHER"]),
+    ("Show only ＡＬＥＸ", "ＡＬＥＸ", "exact", None, ["DEMO-001", "OTHER"]),
+    ("显示姓名包含 Alex Ch 的学生", "Alex Ch", "contains", None, ["DEMO-001"]),
+    ("只显示 Alex Wu", "Alex Wu", "exact", None, ["OTHER"]),
+    ("只显示 Ale Chen", "Ale Chen", None, None, []),
+    ("姓名必须恰好等于Alex", "Alex", "exact", "姓名必须恰好等于Alex", []),
+    ("Show students whose name is exactly Alex", "Alex", "exact", "name is exactly Alex", []),
+    ("Show names starting with Chen", "Chen", "prefix", None, []),
+    ("Show names ending with Chen", "Chen", "suffix", None, ["DEMO-001"]),
+])
+def test_embedded_names_preserve_explicit_operators_and_full_names(snapshot, question, name, operator, evidence, ids):
+    snapshot.tables["students"].append({**snapshot.tables["students"][0], "student_id": "OTHER", "student_name": "Alex Wu"})
+    result = run(snapshot, question, {"references": [{"kind": "student", "text": name,
+        "field": "student_name", "operator": operator, "exact_match_text": evidence}]},
+        {"sql": "SELECT student_id FROM students ORDER BY student_id"})
+    assert result["recognized"] and result["selection"]["ids"] == ids
+
+
+@pytest.mark.parametrize("evidence", ["name is exactly Alex", "   "])
+def test_invented_exact_name_qualifier_is_rejected(snapshot, evidence):
+    result = run(snapshot, "只显示 Alex", {"references": [{"kind": "student", "text": "Alex",
+        "field": "student_name", "operator": "exact", "exact_match_text": evidence}]})
+    assert not result["recognized"] and result["selection"] is None
+
+
+@pytest.mark.parametrize("evidence", ["Alex", "只显示 Alex"])
+def test_non_exact_evidence_cannot_authorize_combined_exact_name(snapshot, evidence):
+    provider = Provider({"output": "combined", "references": [{"kind": "student", "text": "Alex",
+        "field": "student_name", "operator": "exact", "exact_match_text": evidence, "applies_to": "selection"}]}, {
+        "sql": "SELECT number,avg_percent FROM questions ORDER BY order_index",
+        "chart": {"x": "number", "y": ["avg_percent"]},
+        "selection": {"sql": "SELECT student_id FROM students ORDER BY total_score DESC"},
+    })
+    result = asyncio.run(ask(task_id="task", owner_id="t", surface="student_analysis", snapshot=snapshot,
+        question="显示全班平均得分率的图表，同时表格只显示 Alex", provider=provider))
+    assert not result["recognized"]
+    assert result["selection"] is None and result["chart"] is None and result["data"]["rows"] == []
+    assert len(provider.calls) == 1  # Reject before query planning/execution, atomically.
+
+
+def test_another_names_exact_evidence_cannot_authorize_alex(snapshot):
+    provider = Provider({"references": [
+        {"kind": "student", "text": "Alex", "field": "student_name", "operator": "exact",
+         "exact_match_text": "name is exactly Maya"},
+        {"kind": "student", "text": "Maya", "field": "student_name", "operator": "exact",
+         "exact_match_text": "name is exactly Maya", "role": "exclude"},
+    ]}, {"sql": "SELECT student_id FROM students ORDER BY student_id"})
+    result = asyncio.run(ask(task_id="task", owner_id="t", surface="student_analysis", snapshot=snapshot,
+        question="Show Alex and exclude students whose name is exactly Maya", provider=provider))
+    assert not result["recognized"] and result["selection"] is None and result["chart"] is None
+    assert len(provider.calls) == 1
+
+
+@pytest.mark.parametrize("question,evidence,history", [
+    ("Show Alex", "name is exactly Alex", ["Show students whose name is exactly Alex"]),
+    ("Show them again", "name is exactly Alex", ["Show students whose name is exactly Alex"]),
+    ("Show students whose name is not exactly Alex", "name is exactly Alex", []),
+    ("Do not require name is exactly Alex", "name is exactly Alex", []),
+    ("Ignore the previous condition name is exactly Alex", "name is exactly Alex", []),
+    ("Ignore the previous filters for Maya or name is exactly Alex", "name is exactly Alex", []),
+    ("Show students whose name is exactly Alex; ignore that condition", "name is exactly Alex", []),
+    ("Show students whose name is exactly Alex but use contains instead", "name is exactly Alex", []),
+    ("不要按姓名恰好等于Alex筛选", "姓名恰好等于Alex", []),
+    ("Show students whose name is exactly Alex Chen", "name is exactly Alex", []),
+    ("Show students whose name is exactly Alex.Chen", "name is exactly Alex", []),
+    ("Show students whose surname is exactly Alex", "name is exactly Alex", []),
+    ("Show Alex in the table, and chart students whose name is exactly Alex", "name is exactly Alex", []),
+    ("Show Alex and exclude students whose name is exactly Alex", "name is exactly Alex", []),
+])
+def test_exact_evidence_must_belong_to_current_unambiguous_name_condition(snapshot, question, evidence, history):
+    provider = Provider({"references": [{"kind": "student", "text": "Alex", "field": "student_name",
+        "operator": "exact", "exact_match_text": evidence}]}, {"sql": "SELECT student_id FROM students"})
+    result = asyncio.run(ask(task_id="task", owner_id="t", surface="student_analysis", snapshot=snapshot,
+        question=question, history=history, provider=provider))
+    assert not result["recognized"] and result["selection"] is None
+    assert len(provider.calls) == 1
+
+
+@pytest.mark.parametrize("question,name,evidence,ids", [
+    ("Show students whose name is exactly Alex", "Alex", "name is exactly Alex", []),
+    ("姓名必须恰好等于Alex", "Alex", "姓名必须恰好等于Alex", []),
+    ("Show students whose name is exactly Alex Chen", "Alex Chen", "name is exactly Alex Chen", ["DEMO-001"]),
+    ('Show students whose name equals "ＡＬＥＸ　ＣＨＥＮ"', "ＡＬＥＸ　ＣＨＥＮ", 'name equals "ＡＬＥＸ　ＣＨＥＮ"', ["DEMO-001"]),
+    ("显示姓名完全等于‘Alex Chen’的学生", "Alex Chen", "姓名完全等于‘Alex Chen’", ["DEMO-001"]),
+    ("Show students whose name = 'Alex Chen'", "Alex Chen", "name = 'Alex Chen'", ["DEMO-001"]),
+    ("姓名=Alex Chen", "Alex Chen", "姓名=Alex Chen", ["DEMO-001"]),
+    ("Show students whose name is exactly Nobody Here", "Nobody Here", "name is exactly Nobody Here", []),
+])
+def test_current_exact_predicate_preserves_literals_and_valid_zero_matches(snapshot, question, name, evidence, ids):
+    result = run(snapshot, question, {"references": [{"kind": "student", "text": name, "field": "student_name",
+        "operator": "exact", "exact_match_text": evidence}]}, {"sql": "SELECT student_id FROM students"},
+        history=["Show Maya"])
+    assert result["recognized"] and result["selection"]["ids"] == ids
+    assert result["bindings"][0]["operator"] == "exact"
+
+
+@pytest.mark.parametrize("role,ids", [("target", ["DEMO-001", "EXACT"]), ("exclude", ["DEMO-001"])])
+def test_natural_name_and_other_exact_name_keep_independent_roles(snapshot, role, ids):
+    snapshot.tables["students"].append({**snapshot.tables["students"][1], "student_id": "EXACT", "student_name": "Maya"})
+    verb = "include" if role == "target" else "exclude"
+    result = run(snapshot, f"Show Alex and {verb} students whose name is exactly Maya", {"references": [
+        {"kind": "student", "text": "Alex", "field": "student_name", "operator": "exact"},
+        {"kind": "student", "text": "Maya", "field": "student_name", "operator": "exact",
+         "exact_match_text": "name is exactly Maya", "role": role},
+    ]}, {"sql": "SELECT student_id FROM students ORDER BY student_id"})
+    assert result["recognized"] and result["selection"]["ids"] == ids
+    assert [binding["operator"] for binding in result["bindings"]] == ["contains", "exact"]
+
+
+def test_current_exact_exclusion_keeps_fragment_matches(snapshot):
+    snapshot.tables["students"].append({**snapshot.tables["students"][1], "student_id": "EXACT", "student_name": "Maya"})
+    result = run(snapshot, "Exclude students whose name is exactly Maya", {"references": [
+        {"kind": "student", "text": "Maya", "field": "student_name", "operator": "exact",
+         "exact_match_text": "name is exactly Maya", "role": "exclude"},
+    ]}, {"sql": "SELECT student_id FROM students ORDER BY student_id"})
+    assert result["recognized"] and result["selection"]["ids"] == ["DEMO-001", "DEMO-002", "DEMO-003", "DEMO-004"]
+
+
+@pytest.mark.parametrize("field,evidence,ids", [
+    ("student_name", None, ["FRAGMENT", "NAME"]),
+    ("student_name", "name is exactly 123", ["NAME"]),
+    ("student_id", None, ["123"]),
+])
+def test_exact_evidence_keeps_numeric_names_distinct_from_ids(snapshot, field, evidence, ids):
+    source = snapshot.tables["students"][0]
+    snapshot.tables["students"] = [{**source, "student_id": sid, "student_name": name}
+        for sid, name in [("FRAGMENT", "123 Chen"), ("NAME", "123"), ("123", "Alex Chen")]]
+    question = "Show students whose name is exactly 123" if evidence else f"Show {field} 123"
+    result = run(snapshot, question, {"references": [{"kind": "student", "text": "123", "field": field,
+        "operator": "exact", "exact_match_text": evidence}]}, {"sql": "SELECT student_id FROM students ORDER BY student_id"})
+    assert result["recognized"] and result["selection"]["ids"] == ids
+
+
+@pytest.mark.parametrize("name,ids", [("Alex Chen", ["DEMO-001"]), ("Alex", [])])
+def test_combined_explicit_exact_selection_preserves_class_chart_even_when_empty(snapshot, name, ids):
+    evidence = f"name is exactly {name}"
+    result = run(snapshot, f"Chart class averages; show students whose {evidence}", {"output": "combined", "references": [
+        {"kind": "student", "text": name, "field": "student_name", "operator": "exact",
+         "exact_match_text": evidence, "applies_to": "selection"},
+    ]}, {"sql": "SELECT number,avg_percent FROM questions ORDER BY order_index",
+         "chart": {"x": "number", "y": ["avg_percent"]}, "selection": {"sql": "SELECT student_id FROM students"}})
+    assert result["recognized"] and result["selection"]["ids"] == ids
+    assert result["chart"]["traces"][0]["y"] == pytest.approx([90, 100, 200 / 7, 80])
+
+
+def test_explicit_exact_chart_keeps_canonical_identity(snapshot):
+    result = run(snapshot, "Chart scores for students whose name is exactly Alex Chen", {"output": "chart", "references": [
+        {"kind": "student", "text": "Alex Chen", "field": "student_name", "operator": "exact",
+         "exact_match_text": "name is exactly Alex Chen"},
+    ]}, {"sql": "SELECT student_id,q_id,score FROM grades ORDER BY q_id", "chart": {"x": "q_id", "y": ["score"]}})
+    assert result["recognized"] and result["selection"] is None
+    assert result["chart"]["title"] == "Alex Chen (DEMO-001)"
+
+
+def test_current_exact_name_cannot_escape_fixed_student_context(snapshot):
+    provider = Provider({"references": [{"kind": "student", "text": "Alex Chen", "field": "student_name",
+        "operator": "exact", "exact_match_text": "name is exactly Alex Chen"}]}, {"sql": "SELECT student_id FROM students"})
+    result = asyncio.run(ask(task_id="task", owner_id="t", surface="student_analysis", snapshot=snapshot,
+        context_student_id="DEMO-002", question="Show students whose name is exactly Alex Chen", provider=provider))
+    assert result["recognized"] and result["selection"]["ids"] == []
+
+
+@pytest.mark.parametrize("question,role", [
+    ("Exclude students whose name is exactly Alex", "target"),
+    ("Show students whose name is exactly Alex", "exclude"),
+])
+def test_exact_evidence_cannot_be_rebound_to_opposite_condition(snapshot, question, role):
+    result = run(snapshot, question, {"references": [{"kind": "student", "text": "Alex", "field": "student_name",
+        "operator": "exact", "exact_match_text": "name is exactly Alex", "role": role}]})
+    assert not result["recognized"] and result["selection"] is None
 
 
 def test_follow_up_receives_history_but_new_name_wins(snapshot):
