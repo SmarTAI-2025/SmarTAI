@@ -1,6 +1,8 @@
+import { ReviewIssueNotes } from "@/components/tasks/ReviewQueue";
+import { answerReviewNotes } from "@/lib/submissionReview";
 import { questionTypeLabel } from "@/lib/reviewLabels";
 import { ReviewConfirmButton, ReviewBlockDialog, ReviewStageActions } from "@/components/tasks/ReviewConfirmation";
-import { answerHasOptionalAdvice, answerNeedsConfirmation, answerReviewAttention } from "@/lib/submissionReview";
+import { answerNeedsConfirmation, answerReviewAttention } from "@/lib/submissionReview";
 import { submissionReviewBlockers, submissionConfirmationBlockers, answerReviewBlocked, studentIdentityIssue, studentIdentityReviewBlocked, type ReviewBlocker } from "@/lib/reviewConfirmation";
 import { DraftField, type DraftFieldHandle } from "@/components/ui/DraftField";
 import { useDraftProtection } from "@/hooks/useDraftProtection";
@@ -363,7 +365,7 @@ function StudentAnswerReviewForm() {
     });
   }
 
-  async function saveAnswer(question: SubmissionQuestion, moveNext: boolean) {
+  async function saveAnswer(question: SubmissionQuestion, moveNext: boolean, confirmBlank = false) {
     if (!taskId || !student || !taskQuery.data || readOnly || mutationLock.current) return;
     const draft = drafts[question.id];
     if (!draft) return;
@@ -382,6 +384,7 @@ function StudentAnswerReviewForm() {
         qId: question.id,
         expectedWorkflowRevision: taskQuery.data.workflow_revision,
         content: draft.content,
+        ...(confirmBlank ? { flag: [...(student.stu_ans.find(answer => answer.q_id === question.id)?.flag ?? []), "manual_blank_confirmed"] } : {}),
         reviewStatus: "confirmed",
       });
       if (!mounted.current) return;
@@ -805,7 +808,7 @@ function StudentAnswerReviewForm() {
                     editing={editingQuestionIds.has(question.id)}
                     readOnly={readOnly || Boolean(identitySavingStudent) || mutationBusy && savingQuestionId !== question.id}
                     onDraftChange={(patch) => updateDraft(question.id, patch)}
-                    onSave={(moveNext) => void saveAnswer(question, moveNext)}
+                    onSave={(moveNext, confirmBlank) => void saveAnswer(question, moveNext, confirmBlank)}
                     onEdit={() => startEditing(question)}
                     onCancel={() => cancelEditing(question)}
                     onConfirm={() => void confirmAnswer(question)}
@@ -973,7 +976,7 @@ function AnswerReviewCard({ question, answer, draft, sourceFilename, previous, n
   editing: boolean;
   readOnly: boolean;
   onDraftChange: (patch: Partial<AnswerDraft>) => void;
-  onSave: (moveNext: boolean) => void;
+  onSave: (moveNext: boolean, confirmBlank?: boolean) => void;
   onEdit: () => void;
   onCancel: () => void;
   onConfirm: () => void;
@@ -995,7 +998,7 @@ function AnswerReviewCard({ question, answer, draft, sourceFilename, previous, n
         </div>
         <div className="flex flex-wrap items-center gap-2">
           {answer ? <ReviewConfirmButton title={tx(locale, `第 ${question.label} 题`, `Question ${question.label}`)} locale={locale} confirmed={state === "reviewed" && !editing} blocked={answerReviewAttention(answer) === "blocking"} busy={saving} save={editing} onClick={editing ? () => onSave(false) : onConfirm} /> : null}
-          {answerHasOptionalAdvice(answer) ? <span className="text-[11px] text-muted-foreground">{tx(locale, "识别结果可选核对，可继续", "Optional transcription check; you can continue")}</span> : null}
+          <ReviewIssueNotes issues={answerReviewNotes(answer, locale)} />
           <Button type="button" variant="secondary" className="h-9 px-3" disabled={!previous} onClick={() => previous && onNavigate(previous.id)}>
             <ArrowUp aria-hidden="true" className="h-4 w-4" />{t("answerReviewPreviousQuestion")}
           </Button>
@@ -1041,6 +1044,9 @@ function AnswerReviewCard({ question, answer, draft, sourceFilename, previous, n
                 className="mt-3 min-h-[132px] w-full resize-y rounded-[8px] border bg-slate-50 px-4 py-3 font-mono text-sm leading-6 text-foreground outline-none placeholder:text-muted-foreground focus:border-primary focus:bg-card focus:ring-2 focus:ring-primary/15 dark:bg-slate-900/45"
               />
               <div className="mt-3 flex flex-col gap-2 sm:flex-row sm:justify-end">
+                {answer?.flag?.includes("recognition_manual_pending") && draft.content === "" ? <Button type="button" variant="secondary" disabled={saving} onClick={() => onSave(false, true)}>
+                  {tx(locale, "确认本题未作答", "Confirm no answer for this question")}
+                </Button> : null}
                 <Button type="button" variant="secondary" className="h-9 px-4" disabled={saving} onClick={onCancel}>
                   <X aria-hidden="true" className="h-4 w-4" />
                   {tx(locale, "取消", "Cancel")}

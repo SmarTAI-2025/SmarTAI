@@ -8,16 +8,11 @@ the frozen grading-run knowledge scope through the existing ``task_id``
 parameter, and maps each returned
 ``Correction`` into a ``GradeResultDTO``.
 
-Failure semantics (no publishable real zero):
-* ``confidence == 0`` or ``synthesis_method in {all_failed, quota_exhausted}``
-  → hard failure with no provisional score;
-* low confidence or expert disagreement → soft review that preserves the
-  provisional score. (2026-08-28: ``degraded_to_single`` is no longer
-  automatically a review reason — ``run_multi_expert`` only flags the
-  Correction when the surviving sample itself is low confidence, because
-  model capabilities are uneven and one confident model is enough.)
-* a missing correction/student result → hard failure with no provisional score;
-* an exception raised by ``grade_batch`` → the whole run fails, not silent zeros.
+Failure semantics (no publishable failure placeholder):
+* explicit all-failed, quota or paused outcomes without a valid expert have no score;
+* a valid score, including zero-confidence or partial-expert results, is advisory;
+* a missing correction/student result blocks release until it is scored;
+* an exception raised by grade_batch fails the run rather than inventing zero.
 """
 from __future__ import annotations
 
@@ -110,9 +105,8 @@ def correction_to_result(
 ) -> education.GradeResultDTO:
     """Map a single Correction (or its absence) to a GradeResultDTO.
 
-    A real graded answer keeps its score. A confidence-0 / all-failed / missing
-    correction becomes ``failed`` rather than a publishable zero, so it blocks
-    release until the teacher supplies a valid score.
+    A real graded answer keeps its score, including at confidence zero.
+    Explicit failures and missing corrections block release until scored.
     """
     q_id = question.q_id
     if correction is None:
@@ -129,7 +123,7 @@ def correction_to_result(
 
     method = correction.synthesis_method
     has_valid_expert = any(not expert.error_kind for expert in correction.expert_results)
-    hard_failure = (correction.confidence == 0 and not has_valid_expert) or method in _HARD_FAILURE_METHODS
+    hard_failure = method in (_HARD_FAILURE_METHODS | {"paused"}) and not has_valid_expert
     invalid_scale = False
     try:
         normalized_score, normalized_steps = normalize_score_scale(
@@ -152,7 +146,7 @@ def correction_to_result(
         primary_reasons = ["invalid_score_scale"]
     elif hard_failure:
         primary_reasons = [
-            "quota_exhausted" if method == "quota_exhausted" else "llm_failed"
+            "grading_paused" if method == "paused" else "quota_exhausted" if method == "quota_exhausted" else "llm_failed"
         ]
     else:
         primary_reasons = []
@@ -184,7 +178,7 @@ def correction_to_result(
         ai_max_score=question.max_score,
         ai_comment=correction.comment or "",
         ai_steps=[s.model_dump() for s in normalized_steps],
-        ai_confidence=correction.confidence,
+        ai_confidence=None if method == "paused" else correction.confidence,
         ai_expert_results=[e.model_dump() for e in normalized_experts],
         ai_synthesis_method=method,
         requires_review=needs_review,

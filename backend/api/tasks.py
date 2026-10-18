@@ -523,12 +523,16 @@ class StopTaskRunRequest(BaseModel):
     expected_workflow_revision: int = Field(ge=0)
 
 
+class ContinueTaskRunRequest(StopTaskRunRequest):
+    manual: bool = False
+
+
 @router.post("/{task_id}/continue")
-async def continue_stopped_auxiliary_task(task_id: str, request: StopTaskRunRequest, current: User = Depends(require_teacher)):
-    from backend.services.task_execution import continue_auxiliary_run
+async def continue_stopped_auxiliary_task(task_id: str, request: ContinueTaskRunRequest, current: User = Depends(require_teacher)):
+    from backend.services.task_execution import continue_auxiliary_run, continue_manual_grading
     from backend.progress.tracker import remove_reporter
     try:
-        result = await asyncio.to_thread(continue_auxiliary_run, task_id=task_id, owner_id=current.id,
+        result = await asyncio.to_thread(continue_manual_grading if request.manual else continue_auxiliary_run, task_id=task_id, owner_id=current.id,
                                         job_id=request.job_id, expected_revision=request.expected_workflow_revision)
         if result["status"] == "started":
             remove_reporter(request.job_id)
@@ -616,6 +620,19 @@ async def retry_submission_recognition_endpoint(
         queued.pop("_job_attempt", None)
         queued.pop("_recognition_provider_id", None)
         return {**queued, "reused_original_upload": True}
+    except DomainError as exc:
+        return domain_error_response(exc)
+
+
+@router.post("/{task_id}/submission-recognition/{job_id}/manual-review")
+async def manually_complete_submission_recognition(
+    task_id: str, job_id: str, request: RetrySubmissionRecognitionRequest,
+    current: User = Depends(require_teacher),
+):
+    from backend.services.submission_manual_review import continue_manually
+    try:
+        return await continue_manually(task_id=task_id, owner_id=current.id, job_id=job_id,
+                                       expected_revision=request.expected_workflow_revision)
     except DomainError as exc:
         return domain_error_response(exc)
 

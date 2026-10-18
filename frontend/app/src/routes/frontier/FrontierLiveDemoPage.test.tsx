@@ -274,7 +274,7 @@ describe("FrontierLiveDemoPage", () => {
     expect(getTask).toHaveBeenCalledTimes(1);
   });
 
-  it.each([false, true])("grades inline using the default or saved setup (configured: %s)", async (configured) => {
+  it.each([false, true])("grades inline despite optional expert disagreement (configured: %s)", async (configured) => {
     const task = { ...taskWithQuestions(), student_data: recognizedStudents() };
     const setup = { ...gradingSetup(), configured, grading_setup: configured ? { ...gradingSetup().suggested_setup!, teacher_notes: "Keep my saved settings" } : null };
     const grading = deferred<TaskStateSnapshot>();
@@ -284,7 +284,12 @@ describe("FrontierLiveDemoPage", () => {
     vi.mocked(getGradingSetup).mockResolvedValue(setup);
     vi.mocked(saveGradingSetup).mockResolvedValue({ ...setup, configured: true, grading_setup: setup.suggested_setup, workflow_revision: 3 });
     vi.mocked(startGrading).mockResolvedValue({ status: "started", job_id: "grading-job" });
-    vi.mocked(getTaskResult).mockResolvedValue(gradedResult(task));
+    const result = gradedResult(task);
+    const correction = result.results![0].corrections[0];
+    correction.expert_results = [correction.max_score, correction.max_score - 4].map(score => ({
+      provider: "expert", score, max_score: correction.max_score, confidence: .95, comment: "", steps: [],
+    }));
+    vi.mocked(getTaskResult).mockResolvedValue(result);
     const user = userEvent.setup();
     renderLive("asg_demo123");
     const buttons = await screen.findAllByRole("button", { name: "Start grading" });

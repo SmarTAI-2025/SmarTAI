@@ -364,3 +364,122 @@ def test_uncertain_page_keeps_native_text_until_explicit_resubmission():
     assert reused["state"] == "failed"
     assert reused["evidence"]["error_code"] == "provider_submit_uncertain"
     assert next_job.configuration["resubmit_uncertain"] is False
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("route_id", [None, "replacement-model"])
+async def test_gap_retry_keeps_successful_pages_from_queue_through_worker(monkeypatch, route_id):
+    from contextlib import asynccontextmanager
+    from backend.api.knowledge import retry_document, document_coverage
+    from backend.knowledge import ingestion
+    from backend.services import task_facade
+
+    who, doc_id, job_id = queued(pdf(100))
+    job = repo.claim_next(job_id=job_id)
+    repo.initialize(job, 100)
+    for batch in range(5):
+        for page in repo.next_pages(job):
+            state = "failed" if page.page_number == 99 else "blank_confirmed" if page.page_number == 1 else "searchable_with_warning"
+            repo.prepare_page(job, page.id, batch_extra_remaining=0)
+            repo.finish_page(job, page.id, text="" if page.page_number == 1 else f"Original page {page.page_number}",
+                state=state, evidence={"warning_codes": ["knowledge_native_math_unverified"],
+                    "artifact_ids": [f"evidence-{page.page_number}"], "usage": {"initial_calls": 1}})
+    old_pages = repo.manifest(doc_id, who)["pages"]
+    old_chunks = {c.chunk_metadata["page_number"]: c.content for c in list_chunks([doc_id])}
+    calls = []
+
+    @asynccontextmanager
+    async def engine(**_):
+        yield object()
+
+    async def read(request, *args, **kwargs):
+        calls.append(request.pages)
+        assert repo.manifest(doc_id, who)["summary"]["processed_pages"] == 99
+        return SimpleNamespace(result=("Recovered page 99", "searchable", {"usage": {"initial_calls": 1}}),
+            operation_usage=SimpleNamespace(patch_calls=0, empty_recovery_calls=0))
+
+    monkeypatch.setattr(task_facade, "_registry_for_owner", lambda _: Registry())
+    monkeypatch.setattr(ingestion, "resolve_stage_provider_route", lambda **_: SimpleNamespace(route_id=route_id))
+    monkeypatch.setattr(ingestion, "stage_provider_configuration_fingerprint", lambda **_: "new-fingerprint")
+    monkeypatch.setattr(ingestion, "recognition_engine", engine)
+    monkeypatch.setattr(ingestion, "_page_result", lambda run: run.result)
+    response = await retry_document(doc_id, recognition_route_id=route_id,
+        accept_uncertain_resubmission=False, current=SimpleNamespace(id=who))
+    retry = response["id"]
+    initial = repo.manifest(doc_id, who)
+    assert initial["summary"]["status"] == "queued"
+    assert initial["summary"]["processed_pages"] == 99
+    assert initial["summary"]["total_pages"] == 100
+    for old, new in zip(old_pages, initial["pages"]):
+        if old["page_number"] == 99:
+            assert new["state"] == "unprocessed"
+        else:
+            assert new["state"] == old["state"]
+            assert new["artifact_ids"] == old["artifact_ids"]
+            assert new["current_usage"]["initial_calls"] == 0
+    filtered = document_coverage(doc_id, offset=0, limit=20, issues_only=True, current=SimpleNamespace(id=who))
+    assert [p["page_number"] for p in filtered["pages"]] == [99]
+    assert filtered["next_offset"] is None
+    # A duplicate click while queued must not start another retry.
+    assert (await retry_document(doc_id, recognition_route_id=route_id,
+        accept_uncertain_resubmission=False, current=SimpleNamespace(id=who)))["id"] == retry
+    await KnowledgeIngestionWorker(registry_factory=lambda _: Registry(), page_reader=read).run_once(retry)
+    assert calls == [[99]]
+    final = repo.manifest(doc_id, who)
+    assert final["summary"]["coverage_complete"]
+    assert final["summary"]["usage"]["initial_calls"] == 1
+    assert repo.manifest(doc_id, who, issues_only=True)["pages"] == []
+    for chunk in list_chunks([doc_id]):
+        number = chunk.chunk_metadata["page_number"]
+        assert chunk.content == ("Recovered page 99" if number == 99 else old_chunks[number])
+
+
+@pytest.mark.parametrize("accept_uncertain", [False, True])
+@pytest.mark.parametrize("unfinished", [False, True])
+def test_gap_retry_preserves_uncertain_request_guard_after_model_change(accept_uncertain, unfinished):
+    who, doc_id, job_id = queued(pdf(2))
+    job = repo.claim_next(job_id=job_id)
+    repo.initialize(job, 2)
+    first, second = repo.next_pages(job)
+    repo.prepare_page(job, first.id, batch_extra_remaining=0)
+    repo.finish_page(job, first.id, text="Keep this", state="searchable", evidence={})
+    repo.prepare_page(job, second.id, batch_extra_remaining=0)
+    if unfinished:
+        with session_scope() as session:
+            page = session.get(KnowledgePageRecord, second.id)
+            page.operation = {"checkpoint": {"calls": [{"state": "pending"}]}}
+        repo.cancel(doc_id, who)
+    else:
+        repo.finish_page(job, second.id, text="Native text", state="failed",
+                         evidence={"error_code": "provider_submit_uncertain"})
+    retry = repo.queue_document(doc_id, who, dict(job.configuration, route_id="different"),
+        new_version=True, retry_failed_only=True, resubmit_uncertain=accept_uncertain)
+    pages = repo.manifest(doc_id, who)["pages"]
+    assert pages[0]["state"] == "searchable"
+    if accept_uncertain:
+        claimed = repo.claim_next(job_id=retry)
+        assert [p.page_number for p in repo.next_pages(claimed)] == [2]
+        assert repo.reusable_page(claimed, repo.next_pages(claimed)[0]) is None
+    else:
+        assert pages[1]["state"] == "failed"
+        assert pages[1]["error_code"] == "provider_submit_uncertain"
+        assert repo.claim_next(job_id=retry) is None
+
+
+def test_gap_retry_text_budget_failure_rolls_back_without_changing_published_pages(monkeypatch):
+    who, doc_id, job_id = queued(pdf(2))
+    job = repo.claim_next(job_id=job_id)
+    repo.initialize(job, 2)
+    first, second = repo.next_pages(job)
+    repo.prepare_page(job, first.id, batch_extra_remaining=0)
+    repo.finish_page(job, first.id, text="Preserved text", state="searchable", evidence={})
+    repo.prepare_page(job, second.id, batch_extra_remaining=0)
+    repo.finish_page(job, second.id, state="failed", evidence={})
+    before = repo.manifest(doc_id, who)
+    monkeypatch.setattr(repo, "MAX_TEXT_CHARS", len("Preserved text"))
+    from backend.domain.errors import RecognitionError
+    with pytest.raises(RecognitionError, match="recognition_artifact_limit"):
+        repo.queue_document(doc_id, who, job.configuration, new_version=True, retry_failed_only=True)
+    assert repo.manifest(doc_id, who) == before
+    with session_scope() as session:
+        assert list(session.scalars(select(KnowledgeIngestionRecord.id))) == [job_id]

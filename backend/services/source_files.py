@@ -605,7 +605,7 @@ def _resolve_submission_sources(
         )
         if (
             operation.assignment_id != task_id
-            or operation.operation_type != "submission_recognition"
+            or operation.operation_type not in {"submission_recognition", "submission_manual_review"}
         ):
             raise SourcePreviewNotFound("Source preview not found.")
         sources = source_outcome_repository.list_sources(

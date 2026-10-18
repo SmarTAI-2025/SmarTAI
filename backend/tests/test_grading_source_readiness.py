@@ -61,7 +61,7 @@ def _seed_source_case(second_status: str | None):
         q_id="q1",
         order_index=0,
         type="short",
-        stem="Question",
+        stem="Question", criterion="Award up to 10 points for the method and result.",
         max_score=10,
     )
     workflow = workflow_repository.ensure_workflow(
@@ -241,7 +241,7 @@ def _seed_legacy_structured_case(
         assignment_repository.add_question(
             assignment_id=assignment.id, teacher_id=owner_id,
             q_id=f"q{index + 1}", order_index=index,
-            type="short", stem=f"Question {index + 1}", max_score=10,
+            type="short", stem=f"Question {index + 1}", criterion="Award up to 10 points for the method and result.", max_score=10,
         )
     workflow = workflow_repository.ensure_workflow(
         assignment_id=assignment.id,
@@ -638,14 +638,14 @@ def test_structured_submission_without_answers_remains_blocked():
         owner_id=seeded["owner_id"],
     )
 
-    assert readiness["blocking_issues"] == ["answers_required"]
+    assert readiness["blocking_issues"] == ["submission_recognition_blocked"]
     with pytest.raises(InvalidTransition) as exc:
         task_facade.start_task_grading(
             task_id=seeded["assignment_id"],
             owner_id=seeded["owner_id"],
             expected_workflow_revision=seeded["workflow"].workflow_revision,
         )
-    assert exc.value.code == "answers_required"
+    assert exc.value.code == "submission_recognition_blocked"
     assert seeded["grading_repository"].list_runs_for_assignment(
         seeded["assignment_id"],
         actor_id=seeded["owner_id"],

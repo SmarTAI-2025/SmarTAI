@@ -8,7 +8,7 @@ import {
 } from "lucide-react";
 import { useRef, useState, type ReactNode } from "react";
 import { Navigate, useNavigate, useParams } from "react-router-dom";
-import { useRetrySubmissionRecognition, useTask } from "@/api/hooks/tasks";
+import { useManuallyCompleteSubmissionRecognition, useRetrySubmissionRecognition, useTask } from "@/api/hooks/tasks";
 import { useStageProviders } from "@/api/hooks";
 import { StageProviderSelect } from "@/components/models/StageProviderSelect";
 import { getAPIErrorCode } from "@/api/client";
@@ -44,6 +44,7 @@ export function SubmissionRecognitionProgressPage() {
   const taskQuery = useTask(taskId);
   const progressQuery = useTaskProgress(taskId);
   const retryRecognition = useRetrySubmissionRecognition();
+  const manualRecognition = useManuallyCompleteSubmissionRecognition();
   const expertsQuery = useStageProviders();
   const [retryError, setRetryError] = useState<unknown>(null);
   const [providerChoice, setProviderChoice] = useState<{ jobId: string; id: string } | null>(null);
@@ -57,6 +58,15 @@ export function SubmissionRecognitionProgressPage() {
   const failedJobId = taskState?.last_failed_job_id ?? (incomplete ? taskState?.parse_job_id : null);
   const providerId = providerChoice && providerChoice.jobId === failedJobId ? providerChoice.id : taskState?.submission_recognition_provider_id ?? "";
   const uncertain = taskState?.error === "provider_submit_uncertain" || getAPIErrorCode(retryError) === "provider_submit_uncertain";
+  async function continueManually() {
+    if (!taskId || !failedJobId || !taskState || manualRecognition.isPending) return;
+    setRetryError(null);
+    try {
+      await manualRecognition.mutateAsync({ taskId, jobId: failedJobId,
+        expectedWorkflowRevision: taskState.workflow_revision });
+      navigate(`/tasks/${taskId}/submissions`, { replace: true });
+    } catch (error) { setRetryError(error); }
+  }
   async function retry() {
     if (retrying.current || retryRecognition.isPending || !taskId || !taskState || !failedJobId || !providerId) return;
     if (uncertain && acknowledgedJobId !== failedJobId) return;
@@ -139,13 +149,14 @@ export function SubmissionRecognitionProgressPage() {
             onChange={(id) => { if (failedJobId) setProviderChoice({ jobId: failedJobId, id }); setRetryError(null); }} className="mb-4" />
           {uncertain && failedJobId ? <label className="mb-4 flex items-center gap-2 text-sm"><input type="checkbox" checked={acknowledgedJobId === failedJobId} disabled={retryRecognition.isPending} onChange={(event) => setAcknowledgedJobId(event.target.checked ? failedJobId : null)} />{locale === "zh-CN" ? "我了解上次请求可能已计费，确认重试可能再次消耗额度" : "I understand the previous call may have been billed and retrying may incur additional charges"}</label> : null}
           {paused && !retryError ? <TaskPausedState status="submissions_paused" onContinue={() => void retry()}
-            busy={retryRecognition.isPending || refreshing} disabled={!failedJobId || !providerId} /> : <RecoverableActionState
+            onManual={failedJobId ? () => void continueManually() : undefined}
+            busy={retryRecognition.isPending || manualRecognition.isPending || refreshing} disabled={!failedJobId || !providerId} /> : <RecoverableActionState
             info={info}
             locale={locale}
             usageContext={{ providerIds: [providerId], providers: expertsQuery.data ?? [] }}
             className="min-h-[300px]"
             workflowRecovery={{ retry: { onClick: () => void retry(), busy: retryRecognition.isPending || refreshing, disabled: !failedJobId || !providerId || (uncertain && acknowledgedJobId !== failedJobId) }, configurationHref: `/tasks/${taskId}/submissions/upload`, configurationState: { imageRecoveryModel: providerId } }}
-            additionalActions={[{ label: t("submissionProgressRefresh"), onClick: () => void refresh(), busy: retryRecognition.isPending || refreshing }]}
+            additionalActions={[...(failedJobId ? [{ label: locale === "zh-CN" ? "人工继续处理" : "Continue manually", onClick: () => void continueManually(), busy: manualRecognition.isPending, disabled: retryRecognition.isPending || refreshing }] : []), { label: t("submissionProgressRefresh"), onClick: () => void refresh(), busy: retryRecognition.isPending || refreshing }]}
           />}
           {!paused && <SubmissionSourceOutcomePanel
             summary={progressQuery.data?.submission_source_summary ?? taskQuery.data?.submission_source_summary}

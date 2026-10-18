@@ -26,6 +26,7 @@ from backend.agents.multi_expert import (
     run_multi_expert,
 )
 from backend.skills.base import format_deterministic_feedback
+from backend.services.grading_checkpoints import CheckpointWriteError, current_checkpoints
 
 if TYPE_CHECKING:
     from backend.progress.tracker import ProgressReporter
@@ -41,16 +42,17 @@ def _apply_low_confidence_policy(
     grading_setup: Optional[TaskGradingSetup],
 ) -> Correction:
     """Apply the shared policy, independent of legacy saved slider values."""
-    from backend.domain.confidence_policy import confidence_needs_attention, confidence_requires_review
+    from backend.domain.confidence_policy import confidence_needs_attention
 
     other_reasons = [reason for reason in correction.review_reasons if reason != "low_confidence"]
     if correction.review_reasons and not other_reasons:
         correction.requires_human_review = False
     correction.review_reasons = other_reasons
-    if confidence_needs_attention(correction.confidence):
+    valid_experts = [expert for expert in correction.expert_results
+                     if not expert.error_kind and 0 <= expert.score <= expert.max_score]
+    if (any(confidence_needs_attention(expert.confidence) for expert in valid_experts)
+            if valid_experts else confidence_needs_attention(correction.confidence)):
         correction.review_reasons.append("low_confidence")
-    if confidence_requires_review(correction.confidence):
-        correction.requires_human_review = True
     return correction
 
 
@@ -210,7 +212,7 @@ async def grade_student(
             )
             continue
 
-        tasks.append(_grade_single_answer(
+        tasks.append(_grade_and_save_answer(
             problem=problem,
             answer=answer,
             student_id=student_id,
@@ -228,6 +230,8 @@ async def grade_student(
 
     final_corrections: List[Correction] = []
     for c in corrections:
+        if isinstance(c, (CheckpointWriteError, asyncio.CancelledError)):
+            raise c
         if isinstance(c, Exception):
             logger.error(
                 "Per-question grading task failed; exception_type=%s",
@@ -266,6 +270,14 @@ def _is_retryable_full_failure(correction: Correction) -> bool:
     if correction.confidence > 0 or not correction.expert_results:
         return False
     return dominant_error_kind(correction.expert_results) in _RETRYABLE_ERROR_KINDS
+
+
+async def _grade_and_save_answer(**kwargs):
+    correction = await _grade_single_answer(**kwargs)
+    checkpoints = current_checkpoints()
+    if checkpoints:
+        checkpoints.save_correction(kwargs["student_id"], correction)
+    return correction
 
 
 async def _grade_single_answer(
@@ -332,6 +344,8 @@ async def _grade_single_answer(
             if reporter:
                 await reporter.increment_completed()
             return _apply_low_confidence_policy(correction, grading_setup)
+        except CheckpointWriteError:
+            raise
         except AllExpertsFailed as e:
             if (
                 e.dominant_kind in _RETRYABLE_ERROR_KINDS
@@ -425,12 +439,16 @@ async def grade_batch(
     """
     if reporter:
         from backend.progress.grading_activity import GradingActivity
-        reporter.grading_activity = GradingActivity(reporter, sum(
+        checkpoints = current_checkpoints()
+        reporter.grading_activity = GradingActivity(reporter,
+            len(checkpoints.questions) * len(checkpoints.revisions) if checkpoints else sum(
             1 for sd in student_store.values() if sd.get("stu_id")
             for answer in sd.get("stu_ans", [])
             if answer.get("q_id") in problem_store and (question_ids_by_student is None
                 or answer.get("q_id") in question_ids_by_student.get(sd["stu_id"], set()))
         ))
+        if checkpoints:
+            await checkpoints.seed_activity(reporter.grading_activity, registry, grading_setup)
         await reporter.set_phase("grading")
         await reporter.set_totals(
             students=len(student_store),
@@ -460,6 +478,8 @@ async def grade_batch(
     results = await asyncio.gather(*tasks, return_exceptions=True)
     final: List[Dict[str, Any]] = []
     for r in results:
+        if isinstance(r, (CheckpointWriteError, asyncio.CancelledError)):
+            raise r
         if isinstance(r, Exception):
             logger.error(
                 "Student grading task failed; exception_type=%s",

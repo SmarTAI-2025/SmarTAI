@@ -27,6 +27,7 @@ from backend.agents.grading_agent import _grade_single_answer
 from backend.agents.multi_expert import (
     AllExpertsFailed,
     SynthesisOutput,
+    _compute_review_signal,
     _weighted_average_fallback,
     run_multi_expert,
 )
@@ -41,6 +42,24 @@ from backend.tools.structured_llm import extract_and_parse_json
 
 
 # ─── Helpers ─────────────────────────────────────────────────────────────────
+
+
+@pytest.mark.parametrize("scores,maximum,expected_is,flagged", [
+    ([10, 6], 10, .2, True),
+    ([10, 7], 10, .15, False),
+    ([10, 6.99], 10, .1505, True),
+    ([3.8, 2.6], 4, .15, False),
+    ([10, 7.4], 10, .13, False),
+    ([10] * 9 + [6], 10, .12, False),
+    ([100, 97.99], 100, .01005, False),
+    ([3, 1], 3, 1 / 3, True),
+])
+def test_only_population_deviation_over_15_percent_signals_disagreement(scores, maximum, expected_is, flagged):
+    experts = [ExpertResult(provider="expert", score=value, max_score=maximum, confidence=.95, comment="") for value in scores]
+    is_score, review, reasons = _compute_review_signal(experts)
+    assert is_score == pytest.approx(expected_is)
+    assert review is flagged
+    assert reasons == (["high_indecisiveness"] if flagged else [])
 
 
 def _problem(qid: str = "q1") -> ProblemInfo:
@@ -194,7 +213,7 @@ async def test_partial_failure_degrades_to_single(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_partial_failure_high_confidence_survivor_is_not_flagged(monkeypatch):
+async def test_partial_failure_high_confidence_survivor_is_advisory(monkeypatch):
     p1 = _FakeProvider("zhipu:glm-4.5-air")
     p2 = _FakeProvider("gemini:gemini-3-flash-preview")
     _patch_skill_returning(monkeypatch, {
@@ -214,11 +233,11 @@ async def test_partial_failure_high_confidence_survivor_is_not_flagged(monkeypat
     assert correction.confidence == pytest.approx(0.9)
     # One confident model is enough: no forced human review.
     assert correction.requires_human_review is False
-    assert correction.review_reasons == []
+    assert correction.review_reasons == ["partial_experts"]
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("confidence, required", [(0.2499, True), (0.25, False), (0.35, False), (0.60, False)])
+@pytest.mark.parametrize("confidence, required", [(0.2499, False), (0.25, False), (0.35, False), (0.60, False)])
 async def test_partial_failure_low_confidence_survivor_is_flagged(monkeypatch, confidence, required):
     p1 = _FakeProvider("zhipu:glm-4.5-air")
     p2 = _FakeProvider("gemini:gemini-3-flash-preview")
@@ -237,7 +256,7 @@ async def test_partial_failure_low_confidence_survivor_is_flagged(monkeypatch, c
     )
     assert correction.synthesis_method == "degraded_to_single"
     assert correction.requires_human_review is required
-    assert ("degraded_to_single" in correction.review_reasons) is required
+    assert "partial_experts" in correction.review_reasons
 
 
 def test_weighted_average_confidence_uses_best_expert():
@@ -288,7 +307,7 @@ async def test_transient_network_failure_is_not_a_confidence_vote(monkeypatch):
     assert correction.synthesis_method == "degraded_to_single"
     assert correction.confidence == pytest.approx(0.9)
     assert correction.requires_human_review is False
-    assert correction.review_reasons == []
+    assert correction.review_reasons == ["partial_experts"]
     # The failed expert stays visible for triage but cast no vote.
     assert [er.provider for er in correction.expert_results] == [
         p2.provider_id, p1.provider_id,
@@ -320,7 +339,7 @@ async def test_transient_error_is_non_vote_even_with_spurious_confidence(monkeyp
     assert correction.synthesis_method == "degraded_to_single"
     assert correction.confidence == pytest.approx(0.9)
     assert correction.requires_human_review is False
-    assert correction.review_reasons == []
+    assert correction.review_reasons == ["partial_experts"]
 
 
 # ─── 3. Weighted average no longer leaks failed experts ──────────────────────

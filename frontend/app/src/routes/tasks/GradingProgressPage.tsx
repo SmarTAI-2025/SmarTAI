@@ -1,6 +1,7 @@
 import { taskWorkspacePath } from "@/lib/frontierSession";
 import { AlertTriangle, CheckCircle2, LoaderCircle } from "lucide-react";
-import { useMemo, type ReactNode } from "react";
+import { useMemo, useState, type ReactNode } from "react";
+import { continueTaskRun } from "@/api/tasks";
 import { Link, Navigate, useNavigate, useParams } from "react-router-dom";
 import { useStartGrading, useTask } from "@/api/hooks/tasks";
 import { SmarTAIMascot } from "@/components/brand/SmarTAIMascot";
@@ -34,6 +35,8 @@ export function GradingProgressPage() {
   const progressQuery = useTaskProgress(taskId);
   const retryGrading = useStartGrading();
   const intent = useGradingIntent();
+  const [manualBusy, setManualBusy] = useState(false);
+  const [manualError, setManualError] = useState(false);
   const task = taskQuery.data;
   const state = progressQuery.data;
   const status = (state?.status ?? task?.status) as TaskStatus | undefined;
@@ -89,6 +92,20 @@ export function GradingProgressPage() {
     }
   }
 
+  async function handleManual() {
+    if (!taskId || !task?.grading_job_id || manualBusy) return;
+    setManualBusy(true);
+    setManualError(false);
+    try {
+      await continueTaskRun(taskId, task.grading_job_id, state?.workflow_revision ?? task.workflow_revision, true);
+      await taskQuery.refetch();
+      navigate(`/tasks/${taskId}/review`);
+    } catch {
+      setManualError(true);
+      await Promise.all([taskQuery.refetch(), progressQuery.refetch()]);
+    } finally { setManualBusy(false); }
+  }
+
   const hasReadableState = Boolean(status || task || state);
   const readFailed = !hasReadableState && (taskQuery.isError || progressQuery.isError);
   const isFinalizing = status === "grading" && progress?.phase === "done";
@@ -126,10 +143,12 @@ export function GradingProgressPage() {
         <PageState title={copy(locale, "reading")} busy />
       ) : (
         <div>
+              {manualError ? <p role="alert">{locale === "zh-CN" ? "暂时无法进入复核，请刷新状态后重试。" : "Could not open review. Refresh and try again."}</p> : null}
           {status === "error" ? <p className="mb-4 text-sm text-muted-foreground">{locale === "zh-CN" ? "仅重试缺少有效结果的题次，保留成功结果及教师修改。可先在模型配置中调整模型；返回批改设置再开始会重新批改整批。" : "Retry only items without a valid result; keep successful results and teacher edits. You can adjust models first. Starting from grading settings reruns the full batch."}</p> : null}
           {status === "grading_paused" && !retryGrading.error ? (
-            <TaskPausedState status="grading_paused" onContinue={() => void handleRetry()} busy={retryGrading.isPending}>
-              <p className="text-sm text-muted-foreground">{copy(locale, "completedPrefix")} {queue.completed} / {queue.total} {copy(locale, "unitSuffix")}</p>
+            <TaskPausedState status="grading_paused" onContinue={() => void handleRetry()} onManual={() => void handleManual()} busy={retryGrading.isPending || manualBusy}>
+              <p className="text-sm text-muted-foreground">{locale === "zh-CN" ? "已保存 AI 评分" : "Saved AI grades"} {progress?.saved_units ?? queue.completed} / {queue.total} {copy(locale, "unitSuffix")} · {locale === "zh-CN" ? "已汇总" : "Aggregated"} {queue.completed} / {queue.total}</p>
+              <ModelProgressRows models={progress?.model_progress ?? []} locale={locale} stopped />
             </TaskPausedState>
           ) : recoveryInfo ? (
             <RecoverableActionState
@@ -138,7 +157,7 @@ export function GradingProgressPage() {
               usageContext={{ gradingTaskId: taskId }}
               className="min-h-[300px]"
               workflowRecovery={{ retry: { onClick: () => void handleRetry(), busy: retryGrading.isPending }, configurationHref: getTaskGradingSetupHref(taskId, `/tasks/${taskId}/grading/progress`) }}
-              additionalActions={[{ label: copy(locale, "refresh"), onClick: refresh, busy: retryGrading.isPending }, { label: locale === "zh-CN" ? "人工补齐分数" : "Enter missing scores", href: `/tasks/${taskId}/review?resolveFailures=1` }]}
+              additionalActions={[{ label: copy(locale, "refresh"), onClick: refresh, busy: retryGrading.isPending }, { label: locale === "zh-CN" ? "人工继续处理" : "Continue manually", onClick: () => void handleManual(), busy: manualBusy, disabled: retryGrading.isPending }]}
             />
           ) : (
             <>
@@ -157,6 +176,7 @@ export function GradingProgressPage() {
                     : waitingLabel ?? `${copy(locale, "etaPrefix")} ${isFinalizing ? copy(locale, "almostDone") : eta}`}
                 </p>
                 <ModelProgressRows models={progress?.model_progress ?? []} locale={locale} />
+                {progress?.saved_units !== undefined ? <p className="mt-1 text-xs text-muted-foreground">{locale === "zh-CN" ? "已保存至少一个模型评分的题次" : "Responses with at least one saved model grade"}: {progress.saved_units} / {queue.total}</p> : null}
 
                 <div className="mt-4 flex items-center gap-3">
                   <div

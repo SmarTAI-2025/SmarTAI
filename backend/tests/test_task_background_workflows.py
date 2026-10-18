@@ -32,7 +32,7 @@ from backend.services import task_facade
 from backend.tools.structured_llm import PermanentLLMError, RateLimitError, TransientLLMError
 
 
-def _seed_task(*, with_question: bool = False) -> tuple[str, str]:
+def _seed_task(*, with_question: bool = False, criterion: str = "Award up to 10 points for the method and result.") -> tuple[str, str]:
     suffix = uuid.uuid4().hex[:10]
     owner_id = f"teacher_{suffix}"
     course_id = f"course_{suffix}"
@@ -58,7 +58,7 @@ def _seed_task(*, with_question: bool = False) -> tuple[str, str]:
     if with_question:
         assignment_repository.add_question(
             task_id, teacher_id=owner_id, q_id="q1", order_index=0,
-            type="short", stem="Original", criterion="", max_score=10,
+            type="short", stem="Original", criterion=criterion, max_score=10,
         )
     return owner_id, task_id
 
@@ -555,7 +555,7 @@ def test_atomic_question_batch_rolls_back_before_any_partial_write():
     question = assignment_repository.list_questions(
         task_id, teacher_id=owner_id
     )[0]
-    assert question.criterion == ""
+    assert question.criterion == "Award up to 10 points for the method and result."
     assert workflow_repository.get_workflow(
         task_id, owner_id=owner_id
     ).workflow_revision == 0
@@ -618,7 +618,7 @@ def test_task_tombstone_fences_atomic_question_patch_publication():
             )
         )
         assert question is not None
-        assert question.criterion == ""
+        assert question.criterion == "Award up to 10 points for the method and result."
     assert workflow_repository.get_workflow(
         task_id, owner_id=owner_id
     ).workflow_revision == 0
@@ -778,7 +778,7 @@ def test_atomic_question_batch_rejects_non_finite_operation_payload():
     assert invalid.value.code == "invalid_operation_payload"
     assert assignment_repository.list_questions(
         task_id, teacher_id=owner_id
-    )[0].criterion == ""
+    )[0].criterion == "Award up to 10 points for the method and result."
     assert workflow_repository.get_workflow(
         task_id, owner_id=owner_id
     ).workflow_revision == 0
@@ -1396,7 +1396,7 @@ async def test_unknown_ai_completion_target_uses_figma_error_code():
 
 @pytest.mark.asyncio
 async def test_ai_completion_retry_replays_running_job_after_revision_claim():
-    owner_id, task_id = _seed_task(with_question=True)
+    owner_id, task_id = _seed_task(with_question=True, criterion="")
     request = task_preparation.ConfirmAICompletionRequest(
         target_ids=["q1:criterion"], expected_workflow_revision=0,
         test_case_count=7,
@@ -1423,7 +1423,7 @@ async def test_ai_completion_retry_replays_running_job_after_revision_claim():
 
 @pytest.mark.asyncio
 async def test_ai_completion_error_retry_reclaims_with_current_internal_revision():
-    owner_id, task_id = _seed_task(with_question=True)
+    owner_id, task_id = _seed_task(with_question=True, criterion="")
     request = task_preparation.ConfirmAICompletionRequest(
         target_ids=["q1:criterion"], expected_workflow_revision=0,
         test_case_count=7,

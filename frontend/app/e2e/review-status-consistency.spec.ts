@@ -2,7 +2,7 @@ import { expect, test } from "@playwright/test";
 
 const backend = process.env.SMARTAI_E2E_BACKEND_URL ?? "http://127.0.0.1:8000";
 
-for (const mode of ["individual", "overview-all", "detail-all"]) for (const locale of ["zh-CN", "en-US"]) {
+for (const mode of ["individual", "overview-all", "detail-all", "advisory"]) for (const locale of ["zh-CN", "en-US"]) {
   test(`${mode} ${locale}: confirmation, live results and queue stay consistent`, async ({ page }, testInfo) => {
     const zh = locale === "zh-CN", taskId = "asg_review_status";
     const errors: string[] = [];
@@ -20,10 +20,10 @@ for (const mode of ["individual", "overview-all", "detail-all"]) for (const loca
     const problem_data = Object.fromEntries([1, 2, 3, 4].map(n => [`q${n}`, { q_id: `q${n}`, number: String(n), stem: `Synthetic question ${n}.`, criterion: "Reasoning rubric.", max_score: 10 }]));
     const student_data = { S1: { stu_id: "S1", stu_name: "Example", identity_status: "matched", stu_ans: [1, 2, 3, 4].map(n => ({ q_id: `q${n}`, content: "Synthetic answer.", review_status: "confirmed", flag: [] })) } };
     const corrections = [6, 8, 4, 10].map((score, i) => ({ q_id: `q${i + 1}`, score, provisional_score: score, max_score: 10,
-      confidence: i === 0 || i === 2 ? .2 : i === 1 ? .5 : .95, comment: "Original explanation.", steps: [], requires_human_review: i === 0 || i === 2,
+      confidence: i === 0 || i === 2 ? (mode === "advisory" ? .95 : .2) : i === 1 ? .5 : .95, comment: "Original explanation.", steps: [], requires_human_review: i === 0 || i === 2,
       review_reasons: i === 0 || i === 2 ? ["high_indecisiveness"] : [], initial_review_reasons: [] as string[],
       review_status: "pending", teacher_score: null as number | null, teacher_comment: "",
-      expert_results: (i === 0 ? [3, 9] : i === 2 ? [0, 8] : [score, score]).map((value, index) => ({ provider: `expert-${index}`, score: i === 1 && index === 1 ? 0 : value,
+      expert_results: (i === 0 ? [10, 6] : i === 2 ? [0, 8] : [score, score]).map((value, index) => ({ provider: `expert-${index}`, score: i === 1 && index === 1 ? 0 : value,
         max_score: 10, confidence: .95, comment: "Evidence.", steps: [], error_kind: i === 1 && index === 1 ? "general" : null })) }));
     const task = { task_id: taskId, owner_id: "teacher", name: "Review consistency", status: "graded", workflow_revision: 1,
       final_result_version: 0, problem_data, student_data, problem_count: 4, student_count: 1, created_at: 1, updated_at: 1, kb_docs: {} };
@@ -76,25 +76,42 @@ for (const mode of ["individual", "overview-all", "detail-all"]) for (const loca
       throw new Error(`Unexpected request ${request.method()} ${path}`);
     });
     const root = `/tasks/${taskId}`;
-    // Ordinary .5 uncertainty is available for optional detail inspection, never a queue item.
+    // Partial experts and disagreement are suggestions; valid results remain accessible.
     await page.goto(`${root}/review`);
     const queue = page.getByRole("region", { name: zh ? "待复核队列" : "Review queue" });
-    await expect(queue.getByRole("link")).toHaveCount(2);
-    await expect(queue.getByRole("link", { name: /Q2/ })).toHaveCount(0);
+    await expect(queue.getByRole("link")).toHaveCount(3);
+    await expect(queue.getByRole("link", { name: /Q2/ })).toHaveCount(1);
     await expect(queue.getByRole("link", { name: /Q4/ })).toHaveCount(0);
+    if (mode === "advisory") {
+      await expect(queue).toContainText(zh ? "建议处理" : "Suggested review");
+      await page.screenshot({ path: testInfo.outputPath("optional-review-queue.png"), fullPage: true });
+      await page.getByRole("button", { name: zh ? "查看结果分析" : "View Results & Analysis", exact: true }).click();
+      await expect(page).toHaveURL(`${root}/results`);
+      for (const suffix of ["", "/questions/q1", "/students/S1", "/visualizations", "/reports"]) {
+        await page.goto(`${root}/results${suffix}`);
+        const reminder = page.getByRole("link", { name: zh ? /专家分歧较大.*不影响查看/ : /high expert disagreement.*optional/ });
+        await expect(reminder).toBeVisible();
+        await expect(reminder).toHaveAttribute("href", `${root}/review`);
+        expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1)).toBe(true);
+      }
+      await page.screenshot({ path: testInfo.outputPath("optional-review-results.png"), fullPage: true });
+      expect(writes).toEqual([]);
+      await page.getByRole("link", { name: zh ? /专家分歧较大.*不影响查看/ : /high expert disagreement.*optional/ }).click();
+      await expect(queue.getByRole("link")).toHaveCount(3);
+    }
     await page.goto(`${root}/review${mode === "overview-all" ? "" : "/S1/q1"}`);
-    if (mode === "individual") {
-      for (const id of ["q1", "q3"]) {
+    if (mode === "individual" || mode === "advisory") {
+      for (const id of ["q1", "q2", "q3"]) {
         const card = page.locator(`[data-question-id="${id}"]`);
         await card.getByRole("button", { name: zh ? /待确认/ : /Confirm review/ }).click();
-        if (id === "q1") await expect(card.getByRole("button", { name: zh ? /已确认/ : /Confirmed/ })).toBeVisible();
+        if (id !== "q3") await expect(card.getByRole("button", { name: zh ? /已确认/ : /Confirmed/ })).toBeVisible();
         else await expect(page).toHaveURL(`${root}/review`);
       }
     } else {
       await page.getByRole("button", { name: zh ? "全部确认" : "Confirm all", exact: true }).click();
-      await expect.poll(() => writes.length).toBe(4);
+      await expect.poll(() => writes.length).toBe(mode === "overview-all" ? 3 : 4);
     }
-    const reviewWrites = mode === "individual" ? 2 : 4;
+    const reviewWrites = mode === "individual" || mode === "advisory" ? 3 : mode === "overview-all" ? 3 : 4;
     await page.getByRole("button", { name: zh ? "查看结果分析" : "View Results & Analysis", exact: true }).click();
     await expect(page).toHaveURL(`${root}/results`);
     expect(writes).toHaveLength(reviewWrites);
@@ -109,7 +126,7 @@ for (const mode of ["individual", "overview-all", "detail-all"]) for (const loca
     }
     await page.screenshot({ path: testInfo.outputPath("analysis-after-confirmation.png"), fullPage: true });
     await page.goto(`${root}/review`);
-    await expect(page.getByRole("region", { name: zh ? "待复核队列" : "Review queue" })).toContainText(zh ? "当前没有尚待处理" : "No unresolved");
+    await expect(page.getByRole("region", { name: zh ? "待复核队列" : "Review queue" })).toContainText(zh ? "当前没有待处理项" : "No pending items");
     // Changing a confirmed grade updates both statistics and charts without a release.
     await page.goto(`${root}/review/S1/q1`);
     const first = page.locator('[data-question-id="q1"]');
@@ -126,7 +143,7 @@ for (const mode of ["individual", "overview-all", "detail-all"]) for (const loca
     await page.getByRole("button", { name: zh ? "生成本版文件" : "Generate files" }).click();
     await expect(page.getByRole("button", { name: zh ? "下载全部 ZIP" : "Download all ZIP" })).toBeVisible();
     expect(writes).toHaveLength(reviewWrites + 2);
-    if (mode === "individual") expect(corrections[1].teacher_score).toBeNull();
+    if (mode === "individual") expect(corrections[3].teacher_score).toBeNull();
     if (mode === "individual") {
       // A separately saved edit moves the generated report into history.
       reportDirty = true; task.workflow_revision += 1;

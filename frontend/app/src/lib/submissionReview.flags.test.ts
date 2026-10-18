@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { answerNeedsConfirmation, answerReviewAttention, formatSubmissionFlag, getAnswerState, getSubmissionReviewStats, selectSubmissionReview, studentNeedsAttention } from "./submissionReview";
+import { answerNeedsConfirmation, answerReviewAttention, answerReviewNotes, formatSubmissionFlag, getAnswerState, getSubmissionReviewStats, selectSubmissionReview, studentNeedsAttention } from "./submissionReview";
 
 describe("OCR review labels", () => {
   it("counts every unconfirmed answer, including optional checks and genuine blanks", () => {
@@ -10,7 +10,7 @@ describe("OCR review labels", () => {
       { q_id: "q3", number: "q3", type: "short", content: "uncertain", flag: ["recognition_needs_review"] },
     ] }];
     expect(getSubmissionReviewStats(students, questions).reviewCells).toBe(3);
-    expect(getAnswerState(students[0].stu_ans[0])).toBe("recognized");
+    expect(getAnswerState(students[0].stu_ans[0])).toBe("flagged");
     expect(selectSubmissionReview(students, questions, "", "review", "student_id").students).toHaveLength(1);
     const confirmed = [{ ...students[0], stu_ans: students[0].stu_ans.map(a => ({ ...a, review_status: "confirmed" as const })) }];
     expect(getSubmissionReviewStats(confirmed, questions).reviewCells).toBe(0);
@@ -33,7 +33,7 @@ describe("OCR review labels", () => {
   });
 
   it("does not turn document-wide warnings or ordinary pending answers into risks", () => {
-    const answers = Array.from({ length: 12 }, (_, index) => ({ q_id: `q${index}`, number: `${index}`, type: "proof", content: "Readable answer", flag: ["recognition_needs_review", "authorship_uncertain"] }));
+    const answers = Array.from({ length: 12 }, (_, index) => ({ q_id: `q${index}`, number: `${index}`, type: "proof", content: "Readable answer", flag: ["recognition_needs_review"] }));
     expect(answers.every(answer => answerReviewAttention(answer) === "none")).toBe(true);
     expect(answers.every(answer => getAnswerState(answer) === "recognized" && answerNeedsConfirmation(answer))).toBe(true);
     expect(studentNeedsAttention({ stu_id: "s1", stu_name: "Sample", stu_ans: answers }, answers.map(answer => ({ id: answer.q_id, label: answer.number, type: answer.type, stem: "" })))).toBe(false);
@@ -41,11 +41,21 @@ describe("OCR review labels", () => {
 
   it.each(["very_low_confidence", "recognition_low_confidence", "low_confidence"])("keeps uncalibrated %s out of the required queue", (flag) => {
     const answer = { q_id: "q1", number: "1", type: "proof", content: "Readable answer", flag: [flag] };
-    expect(answerReviewAttention(answer)).toBe("none");
+    expect(answerReviewAttention(answer)).toBe("advisory");
     expect(formatSubmissionFlag(flag, "zh-CN")).toContain("可继续");
     expect(answerReviewAttention({ ...answer, flag: ["recognition_failed"] })).toBe("blocking");
     expect(answerReviewAttention({ ...answer, flag: ["recognition_repaired_needs_confirmation"] })).toBe("blocking");
     expect(answerReviewAttention({ ...answer, review_status: "confirmed" })).toBe("none");
+  });
+
+  it.each([0, .25, .5999, .6, .95])("uses real confidence instead of stale flags (%s)", recognition_confidence => {
+    const answer = { q_id: "q1", number: "1", type: "proof", content: "Partial text retained", recognition_confidence, flag: ["low_confidence"] };
+    expect(answerReviewAttention(answer)).toBe(recognition_confidence < .6 ? "advisory" : "none");
+    expect(answerReviewAttention({ ...answer, flag: ["authorship_uncertain"] })).toBe("advisory");
+    const incomplete = { ...answer, flag: ["recognition_manual_pending", "recognition_unprocessed_pages:2"] };
+    expect(answerReviewAttention(incomplete)).toBe("blocking");
+    expect(answerReviewNotes(incomplete, "en-US").map(note => note.severity).sort()).toEqual(recognition_confidence < .6 ? ["advisory", "blocking"] : ["blocking"]);
+    expect(answerReviewNotes(incomplete, "en-US").some(note => note.label.includes("pages:2"))).toBe(false);
   });
 
   it.each(["recognition_failed_pages:2", "recognition_unprocessed_pages:2"])("keeps server-projected page failure %s blocked after confirmation", (flag) => {

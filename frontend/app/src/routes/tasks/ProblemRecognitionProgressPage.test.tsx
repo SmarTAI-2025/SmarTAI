@@ -93,6 +93,19 @@ describe("ProblemRecognitionProgressPage recovery", () => {
     retryMutateAsync.mockResolvedValue({ status: "started", job_id: "retry-job" });
   });
 
+  it.each([null, "q2"])("offers manual continuation for paused recognition (first question %s)", async firstQuestion => {
+    snapshot = { ...failedTask, status: "problems_paused", error: "operation_cancelled" };
+    manualMutateAsync.mockResolvedValue({ first_question_id: firstQuestion, workflow_revision: 9 });
+    render(<MemoryRouter initialEntries={["/tasks/question-task/problems/progress"]}><Routes>
+      <Route path="/tasks/:taskId/problems/progress" element={<ProblemRecognitionProgressPage />} />
+      <Route path="/tasks/:taskId/questions" element={<div>Source review queue</div>} />
+      <Route path="/tasks/:taskId/questions/q2/content" element={<div>Question review</div>} />
+    </Routes></MemoryRouter>);
+    fireEvent.click(screen.getByRole("button", { name: "人工继续处理" }));
+    expect(await screen.findByText("Source review queue")).toBeInTheDocument();
+    expect(retryMutateAsync).not.toHaveBeenCalled();
+  });
+
   it("keeps retry idle during background status polls and only retries on click", async () => {
     expect(manualMutateAsync).not.toHaveBeenCalled();
     const page = <MemoryRouter initialEntries={["/tasks/question-task/problems/progress"]}><Routes>
@@ -112,16 +125,16 @@ describe("ProblemRecognitionProgressPage recovery", () => {
     await waitFor(() => expect(retryMutateAsync).toHaveBeenCalledTimes(1));
   });
 
-  it("offers explicit manual completion beside retry and opens the failed question editor", async () => {
+  it("offers explicit manual completion beside retry and opens the question review queue", async () => {
     failedQuestions = ["q2"];
     render(<MemoryRouter initialEntries={["/tasks/question-task/problems/progress"]}><Routes>
       <Route path="/tasks/:taskId/problems/progress" element={<ProblemRecognitionProgressPage />} />
-      <Route path="/tasks/:taskId/questions/q2/content" element={<div>Failed question editor</div>} />
+      <Route path="/tasks/:taskId/questions" element={<div>Question review queue</div>} />
     </Routes></MemoryRouter>);
     expect(screen.getByRole("button", { name: "重试失败项" })).toBeEnabled();
     expect(manualMutateAsync).not.toHaveBeenCalled();
-    fireEvent.click(screen.getByRole("button", { name: "手动补全失败题目" }));
-    expect(await screen.findByText("Failed question editor")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "人工继续处理" }));
+    expect(await screen.findByText("Question review queue")).toBeInTheDocument();
     expect(manualMutateAsync).toHaveBeenCalledWith({ taskId: "question-task", jobId: "failed-question-job", expectedWorkflowRevision: 8 });
     expect(retryMutateAsync).not.toHaveBeenCalled();
   });

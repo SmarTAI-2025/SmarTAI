@@ -172,13 +172,6 @@ class Settings(BaseSettings):
     # ─── Human-in-the-loop ─────────────────────────────────────────────────────
     confidence_threshold: float = 0.6  # below this, trigger human review
 
-    # ─── Indecisiveness Score (P0 fairness signals) ────────────────────────────
-    # Normalized standard deviation of expert/sample scores (std / max_score).
-    # When IS exceeds this threshold, the Correction is flagged
-    # `requires_human_review=true`. 0.15 means "std ≈ 1.5/10" — empirically near
-    # the point where the model genuinely cannot agree with itself.
-    is_threshold: float = 0.15
-
     # Number of independent samples to draw when only one expert is available.
     # Used by multi_expert.run_multi_expert to fan out N parallel skill runs on
     # the same provider so we can compute an Indecisiveness Score even in
@@ -186,16 +179,10 @@ class Settings(BaseSettings):
     # ≥ 2 experts this knob is ignored — the experts themselves provide variance.
     #
     # Default 1 (cost-frugal): single-provider deployments do NOT pay the 3×
-    # LLM call multiplier by default. Teachers who want IS / Minority Veto
+    # LLM call multiplier by default. Teachers who want IS
     # signals on a single-provider task can opt in per-task via the upcoming
     # task_setup UI control (see plan: hyssop-paper-jaybird).
     multi_sample_n: int = 1
-
-    # Minority-veto rule: if any expert/sample diverges from the median by more
-    # than this fraction of max_score, flag `requires_human_review=true` even
-    # when the IS itself is below threshold. Captures "1 expert thinks it's
-    # 9/10, another thinks 4/10" cases that an averaged score would hide.
-    minority_veto_deviation: float = 0.30
 
     # ─── Progress reporting ────────────────────────────────────────────────────
     progress_ring_buffer_size: int = 200  # max events kept per job

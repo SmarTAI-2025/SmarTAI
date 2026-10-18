@@ -506,6 +506,7 @@ async def parse_student_answer_sources(
     roster_entries: Optional[List[Dict[str, str]]] = None,
     single_attempt: bool = False,
     source_runner=None,
+    source_question_ids: dict[str, list[str]] | None = None,
 ) -> list[SubmissionSourceParseResult]:
     """Return exactly one durable-ready result for every original source."""
     if not sources:
@@ -539,8 +540,6 @@ async def parse_student_answer_sources(
         }
         for problem in problems_data.values()
     ]
-    problems_json = json.dumps(prompt_problems, ensure_ascii=False, indent=1)
-    known_question_ids = set(problems_data)
     safe_roster = [
         {
             "stu_id": str(entry.get("stu_id") or "").strip(),
@@ -597,6 +596,9 @@ async def parse_student_answer_sources(
                     retryable=False,
                 )
 
+            known_question_ids = set((source_question_ids or {}).get(source.source_id, problems_data))
+            problems_json = json.dumps([problem for problem in prompt_problems if problem["q_id"] in known_question_ids],
+                                       ensure_ascii=False, indent=1)
             user_message = (
                 f"**[Filename]**: {source.filename}\n\n"
                 f"**[Identity Matching Rule]**: {identity_instruction}\n\n"
@@ -724,7 +726,7 @@ async def parse_student_answer_sources(
                 str(answer.get("q_id") or "")
                 for answer in all_answers
                 if str(answer.get("q_id") or "")
-                and str(answer.get("q_id") or "") not in known_question_ids
+                and str(answer.get("q_id") or "") not in problems_data
             ))[:100]
             if not matched_answers:
                 return SubmissionSourceParseResult(
@@ -906,6 +908,7 @@ async def parse_student_answer_sources_from_ocr_markdown(
     *,
     identity_mode: Literal["filename", "roster", "manual_review"] = "filename",
     roster_entries: Optional[List[Dict[str, str]]] = None,
+    source_question_ids: dict[str, list[str]] | None = None,
 ) -> list[SubmissionSourceParseResult]:
     """Map Baidu OCR Markdown without selecting or impersonating an LLM."""
     if not sources:
@@ -918,10 +921,6 @@ async def parse_student_answer_sources_from_ocr_markdown(
         for entry in (roster_entries or [])
         if str(entry.get("stu_id") or "").strip()
     ]
-    number_to_problem = {
-        str(problem.get("number") or "").strip(): (q_id, problem)
-        for q_id, problem in problems_data.items()
-    }
     if reporter:
         await reporter.set_phase("parsing")
         await reporter.set_totals(students=len(sources), questions=len(problems_data))
@@ -937,6 +936,10 @@ async def parse_student_answer_sources_from_ocr_markdown(
 
     results: list[SubmissionSourceParseResult] = []
     for source in sources:
+        requested = set((source_question_ids or {}).get(source.source_id, problems_data))
+        source_problems = {q_id: problem for q_id, problem in problems_data.items() if q_id in requested}
+        number_to_problem = {str(problem.get("number") or "").strip(): (q_id, problem)
+                             for q_id, problem in source_problems.items()}
         if source.pre_error_code or not (source.text or "").strip():
             code = source.pre_error_code or "submission_source_empty"
             results.append(SubmissionSourceParseResult(
@@ -981,7 +984,8 @@ async def parse_student_answer_sources_from_ocr_markdown(
         for number, content in sections:
             matched = number_to_problem.get(number.strip())
             if matched is None:
-                unknown_numbers.append(f"number:{number}"[:64])
+                if number.strip() not in {str(problem.get("number") or "").strip() for problem in problems_data.values()}:
+                    unknown_numbers.append(f"number:{number}"[:64])
                 continue
             q_id, problem = matched
             if len(content) > 500_000:
@@ -996,8 +1000,8 @@ async def parse_student_answer_sources_from_ocr_markdown(
                 flag=["ocr_only_structure_requires_teacher_review"],
             ).model_dump())
 
-        if not matched_answers and len(problems_data) == 1 and len(sections) == 1:
-            q_id, problem = next(iter(problems_data.items()))
+        if not matched_answers and len(problems_data) == 1 and source_problems and len(sections) == 1:
+            q_id, problem = next(iter(source_problems.items()))
             only_section_text = sections[0][1]
             if len(only_section_text) <= 500_000:
                 unknown_numbers = []

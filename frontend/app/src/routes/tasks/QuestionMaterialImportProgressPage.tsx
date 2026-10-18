@@ -101,7 +101,8 @@ export function QuestionMaterialImportProgressPage() {
 
         <div className="mt-8 flex flex-wrap items-center justify-between gap-3 border-t pt-5">
           <span className="max-w-[420px] truncate text-[11px] text-muted-foreground" title={jobId}>{jobId ?? ""}</span>
-          <div className="flex gap-2">
+          <div className="flex flex-wrap gap-2">
+            {hasError && taskId ? <Link to={`/tasks/${taskId}/questions`} className="inline-flex h-9 items-center justify-center rounded-lg border bg-card px-4 text-sm font-semibold hover:bg-muted">{locale === "zh-CN" ? "人工继续处理" : "Continue manually"}</Link> : null}
             {hasError ? (
               <Link to={`/tasks/${taskId ?? ""}/questions/import`} className="inline-flex h-9 items-center rounded-[7px] border bg-card px-4 text-sm font-semibold text-foreground hover:bg-muted">
                 {materialImportText(locale, "chooseAgain")}

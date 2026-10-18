@@ -24,6 +24,133 @@ def _archive_bytes() -> bytes:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("saved_filename", [None, "S1.txt", "S2.txt"])
+@pytest.mark.parametrize("paused_run", [False, True])
+async def test_manual_handoff_preserves_saved_answers_and_queues_every_unfinished_source(monkeypatch, saved_filename, paused_run):
+    import asyncio
+    import json
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+    from backend.domain.errors import DomainError
+    from backend.services.submission_manual_review import continue_manually
+    from backend.services.task_execution import stop_task_run
+
+    owner, task = _seed_task(with_question=True)
+    registry = _Registry()
+    calls = []
+    started = saved_filename is not None
+    saved_parse = asyncio.Event()
+    loop = asyncio.get_running_loop()
+    save_checkpoint = workflow_repository.save_operation_checkpoint
+    def checkpoint_saved(*args, **kwargs):
+        result = save_checkpoint(*args, **kwargs)
+        if kwargs.get("stage") == "parser_saved":
+            loop.call_soon_threadsafe(saved_parse.set)
+        return result
+    monkeypatch.setattr(workflow_repository, "save_operation_checkpoint", checkpoint_saved)
+    async def invoke(messages):
+        calls.append(messages[-1].content)
+        if f"**[Filename]**: {saved_filename}" not in messages[-1].content:
+            await asyncio.wait_for(saved_parse.wait(), timeout=5)
+            raise asyncio.CancelledError()
+        return SimpleNamespace(content=json.dumps({"stu_id": "S1", "stu_name": "Synthetic one",
+            "stu_ans": [{"q_id": "q1", "number": "1", "type": "short", "content": "saved wrong answer -2", "flag": []}]}))
+    provider = SimpleNamespace(provider_id="test-provider", supports_vision=False, ainvoke=AsyncMock(side_effect=invoke))
+    registry.provider = provider
+    monkeypatch.setattr(task_facade, "_registry_for_owner", lambda _owner: registry)
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w") as archive:
+        archive.writestr("S1.txt", "first answer")
+        archive.writestr("S2.txt", "second answer")
+    queued = task_facade.queue_task_submission_parsing(task_id=task, owner_id=owner,
+        filename="answers.zip", content=buffer.getvalue(), content_type="application/zip", registry=registry)
+    if started:
+        row = workflow_repository.claim_operation(queued["job_id"], owner_id=owner, worker_id="test", lease_seconds=60)
+        with pytest.raises(asyncio.CancelledError):
+            await task_facade.run_durable_submission_recognition(LeasedOperation(row, worker_id="test", lease_seconds=60))
+    workflow = workflow_repository.get_workflow(task, owner_id=owner)
+    if paused_run:
+        stop_task_run(task_id=task, owner_id=owner, job_id=queued["job_id"], expected_revision=workflow.workflow_revision)
+    else:
+        operation = workflow_repository.get_operation(queued["job_id"], owner_id=owner)
+        task_facade._fail_operation(task, owner, operation.id, operation.attempt, "submission_parse_failed",
+            expected_lease_token=operation.lease_token)
+    paused = task_facade.get_task(task_id=task, owner_id=owner)
+    origin = workflow_repository.get_operation(queued["job_id"], owner_id=owner)
+    saved_calls = list(calls)
+    with pytest.raises(DomainError):
+        await continue_manually(task_id=task, owner_id=owner, job_id=origin.id, expected_revision=paused["workflow_revision"] + 1)
+    if not started:
+        publish = task_facade._commit_imported_submissions
+        def fail_publish(**_kwargs):
+            raise OSError("synthetic local persistence interruption")
+        monkeypatch.setattr(task_facade, "_commit_imported_submissions", fail_publish)
+        with pytest.raises(OSError):
+            await continue_manually(task_id=task, owner_id=owner, job_id=origin.id, expected_revision=paused["workflow_revision"])
+        assert not task_facade.get_task(task_id=task, owner_id=owner)["student_data"]
+        monkeypatch.setattr(task_facade, "_commit_imported_submissions", publish)
+    result = await continue_manually(task_id=task, owner_id=owner, job_id=origin.id,
+                                     expected_revision=paused["workflow_revision"])
+    assert result["status"] == "ready_for_review" and calls == saved_calls
+    after = task_facade.get_task(task_id=task, owner_id=owner)
+    for _ in range(2):
+        for data in (task_facade.get_task(task_id=task, owner_id=owner),
+                     await task_facade.async_task_state(task_id=task, owner_id=owner),
+                     task_facade.list_tasks(owner_id=owner)[task]):
+            assert data["status"] == "submissions_ready"
+            assert data["error"] is None and data["last_failed_job_id"] is None
+    students = list(after["student_data"].values())
+    assert len(students) == 2 and len(after["submission_sources"]) == 2
+    answers = [student["stu_ans"][0] for student in students]
+    assert sum(answer["content"] == "saved wrong answer -2" for answer in answers) == int(started)
+    if started:
+        saved_student = next(student for student in students if student["source_filename"] == saved_filename)
+        assert saved_student["stu_id"] == "S1" and saved_student["identity_status"] == "matched"
+    pending = [student for student in students if "recognition_manual_pending" in student["stu_ans"][0]["flag"]]
+    assert len(pending) == 2 - int(started)
+    assert all(("recognition_paused" if paused_run else "recognition_incomplete") in student["stu_ans"][0]["flag"] for student in pending)
+    assert all(student["identity_status"] == "needs_review" and student["stu_name"] == "[Unknown Student]" for student in pending)
+    assert all(source["recognition_reason_code"] == ("operation_cancelled" if paused_run else "submission_parse_failed") for source in after["submission_sources"] if source["status"] == "manual_review"), after["submission_sources"]
+    assert "submission_recognition_blocked" in task_facade.grading_readiness(task_id=task, owner_id=owner)["blocking_issues"]
+    target = pending[0]
+    with pytest.raises(DomainError) as blocked:
+        task_facade.update_student_answer(task_id=task, owner_id=owner, display_student_id=target["stu_id"],
+            q_id="q1", patch={"review_status": "confirmed"}, expected_revision=after["workflow_revision"])
+    assert blocked.value.code == "answer_review_blocked"
+    task_facade.update_student_answer(task_id=task, owner_id=owner, display_student_id=target["stu_id"],
+        q_id="q1", patch={"content": "", "flag": ["manual_blank_confirmed"], "review_status": "confirmed"},
+        expected_revision=after["workflow_revision"])
+    refreshed = task_facade.get_task(task_id=task, owner_id=owner)
+    repaired = refreshed["student_data"][target["stu_id"]]["stu_ans"][0]
+    assert repaired["content"] == "" and repaired["review_status"] == "confirmed"
+    assert "recognition_failed" not in repaired["flag"]
+    assert "recognition_manual_pending" not in repaired["flag"]
+    for index, student in enumerate(pending):
+        current = task_facade.get_task(task_id=task, owner_id=owner)
+        if student is not target:
+            task_facade.update_student_answer(task_id=task, owner_id=owner, display_student_id=student["stu_id"],
+                q_id="q1", patch={"content": "Teacher transcribed answer", "review_status": "confirmed"},
+                expected_revision=current["workflow_revision"])
+            current = task_facade.get_task(task_id=task, owner_id=owner)
+        task_facade.update_student_identity(task_id=task, owner_id=owner, current_display_id=student["stu_id"],
+            new_display_id=f"Confirmed-{index}", new_display_name=f"Synthetic learner {index}", expected_revision=current["workflow_revision"])
+    refreshed = task_facade.get_task(task_id=task, owner_id=owner)
+    assert not refreshed["submission_source_summary"].get("manual_review")
+    assert all(source["status"] == "parsed" for source in refreshed["submission_sources"])
+    readiness = task_facade.grading_readiness(task_id=task, owner_id=owner)
+    assert not {"submission_recognition_blocked", "submission_identities_unresolved"}.intersection(readiness["blocking_issues"])
+    from backend.services.workflow_inputs import submission_inputs
+    assert submission_inputs(task_id=task, owner_id=owner)["input"]["stored_file_id"] == origin.payload["input_file_id"]
+    original = workflow_repository.get_operation(origin.id, owner_id=owner)
+    assert original.status == "error" and original.error_code == ("operation_cancelled" if paused_run else "submission_parse_failed")
+    assert original.checkpoint == origin.checkpoint and original.artifact_refs == origin.artifact_refs
+    with pytest.raises(DomainError):
+        await continue_manually(task_id=task, owner_id=owner, job_id=origin.id,
+                                expected_revision=refreshed["workflow_revision"])
+    assert calls == saved_calls
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("failure_mode,edited_after_restart,from_retry", [
     ("503", False, False), ("503", True, False), ("stopped", False, False), ("stopped", False, True),
 ])
@@ -572,3 +699,161 @@ async def test_submission_failure_records_fenced_source_outcome(monkeypatch):
     assert outcome.stable_error_code == "submission_source_content_type_mismatch"
     assert outcome.failure_phase == "source_read"
     assert outcome.retryable is False
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("known_identity", [False, True])
+@pytest.mark.parametrize("partial_text", ["", "Visible beginning of q2 answer"])
+@pytest.mark.parametrize("reverse_answers", [False, True])
+async def test_manual_handoff_preserves_each_durable_answer_within_partial_source(monkeypatch, known_identity, partial_text, reverse_answers):
+    from backend.db import assignment_repository
+    from backend.domain.errors import DomainError
+    from backend.services.submission_manual_review import continue_manually
+    from backend.services.task_execution import stop_task_run
+    owner, task = _seed_task(with_question=True)
+    assignment_repository.add_question(task, teacher_id=owner, q_id="q2", order_index=1,
+        type="short", stem="Second question", criterion="Correct method and result: 10 points", max_score=10)
+    queued = task_facade.queue_task_submission_parsing(task_id=task, owner_id=owner,
+        filename="S1.txt", content=b"original saved answers", content_type="text/plain", registry=_Registry())
+    operation = workflow_repository.get_operation(queued["job_id"], owner_id=owner)
+    source = source_outcome_repository.list_sources(operation_id=operation.id, owner_id=owner, attempt=operation.attempt)[0]
+    answers = [{"q_id": "q1", "content": "Durably recognized q1 answer", "flag": []},
+               {"q_id": "q2", "content": partial_text, "flag": ["recognition_failed", "recognition_failed_pages:2"]}]
+    student = {"stu_id": "S1", "stu_name": "Known Student" if known_identity else "[Unknown Student]",
+        "identity_status": "matched" if known_identity else "needs_review", "stu_ans": list(reversed(answers)) if reverse_answers else answers,
+        "recognition": {"coverage": {"processed_pages": [1], "failed_pages": [2]}},
+        "source_filename": source.original_name, "source_id": source.id, "stored_file_id": source.stored_file_id}
+    result = SubmissionSourceParseResult(source.id, source.stored_file_id, source.original_name,
+        "parsed" if known_identity else "identity_conflict", student, "S1", 1, (),
+        None if known_identity else "identity_needs_review", None if known_identity else "identity", False)
+    artifact = file_repository.save_file(storage=get_storage(), owner_id=owner, assignment_id=task,
+        kind="submission_recognition_result", original_name=f"{operation.id}-attempt-{operation.attempt}-parsed.json",
+        content=task_facade._serialize_submission_results([result]), content_type="application/json")
+    workflow_repository.save_operation_checkpoint(operation.id, owner_id=owner, expected_attempt=operation.attempt,
+        expected_checkpoint_revision=operation.checkpoint_revision, stage="submissions_parsed",
+        checkpoint={"parsed_artifact_id": artifact.id}, artifact_refs=[*operation.artifact_refs, artifact.id])
+    stop_task_run(task_id=task, owner_id=owner, job_id=operation.id,
+        expected_revision=workflow_repository.get_workflow(task, owner_id=owner).workflow_revision)
+    paused = task_facade.get_task(task_id=task, owner_id=owner)
+    questions = assignment_repository.list_questions(task, teacher_id=owner)
+    assert not task_facade._reusable_submission_results(owner_id=owner, task_id=task,
+        payload={"retry_from": {"operation_id": operation.id, "attempt": operation.attempt}}, questions=questions)
+    def no_model(*_args, **_kwargs):
+        raise AssertionError("manual handoff must not obtain or call a model")
+    monkeypatch.setattr(task_facade, "_registry_for_owner", no_model)
+    if known_identity and partial_text and reverse_answers:
+        publish = task_facade._commit_imported_submissions
+        monkeypatch.setattr(task_facade, "_commit_imported_submissions", no_model)
+        with pytest.raises(AssertionError):
+            await continue_manually(task_id=task, owner_id=owner, job_id=operation.id, expected_revision=paused["workflow_revision"])
+        monkeypatch.setattr(task_facade, "_commit_imported_submissions", publish)
+    await continue_manually(task_id=task, owner_id=owner, job_id=operation.id, expected_revision=paused["workflow_revision"])
+    after = task_facade.get_task(task_id=task, owner_id=owner)
+    saved = after["student_data"]["S1"]
+    assert saved["stu_name"] == student["stu_name"] and saved["identity_status"] == student["identity_status"]
+    by_id = {answer["q_id"]: answer for answer in saved["stu_ans"]}
+    assert by_id["q1"]["content"] == "Durably recognized q1 answer" and "recognition_manual_pending" not in by_id["q1"]["flag"]
+    assert by_id["q2"]["content"] == partial_text and "recognition_manual_pending" in by_id["q2"]["flag"]
+    assert after["submission_sources"][0]["recognition_reason_code"] == "operation_cancelled"
+    with pytest.raises(DomainError):
+        task_facade.update_student_answer(task_id=task, owner_id=owner, display_student_id="S1", q_id="q2",
+            patch={"review_status": "confirmed"}, expected_revision=after["workflow_revision"])
+    with pytest.raises(DomainError):
+        await continue_manually(task_id=task, owner_id=owner, job_id=operation.id, expected_revision=after["workflow_revision"])
+    assert task_facade.get_task(task_id=task, owner_id=owner)["student_data"] == after["student_data"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("missing_q2", [False, True])
+@pytest.mark.parametrize("failure_mode,manual", [(None, False), ("exception", False),
+    ("empty_failed_answer", False), ("partial", False), ("partial", True)])
+async def test_explicit_retry_only_parses_unfinished_questions_and_keeps_saved_identity(monkeypatch, missing_q2, failure_mode, manual):
+    import json
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+    from backend.db import assignment_repository
+    from backend.services.task_execution import stop_task_run
+    owner, task = _seed_task(with_question=True)
+    assignment_repository.add_question(task, teacher_id=owner, q_id="q2", order_index=1,
+        type="short", stem="Second question", criterion="Correct method and result: 10 points", max_score=10)
+    prompts = []
+    failed_attempts = 3 if failure_mode == "partial" else int(failure_mode is not None)
+    attempts = failed_attempts + int(not manual)
+    fragments = [] if missing_q2 else ["Visible beginning of q2"]
+    async def invoke(messages):
+        prompt = messages[-1].content
+        questions = json.loads(prompt.split("**[Question Data (JSON)]**:\n", 1)[1].split("\n\n**[Student Submission Content]**:", 1)[0])
+        prompts.append([question["q_id"] for question in questions])
+        if failure_mode == "exception" and len(prompts) == 1:
+            raise RuntimeError("synthetic provider failure")
+        failed_answer = len(prompts) <= failed_attempts
+        text = ("Visible ending of q2" if len(prompts) < 3 else "Visible middle of q2") if failure_mode == "partial" else ""
+        content = text if failed_answer else "Completed q2 answer"
+        if failed_answer and text and text not in fragments:
+            fragments.append(text)
+        return SimpleNamespace(content=json.dumps({"stu_id": "changed-id", "stu_name": "Changed identity",
+            "stu_ans": [{"q_id": "q1", "number": "1", "type": "short", "content": "Must not replace saved q1", "flag": []},
+                        {"q_id": "q2", "number": "2", "type": "short", "content": content, "flag": ["recognition_failed"] if failed_answer else []}]}))
+    registry = _Registry()
+    registry.provider = SimpleNamespace(provider_id="test-provider", supports_vision=False, ainvoke=AsyncMock(side_effect=invoke))
+    monkeypatch.setattr(task_facade, "_registry_for_owner", lambda _owner: registry)
+    queued = task_facade.queue_task_submission_parsing(task_id=task, owner_id=owner,
+        filename="S1.txt", content=b"original saved answers", content_type="text/plain", registry=registry)
+    operation = workflow_repository.get_operation(queued["job_id"], owner_id=owner)
+    source = source_outcome_repository.list_sources(operation_id=operation.id, owner_id=owner, attempt=operation.attempt)[0]
+    answers = [{"q_id": "q1", "content": "Durably recognized q1 answer", "flag": []}]
+    if not missing_q2:
+        answers.append({"q_id": "q2", "content": "Visible beginning of q2", "flag": ["recognition_failed_pages:2"]})
+    student = {"stu_id": "S1", "stu_name": "Known Student", "identity_status": "matched", "stu_ans": answers,
+        "recognition": {"coverage": {"processed_pages": [1], "failed_pages": [2]}},
+        "source_filename": source.original_name, "source_id": source.id, "stored_file_id": source.stored_file_id}
+    result = SubmissionSourceParseResult(source.id, source.stored_file_id, source.original_name,
+        "parsed", student, "S1", 1, (), None, None, False)
+    artifact = file_repository.save_file(storage=get_storage(), owner_id=owner, assignment_id=task,
+        kind="submission_recognition_result", original_name=f"{operation.id}-attempt-{operation.attempt}-parsed.json",
+        content=task_facade._serialize_submission_results([result]), content_type="application/json")
+    workflow_repository.save_operation_checkpoint(operation.id, owner_id=owner, expected_attempt=operation.attempt,
+        expected_checkpoint_revision=operation.checkpoint_revision, stage="submissions_parsed",
+        checkpoint={"parsed_artifact_id": artifact.id}, artifact_refs=[*operation.artifact_refs, artifact.id])
+    stop_task_run(task_id=task, owner_id=owner, job_id=operation.id,
+        expected_revision=workflow_repository.get_workflow(task, owner_id=owner).workflow_revision)
+    retry_id = operation.id
+    for attempt in range(attempts):
+        before = task_facade.get_task(task_id=task, owner_id=owner)
+        retry = await tasks.retry_submission_recognition_endpoint(task_id=task, job_id=retry_id,
+            request=tasks.RetrySubmissionRecognitionRequest(expected_workflow_revision=before["workflow_revision"],
+                                                           acknowledge_possible_duplicate_call=True),
+            background_tasks=_BackgroundTasks(), current=SimpleNamespace(id=owner), registry=registry)
+        assert isinstance(retry, dict), json.loads(retry.body)
+        row = workflow_repository.claim_operation(retry["job_id"], owner_id=owner, worker_id="test", lease_seconds=60)
+        await task_facade.run_durable_submission_recognition(LeasedOperation(row, worker_id="test", lease_seconds=60))
+        retry_id = retry["job_id"]
+        if attempt < failed_attempts:
+            assert task_facade.get_task(task_id=task, owner_id=owner)["status"] == "error"
+            saved = task_facade._load_submission_results(task_facade._submission_result_artifact(
+                owner_id=owner, task_id=task, job_id=row.id, job_attempt=row.attempt))[0]
+            assert saved.student["stu_ans"][0]["content"] == "Durably recognized q1 answer"
+            assert saved.student["stu_ans"][1]["content"] == "\n\n".join(fragments)
+    if manual:
+        from backend.services.submission_manual_review import continue_manually
+        current = task_facade.get_task(task_id=task, owner_id=owner)
+        await continue_manually(task_id=task, owner_id=owner, job_id=retry_id,
+            expected_revision=current["workflow_revision"])
+    assert prompts == [["q2"]] * attempts
+    after = task_facade.get_task(task_id=task, owner_id=owner, full=True)
+    assert after["status"] == "submissions_ready"
+    saved = after["student_data"]["S1"]
+    assert saved["stu_name"] == "Known Student" and saved["identity_status"] == "matched"
+    by_id = {answer["q_id"]: answer for answer in saved["stu_ans"]}
+    assert by_id["q1"]["content"] == "Durably recognized q1 answer" and by_id["q1"]["flag"] == []
+    if manual:
+        from backend.domain.errors import DomainError
+        assert by_id["q2"]["content"] == "\n\n".join(fragments)
+        assert "recognition_manual_pending" in by_id["q2"]["flag"]
+        with pytest.raises(DomainError):
+            task_facade.update_student_answer(task_id=task, owner_id=owner, display_student_id="S1", q_id="q2",
+                patch={"review_status": "confirmed"}, expected_revision=after["workflow_revision"])
+    else:
+        assert by_id["q2"]["content"] == "Completed q2 answer" and by_id["q2"]["flag"] == []
+    assert after["submission_sources"][0]["unknown_question_ids"] == []
+    assert task_facade._load_submission_results(artifact)[0].student == student

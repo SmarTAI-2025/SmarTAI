@@ -49,7 +49,7 @@ def start(case, key, revision=None):
                                         expected_workflow_revision=revision, request_id=key)
 
 
-def finish(case, run_id, monkeypatch, failed=("q2",)):
+def finish(case, run_id, monkeypatch, failed=("q2",), *, score=8):
     calls = []
 
     async def fake_batch(**kwargs):
@@ -57,7 +57,7 @@ def finish(case, run_id, monkeypatch, failed=("q2",)):
         assert current_execution().response_timeout_seconds == grading_runs.settings.grading_custom_provider_timeout_seconds
         calls.append(kwargs)
         return [{"student_id": sid, "corrections": [Correction(
-            q_id=qid, type="short", score=0 if qid in failed else 8,
+            q_id=qid, type="short", score=0 if qid in failed else score,
             max_score=10, confidence=0 if qid in failed else 1,
             synthesis_method="all_failed" if qid in failed else "single",
             comment="Transient timeout" if qid in failed else "Recovered", steps=[],
@@ -104,11 +104,31 @@ def test_same_inputs_retry_preserves_history_and_teacher_edits_and_can_publish(c
         expected_workflow_revision=workflows.get_live_workflow(case[0], owner_id=case[1]).workflow_revision)["status"] == "already_done"
     final = task_facade.generate_artifacts(task_id=case[0], owner_id=case[1], expected_revision=workflows.get_live_workflow(case[0], owner_id=case[1]).workflow_revision)
     assert final["status"] == "ok"
+    args = {"task_id": case[0], "owner_id": case[1]}
+    old_version = final["final_result_version"]
+    old_bundle = task_facade.artifact_bytes(**args, version=old_version, artifact_id="bundle")[0]
     # Even after report generation, an unchanged setup can explicitly rerun.
     fresh = start(case, "after-report")
     assert fresh["status"] == "started" and fresh["job_id"] != retry["job_id"]
-    finish(case, fresh["job_id"], monkeypatch, ())
+    finish(case, fresh["job_id"], monkeypatch, (), score=6)
     assert len(grading.list_results_for_run(retry["job_id"])) == len(new_rows)
+    current = task_facade.task_results(**args)
+    assert current["grading_run_id"] == fresh["job_id"]
+    corrections = [item for student in current["results"] for item in student["corrections"]]
+    assert len(corrections) == len(new_rows)
+    assert {item["score"] for item in corrections} == {6}
+    assert {item["result_id"] for item in corrections}.isdisjoint(row.id for row in new_rows)
+    assert task_facade.artifact_bytes(**args, version=old_version, artifact_id="bundle")[0] == old_bundle
+    generated = task_facade.generate_artifacts(
+        **args, expected_revision=workflows.get_live_workflow(case[0], owner_id=case[1]).workflow_revision,
+    )
+    assert generated["final_result_version"] == old_version + 1
+    reports = generated["artifacts"]["versions"]
+    assert {(item["version"], item["current"]) for item in reports} == {
+        (old_version, False), (old_version + 1, True),
+    }
+    assert task_facade.artifact_bytes(**args, version=old_version, artifact_id="bundle")[0] == old_bundle
+    assert task_facade.artifact_bytes(**args, version=old_version + 1, artifact_id="bundle")[0] != old_bundle
 
 
 @pytest.mark.parametrize("change_setup", [False, True])
@@ -427,7 +447,7 @@ def test_failed_only_rejects_changed_grading_content(case, monkeypatch):
     assert len(grading.list_runs_for_assignment(case[0], actor_id=case[1])) == 1
 
 
-def test_question_fields_confirm_independently_and_block_failed_content(case):
+def test_one_confirmation_acknowledges_all_advice_but_blocks_failed_content(case):
     from backend.db.models import AssignmentQuestionRecord
     from backend.domain.errors import ValidationError
     with session_scope() as session:
@@ -442,8 +462,8 @@ def test_question_fields_confirm_independently_and_block_failed_content(case):
             patch={"review_status": "confirmed", **({"review_fields": fields} if fields else {})})["problem"]
     score = confirm(["max_score"])
     assert score["max_score_review_status"] == "confirmed"
-    assert score["review_status"] == "needs_review"
-    assert [i["field"] for i in score["preparation_issues"] if i["status"] == "open"] == ["stem"]
+    assert score["review_status"] == "confirmed"
+    assert not [i for i in score["preparation_issues"] if i["status"] == "open"]
     assert confirm(["stem"])["review_status"] == "confirmed"
     with session_scope() as session:
         row = session.scalar(select(AssignmentQuestionRecord).where(AssignmentQuestionRecord.assignment_id == case[0], AssignmentQuestionRecord.q_id == "q1"))

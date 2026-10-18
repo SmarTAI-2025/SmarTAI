@@ -128,10 +128,13 @@ def test_teacher_score_overrides_ai_and_failed_score_stays_unknown():
 
 
 @pytest.mark.parametrize("patch,pending,reviewed", [
-    ({"confidence": .5, "requires_human_review": True, "review_reasons": ["low_confidence"]}, 0, 0),
-    ({"expert_results": [{"score": 5}, {"score": 0, "error_kind": "general"}, {"score": None}]}, 0, 0),
-    ({"expert_results": [{"score": 5}, {"score": 0}]}, 0, 0),
-    ({"confidence": .35}, 0, 0),
+    ({"confidence": .5, "requires_human_review": True, "review_reasons": ["low_confidence"]}, 1, 0),
+    ({"expert_results": [{"score": 5}, {"score": 0, "error_kind": "general"}, {"score": None}]}, 1, 0),
+    ({"expert_results": [{"score": 5}, {"score": 0}]}, 1, 0),
+    ({"expert_results": [{"score": 5}, {"score": 3.5}]}, 0, 0),
+    ({"expert_results": [{"score": 5}, {"score": 3.49}]}, 1, 0),
+    ({"expert_results": [{"score": 5}, {"score": 0}], "teacher_score": 5, "review_status": "confirmed"}, 0, 1),
+    ({"confidence": .35}, 1, 0),
     ({"initial_review_reasons": ["high_indecisiveness,minority_veto"]}, 0, 0),
     ({"confidence": .2, "teacher_score": 5, "review_status": "confirmed"}, 0, 1),
     ({"confidence": .2, "teacher_score": 0, "review_status": "confirmed"}, 0, 1),

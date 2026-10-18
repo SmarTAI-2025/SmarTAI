@@ -1,3 +1,4 @@
+import { ManualReviewButton } from "@/components/tasks/ManualReviewButton";
 import { answerReviewAttention } from "@/lib/submissionReview";
 import { questionReviewIssues, questionReviewBlockers, submissionReviewBlockers } from "@/lib/reviewConfirmation";
 import { AlertTriangle, ArrowLeft, CheckCircle2, ChevronRight, LoaderCircle, Timer } from "lucide-react";
@@ -244,6 +245,7 @@ export function GradingPreflightPage() {
                   style={{ width: countdownActive ? `${(countdown / AUTO_START_SECONDS) * 100}%` : "0%" }}
                 />
               </div>
+        <ManualReviewButton taskId={taskId} task={taskQuery.data} stage="grading" />
               {startError ? <RecoverableActionState usageContext={{ providerIds: setup?.selected_provider_ids ?? [], providers: setupResponse?.available_experts ?? [] }} info={classifyRecoverableError(startGrading.error, { locale, taskId, returnTo: `/tasks/${taskId}/grading/preflight` })} locale={locale} compact workflowRecovery={{ retry: { onClick: () => void handleStart(), busy: startGrading.isPending }, configurationHref: getTaskGradingSetupHref(taskId, `/tasks/${taskId}/grading/preflight`) }} /> : null}
               {isRegrading ? <div className="border-t px-6 py-3 sm:px-8"><GradingRetryNotice locale={locale} /></div> : null}
             </section>
@@ -376,7 +378,7 @@ export function GradingPreflightPage() {
                   {copy(locale, setup.allow_partial_credit ? "partialAllowed" : "partialDisabled")}
                 </StrategyChip>
                 <StrategyChip tone="warning">
-                  {locale === "zh-CN" ? "置信度 < 0.60 提示 · < 0.25 必须确认" : "Confidence < 0.60: optional · < 0.25: required"}
+                  {locale === "zh-CN" ? "任一专家置信度 < 0.60 时建议处理" : "Any expert confidence < 0.60: suggested review"}
                 </StrategyChip>
                 <StrategyChip tone="neutral">
                   {copy(locale, "feedback")}: {copy(locale, feedbackKey(setup.feedback_length))}

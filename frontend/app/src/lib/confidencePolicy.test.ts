@@ -3,7 +3,7 @@ import { confidenceNeedsAttention, confidenceRequiresReview, confidenceValue } f
 
 describe("shared confidence policy", () => {
   it.each([
-    [0, true, true], [0.2499, true, true], [0.25, true, false],
+    [0, true, false], [0.2499, true, false], [0.25, true, false],
     [0.5999, true, false], [0.60, false, false], [1, false, false],
   ])("classifies %s without rounding across a boundary", (value, attention, required) => {
     expect(confidenceValue(value)).toBe(value);

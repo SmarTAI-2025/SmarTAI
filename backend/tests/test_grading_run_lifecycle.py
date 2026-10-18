@@ -935,12 +935,11 @@ def test_reclaimed_pass_starts_fresh_progress_reporter(setup_assignment, monkeyp
         record.lease_expiry = _time.time() - 1
 
     async def replay_and_count(**kwargs):
-        # Mimic one graded unit in this pass (the real grade_batch calls
-        # reporter.increment_completed per unit).
-        await kwargs["reporter"].increment_completed()
-        return [grading_adapter.AdapterOutcome(
-            student_id=setup_assignment["student_id"], results=[result],
-        )]
+        # The recovered immutable result is already counted. The adapter must
+        # skip it instead of issuing and counting the same model work again.
+        assert kwargs["reused_pairs"] == {(revision.id, question.q_id)}
+        assert (await kwargs["reporter"].snapshot()).completed_units == 1
+        return []
 
     class _Registry:
         @staticmethod
@@ -966,9 +965,12 @@ def test_reclaimed_pass_starts_fresh_progress_reporter(setup_assignment, monkeyp
     ]
     assert progress_events, "pass persisted no grading_progress events"
     last = progress_events[-1]["payload"]
-    # This pass graded exactly 1 unit — NOT 1 (stale) + 1 (this pass) = 2.
+    # Exactly 1 durable unit, not stale progress + restored progress.
     assert last["completed_units"] == 1
     assert last["active_units"] == 0
+    recovered = grading_repository.get_run(run.id)
+    assert recovered.status == education.GradingRunStatus.COMPLETED.value
+    assert recovered.completed_submissions == 1
 
 
 def test_process_run_removes_reporter_on_terminal(setup_assignment, monkeypatch):

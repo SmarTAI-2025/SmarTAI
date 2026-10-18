@@ -1,3 +1,4 @@
+import { ReviewQueue as ReviewQueuePanel } from "@/components/tasks/ReviewQueue";
 import { isCorrectionReviewConfirmed, correctionReviewBlocked, correctionReviewNextBlocked } from "@/components/tasks/resultsReviewModel";
 import { ReviewConfirmButton, ReviewStageActions, RetryFailedGrading } from "@/components/tasks/ReviewConfirmation";
 import { SortableTableHead, useColumnSort, sortColumnRows, directionFor, type ColumnSort } from "@/components/ui/SortableTableHead";
@@ -17,7 +18,7 @@ import { MatrixViewLink } from "@/components/tasks/MatrixViewLink";
 import { MatrixQueueWorkspace } from "@/components/tasks/MatrixQueueWorkspace";
 import { MatrixStatusCell, type MatrixStatusTone } from "@/components/tasks/MatrixStatusCell";
 import { getMatrixIdentityLayout, MATRIX_ACTION_COLUMN_WIDTH, MATRIX_QUESTION_COLUMN_WIDTH } from "@/components/tasks/matrixLayout";
-import { buildResultsModel, effectiveCorrectionScore, formatConfidence, formatPercent, type QuestionSummary, type ResultsModel, type StudentSummary } from "@/components/tasks/resultsModel";
+import { buildResultsModel, hasPartialExperts, effectiveCorrectionScore, formatConfidence, formatPercent, type QuestionSummary, type ResultsModel, type StudentSummary } from "@/components/tasks/resultsModel";
 import { collectResultReviewItems, type ReviewItem } from "@/components/tasks/resultsReviewModel";
 import { useI18n } from "@/i18n/I18nProvider";
 import type { Locale } from "@/i18n/messages";
@@ -87,8 +88,8 @@ export function ReviewOverviewPage() {
     }),
   }), [naturalSelection, headerSort.current?.key, headerSort.current?.direction, confirmedKeys, reviewItems]);
 
-  const resolvingFailures = task?.status === "error" && Boolean(task.grading_job_id) && task.last_failed_job_id === task.grading_job_id && searchParams.get("resolveFailures") === "1";
-  if (taskId && task && !taskQuery.isFetching && !taskQuery.isError && !hasTaskReachedStep(task, 6) && !resolvingFailures) {
+  // Failed runs must first enter manual recovery; a legacy query flag cannot bypass it.
+  if (taskId && task && !taskQuery.isFetching && !taskQuery.isError && !hasTaskReachedStep(task, 6)) {
     if (task.status === "grading") return <Navigate replace to={`/tasks/${taskId}/grading/progress`} />;
     return <Navigate replace to={getTaskDestination(task)} />;
   }
@@ -96,8 +97,9 @@ export function ReviewOverviewPage() {
   const isLoading = taskQuery.isLoading || readingCompletion || resultQuery.isLoading || finalizationQuery.isLoading;
   const isError = taskQuery.isError || resultQuery.isError || finalizationQuery.isError;
   const pendingReviewItems = reviewItems.filter((item) => !confirmedKeys.has(reviewCellKey(item.student.id, item.question.id)));
+  const pausedGrading = pendingReviewItems.some(item => item.correction.initial_review_reasons?.includes("grading_paused") || item.correction.review_reasons?.includes("grading_paused"));
   const blockingReviewItems = pendingReviewItems.filter((item) => correctionReviewNextBlocked(item.correction));
-  const historyView = Boolean(task && task.status !== "graded" && !resolvingFailures);
+  const historyView = Boolean(task && task.status !== "graded");
   const overviewReturnTo = taskId
     ? `/tasks/${encodeURIComponent(taskId)}/review${searchParams.toString() ? `?${searchParams.toString()}` : ""}`
     : "";
@@ -118,7 +120,7 @@ export function ReviewOverviewPage() {
   const confirmableReviews = model.students.flatMap((student) => student.corrections.flatMap((correction) => {
     const score = effectiveCorrectionScore(correction);
     const teacherConfirmed = Number.isFinite(correction.teacher_score) && correction.review_status === "confirmed";
-    return !teacherConfirmed && score !== null && score >= 0 && score <= correction.max_score
+    return !teacherConfirmed && visibleReviewItems.some(item => item.student.id === student.id && item.question.id === correction.q_id && item.severity === "advisory") && score !== null && score >= 0 && score <= correction.max_score
       ? [{ studentId: student.id, qId: correction.q_id, score, comment: correction.teacher_comment ?? "" }]
       : [];
   }));
@@ -136,7 +138,6 @@ export function ReviewOverviewPage() {
 
   async function confirmAllReviews() {
     if (!taskId || confirmingRef.current) return;
-    if (blockingReviewItems.some(({ correction }) => { const score = effectiveCorrectionScore(correction); return score === null || score < 0 || score > correction.max_score; })) { setBlockedDialog(true); return; }
     if (!confirmableReviews.length) {
       if (remainingReviewCount > 0) setBlockedDialog(true);
       return;
@@ -195,9 +196,9 @@ export function ReviewOverviewPage() {
       ) : (
         <>
           {!historyView && resultQuery.data?.grading_run_status === "partial_failed" ? (
-            <section className="mt-5 rounded-[10px] border border-warning/40 bg-warning/5 p-5" aria-label={locale === "zh-CN" ? "批改失败重试" : "Retry failed grading"}>
+            <section className="mt-5 rounded-[10px] border border-warning/40 bg-warning/5 p-5" aria-label={pausedGrading ? (locale === "zh-CN" ? "继续未完成批改" : "Resume incomplete grading") : (locale === "zh-CN" ? "批改失败重试" : "Retry failed grading")}>
               <h2 className="mb-2 text-base font-semibold">{locale === "zh-CN" ? "部分作答未完成批改" : "Some answers could not be graded"}</h2>
-              <RetryFailedGrading taskId={taskId} revision={task?.workflow_revision ?? 0} locale={locale} />
+              <RetryFailedGrading taskId={taskId} revision={task?.workflow_revision ?? 0} locale={locale} paused={pausedGrading} />
             </section>
           ) : null}
           <div className="mt-5 grid grid-cols-2 gap-4 xl:grid-cols-4 xl:gap-5">
@@ -274,7 +275,7 @@ export function ReviewOverviewPage() {
         onStay={() => setBlockedDialog(false)}
         onLeave={() => { setBlockedDialog(false); if (unresolvedHref) navigate(unresolvedHref); else void finalizationQuery.refetch(); }}
       >
-        {taskId && blockingReviewItems.some(item => effectiveCorrectionScore(item.correction) === null) ? <div className="mt-4"><RetryFailedGrading taskId={taskId} revision={task?.workflow_revision ?? 0} locale={locale} /></div> : null}
+        {taskId && blockingReviewItems.some(item => effectiveCorrectionScore(item.correction) === null) ? <div className="mt-4"><RetryFailedGrading taskId={taskId} revision={task?.workflow_revision ?? 0} locale={locale} paused={pausedGrading} /></div> : null}
         <ul className="mt-3 max-h-48 space-y-2 overflow-auto text-sm">{blockingReviewItems.map(item => <li key={reviewCellKey(item.student.id, item.question.id)}><Link className="text-primary underline" onClick={() => setBlockedDialog(false)} to={reviewDetailHref(taskId!, item.student.id, item.question.id, overviewReturnTo)}>{item.student.name} · {item.question.label} · {locale === "zh-CN" ? "请处理并确认" : "Correct and confirm"}</Link></li>)}</ul>
       </UnsavedChangesDialog> : null}
     </div>
@@ -446,37 +447,11 @@ function ReviewCell({ locale, href, correction, item, annotated, confirmed, ques
 }
 
 function ReviewQueue({ locale, taskId, items, returnTo, confirmation }: { confirmation: React.ReactNode; locale: Locale; taskId: string; items: ReviewItem[]; returnTo: string }) {
-  return (
-    <section className="flex h-[330px] flex-col overflow-hidden rounded-[10px] border bg-card px-4 py-5" aria-labelledby="review-queue-title">
-      <h2 id="review-queue-title" className="text-[16px] font-bold leading-6 text-foreground">{copy(locale, "queue")}</h2>
-      {!items.length ? (
-        <div className="flex min-h-0 flex-1 flex-col items-center justify-center text-center">
-          <CheckCircle2 aria-hidden="true" className="h-7 w-7 text-teal-500" />
-          <p className="mt-3 max-w-[220px] text-[12px] leading-5 text-muted-foreground">{copy(locale, "noQueue")}</p>
-        </div>
-      ) : (
-        <ol className="mt-3 min-h-0 flex-1 space-y-1 overflow-y-auto overscroll-contain pr-1">
-          {items.map((item) => (
-            <li key={reviewCellKey(item.student.id, item.question.id)}>
-              <Link
-                to={reviewDetailHref(taskId, item.student.id, item.question.id, returnTo)}
-                className="flex min-h-[54px] items-center gap-2 rounded-[8px] px-2 py-1.5 text-[12px] outline-none transition hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring"
-              >
-                <span className="min-w-0 flex-1">
-                  <span className="block truncate font-semibold text-foreground" title={`${item.student.id} ${item.student.name}`}>
-                    {item.student.name} · {item.question.label}
-                  </span>
-                  <span className={cn("mt-0.5 block truncate", item.severity === "blocking" ? "text-red-700" : "text-amber-700")}>{queueReason(locale, item)}</span>
-                </span>
-                <ChevronRight aria-hidden="true" className="h-4 w-4 shrink-0 text-muted-foreground" />
-              </Link>
-            </li>
-          ))}
-        </ol>
-      )}
-      <div className="mt-auto flex justify-end border-t pt-3">{confirmation}</div>
-    </section>
-  );
+  return <ReviewQueuePanel locale={locale} confirmation={confirmation} items={items.map(item => ({
+    key: reviewCellKey(item.student.id, item.question.id), title: `${item.student.name} · ${item.question.label}`,
+    reason: queueReason(locale, item), severity: item.severity,
+    href: reviewDetailHref(taskId, item.student.id, item.question.id, returnTo),
+  }))} />;
 }
 
 function PageState({ title, description, busy = false, action, href, onAction }: { title: string; description?: string; busy?: boolean; action?: string; href?: string; onAction?: () => void }) {
@@ -496,11 +471,17 @@ function PageState({ title, description, busy = false, action, href, onAction }:
 }
 
 function queueReason(locale: Locale, item: ReviewItem): string {
+  if (item.correction.initial_review_reasons?.includes("grading_paused") || item.correction.review_reasons?.includes("grading_paused")) {
+    return effectiveCorrectionScore(item.correction) === null
+      ? (locale === "zh-CN" ? "已暂停尚未批改 · 请人工补齐" : "Paused, ungraded · complete manually")
+      : (locale === "zh-CN" ? "部分专家完成 · 已保存有效评分和评语" : "Some experts completed · valid scores and feedback saved");
+  }
   if (effectiveCorrectionScore(item.correction) === null) return locale === "zh-CN" ? "缺少有效分数 · 需处理" : "Missing valid score · action required";
   if (correctionReviewBlocked(item.correction)) return locale === "zh-CN" ? "请核对补齐后的分数并确认" : "Check the corrected score and confirm";
   if (item.severity === "blocking") return locale === "zh-CN" ? "请核对并确认" : "Check and confirm the result";
   if (item.correction.review_status === "edited") return copy(locale, "savedPendingReason");
-  if (item.category === "low-confidence") return copy(locale, "lowReason");
+  if (hasPartialExperts(item.correction)) return locale === "zh-CN" ? "部分专家完成 · 建议核对" : "Some experts completed · review suggested";
+  if (item.category === "low-confidence") return locale === "zh-CN" ? "置信度较低 · 建议核对" : "Low confidence · review suggested";
   if (item.category === "expert-disagreement") return copy(locale, "disagreementReason");
   if (item.category === "score-anomaly") return copy(locale, "anomalyReason");
   return copy(locale, "reviewReason");

@@ -42,7 +42,7 @@ async def test_material_image_shares_harness_but_keeps_purpose_and_opt_in(tmp_pa
 
 @pytest.mark.asyncio
 async def test_material_preflight_freezes_parser_and_never_applies_or_runs(tmp_path, monkeypatch):
-    owner, task = _seed_task(with_question=True)
+    owner, task = _seed_task(with_question=True, criterion="")
     storage = LocalStorage(tmp_path)
     monkeypatch.setattr(api, "get_storage", lambda: storage)
     monkeypatch.setattr(question_sources, "get_storage", lambda: storage)
@@ -88,7 +88,7 @@ async def test_compatibility_auxiliary_upload_only_starts_review_plan(monkeypatc
 
 
 @pytest.mark.parametrize("confidence,match,recognition", [
-    (0.2499, "exact", None), (0.9, "possible", None),
+    (0.9, "possible", None),
     (0.9, "exact", {"confidence": "high", "coverage": {"failed_pages": [2]}}),
 ])
 def test_unsafe_test_candidates_never_mutate_or_consume_plan(monkeypatch, confidence, match, recognition):
@@ -117,6 +117,7 @@ def test_mixed_materials_use_strictest_role_and_opt_in_is_hashed():
 
 
 @pytest.mark.parametrize("target", ["criterion", "reference_answer", "test_cases"])
+@pytest.mark.parametrize("confidence", [0.2499, .5])
 @pytest.mark.parametrize("evidence", [
     {"error_code": "provider_upstream_unavailable"},
     {"coverage": {"failed_pages": [2]}},
@@ -124,11 +125,11 @@ def test_mixed_materials_use_strictest_role_and_opt_in_is_hashed():
     {"coverage": {"missing_targets": ["Q2"]}},
     {},
 ])
-def test_all_material_targets_preserve_source_failures_without_blocking_advice(monkeypatch, target, evidence):
+def test_all_material_targets_preserve_source_failures_without_blocking_advice(monkeypatch, target, evidence, confidence):
     candidate = dict(candidate_id="c", q_id="q1", target=target, text_value="Usable material",
-                     test_cases=[dict(input="1", expected_output="2")], confidence=.5, match_status="exact")
+                     test_cases=[dict(input="1", expected_output="2")], confidence=confidence, match_status="exact")
     job = SimpleNamespace(id="job", assignment_id="task", operation_type="material_import", status="ready", attempt=1,
-                          expires_at=None, progress={}, payload=dict(candidates=[candidate], recognition={"confidence": .5, **evidence}))
+                          expires_at=None, progress={}, payload=dict(candidates=[candidate], recognition={"confidence": confidence, **evidence}))
     monkeypatch.setattr(api.workflow_repository, "get_operation", lambda *a, **k: job)
     monkeypatch.setattr(api.task_facade, "get_task", lambda **k: dict(problem_data={"q1": {"type": "programming"}}))
     mutate = Mock(return_value=1)

@@ -25,17 +25,20 @@ vi.mock("@/routes/tasks/results/VisualizationAnalysisPage", () => ({
   VisualizationAnalysisPage: () => <div>visualization-target</div>,
 }));
 
+vi.mock("@/routes/tasks/results/ReportsDownloadsPage", () => ({ ReportsDownloadsPage: () => <div>historical-reports-target</div> }));
+
 function LocationProbe() {
   const location = useLocation();
   return <output data-testid="location-pathname">{location.pathname}</output>;
 }
 
-function TestTree() {
+function TestTree({ path = "/tasks/task-1/results/visualizations" }: { path?: string } = {}) {
   return (
-    <MemoryRouter initialEntries={["/tasks/task-1/results/visualizations"]}>
+    <MemoryRouter initialEntries={[path]}>
       <LocationProbe />
       <Routes>
-        <Route path="/tasks/:taskId/results/visualizations" element={<FinalResultsWorkspacePage />} />
+        <Route path="/tasks/:taskId/results/*" element={<FinalResultsWorkspacePage />} />
+        <Route path="/tasks/:taskId/review" element={<div>required-review-target</div>} />
         <Route path="/tasks/:taskId/submissions" element={<div>submission-redirect-target</div>} />
       </Routes>
     </MemoryRouter>
@@ -133,6 +136,20 @@ describe("FinalResultsWorkspacePage task-status refresh", () => {
 
     expect(await screen.findByText("submission-redirect-target")).toBeInTheDocument();
     expect(screen.getByTestId("location-pathname")).toHaveTextContent("/tasks/task-1/submissions");
+  });
+
+  it.each(["", "/questions", "/questions/q1", "/students", "/students/S1", "/visualizations"])("blocks a direct current-result URL with missing content: %s", async suffix => {
+    useTaskMock.mockReturnValue({ data: gradedTask, isLoading: false, isFetching: false, isError: false });
+    useTaskFinalizationMock.mockReturnValue({ data: { ...finalization, remaining_review_count: 1, ready_for_confirmation: false } });
+    render(<TestTree path={`/tasks/task-1/results${suffix}`} />);
+    expect(await screen.findByText("required-review-target")).toBeVisible();
+  });
+
+  it("keeps generated historical reports reachable while latest results need repair", async () => {
+    useTaskMock.mockReturnValue({ data: gradedTask, isLoading: false, isFetching: false, isError: false });
+    useTaskFinalizationMock.mockReturnValue({ data: { ...finalization, remaining_review_count: 1, ready_for_confirmation: false } });
+    render(<TestTree path="/tasks/task-1/results/reports" />);
+    expect(await screen.findByText("historical-reports-target")).toBeVisible();
   });
 
   it("does not show expired report warnings after saved scores change", async () => {

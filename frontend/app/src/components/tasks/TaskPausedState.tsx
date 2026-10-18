@@ -4,14 +4,15 @@ import { Button } from "@/components/ui/Button";
 import { useI18n } from "@/i18n/I18nProvider";
 import { TASK_ACTION_KEYS, TASK_STAGE_KEYS } from "@/lib/taskPresentation";
 
-export function TaskPausedState({ status, onContinue, busy, disabled, children }: {
+export function TaskPausedState({ status, onContinue, onManual, busy, disabled, children }: {
   status: "problems_paused" | "submissions_paused" | "grading_paused";
   onContinue: () => void;
+  onManual?: () => void;
   busy?: boolean;
   disabled?: boolean;
   children?: ReactNode;
 }) {
-  const { t } = useI18n();
+  const { t, locale } = useI18n();
   return (
     <section role="status" className="grid justify-items-start gap-4 rounded-[10px] border bg-card p-6 sm:p-10">
       <Pause aria-hidden="true" className="h-7 w-7 text-amber-600" />
@@ -21,6 +22,9 @@ export function TaskPausedState({ status, onContinue, busy, disabled, children }
       <Button onClick={onContinue} disabled={busy || disabled} aria-busy={busy || undefined}>
         {t(TASK_ACTION_KEYS[status])}
       </Button>
+      {onManual ? <Button variant="secondary" onClick={onManual} disabled={busy}>
+        {locale === "zh-CN" ? "人工继续处理" : "Continue manually"}
+      </Button> : null}
     </section>
   );
 }

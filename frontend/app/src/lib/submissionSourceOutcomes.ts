@@ -11,6 +11,14 @@ export function getSubmissionSourceReasonCopy(
   source: SubmissionSourceOutcome,
   locale: Locale,
 ): SubmissionSourceReasonCopy {
+  if (source.resolution_status === "manual_resolved") return {
+    title: tx(locale, "教师已补齐并确认", "Completed and confirmed by the teacher"),
+    description: tx(locale, "原识别记录和诊断信息仍保留。", "Original recognition records and diagnostics are preserved."),
+  };
+  if (source.status === "manual_review") return {
+    title: tx(locale, "识别未完成，等待人工处理", "Recognition incomplete; awaiting manual review"),
+    description: tx(locale, "原文件和已完成识别已保留。请逐题补齐作答或确认未作答，处理完成前不能批改。", "Originals and completed recognition are preserved. Complete each answer or confirm it is blank before grading."),
+  };
   const copy = REASON_COPY[source.reason_code ?? source.internal_status];
   if (copy) return copy(locale, source);
 
@@ -44,6 +52,10 @@ export function getSubmissionPageErrorLabel(source: SubmissionSourceOutcome, err
 }
 
 const REASON_COPY: Record<string, ReasonFactory> = {
+  operation_cancelled: (locale) => ({
+    title: tx(locale, "已手动暂停，尚未完成识别", "Manually paused before recognition completed"),
+    description: tx(locale, "原文件和已完成识别已保留。可以继续识别未完成部分，也可以人工继续处理。", "Originals and completed recognition are preserved. Resume the unfinished work or continue manually."),
+  }),
   image_format_mismatch: recognitionFileCopy,
   image_input_too_large: recognitionLimitCopy,
   image_invalid: recognitionFileCopy,

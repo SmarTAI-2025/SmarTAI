@@ -72,7 +72,7 @@ class Correction(BaseModel):
     expert_results: List[ExpertResult] = Field(default_factory=list, description="Individual expert results (empty for single-expert)")
     synthesis_method: Optional[str] = Field(None, description="'single' | 'multi_sample' | 'weighted_average' | 'judge_agent' | 'degraded_to_single' | 'all_failed' | 'quota_exhausted'")
 
-    # ─── P0 fairness signals (Indecisiveness Score + Minority Veto) ───────────
+    # ─── Advisory expert disagreement (Indecisiveness Score) ─────────────────
     is_score: Optional[float] = Field(
         None,
         description="Indecisiveness Score: std-of-scores / max_score across experts/samples. "
@@ -80,13 +80,13 @@ class Correction(BaseModel):
     )
     requires_human_review: bool = Field(
         False,
-        description="True when IS > settings.is_threshold OR a minority-veto rule fires. "
-                    "The score is still set (median-based) so the pipeline does not block; "
+        description="True when population standard deviation / max_score > 0.15. "
+                    "The synthesized score is still set so the pipeline does not block; "
                     "the frontend should surface this flag for teacher attention.",
     )
     review_reasons: List[str] = Field(
         default_factory=list,
-        description="Why review was flagged: e.g. 'high_indecisiveness', 'minority_veto'. "
+        description="Why review was flagged: e.g. 'high_indecisiveness'. "
                     "Stable string IDs so the frontend can localize without parsing.",
     )
     # Presentation/audit overlay only. Durable teacher reviews continue to live

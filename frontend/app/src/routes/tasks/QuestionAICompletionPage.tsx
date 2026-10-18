@@ -201,6 +201,7 @@ function QuestionAICompletionPageForm() {
               returnTo={`/tasks/${taskId ?? ""}/questions/ai-complete`}
             />
 
+            {actionError && taskId ? <div className="mt-3"><Link to={`/tasks/${taskId}/questions`} className="inline-flex h-9 items-center justify-center rounded-lg border bg-card px-4 text-sm font-semibold hover:bg-muted">{locale === "zh-CN" ? "人工继续处理" : "Continue manually"}</Link></div> : null}
             {actionError ? <p role="alert" className="mt-2 text-xs leading-5 text-danger">{actionError}</p> : null}
 
             <footer className="mt-4 flex shrink-0 flex-col-reverse gap-3 sm:mt-auto sm:flex-row sm:items-end sm:justify-between sm:pt-3">

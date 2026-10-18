@@ -1,5 +1,4 @@
 export const LOW_CONFIDENCE_THRESHOLD = 0.60;
-export const REQUIRED_REVIEW_CONFIDENCE_THRESHOLD = 0.25;
 
 /** Unknown or invalid confidence is not a fabricated zero or percentage. */
 export function confidenceValue(value: unknown): number | null {
@@ -11,7 +10,7 @@ export function confidenceNeedsAttention(value: unknown): boolean {
   return confidence !== null && confidence < LOW_CONFIDENCE_THRESHOLD;
 }
 
-export function confidenceRequiresReview(value: unknown): boolean {
-  const confidence = confidenceValue(value);
-  return confidence !== null && confidence < REQUIRED_REVIEW_CONFIDENCE_THRESHOLD;
+/** Confidence alone never makes otherwise usable content a progression blocker. */
+export function confidenceRequiresReview(_value: unknown): boolean {
+  return false;
 }

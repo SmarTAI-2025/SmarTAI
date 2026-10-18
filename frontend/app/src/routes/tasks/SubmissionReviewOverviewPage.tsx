@@ -1,13 +1,14 @@
+import { ReviewQueue as ReviewQueuePanel } from "@/components/tasks/ReviewQueue";
 import { ReviewConfirmButton, ReviewBlockDialog, ReviewStageActions } from "@/components/tasks/ReviewConfirmation";
-import { submissionReviewBlockers, submissionConfirmationBlockers, submissionRecognitionIncomplete, answerReviewBlocked, studentIdentityReviewBlocked, type ReviewBlocker } from "@/lib/reviewConfirmation";
+import { submissionReviewBlockers, submissionRecognitionIncomplete, answerReviewBlocked, studentIdentityReviewBlocked, type ReviewBlocker } from "@/lib/reviewConfirmation";
 import { SortableTableHead, useColumnSort, sortColumnRows, directionFor, type ColumnSort } from "@/components/ui/SortableTableHead";
 import { AlertCircle, CheckCircle2, ChevronRight, RotateCcw } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, Navigate, useNavigate, useParams, useSearchParams } from "react-router-dom";
-import { useTask, useUpdateStudentAnswer, useUpdateStudentIdentity } from "@/api/hooks/tasks";
+import { useTask, useUpdateStudentAnswer } from "@/api/hooks/tasks";
 import { getAPIErrorCode } from "@/api/client";
 import { confirmSubmissionBatch } from "@/lib/submissionReviewBatch";
-import { answerNeedsConfirmation, answerReviewAttention } from "@/lib/submissionReview";
+import { answerNeedsConfirmation, answerReviewAttention, answerReviewLabels } from "@/lib/submissionReview";
 import { isWorkflowRevisionConflictCode } from "@/lib/taskActionGuards";
 import { TaskQueryBar } from "@/components/tasks/AskQueryBar";
 import { useTaskFilterIntent } from "@/hooks/useTaskFilterIntent";
@@ -17,7 +18,6 @@ import { NewTaskStepper } from "@/components/new-task/NewTaskStepper";
 import { MatrixViewLink } from "@/components/tasks/MatrixViewLink";
 import { MatrixQueueWorkspace } from "@/components/tasks/MatrixQueueWorkspace";
 import { MatrixStatusCell, type MatrixStatusTone } from "@/components/tasks/MatrixStatusCell";
-import { SubmissionSourceOutcomePanel } from "@/components/tasks/SubmissionSourceOutcomePanel";
 import { getMatrixIdentityLayout, MATRIX_ACTION_COLUMN_WIDTH, MATRIX_QUESTION_COLUMN_WIDTH } from "@/components/tasks/matrixLayout";
 import { useI18n } from "@/i18n/I18nProvider";
 import type { MessageKey } from "@/i18n/messages";
@@ -67,7 +67,6 @@ export function SubmissionReviewOverviewPage() {
   // A completed /state poll may arrive before the cached task detail changes.
   const taskQuery = useTask(taskId, { refetchOnMount: "always" });
   const readingCompletion = taskQuery.isFetching && !hasTaskReachedStep(taskQuery.data, 4);
-  const identityMutation = useUpdateStudentIdentity();
   const answerMutation = useUpdateStudentAnswer();
   const [blocked, setBlocked] = useState<ReviewBlocker[]>([]);
   const batchLock = useRef(false);
@@ -91,9 +90,8 @@ export function SubmissionReviewOverviewPage() {
   const pendingAnswers = students.flatMap((student) => (student.stu_ans ?? [])
     .filter(answerNeedsConfirmation)
     .map((answer) => ({ student, answer })));
-  const pendingReviews: Array<{ student: StudentSubmission; answer?: StudentAnswerInfo }> = [
-    ...pendingIdentities.map(student => ({ student })), ...pendingAnswers,
-  ];
+  const advisoryCandidates = pendingAnswers.filter(({ student, answer }) => answerReviewAttention(answer) === "advisory"
+    && !studentIdentityReviewBlocked(student, taskQuery.data?.submission_sources));
   const smartFilter = useTaskFilterIntent({
     taskId, surface: "submission_review",
     resolveLocal: (value) => resolveSubmissionQuery(students, questions, value),
@@ -146,11 +144,10 @@ export function SubmissionReviewOverviewPage() {
   const queueItems = taskId
     ? buildSubmissionQueueItems(selection.students, selection.questions, taskId, returnSearch, locale, taskQuery.data?.submission_sources)
     : [];
+  const pendingReviews = advisoryCandidates.filter(({ student, answer }) => queueItems.some(item => item.key === `${student.stu_id}:${answer.q_id}` && item.severity === "advisory"));
 
   async function confirmAll() {
     if (!taskId || !taskQuery.data || batchLock.current) return;
-    const issues = submissionConfirmationBlockers(taskQuery.data, locale);
-    if (issues.length) { setBlocked(issues); return; }
     batchLock.current = true;
     setBatchResult(null);
     const total = pendingReviews.length;
@@ -158,9 +155,7 @@ export function SubmissionReviewOverviewPage() {
     try {
       const progress = (completed: number) => setBatchProgress({ completed, total });
       const revision = taskQuery.data.workflow_revision;
-      const result = await confirmSubmissionBatch(pendingReviews, revision, ({ student, answer }, expectedWorkflowRevision) => answer
-        ? answerMutation.mutateAsync({ taskId, studentId: student.stu_id, qId: answer.q_id, reviewStatus: "confirmed", expectedWorkflowRevision })
-        : identityMutation.mutateAsync({ taskId, currentStudentId: student.stu_id, studentId: student.stu_id, studentName: student.stu_name, expectedWorkflowRevision }), progress);
+      const result = await confirmSubmissionBatch(pendingReviews, revision, ({ student, answer }, expectedWorkflowRevision) => answerMutation.mutateAsync({ taskId, studentId: student.stu_id, qId: answer.q_id, reviewStatus: "confirmed", expectedWorkflowRevision }), progress);
       const unit = locale === "zh-CN" ? "项" : "items";
       if (result.error) {
         const code = getAPIErrorCode(result.error);
@@ -193,13 +188,6 @@ export function SubmissionReviewOverviewPage() {
       <ReviewBlockDialog locale={locale} issues={blocked} onClose={() => setBlocked([])} />
       <NewTaskStepper currentStep={4} blockedFromStep={submissionReviewBlockers(taskQuery.data, locale).length ? 5 : undefined} lockedStepReason={locale === "zh-CN" ? "请先处理并确认关键问题" : "Resolve and confirm required items first"} onLockedStepActivate={() => setBlocked(submissionReviewBlockers(taskQuery.data, locale))} />
 
-      <SubmissionSourceOutcomePanel
-        summary={taskQuery.data?.submission_source_summary}
-        sources={taskQuery.data?.submission_sources}
-        locale={locale}
-        taskId={taskId}
-        className="mt-[22px]"
-      />
 
       <section className="mt-[22px] min-w-0" aria-labelledby="submission-review-matrix">
         <h2 id="submission-review-matrix" className="sr-only">{t("submissionReviewMatrixLabel")}</h2>
@@ -236,7 +224,7 @@ export function SubmissionReviewOverviewPage() {
               <p role="status" className="text-sm">{locale === "zh-CN" ? `待确认：${pendingIdentities.length} 位学生身份、${pendingAnswers.length} 个作答题次` : `Awaiting confirmation: ${pendingIdentities.length} identities, ${pendingAnswers.length} responses`}</p>
 
             </div>
-            <p className="mt-2 text-xs text-muted-foreground">{locale === "zh-CN" ? "按当前识别内容确认全任务的记录，不修改姓名、学号或作答；缺失的作答不会标为已确认。" : "Confirms all records in this task as recognized without changing names, IDs or answers. Missing responses are excluded."}</p>
+            <p className="mt-2 text-xs text-muted-foreground">{locale === "zh-CN" ? "一键确认仅处理当前“建议处理”队列，不修改作答内容；“需要处理”中的问题请逐项处理。" : "Confirm all acknowledges the visible Suggested review items without changing answers. Resolve Action required items individually."}</p>
             {batchProgress ? <p role="status" className="mt-2 text-sm">{locale === "zh-CN" ? "正在确认" : "Confirming"} {batchProgress.completed}/{batchProgress.total}</p> : null}
             {batchResult ? <p role="status" className="mt-2 text-sm">{batchResult.message}{batchResult.href ? <Link className="ml-2 text-primary underline" to={batchResult.href}>{locale === "zh-CN" ? "打开未完成记录" : "Open unfinished record"}</Link> : null}</p> : null}
           </div>
@@ -492,41 +480,11 @@ function SubmissionReviewQueue({
   items: SubmissionQueueItem[];
   t: (key: MessageKey) => string;
 }) {
-  return (
-    <section className="flex h-[330px] flex-col overflow-hidden rounded-[10px] border bg-card px-4 py-5" aria-labelledby="submission-review-queue-title">
-      <h2 id="submission-review-queue-title" className="text-[16px] font-bold leading-6 text-foreground">
-        {t("submissionReviewQueueTitle")}
-      </h2>
-      {!items.length ? (
-        <div className="flex min-h-0 flex-1 flex-col items-center justify-center text-center">
-          <CheckCircle2 aria-hidden="true" className="h-7 w-7 text-teal-500" />
-          <p className="mt-3 max-w-[220px] text-[12px] leading-5 text-muted-foreground">
-            {t("submissionReviewQueueEmpty")}
-          </p>
-        </div>
-      ) : (
-        <ol className="mt-3 min-h-0 flex-1 space-y-1 overflow-y-auto overscroll-contain pr-1">
-          {items.map((item) => (
-            <li key={item.key}>
-              <Link
-                to={item.href}
-                className="flex min-h-[54px] items-center gap-2 rounded-[8px] px-2 py-1.5 text-[12px] outline-none transition hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring"
-              >
-                <span className="min-w-0 flex-1">
-                  <span className="block truncate font-semibold text-foreground" title={`${item.studentId} ${item.studentName}`}>
-                    {item.studentName} · {item.questionLabel}
-                  </span>
-                  <span className={cn("mt-0.5 block truncate", item.severity === "blocking" ? "text-red-700" : "text-amber-700")}>{item.reason || t(item.reasonKey)}</span>
-                </span>
-                <ChevronRight aria-hidden="true" className="h-4 w-4 shrink-0 text-muted-foreground" />
-              </Link>
-            </li>
-          ))}
-        </ol>
-      )}
-      <div className="mt-auto flex justify-end border-t pt-3">{confirmation}</div>
-    </section>
-  );
+  const { locale } = useI18n();
+  return <ReviewQueuePanel locale={locale} confirmation={confirmation} items={items.map(item => ({
+    key: item.key, title: `${item.studentName} · ${item.questionLabel}`, reason: item.reason || t(item.reasonKey),
+    href: item.href, severity: item.severity,
+  }))} />;
 }
 
 function ReviewMetric({
@@ -668,7 +626,7 @@ function buildSubmissionQueueItems(
         questionLabel: question.label,
         reasonKey: reasonKeys.flagged,
         severity: attention,
-        reason: answer?.flag?.filter(flag => !["recognition_needs_review", "ocr_only_structure_requires_teacher_review"].includes(flag)).map(flag => formatSubmissionFlag(flag, locale)).join(" · "),
+        reason: answerReviewLabels(answer, locale).join(" · "),
       });
     }
   }

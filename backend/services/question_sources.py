@@ -213,7 +213,7 @@ async def read_question_source(*, owner_id, task_id, content, filename, content_
             text, summary = await read_question_pdf_batches(
                 service=service, request=native_request, content=content, engine=None,
                 total_pages=total_pages, reporter=reporter, binding=binding, allow_native_partial=True,
-                retry_key=retry_key,
+                retry_key=retry_key, acknowledge_pending_retry=acknowledge_pending_retry,
             )
             return QuestionSourceRead(text, summary, stored_file_id)
 
@@ -224,6 +224,7 @@ async def read_question_source(*, owner_id, task_id, content, filename, content_
                 text, summary = await read_question_pdf_batches(
                     service=service, request=request, content=content, engine=engine,
                     total_pages=total_pages, reporter=reporter, binding=binding, retry_key=retry_key,
+                    acknowledge_pending_retry=acknowledge_pending_retry,
                 )
             except RecognitionError as exc:
                 if exc.code != "provider_vision_not_supported" or not allow_vision or engine is None:

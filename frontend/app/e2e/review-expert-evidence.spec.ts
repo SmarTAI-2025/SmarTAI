@@ -51,7 +51,7 @@ for (const demo of [false, true]) for (const locale of ["zh-CN", "en-US"]) {
       await card.getByText(zh ? "查看各专家原始结果" : "View Original Model Results").click();
       await expect(card.getByText("Expert 0 reasoning")).toBeVisible();
       await expect(card.getByText("Original expert explanation 1.")).toBeVisible();
-      await expect(card.getByText(zh ? /failed-model.*未给出有效分数/ : /failed-model.*No valid score/)).toBeVisible();
+      await expect(card.getByText(zh ? /failed-model.*无有效分数/ : /failed-model.*No valid score/)).toBeVisible();
     }
     await expect(page.getByText(/已隐藏|details are hidden/)).toHaveCount(0);
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1)).toBe(true);

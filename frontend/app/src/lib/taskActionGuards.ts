@@ -637,9 +637,9 @@ export function classifyRecoverableError(
       description: tx(locale,
         "已有成功结果已保留。编程题没有运行测试，不能把未执行当作学生答错。请联系管理员恢复隔离执行服务后仅重试失败项，或查看结果并人工补齐分数。",
         "Successful results are preserved. Tests were not run, so this is not a failed student test. Ask an administrator to restore the isolated runner, then retry only failed items, or review the results and enter the missing score."),
-      actionLabel: tx(locale, "查看结果并补分", "Review results and enter scores"),
+      actionLabel: tx(locale, "查看进度与恢复", "View progress and recovery"),
       actionKind: "refresh",
-      actionHref: taskId ? `/tasks/${taskId}/review?resolveFailures=1` : undefined,
+      actionHref: taskId ? `/tasks/${taskId}/grading/progress` : undefined,
       tone: "danger",
       technicalDetails,
     };

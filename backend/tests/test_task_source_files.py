@@ -231,13 +231,14 @@ def _create_submission_selection(
     storage: StorageBackend,
     files: list[tuple[str, bytes, str]],
     input_hash: str | None = None,
+    operation_type: str = "submission_recognition",
     operation=None,
 ):
     if operation is None:
         operation, _ = workflow_repository.create_operation(
             assignment_id=task_id,
             owner_id=owner_id,
-            operation_type="submission_recognition",
+            operation_type=operation_type,
             input_hash=input_hash or uuid.uuid4().hex,
             payload={},
             expires_at=time.time() + 3600,
@@ -1001,8 +1002,9 @@ def test_storage_read_failure_is_safe_retryable_503(
     assert "secret-bucket" not in caplog.text
 
 
+@pytest.mark.parametrize("operation_type", ["submission_recognition", "submission_manual_review"])
 def test_submission_single_zip_members_partial_failure_and_duplicate_identity_stay_independent(
-    tmp_path,
+    tmp_path, monkeypatch, operation_type,
 ):
     owner_id = "submission-owner"
     task_id = "submission-task"
@@ -1012,6 +1014,7 @@ def test_submission_single_zip_members_partial_failure_and_duplicate_identity_st
         owner_id=owner_id,
         task_id=task_id,
         storage=storage,
+        operation_type=operation_type,
         files=[
             ("PB0001.pdf", PDF, "submission_source"),
             ("folder/PB0001.pdf", PDF_TWO, "submission_source"),
@@ -1060,6 +1063,17 @@ def test_submission_single_zip_members_partial_failure_and_duplicate_identity_st
     assert reference["file_id"] is None
     assert reference["status"] == "unavailable"
     assert reference["unavailable_reason"] == "not_persisted"
+    client = _client(monkeypatch, owner_id=owner_id, storage=storage)
+    assert client.get(f"/tasks/{task_id}/source-files").status_code == 200
+    for stored, content in zip(current.stored_files, [PDF, PDF_TWO]):
+        response = client.get(f"/tasks/{task_id}/source-files/{stored.id}/content")
+        assert response.status_code == 200
+        assert response.content == content
+    _seed_task("other-owner", "other-task")
+    other = _client(monkeypatch, owner_id="other-owner", storage=storage)
+    assert other.get(f"/tasks/{task_id}/source-files").status_code == 404
+    assert other.get(f"/tasks/{task_id}/source-files/{current.stored_files[0].id}/content").status_code == 404
+    assert client.get(f"/tasks/other-task/source-files/{current.stored_files[0].id}/content").status_code == 404
 
 
 def test_submission_retry_uses_only_current_attempt(tmp_path):

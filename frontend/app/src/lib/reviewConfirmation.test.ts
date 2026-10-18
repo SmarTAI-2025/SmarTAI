@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { answerReviewBlocked, answerReviewNextBlocked, questionReviewBlocked, questionReviewNextBlocked, questionReviewIssues, questionReviewBlockers, questionIssueNeedsReview, submissionReviewBlockers, submissionConfirmationBlockers, studentIdentityReviewBlocked } from "./reviewConfirmation";
 import type { Task, ProblemInfo, StudentAnswerInfo, PreparationIssue, StudentSubmission } from "@/types";
 
-const question = (overrides: Partial<ProblemInfo> = {}): ProblemInfo => ({ q_id: "q1", number: "1", type: "short", stem: "Question text", criterion: "", max_score: 10, ...overrides });
+const question = (overrides: Partial<ProblemInfo> = {}): ProblemInfo => ({ q_id: "q1", number: "1", type: "short", stem: "Question text", criterion: "Scoring rubric", reference_answer: "Reference answer", max_score: 10, ...overrides });
 const issue = (overrides: Partial<PreparationIssue> = {}): PreparationIssue => ({ issue_id: "i1", q_id: "q1", field: "stem", code: "recognition_needs_review", severity: "warning", status: "open", ...overrides });
 
 describe("review hard failures", () => {
@@ -12,7 +12,7 @@ describe("review hard failures", () => {
     expect(answerReviewBlocked({...blank, flag:["recognition_failed"]})).toBe(true);
   });
   it("allows uncertain content and blocks an empty question", () => {
-    expect(questionReviewBlocked({stem:"content", preparation_issues:[{status:"open", severity:"warning"}]} as ProblemInfo)).toBe(false);
+    expect(questionReviewBlocked({stem:"content", criterion:"Scoring rubric", preparation_issues:[{status:"open", severity:"warning"}]} as ProblemInfo)).toBe(false);
     expect(questionReviewBlocked({stem:""} as ProblemInfo)).toBe(true);
   });
   it("routes a source with no student record to recovery and a failed answer to its exact question", () => {
@@ -25,7 +25,7 @@ describe("review hard failures", () => {
 
   it("keeps source-wide uncertainty and ordinary confirmation out of the question risk queue", () => {
     const warnings = [issue(), issue({ code: "recognition_partial", details: { coverage: { unverified_targets: ["1", "2"] } } }),
-      issue({ code: "default_max_score_requires_review" }), issue({ details: { confidence_reasons: ["quality_uncalibrated"] } })];
+      issue({ details: { confidence_reasons: ["quality_uncalibrated"] } })];
     const problems = warnings.map((warning, index) => question({ q_id: `q${index}`, review_status: "needs_review", preparation_issues: [warning] }));
     expect(warnings.every(warning => !questionIssueNeedsReview(warning))).toBe(true);
     expect(problems.flatMap(questionReviewIssues)).toEqual([]);
@@ -33,22 +33,22 @@ describe("review hard failures", () => {
     expect(problems[0].preparation_issues).toEqual([warnings[0]]);
   });
 
-  it.each([0, 0.2499, 0.25, 0.5999, 0.60, 1, undefined, NaN, -1])("only puts numeric confidence below .25 into the required queue (%s)", (confidence) => {
+  it.each([0, 0.2499, 0.25, 0.5999, 0.60, 1, undefined, NaN, -1])("puts all numeric confidence below .6 into suggestions without blocking (%s)", (confidence) => {
     const warning = issue({ code: "low_confidence", details: { confidence } });
     const problem = question({ preparation_issues: [warning] });
-    const required = typeof confidence === "number" && confidence >= 0 && confidence < 0.25;
+    const suggested = typeof confidence === "number" && confidence >= 0 && confidence < 0.6;
     expect(questionReviewBlocked(problem)).toBe(false);
-    expect(questionReviewNextBlocked(problem)).toBe(required);
-    expect(questionReviewIssues(problem)).toHaveLength(required ? 1 : 0);
-    expect(questionReviewBlockers([problem], "T1", "zh-CN")).toHaveLength(required ? 1 : 0);
+    expect(questionReviewNextBlocked(problem)).toBe(false);
+    expect(questionReviewIssues(problem)).toHaveLength(suggested ? 1 : 0);
+    expect(questionReviewBlockers([problem], "T1", "zh-CN")).toHaveLength(0);
     expect(questionReviewNextBlocked({ ...problem, review_status: "confirmed" })).toBe(false);
-    if (required) expect(questionReviewBlockers([problem], "T1", "zh-CN")[0].label).toContain("0.25");
+    if (suggested) expect(questionReviewIssues(problem)[0]).toMatchObject({ severity: "warning" });
   });
 
   it("uses actual material confidence and keeps the confirm action possible", () => {
     const imported = question({ preparation_issues: [issue({ code: "low_confidence", field: "rubric" })], material_provenance: { criterion: { confidence: 0.2 } as NonNullable<ProblemInfo["material_provenance"]>["criterion"] } });
     expect(questionReviewBlocked(imported)).toBe(false);
-    expect(questionReviewNextBlocked(imported)).toBe(true);
+    expect(questionReviewNextBlocked(imported)).toBe(false);
     expect(questionReviewIssues(imported)[0].details?.confidence).toBe(0.2);
   });
 
@@ -60,12 +60,12 @@ describe("review hard failures", () => {
     expect(questionReviewNextBlocked(problem)).toBe(false);
   });
 
-  it("keeps truly low numeric confidence required after editing until confirmation", () => {
+  it("does not revive a resolved confidence suggestion as a blocker", () => {
     const warning = issue({ code: "low_confidence", status: "resolved", details: { confidence: 0.2 } });
     const edited = question({ review_status: "edited", preparation_issues: [warning] });
     expect(questionReviewBlocked(edited)).toBe(false);
-    expect(questionReviewNextBlocked(edited)).toBe(true);
-    expect(questionReviewIssues(edited)).toEqual([warning]);
+    expect(questionReviewNextBlocked(edited)).toBe(false);
+    expect(questionReviewIssues(edited)).toEqual([]);
     expect(questionReviewNextBlocked({ ...edited, review_status: "confirmed" })).toBe(false);
     expect(questionReviewIssues({ ...edited, review_status: "confirmed" })).toEqual([]);
   });
@@ -89,12 +89,31 @@ describe("review hard failures", () => {
     expect(questionReviewBlockers([empty, conflict], "T1", "en-US")).toHaveLength(2);
   });
 
+  it("requires a usable rubric but only suggests completing a reference answer", () => {
+    const missingRubric = question({ criterion: "", reference_answer: "" });
+    expect(questionReviewIssues(missingRubric).map(issue => [issue.field, issue.severity])).toEqual([["rubric", "blocking"], ["answer", "warning"]]);
+    expect(questionReviewNextBlocked(missingRubric)).toBe(true);
+    const missingAnswer = question({ reference_answer: "", preparation_issues: [issue({ code: "manual_completion_required", severity: "blocking", details: { required_fields: ["answer"] } })] });
+    expect(questionReviewNextBlocked(missingAnswer)).toBe(false);
+    expect(questionReviewIssues(missingAnswer).every(issue => issue.severity === "warning")).toBe(true);
+    expect(questionReviewIssues({ ...missingAnswer, review_status: "confirmed" })).toEqual([]);
+  });
+
   it("lets a repaired question be confirmed before allowing the next stage", () => {
-    const repaired = question({ review_status: "edited", preparation_issues: [issue({ severity: "blocking", status: "resolved" })] });
+    const repaired = question({ review_status: "edited", preparation_issues: [issue({ code: "required_review_confirmation", severity: "blocking", status: "resolved" })] });
     expect(questionReviewBlocked(repaired)).toBe(false);
     expect(questionReviewNextBlocked(repaired)).toBe(true);
     expect(questionReviewIssues(repaired)[0]).toMatchObject({ severity: "blocking", details: { review_display_reason: "confirmation_required" } });
     expect(questionReviewNextBlocked({ ...repaired, review_status: "confirmed" })).toBe(false);
+  });
+
+  it.each(["manual_completion_required", "source_conflict", "ambiguous_question_match"] as const)("allows explicit confirmation of usable content with a %s marker", code => {
+    const marker = issue({ code, severity: "warning", details: { required_fields: ["criterion"] } });
+    const ready = question({ preparation_issues: [marker] });
+    expect(questionReviewBlocked(ready)).toBe(false);
+    expect(questionReviewNextBlocked(ready)).toBe(true);
+    expect(questionReviewBlocked({ ...ready, criterion: "" })).toBe(true);
+    expect(questionReviewNextBlocked({ ...ready, review_status: "confirmed", preparation_issues: [{ ...marker, status: "acknowledged" }] })).toBe(false);
   });
 
   it("requires confirmation of a repaired answer without rejecting that confirmation", () => {
@@ -107,10 +126,10 @@ describe("review hard failures", () => {
     expect(answerReviewNextBlocked({ ...repaired, review_status: "confirmed" })).toBe(false);
   });
 
-  it("requires confirmation only for the server's numeric below-.25 marker", () => {
+  it("keeps the legacy very-low-confidence marker optional", () => {
     const answer = { q_id: "q1", number: "1", type: "short", content: "Visible work", flag: ["recognition_very_low_confidence"] };
     expect(answerReviewBlocked(answer)).toBe(false);
-    expect(answerReviewNextBlocked(answer)).toBe(true);
+    expect(answerReviewNextBlocked(answer)).toBe(false);
     expect(answerReviewNextBlocked({ ...answer, review_status: "confirmed" })).toBe(false);
   });
 

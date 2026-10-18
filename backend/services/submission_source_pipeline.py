@@ -52,7 +52,7 @@ class PreparedSubmissionSource:
 
 def attach_submission_recognition(results, sources):
     """Keep reading uncertainty separate from student identity and correctness."""
-    from backend.domain.confidence_policy import confidence_requires_review
+    from backend.domain.confidence_policy import confidence_value
     by_source = {source.source_id: source.recognition for source in sources if source.recognition}
     output = []
     for result in results:
@@ -66,8 +66,6 @@ def attach_submission_recognition(results, sources):
             flags = ["recognition_needs_review"]
             if summary.get("confidence") == "low":
                 flags.append("recognition_low_confidence")
-            if confidence_requires_review(summary.get("confidence")):
-                flags.append("recognition_very_low_confidence")
             if summary.get("error_code") or (summary.get("coverage") or {}).get("missing_targets"):
                 flags.append("recognition_failed")
             for key in ("failed_pages", "unprocessed_pages"):
@@ -76,6 +74,12 @@ def attach_submission_recognition(results, sources):
                     flags.append(f"recognition_{key}:" + ",".join(str(page) for page in pages))
             student["stu_ans"] = [dict(answer, flag=list(dict.fromkeys([*answer.get("flag", []), *flags])))
                                    for answer in student.get("stu_ans", [])]
+        numeric_confidence = confidence_value(summary.get("confidence"))
+        if numeric_confidence is not None:
+            student["stu_ans"] = [dict(answer, flag=[
+                *[flag for flag in answer.get("flag", []) if not flag.startswith("recognition_confidence:")],
+                f"recognition_confidence:{numeric_confidence}"])
+                for answer in student.get("stu_ans", [])]
         output.append(replace(result, student=student))
     return output
 

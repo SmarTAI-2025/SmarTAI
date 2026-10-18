@@ -1059,7 +1059,8 @@ class FrozenSubmission:
     revision_number: int
 
 
-def record_event(run_id: str, *, level: str, message: str, payload: dict | None = None) -> None:
+def record_event(run_id: str, *, level: str, message: str, payload: dict | None = None,
+                 worker_id: str | None = None) -> None:
     now = time.time()
     with session_scope() as session:
         run = session.scalar(
@@ -1071,6 +1072,11 @@ def record_event(run_id: str, *, level: str, message: str, payload: dict | None 
             session, run_id, actor_id=run.teacher_id, lock=True
         ) is None:
             raise NotFound("grading_run")
+        if worker_id is not None and (
+            run.status != "running" or run.lease_owner != worker_id
+            or (run.lease_expiry or 0) <= now or run.released_at is not None
+        ):
+            raise LeaseLost("checkpoint_write_lease_lost")
         next_seq = (session.scalar(
             select(func.max(GradingRunEventRecord.sequence)).where(
                 GradingRunEventRecord.grading_run_id == run_id
@@ -1322,7 +1328,52 @@ def upsert_result(run_id: str, *, worker_id: str,
         return _result_to_dto(record)
 
 
-def list_results_for_run(run_id: str) -> list[education.GradeResultDTO]:
+def _missing_result_records(session, run, records):
+    """Project only holes in the run's frozen matrix; reads do not persist them."""
+    revision_ids, question_ids = _result_matrix_axes(session, run)
+    present = {(row.submission_revision_id, row.question_id) for row in records}
+    frozen = session.scalars(select(GradingRunSubmissionRecord).where(
+        GradingRunSubmissionRecord.grading_run_id == run.id)).all()
+    questions = session.scalars(select(AssignmentQuestionRecord).where(
+        AssignmentQuestionRecord.id.in_(question_ids))).all()
+    from backend.db.workflow_repository import GradingRunSetupRecord
+    setup = session.get(GradingRunSetupRecord, run.id)
+    maxima = {item["id"]: item.get("max_score", 10) for item in (setup.input_manifest or {}).get("questions", [])
+              if isinstance(item, dict) and item.get("id")} if setup else {}
+    return [GradeResultRecord(id="", grading_run_id=run.id, submission_revision_id=revision.submission_revision_id,
+        question_id=question.id, student_id=revision.student_id, q_id=question.q_id,
+        ai_score=None, ai_max_score=maxima.get(question.id, question.max_score), ai_synthesis_method="all_failed",
+        requires_review=True, review_reasons=["missing_correction"], initial_requires_review=True,
+        initial_review_reasons=["missing_correction"], result_status="failed",
+        created_at=run.created_at, updated_at=run.completed_at or run.created_at)
+        for revision in frozen if revision.submission_revision_id in revision_ids
+        for question in questions if (revision.submission_revision_id, question.id) not in present]
+
+
+def ensure_missing_result_for_review(run_id: str, *, teacher_id: str, student_id: str, q_id: str):
+    """Create a missing frozen result only after an explicit teacher edit."""
+    with session_scope() as session:
+        run = session.scalar(select(GradingRunRecord).where(GradingRunRecord.id == run_id).with_for_update())
+        if run is None or run.teacher_id != teacher_id or _active_assignment_for_run(
+                session, run_id, actor_id=teacher_id, lock=True) is None:
+            raise NotFound("grading_run")
+        if run.status not in {"completed", "partial_failed"} or run.released_at is not None:
+            raise InvalidTransition("run_not_reviewable")
+        records = session.scalars(select(GradeResultRecord).where(GradeResultRecord.grading_run_id == run_id)).all()
+        existing = next((row for row in records if row.student_id == student_id and row.q_id == q_id), None)
+        if existing is not None:
+            return _result_to_dto(existing)
+        missing = next((row for row in _missing_result_records(session, run, records)
+                        if row.student_id == student_id and row.q_id == q_id), None)
+        if missing is None:
+            raise NotFound("grade_result")
+        missing.id = _new_result_id()
+        session.add(missing)
+        session.flush()
+        return _result_to_dto(missing)
+
+
+def list_results_for_run(run_id: str, *, include_missing: bool = False) -> list[education.GradeResultDTO]:
     with session_scope() as session:
         if _active_assignment_for_run(session, run_id) is None:
             raise NotFound("grading_run")
@@ -1332,6 +1383,8 @@ def list_results_for_run(run_id: str) -> list[education.GradeResultDTO]:
             .order_by(GradeResultRecord.student_id, GradeResultRecord.q_id)
         ).all()
         reviews = _latest_reviews_by_result(session, [r.id for r in records])
+        if include_missing:
+            records = [*records, *_missing_result_records(session, session.get(GradingRunRecord, run_id), records)]
         return [_result_to_dto(r, reviews.get(r.id)) for r in records]
 
 
@@ -1600,6 +1653,16 @@ def release(run_id: str, *, teacher_id: str) -> education.GradingRunDTO:
         )
         if session.scalar(select(unresolved)):
             raise ResultNotReleasable("unresolved_failures")
+        records = session.scalars(select(GradeResultRecord).where(GradeResultRecord.grading_run_id == run_id)).all()
+        reviews = _latest_reviews_by_result(session, [row.id for row in records])
+        for row in records:
+            review = reviews.get(row.id)
+            def valid_score(value):
+                return value is not None and math.isfinite(value) and 0 <= value <= row.ai_max_score
+            effective = review.new_score if review is not None else row.ai_score
+            if (not valid_score(effective) or (not valid_score(row.ai_score)
+                    and (review is None or not review.confirmed))):
+                raise ResultNotReleasable("unconfirmed_or_missing_score")
         revision_ids, question_ids = _result_matrix_axes(session, run)
         actual_pairs = {
             (revision_id, question_id)

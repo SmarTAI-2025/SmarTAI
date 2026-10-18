@@ -1,10 +1,14 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import type { ReactElement } from "react";
+import { fireEvent, render as rtlRender, screen, waitFor } from "@testing-library/react";
 import { createMemoryRouter, RouterProvider } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { GradingSetupPage } from "./GradingSetupPage";
 import { DraftActions, DraftLeaveProvider } from "@/hooks/useDraftLeave";
 import { PageDraftSession } from "@/hooks/useDraftProtection";
 import { clearPageDrafts } from "@/lib/pageDraftStore";
+
+vi.mock("@/api/hooks/tasks", () => ({ useTask: () => ({ data: undefined }) }));
 
 vi.mock("@/api/hooks", () => ({
   useCourseMaterials: vi.fn(),
@@ -49,7 +53,7 @@ describe("GradingSetupPage regrade mode", () => {
     render(<RouterProvider router={router} />);
     fireEvent.click(await screen.findByRole("button", { name: "Show advanced settings" }));
     expect(screen.getAllByRole("slider")).toHaveLength(1);
-    expect(screen.getByText(/Below 0.60: a note beside confirmation in the detail view/)).toBeVisible();
+    expect(screen.getByText(/Any valid expert confidence below 0.60/)).toBeVisible();
     fireEvent.click(screen.getByRole("button", { name: /Save & Review/ }));
     await waitFor(() => expect(saveSetupMutate).toHaveBeenCalledWith(expect.objectContaining({
       gradingSetup: expect.objectContaining({ low_confidence_threshold: 0.6 }),
@@ -363,3 +367,5 @@ describe("GradingSetupPage regrade mode", () => {
   });
 });
 import "fake-indexeddb/auto";
+
+function render(ui: ReactElement) { return rtlRender(<QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>{ui}</QueryClientProvider>); }

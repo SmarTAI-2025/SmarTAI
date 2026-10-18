@@ -161,7 +161,7 @@ for (const mode of ["manual", "all"] as const) test(`${mode} identity and answer
   await expect(page.locator('[data-question-id="q1"]').getByRole("button", { name: /已确认/ })).toHaveCount(1);
   await page.getByRole("link", { name: "返回作答总览", exact: true }).click();
   await expect(page.getByText("待确认：0 位学生身份、0 个作答题次")).toBeVisible();
-  await expect(page.getByRole("button", { name: "已确认", exact: true })).toBeDisabled();
+  await expect(page.getByRole("region", { name: "待复核队列" })).toContainText("当前没有待处理项");
   await expect(page.getByRole("button", { name: "全部确认", exact: true })).toHaveCount(0);
   await expect(page.locator('[data-review-stage-actions]')).toContainText("进入批改设置");
   await page.screenshot({ path: `output/playwright/navigation-review-${mode}-confirmed.png`, fullPage: true });
