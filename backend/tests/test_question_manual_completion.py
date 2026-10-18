@@ -61,42 +61,50 @@ async def test_paused_question_handoff_keeps_completed_questions_and_sources(mon
     assert isinstance(result, dict), getattr(result, "body", result)
     assert calls == before_calls
     if not stopped_after:
-        assert result["status"] == "sources_pending" and result["first_question_id"] is None
-        assert task_facade.get_task(task_id=task, owner_id=owner)["status"] == "problems_paused"
+        assert result["status"] == "ready_for_review" and result["first_question_id"] is None
+        assert task_facade.get_task(task_id=task, owner_id=owner)["status"] == "problems_ready"
         assert "questions_required" in task_facade.grading_readiness(task_id=task, owner_id=owner)["blocking_issues"]
-        original_source = task_preparation.manual_question_source_content(task, queued["job_id"], source["source_token"], current=SimpleNamespace(id=owner))
-        assert original_source.body.decode() == "1. First.\n2. Second."
+        from pydantic import ValidationError as RequestValidationError
+        for payload in ({"manual_questions": [{}]}, {"completed_source_tokens": [source["source_token"]]},
+                        {"question_count": 0}, {"question_count": 501}, {"question_count": 1.5}):
+            with pytest.raises(RequestValidationError):
+                task_preparation.ManualQuestionPreparationRequest(expected_workflow_revision=result["workflow_revision"], **payload)
+        assert not any("manual-review/{source_token}" in route.path for route in task_preparation.router.routes)
+        request = task_preparation.ManualQuestionPreparationRequest(expected_workflow_revision=result["workflow_revision"], question_count=2)
         stranger, _ = _seed_task()
-        assert task_preparation.manual_question_source_content(task, queued["job_id"], source["source_token"], current=SimpleNamespace(id=stranger)).status_code == 404
-        question = task_preparation.ManualQuestionDraft(q_id="teacher-q", stem="Teacher-authored question",
-            reference_answer="Teacher solution", criterion="Award 10 points for the solution.")
-        arguments = dict(manual_questions=[question], expected_workflow_revision=paused["workflow_revision"])
-        refused = await task_preparation.manually_complete_question_preparation(task, queued["job_id"],
-            task_preparation.ManualQuestionPreparationRequest(**arguments), current=SimpleNamespace(id=owner))
-        assert refused.status_code == 422 and not assignment_repository.list_questions(task, teacher_id=owner)
-        for invalid in ([question, question], [question.model_copy(update={"stem": "(a) Explain A.\n(b) Explain B.", "criterion": "(a) 4 分\n(b) 4 分"})]):
-            response = await task_preparation.manually_complete_question_preparation(task, queued["job_id"],
-                task_preparation.ManualQuestionPreparationRequest(expected_workflow_revision=paused["workflow_revision"],
-                    manual_questions=invalid, completed_source_tokens=[source["source_token"]]), current=SimpleNamespace(id=owner))
-            assert response.status_code == 422
-        result = await task_preparation.manually_complete_question_preparation(task, queued["job_id"],
-            task_preparation.ManualQuestionPreparationRequest(**arguments, completed_source_tokens=[source["source_token"]]),
-            current=SimpleNamespace(id=owner))
-        assert result["first_question_id"] == "teacher-q"
+        refused = await task_preparation.manually_complete_question_preparation(task, queued["job_id"], request, current=SimpleNamespace(id=stranger))
+        assert refused.status_code == 404
+        stale = await task_preparation.manually_complete_question_preparation(task, queued["job_id"],
+            request.model_copy(update={"expected_workflow_revision": paused["workflow_revision"]}), current=SimpleNamespace(id=owner))
+        assert stale.status_code == 409
+        result = await task_preparation.manually_complete_question_preparation(task, queued["job_id"], request, current=SimpleNamespace(id=owner))
+        assert result["first_question_id"] == "manual-1"
+        questions = assignment_repository.list_questions(task, teacher_id=owner)
+        assert len(questions) == 2 and all(not q.stem and not q.criterion for q in questions)
         assert "question_manual_completion_required" in task_facade.grading_readiness(task_id=task, owner_id=owner)["blocking_issues"]
-        assert assignment_repository.list_questions(task, teacher_id=owner)[0].stem == question.stem
-        assert task_facade.get_task(task_id=task, owner_id=owner)["problem_data"]["teacher-q"]["max_score_source"] == "teacher_edited"
-        # Previously saved manual drafts must use the same public score-source
-        # contract without changing the teacher's content or rewriting history.
+        # A new count cannot replace rows already being edited, even with a current revision.
+        duplicate = await task_preparation.manually_complete_question_preparation(task, queued["job_id"],
+            request.model_copy(update={"expected_workflow_revision": result["workflow_revision"]}), current=SimpleNamespace(id=owner))
+        assert duplicate.status_code == 409
+        with pytest.raises(ValidationError):
+            task_facade.update_problem(task_id=task, owner_id=owner, q_id="manual-1", patch={"review_status": "confirmed"})
+        for q in questions:
+            task_facade.update_problem(task_id=task, owner_id=owner, q_id=q.q_id, patch={"number": f"A-{q.number}"})
+            task_facade.update_problem(task_id=task, owner_id=owner, q_id=q.q_id, patch={"stem": "Teacher-authored question"})
+            task_facade.update_problem(task_id=task, owner_id=owner, q_id=q.q_id, patch={"criterion": "Award 10 points for the solution.", "max_score": 10})
+            task_facade.update_problem(task_id=task, owner_id=owner, q_id=q.q_id, patch={"review_status": "confirmed"})
+        projected = task_facade.get_task(task_id=task, owner_id=owner)["problem_data"]["manual-1"]
+        assert projected["number"] == "A-1" and projected["question_structure"]["major_number"] == "A-1"
+        assert "question_manual_completion_required" not in task_facade.grading_readiness(task_id=task, owner_id=owner)["blocking_issues"]
+        # Keep the compatibility read of previously saved teacher-entered scores.
         from backend.db.models import AssignmentQuestionRecord
-        created = assignment_repository.list_questions(task, teacher_id=owner)[0]
         with session_scope() as session:
-            stored = session.get(AssignmentQuestionRecord, created.id)
+            stored = session.get(AssignmentQuestionRecord, questions[0].id)
             stored.source = {**stored.source, "presentation": {
                 **stored.source["presentation"], "max_score_source": "teacher_input"}}
-        projected = task_facade.get_task(task_id=task, owner_id=owner)["problem_data"]["teacher-q"]
-        assert projected["max_score_source"] == "teacher_edited" and projected["stem"] == question.stem
-        assert assignment_repository.list_questions(task, teacher_id=owner)[0].source["presentation"]["max_score_source"] == "teacher_input"
+        projected = task_facade.get_task(task_id=task, owner_id=owner)["problem_data"]["manual-1"]
+        assert projected["max_score_source"] == "teacher_edited" and projected["stem"] == "Teacher-authored question"
+
     else:
         questions = assignment_repository.list_questions(task, teacher_id=owner)
         assert questions[0].reference_answer
@@ -189,3 +197,21 @@ async def test_all_question_units_failed_can_enter_manual_review(monkeypatch):
     questions = task_facade.get_task(task_id=task, owner_id=owner)["problem_data"]
     assert len(questions) == 2 and all(not q["criterion"] for q in questions.values())
     assert "question_manual_completion_required" in task_facade.grading_readiness(task_id=task, owner_id=owner)["blocking_issues"]
+
+
+@pytest.mark.asyncio
+async def test_regular_recognized_question_number_uses_the_same_editor(monkeypatch):
+    owner, task, job, revision, _ = await failed_preparation(monkeypatch)
+    await manual(owner, task, job, revision)
+    original = task_facade.get_task(task_id=task, owner_id=owner)
+    changed = task_facade.update_problem(task_id=task, owner_id=owner, q_id="q1",
+        expected_revision=original["workflow_revision"], patch={"number": "1.1.5"})
+    question = changed["problem"]
+    assert question["number"] == "1.1.5" and question["q_id"] == "q1"
+    assert question["stem"] == original["problem_data"]["q1"]["stem"]
+    assert question["reference_answer"] == original["problem_data"]["q1"]["reference_answer"]
+    assert question["criterion"] == original["problem_data"]["q1"]["criterion"]
+    assert question["question_structure"]["major_number"] == "1.1.5"
+    for value in (" ", "x" * 65):
+        with pytest.raises(ValidationError):
+            task_facade.update_problem(task_id=task, owner_id=owner, q_id="q1", patch={"number": value})

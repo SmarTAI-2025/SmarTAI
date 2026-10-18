@@ -191,10 +191,10 @@ export function retrySubmissionRecognition(input: {
 }
 
 export function manuallyCompleteSubmissionRecognition(input: {
-  taskId: string; jobId: string; expectedWorkflowRevision: number;
+  taskId: string; jobId: string; expectedWorkflowRevision: number; studentCount?: number;
 }): Promise<TaskMutationResponse> {
   return postJSON(`/tasks/${encodeURIComponent(input.taskId)}/submission-recognition/${encodeURIComponent(input.jobId)}/manual-review`,
-    { expected_workflow_revision: input.expectedWorkflowRevision });
+    { expected_workflow_revision: input.expectedWorkflowRevision, ...(input.studentCount !== undefined ? { student_count: input.studentCount } : {}) });
 }
 
 export function retryQuestionPreparation(input: {
@@ -217,12 +217,11 @@ export function retryQuestionPreparation(input: {
 
 export function manuallyCompleteQuestionPreparation(input: {
   taskId: string; jobId: string; expectedWorkflowRevision: number;
-  manualQuestions?: Array<{ q_id: string; number?: string; type: string; stem: string; reference_answer: string; criterion: string; max_score: number }>;
-  completedSourceTokens?: string[];
-}): Promise<{ status: "ready_for_review" | "sources_pending"; task_id: string; workflow_revision: number; first_question_id: string | null }> {
+  questionCount?: number;
+}): Promise<{ status: "ready_for_review"; task_id: string; workflow_revision: number; first_question_id: string | null }> {
   return postJSON(`/tasks/${encodeURIComponent(input.taskId)}/question-preparation/${encodeURIComponent(input.jobId)}/manual-review`,
     { expected_workflow_revision: input.expectedWorkflowRevision,
-      ...(input.manualQuestions ? { manual_questions: input.manualQuestions, completed_source_tokens: input.completedSourceTokens } : {}) });
+      ...(input.questionCount !== undefined ? { question_count: input.questionCount } : {}) });
 }
 
 export function uploadReference(taskId: string, file: File, options?: UploadOptions): Promise<TaskMutationResponse> {
@@ -285,7 +284,7 @@ export function getTaskResultArtifactBlob(
 export function updateProblem(
   taskId: string,
   qId: string,
-  patch: Pick<Partial<ProblemInfo>, "stem" | "criterion" | "max_score" | "review_status" | "reference_answer" | "solution_code" | "test_cases"> & { expected_workflow_revision?: number; review_fields?: import("@/types").PreparationIssue["field"][] },
+  patch: Pick<Partial<ProblemInfo>, "number" | "stem" | "criterion" | "max_score" | "review_status" | "reference_answer" | "solution_code" | "test_cases"> & { expected_workflow_revision?: number; review_fields?: import("@/types").PreparationIssue["field"][] },
 ): Promise<{ status: "ok"; q_id: string; problem: ProblemInfo; workflow_revision: number }> {
   return putJSON(`/tasks/${taskId}/problems/${qId}`, patch);
 }

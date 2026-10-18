@@ -2,7 +2,6 @@ import { getTaskDestination } from "@/lib/taskFlow";
 import { ReviewQueue as ReviewQueuePanel } from "@/components/tasks/ReviewQueue";
 import { questionIssueNeedsReview, questionReviewConfirmed, questionReviewIssues, questionReviewBlockers, recognitionIssueLabel, type ReviewBlocker } from "@/lib/reviewConfirmation";
 import { MatrixViewLink } from "@/components/tasks/MatrixViewLink";
-import { ManualQuestionSourceReview } from "@/components/tasks/ManualQuestionSourceReview";
 import { MatrixQueueWorkspace } from "@/components/tasks/MatrixQueueWorkspace";
 import { ReviewConfirmButton, ReviewBlockDialog, ReviewStageActions } from "@/components/tasks/ReviewConfirmation";
 import { groundedRows, hasGroundedOrder } from "@/lib/groundedAsk";
@@ -10,7 +9,7 @@ import { SortButton as HeaderSortButton, SortableTableHead, useColumnSort, sortC
 import { CheckCircle2, ChevronRight, Filter, X } from "lucide-react";
 import { useMemo, useState } from "react";
 import { Link, Navigate, useNavigate, useParams, useSearchParams } from "react-router-dom";
-import { useTask } from "@/api/hooks/tasks";
+import { useManuallyCompleteQuestionPreparation, useTask } from "@/api/hooks/tasks";
 import { useQuestionReview } from "@/hooks/useQuestionReview";
 import { toast } from "sonner";
 import { TaskQueryBar } from "@/components/tasks/AskQueryBar";
@@ -41,6 +40,9 @@ type MaterialField = "stem" | "answer" | "rubric" | "tests";
 export function QuestionPreparationOverviewPage() {
   const { taskId } = useParams();
   const navigate = useNavigate();
+  const createRows = useManuallyCompleteQuestionPreparation();
+  const [questionCount, setQuestionCount] = useState("");
+  const [countError, setCountError] = useState(false);
   const [nextBlockers, setNextBlockers] = useState<ReviewBlocker[]>([]);
   const [searchParams, setSearchParams] = useSearchParams();
   const { locale } = useI18n();
@@ -81,11 +83,6 @@ export function QuestionPreparationOverviewPage() {
     anomalies: allRisks.filter((row) => ["parse_anomaly", "generation_failed", "invalid_test_case", "reference_solution_failed_case"].includes(row.issue.code)).length,
   }), [allRisks]);
 
-  const manualJob = searchParams.get("manualJob");
-  if (taskId && taskQuery.data && manualJob && taskQuery.data.last_failed_job_id === manualJob
-      && ["error", "problems_paused"].includes(taskQuery.data.status)) {
-    return <ManualQuestionSourceReview key={manualJob} taskId={taskId} jobId={manualJob} revision={taskQuery.data.workflow_revision} />;
-  }
   if (taskId && taskQuery.data && !taskQuery.isFetching && (taskQuery.data.status === "problems_paused"
       || (taskQuery.data.status === "error" && taskQuery.data.last_failed_job_id === taskQuery.data.extract_job_id))) {
     return <Navigate replace to={getTaskDestination(taskQuery.data)} />;
@@ -147,6 +144,23 @@ export function QuestionPreparationOverviewPage() {
               sortDirection={sortDirection}
               onSort={toggleSort}
             />
+          ) : !problems.length && taskQuery.data?.manual_question_count_required && taskQuery.data.extract_job_id ? (
+            <form className="p-5" onSubmit={async event => {
+              event.preventDefault();
+              if (!taskId || !taskQuery.data?.extract_job_id || createRows.isPending) return;
+              setCountError(false);
+              try {
+                await createRows.mutateAsync({ taskId, jobId: taskQuery.data.extract_job_id,
+                  expectedWorkflowRevision: taskQuery.data.workflow_revision, questionCount: Number(questionCount) });
+              } catch { setCountError(true); }
+            }}>
+              <p className="mb-3 text-sm text-muted-foreground">{tx(locale, "尚未识别出题目数量。填写题数建立空白行，再进入详情填写题号和内容。", "The question count is unknown. Create blank rows, then enter question numbers and content in the existing details.")}</p>
+              <div className="flex flex-wrap items-end gap-3">
+                <label className="text-sm font-semibold">{tx(locale, "题数", "Question count")}<input id="question-count" aria-label={tx(locale, "题数", "Question count")} type="number" min={1} max={500} step={1} required value={questionCount} onChange={event => setQuestionCount(event.target.value)} className="ml-3 h-9 w-24 rounded-md border bg-background px-3" /></label>
+                <button type="submit" disabled={createRows.isPending || !Number.isInteger(Number(questionCount)) || Number(questionCount) < 1 || Number(questionCount) > 500} className="h-9 rounded-md bg-primary px-4 text-sm font-semibold text-primary-foreground disabled:opacity-45">{tx(locale, "建立题目行", "Create question rows")}</button>
+              </div>
+              {countError ? <p role="alert" className="mt-3 text-sm text-danger">{tx(locale, "未能建立题目行，请刷新后重试。", "Could not create question rows. Refresh and try again.")}</p> : null}
+            </form>
           ) : <MatrixEmpty filtered={Boolean(query)} locale={locale} />}
         </div>} />
           {taskId && firstQuestionId ? <ReviewStageActions

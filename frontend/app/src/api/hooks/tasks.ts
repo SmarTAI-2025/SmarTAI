@@ -312,6 +312,7 @@ export function useUpdateProblem() {
     mutationFn: ({ taskId, qId, expectedWorkflowRevision, ...patch }: {
       taskId: string;
       qId: string;
+      number?: string;
       stem?: string;
       criterion?: string;
       max_score?: number;

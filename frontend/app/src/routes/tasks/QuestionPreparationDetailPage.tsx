@@ -43,7 +43,7 @@ import { isProgrammingProblem } from "@/lib/questionPreparation";
 import { parseScoreHundredths, summarizeRubricPoints } from "@/lib/rubricPoints";
 import type { ProblemInfo, TestCase } from "@/types";
 
-type TextFieldKey = "stem" | "reference_answer" | "solution_code";
+type TextFieldKey = "number" | "stem" | "reference_answer" | "solution_code";
 
 const EMPTY_TEST_CASES: TestCase[] = [];
 
@@ -415,6 +415,7 @@ function QuestionPackageCard({ problem, index, total, previous, next, readOnly, 
 
 
       <div className="space-y-0 divide-y">
+        <EditableTextField fieldKey={`${problem.q_id}:number`} label={tx(locale, "题号", "Question number")} value={problem.number ?? ""} problem={problem} field="number" readOnly={readOnly} saving={saving} locale={locale} onDirtyChange={onDirtyChange} onSave={onSaveText} />
         <EditableTextField fieldKey={`${problem.q_id}:stem`} label={tx(locale, "题目", "Question")} value={problem.stem} problem={problem} field="stem" readOnly={readOnly} saving={saving} locale={locale} onDirtyChange={onDirtyChange} onSave={onSaveText} />
 
         <div className="grid divide-y md:grid-cols-2 md:divide-x md:divide-y-0">
@@ -630,7 +631,7 @@ function EditableTextField({ fieldKey, label, value, problem, field, readOnly, s
       </div>
       {editing ? (
         <div className="mt-3">
-          <textarea value={draft} onChange={(event) => setDraft(event.target.value)} rows={field === "stem" ? 7 : compact ? 6 : 8} className={cn("w-full resize-y rounded-[8px] border bg-background px-4 py-3 text-sm leading-6 text-foreground outline-none focus:border-primary focus:ring-2 focus:ring-primary/15", field === "solution_code" && "font-mono text-xs")} />
+          <textarea value={draft} onChange={(event) => setDraft(event.target.value)} aria-label={label} rows={field === "number" ? 1 : field === "stem" ? 7 : compact ? 6 : 8} className={cn("w-full resize-y rounded-[8px] border bg-background px-4 py-3 text-sm leading-6 text-foreground outline-none focus:border-primary focus:ring-2 focus:ring-primary/15", field === "solution_code" && "font-mono text-xs")} />
           <div className="mt-3 flex items-center justify-between gap-3">
             <p className={cn("text-xs", error ? "text-danger" : "text-muted-foreground")}>{error
               ? tx(locale, "保存失败，请重试。", "Save failed. Try again.")

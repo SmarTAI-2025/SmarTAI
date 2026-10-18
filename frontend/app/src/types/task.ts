@@ -309,6 +309,8 @@ export interface TaskLite {
   grading_setup_configured?: boolean;
   problem_count: number;
   student_count: number;
+  manual_student_count_required?: boolean;
+  manual_question_count_required?: boolean;
   submission_source_summary?: SubmissionSourceSummary;
   kb_docs: Record<string, KBDoc>;
   kb_doc_count: number;

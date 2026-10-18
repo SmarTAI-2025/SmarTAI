@@ -498,6 +498,8 @@ def get_task(*, task_id: str, owner_id: str, full: bool = True) -> dict:
         "analysis_error": workflow.analysis_error_code,
         "problem_count": len(questions),
         "student_count": len(submissions),
+        "manual_question_count_required": not questions and _manual_count_required(workflow, "question"),
+        "manual_student_count_required": not submissions and _manual_count_required(workflow, "student"),
         "submission_source_summary": source_summary,
         "kb_docs": selected_docs,
         "kb_doc_count": len(selected_docs),
@@ -546,6 +548,7 @@ def _submission_source_projection(workflow, owner_id: str) -> tuple[dict[str, in
     }
     manual_review = operation.operation_type == "submission_manual_review"
     manually_resolved_sources = set()
+    unresolved_sources = set()
     if manual_review:
         for student in _serialize_student_data(workflow.assignment_id, owner_id, _active_submissions(workflow.assignment_id, owner_id)).values():
             if student.get("identity_status") == "matched" and not any(
@@ -554,6 +557,9 @@ def _submission_source_projection(workflow, owner_id: str) -> tuple[dict[str, in
                 for answer in student["stu_ans"]
             ):
                 manually_resolved_sources.add(student.get("source_id"))
+            else:
+                unresolved_sources.add(student.get("source_id"))
+        manually_resolved_sources -= unresolved_sources
     rows: list[dict] = []
     summary = dict(empty)
     for result in results:
@@ -672,6 +678,24 @@ def _manual_pause_status(workflow) -> str | None:
     return None
 
 
+def _manual_count_required(workflow, stage: str) -> bool:
+    """Only an explicit current handoff can keep an empty review matrix open."""
+    question = stage == "question"
+    if (workflow.active_job_id or workflow.last_failed_job_id
+            or workflow.presentation_status != ("problems_ready" if question else "submissions_ready")):
+        return False
+    job_id = workflow.extract_job_id if question else workflow.parse_job_id
+    if not job_id:
+        return False
+    try:
+        operation = workflow_repository.get_operation(job_id, owner_id=workflow.owner_id)
+    except NotFound:
+        return False
+    return (operation.assignment_id == workflow.assignment_id
+        and operation.operation_type == ("question_preparation" if question else "submission_manual_review")
+        and (operation.checkpoint or {}).get(f"manual_{stage}_count_required") is True)
+
+
 def _presentation_status(workflow, questions, submissions, latest_run) -> str:
     if workflow.presentation_status in {
         "extracting_problems", "parsing_submissions", "error"
@@ -686,9 +710,11 @@ def _presentation_status(workflow, questions, submissions, latest_run) -> str:
             return "finalized"
         if latest_run.status in {"completed", "partial_failed"}:
             return "graded"
+    if not submissions and _manual_count_required(workflow, "student"):
+        return "submissions_ready"
     if submissions:
         return "grading_setup" if workflow.grading_setup is not None else "submissions_ready"
-    if questions:
+    if questions or _manual_count_required(workflow, "question"):
         return "problems_ready"
     return "draft"
 
@@ -870,6 +896,15 @@ def _serialize_problem(question) -> dict:
 def _serialize_student_data(task_id: str, owner_id: str, submissions) -> dict[str, dict]:
     questions = assignment_repository.list_questions(task_id, teacher_id=owner_id)
     presentations = workflow_repository.list_student_presentations(task_id)
+    container_source = None
+    workflow = workflow_repository.get_live_workflow(task_id, owner_id=owner_id)
+    if workflow.parse_job_id:
+        try:
+            operation = workflow_repository.get_operation(workflow.parse_job_id, owner_id=owner_id)
+            if operation.operation_type == "submission_manual_review":
+                container_source = (operation.checkpoint or {}).get("manual_student_container_source_id")
+        except NotFound:
+            pass
     revision_sources = defaultdict(list)
     for stored in file_repository.list_current_submission_originals(assignment_id=task_id, teacher_id=owner_id):
         if stored.content_type in {"application/pdf", "image/png", "image/jpeg", "image/webp", "image/bmp", "image/tiff"}:
@@ -913,7 +948,7 @@ def _serialize_student_data(task_id: str, owner_id: str, submissions) -> dict[st
             ),
             "identity_status": presentation.identity_status if presentation else "matched",
             "source_id": (revision_sources[revision.id][0]["source_id"] if revision_sources[revision.id]
-                          else presentation.source_id if presentation else None),
+                          else (presentation.source_id or container_source if presentation.identity_match_method == "manual_review" else presentation.source_id) if presentation else None),
             "source_choices": revision_sources[revision.id],
         }
     return output
@@ -2229,9 +2264,16 @@ def _replace_draft_questions(
             or workflow.active_job_id != operation_id
         ):
             _raise_stale_revision()
-        if manual_recovery and (operation is None or workflow.active_job_id
-                or workflow.last_failed_job_id != operation_id):
-            _raise_stale_revision()
+        if manual_recovery:
+            awaiting_count = (operation is not None
+                and (operation.checkpoint or {}).get("manual_question_count_required") is True
+                and workflow.presentation_status == "problems_ready"
+                and workflow.extract_job_id == operation_id
+                and workflow.last_failed_job_id is None and not existing)
+            if operation is None or workflow.active_job_id or (
+                workflow.last_failed_job_id != operation_id and not awaiting_count
+            ):
+                _raise_stale_revision()
         workflow.workflow_revision += 1
         workflow.presentation_status = "problems_ready"
         workflow.active_operation = None
@@ -3667,12 +3709,19 @@ def _commit_imported_submissions(
         )
         if workflow is None:
             raise NotFound("workflow")
-        if manual_recovery and (
-            operation is None or operation.operation_type != "submission_manual_review"
-            or workflow.active_job_id
-            or workflow.last_failed_job_id != (operation.payload or {}).get("manual_origin_id")
-        ):
-            raise InvalidTransition("Manual recognition recovery is no longer current.", code="workflow_busy")
+        count_handoff = False
+        if manual_recovery:
+            previous = session.get(workflow_repository.WorkflowOperationRecord, workflow.parse_job_id) if workflow.parse_job_id else None
+            count_handoff = (operation is not None and previous is not None
+                and (operation.payload or {}).get("manual_origin_id") == previous.id
+                and previous.owner_id == owner_id and previous.assignment_id == task_id
+                and previous.operation_type == "submission_manual_review" and previous.status == "done"
+                and (previous.checkpoint or {}).get("manual_student_count_required") is True
+                and workflow.presentation_status == "submissions_ready" and workflow.last_failed_job_id is None)
+            if (operation is None or operation.operation_type != "submission_manual_review"
+                    or workflow.active_job_id or (not count_handoff
+                    and workflow.last_failed_job_id != (operation.payload or {}).get("manual_origin_id"))):
+                raise InvalidTransition("Manual recognition recovery is no longer current.", code="workflow_busy")
         if (
             expected_workflow_revision is not None
             and workflow.workflow_revision != expected_workflow_revision
@@ -3732,6 +3781,8 @@ def _commit_imported_submissions(
             )
             .limit(1)
         )
+        if count_handoff and active_presentation is not None:
+            raise InvalidTransition("Student rows already exist; edit them in review.")
         if active_presentation is not None and not replace_existing:
             _raise_replacement_confirmation_required()
 
@@ -4763,7 +4814,7 @@ def update_problem(
         raise InvalidTransition("The task is busy.", code="workflow_busy")
     now = time.time()
     substantive = bool({
-        "stem", "criterion", "max_score", "reference_answer",
+        "number", "stem", "criterion", "max_score", "reference_answer",
         "solution_code", "test_cases",
     }.intersection(patch))
     with session_scope() as session:
@@ -4868,9 +4919,14 @@ def update_problem(
                 issue for issue in presentation.get("preparation_issues", [])
                 if issue.get("field") != "max_score"
             ]
-        if "stem" in patch:
+        if "number" in patch:
+            number = str(patch["number"] or "").strip()
+            if not number or len(number) > 64:
+                raise ValidationError("Question number is required.", code="invalid_question_number")
+            patch["number"] = number
+        if "stem" in patch or "number" in patch:
             structure = build_major_question_structure(
-                {"number": question.number, "stem": patch["stem"]},
+                {"number": patch.get("number", question.number), "stem": patch.get("stem", question.stem)},
                 major_order=question.order_index,
                 structure_source="deterministic",
                 review_status="needs_review",
@@ -4907,7 +4963,7 @@ def update_problem(
             })
         source["presentation"] = presentation
         for key in (
-            "stem", "criterion", "max_score", "reference_answer", "test_cases"
+            "number", "stem", "criterion", "max_score", "reference_answer", "test_cases"
         ):
             if key in patch:
                 setattr(question, key, patch[key])

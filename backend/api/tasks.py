@@ -108,6 +108,12 @@ class RetrySubmissionRecognitionRequest(BaseModel):
     acknowledge_possible_duplicate_call: bool = Field(default=False, strict=True)
 
 
+class ManualSubmissionRecognitionRequest(BaseModel):
+    model_config = {"extra": "forbid"}
+    expected_workflow_revision: int = Field(ge=0)
+    student_count: int | None = Field(default=None, ge=1, le=500, strict=True)
+
+
 class UpdateGradingSetupRequest(BaseModel):
     expected_workflow_revision: int = Field(ge=0)
     grading_setup: dict[str, Any]
@@ -115,6 +121,7 @@ class UpdateGradingSetupRequest(BaseModel):
 
 class UpdateProblemRequest(BaseModel):
     expected_workflow_revision: int | None = Field(default=None, ge=0)
+    number: str | None = Field(default=None, min_length=1, max_length=64)
     stem: str | None = None
     criterion: str | None = None
     max_score: float | None = Field(
@@ -626,13 +633,14 @@ async def retry_submission_recognition_endpoint(
 
 @router.post("/{task_id}/submission-recognition/{job_id}/manual-review")
 async def manually_complete_submission_recognition(
-    task_id: str, job_id: str, request: RetrySubmissionRecognitionRequest,
+    task_id: str, job_id: str, request: ManualSubmissionRecognitionRequest,
     current: User = Depends(require_teacher),
 ):
     from backend.services.submission_manual_review import continue_manually
     try:
         return await continue_manually(task_id=task_id, owner_id=current.id, job_id=job_id,
-                                       expected_revision=request.expected_workflow_revision)
+                                       expected_revision=request.expected_workflow_revision,
+                                       student_count=request.student_count)
     except DomainError as exc:
         return domain_error_response(exc)
 

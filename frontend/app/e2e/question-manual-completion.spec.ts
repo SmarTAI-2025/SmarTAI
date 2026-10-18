@@ -86,13 +86,16 @@ for (const paused of [false, true]) test(`${paused ? "paused" : "failed"} questi
   expect(errors).toEqual([]);
 });
 
-test("early pause requires question, rubric and source acknowledgement; reference answer is optional", async ({ page }) => {
+for (const paused of [false, true]) test(`early ${paused ? "pause" : "failure"} enters the original matrix, creates rows, and edits existing details`, async ({ page }) => {
   const errors: string[] = [], mutations: unknown[] = [];
   page.on("pageerror", error => errors.push(error.message));
-  const task = { task_id: "early-manual", name: "人工来源复核", status: "problems_paused", workflow_revision: 2,
-    extract_job_id: "early-job", last_failed_job_id: "early-job" as string | null, error: "operation_cancelled" as string | null,
-    problem_count: 0, problem_data: {}, student_data: {}, student_count: 0, created_at: 1, updated_at: 1, kb_docs: {}, kb_doc_count: 0 };
-  const sources = ["first.pdf", "second.pdf"].map((filename, i) => ({ source_token: `source-${i}`, filename, role: "problem", source_kind: "upload", available: true }));
+  const problem = { q_id: "manual-1", number: "1", type: "short", stem: "", reference_answer: "", criterion: "", max_score: 10,
+    review_status: "needs_review", max_score_review_status: "needs_review", preparation_issues: [
+      { issue_id: "manual", field: "source", code: "manual_completion_required", status: "open", severity: "warning", details: { required_fields: ["stem", "criterion"] } },
+    ] };
+  const task = { task_id: "early-manual", name: "原矩阵人工复核", status: paused ? "problems_paused" : "error", workflow_revision: 2,
+    extract_job_id: "early-job", last_failed_job_id: "early-job" as string | null, error: paused ? "operation_cancelled" : "provider_response_invalid" as string | null,
+    manual_question_count_required: false, problem_count: 0, problem_data: {}, student_data: {}, student_count: 0, created_at: 1, updated_at: 1, kb_docs: {}, kb_doc_count: 0 };
   await page.addInitScript(() => { localStorage.setItem("smartai_token", "synthetic-manual"); localStorage.setItem("smartai_locale", "zh-CN"); });
   const backend = process.env.SMARTAI_E2E_BACKEND_URL ?? "http://127.0.0.1:8000";
   await page.route(`${backend}/**`, async route => {
@@ -102,42 +105,61 @@ test("early pause requires question, rubric and source acknowledgement; referenc
     if (path === "/auth/me") return json({ id: "teacher", username: "test", role: "teacher", is_active: true });
     if (path === "/auth/activity") return json({ token: "synthetic-manual" });
     if (path.startsWith("/experts")) return json([]);
-    if (path.endsWith("/question-preparation/input")) return json({ task_id: task.task_id, workflow_revision: 2, input: { job_id: "early-job", sources } });
     if (request.method() === "POST") {
       expect(path).toBe("/tasks/early-manual/question-preparation/early-job/manual-review");
       const body = request.postDataJSON(); mutations.push(body);
-      if (!body.manual_questions) return json({ status: "sources_pending", first_question_id: null, workflow_revision: 2 });
-      expect(body.completed_source_tokens).toEqual(["source-0", "source-1"]);
-      expect(body.manual_questions[0].q_id).toBe("teacher-q");
-      expect(body.manual_questions[0].reference_answer).toBe("");
+      expect(body.expected_workflow_revision).toBe(task.workflow_revision);
+      expect(body.manual_questions).toBeUndefined();
       task.status = "problems_ready"; task.workflow_revision++; task.last_failed_job_id = null; task.error = null;
-      task.problem_data = { "teacher-q": { ...body.manual_questions[0], review_status: "needs_review", preparation_issues: [], max_score_review_status: "confirmed" } };
-      task.problem_count = 1;
-      return json({ status: "ready_for_review", first_question_id: "teacher-q", workflow_revision: 3 });
+      task.manual_question_count_required = !body.question_count;
+      if (body.question_count) {
+        expect(body.question_count).toBe(1);
+        task.problem_data = { "manual-1": problem }; task.problem_count = 1;
+      }
+      return json({ status: "ready_for_review", first_question_id: body.question_count ? "manual-1" : null, workflow_revision: task.workflow_revision });
     }
+    if (request.method() === "PUT") {
+      expect(path).toBe("/tasks/early-manual/problems/manual-1");
+      const body = request.postDataJSON(); mutations.push(body);
+      expect(body.expected_workflow_revision).toBe(task.workflow_revision);
+      Object.assign(problem, body); task.workflow_revision++;
+      if (body.max_score) problem.max_score_review_status = "confirmed";
+      if (body.review_status === "confirmed") problem.preparation_issues[0].status = "acknowledged";
+      return json({ status: "ok", problem, workflow_revision: task.workflow_revision });
+    }
+    if (path.endsWith("/source-files")) return json({ task_id: task.task_id, workflow_revision: task.workflow_revision, problem_source: null, submission_sources: {} });
     if (path.endsWith("/state")) return json({ ...task, progress: { messages: [], active: [] } });
     if (path === "/tasks/early-manual") return json(task);
     return json([]);
   });
   await page.goto("/tasks/early-manual/problems/progress");
   await page.getByRole("button", { name: "人工继续处理", exact: true }).click();
-  await expect(page.getByRole("heading", { name: "人工补齐题目" })).toBeVisible();
-  await expect(page.getByRole("list", { name: "对照原资料" })).toContainText("second.pdf");
-  const save = page.getByRole("button", { name: "保存题目并继续复核" });
-  await expect(save).toBeDisabled();
-  await page.getByLabel("题号", { exact: true }).fill("teacher-q");
-  await page.getByLabel("题干", { exact: true }).fill("What is 2 + 2?");
-  await page.getByLabel("评分标准（写明分值）", { exact: true }).fill("Award 10 points for 4.");
-  await page.getByRole("checkbox").nth(0).check();
-  await expect(save).toBeDisabled();
-  await page.getByRole("checkbox").nth(1).check();
-  await expect(save).toBeEnabled();
-  expect(mutations).toHaveLength(1);
-  await page.setViewportSize({ width: 390, height: 844 });
-  await page.evaluate(() => window.scrollTo(0, 0));
-  await page.screenshot({ path: "output/playwright/manual-source-queue.png", fullPage: true });
-  await save.click();
-  await expect(page.getByRole("heading", { name: "题目资料总览", exact: true })).toBeVisible();
-  expect(mutations).toHaveLength(2);
+  await expect(page).toHaveURL(/\/tasks\/early-manual\/questions$/);
+  await expect(page.getByRole("heading", { name: "题目资料总览" })).toBeVisible();
+  await page.reload();
+  await expect(page.getByRole("spinbutton", { name: "题数" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "人工补齐题目" })).toHaveCount(0);
+  await page.getByRole("spinbutton", { name: "题数" }).fill("1");
+  await page.getByRole("button", { name: "建立题目行" }).click();
+  const queue = page.getByRole("region", { name: "待复核队列" });
+  await queue.getByRole("tab", { name: /需要处理/ }).click();
+  await queue.getByRole("link").click();
+  const card = page.locator('[data-question-id="manual-1"]');
+  await card.getByRole("button", { name: "题号 · 修改", exact: true }).click();
+  await card.getByRole("textbox", { name: "题号", exact: true }).fill("1.1.5");
+  await card.getByRole("button", { name: "保存", exact: true }).click();
+  await expect(card.getByRole("heading", { name: "第 1.1.5 题" })).toBeVisible();
+  await card.getByRole("button", { name: "题目 · 修改", exact: true }).click();
+  await card.getByRole("textbox", { name: "题目", exact: true }).fill("What is 2 + 2?");
+  await card.getByRole("button", { name: "保存", exact: true }).click();
+  await card.getByRole("button", { name: "修改第 1.1.5 题满分与评分标准", exact: true }).click();
+  await card.getByRole("textbox", { name: "第 1.1.5 题评分标准" }).fill("Award 10 points for 4.");
+  await card.getByRole("button", { name: "保存", exact: true }).click();
+  await card.getByRole("button", { name: /· 待确认$/ }).click();
+  await expect(card.getByRole("button", { name: /· 已确认$/ })).toBeVisible();
+  await page.goto("/tasks/early-manual/questions?manualJob=early-job");
+  await expect(page.getByRole("heading", { name: "题目资料总览" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "人工补齐题目" })).toHaveCount(0);
+  expect(mutations).toHaveLength(6);
   expect(errors).toEqual([]);
 });
