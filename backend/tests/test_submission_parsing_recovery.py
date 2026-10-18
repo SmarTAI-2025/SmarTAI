@@ -765,8 +765,9 @@ async def test_manual_handoff_preserves_each_durable_answer_within_partial_sourc
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("missing_q2", [False, True])
-@pytest.mark.parametrize("failure_mode", [None, "exception", "empty_failed_answer"])
-async def test_explicit_retry_only_parses_unfinished_questions_and_keeps_saved_identity(monkeypatch, missing_q2, failure_mode):
+@pytest.mark.parametrize("failure_mode,manual", [(None, False), ("exception", False),
+    ("empty_failed_answer", False), ("partial", False), ("partial", True)])
+async def test_explicit_retry_only_parses_unfinished_questions_and_keeps_saved_identity(monkeypatch, missing_q2, failure_mode, manual):
     import json
     from types import SimpleNamespace
     from unittest.mock import AsyncMock
@@ -776,17 +777,23 @@ async def test_explicit_retry_only_parses_unfinished_questions_and_keeps_saved_i
     assignment_repository.add_question(task, teacher_id=owner, q_id="q2", order_index=1,
         type="short", stem="Second question", criterion="Correct method and result: 10 points", max_score=10)
     prompts = []
-    fails_once = failure_mode is not None
+    failed_attempts = 3 if failure_mode == "partial" else int(failure_mode is not None)
+    attempts = failed_attempts + int(not manual)
+    fragments = [] if missing_q2 else ["Visible beginning of q2"]
     async def invoke(messages):
         prompt = messages[-1].content
         questions = json.loads(prompt.split("**[Question Data (JSON)]**:\n", 1)[1].split("\n\n**[Student Submission Content]**:", 1)[0])
         prompts.append([question["q_id"] for question in questions])
         if failure_mode == "exception" and len(prompts) == 1:
             raise RuntimeError("synthetic provider failure")
-        failed_answer = failure_mode == "empty_failed_answer" and len(prompts) == 1
+        failed_answer = len(prompts) <= failed_attempts
+        text = ("Visible ending of q2" if len(prompts) < 3 else "Visible middle of q2") if failure_mode == "partial" else ""
+        content = text if failed_answer else "Completed q2 answer"
+        if failed_answer and text and text not in fragments:
+            fragments.append(text)
         return SimpleNamespace(content=json.dumps({"stu_id": "changed-id", "stu_name": "Changed identity",
             "stu_ans": [{"q_id": "q1", "number": "1", "type": "short", "content": "Must not replace saved q1", "flag": []},
-                        {"q_id": "q2", "number": "2", "type": "short", "content": "" if failed_answer else "Completed q2 answer", "flag": ["recognition_failed"] if failed_answer else []}]}))
+                        {"q_id": "q2", "number": "2", "type": "short", "content": content, "flag": ["recognition_failed"] if failed_answer else []}]}))
     registry = _Registry()
     registry.provider = SimpleNamespace(provider_id="test-provider", supports_vision=False, ainvoke=AsyncMock(side_effect=invoke))
     monkeypatch.setattr(task_facade, "_registry_for_owner", lambda _owner: registry)
@@ -811,7 +818,7 @@ async def test_explicit_retry_only_parses_unfinished_questions_and_keeps_saved_i
     stop_task_run(task_id=task, owner_id=owner, job_id=operation.id,
         expected_revision=workflow_repository.get_workflow(task, owner_id=owner).workflow_revision)
     retry_id = operation.id
-    for attempt in range(2 if fails_once else 1):
+    for attempt in range(attempts):
         before = task_facade.get_task(task_id=task, owner_id=owner)
         retry = await tasks.retry_submission_recognition_endpoint(task_id=task, job_id=retry_id,
             request=tasks.RetrySubmissionRecognitionRequest(expected_workflow_revision=before["workflow_revision"],
@@ -821,20 +828,32 @@ async def test_explicit_retry_only_parses_unfinished_questions_and_keeps_saved_i
         row = workflow_repository.claim_operation(retry["job_id"], owner_id=owner, worker_id="test", lease_seconds=60)
         await task_facade.run_durable_submission_recognition(LeasedOperation(row, worker_id="test", lease_seconds=60))
         retry_id = retry["job_id"]
-        if fails_once and attempt == 0:
+        if attempt < failed_attempts:
             assert task_facade.get_task(task_id=task, owner_id=owner)["status"] == "error"
             saved = task_facade._load_submission_results(task_facade._submission_result_artifact(
                 owner_id=owner, task_id=task, job_id=row.id, job_attempt=row.attempt))[0]
             assert saved.student["stu_ans"][0]["content"] == "Durably recognized q1 answer"
-            if not missing_q2:
-                assert saved.student["stu_ans"][1]["content"] == "Visible beginning of q2"
-    assert prompts == [["q2"]] * (2 if fails_once else 1)
+            assert saved.student["stu_ans"][1]["content"] == "\n\n".join(fragments)
+    if manual:
+        from backend.services.submission_manual_review import continue_manually
+        current = task_facade.get_task(task_id=task, owner_id=owner)
+        await continue_manually(task_id=task, owner_id=owner, job_id=retry_id,
+            expected_revision=current["workflow_revision"])
+    assert prompts == [["q2"]] * attempts
     after = task_facade.get_task(task_id=task, owner_id=owner, full=True)
     assert after["status"] == "submissions_ready"
     saved = after["student_data"]["S1"]
     assert saved["stu_name"] == "Known Student" and saved["identity_status"] == "matched"
     by_id = {answer["q_id"]: answer for answer in saved["stu_ans"]}
     assert by_id["q1"]["content"] == "Durably recognized q1 answer" and by_id["q1"]["flag"] == []
-    assert by_id["q2"]["content"] == "Completed q2 answer" and by_id["q2"]["flag"] == []
+    if manual:
+        from backend.domain.errors import DomainError
+        assert by_id["q2"]["content"] == "\n\n".join(fragments)
+        assert "recognition_manual_pending" in by_id["q2"]["flag"]
+        with pytest.raises(DomainError):
+            task_facade.update_student_answer(task_id=task, owner_id=owner, display_student_id="S1", q_id="q2",
+                patch={"review_status": "confirmed"}, expected_revision=after["workflow_revision"])
+    else:
+        assert by_id["q2"]["content"] == "Completed q2 answer" and by_id["q2"]["flag"] == []
     assert after["submission_sources"][0]["unknown_question_ids"] == []
     assert task_facade._load_submission_results(artifact)[0].student == student

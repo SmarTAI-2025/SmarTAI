@@ -2773,9 +2773,18 @@ def _merge_submission_retry_answers(result, saved, target_ids, questions):
             answer = old_answers[q_id]
         elif q_id in incoming:
             answer = incoming[q_id]
-            if (_answer_recognition_failures(answer.get("flag")) and not str(answer.get("content") or "").strip()
-                    and old_answers.get(q_id, {}).get("content")):
-                answer = {**answer, "content": old_answers[q_id]["content"]}
+            if _answer_recognition_failures(answer.get("flag")):
+                old_text = str(old_answers.get(q_id, {}).get("content") or "")
+                new_text = str(answer.get("content") or "")
+                # Failed attempts are evidence for manual review, not replacements.
+                # Keep distinct fragments in attempt order without inferring gaps;
+                # merging the same checkpoint again must not duplicate its text.
+                if old_text.strip():
+                    if not new_text.strip() or new_text in old_text:
+                        new_text = old_text
+                    elif old_text not in new_text:
+                        new_text = old_text + "\n\n" + new_text
+                    answer = {**answer, "content": new_text}
         else:
             # A second failure must retain partially recognized text as evidence.
             answer = dict(old_answers.get(q_id) or {"q_id": q_id, "content": ""})
