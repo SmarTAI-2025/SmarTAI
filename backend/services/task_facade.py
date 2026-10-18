@@ -824,6 +824,10 @@ def _workflow_grading_failure_code(workflow, run) -> str | None:
 
 def _serialize_problem(question) -> dict:
     presentation = dict((question.source or {}).get("presentation") or {})
+    # Older manually entered drafts used a value outside the public contract.
+    # Normalize on read so their details remain usable without rewriting data.
+    if presentation.get("max_score_source") == "teacher_input":
+        presentation["max_score_source"] = "teacher_edited"
     max_score = float(question.max_score)
     structure = presentation.get("question_structure")
     if structure:
