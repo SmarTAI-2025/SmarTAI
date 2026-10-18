@@ -57,6 +57,32 @@ def test_history_is_authorized_by_owner_even_when_query_requests_every_task():
     assert hidden["task_id"] not in response.text
 
 
+@pytest.mark.parametrize("auth_scope", ["user", "frontier_demo"])
+def test_combined_natural_name_matches_display_name_and_preserves_class_chart(auth_scope):
+    owner = _user("teacher", "combined-name")
+    owner.auth_scope = auth_scope
+    seeded = _seed_graded_assignment(owner)
+    with session_scope() as session:
+        for i, name in enumerate(["Alex Chen", "Maya Lin"]):
+            session.add(AssignmentStudentPresentationRecord(id=_id("presentation"),
+                assignment_id=seeded["task_id"], student_id=seeded["students"][i].id,
+                display_student_id=f"DEMO-00{i+1}", display_name=name))
+    provider = Provider({"output": "combined", "references": [{"kind": "student",
+        "text": "Alex", "field": "student_name", "operator": "exact", "applies_to": "selection"}]}, {
+        "sql": "SELECT number,avg_percent FROM questions ORDER BY order_index",
+        "chart": {"x": "number", "y": ["avg_percent"]},
+        "selection": {"sql": "SELECT student_id FROM students"},
+    })
+    response = _client(owner, _Registry(provider)).post(f"/analytics/{seeded['task_id']}/ask", json={
+        "question": "显示全班平均得分率的图表，同时表格只显示 Alex", "surface": "student_analysis",
+    })
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["recognized"] and body["selection"]["ids"] == ["DEMO-001"]
+    assert body["chart"]["traces"][0]["y"] == [62.5]  # Both students, including the teacher override.
+    assert len(provider.calls) == 2
+
+
 def test_invalid_detail_student_cannot_invoke_model():
     owner=_user("teacher","detail-owner"); seeded=_seed_graded_assignment(owner)
     provider=Provider()

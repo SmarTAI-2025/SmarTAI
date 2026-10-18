@@ -357,6 +357,29 @@ def test_combined_general_chart_and_filter_are_independent_queries(snapshot):
     assert response["selection"]["ids"] == ["DEMO-001", "DEMO-004"]
 
 
+@pytest.mark.parametrize("question", [
+    "显示全班平均得分率的图表，同时表格只显示 Alex",
+    "Show the class average score percentage chart, but only show Alex in the table",
+])
+@pytest.mark.parametrize("operator", ["exact", None])
+def test_combined_natural_name_uses_fragment_matching_without_narrowing_chart(snapshot, question, operator):
+    provider = Provider({"output": "combined", "references": [{
+        "kind": "student", "text": "Alex", "field": "student_name",
+        "operator": operator, "applies_to": "selection",
+    }]}, {
+        "sql": "SELECT number,avg_percent FROM questions ORDER BY order_index",
+        "chart": {"x": "number", "y": ["avg_percent"]},
+        "selection": {"sql": "SELECT student_id FROM students ORDER BY total_score DESC"},
+    })
+    response = asyncio.run(ask(task_id="task", owner_id="teacher", question=question,
+        surface="student_analysis", provider=provider, snapshot=snapshot))
+    assert response["recognized"]
+    assert response["selection"] == {"kind": "students", "ids": ["DEMO-001"]}
+    assert response["chart"]["traces"][0]["y"] == pytest.approx([90, 100, 200 / 7, 80])
+    assert response["bindings"][0]["operator"] == "contains"
+    assert len(provider.calls) == 2
+
+
 def test_combined_named_count_and_selection_keep_resolved_scope(snapshot):
     response = run(snapshot, "Count Alex's pass status and show Alex", {
         "output": "combined", "statistic": "student_pass_fail_counts",
@@ -463,9 +486,30 @@ def test_bare_name_uses_matching_contract_not_model_chart_or_exact_guess(snapsho
     assert response["chart"] is None and len(provider.calls) == 1
 
 
-def test_explicit_exact_name_is_not_relaxed(snapshot):
-    result = run(snapshot, "姓名必须恰好等于Alex", {"references": [{"kind": "student", "text": "Alex", "field": "student_name", "operator": "exact"}]}, {"sql": "SELECT student_id FROM students"})
-    assert result["selection"]["ids"] == []
+@pytest.mark.parametrize("question,name,operator,evidence,ids", [
+    ("只显示 Alex", "Alex", "exact", None, ["DEMO-001", "OTHER"]),
+    ("Show only ＡＬＥＸ", "ＡＬＥＸ", "exact", None, ["DEMO-001", "OTHER"]),
+    ("显示姓名包含 Alex Ch 的学生", "Alex Ch", "contains", None, ["DEMO-001"]),
+    ("只显示 Alex Wu", "Alex Wu", "exact", None, ["OTHER"]),
+    ("只显示 Ale Chen", "Ale Chen", None, None, []),
+    ("姓名必须恰好等于Alex", "Alex", "exact", "姓名必须恰好等于Alex", []),
+    ("Show students whose name is exactly Alex", "Alex", "exact", "name is exactly Alex", []),
+    ("Show names starting with Chen", "Chen", "prefix", None, []),
+    ("Show names ending with Chen", "Chen", "suffix", None, ["DEMO-001"]),
+])
+def test_embedded_names_preserve_explicit_operators_and_full_names(snapshot, question, name, operator, evidence, ids):
+    snapshot.tables["students"].append({**snapshot.tables["students"][0], "student_id": "OTHER", "student_name": "Alex Wu"})
+    result = run(snapshot, question, {"references": [{"kind": "student", "text": name,
+        "field": "student_name", "operator": operator, "exact_match_text": evidence}]},
+        {"sql": "SELECT student_id FROM students ORDER BY student_id"})
+    assert result["recognized"] and result["selection"]["ids"] == ids
+
+
+@pytest.mark.parametrize("evidence", ["name is exactly Alex", "   "])
+def test_invented_exact_name_qualifier_is_rejected(snapshot, evidence):
+    result = run(snapshot, "只显示 Alex", {"references": [{"kind": "student", "text": "Alex",
+        "field": "student_name", "operator": "exact", "exact_match_text": evidence}]})
+    assert not result["recognized"] and result["selection"] is None
 
 
 def test_follow_up_receives_history_but_new_name_wins(snapshot):
