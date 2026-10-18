@@ -4149,6 +4149,7 @@ def task_state(*, task_id: str, owner_id: str) -> dict:
         return payload
     _source_summary, source_rows = _submission_source_projection(workflow, owner_id)
     progress: dict | None = None
+    recovering_saved_text = False
     active_operation_status: str | None = None
     if workflow.active_job_id:
         if workflow.active_operation == "grading":
@@ -4163,6 +4164,7 @@ def task_state(*, task_id: str, owner_id: str) -> dict:
                 if progress is not None:
                     progress.setdefault("job_id", operation.id)
                 active_operation_status = operation.status
+                recovering_saved_text = bool((operation.payload or {}).get("manual_saved_sources"))
             except NotFound:
                 progress = None
     elif workflow.extract_job_id or workflow.parse_job_id:
@@ -4184,6 +4186,7 @@ def task_state(*, task_id: str, owner_id: str) -> dict:
         progress.update(phase="paused", error_detail=None, model_waits=[], active=[])
     payload.update({
         "progress": progress,
+        "recovering_saved_text": recovering_saved_text,
         "active_job_id": workflow.active_job_id,
         "active_operation": workflow.active_operation,
         "active_operation_status": active_operation_status,

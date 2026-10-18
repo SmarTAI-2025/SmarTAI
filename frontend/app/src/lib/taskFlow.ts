@@ -5,6 +5,14 @@ const PROCESSING_STATUSES = new Set(["extracting_problems", "parsing_submissions
 const COMPLETED_GRADING_STATUSES = new Set(["graded", "finalized"]);
 const REGRADABLE_STATUSES = new Set(["graded", "finalized"]);
 
+/** A handoff starts work unless the server explicitly confirms readable results. */
+export function manualReviewDestination(taskId: string, stage: "questions" | "submissions" | "grading", status: string): string {
+  const ready = status === "ready_for_review" || (stage === "grading" && status === "manual_review");
+  const destination = ready ? (stage === "grading" ? "review" : stage)
+    : stage === "questions" ? "problems/progress" : `${stage}/progress`;
+  return `/tasks/${taskId}/${destination}`;
+}
+
 export function isTaskAwaitingGrading(status?: string | null): boolean {
   return status === "submissions_ready" || status === "grading_setup";
 }

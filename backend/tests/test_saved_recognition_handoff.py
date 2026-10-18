@@ -63,8 +63,19 @@ async def test_question_saved_pages_are_organized_without_rereading_or_generatin
         current=SimpleNamespace(id=owner), registry=registry, background_tasks=None, allow_prepared_source_reuse=False)
     origin = workflow_repository.get_operation(queued["job_id"], owner_id=owner)
     stored = file_repository.get_file(file_id=origin.payload["source_refs"][0]["stored_file_id"], owner_id=owner)
+    source_example = "Example input: 10 20; expected output: 30."
+    source_json_case = {"input": "7 8", "expected_output": "15"}
+    cases = [
+        {"input": "10 20", "expected_output": "30", "source_excerpt": source_example},
+        source_json_case,  # No source or excerpt, but an exact case in uploaded text.
+        {"input": "10 20", "expected_output": "30"},  # Plain labelled original; omitted source and excerpt.
+        {"input": "2 3", "expected_output": "5"},  # Created; omitted provenance.
+        {"input": "4 5", "expected_output": "9", "source": "llm_generated"},
+        {"input": "10 20", "expected_output": "3", "source": "teacher", "source_excerpt": source_example},
+    ]
     assembly = await save_pages(owner, task, stored, data, final=not stopped, text=[
-        "1. Saved literal question 1. (a) First part. (b) Second part. Rubric: (a) 3 points",
+        "1. Saved literal question 1. (a) First part. (b) Second part. Rubric: (a) 3 points\n"
+        + source_example + "\n" + json.dumps(source_json_case),
         *[f"{i}. Saved literal question {i}." for i in range(2, 8)], RuntimeError("failed page")])
     assert assembly.document.coverage.failed_pages == [8]
     if stopped:
@@ -78,7 +89,8 @@ async def test_question_saved_pages_are_organized_without_rereading_or_generatin
         assert "Saved literal question 7" in messages[-1].content
         return SimpleNamespace(content=json.dumps({"problems": [dict(q_id=f"q{i}", number=str(i), type="short",
             stem=f"Saved literal question {i}." + (" (a) First part. (b) Second part." if i == 1 else ""),
-            criterion="(a) 3 points" if i == 1 else "", source_incomplete=(i == 7)) for i in range(1, 8)]}))
+            criterion="(a) 3 points" if i == 1 else "", test_cases=cases if i == 1 else None,
+            source_incomplete=(i == 7)) for i in range(1, 8)]}))
     registry.provider = SimpleNamespace(provider_id="test-provider", supports_vision=False, ainvoke=organize)
     monkeypatch.setattr(task_facade, "_registry_for_owner", lambda _: registry)
     forbidden = AsyncMock(side_effect=AssertionError("must not reread or generate"))
@@ -97,6 +109,7 @@ async def test_question_saved_pages_are_organized_without_rereading_or_generatin
         task_preparation.ManualQuestionPreparationRequest(expected_workflow_revision=revision), current=SimpleNamespace(id=owner))
     assert isinstance(response, dict), getattr(response, "body", response)
     assert response["status"] == "started"
+    assert task_facade.task_state(task_id=task, owner_id=owner)["recovering_saved_text"] is True
     await task_preparation.run_durable_question_preparation(_claim(owner, response["job_id"], "saved-text"))
     operation = workflow_repository.get_operation(response["job_id"], owner_id=owner)
     assert operation.status == "done", (operation.error_code, operation.checkpoint)
@@ -104,6 +117,18 @@ async def test_question_saved_pages_are_organized_without_rereading_or_generatin
     for read in (task_facade.get_task(task_id=task, owner_id=owner), await task_facade.async_task_state(task_id=task, owner_id=owner)):
         assert read["status"] == "problems_ready" and read["problem_count"] == 7
     problems = task_facade.get_task(task_id=task, owner_id=owner)["problem_data"]
+    assert [case["source"] for case in problems["q1"]["test_cases"]] == [
+        "teacher", "teacher", "teacher", "llm_generated", "llm_generated", "llm_generated"]
+    assert [case["input"] for case in problems["q1"]["test_cases"]] == [case["input"] for case in cases]
+    assert all("source_excerpt" not in case for case in problems["q1"]["test_cases"])
+    from sqlalchemy import select
+    from backend.db.models import AssignmentQuestionRecord
+    from backend.db.session import session_scope
+    with session_scope() as session:
+        stored_question = session.scalar(select(AssignmentQuestionRecord).where(
+            AssignmentQuestionRecord.assignment_id == task, AssignmentQuestionRecord.q_id == "q1"))
+        assert stored_question.test_cases == problems["q1"]["test_cases"]
+    assert task_facade.task_state(task_id=task, owner_id=owner)["recovering_saved_text"] is False
     assert problems["q1"]["stem"] == "Saved literal question 1. (a) First part. (b) Second part."
     assert problems["q1"]["criterion"] == "(a) 3 points" and not problems["q1"].get("reference_answer")
     assert not problems["q1"]["rubric_point_summary"]["is_valid"]
@@ -165,6 +190,7 @@ async def test_submission_saved_text_survives_handoff_and_repeated_task_reads(mo
     response = await continue_manually(task_id=task, owner_id=owner, job_id=origin.id,
         expected_revision=workflow_repository.get_workflow(task, owner_id=owner).workflow_revision)
     assert response["status"] == "started"
+    assert (await task_facade.async_task_state(task_id=task, owner_id=owner))["recovering_saved_text"] is True
     await task_facade.run_durable_submission_recognition(_claim(owner, response["job_id"], "saved-answers"))
     operation = workflow_repository.get_operation(response["job_id"], owner_id=owner)
     assert operation.status == "done", (operation.error_code, operation.checkpoint)
@@ -216,6 +242,20 @@ async def test_completed_organization_chunks_are_retained_on_stop_and_skipped_on
         completed_chunks=completed, **options)
     assert len(calls) == 3 and calls[0] != calls[2] and calls[1] == calls[2]
     assert [item["stem"] for item in result.values()] == ["First problem", "Second problem"]
+
+
+@pytest.mark.parametrize("case,excerpt,text,teacher", [
+    ({"function_name": "add", "function_args": [2, 3], "expected_return": "5"},
+     "add([2, 3]) returns 5", "Example: add([2, 3]) returns 5", True),
+    ({"input": "2 3", "expected_output": "5"}, "input: 2 3; output: 5", "Question only", False),
+    ({"input": "30", "expected_output": "10 20"}, "input: 10 20; output: 30",
+     "input: 10 20; output: 30", False),
+    ({"input": "", "expected_output": "0"}, "", '{"input": "", "expected_output": "0"}', True),
+    ({"input": "2 3", "expected_output": "5"}, "", "题目2有3分，作业有5题", False),
+])
+def test_saved_test_case_evidence(case, excerpt, text, teacher):
+    from backend.agents.ingest_agent import _saved_test_case_supported
+    assert _saved_test_case_supported(case, excerpt, text) is teacher
 
 
 @pytest.mark.asyncio

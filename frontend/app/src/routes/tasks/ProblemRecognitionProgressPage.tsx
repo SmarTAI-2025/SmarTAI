@@ -22,6 +22,7 @@ import { useTaskProgress } from "@/hooks/useTaskProgress";
 import { useI18n } from "@/i18n/I18nProvider";
 import type { Locale, MessageKey } from "@/i18n/messages";
 import { cn } from "@/lib/cn";
+import { manualReviewDestination } from "@/lib/taskFlow";
 import { classifyRecoverableError } from "@/lib/taskActionGuards";
 import type { JobProgress, TaskStatus } from "@/types";
 
@@ -122,10 +123,11 @@ export function ProblemRecognitionProgressPage() {
       setOpeningManual(true);
       setRetryFailure(null);
       try {
-        await manualPreparation.mutateAsync({ taskId, jobId: failedJobId,
+        const result = await manualPreparation.mutateAsync({ taskId, jobId: failedJobId,
           expectedWorkflowRevision: taskState.workflow_revision });
-        navigate(`/tasks/${taskId}/questions`, { replace: true });
-      } catch (error) { setRetryFailure(error); setOpeningManual(false); }
+        navigate(manualReviewDestination(taskId, "questions", result.status), { replace: true });
+      } catch (error) { setRetryFailure(error); }
+      finally { setOpeningManual(false); }
     };
     const submissionUncertain = taskState?.error === "provider_submit_uncertain" || getAPIErrorCode(retryFailure) === "provider_submit_uncertain";
     if (submissionUncertain) {
@@ -308,7 +310,9 @@ export function ProblemRecognitionProgressPage() {
             {activeStageLabel}
           </h2>
           <p className="mt-2 text-sm leading-6 text-muted-foreground">
-            {queued ? queuedDescription : t("problemProgressBackgroundDescription")}
+            {progressQuery.data?.recovering_saved_text
+              ? (locale === "zh-CN" ? "正在整理已保存的识别文字，完成后自动进入复核。" : "Organizing saved recognition text. Review will open when ready.")
+              : queued ? queuedDescription : t("problemProgressBackgroundDescription")}
           </p>
           </div>
           <SmarTAIMascot variant="thinking" size="md" className="hidden sm:inline-flex" />

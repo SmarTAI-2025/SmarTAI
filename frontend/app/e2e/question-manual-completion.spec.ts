@@ -31,7 +31,7 @@ for (const paused of [false, true]) test(`${paused ? "paused" : "failed"} questi
       expect(request.postDataJSON()).toEqual({ expected_workflow_revision: 2 });
       task.status = "problems_ready"; task.error = null; task.last_failed_job_id = null;
       task.workflow_revision = 3; task.problem_count = 2; task.problem_data = { q1: good, q2: failed };
-      return json({ task_id: task.task_id, workflow_revision: 3, first_question_id: "q2" });
+      return json({ status: "ready_for_review", task_id: task.task_id, workflow_revision: 3, first_question_id: "q2" });
     }
     if (request.method() === "PUT") {
       mutations.push(path);

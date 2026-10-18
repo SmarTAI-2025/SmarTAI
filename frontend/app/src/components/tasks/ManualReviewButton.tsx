@@ -6,6 +6,7 @@ import { continueTaskRun, manuallyCompleteQuestionPreparation, manuallyCompleteS
 import { normalizeAPIError } from "@/api/client";
 import { useI18n } from "@/i18n/I18nProvider";
 import { Button } from "@/components/ui/Button";
+import { manualReviewDestination } from "@/lib/taskFlow";
 
 type RecoveryTask = Pick<import("@/types").Task, "status" | "workflow_revision" | "last_failed_job_id" | "grading_job_id" | "parse_job_id" | "extract_job_id">;
 type Stage = "questions" | "submissions" | "grading";
@@ -44,13 +45,13 @@ function ManualReviewAction({ taskId, task, jobId, failedStage }: { taskId: stri
       let href: string;
       if (failedStage === "questions") {
         const result = await manuallyCompleteQuestionPreparation({ taskId, jobId, expectedWorkflowRevision: task.workflow_revision });
-        href = `/tasks/${taskId}/${result.status === "ready_for_review" ? "questions" : "problems/progress"}`;
+        href = manualReviewDestination(taskId, failedStage, result.status);
       } else if (failedStage === "submissions") {
         const result = await manuallyCompleteSubmissionRecognition({ taskId, jobId, expectedWorkflowRevision: task.workflow_revision });
-        href = `/tasks/${taskId}/${["started", "already_running"].includes(result.status) ? "submissions/progress" : "submissions"}`;
+        href = manualReviewDestination(taskId, failedStage, result.status);
       } else {
-        await continueTaskRun(taskId, jobId, task.workflow_revision, true);
-        href = `/tasks/${taskId}/review`;
+        const result = await continueTaskRun(taskId, jobId, task.workflow_revision, true);
+        href = manualReviewDestination(taskId, failedStage, result.status);
       }
       await cache.invalidateQueries({ queryKey: ["tasks"] });
       navigate(href);

@@ -86,7 +86,7 @@ describe("ProblemRecognitionProgressPage recovery", () => {
     snapshot = { ...failedTask };
     isPolling = false;
     failedQuestions = [];
-    manualMutateAsync.mockReset().mockResolvedValue({ first_question_id: "q2", workflow_revision: 9 });
+    manualMutateAsync.mockReset().mockResolvedValue({ status: "ready_for_review", first_question_id: "q2", workflow_revision: 9 });
     retryMutateAsync.mockReset();
     refetchTask.mockReset();
     refetchProgress.mockReset();
@@ -95,7 +95,7 @@ describe("ProblemRecognitionProgressPage recovery", () => {
 
   it.each([null, "q2"])("offers manual continuation for paused recognition (first question %s)", async firstQuestion => {
     snapshot = { ...failedTask, status: "problems_paused", error: "operation_cancelled" };
-    manualMutateAsync.mockResolvedValue({ first_question_id: firstQuestion, workflow_revision: 9 });
+    manualMutateAsync.mockResolvedValue({ status: "ready_for_review", first_question_id: firstQuestion, workflow_revision: 9 });
     render(<MemoryRouter initialEntries={["/tasks/question-task/problems/progress"]}><Routes>
       <Route path="/tasks/:taskId/problems/progress" element={<ProblemRecognitionProgressPage />} />
       <Route path="/tasks/:taskId/questions" element={<div>Source review queue</div>} />
@@ -123,6 +123,24 @@ describe("ProblemRecognitionProgressPage recovery", () => {
     expect(retryMutateAsync).not.toHaveBeenCalled();
     fireEvent.click(retry);
     await waitFor(() => expect(retryMutateAsync).toHaveBeenCalledTimes(1));
+  });
+
+  it.each(["started", "already_running"])("waits for persisted questions after a %s handoff", async responseStatus => {
+    manualMutateAsync.mockImplementation(async () => {
+      snapshot = { ...failedTask, status: "extracting_problems" };
+      return { status: responseStatus };
+    });
+    const view = () => <MemoryRouter initialEntries={["/tasks/question-task/problems/progress"]}><Routes>
+      <Route path="/tasks/:taskId/problems/progress" element={<ProblemRecognitionProgressPage />} />
+      <Route path="/tasks/:taskId/questions" element={<div>Persisted question matrix</div>} />
+    </Routes></MemoryRouter>;
+    const { rerender } = render(view());
+    fireEvent.click(screen.getByRole("button", { name: "人工继续处理" }));
+    await waitFor(() => expect(screen.getByRole("progressbar")).toBeInTheDocument());
+    expect(screen.queryByText("Persisted question matrix")).not.toBeInTheDocument();
+    snapshot = { ...snapshot, status: "problems_ready" };
+    rerender(view());
+    expect(await screen.findByText("Persisted question matrix")).toBeInTheDocument();
   });
 
   it("offers explicit manual completion beside retry and opens the question review queue", async () => {

@@ -22,10 +22,13 @@ function show(value: Parameters<typeof ManualReviewButton>[0]["task"], stage?: "
   </Routes></MemoryRouter></QueryClientProvider>);
   return invalidate;
 }
-beforeEach(() => { Object.values(calls).forEach(call => call.mockReset().mockResolvedValue({ status: "ready_for_review", first_question_id: "Q1" })); });
+beforeEach(() => {
+  Object.values(calls).forEach(call => call.mockReset().mockResolvedValue({ status: "ready_for_review", first_question_id: "Q1" }));
+  calls.grading.mockResolvedValue({ status: "manual_review" });
+});
 describe("manual recovery entry", () => {
-  it.each(["questions", "submissions"] as const)("uses existing progress while saved %s are organized", async stage => {
-    calls[stage].mockResolvedValue({ status: "started", job_id: "saved-text" });
+  it.each(["questions", "submissions"] as const)("uses existing progress while saved %s are already being organized", async stage => {
+    calls[stage].mockResolvedValue({ status: "already_running", job_id: "saved-text" });
     show({ ...task, [stage === "questions" ? "extract_job_id" : "parse_job_id"]: "failed" });
     await userEvent.click(screen.getByRole("button", { name: "人工继续处理" }));
     expect(await screen.findByText(stage === "questions" ? "Organizing saved questions" : "Organizing saved answers")).toBeVisible();

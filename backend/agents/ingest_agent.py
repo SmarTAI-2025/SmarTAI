@@ -390,7 +390,11 @@ async def _extract_problems_call(
         "Combine distinct saved fragments only when their question identity is supported; retain alternatives. "
         "Extract questions only from saved problem sources. Supporting material must never fill a missing stem. "
         "Match supplied rubric/reference material by explicit question identity and copy it literally without alteration. "
-        "Copy a supplied reference_answer literally if present; otherwise leave it empty. Never solve or generate material."
+        "Copy a supplied reference_answer literally if present; otherwise leave it empty. Never generate a rubric or reference answer. "
+        "For each test case copied from the source, include source_excerpt: a verbatim excerpt containing that case's "
+        "input and expected output (or function name, arguments and expected return), and source=teacher. "
+        "For a newly created test case use source=llm_generated and leave source_excerpt empty. "
+        "Never claim a created case was supplied by the teacher."
         if partial_source else "")
     messages = [
         SystemMessage(content=PROB_SYSTEM_PROMPT + recovery_guidance),
@@ -438,12 +442,71 @@ async def _extract_problems_call(
             supplied = str(problem.get(field) or "")
             if supplied and supplied not in text:
                 problem[field] = ""
+        if partial_source:
+            for case in problem.get("test_cases") or []:
+                # Only this recovery parser consumes model-authored cases. Do not
+                # change the teacher-upload default or any completed packages.
+                excerpt = case.pop("source_excerpt", "")
+                case["source"] = "teacher" if _saved_test_case_supported(case, excerpt, text) else "llm_generated"
     logger.info(f"extract_problems: stored {len(prob_dict)} problems")
     return prob_dict
 
 
+def _saved_test_case_supported(case, excerpt, text):
+    """Require the actual I/O pair in one literal source excerpt, not a model label."""
+    def normalized(value):
+        return re.sub(r"\s*([\[\],])\s*", r"\1", re.sub(r"\s+", " ", str(value)).strip())
+
+    # Old/model-omitted excerpts can still be backed by an exact uploaded JSON
+    # case. Do not treat independent occurrences of small values as evidence.
+    if not excerpt:
+        decoder = json.JSONDecoder()
+        fields = (("function_name", "function_args", "expected_return") if case.get("function_name")
+                  else ("input", "expected_output"))
+        for match in re.finditer(r"\{", text):
+            try:
+                supplied, _ = decoder.raw_decode(text[match.start():])
+            except ValueError:
+                continue
+            if isinstance(supplied, dict) and all(key in supplied and supplied[key] == case.get(key) for key in fields):
+                return True
+        # Also preserve ordinary adjacent input/output examples when the model
+        # omits both provenance fields. Unlabelled numbers elsewhere are not proof.
+        if not case.get("function_name") and case.get("input") and case.get("expected_output"):
+            labels = r"[\"']?\s*[:：]\s*[\"'`]*"
+            pattern = (r"(?:\binput\b|输入)" + labels + re.escape(normalized(case["input"]))
+                       + r"[\"'`]*\s*[,;，；]?\s*(?:(?:expected[_ ]*)?output\b|预期输出|输出)"
+                       + labels + re.escape(normalized(case["expected_output"])) + r"(?!\w|\.\d)")
+            return bool(re.search(pattern, normalized(text), re.IGNORECASE))
+        return False
+    if excerpt not in text:
+        return False
+    if case.get("function_name"):
+        values = [case["function_name"], json.dumps(case.get("function_args"), ensure_ascii=False),
+                  case.get("expected_return")]
+    else:
+        values = [case.get("input"), case.get("expected_output")]
+    # Whitespace-only differences from structuring do not change provenance.
+    compact = normalized(excerpt)
+    offset = 0
+    for value in values:
+        if value is None or not str(value).strip():
+            return False
+        match = re.search(r"(?<![\w.])" + re.escape(normalized(value)) + r"(?!\w|\.\d)", compact[offset:])
+        if not match:
+            return False
+        offset += match.end()
+    return True
+
+
+class _PartialTestCase(TestCase):
+    source: Literal["teacher", "llm_generated"] = "llm_generated"
+    source_excerpt: str = ""
+
+
 class _PartialProblem(ProblemInfo):
     source_incomplete: bool = False
+    test_cases: Optional[List[_PartialTestCase]] = None
 
 
 class _PartialProblemSet(BaseModel):

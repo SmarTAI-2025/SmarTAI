@@ -25,7 +25,7 @@ import { useI18n } from "@/i18n/I18nProvider";
 import type { MessageKey } from "@/i18n/messages";
 import { cn } from "@/lib/cn";
 import { classifyRecoverableError } from "@/lib/taskActionGuards";
-import { isTaskAwaitingGrading, getTaskDestination } from "@/lib/taskFlow";
+import { isTaskAwaitingGrading, getTaskDestination, manualReviewDestination } from "@/lib/taskFlow";
 import { submissionRecognitionIncomplete } from "@/lib/reviewConfirmation";
 import type { JobProgress, TaskStatus } from "@/types";
 
@@ -62,9 +62,9 @@ export function SubmissionRecognitionProgressPage() {
     if (!taskId || !failedJobId || !taskState || manualRecognition.isPending) return;
     setRetryError(null);
     try {
-      await manualRecognition.mutateAsync({ taskId, jobId: failedJobId,
+      const result = await manualRecognition.mutateAsync({ taskId, jobId: failedJobId,
         expectedWorkflowRevision: taskState.workflow_revision });
-      navigate(`/tasks/${taskId}/submissions`, { replace: true });
+      navigate(manualReviewDestination(taskId, "submissions", result.status), { replace: true });
     } catch (error) { setRetryError(error); }
   }
   async function retry() {
@@ -226,7 +226,9 @@ export function SubmissionRecognitionProgressPage() {
               : t("submissionProgressRecognizing")}
           </h2>
           <p className="mt-2 text-sm leading-6 text-muted-foreground">
-            {hasDeterminateProgress
+            {progressQuery.data?.recovering_saved_text
+              ? (locale === "zh-CN" ? "正在整理已保存的识别文字，完成后自动进入复核。" : "Organizing saved recognition text. Review will open when ready.")
+              : hasDeterminateProgress
               ? `${t("submissionProgressProcessed")} ${processedFiles} / ${totalFiles} ${t("submissionProgressFiles")} · ${t("submissionProgressBackgroundSuffix")}`
               : t("submissionProgressBackgroundDescription")}
           </p>
