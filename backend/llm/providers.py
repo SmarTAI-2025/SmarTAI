@@ -821,6 +821,27 @@ class QwenProvider(_DomesticOpenAICompatibleProvider):
     _default_base_url = "https://dashscope.aliyuncs.com/compatible-mode/v1"
 
 
+class TencentProvider(_DomesticOpenAICompatibleProvider):
+    provider_type = "tencent"
+    _default_base_url = "https://tokenhub.tencentmaas.com/v1"
+
+
+class DoubaoProvider(_DomesticOpenAICompatibleProvider):
+    provider_type = "doubao"
+    _default_base_url = "https://ark.cn-beijing.volces.com/api/v3"
+
+
+class MiniMaxProvider(_DomesticOpenAICompatibleProvider):
+    provider_type = "minimax"
+    _default_base_url = "https://api.minimax.cn/v1"
+
+    def _generation_kwargs(self, max_output_tokens: int | None) -> dict[str, Any]:
+        kwargs = super()._generation_kwargs(max_output_tokens)
+        # Keep thinking out of the answer consumed by recognition/grading.
+        kwargs.setdefault("extra_body", {})["reasoning_split"] = True
+        return kwargs
+
+
 # ─── User-defined endpoint protocols ────────────────────────────────────────
 
 def _message_role(message: BaseMessage) -> str:
@@ -1092,6 +1113,8 @@ class SafeRelayProvider(BaseProvider):
             payload = _openai_payload(messages, self.model)
             if self.provider_type == "qwen":
                 payload.update(stream=True, stream_options={"include_usage": True})
+            elif self.provider_type == "minimax":
+                payload["reasoning_split"] = True
         elif self.wire_protocol == "anthropic_messages":
             headers.update({
                 "x-api-key": self.config.api_key,
@@ -1274,6 +1297,9 @@ PROVIDER_CLASSES: Dict[str, type[BaseProvider]] = {
     "deepseek": DeepSeekProvider,
     "moonshot": MoonshotProvider,
     "qwen": QwenProvider,
+    "tencent": TencentProvider,
+    "doubao": DoubaoProvider,
+    "minimax": MiniMaxProvider,
 }
 
 
