@@ -86,7 +86,7 @@ for (const paused of [false, true]) test(`${paused ? "paused" : "failed"} questi
   expect(errors).toEqual([]);
 });
 
-for (const paused of [false, true]) test(`early ${paused ? "pause" : "failure"} enters the original matrix, creates rows, and edits existing details`, async ({ page }) => {
+for (const paused of [false, true]) test(`early ${paused ? "pause" : "failure"} enters the original matrix, creates rows, and edits existing details`, async ({ page }, testInfo) => {
   const errors: string[] = [], mutations: unknown[] = [];
   page.on("pageerror", error => errors.push(error.message));
   const problem = { q_id: "manual-1", number: "1", type: "short", stem: "", reference_answer: "", criterion: "", max_score: 10,
@@ -156,7 +156,7 @@ for (const paused of [false, true]) test(`early ${paused ? "pause" : "failure"} 
   await page.reload();
   await expect(card.getByText("其他", { exact: true })).toHaveCount(2);
   await card.scrollIntoViewIfNeeded();
-  await page.screenshot({ path: `/private/tmp/smartai-question-type-${paused ? "pause" : "failure"}.png` });
+  await page.screenshot({ path: testInfo.outputPath("question-number-and-type.png") });
   await card.getByRole("button", { name: "题目 · 修改", exact: true }).click();
   await card.getByRole("textbox", { name: "题目", exact: true }).fill("What is 2 + 2?");
   await card.getByRole("button", { name: "保存", exact: true }).click();
