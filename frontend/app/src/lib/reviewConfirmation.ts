@@ -189,7 +189,7 @@ function collectSubmissionBlockers(task: Task | undefined, locale: string, stude
   if (!task) return [];
   const zh = locale === "zh-CN";
   const allStudents = Object.values(task.student_data ?? {});
-  if (!allStudents.length && task.manual_student_count_required) return [{ label: zh ? "请先填写学生人数并建立学生行" : "Enter the student count and create student rows first", href: `/tasks/${task.task_id}/submissions#student-count` }];
+  if (!allStudents.length) return [{ label: zh ? "请先添加学生或填写人数建立学生行" : "Add students or enter a student count first", href: `/tasks/${task.task_id}/submissions#student-count` }];
   const student = allStudents.find(item => item.stu_id === studentId);
   const sources = (task.submission_sources ?? []).filter(source => {
     if (studentId && source.source_id !== student?.source_id && source.student_candidate !== studentId) return false;

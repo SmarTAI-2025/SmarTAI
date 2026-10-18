@@ -190,6 +190,17 @@ export function retrySubmissionRecognition(input: {
   );
 }
 
+export function addTaskStudent(input: { taskId: string; expectedWorkflowRevision: number }) {
+  return postJSON<{ status: string; student_id: string; workflow_revision: number }>(
+    `/tasks/${encodeURIComponent(input.taskId)}/students`, { expected_workflow_revision: input.expectedWorkflowRevision });
+}
+
+export function deleteTaskStudent(input: { taskId: string; studentId: string; expectedWorkflowRevision: number }) {
+  return deleteJSON<{ status: string; workflow_revision: number }>(
+    `/tasks/${encodeURIComponent(input.taskId)}/students/${encodeURIComponent(input.studentId)}`,
+    { data: { expected_workflow_revision: input.expectedWorkflowRevision } });
+}
+
 export function manuallyCompleteSubmissionRecognition(input: {
   taskId: string; jobId: string; expectedWorkflowRevision: number; studentCount?: number;
 }): Promise<TaskMutationResponse> {
@@ -279,6 +290,16 @@ export function getTaskResultArtifactBlob(
   artifactId: string,
 ): Promise<Blob> {
   return getBlob(`/tasks/${encodeURIComponent(taskId)}/artifacts/${version}/${encodeURIComponent(artifactId)}`);
+}
+
+export function addTaskQuestion(input: { taskId: string; expectedWorkflowRevision: number }) {
+  return postJSON<{ status: string; q_id: string; workflow_revision: number }>(`/tasks/${encodeURIComponent(input.taskId)}/problems`,
+    { expected_workflow_revision: input.expectedWorkflowRevision });
+}
+
+export function deleteTaskQuestion(input: { taskId: string; qId: string; expectedWorkflowRevision: number }) {
+  return deleteJSON<{ status: string; workflow_revision: number }>(`/tasks/${encodeURIComponent(input.taskId)}/problems/${encodeURIComponent(input.qId)}`,
+    { data: { expected_workflow_revision: input.expectedWorkflowRevision } });
 }
 
 export function updateProblem(

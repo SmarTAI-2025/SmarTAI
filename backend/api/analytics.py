@@ -29,6 +29,7 @@ from backend.services.grading_scores import round_ai_score
 from backend.domain.errors import DomainError, NotFound
 from backend.api.errors import domain_error_response
 from backend.auth import require_task_teacher as require_teacher
+from backend.db import assignment_repository
 from backend.db.models import (
     AssignmentQuestionRecord,
     AssignmentRecord,
@@ -214,6 +215,7 @@ def _load_facts(task_id: str, owner_id: str) -> _AnalyticsFacts:
                 AssignmentRecord.id == AssignmentQuestionRecord.assignment_id,
             )
             .where(
+                assignment_repository.active_question_clause(),
                 AssignmentQuestionRecord.assignment_id == task_id,
                 AssignmentRecord.teacher_id == owner_id,
             )

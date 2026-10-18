@@ -11,17 +11,20 @@ export const reviewActionClass = "inline-flex h-10 shrink-0 items-center justify
 type ReviewNavigationAction = { href?: string; label: string; onClick?: () => void; disabled?: boolean; busy?: boolean; id?: string };
 
 /** The three review stages share one action order and one set of control styles. */
-export function ReviewStageActions({ confirmation, back, next, note, children, className }: {
+export function ReviewStageActions({ confirmation, back, next, note, leftAction, children, className }: {
   confirmation?: ReactNode;
   back: ReviewNavigationAction;
   next: ReviewNavigationAction;
   note?: ReactNode;
+  leftAction?: ReactNode;
   children?: ReactNode;
   className?: string;
 }) {
   return <footer className={cn("mt-4 rounded-[10px] border bg-card px-4 py-3 xl:px-5", className)}>
     <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
-      {note ? <p className="text-xs leading-5 text-muted-foreground">{note}</p> : null}
+      {note || leftAction ? <div className="flex min-w-0 items-center gap-4" data-review-stage-note>
+        {note ? <p className="text-xs leading-5 text-muted-foreground">{note}</p> : null}{leftAction}
+      </div> : null}
       <div className="flex w-full flex-col gap-2 sm:w-auto sm:flex-row sm:flex-wrap sm:justify-end xl:ml-auto" data-review-stage-actions>
         {confirmation}
         <ReviewNavigationButton action={back} />

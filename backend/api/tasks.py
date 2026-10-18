@@ -119,6 +119,11 @@ class UpdateGradingSetupRequest(BaseModel):
     grading_setup: dict[str, Any]
 
 
+class ReviewRowMutationRequest(BaseModel):
+    model_config = {"extra": "forbid"}
+    expected_workflow_revision: int = Field(ge=0)
+
+
 class UpdateProblemRequest(BaseModel):
     expected_workflow_revision: int | None = Field(default=None, ge=0)
     number: str | None = Field(default=None, min_length=1, max_length=64)
@@ -701,6 +706,38 @@ def grading_activity(task_id: str, run_id: str, after: int = Query(0, ge=0),
     return _domain(lambda: task_facade.grading_activity_history(
         task_id=task_id, owner_id=current.id, run_id=run_id, after=after, limit=limit,
     ))
+
+
+@router.post("/{task_id}/problems")
+def add_review_question(task_id: str, request: ReviewRowMutationRequest,
+                        current: User = Depends(require_teacher)):
+    from backend.services.question_review_rows import add_question
+    return _domain(lambda: add_question(task_id=task_id, owner_id=current.id,
+        expected_revision=request.expected_workflow_revision))
+
+
+@router.delete("/{task_id}/problems/{q_id}")
+def delete_review_question(task_id: str, q_id: str, request: ReviewRowMutationRequest,
+                           current: User = Depends(require_teacher)):
+    from backend.services.question_review_rows import delete_question
+    return _domain(lambda: delete_question(task_id=task_id, owner_id=current.id, q_id=q_id,
+        expected_revision=request.expected_workflow_revision))
+
+
+@router.post("/{task_id}/students")
+def add_review_student(task_id: str, request: ReviewRowMutationRequest,
+                       current: User = Depends(require_teacher)):
+    from backend.services.student_review_rows import add_student
+    return _domain(lambda: add_student(task_id=task_id, owner_id=current.id,
+        expected_revision=request.expected_workflow_revision))
+
+
+@router.delete("/{task_id}/students/{student_id}")
+def delete_review_student(task_id: str, student_id: str, request: ReviewRowMutationRequest,
+                          current: User = Depends(require_teacher)):
+    from backend.services.student_review_rows import delete_student
+    return _domain(lambda: delete_student(task_id=task_id, owner_id=current.id, student_id=student_id,
+        expected_revision=request.expected_workflow_revision))
 
 
 @router.put("/{task_id}/problems/{q_id}")
