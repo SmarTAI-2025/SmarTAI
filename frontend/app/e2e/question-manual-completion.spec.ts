@@ -1,6 +1,6 @@
 import { test, expect } from "@playwright/test";
 
-for (const paused of [false, true]) test(`${paused ? "paused" : "failed"} question → manual editor → fill → confirm; successful questions are preserved`, async ({ page }) => {
+for (const paused of [false, true]) test(`${paused ? "paused" : "failed"} question → manual queue → editor → confirm; successful questions are preserved`, async ({ page }) => {
   const errors: string[] = [], mutations: string[] = [];
   page.on("pageerror", error => errors.push(error.message));
   const provider = { provider_id: "test-provider", provider_type: "gemini", model: "synthetic", enabled: true, is_default: true };
@@ -54,9 +54,17 @@ for (const paused of [false, true]) test(`${paused ? "paused" : "failed"} questi
   });
   await page.goto("/tasks/manual-test/problems/progress");
   if (!paused) await expect(page.getByRole("button", { name: "重试失败项", exact: true })).toBeVisible();
-  await page.getByRole("button", { name: paused ? "人工继续处理" : "手动补全失败题目", exact: true }).click();
-  await expect(page).toHaveURL(/questions\/q2\/content\?manual=1#question-q2$/);
+  await page.getByRole("button", { name: "人工继续处理", exact: true }).click();
+  await expect(page).toHaveURL(/tasks\/manual-test\/questions$/);
+  const queue = page.getByRole("region", { name: "待复核队列", exact: true });
+  await expect(queue.getByRole("tab", { name: "需要处理 (1)", exact: true })).toHaveAttribute("aria-selected", "true");
+  await expect(queue.getByRole("link")).toHaveCount(1);
+  await queue.getByRole("link").click();
+  await expect(page).toHaveURL(/questions\/q2\/content#question-q2$/);
   const card = page.locator('[data-question-id="q2"]');
+  await expect(card.locator("textarea")).toHaveCount(0);
+  await card.getByRole("button", { name: "标答 / 解题步骤 · 修改", exact: true }).click();
+  await card.getByRole("button", { name: "修改第 2 题满分与评分标准", exact: true }).click();
   await expect(card.locator("textarea")).toHaveCount(2);
   await expect(page.locator('[data-question-id="q1"]')).toContainText("One point for 42.");
   await expect(page.locator('[data-question-id="q1"] textarea')).toHaveCount(0);
@@ -78,7 +86,7 @@ for (const paused of [false, true]) test(`${paused ? "paused" : "failed"} questi
   expect(errors).toEqual([]);
 });
 
-test("early pause keeps source queue blocked until teacher entry and every source confirmation", async ({ page }) => {
+test("early pause requires question, rubric and source acknowledgement; reference answer is optional", async ({ page }) => {
   const errors: string[] = [], mutations: unknown[] = [];
   page.on("pageerror", error => errors.push(error.message));
   const task = { task_id: "early-manual", name: "人工来源复核", status: "problems_paused", workflow_revision: 2,
@@ -101,6 +109,7 @@ test("early pause keeps source queue blocked until teacher entry and every sourc
       if (!body.manual_questions) return json({ status: "sources_pending", first_question_id: null, workflow_revision: 2 });
       expect(body.completed_source_tokens).toEqual(["source-0", "source-1"]);
       expect(body.manual_questions[0].q_id).toBe("teacher-q");
+      expect(body.manual_questions[0].reference_answer).toBe("");
       task.status = "problems_ready"; task.workflow_revision++; task.last_failed_job_id = null; task.error = null;
       task.problem_data = { "teacher-q": { ...body.manual_questions[0], review_status: "needs_review", preparation_issues: [], max_score_review_status: "confirmed" } };
       task.problem_count = 1;
@@ -112,13 +121,12 @@ test("early pause keeps source queue blocked until teacher entry and every sourc
   });
   await page.goto("/tasks/early-manual/problems/progress");
   await page.getByRole("button", { name: "人工继续处理", exact: true }).click();
-  await expect(page.getByRole("heading", { name: "人工复核题目来源" })).toBeVisible();
-  await expect(page.getByRole("list", { name: "未完成来源复核队列" })).toContainText("second.pdf");
+  await expect(page.getByRole("heading", { name: "人工补齐题目" })).toBeVisible();
+  await expect(page.getByRole("list", { name: "对照原资料" })).toContainText("second.pdf");
   const save = page.getByRole("button", { name: "保存题目并继续复核" });
   await expect(save).toBeDisabled();
   await page.getByLabel("题号", { exact: true }).fill("teacher-q");
   await page.getByLabel("题干", { exact: true }).fill("What is 2 + 2?");
-  await page.getByLabel("标准答案", { exact: true }).fill("4");
   await page.getByLabel("评分标准（写明分值）", { exact: true }).fill("Award 10 points for 4.");
   await page.getByRole("checkbox").nth(0).check();
   await expect(save).toBeDisabled();
