@@ -551,7 +551,7 @@ function ReviewDetailForm() {
           />
           {savingReviews ? <p role="status" className="mt-2 rounded-lg bg-primary/5 px-3 py-2 text-xs text-primary">{savingNavigationMessage}</p> : null}
 
-          {student.corrections.some(item => effectiveCorrectionScore(item) === null) ? <section className="mt-4 rounded-lg border border-red-200 bg-red-50/30 p-4"><RetryFailedGrading taskId={taskId} revision={taskQuery.data?.workflow_revision ?? 0} locale={locale} /></section> : null}
+          {student.corrections.some(item => effectiveCorrectionScore(item) === null) ? <section className="mt-4 rounded-lg border border-red-200 bg-red-50/30 p-4"><RetryFailedGrading taskId={taskId} revision={taskQuery.data?.workflow_revision ?? 0} locale={locale} paused={student.corrections.some(item => item.initial_review_reasons?.includes("grading_paused"))} /></section> : null}
 
 
           <ResultQuestionQuery className="mt-3" locale={locale} taskId={taskId} filter={questionFilter}
@@ -738,7 +738,7 @@ function ReviewQuestionCard({ locale, student, question, correction, draft, requ
                     <ul className="mt-2 space-y-2">
                       {correction.expert_results.map((expert, index) => (
                         <li key={`${expert.provider}-${index}`} className="rounded-md bg-muted/60 px-3 py-2">
-                          <p className="font-semibold text-foreground">{expert.provider} · {expert.error_kind ? tx(locale, "未给出有效分数 · 不参与合成", "No valid score · excluded from synthesis") : `${formatScore(expert.score, expert.max_score)}/${String(expert.max_score)} · ${formatConfidence(expert.confidence)}`}</p>
+                          <p className="font-semibold text-foreground">{expert.provider} · {expert.error_kind === "operation_cancelled" ? tx(locale, "手动停止，尚未完成批改", "Manually stopped before completion") : expert.error_kind ? tx(locale, "模型出错 · 未给出有效分数 · 不参与合成", "Model error · No valid score · excluded from synthesis") : `${formatScore(expert.score, expert.max_score)}/${String(expert.max_score)} · ${formatConfidence(expert.confidence)}`}</p>
                           {expert.comment ? <MarkdownMath className="mt-1 text-[11px] leading-5">{expert.comment}</MarkdownMath> : null}
                           {!expert.error_kind ? <ScoringSteps locale={locale} steps={expert.steps} /> : null}
                           {expert.knowledge_citations?.length ? <div className="mt-2 border-t pt-2">
@@ -871,6 +871,7 @@ function reviewQuestionState(correction: Correction | undefined, required: boole
 }
 
 function formatSynthesis(value: string | null | undefined, locale: Locale) {
+  if (value === "paused") return tx(locale, "已暂停尚未批改", "Paused, ungraded");
   const labels: Record<string, [string, string]> = { single: ["单专家", "Single"], median: ["中位数", "Median"], multi_sample: ["多次采样", "Multi-sample"], weighted_average: ["加权平均", "Weighted"], judge_agent: ["裁判模型", "Judge"], degraded_to_single: ["降级单专家", "Fallback"], all_failed: ["全部失败", "Failed"], quota_exhausted: ["额度耗尽", "Quota"] };
   const pair = value ? labels[value] : null;
   return pair ? (locale === "en-US" ? pair[1] : pair[0]) : (value || "—");

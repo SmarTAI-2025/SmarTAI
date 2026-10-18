@@ -24,6 +24,122 @@ def _archive_bytes() -> bytes:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("saved_filename", [None, "S1.txt", "S2.txt"])
+async def test_manual_handoff_preserves_saved_answers_and_queues_every_unfinished_source(monkeypatch, saved_filename):
+    import asyncio
+    import json
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+    from backend.domain.errors import DomainError
+    from backend.services.submission_manual_review import continue_manually
+    from backend.services.task_execution import stop_task_run
+
+    owner, task = _seed_task(with_question=True)
+    registry = _Registry()
+    calls = []
+    started = saved_filename is not None
+    saved_parse = asyncio.Event()
+    loop = asyncio.get_running_loop()
+    save_checkpoint = workflow_repository.save_operation_checkpoint
+    def checkpoint_saved(*args, **kwargs):
+        result = save_checkpoint(*args, **kwargs)
+        if kwargs.get("stage") == "parser_saved":
+            loop.call_soon_threadsafe(saved_parse.set)
+        return result
+    monkeypatch.setattr(workflow_repository, "save_operation_checkpoint", checkpoint_saved)
+    async def invoke(messages):
+        calls.append(messages[-1].content)
+        if f"**[Filename]**: {saved_filename}" not in messages[-1].content:
+            await asyncio.wait_for(saved_parse.wait(), timeout=5)
+            raise asyncio.CancelledError()
+        return SimpleNamespace(content=json.dumps({"stu_id": "S1", "stu_name": "Synthetic one",
+            "stu_ans": [{"q_id": "q1", "number": "1", "type": "short", "content": "saved wrong answer -2", "flag": []}]}))
+    provider = SimpleNamespace(provider_id="test-provider", supports_vision=False, ainvoke=AsyncMock(side_effect=invoke))
+    registry.provider = provider
+    monkeypatch.setattr(task_facade, "_registry_for_owner", lambda _owner: registry)
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w") as archive:
+        archive.writestr("S1.txt", "first answer")
+        archive.writestr("S2.txt", "second answer")
+    queued = task_facade.queue_task_submission_parsing(task_id=task, owner_id=owner,
+        filename="answers.zip", content=buffer.getvalue(), content_type="application/zip", registry=registry)
+    if started:
+        row = workflow_repository.claim_operation(queued["job_id"], owner_id=owner, worker_id="test", lease_seconds=60)
+        with pytest.raises(asyncio.CancelledError):
+            await task_facade.run_durable_submission_recognition(LeasedOperation(row, worker_id="test", lease_seconds=60))
+    workflow = workflow_repository.get_workflow(task, owner_id=owner)
+    stop_task_run(task_id=task, owner_id=owner, job_id=queued["job_id"], expected_revision=workflow.workflow_revision)
+    paused = task_facade.get_task(task_id=task, owner_id=owner)
+    origin = workflow_repository.get_operation(queued["job_id"], owner_id=owner)
+    saved_calls = list(calls)
+    with pytest.raises(DomainError):
+        await continue_manually(task_id=task, owner_id=owner, job_id=origin.id, expected_revision=paused["workflow_revision"] + 1)
+    if not started:
+        publish = task_facade._commit_imported_submissions
+        def fail_publish(**_kwargs):
+            raise OSError("synthetic local persistence interruption")
+        monkeypatch.setattr(task_facade, "_commit_imported_submissions", fail_publish)
+        with pytest.raises(OSError):
+            await continue_manually(task_id=task, owner_id=owner, job_id=origin.id, expected_revision=paused["workflow_revision"])
+        assert not task_facade.get_task(task_id=task, owner_id=owner)["student_data"]
+        monkeypatch.setattr(task_facade, "_commit_imported_submissions", publish)
+    result = await continue_manually(task_id=task, owner_id=owner, job_id=origin.id,
+                                     expected_revision=paused["workflow_revision"])
+    assert result["status"] == "ready_for_review" and calls == saved_calls
+    after = task_facade.get_task(task_id=task, owner_id=owner)
+    assert after["status"] == "submissions_ready"
+    students = list(after["student_data"].values())
+    assert len(students) == 2 and len(after["submission_sources"]) == 2
+    answers = [student["stu_ans"][0] for student in students]
+    assert sum(answer["content"] == "saved wrong answer -2" for answer in answers) == int(started)
+    if started:
+        saved_student = next(student for student in students if student["source_filename"] == saved_filename)
+        assert saved_student["stu_id"] == "S1" and saved_student["identity_status"] == "matched"
+    pending = [student for student in students if "recognition_manual_pending" in student["stu_ans"][0]["flag"]]
+    assert len(pending) == 2 - int(started)
+    assert all("recognition_paused" in student["stu_ans"][0]["flag"] for student in pending)
+    assert all(student["identity_status"] == "needs_review" and student["stu_name"] == "[Unknown Student]" for student in pending)
+    assert all(source["recognition_reason_code"] == "operation_cancelled" for source in after["submission_sources"] if source["status"] == "manual_review"), after["submission_sources"]
+    assert "submission_recognition_blocked" in task_facade.grading_readiness(task_id=task, owner_id=owner)["blocking_issues"]
+    target = pending[0]
+    with pytest.raises(DomainError) as blocked:
+        task_facade.update_student_answer(task_id=task, owner_id=owner, display_student_id=target["stu_id"],
+            q_id="q1", patch={"review_status": "confirmed"}, expected_revision=after["workflow_revision"])
+    assert blocked.value.code == "answer_review_blocked"
+    task_facade.update_student_answer(task_id=task, owner_id=owner, display_student_id=target["stu_id"],
+        q_id="q1", patch={"content": "", "flag": ["manual_blank_confirmed"], "review_status": "confirmed"},
+        expected_revision=after["workflow_revision"])
+    refreshed = task_facade.get_task(task_id=task, owner_id=owner)
+    repaired = refreshed["student_data"][target["stu_id"]]["stu_ans"][0]
+    assert repaired["content"] == "" and repaired["review_status"] == "confirmed"
+    assert "recognition_failed" not in repaired["flag"]
+    assert "recognition_manual_pending" not in repaired["flag"]
+    for index, student in enumerate(pending):
+        current = task_facade.get_task(task_id=task, owner_id=owner)
+        if student is not target:
+            task_facade.update_student_answer(task_id=task, owner_id=owner, display_student_id=student["stu_id"],
+                q_id="q1", patch={"content": "Teacher transcribed answer", "review_status": "confirmed"},
+                expected_revision=current["workflow_revision"])
+            current = task_facade.get_task(task_id=task, owner_id=owner)
+        task_facade.update_student_identity(task_id=task, owner_id=owner, current_display_id=student["stu_id"],
+            new_display_id=f"Confirmed-{index}", new_display_name=f"Synthetic learner {index}", expected_revision=current["workflow_revision"])
+    refreshed = task_facade.get_task(task_id=task, owner_id=owner)
+    assert not refreshed["submission_source_summary"].get("manual_review")
+    assert all(source["status"] == "parsed" for source in refreshed["submission_sources"])
+    readiness = task_facade.grading_readiness(task_id=task, owner_id=owner)
+    assert not {"submission_recognition_blocked", "submission_identities_unresolved"}.intersection(readiness["blocking_issues"])
+    from backend.services.workflow_inputs import submission_inputs
+    assert submission_inputs(task_id=task, owner_id=owner)["input"]["stored_file_id"] == origin.payload["input_file_id"]
+    original = workflow_repository.get_operation(origin.id, owner_id=owner)
+    assert original.status == "error" and original.error_code == "operation_cancelled"
+    assert original.checkpoint == origin.checkpoint and original.artifact_refs == origin.artifact_refs
+    with pytest.raises(DomainError):
+        await continue_manually(task_id=task, owner_id=owner, job_id=origin.id,
+                                expected_revision=refreshed["workflow_revision"])
+    assert calls == saved_calls
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("failure_mode,edited_after_restart,from_retry", [
     ("503", False, False), ("503", True, False), ("stopped", False, False), ("stopped", False, True),
 ])

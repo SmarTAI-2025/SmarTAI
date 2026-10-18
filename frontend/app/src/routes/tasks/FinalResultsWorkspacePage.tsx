@@ -17,6 +17,8 @@ import {
   buildResultsModel,
   clampPercent,
   formatPercent,
+  hasExpertDisagreement,
+  isCorrectionReviewConfirmed,
   summarizeReviewScoreSources,
   type QuestionSummary,
   type ResultsModel,
@@ -104,6 +106,9 @@ export function FinalResultsWorkspacePage() {
   const root = `/tasks/${encodeURIComponent(taskId)}/results`;
   const finalization = finalizationQuery.data;
   const result = resultQuery.data;
+  const disagreementCount = result?.results?.reduce((count, student) => count + student.corrections.filter(
+    (correction) => !isCorrectionReviewConfirmed(correction) && hasExpertDisagreement(correction),
+  ).length, 0) ?? 0;
 
   return (
     <div className="w-full max-w-[1300px]">
@@ -124,6 +129,17 @@ export function FinalResultsWorkspacePage() {
       <NewTaskStepper currentStep={7} />
 
       <ResultStateBanner locale={locale} taskId={taskId} finalization={finalization} provisional={provisional} />
+      {disagreementCount > 0 && (
+        <Link
+          to={`/tasks/${encodeURIComponent(taskId)}/review`}
+          className="mt-3 block rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900 hover:underline dark:border-amber-800 dark:bg-amber-950/30 dark:text-amber-200"
+        >
+          {tx(locale,
+            `有 ${disagreementCount} 个题次专家分歧较大（标准差 ÷ 满分 > 15%），可返回复核；该信号不影响查看结果。`,
+            `${disagreementCount} ${disagreementCount === 1 ? "response has" : "responses have"} high expert disagreement (standard deviation / max score > 15%). Return to review (optional).`,
+          )}
+        </Link>
+      )}
 
       <WorkspaceNavigation locale={locale} root={root} section={section} />
 

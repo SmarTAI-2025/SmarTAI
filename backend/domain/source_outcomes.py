@@ -29,6 +29,7 @@ SOURCE_FAILURE_PHASES = frozenset({
 })
 
 SAFE_SOURCE_REASON_CODES = RECOGNITION_ERROR_CODES | frozenset({
+    "operation_cancelled",
     "workflow_failed",
     "no_provider_configured",
     "provider_not_enabled",

@@ -40,12 +40,7 @@ P0 fairness signals (added 2026-05-03):
   - **Indecisiveness Score (IS)**: normalized std-dev of expert/sample scores.
     Computed in `_compute_review_signal` from the same successes that drive
     the synthesized score. None when only one sample is available.
-  - **Minority Veto**: even when IS stays under threshold, a single rogue
-    expert/sample whose score deviates from the median by > 30% of max_score
-    (configurable) flips `requires_human_review=true`. Catches cases like
-    "two experts say 9/10, one says 4/10" that average out to a clean-looking
-    7.3 but really demand a teacher's eye.
-  Both signals land on `Correction.is_score / requires_human_review /
+  Values above 15% land on `Correction.is_score / requires_human_review /
   review_reasons` and the pipeline never blocks on them — they are advisory
   flags for the frontend to surface.
 """
@@ -60,6 +55,7 @@ from typing import List, Optional, Tuple, TYPE_CHECKING
 from pydantic import BaseModel, Field
 
 from backend.config import settings as _settings
+from backend.domain.grading_review import expert_disagreement_signal
 from backend.models import Correction, ExpertResult, ProblemInfo, StudentAnswerInfo, StepScore, TaskGradingSetup
 from backend.llm.providers import BaseProvider
 from backend.llm.registry import ExpertRegistry
@@ -231,18 +227,26 @@ async def run_multi_expert(
     # ── Single-shot fast path (legacy: 1 provider, effective_n == 1) ──────
     if mode == "single":
         provider = providers[0]
+        from backend.services.grading_checkpoints import current_checkpoints
+        checkpoints = current_checkpoints()
+        provider_id = provider_ids.get(id(provider), provider.provider_id)
         skill = skill_cls(
             provider, reporter=reporter, language=language, task_id=task_id,
             grading_setup=grading_setup,
         )
         from backend.progress.grading_activity import observe_expert
-        async with observe_expert(reporter, provider, samples) as activity:
-            expert_result = normalize_expert_result(
-                await skill.grade(problem, answer, student_id=student_id),
-                problem.max_score,
-            )
-            if activity is not None:
-                activity["successful"] = _is_successful_expert(expert_result)
+        expert_result = checkpoints.get(student_id, problem.q_id, provider_id, 0) if checkpoints else None
+        if expert_result is None:
+            async with observe_expert(reporter, provider, samples) as activity:
+                expert_result = normalize_expert_result(
+                    await skill.grade(problem, answer, student_id=student_id),
+                    problem.max_score,
+                )
+                expert_result.provider_id = provider_id
+                if checkpoints:
+                    checkpoints.save_expert(student_id, problem.q_id, provider_id, 0, expert_result)
+                if activity is not None:
+                    activity["successful"] = _is_successful_expert(expert_result)
         if not _is_successful_expert(expert_result):
             raise AllExpertsFailed([expert_result])
         expert_result.provider_id = provider_ids.get(id(provider), provider.provider_id)
@@ -263,18 +267,26 @@ async def run_multi_expert(
     )
 
     async def _run_one(provider: BaseProvider, sample_idx: int) -> ExpertResult:
+        from backend.services.grading_checkpoints import current_checkpoints
+        checkpoints = current_checkpoints()
+        provider_id = provider_ids.get(id(provider), provider.provider_id)
         skill = skill_cls(
             provider, reporter=reporter, language=language, task_id=task_id,
             grading_setup=grading_setup,
         )
         from backend.progress.grading_activity import observe_expert
-        async with observe_expert(reporter, provider, samples) as activity:
-            result = normalize_expert_result(
-                await skill.grade(problem, answer, student_id=student_id),
-                problem.max_score,
-            )
-            if activity is not None:
-                activity["successful"] = _is_successful_expert(result)
+        result = checkpoints.get(student_id, problem.q_id, provider_id, sample_idx) if checkpoints else None
+        if result is None:
+            async with observe_expert(reporter, provider, samples) as activity:
+                result = normalize_expert_result(
+                    await skill.grade(problem, answer, student_id=student_id), problem.max_score)
+                result.provider_id = provider_id
+                if sample_idx > 0 and result.provider and "#sample" not in result.provider:
+                    result.provider = f"{result.provider}#sample{sample_idx}"
+                if checkpoints:
+                    checkpoints.save_expert(student_id, problem.q_id, provider_id, sample_idx, result)
+                if activity is not None:
+                    activity["successful"] = _is_successful_expert(result)
         result.provider_id = provider_ids.get(id(provider), provider.provider_id)
         # Tag duplicate provider IDs in multi-sample mode so the UI / logs can
         # tell them apart. We do this AFTER the skill returns so any internal
@@ -363,7 +375,7 @@ async def run_multi_expert(
     # weaker model's self-doubt (Qwen on an item it cannot grade) must not
     # drag a confident sibling's verdict into the low-confidence review
     # queue — genuine disagreement is already covered by the fairness
-    # signals computed below (IS / minority veto).
+    # signal computed below (IS).
     best_expert_confidence = max(er.confidence for er in successes)
     if correction.confidence < best_expert_confidence:
         correction.confidence = round(best_expert_confidence, 2)
@@ -372,7 +384,7 @@ async def run_multi_expert(
     if failures:
         correction.expert_results = list(correction.expert_results) + failures
 
-    # ── P0 fairness signals: Indecisiveness Score + Minority Veto ─────────
+    # ── Advisory disagreement: Indecisiveness Score ──────────────────────
     is_score, requires_review, reasons = _compute_review_signal(successes)
     correction.is_score = is_score
     correction.requires_human_review = requires_review
@@ -388,7 +400,7 @@ async def run_multi_expert(
     return correction
 
 
-# ─── Indecisiveness Score + Minority Veto ─────────────────────────────────────
+# ─── Indecisiveness Score ─────────────────────────────────────────────────────
 
 def _compute_review_signal(
     successes: List[ExpertResult],
@@ -400,15 +412,9 @@ def _compute_review_signal(
     - **is_score**: ``std(scores) / max_score`` across the samples. Population
       std (divide by N, not N-1) so 2 samples don't blow up. ``None`` when
       < 2 samples — variance estimation is meaningless on one data point.
-    - **requires_human_review**: True if EITHER ``is_score > settings.is_threshold``
-      OR any score deviates from the median by > ``settings.minority_veto_deviation
-      * max_score``. The minority-veto half catches "two agree, one strongly
-      disagrees" cases that an averaged score would hide.
-    - **review_reasons**: stable string IDs (``high_indecisiveness`` /
-      ``minority_veto``) so the frontend can localize without parsing.
-
-    The thresholds live on `backend.config.settings` so they can be tuned per
-    deployment without code changes (default: IS 0.15, minority 0.30 of max).
+    - **requires_human_review**: True only when ``is_score > 0.15``.
+    - **review_reasons**: ``high_indecisiveness`` for optional teacher attention.
+      The same fixed policy is used by review queues, reports and result queries.
     """
     if len(successes) < 2:
         return None, False, []
@@ -419,30 +425,8 @@ def _compute_review_signal(
     max_score = max(er.max_score for er in successes) or 10.0
     scores = [er.score for er in successes]
 
-    # Population std-dev — handles N=2 cleanly.
-    n = len(scores)
-    mean = sum(scores) / n
-    variance = sum((s - mean) ** 2 for s in scores) / n
-    std = variance ** 0.5
-    is_score = std / max_score if max_score > 0 else 0.0
-
-    reasons: List[str] = []
-    if is_score > _settings.is_threshold:
-        reasons.append("high_indecisiveness")
-
-    # Minority-veto: any sample > deviation_pct away from median.
-    sorted_scores = sorted(scores)
-    if n % 2 == 1:
-        median = sorted_scores[n // 2]
-    else:
-        median = (sorted_scores[n // 2 - 1] + sorted_scores[n // 2]) / 2
-
-    threshold_abs = _settings.minority_veto_deviation * max_score
-    if any(abs(s - median) > threshold_abs for s in scores):
-        if "minority_veto" not in reasons:
-            reasons.append("minority_veto")
-
-    requires_review = len(reasons) > 0
+    is_score, requires_review = expert_disagreement_signal(scores, max_score)
+    reasons = ["high_indecisiveness"] if requires_review else []
     return is_score, requires_review, reasons
 
 

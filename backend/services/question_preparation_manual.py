@@ -6,10 +6,10 @@ from backend.agents.question_preparation_agent import (
     _issue, _issue_field, _validate_major_question_candidates,
     requested_major_question_materials,
 )
-from backend.domain.errors import InvalidTransition
+from backend.domain.errors import InvalidTransition, ValidationError
 from backend.models import QuestionScorePolicy
 from backend.services.question_preparation_artifacts import (
-    UPLOADED_MATERIALS_ALIGNED_STAGE, read_base_preparation_artifact,
+    QUESTIONS_EXTRACTED_STAGE, UPLOADED_MATERIALS_ALIGNED_STAGE, read_base_preparation_artifact,
     read_question_candidate_artifact,
 )
 from backend.services.teacher_score_constraints import teacher_score_requirements
@@ -28,15 +28,16 @@ def recover_manual_question_packages(operation):
                     operation_id=operation.id, attempt=attempt, input_hash=operation.input_hash,
                     provider_record_id=payload.get("recognition_provider_id"))
 
-    base_id = checkpoint.get("aligned_base_artifact_id")
+    aligned = bool(checkpoint.get("aligned_base_artifact_id"))
+    base_id = checkpoint.get("aligned_base_artifact_id") or checkpoint.get("questions_extracted_artifact_id")
     if not base_id:
         unavailable()
     base = read_base_preparation_artifact(
-        base_id, stage=UPLOADED_MATERIALS_ALIGNED_STAGE, **context(base_id))
+        base_id, stage=UPLOADED_MATERIALS_ALIGNED_STAGE if aligned else QUESTIONS_EXTRACTED_STAGE, **context(base_id))
     if base is None:
         unavailable()
     problems = deepcopy(base.payload.problem_data)
-    if list(problems) != list(checkpoint.get("question_ids") or []):
+    if not problems or (checkpoint.get("question_ids") and list(problems) != list(checkpoint["question_ids"])):
         unavailable()
     requested = requested_major_question_materials(problems)
     teacher_points = teacher_score_requirements(
@@ -80,15 +81,40 @@ def recover_manual_question_packages(operation):
                     issue["details"] = {"target": field}
                     issues.append(issue)
             marker = _issue(q_id, "source", "manual_completion_required", "warning", [])
-            marker["details"] = {"required_fields": required_fields}
+            marker["details"] = {"required_fields": required_fields, "reason": operation.error_code}
             issues.append(marker)
             problem["review_status"] = "needs_review"
         problem["preparation_issues"] = issues
-    if not missing_questions:
-        unavailable()
     return problems, missing_questions
 
 
 def unavailable():
     raise InvalidTransition("Verified question drafts are unavailable for manual completion.",
                             code="question_preparation_manual_unavailable")
+
+
+def validate_manual_source_questions(operation, questions, completed_sources):
+    """Only teacher-authored questions may replace a source with no verified list."""
+    from backend.services.question_structure import build_major_question_structure, validate_rubric_points, QuestionRubricValidationError
+    from backend.services.workflow_inputs import question_inputs
+    saved = question_inputs(task_id=operation.assignment_id, owner_id=operation.owner_id)["input"]
+    sources = saved["sources"] if saved and saved["job_id"] == operation.id else []
+    if not sources or set(completed_sources) != {source["source_token"] for source in sources}:
+        raise ValidationError("Review every source before continuing.", code="question_sources_pending")
+    packages = {}
+    for index, question in enumerate(questions):
+        raw = question.model_dump()
+        q_id = raw["q_id"].strip()
+        if not q_id or q_id in packages or any(not raw[field].strip() for field in ("stem", "criterion", "reference_answer")):
+            raise ValidationError("Each question needs a unique ID, stem, answer and rubric.", code="question_review_blocked")
+        raw.update(q_id=q_id, review_status="needs_review", max_score_source="teacher_input")
+        structure = build_major_question_structure(raw, major_order=index, structure_source="deterministic", review_status="needs_review")
+        try:
+            validate_rubric_points(raw["criterion"], raw["max_score"], structure)
+        except QuestionRubricValidationError:
+            raise ValidationError("Rubric points must match the maximum score.", code="question_review_blocked") from None
+        marker = _issue(q_id, "source", "manual_completion_required", "warning", [])
+        marker["details"] = {"required_fields": ["stem", "reference_answer", "criterion"], "reason": operation.error_code}
+        raw["preparation_issues"] = [marker]
+        packages[q_id] = raw
+    return packages

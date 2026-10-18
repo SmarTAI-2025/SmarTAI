@@ -1,5 +1,6 @@
 import { questionIssueNeedsReview, questionReviewConfirmed, questionReviewIssues, questionReviewBlockers, recognitionIssueLabel, type ReviewBlocker } from "@/lib/reviewConfirmation";
 import { MatrixViewLink } from "@/components/tasks/MatrixViewLink";
+import { ManualQuestionSourceReview } from "@/components/tasks/ManualQuestionSourceReview";
 import { MatrixQueueWorkspace } from "@/components/tasks/MatrixQueueWorkspace";
 import { ReviewConfirmButton, ReviewBlockDialog, ReviewStageActions } from "@/components/tasks/ReviewConfirmation";
 import { groundedRows, hasGroundedOrder } from "@/lib/groundedAsk";
@@ -78,6 +79,11 @@ export function QuestionPreparationOverviewPage() {
     anomalies: allRisks.filter((row) => ["parse_anomaly", "generation_failed", "invalid_test_case", "reference_solution_failed_case"].includes(row.issue.code)).length,
   }), [allRisks]);
 
+  const manualJob = searchParams.get("manualJob");
+  if (taskId && taskQuery.data && manualJob && taskQuery.data.last_failed_job_id === manualJob
+      && ["error", "problems_paused"].includes(taskQuery.data.status)) {
+    return <ManualQuestionSourceReview key={manualJob} taskId={taskId} jobId={manualJob} revision={taskQuery.data.workflow_revision} />;
+  }
   if (taskQuery.isSuccess && !taskQuery.isFetching && taskQuery.data.status === "draft") {
     return <Navigate replace to={`/tasks/${taskId}/upload/problems`} />;
   }

@@ -17,6 +17,7 @@ vi.mock("@/api/hooks", () => ({
 vi.mock("@/api/hooks/tasks", () => ({
   useTask: () => ({ data: task(), refetch: vi.fn() }),
   useRetrySubmissionRecognition: () => ({ isPending: false, mutateAsync: vi.fn() }),
+  useManuallyCompleteSubmissionRecognition: () => ({ isPending: false, mutateAsync: vi.fn() }),
 }));
 vi.mock("@/hooks/useTaskProgress", () => ({ useTaskProgress: () => ({ data: task(), progress: state.progress, percent: 30, isError: state.stale, refetch: vi.fn() }) }));
 vi.mock("@/components/new-task/NewTaskStepper", () => ({ NewTaskStepper: () => null }));

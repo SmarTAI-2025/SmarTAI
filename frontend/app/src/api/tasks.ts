@@ -45,10 +45,10 @@ export function stopTaskRun(taskId: string, jobId: string, revision: number) {
   );
 }
 
-export function continueTaskRun(taskId: string, jobId: string, revision: number) {
-  return postJSON<{ status: "started" | "already_running"; job_id: string }>(
+export function continueTaskRun(taskId: string, jobId: string, revision: number, manual = false) {
+  return postJSON<{ status: "started" | "already_running" | "manual_review"; job_id: string }>(
     `/tasks/${encodeURIComponent(taskId)}/continue`,
-    { job_id: jobId, expected_workflow_revision: revision },
+    { job_id: jobId, expected_workflow_revision: revision, ...(manual ? { manual: true } : {}) },
   );
 }
 
@@ -190,6 +190,13 @@ export function retrySubmissionRecognition(input: {
   );
 }
 
+export function manuallyCompleteSubmissionRecognition(input: {
+  taskId: string; jobId: string; expectedWorkflowRevision: number;
+}): Promise<TaskMutationResponse> {
+  return postJSON(`/tasks/${encodeURIComponent(input.taskId)}/submission-recognition/${encodeURIComponent(input.jobId)}/manual-review`,
+    { expected_workflow_revision: input.expectedWorkflowRevision });
+}
+
 export function retryQuestionPreparation(input: {
   taskId: string;
   jobId: string;
@@ -210,9 +217,12 @@ export function retryQuestionPreparation(input: {
 
 export function manuallyCompleteQuestionPreparation(input: {
   taskId: string; jobId: string; expectedWorkflowRevision: number;
-}): Promise<{ task_id: string; workflow_revision: number; first_question_id: string }> {
+  manualQuestions?: Array<{ q_id: string; number?: string; type: string; stem: string; reference_answer: string; criterion: string; max_score: number }>;
+  completedSourceTokens?: string[];
+}): Promise<{ status: "ready_for_review" | "sources_pending"; task_id: string; workflow_revision: number; first_question_id: string | null }> {
   return postJSON(`/tasks/${encodeURIComponent(input.taskId)}/question-preparation/${encodeURIComponent(input.jobId)}/manual-review`,
-    { expected_workflow_revision: input.expectedWorkflowRevision });
+    { expected_workflow_revision: input.expectedWorkflowRevision,
+      ...(input.manualQuestions ? { manual_questions: input.manualQuestions, completed_source_tokens: input.completedSourceTokens } : {}) });
 }
 
 export function uploadReference(taskId: string, file: File, options?: UploadOptions): Promise<TaskMutationResponse> {

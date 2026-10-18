@@ -284,35 +284,47 @@ export function correctionReviewBlocked(correction: Correction): boolean {
 
 /** One pending-review rule for the review queue, analysis, filters and charts. */
 export function correctionReviewAttention(correction: Correction): ReviewAttention {
-  return correctionReviewNextBlocked(correction) ? "blocking" : "none";
+  if (correctionReviewNextBlocked(correction)) return "blocking";
+  return !isCorrectionReviewConfirmed(correction) && hasExpertDisagreement(correction) ? "advisory" : "none";
 }
 
 /** A valid score can be confirmed even when continuing requires that confirmation. */
 export function correctionReviewNextBlocked(correction: Correction): boolean {
   return correctionReviewBlocked(correction) || (!isCorrectionReviewConfirmed(correction)
-    && confidenceRequiresReview(correction.confidence));
+    && (confidenceRequiresReview(correction.confidence)
+      || correctionReviewReasonIds(correction).includes("grading_paused")));
+}
+
+function validExpertScores(correction: Correction): number[] {
+  return correction.expert_results?.filter(expert => !expert.error_kind)
+    .map(expert => expert.score)
+    .filter((score): score is number => validReviewScore(score, correction.max_score)) ?? [];
 }
 
 export function getExpertScoreSpread(correction: Correction): number {
-  const scores = correction.expert_results?.filter(expert => !expert.error_kind)
-    .map(expert => expert.score)
-    .filter((score): score is number => typeof score === "number" && Number.isFinite(score)) ?? [];
+  const scores = validExpertScores(correction);
   return scores.length ? Math.max(...scores) - Math.min(...scores) : 0;
 }
 
 export function hasExpertDisagreement(correction: Correction): boolean {
-  return correctionReviewReasonIds(correction).some(reason => reason === "high_indecisiveness" || reason === "score_spread_high")
-    || getExpertScoreSpread(correction) > Math.max(1, correction.max_score * 0.25);
+  const scores = validExpertScores(correction);
+  if (scores.length < 2) return false;
+  const mean = scores.reduce((sum, score) => sum + score, 0) / scores.length;
+  const variance = scores.reduce((sum, score) => sum + (score - mean) ** 2, 0) / scores.length;
+  // Match backend.domain.grading_review, including the exact 15% boundary.
+  return Math.sqrt(variance) / correction.max_score > 0.15 + Number.EPSILON;
 }
 
 export function reviewReasonLabel(reason: string, locale: Locale = "zh-CN") {
   const english: Record<string, string> = {
+    grading_paused: "Paused before grading finished; check and confirm",
     high_indecisiveness: "Experts disagree", low_confidence: "Low confidence", score_spread_high: "Large score difference",
     minority_veto: "Outlying expert score", parse_failed: "Could not parse result", degraded_to_single: "Only one expert succeeded (low confidence)",
     transient_llm: "Model network error or timeout", llm_failed: "Model could not grade", quota_exhausted: "Quota exhausted", general: "Teacher review required",
   };
   if (locale === "en-US") return english[reason] ?? reason.replaceAll("_", " ");
   const labels: Record<string, string> = {
+    grading_paused: "已暂停，批改未完成，请核对并确认",
     high_indecisiveness: "专家分歧较大",
     low_confidence: "置信度偏低",
     score_spread_high: "评分差异较大",

@@ -359,8 +359,21 @@ class RetryQuestionPreparationRequest(BaseModel):
     use_current_configuration: bool = Field(default=False, strict=True)
 
 
+class ManualQuestionDraft(BaseModel):
+    q_id: str = Field(min_length=1, max_length=80)
+    number: str = Field(default="", max_length=80)
+    type: str = Field(default="short", min_length=1, max_length=80)
+    stem: str = Field(min_length=1, max_length=100_000)
+    criterion: str = Field(min_length=1, max_length=100_000)
+    reference_answer: str = Field(min_length=1, max_length=100_000)
+    max_score: float = Field(default=10, gt=0, le=10_000, allow_inf_nan=False)
+    test_cases: list[dict] = Field(default_factory=list, max_length=100)
+
+
 class ManualQuestionPreparationRequest(BaseModel):
     expected_workflow_revision: int = Field(ge=0)
+    manual_questions: list[ManualQuestionDraft] | None = Field(default=None, min_length=1, max_length=500)
+    completed_source_tokens: list[str] = Field(default_factory=list, max_length=64)
 
 
 def _question_preparation_input_hash(
@@ -1864,6 +1877,35 @@ def _question_preparation_recovery_revision(
     return base + 1 + int(operation.error_code == "operation_cancelled")
 
 
+@router.get("/{task_id}/question-preparation/{job_id}/manual-review/{source_token}/content")
+def manual_question_source_content(task_id: str, job_id: str, source_token: str, current: User = Depends(require_teacher)):
+    try:
+        workflow_repository.get_live_workflow(task_id, owner_id=current.id)
+        operation = workflow_repository.get_operation(job_id, owner_id=current.id)
+        if (operation.assignment_id != task_id or operation.operation_type != "question_preparation"
+                or source_token not in (operation.payload or {}).get("source_tokens", [])):
+            raise NotFound("problem_source")
+        source = workflow_repository.get_operation(source_token, owner_id=current.id)
+        if source.assignment_id != task_id or source.operation_type != "problem_source":
+            raise NotFound("problem_source")
+        payload = source.payload or {}
+        file_id = (payload.get("source_ref") or {}).get("stored_file_id")
+        if file_id:
+            stored = file_repository.get_file(file_id=file_id, owner_id=current.id)
+            if not stored or stored.assignment_id != task_id or stored.kind != "problem_source":
+                raise NotFound("problem_source")
+            with get_storage().open(stored.storage_key) as stream:
+                content = stream.read(stored.size_bytes + 1)
+            if len(content) != stored.size_bytes or hashlib.sha256(content).hexdigest() != stored.sha256:
+                raise NotFound("problem_source")
+            return Response(content=content, media_type=stored.content_type)
+        if payload.get("text"):
+            return Response(content=payload["text"], media_type="text/plain")
+        raise NotFound("problem_source")
+    except DomainError as exc:
+        return domain_error_response(exc)
+
+
 @router.post("/{task_id}/question-preparation/{job_id}/manual-review")
 async def manually_complete_question_preparation(
     task_id: str, job_id: str, request: ManualQuestionPreparationRequest,
@@ -1882,20 +1924,33 @@ async def manually_complete_question_preparation(
         if (workflow.workflow_revision != request.expected_workflow_revision
                 or workflow.workflow_revision != _question_preparation_recovery_revision(failed)):
             raise VersionConflict("The task changed after question preparation.", code="stale_revision")
-        packages, missing = await run_in_threadpool(recover_manual_question_packages, failed)
+        checkpoint = failed.checkpoint or {}
+        has_base = checkpoint.get("aligned_base_artifact_id") or checkpoint.get("questions_extracted_artifact_id")
+        if not has_base:
+            if request.manual_questions is None:
+                return {"status": "sources_pending", "task_id": task_id,
+                        "workflow_revision": workflow.workflow_revision, "first_question_id": None}
+            from backend.services.question_preparation_manual import validate_manual_source_questions
+            packages = validate_manual_source_questions(failed, request.manual_questions, request.completed_source_tokens)
+            missing = list(packages)
+        else:
+            if request.manual_questions is not None:
+                raise InvalidTransition("Verified question drafts already exist; edit them in review.")
+            packages, missing = await run_in_threadpool(recover_manual_question_packages, failed)
         revision = task_facade._replace_draft_questions(
             task_id, current.id, packages, workflow.problem_file_name or "",
             expected_workflow_revision=request.expected_workflow_revision,
             replace_confirmed=bool((failed.payload or {}).get("replace_confirmed")),
             operation_id=failed.id, expected_operation_attempt=failed.attempt,
             expected_checkpoint_revision=failed.checkpoint_revision,
-            operation_checkpoint={**(failed.checkpoint or {}), "manual_completion_question_ids": missing},
+            operation_checkpoint={**(failed.checkpoint or {}), "manual_completion_question_ids": missing,
+                                  **({"manually_completed_source_tokens": request.completed_source_tokens} if not has_base else {})},
             operation_artifact_refs=failed.artifact_refs,
             recognition_provider_id=(failed.payload or {}).get("recognition_provider_id"),
             manual_recovery=True,
         )
         return {"status": "ready_for_review", "task_id": task_id,
-                "workflow_revision": revision, "first_question_id": missing[0]}
+                "workflow_revision": revision, "first_question_id": (missing or list(packages))[0]}
     except DomainError as exc:
         return domain_error_response(exc)
 
@@ -2011,7 +2066,8 @@ async def retry_question_preparation(
             use_current_configuration=request.use_current_configuration,
             # Acknowledged uncertainty starts a distinct operation, preserving the
             # original evidence and never weakening automatic replay protection.
-            acknowledged_restart_from=(f"{failed.id}:{failed.attempt}" if submission_uncertain else None),
+            acknowledged_restart_from=(f"{failed.id}:{failed.attempt}" if submission_uncertain or
+                (failed.error_code == "operation_cancelled" and request.acknowledge_possible_duplicate_call) else None),
         )
         if isinstance(response, dict):
             return {**response, "reused_prepared_sources": True}
@@ -2348,6 +2404,7 @@ async def _recognize_saved_question_sources(sources, *, operation, route, regist
             purpose=_source_role_ocr_purpose(draft.role), reporter=reporter,
             allow_vision=draft.role not in {"rubric", "programming_tests"} or payload.get("enable_material_ocr") is True,
             retry_key=retry_key,
+            acknowledge_pending_retry=bool((operation.payload or {}).get("acknowledged_restart_from")),
         )
         if not result.text.strip():
             raise RecognitionError("ocr_empty_result")

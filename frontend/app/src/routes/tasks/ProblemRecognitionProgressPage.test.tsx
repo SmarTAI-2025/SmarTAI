@@ -93,6 +93,19 @@ describe("ProblemRecognitionProgressPage recovery", () => {
     retryMutateAsync.mockResolvedValue({ status: "started", job_id: "retry-job" });
   });
 
+  it.each([null, "q2"])("offers manual continuation for paused recognition (first question %s)", async firstQuestion => {
+    snapshot = { ...failedTask, status: "problems_paused", error: "operation_cancelled" };
+    manualMutateAsync.mockResolvedValue({ first_question_id: firstQuestion, workflow_revision: 9 });
+    render(<MemoryRouter initialEntries={["/tasks/question-task/problems/progress"]}><Routes>
+      <Route path="/tasks/:taskId/problems/progress" element={<ProblemRecognitionProgressPage />} />
+      <Route path="/tasks/:taskId/questions" element={<div>Source review queue</div>} />
+      <Route path="/tasks/:taskId/questions/q2/content" element={<div>Question review</div>} />
+    </Routes></MemoryRouter>);
+    fireEvent.click(screen.getByRole("button", { name: "人工继续处理" }));
+    expect(await screen.findByText(firstQuestion ? "Question review" : "Source review queue")).toBeInTheDocument();
+    expect(retryMutateAsync).not.toHaveBeenCalled();
+  });
+
   it("keeps retry idle during background status polls and only retries on click", async () => {
     expect(manualMutateAsync).not.toHaveBeenCalled();
     const page = <MemoryRouter initialEntries={["/tasks/question-task/problems/progress"]}><Routes>

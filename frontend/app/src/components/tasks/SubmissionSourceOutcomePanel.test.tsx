@@ -59,6 +59,15 @@ const sources: SubmissionSourceOutcome[] = [
 ];
 
 describe("SubmissionSourceOutcomePanel", () => {
+  it("keeps manually pending sources expanded and distinguishes a stop from a provider failure", () => {
+    render(<MemoryRouter><SubmissionSourceOutcomePanel locale="zh-CN" taskId="task" sources={[{
+      ...sources[1], status: "manual_review", reason_code: "operation_cancelled", recognition_reason_code: "operation_cancelled",
+      resolution_status: "manual_review", failure_phase: "recognition",
+    }]} /></MemoryRouter>);
+    expect(screen.getByText("识别未完成，等待人工处理").closest("details")).toHaveAttribute("open");
+    expect(screen.getByText(/1 份待人工处理/)).toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "重新选择文件" })).not.toBeInTheDocument();
+  });
   it.each(["zh-CN", "en-US"] as const)("shows retained, failed and unread pages with the actual provider cause in %s", (locale) => {
     render(<MemoryRouter><SubmissionSourceOutcomePanel locale={locale} sources={[{
       ...sources[1], content_type: "application/pdf", file_name: "student.pdf",
