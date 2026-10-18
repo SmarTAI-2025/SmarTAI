@@ -27,7 +27,7 @@ const test = base.extend<{ uploadReceiver: UploadReceiver }>({
     finally { await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve())); }
   },
 });
-test.use({ reducedMotion: "reduce" });
+test.use({ contextOptions: { reducedMotion: "reduce" } });
 
 const backend = process.env.SMARTAI_E2E_BACKEND_URL ?? "http://127.0.0.1:8000";
 const uploadPath = "/tasks/roster-audit/submissions/upload";
