@@ -121,7 +121,7 @@ async def prepare_saved_question_packages(sources, *, provider, reporter, score_
     for number in wanted:
         if normalize_question_number(number) not in actual:
             q_id = f"q{len(packages) + 1}"
-            packages[q_id] = dict(q_id=q_id, number=number, type="short", stem="", criterion="", max_score=10)
+            packages[q_id] = dict(q_id=q_id, number=number, type="other", stem="", criterion="", max_score=10)
             actual.add(normalize_question_number(number))
     return _saved_package_issues(packages, score_policy, outline)
 

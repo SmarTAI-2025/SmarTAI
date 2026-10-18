@@ -216,3 +216,21 @@ async def test_completed_organization_chunks_are_retained_on_stop_and_skipped_on
         completed_chunks=completed, **options)
     assert len(calls) == 3 and calls[0] != calls[2] and calls[1] == calls[2]
     assert [item["stem"] for item in result.values()] == ["First problem", "Second problem"]
+
+
+@pytest.mark.asyncio
+async def test_saved_organization_respects_targets_and_does_not_invent_missing_material():
+    from backend.models import QuestionScorePolicy
+    from backend.progress.tracker import ProgressReporter
+    from backend.services.question_preparation_manual import prepare_saved_question_packages
+    response = {"problems": [dict(q_id=f"q{i}", number=str(i), type="short",
+        stem=f"Saved question {i}", criterion="Invented rubric", reference_answer="Invented solution") for i in (1, 2)]}
+    provider = SimpleNamespace(provider_id="synthetic", ainvoke=AsyncMock(return_value=SimpleNamespace(content=json.dumps(response))))
+    source = (SimpleNamespace(role="problem", extraction_hint=""), "Saved question 1\nSaved question 2",
+              {"recognition_options": {"targets": ["1", "3"]}})
+    result = await prepare_saved_question_packages([source], provider=provider, reporter=ProgressReporter("scope"),
+        score_policy=QuestionScorePolicy(), ocr_only=False, recovered=None,
+        on_started=AsyncMock(), on_extracted=AsyncMock(), on_failed=AsyncMock())
+    assert [row["number"] for row in result.values()] == ["1", "3"]
+    assert result["q1"]["criterion"] == result["q1"]["reference_answer"] == ""
+    assert result["q2"]["stem"] == "" and result["q2"]["type"] == "other"
