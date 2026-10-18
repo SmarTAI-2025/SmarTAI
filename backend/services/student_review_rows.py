@@ -7,22 +7,16 @@ from sqlalchemy import select
 from backend.db import assignment_repository, workflow_repository
 from backend.db.models import AssignmentQuestionRecord, SubmissionRecord, SubmissionRevisionRecord, SubmissionAnswerRecord
 from backend.db.session import session_scope
-from backend.domain.errors import InvalidTransition, NotFound, VersionConflict
+from backend.domain.errors import InvalidTransition, NotFound
 from backend.services import task_facade
 
 
 def _review_workflow(session, *, task_id, owner_id, expected_revision):
-    workflow = session.scalar(select(workflow_repository.AssignmentWorkflowRecord).where(
-        workflow_repository.AssignmentWorkflowRecord.assignment_id == task_id,
-        workflow_repository.AssignmentWorkflowRecord.owner_id == owner_id,
-    ).with_for_update())
-    if workflow is None:
-        raise NotFound("workflow")
+    workflow = workflow_repository.lock_workflow_revision(session,
+        assignment_id=task_id, owner_id=owner_id, expected_revision=expected_revision)
     workflow_repository._lock_live_assignment(session, assignment_id=task_id, owner_id=owner_id)
     if workflow.active_job_id or workflow.last_failed_job_id or workflow.presentation_status not in {"submissions_ready", "grading_setup"}:
         raise InvalidTransition("Student rows can only change during submission review.", code="workflow_busy")
-    if workflow.workflow_revision != expected_revision:
-        raise VersionConflict("The task changed before editing student rows.", code="stale_revision")
     return workflow
 
 

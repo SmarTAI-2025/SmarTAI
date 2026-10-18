@@ -78,6 +78,13 @@ def test_postgres_task_metadata_compare_and_update_is_atomic(pg_database):
     test_invalid_tags_roll_back_name_and_semester_and_enforce_owner()
 
 
+@pytest.mark.parametrize("kind", ["question", "student"])
+@pytest.mark.parametrize("actions", [("add", "add"), ("add", "delete"), ("delete", "delete")])
+def test_postgres_review_row_mutations_have_one_winner(pg_database, kind, actions):
+    from backend.tests.test_review_row_concurrency import assert_concurrent_row_mutations
+    assert_concurrent_row_mutations(kind, actions, attempts=3)
+
+
 def test_postgres_task_identity_migration_preserves_existing_results(pg_database, monkeypatch):
     from sqlalchemy import select
     from alembic import command
