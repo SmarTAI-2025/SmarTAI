@@ -1,7 +1,8 @@
 import { test, expect, type Page } from "@playwright/test";
+import type { ProviderFailure } from "../src/types/progress";
 
 // Synthetic API responses only. Never use a user's task, key or paid endpoint.
-async function fixture(page: Page, stage: "problems" | "submissions" | "grading", code = "provider_request_rejected", startSucceeds = false) {
+async function fixture(page: Page, stage: "problems" | "submissions" | "grading", code = "provider_request_rejected", startSucceeds = false, diagnostic?: ProviderFailure, locale = "zh-CN") {
   const calls: Array<{ path: string; body: string }> = [];
   const errors: string[] = [];
   page.on("pageerror", (error) => errors.push(error.message));
@@ -14,7 +15,7 @@ async function fixture(page: Page, stage: "problems" | "submissions" | "grading"
   const setup = { schema_version: 1, selected_provider_ids: ["old"], primary_provider_id: "old", aggregation_method: "single", multi_sample_n: 1, knowledge_scope: "none", strictness: 75, allow_partial_credit: true, feedback_tone: "neutral", feedback_length: "medium", feedback_language: "zh", suggest_corrections: true, low_confidence_threshold: 0.6, teacher_notes: "原批改说明" };
   const setupResponse = { task_id: task.task_id, task_status: task.status, workflow_revision: 7, configured: true, grading_setup: setup, suggested_setup: null, grading_setup_fingerprint: "synthetic", grading_setup_updated_at: 1,
     available_experts: providers, knowledge: { scope_options: ["none", "all_task_docs"], task_doc_count: 0, task_docs: [] }, readiness: { ready: true, blocking_issues: [], warnings: [] } };
-  await page.addInitScript(() => { localStorage.setItem("smartai_token", "synthetic-recovery-token"); localStorage.setItem("smartai_locale", "zh-CN"); });
+  await page.addInitScript((language) => { localStorage.setItem("smartai_token", "synthetic-recovery-token"); localStorage.setItem("smartai_locale", language); }, locale);
   const backend = process.env.SMARTAI_E2E_BACKEND_URL ?? "http://127.0.0.1:8000";
   await page.route(`${backend.replace(/\/$/, "")}/**`, async (route) => {
     const req = route.request(), path = new URL(req.url()).pathname;
@@ -43,13 +44,51 @@ async function fixture(page: Page, stage: "problems" | "submissions" | "grading"
     if (path.endsWith("/draft-reference")) return json({ available: true, prepared: false, filename: "saved.pdf" });
     if (path.endsWith("/question-preparation/capabilities")) return json({ source_roles: Object.fromEntries(["problem", "reference_answer", "rubric", "programming_tests"].map((role) => [role, { accepted_extensions: [".pdf", ".txt", ".png"] }])), reader: { ocr: true }, limits: { max_file_bytes: 5242880 }, score_policy: { maximum_max_score: 10000, per_question_text_max_characters: 12000 } });
     if (path.endsWith("/grading-setup")) return json(setupResponse);
-    if (path === `/tasks/${task.task_id}/state`) return json({ ...task, progress: { phase: task.status === "error" ? "error" : "processing", current_step: stage, error_detail: task.error, messages: [] } });
+    if (path === `/tasks/${task.task_id}/state`) return json({ ...task, progress: { phase: task.status === "error" ? "error" : "processing", current_step: stage, error_detail: task.error, messages: [], provider_failures: diagnostic ? [diagnostic] : [] } });
     if (path === `/tasks/${task.task_id}`) return json(task);
     if (path.endsWith("/kb")) return json({ docs: [] });
     return json({ items: [], total: 0 });
   });
   page.on("dialog", (dialog) => void dialog.accept());
   return { calls, errors };
+}
+
+for (const stage of ["problems", "submissions"] as const) {
+  for (const locale of ["zh-CN", "en-US"]) {
+    for (const width of [390, 1440]) {
+      test(`recognition failure page and reason survive refresh with retry protection: ${stage} ${locale} ${width}`, async ({ page }, testInfo) => {
+        await page.setViewportSize({ width, height: 900 });
+        const { calls, errors } = await fixture(page, stage, "provider_submit_uncertain", true,
+          { code: "provider_recitation_blocked", pages: [8] }, locale);
+        const consoleErrors: string[] = [];
+        page.on("console", (message) => { if (message.type() === "error") consoleErrors.push(message.text()); });
+        await page.goto(`/tasks/recovery-task/${stage}/progress`);
+        const reason = page.getByText(locale === "zh-CN" ? /PDF 第 8 页/ : /Affected PDF pages: 8/);
+        await expect(reason).toBeVisible();
+        await expect(reason).toContainText("RECITATION");
+        const retry = page.getByRole("button", { name: /重试失败项|Retry failed/i });
+        await expect(retry).toBeDisabled();
+        await page.reload();
+        await expect(reason).toBeVisible();
+        await expect(retry).toBeDisabled();
+        expect(calls).toHaveLength(0);
+        for (const content of [reason, retry]) {
+          expect(await content.evaluate((element) => {
+            const bounds = element.getBoundingClientRect();
+            return bounds.left >= 0 && bounds.right <= window.innerWidth && element.scrollWidth <= element.clientWidth;
+          })).toBe(true);
+        }
+        await page.screenshot({ path: testInfo.outputPath("failure.png"), fullPage: true });
+        await page.getByRole("checkbox").check();
+        await expect(retry).toBeEnabled();
+        await retry.click();
+        await expect.poll(() => calls.length).toBe(1);
+        expect(calls[0].body).toContain('"acknowledge_possible_duplicate_call":true');
+        expect(errors).toEqual([]);
+        expect(consoleErrors).toEqual([]);
+      });
+    }
+  }
 }
 
 test("mobile recovery actions stay visible and do not overflow", async ({ page }) => {

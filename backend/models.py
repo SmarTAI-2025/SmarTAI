@@ -7,7 +7,7 @@ from __future__ import annotations
 import time
 import math
 from typing import Annotated, List, Optional, Literal, Dict, Any
-from pydantic import BaseModel, BeforeValidator, ConfigDict, Field, field_validator, model_validator
+from pydantic import BaseModel, BeforeValidator, ConfigDict, Field, field_validator, model_serializer, model_validator
 
 from backend.services.question_structure import (
     MajorQuestionStructureV1,
@@ -376,8 +376,17 @@ class ProviderFailure(BaseModel):
     code: Literal[
         "provider_upstream_unavailable", "provider_timeout", "provider_unreachable",
         "provider_rate_limited", "provider_response_invalid",
+        "recognition_response_invalid", "provider_recitation_blocked", "provider_content_blocked",
     ]
     http_status: int | None = Field(default=None, strict=True, ge=400, le=599)
+    pages: list[Annotated[int, Field(strict=True, ge=1, le=10000)]] = Field(default_factory=list, max_length=24)
+
+    @model_serializer(mode="wrap")
+    def omit_unknown_pages(self, handler):
+        data = handler(self)
+        if not self.pages:
+            data.pop("pages", None)
+        return data
 
 
 class JobProgress(BaseModel):

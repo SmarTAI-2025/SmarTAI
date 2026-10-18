@@ -38,8 +38,9 @@ export interface RecognitionRequestState {
 }
 
 export interface ProviderFailure {
-  code: "provider_upstream_unavailable" | "provider_timeout" | "provider_unreachable" | "provider_rate_limited" | "provider_response_invalid";
+  code: "provider_upstream_unavailable" | "provider_timeout" | "provider_unreachable" | "provider_rate_limited" | "provider_response_invalid" | "recognition_response_invalid" | "provider_recitation_blocked" | "provider_content_blocked";
   http_status?: number | null;
+  pages?: number[];
 }
 
 export interface JobProgress {

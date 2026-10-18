@@ -735,9 +735,9 @@ export function classifyRecoverableError(
   }
 
   if (code === "provider_recitation_blocked" || code === "provider_content_blocked") {
-    const pages = Array.isArray(detail?.failed_pages)
-      ? detail.failed_pages.filter((page): page is number => Number.isInteger(page) && page > 0 && page <= 10000).slice(0, 30)
-      : [];
+    const observed = Array.isArray(context.providerFailures) ? context.providerFailures.at(-1) : undefined;
+    const pages = safeFailurePages(observed?.code === code ? observed.pages : undefined);
+    if (!pages.length) pages.push(...safeFailurePages(detail?.failed_pages));
     const pageHint = pages.length ? tx(locale, `失败位置：PDF 第 ${pages.join("、")} 页。`, `Affected PDF pages: ${pages.join(", ")}. `) : "";
     return {
       title: code === "provider_recitation_blocked"
@@ -749,6 +749,20 @@ export function classifyRecoverableError(
       actionLabel: tx(locale, "更换模型", "Change model"),
       actionHref: `/settings/byok${returnTo ? `?returnTo=${encodeURIComponent(returnTo)}` : ""}`,
       actionKind: "byok", tone: "warning", technicalDetails,
+    };
+  }
+
+  if (code === "recognition_response_invalid") {
+    const observed = Array.isArray(context.providerFailures) ? context.providerFailures.at(-1) : undefined;
+    const pages = safeFailurePages(observed?.code === code ? observed.pages : undefined);
+    if (!pages.length) pages.push(...safeFailurePages(detail?.failed_pages));
+    const cause = uncertainProviderCauseCopy({
+      code, pages,
+    }, locale)!;
+    return {
+      title: cause.title, description: cause.description,
+      actionLabel: tx(locale, "重新尝试", "Try again"), actionKind: "retry",
+      tone: "warning", technicalDetails,
     };
   }
 
@@ -1294,6 +1308,12 @@ function providerConfigurationErrorCopy(
     : null;
 }
 
+function safeFailurePages(value: unknown): number[] {
+  return Array.isArray(value)
+    ? [...new Set(value.filter((page): page is number => Number.isInteger(page) && page > 0 && page <= 10000))].slice(0, 24)
+    : [];
+}
+
 function uncertainProviderCauseCopy(failure: ProviderFailure, locale: Locale) {
   const copies: Record<string, [string, string, string, string]> = {
     provider_upstream_unavailable: ["模型服务暂时不可用", "The model service is temporarily unavailable", "本次运行最近记录到服务商返回临时故障", "The latest recorded model failure in this run was a temporary provider error"],
@@ -1301,6 +1321,9 @@ function uncertainProviderCauseCopy(failure: ProviderFailure, locale: Locale) {
     provider_unreachable: ["模型连接失败或中断", "The model connection failed or was interrupted", "本次运行最近记录到模型连接失败或中断，未能取得完整结果", "The latest recorded model failure in this run was a failed or interrupted connection"],
     provider_rate_limited: ["模型请求受到限流", "The model request was rate limited", "本次运行最近记录到服务商限流", "The latest recorded model failure in this run was provider rate limiting"],
     provider_response_invalid: ["模型返回结果无法使用", "The model response could not be used", "本次运行最近记录到模型返回结果未通过格式校验", "The latest recorded model failure in this run was an invalid response format"],
+    recognition_response_invalid: ["识别结果无法使用", "The recognition response could not be used", "返回的识别结果未通过有效性校验，无法作为已完成结果使用", "The recognition response failed validation and could not be accepted as completed"],
+    provider_recitation_blocked: ["模型停止了原文转写", "The model stopped transcribing this content", "服务商将输出判定为可能复述受版权保护的原文（RECITATION），停止返回识别结果。请调整所需识别范围或更换模型", "The provider flagged possible recitation of copyrighted text (RECITATION) and stopped transcription. Adjust the requested scope or change models"],
+    provider_content_blocked: ["模型限制了这次内容输出", "The model blocked this content output", "服务商因内容策略停止输出识别结果。请调整所需识别范围或更换模型", "The provider stopped transcription under its content policy. Adjust the requested scope or change models"],
   };
   if (typeof failure.code !== "string" || !Object.hasOwn(copies, failure.code)) return null;
   const copy = copies[failure.code];
@@ -1309,9 +1332,11 @@ function uncertainProviderCauseCopy(failure: ProviderFailure, locale: Locale) {
     (failure.code === "provider_upstream_unavailable" && status >= 500 && status <= 599)
     || (failure.code === "provider_rate_limited" && status === 429)
   ) ? status : null;
+  const pages = safeFailurePages(failure.pages);
+  const pageHint = pages.length ? tx(locale, `失败位置：PDF 第 ${pages.join("、")} 页。`, `Affected PDF pages: ${pages.join(", ")}. `) : "";
   return {
     title: tx(locale, copy[0], copy[1]),
-    description: tx(locale, copy[2], copy[3]) + (httpStatus ? ` (HTTP ${httpStatus})` : "") + tx(locale, "。", "."),
+    description: pageHint + tx(locale, copy[2], copy[3]) + (httpStatus ? ` (HTTP ${httpStatus})` : "") + tx(locale, "。", "."),
     httpStatus,
   };
 }

@@ -347,6 +347,42 @@ describe("background task failure guidance", () => {
     expect(info.description).toContain("计费尚无法确认");
   });
 
+  it.each(["zh-CN", "en-US"] as const)("preserves the failed page and refusal alongside retry consent (%s)", (locale) => {
+    const info = classifyRecoverableError("provider_submit_uncertain", {
+      locale, providerFailures: [{ code: "provider_recitation_blocked", pages: [8] }],
+    });
+    expect(info.description).toContain(locale === "zh-CN" ? "PDF 第 8 页" : "PDF pages: 8");
+    expect(info.description).toContain("RECITATION");
+    expect(info.description).toContain(locale === "zh-CN" ? "系统不会自动重试" : "will not retry automatically");
+    expect(info.actionKind).toBe("refresh");
+  });
+
+  it("shows invalid recognition without inventing a refusal or an upstream status", () => {
+    const info = classifyRecoverableError("provider_submit_uncertain", {
+      providerFailures: [{ code: "recognition_response_invalid", http_status: 422, pages: [8] }],
+    });
+    expect(info.description).toContain("PDF 第 8 页");
+    expect(info.description).toContain("未通过有效性校验");
+    expect(info.description).not.toMatch(/RECITATION|HTTP|无法确定具体原因/);
+  });
+
+  it("filters malformed page evidence and never exposes raw values", () => {
+    const info = classifyRecoverableError("provider_submit_uncertain", {
+      providerFailures: [{ code: "provider_content_blocked", pages: [0, 8, 8, 1.5, true, "PRIVATE", 10001] }] as unknown as ProviderFailure[],
+    });
+    expect(info.description).toContain("PDF 第 8 页");
+    expect(info.description).not.toMatch(/PRIVATE|true|10001|1\.5/);
+  });
+
+  it("shows a direct invalid recognition error with its failed page", () => {
+    const info = classifyRecoverableError("recognition_response_invalid", {
+      providerFailures: [{ code: "recognition_response_invalid", pages: [8] }],
+    });
+    expect(info.description).toContain("PDF 第 8 页");
+    expect(info.title).toBe("识别结果无法使用");
+    expect(info.description).not.toContain("RECITATION");
+  });
+
   it.each([{}, [null], [{ code: "__proto__" }], [{ code: "constructor" }], [{ code: "PRIVATE_PROVIDER_BODY" }]].map((providerFailures) => ({ providerFailures })))(
     "ignores malformed or unknown diagnostic fields: $providerFailures", ({ providerFailures }) => {
       const info = classifyRecoverableError("provider_submit_uncertain", {

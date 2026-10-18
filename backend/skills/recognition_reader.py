@@ -225,8 +225,8 @@ class LLMRecognitionEngine:
             warnings.append("provider_refused")
         try:
             return RecognitionCandidateV1(
-                kind="vision", status="ok" if response.content.strip() else "empty",
-                text=response.content if response.content.strip() else "",
+                kind="vision", status="error" if "provider_refused" in warnings else "ok" if response.content.strip() else "empty",
+                text=response.content if response.content.strip() and "provider_refused" not in warnings else "",
                 provider_route_id=self._capabilities.route_id, model=response.model,
                 duration_ms=response.duration_ms, input_tokens=response.input_tokens,
                 output_tokens=response.output_tokens, finish_reason=response.finish_reason,

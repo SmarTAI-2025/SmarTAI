@@ -328,13 +328,15 @@ class ProgressReporter:
             self._progress.error_detail = detail
         await self._emit(ProgressEvent(level="error", message=detail))
 
-    async def record_provider_failure(self, exc: Exception) -> None:
+    async def record_provider_failure(self, exc: Exception, *, pages: list[int] | None = None) -> None:
         """Best-effort evidence must never replace the original recovery guard."""
         try:
             from backend.services.background_errors import provider_failure_diagnostic
             failure = provider_failure_diagnostic(exc)
             if failure is None:
                 return
+            if pages:
+                failure = type(failure).model_validate({**failure.model_dump(), "pages": sorted(set(pages))})
             async with self._lock:
                 previous = [item for item in self._progress.provider_failures if item != failure]
                 self._progress.provider_failures = [*previous, failure][-8:]

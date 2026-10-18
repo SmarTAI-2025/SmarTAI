@@ -55,6 +55,16 @@ vi.mock("@/i18n/I18nProvider", () => ({
 }));
 
 describe("ProblemRecognitionProgressPage generation failure", () => {
+  it("shows the persisted failed page and refusal without enabling an unacknowledged retry", () => {
+    failureCode = "provider_submit_uncertain";
+    generationProgress = { provider_failures: [{ code: "provider_recitation_blocked", pages: [8] }] };
+    render(<MemoryRouter initialEntries={["/tasks/task-1/problems/progress"]}>
+      <Routes><Route path="/tasks/:taskId/problems/progress" element={<ProblemRecognitionProgressPage />} /></Routes>
+    </MemoryRouter>);
+    expect(screen.getByText(/PDF 第 8 页/)).toHaveTextContent("RECITATION");
+    expect(screen.getByRole("button", { name: "重试失败项" })).toBeDisabled();
+    expect(screen.getByRole("checkbox", { name: "我了解可能再次计费，确认重试未完成的题目" })).not.toBeChecked();
+  });
   it("shows an observed 503 without overwriting it with generic billing copy", () => {
     failureCode = "provider_submit_uncertain";
     generationProgress = { provider_failures: [{ code: "provider_upstream_unavailable", http_status: 503 }] };
