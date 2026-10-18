@@ -4,7 +4,7 @@ import { test, expect } from "@playwright/test";
 const manifestPath = process.env.SMARTAI_RETRY_DEMO_MANIFEST;
 test.skip(!manifestPath, "Requires the disposable controlled grading_retry_demo server.");
 
-test("partial failure → explicit same-config retry → live progress → review and publish", async ({ page, request }) => {
+test("partial failure → explicit same-config retry → live progress → review and publish", async ({ page, request }, testInfo) => {
   test.setTimeout(60_000);
   const fixture = JSON.parse(readFileSync(manifestPath!, "utf8"));
   const backend = process.env.SMARTAI_E2E_BACKEND_URL!;
@@ -20,9 +20,15 @@ test("partial failure → explicit same-config retry → live progress → revie
   await page.goto(`/tasks/${fixture.task_id}/review`);
   await expect(page).toHaveURL(/\/grading\/progress$/);
   await expect(page.getByRole("heading", { name: "This grading run did not finish" })).toBeVisible();
-  await page.screenshot({ path: "output/playwright/01-partial-failed.png", fullPage: true });
+  await page.screenshot({ path: testInfo.outputPath("01-partial-failed.png"), fullPage: true });
   await expect(page.getByText(/keep successful results and teacher edits/)).toBeVisible();
-  await page.getByRole("link", { name: "Enter missing scores", exact: true }).click();
+  const manualResponse = page.waitForResponse((r) => r.url().endsWith(`/tasks/${fixture.task_id}/continue`) && r.request().method() === "POST");
+  await page.getByRole("button", { name: "Continue manually", exact: true }).click();
+  const handoff = await manualResponse;
+  expect(handoff.ok()).toBe(true);
+  expect(handoff.request().postDataJSON()).toMatchObject({ job_id: fixture.old_run_id, manual: true });
+  expect((await handoff.json()).status).toBe("manual_review");
+  await expect(page).toHaveURL(/\/review$/);
   await page.getByRole("link", { name: "View Grading Details", exact: true }).click();
   await expect(page.getByRole("textbox", { name: /final score/ }).first()).toBeVisible();
   await expect(page).toHaveURL(/\/review\/[^/]+\/[^/?]+/);
@@ -30,7 +36,8 @@ test("partial failure → explicit same-config retry → live progress → revie
   await page.getByRole("button", { name: "View Results & Analysis", exact: true }).click();
   await expect(page.getByRole("alertdialog")).toBeVisible();
   await page.getByRole("alertdialog").getByRole("button", { name: "Back", exact: true }).click();
-  await page.goto(`/tasks/${fixture.task_id}/grading/progress`);
+  // Manual handoff makes the failed results editable. Retry from that workspace;
+  // the progress URL now redirects here until a new grading run starts.
   const gradingResponse = page.waitForResponse((r) => r.url().endsWith(`/tasks/${fixture.task_id}/grade`) && r.request().method() === "POST");
   await page.getByRole("button", { name: "Retry failed items", exact: true }).click();
   const response = await gradingResponse;
@@ -40,10 +47,10 @@ test("partial failure → explicit same-config retry → live progress → revie
   expect(started.job_id).not.toBe(fixture.old_run_id);
   await expect(page).toHaveURL(/\/grading\/progress$/);
   await expect(page.getByRole("heading", { name: "Grading student submissions" })).toBeVisible();
-  await page.screenshot({ path: "output/playwright/02-new-progress.png", fullPage: true });
+  await page.screenshot({ path: testInfo.outputPath("02-new-progress.png"), fullPage: true });
   await expect(page).toHaveURL(/\/review$/, { timeout: 20_000 });
   await expect(page.getByRole("heading", { name: "This grading run did not finish" })).toHaveCount(0);
-  await page.screenshot({ path: "output/playwright/03-recovered-review.png", fullPage: true });
+  await page.screenshot({ path: testInfo.outputPath("03-recovered-review.png"), fullPage: true });
   const token = await page.evaluate(() => localStorage.getItem("smartai_token"));
   const headers = { Authorization: `Bearer ${token}` };
   const finalState = await (await request.get(`${backend}/tasks/${fixture.task_id}/finalization`, { headers })).json();
