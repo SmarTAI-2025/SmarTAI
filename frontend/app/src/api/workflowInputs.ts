@@ -4,6 +4,7 @@ import { useDraftOwner } from "@/hooks/useDraftProtection";
 import type { PreparationSourceRole, ProblemSourceMode, ProblemStructureMode, QuestionScorePolicyInput, SubmissionIdentityMode } from "@/types";
 
 export interface ProblemInput {
+  generation_language?: "zh" | "en" | null;
   job_id: string; recognition_provider_id: string;
   score_policy: { mode: QuestionScorePolicyInput["mode"]; uniform_max_score?: number | null; per_question_text?: string | null };
   sources: Array<{

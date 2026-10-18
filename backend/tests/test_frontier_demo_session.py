@@ -73,6 +73,20 @@ def task(client, session, key="demo"):
     return response.json()
 
 
+def test_demo_captures_language_once_and_suggests_matching_feedback(enabled):
+    session = issue(enabled)
+    created = task(enabled, session)
+    task_id = created["task_id"]
+    path = f"/tasks/{task_id}/content-language/default"
+    auth = headers(session["token"])
+    assert enabled.put(path, headers=auth, json={"language": "en"}).json() == {"language": "en"}
+    assert enabled.put(path, headers=auth, json={"language": "zh"}).json() == {"language": "en"}
+    setup = enabled.get(f"/tasks/{task_id}/grading-setup", headers=auth).json()
+    assert setup["suggested_setup"]["feedback_language"] == "en"
+    assert setup["grading_setup"] is None
+    assert setup["workflow_revision"] == created["workflow_revision"]
+
+
 def test_disabled_and_incomplete_configuration_fail_closed(enabled, monkeypatch):
     monkeypatch.setattr(settings, "frontier_demo_enabled", False)
     assert enabled.post("/auth/frontier-demo-session").status_code == 503

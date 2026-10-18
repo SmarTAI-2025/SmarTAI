@@ -80,6 +80,7 @@ export async function startQuestionPreparation(
         expected_workflow_revision: input.expectedWorkflowRevision,
         replace_confirmed: input.replaceConfirmed ?? false,
         generation_policy: "complete_required_materials",
+        generation_language: input.generationLanguage,
         score_policy: {
           mode: input.scorePolicy.mode,
           ...(input.scorePolicy.mode === "uniform"

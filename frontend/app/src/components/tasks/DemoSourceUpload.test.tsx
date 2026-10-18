@@ -9,15 +9,18 @@ import { getTask, parseSubmissions } from '@/api/tasks';
 import { getGradingSetup } from '@/api/gradingSetup';
 import { preflightProblemSource, startQuestionPreparation } from '@/api/problemSources';
 import { fixtureFile } from '@/lib/frontierFixtures';
+import { useWorkflowInput } from '@/api/workflowInputs';
 import { beginFrontierSession, setFrontierExitPending } from '@/lib/frontierSession';
 const state = vi.hoisted(() => ({ locale: 'en-US' }));
 vi.mock('@/api/hooks', () => ({ useTask: vi.fn() }));
 vi.mock('@/api/tasks', () => ({ getTask: vi.fn(), parseSubmissions: vi.fn() }));
 vi.mock('@/api/gradingSetup', () => ({ getGradingSetup: vi.fn() }));
 vi.mock('@/api/problemSources', () => ({ preflightProblemSource: vi.fn(), startQuestionPreparation: vi.fn() }));
+vi.mock('@/api/workflowInputs', () => ({ useWorkflowInput: vi.fn() }));
 vi.mock('@/lib/frontierFixtures', async original => ({ ...await original<object>(), fixtureFile: vi.fn() }));
 vi.mock('@/i18n/I18nProvider', () => ({ useI18n: () => ({ locale: state.locale }) }));
 vi.mock('@/components/new-task/NewTaskStepper', () => ({ NewTaskStepper: () => null }));
+vi.mock('@/hooks/useTaskContentLanguage', () => ({ useTaskContentLanguage: () => ({ language: 'en', error: null, retry: vi.fn() }) }));
 function mount(stage: 'questions' | 'submissions') {
   const queries = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   for (const key of [taskKeys.detail('demo'), taskKeys.state('demo')]) {
@@ -40,6 +43,7 @@ describe('fixed Demo uploads', () => {
     vi.mocked(preflightProblemSource).mockResolvedValue({ source_token: 'source', workflow_revision: 8 } as any);
     vi.mocked(parseSubmissions).mockResolvedValue({ status: 'started' } as any);
     vi.mocked(startQuestionPreparation).mockResolvedValue({ status: 'started' } as any);
+    vi.mocked(useWorkflowInput).mockReturnValue({ data: { input: null } } as any);
   });
   it.each(['en-US', 'zh-CN'])('preloads fixed submissions, then uses the normal recognition API (%s)', async locale => {
     state.locale = locale; const { container, queries } = mount('submissions');
@@ -62,6 +66,14 @@ describe('fixed Demo uploads', () => {
     vi.mocked(useTask).mockReturnValue({ data: { status: 'submissions_ready', problem_count: 4, student_count: 4 } } as any);
     mount('submissions'); fireEvent.click(screen.getByRole('button', { name: 'Review Submissions' }));
     await screen.findByText('Submission review'); expect(parseSubmissions).not.toHaveBeenCalled(); expect(fixtureFile).not.toHaveBeenCalled();
+  });
+  it('shows the submitted generation language when returning to prepared questions', () => {
+    vi.mocked(useTask).mockReturnValue({ data: { status: 'problems_ready', problem_count: 4, extract_job_id: 'prepared' } } as any);
+    vi.mocked(useWorkflowInput).mockReturnValue({ data: { input: { generation_language: 'zh' } } } as any);
+    mount('questions');
+    expect(screen.getByRole('combobox', { name: 'Generation language' })).toHaveValue('zh');
+    expect(screen.getByRole('combobox', { name: 'Generation language' })).toBeDisabled();
+    expect(useWorkflowInput).toHaveBeenCalledWith('demo', 'problems', true);
   });
   it('does not launch recognition after the guest exits during setup', async () => {
     let finish!: (value: any) => void;

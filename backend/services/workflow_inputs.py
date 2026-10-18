@@ -63,8 +63,20 @@ def question_inputs(*, task_id: str, owner_id: str) -> dict:
         "job_id": operation.id, "sources": sources,
         "recognition_provider_id": workflow.question_recognition_provider_id or payload.get("recognition_provider_id"),
         "score_policy": payload.get("score_policy") or {"mode": "default_10"},
+        "generation_language": payload.get("generation_language"),
     }
     return result
+
+
+def question_generation_language(*, task_id: str, owner_id: str) -> str | None:
+    try:
+        workflow, operation = latest_input_operation(task_id=task_id, owner_id=owner_id, stage="problems")
+    except NotFound:
+        # Historical tasks can outlive their temporary preparation operation.
+        workflow = workflow_repository.get_live_workflow(task_id, owner_id=owner_id)
+        operation = None
+    language = (operation.payload or {}).get("generation_language") if operation else None
+    return language or workflow.initial_content_language
 
 
 def submission_inputs(*, task_id: str, owner_id: str) -> dict:

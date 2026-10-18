@@ -1,5 +1,8 @@
 import { ManualReviewButton } from "@/components/tasks/ManualReviewButton";
 import { DemoSourceUpload } from "@/components/tasks/DemoSourceUpload";
+import { GenerationLanguageSelect } from "@/components/tasks/GenerationLanguageSelect";
+import { useTaskContentLanguage } from "@/hooks/useTaskContentLanguage";
+import type { ContentLanguage } from "@/api/contentLanguage";
 import { useFrontierWorkspace } from "@/lib/frontierContext";
 import { taskInputVersion } from "@/lib/editorVersions";
 import {
@@ -73,6 +76,7 @@ export function AddProblemsPage() {
 function AddProblemsLoader() {
   const { taskId } = useParams();
   const { locale } = useI18n();
+  const contentLanguage = useTaskContentLanguage(taskId);
   const hydrated = useRef(false);
   const taskQuery = useTask(taskId, { refetchOnMount: "always" });
   const inputQuery = useWorkflowInput(taskId, "problems", Boolean(taskQuery.data?.extract_job_id));
@@ -83,10 +87,12 @@ function AddProblemsLoader() {
     if (inputQuery.isError) return <RecoverableActionState locale={locale} info={classifyRecoverableError(inputQuery.error, { locale })} workflowRecovery={{ retry: { onClick: () => void inputQuery.refetch() }, configurationHref: `/tasks/${taskId}/edit` }} />;
     hydrated.current = true;
   }
-  return <AddProblemsForm key={taskId} taskQuery={taskQuery} submittedInput={inputQuery.data?.input} />;
+  if (contentLanguage.error) return <RecoverableActionState locale={locale} info={classifyRecoverableError(contentLanguage.error, { locale })} primaryAction={{ label: locale === "zh-CN" ? "重试" : "Retry", onClick: contentLanguage.retry }} />;
+  if (!contentLanguage.language) return <div role="status"><LoaderCircle className="animate-spin" /></div>;
+  return <AddProblemsForm key={taskId} taskQuery={taskQuery} submittedInput={inputQuery.data?.input} initialLanguage={contentLanguage.language} />;
 }
 
-function AddProblemsForm({ taskQuery, submittedInput }: { taskQuery: ReturnType<typeof useTask>; submittedInput?: ProblemInput | null }) {
+function AddProblemsForm({ taskQuery, submittedInput, initialLanguage }: { taskQuery: ReturnType<typeof useTask>; submittedInput?: ProblemInput | null; initialLanguage: ContentLanguage }) {
   const { taskId } = useParams();
   const navigate = useNavigate();
   const { locale, t } = useI18n();
@@ -94,7 +100,8 @@ function AddProblemsForm({ taskQuery, submittedInput }: { taskQuery: ReturnType<
   const expertsQuery = useStageProviders();
   const preflight = useProblemSourcePreflight();
   const startPreparation = useStartQuestionPreparation();
-  const draft = usePageDraft(`problems:${taskId}`, () => problemDraftFromInput(submittedInput), problemDraftCodec, taskInputVersion(taskQuery.data, "problems"), undefined, preflight.isPending || startPreparation.isPending);
+  const draft = usePageDraft(`problems:${taskId}`, () => problemDraftFromInput(submittedInput, initialLanguage), problemDraftCodec, taskInputVersion(taskQuery.data, "problems"), undefined, preflight.isPending || startPreparation.isPending);
+  const [generationLanguage, setGenerationLanguage] = draft.field("generationLanguage");
   const submitting = useRef(false);
   const [activeRole, setActiveRole] = draft.field("activeRole");
   const [sources, setSources] = draft.field("sources");
@@ -265,6 +272,7 @@ function AddProblemsForm({ taskQuery, submittedInput }: { taskQuery: ReturnType<
         expectedWorkflowRevision: taskQuery.data.workflow_revision,
         replaceConfirmed,
         scorePolicy: resolvedScorePolicy.value,
+        generationLanguage: generationLanguage || initialLanguage,
         recognitionProviderId,
       });
       toast.success(
@@ -485,6 +493,7 @@ function AddProblemsForm({ taskQuery, submittedInput }: { taskQuery: ReturnType<
                 : tx(locale, "尚未启用模型；点击主按钮可查看原因并前往 BYOK。", "No model is enabled. Use the main button to open BYOK guidance.")}
             </p>
           </div>
+          <GenerationLanguageSelect value={generationLanguage || initialLanguage} onChange={setGenerationLanguage} disabled={isBusy} />
           <button
             type="button"
             onClick={() => void handleStart()}

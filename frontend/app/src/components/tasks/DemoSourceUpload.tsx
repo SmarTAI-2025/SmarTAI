@@ -7,7 +7,11 @@ import { useStartQuestionPreparation } from "@/api/hooks/problemSources";
 import { getGradingSetup } from "@/api/gradingSetup";
 import { preflightProblemSource } from "@/api/problemSources";
 import { getTask } from "@/api/tasks";
+import { useWorkflowInput } from "@/api/workflowInputs";
 import { NewTaskStepper } from "@/components/new-task/NewTaskStepper";
+import { GenerationLanguageSelect } from "./GenerationLanguageSelect";
+import { useTaskContentLanguage } from "@/hooks/useTaskContentLanguage";
+import type { ContentLanguage } from "@/api/contentLanguage";
 import { RecoverableActionState } from "@/components/ui/RecoverableActionState";
 import { useI18n } from "@/i18n/I18nProvider";
 import { classifyRecoverableError } from "@/lib/taskActionGuards";
@@ -18,6 +22,8 @@ import { getFrontierGeneration, isFrontierExitPending } from "@/lib/frontierSess
 export function DemoSourceUpload({ stage }: { stage: "questions" | "submissions" }) {
   const { taskId } = useParams();
   const { locale } = useI18n();
+  const contentLanguage = useTaskContentLanguage(taskId, stage === "questions");
+  const [generationLanguage, setGenerationLanguage] = useState<ContentLanguage | null>(null);
   const navigate = useNavigate();
   const query = useTask(taskId, { refetchOnMount: "always" });
   const prepareQuestions = useStartQuestionPreparation();
@@ -33,6 +39,7 @@ export function DemoSourceUpload({ stage }: { stage: "questions" | "submissions"
   const destination = `/tasks/${taskId}/${questions ? "questions" : "submissions"}`;
   const progress = `/tasks/${taskId}/${questions ? "problems" : "submissions"}/progress`;
   const task = query.data;
+  const submittedInput = useWorkflowInput(taskId, "problems", questions && Boolean(task?.extract_job_id));
   const running = task?.status === (questions ? "extracting_problems" : "parsing_submissions");
   const ready = Boolean(questions ? task?.problem_count : task?.student_count);
   const sourceFailed = task?.status === "error" && Boolean(task.last_failed_job_id)
@@ -43,6 +50,7 @@ export function DemoSourceUpload({ stage }: { stage: "questions" | "submissions"
 
   async function start() {
     if (!taskId || !task || inFlight.current || isFrontierExitPending()) return;
+    if (questions && !contentLanguage.language) return;
     if (running || sourceFailed) { navigate(progress); return; }
     if (ready) { navigate(destination); return; }
     const generation = getFrontierGeneration();
@@ -69,6 +77,7 @@ export function DemoSourceUpload({ stage }: { stage: "questions" | "submissions"
         const revision = preflight.workflow_revision ?? preflight.base_workflow_revision;
         if (revision === undefined) throw new Error("task_workflow_changed");
         await step(() => prepareQuestions.mutateAsync({ taskId, sourceTokens: [preflight.source_token], expectedWorkflowRevision: revision,
+          generationLanguage: generationLanguage ?? contentLanguage.language!,
           scorePolicy: { mode: "per_question", perQuestionText: DEMO_SCORE_POLICY }, recognitionProviderId: provider.provider_id }));
       } else {
         await step(() => recognizeSubmissions.mutateAsync({ taskId, file, identityMode: "filename", recognitionProviderId: provider.provider_id, expectedWorkflowRevision: latest.workflow_revision }));
@@ -91,8 +100,10 @@ export function DemoSourceUpload({ stage }: { stage: "questions" | "submissions"
     </section>
     {error || query.error ? <RecoverableActionState locale={locale} className="mx-auto mt-4 max-w-[900px]" info={classifyRecoverableError(error ?? query.error, { locale, taskId })} primaryAction={{ label: tx("重试", "Retry"), onClick: () => error ? void start() : void query.refetch(), busy }} /> : null}
     <div className="mx-auto mt-6 flex max-w-[900px] flex-wrap justify-end gap-3">
+      {questions && contentLanguage.language ? <GenerationLanguageSelect value={submittedInput.data?.input?.generation_language ?? generationLanguage ?? contentLanguage.language} onChange={setGenerationLanguage} disabled={busy || running || ready || sourceFailed} /> : null}
+      {contentLanguage.error ? <button type="button" onClick={contentLanguage.retry}>{tx("重试语言设置", "Retry language settings")}</button> : null}
       <Link className="rounded-lg border px-4 py-2" to={`/tasks/${taskId}/${questions ? "edit" : "questions"}`}>{tx(questions ? "查看任务信息" : "查看题目资料", questions ? "View Task Details" : "View Questions")}</Link>
-      <button type="button" onClick={() => void start()} disabled={busy || !task || (!questions && !task.problem_count)} className="flex items-center gap-2 rounded-lg bg-primary px-5 py-2 text-primary-foreground disabled:opacity-50">{busy ? <LoaderCircle className="h-4 w-4 animate-spin" /> : null}{label}</button>
+      <button type="button" onClick={() => void start()} disabled={busy || !task || (questions && !contentLanguage.language) || (!questions && !task.problem_count)} className="flex items-center gap-2 rounded-lg bg-primary px-5 py-2 text-primary-foreground disabled:opacity-50">{busy ? <LoaderCircle className="h-4 w-4 animate-spin" /> : null}{label}</button>
     </div>
   </div>;
 }
