@@ -267,7 +267,7 @@ function questionStateForStudent(student: StudentSummary, questionId: string): R
 }
 
 function formatSynthesis(value: string | null | undefined, locale: Locale): string {
-  const labels: Record<string, [string, string]> = { single: ["单专家", "Single"], median: ["中位数", "Median"], multi_sample: ["多次采样", "Multi-sample"], weighted_average: ["加权平均", "Weighted"], judge_agent: ["裁判模型", "Judge"], degraded_to_single: ["降级单专家", "Fallback"], all_failed: ["全部失败", "Failed"], quota_exhausted: ["额度耗尽", "Quota"] };
+  const labels: Record<string, [string, string]> = { single: ["单专家", "Single"], median: ["中位数", "Median"], multi_sample: ["多次采样", "Multi-sample"], weighted_average: ["加权平均", "Weighted"], judge_agent: ["裁判模型", "Judge"], degraded_to_single: ["部分专家完成", "Some experts completed"], all_failed: ["全部失败", "Failed"], quota_exhausted: ["额度耗尽", "Quota"] };
   const pair = value ? labels[value] : null;
   return pair ? pair[locale === "en-US" ? 1 : 0] : value || "—";
 }

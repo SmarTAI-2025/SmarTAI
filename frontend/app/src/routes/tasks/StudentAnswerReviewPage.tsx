@@ -1,6 +1,8 @@
+import { ReviewIssueNotes } from "@/components/tasks/ReviewQueue";
+import { answerReviewNotes } from "@/lib/submissionReview";
 import { questionTypeLabel } from "@/lib/reviewLabels";
 import { ReviewConfirmButton, ReviewBlockDialog, ReviewStageActions } from "@/components/tasks/ReviewConfirmation";
-import { answerHasOptionalAdvice, answerNeedsConfirmation, answerReviewAttention } from "@/lib/submissionReview";
+import { answerNeedsConfirmation, answerReviewAttention } from "@/lib/submissionReview";
 import { submissionReviewBlockers, submissionConfirmationBlockers, answerReviewBlocked, studentIdentityIssue, studentIdentityReviewBlocked, type ReviewBlocker } from "@/lib/reviewConfirmation";
 import { DraftField, type DraftFieldHandle } from "@/components/ui/DraftField";
 import { useDraftProtection } from "@/hooks/useDraftProtection";
@@ -996,7 +998,7 @@ function AnswerReviewCard({ question, answer, draft, sourceFilename, previous, n
         </div>
         <div className="flex flex-wrap items-center gap-2">
           {answer ? <ReviewConfirmButton title={tx(locale, `第 ${question.label} 题`, `Question ${question.label}`)} locale={locale} confirmed={state === "reviewed" && !editing} blocked={answerReviewAttention(answer) === "blocking"} busy={saving} save={editing} onClick={editing ? () => onSave(false) : onConfirm} /> : null}
-          {answerHasOptionalAdvice(answer) ? <span className="text-[11px] text-muted-foreground">{tx(locale, "识别结果可选核对，可继续", "Optional transcription check; you can continue")}</span> : null}
+          <ReviewIssueNotes issues={answerReviewNotes(answer, locale)} />
           <Button type="button" variant="secondary" className="h-9 px-3" disabled={!previous} onClick={() => previous && onNavigate(previous.id)}>
             <ArrowUp aria-hidden="true" className="h-4 w-4" />{t("answerReviewPreviousQuestion")}
           </Button>

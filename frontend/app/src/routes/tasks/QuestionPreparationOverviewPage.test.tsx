@@ -111,10 +111,10 @@ describe("QuestionPreparationOverviewPage smart search", () => {
     expect(mutateAsync).not.toHaveBeenCalled();
   });
 
-  it("confirms every question, including those hidden by the current filter", async () => {
+  it("confirms only suggested questions visible in the current queue", async () => {
     renderPage("/tasks/task-1/questions?q=Q2");
     await userEvent.click(await screen.findByRole("button", { name: "全部确认" }));
-    expect(mutateAsync.mock.calls.map(([input]) => input.qId)).toEqual(["Q1", "Q2"]);
+    expect(mutateAsync.mock.calls.map(([input]) => input.qId)).toEqual(["Q2"]);
   });
 
   it("chains returned revisions across all visible questions", async () => {
@@ -130,14 +130,15 @@ describe("QuestionPreparationOverviewPage smart search", () => {
   ])("renders the review matrix for %s without crashing", (code, label) => {
     extraIssues.push({ issue_id: "ocr-risk", field: "stem", code, severity: "warning", status: "open" });
     renderPage("/tasks/task-1/questions");
-    expect(within(screen.getByRole("region", { name: "待复核队列" })).queryByRole("link")).not.toBeInTheDocument();
+    expect(within(screen.getByRole("region", { name: "待复核队列" })).getAllByRole("link")).toHaveLength(2);
     expect(screen.getByRole("row", { name: /Q1/ })).toBeInTheDocument();
   });
 
-  it("blocks the entire batch and links the failed question before writing", async () => {
+  it("offers no bulk confirmation for required items and still blocks progression", async () => {
     extraIssues.push({ issue_id: "failed", field: "stem", code: "parse_anomaly", severity: "blocking", status: "open" });
     renderPage("/tasks/task-1/questions");
-    await userEvent.click(screen.getByRole("button", { name: "全部确认" }));
+    expect(screen.queryByRole("button", { name: "全部确认" })).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "进入上传作答" }));
     expect(screen.getByRole("alertdialog")).toBeInTheDocument();
     expect(mutateAsync).not.toHaveBeenCalled();
     expect(screen.getByRole("button", {name: "前往问题位置"})).toBeEnabled();
@@ -158,8 +159,8 @@ describe("QuestionPreparationOverviewPage smart search", () => {
     expect(screen.getByRole("columnheader", { name: "满分" })).toBeInTheDocument();
     expect(screen.getByTitle("系统默认，需确认")).toHaveTextContent("10 分");
     expect(screen.getByText(/作业总分 16/)).toBeInTheDocument();
-    expect(screen.getByTitle("系统默认，需确认")).toHaveClass("bg-emerald-100");
-    expect(screen.getByRole("region", { name: "待复核队列" })).toHaveTextContent("当前没有需要复核的题目");
+    expect(screen.getByTitle("系统默认，需确认")).toHaveClass("bg-amber-100");
+    expect(screen.getByRole("region", { name: "待复核队列" })).toHaveTextContent("建议处理 (2)");
     expect(screen.getAllByRole("row")).toHaveLength(3);
     expect(screen.queryByRole("row", { name: /\(a\)/ })).not.toBeInTheDocument();
     expect(screen.queryByRole("row", { name: /\(b\)/ })).not.toBeInTheDocument();

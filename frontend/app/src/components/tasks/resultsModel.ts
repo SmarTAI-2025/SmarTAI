@@ -1,7 +1,7 @@
 import type { Correction, ProblemInfo, StudentAnswerInfo, StudentResult, StudentSubmission, Task, TaskResultResponse } from "@/types";
 import type { Locale } from "@/i18n/messages";
 import type { ReviewAttention } from "@/lib/reviewConfirmation";
-import { confidenceNeedsAttention, confidenceRequiresReview, confidenceValue } from "@/lib/confidencePolicy";
+import { confidenceNeedsAttention, confidenceValue } from "@/lib/confidencePolicy";
 export { LOW_CONFIDENCE_THRESHOLD } from "@/lib/confidencePolicy";
 
 export type CorrectionScoreSource =
@@ -10,7 +10,7 @@ export type CorrectionScoreSource =
   | "teacher_changed"
   | "hard_failure";
 
-const HARD_FAILURE_METHODS = new Set(["all_failed", "quota_exhausted"]);
+const HARD_FAILURE_METHODS = new Set(["all_failed", "quota_exhausted", "paused"]);
 const HARD_FAILURE_REASONS = new Set([
   "llm_failed",
   "quota_exhausted",
@@ -261,7 +261,9 @@ export function formatConfidence(value: number | null | undefined) {
 }
 
 export function isLowConfidence(correction: Correction) {
-  return !isCorrectionReviewConfirmed(correction) && confidenceNeedsAttention(correction.confidence);
+  return !isCorrectionReviewConfirmed(correction) && (validExpertResults(correction).length
+    ? validExpertResults(correction).some(expert => confidenceNeedsAttention(expert.confidence))
+    : confidenceNeedsAttention(correction.confidence));
 }
 
 export function hasReviewSignal(correction: Correction) {
@@ -285,20 +287,27 @@ export function correctionReviewBlocked(correction: Correction): boolean {
 /** One pending-review rule for the review queue, analysis, filters and charts. */
 export function correctionReviewAttention(correction: Correction): ReviewAttention {
   if (correctionReviewNextBlocked(correction)) return "blocking";
-  return !isCorrectionReviewConfirmed(correction) && hasExpertDisagreement(correction) ? "advisory" : "none";
+  return !isCorrectionReviewConfirmed(correction) && (isLowConfidence(correction) || hasPartialExperts(correction) || hasExpertDisagreement(correction)) ? "advisory" : "none";
 }
 
 /** A valid score can be confirmed even when continuing requires that confirmation. */
 export function correctionReviewNextBlocked(correction: Correction): boolean {
-  return correctionReviewBlocked(correction) || (!isCorrectionReviewConfirmed(correction)
-    && (confidenceRequiresReview(correction.confidence)
-      || correctionReviewReasonIds(correction).includes("grading_paused")));
+  return correctionReviewBlocked(correction);
+}
+
+export function validExpertResults(correction: Correction) {
+  return correction.expert_results?.filter(expert => !expert.error_kind && validReviewScore(expert.score, correction.max_score)) ?? [];
+}
+
+export function hasPartialExperts(correction: Correction): boolean {
+  const valid = validExpertResults(correction);
+  return (valid.length > 0 && valid.length < (correction.expert_results?.length ?? 0))
+    || (validReviewScore(effectiveCorrectionScore(correction), correction.max_score)
+      && correctionReviewReasonIds(correction).some(reason => ["partial_experts", "degraded_to_single"].includes(reason)));
 }
 
 function validExpertScores(correction: Correction): number[] {
-  return correction.expert_results?.filter(expert => !expert.error_kind)
-    .map(expert => expert.score)
-    .filter((score): score is number => validReviewScore(score, correction.max_score)) ?? [];
+  return validExpertResults(correction).map(expert => expert.score);
 }
 
 export function getExpertScoreSpread(correction: Correction): number {
@@ -317,19 +326,20 @@ export function hasExpertDisagreement(correction: Correction): boolean {
 
 export function reviewReasonLabel(reason: string, locale: Locale = "zh-CN") {
   const english: Record<string, string> = {
-    grading_paused: "Paused before grading finished; check and confirm",
+    grading_paused: "Paused before grading finished", partial_experts: "Some experts completed",
     high_indecisiveness: "Experts disagree", low_confidence: "Low confidence", score_spread_high: "Large score difference",
-    minority_veto: "Outlying expert score", parse_failed: "Could not parse result", degraded_to_single: "Only one expert succeeded (low confidence)",
+    minority_veto: "Outlying expert score", parse_failed: "Could not parse result", degraded_to_single: "Some experts completed",
     transient_llm: "Model network error or timeout", llm_failed: "Model could not grade", quota_exhausted: "Quota exhausted", general: "Teacher review required",
   };
   if (locale === "en-US") return english[reason] ?? reason.replaceAll("_", " ");
   const labels: Record<string, string> = {
-    grading_paused: "已暂停，批改未完成，请核对并确认",
+    grading_paused: "已暂停，批改未完成",
+    partial_experts: "部分专家完成",
     high_indecisiveness: "专家分歧较大",
     low_confidence: "置信度偏低",
     score_spread_high: "评分差异较大",
     parse_failed: "解析失败",
-    degraded_to_single: "仅单专家成功（低置信度）",
+    degraded_to_single: "部分专家完成",
     transient_llm: "模型网络或超时错误",
     llm_failed: "模型未完成批改",
     quota_exhausted: "额度不足",
@@ -456,6 +466,8 @@ function isFiniteScore(value: number | null | undefined): value is number {
 }
 
 function hasHardFailureSignal(correction: Correction): boolean {
-  if (HARD_FAILURE_METHODS.has(correction.synthesis_method ?? "")) return true;
-  return correctionReviewReasonIds(correction).some((reason) => HARD_FAILURE_REASONS.has(reason));
+  const reasons = correctionReviewReasonIds(correction);
+  if (reasons.some(reason => ["invalid_score_scale", "missing_correction", "missing_student_result"].includes(reason))) return true;
+  return validExpertResults(correction).length === 0 && (HARD_FAILURE_METHODS.has(correction.synthesis_method ?? "")
+    || reasons.some(reason => HARD_FAILURE_REASONS.has(reason)));
 }

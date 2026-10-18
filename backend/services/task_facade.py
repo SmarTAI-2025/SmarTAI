@@ -4668,7 +4668,7 @@ def task_results(*, task_id: str, owner_id: str) -> dict:
             "task_id": task_id,
             "error": _grading_failure_code(run),
         }
-    results = grading_repository.list_results_for_run(run.id)
+    results = grading_repository.list_results_for_run(run.id, include_missing=True)
     presentations = workflow_repository.list_student_presentations(task_id)
     grouped: dict[str, list] = defaultdict(list)
     for result in results:
@@ -5278,7 +5278,8 @@ def update_correction_review(
     rows = grading_repository.list_results_for_run(target_run.id)
     row = next((item for item in rows if item.student_id == internal_id and item.q_id == q_id), None)
     if row is None:
-        raise NotFound("grade_result")
+        row = grading_repository.ensure_missing_result_for_review(
+            target_run.id, teacher_id=owner_id, student_id=internal_id, q_id=q_id)
     previous_score = row.effective_score
     previous_comment = row.effective_comment
     unchanged = previous_score == teacher_score and previous_comment == teacher_comment
@@ -5332,7 +5333,7 @@ def finalization(*, task_id: str, owner_id: str) -> dict:
     required_review_count = 0
     confirmed_required_count = 0
     if run is not None:
-        for result in grading_repository.list_results_for_run(run.id):
+        for result in grading_repository.list_results_for_run(run.id, include_missing=True):
             if (_correction_review_blocks_finalization(result)
                     or result.ai_score is None):
                 required_review_count += 1

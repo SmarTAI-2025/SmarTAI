@@ -106,6 +106,9 @@ export function FinalResultsWorkspacePage() {
   const root = `/tasks/${encodeURIComponent(taskId)}/results`;
   const finalization = finalizationQuery.data;
   const result = resultQuery.data;
+  if (section !== "reports" && finalization.remaining_review_count > 0) {
+    return <Navigate replace to={`/tasks/${encodeURIComponent(taskId)}/review`} />;
+  }
   const disagreementCount = result?.results?.reduce((count, student) => count + student.corrections.filter(
     (correction) => !isCorrectionReviewConfirmed(correction) && hasExpertDisagreement(correction),
   ).length, 0) ?? 0;

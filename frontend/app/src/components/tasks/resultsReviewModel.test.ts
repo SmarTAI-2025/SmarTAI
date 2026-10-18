@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { Correction } from "@/types";
 import { buildResultsModel, hasReviewSignal, summarizeReviewScoreSources } from "./resultsModel";
-import { collectResultReviewItems, correctionReviewAttention, correctionReviewBlocked, correctionReviewNextBlocked, isCorrectionReviewConfirmed } from "./resultsReviewModel";
+import { collectResultReviewItems, correctionReviewNotes, correctionReviewAttention, correctionReviewBlocked, correctionReviewNextBlocked, isCorrectionReviewConfirmed } from "./resultsReviewModel";
 
 const correction = (overrides: Partial<Correction> = {}): Correction => ({
   q_id: "q1", type: "short", score: 8, max_score: 10, confidence: 0.9,
@@ -9,9 +9,9 @@ const correction = (overrides: Partial<Correction> = {}): Correction => ({
 });
 
 describe("grading review attention", () => {
-  it("requires confirmation for saved partial grades even at high confidence", () => {
+  it("does not block a valid grade merely because the task paused", () => {
     const paused = correction({ review_reasons: ["grading_paused"], requires_human_review: true });
-    expect(correctionReviewAttention(paused)).toBe("blocking");
+    expect(correctionReviewAttention(paused)).toBe("none");
     expect(correctionReviewBlocked(paused)).toBe(false);
     expect(correctionReviewAttention({ ...paused, teacher_score: 8, review_status: "confirmed" })).toBe("none");
   });
@@ -34,11 +34,11 @@ describe("grading review attention", () => {
     expect(correctionReviewAttention(correction({ score: Number.NaN }))).toBe("blocking");
   });
 
-  it("requires very low confidence confirmation without treating legacy flags alone as disagreement", () => {
-    expect(correctionReviewAttention(correction({ confidence: 0.2 }))).toBe("blocking");
+  it("treats every low confidence as advisory without treating legacy flags alone as disagreement", () => {
+    expect(correctionReviewAttention(correction({ confidence: 0.2 }))).toBe("advisory");
     expect(correctionReviewBlocked(correction({ confidence: 0.2 }))).toBe(false);
-    expect(correctionReviewNextBlocked(correction({ confidence: 0.2 }))).toBe(true);
-    expect(correctionReviewAttention(correction({ confidence: 0.25 }))).toBe("none");
+    expect(correctionReviewNextBlocked(correction({ confidence: 0.2 }))).toBe(false);
+    expect(correctionReviewAttention(correction({ confidence: 0.25 }))).toBe("advisory");
     expect(correctionReviewNextBlocked(correction({ confidence: 0.25 }))).toBe(false);
     expect(correctionReviewAttention(correction({ review_reasons: ["score_spread_high"] }))).toBe("none");
     expect(correctionReviewAttention(correction({ confidence: 0.2, teacher_score: 8, review_status: "confirmed" }))).toBe("none");
@@ -47,7 +47,7 @@ describe("grading review attention", () => {
   it("does not mistake a failed expert placeholder for disagreement, but retains real zero scores", () => {
     const successful = { provider: "a", score: 9, max_score: 10, confidence: .9, comment: "", steps: [] };
     const zero = { ...successful, provider: "b", score: 0, confidence: 0 };
-    expect(correctionReviewAttention(correction({ expert_results: [successful, { ...zero, error_kind: "parse_failed" }] }))).toBe("none");
+    expect(correctionReviewAttention(correction({ expert_results: [successful, { ...zero, error_kind: "parse_failed" }] }))).toBe("advisory");
     expect(correctionReviewAttention(correction({ expert_results: [successful, zero] }))).toBe("advisory");
   });
 
@@ -58,14 +58,34 @@ describe("grading review attention", () => {
     expect(correctionReviewAttention({ ...value, teacher_score: 8, review_status: "confirmed" })).toBe("none");
   });
 
+  it("uses each valid expert's confidence and lists only low experts", () => {
+    const expert = { provider: "high", score: 8, max_score: 10, confidence: .9, comment: "", steps: [] };
+    const value = correction({ confidence: .95, expert_results: [expert, { ...expert, provider: "low", confidence: .45 }] });
+    expect(correctionReviewAttention(value)).toBe("advisory");
+    expect(correctionReviewNotes(value, "en-US")).toEqual([{ severity: "advisory", label: "low: low confidence (0.45); review suggested." }]);
+    expect(correctionReviewNotes({ ...value, expert_results: [{ ...expert, confidence: .45 }] }, "en-US")[0].label).toBe("Low confidence (0.45); review suggested.");
+  });
+
+  it.each([0, 8])("retains valid partial scores (%s), excluding failed confidence placeholders", score => {
+    const expert = { provider: "valid", score, max_score: 10, confidence: .9, comment: "Saved feedback", steps: [] };
+    const value = correction({ score, provisional_score: score, confidence: 0, review_reasons: ["quota_exhausted", "partial_experts"],
+      expert_results: [expert, { ...expert, provider: "stopped", score: 0, confidence: 0, error_kind: "operation_cancelled" }] });
+    expect(correctionReviewAttention(value)).toBe("advisory");
+    expect(correctionReviewNextBlocked(value)).toBe(false);
+    const notes = correctionReviewNotes(value, "en-US");
+    expect(notes).toHaveLength(1);
+    expect(notes[0]).toMatchObject({ severity: "advisory", label: expect.stringContaining("Some experts completed") });
+    expect(correctionReviewAttention({ ...value, teacher_score: score, review_status: "confirmed" })).toBe("none");
+  });
+
   it("excludes optional confidence checks from required counts while retaining explicit confidence-query data", () => {
     const corrections = [correction({ q_id: "normal", confidence: 0.6 }), correction({ q_id: "optional", confidence: 0.4 }), correction({ q_id: "missing", score: null, provisional_score: null })];
     const model = buildResultsModel(undefined, { task_id: "T1", status: "graded", timestamp: 0, results: [{ student_id: "s1", student_name: "Sample", corrections }] } as Parameters<typeof buildResultsModel>[1]);
     const before = JSON.stringify(corrections);
     const items = collectResultReviewItems(model, model.students);
-    expect(items.map(item => [item.correction.q_id, item.severity])).toEqual([["missing", "blocking"]]);
+    expect(items.map(item => [item.correction.q_id, item.severity])).toEqual([["missing", "blocking"], ["optional", "advisory"]]);
     expect(model.lowConfidenceCount).toBe(1);
-    expect(model.reviewCount).toBe(1);
+    expect(model.reviewCount).toBe(2);
     expect(model.students[0].totalScore).toBe(16);
     expect(model.students[0].totalMax).toBe(20);
     expect(JSON.stringify(corrections)).toBe(before);

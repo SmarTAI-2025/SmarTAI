@@ -40,7 +40,7 @@ vi.mock("@/components/tasks/ResultQuestionQuery", () => ({
 vi.mock("@/components/knowledge-base/KnowledgeCitationPreview", () => ({ KnowledgeCitationPreview: () => null }));
 vi.mock("@/i18n/I18nProvider", () => ({ useI18n: () => ({ locale: state.locale, t: (key: string) => key }) }));
 function correction(qId: string, patch = {}) {
-  return { q_id: qId, type: "calculation", score: 7, provisional_score: 7, max_score: 10, confidence: 0.8,
+  return { q_id: qId, type: "calculation", score: 7, provisional_score: 7, max_score: 10, confidence: 0.4,
     comment: "AI note", steps: [], expert_results: [], requires_human_review: false, review_status: "confirmed", ...patch };
 }
 function show(detail = false, suffix = "") {
@@ -82,29 +82,19 @@ describe("one-click grading review", () => {
     expect(state.bulk).not.toHaveBeenCalled();
   });
 
-  it.each([false, true])("requires very low confidence confirmation while leaving its valid score confirmable (detail=%s)", async detail => {
+  it.each([false, true])("allows results without confirming extremely low confidence (detail=%s)", async detail => {
     state.result.results = [{ student_id: "S1", corrections: [correction("Q1", { confidence: 0.2499, review_status: "pending" })] }];
     show(detail);
     await userEvent.click(screen.getByRole("button", { name: "View Results & Analysis" }));
-    expect(screen.getByRole("alertdialog")).toBeInTheDocument();
-    expect(screen.queryByText("Current results page")).not.toBeInTheDocument();
-    await userEvent.click(screen.getByRole("button", { name: detail ? "Back" : "Stay here" }));
-    if (detail) {
-      const confirm = screen.getByRole("button", { name: /Q1.*Confirm review/ });
-      expect(confirm).toBeEnabled();
-      await userEvent.click(confirm);
-      expect(state.update).toHaveBeenCalledWith(expect.objectContaining({ teacher_score: 7, confirm: true }));
-    } else {
-      await userEvent.click(screen.getByRole("button", { name: "Confirm all" }));
-      expect(state.bulk).toHaveBeenCalledWith(expect.objectContaining({ entries: [{ studentId: "S1", qId: "Q1", score: 7, comment: "" }] }));
-    }
+    expect(screen.getByText("Current results page")).toBeInTheDocument();
+    expect(state.update).not.toHaveBeenCalled(); expect(state.bulk).not.toHaveBeenCalled();
   });
 
   it.each([0.25, 0.5999, 0.60])("allows results navigation at confidence %s without forced confirmation", async confidence => {
     state.result.results = [{ student_id: "S1", corrections: [correction("Q1", { confidence, review_status: "pending" })] }];
     show();
-    expect(screen.getByText("Low-confidence responses").closest("section")).toHaveTextContent("0");
-    expect(within(screen.getByRole("region", { name: "Review queue" })).queryByRole("link")).not.toBeInTheDocument();
+    expect(screen.getByText("Low-confidence responses").closest("section")).toHaveTextContent(confidence < 0.6 ? "1" : "0");
+    expect(within(screen.getByRole("region", { name: "Review queue" })).queryAllByRole("link")).toHaveLength(confidence < 0.6 ? 1 : 0);
     await userEvent.click(screen.getByRole("button", { name: "View Results & Analysis" }));
     expect(await screen.findByText("Current results page")).toBeVisible();
     expect(state.bulk).not.toHaveBeenCalled();
@@ -114,10 +104,10 @@ describe("one-click grading review", () => {
   it.each([0.25, 0.5999, 0.60])("shows optional confidence text only beside detail confirmation at %s", confidence => {
     state.result.results = [{ student_id: "S1", corrections: [correction("Q1", { confidence, review_status: "pending" })] }];
     show(true);
-    const hint = screen.queryByText("Low confidence; optional check");
+    const hint = screen.queryByText(`Low confidence (${confidence}); review suggested.`);
     if (confidence < 0.60) {
-      expect(hint).toHaveClass("text-[11px]");
-      expect(hint?.parentElement).toContainElement(screen.getByRole("button", { name: /Q1.*Confirm review/ }));
+      expect(hint?.closest("ul")).toHaveClass("text-[11px]");
+      expect(hint?.closest("header")).toContainElement(screen.getByRole("button", { name: /Q1.*Confirm review/ }));
     } else expect(hint).not.toBeInTheDocument();
   });
 
@@ -155,7 +145,7 @@ describe("one-click grading review", () => {
     show(true);
     expect(screen.getByRole("region", { name: "SmarTAI Grading Result" })).toHaveTextContent("8.5 / 10");
     expect(screen.getByRole("textbox", { name: "Q1 final score" })).toHaveValue("9");
-    expect(screen.getByText(/failed-model/)).toHaveTextContent("No valid score · excluded from synthesis");
+    expect(screen.getByText(/failed-model/)).toHaveTextContent("No valid score; excluded from synthesis");
   });
 
   it("preserves a precise maximum in the default, fallback hint, and validation", () => {
@@ -173,19 +163,11 @@ describe("one-click grading review", () => {
     expect(state.update).not.toHaveBeenCalled();
   });
 
-  it("opens failed-result details from recovery and keeps missing scores blocked", async () => {
+  it.each([false, true])("retires direct failed-result access until manual handoff (detail=%s)", detail => {
     Object.assign(state.task, { status: "error", grading_job_id: "failed-run", last_failed_job_id: "failed-run" });
-    state.result.grading_run_status = "partial_failed";
-    state.result.results = [{ student_id: "S1", corrections: [correction("Q1"), correction("Q2", {
-      score: null, provisional_score: null, result_status: "failed", review_status: "pending",
-    })] }];
-    show(false, "?resolveFailures=1");
-    await userEvent.click(screen.getByRole("link", { name: "View Grading Details" }));
-    expect(screen.getByRole("textbox", { name: "Q2 final score" })).toBeInTheDocument();
-    expect(screen.queryByText("Grading recovery progress")).not.toBeInTheDocument();
-    await userEvent.click(screen.getByRole("button", { name: "View Results & Analysis" }));
-    expect(state.generate).not.toHaveBeenCalled();
-    expect(screen.getByRole("alertdialog")).toBeInTheDocument();
+    show(detail, "?resolveFailures=1");
+    expect(screen.getByText("Grading recovery progress")).toBeInTheDocument();
+    expect(screen.queryByRole("textbox", { name: "Q1 final score" })).not.toBeInTheDocument();
   });
   it("provides a reachable partial failure retry while keeping the existing results visible", async () => {
     state.result.grading_run_status = "partial_failed";
@@ -196,19 +178,20 @@ describe("one-click grading review", () => {
     expect(screen.getByText(/Successful results and teacher scores/)).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "Some answers could not be graded" })).toBeInTheDocument();
   });
-  it("does not confirm a valid subset while another result is missing its score", async () => {
+  it("bulk-confirms suggested results while a required item stays blocked", async () => {
     state.result.results = [{student_id:"S1", corrections:[correction("Q1"), correction("Q2", {score:null, provisional_score:null, result_status:"failed"})]}];
     show();
+    expect(screen.queryByRole("button", {name:"Confirm all"})).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole("tab", {name:/Suggested review/}));
     await userEvent.click(screen.getByRole("button", {name:"Confirm all"}));
-    expect(screen.getByRole("alertdialog")).toBeInTheDocument();
-    expect(state.bulk).not.toHaveBeenCalled();
-    expect(screen.getByRole("button", {name:"Retry failed items"})).toBeEnabled();
+    expect(state.bulk).toHaveBeenCalledWith(expect.objectContaining({ entries: [{ studentId: "S1", qId: "Q1", score: 7, comment: "" }] }));
+    expect(state.generate).not.toHaveBeenCalled();
   });
   it("shows the total confirmed count even when no AI result required review", () => {
     state.result.results = [{ student_id: "S1", corrections: [correction("Q1", { teacher_score: 7 }), correction("Q2", { teacher_score: 0 })] }];
     show();
     expect(screen.getByText("2/2")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Confirmed" })).toBeDisabled();
+    expect(screen.queryByRole("button", { name: "Confirm all" })).not.toBeInTheDocument();
   });
   it("requires confirmation of a repaired missing score without suggesting another model retry", async () => {
     state.result.results = [{ student_id: "S1", corrections: [correction("Q1", { score: 6, provisional_score: null, teacher_score: 6, review_status: "edited", confidence: 0.6 })] }];
@@ -281,8 +264,10 @@ describe("one-click grading review", () => {
     expect(state.generate).not.toHaveBeenCalled();
     expect(screen.getByRole("alertdialog")).toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: "Stay here" }));
-    await userEvent.click(screen.getByRole("button", { name: "Confirm all" }));
-    expect(state.bulk).toHaveBeenCalledWith(expect.objectContaining({ entries: [{ studentId: "S1", qId: "Q1", score: 7, comment: "" }] }));
+    expect(screen.queryByRole("button", { name: "Confirm all" })).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole("link", { name: "View Grading Details" }));
+    await userEvent.click(screen.getByRole("button", { name: /Q1.*Confirm review/ }));
+    expect(state.update).toHaveBeenCalledWith(expect.objectContaining({ teacher_score: 7, confirm: true }));
   });
 
   it("confirms every student result in one action while chaining workflow revisions", async () => {
@@ -346,6 +331,9 @@ describe("one-click grading review", () => {
     const unload = new Event("beforeunload", { cancelable: true });
     window.dispatchEvent(unload);
     expect(unload.defaultPrevented).toBe(true);
+    // Cancel the blocked route intent explicitly. Otherwise DraftLeaveProvider
+    // resumes it after the save becomes clean, racing this stay-on-S1 assertion.
+    await userEvent.click(screen.getByRole("button", { name: "继续编辑" }));
 
     await act(async () => {
       completeFirst({ workflow_revision: 6, correction: correction("Q1", { teacher_score: 7 }) });

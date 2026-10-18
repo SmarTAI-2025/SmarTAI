@@ -233,3 +233,64 @@ def test_failed_grading_can_explicitly_continue_manually_without_model(case, sta
     continue_manual_grading(task_id=case[0], owner_id=case[1], job_id=run_id,
         expected_revision=workflows.get_live_workflow(case[0], owner_id=case[1]).workflow_revision)
     assert task_facade.finalization(task_id=case[0], owner_id=case[1])["remaining_review_count"] == 2
+
+
+@pytest.mark.parametrize("replacement", [None, 0, 7])
+def test_old_release_api_cannot_bypass_missing_score_confirmation(replacement):
+    from backend.api.grading_runs import release_run
+    from backend.db.models import GradeResultRecord
+    from backend.db.session import session_scope
+    from backend.tests.test_task_finalization_contract import _prepared_task
+    seeded = _prepared_task()
+    args = {"task_id": seeded["task_id"], "owner_id": seeded["owner_id"]}
+    with session_scope() as session:
+        row = session.get(GradeResultRecord, seeded["required_result_id"])
+        row.ai_score = None
+        row.result_status = "graded"  # Old persisted status alone is not score evidence.
+    if replacement is not None:
+        grades.add_teacher_review(seeded["required_result_id"], teacher_id=seeded["owner_id"],
+            new_score=replacement, new_comment="Unconfirmed replacement", confirm=False)
+    assert task_facade.finalization(**args)["remaining_review_count"] == 1
+    assert task_facade.task_results(**args)["results"]  # Review data remains readable.
+    blocked = release_run(seeded["run_id"], current=SimpleNamespace(id=seeded["owner_id"]))
+    assert blocked.status_code == 409
+    assert grades.get_run(seeded["run_id"]).released_at is None
+    grades.add_teacher_review(seeded["required_result_id"], teacher_id=seeded["owner_id"],
+        new_score=7 if replacement is None else replacement, new_comment="Confirmed repair", confirm=True)
+    assert task_facade.finalization(**args)["remaining_review_count"] == 0
+    released = release_run(seeded["run_id"], current=SimpleNamespace(id=seeded["owner_id"]))
+    assert released["released_at"] is not None
+
+
+@pytest.mark.parametrize("missing_all", [False, True])
+def test_missing_frozen_grades_are_required_readable_and_teacher_repairable(missing_all):
+    from backend.db.models import GradeResultRecord
+    from backend.db.session import session_scope
+    from backend.tests.test_task_finalization_contract import _prepared_task
+    seeded = _prepared_task()
+    args = {"task_id": seeded["task_id"], "owner_id": seeded["owner_id"]}
+    missing_ids = [seeded["required_result_id"]] + ([seeded["optional_result_id"]] if missing_all else [])
+    with session_scope() as session:
+        for result_id in missing_ids:
+            session.delete(session.get(GradeResultRecord, result_id))
+    before = task_facade.finalization(**args)
+    assert before["remaining_review_count"] == len(missing_ids) and not before["ready_for_confirmation"]
+    results = task_facade.task_results(**args)["results"]
+    pending = [row for student in results for row in student["corrections"] if "missing_correction" in row["review_reasons"]]
+    assert len(pending) == len(missing_ids) and all(row["score"] is None for row in pending)
+    assert len(grades.list_results_for_run(seeded["run_id"])) == 2 - len(missing_ids)  # GET has no write.
+    with pytest.raises(ResultNotReleasable):
+        grades.release(seeded["run_id"], teacher_id=seeded["owner_id"])
+    for missing in pending:
+        current = task_facade.finalization(**args)
+        saved = task_facade.update_correction_review(**args, display_student_id=seeded["student_id"],
+            q_id=missing["q_id"], teacher_score=0, teacher_comment="Teacher supplied score", confirm=False,
+            expected_revision=current["workflow_revision"])
+        assert task_facade.finalization(**args)["remaining_review_count"] > 0
+        with pytest.raises(ResultNotReleasable):
+            grades.release(seeded["run_id"], teacher_id=seeded["owner_id"])
+        task_facade.update_correction_review(**args, display_student_id=seeded["student_id"],
+            q_id=missing["q_id"], teacher_score=0, teacher_comment="Teacher supplied score", confirm=True,
+            expected_revision=saved["workflow_revision"])
+    assert task_facade.finalization(**args)["remaining_review_count"] == 0
+    assert grades.release(seeded["run_id"], teacher_id=seeded["owner_id"]).released_at is not None

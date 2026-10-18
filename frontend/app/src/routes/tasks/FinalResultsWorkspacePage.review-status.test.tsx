@@ -62,7 +62,7 @@ for (const locale of ["zh-CN", "en-US"]) {
     );
   }
   it.each(["", "/questions", "/questions/q1", "/students", "/students/S1"])(
-    `${locale} failed experts and routine confidence do not invent pending items on results%s`, (suffix) => {
+    `${locale} partial experts and low confidence retain usable results and advisory signals on results%s`, (suffix) => {
       state.locale = locale;
       state.correction = { ...state.correction, confidence: .5, review_reasons: [], requires_human_review: false,
         expert_results: [{ provider: "valid", score: 6, max_score: 10, confidence: .5, comment: "", steps: [] },
@@ -74,10 +74,10 @@ for (const locale of ["zh-CN", "en-US"]) {
           <Routes><Route path={path} element={<FinalResultsWorkspacePage />} /></Routes>
         </MemoryRouter>
       </QueryClientProvider>);
-      expect(container.textContent).not.toMatch(/AI\s*(?:分|score)|未人工|教师未操作|Unreviewed|not reviewed|no teacher action|[1-9]\d* 项待|[1-9]\d* awaiting/);
+      expect(container.textContent).not.toMatch(/AI\s*(?:分|score)|未人工|教师未操作|Unreviewed|not reviewed|no teacher action/);
       expect(container.textContent).not.toMatch(/[1-9]\d* 个专家分歧|[1-9]\d* expert-disagreement/);
       expect(screen.queryByRole("link", { name: /专家分歧较大|high expert disagreement/ })).not.toBeInTheDocument();
-      expect(container.textContent).not.toMatch(/(?:[1-9]\d* 个低置信|[1-9]\d* low-confidence|Low-confidence items)/);
+      expect(container.textContent).not.toMatch(/缺少有效分数|Missing valid score/);
       expect(container.textContent).toContain("60%");
     },
   );

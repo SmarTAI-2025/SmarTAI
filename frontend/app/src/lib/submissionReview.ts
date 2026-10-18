@@ -1,3 +1,4 @@
+import { confidenceNeedsAttention, confidenceValue } from "./confidencePolicy";
 import type { ProblemInfo, StudentAnswerInfo, StudentSubmission } from "@/types";
 import { answerReviewBlocked, answerReviewNextBlocked, studentIdentityReviewBlocked, type ReviewAttention } from "./reviewConfirmation";
 import type { Locale } from "@/i18n/messages";
@@ -50,7 +51,7 @@ export function formatSubmissionFlag(flag: string, locale: Locale): string {
     parse_failed: ["作答解析失败，请修正并确认", "Answer parsing failed; correct and confirm"],
     no_matching_answer: ["未识别到对应作答，请对照原件修正并确认", "No matching answer recognized; correct against the source and confirm"],
     recognition_repaired_needs_confirmation: ["识别问题已修正，请确认作答", "Recognition issue corrected; confirm the answer"],
-    recognition_very_low_confidence: ["识别置信度低于 0.25，请核对并确认", "Recognition confidence below 0.25; check and confirm"],
+    recognition_very_low_confidence: ["识别置信度较低，建议核对确认", "Low recognition confidence; review suggested"],
     very_low_confidence: ["识别结果建议核对，可继续", "Checking the transcription is optional; you can continue"],
     recognition_low_confidence: ["来源识别存在不确定性，可继续", "Source transcription is uncertain; you can continue"],
     low_confidence: ["识别结果建议核对，可继续", "Checking the transcription is optional; you can continue"],
@@ -95,16 +96,20 @@ export function getAnswerState(answer?: StudentAnswerInfo): SubmissionAnswerStat
   return "recognized";
 }
 
-/** Keep source-level warnings and ordinary pending confirmation out of risk queues. */
+/** Only concrete missing content blocks; usable uncertainty is advisory. */
 export function answerReviewAttention(answer?: StudentAnswerInfo): ReviewAttention {
   if (answerReviewNextBlocked(answer)) return "blocking";
-  return "none";
+  return answerHasOptionalAdvice(answer) ? "advisory" : "none";
 }
 
-/** Optional source advice belongs beside confirmation in the detail page only. */
+/** Suggestions appear in the queue and beside the individual confirmation. */
 export function answerHasOptionalAdvice(answer?: StudentAnswerInfo): boolean {
-  return Boolean(answer && answer.review_status !== "confirmed" && !answerReviewNextBlocked(answer)
-    && answer.flag?.some(flag => ["recognition_needs_review", "very_low_confidence", "recognition_low_confidence", "low_confidence"].includes(flag)));
+  if (!answer || answer.review_status === "confirmed") return false;
+  const confidence = confidenceValue(answer.recognition_confidence);
+  return Boolean(answer.flag?.some(flag => ["authorship_uncertain", "external_annotation_present"].includes(flag)))
+    || (confidence !== null ? confidenceNeedsAttention(confidence)
+      : Boolean(answer.flag?.some(flag => ["recognition_very_low_confidence", "very_low_confidence", "recognition_low_confidence", "low_confidence"].includes(flag))));
+
 }
 
 export function answerNeedsConfirmation(answer?: StudentAnswerInfo): boolean {
@@ -265,4 +270,21 @@ function normalize(value: string) {
 
 function naturalCompare(a: string, b: string) {
   return a.localeCompare(b, undefined, { numeric: true, sensitivity: "base" });
+}
+
+export function answerReviewLabels(answer: StudentAnswerInfo | undefined, locale: Locale): string[] {
+  return answerReviewNotes(answer, locale).map(issue => issue.label);
+}
+
+export function answerReviewNotes(answer: StudentAnswerInfo | undefined, locale: Locale): Array<{ label: string; severity: "blocking" | "advisory" }> {
+  if (!answer || (answer.review_status === "confirmed" && !answerReviewBlocked(answer))) return [];
+  const confidence = confidenceValue(answer.recognition_confidence);
+  const flags = (answer.flag ?? []).filter(flag => !["manual_blank_confirmed", "recognition_needs_review", "ocr_only_structure_requires_teacher_review"].includes(flag)
+    && !flag.startsWith("recognition_confidence:") && !flag.startsWith("recognition_failed_pages:") && !flag.startsWith("recognition_unprocessed_pages:")
+    && !(confidence !== null && ["recognition_very_low_confidence", "very_low_confidence", "recognition_low_confidence", "low_confidence"].includes(flag)));
+  const required = new Set(["recognition_failed", "parse_failed", "no_matching_answer", "recognition_manual_pending", "recognition_paused", "recognition_incomplete", "recognition_repaired_needs_confirmation"]);
+  return [
+    ...(confidenceNeedsAttention(confidence) ? [{ label: locale === "zh-CN" ? `置信度 ${confidence} 较低，建议核对确认。` : `Low confidence (${confidence}); review suggested.`, severity: "advisory" as const }] : []),
+    ...[...new Set(flags)].map(flag => ({ label: formatSubmissionFlag(flag, locale), severity: required.has(flag) ? "blocking" as const : "advisory" as const })),
+  ];
 }

@@ -28,8 +28,8 @@ it("keeps exact advisory candidates selectable, uses .60 for defaults and protec
     <Route path="/tasks/:taskId/questions/import/:jobId" element={<QuestionMaterialImportReviewPage />} />
   </Routes></MemoryRouter>);
   const checkbox = (name: string) => within(screen.getByRole("cell", { name }).closest("tr")!).getByRole("checkbox");
-  for (const id of ["required", "mismatch", "invalid"]) expect(checkbox(id)).toBeDisabled();
-  for (const id of ["advisory", "below", "unknown"]) {
+  for (const id of ["mismatch", "invalid"]) expect(checkbox(id)).toBeDisabled();
+  for (const id of ["required", "advisory", "below", "unknown"]) {
     expect(checkbox(id)).toBeEnabled();
     expect(checkbox(id)).not.toBeChecked();
     await userEvent.click(checkbox(id));

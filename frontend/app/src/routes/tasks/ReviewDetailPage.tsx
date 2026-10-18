@@ -1,4 +1,5 @@
-import { confidenceNeedsAttention, confidenceRequiresReview } from "@/lib/confidencePolicy";
+import { ReviewIssueNotes } from "@/components/tasks/ReviewQueue";
+import { validExpertResults, hasPartialExperts } from "@/components/tasks/resultsModel";
 import { isCorrectionReviewConfirmed, correctionReviewBlocked, correctionReviewNextBlocked } from "@/components/tasks/resultsReviewModel";
 import { ReviewConfirmButton, ReviewBlockDialog, RetryFailedGrading, ReviewStageActions } from "@/components/tasks/ReviewConfirmation";
 import { type ReviewBlocker } from "@/lib/reviewConfirmation";
@@ -33,7 +34,7 @@ import {
   type QuestionSummary,
   type StudentSummary,
 } from "@/components/tasks/resultsModel";
-import { collectResultReviewItems } from "@/components/tasks/resultsReviewModel";
+import { collectResultReviewItems, correctionReviewNotes } from "@/components/tasks/resultsReviewModel";
 import { MarkdownMath } from "@/components/ui/MarkdownMath";
 import { useI18n } from "@/i18n/I18nProvider";
 import type { Locale } from "@/i18n/messages";
@@ -83,10 +84,6 @@ function ReviewDetailForm() {
   );
   const requiredReviewKeys = useMemo(
     () => new Set(reviewItems.map((item) => reviewCellKey(item.student.id, item.question.id))),
-    [reviewItems],
-  );
-  const reviewReasonsByKey = useMemo(
-    () => new Map(reviewItems.map((item) => [reviewCellKey(item.student.id, item.question.id), item.reasons])),
     [reviewItems],
   );
   const studentIndex = model.students.findIndex((item) => item.id === studentId);
@@ -295,9 +292,7 @@ function ReviewDetailForm() {
   }, [goToStudent, nextQuestion, nextStudent, previousQuestion, previousStudent, requestQuestionNavigation]);
 
   if (taskId && taskQuery.data?.status === "grading") return <Navigate replace to={`/tasks/${taskId}/grading/progress`} />;
-  const resolvingFailures = taskQuery.data?.status === "error" && Boolean(taskQuery.data.grading_job_id)
-    && taskQuery.data.last_failed_job_id === taskQuery.data.grading_job_id;
-  if (taskId && taskQuery.data && !resolvingFailures && ![
+  if (taskId && taskQuery.data && ![
     "graded", "finalized",
   ].includes(taskQuery.data.status)) return <Navigate replace to={getTaskDestination(taskQuery.data)} />;
 
@@ -583,7 +578,6 @@ function ReviewDetailForm() {
                     score: correction ? correctionReviewDraftScore(correction) : "",
                     comment: correction?.teacher_comment ?? "",
                   };
-                  const required = requiredReviewKeys.has(reviewCellKey(student.id, question.id));
                   return (
                     <ReviewQuestionCard
                       key={question.id}
@@ -592,8 +586,6 @@ function ReviewDetailForm() {
                       question={question}
                       correction={correction}
                       draft={draft}
-                      required={required}
-                      reviewReasons={reviewReasonsByKey.get(reviewCellKey(student.id, question.id)) ?? []}
                       previous={visibleQuestions[index - 1] ?? null}
                       next={visibleQuestions[index + 1] ?? null}
                       dirty={dirtyQuestionIds.has(question.id)}
@@ -657,14 +649,12 @@ function StudentNavigation({ className, locale, current, previous, next, onSelec
   );
 }
 
-function ReviewQuestionCard({ locale, student, question, correction, draft, required, reviewReasons, previous, next, dirty, saving, scoreError, saveError, hasNextReview, onDraftChange, onConfirm, onNavigate }: {
+function ReviewQuestionCard({ locale, student, question, correction, draft, previous, next, dirty, saving, scoreError, saveError, hasNextReview, onDraftChange, onConfirm, onNavigate }: {
   locale: Locale;
   student: StudentSummary;
   question: QuestionSummary;
   correction?: Correction;
   draft: ReviewDraft;
-  required: boolean;
-  reviewReasons: string[];
   previous: QuestionSummary | null;
   next: QuestionSummary | null;
   dirty: boolean;
@@ -693,9 +683,7 @@ function ReviewQuestionCard({ locale, student, question, correction, draft, requ
         </div>
         <div className="flex flex-wrap items-center gap-2">
           <ReviewConfirmButton title={question.label} locale={locale} confirmed={alreadyConfirmed} blocked={Boolean(correction && correctionReviewBlocked(correction))} busy={saving} disabled={!correction} onClick={onConfirm} />
-          {!alreadyConfirmed && correction && confidenceNeedsAttention(correction.confidence) && !confidenceRequiresReview(correction.confidence) ? (
-            <span className="text-[11px] text-muted-foreground">{tx(locale, "置信度偏低，可选核对", "Low confidence; optional check")}</span>
-          ) : null}
+          {!alreadyConfirmed && correction ? <ReviewIssueNotes issues={correctionReviewNotes(correction, locale)} /> : null}
           <QuestionButtons locale={locale} previous={previous} next={next} onSelect={onNavigate} />
         </div>
       </header>
@@ -725,11 +713,10 @@ function ReviewQuestionCard({ locale, student, question, correction, draft, requ
             {correction ? (
               <>
                 <MarkdownMath className="mt-3 text-[13px] leading-6 text-foreground">{correction.comment || tx(locale, "SmarTAI 未返回文字说明。", "SmarTAI returned no written rationale.")}</MarkdownMath>
-                {reviewReasons.length ? <div className="mt-3 flex flex-wrap gap-1.5">{reviewReasons.map((reason) => <span key={reason} className="rounded-full bg-amber-50 px-2.5 py-1 text-[10px] font-semibold text-amber-700 dark:bg-amber-950/40 dark:text-amber-200">{reason}</span>)}</div> : null}
                 <ScoringSteps locale={locale} steps={correction.steps} />
                   <dl className="mt-4 grid grid-cols-2 gap-2 text-xs sm:grid-cols-3">
                     <Signal label={tx(locale, "置信度", "Confidence")} value={formatConfidence(correction.confidence)} />
-                    <Signal label={tx(locale, "专家数", "Models")} value={String(Math.max(1, correction.expert_results?.length ?? 0))} />
+                    <Signal label={tx(locale, "专家数", "Models")} value={correction.expert_results?.length ? `${validExpertResults(correction).length} / ${correction.expert_results.length}${hasPartialExperts(correction) ? tx(locale, " · 部分专家完成", " · Some experts completed") : ""}` : hasPartialExperts(correction) ? tx(locale, "部分专家完成", "Some experts completed") : displayScore !== null ? "1" : "0"} />
                     <Signal label={tx(locale, "合成方式", "Synthesis")} value={formatSynthesis(correction.synthesis_method, locale)} />
                   </dl>
                 {correction.expert_results?.length ? (
@@ -738,7 +725,7 @@ function ReviewQuestionCard({ locale, student, question, correction, draft, requ
                     <ul className="mt-2 space-y-2">
                       {correction.expert_results.map((expert, index) => (
                         <li key={`${expert.provider}-${index}`} className="rounded-md bg-muted/60 px-3 py-2">
-                          <p className="font-semibold text-foreground">{expert.provider} · {expert.error_kind === "operation_cancelled" ? tx(locale, "手动停止，尚未完成批改", "Manually stopped before completion") : expert.error_kind ? tx(locale, "模型出错 · 未给出有效分数 · 不参与合成", "Model error · No valid score · excluded from synthesis") : `${formatScore(expert.score, expert.max_score)}/${String(expert.max_score)} · ${formatConfidence(expert.confidence)}`}</p>
+                          <p className="font-semibold text-foreground">{expert.provider} · {expert.error_kind === "operation_cancelled" ? tx(locale, "手动停止，尚未完成批改", "Manually stopped before completion") : expert.error_kind ? `${expert.error_kind === "quota_exhausted" ? tx(locale, "额度不足", "Quota exhausted") : expert.error_kind === "transient_llm" ? tx(locale, "网络或超时错误", "Network error or timeout") : tx(locale, "模型出错", "Model error")} · ${tx(locale, "无有效分数，不参与合成", "No valid score; excluded from synthesis")}` : `${formatScore(expert.score, expert.max_score)}/${String(expert.max_score)} · ${formatConfidence(expert.confidence)}`}</p>
                           {expert.comment ? <MarkdownMath className="mt-1 text-[11px] leading-5">{expert.comment}</MarkdownMath> : null}
                           {!expert.error_kind ? <ScoringSteps locale={locale} steps={expert.steps} /> : null}
                           {expert.knowledge_citations?.length ? <div className="mt-2 border-t pt-2">
@@ -872,7 +859,7 @@ function reviewQuestionState(correction: Correction | undefined, required: boole
 
 function formatSynthesis(value: string | null | undefined, locale: Locale) {
   if (value === "paused") return tx(locale, "已暂停尚未批改", "Paused, ungraded");
-  const labels: Record<string, [string, string]> = { single: ["单专家", "Single"], median: ["中位数", "Median"], multi_sample: ["多次采样", "Multi-sample"], weighted_average: ["加权平均", "Weighted"], judge_agent: ["裁判模型", "Judge"], degraded_to_single: ["降级单专家", "Fallback"], all_failed: ["全部失败", "Failed"], quota_exhausted: ["额度耗尽", "Quota"] };
+  const labels: Record<string, [string, string]> = { single: ["单专家", "Single"], median: ["中位数", "Median"], multi_sample: ["多次采样", "Multi-sample"], weighted_average: ["加权平均", "Weighted"], judge_agent: ["裁判模型", "Judge"], degraded_to_single: ["部分专家完成", "Some experts completed"], all_failed: ["全部失败", "Failed"], quota_exhausted: ["额度耗尽", "Quota"] };
   const pair = value ? labels[value] : null;
   return pair ? (locale === "en-US" ? pair[1] : pair[0]) : (value || "—");
 }
